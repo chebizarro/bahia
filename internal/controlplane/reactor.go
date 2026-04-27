@@ -65,6 +65,8 @@ type Reactor struct {
 	registry *service.RegistryService
 	logger   *slog.Logger
 	zapLog   *zap.Logger
+	dedup    *nostrpool.EventDeduplicator
+	backoff  *nostrpool.Backoff
 
 	mu   sync.Mutex
 	runs map[string]*DeploymentRun // requestEventID -> run
@@ -98,7 +100,10 @@ func NewReactor(config Config, registry *service.RegistryService, zapLog *zap.Lo
 		poolOpts = append(poolOpts, nostrpool.WithPrivateKey(config.PrivateKey))
 	}
 	
-	allRelays := append(config.Relays, config.PrivateRelays...)
+	// Copy slices to avoid mutating config's backing array
+	allRelays := make([]string, 0, len(config.Relays)+len(config.PrivateRelays))
+	allRelays = append(allRelays, config.Relays...)
+	allRelays = append(allRelays, config.PrivateRelays...)
 	pool := nostrpool.NewRelayPool(allRelays, zapLog, poolOpts...)
 
 	return &Reactor{
@@ -107,6 +112,8 @@ func NewReactor(config Config, registry *service.RegistryService, zapLog *zap.Lo
 		registry: registry,
 		logger:   slog.Default().With("component", "controlplane"),
 		zapLog:   zapLog,
+		dedup:    nostrpool.NewEventDeduplicator(10000),
+		backoff:  nostrpool.DefaultBackoff(),
 		runs:     make(map[string]*DeploymentRun),
 	}
 }
@@ -153,13 +160,15 @@ func (r *Reactor) Run(ctx context.Context) error {
 
 		case ev, ok := <-merged.Events:
 			if !ok {
-				r.logger.Warn("subscription closed, reconnecting...")
-				time.Sleep(5 * time.Second)
+				delay := r.backoff.Next()
+				r.logger.Warn("subscription closed, reconnecting...", "delay", delay)
+				time.Sleep(delay)
 				merged, err = r.pool.SubscribeAllWithEOSE(ctx, filters)
 				if err != nil {
 					r.logger.Error("reconnect failed", "error", err)
 					continue
 				}
+				r.backoff.Reset()
 				continue
 			}
 			
@@ -170,6 +179,19 @@ func (r *Reactor) Run(ctx context.Context) error {
 
 // handleEvent dispatches events to the appropriate handler.
 func (r *Reactor) handleEvent(ctx context.Context, event *nostr.Event) {
+	// Verify event signature to prevent spoofing
+	ok, err := event.CheckSignature()
+	if err != nil || !ok {
+		r.logger.Warn("invalid event signature", "event_id", event.ID, "error", err)
+		return
+	}
+
+	// Deduplicate events (relays may replay during reconnection)
+	if r.dedup.IsDuplicate(event.ID) {
+		return
+	}
+	r.dedup.MarkSeen(event.ID)
+
 	switch event.Kind {
 	case KindDeployRequest:
 		go r.handleDeployRequest(ctx, event)
@@ -210,6 +232,23 @@ func (r *Reactor) handleDeployRequest(ctx context.Context, event *nostr.Event) {
 
 	logger = logger.With("service_id", req.ServiceID, "environment_id", req.EnvironmentID)
 	logger.Info("creating deployment intent")
+
+	// Validate that service, environment, and artifact exist
+	if _, err := r.registry.GetService(ctx, req.ServiceID); err != nil {
+		logger.Error("service not found", "error", err)
+		r.publishError(ctx, event, "validation_error", fmt.Sprintf("service not found: %v", err))
+		return
+	}
+	if _, err := r.registry.GetEnvironment(ctx, req.EnvironmentID); err != nil {
+		logger.Error("environment not found", "error", err)
+		r.publishError(ctx, event, "validation_error", fmt.Sprintf("environment not found: %v", err))
+		return
+	}
+	if _, err := r.registry.GetArtifact(ctx, req.ArtifactID); err != nil {
+		logger.Error("artifact not found", "error", err)
+		r.publishError(ctx, event, "validation_error", fmt.Sprintf("artifact not found: %v", err))
+		return
+	}
 
 	// Create run tracker
 	run := &DeploymentRun{
@@ -317,6 +356,7 @@ func (r *Reactor) handleServiceAction(ctx context.Context, event *nostr.Event) {
 
 	if !r.isAuthorized(event.PubKey) {
 		logger.Warn("unauthorized service action")
+		r.publishError(ctx, event, "unauthorized", "requester not in authorized list")
 		return
 	}
 
@@ -373,6 +413,10 @@ func (r *Reactor) handleServiceCreate(ctx context.Context, event *nostr.Event) {
 
 	runtimeType := domain.RuntimeTypeDocker
 	if req.RuntimeType != "" {
+		if err := domain.ValidateRuntimeType(domain.RuntimeType(req.RuntimeType)); err != nil {
+			r.publishError(ctx, event, "validation_error", fmt.Sprintf("invalid runtime_type: %v", err))
+			return
+		}
 		runtimeType = domain.RuntimeType(req.RuntimeType)
 	}
 
@@ -736,7 +780,7 @@ func (r *Reactor) publishError(ctx context.Context, requestEvent *nostr.Event, s
 			{"p", requestEvent.PubKey},
 			{"status", "error"},
 			{"step", step},
-			{"error", step},
+			{"error", message},
 		},
 		Content: message,
 	}

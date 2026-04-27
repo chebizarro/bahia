@@ -423,6 +423,11 @@ func (s *Server) handleCreateService(ctx context.Context, args map[string]interf
 		runtimeType = "docker"
 	}
 
+	// Validate runtime type
+	if err := domain.ValidateRuntimeType(domain.RuntimeType(runtimeType)); err != nil {
+		return errorResult(fmt.Sprintf("invalid runtime_type: %v", err)), nil
+	}
+
 	svc := &domain.Service{
 		ID:           uuid.New(),
 		Name:         name,
@@ -544,6 +549,17 @@ func (s *Server) handleDeploy(ctx context.Context, args map[string]interface{}) 
 
 	if requestedBy == "" {
 		requestedBy = "mcp-agent"
+	}
+
+	// Validate that service, environment, and artifact exist
+	if _, err := s.registry.GetService(ctx, serviceID); err != nil {
+		return errorResult(fmt.Sprintf("service not found: %v", err)), nil
+	}
+	if _, err := s.registry.GetEnvironment(ctx, envID); err != nil {
+		return errorResult(fmt.Sprintf("environment not found: %v", err)), nil
+	}
+	if _, err := s.registry.GetArtifact(ctx, artifactID); err != nil {
+		return errorResult(fmt.Sprintf("artifact not found: %v", err)), nil
 	}
 
 	intent := &domain.DeploymentIntent{
