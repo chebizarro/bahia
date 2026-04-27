@@ -79,6 +79,108 @@ func TestGetService(t *testing.T) {
 	}
 }
 
+func TestCreateService(t *testing.T) {
+	var gotBody map[string]string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Errorf("method = %s, want POST", r.Method)
+		}
+		if r.URL.Path != "/api/v1/services" {
+			t.Errorf("path = %s, want /api/v1/services", r.URL.Path)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Fatalf("decoding request body: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		svc := domain.Service{ID: uuid.New(), Name: gotBody["name"], ArtifactRepo: gotBody["artifact_repo"], RuntimeType: domain.RuntimeType(gotBody["runtime_type"])}
+		json.NewEncoder(w).Encode(map[string]any{"data": svc})
+	}))
+	defer server.Close()
+
+	c := New(server.URL)
+	result, err := c.CreateService(context.Background(), "api", "registry.example/api", domain.RuntimeTypeCompose)
+	if err != nil {
+		t.Fatalf("CreateService() error = %v", err)
+	}
+	if gotBody["name"] != "api" {
+		t.Errorf("name = %s, want api", gotBody["name"])
+	}
+	if gotBody["artifact_repo"] != "registry.example/api" {
+		t.Errorf("artifact_repo = %s, want registry.example/api", gotBody["artifact_repo"])
+	}
+	if gotBody["runtime_type"] != string(domain.RuntimeTypeCompose) {
+		t.Errorf("runtime_type = %s, want %s", gotBody["runtime_type"], domain.RuntimeTypeCompose)
+	}
+	if result.Name != "api" {
+		t.Errorf("Name = %s, want api", result.Name)
+	}
+}
+
+func TestGetEnvironment(t *testing.T) {
+	env := domain.Environment{ID: uuid.New(), Name: "prod", DeployStrategy: domain.DeployStrategyCanary, Protected: true}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			t.Errorf("method = %s, want GET", r.Method)
+		}
+		if !strings.HasPrefix(r.URL.Path, "/api/v1/environments/") {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{"data": env})
+	}))
+	defer server.Close()
+
+	c := New(server.URL)
+	result, err := c.GetEnvironment(context.Background(), env.ID.String())
+	if err != nil {
+		t.Fatalf("GetEnvironment() error = %v", err)
+	}
+	if result.Name != "prod" {
+		t.Errorf("Name = %s, want prod", result.Name)
+	}
+	if !result.Protected {
+		t.Error("Protected = false, want true")
+	}
+}
+
+func TestCreateEnvironment(t *testing.T) {
+	var gotBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Errorf("method = %s, want POST", r.Method)
+		}
+		if r.URL.Path != "/api/v1/environments" {
+			t.Errorf("path = %s, want /api/v1/environments", r.URL.Path)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Fatalf("decoding request body: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		env := domain.Environment{ID: uuid.New(), Name: gotBody["name"].(string), DeployStrategy: domain.DeployStrategy(gotBody["deploy_strategy"].(string)), Protected: gotBody["protected"].(bool)}
+		json.NewEncoder(w).Encode(map[string]any{"data": env})
+	}))
+	defer server.Close()
+
+	c := New(server.URL)
+	result, err := c.CreateEnvironment(context.Background(), "staging", domain.DeployStrategyReplace, true)
+	if err != nil {
+		t.Fatalf("CreateEnvironment() error = %v", err)
+	}
+	if gotBody["name"] != "staging" {
+		t.Errorf("name = %v, want staging", gotBody["name"])
+	}
+	if gotBody["deploy_strategy"] != string(domain.DeployStrategyReplace) {
+		t.Errorf("deploy_strategy = %v, want %s", gotBody["deploy_strategy"], domain.DeployStrategyReplace)
+	}
+	if gotBody["protected"] != true {
+		t.Errorf("protected = %v, want true", gotBody["protected"])
+	}
+	if result.Name != "staging" {
+		t.Errorf("Name = %s, want staging", result.Name)
+	}
+}
+
 func TestAPIError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

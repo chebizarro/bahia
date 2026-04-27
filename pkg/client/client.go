@@ -111,6 +111,20 @@ func (c *Client) GetService(ctx context.Context, id string) (*domain.Service, er
 	return &svc, nil
 }
 
+// CreateService registers a new service.
+func (c *Client) CreateService(ctx context.Context, name, artifactRepo string, runtimeType domain.RuntimeType) (*domain.Service, error) {
+	body := map[string]string{
+		"name":          name,
+		"artifact_repo": artifactRepo,
+		"runtime_type":  string(runtimeType),
+	}
+	var svc domain.Service
+	if err := c.do(ctx, http.MethodPost, "/api/v1/services", body, &svc); err != nil {
+		return nil, err
+	}
+	return &svc, nil
+}
+
 // --- Environments ---
 
 // ListEnvironments returns all environments.
@@ -120,6 +134,29 @@ func (c *Client) ListEnvironments(ctx context.Context) ([]domain.Environment, er
 		return nil, err
 	}
 	return envs, nil
+}
+
+// GetEnvironment returns an environment by ID.
+func (c *Client) GetEnvironment(ctx context.Context, id string) (*domain.Environment, error) {
+	var env domain.Environment
+	if err := c.do(ctx, http.MethodGet, "/api/v1/environments/"+id, nil, &env); err != nil {
+		return nil, err
+	}
+	return &env, nil
+}
+
+// CreateEnvironment registers a new environment.
+func (c *Client) CreateEnvironment(ctx context.Context, name string, strategy domain.DeployStrategy, protected bool) (*domain.Environment, error) {
+	body := map[string]any{
+		"name":            name,
+		"deploy_strategy": string(strategy),
+		"protected":       protected,
+	}
+	var env domain.Environment
+	if err := c.do(ctx, http.MethodPost, "/api/v1/environments", body, &env); err != nil {
+		return nil, err
+	}
+	return &env, nil
 }
 
 // --- State ---
@@ -258,7 +295,9 @@ func (c *Client) StreamLiveLogs(ctx context.Context, serviceID, envID string, ta
 		req.Header.Set("Authorization", "Bearer "+c.authToken)
 	}
 
-	resp, err := c.httpClient.Do(req)
+	streamClient := *c.httpClient
+	streamClient.Timeout = 0
+	resp, err := streamClient.Do(req)
 	if err != nil {
 		return err
 	}
@@ -447,7 +486,9 @@ func (c *Client) StreamEvents(ctx context.Context, types []string, callback func
 		req.Header.Set("Authorization", "Bearer "+c.authToken)
 	}
 
-	resp, err := c.httpClient.Do(req)
+	streamClient := *c.httpClient
+	streamClient.Timeout = 0
+	resp, err := streamClient.Do(req)
 	if err != nil {
 		return err
 	}

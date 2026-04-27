@@ -172,7 +172,29 @@ func servicesCommands() *cobra.Command {
 		},
 	}
 
-	cmd.AddCommand(listCmd, getCmd)
+	createCmd := &cobra.Command{
+		Use:   "create",
+		Short: "Create a new service",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			name, _ := cmd.Flags().GetString("name")
+			artifactRepo, _ := cmd.Flags().GetString("artifact-repo")
+			runtimeType, _ := cmd.Flags().GetString("runtime-type")
+
+			svc, err := apiClient.CreateService(cmd.Context(), name, artifactRepo, domain.RuntimeType(runtimeType))
+			if err != nil {
+				return err
+			}
+			return outputSingle(svc)
+		},
+	}
+	createCmd.Flags().String("name", "", "Service name")
+	createCmd.Flags().String("artifact-repo", "", "Artifact repository")
+	createCmd.Flags().String("runtime-type", string(domain.RuntimeTypeCompose), "Runtime type: docker, compose, kubernetes")
+	_ = createCmd.MarkFlagRequired("name")
+	_ = createCmd.MarkFlagRequired("artifact-repo")
+
+	cmd.AddCommand(listCmd, getCmd, createCmd)
 	return cmd
 }
 
@@ -199,7 +221,41 @@ func environmentsCommands() *cobra.Command {
 		},
 	}
 
-	cmd.AddCommand(listCmd)
+	getCmd := &cobra.Command{
+		Use:   "get [id]",
+		Short: "Get an environment by ID",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			env, err := apiClient.GetEnvironment(cmd.Context(), args[0])
+			if err != nil {
+				return err
+			}
+			return outputSingle(env)
+		},
+	}
+
+	createCmd := &cobra.Command{
+		Use:   "create",
+		Short: "Create a new environment",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			name, _ := cmd.Flags().GetString("name")
+			strategy, _ := cmd.Flags().GetString("strategy")
+			protected, _ := cmd.Flags().GetBool("protected")
+
+			env, err := apiClient.CreateEnvironment(cmd.Context(), name, domain.DeployStrategy(strategy), protected)
+			if err != nil {
+				return err
+			}
+			return outputSingle(env)
+		},
+	}
+	createCmd.Flags().String("name", "", "Environment name")
+	createCmd.Flags().String("strategy", string(domain.DeployStrategyReplace), "Deploy strategy: replace, blue_green, canary")
+	createCmd.Flags().Bool("protected", false, "Require extra protections for deployments")
+	_ = createCmd.MarkFlagRequired("name")
+
+	cmd.AddCommand(listCmd, getCmd, createCmd)
 	return cmd
 }
 
@@ -303,13 +359,15 @@ func deployCommands() *cobra.Command {
 	_ = rollbackCmd.MarkFlagRequired("service")
 	_ = rollbackCmd.MarkFlagRequired("environment")
 
-	return &cobra.Command{
+	deploymentsCmd := &cobra.Command{
 		Use:   "deployments",
 		Short: "Deployment commands",
 		Run: func(cmd *cobra.Command, args []string) {
 			cmd.Help()
 		},
 	}
+	deploymentsCmd.AddCommand(deployCmd, rollbackCmd)
+	return deploymentsCmd
 }
 
 // --- Workers Commands ---
