@@ -1,0 +1,223 @@
+package runtime
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/google/uuid"
+	"github.com/openagentsinc/bahia/internal/domain"
+	"go.uber.org/zap"
+)
+
+func TestComposeImageEnvKey(t *testing.T) {
+	cases := map[string]string{
+		"my-service": "MY_SERVICE_IMAGE",
+		"agent.api":  "AGENT_API_IMAGE",
+		"api_v2":     "API_V2_IMAGE",
+		"api/v2":     "API_V2_IMAGE",
+	}
+	for input, want := range cases {
+		if got := composeImageEnvKey(input); got != want {
+			t.Errorf("composeImageEnvKey(%q) = %q, want %q", input, got, want)
+		}
+	}
+}
+
+func TestComposeRuntimeCommandEnvMergesDockerHostAndExtraEnv(t *testing.T) {
+	t.Setenv("DOCKER_HOST", "unix:///old.sock")
+	t.Setenv("APP_ENV", "old")
+
+	r := &ComposeRuntime{dockerHost: "tcp://docker:2375"}
+	env := r.commandEnv([]string{"APP_ENV=new", "MY_SERVICE_IMAGE=registry.example/app:v2"})
+
+	if got := envValue(env, "DOCKER_HOST"); got != "tcp://docker:2375" {
+		t.Fatalf("DOCKER_HOST = %q, want tcp://docker:2375", got)
+	}
+	if got := envValue(env, "APP_ENV"); got != "new" {
+		t.Fatalf("APP_ENV = %q, want new", got)
+	}
+	if got := envValue(env, "MY_SERVICE_IMAGE"); got != "registry.example/app:v2" {
+		t.Fatalf("MY_SERVICE_IMAGE = %q, want registry.example/app:v2", got)
+	}
+}
+
+func TestComposeRuntimeDeployAppliesImageOverrideToPullAndUp(t *testing.T) {
+	logPath := filepath.Join(t.TempDir(), "compose-calls.log")
+	bin := writeFakeComposeBinary(t, `#!/bin/sh
+printf '%s|%s|%s\n' "$AGENT_API_IMAGE" "$DOCKER_HOST" "$*" >> "$COMPOSE_CALL_LOG"
+`)
+	t.Setenv("COMPOSE_CALL_LOG", logPath)
+
+	r := &ComposeRuntime{
+		binary:     bin,
+		dockerHost: "tcp://docker:2375",
+		logger:     zap.NewNop(),
+	}
+
+	if err := r.Deploy(context.Background(), "agent.api", "registry.example/agent:v2", DeployOptions{
+		Environment: map[string]string{"AGENT_API_IMAGE": "registry.example/agent:old"},
+	}); err != nil {
+		t.Fatalf("Deploy() error = %v", err)
+	}
+
+	raw, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read log: %v", err)
+	}
+	lines := nonEmptyLines(string(raw))
+	if len(lines) != 2 {
+		t.Fatalf("expected pull and up calls, got %d: %q", len(lines), raw)
+	}
+	for _, line := range lines {
+		if !strings.HasPrefix(line, "registry.example/agent:v2|tcp://docker:2375|") {
+			t.Fatalf("image override or docker host missing from call line: %q", line)
+		}
+	}
+	if !strings.Contains(lines[0], "pull agent.api") {
+		t.Fatalf("first call should pull service, got %q", lines[0])
+	}
+	if !strings.Contains(lines[1], "up -d --force-recreate --no-deps agent.api") {
+		t.Fatalf("second call should up service, got %q", lines[1])
+	}
+}
+
+func TestComposeRuntimeDeploySkipsBlankImageOverride(t *testing.T) {
+	logPath := filepath.Join(t.TempDir(), "compose-calls.log")
+	bin := writeFakeComposeBinary(t, `#!/bin/sh
+printf '%s|%s\n' "$MY_SERVICE_IMAGE" "$*" >> "$COMPOSE_CALL_LOG"
+`)
+	t.Setenv("COMPOSE_CALL_LOG", logPath)
+
+	r := &ComposeRuntime{binary: bin, logger: zap.NewNop()}
+	if err := r.Deploy(context.Background(), "my-service", "   ", DeployOptions{}); err != nil {
+		t.Fatalf("Deploy() error = %v", err)
+	}
+
+	raw, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read log: %v", err)
+	}
+	for _, line := range nonEmptyLines(string(raw)) {
+		if !strings.HasPrefix(line, "|") {
+			t.Fatalf("blank image should not inject MY_SERVICE_IMAGE, got line %q", line)
+		}
+	}
+}
+
+func TestComposeRuntimeObserveParsesJSONArrayAndPrefersRunningEntry(t *testing.T) {
+	bin := writeFakeComposeBinary(t, `#!/bin/sh
+printf '%s' '[{"ID":"stopped-id","Image":"registry.example/app:v1","State":"exited","Status":"Exited"},{"ID":"running-id","Image":"registry.example/app:v2","State":"running","Status":"Up"}]'
+`)
+	r := &ComposeRuntime{binary: bin, logger: zap.NewNop()}
+
+	obs, err := r.Observe(context.Background(), uuid.New(), uuid.New(), "app")
+	if err != nil {
+		t.Fatalf("Observe() error = %v", err)
+	}
+	if obs.HealthStatus != domain.HealthStatusHealthy {
+		t.Fatalf("HealthStatus = %s, want healthy", obs.HealthStatus)
+	}
+	if obs.ObservedContainerID != "running-id" {
+		t.Fatalf("ObservedContainerID = %q, want running-id", obs.ObservedContainerID)
+	}
+	if obs.ObservedImageRepo != "registry.example/app:v2" {
+		t.Fatalf("ObservedImageRepo = %q, want registry.example/app:v2", obs.ObservedImageRepo)
+	}
+}
+
+func TestComposeRuntimeObserveIgnoresStderrWarnings(t *testing.T) {
+	bin := writeFakeComposeBinary(t, `#!/bin/sh
+printf '%s\n' 'warning: obsolete compose version' >&2
+printf '%s' '{"ID":"running-id","Image":"registry.example/app:v2","State":"running","Status":"Up"}'
+`)
+	r := &ComposeRuntime{binary: bin, logger: zap.NewNop()}
+
+	obs, err := r.Observe(context.Background(), uuid.New(), uuid.New(), "app")
+	if err != nil {
+		t.Fatalf("Observe() error = %v", err)
+	}
+	if obs.ObservedContainerID != "running-id" {
+		t.Fatalf("ObservedContainerID = %q, want running-id", obs.ObservedContainerID)
+	}
+}
+
+func TestComposeRuntimeObserveInheritsDockerHost(t *testing.T) {
+	bin := writeFakeComposeBinary(t, `#!/bin/sh
+if [ "$DOCKER_HOST" != "tcp://docker:2375" ]; then
+  echo "wrong docker host: $DOCKER_HOST" >&2
+  exit 1
+fi
+printf '%s' '{"ID":"running-id","Image":"registry.example/app:v2","State":"running","Status":"Up"}'
+`)
+	r := &ComposeRuntime{binary: bin, dockerHost: "tcp://docker:2375", logger: zap.NewNop()}
+
+	if _, err := r.Observe(context.Background(), uuid.New(), uuid.New(), "app"); err != nil {
+		t.Fatalf("Observe() error = %v", err)
+	}
+}
+
+func TestComposeRuntimeObserveParsesLineDelimitedJSON(t *testing.T) {
+	bin := writeFakeComposeBinary(t, `#!/bin/sh
+printf '%s\n%s\n' '{"ID":"first","Image":"registry.example/app:v1","State":"exited","Status":"Exited"}' '{"ID":"second","Image":"registry.example/app:v2","State":"running","Status":"Up"}'
+`)
+	r := &ComposeRuntime{binary: bin, logger: zap.NewNop()}
+
+	obs, err := r.Observe(context.Background(), uuid.New(), uuid.New(), "app")
+	if err != nil {
+		t.Fatalf("Observe() error = %v", err)
+	}
+	if obs.HealthStatus != domain.HealthStatusHealthy {
+		t.Fatalf("HealthStatus = %s, want healthy", obs.HealthStatus)
+	}
+	if obs.ObservedContainerID != "second" {
+		t.Fatalf("ObservedContainerID = %q, want second", obs.ObservedContainerID)
+	}
+}
+
+func TestComposeRuntimeObserveReturnsParseErrorForInvalidJSON(t *testing.T) {
+	bin := writeFakeComposeBinary(t, `#!/bin/sh
+printf '%s' 'not-json'
+`)
+	r := &ComposeRuntime{binary: bin, logger: zap.NewNop()}
+
+	_, err := r.Observe(context.Background(), uuid.New(), uuid.New(), "app")
+	if err == nil {
+		t.Fatal("Observe() expected parse error")
+	}
+	if !strings.Contains(err.Error(), "parse compose ps output") {
+		t.Fatalf("Observe() error = %v, want parse compose ps output", err)
+	}
+}
+
+func writeFakeComposeBinary(t *testing.T, content string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "fake-compose")
+	if err := os.WriteFile(path, []byte(content), 0o755); err != nil {
+		t.Fatalf("write fake compose binary: %v", err)
+	}
+	return path
+}
+
+func envValue(env []string, key string) string {
+	prefix := key + "="
+	for _, entry := range env {
+		if strings.HasPrefix(entry, prefix) {
+			return strings.TrimPrefix(entry, prefix)
+		}
+	}
+	return ""
+}
+
+func nonEmptyLines(s string) []string {
+	parts := strings.Split(s, "\n")
+	lines := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if strings.TrimSpace(part) != "" {
+			lines = append(lines, part)
+		}
+	}
+	return lines
+}
