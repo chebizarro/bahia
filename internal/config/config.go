@@ -15,20 +15,20 @@ import (
 
 // Config is the top-level configuration for Bahia.
 type Config struct {
-	Server        ServerConfig        `koanf:"server"`
-	DB            DBConfig            `koanf:"db"`
-	Harbor        HarborConfig        `koanf:"harbor"`
-	Loom          LoomConfig          `koanf:"loom"`
-	Nostr         NostrConfig         `koanf:"nostr"`
-	Reconcile     ReconcileConfig     `koanf:"reconcile"`
-	Runtime       RuntimeConfig       `koanf:"runtime"`
-	Log           LogConfig           `koanf:"log"`
-	Auth          AuthConfig          `koanf:"auth"`
-	CORS          CORSConfig          `koanf:"cors"`
-	Blossom       BlossomConfig       `koanf:"blossom"`
-	Cashu         CashuConfig         `koanf:"cashu"`
-	Telemetry     TelemetryConfig     `koanf:"telemetry"`
-	Notifications NotificationsConfig `koanf:"notifications"`
+	Server        ServerConfig          `koanf:"server"`
+	DB            DBConfig              `koanf:"db"`
+	Harbor        HarborConfig          `koanf:"harbor"`
+	Loom          LoomConfig            `koanf:"loom"`
+	Nostr         NostrConfig           `koanf:"nostr"`
+	Reconcile     ReconcileConfig       `koanf:"reconcile"`
+	Runtime       RuntimeConfig         `koanf:"runtime"`
+	Log           LogConfig             `koanf:"log"`
+	Auth          AuthConfig            `koanf:"auth"`
+	CORS          CORSConfig            `koanf:"cors"`
+	Blossom       BlossomConfig         `koanf:"blossom"`
+	Cashu         CashuConfig           `koanf:"cashu"`
+	Telemetry     TelemetryConfig       `koanf:"telemetry"`
+	Notifications NotificationsConfig   `koanf:"notifications"`
 	Registry      RegistryAdapterConfig `koanf:"registry"`
 }
 
@@ -106,14 +106,37 @@ type ReconcileConfig struct {
 	Enabled  bool          `koanf:"enabled"`
 }
 
-// RuntimeConfig holds target runtime settings.
+// RuntimeTargetConfig holds the connection settings for one runtime target.
+type RuntimeTargetConfig struct {
+	Type          string `koanf:"type"`
+	DockerHost    string `koanf:"docker_host"`
+	ComposeDir    string `koanf:"compose_dir"`
+	KubeContext   string `koanf:"kube_context"`
+	KubeNamespace string `koanf:"kube_namespace"`
+	KubeConfig    string `koanf:"kube_config"`
+}
+
+// RuntimeConfig holds runtime targeting settings.
+//
+// The flat fields are retained for backward compatibility with existing
+// runtime.type, runtime.docker_host, and runtime.compose_dir configuration.
+// New installations should prefer runtime.default.* plus
+// runtime.environments.<environment-name>.*. Environment variables for nested
+// runtime settings must use double underscores, for example:
+// BAHIA_RUNTIME__DEFAULT__TYPE=compose and
+// BAHIA_RUNTIME__ENVIRONMENTS__production__COMPOSE_DIR=/srv/bahia/prod.
 type RuntimeConfig struct {
-	Type            string `koanf:"type"`
-	DockerHost      string `koanf:"docker_host"`
-	ComposeDir      string `koanf:"compose_dir"`
-	KubeContext     string `koanf:"kube_context"`
-	KubeNamespace   string `koanf:"kube_namespace"`
-	KubeConfig      string `koanf:"kube_config"`
+	// Legacy flat fields.
+	Type          string `koanf:"type"`
+	DockerHost    string `koanf:"docker_host"`
+	ComposeDir    string `koanf:"compose_dir"`
+	KubeContext   string `koanf:"kube_context"`
+	KubeNamespace string `koanf:"kube_namespace"`
+	KubeConfig    string `koanf:"kube_config"`
+
+	// Environment-targeted fields.
+	Default      RuntimeTargetConfig            `koanf:"default"`
+	Environments map[string]RuntimeTargetConfig `koanf:"environments"`
 }
 
 // LogConfig holds logging settings.
@@ -151,8 +174,8 @@ type CashuConfig struct {
 
 // TelemetryConfig holds observability / metrics settings.
 type TelemetryConfig struct {
-	Enabled     bool   `koanf:"enabled"`
-	ServiceName string `koanf:"service_name"`
+	Enabled      bool   `koanf:"enabled"`
+	ServiceName  string `koanf:"service_name"`
 	OTLPEndpoint string `koanf:"otlp_endpoint"` // OpenTelemetry collector endpoint
 }
 
@@ -202,8 +225,9 @@ func Defaults() *Config {
 			Enabled:  true,
 		},
 		Runtime: RuntimeConfig{
-			Type:       "docker",
-			DockerHost: "unix:///var/run/docker.sock",
+			Type:         "docker",
+			DockerHost:   "unix:///var/run/docker.sock",
+			Environments: map[string]RuntimeTargetConfig{},
 		},
 		Log: LogConfig{
 			Level:  "info",
@@ -233,7 +257,10 @@ func Defaults() *Config {
 
 // Load reads configuration from an optional YAML file and environment variables.
 // Environment variables are prefixed with BAHIA_ and use _ as the section separator
-// (e.g. BAHIA_DB_HOST → db.host). Double underscore (__) is also accepted.
+// (e.g. BAHIA_DB_HOST → db.host). Double underscore (__) is accepted as an
+// explicit nested separator and is required for nested runtime maps such as
+// BAHIA_RUNTIME__DEFAULT__TYPE or
+// BAHIA_RUNTIME__ENVIRONMENTS__production__COMPOSE_DIR.
 func Load(configPath string) (*Config, error) {
 	k := koanf.New(".")
 	cfg := Defaults()

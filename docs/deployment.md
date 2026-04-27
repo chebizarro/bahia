@@ -98,6 +98,52 @@ docker run -p 8080:8080 \
 
 See `.env.example` for all available configuration options.
 
+Nested runtime target settings use double underscores in environment variables:
+
+```bash
+export BAHIA_RUNTIME__DEFAULT__TYPE=compose
+export BAHIA_RUNTIME__DEFAULT__COMPOSE_DIR=/srv/bahia/compose/default
+export BAHIA_RUNTIME__ENVIRONMENTS__production__COMPOSE_DIR=/srv/bahia/compose/production
+export BAHIA_RUNTIME__ENVIRONMENTS__production__DOCKER_HOST=tcp://docker-prod.example.com:2375
+```
+
+## Runtime Targeting
+
+Bahia supports a process-wide runtime default plus per-environment runtime targets:
+
+```yaml
+runtime:
+  # Legacy flat keys are still accepted as fallback defaults.
+  type: docker
+  docker_host: unix:///var/run/docker.sock
+
+  default:
+    type: compose
+    docker_host: unix:///var/run/docker.sock
+    compose_dir: /srv/bahia/compose/default
+
+  environments:
+    staging:
+      compose_dir: /srv/bahia/compose/staging
+    production:
+      docker_host: tcp://docker-prod.example.com:2375
+      compose_dir: /srv/bahia/compose/production
+```
+
+Resolution order is: legacy flat `runtime.*`, then `runtime.default.*`, then `runtime.environments.<environment-name>.*`, then the persisted `Environment.runtime_config` keys (`type`, `docker_host`, `compose_dir`, `kube_context`, `kube_namespace`, `kube_config`). A service's `runtime_type` remains authoritative for whether Bahia uses Docker, Compose, or Kubernetes; environment-specific `type` overrides are rejected if they conflict with the service.
+
+For Compose, Bahia intentionally uses **one Compose project directory per Bahia environment**. Multiple environments can point to different `compose_dir` values, but services in the same environment share that Compose project.
+
+Compose files should expose image overrides using the service-name-derived environment variable pattern. For example, service `agent-api` maps to `AGENT_API_IMAGE`:
+
+```yaml
+services:
+  agent-api:
+    image: ${AGENT_API_IMAGE:-registry.example.com/agent-api:latest}
+```
+
+When running Bahia inside a container with the Compose runtime, mount both `/var/run/docker.sock` and the configured compose project directory at the same path used by `runtime.default.compose_dir` or the per-environment `compose_dir`.
+
 ## Monitoring
 
 - Health check: `GET /health`

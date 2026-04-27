@@ -2,6 +2,8 @@ package config
 
 import (
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -179,16 +181,16 @@ func TestDBConfigDSN_SpecialCharacters(t *testing.T) {
 func TestLoadFromEnvVars(t *testing.T) {
 	// Set env vars using single-underscore convention (matches .env.example).
 	envs := map[string]string{
-		"BAHIA_DB_HOST":              "envhost",
-		"BAHIA_DB_PORT":              "9999",
-		"BAHIA_DB_MAX_OPEN_CONNS":    "42",
-		"BAHIA_SERVER_READ_TIMEOUT":  "5s",
-		"BAHIA_SERVER_PORT":          "3000",
+		"BAHIA_DB_HOST":               "envhost",
+		"BAHIA_DB_PORT":               "9999",
+		"BAHIA_DB_MAX_OPEN_CONNS":     "42",
+		"BAHIA_SERVER_READ_TIMEOUT":   "5s",
+		"BAHIA_SERVER_PORT":           "3000",
 		"BAHIA_NOSTR_PUBLISH_ENABLED": "false",
-		"BAHIA_RUNTIME_DOCKER_HOST":  "tcp://remote:2375",
-		"BAHIA_AUTH_JWT_SECRET":      "supersecret",
-		"BAHIA_LOG_LEVEL":            "debug",
-		"BAHIA_RECONCILE_ENABLED":    "false",
+		"BAHIA_RUNTIME_DOCKER_HOST":   "tcp://remote:2375",
+		"BAHIA_AUTH_JWT_SECRET":       "supersecret",
+		"BAHIA_LOG_LEVEL":             "debug",
+		"BAHIA_RECONCILE_ENABLED":     "false",
 	}
 	for k, v := range envs {
 		t.Setenv(k, v)
@@ -246,6 +248,78 @@ func TestLoadFromEnvVars_DoubleUnderscore(t *testing.T) {
 	}
 	if cfg.DB.MaxOpenConns != 77 {
 		t.Errorf("DB.MaxOpenConns = %d, want %d (via double-underscore)", cfg.DB.MaxOpenConns, 77)
+	}
+}
+
+func TestLoadNestedRuntimeConfigFromYAML(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	content := []byte(`runtime:
+  type: docker
+  docker_host: unix:///legacy.sock
+  default:
+    type: compose
+    docker_host: tcp://default:2375
+    compose_dir: /srv/bahia/default
+  environments:
+    production:
+      compose_dir: /srv/bahia/production
+      docker_host: tcp://prod:2375
+    staging:
+      type: kubernetes
+      kube_context: staging-cluster
+      kube_namespace: staging
+`)
+	if err := os.WriteFile(path, content, 0o644); err != nil {
+		t.Fatalf("writing temp config: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	if cfg.Runtime.Type != "docker" {
+		t.Errorf("legacy Runtime.Type = %q, want docker", cfg.Runtime.Type)
+	}
+	if cfg.Runtime.Default.Type != "compose" {
+		t.Errorf("Runtime.Default.Type = %q, want compose", cfg.Runtime.Default.Type)
+	}
+	if cfg.Runtime.Default.ComposeDir != "/srv/bahia/default" {
+		t.Errorf("Runtime.Default.ComposeDir = %q", cfg.Runtime.Default.ComposeDir)
+	}
+	prod := cfg.Runtime.Environments["production"]
+	if prod.ComposeDir != "/srv/bahia/production" || prod.DockerHost != "tcp://prod:2375" {
+		t.Errorf("production runtime target = %+v", prod)
+	}
+	staging := cfg.Runtime.Environments["staging"]
+	if staging.Type != "kubernetes" || staging.KubeContext != "staging-cluster" || staging.KubeNamespace != "staging" {
+		t.Errorf("staging runtime target = %+v", staging)
+	}
+}
+
+func TestLoadNestedRuntimeConfigFromEnvVars(t *testing.T) {
+	t.Setenv("BAHIA_RUNTIME__DEFAULT__TYPE", "compose")
+	t.Setenv("BAHIA_RUNTIME__DEFAULT__COMPOSE_DIR", "/srv/bahia/default")
+	t.Setenv("BAHIA_RUNTIME__ENVIRONMENTS__production__DOCKER_HOST", "tcp://prod:2375")
+	t.Setenv("BAHIA_RUNTIME__ENVIRONMENTS__production__COMPOSE_DIR", "/srv/bahia/production")
+
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	if cfg.Runtime.Default.Type != "compose" {
+		t.Errorf("Runtime.Default.Type = %q, want compose", cfg.Runtime.Default.Type)
+	}
+	if cfg.Runtime.Default.ComposeDir != "/srv/bahia/default" {
+		t.Errorf("Runtime.Default.ComposeDir = %q", cfg.Runtime.Default.ComposeDir)
+	}
+	prod, ok := cfg.Runtime.Environments["production"]
+	if !ok {
+		t.Fatalf("missing production environment target: %+v", cfg.Runtime.Environments)
+	}
+	if prod.DockerHost != "tcp://prod:2375" || prod.ComposeDir != "/srv/bahia/production" {
+		t.Errorf("production runtime target = %+v", prod)
 	}
 }
 

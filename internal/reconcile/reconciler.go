@@ -19,7 +19,7 @@ type Reconciler struct {
 	artifacts    repository.ArtifactRepository
 	observations repository.RuntimeObservationRepository
 	state        repository.EnvironmentServiceStateRepository
-	observer     runtime.Observer
+	resolver     runtime.RuntimeResolver
 	publisher    events.Publisher
 	interval     time.Duration
 	logger       *zap.Logger
@@ -32,7 +32,7 @@ func NewReconciler(
 	artifacts repository.ArtifactRepository,
 	observations repository.RuntimeObservationRepository,
 	state repository.EnvironmentServiceStateRepository,
-	observer runtime.Observer,
+	resolver runtime.RuntimeResolver,
 	publisher events.Publisher,
 	interval time.Duration,
 	logger *zap.Logger,
@@ -43,7 +43,7 @@ func NewReconciler(
 		artifacts:    artifacts,
 		observations: observations,
 		state:        state,
-		observer:     observer,
+		resolver:     resolver,
 		publisher:    publisher,
 		interval:     interval,
 		logger:       logger,
@@ -105,8 +105,24 @@ func (r *Reconciler) reconcileOne(ctx context.Context, currentState *domain.Envi
 		return err
 	}
 
+	// Look up the target environment so runtime selection can be scoped per environment.
+	env, err := r.environments.GetByID(ctx, currentState.EnvironmentID)
+	if err != nil || env == nil {
+		return err
+	}
+
+	rt, err := r.resolver.Resolve(svc, env)
+	if err != nil {
+		r.logger.Warn("failed to resolve runtime",
+			zap.String("service", svc.Name),
+			zap.String("environment", env.Name),
+			zap.Error(err),
+		)
+		return nil
+	}
+
 	// Observe actual runtime state.
-	obs, err := r.observer.Observe(ctx, currentState.ServiceID, currentState.EnvironmentID, svc.Name)
+	obs, err := rt.Observe(ctx, currentState.ServiceID, currentState.EnvironmentID, svc.Name)
 	if err != nil {
 		r.logger.Warn("failed to observe runtime",
 			zap.String("service", svc.Name),

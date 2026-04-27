@@ -17,6 +17,7 @@ import (
 // LogHandler handles container log requests.
 type LogHandler struct {
 	logService *runtime.LogService
+	resolver   runtime.RuntimeResolver
 	runs       repository.DeploymentRunRepository
 	services   repository.ServiceRepository
 	envs       repository.EnvironmentRepository
@@ -33,8 +34,23 @@ func NewLogHandler(
 	states repository.EnvironmentServiceStateRepository,
 	logger *zap.Logger,
 ) *LogHandler {
+	return NewLogHandlerWithResolver(logService, nil, runs, services, envs, states, logger)
+}
+
+// NewLogHandlerWithResolver creates a new LogHandler that resolves live-log
+// runtime targets per service/environment while retaining LogService for stored run logs.
+func NewLogHandlerWithResolver(
+	logService *runtime.LogService,
+	resolver runtime.RuntimeResolver,
+	runs repository.DeploymentRunRepository,
+	services repository.ServiceRepository,
+	envs repository.EnvironmentRepository,
+	states repository.EnvironmentServiceStateRepository,
+	logger *zap.Logger,
+) *LogHandler {
 	return &LogHandler{
 		logService: logService,
+		resolver:   resolver,
 		runs:       runs,
 		services:   services,
 		envs:       envs,
@@ -135,7 +151,7 @@ func (h *LogHandler) StreamLiveLogs(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Verify environment exists
-	_, err = h.envs.GetByID(r.Context(), envID)
+	env, err := h.envs.GetByID(r.Context(), envID)
 	if err != nil {
 		if err == repository.ErrNotFound {
 			writeError(w, http.StatusNotFound, "environment not found")
@@ -164,8 +180,30 @@ func (h *LogHandler) StreamLiveLogs(w http.ResponseWriter, r *http.Request) {
 		Follow:      follow,
 	}
 
-	// Start log stream
-	logChan, err := h.logService.StreamLiveLogs(r.Context(), opts)
+	// Start log stream. Prefer resolver-based live logs so runtime targeting follows
+	// the requested environment; fall back to the legacy LogService runtime when no
+	// resolver has been wired (primarily for existing tests and callers).
+	var logChan <-chan runtime.LogEntry
+	if h.resolver != nil {
+		rt, err := h.resolver.Resolve(svc, env)
+		if err != nil {
+			h.logger.Error("failed to resolve runtime for log stream",
+				zap.String("service", svc.Name),
+				zap.String("environment", env.Name),
+				zap.Error(err),
+			)
+			writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to resolve runtime: %v", err))
+			return
+		}
+		logChan, err = rt.StreamLogs(r.Context(), opts.ServiceName, runtime.LogOptions{
+			Tail:   tail,
+			Follow: follow,
+		})
+	} else if h.logService != nil {
+		logChan, err = h.logService.StreamLiveLogs(r.Context(), opts)
+	} else {
+		err = fmt.Errorf("no runtime configured for live log streaming")
+	}
 	if err != nil {
 		h.logger.Error("failed to start log stream",
 			zap.String("service", svc.Name),

@@ -42,8 +42,29 @@ reconcile:
   enabled: true
 
 runtime:
+  # Legacy flat keys remain supported as the process-wide fallback.
   type: docker
   docker_host: "unix:///var/run/docker.sock"
+
+  # Preferred runtime target defaults. Services use their runtime_type to choose
+  # docker, compose, or kubernetes; these fields choose where that runtime runs.
+  default:
+    type: docker
+    docker_host: "unix:///var/run/docker.sock"
+    compose_dir: "/srv/bahia/compose/default"
+    kube_context: ""
+    kube_namespace: "default"
+    kube_config: ""
+
+  # Optional per-environment runtime targets. Compose uses one project directory
+  # per Bahia environment; all services in that environment share it.
+  environments:
+    staging:
+      compose_dir: "/srv/bahia/compose/staging"
+      docker_host: "unix:///var/run/docker.sock"
+    production:
+      compose_dir: "/srv/bahia/compose/production"
+      docker_host: "tcp://docker-prod.example.com:2375"
 
 log:
   level: info

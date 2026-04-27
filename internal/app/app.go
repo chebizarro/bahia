@@ -11,19 +11,19 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/openagentsinc/bahia/internal/adapters/harbor"
-	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/adapters/loom"
 	nostrAdapter "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	registryAdapter "github.com/openagentsinc/bahia/internal/adapters/registry"
-	secretsAdapter "github.com/openagentsinc/bahia/internal/adapters/secrets"
-	"github.com/openagentsinc/bahia/internal/notifications"
 	"github.com/openagentsinc/bahia/internal/adapters/runtime"
+	secretsAdapter "github.com/openagentsinc/bahia/internal/adapters/secrets"
 	"github.com/openagentsinc/bahia/internal/adapters/telemetry"
 	"github.com/openagentsinc/bahia/internal/api/handlers"
 	"github.com/openagentsinc/bahia/internal/api/router"
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/db"
+	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/events"
+	"github.com/openagentsinc/bahia/internal/notifications"
 	"github.com/openagentsinc/bahia/internal/reconcile"
 	"github.com/openagentsinc/bahia/internal/repository"
 	"github.com/openagentsinc/bahia/internal/service"
@@ -170,26 +170,16 @@ func New(cfg *config.Config) (*App, error) {
 	)
 	coord.SetupEventHandlers(publisher)
 
-	// Runtime observer — uses the factory to select Docker, Compose, or Kubernetes.
-	observer, err := runtime.NewObserver(runtime.RuntimeConfig{
-		Type:          cfg.Runtime.Type,
-		DockerHost:    cfg.Runtime.DockerHost,
-		ComposeDir:    cfg.Runtime.ComposeDir,
-		KubeContext:   cfg.Runtime.KubeContext,
-		KubeNamespace: cfg.Runtime.KubeNamespace,
-		KubeConfig:    cfg.Runtime.KubeConfig,
-	}, logger)
-	if err != nil {
-		return nil, fmt.Errorf("creating runtime observer: %w", err)
-	}
-	logger.Info("runtime observer initialized", zap.String("type", cfg.Runtime.Type))
+	// Runtime resolver — selects Docker, Compose, or Kubernetes per service/environment.
+	runtimeResolver := runtime.NewConfigRuntimeResolver(cfg.Runtime, logger)
+	logger.Info("runtime resolver initialized", zap.String("default_type", cfg.Runtime.Type))
 
 	// Reconciler (created here but started in Run() with the lifecycle context).
 	var rec *reconcile.Reconciler
 	if cfg.Reconcile.Enabled {
 		rec = reconcile.NewReconciler(
 			serviceRepo, envRepo, artifactRepo, obsRepo, stateRepo,
-			observer, publisher, cfg.Reconcile.Interval, logger,
+			runtimeResolver, publisher, cfg.Reconcile.Interval, logger,
 		)
 	}
 
@@ -249,12 +239,12 @@ func New(cfg *config.Config) (*App, error) {
 	// HTTP router.
 	handler := router.NewWithDeps(registry, logger, cfg.CORS, telemetryProvider,
 		router.RouterDeps{
-			Workers:   workerRepo,
-			Payments:  paymentSvc,
-			SBOMs:     sbomRepo,
-			Artifacts: artifactRepo,
-			EventHub:  eventHub,
-			Policies:  policySvc,
+			Workers:       workerRepo,
+			Payments:      paymentSvc,
+			SBOMs:         sbomRepo,
+			Artifacts:     artifactRepo,
+			EventHub:      eventHub,
+			Policies:      policySvc,
 			Secrets:       secretRepo,
 			Encryptor:     secretEncryptor,
 			Notifications: notifRepo,

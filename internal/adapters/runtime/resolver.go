@@ -1,0 +1,190 @@
+package runtime
+
+import (
+	"fmt"
+	"sort"
+	"strings"
+	"sync"
+
+	"github.com/openagentsinc/bahia/internal/config"
+	"github.com/openagentsinc/bahia/internal/domain"
+	"go.uber.org/zap"
+)
+
+// RuntimeResolver resolves the concrete runtime adapter for a service in an environment.
+type RuntimeResolver interface {
+	Resolve(service *domain.Service, env *domain.Environment) (Runtime, error)
+}
+
+// ConfigRuntimeResolver resolves runtime targets from global config plus
+// environment-scoped overrides and caches runtime instances per resolved target.
+type ConfigRuntimeResolver struct {
+	cfg    config.RuntimeConfig
+	logger *zap.Logger
+
+	mu    sync.Mutex
+	cache map[string]Runtime
+}
+
+// NewConfigRuntimeResolver creates a runtime resolver backed by Bahia config.
+func NewConfigRuntimeResolver(cfg config.RuntimeConfig, logger *zap.Logger) *ConfigRuntimeResolver {
+	if logger == nil {
+		logger = zap.NewNop()
+	}
+	return &ConfigRuntimeResolver{
+		cfg:    cfg,
+		logger: logger,
+		cache:  make(map[string]Runtime),
+	}
+}
+
+// Resolve returns a runtime instance for the supplied service and environment.
+func (r *ConfigRuntimeResolver) Resolve(service *domain.Service, env *domain.Environment) (Runtime, error) {
+	if service == nil {
+		return nil, fmt.Errorf("service is required for runtime resolution")
+	}
+	if env == nil {
+		return nil, fmt.Errorf("environment is required for runtime resolution")
+	}
+
+	target, envTypeExplicit := r.resolveTarget(env)
+	serviceType := service.RuntimeType
+	if serviceType != "" && envTypeExplicit && target.Type != "" && domain.RuntimeType(target.Type) != serviceType {
+		return nil, fmt.Errorf("runtime type conflict for environment %q: service %q requires %q but environment target config specifies %q", env.Name, service.Name, serviceType, target.Type)
+	}
+
+	if serviceType != "" {
+		target.Type = string(serviceType)
+	}
+
+	key := runtimeCacheKey(target)
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if rt, ok := r.cache[key]; ok {
+		return rt, nil
+	}
+
+	rt, err := NewRuntime(RuntimeConfig{
+		Type:          target.Type,
+		DockerHost:    target.DockerHost,
+		ComposeDir:    target.ComposeDir,
+		KubeContext:   target.KubeContext,
+		KubeNamespace: target.KubeNamespace,
+		KubeConfig:    target.KubeConfig,
+	}, r.logger)
+	if err != nil {
+		return nil, err
+	}
+	r.cache[key] = rt
+	return rt, nil
+}
+
+func (r *ConfigRuntimeResolver) resolveTarget(env *domain.Environment) (config.RuntimeTargetConfig, bool) {
+	target := config.RuntimeTargetConfig{
+		Type:          r.cfg.Type,
+		DockerHost:    r.cfg.DockerHost,
+		ComposeDir:    r.cfg.ComposeDir,
+		KubeContext:   r.cfg.KubeContext,
+		KubeNamespace: r.cfg.KubeNamespace,
+		KubeConfig:    r.cfg.KubeConfig,
+	}
+
+	target = overlayTarget(target, r.cfg.Default)
+
+	envTypeExplicit := false
+	if r.cfg.Environments != nil {
+		if envTarget, ok := r.cfg.Environments[env.Name]; ok {
+			if strings.TrimSpace(envTarget.Type) != "" {
+				envTypeExplicit = true
+			}
+			target = overlayTarget(target, envTarget)
+		}
+	}
+
+	if env.RuntimeConfig != nil {
+		var fromRuntimeConfig bool
+		target, fromRuntimeConfig = overlayRuntimeConfig(target, env.RuntimeConfig)
+		envTypeExplicit = envTypeExplicit || fromRuntimeConfig
+	}
+
+	return target, envTypeExplicit
+}
+
+func overlayTarget(base, override config.RuntimeTargetConfig) config.RuntimeTargetConfig {
+	if override.Type != "" {
+		base.Type = override.Type
+	}
+	if override.DockerHost != "" {
+		base.DockerHost = override.DockerHost
+	}
+	if override.ComposeDir != "" {
+		base.ComposeDir = override.ComposeDir
+	}
+	if override.KubeContext != "" {
+		base.KubeContext = override.KubeContext
+	}
+	if override.KubeNamespace != "" {
+		base.KubeNamespace = override.KubeNamespace
+	}
+	if override.KubeConfig != "" {
+		base.KubeConfig = override.KubeConfig
+	}
+	return base
+}
+
+func overlayRuntimeConfig(base config.RuntimeTargetConfig, values map[string]any) (config.RuntimeTargetConfig, bool) {
+	typeExplicit := false
+	for _, key := range sortedRuntimeConfigKeys(values) {
+		value, ok := stringValue(values[key])
+		if !ok || value == "" {
+			continue
+		}
+		switch key {
+		case "type":
+			base.Type = value
+			typeExplicit = true
+		case "docker_host":
+			base.DockerHost = value
+		case "compose_dir":
+			base.ComposeDir = value
+		case "kube_context":
+			base.KubeContext = value
+		case "kube_namespace":
+			base.KubeNamespace = value
+		case "kube_config":
+			base.KubeConfig = value
+		}
+	}
+	return base, typeExplicit
+}
+
+func sortedRuntimeConfigKeys(values map[string]any) []string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func stringValue(v any) (string, bool) {
+	s, ok := v.(string)
+	if !ok {
+		return "", false
+	}
+	return strings.TrimSpace(s), true
+}
+
+func runtimeCacheKey(target config.RuntimeTargetConfig) string {
+	return strings.Join([]string{
+		target.Type,
+		target.DockerHost,
+		target.ComposeDir,
+		target.KubeContext,
+		target.KubeNamespace,
+		target.KubeConfig,
+	}, "\x00")
+}
+
+var _ RuntimeResolver = (*ConfigRuntimeResolver)(nil)

@@ -38,7 +38,7 @@ func TestNewRuntime_DockerDefault(t *testing.T) {
 
 func TestNewRuntime_Compose(t *testing.T) {
 	logger := zap.NewNop()
-	rt, err := NewRuntime(RuntimeConfig{Type: "compose", ComposeDir: "/tmp/project"}, logger)
+	rt, err := NewRuntime(RuntimeConfig{Type: "compose", ComposeDir: "/tmp/project", DockerHost: "tcp://compose-docker:2375"}, logger)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -51,6 +51,9 @@ func TestNewRuntime_Compose(t *testing.T) {
 	}
 	if cr.projectDir != "/tmp/project" {
 		t.Errorf("expected /tmp/project, got %s", cr.projectDir)
+	}
+	if cr.dockerHost != "tcp://compose-docker:2375" {
+		t.Errorf("expected compose docker host override, got %s", cr.dockerHost)
 	}
 }
 
@@ -102,6 +105,16 @@ func TestNewRuntime_UnsupportedType(t *testing.T) {
 		t.Fatal("expected error for unsupported type")
 	}
 	if !contains(err.Error(), "unsupported runtime type") {
+		t.Errorf("unexpected error message: %v", err)
+	}
+}
+
+func TestNewRuntime_ComposeRequiresComposeDir(t *testing.T) {
+	_, err := NewRuntime(RuntimeConfig{Type: "compose"}, zap.NewNop())
+	if err == nil {
+		t.Fatal("expected error for missing compose_dir")
+	}
+	if !contains(err.Error(), "compose_dir is required") {
 		t.Errorf("unexpected error message: %v", err)
 	}
 }

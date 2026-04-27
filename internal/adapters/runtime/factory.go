@@ -35,9 +35,9 @@ func NewRuntime(cfg RuntimeConfig, logger *zap.Logger) (Runtime, error) {
 	case domain.RuntimeTypeCompose:
 		dir := cfg.ComposeDir
 		if dir == "" {
-			dir = "."
+			return nil, fmt.Errorf("compose_dir is required for compose runtime")
 		}
-		return NewComposeRuntime(dir, logger), nil
+		return NewComposeRuntimeWithDockerHost(dir, cfg.DockerHost, logger), nil
 
 	case domain.RuntimeTypeK8s:
 		return NewKubernetesRuntime(

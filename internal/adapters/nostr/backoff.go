@@ -41,8 +41,8 @@ func (b *Backoff) Next() time.Duration {
 	if b.Multiplier == 0 {
 		b.Multiplier = 2.0
 	}
-	if b.Jitter == 0 {
-		b.Jitter = 0.5
+	if b.Jitter < 0 {
+		b.Jitter = 0
 	}
 
 	// Calculate base delay with exponential increase.
@@ -56,9 +56,12 @@ func (b *Backoff) Next() time.Duration {
 	jitter := (rand.Float64()*2 - 1) * jitterRange // -jitterRange to +jitterRange
 	delay += jitter
 
-	// Ensure delay is at least half the initial.
+	// Ensure delay stays within the configured bounds after jitter.
 	if delay < float64(b.Initial)/2 {
 		delay = float64(b.Initial) / 2
+	}
+	if delay > float64(b.Max) {
+		delay = float64(b.Max)
 	}
 
 	b.attempt++
