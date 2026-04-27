@@ -1,0 +1,158 @@
+package repository
+
+import (
+	"context"
+	"fmt"
+
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/openagentsinc/bahia/internal/domain"
+)
+
+// PgSecretRepository is a PostgreSQL implementation of SecretRepository.
+type PgSecretRepository struct {
+	pool *pgxpool.Pool
+}
+
+// NewPgSecretRepository creates a new PgSecretRepository.
+func NewPgSecretRepository(pool *pgxpool.Pool) *PgSecretRepository {
+	return &PgSecretRepository{pool: pool}
+}
+
+func (r *PgSecretRepository) Create(ctx context.Context, s *domain.ServiceSecret) error {
+	if s.ID == uuid.Nil {
+		s.ID = uuid.New()
+	}
+	if s.Version == 0 {
+		s.Version = 1
+	}
+
+	_, err := r.pool.Exec(ctx, `
+		INSERT INTO service_secrets (id, service_id, environment_id, name, encrypted_value,
+			encryption_method, version, created_by, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now(), now())
+	`, s.ID, s.ServiceID, s.EnvironmentID, s.Name, s.EncryptedValue,
+		string(s.EncryptionMethod), s.Version, s.CreatedBy)
+	if err != nil {
+		return fmt.Errorf("creating secret: %w", err)
+	}
+	return nil
+}
+
+func (r *PgSecretRepository) GetByID(ctx context.Context, id uuid.UUID) (*domain.ServiceSecret, error) {
+	s := &domain.ServiceSecret{}
+	var method string
+	err := r.pool.QueryRow(ctx, `
+		SELECT id, service_id, environment_id, name, encrypted_value,
+			encryption_method, version, created_by, created_at, updated_at
+		FROM service_secrets WHERE id = $1
+	`, id).Scan(&s.ID, &s.ServiceID, &s.EnvironmentID, &s.Name, &s.EncryptedValue,
+		&method, &s.Version, &s.CreatedBy, &s.CreatedAt, &s.UpdatedAt)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("getting secret: %w", err)
+	}
+	s.EncryptionMethod = domain.EncryptionMethod(method)
+	return s, nil
+}
+
+func (r *PgSecretRepository) ListByService(ctx context.Context, serviceID uuid.UUID) ([]domain.ServiceSecret, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT id, service_id, environment_id, name, encrypted_value,
+			encryption_method, version, created_by, created_at, updated_at
+		FROM service_secrets WHERE service_id = $1
+		ORDER BY name, environment_id NULLS FIRST
+	`, serviceID)
+	if err != nil {
+		return nil, fmt.Errorf("listing secrets: %w", err)
+	}
+	defer rows.Close()
+	return scanSecrets(rows)
+}
+
+func (r *PgSecretRepository) ListByServiceAndEnv(ctx context.Context, serviceID, envID uuid.UUID) ([]domain.ServiceSecret, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT id, service_id, environment_id, name, encrypted_value,
+			encryption_method, version, created_by, created_at, updated_at
+		FROM service_secrets
+		WHERE service_id = $1 AND environment_id = $2
+		ORDER BY name
+	`, serviceID, envID)
+	if err != nil {
+		return nil, fmt.Errorf("listing secrets by env: %w", err)
+	}
+	defer rows.Close()
+	return scanSecrets(rows)
+}
+
+// ListEffective returns the merged set of secrets for a service+environment:
+// environment-specific secrets override service-wide ones with the same name.
+func (r *PgSecretRepository) ListEffective(ctx context.Context, serviceID, envID uuid.UUID) ([]domain.ServiceSecret, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT DISTINCT ON (name) id, service_id, environment_id, name, encrypted_value,
+			encryption_method, version, created_by, created_at, updated_at
+		FROM service_secrets
+		WHERE service_id = $1 AND (environment_id IS NULL OR environment_id = $2)
+		ORDER BY name, environment_id DESC NULLS LAST
+	`, serviceID, envID)
+	if err != nil {
+		return nil, fmt.Errorf("listing effective secrets: %w", err)
+	}
+	defer rows.Close()
+	return scanSecrets(rows)
+}
+
+func (r *PgSecretRepository) Update(ctx context.Context, s *domain.ServiceSecret) error {
+	_, err := r.pool.Exec(ctx, `
+		UPDATE service_secrets
+		SET encrypted_value = $1, encryption_method = $2, version = version + 1, updated_at = now()
+		WHERE id = $3
+	`, s.EncryptedValue, string(s.EncryptionMethod), s.ID)
+	if err != nil {
+		return fmt.Errorf("updating secret: %w", err)
+	}
+	return nil
+}
+
+func (r *PgSecretRepository) Delete(ctx context.Context, id uuid.UUID) error {
+	_, err := r.pool.Exec(ctx, `DELETE FROM service_secrets WHERE id = $1`, id)
+	if err != nil {
+		return fmt.Errorf("deleting secret: %w", err)
+	}
+	return nil
+}
+
+func (r *PgSecretRepository) DeleteByName(ctx context.Context, serviceID uuid.UUID, envID *uuid.UUID, name string) error {
+	var err error
+	if envID != nil {
+		_, err = r.pool.Exec(ctx, `
+			DELETE FROM service_secrets WHERE service_id = $1 AND environment_id = $2 AND name = $3
+		`, serviceID, envID, name)
+	} else {
+		_, err = r.pool.Exec(ctx, `
+			DELETE FROM service_secrets WHERE service_id = $1 AND environment_id IS NULL AND name = $3
+		`, serviceID, name)
+	}
+	if err != nil {
+		return fmt.Errorf("deleting secret by name: %w", err)
+	}
+	return nil
+}
+
+func scanSecrets(rows pgx.Rows) ([]domain.ServiceSecret, error) {
+	var secrets []domain.ServiceSecret
+	for rows.Next() {
+		var s domain.ServiceSecret
+		var method string
+		if err := rows.Scan(&s.ID, &s.ServiceID, &s.EnvironmentID, &s.Name, &s.EncryptedValue,
+			&method, &s.Version, &s.CreatedBy, &s.CreatedAt, &s.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("scanning secret: %w", err)
+		}
+		s.EncryptionMethod = domain.EncryptionMethod(method)
+		secrets = append(secrets, s)
+	}
+	return secrets, rows.Err()
+}

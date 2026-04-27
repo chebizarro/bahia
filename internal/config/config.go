@@ -1,0 +1,279 @@
+// Package config provides configuration loading and validation for Bahia.
+package config
+
+import (
+	"fmt"
+	"net/url"
+	"strings"
+	"time"
+
+	"github.com/knadh/koanf/parsers/yaml"
+	"github.com/knadh/koanf/providers/env"
+	"github.com/knadh/koanf/providers/file"
+	"github.com/knadh/koanf/v2"
+)
+
+// Config is the top-level configuration for Bahia.
+type Config struct {
+	Server        ServerConfig        `koanf:"server"`
+	DB            DBConfig            `koanf:"db"`
+	Harbor        HarborConfig        `koanf:"harbor"`
+	Loom          LoomConfig          `koanf:"loom"`
+	Nostr         NostrConfig         `koanf:"nostr"`
+	Reconcile     ReconcileConfig     `koanf:"reconcile"`
+	Runtime       RuntimeConfig       `koanf:"runtime"`
+	Log           LogConfig           `koanf:"log"`
+	Auth          AuthConfig          `koanf:"auth"`
+	CORS          CORSConfig          `koanf:"cors"`
+	Blossom       BlossomConfig       `koanf:"blossom"`
+	Cashu         CashuConfig         `koanf:"cashu"`
+	Telemetry     TelemetryConfig     `koanf:"telemetry"`
+	Notifications NotificationsConfig `koanf:"notifications"`
+	Registry      RegistryAdapterConfig `koanf:"registry"`
+}
+
+// RegistryAdapterConfig holds OCI registry adapter settings for multi-registry support.
+// When configured, this supersedes HarborConfig for image verification.
+type RegistryAdapterConfig struct {
+	Type     string `koanf:"type"`     // ghcr, dockerhub, harbor, oci (auto-detected from URL if empty)
+	URL      string `koanf:"url"`      // registry base URL (required for harbor/oci)
+	Username string `koanf:"username"` // credentials (optional for public repos)
+	Password string `koanf:"password"` // password or PAT
+}
+
+// ServerConfig holds HTTP server settings.
+type ServerConfig struct {
+	Host            string        `koanf:"host"`
+	Port            int           `koanf:"port"`
+	ReadTimeout     time.Duration `koanf:"read_timeout"`
+	WriteTimeout    time.Duration `koanf:"write_timeout"`
+	ShutdownTimeout time.Duration `koanf:"shutdown_timeout"`
+}
+
+// DBConfig holds PostgreSQL connection settings.
+type DBConfig struct {
+	Host            string        `koanf:"host"`
+	Port            int           `koanf:"port"`
+	User            string        `koanf:"user"`
+	Password        string        `koanf:"password"`
+	Name            string        `koanf:"name"`
+	SSLMode         string        `koanf:"sslmode"`
+	MaxOpenConns    int           `koanf:"max_open_conns"`
+	MaxIdleConns    int           `koanf:"max_idle_conns"`
+	ConnMaxLifetime time.Duration `koanf:"conn_max_lifetime"`
+}
+
+// DSN returns a PostgreSQL connection string with properly escaped components.
+func (c DBConfig) DSN() string {
+	u := &url.URL{
+		Scheme: "postgres",
+		User:   url.UserPassword(c.User, c.Password),
+		Host:   fmt.Sprintf("%s:%d", c.Host, c.Port),
+		Path:   c.Name,
+	}
+	q := u.Query()
+	q.Set("sslmode", c.SSLMode)
+	u.RawQuery = q.Encode()
+	return u.String()
+}
+
+// HarborConfig holds Harbor registry settings.
+type HarborConfig struct {
+	URL      string `koanf:"url"`
+	Username string `koanf:"username"`
+	Password string `koanf:"password"`
+	Insecure bool   `koanf:"insecure"`
+	Enabled  bool   `koanf:"enabled"`
+}
+
+// LoomConfig holds Loom worker integration settings.
+type LoomConfig struct {
+	Relays       []string      `koanf:"relays"`
+	JobTimeout   time.Duration `koanf:"job_timeout"`
+	PollInterval time.Duration `koanf:"poll_interval"`
+}
+
+// NostrConfig holds Nostr relay and identity settings.
+type NostrConfig struct {
+	PrivateKey     string   `koanf:"private_key"`
+	Relays         []string `koanf:"relays"`
+	PublishEnabled bool     `koanf:"publish_enabled"`
+}
+
+// ReconcileConfig holds reconciliation loop settings.
+type ReconcileConfig struct {
+	Interval time.Duration `koanf:"interval"`
+	Enabled  bool          `koanf:"enabled"`
+}
+
+// RuntimeConfig holds target runtime settings.
+type RuntimeConfig struct {
+	Type            string `koanf:"type"`
+	DockerHost      string `koanf:"docker_host"`
+	ComposeDir      string `koanf:"compose_dir"`
+	KubeContext     string `koanf:"kube_context"`
+	KubeNamespace   string `koanf:"kube_namespace"`
+	KubeConfig      string `koanf:"kube_config"`
+}
+
+// LogConfig holds logging settings.
+type LogConfig struct {
+	Level  string `koanf:"level"`
+	Format string `koanf:"format"`
+}
+
+// AuthConfig holds authentication settings.
+type AuthConfig struct {
+	Enabled   bool   `koanf:"enabled"`
+	JWTSecret string `koanf:"jwt_secret"`
+}
+
+// CORSConfig holds CORS middleware settings.
+type CORSConfig struct {
+	// AllowedOrigins is the list of origins allowed to make cross-origin requests.
+	// If empty, no origins are allowed (secure default).
+	// Use ["*"] only for development.
+	AllowedOrigins []string `koanf:"allowed_origins"`
+}
+
+// BlossomConfig holds Blossom media/blob storage settings.
+type BlossomConfig struct {
+	Enabled bool   `koanf:"enabled"`
+	URL     string `koanf:"url"`
+}
+
+// CashuConfig holds Cashu ecash payment integration settings.
+type CashuConfig struct {
+	Enabled  bool   `koanf:"enabled"`
+	MintURL  string `koanf:"mint_url"`
+	WalletDB string `koanf:"wallet_db"` // path to wallet database
+}
+
+// TelemetryConfig holds observability / metrics settings.
+type TelemetryConfig struct {
+	Enabled     bool   `koanf:"enabled"`
+	ServiceName string `koanf:"service_name"`
+	OTLPEndpoint string `koanf:"otlp_endpoint"` // OpenTelemetry collector endpoint
+}
+
+// NotificationsConfig holds notification dispatcher settings.
+type NotificationsConfig struct {
+	Enabled    bool     `koanf:"enabled"`
+	WebhookURL string   `koanf:"webhook_url"`
+	NostrDM    bool     `koanf:"nostr_dm"` // send DMs to subscribed pubkeys
+	Kinds      []string `koanf:"kinds"`    // event kinds to notify on (e.g. "deployment.completed")
+}
+
+// Defaults returns a Config with sensible default values.
+func Defaults() *Config {
+	return &Config{
+		Server: ServerConfig{
+			Host:            "0.0.0.0",
+			Port:            8080,
+			ReadTimeout:     30 * time.Second,
+			WriteTimeout:    30 * time.Second,
+			ShutdownTimeout: 15 * time.Second,
+		},
+		DB: DBConfig{
+			Host:            "localhost",
+			Port:            5432,
+			User:            "bahia",
+			Password:        "bahia",
+			Name:            "bahia",
+			SSLMode:         "disable",
+			MaxOpenConns:    25,
+			MaxIdleConns:    5,
+			ConnMaxLifetime: 5 * time.Minute,
+		},
+		Harbor: HarborConfig{
+			URL:      "https://harbor.example.com",
+			Insecure: false,
+			Enabled:  false,
+		},
+		Loom: LoomConfig{
+			JobTimeout:   30 * time.Minute,
+			PollInterval: 10 * time.Second,
+		},
+		Nostr: NostrConfig{
+			PublishEnabled: true,
+		},
+		Reconcile: ReconcileConfig{
+			Interval: 60 * time.Second,
+			Enabled:  true,
+		},
+		Runtime: RuntimeConfig{
+			Type:       "docker",
+			DockerHost: "unix:///var/run/docker.sock",
+		},
+		Log: LogConfig{
+			Level:  "info",
+			Format: "json",
+		},
+		Auth: AuthConfig{
+			Enabled: false,
+		},
+		CORS: CORSConfig{
+			AllowedOrigins: []string{}, // secure default: no cross-origin requests
+		},
+		Blossom: BlossomConfig{
+			Enabled: false,
+		},
+		Cashu: CashuConfig{
+			Enabled: false,
+		},
+		Telemetry: TelemetryConfig{
+			Enabled:     false,
+			ServiceName: "bahia",
+		},
+		Notifications: NotificationsConfig{
+			Enabled: false,
+		},
+	}
+}
+
+// Load reads configuration from an optional YAML file and environment variables.
+// Environment variables are prefixed with BAHIA_ and use _ as the section separator
+// (e.g. BAHIA_DB_HOST → db.host). Double underscore (__) is also accepted.
+func Load(configPath string) (*Config, error) {
+	k := koanf.New(".")
+	cfg := Defaults()
+
+	// Load from YAML file if provided.
+	if configPath != "" {
+		if err := k.Load(file.Provider(configPath), yaml.Parser()); err != nil {
+			return nil, fmt.Errorf("loading config file %s: %w", configPath, err)
+		}
+	}
+
+	// Load from environment variables with BAHIA_ prefix.
+	// Convention: BAHIA_<SECTION>_<FIELD> maps to section.field in koanf.
+	// All config sections are single words (server, db, harbor, etc.),
+	// so only the first underscore separates section from field name.
+	// Field names may contain underscores (e.g., read_timeout, max_open_conns).
+	// Double-underscore (__) is also accepted as an explicit level separator.
+	if err := k.Load(env.Provider("BAHIA_", ".", func(s string) string {
+		key := strings.ToLower(strings.TrimPrefix(s, "BAHIA_"))
+		// First, honour explicit double-underscore separators.
+		key = strings.ReplaceAll(key, "__", ".")
+		// If no explicit separator was found, split on the first underscore.
+		if !strings.Contains(key, ".") {
+			if i := strings.Index(key, "_"); i >= 0 {
+				key = key[:i] + "." + key[i+1:]
+			}
+		}
+		return key
+	}), nil); err != nil {
+		return nil, fmt.Errorf("loading environment config: %w", err)
+	}
+
+	if err := k.Unmarshal("", cfg); err != nil {
+		return nil, fmt.Errorf("unmarshaling config: %w", err)
+	}
+
+	return cfg, nil
+}
+
+// ServerAddress returns the host:port string for the HTTP server.
+func (c *Config) ServerAddress() string {
+	return fmt.Sprintf("%s:%d", c.Server.Host, c.Server.Port)
+}

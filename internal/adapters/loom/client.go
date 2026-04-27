@@ -1,0 +1,429 @@
+// Package loom provides a client for interacting with Loom workers via Nostr.
+//
+// The Loom protocol defines five event kinds:
+//
+//	Kind 10100 – Worker Advertisement (Replaceable)
+//	Kind 5100  – Job Request (Regular)
+//	Kind 30100 – Job Status Update (Parameterized Replaceable)
+//	Kind 5101  – Job Result (Regular)
+//	Kind 5102  – Job Cancellation Request (Regular)
+//
+// See loom-protocol/SPECIFICATION.md for the full specification.
+package loom
+
+import (
+	"context"
+	"fmt"
+	"strconv"
+	"time"
+
+	"github.com/nbd-wtf/go-nostr"
+	"github.com/nbd-wtf/go-nostr/nip44"
+	nostrAdapter "github.com/openagentsinc/bahia/internal/adapters/nostr"
+	"github.com/openagentsinc/bahia/internal/config"
+	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/repository"
+	"go.uber.org/zap"
+)
+
+// Loom Protocol event kinds.
+const (
+	KindWorkerAd     = 10100 // Replaceable worker advertisement
+	KindJobRequest   = 5100  // Job request (subprocess)
+	KindJobStatus    = 30100 // Parameterized replaceable status update
+	KindJobResult    = 5101  // Final job result
+	KindJobCancelReq = 5102  // Cancellation request
+)
+
+// Job status values returned in Kind 30100 status tags.
+const (
+	StatusQueued    = "queued"
+	StatusRunning   = "running"
+	StatusCompleted = "completed"
+	StatusFailed    = "failed"
+	StatusCancelled = "cancelled"
+	StatusTimeout   = "timeout"
+)
+
+// JobRequest represents a deploy job request sent to Loom workers.
+type JobRequest struct {
+	ID           string            `json:"id"`
+	Type         string            `json:"type"`                    // "deploy", "build"
+	Image        string            `json:"image"`
+	Digest       string            `json:"digest"`
+	Environment  string            `json:"environment"`
+	Service      string            `json:"service"`
+	WorkerPubkey string            `json:"worker_pubkey,omitempty"` // target a specific worker (auto-selected if empty)
+	Cmd          string            `json:"cmd,omitempty"`           // executable (default: "bash")
+	Args         []string          `json:"args,omitempty"`          // extra args appended after generated script
+	Env          map[string]string `json:"env,omitempty"`           // additional env vars
+	Secrets      map[string]string `json:"secrets,omitempty"`       // NIP-44 encrypted secret env vars
+	Params       map[string]string `json:"params,omitempty"`
+	PaymentToken string            `json:"payment_token,omitempty"` // Cashu payment token
+	Timeout      time.Duration     `json:"timeout,omitempty"`
+}
+
+// JobStatus represents the current status of a Loom job.
+type JobStatus struct {
+	JobID        string `json:"job_id"`
+	Status       string `json:"status"` // queued, running, completed, failed, cancelled, timeout
+	Success      *bool  `json:"success,omitempty"`
+	ExitCode     *int   `json:"exit_code,omitempty"`
+	Duration     *int   `json:"duration,omitempty"`   // seconds
+	WorkerPubkey string `json:"worker_pubkey,omitempty"`
+	StdoutURL    string `json:"stdout_url,omitempty"` // Blossom URL
+	StderrURL    string `json:"stderr_url,omitempty"` // Blossom URL
+	ChangeToken  string `json:"change_token,omitempty"`
+	Error        string `json:"error,omitempty"`
+	LogOutput    string `json:"log_output,omitempty"` // content from status updates
+}
+
+// StatusCallback is called for each intermediate Kind 30100 status update
+// received while waiting for a job result.
+type StatusCallback func(status *JobStatus)
+
+// Client interacts with Loom workers via the Loom Nostr protocol.
+type Client struct {
+	pool         *nostrAdapter.RelayPool
+	workerRepo   repository.WorkerRepository
+	privateKey   string
+	jobTimeout   time.Duration
+	pollInterval time.Duration
+	logger       *zap.Logger
+}
+
+// NewClient creates a new Loom client.
+// If pool is nil, a standalone pool is created from config relay URLs.
+// workerRepo is optional; when non-nil, enables auto-selection of workers.
+func NewClient(cfg config.LoomConfig, nostrPrivateKey string, pool *nostrAdapter.RelayPool, logger *zap.Logger, opts ...ClientOption) *Client {
+	if pool == nil {
+		pool = nostrAdapter.NewRelayPool(cfg.Relays, logger)
+		pool.Connect(context.Background())
+	}
+
+	c := &Client{
+		pool:         pool,
+		privateKey:   nostrPrivateKey,
+		jobTimeout:   cfg.JobTimeout,
+		pollInterval: cfg.PollInterval,
+		logger:       logger,
+	}
+	for _, opt := range opts {
+		opt(c)
+	}
+	return c
+}
+
+// ClientOption configures a Client.
+type ClientOption func(*Client)
+
+// WithWorkerRepo enables worker auto-selection from the catalog.
+func WithWorkerRepo(repo repository.WorkerRepository) ClientOption {
+	return func(c *Client) { c.workerRepo = repo }
+}
+
+// SubmitJob submits a deployment job to Loom workers via a Kind 5100 job request event.
+// If no WorkerPubkey is set and a workerRepo is available, auto-selects an online worker.
+func (c *Client) SubmitJob(ctx context.Context, job JobRequest) (string, error) {
+	if c.privateKey == "" {
+		return "", fmt.Errorf("nostr private key not configured")
+	}
+
+	// Auto-select worker if none specified.
+	workerPubkey := job.WorkerPubkey
+	if workerPubkey == "" && c.workerRepo != nil {
+		selected, err := c.selectWorker(ctx)
+		if err != nil {
+			return "", fmt.Errorf("auto-selecting worker: %w", err)
+		}
+		workerPubkey = selected
+		c.logger.Info("auto-selected worker", zap.String("pubkey", workerPubkey))
+	}
+
+	// Build the command. Default to "bash -c <deploy-script>".
+	cmd := job.Cmd
+	if cmd == "" {
+		cmd = "bash"
+	}
+
+	tags := nostr.Tags{
+		{"cmd", cmd},
+	}
+
+	// Build args: if caller supplied explicit args, use those.
+	// Otherwise synthesize a deploy script from image/digest/service.
+	args := job.Args
+	if len(args) == 0 && job.Image != "" {
+		script := buildDeployScript(job)
+		args = []string{"-c", script}
+	}
+	if len(args) > 0 {
+		argsTag := nostr.Tag{"args"}
+		argsTag = append(argsTag, args...)
+		tags = append(tags, argsTag)
+	}
+
+	// Target worker.
+	if workerPubkey != "" {
+		tags = append(tags, nostr.Tag{"p", workerPubkey})
+	}
+
+	// Payment token (required by spec, optional in Bahia until Cashu is wired).
+	if job.PaymentToken != "" {
+		tags = append(tags, nostr.Tag{"payment", job.PaymentToken})
+	}
+
+	// Standard env vars for the deploy context.
+	envVars := map[string]string{
+		"BAHIA_DEPLOY_SERVICE":     job.Service,
+		"BAHIA_DEPLOY_ENVIRONMENT": job.Environment,
+		"BAHIA_DEPLOY_IMAGE":       job.Image,
+		"BAHIA_DEPLOY_DIGEST":      job.Digest,
+		"BAHIA_DEPLOY_TYPE":        job.Type,
+	}
+	// Merge caller-supplied env vars (override defaults).
+	for k, v := range job.Env {
+		envVars[k] = v
+	}
+	for k, v := range envVars {
+		if v != "" {
+			tags = append(tags, nostr.Tag{"env", k, v})
+		}
+	}
+
+	// NIP-44 encrypted secret env vars.
+	if len(job.Secrets) > 0 && workerPubkey != "" {
+		secretTags, err := c.encryptSecrets(job.Secrets, workerPubkey)
+		if err != nil {
+			return "", fmt.Errorf("encrypting secrets: %w", err)
+		}
+		tags = append(tags, secretTags...)
+	}
+
+	// Stdin content is empty for deployment jobs.
+	ev := nostr.Event{
+		Kind:      KindJobRequest,
+		Content:   "",
+		CreatedAt: nostr.Timestamp(time.Now().Unix()),
+		Tags:      tags,
+	}
+
+	if err := ev.Sign(c.privateKey); err != nil {
+		return "", fmt.Errorf("signing event: %w", err)
+	}
+
+	published, err := c.pool.Publish(ctx, ev)
+	if err != nil {
+		return "", fmt.Errorf("publishing job request: %w", err)
+	}
+
+	c.logger.Info("loom job submitted",
+		zap.String("event_id", ev.ID),
+		zap.String("service", job.Service),
+		zap.String("environment", job.Environment),
+		zap.String("worker", workerPubkey),
+		zap.Int("kind", KindJobRequest),
+		zap.Int("relays", published),
+	)
+
+	return ev.ID, nil
+}
+
+// PollJobStatus subscribes to Kind 30100 (status) and Kind 5101 (result) events
+// for the given job event ID. It returns when a terminal result (Kind 5101) is
+// received or the context expires. An optional StatusCallback is invoked for
+// each intermediate status update.
+func (c *Client) PollJobStatus(ctx context.Context, jobEventID string, callbacks ...StatusCallback) (*JobStatus, error) {
+	ctx, cancel := context.WithTimeout(ctx, c.jobTimeout)
+	defer cancel()
+
+	filters := []nostr.Filter{{
+		Kinds: []int{KindJobStatus, KindJobResult},
+		Tags:  nostr.TagMap{"e": {jobEventID}},
+	}}
+
+	sub, err := c.pool.Subscribe(ctx, filters)
+	if err != nil {
+		return nil, fmt.Errorf("subscribing for job status: %w", err)
+	}
+
+	// Track the latest status while waiting for a result.
+	latest := &JobStatus{JobID: jobEventID, Status: StatusQueued}
+
+	for {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case ev, ok := <-sub.Events:
+			if !ok {
+				return nil, fmt.Errorf("subscription closed unexpectedly")
+			}
+
+			switch ev.Kind {
+			case KindJobStatus:
+				// Intermediate status update — record it.
+				status := getTagValue(ev.Tags, "status")
+				if status != "" {
+					latest.Status = status
+				}
+				latest.WorkerPubkey = ev.PubKey
+				if ev.Content != "" {
+					latest.LogOutput = ev.Content
+				}
+				c.logger.Debug("loom job status update",
+					zap.String("job_id", jobEventID),
+					zap.String("status", latest.Status),
+				)
+				// Notify callbacks.
+				for _, cb := range callbacks {
+					cb(latest)
+				}
+
+			case KindJobResult:
+				// Terminal result — parse tags and return.
+				return parseJobResult(ev, jobEventID), nil
+			}
+		}
+	}
+}
+
+// CancelJob publishes a Kind 5102 cancellation request for the given job.
+func (c *Client) CancelJob(ctx context.Context, jobEventID string, workerPubkey string) error {
+	if c.privateKey == "" {
+		return fmt.Errorf("nostr private key not configured")
+	}
+
+	tags := nostr.Tags{
+		{"e", jobEventID},
+	}
+	if workerPubkey != "" {
+		tags = append(tags, nostr.Tag{"p", workerPubkey})
+	}
+
+	ev := nostr.Event{
+		Kind:      KindJobCancelReq,
+		Content:   "",
+		CreatedAt: nostr.Timestamp(time.Now().Unix()),
+		Tags:      tags,
+	}
+
+	if err := ev.Sign(c.privateKey); err != nil {
+		return fmt.Errorf("signing cancellation event: %w", err)
+	}
+
+	published, err := c.pool.Publish(ctx, ev)
+	if err != nil {
+		return fmt.Errorf("publishing cancellation request: %w", err)
+	}
+
+	c.logger.Info("loom job cancellation sent",
+		zap.String("job_event_id", jobEventID),
+		zap.Int("kind", KindJobCancelReq),
+		zap.Int("relays", published),
+	)
+
+	return nil
+}
+
+// ---------------------------------------------------------------------------
+// Worker selection
+// ---------------------------------------------------------------------------
+
+// selectWorker picks the best available online worker from the catalog.
+// Currently selects the most recently advertised online worker.
+func (c *Client) selectWorker(ctx context.Context) (string, error) {
+	workers, err := c.workerRepo.List(ctx, string(domain.WorkerStatusOnline), 10)
+	if err != nil {
+		return "", fmt.Errorf("listing online workers: %w", err)
+	}
+	if len(workers) == 0 {
+		return "", fmt.Errorf("no online workers available")
+	}
+	// Return the most recently advertised worker (list is ordered by last_advertisement_at DESC).
+	return workers[0].PubKey, nil
+}
+
+// ---------------------------------------------------------------------------
+// Secret encryption
+// ---------------------------------------------------------------------------
+
+// encryptSecrets encrypts secret env vars using NIP-44 with the worker's pubkey.
+func (c *Client) encryptSecrets(secrets map[string]string, workerPubkey string) (nostr.Tags, error) {
+	conversationKey, err := nip44.GenerateConversationKey(workerPubkey, c.privateKey)
+	if err != nil {
+		return nil, fmt.Errorf("generating conversation key: %w", err)
+	}
+
+	var tags nostr.Tags
+	for key, value := range secrets {
+		encrypted, err := nip44.Encrypt(value, conversationKey)
+		if err != nil {
+			return nil, fmt.Errorf("encrypting secret %q: %w", key, err)
+		}
+		tags = append(tags, nostr.Tag{"secret", key, encrypted})
+	}
+	return tags, nil
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+// buildDeployScript generates a minimal bash script for a container deployment.
+func buildDeployScript(job JobRequest) string {
+	ref := job.Image
+	if job.Digest != "" {
+		ref += "@" + job.Digest
+	}
+	return fmt.Sprintf(
+		`set -e; echo "Deploying %s to %s/%s"; docker pull %s && docker stop %s 2>/dev/null || true && docker rm %s 2>/dev/null || true && docker run -d --name %s %s; echo "Deploy complete"`,
+		ref, job.Environment, job.Service,
+		ref,
+		job.Service, job.Service,
+		job.Service, ref,
+	)
+}
+
+// parseJobResult extracts a JobStatus from a Kind 5101 result event.
+func parseJobResult(ev *nostr.Event, jobEventID string) *JobStatus {
+	result := &JobStatus{
+		JobID:        jobEventID,
+		WorkerPubkey: ev.PubKey,
+	}
+
+	if s := getTagValue(ev.Tags, "success"); s != "" {
+		v := s == "true"
+		result.Success = &v
+		if v {
+			result.Status = StatusCompleted
+		} else {
+			result.Status = StatusFailed
+		}
+	}
+	if s := getTagValue(ev.Tags, "exit_code"); s != "" {
+		if code, err := strconv.Atoi(s); err == nil {
+			result.ExitCode = &code
+		}
+	}
+	if s := getTagValue(ev.Tags, "duration"); s != "" {
+		if dur, err := strconv.Atoi(s); err == nil {
+			result.Duration = &dur
+		}
+	}
+	result.StdoutURL = getTagValue(ev.Tags, "stdout")
+	result.StderrURL = getTagValue(ev.Tags, "stderr")
+	result.ChangeToken = getTagValue(ev.Tags, "change")
+	result.Error = getTagValue(ev.Tags, "error")
+
+	return result
+}
+
+// getTagValue returns the first value for the given tag key, or "".
+func getTagValue(tags nostr.Tags, key string) string {
+	for _, tag := range tags {
+		if len(tag) >= 2 && tag[0] == key {
+			return tag[1]
+		}
+	}
+	return ""
+}

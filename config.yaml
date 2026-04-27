@@ -1,0 +1,54 @@
+# Bahia Deployment Registry - Example Configuration
+server:
+  host: "0.0.0.0"
+  port: 8080
+  read_timeout: 30s
+  write_timeout: 30s
+  shutdown_timeout: 15s
+
+db:
+  host: localhost
+  port: 5432
+  user: bahia
+  password: bahia
+  name: bahia
+  sslmode: disable
+  max_open_conns: 25
+  max_idle_conns: 5
+  conn_max_lifetime: 5m
+
+harbor:
+  url: "https://harbor.example.com"
+  username: ""
+  password: ""
+  insecure: false
+
+loom:
+  relays:
+    - "wss://relay.damus.io"
+    - "wss://nos.lol"
+  job_timeout: 30m
+  poll_interval: 10s
+
+nostr:
+  private_key: ""
+  relays:
+    - "wss://relay.damus.io"
+    - "wss://nos.lol"
+  publish_enabled: false
+
+reconcile:
+  interval: 60s
+  enabled: true
+
+runtime:
+  type: docker
+  docker_host: "unix:///var/run/docker.sock"
+
+log:
+  level: info
+  format: json
+
+auth:
+  enabled: false
+  jwt_secret: ""

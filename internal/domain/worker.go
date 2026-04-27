@@ -1,0 +1,75 @@
+package domain
+
+import "time"
+
+// WorkerStatus represents the availability of a Loom worker.
+type WorkerStatus string
+
+const (
+	WorkerStatusOnline  WorkerStatus = "online"
+	WorkerStatusStale   WorkerStatus = "stale"   // no ad for >5 minutes
+	WorkerStatusOffline WorkerStatus = "offline"  // no ad for >30 minutes
+)
+
+// WorkerSoftware describes an installed software entry from the S tag.
+type WorkerSoftware struct {
+	Name    string `json:"name"`
+	Version string `json:"version"`
+	Path    string `json:"path,omitempty"`
+}
+
+// WorkerPricing describes pricing from a price tag.
+type WorkerPricing struct {
+	MintURL        string `json:"mint_url"`
+	PricePerSecond int    `json:"price_per_second"`
+	Unit           string `json:"unit"` // e.g. "sat"
+}
+
+// Worker represents a Loom compute worker discovered via Kind 10100 events.
+type Worker struct {
+	PubKey             string           `json:"pubkey"`
+	Name               string           `json:"name"`
+	Description        string           `json:"description,omitempty"`
+	Architecture       string           `json:"architecture,omitempty"`    // e.g. "linux/amd64"
+	MaxConcurrentJobs  int              `json:"max_concurrent_jobs"`
+	CurrentQueueDepth  int              `json:"current_queue_depth"`
+	Software           []WorkerSoftware `json:"software,omitempty"`
+	Pricing            []WorkerPricing  `json:"pricing,omitempty"`
+	MinDurationSecs    int              `json:"min_duration_secs,omitempty"`
+	MaxDurationSecs    int              `json:"max_duration_secs,omitempty"`
+	Geohash            string           `json:"geohash,omitempty"`
+	PreferredRelays    []string         `json:"preferred_relays,omitempty"`
+	LastAdvertisementAt time.Time       `json:"last_advertisement_at"`
+	Status             WorkerStatus     `json:"status"`
+	CreatedAt          time.Time        `json:"created_at"`
+	UpdatedAt          time.Time        `json:"updated_at"`
+}
+
+// StaleThreshold is the duration after which a worker is considered stale.
+const StaleThreshold = 5 * time.Minute
+
+// OfflineThreshold is the duration after which a worker is considered offline.
+const OfflineThreshold = 30 * time.Minute
+
+// ComputeStatus derives the worker's current status from its last advertisement time.
+func (w *Worker) ComputeStatus(now time.Time) WorkerStatus {
+	age := now.Sub(w.LastAdvertisementAt)
+	switch {
+	case age > OfflineThreshold:
+		return WorkerStatusOffline
+	case age > StaleThreshold:
+		return WorkerStatusStale
+	default:
+		return WorkerStatusOnline
+	}
+}
+
+// HasSoftware checks if the worker advertises the given software name.
+func (w *Worker) HasSoftware(name string) bool {
+	for _, s := range w.Software {
+		if s.Name == name {
+			return true
+		}
+	}
+	return false
+}
