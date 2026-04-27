@@ -77,7 +77,7 @@ func TestCreateService_InvalidRuntimeType(t *testing.T) {
 	w := postJSON(t, h.Create, dto.CreateServiceRequest{
 		Name:         "my-svc",
 		ArtifactRepo: "harbor/test",
-		RuntimeType:  "podman",
+		RuntimeType:  "lxc",
 	})
 	assertStatus(t, w, http.StatusBadRequest)
 	assertErrorContains(t, w, "runtime type")

@@ -113,6 +113,7 @@ const (
 	RuntimeTypeDocker  RuntimeType = "docker"
 	RuntimeTypeCompose RuntimeType = "compose"
 	RuntimeTypeK8s     RuntimeType = "kubernetes"
+	RuntimeTypePodman  RuntimeType = "podman"
 )
 
 // Service represents a deployable application component.

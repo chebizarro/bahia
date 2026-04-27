@@ -73,13 +73,13 @@ func TestValidateHealthStatus(t *testing.T) {
 }
 
 func TestValidateRuntimeType(t *testing.T) {
-	valid := []RuntimeType{RuntimeTypeDocker, RuntimeTypeCompose, RuntimeTypeK8s, ""}
+	valid := []RuntimeType{RuntimeTypeDocker, RuntimeTypeCompose, RuntimeTypeK8s, RuntimeTypePodman, ""}
 	for _, s := range valid {
 		if err := ValidateRuntimeType(s); err != nil {
 			t.Errorf("ValidateRuntimeType(%q) unexpected error: %v", s, err)
 		}
 	}
-	if err := ValidateRuntimeType("podman"); err == nil {
+	if err := ValidateRuntimeType("lxc"); err == nil {
 		t.Error("expected error for unsupported runtime type")
 	}
 }

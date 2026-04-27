@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"fmt"
+	"os"
 
 	"github.com/openagentsinc/bahia/internal/domain"
 	"go.uber.org/zap"
@@ -9,8 +10,9 @@ import (
 
 // RuntimeConfig holds the configuration needed to create a Runtime.
 type RuntimeConfig struct {
-	Type          string // "docker", "compose", "kubernetes"
+	Type          string // "docker", "compose", "kubernetes", "podman"
 	DockerHost    string // Docker socket or TCP address
+	PodmanHost    string // Podman socket path (defaults to rootless user socket)
 	ComposeDir    string // Directory containing docker-compose.yml
 	KubeContext   string // Kubernetes context name
 	KubeNamespace string // Kubernetes namespace
@@ -46,6 +48,14 @@ func NewRuntime(cfg RuntimeConfig, logger *zap.Logger) (Runtime, error) {
 			cfg.KubeConfig,
 			logger,
 		), nil
+
+	case domain.RuntimeTypePodman:
+		host := cfg.PodmanHost
+		if host == "" {
+			// Default to rootless Podman socket
+			host = fmt.Sprintf("unix:///run/user/%d/podman/podman.sock", os.Getuid())
+		}
+		return NewPodmanObserver(host, logger), nil
 
 	default:
 		return nil, fmt.Errorf("unsupported runtime type: %q", cfg.Type)

@@ -6,7 +6,7 @@ This guide covers how to run Bahia in different environments.
 
 - Go 1.24+
 - PostgreSQL 16+
-- Docker (for runtime observation)
+- Docker, Podman, or Kubernetes (for runtime observation)
 
 ## Quick Start with Docker Compose
 
@@ -130,7 +130,49 @@ runtime:
       compose_dir: /srv/bahia/compose/production
 ```
 
-Resolution order is: legacy flat `runtime.*`, then `runtime.default.*`, then `runtime.environments.<environment-name>.*`, then the persisted `Environment.runtime_config` keys (`type`, `docker_host`, `compose_dir`, `kube_context`, `kube_namespace`, `kube_config`). A service's `runtime_type` remains authoritative for whether Bahia uses Docker, Compose, or Kubernetes; environment-specific `type` overrides are rejected if they conflict with the service.
+Resolution order is: legacy flat `runtime.*`, then `runtime.default.*`, then `runtime.environments.<environment-name>.*`, then the persisted `Environment.runtime_config` keys (`type`, `docker_host`, `podman_host`, `compose_dir`, `kube_context`, `kube_namespace`, `kube_config`). A service's `runtime_type` remains authoritative for whether Bahia uses Docker, Compose, Kubernetes, or Podman; environment-specific `type` overrides are rejected if they conflict with the service.
+
+## Podman Runtime
+
+Bahia supports Podman as an alternative to Docker. Since Podman emulates Docker's API, Bahia communicates with Podman via its Docker-compatible socket.
+
+### Configuration
+
+```yaml
+runtime:
+  type: podman
+  # Rootless Podman (default if omitted):
+  podman_host: unix:///run/user/1000/podman/podman.sock
+
+  # Or for rootful Podman:
+  # podman_host: unix:///run/podman/podman.sock
+```
+
+### Socket Paths
+
+| Mode | Socket Path |
+|------|-------------|
+| Rootless | `unix:///run/user/<UID>/podman/podman.sock` |
+| Rootful | `unix:///run/podman/podman.sock` |
+
+### Enabling the Podman Socket
+
+Podman's API socket is not enabled by default. Enable it with:
+
+```bash
+# Rootless (user service)
+systemctl --user enable --now podman.socket
+
+# Rootful (system service)
+sudo systemctl enable --now podman.socket
+```
+
+### Environment Variables
+
+```bash
+export BAHIA_RUNTIME__DEFAULT__TYPE=podman
+export BAHIA_RUNTIME__DEFAULT__PODMAN_HOST=unix:///run/user/1000/podman/podman.sock
+```
 
 For Compose, Bahia intentionally uses **one Compose project directory per Bahia environment**. Multiple environments can point to different `compose_dir` values, but services in the same environment share that Compose project.
 

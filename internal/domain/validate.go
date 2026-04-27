@@ -84,7 +84,7 @@ func ValidateHealthStatus(s HealthStatus) error {
 // ValidateRuntimeType checks that a RuntimeType is a known value.
 func ValidateRuntimeType(s RuntimeType) error {
 	switch s {
-	case RuntimeTypeDocker, RuntimeTypeCompose, RuntimeTypeK8s:
+	case RuntimeTypeDocker, RuntimeTypeCompose, RuntimeTypeK8s, RuntimeTypePodman:
 		return nil
 	case "":
 		return nil // defaults to "docker"

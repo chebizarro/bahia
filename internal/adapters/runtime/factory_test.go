@@ -98,9 +98,35 @@ func TestNewRuntime_KubernetesDefaultNamespace(t *testing.T) {
 	}
 }
 
+func TestNewRuntime_Podman(t *testing.T) {
+	logger := zap.NewNop()
+	rt, err := NewRuntime(RuntimeConfig{Type: "podman", PodmanHost: "unix:///run/podman/podman.sock"}, logger)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if rt.Type() != domain.RuntimeTypePodman {
+		t.Errorf("expected podman, got %s", rt.Type())
+	}
+	if _, ok := rt.(*PodmanObserver); !ok {
+		t.Error("expected *PodmanObserver")
+	}
+}
+
+func TestNewRuntime_PodmanDefaultSocket(t *testing.T) {
+	logger := zap.NewNop()
+	// Empty PodmanHost should default to rootless socket.
+	rt, err := NewRuntime(RuntimeConfig{Type: "podman"}, logger)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if rt.Type() != domain.RuntimeTypePodman {
+		t.Errorf("expected podman, got %s", rt.Type())
+	}
+}
+
 func TestNewRuntime_UnsupportedType(t *testing.T) {
 	logger := zap.NewNop()
-	_, err := NewRuntime(RuntimeConfig{Type: "podman"}, logger)
+	_, err := NewRuntime(RuntimeConfig{Type: "lxc"}, logger)
 	if err == nil {
 		t.Fatal("expected error for unsupported type")
 	}
@@ -281,9 +307,11 @@ func TestRuntimeInterfaceCompileTime(t *testing.T) {
 	var _ Runtime = (*DockerObserver)(nil)
 	var _ Runtime = (*ComposeRuntime)(nil)
 	var _ Runtime = (*KubernetesRuntime)(nil)
+	var _ Runtime = (*PodmanObserver)(nil)
 	var _ Observer = (*DockerObserver)(nil)
 	var _ Observer = (*ComposeRuntime)(nil)
 	var _ Observer = (*KubernetesRuntime)(nil)
+	var _ Observer = (*PodmanObserver)(nil)
 }
 
 func TestDeployOptions(t *testing.T) {

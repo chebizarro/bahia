@@ -60,7 +60,7 @@ You push code → CI builds it → Bahia registers the artifact → You deploy �
 - ✅ Service, environment, build, artifact registration
 - ✅ Deployment intents with approval workflows
 - ✅ Deployment execution via Loom workers
-- ✅ Runtime observation and drift detection
+- ✅ Runtime observation and drift detection (Docker, Podman, Compose, Kubernetes)
 - ✅ Rollback workflows with blue-green/canary support
 - ✅ SBOM parsing (SPDX and CycloneDX)
 - ✅ Cashu wallet for worker payments
