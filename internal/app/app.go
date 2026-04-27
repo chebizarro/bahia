@@ -20,9 +20,11 @@ import (
 	"github.com/openagentsinc/bahia/internal/api/handlers"
 	"github.com/openagentsinc/bahia/internal/api/router"
 	"github.com/openagentsinc/bahia/internal/config"
+	"github.com/openagentsinc/bahia/internal/controlplane"
 	"github.com/openagentsinc/bahia/internal/db"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/events"
+	"github.com/openagentsinc/bahia/internal/mcp"
 	"github.com/openagentsinc/bahia/internal/notifications"
 	"github.com/openagentsinc/bahia/internal/reconcile"
 	"github.com/openagentsinc/bahia/internal/repository"
@@ -236,6 +238,22 @@ func New(cfg *config.Config) (*App, error) {
 		logger.Info("secrets encryption enabled")
 	}
 
+	// MCP (Model Context Protocol) server for AI agent integration.
+	mcpServer := mcp.NewServer(registry, logger)
+	mcpHandler := handlers.NewMCPHandler(mcpServer, logger)
+	logger.Info("mcp server initialized")
+
+	// Nostr control plane reactor for event-driven deployment operations.
+	if len(cfg.Nostr.Relays) > 0 && cfg.Nostr.PrivateKey != "" {
+		reactorConfig := controlplane.Config{
+			Relays:     cfg.Nostr.Relays,
+			PrivateKey: cfg.Nostr.PrivateKey,
+		}
+		reactor := controlplane.NewReactor(reactorConfig, registry, logger)
+		bgManager.Register(&controlplaneRunner{reactor: reactor})
+		logger.Info("nostr control plane reactor registered")
+	}
+
 	// HTTP router.
 	handler := router.NewWithDeps(registry, logger, cfg.CORS, telemetryProvider,
 		router.RouterDeps{
@@ -249,6 +267,7 @@ func New(cfg *config.Config) (*App, error) {
 			Encryptor:     secretEncryptor,
 			Notifications: notifRepo,
 			Dispatcher:    notifDispatcher,
+			MCP:           mcpHandler,
 		}, cfg.Auth)
 
 	httpServer := &http.Server{
@@ -336,4 +355,14 @@ func (r *reconcilerRunner) Name() string { return "reconciler" }
 func (r *reconcilerRunner) Run(ctx context.Context) error {
 	r.rec.Run(ctx)
 	return nil
+}
+
+// controlplaneRunner adapts the controlplane.Reactor to the BackgroundRunner interface.
+type controlplaneRunner struct {
+	reactor *controlplane.Reactor
+}
+
+func (r *controlplaneRunner) Name() string { return "controlplane" }
+func (r *controlplaneRunner) Run(ctx context.Context) error {
+	return r.reactor.Run(ctx)
 }

@@ -40,6 +40,7 @@ type RouterDeps struct {
 	Encryptor     *secrets.Encryptor
 	Notifications repository.NotificationRepository
 	Dispatcher    *notifications.Dispatcher
+	MCP           *handlers.MCPHandler
 }
 
 // SignatureVerifier is the interface for signature verification.
@@ -274,6 +275,13 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 				r.Put("/notifications/channels/{id}", notifH.UpdateChannel)
 				r.Delete("/notifications/channels/{id}", notifH.DeleteChannel)
 				r.Post("/notifications/channels/{id}/test", notifH.TestChannel)
+			}
+
+			// MCP (Model Context Protocol) endpoints
+			if deps.MCP != nil {
+				r.Get("/mcp/info", deps.MCP.GetServerInfo)
+				r.Post("/mcp/tools/list", deps.MCP.ListTools)
+				r.Post("/mcp/tools/call", deps.MCP.CallTool)
 			}
 		})
 	})
