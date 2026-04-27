@@ -21,6 +21,8 @@ services:
       dockerfile: Dockerfile
     ports:
       - "8080:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
     environment:
       BAHIA_DB_HOST: postgres
       BAHIA_DB_PORT: "5432"
