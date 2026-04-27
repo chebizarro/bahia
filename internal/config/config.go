@@ -95,9 +95,11 @@ type LoomConfig struct {
 
 // NostrConfig holds Nostr relay and identity settings.
 type NostrConfig struct {
-	PrivateKey     string   `koanf:"private_key"`
-	Relays         []string `koanf:"relays"`
-	PublishEnabled bool     `koanf:"publish_enabled"`
+	PrivateKey        string   `koanf:"private_key"`
+	Relays            []string `koanf:"relays"`
+	PrivateRelays     []string `koanf:"private_relays"`
+	AuthorizedPubkeys []string `koanf:"authorized_pubkeys"`
+	PublishEnabled    bool     `koanf:"publish_enabled"`
 }
 
 // ReconcileConfig holds reconciliation loop settings.

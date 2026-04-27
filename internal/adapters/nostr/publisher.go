@@ -23,15 +23,21 @@ const (
 	KindObservation        = 31005
 )
 
-// Nostr event kinds for Bahia inbound command events.
+// Nostr event kinds for Bahia inbound command events (311xx series).
+// DEPRECATED: These kinds are superseded by the control plane reactor's 596x series
+// (see internal/controlplane/reactor.go). The 311xx series remains for backward
+// compatibility with existing event processors but new implementations should use:
+//   - KindDeployRequest (5961) instead of KindCmdIntentCreate (31102)
+//   - KindDeploymentApproval (5966) instead of KindCmdIntentApprove/Reject (31103/31104)
+//   - KindRollbackRequest (5962) instead of KindCmdRollbackRequest (31105)
 // See docs/nostr-commands.md for tag structure and content format.
 const (
-	KindCmdBuildRegister     = 31100
-	KindCmdArtifactRegister  = 31101
-	KindCmdIntentCreate      = 31102
-	KindCmdIntentApprove     = 31103
-	KindCmdIntentReject      = 31104
-	KindCmdRollbackRequest   = 31105
+	KindCmdBuildRegister     = 31100 // Deprecated: use reactor API
+	KindCmdArtifactRegister  = 31101 // Deprecated: use reactor API
+	KindCmdIntentCreate      = 31102 // Deprecated: use KindDeployRequest (5961)
+	KindCmdIntentApprove     = 31103 // Deprecated: use KindDeploymentApproval (5966)
+	KindCmdIntentReject      = 31104 // Deprecated: use KindDeploymentApproval (5966)
+	KindCmdRollbackRequest   = 31105 // Deprecated: use KindRollbackRequest (5962)
 )
 
 // Publisher bridges internal events to Nostr relay publication.

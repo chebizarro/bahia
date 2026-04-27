@@ -246,10 +246,15 @@ func New(cfg *config.Config) (*App, error) {
 	// Nostr control plane reactor for event-driven deployment operations.
 	if len(cfg.Nostr.Relays) > 0 && cfg.Nostr.PrivateKey != "" {
 		reactorConfig := controlplane.Config{
-			Relays:     cfg.Nostr.Relays,
-			PrivateKey: cfg.Nostr.PrivateKey,
+			Relays:            cfg.Nostr.Relays,
+			PrivateRelays:     cfg.Nostr.PrivateRelays,
+			PrivateKey:        cfg.Nostr.PrivateKey,
+			AuthorizedPubkeys: cfg.Nostr.AuthorizedPubkeys,
 		}
-		reactor := controlplane.NewReactor(reactorConfig, registry, logger)
+		// Pass nil for signer to use local key signing.
+		// To enable NIP-46 remote signing via Signet, create a signet.Client
+		// and pass it here: controlplane.NewReactor(..., signetClient, logger)
+		reactor := controlplane.NewReactor(reactorConfig, registry, relayPool, nil, logger)
 		bgManager.Register(&controlplaneRunner{reactor: reactor})
 		logger.Info("nostr control plane reactor registered")
 	}

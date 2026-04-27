@@ -277,11 +277,14 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 				r.Post("/notifications/channels/{id}/test", notifH.TestChannel)
 			}
 
-			// MCP (Model Context Protocol) endpoints
+			// Agent Tools API (inspired by MCP, but HTTP-based for direct AI agent access)
+			// NOTE: This is NOT a true MCP implementation (no JSON-RPC 2.0, no SSE transport).
+			// It exposes deployment registry operations as callable tools for AI agents.
+			// For real MCP integration, see internal/mcp/server.go's GetTools/CallTool methods.
 			if deps.MCP != nil {
-				r.Get("/mcp/info", deps.MCP.GetServerInfo)
-				r.Post("/mcp/tools/list", deps.MCP.ListTools)
-				r.Post("/mcp/tools/call", deps.MCP.CallTool)
+				r.Get("/agent/info", deps.MCP.GetServerInfo)
+				r.Post("/agent/tools/list", deps.MCP.ListTools)
+				r.Post("/agent/tools/call", deps.MCP.CallTool)
 			}
 		})
 	})

@@ -22,6 +22,8 @@ import (
 )
 
 // Event kinds for Bahia control plane (596x/696x/796x series).
+// This is the CANONICAL event kind series for Bahia operations.
+// The 311xx series in internal/adapters/nostr/publisher.go is deprecated.
 const (
 	// Request kinds (5961-5969)
 	KindDeployRequest       = 5961 // Request to deploy a service
@@ -30,14 +32,25 @@ const (
 	KindServiceCreate       = 5964 // Create a new service
 	KindEnvironmentCreate   = 5965 // Create a new environment
 	KindDeploymentApproval  = 5966 // Approve or reject a deployment
+	KindObservationSubmit   = 5967 // Submit runtime observation
+	KindDriftRemediate      = 5968 // Request drift remediation
 
 	// Status kinds (6961-6969)
 	KindDeploymentStatus   = 6961 // Deployment progress updates
 	KindServiceStatus      = 6962 // Service health/state updates
 
 	// Result kinds (7961-7969)
-	KindDeploymentResult   = 7961 // Final deployment result
-	KindActionResult       = 7962 // Result of a service action
+	KindDeploymentResult     = 7961 // Final deployment result
+	KindActionResult         = 7962 // Result of a service action
+	KindServiceCreateResult  = 7963 // Service creation result
+	KindEnvCreateResult      = 7964 // Environment creation result
+	KindObservationResult    = 7965 // Observation submission result
+	KindRemediationResult    = 7966 // Drift remediation result
+
+	// Replaceable registry kinds (3196x series, d-tag indexed)
+	KindServiceState       = 31961 // Replaceable service state (d=service:env)
+	KindServiceRegistry    = 31962 // Replaceable service registry entry (d=service_id)
+	KindEnvironmentRegistry = 31963 // Replaceable environment registry entry (d=env_id)
 )
 
 // DefaultAuthorizedPubkeys is the list of pubkeys allowed to control Bahia via Nostr.
@@ -53,9 +66,17 @@ type Config struct {
 	// PrivateRelays is the list of relay URLs for private/draft events.
 	PrivateRelays []string
 	// PrivateKey is the hex-encoded signing key for event publishing.
+	// Used when no Signer is configured.
 	PrivateKey string
 	// AuthorizedPubkeys is the list of pubkeys allowed to submit requests.
 	AuthorizedPubkeys []string
+}
+
+// EventSigner signs Nostr events. Implementations include local signing
+// (using a private key) or remote signing via NIP-46 bunker (Signet).
+type EventSigner interface {
+	// Sign signs an event in place.
+	Sign(ctx context.Context, event *nostr.Event) error
 }
 
 // Reactor subscribes to Nostr control plane events and dispatches handlers.
@@ -63,6 +84,7 @@ type Reactor struct {
 	config   Config
 	pool     *nostrpool.RelayPool
 	registry *service.RegistryService
+	signer   EventSigner // Optional NIP-46 signer
 	logger   *slog.Logger
 	zapLog   *zap.Logger
 	dedup    *nostrpool.EventDeduplicator
@@ -89,27 +111,33 @@ type DeploymentRun struct {
 }
 
 // NewReactor creates a new Bahia control plane reactor.
-func NewReactor(config Config, registry *service.RegistryService, zapLog *zap.Logger) *Reactor {
+// If pool is nil, a new pool will be created from the config relays.
+// If signer is provided, it will be used for NIP-46 remote signing; otherwise
+// the config.PrivateKey will be used for local signing.
+func NewReactor(config Config, registry *service.RegistryService, pool *nostrpool.RelayPool, signer EventSigner, zapLog *zap.Logger) *Reactor {
 	if zapLog == nil {
 		zapLog = zap.NewNop()
 	}
 	
-	// Create relay pool with private key for NIP-42 auth
-	poolOpts := []nostrpool.RelayPoolOption{}
-	if config.PrivateKey != "" {
-		poolOpts = append(poolOpts, nostrpool.WithPrivateKey(config.PrivateKey))
+	// Use provided pool or create a new one
+	if pool == nil {
+		poolOpts := []nostrpool.RelayPoolOption{}
+		if config.PrivateKey != "" {
+			poolOpts = append(poolOpts, nostrpool.WithPrivateKey(config.PrivateKey))
+		}
+		
+		// Copy slices to avoid mutating config's backing array
+		allRelays := make([]string, 0, len(config.Relays)+len(config.PrivateRelays))
+		allRelays = append(allRelays, config.Relays...)
+		allRelays = append(allRelays, config.PrivateRelays...)
+		pool = nostrpool.NewRelayPool(allRelays, zapLog, poolOpts...)
 	}
-	
-	// Copy slices to avoid mutating config's backing array
-	allRelays := make([]string, 0, len(config.Relays)+len(config.PrivateRelays))
-	allRelays = append(allRelays, config.Relays...)
-	allRelays = append(allRelays, config.PrivateRelays...)
-	pool := nostrpool.NewRelayPool(allRelays, zapLog, poolOpts...)
 
 	return &Reactor{
 		config:   config,
 		pool:     pool,
 		registry: registry,
+		signer:   signer, // May be nil, signEvent will fall back to local key
 		logger:   slog.Default().With("component", "controlplane"),
 		zapLog:   zapLog,
 		dedup:    nostrpool.NewEventDeduplicator(10000),
@@ -128,6 +156,9 @@ func (r *Reactor) Run(ctx context.Context) error {
 	// Connect to relays
 	r.pool.Connect(ctx)
 
+	// Start periodic cleanup of completed runs
+	go r.cleanupRuns(ctx)
+
 	// Subscribe to control plane request events
 	now := nostr.Now()
 	filters := []nostr.Filter{
@@ -139,6 +170,8 @@ func (r *Reactor) Run(ctx context.Context) error {
 				KindServiceCreate,
 				KindEnvironmentCreate,
 				KindDeploymentApproval,
+				KindObservationSubmit,
+				KindDriftRemediate,
 			},
 			Since: &now,
 		},
@@ -205,6 +238,10 @@ func (r *Reactor) handleEvent(ctx context.Context, event *nostr.Event) {
 		go r.handleEnvironmentCreate(ctx, event)
 	case KindDeploymentApproval:
 		go r.handleDeploymentApproval(ctx, event)
+	case KindObservationSubmit:
+		go r.handleObservationSubmit(ctx, event)
+	case KindDriftRemediate:
+		go r.handleDriftRemediate(ctx, event)
 	default:
 		r.logger.Warn("unexpected event kind", "kind", event.Kind)
 	}
@@ -722,12 +759,13 @@ func (r *Reactor) publishServiceCreated(ctx context.Context, requestEvent *nostr
 	})
 
 	event := &nostr.Event{
-		Kind:      KindActionResult,
+		Kind:      KindServiceCreateResult,
 		CreatedAt: nostr.Now(),
 		Tags: nostr.Tags{
 			{"e", requestEvent.ID, "", "reply"},
 			{"p", requestEvent.PubKey},
 			{"status", "success"},
+			{"type", "service_created"},
 			{"service", svc.ID.String()},
 		},
 		Content: string(content),
@@ -751,12 +789,13 @@ func (r *Reactor) publishEnvironmentCreated(ctx context.Context, requestEvent *n
 	})
 
 	event := &nostr.Event{
-		Kind:      KindActionResult,
+		Kind:      KindEnvCreateResult,
 		CreatedAt: nostr.Now(),
 		Tags: nostr.Tags{
 			{"e", requestEvent.ID, "", "reply"},
 			{"p", requestEvent.PubKey},
 			{"status", "success"},
+			{"type", "environment_created"},
 			{"environment", env.ID.String()},
 		},
 		Content: string(content),
@@ -793,10 +832,17 @@ func (r *Reactor) publishError(ctx context.Context, requestEvent *nostr.Event, s
 	return err
 }
 
-// signEvent signs an event with the configured private key.
+// signEvent signs an event using the NIP-46 signer if configured,
+// otherwise falls back to the local private key.
 func (r *Reactor) signEvent(event *nostr.Event) error {
+	// Prefer NIP-46 remote signing if signer is configured
+	if r.signer != nil {
+		return r.signer.Sign(context.Background(), event)
+	}
+
+	// Fall back to local key signing
 	if r.config.PrivateKey == "" {
-		return fmt.Errorf("no private key configured")
+		return fmt.Errorf("no private key or signer configured")
 	}
 	return event.Sign(r.config.PrivateKey)
 }
@@ -806,4 +852,360 @@ func (r *Reactor) GetRun(requestEventID string) *DeploymentRun {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.runs[requestEventID]
+}
+
+// ObservationRequest represents a kind:5967 observation submission.
+type ObservationRequest struct {
+	ServiceID           uuid.UUID `json:"service_id"`
+	EnvironmentID       uuid.UUID `json:"environment_id"`
+	ObservedImageDigest string    `json:"observed_image_digest"`
+	ObservedImageRepo   string    `json:"observed_image_repo,omitempty"`
+	ObservedContainerID string    `json:"observed_container_id,omitempty"`
+	ObservedHost        string    `json:"observed_host,omitempty"`
+	ObservedVersion     string    `json:"observed_version,omitempty"`
+	HealthStatus        string    `json:"health_status"`
+	Source              string    `json:"source"`
+}
+
+// handleObservationSubmit processes a kind:5967 observation submission event.
+func (r *Reactor) handleObservationSubmit(ctx context.Context, event *nostr.Event) {
+	logger := r.logger.With("event_id", event.ID, "requester", event.PubKey)
+	logger.Info("received observation submission")
+
+	// Validate authorization
+	if !r.isAuthorized(event.PubKey) {
+		logger.Warn("unauthorized observation submission")
+		r.publishError(ctx, event, "unauthorized", "requester not in authorized list")
+		return
+	}
+
+	// Parse observation request
+	var req ObservationRequest
+	if err := json.Unmarshal([]byte(event.Content), &req); err != nil {
+		logger.Error("failed to parse observation request", "error", err)
+		r.publishError(ctx, event, "parse_error", err.Error())
+		return
+	}
+
+	// Validate required fields
+	if req.ServiceID == uuid.Nil {
+		r.publishError(ctx, event, "validation_error", "service_id is required")
+		return
+	}
+	if req.EnvironmentID == uuid.Nil {
+		r.publishError(ctx, event, "validation_error", "environment_id is required")
+		return
+	}
+	if req.ObservedImageDigest == "" {
+		r.publishError(ctx, event, "validation_error", "observed_image_digest is required")
+		return
+	}
+
+	// Parse health status
+	healthStatus := domain.HealthStatus(req.HealthStatus)
+	if healthStatus == "" {
+		healthStatus = domain.HealthStatusUnknown
+	}
+
+	// Create and record observation
+	obs := &domain.RuntimeObservation{
+		ID:                  uuid.New(),
+		ServiceID:           req.ServiceID,
+		EnvironmentID:       req.EnvironmentID,
+		ObservedImageDigest: req.ObservedImageDigest,
+		ObservedImageRepo:   req.ObservedImageRepo,
+		ObservedContainerID: req.ObservedContainerID,
+		ObservedHost:        req.ObservedHost,
+		ObservedVersion:     req.ObservedVersion,
+		HealthStatus:        healthStatus,
+		Source:              req.Source,
+		ObservedAt:          time.Now(),
+	}
+
+	if err := r.registry.RecordObservation(ctx, obs); err != nil {
+		logger.Error("failed to record observation", "error", err)
+		r.publishError(ctx, event, "record_error", err.Error())
+		return
+	}
+
+	logger.Info("observation recorded", "observation_id", obs.ID)
+
+	// Publish observation result
+	if err := r.publishObservationResult(ctx, event, obs); err != nil {
+		logger.Error("failed to publish observation result", "error", err)
+	}
+
+	// Publish updated state event
+	if err := r.publishStateEvent(ctx, req.ServiceID, req.EnvironmentID); err != nil {
+		logger.Error("failed to publish state event", "error", err)
+	}
+}
+
+// handleDriftRemediate processes a kind:5968 drift remediation request.
+func (r *Reactor) handleDriftRemediate(ctx context.Context, event *nostr.Event) {
+	logger := r.logger.With("event_id", event.ID, "requester", event.PubKey)
+	logger.Info("received drift remediation request")
+
+	// Validate authorization
+	if !r.isAuthorized(event.PubKey) {
+		logger.Warn("unauthorized drift remediation request")
+		r.publishError(ctx, event, "unauthorized", "requester not in authorized list")
+		return
+	}
+
+	// Parse request - expects service_id and environment_id
+	var req struct {
+		ServiceID     uuid.UUID `json:"service_id"`
+		EnvironmentID uuid.UUID `json:"environment_id"`
+	}
+	if err := json.Unmarshal([]byte(event.Content), &req); err != nil {
+		logger.Error("failed to parse remediation request", "error", err)
+		r.publishError(ctx, event, "parse_error", err.Error())
+		return
+	}
+
+	// Get current state
+	state, err := r.registry.GetEnvironmentServiceState(ctx, req.ServiceID, req.EnvironmentID)
+	if err != nil {
+		logger.Error("failed to get service state", "error", err)
+		r.publishError(ctx, event, "state_error", err.Error())
+		return
+	}
+
+	// Check if drifted
+	if state.DriftStatus != domain.DriftStatusDrifted {
+		r.publishRemediationResult(ctx, event, state, "not_drifted", "Service is not in drifted state")
+		return
+	}
+
+	// If we have a desired artifact, create a new deployment intent to remediate
+	if state.DesiredArtifactID == nil {
+		r.publishRemediationResult(ctx, event, state, "no_desired_artifact", "No desired artifact configured")
+		return
+	}
+
+	// Create deployment intent to restore desired state
+	intent := &domain.DeploymentIntent{
+		ID:            uuid.New(),
+		ServiceID:     req.ServiceID,
+		EnvironmentID: req.EnvironmentID,
+		ArtifactID:    *state.DesiredArtifactID,
+		RequestedBy:   event.PubKey,
+		SourceKind:    domain.SourceKindEventTriggered,
+		Status:        domain.IntentStatusPending,
+		CreatedAt:     time.Now(),
+		UpdatedAt:     time.Now(),
+	}
+
+	if err := r.registry.CreateDeploymentIntent(ctx, intent); err != nil {
+		logger.Error("failed to create remediation intent", "error", err)
+		r.publishError(ctx, event, "intent_error", err.Error())
+		return
+	}
+
+	logger.Info("remediation intent created", "intent_id", intent.ID)
+	r.publishRemediationResult(ctx, event, state, "remediation_started", fmt.Sprintf("Deployment intent %s created", intent.ID))
+}
+
+// publishObservationResult publishes a kind:7965 observation result event.
+func (r *Reactor) publishObservationResult(ctx context.Context, requestEvent *nostr.Event, obs *domain.RuntimeObservation) error {
+	content, _ := json.Marshal(map[string]interface{}{
+		"observation_id":        obs.ID.String(),
+		"service_id":            obs.ServiceID.String(),
+		"environment_id":        obs.EnvironmentID.String(),
+		"observed_image_digest": obs.ObservedImageDigest,
+		"health_status":         string(obs.HealthStatus),
+		"observed_at":           obs.ObservedAt.Format(time.RFC3339),
+	})
+
+	event := &nostr.Event{
+		Kind:      KindObservationResult,
+		CreatedAt: nostr.Now(),
+		Tags: nostr.Tags{
+			{"e", requestEvent.ID, "", "reply"},
+			{"p", requestEvent.PubKey},
+			{"status", "success"},
+			{"observation", obs.ID.String()},
+		},
+		Content: string(content),
+	}
+
+	if err := r.signEvent(event); err != nil {
+		return fmt.Errorf("sign observation result: %w", err)
+	}
+
+	_, err := r.pool.Publish(ctx, *event)
+	return err
+}
+
+// publishRemediationResult publishes a kind:7966 remediation result event.
+func (r *Reactor) publishRemediationResult(ctx context.Context, requestEvent *nostr.Event, state *domain.EnvironmentServiceState, status, message string) error {
+	content, _ := json.Marshal(map[string]interface{}{
+		"service_id":     state.ServiceID.String(),
+		"environment_id": state.EnvironmentID.String(),
+		"drift_status":   string(state.DriftStatus),
+		"status":         status,
+		"message":        message,
+	})
+
+	event := &nostr.Event{
+		Kind:      KindRemediationResult,
+		CreatedAt: nostr.Now(),
+		Tags: nostr.Tags{
+			{"e", requestEvent.ID, "", "reply"},
+			{"p", requestEvent.PubKey},
+			{"status", status},
+		},
+		Content: string(content),
+	}
+
+	if err := r.signEvent(event); err != nil {
+		return fmt.Errorf("sign remediation result: %w", err)
+	}
+
+	_, err := r.pool.Publish(ctx, *event)
+	return err
+}
+
+// publishStateEvent publishes a replaceable kind:31961 service state event.
+// The d-tag is formatted as "service:env" to allow per-service-environment state tracking.
+func (r *Reactor) publishStateEvent(ctx context.Context, serviceID, envID uuid.UUID) error {
+	state, err := r.registry.GetEnvironmentServiceState(ctx, serviceID, envID)
+	if err != nil {
+		return fmt.Errorf("get state: %w", err)
+	}
+
+	// Build state content
+	content := map[string]interface{}{
+		"service_id":     state.ServiceID.String(),
+		"environment_id": state.EnvironmentID.String(),
+		"drift_status":   string(state.DriftStatus),
+		"updated_at":     state.UpdatedAt.Format(time.RFC3339),
+	}
+	if state.DesiredArtifactID != nil {
+		content["desired_artifact_id"] = state.DesiredArtifactID.String()
+	}
+	if state.DesiredIntentID != nil {
+		content["desired_intent_id"] = state.DesiredIntentID.String()
+	}
+	if state.LastSuccessfulRunID != nil {
+		content["last_successful_run_id"] = state.LastSuccessfulRunID.String()
+	}
+	if state.CurrentObservationID != nil {
+		content["current_observation_id"] = state.CurrentObservationID.String()
+	}
+	if state.LastReconciledAt != nil {
+		content["last_reconciled_at"] = state.LastReconciledAt.Format(time.RFC3339)
+	}
+
+	contentJSON, _ := json.Marshal(content)
+	dTag := fmt.Sprintf("%s:%s", serviceID.String(), envID.String())
+
+	event := &nostr.Event{
+		Kind:      KindServiceState,
+		CreatedAt: nostr.Now(),
+		Tags: nostr.Tags{
+			{"d", dTag},
+			{"service", serviceID.String()},
+			{"environment", envID.String()},
+			{"drift_status", string(state.DriftStatus)},
+		},
+		Content: string(contentJSON),
+	}
+
+	if err := r.signEvent(event); err != nil {
+		return fmt.Errorf("sign state event: %w", err)
+	}
+
+	_, err = r.pool.Publish(ctx, *event)
+	return err
+}
+
+// PublishServiceRegistry publishes a replaceable kind:31962 service registry event.
+func (r *Reactor) PublishServiceRegistry(ctx context.Context, svc *domain.Service) error {
+	content, _ := json.Marshal(map[string]interface{}{
+		"id":             svc.ID.String(),
+		"name":           svc.Name,
+		"repo_url":       svc.RepoURL,
+		"artifact_repo":  svc.ArtifactRepo,
+		"default_branch": svc.DefaultBranch,
+		"runtime_type":   string(svc.RuntimeType),
+		"created_at":     svc.CreatedAt.Format(time.RFC3339),
+		"updated_at":     svc.UpdatedAt.Format(time.RFC3339),
+	})
+
+	event := &nostr.Event{
+		Kind:      KindServiceRegistry,
+		CreatedAt: nostr.Now(),
+		Tags: nostr.Tags{
+			{"d", svc.ID.String()},
+			{"name", svc.Name},
+			{"runtime", string(svc.RuntimeType)},
+		},
+		Content: string(content),
+	}
+
+	if err := r.signEvent(event); err != nil {
+		return fmt.Errorf("sign service registry event: %w", err)
+	}
+
+	_, err := r.pool.Publish(ctx, *event)
+	return err
+}
+
+// PublishEnvironmentRegistry publishes a replaceable kind:31963 environment registry event.
+func (r *Reactor) PublishEnvironmentRegistry(ctx context.Context, env *domain.Environment) error {
+	content, _ := json.Marshal(map[string]interface{}{
+		"id":              env.ID.String(),
+		"name":            env.Name,
+		"protected":       env.Protected,
+		"deploy_strategy": string(env.DeployStrategy),
+		"created_at":      env.CreatedAt.Format(time.RFC3339),
+		"updated_at":      env.UpdatedAt.Format(time.RFC3339),
+	})
+
+	event := &nostr.Event{
+		Kind:      KindEnvironmentRegistry,
+		CreatedAt: nostr.Now(),
+		Tags: nostr.Tags{
+			{"d", env.ID.String()},
+			{"name", env.Name},
+			{"protected", fmt.Sprintf("%t", env.Protected)},
+		},
+		Content: string(content),
+	}
+
+	if err := r.signEvent(event); err != nil {
+		return fmt.Errorf("sign environment registry event: %w", err)
+	}
+
+	_, err := r.pool.Publish(ctx, *event)
+	return err
+}
+
+// cleanupRuns periodically removes completed runs older than 1 hour.
+func (r *Reactor) cleanupRuns(ctx context.Context) {
+	ticker := time.NewTicker(10 * time.Minute)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			r.mu.Lock()
+			cutoff := time.Now().Add(-1 * time.Hour)
+			deleted := 0
+			for id, run := range r.runs {
+				if run.CompletedAt != nil && run.CompletedAt.Before(cutoff) {
+					delete(r.runs, id)
+					deleted++
+				}
+			}
+			r.mu.Unlock()
+			if deleted > 0 {
+				r.logger.Info("cleaned up completed runs", "deleted", deleted)
+			}
+		}
+	}
 }

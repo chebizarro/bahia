@@ -317,6 +317,131 @@ func (s *Server) GetTools() []Tool {
 				"required": []string{"service_id"},
 			},
 		},
+		{
+			Name:        "bahia_get_artifact",
+			Description: "Get details for a specific artifact",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"artifact_id": map[string]interface{}{
+						"type":        "string",
+						"description": "Artifact UUID",
+					},
+				},
+				"required": []string{"artifact_id"},
+			},
+		},
+		// Build operations
+		{
+			Name:        "bahia_list_builds",
+			Description: "List builds for a service",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"service_id": map[string]interface{}{
+						"type":        "string",
+						"description": "Service UUID to list builds for",
+					},
+					"limit": map[string]interface{}{
+						"type":        "integer",
+						"description": "Maximum number of results",
+						"default":     20,
+					},
+				},
+				"required": []string{"service_id"},
+			},
+		},
+		{
+			Name:        "bahia_get_build",
+			Description: "Get details for a specific build",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"build_id": map[string]interface{}{
+						"type":        "string",
+						"description": "Build UUID",
+					},
+				},
+				"required": []string{"build_id"},
+			},
+		},
+		// Observability operations
+		{
+			Name:        "bahia_list_states",
+			Description: "List environment service states (current desired vs observed state)",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"environment_id": map[string]interface{}{
+						"type":        "string",
+						"description": "Filter by environment UUID (optional)",
+					},
+				},
+			},
+		},
+		{
+			Name:        "bahia_list_drifted",
+			Description: "List services that have drifted from desired state",
+			InputSchema: map[string]interface{}{
+				"type":       "object",
+				"properties": map[string]interface{}{},
+			},
+		},
+		{
+			Name:        "bahia_get_observation",
+			Description: "Get the latest runtime observation for a service in an environment",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"service_id": map[string]interface{}{
+						"type":        "string",
+						"description": "Service UUID",
+					},
+					"environment_id": map[string]interface{}{
+						"type":        "string",
+						"description": "Environment UUID",
+					},
+				},
+				"required": []string{"service_id", "environment_id"},
+			},
+		},
+		{
+			Name:        "bahia_list_intents",
+			Description: "List deployment intents for a service in an environment",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"service_id": map[string]interface{}{
+						"type":        "string",
+						"description": "Service UUID",
+					},
+					"environment_id": map[string]interface{}{
+						"type":        "string",
+						"description": "Environment UUID",
+					},
+					"limit": map[string]interface{}{
+						"type":        "integer",
+						"description": "Maximum number of results",
+						"default":     20,
+					},
+				},
+				"required": []string{"service_id", "environment_id"},
+			},
+		},
+		{
+			Name:        "bahia_list_runs",
+			Description: "List deployment runs for an intent",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"intent_id": map[string]interface{}{
+						"type":        "string",
+						"description": "Deployment intent UUID",
+					},
+				},
+				"required": []string{"intent_id"},
+			},
+		},
 	}
 }
 
@@ -357,6 +482,24 @@ func (s *Server) CallTool(ctx context.Context, name string, arguments map[string
 	// Artifact operations
 	case "bahia_list_artifacts":
 		return s.handleListArtifacts(ctx, arguments)
+	case "bahia_get_artifact":
+		return s.handleGetArtifact(ctx, arguments)
+	// Build operations
+	case "bahia_list_builds":
+		return s.handleListBuilds(ctx, arguments)
+	case "bahia_get_build":
+		return s.handleGetBuild(ctx, arguments)
+	// Observability operations
+	case "bahia_list_states":
+		return s.handleListStates(ctx, arguments)
+	case "bahia_list_drifted":
+		return s.handleListDrifted(ctx, arguments)
+	case "bahia_get_observation":
+		return s.handleGetObservation(ctx, arguments)
+	case "bahia_list_intents":
+		return s.handleListIntents(ctx, arguments)
+	case "bahia_list_runs":
+		return s.handleListRuns(ctx, arguments)
 	default:
 		return errorResult(fmt.Sprintf("unknown tool: %s", name)), nil
 	}
@@ -785,6 +928,212 @@ func (s *Server) handleListArtifacts(ctx context.Context, args map[string]interf
 	return jsonResult(result)
 }
 
+func (s *Server) handleGetArtifact(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
+	artifactIDStr, _ := args["artifact_id"].(string)
+
+	artifactID, err := uuid.Parse(artifactIDStr)
+	if err != nil {
+		return errorResult(fmt.Sprintf("invalid artifact_id: %v", err)), nil
+	}
+
+	artifact, err := s.registry.GetArtifact(ctx, artifactID)
+	if err != nil {
+		return errorResult(fmt.Sprintf("failed to get artifact: %v", err)), nil
+	}
+	if artifact == nil {
+		return errorResult("artifact not found"), nil
+	}
+
+	result := map[string]interface{}{
+		"id":           artifact.ID.String(),
+		"build_id":     artifact.BuildID.String(),
+		"service_id":   artifact.ServiceID.String(),
+		"image_repo":   artifact.ImageRepo,
+		"image_tag":    artifact.ImageTag,
+		"image_digest": artifact.ImageDigest,
+		"scan_status":  artifact.ScanStatus,
+		"created_at":   artifact.CreatedAt.Format("2006-01-02T15:04:05Z"),
+	}
+	return jsonResult(result)
+}
+
+func (s *Server) handleListBuilds(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
+	serviceIDStr, _ := args["service_id"].(string)
+	limit := 20
+	if l, ok := args["limit"].(float64); ok {
+		limit = int(l)
+	}
+
+	serviceID, err := uuid.Parse(serviceIDStr)
+	if err != nil {
+		return errorResult(fmt.Sprintf("invalid service_id: %v", err)), nil
+	}
+
+	builds, err := s.registry.ListBuilds(ctx, serviceID, limit, 0)
+	if err != nil {
+		return errorResult(fmt.Sprintf("failed to list builds: %v", err)), nil
+	}
+
+	result := map[string]interface{}{
+		"builds": buildsToMaps(builds),
+		"total":  len(builds),
+	}
+	return jsonResult(result)
+}
+
+func (s *Server) handleGetBuild(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
+	buildIDStr, _ := args["build_id"].(string)
+
+	buildID, err := uuid.Parse(buildIDStr)
+	if err != nil {
+		return errorResult(fmt.Sprintf("invalid build_id: %v", err)), nil
+	}
+
+	build, err := s.registry.GetBuild(ctx, buildID)
+	if err != nil {
+		return errorResult(fmt.Sprintf("failed to get build: %v", err)), nil
+	}
+	if build == nil {
+		return errorResult("build not found"), nil
+	}
+
+	result := map[string]interface{}{
+		"id":         build.ID.String(),
+		"service_id": build.ServiceID.String(),
+		"git_sha":    build.GitSHA,
+		"git_ref":    build.GitRef,
+		"status":     build.Status,
+		"ci_system":  build.CISystem,
+		"ci_run_id":  build.CIRunID,
+		"created_at": build.CreatedAt.Format("2006-01-02T15:04:05Z"),
+	}
+	return jsonResult(result)
+}
+
+func (s *Server) handleListStates(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
+	envIDStr, _ := args["environment_id"].(string)
+
+	var states []domain.EnvironmentServiceState
+	var err error
+
+	if envIDStr != "" {
+		envID, parseErr := uuid.Parse(envIDStr)
+		if parseErr != nil {
+			return errorResult(fmt.Sprintf("invalid environment_id: %v", parseErr)), nil
+		}
+		states, err = s.registry.ListEnvironmentStates(ctx, envID)
+	} else {
+		states, err = s.registry.ListAllStates(ctx)
+	}
+
+	if err != nil {
+		return errorResult(fmt.Sprintf("failed to list states: %v", err)), nil
+	}
+
+	result := map[string]interface{}{
+		"states": statesToMaps(states),
+		"total":  len(states),
+	}
+	return jsonResult(result)
+}
+
+func (s *Server) handleListDrifted(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
+	states, err := s.registry.ListDriftedStates(ctx)
+	if err != nil {
+		return errorResult(fmt.Sprintf("failed to list drifted states: %v", err)), nil
+	}
+
+	result := map[string]interface{}{
+		"drifted": statesToMaps(states),
+		"total":   len(states),
+	}
+	return jsonResult(result)
+}
+
+func (s *Server) handleGetObservation(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
+	serviceIDStr, _ := args["service_id"].(string)
+	envIDStr, _ := args["environment_id"].(string)
+
+	serviceID, err := uuid.Parse(serviceIDStr)
+	if err != nil {
+		return errorResult(fmt.Sprintf("invalid service_id: %v", err)), nil
+	}
+
+	envID, err := uuid.Parse(envIDStr)
+	if err != nil {
+		return errorResult(fmt.Sprintf("invalid environment_id: %v", err)), nil
+	}
+
+	obs, err := s.registry.GetLatestObservation(ctx, serviceID, envID)
+	if err != nil {
+		return errorResult(fmt.Sprintf("failed to get observation: %v", err)), nil
+	}
+	if obs == nil {
+		return errorResult("no observation found"), nil
+	}
+
+	result := map[string]interface{}{
+		"id":              obs.ID.String(),
+		"service_id":      obs.ServiceID.String(),
+		"environment_id":  obs.EnvironmentID.String(),
+		"image_digest":    obs.ObservedImageDigest,
+		"container_id":    obs.ObservedContainerID,
+		"health_status":   obs.HealthStatus,
+		"observed_at":     obs.ObservedAt.Format("2006-01-02T15:04:05Z"),
+	}
+	return jsonResult(result)
+}
+
+func (s *Server) handleListIntents(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
+	serviceIDStr, _ := args["service_id"].(string)
+	envIDStr, _ := args["environment_id"].(string)
+	limit := 20
+	if l, ok := args["limit"].(float64); ok {
+		limit = int(l)
+	}
+
+	serviceID, err := uuid.Parse(serviceIDStr)
+	if err != nil {
+		return errorResult(fmt.Sprintf("invalid service_id: %v", err)), nil
+	}
+
+	envID, err := uuid.Parse(envIDStr)
+	if err != nil {
+		return errorResult(fmt.Sprintf("invalid environment_id: %v", err)), nil
+	}
+
+	intents, err := s.registry.ListDeploymentIntents(ctx, serviceID, envID, limit, 0)
+	if err != nil {
+		return errorResult(fmt.Sprintf("failed to list intents: %v", err)), nil
+	}
+
+	result := map[string]interface{}{
+		"intents": intentsToMaps(intents),
+		"total":   len(intents),
+	}
+	return jsonResult(result)
+}
+
+func (s *Server) handleListRuns(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
+	intentIDStr, _ := args["intent_id"].(string)
+
+	intentID, err := uuid.Parse(intentIDStr)
+	if err != nil {
+		return errorResult(fmt.Sprintf("invalid intent_id: %v", err)), nil
+	}
+
+	runs, err := s.registry.ListDeploymentRuns(ctx, intentID)
+	if err != nil {
+		return errorResult(fmt.Sprintf("failed to list runs: %v", err)), nil
+	}
+
+	result := map[string]interface{}{
+		"runs":  runsToMaps(runs),
+		"total": len(runs),
+	}
+	return jsonResult(result)
+}
+
 // --- Helper Functions ---
 
 func jsonResult(data interface{}) (*ToolResult, error) {
@@ -866,4 +1215,144 @@ func artifactsToMaps(artifacts []domain.Artifact) []map[string]interface{} {
 		}
 	}
 	return result
+}
+
+func buildsToMaps(builds []domain.Build) []map[string]interface{} {
+	result := make([]map[string]interface{}, len(builds))
+	for i, b := range builds {
+		m := map[string]interface{}{
+			"id":         b.ID.String(),
+			"service_id": b.ServiceID.String(),
+			"git_sha":    b.GitSHA,
+			"git_ref":    b.GitRef,
+			"ci_system":  b.CISystem,
+			"ci_run_id":  b.CIRunID,
+			"status":     string(b.Status),
+			"created_at": b.CreatedAt.Format("2006-01-02T15:04:05Z"),
+		}
+		if b.LoomJobID != "" {
+			m["loom_job_id"] = b.LoomJobID
+		}
+		if b.StartedAt != nil {
+			m["started_at"] = b.StartedAt.Format("2006-01-02T15:04:05Z")
+		}
+		if b.FinishedAt != nil {
+			m["finished_at"] = b.FinishedAt.Format("2006-01-02T15:04:05Z")
+		}
+		result[i] = m
+	}
+	return result
+}
+
+func statesToMaps(states []domain.EnvironmentServiceState) []map[string]interface{} {
+	result := make([]map[string]interface{}, len(states))
+	for i, s := range states {
+		m := map[string]interface{}{
+			"service_id":     s.ServiceID.String(),
+			"environment_id": s.EnvironmentID.String(),
+			"drift_status":   string(s.DriftStatus),
+			"updated_at":     s.UpdatedAt.Format("2006-01-02T15:04:05Z"),
+		}
+		if s.DesiredArtifactID != nil {
+			m["desired_artifact_id"] = s.DesiredArtifactID.String()
+		}
+		if s.DesiredIntentID != nil {
+			m["desired_intent_id"] = s.DesiredIntentID.String()
+		}
+		if s.LastSuccessfulRunID != nil {
+			m["last_successful_run_id"] = s.LastSuccessfulRunID.String()
+		}
+		if s.CurrentObservationID != nil {
+			m["current_observation_id"] = s.CurrentObservationID.String()
+		}
+		if s.LastReconciledAt != nil {
+			m["last_reconciled_at"] = s.LastReconciledAt.Format("2006-01-02T15:04:05Z")
+		}
+		result[i] = m
+	}
+	return result
+}
+
+func intentsToMaps(intents []domain.DeploymentIntent) []map[string]interface{} {
+	result := make([]map[string]interface{}, len(intents))
+	for i, intent := range intents {
+		m := map[string]interface{}{
+			"id":              intent.ID.String(),
+			"service_id":     intent.ServiceID.String(),
+			"environment_id": intent.EnvironmentID.String(),
+			"artifact_id":    intent.ArtifactID.String(),
+			"requested_by":   intent.RequestedBy,
+			"source_kind":    string(intent.SourceKind),
+			"approval_status": string(intent.ApprovalStatus),
+			"status":         string(intent.Status),
+			"created_at":     intent.CreatedAt.Format("2006-01-02T15:04:05Z"),
+			"updated_at":     intent.UpdatedAt.Format("2006-01-02T15:04:05Z"),
+		}
+		if intent.SupersedesIntentID != nil {
+			m["supersedes_intent_id"] = intent.SupersedesIntentID.String()
+		}
+		if intent.ApprovedAt != nil {
+			m["approved_at"] = intent.ApprovedAt.Format("2006-01-02T15:04:05Z")
+		}
+		result[i] = m
+	}
+	return result
+}
+
+func runsToMaps(runs []domain.DeploymentRun) []map[string]interface{} {
+	result := make([]map[string]interface{}, len(runs))
+	for i, r := range runs {
+		m := map[string]interface{}{
+			"id":                   r.ID.String(),
+			"deployment_intent_id": r.DeploymentIntentID.String(),
+			"status":               string(r.Status),
+			"created_at":           r.CreatedAt.Format("2006-01-02T15:04:05Z"),
+			"updated_at":           r.UpdatedAt.Format("2006-01-02T15:04:05Z"),
+		}
+		if r.LoomJobID != "" {
+			m["loom_job_id"] = r.LoomJobID
+		}
+		if r.WorkerPubkey != "" {
+			m["worker_pubkey"] = r.WorkerPubkey
+		}
+		if r.WorkerName != "" {
+			m["worker_name"] = r.WorkerName
+		}
+		if r.ExitCode != nil {
+			m["exit_code"] = *r.ExitCode
+		}
+		if r.StartedAt != nil {
+			m["started_at"] = r.StartedAt.Format("2006-01-02T15:04:05Z")
+		}
+		if r.FinishedAt != nil {
+			m["finished_at"] = r.FinishedAt.Format("2006-01-02T15:04:05Z")
+		}
+		result[i] = m
+	}
+	return result
+}
+
+func observationToMap(obs *domain.RuntimeObservation) map[string]interface{} {
+	m := map[string]interface{}{
+		"id":                    obs.ID.String(),
+		"service_id":            obs.ServiceID.String(),
+		"environment_id":        obs.EnvironmentID.String(),
+		"observed_image_digest": obs.ObservedImageDigest,
+		"health_status":         string(obs.HealthStatus),
+		"source":                obs.Source,
+		"observed_at":           obs.ObservedAt.Format("2006-01-02T15:04:05Z"),
+	}
+	if obs.ObservedImageRepo != "" {
+		m["observed_image_repo"] = obs.ObservedImageRepo
+	}
+	if obs.ObservedContainerID != "" {
+		m["observed_container_id"] = obs.ObservedContainerID
+	}
+	if obs.ObservedHost != "" {
+		m["observed_host"] = obs.ObservedHost
+	}
+	if obs.ObservedVersion != "" {
+		m["observed_version"] = obs.ObservedVersion
+	}
+	return m
 }
