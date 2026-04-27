@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -44,6 +45,7 @@ type DeployOptions struct {
 	Environment map[string]string `json:"environment,omitempty"`
 	Labels      map[string]string `json:"labels,omitempty"`
 	Ports       []string          `json:"ports,omitempty"`   // "8080:80" format
+	Volumes     []string          `json:"volumes,omitempty"` // "/host:/container[:ro]" format
 	Restart     string            `json:"restart,omitempty"` // always, unless-stopped, on-failure
 	PullAlways  bool              `json:"pull_always,omitempty"`
 }
@@ -63,12 +65,12 @@ type LogEntry struct {
 
 // DockerContainer represents a running Docker container (subset of Docker API response).
 type DockerContainer struct {
-	ID      string   `json:"Id"`
-	Names   []string `json:"Names"`
-	Image   string   `json:"Image"`
-	ImageID string   `json:"ImageID"`
-	State   string   `json:"State"`
-	Status  string   `json:"Status"`
+	ID      string            `json:"Id"`
+	Names   []string          `json:"Names"`
+	Image   string            `json:"Image"`
+	ImageID string            `json:"ImageID"`
+	State   string            `json:"State"`
+	Status  string            `json:"Status"`
 	Labels  map[string]string `json:"Labels"`
 }
 
@@ -168,18 +170,7 @@ func (o *DockerObserver) Type() domain.RuntimeType {
 
 // Deploy creates or updates a Docker container for the given service.
 func (o *DockerObserver) Deploy(ctx context.Context, serviceName, image string, opts DeployOptions) error {
-	// First, try to stop and remove any existing container.
-	_ = o.stopAndRemove(ctx, serviceName)
-
-	// Pull the image if requested.
-	if opts.PullAlways {
-		if err := o.pullImage(ctx, image); err != nil {
-			o.logger.Warn("failed to pull image, trying with local",
-				zap.String("image", image), zap.Error(err))
-		}
-	}
-
-	// Build container config.
+	// Build and validate container config before removing any existing container.
 	labels := map[string]string{"bahia.service": serviceName}
 	for k, v := range opts.Labels {
 		labels[k] = v
@@ -190,9 +181,20 @@ func (o *DockerObserver) Deploy(ctx context.Context, serviceName, image string, 
 		env = append(env, k+"="+v)
 	}
 
+	exposedPorts, portBindings, err := buildDockerPortConfig(opts.Ports)
+	if err != nil {
+		return err
+	}
+
 	hostConfig := map[string]any{}
 	if opts.Restart != "" {
 		hostConfig["RestartPolicy"] = map[string]any{"Name": opts.Restart}
+	}
+	if len(portBindings) > 0 {
+		hostConfig["PortBindings"] = portBindings
+	}
+	if binds := cleanDockerBinds(opts.Volumes); len(binds) > 0 {
+		hostConfig["Binds"] = binds
 	}
 
 	body := map[string]any{
@@ -201,10 +203,24 @@ func (o *DockerObserver) Deploy(ctx context.Context, serviceName, image string, 
 		"Env":        env,
 		"HostConfig": hostConfig,
 	}
+	if len(exposedPorts) > 0 {
+		body["ExposedPorts"] = exposedPorts
+	}
 
 	bodyJSON, err := json.Marshal(body)
 	if err != nil {
 		return fmt.Errorf("marshaling container config: %w", err)
+	}
+
+	// Stop and remove any existing container only after option validation succeeds.
+	_ = o.stopAndRemove(ctx, serviceName)
+
+	// Pull the image if requested.
+	if opts.PullAlways {
+		if err := o.pullImage(ctx, image); err != nil {
+			o.logger.Warn("failed to pull image, trying with local",
+				zap.String("image", image), zap.Error(err))
+		}
 	}
 
 	// Create container.
@@ -341,6 +357,92 @@ func (o *DockerObserver) StreamLogs(ctx context.Context, serviceName string, opt
 }
 
 // --- internal helpers ---
+
+type dockerPortBinding struct {
+	HostPort string `json:"HostPort"`
+}
+
+func buildDockerPortConfig(ports []string) (map[string]struct{}, map[string][]dockerPortBinding, error) {
+	exposedPorts := make(map[string]struct{})
+	portBindings := make(map[string][]dockerPortBinding)
+
+	for _, raw := range ports {
+		port := strings.TrimSpace(raw)
+		if port == "" {
+			continue
+		}
+
+		parts := strings.Split(port, ":")
+		if len(parts) != 2 {
+			return nil, nil, fmt.Errorf("invalid port mapping %q: expected hostPort:containerPort", raw)
+		}
+
+		hostPort, containerPort, err := normalizeDockerPortMapping(strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1]), raw)
+		if err != nil {
+			return nil, nil, err
+		}
+		if _, exists := portBindings[containerPort]; exists {
+			return nil, nil, fmt.Errorf("invalid port mapping %q: duplicate container port %s", raw, containerPort)
+		}
+
+		exposedPorts[containerPort] = struct{}{}
+		portBindings[containerPort] = []dockerPortBinding{{HostPort: hostPort}}
+	}
+
+	return exposedPorts, portBindings, nil
+}
+
+func normalizeDockerPortMapping(hostPort, containerPort, raw string) (string, string, error) {
+	if hostPort == "" || containerPort == "" {
+		return "", "", fmt.Errorf("invalid port mapping %q: host and container ports are required", raw)
+	}
+	if err := validateDockerPortNumber(hostPort); err != nil {
+		return "", "", fmt.Errorf("invalid port mapping %q: invalid host port %q: %w", raw, hostPort, err)
+	}
+
+	containerNumber := containerPort
+	protocol := "tcp"
+	if strings.Contains(containerPort, "/") {
+		parts := strings.Split(containerPort, "/")
+		if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" || strings.TrimSpace(parts[1]) == "" {
+			return "", "", fmt.Errorf("invalid port mapping %q: expected containerPort[/protocol]", raw)
+		}
+		containerNumber = strings.TrimSpace(parts[0])
+		protocol = strings.ToLower(strings.TrimSpace(parts[1]))
+	}
+	if err := validateDockerPortNumber(containerNumber); err != nil {
+		return "", "", fmt.Errorf("invalid port mapping %q: invalid container port %q: %w", raw, containerNumber, err)
+	}
+	switch protocol {
+	case "tcp", "udp", "sctp":
+	default:
+		return "", "", fmt.Errorf("invalid port mapping %q: unsupported protocol %q", raw, protocol)
+	}
+
+	return hostPort, containerNumber + "/" + protocol, nil
+}
+
+func validateDockerPortNumber(port string) error {
+	parsed, err := strconv.Atoi(port)
+	if err != nil {
+		return err
+	}
+	if parsed < 1 || parsed > 65535 {
+		return fmt.Errorf("must be between 1 and 65535")
+	}
+	return nil
+}
+
+func cleanDockerBinds(volumes []string) []string {
+	binds := make([]string, 0, len(volumes))
+	for _, volume := range volumes {
+		volume = strings.TrimSpace(volume)
+		if volume != "" {
+			binds = append(binds, volume)
+		}
+	}
+	return binds
+}
 
 func (o *DockerObserver) listContainers(ctx context.Context, serviceName string) ([]DockerContainer, error) {
 	url := fmt.Sprintf("%s/v1.43/containers/json?filters={\"label\":[\"bahia.service=%s\"]}", o.host, serviceName)
