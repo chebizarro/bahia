@@ -13,6 +13,7 @@
     <li><a href="/" class:active={$page.url.pathname === '/'}>Dashboard</a></li>
     <li><a href="/souls" class:active={$page.url.pathname.startsWith('/souls')}>Souls</a></li>
     <li><a href="/services" class:active={$page.url.pathname.startsWith('/services')}>Services</a></li>
+    <li><a href="/artifacts" class:active={$page.url.pathname.startsWith('/artifacts')}>Artifacts</a></li>
     <li><a href="/environments" class:active={$page.url.pathname.startsWith('/environments')}>Environments</a></li>
     <li><a href="/workers" class:active={$page.url.pathname.startsWith('/workers')}>Workers</a></li>
     <li><a href="/policies" class:active={$page.url.pathname.startsWith('/policies')}>Policies</a></li>
