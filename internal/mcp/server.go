@@ -6,9 +6,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
+	"github.com/openagentsinc/bahia/internal/adapters/secrets"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/repository"
 	"github.com/openagentsinc/bahia/internal/service"
 	"go.uber.org/zap"
 )
@@ -16,8 +19,10 @@ import (
 // Server provides an MCP-compatible interface for Bahia operations.
 // It exposes deployment registry functionality as MCP tools.
 type Server struct {
-	registry *service.RegistryService
-	logger   *zap.Logger
+	registry    *service.RegistryService
+	logger      *zap.Logger
+	secretsRepo repository.SecretRepository // optional: for secret management tools
+	encryptor   *secrets.Encryptor          // optional: for secret encryption/decryption
 }
 
 // Config holds MCP server configuration.
@@ -29,9 +34,17 @@ type Config struct {
 
 // NewServer creates a new MCP server for Bahia.
 func NewServer(registry *service.RegistryService, logger *zap.Logger) *Server {
+	return NewServerWithDeps(registry, logger, nil, nil)
+}
+
+// NewServerWithDeps creates a new MCP server with optional dependencies.
+// secretsRepo and encryptor are optional; if nil, secret management tools will return errors.
+func NewServerWithDeps(registry *service.RegistryService, logger *zap.Logger, secretsRepo repository.SecretRepository, encryptor *secrets.Encryptor) *Server {
 	return &Server{
-		registry: registry,
-		logger:   logger.With(zap.String("component", "mcp-server")),
+		registry:    registry,
+		logger:      logger.With(zap.String("component", "mcp-server")),
+		secretsRepo: secretsRepo,
+		encryptor:   encryptor,
 	}
 }
 
@@ -442,6 +455,134 @@ func (s *Server) GetTools() []Tool {
 				"required": []string{"intent_id"},
 			},
 		},
+		{
+			Name:        "bahia_create_run",
+			Description: "Create a new deployment run for an approved intent",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"intent_id": map[string]interface{}{
+						"type":        "string",
+						"description": "Deployment intent UUID",
+					},
+					"worker_pubkey": map[string]interface{}{
+						"type":        "string",
+						"description": "Worker public key (optional)",
+					},
+				},
+				"required": []string{"intent_id"},
+			},
+		},
+		{
+			Name:        "bahia_get_run",
+			Description: "Get details for a specific deployment run",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"run_id": map[string]interface{}{
+						"type":        "string",
+						"description": "Deployment run UUID",
+					},
+				},
+				"required": []string{"run_id"},
+			},
+		},
+		{
+			Name:        "bahia_complete_run",
+			Description: "Mark a deployment run as complete with status and exit code",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"run_id": map[string]interface{}{
+						"type":        "string",
+						"description": "Deployment run UUID",
+					},
+					"status": map[string]interface{}{
+						"type":        "string",
+						"description": "Terminal status (succeeded, failed, cancelled)",
+						"enum":        []string{"succeeded", "failed", "cancelled"},
+					},
+					"exit_code": map[string]interface{}{
+						"type":        "integer",
+						"description": "Process exit code (optional)",
+					},
+				},
+				"required": []string{"run_id", "status"},
+			},
+		},
+		// Secret management operations
+		{
+			Name:        "bahia_list_secrets",
+			Description: "List secrets for a service (returns metadata only, not plaintext values)",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"service_id": map[string]interface{}{
+						"type":        "string",
+						"description": "Service UUID",
+					},
+				},
+				"required": []string{"service_id"},
+			},
+		},
+		{
+			Name:        "bahia_create_secret",
+			Description: "Create a new encrypted secret for a service",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"service_id": map[string]interface{}{
+						"type":        "string",
+						"description": "Service UUID",
+					},
+					"name": map[string]interface{}{
+						"type":        "string",
+						"description": "Secret name (e.g., DATABASE_URL)",
+					},
+					"value": map[string]interface{}{
+						"type":        "string",
+						"description": "Plaintext secret value to encrypt",
+					},
+					"environment_id": map[string]interface{}{
+						"type":        "string",
+						"description": "Environment UUID (optional, omit for service-wide secret)",
+					},
+				},
+				"required": []string{"service_id", "name", "value"},
+			},
+		},
+		{
+			Name:        "bahia_update_secret",
+			Description: "Update an existing secret's value",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"secret_id": map[string]interface{}{
+						"type":        "string",
+						"description": "Secret UUID",
+					},
+					"value": map[string]interface{}{
+						"type":        "string",
+						"description": "New plaintext secret value to encrypt",
+					},
+				},
+				"required": []string{"secret_id", "value"},
+			},
+		},
+		{
+			Name:        "bahia_delete_secret",
+			Description: "Delete a secret",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"secret_id": map[string]interface{}{
+						"type":        "string",
+						"description": "Secret UUID",
+					},
+				},
+				"required": []string{"secret_id"},
+			},
+		},
 	}
 }
 
@@ -500,6 +641,21 @@ func (s *Server) CallTool(ctx context.Context, name string, arguments map[string
 		return s.handleListIntents(ctx, arguments)
 	case "bahia_list_runs":
 		return s.handleListRuns(ctx, arguments)
+	case "bahia_create_run":
+		return s.handleCreateRun(ctx, arguments)
+	case "bahia_get_run":
+		return s.handleGetRun(ctx, arguments)
+	case "bahia_complete_run":
+		return s.handleCompleteRun(ctx, arguments)
+	// Secret operations
+	case "bahia_list_secrets":
+		return s.handleListSecrets(ctx, arguments)
+	case "bahia_create_secret":
+		return s.handleCreateSecret(ctx, arguments)
+	case "bahia_update_secret":
+		return s.handleUpdateSecret(ctx, arguments)
+	case "bahia_delete_secret":
+		return s.handleDeleteSecret(ctx, arguments)
 	default:
 		return errorResult(fmt.Sprintf("unknown tool: %s", name)), nil
 	}
@@ -1134,6 +1290,281 @@ func (s *Server) handleListRuns(ctx context.Context, args map[string]interface{}
 	return jsonResult(result)
 }
 
+func (s *Server) handleCreateRun(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
+	intentIDStr, _ := args["intent_id"].(string)
+	workerPubkey, _ := args["worker_pubkey"].(string)
+
+	intentID, err := uuid.Parse(intentIDStr)
+	if err != nil {
+		return errorResult(fmt.Sprintf("invalid intent_id: %v", err)), nil
+	}
+
+	run := &domain.DeploymentRun{
+		ID:                 uuid.New(),
+		DeploymentIntentID: intentID,
+		WorkerPubkey:       workerPubkey,
+		Status:             domain.RunStatusQueued,
+		CreatedAt:          time.Now(),
+		UpdatedAt:          time.Now(),
+	}
+
+	if err := s.registry.CreateDeploymentRun(ctx, run); err != nil {
+		return errorResult(fmt.Sprintf("failed to create run: %v", err)), nil
+	}
+
+	s.logger.Info("deployment run created",
+		zap.String("run_id", run.ID.String()),
+		zap.String("intent_id", intentID.String()),
+	)
+
+	result := map[string]interface{}{
+		"status":    "created",
+		"run_id":    run.ID.String(),
+		"intent_id": intentID.String(),
+		"message":   "Deployment run created",
+	}
+	return jsonResult(result)
+}
+
+func (s *Server) handleGetRun(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
+	runIDStr, _ := args["run_id"].(string)
+
+	runID, err := uuid.Parse(runIDStr)
+	if err != nil {
+		return errorResult(fmt.Sprintf("invalid run_id: %v", err)), nil
+	}
+
+	run, err := s.registry.GetDeploymentRun(ctx, runID)
+	if err != nil {
+		return errorResult(fmt.Sprintf("failed to get run: %v", err)), nil
+	}
+	if run == nil {
+		return errorResult("run not found"), nil
+	}
+
+	result := runToMap(run)
+	return jsonResult(result)
+}
+
+func (s *Server) handleCompleteRun(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
+	runIDStr, _ := args["run_id"].(string)
+	statusStr, _ := args["status"].(string)
+	
+	runID, err := uuid.Parse(runIDStr)
+	if err != nil {
+		return errorResult(fmt.Sprintf("invalid run_id: %v", err)), nil
+	}
+
+	var status domain.DeploymentRunStatus
+	switch statusStr {
+	case "succeeded":
+		status = domain.RunStatusSucceeded
+	case "failed":
+		status = domain.RunStatusFailed
+	case "cancelled":
+		status = domain.RunStatusCancelled
+	default:
+		return errorResult(fmt.Sprintf("invalid status: %s (must be succeeded, failed, or cancelled)", statusStr)), nil
+	}
+
+	var exitCode *int
+	if code, ok := args["exit_code"].(float64); ok {
+		codeInt := int(code)
+		exitCode = &codeInt
+	}
+
+	if err := s.registry.CompleteDeploymentRun(ctx, runID, status, exitCode); err != nil {
+		return errorResult(fmt.Sprintf("failed to complete run: %v", err)), nil
+	}
+
+	s.logger.Info("deployment run completed",
+		zap.String("run_id", runID.String()),
+		zap.String("status", string(status)),
+	)
+
+	result := map[string]interface{}{
+		"status":  "completed",
+		"run_id":  runID.String(),
+		"message": fmt.Sprintf("Deployment run marked as %s", status),
+	}
+	return jsonResult(result)
+}
+
+func (s *Server) handleListSecrets(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
+	if s.secretsRepo == nil {
+		return errorResult("secret management tools are not configured"), nil
+	}
+
+	serviceIDStr, _ := args["service_id"].(string)
+
+	serviceID, err := uuid.Parse(serviceIDStr)
+	if err != nil {
+		return errorResult(fmt.Sprintf("invalid service_id: %v", err)), nil
+	}
+
+	secrets, err := s.secretsRepo.ListByService(ctx, serviceID)
+	if err != nil {
+		return errorResult(fmt.Sprintf("failed to list secrets: %v", err)), nil
+	}
+
+	result := map[string]interface{}{
+		"secrets": secretsToMaps(secrets),
+		"total":   len(secrets),
+	}
+	return jsonResult(result)
+}
+
+func (s *Server) handleCreateSecret(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
+	if s.secretsRepo == nil || s.encryptor == nil {
+		return errorResult("secret management tools are not configured"), nil
+	}
+
+	serviceIDStr, _ := args["service_id"].(string)
+	name, _ := args["name"].(string)
+	value, _ := args["value"].(string)
+	envIDStr, _ := args["environment_id"].(string)
+
+	if name == "" {
+		return errorResult("name is required"), nil
+	}
+	if value == "" {
+		return errorResult("value is required"), nil
+	}
+
+	serviceID, err := uuid.Parse(serviceIDStr)
+	if err != nil {
+		return errorResult(fmt.Sprintf("invalid service_id: %v", err)), nil
+	}
+
+	var envID *uuid.UUID
+	if envIDStr != "" {
+		parsedEnvID, err := uuid.Parse(envIDStr)
+		if err != nil {
+			return errorResult(fmt.Sprintf("invalid environment_id: %v", err)), nil
+		}
+		envID = &parsedEnvID
+	}
+
+	// Encrypt the value using AES256-GCM (default encryption method)
+	encryptedValue, err := s.encryptor.Encrypt(value, domain.EncryptionAES256)
+	if err != nil {
+		return errorResult(fmt.Sprintf("failed to encrypt secret: %v", err)), nil
+	}
+
+	secret := &domain.ServiceSecret{
+		ID:               uuid.New(),
+		ServiceID:        serviceID,
+		EnvironmentID:    envID,
+		Name:             name,
+		EncryptedValue:   encryptedValue,
+		EncryptionMethod: domain.EncryptionAES256,
+		Version:          1,
+		CreatedBy:        "mcp-agent",
+		CreatedAt:        time.Now(),
+		UpdatedAt:        time.Now(),
+	}
+
+	if err := s.secretsRepo.Create(ctx, secret); err != nil {
+		return errorResult(fmt.Sprintf("failed to create secret: %v", err)), nil
+	}
+
+	s.logger.Info("secret created",
+		zap.String("secret_id", secret.ID.String()),
+		zap.String("service_id", serviceID.String()),
+		zap.String("name", name),
+	)
+
+	// Return metadata only, not the encrypted value
+	result := map[string]interface{}{
+		"status":    "created",
+		"secret_id": secret.ID.String(),
+		"name":      name,
+		"version":   secret.Version,
+		"message":   "Secret created and encrypted successfully",
+	}
+	return jsonResult(result)
+}
+
+func (s *Server) handleUpdateSecret(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
+	if s.secretsRepo == nil || s.encryptor == nil {
+		return errorResult("secret management tools are not configured"), nil
+	}
+
+	secretIDStr, _ := args["secret_id"].(string)
+	value, _ := args["value"].(string)
+
+	if value == "" {
+		return errorResult("value is required"), nil
+	}
+
+	secretID, err := uuid.Parse(secretIDStr)
+	if err != nil {
+		return errorResult(fmt.Sprintf("invalid secret_id: %v", err)), nil
+	}
+
+	// Get existing secret
+	existing, err := s.secretsRepo.GetByID(ctx, secretID)
+	if err != nil {
+		return errorResult(fmt.Sprintf("failed to get secret: %v", err)), nil
+	}
+	if existing == nil {
+		return errorResult("secret not found"), nil
+	}
+
+	// Encrypt the new value
+	encryptedValue, err := s.encryptor.Encrypt(value, domain.EncryptionAES256)
+	if err != nil {
+		return errorResult(fmt.Sprintf("failed to encrypt secret: %v", err)), nil
+	}
+
+	// Update the secret
+	existing.EncryptedValue = encryptedValue
+	existing.Version++
+	existing.UpdatedAt = time.Now()
+
+	if err := s.secretsRepo.Update(ctx, existing); err != nil {
+		return errorResult(fmt.Sprintf("failed to update secret: %v", err)), nil
+	}
+
+	s.logger.Info("secret updated",
+		zap.String("secret_id", secretID.String()),
+		zap.Int("version", existing.Version),
+	)
+
+	result := map[string]interface{}{
+		"status":    "updated",
+		"secret_id": secretID.String(),
+		"version":   existing.Version,
+		"message":   "Secret updated successfully",
+	}
+	return jsonResult(result)
+}
+
+func (s *Server) handleDeleteSecret(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
+	if s.secretsRepo == nil {
+		return errorResult("secret management tools are not configured"), nil
+	}
+
+	secretIDStr, _ := args["secret_id"].(string)
+
+	secretID, err := uuid.Parse(secretIDStr)
+	if err != nil {
+		return errorResult(fmt.Sprintf("invalid secret_id: %v", err)), nil
+	}
+
+	if err := s.secretsRepo.Delete(ctx, secretID); err != nil {
+		return errorResult(fmt.Sprintf("failed to delete secret: %v", err)), nil
+	}
+
+	s.logger.Info("secret deleted", zap.String("secret_id", secretID.String()))
+
+	result := map[string]interface{}{
+		"status":    "deleted",
+		"secret_id": secretID.String(),
+	}
+	return jsonResult(result)
+}
+
 // --- Helper Functions ---
 
 func jsonResult(data interface{}) (*ToolResult, error) {
@@ -1355,4 +1786,56 @@ func observationToMap(obs *domain.RuntimeObservation) map[string]interface{} {
 		m["observed_version"] = obs.ObservedVersion
 	}
 	return m
+}
+
+func runToMap(r *domain.DeploymentRun) map[string]interface{} {
+	m := map[string]interface{}{
+		"id":                   r.ID.String(),
+		"deployment_intent_id": r.DeploymentIntentID.String(),
+		"status":               string(r.Status),
+		"created_at":           r.CreatedAt.Format("2006-01-02T15:04:05Z"),
+		"updated_at":           r.UpdatedAt.Format("2006-01-02T15:04:05Z"),
+	}
+	if r.LoomJobID != "" {
+		m["loom_job_id"] = r.LoomJobID
+	}
+	if r.WorkerPubkey != "" {
+		m["worker_pubkey"] = r.WorkerPubkey
+	}
+	if r.WorkerName != "" {
+		m["worker_name"] = r.WorkerName
+	}
+	if r.ExitCode != nil {
+		m["exit_code"] = *r.ExitCode
+	}
+	if r.StartedAt != nil {
+		m["started_at"] = r.StartedAt.Format("2006-01-02T15:04:05Z")
+	}
+	if r.FinishedAt != nil {
+		m["finished_at"] = r.FinishedAt.Format("2006-01-02T15:04:05Z")
+	}
+	return m
+}
+
+func secretsToMaps(secrets []domain.ServiceSecret) []map[string]interface{} {
+	result := make([]map[string]interface{}, len(secrets))
+	for i, s := range secrets {
+		// Convert to SecretRef to strip encrypted value
+		ref := s.ToRef()
+		m := map[string]interface{}{
+			"id":                ref.ID.String(),
+			"service_id":        ref.ServiceID.String(),
+			"name":              ref.Name,
+			"encryption_method": string(ref.EncryptionMethod),
+			"version":           ref.Version,
+			"created_by":        ref.CreatedBy,
+			"created_at":        ref.CreatedAt.Format("2006-01-02T15:04:05Z"),
+			"updated_at":        ref.UpdatedAt.Format("2006-01-02T15:04:05Z"),
+		}
+		if ref.EnvironmentID != nil {
+			m["environment_id"] = ref.EnvironmentID.String()
+		}
+		result[i] = m
+	}
+	return result
 }
