@@ -55,6 +55,17 @@
   let secretDeleteError = null;
   let secretToDelete = null;
 
+  // Artifact registration modal state
+  let artifactRegisterOpen = false;
+  let artifactRegistering = false;
+  let artifactRegisterError = null;
+  let artifactForm = {
+    name: '',
+    version: '',
+    digest: '',
+    metadata: ''
+  };
+
   const runtimeOptions = [
     { value: 'docker', label: 'Docker' },
     { value: 'compose', label: 'Docker Compose' },
@@ -89,6 +100,15 @@
     { key: 'image_digest', label: 'Digest', render: (r) => `<code>${r.image_digest?.slice(7, 19)}...</code>` },
     { key: 'size_bytes', label: 'Size', render: (r) => formatBytes(r.size_bytes) }
   ];
+
+  function formatDate(timestamp) {
+    if (!timestamp) return '-';
+    return new Date(timestamp).toLocaleDateString('en-US', {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric'
+    });
+  }
 
   function formatBytes(bytes) {
     if (!bytes) return '-';
@@ -268,6 +288,78 @@
       secretDeleting = false;
     }
   }
+
+  async function reloadArtifacts() {
+    try {
+      artifacts = await api.listArtifacts(serviceId);
+    } catch (err) {
+      console.error('Failed to reload artifacts:', err);
+    }
+  }
+
+  function openArtifactRegisterModal() {
+    artifactForm = {
+      name: '',
+      version: '',
+      digest: '',
+      metadata: ''
+    };
+    artifactRegisterError = null;
+    artifactRegisterOpen = true;
+  }
+
+  function closeArtifactRegisterModal() {
+    artifactRegisterOpen = false;
+    artifactRegisterError = null;
+  }
+
+  async function handleArtifactRegister() {
+    // Validate required fields
+    if (!artifactForm.name.trim()) {
+      artifactRegisterError = 'Artifact name is required';
+      return;
+    }
+    if (!artifactForm.version.trim()) {
+      artifactRegisterError = 'Version is required';
+      return;
+    }
+    if (!artifactForm.digest.trim()) {
+      artifactRegisterError = 'Digest is required';
+      return;
+    }
+
+    // Validate metadata JSON if provided
+    let metadata = null;
+    if (artifactForm.metadata.trim()) {
+      try {
+        metadata = JSON.parse(artifactForm.metadata);
+      } catch (err) {
+        artifactRegisterError = 'Metadata must be valid JSON';
+        return;
+      }
+    }
+
+    artifactRegistering = true;
+    artifactRegisterError = null;
+
+    try {
+      await api.registerArtifact({
+        service_id: serviceId,
+        name: artifactForm.name.trim(),
+        version: artifactForm.version.trim(),
+        digest: artifactForm.digest.trim(),
+        metadata: metadata
+      });
+      
+      // Close modal and reload artifacts
+      closeArtifactRegisterModal();
+      await reloadArtifacts();
+    } catch (err) {
+      artifactRegisterError = err.message || 'Failed to register artifact';
+    } finally {
+      artifactRegistering = false;
+    }
+  }
 </script>
 
 <div class="page">
@@ -302,8 +394,42 @@
     </section>
 
     <section>
-      <h2>Artifacts ({artifacts.length})</h2>
-      <Table columns={artifactColumns} data={artifacts.slice(0, 10)} />
+      <div class="section-header">
+        <h2>Artifacts ({artifacts.length})</h2>
+        <LoadingButton variant="primary" on:click={openArtifactRegisterModal}>
+          Register Artifact
+        </LoadingButton>
+      </div>
+      {#if artifacts.length > 0}
+        <div class="artifacts-table">
+          {#each artifacts as artifact}
+            <a href="/artifacts/{artifact.id}" class="artifact-row">
+              <div class="artifact-info">
+                <div class="artifact-main">
+                  <code class="artifact-name">{artifact.name}</code>
+                  <span class="artifact-version">v{artifact.version}</span>
+                </div>
+                <div class="artifact-meta">
+                  <span class="artifact-created">{formatDate(artifact.created_at)}</span>
+                  {#if artifact.sbom_url}
+                    <span class="badge badge-sbom">SBOM</span>
+                  {/if}
+                  {#if artifact.signatures && artifact.signatures.length > 0}
+                    <span class="badge badge-signatures">{artifact.signatures.length} signature{artifact.signatures.length > 1 ? 's' : ''}</span>
+                  {/if}
+                </div>
+              </div>
+            </a>
+          {/each}
+        </div>
+      {:else}
+        <div class="empty-state">
+          <p class="empty">No artifacts registered</p>
+          <LoadingButton variant="primary" on:click={openArtifactRegisterModal}>
+            Register Your First Artifact
+          </LoadingButton>
+        </div>
+      {/if}
     </section>
 
     <section>
@@ -529,6 +655,81 @@
   </div>
 </ConfirmDialog>
 
+<!-- Artifact Registration Modal -->
+<Modal bind:open={artifactRegisterOpen} title="Register Artifact" on:close={closeArtifactRegisterModal}>
+  <form on:submit|preventDefault={handleArtifactRegister} class="artifact-form">
+    <div class="form-field">
+      <label for="artifact-name">Name *</label>
+      <Input
+        id="artifact-name"
+        bind:value={artifactForm.name}
+        placeholder="my-service"
+        required
+        disabled={artifactRegistering}
+      />
+      <span class="field-hint">The artifact name (e.g., service name or image name)</span>
+    </div>
+
+    <div class="form-field">
+      <label for="artifact-version">Version *</label>
+      <Input
+        id="artifact-version"
+        bind:value={artifactForm.version}
+        placeholder="1.0.0"
+        required
+        disabled={artifactRegistering}
+      />
+      <span class="field-hint">Semantic version or tag</span>
+    </div>
+
+    <div class="form-field">
+      <label for="artifact-digest">Digest *</label>
+      <Input
+        id="artifact-digest"
+        bind:value={artifactForm.digest}
+        placeholder="sha256:abcdef123456..."
+        required
+        disabled={artifactRegistering}
+      />
+      <span class="field-hint">Content-addressable digest (e.g., SHA256 hash)</span>
+    </div>
+
+    <div class="form-field">
+      <label for="artifact-metadata">Metadata (JSON)</label>
+      <Textarea
+        id="artifact-metadata"
+        bind:value={artifactForm.metadata}
+        placeholder='{"build_id": "123", "commit": "abc123"}'
+        rows={6}
+        disabled={artifactRegistering}
+      />
+      <span class="field-hint">Optional JSON metadata about the artifact</span>
+    </div>
+
+    {#if artifactRegisterError}
+      <p class="error">{artifactRegisterError}</p>
+    {/if}
+
+    <div class="form-actions">
+      <LoadingButton
+        type="button"
+        variant="secondary"
+        on:click={closeArtifactRegisterModal}
+        disabled={artifactRegistering}
+      >
+        Cancel
+      </LoadingButton>
+      <LoadingButton
+        type="submit"
+        variant="primary"
+        loading={artifactRegistering}
+      >
+        Register Artifact
+      </LoadingButton>
+    </div>
+  </form>
+</Modal>
+
 <style>
   .page { max-width: 1000px; }
   .back {
@@ -699,5 +900,81 @@
     font-size: 0.75rem;
     color: var(--text-muted);
     margin-top: 0.25rem;
+  }
+
+  .artifacts-table {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+  .artifact-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.75rem;
+    background: var(--hover-bg);
+    border-radius: 4px;
+    border: 1px solid var(--border-color);
+    text-decoration: none;
+    color: inherit;
+    transition: background 0.2s;
+  }
+  .artifact-row:hover {
+    background: var(--bg);
+    border-color: var(--primary);
+  }
+  .artifact-info {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    flex: 1;
+  }
+  .artifact-main {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+  }
+  .artifact-name {
+    font-weight: 500;
+    color: var(--text-primary);
+    font-size: 0.9375rem;
+  }
+  .artifact-version {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    padding: 0.125rem 0.5rem;
+    background: var(--bg);
+    border-radius: 3px;
+  }
+  .artifact-meta {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+  .artifact-created {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+  }
+  .badge {
+    font-size: 0.625rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    padding: 0.25rem 0.5rem;
+    border-radius: 3px;
+    letter-spacing: 0.025em;
+  }
+  .badge-sbom {
+    background: #e3f2fd;
+    color: #1976d2;
+  }
+  .badge-signatures {
+    background: #e8f5e9;
+    color: #388e3c;
+  }
+
+  .artifact-form {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
   }
 </style>
