@@ -1,7 +1,7 @@
 {
   "database": "dolt",
   "backend": "dolt",
-  "dolt_mode": "embedded",
+  "dolt_mode": "server",
   "dolt_database": "beads_bahia",
-  "project_id": "c4ce6591-721a-494d-8ea7-d90db6c8af69"
+  "project_id": "098e13d0-c8a8-41e5-bc73-9654d7284585"
 }

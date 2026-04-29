@@ -10,6 +10,12 @@
   let pendingDeployments = [];
   let pendingLoading = false;
   let pendingError = null;
+  let pendingCacheLoadedAt = null;
+  let pendingPairFailures = 0;
+
+  // Cache configuration
+  const PENDING_CACHE_KEY = 'bahia_dashboard_pending_deployments';
+  const PENDING_CACHE_TTL_MS = 30000; // 30 seconds
 
   $: stateColumns = [
     { key: 'service_id', label: 'Service', render: (r) => `<code>${r.service_id?.slice(0, 8)}...</code>` },
@@ -40,11 +46,71 @@
     return 'default';
   }
 
-  // Helper: escape HTML to prevent XSS
+  // Helper: escape HTML to prevent XSS (pure string replacement)
   function escapeHtml(text) {
-    const div = document.createElement('div');
-    div.textContent = text;
-    return div.innerHTML;
+    return String(text)
+      .replace(/&/g, '&')
+      .replace(/</g, '<')
+      .replace(/>/g, '>')
+      .replace(/"/g, '"')
+      .replace(/'/g, '&#039;');
+  }
+
+  // Helper: bounded concurrency for async operations
+  async function withBoundedConcurrency(tasks, limit) {
+    const results = [];
+    const executing = [];
+    
+    for (const task of tasks) {
+      const promise = task().then(result => {
+        executing.splice(executing.indexOf(promise), 1);
+        return result;
+      });
+      
+      results.push(promise);
+      executing.push(promise);
+      
+      if (executing.length >= limit) {
+        await Promise.race(executing);
+      }
+    }
+    
+    return Promise.all(results);
+  }
+
+  // Helper: get cached pending count if fresh
+  function getCachedPendingCount() {
+    if (typeof sessionStorage === 'undefined') return null;
+    
+    try {
+      const cached = sessionStorage.getItem(PENDING_CACHE_KEY);
+      if (!cached) return null;
+      
+      const { count, timestamp } = JSON.parse(cached);
+      const age = Date.now() - timestamp;
+      
+      if (age < PENDING_CACHE_TTL_MS) {
+        pendingCacheLoadedAt = timestamp;
+        return count;
+      }
+    } catch (err) {
+      // Invalid cache, ignore
+    }
+    
+    return null;
+  }
+
+  // Helper: cache pending count
+  function cachePendingCount(count) {
+    if (typeof sessionStorage === 'undefined') return;
+    
+    try {
+      const timestamp = Date.now();
+      sessionStorage.setItem(PENDING_CACHE_KEY, JSON.stringify({ count, timestamp }));
+      pendingCacheLoadedAt = timestamp;
+    } catch (err) {
+      // Cache storage failed, ignore
+    }
   }
 
   // Load pending deployments
@@ -54,48 +120,72 @@
       return;
     }
 
+    // Try to display cached count first
+    const cachedCount = getCachedPendingCount();
+    if (cachedCount !== null) {
+      pendingDeployments = new Array(cachedCount); // Placeholder
+    }
+
     pendingLoading = true;
     pendingError = null;
+    pendingPairFailures = 0;
 
     try {
-      // Load services and environments
-      const [servicesList, envsList] = await Promise.all([
-        api.listServices().catch(() => []),
-        api.listEnvironments().catch(() => [])
-      ]);
+      // Reuse global stores if available, fallback to API calls
+      let servicesList = $services;
+      let envsList = $environments;
 
-      // Fetch intents for all service/environment pairs
-      const intentPromises = [];
+      if (servicesList.length === 0 || envsList.length === 0) {
+        const [fetchedServices, fetchedEnvs] = await Promise.all([
+          servicesList.length === 0 ? api.listServices().catch(() => []) : servicesList,
+          envsList.length === 0 ? api.listEnvironments().catch(() => []) : envsList
+        ]);
+        servicesList = fetchedServices;
+        envsList = fetchedEnvs;
+      }
+
+      // Skip intent calls if either list is empty
+      if (servicesList.length === 0 || envsList.length === 0) {
+        pendingDeployments = [];
+        cachePendingCount(0);
+        return;
+      }
+
+      // Build tasks for all service/environment pairs
+      const intentTasks = [];
       const intentMap = new Map(); // dedupe by intent.id
 
       for (const service of servicesList) {
         for (const env of envsList) {
-          intentPromises.push(
-            api.listIntents(service.id, env.id)
-              .then(intents => {
-                if (Array.isArray(intents)) {
-                  intents.forEach(intent => {
-                    if (intent?.id) {
-                      intentMap.set(intent.id, intent);
-                    }
-                  });
-                }
-              })
-              .catch(err => {
-                // Silently handle per-pair failures
-                console.debug(`Failed to load intents for ${service.id}/${env.id}:`, err);
-              })
-          );
+          intentTasks.push(async () => {
+            try {
+              const intents = await api.listIntents(service.id, env.id);
+              if (Array.isArray(intents)) {
+                intents.forEach(intent => {
+                  if (intent?.id) {
+                    intentMap.set(intent.id, intent);
+                  }
+                });
+              }
+            } catch (err) {
+              // Track per-pair failures instead of logging each
+              pendingPairFailures++;
+            }
+          });
         }
       }
 
-      await Promise.all(intentPromises);
+      // Fetch with bounded concurrency (limit 6)
+      await withBoundedConcurrency(intentTasks, 6);
 
       // Filter for pending approvals
       pendingDeployments = Array.from(intentMap.values()).filter(intent => {
         const status = String(intent.approval_status || '').toLowerCase();
         return status === 'pending';
       });
+
+      // Cache the fresh result
+      cachePendingCount(pendingDeployments.length);
 
     } catch (err) {
       console.error('Failed to load pending deployments:', err);
