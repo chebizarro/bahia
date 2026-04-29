@@ -229,6 +229,13 @@ class BahiaClient {
 
   // Artifacts
   listArtifacts(serviceId) { return this.fetch(`/services/${encodeURIComponent(serviceId)}/artifacts`); }
+  getArtifact(id) { return this.fetch(`/artifacts/${encodeURIComponent(id)}`); }
+  registerArtifact(payload) {
+    return this.fetch('/artifacts', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    });
+  }
 
   // Builds
   listBuilds(serviceId) { return this.fetch(`/services/${encodeURIComponent(serviceId)}/builds`); }
