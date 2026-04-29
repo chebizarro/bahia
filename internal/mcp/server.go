@@ -23,6 +23,7 @@ type Server struct {
 	logger      *zap.Logger
 	secretsRepo repository.SecretRepository // optional: for secret management tools
 	encryptor   *secrets.Encryptor          // optional: for secret encryption/decryption
+	policies    *service.PolicyService      // optional: for policy management tools
 }
 
 // Config holds MCP server configuration.
@@ -32,19 +33,36 @@ type Config struct {
 	Description string `json:"description"`
 }
 
+// ServerDeps holds optional dependencies for the MCP server.
+type ServerDeps struct {
+	SecretsRepo repository.SecretRepository
+	Encryptor   *secrets.Encryptor
+	Policies    *service.PolicyService
+}
+
 // NewServer creates a new MCP server for Bahia.
 func NewServer(registry *service.RegistryService, logger *zap.Logger) *Server {
-	return NewServerWithDeps(registry, logger, nil, nil)
+	return NewServerWithOptions(registry, logger, ServerDeps{})
 }
 
 // NewServerWithDeps creates a new MCP server with optional dependencies.
 // secretsRepo and encryptor are optional; if nil, secret management tools will return errors.
 func NewServerWithDeps(registry *service.RegistryService, logger *zap.Logger, secretsRepo repository.SecretRepository, encryptor *secrets.Encryptor) *Server {
+	return NewServerWithOptions(registry, logger, ServerDeps{
+		SecretsRepo: secretsRepo,
+		Encryptor:   encryptor,
+	})
+}
+
+// NewServerWithOptions creates a new MCP server with optional dependencies.
+// This is the canonical constructor; other constructors delegate to this.
+func NewServerWithOptions(registry *service.RegistryService, logger *zap.Logger, deps ServerDeps) *Server {
 	return &Server{
 		registry:    registry,
 		logger:      logger.With(zap.String("component", "mcp-server")),
-		secretsRepo: secretsRepo,
-		encryptor:   encryptor,
+		secretsRepo: deps.SecretsRepo,
+		encryptor:   deps.Encryptor,
+		policies:    deps.Policies,
 	}
 }
 
@@ -244,7 +262,7 @@ func (s *Server) GetTools() []Tool {
 				"required": []string{"service_id", "environment_id"},
 			},
 		},
-		{  
+		{
 			Name:        "bahia_approve_deployment",
 			Description: "Approve a pending deployment intent",
 			InputSchema: map[string]interface{}{
@@ -272,7 +290,7 @@ func (s *Server) GetTools() []Tool {
 				"required": []string{"intent_id"},
 			},
 		},
-		{  
+		{
 			Name:        "bahia_delete_service",
 			Description: "Delete a service from the registry",
 			InputSchema: map[string]interface{}{
@@ -583,6 +601,124 @@ func (s *Server) GetTools() []Tool {
 				"required": []string{"secret_id"},
 			},
 		},
+		// Policy operations
+		{
+			Name:        "bahia_list_policies",
+			Description: "List deployment policies",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"environment_id": map[string]interface{}{
+						"type":        "string",
+						"description": "Filter by environment ID (UUID). Omit to list all policies.",
+					},
+					"enabled": map[string]interface{}{
+						"type":        "boolean",
+						"description": "If true, only return enabled policies",
+					},
+				},
+			},
+		},
+		{
+			Name:        "bahia_create_policy",
+			Description: "Create a new deployment policy",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"name": map[string]interface{}{
+						"type":        "string",
+						"description": "Policy name",
+					},
+					"environment_id": map[string]interface{}{
+						"type":        "string",
+						"description": "Environment ID (UUID). Omit for global policy.",
+					},
+					"rules": map[string]interface{}{
+						"type":        "array",
+						"description": "Array of policy rules",
+					},
+					"enforcement": map[string]interface{}{
+						"type":        "string",
+						"description": "Enforcement mode: 'warn' or 'block'",
+					},
+					"enabled": map[string]interface{}{
+						"type":        "boolean",
+						"description": "Whether the policy is enabled",
+					},
+				},
+				"required": []string{"name", "rules", "enforcement"},
+			},
+		},
+		{
+			Name:        "bahia_update_policy",
+			Description: "Update an existing deployment policy",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"policy_id": map[string]interface{}{
+						"type":        "string",
+						"description": "Policy UUID",
+					},
+					"name": map[string]interface{}{
+						"type":        "string",
+						"description": "Policy name",
+					},
+					"environment_id": map[string]interface{}{
+						"type":        "string",
+						"description": "Environment ID (UUID). Omit for global policy.",
+					},
+					"rules": map[string]interface{}{
+						"type":        "array",
+						"description": "Array of policy rules",
+					},
+					"enforcement": map[string]interface{}{
+						"type":        "string",
+						"description": "Enforcement mode: 'warn' or 'block'",
+					},
+					"enabled": map[string]interface{}{
+						"type":        "boolean",
+						"description": "Whether the policy is enabled",
+					},
+				},
+				"required": []string{"policy_id"},
+			},
+		},
+		{
+			Name:        "bahia_delete_policy",
+			Description: "Delete a deployment policy",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"policy_id": map[string]interface{}{
+						"type":        "string",
+						"description": "Policy UUID",
+					},
+				},
+				"required": []string{"policy_id"},
+			},
+		},
+		{
+			Name:        "bahia_evaluate_policy",
+			Description: "Evaluate all applicable policies against an artifact for a given environment",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"artifact_id": map[string]interface{}{
+						"type":        "string",
+						"description": "Artifact UUID",
+					},
+					"environment_id": map[string]interface{}{
+						"type":        "string",
+						"description": "Environment UUID",
+					},
+					"service_id": map[string]interface{}{
+						"type":        "string",
+						"description": "Service UUID (optional, for context)",
+					},
+				},
+				"required": []string{"artifact_id", "environment_id"},
+			},
+		},
 	}
 }
 
@@ -656,6 +792,17 @@ func (s *Server) CallTool(ctx context.Context, name string, arguments map[string
 		return s.handleUpdateSecret(ctx, arguments)
 	case "bahia_delete_secret":
 		return s.handleDeleteSecret(ctx, arguments)
+	// Policy operations
+	case "bahia_list_policies":
+		return s.handleListPolicies(ctx, arguments)
+	case "bahia_create_policy":
+		return s.handleCreatePolicy(ctx, arguments)
+	case "bahia_update_policy":
+		return s.handleUpdatePolicy(ctx, arguments)
+	case "bahia_delete_policy":
+		return s.handleDeletePolicy(ctx, arguments)
+	case "bahia_evaluate_policy":
+		return s.handleEvaluatePolicy(ctx, arguments)
 	default:
 		return errorResult(fmt.Sprintf("unknown tool: %s", name)), nil
 	}
@@ -1229,13 +1376,13 @@ func (s *Server) handleGetObservation(ctx context.Context, args map[string]inter
 	}
 
 	result := map[string]interface{}{
-		"id":              obs.ID.String(),
-		"service_id":      obs.ServiceID.String(),
-		"environment_id":  obs.EnvironmentID.String(),
-		"image_digest":    obs.ObservedImageDigest,
-		"container_id":    obs.ObservedContainerID,
-		"health_status":   obs.HealthStatus,
-		"observed_at":     obs.ObservedAt.Format("2006-01-02T15:04:05Z"),
+		"id":             obs.ID.String(),
+		"service_id":     obs.ServiceID.String(),
+		"environment_id": obs.EnvironmentID.String(),
+		"image_digest":   obs.ObservedImageDigest,
+		"container_id":   obs.ObservedContainerID,
+		"health_status":  obs.HealthStatus,
+		"observed_at":    obs.ObservedAt.Format("2006-01-02T15:04:05Z"),
 	}
 	return jsonResult(result)
 }
@@ -1349,7 +1496,7 @@ func (s *Server) handleGetRun(ctx context.Context, args map[string]interface{}) 
 func (s *Server) handleCompleteRun(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
 	runIDStr, _ := args["run_id"].(string)
 	statusStr, _ := args["status"].(string)
-	
+
 	runID, err := uuid.Parse(runIDStr)
 	if err != nil {
 		return errorResult(fmt.Sprintf("invalid run_id: %v", err)), nil
@@ -1709,15 +1856,15 @@ func intentsToMaps(intents []domain.DeploymentIntent) []map[string]interface{} {
 	for i, intent := range intents {
 		m := map[string]interface{}{
 			"id":              intent.ID.String(),
-			"service_id":     intent.ServiceID.String(),
-			"environment_id": intent.EnvironmentID.String(),
-			"artifact_id":    intent.ArtifactID.String(),
-			"requested_by":   intent.RequestedBy,
-			"source_kind":    string(intent.SourceKind),
+			"service_id":      intent.ServiceID.String(),
+			"environment_id":  intent.EnvironmentID.String(),
+			"artifact_id":     intent.ArtifactID.String(),
+			"requested_by":    intent.RequestedBy,
+			"source_kind":     string(intent.SourceKind),
 			"approval_status": string(intent.ApprovalStatus),
-			"status":         string(intent.Status),
-			"created_at":     intent.CreatedAt.Format("2006-01-02T15:04:05Z"),
-			"updated_at":     intent.UpdatedAt.Format("2006-01-02T15:04:05Z"),
+			"status":          string(intent.Status),
+			"created_at":      intent.CreatedAt.Format("2006-01-02T15:04:05Z"),
+			"updated_at":      intent.UpdatedAt.Format("2006-01-02T15:04:05Z"),
 		}
 		if intent.SupersedesIntentID != nil {
 			m["supersedes_intent_id"] = intent.SupersedesIntentID.String()
@@ -1838,4 +1985,337 @@ func secretsToMaps(secrets []domain.ServiceSecret) []map[string]interface{} {
 		result[i] = m
 	}
 	return result
+}
+
+// --- Policy Handlers ---
+
+func (s *Server) handleListPolicies(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
+	if s.policies == nil {
+		return errorResult("policy tools are not configured"), nil
+	}
+
+	// Check for enabled filter
+	enabledOnly := false
+	if enabled, ok := args["enabled"].(bool); ok {
+		enabledOnly = enabled
+	}
+
+	// If environment_id is provided, filter by environment
+	if envIDStr, ok := args["environment_id"].(string); ok && envIDStr != "" {
+		envID, err := uuid.Parse(envIDStr)
+		if err != nil {
+			return errorResult(fmt.Sprintf("invalid environment_id: %v", err)), nil
+		}
+
+		// List all policies and filter by environment
+		allPolicies, err := s.policies.ListPolicies(ctx, enabledOnly)
+		if err != nil {
+			return errorResult(fmt.Sprintf("failed to list policies: %v", err)), nil
+		}
+
+		var filteredPolicies []domain.DeploymentPolicy
+		for _, p := range allPolicies {
+			if p.EnvironmentID != nil && *p.EnvironmentID == envID {
+				filteredPolicies = append(filteredPolicies, p)
+			}
+		}
+
+		result := map[string]interface{}{
+			"policies": policiesToMaps(filteredPolicies),
+			"total":    len(filteredPolicies),
+		}
+		return jsonResult(result)
+	}
+
+	// List all policies
+	policies, err := s.policies.ListPolicies(ctx, enabledOnly)
+	if err != nil {
+		return errorResult(fmt.Sprintf("failed to list policies: %v", err)), nil
+	}
+
+	result := map[string]interface{}{
+		"policies": policiesToMaps(policies),
+		"total":    len(policies),
+	}
+	return jsonResult(result)
+}
+
+func (s *Server) handleCreatePolicy(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
+	if s.policies == nil {
+		return errorResult("policy tools are not configured"), nil
+	}
+
+	name, _ := args["name"].(string)
+	enforcementStr, _ := args["enforcement"].(string)
+
+	if name == "" {
+		return errorResult("name is required"), nil
+	}
+	if enforcementStr == "" {
+		return errorResult("enforcement is required"), nil
+	}
+
+	// Validate enforcement
+	enforcement := domain.PolicyEnforcement(enforcementStr)
+	if enforcement != domain.PolicyEnforcementWarn && enforcement != domain.PolicyEnforcementBlock {
+		return errorResult(fmt.Sprintf("invalid enforcement: %s (must be 'warn' or 'block')", enforcementStr)), nil
+	}
+
+	// Parse environment_id if provided
+	var envID *uuid.UUID
+	if envIDStr, ok := args["environment_id"].(string); ok && envIDStr != "" {
+		parsedEnvID, err := uuid.Parse(envIDStr)
+		if err != nil {
+			return errorResult(fmt.Sprintf("invalid environment_id: %v", err)), nil
+		}
+		envID = &parsedEnvID
+	}
+
+	// Parse rules
+	rulesRaw, ok := args["rules"]
+	if !ok {
+		return errorResult("rules is required"), nil
+	}
+
+	// Convert rules via JSON marshal/unmarshal
+	rulesJSON, err := json.Marshal(rulesRaw)
+	if err != nil {
+		return errorResult(fmt.Sprintf("failed to marshal rules: %v", err)), nil
+	}
+
+	var rules []domain.PolicyRule
+	if err := json.Unmarshal(rulesJSON, &rules); err != nil {
+		return errorResult(fmt.Sprintf("failed to parse rules: %v", err)), nil
+	}
+
+	// Parse enabled flag (default: true)
+	enabled := true
+	if enabledVal, ok := args["enabled"].(bool); ok {
+		enabled = enabledVal
+	}
+
+	policy := &domain.DeploymentPolicy{
+		ID:            uuid.New(),
+		Name:          name,
+		EnvironmentID: envID,
+		Rules:         rules,
+		Enforcement:   enforcement,
+		Enabled:       enabled,
+		CreatedAt:     time.Now(),
+		UpdatedAt:     time.Now(),
+	}
+
+	if err := s.policies.CreatePolicy(ctx, policy); err != nil {
+		return errorResult(fmt.Sprintf("failed to create policy: %v", err)), nil
+	}
+
+	s.logger.Info("policy created",
+		zap.String("policy_id", policy.ID.String()),
+		zap.String("name", name),
+		zap.String("enforcement", enforcementStr),
+	)
+
+	result := map[string]interface{}{
+		"status":    "created",
+		"policy_id": policy.ID.String(),
+		"name":      name,
+		"message":   "Policy created successfully",
+	}
+	return jsonResult(result)
+}
+
+func (s *Server) handleUpdatePolicy(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
+	if s.policies == nil {
+		return errorResult("policy tools are not configured"), nil
+	}
+
+	policyIDStr, _ := args["policy_id"].(string)
+	if policyIDStr == "" {
+		return errorResult("policy_id is required"), nil
+	}
+
+	policyID, err := uuid.Parse(policyIDStr)
+	if err != nil {
+		return errorResult(fmt.Sprintf("invalid policy_id: %v", err)), nil
+	}
+
+	// Get existing policy
+	policy, err := s.policies.GetPolicy(ctx, policyID)
+	if err != nil {
+		return errorResult(fmt.Sprintf("failed to get policy: %v", err)), nil
+	}
+	if policy == nil {
+		return errorResult("policy not found"), nil
+	}
+
+	// Update fields if provided
+	if name, ok := args["name"].(string); ok && name != "" {
+		policy.Name = name
+	}
+
+	if enforcementStr, ok := args["enforcement"].(string); ok && enforcementStr != "" {
+		enforcement := domain.PolicyEnforcement(enforcementStr)
+		if enforcement != domain.PolicyEnforcementWarn && enforcement != domain.PolicyEnforcementBlock {
+			return errorResult(fmt.Sprintf("invalid enforcement: %s (must be 'warn' or 'block')", enforcementStr)), nil
+		}
+		policy.Enforcement = enforcement
+	}
+
+	if envIDStr, ok := args["environment_id"].(string); ok {
+		if envIDStr == "" {
+			policy.EnvironmentID = nil
+		} else {
+			parsedEnvID, err := uuid.Parse(envIDStr)
+			if err != nil {
+				return errorResult(fmt.Sprintf("invalid environment_id: %v", err)), nil
+			}
+			policy.EnvironmentID = &parsedEnvID
+		}
+	}
+
+	if rulesRaw, ok := args["rules"]; ok {
+		rulesJSON, err := json.Marshal(rulesRaw)
+		if err != nil {
+			return errorResult(fmt.Sprintf("failed to marshal rules: %v", err)), nil
+		}
+
+		var rules []domain.PolicyRule
+		if err := json.Unmarshal(rulesJSON, &rules); err != nil {
+			return errorResult(fmt.Sprintf("failed to parse rules: %v", err)), nil
+		}
+		policy.Rules = rules
+	}
+
+	if enabled, ok := args["enabled"].(bool); ok {
+		policy.Enabled = enabled
+	}
+
+	policy.UpdatedAt = time.Now()
+
+	if err := s.policies.UpdatePolicy(ctx, policy); err != nil {
+		return errorResult(fmt.Sprintf("failed to update policy: %v", err)), nil
+	}
+
+	s.logger.Info("policy updated",
+		zap.String("policy_id", policy.ID.String()),
+		zap.String("name", policy.Name),
+	)
+
+	result := map[string]interface{}{
+		"status":    "updated",
+		"policy_id": policy.ID.String(),
+		"message":   "Policy updated successfully",
+	}
+	return jsonResult(result)
+}
+
+func (s *Server) handleDeletePolicy(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
+	if s.policies == nil {
+		return errorResult("policy tools are not configured"), nil
+	}
+
+	policyIDStr, _ := args["policy_id"].(string)
+	if policyIDStr == "" {
+		return errorResult("policy_id is required"), nil
+	}
+
+	policyID, err := uuid.Parse(policyIDStr)
+	if err != nil {
+		return errorResult(fmt.Sprintf("invalid policy_id: %v", err)), nil
+	}
+
+	if err := s.policies.DeletePolicy(ctx, policyID); err != nil {
+		return errorResult(fmt.Sprintf("failed to delete policy: %v", err)), nil
+	}
+
+	s.logger.Info("policy deleted", zap.String("policy_id", policyID.String()))
+
+	result := map[string]interface{}{
+		"status":    "deleted",
+		"policy_id": policyID.String(),
+	}
+	return jsonResult(result)
+}
+
+func (s *Server) handleEvaluatePolicy(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
+	if s.policies == nil {
+		return errorResult("policy tools are not configured"), nil
+	}
+
+	artifactIDStr, _ := args["artifact_id"].(string)
+	environmentIDStr, _ := args["environment_id"].(string)
+
+	if artifactIDStr == "" {
+		return errorResult("artifact_id is required"), nil
+	}
+	if environmentIDStr == "" {
+		return errorResult("environment_id is required"), nil
+	}
+
+	artifactID, err := uuid.Parse(artifactIDStr)
+	if err != nil {
+		return errorResult(fmt.Sprintf("invalid artifact_id: %v", err)), nil
+	}
+
+	environmentID, err := uuid.Parse(environmentIDStr)
+	if err != nil {
+		return errorResult(fmt.Sprintf("invalid environment_id: %v", err)), nil
+	}
+
+	evaluation, err := s.policies.Evaluate(ctx, artifactID, environmentID)
+	if err != nil {
+		return errorResult(fmt.Sprintf("failed to evaluate policies: %v", err)), nil
+	}
+
+	result := map[string]interface{}{
+		"allowed":  evaluation.Allowed,
+		"warnings": evaluation.Warnings,
+		"blockers": evaluation.Blockers,
+		"results":  policyResultsToMaps(evaluation.Results),
+	}
+	return jsonResult(result)
+}
+
+func policiesToMaps(policies []domain.DeploymentPolicy) []map[string]interface{} {
+	result := make([]map[string]interface{}, len(policies))
+	for i, p := range policies {
+		m := map[string]interface{}{
+			"id":          p.ID.String(),
+			"name":        p.Name,
+			"rules":       p.Rules,
+			"enforcement": string(p.Enforcement),
+			"enabled":     p.Enabled,
+			"created_at":  p.CreatedAt.Format("2006-01-02T15:04:05Z"),
+			"updated_at":  p.UpdatedAt.Format("2006-01-02T15:04:05Z"),
+		}
+		if p.EnvironmentID != nil {
+			m["environment_id"] = p.EnvironmentID.String()
+		}
+		result[i] = m
+	}
+	return result
+}
+
+func policyResultsToMaps(results []domain.PolicyResult) []map[string]interface{} {
+	output := make([]map[string]interface{}, len(results))
+	for i, r := range results {
+		m := map[string]interface{}{
+			"policy_id":   r.PolicyID.String(),
+			"policy_name": r.PolicyName,
+			"passed":      r.Passed,
+			"enforcement": string(r.Enforcement),
+		}
+		if len(r.Violations) > 0 {
+			violations := make([]map[string]interface{}, len(r.Violations))
+			for j, v := range r.Violations {
+				violations[j] = map[string]interface{}{
+					"rule":    string(v.Rule),
+					"message": v.Message,
+				}
+			}
+			m["violations"] = violations
+		}
+		output[i] = m
+	}
+	return output
 }
