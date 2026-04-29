@@ -33,66 +33,187 @@ export const envCount = derived(environments, $envs => $envs.length);
 export const driftCount = derived(driftedStates, $drifted => $drifted.length);
 export const workerCount = derived(workers, $workers => $workers.length);
 
+// In-flight request deduplication
+const inFlight = {
+  services: null,
+  environments: null,
+  states: null,
+  workers: null
+};
+
+// loadAll freshness tracking
+let lastLoadAllAt = 0;
+const LOAD_ALL_TTL_MS = 15000; // 15 seconds
+
+// SSE-triggered state refresh throttling
+let stateRefreshTimer = null;
+const STATE_REFRESH_DELAY_MS = 750; // 750ms window (between 500-1000ms)
+
 // Actions
 export async function loadServices() {
   if (!api) return;
+  
+  // Return in-flight promise if already loading
+  if (inFlight.services) {
+    return inFlight.services;
+  }
+  
   loading.update(l => ({ ...l, services: true }));
+  
+  inFlight.services = (async () => {
+    try {
+      const data = await api.listServices();
+      services.set(data || []);
+    } catch (err) {
+      console.error('Failed to load services:', err);
+    } finally {
+      loading.update(l => ({ ...l, services: false }));
+    }
+  })();
+  
   try {
-    const data = await api.listServices();
-    services.set(data || []);
-  } catch (err) {
-    console.error('Failed to load services:', err);
+    await inFlight.services;
   } finally {
-    loading.update(l => ({ ...l, services: false }));
+    inFlight.services = null;
   }
 }
 
 export async function loadEnvironments() {
   if (!api) return;
+  
+  // Return in-flight promise if already loading
+  if (inFlight.environments) {
+    return inFlight.environments;
+  }
+  
   loading.update(l => ({ ...l, environments: true }));
+  
+  inFlight.environments = (async () => {
+    try {
+      const data = await api.listEnvironments();
+      environments.set(data || []);
+    } catch (err) {
+      console.error('Failed to load environments:', err);
+    } finally {
+      loading.update(l => ({ ...l, environments: false }));
+    }
+  })();
+  
   try {
-    const data = await api.listEnvironments();
-    environments.set(data || []);
-  } catch (err) {
-    console.error('Failed to load environments:', err);
+    await inFlight.environments;
   } finally {
-    loading.update(l => ({ ...l, environments: false }));
+    inFlight.environments = null;
   }
 }
 
 export async function loadStates() {
   if (!api) return;
+  
+  // Return in-flight promise if already loading
+  if (inFlight.states) {
+    return inFlight.states;
+  }
+  
   loading.update(l => ({ ...l, states: true }));
+  
+  inFlight.states = (async () => {
+    try {
+      const data = await api.listStates();
+      states.set(data || []);
+    } catch (err) {
+      console.error('Failed to load states:', err);
+    } finally {
+      loading.update(l => ({ ...l, states: false }));
+    }
+  })();
+  
   try {
-    const data = await api.listStates();
-    states.set(data || []);
-  } catch (err) {
-    console.error('Failed to load states:', err);
+    await inFlight.states;
   } finally {
-    loading.update(l => ({ ...l, states: false }));
+    inFlight.states = null;
   }
 }
 
 export async function loadWorkers() {
   if (!api) return;
+  
+  // Return in-flight promise if already loading
+  if (inFlight.workers) {
+    return inFlight.workers;
+  }
+  
   loading.update(l => ({ ...l, workers: true }));
+  
+  inFlight.workers = (async () => {
+    try {
+      const data = await api.listWorkers();
+      workers.set(data || []);
+    } catch (err) {
+      console.error('Failed to load workers:', err);
+    } finally {
+      loading.update(l => ({ ...l, workers: false }));
+    }
+  })();
+  
   try {
-    const data = await api.listWorkers();
-    workers.set(data || []);
-  } catch (err) {
-    console.error('Failed to load workers:', err);
+    await inFlight.workers;
   } finally {
-    loading.update(l => ({ ...l, workers: false }));
+    inFlight.workers = null;
   }
 }
 
 export async function loadAll() {
+  // Freshness guard: skip if recently loaded and stores have data
+  const now = Date.now();
+  const elapsed = now - lastLoadAllAt;
+  
+  if (elapsed < LOAD_ALL_TTL_MS) {
+    // Check if stores have data
+    let hasData = false;
+    const unsubServices = services.subscribe(v => { hasData = hasData || v.length > 0; });
+    const unsubEnvs = environments.subscribe(v => { hasData = hasData || v.length > 0; });
+    const unsubStates = states.subscribe(v => { hasData = hasData || v.length > 0; });
+    const unsubWorkers = workers.subscribe(v => { hasData = hasData || v.length > 0; });
+    
+    unsubServices();
+    unsubEnvs();
+    unsubStates();
+    unsubWorkers();
+    
+    if (hasData) {
+      // Skip network - data is fresh
+      return;
+    }
+  }
+  
+  // Update timestamp before loading
+  lastLoadAllAt = now;
+  
   await Promise.all([
     loadServices(),
     loadEnvironments(),
     loadStates(),
     loadWorkers()
   ]);
+}
+
+// Throttled state refresh scheduler
+function scheduleStateRefresh() {
+  // Don't schedule if already in-flight
+  if (inFlight.states) {
+    return;
+  }
+  
+  // Don't schedule if already scheduled
+  if (stateRefreshTimer) {
+    return;
+  }
+  
+  // Schedule refresh after delay
+  stateRefreshTimer = setTimeout(() => {
+    stateRefreshTimer = null;
+    loadStates();
+  }, STATE_REFRESH_DELAY_MS);
 }
 
 // SSE subscription
@@ -105,14 +226,20 @@ export function subscribeToEvents() {
   eventSourceCleanup = api.streamEvents([], (event) => {
     events.update(evs => [event, ...evs].slice(0, 100));
     
-    // Refresh relevant data based on event type
+    // Throttled state refresh for deployment/drift events
     if (event.type?.startsWith('deployment.') || event.type?.startsWith('drift.')) {
-      loadStates();
+      scheduleStateRefresh();
     }
   });
 }
 
 export function unsubscribeFromEvents() {
+  // Clear pending state refresh timer
+  if (stateRefreshTimer) {
+    clearTimeout(stateRefreshTimer);
+    stateRefreshTimer = null;
+  }
+  
   if (eventSourceCleanup) {
     eventSourceCleanup();
     eventSourceCleanup = null;
