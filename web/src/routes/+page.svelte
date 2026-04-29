@@ -84,25 +84,28 @@
     padding: 2rem;
   }
   :global(.badge-success) {
-    background: #065f46;
-    color: #6ee7b7;
+    background: var(--success);
+    color: #fff;
     padding: 0.125rem 0.5rem;
     border-radius: 4px;
     font-size: 0.75rem;
+    opacity: 0.9;
   }
   :global(.badge-error) {
-    background: #7f1d1d;
-    color: #fca5a5;
+    background: var(--error);
+    color: #fff;
     padding: 0.125rem 0.5rem;
     border-radius: 4px;
     font-size: 0.75rem;
+    opacity: 0.9;
   }
   :global(.badge-default) {
-    background: #374151;
-    color: #d1d5db;
+    background: var(--text-muted);
+    color: var(--bg);
     padding: 0.125rem 0.5rem;
     border-radius: 4px;
     font-size: 0.75rem;
+    opacity: 0.9;
   }
   :global(code) {
     font-family: 'SF Mono', Monaco, monospace;

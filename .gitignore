@@ -37,3 +37,7 @@ prompt-exports/
 .dolt/
 *.db
 .beads-credential-key
+
+node_modules/
+.svelte-kit/
+dist/

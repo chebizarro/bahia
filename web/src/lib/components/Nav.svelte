@@ -1,5 +1,6 @@
 <script>
   import { page } from '$app/stores';
+  import { theme, toggleTheme } from '$lib/stores/theme.js';
 </script>
 
 <nav>
@@ -17,6 +18,14 @@
     <li><a href="/policies" class:active={$page.url.pathname.startsWith('/policies')}>Policies</a></li>
     <li><a href="/events" class:active={$page.url.pathname === '/events'}>Events</a></li>
   </ul>
+  
+  <button class="theme-toggle" on:click={toggleTheme} aria-label="Toggle theme">
+    {#if $theme === 'dark'}
+      ☀️
+    {:else}
+      🌙
+    {/if}
+  </button>
 </nav>
 
 <style>
@@ -58,5 +67,22 @@
   .nav-links a.active {
     background: var(--primary, #6366f1);
     color: #fff;
+  }
+  .theme-toggle {
+    margin-left: auto;
+    background: transparent;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    padding: 0.5rem 0.75rem;
+    font-size: 1.25rem;
+    cursor: pointer;
+    transition: all 0.15s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .theme-toggle:hover {
+    background: var(--hover-bg);
+    transform: scale(1.05);
   }
 </style>

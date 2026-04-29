@@ -1,6 +1,9 @@
 import { writable, derived } from 'svelte/store';
 import { api } from '../api/client.js';
 
+// Re-export theme store
+export { theme, toggleTheme } from './theme.js';
+
 // Auth state
 export const isAuthenticated = writable(false);
 export const currentUser = writable(null);
@@ -32,6 +35,7 @@ export const workerCount = derived(workers, $workers => $workers.length);
 
 // Actions
 export async function loadServices() {
+  if (!api) return;
   loading.update(l => ({ ...l, services: true }));
   try {
     const data = await api.listServices();
@@ -44,6 +48,7 @@ export async function loadServices() {
 }
 
 export async function loadEnvironments() {
+  if (!api) return;
   loading.update(l => ({ ...l, environments: true }));
   try {
     const data = await api.listEnvironments();
@@ -56,6 +61,7 @@ export async function loadEnvironments() {
 }
 
 export async function loadStates() {
+  if (!api) return;
   loading.update(l => ({ ...l, states: true }));
   try {
     const data = await api.listStates();
@@ -68,6 +74,7 @@ export async function loadStates() {
 }
 
 export async function loadWorkers() {
+  if (!api) return;
   loading.update(l => ({ ...l, workers: true }));
   try {
     const data = await api.listWorkers();
@@ -92,6 +99,7 @@ export async function loadAll() {
 let eventSourceCleanup = null;
 
 export function subscribeToEvents() {
+  if (!api) return;
   if (eventSourceCleanup) eventSourceCleanup();
   
   eventSourceCleanup = api.streamEvents([], (event) => {

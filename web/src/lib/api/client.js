@@ -132,5 +132,6 @@ class BahiaClient {
   }
 }
 
-export const api = new BahiaClient();
+// Only instantiate in browser context
+export const api = typeof window !== 'undefined' ? new BahiaClient() : null;
 export default api;
