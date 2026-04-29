@@ -7,13 +7,20 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/openagentsinc/bahia/internal/domain"
 )
 
 // PgDeploymentIntentRepository is a PostgreSQL implementation.
+type deploymentDB interface {
+	Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error)
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
+
 type PgDeploymentIntentRepository struct {
-	pool *pgxpool.Pool
+	pool deploymentDB
 }
 
 func NewPgDeploymentIntentRepository(pool *pgxpool.Pool) *PgDeploymentIntentRepository {
@@ -80,6 +87,22 @@ func (r *PgDeploymentIntentRepository) GetByID(ctx context.Context, id uuid.UUID
 	return di, nil
 }
 
+func (r *PgDeploymentIntentRepository) GetByHiveResultEventID(ctx context.Context, eventID string) (*domain.DeploymentIntent, error) {
+	row := r.pool.QueryRow(ctx, `
+		SELECT `+intentColumns+` FROM deployment_intents
+		WHERE metadata->>'hive_ci_result_event_id' = $1
+		LIMIT 1
+	`, eventID)
+	di, err := r.scanIntent(row)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("querying deployment intent by hive result event id: %w", err)
+	}
+	return di, nil
+}
+
 func (r *PgDeploymentIntentRepository) ListByServiceEnv(ctx context.Context, serviceID, envID uuid.UUID, limit, offset int) ([]domain.DeploymentIntent, error) {
 	rows, err := r.pool.Query(ctx, `
 		SELECT `+intentColumns+` FROM deployment_intents
@@ -140,7 +163,7 @@ func (r *PgDeploymentIntentRepository) UpdateApproval(ctx context.Context, id uu
 
 // PgDeploymentRunRepository is a PostgreSQL implementation.
 type PgDeploymentRunRepository struct {
-	pool *pgxpool.Pool
+	pool deploymentDB
 }
 
 func NewPgDeploymentRunRepository(pool *pgxpool.Pool) *PgDeploymentRunRepository {

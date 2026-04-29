@@ -7,13 +7,20 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/openagentsinc/bahia/internal/domain"
 )
 
 // PgBuildRepository is a PostgreSQL implementation of BuildRepository.
+type buildDB interface {
+	Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error)
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
+
 type PgBuildRepository struct {
-	pool *pgxpool.Pool
+	pool buildDB
 }
 
 func NewPgBuildRepository(pool *pgxpool.Pool) *PgBuildRepository {
@@ -56,6 +63,25 @@ func (r *PgBuildRepository) GetByID(ctx context.Context, id uuid.UUID) (*domain.
 	}
 	if err := unmarshalJSON(metaJSON, &b.Metadata, "build metadata"); err != nil {
 		return nil, fmt.Errorf("reading build %s: %w", id, err)
+	}
+	return b, nil
+}
+
+func (r *PgBuildRepository) GetByCISystemRunID(ctx context.Context, ciSystem, ciRunID string) (*domain.Build, error) {
+	b := &domain.Build{}
+	var metaJSON []byte
+	err := r.pool.QueryRow(ctx, `
+		SELECT id, service_id, git_sha, git_ref, ci_system, ci_run_id, loom_job_id, status, source_event_id, started_at, finished_at, metadata, created_at
+		FROM builds WHERE ci_system = $1 AND ci_run_id = $2
+	`, ciSystem, ciRunID).Scan(&b.ID, &b.ServiceID, &b.GitSHA, &b.GitRef, &b.CISystem, &b.CIRunID, &b.LoomJobID, &b.Status, &b.SourceEventID, &b.StartedAt, &b.FinishedAt, &metaJSON, &b.CreatedAt)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("querying build by ci system/run id: %w", err)
+	}
+	if err := unmarshalJSON(metaJSON, &b.Metadata, "build metadata"); err != nil {
+		return nil, fmt.Errorf("reading build for ci system/run id %s/%s: %w", ciSystem, ciRunID, err)
 	}
 	return b, nil
 }

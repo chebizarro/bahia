@@ -131,6 +131,14 @@ func (m *mockBuildRepo) UpdateStatus(_ context.Context, id uuid.UUID, status dom
 	}
 	return nil
 }
+func (m *mockBuildRepo) GetByCISystemRunID(_ context.Context, ciSystem, ciRunID string) (*domain.Build, error) {
+	for _, b := range m.builds {
+		if b.CISystem == ciSystem && b.CIRunID == ciRunID {
+			return b, nil
+		}
+	}
+	return nil, nil
+}
 
 type mockArtifactRepo struct {
 	artifacts   map[uuid.UUID]*domain.Artifact
@@ -157,6 +165,14 @@ func (m *mockArtifactRepo) GetByID(_ context.Context, id uuid.UUID) (*domain.Art
 func (m *mockArtifactRepo) GetByDigest(_ context.Context, repo, digest string) (*domain.Artifact, error) {
 	for _, a := range m.artifacts {
 		if a.ImageRepo == repo && a.ImageDigest == digest {
+			return a, nil
+		}
+	}
+	return nil, nil
+}
+func (m *mockArtifactRepo) GetByImageRepoDigest(_ context.Context, imageRepo, imageDigest string) (*domain.Artifact, error) {
+	for _, a := range m.artifacts {
+		if a.ImageRepo == imageRepo && a.ImageDigest == imageDigest {
 			return a, nil
 		}
 	}
@@ -206,6 +222,16 @@ func (m *mockIntentRepo) GetByID(_ context.Context, id uuid.UUID) (*domain.Deplo
 		return nil, m.getByIDErr
 	}
 	return m.intents[id], nil
+}
+func (m *mockIntentRepo) GetByHiveResultEventID(_ context.Context, eventID string) (*domain.DeploymentIntent, error) {
+	for _, di := range m.intents {
+		if di.Metadata != nil {
+			if v, ok := di.Metadata["hive_ci_result_event_id"].(string); ok && v == eventID {
+				return di, nil
+			}
+		}
+	}
+	return nil, nil
 }
 func (m *mockIntentRepo) ListByServiceEnv(_ context.Context, serviceID, envID uuid.UUID, limit, offset int) ([]domain.DeploymentIntent, error) {
 	var result []domain.DeploymentIntent

@@ -69,6 +69,8 @@ You push code → CI builds it → Bahia registers the artifact → You deploy �
 - ✅ REST API and CLI
 - ✅ Web UI for browsing services, environments, and deployments
 - ✅ Soul Factory agent provisioning (experimental)
+- ✅ **OCI Registry Server** — internal container registry backed by PostgreSQL + Blossom
+- ✅ **Hive-CI Bridge** — auto-ingest CI events (kind 5401/5402) and create builds/artifacts/deployments
 
 See [protocol-compatibility.md](docs/protocol-compatibility.md) for integration details.
 
@@ -114,6 +116,10 @@ Full API docs: [docs/api.md](docs/api.md)
 | `POST /api/v1/deployments/intents` | Create deployment intent |
 | `POST /api/v1/rollback` | Roll back a deployment |
 | `GET /api/v1/state/drifted` | List drifted deployments |
+| `GET /v2/` | OCI Distribution API (registry) |
+| `GET /v2/{name}/manifests/{ref}` | Pull container manifest |
+| `PUT /v2/{name}/manifests/{ref}` | Push container manifest |
+| `POST /v2/{name}/blobs/uploads/` | Start blob upload |
 
 ## CLI
 

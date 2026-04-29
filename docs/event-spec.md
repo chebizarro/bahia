@@ -108,6 +108,58 @@ Published by Bahia to cancel a running or queued job:
 }
 ```
 
+## Hive-CI Integration Events
+
+Bahia subscribes to [Hive-CI](../hive-ci-protocol/SPECIFICATION.md) events to auto-ingest CI workflow results.
+
+### Workflow Run (Kind 5401)
+Received from Hive-CI dispatchers when a workflow starts:
+
+```json
+{
+  "kind": 5401,
+  "pubkey": "<trusted-dispatcher-pubkey>",
+  "content": "",
+  "tags": [
+    ["a", "30618:abc123...:my-project"],
+    ["workflow", ".github/workflows/build.yml"],
+    ["commit", "abc123def456"],
+    ["branch", "main"],
+    ["trigger", "push"],
+    ["triggered-by", "<user-pubkey>"],
+    ["publisher", "<ephemeral-pubkey>"]
+  ]
+}
+```
+
+### Workflow Result (Kind 5402)
+Received from the ephemeral key declared in the 5401 event:
+
+```json
+{
+  "kind": 5402,
+  "pubkey": "<ephemeral-pubkey>",
+  "content": "",
+  "tags": [
+    ["e", "<workflow-run-event-id>"],
+    ["log_url", "https://blossom.server/workflow.log"],
+    ["status", "success"],
+    ["exit_code", "0"],
+    ["duration", "234"],
+    ["image_repo", "registry.sharegap.net/cascadia/myapp"],
+    ["image_tag", "v1.2.3"],
+    ["image_digest", "sha256:abc123..."]
+  ]
+}
+```
+
+**Bahia processing:**
+1. Validates `5402.pubkey == 5401.publisher` (ephemeral key relationship)
+2. Creates Build record from CI result
+3. Verifies image exists in OCI registry
+4. Creates Artifact linked to Build
+5. (If configured) Creates staging DeploymentIntent
+
 ## Protocol Compatibility Matrix
 
 | Kind | Name | Direction | Bahia Role |
@@ -117,6 +169,8 @@ Published by Bahia to cancel a running or queued job:
 | 30100 | Job Status Update | Subscribe | Monitor running job status |
 | 5101 | Job Result | Subscribe | Receive final result (exit code, logs) |
 | 5102 | Job Cancellation | **Publish** | Cancel running / queued jobs |
+| 5401 | Workflow Run | Subscribe | Receive CI workflow start (Hive-CI) |
+| 5402 | Workflow Result | Subscribe | Receive CI workflow result (Hive-CI) |
 | 31000–31005 | Bahia Audit Events | **Publish** | Emit build, deploy, drift events |
 
 ## Event Storage

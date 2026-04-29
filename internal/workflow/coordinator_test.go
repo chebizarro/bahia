@@ -72,6 +72,9 @@ func (m *stubBuildRepo) ListByService(_ context.Context, _ uuid.UUID, _, _ int) 
 func (m *stubBuildRepo) UpdateStatus(_ context.Context, _ uuid.UUID, _ domain.BuildStatus) error {
 	return nil
 }
+func (m *stubBuildRepo) GetByCISystemRunID(_ context.Context, _, _ string) (*domain.Build, error) {
+	return nil, nil
+}
 
 type stubArtifactRepo struct{ art *domain.Artifact }
 
@@ -92,6 +95,9 @@ func (m *stubArtifactRepo) ListByService(_ context.Context, _ uuid.UUID, _, _ in
 	return nil, nil
 }
 func (m *stubArtifactRepo) ListByBuild(_ context.Context, _ uuid.UUID) ([]domain.Artifact, error) {
+	return nil, nil
+}
+func (m *stubArtifactRepo) GetByImageRepoDigest(_ context.Context, _, _ string) (*domain.Artifact, error) {
 	return nil, nil
 }
 
@@ -139,6 +145,9 @@ func (m *stubIntentRepo) UpdateApproval(_ context.Context, id uuid.UUID, status 
 		di.ApprovalStatus = status
 	}
 	return nil
+}
+func (m *stubIntentRepo) GetByHiveResultEventID(_ context.Context, _ string) (*domain.DeploymentIntent, error) {
+	return nil, nil
 }
 
 type stubRunRepo struct {

@@ -89,6 +89,45 @@ Currently no authentication required for local development. Production deploymen
 | GET | `/api/v1/services/{serviceId}/environments/{envId}/state` | Get specific state |
 | POST | `/api/v1/observations` | Record a runtime observation |
 
+## OCI Registry (Distribution API v2)
+
+The OCI registry endpoints are mounted at `/v2` (outside `/api/v1`) and implement the [OCI Distribution Spec](https://github.com/opencontainers/distribution-spec).
+
+### Authentication
+
+| Method | Description |
+|--------|-------------|
+| NIP-98 | Nostr-signed HTTP auth for push operations |
+| Basic Auth | Service account credentials |
+| Anonymous | Pull from allowed CIDRs (internal network) |
+
+### Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/v2/` | API version check |
+| GET | `/v2/{name}/manifests/{reference}` | Pull manifest by tag or digest |
+| HEAD | `/v2/{name}/manifests/{reference}` | Check manifest existence |
+| PUT | `/v2/{name}/manifests/{reference}` | Push manifest |
+| GET | `/v2/{name}/blobs/{digest}` | Pull blob |
+| HEAD | `/v2/{name}/blobs/{digest}` | Check blob existence |
+| POST | `/v2/{name}/blobs/uploads/` | Start blob upload |
+| PATCH | `/v2/{name}/blobs/uploads/{uuid}` | Upload blob chunk |
+| PUT | `/v2/{name}/blobs/uploads/{uuid}?digest=...` | Complete blob upload |
+| GET | `/v2/{name}/tags/list` | List tags |
+| GET | `/v2/{name}/referrers/{digest}` | List referrers |
+
+### Usage
+
+```bash
+# Push with docker (requires auth)
+docker tag myapp:latest registry.sharegap.net/cascadia/myapp:v1.0.0
+docker push registry.sharegap.net/cascadia/myapp:v1.0.0
+
+# Pull (anonymous from internal network)
+docker pull registry.sharegap.net/cascadia/myapp:v1.0.0
+```
+
 ## Response Format
 
 All responses follow this format:

@@ -36,15 +36,68 @@ Bridges Bahia to Loom workers via Nostr:
 - Supports job cancellation (Kind 5102)
 - Maps Loom job states to internal deployment run status
 
+### OCI Registry Server
+
+Bahia serves as an internal OCI-compliant container registry:
+
+```
+┌─────────────────────────────────────────────────────┐
+│                  OCI Registry                        │
+├─────────────────────────────────────────────────────┤
+│  /v2/* endpoints                                    │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐ │
+│  │  Manifests  │  │    Blobs    │  │    Tags     │ │
+│  │ (PostgreSQL)│  │  (Blossom)  │  │ (PostgreSQL)│ │
+│  └─────────────┘  └─────────────┘  └─────────────┘ │
+└─────────────────────────────────────────────────────┘
+```
+
+- **Manifest storage**: PostgreSQL (exact bytes preserved for digest stability)
+- **Blob storage**: Blossom (content-addressed, deduped)
+- **Authentication**: NIP-98, basic auth service accounts, anonymous pull from allowed CIDRs
+
+### Hive-CI Bridge
+
+Ingests CI workflow events and auto-creates builds, artifacts, and deployment intents:
+
+```
+Hive-CI (5401)     Hive-CI (5402)
+Workflow Run  ────▶  Workflow Result
+     │                    │
+     └────────┬───────────┘
+              ▼
+       ┌─────────────┐
+       │   Bridge    │
+       │ (Bahia)     │
+       └──────┬──────┘
+              │
+    ┌─────────┼─────────┐
+    ▼         ▼         ▼
+ Build    Artifact   Intent
+              │
+              ▼
+         OCI Registry
+        (verify image)
+```
+
+- Subscribes to kind 5401 (Workflow Run) and 5402 (Workflow Result)
+- Validates publisher key relationship (ephemeral key matches)
+- Auto-creates builds from CI results
+- Auto-creates artifacts by verifying image in OCI registry
+- Auto-creates staging deployment intents (configurable)
+- Background retry for pending results
+
 ### Adapters
 
 | Adapter | Purpose |
 |---------|---------|
 | **Harbor** | Resolves image tags to digests, verifies image existence |
+| **Blossom** | Blob storage for OCI registry and CI logs |
 | **Nostr** | Publishes audit events, subscribes to job updates |
 | **Docker** | Queries running containers for drift detection |
 | **Cashu** | Handles payments to workers (in development) |
 | **Signet** | NIP-46 bunker integration for key management |
+| **Hive-CI** | Subscribes to CI workflow events (5401/5402) |
 
 ### Reconciler
 Background worker that continuously compares desired state (what should be running) with observed state (what is running):

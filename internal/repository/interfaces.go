@@ -3,6 +3,7 @@ package repository
 
 import (
 	"context"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/domain"
@@ -32,6 +33,7 @@ type EnvironmentRepository interface {
 type BuildRepository interface {
 	Create(ctx context.Context, b *domain.Build) error
 	GetByID(ctx context.Context, id uuid.UUID) (*domain.Build, error)
+	GetByCISystemRunID(ctx context.Context, ciSystem, ciRunID string) (*domain.Build, error)
 	ListByService(ctx context.Context, serviceID uuid.UUID, limit, offset int) ([]domain.Build, error)
 	UpdateStatus(ctx context.Context, id uuid.UUID, status domain.BuildStatus) error
 }
@@ -41,6 +43,7 @@ type ArtifactRepository interface {
 	Create(ctx context.Context, a *domain.Artifact) error
 	GetByID(ctx context.Context, id uuid.UUID) (*domain.Artifact, error)
 	GetByDigest(ctx context.Context, repo, digest string) (*domain.Artifact, error)
+	GetByImageRepoDigest(ctx context.Context, imageRepo, imageDigest string) (*domain.Artifact, error)
 	ListByService(ctx context.Context, serviceID uuid.UUID, limit, offset int) ([]domain.Artifact, error)
 	ListByBuild(ctx context.Context, buildID uuid.UUID) ([]domain.Artifact, error)
 }
@@ -49,6 +52,7 @@ type ArtifactRepository interface {
 type DeploymentIntentRepository interface {
 	Create(ctx context.Context, di *domain.DeploymentIntent) error
 	GetByID(ctx context.Context, id uuid.UUID) (*domain.DeploymentIntent, error)
+	GetByHiveResultEventID(ctx context.Context, eventID string) (*domain.DeploymentIntent, error)
 	ListByServiceEnv(ctx context.Context, serviceID, envID uuid.UUID, limit, offset int) ([]domain.DeploymentIntent, error)
 	UpdateStatus(ctx context.Context, id uuid.UUID, status domain.DeploymentIntentStatus) error
 	UpdateApproval(ctx context.Context, id uuid.UUID, status domain.ApprovalStatus) error
@@ -161,4 +165,55 @@ type EnvironmentServiceStateRepository interface {
 	ListByService(ctx context.Context, serviceID uuid.UUID) ([]domain.EnvironmentServiceState, error)
 	ListDrifted(ctx context.Context) ([]domain.EnvironmentServiceState, error)
 	ListAll(ctx context.Context) ([]domain.EnvironmentServiceState, error)
+}
+
+// OCIRegistryRepository manages OCI manifest/blob/tag metadata.
+type OCIRegistryRepository interface {
+	EnsureRepository(ctx context.Context, name string) (*domain.OCIRepository, error)
+	GetRepository(ctx context.Context, name string) (*domain.OCIRepository, error)
+	GetManifestByDigest(ctx context.Context, repoName, digest string) (*domain.OCIManifest, error)
+	GetManifestByTag(ctx context.Context, repoName, tag string) (*domain.OCIManifest, error)
+	PutManifest(ctx context.Context, manifest domain.OCIManifest, tag string) error
+	GetBlob(ctx context.Context, digest string) (*domain.OCIBlob, error)
+	BlobExistsInRepo(ctx context.Context, repoName, digest string) (bool, error)
+	FinalizeBlob(ctx context.Context, upload domain.OCIBlobUpload) error
+	LinkBlobToRepo(ctx context.Context, repoName, digest string) error
+	UpsertBlob(ctx context.Context, repoName, digest, mediaType, storageRef string, sizeBytes int64) error
+	ListTags(ctx context.Context, repoName, lastTag string, limit int) ([]string, error)
+	ListReferrers(ctx context.Context, repoName, subjectDigest, artifactType string) ([]domain.OCIReferrerDescriptor, error)
+	// For checking manifest existence (used by bridge)
+	GetManifest(ctx context.Context, repoName, reference string) (*domain.OCIManifest, error)
+}
+
+// UploadSessionRepository manages OCI blob upload sessions.
+type UploadSessionRepository interface {
+	Create(ctx context.Context, uploadID, repoName, spoolPath string, expiresAt time.Time) error
+	Get(ctx context.Context, uploadID string) (repoName, spoolPath, state string, offsetBytes int64, expiresAt time.Time, err error)
+	UpdateOffset(ctx context.Context, uploadID string, offsetBytes int64, expiresAt time.Time) error
+	UpdateState(ctx context.Context, uploadID, state string) error
+	Delete(ctx context.Context, uploadID string) error
+}
+
+// HiveCIRepository manages Hive-CI workflow runs/results and pipeline policies.
+type HiveCIRepository interface {
+	UpsertWorkflowRun(ctx context.Context, run domain.HiveCIWorkflowRun) error
+	UpsertWorkflowResult(ctx context.Context, result domain.HiveCIWorkflowResult) error
+	GetRunByEventID(ctx context.Context, eventID string) (*domain.HiveCIWorkflowRun, error)
+	GetResultByEventID(ctx context.Context, eventID string) (*domain.HiveCIWorkflowResult, error)
+	ListPendingResults(ctx context.Context) ([]domain.HiveCIWorkflowResult, error)
+	ListOrphanedResultsByRun(ctx context.Context, runEventID string) ([]domain.HiveCIWorkflowResult, error)
+	UpdateResultState(ctx context.Context, eventID string, newState domain.HiveCIProcessingState) error
+	IncrementResultRetry(ctx context.Context, eventID string, at time.Time) (int, error)
+	MarkResultFailed(ctx context.Context, eventID, reason string) error
+	ListPolicies(ctx context.Context) ([]domain.HiveCIPipelinePolicy, error)
+	GetPolicyByRepoAndWorkflow(ctx context.Context, repo, workflow string) (*domain.HiveCIPipelinePolicy, error)
+}
+
+// ServiceAccountRepository manages OCI registry service accounts.
+type ServiceAccountRepository interface {
+	Create(ctx context.Context, accountID, name, secretHash string, scopes []string, enabled bool) error
+	GetByName(ctx context.Context, name string) (accountID, secretHash string, scopes []string, enabled bool, err error)
+	UpdateScopes(ctx context.Context, accountID string, scopes []string) error
+	UpdateEnabled(ctx context.Context, accountID string, enabled bool) error
+	Delete(ctx context.Context, accountID string) error
 }

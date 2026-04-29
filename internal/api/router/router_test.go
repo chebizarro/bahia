@@ -148,6 +148,9 @@ func (m *mockBuildRepo) UpdateStatus(_ context.Context, id uuid.UUID, status dom
 	b.Status = status
 	return nil
 }
+func (m *mockBuildRepo) GetByCISystemRunID(_ context.Context, _, _ string) (*domain.Build, error) {
+	return nil, nil
+}
 
 type mockArtifactRepo struct{ artifacts map[uuid.UUID]*domain.Artifact }
 
@@ -189,6 +192,14 @@ func (m *mockArtifactRepo) ListByBuild(_ context.Context, buildID uuid.UUID) ([]
 		}
 	}
 	return result, nil
+}
+func (m *mockArtifactRepo) GetByImageRepoDigest(_ context.Context, imageRepo, imageDigest string) (*domain.Artifact, error) {
+	for _, a := range m.artifacts {
+		if a.ImageRepo == imageRepo && a.ImageDigest == imageDigest {
+			return a, nil
+		}
+	}
+	return nil, nil
 }
 
 type mockIntentRepo struct{ intents map[uuid.UUID]*domain.DeploymentIntent }
@@ -240,6 +251,16 @@ func (m *mockIntentRepo) UpdateApproval(_ context.Context, id uuid.UUID, status 
 	}
 	di.ApprovalStatus = status
 	return nil
+}
+func (m *mockIntentRepo) GetByHiveResultEventID(_ context.Context, eventID string) (*domain.DeploymentIntent, error) {
+	for _, di := range m.intents {
+		if di.Metadata != nil {
+			if v, ok := di.Metadata["hive_ci_result_event_id"].(string); ok && v == eventID {
+				return di, nil
+			}
+		}
+	}
+	return nil, nil
 }
 
 type mockRunRepo struct{ runs map[uuid.UUID]*domain.DeploymentRun }

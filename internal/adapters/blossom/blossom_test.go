@@ -10,6 +10,8 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -512,5 +514,105 @@ func TestClient_Upload_WithAuth(t *testing.T) {
 	}
 	if !strings.HasPrefix(receivedAuth, "Nostr ") {
 		t.Errorf("Authorization header should start with 'Nostr ', got %q", receivedAuth)
+	}
+}
+
+func TestClient_UploadFile(t *testing.T) {
+	data := []byte("file upload content")
+	h := sha256.Sum256(data)
+	hash := hex.EncodeToString(h[:])
+
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "blob.bin")
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	var uploadedLen int64
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodHead {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		if r.Method != http.MethodPut {
+			t.Fatalf("expected PUT, got %s", r.Method)
+		}
+		if r.URL.Path != "/upload" {
+			t.Fatalf("expected /upload path, got %s", r.URL.Path)
+		}
+		uploadedLen = r.ContentLength
+		if r.Header.Get("X-SHA-256") != hash {
+			t.Fatalf("unexpected hash header: %s", r.Header.Get("X-SHA-256"))
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(BlobDescriptor{URL: server.URL + "/" + hash, SHA256: hash, Size: int64(len(data))})
+	}))
+	defer server.Close()
+
+	client := NewClient(Config{Servers: []string{server.URL}, MaxRetries: 1}, testLogger())
+	bd, err := client.UploadFile(context.Background(), path, "application/octet-stream", "")
+	if err != nil {
+		t.Fatalf("UploadFile() error = %v", err)
+	}
+	if bd.SHA256 != hash {
+		t.Fatalf("got hash %s want %s", bd.SHA256, hash)
+	}
+	if uploadedLen != int64(len(data)) {
+		t.Fatalf("uploaded length %d want %d", uploadedLen, len(data))
+	}
+}
+
+func TestClient_HeadByURLAndOpenStreamByURL(t *testing.T) {
+	data := []byte("stream-me")
+	h := sha256.Sum256(data)
+	hash := hex.EncodeToString(h[:])
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodHead {
+			w.Header().Set("Content-Type", "application/vnd.oci.image.layer.v1.tar")
+			w.Header().Set("Content-Length", "9")
+			w.Header().Set("Etag", `"etag-1"`)
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.Header().Set("Content-Type", "application/vnd.oci.image.layer.v1.tar")
+		w.Header().Set("Etag", `"etag-1"`)
+		_, _ = w.Write(data)
+	}))
+	defer server.Close()
+
+	client := NewClient(Config{Servers: []string{server.URL}, MaxRetries: 1}, testLogger())
+	url := server.URL + "/" + hash
+
+	head, err := client.HeadByURL(context.Background(), url)
+	if err != nil {
+		t.Fatalf("HeadByURL() error = %v", err)
+	}
+	if !head.Exists {
+		t.Fatalf("expected blob to exist")
+	}
+	if head.ContentLength != int64(len(data)) {
+		t.Fatalf("ContentLength=%d want %d", head.ContentLength, len(data))
+	}
+	if got := head.Header.Get("Etag"); got == "" {
+		t.Fatalf("expected Etag header")
+	}
+
+	stream, err := client.OpenStreamByURL(context.Background(), url)
+	if err != nil {
+		t.Fatalf("OpenStreamByURL() error = %v", err)
+	}
+	defer stream.Close()
+
+	if stream.ContentType != "application/vnd.oci.image.layer.v1.tar" {
+		t.Fatalf("unexpected content type: %s", stream.ContentType)
+	}
+	body, err := io.ReadAll(stream.Body)
+	if err != nil {
+		t.Fatalf("ReadAll(stream.Body) error = %v", err)
+	}
+	if string(body) != string(data) {
+		t.Fatalf("stream body = %q want %q", string(body), string(data))
 	}
 }

@@ -26,6 +26,8 @@ type Config struct {
 	Auth          AuthConfig            `koanf:"auth"`
 	CORS          CORSConfig            `koanf:"cors"`
 	Blossom       BlossomConfig         `koanf:"blossom"`
+	OCI           OCIServerConfig       `koanf:"oci"`
+	HiveCI        HiveCIConfig          `koanf:"hiveci"`
 	Cashu         CashuConfig           `koanf:"cashu"`
 	Telemetry     TelemetryConfig       `koanf:"telemetry"`
 	Notifications NotificationsConfig   `koanf:"notifications"`
@@ -163,8 +165,44 @@ type CORSConfig struct {
 
 // BlossomConfig holds Blossom media/blob storage settings.
 type BlossomConfig struct {
-	Enabled bool   `koanf:"enabled"`
-	URL     string `koanf:"url"`
+	Enabled      bool          `koanf:"enabled"`
+	URL          string        `koanf:"url"`
+	Servers      []string      `koanf:"servers"`
+	Timeout      time.Duration `koanf:"timeout"`
+	MaxRetries   int           `koanf:"max_retries"`
+	RetryDelay   time.Duration `koanf:"retry_delay"`
+	PrivateKey   string        `koanf:"private_key"`
+	StorageClass string        `koanf:"storage_class"`
+}
+
+// OCIServerConfig holds server-side OCI registry settings.
+type OCIServerConfig struct {
+	Enabled                 bool                      `koanf:"enabled"`
+	PublicHost              string                    `koanf:"public_host"`
+	SpoolDir                string                    `koanf:"spool_dir"`
+	UploadExpiry            time.Duration             `koanf:"upload_expiry"`
+	AllowAnonymousPullCIDRs []string                  `koanf:"allow_anonymous_pull_cidrs"`
+	TrustedProxyCIDRs       []string                  `koanf:"trusted_proxy_cidrs"`
+	AuthorizedPushPubkeys   []string                  `koanf:"authorized_push_pubkeys"`
+	ServiceAccounts         []OCIServiceAccountConfig `koanf:"service_accounts"`
+}
+
+// OCIServiceAccountConfig defines a basic-auth service account for OCI token/auth flows.
+type OCIServiceAccountConfig struct {
+	Username     string   `koanf:"username"`
+	PasswordHash string   `koanf:"password_hash"`
+	Permissions  []string `koanf:"permissions"`   // pull, push
+	RepoPrefixes []string `koanf:"repo_prefixes"` // e.g. cascadia/
+}
+
+// HiveCIConfig holds Hive-CI integration settings.
+type HiveCIConfig struct {
+	Enabled                      bool          `koanf:"enabled"`
+	TrustedCIPubkeys             []string      `koanf:"trusted_ci_pubkeys"`
+	AutoRegisterBuilds           bool          `koanf:"auto_register_builds"`
+	AutoDeployStagingEnvironment string        `koanf:"auto_deploy_staging_environment"`
+	RetryInterval                time.Duration `koanf:"retry_interval"`
+	MaxRetries                   int           `koanf:"max_retries"`
 }
 
 // CashuConfig holds Cashu ecash payment integration settings.
@@ -242,7 +280,30 @@ func Defaults() *Config {
 			AllowedOrigins: []string{}, // secure default: no cross-origin requests
 		},
 		Blossom: BlossomConfig{
-			Enabled: false,
+			Enabled:    false,
+			Timeout:    30 * time.Second,
+			MaxRetries: 3,
+			RetryDelay: 1 * time.Second,
+		},
+		OCI: OCIServerConfig{
+			Enabled:                 false,
+			SpoolDir:                "/tmp/bahia-oci-spool",
+			UploadExpiry:            24 * time.Hour,
+			AllowAnonymousPullCIDRs: []string{"192.168.40.0/24"},
+			ServiceAccounts: []OCIServiceAccountConfig{
+				{
+					Username:     "hive-ci",
+					PasswordHash: "$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy",
+					Permissions:  []string{"pull", "push"},
+					RepoPrefixes: []string{"cascadia/"},
+				},
+			},
+		},
+		HiveCI: HiveCIConfig{
+			Enabled:            false,
+			AutoRegisterBuilds: true,
+			RetryInterval:      30 * time.Second,
+			MaxRetries:         10,
 		},
 		Cashu: CashuConfig{
 			Enabled: false,
@@ -298,8 +359,35 @@ func Load(configPath string) (*Config, error) {
 	if err := k.Unmarshal("", cfg); err != nil {
 		return nil, fmt.Errorf("unmarshaling config: %w", err)
 	}
+	if err := cfg.validate(); err != nil {
+		return nil, err
+	}
 
 	return cfg, nil
+}
+
+func (c *Config) validate() error {
+	if c.OCI.Enabled {
+		if strings.TrimSpace(c.OCI.PublicHost) == "" {
+			return fmt.Errorf("config validation failed: oci.public_host is required when oci.enabled=true")
+		}
+		if strings.TrimSpace(c.OCI.SpoolDir) == "" {
+			return fmt.Errorf("config validation failed: oci.spool_dir is required when oci.enabled=true")
+		}
+		if c.OCI.UploadExpiry <= 0 {
+			return fmt.Errorf("config validation failed: oci.upload_expiry must be > 0 when oci.enabled=true")
+		}
+	}
+	if c.HiveCI.Enabled && len(c.HiveCI.TrustedCIPubkeys) == 0 {
+		return fmt.Errorf("config validation failed: hiveci.trusted_ci_pubkeys is required when hiveci.enabled=true")
+	}
+	if c.HiveCI.RetryInterval <= 0 {
+		return fmt.Errorf("config validation failed: hiveci.retry_interval must be > 0")
+	}
+	if c.HiveCI.MaxRetries <= 0 {
+		return fmt.Errorf("config validation failed: hiveci.max_retries must be > 0")
+	}
+	return nil
 }
 
 // ServerAddress returns the host:port string for the HTTP server.

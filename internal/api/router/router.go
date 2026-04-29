@@ -41,6 +41,7 @@ type RouterDeps struct {
 	Notifications repository.NotificationRepository
 	Dispatcher    *notifications.Dispatcher
 	MCP           *handlers.MCPHandler
+	OCI           http.Handler
 }
 
 // SignatureVerifier is the interface for signature verification.
@@ -61,7 +62,6 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 	r.Use(middleware.RequestLogger(logger))
 	r.Use(middleware.Recoverer(logger))
 	r.Use(middleware.CORS(middleware.NewCORSConfig(corsCfg.AllowedOrigins)))
-	r.Use(middleware.ContentType)
 
 	// Per-IP rate limiting: 100 requests/minute for reads, 30/minute for writes.
 	readLimiter := middleware.NewIPRateLimiter(middleware.RateLimiterConfig{
@@ -100,8 +100,13 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 	deployH := handlers.NewDeploymentHandler(registry)
 	stateH := handlers.NewStateHandler(registry)
 
+	if deps.OCI != nil {
+		r.Mount("/v2", deps.OCI)
+	}
+
 	// API v1 routes (authenticated when auth is enabled).
 	r.Route("/api/v1", func(r chi.Router) {
+		r.Use(middleware.ContentType)
 		r.Use(auth.Middleware(authEnabled, jwtSecret))
 
 		// Read routes: GET/list endpoints with read rate limit.

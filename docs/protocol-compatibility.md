@@ -347,6 +347,80 @@ bunker://<remote-signer-pubkey>?relay=wss://relay.example.com&secret=<secret>
 
 ---
 
+## OCI Distribution Specification
+
+Bahia implements the [OCI Distribution Spec v2](https://github.com/opencontainers/distribution-spec) as an internal container registry.
+
+| Endpoint | Direction | Status | Description |
+|----------|-----------|--------|-------------|
+| `GET /v2/` | Inbound | ✅ | API version check |
+| `GET /v2/{name}/manifests/{ref}` | Inbound | ✅ | Pull manifest |
+| `HEAD /v2/{name}/manifests/{ref}` | Inbound | ✅ | Check manifest |
+| `PUT /v2/{name}/manifests/{ref}` | Inbound | ✅ | Push manifest |
+| `GET /v2/{name}/blobs/{digest}` | Inbound | ✅ | Pull blob |
+| `HEAD /v2/{name}/blobs/{digest}` | Inbound | ✅ | Check blob |
+| `POST /v2/{name}/blobs/uploads/` | Inbound | ✅ | Start upload |
+| `PATCH /v2/{name}/blobs/uploads/{uuid}` | Inbound | ✅ | Chunk upload |
+| `PUT /v2/{name}/blobs/uploads/{uuid}` | Inbound | ✅ | Complete upload |
+| `GET /v2/{name}/tags/list` | Inbound | ✅ | List tags |
+| `GET /v2/{name}/referrers/{digest}` | Inbound | ✅ | List referrers |
+
+**Storage Backend:**
+- Manifests: PostgreSQL (BYTEA for digest stability)
+- Blobs: Blossom (content-addressed)
+- Tags: PostgreSQL
+
+**Authentication:**
+- NIP-98 for push operations
+- Basic auth service accounts
+- Anonymous pull from configured CIDRs
+
+---
+
+## Hive-CI Protocol
+
+Bahia subscribes to [Hive-CI](../hive-ci-protocol/SPECIFICATION.md) workflow events to auto-ingest CI results.
+
+| Kind | Name | Direction | Status | Description |
+|------|------|-----------|--------|-------------|
+| 5401 | Workflow Run | Inbound | ✅ | CI workflow started |
+| 5402 | Workflow Result | Inbound | ✅ | CI workflow completed |
+
+### Kind 5401 — Workflow Run (Inbound)
+
+Bahia subscribes to trusted CI dispatcher pubkeys and records workflow runs.
+
+**Required tags parsed:**
+- `a` — NIP-34 repository coordinate
+- `commit` — Git commit hash
+- `branch` — Git branch name
+- `workflow` — Workflow file path
+- `triggered-by` — User who triggered
+- `publisher` — Ephemeral pubkey for result
+
+### Kind 5402 — Workflow Result (Inbound)
+
+Bahia validates ephemeral publisher key matches 5401, then processes:
+
+**Required tags parsed:**
+- `e` — Reference to 5401 event
+- `status` — `success` or `failure`
+- `exit_code` — Process exit code
+- `duration` — Execution duration
+- `log_url` — Blossom URL for logs
+- `image_repo` — Container image repository (Bahia-specific)
+- `image_tag` — Container image tag (Bahia-specific)
+- `image_digest` — Container image digest (Bahia-specific)
+
+**Processing flow:**
+1. Validate publisher key relationship
+2. Create Build record
+3. Verify image in OCI registry
+4. Create Artifact record
+5. (Optional) Create staging DeploymentIntent
+
+---
+
 ## Known Gaps
 
 These features have interfaces defined but implementations are incomplete:
@@ -376,6 +450,9 @@ These features have interfaces defined but implementations are incomplete:
 | Cashu         | Outbound  | ✅     | \`internal/adapters/cashu/\` |
 | NIP-05        | Outbound  | ✅     | \`internal/auth/nip05.go\` |
 | NIP-46        | Both      | ✅     | `internal/adapters/signet/client.go` |
+| OCI Dist v2   | Inbound   | ✅     | `internal/api/handlers/registry.go` |
+| Kind 5401     | Inbound   | ✅     | `internal/adapters/hiveci/subscriber.go` |
+| Kind 5402     | Inbound   | ✅     | `internal/adapters/hiveci/subscriber.go` |
 
 ---
 

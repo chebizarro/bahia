@@ -186,8 +186,80 @@ services:
 
 When running Bahia inside a container with the Compose runtime, mount both `/var/run/docker.sock` and the configured compose project directory at the same path used by `runtime.default.compose_dir` or the per-environment `compose_dir`.
 
+## OCI Registry Configuration
+
+Bahia includes an internal OCI-compliant container registry. Configure it in your config file:
+
+```yaml
+oci:
+  enabled: true
+  public_host: registry.sharegap.net
+  spool_dir: /srv/data/bahia/oci-uploads
+  upload_expiry: 24h
+  
+  # Anonymous pull from internal network
+  allow_anonymous_pull_cidrs:
+    - 192.168.40.0/24
+    - 10.0.0.0/8
+  
+  # Trusted proxies for X-Forwarded-For
+  trusted_proxy_cidrs:
+    - 127.0.0.1/32
+    - 172.17.0.0/16
+  
+  # Service accounts for push access
+  service_accounts:
+    - username: hive-ci
+      password_hash: "$2a$10$..."  # bcrypt hash
+      permissions: [pull, push]
+      repo_prefixes: [cascadia/]
+```
+
+### Blossom Backend
+
+The registry uses Blossom for blob storage. Ensure Blossom is configured:
+
+```yaml
+blossom:
+  base_url: https://blossom.sharegap.net
+  auth_pubkey: <your-blossom-auth-pubkey>
+```
+
+### Spool Directory
+
+Create the spool directory for upload chunks:
+
+```bash
+mkdir -p /srv/data/bahia/oci-uploads
+chown bahia:bahia /srv/data/bahia/oci-uploads
+```
+
+## Hive-CI Integration
+
+Enable automatic CI event ingestion:
+
+```yaml
+hiveci:
+  enabled: true
+  
+  # Trusted CI dispatcher pubkeys (5401 events)
+  trusted_ci_pubkeys:
+    - <hive-ci-dispatcher-pubkey>
+  
+  # Auto-create builds from CI results
+  auto_register_builds: true
+  
+  # Auto-deploy to staging environment
+  auto_deploy_staging_environment: edge-01-staging
+  
+  # Retry configuration
+  retry_interval: 30s
+  max_retries: 10
+```
+
 ## Monitoring
 
 - Health check: `GET /health`
 - Readiness check: `GET /ready`
 - Drift detection: `GET /api/v1/state/drifted`
+- Registry API: `GET /v2/`

@@ -131,6 +131,15 @@ func (m *mockArtifactRepo) ListByBuild(_ context.Context, buildID uuid.UUID) ([]
 	return nil, nil
 }
 
+func (m *mockArtifactRepo) GetByImageRepoDigest(_ context.Context, imageRepo, imageDigest string) (*domain.Artifact, error) {
+	for _, a := range m.artifacts {
+		if a.ImageRepo == imageRepo && a.ImageDigest == imageDigest {
+			return a, nil
+		}
+	}
+	return nil, nil
+}
+
 type mockStateRepo struct {
 	states map[string]*domain.EnvironmentServiceState
 }

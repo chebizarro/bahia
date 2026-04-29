@@ -7,13 +7,20 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/openagentsinc/bahia/internal/domain"
 )
 
 // PgArtifactRepository is a PostgreSQL implementation of ArtifactRepository.
+type artifactDB interface {
+	Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error)
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
+
 type PgArtifactRepository struct {
-	pool *pgxpool.Pool
+	pool artifactDB
 }
 
 func NewPgArtifactRepository(pool *pgxpool.Pool) *PgArtifactRepository {
@@ -78,6 +85,10 @@ func (r *PgArtifactRepository) GetByDigest(ctx context.Context, repo, digest str
 		return nil, fmt.Errorf("querying artifact by digest: %w", err)
 	}
 	return a, nil
+}
+
+func (r *PgArtifactRepository) GetByImageRepoDigest(ctx context.Context, imageRepo, imageDigest string) (*domain.Artifact, error) {
+	return r.GetByDigest(ctx, imageRepo, imageDigest)
 }
 
 func (r *PgArtifactRepository) ListByService(ctx context.Context, serviceID uuid.UUID, limit, offset int) ([]domain.Artifact, error) {

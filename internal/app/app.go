@@ -4,13 +4,16 @@ package app
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/openagentsinc/bahia/internal/adapters/blossom"
 	"github.com/openagentsinc/bahia/internal/adapters/harbor"
+	hiveciAdapter "github.com/openagentsinc/bahia/internal/adapters/hiveci"
 	"github.com/openagentsinc/bahia/internal/adapters/loom"
 	nostrAdapter "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	registryAdapter "github.com/openagentsinc/bahia/internal/adapters/registry"
@@ -18,6 +21,7 @@ import (
 	secretsAdapter "github.com/openagentsinc/bahia/internal/adapters/secrets"
 	"github.com/openagentsinc/bahia/internal/adapters/telemetry"
 	"github.com/openagentsinc/bahia/internal/api/handlers"
+	"github.com/openagentsinc/bahia/internal/auth"
 	"github.com/openagentsinc/bahia/internal/api/router"
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/controlplane"
@@ -26,6 +30,7 @@ import (
 	"github.com/openagentsinc/bahia/internal/events"
 	"github.com/openagentsinc/bahia/internal/mcp"
 	"github.com/openagentsinc/bahia/internal/notifications"
+	"github.com/openagentsinc/bahia/internal/pipeline"
 	"github.com/openagentsinc/bahia/internal/reconcile"
 	"github.com/openagentsinc/bahia/internal/repository"
 	"github.com/openagentsinc/bahia/internal/service"
@@ -208,6 +213,49 @@ func New(cfg *config.Config) (*App, error) {
 	)
 	bgManager.Register(nostrSub)
 
+	// OCI Registry wiring.
+	var ociHandler http.Handler
+	var ociRepo repository.OCIRegistryRepository
+	if cfg.OCI.Enabled {
+		pgOCIRepo := repository.NewPgOCIRepository(pool)
+		ociRepo = pgOCIRepo
+		blossomCfg := blossom.Config{
+			Servers:       cfg.Blossom.Servers,
+			MaxRetries:    cfg.Blossom.MaxRetries,
+			RetryDelay:    cfg.Blossom.RetryDelay,
+			Timeout:       cfg.Blossom.Timeout,
+			PrivateKeyHex: cfg.Blossom.PrivateKey,
+		}
+		if len(blossomCfg.Servers) == 0 && cfg.Blossom.URL != "" {
+			blossomCfg.Servers = []string{cfg.Blossom.URL}
+		}
+		blossomClient := blossom.NewClient(blossomCfg, slog.Default())
+		ociSvc, err := service.NewOCIRegistryService(cfg.OCI, pgOCIRepo, pgOCIRepo, blossomClient, logger)
+		if err != nil {
+			return nil, fmt.Errorf("create oci registry service: %w", err)
+		}
+		nip98Validator := auth.NewNIP98Validator(auth.DefaultNIP98Config())
+		ociHandler = handlers.NewOCIRegistryHandler(ociSvc, nip98Validator, cfg.OCI)
+		bgManager.Register(NewOCIUploadCleanupRunner(ociSvc, cfg.OCI.UploadExpiry, logger))
+		logger.Info("oci registry enabled", zap.String("host", cfg.OCI.PublicHost))
+	}
+
+	// Hive-CI wiring.
+	if cfg.HiveCI.Enabled {
+		hiveRepo := repository.NewPgHiveCIRepository(pool)
+		bridge := pipeline.NewBridge(hiveRepo, buildRepo, artifactRepo, intentRepo, envRepo, ociRepo, cfg.HiveCI.TrustedCIPubkeys, logger)
+		// Wrap bridge.ProcessResult to match the ResultConsumer signature (no error return).
+		onResult := func(ctx context.Context, resultEventID string) {
+			if err := bridge.ProcessResult(ctx, resultEventID); err != nil {
+				logger.Error("bridge process result failed", zap.String("result_event_id", resultEventID), zap.Error(err))
+			}
+		}
+		hiveSub := hiveciAdapter.NewSubscriber(relayPool, hiveRepo, cfg.HiveCI.TrustedCIPubkeys, logger, onResult)
+		bgManager.Register(hiveSub)
+		bgManager.Register(NewHiveCIRetryRunner(hiveRepo, bridge, cfg.HiveCI.RetryInterval, cfg.HiveCI.MaxRetries, logger))
+		logger.Info("hive-ci bridge enabled")
+	}
+
 	// Payment service (Cashu integration).
 	var paymentSvc *service.PaymentService
 	if cfg.Cashu.Enabled {
@@ -273,6 +321,7 @@ func New(cfg *config.Config) (*App, error) {
 			Notifications: notifRepo,
 			Dispatcher:    notifDispatcher,
 			MCP:           mcpHandler,
+			OCI:           ociHandler,
 		}, cfg.Auth)
 
 	httpServer := &http.Server{
