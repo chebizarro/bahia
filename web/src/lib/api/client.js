@@ -360,6 +360,48 @@ class BahiaClient {
 
     return () => eventSource.close();
   }
+
+  // Auth Exchange
+  // Exchange NIP-98 signed event for a JWT token
+  async exchangeNostrAuth(event) {
+    // This endpoint is unauthenticated, so we temporarily clear the token
+    const savedToken = this.token;
+    this.token = null;
+    
+    try {
+      const res = await fetch(`${BASE_URL}/auth/nostr`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ event })
+      });
+
+      if (!res.ok) {
+        let errorMessage = `HTTP ${res.status}: ${res.statusText}`;
+        try {
+          const errorData = await res.json();
+          if (errorData.error) {
+            errorMessage = errorData.error;
+          }
+        } catch {
+          // Response body is not JSON or empty
+        }
+        throw new Error(errorMessage);
+      }
+
+      const data = await res.json();
+      
+      if (data.error) {
+        throw new Error(data.error);
+      }
+      
+      return data.data;
+    } finally {
+      // Restore the saved token
+      this.token = savedToken;
+    }
+  }
 }
 
 // Only instantiate in browser context

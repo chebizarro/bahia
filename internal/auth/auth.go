@@ -202,6 +202,11 @@ func ValidateToken(tokenString, secret string) (*Claims, error) {
 // GenerateToken creates a signed JWT token for the given subject.
 // This is primarily useful for testing; production systems should use a proper auth service.
 func GenerateToken(subject, secret string, expiry time.Duration) (string, error) {
+	return GenerateTokenWithPubKey(subject, "", secret, expiry)
+}
+
+// GenerateTokenWithPubKey creates a signed JWT token with an optional Nostr pubkey claim.
+func GenerateTokenWithPubKey(subject, pubkey, secret string, expiry time.Duration) (string, error) {
 	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"HS256","typ":"JWT"}`))
 
 	now := time.Now().Unix()
@@ -210,6 +215,7 @@ func GenerateToken(subject, secret string, expiry time.Duration) (string, error)
 		IssuedAt:  now,
 		ExpiresAt: now + int64(expiry.Seconds()),
 		Issuer:    "bahia",
+		PubKey:    pubkey,
 	}
 
 	claimsJSON, err := json.Marshal(claims)

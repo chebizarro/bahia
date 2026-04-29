@@ -104,6 +104,13 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 		r.Mount("/v2", deps.OCI)
 	}
 
+	// Public auth exchange endpoint (unauthenticated)
+	// This must be registered BEFORE the authenticated routes to allow JWT acquisition
+	if jwtSecret != "" {
+		authExchangeH := handlers.NewAuthExchangeHandler(jwtSecret)
+		r.Post("/api/v1/auth/nostr", authExchangeH.Exchange)
+	}
+
 	// API v1 routes (authenticated when auth is enabled).
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Use(middleware.ContentType)

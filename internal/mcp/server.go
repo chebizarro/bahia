@@ -27,6 +27,7 @@ type Server struct {
 	policies           *service.PolicyService        // optional: for policy management tools
 	notificationRepo   repository.NotificationRepository // optional: for notification tools
 	notificationDisp   *notifications.Dispatcher     // optional: for notification testing
+	workers            repository.WorkerRepository   // optional: for worker management tools
 }
 
 // Config holds MCP server configuration.
@@ -43,6 +44,7 @@ type ServerDeps struct {
 	Policies             *service.PolicyService
 	NotificationRepo     repository.NotificationRepository
 	NotificationDispatcher *notifications.Dispatcher
+	Workers              repository.WorkerRepository
 }
 
 // NewServer creates a new MCP server for Bahia.
@@ -70,6 +72,7 @@ func NewServerWithOptions(registry *service.RegistryService, logger *zap.Logger,
 		policies:         deps.Policies,
 		notificationRepo: deps.NotificationRepo,
 		notificationDisp: deps.NotificationDispatcher,
+		workers:          deps.Workers,
 	}
 }
 
@@ -151,6 +154,41 @@ func (s *Server) GetTools() []Tool {
 				"required": []string{"name", "artifact_repo"},
 			},
 		},
+		{
+			Name:        "bahia_update_service",
+			Description: "Update an existing service's configuration",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"service_id": map[string]interface{}{
+						"type":        "string",
+						"description": "Service UUID to update",
+					},
+					"name": map[string]interface{}{
+						"type":        "string",
+						"description": "New service name (optional)",
+					},
+					"repo_url": map[string]interface{}{
+						"type":        "string",
+						"description": "New source code repository URL (optional)",
+					},
+					"artifact_repo": map[string]interface{}{
+						"type":        "string",
+						"description": "New container image repository path (optional)",
+					},
+					"default_branch": map[string]interface{}{
+						"type":        "string",
+						"description": "New default branch (optional)",
+					},
+					"runtime_type": map[string]interface{}{
+						"type":        "string",
+						"description": "New runtime type (optional)",
+						"enum":        []string{"docker", "compose", "kubernetes", "podman"},
+					},
+				},
+				"required": []string{"service_id"},
+			},
+		},
 		// Environment operations
 		{
 			Name:        "bahia_list_environments",
@@ -200,6 +238,41 @@ func (s *Server) GetTools() []Tool {
 					},
 				},
 				"required": []string{"name"},
+			},
+		},
+		{
+			Name:        "bahia_update_environment",
+			Description: "Update an existing environment's configuration",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"environment_id": map[string]interface{}{
+						"type":        "string",
+						"description": "Environment UUID to update",
+					},
+					"name": map[string]interface{}{
+						"type":        "string",
+						"description": "New environment name (optional)",
+					},
+					"loom_worker_selector": map[string]interface{}{
+						"type":        "object",
+						"description": "New Loom worker selector criteria (optional)",
+					},
+					"runtime_config": map[string]interface{}{
+						"type":        "object",
+						"description": "New runtime configuration (optional)",
+					},
+					"deploy_strategy": map[string]interface{}{
+						"type":        "string",
+						"description": "New deployment strategy (optional)",
+						"enum":        []string{"replace", "blue_green", "canary"},
+					},
+					"protected": map[string]interface{}{
+						"type":        "boolean",
+						"description": "Whether deployments require approval (optional)",
+					},
+				},
+				"required": []string{"environment_id"},
 			},
 		},
 		// Deployment operations
@@ -726,6 +799,126 @@ func (s *Server) GetTools() []Tool {
 				"required": []string{"artifact_id", "environment_id"},
 			},
 		},
+		// Worker operations
+		{
+			Name:        "bahia_list_workers",
+			Description: "List Loom workers with optional filters",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"capability": map[string]interface{}{
+						"type":        "string",
+						"description": "Filter by software capability/name (optional)",
+					},
+					"available": map[string]interface{}{
+						"type":        "boolean",
+						"description": "Filter by availability status (optional)",
+					},
+					"limit": map[string]interface{}{
+						"type":        "integer",
+						"description": "Maximum number of results (default: 50)",
+						"default":     50,
+					},
+				},
+			},
+		},
+		{
+			Name:        "bahia_get_worker",
+			Description: "Get details for a specific Loom worker by public key",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"pubkey": map[string]interface{}{
+						"type":        "string",
+						"description": "Worker's Nostr public key (hex format)",
+					},
+				},
+				"required": []string{"pubkey"},
+			},
+		},
+		{
+			Name:        "bahia_get_worker_pricing",
+			Description: "Get pricing information for a specific Loom worker",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"pubkey": map[string]interface{}{
+						"type":        "string",
+						"description": "Worker's Nostr public key (hex format)",
+					},
+				},
+				"required": []string{"pubkey"},
+			},
+		},
+		// Intent alias operations (REST-aligned naming)
+		{
+			Name:        "bahia_create_intent",
+			Description: "Create a deployment intent (alias for bahia_deploy)",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"service_id": map[string]interface{}{
+						"type":        "string",
+						"description": "Service UUID to deploy",
+					},
+					"environment_id": map[string]interface{}{
+						"type":        "string",
+						"description": "Target environment UUID",
+					},
+					"artifact_id": map[string]interface{}{
+						"type":        "string",
+						"description": "Artifact UUID to deploy",
+					},
+					"requested_by": map[string]interface{}{
+						"type":        "string",
+						"description": "Identity of the requester",
+					},
+				},
+				"required": []string{"service_id", "environment_id", "artifact_id"},
+			},
+		},
+		{
+			Name:        "bahia_get_intent",
+			Description: "Get details for a specific deployment intent",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"intent_id": map[string]interface{}{
+						"type":        "string",
+						"description": "Deployment intent UUID",
+					},
+				},
+				"required": []string{"intent_id"},
+			},
+		},
+		{
+			Name:        "bahia_approve_intent",
+			Description: "Approve a pending deployment intent (alias for bahia_approve_deployment)",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"intent_id": map[string]interface{}{
+						"type":        "string",
+						"description": "Deployment intent UUID to approve",
+					},
+				},
+				"required": []string{"intent_id"},
+			},
+		},
+		{
+			Name:        "bahia_reject_intent",
+			Description: "Reject a pending deployment intent (alias for bahia_reject_deployment)",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"intent_id": map[string]interface{}{
+						"type":        "string",
+						"description": "Deployment intent UUID to reject",
+					},
+				},
+				"required": []string{"intent_id"},
+			},
+		},
 		// Notification operations
 		{
 			Name:        "bahia_list_notifications",
@@ -807,6 +1000,8 @@ func (s *Server) CallTool(ctx context.Context, name string, arguments map[string
 		return s.handleGetService(ctx, arguments)
 	case "bahia_create_service":
 		return s.handleCreateService(ctx, arguments)
+	case "bahia_update_service":
+		return s.handleUpdateService(ctx, arguments)
 	// Environment operations
 	case "bahia_list_environments":
 		return s.handleListEnvironments(ctx, arguments)
@@ -814,6 +1009,8 @@ func (s *Server) CallTool(ctx context.Context, name string, arguments map[string
 		return s.handleGetEnvironment(ctx, arguments)
 	case "bahia_create_environment":
 		return s.handleCreateEnvironment(ctx, arguments)
+	case "bahia_update_environment":
+		return s.handleUpdateEnvironment(ctx, arguments)
 	// Deployment operations
 	case "bahia_deploy":
 		return s.handleDeploy(ctx, arguments)
@@ -876,6 +1073,22 @@ func (s *Server) CallTool(ctx context.Context, name string, arguments map[string
 		return s.handleDeletePolicy(ctx, arguments)
 	case "bahia_evaluate_policy":
 		return s.handleEvaluatePolicy(ctx, arguments)
+	// Worker operations
+	case "bahia_list_workers":
+		return s.handleListWorkers(ctx, arguments)
+	case "bahia_get_worker":
+		return s.handleGetWorker(ctx, arguments)
+	case "bahia_get_worker_pricing":
+		return s.handleGetWorkerPricing(ctx, arguments)
+	// Intent alias operations
+	case "bahia_create_intent":
+		return s.handleDeploy(ctx, arguments) // alias
+	case "bahia_get_intent":
+		return s.handleGetIntent(ctx, arguments)
+	case "bahia_approve_intent":
+		return s.handleApproveDeployment(ctx, arguments) // alias
+	case "bahia_reject_intent":
+		return s.handleRejectDeployment(ctx, arguments) // alias
 	// Notification operations
 	case "bahia_list_notifications":
 		return s.handleListNotifications(ctx, arguments)
@@ -1050,6 +1263,130 @@ func (s *Server) handleCreateEnvironment(ctx context.Context, args map[string]in
 		"status":         "created",
 		"environment_id": env.ID.String(),
 		"name":           name,
+	}
+	return jsonResult(result)
+}
+
+func (s *Server) handleUpdateService(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
+	serviceIDStr, _ := args["service_id"].(string)
+	if serviceIDStr == "" {
+		return errorResult("service_id is required"), nil
+	}
+
+	serviceID, err := uuid.Parse(serviceIDStr)
+	if err != nil {
+		return errorResult(fmt.Sprintf("invalid service_id: %v", err)), nil
+	}
+
+	// Get existing service
+	svc, err := s.registry.GetService(ctx, serviceID)
+	if err != nil {
+		return errorResult(fmt.Sprintf("failed to get service: %v", err)), nil
+	}
+	if svc == nil {
+		return errorResult("service not found"), nil
+	}
+
+	// Update fields if provided
+	if name, ok := args["name"].(string); ok && name != "" {
+		svc.Name = name
+	}
+	if repoURL, ok := args["repo_url"].(string); ok {
+		svc.RepoURL = repoURL
+	}
+	if artifactRepo, ok := args["artifact_repo"].(string); ok && artifactRepo != "" {
+		svc.ArtifactRepo = artifactRepo
+	}
+	if defaultBranch, ok := args["default_branch"].(string); ok {
+		svc.DefaultBranch = defaultBranch
+	}
+	if runtimeType, ok := args["runtime_type"].(string); ok && runtimeType != "" {
+		rt := domain.RuntimeType(runtimeType)
+		// Validate runtime type
+		if rt != domain.RuntimeTypeDocker && rt != domain.RuntimeTypeCompose &&
+			rt != domain.RuntimeTypeK8s && rt != domain.RuntimeTypePodman {
+			return errorResult(fmt.Sprintf("invalid runtime_type: %s (must be docker, compose, kubernetes, or podman)", runtimeType)), nil
+		}
+		svc.RuntimeType = rt
+	}
+
+	svc.UpdatedAt = time.Now()
+
+	if err := s.registry.UpdateService(ctx, svc); err != nil {
+		return errorResult(fmt.Sprintf("failed to update service: %v", err)), nil
+	}
+
+	s.logger.Info("service updated",
+		zap.String("service_id", svc.ID.String()),
+		zap.String("name", svc.Name),
+	)
+
+	result := map[string]interface{}{
+		"status":     "updated",
+		"service_id": svc.ID.String(),
+		"service":    serviceToMap(svc),
+	}
+	return jsonResult(result)
+}
+
+func (s *Server) handleUpdateEnvironment(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
+	envIDStr, _ := args["environment_id"].(string)
+	if envIDStr == "" {
+		return errorResult("environment_id is required"), nil
+	}
+
+	envID, err := uuid.Parse(envIDStr)
+	if err != nil {
+		return errorResult(fmt.Sprintf("invalid environment_id: %v", err)), nil
+	}
+
+	// Get existing environment
+	env, err := s.registry.GetEnvironment(ctx, envID)
+	if err != nil {
+		return errorResult(fmt.Sprintf("failed to get environment: %v", err)), nil
+	}
+	if env == nil {
+		return errorResult("environment not found"), nil
+	}
+
+	// Update fields if provided
+	if name, ok := args["name"].(string); ok && name != "" {
+		env.Name = name
+	}
+	if loomWorkerSelector, ok := args["loom_worker_selector"].(map[string]interface{}); ok {
+		env.LoomWorkerSelector = loomWorkerSelector
+	}
+	if runtimeConfig, ok := args["runtime_config"].(map[string]interface{}); ok {
+		env.RuntimeConfig = runtimeConfig
+	}
+	if deployStrategy, ok := args["deploy_strategy"].(string); ok && deployStrategy != "" {
+		ds := domain.DeployStrategy(deployStrategy)
+		// Validate deploy strategy
+		if ds != domain.DeployStrategyReplace && ds != domain.DeployStrategyBlueGreen &&
+		ds != domain.DeployStrategyCanary {
+			return errorResult(fmt.Sprintf("invalid deploy_strategy: %s (must be replace, blue_green, or canary)", deployStrategy)), nil
+		}
+		env.DeployStrategy = ds
+	}
+	if protected, ok := args["protected"].(bool); ok {
+		env.Protected = protected
+	}
+
+	env.UpdatedAt = time.Now()
+
+	if err := s.registry.UpdateEnvironment(ctx, env); err != nil {
+		return errorResult(fmt.Sprintf("failed to update environment: %v", err)), nil
+	}
+
+	s.logger.Info("environment updated",
+		zap.String("environment_id", env.ID.String()),
+		zap.String("name", env.Name),
+	)
+
+	result := map[string]interface{}{
+		"status":         "updated",
+		"environment_id": env.ID.String(),
+		"environment":    environmentToMap(env),
 	}
 	return jsonResult(result)
 }
@@ -1794,6 +2131,118 @@ func (s *Server) handleDeleteSecret(ctx context.Context, args map[string]interfa
 	return jsonResult(result)
 }
 
+func (s *Server) handleListWorkers(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
+	if s.workers == nil {
+		return errorResult("worker tools are not configured"), nil
+	}
+
+	capability, _ := args["capability"].(string)
+	available, hasAvailable := args["available"].(bool)
+	limit := 50
+	if l, ok := args["limit"].(float64); ok {
+		limit = int(l)
+	}
+
+	// List all workers (status filter in repository)
+	workers, err := s.workers.List(ctx, "", limit)
+	if err != nil {
+		return errorResult(fmt.Sprintf("failed to list workers: %v", err)), nil
+	}
+
+	// Apply filters in memory if needed
+	filtered := make([]domain.Worker, 0)
+	for _, w := range workers {
+		// Filter by capability if specified
+		if capability != "" && !w.HasSoftware(capability) {
+			continue
+		}
+		// Filter by availability if specified
+		if hasAvailable {
+			isOnline := w.ComputeStatus(time.Now()) == domain.WorkerStatusOnline
+			if available != isOnline {
+				continue
+			}
+		}
+		filtered = append(filtered, w)
+	}
+
+	result := map[string]interface{}{
+		"workers": workersToMaps(filtered),
+		"total":   len(filtered),
+	}
+	return jsonResult(result)
+}
+
+func (s *Server) handleGetWorker(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
+	if s.workers == nil {
+		return errorResult("worker tools are not configured"), nil
+	}
+
+	pubkey, _ := args["pubkey"].(string)
+	if pubkey == "" {
+		return errorResult("pubkey is required"), nil
+	}
+
+	worker, err := s.workers.GetByPubKey(ctx, pubkey)
+	if err != nil {
+		return errorResult(fmt.Sprintf("failed to get worker: %v", err)), nil
+	}
+	if worker == nil {
+		return errorResult("worker not found"), nil
+	}
+
+	return jsonResult(workerToMap(worker))
+}
+
+func (s *Server) handleGetWorkerPricing(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
+	if s.workers == nil {
+		return errorResult("worker tools are not configured"), nil
+	}
+
+	pubkey, _ := args["pubkey"].(string)
+	if pubkey == "" {
+		return errorResult("pubkey is required"), nil
+	}
+
+	worker, err := s.workers.GetByPubKey(ctx, pubkey)
+	if err != nil {
+		return errorResult(fmt.Sprintf("failed to get worker: %v", err)), nil
+	}
+	if worker == nil {
+		return errorResult("worker not found"), nil
+	}
+
+	// Return just the pricing information
+	result := map[string]interface{}{
+		"pubkey":  worker.PubKey,
+		"name":    worker.Name,
+		"pricing": worker.Pricing,
+	}
+	return jsonResult(result)
+}
+
+func (s *Server) handleGetIntent(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
+	intentIDStr, _ := args["intent_id"].(string)
+	if intentIDStr == "" {
+		return errorResult("intent_id is required"), nil
+	}
+
+	intentID, err := uuid.Parse(intentIDStr)
+	if err != nil {
+		return errorResult(fmt.Sprintf("invalid intent_id: %v", err)), nil
+	}
+
+	intent, err := s.registry.GetDeploymentIntent(ctx, intentID)
+	if err != nil {
+		return errorResult(fmt.Sprintf("failed to get intent: %v", err)), nil
+	}
+	if intent == nil {
+		return errorResult("intent not found"), nil
+	}
+
+	return jsonResult(intentToMap(intent))
+}
+
 // --- Helper Functions ---
 
 func jsonResult(data interface{}) (*ToolResult, error) {
@@ -1842,7 +2291,7 @@ func servicesToMaps(services []domain.Service) []map[string]interface{} {
 }
 
 func environmentToMap(env *domain.Environment) map[string]interface{} {
-	return map[string]interface{}{
+	m := map[string]interface{}{
 		"id":              env.ID.String(),
 		"name":            env.Name,
 		"protected":       env.Protected,
@@ -1850,6 +2299,13 @@ func environmentToMap(env *domain.Environment) map[string]interface{} {
 		"created_at":      env.CreatedAt.Format("2006-01-02T15:04:05Z"),
 		"updated_at":      env.UpdatedAt.Format("2006-01-02T15:04:05Z"),
 	}
+	if env.LoomWorkerSelector != nil {
+		m["loom_worker_selector"] = env.LoomWorkerSelector
+	}
+	if env.RuntimeConfig != nil {
+		m["runtime_config"] = env.RuntimeConfig
+	}
+	return m
 }
 
 func environmentsToMaps(envs []domain.Environment) []map[string]interface{} {
@@ -1936,27 +2392,71 @@ func statesToMaps(states []domain.EnvironmentServiceState) []map[string]interfac
 func intentsToMaps(intents []domain.DeploymentIntent) []map[string]interface{} {
 	result := make([]map[string]interface{}, len(intents))
 	for i, intent := range intents {
-		m := map[string]interface{}{
-			"id":              intent.ID.String(),
-			"service_id":      intent.ServiceID.String(),
-			"environment_id":  intent.EnvironmentID.String(),
-			"artifact_id":     intent.ArtifactID.String(),
-			"requested_by":    intent.RequestedBy,
-			"source_kind":     string(intent.SourceKind),
-			"approval_status": string(intent.ApprovalStatus),
-			"status":          string(intent.Status),
-			"created_at":      intent.CreatedAt.Format("2006-01-02T15:04:05Z"),
-			"updated_at":      intent.UpdatedAt.Format("2006-01-02T15:04:05Z"),
-		}
-		if intent.SupersedesIntentID != nil {
-			m["supersedes_intent_id"] = intent.SupersedesIntentID.String()
-		}
-		if intent.ApprovedAt != nil {
-			m["approved_at"] = intent.ApprovedAt.Format("2006-01-02T15:04:05Z")
-		}
-		result[i] = m
+		result[i] = intentToMap(&intent)
 	}
 	return result
+}
+
+func intentToMap(intent *domain.DeploymentIntent) map[string]interface{} {
+	m := map[string]interface{}{
+		"id":              intent.ID.String(),
+		"service_id":      intent.ServiceID.String(),
+		"environment_id":  intent.EnvironmentID.String(),
+		"artifact_id":     intent.ArtifactID.String(),
+		"requested_by":    intent.RequestedBy,
+		"source_kind":     string(intent.SourceKind),
+		"approval_status": string(intent.ApprovalStatus),
+		"status":          string(intent.Status),
+		"created_at":      intent.CreatedAt.Format("2006-01-02T15:04:05Z"),
+		"updated_at":      intent.UpdatedAt.Format("2006-01-02T15:04:05Z"),
+	}
+	if intent.SupersedesIntentID != nil {
+		m["supersedes_intent_id"] = intent.SupersedesIntentID.String()
+	}
+	if intent.ApprovedAt != nil {
+		m["approved_at"] = intent.ApprovedAt.Format("2006-01-02T15:04:05Z")
+	}
+	return m
+}
+
+func workersToMaps(workers []domain.Worker) []map[string]interface{} {
+	result := make([]map[string]interface{}, len(workers))
+	for i := range workers {
+		result[i] = workerToMap(&workers[i])
+	}
+	return result
+}
+
+func workerToMap(w *domain.Worker) map[string]interface{} {
+	m := map[string]interface{}{
+		"pubkey":               w.PubKey,
+		"name":                 w.Name,
+		"architecture":         w.Architecture,
+		"max_concurrent_jobs":  w.MaxConcurrentJobs,
+		"current_queue_depth":  w.CurrentQueueDepth,
+		"software":             w.Software,
+		"pricing":              w.Pricing,
+		"status":               string(w.Status),
+		"last_advertisement_at": w.LastAdvertisementAt.Format("2006-01-02T15:04:05Z"),
+		"created_at":           w.CreatedAt.Format("2006-01-02T15:04:05Z"),
+		"updated_at":           w.UpdatedAt.Format("2006-01-02T15:04:05Z"),
+	}
+	if w.Description != "" {
+		m["description"] = w.Description
+	}
+	if w.MinDurationSecs > 0 {
+		m["min_duration_secs"] = w.MinDurationSecs
+	}
+	if w.MaxDurationSecs > 0 {
+		m["max_duration_secs"] = w.MaxDurationSecs
+	}
+	if w.Geohash != "" {
+		m["geohash"] = w.Geohash
+	}
+	if len(w.PreferredRelays) > 0 {
+		m["preferred_relays"] = w.PreferredRelays
+	}
+	return m
 }
 
 func runsToMaps(runs []domain.DeploymentRun) []map[string]interface{} {

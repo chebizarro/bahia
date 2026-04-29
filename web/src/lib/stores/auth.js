@@ -23,7 +23,9 @@ const initialState = {
   relays: {},
   capabilities: {},
   error: null,
-  lastAuthenticatedAt: null
+  lastAuthenticatedAt: null,
+  backendAuthenticated: false,
+  tokenExpiresAt: null
 };
 
 // Load persisted session from localStorage
@@ -265,16 +267,29 @@ export async function login() {
 
 /**
  * Logout and clear session
- * Does NOT clear bahia_token (API token auth is separate)
+ * Clears both NIP-07 session and backend API token
  */
 export function logout() {
   clearPersistedSession();
+  
+  // Clear backend API token
+  if (browser) {
+    import('$lib/api/client.js').then(({ api }) => {
+      if (api) {
+        api.setToken(null);
+      }
+    }).catch(err => {
+      console.error('Failed to clear API token:', err);
+    });
+  }
   
   authState.update(state => ({
     ...initialState,
     status: 'unauthenticated',
     extensionAvailable: state.extensionAvailable,
-    capabilities: state.extensionAvailable ? getCapabilities() : {}
+    capabilities: state.extensionAvailable ? getCapabilities() : {},
+    backendAuthenticated: false,
+    tokenExpiresAt: null
   }));
 }
 
@@ -302,5 +317,94 @@ export async function signWithAuth(event) {
   } catch (error) {
     console.error('Failed to sign event:', error);
     throw new Error(`Event signing failed: ${error.message}`);
+  }
+}
+
+/**
+ * Authenticate with the backend API by exchanging a NIP-98 signed event for a JWT token
+ * This requires an active NIP-07 session
+ * @throws {Error} If not in browser, not authenticated, or exchange fails
+ */
+export async function authenticateBackend() {
+  if (!browser) {
+    throw new Error('authenticateBackend() can only be called in the browser');
+  }
+
+  // Import API client
+  const { api } = await import('$lib/api/client.js');
+  if (!api) {
+    throw new Error('API client not available');
+  }
+
+  // Get current auth state
+  const currentState = await new Promise(resolve => {
+    const unsubscribe = authState.subscribe(state => {
+      unsubscribe();
+      resolve(state);
+    });
+  });
+
+  // Ensure NIP-07 auth exists
+  if (currentState.status !== 'authenticated' || !currentState.pubkey) {
+    // Try to login first
+    await login();
+    
+    // Get updated state
+    const updatedState = await new Promise(resolve => {
+      const unsubscribe = authState.subscribe(state => {
+        unsubscribe();
+        resolve(state);
+      });
+    });
+    
+    if (updatedState.status !== 'authenticated' || !updatedState.pubkey) {
+      throw new Error('NIP-07 authentication required before backend auth');
+    }
+  }
+
+  try {
+    // Build unsigned NIP-98 event
+    const now = Math.floor(Date.now() / 1000);
+    const unsignedEvent = {
+      kind: 27235,
+      pubkey: currentState.pubkey,
+      created_at: now,
+      tags: [
+        ['u', '/api/v1/auth/nostr'],
+        ['method', 'POST']
+      ],
+      content: ''
+    };
+
+    // Sign the event
+    const signedEvent = await signWithAuth(unsignedEvent);
+
+    // Exchange for JWT
+    const response = await api.exchangeNostrAuth(signedEvent);
+
+    // Update API client with new token
+    api.setToken(response.token);
+
+    // Update auth state
+    authState.update(state => ({
+      ...state,
+      backendAuthenticated: true,
+      tokenExpiresAt: response.expires_at,
+      error: null
+    }));
+
+    return response;
+  } catch (error) {
+    console.error('Backend authentication failed:', error);
+    
+    // Update state to reflect failure
+    authState.update(state => ({
+      ...state,
+      backendAuthenticated: false,
+      tokenExpiresAt: null,
+      error: error.message
+    }));
+
+    throw error;
   }
 }

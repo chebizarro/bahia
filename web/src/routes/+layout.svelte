@@ -1,6 +1,8 @@
 <script>
   import { onMount, onDestroy } from 'svelte';
   import Nav from '$lib/components/Nav.svelte';
+  import ErrorBoundary from '$lib/components/ErrorBoundary.svelte';
+  import ToastContainer from '$lib/components/ToastContainer.svelte';
   import { loadAll, subscribeToEvents, unsubscribeFromEvents } from '$lib/stores';
   import { theme } from '$lib/stores/theme.js';
 
@@ -17,9 +19,13 @@
 <div class="app">
   <Nav />
   <main>
-    <slot />
+    <ErrorBoundary>
+      <slot />
+    </ErrorBoundary>
   </main>
 </div>
+
+<ToastContainer />
 
 <style>
   :global(*) {
