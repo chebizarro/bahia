@@ -1,6 +1,7 @@
 <script>
   import Table from '$lib/components/Table.svelte';
   import { workers, loading, loadWorkers } from '$lib/stores';
+  import { goto } from '$app/navigation';
   import { onMount } from 'svelte';
 
   onMount(() => loadWorkers());
@@ -23,7 +24,7 @@
   {#if $loading.workers}
     <p class="loading">Loading...</p>
   {:else}
-    <Table columns={columns} data={$workers} />
+    <Table columns={columns} data={$workers} onRowClick={(row) => goto(`/workers/${encodeURIComponent(row.pubkey)}`)} />
   {/if}
 </div>
 
