@@ -17,6 +17,29 @@ class BahiaClient {
     }
   }
 
+  // Query parameter helper
+  query(params) {
+    if (!params || typeof params !== 'object') return '';
+    
+    const pairs = [];
+    for (const [key, value] of Object.entries(params)) {
+      // Omit null, undefined, and empty string values
+      if (value === null || value === undefined || value === '') continue;
+      
+      // Handle arrays by comma-joining
+      if (Array.isArray(value)) {
+        if (value.length > 0) {
+          pairs.push(`${encodeURIComponent(key)}=${encodeURIComponent(value.join(','))}`);
+        }
+      } else {
+        // Serialize booleans and numbers as strings
+        pairs.push(`${encodeURIComponent(key)}=${encodeURIComponent(String(value))}`);
+      }
+    }
+    
+    return pairs.length > 0 ? `?${pairs.join('&')}` : '';
+  }
+
   async fetch(path, options = {}) {
     const headers = {
       'Content-Type': 'application/json',
@@ -155,9 +178,49 @@ class BahiaClient {
   // Policies
   listPolicies() { return this.fetch('/policies'); }
   getPolicy(id) { return this.fetch(`/policies/${encodeURIComponent(id)}`); }
+  createPolicy(payload) {
+    return this.fetch('/policies', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    });
+  }
+  updatePolicy(id, patch) {
+    return this.fetch(`/policies/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      body: JSON.stringify(patch)
+    });
+  }
+  deletePolicy(id) {
+    return this.fetch(`/policies/${encodeURIComponent(id)}`, {
+      method: 'DELETE'
+    });
+  }
+  evaluatePolicy(payload) {
+    return this.fetch('/policies/evaluate', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    });
+  }
 
   // Secrets
   listSecrets(serviceId) { return this.fetch(`/services/${encodeURIComponent(serviceId)}/secrets`); }
+  createSecret(serviceId, payload) {
+    return this.fetch(`/services/${encodeURIComponent(serviceId)}/secrets`, {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    });
+  }
+  updateSecret(serviceId, secretId, payload) {
+    return this.fetch(`/services/${encodeURIComponent(serviceId)}/secrets/${encodeURIComponent(secretId)}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload)
+    });
+  }
+  deleteSecret(serviceId, secretId) {
+    return this.fetch(`/services/${encodeURIComponent(serviceId)}/secrets/${encodeURIComponent(secretId)}`, {
+      method: 'DELETE'
+    });
+  }
 
   // Organizations
   listOrgs() { return this.fetch('/orgs'); }
@@ -169,6 +232,89 @@ class BahiaClient {
 
   // Builds
   listBuilds(serviceId) { return this.fetch(`/services/${encodeURIComponent(serviceId)}/builds`); }
+
+  // Notifications
+  listNotificationChannels(params = {}) {
+    return this.fetch(`/notifications/channels${this.query(params)}`);
+  }
+  getNotificationChannel(id) {
+    return this.fetch(`/notifications/channels/${encodeURIComponent(id)}`);
+  }
+  createNotificationChannel(payload) {
+    return this.fetch('/notifications/channels', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    });
+  }
+  updateNotificationChannel(id, patch) {
+    return this.fetch(`/notifications/channels/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      body: JSON.stringify(patch)
+    });
+  }
+  deleteNotificationChannel(id) {
+    return this.fetch(`/notifications/channels/${encodeURIComponent(id)}`, {
+      method: 'DELETE'
+    });
+  }
+  testNotificationChannel(id) {
+    return this.fetch(`/notifications/channels/${encodeURIComponent(id)}/test`, {
+      method: 'POST'
+    });
+  }
+  listNotificationLogs(params = {}) {
+    return this.fetch(`/notifications/log${this.query(params)}`);
+  }
+
+  // Payments
+  estimateCost(payload) {
+    return this.fetch('/payments/estimate', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    });
+  }
+  getRunCost(runId) {
+    return this.fetch(`/deployments/runs/${encodeURIComponent(runId)}/cost`);
+  }
+  getPaymentHistory(params = {}) {
+    return this.fetch(`/payments/history${this.query(params)}`);
+  }
+
+  // SBOM
+  getSBOM(artifactId) {
+    return this.fetch(`/artifacts/${encodeURIComponent(artifactId)}/sbom`);
+  }
+  getSBOMPackages(artifactId, params = {}) {
+    return this.fetch(`/artifacts/${encodeURIComponent(artifactId)}/sbom/packages${this.query(params)}`);
+  }
+  searchSBOMPackages(params = {}) {
+    return this.fetch(`/sbom/search${this.query(params)}`);
+  }
+  ingestSBOM(artifactId, payload) {
+    return this.fetch(`/artifacts/${encodeURIComponent(artifactId)}/sbom`, {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    });
+  }
+
+  // Signatures
+  listSignatures(artifactId) {
+    return this.fetch(`/artifacts/${encodeURIComponent(artifactId)}/signatures`);
+  }
+  listVerifiedSignatures(artifactId) {
+    return this.fetch(`/artifacts/${encodeURIComponent(artifactId)}/signatures/verified`);
+  }
+  hasVerifiedSignature(artifactId) {
+    return this.fetch(`/artifacts/${encodeURIComponent(artifactId)}/signatures/check`);
+  }
+  getSignature(id) {
+    return this.fetch(`/signatures/${encodeURIComponent(id)}`);
+  }
+  verifySignatures(artifactId) {
+    return this.fetch(`/artifacts/${encodeURIComponent(artifactId)}/signatures/verify`, {
+      method: 'POST'
+    });
+  }
 
   // SSE Event Stream
   streamEvents(types = [], onEvent, onError) {
