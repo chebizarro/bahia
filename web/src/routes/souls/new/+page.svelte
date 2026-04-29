@@ -1,10 +1,12 @@
 <script>
   import { goto } from '$app/navigation';
-  import { onMount } from 'svelte';
+  import { onMount, onDestroy } from 'svelte';
+  import { get } from 'svelte/store';
   import TemplateSelector from '$lib/components/TemplateSelector.svelte';
   import ProvisioningProgress from '$lib/components/ProvisioningProgress.svelte';
   import { nostr, KINDS } from '$lib/nostr/client.js';
   import { trackProvisioningRun, provisioningRuns } from '$lib/stores/souls.js';
+  import { authState, initializeAuth, login, signWithAuth } from '$lib/stores/auth.js';
   
   // Form state
   let step = 1; // 1: template, 2: configure, 3: provisioning
@@ -17,6 +19,12 @@
   // Provisioning state
   let requestEventId = null;
   let currentRun = null;
+  let provisioningCleanup = null;
+  
+  // Publishing state
+  let publishing = false;
+  let publishError = null;
+  let publishResults = [];
   
   // Error state
   let error = null;
@@ -26,6 +34,12 @@
   $: if (requestEventId && $provisioningRuns.has(requestEventId)) {
     currentRun = $provisioningRuns.get(requestEventId);
   }
+  
+  // Derived auth status for UI
+  $: isAuthenticated = $authState.status === 'authenticated';
+  $: hasExtension = $authState.extensionAvailable;
+  $: authError = $authState.error;
+  $: userPubkey = $authState.pubkey;
   
   function handleTemplateSelect(e) {
     selectedTemplate = e.detail;
@@ -60,9 +74,20 @@
     }
   }
   
+  async function handleLogin() {
+    try {
+      error = null;
+      await login();
+    } catch (err) {
+      error = `Login failed: ${err.message}`;
+    }
+  }
+  
   async function submitProvisioning() {
     error = null;
+    publishError = null;
     submitting = true;
+    publishing = true;
     
     try {
       // Validate
@@ -72,6 +97,22 @@
       if (!brief && !selectedTemplate) {
         throw new Error('Please provide a brief or select a template');
       }
+      
+      // Ensure authenticated
+      const auth = get(authState);
+      if (!isAuthenticated) {
+        // Try to login
+        await login();
+        
+        // Re-check auth state
+        const authAfterLogin = get(authState);
+        if (authAfterLogin.status !== 'authenticated') {
+          throw new Error('Authentication required to provision a soul');
+        }
+      }
+      
+      // Get current auth state
+      const currentAuth = get(authState);
       
       // Build the provisioning request event
       const tags = [
@@ -91,80 +132,58 @@
       });
       
       // Create unsigned event
-      const event = {
+      const unsignedEvent = {
         kind: KINDS.PROVISIONING_REQUEST,
         created_at: Math.floor(Date.now() / 1000),
+        pubkey: currentAuth.pubkey,
         tags,
         content
       };
       
-      // Note: In production, this would be signed by the user's keypair
-      // For now, we'll just show what would be published
-      console.log('[designer] Would publish:', event);
+      // Sign the event with NIP-07
+      const signedEvent = await signWithAuth(unsignedEvent);
       
-      // TODO: Sign with NIP-07 or bunker
-      // For demo, simulate the request ID
-      requestEventId = 'demo_' + Math.random().toString(36).slice(2);
+      // Set request ID from signed event
+      requestEventId = signedEvent.id;
+      
+      // Start tracking before publish
+      provisioningCleanup = trackProvisioningRun(requestEventId, {
+        onProgress: (p) => console.log('[provisioning] Progress:', p),
+        onComplete: (data) => console.log('[provisioning] Complete:', data),
+        onError: (err) => console.error('[provisioning] Error:', err)
+      });
+      
+      // Publish to relays
+      publishResults = await nostr.publish(signedEvent);
+      
+      // Check if any relay accepted the event
+      const successfulPublish = publishResults.some(result => result.sent === true);
+      
+      if (!successfulPublish) {
+        // Clean up tracking if publish failed
+        if (provisioningCleanup) {
+          provisioningCleanup();
+          provisioningCleanup = null;
+        }
+        throw new Error('No connected relays available for publishing');
+      }
       
       // Move to step 3
       step = 3;
       
-      // Track the provisioning run
-      trackProvisioningRun(requestEventId, {
-        onProgress: (p) => console.log('[designer] Progress:', p),
-        onComplete: (data) => console.log('[designer] Complete:', data),
-        onError: (err) => console.log('[designer] Error:', err)
-      });
-      
-      // Simulate progress for demo
-      simulateProvisioning();
-      
     } catch (err) {
+      publishError = err.message;
       error = err.message;
+      
+      // Clean up tracking on error
+      if (provisioningCleanup) {
+        provisioningCleanup();
+        provisioningCleanup = null;
+      }
     } finally {
       submitting = false;
+      publishing = false;
     }
-  }
-  
-  // Demo: simulate provisioning progress
-  function simulateProvisioning() {
-    const steps = ['generate', 'signet', 'avatar', 'profile', 'qdrant', 'memory', 'workspace', 'deploy'];
-    let idx = 0;
-    
-    const interval = setInterval(() => {
-      if (idx >= steps.length) {
-        // Complete
-        provisioningRuns.update(runs => {
-          const r = runs.get(requestEventId);
-          if (r) {
-            r.status = 'completed';
-            r.result = {
-              success: true,
-              data: {
-                soul_id: agentId,
-                npub: 'npub1' + Math.random().toString(36).slice(2, 22)
-              }
-            };
-          }
-          return new Map(runs);
-        });
-        clearInterval(interval);
-        return;
-      }
-      
-      provisioningRuns.update(runs => {
-        const r = runs.get(requestEventId);
-        if (r) {
-          r.status = 'running';
-          r.step = steps[idx];
-          r.progress = { current: idx + 1, total: steps.length };
-          r.message = `Running ${steps[idx]}...`;
-        }
-        return new Map(runs);
-      });
-      
-      idx++;
-    }, 1500);
   }
   
   function viewSoul() {
@@ -172,7 +191,31 @@
   }
   
   onMount(async () => {
-    await nostr.connect();
+    // Initialize auth system
+    await initializeAuth();
+    
+    // Connect to Nostr relays
+    const auth = get(authState);
+    const writeRelays = auth.relays
+      ? Object.entries(auth.relays)
+          .filter(([_, perms]) => perms.write !== false)
+          .map(([url]) => url)
+      : [];
+    
+    if (writeRelays.length > 0) {
+      await nostr.connect(writeRelays);
+    } else {
+      await nostr.connect();
+    }
+  });
+  
+  onDestroy(() => {
+    // Clean up provisioning tracking
+    if (provisioningCleanup) {
+      provisioningCleanup();
+      provisioningCleanup = null;
+    }
+    // Note: Do not disconnect nostr client as it's shared globally
   });
 </script>
 
@@ -204,6 +247,48 @@
       <span class="step-label">Provision</span>
     </div>
   </div>
+  
+  <!-- Auth Status Banner (Step 2) -->
+  {#if step === 2}
+    <div class="auth-status" class:authenticated={isAuthenticated} class:error={authError}>
+      {#if authError}
+        <span class="icon">⚠️</span>
+        <div class="status-content">
+          <strong>Extension Error</strong>
+          <p>{authError}</p>
+        </div>
+      {:else if !hasExtension}
+        <span class="icon">🔌</span>
+        <div class="status-content">
+          <strong>NIP-07 Extension Required</strong>
+          <p>Please install a Nostr browser extension (Alby, nos2x, etc.) to sign events</p>
+        </div>
+      {:else if isAuthenticated && userPubkey}
+        <span class="icon">✓</span>
+        <div class="status-content">
+          <strong>Authenticated</strong>
+          <p>Pubkey: {userPubkey.slice(0, 8)}...{userPubkey.slice(-8)}</p>
+        </div>
+      {:else if $authState.status === 'authenticating'}
+        <span class="icon">⏳</span>
+        <div class="status-content">
+          <strong>Requesting Permission</strong>
+          <p>Check your extension for approval prompt</p>
+        </div>
+      {:else}
+        <span class="icon">🔑</span>
+        <div class="status-content">
+          <strong>NIP-07 Login Required</strong>
+          <p>You'll be prompted to authorize signing when you provision the soul</p>
+        </div>
+        {#if hasExtension && !isAuthenticated}
+          <button class="btn-login" on:click={handleLogin}>
+            Login Now
+          </button>
+        {/if}
+      {/if}
+    </div>
+  {/if}
   
   <!-- Error -->
   {#if error}
@@ -317,9 +402,12 @@
         <button 
           class="btn-primary" 
           on:click={submitProvisioning}
-          disabled={submitting}
+          disabled={submitting || (!hasExtension && !isAuthenticated)}
         >
-          {#if submitting}
+          {#if publishing}
+            <span class="spinner"></span>
+            Signing & Publishing...
+          {:else if submitting}
             <span class="spinner"></span>
             Submitting...
           {:else}
@@ -333,6 +421,21 @@
   <!-- Step 3: Provisioning -->
   {#if step === 3}
     <div class="wizard-content">
+      <div class="publish-success">
+        <span class="icon">✓</span>
+        <h3>Event Signed & Published</h3>
+        <div class="event-details">
+          <div class="detail-row">
+            <span class="label">Request ID:</span>
+            <code>{requestEventId}</code>
+          </div>
+          <div class="detail-row">
+            <span class="label">Published to:</span>
+            <span>{publishResults.filter(r => r.sent).length} relay(s)</span>
+          </div>
+        </div>
+      </div>
+      
       <ProvisioningProgress 
         run={currentRun} 
         onComplete={viewSoul}
@@ -431,6 +534,66 @@
   
   .progress-line.active {
     background: var(--primary);
+  }
+  
+  .auth-status {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    padding: 1rem 1.25rem;
+    background: rgba(99, 102, 241, 0.1);
+    border: 1px solid rgba(99, 102, 241, 0.3);
+    border-radius: 8px;
+    margin-bottom: 1.5rem;
+  }
+  
+  .auth-status.authenticated {
+    background: rgba(34, 197, 94, 0.1);
+    border-color: rgba(34, 197, 94, 0.3);
+    color: #22c55e;
+  }
+  
+  .auth-status.error {
+    background: rgba(239, 68, 68, 0.1);
+    border-color: rgba(239, 68, 68, 0.3);
+    color: #ef4444;
+  }
+  
+  .auth-status .icon {
+    font-size: 1.5rem;
+    flex-shrink: 0;
+  }
+  
+  .auth-status .status-content {
+    flex: 1;
+  }
+  
+  .auth-status .status-content strong {
+    display: block;
+    font-size: 0.9rem;
+    margin-bottom: 0.25rem;
+  }
+  
+  .auth-status .status-content p {
+    margin: 0;
+    font-size: 0.8rem;
+    opacity: 0.9;
+  }
+  
+  .auth-status .btn-login {
+    background: var(--primary);
+    color: white;
+    border: none;
+    padding: 0.5rem 1rem;
+    border-radius: 6px;
+    font-size: 0.85rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  
+  .auth-status .btn-login:hover {
+    background: #5558e3;
   }
   
   .error-banner {
@@ -603,6 +766,68 @@
     white-space: pre-wrap;
     max-height: 200px;
     overflow-y: auto;
+  }
+  
+  .publish-success {
+    text-align: center;
+    padding: 2rem;
+    background: rgba(34, 197, 94, 0.05);
+    border: 1px solid rgba(34, 197, 94, 0.2);
+    border-radius: 8px;
+    margin-bottom: 2rem;
+  }
+  
+  .publish-success .icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 48px;
+    height: 48px;
+    background: #22c55e;
+    color: white;
+    border-radius: 50%;
+    font-size: 1.5rem;
+    margin-bottom: 1rem;
+  }
+  
+  .publish-success h3 {
+    font-size: 1.25rem;
+    margin: 0 0 1rem 0;
+    color: var(--text-primary);
+  }
+  
+  .event-details {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    max-width: 500px;
+    margin: 0 auto;
+  }
+  
+  .detail-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.5rem 1rem;
+    background: var(--card-bg);
+    border-radius: 6px;
+    font-size: 0.85rem;
+  }
+  
+  .detail-row .label {
+    color: var(--text-muted);
+    font-weight: 500;
+  }
+  
+  .detail-row code {
+    background: var(--bg);
+    padding: 0.25rem 0.5rem;
+    border-radius: 4px;
+    font-size: 0.75rem;
+    font-family: monospace;
+    max-width: 300px;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   
   .spinner {

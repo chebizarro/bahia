@@ -10,6 +10,7 @@
   import LoadingButton from '$lib/components/LoadingButton.svelte';
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
   import Checkbox from '$lib/components/Checkbox.svelte';
+  import Textarea from '$lib/components/Textarea.svelte';
   import { api } from '$lib/api/client.js';
 
   let service = null;
@@ -38,6 +39,21 @@
   let deleting = false;
   let deleteError = null;
   let deleteForce = false;
+
+  // Secret create modal state
+  let secretCreateOpen = false;
+  let secretCreating = false;
+  let secretCreateError = null;
+  let secretForm = {
+    name: '',
+    value: ''
+  };
+
+  // Secret delete modal state
+  let secretDeleteOpen = false;
+  let secretDeleting = false;
+  let secretDeleteError = null;
+  let secretToDelete = null;
 
   const runtimeOptions = [
     { value: 'docker', label: 'Docker' },
@@ -162,6 +178,96 @@
       // Keep modal open to allow retry with force option
     }
   }
+
+  async function reloadSecrets() {
+    try {
+      secrets = await api.listSecrets(serviceId);
+    } catch (err) {
+      // Keep current list intact on reload failure
+      console.error('Failed to reload secrets:', err);
+    }
+  }
+
+  function openSecretCreateModal() {
+    secretForm = {
+      name: '',
+      value: ''
+    };
+    secretCreateError = null;
+    secretCreateOpen = true;
+  }
+
+  function closeSecretCreateModal() {
+    secretCreateOpen = false;
+    secretCreateError = null;
+    // Clear value immediately for security
+    secretForm.value = '';
+  }
+
+  async function handleSecretCreate() {
+    // Validate required fields
+    if (!secretForm.name.trim()) {
+      secretCreateError = 'Secret name is required';
+      return;
+    }
+    if (!secretForm.value) {
+      secretCreateError = 'Secret value is required';
+      return;
+    }
+
+    secretCreating = true;
+    secretCreateError = null;
+
+    try {
+      await api.createSecret(serviceId, {
+        name: secretForm.name.trim(),
+        value: secretForm.value
+      });
+      
+      // Clear value immediately for security
+      secretForm.value = '';
+      
+      // Close modal and reload secrets
+      closeSecretCreateModal();
+      await reloadSecrets();
+    } catch (err) {
+      // Never log the secret value
+      secretCreateError = err.message || 'Failed to create secret';
+    } finally {
+      secretCreating = false;
+    }
+  }
+
+  function openSecretDeleteModal(secret) {
+    secretToDelete = secret;
+    secretDeleteError = null;
+    secretDeleteOpen = true;
+  }
+
+  function closeSecretDeleteModal() {
+    secretDeleteOpen = false;
+    secretDeleteError = null;
+    secretToDelete = null;
+  }
+
+  async function handleSecretDelete() {
+    if (!secretToDelete) return;
+
+    secretDeleting = true;
+    secretDeleteError = null;
+
+    try {
+      await api.deleteSecret(serviceId, secretToDelete.id);
+      
+      // Close dialog and reload secrets
+      closeSecretDeleteModal();
+      await reloadSecrets();
+    } catch (err) {
+      secretDeleteError = err.message || 'Failed to delete secret';
+    } finally {
+      secretDeleting = false;
+    }
+  }
 </script>
 
 <div class="page">
@@ -201,15 +307,40 @@
     </section>
 
     <section>
-      <h2>Secrets ({secrets.length})</h2>
+      <div class="section-header">
+        <h2>Secrets ({secrets.length})</h2>
+        <LoadingButton variant="primary" on:click={openSecretCreateModal}>
+          Add Secret
+        </LoadingButton>
+      </div>
       {#if secrets.length > 0}
-        <ul class="secrets-list">
+        <div class="secrets-table">
           {#each secrets as secret}
-            <li><code>{secret.name}</code> (v{secret.version})</li>
+            <div class="secret-row">
+              <div class="secret-info">
+                <code class="secret-name">{secret.name}</code>
+                <span class="secret-version">v{secret.version}</span>
+                {#if secret.environment_id}
+                  <span class="secret-scope">env: {secret.environment_id}</span>
+                {/if}
+              </div>
+              <LoadingButton 
+                variant="danger" 
+                size="small"
+                on:click={() => openSecretDeleteModal(secret)}
+              >
+                Delete
+              </LoadingButton>
+            </div>
           {/each}
-        </ul>
+        </div>
       {:else}
-        <p class="empty">No secrets configured</p>
+        <div class="empty-state">
+          <p class="empty">No secrets configured</p>
+          <LoadingButton variant="primary" on:click={openSecretCreateModal}>
+            Add Your First Secret
+          </LoadingButton>
+        </div>
       {/if}
     </section>
   {/if}
@@ -325,6 +456,79 @@
   </div>
 </ConfirmDialog>
 
+<!-- Secret Create Modal -->
+<Modal bind:open={secretCreateOpen} title="Add Secret" on:close={closeSecretCreateModal}>
+  <form on:submit|preventDefault={handleSecretCreate} class="secret-form">
+    <div class="form-field">
+      <label for="secret-name">Name *</label>
+      <Input
+        id="secret-name"
+        bind:value={secretForm.name}
+        placeholder="DATABASE_URL"
+        required
+        disabled={secretCreating}
+      />
+      <span class="field-hint">A unique identifier for this secret</span>
+    </div>
+
+    <div class="form-field">
+      <label for="secret-value">Value *</label>
+      <Textarea
+        id="secret-value"
+        bind:value={secretForm.value}
+        placeholder="Enter the secret value..."
+        rows={6}
+        required
+        disabled={secretCreating}
+      />
+      <span class="field-hint">The secret value will be encrypted and never displayed</span>
+    </div>
+
+    {#if secretCreateError}
+      <p class="error">{secretCreateError}</p>
+    {/if}
+
+    <div class="form-actions">
+      <LoadingButton
+        type="button"
+        variant="secondary"
+        on:click={closeSecretCreateModal}
+        disabled={secretCreating}
+      >
+        Cancel
+      </LoadingButton>
+      <LoadingButton
+        type="submit"
+        variant="primary"
+        loading={secretCreating}
+      >
+        Create Secret
+      </LoadingButton>
+    </div>
+  </form>
+</Modal>
+
+<!-- Secret Delete Confirmation Dialog -->
+<ConfirmDialog
+  bind:open={secretDeleteOpen}
+  title="Delete Secret"
+  confirmLabel="Delete"
+  variant="danger"
+  loading={secretDeleting}
+  on:confirm={handleSecretDelete}
+  on:cancel={closeSecretDeleteModal}
+  on:close={closeSecretDeleteModal}
+>
+  <div class="delete-content">
+    <p>Are you sure you want to delete the secret <code>{secretToDelete?.name}</code>?</p>
+    <p class="warning">This action cannot be undone. Any services using this secret will lose access.</p>
+
+    {#if secretDeleteError}
+      <p class="error">{secretDeleteError}</p>
+    {/if}
+  </div>
+</ConfirmDialog>
+
 <style>
   .page { max-width: 1000px; }
   .back {
@@ -426,5 +630,74 @@
     padding: 0.75rem;
     background: var(--hover-bg);
     border-radius: 4px;
+  }
+
+  .section-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 1rem;
+  }
+  .section-header h2 {
+    margin-bottom: 0;
+  }
+
+  .secrets-table {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+  .secret-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.75rem;
+    background: var(--hover-bg);
+    border-radius: 4px;
+    border: 1px solid var(--border-color);
+  }
+  .secret-info {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    flex: 1;
+  }
+  .secret-name {
+    font-weight: 500;
+    color: var(--text-primary);
+  }
+  .secret-version {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    padding: 0.125rem 0.5rem;
+    background: var(--bg);
+    border-radius: 3px;
+  }
+  .secret-scope {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    font-style: italic;
+  }
+
+  .empty-state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 1rem;
+    padding: 2rem;
+  }
+  .empty-state .empty {
+    margin: 0;
+  }
+
+  .secret-form {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+  }
+  .field-hint {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    margin-top: 0.25rem;
   }
 </style>

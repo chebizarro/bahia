@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/adapters/secrets"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/notifications"
 	"github.com/openagentsinc/bahia/internal/repository"
 	"github.com/openagentsinc/bahia/internal/service"
 	"go.uber.org/zap"
@@ -19,11 +20,13 @@ import (
 // Server provides an MCP-compatible interface for Bahia operations.
 // It exposes deployment registry functionality as MCP tools.
 type Server struct {
-	registry    *service.RegistryService
-	logger      *zap.Logger
-	secretsRepo repository.SecretRepository // optional: for secret management tools
-	encryptor   *secrets.Encryptor          // optional: for secret encryption/decryption
-	policies    *service.PolicyService      // optional: for policy management tools
+	registry           *service.RegistryService
+	logger             *zap.Logger
+	secretsRepo        repository.SecretRepository   // optional: for secret management tools
+	encryptor          *secrets.Encryptor            // optional: for secret encryption/decryption
+	policies           *service.PolicyService        // optional: for policy management tools
+	notificationRepo   repository.NotificationRepository // optional: for notification tools
+	notificationDisp   *notifications.Dispatcher     // optional: for notification testing
 }
 
 // Config holds MCP server configuration.
@@ -35,9 +38,11 @@ type Config struct {
 
 // ServerDeps holds optional dependencies for the MCP server.
 type ServerDeps struct {
-	SecretsRepo repository.SecretRepository
-	Encryptor   *secrets.Encryptor
-	Policies    *service.PolicyService
+	SecretsRepo          repository.SecretRepository
+	Encryptor            *secrets.Encryptor
+	Policies             *service.PolicyService
+	NotificationRepo     repository.NotificationRepository
+	NotificationDispatcher *notifications.Dispatcher
 }
 
 // NewServer creates a new MCP server for Bahia.
@@ -58,11 +63,13 @@ func NewServerWithDeps(registry *service.RegistryService, logger *zap.Logger, se
 // This is the canonical constructor; other constructors delegate to this.
 func NewServerWithOptions(registry *service.RegistryService, logger *zap.Logger, deps ServerDeps) *Server {
 	return &Server{
-		registry:    registry,
-		logger:      logger.With(zap.String("component", "mcp-server")),
-		secretsRepo: deps.SecretsRepo,
-		encryptor:   deps.Encryptor,
-		policies:    deps.Policies,
+		registry:         registry,
+		logger:           logger,
+		secretsRepo:      deps.SecretsRepo,
+		encryptor:        deps.Encryptor,
+		policies:         deps.Policies,
+		notificationRepo: deps.NotificationRepo,
+		notificationDisp: deps.NotificationDispatcher,
 	}
 }
 
@@ -719,6 +726,72 @@ func (s *Server) GetTools() []Tool {
 				"required": []string{"artifact_id", "environment_id"},
 			},
 		},
+		// Notification operations
+		{
+			Name:        "bahia_list_notifications",
+			Description: "List recent notifications with optional filters",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"status": map[string]interface{}{
+						"type":        "string",
+						"description": "Filter by status: 'read' (sent), 'unread' (pending/retrying), or omit for all",
+						"enum":        []string{"read", "unread"},
+					},
+					"event_type": map[string]interface{}{
+						"type":        "string",
+						"description": "Filter by event type (optional)",
+					},
+					"limit": map[string]interface{}{
+						"type":        "integer",
+						"description": "Maximum number of notifications to return (default: 50)",
+						"default":     50,
+					},
+				},
+			},
+		},
+		{
+			Name:        "bahia_get_notification",
+			Description: "Get a single notification by ID (not currently supported)",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"notification_id": map[string]interface{}{
+						"type":        "string",
+						"description": "Notification UUID",
+					},
+				},
+				"required": []string{"notification_id"},
+			},
+		},
+		{
+			Name:        "bahia_mark_notification_read",
+			Description: "Mark a notification as read",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"notification_id": map[string]interface{}{
+						"type":        "string",
+						"description": "Notification UUID",
+					},
+				},
+				"required": []string{"notification_id"},
+			},
+		},
+		{
+			Name:        "bahia_dismiss_notification",
+			Description: "Dismiss/delete a notification (not supported - notification logs are immutable)",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"notification_id": map[string]interface{}{
+						"type":        "string",
+						"description": "Notification UUID",
+					},
+				},
+				"required": []string{"notification_id"},
+			},
+		},
 	}
 }
 
@@ -803,6 +876,15 @@ func (s *Server) CallTool(ctx context.Context, name string, arguments map[string
 		return s.handleDeletePolicy(ctx, arguments)
 	case "bahia_evaluate_policy":
 		return s.handleEvaluatePolicy(ctx, arguments)
+	// Notification operations
+	case "bahia_list_notifications":
+		return s.handleListNotifications(ctx, arguments)
+	case "bahia_get_notification":
+		return s.handleGetNotification(ctx, arguments)
+	case "bahia_mark_notification_read":
+		return s.handleMarkNotificationRead(ctx, arguments)
+	case "bahia_dismiss_notification":
+		return s.handleDismissNotification(ctx, arguments)
 	default:
 		return errorResult(fmt.Sprintf("unknown tool: %s", name)), nil
 	}
@@ -2318,4 +2400,137 @@ func policyResultsToMaps(results []domain.PolicyResult) []map[string]interface{}
 		output[i] = m
 	}
 	return output
+}
+
+// --- Notification Handlers ---
+
+func (s *Server) handleListNotifications(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
+	if s.notificationRepo == nil {
+		return errorResult("notification tools are not configured"), nil
+	}
+
+	status, _ := args["status"].(string)
+	eventType, _ := args["event_type"].(string)
+	limit, _ := args["limit"].(float64)
+	if limit == 0 {
+		limit = 50
+	}
+
+	// List recent notifications
+	logs, err := s.notificationRepo.ListRecentLogs(ctx, int(limit))
+	if err != nil {
+		return errorResult(fmt.Sprintf("failed to list notifications: %v", err)), nil
+	}
+
+	// Apply filters
+	var filtered []domain.NotificationLog
+	for _, log := range logs {
+		// Filter by status (read = sent, unread = pending/retrying)
+		if status != "" {
+			if status == "read" && log.Status != domain.NotificationStatusSent {
+				continue
+			}
+			if status == "unread" && log.Status != domain.NotificationStatusPending && log.Status != domain.NotificationStatusRetrying {
+				continue
+			}
+		}
+
+		// Filter by event type
+		if eventType != "" && log.EventType != eventType {
+			continue
+		}
+
+		filtered = append(filtered, log)
+	}
+
+	result := map[string]interface{}{
+		"notifications": notificationLogsToMaps(filtered),
+		"total":         len(filtered),
+	}
+	return jsonResult(result)
+}
+
+func (s *Server) handleGetNotification(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
+	if s.notificationRepo == nil {
+		return errorResult("notification tools are not configured"), nil
+	}
+
+	return errorResult("get notification by ID is not currently supported - repository method not available. Use list_notifications instead."), nil
+}
+
+func (s *Server) handleMarkNotificationRead(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
+	if s.notificationRepo == nil {
+		return errorResult("notification tools are not configured"), nil
+	}
+
+	notificationIDStr, _ := args["notification_id"].(string)
+	if notificationIDStr == "" {
+		return errorResult("notification_id is required"), nil
+	}
+
+	notificationID, err := uuid.Parse(notificationIDStr)
+	if err != nil {
+		return errorResult(fmt.Sprintf("invalid notification_id: %v", err)), nil
+	}
+
+	// Since we don't have GetLogByID, we need to search through recent logs
+	// This is a workaround until the repository interface is extended
+	logs, err := s.notificationRepo.ListRecentLogs(ctx, 200)
+	if err != nil {
+		return errorResult(fmt.Sprintf("failed to find notification: %v", err)), nil
+	}
+
+	var notification *domain.NotificationLog
+	for i, log := range logs {
+		if log.ID == notificationID {
+			notification = &logs[i]
+			break
+		}
+	}
+
+	if notification == nil {
+		return errorResult("notification not found"), nil
+	}
+
+	// Mark as read by updating status to sent
+	notification.Status = domain.NotificationStatusSent
+	if err := s.notificationRepo.UpdateLog(ctx, notification); err != nil {
+		return errorResult(fmt.Sprintf("failed to mark notification as read: %v", err)), nil
+	}
+
+	s.logger.Info("notification marked as read", zap.String("notification_id", notificationID.String()))
+
+	result := map[string]interface{}{
+		"status":          "marked_read",
+		"notification_id": notificationID.String(),
+	}
+	return jsonResult(result)
+}
+
+func (s *Server) handleDismissNotification(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
+	if s.notificationRepo == nil {
+		return errorResult("notification tools are not configured"), nil
+	}
+
+	return errorResult("dismiss notification is not supported - notification logs are immutable audit records"), nil
+}
+
+func notificationLogsToMaps(logs []domain.NotificationLog) []map[string]interface{} {
+	result := make([]map[string]interface{}, len(logs))
+	for i, log := range logs {
+		result[i] = map[string]interface{}{
+			"id":         log.ID.String(),
+			"channel_id": log.ChannelID.String(),
+			"event_type": log.EventType,
+			"payload":    log.Payload,
+			"status":     string(log.Status),
+			"attempts":   log.Attempts,
+			"created_at": log.CreatedAt.Format("2006-01-02T15:04:05Z"),
+			"updated_at": log.UpdatedAt.Format("2006-01-02T15:04:05Z"),
+		}
+		if log.LastError != "" {
+			result[i]["last_error"] = log.LastError
+		}
+	}
+	return result
 }

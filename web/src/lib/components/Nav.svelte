@@ -16,6 +16,13 @@
     <li><a href="/environments" class:active={$page.url.pathname.startsWith('/environments')}>Environments</a></li>
     <li><a href="/workers" class:active={$page.url.pathname.startsWith('/workers')}>Workers</a></li>
     <li><a href="/policies" class:active={$page.url.pathname.startsWith('/policies')}>Policies</a></li>
+    <li><a href="/deployments" class:active={$page.url.pathname.startsWith('/deployments') && !$page.url.pathname.startsWith('/deployments/pending')}>Deployments</a></li>
+    <li>
+      <a href="/deployments/pending" class:active={$page.url.pathname.startsWith('/deployments/pending')} class="with-badge">
+        Pending Approvals
+        <span class="badge">!</span>
+      </a>
+    </li>
     <li><a href="/events" class:active={$page.url.pathname === '/events'}>Events</a></li>
   </ul>
   
@@ -84,5 +91,19 @@
   .theme-toggle:hover {
     background: var(--hover-bg);
     transform: scale(1.05);
+  }
+  .with-badge {
+    position: relative;
+  }
+  .badge {
+    display: inline-block;
+    background: var(--warning, #f59e0b);
+    color: #fff;
+    font-size: 0.65rem;
+    font-weight: bold;
+    padding: 0.125rem 0.375rem;
+    border-radius: 10px;
+    margin-left: 0.25rem;
+    vertical-align: middle;
   }
 </style>
