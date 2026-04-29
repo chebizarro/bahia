@@ -214,7 +214,7 @@
       <Textarea
         id="rules"
         bind:value={createForm.rules}
-        placeholder='[{"type": "require_sbom"}]'
+        placeholder={'[{"type": "require_sbom"}]'}
         rows={8}
         required
         disabled={creating}

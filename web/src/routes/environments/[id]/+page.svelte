@@ -248,7 +248,7 @@
       <Textarea
         id="edit-runtime-config"
         bind:value={editForm.runtime_config}
-        placeholder="{}"
+        placeholder={'{}'}
         rows={8}
         disabled={editing}
       />

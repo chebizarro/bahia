@@ -256,7 +256,7 @@
       <Textarea
         id="edit-rules"
         bind:value={editForm.rules}
-        placeholder='[{"type": "require_sbom"}]'
+        placeholder={'[{"type": "require_sbom"}]'}
         rows={10}
         required
         disabled={editing}
