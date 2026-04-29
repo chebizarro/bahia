@@ -27,6 +27,27 @@ class BahiaClient {
     }
 
     const res = await fetch(`${BASE_URL}${path}`, { ...options, headers });
+    
+    // Handle non-2xx responses
+    if (!res.ok) {
+      let errorMessage = `HTTP ${res.status}: ${res.statusText}`;
+      try {
+        const errorData = await res.json();
+        if (errorData.error) {
+          errorMessage = errorData.error;
+        }
+      } catch {
+        // Response body is not JSON or empty, use status text
+      }
+      throw new Error(errorMessage);
+    }
+
+    // Handle empty responses (e.g., 204 No Content)
+    const contentType = res.headers.get('content-type');
+    if (!contentType || !contentType.includes('application/json')) {
+      return null;
+    }
+
     const data = await res.json();
     
     if (data.error) {
@@ -37,11 +58,46 @@ class BahiaClient {
 
   // Services
   listServices() { return this.fetch('/services'); }
-  getService(id) { return this.fetch(`/services/${id}`); }
+  getService(id) { return this.fetch(`/services/${encodeURIComponent(id)}`); }
+  createService(payload) {
+    return this.fetch('/services', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    });
+  }
+  updateService(id, patch) {
+    return this.fetch(`/services/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      body: JSON.stringify(patch)
+    });
+  }
+  deleteService(id, force = false) {
+    const query = force ? '?force=true' : '';
+    return this.fetch(`/services/${encodeURIComponent(id)}${query}`, {
+      method: 'DELETE'
+    });
+  }
 
   // Environments
   listEnvironments() { return this.fetch('/environments'); }
-  getEnvironment(id) { return this.fetch(`/environments/${id}`); }
+  getEnvironment(id) { return this.fetch(`/environments/${encodeURIComponent(id)}`); }
+  createEnvironment(payload) {
+    return this.fetch('/environments', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    });
+  }
+  updateEnvironment(id, patch) {
+    return this.fetch(`/environments/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      body: JSON.stringify(patch)
+    });
+  }
+  deleteEnvironment(id) {
+    return this.fetch(`/environments/${encodeURIComponent(id)}`, {
+      method: 'DELETE'
+    });
+  }
 
   // State
   listStates() { return this.fetch('/state'); }
@@ -49,42 +105,70 @@ class BahiaClient {
 
   // Deployments
   listIntents(serviceId, envId) {
-    return this.fetch(`/deployments/intents?service_id=${serviceId}&environment_id=${envId}`);
+    return this.fetch(`/services/${encodeURIComponent(serviceId)}/environments/${encodeURIComponent(envId)}/intents`);
   }
-  getIntent(id) { return this.fetch(`/deployments/intents/${id}`); }
+  getIntent(id) { return this.fetch(`/deployments/intents/${encodeURIComponent(id)}`); }
   createIntent(serviceId, envId, artifactId) {
     return this.fetch('/deployments/intents', {
       method: 'POST',
       body: JSON.stringify({ service_id: serviceId, environment_id: envId, artifact_id: artifactId })
     });
   }
-  approveIntent(id) { return this.fetch(`/deployments/intents/${id}/approve`, { method: 'POST' }); }
+  approveIntent(id) {
+    return this.fetch(`/deployments/intents/${encodeURIComponent(id)}/approve`, { method: 'POST' });
+  }
+  rejectIntent(id) {
+    return this.fetch(`/deployments/intents/${encodeURIComponent(id)}/reject`, { method: 'POST' });
+  }
   
   // Runs
-  getRun(id) { return this.fetch(`/deployments/runs/${id}`); }
-  getRunLogs(id, tail = 100) { return this.fetch(`/deployments/runs/${id}/logs?tail=${tail}`); }
+  getRun(id) { return this.fetch(`/deployments/runs/${encodeURIComponent(id)}`); }
+  getRunLogs(id, tail = 100) {
+    return this.fetch(`/deployments/runs/${encodeURIComponent(id)}/logs?tail=${encodeURIComponent(tail)}`);
+  }
+  listRuns(intentId) {
+    return this.fetch(`/deployments/intents/${encodeURIComponent(intentId)}/runs`);
+  }
+  createRun(payload) {
+    return this.fetch('/deployments/runs', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    });
+  }
+  completeRun(id, payload) {
+    return this.fetch(`/deployments/runs/${encodeURIComponent(id)}/complete`, {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    });
+  }
+  rollback(payload) {
+    return this.fetch('/rollback', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    });
+  }
 
   // Workers
   listWorkers() { return this.fetch('/workers'); }
-  getWorker(pubkey) { return this.fetch(`/workers/${pubkey}`); }
+  getWorker(pubkey) { return this.fetch(`/workers/${encodeURIComponent(pubkey)}`); }
 
   // Policies
   listPolicies() { return this.fetch('/policies'); }
-  getPolicy(id) { return this.fetch(`/policies/${id}`); }
+  getPolicy(id) { return this.fetch(`/policies/${encodeURIComponent(id)}`); }
 
   // Secrets
-  listSecrets(serviceId) { return this.fetch(`/services/${serviceId}/secrets`); }
+  listSecrets(serviceId) { return this.fetch(`/services/${encodeURIComponent(serviceId)}/secrets`); }
 
   // Organizations
   listOrgs() { return this.fetch('/orgs'); }
-  getOrg(id) { return this.fetch(`/orgs/${id}`); }
-  listOrgMembers(orgId) { return this.fetch(`/orgs/${orgId}/members`); }
+  getOrg(id) { return this.fetch(`/orgs/${encodeURIComponent(id)}`); }
+  listOrgMembers(orgId) { return this.fetch(`/orgs/${encodeURIComponent(orgId)}/members`); }
 
   // Artifacts
-  listArtifacts(serviceId) { return this.fetch(`/services/${serviceId}/artifacts`); }
+  listArtifacts(serviceId) { return this.fetch(`/services/${encodeURIComponent(serviceId)}/artifacts`); }
 
   // Builds
-  listBuilds(serviceId) { return this.fetch(`/services/${serviceId}/builds`); }
+  listBuilds(serviceId) { return this.fetch(`/services/${encodeURIComponent(serviceId)}/builds`); }
 
   // SSE Event Stream
   streamEvents(types = [], onEvent, onError) {
