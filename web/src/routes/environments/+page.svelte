@@ -156,7 +156,7 @@
       <Textarea
         id="runtime-config"
         bind:value={createForm.runtime_config}
-        placeholder="{}"
+        placeholder={'{}'}
         rows={6}
         disabled={creating}
       />
