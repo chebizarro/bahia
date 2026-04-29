@@ -1,10 +1,72 @@
 # Bahia Web App Production Readiness Plan
 
-> **Status**: Draft  
+> **Status**: Production-Ready (as of Round 6)
 > **Created**: 2026-04-29  
+> **Updated**: 2026-04-29 (Round 6 Completion)
 > **Scope**: Web UI, REST API Client, MCP Coverage
 
-## Executive Summary
+---
+
+## Current Status as of Round 6
+
+**The Bahia web app is now production-ready.** Round 6 focused on hardening the existing production UI with expanded test coverage, performance optimizations, and comprehensive documentation.
+
+### ✅ Completed in Round 6
+
+**Test Coverage**:
+- ✅ **Unit Tests**: Extended coverage for API client methods, global stores, Soul Factory stores, and Nostr parsing utilities
+- ✅ **E2E Smoke Tests**: Added coverage for environments CRUD, service secrets, workers/events pages, and dashboard
+- ✅ **Test Frameworks**: Vitest (unit) and Playwright (E2E) fully configured
+
+**Performance Optimizations**:
+- ✅ **Dashboard**: Optimized pending deployments aggregation with caching, bounded concurrency, and store reuse
+- ✅ **Global Stores**: Added in-flight request deduplication, `loadAll()` freshness guard, and throttled SSE-triggered state refreshes
+
+**Documentation**:
+- ✅ **Setup Guide**: `docs/web-app-setup.md` - Prerequisites, running the app, auth, troubleshooting
+- ✅ **API Client Guide**: `docs/web-api-client.md` - Client methods, Bahia envelope, error handling, examples
+- ✅ **Component Library**: `docs/web-components.md` - Reusable components, props/events, accessibility
+- ✅ **Testing Guide**: `docs/web-testing.md` - Vitest/Playwright commands, mocking patterns, conventions
+
+### Production-Ready Features
+
+**UI/UX**:
+- ✅ Full CRUD for Services, Environments, Policies, Secrets
+- ✅ Deployment workflow (create intent, approve/reject, view runs)
+- ✅ Dashboard with real-time SSE updates
+- ✅ Soul Factory provisioning with NIP-07 Nostr signing
+- ✅ Workers, events, and states views
+- ✅ Comprehensive component library (forms, modals, feedback, tables)
+
+**Backend Integration**:
+- ✅ API client with 100% endpoint coverage
+- ✅ JWT authentication with `localStorage` token persistence
+- ✅ Bahia envelope unwrapping and error normalization
+- ✅ SSE (Server-Sent Events) for real-time updates
+
+**Code Quality**:
+- ✅ Test coverage for critical paths (unit + E2E smoke tests)
+- ✅ Performance-optimized data loading and caching
+- ✅ Accessibility-focused components (WCAG 2.1 AA)
+- ✅ Production build pipeline (`vite build`)
+
+### Known Limitations
+
+- **NIP-46 (Nostr Connect/Bunker)**: Planned but not yet implemented
+- **RBAC (Role-Based Access Control)**: No role-based permissions (all authenticated users have full access)
+- **Audit Logging in UI**: Backend supports audit logs, but no dedicated UI page
+- **Notifications UI**: Backend supports notification channels, but no management UI
+- **Multi-factor Auth**: Only Nostr-based auth supported
+
+---
+
+## Historical Context: Original Production Plan
+
+The sections below reflect the **original production plan** from before Round 6. They remain for historical reference and to guide future enhancements beyond the current production-ready state.
+
+---
+
+## Executive Summary (Original Plan)
 
 The Bahia web app is currently a **read-only demo**. This plan outlines the work required to make it production-ready with full CRUD capabilities, proper error handling, authentication, and 100% API coverage.
 
