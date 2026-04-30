@@ -21,6 +21,11 @@ const DEFAULT_RELAYS = [
   'wss://armada.sharegap.net'
 ];
 
+// Reconnection configuration
+const MAX_RECONNECT_ATTEMPTS = 5;
+const INITIAL_BACKOFF_MS = 1000;
+const MAX_BACKOFF_MS = 30000;
+
 class NostrClient {
   constructor() {
     this.relays = DEFAULT_RELAYS;
@@ -29,11 +34,23 @@ class NostrClient {
     this.subIdCounter = 0;
     this.connected = writable(false);
     this.connectionStatus = writable({});
+    this.reconnectAttempts = new Map(); // Track attempts per relay
+    this.reconnectTimers = new Map(); // Track timers per relay
+  }
+
+  // Calculate exponential backoff delay
+  getBackoffDelay(attempts) {
+    const delay = Math.min(INITIAL_BACKOFF_MS * Math.pow(2, attempts), MAX_BACKOFF_MS);
+    // Add jitter (±20%)
+    const jitter = delay * 0.2 * (Math.random() - 0.5);
+    return Math.round(delay + jitter);
   }
 
   // Connect to all relays
   async connect(relays = this.relays) {
     this.relays = relays;
+    // Reset reconnect attempts for fresh connection
+    relays.forEach(url => this.reconnectAttempts.set(url, 0));
     const promises = relays.map(url => this.connectRelay(url));
     await Promise.allSettled(promises);
     this.updateConnectedStatus();
@@ -41,18 +58,33 @@ class NostrClient {
 
   // Connect to a single relay
   connectRelay(url) {
-    return new Promise((resolve, reject) => {
+    return new Promise((resolve) => {
+      // Clear any pending reconnect timer
+      if (this.reconnectTimers.has(url)) {
+        clearTimeout(this.reconnectTimers.get(url));
+        this.reconnectTimers.delete(url);
+      }
+
       if (this.sockets.has(url) && this.sockets.get(url).readyState === WebSocket.OPEN) {
         resolve();
         return;
       }
 
-      const ws = new WebSocket(url);
+      let ws;
+      try {
+        ws = new WebSocket(url);
+      } catch (err) {
+        console.error(`[nostr] Failed to create WebSocket for ${url}:`, err);
+        this.connectionStatus.update(s => ({ ...s, [url]: 'error' }));
+        resolve(); // Don't reject, just resolve to not block
+        return;
+      }
       
       ws.onopen = () => {
         console.log(`[nostr] Connected to ${url}`);
         this.sockets.set(url, ws);
         this.connectionStatus.update(s => ({ ...s, [url]: 'connected' }));
+        this.reconnectAttempts.set(url, 0); // Reset attempts on successful connection
         this.updateConnectedStatus();
         resolve();
       };
@@ -62,20 +94,64 @@ class NostrClient {
         this.sockets.delete(url);
         this.connectionStatus.update(s => ({ ...s, [url]: 'disconnected' }));
         this.updateConnectedStatus();
-        // Auto-reconnect after 5 seconds
-        setTimeout(() => this.connectRelay(url), 5000);
+        
+        // Schedule reconnect with backoff
+        this.scheduleReconnect(url);
       };
 
       ws.onerror = (err) => {
         console.error(`[nostr] Error on ${url}:`, err);
         this.connectionStatus.update(s => ({ ...s, [url]: 'error' }));
-        reject(err);
+        // Don't reject - let onclose handle reconnection
+        // The error event is always followed by close event
       };
 
       ws.onmessage = (e) => {
         this.handleMessage(url, e.data);
       };
+
+      // Timeout for initial connection
+      setTimeout(() => {
+        if (ws.readyState === WebSocket.CONNECTING) {
+          console.log(`[nostr] Connection timeout for ${url}`);
+          ws.close();
+          resolve(); // Don't block on timeout
+        }
+      }, 10000);
     });
+  }
+
+  // Schedule reconnection with exponential backoff
+  scheduleReconnect(url) {
+    const attempts = this.reconnectAttempts.get(url) || 0;
+    
+    if (attempts >= MAX_RECONNECT_ATTEMPTS) {
+      console.log(`[nostr] Max reconnect attempts (${MAX_RECONNECT_ATTEMPTS}) reached for ${url}. Giving up.`);
+      this.connectionStatus.update(s => ({ ...s, [url]: 'failed' }));
+      return;
+    }
+
+    const delay = this.getBackoffDelay(attempts);
+    console.log(`[nostr] Reconnecting to ${url} in ${delay}ms (attempt ${attempts + 1}/${MAX_RECONNECT_ATTEMPTS})`);
+    
+    this.reconnectAttempts.set(url, attempts + 1);
+    
+    const timer = setTimeout(() => {
+      this.reconnectTimers.delete(url);
+      this.connectRelay(url);
+    }, delay);
+    
+    this.reconnectTimers.set(url, timer);
+  }
+
+  // Reset and retry connection to a specific relay
+  retryRelay(url) {
+    this.reconnectAttempts.set(url, 0);
+    if (this.reconnectTimers.has(url)) {
+      clearTimeout(this.reconnectTimers.get(url));
+      this.reconnectTimers.delete(url);
+    }
+    return this.connectRelay(url);
   }
 
   // Update connected store
@@ -154,6 +230,12 @@ class NostrClient {
       let eoseCount = 0;
       const relayCount = this.sockets.size;
 
+      // If no relays connected, resolve immediately with empty array
+      if (relayCount === 0) {
+        resolve([]);
+        return;
+      }
+
       const unsub = this.subscribe(filters, {
         onEvent: (event) => {
           // Deduplicate by event ID
@@ -196,6 +278,12 @@ class NostrClient {
   // Close all connections
   disconnect() {
     this.subscriptions.clear();
+    
+    // Clear all reconnect timers
+    this.reconnectTimers.forEach(timer => clearTimeout(timer));
+    this.reconnectTimers.clear();
+    this.reconnectAttempts.clear();
+    
     this.sockets.forEach((ws, url) => {
       ws.close();
     });
