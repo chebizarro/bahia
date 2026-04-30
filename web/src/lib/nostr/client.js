@@ -15,44 +15,111 @@ export const KINDS = {
   REPOSITORY: 30617
 };
 
-// Default relays
+// Default relays - can be overridden via localStorage or connect() parameter
 const DEFAULT_RELAYS = [
-  'wss://relay.sharegap.net',
-  'wss://armada.sharegap.net'
+  'wss://relay.damus.io',
+  'wss://relay.nostr.band',
+  'wss://nos.lol'
 ];
+
+// Storage key for user-configured relays
+const RELAY_CONFIG_KEY = 'bahia_nostr_relays';
 
 // Reconnection configuration
 const MAX_RECONNECT_ATTEMPTS = 5;
 const INITIAL_BACKOFF_MS = 1000;
 const MAX_BACKOFF_MS = 30000;
 
+/**
+ * Get configured relays from localStorage or return defaults
+ */
+function getConfiguredRelays() {
+  if (typeof localStorage === 'undefined') return DEFAULT_RELAYS;
+  
+  try {
+    const stored = localStorage.getItem(RELAY_CONFIG_KEY);
+    if (stored) {
+      const relays = JSON.parse(stored);
+      if (Array.isArray(relays) && relays.length > 0) {
+        return relays;
+      }
+    }
+  } catch (e) {
+    console.error('[nostr] Failed to load relay config:', e);
+  }
+  
+  return DEFAULT_RELAYS;
+}
+
+/**
+ * Save relay configuration to localStorage
+ */
+export function saveRelayConfig(relays) {
+  if (typeof localStorage === 'undefined') return;
+  
+  try {
+    if (Array.isArray(relays) && relays.length > 0) {
+      localStorage.setItem(RELAY_CONFIG_KEY, JSON.stringify(relays));
+    } else {
+      localStorage.removeItem(RELAY_CONFIG_KEY);
+    }
+  } catch (e) {
+    console.error('[nostr] Failed to save relay config:', e);
+  }
+}
+
+/**
+ * Get the default relay list
+ */
+export function getDefaultRelays() {
+  return [...DEFAULT_RELAYS];
+}
+
 class NostrClient {
   constructor() {
-    this.relays = DEFAULT_RELAYS;
+    this.relays = getConfiguredRelays();
     this.sockets = new Map();
     this.subscriptions = new Map();
     this.subIdCounter = 0;
     this.connected = writable(false);
     this.connectionStatus = writable({});
-    this.reconnectAttempts = new Map(); // Track attempts per relay
-    this.reconnectTimers = new Map(); // Track timers per relay
+    this.reconnectAttempts = new Map();
+    this.reconnectTimers = new Map();
   }
 
   // Calculate exponential backoff delay
   getBackoffDelay(attempts) {
     const delay = Math.min(INITIAL_BACKOFF_MS * Math.pow(2, attempts), MAX_BACKOFF_MS);
-    // Add jitter (±20%)
     const jitter = delay * 0.2 * (Math.random() - 0.5);
     return Math.round(delay + jitter);
+  }
+
+  // Get current relay list
+  getRelays() {
+    return [...this.relays];
+  }
+
+  // Set relay list (and optionally persist)
+  setRelays(relays, persist = true) {
+    this.relays = relays;
+    if (persist) {
+      saveRelayConfig(relays);
+    }
   }
 
   // Connect to all relays
   async connect(relays = this.relays) {
     this.relays = relays;
+    console.log(`[nostr] Connecting to ${relays.length} relay(s):`, relays);
+    
     // Reset reconnect attempts for fresh connection
     relays.forEach(url => this.reconnectAttempts.set(url, 0));
     const promises = relays.map(url => this.connectRelay(url));
-    await Promise.allSettled(promises);
+    const results = await Promise.allSettled(promises);
+    
+    const connected = results.filter(r => r.status === 'fulfilled').length;
+    console.log(`[nostr] Connected to ${connected}/${relays.length} relays`);
+    
     this.updateConnectedStatus();
   }
 
@@ -76,15 +143,15 @@ class NostrClient {
       } catch (err) {
         console.error(`[nostr] Failed to create WebSocket for ${url}:`, err);
         this.connectionStatus.update(s => ({ ...s, [url]: 'error' }));
-        resolve(); // Don't reject, just resolve to not block
+        resolve();
         return;
       }
       
       ws.onopen = () => {
-        console.log(`[nostr] Connected to ${url}`);
+        console.log(`[nostr] ✓ Connected to ${url}`);
         this.sockets.set(url, ws);
         this.connectionStatus.update(s => ({ ...s, [url]: 'connected' }));
-        this.reconnectAttempts.set(url, 0); // Reset attempts on successful connection
+        this.reconnectAttempts.set(url, 0);
         this.updateConnectedStatus();
         resolve();
       };
@@ -94,16 +161,13 @@ class NostrClient {
         this.sockets.delete(url);
         this.connectionStatus.update(s => ({ ...s, [url]: 'disconnected' }));
         this.updateConnectedStatus();
-        
-        // Schedule reconnect with backoff
         this.scheduleReconnect(url);
       };
 
       ws.onerror = (err) => {
-        console.error(`[nostr] Error on ${url}:`, err);
+        // Don't log full error object, just note it happened
+        console.warn(`[nostr] ✗ Connection failed: ${url}`);
         this.connectionStatus.update(s => ({ ...s, [url]: 'error' }));
-        // Don't reject - let onclose handle reconnection
-        // The error event is always followed by close event
       };
 
       ws.onmessage = (e) => {
@@ -113,9 +177,9 @@ class NostrClient {
       // Timeout for initial connection
       setTimeout(() => {
         if (ws.readyState === WebSocket.CONNECTING) {
-          console.log(`[nostr] Connection timeout for ${url}`);
+          console.log(`[nostr] Connection timeout: ${url}`);
           ws.close();
-          resolve(); // Don't block on timeout
+          resolve();
         }
       }, 10000);
     });
@@ -126,13 +190,13 @@ class NostrClient {
     const attempts = this.reconnectAttempts.get(url) || 0;
     
     if (attempts >= MAX_RECONNECT_ATTEMPTS) {
-      console.log(`[nostr] Max reconnect attempts (${MAX_RECONNECT_ATTEMPTS}) reached for ${url}. Giving up.`);
+      console.log(`[nostr] Giving up on ${url} after ${MAX_RECONNECT_ATTEMPTS} attempts`);
       this.connectionStatus.update(s => ({ ...s, [url]: 'failed' }));
       return;
     }
 
     const delay = this.getBackoffDelay(attempts);
-    console.log(`[nostr] Reconnecting to ${url} in ${delay}ms (attempt ${attempts + 1}/${MAX_RECONNECT_ATTEMPTS})`);
+    console.log(`[nostr] Will retry ${url} in ${Math.round(delay/1000)}s (attempt ${attempts + 1}/${MAX_RECONNECT_ATTEMPTS})`);
     
     this.reconnectAttempts.set(url, attempts + 1);
     
@@ -185,7 +249,6 @@ class NostrClient {
 
         case 'OK':
           const [eventId, success, message] = rest;
-          // Handle publish confirmation
           break;
 
         case 'NOTICE':
@@ -203,7 +266,6 @@ class NostrClient {
     
     this.subscriptions.set(subId, { filters, onEvent, onEose, events: [] });
 
-    // Send REQ to all connected relays
     const req = JSON.stringify(['REQ', subId, ...filters]);
     this.sockets.forEach((ws, url) => {
       if (ws.readyState === WebSocket.OPEN) {
@@ -211,7 +273,6 @@ class NostrClient {
       }
     });
 
-    // Return unsubscribe function
     return () => {
       this.subscriptions.delete(subId);
       const close = JSON.stringify(['CLOSE', subId]);
@@ -230,7 +291,6 @@ class NostrClient {
       let eoseCount = 0;
       const relayCount = this.sockets.size;
 
-      // If no relays connected, resolve immediately with empty array
       if (relayCount === 0) {
         resolve([]);
         return;
@@ -238,7 +298,6 @@ class NostrClient {
 
       const unsub = this.subscribe(filters, {
         onEvent: (event) => {
-          // Deduplicate by event ID
           if (!events.find(e => e.id === event.id)) {
             events.push(event);
           }
@@ -252,7 +311,6 @@ class NostrClient {
         }
       });
 
-      // Timeout fallback
       setTimeout(() => {
         unsub();
         resolve(events);
@@ -279,7 +337,6 @@ class NostrClient {
   disconnect() {
     this.subscriptions.clear();
     
-    // Clear all reconnect timers
     this.reconnectTimers.forEach(timer => clearTimeout(timer));
     this.reconnectTimers.clear();
     this.reconnectAttempts.clear();
@@ -297,7 +354,6 @@ export const nostr = new NostrClient();
 
 // --- Soul Factory specific helpers ---
 
-// Fetch all soul templates
 export async function fetchTemplates(authorPubkey = null) {
   const filter = { kinds: [KINDS.SOUL_TEMPLATE] };
   if (authorPubkey) {
@@ -306,7 +362,6 @@ export async function fetchTemplates(authorPubkey = null) {
   return nostr.query([filter]);
 }
 
-// Fetch all agent souls
 export async function fetchSouls(authorPubkey = null) {
   const filter = { kinds: [KINDS.AGENT_SOUL] };
   if (authorPubkey) {
@@ -315,7 +370,6 @@ export async function fetchSouls(authorPubkey = null) {
   return nostr.query([filter]);
 }
 
-// Fetch a specific soul by agent ID
 export async function fetchSoul(agentId, authorPubkey) {
   const events = await nostr.query([{
     kinds: [KINDS.AGENT_SOUL],
@@ -325,7 +379,6 @@ export async function fetchSoul(agentId, authorPubkey) {
   return events[0] || null;
 }
 
-// Subscribe to provisioning progress
 export function subscribeToProvisioningProgress(requestEventId, onStatus, onResult) {
   return nostr.subscribe([
     { kinds: [KINDS.PROVISIONING_STATUS], '#e': [requestEventId] },
@@ -341,7 +394,6 @@ export function subscribeToProvisioningProgress(requestEventId, onStatus, onResu
   });
 }
 
-// Parse a soul event into a structured object
 export function parseSoulEvent(event) {
   const soul = {
     id: event.id,
@@ -388,7 +440,6 @@ export function parseSoulEvent(event) {
   return soul;
 }
 
-// Parse a template event
 export function parseTemplateEvent(event) {
   const template = {
     id: event.id,
@@ -418,7 +469,6 @@ export function parseTemplateEvent(event) {
   return template;
 }
 
-// Parse repository announcement event (NIP-34 Kind 30617)
 export function parseRepositoryEvent(event) {
   if (!event || !event.id || !event.pubkey || !Array.isArray(event.tags)) {
     return null;
@@ -491,7 +541,6 @@ export function parseRepositoryEvent(event) {
   return repo;
 }
 
-// Fetch repository announcements (NIP-34 Kind 30617)
 export async function fetchRepositories({ authors = null, limit = 200, since = null } = {}) {
   const filter = {
     kinds: [KINDS.REPOSITORY],
@@ -522,7 +571,6 @@ export async function fetchRepositories({ authors = null, limit = 200, since = n
   return Array.from(deduped.values());
 }
 
-// Parse provisioning status event
 function parseProvisioningStatus(event) {
   const status = {
     id: event.id,
@@ -543,7 +591,6 @@ function parseProvisioningStatus(event) {
   return status;
 }
 
-// Parse provisioning result event
 function parseProvisioningResult(event) {
   const result = {
     id: event.id,
