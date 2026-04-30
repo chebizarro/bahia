@@ -17,10 +17,12 @@
   } from '$lib/stores/repositories.js';
 
   export let open = false;
-  export let value = null;
+  // svelte-ignore unused-export-let
+  export let value = null; // Current selection (for future pre-select feature)
   export let requirePrimaryUrl = false;
   export let allowManual = true;
-  export let context = 'service';
+  // svelte-ignore unused-export-let
+  export let context = 'service'; // Context hint (for future filtering)
 
   const dispatch = createEventDispatcher();
 

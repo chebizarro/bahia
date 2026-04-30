@@ -162,13 +162,15 @@
           <h3>🔐 Identity</h3>
           <dl>
             <dt>npub</dt>
-            <dd class="copyable" on:click={copyNpub} title="Click to copy">
+            <!-- svelte-ignore a11y-no-noninteractive-element-interactions a11y-no-noninteractive-element-to-interactive-role -->
+            <dd class="copyable" on:click={copyNpub} on:keydown={copyNpub} role="button" tabindex="0" title="Click to copy">
               <code>{soul.npub || 'N/A'}</code>
               <span class="copy-icon">📋</span>
             </dd>
             
             <dt>Public Key</dt>
-            <dd class="copyable" on:click={copyPubkey} title="Click to copy">
+            <!-- svelte-ignore a11y-no-noninteractive-element-interactions a11y-no-noninteractive-element-to-interactive-role -->
+            <dd class="copyable" on:click={copyPubkey} on:keydown={copyPubkey} role="button" tabindex="0" title="Click to copy">
               <code>{soul.agentPubkey?.slice(0, 16)}...{soul.agentPubkey?.slice(-8) || 'N/A'}</code>
               <span class="copy-icon">📋</span>
             </dd>

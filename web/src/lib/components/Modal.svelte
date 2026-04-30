@@ -55,6 +55,12 @@
     }
   }
 
+  function handleBackdropKeydown(e) {
+    if (closeOnBackdrop && e.key === 'Enter') {
+      close();
+    }
+  }
+
   function handleKeydown(e) {
     if (closeOnEscape && e.key === 'Escape') {
       close();
@@ -65,7 +71,13 @@
 <svelte:window on:keydown={handleKeydown} />
 
 {#if open}
-  <div class="modal-backdrop" on:click={handleBackdropClick}>
+  <!-- svelte-ignore a11y-no-static-element-interactions -->
+  <div 
+    class="modal-backdrop" 
+    on:click={handleBackdropClick}
+    on:keydown={handleBackdropKeydown}
+    role="presentation"
+  >
     <div
       class="modal {size}"
       role="dialog"
@@ -77,12 +89,12 @@
       {#if title}
         <div class="modal-header">
           <h2 id="modal-title" class="modal-title">{title}</h2>
-          <button class="close-button" on:click={close} aria-label="Close">
+          <button class="close-button" on:click={close} aria-label="Close" type="button">
             ×
           </button>
         </div>
       {:else}
-        <button class="close-button-only" on:click={close} aria-label="Close">
+        <button class="close-button-only" on:click={close} aria-label="Close" type="button">
           ×
         </button>
       {/if}

@@ -43,12 +43,12 @@
 
 <div class="repo-picker">
   {#if label}
-    <label class="picker-label">
+    <span class="picker-label">
       {label}
       {#if required}
         <span class="required">*</span>
       {/if}
-    </label>
+    </span>
   {/if}
 
   <div class="picker-display" class:disabled class:has-value={hasValue}>
