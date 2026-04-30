@@ -27,9 +27,11 @@ async function checkWebApp() {
     };
     
     const respHandler = (response: any) => {
-      if (!response.ok()) {
+      // Only count 4xx and 5xx as errors (not 304 cache hits)
+      const status = response.status();
+      if (status >= 400) {
         const u = new URL(response.url());
-        const key = `${response.status()} ${u.pathname}`;
+        const key = `${status} ${u.pathname}`;
         errorCounts.set(key, (errorCounts.get(key) || 0) + 1);
       }
     };
