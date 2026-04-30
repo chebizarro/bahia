@@ -1,28 +1,29 @@
 <script>
-  import { createEventDispatcher } from 'svelte';
+  let {
+    id = '',
+    name = '',
+    value = $bindable(),
+    placeholder = '',
+    disabled = false,
+    required = false,
+    error = '',
+    rows = 4,
+    oninput: onInput,
+    onchange: onChange,
+    onblur: onBlur
+  } = $props();
 
-  export let id = '';
-  export let name = '';
-  export let value = '';
-  export let placeholder = '';
-  export let disabled = false;
-  export let required = false;
-  export let error = '';
-  export let rows = 4;
-
-  const dispatch = createEventDispatcher();
-
-  function handleInput(e) {
-    value = e.target.value;
-    dispatch('input', { value });
+  function handleInput(event) {
+    value = event.currentTarget.value;
+    onInput?.(event);
   }
 
-  function handleChange(e) {
-    dispatch('change', { value: e.target.value });
+  function handleChange(event) {
+    onChange?.(event);
   }
 
-  function handleBlur(e) {
-    dispatch('blur', { value: e.target.value });
+  function handleBlur(event) {
+    onBlur?.(event);
   }
 </script>
 
@@ -33,12 +34,12 @@
   {disabled}
   {required}
   {rows}
-  {value}
+  bind:value
   class="textarea"
   class:error
-  on:input={handleInput}
-  on:change={handleChange}
-  on:blur={handleBlur}
+  oninput={handleInput}
+  onchange={handleChange}
+  onblur={handleBlur}
 ></textarea>
 
 <style>

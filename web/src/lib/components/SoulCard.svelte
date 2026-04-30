@@ -1,6 +1,6 @@
 <script>
-  export let soul;
-  
+  let { soul } = $props();
+
   const statusColors = {
     active: 'success',
     provisioning: 'warning',
@@ -8,7 +8,7 @@
     revoked: 'error',
     draft: 'muted'
   };
-  
+
   const deployStatusColors = {
     deployed: 'success',
     healthy: 'success',
@@ -18,15 +18,15 @@
     stopped: 'muted',
     pending: 'muted'
   };
-  
+
   const tierIcons = {
     lightweight: '⚡',
     standard: '🤖',
     heavy: '🦾'
   };
-  
-  $: statusColor = statusColors[soul.status] || 'default';
-  $: deployColor = deployStatusColors[soul.deployStatus] || 'muted';
+
+  const statusColor = $derived(statusColors[soul.status] || 'default');
+  const deployColor = $derived(deployStatusColors[soul.deployStatus] || 'muted');
 </script>
 
 <a href="/souls/{soul.agentId}" class="soul-card {statusColor}">

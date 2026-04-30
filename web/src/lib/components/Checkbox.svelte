@@ -1,17 +1,17 @@
 <script>
-  import { createEventDispatcher } from 'svelte';
+  let {
+    id = '',
+    name = '',
+    checked = $bindable(),
+    disabled = false,
+    label = '',
+    children,
+    onchange: onChange
+  } = $props();
 
-  export let id = '';
-  export let name = '';
-  export let checked = false;
-  export let disabled = false;
-  export let label = '';
-
-  const dispatch = createEventDispatcher();
-
-  function handleChange(e) {
-    checked = e.target.checked;
-    dispatch('change', { checked });
+  function handleChange(event) {
+    checked = event.currentTarget.checked;
+    onChange?.(event);
   }
 </script>
 
@@ -23,12 +23,12 @@
     {disabled}
     bind:checked
     class="checkbox"
-    on:change={handleChange}
+    onchange={handleChange}
   />
   {#if label}
     <span class="label">{label}</span>
   {:else}
-    <slot />
+    {@render children?.()}
   {/if}
 </label>
 

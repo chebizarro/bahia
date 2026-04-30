@@ -1,16 +1,11 @@
 <script>
-  import { createEventDispatcher } from 'svelte';
-
-  export let id;
-  export let type = 'info'; // success | error | warning | info
-  export let title = '';
-  export let message = '';
-
-  const dispatch = createEventDispatcher();
-
-  function close() {
-    dispatch('close', { id });
-  }
+  let {
+    id,
+    type = 'info',
+    title = '',
+    message = '',
+    onClose
+  } = $props();
 
   const icons = {
     success: '✓',
@@ -18,6 +13,10 @@
     warning: '⚠',
     info: 'ℹ'
   };
+
+  function close() {
+    onClose?.(id);
+  }
 </script>
 
 <div class="toast {type}" role="alert">
@@ -28,7 +27,7 @@
     {/if}
     <div class="toast-message">{message}</div>
   </div>
-  <button class="toast-close" on:click={close} aria-label="Close">
+  <button class="toast-close" onclick={close} aria-label="Close">
     ×
   </button>
 </div>
@@ -78,7 +77,7 @@
   .toast.error .toast-icon { color: var(--error); }
   .toast.warning .toast-icon { color: var(--warning); }
   .toast.info .toast-icon { color: var(--primary); }
-  
+
   .toast-content {
     flex: 1;
     min-width: 0;

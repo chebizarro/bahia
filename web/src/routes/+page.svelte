@@ -1,5 +1,4 @@
 <script>
-  import { onMount } from 'svelte';
   import Card from '$lib/components/Card.svelte';
   import Table from '$lib/components/Table.svelte';
   import Badge from '$lib/components/Badge.svelte';
@@ -7,9 +6,9 @@
   import { services, environments, states, workers, driftedStates, events, loading } from '$lib/stores';
 
   // Pending deployments state
-  let pendingDeployments = [];
-  let pendingLoading = false;
-  let pendingError = null;
+  let pendingDeployments = $state([]);
+  let pendingLoading = $state(false);
+  let pendingError = $state(null);
   let pendingCacheLoadedAt = null;
   let pendingPairFailures = 0;
 
@@ -17,25 +16,7 @@
   const PENDING_CACHE_KEY = 'bahia_dashboard_pending_deployments';
   const PENDING_CACHE_TTL_MS = 30000; // 30 seconds
 
-  $: stateColumns = [
-    { key: 'service_id', label: 'Service', render: (r) => `<code>${r.service_id?.slice(0, 8)}...</code>` },
-    { key: 'environment_id', label: 'Environment', render: (r) => `<code>${r.environment_id?.slice(0, 8)}...</code>` },
-    { key: 'drift_status', label: 'Drift', render: (r) => {
-      const variant = r.drift_status === 'in_sync' ? 'success' : r.drift_status === 'drifted' ? 'error' : 'default';
-      return `<span class="badge-${variant}">${r.drift_status}</span>`;
-    }}
-  ];
 
-  $: eventColumns = [
-    { key: 'time', label: 'Time', render: (r) => r.time?.slice(11, 19) || '-' },
-    { key: 'type', label: 'Event', render: (r) => {
-      const type = r.type || '';
-      const variant = eventBadgeVariant(type);
-      const escaped = escapeHtml(type);
-      return `<span class="badge ${variant}">${escaped}</span>`;
-    }},
-    { key: 'entity_id', label: 'Entity', render: (r) => r.entity_id ? `${r.entity_id.slice(0, 8)}...` : '-' }
-  ];
 
   // Helper: determine badge variant for event type
   function eventBadgeVariant(type) {
@@ -132,8 +113,8 @@
 
     try {
       // Reuse global stores if available, fallback to API calls
-      let servicesList = $services;
-      let envsList = $environments;
+      let servicesList = services;
+      let envsList = environments;
 
       if (servicesList.length === 0 || envsList.length === 0) {
         const [fetchedServices, fetchedEnvs] = await Promise.all([
@@ -196,16 +177,34 @@
     }
   }
 
-  onMount(() => {
-    loadPendingDeployments();
+  $effect(() => {
+    queueMicrotask(() => loadPendingDeployments());
   });
 
-  $: pendingCount = pendingDeployments.length;
-  $: pendingSubtitle = pendingError
+  let stateColumns = $derived([
+    { key: 'service_id', label: 'Service', render: (r) => `<code>${r.service_id?.slice(0, 8)}...</code>` },
+    { key: 'environment_id', label: 'Environment', render: (r) => `<code>${r.environment_id?.slice(0, 8)}...</code>` },
+    { key: 'drift_status', label: 'Drift', render: (r) => {
+      const variant = r.drift_status === 'in_sync' ? 'success' : r.drift_status === 'drifted' ? 'error' : 'default';
+      return `<span class="badge-${variant}">${r.drift_status}</span>`;
+    }}
+  ]);
+  let eventColumns = $derived([
+    { key: 'time', label: 'Time', render: (r) => r.time?.slice(11, 19) || '-' },
+    { key: 'type', label: 'Event', render: (r) => {
+      const type = r.type || '';
+      const variant = eventBadgeVariant(type);
+      const escaped = escapeHtml(type);
+      return `<span class="badge ${variant}">${escaped}</span>`;
+    }},
+    { key: 'entity_id', label: 'Entity', render: (r) => r.entity_id ? `${r.entity_id.slice(0, 8)}...` : '-' }
+  ]);
+  let pendingCount = $derived(pendingDeployments.length);
+  let pendingSubtitle = $derived(pendingError
     ? 'Unable to load'
     : pendingCount > 0
       ? 'Needs review'
-      : 'All clear';
+      : 'All clear');
 </script>
 
 <div class="dashboard">
@@ -217,14 +216,14 @@
   </div>
 
   <div class="stats">
-    <Card title="Services" value={$services.length} subtitle="Total registered" />
-    <Card title="Environments" value={$environments.length} subtitle="Configured" />
-    <Card title="Workers" value={$workers.length} subtitle="Available" />
+    <Card title="Services" value={services.length} subtitle="Total registered" />
+    <Card title="Environments" value={environments.length} subtitle="Configured" />
+    <Card title="Workers" value={workers.length} subtitle="Available" />
     <Card 
       title="Drifted" 
-      value={$driftedStates.length} 
+      value={driftedStates().length} 
       subtitle="Need attention"
-      status={$driftedStates.length > 0 ? 'error' : 'success'}
+      status={driftedStates().length > 0 ? 'error' : 'success'}
     />
     <a href="/deployments/pending" class="card-link">
       <Card
@@ -239,13 +238,13 @@
   <div class="sections">
     <section>
       <h2>Environment States</h2>
-      <Table columns={stateColumns} data={$states.slice(0, 10)} />
+      <Table columns={stateColumns} data={states.slice(0, 10)} />
     </section>
 
     <section>
       <h2>Recent Activity</h2>
-      <Table columns={eventColumns} data={$events.slice(0, 10)} />
-      {#if $events.length === 0}
+      <Table columns={eventColumns} data={events.slice(0, 10)} />
+      {#if events.length === 0}
         <p class="hint">Events will appear here in real-time via SSE</p>
       {/if}
     </section>

@@ -1,36 +1,45 @@
 <script>
-  import { page } from '$app/stores';
-  import { onMount } from 'svelte';
+  import { page } from '$app/state';
   import Card from '$lib/components/Card.svelte';
   import Table from '$lib/components/Table.svelte';
   import ErrorState from '$lib/components/ErrorState.svelte';
   import EmptyState from '$lib/components/EmptyState.svelte';
   import { api } from '$lib/api/client.js';
 
-  let worker = null;
-  let loading = true;
-  let error = null;
+  let worker = $state(null);
+  let loading = $state(true);
+  let error = $state(null);
 
-  $: pubkey = $page.params.pubkey;
+  let pubkey = $derived(page.params.pubkey);
 
-  onMount(async () => {
+  $effect(() => {
+    const key = pubkey;
+    if (!key) return;
+    void loadWorker(key);
+  });
+
+  async function loadWorker(key) {
+    loading = true;
+    error = null;
+    worker = null;
+
     try {
-      const decodedPubkey = decodeURIComponent(pubkey);
+      const decodedPubkey = decodeURIComponent(key);
       worker = await api.getWorker(decodedPubkey);
     } catch (err) {
       error = err.message || 'Failed to load worker';
     } finally {
       loading = false;
     }
-  });
+  }
 
-  $: capabilitiesColumns = [
+  let capabilitiesColumns = $derived([
     { key: 'name', label: 'Capability' }
-  ];
+  ]);
 
-  $: capabilitiesData = worker?.capabilities 
+  let capabilitiesData = $derived(worker?.capabilities 
     ? worker.capabilities.map(cap => ({ name: cap }))
-    : [];
+    : []);
 </script>
 
 <div class="page">

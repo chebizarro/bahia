@@ -10,22 +10,23 @@
   import EmptyState from '$lib/components/EmptyState.svelte';
   import { environments, loading, loadEnvironments } from '$lib/stores';
   import { api } from '$lib/api/client.js';
-  import { onMount } from 'svelte';
 
-  onMount(() => loadEnvironments());
+  $effect(() => {
+    void loadEnvironments();
+  });
 
   // Create modal state
-  let createOpen = false;
-  let creating = false;
-  let createError = null;
+  let createOpen = $state(false);
+  let creating = $state(false);
+  let createError = $state(null);
 
-  let createForm = {
+  let createForm = $state({
     name: '',
     loom_worker_selector: '',
     runtime_config: '{}',
     deploy_strategy: 'replace',
     protected: false
-  };
+  });
 
   const deployStrategyOptions = [
     { value: 'replace', label: 'Replace' },
@@ -33,12 +34,12 @@
     { value: 'canary', label: 'Canary' }
   ];
 
-  $: columns = [
+  let columns = $derived([
     { key: 'name', label: 'Name' },
     { key: 'deploy_strategy', label: 'Strategy' },
     { key: 'protected', label: 'Protected', render: (r) => r.protected ? '🔒' : '-' },
     { key: 'id', label: 'ID', render: (r) => `<code>${r.id?.slice(0, 8)}...</code>` }
-  ];
+  ]);
 
   function openCreateModal() {
     createOpen = true;
@@ -106,30 +107,30 @@
   <div class="header">
     <div class="title-row">
       <h1>Environments</h1>
-      <span class="count">{$environments.length} environments</span>
+      <span class="count">{environments.length} environments</span>
     </div>
-    <LoadingButton variant="primary" on:click={openCreateModal}>
+    <LoadingButton variant="primary" onclick={openCreateModal}>
       Create Environment
     </LoadingButton>
   </div>
 
-  {#if $loading.environments}
+  {#if loading.environments}
     <p class="loading">Loading...</p>
-  {:else if $environments.length === 0}
+  {:else if environments.length === 0}
     <EmptyState
       icon="🌍"
       title="No environments yet"
       message="Create your first environment to define deployment targets"
       actionLabel="Create Environment"
-      on:click={openCreateModal}
+      onAction={openCreateModal}
     />
   {:else}
-    <Table {columns} data={$environments} onRowClick={(row) => goto(`/environments/${row.id}`)} />
+    <Table {columns} data={environments} onRowClick={(row) => goto(`/environments/${row.id}`)} />
   {/if}
 </div>
 
-<Modal bind:open={createOpen} title="Create Environment" on:close={closeCreateModal}>
-  <form on:submit|preventDefault={handleCreate} class="create-form">
+<Modal bind:open={createOpen} title="Create Environment" onClose={closeCreateModal}>
+  <form onsubmit={(event) => { event.preventDefault(); handleCreate(); }} class="create-form">
     <div class="form-field">
       <label for="env-name">Name *</label>
       <Input
@@ -190,7 +191,7 @@
       <LoadingButton
         type="button"
         variant="secondary"
-        on:click={closeCreateModal}
+        onclick={closeCreateModal}
         disabled={creating}
       >
         Cancel

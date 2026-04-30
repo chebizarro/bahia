@@ -1,26 +1,25 @@
 <script>
   import { goto } from '$app/navigation';
-  import { onMount } from 'svelte';
   import Table from '$lib/components/Table.svelte';
   import EmptyState from '$lib/components/EmptyState.svelte';
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
   import LoadingButton from '$lib/components/LoadingButton.svelte';
   import { api } from '$lib/api/client.js';
 
-  let pendingIntents = [];
-  let loading = true;
-  let error = null;
+  let pendingIntents = $state([]);
+  let loading = $state(true);
+  let error = $state(null);
 
   // Action state
-  let actionIntent = null;
-  let approving = false;
-  let rejecting = false;
-  let actionError = null;
-  let approveOpen = false;
-  let rejectOpen = false;
+  let actionIntent = $state(null);
+  let approving = $state(false);
+  let rejecting = $state(false);
+  let actionError = $state(null);
+  let approveOpen = $state(false);
+  let rejectOpen = $state(false);
 
   // Columns for the pending intents table
-  $: columns = [
+  let columns = $derived([
     { key: 'service_name', label: 'Service' },
     { key: 'environment_name', label: 'Environment' },
     { 
@@ -44,10 +43,10 @@
         </div>
       `
     }
-  ];
+  ]);
 
-  onMount(() => {
-    loadPendingIntents();
+  $effect(() => {
+    void loadPendingIntents();
   });
 
   async function loadPendingIntents() {
@@ -193,7 +192,7 @@
   }
 </script>
 
-<svelte:body on:click={handleTableClick} />
+<svelte:body onclick={handleTableClick} />
 
 <div class="page">
   <div class="header">
@@ -232,9 +231,9 @@
   confirmLabel="Approve"
   variant="default"
   loading={approving}
-  on:confirm={handleApprove}
-  on:cancel={() => { approveOpen = false; actionError = null; }}
-  on:close={() => { approveOpen = false; actionError = null; }}
+  onConfirm={handleApprove}
+  onCancel={() => { approveOpen = false; actionError = null; }}
+  onClose={() => { approveOpen = false; actionError = null; }}
 >
   {#if actionError}
     <p class="dialog-error">{actionError}</p>
@@ -249,9 +248,9 @@
   confirmLabel="Reject"
   variant="danger"
   loading={rejecting}
-  on:confirm={handleReject}
-  on:cancel={() => { rejectOpen = false; actionError = null; }}
-  on:close={() => { rejectOpen = false; actionError = null; }}
+  onConfirm={handleReject}
+  onCancel={() => { rejectOpen = false; actionError = null; }}
+  onClose={() => { rejectOpen = false; actionError = null; }}
 >
   {#if actionError}
     <p class="dialog-error">{actionError}</p>

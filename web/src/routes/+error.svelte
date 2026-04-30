@@ -1,12 +1,8 @@
 <script>
-  import { page } from '$app/stores';
+  import { page } from '$app/state';
   import ErrorState from '$lib/components/ErrorState.svelte';
 
-  $: status = $page.status || 500;
-  $: error = $page.error;
 
-  $: title = getTitle(status);
-  $: message = error?.message || getDefaultMessage(status);
 
   function getTitle(status) {
     switch (status) {
@@ -41,12 +37,16 @@
       window.location.href = '/';
     }
   }
+  let status = $derived(page.status || 500);
+  let error = $derived(page.error);
+  let title = $derived(getTitle(status));
+  let message = $derived(error?.message || getDefaultMessage(status));
 </script>
 
 <ErrorState {title} {message} showIcon={true}>
   <div class="actions">
     <a href="/" class="button button-primary">Go to Dashboard</a>
-    <button type="button" class="button button-secondary" on:click={goBack}>
+    <button type="button" class="button button-secondary" onclick={goBack}>
       Go Back
     </button>
   </div>

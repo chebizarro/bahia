@@ -1,5 +1,4 @@
 <script>
-  import { onMount } from 'svelte';
   import { api } from '$lib/api/client.js';
   import { authState } from '$lib/stores/auth.js';
   import { toast } from '$lib/components/toast.js';
@@ -7,13 +6,13 @@
   import Badge from '$lib/components/Badge.svelte';
   import EmptyState from '$lib/components/EmptyState.svelte';
 
-  let orgs = [];
-  let myInvites = [];
-  let loading = true;
-  let error = null;
+  let orgs = $state([]);
+  let myInvites = $state([]);
+  let loading = $state(true);
+  let error = $state(null);
 
-  onMount(async () => {
-    await loadData();
+  $effect(() => {
+    void loadData();
   });
 
   async function loadData() {
@@ -68,7 +67,7 @@
 {:else if error}
   <div class="error-state">
     <p>Error: {error}</p>
-    <button on:click={loadData}>Retry</button>
+    <button onclick={loadData}>Retry</button>
   </div>
 {:else}
   {#if myInvites.length > 0}
@@ -80,9 +79,9 @@
             <div class="invite-card">
               <div class="invite-info">
                 <strong>{invite.org_display_name || invite.org_name}</strong>
-                <Badge type={getRoleBadgeType(invite.role)}>{invite.role}</Badge>
+                <Badge variant={getRoleBadgeType(invite.role)}>{invite.role}</Badge>
               </div>
-              <button class="btn-success" on:click={() => acceptInvite(invite)}>
+              <button class="btn-success" onclick={() => acceptInvite(invite)}>
                 Accept
               </button>
             </div>
@@ -107,7 +106,7 @@
               <div class="org-content">
                 <h3>{org.display_name || org.name}</h3>
                 <p class="org-name">@{org.name}</p>
-                <Badge type={getRoleBadgeType(org.role)}>{org.role}</Badge>
+                <Badge variant={getRoleBadgeType(org.role)}>{org.role}</Badge>
               </div>
             </Card>
           </a>

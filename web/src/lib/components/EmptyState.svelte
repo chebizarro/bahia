@@ -1,9 +1,14 @@
 <script>
-  export let title = 'No data';
-  export let message = '';
-  export let icon = '📭';
-  export let actionLabel = '';
-  export let showIcon = true;
+  let {
+    title = 'No data',
+    message = '',
+    icon = '📭',
+    actionLabel = '',
+    showIcon = true,
+    onAction,
+    children,
+    action
+  } = $props();
 </script>
 
 <div class="empty-state">
@@ -14,17 +19,17 @@
   {#if message}
     <p class="message">{message}</p>
   {/if}
-  {#if actionLabel || $$slots.action}
+  {#if actionLabel || action}
     <div class="actions">
       {#if actionLabel}
-        <button class="action-button" on:click>
+        <button class="action-button" onclick={onAction}>
           {actionLabel}
         </button>
       {/if}
-      <slot name="action" />
+      {@render action?.()}
     </div>
   {/if}
-  <slot />
+  {@render children?.()}
 </div>
 
 <style>

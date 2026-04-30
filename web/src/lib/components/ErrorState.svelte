@@ -1,18 +1,15 @@
 <script>
-  import { createEventDispatcher } from 'svelte';
   import LoadingButton from './LoadingButton.svelte';
 
-  export let title = 'Error';
-  export let message = 'An error occurred.';
-  export let details = '';
-  export let resetLabel = '';
-  export let showIcon = true;
-
-  const dispatch = createEventDispatcher();
-
-  function handleReset() {
-    dispatch('reset');
-  }
+  let {
+    title = 'Error',
+    message = 'An error occurred.',
+    details = '',
+    resetLabel = '',
+    showIcon = true,
+    onReset,
+    children
+  } = $props();
 </script>
 
 <div class="error-state">
@@ -29,12 +26,12 @@
   {/if}
   {#if resetLabel}
     <div class="actions">
-      <LoadingButton variant="primary" on:click={handleReset}>
+      <LoadingButton variant="primary" onclick={onReset}>
         {resetLabel}
       </LoadingButton>
     </div>
   {/if}
-  <slot />
+  {@render children?.()}
 </div>
 
 <style>

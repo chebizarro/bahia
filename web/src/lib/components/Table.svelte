@@ -1,7 +1,9 @@
 <script>
-  export let columns = [];
-  export let data = [];
-  export let onRowClick = null;
+  let { columns = [], data = [], onRowClick = null } = $props();
+
+  function handleRowClick(row, event) {
+    onRowClick?.(row, event);
+  }
 </script>
 
 <div class="table-container">
@@ -15,7 +17,7 @@
     </thead>
     <tbody>
       {#each data as row}
-        <tr class:clickable={onRowClick} on:click={() => onRowClick?.(row)}>
+        <tr class:clickable={onRowClick} onclick={(event) => handleRowClick(row, event)}>
           {#each columns as col}
             <td>
               {#if col.render}

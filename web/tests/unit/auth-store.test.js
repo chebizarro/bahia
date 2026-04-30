@@ -1,5 +1,4 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
-import { get } from 'svelte/store';
 
 // Mock browser environment
 global.window = global;
@@ -43,6 +42,10 @@ describe('Auth Store', () => {
       nip44: false
     });
     nip07Module.detectNip07.mockReturnValue({ available: true });
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ data: { token: 'test-token', expires_at: new Date(Date.now() + 3600000).toISOString() } })
+    });
     
     // Dynamically import auth module to get fresh state
     authModule = await import('../../src/lib/stores/auth.js');
@@ -57,7 +60,7 @@ describe('Auth Store', () => {
     it('should initialize with unauthenticated status when no session exists', async () => {
       await authModule.initializeAuth();
       
-      const state = get(authModule.authState);
+      const state = authModule.authState;
       
       expect(state.status).toBe('unauthenticated');
       expect(state.extensionAvailable).toBe(true);
@@ -75,7 +78,7 @@ describe('Auth Store', () => {
       
       await authModule.initializeAuth();
       
-      const state = get(authModule.authState);
+      const state = authModule.authState;
       
       expect(state.status).toBe('authenticated');
       expect(state.pubkey).toBe(session.pubkey);
@@ -95,7 +98,7 @@ describe('Auth Store', () => {
       
       await authModule.initializeAuth();
       
-      const state = get(authModule.authState);
+      const state = authModule.authState;
       
       expect(state.status).toBe('unauthenticated');
       expect(state.extensionAvailable).toBe(false);
@@ -121,7 +124,7 @@ describe('Auth Store', () => {
       
       await authModule.initializeAuth();
       
-      const state = get(authModule.authState);
+      const state = authModule.authState;
       
       expect(state.capabilities).toEqual(capabilities);
     });
@@ -131,7 +134,7 @@ describe('Auth Store', () => {
       
       await authModule.initializeAuth();
       
-      const state = get(authModule.authState);
+      const state = authModule.authState;
       
       expect(state.status).toBe('unauthenticated');
       expect(state.pubkey).toBeNull();
@@ -146,7 +149,7 @@ describe('Auth Store', () => {
       
       await authModule.initializeAuth();
       
-      const state = get(authModule.authState);
+      const state = authModule.authState;
       
       expect(state.status).toBe('unauthenticated');
     });
@@ -156,7 +159,7 @@ describe('Auth Store', () => {
       
       await authModule.initializeAuth();
       
-      const state = get(authModule.authState);
+      const state = authModule.authState;
       
       expect(state.status).toBe('error');
       expect(state.error).toBe('Init failed');
@@ -173,7 +176,7 @@ describe('Auth Store', () => {
       
       await authModule.login();
       
-      const state = get(authModule.authState);
+      const state = authModule.authState;
       
       expect(state.status).toBe('authenticated');
       expect(state.pubkey).toBe(pubkey);
@@ -199,7 +202,7 @@ describe('Auth Store', () => {
       
       await authModule.login();
       
-      const state = get(authModule.authState);
+      const state = authModule.authState;
       
       expect(state.capabilities).toEqual(capabilities);
     });
@@ -218,7 +221,7 @@ describe('Auth Store', () => {
       
       await expect(authModule.login()).rejects.toThrow('User denied');
       
-      const state = get(authModule.authState);
+      const state = authModule.authState;
       
       // Should restore previous session
       expect(state.status).toBe('authenticated');
@@ -230,7 +233,7 @@ describe('Auth Store', () => {
       
       await expect(authModule.login()).rejects.toThrow('Extension error');
       
-      const state = get(authModule.authState);
+      const state = authModule.authState;
       
       expect(state.status).toBe('error');
       expect(state.error).toBe('Extension error');
@@ -244,7 +247,7 @@ describe('Auth Store', () => {
       
       await authModule.login();
       
-      const state = get(authModule.authState);
+      const state = authModule.authState;
       
       // Should still authenticate with empty relays
       expect(state.status).toBe('authenticated');
@@ -261,7 +264,7 @@ describe('Auth Store', () => {
       // Then logout
       authModule.logout();
       
-      const state = get(authModule.authState);
+      const state = authModule.authState;
       
       expect(state.status).toBe('unauthenticated');
       expect(state.pubkey).toBeNull();
@@ -277,7 +280,7 @@ describe('Auth Store', () => {
       
       authModule.logout();
       
-      const state = get(authModule.authState);
+      const state = authModule.authState;
       
       expect(state.extensionAvailable).toBe(true);
     });
@@ -295,7 +298,7 @@ describe('Auth Store', () => {
       await authModule.login();
       authModule.logout();
       
-      const state = get(authModule.authState);
+      const state = authModule.authState;
       
       expect(state.capabilities).toEqual(capabilities);
     });
@@ -351,7 +354,7 @@ describe('Auth Store', () => {
     it('isAuthenticated should be false when unauthenticated', async () => {
       await authModule.initializeAuth();
       
-      const isAuth = get(authModule.isAuthenticated);
+      const isAuth = authModule.isAuthenticated();
       
       expect(isAuth).toBe(false);
     });
@@ -359,7 +362,7 @@ describe('Auth Store', () => {
     it('isAuthenticated should be true when authenticated', async () => {
       await authModule.login();
       
-      const isAuth = get(authModule.isAuthenticated);
+      const isAuth = authModule.isAuthenticated();
       
       expect(isAuth).toBe(true);
     });
@@ -367,7 +370,7 @@ describe('Auth Store', () => {
     it('currentUser should be null when unauthenticated', async () => {
       await authModule.initializeAuth();
       
-      const user = get(authModule.currentUser);
+      const user = authModule.currentUser();
       
       expect(user).toBeNull();
     });
@@ -381,7 +384,7 @@ describe('Auth Store', () => {
       
       await authModule.login();
       
-      const user = get(authModule.currentUser);
+      const user = authModule.currentUser();
       
       expect(user).toBeTruthy();
       expect(user.pubkey).toBe(pubkey);

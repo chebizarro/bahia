@@ -2,19 +2,19 @@
   import { toasts, removeToast } from './toast.js';
   import Toast from './Toast.svelte';
 
-  function handleClose(event) {
-    removeToast(event.detail.id);
+  function handleClose(id) {
+    removeToast(id);
   }
 </script>
 
 <div class="toast-container">
-  {#each $toasts as toast (toast.id)}
+  {#each toasts as toast (toast.id)}
     <Toast
       id={toast.id}
       type={toast.type}
       title={toast.title}
       message={toast.message}
-      on:close={handleClose}
+      onClose={handleClose}
     />
   {/each}
 </div>

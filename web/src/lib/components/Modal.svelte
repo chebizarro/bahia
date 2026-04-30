@@ -1,81 +1,72 @@
 <script>
-  import { createEventDispatcher, onMount, onDestroy } from 'svelte';
+  let {
+    open = $bindable(),
+    title = '',
+    closeOnBackdrop = true,
+    closeOnEscape = true,
+    size = 'md',
+    onClose,
+    onOpened,
+    onClosed,
+    children
+  } = $props();
 
-  export let open = false;
-  export let title = '';
-  export let closeOnBackdrop = true;
-  export let closeOnEscape = true;
-  export let size = 'md'; // sm | md | lg | xl
-
-  const dispatch = createEventDispatcher();
   let previouslyFocused = null;
-  let modalElement = null;
+  let modalElement = $state(null);
+  let wasOpen = $state(false);
 
-  onMount(() => {
-    if (open) {
-      handleOpen();
+  $effect(() => {
+    if (open && !wasOpen) {
+      previouslyFocused = document.activeElement;
+      onOpened?.();
+      modalElement?.focus();
+    } else if (!open && wasOpen) {
+      onClosed?.();
+      previouslyFocused?.focus();
     }
+
+    wasOpen = open;
   });
 
-  onDestroy(() => {
-    if (previouslyFocused) {
-      previouslyFocused.focus();
-    }
+  $effect(() => {
+    return () => {
+      previouslyFocused?.focus();
+    };
   });
-
-  $: if (open) {
-    handleOpen();
-  } else {
-    handleClose();
-  }
-
-  function handleOpen() {
-    previouslyFocused = document.activeElement;
-    dispatch('opened');
-    if (modalElement) {
-      modalElement.focus();
-    }
-  }
-
-  function handleClose() {
-    dispatch('closed');
-  }
 
   function close() {
     open = false;
-    dispatch('close');
-    if (previouslyFocused) {
-      previouslyFocused.focus();
-    }
+    onClose?.();
+    previouslyFocused?.focus();
   }
 
-  function handleBackdropClick(e) {
-    if (closeOnBackdrop && e.target === e.currentTarget) {
+  function handleBackdropClick(event) {
+    if (closeOnBackdrop && event.target === event.currentTarget) {
       close();
     }
   }
 
-  function handleBackdropKeydown(e) {
-    if (closeOnBackdrop && e.key === 'Enter') {
+  function handleBackdropKeydown(event) {
+    if (closeOnBackdrop && event.key === 'Enter') {
       close();
     }
   }
 
-  function handleKeydown(e) {
-    if (closeOnEscape && e.key === 'Escape') {
+  function handleKeydown(event) {
+    if (closeOnEscape && event.key === 'Escape') {
       close();
     }
   }
 </script>
 
-<svelte:window on:keydown={handleKeydown} />
+<svelte:window onkeydown={handleKeydown} />
 
 {#if open}
-  <!-- svelte-ignore a11y-no-static-element-interactions -->
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div 
     class="modal-backdrop" 
-    on:click={handleBackdropClick}
-    on:keydown={handleBackdropKeydown}
+    onclick={handleBackdropClick}
+    onkeydown={handleBackdropKeydown}
     role="presentation"
   >
     <div
@@ -89,17 +80,17 @@
       {#if title}
         <div class="modal-header">
           <h2 id="modal-title" class="modal-title">{title}</h2>
-          <button class="close-button" on:click={close} aria-label="Close" type="button">
+          <button class="close-button" onclick={close} aria-label="Close" type="button">
             ×
           </button>
         </div>
       {:else}
-        <button class="close-button-only" on:click={close} aria-label="Close" type="button">
+        <button class="close-button-only" onclick={close} aria-label="Close" type="button">
           ×
         </button>
       {/if}
       <div class="modal-body">
-        <slot />
+        {@render children?.()}
       </div>
     </div>
   </div>
@@ -133,7 +124,7 @@
   .modal.md { width: 100%; max-width: 600px; }
   .modal.lg { width: 100%; max-width: 800px; }
   .modal.xl { width: 100%; max-width: 1200px; }
-  
+
   .modal-header {
     display: flex;
     align-items: center;

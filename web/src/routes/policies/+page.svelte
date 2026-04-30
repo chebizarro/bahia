@@ -1,6 +1,5 @@
 <script>
   import { goto } from '$app/navigation';
-  import { onMount } from 'svelte';
   import Table from '$lib/components/Table.svelte';
   import Modal from '$lib/components/Modal.svelte';
   import Input from '$lib/components/Input.svelte';
@@ -11,30 +10,34 @@
   import EmptyState from '$lib/components/EmptyState.svelte';
   import { api } from '$lib/api/client.js';
 
-  let policies = [];
-  let environments = [];
-  let loading = true;
-  let error = null;
+  let policies = $state([]);
+  let environments = $state([]);
+  let loading = $state(true);
+  let error = $state(null);
 
   // Create modal state
-  let createOpen = false;
-  let creating = false;
-  let createError = null;
+  let createOpen = $state(false);
+  let creating = $state(false);
+  let createError = $state(null);
 
-  let createForm = {
+  let createForm = $state({
     name: '',
     environment_id: '',
     rules: '[]',
     enforcement: 'warn',
     enabled: true
-  };
+  });
 
   const enforcementOptions = [
     { value: 'warn', label: 'Warn' },
     { value: 'block', label: 'Block' }
   ];
 
-  onMount(async () => {
+  $effect(() => {
+    void loadPolicyList();
+  });
+
+  async function loadPolicyList() {
     try {
       [policies, environments] = await Promise.all([
         api.listPolicies().catch(() => []),
@@ -46,14 +49,14 @@
     } finally {
       loading = false;
     }
-  });
+  }
 
-  $: environmentOptions = [
+  let environmentOptions = $derived([
     { value: '', label: 'Global policy' },
     ...environments.map(env => ({ value: env.id, label: env.name }))
-  ];
+  ]);
 
-  $: columns = [
+  let columns = $derived([
     { key: 'name', label: 'Name' },
     {
       key: 'environment_id',
@@ -72,7 +75,7 @@
       render: (r) => Array.isArray(r.rules) ? `${r.rules.length} rule${r.rules.length !== 1 ? 's' : ''}` : '0 rules'
     },
     { key: 'id', label: 'ID', render: (r) => `<code>${r.id?.slice(0, 8)}...</code>` }
-  ];
+  ]);
 
   function openCreateModal() {
     createOpen = true;
@@ -152,7 +155,7 @@
       <h1>Policies</h1>
       <span class="count">{policies.length} policies</span>
     </div>
-    <LoadingButton variant="primary" on:click={openCreateModal}>
+    <LoadingButton variant="primary" onclick={openCreateModal}>
       Create Policy
     </LoadingButton>
   </div>
@@ -167,15 +170,15 @@
       title="No policies yet"
       message="Create your first deployment policy to enforce rules and controls"
       actionLabel="Create Policy"
-      on:click={openCreateModal}
+      onAction={openCreateModal}
     />
   {:else}
     <Table {columns} data={policies} onRowClick={(row) => goto(`/policies/${row.id}`)} />
   {/if}
 </div>
 
-<Modal bind:open={createOpen} title="Create Policy" on:close={closeCreateModal}>
-  <form on:submit|preventDefault={handleCreate} class="create-form">
+<Modal bind:open={createOpen} title="Create Policy" onClose={closeCreateModal}>
+  <form onsubmit={(event) => { event.preventDefault(); handleCreate(); }} class="create-form">
     <div class="form-field">
       <label for="policy-name">Name *</label>
       <Input
@@ -239,7 +242,7 @@
       <LoadingButton
         type="button"
         variant="secondary"
-        on:click={closeCreateModal}
+        onclick={closeCreateModal}
         disabled={creating}
       >
         Cancel

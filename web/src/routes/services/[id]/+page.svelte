@@ -1,8 +1,6 @@
 <script>
-  import { page } from '$app/stores';
+  import { page } from '$app/state';
   import { goto } from '$app/navigation';
-  import { onMount } from 'svelte';
-  import { get } from 'svelte/store';
   import Card from '$lib/components/Card.svelte';
   import Table from '$lib/components/Table.svelte';
   import Modal from '$lib/components/Modal.svelte';
@@ -22,37 +20,33 @@
   } from '$lib/stores/repositories.js';
   import { fetchRepoBranches, isNostrRepository } from '$lib/nostr/branches.js';
 
-  let service = null;
-  let builds = [];
-  let artifacts = [];
-  let secrets = [];
-  let loading = true;
-  let error = null;
+  let service = $state(null);
+  let builds = $state([]);
+  let artifacts = $state([]);
+  let secrets = $state([]);
+  let loading = $state(true);
+  let error = $state(null);
+  let serviceId = $derived(page.params.id);
 
-  $: serviceId = $page.params.id;
 
   // Edit modal state
-  let editOpen = false;
-  let editing = false;
-  let editError = null;
-  let editForm = {
+  let editOpen = $state(false);
+  let editing = $state(false);
+  let editError = $state(null);
+  let editForm = $state({
     name: '',
     repositorySelection: createManualRepositorySelection(''),
     artifact_repo: '',
     runtime_type: '',
     default_branch: ''
-  };
+  });
 
   // Branch detection state for edit form
-  let editDetectedBranches = [];
-  let editDetectedDefaultBranch = null;
-  let editBranchesLoading = false;
-  let editBranchesError = null;
+  let editDetectedBranches = $state([]);
+  let editDetectedDefaultBranch = $state(null);
+  let editBranchesLoading = $state(false);
+  let editBranchesError = $state(null);
 
-  // Watch for edit form repository selection changes
-  $: if (editOpen && editForm.repositorySelection) {
-    handleEditRepositoryChange(editForm.repositorySelection);
-  }
 
   async function handleEditRepositoryChange(selection) {
     // Reset branch state
@@ -78,42 +72,38 @@
     }
   }
 
-  $: editBranchOptions = editDetectedBranches.map(b => ({
-    value: b,
-    label: b === editDetectedDefaultBranch ? `${b} (default)` : b
-  }));
 
   // Delete modal state
-  let deleteOpen = false;
-  let deleting = false;
-  let deleteError = null;
-  let deleteForce = false;
+  let deleteOpen = $state(false);
+  let deleting = $state(false);
+  let deleteError = $state(null);
+  let deleteForce = $state(false);
 
   // Secret create modal state
-  let secretCreateOpen = false;
-  let secretCreating = false;
-  let secretCreateError = null;
-  let secretForm = {
+  let secretCreateOpen = $state(false);
+  let secretCreating = $state(false);
+  let secretCreateError = $state(null);
+  let secretForm = $state({
     name: '',
     value: ''
-  };
+  });
 
   // Secret delete modal state
-  let secretDeleteOpen = false;
-  let secretDeleting = false;
-  let secretDeleteError = null;
-  let secretToDelete = null;
+  let secretDeleteOpen = $state(false);
+  let secretDeleting = $state(false);
+  let secretDeleteError = $state(null);
+  let secretToDelete = $state(null);
 
   // Artifact registration modal state
-  let artifactRegisterOpen = false;
-  let artifactRegistering = false;
-  let artifactRegisterError = null;
-  let artifactForm = {
+  let artifactRegisterOpen = $state(false);
+  let artifactRegistering = $state(false);
+  let artifactRegisterError = $state(null);
+  let artifactForm = $state({
     name: '',
     version: '',
     digest: '',
     metadata: ''
-  };
+  });
 
   const runtimeOptions = [
     { value: 'docker', label: 'Docker' },
@@ -122,13 +112,26 @@
     { value: 'podman', label: 'Podman' }
   ];
 
-  onMount(async () => {
+  $effect(() => {
+    const id = serviceId;
+    if (!id) return;
+    void loadServiceDetail(id);
+  });
+
+  async function loadServiceDetail(id) {
+    loading = true;
+    error = null;
+    service = null;
+    builds = [];
+    artifacts = [];
+    secrets = [];
+
     try {
       const [loadedService, loadedBuilds, loadedArtifacts, loadedSecrets] = await Promise.all([
-        api.getService(serviceId),
-        api.listBuilds(serviceId).catch(() => []),
-        api.listArtifacts(serviceId).catch(() => []),
-        api.listSecrets(serviceId).catch(() => [])
+        api.getService(id),
+        api.listBuilds(id).catch(() => []),
+        api.listArtifacts(id).catch(() => []),
+        api.listSecrets(id).catch(() => [])
       ]);
 
       service = loadedService;
@@ -142,20 +145,9 @@
     } finally {
       loading = false;
     }
-  });
+  }
 
-  $: buildColumns = [
-    { key: 'git_sha', label: 'Commit', render: (r) => `<code>${r.git_sha?.slice(0, 7)}</code>` },
-    { key: 'git_ref', label: 'Ref' },
-    { key: 'status', label: 'Status' },
-    { key: 'ci_system', label: 'CI' }
-  ];
 
-  $: artifactColumns = [
-    { key: 'image_tag', label: 'Tag' },
-    { key: 'image_digest', label: 'Digest', render: (r) => `<code>${r.image_digest?.slice(7, 19)}...</code>` },
-    { key: 'size_bytes', label: 'Size', render: (r) => formatBytes(r.size_bytes) }
-  ];
 
   function formatDate(timestamp) {
     if (!timestamp) return '-';
@@ -175,7 +167,7 @@
   function openEditModal() {
     if (!service) return;
     
-    const currentRepositories = get(repositories);
+    const currentRepositories = repositories;
 
     editForm = {
       name: service.name,
@@ -418,6 +410,27 @@
       artifactRegistering = false;
     }
   }
+  // Watch for edit form repository selection changes
+  $effect(() => {
+    if (editOpen && editForm.repositorySelection) {
+      handleEditRepositoryChange(editForm.repositorySelection);
+    }
+  });
+  let editBranchOptions = $derived(editDetectedBranches.map(b => ({
+    value: b,
+    label: b === editDetectedDefaultBranch ? `${b} (default)` : b
+  })));
+  let buildColumns = $derived([
+    { key: 'git_sha', label: 'Commit', render: (r) => `<code>${r.git_sha?.slice(0, 7)}</code>` },
+    { key: 'git_ref', label: 'Ref' },
+    { key: 'status', label: 'Status' },
+    { key: 'ci_system', label: 'CI' }
+  ]);
+  let artifactColumns = $derived([
+    { key: 'image_tag', label: 'Tag' },
+    { key: 'image_digest', label: 'Digest', render: (r) => `<code>${r.image_digest?.slice(7, 19)}...</code>` },
+    { key: 'size_bytes', label: 'Size', render: (r) => formatBytes(r.size_bytes) }
+  ]);
 </script>
 
 <div class="page">
@@ -431,10 +444,10 @@
     <div class="header">
       <h1>{service.name}</h1>
       <div class="actions">
-        <LoadingButton variant="secondary" on:click={openEditModal}>
+        <LoadingButton variant="secondary" onclick={openEditModal}>
           Edit
         </LoadingButton>
-        <LoadingButton variant="danger" on:click={openDeleteModal}>
+        <LoadingButton variant="danger" onclick={openDeleteModal}>
           Delete
         </LoadingButton>
       </div>
@@ -454,7 +467,7 @@
     <section>
       <div class="section-header">
         <h2>Artifacts ({artifacts.length})</h2>
-        <LoadingButton variant="primary" on:click={openArtifactRegisterModal}>
+        <LoadingButton variant="primary" onclick={openArtifactRegisterModal}>
           Register Artifact
         </LoadingButton>
       </div>
@@ -483,7 +496,7 @@
       {:else}
         <div class="empty-state">
           <p class="empty">No artifacts registered</p>
-          <LoadingButton variant="primary" on:click={openArtifactRegisterModal}>
+          <LoadingButton variant="primary" onclick={openArtifactRegisterModal}>
             Register Your First Artifact
           </LoadingButton>
         </div>
@@ -493,7 +506,7 @@
     <section>
       <div class="section-header">
         <h2>Secrets ({secrets.length})</h2>
-        <LoadingButton variant="primary" on:click={openSecretCreateModal}>
+        <LoadingButton variant="primary" onclick={openSecretCreateModal}>
           Add Secret
         </LoadingButton>
       </div>
@@ -510,8 +523,7 @@
               </div>
               <LoadingButton 
                 variant="danger" 
-                size="small"
-                on:click={() => openSecretDeleteModal(secret)}
+                      onclick={() => openSecretDeleteModal(secret)}
               >
                 Delete
               </LoadingButton>
@@ -521,7 +533,7 @@
       {:else}
         <div class="empty-state">
           <p class="empty">No secrets configured</p>
-          <LoadingButton variant="primary" on:click={openSecretCreateModal}>
+          <LoadingButton variant="primary" onclick={openSecretCreateModal}>
             Add Your First Secret
           </LoadingButton>
         </div>
@@ -531,8 +543,8 @@
 </div>
 
 <!-- Edit Modal -->
-<Modal bind:open={editOpen} title="Edit Service" on:close={closeEditModal}>
-  <form on:submit|preventDefault={handleEdit} class="edit-form">
+<Modal bind:open={editOpen} title="Edit Service" onClose={closeEditModal}>
+  <form onsubmit={(event) => { event.preventDefault(); handleEdit(); }} class="edit-form">
     <div class="form-field">
       <label for="edit-name">Name *</label>
       <Input
@@ -611,7 +623,7 @@
       <LoadingButton
         type="button"
         variant="secondary"
-        on:click={closeEditModal}
+        onclick={closeEditModal}
         disabled={editing}
       >
         Cancel
@@ -634,9 +646,9 @@
   confirmLabel="Delete"
   variant="danger"
   loading={deleting}
-  on:confirm={handleDelete}
-  on:cancel={closeDeleteModal}
-  on:close={closeDeleteModal}
+  onConfirm={handleDelete}
+  onCancel={closeDeleteModal}
+  onClose={closeDeleteModal}
 >
   <div class="delete-content">
     <p>Are you sure you want to delete <strong>{service?.name}</strong>?</p>
@@ -658,8 +670,8 @@
 </ConfirmDialog>
 
 <!-- Secret Create Modal -->
-<Modal bind:open={secretCreateOpen} title="Add Secret" on:close={closeSecretCreateModal}>
-  <form on:submit|preventDefault={handleSecretCreate} class="secret-form">
+<Modal bind:open={secretCreateOpen} title="Add Secret" onClose={closeSecretCreateModal}>
+  <form onsubmit={(event) => { event.preventDefault(); handleSecretCreate(); }} class="secret-form">
     <div class="form-field">
       <label for="secret-name">Name *</label>
       <Input
@@ -693,7 +705,7 @@
       <LoadingButton
         type="button"
         variant="secondary"
-        on:click={closeSecretCreateModal}
+        onclick={closeSecretCreateModal}
         disabled={secretCreating}
       >
         Cancel
@@ -716,9 +728,9 @@
   confirmLabel="Delete"
   variant="danger"
   loading={secretDeleting}
-  on:confirm={handleSecretDelete}
-  on:cancel={closeSecretDeleteModal}
-  on:close={closeSecretDeleteModal}
+  onConfirm={handleSecretDelete}
+  onCancel={closeSecretDeleteModal}
+  onClose={closeSecretDeleteModal}
 >
   <div class="delete-content">
     <p>Are you sure you want to delete the secret <code>{secretToDelete?.name}</code>?</p>
@@ -731,8 +743,8 @@
 </ConfirmDialog>
 
 <!-- Artifact Registration Modal -->
-<Modal bind:open={artifactRegisterOpen} title="Register Artifact" on:close={closeArtifactRegisterModal}>
-  <form on:submit|preventDefault={handleArtifactRegister} class="artifact-form">
+<Modal bind:open={artifactRegisterOpen} title="Register Artifact" onClose={closeArtifactRegisterModal}>
+  <form onsubmit={(event) => { event.preventDefault(); handleArtifactRegister(); }} class="artifact-form">
     <div class="form-field">
       <label for="artifact-name">Name *</label>
       <Input
@@ -789,7 +801,7 @@
       <LoadingButton
         type="button"
         variant="secondary"
-        on:click={closeArtifactRegisterModal}
+        onclick={closeArtifactRegisterModal}
         disabled={artifactRegistering}
       >
         Cancel
@@ -847,18 +859,6 @@
     font-size: 1rem;
     color: var(--text-muted);
     margin-bottom: 1rem;
-  }
-  .secrets-list {
-    list-style: none;
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.5rem;
-  }
-  .secrets-list li {
-    background: var(--hover-bg);
-    padding: 0.25rem 0.75rem;
-    border-radius: 4px;
-    font-size: 0.875rem;
   }
   .empty, .loading, .error {
     color: var(--text-muted);

@@ -1,5 +1,4 @@
 <script>
-  import { onMount, onDestroy } from 'svelte';
   import SoulCard from '$lib/components/SoulCard.svelte';
   import Card from '$lib/components/Card.svelte';
   import { nostr } from '$lib/nostr/client.js';
@@ -13,10 +12,10 @@
     unsubscribeFromSoulUpdates
   } from '$lib/stores/souls.js';
   
-  let filter = 'all';
-  let search = '';
+  let filter = $state('all');
+  let search = $state('');
   
-  $: filteredSouls = $souls.filter(soul => {
+  let filteredSouls = $derived(souls.filter(soul => {
     // Status filter
     if (filter !== 'all' && soul.status !== filter) return false;
     
@@ -31,16 +30,25 @@
     }
     
     return true;
-  });
+  }));
   
-  onMount(async () => {
-    await nostr.connect();
-    await loadSouls();
-    subscribeToSoulUpdates();
-  });
-  
-  onDestroy(() => {
-    unsubscribeFromSoulUpdates();
+  $effect(() => {
+    let cancelled = false;
+
+    async function initializeSouls() {
+      await nostr.connect();
+      if (cancelled) return;
+      await loadSouls();
+      if (cancelled) return;
+      subscribeToSoulUpdates();
+    }
+
+    void initializeSouls();
+
+    return () => {
+      cancelled = true;
+      unsubscribeFromSoulUpdates();
+    };
   });
 </script>
 
@@ -62,10 +70,10 @@
   
   <!-- Stats Cards -->
   <div class="stats-grid">
-    <Card title="Total Souls" value={$soulCounts.total} />
-    <Card title="Active" value={$soulCounts.active} status="success" />
-    <Card title="Provisioning" value={$soulCounts.provisioning} status="warning" />
-    <Card title="Suspended" value={$soulCounts.suspended} />
+    <Card title="Total Souls" value={soulCounts().total} />
+    <Card title="Active" value={soulCounts().active} status="success" />
+    <Card title="Provisioning" value={soulCounts().provisioning} status="warning" />
+    <Card title="Suspended" value={soulCounts().suspended} />
   </div>
   
   <!-- Filters -->
@@ -74,28 +82,28 @@
       <button 
         class="filter-tab" 
         class:active={filter === 'all'} 
-        on:click={() => filter = 'all'}
+        onclick={() => filter = 'all'}
       >
         All
       </button>
       <button 
         class="filter-tab" 
         class:active={filter === 'active'} 
-        on:click={() => filter = 'active'}
+        onclick={() => filter = 'active'}
       >
         Active
       </button>
       <button 
         class="filter-tab" 
         class:active={filter === 'provisioning'} 
-        on:click={() => filter = 'provisioning'}
+        onclick={() => filter = 'provisioning'}
       >
         Provisioning
       </button>
       <button 
         class="filter-tab" 
         class:active={filter === 'suspended'} 
-        on:click={() => filter = 'suspended'}
+        onclick={() => filter = 'suspended'}
       >
         Suspended
       </button>
@@ -119,7 +127,7 @@
   {/if}
   
   <!-- Loading -->
-  {#if $loading.souls}
+  {#if loading.souls}
     <div class="loading">
       <div class="spinner"></div>
       <span>Loading souls...</span>

@@ -1,7 +1,6 @@
 <script>
-  import { page } from '$app/stores';
+  import { page } from '$app/state';
   import { goto } from '$app/navigation';
-  import { onMount } from 'svelte';
   import Card from '$lib/components/Card.svelte';
   import Table from '$lib/components/Table.svelte';
   import LoadingButton from '$lib/components/LoadingButton.svelte';
@@ -9,25 +8,26 @@
   import EmptyState from '$lib/components/EmptyState.svelte';
   import { api } from '$lib/api/client.js';
 
-  let intent = null;
-  let runs = [];
-  let service = null;
-  let environment = null;
-  let loading = true;
-  let error = null;
+  let intent = $state(null);
+  let runs = $state([]);
+  let service = $state(null);
+  let environment = $state(null);
+  let loading = $state(true);
+  let error = $state(null);
+  let intentId = $derived(page.params.id);
 
   // Action state
-  let approving = false;
-  let rejecting = false;
-  let actionError = null;
-  let approveOpen = false;
-  let rejectOpen = false;
+  let approving = $state(false);
+  let rejecting = $state(false);
+  let actionError = $state(null);
+  let approveOpen = $state(false);
+  let rejectOpen = $state(false);
 
   // Reactive: check if intent is pending approval
-  $: isPending = intent && String(intent.approval_status || '').toLowerCase() === 'pending';
+  let isPending = $derived(intent && String(intent.approval_status || '').toLowerCase() === 'pending');
 
   // Columns for runs table
-  $: runsColumns = [
+  let runsColumns = $derived([
     { 
       key: 'id', 
       label: 'Run ID', 
@@ -66,25 +66,25 @@
       label: 'Finished',
       render: (r) => r.finished_at ? new Date(r.finished_at).toLocaleString() : '-'
     }
-  ];
+  ]);
 
-  onMount(() => {
-    loadIntent();
+  $effect(() => {
+    const id = intentId;
+    if (!id) return;
+    void loadIntent(id);
   });
 
-  async function loadIntent() {
+  async function loadIntent(id = intentId) {
     loading = true;
     error = null;
 
     try {
-      const intentId = $page.params.id;
-      
       // Load intent
-      intent = await api.getIntent(intentId);
+      intent = await api.getIntent(id);
 
       // Load runs for this intent
       try {
-        runs = await api.listRuns(intentId);
+        runs = await api.listRuns(id);
         if (!Array.isArray(runs)) {
           runs = [];
         }
@@ -189,7 +189,7 @@
   {:else if error}
     <div class="error-state">
       <p class="error">⚠️ {error}</p>
-      <LoadingButton variant="secondary" on:click={() => goto('/deployments')}>
+      <LoadingButton variant="secondary" onclick={() => goto('/deployments')}>
         Back to Deployments
       </LoadingButton>
     </div>
@@ -204,13 +204,13 @@
         <div class="actions">
           <LoadingButton 
             variant="primary" 
-            on:click={() => { approveOpen = true; actionError = null; }}
+            onclick={() => { approveOpen = true; actionError = null; }}
           >
             Approve
           </LoadingButton>
           <LoadingButton 
             variant="danger" 
-            on:click={() => { rejectOpen = true; actionError = null; }}
+            onclick={() => { rejectOpen = true; actionError = null; }}
           >
             Reject
           </LoadingButton>
@@ -310,7 +310,7 @@
       title="Intent not found"
       message="The requested deployment intent does not exist"
     >
-      <LoadingButton variant="secondary" on:click={() => goto('/deployments')}>
+      <LoadingButton variant="secondary" onAction={() => goto('/deployments')}>
         Back to Deployments
       </LoadingButton>
     </EmptyState>
@@ -327,9 +327,9 @@
   confirmLabel="Approve"
   variant="default"
   loading={approving}
-  on:confirm={handleApprove}
-  on:cancel={() => { approveOpen = false; actionError = null; }}
-  on:close={() => { approveOpen = false; actionError = null; }}
+  onConfirm={handleApprove}
+  onCancel={() => { approveOpen = false; actionError = null; }}
+  onClose={() => { approveOpen = false; actionError = null; }}
 >
   {#if actionError}
     <p class="dialog-error">{actionError}</p>
@@ -346,9 +346,9 @@
   confirmLabel="Reject"
   variant="danger"
   loading={rejecting}
-  on:confirm={handleReject}
-  on:cancel={() => { rejectOpen = false; actionError = null; }}
-  on:close={() => { rejectOpen = false; actionError = null; }}
+  onConfirm={handleReject}
+  onCancel={() => { rejectOpen = false; actionError = null; }}
+  onClose={() => { rejectOpen = false; actionError = null; }}
 >
   {#if actionError}
     <p class="dialog-error">{actionError}</p>

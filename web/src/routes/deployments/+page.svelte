@@ -1,18 +1,17 @@
 <script>
   import { goto } from '$app/navigation';
-  import { onMount } from 'svelte';
   import Table from '$lib/components/Table.svelte';
   import EmptyState from '$lib/components/EmptyState.svelte';
   import Select from '$lib/components/Select.svelte';
   import { api } from '$lib/api/client.js';
 
-  let intents = [];
+  let intents = $state([]);
   let services = [];
   let environments = [];
-  let loading = true;
-  let error = null;
-  let statusFilter = 'all';
-  let approvalFilter = 'all';
+  let loading = $state(true);
+  let error = $state(null);
+  let statusFilter = $state('all');
+  let approvalFilter = $state('all');
 
   const statusOptions = [
     { value: 'all', label: 'All Statuses' },
@@ -32,7 +31,7 @@
   ];
 
   // Columns for the intents table
-  $: columns = [
+  let columns = $derived([
     { key: 'service_name', label: 'Service' },
     { key: 'environment_name', label: 'Environment' },
     { 
@@ -73,10 +72,10 @@
       label: 'Created',
       render: (r) => r.created_at ? new Date(r.created_at).toLocaleString() : '-'
     }
-  ];
+  ]);
 
   // Filter intents based on current filters
-  $: filteredIntents = intents.filter(intent => {
+  let filteredIntents = $derived(intents.filter(intent => {
     // Status filter
     if (statusFilter !== 'all') {
       const deployStatus = String(intent.deployment_status || '').toLowerCase();
@@ -90,10 +89,10 @@
     }
 
     return true;
-  });
+  }));
 
-  onMount(() => {
-    loadAllIntents();
+  $effect(() => {
+    void loadAllIntents();
   });
 
   async function loadAllIntents() {

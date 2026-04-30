@@ -1,30 +1,33 @@
 <script>
-  import { createEventDispatcher } from 'svelte';
   import Modal from './Modal.svelte';
   import LoadingButton from './LoadingButton.svelte';
 
-  export let open = false;
-  export let title = 'Confirm Action';
-  export let message = '';
-  export let confirmLabel = 'Confirm';
-  export let cancelLabel = 'Cancel';
-  export let variant = 'default'; // default | danger
-  export let loading = false;
-
-  const dispatch = createEventDispatcher();
+  let {
+    open = $bindable(),
+    title = 'Confirm Action',
+    message = '',
+    confirmLabel = 'Confirm',
+    cancelLabel = 'Cancel',
+    variant = 'default',
+    loading = false,
+    children,
+    onConfirm,
+    onCancel,
+    onClose
+  } = $props();
 
   function handleConfirm() {
-    dispatch('confirm');
+    onConfirm?.();
   }
 
   function handleCancel() {
     open = false;
-    dispatch('cancel');
+    onCancel?.();
   }
 
   function handleClose() {
     open = false;
-    dispatch('close');
+    onClose?.();
   }
 </script>
 
@@ -34,22 +37,23 @@
   size="sm"
   closeOnBackdrop={!loading}
   closeOnEscape={!loading}
-  on:close={handleClose}
+  onClose={handleClose}
 >
   <div class="confirm-dialog">
     <p class="message">{message}</p>
+    {@render children?.()}
     <div class="actions">
       <LoadingButton
         variant="secondary"
         disabled={loading}
-        on:click={handleCancel}
+        onclick={handleCancel}
       >
         {cancelLabel}
       </LoadingButton>
       <LoadingButton
         variant={variant === 'danger' ? 'danger' : 'primary'}
         {loading}
-        on:click={handleConfirm}
+        onclick={handleConfirm}
       >
         {confirmLabel}
       </LoadingButton>

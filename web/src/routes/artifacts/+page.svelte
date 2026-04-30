@@ -1,30 +1,33 @@
 <script>
   import { goto } from '$app/navigation';
-  import { onMount } from 'svelte';
   import Table from '$lib/components/Table.svelte';
   import Badge from '$lib/components/Badge.svelte';
   import EmptyState from '$lib/components/EmptyState.svelte';
   import { api } from '$lib/api/client.js';
 
   // Tab state
-  let activeTab = 'registry';
+  let activeTab = $state('registry');
 
   // Registry artifacts state
-  let registryLoading = true;
-  let artifacts = [];
+  let registryLoading = $state(true);
+  let artifacts = $state([]);
   let services = [];
-  let serviceMap = {};
+  let serviceMap = $state({});
 
   // Blossom state
-  let blossomLoading = false;
-  let blossomBlobs = [];
-  let blossomServers = [];
-  let blossomHealth = {};
-  let blossomError = null;
-  let pubkeyFilter = '';
-  let typeFilter = '';
+  let blossomLoading = $state(false);
+  let blossomBlobs = $state([]);
+  let blossomServers = $state([]);
+  let blossomHealth = $state({});
+  let blossomError = $state(null);
+  let pubkeyFilter = $state('');
+  let typeFilter = $state('');
 
-  onMount(async () => {
+  $effect(() => {
+    void loadRegistryArtifacts();
+  });
+
+  async function loadRegistryArtifacts() {
     // Load registry artifacts
     try {
       services = await api.listServices();
@@ -43,7 +46,7 @@
     } finally {
       registryLoading = false;
     }
-  });
+  }
 
   async function loadBlossomBlobs() {
     if (blossomBlobs.length > 0 && !pubkeyFilter) return; // Already loaded
@@ -125,15 +128,15 @@
   }
 
   // Filter blobs by type
-  $: filteredBlobs = blossomBlobs.filter(blob => {
+  let filteredBlobs = $derived(blossomBlobs.filter(blob => {
     if (!typeFilter) return true;
     return blob.type?.toLowerCase().includes(typeFilter.toLowerCase());
-  });
+  }));
 
   // Unique content types for filter dropdown
-  $: uniqueTypes = [...new Set(blossomBlobs.map(b => b.type).filter(Boolean))].sort();
+  let uniqueTypes = $derived([...new Set(blossomBlobs.map(b => b.type).filter(Boolean))].sort());
 
-  $: registryColumns = [
+  let registryColumns = $derived([
     { 
       key: 'image_tag', 
       label: 'Name',
@@ -170,9 +173,9 @@
         return `<span class="badge-cell ${badge.variant}">${badge.text}</span>`;
       }
     }
-  ];
+  ]);
 
-  $: blossomColumns = [
+  let blossomColumns = $derived([
     {
       key: 'type',
       label: 'Type',
@@ -198,7 +201,7 @@
       label: 'Actions',
       render: (r) => `<a href="${r.url}" target="_blank" class="download-link">Download ↗</a>`
     }
-  ];
+  ]);
 </script>
 
 <div class="page">
@@ -220,14 +223,14 @@
     <button
       class="tab"
       class:active={activeTab === 'registry'}
-      on:click={() => handleTabChange('registry')}
+      onclick={() => handleTabChange('registry')}
     >
       📦 Registry
     </button>
     <button
       class="tab"
       class:active={activeTab === 'blossom'}
-      on:click={() => handleTabChange('blossom')}
+      onclick={() => handleTabChange('blossom')}
     >
       🌸 Blossom
     </button>
@@ -278,7 +281,7 @@
           placeholder="Enter hex pubkey to filter..."
           class="filter-input"
         />
-        <button class="filter-btn" on:click={handlePubkeySearch}>Search</button>
+        <button class="filter-btn" onclick={handlePubkeySearch}>Search</button>
       </div>
       
       {#if uniqueTypes.length > 0}

@@ -1,9 +1,13 @@
 <script>
-  export let type = 'button';
-  export let variant = 'primary'; // primary | secondary | danger
-  export let loading = false;
-  export let disabled = false;
-  export let fullWidth = false;
+  let {
+    type = 'button',
+    variant = 'primary',
+    loading = false,
+    disabled = false,
+    fullWidth = false,
+    children,
+    onclick
+  } = $props();
 </script>
 
 <button
@@ -12,12 +16,12 @@
   class:loading
   class:full-width={fullWidth}
   disabled={disabled || loading}
-  on:click
+  {onclick}
 >
   {#if loading}
     <span class="spinner"></span>
   {/if}
-  <slot />
+  {@render children?.()}
 </button>
 
 <style>

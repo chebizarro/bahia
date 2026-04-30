@@ -1,5 +1,4 @@
 <script>
-  import { onMount } from 'svelte';
   import Card from '$lib/components/Card.svelte';
   import Input from '$lib/components/Input.svelte';
   import LoadingButton from '$lib/components/LoadingButton.svelte';
@@ -9,25 +8,31 @@
   import { toast } from '$lib/components/toast.js';
 
   // System info from server
-  let systemInfo = null;
-  let systemLoading = true;
-  let systemError = null;
+  let systemInfo = $state(null);
+  let systemLoading = $state(true);
+  let systemError = $state(null);
 
   // Relay configuration (client-side)
-  let relayInput = '';
-  let relays = [];
-  let relaysSaving = false;
-  let connectionStatus = {};
+  let relayInput = $state('');
+  let relays = $state([]);
+  let relaysSaving = $state(false);
+  let connectionStatus = $state({});
 
-  // Subscribe to connection status
-  const unsubscribe = nostr.connectionStatus.subscribe(status => {
-    connectionStatus = status;
-  });
+  $effect(() => {
+    const unsubscribe = nostr.connectionStatus.subscribe(status => {
+      connectionStatus = status;
+    });
 
-  onMount(async () => {
     // Load current relay config
     relays = nostr.getRelays();
-    
+    void loadSystemInfo();
+
+    return () => {
+      unsubscribe();
+    };
+  });
+
+  async function loadSystemInfo() {
     // Load system info from server
     try {
       systemInfo = await api.getSystemInfo();
@@ -36,11 +41,7 @@
     } finally {
       systemLoading = false;
     }
-
-    return () => {
-      unsubscribe();
-    };
-  });
+  }
 
   function addRelay() {
     const url = relayInput.trim();
@@ -134,7 +135,7 @@
             <span class="relay-status" style="background: {getStatusColor(connectionStatus[relay])}"></span>
             <span class="relay-url">{relay}</span>
             <span class="relay-status-text">{getStatusLabel(connectionStatus[relay])}</span>
-            <button class="relay-remove" on:click={() => removeRelay(relay)} title="Remove relay">×</button>
+            <button class="relay-remove" onclick={() => removeRelay(relay)} title="Remove relay">×</button>
           </div>
         {/each}
       </div>
@@ -143,14 +144,14 @@
         <Input
           placeholder="wss://relay.example.com"
           bind:value={relayInput}
-          on:keydown={(e) => e.key === 'Enter' && addRelay()}
+          onkeydown={(e) => e.key === 'Enter' && addRelay()}
         />
-        <LoadingButton variant="secondary" on:click={addRelay}>Add</LoadingButton>
+        <LoadingButton variant="secondary" onclick={addRelay}>Add</LoadingButton>
       </div>
 
       <div class="relay-actions">
-        <LoadingButton variant="secondary" on:click={resetToDefaults}>Reset to Defaults</LoadingButton>
-        <LoadingButton variant="primary" loading={relaysSaving} on:click={saveRelays}>Save & Reconnect</LoadingButton>
+        <LoadingButton variant="secondary" onclick={resetToDefaults}>Reset to Defaults</LoadingButton>
+        <LoadingButton variant="primary" loading={relaysSaving} onclick={saveRelays}>Save & Reconnect</LoadingButton>
       </div>
     </section>
 
@@ -165,14 +166,14 @@
           <button
             class="theme-btn"
             class:active={$theme === 'light'}
-            on:click={() => $theme !== 'light' && toggleTheme()}
+            onclick={() => $theme !== 'light' && toggleTheme()}
           >
             ☀️ Light
           </button>
           <button
             class="theme-btn"
             class:active={$theme === 'dark'}
-            on:click={() => $theme !== 'dark' && toggleTheme()}
+            onclick={() => $theme !== 'dark' && toggleTheme()}
           >
             🌙 Dark
           </button>
@@ -198,9 +199,9 @@
           {#if systemInfo.nostr?.service_npub}
             <div class="config-row">
               <span class="config-label">Service Identity</span>
-              <span class="config-value monospace clickable" on:click={() => copyToClipboard(systemInfo.nostr.service_npub)} title="Click to copy">
+              <button type="button" class="config-value monospace clickable" onclick={() => copyToClipboard(systemInfo.nostr.service_npub)} title="Click to copy">
                 {systemInfo.nostr.service_npub.slice(0, 20)}...
-              </span>
+              </button>
             </div>
           {/if}
           {#if systemInfo.nostr?.relays?.length > 0}
@@ -513,7 +514,11 @@
   }
 
   .config-value.clickable {
+    background: transparent;
+    border: none;
+    color: inherit;
     cursor: pointer;
+    padding: 0;
     text-decoration: underline;
     text-decoration-style: dotted;
   }

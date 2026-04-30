@@ -1,23 +1,23 @@
 <script>
-  import { createEventDispatcher } from 'svelte';
   import Badge from '$lib/components/Badge.svelte';
   import RepositorySearchModal from './RepositorySearchModal.svelte';
 
-  export let value = null;
-  export let label = 'Source Repository';
-  export let placeholder = 'No repository selected';
-  export let required = false;
-  export let disabled = false;
-  export let context = 'service';
-  export let requirePrimaryUrl = context === 'service';
+  let {
+    value = $bindable(null),
+    label = 'Source Repository',
+    placeholder = 'No repository selected',
+    required = false,
+    disabled = false,
+    context = 'service',
+    requirePrimaryUrl = context === 'service',
+    onChange
+  } = $props();
 
-  const dispatch = createEventDispatcher();
+  let modalOpen = $state(false);
 
-  let modalOpen = false;
-
-  $: hasValue = value && (value.repoUrl || value.displayName);
-  $: providerLabel = value?.provider === 'nostr' ? 'Nostr' : value?.provider === 'manual' ? 'Manual' : '';
-  $: providerVariant = value?.provider === 'nostr' ? 'info' : 'default';
+  const hasValue = $derived(value && (value.repoUrl || value.displayName));
+  const providerLabel = $derived(value?.provider === 'nostr' ? 'Nostr' : value?.provider === 'manual' ? 'Manual' : '');
+  const providerVariant = $derived(value?.provider === 'nostr' ? 'info' : 'default');
 
   function openModal() {
     if (!disabled) {
@@ -25,10 +25,10 @@
     }
   }
 
-  function handleSelect(event) {
-    value = event.detail;
+  function handleSelect(repository) {
+    value = repository;
     modalOpen = false;
-    dispatch('change', value);
+    onChange?.(value);
   }
 
   function handleModalClose() {
@@ -37,7 +37,7 @@
 
   function clearSelection() {
     value = null;
-    dispatch('change', null);
+    onChange?.(null);
   }
 </script>
 
@@ -67,8 +67,8 @@
           {/if}
         </div>
         <div class="selection-actions">
-          <button type="button" class="action-link" on:click={openModal} {disabled}>Change</button>
-          <button type="button" class="action-link danger" on:click={clearSelection} {disabled}>Clear</button>
+          <button type="button" class="action-link" onclick={openModal} {disabled}>Change</button>
+          <button type="button" class="action-link danger" onclick={clearSelection} {disabled}>Clear</button>
         </div>
       </div>
     {:else}
@@ -77,7 +77,7 @@
         <button
           type="button"
           class="browse-button"
-          on:click={openModal}
+          onclick={openModal}
           {disabled}
         >
           Choose Repository
@@ -92,8 +92,8 @@
   {value}
   {requirePrimaryUrl}
   {context}
-  on:select={handleSelect}
-  on:close={handleModalClose}
+  onSelect={handleSelect}
+  onClose={handleModalClose}
 />
 
 <style>

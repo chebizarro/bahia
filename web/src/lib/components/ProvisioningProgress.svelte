@@ -1,7 +1,9 @@
 <script>
-  export let run = null;
-  export let onComplete = null;
-  
+  let {
+    run = null,
+    onComplete = null
+  } = $props();
+
   const steps = [
     { id: 'generate', label: 'Generate Soul', icon: '🧠' },
     { id: 'signet', label: 'Create Identity', icon: '🔐' },
@@ -12,11 +14,13 @@
     { id: 'workspace', label: 'Init Workspace', icon: '📁' },
     { id: 'deploy', label: 'Deploy Agent', icon: '🚀' }
   ];
-  
-  $: currentStepIdx = steps.findIndex(s => s.id === run?.step);
-  $: progressPercent = run?.progress 
-    ? Math.round((run.progress.current / run.progress.total) * 100)
-    : 0;
+
+  const currentStepIdx = $derived(steps.findIndex((s) => s.id === run?.step));
+  const progressPercent = $derived(
+    run?.progress
+      ? Math.round((run.progress.current / run.progress.total) * 100)
+      : 0
+  );
 </script>
 
 <div class="provisioning-progress">
@@ -37,7 +41,7 @@
         </div>
       {/if}
       {#if onComplete}
-        <button class="btn-primary" on:click={onComplete}>
+        <button class="btn-primary" onclick={onComplete}>
           View Soul
         </button>
       {/if}
@@ -49,7 +53,6 @@
       <p>{run.result?.error || run.message || 'An error occurred'}</p>
     </div>
   {:else}
-    <!-- Progress view -->
     <div class="progress-header">
       <h3>Provisioning Soul</h3>
       <span class="percent">{progressPercent}%</span>

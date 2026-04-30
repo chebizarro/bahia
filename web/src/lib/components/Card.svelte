@@ -1,8 +1,11 @@
 <script>
-  export let title = '';
-  export let value = '';
-  export let subtitle = '';
-  export let status = 'default'; // default, success, warning, error
+  let {
+    title = '',
+    value = '',
+    subtitle = '',
+    status = 'default',
+    children
+  } = $props();
 </script>
 
 <div class="card {status}">
@@ -15,7 +18,7 @@
   {#if subtitle}
     <div class="card-subtitle">{subtitle}</div>
   {/if}
-  <slot />
+  {@render children?.()}
 </div>
 
 <style>

@@ -1,9 +1,12 @@
 <script>
-  export let label = '';
-  export let id = '';
-  export let error = '';
-  export let hint = '';
-  export let required = false;
+  let {
+    label = '',
+    id = '',
+    error = '',
+    hint = '',
+    required = false,
+    children
+  } = $props();
 </script>
 
 <div class="form-field">
@@ -15,7 +18,7 @@
       {/if}
     </label>
   {/if}
-  <slot />
+  {@render children?.()}
   {#if error}
     <div class="error">{error}</div>
   {/if}

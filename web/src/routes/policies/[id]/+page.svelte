@@ -1,7 +1,6 @@
 <script>
-  import { page } from '$app/stores';
+  import { page } from '$app/state';
   import { goto } from '$app/navigation';
-  import { onMount } from 'svelte';
   import Card from '$lib/components/Card.svelte';
   import Modal from '$lib/components/Modal.svelte';
   import Input from '$lib/components/Input.svelte';
@@ -12,39 +11,49 @@
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
   import { api } from '$lib/api/client.js';
 
-  let policy = null;
-  let environments = [];
-  let loading = true;
-  let error = null;
+  let policy = $state(null);
+  let environments = $state([]);
+  let loading = $state(true);
+  let error = $state(null);
 
-  $: policyId = $page.params.id;
+  let policyId = $derived(page.params.id);
 
   // Edit modal state
-  let editOpen = false;
-  let editing = false;
-  let editError = null;
-  let editForm = {
+  let editOpen = $state(false);
+  let editing = $state(false);
+  let editError = $state(null);
+  let editForm = $state({
     name: '',
     environment_id: '',
     rules: '[]',
     enforcement: 'warn',
     enabled: true
-  };
+  });
 
   // Delete modal state
-  let deleteOpen = false;
-  let deleting = false;
-  let deleteError = null;
+  let deleteOpen = $state(false);
+  let deleting = $state(false);
+  let deleteError = $state(null);
 
   const enforcementOptions = [
     { value: 'warn', label: 'Warn' },
     { value: 'block', label: 'Block' }
   ];
 
-  onMount(async () => {
+  $effect(() => {
+    const id = policyId;
+    if (!id) return;
+    void loadPolicy(id);
+  });
+
+  async function loadPolicy(id) {
+    loading = true;
+    error = null;
+    policy = null;
+
     try {
       [policy, environments] = await Promise.all([
-        api.getPolicy(policyId),
+        api.getPolicy(id),
         api.listEnvironments().catch(() => [])
       ]);
     } catch (err) {
@@ -52,20 +61,20 @@
     } finally {
       loading = false;
     }
-  });
+  }
 
-  $: environmentOptions = [
+  let environmentOptions = $derived([
     { value: '', label: 'Global policy' },
     ...environments.map(env => ({ value: env.id, label: env.name }))
-  ];
+  ]);
 
-  $: environmentName = policy?.environment_id 
+  let environmentName = $derived(policy?.environment_id 
     ? (environments.find(e => e.id === policy.environment_id)?.name || policy.environment_id)
-    : 'Global';
+    : 'Global');
 
-  $: formattedRules = policy?.rules 
+  let formattedRules = $derived(policy?.rules 
     ? JSON.stringify(policy.rules, null, 2)
-    : '[]';
+    : '[]');
 
   function openEditModal() {
     if (!policy) return;
@@ -172,10 +181,10 @@
     <div class="header">
       <h1>{policy.name}</h1>
       <div class="actions">
-        <LoadingButton variant="secondary" on:click={openEditModal}>
+        <LoadingButton variant="secondary" onclick={openEditModal}>
           Edit
         </LoadingButton>
-        <LoadingButton variant="danger" on:click={openDeleteModal}>
+        <LoadingButton variant="danger" onclick={openDeleteModal}>
           Delete
         </LoadingButton>
       </div>
@@ -216,8 +225,8 @@
 </div>
 
 <!-- Edit Modal -->
-<Modal bind:open={editOpen} title="Edit Policy" on:close={closeEditModal}>
-  <form on:submit|preventDefault={handleEdit} class="edit-form">
+<Modal bind:open={editOpen} title="Edit Policy" onClose={closeEditModal}>
+  <form onsubmit={(event) => { event.preventDefault(); handleEdit(); }} class="edit-form">
     <div class="form-field">
       <label for="edit-name">Name *</label>
       <Input
@@ -281,7 +290,7 @@
       <LoadingButton
         type="button"
         variant="secondary"
-        on:click={closeEditModal}
+        onclick={closeEditModal}
         disabled={editing}
       >
         Cancel
@@ -304,9 +313,9 @@
   confirmLabel="Delete"
   variant="danger"
   loading={deleting}
-  on:confirm={handleDelete}
-  on:cancel={closeDeleteModal}
-  on:close={closeDeleteModal}
+  onConfirm={handleDelete}
+  onCancel={closeDeleteModal}
+  onClose={closeDeleteModal}
 >
   <div class="delete-content">
     <p>Are you sure you want to delete <strong>{policy?.name}</strong>?</p>

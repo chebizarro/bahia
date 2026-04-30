@@ -1,24 +1,24 @@
 <script>
-  import { createEventDispatcher } from 'svelte';
+  let {
+    id = '',
+    name = '',
+    value = $bindable(),
+    options = [],
+    disabled = false,
+    required = false,
+    error = '',
+    placeholder = 'Select an option',
+    onchange: onChange,
+    onblur: onBlur
+  } = $props();
 
-  export let id = '';
-  export let name = '';
-  export let value = '';
-  export let options = [];
-  export let disabled = false;
-  export let required = false;
-  export let error = '';
-  export let placeholder = 'Select an option';
-
-  const dispatch = createEventDispatcher();
-
-  function handleChange(e) {
-    value = e.target.value;
-    dispatch('change', { value });
+  function handleChange(event) {
+    value = event.currentTarget.value;
+    onChange?.(event);
   }
 
-  function handleBlur(e) {
-    dispatch('blur', { value: e.target.value });
+  function handleBlur(event) {
+    onBlur?.(event);
   }
 </script>
 
@@ -30,8 +30,8 @@
   bind:value
   class="select"
   class:error
-  on:change={handleChange}
-  on:blur={handleBlur}
+  onchange={handleChange}
+  onblur={handleBlur}
 >
   {#if placeholder}
     <option value="" disabled selected={!value}>{placeholder}</option>

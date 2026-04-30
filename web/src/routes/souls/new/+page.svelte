@@ -1,7 +1,5 @@
 <script>
   import { goto } from '$app/navigation';
-  import { onMount, onDestroy } from 'svelte';
-  import { get } from 'svelte/store';
   import TemplateSelector from '$lib/components/TemplateSelector.svelte';
   import RepositoryPicker from '$lib/components/repositories/RepositoryPicker.svelte';
   import ProvisioningProgress from '$lib/components/ProvisioningProgress.svelte';
@@ -10,38 +8,40 @@
   import { authState, initializeAuth, login, signWithAuth } from '$lib/stores/auth.js';
   
   // Form state
-  let step = 1; // 1: template, 2: repository, 3: configure, 4: provisioning
-  let selectedTemplate = null;
-  let selectedRepository = null;
-  let agentId = '';
-  let agentName = '';
-  let brief = '';
-  let tier = 'standard';
+  let step = $state(1); // 1: template, 2: repository, 3: configure, 4: provisioning
+  let selectedTemplate = $state(null);
+  let selectedRepository = $state(null);
+  let agentId = $state('');
+  let agentName = $state('');
+  let brief = $state('');
+  let tier = $state('standard');
   
   // Provisioning state
-  let requestEventId = null;
-  let currentRun = null;
+  let requestEventId = $state(null);
+  let currentRun = $state(null);
   let provisioningCleanup = null;
   
   // Publishing state
-  let publishing = false;
+  let publishing = $state(false);
   let publishError = null;
-  let publishResults = [];
+  let publishResults = $state([]);
   
   // Error state
-  let error = null;
-  let submitting = false;
+  let error = $state(null);
+  let submitting = $state(false);
   
   // Subscribe to run updates
-  $: if (requestEventId && $provisioningRuns.has(requestEventId)) {
-    currentRun = $provisioningRuns.get(requestEventId);
-  }
+  $effect(() => {
+    if (requestEventId && provisioningRuns.has(requestEventId)) {
+      currentRun = provisioningRuns.get(requestEventId);
+    }
+  });
   
   // Derived auth status for UI
-  $: isAuthenticated = $authState.status === 'authenticated';
-  $: hasExtension = $authState.extensionAvailable;
-  $: authError = $authState.error;
-  $: userPubkey = $authState.pubkey;
+  let isAuthenticated = $derived(authState.status === 'authenticated');
+  let hasExtension = $derived(authState.extensionAvailable);
+  let authError = $derived(authState.error);
+  let userPubkey = $derived(authState.pubkey);
   
   function handleTemplateSelect(e) {
     selectedTemplate = e.detail;
@@ -105,20 +105,20 @@
       }
       
       // Ensure authenticated
-      const auth = get(authState);
+      const auth = authState;
       if (!isAuthenticated) {
         // Try to login
         await login();
         
         // Re-check auth state
-        const authAfterLogin = get(authState);
+        const authAfterLogin = authState;
         if (authAfterLogin.status !== 'authenticated') {
           throw new Error('Authentication required to provision a soul');
         }
       }
       
       // Get current auth state
-      const currentAuth = get(authState);
+      const currentAuth = authState;
       
       // Build the provisioning request event
       const tags = [
@@ -201,32 +201,36 @@
     goto(`/souls/${agentId}`);
   }
   
-  onMount(async () => {
-    // Initialize auth system
-    await initializeAuth();
-    
-    // Connect to Nostr relays
-    const auth = get(authState);
-    const writeRelays = auth.relays
-      ? Object.entries(auth.relays)
-          .filter(([_, perms]) => perms.write !== false)
-          .map(([url]) => url)
-      : [];
-    
-    if (writeRelays.length > 0) {
-      await nostr.connect(writeRelays);
-    } else {
-      await nostr.connect();
+  $effect(() => {
+    async function initializeNostr() {
+      // Initialize auth system
+      await initializeAuth();
+      
+      // Connect to Nostr relays
+      const auth = authState;
+      const writeRelays = auth.relays
+        ? Object.entries(auth.relays)
+            .filter(([_, perms]) => perms.write !== false)
+            .map(([url]) => url)
+        : [];
+      
+      if (writeRelays.length > 0) {
+        await nostr.connect(writeRelays);
+      } else {
+        await nostr.connect();
+      }
     }
-  });
-  
-  onDestroy(() => {
-    // Clean up provisioning tracking
-    if (provisioningCleanup) {
-      provisioningCleanup();
-      provisioningCleanup = null;
-    }
-    // Note: Do not disconnect nostr client as it's shared globally
+
+    void initializeNostr();
+
+    return () => {
+      // Clean up provisioning tracking
+      if (provisioningCleanup) {
+        provisioningCleanup();
+        provisioningCleanup = null;
+      }
+      // Note: Do not disconnect nostr client as it's shared globally
+    };
   });
 </script>
 
@@ -285,7 +289,7 @@
           <strong>Authenticated</strong>
           <p>Pubkey: {userPubkey.slice(0, 8)}...{userPubkey.slice(-8)}</p>
         </div>
-      {:else if $authState.status === 'authenticating'}
+      {:else if authState.status === 'authenticating'}
         <span class="icon">⏳</span>
         <div class="status-content">
           <strong>Requesting Permission</strong>
@@ -298,7 +302,7 @@
           <p>You'll be prompted to authorize signing when you provision the soul</p>
         </div>
         {#if hasExtension && !isAuthenticated}
-          <button class="btn-login" on:click={handleLogin}>
+          <button class="btn-login" onclick={handleLogin}>
             Login Now
           </button>
         {/if}
@@ -319,12 +323,12 @@
     <div class="wizard-content">
       <TemplateSelector 
         selected={selectedTemplate} 
-        on:select={handleTemplateSelect}
+        onSelect={handleTemplateSelect}
       />
       
       <div class="wizard-actions">
         <div></div>
-        <button class="btn-primary" on:click={nextStep}>
+        <button class="btn-primary" onclick={nextStep}>
           Continue →
         </button>
       </div>
@@ -343,10 +347,10 @@
       </div>
       
       <div class="wizard-actions">
-        <button class="btn-secondary" on:click={prevStep}>
+        <button class="btn-secondary" onclick={prevStep}>
           ← Back
         </button>
-        <button class="btn-primary" on:click={nextStep}>
+        <button class="btn-primary" onclick={nextStep}>
           Continue →
         </button>
       </div>
@@ -367,7 +371,7 @@
               type="text" 
               bind:value={agentName}
               placeholder="e.g., Scout, CodeBot, ResearchHelper"
-              on:blur={generateAgentId}
+              onblur={generateAgentId}
             />
             <span class="hint">A friendly name for your agent</span>
           </div>
@@ -434,12 +438,12 @@
       </div>
       
       <div class="wizard-actions">
-        <button class="btn-secondary" on:click={prevStep}>
+        <button class="btn-secondary" onclick={prevStep}>
           ← Back
         </button>
         <button 
           class="btn-primary" 
-          on:click={submitProvisioning}
+          onclick={submitProvisioning}
           disabled={submitting || (!hasExtension && !isAuthenticated)}
         >
           {#if publishing}

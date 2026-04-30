@@ -1,6 +1,4 @@
 <script>
-  import { createEventDispatcher, onMount } from 'svelte';
-  import { get } from 'svelte/store';
   import Modal from '$lib/components/Modal.svelte';
   import Input from '$lib/components/Input.svelte';
   import LoadingButton from '$lib/components/LoadingButton.svelte';
@@ -16,30 +14,32 @@
     createNip34RepositorySelection
   } from '$lib/stores/repositories.js';
 
-  export let open = false;
-  // svelte-ignore unused-export-let
-  export let value = null; // Current selection (for future pre-select feature)
-  export let requirePrimaryUrl = false;
-  export let allowManual = true;
-  // svelte-ignore unused-export-let
-  export let context = 'service'; // Context hint (for future filtering)
+  let {
+    open = false,
+    requirePrimaryUrl = false,
+    allowManual = true,
+    onSelect,
+    onClose
+  } = $props();
 
-  const dispatch = createEventDispatcher();
+  let activeTab = $state('nostr');
+  let searchQuery = $state('');
+  let manualUrl = $state('');
+  let selectedRepo = $state(null);
+  let hasLoadedOnce = $state(false);
 
-  let activeTab = 'nostr';
-  let searchQuery = '';
-  let manualUrl = '';
-  let selectedRepo = null;
-  let hasLoadedOnce = false;
+  const filteredRepos = $derived(
+    filterRepositories(repositories, searchQuery, {
+      requirePrimaryUrl: false
+    })
+  );
 
-  $: filteredRepos = filterRepositories($repositories, searchQuery, {
-    requirePrimaryUrl: false
+  $effect(() => {
+    if (open && !hasLoadedOnce) {
+      hasLoadedOnce = true;
+      loadRepositories();
+    }
   });
-
-  $: if (open && !hasLoadedOnce) {
-    hasLoadedOnce = true;
-    loadRepositories();
-  }
 
   function isRepoDisabled(repo) {
     return requirePrimaryUrl && !repo?.primaryUrl;
@@ -52,16 +52,7 @@
     return '';
   }
 
-  function isRepoSelected(repo) {
-    if (!selectedRepo) return false;
-    if (repo?.repoCoordinate && selectedRepo?.repoCoordinate) {
-      return repo.repoCoordinate === selectedRepo.repoCoordinate;
-    }
-    return repo?.id === selectedRepo?.id;
-  }
-
-  function handleRepoSelect(event) {
-    const repo = event.detail;
+  function handleRepoSelect(repo) {
     if (isRepoDisabled(repo)) return;
     selectedRepo = repo;
   }
@@ -69,7 +60,7 @@
   function confirmNostrSelection() {
     if (!selectedRepo) return;
     const selection = createNip34RepositorySelection(selectedRepo);
-    dispatch('select', selection);
+    onSelect?.(selection);
     resetAndClose();
   }
 
@@ -77,7 +68,7 @@
     const trimmed = (manualUrl || '').trim();
     if (!trimmed) return;
     const selection = createManualRepositorySelection(trimmed);
-    dispatch('select', selection);
+    onSelect?.(selection);
     resetAndClose();
   }
 
@@ -90,7 +81,7 @@
     manualUrl = '';
     selectedRepo = null;
     activeTab = 'nostr';
-    dispatch('close');
+    onClose?.();
   }
 
   function switchTab(tab) {
@@ -99,15 +90,13 @@
   }
 </script>
 
-<Modal {open} title="Choose Repository" size="lg" on:close={handleClose}>
-  <!-- Wrap in form with novalidate to isolate from parent form validation -->
-  <form on:submit|preventDefault class="search-modal" novalidate>
-    <!-- Tabs -->
+<Modal {open} title="Choose Repository" size="lg" onClose={handleClose}>
+  <form onsubmit={(event) => event.preventDefault()} class="search-modal" novalidate>
     <div class="tabs">
       <button
         class="tab"
         class:active={activeTab === 'nostr'}
-        on:click={() => switchTab('nostr')}
+        onclick={() => switchTab('nostr')}
       >
         🔍 Nostr Repositories
       </button>
@@ -115,14 +104,13 @@
         <button
           class="tab"
           class:active={activeTab === 'manual'}
-          on:click={() => switchTab('manual')}
+          onclick={() => switchTab('manual')}
         >
           ✏️ Manual Entry
         </button>
       {/if}
     </div>
 
-    <!-- Nostr Tab -->
     {#if activeTab === 'nostr'}
       <div class="tab-content">
         <div class="search-bar">
@@ -133,18 +121,18 @@
           />
         </div>
 
-        {#if $loading.list}
+        {#if loading.list}
           <div class="loading">
             <div class="spinner"></div>
             Loading repositories...
           </div>
-        {:else if $error}
+        {:else if error.value}
           <EmptyState
             icon="⚠️"
             title="Failed to load repositories"
-            message={$error}
+            message={error.value}
             actionLabel="Retry"
-            on:click={() => loadRepositories({ force: true })}
+            onAction={() => loadRepositories({ force: true })}
           />
         {:else if filteredRepos.length === 0}
           <EmptyState
@@ -162,7 +150,7 @@
                 selected={selectedRepo?.repoCoordinate === repo.repoCoordinate || selectedRepo?.id === repo.id}
                 disabled={isRepoDisabled(repo)}
                 disabledReason={getDisabledReason(repo)}
-                on:select={handleRepoSelect}
+                onSelect={handleRepoSelect}
               />
             {/each}
           </div>
@@ -171,14 +159,14 @@
         <div class="actions">
           <LoadingButton
             variant="secondary"
-            on:click={handleClose}
+            onclick={handleClose}
           >
             Cancel
           </LoadingButton>
           <LoadingButton
             variant="primary"
             disabled={!selectedRepo}
-            on:click={confirmNostrSelection}
+            onclick={confirmNostrSelection}
           >
             Select Repository
           </LoadingButton>
@@ -186,7 +174,6 @@
       </div>
     {/if}
 
-    <!-- Manual Tab -->
     {#if activeTab === 'manual'}
       <div class="tab-content">
         <p class="manual-hint">Enter a repository URL directly (clone URL or web URL).</p>
@@ -198,14 +185,14 @@
         <div class="actions">
           <LoadingButton
             variant="secondary"
-            on:click={handleClose}
+            onclick={handleClose}
           >
             Cancel
           </LoadingButton>
           <LoadingButton
             variant="primary"
             disabled={!(manualUrl || '').trim()}
-            on:click={confirmManualEntry}
+            onclick={confirmManualEntry}
           >
             Use This URL
           </LoadingButton>

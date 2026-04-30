@@ -1,5 +1,4 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
-import { get } from 'svelte/store';
 
 // Mock browser environment
 global.window = global;
@@ -130,7 +129,7 @@ describe('Souls Store', () => {
       expect(fetchSouls).toHaveBeenCalledWith(null);
       expect(parseSoulEvent).toHaveBeenCalledTimes(2);
 
-      const souls = get(soulsModule.souls);
+      const souls = soulsModule.souls;
       expect(souls).toHaveLength(2);
       expect(souls[0].agentId).toBe('agent-id-2'); // Sorted newest first
       expect(souls[1].agentId).toBe('agent-id-1');
@@ -148,7 +147,7 @@ describe('Souls Store', () => {
       let loadingDuringFetch = null;
 
       fetchSouls.mockImplementation(async () => {
-        loadingDuringFetch = get(soulsModule.loading);
+        loadingDuringFetch = { ...soulsModule.loading };
         return [{
           id: 'soul-1',
           pubkey: 'pk-1',
@@ -161,7 +160,7 @@ describe('Souls Store', () => {
 
       expect(loadingDuringFetch.souls).toBe(true);
 
-      const loadingAfter = get(soulsModule.loading);
+      const loadingAfter = soulsModule.loading;
       expect(loadingAfter.souls).toBe(false);
     });
 
@@ -177,10 +176,10 @@ describe('Souls Store', () => {
         expect.any(Error)
       );
 
-      const error = get(soulsModule.error);
+      const error = soulsModule.error.value;
       expect(error).toBe('Relay connection failed');
 
-      const loading = get(soulsModule.loading);
+      const loading = soulsModule.loading;
       expect(loading.souls).toBe(false);
 
       consoleError.mockRestore();
@@ -193,7 +192,7 @@ describe('Souls Store', () => {
       fetchSouls.mockRejectedValueOnce(new Error('Network error'));
       await soulsModule.loadSouls();
 
-      let error = get(soulsModule.error);
+      let error = soulsModule.error.value;
       expect(error).toBe('Network error');
 
       // Second load succeeds
@@ -205,7 +204,7 @@ describe('Souls Store', () => {
       }]);
       await soulsModule.loadSouls();
 
-      error = get(soulsModule.error);
+      error = soulsModule.error.value;
       expect(error).toBeNull();
 
       consoleError.mockRestore();
@@ -219,7 +218,7 @@ describe('Souls Store', () => {
       expect(fetchTemplates).toHaveBeenCalledWith(null);
       expect(parseTemplateEvent).toHaveBeenCalledTimes(1);
 
-      const templates = get(soulsModule.templates);
+      const templates = soulsModule.templates;
       expect(templates).toHaveLength(1);
       expect(templates[0].identifier).toBe('template-standard');
     });
@@ -256,7 +255,7 @@ describe('Souls Store', () => {
 
       await soulsModule.loadTemplates();
 
-      const templates = get(soulsModule.templates);
+      const templates = soulsModule.templates;
       expect(templates).toHaveLength(3);
       expect(templates[0].name).toBe('Alpha');
       expect(templates[1].name).toBe('Middle');
@@ -267,7 +266,7 @@ describe('Souls Store', () => {
       let loadingDuringFetch = null;
 
       fetchTemplates.mockImplementation(async () => {
-        loadingDuringFetch = get(soulsModule.loading);
+        loadingDuringFetch = { ...soulsModule.loading };
         return [{
           id: 't1',
           pubkey: 'pk',
@@ -280,7 +279,7 @@ describe('Souls Store', () => {
 
       expect(loadingDuringFetch.templates).toBe(true);
 
-      const loadingAfter = get(soulsModule.loading);
+      const loadingAfter = soulsModule.loading;
       expect(loadingAfter.templates).toBe(false);
     });
 
@@ -296,7 +295,7 @@ describe('Souls Store', () => {
         expect.any(Error)
       );
 
-      const error = get(soulsModule.error);
+      const error = soulsModule.error.value;
       expect(error).toBe('Templates fetch error');
 
       consoleError.mockRestore();
@@ -310,8 +309,8 @@ describe('Souls Store', () => {
       expect(fetchSouls).toHaveBeenCalledWith(null);
       expect(fetchTemplates).toHaveBeenCalledWith(null);
 
-      const souls = get(soulsModule.souls);
-      const templates = get(soulsModule.templates);
+      const souls = soulsModule.souls;
+      const templates = soulsModule.templates;
 
       expect(souls).toHaveLength(2);
       expect(templates).toHaveLength(1);
@@ -342,7 +341,7 @@ describe('Souls Store', () => {
       expect(fetchSouls).toHaveBeenCalled();
       expect(fetchTemplates).toHaveBeenCalled();
 
-      const templates = get(soulsModule.templates);
+      const templates = soulsModule.templates;
       expect(templates).toHaveLength(1);
 
       consoleError.mockRestore();
@@ -411,7 +410,7 @@ describe('Souls Store', () => {
 
       onEventCallback(updatedEvent);
 
-      const souls = get(soulsModule.souls);
+      const souls = soulsModule.souls;
       expect(souls).toHaveLength(2);
       
       const updatedSoul = souls.find(s => s.agentId === 'agent-id-1');
@@ -444,7 +443,7 @@ describe('Souls Store', () => {
 
       onEventCallback(newEvent);
 
-      const souls = get(soulsModule.souls);
+      const souls = soulsModule.souls;
       expect(souls).toHaveLength(3);
       expect(souls[0].agentId).toBe('agent-id-3'); // Added at front
     });
@@ -487,7 +486,7 @@ describe('Souls Store', () => {
 
       soulsModule.trackProvisioningRun(requestEventId, {});
 
-      const runs = get(soulsModule.provisioningRuns);
+      const runs = soulsModule.provisioningRuns;
       expect(runs.has(requestEventId)).toBe(true);
       
       const run = runs.get(requestEventId);
@@ -539,7 +538,7 @@ describe('Souls Store', () => {
 
       onEventCallback(statusEvent);
 
-      const runs = get(soulsModule.provisioningRuns);
+      const runs = soulsModule.provisioningRuns;
       const run = runs.get(requestEventId);
       
       expect(run.status).toBe('running');
@@ -581,7 +580,7 @@ describe('Souls Store', () => {
 
       onEventCallback(resultEvent);
 
-      const runs = get(soulsModule.provisioningRuns);
+      const runs = soulsModule.provisioningRuns;
       const run = runs.get(requestEventId);
       
       expect(run.status).toBe('completed');
@@ -617,7 +616,7 @@ describe('Souls Store', () => {
 
       onEventCallback(resultEvent);
 
-      const runs = get(soulsModule.provisioningRuns);
+      const runs = soulsModule.provisioningRuns;
       const run = runs.get(requestEventId);
       
       expect(run.status).toBe('failed');
@@ -633,12 +632,12 @@ describe('Souls Store', () => {
 
       const cleanup = soulsModule.trackProvisioningRun(requestEventId, {});
 
-      let runs = get(soulsModule.provisioningRuns);
+      let runs = soulsModule.provisioningRuns;
       expect(runs.has(requestEventId)).toBe(true);
 
       cleanup();
 
-      runs = get(soulsModule.provisioningRuns);
+      runs = soulsModule.provisioningRuns;
       expect(runs.has(requestEventId)).toBe(false);
     });
   });

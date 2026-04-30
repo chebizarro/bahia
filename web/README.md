@@ -21,6 +21,12 @@ npm run dev
 
 The dev server proxies `/api` requests to `http://localhost:8080`.
 
+## Svelte 5 Rune Architecture
+
+The dashboard runs with global Svelte 5 rune mode enabled. Components and routes use `$state`, `$derived`, `$effect`, callback props such as `onClose`/`onConfirm`, and DOM event props such as `onclick`.
+
+Shared UI state lives in rune-backed `.svelte.js` modules under `src/lib/stores/`; existing `.js` store entrypoints remain as stable re-export facades for imports.
+
 ## Production Build
 
 ```bash

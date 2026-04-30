@@ -1,28 +1,30 @@
 <script>
-  import { createEventDispatcher } from 'svelte';
+  let {
+    id = '',
+    name = '',
+    type = 'text',
+    value = $bindable(),
+    placeholder = '',
+    disabled = false,
+    required = false,
+    error = '',
+    oninput: onInput,
+    onchange: onChange,
+    onblur: onBlur,
+    onkeydown: onKeydown
+  } = $props();
 
-  export let id = '';
-  export let name = '';
-  export let type = 'text';
-  export let value = '';
-  export let placeholder = '';
-  export let disabled = false;
-  export let required = false;
-  export let error = '';
-
-  const dispatch = createEventDispatcher();
-
-  function handleInput(e) {
-    value = e.target.value;
-    dispatch('input', { value });
+  function handleInput(event) {
+    value = event.currentTarget.value;
+    onInput?.(event);
   }
 
-  function handleChange(e) {
-    dispatch('change', { value: e.target.value });
+  function handleChange(event) {
+    onChange?.(event);
   }
 
-  function handleBlur(e) {
-    dispatch('blur', { value: e.target.value });
+  function handleBlur(event) {
+    onBlur?.(event);
   }
 </script>
 
@@ -33,13 +35,13 @@
   {placeholder}
   {disabled}
   {required}
-  {value}
+  bind:value
   class="input"
   class:error
-  on:input={handleInput}
-  on:change={handleChange}
-  on:blur={handleBlur}
-  on:keydown
+  oninput={handleInput}
+  onchange={handleChange}
+  onblur={handleBlur}
+  onkeydown={onKeydown}
 />
 
 <style>

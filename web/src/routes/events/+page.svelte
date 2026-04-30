@@ -1,30 +1,29 @@
 <script>
-  import { onMount, onDestroy } from 'svelte';
   import Table from '$lib/components/Table.svelte';
   import { sseEvents, sseConnection, connectEventStream, disconnectEventStream } from '$lib/stores/sse';
 
-  $: columns = [
+  let columns = $derived([
     { key: 'time', label: 'Time', render: (r) => r.time || '-' },
     { key: 'type', label: 'Event Type' },
     { key: 'entity_id', label: 'Entity ID', render: (r) => r.entity_id ? `<code>${r.entity_id}</code>` : '-' },
     { key: 'data', label: 'Data', render: (r) => r.data ? `<code>${JSON.stringify(r.data).slice(0, 50)}...</code>` : '-' }
-  ];
+  ]);
 
   // Reactive status display based on connection state
-  $: statusDisplay = {
+  let statusDisplay = $derived({
     idle: '⚪ Not connected',
     connecting: '🟡 Connecting',
     connected: '🟢 Connected via SSE',
     disconnected: '⚪ Disconnected',
     error: '🔴 Connection error'
-  }[$sseConnection.status] || '⚪ Unknown';
+  }[sseConnection.status] || '⚪ Unknown');
 
-  onMount(() => {
+  $effect(() => {
     connectEventStream();
-  });
 
-  onDestroy(() => {
-    disconnectEventStream();
+    return () => {
+      disconnectEventStream();
+    };
   });
 </script>
 
@@ -36,7 +35,7 @@
 
   <p class="hint">Events are streamed in real-time from the server.</p>
 
-  <Table columns={columns} data={$sseEvents} />
+  <Table columns={columns} data={sseEvents} />
 </div>
 
 <style>

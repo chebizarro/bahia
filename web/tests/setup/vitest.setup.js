@@ -1,5 +1,12 @@
 import { beforeEach, afterEach, vi } from 'vitest';
 
+vi.mock('$app/environment', () => ({
+  browser: true,
+  dev: false,
+  building: false,
+  version: 'test'
+}));
+
 // Mock localStorage
 const localStorageMock = (() => {
   let store = {};

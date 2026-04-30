@@ -1,6 +1,5 @@
 <script>
-  import { onMount, onDestroy } from 'svelte';
-  import { page } from '$app/stores';
+  import { page } from '$app/state';
   import Nav from '$lib/components/Nav.svelte';
   import ErrorBoundary from '$lib/components/ErrorBoundary.svelte';
   import AuthGuard from '$lib/components/AuthGuard.svelte';
@@ -8,6 +7,13 @@
   import { loadAll, subscribeToEvents, unsubscribeFromEvents } from '$lib/stores';
   import { theme } from '$lib/stores/theme.js';
   import { initializeAuth } from '$lib/stores/auth.js';
+  /**
+   * @typedef {Object} Props
+   * @property {import('svelte').Snippet} [children]
+   */
+
+  /** @type {Props} */
+  let { children } = $props();
 
   // Routes that require authentication
   const protectedPrefixes = [
@@ -24,16 +30,22 @@
   ];
 
   // Check if current route is protected
-  $: isProtectedRoute = protectedPrefixes.some(prefix => $page.url.pathname.startsWith(prefix));
+  let isProtectedRoute = $derived(protectedPrefixes.some(prefix => page.url.pathname.startsWith(prefix)));
 
-  onMount(() => {
-    loadAll();
-    subscribeToEvents();
-    initializeAuth();
-  });
+  $effect(() => {
+    let active = true;
 
-  onDestroy(() => {
-    unsubscribeFromEvents();
+    queueMicrotask(() => {
+      if (!active) return;
+      loadAll();
+      subscribeToEvents();
+      initializeAuth();
+    });
+
+    return () => {
+      active = false;
+      unsubscribeFromEvents();
+    };
   });
 </script>
 
@@ -43,10 +55,10 @@
     <ErrorBoundary>
       {#if isProtectedRoute}
         <AuthGuard>
-          <slot />
+          {@render children?.()}
         </AuthGuard>
       {:else}
-        <slot />
+        {@render children?.()}
       {/if}
     </ErrorBoundary>
   </main>

@@ -1,40 +1,38 @@
 <script>
-  import { createEventDispatcher } from 'svelte';
   import Badge from '$lib/components/Badge.svelte';
 
-  export let repository;
-  export let selected = false;
-  export let disabled = false;
-  export let disabledReason = '';
-  export let showCi = false;
-
-  const dispatch = createEventDispatcher();
+  let {
+    repository,
+    selected = false,
+    disabled = false,
+    disabledReason = '',
+    showCi = false,
+    onSelect
+  } = $props();
 
   function handleClick() {
     if (!disabled) {
-      dispatch('select', repository);
+      onSelect?.(repository);
     }
   }
 
-  $: provider = repository?.source === 'nip34' || repository?.repoCoordinate ? 'Nostr' : 'Manual';
-  $: name = repository?.displayName || repository?.name || repository?.identifier || 'Unnamed';
-  $: description = repository?.description || '';
-  $: url = repository?.primaryUrl || '';
-  $: hasUrl = !!url;
+  const provider = $derived(repository?.source === 'nip34' || repository?.repoCoordinate ? 'Nostr' : 'Manual');
+  const name = $derived(repository?.displayName || repository?.name || repository?.identifier || 'Unnamed');
+  const description = $derived(repository?.description || '');
+  const url = $derived(repository?.primaryUrl || '');
 
-  // CI state
-  $: ciState = repository?.ci?.state || 'unsupported';
-  $: ciLookup = repository?.ci?.lookup;
-  $: latestResult = ciLookup?.latest_result;
-  $: latestRun = ciLookup?.latest_run;
-  $: linkedServiceCount = ciLookup?.linked_services?.length || 0;
+  const ciState = $derived(repository?.ci?.state || 'unsupported');
+  const ciLookup = $derived(repository?.ci?.lookup);
+  const latestResult = $derived(ciLookup?.latest_result);
+  const latestRun = $derived(ciLookup?.latest_run);
+  const linkedServiceCount = $derived(ciLookup?.linked_services?.length || 0);
 </script>
 
 <button
   class="repo-card"
   class:selected
   class:disabled
-  on:click={handleClick}
+  onclick={handleClick}
   {disabled}
   title={disabled && disabledReason ? disabledReason : undefined}
 >

@@ -1,6 +1,5 @@
 <script>
-  import { onMount } from 'svelte';
-  import { page } from '$app/stores';
+  import { page } from '$app/state';
   import { goto } from '$app/navigation';
   import { api } from '$lib/api/client.js';
   import { authState } from '$lib/stores/auth.js';
@@ -14,22 +13,22 @@
   import LoadingButton from '$lib/components/LoadingButton.svelte';
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
 
-  let org = null;
-  let members = [];
-  let invites = [];
-  let loading = true;
-  let error = null;
-  let myRole = null;
+  let org = $state(null);
+  let members = $state([]);
+  let invites = $state([]);
+  let loading = $state(true);
+  let error = $state(null);
+  let myRole = $state(null);
 
   // Invite modal state
-  let showInviteModal = false;
-  let invitePubkey = '';
-  let inviteRole = 'viewer';
-  let inviting = false;
+  let showInviteModal = $state(false);
+  let invitePubkey = $state('');
+  let inviteRole = $state('viewer');
+  let inviting = $state(false);
 
   // Delete confirm state
-  let showDeleteConfirm = false;
-  let deleting = false;
+  let showDeleteConfirm = $state(false);
+  let deleting = $state(false);
 
   const roleOptions = [
     { value: 'viewer', label: 'Viewer' },
@@ -37,29 +36,31 @@
     { value: 'admin', label: 'Admin' }
   ];
 
-  $: orgId = $page.params.id;
-  $: canManageMembers = myRole === 'owner' || myRole === 'admin';
-  $: canDelete = myRole === 'owner';
+  let orgId = $derived(page.params.id);
+  let canManageMembers = $derived(myRole === 'owner' || myRole === 'admin');
+  let canDelete = $derived(myRole === 'owner');
 
-  onMount(async () => {
-    await loadData();
+  $effect(() => {
+    const id = orgId;
+    if (!id) return;
+    void loadData(id);
   });
 
-  async function loadData() {
+  async function loadData(id = orgId) {
     loading = true;
     error = null;
     try {
       const [orgData, membersData, invitesData] = await Promise.all([
-        api.getOrg(orgId),
-        api.listOrgMembers(orgId),
-        canManageMembers ? api.listOrgInvites(orgId).catch(() => []) : Promise.resolve([])
+        api.getOrg(id),
+        api.listOrgMembers(id),
+        canManageMembers ? api.listOrgInvites(id).catch(() => []) : Promise.resolve([])
       ]);
       org = orgData;
       members = membersData;
       invites = invitesData;
       
       // Find my role
-      const myPubkey = $authState.pubkey;
+      const myPubkey = authState.pubkey;
       const myMembership = members.find(m => m.pubkey === myPubkey);
       myRole = myMembership?.role || org.role; // org.role from list endpoint
     } catch (e) {
@@ -176,14 +177,14 @@
       <h1>{org.display_name || org.name}</h1>
       <p class="org-name">@{org.name}</p>
     </div>
-    <Badge type={getRoleBadgeType(myRole)}>{myRole}</Badge>
+    <Badge variant={getRoleBadgeType(myRole)}>{myRole}</Badge>
   </div>
 
   <section class="section">
     <div class="section-header">
       <h2>Members ({members.length})</h2>
       {#if canManageMembers}
-        <button class="btn-primary" on:click={() => showInviteModal = true}>
+        <button class="btn-primary" onclick={() => showInviteModal = true}>
           + Invite Member
         </button>
       {/if}
@@ -208,16 +209,16 @@
                   <span class="pubkey" title={member.pubkey}>
                     {member.nip05 || truncatePubkey(member.pubkey)}
                   </span>
-                  {#if member.pubkey === $authState.pubkey}
-                    <Badge type="info">You</Badge>
+                  {#if member.pubkey === authState.pubkey}
+                    <Badge variant="info">You</Badge>
                   {/if}
                 </div>
               </td>
               <td>
-                {#if canManageMembers && member.role !== 'owner' && member.pubkey !== $authState.pubkey}
+                {#if canManageMembers && member.role !== 'owner' && member.pubkey !== authState.pubkey}
                   <select
                     value={member.role}
-                    on:change={(e) => updateRole(member, e.target.value)}
+                    onchange={(e) => updateRole(member, e.target.value)}
                     class="role-select"
                   >
                     {#each roleOptions as opt}
@@ -225,13 +226,13 @@
                     {/each}
                   </select>
                 {:else}
-                  <Badge type={getRoleBadgeType(member.role)}>{member.role}</Badge>
+                  <Badge variant={getRoleBadgeType(member.role)}>{member.role}</Badge>
                 {/if}
               </td>
               {#if canManageMembers}
                 <td>
-                  {#if member.role !== 'owner' && member.pubkey !== $authState.pubkey}
-                    <button class="btn-danger-small" on:click={() => removeMember(member)}>
+                  {#if member.role !== 'owner' && member.pubkey !== authState.pubkey}
+                    <button class="btn-danger-small" onclick={() => removeMember(member)}>
                       Remove
                     </button>
                   {/if}
@@ -261,10 +262,10 @@
             {#each invites as invite}
               <tr>
                 <td><span class="pubkey">{truncatePubkey(invite.pubkey)}</span></td>
-                <td><Badge type={getRoleBadgeType(invite.role)}>{invite.role}</Badge></td>
+                <td><Badge variant={getRoleBadgeType(invite.role)}>{invite.role}</Badge></td>
                 <td>{new Date(invite.expires_at).toLocaleDateString()}</td>
                 <td>
-                  <button class="btn-danger-small" on:click={() => revokeInvite(invite)}>
+                  <button class="btn-danger-small" onclick={() => revokeInvite(invite)}>
                     Revoke
                   </button>
                 </td>
@@ -285,7 +286,7 @@
             <strong>Delete this organization</strong>
             <p>Once deleted, all data will be permanently removed.</p>
           </div>
-          <button class="btn-danger" on:click={() => showDeleteConfirm = true}>
+          <button class="btn-danger" onclick={() => showDeleteConfirm = true}>
             Delete Organization
           </button>
         </div>
@@ -296,8 +297,8 @@
 
 <!-- Invite Modal -->
 {#if showInviteModal}
-  <Modal title="Invite Member" on:close={() => showInviteModal = false}>
-    <form on:submit|preventDefault={sendInvite}>
+  <Modal bind:open={showInviteModal} title="Invite Member" onClose={() => showInviteModal = false}>
+    <form onsubmit={(event) => { event.preventDefault(); sendInvite(); }}>
       <FormField label="Pubkey (hex)">
         <Input bind:value={invitePubkey} placeholder="Enter nostr pubkey" />
       </FormField>
@@ -305,7 +306,7 @@
         <Select bind:value={inviteRole} options={roleOptions} />
       </FormField>
       <div class="modal-actions">
-        <button type="button" class="btn-cancel" on:click={() => showInviteModal = false}>
+        <button type="button" class="btn-cancel" onclick={() => showInviteModal = false}>
           Cancel
         </button>
         <LoadingButton type="submit" loading={inviting}>
@@ -319,12 +320,13 @@
 <!-- Delete Confirmation -->
 {#if showDeleteConfirm}
   <ConfirmDialog
+    bind:open={showDeleteConfirm}
     title="Delete Organization"
     message="Are you sure you want to delete this organization? This action cannot be undone."
-    confirmText="Delete"
-    confirmType="danger"
-    on:confirm={deleteOrg}
-    on:cancel={() => showDeleteConfirm = false}
+    confirmLabel="Delete"
+    variant="danger"
+    onConfirm={deleteOrg}
+    onCancel={() => showDeleteConfirm = false}
     loading={deleting}
   />
 {/if}

@@ -1,12 +1,11 @@
 <script>
-  import { createEventDispatcher } from 'svelte';
   import { templates, templatesByTier, loading, loadTemplates } from '$lib/stores/souls.js';
-  import { onMount } from 'svelte';
-  
-  export let selected = null;
-  
-  const dispatch = createEventDispatcher();
-  
+
+  let {
+    selected = null,
+    onSelect
+  } = $props();
+
   const tierInfo = {
     lightweight: {
       icon: '⚡',
@@ -24,35 +23,36 @@
       description: 'Maximum resources for complex workloads.'
     }
   };
-  
-  function selectTemplate(template) {
-    selected = template;
-    dispatch('select', template);
-  }
-  
-  onMount(() => {
-    if ($templates.length === 0) {
+
+  const groupedTemplates = $derived(templatesByTier());
+
+  $effect(() => {
+    if (templates.length === 0) {
       loadTemplates();
     }
   });
+
+  function selectTemplate(template) {
+    selected = template;
+    onSelect?.(template);
+  }
 </script>
 
 <div class="template-selector">
   <h3>Choose a Template</h3>
   <p class="hint">Select a template to start with or create a custom soul from scratch.</p>
   
-  {#if $loading.templates}
+  {#if loading.templates}
     <div class="loading">
       <div class="spinner"></div>
       Loading templates...
     </div>
   {:else}
-    <!-- Custom option -->
     <div class="template-section">
       <button 
         class="template-card custom"
         class:selected={selected === null}
-        on:click={() => selectTemplate(null)}
+        onclick={() => selectTemplate(null)}
       >
         <div class="template-icon">✨</div>
         <div class="template-info">
@@ -65,9 +65,8 @@
       </button>
     </div>
     
-    <!-- Templates by tier -->
     {#each Object.entries(tierInfo) as [tier, info]}
-      {#if $templatesByTier[tier]?.length > 0}
+      {#if groupedTemplates[tier]?.length > 0}
         <div class="template-section">
           <h4 class="tier-header">
             <span class="tier-icon">{info.icon}</span>
@@ -76,11 +75,11 @@
           </h4>
           
           <div class="template-grid">
-            {#each $templatesByTier[tier] as template}
+            {#each groupedTemplates[tier] as template}
               <button 
                 class="template-card"
                 class:selected={selected?.identifier === template.identifier}
-                on:click={() => selectTemplate(template)}
+                onclick={() => selectTemplate(template)}
               >
                 <div class="template-icon">{info.icon}</div>
                 <div class="template-info">
@@ -104,7 +103,7 @@
       {/if}
     {/each}
     
-    {#if $templates.length === 0}
+    {#if templates.length === 0}
       <div class="empty-state">
         <p>No templates available. You can still create a custom soul.</p>
       </div>

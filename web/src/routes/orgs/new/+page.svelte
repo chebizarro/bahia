@@ -7,15 +7,17 @@
   import FormField from '$lib/components/FormField.svelte';
   import LoadingButton from '$lib/components/LoadingButton.svelte';
 
-  let name = '';
-  let displayName = '';
-  let submitting = false;
-  let errors = {};
+  let name = $state('');
+  let displayName = $state('');
+  let submitting = $state(false);
+  let errors = $state({});
 
   // Auto-generate name from display name
-  $: if (displayName && !name) {
-    name = displayName.toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-').slice(0, 32);
-  }
+  $effect(() => {
+    if (displayName && !name) {
+      name = displayName.toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-').slice(0, 32);
+    }
+  });
 
   function validate() {
     errors = {};
@@ -63,7 +65,7 @@
   <h1>Create Organization</h1>
   
   <Card>
-    <form on:submit|preventDefault={handleSubmit}>
+    <form onsubmit={(event) => { event.preventDefault(); handleSubmit(); }}>
       <FormField label="Display Name" error={errors.displayName}>
         <Input
           bind:value={displayName}

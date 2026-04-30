@@ -1,5 +1,4 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
-import { get } from 'svelte/store';
 
 // Mock browser environment
 global.window = global;
@@ -58,6 +57,7 @@ describe('Global Stores (index.js)', () => {
     if (storesModule.unsubscribeFromEvents) {
       storesModule.unsubscribeFromEvents();
     }
+    vi.useRealTimers();
   });
 
   describe('loadServices', () => {
@@ -66,7 +66,7 @@ describe('Global Stores (index.js)', () => {
 
       expect(mockApi.listServices).toHaveBeenCalledTimes(1);
 
-      const services = get(storesModule.services);
+      const services = storesModule.services;
       expect(services).toHaveLength(2);
       expect(services[0].id).toBe('svc-1');
       expect(services[1].id).toBe('svc-2');
@@ -76,7 +76,7 @@ describe('Global Stores (index.js)', () => {
       let loadingDuringFetch = null;
 
       mockApi.listServices.mockImplementation(async () => {
-        loadingDuringFetch = get(storesModule.loading);
+        loadingDuringFetch = { ...storesModule.loading };
         return [{ id: 'svc-1', name: 'Service 1' }];
       });
 
@@ -84,7 +84,7 @@ describe('Global Stores (index.js)', () => {
 
       expect(loadingDuringFetch.services).toBe(true);
 
-      const loadingAfter = get(storesModule.loading);
+      const loadingAfter = storesModule.loading;
       expect(loadingAfter.services).toBe(false);
     });
 
@@ -99,10 +99,10 @@ describe('Global Stores (index.js)', () => {
         expect.any(Error)
       );
 
-      const services = get(storesModule.services);
+      const services = storesModule.services;
       expect(services).toEqual([]);
 
-      const loading = get(storesModule.loading);
+      const loading = storesModule.loading;
       expect(loading.services).toBe(false);
 
       consoleError.mockRestore();
@@ -113,7 +113,7 @@ describe('Global Stores (index.js)', () => {
 
       await storesModule.loadServices();
 
-      const services = get(storesModule.services);
+      const services = storesModule.services;
       expect(services).toEqual([]);
     });
   });
@@ -124,7 +124,7 @@ describe('Global Stores (index.js)', () => {
 
       expect(mockApi.listEnvironments).toHaveBeenCalledTimes(1);
 
-      const environments = get(storesModule.environments);
+      const environments = storesModule.environments;
       expect(environments).toHaveLength(2);
       expect(environments[0].id).toBe('env-prod');
     });
@@ -133,7 +133,7 @@ describe('Global Stores (index.js)', () => {
       let loadingDuringFetch = null;
 
       mockApi.listEnvironments.mockImplementation(async () => {
-        loadingDuringFetch = get(storesModule.loading);
+        loadingDuringFetch = { ...storesModule.loading };
         return [{ id: 'env-1', name: 'Env 1' }];
       });
 
@@ -141,7 +141,7 @@ describe('Global Stores (index.js)', () => {
 
       expect(loadingDuringFetch.environments).toBe(true);
 
-      const loadingAfter = get(storesModule.loading);
+      const loadingAfter = storesModule.loading;
       expect(loadingAfter.environments).toBe(false);
     });
 
@@ -153,7 +153,7 @@ describe('Global Stores (index.js)', () => {
 
       expect(consoleError).toHaveBeenCalled();
 
-      const loading = get(storesModule.loading);
+      const loading = storesModule.loading;
       expect(loading.environments).toBe(false);
 
       consoleError.mockRestore();
@@ -166,7 +166,7 @@ describe('Global Stores (index.js)', () => {
 
       expect(mockApi.listStates).toHaveBeenCalledTimes(1);
 
-      const states = get(storesModule.states);
+      const states = storesModule.states;
       expect(states).toHaveLength(2);
       expect(states[0].drift_status).toBe('synced');
       expect(states[1].drift_status).toBe('drifted');
@@ -176,7 +176,7 @@ describe('Global Stores (index.js)', () => {
       let loadingDuringFetch = null;
 
       mockApi.listStates.mockImplementation(async () => {
-        loadingDuringFetch = get(storesModule.loading);
+        loadingDuringFetch = { ...storesModule.loading };
         return [{ id: 'state-1' }];
       });
 
@@ -184,7 +184,7 @@ describe('Global Stores (index.js)', () => {
 
       expect(loadingDuringFetch.states).toBe(true);
 
-      const loadingAfter = get(storesModule.loading);
+      const loadingAfter = storesModule.loading;
       expect(loadingAfter.states).toBe(false);
     });
 
@@ -196,7 +196,7 @@ describe('Global Stores (index.js)', () => {
 
       expect(consoleError).toHaveBeenCalled();
 
-      const loading = get(storesModule.loading);
+      const loading = storesModule.loading;
       expect(loading.states).toBe(false);
 
       consoleError.mockRestore();
@@ -209,7 +209,7 @@ describe('Global Stores (index.js)', () => {
 
       expect(mockApi.listWorkers).toHaveBeenCalledTimes(1);
 
-      const workers = get(storesModule.workers);
+      const workers = storesModule.workers;
       expect(workers).toHaveLength(2);
       expect(workers[0].pubkey).toBe('worker-1');
     });
@@ -218,7 +218,7 @@ describe('Global Stores (index.js)', () => {
       let loadingDuringFetch = null;
 
       mockApi.listWorkers.mockImplementation(async () => {
-        loadingDuringFetch = get(storesModule.loading);
+        loadingDuringFetch = { ...storesModule.loading };
         return [{ pubkey: 'w1' }];
       });
 
@@ -226,7 +226,7 @@ describe('Global Stores (index.js)', () => {
 
       expect(loadingDuringFetch.workers).toBe(true);
 
-      const loadingAfter = get(storesModule.loading);
+      const loadingAfter = storesModule.loading;
       expect(loadingAfter.workers).toBe(false);
     });
 
@@ -238,7 +238,7 @@ describe('Global Stores (index.js)', () => {
 
       expect(consoleError).toHaveBeenCalled();
 
-      const loading = get(storesModule.loading);
+      const loading = storesModule.loading;
       expect(loading.workers).toBe(false);
 
       consoleError.mockRestore();
@@ -254,10 +254,10 @@ describe('Global Stores (index.js)', () => {
       expect(mockApi.listStates).toHaveBeenCalledTimes(1);
       expect(mockApi.listWorkers).toHaveBeenCalledTimes(1);
 
-      const services = get(storesModule.services);
-      const environments = get(storesModule.environments);
-      const states = get(storesModule.states);
-      const workers = get(storesModule.workers);
+      const services = storesModule.services;
+      const environments = storesModule.environments;
+      const states = storesModule.states;
+      const workers = storesModule.workers;
 
       expect(services).toHaveLength(2);
       expect(environments).toHaveLength(2);
@@ -276,7 +276,7 @@ describe('Global Stores (index.js)', () => {
       expect(mockApi.listServices).toHaveBeenCalled();
       expect(mockApi.listEnvironments).toHaveBeenCalled();
 
-      const environments = get(storesModule.environments);
+      const environments = storesModule.environments;
       expect(environments).toHaveLength(1);
 
       consoleError.mockRestore();
@@ -287,7 +287,7 @@ describe('Global Stores (index.js)', () => {
     it('should filter states by drift_status', async () => {
       await storesModule.loadStates();
 
-      const drifted = get(storesModule.driftedStates);
+      const drifted = storesModule.driftedStates();
       
       expect(drifted).toHaveLength(1);
       expect(drifted[0].drift_status).toBe('drifted');
@@ -296,7 +296,7 @@ describe('Global Stores (index.js)', () => {
     it('should update when states change', async () => {
       await storesModule.loadStates();
 
-      let drifted = get(storesModule.driftedStates);
+      let drifted = storesModule.driftedStates();
       expect(drifted).toHaveLength(1);
 
       // Update states
@@ -308,7 +308,7 @@ describe('Global Stores (index.js)', () => {
 
       await storesModule.loadStates();
 
-      drifted = get(storesModule.driftedStates);
+      drifted = storesModule.driftedStates();
       expect(drifted).toHaveLength(2);
     });
 
@@ -320,7 +320,7 @@ describe('Global Stores (index.js)', () => {
 
       await storesModule.loadStates();
 
-      const drifted = get(storesModule.driftedStates);
+      const drifted = storesModule.driftedStates();
       expect(drifted).toHaveLength(0);
     });
   });
@@ -338,6 +338,7 @@ describe('Global Stores (index.js)', () => {
 
       expect(mockApi.streamEvents).toHaveBeenCalledWith(
         [],
+        expect.any(Function),
         expect.any(Function)
       );
       expect(eventCallback).not.toBeNull();
@@ -359,7 +360,7 @@ describe('Global Stores (index.js)', () => {
       eventCallback(event1);
       eventCallback(event2);
 
-      const events = get(storesModule.events);
+      const events = storesModule.events;
       expect(events).toHaveLength(2);
       expect(events[0]).toEqual(event2); // Most recent first
       expect(events[1]).toEqual(event1);
@@ -380,12 +381,13 @@ describe('Global Stores (index.js)', () => {
         eventCallback({ id: `evt-${i}`, type: 'test.event', timestamp: new Date().toISOString() });
       }
 
-      const events = get(storesModule.events);
+      const events = storesModule.events;
       expect(events).toHaveLength(100);
       expect(events[0].id).toBe('evt-149'); // Most recent
     });
 
-    it('should trigger loadStates on deployment events', () => {
+    it('should trigger loadStates on deployment events', async () => {
+      vi.useFakeTimers();
       let eventCallback = null;
 
       mockApi.streamEvents.mockImplementation((types, onEvent) => {
@@ -399,10 +401,13 @@ describe('Global Stores (index.js)', () => {
 
       eventCallback({ id: 'evt-1', type: 'deployment.completed' });
 
+      expect(mockApi.listStates).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(750);
       expect(mockApi.listStates).toHaveBeenCalledTimes(1);
     });
 
-    it('should trigger loadStates on drift events', () => {
+    it('should trigger loadStates on drift events', async () => {
+      vi.useFakeTimers();
       let eventCallback = null;
 
       mockApi.streamEvents.mockImplementation((types, onEvent) => {
@@ -416,6 +421,8 @@ describe('Global Stores (index.js)', () => {
 
       eventCallback({ id: 'evt-2', type: 'drift.detected' });
 
+      expect(mockApi.listStates).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(750);
       expect(mockApi.listStates).toHaveBeenCalledTimes(1);
     });
 

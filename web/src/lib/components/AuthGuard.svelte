@@ -1,28 +1,34 @@
 <script>
-  import { onMount } from 'svelte';
   import { goto } from '$app/navigation';
-  import { authState, initializeAuth } from '$lib/stores/auth.js';
-  
-  // Track if we've done the initial check
-  let initialized = false;
-  
-  onMount(() => {
-    // Ensure auth is initialized
-    if ($authState.status === 'unknown') {
-      initializeAuth();
+  import { authState, isAuthenticated, initializeAuth } from '$lib/stores/auth.js';
+
+  let { children } = $props();
+
+  let initialized = $state(false);
+
+  $effect(() => {
+    if (!initialized) {
+      if (authState.status === 'unknown') {
+        initializeAuth();
+      }
+      initialized = true;
     }
-    initialized = true;
   });
-  
-  // Reactive redirect when auth state changes
-  $: if (initialized && $authState.status !== 'unknown' && $authState.status !== 'checking' && $authState.status !== 'authenticating') {
-    if (!$authState.backendAuthenticated && $authState.status !== 'authenticated') {
+
+  const isLoading = $derived(
+    !initialized ||
+      authState.status === 'unknown' ||
+      authState.status === 'checking' ||
+      authState.status === 'authenticating'
+  );
+
+  const isAuthorized = $derived(authState.backendAuthenticated || isAuthenticated());
+
+  $effect(() => {
+    if (!isLoading && !isAuthorized) {
       goto('/');
     }
-  }
-  
-  $: isLoading = !initialized || $authState.status === 'unknown' || $authState.status === 'checking' || $authState.status === 'authenticating';
-  $: isAuthorized = $authState.backendAuthenticated || $authState.status === 'authenticated';
+  });
 </script>
 
 {#if isLoading}
@@ -31,7 +37,7 @@
     <p>Checking authentication...</p>
   </div>
 {:else if isAuthorized}
-  <slot />
+  {@render children?.()}
 {:else}
   <div class="auth-redirect">
     <p>Redirecting to login...</p>

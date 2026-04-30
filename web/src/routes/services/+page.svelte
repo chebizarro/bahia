@@ -1,6 +1,5 @@
 <script>
   import { goto } from '$app/navigation';
-  import { onMount } from 'svelte';
   import Table from '$lib/components/Table.svelte';
   import Modal from '$lib/components/Modal.svelte';
   import Input from '$lib/components/Input.svelte';
@@ -14,12 +13,16 @@
   import { api } from '$lib/api/client.js';
 
   // Registry state
-  let availableRegistries = [];
-  let registriesLoading = true;
-  let selectedRegistry = 'custom';
-  let repoPath = '';
+  let availableRegistries = $state([]);
+  let registriesLoading = $state(true);
+  let selectedRegistry = $state('custom');
+  let repoPath = $state('');
 
-  onMount(async () => {
+  $effect(() => {
+    void initializeServicesPage();
+  });
+
+  async function initializeServicesPage() {
     loadServices();
     // Load available registries
     try {
@@ -35,53 +38,29 @@
     } finally {
       registriesLoading = false;
     }
-  });
+  }
 
   // Create modal state
-  let createOpen = false;
-  let creating = false;
-  let createError = null;
+  let createOpen = $state(false);
+  let creating = $state(false);
+  let createError = $state(null);
 
-  let createForm = {
+  let createForm = $state({
     name: '',
     repositorySelection: createManualRepositorySelection(''),
     artifact_repo: '',
     runtime_type: 'docker',
     default_branch: 'main'
-  };
+  });
 
-  // Compute artifact_repo from registry selection + path
-  $: {
-    if (selectedRegistry === 'custom') {
-      createForm.artifact_repo = repoPath;
-    } else {
-      const registry = availableRegistries.find(r => r.id === selectedRegistry);
-      if (registry && repoPath) {
-        createForm.artifact_repo = `${registry.base_url}/${repoPath}`;
-      } else {
-        createForm.artifact_repo = repoPath;
-      }
-    }
-  }
 
-  $: registryOptions = [
-    ...availableRegistries.map(r => ({
-      value: r.id,
-      label: r.default ? `${r.name} (default)` : r.name
-    })),
-    { value: 'custom', label: 'Custom Registry' }
-  ];
 
   // Branch detection state
-  let detectedBranches = [];
-  let detectedDefaultBranch = null;
-  let branchesLoading = false;
-  let branchesError = null;
+  let detectedBranches = $state([]);
+  let detectedDefaultBranch = $state(null);
+  let branchesLoading = $state(false);
+  let branchesError = $state(null);
 
-  // Watch for repository selection changes and fetch branches
-  $: if (createForm.repositorySelection) {
-    handleRepositoryChange(createForm.repositorySelection);
-  }
 
   async function handleRepositoryChange(selection) {
     // Reset branch state
@@ -115,10 +94,6 @@
     }
   }
 
-  $: branchOptions = detectedBranches.map(b => ({
-    value: b,
-    label: b === detectedDefaultBranch ? `${b} (default)` : b
-  }));
 
   const runtimeOptions = [
     { value: 'docker', label: 'Docker' },
@@ -127,13 +102,6 @@
     { value: 'podman', label: 'Podman' }
   ];
 
-  $: columns = [
-    { key: 'name', label: 'Name' },
-    { key: 'artifact_repo', label: 'Artifact Repo' },
-    { key: 'runtime_type', label: 'Runtime' },
-    { key: 'default_branch', label: 'Branch' },
-    { key: 'id', label: 'ID', render: (r) => `<code>${r.id?.slice(0, 8)}...</code>` }
-  ];
 
   function openCreateModal() {
     createOpen = true;
@@ -192,36 +160,73 @@
       creating = false;
     }
   }
+  // Compute artifact_repo from registry selection + path
+  $effect(() => {
+    if (selectedRegistry === 'custom') {
+      createForm.artifact_repo = repoPath;
+    } else {
+      const registry = availableRegistries.find(r => r.id === selectedRegistry);
+      if (registry && repoPath) {
+        createForm.artifact_repo = `${registry.base_url}/${repoPath}`;
+      } else {
+        createForm.artifact_repo = repoPath;
+      }
+    }
+  });
+  let registryOptions = $derived([
+    ...availableRegistries.map(r => ({
+      value: r.id,
+      label: r.default ? `${r.name} (default)` : r.name
+    })),
+    { value: 'custom', label: 'Custom Registry' }
+  ]);
+  // Watch for repository selection changes and fetch branches
+  $effect(() => {
+    if (createForm.repositorySelection) {
+      handleRepositoryChange(createForm.repositorySelection);
+    }
+  });
+  let branchOptions = $derived(detectedBranches.map(b => ({
+    value: b,
+    label: b === detectedDefaultBranch ? `${b} (default)` : b
+  })));
+  let columns = $derived([
+    { key: 'name', label: 'Name' },
+    { key: 'artifact_repo', label: 'Artifact Repo' },
+    { key: 'runtime_type', label: 'Runtime' },
+    { key: 'default_branch', label: 'Branch' },
+    { key: 'id', label: 'ID', render: (r) => `<code>${r.id?.slice(0, 8)}...</code>` }
+  ]);
 </script>
 
 <div class="page">
   <div class="header">
     <div class="title-row">
       <h1>Services</h1>
-      <span class="count">{$services.length} services</span>
+      <span class="count">{services.length} services</span>
     </div>
-    <LoadingButton variant="primary" on:click={openCreateModal}>
+    <LoadingButton variant="primary" onclick={openCreateModal}>
       Create Service
     </LoadingButton>
   </div>
 
-  {#if $loading.services}
+  {#if loading.services}
     <p class="loading">Loading...</p>
-  {:else if $services.length === 0}
+  {:else if services.length === 0}
     <EmptyState
       icon="📦"
       title="No services yet"
       message="Create your first service to get started with deployments"
       actionLabel="Create Service"
-      on:click={openCreateModal}
+      onAction={openCreateModal}
     />
   {:else}
-    <Table {columns} data={$services} onRowClick={(row) => goto(`/services/${row.id}`)} />
+    <Table {columns} data={services} onRowClick={(row) => goto(`/services/${row.id}`)} />
   {/if}
 </div>
 
-<Modal bind:open={createOpen} title="Create Service" on:close={closeCreateModal}>
-  <form on:submit|preventDefault={handleCreate} class="create-form">
+<Modal bind:open={createOpen} title="Create Service" onClose={closeCreateModal}>
+  <form onsubmit={(event) => { event.preventDefault(); handleCreate(); }} class="create-form">
     <div class="form-field">
       <label for="service-name">Name *</label>
       <Input
@@ -318,7 +323,7 @@
       <LoadingButton
         type="button"
         variant="secondary"
-        on:click={closeCreateModal}
+        onclick={closeCreateModal}
         disabled={creating}
       >
         Cancel

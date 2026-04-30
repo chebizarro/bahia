@@ -1,15 +1,14 @@
 <script>
-  import { page } from '$app/stores';
-  import { onMount, onDestroy } from 'svelte';
+  import { page } from '$app/state';
   import Badge from '$lib/components/Badge.svelte';
   import { nostr, fetchSoul, parseSoulEvent, KINDS } from '$lib/nostr/client.js';
   
-  let soul = null;
-  let loading = true;
-  let error = null;
+  let soul = $state(null);
+  let loading = $state(true);
+  let error = $state(null);
   let unsub = null;
   
-  $: agentId = $page.params.id;
+  let agentId = $derived(page.params.id);
   
   const statusColors = {
     active: 'success',
@@ -29,12 +28,12 @@
     pending: 'default'
   };
   
-  async function loadSoul() {
+  async function loadSoul(id = agentId) {
     loading = true;
     error = null;
     
     try {
-      const event = await fetchSoul(agentId);
+      const event = await fetchSoul(id);
       if (event) {
         soul = parseSoulEvent(event);
       } else {
@@ -47,10 +46,10 @@
     }
   }
   
-  function subscribeToUpdates() {
+  function subscribeToUpdates(id = agentId) {
     unsub = nostr.subscribe([{
       kinds: [KINDS.AGENT_SOUL],
-      '#d': [agentId]
+      '#d': [id]
     }], {
       onEvent: (event) => {
         soul = parseSoulEvent(event);
@@ -72,14 +71,33 @@
     navigator.clipboard.writeText(soul.agentPubkey);
   }
   
-  onMount(async () => {
-    await nostr.connect();
-    await loadSoul();
-    subscribeToUpdates();
-  });
-  
-  onDestroy(() => {
-    if (unsub) unsub();
+  $effect(() => {
+    const id = agentId;
+    if (!id) return;
+
+    let cancelled = false;
+    if (unsub) {
+      unsub();
+      unsub = null;
+    }
+
+    async function initializeSoul() {
+      await nostr.connect();
+      if (cancelled) return;
+      await loadSoul(id);
+      if (cancelled) return;
+      subscribeToUpdates(id);
+    }
+
+    void initializeSoul();
+
+    return () => {
+      cancelled = true;
+      if (unsub) {
+        unsub();
+        unsub = null;
+      }
+    };
   });
 </script>
 
@@ -121,9 +139,9 @@
           <span class="agent-id">@{soul.agentId}</span>
           
           <div class="status-row">
-            <Badge status={statusColors[soul.status]}>{soul.status}</Badge>
+            <Badge variant={statusColors[soul.status]}>{soul.status}</Badge>
             {#if soul.deployStatus}
-              <Badge status={deployStatusColors[soul.deployStatus]}>{soul.deployStatus}</Badge>
+              <Badge variant={deployStatusColors[soul.deployStatus]}>{soul.deployStatus}</Badge>
             {/if}
             <span class="tier-badge">
               {#if soul.tier === 'lightweight'}⚡{:else if soul.tier === 'heavy'}🦾{:else}🤖{/if}
@@ -138,17 +156,17 @@
         
         <div class="hero-actions">
           {#if soul.status === 'active'}
-            <button class="btn-warning" on:click={() => handleAction('suspend')}>
+            <button class="btn-warning" onclick={() => handleAction('suspend')}>
               Suspend
             </button>
-            <button class="btn-secondary" on:click={() => handleAction('redeploy')}>
+            <button class="btn-secondary" onclick={() => handleAction('redeploy')}>
               Redeploy
             </button>
           {:else if soul.status === 'suspended'}
-            <button class="btn-primary" on:click={() => handleAction('resume')}>
+            <button class="btn-primary" onclick={() => handleAction('resume')}>
               Resume
             </button>
-            <button class="btn-error" on:click={() => handleAction('revoke')}>
+            <button class="btn-error" onclick={() => handleAction('revoke')}>
               Revoke
             </button>
           {/if}
@@ -162,15 +180,15 @@
           <h3>🔐 Identity</h3>
           <dl>
             <dt>npub</dt>
-            <!-- svelte-ignore a11y-no-noninteractive-element-interactions a11y-no-noninteractive-element-to-interactive-role -->
-            <dd class="copyable" on:click={copyNpub} on:keydown={copyNpub} role="button" tabindex="0" title="Click to copy">
+            <!-- svelte-ignore a11y_no_noninteractive_element_interactions, a11y_no_noninteractive_element_to_interactive_role -->
+            <dd class="copyable" onclick={copyNpub} onkeydown={copyNpub} role="button" tabindex="0" title="Click to copy">
               <code>{soul.npub || 'N/A'}</code>
               <span class="copy-icon">📋</span>
             </dd>
             
             <dt>Public Key</dt>
-            <!-- svelte-ignore a11y-no-noninteractive-element-interactions a11y-no-noninteractive-element-to-interactive-role -->
-            <dd class="copyable" on:click={copyPubkey} on:keydown={copyPubkey} role="button" tabindex="0" title="Click to copy">
+            <!-- svelte-ignore a11y_no_noninteractive_element_interactions, a11y_no_noninteractive_element_to_interactive_role -->
+            <dd class="copyable" onclick={copyPubkey} onkeydown={copyPubkey} role="button" tabindex="0" title="Click to copy">
               <code>{soul.agentPubkey?.slice(0, 16)}...{soul.agentPubkey?.slice(-8) || 'N/A'}</code>
               <span class="copy-icon">📋</span>
             </dd>

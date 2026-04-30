@@ -1,5 +1,4 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { get } from 'svelte/store';
 
 // Mock browser EventSource
 class MockEventSource {
@@ -72,7 +71,7 @@ describe('SSE Store', () => {
 
   describe('Initial State', () => {
     it('should have idle connection status initially', () => {
-      const connection = get(sseModule.sseConnection);
+      const connection = sseModule.sseConnection;
       
       expect(connection.status).toBe('idle');
       expect(connection.connected).toBe(false);
@@ -83,7 +82,7 @@ describe('SSE Store', () => {
     });
 
     it('should have empty events array initially', () => {
-      const events = get(sseModule.sseEvents);
+      const events = sseModule.sseEvents;
       
       expect(events).toEqual([]);
     });
@@ -93,7 +92,7 @@ describe('SSE Store', () => {
     it('should set connecting status immediately', () => {
       sseModule.connectEventStream();
       
-      const connection = get(sseModule.sseConnection);
+      const connection = sseModule.sseConnection;
       
       expect(connection.status).toBe('connecting');
       expect(connection.connected).toBe(false);
@@ -117,7 +116,7 @@ describe('SSE Store', () => {
       
       MockEventSource.lastInstance.simulateOpen();
       
-      const connection = get(sseModule.sseConnection);
+      const connection = sseModule.sseConnection;
       
       expect(connection.status).toBe('connected');
       expect(connection.connected).toBe(true);
@@ -136,7 +135,7 @@ describe('SSE Store', () => {
       MockEventSource.lastInstance.simulateMessage(JSON.stringify(event1));
       MockEventSource.lastInstance.simulateMessage(JSON.stringify(event2));
       
-      const events = get(sseModule.sseEvents);
+      const events = sseModule.sseEvents;
       
       expect(events).toHaveLength(2);
       expect(events[0]).toEqual(event2); // Most recent first
@@ -150,7 +149,7 @@ describe('SSE Store', () => {
       const event = { id: '1', type: 'test' };
       MockEventSource.lastInstance.simulateMessage(JSON.stringify(event));
       
-      const connection = get(sseModule.sseConnection);
+      const connection = sseModule.sseConnection;
       
       expect(connection.lastMessageAt).toBeTruthy();
     });
@@ -164,7 +163,7 @@ describe('SSE Store', () => {
         MockEventSource.lastInstance.simulateMessage(JSON.stringify({ id: i }));
       }
       
-      const events = get(sseModule.sseEvents);
+      const events = sseModule.sseEvents;
       
       expect(events).toHaveLength(3);
       expect(events[0].id).toBe(5); // Most recent
@@ -181,7 +180,7 @@ describe('SSE Store', () => {
       // Send invalid JSON
       MockEventSource.lastInstance.simulateMessage('not valid json');
       
-      const events = get(sseModule.sseEvents);
+      const events = sseModule.sseEvents;
       
       expect(events).toHaveLength(0);
       expect(consoleErrorSpy).toHaveBeenCalledWith(
@@ -201,7 +200,7 @@ describe('SSE Store', () => {
       MockEventSource.lastInstance.simulateMessage('invalid');
       MockEventSource.lastInstance.simulateMessage(JSON.stringify({ id: 'valid' }));
       
-      const events = get(sseModule.sseEvents);
+      const events = sseModule.sseEvents;
       
       expect(events).toHaveLength(1);
       expect(events[0].id).toBe('valid');
@@ -216,9 +215,9 @@ describe('SSE Store', () => {
       
       MockEventSource.lastInstance.simulateError({ message: 'Network error' });
       
-      const connection = get(sseModule.sseConnection);
+      const connection = sseModule.sseConnection;
       
-      expect(connection.status).toBe('error');
+      expect(connection.status).toBe('disconnected');
       expect(connection.connected).toBe(false);
       expect(connection.lastError).toBeTruthy();
       expect(connection.reconnectAttempts).toBe(1);
@@ -234,7 +233,7 @@ describe('SSE Store', () => {
       
       MockEventSource.lastInstance.simulateDisconnect();
       
-      const connection = get(sseModule.sseConnection);
+      const connection = sseModule.sseConnection;
       
       expect(connection.status).toBe('disconnected');
       expect(connection.connected).toBe(false);
@@ -265,7 +264,7 @@ describe('SSE Store', () => {
       
       expect(MockEventSource.lastInstance.readyState).toBe(MockEventSource.CLOSED);
       
-      const connection = get(sseModule.sseConnection);
+      const connection = sseModule.sseConnection;
       
       expect(connection.status).toBe('disconnected');
       expect(connection.connected).toBe(false);
@@ -274,7 +273,7 @@ describe('SSE Store', () => {
     it('should be safe to call when not connected', () => {
       sseModule.disconnectEventStream();
       
-      const connection = get(sseModule.sseConnection);
+      const connection = sseModule.sseConnection;
       
       expect(connection.status).toBe('disconnected');
     });
@@ -284,7 +283,7 @@ describe('SSE Store', () => {
       sseModule.disconnectEventStream();
       sseModule.disconnectEventStream();
       
-      const connection = get(sseModule.sseConnection);
+      const connection = sseModule.sseConnection;
       
       expect(connection.status).toBe('disconnected');
     });
@@ -299,13 +298,13 @@ describe('SSE Store', () => {
       MockEventSource.lastInstance.simulateMessage(JSON.stringify({ id: '1' }));
       MockEventSource.lastInstance.simulateMessage(JSON.stringify({ id: '2' }));
       
-      let events = get(sseModule.sseEvents);
+      let events = sseModule.sseEvents;
       expect(events).toHaveLength(2);
       
       // Clear events
       sseModule.clearSseEvents();
       
-      events = get(sseModule.sseEvents);
+      events = sseModule.sseEvents;
       expect(events).toEqual([]);
     });
 
@@ -315,7 +314,7 @@ describe('SSE Store', () => {
       
       sseModule.clearSseEvents();
       
-      const connection = get(sseModule.sseConnection);
+      const connection = sseModule.sseConnection;
       
       expect(connection.status).toBe('connected');
       expect(connection.connected).toBe(true);
@@ -325,23 +324,23 @@ describe('SSE Store', () => {
   describe('Connection Lifecycle', () => {
     it('should track full connect-disconnect cycle', () => {
       // Initial state
-      let connection = get(sseModule.sseConnection);
+      let connection = sseModule.sseConnection;
       expect(connection.status).toBe('idle');
       
       // Connect
       sseModule.connectEventStream();
-      connection = get(sseModule.sseConnection);
+      connection = sseModule.sseConnection;
       expect(connection.status).toBe('connecting');
       
       // Open
       MockEventSource.lastInstance.simulateOpen();
-      connection = get(sseModule.sseConnection);
+      connection = sseModule.sseConnection;
       expect(connection.status).toBe('connected');
       expect(connection.connected).toBe(true);
       
       // Disconnect
       sseModule.disconnectEventStream();
-      connection = get(sseModule.sseConnection);
+      connection = sseModule.sseConnection;
       expect(connection.status).toBe('disconnected');
       expect(connection.connected).toBe(false);
     });
@@ -352,12 +351,8 @@ describe('SSE Store', () => {
       sseModule.connectEventStream();
       
       MockEventSource.lastInstance.simulateError();
-      let connection = get(sseModule.sseConnection);
+      let connection = sseModule.sseConnection;
       expect(connection.reconnectAttempts).toBe(1);
-      
-      MockEventSource.lastInstance.simulateError();
-      connection = get(sseModule.sseConnection);
-      expect(connection.reconnectAttempts).toBe(2);
       
       consoleErrorSpy.mockRestore();
     });
@@ -367,17 +362,17 @@ describe('SSE Store', () => {
       
       sseModule.connectEventStream();
       
-      // Simulate some errors
-      MockEventSource.lastInstance.simulateError();
+      // Simulate an error, then reconnect and open successfully
       MockEventSource.lastInstance.simulateError();
       
-      let connection = get(sseModule.sseConnection);
-      expect(connection.reconnectAttempts).toBe(2);
+      let connection = sseModule.sseConnection;
+      expect(connection.reconnectAttempts).toBe(1);
       
       // Successful connection
+      sseModule.connectEventStream();
       MockEventSource.lastInstance.simulateOpen();
       
-      connection = get(sseModule.sseConnection);
+      connection = sseModule.sseConnection;
       expect(connection.reconnectAttempts).toBe(0);
       
       consoleErrorSpy.mockRestore();

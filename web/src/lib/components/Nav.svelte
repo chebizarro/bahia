@@ -3,23 +3,19 @@
   import { theme, toggleTheme } from '$lib/stores/theme.js';
   import { authState, isAuthenticated, login, logout } from '$lib/stores/auth.js';
 
-  // Truncate pubkey for display (first 8 + last 4 chars)
   function truncatePubkey(pubkey) {
     if (!pubkey || pubkey.length < 16) return pubkey;
     return `${pubkey.slice(0, 8)}...${pubkey.slice(-4)}`;
   }
 
-  // Handle login click
   async function handleLogin() {
     try {
       await login();
     } catch (error) {
       console.error('Login failed:', error);
-      // Error state is handled by the auth store
     }
   }
 
-  // Handle logout click
   function handleLogout() {
     logout();
   }
@@ -52,52 +48,50 @@
   </ul>
   
   <div class="nav-actions">
-    <!-- Auth UI -->
     <div class="auth-section">
-      {#if $authState.status === 'checking' || $authState.status === 'authenticating'}
+      {#if authState.status === 'checking' || authState.status === 'authenticating'}
         <span class="auth-loading">
           <span class="spinner"></span>
-          {$authState.status === 'checking' ? 'Checking...' : 'Signing in...'}
+          {authState.status === 'checking' ? 'Checking...' : 'Signing in...'}
         </span>
-      {:else if $isAuthenticated}
+      {:else if isAuthenticated()}
         <div class="user-info">
-          <span class="user-pubkey" title={$authState.pubkey}>
-            {#if $authState.backendAuthenticated}
+          <span class="user-pubkey" title={authState.pubkey}>
+            {#if authState.backendAuthenticated}
               ✅
             {:else}
               🔑
             {/if}
-            {truncatePubkey($authState.pubkey)}
+            {truncatePubkey(authState.pubkey)}
           </span>
-          {#if !$authState.backendAuthenticated && $authState.error}
-            <span class="auth-warning" title={$authState.error}>⚠️</span>
+          {#if !authState.backendAuthenticated && authState.error}
+            <span class="auth-warning" title={authState.error}>⚠️</span>
           {/if}
-          <button class="logout-btn" on:click={handleLogout}>
+          <button class="logout-btn" onclick={handleLogout}>
             Logout
           </button>
         </div>
       {:else}
         <button
           class="login-btn"
-          on:click={handleLogin}
-          disabled={!$authState.extensionAvailable}
-          title={$authState.extensionAvailable ? 'Login with Nostr extension' : 'No Nostr extension detected (NIP-07)'}
+          onclick={handleLogin}
+          disabled={!authState.extensionAvailable}
+          title={authState.extensionAvailable ? 'Login with Nostr extension' : 'No Nostr extension detected (NIP-07)'}
         >
-          {#if $authState.extensionAvailable}
+          {#if authState.extensionAvailable}
             🔐 Login with Nostr
           {:else}
             ⚠️ No Extension
           {/if}
         </button>
-        {#if $authState.status === 'error' && $authState.error}
-          <span class="auth-error" title={$authState.error}>⚠️</span>
+        {#if authState.status === 'error' && authState.error}
+          <span class="auth-error" title={authState.error}>⚠️</span>
         {/if}
       {/if}
     </div>
 
-    <!-- Theme toggle -->
-    <button class="theme-toggle" on:click={toggleTheme} aria-label="Toggle theme">
-      {#if $theme === 'dark'}
+    <button class="theme-toggle" onclick={toggleTheme} aria-label="Toggle theme">
+      {#if theme.value === 'dark'}
         ☀️
       {:else}
         🌙

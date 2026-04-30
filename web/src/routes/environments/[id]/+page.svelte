@@ -1,7 +1,6 @@
 <script>
-  import { page } from '$app/stores';
+  import { page } from '$app/state';
   import { goto } from '$app/navigation';
-  import { onMount } from 'svelte';
   import Card from '$lib/components/Card.svelte';
   import Table from '$lib/components/Table.svelte';
   import Modal from '$lib/components/Modal.svelte';
@@ -14,29 +13,29 @@
   import EmptyState from '$lib/components/EmptyState.svelte';
   import { api } from '$lib/api/client.js';
 
-  let environment = null;
-  let states = [];
-  let loading = true;
-  let error = null;
+  let environment = $state(null);
+  let states = $state([]);
+  let loading = $state(true);
+  let error = $state(null);
 
-  $: environmentId = $page.params.id;
+  let environmentId = $derived(page.params.id);
 
   // Edit modal state
-  let editOpen = false;
-  let editing = false;
-  let editError = null;
-  let editForm = {
+  let editOpen = $state(false);
+  let editing = $state(false);
+  let editError = $state(null);
+  let editForm = $state({
     name: '',
     loom_worker_selector: '',
     runtime_config: '{}',
     deploy_strategy: 'replace',
     protected: false
-  };
+  });
 
   // Delete modal state
-  let deleteOpen = false;
-  let deleting = false;
-  let deleteError = null;
+  let deleteOpen = $state(false);
+  let deleting = $state(false);
+  let deleteError = $state(null);
 
   const deployStrategyOptions = [
     { value: 'replace', label: 'Replace' },
@@ -44,14 +43,25 @@
     { value: 'canary', label: 'Canary' }
   ];
 
-  onMount(async () => {
+  $effect(() => {
+    const id = environmentId;
+    if (!id) return;
+    void loadEnvironment(id);
+  });
+
+  async function loadEnvironment(id) {
+    loading = true;
+    error = null;
+    environment = null;
+    states = [];
+
     try {
-      environment = await api.getEnvironment(environmentId);
+      environment = await api.getEnvironment(id);
       
       // Load all states and filter by environment_id
       try {
         const allStates = await api.listStates();
-        states = allStates.filter(state => state.environment_id === environmentId);
+        states = allStates.filter(state => state.environment_id === id);
       } catch (err) {
         // If listStates fails, still show environment details
         console.error('Failed to load states:', err);
@@ -62,14 +72,14 @@
     } finally {
       loading = false;
     }
-  });
+  }
 
-  $: stateColumns = [
+  let stateColumns = $derived([
     { key: 'service_id', label: 'Service', render: (r) => `<code>${r.service_id?.slice(0, 12)}...</code>` },
     { key: 'artifact_id', label: 'Artifact', render: (r) => `<code>${r.artifact_id?.slice(0, 12)}...</code>` },
     { key: 'status', label: 'Status' },
     { key: 'deployed_at', label: 'Deployed', render: (r) => r.deployed_at ? new Date(r.deployed_at).toLocaleString() : '-' }
-  ];
+  ]);
 
   function openEditModal() {
     if (!environment) return;
@@ -181,10 +191,10 @@
     <div class="header">
       <h1>{environment.name}</h1>
       <div class="actions">
-        <LoadingButton variant="secondary" on:click={openEditModal}>
+        <LoadingButton variant="secondary" onclick={openEditModal}>
           Edit
         </LoadingButton>
-        <LoadingButton variant="danger" on:click={openDeleteModal}>
+        <LoadingButton variant="danger" onclick={openDeleteModal}>
           Delete
         </LoadingButton>
       </div>
@@ -220,8 +230,8 @@
 </div>
 
 <!-- Edit Modal -->
-<Modal bind:open={editOpen} title="Edit Environment" on:close={closeEditModal}>
-  <form on:submit|preventDefault={handleEdit} class="edit-form">
+<Modal bind:open={editOpen} title="Edit Environment" onClose={closeEditModal}>
+  <form onsubmit={(event) => { event.preventDefault(); handleEdit(); }} class="edit-form">
     <div class="form-field">
       <label for="edit-name">Name *</label>
       <Input
@@ -282,7 +292,7 @@
       <LoadingButton
         type="button"
         variant="secondary"
-        on:click={closeEditModal}
+        onclick={closeEditModal}
         disabled={editing}
       >
         Cancel
@@ -305,9 +315,9 @@
   confirmLabel="Delete"
   variant="danger"
   loading={deleting}
-  on:confirm={handleDelete}
-  on:cancel={closeDeleteModal}
-  on:close={closeDeleteModal}
+  onConfirm={handleDelete}
+  onCancel={closeDeleteModal}
+  onClose={closeDeleteModal}
 >
   <div class="delete-content">
     <p>Are you sure you want to delete <strong>{environment?.name}</strong>?</p>

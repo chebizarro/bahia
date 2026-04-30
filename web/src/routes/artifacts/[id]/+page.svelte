@@ -1,7 +1,6 @@
 <script>
-  import { page } from '$app/stores';
+  import { page } from '$app/state';
   import { goto } from '$app/navigation';
-  import { onMount } from 'svelte';
   import Card from '$lib/components/Card.svelte';
   import Table from '$lib/components/Table.svelte';
   import Badge from '$lib/components/Badge.svelte';
@@ -9,33 +8,33 @@
   import EmptyState from '$lib/components/EmptyState.svelte';
   import { api } from '$lib/api/client.js';
 
-  let artifact = null;
-  let service = null;
-  let sbomPackages = [];
-  let signatures = [];
-  let hasVerifiedSig = false;
-  let loading = true;
-  let error = null;
+  let artifact = $state(null);
+  let service = $state(null);
+  let sbomPackages = $state([]);
+  let signatures = $state([]);
+  let hasVerifiedSig = $state(false);
+  let loading = $state(true);
+  let error = $state(null);
   
   // Tab state
-  let activeTab = 'overview'; // overview, sbom, signatures
+  let activeTab = $state('overview'); // overview, sbom, signatures
   
   // Verification state
-  let verifying = false;
-  let verifyError = null;
+  let verifying = $state(false);
+  let verifyError = $state(null);
 
-  $: artifactId = $page.params.id;
+  let artifactId = $derived(page.params.id);
 
   // SBOM table columns
-  $: sbomColumns = [
+  let sbomColumns = $derived([
     { key: 'name', label: 'Package Name' },
     { key: 'version', label: 'Version' },
     { key: 'license', label: 'License' },
     { key: 'type', label: 'Type' }
-  ];
+  ]);
 
   // Signatures table columns
-  $: signatureColumns = [
+  let signatureColumns = $derived([
     { 
       key: 'signer', 
       label: 'Signer',
@@ -59,19 +58,21 @@
         return '<span style="color: #888;">○ Pending</span>';
       }
     }
-  ];
+  ]);
 
-  onMount(async () => {
-    await loadArtifact();
+  $effect(() => {
+    const id = artifactId;
+    if (!id) return;
+    void loadArtifact(id);
   });
 
-  async function loadArtifact() {
+  async function loadArtifact(id = artifactId) {
     loading = true;
     error = null;
 
     try {
       // Load artifact details (another agent is adding this method)
-      artifact = await api.getArtifact(artifactId);
+      artifact = await api.getArtifact(id);
 
       // Load service if service_id exists
       if (artifact.service_id) {
@@ -84,7 +85,7 @@
 
       // Load SBOM packages
       try {
-        sbomPackages = await api.getSBOMPackages(artifactId);
+        sbomPackages = await api.getSBOMPackages(id);
         if (!Array.isArray(sbomPackages)) {
           sbomPackages = [];
         }
@@ -95,7 +96,7 @@
 
       // Load signatures
       try {
-        signatures = await api.listSignatures(artifactId);
+        signatures = await api.listSignatures(id);
         if (!Array.isArray(signatures)) {
           signatures = [];
         }
@@ -106,7 +107,7 @@
 
       // Check verification status
       try {
-        const result = await api.hasVerifiedSignature(artifactId);
+        const result = await api.hasVerifiedSignature(id);
         hasVerifiedSig = result?.verified || false;
       } catch (err) {
         console.warn('Failed to check verification status:', err);
@@ -162,7 +163,7 @@
   {:else if error}
     <div class="error-state">
       <p class="error">⚠️ {error}</p>
-      <LoadingButton variant="secondary" on:click={() => goto('/services')}>
+      <LoadingButton variant="secondary" onclick={() => goto('/services')}>
         Back to Services
       </LoadingButton>
     </div>
@@ -184,21 +185,21 @@
       <button 
         class="tab" 
         class:active={activeTab === 'overview'}
-        on:click={() => activeTab = 'overview'}
+        onclick={() => activeTab = 'overview'}
       >
         Overview
       </button>
       <button 
         class="tab" 
         class:active={activeTab === 'sbom'}
-        on:click={() => activeTab = 'sbom'}
+        onclick={() => activeTab = 'sbom'}
       >
         SBOM {sbomPackages.length > 0 ? `(${sbomPackages.length})` : ''}
       </button>
       <button 
         class="tab" 
         class:active={activeTab === 'signatures'}
-        on:click={() => activeTab = 'signatures'}
+        onclick={() => activeTab = 'signatures'}
       >
         Signatures {signatures.length > 0 ? `(${signatures.length})` : ''}
       </button>
@@ -300,7 +301,7 @@
                 <LoadingButton
                   variant="primary"
                   loading={verifying}
-                  on:click={handleVerifySignatures}
+                  onclick={handleVerifySignatures}
                 >
                   Verify Signatures
                 </LoadingButton>
@@ -330,7 +331,7 @@
       title="Artifact not found"
       message="The requested artifact does not exist"
     >
-      <LoadingButton variant="secondary" on:click={() => goto('/services')}>
+      <LoadingButton variant="secondary" onAction={() => goto('/services')}>
         Back to Services
       </LoadingButton>
     </EmptyState>
