@@ -100,7 +100,8 @@
 </script>
 
 <Modal {open} title="Choose Repository" size="lg" on:close={handleClose}>
-  <div class="search-modal">
+  <!-- Wrap in form with novalidate to isolate from parent form validation -->
+  <form on:submit|preventDefault class="search-modal" novalidate>
     <!-- Tabs -->
     <div class="tabs">
       <button
@@ -211,7 +212,7 @@
         </div>
       </div>
     {/if}
-  </div>
+  </form>
 </Modal>
 
 <style>
