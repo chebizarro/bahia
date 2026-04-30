@@ -3,14 +3,16 @@
   import { onMount, onDestroy } from 'svelte';
   import { get } from 'svelte/store';
   import TemplateSelector from '$lib/components/TemplateSelector.svelte';
+  import RepositoryPicker from '$lib/components/repositories/RepositoryPicker.svelte';
   import ProvisioningProgress from '$lib/components/ProvisioningProgress.svelte';
   import { nostr, KINDS } from '$lib/nostr/client.js';
   import { trackProvisioningRun, provisioningRuns } from '$lib/stores/souls.js';
   import { authState, initializeAuth, login, signWithAuth } from '$lib/stores/auth.js';
   
   // Form state
-  let step = 1; // 1: template, 2: configure, 3: provisioning
+  let step = 1; // 1: template, 2: repository, 3: configure, 4: provisioning
   let selectedTemplate = null;
+  let selectedRepository = null;
   let agentId = '';
   let agentName = '';
   let brief = '';
@@ -52,11 +54,15 @@
   function nextStep() {
     if (step === 1) {
       step = 2;
+    } else if (step === 2) {
+      step = 3;
     }
   }
   
   function prevStep() {
-    if (step === 2) {
+    if (step === 3) {
+      step = 2;
+    } else if (step === 2) {
       step = 1;
     }
   }
@@ -127,8 +133,13 @@
         tags.push(['template', `31950:${selectedTemplate.pubkey}:${selectedTemplate.identifier}`]);
       }
       
+      const baseBrief = brief || selectedTemplate?.basePrompt || '';
+      const repoContext = selectedRepository
+        ? `Repository context:\n- name: ${selectedRepository.displayName}\n- coordinate: ${selectedRepository.repoCoordinate || 'N/A'}\n- clone: ${selectedRepository.cloneUrl || selectedRepository.repoUrl}\n- web: ${selectedRepository.webUrl || 'N/A'}\n\n`
+        : '';
+      
       const content = JSON.stringify({
-        brief: brief || selectedTemplate?.basePrompt || ''
+        brief: repoContext ? `${repoContext}${baseBrief}` : baseBrief
       });
       
       // Create unsigned event
@@ -168,8 +179,8 @@
         throw new Error('No connected relays available for publishing');
       }
       
-      // Move to step 3
-      step = 3;
+      // Move to step 4
+      step = 4;
       
     } catch (err) {
       publishError = err.message;
@@ -239,17 +250,22 @@
     <div class="progress-line" class:active={step > 1}></div>
     <div class="progress-step" class:active={step >= 2} class:complete={step > 2}>
       <span class="step-num">2</span>
-      <span class="step-label">Configure</span>
+      <span class="step-label">Repository</span>
     </div>
     <div class="progress-line" class:active={step > 2}></div>
-    <div class="progress-step" class:active={step >= 3}>
+    <div class="progress-step" class:active={step >= 3} class:complete={step > 3}>
       <span class="step-num">3</span>
+      <span class="step-label">Configure</span>
+    </div>
+    <div class="progress-line" class:active={step > 3}></div>
+    <div class="progress-step" class:active={step >= 4}>
+      <span class="step-num">4</span>
       <span class="step-label">Provision</span>
     </div>
   </div>
   
   <!-- Auth Status Banner (Step 2) -->
-  {#if step === 2}
+  {#if step === 3}
     <div class="auth-status" class:authenticated={isAuthenticated} class:error={authError}>
       {#if authError}
         <span class="icon">⚠️</span>
@@ -315,8 +331,30 @@
     </div>
   {/if}
   
-  <!-- Step 2: Configure -->
+  <!-- Step 2: Repository (Optional) -->
   {#if step === 2}
+    <div class="wizard-content">
+      <div class="config-form">
+        <div class="form-section">
+          <h3>Repository</h3>
+          <p class="hint">Repository is optional</p>
+          <RepositoryPicker bind:value={selectedRepository} context="soul" requirePrimaryUrl={false} />
+        </div>
+      </div>
+      
+      <div class="wizard-actions">
+        <button class="btn-secondary" on:click={prevStep}>
+          ← Back
+        </button>
+        <button class="btn-primary" on:click={nextStep}>
+          Continue →
+        </button>
+      </div>
+    </div>
+  {/if}
+  
+  <!-- Step 3: Configure -->
+  {#if step === 3}
     <div class="wizard-content">
       <div class="config-form">
         <div class="form-section">
@@ -418,8 +456,8 @@
     </div>
   {/if}
   
-  <!-- Step 3: Provisioning -->
-  {#if step === 3}
+  <!-- Step 4: Provisioning -->
+  {#if step === 4}
     <div class="wizard-content">
       <div class="publish-success">
         <span class="icon">✓</span>

@@ -7,7 +7,9 @@
   import Select from '$lib/components/Select.svelte';
   import LoadingButton from '$lib/components/LoadingButton.svelte';
   import EmptyState from '$lib/components/EmptyState.svelte';
+  import RepositoryPicker from '$lib/components/repositories/RepositoryPicker.svelte';
   import { services, loading, loadServices } from '$lib/stores';
+  import { createManualRepositorySelection } from '$lib/stores/repositories.js';
   import { api } from '$lib/api/client.js';
 
   onMount(() => loadServices());
@@ -19,7 +21,7 @@
 
   let createForm = {
     name: '',
-    repo_url: '',
+    repositorySelection: createManualRepositorySelection(''),
     artifact_repo: '',
     runtime_type: 'docker',
     default_branch: 'main'
@@ -51,7 +53,7 @@
     // Reset form
     createForm = {
       name: '',
-      repo_url: '',
+      repositorySelection: createManualRepositorySelection(''),
       artifact_repo: '',
       runtime_type: 'docker',
       default_branch: 'main'
@@ -79,7 +81,7 @@
     try {
       await api.createService({
         name: createForm.name.trim(),
-        repo_url: createForm.repo_url.trim(),
+        repo_url: createForm.repositorySelection?.repoUrl || '',
         artifact_repo: createForm.artifact_repo.trim(),
         runtime_type: createForm.runtime_type,
         default_branch: createForm.default_branch.trim() || 'main'
@@ -146,13 +148,7 @@
     </div>
 
     <div class="form-field">
-      <label for="repo-url">Repository URL</label>
-      <Input
-        id="repo-url"
-        bind:value={createForm.repo_url}
-        placeholder="https://github.com/org/repo"
-        disabled={creating}
-      />
+      <RepositoryPicker bind:value={createForm.repositorySelection} context="service" disabled={creating} />
     </div>
 
     <div class="form-field">

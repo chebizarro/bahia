@@ -2,6 +2,7 @@
   import { page } from '$app/stores';
   import { goto } from '$app/navigation';
   import { onMount } from 'svelte';
+  import { get } from 'svelte/store';
   import Card from '$lib/components/Card.svelte';
   import Table from '$lib/components/Table.svelte';
   import Modal from '$lib/components/Modal.svelte';
@@ -11,7 +12,14 @@
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
   import Checkbox from '$lib/components/Checkbox.svelte';
   import Textarea from '$lib/components/Textarea.svelte';
+  import RepositoryPicker from '$lib/components/repositories/RepositoryPicker.svelte';
   import { api } from '$lib/api/client.js';
+  import {
+    repositories,
+    createManualRepositorySelection,
+    resolveSelectionFromRepoUrl,
+    loadRepositories
+  } from '$lib/stores/repositories.js';
 
   let service = null;
   let builds = [];
@@ -28,7 +36,7 @@
   let editError = null;
   let editForm = {
     name: '',
-    repo_url: '',
+    repositorySelection: createManualRepositorySelection(''),
     artifact_repo: '',
     runtime_type: '',
     default_branch: ''
@@ -75,12 +83,19 @@
 
   onMount(async () => {
     try {
-      [service, builds, artifacts, secrets] = await Promise.all([
+      const [loadedService, loadedBuilds, loadedArtifacts, loadedSecrets] = await Promise.all([
         api.getService(serviceId),
         api.listBuilds(serviceId).catch(() => []),
         api.listArtifacts(serviceId).catch(() => []),
         api.listSecrets(serviceId).catch(() => [])
       ]);
+
+      service = loadedService;
+      builds = loadedBuilds;
+      artifacts = loadedArtifacts;
+      secrets = loadedSecrets;
+
+      await loadRepositories();
     } catch (err) {
       error = err.message;
     } finally {
@@ -119,9 +134,11 @@
   function openEditModal() {
     if (!service) return;
     
+    const currentRepositories = get(repositories);
+
     editForm = {
       name: service.name,
-      repo_url: service.repo_url || '',
+      repositorySelection: resolveSelectionFromRepoUrl(service.repo_url || '', currentRepositories),
       artifact_repo: service.artifact_repo,
       runtime_type: service.runtime_type || 'docker',
       default_branch: service.default_branch || 'main'
@@ -156,7 +173,7 @@
     try {
       const updated = await api.updateService(serviceId, {
         name: editForm.name.trim(),
-        repo_url: editForm.repo_url.trim(),
+        repo_url: editForm.repositorySelection?.repoUrl || '',
         artifact_repo: editForm.artifact_repo.trim(),
         runtime_type: editForm.runtime_type,
         default_branch: editForm.default_branch.trim() || 'main'
@@ -498,13 +515,7 @@
     </div>
 
     <div class="form-field">
-      <label for="edit-repo-url">Repository URL</label>
-      <Input
-        id="edit-repo-url"
-        bind:value={editForm.repo_url}
-        placeholder="https://github.com/org/repo"
-        disabled={editing}
-      />
+      <RepositoryPicker bind:value={editForm.repositorySelection} context="service" disabled={editing} />
     </div>
 
     <div class="form-field">
