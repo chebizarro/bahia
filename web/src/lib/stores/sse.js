@@ -2,7 +2,7 @@ import { writable } from 'svelte/store';
 
 // Connection state store
 export const sseConnection = writable({
-  status: 'idle', // 'idle' | 'connecting' | 'connected' | 'disconnected' | 'error'
+  status: 'idle', // 'idle' | 'connecting' | 'connected' | 'disconnected' | 'error' | 'stopped'
   connected: false,
   lastError: null,
   reconnectAttempts: 0,
@@ -13,9 +13,26 @@ export const sseConnection = writable({
 // Events store
 export const sseEvents = writable([]);
 
-// Internal EventSource instance
+// Internal state
 let eventSource = null;
 let cleanupFn = null;
+let reconnectTimer = null;
+let currentOptions = null;
+
+// Backoff configuration
+const MAX_RECONNECT_ATTEMPTS = 5;
+const INITIAL_BACKOFF_MS = 1000;
+const MAX_BACKOFF_MS = 30000;
+
+/**
+ * Calculate exponential backoff delay
+ */
+function getBackoffDelay(attempt) {
+  const delay = Math.min(INITIAL_BACKOFF_MS * Math.pow(2, attempt), MAX_BACKOFF_MS);
+  // Add some jitter (±20%)
+  const jitter = delay * 0.2 * (Math.random() - 0.5);
+  return Math.round(delay + jitter);
+}
 
 /**
  * Connect to the SSE event stream
@@ -25,10 +42,17 @@ let cleanupFn = null;
  */
 export function connectEventStream(options = {}) {
   const { types = [], maxEvents = 100 } = options;
+  currentOptions = options;
 
   // Close existing connection if any
   if (eventSource) {
     disconnectEventStream();
+  }
+  
+  // Clear any pending reconnect
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
   }
 
   // Build URL
@@ -80,21 +104,39 @@ export function connectEventStream(options = {}) {
 
     // Handle errors
     eventSource.onerror = (err) => {
-      console.error('SSE connection error:', err);
+      // Close the current source immediately to prevent browser's auto-reconnect
+      eventSource.close();
+      eventSource = null;
+      
+      let currentAttempts = 0;
+      sseConnection.update(state => {
+        currentAttempts = state.reconnectAttempts + 1;
+        return {
+          ...state,
+          status: currentAttempts >= MAX_RECONNECT_ATTEMPTS ? 'stopped' : 'disconnected',
+          connected: false,
+          lastError: 'Connection error',
+          reconnectAttempts: currentAttempts
+        };
+      });
 
-      // Determine if this is a disconnect or error
-      const isDisconnected = eventSource.readyState === EventSource.CLOSED;
-
-      sseConnection.update(state => ({
-        ...state,
-        status: isDisconnected ? 'disconnected' : 'error',
-        connected: false,
-        lastError: err.message || 'Connection error',
-        reconnectAttempts: state.reconnectAttempts + 1
-      }));
-
-      // EventSource will automatically attempt to reconnect
-      // unless we explicitly close it
+      // Check if we should retry
+      if (currentAttempts < MAX_RECONNECT_ATTEMPTS) {
+        const delay = getBackoffDelay(currentAttempts);
+        console.log(`SSE reconnecting in ${delay}ms (attempt ${currentAttempts}/${MAX_RECONNECT_ATTEMPTS})`);
+        
+        reconnectTimer = setTimeout(() => {
+          reconnectTimer = null;
+          if (currentOptions) {
+            // Manually reconnect with current options
+            const opts = currentOptions;
+            currentOptions = null;
+            connectEventStream(opts);
+          }
+        }, delay);
+      } else {
+        console.error(`SSE connection failed after ${MAX_RECONNECT_ATTEMPTS} attempts. Stopped retrying.`);
+      }
     };
 
     // Store cleanup function
@@ -103,6 +145,11 @@ export function connectEventStream(options = {}) {
         eventSource.close();
         eventSource = null;
       }
+      if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+      }
+      currentOptions = null;
     };
   } catch (err) {
     console.error('Failed to create EventSource:', err);
@@ -128,6 +175,13 @@ export function disconnectEventStream() {
     eventSource.close();
     eventSource = null;
   }
+  
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
+  
+  currentOptions = null;
 
   sseConnection.update(state => ({
     ...state,
@@ -141,4 +195,16 @@ export function disconnectEventStream() {
  */
 export function clearSseEvents() {
   sseEvents.set([]);
+}
+
+/**
+ * Reset and retry connection
+ */
+export function retryConnection(options = {}) {
+  sseConnection.update(state => ({
+    ...state,
+    reconnectAttempts: 0,
+    status: 'idle'
+  }));
+  connectEventStream(options);
 }

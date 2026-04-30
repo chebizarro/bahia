@@ -1,5 +1,6 @@
 import { writable, derived } from 'svelte/store';
 import { api } from '../api/client.js';
+import { connectEventStream, disconnectEventStream, sseEvents } from './sse.js';
 
 // Re-export theme store
 export { theme, toggleTheme } from './theme.js';
@@ -216,21 +217,42 @@ function scheduleStateRefresh() {
   }, STATE_REFRESH_DELAY_MS);
 }
 
-// SSE subscription
-let eventSourceCleanup = null;
+// SSE subscription using the sse store with backoff
+let sseUnsubscribe = null;
+let lastEventId = null;
 
 export function subscribeToEvents() {
   if (!api) return;
-  if (eventSourceCleanup) eventSourceCleanup();
+  unsubscribeFromEvents();
   
-  eventSourceCleanup = api.streamEvents([], (event) => {
-    events.update(evs => [event, ...evs].slice(0, 100));
-    
-    // Throttled state refresh for deployment/drift events
-    if (event.type?.startsWith('deployment.') || event.type?.startsWith('drift.')) {
-      scheduleStateRefresh();
+  // Subscribe to SSE events store
+  sseUnsubscribe = sseEvents.subscribe(sseEvs => {
+    // Only process if we have new events
+    if (sseEvs.length > 0) {
+      const newEvent = sseEvs[0];
+      
+      // Only add if it's actually new (different from last seen)
+      if (newEvent?.id !== lastEventId) {
+        lastEventId = newEvent?.id;
+        
+        events.update(evs => {
+          // Check if event is already in list
+          if (evs.some(e => e.id === newEvent.id)) {
+            return evs;
+          }
+          return [newEvent, ...evs].slice(0, 100);
+        });
+        
+        // Throttled state refresh for deployment/drift events
+        if (newEvent?.type?.startsWith('deployment.') || newEvent?.type?.startsWith('drift.')) {
+          scheduleStateRefresh();
+        }
+      }
     }
   });
+  
+  // Connect using the sse store which has backoff
+  connectEventStream();
 }
 
 export function unsubscribeFromEvents() {
@@ -240,8 +262,11 @@ export function unsubscribeFromEvents() {
     stateRefreshTimer = null;
   }
   
-  if (eventSourceCleanup) {
-    eventSourceCleanup();
-    eventSourceCleanup = null;
+  if (sseUnsubscribe) {
+    sseUnsubscribe();
+    sseUnsubscribe = null;
   }
+  
+  lastEventId = null;
+  disconnectEventStream();
 }
