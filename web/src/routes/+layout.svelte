@@ -1,11 +1,30 @@
 <script>
   import { onMount, onDestroy } from 'svelte';
+  import { page } from '$app/stores';
   import Nav from '$lib/components/Nav.svelte';
   import ErrorBoundary from '$lib/components/ErrorBoundary.svelte';
+  import AuthGuard from '$lib/components/AuthGuard.svelte';
   import ToastContainer from '$lib/components/ToastContainer.svelte';
   import { loadAll, subscribeToEvents, unsubscribeFromEvents } from '$lib/stores';
   import { theme } from '$lib/stores/theme.js';
   import { initializeAuth } from '$lib/stores/auth.js';
+
+  // Routes that require authentication
+  const protectedPrefixes = [
+    '/souls',
+    '/services',
+    '/deployments',
+    '/policies',
+    '/environments',
+    '/workers',
+    '/artifacts',
+    '/settings',
+    '/events',
+    '/orgs'
+  ];
+
+  // Check if current route is protected
+  $: isProtectedRoute = protectedPrefixes.some(prefix => $page.url.pathname.startsWith(prefix));
 
   onMount(() => {
     loadAll();
@@ -22,7 +41,13 @@
   <Nav />
   <main>
     <ErrorBoundary>
-      <slot />
+      {#if isProtectedRoute}
+        <AuthGuard>
+          <slot />
+        </AuthGuard>
+      {:else}
+        <slot />
+      {/if}
     </ErrorBoundary>
   </main>
 </div>

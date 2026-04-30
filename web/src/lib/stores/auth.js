@@ -3,6 +3,7 @@
 
 import { writable, derived, get } from 'svelte/store';
 import { browser } from '$app/environment';
+import { toast } from '$lib/components/toast.js';
 import {
   waitForNip07,
   getPublicKey,
@@ -150,6 +151,11 @@ export async function initializeAuth() {
         status: 'unauthenticated',
         error: null
       }));
+      
+      // Warn if no NIP-07 extension detected
+      if (!available) {
+        toast.warning('No Nostr extension detected. Install a NIP-07 extension like Alby or nos2x to sign in.');
+      }
     }
   } catch (error) {
     console.error('Auth initialization failed:', error);
@@ -279,6 +285,7 @@ export async function login() {
       // Automatically authenticate with backend to get JWT for API access
       try {
         await authenticateBackendInternal(pubkey);
+        toast.success('Signed in successfully');
       } catch (backendError) {
         // Backend auth failed but NIP-07 login succeeded
         // Log the error but don't fail the login - user can retry backend auth later
@@ -288,6 +295,7 @@ export async function login() {
           backendAuthenticated: false,
           error: `Signed in, but backend auth failed: ${backendError.message}`
         }));
+        toast.error(`Backend auth failed: ${backendError.message}. Some features may be unavailable.`);
       }
       
     } catch (error) {

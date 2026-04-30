@@ -464,6 +464,97 @@ class BahiaClient {
       this.token = savedToken;
     }
   }
+
+  // ============ Organizations ============
+
+  // List organizations the current user belongs to
+  async listOrgs() {
+    return this.fetch('/orgs').then(r => r ?? []);
+  }
+
+  // Get a single organization by ID
+  async getOrg(id) {
+    return this.fetch(`/orgs/${id}`);
+  }
+
+  // Create a new organization
+  async createOrg({ name, displayName }) {
+    return this.fetch('/orgs', {
+      method: 'POST',
+      body: JSON.stringify({ name, display_name: displayName })
+    });
+  }
+
+  // Update an organization
+  async updateOrg(id, { displayName }) {
+    return this.fetch(`/orgs/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify({ display_name: displayName })
+    });
+  }
+
+  // Delete an organization
+  async deleteOrg(id) {
+    return this.fetch(`/orgs/${id}`, { method: 'DELETE' });
+  }
+
+  // ============ Organization Members ============
+
+  // List members of an organization
+  async listOrgMembers(orgId) {
+    return this.fetch(`/orgs/${orgId}/members`).then(r => r ?? []);
+  }
+
+  // Add a member to an organization
+  async addOrgMember(orgId, { pubkey, role }) {
+    return this.fetch(`/orgs/${orgId}/members`, {
+      method: 'POST',
+      body: JSON.stringify({ pubkey, role })
+    });
+  }
+
+  // Update a member's role
+  async updateOrgMemberRole(orgId, pubkey, { role }) {
+    return this.fetch(`/orgs/${orgId}/members/${pubkey}`, {
+      method: 'PUT',
+      body: JSON.stringify({ role })
+    });
+  }
+
+  // Remove a member from an organization
+  async removeOrgMember(orgId, pubkey) {
+    return this.fetch(`/orgs/${orgId}/members/${pubkey}`, { method: 'DELETE' });
+  }
+
+  // ============ Organization Invites ============
+
+  // List invites for an organization
+  async listOrgInvites(orgId) {
+    return this.fetch(`/orgs/${orgId}/invites`).then(r => r ?? []);
+  }
+
+  // Create an invite
+  async createOrgInvite(orgId, { pubkey, role, expiresIn }) {
+    return this.fetch(`/orgs/${orgId}/invites`, {
+      method: 'POST',
+      body: JSON.stringify({ pubkey, role, expires_in: expiresIn })
+    });
+  }
+
+  // Revoke an invite
+  async revokeOrgInvite(orgId, inviteId) {
+    return this.fetch(`/orgs/${orgId}/invites/${inviteId}`, { method: 'DELETE' });
+  }
+
+  // Get my pending invites
+  async getMyInvites() {
+    return this.fetch('/me/invites').then(r => r ?? []);
+  }
+
+  // Accept an invite
+  async acceptInvite(inviteId) {
+    return this.fetch(`/invites/${inviteId}/accept`, { method: 'POST' });
+  }
 }
 
 // Only instantiate in browser context

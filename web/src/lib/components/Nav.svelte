@@ -33,6 +33,7 @@
   
   <ul class="nav-links">
     <li><a href="/" class:active={$page.url.pathname === '/'}>Dashboard</a></li>
+    <li><a href="/orgs" class:active={$page.url.pathname.startsWith('/orgs')}>Orgs</a></li>
     <li><a href="/souls" class:active={$page.url.pathname.startsWith('/souls')}>Souls</a></li>
     <li><a href="/services" class:active={$page.url.pathname.startsWith('/services')}>Services</a></li>
     <li><a href="/artifacts" class:active={$page.url.pathname.startsWith('/artifacts')}>Artifacts</a></li>
