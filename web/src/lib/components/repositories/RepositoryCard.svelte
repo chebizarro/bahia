@@ -21,6 +21,13 @@
   $: description = repository?.description || '';
   $: url = repository?.primaryUrl || '';
   $: hasUrl = !!url;
+
+  // CI state
+  $: ciState = repository?.ci?.state || 'unsupported';
+  $: ciLookup = repository?.ci?.lookup;
+  $: latestResult = ciLookup?.latest_result;
+  $: latestRun = ciLookup?.latest_run;
+  $: linkedServiceCount = ciLookup?.linked_services?.length || 0;
 </script>
 
 <button
@@ -45,10 +52,28 @@
     {:else if disabled && disabledReason}
       <p class="repo-warning">{disabledReason}</p>
     {/if}
-    {#if showCi && repository?.ci}
-      <div class="repo-ci">
-        <!-- Phase 3: CI badge slot -->
-        <slot name="ci" />
+    {#if showCi && ciState !== 'unsupported'}
+      <div class="ci-status">
+        {#if ciState === 'loading'}
+          <span class="ci-badge loading">Loading CI...</span>
+        {:else if ciState === 'error'}
+          <span class="ci-badge error">CI unavailable</span>
+        {:else if ciState === 'empty'}
+          <span class="ci-badge empty">No CI activity</span>
+        {:else if ciState === 'ready'}
+          {#if latestResult}
+            <span class="ci-badge" class:success={latestResult.status === 'success'} class:failure={latestResult.status === 'failure'}>
+              {latestResult.status === 'success' ? '✓' : '✗'} {latestResult.status}
+            </span>
+          {:else if latestRun}
+            <span class="ci-badge pending">⏳ Run observed</span>
+          {:else}
+            <span class="ci-badge configured">⚙ Configured</span>
+          {/if}
+          {#if linkedServiceCount > 0}
+            <span class="ci-linked">{linkedServiceCount} service{linkedServiceCount > 1 ? 's' : ''}</span>
+          {/if}
+        {/if}
       </div>
     {/if}
   </div>
@@ -148,8 +173,30 @@
     font-style: italic;
   }
 
-  .repo-ci {
+  .ci-status {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
     margin-top: 0.5rem;
+    font-size: 0.75rem;
+  }
+
+  .ci-badge {
+    padding: 0.15rem 0.4rem;
+    border-radius: 4px;
+    font-weight: 500;
+  }
+
+  .ci-badge.loading { background: var(--bg); color: var(--text-muted); }
+  .ci-badge.error { background: rgba(239, 68, 68, 0.1); color: #ef4444; }
+  .ci-badge.empty { background: var(--bg); color: var(--text-muted); }
+  .ci-badge.success { background: rgba(34, 197, 94, 0.15); color: #22c55e; }
+  .ci-badge.failure { background: rgba(239, 68, 68, 0.15); color: #ef4444; }
+  .ci-badge.pending { background: rgba(234, 179, 8, 0.15); color: #eab308; }
+  .ci-badge.configured { background: rgba(99, 102, 241, 0.15); color: var(--primary); }
+
+  .ci-linked {
+    color: var(--text-muted);
   }
 
   .check {

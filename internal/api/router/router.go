@@ -41,6 +41,7 @@ type RouterDeps struct {
 	Notifications repository.NotificationRepository
 	Dispatcher    *notifications.Dispatcher
 	MCP           *handlers.MCPHandler
+	HiveCI        repository.HiveCIRepository
 	OCI           http.Handler
 }
 
@@ -99,6 +100,7 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 	artifactH := handlers.NewArtifactHandler(registry)
 	deployH := handlers.NewDeploymentHandler(registry)
 	stateH := handlers.NewStateHandler(registry)
+	repoCIHandler := handlers.NewRepositoryCIHandler(deps.HiveCI)
 
 	if deps.OCI != nil {
 		r.Mount("/v2", deps.OCI)
@@ -149,6 +151,9 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 			r.Get("/state/drifted", stateH.ListDrifted)
 			r.Get("/environments/{envId}/state", stateH.ListByEnvironment)
 			r.Get("/services/{serviceId}/environments/{envId}/state", stateH.GetState)
+
+			// Repository CI lookup (read)
+			r.Post("/repositories/ci/lookup", repoCIHandler.Lookup)
 
 			// Workers (read)
 			if deps.Workers != nil {

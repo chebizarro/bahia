@@ -1,6 +1,7 @@
 import { writable, get } from 'svelte/store';
 import { authState } from '$lib/stores/auth.js';
 import { nostr, fetchRepositories } from '$lib/nostr/client.js';
+import { api } from '$lib/api/client.js';
 
 export const repositories = writable([]);
 
@@ -15,6 +16,11 @@ export const meta = writable({
   requestSeq: 0,
   authors: null
 });
+
+// CI enrichment state
+export const ciMeta = writable({ requestSeq: 0, lastLoadedAt: null });
+export const ciLoading = writable(false);
+export const ciError = writable(null);
 
 function normalizeAuthors(authors) {
   if (!Array.isArray(authors) || authors.length === 0) {
@@ -93,6 +99,12 @@ export async function loadRepositories({ authors = null, force = false } = {}) {
       authors: normalizedAuthors
     }));
 
+    // Trigger CI enrichment (non-blocking)
+    const repos = get(repositories);
+    enrichRepositoriesWithCI(repos).then(() => {
+      repositories.set([...repos]); // trigger reactivity
+    });
+
     return get(repositories);
   } catch (err) {
     if (get(meta).requestSeq === nextSeq) {
@@ -102,6 +114,78 @@ export async function loadRepositories({ authors = null, force = false } = {}) {
   } finally {
     if (get(meta).requestSeq === nextSeq) {
       loading.update((l) => ({ ...l, list: false }));
+    }
+  }
+}
+
+export async function enrichRepositoriesWithCI(repoList) {
+  const coords = [...new Set(
+    repoList
+      .map(r => r.repoCoordinate)
+      .filter(Boolean)
+  )];
+
+  if (coords.length === 0) {
+    repoList.forEach(r => {
+      r.ci = { state: 'unsupported', lookup: null, error: null };
+    });
+    return;
+  }
+
+  // Mark as loading
+  repoList.forEach(r => {
+    r.ci = r.repoCoordinate
+      ? { state: 'loading', lookup: null, error: null }
+      : { state: 'unsupported', lookup: null, error: null };
+  });
+
+  const currentSeq = get(ciMeta).requestSeq + 1;
+  ciMeta.update(m => ({ ...m, requestSeq: currentSeq }));
+  ciLoading.set(true);
+  ciError.set(null);
+
+  try {
+    const results = await api.lookupRepositoryCI(coords);
+
+    // Check for stale response
+    if (get(ciMeta).requestSeq !== currentSeq) return;
+
+    // Build lookup map
+    const lookupMap = new Map();
+    for (const result of results) {
+      lookupMap.set(result.repo_coordinate, result);
+    }
+
+    // Enrich repos
+    repoList.forEach(r => {
+      if (!r.repoCoordinate) return;
+      const lookup = lookupMap.get(r.repoCoordinate);
+      if (lookup) {
+        const hasRun = !!lookup.latest_run;
+        const hasPolicies = lookup.policies?.length > 0;
+        r.ci = {
+          state: (hasRun || hasPolicies) ? 'ready' : 'empty',
+          lookup,
+          error: null
+        };
+      } else {
+        r.ci = { state: 'empty', lookup: null, error: null };
+      }
+    });
+
+    ciMeta.update(m => ({ ...m, lastLoadedAt: Date.now() }));
+  } catch (err) {
+    if (get(ciMeta).requestSeq === currentSeq) {
+      ciError.set(err?.message || 'Failed to load CI status');
+      repoList.forEach(r => {
+        if (r.repoCoordinate && r.ci?.state === 'loading') {
+          r.ci = { state: 'error', lookup: null, error: err?.message };
+        }
+      });
+    }
+  } finally {
+    if (get(ciMeta).requestSeq === currentSeq) {
+      ciLoading.set(false);
     }
   }
 }

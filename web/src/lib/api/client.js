@@ -368,6 +368,18 @@ class BahiaClient {
     return () => eventSource.close();
   }
 
+  // CI Lookup
+  async lookupRepositoryCI(repoCoordinates, { includeDisabledPolicies = false } = {}) {
+    const payload = await this.fetch('/repositories/ci/lookup', {
+      method: 'POST',
+      body: JSON.stringify({
+        repo_coordinates: repoCoordinates,
+        include_disabled_policies: includeDisabledPolicies
+      })
+    });
+    return payload?.results || [];
+  }
+
   // Auth Exchange
   // Exchange NIP-98 signed event for a JWT token
   async exchangeNostrAuth(event) {
