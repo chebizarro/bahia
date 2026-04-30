@@ -1,11 +1,12 @@
 <script>
   import { goto } from '$app/navigation';
+  import { untrack } from 'svelte';
   import TemplateSelector from '$lib/components/TemplateSelector.svelte';
   import RepositoryPicker from '$lib/components/repositories/RepositoryPicker.svelte';
   import ProvisioningProgress from '$lib/components/ProvisioningProgress.svelte';
   import { nostr, KINDS } from '$lib/nostr/client.js';
   import { trackProvisioningRun, provisioningRuns } from '$lib/stores/souls.js';
-  import { authState, initializeAuth, login, signWithAuth } from '$lib/stores/auth.js';
+  import { authState, initializeAuth, login, refreshExtensionStatus, signWithAuth } from '$lib/stores/auth.js';
   
   // Form state
   let step = $state(1); // 1: template, 2: repository, 3: configure, 4: provisioning
@@ -20,6 +21,7 @@
   let requestEventId = $state(null);
   let currentRun = $state(null);
   let provisioningCleanup = null;
+  let nostrInitialized = false;
   
   // Publishing state
   let publishing = $state(false);
@@ -43,8 +45,8 @@
   let authError = $derived(authState.error);
   let userPubkey = $derived(authState.pubkey);
   
-  function handleTemplateSelect(e) {
-    selectedTemplate = e.detail;
+  function handleTemplateSelect(template) {
+    selectedTemplate = template;
     if (selectedTemplate) {
       // Pre-fill tier from template
       tier = selectedTemplate.tier || 'standard';
@@ -202,9 +204,18 @@
   }
   
   $effect(() => {
+    if (nostrInitialized) return;
+    nostrInitialized = true;
+
     async function initializeNostr() {
-      // Initialize auth system
-      await initializeAuth();
+      // The layout/AuthGuard initializes auth before this protected route mounts.
+      // Avoid resetting auth back to "checking", which would make AuthGuard unmount
+      // and remount the wizard in a loop.
+      if (authState.status === 'unknown') {
+        await initializeAuth();
+      } else if (!authState.extensionAvailable) {
+        await refreshExtensionStatus();
+      }
       
       // Connect to Nostr relays
       const auth = authState;
@@ -221,7 +232,7 @@
       }
     }
 
-    void initializeNostr();
+    void untrack(() => initializeNostr());
 
     return () => {
       // Clean up provisioning tracking

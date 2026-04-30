@@ -1,5 +1,6 @@
 <script>
   import { goto } from '$app/navigation';
+  import { untrack } from 'svelte';
   import { authState, isAuthenticated, initializeAuth } from '$lib/stores/auth.js';
 
   let { children } = $props();
@@ -7,11 +8,11 @@
   let initialized = $state(false);
 
   $effect(() => {
-    if (!initialized) {
-      if (authState.status === 'unknown') {
-        initializeAuth();
-      }
-      initialized = true;
+    if (initialized) return;
+
+    initialized = true;
+    if (untrack(() => authState.status) === 'unknown') {
+      void untrack(() => initializeAuth());
     }
   });
 

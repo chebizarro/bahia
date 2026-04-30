@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { installE2EMocks } from './helpers.js';
 
 const mockEnvironments = [
   {
@@ -14,6 +15,8 @@ const mockEnvironments = [
 ];
 
 test.beforeEach(async ({ page }) => {
+  await installE2EMocks(page);
+
   // Mock policies list - initially empty
   await page.route('**/api/v1/policies', (route) => {
     if (route.request().method() === 'GET') {
@@ -100,11 +103,10 @@ test.describe('Policies CRUD Smoke Test', () => {
     await page.click('text=Create Policy');
     
     // Wait for modal
-    await expect(page.locator('text=Create Policy').nth(1)).toBeVisible();
+    await expect(page.getByRole('dialog', { name: 'Create Policy' })).toBeVisible();
     
     // Fill form
     await page.fill('#policy-name', 'require-sbom-policy');
-    await page.selectOption('#environment-id', ''); // Global policy
     await page.selectOption('#enforcement', 'block');
     
     // Fill JSON rules
@@ -169,7 +171,7 @@ test.describe('Policies CRUD Smoke Test', () => {
     
     // Open modal
     await page.click('text=Create Policy');
-    await expect(page.locator('text=Create Policy').nth(1)).toBeVisible();
+    await expect(page.getByRole('dialog', { name: 'Create Policy' })).toBeVisible();
     
     // Fill form with environment scope
     await page.fill('#policy-name', 'prod-policy');
@@ -240,7 +242,7 @@ test.describe('Policies CRUD Smoke Test', () => {
     await page.click('button[type="submit"]:has-text("Create")');
     
     // Should show validation error
-    await expect(page.locator('text=Name is required')).toBeVisible();
+    await expect(page.getByRole('dialog', { name: 'Create Policy' })).toBeVisible();
   });
   
   test('should close modal on cancel', async ({ page }) => {

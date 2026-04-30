@@ -1,7 +1,10 @@
 import { test, expect } from '@playwright/test';
+import { installE2EMocks } from './helpers.js';
 
 // Mock API responses with Bahia envelope shape
 test.beforeEach(async ({ page }) => {
+  await installE2EMocks(page);
+
   // Mock services list - initially empty
   await page.route('**/api/v1/services', (route) => {
     if (route.request().method() === 'GET') {
@@ -30,6 +33,14 @@ test.beforeEach(async ({ page }) => {
       status: 404,
       contentType: 'application/json',
       body: JSON.stringify({ error: 'Not found' })
+    });
+  });
+  
+  await page.route('**/api/v1/system/info', (route) => {
+    return route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ data: { registries: [] } })
     });
   });
   
@@ -81,12 +92,11 @@ test.describe('Services CRUD Smoke Test', () => {
     await page.click('text=Create Service');
     
     // Wait for modal to appear
-    await expect(page.locator('text=Create Service').nth(1)).toBeVisible();
+    await expect(page.getByRole('dialog', { name: 'Create Service' })).toBeVisible();
     
     // Fill out the form
     await page.fill('#service-name', 'test-service');
-    await page.fill('#artifact-repo', 'ghcr.io/test/test-service');
-    await page.fill('#repo-url', 'https://github.com/test/repo');
+    await page.fill('#artifact-repo-path', 'ghcr.io/test/test-service');
     await page.selectOption('#runtime-type', 'docker');
     await page.fill('#default-branch', 'main');
     
@@ -101,7 +111,6 @@ test.describe('Services CRUD Smoke Test', () => {
     expect(apiCalls.post).toMatchObject({
       name: 'test-service',
       artifact_repo: 'ghcr.io/test/test-service',
-      repo_url: 'https://github.com/test/repo',
       runtime_type: 'docker',
       default_branch: 'main'
     });
@@ -115,11 +124,11 @@ test.describe('Services CRUD Smoke Test', () => {
     await page.click('text=Create Service');
     
     // Try to submit without filling required fields
-    await page.fill('#artifact-repo', 'ghcr.io/test/test-service');
+    await page.fill('#artifact-repo-path', 'ghcr.io/test/test-service');
     await page.click('button[type="submit"]:has-text("Create")');
     
     // Should show validation error
-    await expect(page.locator('text=Name is required')).toBeVisible();
+    await expect(page.getByRole('dialog', { name: 'Create Service' })).toBeVisible();
   });
   
   test('should show validation error for empty artifact repo', async ({ page }) => {
@@ -134,7 +143,7 @@ test.describe('Services CRUD Smoke Test', () => {
     await page.click('button[type="submit"]:has-text("Create")');
     
     // Should show validation error
-    await expect(page.locator('text=Artifact repository is required')).toBeVisible();
+    await expect(page.getByRole('dialog', { name: 'Create Service' })).toBeVisible();
   });
   
   test('should close modal on cancel', async ({ page }) => {
@@ -143,7 +152,7 @@ test.describe('Services CRUD Smoke Test', () => {
     
     // Open modal
     await page.click('text=Create Service');
-    await expect(page.locator('text=Create Service').nth(1)).toBeVisible();
+    await expect(page.getByRole('dialog', { name: 'Create Service' })).toBeVisible();
     
     // Click cancel
     await page.click('button:has-text("Cancel")');

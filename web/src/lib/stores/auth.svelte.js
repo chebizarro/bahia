@@ -106,7 +106,8 @@ function clearPersistedSession() {
   }
 }
 
-// Track in-flight login to prevent duplicate calls
+// Track in-flight auth work to prevent duplicate calls
+let initializeInProgress = null;
 let loginInProgress = null;
 
 /**
@@ -114,49 +115,63 @@ let loginInProgress = null;
  * Should be called once on app mount
  */
 export async function initializeAuth() {
-  updateAuthState({ status: 'checking' });
-
-  try {
-    // Wait for extension to become available
-    const { available } = await waitForNip07({ timeoutMs: 1500 });
-
-    // Update extension availability
-    updateAuthState({ extensionAvailable: available });
-
-    // Try to restore previous session
-    const persisted = loadPersistedSession();
-
-    if (persisted && available) {
-      // Restore session with capabilities
-      const capabilities = getCapabilities();
-
-      updateAuthState({
-        status: 'authenticated',
-        pubkey: persisted.pubkey,
-        relays: persisted.relays,
-        capabilities,
-        lastAuthenticatedAt: persisted.lastAuthenticatedAt,
-        error: null
-      });
-    } else {
-      // No valid session
-      updateAuthState({
-        status: 'unauthenticated',
-        error: null
-      });
-
-      // Warn if no NIP-07 extension detected
-      if (!available) {
-        toast.warning('No Nostr extension detected. Install a NIP-07 extension like Alby or nos2x to sign in.');
-      }
-    }
-  } catch (error) {
-    console.error('Auth initialization failed:', error);
-    updateAuthState({
-      status: 'error',
-      error: error.message
-    });
+  if (initializeInProgress) {
+    return initializeInProgress;
   }
+
+  initializeInProgress = (async () => {
+    updateAuthState({ status: 'checking' });
+
+    try {
+      // Wait for extension to become available
+      const { available } = await waitForNip07({ timeoutMs: 1500 });
+
+      // Update extension availability
+      updateAuthState({ extensionAvailable: available });
+
+      // Try to restore previous session
+      const persisted = loadPersistedSession();
+      const backendToken = localStorage.getItem('bahia_token');
+      const backendAuthenticated = Boolean(backendToken);
+
+      if (persisted && available) {
+        // Restore session with capabilities
+        const capabilities = getCapabilities();
+
+        updateAuthState({
+          status: 'authenticated',
+          pubkey: persisted.pubkey,
+          relays: persisted.relays,
+          capabilities,
+          lastAuthenticatedAt: persisted.lastAuthenticatedAt,
+          backendAuthenticated,
+          error: null
+        });
+      } else {
+        // No valid NIP-07 session. Preserve backend auth if a JWT was already stored.
+        updateAuthState({
+          status: 'unauthenticated',
+          backendAuthenticated,
+          error: null
+        });
+
+        // Warn if no NIP-07 extension detected and no backend session exists
+        if (!available && !backendAuthenticated) {
+          toast.warning('No Nostr extension detected. Install a NIP-07 extension like Alby or nos2x to sign in.');
+        }
+      }
+    } catch (error) {
+      console.error('Auth initialization failed:', error);
+      updateAuthState({
+        status: 'error',
+        error: error.message
+      });
+    } finally {
+      initializeInProgress = null;
+    }
+  })();
+
+  return initializeInProgress;
 }
 
 /**

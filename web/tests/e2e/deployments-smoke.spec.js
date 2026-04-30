@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { installE2EMocks } from './helpers.js';
 
 // Mock data
 const mockServices = [
@@ -55,6 +56,8 @@ const mockPendingIntents = [
 ];
 
 test.beforeEach(async ({ page }) => {
+  await installE2EMocks(page);
+
   // Mock services
   await page.route('**/api/v1/services', (route) => {
     return route.fulfill({
@@ -102,7 +105,7 @@ test.beforeEach(async ({ page }) => {
   });
   
   // Mock approval endpoint
-  await page.route('**/api/v1/intents/*/approve', (route) => {
+  await page.route('**/api/v1/deployments/intents/*/approve', (route) => {
     return route.fulfill({
       status: 200,
       contentType: 'application/json',
@@ -111,7 +114,7 @@ test.beforeEach(async ({ page }) => {
   });
   
   // Mock rejection endpoint
-  await page.route('**/api/v1/intents/*/reject', (route) => {
+  await page.route('**/api/v1/deployments/intents/*/reject', (route) => {
     return route.fulfill({
       status: 200,
       contentType: 'application/json',
@@ -161,7 +164,7 @@ test.describe('Deployments Smoke Test', () => {
     const approvedIntents = [];
     
     // Track approval calls
-    await page.route('**/api/v1/intents/*/approve', (route) => {
+    await page.route('**/api/v1/deployments/intents/*/approve', (route) => {
       const intentId = route.request().url().match(/intents\/([^\/]+)\/approve/)[1];
       approvedIntents.push(intentId);
       
@@ -177,13 +180,13 @@ test.describe('Deployments Smoke Test', () => {
     await page.waitForTimeout(500);
     
     // Click the first approve button
-    await page.click('.btn-approve:visible >> nth=0');
+    await page.locator('button:has-text("Approve")').first().click();
     
     // Wait for confirmation dialog
-    await expect(page.locator('text=Approve Deployment')).toBeVisible();
+    await expect(page.getByRole('dialog', { name: 'Approve Deployment' })).toBeVisible();
     
     // Confirm approval
-    await page.click('button:has-text("Approve")');
+    await page.getByRole('dialog', { name: 'Approve Deployment' }).getByRole('button', { name: 'Approve' }).click();
     
     // Wait for API call
     await page.waitForTimeout(500);
@@ -197,7 +200,7 @@ test.describe('Deployments Smoke Test', () => {
     const rejectedIntents = [];
     
     // Track rejection calls
-    await page.route('**/api/v1/intents/*/reject', (route) => {
+    await page.route('**/api/v1/deployments/intents/*/reject', (route) => {
       const intentId = route.request().url().match(/intents\/([^\/]+)\/reject/)[1];
       rejectedIntents.push(intentId);
       
@@ -213,13 +216,13 @@ test.describe('Deployments Smoke Test', () => {
     await page.waitForTimeout(500);
     
     // Click the first reject button
-    await page.click('.btn-reject:visible >> nth=0');
+    await page.locator('button:has-text("Reject")').first().click();
     
     // Wait for confirmation dialog
-    await expect(page.locator('text=Reject Deployment')).toBeVisible();
+    await expect(page.getByRole('dialog', { name: 'Reject Deployment' })).toBeVisible();
     
     // Confirm rejection
-    await page.click('button:has-text("Reject")');
+    await page.getByRole('dialog', { name: 'Reject Deployment' }).getByRole('button', { name: 'Reject' }).click();
     
     // Wait for API call
     await page.waitForTimeout(500);

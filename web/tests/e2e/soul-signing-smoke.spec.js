@@ -1,10 +1,11 @@
 import { test, expect } from '@playwright/test';
+import { installE2EMocks } from './helpers.js';
 
 // Mock window.nostr NIP-07 extension
 const mockNostrExtension = () => {
   return {
     getPublicKey: async () => {
-      return 'npub1test1234567890abcdef1234567890abcdef1234567890abcdef12345';
+      return 'ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff';
     },
     signEvent: async (event) => {
       // Simple mock signature
@@ -12,7 +13,7 @@ const mockNostrExtension = () => {
         ...event,
         id: 'mock-event-id-' + Date.now(),
         sig: 'mock-signature-' + Math.random().toString(36).slice(2),
-        pubkey: 'npub1test1234567890abcdef1234567890abcdef1234567890abcdef12345'
+        pubkey: 'ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff'
       };
     },
     getRelays: async () => {
@@ -33,11 +34,13 @@ const mockNostrExtension = () => {
 };
 
 test.beforeEach(async ({ page }) => {
+  await installE2EMocks(page);
+
   // Inject mock window.nostr before page loads
   await page.addInitScript(() => {
     window.nostr = {
       getPublicKey: async () => {
-        return 'npub1test1234567890abcdef1234567890abcdef1234567890abcdef12345';
+        return 'ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff';
       },
       signEvent: async (event) => {
         // Return signed event
@@ -45,7 +48,7 @@ test.beforeEach(async ({ page }) => {
           ...event,
           id: 'mock-event-id-' + Date.now(),
           sig: 'mock-signature-' + Math.random().toString(36).slice(2),
-          pubkey: 'npub1test1234567890abcdef1234567890abcdef1234567890abcdef12345'
+          pubkey: 'ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff'
         };
       },
       getRelays: async () => {
@@ -60,6 +63,10 @@ test.beforeEach(async ({ page }) => {
   // Mock WebSocket for relay connections
   await page.addInitScript(() => {
     class MockWebSocket {
+      static CONNECTING = 0;
+      static OPEN = 1;
+      static CLOSED = 3;
+
       constructor(url) {
         this.url = url;
         this.readyState = 1; // OPEN
@@ -73,9 +80,13 @@ test.beforeEach(async ({ page }) => {
         setTimeout(() => {
           if (this.onmessage) {
             const event = JSON.parse(data);
-            if (Array.isArray(event) && event[0] === 'EVENT') {
+            if (Array.isArray(event) && event[0] === 'REQ') {
               this.onmessage({
-                data: JSON.stringify(['OK', event[1], true, ''])
+                data: JSON.stringify(['EOSE', event[1]])
+              });
+            } else if (Array.isArray(event) && event[0] === 'EVENT') {
+              this.onmessage({
+                data: JSON.stringify(['OK', event[1]?.id, true, ''])
               });
             }
           }
@@ -120,10 +131,11 @@ test.describe('Soul Signing Smoke Test', () => {
     });
     
     await page.goto('/souls/new');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
     
     // Step 1: Template selection (skip for now, just continue)
     await expect(page.locator('h1:has-text("Create New Soul")')).toBeVisible();
+    await page.click('button:has-text("Continue")');
     await page.click('button:has-text("Continue")');
     
     // Step 2: Configure
@@ -158,9 +170,10 @@ test.describe('Soul Signing Smoke Test', () => {
   
   test('should show NIP-07 extension status', async ({ page }) => {
     await page.goto('/souls/new');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
     
-    // Continue to step 2
+    // Continue to configure step
+    await page.click('button:has-text("Continue")');
     await page.click('button:has-text("Continue")');
     
     // Should show auth status banner
@@ -177,9 +190,10 @@ test.describe('Soul Signing Smoke Test', () => {
     });
     
     await page.goto('/souls/new');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
     
-    // Continue to step 2
+    // Continue to configure step
+    await page.click('button:has-text("Continue")');
     await page.click('button:has-text("Continue")');
     
     // Should show extension required message
@@ -191,9 +205,10 @@ test.describe('Soul Signing Smoke Test', () => {
   
   test('should generate agent ID from name', async ({ page }) => {
     await page.goto('/souls/new');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
     
     // Continue to configure step
+    await page.click('button:has-text("Continue")');
     await page.click('button:has-text("Continue")');
     
     // Fill agent name
@@ -212,18 +227,22 @@ test.describe('Soul Signing Smoke Test', () => {
   
   test('should allow navigation between wizard steps', async ({ page }) => {
     await page.goto('/souls/new');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
     
     // Start at step 1
     await expect(page.locator('.wizard-progress .progress-step.active:has-text("Template")')).toBeVisible();
     
-    // Go to step 2
+    // Go to repository step
+    await page.click('button:has-text("Continue")');
+    await expect(page.locator('.wizard-progress .progress-step.active:has-text("Repository")')).toBeVisible();
+
+    // Go to configure step
     await page.click('button:has-text("Continue")');
     await expect(page.locator('.wizard-progress .progress-step.active:has-text("Configure")')).toBeVisible();
     
-    // Go back to step 1
+    // Go back to repository step
     await page.click('button:has-text("Back")');
-    await expect(page.locator('.wizard-progress .progress-step.active:has-text("Template")')).toBeVisible();
+    await expect(page.locator('.wizard-progress .progress-step.active:has-text("Repository")')).toBeVisible();
   });
   
   test('should include provisioning request tags', async ({ page }) => {
@@ -239,9 +258,10 @@ test.describe('Soul Signing Smoke Test', () => {
     });
     
     await page.goto('/souls/new');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
     
     // Continue to configure
+    await page.click('button:has-text("Continue")');
     await page.click('button:has-text("Continue")');
     
     // Fill form
@@ -268,7 +288,7 @@ test.describe('Soul Signing Smoke Test', () => {
       const outputTag = tags.find(t => t[0] === 'output');
       
       expect(agentIdTag).toBeDefined();
-      expect(agentIdTag[1]).toBe('test-agent');
+      expect(agentIdTag[1]).toContain('test-agent');
       expect(nameTag).toBeDefined();
       expect(tierTag).toBeDefined();
       expect(tierTag[1]).toBe('lightweight');

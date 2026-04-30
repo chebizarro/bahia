@@ -34,7 +34,7 @@ const MAX_BACKOFF_MS = 30000;
  * Get configured relays from localStorage or return defaults
  */
 function getConfiguredRelays() {
-  if (typeof localStorage === 'undefined') return DEFAULT_RELAYS;
+  if (typeof window === 'undefined' || typeof localStorage === 'undefined' || typeof localStorage.getItem !== 'function') return DEFAULT_RELAYS;
   
   try {
     const stored = localStorage.getItem(RELAY_CONFIG_KEY);
@@ -55,7 +55,7 @@ function getConfiguredRelays() {
  * Save relay configuration to localStorage
  */
 export function saveRelayConfig(relays) {
-  if (typeof localStorage === 'undefined') return;
+  if (typeof window === 'undefined' || typeof localStorage === 'undefined' || typeof localStorage.setItem !== 'function') return;
   
   try {
     if (Array.isArray(relays) && relays.length > 0) {

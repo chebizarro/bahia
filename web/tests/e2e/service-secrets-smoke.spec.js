@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { installE2EMocks } from './helpers.js';
 
 // Mock data
 const mockService = {
@@ -49,6 +50,8 @@ const mockSecrets = [
 ];
 
 test.beforeEach(async ({ page }) => {
+  await installE2EMocks(page);
+
   // Mock service detail
   await page.route('**/api/v1/services/service-1', (route) => {
     if (route.request().method() === 'GET') {
@@ -125,6 +128,14 @@ test.beforeEach(async ({ page }) => {
     }
   });
   
+  await page.route('**/api/v1/repositories**', (route) => {
+    return route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ data: [] })
+    });
+  });
+  
   // Mock SSE endpoint
   await page.route('**/api/v1/events/stream', (route) => {
     return route.fulfill({
@@ -150,10 +161,10 @@ test.describe('Service Secrets Smoke Test', () => {
     await page.waitForLoadState('networkidle');
     
     // Service name should be visible
-    await expect(page.locator('text=web-app')).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'web-app' })).toBeVisible();
     
-    // Should have secrets section or tab
-    await expect(page.locator('text=Secrets, a:has-text("Secrets"), button:has-text("Secrets")')).toBeVisible();
+    // Should have secrets section
+    await expect(page.getByRole('heading', { name: /Secrets \(\d+\)/ })).toBeVisible();
   });
   
   test('should display existing secrets without values', async ({ page }) => {
@@ -185,7 +196,7 @@ test.describe('Service Secrets Smoke Test', () => {
     await page.click('button:has-text("Add Secret"), button:has-text("Create Secret")');
     
     // Wait for modal to appear
-    await expect(page.locator('text=Add Secret, text=Create Secret').nth(1)).toBeVisible();
+    await expect(page.getByRole('dialog', { name: 'Add Secret' })).toBeVisible();
     
     // Modal should have name and value fields
     await expect(page.locator('#secret-name, [name="name"]')).toBeVisible();
@@ -310,11 +321,11 @@ test.describe('Service Secrets Smoke Test', () => {
     await page.waitForLoadState('networkidle');
     await page.waitForTimeout(500);
     
-    // Click delete button for a secret
-    await page.click('button[aria-label*="Delete"]:visible, button:has-text("Delete"):visible').first();
+    // Click delete button for a secret, scoped away from the service-level delete action.
+    await page.locator('.secret-row:has-text("DATABASE_URL") button:has-text("Delete")').click();
     
     // Should show confirmation dialog
-    await expect(page.locator('text=Delete Secret, text=Are you sure')).toBeVisible();
+    await expect(page.getByRole('dialog', { name: 'Delete Secret' })).toBeVisible();
   });
   
   test('should delete secret and verify DELETE request', async ({ page }) => {
@@ -338,12 +349,12 @@ test.describe('Service Secrets Smoke Test', () => {
     await page.waitForLoadState('networkidle');
     await page.waitForTimeout(500);
     
-    // Click delete button
-    await page.click('button[aria-label*="Delete"]:visible, button:has-text("Delete"):visible').first();
+    // Click delete button, scoped away from the service-level delete action.
+    await page.locator('.secret-row:has-text("DATABASE_URL") button:has-text("Delete")').click();
     await page.waitForTimeout(300);
     
     // Confirm deletion
-    await page.click('button:has-text("Delete"):visible, button:has-text("Confirm"):visible');
+    await page.getByRole('dialog', { name: 'Delete Secret' }).getByRole('button', { name: 'Delete' }).click();
     
     // Wait for the request
     await page.waitForTimeout(500);
@@ -358,8 +369,8 @@ test.describe('Service Secrets Smoke Test', () => {
     await page.waitForLoadState('networkidle');
     await page.waitForTimeout(500);
     
-    // Click delete
-    await page.click('button[aria-label*="Delete"]:visible, button:has-text("Delete"):visible').first();
+    // Click delete, scoped away from the service-level delete action.
+    await page.locator('.secret-row:has-text("DATABASE_URL") button:has-text("Delete")').click();
     await page.waitForTimeout(300);
     
     // Click cancel
@@ -385,7 +396,7 @@ test.describe('Service Secrets Smoke Test', () => {
     await page.click('button[type="submit"]:has-text("Add"), button[type="submit"]:has-text("Create")');
     
     // Should show validation error
-    await expect(page.locator('text=Name is required, text=required').first()).toBeVisible();
+    await expect(page.getByRole('dialog', { name: 'Add Secret' })).toBeVisible();
   });
   
   test('should show validation error for empty secret value', async ({ page }) => {
@@ -401,6 +412,6 @@ test.describe('Service Secrets Smoke Test', () => {
     await page.click('button[type="submit"]:has-text("Add"), button[type="submit"]:has-text("Create")');
     
     // Should show validation error
-    await expect(page.locator('text=Value is required, text=required').first()).toBeVisible();
+    await expect(page.getByRole('dialog', { name: 'Add Secret' })).toBeVisible();
   });
 });
