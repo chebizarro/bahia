@@ -380,6 +380,11 @@ class BahiaClient {
     return payload?.results || [];
   }
 
+  // System Info
+  async getSystemInfo() {
+    return this.fetch('/system/info');
+  }
+
   // Blossom Artifacts
   /**
    * List blobs from configured Blossom servers.

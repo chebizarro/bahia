@@ -13,7 +13,29 @@
   import { fetchRepoBranches, isNostrRepository } from '$lib/nostr/branches.js';
   import { api } from '$lib/api/client.js';
 
-  onMount(() => loadServices());
+  // Registry state
+  let availableRegistries = [];
+  let registriesLoading = true;
+  let selectedRegistry = 'custom';
+  let repoPath = '';
+
+  onMount(async () => {
+    loadServices();
+    // Load available registries
+    try {
+      const info = await api.getSystemInfo();
+      availableRegistries = info?.registries || [];
+      // Auto-select default registry if available
+      const defaultReg = availableRegistries.find(r => r.default);
+      if (defaultReg) {
+        selectedRegistry = defaultReg.id;
+      }
+    } catch (err) {
+      console.warn('Failed to load registries:', err);
+    } finally {
+      registriesLoading = false;
+    }
+  });
 
   // Create modal state
   let createOpen = false;
@@ -27,6 +49,28 @@
     runtime_type: 'docker',
     default_branch: 'main'
   };
+
+  // Compute artifact_repo from registry selection + path
+  $: {
+    if (selectedRegistry === 'custom') {
+      createForm.artifact_repo = repoPath;
+    } else {
+      const registry = availableRegistries.find(r => r.id === selectedRegistry);
+      if (registry && repoPath) {
+        createForm.artifact_repo = `${registry.base_url}/${repoPath}`;
+      } else {
+        createForm.artifact_repo = repoPath;
+      }
+    }
+  }
+
+  $: registryOptions = [
+    ...availableRegistries.map(r => ({
+      value: r.id,
+      label: r.default ? `${r.name} (default)` : r.name
+    })),
+    { value: 'custom', label: 'Custom Registry' }
+  ];
 
   // Branch detection state
   let detectedBranches = [];
@@ -107,6 +151,10 @@
       runtime_type: 'docker',
       default_branch: 'main'
     };
+    // Reset registry state
+    repoPath = '';
+    const defaultReg = availableRegistries.find(r => r.default);
+    selectedRegistry = defaultReg?.id || 'custom';
   }
 
   async function handleCreate() {
@@ -115,8 +163,8 @@
       createError = 'Name is required';
       return;
     }
-    if (!createForm.artifact_repo.trim()) {
-      createError = 'Artifact repository is required';
+    if (!repoPath.trim()) {
+      createError = 'Repository path is required';
       return;
     }
     if (!createForm.runtime_type) {
@@ -186,14 +234,32 @@
     </div>
 
     <div class="form-field">
-      <label for="artifact-repo">Artifact Repository *</label>
-      <Input
-        id="artifact-repo"
-        bind:value={createForm.artifact_repo}
-        placeholder="ghcr.io/org/my-service"
-        required
-        disabled={creating}
-      />
+      <label for="artifact-registry">Artifact Repository *</label>
+      {#if registriesLoading}
+        <div class="registry-loading">
+          <span class="spinner-small"></span>
+          Loading registries...
+        </div>
+      {:else}
+        <div class="registry-picker">
+          <Select
+            id="artifact-registry"
+            bind:value={selectedRegistry}
+            options={registryOptions}
+            disabled={creating}
+          />
+          <Input
+            id="artifact-repo-path"
+            bind:value={repoPath}
+            placeholder={selectedRegistry === 'custom' ? 'ghcr.io/org/my-service' : 'org/my-service'}
+            required
+            disabled={creating}
+          />
+        </div>
+        {#if selectedRegistry !== 'custom' && repoPath}
+          <span class="registry-preview">→ {createForm.artifact_repo}</span>
+        {/if}
+      {/if}
     </div>
 
     <div class="form-field">
@@ -354,5 +420,35 @@
     font-size: 0.75rem;
     color: var(--error);
     margin-top: 0.25rem;
+  }
+
+  .registry-loading {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.875rem;
+    color: var(--text-muted);
+    padding: 0.5rem 0;
+  }
+
+  .registry-picker {
+    display: flex;
+    gap: 0.5rem;
+  }
+
+  .registry-picker :global(select) {
+    flex: 0 0 200px;
+  }
+
+  .registry-picker :global(input) {
+    flex: 1;
+  }
+
+  .registry-preview {
+    display: block;
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    margin-top: 0.25rem;
+    font-family: monospace;
   }
 </style>

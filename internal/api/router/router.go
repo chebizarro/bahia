@@ -29,6 +29,7 @@ var Version = "dev"
 // New creates and configures the HTTP router.
 // RouterDeps holds optional dependencies for the router.
 type RouterDeps struct {
+	Config        *config.Config
 	Workers       repository.WorkerRepository
 	Payments      *service.PaymentService
 	SBOMs         repository.SBOMRepository
@@ -103,6 +104,7 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 	deployH := handlers.NewDeploymentHandler(registry)
 	stateH := handlers.NewStateHandler(registry)
 	repoCIHandler := handlers.NewRepositoryCIHandler(deps.HiveCI)
+	systemH := handlers.NewSystemHandler(deps.Config)
 
 	if deps.OCI != nil {
 		r.Mount("/v2", deps.OCI)
@@ -156,6 +158,11 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 
 			// Repository CI lookup (read)
 			r.Post("/repositories/ci/lookup", repoCIHandler.Lookup)
+
+			// System info (read)
+			if deps.Config != nil {
+				r.Get("/system/info", systemH.GetInfo)
+			}
 
 			// Workers (read)
 			if deps.Workers != nil {

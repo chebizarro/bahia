@@ -319,6 +319,7 @@ func New(cfg *config.Config) (*App, error) {
 	// HTTP router.
 	handler := router.NewWithDeps(registry, logger, cfg.CORS, telemetryProvider,
 		router.RouterDeps{
+			Config:        cfg,
 			Workers:       workerRepo,
 			Payments:      paymentSvc,
 			SBOMs:         sbomRepo,
