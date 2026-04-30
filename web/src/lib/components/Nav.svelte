@@ -25,6 +25,7 @@
       </a>
     </li>
     <li><a href="/events" class:active={$page.url.pathname === '/events'}>Events</a></li>
+    <li><a href="/settings" class:active={$page.url.pathname === '/settings'}>⚙️ Settings</a></li>
   </ul>
   
   <button class="theme-toggle" on:click={toggleTheme} aria-label="Toggle theme">
