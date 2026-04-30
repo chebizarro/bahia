@@ -20,6 +20,7 @@
     resolveSelectionFromRepoUrl,
     loadRepositories
   } from '$lib/stores/repositories.js';
+  import { fetchRepoBranches, isNostrRepository } from '$lib/nostr/branches.js';
 
   let service = null;
   let builds = [];
@@ -41,6 +42,46 @@
     runtime_type: '',
     default_branch: ''
   };
+
+  // Branch detection state for edit form
+  let editDetectedBranches = [];
+  let editDetectedDefaultBranch = null;
+  let editBranchesLoading = false;
+  let editBranchesError = null;
+
+  // Watch for edit form repository selection changes
+  $: if (editOpen && editForm.repositorySelection) {
+    handleEditRepositoryChange(editForm.repositorySelection);
+  }
+
+  async function handleEditRepositoryChange(selection) {
+    // Reset branch state
+    editDetectedBranches = [];
+    editDetectedDefaultBranch = null;
+    editBranchesError = null;
+
+    // Only fetch branches for NIP-34 repos
+    if (!isNostrRepository(selection)) {
+      return;
+    }
+
+    editBranchesLoading = true;
+    try {
+      const result = await fetchRepoBranches(selection.repoCoordinate);
+      editDetectedBranches = result.branches;
+      editDetectedDefaultBranch = result.defaultBranch;
+      editBranchesError = result.error;
+    } catch (err) {
+      editBranchesError = err?.message || 'Failed to fetch branches';
+    } finally {
+      editBranchesLoading = false;
+    }
+  }
+
+  $: editBranchOptions = editDetectedBranches.map(b => ({
+    value: b,
+    label: b === editDetectedDefaultBranch ? `${b} (default)` : b
+  }));
 
   // Delete modal state
   let deleteOpen = false;
@@ -531,12 +572,35 @@
 
     <div class="form-field">
       <label for="edit-default-branch">Default Branch</label>
-      <Input
-        id="edit-default-branch"
-        bind:value={editForm.default_branch}
-        placeholder="main"
-        disabled={editing}
-      />
+      {#if editBranchesLoading}
+        <div class="branch-loading">
+          <span class="spinner-small"></span>
+          Detecting branches...
+        </div>
+      {:else if editDetectedBranches.length > 0}
+        <Select
+          id="edit-default-branch"
+          bind:value={editForm.default_branch}
+          options={editBranchOptions}
+          disabled={editing}
+        />
+        {#if editDetectedDefaultBranch}
+          <span class="branch-hint">Detected from repository state</span>
+        {/if}
+      {:else}
+        <Input
+          id="edit-default-branch"
+          bind:value={editForm.default_branch}
+          placeholder="main"
+          disabled={editing}
+        />
+        {#if isNostrRepository(editForm.repositorySelection) && !editBranchesError}
+          <span class="branch-hint">No branches detected - enter manually</span>
+        {/if}
+      {/if}
+      {#if editBranchesError}
+        <span class="branch-error">{editBranchesError}</span>
+      {/if}
     </div>
 
     {#if editError}
@@ -987,5 +1051,41 @@
     display: flex;
     flex-direction: column;
     gap: 1rem;
+  }
+
+  .branch-loading {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.875rem;
+    color: var(--text-muted);
+    padding: 0.5rem 0;
+  }
+
+  .spinner-small {
+    width: 14px;
+    height: 14px;
+    border: 2px solid var(--border-color);
+    border-top-color: var(--primary);
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+  }
+
+  @keyframes spin {
+    to { transform: rotate(360deg); }
+  }
+
+  .branch-hint {
+    display: block;
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    margin-top: 0.25rem;
+  }
+
+  .branch-error {
+    display: block;
+    font-size: 0.75rem;
+    color: var(--error);
+    margin-top: 0.25rem;
   }
 </style>

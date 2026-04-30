@@ -10,6 +10,7 @@
   import RepositoryPicker from '$lib/components/repositories/RepositoryPicker.svelte';
   import { services, loading, loadServices } from '$lib/stores';
   import { createManualRepositorySelection } from '$lib/stores/repositories.js';
+  import { fetchRepoBranches, isNostrRepository } from '$lib/nostr/branches.js';
   import { api } from '$lib/api/client.js';
 
   onMount(() => loadServices());
@@ -26,6 +27,54 @@
     runtime_type: 'docker',
     default_branch: 'main'
   };
+
+  // Branch detection state
+  let detectedBranches = [];
+  let detectedDefaultBranch = null;
+  let branchesLoading = false;
+  let branchesError = null;
+
+  // Watch for repository selection changes and fetch branches
+  $: if (createForm.repositorySelection) {
+    handleRepositoryChange(createForm.repositorySelection);
+  }
+
+  async function handleRepositoryChange(selection) {
+    // Reset branch state
+    detectedBranches = [];
+    detectedDefaultBranch = null;
+    branchesError = null;
+
+    // Only fetch branches for NIP-34 repos
+    if (!isNostrRepository(selection)) {
+      return;
+    }
+
+    branchesLoading = true;
+    try {
+      const result = await fetchRepoBranches(selection.repoCoordinate);
+      detectedBranches = result.branches;
+      detectedDefaultBranch = result.defaultBranch;
+      branchesError = result.error;
+
+      // Auto-select detected default branch
+      if (result.defaultBranch && !createForm.default_branch) {
+        createForm.default_branch = result.defaultBranch;
+      } else if (result.defaultBranch && createForm.default_branch === 'main') {
+        // Update if still using default 'main'
+        createForm.default_branch = result.defaultBranch;
+      }
+    } catch (err) {
+      branchesError = err?.message || 'Failed to fetch branches';
+    } finally {
+      branchesLoading = false;
+    }
+  }
+
+  $: branchOptions = detectedBranches.map(b => ({
+    value: b,
+    label: b === detectedDefaultBranch ? `${b} (default)` : b
+  }));
 
   const runtimeOptions = [
     { value: 'docker', label: 'Docker' },
@@ -164,12 +213,35 @@
 
     <div class="form-field">
       <label for="default-branch">Default Branch</label>
-      <Input
-        id="default-branch"
-        bind:value={createForm.default_branch}
-        placeholder="main"
-        disabled={creating}
-      />
+      {#if branchesLoading}
+        <div class="branch-loading">
+          <span class="spinner-small"></span>
+          Detecting branches...
+        </div>
+      {:else if detectedBranches.length > 0}
+        <Select
+          id="default-branch"
+          bind:value={createForm.default_branch}
+          options={branchOptions}
+          disabled={creating}
+        />
+        {#if detectedDefaultBranch}
+          <span class="branch-hint">Detected from repository state</span>
+        {/if}
+      {:else}
+        <Input
+          id="default-branch"
+          bind:value={createForm.default_branch}
+          placeholder="main"
+          disabled={creating}
+        />
+        {#if isNostrRepository(createForm.repositorySelection) && !branchesError}
+          <span class="branch-hint">No branches detected - enter manually</span>
+        {/if}
+      {/if}
+      {#if branchesError}
+        <span class="branch-error">{branchesError}</span>
+      {/if}
     </div>
 
     {#if createError}
@@ -246,5 +318,41 @@
     padding: 0.5rem;
     background: rgba(239, 68, 68, 0.1);
     border-radius: 4px;
+  }
+
+  .branch-loading {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.875rem;
+    color: var(--text-muted);
+    padding: 0.5rem 0;
+  }
+
+  .spinner-small {
+    width: 14px;
+    height: 14px;
+    border: 2px solid var(--border-color);
+    border-top-color: var(--primary);
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+  }
+
+  @keyframes spin {
+    to { transform: rotate(360deg); }
+  }
+
+  .branch-hint {
+    display: block;
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    margin-top: 0.25rem;
+  }
+
+  .branch-error {
+    display: block;
+    font-size: 0.75rem;
+    color: var(--error);
+    margin-top: 0.25rem;
   }
 </style>
