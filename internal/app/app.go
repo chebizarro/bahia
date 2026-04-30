@@ -109,6 +109,11 @@ func New(cfg *config.Config) (*App, error) {
 	// Secret repository.
 	secretRepo := repository.NewPgSecretRepository(pool)
 
+	// Tenant repositories.
+	orgRepo := repository.NewPgOrganizationRepository(pool)
+	orgMemberRepo := repository.NewPgOrgMemberRepository(pool)
+	orgInviteRepo := repository.NewPgOrgInviteRepository(pool)
+
 	// Event publisher.
 	publisher := events.NewInProcessPublisher(logger)
 
@@ -316,6 +321,9 @@ func New(cfg *config.Config) (*App, error) {
 		logger.Info("nostr control plane reactor registered")
 	}
 
+	// Tenant RBAC.
+	rbac := auth.NewRBAC(orgMemberRepo)
+
 	// HTTP router.
 	handler := router.NewWithDeps(registry, logger, cfg.CORS, telemetryProvider,
 		router.RouterDeps{
@@ -333,6 +341,10 @@ func New(cfg *config.Config) (*App, error) {
 			MCP:           mcpHandler,
 			Blossom:       blossomClient,
 			OCI:           ociHandler,
+			Orgs:          orgRepo,
+			OrgMembers:    orgMemberRepo,
+			OrgInvites:    orgInviteRepo,
+			RBAC:          rbac,
 		}, cfg.Auth)
 
 	httpServer := &http.Server{

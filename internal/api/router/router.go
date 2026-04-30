@@ -46,6 +46,10 @@ type RouterDeps struct {
 	HiveCI        repository.HiveCIRepository
 	Blossom       *blossom.Client
 	OCI           http.Handler
+	Orgs          repository.OrganizationRepository
+	OrgMembers    repository.OrgMemberRepository
+	OrgInvites    repository.OrgInviteRepository
+	RBAC          *auth.RBAC
 }
 
 // SignatureVerifier is the interface for signature verification.
@@ -106,6 +110,11 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 	repoCIHandler := handlers.NewRepositoryCIHandler(deps.HiveCI)
 	systemH := handlers.NewSystemHandler(deps.Config)
 
+	var tenantH *handlers.TenantHandler
+	if deps.Orgs != nil && deps.OrgMembers != nil && deps.OrgInvites != nil && deps.RBAC != nil {
+		tenantH = handlers.NewTenantHandler(deps.Orgs, deps.OrgMembers, deps.OrgInvites, deps.RBAC, logger)
+	}
+
 	if deps.OCI != nil {
 		r.Mount("/v2", deps.OCI)
 	}
@@ -125,6 +134,15 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 		// Read routes: GET/list endpoints with read rate limit.
 		r.Group(func(r chi.Router) {
 			r.Use(middleware.RateLimit(readLimiter))
+
+			// Tenant orgs (read)
+			if tenantH != nil {
+				r.Get("/orgs", tenantH.ListOrgs)
+				r.Get("/orgs/{id}", tenantH.GetOrg)
+				r.Get("/orgs/{id}/members", tenantH.ListMembers)
+				r.Get("/orgs/{id}/invites", tenantH.ListInvites)
+				r.Get("/me/invites", tenantH.MyInvites)
+			}
 
 			// Services (read)
 			r.Get("/services", svcH.List)
@@ -235,6 +253,18 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 		// Write routes: POST/PUT/PATCH/DELETE endpoints with stricter rate limit.
 		r.Group(func(r chi.Router) {
 			r.Use(middleware.RateLimit(writeLimiter))
+
+			// Tenant orgs (write)
+			if tenantH != nil {
+				r.Post("/orgs", tenantH.CreateOrg)
+				r.Put("/orgs/{id}", tenantH.UpdateOrg)
+				r.Delete("/orgs/{id}", tenantH.DeleteOrg)
+				r.Post("/orgs/{id}/members", tenantH.AddMember)
+				r.Put("/orgs/{id}/members/{pubkey}", tenantH.UpdateMemberRole)
+				r.Delete("/orgs/{id}/members/{pubkey}", tenantH.RemoveMember)
+				r.Post("/orgs/{id}/invites", tenantH.CreateInvite)
+				r.Delete("/orgs/{id}/invites/{inviteId}", tenantH.RevokeInvite)
+			}
 
 			// Services (write)
 			r.Post("/services", svcH.Create)
