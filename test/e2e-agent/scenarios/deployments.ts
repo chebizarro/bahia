@@ -126,12 +126,30 @@ export const approveDeploymentIntent: Scenario = {
       });
       steps.push(step('Setup service and environment', 'passed', Date.now() - setupStart));
       
-      // Step 2: Create deployment intent
+      // Step 2: Create build and artifact
+      const buildStart = Date.now();
+      const build = await drivers.api.createBuild({
+        service_id: service.data!.id,
+        git_sha: `abc${Date.now().toString(16).slice(0, 4)}`,
+        git_ref: 'refs/heads/main',
+        ci_run_id: `run-${Date.now()}`,
+        status: 'succeeded',
+      });
+      const artifact = await drivers.api.registerArtifact({
+        build_id: build.data!.id,
+        service_id: service.data!.id,
+        image_repo: 'registry.example.com/test/app',
+        image_tag: 'v1.0.0',
+        image_digest: `sha256:${Date.now().toString(16).padStart(64, '0')}`,
+      });
+      steps.push(step('Create build and artifact', 'passed', Date.now() - buildStart));
+      
+      // Step 3: Create deployment intent
       const intentStart = Date.now();
       const intent = await drivers.api.createDeploymentIntent({
         service_id: service.data!.id,
         environment_id: environment.data!.id,
-        artifact_id: 'sha256:1234567890abcdef',
+        artifact_id: artifact.data!.id,
         requested_by: 'test-user',
       });
       steps.push(step('Create deployment intent', 'passed', Date.now() - intentStart));
@@ -143,12 +161,12 @@ export const approveDeploymentIntent: Scenario = {
         throw new Error('Could not extract intent ID from response');
       }
       
-      // Step 3: Approve the intent
+      // Step 4: Approve the intent
       const approveStart = Date.now();
       await drivers.api.approveDeploymentIntent(intentId);
       steps.push(step('Approve deployment intent', 'passed', Date.now() - approveStart));
       
-      // Step 4: Verify approval
+      // Step 5: Verify approval
       const verifyStart = Date.now();
       const fetchedIntent = await drivers.api.getDeploymentIntent(intentId);
       steps.push(step('Verify approval', 'passed', Date.now() - verifyStart));
@@ -208,19 +226,37 @@ export const rejectDeploymentIntent: Scenario = {
       });
       steps.push(step('Setup service and environment', 'passed', Date.now() - setupStart));
       
-      // Step 2: Create deployment intent
+      // Step 2: Create build and artifact
+      const buildStart = Date.now();
+      const build = await drivers.api.createBuild({
+        service_id: service.data!.id,
+        git_sha: `abc${Date.now().toString(16).slice(0, 4)}`,
+        git_ref: 'refs/heads/main',
+        ci_run_id: `run-${Date.now()}`,
+        status: 'succeeded',
+      });
+      const artifact = await drivers.api.registerArtifact({
+        build_id: build.data!.id,
+        service_id: service.data!.id,
+        image_repo: 'registry.example.com/test/app',
+        image_tag: 'v1.0.0',
+        image_digest: `sha256:${Date.now().toString(16).padStart(64, '0')}`,
+      });
+      steps.push(step('Create build and artifact', 'passed', Date.now() - buildStart));
+      
+      // Step 3: Create deployment intent
       const intentStart = Date.now();
       const intent = await drivers.api.createDeploymentIntent({
         service_id: service.data!.id,
         environment_id: environment.data!.id,
-        artifact_id: 'sha256:1234567890abcdef',
+        artifact_id: artifact.data!.id,
         requested_by: 'test-user',
       });
       steps.push(step('Create deployment intent', 'passed', Date.now() - intentStart));
       
       const intentId = typeof intent.data === 'string' ? intent.data : (intent.data as any)?.id;
       
-      // Step 3: Reject the intent
+      // Step 4: Reject the intent
       const rejectStart = Date.now();
       await drivers.api.rejectDeploymentIntent(intentId, 'Failed security scan');
       steps.push(step('Reject deployment intent', 'passed', Date.now() - rejectStart));
@@ -281,12 +317,30 @@ export const fullDeploymentWorkflow: Scenario = {
       });
       steps.push(step('Setup', 'passed', Date.now() - setupStart));
       
+      // Create build and artifact
+      const buildStart = Date.now();
+      const build = await drivers.api.createBuild({
+        service_id: service.data!.id,
+        git_sha: `abc${Date.now().toString(16).slice(0, 4)}`,
+        git_ref: 'refs/heads/main',
+        ci_run_id: `run-${Date.now()}`,
+        status: 'succeeded',
+      });
+      const artifact = await drivers.api.registerArtifact({
+        build_id: build.data!.id,
+        service_id: service.data!.id,
+        image_repo: 'registry.example.com/test/app',
+        image_tag: 'v1.0.0',
+        image_digest: `sha256:${Date.now().toString(16).padStart(64, '0')}`,
+      });
+      steps.push(step('Create build and artifact', 'passed', Date.now() - buildStart));
+      
       // Create intent
       const intentStart = Date.now();
       const intent = await drivers.api.createDeploymentIntent({
         service_id: service.data!.id,
         environment_id: environment.data!.id,
-        artifact_id: 'sha256:workflow-test',
+        artifact_id: artifact.data!.id,
         requested_by: 'test-user',
       });
       steps.push(step('Create intent', 'passed', Date.now() - intentStart));

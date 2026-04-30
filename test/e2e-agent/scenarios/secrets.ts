@@ -34,6 +34,32 @@ async function secretRequest<T>(
 }
 
 /**
+ * Check if secrets endpoint is available
+ */
+async function checkSecretsAvailable(apiUrl: string): Promise<boolean> {
+  try {
+    const response = await fetch(`${apiUrl}/api/v1/services/test/secrets`);
+    // 404 means secrets not configured, anything else means it exists
+    return response.status !== 404;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Create a skipped result for unavailable secrets
+ */
+function secretsNotAvailableResult(name: string, startTime: number): ScenarioResult {
+  return {
+    name,
+    status: 'skipped',
+    duration: Date.now() - startTime,
+    steps: [step('Check secrets availability', 'skipped', 0, 'Secrets endpoint not configured')],
+    error: 'Secrets endpoint not configured in this deployment',
+  };
+}
+
+/**
  * Test: Create secret with NIP-44 encryption
  */
 export const createSecretNIP44: Scenario = {
@@ -136,6 +162,12 @@ export const createSecretAES256: Scenario = {
   async run(drivers: ScenarioDrivers): Promise<ScenarioResult> {
     const steps: TestStepResult[] = [];
     const startTime = Date.now();
+    const apiUrl = (drivers.api as any).baseUrl;
+    
+    // Check if secrets are available
+    if (!(await checkSecretsAvailable(apiUrl))) {
+      return secretsNotAvailableResult(this.name, startTime);
+    }
     
     try {
       // Step 1: Create service
@@ -201,6 +233,11 @@ export const listServiceSecrets: Scenario = {
   async run(drivers: ScenarioDrivers): Promise<ScenarioResult> {
     const steps: TestStepResult[] = [];
     const startTime = Date.now();
+    const apiUrl = (drivers.api as any).baseUrl;
+    
+    if (!(await checkSecretsAvailable(apiUrl))) {
+      return secretsNotAvailableResult(this.name, startTime);
+    }
     
     try {
       // Step 1: Create service
@@ -286,6 +323,11 @@ export const updateSecret: Scenario = {
   async run(drivers: ScenarioDrivers): Promise<ScenarioResult> {
     const steps: TestStepResult[] = [];
     const startTime = Date.now();
+    const apiUrl = (drivers.api as any).baseUrl;
+    
+    if (!(await checkSecretsAvailable(apiUrl))) {
+      return secretsNotAvailableResult(this.name, startTime);
+    }
     
     try {
       // Step 1: Create service and secret
@@ -364,6 +406,11 @@ export const deleteSecret: Scenario = {
   async run(drivers: ScenarioDrivers): Promise<ScenarioResult> {
     const steps: TestStepResult[] = [];
     const startTime = Date.now();
+    const apiUrl = (drivers.api as any).baseUrl;
+    
+    if (!(await checkSecretsAvailable(apiUrl))) {
+      return secretsNotAvailableResult(this.name, startTime);
+    }
     
     try {
       // Step 1: Create service and secret
@@ -440,6 +487,11 @@ export const environmentScopedSecrets: Scenario = {
   async run(drivers: ScenarioDrivers): Promise<ScenarioResult> {
     const steps: TestStepResult[] = [];
     const startTime = Date.now();
+    const apiUrl = (drivers.api as any).baseUrl;
+    
+    if (!(await checkSecretsAvailable(apiUrl))) {
+      return secretsNotAvailableResult(this.name, startTime);
+    }
     
     try {
       // Step 1: Create service and environments

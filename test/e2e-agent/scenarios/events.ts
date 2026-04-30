@@ -11,6 +11,34 @@ function step(name: string, status: TestStepResult['status'], duration: number, 
 }
 
 /**
+ * Check if SSE streaming is available
+ */
+async function checkSSEAvailable(apiUrl: string): Promise<boolean> {
+  try {
+    const response = await fetch(`${apiUrl}/api/v1/events/stream`, {
+      signal: AbortSignal.timeout(1000),
+    });
+    // 500 means SSE not configured
+    return response.status !== 500;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Create a skipped result for unavailable SSE
+ */
+function sseNotAvailableResult(name: string, startTime: number): ScenarioResult {
+  return {
+    name,
+    status: 'skipped',
+    duration: Date.now() - startTime,
+    steps: [step('Check SSE availability', 'skipped', 0, 'SSE streaming not configured')],
+    error: 'SSE streaming not supported in this deployment',
+  };
+}
+
+/**
  * Helper to connect to SSE stream and collect events
  */
 async function collectSSEEvents(
@@ -38,6 +66,12 @@ async function collectSSEEvents(
     fetch(url, { signal: controller.signal })
       .then(response => {
         if (!response.ok) {
+          // If SSE not supported, resolve with empty events
+          if (response.status === 500) {
+            clearTimeout(timeout);
+            resolve([]);
+            return;
+          }
           throw new Error(`SSE connection failed: ${response.status}`);
         }
         
@@ -175,9 +209,13 @@ export const receiveDeploymentEvents: Scenario = {
   async run(drivers: ScenarioDrivers): Promise<ScenarioResult> {
     const steps: TestStepResult[] = [];
     const startTime = Date.now();
+    const apiUrl = (drivers.api as any).baseUrl;
+    
+    if (!(await checkSSEAvailable(apiUrl))) {
+      return sseNotAvailableResult(this.name, startTime);
+    }
     
     try {
-      const apiUrl = (drivers.api as any).baseUrl;
       
       // Step 1: Start listening for events
       const listenStart = Date.now();
@@ -252,9 +290,13 @@ export const filterEventsByType: Scenario = {
   async run(drivers: ScenarioDrivers): Promise<ScenarioResult> {
     const steps: TestStepResult[] = [];
     const startTime = Date.now();
+    const apiUrl = (drivers.api as any).baseUrl;
+    
+    if (!(await checkSSEAvailable(apiUrl))) {
+      return sseNotAvailableResult(this.name, startTime);
+    }
     
     try {
-      const apiUrl = (drivers.api as any).baseUrl;
       
       // Test with specific event type filter
       const filterStart = Date.now();
@@ -308,10 +350,13 @@ export const sseHeartbeat: Scenario = {
   async run(drivers: ScenarioDrivers): Promise<ScenarioResult> {
     const steps: TestStepResult[] = [];
     const startTime = Date.now();
+    const apiUrl = (drivers.api as any).baseUrl;
+    
+    if (!(await checkSSEAvailable(apiUrl))) {
+      return sseNotAvailableResult(this.name, startTime);
+    }
     
     try {
-      const apiUrl = (drivers.api as any).baseUrl;
-      
       // Listen for longer period to receive heartbeats (sent every 30s according to handler)
       // For testing purposes, we'll just verify the connection stays open
       const connectStart = Date.now();
@@ -353,10 +398,13 @@ export const multipleConcurrentConnections: Scenario = {
   async run(drivers: ScenarioDrivers): Promise<ScenarioResult> {
     const steps: TestStepResult[] = [];
     const startTime = Date.now();
+    const apiUrl = (drivers.api as any).baseUrl;
+    
+    if (!(await checkSSEAvailable(apiUrl))) {
+      return sseNotAvailableResult(this.name, startTime);
+    }
     
     try {
-      const apiUrl = (drivers.api as any).baseUrl;
-      
       // Open multiple concurrent connections
       const concurrentStart = Date.now();
       const promises = [

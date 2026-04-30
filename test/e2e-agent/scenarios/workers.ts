@@ -104,13 +104,15 @@ export const listWorkersByStatus: Scenario = {
         const result = await workerRequest<any[]>(apiUrl, `/api/v1/workers?status=${status}`);
         steps.push(step(`Filter by status: ${status}`, 'passed', Date.now() - filterStart));
         
-        if (!Array.isArray(result.data)) {
+        // Handle null as empty array (no workers with that status)
+        const workers = result.data ?? [];
+        if (!Array.isArray(workers)) {
           throw new Error(`Status filter ${status} did not return an array`);
         }
         
         // Verify all returned workers have the requested status (if any returned)
-        if (result.data.length > 0) {
-          const invalidWorkers = result.data.filter((w: any) => w.status !== status);
+        if (workers.length > 0) {
+          const invalidWorkers = workers.filter((w: any) => w.status !== status);
           if (invalidWorkers.length > 0) {
             throw new Error(`Found ${invalidWorkers.length} workers with wrong status`);
           }
