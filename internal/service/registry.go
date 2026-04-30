@@ -4,6 +4,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -93,22 +94,41 @@ func (s *RegistryService) CreateService(ctx context.Context, svc *domain.Service
 	if svc.DefaultBranch == "" {
 		svc.DefaultBranch = "main"
 	}
+	normalizeServiceRepositoryForWrite(svc)
 	return s.services.Create(ctx, svc)
 }
 
 func (s *RegistryService) GetService(ctx context.Context, id uuid.UUID) (*domain.Service, error) {
-	return s.services.GetByID(ctx, id)
+	svc, err := s.services.GetByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	normalizeServiceRepositoryForRead(svc)
+	return svc, nil
 }
 
 func (s *RegistryService) GetServiceByName(ctx context.Context, name string) (*domain.Service, error) {
-	return s.services.GetByName(ctx, name)
+	svc, err := s.services.GetByName(ctx, name)
+	if err != nil {
+		return nil, err
+	}
+	normalizeServiceRepositoryForRead(svc)
+	return svc, nil
 }
 
 func (s *RegistryService) ListServices(ctx context.Context) ([]domain.Service, error) {
-	return s.services.List(ctx)
+	svcs, err := s.services.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for i := range svcs {
+		normalizeServiceRepositoryForRead(&svcs[i])
+	}
+	return svcs, nil
 }
 
 func (s *RegistryService) UpdateService(ctx context.Context, svc *domain.Service) error {
+	normalizeServiceRepositoryForWrite(svc)
 	return s.services.Update(ctx, svc)
 }
 
@@ -132,6 +152,89 @@ func (s *RegistryService) DeleteService(ctx context.Context, id uuid.UUID, force
 		}
 	}
 	return s.services.Delete(ctx, id)
+}
+
+func normalizeServiceRepositoryForWrite(svc *domain.Service) {
+	if svc == nil {
+		return
+	}
+
+	svc.RepoURL = strings.TrimSpace(svc.RepoURL)
+
+	if svc.Repository != nil {
+		svc.Repository.CloneURL = strings.TrimSpace(svc.Repository.CloneURL)
+		svc.Repository.WebURL = strings.TrimSpace(svc.Repository.WebURL)
+		svc.Repository.Source = strings.TrimSpace(svc.Repository.Source)
+		svc.Repository.RepoCoordinate = strings.TrimSpace(svc.Repository.RepoCoordinate)
+
+		if svc.Repository.CI != nil {
+			svc.Repository.CI.Provider = strings.TrimSpace(svc.Repository.CI.Provider)
+			if svc.Repository.CI.Provider == "" {
+				svc.Repository.CI.Provider = "hiveci"
+			}
+		}
+
+		if len(svc.Repository.RelayURLs) > 0 {
+			seen := make(map[string]struct{}, len(svc.Repository.RelayURLs))
+			relays := make([]string, 0, len(svc.Repository.RelayURLs))
+			for _, relay := range svc.Repository.RelayURLs {
+				trimmed := strings.TrimSpace(relay)
+				if trimmed == "" {
+					continue
+				}
+				if _, ok := seen[trimmed]; ok {
+					continue
+				}
+				seen[trimmed] = struct{}{}
+				relays = append(relays, trimmed)
+			}
+			svc.Repository.RelayURLs = relays
+		}
+
+		if svc.Repository.CloneURL != "" {
+			svc.RepoURL = svc.Repository.CloneURL
+		}
+
+		if svc.Repository.Source == "" {
+			if svc.Repository.RepoCoordinate != "" {
+				svc.Repository.Source = "nip34"
+			} else {
+				svc.Repository.Source = "manual"
+			}
+		}
+	}
+
+	if svc.Repository == nil && svc.RepoURL != "" {
+		svc.Repository = &domain.RepositoryRef{
+			Source:   "manual",
+			CloneURL: svc.RepoURL,
+		}
+	}
+}
+
+func normalizeServiceRepositoryForRead(svc *domain.Service) {
+	if svc == nil {
+		return
+	}
+
+	svc.RepoURL = strings.TrimSpace(svc.RepoURL)
+
+	if svc.Repository == nil && svc.RepoURL != "" {
+		svc.Repository = &domain.RepositoryRef{
+			Source:   "manual",
+			CloneURL: svc.RepoURL,
+		}
+		return
+	}
+
+	if svc.Repository == nil {
+		return
+	}
+
+	svc.Repository.CloneURL = strings.TrimSpace(svc.Repository.CloneURL)
+	if svc.RepoURL == "" || svc.RepoURL != svc.Repository.CloneURL {
+		svc.RepoURL = svc.Repository.CloneURL
+	}
 }
 
 // --- Environment CRUD ---

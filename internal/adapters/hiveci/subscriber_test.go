@@ -58,6 +58,9 @@ func (r *testHiveRepo) ListPolicies(_ context.Context) ([]domain.HiveCIPipelineP
 func (r *testHiveRepo) GetPolicyByRepoAndWorkflow(_ context.Context, _, _ string) (*domain.HiveCIPipelinePolicy, error) {
 	return nil, nil
 }
+func (r *testHiveRepo) LookupRepositoryCI(_ context.Context, _ []string, _ bool) ([]domain.RepositoryCILookup, error) {
+	return nil, nil
+}
 
 func TestRequiredTagParsing(t *testing.T) {
 	ev := &nostr.Event{Tags: nostr.Tags{{"a", "30618:pk:repo"}, {"commit", "abc"}}}

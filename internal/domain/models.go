@@ -118,14 +118,31 @@ const (
 
 // Service represents a deployable application component.
 type Service struct {
-	ID            uuid.UUID   `json:"id"`
-	Name          string      `json:"name"`
-	RepoURL       string      `json:"repo_url,omitempty"`
-	ArtifactRepo  string      `json:"artifact_repo"`
-	DefaultBranch string      `json:"default_branch"`
-	RuntimeType   RuntimeType `json:"runtime_type"`
-	CreatedAt     time.Time   `json:"created_at"`
-	UpdatedAt     time.Time   `json:"updated_at"`
+	ID            uuid.UUID      `json:"id"`
+	Name          string         `json:"name"`
+	RepoURL       string         `json:"repo_url,omitempty"`
+	Repository    *RepositoryRef `json:"repository,omitempty"`
+	ArtifactRepo  string         `json:"artifact_repo"`
+	DefaultBranch string         `json:"default_branch"`
+	RuntimeType   RuntimeType    `json:"runtime_type"`
+	CreatedAt     time.Time      `json:"created_at"`
+	UpdatedAt     time.Time      `json:"updated_at"`
+}
+
+// RepositoryRef captures structured source repository metadata for a service.
+type RepositoryRef struct {
+	Source         string           `json:"source"`
+	RepoCoordinate string           `json:"repo_coordinate,omitempty"`
+	CloneURL       string           `json:"clone_url,omitempty"`
+	WebURL         string           `json:"web_url,omitempty"`
+	RelayURLs      []string         `json:"relay_urls,omitempty"`
+	CI             *ServiceCIConfig `json:"ci,omitempty"`
+}
+
+// ServiceCIConfig contains CI provider settings for a service repository.
+type ServiceCIConfig struct {
+	Provider     string `json:"provider"`
+	WorkflowPath string `json:"workflow_path,omitempty"`
 }
 
 // Environment represents a named deployment target.

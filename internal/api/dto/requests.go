@@ -5,20 +5,38 @@ import "github.com/google/uuid"
 
 // CreateServiceRequest represents a request to register a new service.
 type CreateServiceRequest struct {
-	Name          string `json:"name"`
-	RepoURL       string `json:"repo_url,omitempty"`
-	ArtifactRepo  string `json:"artifact_repo"`
-	DefaultBranch string `json:"default_branch,omitempty"`
-	RuntimeType   string `json:"runtime_type,omitempty"`
+	Name          string                `json:"name"`
+	RepoURL       string                `json:"repo_url,omitempty"`
+	Repository    *RepositoryRefRequest `json:"repository,omitempty"`
+	ArtifactRepo  string                `json:"artifact_repo"`
+	DefaultBranch string                `json:"default_branch,omitempty"`
+	RuntimeType   string                `json:"runtime_type,omitempty"`
 }
 
 // UpdateServiceRequest represents a request to update a service.
 type UpdateServiceRequest struct {
-	Name          *string `json:"name,omitempty"`
-	RepoURL       *string `json:"repo_url,omitempty"`
-	ArtifactRepo  *string `json:"artifact_repo,omitempty"`
-	DefaultBranch *string `json:"default_branch,omitempty"`
-	RuntimeType   *string `json:"runtime_type,omitempty"`
+	Name          *string               `json:"name,omitempty"`
+	RepoURL       *string               `json:"repo_url,omitempty"`
+	Repository    *RepositoryRefRequest `json:"repository,omitempty"`
+	ArtifactRepo  *string               `json:"artifact_repo,omitempty"`
+	DefaultBranch *string               `json:"default_branch,omitempty"`
+	RuntimeType   *string               `json:"runtime_type,omitempty"`
+}
+
+// RepositoryRefRequest is the request payload for structured repository metadata.
+type RepositoryRefRequest struct {
+	Source         string                  `json:"source,omitempty"`
+	RepoCoordinate string                  `json:"repo_coordinate,omitempty"`
+	CloneURL       string                  `json:"clone_url,omitempty"`
+	WebURL         string                  `json:"web_url,omitempty"`
+	RelayURLs      []string                `json:"relay_urls,omitempty"`
+	CI             *ServiceCIConfigRequest `json:"ci,omitempty"`
+}
+
+// ServiceCIConfigRequest is the request payload for CI configuration.
+type ServiceCIConfigRequest struct {
+	Provider     string `json:"provider,omitempty"`
+	WorkflowPath string `json:"workflow_path,omitempty"`
 }
 
 // CreateEnvironmentRequest represents a request to register a new environment.
@@ -116,4 +134,10 @@ type RecordObservationRequest struct {
 	HealthStatus        string         `json:"health_status"`
 	Source              string         `json:"source"`
 	Metadata            map[string]any `json:"metadata,omitempty"`
+}
+
+// LookupRepositoryCIRequest is the request payload for batch CI status lookup.
+type LookupRepositoryCIRequest struct {
+	RepoCoordinates         []string `json:"repo_coordinates"`
+	IncludeDisabledPolicies bool     `json:"include_disabled_policies,omitempty"`
 }

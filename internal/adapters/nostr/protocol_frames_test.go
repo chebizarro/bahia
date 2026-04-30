@@ -2,6 +2,7 @@ package nostr
 
 import (
 	"testing"
+	"time"
 
 	"github.com/nbd-wtf/go-nostr/nip11"
 	"github.com/stretchr/testify/assert"
@@ -183,7 +184,7 @@ func TestSubscriber_CaughtUpState(t *testing.T) {
 func TestMergedSubscription_EOSEChannel(t *testing.T) {
 	t.Run("EOSE signal is non-blocking", func(t *testing.T) {
 		eose := make(chan struct{})
-		
+
 		// Should not block when no one is listening
 		select {
 		case <-eose:
@@ -216,19 +217,24 @@ func TestMergedSubscription_EOSEChannel(t *testing.T) {
 // Test backoff behavior
 
 func TestBackoff_Reset(t *testing.T) {
-	b := DefaultBackoff()
-	
+	b := &Backoff{
+		Initial:    time.Second,
+		Max:        2 * time.Minute,
+		Multiplier: 2.0,
+		Jitter:     0,
+	}
+
 	// Get some delays
 	d1 := b.Next()
 	d2 := b.Next()
 	require.True(t, d2 > d1, "delay should increase")
-	
+
 	// Reset
 	b.Reset()
-	
+
 	// Should be back to initial
 	d3 := b.Next()
-	require.True(t, d3 <= d1*2, "delay after reset should be near initial")
+	require.Equal(t, d1, d3, "delay after reset should return to initial")
 }
 
 func TestBackoff_MaxCap(t *testing.T) {

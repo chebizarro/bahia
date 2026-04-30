@@ -80,7 +80,7 @@ class BahiaClient {
   }
 
   // Services
-  listServices() { return this.fetch('/services'); }
+  listServices() { return this.fetch('/services').then(r => r ?? []); }
   getService(id) { return this.fetch(`/services/${encodeURIComponent(id)}`); }
   createService(payload) {
     return this.fetch('/services', {
@@ -102,7 +102,7 @@ class BahiaClient {
   }
 
   // Environments
-  listEnvironments() { return this.fetch('/environments'); }
+  listEnvironments() { return this.fetch('/environments').then(r => r ?? []); }
   getEnvironment(id) { return this.fetch(`/environments/${encodeURIComponent(id)}`); }
   createEnvironment(payload) {
     return this.fetch('/environments', {
@@ -123,12 +123,12 @@ class BahiaClient {
   }
 
   // State
-  listStates() { return this.fetch('/state'); }
-  listDriftedStates() { return this.fetch('/state/drifted'); }
+  listStates() { return this.fetch('/state').then(r => r ?? []); }
+  listDriftedStates() { return this.fetch('/state/drifted').then(r => r ?? []); }
 
   // Deployments
   listIntents(serviceId, envId) {
-    return this.fetch(`/services/${encodeURIComponent(serviceId)}/environments/${encodeURIComponent(envId)}/intents`);
+    return this.fetch(`/services/${encodeURIComponent(serviceId)}/environments/${encodeURIComponent(envId)}/intents`).then(r => r ?? []);
   }
   getIntent(id) { return this.fetch(`/deployments/intents/${encodeURIComponent(id)}`); }
   createIntent(serviceId, envId, artifactId) {
@@ -150,7 +150,7 @@ class BahiaClient {
     return this.fetch(`/deployments/runs/${encodeURIComponent(id)}/logs?tail=${encodeURIComponent(tail)}`);
   }
   listRuns(intentId) {
-    return this.fetch(`/deployments/intents/${encodeURIComponent(intentId)}/runs`);
+    return this.fetch(`/deployments/intents/${encodeURIComponent(intentId)}/runs`).then(r => r ?? []);
   }
   createRun(payload) {
     return this.fetch('/deployments/runs', {
@@ -172,11 +172,11 @@ class BahiaClient {
   }
 
   // Workers
-  listWorkers() { return this.fetch('/workers'); }
+  listWorkers() { return this.fetch('/workers').then(r => r ?? []); }
   getWorker(pubkey) { return this.fetch(`/workers/${encodeURIComponent(pubkey)}`); }
 
   // Policies
-  listPolicies() { return this.fetch('/policies'); }
+  listPolicies() { return this.fetch('/policies').then(r => r ?? []); }
   getPolicy(id) { return this.fetch(`/policies/${encodeURIComponent(id)}`); }
   createPolicy(payload) {
     return this.fetch('/policies', {
@@ -203,7 +203,7 @@ class BahiaClient {
   }
 
   // Secrets
-  listSecrets(serviceId) { return this.fetch(`/services/${encodeURIComponent(serviceId)}/secrets`); }
+  listSecrets(serviceId) { return this.fetch(`/services/${encodeURIComponent(serviceId)}/secrets`).then(r => r ?? []); }
   createSecret(serviceId, payload) {
     return this.fetch(`/services/${encodeURIComponent(serviceId)}/secrets`, {
       method: 'POST',
@@ -223,12 +223,12 @@ class BahiaClient {
   }
 
   // Organizations
-  listOrgs() { return this.fetch('/orgs'); }
+  listOrgs() { return this.fetch('/orgs').then(r => r ?? []); }
   getOrg(id) { return this.fetch(`/orgs/${encodeURIComponent(id)}`); }
-  listOrgMembers(orgId) { return this.fetch(`/orgs/${encodeURIComponent(orgId)}/members`); }
+  listOrgMembers(orgId) { return this.fetch(`/orgs/${encodeURIComponent(orgId)}/members`).then(r => r ?? []); }
 
   // Artifacts
-  listArtifacts(serviceId) { return this.fetch(`/services/${encodeURIComponent(serviceId)}/artifacts`); }
+  listArtifacts(serviceId) { return this.fetch(`/services/${encodeURIComponent(serviceId)}/artifacts`).then(r => r ?? []); }
   getArtifact(id) { return this.fetch(`/artifacts/${encodeURIComponent(id)}`); }
   registerArtifact(payload) {
     return this.fetch('/artifacts', {
@@ -238,11 +238,11 @@ class BahiaClient {
   }
 
   // Builds
-  listBuilds(serviceId) { return this.fetch(`/services/${encodeURIComponent(serviceId)}/builds`); }
+  listBuilds(serviceId) { return this.fetch(`/services/${encodeURIComponent(serviceId)}/builds`).then(r => r ?? []); }
 
   // Notifications
   listNotificationChannels(params = {}) {
-    return this.fetch(`/notifications/channels${this.query(params)}`);
+    return this.fetch(`/notifications/channels${this.query(params)}`).then(r => r ?? []);
   }
   getNotificationChannel(id) {
     return this.fetch(`/notifications/channels/${encodeURIComponent(id)}`);
@@ -270,7 +270,7 @@ class BahiaClient {
     });
   }
   listNotificationLogs(params = {}) {
-    return this.fetch(`/notifications/log${this.query(params)}`);
+    return this.fetch(`/notifications/log${this.query(params)}`).then(r => r ?? []);
   }
 
   // Payments
@@ -306,10 +306,10 @@ class BahiaClient {
 
   // Signatures
   listSignatures(artifactId) {
-    return this.fetch(`/artifacts/${encodeURIComponent(artifactId)}/signatures`);
+    return this.fetch(`/artifacts/${encodeURIComponent(artifactId)}/signatures`).then(r => r ?? []);
   }
   listVerifiedSignatures(artifactId) {
-    return this.fetch(`/artifacts/${encodeURIComponent(artifactId)}/signatures/verified`);
+    return this.fetch(`/artifacts/${encodeURIComponent(artifactId)}/signatures/verified`).then(r => r ?? []);
   }
   hasVerifiedSignature(artifactId) {
     return this.fetch(`/artifacts/${encodeURIComponent(artifactId)}/signatures/check`);

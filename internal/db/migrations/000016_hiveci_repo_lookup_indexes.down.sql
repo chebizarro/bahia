@@ -1,0 +1,1 @@
+DROP INDEX IF EXISTS idx_hiveci_workflow_runs_repo_created_at;

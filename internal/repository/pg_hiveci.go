@@ -2,9 +2,11 @@ package repository
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -351,6 +353,322 @@ func (r *PgHiveCIRepository) GetPolicyByRepoAndWorkflow(ctx context.Context, rep
 		return nil, err
 	}
 	return &policy, nil
+}
+
+func (r *PgHiveCIRepository) LookupRepositoryCI(ctx context.Context, repoCoordinates []string, includeDisabledPolicies bool) ([]domain.RepositoryCILookup, error) {
+	if len(repoCoordinates) == 0 {
+		return []domain.RepositoryCILookup{}, nil
+	}
+
+	uniqueCoordinates := make([]string, 0, len(repoCoordinates))
+	seenCoordinates := make(map[string]struct{}, len(repoCoordinates))
+	for _, coord := range repoCoordinates {
+		if _, seen := seenCoordinates[coord]; seen {
+			continue
+		}
+		seenCoordinates[coord] = struct{}{}
+		uniqueCoordinates = append(uniqueCoordinates, coord)
+	}
+
+	lookupsByCoordinate := make(map[string]*domain.RepositoryCILookup, len(uniqueCoordinates))
+	for _, coord := range uniqueCoordinates {
+		lookupsByCoordinate[coord] = &domain.RepositoryCILookup{
+			RepoCoordinate: coord,
+			Policies:       []domain.RepositoryCIPolicyLink{},
+			LinkedServices: []domain.RepositoryCIServiceLink{},
+		}
+	}
+
+	runRows, err := r.pool.Query(ctx, `
+		WITH requested AS (
+			SELECT unnest($1::text[]) AS repo_coordinate
+		),
+		latest_runs AS (
+			SELECT DISTINCT ON (r.repo_coordinate)
+				r.*
+			FROM hiveci_workflow_runs r
+			INNER JOIN requested req ON r.repo_coordinate = req.repo_coordinate
+			ORDER BY r.repo_coordinate, r.event_created_at DESC, r.created_at DESC, r.run_event_id DESC
+		)
+		SELECT
+			lr.repo_coordinate,
+			lr.run_event_id,
+			lr.commit_sha,
+			lr.branch,
+			lr.workflow_path,
+			lr.trigger_type,
+			lr.triggered_by,
+			lr.publisher_pubkey,
+			lr.event_created_at AS run_event_created_at,
+			lr.processing_state AS run_processing_state,
+			res.result_event_id,
+			res.status,
+			res.exit_code,
+			res.duration_seconds,
+			res.log_url,
+			res.error,
+			res.image_repo,
+			res.image_tag,
+			res.image_digest,
+			res.processing_state AS result_processing_state,
+			res.processing_error,
+			res.retry_count,
+			res.last_retry_at,
+			res.event_created_at AS result_event_created_at
+		FROM latest_runs lr
+		LEFT JOIN hiveci_workflow_results res ON res.run_event_id = lr.run_event_id
+	`, uniqueCoordinates)
+	if err != nil {
+		return nil, fmt.Errorf("looking up repository ci latest runs: %w", err)
+	}
+	defer runRows.Close()
+
+	for runRows.Next() {
+		row, err := scanRepositoryCIRunResultRow(runRows)
+		if err != nil {
+			return nil, err
+		}
+
+		lookup := lookupsByCoordinate[row.RepoCoordinate]
+		if lookup == nil {
+			continue
+		}
+		if row.RunEventID.Valid {
+			lookup.LatestRun = &domain.RepositoryCIRunSummary{
+				RunEventID:      row.RunEventID.String,
+				WorkflowPath:    row.WorkflowPath.String,
+				Branch:          row.Branch.String,
+				CommitSHA:       row.CommitSHA.String,
+				TriggerType:     row.TriggerType.String,
+				TriggeredBy:     row.TriggeredBy.String,
+				PublisherPubkey: row.PublisherPubkey.String,
+				EventCreatedAt:  row.RunEventCreatedAt.Time,
+				ProcessingState: domain.HiveCIProcessingState(row.RunProcessingState.String),
+			}
+		}
+		if row.ResultEventID.Valid {
+			lookup.LatestResult = &domain.RepositoryCIResultSummary{
+				ResultEventID:   row.ResultEventID.String,
+				Status:          row.Status.String,
+				ExitCode:        int(row.ExitCode.Int64),
+				DurationSeconds: int(row.DurationSeconds.Int64),
+				LogURL:          row.LogURL.String,
+				Error:           row.Error.String,
+				ImageRepo:       row.ImageRepo.String,
+				ImageTag:        row.ImageTag.String,
+				ImageDigest:     row.ImageDigest.String,
+				ProcessingState: domain.HiveCIProcessingState(row.ResultProcessingState.String),
+				ProcessingError: row.ProcessingError.String,
+				RetryCount:      int(row.RetryCount.Int64),
+				EventCreatedAt:  row.ResultEventCreatedAt.Time,
+			}
+			if row.LastRetryAt.Valid {
+				lookup.LatestResult.LastRetryAt = &row.LastRetryAt.Time
+			}
+		}
+	}
+	if err := runRows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating repository ci latest runs: %w", err)
+	}
+
+	policyRows, err := r.pool.Query(ctx, `
+		SELECT
+			p.id AS policy_id,
+			p.repo_coordinate,
+			p.workflow_path,
+			p.branch_pattern,
+			p.enabled,
+			p.service_id,
+			s.name AS service_name,
+			p.environment_id,
+			e.name AS environment_name
+		FROM hiveci_pipeline_policies p
+		INNER JOIN services s ON s.id = p.service_id
+		INNER JOIN environments e ON e.id = p.environment_id
+		WHERE p.repo_coordinate = ANY($1)
+		  AND ($2 OR p.enabled = true)
+		ORDER BY p.repo_coordinate, s.name, e.name
+	`, uniqueCoordinates, includeDisabledPolicies)
+	if err != nil {
+		return nil, fmt.Errorf("looking up repository ci policies: %w", err)
+	}
+	defer policyRows.Close()
+
+	serviceIndexByCoordinate := make(map[string]map[uuid.UUID]int)
+	environmentSeenByCoordinateService := make(map[string]map[uuid.UUID]map[uuid.UUID]struct{})
+	for policyRows.Next() {
+		row, err := scanRepositoryCIPolicyRow(policyRows)
+		if err != nil {
+			return nil, err
+		}
+
+		lookup := lookupsByCoordinate[row.RepoCoordinate]
+		if lookup == nil {
+			continue
+		}
+
+		lookup.Policies = append(lookup.Policies, domain.RepositoryCIPolicyLink{
+			PolicyID:        row.PolicyID,
+			WorkflowPath:    row.WorkflowPath,
+			BranchPattern:   row.BranchPattern.String,
+			Enabled:         row.Enabled,
+			ServiceID:       row.ServiceID,
+			ServiceName:     row.ServiceName,
+			EnvironmentID:   row.EnvironmentID,
+			EnvironmentName: row.EnvironmentName,
+		})
+
+		addRepositoryCILinkedService(
+			lookup,
+			row,
+			serviceIndexByCoordinate,
+			environmentSeenByCoordinateService,
+		)
+	}
+	if err := policyRows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating repository ci policies: %w", err)
+	}
+
+	lookups := make([]domain.RepositoryCILookup, 0, len(uniqueCoordinates))
+	for _, coord := range uniqueCoordinates {
+		lookups = append(lookups, *lookupsByCoordinate[coord])
+	}
+	return lookups, nil
+}
+
+type runResultRow struct {
+	RepoCoordinate string
+
+	RunEventID         sql.NullString
+	CommitSHA          sql.NullString
+	Branch             sql.NullString
+	WorkflowPath       sql.NullString
+	TriggerType        sql.NullString
+	TriggeredBy        sql.NullString
+	PublisherPubkey    sql.NullString
+	RunEventCreatedAt  sql.NullTime
+	RunProcessingState sql.NullString
+
+	ResultEventID         sql.NullString
+	Status                sql.NullString
+	ExitCode              sql.NullInt64
+	DurationSeconds       sql.NullInt64
+	LogURL                sql.NullString
+	Error                 sql.NullString
+	ImageRepo             sql.NullString
+	ImageTag              sql.NullString
+	ImageDigest           sql.NullString
+	ResultProcessingState sql.NullString
+	ProcessingError       sql.NullString
+	RetryCount            sql.NullInt64
+	LastRetryAt           sql.NullTime
+	ResultEventCreatedAt  sql.NullTime
+}
+
+type policyRow struct {
+	PolicyID        uuid.UUID
+	RepoCoordinate  string
+	WorkflowPath    string
+	BranchPattern   sql.NullString
+	Enabled         bool
+	ServiceID       uuid.UUID
+	ServiceName     string
+	EnvironmentID   uuid.UUID
+	EnvironmentName string
+}
+
+func scanRepositoryCIRunResultRow(row interface{ Scan(...any) error }) (runResultRow, error) {
+	var rr runResultRow
+	if err := row.Scan(
+		&rr.RepoCoordinate,
+		&rr.RunEventID,
+		&rr.CommitSHA,
+		&rr.Branch,
+		&rr.WorkflowPath,
+		&rr.TriggerType,
+		&rr.TriggeredBy,
+		&rr.PublisherPubkey,
+		&rr.RunEventCreatedAt,
+		&rr.RunProcessingState,
+		&rr.ResultEventID,
+		&rr.Status,
+		&rr.ExitCode,
+		&rr.DurationSeconds,
+		&rr.LogURL,
+		&rr.Error,
+		&rr.ImageRepo,
+		&rr.ImageTag,
+		&rr.ImageDigest,
+		&rr.ResultProcessingState,
+		&rr.ProcessingError,
+		&rr.RetryCount,
+		&rr.LastRetryAt,
+		&rr.ResultEventCreatedAt,
+	); err != nil {
+		return rr, fmt.Errorf("scanning repository ci run/result row: %w", err)
+	}
+	return rr, nil
+}
+
+func scanRepositoryCIPolicyRow(row interface{ Scan(...any) error }) (policyRow, error) {
+	var pr policyRow
+	if err := row.Scan(
+		&pr.PolicyID,
+		&pr.RepoCoordinate,
+		&pr.WorkflowPath,
+		&pr.BranchPattern,
+		&pr.Enabled,
+		&pr.ServiceID,
+		&pr.ServiceName,
+		&pr.EnvironmentID,
+		&pr.EnvironmentName,
+	); err != nil {
+		return pr, fmt.Errorf("scanning repository ci policy row: %w", err)
+	}
+	return pr, nil
+}
+
+func addRepositoryCILinkedService(
+	lookup *domain.RepositoryCILookup,
+	row policyRow,
+	serviceIndexByCoordinate map[string]map[uuid.UUID]int,
+	environmentSeenByCoordinateService map[string]map[uuid.UUID]map[uuid.UUID]struct{},
+) {
+	serviceIndex, ok := serviceIndexByCoordinate[row.RepoCoordinate]
+	if !ok {
+		serviceIndex = make(map[uuid.UUID]int)
+		serviceIndexByCoordinate[row.RepoCoordinate] = serviceIndex
+	}
+
+	environmentSeenByService, ok := environmentSeenByCoordinateService[row.RepoCoordinate]
+	if !ok {
+		environmentSeenByService = make(map[uuid.UUID]map[uuid.UUID]struct{})
+		environmentSeenByCoordinateService[row.RepoCoordinate] = environmentSeenByService
+	}
+
+	idx, ok := serviceIndex[row.ServiceID]
+	if !ok {
+		idx = len(lookup.LinkedServices)
+		serviceIndex[row.ServiceID] = idx
+		lookup.LinkedServices = append(lookup.LinkedServices, domain.RepositoryCIServiceLink{
+			ServiceID:        row.ServiceID,
+			ServiceName:      row.ServiceName,
+			EnvironmentIDs:   []uuid.UUID{},
+			EnvironmentNames: []string{},
+		})
+	}
+
+	envSeen, ok := environmentSeenByService[row.ServiceID]
+	if !ok {
+		envSeen = make(map[uuid.UUID]struct{})
+		environmentSeenByService[row.ServiceID] = envSeen
+	}
+	if _, seen := envSeen[row.EnvironmentID]; seen {
+		return
+	}
+	envSeen[row.EnvironmentID] = struct{}{}
+	lookup.LinkedServices[idx].EnvironmentIDs = append(lookup.LinkedServices[idx].EnvironmentIDs, row.EnvironmentID)
+	lookup.LinkedServices[idx].EnvironmentNames = append(lookup.LinkedServices[idx].EnvironmentNames, row.EnvironmentName)
 }
 
 func isValidHiveCIResultTransition(ctx context.Context, pool hiveCIDB, eventID string, newState domain.HiveCIProcessingState) bool {
