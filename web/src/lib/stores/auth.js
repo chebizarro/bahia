@@ -1,7 +1,7 @@
 // Auth/session store for NIP-07 browser extension authentication
 // UI identity/session state only - does NOT manage bahia_token
 
-import { writable, derived } from 'svelte/store';
+import { writable, derived, get } from 'svelte/store';
 import { browser } from '$app/environment';
 import {
   waitForNip07,
@@ -188,12 +188,7 @@ export async function login() {
   }
   
   // Check if already authenticating
-  const currentState = await new Promise(resolve => {
-    const unsubscribe = authState.subscribe(state => {
-      unsubscribe();
-      resolve(state);
-    });
-  });
+  const currentState = get(authState);
   
   if (currentState.status === 'authenticating') {
     console.warn('Login already in progress');
@@ -300,12 +295,7 @@ export function logout() {
  * @throws {Error} If not authenticated or signing fails
  */
 export async function signWithAuth(event) {
-  const currentState = await new Promise(resolve => {
-    const unsubscribe = authState.subscribe(state => {
-      unsubscribe();
-      resolve(state);
-    });
-  });
+  const currentState = get(authState);
   
   if (currentState.status !== 'authenticated') {
     throw new Error('Not authenticated - please login first');
@@ -337,12 +327,7 @@ export async function authenticateBackend() {
   }
 
   // Get current auth state
-  const currentState = await new Promise(resolve => {
-    const unsubscribe = authState.subscribe(state => {
-      unsubscribe();
-      resolve(state);
-    });
-  });
+  const currentState = get(authState);
 
   // Ensure NIP-07 auth exists
   if (currentState.status !== 'authenticated' || !currentState.pubkey) {
@@ -350,12 +335,7 @@ export async function authenticateBackend() {
     await login();
     
     // Get updated state
-    const updatedState = await new Promise(resolve => {
-      const unsubscribe = authState.subscribe(state => {
-        unsubscribe();
-        resolve(state);
-      });
-    });
+    const updatedState = get(authState);
     
     if (updatedState.status !== 'authenticated' || !updatedState.pubkey) {
       throw new Error('NIP-07 authentication required before backend auth');
