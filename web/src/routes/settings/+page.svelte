@@ -165,15 +165,15 @@
         <div class="theme-toggle-group">
           <button
             class="theme-btn"
-            class:active={$theme === 'light'}
-            onclick={() => $theme !== 'light' && toggleTheme()}
+            class:active={theme.value === 'light'}
+            onclick={() => theme.value !== 'light' && toggleTheme()}
           >
             ☀️ Light
           </button>
           <button
             class="theme-btn"
-            class:active={$theme === 'dark'}
-            onclick={() => $theme !== 'dark' && toggleTheme()}
+            class:active={theme.value === 'dark'}
+            onclick={() => theme.value !== 'dark' && toggleTheme()}
           >
             🌙 Dark
           </button>

@@ -119,10 +119,10 @@
   </div>
   
   <!-- Error -->
-  {#if $error}
+  {#if error.value}
     <div class="error-banner">
       <span class="icon">⚠️</span>
-      {$error}
+      {error.value}
     </div>
   {/if}
   
