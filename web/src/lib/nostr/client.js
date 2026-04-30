@@ -17,8 +17,8 @@ export const KINDS = {
 
 // Default relays - can be overridden via localStorage or connect() parameter
 const DEFAULT_RELAYS = [
-  'wss://relay.damus.io',
-  'wss://relay.nostr.band',
+  'wss://relay.sharegap.net',
+  'wss://relay.primal.net',
   'wss://nos.lol'
 ];
 

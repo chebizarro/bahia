@@ -157,7 +157,7 @@
             {#each filteredRepos as repo (repo.repoCoordinate || repo.id)}
               <RepositoryCard
                 repository={repo}
-                selected={isRepoSelected(repo)}
+                selected={selectedRepo?.repoCoordinate === repo.repoCoordinate || selectedRepo?.id === repo.id}
                 disabled={isRepoDisabled(repo)}
                 disabledReason={getDisabledReason(repo)}
                 on:select={handleRepoSelect}
