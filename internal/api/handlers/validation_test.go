@@ -83,6 +83,138 @@ func TestCreateService_InvalidRuntimeType(t *testing.T) {
 	assertErrorContains(t, w, "runtime type")
 }
 
+func TestValidateCreateServiceRepositoryCompatibility(t *testing.T) {
+	tests := []struct {
+		name    string
+		req     dto.CreateServiceRequest
+		wantErr bool
+	}{
+		{
+			name: "repo_url only",
+			req:  dto.CreateServiceRequest{RepoURL: "https://example.com/repo.git"},
+		},
+		{
+			name: "repository only with clone_url",
+			req:  dto.CreateServiceRequest{Repository: &dto.RepositoryRefRequest{CloneURL: "https://example.com/repo.git"}},
+		},
+		{
+			name:    "repository only without clone_url",
+			req:     dto.CreateServiceRequest{Repository: &dto.RepositoryRefRequest{Source: "manual"}},
+			wantErr: true,
+		},
+		{
+			name: "both equal after trim",
+			req: dto.CreateServiceRequest{
+				RepoURL:    " https://example.com/repo.git ",
+				Repository: &dto.RepositoryRefRequest{CloneURL: "https://example.com/repo.git"},
+			},
+		},
+		{
+			name: "both different",
+			req: dto.CreateServiceRequest{
+				RepoURL:    "https://example.com/one.git",
+				Repository: &dto.RepositoryRefRequest{CloneURL: "https://example.com/two.git"},
+			},
+			wantErr: true,
+		},
+		{
+			name: "neither present",
+			req:  dto.CreateServiceRequest{},
+		},
+		{
+			name:    "nip34 requires repo_coordinate",
+			req:     dto.CreateServiceRequest{Repository: &dto.RepositoryRefRequest{Source: "nip34", CloneURL: "https://example.com/repo.git"}},
+			wantErr: true,
+		},
+		{
+			name:    "invalid ci provider",
+			req:     dto.CreateServiceRequest{Repository: &dto.RepositoryRefRequest{CloneURL: "https://example.com/repo.git", CI: &dto.ServiceCIConfigRequest{Provider: "other"}}},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateCreateServiceRepository(&tt.req)
+			if tt.wantErr && err == nil {
+				t.Fatal("expected error, got nil")
+			}
+			if !tt.wantErr && err != nil {
+				t.Fatalf("expected no error, got %v", err)
+			}
+		})
+	}
+}
+
+func TestValidateUpdateServiceRepositoryCompatibility(t *testing.T) {
+	emptyRepoURL := ""
+	repoURL := "https://example.com/repo.git"
+	differentRepoURL := "https://example.com/other.git"
+
+	tests := []struct {
+		name    string
+		req     dto.UpdateServiceRequest
+		wantErr bool
+	}{
+		{
+			name: "omit both",
+			req:  dto.UpdateServiceRequest{},
+		},
+		{
+			name: "repo_url only non-empty",
+			req:  dto.UpdateServiceRequest{RepoURL: &repoURL},
+		},
+		{
+			name: "repo_url only empty clears",
+			req:  dto.UpdateServiceRequest{RepoURL: &emptyRepoURL},
+		},
+		{
+			name: "repository only with clone_url",
+			req:  dto.UpdateServiceRequest{Repository: &dto.RepositoryRefRequest{CloneURL: repoURL}},
+		},
+		{
+			name:    "repository only without clone_url",
+			req:     dto.UpdateServiceRequest{Repository: &dto.RepositoryRefRequest{Source: "manual"}},
+			wantErr: true,
+		},
+		{
+			name: "both equal",
+			req: dto.UpdateServiceRequest{
+				RepoURL:    &repoURL,
+				Repository: &dto.RepositoryRefRequest{CloneURL: " https://example.com/repo.git "},
+			},
+		},
+		{
+			name: "both different",
+			req: dto.UpdateServiceRequest{
+				RepoURL:    &differentRepoURL,
+				Repository: &dto.RepositoryRefRequest{CloneURL: repoURL},
+			},
+			wantErr: true,
+		},
+		{
+			name: "empty repo_url with repository",
+			req: dto.UpdateServiceRequest{
+				RepoURL:    &emptyRepoURL,
+				Repository: &dto.RepositoryRefRequest{CloneURL: repoURL},
+			},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateUpdateServiceRepository(&tt.req)
+			if tt.wantErr && err == nil {
+				t.Fatal("expected error, got nil")
+			}
+			if !tt.wantErr && err != nil {
+				t.Fatalf("expected no error, got %v", err)
+			}
+		})
+	}
+}
+
 // --- Build Handler Validation ---
 
 func TestRegisterBuild_InvalidGitSHA(t *testing.T) {
@@ -233,11 +365,11 @@ func TestCompleteRun_InvalidStatus(t *testing.T) {
 func TestRecordObservation_InvalidHealthStatus(t *testing.T) {
 	h := NewStateHandler(nil)
 	w := postJSON(t, h.RecordObservation, map[string]any{
-		"service_id":           "550e8400-e29b-41d4-a716-446655440000",
-		"environment_id":       "550e8400-e29b-41d4-a716-446655440001",
+		"service_id":            "550e8400-e29b-41d4-a716-446655440000",
+		"environment_id":        "550e8400-e29b-41d4-a716-446655440001",
 		"observed_image_digest": "sha256:abc",
-		"health_status":        "ok", // invalid
-		"source":               "docker",
+		"health_status":         "ok", // invalid
+		"source":                "docker",
 	})
 	assertStatus(t, w, http.StatusBadRequest)
 	assertErrorContains(t, w, "health status")
@@ -246,11 +378,11 @@ func TestRecordObservation_InvalidHealthStatus(t *testing.T) {
 func TestRecordObservation_NilServiceID(t *testing.T) {
 	h := NewStateHandler(nil)
 	w := postJSON(t, h.RecordObservation, map[string]any{
-		"service_id":           "00000000-0000-0000-0000-000000000000",
-		"environment_id":       "550e8400-e29b-41d4-a716-446655440001",
+		"service_id":            "00000000-0000-0000-0000-000000000000",
+		"environment_id":        "550e8400-e29b-41d4-a716-446655440001",
 		"observed_image_digest": "test",
-		"health_status":        "healthy",
-		"source":               "docker",
+		"health_status":         "healthy",
+		"source":                "docker",
 	})
 	assertStatus(t, w, http.StatusBadRequest)
 	assertErrorContains(t, w, "service_id")
@@ -259,11 +391,11 @@ func TestRecordObservation_NilServiceID(t *testing.T) {
 func TestRecordObservation_EmptySource(t *testing.T) {
 	h := NewStateHandler(nil)
 	w := postJSON(t, h.RecordObservation, map[string]any{
-		"service_id":           "550e8400-e29b-41d4-a716-446655440000",
-		"environment_id":       "550e8400-e29b-41d4-a716-446655440001",
+		"service_id":            "550e8400-e29b-41d4-a716-446655440000",
+		"environment_id":        "550e8400-e29b-41d4-a716-446655440001",
 		"observed_image_digest": "test",
-		"health_status":        "healthy",
-		"source":               "",
+		"health_status":         "healthy",
+		"source":                "",
 	})
 	assertStatus(t, w, http.StatusBadRequest)
 	assertErrorContains(t, w, "source")
