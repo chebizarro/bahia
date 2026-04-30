@@ -126,6 +126,7 @@
       <div class="tab-content">
         <div class="search-bar">
           <Input
+            type="search"
             placeholder="Search repositories..."
             bind:value={searchQuery}
           />

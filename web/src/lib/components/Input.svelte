@@ -39,6 +39,7 @@
   on:input={handleInput}
   on:change={handleChange}
   on:blur={handleBlur}
+  on:keydown
 />
 
 <style>

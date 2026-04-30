@@ -67,14 +67,15 @@
           {/if}
         </div>
         <div class="selection-actions">
-          <button class="action-link" on:click={openModal} {disabled}>Change</button>
-          <button class="action-link danger" on:click={clearSelection} {disabled}>Clear</button>
+          <button type="button" class="action-link" on:click={openModal} {disabled}>Change</button>
+          <button type="button" class="action-link danger" on:click={clearSelection} {disabled}>Clear</button>
         </div>
       </div>
     {:else}
       <div class="empty-display">
         <span class="placeholder-text">{placeholder}</span>
         <button
+          type="button"
           class="browse-button"
           on:click={openModal}
           {disabled}
