@@ -61,8 +61,16 @@
       {:else if $isAuthenticated}
         <div class="user-info">
           <span class="user-pubkey" title={$authState.pubkey}>
-            🔑 {truncatePubkey($authState.pubkey)}
+            {#if $authState.backendAuthenticated}
+              ✅
+            {:else}
+              🔑
+            {/if}
+            {truncatePubkey($authState.pubkey)}
           </span>
+          {#if !$authState.backendAuthenticated && $authState.error}
+            <span class="auth-warning" title={$authState.error}>⚠️</span>
+          {/if}
           <button class="logout-btn" on:click={handleLogout}>
             Logout
           </button>
@@ -232,6 +240,11 @@
   
   .auth-error {
     cursor: help;
+  }
+  
+  .auth-warning {
+    cursor: help;
+    color: var(--warning);
   }
   
   .theme-toggle {

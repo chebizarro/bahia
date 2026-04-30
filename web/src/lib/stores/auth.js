@@ -178,6 +178,55 @@ export async function refreshExtensionStatus() {
 }
 
 /**
+ * Internal: Authenticate with backend using a known pubkey
+ * Called automatically after NIP-07 login succeeds
+ * @param {string} pubkey - The authenticated user's public key
+ */
+async function authenticateBackendInternal(pubkey) {
+  if (!browser) {
+    throw new Error('Backend auth requires browser environment');
+  }
+
+  // Import API client
+  const { api } = await import('$lib/api/client.js');
+  if (!api) {
+    throw new Error('API client not available');
+  }
+
+  // Build unsigned NIP-98 event
+  const now = Math.floor(Date.now() / 1000);
+  const unsignedEvent = {
+    kind: 27235,
+    pubkey,
+    created_at: now,
+    tags: [
+      ['u', '/api/v1/auth/nostr'],
+      ['method', 'POST']
+    ],
+    content: ''
+  };
+
+  // Sign the event using NIP-07 extension directly
+  const signedEvent = await nip07SignEvent(unsignedEvent);
+
+  // Exchange for JWT
+  const response = await api.exchangeNostrAuth(signedEvent);
+
+  // Update API client with new token
+  api.setToken(response.token);
+
+  // Update auth state
+  authState.update(state => ({
+    ...state,
+    backendAuthenticated: true,
+    tokenExpiresAt: response.expires_at,
+    error: null
+  }));
+
+  return response;
+}
+
+/**
  * Login with NIP-07 extension
  * Prompts user for public key and fetches session data
  */
@@ -213,7 +262,7 @@ export async function login() {
         Promise.resolve(getCapabilities())
       ]);
       
-      // Update state
+      // Update state (NIP-07 auth complete)
       authState.update(state => ({
         ...state,
         status: 'authenticated',
@@ -226,6 +275,20 @@ export async function login() {
       
       // Persist session
       persistSession(pubkey, relays);
+      
+      // Automatically authenticate with backend to get JWT for API access
+      try {
+        await authenticateBackendInternal(pubkey);
+      } catch (backendError) {
+        // Backend auth failed but NIP-07 login succeeded
+        // Log the error but don't fail the login - user can retry backend auth later
+        console.warn('Backend authentication failed:', backendError.message);
+        authState.update(state => ({
+          ...state,
+          backendAuthenticated: false,
+          error: `Signed in, but backend auth failed: ${backendError.message}`
+        }));
+      }
       
     } catch (error) {
       console.error('Login failed:', error);
