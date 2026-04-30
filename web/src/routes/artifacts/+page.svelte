@@ -6,37 +6,80 @@
   import EmptyState from '$lib/components/EmptyState.svelte';
   import { api } from '$lib/api/client.js';
 
-  let loading = true;
+  // Tab state
+  let activeTab = 'registry';
+
+  // Registry artifacts state
+  let registryLoading = true;
   let artifacts = [];
   let services = [];
   let serviceMap = {};
 
+  // Blossom state
+  let blossomLoading = false;
+  let blossomBlobs = [];
+  let blossomServers = [];
+  let blossomHealth = {};
+  let blossomError = null;
+  let pubkeyFilter = '';
+  let typeFilter = '';
+
   onMount(async () => {
+    // Load registry artifacts
     try {
-      // First load all services
       services = await api.listServices();
-      
-      // Create service lookup map
       serviceMap = services.reduce((map, service) => {
         map[service.id] = service.name;
         return map;
       }, {});
 
-      // Fetch artifacts for each service
       const artifactPromises = services.map(service => 
         api.listArtifacts(service.id).catch(() => [])
       );
-      
       const artifactsByService = await Promise.all(artifactPromises);
-      
-      // Flatten all artifacts into one array
       artifacts = artifactsByService.flat();
     } catch (err) {
       console.error('Failed to load artifacts:', err);
     } finally {
-      loading = false;
+      registryLoading = false;
     }
   });
+
+  async function loadBlossomBlobs() {
+    if (blossomBlobs.length > 0 && !pubkeyFilter) return; // Already loaded
+    
+    blossomLoading = true;
+    blossomError = null;
+    
+    try {
+      // Load servers and health in parallel
+      const [servers, health, blobs] = await Promise.all([
+        api.getBlossomServers().catch(() => []),
+        api.checkBlossomHealth().catch(() => ({})),
+        api.listBlossomBlobs(pubkeyFilter || null)
+      ]);
+      
+      blossomServers = servers;
+      blossomHealth = health;
+      blossomBlobs = blobs;
+    } catch (err) {
+      console.error('Failed to load Blossom blobs:', err);
+      blossomError = err.message;
+    } finally {
+      blossomLoading = false;
+    }
+  }
+
+  function handleTabChange(tab) {
+    activeTab = tab;
+    if (tab === 'blossom' && blossomBlobs.length === 0) {
+      loadBlossomBlobs();
+    }
+  }
+
+  function handlePubkeySearch() {
+    loadBlossomBlobs();
+  }
 
   function getSBOMBadge(artifact) {
     if (artifact.sbom_url) {
@@ -58,7 +101,39 @@
     return date.toLocaleDateString() + ' ' + date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   }
 
-  $: columns = [
+  function formatSize(bytes) {
+    if (!bytes) return '-';
+    const units = ['B', 'KB', 'MB', 'GB'];
+    let size = bytes;
+    let unitIndex = 0;
+    while (size >= 1024 && unitIndex < units.length - 1) {
+      size /= 1024;
+      unitIndex++;
+    }
+    return `${size.toFixed(1)} ${units[unitIndex]}`;
+  }
+
+  function getContentTypeIcon(type) {
+    if (!type) return '📄';
+    if (type.startsWith('image/')) return '🖼️';
+    if (type.startsWith('video/')) return '🎬';
+    if (type.startsWith('audio/')) return '🎵';
+    if (type.includes('json')) return '📋';
+    if (type.includes('text')) return '📝';
+    if (type.includes('pdf')) return '📕';
+    return '📦';
+  }
+
+  // Filter blobs by type
+  $: filteredBlobs = blossomBlobs.filter(blob => {
+    if (!typeFilter) return true;
+    return blob.type?.toLowerCase().includes(typeFilter.toLowerCase());
+  });
+
+  // Unique content types for filter dropdown
+  $: uniqueTypes = [...new Set(blossomBlobs.map(b => b.type).filter(Boolean))].sort();
+
+  $: registryColumns = [
     { 
       key: 'image_tag', 
       label: 'Name',
@@ -96,26 +171,152 @@
       }
     }
   ];
+
+  $: blossomColumns = [
+    {
+      key: 'type',
+      label: 'Type',
+      render: (r) => `<span class="type-icon">${getContentTypeIcon(r.type)}</span> <span class="type-label">${r.type || 'unknown'}</span>`
+    },
+    {
+      key: 'sha256',
+      label: 'SHA256',
+      render: (r) => `<code class="hash">${r.sha256?.slice(0, 16) || '-'}...</code>`
+    },
+    {
+      key: 'size',
+      label: 'Size',
+      render: (r) => formatSize(r.size)
+    },
+    {
+      key: 'uploaded',
+      label: 'Uploaded',
+      render: (r) => formatDate(r.uploaded)
+    },
+    {
+      key: 'url',
+      label: 'Actions',
+      render: (r) => `<a href="${r.url}" target="_blank" class="download-link">Download ↗</a>`
+    }
+  ];
 </script>
 
 <div class="page">
   <div class="header">
     <div class="title-row">
       <h1>Artifacts</h1>
-      <span class="count">{artifacts.length} artifacts</span>
+      <span class="count">
+        {#if activeTab === 'registry'}
+          {artifacts.length} registry artifacts
+        {:else}
+          {filteredBlobs.length} blossom blobs
+        {/if}
+      </span>
     </div>
   </div>
 
-  {#if loading}
-    <p class="loading">Loading...</p>
-  {:else if artifacts.length === 0}
-    <EmptyState
-      icon="📦"
-      title="No artifacts yet"
-      message="Artifacts will appear here once services have builds"
-    />
-  {:else}
-    <Table {columns} data={artifacts} onRowClick={(row) => goto(`/artifacts/${row.id}`)} />
+  <!-- Tabs -->
+  <div class="tabs">
+    <button
+      class="tab"
+      class:active={activeTab === 'registry'}
+      on:click={() => handleTabChange('registry')}
+    >
+      📦 Registry
+    </button>
+    <button
+      class="tab"
+      class:active={activeTab === 'blossom'}
+      on:click={() => handleTabChange('blossom')}
+    >
+      🌸 Blossom
+    </button>
+  </div>
+
+  <!-- Registry Tab -->
+  {#if activeTab === 'registry'}
+    {#if registryLoading}
+      <p class="loading">Loading registry artifacts...</p>
+    {:else if artifacts.length === 0}
+      <EmptyState
+        icon="📦"
+        title="No artifacts yet"
+        message="Artifacts will appear here once services have builds"
+      />
+    {:else}
+      <Table columns={registryColumns} data={artifacts} onRowClick={(row) => goto(`/artifacts/${row.id}`)} />
+    {/if}
+  {/if}
+
+  <!-- Blossom Tab -->
+  {#if activeTab === 'blossom'}
+    <!-- Server Status -->
+    {#if blossomServers.length > 0}
+      <div class="server-status">
+        <span class="server-label">Servers:</span>
+        {#each blossomServers as server}
+          <span class="server-badge" class:healthy={blossomHealth[server] === 'ok'} class:unhealthy={blossomHealth[server] && blossomHealth[server] !== 'ok'}>
+            {new URL(server).hostname}
+            {#if blossomHealth[server] === 'ok'}
+              ✓
+            {:else if blossomHealth[server]}
+              ✗
+            {/if}
+          </span>
+        {/each}
+      </div>
+    {/if}
+
+    <!-- Filters -->
+    <div class="filters">
+      <div class="filter-group">
+        <label for="pubkey-filter">Owner Pubkey:</label>
+        <input
+          type="text"
+          id="pubkey-filter"
+          bind:value={pubkeyFilter}
+          placeholder="Enter hex pubkey to filter..."
+          class="filter-input"
+        />
+        <button class="filter-btn" on:click={handlePubkeySearch}>Search</button>
+      </div>
+      
+      {#if uniqueTypes.length > 0}
+        <div class="filter-group">
+          <label for="type-filter">Content Type:</label>
+          <select id="type-filter" bind:value={typeFilter} class="filter-select">
+            <option value="">All types</option>
+            {#each uniqueTypes as type}
+              <option value={type}>{type}</option>
+            {/each}
+          </select>
+        </div>
+      {/if}
+    </div>
+
+    {#if blossomLoading}
+      <p class="loading">Loading Blossom blobs...</p>
+    {:else if blossomError}
+      <EmptyState
+        icon="⚠️"
+        title="Error loading blobs"
+        message={blossomError}
+      />
+    {:else if blossomServers.length === 0}
+      <EmptyState
+        icon="🌸"
+        title="No Blossom servers configured"
+        message="Configure Blossom servers in your deployment to browse artifacts"
+      />
+    {:else if filteredBlobs.length === 0}
+      <EmptyState
+        icon="🌸"
+        title="No blobs found"
+        message={pubkeyFilter ? "No blobs found for this pubkey" : "No blobs stored on Blossom servers yet"}
+      />
+    {:else}
+      <Table columns={blossomColumns} data={filteredBlobs} />
+    {/if}
   {/if}
 </div>
 
@@ -124,7 +325,7 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    margin-bottom: 1.5rem;
+    margin-bottom: 1rem;
   }
   .title-row {
     display: flex;
@@ -141,6 +342,115 @@
     text-align: center;
   }
 
+  /* Tabs */
+  .tabs {
+    display: flex;
+    gap: 0;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 1.5rem;
+  }
+  .tab {
+    padding: 0.75rem 1.5rem;
+    background: none;
+    border: none;
+    border-bottom: 2px solid transparent;
+    color: var(--text-muted);
+    font-size: 0.9rem;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+  .tab:hover {
+    color: var(--text);
+    background: var(--bg-hover);
+  }
+  .tab.active {
+    color: var(--primary);
+    border-bottom-color: var(--primary);
+  }
+
+  /* Server Status */
+  .server-status {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 1rem;
+    padding: 0.5rem;
+    background: var(--bg-secondary);
+    border-radius: 6px;
+    font-size: 0.85rem;
+  }
+  .server-label {
+    color: var(--text-muted);
+  }
+  .server-badge {
+    padding: 0.25rem 0.5rem;
+    border-radius: 4px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+  }
+  .server-badge.healthy {
+    background: #065f46;
+    border-color: #059669;
+    color: #6ee7b7;
+  }
+  .server-badge.unhealthy {
+    background: #7f1d1d;
+    border-color: #dc2626;
+    color: #fca5a5;
+  }
+
+  /* Filters */
+  .filters {
+    display: flex;
+    gap: 1.5rem;
+    margin-bottom: 1rem;
+    flex-wrap: wrap;
+  }
+  .filter-group {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+  .filter-group label {
+    font-size: 0.85rem;
+    color: var(--text-muted);
+  }
+  .filter-input {
+    padding: 0.5rem 0.75rem;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 0.85rem;
+    width: 280px;
+  }
+  .filter-input:focus {
+    outline: none;
+    border-color: var(--primary);
+  }
+  .filter-select {
+    padding: 0.5rem 0.75rem;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 0.85rem;
+    min-width: 150px;
+  }
+  .filter-btn {
+    padding: 0.5rem 1rem;
+    background: var(--primary);
+    color: white;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 0.85rem;
+  }
+  .filter-btn:hover {
+    opacity: 0.9;
+  }
+
+  /* Table cell styles */
   :global(.badge-cell) {
     display: inline-flex;
     align-items: center;
@@ -160,5 +470,28 @@
   :global(.badge-cell.default) {
     background: #374151;
     color: #d1d5db;
+  }
+
+  :global(.type-icon) {
+    font-size: 1.1rem;
+    margin-right: 0.25rem;
+  }
+  :global(.type-label) {
+    font-size: 0.85rem;
+    color: var(--text-muted);
+  }
+  :global(.hash) {
+    font-size: 0.8rem;
+    background: var(--bg-secondary);
+    padding: 0.2rem 0.4rem;
+    border-radius: 3px;
+  }
+  :global(.download-link) {
+    color: var(--primary);
+    text-decoration: none;
+    font-size: 0.85rem;
+  }
+  :global(.download-link:hover) {
+    text-decoration: underline;
   }
 </style>

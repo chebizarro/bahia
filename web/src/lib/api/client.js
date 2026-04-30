@@ -380,6 +380,44 @@ class BahiaClient {
     return payload?.results || [];
   }
 
+  // Blossom Artifacts
+  /**
+   * List blobs from configured Blossom servers.
+   * @param {string} [pubkey] - Optional pubkey to filter blobs by owner
+   * @returns {Promise<Array<{url: string, sha256: string, size: number, type: string, uploaded: string}>>}
+   */
+  async listBlossomBlobs(pubkey = null) {
+    const body = pubkey ? { pubkey } : {};
+    return this.fetch('/blossom/list', {
+      method: 'POST',
+      body: JSON.stringify(body)
+    }).then(r => r ?? []);
+  }
+
+  /**
+   * Get list of configured Blossom server URLs.
+   * @returns {Promise<string[]>}
+   */
+  async getBlossomServers() {
+    return this.fetch('/blossom/servers').then(r => r ?? []);
+  }
+
+  /**
+   * Check health of all Blossom servers.
+   * @returns {Promise<Record<string, string>>} Map of server URL to status ("ok" or error message)
+   */
+  async checkBlossomHealth() {
+    return this.fetch('/blossom/health').then(r => r ?? {});
+  }
+
+  /**
+   * Get upload/download statistics for Blossom servers.
+   * @returns {Promise<Record<string, {uploads: number, downloads: number, failures: number}>>}
+   */
+  async getBlossomStats() {
+    return this.fetch('/blossom/stats').then(r => r ?? {});
+  }
+
   // Auth Exchange
   // Exchange NIP-98 signed event for a JWT token
   async exchangeNostrAuth(event) {

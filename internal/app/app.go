@@ -213,23 +213,32 @@ func New(cfg *config.Config) (*App, error) {
 	)
 	bgManager.Register(nostrSub)
 
+	// Blossom client wiring (used for artifact storage and browsing).
+	var blossomClient *blossom.Client
+	blossomCfg := blossom.Config{
+		Servers:       cfg.Blossom.Servers,
+		MaxRetries:    cfg.Blossom.MaxRetries,
+		RetryDelay:    cfg.Blossom.RetryDelay,
+		Timeout:       cfg.Blossom.Timeout,
+		PrivateKeyHex: cfg.Blossom.PrivateKey,
+	}
+	if len(blossomCfg.Servers) == 0 && cfg.Blossom.URL != "" {
+		blossomCfg.Servers = []string{cfg.Blossom.URL}
+	}
+	if len(blossomCfg.Servers) > 0 {
+		blossomClient = blossom.NewClient(blossomCfg, slog.Default())
+		logger.Info("blossom client enabled", zap.Strings("servers", blossomCfg.Servers))
+	}
+
 	// OCI Registry wiring.
 	var ociHandler http.Handler
 	var ociRepo repository.OCIRegistryRepository
 	if cfg.OCI.Enabled {
 		pgOCIRepo := repository.NewPgOCIRepository(pool)
 		ociRepo = pgOCIRepo
-		blossomCfg := blossom.Config{
-			Servers:       cfg.Blossom.Servers,
-			MaxRetries:    cfg.Blossom.MaxRetries,
-			RetryDelay:    cfg.Blossom.RetryDelay,
-			Timeout:       cfg.Blossom.Timeout,
-			PrivateKeyHex: cfg.Blossom.PrivateKey,
+		if blossomClient == nil {
+			return nil, fmt.Errorf("OCI registry requires Blossom servers to be configured")
 		}
-		if len(blossomCfg.Servers) == 0 && cfg.Blossom.URL != "" {
-			blossomCfg.Servers = []string{cfg.Blossom.URL}
-		}
-		blossomClient := blossom.NewClient(blossomCfg, slog.Default())
 		ociSvc, err := service.NewOCIRegistryService(cfg.OCI, pgOCIRepo, pgOCIRepo, blossomClient, logger)
 		if err != nil {
 			return nil, fmt.Errorf("create oci registry service: %w", err)
@@ -321,6 +330,7 @@ func New(cfg *config.Config) (*App, error) {
 			Notifications: notifRepo,
 			Dispatcher:    notifDispatcher,
 			MCP:           mcpHandler,
+			Blossom:       blossomClient,
 			OCI:           ociHandler,
 		}, cfg.Auth)
 

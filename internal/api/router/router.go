@@ -8,6 +8,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	chimiddleware "github.com/go-chi/chi/v5/middleware"
+	"github.com/openagentsinc/bahia/internal/adapters/blossom"
 	"github.com/openagentsinc/bahia/internal/adapters/secrets"
 	"github.com/openagentsinc/bahia/internal/adapters/telemetry"
 	"github.com/openagentsinc/bahia/internal/api/dto"
@@ -42,6 +43,7 @@ type RouterDeps struct {
 	Dispatcher    *notifications.Dispatcher
 	MCP           *handlers.MCPHandler
 	HiveCI        repository.HiveCIRepository
+	Blossom       *blossom.Client
 	OCI           http.Handler
 }
 
@@ -211,6 +213,15 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 				r.Get("/notifications/channels", notifH.ListChannels)
 				r.Get("/notifications/channels/{id}", notifH.GetChannel)
 				r.Get("/notifications/log", notifH.ListLogs)
+			}
+
+			// Blossom (read)
+			if deps.Blossom != nil {
+				blossomH := handlers.NewBlossomHandler(deps.Blossom)
+				r.Post("/blossom/list", blossomH.ListBlobs)
+				r.Get("/blossom/servers", blossomH.GetServers)
+				r.Get("/blossom/health", blossomH.HealthCheck)
+				r.Get("/blossom/stats", blossomH.GetStats)
 			}
 		})
 
