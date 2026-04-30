@@ -1,6 +1,28 @@
 <script>
   import { page } from '$app/stores';
   import { theme, toggleTheme } from '$lib/stores/theme.js';
+  import { authState, isAuthenticated, login, logout } from '$lib/stores/auth.js';
+
+  // Truncate pubkey for display (first 8 + last 4 chars)
+  function truncatePubkey(pubkey) {
+    if (!pubkey || pubkey.length < 16) return pubkey;
+    return `${pubkey.slice(0, 8)}...${pubkey.slice(-4)}`;
+  }
+
+  // Handle login click
+  async function handleLogin() {
+    try {
+      await login();
+    } catch (error) {
+      console.error('Login failed:', error);
+      // Error state is handled by the auth store
+    }
+  }
+
+  // Handle logout click
+  function handleLogout() {
+    logout();
+  }
 </script>
 
 <nav>
@@ -28,13 +50,51 @@
     <li><a href="/settings" class:active={$page.url.pathname === '/settings'}>⚙️ Settings</a></li>
   </ul>
   
-  <button class="theme-toggle" on:click={toggleTheme} aria-label="Toggle theme">
-    {#if $theme === 'dark'}
-      ☀️
-    {:else}
-      🌙
-    {/if}
-  </button>
+  <div class="nav-actions">
+    <!-- Auth UI -->
+    <div class="auth-section">
+      {#if $authState.status === 'checking' || $authState.status === 'authenticating'}
+        <span class="auth-loading">
+          <span class="spinner"></span>
+          {$authState.status === 'checking' ? 'Checking...' : 'Signing in...'}
+        </span>
+      {:else if $isAuthenticated}
+        <div class="user-info">
+          <span class="user-pubkey" title={$authState.pubkey}>
+            🔑 {truncatePubkey($authState.pubkey)}
+          </span>
+          <button class="logout-btn" on:click={handleLogout}>
+            Logout
+          </button>
+        </div>
+      {:else}
+        <button
+          class="login-btn"
+          on:click={handleLogin}
+          disabled={!$authState.extensionAvailable}
+          title={$authState.extensionAvailable ? 'Login with Nostr extension' : 'No Nostr extension detected (NIP-07)'}
+        >
+          {#if $authState.extensionAvailable}
+            🔐 Login with Nostr
+          {:else}
+            ⚠️ No Extension
+          {/if}
+        </button>
+        {#if $authState.status === 'error' && $authState.error}
+          <span class="auth-error" title={$authState.error}>⚠️</span>
+        {/if}
+      {/if}
+    </div>
+
+    <!-- Theme toggle -->
+    <button class="theme-toggle" on:click={toggleTheme} aria-label="Toggle theme">
+      {#if $theme === 'dark'}
+        ☀️
+      {:else}
+        🌙
+      {/if}
+    </button>
+  </div>
 </nav>
 
 <style>
@@ -77,8 +137,104 @@
     background: var(--primary, #6366f1);
     color: #fff;
   }
-  .theme-toggle {
+  
+  .nav-actions {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
     margin-left: auto;
+  }
+  
+  .auth-section {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+  
+  .auth-loading {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    color: var(--text-muted);
+    font-size: 0.875rem;
+  }
+  
+  .spinner {
+    width: 14px;
+    height: 14px;
+    border: 2px solid var(--border-color);
+    border-top-color: var(--primary);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+  }
+  
+  @keyframes spin {
+    to { transform: rotate(360deg); }
+  }
+  
+  .user-info {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+  }
+  
+  .user-pubkey {
+    font-family: monospace;
+    font-size: 0.8rem;
+    color: var(--text-muted);
+    background: var(--card-bg);
+    padding: 0.25rem 0.5rem;
+    border-radius: 4px;
+    border: 1px solid var(--border-color);
+  }
+  
+  .login-btn {
+    background: var(--primary);
+    color: #fff;
+    border: none;
+    padding: 0.5rem 1rem;
+    border-radius: 6px;
+    font-size: 0.875rem;
+    cursor: pointer;
+    transition: all 0.15s;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+  
+  .login-btn:hover:not(:disabled) {
+    filter: brightness(1.1);
+    transform: translateY(-1px);
+  }
+  
+  .login-btn:disabled {
+    background: var(--text-muted);
+    cursor: not-allowed;
+    opacity: 0.7;
+  }
+  
+  .logout-btn {
+    background: transparent;
+    color: var(--text-muted);
+    border: 1px solid var(--border-color);
+    padding: 0.375rem 0.75rem;
+    border-radius: 6px;
+    font-size: 0.8rem;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  
+  .logout-btn:hover {
+    background: var(--error);
+    color: #fff;
+    border-color: var(--error);
+  }
+  
+  .auth-error {
+    cursor: help;
+  }
+  
+  .theme-toggle {
     background: transparent;
     border: 1px solid var(--border-color);
     border-radius: 6px;

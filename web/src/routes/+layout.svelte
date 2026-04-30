@@ -5,10 +5,12 @@
   import ToastContainer from '$lib/components/ToastContainer.svelte';
   import { loadAll, subscribeToEvents, unsubscribeFromEvents } from '$lib/stores';
   import { theme } from '$lib/stores/theme.js';
+  import { initializeAuth } from '$lib/stores/auth.js';
 
   onMount(() => {
     loadAll();
     subscribeToEvents();
+    initializeAuth();
   });
 
   onDestroy(() => {
