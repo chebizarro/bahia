@@ -1,0 +1,24 @@
+{
+  "name": "bahia-e2e-agent-tests",
+  "version": "1.0.0",
+  "description": "Agent-driven end-to-end testing harness for Bahia",
+  "type": "module",
+  "scripts": {
+    "test": "tsx cli.ts --all",
+    "test:smoke": "tsx cli.ts --tags smoke",
+    "test:json": "tsx cli.ts --all --json",
+    "smoke": "tsx smoke-test.ts",
+    "demo": "tsx scenarios/demo.ts",
+    "scenarios": "tsx -e \"import('./scenarios/index.js').then(m => m.printSummary())\"",
+    "clean": "docker compose down -v"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^0.5.0",
+    "@playwright/test": "^1.44.0",
+    "tsx": "^4.7.0",
+    "typescript": "^5.4.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.12.0"
+  }
+}

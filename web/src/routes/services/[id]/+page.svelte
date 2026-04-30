@@ -699,7 +699,7 @@
       <Textarea
         id="artifact-metadata"
         bind:value={artifactForm.metadata}
-        placeholder='{"build_id": "123", "commit": "abc123"}'
+        placeholder={'{"build_id": "123", "commit": "abc123"}'}
         rows={6}
         disabled={artifactRegistering}
       />

@@ -22,7 +22,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
 # Runtime stage
 FROM alpine:3.21
 
-RUN apk add --no-cache ca-certificates tzdata docker-cli docker-cli-compose
+RUN apk add --no-cache ca-certificates tzdata docker-cli docker-cli-compose wget
 
 COPY --from=builder /bin/bahia-server /usr/local/bin/bahia-server
 COPY --from=builder /bin/bahia /usr/local/bin/bahia

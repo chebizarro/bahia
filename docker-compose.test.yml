@@ -1,0 +1,27 @@
+# Docker Compose override for E2E testing
+# Usage: docker compose -f docker-compose.yml -f docker-compose.test.yml up
+
+services:
+  postgres:
+    # Expose postgres for direct test connections
+    ports:
+      - "5432:5432"
+    # Faster startup for tests
+    command: postgres -c fsync=off -c synchronous_commit=off -c full_page_writes=off
+
+  bahia:
+    # More verbose logging for debugging tests
+    environment:
+      BAHIA_LOG_LEVEL: debug
+      BAHIA_LOG_FORMAT: json
+    # Use different port to avoid conflicts
+    ports:
+      - "8081:8080"
+    # Disable reconciliation during tests to avoid interference
+    # Can be overridden per-test if needed
+    # BAHIA_RECONCILE_ENABLED: "false"
+
+  web:
+    # Expose on a different port to avoid conflicts with dev server
+    ports:
+      - "3001:80"

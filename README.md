@@ -77,11 +77,14 @@ See [protocol-compatibility.md](docs/protocol-compatibility.md) for integration 
 ## Quick Start
 
 ```bash
-# Start with Docker Compose (includes PostgreSQL)
+# Start with Docker Compose (includes PostgreSQL, API server, and Web UI)
 docker compose up --build
 
 # API is at http://localhost:8080
 curl http://localhost:8080/health
+
+# Web UI is at http://localhost:3000
+open http://localhost:3000
 ```
 
 ## Development
