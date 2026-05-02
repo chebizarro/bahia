@@ -14,6 +14,8 @@
   let environments = $state([]);
   let loading = $state(true);
   let error = $state(null);
+  let enforcementFilter = $state('all');
+  let enabledFilter = $state('all');
 
   // Create modal state
   let createOpen = $state(false);
@@ -51,10 +53,46 @@
     }
   }
 
+  let filterEnforcementOptions = [
+    { value: 'all', label: 'All enforcement levels' },
+    ...enforcementOptions
+  ];
+
+  let filterEnabledOptions = [
+    { value: 'all', label: 'All statuses' },
+    { value: 'enabled', label: 'Enabled' },
+    { value: 'disabled', label: 'Disabled' }
+  ];
+
   let environmentOptions = $derived([
     { value: '', label: 'Global policy' },
     ...environments.map(env => ({ value: env.id, label: env.name }))
   ]);
+
+  function getRuleCount(policy) {
+    if (typeof policy?.rule_count === 'number') {
+      return policy.rule_count;
+    }
+    return Array.isArray(policy?.rules) ? policy.rules.length : 0;
+  }
+
+  let filteredPolicies = $derived(
+    policies.filter((policy) => {
+      if (enforcementFilter !== 'all' && policy.enforcement !== enforcementFilter) {
+        return false;
+      }
+
+      if (enabledFilter === 'enabled' && !policy.enabled) {
+        return false;
+      }
+
+      if (enabledFilter === 'disabled' && policy.enabled) {
+        return false;
+      }
+
+      return true;
+    })
+  );
 
   let columns = $derived([
     { key: 'name', label: 'Name' },
@@ -72,9 +110,20 @@
     {
       key: 'rules',
       label: 'Rules',
-      render: (r) => Array.isArray(r.rules) ? `${r.rules.length} rule${r.rules.length !== 1 ? 's' : ''}` : '0 rules'
+      render: (r) => {
+        const count = getRuleCount(r);
+        return `${count} rule${count !== 1 ? 's' : ''}`;
+      }
     },
-    { key: 'id', label: 'ID', render: (r) => `<code>${r.id?.slice(0, 8)}...</code>` }
+    { key: 'id', label: 'ID', render: (r) => `<code>${r.id?.slice(0, 8)}...</code>` },
+    {
+      key: 'actions',
+      label: 'Actions',
+      render: (r) => {
+        const policyPath = `/policies/${encodeURIComponent(r.id)}`;
+        return `<div class="table-actions"><a href="${policyPath}">Edit</a><a href="${policyPath}">Delete</a></div>`;
+      }
+    }
   ]);
 
   function openCreateModal() {
@@ -153,7 +202,7 @@
   <div class="header">
     <div class="title-row">
       <h1>Policies</h1>
-      <span class="count">{policies.length} policies</span>
+      <span class="count">{filteredPolicies.length} of {policies.length} policies</span>
     </div>
     <LoadingButton variant="primary" onclick={openCreateModal}>
       Create Policy
@@ -173,7 +222,26 @@
       onAction={openCreateModal}
     />
   {:else}
-    <Table {columns} data={policies} onRowClick={(row) => goto(`/policies/${row.id}`)} />
+    <div class="filters" aria-label="Policy filters">
+      <div class="filter-field">
+        <label for="enforcement-filter">Enforcement</label>
+        <Select
+          id="enforcement-filter"
+          bind:value={enforcementFilter}
+          options={filterEnforcementOptions}
+        />
+      </div>
+      <div class="filter-field">
+        <label for="enabled-filter">Status</label>
+        <Select
+          id="enabled-filter"
+          bind:value={enabledFilter}
+          options={filterEnabledOptions}
+        />
+      </div>
+    </div>
+
+    <Table {columns} data={filteredPolicies} onRowClick={(row) => goto(`/policies/${row.id}`)} />
   {/if}
 </div>
 
@@ -281,6 +349,34 @@
   }
   .error {
     color: var(--error);
+  }
+
+  .filters {
+    display: flex;
+    gap: 1rem;
+    margin-bottom: 1rem;
+  }
+  .filter-field {
+    min-width: 220px;
+  }
+  .filter-field label {
+    display: block;
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    margin-bottom: 0.25rem;
+  }
+
+  :global(.table-actions) {
+    display: inline-flex;
+    gap: 0.75rem;
+  }
+  :global(.table-actions a) {
+    color: var(--primary);
+    text-decoration: none;
+    font-size: 0.875rem;
+  }
+  :global(.table-actions a:hover) {
+    text-decoration: underline;
   }
 
   .create-form {

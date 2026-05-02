@@ -252,6 +252,96 @@ test.describe('Policies CRUD Smoke Test', () => {
     await expect(page.locator('#policy-name')).not.toBeVisible();
   });
   
+  test('should filter policies by enforcement and status', async ({ page }) => {
+    await page.route('**/api/v1/policies', (route) => {
+      if (route.request().method() === 'GET') {
+        return route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            data: [
+              {
+                id: 'policy-1',
+                name: 'warn-enabled',
+                enforcement: 'warn',
+                enabled: true,
+                rules: [{ type: 'require_sbom' }]
+              },
+              {
+                id: 'policy-2',
+                name: 'block-disabled',
+                enforcement: 'block',
+                enabled: false,
+                rules: [{ type: 'require_signature' }, { type: 'require_approval' }]
+              }
+            ]
+          })
+        });
+      }
+
+      return route.fulfill({
+        status: 404,
+        contentType: 'application/json',
+        body: JSON.stringify({ error: 'Not found' })
+      });
+    });
+
+    await page.goto('/policies');
+    await page.waitForLoadState('networkidle');
+
+    await expect(page.locator('tbody tr')).toHaveCount(2);
+
+    await page.selectOption('#enforcement-filter', 'block');
+    await expect(page.locator('tbody tr')).toHaveCount(1);
+    await expect(page.locator('text=block-disabled')).toBeVisible();
+
+    await page.selectOption('#enabled-filter', 'disabled');
+    await expect(page.locator('tbody tr')).toHaveCount(1);
+    await expect(page.locator('text=block-disabled')).toBeVisible();
+
+    await page.selectOption('#enforcement-filter', 'warn');
+    await expect(page.locator('tbody tr')).toHaveCount(1);
+    await expect(page.locator('tbody tr td.empty')).toHaveCount(1);
+  });
+
+  test('should show policy rule count and edit/delete actions', async ({ page }) => {
+    await page.route('**/api/v1/policies', (route) => {
+      if (route.request().method() === 'GET') {
+        return route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            data: [
+              {
+                id: 'policy-rule-count',
+                name: 'policy-with-three-rules',
+                enforcement: 'warn',
+                enabled: true,
+                rule_count: 3
+              }
+            ]
+          })
+        });
+      }
+
+      return route.fulfill({
+        status: 404,
+        contentType: 'application/json',
+        body: JSON.stringify({ error: 'Not found' })
+      });
+    });
+
+    await page.goto('/policies');
+    await page.waitForLoadState('networkidle');
+
+    await expect(page.locator('tbody')).toContainText('3 rules');
+
+    const editLink = page.getByRole('link', { name: 'Edit' });
+    const deleteLink = page.getByRole('link', { name: 'Delete' });
+    await expect(editLink).toHaveAttribute('href', '/policies/policy-rule-count');
+    await expect(deleteLink).toHaveAttribute('href', '/policies/policy-rule-count');
+  });
+
   test('should toggle enabled checkbox', async ({ page }) => {
     const apiCalls = {
       post: null
