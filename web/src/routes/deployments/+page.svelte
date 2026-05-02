@@ -3,6 +3,7 @@
   import Table from '$lib/components/Table.svelte';
   import EmptyState from '$lib/components/EmptyState.svelte';
   import Select from '$lib/components/Select.svelte';
+  import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
   import { api } from '$lib/api/client.js';
 
   const PAGE_SIZE = 25;
@@ -19,6 +20,14 @@
   let startDate = $state('');
   let endDate = $state('');
   let currentPage = $state(1);
+
+  let rollbackOpen = $state(false);
+  let rollbackSubmitting = $state(false);
+  let rollbackError = $state(null);
+  let rollbackIntent = $state(null);
+  let rollbackArtifacts = $state([]);
+  let rollbackTargetMode = $state('previous');
+  let rollbackArtifactId = $state('');
 
   const statusOptions = [
     { value: 'all', label: 'All Statuses' },
@@ -90,6 +99,14 @@
   }
 
   let columns = $derived([
+    {
+      key: 'rollback_action',
+      label: 'Rollback',
+      render: (r) => {
+        if (!r?.service_id || !r?.environment_id) return '-';
+        return `<button type="button" class="rollback-btn" data-rollback-id="${r.id}">Rollback</button>`;
+      }
+    },
     { key: 'service_name', label: 'Service' },
     { key: 'environment_name', label: 'Environment' },
     { 
@@ -212,6 +229,65 @@
     }
   }
 
+  async function openRollbackModal(intent) {
+    rollbackIntent = intent;
+    rollbackTargetMode = 'previous';
+    rollbackArtifactId = '';
+    rollbackError = null;
+    rollbackArtifacts = [];
+
+    try {
+      rollbackArtifacts = await api.listArtifacts(intent.service_id);
+    } catch (err) {
+      rollbackError = err.message || 'Failed to load artifacts';
+    }
+
+    rollbackOpen = true;
+  }
+
+  async function handleRollbackConfirm() {
+    if (!rollbackIntent) return;
+    if (rollbackTargetMode === 'artifact' && !rollbackArtifactId) {
+      rollbackError = 'Select an artifact target';
+      return;
+    }
+
+    rollbackSubmitting = true;
+    rollbackError = null;
+
+    try {
+      if (rollbackTargetMode === 'previous') {
+        await api.rollback({
+          service_id: rollbackIntent.service_id,
+          environment_id: rollbackIntent.environment_id
+        });
+      } else {
+        await api.createIntent(
+          rollbackIntent.service_id,
+          rollbackIntent.environment_id,
+          rollbackArtifactId
+        );
+      }
+      rollbackOpen = false;
+      await loadAllIntents();
+    } catch (err) {
+      rollbackError = err.message || 'Failed to create rollback intent';
+    } finally {
+      rollbackSubmitting = false;
+    }
+  }
+
+  function handleTableRowClick(row, event) {
+    const rollbackButton = event?.target?.closest('.rollback-btn');
+    if (rollbackButton) {
+      event.preventDefault();
+      event.stopPropagation();
+      void openRollbackModal(row);
+      return;
+    }
+    goto(`/deployments/${row.id}`);
+  }
+
   function goToPreviousPage() {
     if (currentPage > 1) currentPage -= 1;
   }
@@ -219,6 +295,13 @@
   function goToNextPage() {
     if (currentPage < totalPages) currentPage += 1;
   }
+
+  let rollbackArtifactOptions = $derived(
+    rollbackArtifacts.map((artifact) => ({
+      value: artifact.id,
+      label: artifact.image_tag || artifact.version || artifact.name || artifact.id
+    }))
+  );
 </script>
 
 <div class="page">
@@ -280,7 +363,7 @@
       message="Try adjusting your filter criteria"
     />
   {:else}
-    <Table {columns} data={pagedIntents} onRowClick={(row) => goto(`/deployments/${row.id}`)} />
+    <Table {columns} data={pagedIntents} onRowClick={handleTableRowClick} />
 
     {#if filteredIntents.length > PAGE_SIZE}
       <div class="pagination" aria-label="Deployment history pagination">
@@ -390,4 +473,77 @@
     cursor: not-allowed;
     opacity: 0.55;
   }
+
+  :global(.rollback-btn) {
+    border: 1px solid var(--border-color, #2a2a4a);
+    background: var(--card-bg, #1a1a2e);
+    color: var(--text-primary, #e5e7eb);
+    border-radius: 0.375rem;
+    padding: 0.3rem 0.6rem;
+    cursor: pointer;
+  }
+
+  :global(.rollback-btn:hover) {
+    border-color: var(--primary, #6366f1);
+  }
+
+  .rollback-body {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+  }
+
+  .rollback-option {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .rollback-error {
+    color: var(--error);
+    font-size: 0.875rem;
+    margin: 0;
+  }
 </style>
+
+<ConfirmDialog
+  bind:open={rollbackOpen}
+  title="Confirm Rollback"
+  confirmLabel="Create Rollback Intent"
+  loading={rollbackSubmitting}
+  onConfirm={handleRollbackConfirm}
+  onCancel={() => { rollbackOpen = false; rollbackError = null; }}
+  onClose={() => { rollbackOpen = false; rollbackError = null; }}
+>
+  <div class="rollback-body">
+    <p>
+      {#if rollbackIntent}
+        Roll back <strong>{rollbackIntent.service_name}</strong> in <strong>{rollbackIntent.environment_name}</strong>.
+      {/if}
+    </p>
+
+    <label class="rollback-option">
+      <input type="radio" name="rollback-target-history" bind:group={rollbackTargetMode} value="previous" />
+      Previous successful version (automatic)
+    </label>
+
+    <label class="rollback-option">
+      <input type="radio" name="rollback-target-history" bind:group={rollbackTargetMode} value="artifact" />
+      Specific artifact
+    </label>
+
+    {#if rollbackTargetMode === 'artifact'}
+      <Select
+        id="rollback-artifact-history"
+        bind:value={rollbackArtifactId}
+        options={rollbackArtifactOptions}
+        placeholder={rollbackArtifactOptions.length > 0 ? 'Select artifact' : 'No artifacts available'}
+        disabled={rollbackSubmitting || rollbackArtifactOptions.length === 0}
+      />
+    {/if}
+
+    {#if rollbackError}
+      <p class="rollback-error">{rollbackError}</p>
+    {/if}
+  </div>
+</ConfirmDialog>

@@ -97,6 +97,15 @@
   });
   const COST_ESTIMATE_UNAVAILABLE_COPY = 'Cost estimate unavailable before run creation: the current API estimates cost from a deployment run ID, which does not exist until after an intent is approved and executed.';
 
+  // Rollback modal state
+  let rollbackOpen = $state(false);
+  let rollingBack = $state(false);
+  let rollbackError = $state(null);
+  let rollbackForm = $state({
+    environment_id: '',
+    mode: 'previous',
+    artifact_id: ''
+  });
   // Secret create modal state
   let secretCreateOpen = $state(false);
   let secretCreating = $state(false);
@@ -392,6 +401,54 @@
     }
   }
 
+  function openRollbackModal() {
+    rollbackForm = {
+      environment_id: '',
+      mode: 'previous',
+      artifact_id: ''
+    };
+    rollbackError = null;
+    rollbackOpen = true;
+  }
+
+  function closeRollbackModal() {
+    if (rollingBack) return;
+    rollbackOpen = false;
+    rollbackError = null;
+  }
+
+  async function handleRollback() {
+    if (!rollbackForm.environment_id) {
+      rollbackError = 'Select an environment';
+      return;
+    }
+
+    if (rollbackForm.mode === 'artifact' && !rollbackForm.artifact_id) {
+      rollbackError = 'Select an artifact target';
+      return;
+    }
+
+    rollingBack = true;
+    rollbackError = null;
+
+    try {
+      if (rollbackForm.mode === 'previous') {
+        await api.rollback({
+          service_id: serviceId,
+          environment_id: rollbackForm.environment_id
+        });
+      } else {
+        await api.createIntent(serviceId, rollbackForm.environment_id, rollbackForm.artifact_id);
+      }
+      rollbackOpen = false;
+      goto('/deployments');
+    } catch (err) {
+      rollbackError = err.message || 'Failed to create rollback intent';
+    } finally {
+      rollingBack = false;
+    }
+  }
+
   async function handleDelete() {
     deleting = true;
     deleteError = null;
@@ -678,6 +735,8 @@
   })));
   let selectedDeployEnvironment = $derived(environments.find(environment => environment.id === deployForm.environment_id));
   let selectedDeployArtifact = $derived(artifacts.find(artifact => artifact.id === deployForm.artifact_id));
+  let selectedRollbackEnvironment = $derived(environments.find(environment => environment.id === rollbackForm.environment_id));
+  let selectedRollbackArtifact = $derived(artifacts.find(artifact => artifact.id === rollbackForm.artifact_id));
   let selectedDeployArtifactBuild = $derived.by(() => {
     if (!selectedDeployArtifact) return null;
     const buildId = selectedDeployArtifact.build_id || selectedDeployArtifact.metadata?.build_id;
@@ -721,6 +780,9 @@
       <div class="actions">
         <LoadingButton variant="primary" onclick={openDeployModal}>
           Deploy
+        </LoadingButton>
+        <LoadingButton variant="secondary" onclick={openRollbackModal}>
+          Rollback
         </LoadingButton>
         <LoadingButton variant="secondary" onclick={openEditModal}>
           Edit
@@ -1107,6 +1169,83 @@
     </div>
   </form>
 </Modal>
+
+<!-- Rollback Modal -->
+<ConfirmDialog
+  bind:open={rollbackOpen}
+  title="Confirm Rollback"
+  confirmLabel="Create Rollback Intent"
+  loading={rollingBack}
+  onConfirm={handleRollback}
+  onCancel={closeRollbackModal}
+  onClose={closeRollbackModal}
+>
+  <div class="delete-content">
+    <p>
+      Roll back <strong>{service?.name}</strong>.
+    </p>
+
+    <div class="form-field">
+      <label for="rollback-environment">Environment *</label>
+      <Select
+        id="rollback-environment"
+        bind:value={rollbackForm.environment_id}
+        options={deployEnvironmentOptions}
+        placeholder={environments.length > 0 ? 'Select environment' : 'No environments available'}
+        disabled={rollingBack || environments.length === 0}
+      />
+    </div>
+
+    <label class="rollback-option">
+      <input type="radio" name="rollback-target-service" bind:group={rollbackForm.mode} value="previous" />
+      Previous successful version (automatic)
+    </label>
+
+    <label class="rollback-option">
+      <input type="radio" name="rollback-target-service" bind:group={rollbackForm.mode} value="artifact" />
+      Specific artifact
+    </label>
+
+    {#if rollbackForm.mode === 'artifact'}
+      <div class="form-field">
+        <label for="rollback-artifact-service">Artifact *</label>
+        <Select
+          id="rollback-artifact-service"
+          bind:value={rollbackForm.artifact_id}
+          options={deployArtifactOptions}
+          placeholder={artifacts.length > 0 ? 'Select artifact' : 'No artifacts registered'}
+          disabled={rollingBack || artifacts.length === 0}
+        />
+      </div>
+    {/if}
+
+    {#if selectedRollbackEnvironment || selectedRollbackArtifact}
+      <div class="deploy-summary">
+        <h3>Rollback Target</h3>
+        <dl>
+          <div>
+            <dt>Environment</dt>
+            <dd>{selectedRollbackEnvironment ? environmentDisplayName(selectedRollbackEnvironment) : 'Select an environment'}</dd>
+          </div>
+          <div>
+            <dt>Mode</dt>
+            <dd>{rollbackForm.mode === 'previous' ? 'Previous successful version' : 'Specific artifact'}</dd>
+          </div>
+          {#if rollbackForm.mode === 'artifact'}
+            <div>
+              <dt>Artifact</dt>
+              <dd>{selectedRollbackArtifact ? artifactOptionLabel(selectedRollbackArtifact) : 'Select an artifact'}</dd>
+            </div>
+          {/if}
+        </dl>
+      </div>
+    {/if}
+
+    {#if rollbackError}
+      <p class="error">{rollbackError}</p>
+    {/if}
+  </div>
+</ConfirmDialog>
 
 <!-- Secret Create Modal -->
 <Modal bind:open={secretCreateOpen} title="Add Secret" onClose={closeSecretCreateModal}>
@@ -1613,6 +1752,12 @@
   }
   .status-dot.pass { background: #2e7d32; }
   .status-dot.fail { background: #c62828; }
+  .rollback-option {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.875rem;
+  }
   @media (max-width: 720px) {
     .preview-grid {
       grid-template-columns: 1fr;

@@ -170,6 +170,25 @@ test.describe('Service Detail Edit/Delete Actions', () => {
       });
     });
 
+    await page.route('**/api/v1/rollback', async (route) => {
+      expect(route.request().headers().authorization).toMatch(/^Nostr\s+/);
+      const body = route.request().postDataJSON();
+      return route.fulfill({
+        status: 201,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          data: {
+            id: 'intent-rollback',
+            ...body,
+            source_kind: 'rollback',
+            approval_status: 'pending',
+            status: 'pending',
+            created_at: '2026-05-02T12:05:00.000Z'
+          }
+        })
+      });
+    });
+
   });
 
   test('opens edit modal with pre-populated values and saves', async ({ page }) => {
@@ -239,6 +258,30 @@ test.describe('Service Detail Edit/Delete Actions', () => {
       environment_id: 'env-prod',
       artifact_id: 'artifact-1'
     });
+    await expect(page).toHaveURL(/\/deployments$/);
+  });
+
+  test('opens rollback modal and creates rollback intent using previous version', async ({ page }) => {
+    await page.goto('/services/svc-1');
+    await expect(page.getByRole('heading', { name: 'api-service' })).toBeVisible();
+
+    await page.getByRole('button', { name: 'Rollback' }).click();
+    const dialog = page.getByRole('dialog', { name: 'Confirm Rollback' });
+    await expect(dialog).toBeVisible();
+
+    await dialog.locator('#rollback-environment').selectOption('env-prod');
+
+    const rollbackRequestPromise = page.waitForRequest(
+      (request) => request.method() === 'POST' && request.url().endsWith('/api/v1/rollback')
+    );
+    await dialog.getByRole('button', { name: 'Create Rollback Intent' }).click();
+
+    const rollbackPayload = (await rollbackRequestPromise).postDataJSON();
+    expect(rollbackPayload).toEqual({
+      service_id: 'svc-1',
+      environment_id: 'env-prod'
+    });
+
     await expect(page).toHaveURL(/\/deployments$/);
   });
 

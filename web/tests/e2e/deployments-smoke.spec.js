@@ -130,6 +130,42 @@ test.beforeEach(async ({ page }) => {
       body: JSON.stringify({ data: { status: 'rejected' } })
     });
   });
+
+  await page.route('**/api/v1/services/*/artifacts', (route) => {
+    const url = route.request().url();
+    if (url.includes('/services/service-1/artifacts')) {
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          data: [
+            { id: 'artifact-rollback-1', image_tag: 'v1.2.0' },
+            { id: 'artifact-rollback-2', image_tag: 'v1.1.0' }
+          ]
+        })
+      });
+    }
+    return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data: [] }) });
+  });
+
+  await page.route('**/api/v1/deployments/intents', (route) => {
+    if (route.request().method() !== 'POST') {
+      return route.fallback();
+    }
+    return route.fulfill({
+      status: 201,
+      contentType: 'application/json',
+      body: JSON.stringify({ data: { id: 'intent-created' } })
+    });
+  });
+
+  await page.route('**/api/v1/rollback', (route) => {
+    return route.fulfill({
+      status: 201,
+      contentType: 'application/json',
+      body: JSON.stringify({ data: { id: 'intent-rollback' } })
+    });
+  });
   
 });
 
@@ -356,6 +392,30 @@ test.describe('Deployment Run Details Page', () => {
 });
 
 test.describe('Deployment History Page', () => {
+  test('should open rollback modal and create rollback intent for specific artifact', async ({ page }) => {
+    await page.goto('/deployments');
+    await page.waitForLoadState('networkidle');
+
+    await page.getByRole('button', { name: 'Rollback' }).first().click();
+    const dialog = page.getByRole('dialog', { name: 'Confirm Rollback' });
+    await expect(dialog).toBeVisible();
+
+    await dialog.getByLabel('Specific artifact').check();
+    await dialog.locator('#rollback-artifact-history').selectOption('artifact-rollback-2');
+
+    const createRequestPromise = page.waitForRequest(
+      (request) => request.method() === 'POST' && request.url().endsWith('/api/v1/deployments/intents')
+    );
+    await dialog.getByRole('button', { name: 'Create Rollback Intent' }).click();
+
+    const payload = (await createRequestPromise).postDataJSON();
+    expect(payload).toEqual({
+      service_id: 'service-1',
+      environment_id: 'env-1',
+      artifact_id: 'artifact-rollback-2'
+    });
+  });
+
   test('should show status/service/environment/date filters and pagination on /deployments', async ({ page }) => {
     const pagedIntents = Array.from({ length: 30 }, (_, index) => ({
       id: `intent-page-${index + 1}`,
