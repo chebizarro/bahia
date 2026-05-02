@@ -195,6 +195,35 @@ describe('BahiaClient - Retry and Edge Coverage', () => {
     expect(result).toEqual([]);
   });
 
+  it('getSystemInfo requests the system info endpoint', async () => {
+    const payload = { version: '1.2.3', environment: 'dev' };
+    global.fetch.mockResolvedValueOnce({
+      ok: true,
+      headers: new Map([['content-type', 'application/json']]),
+      json: async () => ({ data: payload })
+    });
+
+    const result = await client.getSystemInfo();
+
+    expect(global.fetch).toHaveBeenCalledWith('/api/v1/system/info', expect.any(Object));
+    expect(result).toEqual(payload);
+  });
+
+  it('listBlossomBlobs sends pubkey payload when provided', async () => {
+    global.fetch.mockResolvedValueOnce({
+      ok: true,
+      headers: new Map([['content-type', 'application/json']]),
+      json: async () => ({ data: [] })
+    });
+
+    await client.listBlossomBlobs('npub1abc');
+
+    expect(global.fetch).toHaveBeenCalledWith(
+      '/api/v1/blossom/list',
+      expect.objectContaining({ method: 'POST', body: JSON.stringify({ pubkey: 'npub1abc' }) })
+    );
+  });
+
   it('listBlossomBlobs sends empty body when pubkey is omitted', async () => {
     global.fetch.mockResolvedValueOnce({
       ok: true,
@@ -208,6 +237,45 @@ describe('BahiaClient - Retry and Edge Coverage', () => {
       '/api/v1/blossom/list',
       expect.objectContaining({ method: 'POST', body: JSON.stringify({}) })
     );
+  });
+
+  it('getBlossomServers defaults to [] when backend returns null', async () => {
+    global.fetch.mockResolvedValueOnce({
+      ok: true,
+      headers: new Map([['content-type', 'application/json']]),
+      json: async () => ({ data: null })
+    });
+
+    const result = await client.getBlossomServers();
+
+    expect(global.fetch).toHaveBeenCalledWith('/api/v1/blossom/servers', expect.any(Object));
+    expect(result).toEqual([]);
+  });
+
+  it('checkBlossomHealth defaults to {} when backend returns null', async () => {
+    global.fetch.mockResolvedValueOnce({
+      ok: true,
+      headers: new Map([['content-type', 'application/json']]),
+      json: async () => ({ data: null })
+    });
+
+    const result = await client.checkBlossomHealth();
+
+    expect(global.fetch).toHaveBeenCalledWith('/api/v1/blossom/health', expect.any(Object));
+    expect(result).toEqual({});
+  });
+
+  it('getBlossomStats defaults to {} when backend returns null', async () => {
+    global.fetch.mockResolvedValueOnce({
+      ok: true,
+      headers: new Map([['content-type', 'application/json']]),
+      json: async () => ({ data: null })
+    });
+
+    const result = await client.getBlossomStats();
+
+    expect(global.fetch).toHaveBeenCalledWith('/api/v1/blossom/stats', expect.any(Object));
+    expect(result).toEqual({});
   });
 
   it('organization member/invite methods call expected paths', async () => {
