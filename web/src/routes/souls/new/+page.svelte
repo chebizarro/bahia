@@ -169,8 +169,8 @@
       // Publish to relays
       publishResults = await nostr.publish(signedEvent);
       
-      // Check if any relay accepted the event
-      const successfulPublish = publishResults.some(result => result.sent === true);
+      // Check if any relay accepted the event via OK
+      const successfulPublish = publishResults.some(result => result.accepted === true);
       
       if (!successfulPublish) {
         // Clean up tracking if publish failed
@@ -178,7 +178,20 @@
           provisioningCleanup();
           provisioningCleanup = null;
         }
-        throw new Error('No connected relays available for publishing');
+
+        if (publishResults.length === 0) {
+          throw new Error('No connected relays available for publishing');
+        }
+
+        const relayErrors = publishResults
+          .map((result) => {
+            const relayName = result.relay || 'relay';
+            const details = result.message || (result.sent ? 'event rejected' : 'send failed');
+            return `${relayName}: ${details}`;
+          })
+          .join('; ');
+
+        throw new Error(`Provisioning request was not accepted by any relay. ${relayErrors}`);
       }
       
       // Move to step 4
@@ -484,7 +497,7 @@
           </div>
           <div class="detail-row">
             <span class="label">Published to:</span>
-            <span>{publishResults.filter(r => r.sent).length} relay(s)</span>
+            <span>{publishResults.filter(r => r.accepted).length} relay(s)</span>
           </div>
         </div>
       </div>

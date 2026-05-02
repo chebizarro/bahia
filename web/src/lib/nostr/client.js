@@ -222,6 +222,7 @@ export class NostrClient {
     this.reconnectAttempts = new Map();
     this.reconnectTimers = new Map();
     this.manuallyDisconnected = false;
+    this.pendingPublishes = new Map();
   }
 
   // Calculate exponential backoff delay
@@ -300,6 +301,7 @@ export class NostrClient {
         this.sockets.delete(url);
         this.connectionStatus.update(s => ({ ...s, [url]: 'disconnected' }));
         this.updateConnectedStatus();
+        this.rejectPendingPublishesForRelay(url, 'relay connection closed');
         this.notifyRelayClosed(url, 'relay connection closed');
         if (!this.manuallyDisconnected) {
           this.scheduleReconnect(url);
@@ -371,30 +373,35 @@ export class NostrClient {
   handleMessage(relay, data) {
     try {
       const msg = JSON.parse(data);
-      const [type, subId, ...rest] = msg;
+      const [type] = msg;
 
       switch (type) {
-        case 'EVENT':
-          const event = rest[0];
+        case 'EVENT': {
+          const [, subId, event] = msg;
           const sub = this.subscriptions.get(subId);
           if (sub && sub.onEvent) {
             sub.onEvent(event, relay);
           }
           break;
+        }
 
-        case 'EOSE':
+        case 'EOSE': {
+          const [, subId] = msg;
           const subEose = this.subscriptions.get(subId);
           if (subEose && subEose.onEose) {
             subEose.onEose(relay);
           }
           break;
+        }
 
-        case 'OK':
-          const [eventId, success, message] = rest;
+        case 'OK': {
+          const [, eventId, accepted, message] = msg;
+          this.handleOk(relay, eventId, accepted, message);
           break;
+        }
 
         case 'CLOSED': {
-          const reason = rest[0] || '';
+          const [, subId, reason = ''] = msg;
           const subClosed = this.subscriptions.get(subId);
           if (subClosed && subClosed.onClosed) {
             subClosed.onClosed(reason, relay);
@@ -403,11 +410,31 @@ export class NostrClient {
         }
 
         case 'NOTICE':
-          console.log(`[nostr] Notice from ${relay}:`, rest[0]);
+          console.log(`[nostr] Notice from ${relay}:`, msg[1]);
           break;
       }
     } catch (err) {
       console.error('[nostr] Failed to parse message:', err);
+    }
+  }
+
+  handleOk(relay, eventId, accepted, message = '') {
+    const pendingByRelay = this.pendingPublishes.get(eventId);
+    if (!pendingByRelay) return;
+
+    const pending = pendingByRelay.get(relay);
+    if (!pending) return;
+
+    pendingByRelay.delete(relay);
+    pending.resolve({
+      relay,
+      sent: true,
+      accepted: accepted === true,
+      message: typeof message === 'string' ? message : ''
+    });
+
+    if (pendingByRelay.size === 0) {
+      this.pendingPublishes.delete(eventId);
     }
   }
 
@@ -538,25 +565,76 @@ export class NostrClient {
     });
   }
 
-  // Publish an event
+  rejectPendingPublishesForRelay(relay, message) {
+    this.pendingPublishes.forEach((pendingByRelay, eventId) => {
+      const relaysToReject = relay ? [relay] : Array.from(pendingByRelay.keys());
+
+      relaysToReject.forEach((relayUrl) => {
+        const pending = pendingByRelay.get(relayUrl);
+        if (!pending) return;
+
+        pendingByRelay.delete(relayUrl);
+        pending.resolve({
+          relay: relayUrl,
+          sent: false,
+          accepted: false,
+          message: message || 'relay connection closed'
+        });
+      });
+
+      if (pendingByRelay.size === 0) {
+        this.pendingPublishes.delete(eventId);
+      }
+    });
+  }
+
+  // Publish an event and wait for per-relay OK/CLOSED outcomes.
   async publish(event) {
+    if (!event?.id) {
+      throw new Error('Cannot publish event without id');
+    }
+
     const msg = JSON.stringify(['EVENT', event]);
-    const results = [];
+    const pendingByRelay = new Map();
+    const promises = [];
 
     this.sockets.forEach((ws, url) => {
-      if (ws.readyState === WebSocket.OPEN) {
+      if (ws.readyState !== WebSocket.OPEN) return;
+
+      let resolvePending;
+      const relayPromise = new Promise((resolve) => {
+        resolvePending = resolve;
+      });
+
+      pendingByRelay.set(url, { resolve: resolvePending });
+      promises.push(relayPromise);
+
+      try {
         ws.send(msg);
-        results.push({ relay: url, sent: true });
+      } catch (error) {
+        pendingByRelay.delete(url);
+        resolvePending({
+          relay: url,
+          sent: false,
+          accepted: false,
+          message: error?.message || 'failed to send event'
+        });
       }
     });
 
-    return results;
+    if (pendingByRelay.size === 0) {
+      return [];
+    }
+
+    this.pendingPublishes.set(event.id, pendingByRelay);
+    return Promise.all(promises);
   }
 
   // Close all connections
   disconnect() {
     this.manuallyDisconnected = true;
     this.subscriptions.clear();
+    this.rejectPendingPublishesForRelay('', 'client disconnected');
     
     this.reconnectTimers.forEach(timer => clearTimeout(timer));
     this.reconnectTimers.clear();

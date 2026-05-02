@@ -237,6 +237,56 @@ test.describe('Soul Signing Smoke Test', () => {
     await expect(page.locator('.wizard-progress .progress-step.active:has-text("Repository")')).toBeVisible();
   });
   
+  test('should show relay rejection error when publish is not accepted', async ({ page }) => {
+    await page.addInitScript(() => {
+      class RejectingWebSocket {
+        static CONNECTING = 0;
+        static OPEN = 1;
+        static CLOSED = 3;
+
+        constructor(url) {
+          this.url = url;
+          this.readyState = 1;
+          setTimeout(() => {
+            if (this.onopen) this.onopen({ type: 'open' });
+          }, 10);
+        }
+
+        send(data) {
+          setTimeout(() => {
+            if (!this.onmessage) return;
+            const event = JSON.parse(data);
+            if (Array.isArray(event) && event[0] === 'EVENT') {
+              this.onmessage({ data: JSON.stringify(['OK', event[1]?.id, false, 'auth required']) });
+            }
+          }, 10);
+        }
+
+        close() {
+          this.readyState = 3;
+          if (this.onclose) this.onclose({ type: 'close' });
+        }
+      }
+
+      window.WebSocket = RejectingWebSocket;
+    });
+
+    await page.goto('/souls/new');
+    await page.waitForLoadState('domcontentloaded');
+
+    await page.click('button:has-text("Continue")');
+    await page.click('button:has-text("Continue")');
+
+    await page.fill('#agentName', 'Reject Agent');
+    await page.fill('#agentId', 'reject-agent');
+    await page.fill('#brief', 'Should fail due to relay rejection');
+
+    await page.click('button:has-text("Provision Soul")');
+
+    await expect(page.locator('.error-banner')).toContainText('not accepted by any relay');
+    await expect(page.locator('.wizard-progress .progress-step.active:has-text("Configure")')).toBeVisible();
+  });
+
   test('should include provisioning request tags', async ({ page }) => {
     let capturedEvent = null;
     

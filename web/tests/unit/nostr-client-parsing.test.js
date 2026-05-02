@@ -87,6 +87,57 @@ describe('Nostr Client - Parsing Functions', () => {
     });
   });
 
+  describe('publish', () => {
+    it('resolves relay publish result using OK acceptance', async () => {
+      const client = new NostrClient({ relays: [] });
+      const socket = { readyState: WebSocket.OPEN, send: vi.fn() };
+      client.sockets.set('wss://relay.example', socket);
+
+      const publishPromise = client.publish({ id: 'evt-1', kind: 5950, tags: [], content: '' });
+
+      expect(socket.send).toHaveBeenCalledWith(expect.stringContaining('"EVENT"'));
+
+      client.handleMessage('wss://relay.example', JSON.stringify(['OK', 'evt-1', true, 'accepted']));
+
+      await expect(publishPromise).resolves.toEqual([
+        { relay: 'wss://relay.example', sent: true, accepted: true, message: 'accepted' }
+      ]);
+    });
+
+    it('returns rejected result when relay rejects event', async () => {
+      const client = new NostrClient({ relays: [] });
+      const socket = { readyState: WebSocket.OPEN, send: vi.fn() };
+      client.sockets.set('wss://relay.example', socket);
+
+      const publishPromise = client.publish({ id: 'evt-2', kind: 5950, tags: [], content: '' });
+      client.handleMessage('wss://relay.example', JSON.stringify(['OK', 'evt-2', false, 'auth required']));
+
+      await expect(publishPromise).resolves.toEqual([
+        { relay: 'wss://relay.example', sent: true, accepted: false, message: 'auth required' }
+      ]);
+    });
+
+    it('returns send failure if relay closes before OK', async () => {
+      const client = new NostrClient({ relays: [] });
+      const socket = { readyState: WebSocket.OPEN, send: vi.fn() };
+      client.sockets.set('wss://relay.example', socket);
+
+      const publishPromise = client.publish({ id: 'evt-3', kind: 5950, tags: [], content: '' });
+      client.rejectPendingPublishesForRelay('wss://relay.example', 'relay connection closed');
+
+      await expect(publishPromise).resolves.toEqual([
+        { relay: 'wss://relay.example', sent: false, accepted: false, message: 'relay connection closed' }
+      ]);
+    });
+
+    it('throws when publishing unsigned event without id', async () => {
+      const client = new NostrClient({ relays: [] });
+      await expect(client.publish({ kind: 5950, tags: [], content: '' })).rejects.toThrow(
+        'Cannot publish event without id'
+      );
+    });
+  });
+
   describe('parseSoulEvent', () => {
     it('should parse minimal soul event with defaults', () => {
       const event = {
