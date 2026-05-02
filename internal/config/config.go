@@ -40,11 +40,13 @@ type Config struct {
 // LLMControlplaneConfig holds DB-first LLM provisioning control-plane settings.
 type LLMControlplaneConfig struct {
 	Enabled                 bool                                `koanf:"enabled"`
+	AllowOperationalREST    bool                                `koanf:"allow_operational_rest"`
 	DefaultGatewayRef       string                              `koanf:"default_gateway_ref"`
 	CoordinatorPollInterval time.Duration                       `koanf:"coordinator_poll_interval"`
 	StaleRunTimeout         time.Duration                       `koanf:"stale_run_timeout"`
 	ReconcileInterval       time.Duration                       `koanf:"reconcile_interval"`
 	Gateways                map[string]LLMGatewayEndpointConfig `koanf:"gateways"`
+	OperatorAccessConfig    `koanf:",squash"`
 }
 
 // LLMGatewayEndpointConfig describes one inference gateway admin endpoint.
@@ -370,6 +372,7 @@ func Defaults() *Config {
 		},
 		LLM: LLMControlplaneConfig{
 			Enabled:                 false,
+			AllowOperationalREST:    false,
 			CoordinatorPollInterval: 5 * time.Second,
 			StaleRunTimeout:         15 * time.Minute,
 			ReconcileInterval:       60 * time.Second,
@@ -545,6 +548,20 @@ func (c *Config) validate() error {
 }
 
 func (c *Config) validateLLM() error {
+	if c.LLM.AllowOperationalREST {
+		if !c.Auth.Enabled {
+			return fmt.Errorf("config validation failed: auth.enabled=true is required when llm.allow_operational_rest=true")
+		}
+		if strings.TrimSpace(c.Auth.JWTSecret) == "" && !c.Auth.NIP98Enabled {
+			return fmt.Errorf("config validation failed: auth.jwt_secret or auth.nip98_enabled=true is required when llm.allow_operational_rest=true")
+		}
+		if c.LLM.OperatorAccessConfig.Empty() {
+			return fmt.Errorf("config validation failed: llm operator allowlist is required when llm.allow_operational_rest=true")
+		}
+		if !c.LLM.Enabled {
+			return fmt.Errorf("config validation failed: llm.enabled=true is required when llm.allow_operational_rest=true")
+		}
+	}
 	if !c.LLM.Enabled {
 		return nil
 	}

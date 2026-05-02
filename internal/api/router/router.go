@@ -140,7 +140,7 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 	systemH := handlers.NewSystemHandler(deps.Config, handlers.WithSystemMCPTransport(deps.MCP != nil))
 	var llmH *handlers.LLMHandler
 	if deps.LLMRegistry != nil {
-		llmH = handlers.NewLLMHandler(deps.LLMRegistry, deps.Workers)
+		llmH = handlers.NewLLMHandler(deps.LLMRegistry)
 	}
 
 	var logsH *handlers.LogHandler
@@ -348,13 +348,7 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 			if llmH != nil {
 				r.Post("/llm/routes", llmH.CreateRoute)
 				r.Put("/llm/routes/{id}", llmH.UpdateRoute)
-				r.Post("/llm/hosts", llmH.RegisterHost)
 				r.Post("/llm/routes/{routeId}/releases", llmH.CreateRelease)
-				r.Post("/llm/intents", llmH.CreateIntent)
-				r.Post("/llm/intents/{id}/approve", llmH.ApproveIntent)
-				r.Post("/llm/intents/{id}/reject", llmH.RejectIntent)
-				r.Post("/llm/rollback", llmH.Rollback)
-				r.Post("/llm/observations", llmH.RecordObservation)
 			}
 
 			// Deployment Runs (write)
@@ -429,6 +423,20 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 			})
 		}
 
+		if llmOperationalRESTEnabled(deps.Config) && deps.LLMRegistry != nil {
+			llmCompatH := handlers.NewLLMHandler(deps.LLMRegistry, deps.Workers)
+			r.Group(func(r chi.Router) {
+				r.Use(middleware.RateLimit(writeLimiter))
+				r.Use(middleware.RequireOperator(operatorAccessMiddlewareConfig(deps.Config.LLM.OperatorAccessConfig, authMiddleware.NIP05Resolver)))
+				r.Post("/llm/intents", llmCompatH.CreateIntent)
+				r.Post("/llm/intents/{id}/approve", llmCompatH.ApproveIntent)
+				r.Post("/llm/intents/{id}/reject", llmCompatH.RejectIntent)
+				r.Post("/llm/rollback", llmCompatH.Rollback)
+				r.Post("/llm/hosts", llmCompatH.RegisterHost)
+				r.Post("/llm/observations", llmCompatH.RecordObservation)
+			})
+		}
+
 		if adoptionEnabled(deps.Config) {
 			r.Group(func(r chi.Router) {
 				r.Use(middleware.RequireOperator(operatorAccessMiddlewareConfig(deps.Config.Adoption.OperatorAccessConfig, authMiddleware.NIP05Resolver)))
@@ -477,6 +485,10 @@ func adoptionEnabled(cfg *config.Config) bool {
 
 func directRuntimeEnabled(cfg *config.Config) bool {
 	return cfg != nil && cfg.DirectRuntime.Enabled
+}
+
+func llmOperationalRESTEnabled(cfg *config.Config) bool {
+	return cfg != nil && cfg.LLM.AllowOperationalREST
 }
 
 func operatorAccessMiddlewareConfig(cfg config.OperatorAccessConfig, resolver *auth.NIP05Resolver) middleware.OperatorAccessConfig {

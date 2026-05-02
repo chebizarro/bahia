@@ -49,6 +49,9 @@ func TestDefaults(t *testing.T) {
 	if cfg.DirectRuntime.Enabled {
 		t.Error("expected direct runtime actions disabled by default")
 	}
+	if cfg.LLM.AllowOperationalREST {
+		t.Error("expected LLM operational REST disabled by default")
+	}
 	if cfg.Auth.NIP98Enabled {
 		t.Error("expected NIP-98 auth disabled by default")
 	}
@@ -411,6 +414,41 @@ func TestPrivilegedRouteConfigValidation(t *testing.T) {
 		}
 	})
 
+	t.Run("LLM operational REST requires auth", func(t *testing.T) {
+		cfg := Defaults()
+		cfg.LLM.Enabled = true
+		cfg.LLM.AllowOperationalREST = true
+		cfg.LLM.AllowedSubjects = []string{"ops"}
+		err := cfg.validate()
+		if err == nil || !strings.Contains(err.Error(), "auth.enabled=true") {
+			t.Fatalf("validate error = %v, want auth requirement", err)
+		}
+	})
+
+	t.Run("LLM operational REST requires allowlist", func(t *testing.T) {
+		cfg := Defaults()
+		cfg.Auth.Enabled = true
+		cfg.Auth.JWTSecret = "secret"
+		cfg.LLM.Enabled = true
+		cfg.LLM.AllowOperationalREST = true
+		err := cfg.validate()
+		if err == nil || !strings.Contains(err.Error(), "llm operator allowlist") {
+			t.Fatalf("validate error = %v, want llm allowlist requirement", err)
+		}
+	})
+
+	t.Run("LLM operational REST requires LLM subsystem", func(t *testing.T) {
+		cfg := Defaults()
+		cfg.Auth.Enabled = true
+		cfg.Auth.JWTSecret = "secret"
+		cfg.LLM.AllowOperationalREST = true
+		cfg.LLM.AllowedSubjects = []string{"ops"}
+		err := cfg.validate()
+		if err == nil || !strings.Contains(err.Error(), "llm.enabled=true") {
+			t.Fatalf("validate error = %v, want llm enabled requirement", err)
+		}
+	})
+
 	t.Run("enabled with auth and allowlists is valid", func(t *testing.T) {
 		cfg := Defaults()
 		cfg.Auth.Enabled = true
@@ -419,6 +457,9 @@ func TestPrivilegedRouteConfigValidation(t *testing.T) {
 		cfg.Adoption.AllowedSubjects = []string{"ops"}
 		cfg.DirectRuntime.Enabled = true
 		cfg.DirectRuntime.AllowedPubkeys = []string{"abcdef"}
+		cfg.LLM.Enabled = true
+		cfg.LLM.AllowOperationalREST = true
+		cfg.LLM.AllowedSubjects = []string{"llm-ops"}
 		if err := cfg.validate(); err != nil {
 			t.Fatalf("validate error = %v", err)
 		}
@@ -481,6 +522,11 @@ direct_runtime_actions:
   enabled: true
   allowed_subjects:
     - runtime-user
+llm:
+  enabled: true
+  allow_operational_rest: true
+  allowed_subjects:
+    - llm-ops
 `)
 	if err := os.WriteFile(path, content, 0o644); err != nil {
 		t.Fatalf("writing temp config: %v", err)
@@ -495,6 +541,9 @@ direct_runtime_actions:
 	}
 	if !cfg.DirectRuntime.Enabled || len(cfg.DirectRuntime.AllowedSubjects) != 1 || cfg.DirectRuntime.AllowedSubjects[0] != "runtime-user" {
 		t.Fatalf("direct runtime config not loaded: %+v", cfg.DirectRuntime)
+	}
+	if !cfg.LLM.AllowOperationalREST || len(cfg.LLM.AllowedSubjects) != 1 || cfg.LLM.AllowedSubjects[0] != "llm-ops" {
+		t.Fatalf("llm operational REST config not loaded: %+v", cfg.LLM)
 	}
 }
 
@@ -616,6 +665,41 @@ func TestPrivilegedFeatureValidationRequiresAuthAndOperatorAllowlists(t *testing
 	directAllowed.DirectRuntime.AllowedPubkeys = []string{"0123456789abcdef"}
 	if err := directAllowed.validate(); err != nil {
 		t.Fatalf("direct runtime with auth and allowlist should validate: %v", err)
+	}
+
+	llmOperationalNoAuth := Defaults()
+	llmOperationalNoAuth.LLM.Enabled = true
+	llmOperationalNoAuth.LLM.AllowOperationalREST = true
+	if err := llmOperationalNoAuth.validate(); err == nil || !strings.Contains(err.Error(), "auth.enabled=true is required when llm.allow_operational_rest=true") {
+		t.Fatalf("llm operational REST without auth error = %v", err)
+	}
+
+	llmOperationalNoAllowlist := Defaults()
+	llmOperationalNoAllowlist.Auth.Enabled = true
+	llmOperationalNoAllowlist.Auth.NIP98Enabled = true
+	llmOperationalNoAllowlist.LLM.Enabled = true
+	llmOperationalNoAllowlist.LLM.AllowOperationalREST = true
+	if err := llmOperationalNoAllowlist.validate(); err == nil || !strings.Contains(err.Error(), "llm operator allowlist is required") {
+		t.Fatalf("llm operational REST without allowlist error = %v", err)
+	}
+
+	llmOperationalNoLLM := Defaults()
+	llmOperationalNoLLM.Auth.Enabled = true
+	llmOperationalNoLLM.Auth.NIP98Enabled = true
+	llmOperationalNoLLM.LLM.AllowOperationalREST = true
+	llmOperationalNoLLM.LLM.AllowedPubkeys = []string{"0123456789abcdef"}
+	if err := llmOperationalNoLLM.validate(); err == nil || !strings.Contains(err.Error(), "llm.enabled=true is required") {
+		t.Fatalf("llm operational REST without llm enabled error = %v", err)
+	}
+
+	llmOperationalAllowed := Defaults()
+	llmOperationalAllowed.Auth.Enabled = true
+	llmOperationalAllowed.Auth.NIP98Enabled = true
+	llmOperationalAllowed.LLM.Enabled = true
+	llmOperationalAllowed.LLM.AllowOperationalREST = true
+	llmOperationalAllowed.LLM.AllowedPubkeys = []string{"0123456789abcdef"}
+	if err := llmOperationalAllowed.validate(); err != nil {
+		t.Fatalf("llm operational REST with auth and allowlist should validate: %v", err)
 	}
 }
 

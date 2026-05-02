@@ -17,8 +17,12 @@ type LLMHandler struct {
 	workers  repository.WorkerRepository
 }
 
-func NewLLMHandler(registry *service.LLMRegistryService, workers repository.WorkerRepository) *LLMHandler {
-	return &LLMHandler{registry: registry, workers: workers}
+func NewLLMHandler(registry *service.LLMRegistryService, workers ...repository.WorkerRepository) *LLMHandler {
+	var workerRepo repository.WorkerRepository
+	if len(workers) > 0 {
+		workerRepo = workers[0]
+	}
+	return &LLMHandler{registry: registry, workers: workerRepo}
 }
 
 func (h *LLMHandler) ListRoutes(w http.ResponseWriter, r *http.Request) {
