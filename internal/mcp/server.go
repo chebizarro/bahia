@@ -20,14 +20,14 @@ import (
 // Server provides an MCP-compatible interface for Bahia operations.
 // It exposes deployment registry functionality as MCP tools.
 type Server struct {
-	registry           *service.RegistryService
-	logger             *zap.Logger
-	secretsRepo        repository.SecretRepository   // optional: for secret management tools
-	encryptor          *secrets.Encryptor            // optional: for secret encryption/decryption
-	policies           *service.PolicyService        // optional: for policy management tools
-	notificationRepo   repository.NotificationRepository // optional: for notification tools
-	notificationDisp   *notifications.Dispatcher     // optional: for notification testing
-	workers            repository.WorkerRepository   // optional: for worker management tools
+	registry         *service.RegistryService
+	logger           *zap.Logger
+	secretsRepo      repository.SecretRepository       // optional: for secret management tools
+	encryptor        *secrets.Encryptor                // optional: for secret encryption/decryption
+	policies         *service.PolicyService            // optional: for policy management tools
+	notificationRepo repository.NotificationRepository // optional: for notification tools
+	notificationDisp *notifications.Dispatcher         // optional: for notification testing
+	workers          repository.WorkerRepository       // optional: for worker management tools
 }
 
 // Config holds MCP server configuration.
@@ -39,12 +39,12 @@ type Config struct {
 
 // ServerDeps holds optional dependencies for the MCP server.
 type ServerDeps struct {
-	SecretsRepo          repository.SecretRepository
-	Encryptor            *secrets.Encryptor
-	Policies             *service.PolicyService
-	NotificationRepo     repository.NotificationRepository
+	SecretsRepo            repository.SecretRepository
+	Encryptor              *secrets.Encryptor
+	Policies               *service.PolicyService
+	NotificationRepo       repository.NotificationRepository
 	NotificationDispatcher *notifications.Dispatcher
-	Workers              repository.WorkerRepository
+	Workers                repository.WorkerRepository
 }
 
 // NewServer creates a new MCP server for Bahia.
@@ -442,6 +442,61 @@ func (s *Server) GetTools() []Tool {
 				"required": []string{"artifact_id"},
 			},
 		},
+		{
+			Name:        "bahia_register_artifact",
+			Description: "Register a new artifact",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"build_id": map[string]interface{}{
+						"type":        "string",
+						"description": "Build UUID",
+					},
+					"service_id": map[string]interface{}{
+						"type":        "string",
+						"description": "Service UUID",
+					},
+					"image_repo": map[string]interface{}{
+						"type":        "string",
+						"description": "Container image repository",
+					},
+					"image_tag": map[string]interface{}{
+						"type":        "string",
+						"description": "Container image tag",
+					},
+					"image_digest": map[string]interface{}{
+						"type":        "string",
+						"description": "Container image digest (sha256:...)",
+					},
+					"manifest_media_type": map[string]interface{}{
+						"type":        "string",
+						"description": "OCI manifest media type (optional)",
+					},
+					"size_bytes": map[string]interface{}{
+						"type":        "integer",
+						"description": "Artifact size in bytes (optional)",
+					},
+					"sbom_url": map[string]interface{}{
+						"type":        "string",
+						"description": "SBOM URL (optional)",
+					},
+					"signature_ref": map[string]interface{}{
+						"type":        "string",
+						"description": "Signature reference (optional)",
+					},
+					"scan_status": map[string]interface{}{
+						"type":        "string",
+						"description": "Scan status (optional)",
+						"enum":        []string{"unknown", "pending", "clean", "warning", "failed"},
+					},
+					"metadata": map[string]interface{}{
+						"type":        "object",
+						"description": "Arbitrary artifact metadata (optional)",
+					},
+				},
+				"required": []string{"build_id", "service_id", "image_repo", "image_tag", "image_digest"},
+			},
+		},
 		// Build operations
 		{
 			Name:        "bahia_list_builds",
@@ -474,6 +529,53 @@ func (s *Server) GetTools() []Tool {
 					},
 				},
 				"required": []string{"build_id"},
+			},
+		},
+		{
+			Name:        "bahia_register_build",
+			Description: "Register a new build",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"service_id": map[string]interface{}{
+						"type":        "string",
+						"description": "Service UUID",
+					},
+					"git_sha": map[string]interface{}{
+						"type":        "string",
+						"description": "Git commit SHA",
+					},
+					"git_ref": map[string]interface{}{
+						"type":        "string",
+						"description": "Git reference (branch/tag)",
+					},
+					"ci_system": map[string]interface{}{
+						"type":        "string",
+						"description": "CI system name (optional, default hive-ci)",
+					},
+					"ci_run_id": map[string]interface{}{
+						"type":        "string",
+						"description": "CI run identifier",
+					},
+					"loom_job_id": map[string]interface{}{
+						"type":        "string",
+						"description": "Associated Loom job identifier (optional)",
+					},
+					"status": map[string]interface{}{
+						"type":        "string",
+						"description": "Build status (optional)",
+						"enum":        []string{"queued", "running", "succeeded", "failed", "cancelled"},
+					},
+					"source_event_id": map[string]interface{}{
+						"type":        "string",
+						"description": "Source event identifier (optional)",
+					},
+					"metadata": map[string]interface{}{
+						"type":        "object",
+						"description": "Arbitrary build metadata (optional)",
+					},
+				},
+				"required": []string{"service_id", "git_sha", "git_ref", "ci_run_id"},
 			},
 		},
 		// Observability operations
@@ -1045,11 +1147,15 @@ func (s *Server) CallTool(ctx context.Context, name string, arguments map[string
 		return s.handleListArtifacts(ctx, arguments)
 	case "bahia_get_artifact":
 		return s.handleGetArtifact(ctx, arguments)
+	case "bahia_register_artifact":
+		return s.handleRegisterArtifact(ctx, arguments)
 	// Build operations
 	case "bahia_list_builds":
 		return s.handleListBuilds(ctx, arguments)
 	case "bahia_get_build":
 		return s.handleGetBuild(ctx, arguments)
+	case "bahia_register_build":
+		return s.handleRegisterBuild(ctx, arguments)
 	// Observability operations
 	case "bahia_list_states":
 		return s.handleListStates(ctx, arguments)
@@ -1380,7 +1486,7 @@ func (s *Server) handleUpdateEnvironment(ctx context.Context, args map[string]in
 		ds := domain.DeployStrategy(deployStrategy)
 		// Validate deploy strategy
 		if ds != domain.DeployStrategyReplace && ds != domain.DeployStrategyBlueGreen &&
-		ds != domain.DeployStrategyCanary {
+			ds != domain.DeployStrategyCanary {
 			return errorResult(fmt.Sprintf("invalid deploy_strategy: %s (must be replace, blue_green, or canary)", deployStrategy)), nil
 		}
 		env.DeployStrategy = ds
@@ -1696,6 +1802,83 @@ func (s *Server) handleGetArtifact(ctx context.Context, args map[string]interfac
 	return jsonResult(result)
 }
 
+func (s *Server) handleRegisterArtifact(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
+	buildIDStr, _ := args["build_id"].(string)
+	serviceIDStr, _ := args["service_id"].(string)
+	imageRepo, _ := args["image_repo"].(string)
+	imageTag, _ := args["image_tag"].(string)
+	imageDigest, _ := args["image_digest"].(string)
+	manifestMediaType, _ := args["manifest_media_type"].(string)
+	sbomURL, _ := args["sbom_url"].(string)
+	signatureRef, _ := args["signature_ref"].(string)
+	scanStatus, _ := args["scan_status"].(string)
+	metadata, _ := args["metadata"].(map[string]interface{})
+
+	buildID, err := uuid.Parse(buildIDStr)
+	if err != nil {
+		return errorResult(fmt.Sprintf("invalid build_id: %v", err)), nil
+	}
+	serviceID, err := uuid.Parse(serviceIDStr)
+	if err != nil {
+		return errorResult(fmt.Sprintf("invalid service_id: %v", err)), nil
+	}
+	if err := domain.ValidateRequiredString(imageRepo, "image_repo"); err != nil {
+		return errorResult(err.Error()), nil
+	}
+	if err := domain.ValidateRequiredString(imageTag, "image_tag"); err != nil {
+		return errorResult(err.Error()), nil
+	}
+	if err := domain.ValidateImageDigest(imageDigest); err != nil {
+		return errorResult(err.Error()), nil
+	}
+	if err := domain.ValidateScanStatus(domain.ScanStatus(scanStatus)); err != nil {
+		return errorResult(err.Error()), nil
+	}
+
+	var sizeBytes *int64
+	if size, ok := args["size_bytes"].(float64); ok {
+		sizeInt := int64(size)
+		sizeBytes = &sizeInt
+	}
+
+	artifact := &domain.Artifact{
+		ID:                uuid.New(),
+		BuildID:           buildID,
+		ServiceID:         serviceID,
+		ImageRepo:         imageRepo,
+		ImageTag:          imageTag,
+		ImageDigest:       imageDigest,
+		ManifestMediaType: manifestMediaType,
+		SizeBytes:         sizeBytes,
+		SBOMURL:           sbomURL,
+		SignatureRef:      signatureRef,
+		ScanStatus:        domain.ScanStatus(scanStatus),
+		Metadata:          metadata,
+	}
+
+	if err := s.registry.RegisterArtifact(ctx, artifact); err != nil {
+		return errorResult(fmt.Sprintf("failed to register artifact: %v", err)), nil
+	}
+
+	result := map[string]interface{}{
+		"status":      "created",
+		"artifact_id": artifact.ID.String(),
+		"artifact": map[string]interface{}{
+			"id":                  artifact.ID.String(),
+			"build_id":            artifact.BuildID.String(),
+			"service_id":          artifact.ServiceID.String(),
+			"image_repo":          artifact.ImageRepo,
+			"image_tag":           artifact.ImageTag,
+			"image_digest":        artifact.ImageDigest,
+			"scan_status":         string(artifact.ScanStatus),
+			"signature_ref":       artifact.SignatureRef,
+			"sbom_url":            artifact.SBOMURL,
+			"manifest_media_type": artifact.ManifestMediaType,
+		},
+	}
+	return jsonResult(result)
+}
+
 func (s *Server) handleListBuilds(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
 	serviceIDStr, _ := args["service_id"].(string)
 	limit := 20
@@ -1745,6 +1928,72 @@ func (s *Server) handleGetBuild(ctx context.Context, args map[string]interface{}
 		"ci_system":  build.CISystem,
 		"ci_run_id":  build.CIRunID,
 		"created_at": build.CreatedAt.Format("2006-01-02T15:04:05Z"),
+	}
+	return jsonResult(result)
+}
+
+func (s *Server) handleRegisterBuild(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
+	serviceIDStr, _ := args["service_id"].(string)
+	gitSHA, _ := args["git_sha"].(string)
+	gitRef, _ := args["git_ref"].(string)
+	ciSystem, _ := args["ci_system"].(string)
+	ciRunID, _ := args["ci_run_id"].(string)
+	loomJobID, _ := args["loom_job_id"].(string)
+	status, _ := args["status"].(string)
+	sourceEventID, _ := args["source_event_id"].(string)
+	metadata, _ := args["metadata"].(map[string]interface{})
+
+	serviceID, err := uuid.Parse(serviceIDStr)
+	if err != nil {
+		return errorResult(fmt.Sprintf("invalid service_id: %v", err)), nil
+	}
+	if err := domain.ValidateGitSHA(gitSHA); err != nil {
+		return errorResult(err.Error()), nil
+	}
+	if err := domain.ValidateRequiredString(gitRef, "git_ref"); err != nil {
+		return errorResult(err.Error()), nil
+	}
+	if err := domain.ValidateRequiredString(ciRunID, "ci_run_id"); err != nil {
+		return errorResult(err.Error()), nil
+	}
+	if err := domain.ValidateBuildStatus(domain.BuildStatus(status)); err != nil {
+		return errorResult(err.Error()), nil
+	}
+	if ciSystem == "" {
+		ciSystem = "hive-ci"
+	}
+
+	build := &domain.Build{
+		ID:            uuid.New(),
+		ServiceID:     serviceID,
+		GitSHA:        gitSHA,
+		GitRef:        gitRef,
+		CISystem:      ciSystem,
+		CIRunID:       ciRunID,
+		LoomJobID:     loomJobID,
+		Status:        domain.BuildStatus(status),
+		SourceEventID: sourceEventID,
+		Metadata:      metadata,
+	}
+
+	if err := s.registry.RegisterBuild(ctx, build); err != nil {
+		return errorResult(fmt.Sprintf("failed to register build: %v", err)), nil
+	}
+
+	result := map[string]interface{}{
+		"status":   "created",
+		"build_id": build.ID.String(),
+		"build": map[string]interface{}{
+			"id":              build.ID.String(),
+			"service_id":      build.ServiceID.String(),
+			"git_sha":         build.GitSHA,
+			"git_ref":         build.GitRef,
+			"ci_system":       build.CISystem,
+			"ci_run_id":       build.CIRunID,
+			"status":          string(build.Status),
+			"loom_job_id":     build.LoomJobID,
+			"source_event_id": build.SourceEventID,
+		},
 	}
 	return jsonResult(result)
 }
@@ -2446,17 +2695,17 @@ func workersToMaps(workers []domain.Worker) []map[string]interface{} {
 
 func workerToMap(w *domain.Worker) map[string]interface{} {
 	m := map[string]interface{}{
-		"pubkey":               w.PubKey,
-		"name":                 w.Name,
-		"architecture":         w.Architecture,
-		"max_concurrent_jobs":  w.MaxConcurrentJobs,
-		"current_queue_depth":  w.CurrentQueueDepth,
-		"software":             w.Software,
-		"pricing":              w.Pricing,
-		"status":               string(w.Status),
+		"pubkey":                w.PubKey,
+		"name":                  w.Name,
+		"architecture":          w.Architecture,
+		"max_concurrent_jobs":   w.MaxConcurrentJobs,
+		"current_queue_depth":   w.CurrentQueueDepth,
+		"software":              w.Software,
+		"pricing":               w.Pricing,
+		"status":                string(w.Status),
 		"last_advertisement_at": w.LastAdvertisementAt.Format("2006-01-02T15:04:05Z"),
-		"created_at":           w.CreatedAt.Format("2006-01-02T15:04:05Z"),
-		"updated_at":           w.UpdatedAt.Format("2006-01-02T15:04:05Z"),
+		"created_at":            w.CreatedAt.Format("2006-01-02T15:04:05Z"),
+		"updated_at":            w.UpdatedAt.Format("2006-01-02T15:04:05Z"),
 	}
 	if w.Description != "" {
 		m["description"] = w.Description
