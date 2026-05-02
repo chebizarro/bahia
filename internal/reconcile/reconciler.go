@@ -154,7 +154,10 @@ func (r *Reconciler) reconcileOne(ctx context.Context, currentState *domain.Envi
 					Type:     events.EventDriftDetected,
 					EntityID: currentState.ServiceID.String(),
 					Data: map[string]string{
+						"service_id":      currentState.ServiceID.String(),
+						"environment_id":  currentState.EnvironmentID.String(),
 						"service":         svc.Name,
+						"environment":     env.Name,
 						"desired_digest":  desired.ImageDigest,
 						"observed_digest": obs.ObservedImageDigest,
 					},
@@ -169,5 +172,16 @@ func (r *Reconciler) reconcileOne(ctx context.Context, currentState *domain.Envi
 	currentState.DriftStatus = newDrift
 	currentState.LastReconciledAt = &now
 
-	return r.state.Upsert(ctx, currentState)
+	if err := r.state.Upsert(ctx, currentState); err != nil {
+		return err
+	}
+	r.publisher.Publish(ctx, events.Event{
+		Type:     events.EventEnvironmentServiceStateChanged,
+		EntityID: currentState.ServiceID.String() + ":" + currentState.EnvironmentID.String(),
+		Data: events.ResourceData{
+			ServiceID:     currentState.ServiceID.String(),
+			EnvironmentID: currentState.EnvironmentID.String(),
+		},
+	})
+	return nil
 }

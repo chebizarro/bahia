@@ -26,30 +26,30 @@ import (
 // The 311xx series in internal/adapters/nostr/publisher.go is deprecated.
 const (
 	// Request kinds (5961-5969)
-	KindDeployRequest       = 5961 // Request to deploy a service
-	KindRollbackRequest     = 5962 // Request to rollback a service
-	KindServiceAction       = 5963 // Lifecycle action (scale, restart, stop)
-	KindServiceCreate       = 5964 // Create a new service
-	KindEnvironmentCreate   = 5965 // Create a new environment
-	KindDeploymentApproval  = 5966 // Approve or reject a deployment
-	KindObservationSubmit   = 5967 // Submit runtime observation
-	KindDriftRemediate      = 5968 // Request drift remediation
+	KindDeployRequest      = 5961 // Request to deploy a service
+	KindRollbackRequest    = 5962 // Request to rollback a service
+	KindServiceAction      = 5963 // Lifecycle action (scale, restart, stop)
+	KindServiceCreate      = 5964 // Create a new service
+	KindEnvironmentCreate  = 5965 // Create a new environment
+	KindDeploymentApproval = 5966 // Approve or reject a deployment
+	KindObservationSubmit  = 5967 // Submit runtime observation
+	KindDriftRemediate     = 5968 // Request drift remediation
 
 	// Status kinds (6961-6969)
-	KindDeploymentStatus   = 6961 // Deployment progress updates
-	KindServiceStatus      = 6962 // Service health/state updates
+	KindDeploymentStatus = 6961 // Deployment progress updates
+	KindServiceStatus    = 6962 // Service health/state updates
 
 	// Result kinds (7961-7969)
-	KindDeploymentResult     = 7961 // Final deployment result
-	KindActionResult         = 7962 // Result of a service action
-	KindServiceCreateResult  = 7963 // Service creation result
-	KindEnvCreateResult      = 7964 // Environment creation result
-	KindObservationResult    = 7965 // Observation submission result
-	KindRemediationResult    = 7966 // Drift remediation result
+	KindDeploymentResult    = 7961 // Final deployment result
+	KindActionResult        = 7962 // Result of a service action
+	KindServiceCreateResult = 7963 // Service creation result
+	KindEnvCreateResult     = 7964 // Environment creation result
+	KindObservationResult   = 7965 // Observation submission result
+	KindRemediationResult   = 7966 // Drift remediation result
 
 	// Replaceable registry kinds (3196x series, d-tag indexed)
-	KindServiceState       = 31961 // Replaceable service state (d=service:env)
-	KindServiceRegistry    = 31962 // Replaceable service registry entry (d=service_id)
+	KindServiceState        = 31961 // Replaceable service state (d=service:env)
+	KindServiceRegistry     = 31962 // Replaceable service registry entry (d=service_id)
 	KindEnvironmentRegistry = 31963 // Replaceable environment registry entry (d=env_id)
 )
 
@@ -118,14 +118,14 @@ func NewReactor(config Config, registry *service.RegistryService, pool *nostrpoo
 	if zapLog == nil {
 		zapLog = zap.NewNop()
 	}
-	
+
 	// Use provided pool or create a new one
 	if pool == nil {
 		poolOpts := []nostrpool.RelayPoolOption{}
 		if config.PrivateKey != "" {
 			poolOpts = append(poolOpts, nostrpool.WithPrivateKey(config.PrivateKey))
 		}
-		
+
 		// Copy slices to avoid mutating config's backing array
 		allRelays := make([]string, 0, len(config.Relays)+len(config.PrivateRelays))
 		allRelays = append(allRelays, config.Relays...)
@@ -204,7 +204,7 @@ func (r *Reactor) Run(ctx context.Context) error {
 				r.backoff.Reset()
 				continue
 			}
-			
+
 			r.handleEvent(ctx, ev)
 		}
 	}
@@ -634,18 +634,103 @@ type deployRequest struct {
 
 // --- Event Publishing ---
 
+func (r *Reactor) appendRequestResourceTags(ctx context.Context, tags nostr.Tags, requestEvent *nostr.Event) nostr.Tags {
+	seen := make(map[string]struct{}, len(tags))
+	for _, tag := range tags {
+		if len(tag) >= 2 {
+			seen[tag[0]+"="+tag[1]] = struct{}{}
+		}
+	}
+	add := func(key, value string) {
+		if value == "" {
+			return
+		}
+		dedupeKey := key + "=" + value
+		if _, ok := seen[dedupeKey]; ok {
+			return
+		}
+		seen[dedupeKey] = struct{}{}
+		tags = append(tags, nostr.Tag{key, value})
+	}
+
+	r.mu.Lock()
+	run := r.runs[requestEvent.ID]
+	r.mu.Unlock()
+	if run != nil {
+		add("service", run.ServiceID.String())
+		add("environment", run.EnvironmentID.String())
+		if run.ArtifactID != uuid.Nil {
+			add("artifact", run.ArtifactID.String())
+		}
+		if run.IntentID != nil {
+			add("intent", run.IntentID.String())
+		}
+		add("run", run.ID.String())
+	}
+
+	var content struct {
+		ServiceID     string `json:"service_id"`
+		EnvironmentID string `json:"environment_id"`
+		ArtifactID    string `json:"artifact_id"`
+		IntentID      string `json:"intent_id"`
+		RunID         string `json:"run_id"`
+	}
+	if requestEvent.Content != "" {
+		_ = json.Unmarshal([]byte(requestEvent.Content), &content)
+	}
+	add("service", content.ServiceID)
+	add("environment", content.EnvironmentID)
+	add("artifact", content.ArtifactID)
+	add("intent", content.IntentID)
+	add("run", content.RunID)
+
+	for _, tag := range requestEvent.Tags {
+		if len(tag) < 2 {
+			continue
+		}
+		switch tag[0] {
+		case "service", "environment", "artifact", "intent", "run":
+			add(tag[0], tag[1])
+		}
+	}
+
+	// Approval requests normally provide only an intent tag; enrich with the
+	// referenced resources when possible so consumers can filter result events.
+	if content.IntentID == "" {
+		for _, tag := range tags {
+			if len(tag) >= 2 && tag[0] == "intent" {
+				content.IntentID = tag[1]
+				break
+			}
+		}
+	}
+	if r.registry != nil {
+		if intentID, err := uuid.Parse(content.IntentID); err == nil {
+			if intent, err := r.registry.GetDeploymentIntent(ctx, intentID); err == nil && intent != nil {
+				add("service", intent.ServiceID.String())
+				add("environment", intent.EnvironmentID.String())
+				add("artifact", intent.ArtifactID.String())
+			}
+		}
+	}
+	return tags
+}
+
 // publishStatus publishes a kind:6961 deployment status event.
 func (r *Reactor) publishStatus(ctx context.Context, requestEvent *nostr.Event, step, message string) error {
+	tags := nostr.Tags{
+		{"e", requestEvent.ID, "", "reply"},
+		{"p", requestEvent.PubKey},
+		{"status", "processing"},
+		{"step", step},
+	}
+	tags = r.appendRequestResourceTags(ctx, tags, requestEvent)
+
 	event := &nostr.Event{
 		Kind:      KindDeploymentStatus,
 		CreatedAt: nostr.Now(),
-		Tags: nostr.Tags{
-			{"e", requestEvent.ID, "", "reply"},
-			{"p", requestEvent.PubKey},
-			{"status", "processing"},
-			{"step", step},
-		},
-		Content: message,
+		Tags:      tags,
+		Content:   message,
 	}
 
 	if err := r.signEvent(event); err != nil {
@@ -673,6 +758,9 @@ func (r *Reactor) publishDeploymentResult(ctx context.Context, requestEvent *nos
 			{"e", requestEvent.ID, "", "reply"},
 			{"p", requestEvent.PubKey},
 			{"status", "success"},
+			{"service", intent.ServiceID.String()},
+			{"environment", intent.EnvironmentID.String()},
+			{"artifact", intent.ArtifactID.String()},
 			{"intent", intent.ID.String()},
 		},
 		Content: string(content),
@@ -694,6 +782,7 @@ func (r *Reactor) publishActionResult(ctx context.Context, requestEvent *nostr.E
 		{"action", action},
 		{"status", status},
 	}
+	tags = r.appendRequestResourceTags(ctx, tags, requestEvent)
 
 	content := map[string]interface{}{
 		"action": action,
@@ -727,18 +816,28 @@ func (r *Reactor) publishApprovalResult(ctx context.Context, requestEvent *nostr
 		"intent_id": intentID,
 		"decision":  decision,
 	})
+	tags := nostr.Tags{
+		{"e", requestEvent.ID, "", "reply"},
+		{"p", requestEvent.PubKey},
+		{"status", "success"},
+		{"intent", intentID},
+		{"decision", decision},
+	}
+	if parsedIntentID, err := uuid.Parse(intentID); err == nil {
+		if intent, err := r.registry.GetDeploymentIntent(ctx, parsedIntentID); err == nil && intent != nil {
+			tags = append(tags,
+				nostr.Tag{"service", intent.ServiceID.String()},
+				nostr.Tag{"environment", intent.EnvironmentID.String()},
+				nostr.Tag{"artifact", intent.ArtifactID.String()},
+			)
+		}
+	}
 
 	event := &nostr.Event{
 		Kind:      KindActionResult,
 		CreatedAt: nostr.Now(),
-		Tags: nostr.Tags{
-			{"e", requestEvent.ID, "", "reply"},
-			{"p", requestEvent.PubKey},
-			{"status", "success"},
-			{"intent", intentID},
-			{"decision", decision},
-		},
-		Content: string(content),
+		Tags:      tags,
+		Content:   string(content),
 	}
 
 	if err := r.signEvent(event); err != nil {
@@ -811,17 +910,19 @@ func (r *Reactor) publishEnvironmentCreated(ctx context.Context, requestEvent *n
 
 // publishError publishes a kind:7961 error result event.
 func (r *Reactor) publishError(ctx context.Context, requestEvent *nostr.Event, step, message string) error {
+	tags := nostr.Tags{
+		{"e", requestEvent.ID, "", "reply"},
+		{"p", requestEvent.PubKey},
+		{"status", "error"},
+		{"step", step},
+		{"error", message},
+	}
+	tags = r.appendRequestResourceTags(ctx, tags, requestEvent)
 	event := &nostr.Event{
 		Kind:      KindDeploymentResult,
 		CreatedAt: nostr.Now(),
-		Tags: nostr.Tags{
-			{"e", requestEvent.ID, "", "reply"},
-			{"p", requestEvent.PubKey},
-			{"status", "error"},
-			{"step", step},
-			{"error", message},
-		},
-		Content: message,
+		Tags:      tags,
+		Content:   message,
 	}
 
 	if err := r.signEvent(event); err != nil {
@@ -1025,6 +1126,8 @@ func (r *Reactor) publishObservationResult(ctx context.Context, requestEvent *no
 			{"e", requestEvent.ID, "", "reply"},
 			{"p", requestEvent.PubKey},
 			{"status", "success"},
+			{"service", obs.ServiceID.String()},
+			{"environment", obs.EnvironmentID.String()},
 			{"observation", obs.ID.String()},
 		},
 		Content: string(content),
@@ -1055,8 +1158,16 @@ func (r *Reactor) publishRemediationResult(ctx context.Context, requestEvent *no
 			{"e", requestEvent.ID, "", "reply"},
 			{"p", requestEvent.PubKey},
 			{"status", status},
+			{"service", state.ServiceID.String()},
+			{"environment", state.EnvironmentID.String()},
 		},
 		Content: string(content),
+	}
+	if state.DesiredArtifactID != nil {
+		event.Tags = append(event.Tags, nostr.Tag{"artifact", state.DesiredArtifactID.String()})
+	}
+	if state.DesiredIntentID != nil {
+		event.Tags = append(event.Tags, nostr.Tag{"intent", state.DesiredIntentID.String()})
 	}
 
 	if err := r.signEvent(event); err != nil {
@@ -1080,6 +1191,7 @@ func (r *Reactor) publishStateEvent(ctx context.Context, serviceID, envID uuid.U
 		"service_id":     state.ServiceID.String(),
 		"environment_id": state.EnvironmentID.String(),
 		"drift_status":   string(state.DriftStatus),
+		"deleted":        false,
 		"updated_at":     state.UpdatedAt.Format(time.RFC3339),
 	}
 	if state.DesiredArtifactID != nil {
@@ -1108,9 +1220,19 @@ func (r *Reactor) publishStateEvent(ctx context.Context, serviceID, envID uuid.U
 			{"d", dTag},
 			{"service", serviceID.String()},
 			{"environment", envID.String()},
+			{"deleted", "false"},
 			{"drift_status", string(state.DriftStatus)},
 		},
 		Content: string(contentJSON),
+	}
+	if state.DesiredArtifactID != nil {
+		event.Tags = append(event.Tags, nostr.Tag{"artifact", state.DesiredArtifactID.String()})
+	}
+	if state.DesiredIntentID != nil {
+		event.Tags = append(event.Tags, nostr.Tag{"intent", state.DesiredIntentID.String()})
+	}
+	if state.LastSuccessfulRunID != nil {
+		event.Tags = append(event.Tags, nostr.Tag{"run", state.LastSuccessfulRunID.String()})
 	}
 
 	if err := r.signEvent(event); err != nil {
@@ -1124,6 +1246,7 @@ func (r *Reactor) publishStateEvent(ctx context.Context, serviceID, envID uuid.U
 // PublishServiceRegistry publishes a replaceable kind:31962 service registry event.
 func (r *Reactor) PublishServiceRegistry(ctx context.Context, svc *domain.Service) error {
 	content, _ := json.Marshal(map[string]interface{}{
+		"deleted":        false,
 		"id":             svc.ID.String(),
 		"name":           svc.Name,
 		"repo_url":       svc.RepoURL,
@@ -1139,6 +1262,7 @@ func (r *Reactor) PublishServiceRegistry(ctx context.Context, svc *domain.Servic
 		CreatedAt: nostr.Now(),
 		Tags: nostr.Tags{
 			{"d", svc.ID.String()},
+			{"deleted", "false"},
 			{"name", svc.Name},
 			{"runtime", string(svc.RuntimeType)},
 		},
@@ -1156,6 +1280,7 @@ func (r *Reactor) PublishServiceRegistry(ctx context.Context, svc *domain.Servic
 // PublishEnvironmentRegistry publishes a replaceable kind:31963 environment registry event.
 func (r *Reactor) PublishEnvironmentRegistry(ctx context.Context, env *domain.Environment) error {
 	content, _ := json.Marshal(map[string]interface{}{
+		"deleted":         false,
 		"id":              env.ID.String(),
 		"name":            env.Name,
 		"protected":       env.Protected,
@@ -1169,6 +1294,7 @@ func (r *Reactor) PublishEnvironmentRegistry(ctx context.Context, env *domain.En
 		CreatedAt: nostr.Now(),
 		Tags: nostr.Tags{
 			{"d", env.ID.String()},
+			{"deleted", "false"},
 			{"name", env.Name},
 			{"protected", fmt.Sprintf("%t", env.Protected)},
 		},

@@ -14,8 +14,8 @@ import (
 // Inbound event kinds the subscriber listens for.
 var DefaultInboundKinds = []int{
 	// Hive-CI protocol kinds.
-	5401,  // Hive-CI workflow run request
-	5402,  // Hive-CI workflow result
+	5401, // Hive-CI workflow run request
+	5402, // Hive-CI workflow result
 
 	// Loom protocol kinds.
 	10100, // Worker Advertisement
@@ -25,6 +25,10 @@ var DefaultInboundKinds = []int{
 
 	// Bahia command kinds (31100-31105) — registered by Phase 1 command definitions.
 	31100, 31101, 31102, 31103, 31104, 31105,
+
+	// Canonical Bahia control-plane request kinds (5961-5968). These are
+	// audited here only; the controlplane.Reactor remains the handler of record.
+	5961, 5962, 5963, 5964, 5965, 5966, 5967, 5968,
 }
 
 // EventHandler is called for each inbound event after persistence.
@@ -35,14 +39,14 @@ type EventHandler func(ctx context.Context, ev *nostr.Event)
 // Subscriber connects to Nostr relays and persists inbound events
 // to the nostr_events audit table. It implements app.BackgroundRunner.
 type Subscriber struct {
-	pool         *RelayPool
-	eventRepo    repository.NostrEventRepository
-	kinds        []int
-	handlers     []EventHandler
-	logger       *zap.Logger
-	dedup        *EventDeduplicator
+	pool          *RelayPool
+	eventRepo     repository.NostrEventRepository
+	kinds         []int
+	handlers      []EventHandler
+	logger        *zap.Logger
+	dedup         *EventDeduplicator
 	backfillLimit int // max events to fetch on catch-up (0 = no limit)
-	
+
 	// caughtUp indicates whether EOSE has been received (caught up with stored events).
 	caughtUp atomic.Bool
 }
@@ -85,7 +89,7 @@ func NewSubscriber(
 		kinds:         DefaultInboundKinds,
 		logger:        logger.Named("nostr-subscriber"),
 		dedup:         NewEventDeduplicator(10000), // Default: track last 10k events
-		backfillLimit: 1000, // Default: limit catch-up to 1000 events
+		backfillLimit: 1000,                        // Default: limit catch-up to 1000 events
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -99,20 +103,20 @@ func (s *Subscriber) Name() string { return "nostr-subscriber" }
 // Run implements app.BackgroundRunner. It blocks until ctx is cancelled.
 func (s *Subscriber) Run(ctx context.Context) error {
 	backoff := DefaultBackoff()
-	
+
 	for {
 		err := s.subscribe(ctx)
 		if ctx.Err() != nil {
 			return nil // clean shutdown
 		}
-		
+
 		delay := backoff.Next()
 		s.logger.Warn("subscription ended, reconnecting with backoff",
 			zap.Error(err),
 			zap.Duration("delay", delay),
 			zap.Int("attempt", backoff.Attempt()),
 		)
-		
+
 		select {
 		case <-ctx.Done():
 			return nil
@@ -130,17 +134,17 @@ func (s *Subscriber) IsCaughtUp() bool {
 func (s *Subscriber) subscribe(ctx context.Context) error {
 	// Reset caught-up state on new subscription.
 	s.caughtUp.Store(false)
-	
+
 	filter := nostr.Filter{
 		Kinds: s.kinds,
 		Since: nowTimestamp(),
 	}
-	
+
 	// Apply backfill limit to prevent memory pressure on reconnect.
 	if s.backfillLimit > 0 {
 		filter.Limit = s.backfillLimit
 	}
-	
+
 	filters := []nostr.Filter{filter}
 
 	merged, err := s.pool.SubscribeAllWithEOSE(ctx, filters)
@@ -152,7 +156,7 @@ func (s *Subscriber) subscribe(ctx context.Context) error {
 		zap.Ints("kinds", s.kinds),
 		zap.Strings("relays", s.pool.URLs()),
 	)
-	
+
 	// Note: Backoff should be reset externally after successful subscription.
 	// The caller (Run) doesn't have visibility into this, but the subscription
 	// will run until error, at which point backoff continues from where it was.
@@ -231,10 +235,18 @@ func (s *Subscriber) handleEvent(ctx context.Context, ev *nostr.Event) {
 		)
 	}
 
+	if isCanonicalControlPlaneRequest(ev.Kind) {
+		return
+	}
+
 	// Invoke handlers - only for non-duplicate events.
 	for _, h := range s.handlers {
 		h(ctx, ev)
 	}
+}
+
+func isCanonicalControlPlaneRequest(kind int) bool {
+	return kind >= 5961 && kind <= 5968
 }
 
 func nowTimestamp() *nostr.Timestamp {

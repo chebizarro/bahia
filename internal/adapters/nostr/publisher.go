@@ -15,12 +15,29 @@ import (
 
 // Nostr event kinds for Bahia outbound audit events.
 const (
-	KindBuildRegistered    = 31000
-	KindArtifactRegistered = 31001
-	KindDeploymentCreated  = 31002
-	KindDeploymentComplete = 31003
-	KindDriftDetected      = 31004
-	KindObservation        = 31005
+	KindBuildRegistered          = 31000
+	KindArtifactRegistered       = 31001
+	KindDeploymentCreated        = 31002
+	KindDeploymentComplete       = 31003
+	KindDriftDetected            = 31004
+	KindObservation              = 31005
+	KindServiceRegistryAudit     = 31006
+	KindEnvironmentRegistryAudit = 31007
+	KindStateChangedAudit        = 31008
+	KindRuntimeActionAudit       = 31009
+	KindReconcileAudit           = 31010
+	KindAdoptionAudit            = 31011
+	KindDeploymentApprovalAudit  = 31012
+	KindDeploymentRunAudit       = 31013
+)
+
+// Canonical replaceable read-model kinds (3196x). Keep these values aligned
+// with internal/controlplane/reactor.go without importing that package (the
+// reactor already imports this adapter package for RelayPool).
+const (
+	KindServiceState        = 31961
+	KindServiceRegistry     = 31962
+	KindEnvironmentRegistry = 31963
 )
 
 // Nostr event kinds for Bahia inbound command events (311xx series).
@@ -30,23 +47,24 @@ const (
 //   - KindDeployRequest (5961) instead of KindCmdIntentCreate (31102)
 //   - KindDeploymentApproval (5966) instead of KindCmdIntentApprove/Reject (31103/31104)
 //   - KindRollbackRequest (5962) instead of KindCmdRollbackRequest (31105)
+//
 // See docs/nostr-commands.md for tag structure and content format.
 const (
-	KindCmdBuildRegister     = 31100 // Deprecated: use reactor API
-	KindCmdArtifactRegister  = 31101 // Deprecated: use reactor API
-	KindCmdIntentCreate      = 31102 // Deprecated: use KindDeployRequest (5961)
-	KindCmdIntentApprove     = 31103 // Deprecated: use KindDeploymentApproval (5966)
-	KindCmdIntentReject      = 31104 // Deprecated: use KindDeploymentApproval (5966)
-	KindCmdRollbackRequest   = 31105 // Deprecated: use KindRollbackRequest (5962)
+	KindCmdBuildRegister    = 31100 // Deprecated: use reactor API
+	KindCmdArtifactRegister = 31101 // Deprecated: use reactor API
+	KindCmdIntentCreate     = 31102 // Deprecated: use KindDeployRequest (5961)
+	KindCmdIntentApprove    = 31103 // Deprecated: use KindDeploymentApproval (5966)
+	KindCmdIntentReject     = 31104 // Deprecated: use KindDeploymentApproval (5966)
+	KindCmdRollbackRequest  = 31105 // Deprecated: use KindRollbackRequest (5962)
 )
 
 // Publisher bridges internal events to Nostr relay publication.
 type Publisher struct {
-	pool           *RelayPool
-	privateKey     string
-	enabled        bool
-	logger         *zap.Logger
-	eventRepo      repository.NostrEventRepository
+	pool       *RelayPool
+	privateKey string
+	enabled    bool
+	logger     *zap.Logger
+	eventRepo  repository.NostrEventRepository
 }
 
 // NewPublisher creates a new Nostr event publisher.

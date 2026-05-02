@@ -13,22 +13,43 @@ import (
 type EventType string
 
 const (
-	EventBuildRegistered          EventType = "build.registered"
-	EventBuildStatusChanged       EventType = "build.status_changed"
-	EventArtifactRegistered       EventType = "artifact.registered"
-	EventDeploymentIntentCreated  EventType = "deployment_intent.created"
-	EventDeploymentIntentApproved EventType = "deployment_intent.approved"
-	EventDeploymentRunCreated     EventType = "deployment_run.created"
-	EventDeploymentRunCompleted   EventType = "deployment_run.completed"
-	EventRuntimeObservation       EventType = "runtime.observation"
-	EventDriftDetected            EventType = "drift.detected"
-	EventReconcileCompleted       EventType = "reconcile.completed"
-	EventAdoptionImported         EventType = "adoption.imported"
-	EventAdoptionScanCompleted    EventType = "adoption.scan_completed"
-	EventRuntimeDeploy            EventType = "runtime.deploy"
-	EventRuntimeRestart           EventType = "runtime.restart"
-	EventRuntimeStop              EventType = "runtime.stop"
+	EventServiceCreated                 EventType = "service.created"
+	EventServiceUpdated                 EventType = "service.updated"
+	EventServiceDeleted                 EventType = "service.deleted"
+	EventEnvironmentCreated             EventType = "environment.created"
+	EventEnvironmentUpdated             EventType = "environment.updated"
+	EventEnvironmentDeleted             EventType = "environment.deleted"
+	EventBuildRegistered                EventType = "build.registered"
+	EventBuildStatusChanged             EventType = "build.status_changed"
+	EventArtifactRegistered             EventType = "artifact.registered"
+	EventDeploymentIntentCreated        EventType = "deployment_intent.created"
+	EventDeploymentIntentApproved       EventType = "deployment_intent.approved"
+	EventDeploymentIntentRejected       EventType = "deployment_intent.rejected"
+	EventDeploymentRunCreated           EventType = "deployment_run.created"
+	EventDeploymentRunStatusChanged     EventType = "deployment_run.status_changed"
+	EventDeploymentRunCompleted         EventType = "deployment_run.completed"
+	EventRuntimeObservation             EventType = "runtime.observation"
+	EventEnvironmentServiceStateChanged EventType = "environment_service_state.changed"
+	EventDriftDetected                  EventType = "drift.detected"
+	EventReconcileCompleted             EventType = "reconcile.completed"
+	EventAdoptionImported               EventType = "adoption.imported"
+	EventAdoptionScanCompleted          EventType = "adoption.scan_completed"
+	EventRuntimeDeploy                  EventType = "runtime.deploy"
+	EventRuntimeRestart                 EventType = "runtime.restart"
+	EventRuntimeStop                    EventType = "runtime.stop"
 )
+
+// ResourceData carries projection-relevant resource identifiers in internal
+// events. Fields are strings to keep this package decoupled from domain UUID
+// types and to allow callers to include only the identifiers they know.
+type ResourceData struct {
+	ServiceID     string `json:"service_id,omitempty"`
+	EnvironmentID string `json:"environment_id,omitempty"`
+	ArtifactID    string `json:"artifact_id,omitempty"`
+	IntentID      string `json:"intent_id,omitempty"`
+	RunID         string `json:"run_id,omitempty"`
+	Deleted       bool   `json:"deleted,omitempty"`
+}
 
 // Event represents an internal domain event.
 type Event struct {

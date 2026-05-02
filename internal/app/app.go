@@ -119,7 +119,19 @@ func New(cfg *config.Config) (*App, error) {
 
 	// Adapters.
 	// Shared relay pool for Nostr and Loom connections.
-	relayURLs := cfg.Nostr.Relays
+	relayURLs := append([]string(nil), cfg.Nostr.Relays...)
+	if cfg.Nostr.Sidecar.Enabled && cfg.Nostr.Sidecar.PublicURL != "" {
+		found := false
+		for _, existing := range relayURLs {
+			if cfg.Nostr.Sidecar.PublicURL == existing {
+				found = true
+				break
+			}
+		}
+		if !found {
+			relayURLs = append(relayURLs, cfg.Nostr.Sidecar.PublicURL)
+		}
+	}
 	for _, r := range cfg.Loom.Relays {
 		found := false
 		for _, existing := range relayURLs {
@@ -171,7 +183,6 @@ func New(cfg *config.Config) (*App, error) {
 		verifier, publisher, logger,
 	)
 	nostrPub := nostrAdapter.NewPublisher(cfg.Nostr, relayPool, nostrEventRepo, logger)
-	nostrPub.SetupSubscriptions(publisher)
 
 	// Worker policy service for environment-specific worker selection.
 	workerPolicySvc := service.NewWorkerPolicyService(workerRepo, logger)
@@ -230,6 +241,16 @@ func New(cfg *config.Config) (*App, error) {
 
 	// Background runner manager.
 	bgManager := NewBackgroundManager(logger)
+
+	// Nostr read-model projector. This owns canonical 3196x projections and
+	// the 310xx audit/activity feed for relay consumers; the legacy Publisher is
+	// retained for relay pool lifecycle compatibility.
+	nostrProjector := nostrAdapter.NewProjector(cfg.Nostr, registry, relayPool, nostrEventRepo, logger)
+	nostrProjector.SetupSubscriptions(publisher)
+	if nostrProjector.Enabled() {
+		bgManager.Register(nostrProjector)
+		logger.Info("nostr read-model projector registered")
+	}
 
 	// Register the reconciler as a background runner (if enabled).
 	if rec != nil {

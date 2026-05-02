@@ -95,7 +95,15 @@ func (s *RegistryService) CreateService(ctx context.Context, svc *domain.Service
 		svc.DefaultBranch = "main"
 	}
 	normalizeServiceRepositoryForWrite(svc)
-	return s.services.Create(ctx, svc)
+	if err := s.services.Create(ctx, svc); err != nil {
+		return err
+	}
+	s.publisher.Publish(ctx, events.Event{
+		Type:     events.EventServiceCreated,
+		EntityID: svc.ID.String(),
+		Data:     events.ResourceData{ServiceID: svc.ID.String()},
+	})
+	return nil
 }
 
 func (s *RegistryService) GetService(ctx context.Context, id uuid.UUID) (*domain.Service, error) {
@@ -129,12 +137,21 @@ func (s *RegistryService) ListServices(ctx context.Context) ([]domain.Service, e
 
 func (s *RegistryService) UpdateService(ctx context.Context, svc *domain.Service) error {
 	normalizeServiceRepositoryForWrite(svc)
-	return s.services.Update(ctx, svc)
+	if err := s.services.Update(ctx, svc); err != nil {
+		return err
+	}
+	s.publisher.Publish(ctx, events.Event{
+		Type:     events.EventServiceUpdated,
+		EntityID: svc.ID.String(),
+		Data:     events.ResourceData{ServiceID: svc.ID.String()},
+	})
+	return nil
 }
 
 // DeleteService deletes a service after checking for dependent resources.
 // If force is false and dependents exist, returns an error describing what would be cascaded.
 func (s *RegistryService) DeleteService(ctx context.Context, id uuid.UUID, force bool) error {
+	var affectedStates []domain.EnvironmentServiceState
 	if !force {
 		if pgRepo, ok := s.services.(*repository.PgServiceRepository); ok {
 			builds, artifacts, intents, err := pgRepo.CountDependents(ctx, id)
@@ -151,7 +168,31 @@ func (s *RegistryService) DeleteService(ctx context.Context, id uuid.UUID, force
 			}
 		}
 	}
-	return s.services.Delete(ctx, id)
+	if states, err := s.state.ListByService(ctx, id); err == nil {
+		affectedStates = states
+	} else {
+		s.logger.Warn("failed to list affected service state before delete", zap.String("service_id", id.String()), zap.Error(err))
+	}
+	if err := s.services.Delete(ctx, id); err != nil {
+		return err
+	}
+	for _, st := range affectedStates {
+		s.publisher.Publish(ctx, events.Event{
+			Type:     events.EventEnvironmentServiceStateChanged,
+			EntityID: st.ServiceID.String() + ":" + st.EnvironmentID.String(),
+			Data: events.ResourceData{
+				ServiceID:     st.ServiceID.String(),
+				EnvironmentID: st.EnvironmentID.String(),
+				Deleted:       true,
+			},
+		})
+	}
+	s.publisher.Publish(ctx, events.Event{
+		Type:     events.EventServiceDeleted,
+		EntityID: id.String(),
+		Data:     events.ResourceData{ServiceID: id.String(), Deleted: true},
+	})
+	return nil
 }
 
 func normalizeServiceRepositoryForWrite(svc *domain.Service) {
@@ -243,7 +284,15 @@ func (s *RegistryService) CreateEnvironment(ctx context.Context, env *domain.Env
 	if env.DeployStrategy == "" {
 		env.DeployStrategy = domain.DeployStrategyReplace
 	}
-	return s.environments.Create(ctx, env)
+	if err := s.environments.Create(ctx, env); err != nil {
+		return err
+	}
+	s.publisher.Publish(ctx, events.Event{
+		Type:     events.EventEnvironmentCreated,
+		EntityID: env.ID.String(),
+		Data:     events.ResourceData{EnvironmentID: env.ID.String()},
+	})
+	return nil
 }
 
 func (s *RegistryService) GetEnvironment(ctx context.Context, id uuid.UUID) (*domain.Environment, error) {
@@ -259,12 +308,21 @@ func (s *RegistryService) ListEnvironments(ctx context.Context) ([]domain.Enviro
 }
 
 func (s *RegistryService) UpdateEnvironment(ctx context.Context, env *domain.Environment) error {
-	return s.environments.Update(ctx, env)
+	if err := s.environments.Update(ctx, env); err != nil {
+		return err
+	}
+	s.publisher.Publish(ctx, events.Event{
+		Type:     events.EventEnvironmentUpdated,
+		EntityID: env.ID.String(),
+		Data:     events.ResourceData{EnvironmentID: env.ID.String()},
+	})
+	return nil
 }
 
 // DeleteEnvironment deletes an environment after checking for dependent resources.
 // If force is false and dependents exist, returns an error describing what would be cascaded.
 func (s *RegistryService) DeleteEnvironment(ctx context.Context, id uuid.UUID, force bool) error {
+	var affectedStates []domain.EnvironmentServiceState
 	if !force {
 		if pgRepo, ok := s.environments.(*repository.PgEnvironmentRepository); ok {
 			intents, states, err := pgRepo.CountDependents(ctx, id)
@@ -281,7 +339,31 @@ func (s *RegistryService) DeleteEnvironment(ctx context.Context, id uuid.UUID, f
 			}
 		}
 	}
-	return s.environments.Delete(ctx, id)
+	if states, err := s.state.ListByEnvironment(ctx, id); err == nil {
+		affectedStates = states
+	} else {
+		s.logger.Warn("failed to list affected environment state before delete", zap.String("environment_id", id.String()), zap.Error(err))
+	}
+	if err := s.environments.Delete(ctx, id); err != nil {
+		return err
+	}
+	for _, st := range affectedStates {
+		s.publisher.Publish(ctx, events.Event{
+			Type:     events.EventEnvironmentServiceStateChanged,
+			EntityID: st.ServiceID.String() + ":" + st.EnvironmentID.String(),
+			Data: events.ResourceData{
+				ServiceID:     st.ServiceID.String(),
+				EnvironmentID: st.EnvironmentID.String(),
+				Deleted:       true,
+			},
+		})
+	}
+	s.publisher.Publish(ctx, events.Event{
+		Type:     events.EventEnvironmentDeleted,
+		EntityID: id.String(),
+		Data:     events.ResourceData{EnvironmentID: id.String(), Deleted: true},
+	})
+	return nil
 }
 
 // --- Build operations ---
@@ -454,14 +536,25 @@ func (s *RegistryService) CreateDeploymentIntent(ctx context.Context, di *domain
 
 	// Update the environment service state desired artifact.
 	state := &domain.EnvironmentServiceState{
-		ServiceID:       di.ServiceID,
-		EnvironmentID:   di.EnvironmentID,
+		ServiceID:         di.ServiceID,
+		EnvironmentID:     di.EnvironmentID,
 		DesiredArtifactID: &di.ArtifactID,
-		DesiredIntentID: &di.ID,
-		DriftStatus:     domain.DriftStatusDeploying,
+		DesiredIntentID:   &di.ID,
+		DriftStatus:       domain.DriftStatusDeploying,
 	}
 	if err := s.state.Upsert(ctx, state); err != nil {
 		s.logger.Error("failed to update environment service state", zap.Error(err))
+	} else {
+		s.publisher.Publish(ctx, events.Event{
+			Type:     events.EventEnvironmentServiceStateChanged,
+			EntityID: di.ServiceID.String() + ":" + di.EnvironmentID.String(),
+			Data: events.ResourceData{
+				ServiceID:     di.ServiceID.String(),
+				EnvironmentID: di.EnvironmentID.String(),
+				ArtifactID:    di.ArtifactID.String(),
+				IntentID:      di.ID.String(),
+			},
+		})
 	}
 
 	s.publisher.Publish(ctx, events.Event{
@@ -519,6 +612,7 @@ func (s *RegistryService) ApproveDeploymentIntent(ctx context.Context, id uuid.U
 	s.publisher.Publish(ctx, events.Event{
 		Type:     events.EventDeploymentIntentApproved,
 		EntityID: id.String(),
+		Data:     events.ResourceData{ServiceID: di.ServiceID.String(), EnvironmentID: di.EnvironmentID.String(), ArtifactID: di.ArtifactID.String(), IntentID: id.String()},
 	})
 	return nil
 }
@@ -545,7 +639,67 @@ func (s *RegistryService) RejectDeploymentIntent(ctx context.Context, id uuid.UU
 	if err := s.intents.UpdateApproval(ctx, id, domain.ApprovalStatusRejected); err != nil {
 		return err
 	}
-	return s.intents.UpdateStatus(ctx, id, domain.IntentStatusRejected)
+	if err := s.intents.UpdateStatus(ctx, id, domain.IntentStatusRejected); err != nil {
+		return err
+	}
+	if err := s.repairStateAfterRejectedIntent(ctx, di); err != nil {
+		return err
+	}
+	s.publisher.Publish(ctx, events.Event{
+		Type:     events.EventDeploymentIntentRejected,
+		EntityID: id.String(),
+		Data:     events.ResourceData{ServiceID: di.ServiceID.String(), EnvironmentID: di.EnvironmentID.String(), ArtifactID: di.ArtifactID.String(), IntentID: id.String()},
+	})
+	return nil
+}
+
+func (s *RegistryService) repairStateAfterRejectedIntent(ctx context.Context, rejected *domain.DeploymentIntent) error {
+	state, err := s.state.Get(ctx, rejected.ServiceID, rejected.EnvironmentID)
+	if err != nil {
+		return fmt.Errorf("getting state for rejected intent repair: %w", err)
+	}
+	if state == nil || state.DesiredIntentID == nil || *state.DesiredIntentID != rejected.ID {
+		return nil
+	}
+
+	intents, err := s.intents.ListByServiceEnv(ctx, rejected.ServiceID, rejected.EnvironmentID, 50, 0)
+	if err != nil {
+		return fmt.Errorf("listing intents for rejected intent repair: %w", err)
+	}
+
+	state.DesiredArtifactID = nil
+	state.DesiredIntentID = nil
+	state.DriftStatus = domain.DriftStatusUnknown
+	for i := range intents {
+		candidate := intents[i]
+		if candidate.ID == rejected.ID {
+			continue
+		}
+		switch candidate.Status {
+		case domain.IntentStatusDeployed, domain.IntentStatusDeploying, domain.IntentStatusApproved:
+			state.DesiredArtifactID = &candidate.ArtifactID
+			state.DesiredIntentID = &candidate.ID
+			break
+		default:
+			continue
+		}
+		if state.DesiredIntentID != nil {
+			break
+		}
+	}
+
+	if err := s.state.Upsert(ctx, state); err != nil {
+		return fmt.Errorf("repairing state after rejected intent: %w", err)
+	}
+	s.publisher.Publish(ctx, events.Event{
+		Type:     events.EventEnvironmentServiceStateChanged,
+		EntityID: rejected.ServiceID.String() + ":" + rejected.EnvironmentID.String(),
+		Data: events.ResourceData{
+			ServiceID:     rejected.ServiceID.String(),
+			EnvironmentID: rejected.EnvironmentID.String(),
+		},
+	})
+	return nil
 }
 
 // --- Deployment Run operations ---
@@ -583,6 +737,11 @@ func (s *RegistryService) CreateDeploymentRun(ctx context.Context, dr *domain.De
 		Type:     events.EventDeploymentRunCreated,
 		EntityID: dr.ID.String(),
 		Data:     dr,
+	})
+	s.publisher.Publish(ctx, events.Event{
+		Type:     events.EventDeploymentRunStatusChanged,
+		EntityID: dr.ID.String(),
+		Data:     events.ResourceData{IntentID: dr.DeploymentIntentID.String(), RunID: dr.ID.String()},
 	})
 	return nil
 }
@@ -670,6 +829,17 @@ func (s *RegistryService) CompleteDeploymentRun(ctx context.Context, id uuid.UUI
 				)
 				return fmt.Errorf("upserting environment state after successful run: %w", err)
 			}
+			s.publisher.Publish(ctx, events.Event{
+				Type:     events.EventEnvironmentServiceStateChanged,
+				EntityID: intent.ServiceID.String() + ":" + intent.EnvironmentID.String(),
+				Data: events.ResourceData{
+					ServiceID:     intent.ServiceID.String(),
+					EnvironmentID: intent.EnvironmentID.String(),
+					ArtifactID:    intent.ArtifactID.String(),
+					IntentID:      intent.ID.String(),
+					RunID:         id.String(),
+				},
+			})
 		}
 	}
 
@@ -677,6 +847,11 @@ func (s *RegistryService) CompleteDeploymentRun(ctx context.Context, id uuid.UUI
 		Type:     events.EventDeploymentRunCompleted,
 		EntityID: id.String(),
 		Data:     map[string]string{"status": string(status)},
+	})
+	s.publisher.Publish(ctx, events.Event{
+		Type:     events.EventDeploymentRunStatusChanged,
+		EntityID: id.String(),
+		Data:     events.ResourceData{IntentID: dr.DeploymentIntentID.String(), RunID: id.String()},
 	})
 	return nil
 }
@@ -811,7 +986,23 @@ func (s *RegistryService) RecordObservation(ctx context.Context, obs *domain.Run
 
 	now := time.Now().UTC()
 	state.LastReconciledAt = &now
-	return s.state.Upsert(ctx, state)
+	if err := s.state.Upsert(ctx, state); err != nil {
+		return err
+	}
+	s.publisher.Publish(ctx, events.Event{
+		Type:     events.EventRuntimeObservation,
+		EntityID: obs.ID.String(),
+		Data:     obs,
+	})
+	s.publisher.Publish(ctx, events.Event{
+		Type:     events.EventEnvironmentServiceStateChanged,
+		EntityID: obs.ServiceID.String() + ":" + obs.EnvironmentID.String(),
+		Data: events.ResourceData{
+			ServiceID:     obs.ServiceID.String(),
+			EnvironmentID: obs.EnvironmentID.String(),
+		},
+	})
+	return nil
 }
 
 func (s *RegistryService) GetLatestObservation(ctx context.Context, serviceID, envID uuid.UUID) (*domain.RuntimeObservation, error) {
