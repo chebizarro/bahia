@@ -77,7 +77,7 @@ func (d *Dispatcher) dispatch(ctx context.Context, eventType string, payload map
 			continue
 		}
 
-		d.sendToChannel(ctx, &ch, eventType, payload)
+		_ = d.sendToChannel(ctx, &ch, eventType, payload)
 	}
 }
 
@@ -86,14 +86,24 @@ func (d *Dispatcher) Dispatch(ctx context.Context, eventType string, payload map
 	d.dispatch(ctx, eventType, payload)
 }
 
-func (d *Dispatcher) sendToChannel(ctx context.Context, ch *domain.NotificationChannel, eventType string, payload map[string]any) {
+// DispatchToChannel sends a notification directly to one channel, bypassing event filters.
+// It is intended for explicit test/send operations where the caller already selected the channel.
+func (d *Dispatcher) DispatchToChannel(ctx context.Context, ch *domain.NotificationChannel, eventType string, payload map[string]any) error {
+	if ch == nil {
+		return fmt.Errorf("notification channel is required")
+	}
+	return d.sendToChannel(ctx, ch, eventType, payload)
+}
+
+func (d *Dispatcher) sendToChannel(ctx context.Context, ch *domain.NotificationChannel, eventType string, payload map[string]any) error {
 	sender, ok := d.senders[ch.ChannelType]
 	if !ok {
+		err := fmt.Errorf("no sender registered for channel type %s", ch.ChannelType)
 		d.logger.Warn("no sender registered for channel type",
 			zap.String("type", string(ch.ChannelType)),
 			zap.String("channel", ch.Name),
 		)
-		return
+		return err
 	}
 
 	// Create log entry.
@@ -120,6 +130,8 @@ func (d *Dispatcher) sendToChannel(ctx context.Context, ch *domain.NotificationC
 			zap.String("event", eventType),
 			zap.Error(err),
 		)
+		_ = d.repo.UpdateLog(ctx, logEntry)
+		return err
 	} else {
 		logEntry.Status = domain.NotificationStatusSent
 		d.logger.Debug("notification sent",
@@ -129,6 +141,7 @@ func (d *Dispatcher) sendToChannel(ctx context.Context, ch *domain.NotificationC
 	}
 
 	_ = d.repo.UpdateLog(ctx, logEntry)
+	return nil
 }
 
 // RetryFailed retries failed/pending notifications up to maxAttempts.

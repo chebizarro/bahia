@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -1054,7 +1055,117 @@ func (s *Server) GetTools() []Tool {
 				"required": []string{"intent_id"},
 			},
 		},
-		// Notification operations
+		// Notification channel operations
+		{
+			Name:        "bahia_list_notification_channels",
+			Description: "List notification delivery channels",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"enabled": map[string]interface{}{
+						"type":        "boolean",
+						"description": "If true, only return enabled channels",
+					},
+				},
+			},
+		},
+		{
+			Name:        "bahia_get_notification_channel",
+			Description: "Get a notification channel by ID",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"channel_id": map[string]interface{}{
+						"type":        "string",
+						"description": "Notification channel UUID",
+					},
+				},
+				"required": []string{"channel_id"},
+			},
+		},
+		{
+			Name:        "bahia_create_notification_channel",
+			Description: "Create a notification delivery channel",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"name": map[string]interface{}{
+						"type":        "string",
+						"description": "Unique channel name",
+					},
+					"channel_type": map[string]interface{}{
+						"type":        "string",
+						"description": "Delivery type",
+						"enum":        []string{"webhook", "nostr_dm"},
+					},
+					"config": map[string]interface{}{
+						"type":        "object",
+						"description": "Type-specific delivery config (for example webhook url or nostr pubkey)",
+					},
+					"event_filter": map[string]interface{}{
+						"type":        "object",
+						"description": "Optional filter such as type=* or types=[drift.detected]",
+					},
+					"enabled": map[string]interface{}{
+						"type":        "boolean",
+						"description": "Whether the channel is active (default true)",
+					},
+				},
+				"required": []string{"name", "channel_type", "config"},
+			},
+		},
+		{
+			Name:        "bahia_update_notification_channel",
+			Description: "Update a notification delivery channel",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"channel_id": map[string]interface{}{
+						"type":        "string",
+						"description": "Notification channel UUID",
+					},
+					"name": map[string]interface{}{"type": "string", "description": "New channel name"},
+					"channel_type": map[string]interface{}{
+						"type":        "string",
+						"description": "Delivery type",
+						"enum":        []string{"webhook", "nostr_dm"},
+					},
+					"config":       map[string]interface{}{"type": "object", "description": "Replacement type-specific delivery config"},
+					"event_filter": map[string]interface{}{"type": "object", "description": "Replacement event filter"},
+					"enabled":      map[string]interface{}{"type": "boolean", "description": "Whether the channel is active"},
+				},
+				"required": []string{"channel_id"},
+			},
+		},
+		{
+			Name:        "bahia_delete_notification_channel",
+			Description: "Delete a notification delivery channel",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"channel_id": map[string]interface{}{
+						"type":        "string",
+						"description": "Notification channel UUID",
+					},
+				},
+				"required": []string{"channel_id"},
+			},
+		},
+		{
+			Name:        "bahia_test_notification_channel",
+			Description: "Send a test notification through the configured dispatcher",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"channel_id": map[string]interface{}{
+						"type":        "string",
+						"description": "Notification channel UUID",
+					},
+				},
+				"required": []string{"channel_id"},
+			},
+		},
+		// Notification log operations
 		{
 			Name:        "bahia_list_notifications",
 			Description: "List recent notifications with optional filters",
@@ -1232,7 +1343,20 @@ func (s *Server) CallTool(ctx context.Context, name string, arguments map[string
 		return s.handleApproveDeployment(ctx, arguments) // alias
 	case "bahia_reject_intent":
 		return s.handleRejectDeployment(ctx, arguments) // alias
-	// Notification operations
+	// Notification channel operations
+	case "bahia_list_notification_channels":
+		return s.handleListNotificationChannels(ctx, arguments)
+	case "bahia_get_notification_channel":
+		return s.handleGetNotificationChannel(ctx, arguments)
+	case "bahia_create_notification_channel":
+		return s.handleCreateNotificationChannel(ctx, arguments)
+	case "bahia_update_notification_channel":
+		return s.handleUpdateNotificationChannel(ctx, arguments)
+	case "bahia_delete_notification_channel":
+		return s.handleDeleteNotificationChannel(ctx, arguments)
+	case "bahia_test_notification_channel":
+		return s.handleTestNotificationChannel(ctx, arguments)
+	// Notification log operations
 	case "bahia_list_notifications":
 		return s.handleListNotifications(ctx, arguments)
 	case "bahia_get_notification":
@@ -3250,6 +3374,232 @@ func policyResultsToMaps(results []domain.PolicyResult) []map[string]interface{}
 
 // --- Notification Handlers ---
 
+func (s *Server) handleListNotificationChannels(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
+	if s.notificationRepo == nil {
+		return errorResult("notification channel tools are not configured"), nil
+	}
+
+	enabledOnly := false
+	if enabled, ok := args["enabled"].(bool); ok {
+		enabledOnly = enabled
+	}
+
+	channels, err := s.notificationRepo.ListChannels(ctx, enabledOnly)
+	if err != nil {
+		return errorResult(fmt.Sprintf("failed to list notification channels: %v", err)), nil
+	}
+
+	result := map[string]interface{}{
+		"channels": notificationChannelsToMaps(channels),
+		"total":    len(channels),
+	}
+	return jsonResult(result)
+}
+
+func (s *Server) handleGetNotificationChannel(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
+	if s.notificationRepo == nil {
+		return errorResult("notification channel tools are not configured"), nil
+	}
+
+	channelID, err := parseRequiredUUIDArg(args, "channel_id")
+	if err != nil {
+		return errorResult(err.Error()), nil
+	}
+
+	ch, err := s.notificationRepo.GetChannelByID(ctx, channelID)
+	if err != nil {
+		return errorResult(fmt.Sprintf("failed to get notification channel: %v", err)), nil
+	}
+	if ch == nil {
+		return errorResult("notification channel not found"), nil
+	}
+
+	return jsonResult(notificationChannelToMap(ch))
+}
+
+func (s *Server) handleCreateNotificationChannel(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
+	if s.notificationRepo == nil {
+		return errorResult("notification channel tools are not configured"), nil
+	}
+
+	name, _ := args["name"].(string)
+	if name == "" {
+		return errorResult("name is required"), nil
+	}
+
+	channelType, err := parseNotificationChannelType(args)
+	if err != nil {
+		return errorResult(err.Error()), nil
+	}
+
+	config, err := optionalMapArg(args, "config")
+	if err != nil {
+		return errorResult(err.Error()), nil
+	}
+	if config == nil {
+		return errorResult("config is required"), nil
+	}
+
+	eventFilter, err := optionalMapArg(args, "event_filter")
+	if err != nil {
+		return errorResult(err.Error()), nil
+	}
+
+	enabled := true
+	if enabledVal, ok := args["enabled"].(bool); ok {
+		enabled = enabledVal
+	}
+
+	now := time.Now().UTC()
+	ch := &domain.NotificationChannel{
+		ID:          uuid.New(),
+		Name:        name,
+		ChannelType: channelType,
+		Config:      config,
+		EventFilter: eventFilter,
+		Enabled:     enabled,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+
+	if err := s.notificationRepo.CreateChannel(ctx, ch); err != nil {
+		return errorResult(fmt.Sprintf("failed to create notification channel: %v", err)), nil
+	}
+
+	result := map[string]interface{}{
+		"status":     "created",
+		"channel_id": ch.ID.String(),
+		"channel":    notificationChannelToMap(ch),
+	}
+	return jsonResult(result)
+}
+
+func (s *Server) handleUpdateNotificationChannel(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
+	if s.notificationRepo == nil {
+		return errorResult("notification channel tools are not configured"), nil
+	}
+
+	channelID, err := parseRequiredUUIDArg(args, "channel_id")
+	if err != nil {
+		return errorResult(err.Error()), nil
+	}
+
+	ch, err := s.notificationRepo.GetChannelByID(ctx, channelID)
+	if err != nil {
+		return errorResult(fmt.Sprintf("failed to get notification channel: %v", err)), nil
+	}
+	if ch == nil {
+		return errorResult("notification channel not found"), nil
+	}
+
+	if name, ok := args["name"].(string); ok && name != "" {
+		ch.Name = name
+	}
+	if _, ok := args["channel_type"]; ok {
+		channelType, err := parseNotificationChannelType(args)
+		if err != nil {
+			return errorResult(err.Error()), nil
+		}
+		ch.ChannelType = channelType
+	}
+	if _, ok := args["config"]; ok {
+		config, err := optionalMapArg(args, "config")
+		if err != nil {
+			return errorResult(err.Error()), nil
+		}
+		ch.Config = config
+	}
+	if _, ok := args["event_filter"]; ok {
+		eventFilter, err := optionalMapArg(args, "event_filter")
+		if err != nil {
+			return errorResult(err.Error()), nil
+		}
+		ch.EventFilter = eventFilter
+	}
+	if enabled, ok := args["enabled"].(bool); ok {
+		ch.Enabled = enabled
+	}
+	ch.UpdatedAt = time.Now().UTC()
+
+	if err := s.notificationRepo.UpdateChannel(ctx, ch); err != nil {
+		return errorResult(fmt.Sprintf("failed to update notification channel: %v", err)), nil
+	}
+
+	result := map[string]interface{}{
+		"status":     "updated",
+		"channel_id": ch.ID.String(),
+		"channel":    notificationChannelToMap(ch),
+	}
+	return jsonResult(result)
+}
+
+func (s *Server) handleDeleteNotificationChannel(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
+	if s.notificationRepo == nil {
+		return errorResult("notification channel tools are not configured"), nil
+	}
+
+	channelID, err := parseRequiredUUIDArg(args, "channel_id")
+	if err != nil {
+		return errorResult(err.Error()), nil
+	}
+
+	ch, err := s.notificationRepo.GetChannelByID(ctx, channelID)
+	if err != nil {
+		return errorResult(fmt.Sprintf("failed to get notification channel: %v", err)), nil
+	}
+	if ch == nil {
+		return errorResult("notification channel not found"), nil
+	}
+
+	if err := s.notificationRepo.DeleteChannel(ctx, channelID); err != nil {
+		return errorResult(fmt.Sprintf("failed to delete notification channel: %v", err)), nil
+	}
+
+	result := map[string]interface{}{
+		"status":     "deleted",
+		"channel_id": channelID.String(),
+	}
+	return jsonResult(result)
+}
+
+func (s *Server) handleTestNotificationChannel(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
+	if s.notificationRepo == nil {
+		return errorResult("notification channel tools are not configured"), nil
+	}
+	if s.notificationDisp == nil {
+		return errorResult("notification dispatcher is not configured"), nil
+	}
+
+	channelID, err := parseRequiredUUIDArg(args, "channel_id")
+	if err != nil {
+		return errorResult(err.Error()), nil
+	}
+
+	ch, err := s.notificationRepo.GetChannelByID(ctx, channelID)
+	if err != nil {
+		return errorResult(fmt.Sprintf("failed to get notification channel: %v", err)), nil
+	}
+	if ch == nil {
+		return errorResult("notification channel not found"), nil
+	}
+	if !ch.Enabled {
+		return errorResult("notification channel is disabled"), nil
+	}
+
+	if err := s.notificationDisp.DispatchToChannel(ctx, ch, "test", map[string]any{
+		"message":    "This is a test notification from Bahia",
+		"channel_id": ch.ID.String(),
+	}); err != nil {
+		return errorResult(fmt.Sprintf("failed to send test notification: %v", err)), nil
+	}
+
+	result := map[string]interface{}{
+		"status":     "test_sent",
+		"channel_id": ch.ID.String(),
+	}
+	return jsonResult(result)
+}
+
 func (s *Server) handleListNotifications(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
 	if s.notificationRepo == nil {
 		return errorResult("notification tools are not configured"), nil
@@ -3359,6 +3709,102 @@ func (s *Server) handleDismissNotification(ctx context.Context, args map[string]
 	}
 
 	return errorResult("dismiss notification is not supported - notification logs are immutable audit records"), nil
+}
+
+func notificationChannelsToMaps(channels []domain.NotificationChannel) []map[string]interface{} {
+	result := make([]map[string]interface{}, len(channels))
+	for i := range channels {
+		result[i] = notificationChannelToMap(&channels[i])
+	}
+	return result
+}
+
+func notificationChannelToMap(ch *domain.NotificationChannel) map[string]interface{} {
+	return map[string]interface{}{
+		"id":              ch.ID.String(),
+		"name":            ch.Name,
+		"channel_type":    string(ch.ChannelType),
+		"config":          redactNotificationChannelConfig(ch.Config),
+		"config_redacted": notificationChannelConfigHasSensitiveKeys(ch.Config),
+		"event_filter":    ch.EventFilter,
+		"enabled":         ch.Enabled,
+		"created_at":      ch.CreatedAt.Format("2006-01-02T15:04:05Z"),
+		"updated_at":      ch.UpdatedAt.Format("2006-01-02T15:04:05Z"),
+	}
+}
+
+func redactNotificationChannelConfig(config map[string]any) map[string]any {
+	if config == nil {
+		return nil
+	}
+	redacted := make(map[string]any, len(config))
+	for key, value := range config {
+		if isSensitiveNotificationConfigKey(key) {
+			redacted[key] = "[redacted]"
+			continue
+		}
+		redacted[key] = value
+	}
+	return redacted
+}
+
+func notificationChannelConfigHasSensitiveKeys(config map[string]any) bool {
+	for key := range config {
+		if isSensitiveNotificationConfigKey(key) {
+			return true
+		}
+	}
+	return false
+}
+
+func isSensitiveNotificationConfigKey(key string) bool {
+	key = strings.ToLower(key)
+	if key == "url" || key == "webhook_url" {
+		return true
+	}
+	for _, marker := range []string{"secret", "password", "token", "authorization", "bearer", "credential", "api_key", "private_key", "signing_key"} {
+		if strings.Contains(key, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func parseRequiredUUIDArg(args map[string]interface{}, name string) (uuid.UUID, error) {
+	value, _ := args[name].(string)
+	if value == "" {
+		return uuid.Nil, fmt.Errorf("%s is required", name)
+	}
+	id, err := uuid.Parse(value)
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("invalid %s: %v", name, err)
+	}
+	return id, nil
+}
+
+func parseNotificationChannelType(args map[string]interface{}) (domain.ChannelType, error) {
+	channelTypeStr, _ := args["channel_type"].(string)
+	if channelTypeStr == "" {
+		return "", fmt.Errorf("channel_type is required")
+	}
+	channelType := domain.ChannelType(channelTypeStr)
+	if channelType != domain.ChannelTypeWebhook && channelType != domain.ChannelTypeNostrDM {
+		return "", fmt.Errorf("channel_type must be 'webhook' or 'nostr_dm'")
+	}
+	return channelType, nil
+}
+
+func optionalMapArg(args map[string]interface{}, name string) (map[string]any, error) {
+	value, ok := args[name]
+	if !ok || value == nil {
+		return nil, nil
+	}
+	switch typed := value.(type) {
+	case map[string]any:
+		return typed, nil
+	default:
+		return nil, fmt.Errorf("%s must be an object", name)
+	}
 }
 
 func notificationLogsToMaps(logs []domain.NotificationLog) []map[string]interface{} {
