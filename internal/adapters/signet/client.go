@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/url"
@@ -20,6 +21,26 @@ import (
 	"github.com/nbd-wtf/go-nostr/nip46"
 )
 
+var (
+	// ErrNoBunkerConfigured is returned when production/default configuration lacks a Signet bunker URI.
+	ErrNoBunkerConfigured = errors.New("signet bunker URI is required")
+	// ErrNotConnected is returned when an operation requires a connected Signet client.
+	ErrNotConnected = errors.New("signet client is not connected")
+	// ErrAgentNotFound is returned when an agent identity is unknown to this client.
+	ErrAgentNotFound = errors.New("signet agent not found")
+	// ErrAgentSuspended is returned when a suspended mock agent is asked to sign.
+	ErrAgentSuspended = errors.New("signet agent is suspended")
+	// ErrInvalidEvent is returned when a nil Nostr event is passed for signing.
+	ErrInvalidEvent = errors.New("nostr event is nil")
+)
+
+const (
+	// AgentStatusActive is the active Signet agent state.
+	AgentStatusActive = "active"
+	// AgentStatusSuspended is the suspended Signet agent state.
+	AgentStatusSuspended = "suspended"
+)
+
 // Client communicates with Signet via NIP-46.
 type Client struct {
 	bunkerURI       string
@@ -27,10 +48,11 @@ type Client struct {
 	pool            *nostr.SimplePool
 	logger          *slog.Logger
 	clientSecretKey string // Ephemeral key for NIP-46 session
+	allowMock       bool   // Explicit test/dev-only mock signing mode
 
-	mu      sync.Mutex
-	bunker  *nip46.BunkerClient // Active NIP-46 connection
-	agents  map[string]*AgentIdentity
+	mu        sync.Mutex
+	bunker    *nip46.BunkerClient // Active NIP-46 connection
+	agents    map[string]*AgentIdentity
 	connected bool
 }
 
@@ -41,6 +63,8 @@ type AgentIdentity struct {
 	Npub          string
 	BunkerURI     string
 	bunkerClient  *nip46.BunkerClient // Agent-specific bunker connection
+	mockSecretKey string              // Explicit mock-mode-only agent signing key
+	mockStatus    string              // Explicit mock-mode-only lifecycle status
 }
 
 // Config holds Signet client configuration.
@@ -48,6 +72,7 @@ type Config struct {
 	BunkerURI       string   // bunker://<pubkey>?relay=...&secret=...
 	Relays          []string // Backup relays if not in URI
 	ClientSecretKey string   // Optional: persistent client key (generated if empty)
+	AllowMock       bool     // Explicit test/dev-only mock mode; production defaults to fail-closed
 }
 
 // NewClient creates a new Signet client.
@@ -68,6 +93,7 @@ func NewClient(config Config, logger *slog.Logger) (*Client, error) {
 		pool:            nostr.NewSimplePool(context.Background()),
 		logger:          logger.With("component", "signet"),
 		clientSecretKey: clientSK,
+		allowMock:       config.AllowMock,
 		agents:          make(map[string]*AgentIdentity),
 	}
 
@@ -84,7 +110,10 @@ func (c *Client) Connect(ctx context.Context) error {
 	}
 
 	if c.bunkerURI == "" {
-		c.logger.Warn("no bunker URI configured, running in mock mode")
+		if !c.allowMock {
+			return ErrNoBunkerConfigured
+		}
+		c.logger.Warn("no bunker URI configured, running in explicit mock mode")
 		c.connected = true
 		return nil
 	}
@@ -108,7 +137,7 @@ func (c *Client) Connect(ctx context.Context) error {
 	// Verify connection with ping
 	pingCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	
+
 	if err := bunker.Ping(pingCtx); err != nil {
 		return fmt.Errorf("bunker ping failed: %w", err)
 	}
@@ -131,7 +160,7 @@ func (c *Client) IsConnected() bool {
 func (c *Client) IsMockMode() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.bunkerURI == "" && c.connected
+	return c.allowMock && c.bunkerURI == "" && c.connected
 }
 
 // ProvisionAgent registers a new agent with Signet.
@@ -140,17 +169,21 @@ func (c *Client) ProvisionAgent(ctx context.Context, agentID string, allowedKind
 	c.logger.Info("provisioning agent", "agent_id", agentID, "allowed_kinds", allowedKinds)
 
 	c.mu.Lock()
-	mockMode := c.bunkerURI == ""
+	connected := c.connected
+	mockMode := c.allowMock && c.bunkerURI == ""
 	bunker := c.bunker
 	c.mu.Unlock()
 
+	if !connected {
+		return "", "", "", ErrNotConnected
+	}
+
 	if mockMode {
-		// Mock mode: generate local keypair
 		return c.provisionAgentMock(agentID)
 	}
 
 	if bunker == nil {
-		return "", "", "", fmt.Errorf("not connected to bunker")
+		return "", "", "", ErrNotConnected
 	}
 
 	// Call Signet's custom provision_agent RPC
@@ -189,7 +222,7 @@ func (c *Client) ProvisionAgent(ctx context.Context, agentID string, allowedKind
 
 	c.logger.Info("agent provisioned",
 		"agent_id", agentID,
-		"pubkey", resp.Pubkey[:16]+"...",
+		"pubkey", redactPubkey(resp.Pubkey),
 		"npub", npubEncoded,
 	)
 
@@ -202,23 +235,25 @@ func (c *Client) provisionAgentMock(agentID string) (pubkey, npub, bunkerURI str
 	mockPK, _ := nostr.GetPublicKey(mockSK)
 	mockNpub, _ := nip19.EncodePublicKey(mockPK)
 
-	// Build mock bunker URI
-	agentBunkerURI := fmt.Sprintf("bunker://%s?relay=wss://relay.sharegap.net", mockPK)
+	// Build an intentionally non-production URI so test/dev mock identities are obvious.
+	agentBunkerURI := fmt.Sprintf("mock-bunker://%s", mockPK)
 
 	identity := &AgentIdentity{
-		AgentID:   agentID,
-		Pubkey:    mockPK,
-		Npub:      mockNpub,
-		BunkerURI: agentBunkerURI,
+		AgentID:       agentID,
+		Pubkey:        mockPK,
+		Npub:          mockNpub,
+		BunkerURI:     agentBunkerURI,
+		mockSecretKey: mockSK,
+		mockStatus:    AgentStatusActive,
 	}
 
 	c.mu.Lock()
 	c.agents[agentID] = identity
 	c.mu.Unlock()
 
-	c.logger.Info("agent provisioned (mock mode)",
+	c.logger.Info("agent provisioned (explicit mock mode)",
 		"agent_id", agentID,
-		"pubkey", mockPK[:16]+"...",
+		"pubkey", redactPubkey(mockPK),
 		"npub", mockNpub,
 	)
 
@@ -228,17 +263,21 @@ func (c *Client) provisionAgentMock(agentID string) (pubkey, npub, bunkerURI str
 // Sign signs an event using the Signet bunker's key.
 func (c *Client) Sign(ctx context.Context, event *nostr.Event) error {
 	c.mu.Lock()
-	mockMode := c.bunkerURI == ""
+	connected := c.connected
+	mockMode := c.allowMock && c.bunkerURI == ""
 	bunker := c.bunker
 	c.mu.Unlock()
 
+	if !connected {
+		return ErrNotConnected
+	}
+
 	if mockMode {
-		// Mock mode: sign with ephemeral key
 		return c.signMock(event)
 	}
 
 	if bunker == nil {
-		return fmt.Errorf("not connected to bunker")
+		return ErrNotConnected
 	}
 
 	// Use NIP-46 SignEvent
@@ -249,35 +288,36 @@ func (c *Client) Sign(ctx context.Context, event *nostr.Event) error {
 	return nil
 }
 
-// signMock signs with an ephemeral key for testing.
+// signMock signs with the explicit mock client's stable key for testing.
 func (c *Client) signMock(event *nostr.Event) error {
-	sk := nostr.GeneratePrivateKey()
-	pk, _ := nostr.GetPublicKey(sk)
-	event.PubKey = pk
-
-	if err := event.Sign(sk); err != nil {
-		return fmt.Errorf("sign event: %w", err)
-	}
-
-	return nil
+	return signEventWithKey(event, c.clientSecretKey)
 }
 
 // SignAs signs an event as a specific agent.
 func (c *Client) SignAs(ctx context.Context, agentID string, event *nostr.Event) error {
 	c.mu.Lock()
+	connected := c.connected
 	identity, ok := c.agents[agentID]
-	mockMode := c.bunkerURI == ""
+	mockMode := c.allowMock && c.bunkerURI == ""
 	c.mu.Unlock()
 
+	if !connected {
+		return ErrNotConnected
+	}
+
 	if !ok {
-		return fmt.Errorf("agent not found: %s", agentID)
+		return fmt.Errorf("%w: %s", ErrAgentNotFound, agentID)
 	}
 
 	if mockMode {
-		// Mock mode: just set the pubkey (can't actually sign without private key)
-		event.PubKey = identity.Pubkey
-		c.logger.Debug("signing as agent (mock mode)", "agent_id", agentID)
-		return nil
+		if identity.mockStatus == AgentStatusSuspended {
+			return fmt.Errorf("%w: %s", ErrAgentSuspended, agentID)
+		}
+		if identity.mockSecretKey == "" {
+			return fmt.Errorf("mock agent missing signing key: %s", agentID)
+		}
+		c.logger.Debug("signing as agent (explicit mock mode)", "agent_id", agentID)
+		return signEventWithKey(event, identity.mockSecretKey)
 	}
 
 	// Connect to agent's bunker if needed
@@ -292,7 +332,7 @@ func (c *Client) SignAs(ctx context.Context, agentID string, event *nostr.Event)
 		if err != nil {
 			return fmt.Errorf("connect to agent bunker: %w", err)
 		}
-		
+
 		c.mu.Lock()
 		identity.bunkerClient = bunker
 		c.mu.Unlock()
@@ -303,20 +343,29 @@ func (c *Client) SignAs(ctx context.Context, agentID string, event *nostr.Event)
 		return fmt.Errorf("agent sign_event: %w", err)
 	}
 
-	c.logger.Debug("signed as agent", "agent_id", agentID, "pubkey", identity.Pubkey[:16]+"...")
+	c.logger.Debug("signed as agent", "agent_id", agentID, "pubkey", redactPubkey(identity.Pubkey))
 	return nil
 }
 
 // RevokeAgent permanently destroys an agent's keypair.
 func (c *Client) RevokeAgent(ctx context.Context, pubkey string) error {
-	c.logger.Info("revoking agent", "pubkey", pubkey[:16]+"...")
+	c.logger.Info("revoking agent", "pubkey", redactPubkey(pubkey))
 
 	c.mu.Lock()
-	mockMode := c.bunkerURI == ""
+	connected := c.connected
+	mockMode := c.allowMock && c.bunkerURI == ""
 	bunker := c.bunker
 	c.mu.Unlock()
 
-	if !mockMode && bunker != nil {
+	if !connected {
+		return ErrNotConnected
+	}
+
+	if !mockMode && bunker == nil {
+		return ErrNotConnected
+	}
+
+	if !mockMode {
 		// Call Signet's custom revoke_agent RPC
 		params := map[string]interface{}{
 			"pubkey": pubkey,
@@ -330,39 +379,38 @@ func (c *Client) RevokeAgent(ctx context.Context, pubkey string) error {
 	}
 
 	// Remove from local cache
-	c.mu.Lock()
-	for id, identity := range c.agents {
-		if identity.Pubkey == pubkey {
-			// Close agent's bunker connection if exists
-			if identity.bunkerClient != nil {
-				// Note: BunkerClient doesn't have a Close method currently
-			}
-			delete(c.agents, id)
-			break
-		}
+	if !c.removeAgentByPubkey(pubkey) && mockMode {
+		return fmt.Errorf("%w: %s", ErrAgentNotFound, pubkey)
 	}
-	c.mu.Unlock()
 
-	c.logger.Info("agent revoked", "pubkey", pubkey[:16]+"...")
+	c.logger.Info("agent revoked", "pubkey", redactPubkey(pubkey))
 	return nil
 }
 
 // SuspendAgent temporarily blocks signing for an agent.
 func (c *Client) SuspendAgent(ctx context.Context, pubkey string) error {
-	c.logger.Info("suspending agent", "pubkey", pubkey[:16]+"...")
+	c.logger.Info("suspending agent", "pubkey", redactPubkey(pubkey))
 
 	c.mu.Lock()
-	mockMode := c.bunkerURI == ""
+	connected := c.connected
+	mockMode := c.allowMock && c.bunkerURI == ""
 	bunker := c.bunker
 	c.mu.Unlock()
 
+	if !connected {
+		return ErrNotConnected
+	}
+
 	if mockMode {
-		c.logger.Info("agent suspended (mock mode)", "pubkey", pubkey[:16]+"...")
+		if err := c.setMockAgentStatus(pubkey, AgentStatusSuspended); err != nil {
+			return err
+		}
+		c.logger.Info("agent suspended (explicit mock mode)", "pubkey", redactPubkey(pubkey))
 		return nil
 	}
 
 	if bunker == nil {
-		return fmt.Errorf("not connected to bunker")
+		return ErrNotConnected
 	}
 
 	// Call Signet's custom suspend_agent RPC
@@ -376,26 +424,34 @@ func (c *Client) SuspendAgent(ctx context.Context, pubkey string) error {
 		return fmt.Errorf("suspend_agent RPC failed: %w", err)
 	}
 
-	c.logger.Info("agent suspended", "pubkey", pubkey[:16]+"...")
+	c.logger.Info("agent suspended", "pubkey", redactPubkey(pubkey))
 	return nil
 }
 
 // ResumeAgent re-enables signing for a suspended agent.
 func (c *Client) ResumeAgent(ctx context.Context, pubkey string) error {
-	c.logger.Info("resuming agent", "pubkey", pubkey[:16]+"...")
+	c.logger.Info("resuming agent", "pubkey", redactPubkey(pubkey))
 
 	c.mu.Lock()
-	mockMode := c.bunkerURI == ""
+	connected := c.connected
+	mockMode := c.allowMock && c.bunkerURI == ""
 	bunker := c.bunker
 	c.mu.Unlock()
 
+	if !connected {
+		return ErrNotConnected
+	}
+
 	if mockMode {
-		c.logger.Info("agent resumed (mock mode)", "pubkey", pubkey[:16]+"...")
+		if err := c.setMockAgentStatus(pubkey, AgentStatusActive); err != nil {
+			return err
+		}
+		c.logger.Info("agent resumed (explicit mock mode)", "pubkey", redactPubkey(pubkey))
 		return nil
 	}
 
 	if bunker == nil {
-		return fmt.Errorf("not connected to bunker")
+		return ErrNotConnected
 	}
 
 	// Call Signet's custom resume_agent RPC
@@ -409,19 +465,28 @@ func (c *Client) ResumeAgent(ctx context.Context, pubkey string) error {
 		return fmt.Errorf("resume_agent RPC failed: %w", err)
 	}
 
-	c.logger.Info("agent resumed", "pubkey", pubkey[:16]+"...")
+	c.logger.Info("agent resumed", "pubkey", redactPubkey(pubkey))
 	return nil
 }
 
 // GetAgentStatus checks the status of an agent in Signet.
 func (c *Client) GetAgentStatus(ctx context.Context, pubkey string) (string, error) {
 	c.mu.Lock()
-	mockMode := c.bunkerURI == ""
+	connected := c.connected
+	mockMode := c.allowMock && c.bunkerURI == ""
 	bunker := c.bunker
 	c.mu.Unlock()
 
-	if mockMode || bunker == nil {
-		return "active", nil
+	if !connected {
+		return "", ErrNotConnected
+	}
+
+	if mockMode {
+		return c.getMockAgentStatus(pubkey)
+	}
+
+	if bunker == nil {
+		return "", ErrNotConnected
 	}
 
 	// Call Signet's custom get_agent_status RPC
@@ -460,9 +525,14 @@ func (c *Client) ListAgents(ctx context.Context) ([]*AgentIdentity, error) {
 // GetPublicKey returns the bunker's public key.
 func (c *Client) GetPublicKey(ctx context.Context) (string, error) {
 	c.mu.Lock()
-	mockMode := c.bunkerURI == ""
+	connected := c.connected
+	mockMode := c.allowMock && c.bunkerURI == ""
 	bunker := c.bunker
 	c.mu.Unlock()
+
+	if !connected {
+		return "", ErrNotConnected
+	}
 
 	if mockMode {
 		pk, _ := nostr.GetPublicKey(c.clientSecretKey)
@@ -470,7 +540,7 @@ func (c *Client) GetPublicKey(ctx context.Context) (string, error) {
 	}
 
 	if bunker == nil {
-		return "", fmt.Errorf("not connected to bunker")
+		return "", ErrNotConnected
 	}
 
 	return bunker.GetPublicKey(ctx)
@@ -553,6 +623,74 @@ func ParseBunkerURI(uri string) (pubkey string, relays []string, secret string, 
 	}
 
 	return pubkey, relays, secret, nil
+}
+
+func signEventWithKey(event *nostr.Event, secretKey string) error {
+	if event == nil {
+		return ErrInvalidEvent
+	}
+
+	pubkey, err := nostr.GetPublicKey(secretKey)
+	if err != nil {
+		return fmt.Errorf("derive public key: %w", err)
+	}
+	event.PubKey = pubkey
+
+	if err := event.Sign(secretKey); err != nil {
+		return fmt.Errorf("sign event: %w", err)
+	}
+
+	return nil
+}
+
+func (c *Client) setMockAgentStatus(pubkey, status string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	for _, identity := range c.agents {
+		if identity.Pubkey == pubkey {
+			identity.mockStatus = status
+			return nil
+		}
+	}
+
+	return fmt.Errorf("%w: %s", ErrAgentNotFound, pubkey)
+}
+
+func (c *Client) getMockAgentStatus(pubkey string) (string, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	for _, identity := range c.agents {
+		if identity.Pubkey == pubkey {
+			if identity.mockStatus == "" {
+				return AgentStatusActive, nil
+			}
+			return identity.mockStatus, nil
+		}
+	}
+
+	return "", fmt.Errorf("%w: %s", ErrAgentNotFound, pubkey)
+}
+
+func (c *Client) removeAgentByPubkey(pubkey string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	for id, identity := range c.agents {
+		if identity.Pubkey == pubkey {
+			delete(c.agents, id)
+			return true
+		}
+	}
+	return false
+}
+
+func redactPubkey(pubkey string) string {
+	if len(pubkey) <= 16 {
+		return pubkey
+	}
+	return pubkey[:16] + "..."
 }
 
 // Ensure Client implements the expected interface
