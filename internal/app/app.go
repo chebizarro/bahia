@@ -236,9 +236,9 @@ func New(cfg *config.Config) (*App, error) {
 	// Background runner manager.
 	bgManager := NewBackgroundManager(logger)
 
-	// LLM provisioning control plane. This is intentionally non-Nostr in this bucket;
-	// Nostr lifecycle support can layer on top of the DB-first registry later.
+	// LLM provisioning control plane.
 	var llmRegistry *service.LLMRegistryService
+	var llmResponder *controlplane.LLMResponder
 	if cfg.LLM.Enabled {
 		llmRouteRepo := repository.NewPgLLMRouteRepository(pool)
 		llmReleaseRepo := repository.NewPgLLMReleaseRepository(pool)
@@ -260,9 +260,14 @@ func New(cfg *config.Config) (*App, error) {
 			provisioners[kind] = p
 		}
 		placementSvc := service.NewLLMPlacementService(workerRepo, logger)
-		llmCoordinator := service.NewLLMProvisioningCoordinator(llmRegistry, envRepo, llmRunRepo, placementSvc, provisioners, gatewayManager, cfg.LLM.DefaultGatewayRef, logger,
+		coordOpts := []service.LLMProvisioningCoordinatorOption{
 			service.WithLLMCoordinatorIntervals(cfg.LLM.CoordinatorPollInterval, cfg.LLM.StaleRunTimeout),
-		)
+		}
+		if cfg.Nostr.PrivateKey != "" && controlPlanePool != nil {
+			llmResponder = controlplane.NewLLMResponder(controlPlanePool, cfg.Nostr.PrivateKey, nil, logger, nostrEventRepo)
+			coordOpts = append(coordOpts, service.WithLLMProvisioningResponder(llmResponder))
+		}
+		llmCoordinator := service.NewLLMProvisioningCoordinator(llmRegistry, envRepo, llmRunRepo, placementSvc, provisioners, gatewayManager, cfg.LLM.DefaultGatewayRef, logger, coordOpts...)
 		llmReconciler := reconcile.NewLLMRouteReconciler(llmRegistry, envRepo, provisioners, gatewayManager, cfg.LLM.DefaultGatewayRef, cfg.LLM.ReconcileInterval, logger)
 		bgManager.Register(llmCoordinator)
 		bgManager.Register(llmReconciler)
@@ -272,7 +277,11 @@ func New(cfg *config.Config) (*App, error) {
 	// Nostr read-model projector. This owns canonical 3196x projections and
 	// the 310xx audit/activity feed for relay consumers; the legacy Publisher is
 	// retained for relay pool lifecycle compatibility.
-	nostrProjector := nostrAdapter.NewProjector(cfg.Nostr, registry, controlPlanePool, nostrEventRepo, logger)
+	projectorOpts := []nostrAdapter.ProjectorOption{}
+	if llmRegistry != nil {
+		projectorOpts = append(projectorOpts, nostrAdapter.WithLLMProjectionSource(llmRegistry))
+	}
+	nostrProjector := nostrAdapter.NewProjector(cfg.Nostr, registry, controlPlanePool, nostrEventRepo, logger, projectorOpts...)
 	nostrProjector.SetupSubscriptions(publisher)
 	if nostrProjector.Enabled() {
 		bgManager.Register(nostrProjector)
@@ -390,7 +399,11 @@ func New(cfg *config.Config) (*App, error) {
 		// Pass nil for signer to use local key signing.
 		// To enable NIP-46 remote signing via Signet, create a signet.Client
 		// and pass it here: controlplane.NewReactor(..., signetClient, logger)
-		reactor := controlplane.NewReactor(reactorConfig, registry, controlPlanePool, nil, logger)
+		reactorOpts := []controlplane.ReactorOption{}
+		if llmRegistry != nil {
+			reactorOpts = append(reactorOpts, controlplane.WithLLMRegistry(llmRegistry))
+		}
+		reactor := controlplane.NewReactor(reactorConfig, registry, controlPlanePool, nil, logger, reactorOpts...)
 		bgManager.Register(&controlplaneRunner{reactor: reactor})
 		logger.Info("nostr control plane reactor registered", zap.Strings("relays", controlPlaneRelays))
 	}

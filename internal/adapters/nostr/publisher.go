@@ -15,20 +15,26 @@ import (
 
 // Nostr event kinds for Bahia outbound audit events.
 const (
-	KindBuildRegistered          = 31000
-	KindArtifactRegistered       = 31001
-	KindDeploymentCreated        = 31002
-	KindDeploymentComplete       = 31003
-	KindDriftDetected            = 31004
-	KindObservation              = 31005
-	KindServiceRegistryAudit     = 31006
-	KindEnvironmentRegistryAudit = 31007
-	KindStateChangedAudit        = 31008
-	KindRuntimeActionAudit       = 31009
-	KindReconcileAudit           = 31010
-	KindAdoptionAudit            = 31011
-	KindDeploymentApprovalAudit  = 31012
-	KindDeploymentRunAudit       = 31013
+	KindBuildRegistered           = 31000
+	KindArtifactRegistered        = 31001
+	KindDeploymentCreated         = 31002
+	KindDeploymentComplete        = 31003
+	KindDriftDetected             = 31004
+	KindObservation               = 31005
+	KindServiceRegistryAudit      = 31006
+	KindEnvironmentRegistryAudit  = 31007
+	KindStateChangedAudit         = 31008
+	KindRuntimeActionAudit        = 31009
+	KindReconcileAudit            = 31010
+	KindAdoptionAudit             = 31011
+	KindDeploymentApprovalAudit   = 31012
+	KindDeploymentRunAudit        = 31013
+	KindLLMRouteRegistryAudit     = 31014
+	KindLLMReleaseRegisteredAudit = 31015
+	KindLLMDeploymentAudit        = 31016
+	KindLLMRunAudit               = 31017
+	KindLLMRouteStateAudit        = 31018
+	KindLLMGatewayAudit           = 31019
 )
 
 // Canonical replaceable read-model kinds (3196x). Keep these values aligned
@@ -38,6 +44,8 @@ const (
 	KindServiceState        = 31961
 	KindServiceRegistry     = 31962
 	KindEnvironmentRegistry = 31963
+	KindLLMRouteRegistry    = 31964
+	KindLLMRouteState       = 31965
 )
 
 // Nostr event kinds for Bahia inbound command events (311xx series).

@@ -28,6 +28,17 @@ type ProjectionSource interface {
 	GetDeploymentRun(ctx context.Context, id uuid.UUID) (*domain.DeploymentRun, error)
 }
 
+// LLMProjectionSource is the authoritative LLM state reader used by the projector.
+// service.LLMRegistryService satisfies this interface.
+type LLMProjectionSource interface {
+	ListLLMRoutes(ctx context.Context, limit, offset int) ([]domain.LLMRoute, error)
+	GetLLMRoute(ctx context.Context, id uuid.UUID) (*domain.LLMRoute, error)
+	ListAllLLMRouteStates(ctx context.Context) ([]domain.LLMRouteState, error)
+	GetLLMRouteState(ctx context.Context, routeID, envID uuid.UUID) (*domain.LLMRouteState, error)
+	GetLLMDeploymentIntent(ctx context.Context, id uuid.UUID) (*domain.LLMDeploymentIntent, error)
+	GetLLMDeploymentRun(ctx context.Context, id uuid.UUID) (*domain.LLMDeploymentRun, error)
+}
+
 // ProjectionPublisher publishes signed Nostr events to relay-visible storage.
 type ProjectionPublisher interface {
 	Publish(ctx context.Context, ev gonostr.Event) (int, error)
@@ -38,6 +49,7 @@ type ProjectionPublisher interface {
 // periodic snapshot can repair a cold or wiped sidecar store.
 type Projector struct {
 	source         ProjectionSource
+	llmSource      LLMProjectionSource
 	publisher      ProjectionPublisher
 	eventRepo      repository.NostrEventRepository
 	privateKey     string
@@ -53,6 +65,10 @@ type ProjectorOption func(*Projector)
 // Use <=0 in tests to disable periodic repair after the startup snapshot.
 func WithProjectorRepairInterval(interval time.Duration) ProjectorOption {
 	return func(p *Projector) { p.repairInterval = interval }
+}
+
+func WithLLMProjectionSource(source LLMProjectionSource) ProjectorOption {
+	return func(p *Projector) { p.llmSource = source }
 }
 
 // NewProjector creates a canonical Nostr read-model projector.
@@ -108,6 +124,19 @@ func (p *Projector) SetupSubscriptions(pub events.Publisher) {
 		events.EventRuntimeDeploy,
 		events.EventRuntimeRestart,
 		events.EventRuntimeStop,
+		events.EventLLMRouteCreated,
+		events.EventLLMRouteUpdated,
+		events.EventLLMReleaseRegistered,
+		events.EventLLMDeploymentIntentCreated,
+		events.EventLLMDeploymentIntentApproved,
+		events.EventLLMDeploymentIntentRejected,
+		events.EventLLMDeploymentRunCreated,
+		events.EventLLMDeploymentRunStatusChanged,
+		events.EventLLMDeploymentRunCompleted,
+		events.EventLLMRouteObservation,
+		events.EventLLMRouteStateChanged,
+		events.EventLLMRouteDriftDetected,
+		events.EventLLMGatewayRouteSynced,
 	} {
 		et := eventType
 		pub.Subscribe(et, func(ctx context.Context, e events.Event) {
@@ -182,7 +211,37 @@ func (p *Projector) RepublishSnapshot(ctx context.Context) error {
 			)
 		}
 	}
-	p.logger.Info("Nostr projection snapshot republished", zap.Int("services", len(services)), zap.Int("environments", len(envs)), zap.Int("states", len(states)))
+	llmRoutes := 0
+	llmStates := 0
+	if p.llmSource != nil {
+		const pageSize = 500
+		for offset := 0; ; offset += pageSize {
+			routes, err := p.llmSource.ListLLMRoutes(ctx, pageSize, offset)
+			if err != nil {
+				return fmt.Errorf("list LLM routes: %w", err)
+			}
+			llmRoutes += len(routes)
+			for i := range routes {
+				if err := p.publishLLMRouteRegistry(ctx, &routes[i], false); err != nil {
+					p.logger.Warn("publish LLM route registry projection failed", zap.String("route_id", routes[i].ID.String()), zap.Error(err))
+				}
+			}
+			if len(routes) < pageSize {
+				break
+			}
+		}
+		states, err := p.llmSource.ListAllLLMRouteStates(ctx)
+		if err != nil {
+			return fmt.Errorf("list LLM route states: %w", err)
+		}
+		llmStates = len(states)
+		for i := range states {
+			if err := p.publishLLMRouteState(ctx, &states[i]); err != nil {
+				p.logger.Warn("publish LLM route state projection failed", zap.String("route_id", states[i].RouteID.String()), zap.String("environment_id", states[i].EnvironmentID.String()), zap.Error(err))
+			}
+		}
+	}
+	p.logger.Info("Nostr projection snapshot republished", zap.Int("services", len(services)), zap.Int("environments", len(envs)), zap.Int("states", len(states)), zap.Int("llm_routes", llmRoutes), zap.Int("llm_states", llmStates))
 	return nil
 }
 
@@ -233,6 +292,28 @@ func (p *Projector) handleEvent(ctx context.Context, e events.Event) {
 		if e.Type == events.EventAdoptionImported {
 			p.publishServiceByID(ctx, res.ServiceID)
 			p.publishEnvironmentByID(ctx, res.EnvironmentID)
+		}
+	case events.EventLLMRouteCreated, events.EventLLMRouteUpdated:
+		p.publishLLMRouteByID(ctx, firstString(res.RouteID, e.EntityID))
+	case events.EventLLMReleaseRegistered:
+		p.publishLLMRouteByID(ctx, res.RouteID)
+	case events.EventLLMDeploymentIntentCreated, events.EventLLMDeploymentIntentApproved, events.EventLLMDeploymentIntentRejected:
+		if id, ok := parseUUID(firstString(res.IntentID, e.EntityID)); ok {
+			p.publishLLMStateForIntent(ctx, id)
+		}
+	case events.EventLLMDeploymentRunCreated, events.EventLLMDeploymentRunStatusChanged, events.EventLLMDeploymentRunCompleted:
+		if id, ok := parseUUID(firstString(res.RunID, e.EntityID)); ok {
+			p.publishLLMStateForRun(ctx, id)
+		} else if id, ok := parseUUID(res.IntentID); ok {
+			p.publishLLMStateForIntent(ctx, id)
+		}
+	case events.EventLLMRouteObservation, events.EventLLMRouteStateChanged, events.EventLLMRouteDriftDetected, events.EventLLMGatewayRouteSynced:
+		if res.Deleted {
+			if err := p.publishLLMRouteStateTombstone(ctx, res); err != nil {
+				p.logger.Warn("publish LLM route state tombstone failed", zap.String("route_id", res.RouteID), zap.String("environment_id", res.EnvironmentID), zap.Error(err))
+			}
+		} else {
+			p.publishLLMStateForResource(ctx, res)
 		}
 	}
 }
@@ -323,6 +404,79 @@ func (p *Projector) publishStateForIDs(ctx context.Context, serviceID, envID uui
 	}
 }
 
+func (p *Projector) publishLLMRouteByID(ctx context.Context, raw string) {
+	if p.llmSource == nil {
+		return
+	}
+	id, ok := parseUUID(raw)
+	if !ok {
+		return
+	}
+	route, err := p.llmSource.GetLLMRoute(ctx, id)
+	if err != nil || route == nil {
+		if err != nil {
+			p.logger.Warn("read LLM route for projection failed", zap.String("route_id", raw), zap.Error(err))
+		}
+		return
+	}
+	if err := p.publishLLMRouteRegistry(ctx, route, false); err != nil {
+		p.logger.Warn("publish LLM route registry projection failed", zap.String("route_id", raw), zap.Error(err))
+	}
+}
+
+func (p *Projector) publishLLMStateForIntent(ctx context.Context, intentID uuid.UUID) {
+	if p.llmSource == nil {
+		return
+	}
+	intent, err := p.llmSource.GetLLMDeploymentIntent(ctx, intentID)
+	if err != nil || intent == nil {
+		if err != nil {
+			p.logger.Warn("read LLM deployment intent for projection failed", zap.String("intent_id", intentID.String()), zap.Error(err))
+		}
+		return
+	}
+	p.publishLLMStateForIDs(ctx, intent.RouteID, intent.EnvironmentID)
+}
+
+func (p *Projector) publishLLMStateForRun(ctx context.Context, runID uuid.UUID) {
+	if p.llmSource == nil {
+		return
+	}
+	run, err := p.llmSource.GetLLMDeploymentRun(ctx, runID)
+	if err != nil || run == nil {
+		if err != nil {
+			p.logger.Warn("read LLM deployment run for projection failed", zap.String("run_id", runID.String()), zap.Error(err))
+		}
+		return
+	}
+	p.publishLLMStateForIntent(ctx, run.DeploymentIntentID)
+}
+
+func (p *Projector) publishLLMStateForResource(ctx context.Context, res events.ResourceData) {
+	routeID, routeOK := parseUUID(res.RouteID)
+	envID, envOK := parseUUID(res.EnvironmentID)
+	if !routeOK || !envOK {
+		return
+	}
+	p.publishLLMStateForIDs(ctx, routeID, envID)
+}
+
+func (p *Projector) publishLLMStateForIDs(ctx context.Context, routeID, envID uuid.UUID) {
+	if p.llmSource == nil {
+		return
+	}
+	state, err := p.llmSource.GetLLMRouteState(ctx, routeID, envID)
+	if err != nil || state == nil {
+		if err != nil {
+			p.logger.Warn("read LLM route state for projection failed", zap.String("route_id", routeID.String()), zap.String("environment_id", envID.String()), zap.Error(err))
+		}
+		return
+	}
+	if err := p.publishLLMRouteState(ctx, state); err != nil {
+		p.logger.Warn("publish LLM route state projection failed", zap.String("route_id", routeID.String()), zap.String("environment_id", envID.String()), zap.Error(err))
+	}
+}
+
 func (p *Projector) publishServiceRegistry(ctx context.Context, svc *domain.Service, deleted bool) error {
 	content := map[string]any{
 		"deleted": deleted,
@@ -379,6 +533,99 @@ func (p *Projector) publishEnvironmentRegistry(ctx context.Context, env *domain.
 		)
 	}
 	return p.publishSigned(ctx, KindEnvironmentRegistry, tags, string(contentJSON), "environment.projection", &env.ID)
+}
+
+func (p *Projector) publishLLMRouteRegistry(ctx context.Context, route *domain.LLMRoute, deleted bool) error {
+	content := map[string]any{
+		"deleted": deleted,
+		"id":      route.ID.String(),
+	}
+	if !deleted {
+		content["name"] = route.Name
+		content["description"] = route.Description
+		content["gateway_config"] = route.GatewayConfig
+		content["default_placement_policy"] = route.DefaultPlacementPolicy
+		content["default_promotion_gate"] = route.DefaultPromotionGate
+		content["metadata"] = route.Metadata
+		content["created_at"] = formatTime(route.CreatedAt)
+		content["updated_at"] = formatTime(route.UpdatedAt)
+	} else {
+		content["updated_at"] = formatTime(route.UpdatedAt)
+	}
+	contentJSON, _ := json.Marshal(content)
+	tags := gonostr.Tags{{"d", route.ID.String()}, {"route", route.ID.String()}, {"deleted", fmt.Sprintf("%t", deleted)}}
+	if !deleted {
+		tags = append(tags, gonostr.Tag{"name", route.Name})
+		if route.GatewayConfig != nil && route.GatewayConfig.PublicModel != "" {
+			tags = append(tags, gonostr.Tag{"model", route.GatewayConfig.PublicModel})
+		}
+	}
+	return p.publishSigned(ctx, KindLLMRouteRegistry, tags, string(contentJSON), "llm_route.projection", &route.ID)
+}
+
+func (p *Projector) publishLLMRouteState(ctx context.Context, state *domain.LLMRouteState) error {
+	content := map[string]any{
+		"deleted":          false,
+		"route_id":         state.RouteID.String(),
+		"environment_id":   state.EnvironmentID.String(),
+		"drift_status":     string(state.DriftStatus),
+		"gateway_status":   string(state.GatewayStatus),
+		"backend_kind":     string(state.BackendKind),
+		"backend_endpoint": state.BackendEndpoint,
+		"backend_health":   string(state.BackendHealth),
+		"gateway_target":   state.GatewayTarget,
+		"updated_at":       formatTime(state.UpdatedAt),
+	}
+	if state.DesiredReleaseID != nil {
+		content["desired_release_id"] = state.DesiredReleaseID.String()
+	}
+	if state.DesiredIntentID != nil {
+		content["desired_intent_id"] = state.DesiredIntentID.String()
+	}
+	if state.ActiveRunID != nil {
+		content["active_run_id"] = state.ActiveRunID.String()
+	}
+	if state.CurrentObservationID != nil {
+		content["current_observation_id"] = state.CurrentObservationID.String()
+	}
+	if state.LastReconciledAt != nil {
+		content["last_reconciled_at"] = formatTime(*state.LastReconciledAt)
+	}
+	contentJSON, _ := json.Marshal(content)
+	dTag := fmt.Sprintf("%s:%s", state.RouteID, state.EnvironmentID)
+	tags := gonostr.Tags{
+		{"d", dTag},
+		{"route", state.RouteID.String()},
+		{"environment", state.EnvironmentID.String()},
+		{"deleted", "false"},
+		{"drift_status", string(state.DriftStatus)},
+		{"gateway_status", string(state.GatewayStatus)},
+	}
+	if state.DesiredReleaseID != nil {
+		tags = append(tags, gonostr.Tag{"release", state.DesiredReleaseID.String()})
+	}
+	if state.DesiredIntentID != nil {
+		tags = append(tags, gonostr.Tag{"intent", state.DesiredIntentID.String()})
+	}
+	if state.ActiveRunID != nil {
+		tags = append(tags, gonostr.Tag{"run", state.ActiveRunID.String()})
+	}
+	if state.BackendKind != "" {
+		tags = append(tags, gonostr.Tag{"backend", string(state.BackendKind)})
+	}
+	return p.publishSigned(ctx, KindLLMRouteState, tags, string(contentJSON), "llm_route_state.projection", &state.RouteID)
+}
+
+func (p *Projector) publishLLMRouteStateTombstone(ctx context.Context, res events.ResourceData) error {
+	routeID, routeOK := parseUUID(res.RouteID)
+	envID, envOK := parseUUID(res.EnvironmentID)
+	if !routeOK || !envOK {
+		return nil
+	}
+	content, _ := json.Marshal(map[string]any{"deleted": true, "route_id": routeID.String(), "environment_id": envID.String(), "updated_at": formatTime(time.Now().UTC())})
+	dTag := fmt.Sprintf("%s:%s", routeID, envID)
+	tags := gonostr.Tags{{"d", dTag}, {"route", routeID.String()}, {"environment", envID.String()}, {"deleted", "true"}}
+	return p.publishSigned(ctx, KindLLMRouteState, tags, string(content), "llm_route_state.projection", &routeID)
 }
 
 func (p *Projector) publishState(ctx context.Context, state *domain.EnvironmentServiceState) error {
@@ -467,8 +714,28 @@ func (p *Projector) publishAudit(ctx context.Context, e events.Event) error {
 		tags = append(tags, gonostr.Tag{"d", e.EntityID})
 	}
 	tags = appendResourceTags(tags, res)
-	entityID := firstParsedUUID(e.EntityID, res.ServiceID, res.EnvironmentID, res.IntentID, res.RunID, res.ArtifactID)
+	entityID := auditEntityID(e.Type, e.EntityID, res)
 	return p.publishSigned(ctx, kind, tags, string(content), string(e.Type), entityID)
+}
+
+func auditEntityID(t events.EventType, raw string, res events.ResourceData) *uuid.UUID {
+	if isLLMEvent(t) {
+		return firstParsedUUID(raw, res.RouteID, res.ReleaseID, res.EnvironmentID, res.IntentID, res.RunID)
+	}
+	return firstParsedUUID(raw, res.ServiceID, res.EnvironmentID, res.IntentID, res.RunID, res.ArtifactID)
+}
+
+func isLLMEvent(t events.EventType) bool {
+	switch t {
+	case events.EventLLMRouteCreated, events.EventLLMRouteUpdated,
+		events.EventLLMReleaseRegistered,
+		events.EventLLMDeploymentIntentCreated, events.EventLLMDeploymentIntentApproved, events.EventLLMDeploymentIntentRejected,
+		events.EventLLMDeploymentRunCreated, events.EventLLMDeploymentRunStatusChanged, events.EventLLMDeploymentRunCompleted,
+		events.EventLLMRouteObservation, events.EventLLMRouteStateChanged, events.EventLLMRouteDriftDetected, events.EventLLMGatewayRouteSynced:
+		return true
+	default:
+		return false
+	}
 }
 
 func (p *Projector) publishSigned(ctx context.Context, kind int, tags gonostr.Tags, content, entityType string, entityID *uuid.UUID) error {
@@ -536,6 +803,18 @@ func auditKindForEvent(t events.EventType) int {
 		return KindDeploymentApprovalAudit
 	case events.EventDeploymentRunCreated, events.EventDeploymentRunStatusChanged:
 		return KindDeploymentRunAudit
+	case events.EventLLMRouteCreated, events.EventLLMRouteUpdated:
+		return KindLLMRouteRegistryAudit
+	case events.EventLLMReleaseRegistered:
+		return KindLLMReleaseRegisteredAudit
+	case events.EventLLMDeploymentIntentCreated, events.EventLLMDeploymentIntentApproved, events.EventLLMDeploymentIntentRejected:
+		return KindLLMDeploymentAudit
+	case events.EventLLMDeploymentRunCreated, events.EventLLMDeploymentRunStatusChanged, events.EventLLMDeploymentRunCompleted:
+		return KindLLMRunAudit
+	case events.EventLLMRouteObservation, events.EventLLMRouteStateChanged, events.EventLLMRouteDriftDetected:
+		return KindLLMRouteStateAudit
+	case events.EventLLMGatewayRouteSynced:
+		return KindLLMGatewayAudit
 	default:
 		return 0
 	}
@@ -561,6 +840,76 @@ func resourceFromEvent(e events.Event) events.ResourceData {
 		}
 	case domain.DeploymentRun:
 		return events.ResourceData{IntentID: data.DeploymentIntentID.String(), RunID: data.ID.String()}
+	case *domain.LLMRoute:
+		if data != nil {
+			return events.ResourceData{RouteID: data.ID.String()}
+		}
+	case domain.LLMRoute:
+		return events.ResourceData{RouteID: data.ID.String()}
+	case *domain.LLMRelease:
+		if data != nil {
+			return events.ResourceData{RouteID: data.RouteID.String(), ReleaseID: data.ID.String()}
+		}
+	case domain.LLMRelease:
+		return events.ResourceData{RouteID: data.RouteID.String(), ReleaseID: data.ID.String()}
+	case *domain.LLMDeploymentIntent:
+		if data != nil {
+			return events.ResourceData{RouteID: data.RouteID.String(), EnvironmentID: data.EnvironmentID.String(), ReleaseID: data.ReleaseID.String(), IntentID: data.ID.String()}
+		}
+	case domain.LLMDeploymentIntent:
+		return events.ResourceData{RouteID: data.RouteID.String(), EnvironmentID: data.EnvironmentID.String(), ReleaseID: data.ReleaseID.String(), IntentID: data.ID.String()}
+	case *domain.LLMDeploymentRun:
+		if data != nil {
+			return events.ResourceData{IntentID: data.DeploymentIntentID.String(), RunID: data.ID.String()}
+		}
+	case domain.LLMDeploymentRun:
+		return events.ResourceData{IntentID: data.DeploymentIntentID.String(), RunID: data.ID.String()}
+	case *domain.LLMRouteObservation:
+		if data != nil {
+			res := events.ResourceData{RouteID: data.RouteID.String(), EnvironmentID: data.EnvironmentID.String()}
+			if data.ObservedReleaseID != nil {
+				res.ReleaseID = data.ObservedReleaseID.String()
+			}
+			if data.ObservedRunID != nil {
+				res.RunID = data.ObservedRunID.String()
+			}
+			return res
+		}
+	case domain.LLMRouteObservation:
+		res := events.ResourceData{RouteID: data.RouteID.String(), EnvironmentID: data.EnvironmentID.String()}
+		if data.ObservedReleaseID != nil {
+			res.ReleaseID = data.ObservedReleaseID.String()
+		}
+		if data.ObservedRunID != nil {
+			res.RunID = data.ObservedRunID.String()
+		}
+		return res
+	case *domain.LLMRouteState:
+		if data != nil {
+			res := events.ResourceData{RouteID: data.RouteID.String(), EnvironmentID: data.EnvironmentID.String()}
+			if data.DesiredReleaseID != nil {
+				res.ReleaseID = data.DesiredReleaseID.String()
+			}
+			if data.DesiredIntentID != nil {
+				res.IntentID = data.DesiredIntentID.String()
+			}
+			if data.ActiveRunID != nil {
+				res.RunID = data.ActiveRunID.String()
+			}
+			return res
+		}
+	case domain.LLMRouteState:
+		res := events.ResourceData{RouteID: data.RouteID.String(), EnvironmentID: data.EnvironmentID.String()}
+		if data.DesiredReleaseID != nil {
+			res.ReleaseID = data.DesiredReleaseID.String()
+		}
+		if data.DesiredIntentID != nil {
+			res.IntentID = data.DesiredIntentID.String()
+		}
+		if data.ActiveRunID != nil {
+			res.RunID = data.ActiveRunID.String()
+		}
+		return res
 	case *domain.RuntimeObservation:
 		if data != nil {
 			return events.ResourceData{ServiceID: data.ServiceID.String(), EnvironmentID: data.EnvironmentID.String()}
@@ -580,6 +929,8 @@ func resourceFromStringMap(m map[string]string) events.ResourceData {
 		ServiceID:     m["service_id"],
 		EnvironmentID: m["environment_id"],
 		ArtifactID:    m["artifact_id"],
+		RouteID:       m["route_id"],
+		ReleaseID:     m["release_id"],
 		IntentID:      firstString(m["intent_id"], m["deployment_intent_id"]),
 		RunID:         firstString(m["run_id"], m["deployment_run_id"]),
 	}
@@ -590,6 +941,8 @@ func resourceFromAnyMap(m map[string]any) events.ResourceData {
 		ServiceID:     stringify(m["service_id"]),
 		EnvironmentID: stringify(m["environment_id"]),
 		ArtifactID:    stringify(m["artifact_id"]),
+		RouteID:       stringify(m["route_id"]),
+		ReleaseID:     stringify(m["release_id"]),
 		IntentID:      firstString(stringify(m["intent_id"]), stringify(m["deployment_intent_id"])),
 		RunID:         firstString(stringify(m["run_id"]), stringify(m["deployment_run_id"])),
 	}
@@ -604,6 +957,12 @@ func appendResourceTags(tags gonostr.Tags, res events.ResourceData) gonostr.Tags
 	}
 	if res.ArtifactID != "" {
 		tags = append(tags, gonostr.Tag{"artifact", res.ArtifactID})
+	}
+	if res.RouteID != "" {
+		tags = append(tags, gonostr.Tag{"route", res.RouteID})
+	}
+	if res.ReleaseID != "" {
+		tags = append(tags, gonostr.Tag{"release", res.ReleaseID})
 	}
 	if res.IntentID != "" {
 		tags = append(tags, gonostr.Tag{"intent", res.IntentID})

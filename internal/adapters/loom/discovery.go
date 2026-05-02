@@ -100,7 +100,7 @@ func (d *WorkerDiscovery) fetchRecentWorkers(ctx context.Context) error {
 	}
 
 	var events []*nostr.Event
-	
+
 collectLoop:
 	for {
 		select {
@@ -141,7 +141,7 @@ collectLoop:
 // subscribeLoop maintains a subscription to Kind 10100 events.
 func (d *WorkerDiscovery) subscribeLoop() {
 	backoff := nostrAdapter.DefaultBackoff()
-	
+
 	for {
 		select {
 		case <-d.ctx.Done():
@@ -274,10 +274,13 @@ func (d *WorkerDiscovery) processWorkerEvent(ctx context.Context, ev *nostr.Even
 
 // workerAdContent is the JSON content of a Kind 10100 event.
 type workerAdContent struct {
-	Name              string `json:"name"`
-	Description       string `json:"description"`
-	MaxConcurrentJobs int    `json:"max_concurrent_jobs"`
-	CurrentQueueDepth int    `json:"current_queue_depth"`
+	Name              string                      `json:"name"`
+	Description       string                      `json:"description"`
+	MaxConcurrentJobs int                         `json:"max_concurrent_jobs"`
+	CurrentQueueDepth int                         `json:"current_queue_depth"`
+	Resources         *domain.WorkerResources     `json:"resources,omitempty"`
+	Accelerators      []domain.WorkerAccelerator  `json:"accelerators,omitempty"`
+	RuntimeTarget     *domain.WorkerRuntimeTarget `json:"runtime_target,omitempty"`
 }
 
 // parseWorkerAdvertisement parses a Kind 10100 event into a Worker.
@@ -293,6 +296,9 @@ func parseWorkerAdvertisement(ev *nostr.Event) (*domain.Worker, error) {
 		Description:         content.Description,
 		MaxConcurrentJobs:   content.MaxConcurrentJobs,
 		CurrentQueueDepth:   content.CurrentQueueDepth,
+		Resources:           content.Resources,
+		Accelerators:        content.Accelerators,
+		RuntimeTarget:       content.RuntimeTarget,
 		LastAdvertisementAt: time.Unix(int64(ev.CreatedAt), 0),
 		CreatedAt:           time.Now(),
 		UpdatedAt:           time.Now(),

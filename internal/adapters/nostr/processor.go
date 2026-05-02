@@ -277,10 +277,13 @@ func (p *Processor) handleWorkerAdvertisement(ctx context.Context, ev *gonostr.E
 
 	// Parse content JSON for name/description/queue info.
 	var content struct {
-		Name              string `json:"name"`
-		Description       string `json:"description"`
-		MaxConcurrentJobs int    `json:"max_concurrent_jobs"`
-		CurrentQueueDepth int    `json:"current_queue_depth"`
+		Name              string                      `json:"name"`
+		Description       string                      `json:"description"`
+		MaxConcurrentJobs int                         `json:"max_concurrent_jobs"`
+		CurrentQueueDepth int                         `json:"current_queue_depth"`
+		Resources         *domain.WorkerResources     `json:"resources,omitempty"`
+		Accelerators      []domain.WorkerAccelerator  `json:"accelerators,omitempty"`
+		RuntimeTarget     *domain.WorkerRuntimeTarget `json:"runtime_target,omitempty"`
 	}
 	if ev.Content != "" {
 		_ = json.Unmarshal([]byte(ev.Content), &content)
@@ -292,6 +295,9 @@ func (p *Processor) handleWorkerAdvertisement(ctx context.Context, ev *gonostr.E
 		Description:         content.Description,
 		MaxConcurrentJobs:   content.MaxConcurrentJobs,
 		CurrentQueueDepth:   content.CurrentQueueDepth,
+		Resources:           content.Resources,
+		Accelerators:        content.Accelerators,
+		RuntimeTarget:       content.RuntimeTarget,
 		LastAdvertisementAt: ev.CreatedAt.Time(),
 		Status:              domain.WorkerStatusOnline,
 	}

@@ -13,6 +13,13 @@ import (
 	"go.uber.org/zap"
 )
 
+// LLMProvisioningResponder publishes optional out-of-band lifecycle replies for Nostr-originated LLM intents.
+type LLMProvisioningResponder interface {
+	PublishStatus(ctx context.Context, intent *domain.LLMDeploymentIntent, run *domain.LLMDeploymentRun, step, message string) error
+	PublishResult(ctx context.Context, intent *domain.LLMDeploymentIntent, run *domain.LLMDeploymentRun, status, message string) error
+	PublishError(ctx context.Context, intent *domain.LLMDeploymentIntent, run *domain.LLMDeploymentRun, step string, cause error) error
+}
+
 // LLMProvisioningCoordinator drains DB-backed LLM runs and promotes healthy backends into the gateway.
 type LLMProvisioningCoordinator struct {
 	registry          *LLMRegistryService
@@ -23,6 +30,7 @@ type LLMProvisioningCoordinator struct {
 	gateway           llmadapter.GatewayRouteManager
 	gate              *LLMPromotionGate
 	defaultGatewayRef string
+	responder         LLMProvisioningResponder
 	pollInterval      time.Duration
 	staleRunTimeout   time.Duration
 	logger            *zap.Logger
@@ -39,6 +47,10 @@ func WithLLMCoordinatorIntervals(pollInterval, staleRunTimeout time.Duration) LL
 			c.staleRunTimeout = staleRunTimeout
 		}
 	}
+}
+
+func WithLLMProvisioningResponder(responder LLMProvisioningResponder) LLMProvisioningCoordinatorOption {
+	return func(c *LLMProvisioningCoordinator) { c.responder = responder }
 }
 
 func NewLLMProvisioningCoordinator(registry *LLMRegistryService, envs repository.EnvironmentRepository, runs repository.LLMDeploymentRunRepository, placement *LLMPlacementService, provisioners llmadapter.ProvisionerResolver, gateway llmadapter.GatewayRouteManager, defaultGatewayRef string, logger *zap.Logger, opts ...LLMProvisioningCoordinatorOption) *LLMProvisioningCoordinator {
@@ -125,7 +137,9 @@ func (c *LLMProvisioningCoordinator) processRun(ctx context.Context, run *domain
 		}
 	}
 	_ = c.runs.Update(ctx, run)
+	c.publishStatus(ctx, intent, run, "placing_backend", "selected LLM backend placement")
 
+	c.publishStatus(ctx, intent, run, "provisioning_backend", "provisioning LLM backend")
 	result, err := provisioner.Provision(ctx, req)
 	if err != nil {
 		return c.failRun(ctx, run, err, provisioner, req)
@@ -150,6 +164,7 @@ func (c *LLMProvisioningCoordinator) processRun(ctx context.Context, run *domain
 		return c.registry.CompleteDeploymentRun(ctx, run.ID, domain.RunStatusCancelled, nil)
 	}
 
+	c.publishStatus(ctx, intent, run, "evaluating_gate", "evaluating LLM backend promotion gate")
 	gateResult, err := c.gate.Evaluate(ctx, provisioner, req, effectiveLLMGate(route, release))
 	mergeRunMetadata(run, map[string]any{"promotion_gate": gateResult})
 	_ = c.runs.Update(ctx, run)
@@ -164,6 +179,7 @@ func (c *LLMProvisioningCoordinator) processRun(ctx context.Context, run *domain
 	if strings.TrimSpace(gatewayRef) == "" {
 		return c.failRun(ctx, run, fmt.Errorf("no llm gateway configured for environment %s", env.ID), provisioner, req)
 	}
+	c.publishStatus(ctx, intent, run, "syncing_gateway", "syncing LLM gateway route")
 	spec := BuildLLMGatewayRouteSpec(route, result.BackendEndpoint)
 	gatewayObs, err := c.gateway.UpsertRoute(ctx, gatewayRef, spec)
 	if err != nil {
@@ -173,6 +189,7 @@ func (c *LLMProvisioningCoordinator) processRun(ctx context.Context, run *domain
 	if err != nil {
 		backendObs = &llmadapter.BackendObservation{BackendKind: result.BackendKind, BackendEndpoint: result.BackendEndpoint, HealthStatus: domain.HealthStatusUnhealthy, Source: "coordinator", Metadata: map[string]any{"observe_error": err.Error()}}
 	}
+	c.publishStatus(ctx, intent, run, "recording_observation", "recording LLM route observation")
 	obs := &domain.LLMRouteObservation{RouteID: route.ID, EnvironmentID: env.ID, ObservedReleaseID: &release.ID, ObservedRunID: &run.ID, BackendKind: backendObs.BackendKind, BackendEndpoint: backendObs.BackendEndpoint, BackendHealth: backendObs.HealthStatus, GatewayStatus: gatewayObs.Status, GatewayTarget: gatewayObs.TargetURL, GatewayConfigHash: gatewayObs.GatewayConfigHash, Source: "coordinator", Metadata: map[string]any{"backend": backendObs.Metadata, "gateway": gatewayObs.Metadata}}
 	if obs.GatewayTarget == "" {
 		obs.GatewayTarget = result.BackendEndpoint
@@ -183,7 +200,11 @@ func (c *LLMProvisioningCoordinator) processRun(ctx context.Context, run *domain
 	if err := c.registry.RecordObservation(ctx, obs); err != nil {
 		return err
 	}
-	return c.registry.CompleteDeploymentRun(ctx, run.ID, domain.RunStatusSucceeded, nil)
+	if err := c.registry.CompleteDeploymentRun(ctx, run.ID, domain.RunStatusSucceeded, nil); err != nil {
+		return err
+	}
+	c.publishResult(ctx, intent, run, "completed", "LLM deployment completed")
+	return nil
 }
 
 func (c *LLMProvisioningCoordinator) failRun(ctx context.Context, run *domain.LLMDeploymentRun, cause error, provisioner llmadapter.Provisioner, req llmadapter.ProvisionCandidateRequest) error {
@@ -195,7 +216,41 @@ func (c *LLMProvisioningCoordinator) failRun(ctx context.Context, run *domain.LL
 	if err := c.registry.CompleteDeploymentRun(ctx, run.ID, domain.RunStatusFailed, nil); err != nil {
 		return err
 	}
+	if req.Route != nil && req.Release != nil && req.Environment != nil {
+		intent := &domain.LLMDeploymentIntent{ID: run.DeploymentIntentID, RouteID: req.Route.ID, ReleaseID: req.Release.ID, EnvironmentID: req.Environment.ID, Metadata: map[string]any{}}
+		if loaded, err := c.registry.GetDeploymentIntent(ctx, run.DeploymentIntentID); err == nil && loaded != nil {
+			intent = loaded
+		}
+		c.publishError(ctx, intent, run, "failed", cause)
+	}
 	return cause
+}
+
+func (c *LLMProvisioningCoordinator) publishStatus(ctx context.Context, intent *domain.LLMDeploymentIntent, run *domain.LLMDeploymentRun, step, message string) {
+	if c.responder == nil || intent == nil {
+		return
+	}
+	if err := c.responder.PublishStatus(ctx, intent, run, step, message); err != nil {
+		c.logger.Warn("publish LLM provisioning status failed", zap.String("step", step), zap.Error(err))
+	}
+}
+
+func (c *LLMProvisioningCoordinator) publishResult(ctx context.Context, intent *domain.LLMDeploymentIntent, run *domain.LLMDeploymentRun, status, message string) {
+	if c.responder == nil || intent == nil {
+		return
+	}
+	if err := c.responder.PublishResult(ctx, intent, run, status, message); err != nil {
+		c.logger.Warn("publish LLM provisioning result failed", zap.String("status", status), zap.Error(err))
+	}
+}
+
+func (c *LLMProvisioningCoordinator) publishError(ctx context.Context, intent *domain.LLMDeploymentIntent, run *domain.LLMDeploymentRun, step string, cause error) {
+	if c.responder == nil || intent == nil || cause == nil {
+		return
+	}
+	if err := c.responder.PublishError(ctx, intent, run, step, cause); err != nil {
+		c.logger.Warn("publish LLM provisioning error failed", zap.String("step", step), zap.Error(err))
+	}
 }
 
 func (c *LLMProvisioningCoordinator) gatewayRef(env *domain.Environment) string {

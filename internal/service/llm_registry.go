@@ -256,8 +256,14 @@ func (s *LLMRegistryService) MarkDeploymentRunCreated(ctx context.Context, run *
 	if err := s.intents.UpdateStatus(ctx, run.DeploymentIntentID, domain.IntentStatusDeploying); err != nil {
 		return err
 	}
-	s.publish(ctx, events.EventLLMDeploymentRunCreated, run.ID.String(), events.ResourceData{IntentID: run.DeploymentIntentID.String(), RunID: run.ID.String()})
-	s.publish(ctx, events.EventLLMDeploymentRunStatusChanged, run.ID.String(), events.ResourceData{IntentID: run.DeploymentIntentID.String(), RunID: run.ID.String()})
+	data := map[string]any{"intent_id": run.DeploymentIntentID.String(), "run_id": run.ID.String(), "status": string(run.Status)}
+	if intent, err := s.intents.GetByID(ctx, run.DeploymentIntentID); err == nil && intent != nil {
+		data["route_id"] = intent.RouteID.String()
+		data["release_id"] = intent.ReleaseID.String()
+		data["environment_id"] = intent.EnvironmentID.String()
+	}
+	s.publish(ctx, events.EventLLMDeploymentRunCreated, run.ID.String(), data)
+	s.publish(ctx, events.EventLLMDeploymentRunStatusChanged, run.ID.String(), data)
 	return nil
 }
 
@@ -313,8 +319,9 @@ func (s *LLMRegistryService) CompleteDeploymentRun(ctx context.Context, id uuid.
 	if err := s.state.Upsert(ctx, state); err != nil {
 		return err
 	}
-	s.publish(ctx, events.EventLLMDeploymentRunCompleted, id.String(), map[string]string{"status": string(status)})
-	s.publish(ctx, events.EventLLMDeploymentRunStatusChanged, id.String(), events.ResourceData{RouteID: intent.RouteID.String(), ReleaseID: intent.ReleaseID.String(), EnvironmentID: intent.EnvironmentID.String(), IntentID: intent.ID.String(), RunID: id.String()})
+	runData := map[string]any{"status": string(status), "route_id": intent.RouteID.String(), "release_id": intent.ReleaseID.String(), "environment_id": intent.EnvironmentID.String(), "intent_id": intent.ID.String(), "run_id": id.String()}
+	s.publish(ctx, events.EventLLMDeploymentRunCompleted, id.String(), runData)
+	s.publish(ctx, events.EventLLMDeploymentRunStatusChanged, id.String(), runData)
 	s.publishStateChanged(ctx, state)
 	return nil
 }
@@ -437,6 +444,31 @@ func (s *LLMRegistryService) ListAllRouteStates(ctx context.Context) ([]domain.L
 
 func (s *LLMRegistryService) ListDriftedRouteStates(ctx context.Context) ([]domain.LLMRouteState, error) {
 	return s.state.ListDrifted(ctx)
+}
+
+// LLM projector source aliases keep projection wiring explicit without changing the HTTP-facing service API.
+func (s *LLMRegistryService) ListLLMRoutes(ctx context.Context, limit, offset int) ([]domain.LLMRoute, error) {
+	return s.ListRoutes(ctx, limit, offset)
+}
+
+func (s *LLMRegistryService) GetLLMRoute(ctx context.Context, id uuid.UUID) (*domain.LLMRoute, error) {
+	return s.GetRoute(ctx, id)
+}
+
+func (s *LLMRegistryService) ListAllLLMRouteStates(ctx context.Context) ([]domain.LLMRouteState, error) {
+	return s.ListAllRouteStates(ctx)
+}
+
+func (s *LLMRegistryService) GetLLMRouteState(ctx context.Context, routeID, envID uuid.UUID) (*domain.LLMRouteState, error) {
+	return s.GetRouteState(ctx, routeID, envID)
+}
+
+func (s *LLMRegistryService) GetLLMDeploymentIntent(ctx context.Context, id uuid.UUID) (*domain.LLMDeploymentIntent, error) {
+	return s.GetDeploymentIntent(ctx, id)
+}
+
+func (s *LLMRegistryService) GetLLMDeploymentRun(ctx context.Context, id uuid.UUID) (*domain.LLMDeploymentRun, error) {
+	return s.GetDeploymentRun(ctx, id)
 }
 
 func (s *LLMRegistryService) loadRouteReleaseEnvironment(ctx context.Context, routeID, releaseID, envID uuid.UUID) (*domain.LLMRoute, *domain.LLMRelease, *domain.Environment, error) {

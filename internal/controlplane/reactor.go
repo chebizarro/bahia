@@ -25,32 +25,42 @@ import (
 // This is the CANONICAL event kind series for Bahia operations.
 // The 311xx series in internal/adapters/nostr/publisher.go is deprecated.
 const (
-	// Request kinds (5961-5969)
-	KindDeployRequest      = 5961 // Request to deploy a service
-	KindRollbackRequest    = 5962 // Request to rollback a service
-	KindServiceAction      = 5963 // Lifecycle action (scale, restart, stop)
-	KindServiceCreate      = 5964 // Create a new service
-	KindEnvironmentCreate  = 5965 // Create a new environment
-	KindDeploymentApproval = 5966 // Approve or reject a deployment
-	KindObservationSubmit  = 5967 // Submit runtime observation
-	KindDriftRemediate     = 5968 // Request drift remediation
+	// Request kinds (5961-5974)
+	KindDeployRequest         = 5961 // Request to deploy a service
+	KindRollbackRequest       = 5962 // Request to rollback a service
+	KindServiceAction         = 5963 // Lifecycle action (scale, restart, stop)
+	KindServiceCreate         = 5964 // Create a new service
+	KindEnvironmentCreate     = 5965 // Create a new environment
+	KindDeploymentApproval    = 5966 // Approve or reject a deployment
+	KindObservationSubmit     = 5967 // Submit runtime observation
+	KindDriftRemediate        = 5968 // Request drift remediation
+	KindLLMRouteCreate        = 5971 // Create an LLM route
+	KindLLMReleaseRegister    = 5972 // Register an LLM release
+	KindLLMDeployRequest      = 5973 // Request LLM route deployment
+	KindLLMDeploymentApproval = 5974 // Approve or reject an LLM deployment
 
-	// Status kinds (6961-6969)
-	KindDeploymentStatus = 6961 // Deployment progress updates
-	KindServiceStatus    = 6962 // Service health/state updates
+	// Status kinds (6961-6973)
+	KindDeploymentStatus    = 6961 // Deployment progress updates
+	KindServiceStatus       = 6962 // Service health/state updates
+	KindLLMDeploymentStatus = 6973 // LLM deployment progress updates
 
-	// Result kinds (7961-7969)
-	KindDeploymentResult    = 7961 // Final deployment result
-	KindActionResult        = 7962 // Result of a service action
-	KindServiceCreateResult = 7963 // Service creation result
-	KindEnvCreateResult     = 7964 // Environment creation result
-	KindObservationResult   = 7965 // Observation submission result
-	KindRemediationResult   = 7966 // Drift remediation result
+	// Result kinds (7961-7973)
+	KindDeploymentResult         = 7961 // Final deployment result
+	KindActionResult             = 7962 // Result of a service action
+	KindServiceCreateResult      = 7963 // Service creation result
+	KindEnvCreateResult          = 7964 // Environment creation result
+	KindObservationResult        = 7965 // Observation submission result
+	KindRemediationResult        = 7966 // Drift remediation result
+	KindLLMRouteCreateResult     = 7971 // LLM route creation result
+	KindLLMReleaseRegisterResult = 7972 // LLM release registration result
+	KindLLMDeploymentResult      = 7973 // LLM deployment/approval result
 
 	// Replaceable registry kinds (3196x series, d-tag indexed)
 	KindServiceState        = 31961 // Replaceable service state (d=service:env)
 	KindServiceRegistry     = 31962 // Replaceable service registry entry (d=service_id)
 	KindEnvironmentRegistry = 31963 // Replaceable environment registry entry (d=env_id)
+	KindLLMRouteRegistry    = 31964 // Replaceable LLM route registry entry (d=route_id)
+	KindLLMRouteState       = 31965 // Replaceable LLM route state (d=route:env)
 )
 
 // DefaultAuthorizedPubkeys is the list of pubkeys allowed to control Bahia via Nostr.
@@ -81,14 +91,15 @@ type EventSigner interface {
 
 // Reactor subscribes to Nostr control plane events and dispatches handlers.
 type Reactor struct {
-	config   Config
-	pool     *nostrpool.RelayPool
-	registry *service.RegistryService
-	signer   EventSigner // Optional NIP-46 signer
-	logger   *slog.Logger
-	zapLog   *zap.Logger
-	dedup    *nostrpool.EventDeduplicator
-	backoff  *nostrpool.Backoff
+	config      Config
+	pool        *nostrpool.RelayPool
+	registry    *service.RegistryService
+	llmRegistry *service.LLMRegistryService
+	signer      EventSigner // Optional NIP-46 signer
+	logger      *slog.Logger
+	zapLog      *zap.Logger
+	dedup       *nostrpool.EventDeduplicator
+	backoff     *nostrpool.Backoff
 
 	mu   sync.Mutex
 	runs map[string]*DeploymentRun // requestEventID -> run
@@ -110,11 +121,19 @@ type DeploymentRun struct {
 	CompletedAt     *time.Time
 }
 
+// ReactorOption configures optional reactor dependencies without breaking the legacy constructor shape.
+type ReactorOption func(*Reactor)
+
+// WithLLMRegistry enables LLM Nostr lifecycle request handling.
+func WithLLMRegistry(registry *service.LLMRegistryService) ReactorOption {
+	return func(r *Reactor) { r.llmRegistry = registry }
+}
+
 // NewReactor creates a new Bahia control plane reactor.
 // If pool is nil, a new pool will be created from the config relays.
 // If signer is provided, it will be used for NIP-46 remote signing; otherwise
 // the config.PrivateKey will be used for local signing.
-func NewReactor(config Config, registry *service.RegistryService, pool *nostrpool.RelayPool, signer EventSigner, zapLog *zap.Logger) *Reactor {
+func NewReactor(config Config, registry *service.RegistryService, pool *nostrpool.RelayPool, signer EventSigner, zapLog *zap.Logger, opts ...ReactorOption) *Reactor {
 	if zapLog == nil {
 		zapLog = zap.NewNop()
 	}
@@ -133,7 +152,7 @@ func NewReactor(config Config, registry *service.RegistryService, pool *nostrpoo
 		pool = nostrpool.NewRelayPool(allRelays, zapLog, poolOpts...)
 	}
 
-	return &Reactor{
+	r := &Reactor{
 		config:   config,
 		pool:     pool,
 		registry: registry,
@@ -144,6 +163,10 @@ func NewReactor(config Config, registry *service.RegistryService, pool *nostrpoo
 		backoff:  nostrpool.DefaultBackoff(),
 		runs:     make(map[string]*DeploymentRun),
 	}
+	for _, opt := range opts {
+		opt(r)
+	}
+	return r
 }
 
 // Run starts the reactor and blocks until context is cancelled.
@@ -172,6 +195,10 @@ func (r *Reactor) Run(ctx context.Context) error {
 				KindDeploymentApproval,
 				KindObservationSubmit,
 				KindDriftRemediate,
+				KindLLMRouteCreate,
+				KindLLMReleaseRegister,
+				KindLLMDeployRequest,
+				KindLLMDeploymentApproval,
 			},
 			Since: &now,
 		},
@@ -242,6 +269,14 @@ func (r *Reactor) handleEvent(ctx context.Context, event *nostr.Event) {
 		go r.handleObservationSubmit(ctx, event)
 	case KindDriftRemediate:
 		go r.handleDriftRemediate(ctx, event)
+	case KindLLMRouteCreate:
+		go r.handleLLMRouteCreate(ctx, event)
+	case KindLLMReleaseRegister:
+		go r.handleLLMReleaseRegister(ctx, event)
+	case KindLLMDeployRequest:
+		go r.handleLLMDeployRequest(ctx, event)
+	case KindLLMDeploymentApproval:
+		go r.handleLLMDeploymentApproval(ctx, event)
 	default:
 		r.logger.Warn("unexpected event kind", "kind", event.Kind)
 	}
@@ -584,6 +619,213 @@ func (r *Reactor) handleDeploymentApproval(ctx context.Context, event *nostr.Eve
 	r.publishApprovalResult(ctx, event, intentID, decision)
 }
 
+// handleLLMRouteCreate processes a kind:5971 LLM route creation request.
+func (r *Reactor) handleLLMRouteCreate(ctx context.Context, event *nostr.Event) {
+	logger := r.logger.With("event_id", event.ID, "requester", event.PubKey)
+	if !r.authorizeLLMRequest(ctx, event, "route_create") {
+		return
+	}
+	var req struct {
+		Name                   string                         `json:"name"`
+		Description            string                         `json:"description,omitempty"`
+		GatewayConfig          *domain.LLMGatewayRouteConfig  `json:"gateway_config,omitempty"`
+		DefaultPlacementPolicy *domain.LLMPlacementPolicy     `json:"default_placement_policy,omitempty"`
+		DefaultPromotionGate   *domain.LLMPromotionGateConfig `json:"default_promotion_gate,omitempty"`
+		Metadata               map[string]any                 `json:"metadata,omitempty"`
+	}
+	if err := json.Unmarshal([]byte(event.Content), &req); err != nil {
+		r.publishLLMError(ctx, event, "parse_error", err.Error())
+		return
+	}
+	route := &domain.LLMRoute{Name: req.Name, Description: req.Description, GatewayConfig: req.GatewayConfig, DefaultPlacementPolicy: req.DefaultPlacementPolicy, DefaultPromotionGate: req.DefaultPromotionGate, Metadata: req.Metadata}
+	if err := r.llmRegistry.CreateRoute(ctx, route); err != nil {
+		logger.Error("failed to create LLM route", "error", err)
+		r.publishLLMError(ctx, event, "create_error", err.Error())
+		return
+	}
+	logger.Info("LLM route created", "route_id", route.ID.String(), "name", route.Name)
+	r.publishLLMRouteCreateResult(ctx, event, route)
+}
+
+// handleLLMReleaseRegister processes a kind:5972 LLM release registration request.
+func (r *Reactor) handleLLMReleaseRegister(ctx context.Context, event *nostr.Event) {
+	logger := r.logger.With("event_id", event.ID, "requester", event.PubKey)
+	if !r.authorizeLLMRequest(ctx, event, "release_register") {
+		return
+	}
+	var req struct {
+		RouteID            string                                 `json:"route_id"`
+		Version            string                                 `json:"version"`
+		ModelRef           string                                 `json:"model_ref"`
+		ModelSource        string                                 `json:"model_source"`
+		ModelRevision      string                                 `json:"model_revision,omitempty"`
+		EstimatedVRAMGB    int                                    `json:"estimated_vram_gb,omitempty"`
+		BackendPreferences []domain.LLMBackendKind                `json:"backend_preferences,omitempty"`
+		RuntimeBackend     *domain.LLMRuntimeManagedBackendConfig `json:"runtime_backend,omitempty"`
+		ExternalBackend    *domain.LLMExternalBackendConfig       `json:"external_backend,omitempty"`
+		PlacementPolicy    *domain.LLMPlacementPolicy             `json:"placement_policy,omitempty"`
+		PromotionGate      *domain.LLMPromotionGateConfig         `json:"promotion_gate,omitempty"`
+		Metadata           map[string]any                         `json:"metadata,omitempty"`
+	}
+	if err := json.Unmarshal([]byte(event.Content), &req); err != nil {
+		r.publishLLMError(ctx, event, "parse_error", err.Error())
+		return
+	}
+	if req.RouteID == "" {
+		req.RouteID = tagValueNostr(event.Tags, "route")
+	}
+	routeID, err := uuid.Parse(req.RouteID)
+	if err != nil {
+		r.publishLLMError(ctx, event, "validation_error", fmt.Sprintf("invalid route_id: %v", err))
+		return
+	}
+	release := &domain.LLMRelease{RouteID: routeID, Version: req.Version, ModelRef: req.ModelRef, ModelSource: req.ModelSource, ModelRevision: req.ModelRevision, EstimatedVRAMGB: req.EstimatedVRAMGB, BackendPreferences: req.BackendPreferences, RuntimeBackend: req.RuntimeBackend, ExternalBackend: req.ExternalBackend, PlacementPolicy: req.PlacementPolicy, PromotionGate: req.PromotionGate, Metadata: req.Metadata}
+	if err := r.llmRegistry.CreateRelease(ctx, release); err != nil {
+		logger.Error("failed to register LLM release", "error", err)
+		r.publishLLMError(ctx, event, "register_error", err.Error())
+		return
+	}
+	logger.Info("LLM release registered", "route_id", routeID.String(), "release_id", release.ID.String())
+	r.publishLLMReleaseRegisterResult(ctx, event, release)
+}
+
+// handleLLMDeployRequest processes a kind:5973 LLM deployment request.
+func (r *Reactor) handleLLMDeployRequest(ctx context.Context, event *nostr.Event) {
+	logger := r.logger.With("event_id", event.ID, "requester", event.PubKey)
+	if !r.authorizeLLMRequest(ctx, event, "deploy") {
+		return
+	}
+	var req struct {
+		RouteID       string         `json:"route_id"`
+		EnvironmentID string         `json:"environment_id"`
+		ReleaseID     string         `json:"release_id"`
+		RequestedBy   string         `json:"requested_by,omitempty"`
+		Metadata      map[string]any `json:"metadata,omitempty"`
+	}
+	if err := json.Unmarshal([]byte(event.Content), &req); err != nil {
+		r.publishLLMError(ctx, event, "parse_error", err.Error())
+		return
+	}
+	if req.RouteID == "" {
+		req.RouteID = tagValueNostr(event.Tags, "route")
+	}
+	if req.EnvironmentID == "" {
+		req.EnvironmentID = tagValueNostr(event.Tags, "environment")
+	}
+	if req.ReleaseID == "" {
+		req.ReleaseID = tagValueNostr(event.Tags, "release")
+	}
+	routeID, err := uuid.Parse(req.RouteID)
+	if err != nil {
+		r.publishLLMError(ctx, event, "validation_error", fmt.Sprintf("invalid route_id: %v", err))
+		return
+	}
+	envID, err := uuid.Parse(req.EnvironmentID)
+	if err != nil {
+		r.publishLLMError(ctx, event, "validation_error", fmt.Sprintf("invalid environment_id: %v", err))
+		return
+	}
+	releaseID, err := uuid.Parse(req.ReleaseID)
+	if err != nil {
+		r.publishLLMError(ctx, event, "validation_error", fmt.Sprintf("invalid release_id: %v", err))
+		return
+	}
+	if req.RequestedBy == "" {
+		req.RequestedBy = event.PubKey
+	}
+	metadata := req.Metadata
+	if metadata == nil {
+		metadata = map[string]any{}
+	}
+	metadata["nostr_event_id"] = event.ID
+	metadata["nostr_request_pubkey"] = event.PubKey
+	intent := &domain.LLMDeploymentIntent{RouteID: routeID, EnvironmentID: envID, ReleaseID: releaseID, RequestedBy: req.RequestedBy, SourceKind: domain.SourceKindEventTriggered, Metadata: metadata}
+	if err := r.llmRegistry.CreateDeploymentIntent(ctx, intent); err != nil {
+		logger.Error("failed to create LLM deployment intent", "error", err)
+		r.publishLLMError(ctx, event, "intent_error", err.Error())
+		return
+	}
+	logger.Info("LLM deployment intent created", "intent_id", intent.ID.String())
+	r.publishLLMDeploymentStatus(ctx, event, intent, "accepted", "LLM deployment intent accepted")
+}
+
+// handleLLMDeploymentApproval processes a kind:5974 LLM approval/rejection request.
+func (r *Reactor) handleLLMDeploymentApproval(ctx context.Context, event *nostr.Event) {
+	logger := r.logger.With("event_id", event.ID, "approver", event.PubKey)
+	if !r.authorizeLLMRequest(ctx, event, "approval") {
+		return
+	}
+	var content struct {
+		IntentID string `json:"intent_id,omitempty"`
+		Decision string `json:"decision,omitempty"`
+	}
+	_ = json.Unmarshal([]byte(event.Content), &content)
+	if content.IntentID == "" {
+		content.IntentID = tagValueNostr(event.Tags, "intent")
+	}
+	if content.Decision == "" {
+		content.Decision = tagValueNostr(event.Tags, "decision")
+	}
+	if content.Decision != "approve" && content.Decision != "reject" {
+		r.publishLLMError(ctx, event, "validation_error", "decision must be 'approve' or 'reject'")
+		return
+	}
+	intentID, err := uuid.Parse(content.IntentID)
+	if err != nil {
+		r.publishLLMError(ctx, event, "validation_error", fmt.Sprintf("invalid intent_id: %v", err))
+		return
+	}
+	if content.Decision == "approve" {
+		err = r.llmRegistry.ApproveDeploymentIntent(ctx, intentID)
+	} else {
+		err = r.llmRegistry.RejectDeploymentIntent(ctx, intentID)
+	}
+	if err != nil {
+		logger.Error("failed to apply LLM deployment approval decision", "error", err)
+		r.publishLLMError(ctx, event, "approval_error", err.Error())
+		return
+	}
+	intent, _ := r.llmRegistry.GetDeploymentIntent(ctx, intentID)
+	if intent == nil {
+		intent = &domain.LLMDeploymentIntent{ID: intentID}
+	}
+	r.publishLLMDeploymentResult(ctx, event, intent, content.Decision, "LLM deployment approval decision recorded")
+}
+
+func (r *Reactor) authorizeLLMRequest(ctx context.Context, event *nostr.Event, step string) bool {
+	if !r.isAuthorized(event.PubKey) {
+		r.publishLLMError(ctx, event, "unauthorized", "requester not in authorized list")
+		return false
+	}
+	if r.llmRegistry == nil {
+		r.publishLLMError(ctx, event, step+"_unavailable", "LLM registry is not configured")
+		return false
+	}
+	return true
+}
+
+func tagValueNostr(tags nostr.Tags, key string) string {
+	for _, tag := range tags {
+		if len(tag) >= 2 && tag[0] == key {
+			return tag[1]
+		}
+	}
+	return ""
+}
+
+func stringFromAny(v any) string {
+	switch x := v.(type) {
+	case string:
+		return x
+	case fmt.Stringer:
+		return x.String()
+	case nil:
+		return ""
+	default:
+		return fmt.Sprint(x)
+	}
+}
+
 // isAuthorized checks if a pubkey is authorized to use the control plane.
 func (r *Reactor) isAuthorized(pubkey string) bool {
 	authorized := r.config.AuthorizedPubkeys
@@ -846,6 +1088,176 @@ func (r *Reactor) publishApprovalResult(ctx context.Context, requestEvent *nostr
 
 	_, err := r.pool.Publish(ctx, *event)
 	return err
+}
+
+func (r *Reactor) publishLLMRouteCreateResult(ctx context.Context, requestEvent *nostr.Event, route *domain.LLMRoute) error {
+	content, _ := json.Marshal(map[string]any{
+		"route_id": route.ID.String(),
+		"name":     route.Name,
+		"status":   "success",
+	})
+	event := &nostr.Event{
+		Kind:      KindLLMRouteCreateResult,
+		CreatedAt: nostr.Now(),
+		Tags: nostr.Tags{
+			{"e", requestEvent.ID, "", "reply"},
+			{"p", requestEvent.PubKey},
+			{"status", "success"},
+			{"route", route.ID.String()},
+		},
+		Content: string(content),
+	}
+	if err := r.signEvent(event); err != nil {
+		return fmt.Errorf("sign LLM route create result: %w", err)
+	}
+	_, err := r.pool.Publish(ctx, *event)
+	return err
+}
+
+func (r *Reactor) publishLLMReleaseRegisterResult(ctx context.Context, requestEvent *nostr.Event, release *domain.LLMRelease) error {
+	content, _ := json.Marshal(map[string]any{
+		"route_id":   release.RouteID.String(),
+		"release_id": release.ID.String(),
+		"version":    release.Version,
+		"status":     "success",
+	})
+	event := &nostr.Event{
+		Kind:      KindLLMReleaseRegisterResult,
+		CreatedAt: nostr.Now(),
+		Tags: nostr.Tags{
+			{"e", requestEvent.ID, "", "reply"},
+			{"p", requestEvent.PubKey},
+			{"status", "success"},
+			{"route", release.RouteID.String()},
+			{"release", release.ID.String()},
+		},
+		Content: string(content),
+	}
+	if err := r.signEvent(event); err != nil {
+		return fmt.Errorf("sign LLM release register result: %w", err)
+	}
+	_, err := r.pool.Publish(ctx, *event)
+	return err
+}
+
+func (r *Reactor) publishLLMDeploymentStatus(ctx context.Context, requestEvent *nostr.Event, intent *domain.LLMDeploymentIntent, step, message string) error {
+	content, _ := json.Marshal(map[string]any{
+		"intent_id":      intent.ID.String(),
+		"route_id":       intent.RouteID.String(),
+		"environment_id": intent.EnvironmentID.String(),
+		"release_id":     intent.ReleaseID.String(),
+		"status":         "processing",
+		"step":           step,
+		"message":        message,
+	})
+	tags := nostr.Tags{
+		{"e", requestEvent.ID, "", "reply"},
+		{"p", requestEvent.PubKey},
+		{"status", "processing"},
+		{"step", step},
+		{"route", intent.RouteID.String()},
+		{"environment", intent.EnvironmentID.String()},
+		{"release", intent.ReleaseID.String()},
+		{"intent", intent.ID.String()},
+	}
+	event := &nostr.Event{Kind: KindLLMDeploymentStatus, CreatedAt: nostr.Now(), Tags: tags, Content: string(content)}
+	if err := r.signEvent(event); err != nil {
+		return fmt.Errorf("sign LLM deployment status: %w", err)
+	}
+	_, err := r.pool.Publish(ctx, *event)
+	return err
+}
+
+func (r *Reactor) publishLLMDeploymentResult(ctx context.Context, requestEvent *nostr.Event, intent *domain.LLMDeploymentIntent, status, message string) error {
+	content, _ := json.Marshal(map[string]any{
+		"intent_id":      intent.ID.String(),
+		"route_id":       intent.RouteID.String(),
+		"environment_id": intent.EnvironmentID.String(),
+		"release_id":     intent.ReleaseID.String(),
+		"status":         status,
+		"message":        message,
+	})
+	tags := nostr.Tags{
+		{"e", requestEvent.ID, "", "reply"},
+		{"p", requestEvent.PubKey},
+		{"status", "success"},
+		{"result", status},
+		{"route", intent.RouteID.String()},
+		{"environment", intent.EnvironmentID.String()},
+		{"release", intent.ReleaseID.String()},
+		{"intent", intent.ID.String()},
+	}
+	event := &nostr.Event{Kind: KindLLMDeploymentResult, CreatedAt: nostr.Now(), Tags: tags, Content: string(content)}
+	if err := r.signEvent(event); err != nil {
+		return fmt.Errorf("sign LLM deployment result: %w", err)
+	}
+	_, err := r.pool.Publish(ctx, *event)
+	return err
+}
+
+func (r *Reactor) publishLLMError(ctx context.Context, requestEvent *nostr.Event, step, message string) error {
+	kind := KindLLMDeploymentResult
+	switch requestEvent.Kind {
+	case KindLLMRouteCreate:
+		kind = KindLLMRouteCreateResult
+	case KindLLMReleaseRegister:
+		kind = KindLLMReleaseRegisterResult
+	}
+	content, _ := json.Marshal(map[string]any{"status": "error", "step": step, "error": message})
+	tags := nostr.Tags{
+		{"e", requestEvent.ID, "", "reply"},
+		{"p", requestEvent.PubKey},
+		{"status", "error"},
+		{"step", step},
+		{"error", message},
+	}
+	tags = appendLLMRequestTags(tags, requestEvent)
+	event := &nostr.Event{Kind: kind, CreatedAt: nostr.Now(), Tags: tags, Content: string(content)}
+	if err := r.signEvent(event); err != nil {
+		return fmt.Errorf("sign LLM error result: %w", err)
+	}
+	_, err := r.pool.Publish(ctx, *event)
+	return err
+}
+
+func appendLLMRequestTags(tags nostr.Tags, requestEvent *nostr.Event) nostr.Tags {
+	seen := map[string]struct{}{}
+	for _, tag := range tags {
+		if len(tag) >= 2 {
+			seen[tag[0]+"="+tag[1]] = struct{}{}
+		}
+	}
+	add := func(key, value string) {
+		if value == "" {
+			return
+		}
+		k := key + "=" + value
+		if _, ok := seen[k]; ok {
+			return
+		}
+		seen[k] = struct{}{}
+		tags = append(tags, nostr.Tag{key, value})
+	}
+	if requestEvent.Content != "" {
+		var raw map[string]any
+		if json.Unmarshal([]byte(requestEvent.Content), &raw) == nil {
+			add("route", stringFromAny(raw["route_id"]))
+			add("environment", stringFromAny(raw["environment_id"]))
+			add("release", stringFromAny(raw["release_id"]))
+			add("intent", stringFromAny(raw["intent_id"]))
+			add("run", stringFromAny(raw["run_id"]))
+		}
+	}
+	for _, tag := range requestEvent.Tags {
+		if len(tag) < 2 {
+			continue
+		}
+		switch tag[0] {
+		case "route", "environment", "release", "intent", "run":
+			add(tag[0], tag[1])
+		}
+	}
+	return tags
 }
 
 // publishServiceCreated publishes a result for service creation.
