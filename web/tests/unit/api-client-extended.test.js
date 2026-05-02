@@ -199,10 +199,13 @@ describe('BahiaClient - Extended API Coverage', () => {
   });
 
   describe('Policy Methods', () => {
-    it('should call createPolicy with correct method and body', async () => {
+    it('should call createPolicy with all supported fields', async () => {
       const payload = {
         name: 'Production Approval Required',
-        rules: [{ type: 'require_approval', environments: ['production'] }]
+        environment_id: 'env-prod',
+        rules: [{ type: 'require_approval', environments: ['production'] }],
+        enforcement: 'enforce',
+        enabled: true
       };
 
       global.fetch.mockResolvedValueOnce({
@@ -221,6 +224,61 @@ describe('BahiaClient - Extended API Coverage', () => {
         })
       );
       expect(result).toEqual({ id: 'pol-1', ...payload });
+    });
+
+    it('should call updatePolicy with all supported patch fields and encoded path', async () => {
+      const policyId = 'pol/v2';
+      const patch = {
+        name: 'Production Gate',
+        environment_id: 'env-prod',
+        rules: [{ type: 'deny_if_drifted' }],
+        enforcement: 'audit',
+        enabled: false
+      };
+
+      global.fetch.mockResolvedValueOnce({
+        ok: true,
+        headers: new Map([['content-type', 'application/json']]),
+        json: async () => ({ data: { id: policyId, ...patch } })
+      });
+
+      const result = await api.updatePolicy(policyId, patch);
+
+      expect(global.fetch).toHaveBeenCalledWith(
+        `/api/v1/policies/${encodeURIComponent(policyId)}`,
+        expect.objectContaining({
+          method: 'PUT',
+          body: JSON.stringify(patch)
+        })
+      );
+      expect(result).toEqual({ id: policyId, ...patch });
+    });
+
+    it('should call evaluatePolicy with POST and payload', async () => {
+      const payload = {
+        policy_id: 'pol-1',
+        context: {
+          environment_id: 'env-prod',
+          service_id: 'svc-1'
+        }
+      };
+
+      global.fetch.mockResolvedValueOnce({
+        ok: true,
+        headers: new Map([['content-type', 'application/json']]),
+        json: async () => ({ data: { allowed: true, reason: 'approved' } })
+      });
+
+      const result = await api.evaluatePolicy(payload);
+
+      expect(global.fetch).toHaveBeenCalledWith(
+        '/api/v1/policies/evaluate',
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify(payload)
+        })
+      );
+      expect(result).toEqual({ allowed: true, reason: 'approved' });
     });
 
     it('should call deletePolicy with correct method and encoded path', async () => {
