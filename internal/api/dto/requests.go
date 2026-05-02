@@ -136,6 +136,141 @@ type RecordObservationRequest struct {
 	Metadata            map[string]any `json:"metadata,omitempty"`
 }
 
+// LLMGatewayConfigRequest configures gateway routing for an LLM route.
+type LLMGatewayConfigRequest struct {
+	PublicModel    string            `json:"public_model,omitempty"`
+	Path           string            `json:"path,omitempty"`
+	TimeoutSeconds int               `json:"timeout_seconds,omitempty"`
+	Headers        map[string]string `json:"headers,omitempty"`
+}
+
+// LLMPlacementPolicyRequest captures placement preferences for LLM backends.
+type LLMPlacementPolicyRequest struct {
+	PreferredKinds    []string       `json:"preferred_kinds,omitempty"`
+	WorkerSelector    map[string]any `json:"worker_selector,omitempty"`
+	MinGPUCount       int            `json:"min_gpu_count,omitempty"`
+	MinGPUMemoryGB    int            `json:"min_gpu_memory_gb,omitempty"`
+	MinSystemMemoryGB int            `json:"min_system_memory_gb,omitempty"`
+	MaxPrice          int            `json:"max_price,omitempty"`
+	AllowExternal     bool           `json:"allow_external,omitempty"`
+}
+
+// LLMPromotionGateRequest configures backend readiness checks before promotion.
+type LLMPromotionGateRequest struct {
+	IntervalSeconds  int `json:"interval_seconds,omitempty"`
+	TimeoutSeconds   int `json:"timeout_seconds,omitempty"`
+	SuccessThreshold int `json:"success_threshold,omitempty"`
+	FailureThreshold int `json:"failure_threshold,omitempty"`
+}
+
+// CreateLLMRouteRequest creates an LLM route.
+type CreateLLMRouteRequest struct {
+	Name                   string                     `json:"name"`
+	Description            string                     `json:"description,omitempty"`
+	GatewayConfig          *LLMGatewayConfigRequest   `json:"gateway_config,omitempty"`
+	DefaultPlacementPolicy *LLMPlacementPolicyRequest `json:"default_placement_policy,omitempty"`
+	DefaultPromotionGate   *LLMPromotionGateRequest   `json:"default_promotion_gate,omitempty"`
+	Metadata               map[string]any             `json:"metadata,omitempty"`
+}
+
+// UpdateLLMRouteRequest updates mutable LLM route fields. Name is intentionally omitted.
+type UpdateLLMRouteRequest struct {
+	Description            *string                    `json:"description,omitempty"`
+	GatewayConfig          *LLMGatewayConfigRequest   `json:"gateway_config,omitempty"`
+	DefaultPlacementPolicy *LLMPlacementPolicyRequest `json:"default_placement_policy,omitempty"`
+	DefaultPromotionGate   *LLMPromotionGateRequest   `json:"default_promotion_gate,omitempty"`
+	Metadata               *map[string]any            `json:"metadata,omitempty"`
+}
+
+// LLMRuntimeManagedBackendRequest configures vLLM/Ollama/llama.cpp runtime backends.
+type LLMRuntimeManagedBackendRequest struct {
+	Image         string            `json:"image"`
+	Scheme        string            `json:"scheme,omitempty"`
+	ContainerPort int               `json:"container_port"`
+	HostPort      int               `json:"host_port"`
+	HealthPath    string            `json:"health_path"`
+	Environment   map[string]string `json:"environment,omitempty"`
+	Volumes       []string          `json:"volumes,omitempty"`
+	Command       []string          `json:"command,omitempty"`
+	Entrypoint    []string          `json:"entrypoint,omitempty"`
+	WorkingDir    string            `json:"working_dir,omitempty"`
+	NetworkMode   string            `json:"network_mode,omitempty"`
+	PullAlways    bool              `json:"pull_always,omitempty"`
+}
+
+// LLMExternalBackendRequest configures externally hosted LLM backends.
+type LLMExternalBackendRequest struct {
+	BaseURL   string `json:"base_url"`
+	HealthURL string `json:"health_url,omitempty"`
+}
+
+// RegisterLLMHostRequest registers or updates an LLM-capable runtime host.
+type RegisterLLMHostRequest struct {
+	PubKey            string              `json:"pubkey"`
+	Name              string              `json:"name"`
+	Description       string              `json:"description,omitempty"`
+	Architecture      string              `json:"architecture,omitempty"`
+	MaxConcurrentJobs int                 `json:"max_concurrent_jobs,omitempty"`
+	CurrentQueueDepth int                 `json:"current_queue_depth,omitempty"`
+	Software          []map[string]string `json:"software,omitempty"`
+	Pricing           []map[string]any    `json:"pricing,omitempty"`
+	Resources         map[string]int      `json:"resources,omitempty"`
+	Accelerators      []map[string]any    `json:"accelerators,omitempty"`
+	RuntimeTarget     map[string]string   `json:"runtime_target,omitempty"`
+	MinDurationSecs   int                 `json:"min_duration_secs,omitempty"`
+	MaxDurationSecs   int                 `json:"max_duration_secs,omitempty"`
+	Geohash           string              `json:"geohash,omitempty"`
+	PreferredRelays   []string            `json:"preferred_relays,omitempty"`
+}
+
+// CreateLLMReleaseRequest registers an immutable model release for a route.
+type CreateLLMReleaseRequest struct {
+	Version            string                           `json:"version"`
+	ModelRef           string                           `json:"model_ref"`
+	ModelSource        string                           `json:"model_source"`
+	ModelRevision      string                           `json:"model_revision,omitempty"`
+	EstimatedVRAMGB    int                              `json:"estimated_vram_gb,omitempty"`
+	BackendPreferences []string                         `json:"backend_preferences,omitempty"`
+	RuntimeBackend     *LLMRuntimeManagedBackendRequest `json:"runtime_backend,omitempty"`
+	ExternalBackend    *LLMExternalBackendRequest       `json:"external_backend,omitempty"`
+	PlacementPolicy    *LLMPlacementPolicyRequest       `json:"placement_policy,omitempty"`
+	PromotionGate      *LLMPromotionGateRequest         `json:"promotion_gate,omitempty"`
+	Metadata           map[string]any                   `json:"metadata,omitempty"`
+}
+
+// CreateLLMDeploymentIntentRequest requests an async LLM deployment.
+type CreateLLMDeploymentIntentRequest struct {
+	RouteID       uuid.UUID      `json:"route_id"`
+	EnvironmentID uuid.UUID      `json:"environment_id"`
+	ReleaseID     uuid.UUID      `json:"release_id"`
+	RequestedBy   string         `json:"requested_by"`
+	SourceKind    string         `json:"source_kind,omitempty"`
+	Metadata      map[string]any `json:"metadata,omitempty"`
+}
+
+// RollbackLLMRouteRequest requests rollback to a previous deployed LLM release.
+type RollbackLLMRouteRequest struct {
+	RouteID       uuid.UUID `json:"route_id"`
+	EnvironmentID uuid.UUID `json:"environment_id"`
+	RequestedBy   string    `json:"requested_by"`
+}
+
+// RecordLLMRouteObservationRequest records observed LLM route/backend state.
+type RecordLLMRouteObservationRequest struct {
+	RouteID           uuid.UUID      `json:"route_id"`
+	EnvironmentID     uuid.UUID      `json:"environment_id"`
+	ObservedReleaseID *uuid.UUID     `json:"observed_release_id,omitempty"`
+	ObservedRunID     *uuid.UUID     `json:"observed_run_id,omitempty"`
+	BackendKind       string         `json:"backend_kind,omitempty"`
+	BackendEndpoint   string         `json:"backend_endpoint,omitempty"`
+	BackendHealth     string         `json:"backend_health"`
+	GatewayStatus     string         `json:"gateway_status"`
+	GatewayTarget     string         `json:"gateway_target,omitempty"`
+	GatewayConfigHash string         `json:"gateway_config_hash,omitempty"`
+	Source            string         `json:"source"`
+	Metadata          map[string]any `json:"metadata,omitempty"`
+}
+
 // AdoptionTargetRequest identifies one Docker host to scan/import.
 type AdoptionTargetRequest struct {
 	Name            string `json:"name"`

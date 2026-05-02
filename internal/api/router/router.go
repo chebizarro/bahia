@@ -58,6 +58,7 @@ type RouterDeps struct {
 	OrgMembers       repository.OrgMemberRepository
 	OrgInvites       repository.OrgInviteRepository
 	RBAC             *auth.RBAC
+	LLMRegistry      *service.LLMRegistryService
 }
 
 // SignatureVerifier is the interface for signature verification.
@@ -137,6 +138,10 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 	serviceActionH := handlers.NewServiceActionHandler(deps.RuntimeLifecycle, handlers.WithServiceActionLogger(logger), handlers.WithServiceActionMetrics(metrics))
 	repoCIHandler := handlers.NewRepositoryCIHandler(deps.HiveCI)
 	systemH := handlers.NewSystemHandler(deps.Config, handlers.WithSystemMCPTransport(deps.MCP != nil))
+	var llmH *handlers.LLMHandler
+	if deps.LLMRegistry != nil {
+		llmH = handlers.NewLLMHandler(deps.LLMRegistry, deps.Workers)
+	}
 
 	var logsH *handlers.LogHandler
 	if deps.Runs != nil && deps.Services != nil && deps.Environments != nil {
@@ -222,6 +227,22 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 
 			// Repository CI lookup (read)
 			r.Post("/repositories/ci/lookup", repoCIHandler.Lookup)
+
+			// LLM control plane (read)
+			if llmH != nil {
+				r.Get("/llm/routes", llmH.ListRoutes)
+				r.Get("/llm/routes/{id}", llmH.GetRoute)
+				r.Get("/llm/routes/{routeId}/releases", llmH.ListReleases)
+				r.Get("/llm/releases/{id}", llmH.GetRelease)
+				r.Get("/llm/intents/{id}", llmH.GetIntent)
+				r.Get("/llm/routes/{routeId}/environments/{envId}/intents", llmH.ListIntents)
+				r.Get("/llm/runs/{id}", llmH.GetRun)
+				r.Get("/llm/intents/{intentId}/runs", llmH.ListRuns)
+				r.Get("/llm/state", llmH.ListAllState)
+				r.Get("/llm/state/drifted", llmH.ListDriftedState)
+				r.Get("/llm/environments/{envId}/state", llmH.ListEnvironmentState)
+				r.Get("/llm/routes/{routeId}/environments/{envId}/state", llmH.GetState)
+			}
 
 			// Workers (read)
 			if deps.Workers != nil {
@@ -322,6 +343,19 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 			r.Post("/deployments/intents", deployH.CreateIntent)
 			r.Post("/deployments/intents/{id}/approve", deployH.ApproveIntent)
 			r.Post("/deployments/intents/{id}/reject", deployH.RejectIntent)
+
+			// LLM control plane (write)
+			if llmH != nil {
+				r.Post("/llm/routes", llmH.CreateRoute)
+				r.Put("/llm/routes/{id}", llmH.UpdateRoute)
+				r.Post("/llm/hosts", llmH.RegisterHost)
+				r.Post("/llm/routes/{routeId}/releases", llmH.CreateRelease)
+				r.Post("/llm/intents", llmH.CreateIntent)
+				r.Post("/llm/intents/{id}/approve", llmH.ApproveIntent)
+				r.Post("/llm/intents/{id}/reject", llmH.RejectIntent)
+				r.Post("/llm/rollback", llmH.Rollback)
+				r.Post("/llm/observations", llmH.RecordObservation)
+			}
 
 			// Deployment Runs (write)
 			r.Post("/deployments/runs", deployH.CreateRun)

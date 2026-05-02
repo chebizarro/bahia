@@ -14,6 +14,7 @@ import (
 	"github.com/openagentsinc/bahia/internal/adapters/blossom"
 	"github.com/openagentsinc/bahia/internal/adapters/harbor"
 	hiveciAdapter "github.com/openagentsinc/bahia/internal/adapters/hiveci"
+	llmadapter "github.com/openagentsinc/bahia/internal/adapters/llm"
 	"github.com/openagentsinc/bahia/internal/adapters/loom"
 	nostrAdapter "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	registryAdapter "github.com/openagentsinc/bahia/internal/adapters/registry"
@@ -45,6 +46,7 @@ type App struct {
 	Logger      *zap.Logger
 	DB          *pgxpool.Pool
 	Registry    *service.RegistryService
+	LLMRegistry *service.LLMRegistryService
 	HTTPServer  *http.Server
 	Publisher   events.Publisher
 	Coordinator *workflow.Coordinator
@@ -234,6 +236,39 @@ func New(cfg *config.Config) (*App, error) {
 	// Background runner manager.
 	bgManager := NewBackgroundManager(logger)
 
+	// LLM provisioning control plane. This is intentionally non-Nostr in this bucket;
+	// Nostr lifecycle support can layer on top of the DB-first registry later.
+	var llmRegistry *service.LLMRegistryService
+	if cfg.LLM.Enabled {
+		llmRouteRepo := repository.NewPgLLMRouteRepository(pool)
+		llmReleaseRepo := repository.NewPgLLMReleaseRepository(pool)
+		llmIntentRepo := repository.NewPgLLMDeploymentIntentRepository(pool)
+		llmRunRepo := repository.NewPgLLMDeploymentRunRepository(pool)
+		llmObsRepo := repository.NewPgLLMRouteObservationRepository(pool)
+		llmStateRepo := repository.NewPgLLMRouteStateRepository(pool)
+		llmRegistry = service.NewLLMRegistryService(llmRouteRepo, llmReleaseRepo, envRepo, llmIntentRepo, llmRunRepo, llmObsRepo, llmStateRepo, publisher, logger)
+
+		gatewayManager := llmadapter.NewHTTPGatewayRouteManager(llmGatewayHTTPConfig(cfg.LLM), nil)
+		provisioners := llmadapter.StaticProvisionerResolver{}
+		externalProvisioner := llmadapter.NewExternalAPIProvisioner(nil)
+		provisioners[domain.LLMBackendKindExternalAPI] = externalProvisioner
+		for _, kind := range []domain.LLMBackendKind{domain.LLMBackendKindVLLM, domain.LLMBackendKindOllama, domain.LLMBackendKindLlamaCPP} {
+			p, err := llmadapter.NewRuntimeProvisioner(kind, cfg.Runtime, logger)
+			if err != nil {
+				return nil, fmt.Errorf("creating LLM runtime provisioner %s: %w", kind, err)
+			}
+			provisioners[kind] = p
+		}
+		placementSvc := service.NewLLMPlacementService(workerRepo, logger)
+		llmCoordinator := service.NewLLMProvisioningCoordinator(llmRegistry, envRepo, llmRunRepo, placementSvc, provisioners, gatewayManager, cfg.LLM.DefaultGatewayRef, logger,
+			service.WithLLMCoordinatorIntervals(cfg.LLM.CoordinatorPollInterval, cfg.LLM.StaleRunTimeout),
+		)
+		llmReconciler := reconcile.NewLLMRouteReconciler(llmRegistry, envRepo, provisioners, gatewayManager, cfg.LLM.DefaultGatewayRef, cfg.LLM.ReconcileInterval, logger)
+		bgManager.Register(llmCoordinator)
+		bgManager.Register(llmReconciler)
+		logger.Info("LLM control plane enabled", zap.String("default_gateway_ref", cfg.LLM.DefaultGatewayRef))
+	}
+
 	// Nostr read-model projector. This owns canonical 3196x projections and
 	// the 310xx audit/activity feed for relay consumers; the legacy Publisher is
 	// retained for relay pool lifecycle compatibility.
@@ -405,6 +440,7 @@ func New(cfg *config.Config) (*App, error) {
 			OrgMembers:       orgMemberRepo,
 			OrgInvites:       orgInviteRepo,
 			RBAC:             rbac,
+			LLMRegistry:      llmRegistry,
 		}, cfg.Auth)
 
 	httpServer := &http.Server{
@@ -419,6 +455,7 @@ func New(cfg *config.Config) (*App, error) {
 		Logger:      logger,
 		DB:          pool,
 		Registry:    registry,
+		LLMRegistry: llmRegistry,
 		HTTPServer:  httpServer,
 		Publisher:   publisher,
 		Coordinator: coord,
@@ -515,6 +552,14 @@ func interopRelayURLs(cfg *config.Config, controlPlaneRelays []string) []string 
 		relays = appendUniqueRelay(relays, r)
 	}
 	return relays
+}
+
+func llmGatewayHTTPConfig(cfg config.LLMControlplaneConfig) llmadapter.GatewayHTTPConfig {
+	endpoints := make(map[string]llmadapter.GatewayHTTPEndpointConfig, len(cfg.Gateways))
+	for ref, ep := range cfg.Gateways {
+		endpoints[ref] = llmadapter.GatewayHTTPEndpointConfig{Type: ep.Type, BaseURL: ep.BaseURL, AuthToken: ep.AuthToken, Timeout: ep.Timeout}
+	}
+	return llmadapter.GatewayHTTPConfig{Endpoints: endpoints}
 }
 
 func closeRelayPools(pools ...*nostrAdapter.RelayPool) {

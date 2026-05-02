@@ -34,6 +34,25 @@ type Config struct {
 	Telemetry     TelemetryConfig       `koanf:"telemetry"`
 	Notifications NotificationsConfig   `koanf:"notifications"`
 	Registry      RegistryAdapterConfig `koanf:"registry"`
+	LLM           LLMControlplaneConfig `koanf:"llm"`
+}
+
+// LLMControlplaneConfig holds DB-first LLM provisioning control-plane settings.
+type LLMControlplaneConfig struct {
+	Enabled                 bool                                `koanf:"enabled"`
+	DefaultGatewayRef       string                              `koanf:"default_gateway_ref"`
+	CoordinatorPollInterval time.Duration                       `koanf:"coordinator_poll_interval"`
+	StaleRunTimeout         time.Duration                       `koanf:"stale_run_timeout"`
+	ReconcileInterval       time.Duration                       `koanf:"reconcile_interval"`
+	Gateways                map[string]LLMGatewayEndpointConfig `koanf:"gateways"`
+}
+
+// LLMGatewayEndpointConfig describes one inference gateway admin endpoint.
+type LLMGatewayEndpointConfig struct {
+	Type      string        `koanf:"type"`
+	BaseURL   string        `koanf:"base_url"`
+	AuthToken string        `koanf:"auth_token"`
+	Timeout   time.Duration `koanf:"timeout"`
 }
 
 // RegistryAdapterConfig holds OCI registry adapter settings for multi-registry support.
@@ -349,6 +368,13 @@ func Defaults() *Config {
 			Environments: map[string]RuntimeTargetConfig{},
 			Endpoints:    map[string]RuntimeEndpointConfig{},
 		},
+		LLM: LLMControlplaneConfig{
+			Enabled:                 false,
+			CoordinatorPollInterval: 5 * time.Second,
+			StaleRunTimeout:         15 * time.Minute,
+			ReconcileInterval:       60 * time.Second,
+			Gateways:                map[string]LLMGatewayEndpointConfig{},
+		},
 		Log: LogConfig{
 			Level:  "info",
 			Format: "json",
@@ -509,8 +535,47 @@ func (c *Config) validate() error {
 	if c.HiveCI.MaxRetries <= 0 {
 		return fmt.Errorf("config validation failed: hiveci.max_retries must be > 0")
 	}
+	if err := c.validateLLM(); err != nil {
+		return err
+	}
 	if err := c.validateRelaySidecar(); err != nil {
 		return err
+	}
+	return nil
+}
+
+func (c *Config) validateLLM() error {
+	if !c.LLM.Enabled {
+		return nil
+	}
+	if c.LLM.CoordinatorPollInterval <= 0 {
+		return fmt.Errorf("config validation failed: llm.coordinator_poll_interval must be > 0 when llm.enabled=true")
+	}
+	if c.LLM.StaleRunTimeout <= 0 {
+		return fmt.Errorf("config validation failed: llm.stale_run_timeout must be > 0 when llm.enabled=true")
+	}
+	if c.LLM.ReconcileInterval <= 0 {
+		return fmt.Errorf("config validation failed: llm.reconcile_interval must be > 0 when llm.enabled=true")
+	}
+	for name, gateway := range c.LLM.Gateways {
+		if strings.TrimSpace(name) == "" {
+			return fmt.Errorf("config validation failed: llm gateway names must not be empty")
+		}
+		if typ := strings.TrimSpace(gateway.Type); typ != "" && typ != "http" {
+			return fmt.Errorf("config validation failed: llm.gateways.%s.type %q is unsupported", name, gateway.Type)
+		}
+		if strings.TrimSpace(gateway.BaseURL) == "" {
+			return fmt.Errorf("config validation failed: llm.gateways.%s.base_url is required", name)
+		}
+		parsed, err := url.Parse(gateway.BaseURL)
+		if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+			return fmt.Errorf("config validation failed: llm.gateways.%s.base_url must be a valid URL", name)
+		}
+	}
+	if ref := strings.TrimSpace(c.LLM.DefaultGatewayRef); ref != "" {
+		if _, ok := c.LLM.Gateways[ref]; !ok {
+			return fmt.Errorf("config validation failed: llm.default_gateway_ref %q is not configured", ref)
+		}
 	}
 	return nil
 }

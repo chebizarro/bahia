@@ -37,6 +37,19 @@ const (
 	EventRuntimeDeploy                  EventType = "runtime.deploy"
 	EventRuntimeRestart                 EventType = "runtime.restart"
 	EventRuntimeStop                    EventType = "runtime.stop"
+	EventLLMRouteCreated                EventType = "llm_route.created"
+	EventLLMRouteUpdated                EventType = "llm_route.updated"
+	EventLLMReleaseRegistered           EventType = "llm_release.registered"
+	EventLLMDeploymentIntentCreated     EventType = "llm_deployment_intent.created"
+	EventLLMDeploymentIntentApproved    EventType = "llm_deployment_intent.approved"
+	EventLLMDeploymentIntentRejected    EventType = "llm_deployment_intent.rejected"
+	EventLLMDeploymentRunCreated        EventType = "llm_deployment_run.created"
+	EventLLMDeploymentRunStatusChanged  EventType = "llm_deployment_run.status_changed"
+	EventLLMDeploymentRunCompleted      EventType = "llm_deployment_run.completed"
+	EventLLMRouteObservation            EventType = "llm_route.observation"
+	EventLLMRouteStateChanged           EventType = "llm_route_state.changed"
+	EventLLMRouteDriftDetected          EventType = "llm_route.drift_detected"
+	EventLLMGatewayRouteSynced          EventType = "llm_gateway_route.synced"
 )
 
 // ResourceData carries projection-relevant resource identifiers in internal
@@ -46,6 +59,8 @@ type ResourceData struct {
 	ServiceID     string `json:"service_id,omitempty"`
 	EnvironmentID string `json:"environment_id,omitempty"`
 	ArtifactID    string `json:"artifact_id,omitempty"`
+	RouteID       string `json:"route_id,omitempty"`
+	ReleaseID     string `json:"release_id,omitempty"`
 	IntentID      string `json:"intent_id,omitempty"`
 	RunID         string `json:"run_id,omitempty"`
 	Deleted       bool   `json:"deleted,omitempty"`
