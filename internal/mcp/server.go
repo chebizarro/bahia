@@ -1309,6 +1309,7 @@ func (s *Server) handleUpdateService(ctx context.Context, args map[string]interf
 	}
 	if repoURL, ok := args["repo_url"].(string); ok {
 		svc.RepoURL = repoURL
+		svc.Repository = nil
 	}
 	if artifactRepo, ok := args["artifact_repo"].(string); ok && artifactRepo != "" {
 		svc.ArtifactRepo = artifactRepo
