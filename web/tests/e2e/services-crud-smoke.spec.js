@@ -156,4 +156,60 @@ test.describe('Services CRUD Smoke Test', () => {
     // Modal should be closed
     await expect(page.locator('text=Artifact Repository')).not.toBeVisible();
   });
+
+  test('should support search, runtime filtering, and pagination controls', async ({ page }) => {
+    const services = Array.from({ length: 30 }, (_, index) => ({
+      id: `service-${index + 1}`,
+      name: `service-${index + 1}`,
+      artifact_repo: `ghcr.io/acme/service-${index + 1}`,
+      runtime_type: index < 15 ? 'docker' : 'kubernetes',
+      default_branch: 'main'
+    }));
+
+    await page.unroute('**/api/v1/services');
+    await page.route('**/api/v1/services', (route) => {
+      if (route.request().method() === 'GET') {
+        return route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({ data: services })
+        });
+      }
+
+      return route.fulfill({
+        status: 201,
+        contentType: 'application/json',
+        body: JSON.stringify({ data: { id: 'created-service' } })
+      });
+    });
+
+    await page.goto('/services');
+    await page.waitForLoadState('networkidle');
+
+    await expect(page.locator('#service-search')).toBeVisible();
+    await expect(page.locator('#runtime-filter')).toBeVisible();
+    await expect(page.locator('#page-size')).toBeVisible();
+
+    await expect(page.locator('tbody tr')).toHaveCount(25);
+    await expect(page.locator('text=Page 1 of 2')).toBeVisible();
+
+    await page.selectOption('#page-size', '10');
+    await expect(page.locator('text=Page 1 of 3')).toBeVisible();
+    await expect(page.locator('tbody tr')).toHaveCount(10);
+
+    await page.getByRole('button', { name: 'Next' }).click();
+    await expect(page.locator('text=Page 2 of 3')).toBeVisible();
+
+    await page.fill('#service-search', 'service-2');
+    await expect(page.locator('tbody tr')).toHaveCount(10);
+    await expect(page.locator('text=Page 1 of 2')).toBeVisible();
+
+    await page.selectOption('#runtime-filter', 'kubernetes');
+    await expect(page.locator('tbody tr')).toHaveCount(10);
+    await expect(page.locator('text=Page 1 of 1')).not.toBeVisible();
+
+    await page.selectOption('#page-size', '50');
+    await expect(page.locator('tbody tr')).toHaveCount(10);
+    await expect(page.locator('text=Page 1 of 1')).not.toBeVisible();
+  });
 });
