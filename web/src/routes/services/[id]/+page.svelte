@@ -653,7 +653,8 @@
   <div class="delete-content">
     <p>Are you sure you want to delete <strong>{service?.name}</strong>?</p>
     <p class="warning">This action cannot be undone.</p>
-    
+    <p class="warning">Deleting this service will cascade to related resources (such as secrets, artifacts, and deployment records).</p>
+
     <div class="force-option">
       <Checkbox
         id="delete-force"
