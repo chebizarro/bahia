@@ -9,7 +9,10 @@
     "test": "vitest run",
     "test:unit": "vitest run --config vitest.config.js",
     "test:unit:watch": "vitest --config vitest.config.js",
-    "test:unit:coverage": "vitest run --config vitest.config.js --coverage"
+    "test:unit:coverage": "vitest run --config vitest.config.js --coverage",
+    "test:e2e": "playwright test",
+    "test:e2e:headed": "playwright test --headed",
+    "test:e2e:ui": "playwright test --ui"
   },
   "devDependencies": {
     "@playwright/test": "^1.59.1",
