@@ -23,6 +23,9 @@
   let service = $state(null);
   let builds = $state([]);
   let artifacts = $state([]);
+  let environments = $state([]);
+  let artifactsLoadError = $state(null);
+  let environmentsLoadError = $state(null);
   let secrets = $state([]);
   let loading = $state(true);
   let error = $state(null);
@@ -79,6 +82,20 @@
   let deleteError = $state(null);
   let deleteForce = $state(false);
 
+  // Deployment intent modal state
+  let deployOpen = $state(false);
+  let deploying = $state(false);
+  let deployError = $state(null);
+  let deployPolicyPreview = $state(null);
+  let deployPolicyPreviewLoading = $state(false);
+  let deployPolicyPreviewError = $state(null);
+  let deployPolicyPreviewKey = $state('');
+  let deployForm = $state({
+    environment_id: '',
+    artifact_id: ''
+  });
+  const COST_ESTIMATE_UNAVAILABLE_COPY = 'Cost estimate unavailable before run creation: the current API estimates cost from a deployment run ID, which does not exist until after an intent is approved and executed.';
+
   // Secret create modal state
   let secretCreateOpen = $state(false);
   let secretCreating = $state(false);
@@ -124,19 +141,30 @@
     service = null;
     builds = [];
     artifacts = [];
+    environments = [];
+    artifactsLoadError = null;
+    environmentsLoadError = null;
     secrets = [];
 
     try {
-      const [loadedService, loadedBuilds, loadedArtifacts, loadedSecrets] = await Promise.all([
+      const [loadedService, loadedBuilds, loadedArtifacts, loadedEnvironments, loadedSecrets] = await Promise.all([
         api.getService(id),
         api.listBuilds(id).catch(() => []),
-        api.listArtifacts(id).catch(() => []),
+        api.listArtifacts(id).catch((err) => {
+          artifactsLoadError = err.message || 'Failed to load artifacts';
+          return [];
+        }),
+        api.listEnvironments().catch((err) => {
+          environmentsLoadError = err.message || 'Failed to load environments';
+          return [];
+        }),
         api.listSecrets(id).catch(() => [])
       ]);
 
       service = loadedService;
       builds = loadedBuilds;
       artifacts = loadedArtifacts;
+      environments = loadedEnvironments;
       secrets = loadedSecrets;
 
       await loadRepositories();
@@ -162,6 +190,50 @@
     if (!bytes) return '-';
     const mb = bytes / (1024 * 1024);
     return `${mb.toFixed(1)} MB`;
+  }
+
+  function formatDigest(digest) {
+    if (!digest) return '-';
+    const value = String(digest);
+    return value.length > 22 ? `${value.slice(0, 18)}…${value.slice(-6)}` : value;
+  }
+
+  function artifactDisplayName(artifact) {
+    if (!artifact) return 'Unknown artifact';
+    return artifact.image_tag || artifact.version || artifact.name || formatDigest(artifact.image_digest || artifact.digest || artifact.id);
+  }
+
+  function artifactBuildLabel(artifact) {
+    if (!artifact) return null;
+    const buildId = artifact.build_id || artifact.metadata?.build_id;
+    const build = builds.find((candidate) => candidate.id === buildId);
+    if (build?.git_sha) return `build ${build.git_sha.slice(0, 7)}`;
+    if (buildId) return `build ${String(buildId).slice(0, 8)}`;
+    return null;
+  }
+
+  function artifactOptionLabel(artifact) {
+    const parts = [artifactDisplayName(artifact)];
+    const digest = artifact.image_digest || artifact.digest;
+    if (digest) parts.push(formatDigest(digest));
+    const buildLabel = artifactBuildLabel(artifact);
+    if (buildLabel) parts.push(buildLabel);
+    return parts.filter(Boolean).join(' · ');
+  }
+
+  function environmentDisplayName(environment) {
+    if (!environment) return 'Unknown environment';
+    return environment.name || environment.slug || environment.id;
+  }
+
+  function policyStatusLabel(preview) {
+    if (!preview) return 'Not evaluated';
+    return preview.allowed === false ? 'Blocked' : 'Allowed';
+  }
+
+  function policyStatusClass(preview) {
+    if (!preview) return 'muted';
+    return preview.allowed === false ? 'error' : 'success';
   }
 
   function openEditModal() {
@@ -232,6 +304,80 @@
     deleteOpen = false;
     deleteError = null;
     deleteForce = false;
+  }
+
+  function resetDeployPreview() {
+    deployPolicyPreview = null;
+    deployPolicyPreviewError = null;
+    deployPolicyPreviewLoading = false;
+    deployPolicyPreviewKey = '';
+  }
+
+  function openDeployModal() {
+    deployForm = {
+      environment_id: '',
+      artifact_id: ''
+    };
+    deployError = null;
+    resetDeployPreview();
+    deployOpen = true;
+  }
+
+  function closeDeployModal() {
+    if (deploying) return;
+    deployOpen = false;
+    deployError = null;
+    resetDeployPreview();
+  }
+
+  async function loadDeploymentPolicyPreview(environmentId, artifactId) {
+    const key = `${environmentId}:${artifactId}`;
+    deployPolicyPreviewKey = key;
+    deployPolicyPreview = null;
+    deployPolicyPreviewError = null;
+    deployPolicyPreviewLoading = true;
+
+    try {
+      const preview = await api.evaluatePolicy({
+        artifact_id: artifactId,
+        environment_id: environmentId
+      });
+      if (deployPolicyPreviewKey === key) {
+        deployPolicyPreview = preview;
+      }
+    } catch (err) {
+      if (deployPolicyPreviewKey === key) {
+        deployPolicyPreviewError = err.message || 'Policy preview is not available';
+      }
+    } finally {
+      if (deployPolicyPreviewKey === key) {
+        deployPolicyPreviewLoading = false;
+      }
+    }
+  }
+
+  async function handleDeploy() {
+    if (!deployForm.environment_id) {
+      deployError = 'Select an environment';
+      return;
+    }
+    if (!deployForm.artifact_id) {
+      deployError = 'Select an artifact';
+      return;
+    }
+
+    deploying = true;
+    deployError = null;
+
+    try {
+      await api.createIntent(serviceId, deployForm.environment_id, deployForm.artifact_id);
+      deployOpen = false;
+      goto('/deployments');
+    } catch (err) {
+      deployError = err.message || 'Failed to create deployment intent';
+    } finally {
+      deploying = false;
+    }
   }
 
   async function handleDelete() {
@@ -420,6 +566,34 @@
     value: b,
     label: b === editDetectedDefaultBranch ? `${b} (default)` : b
   })));
+
+  let deployEnvironmentOptions = $derived(environments.map(environment => ({
+    value: environment.id,
+    label: environmentDisplayName(environment)
+  })));
+  let deployArtifactOptions = $derived(artifacts.map(artifact => ({
+    value: artifact.id,
+    label: artifactOptionLabel(artifact)
+  })));
+  let selectedDeployEnvironment = $derived(environments.find(environment => environment.id === deployForm.environment_id));
+  let selectedDeployArtifact = $derived(artifacts.find(artifact => artifact.id === deployForm.artifact_id));
+  let selectedDeployArtifactBuild = $derived.by(() => {
+    if (!selectedDeployArtifact) return null;
+    const buildId = selectedDeployArtifact.build_id || selectedDeployArtifact.metadata?.build_id;
+    return builds.find(build => build.id === buildId) || null;
+  });
+
+  $effect(() => {
+    if (!deployOpen) return;
+    const environmentId = deployForm.environment_id;
+    const artifactId = deployForm.artifact_id;
+    if (!environmentId || !artifactId) {
+      resetDeployPreview();
+      return;
+    }
+    void loadDeploymentPolicyPreview(environmentId, artifactId);
+  });
+
   let buildColumns = $derived([
     { key: 'git_sha', label: 'Commit', render: (r) => `<code>${r.git_sha?.slice(0, 7)}</code>` },
     { key: 'git_ref', label: 'Ref' },
@@ -444,6 +618,9 @@
     <div class="header">
       <h1>{service.name}</h1>
       <div class="actions">
+        <LoadingButton variant="primary" onclick={openDeployModal}>
+          Deploy
+        </LoadingButton>
         <LoadingButton variant="secondary" onclick={openEditModal}>
           Edit
         </LoadingButton>
@@ -669,6 +846,151 @@
     {/if}
   </div>
 </ConfirmDialog>
+
+<!-- Deployment Intent Modal -->
+<Modal bind:open={deployOpen} title="Create Deployment Intent" size="lg" onClose={closeDeployModal}>
+  <form onsubmit={(event) => { event.preventDefault(); handleDeploy(); }} class="deploy-form">
+    <p class="modal-intro">
+      Choose where to deploy <strong>{service?.name}</strong> and which recent artifact should be promoted.
+    </p>
+
+    {#if environmentsLoadError || artifactsLoadError}
+      <div class="deploy-input-warning" role="alert">
+        {#if environmentsLoadError}
+          <p>Unable to load environments: {environmentsLoadError}</p>
+        {/if}
+        {#if artifactsLoadError}
+          <p>Unable to load artifacts: {artifactsLoadError}</p>
+        {/if}
+      </div>
+    {/if}
+
+    <div class="form-field">
+      <label for="deploy-environment">Environment *</label>
+      <Select
+        id="deploy-environment"
+        bind:value={deployForm.environment_id}
+        options={deployEnvironmentOptions}
+        placeholder={environments.length > 0 ? 'Select environment' : 'No environments available'}
+        required
+        disabled={deploying || environments.length === 0}
+      />
+      <span class="field-hint">Deployment intent will target the selected environment.</span>
+    </div>
+
+    <div class="form-field">
+      <label for="deploy-artifact">Artifact from recent builds *</label>
+      <Select
+        id="deploy-artifact"
+        bind:value={deployForm.artifact_id}
+        options={deployArtifactOptions}
+        placeholder={artifacts.length > 0 ? 'Select artifact' : 'No artifacts registered'}
+        required
+        disabled={deploying || artifacts.length === 0}
+      />
+      <span class="field-hint">
+        Artifacts are sourced from this service's registered artifacts. Build details are shown when the artifact includes build metadata.
+      </span>
+    </div>
+
+    {#if selectedDeployEnvironment || selectedDeployArtifact}
+      <div class="deploy-summary">
+        <h3>Selection Summary</h3>
+        <dl>
+          <div>
+            <dt>Environment</dt>
+            <dd>{selectedDeployEnvironment ? environmentDisplayName(selectedDeployEnvironment) : 'Select an environment'}</dd>
+          </div>
+          <div>
+            <dt>Artifact</dt>
+            <dd>{selectedDeployArtifact ? artifactOptionLabel(selectedDeployArtifact) : 'Select an artifact'}</dd>
+          </div>
+          {#if selectedDeployArtifactBuild}
+            <div>
+              <dt>Build</dt>
+              <dd>
+                {selectedDeployArtifactBuild.git_sha?.slice(0, 7) || selectedDeployArtifactBuild.id}
+                {selectedDeployArtifactBuild.git_ref ? ` · ${selectedDeployArtifactBuild.git_ref}` : ''}
+              </dd>
+            </div>
+          {/if}
+        </dl>
+      </div>
+    {/if}
+
+    <div class="preview-grid">
+      <section class="preview-card">
+        <div class="preview-card-header">
+          <h3>Policy Preview</h3>
+          {#if deployPolicyPreview}
+            <span class="status-pill {policyStatusClass(deployPolicyPreview)}">{policyStatusLabel(deployPolicyPreview)}</span>
+          {/if}
+        </div>
+        {#if !deployForm.environment_id || !deployForm.artifact_id}
+          <p class="preview-muted">Select an environment and artifact to preview policy evaluation.</p>
+        {:else if deployPolicyPreviewLoading}
+          <p class="preview-muted">Evaluating policies...</p>
+        {:else if deployPolicyPreviewError}
+          <p class="preview-warning">
+            Policy preview unavailable: {deployPolicyPreviewError}. You can still create the intent; backend policy enforcement remains authoritative.
+          </p>
+        {:else if deployPolicyPreview}
+          <p class="preview-muted">
+            {deployPolicyPreview.results?.length || 0} policy result{(deployPolicyPreview.results?.length || 0) === 1 ? '' : 's'} ·
+            {deployPolicyPreview.warnings || 0} warning{(deployPolicyPreview.warnings || 0) === 1 ? '' : 's'} ·
+            {deployPolicyPreview.blockers || 0} blocker{(deployPolicyPreview.blockers || 0) === 1 ? '' : 's'}
+          </p>
+          {#if deployPolicyPreview.results?.length > 0}
+            <ul class="policy-results">
+              {#each deployPolicyPreview.results as result}
+                <li>
+                  <span class="status-dot" class:pass={result.passed} class:fail={!result.passed}></span>
+                  <span>
+                    <strong>{result.policy_name || result.policy_id}</strong>
+                    <small>{result.enforcement || 'warn'}</small>
+                    {#if result.violations?.length > 0}
+                      <em>{result.violations.map(v => v.message || v.rule).join('; ')}</em>
+                    {/if}
+                  </span>
+                </li>
+              {/each}
+            </ul>
+          {:else}
+            <p class="preview-muted">No applicable policy rules were returned for this selection.</p>
+          {/if}
+        {/if}
+      </section>
+
+      <section class="preview-card">
+        <h3>Cost Estimate</h3>
+        <p class="preview-muted">{COST_ESTIMATE_UNAVAILABLE_COPY}</p>
+      </section>
+    </div>
+
+    {#if deployError}
+      <p class="error">{deployError}</p>
+    {/if}
+
+    <div class="form-actions">
+      <LoadingButton
+        type="button"
+        variant="secondary"
+        onclick={closeDeployModal}
+        disabled={deploying}
+      >
+        Cancel
+      </LoadingButton>
+      <LoadingButton
+        type="submit"
+        variant="primary"
+        loading={deploying}
+        disabled={!deployForm.environment_id || !deployForm.artifact_id}
+      >
+        Create Intent
+      </LoadingButton>
+    </div>
+  </form>
+</Modal>
 
 <!-- Secret Create Modal -->
 <Modal bind:open={secretCreateOpen} title="Add Secret" onClose={closeSecretCreateModal}>
@@ -967,10 +1289,144 @@
     margin: 0;
   }
 
-  .secret-form {
+  .secret-form,
+  .deploy-form {
     display: flex;
     flex-direction: column;
     gap: 1rem;
+  }
+  .modal-intro {
+    margin: 0;
+    color: var(--text-muted);
+    line-height: 1.5;
+  }
+  .deploy-input-warning,
+  .deploy-summary {
+    padding: 1rem;
+    background: var(--hover-bg);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+  }
+  .deploy-input-warning {
+    border-color: var(--warning, #d97706);
+    color: var(--warning, #d97706);
+    font-size: 0.875rem;
+  }
+  .deploy-input-warning p {
+    margin: 0;
+  }
+  .deploy-input-warning p + p {
+    margin-top: 0.5rem;
+  }
+  .deploy-summary h3,
+  .preview-card h3 {
+    margin: 0;
+    font-size: 0.95rem;
+    color: var(--text-primary);
+  }
+  .deploy-summary dl {
+    display: grid;
+    gap: 0.75rem;
+    margin: 0.75rem 0 0;
+  }
+  .deploy-summary dl > div {
+    display: grid;
+    grid-template-columns: 110px 1fr;
+    gap: 0.75rem;
+  }
+  .deploy-summary dt {
+    color: var(--text-muted);
+    font-size: 0.8rem;
+  }
+  .deploy-summary dd {
+    margin: 0;
+    color: var(--text-primary);
+    font-size: 0.875rem;
+  }
+  .preview-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1.4fr) minmax(220px, 0.8fr);
+    gap: 1rem;
+  }
+  .preview-card {
+    margin: 0;
+    padding: 1rem;
+    background: var(--hover-bg);
+  }
+  .preview-card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    margin-bottom: 0.75rem;
+  }
+  .preview-muted,
+  .preview-warning {
+    margin: 0.75rem 0 0;
+    color: var(--text-muted);
+    font-size: 0.875rem;
+    line-height: 1.5;
+  }
+  .preview-warning {
+    color: var(--warning, #d97706);
+  }
+  .status-pill {
+    border-radius: 999px;
+    padding: 0.2rem 0.55rem;
+    font-size: 0.75rem;
+    font-weight: 600;
+  }
+  .status-pill.success {
+    background: #e8f5e9;
+    color: #2e7d32;
+  }
+  .status-pill.error {
+    background: #ffebee;
+    color: #c62828;
+  }
+  .status-pill.muted {
+    background: var(--bg);
+    color: var(--text-muted);
+  }
+  .policy-results {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    list-style: none;
+    padding: 0;
+    margin: 1rem 0 0;
+  }
+  .policy-results li {
+    display: flex;
+    gap: 0.5rem;
+    align-items: flex-start;
+  }
+  .policy-results small,
+  .policy-results em {
+    display: block;
+    color: var(--text-muted);
+    font-size: 0.75rem;
+    font-style: normal;
+    margin-top: 0.125rem;
+  }
+  .status-dot {
+    width: 0.65rem;
+    height: 0.65rem;
+    border-radius: 999px;
+    margin-top: 0.25rem;
+    background: var(--text-muted);
+    flex: 0 0 auto;
+  }
+  .status-dot.pass { background: #2e7d32; }
+  .status-dot.fail { background: #c62828; }
+  @media (max-width: 720px) {
+    .preview-grid {
+      grid-template-columns: 1fr;
+    }
+    .deploy-summary dl > div {
+      grid-template-columns: 1fr;
+      gap: 0.25rem;
+    }
   }
   .field-hint {
     font-size: 0.75rem;
