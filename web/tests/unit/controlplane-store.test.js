@@ -150,18 +150,21 @@ describe('controlplane store', () => {
       event({
         id: 'svc-1-event',
         kind: KINDS.BAHIA_SERVICE_REGISTRY,
+        pubkey: 'b'.repeat(64),
         tags: [['d', 'svc-1'], ['deleted', 'false']],
         content: { id: 'svc-1', name: 'API', deleted: false }
       }),
       event({
         id: 'env-1-event',
         kind: KINDS.BAHIA_ENVIRONMENT_REGISTRY,
+        pubkey: 'b'.repeat(64),
         tags: [['d', 'env-1'], ['deleted', 'false']],
         content: { id: 'env-1', name: 'Prod', deleted: false }
       }),
       event({
         id: 'state-1-event',
         kind: KINDS.BAHIA_SERVICE_STATE,
+        pubkey: 'b'.repeat(64),
         tags: [['d', 'svc-1:env-1'], ['service', 'svc-1'], ['environment', 'env-1'], ['deleted', 'false']],
         content: { service_id: 'svc-1', environment_id: 'env-1', drift_status: 'in_sync', deleted: false }
       }),
@@ -180,11 +183,13 @@ describe('controlplane store', () => {
     expect(nostrMock.setRelays).toHaveBeenCalledWith(['ws://localhost:10547/relay'], false);
     expect(nostrMock.connect).toHaveBeenCalledWith(['ws://localhost:10547/relay']);
     expect(nostrMock.queryUntilEose).toHaveBeenCalledWith(expect.arrayContaining([
-      expect.objectContaining({ kinds: expect.arrayContaining([31961, 31962, 31963, 10100]) })
+      expect.objectContaining({ kinds: expect.arrayContaining([31961, 31962, 31963]), authors: ['b'.repeat(64)] }),
+      expect.objectContaining({ kinds: [10100] })
     ]));
     expect(nostrMock.subscribe).toHaveBeenCalledWith(
       expect.arrayContaining([
-        expect.objectContaining({ kinds: expect.arrayContaining([31961, 31962, 31963, 10100]) })
+        expect.objectContaining({ kinds: expect.arrayContaining([31961, 31962, 31963]), authors: ['b'.repeat(64)] }),
+        expect.objectContaining({ kinds: [10100] })
       ]),
       expect.objectContaining({ onEvent: expect.any(Function), onClosed: expect.any(Function) })
     );
@@ -208,6 +213,7 @@ describe('controlplane store', () => {
     liveHandlers.onEvent(event({
       id: 'audit-1',
       kind: 31006,
+      pubkey: 'b'.repeat(64),
       created_at: 200,
       tags: [['event_type', 'service.created'], ['d', 'svc-2']],
       content: { event_type: 'service.created', entity_id: 'svc-2', data: { name: 'API' } }
@@ -215,6 +221,20 @@ describe('controlplane store', () => {
 
     expect(store.events).toHaveLength(1);
     expect(store.events[0]).toMatchObject({ id: 'audit-1', type: 'service.created', entity_id: 'svc-2' });
+  });
+
+  it('ignores canonical Bahia events not authored by the advertised service pubkey', async () => {
+    await store.bootstrapControlplane();
+
+    expect(store.applyControlplaneEvent(event({
+      id: 'spoofed-service',
+      kind: KINDS.BAHIA_SERVICE_REGISTRY,
+      pubkey: 'f'.repeat(64),
+      tags: [['d', 'svc-spoof'], ['deleted', 'false']],
+      content: { id: 'svc-spoof', name: 'Spoofed Service', deleted: false }
+    }))).toBe(false);
+
+    expect(store.services).toEqual([]);
   });
 
   it('tracks reconnect status from the shared Nostr client connection store', async () => {

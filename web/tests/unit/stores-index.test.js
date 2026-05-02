@@ -18,7 +18,7 @@ const controlplaneMock = vi.hoisted(() => ({
   workers: [],
   events: [],
   loading: { services: false, environments: false, states: false, workers: false },
-  controlplaneConnection: { status: 'idle', rollbackToSse: false },
+  controlplaneConnection: { status: 'idle', ready: false, rollbackToSse: false },
   bootstrapControlplane: vi.fn(),
   disconnectControlplane: vi.fn(),
   ingestLegacyEvent: vi.fn()
@@ -46,7 +46,7 @@ describe('Global Stores (index.js)', () => {
     controlplaneMock.workers.length = 0;
     controlplaneMock.events.length = 0;
     Object.assign(controlplaneMock.loading, { services: false, environments: false, states: false, workers: false });
-    Object.assign(controlplaneMock.controlplaneConnection, { status: 'idle', rollbackToSse: false });
+    Object.assign(controlplaneMock.controlplaneConnection, { status: 'idle', ready: false, rollbackToSse: false });
     controlplaneMock.bootstrapControlplane.mockResolvedValue({ ok: true, rollbackToSse: false });
 
     const apiModule = await import('../../src/lib/api/client.js');
@@ -100,6 +100,16 @@ describe('Global Stores (index.js)', () => {
     expect(storesModule.environments).toHaveLength(2);
     expect(storesModule.states).toHaveLength(2);
     expect(storesModule.workers).toHaveLength(2);
+  });
+
+  it('does not let REST refreshes overwrite authoritative relay-backed state', async () => {
+    controlplaneMock.controlplaneConnection.ready = true;
+    controlplaneMock.services.push({ id: 'svc-relay', name: 'Relay Service' });
+
+    await storesModule.loadServices();
+
+    expect(mockApi.listServices).not.toHaveBeenCalled();
+    expect(storesModule.services).toEqual([{ id: 'svc-relay', name: 'Relay Service' }]);
   });
 
   it('loadAll bootstraps the relay-backed controlplane before falling back to REST', async () => {

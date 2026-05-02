@@ -7,8 +7,19 @@ test.beforeEach(async ({ page }) => {
     const url = route.request().url();
     
     // Return appropriate mock data based on endpoint
-    if (url.includes('/services')) {
+    if (url.includes('/system/info')) {
       return route.fulfill({ 
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          data: {
+            nostr: { browser_relays: [] },
+            features: { legacy_sse: true, relay_read_models: false }
+          }
+        })
+      });
+    } else if (url.includes('/services')) {
+      return route.fulfill({
         status: 200,
         contentType: 'application/json',
         body: JSON.stringify({ data: [] })

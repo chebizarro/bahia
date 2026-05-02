@@ -63,6 +63,7 @@ function replaceArray(target, values) {
 
 async function loadViaRest(key, loader, target) {
   if (!api) return;
+  if (controlplaneConnection.ready && !controlplaneConnection.rollbackToSse) return;
   if (inFlight[key]) return inFlight[key];
 
   loading[key] = true;

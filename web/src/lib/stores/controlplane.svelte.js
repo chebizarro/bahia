@@ -18,6 +18,7 @@ const MAX_ACTIVITY = 100;
 const ACTIVITY_BACKFILL_LIMIT = 100;
 const READ_MODEL_LIMIT = 1000;
 const ACTIVITY_BACKFILL_SECONDS = 7 * 24 * 60 * 60;
+const CANONICAL_READ_MODEL_KINDS = BAHIA_READ_MODEL_KINDS.filter((kind) => kind !== KINDS.LOOM_WORKER_AD);
 
 export const controlplaneConnection = $state({
   status: 'idle', // idle | discovering | connecting | bootstrapping | live | rollback_sse | error | disconnected
@@ -158,22 +159,44 @@ export function resolveBrowserRelays(systemInfo) {
   return Array.from(new Set(relays.map(normalizeRelayUrl).filter(Boolean)));
 }
 
+function canonicalAuthorFilter() {
+  const servicePubkey = controlplaneConnection.servicePubkey;
+  return servicePubkey ? { authors: [servicePubkey] } : {};
+}
+
 function readModelFilters() {
+  const authorFilter = canonicalAuthorFilter();
   return [
-    { kinds: BAHIA_READ_MODEL_KINDS, limit: READ_MODEL_LIMIT },
+    { kinds: CANONICAL_READ_MODEL_KINDS, limit: READ_MODEL_LIMIT, ...authorFilter },
+    { kinds: [KINDS.LOOM_WORKER_AD], limit: READ_MODEL_LIMIT },
     {
       kinds: [...BAHIA_AUDIT_KINDS, ...BAHIA_STATUS_KINDS],
       since: Math.floor(Date.now() / 1000) - ACTIVITY_BACKFILL_SECONDS,
-      limit: ACTIVITY_BACKFILL_LIMIT
+      limit: ACTIVITY_BACKFILL_LIMIT,
+      ...authorFilter
     }
   ];
 }
 
 function liveFilters(since) {
+  const authorFilter = canonicalAuthorFilter();
   return [
-    { kinds: BAHIA_READ_MODEL_KINDS, since },
-    { kinds: [...BAHIA_AUDIT_KINDS, ...BAHIA_STATUS_KINDS], since }
+    { kinds: CANONICAL_READ_MODEL_KINDS, since, ...authorFilter },
+    { kinds: [KINDS.LOOM_WORKER_AD], since },
+    { kinds: [...BAHIA_AUDIT_KINDS, ...BAHIA_STATUS_KINDS], since, ...authorFilter }
   ];
+}
+
+function isCanonicalBahiaKind(kind) {
+  return CANONICAL_READ_MODEL_KINDS.includes(kind) ||
+    BAHIA_AUDIT_KINDS.includes(kind) ||
+    BAHIA_STATUS_KINDS.includes(kind);
+}
+
+function shouldAcceptControlplaneEvent(event) {
+  const servicePubkey = controlplaneConnection.servicePubkey;
+  if (!servicePubkey || !isCanonicalBahiaKind(event.kind)) return true;
+  return event.pubkey === servicePubkey;
 }
 
 function contentWithEventMeta(event) {
@@ -311,6 +334,7 @@ function applyActivityEvent(event) {
 
 export function applyControlplaneEvent(event) {
   if (!event?.id || typeof event.kind !== 'number') return false;
+  if (!shouldAcceptControlplaneEvent(event)) return false;
   if (seenEventIds.has(event.id)) return false;
   seenEventIds.add(event.id);
 
