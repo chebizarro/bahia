@@ -2,7 +2,7 @@
 
 ## Overview
 
-Bahia publishes signed Nostr events to relay networks for traceability and automation. All events are published as parameterized replaceable events (kind 30000-39999 range) using NIP-33.
+Bahia publishes signed Nostr events to relay networks for traceability, automation, and control-plane state. Audit/activity events use the 31000-series, replaceable read models use NIP-33-style d-tagged 3196x events, and request/status/result flows use the canonical 596x/696x/796x series.
 
 ## Event Kinds
 
@@ -14,6 +14,12 @@ Bahia publishes signed Nostr events to relay networks for traceability and autom
 | 31003 | `deployment.completed` | A deployment run has completed |
 | 31004 | `drift.detected` | Drift has been detected between desired and observed state |
 | 31005 | `runtime.observation` | A runtime observation has been recorded |
+| 31014 | `llm_route.projection` | LLM route registry projection emitted |
+| 31015 | `llm_release.registered` | LLM release registration emitted |
+| 31016 | `llm_deployment.*` | LLM deployment intent/approval/rejection emitted |
+| 31017 | `llm_deployment_run.*` | LLM deployment run lifecycle emitted |
+| 31018 | `llm_route_state.*` | LLM route state/observation/drift emitted |
+| 31019 | `llm_gateway_route.synced` | LLM gateway route synchronization emitted |
 
 ## Internal Operational Event Types
 
@@ -26,6 +32,13 @@ Bahia also emits typed in-process audit events used by Nostr read-model projecto
 | `runtime.deploy` | Direct runtime deploy completed | `service_id`, `environment_id`, `artifact_id`, `runtime_target`, `observation_id`, `health_status` |
 | `runtime.restart` | Direct runtime restart completed | `service_id`, `environment_id`, `runtime_target`, `observation_id`, `health_status` |
 | `runtime.stop` | Direct runtime stop completed | `service_id`, `environment_id`, `runtime_target`, `observation_id`, `health_status` |
+| `llm_route.created` / `llm_route.updated` | LLM route registry changed | `route_id` |
+| `llm_release.registered` | Immutable LLM release registered | `route_id`, `release_id` |
+| `llm_deployment_intent.created` / `.approved` / `.rejected` | LLM deployment intent lifecycle changed | `route_id`, `environment_id`, `release_id`, `intent_id` |
+| `llm_deployment_run.created` / `.status_changed` / `.completed` | LLM deployment run lifecycle changed | `intent_id`, `run_id` |
+| `llm_route.observation` | LLM backend/gateway observation recorded | `route_id`, `environment_id`, `release_id`, `run_id` |
+| `llm_route_state.changed` / `llm_route.drift_detected` | LLM route state projection changed | `route_id`, `environment_id`, `release_id`, `intent_id`, `run_id` |
+| `llm_gateway_route.synced` | Gateway model route synchronized | `route_id`, `environment_id` |
 
 ## Event Structure
 
@@ -120,6 +133,74 @@ Published by Bahia to cancel a running or queued job:
 }
 ```
 
+## LLM Control-Plane Events
+
+Bahia's LLM control plane uses the canonical Nostr contract in `internal/controlplane/reactor.go` and publishes database-backed projections through `internal/adapters/nostr/projector.go`.
+
+### LLM Requests (Kinds 5971–5975)
+
+Operators and MCP tools publish signed request events for route creation, release registration, deployment, approval/rejection, and rollback:
+
+```json
+{
+  "kind": 5973,
+  "content": "{\"route_id\":\"...\",\"environment_id\":\"...\",\"release_id\":\"...\"}",
+  "tags": [
+    ["route", "<route_id>"],
+    ["environment", "<environment_id>"],
+    ["release", "<release_id>"]
+  ]
+}
+```
+
+### LLM Status and Results (Kinds 6973, 7971–7973)
+
+Bahia publishes threaded replies to the original request. Deploy, approval, and rollback share kind `7973`; route create and release register use `7971` and `7972` respectively.
+
+```json
+{
+  "kind": 6973,
+  "content": "{\"status\":\"processing\",\"step\":\"provisioning\",\"message\":\"deploying LLM route\"}",
+  "tags": [
+    ["e", "<request_event_id>", "", "reply"],
+    ["p", "<requester_pubkey>"],
+    ["route", "<route_id>"],
+    ["environment", "<environment_id>"],
+    ["intent", "<intent_id>"],
+    ["run", "<run_id>"],
+    ["status", "processing"],
+    ["step", "provisioning"]
+  ]
+}
+```
+
+### LLM Read Models (Kinds 31964–31965)
+
+LLM route registry and route-state projections are Bahia-signed replaceable events. Clients query them, wait for EOSE, and then keep the subscription open for live updates.
+
+```json
+{
+  "kind": 31965,
+  "content": "{\"route_id\":\"...\",\"environment_id\":\"...\",\"desired_release_id\":\"...\",\"gateway_status\":\"synced\"}",
+  "tags": [
+    ["d", "<route_id>:<environment_id>"],
+    ["route", "<route_id>"],
+    ["environment", "<environment_id>"],
+    ["release", "<desired_release_id>"],
+    ["intent", "<desired_intent_id>"],
+    ["run", "<active_run_id>"],
+    ["gateway", "synced"],
+    ["backend", "vllm"]
+  ]
+}
+```
+
+**Bahia processing:**
+1. Validates request event ID/signature/timestamp and authorized pubkey.
+2. Mutates LLM registry/deployment state through `LLMRegistryService`.
+3. Publishes status/result replies with `route`, `release`, `environment`, `intent`, and `run` tags.
+4. Projects `31964`/`31965` read models and `31014–31019` audit/activity events.
+
 ## Hive-CI Integration Events
 
 Bahia subscribes to [Hive-CI](../hive-ci-protocol/SPECIFICATION.md) events to auto-ingest CI workflow results.
@@ -183,7 +264,12 @@ Received from the ephemeral key declared in the 5401 event:
 | 5102 | Job Cancellation | **Publish** | Cancel running / queued jobs |
 | 5401 | Workflow Run | Subscribe | Receive CI workflow start (Hive-CI) |
 | 5402 | Workflow Result | Subscribe | Receive CI workflow result (Hive-CI) |
-| 31000–31005 | Bahia Audit Events | **Publish** | Emit build, deploy, drift events |
+| 31000–31019 | Bahia Audit Events | **Publish** | Emit build, deploy, drift, and LLM lifecycle events |
+| 31964 | LLM Route Registry | **Publish** | Replaceable LLM route registry read model |
+| 31965 | LLM Route State | **Publish** | Replaceable LLM route/environment state read model |
+| 5971–5975 | LLM Requests | Subscribe | Consume authorized LLM control-plane commands |
+| 6973 | LLM Deployment Status | **Publish** | Emit LLM deployment/rollback progress |
+| 7971–7973 | LLM Results | **Publish** | Emit LLM route/release/deployment terminal results |
 
 ## Event Storage
 

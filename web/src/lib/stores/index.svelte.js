@@ -4,6 +4,8 @@ import {
   services,
   environments,
   states,
+  llmRoutes,
+  llmRouteStates,
   workers,
   events,
   loading,
@@ -19,7 +21,7 @@ export { theme, toggleTheme } from './theme.js';
 export { isAuthenticated, currentUser };
 
 // Nostr-backed dashboard/read-model state
-export { services, environments, states, workers, events, loading, controlplaneConnection };
+export { services, environments, states, llmRoutes, llmRouteStates, workers, events, loading, controlplaneConnection };
 
 // Derived state helpers
 export function driftedStates() {

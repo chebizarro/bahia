@@ -6,10 +6,13 @@ Bahia's supported Nostr command contract is the canonical 596x request series ha
 
 | Family | Kinds | Direction | Purpose |
 |--------|-------|-----------|---------|
-| Requests | 5961–5968 | inbound | Operator/agent commands |
-| Status | 6961–6962 | outbound | Progress updates |
-| Results | 7961–7966 | outbound | Terminal operation results |
-| Read models | 31961–31963 | outbound replaceable | Current browser/agent state |
+| Service requests | 5961–5968 | inbound | Service/environment operator commands |
+| LLM requests | 5971–5975 | inbound | LLM route/release/deploy/approval/rollback commands |
+| Service status | 6961–6962 | outbound | Service progress updates |
+| LLM status | 6973 | outbound | LLM deployment/rollback progress updates |
+| Service results | 7961–7966 | outbound | Service terminal operation results |
+| LLM results | 7971–7973 | outbound | LLM route/release/deployment terminal results |
+| Read models | 31961–31965 | outbound replaceable | Current browser/agent state |
 | Audit/activity | 31000–31099 | outbound append-only | Recent activity feed |
 
 ## Request Kinds
@@ -24,6 +27,11 @@ Bahia's supported Nostr command contract is the canonical 596x request series ha
 | 5966 | `DeploymentApproval` | Approve or reject an intent |
 | 5967 | `ObservationSubmit` | Submit runtime observation |
 | 5968 | `DriftRemediate` | Request drift remediation |
+| 5971 | `LLMRouteCreate` | Create an LLM route registry entry |
+| 5972 | `LLMReleaseRegister` | Register an immutable LLM release |
+| 5973 | `LLMDeployRequest` | Deploy an LLM release to an environment |
+| 5974 | `LLMDeploymentApproval` | Approve or reject an LLM deployment intent |
+| 5975 | `LLMRollbackRequest` | Roll back an LLM route/environment |
 
 All inbound requests must be valid signed Nostr events from an authorized pubkey. The sidecar verifies event ID/signature/timestamp and accepts request kinds only from `nostr.authorized_pubkeys`; Bahia services remain the final authority for business authorization.
 
@@ -34,6 +42,8 @@ Use tags for routing and correlation so subscribers do not need to parse content
 - `["service", "<service_id>"]`
 - `["environment", "<environment_id>"]`
 - `["artifact", "<artifact_id>"]`
+- `["route", "<llm_route_id>"]`
+- `["release", "<llm_release_id>"]`
 - `["intent", "<intent_id>"]`
 - `["run", "<run_id>"]`
 - `["e", "<request_event_id>", "", "reply"]` on status/result replies
@@ -54,6 +64,78 @@ Use tags for routing and correlation so subscribers do not need to parse content
 }
 ```
 
+## LLM Request Examples
+
+### Create LLM Route (Kind 5971)
+
+```json
+{
+  "kind": 5971,
+  "content": "{\"name\":\"chat\",\"description\":\"chat completions\",\"gateway_config\":{\"public_model\":\"chat\"}}",
+  "tags": [
+    ["route", "<optional-client-route-id>"],
+    ["model", "chat"]
+  ]
+}
+```
+
+### Register LLM Release (Kind 5972)
+
+```json
+{
+  "kind": 5972,
+  "content": "{\"route_id\":\"...\",\"version\":\"v1\",\"model_ref\":\"hf/org/model\",\"model_source\":\"huggingface\"}",
+  "tags": [
+    ["route", "<route_id>"],
+    ["model", "hf/org/model"]
+  ]
+}
+```
+
+### Deploy LLM Release (Kind 5973)
+
+```json
+{
+  "kind": 5973,
+  "content": "{\"route_id\":\"...\",\"environment_id\":\"...\",\"release_id\":\"...\",\"requested_by\":\"operator\"}",
+  "tags": [
+    ["route", "<route_id>"],
+    ["environment", "<environment_id>"],
+    ["release", "<release_id>"]
+  ]
+}
+```
+
+### Approve or Reject LLM Deployment (Kind 5974)
+
+```json
+{
+  "kind": 5974,
+  "content": "{\"intent_id\":\"...\",\"decision\":\"approve\"}",
+  "tags": [
+    ["intent", "<intent_id>"],
+    ["decision", "approve"]
+  ]
+}
+```
+
+### Roll Back LLM Route (Kind 5975)
+
+```json
+{
+  "kind": 5975,
+  "content": "{\"route_id\":\"...\",\"environment_id\":\"...\",\"requested_by\":\"operator\"}",
+  "tags": [
+    ["route", "<route_id>"],
+    ["environment", "<environment_id>"]
+  ]
+}
+```
+
+LLM status/result replies use kind `6973` and `7973` for deploy/approval/rollback and include `route`, `release` when known, `environment`, `intent`, `run`, `e`, and `p` tags. Route create and release register terminal replies use `7971` and `7972`.
+
+MCP LLM tools publish these canonical request events and return `request_event_id`, `request_kind`, `status_kind`, `result_kind`, `registry_kind`, `state_kind`, and resource IDs. Agents should use those fields to subscribe to relay updates; do not poll REST for completion.
+
 ## Replaceable Read Models
 
 | Kind | d-tag | Description |
@@ -61,6 +143,8 @@ Use tags for routing and correlation so subscribers do not need to parse content
 | 31961 | `service_id:environment_id` | Current service state in an environment |
 | 31962 | `service_id` | Service registry entry |
 | 31963 | `environment_id` | Environment registry entry |
+| 31964 | `route_id` | LLM route registry entry |
+| 31965 | `route_id:environment_id` | Current LLM route state in an environment |
 
 Read-model events are Bahia-signed projections from the database. Clients should query them, wait for EOSE, then keep the live subscription open. Latest `created_at` wins for each `(kind, pubkey, d-tag)` key. Deletions use tombstones (`deleted=true`) rather than relying on Nostr delete events.
 

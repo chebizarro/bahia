@@ -36,6 +36,8 @@ export const controlplaneConnection = $state({
 export const services = $state([]);
 export const environments = $state([]);
 export const states = $state([]);
+export const llmRoutes = $state([]);
+export const llmRouteStates = $state([]);
 export const workers = $state([]);
 export const events = $state([]);
 
@@ -51,6 +53,8 @@ const seenEventIds = new Set();
 const serviceMap = new Map();
 const environmentMap = new Map();
 const stateMap = new Map();
+const llmRouteMap = new Map();
+const llmRouteStateMap = new Map();
 const workerMap = new Map();
 const activityMap = new Map();
 
@@ -70,6 +74,8 @@ function resetArrays() {
   services.length = 0;
   environments.length = 0;
   states.length = 0;
+  llmRoutes.length = 0;
+  llmRouteStates.length = 0;
   workers.length = 0;
   events.length = 0;
 }
@@ -89,6 +95,8 @@ function refreshCollections() {
   replaceArray(services, Array.from(serviceMap.values()).sort(sortByNameOrId));
   replaceArray(environments, Array.from(environmentMap.values()).sort(sortByNameOrId));
   replaceArray(states, Array.from(stateMap.values()).sort(sortByNameOrId));
+  replaceArray(llmRoutes, Array.from(llmRouteMap.values()).sort(sortByNameOrId));
+  replaceArray(llmRouteStates, Array.from(llmRouteStateMap.values()).sort(sortByNameOrId));
   replaceArray(workers, Array.from(workerMap.values()).sort(sortByNameOrId));
   replaceArray(
     events,
@@ -113,6 +121,8 @@ export function resetControlplaneStore() {
   serviceMap.clear();
   environmentMap.clear();
   stateMap.clear();
+  llmRouteMap.clear();
+  llmRouteStateMap.clear();
   workerMap.clear();
   activityMap.clear();
   resetArrays();
@@ -261,6 +271,46 @@ function applyStateEvent(event) {
   return true;
 }
 
+function applyLLMRouteEvent(event) {
+  const { accepted } = upsertReplaceableEvent(replaceableEvents, event);
+  if (!accepted) return false;
+
+  const content = contentWithEventMeta(event);
+  const id = content.id || content.route_id || getTagValue(event, 'route') || getDTag(event);
+  if (!id) return false;
+
+  if (isReplaceableTombstone(event)) {
+    llmRouteMap.delete(id);
+  } else {
+    llmRouteMap.set(id, { ...content, id, route_id: id });
+  }
+  return true;
+}
+
+function applyLLMRouteStateEvent(event) {
+  const { accepted, key } = upsertReplaceableEvent(replaceableEvents, event);
+  if (!accepted) return false;
+
+  const content = contentWithEventMeta(event);
+  const dTag = getDTag(event);
+  const routeID = content.route_id || getTagValue(event, 'route');
+  const environmentID = content.environment_id || getTagValue(event, 'environment');
+  const id = content.id || dTag || (routeID && environmentID ? `${routeID}:${environmentID}` : key);
+  if (!id) return false;
+
+  if (isReplaceableTombstone(event)) {
+    llmRouteStateMap.delete(id);
+  } else {
+    llmRouteStateMap.set(id, {
+      ...content,
+      id,
+      route_id: routeID,
+      environment_id: environmentID
+    });
+  }
+  return true;
+}
+
 function applyWorkerEvent(event) {
   const { accepted } = upsertReplaceableEvent(replaceableEvents, event);
   if (!accepted) return false;
@@ -284,7 +334,9 @@ function applyWorkerEvent(event) {
 
 function activityType(event, content) {
   if (content.event_type) return content.event_type;
+  if (event.kind === KINDS.BAHIA_LLM_DEPLOYMENT_STATUS) return 'llm_deployment.status';
   if (event.kind === KINDS.BAHIA_DEPLOYMENT_STATUS || event.kind === KINDS.BAHIA_SERVICE_STATUS) return 'controlplane.status';
+  if (event.kind === KINDS.BAHIA_LLM_ROUTE_CREATE_RESULT || event.kind === KINDS.BAHIA_LLM_RELEASE_REGISTER_RESULT || event.kind === KINDS.BAHIA_LLM_DEPLOYMENT_RESULT) return 'llm_deployment.result';
   if (BAHIA_STATUS_KINDS.includes(event.kind)) return 'controlplane.result';
   return `nostr.kind.${event.kind}`;
 }
@@ -292,7 +344,11 @@ function activityType(event, content) {
 function activityEntityId(event, content) {
   return content.entity_id ||
     content.service_id ||
+    content.route_id ||
+    content.release_id ||
     getTagValue(event, 'service') ||
+    getTagValue(event, 'route') ||
+    getTagValue(event, 'release') ||
     getTagValue(event, 'environment') ||
     getTagValue(event, 'intent') ||
     getTagValue(event, 'run') ||
@@ -344,6 +400,12 @@ export function applyControlplaneEvent(event) {
       break;
     case KINDS.BAHIA_SERVICE_STATE:
       changed = applyStateEvent(event);
+      break;
+    case KINDS.BAHIA_LLM_ROUTE_REGISTRY:
+      changed = applyLLMRouteEvent(event);
+      break;
+    case KINDS.BAHIA_LLM_ROUTE_STATE:
+      changed = applyLLMRouteStateEvent(event);
       break;
     case KINDS.LOOM_WORKER_AD:
       changed = applyWorkerEvent(event);

@@ -183,13 +183,15 @@ describe('controlplane store', () => {
     expect(nostrMock.setRelays).toHaveBeenCalledWith(['ws://localhost:10547/relay'], false);
     expect(nostrMock.connect).toHaveBeenCalledWith(['ws://localhost:10547/relay']);
     expect(nostrMock.queryUntilEose).toHaveBeenCalledWith(expect.arrayContaining([
-      expect.objectContaining({ kinds: expect.arrayContaining([31961, 31962, 31963]), authors: ['b'.repeat(64)] }),
-      expect.objectContaining({ kinds: [10100] })
+      expect.objectContaining({ kinds: expect.arrayContaining([31961, 31962, 31963, 31964, 31965]), authors: ['b'.repeat(64)] }),
+      expect.objectContaining({ kinds: [10100] }),
+      expect.objectContaining({ kinds: expect.arrayContaining([6961, 6962, 6973, 7961, 7971, 7972, 7973]), authors: ['b'.repeat(64)] })
     ]));
     expect(nostrMock.subscribe).toHaveBeenCalledWith(
       expect.arrayContaining([
-        expect.objectContaining({ kinds: expect.arrayContaining([31961, 31962, 31963]), authors: ['b'.repeat(64)] }),
-        expect.objectContaining({ kinds: [10100] })
+        expect.objectContaining({ kinds: expect.arrayContaining([31961, 31962, 31963, 31964, 31965]), authors: ['b'.repeat(64)] }),
+        expect.objectContaining({ kinds: [10100] }),
+        expect.objectContaining({ kinds: expect.arrayContaining([6961, 6962, 6973, 7961, 7971, 7972, 7973]), authors: ['b'.repeat(64)] })
       ]),
       expect.objectContaining({ onEvent: expect.any(Function), onClosed: expect.any(Function) })
     );
@@ -202,6 +204,30 @@ describe('controlplane store', () => {
     expect(store.workers).toHaveLength(1);
   });
 
+  it('applies LLM route and route-state read models from relay events', async () => {
+    await store.bootstrapControlplane();
+
+    expect(store.applyControlplaneEvent(event({
+      id: 'llm-route-1-event',
+      kind: KINDS.BAHIA_LLM_ROUTE_REGISTRY,
+      pubkey: 'b'.repeat(64),
+      tags: [['d', 'route-1'], ['route', 'route-1'], ['model', 'chat-public'], ['deleted', 'false']],
+      content: { id: 'route-1', name: 'chat', public_model: 'chat-public', deleted: false }
+    }))).toBe(true);
+    expect(store.applyControlplaneEvent(event({
+      id: 'llm-state-1-event',
+      kind: KINDS.BAHIA_LLM_ROUTE_STATE,
+      pubkey: 'b'.repeat(64),
+      tags: [['d', 'route-1:env-1'], ['route', 'route-1'], ['environment', 'env-1'], ['deleted', 'false']],
+      content: { route_id: 'route-1', environment_id: 'env-1', gateway_status: 'synced', deleted: false }
+    }))).toBe(true);
+
+    expect(store.llmRoutes).toHaveLength(1);
+    expect(store.llmRoutes[0]).toMatchObject({ id: 'route-1', route_id: 'route-1', name: 'chat' });
+    expect(store.llmRouteStates).toHaveLength(1);
+    expect(store.llmRouteStates[0]).toMatchObject({ id: 'route-1:env-1', route_id: 'route-1', environment_id: 'env-1', gateway_status: 'synced' });
+  });
+
   it('bridges live subscription events into relay-backed state', async () => {
     let liveHandlers;
     nostrMock.subscribe.mockImplementation((_filters, handlers) => {
@@ -212,15 +238,15 @@ describe('controlplane store', () => {
     await store.bootstrapControlplane();
     liveHandlers.onEvent(event({
       id: 'audit-1',
-      kind: 31006,
+      kind: KINDS.BAHIA_LLM_DEPLOYMENT_STATUS,
       pubkey: 'b'.repeat(64),
       created_at: 200,
-      tags: [['event_type', 'service.created'], ['d', 'svc-2']],
-      content: { event_type: 'service.created', entity_id: 'svc-2', data: { name: 'API' } }
+      tags: [['route', 'route-1'], ['environment', 'env-1'], ['intent', 'intent-1'], ['status', 'processing']],
+      content: { status: 'processing', step: 'provisioning', route_id: 'route-1', environment_id: 'env-1' }
     }));
 
     expect(store.events).toHaveLength(1);
-    expect(store.events[0]).toMatchObject({ id: 'audit-1', type: 'service.created', entity_id: 'svc-2' });
+    expect(store.events[0]).toMatchObject({ id: 'audit-1', type: 'llm_deployment.status', entity_id: 'route-1' });
   });
 
   it('ignores canonical Bahia events not authored by the advertised service pubkey', async () => {

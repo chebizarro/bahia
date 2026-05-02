@@ -8,6 +8,8 @@ describe('Nostr Client - Parsing Functions', () => {
   let parseSoulEvent;
   let parseTemplateEvent;
   let KINDS;
+  let BAHIA_READ_MODEL_KINDS;
+  let BAHIA_STATUS_KINDS;
   let replaceableKey;
   let shouldAcceptReplaceableEvent;
   let isReplaceableTombstone;
@@ -22,6 +24,8 @@ describe('Nostr Client - Parsing Functions', () => {
     parseSoulEvent = module.parseSoulEvent;
     parseTemplateEvent = module.parseTemplateEvent;
     KINDS = module.KINDS;
+    BAHIA_READ_MODEL_KINDS = module.BAHIA_READ_MODEL_KINDS;
+    BAHIA_STATUS_KINDS = module.BAHIA_STATUS_KINDS;
     replaceableKey = module.replaceableKey;
     shouldAcceptReplaceableEvent = module.shouldAcceptReplaceableEvent;
     isReplaceableTombstone = module.isReplaceableTombstone;
@@ -45,9 +49,25 @@ describe('Nostr Client - Parsing Functions', () => {
       expect(KINDS.BAHIA_SERVICE_STATE).toBe(31961);
       expect(KINDS.BAHIA_SERVICE_REGISTRY).toBe(31962);
       expect(KINDS.BAHIA_ENVIRONMENT_REGISTRY).toBe(31963);
+      expect(KINDS.BAHIA_LLM_ROUTE_REGISTRY).toBe(31964);
+      expect(KINDS.BAHIA_LLM_ROUTE_STATE).toBe(31965);
       expect(KINDS.LOOM_WORKER_AD).toBe(10100);
+      expect(KINDS.BAHIA_REQUEST_LLM_ROUTE_CREATE).toBe(5971);
+      expect(KINDS.BAHIA_REQUEST_LLM_RELEASE_REGISTER).toBe(5972);
+      expect(KINDS.BAHIA_REQUEST_LLM_DEPLOY).toBe(5973);
+      expect(KINDS.BAHIA_REQUEST_LLM_DEPLOYMENT_APPROVAL).toBe(5974);
+      expect(KINDS.BAHIA_REQUEST_LLM_ROLLBACK).toBe(5975);
       expect(KINDS.BAHIA_DEPLOYMENT_STATUS).toBe(6961);
+      expect(KINDS.BAHIA_LLM_DEPLOYMENT_STATUS).toBe(6973);
       expect(KINDS.BAHIA_DEPLOYMENT_RESULT).toBe(7961);
+      expect(KINDS.BAHIA_LLM_ROUTE_CREATE_RESULT).toBe(7971);
+      expect(KINDS.BAHIA_LLM_RELEASE_REGISTER_RESULT).toBe(7972);
+      expect(KINDS.BAHIA_LLM_DEPLOYMENT_RESULT).toBe(7973);
+    });
+
+    it('includes LLM read models and lifecycle events in Bahia subscription groups', () => {
+      expect(BAHIA_READ_MODEL_KINDS).toEqual(expect.arrayContaining([31964, 31965]));
+      expect(BAHIA_STATUS_KINDS).toEqual(expect.arrayContaining([6973, 7971, 7972, 7973]));
     });
   });
 

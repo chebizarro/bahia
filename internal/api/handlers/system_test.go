@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/openagentsinc/bahia/internal/config"
+	"github.com/openagentsinc/bahia/internal/controlplane"
 )
 
 func TestSystemHandler_GetInfo_ExposesRelaySidecarCapabilities(t *testing.T) {
@@ -105,7 +106,12 @@ func TestSystemHandler_GetInfo_ExposesMCPTransportOnlyWhenEnabled(t *testing.T) 
 
 	var payload struct {
 		Data struct {
-			Features map[string]bool `json:"features"`
+			Features     map[string]bool `json:"features"`
+			ControlPlane struct {
+				MCP struct {
+					AsyncCorrelation bool `json:"async_correlation"`
+				} `json:"mcp"`
+			} `json:"control_plane"`
 		} `json:"data"`
 	}
 	if err := json.NewDecoder(w.Body).Decode(&payload); err != nil {
@@ -114,6 +120,118 @@ func TestSystemHandler_GetInfo_ExposesMCPTransportOnlyWhenEnabled(t *testing.T) 
 	if !payload.Data.Features["mcp_transport"] {
 		t.Fatalf("expected mcp_transport feature when handler is wired")
 	}
+	if !payload.Data.ControlPlane.MCP.AsyncCorrelation {
+		t.Fatalf("expected MCP async correlation guidance when MCP transport is wired")
+	}
+}
+
+func TestSystemHandler_GetInfo_DoesNotAdvertiseDisabledControlPlaneCapabilities(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.LLM.Enabled = false
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/system/info", nil)
+	w := httptest.NewRecorder()
+
+	NewSystemHandler(cfg).GetInfo(w, req)
+
+	var payload struct {
+		Data struct {
+			Features     map[string]bool `json:"features"`
+			ControlPlane struct {
+				Capabilities   []string       `json:"capabilities"`
+				RequestKinds   map[string]int `json:"request_kinds"`
+				StatusKinds    map[string]int `json:"status_kinds"`
+				ResultKinds    map[string]int `json:"result_kinds"`
+				ReadModelKinds map[string]int `json:"read_model_kinds"`
+			} `json:"control_plane"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+
+	if payload.Data.Features["llm_control_plane"] {
+		t.Fatalf("expected llm_control_plane feature to be false when LLM is disabled")
+	}
+	if containsString(payload.Data.ControlPlane.Capabilities, "llm_routes") || containsString(payload.Data.ControlPlane.Capabilities, "mcp_async_correlation") {
+		t.Fatalf("unexpected disabled capabilities: %#v", payload.Data.ControlPlane.Capabilities)
+	}
+	if _, ok := payload.Data.ControlPlane.RequestKinds["llm_deploy_request"]; ok {
+		t.Fatalf("disabled LLM request kind was advertised")
+	}
+	if _, ok := payload.Data.ControlPlane.StatusKinds["llm_deployment_status"]; ok {
+		t.Fatalf("disabled LLM status kind was advertised")
+	}
+	if _, ok := payload.Data.ControlPlane.ResultKinds["llm_deployment_result"]; ok {
+		t.Fatalf("disabled LLM result kind was advertised")
+	}
+	if _, ok := payload.Data.ControlPlane.ReadModelKinds["llm_route_state"]; ok {
+		t.Fatalf("disabled LLM read-model kind was advertised")
+	}
+}
+
+func TestSystemHandler_GetInfo_AdvertisesControlPlaneKinds(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.LLM.Enabled = true
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/system/info", nil)
+	w := httptest.NewRecorder()
+
+	NewSystemHandler(cfg, WithSystemMCPTransport(true)).GetInfo(w, req)
+
+	var payload struct {
+		Data struct {
+			Features     map[string]bool `json:"features"`
+			ControlPlane struct {
+				Version         string         `json:"version"`
+				Capabilities    []string       `json:"capabilities"`
+				RequestKinds    map[string]int `json:"request_kinds"`
+				StatusKinds     map[string]int `json:"status_kinds"`
+				ResultKinds     map[string]int `json:"result_kinds"`
+				ReadModelKinds  map[string]int `json:"read_model_kinds"`
+				CorrelationTags []string       `json:"correlation_tags"`
+			} `json:"control_plane"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+
+	if !payload.Data.Features["llm_control_plane"] {
+		t.Fatalf("expected llm_control_plane feature when LLM is enabled")
+	}
+	if payload.Data.ControlPlane.Version != "bahia-controlplane-v1" {
+		t.Fatalf("unexpected control plane version %q", payload.Data.ControlPlane.Version)
+	}
+	if !containsString(payload.Data.ControlPlane.Capabilities, "llm_routes") || !containsString(payload.Data.ControlPlane.Capabilities, "mcp_async_correlation") {
+		t.Fatalf("missing enabled capabilities: %#v", payload.Data.ControlPlane.Capabilities)
+	}
+	assertKind := func(group string, got map[string]int, key string, want int) {
+		t.Helper()
+		if got[key] != want {
+			t.Fatalf("%s[%s] = %d, want %d", group, key, got[key], want)
+		}
+	}
+	assertKind("request_kinds", payload.Data.ControlPlane.RequestKinds, "llm_route_create", controlplane.KindLLMRouteCreate)
+	assertKind("request_kinds", payload.Data.ControlPlane.RequestKinds, "llm_release_register", controlplane.KindLLMReleaseRegister)
+	assertKind("request_kinds", payload.Data.ControlPlane.RequestKinds, "llm_deploy_request", controlplane.KindLLMDeployRequest)
+	assertKind("request_kinds", payload.Data.ControlPlane.RequestKinds, "llm_deployment_approval", controlplane.KindLLMDeploymentApproval)
+	assertKind("request_kinds", payload.Data.ControlPlane.RequestKinds, "llm_rollback_request", controlplane.KindLLMRollbackRequest)
+	assertKind("status_kinds", payload.Data.ControlPlane.StatusKinds, "llm_deployment_status", controlplane.KindLLMDeploymentStatus)
+	assertKind("result_kinds", payload.Data.ControlPlane.ResultKinds, "llm_route_create_result", controlplane.KindLLMRouteCreateResult)
+	assertKind("result_kinds", payload.Data.ControlPlane.ResultKinds, "llm_release_register_result", controlplane.KindLLMReleaseRegisterResult)
+	assertKind("result_kinds", payload.Data.ControlPlane.ResultKinds, "llm_deployment_result", controlplane.KindLLMDeploymentResult)
+	assertKind("read_model_kinds", payload.Data.ControlPlane.ReadModelKinds, "llm_route_registry", controlplane.KindLLMRouteRegistry)
+	assertKind("read_model_kinds", payload.Data.ControlPlane.ReadModelKinds, "llm_route_state", controlplane.KindLLMRouteState)
+}
+
+func containsString(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
 }
 
 func TestSystemHandler_GetInfo_AdvertisesRemovedLegacyFeaturesAsDisabled(t *testing.T) {

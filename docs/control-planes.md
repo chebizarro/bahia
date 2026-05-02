@@ -20,7 +20,7 @@ Removed legacy surfaces:
 
 > **Base paths**: `/mcp` and `/api/v1/mcp`
 
-MCP clients use JSON-RPC 2.0 over HTTP. Tool implementations are backed by `internal/mcp/server.go`; long-running tool results include Nostr correlation metadata (`request_event_id`, `service_id`, `environment_id`, `intent_id`, `run_id`, status/result/read-model kinds) so agents can follow async truth on the relay.
+MCP clients use JSON-RPC 2.0 over HTTP. Tool implementations are backed by `internal/mcp/server.go`; long-running tool results include Nostr correlation metadata (`request_event_id`, `request_kind`, `service_id`, `route_id`, `release_id`, `environment_id`, `intent_id`, `run_id`, status/result/read-model kinds) so agents can follow async truth on the relay. `/api/v1/system/info` advertises the same contract under `control_plane` for clients that need kind discovery before subscribing.
 
 Example:
 
@@ -64,14 +64,17 @@ This avoids duplicate event loops: Bahia publishes canonical 696x/796x/3196x/rea
 
 ## Nostr Control Plane
 
-The Nostr reactor subscribes to signed request events and publishes status, terminal results, and replaceable read models. All business logic still delegates to `RegistryService`.
+The Nostr reactor subscribes to signed request events and publishes status, terminal results, and replaceable read models. Service operations delegate to `RegistryService`; LLM route/release/deploy/approval/rollback operations delegate to `LLMRegistryService`. LLM deploy, approval, and rollback are Nostr-first async actions; REST is only a narrowed registry/query/compatibility surface.
 
 | Series | Range | Purpose |
 |--------|-------|---------|
-| Request | 5961–5968 | Inbound operation requests |
-| Status | 6961–6962 | Progress/status updates |
-| Result | 7961–7966 | Terminal operation results |
-| Registry | 31961–31963 | Replaceable browser/agent read models |
+| Service requests | 5961–5968 | Inbound service/environment operation requests |
+| LLM requests | 5971–5975 | Inbound LLM route/release/deploy/approval/rollback requests |
+| Service status | 6961–6962 | Service progress/status updates |
+| LLM status | 6973 | LLM deployment/rollback progress updates |
+| Service results | 7961–7966 | Service terminal operation results |
+| LLM results | 7971–7973 | LLM route/release/deployment terminal results |
+| Registry/read models | 31961–31965 | Replaceable browser/agent read models |
 
 ### Request Events (596x)
 
@@ -85,6 +88,28 @@ The Nostr reactor subscribes to signed request events and publishes status, term
 | 5966 | `DeploymentApproval` | Approve/reject a deployment |
 | 5967 | `ObservationSubmit` | Submit runtime observation |
 | 5968 | `DriftRemediate` | Request drift remediation |
+| 5971 | `LLMRouteCreate` | Create an LLM route registry entry |
+| 5972 | `LLMReleaseRegister` | Register an immutable LLM route release |
+| 5973 | `LLMDeployRequest` | Request LLM route deployment |
+| 5974 | `LLMDeploymentApproval` | Approve/reject an LLM deployment intent |
+| 5975 | `LLMRollbackRequest` | Request LLM route rollback |
+
+### Status and Result Events
+
+| Kind | Name | Description |
+|------|------|-------------|
+| 6961 | `DeploymentStatus` | Service deployment progress |
+| 6962 | `ServiceStatus` | Service health/state updates |
+| 6973 | `LLMDeploymentStatus` | LLM deployment/rollback progress |
+| 7961 | `DeploymentResult` | Service deployment terminal result |
+| 7962 | `ActionResult` | Service action terminal result |
+| 7963 | `ServiceCreateResult` | Service creation terminal result |
+| 7964 | `EnvironmentCreateResult` | Environment creation terminal result |
+| 7965 | `ObservationResult` | Observation submission terminal result |
+| 7966 | `RemediationResult` | Drift remediation terminal result |
+| 7971 | `LLMRouteCreateResult` | LLM route creation terminal result |
+| 7972 | `LLMReleaseRegisterResult` | LLM release registration terminal result |
+| 7973 | `LLMDeploymentResult` | LLM deploy/approval/rollback terminal result |
 
 ### Replaceable Read Models
 
@@ -93,6 +118,12 @@ The Nostr reactor subscribes to signed request events and publishes status, term
 | 31961 | `ServiceState` | `service_id:environment_id` | Current desired/observed service state |
 | 31962 | `ServiceRegistry` | `service_id` | Service registry entry |
 | 31963 | `EnvironmentRegistry` | `environment_id` | Environment registry entry |
+| 31964 | `LLMRouteRegistry` | `route_id` | LLM route registry entry |
+| 31965 | `LLMRouteState` | `route_id:environment_id` | Current desired/observed LLM route state |
+
+### Correlation Tags
+
+Use tags for relay-side filtering and MCP follow-up subscriptions. Service flows use `service`, `environment`, `artifact`, `intent`, and `run`. LLM flows use `route`, `release`, `environment`, `intent`, and `run`. Status/result replies also include `e` with marker `reply`, `p` for the requester pubkey, plus `status` and `step` where applicable. MCP async LLM tools return the request event id and the relevant request/status/result/read-model kind ids so clients can subscribe directly rather than polling.
 
 Clients should wait for EOSE on bootstrap queries, then keep subscriptions open for live updates. Deduplicate by event id; for replaceable events, latest `created_at` wins for `(kind, pubkey, d-tag)`. Deletions use tombstone content/tags (`deleted=true`), not Nostr delete events.
 

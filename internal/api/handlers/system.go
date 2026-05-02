@@ -8,6 +8,7 @@ import (
 	"github.com/nbd-wtf/go-nostr"
 	"github.com/nbd-wtf/go-nostr/nip19"
 	"github.com/openagentsinc/bahia/internal/config"
+	"github.com/openagentsinc/bahia/internal/controlplane"
 )
 
 // SystemHandler handles system info endpoints.
@@ -53,6 +54,24 @@ type NostrConfigInfo struct {
 	ServiceNpub    string   `json:"service_npub,omitempty"`
 }
 
+// ControlPlaneInfo advertises the canonical Nostr control-plane contract.
+type ControlPlaneInfo struct {
+	Version         string         `json:"version"`
+	Capabilities    []string       `json:"capabilities"`
+	RequestKinds    map[string]int `json:"request_kinds"`
+	StatusKinds     map[string]int `json:"status_kinds"`
+	ResultKinds     map[string]int `json:"result_kinds"`
+	ReadModelKinds  map[string]int `json:"read_model_kinds"`
+	CorrelationTags []string       `json:"correlation_tags"`
+	MCP             MCPInfo        `json:"mcp"`
+}
+
+// MCPInfo describes MCP correlation guidance for async control-plane tools.
+type MCPInfo struct {
+	AsyncCorrelation bool     `json:"async_correlation"`
+	Fields           []string `json:"fields"`
+}
+
 // BlossomConfigInfo describes Blossom storage configuration.
 type BlossomConfigInfo struct {
 	Enabled      bool     `json:"enabled"`
@@ -75,12 +94,13 @@ type OCIConfigInfo struct {
 
 // SystemInfoResponse is the response for GET /api/v1/system/info.
 type SystemInfoResponse struct {
-	Registries []RegistryInfo    `json:"registries"`
-	Nostr      NostrConfigInfo   `json:"nostr"`
-	Blossom    BlossomConfigInfo `json:"blossom"`
-	Runtime    RuntimeConfigInfo `json:"runtime"`
-	OCI        OCIConfigInfo     `json:"oci"`
-	Features   map[string]bool   `json:"features"`
+	Registries   []RegistryInfo    `json:"registries"`
+	Nostr        NostrConfigInfo   `json:"nostr"`
+	ControlPlane ControlPlaneInfo  `json:"control_plane"`
+	Blossom      BlossomConfigInfo `json:"blossom"`
+	Runtime      RuntimeConfigInfo `json:"runtime"`
+	OCI          OCIConfigInfo     `json:"oci"`
+	Features     map[string]bool   `json:"features"`
 }
 
 // GetInfo returns system information including available registries.
@@ -207,6 +227,7 @@ func (h *SystemHandler) GetInfo(w http.ResponseWriter, r *http.Request) {
 		"nostr_auth_exchange":    false,
 		"relay_sidecar":          h.cfg.Nostr.Sidecar.Enabled,
 		"relay_read_models":      h.cfg.Nostr.Sidecar.Enabled && h.cfg.Nostr.PublishEnabled,
+		"llm_control_plane":      h.cfg.LLM.Enabled,
 		"direct_nostr_http_auth": h.cfg.Auth.NIP98Enabled,
 		"mcp_transport":          h.mcpTransportEnabled,
 		"legacy_sse":             false,
@@ -215,16 +236,84 @@ func (h *SystemHandler) GetInfo(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := SystemInfoResponse{
-		Registries: registries,
-		Nostr:      nostrInfo,
-		Blossom:    blossomInfo,
-		Runtime:    runtimeInfo,
-		OCI:        ociInfo,
-		Features:   features,
+		Registries:   registries,
+		Nostr:        nostrInfo,
+		ControlPlane: controlPlaneInfo(h.cfg.LLM.Enabled, h.mcpTransportEnabled),
+		Blossom:      blossomInfo,
+		Runtime:      runtimeInfo,
+		OCI:          ociInfo,
+		Features:     features,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{"data": resp})
+}
+
+func controlPlaneInfo(llmEnabled, mcpTransportEnabled bool) ControlPlaneInfo {
+	capabilities := []string{"service_deployments", "service_registry_read_models", "relay_read_models"}
+	requestKinds := map[string]int{
+		"deploy_request":      controlplane.KindDeployRequest,
+		"rollback_request":    controlplane.KindRollbackRequest,
+		"service_action":      controlplane.KindServiceAction,
+		"service_create":      controlplane.KindServiceCreate,
+		"environment_create":  controlplane.KindEnvironmentCreate,
+		"deployment_approval": controlplane.KindDeploymentApproval,
+		"observation_submit":  controlplane.KindObservationSubmit,
+		"drift_remediate":     controlplane.KindDriftRemediate,
+	}
+	statusKinds := map[string]int{
+		"deployment_status": controlplane.KindDeploymentStatus,
+		"service_status":    controlplane.KindServiceStatus,
+	}
+	resultKinds := map[string]int{
+		"deployment_result":         controlplane.KindDeploymentResult,
+		"action_result":             controlplane.KindActionResult,
+		"service_create_result":     controlplane.KindServiceCreateResult,
+		"environment_create_result": controlplane.KindEnvCreateResult,
+		"observation_result":        controlplane.KindObservationResult,
+		"remediation_result":        controlplane.KindRemediationResult,
+	}
+	readModelKinds := map[string]int{
+		"service_state":        controlplane.KindServiceState,
+		"service_registry":     controlplane.KindServiceRegistry,
+		"environment_registry": controlplane.KindEnvironmentRegistry,
+	}
+	correlationTags := []string{"service", "environment", "artifact", "intent", "run", "e", "p", "status", "step"}
+	mcpFields := []string{"request_event_id", "request_kind", "status_kind", "result_kind", "registry_kind", "state_kind", "service_id", "environment_id", "intent_id", "run_id"}
+
+	if llmEnabled {
+		capabilities = append(capabilities, "llm_routes", "llm_deployments", "llm_rollback")
+		requestKinds["llm_route_create"] = controlplane.KindLLMRouteCreate
+		requestKinds["llm_release_register"] = controlplane.KindLLMReleaseRegister
+		requestKinds["llm_deploy_request"] = controlplane.KindLLMDeployRequest
+		requestKinds["llm_deployment_approval"] = controlplane.KindLLMDeploymentApproval
+		requestKinds["llm_rollback_request"] = controlplane.KindLLMRollbackRequest
+		statusKinds["llm_deployment_status"] = controlplane.KindLLMDeploymentStatus
+		resultKinds["llm_route_create_result"] = controlplane.KindLLMRouteCreateResult
+		resultKinds["llm_release_register_result"] = controlplane.KindLLMReleaseRegisterResult
+		resultKinds["llm_deployment_result"] = controlplane.KindLLMDeploymentResult
+		readModelKinds["llm_route_registry"] = controlplane.KindLLMRouteRegistry
+		readModelKinds["llm_route_state"] = controlplane.KindLLMRouteState
+		correlationTags = append(correlationTags, "route", "release")
+		mcpFields = append(mcpFields, "route_id", "release_id")
+	}
+	if mcpTransportEnabled {
+		capabilities = append(capabilities, "mcp_async_correlation")
+	}
+
+	return ControlPlaneInfo{
+		Version:         "bahia-controlplane-v1",
+		Capabilities:    capabilities,
+		RequestKinds:    requestKinds,
+		StatusKinds:     statusKinds,
+		ResultKinds:     resultKinds,
+		ReadModelKinds:  readModelKinds,
+		CorrelationTags: correlationTags,
+		MCP: MCPInfo{
+			AsyncCorrelation: mcpTransportEnabled,
+			Fields:           mcpFields,
+		},
+	}
 }
 
 // derivePublicKey derives a public key hex from a private key (hex or nsec).
