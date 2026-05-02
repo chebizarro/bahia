@@ -34,11 +34,12 @@ export class BahiaClient {
   }
 
   async fetch(path, options = {}) {
-    const method = options.method || 'GET';
+    const { retries: retryOverride, ...fetchOptions } = options;
+    const method = fetchOptions.method || 'GET';
     const url = `${BASE_URL}${path}`;
     const headers = {
       'Content-Type': 'application/json',
-      ...options.headers
+      ...fetchOptions.headers
     };
 
     if (!headers.Authorization && this.authProvider?.getAuthorizationHeader) {
@@ -48,7 +49,19 @@ export class BahiaClient {
       }
     }
 
-    const res = await fetch(url, { ...options, method, headers });
+    const retries = Number.isInteger(retryOverride) ? Math.max(0, retryOverride) : (method === 'GET' ? 1 : 0);
+
+    let res;
+    for (let attempt = 0; ; attempt++) {
+      try {
+        res = await fetch(url, { ...fetchOptions, method, headers });
+        break;
+      } catch (error) {
+        if (attempt >= retries) {
+          throw error;
+        }
+      }
+    }
     
     // Handle non-2xx responses
     if (!res.ok) {
