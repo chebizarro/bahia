@@ -118,6 +118,30 @@ func TestStatusRecorder_WriteHeader(t *testing.T) {
 	}
 }
 
+type flushRecorder struct {
+	*httptest.ResponseRecorder
+	flushed bool
+}
+
+func (f *flushRecorder) Flush() {
+	f.flushed = true
+}
+
+func TestStatusRecorder_Flush(t *testing.T) {
+	w := &flushRecorder{ResponseRecorder: httptest.NewRecorder()}
+	sr := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+
+	flusher, ok := any(sr).(http.Flusher)
+	if !ok {
+		t.Fatalf("statusRecorder should implement http.Flusher")
+	}
+	flusher.Flush()
+
+	if !w.flushed {
+		t.Fatalf("expected underlying flusher to be called")
+	}
+}
+
 func TestParseStatusBucket(t *testing.T) {
 	tests := []struct {
 		status int

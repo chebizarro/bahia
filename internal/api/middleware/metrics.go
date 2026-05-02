@@ -62,6 +62,13 @@ func (r *statusRecorder) Write(b []byte) (int, error) {
 	return r.ResponseWriter.Write(b)
 }
 
+// Flush forwards flush support for streaming responses such as SSE.
+func (r *statusRecorder) Flush() {
+	if f, ok := r.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
 // Unwrap returns the underlying ResponseWriter for http.ResponseController support.
 func (r *statusRecorder) Unwrap() http.ResponseWriter {
 	return r.ResponseWriter

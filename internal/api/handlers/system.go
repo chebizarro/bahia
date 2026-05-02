@@ -176,14 +176,15 @@ func (h *SystemHandler) GetInfo(w http.ResponseWriter, r *http.Request) {
 
 	// Feature flags
 	features := map[string]bool{
-		"oci":           h.cfg.OCI.Enabled,
-		"harbor":        h.cfg.Harbor.Enabled,
-		"blossom":       h.cfg.Blossom.Enabled,
-		"hiveci":        h.cfg.HiveCI.Enabled,
-		"cashu":         h.cfg.Cashu.Enabled,
-		"telemetry":     h.cfg.Telemetry.Enabled,
-		"notifications": h.cfg.Notifications.Enabled,
-		"auth":          h.cfg.Auth.Enabled,
+		"oci":                h.cfg.OCI.Enabled,
+		"harbor":             h.cfg.Harbor.Enabled,
+		"blossom":            h.cfg.Blossom.Enabled,
+		"hiveci":             h.cfg.HiveCI.Enabled,
+		"cashu":              h.cfg.Cashu.Enabled,
+		"telemetry":          h.cfg.Telemetry.Enabled,
+		"notifications":      h.cfg.Notifications.Enabled,
+		"auth":               h.cfg.Auth.Enabled,
+		"nostr_auth_exchange": h.cfg.Auth.JWTSecret != "",
 	}
 
 	resp := SystemInfoResponse{

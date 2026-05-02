@@ -11,6 +11,7 @@ import {
   signEvent as nip07SignEvent,
   detectNip07
 } from '$lib/nostr/nip07.js';
+import { supportsNostrAuthExchange } from '$lib/auth/capabilities.js';
 
 // LocalStorage key for session persistence
 const SESSION_KEY = 'bahia_auth_session';
@@ -205,6 +206,11 @@ async function authenticateBackendInternal(pubkey) {
     throw new Error('API client not available');
   }
 
+  const systemInfo = await api.getSystemInfo().catch(() => null);
+  if (!supportsNostrAuthExchange(systemInfo)) {
+    return null;
+  }
+
   // Build unsigned NIP-98 event
   const now = Math.floor(Date.now() / 1000);
   const unsignedEvent = {
@@ -284,10 +290,19 @@ export async function login() {
       // Persist session
       persistSession(pubkey, relays);
 
-      // Automatically authenticate with backend to get JWT for API access
+      // Automatically authenticate with backend to get JWT for API access when supported
       try {
-        await authenticateBackendInternal(pubkey);
-        toast.success('Signed in successfully');
+        const backendAuth = await authenticateBackendInternal(pubkey);
+        if (backendAuth) {
+          toast.success('Signed in successfully');
+        } else {
+          updateAuthState({
+            backendAuthenticated: false,
+            tokenExpiresAt: null,
+            error: null
+          });
+          toast.success('Signed in successfully');
+        }
       } catch (backendError) {
         // Backend auth failed but NIP-07 login succeeded
         // Log the error but don't fail the login - user can retry backend auth later
@@ -404,6 +419,11 @@ export async function authenticateBackend() {
   }
 
   try {
+    const systemInfo = await api.getSystemInfo().catch(() => null);
+    if (!supportsNostrAuthExchange(systemInfo)) {
+      throw new Error('Backend Nostr auth exchange is not enabled on this Bahia server');
+    }
+
     // Build unsigned NIP-98 event
     const now = Math.floor(Date.now() / 1000);
     const unsignedEvent = {
