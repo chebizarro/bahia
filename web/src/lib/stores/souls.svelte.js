@@ -167,34 +167,72 @@ export function unsubscribeFromSoulUpdates() {
   }
 }
 
+const PROVISIONING_EVENT_TIMEOUT_MS = 120000;
+
 // Track a provisioning run
-export function trackProvisioningRun(requestEventId, { onProgress, onComplete, onError }) {
+export function trackProvisioningRun(requestEventId, { onProgress, onComplete, onError } = {}) {
   const run = $state({
     id: requestEventId,
     status: 'pending',
     step: '',
     progress: { current: 0, total: 8 },
-    message: 'Starting...',
+    message: 'Waiting for provisioning events…',
     result: null
   });
 
   provisioningRuns.set(requestEventId, run);
+
+  const seenEventIds = new Set();
+  let lastEventAt = Date.now();
+  let finished = false;
+
+  const failRun = (message) => {
+    if (finished) return;
+    finished = true;
+
+    const currentRun = provisioningRuns.get(requestEventId);
+    if (currentRun) {
+      currentRun.status = 'failed';
+      currentRun.message = message;
+      currentRun.result = { success: false, data: {}, error: message };
+    }
+
+    clearInterval(timeoutTimer);
+    unsub();
+    if (onError) onError(message);
+  };
+
+  const timeoutTimer = setInterval(() => {
+    if (finished) return;
+    if (Date.now() - lastEventAt > PROVISIONING_EVENT_TIMEOUT_MS) {
+      failRun('Provisioning timed out waiting for relay updates');
+    }
+  }, 1000);
 
   const unsub = nostr.subscribe([
     { kinds: [KINDS.PROVISIONING_STATUS], '#e': [requestEventId] },
     { kinds: [KINDS.PROVISIONING_RESULT], '#e': [requestEventId] }
   ], {
     onEvent: (event) => {
+      if (finished) return;
+      if (event?.id && seenEventIds.has(event.id)) return;
+      if (event?.id) seenEventIds.add(event.id);
+      lastEventAt = Date.now();
+
       if (event.kind === KINDS.PROVISIONING_STATUS) {
-        // Update progress
         let step = '';
         let progress = { current: 0, total: 8 };
-        let message = event.content;
+        const message = event.content || 'Provisioning in progress';
 
-        for (const tag of event.tags) {
-          if (tag[0] === 'step') step = tag[1];
+        for (const tag of event.tags || []) {
+          if (tag[0] === 'step') step = tag[1] || '';
           if (tag[0] === 'progress') {
-            progress = { current: parseInt(tag[1]), total: parseInt(tag[2]) };
+            const current = Number.parseInt(tag[1], 10);
+            const total = Number.parseInt(tag[2], 10);
+            progress = {
+              current: Number.isFinite(current) ? current : 0,
+              total: Number.isFinite(total) ? total : 8
+            };
           }
         }
 
@@ -207,37 +245,60 @@ export function trackProvisioningRun(requestEventId, { onProgress, onComplete, o
         }
 
         if (onProgress) onProgress({ step, progress, message });
-      } else if (event.kind === KINDS.PROVISIONING_RESULT) {
-        // Handle result
+        return;
+      }
+
+      if (event.kind === KINDS.PROVISIONING_RESULT) {
         let success = false;
         let resultData = {};
 
-        for (const tag of event.tags) {
+        for (const tag of event.tags || []) {
           if (tag[0] === 'status') success = tag[1] === 'success';
         }
 
         if (success && event.content) {
-          try { resultData = JSON.parse(event.content); } catch (e) {}
+          try {
+            resultData = JSON.parse(event.content);
+          } catch {
+            resultData = {};
+          }
         }
 
+        const errorMessage = success ? null : (event.content || 'Provisioning failed');
         const currentRun = provisioningRuns.get(requestEventId);
         if (currentRun) {
           currentRun.status = success ? 'completed' : 'failed';
-          currentRun.result = { success, data: resultData, error: success ? null : event.content };
+          currentRun.message = success ? 'Provisioning complete' : errorMessage;
+          currentRun.result = { success, data: resultData, error: errorMessage };
         }
 
+        finished = true;
+        clearInterval(timeoutTimer);
         unsub();
 
-        if (success && onComplete) {
-          onComplete(resultData);
-        } else if (!success && onError) {
-          onError(event.content);
+        if (success) {
+          if (onComplete) onComplete(resultData);
+        } else if (onError) {
+          onError(errorMessage);
         }
       }
+    },
+    onEose: () => {
+      if (finished) return;
+      const currentRun = provisioningRuns.get(requestEventId);
+      if (currentRun && currentRun.status === 'pending') {
+        currentRun.message = 'Request published. Waiting for live provisioning updates…';
+      }
+    },
+    onClosed: (reason) => {
+      if (finished) return;
+      failRun(reason ? `Provisioning subscription closed: ${reason}` : 'Provisioning subscription closed by relay');
     }
   });
 
   return () => {
+    finished = true;
+    clearInterval(timeoutTimer);
     unsub();
     provisioningRuns.delete(requestEventId);
   };

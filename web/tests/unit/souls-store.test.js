@@ -508,7 +508,9 @@ describe('Souls Store', () => {
           { kinds: [KINDS.PROVISIONING_RESULT], '#e': [requestEventId] }
         ],
         expect.objectContaining({
-          onEvent: expect.any(Function)
+          onEvent: expect.any(Function),
+          onEose: expect.any(Function),
+          onClosed: expect.any(Function)
         })
       );
     });
@@ -528,6 +530,7 @@ describe('Souls Store', () => {
       const { KINDS } = require('../../src/lib/nostr/client.js');
       
       const statusEvent = {
+        id: 'status-1',
         kind: KINDS.PROVISIONING_STATUS,
         content: 'Creating Qdrant collection',
         tags: [
@@ -570,6 +573,7 @@ describe('Souls Store', () => {
       const { KINDS } = require('../../src/lib/nostr/client.js');
       
       const resultEvent = {
+        id: 'result-success-1',
         kind: KINDS.PROVISIONING_RESULT,
         content: '{"agentId":"agent-new","npub":"npub123"}',
         tags: [
@@ -607,6 +611,7 @@ describe('Souls Store', () => {
       const { KINDS } = require('../../src/lib/nostr/client.js');
       
       const resultEvent = {
+        id: 'result-error-1',
         kind: KINDS.PROVISIONING_RESULT,
         content: 'Qdrant collection creation failed',
         tags: [
@@ -625,6 +630,60 @@ describe('Souls Store', () => {
 
       expect(onError).toHaveBeenCalledWith('Qdrant collection creation failed');
       expect(unsub).toHaveBeenCalledTimes(1);
+    });
+
+    it('should update pending message after EOSE while waiting for live updates', () => {
+      const requestEventId = 'req-event-eose';
+
+      let handlers = null;
+      mockNostr.subscribe.mockImplementation((filters, incomingHandlers) => {
+        handlers = incomingHandlers;
+        return () => {};
+      });
+
+      soulsModule.trackProvisioningRun(requestEventId, {});
+      handlers.onEose('wss://relay.example');
+
+      const run = soulsModule.provisioningRuns.get(requestEventId);
+      expect(run.message).toBe('Request published. Waiting for live provisioning updates…');
+    });
+
+    it('should fail run when relay closes subscription', () => {
+      const requestEventId = 'req-event-closed';
+
+      let handlers = null;
+      const unsub = vi.fn();
+      mockNostr.subscribe.mockImplementation((filters, incomingHandlers) => {
+        handlers = incomingHandlers;
+        return unsub;
+      });
+
+      const onError = vi.fn();
+      soulsModule.trackProvisioningRun(requestEventId, { onError });
+      handlers.onClosed('auth required', 'wss://relay.example');
+
+      const run = soulsModule.provisioningRuns.get(requestEventId);
+      expect(run.status).toBe('failed');
+      expect(run.result.error).toBe('Provisioning subscription closed: auth required');
+      expect(onError).toHaveBeenCalledWith('Provisioning subscription closed: auth required');
+      expect(unsub).toHaveBeenCalledTimes(1);
+    });
+
+    it('should fail run on timeout when no relay updates arrive', () => {
+      vi.useFakeTimers();
+
+      const requestEventId = 'req-event-timeout';
+      const onError = vi.fn();
+      soulsModule.trackProvisioningRun(requestEventId, { onError });
+
+      vi.advanceTimersByTime(121000);
+
+      const run = soulsModule.provisioningRuns.get(requestEventId);
+      expect(run.status).toBe('failed');
+      expect(run.result.error).toBe('Provisioning timed out waiting for relay updates');
+      expect(onError).toHaveBeenCalledWith('Provisioning timed out waiting for relay updates');
+
+      vi.useRealTimers();
     });
 
     it('should return cleanup function that removes run from store', () => {
