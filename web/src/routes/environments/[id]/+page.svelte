@@ -12,6 +12,7 @@
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
   import EmptyState from '$lib/components/EmptyState.svelte';
   import { api } from '$lib/api/client.js';
+  import { environmentFormSchema, parseRuntimeConfig, validateForm } from '$lib/validation/forms.js';
 
   let environment = $state(null);
   let states = $state([]);
@@ -164,26 +165,13 @@
   }
 
   async function handleEdit() {
-    // Validate required fields
-    if (!editForm.name.trim()) {
-      editError = 'Name is required';
-      return;
-    }
-    if (!editForm.deploy_strategy) {
-      editError = 'Deploy strategy is required';
+    const validationResult = validateForm(environmentFormSchema, editForm);
+    if (!validationResult.success) {
+      editError = validationResult.error;
       return;
     }
 
-    // Validate runtime_config JSON
-    let parsedRuntimeConfig = {};
-    if (editForm.runtime_config.trim()) {
-      try {
-        parsedRuntimeConfig = JSON.parse(editForm.runtime_config);
-      } catch (err) {
-        editError = 'Runtime config must be valid JSON';
-        return;
-      }
-    }
+    const parsedRuntimeConfig = parseRuntimeConfig(editForm.runtime_config);
 
     editing = true;
     editError = null;

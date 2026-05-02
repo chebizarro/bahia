@@ -19,6 +19,7 @@
     loadRepositories
   } from '$lib/stores/repositories.js';
   import { fetchRepoBranches, isNostrRepository } from '$lib/nostr/branches.js';
+  import { secretFormSchema, secretValueSchema, serviceFormSchema, validateForm } from '$lib/validation/forms.js';
 
   let service = $state(null);
   let builds = $state([]);
@@ -273,17 +274,13 @@
   }
 
   async function handleEdit() {
-    // Validate required fields
-    if (!editForm.name.trim()) {
-      editError = 'Name is required';
-      return;
-    }
-    if (!editForm.artifact_repo.trim()) {
-      editError = 'Artifact repository is required';
-      return;
-    }
-    if (!editForm.runtime_type) {
-      editError = 'Runtime type is required';
+    const validationResult = validateForm(serviceFormSchema, {
+      name: editForm.name,
+      artifactRepo: editForm.artifact_repo,
+      runtimeType: editForm.runtime_type
+    });
+    if (!validationResult.success) {
+      editError = validationResult.error;
       return;
     }
 
@@ -483,13 +480,9 @@
   }
 
   async function handleSecretCreate() {
-    // Validate required fields
-    if (!secretForm.name.trim()) {
-      secretCreateError = 'Secret name is required';
-      return;
-    }
-    if (!secretForm.value) {
-      secretCreateError = 'Secret value is required';
+    const validationResult = validateForm(secretFormSchema, secretForm);
+    if (!validationResult.success) {
+      secretCreateError = validationResult.error;
       return;
     }
 
@@ -528,8 +521,10 @@
 
   async function handleSecretUpdate() {
     if (!secretToUpdate) return;
-    if (!secretUpdateValue) {
-      secretUpdateError = 'Secret value is required';
+
+    const validationResult = validateForm(secretValueSchema, { value: secretUpdateValue });
+    if (!validationResult.success) {
+      secretUpdateError = validationResult.error;
       return;
     }
 

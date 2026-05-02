@@ -1,3 +1,5 @@
+import { serviceFormSchema, validateForm } from '$lib/validation/forms.js';
+
 export function buildArtifactRepo({ selectedRegistry, repoPath, availableRegistries }) {
   const trimmedPath = (repoPath || '').trim();
   if (!trimmedPath) return '';
@@ -10,10 +12,8 @@ export function buildArtifactRepo({ selectedRegistry, repoPath, availableRegistr
 }
 
 export function validateCreateServiceForm({ name, artifactRepo, runtimeType }) {
-  if (!(name || '').trim()) return 'Name is required';
-  if (!(artifactRepo || '').trim()) return 'Artifact repository is required';
-  if (!runtimeType) return 'Runtime type is required';
-  return null;
+  const result = validateForm(serviceFormSchema, { name, artifactRepo, runtimeType });
+  return result.error;
 }
 
 export function buildCreateServicePayload(form) {

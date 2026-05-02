@@ -9,6 +9,7 @@
   import LoadingButton from '$lib/components/LoadingButton.svelte';
   import EmptyState from '$lib/components/EmptyState.svelte';
   import { api } from '$lib/api/client.js';
+  import { policyFormSchema, validateForm } from '$lib/validation/forms.js';
 
   let policies = $state([]);
   let environments = $state([]);
@@ -145,29 +146,13 @@
   }
 
   async function handleCreate() {
-    // Validate required fields
-    if (!createForm.name.trim()) {
-      createError = 'Name is required';
+    const validationResult = validateForm(policyFormSchema, createForm);
+    if (!validationResult.success) {
+      createError = validationResult.error;
       return;
     }
 
-    if (!createForm.enforcement) {
-      createError = 'Enforcement mode is required';
-      return;
-    }
-
-    // Validate and parse rules JSON
-    let parsedRules;
-    try {
-      parsedRules = JSON.parse(createForm.rules);
-      if (!Array.isArray(parsedRules)) {
-        createError = 'Rules must be a JSON array';
-        return;
-      }
-    } catch (err) {
-      createError = 'Rules must be valid JSON';
-      return;
-    }
+    const parsedRules = JSON.parse(createForm.rules);
 
     creating = true;
     createError = null;

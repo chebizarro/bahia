@@ -10,6 +10,7 @@
   import EmptyState from '$lib/components/EmptyState.svelte';
   import { environments, loading, loadEnvironments } from '$lib/stores';
   import { api } from '$lib/api/client.js';
+  import { environmentFormSchema, parseRuntimeConfig, validateForm } from '$lib/validation/forms.js';
 
   $effect(() => {
     void loadEnvironments();
@@ -66,26 +67,13 @@
   }
 
   async function handleCreate() {
-    // Validate required fields
-    if (!createForm.name.trim()) {
-      createError = 'Name is required';
-      return;
-    }
-    if (!createForm.deploy_strategy) {
-      createError = 'Deploy strategy is required';
+    const validationResult = validateForm(environmentFormSchema, createForm);
+    if (!validationResult.success) {
+      createError = validationResult.error;
       return;
     }
 
-    // Validate runtime_config JSON
-    let parsedRuntimeConfig = {};
-    if (createForm.runtime_config.trim()) {
-      try {
-        parsedRuntimeConfig = JSON.parse(createForm.runtime_config);
-      } catch (err) {
-        createError = 'Runtime config must be valid JSON';
-        return;
-      }
-    }
+    const parsedRuntimeConfig = parseRuntimeConfig(createForm.runtime_config);
 
     creating = true;
     createError = null;

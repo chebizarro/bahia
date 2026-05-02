@@ -10,6 +10,7 @@
   import LoadingButton from '$lib/components/LoadingButton.svelte';
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
   import { api } from '$lib/api/client.js';
+  import { policyFormSchema, validateForm } from '$lib/validation/forms.js';
 
   let policy = $state(null);
   let environments = $state([]);
@@ -152,17 +153,6 @@
   }
 
   async function handleEdit() {
-    // Validate required fields
-    if (!editForm.name.trim()) {
-      editError = 'Name is required';
-      return;
-    }
-
-    if (!editForm.enforcement) {
-      editError = 'Enforcement mode is required';
-      return;
-    }
-
     // Validate and parse rules JSON
     let parsedRules;
     try {
@@ -177,6 +167,15 @@
       }
     } catch (err) {
       editError = err?.message || 'Rules must be valid JSON';
+      return;
+    }
+
+    const validationResult = validateForm(policyFormSchema, {
+      ...editForm,
+      rules: JSON.stringify(parsedRules)
+    });
+    if (!validationResult.success) {
+      editError = validationResult.error;
       return;
     }
 
