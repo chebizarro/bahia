@@ -341,6 +341,138 @@ describe('BahiaClient - Extended API Coverage', () => {
     });
   });
 
+  describe('Build Methods', () => {
+    it('should call getBuild with encoded ID', async () => {
+      const buildId = 'build/abc-123';
+
+      global.fetch.mockResolvedValueOnce({
+        ok: true,
+        headers: new Map([['content-type', 'application/json']]),
+        json: async () => ({ data: { id: buildId, status: 'pending' } })
+      });
+
+      const result = await api.getBuild(buildId);
+
+      expect(global.fetch).toHaveBeenCalledWith(
+        `/api/v1/builds/${encodeURIComponent(buildId)}`,
+        expect.any(Object)
+      );
+      expect(result).toEqual({ id: buildId, status: 'pending' });
+    });
+
+    it('should call registerBuild with POST and body', async () => {
+      const payload = {
+        service_id: 'svc-1',
+        vcs_ref: 'refs/heads/main',
+        vcs_sha: 'abcdef1234567890abcdef1234567890abcdef12',
+        source: 'github-actions'
+      };
+
+      global.fetch.mockResolvedValueOnce({
+        ok: true,
+        headers: new Map([['content-type', 'application/json']]),
+        json: async () => ({ data: { id: 'build-1', ...payload } })
+      });
+
+      const result = await api.registerBuild(payload);
+
+      expect(global.fetch).toHaveBeenCalledWith(
+        '/api/v1/builds',
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify(payload)
+        })
+      );
+      expect(result).toEqual({ id: 'build-1', ...payload });
+    });
+
+    it('should call updateBuildStatus with PATCH and encoded ID', async () => {
+      const buildId = 'build@123';
+
+      global.fetch.mockResolvedValueOnce({
+        ok: true,
+        status: 204,
+        headers: new Map([['content-type', 'text/plain']]),
+        json: async () => { throw new Error('No content'); }
+      });
+
+      const result = await api.updateBuildStatus(buildId, 'success');
+
+      expect(global.fetch).toHaveBeenCalledWith(
+        `/api/v1/builds/${encodeURIComponent(buildId)}/status`,
+        expect.objectContaining({
+          method: 'PATCH',
+          body: JSON.stringify({ status: 'success' })
+        })
+      );
+      expect(result).toBeNull();
+    });
+
+    it('should return [] from listBuilds when backend data is null', async () => {
+      const serviceId = 'svc-x';
+
+      global.fetch.mockResolvedValueOnce({
+        ok: true,
+        headers: new Map([['content-type', 'application/json']]),
+        json: async () => ({ data: null })
+      });
+
+      const result = await api.listBuilds(serviceId);
+
+      expect(global.fetch).toHaveBeenCalledWith(
+        `/api/v1/services/${encodeURIComponent(serviceId)}/builds`,
+        expect.any(Object)
+      );
+      expect(result).toEqual([]);
+    });
+  });
+
+  describe('Artifact Methods', () => {
+    it('should call getArtifact with encoded ID', async () => {
+      const artifactId = 'artifact/v2';
+
+      global.fetch.mockResolvedValueOnce({
+        ok: true,
+        headers: new Map([['content-type', 'application/json']]),
+        json: async () => ({ data: { id: artifactId } })
+      });
+
+      const result = await api.getArtifact(artifactId);
+
+      expect(global.fetch).toHaveBeenCalledWith(
+        `/api/v1/artifacts/${encodeURIComponent(artifactId)}`,
+        expect.any(Object)
+      );
+      expect(result).toEqual({ id: artifactId });
+    });
+
+    it('should call registerArtifact with POST and body', async () => {
+      const payload = {
+        build_id: 'build-1',
+        digest: 'sha256:1234abcd',
+        repository: 'ghcr.io/example/app',
+        tags: ['latest']
+      };
+
+      global.fetch.mockResolvedValueOnce({
+        ok: true,
+        headers: new Map([['content-type', 'application/json']]),
+        json: async () => ({ data: { id: 'artifact-1', ...payload } })
+      });
+
+      const result = await api.registerArtifact(payload);
+
+      expect(global.fetch).toHaveBeenCalledWith(
+        '/api/v1/artifacts',
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify(payload)
+        })
+      );
+      expect(result).toEqual({ id: 'artifact-1', ...payload });
+    });
+  });
+
   describe('SBOM Methods', () => {
     it('should call getSBOM with correct path encoding', async () => {
       const artifactId = 'artifact-abc-123';

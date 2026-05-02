@@ -265,6 +265,19 @@ export class BahiaClient {
 
   // Builds
   listBuilds(serviceId) { return this.fetch(`/services/${encodeURIComponent(serviceId)}/builds`).then(r => r ?? []); }
+  getBuild(id) { return this.fetch(`/builds/${encodeURIComponent(id)}`); }
+  registerBuild(payload) {
+    return this.fetch('/builds', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    });
+  }
+  updateBuildStatus(id, status) {
+    return this.fetch(`/builds/${encodeURIComponent(id)}/status`, {
+      method: 'PATCH',
+      body: JSON.stringify({ status })
+    });
+  }
 
   // Notifications
   listNotificationChannels(params = {}) {
