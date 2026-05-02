@@ -54,6 +54,68 @@
     return links.length > 0 ? `<div class="row-actions">${links.join('')}</div>` : '-';
   }
 
+  function firstPresentString(...values) {
+    const value = values.find((candidate) => candidate !== null && candidate !== undefined && String(candidate).trim() !== '');
+    return value === undefined ? '' : String(value);
+  }
+
+  function eventData(row) {
+    return row?.data && typeof row.data === 'object' && !Array.isArray(row.data) ? row.data : {};
+  }
+
+  function addActivityEntityLink(links, seenHrefs, label, basePath, id) {
+    if (!id) return;
+
+    const entityId = String(id);
+    const href = `${basePath}/${encodeURIComponent(entityId)}`;
+    if (seenHrefs.has(href)) return;
+
+    seenHrefs.add(href);
+    links.push(
+      `<a class="activity-entity-link" href="${href}" title="${escapeHtml(`${label} ${entityId}`)}" aria-label="${escapeHtml(`${label} ${entityId}`)}">` +
+        `<span class="entity-kind">${escapeHtml(label)}</span> <code>${escapeHtml(entityId.slice(0, 8))}...</code>` +
+      `</a>`
+    );
+  }
+
+  function dashboardActivityEntityLinks(row) {
+    const type = String(row?.type || '');
+    const data = eventData(row);
+    const entityId = firstPresentString(row?.entity_id);
+
+    const serviceId = firstPresentString(
+      data.service_id,
+      data.serviceId,
+      type.startsWith('service.') ? entityId : ''
+    );
+    const environmentId = firstPresentString(
+      data.environment_id,
+      data.environmentId,
+      type.startsWith('environment.') ? entityId : ''
+    );
+    const deploymentId = firstPresentString(
+      data.deployment_id,
+      data.deploymentId,
+      data.intent_id,
+      data.intentId,
+      data.deployment_intent_id,
+      data.deploymentIntentId,
+      type.startsWith('deployment.') && !serviceId && !environmentId ? entityId : ''
+    );
+
+    const links = [];
+    const seenHrefs = new Set();
+    addActivityEntityLink(links, seenHrefs, 'Deployment', '/deployments', deploymentId);
+    addActivityEntityLink(links, seenHrefs, 'Service', '/services', serviceId);
+    addActivityEntityLink(links, seenHrefs, 'Environment', '/environments', environmentId);
+
+    if (links.length > 0) {
+      return `<div class="activity-entity-links">${links.join('')}</div>`;
+    }
+
+    return entityId ? `<code>${escapeHtml(entityId.slice(0, 8))}...</code>` : '-';
+  }
+
   // Helper: bounded concurrency for async operations
   async function withBoundedConcurrency(tasks, limit) {
     const results = [];
@@ -216,7 +278,7 @@
       const escaped = escapeHtml(type);
       return `<span class="badge ${variant}">${escaped}</span>`;
     }},
-    { key: 'entity_id', label: 'Entity', render: (r) => r.entity_id ? `${r.entity_id.slice(0, 8)}...` : '-' }
+    { key: 'entity_id', label: 'Entity', render: dashboardActivityEntityLinks }
   ]);
   let pendingCount = $derived(pendingDeployments.length);
   let pendingSubtitle = $derived(pendingError
@@ -394,6 +456,29 @@
   }
   :global(.row-action-link.secondary) {
     color: var(--text-muted);
+  }
+  :global(.activity-entity-links) {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.375rem;
+  }
+  :global(.activity-entity-link) {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    color: var(--primary);
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-decoration: none;
+    white-space: nowrap;
+  }
+  :global(.activity-entity-link:hover),
+  :global(.activity-entity-link:focus-visible) {
+    text-decoration: underline;
+  }
+  :global(.entity-kind) {
+    color: var(--text-muted);
+    font-weight: 500;
   }
   :global(.badge.info) {
     background: #1e3a5f;

@@ -128,6 +128,7 @@ const mockEvents = [
     time: new Date(Date.now() - 300000).toISOString(),
     entity_id: 'service-2',
     data: {
+      deployment_id: 'deploy-2',
       service_id: 'service-2',
       service_name: 'api-service',
       environment_id: 'env-2',
@@ -417,6 +418,17 @@ test.describe('Dashboard Smoke Test', () => {
     // Event entity cells or the SSE empty hint should render without errors.
     const activitySection = page.locator('section:has-text("Recent Activity")');
     await expect(activitySection.locator('table, .hint').first()).toBeVisible();
+  });
+
+  test('should deep-link recent activity entities to dashboard detail routes', async ({ page }) => {
+    await page.goto('/');
+    await page.waitForLoadState('networkidle');
+    await page.waitForTimeout(1000);
+
+    const activitySection = page.locator('section:has-text("Recent Activity")');
+    await expect(activitySection.locator('a[href="/deployments/deploy-2"]')).toBeVisible();
+    await expect(activitySection.locator('a[href="/services/service-1"]').first()).toBeVisible();
+    await expect(activitySection.locator('a[href="/environments/env-2"]').first()).toBeVisible();
   });
   
   test('should show event timestamps in recent activity', async ({ page }) => {
