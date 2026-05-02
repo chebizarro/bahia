@@ -137,15 +137,28 @@ test.describe('Environments CRUD Smoke Test', () => {
   test('should open Create Environment modal', async ({ page }) => {
     await page.goto('/environments');
     await page.waitForLoadState('networkidle');
-    
+
     // Click Create Environment button
     await page.click('text=Create Environment');
-    
+
     // Wait for modal to appear
     await expect(page.getByRole('dialog', { name: 'Create Environment' })).toBeVisible();
-    
+
     // Modal should have required fields
     await expect(page.getByLabel('Name *')).toBeVisible();
+    await expect(page.getByLabel('Loom Worker Selector')).toBeVisible();
+    await expect(page.getByLabel('Runtime Config (JSON)')).toBeVisible();
+    await expect(page.getByLabel('Deploy Strategy *')).toBeVisible();
+    await expect(page.getByLabel('Protected (requires approval for deployments)')).toBeVisible();
+
+    // Deploy strategy options should match product language
+    const strategySelect = page.getByLabel('Deploy Strategy *');
+    await strategySelect.selectOption('rolling');
+    await expect(strategySelect).toHaveValue('rolling');
+    await strategySelect.selectOption('blue-green');
+    await expect(strategySelect).toHaveValue('blue-green');
+    await strategySelect.selectOption('canary');
+    await expect(strategySelect).toHaveValue('canary');
   });
   
   test('should create environment with valid JSON runtime config', async ({ page }) => {
@@ -191,6 +204,10 @@ test.describe('Environments CRUD Smoke Test', () => {
     const runtimeConfigField = page.locator('#runtime-config, [name="runtime_config"], textarea[placeholder*="JSON"], textarea[placeholder*="runtime"]').first();
     await runtimeConfigField.fill('{"cpu_limit":"1","memory_limit":"1Gi"}');
     
+    // Select strategy and set protected toggle
+    await page.getByLabel('Deploy Strategy *').selectOption('blue-green');
+    await page.getByLabel('Protected (requires approval for deployments)').check();
+
     // Submit the form
     await page.click('button[type="submit"]:has-text("Create")');
     
@@ -201,11 +218,13 @@ test.describe('Environments CRUD Smoke Test', () => {
     expect(apiCalls.post).not.toBeNull();
     expect(apiCalls.post).toMatchObject({
       name: 'development',
-      loom_worker_selector: 'role=dev'
+      loom_worker_selector: 'role=dev',
+      deploy_strategy: 'blue_green',
+      protected: true
     });
-    
-    // Verify runtime_config is present (may be string or object depending on form handling)
-    expect(apiCalls.post.runtime_config).toBeDefined();
+
+    // Verify runtime_config is parsed JSON
+    expect(apiCalls.post.runtime_config).toEqual({ cpu_limit: '1', memory_limit: '1Gi' });
   });
   
   test('should navigate to environment detail page', async ({ page }) => {

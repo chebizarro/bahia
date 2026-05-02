@@ -24,15 +24,21 @@
     name: '',
     loom_worker_selector: '',
     runtime_config: '{}',
-    deploy_strategy: 'replace',
+    deploy_strategy: 'rolling',
     protected: false
   });
 
   const deployStrategyOptions = [
-    { value: 'replace', label: 'Replace' },
-    { value: 'blue_green', label: 'Blue/Green' },
+    { value: 'rolling', label: 'Rolling' },
+    { value: 'blue-green', label: 'Blue-Green' },
     { value: 'canary', label: 'Canary' }
   ];
+
+  const deployStrategyApiMap = {
+    rolling: 'replace',
+    'blue-green': 'blue_green',
+    canary: 'canary'
+  };
 
   let columns = $derived([
     { key: 'name', label: 'Name' },
@@ -54,7 +60,7 @@
       name: '',
       loom_worker_selector: '',
       runtime_config: '{}',
-      deploy_strategy: 'replace',
+      deploy_strategy: 'rolling',
       protected: false
     };
   }
@@ -89,7 +95,7 @@
         name: createForm.name.trim(),
         loom_worker_selector: createForm.loom_worker_selector.trim(),
         runtime_config: parsedRuntimeConfig,
-        deploy_strategy: createForm.deploy_strategy,
+        deploy_strategy: deployStrategyApiMap[createForm.deploy_strategy] || createForm.deploy_strategy,
         protected: createForm.protected
       });
       
