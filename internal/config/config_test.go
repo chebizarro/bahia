@@ -502,3 +502,97 @@ func TestServerAddress(t *testing.T) {
 		t.Errorf("expected address %s, got %s", expected, got)
 	}
 }
+
+func TestPrivilegedFeatureValidationRequiresAuthAndOperatorAllowlists(t *testing.T) {
+	adoptionNoAuth := Defaults()
+	adoptionNoAuth.Adoption.Enabled = true
+	if err := adoptionNoAuth.validate(); err == nil || !strings.Contains(err.Error(), "auth.enabled=true is required when adoption.enabled=true") {
+		t.Fatalf("adoption without auth error = %v", err)
+	}
+
+	adoptionNoCredential := Defaults()
+	adoptionNoCredential.Auth.Enabled = true
+	adoptionNoCredential.Adoption.Enabled = true
+	if err := adoptionNoCredential.validate(); err == nil || !strings.Contains(err.Error(), "auth.jwt_secret or auth.nip98_enabled=true is required when adoption.enabled=true") {
+		t.Fatalf("adoption without auth credential error = %v", err)
+	}
+
+	adoptionNoAllowlist := Defaults()
+	adoptionNoAllowlist.Auth.Enabled = true
+	adoptionNoAllowlist.Auth.JWTSecret = "test-secret"
+	adoptionNoAllowlist.Adoption.Enabled = true
+	if err := adoptionNoAllowlist.validate(); err == nil || !strings.Contains(err.Error(), "adoption operator allowlist is required") {
+		t.Fatalf("adoption without allowlist error = %v", err)
+	}
+
+	adoptionAllowed := Defaults()
+	adoptionAllowed.Auth.Enabled = true
+	adoptionAllowed.Auth.JWTSecret = "test-secret"
+	adoptionAllowed.Adoption.Enabled = true
+	adoptionAllowed.Adoption.AllowedSubjects = []string{"ops"}
+	if err := adoptionAllowed.validate(); err != nil {
+		t.Fatalf("adoption with auth and allowlist should validate: %v", err)
+	}
+
+	directNoAuth := Defaults()
+	directNoAuth.DirectRuntime.Enabled = true
+	if err := directNoAuth.validate(); err == nil || !strings.Contains(err.Error(), "auth.enabled=true is required when direct_runtime_actions.enabled=true") {
+		t.Fatalf("direct runtime without auth error = %v", err)
+	}
+
+	directNoAllowlist := Defaults()
+	directNoAllowlist.Auth.Enabled = true
+	directNoAllowlist.Auth.NIP98Enabled = true
+	directNoAllowlist.DirectRuntime.Enabled = true
+	if err := directNoAllowlist.validate(); err == nil || !strings.Contains(err.Error(), "direct_runtime_actions operator allowlist is required") {
+		t.Fatalf("direct runtime without allowlist error = %v", err)
+	}
+
+	directAllowed := Defaults()
+	directAllowed.Auth.Enabled = true
+	directAllowed.Auth.NIP98Enabled = true
+	directAllowed.DirectRuntime.Enabled = true
+	directAllowed.DirectRuntime.AllowedPubkeys = []string{"0123456789abcdef"}
+	if err := directAllowed.validate(); err != nil {
+		t.Fatalf("direct runtime with auth and allowlist should validate: %v", err)
+	}
+}
+
+func TestRuntimeEndpointValidationRequiresKnownRefsAndCompleteTLS(t *testing.T) {
+	missingHost := Defaults()
+	missingHost.Runtime.Endpoints["prod-docker"] = RuntimeEndpointConfig{ClientCertFile: "/cert.pem", ClientKeyFile: "/key.pem"}
+	if err := missingHost.validate(); err == nil || !strings.Contains(err.Error(), `runtime endpoint "prod-docker" requires docker_host`) {
+		t.Fatalf("missing docker_host error = %v", err)
+	}
+
+	missingKey := Defaults()
+	missingKey.Runtime.Endpoints["prod-docker"] = RuntimeEndpointConfig{DockerHost: "tcp://docker.example:2376", ClientCertFile: "/cert.pem"}
+	if err := missingKey.validate(); err == nil || !strings.Contains(err.Error(), "requires both client_cert_file and client_key_file") {
+		t.Fatalf("incomplete TLS pair error = %v", err)
+	}
+
+	unknownDefaultRef := Defaults()
+	unknownDefaultRef.Runtime.Default.EndpointRef = "missing"
+	if err := unknownDefaultRef.validate(); err == nil || !strings.Contains(err.Error(), `runtime.default.endpoint_ref "missing" is not configured`) {
+		t.Fatalf("unknown default endpoint_ref error = %v", err)
+	}
+
+	unknownEnvRef := Defaults()
+	unknownEnvRef.Runtime.Environments["production"] = RuntimeTargetConfig{EndpointRef: "missing"}
+	if err := unknownEnvRef.validate(); err == nil || !strings.Contains(err.Error(), `runtime.environments.production.endpoint_ref "missing" is not configured`) {
+		t.Fatalf("unknown environment endpoint_ref error = %v", err)
+	}
+
+	valid := Defaults()
+	valid.Runtime.Endpoints["prod-docker"] = RuntimeEndpointConfig{
+		DockerHost:     "tcp://docker.example:2376",
+		CACertFile:     "/ca.pem",
+		ClientCertFile: "/cert.pem",
+		ClientKeyFile:  "/key.pem",
+	}
+	valid.Runtime.Default.EndpointRef = "prod-docker"
+	valid.Runtime.Environments["production"] = RuntimeTargetConfig{EndpointRef: "prod-docker"}
+	if err := valid.validate(); err != nil {
+		t.Fatalf("valid endpoint refs and TLS pair should validate: %v", err)
+	}
+}

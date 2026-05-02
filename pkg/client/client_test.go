@@ -171,6 +171,55 @@ func TestImportAdoption(t *testing.T) {
 	}
 }
 
+func TestPrivilegedMethodsSendBearerToken(t *testing.T) {
+	wantToken := "Bearer operator-token"
+	seen := map[string]string{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen[r.Method+" "+r.URL.Path] = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/v1/adoption/scan":
+			json.NewEncoder(w).Encode(map[string]any{"data": []AdoptionPreview{}})
+		case "/api/v1/adoption/import":
+			json.NewEncoder(w).Encode(map[string]any{"data": []AdoptionImportResult{}})
+		default:
+			json.NewEncoder(w).Encode(map[string]any{"data": RuntimeActionResult{Action: r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:], ServiceID: "svc", EnvironmentID: "env"}})
+		}
+	}))
+	defer server.Close()
+
+	c := New(server.URL)
+	c.SetAuthToken("operator-token")
+	ctx := context.Background()
+	if _, err := c.ScanAdoption(ctx, AdoptionScanRequest{Targets: []AdoptionTarget{{Name: "prod", EndpointRef: "prod-docker"}}}); err != nil {
+		t.Fatalf("ScanAdoption() error = %v", err)
+	}
+	if _, err := c.ImportAdoption(ctx, AdoptionImportRequest{Targets: []AdoptionTarget{{Name: "prod", EndpointRef: "prod-docker"}}, ImportAll: true}); err != nil {
+		t.Fatalf("ImportAdoption() error = %v", err)
+	}
+	if _, err := c.DeployServiceRuntime(ctx, "svc", "env", nil); err != nil {
+		t.Fatalf("DeployServiceRuntime() error = %v", err)
+	}
+	if _, err := c.RestartServiceRuntime(ctx, "svc", "env"); err != nil {
+		t.Fatalf("RestartServiceRuntime() error = %v", err)
+	}
+	if _, err := c.StopServiceRuntime(ctx, "svc", "env"); err != nil {
+		t.Fatalf("StopServiceRuntime() error = %v", err)
+	}
+
+	for _, key := range []string{
+		"POST /api/v1/adoption/scan",
+		"POST /api/v1/adoption/import",
+		"POST /api/v1/services/svc/environments/env/deploy",
+		"POST /api/v1/services/svc/environments/env/restart",
+		"POST /api/v1/services/svc/environments/env/stop",
+	} {
+		if seen[key] != wantToken {
+			t.Fatalf("%s Authorization = %q, want %q (all seen: %#v)", key, seen[key], wantToken, seen)
+		}
+	}
+}
+
 func TestRuntimeActionMethods(t *testing.T) {
 	artifactID := uuid.NewString()
 	var paths []string
