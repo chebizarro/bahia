@@ -24,7 +24,11 @@ type PgBuildRepository struct {
 }
 
 func NewPgBuildRepository(pool *pgxpool.Pool) *PgBuildRepository {
-	return &PgBuildRepository{pool: pool}
+	return newPgBuildRepositoryWithDB(pool)
+}
+
+func newPgBuildRepositoryWithDB(db buildDB) *PgBuildRepository {
+	return &PgBuildRepository{pool: db}
 }
 
 func (r *PgBuildRepository) Create(ctx context.Context, b *domain.Build) error {

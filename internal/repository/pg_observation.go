@@ -13,11 +13,15 @@ import (
 
 // PgRuntimeObservationRepository is a PostgreSQL implementation.
 type PgRuntimeObservationRepository struct {
-	pool *pgxpool.Pool
+	pool pgQueryer
 }
 
 func NewPgRuntimeObservationRepository(pool *pgxpool.Pool) *PgRuntimeObservationRepository {
-	return &PgRuntimeObservationRepository{pool: pool}
+	return newPgRuntimeObservationRepositoryWithDB(pool)
+}
+
+func newPgRuntimeObservationRepositoryWithDB(db pgQueryer) *PgRuntimeObservationRepository {
+	return &PgRuntimeObservationRepository{pool: db}
 }
 
 const obsColumns = `id, service_id, environment_id, observed_image_digest, observed_image_repo, observed_container_id, observed_host, observed_version, health_status, source, metadata, observed_at`

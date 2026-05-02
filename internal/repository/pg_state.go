@@ -13,11 +13,15 @@ import (
 
 // PgEnvironmentServiceStateRepository is a PostgreSQL implementation.
 type PgEnvironmentServiceStateRepository struct {
-	pool *pgxpool.Pool
+	pool pgQueryer
 }
 
 func NewPgEnvironmentServiceStateRepository(pool *pgxpool.Pool) *PgEnvironmentServiceStateRepository {
-	return &PgEnvironmentServiceStateRepository{pool: pool}
+	return newPgEnvironmentServiceStateRepositoryWithDB(pool)
+}
+
+func newPgEnvironmentServiceStateRepositoryWithDB(db pgQueryer) *PgEnvironmentServiceStateRepository {
+	return &PgEnvironmentServiceStateRepository{pool: db}
 }
 
 const stateColumns = `service_id, environment_id, desired_artifact_id, desired_intent_id, last_successful_run_id, current_observation_id, drift_status, last_reconciled_at, updated_at`

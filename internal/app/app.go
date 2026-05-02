@@ -201,6 +201,7 @@ func New(cfg *config.Config) (*App, error) {
 			registry, serviceRepo, envRepo, buildRepo, artifactRepo, stateRepo, obsRepo, publisher, logger,
 			service.WithAdoptionRuntimeConfig(cfg.Runtime, cfg.Adoption.AllowRawDockerHosts),
 			service.WithAdoptionSecrets(secretRepo, secretEncryptor),
+			service.WithAdoptionTxExecutor(repository.NewPgTxExecutor(pool)),
 		)
 	}
 	var runtimeLifecycleSvc *service.RuntimeLifecycleService

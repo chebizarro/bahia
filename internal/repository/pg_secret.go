@@ -12,12 +12,16 @@ import (
 
 // PgSecretRepository is a PostgreSQL implementation of SecretRepository.
 type PgSecretRepository struct {
-	pool *pgxpool.Pool
+	pool pgQueryer
 }
 
 // NewPgSecretRepository creates a new PgSecretRepository.
 func NewPgSecretRepository(pool *pgxpool.Pool) *PgSecretRepository {
-	return &PgSecretRepository{pool: pool}
+	return newPgSecretRepositoryWithDB(pool)
+}
+
+func newPgSecretRepositoryWithDB(db pgQueryer) *PgSecretRepository {
+	return &PgSecretRepository{pool: db}
 }
 
 func (r *PgSecretRepository) Create(ctx context.Context, s *domain.ServiceSecret) error {

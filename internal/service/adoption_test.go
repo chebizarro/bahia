@@ -9,10 +9,12 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 	secretsAdapter "github.com/openagentsinc/bahia/internal/adapters/secrets"
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/events"
+	"github.com/openagentsinc/bahia/internal/repository"
 	"go.uber.org/zap"
 )
 
@@ -99,6 +101,119 @@ func TestAdoptionServiceImportSeedsModelsAndIsIdempotent(t *testing.T) {
 	}
 	if len(obsRepo.observations) != 2 {
 		t.Fatalf("expected re-import to record another observation, got %d", len(obsRepo.observations))
+	}
+}
+
+func TestAdoptionServiceImportTransactionalRollbackOnStateFailure(t *testing.T) {
+	ctx := context.Background()
+	server := newAdoptionDockerServer(t)
+	defer server.Close()
+
+	registry, svcRepo, envRepo, buildRepo, artifactRepo, _, _ := newTestRegistry()
+	stateRepo := registry.state.(*mockStateRepo)
+	obsRepo := registry.observations.(*mockObsRepo)
+	stateRepo.upsertErr = fmt.Errorf("simulated state failure")
+	publisher := &capturePublisher{}
+	adoption := NewAdoptionService(
+		registry, svcRepo, envRepo, buildRepo, artifactRepo, stateRepo, obsRepo, publisher, zap.NewNop(),
+		WithAdoptionTxExecutor(newMockAdoptionTxExecutor(svcRepo, envRepo, buildRepo, artifactRepo, stateRepo, obsRepo, nil)),
+	)
+
+	results, err := adoption.Import(ctx, AdoptionImportRequest{
+		Targets:   []AdoptionTarget{{Name: "local", DockerHost: server.URL, EnvironmentName: "prod"}},
+		ImportAll: true,
+	})
+	if err != nil {
+		t.Fatalf("Import returned error: %v", err)
+	}
+	if len(results) != 1 || results[0].Status != adoptionStatusFailed || !strings.Contains(results[0].Error, "simulated state failure") {
+		t.Fatalf("expected transactional failure result, got %#v", results)
+	}
+	if results[0].ServiceID != nil || results[0].EnvironmentID != nil || results[0].BuildID != nil || results[0].ArtifactID != nil {
+		t.Fatalf("failed transactional import leaked rolled-back ids: %#v", results[0])
+	}
+	if len(svcRepo.services) != 0 || len(envRepo.envs) != 0 || len(buildRepo.builds) != 0 || len(artifactRepo.artifacts) != 0 || len(stateRepo.states) != 0 || len(obsRepo.observations) != 0 {
+		t.Fatalf("failed import left partial rows: services=%d envs=%d builds=%d artifacts=%d states=%d observations=%d",
+			len(svcRepo.services), len(envRepo.envs), len(buildRepo.builds), len(artifactRepo.artifacts), len(stateRepo.states), len(obsRepo.observations))
+	}
+	if publisher.hasEvent(adoptionImportedEvent) {
+		t.Fatalf("failed transactional import published event: %#v", publisher.events)
+	}
+}
+
+func TestAdoptionServiceImportRetriesAfterTransactionalDuplicateRace(t *testing.T) {
+	ctx := context.Background()
+	server := newAdoptionDockerServer(t)
+	defer server.Close()
+
+	registry, svcRepo, envRepo, buildRepo, artifactRepo, _, _ := newTestRegistry()
+	stateRepo := registry.state.(*mockStateRepo)
+	obsRepo := registry.observations.(*mockObsRepo)
+	txExecutor := newMockAdoptionTxExecutor(svcRepo, envRepo, buildRepo, artifactRepo, stateRepo, obsRepo, nil)
+	txExecutor.failures = []error{&pgconn.PgError{Code: "23505", Message: "duplicate key value violates unique constraint"}}
+	adoption := NewAdoptionService(
+		registry, svcRepo, envRepo, buildRepo, artifactRepo, stateRepo, obsRepo, &events.NoopPublisher{}, zap.NewNop(),
+		WithAdoptionTxExecutor(txExecutor),
+	)
+
+	results, err := adoption.Import(ctx, AdoptionImportRequest{
+		Targets:   []AdoptionTarget{{Name: "local", DockerHost: server.URL, EnvironmentName: "prod"}},
+		ImportAll: true,
+	})
+	if err != nil {
+		t.Fatalf("Import returned error: %v", err)
+	}
+	if len(results) != 1 || results[0].Status != adoptionStatusCreated || results[0].Error != "" {
+		t.Fatalf("expected retry to converge on successful import, got %#v", results)
+	}
+	if len(svcRepo.services) != 1 || len(buildRepo.builds) != 1 || len(artifactRepo.artifacts) != 1 {
+		t.Fatalf("retry-safe import did not create canonical rows: services=%d builds=%d artifacts=%d", len(svcRepo.services), len(buildRepo.builds), len(artifactRepo.artifacts))
+	}
+}
+
+func TestAdoptionServiceImportTransactionalDuplicateImportConverges(t *testing.T) {
+	ctx := context.Background()
+	server := newAdoptionDockerServer(t)
+	defer server.Close()
+
+	registry, svcRepo, envRepo, buildRepo, artifactRepo, _, _ := newTestRegistry()
+	stateRepo := registry.state.(*mockStateRepo)
+	obsRepo := registry.observations.(*mockObsRepo)
+	adoption := NewAdoptionService(
+		registry, svcRepo, envRepo, buildRepo, artifactRepo, stateRepo, obsRepo, &events.NoopPublisher{}, zap.NewNop(),
+		WithAdoptionTxExecutor(newMockAdoptionTxExecutor(svcRepo, envRepo, buildRepo, artifactRepo, stateRepo, obsRepo, nil)),
+	)
+
+	for i, wantStatus := range []string{adoptionStatusCreated, adoptionStatusUpdated} {
+		results, err := adoption.Import(ctx, AdoptionImportRequest{
+			Targets:   []AdoptionTarget{{Name: "local", DockerHost: server.URL, EnvironmentName: "prod"}},
+			ImportAll: true,
+		})
+		if err != nil {
+			t.Fatalf("Import %d returned error: %v", i+1, err)
+		}
+		if len(results) != 1 || results[0].Status != wantStatus || results[0].Error != "" {
+			t.Fatalf("unexpected import %d result: %#v", i+1, results)
+		}
+	}
+	if len(svcRepo.services) != 1 || len(envRepo.envs) != 1 || len(buildRepo.builds) != 1 || len(artifactRepo.artifacts) != 1 || len(stateRepo.states) != 1 {
+		t.Fatalf("duplicate import did not converge: services=%d envs=%d builds=%d artifacts=%d states=%d",
+			len(svcRepo.services), len(envRepo.envs), len(buildRepo.builds), len(artifactRepo.artifacts), len(stateRepo.states))
+	}
+	if len(obsRepo.observations) != 2 {
+		t.Fatalf("expected each committed import to record one observation, got %d", len(obsRepo.observations))
+	}
+	svc, err := svcRepo.GetByName(ctx, "demo-web")
+	if err != nil || svc == nil || svc.RuntimeConfig == nil || svc.RuntimeConfig.Adopted == nil {
+		t.Fatalf("expected adopted service, svc=%#v err=%v", svc, err)
+	}
+	if svc.RuntimeConfig.Adopted.ContainerID != "container-123" {
+		t.Fatalf("adopted container_id not recorded: %#v", svc.RuntimeConfig.Adopted)
+	}
+	for _, build := range buildRepo.builds {
+		if build.CIRunID != "local:demo-web-1:sha256:repo123" {
+			t.Fatalf("stable adoption run id = %q", build.CIRunID)
+		}
 	}
 }
 
@@ -520,6 +635,135 @@ func (p *capturePublisher) Publish(_ context.Context, e events.Event) {
 }
 
 func (p *capturePublisher) Subscribe(_ events.EventType, _ events.Handler) {}
+
+type mockAdoptionTxExecutor struct {
+	failures     []error
+	services     *mockServiceRepo
+	environments *mockEnvRepo
+	builds       *mockBuildRepo
+	artifacts    *mockArtifactRepo
+	state        *mockStateRepo
+	observations *mockObsRepo
+	secrets      *mockSecretRepo
+}
+
+func newMockAdoptionTxExecutor(services *mockServiceRepo, environments *mockEnvRepo, builds *mockBuildRepo, artifacts *mockArtifactRepo, state *mockStateRepo, observations *mockObsRepo, secrets *mockSecretRepo) *mockAdoptionTxExecutor {
+	return &mockAdoptionTxExecutor{services: services, environments: environments, builds: builds, artifacts: artifacts, state: state, observations: observations, secrets: secrets}
+}
+
+func (e *mockAdoptionTxExecutor) WithinTx(ctx context.Context, fn func(repos repository.TxRepos) error) error {
+	if len(e.failures) > 0 {
+		err := e.failures[0]
+		e.failures = e.failures[1:]
+		return err
+	}
+	txServices := cloneMockServiceRepo(e.services)
+	txEnvironments := cloneMockEnvRepo(e.environments)
+	txBuilds := cloneMockBuildRepo(e.builds)
+	txArtifacts := cloneMockArtifactRepo(e.artifacts)
+	txState := cloneMockStateRepo(e.state)
+	txObservations := cloneMockObsRepo(e.observations)
+	txSecrets := cloneMockSecretRepo(e.secrets)
+
+	if err := fn(repository.TxRepos{
+		Services:     txServices,
+		Environments: txEnvironments,
+		Builds:       txBuilds,
+		Artifacts:    txArtifacts,
+		State:        txState,
+		Observations: txObservations,
+		Secrets:      txSecrets,
+	}); err != nil {
+		return err
+	}
+
+	e.services.services = txServices.services
+	e.environments.envs = txEnvironments.envs
+	e.builds.builds = txBuilds.builds
+	e.artifacts.artifacts = txArtifacts.artifacts
+	e.state.states = txState.states
+	e.observations.observations = txObservations.observations
+	if e.secrets != nil && txSecrets != nil {
+		e.secrets.secrets = txSecrets.secrets
+	}
+	_ = ctx
+	return nil
+}
+
+func cloneMockServiceRepo(src *mockServiceRepo) *mockServiceRepo {
+	clone := newMockServiceRepo()
+	for id, svc := range src.services {
+		copied := *svc
+		clone.services[id] = &copied
+	}
+	return clone
+}
+
+func cloneMockEnvRepo(src *mockEnvRepo) *mockEnvRepo {
+	clone := newMockEnvRepo()
+	for id, env := range src.envs {
+		copied := *env
+		if env.RuntimeConfig != nil {
+			copied.RuntimeConfig = map[string]any{}
+			for k, v := range env.RuntimeConfig {
+				copied.RuntimeConfig[k] = v
+			}
+		}
+		clone.envs[id] = &copied
+	}
+	return clone
+}
+
+func cloneMockBuildRepo(src *mockBuildRepo) *mockBuildRepo {
+	clone := newMockBuildRepo()
+	for id, build := range src.builds {
+		copied := *build
+		clone.builds[id] = &copied
+	}
+	return clone
+}
+
+func cloneMockArtifactRepo(src *mockArtifactRepo) *mockArtifactRepo {
+	clone := newMockArtifactRepo()
+	clone.getByIDErr = src.getByIDErr
+	for id, artifact := range src.artifacts {
+		copied := *artifact
+		clone.artifacts[id] = &copied
+	}
+	return clone
+}
+
+func cloneMockStateRepo(src *mockStateRepo) *mockStateRepo {
+	clone := newMockStateRepo()
+	clone.upsertErr = src.upsertErr
+	clone.getErr = src.getErr
+	for key, state := range src.states {
+		copied := *state
+		clone.states[key] = &copied
+	}
+	return clone
+}
+
+func cloneMockObsRepo(src *mockObsRepo) *mockObsRepo {
+	clone := newMockObsRepo()
+	for id, obs := range src.observations {
+		copied := *obs
+		clone.observations[id] = &copied
+	}
+	return clone
+}
+
+func cloneMockSecretRepo(src *mockSecretRepo) *mockSecretRepo {
+	if src == nil {
+		return nil
+	}
+	clone := newMockSecretRepo()
+	for id, secret := range src.secrets {
+		copied := *secret
+		clone.secrets[id] = &copied
+	}
+	return clone
+}
 
 func containsString(values []string, want string) bool {
 	for _, value := range values {

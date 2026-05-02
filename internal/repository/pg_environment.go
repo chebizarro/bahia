@@ -13,11 +13,15 @@ import (
 
 // PgEnvironmentRepository is a PostgreSQL implementation of EnvironmentRepository.
 type PgEnvironmentRepository struct {
-	pool *pgxpool.Pool
+	pool pgQueryer
 }
 
 func NewPgEnvironmentRepository(pool *pgxpool.Pool) *PgEnvironmentRepository {
-	return &PgEnvironmentRepository{pool: pool}
+	return newPgEnvironmentRepositoryWithDB(pool)
+}
+
+func newPgEnvironmentRepositoryWithDB(db pgQueryer) *PgEnvironmentRepository {
+	return &PgEnvironmentRepository{pool: db}
 }
 
 func (r *PgEnvironmentRepository) Create(ctx context.Context, env *domain.Environment) error {

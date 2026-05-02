@@ -149,6 +149,7 @@ type ServiceRuntimeConfig struct {
 // AdoptedRuntimeConfig captures runtime settings imported from an existing workload.
 type AdoptedRuntimeConfig struct {
 	TargetName    string            `json:"target_name"`
+	ContainerID   string            `json:"container_id,omitempty"`
 	SourceRuntime string            `json:"source_runtime"`
 	HostAlias     string            `json:"host_alias"`
 	EndpointRef   string            `json:"endpoint_ref,omitempty"`

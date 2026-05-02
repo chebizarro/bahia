@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"regexp"
 	"sort"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/openagentsinc/bahia/internal/adapters/runtime"
 	secretsAdapter "github.com/openagentsinc/bahia/internal/adapters/secrets"
 	"github.com/openagentsinc/bahia/internal/config"
@@ -36,6 +38,7 @@ type AdoptionService struct {
 	state        repository.EnvironmentServiceStateRepository
 	observations repository.RuntimeObservationRepository
 	secrets      repository.SecretRepository
+	txExecutor   repository.TxExecutor
 	publisher    events.Publisher
 	logger       *zap.Logger
 
@@ -60,6 +63,13 @@ func WithAdoptionSecrets(repo repository.SecretRepository, encryptor *secretsAda
 	return func(s *AdoptionService) {
 		s.secrets = repo
 		s.secretEncryptor = encryptor
+	}
+}
+
+// WithAdoptionTxExecutor makes per-candidate import persistence atomic.
+func WithAdoptionTxExecutor(txExecutor repository.TxExecutor) AdoptionServiceOption {
+	return func(s *AdoptionService) {
+		s.txExecutor = txExecutor
 	}
 }
 
@@ -333,87 +343,162 @@ func (s *AdoptionService) importCandidate(ctx context.Context, target AdoptionTa
 		return result
 	}
 
-	env, err := s.ensureAdoptionEnvironment(ctx, target)
+	var committedResult AdoptionImportResult
+	var importEvent events.Event
+	persist := func(repos repository.TxRepos) error {
+		stagedResult := result
+		repos = s.completeTxRepos(repos)
+		registry := s.registryForRepos(repos)
+
+		env, err := s.ensureAdoptionEnvironment(ctx, registry, repos.Environments, target)
+		if err != nil {
+			return err
+		}
+		stagedResult.EnvironmentID = &env.ID
+
+		svc, createdService, err := s.ensureAdoptionService(ctx, registry, repos.Services, target, discovered, classified, serviceName)
+		if err != nil {
+			return err
+		}
+		stagedResult.ServiceID = &svc.ID
+		stagedResult.ServiceName = svc.Name
+
+		build, err := s.ensureAdoptionBuild(ctx, repos.Builds, target, discovered, svc.ID)
+		if err != nil {
+			return err
+		}
+		stagedResult.BuildID = &build.ID
+
+		artifact, err := s.ensureAdoptionArtifact(ctx, repos.Artifacts, discovered, svc.ID, build.ID)
+		if err != nil {
+			return err
+		}
+		stagedResult.ArtifactID = &artifact.ID
+
+		state := &domain.EnvironmentServiceState{
+			ServiceID:         svc.ID,
+			EnvironmentID:     env.ID,
+			DesiredArtifactID: &artifact.ID,
+			DriftStatus:       domain.DriftStatusUnknown,
+		}
+		if err := repos.State.Upsert(ctx, state); err != nil {
+			return fmt.Errorf("seeding environment service state: %w", err)
+		}
+
+		obs := observationFromDiscovered(target, svc.ID, env.ID, discovered)
+		if err := registry.RecordObservation(ctx, obs); err != nil {
+			return fmt.Errorf("recording runtime observation: %w", err)
+		}
+
+		if err := s.importSensitiveEnvironmentSecrets(ctx, repos.Secrets, svc.ID, env.ID, classified.SensitiveEnvironment); err != nil {
+			return err
+		}
+
+		status := adoptionStatusUpdated
+		if createdService {
+			status = adoptionStatusCreated
+		}
+		stagedResult.Status = status
+		committedResult = stagedResult
+		importEvent = events.Event{
+			Type:     adoptionImportedEvent,
+			EntityID: svc.ID.String(),
+			Data: map[string]any{
+				"service_id":     svc.ID,
+				"environment_id": env.ID,
+				"artifact_id":    artifact.ID,
+				"target_name":    target.Name,
+				"container_id":   discovered.ContainerID,
+				"container_name": discovered.ContainerName,
+				"status":         status,
+			},
+		}
+		return nil
+	}
+
+	var err error
+	if s.txExecutor != nil {
+		for attempt := 0; attempt < 2; attempt++ {
+			committedResult = AdoptionImportResult{}
+			importEvent = events.Event{}
+			err = s.txExecutor.WithinTx(ctx, persist)
+			if err == nil || !isRetryableImportTxError(err) {
+				break
+			}
+		}
+	} else {
+		err = persist(s.completeTxRepos(repository.TxRepos{}))
+	}
 	if err != nil {
 		result.Status = adoptionStatusFailed
 		result.Error = err.Error()
 		return result
 	}
-	result.EnvironmentID = &env.ID
-
-	svc, createdService, err := s.ensureAdoptionService(ctx, target, discovered, classified, serviceName)
-	if err != nil {
-		result.Status = adoptionStatusFailed
-		result.Error = err.Error()
-		return result
+	if committedResult.Status != "" {
+		result = committedResult
 	}
-	result.ServiceID = &svc.ID
-	result.ServiceName = svc.Name
-
-	build, err := s.ensureAdoptionBuild(ctx, target, discovered, svc.ID)
-	if err != nil {
-		result.Status = adoptionStatusFailed
-		result.Error = err.Error()
-		return result
+	if importEvent.Type != "" {
+		s.publisher.Publish(ctx, importEvent)
 	}
-	result.BuildID = &build.ID
-
-	artifact, err := s.ensureAdoptionArtifact(ctx, discovered, svc.ID, build.ID)
-	if err != nil {
-		result.Status = adoptionStatusFailed
-		result.Error = err.Error()
-		return result
-	}
-	result.ArtifactID = &artifact.ID
-
-	state := &domain.EnvironmentServiceState{
-		ServiceID:         svc.ID,
-		EnvironmentID:     env.ID,
-		DesiredArtifactID: &artifact.ID,
-		DriftStatus:       domain.DriftStatusUnknown,
-	}
-	if err := s.state.Upsert(ctx, state); err != nil {
-		result.Status = adoptionStatusFailed
-		result.Error = fmt.Errorf("seeding environment service state: %w", err).Error()
-		return result
-	}
-
-	obs := observationFromDiscovered(target, svc.ID, env.ID, discovered)
-	if err := s.registry.RecordObservation(ctx, obs); err != nil {
-		result.Status = adoptionStatusFailed
-		result.Error = fmt.Errorf("recording runtime observation: %w", err).Error()
-		return result
-	}
-
-	if err := s.importSensitiveEnvironmentSecrets(ctx, svc.ID, env.ID, classified.SensitiveEnvironment); err != nil {
-		result.Status = adoptionStatusFailed
-		result.Error = err.Error()
-		return result
-	}
-
-	status := adoptionStatusUpdated
-	if createdService {
-		status = adoptionStatusCreated
-	}
-	result.Status = status
-	s.publisher.Publish(ctx, events.Event{
-		Type:     adoptionImportedEvent,
-		EntityID: svc.ID.String(),
-		Data: map[string]any{
-			"service_id":     svc.ID,
-			"environment_id": env.ID,
-			"artifact_id":    artifact.ID,
-			"target_name":    target.Name,
-			"container_id":   discovered.ContainerID,
-			"container_name": discovered.ContainerName,
-			"status":         status,
-		},
-	})
 	return result
 }
 
-func (s *AdoptionService) ensureAdoptionEnvironment(ctx context.Context, target AdoptionTarget) (*domain.Environment, error) {
-	existing, err := s.environments.GetByName(ctx, target.EnvironmentName)
+func isRetryableImportTxError(err error) bool {
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) {
+		return false
+	}
+	switch pgErr.Code {
+	case "23505", "40001", "40P01":
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *AdoptionService) completeTxRepos(repos repository.TxRepos) repository.TxRepos {
+	if repos.Services == nil {
+		repos.Services = s.services
+	}
+	if repos.Environments == nil {
+		repos.Environments = s.environments
+	}
+	if repos.Builds == nil {
+		repos.Builds = s.builds
+	}
+	if repos.Artifacts == nil {
+		repos.Artifacts = s.artifacts
+	}
+	if repos.State == nil {
+		repos.State = s.state
+	}
+	if repos.Observations == nil {
+		repos.Observations = s.observations
+	}
+	if repos.Secrets == nil {
+		repos.Secrets = s.secrets
+	}
+	return repos
+}
+
+func (s *AdoptionService) registryForRepos(repos repository.TxRepos) *RegistryService {
+	return NewRegistryService(
+		repos.Services,
+		repos.Environments,
+		repos.Builds,
+		repos.Artifacts,
+		nil,
+		nil,
+		repos.Observations,
+		repos.State,
+		nil,
+		&events.NoopPublisher{},
+		s.logger,
+	)
+}
+
+func (s *AdoptionService) ensureAdoptionEnvironment(ctx context.Context, registry *RegistryService, environments repository.EnvironmentRepository, target AdoptionTarget) (*domain.Environment, error) {
+	existing, err := environments.GetByName(ctx, target.EnvironmentName)
 	if err != nil {
 		return nil, fmt.Errorf("looking up environment %q: %w", target.EnvironmentName, err)
 	}
@@ -432,7 +517,7 @@ func (s *AdoptionService) ensureAdoptionEnvironment(ctx context.Context, target 
 			Name:          target.EnvironmentName,
 			RuntimeConfig: config,
 		}
-		if err := s.registry.CreateEnvironment(ctx, env); err != nil {
+		if err := registry.CreateEnvironment(ctx, env); err != nil {
 			return nil, fmt.Errorf("creating environment %q: %w", target.EnvironmentName, err)
 		}
 		return env, nil
@@ -470,20 +555,20 @@ func (s *AdoptionService) ensureAdoptionEnvironment(ctx context.Context, target 
 		}
 	}
 	if changed {
-		if err := s.registry.UpdateEnvironment(ctx, existing); err != nil {
+		if err := registry.UpdateEnvironment(ctx, existing); err != nil {
 			return nil, fmt.Errorf("updating environment %q: %w", target.EnvironmentName, err)
 		}
 	}
 	return existing, nil
 }
 
-func (s *AdoptionService) ensureAdoptionService(ctx context.Context, target AdoptionTarget, discovered runtime.DiscoveredContainer, classified sensitiveDataClassification, serviceName string) (*domain.Service, bool, error) {
+func (s *AdoptionService) ensureAdoptionService(ctx context.Context, registry *RegistryService, services repository.ServiceRepository, target AdoptionTarget, discovered runtime.DiscoveredContainer, classified sensitiveDataClassification, serviceName string) (*domain.Service, bool, error) {
 	adopted := adoptedRuntimeConfig(target, discovered, classified)
-	byIdentity, err := s.findServiceByAdoptedTarget(ctx, target, discovered)
+	byIdentity, err := s.findServiceByAdoptedTarget(ctx, services, target, discovered)
 	if err != nil {
 		return nil, false, err
 	}
-	byName, err := s.services.GetByName(ctx, serviceName)
+	byName, err := services.GetByName(ctx, serviceName)
 	if err != nil {
 		return nil, false, fmt.Errorf("looking up service %q: %w", serviceName, err)
 	}
@@ -505,7 +590,7 @@ func (s *AdoptionService) ensureAdoptionService(ctx context.Context, target Adop
 			RuntimeType:   domain.RuntimeTypeDocker,
 			RuntimeConfig: &domain.ServiceRuntimeConfig{Adopted: adopted},
 		}
-		if err := s.registry.CreateService(ctx, svc); err != nil {
+		if err := registry.CreateService(ctx, svc); err != nil {
 			return nil, false, fmt.Errorf("creating service %q: %w", serviceName, err)
 		}
 		return svc, true, nil
@@ -513,14 +598,14 @@ func (s *AdoptionService) ensureAdoptionService(ctx context.Context, target Adop
 	existing.RuntimeType = domain.RuntimeTypeDocker
 	existing.ArtifactRepo = discovered.ImageRepo
 	existing.RuntimeConfig = &domain.ServiceRuntimeConfig{Adopted: adopted}
-	if err := s.registry.UpdateService(ctx, existing); err != nil {
+	if err := registry.UpdateService(ctx, existing); err != nil {
 		return nil, false, fmt.Errorf("updating service %q: %w", existing.Name, err)
 	}
 	return existing, false, nil
 }
 
-func (s *AdoptionService) findServiceByAdoptedTarget(ctx context.Context, target AdoptionTarget, discovered runtime.DiscoveredContainer) (*domain.Service, error) {
-	services, err := s.services.List(ctx)
+func (s *AdoptionService) findServiceByAdoptedTarget(ctx context.Context, serviceRepo repository.ServiceRepository, target AdoptionTarget, discovered runtime.DiscoveredContainer) (*domain.Service, error) {
+	services, err := serviceRepo.List(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("listing services for adopted target lookup: %w", err)
 	}
@@ -532,9 +617,9 @@ func (s *AdoptionService) findServiceByAdoptedTarget(ctx context.Context, target
 	return nil, nil
 }
 
-func (s *AdoptionService) ensureAdoptionBuild(ctx context.Context, target AdoptionTarget, discovered runtime.DiscoveredContainer, serviceID uuid.UUID) (*domain.Build, error) {
+func (s *AdoptionService) ensureAdoptionBuild(ctx context.Context, builds repository.BuildRepository, target AdoptionTarget, discovered runtime.DiscoveredContainer, serviceID uuid.UUID) (*domain.Build, error) {
 	runID := adoptionRunID(target, discovered)
-	existing, err := s.builds.GetByCISystemRunID(ctx, adoptionCISystem, runID)
+	existing, err := builds.GetByCISystemRunID(ctx, adoptionCISystem, runID)
 	if err != nil {
 		return nil, fmt.Errorf("looking up adoption build: %w", err)
 	}
@@ -575,14 +660,14 @@ func (s *AdoptionService) ensureAdoptionBuild(ctx context.Context, target Adopti
 	finished := time.Now().UTC()
 	build.StartedAt = &finished
 	build.FinishedAt = &finished
-	if err := s.builds.Create(ctx, build); err != nil {
+	if err := builds.Create(ctx, build); err != nil {
 		return nil, fmt.Errorf("creating adoption build: %w", err)
 	}
 	return build, nil
 }
 
-func (s *AdoptionService) ensureAdoptionArtifact(ctx context.Context, discovered runtime.DiscoveredContainer, serviceID, buildID uuid.UUID) (*domain.Artifact, error) {
-	existing, err := s.artifacts.GetByImageRepoDigest(ctx, discovered.ImageRepo, discovered.ImageDigest)
+func (s *AdoptionService) ensureAdoptionArtifact(ctx context.Context, artifacts repository.ArtifactRepository, discovered runtime.DiscoveredContainer, serviceID, buildID uuid.UUID) (*domain.Artifact, error) {
+	existing, err := artifacts.GetByImageRepoDigest(ctx, discovered.ImageRepo, discovered.ImageDigest)
 	if err != nil {
 		return nil, fmt.Errorf("looking up adoption artifact: %w", err)
 	}
@@ -611,7 +696,7 @@ func (s *AdoptionService) ensureAdoptionArtifact(ctx context.Context, discovered
 			"image_ref":      discovered.ImageRef,
 		},
 	}
-	if err := s.artifacts.Create(ctx, artifact); err != nil {
+	if err := artifacts.Create(ctx, artifact); err != nil {
 		return nil, fmt.Errorf("creating adoption artifact: %w", err)
 	}
 	return artifact, nil
@@ -709,6 +794,7 @@ func proposedServiceName(discovered runtime.DiscoveredContainer) string {
 func adoptedRuntimeConfig(target AdoptionTarget, discovered runtime.DiscoveredContainer, classified sensitiveDataClassification) *domain.AdoptedRuntimeConfig {
 	return &domain.AdoptedRuntimeConfig{
 		TargetName:    discovered.TargetName,
+		ContainerID:   discovered.ContainerID,
 		SourceRuntime: discovered.SourceRuntime,
 		HostAlias:     target.Name,
 		EndpointRef:   target.EndpointRef,
@@ -734,14 +820,14 @@ func sameAdoptedTarget(svc *domain.Service, target AdoptionTarget, discovered ru
 }
 
 func adoptionRunID(target AdoptionTarget, discovered runtime.DiscoveredContainer) string {
-	return target.Name + ":" + discovered.ContainerName
+	return strings.Join([]string{target.Name, discovered.TargetName, discovered.ImageDigest}, ":")
 }
 
-func (s *AdoptionService) importSensitiveEnvironmentSecrets(ctx context.Context, serviceID, envID uuid.UUID, sensitiveEnv map[string]string) error {
+func (s *AdoptionService) importSensitiveEnvironmentSecrets(ctx context.Context, secrets repository.SecretRepository, serviceID, envID uuid.UUID, sensitiveEnv map[string]string) error {
 	if len(sensitiveEnv) == 0 {
 		return nil
 	}
-	if s.secrets == nil || s.secretEncryptor == nil {
+	if secrets == nil || s.secretEncryptor == nil {
 		return fmt.Errorf("sensitive environment values require configured secret storage and encryption")
 	}
 	keys := sortedStringKeys(sensitiveEnv)
@@ -751,7 +837,7 @@ func (s *AdoptionService) importSensitiveEnvironmentSecrets(ctx context.Context,
 		if err != nil {
 			return fmt.Errorf("encrypting imported secret %q: %w", key, err)
 		}
-		if err := s.secrets.DeleteByName(ctx, serviceID, &envID, key); err != nil {
+		if err := secrets.DeleteByName(ctx, serviceID, &envID, key); err != nil {
 			return fmt.Errorf("replacing imported secret %q: %w", key, err)
 		}
 		secret := &domain.ServiceSecret{
@@ -764,7 +850,7 @@ func (s *AdoptionService) importSensitiveEnvironmentSecrets(ctx context.Context,
 			Version:          1,
 			CreatedBy:        "adoption",
 		}
-		if err := s.secrets.Create(ctx, secret); err != nil {
+		if err := secrets.Create(ctx, secret); err != nil {
 			return fmt.Errorf("creating imported secret %q: %w", key, err)
 		}
 	}

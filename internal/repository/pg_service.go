@@ -13,12 +13,16 @@ import (
 
 // PgServiceRepository is a PostgreSQL implementation of ServiceRepository.
 type PgServiceRepository struct {
-	pool *pgxpool.Pool
+	pool pgQueryer
 }
 
 // NewPgServiceRepository creates a new PgServiceRepository.
 func NewPgServiceRepository(pool *pgxpool.Pool) *PgServiceRepository {
-	return &PgServiceRepository{pool: pool}
+	return newPgServiceRepositoryWithDB(pool)
+}
+
+func newPgServiceRepositoryWithDB(db pgQueryer) *PgServiceRepository {
+	return &PgServiceRepository{pool: db}
 }
 
 func (r *PgServiceRepository) Create(ctx context.Context, svc *domain.Service) error {

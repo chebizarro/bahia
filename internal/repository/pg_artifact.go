@@ -24,7 +24,11 @@ type PgArtifactRepository struct {
 }
 
 func NewPgArtifactRepository(pool *pgxpool.Pool) *PgArtifactRepository {
-	return &PgArtifactRepository{pool: pool}
+	return newPgArtifactRepositoryWithDB(pool)
+}
+
+func newPgArtifactRepositoryWithDB(db artifactDB) *PgArtifactRepository {
+	return &PgArtifactRepository{pool: db}
 }
 
 func (r *PgArtifactRepository) Create(ctx context.Context, a *domain.Artifact) error {
