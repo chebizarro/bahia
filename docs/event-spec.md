@@ -17,7 +17,7 @@ Bahia publishes signed Nostr events to relay networks for traceability and autom
 
 ## Internal Operational Event Types
 
-Bahia also emits typed in-process audit events used by SSE/automation subscribers and local observability wiring. Adoption and direct-runtime events are deliberately structured around IDs and counts; they must not contain secret values, raw environment values, Docker TLS material, or bearer/NIP-98 credentials.
+Bahia also emits typed in-process audit events used by Nostr read-model projectors, automation subscribers, and local observability wiring. Adoption and direct-runtime events are deliberately structured around IDs and counts; they must not contain secret values, raw environment values, Docker TLS material, or bearer/NIP-98 credentials.
 
 | Type | Description | Key fields |
 |------|-------------|------------|

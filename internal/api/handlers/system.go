@@ -193,7 +193,8 @@ func (h *SystemHandler) GetInfo(w http.ResponseWriter, r *http.Request) {
 		PublicHost: h.cfg.OCI.PublicHost,
 	}
 
-	// Feature flags
+	// Feature flags. The removed legacy compatibility surfaces remain present
+	// as false values for older clients that probe capabilities defensively.
 	features := map[string]bool{
 		"oci":                    h.cfg.OCI.Enabled,
 		"harbor":                 h.cfg.Harbor.Enabled,
@@ -203,14 +204,14 @@ func (h *SystemHandler) GetInfo(w http.ResponseWriter, r *http.Request) {
 		"telemetry":              h.cfg.Telemetry.Enabled,
 		"notifications":          h.cfg.Notifications.Enabled,
 		"auth":                   h.cfg.Auth.Enabled,
-		"nostr_auth_exchange":    h.cfg.Auth.JWTSecret != "",
+		"nostr_auth_exchange":    false,
 		"relay_sidecar":          h.cfg.Nostr.Sidecar.Enabled,
 		"relay_read_models":      h.cfg.Nostr.Sidecar.Enabled && h.cfg.Nostr.PublishEnabled,
 		"direct_nostr_http_auth": h.cfg.Auth.NIP98Enabled,
 		"mcp_transport":          h.mcpTransportEnabled,
-		"legacy_sse":             true,
-		"legacy_jwt_exchange":    h.cfg.Auth.JWTSecret != "",
-		"legacy_agent_http":      true,
+		"legacy_sse":             false,
+		"legacy_jwt_exchange":    false,
+		"legacy_agent_http":      false,
 	}
 
 	resp := SystemInfoResponse{

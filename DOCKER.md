@@ -121,7 +121,7 @@ The web service uses a multi-stage Dockerfile:
 ### Nginx Proxy Configuration
 - Static files served from `/usr/share/nginx/html`
 - `/api/*` proxied to `http://bahia:8080`
-- SSE endpoints (`/api/v1/events/stream`) configured with buffering disabled
+- Nostr relay websocket (`/relay`) proxied to the relay sidecar with buffering disabled
 - Gzip compression enabled for text assets
 
 ### API Client Configuration

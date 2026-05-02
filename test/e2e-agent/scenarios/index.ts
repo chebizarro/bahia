@@ -59,7 +59,7 @@ export const categories: ScenarioCategory[] = [
   },
   {
     name: 'Events',
-    description: 'SSE event stream connection and filtering',
+    description: 'Nostr sidecar relay discovery and control-plane feature checks',
     scenarios: eventScenarios,
   },
 ];

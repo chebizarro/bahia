@@ -452,7 +452,7 @@ func makeRouterNIP98Header(t *testing.T, method, url string) string {
 
 // --- Health / Ready ---
 
-func TestRouter_NativeMCPAndDeprecatedAgentHeaders(t *testing.T) {
+func TestRouter_NativeMCPRemovesLegacyAgentHTTP(t *testing.T) {
 	cfg := config.Defaults()
 	mcpH := handlers.NewMCPHandler(mcpserver.NewServer(nil, zap.NewNop()), zap.NewNop())
 	handler := router.NewWithDeps(nil, zap.NewNop(), config.CORSConfig{AllowedOrigins: []string{"*"}}, nil, router.RouterDeps{
@@ -469,9 +469,17 @@ func TestRouter_NativeMCPAndDeprecatedAgentHeaders(t *testing.T) {
 		}
 	}
 
-	resp, _ := doJSON(t, "GET", srv.URL+"/api/v1/agent/info", nil)
-	if resp.Header.Get("Deprecation") != "true" || resp.Header.Get("Sunset") == "" {
-		t.Fatalf("expected deprecation headers on legacy agent route, got %#v", resp.Header)
+	req, err := http.NewRequest(http.MethodGet, srv.URL+"/api/v1/agent/info", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("expected legacy agent route to be removed, got status %d", resp.StatusCode)
 	}
 }
 

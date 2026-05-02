@@ -116,8 +116,8 @@ func TestSystemHandler_GetInfo_ExposesMCPTransportOnlyWhenEnabled(t *testing.T) 
 	}
 }
 
-func TestSystemHandler_GetInfo_ExposesNostrAuthExchangeFeature(t *testing.T) {
-	cfg := &config.Config{}
+func TestSystemHandler_GetInfo_AdvertisesRemovedLegacyFeaturesAsDisabled(t *testing.T) {
+	cfg := config.Defaults()
 	cfg.Auth.JWTSecret = "test-secret"
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/system/info", nil)
@@ -138,7 +138,9 @@ func TestSystemHandler_GetInfo_ExposesNostrAuthExchangeFeature(t *testing.T) {
 		t.Fatalf("decode response: %v", err)
 	}
 
-	if !payload.Data.Features["nostr_auth_exchange"] {
-		t.Fatalf("expected nostr_auth_exchange feature to be true")
+	for _, feature := range []string{"nostr_auth_exchange", "legacy_sse", "legacy_jwt_exchange", "legacy_agent_http"} {
+		if payload.Data.Features[feature] {
+			t.Fatalf("expected %s feature to be false after cutover", feature)
+		}
 	}
 }

@@ -14,7 +14,7 @@ test.beforeEach(async ({ page }) => {
         body: JSON.stringify({
           data: {
             nostr: { browser_relays: [] },
-            features: { legacy_sse: true, relay_read_models: false }
+            features: { legacy_sse: false, relay_read_models: false }
           }
         })
       });
@@ -30,14 +30,6 @@ test.beforeEach(async ({ page }) => {
         contentType: 'application/json',
         body: JSON.stringify({ data: [] })
       });
-    } else if (url.includes('/events/stream')) {
-      // Mock SSE endpoint
-      return route.fulfill({
-        status: 200,
-        contentType: 'text/event-stream',
-        body: ''
-      });
-    }
     
     // Default response for unknown endpoints
     return route.fulfill({

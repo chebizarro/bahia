@@ -11,7 +11,7 @@ import {
   signEvent as nip07SignEvent,
   detectNip07
 } from '$lib/nostr/nip07.js';
-import { supportsDirectNip98Auth, supportsNostrAuthExchange } from '$lib/auth/capabilities.js';
+import { supportsDirectNip98Auth } from '$lib/auth/capabilities.js';
 
 const SESSION_KEY = 'bahia_auth_session';
 
@@ -24,7 +24,6 @@ const initialState = {
   error: null,
   lastAuthenticatedAt: null,
   backendAuthenticated: false,
-  tokenExpiresAt: null,
   directNip98Ready: false
 };
 
@@ -95,28 +94,12 @@ function absoluteHTTPURL(url) {
   return new URL(url, origin).toString();
 }
 
-async function legacyExchangeBackendToken(api, pubkey) {
-  const unsignedEvent = {
-    kind: 27235,
-    pubkey,
-    created_at: Math.floor(Date.now() / 1000),
-    tags: [['u', '/api/v1/auth/nostr'], ['method', 'POST']],
-    content: ''
-  };
-  const signedEvent = await nip07SignEvent(unsignedEvent);
-  const response = await api.exchangeNostrAuth(signedEvent);
-  api.setAuthProvider(null);
-  api.setToken(response.token);
-  updateAuthState({ backendAuthenticated: true, tokenExpiresAt: response.expires_at, directNip98Ready: false, error: null });
-  return response;
-}
-
 function installDirectNip98Provider(api) {
-  api.setToken(null);
   api.setAuthProvider({ getAuthorizationHeader: ({ method, url }) => signHttpRequest({ method, url }) });
+  if (browser) localStorage.removeItem('bahia_token');
 }
 
-async function configureBackendAuth(pubkey, { exchangeIfNeeded = false, requireBackend = false } = {}) {
+async function configureBackendAuth(pubkey, { requireBackend = false } = {}) {
   if (!browser) throw new Error('Backend auth requires browser environment');
   const { api } = await import('$lib/api/client.js');
   if (!api) throw new Error('API client not available');
@@ -124,34 +107,24 @@ async function configureBackendAuth(pubkey, { exchangeIfNeeded = false, requireB
   const systemInfo = await api.getSystemInfo().catch(() => null);
   if (supportsDirectNip98Auth(systemInfo)) {
     installDirectNip98Provider(api);
-    updateAuthState({ backendAuthenticated: true, tokenExpiresAt: null, directNip98Ready: true, error: null });
+    updateAuthState({ backendAuthenticated: true, directNip98Ready: true, error: null });
     return { method: 'nip98', pubkey };
   }
 
   api.setAuthProvider(null);
-  if (supportsNostrAuthExchange(systemInfo) && exchangeIfNeeded) {
-    return legacyExchangeBackendToken(api, pubkey);
-  }
-
-  const backendToken = localStorage.getItem('bahia_token');
-  if (backendToken) {
-    api.setToken(backendToken);
-    updateAuthState({ backendAuthenticated: true, directNip98Ready: false, error: null });
-    return { method: 'jwt', pubkey };
-  }
+  if (browser) localStorage.removeItem('bahia_token');
 
   updateAuthState({
     backendAuthenticated: false,
-    tokenExpiresAt: null,
     directNip98Ready: false,
-    error: requireBackend ? 'Backend direct NIP-98 auth and legacy JWT exchange are not enabled' : null
+    error: requireBackend ? 'Backend direct NIP-98 auth is not enabled' : null
   });
-  if (requireBackend) throw new Error('Backend direct NIP-98 auth and legacy JWT exchange are not enabled');
+  if (requireBackend) throw new Error('Backend direct NIP-98 auth is not enabled');
   return null;
 }
 
 async function authenticateBackendInternal(pubkey) {
-  return configureBackendAuth(pubkey, { exchangeIfNeeded: true });
+  return configureBackendAuth(pubkey);
 }
 
 let initializeInProgress = null;
@@ -165,8 +138,7 @@ export async function initializeAuth() {
       const { available } = await waitForNip07({ timeoutMs: 1500 });
       updateAuthState({ extensionAvailable: available });
       const persisted = loadPersistedSession();
-      const backendToken = localStorage.getItem('bahia_token');
-      const backendAuthenticated = Boolean(backendToken);
+      if (browser) localStorage.removeItem('bahia_token');
 
       if (persisted && available) {
         const capabilities = getCapabilities();
@@ -176,7 +148,7 @@ export async function initializeAuth() {
           relays: persisted.relays,
           capabilities,
           lastAuthenticatedAt: persisted.lastAuthenticatedAt,
-          backendAuthenticated,
+          backendAuthenticated: false,
           directNip98Ready: false,
           error: null
         });
@@ -186,8 +158,8 @@ export async function initializeAuth() {
           console.warn('Backend auth provider initialization failed:', backendError.message);
         }
       } else {
-        updateAuthState({ status: 'unauthenticated', backendAuthenticated, directNip98Ready: false, error: null });
-        if (!available && !backendAuthenticated) {
+        updateAuthState({ status: 'unauthenticated', backendAuthenticated: false, directNip98Ready: false, error: null });
+        if (!available) {
           toast.warning('No Nostr extension detected. Install a NIP-07 extension like Alby or nos2x to sign in.');
         }
       }
@@ -258,7 +230,7 @@ export function logout() {
     import('$lib/api/client.js').then(({ api }) => {
       if (api) {
         api.setAuthProvider(null);
-        api.setToken(null);
+        if (browser) localStorage.removeItem('bahia_token');
       }
     }).catch(err => console.error('Failed to clear API token:', err));
   }
@@ -268,7 +240,6 @@ export function logout() {
     extensionAvailable: authState.extensionAvailable,
     capabilities: authState.extensionAvailable ? getCapabilities() : {},
     backendAuthenticated: false,
-    tokenExpiresAt: null,
     directNip98Ready: false
   });
 }
@@ -308,10 +279,10 @@ export async function authenticateBackend() {
     }
   }
   try {
-    return await configureBackendAuth(authState.pubkey, { exchangeIfNeeded: true, requireBackend: true });
+    return await configureBackendAuth(authState.pubkey, { requireBackend: true });
   } catch (error) {
     console.error('Backend authentication failed:', error);
-    updateAuthState({ backendAuthenticated: false, tokenExpiresAt: null, directNip98Ready: false, error: error.message });
+    updateAuthState({ backendAuthenticated: false, directNip98Ready: false, error: error.message });
     throw error;
   }
 }

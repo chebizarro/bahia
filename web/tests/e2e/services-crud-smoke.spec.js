@@ -44,14 +44,6 @@ test.beforeEach(async ({ page }) => {
     });
   });
   
-  // Mock SSE endpoint
-  await page.route('**/api/v1/events/stream', (route) => {
-    return route.fulfill({
-      status: 200,
-      contentType: 'text/event-stream',
-      body: ''
-    });
-  });
 });
 
 test.describe('Services CRUD Smoke Test', () => {

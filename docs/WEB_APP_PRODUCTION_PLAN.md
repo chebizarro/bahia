@@ -20,7 +20,7 @@
 
 **Performance Optimizations**:
 - ✅ **Dashboard**: Optimized pending deployments aggregation with caching, bounded concurrency, and store reuse
-- ✅ **Global Stores**: Added in-flight request deduplication, `loadAll()` freshness guard, and throttled SSE-triggered state refreshes
+- ✅ **Global Stores**: Added in-flight request deduplication, `loadAll()` freshness guard, and relay-backed read-model refreshes
 
 **Documentation**:
 - ✅ **Setup Guide**: `docs/web-app-setup.md` - Prerequisites, running the app, auth, troubleshooting
@@ -33,16 +33,16 @@
 **UI/UX**:
 - ✅ Full CRUD for Services, Environments, Policies, Secrets
 - ✅ Deployment workflow (create intent, approve/reject, view runs)
-- ✅ Dashboard with real-time SSE updates
+- ✅ Dashboard with real-time Nostr relay updates
 - ✅ Soul Factory provisioning with NIP-07 Nostr signing
 - ✅ Workers, events, and states views
 - ✅ Comprehensive component library (forms, modals, feedback, tables)
 
 **Backend Integration**:
 - ✅ API client with 100% endpoint coverage
-- ✅ JWT authentication with `localStorage` token persistence
+- ✅ Direct NIP-98 authentication with NIP-07 signing
 - ✅ Bahia envelope unwrapping and error normalization
-- ✅ SSE (Server-Sent Events) for real-time updates
+- ✅ Nostr sidecar read models for real-time updates
 
 **Code Quality**:
 - ✅ Test coverage for critical paths (unit + E2E smoke tests)
@@ -76,12 +76,12 @@ The Bahia web app is currently a **read-only demo**. This plan outlines the work
 - Zero tests
 - Read-only views for all entities
 - Simulated Soul Factory provisioning
-- Hardcoded SSE "Connected" status
+- Hardcoded relay "Connected" status
 
 **Target State:**
 - Full CRUD UI for Services, Environments, Policies, Secrets
 - Complete deployment workflow (create, approve, reject, rollback)
-- Real-time SSE with proper connection state
+- Nostr relay realtime with proper connection state
 - Authentication flow with Nostr (NIP-07/NIP-46)
 - Real Soul Factory provisioning via Nostr
 - Comprehensive test coverage
@@ -121,7 +121,7 @@ The Bahia web app is currently a **read-only demo**. This plan outlines the work
 │  ┌─────────────┐  ┌─────────────┐  ┌──────────────────────┐ │
 │  │   Routes    │  │  Stores     │  │   API Client         │ │
 │  │  Full CRUD  │  │  + Auth     │  │   100% coverage      │ │
-│  │  + Forms    │  │  + SSE state│  │   + error handling   │ │
+│  │  + Forms    │  │  + relay state│  │   + error handling   │ │
 │  │  + Modals   │  │  + cache    │  │   + retry logic      │ │
 │  └─────────────┘  └─────────────┘  └──────────────────────┘ │
 │  ┌─────────────────────────────────────────────────────────┐│
@@ -147,8 +147,8 @@ The Bahia web app is currently a **read-only demo**. This plan outlines the work
 - Add protected route wrapper component
 - Implement JWT token refresh flow
 
-### 1.3 SSE Connection Management
-- Create SSE connection state store (connecting/connected/disconnected/error)
+### 1.3 Nostr Relay Connection Management
+- Create relay connection state store (discovering/connecting/bootstrapping/live/error)
 - Add automatic reconnection with backoff
 - Surface connection status in UI (replace hardcoded "Connected")
 - Add event filtering UI controls
@@ -382,7 +382,7 @@ recordObservation({ service_id, environment_id, observed_image_digest, health_st
 - Show run details (logs, duration, exit code)
 
 ### 5.4 Deployment Runs View
-- Real-time log streaming via SSE
+- Real-time log streaming via the log-follow endpoint
 - Progress indicator
 - Ability to view stdout/stderr
 
@@ -532,7 +532,7 @@ recordObservation({ service_id, environment_id, observed_image_digest, health_st
 - Form components
 - Modal interactions
 - Table sorting/filtering
-- SSE connection handling
+- Nostr relay connection handling
 
 ### 12.3 Integration Tests
 - Auth flow
@@ -734,7 +734,7 @@ The following operations exist in the REST API but lack MCP tools:
 
 1. **Backend Auth**: JWT middleware enabled with valid secrets
 2. **Nostr Relays**: Reliable relay infrastructure for Soul Factory
-3. **SSE Stability**: Backend EventStreamHub properly publishing
+3. **Nostr sidecar stability**: relay read-model bootstrap reaches EOSE and live subscriptions stay connected
 4. **Design System**: Finalize color palette, typography, spacing
 
 ---
@@ -779,7 +779,7 @@ web/src/
 │   │       └── EmptyState.svelte
 │   ├── stores/
 │   │   ├── auth.js            # Authentication state
-│   │   ├── sse.js             # SSE connection state
+│   │   ├── controlplane.svelte.js # Nostr read-model connection state
 │   │   ├── services.js        # Service CRUD
 │   │   ├── environments.js    # Environment CRUD
 │   │   ├── deployments.js     # Deployment workflow

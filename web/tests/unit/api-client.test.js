@@ -16,25 +16,19 @@ describe('BahiaClient', () => {
     const module = await import('../../src/lib/api/client.js');
     BahiaClient = module.BahiaClient || class {
       constructor() {
-        this.token = typeof localStorage !== 'undefined' ? localStorage.getItem('bahia_token') : null;
+        this.authProvider = null;
       }
-      setToken(token) {
-        this.token = token;
-        if (typeof localStorage !== 'undefined') {
-          if (token) {
-            localStorage.setItem('bahia_token', token);
-          } else {
-            localStorage.removeItem('bahia_token');
-          }
-        }
+      setAuthProvider(provider) {
+        this.authProvider = provider || null;
       }
       async fetch(path, options = {}) {
         const headers = {
           'Content-Type': 'application/json',
           ...options.headers
         };
-        if (this.token) {
-          headers['Authorization'] = `Bearer ${this.token}`;
+        if (!headers.Authorization && this.authProvider?.getAuthorizationHeader) {
+          const authorization = await this.authProvider.getAuthorizationHeader({ method: options.method || 'GET', url: `/api/v1${path}` });
+          if (authorization) headers.Authorization = authorization;
         }
         const res = await fetch(`/api/v1${path}`, { ...options, headers });
         if (!res.ok) {
@@ -64,22 +58,18 @@ describe('BahiaClient', () => {
     client = new BahiaClient();
   });
 
-  describe('Token Management', () => {
-    it('should initialize without a token', () => {
-      expect(client.token).toBeNull();
+  describe('Auth Provider Management', () => {
+    it('should initialize without bearer token state', () => {
+      expect(client.authProvider).toBeNull();
+      expect(client.token).toBeUndefined();
     });
 
-    it('should set and persist token to localStorage', () => {
-      client.setToken('test-token-123');
-      expect(client.token).toBe('test-token-123');
-      expect(localStorage.getItem('bahia_token')).toBe('test-token-123');
-    });
-
-    it('should remove token from localStorage when cleared', () => {
-      client.setToken('test-token');
-      client.setToken(null);
-      expect(client.token).toBeNull();
-      expect(localStorage.getItem('bahia_token')).toBeNull();
+    it('should set and clear auth provider', () => {
+      const provider = { getAuthorizationHeader: vi.fn() };
+      client.setAuthProvider(provider);
+      expect(client.authProvider).toBe(provider);
+      client.setAuthProvider(null);
+      expect(client.authProvider).toBeNull();
     });
   });
 
@@ -109,8 +99,8 @@ describe('BahiaClient', () => {
       expect(result).toEqual(mockServices);
     });
 
-    it('should include Authorization header when token is set', async () => {
-      client.setToken('test-token');
+    it('should include Authorization header from auth provider', async () => {
+      client.setAuthProvider({ getAuthorizationHeader: vi.fn().mockResolvedValue('Nostr signed-event') });
       
       global.fetch.mockResolvedValueOnce({
         ok: true,
@@ -125,7 +115,7 @@ describe('BahiaClient', () => {
         expect.objectContaining({
           headers: expect.objectContaining({
             'Content-Type': 'application/json',
-            'Authorization': 'Bearer test-token'
+            'Authorization': 'Nostr signed-event'
           })
         })
       );

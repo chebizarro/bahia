@@ -9,10 +9,8 @@ import {
   loading,
   controlplaneConnection,
   bootstrapControlplane,
-  disconnectControlplane,
-  ingestLegacyEvent
+  disconnectControlplane
 } from './controlplane.svelte.js';
-import { connectEventStream, disconnectEventStream } from './sse.svelte.js';
 
 // Re-export theme store
 export { theme, toggleTheme } from './theme.js';
@@ -54,8 +52,6 @@ const inFlight = {
   events: null
 };
 
-let sseRollbackActive = false;
-
 function replaceArray(target, values) {
   target.length = 0;
   target.push(...(values || []));
@@ -63,7 +59,7 @@ function replaceArray(target, values) {
 
 async function loadViaRest(key, loader, target) {
   if (!api) return;
-  if (controlplaneConnection.ready && !controlplaneConnection.rollbackToSse) return;
+  if (controlplaneConnection.ready) return;
   if (inFlight[key]) return inFlight[key];
 
   loading[key] = true;
@@ -134,22 +130,11 @@ export function subscribeToEvents() {
 
   inFlight.events = bootstrapControlplane().then((result) => {
     if (result.ok) return;
-    if (!result.rollbackToSse) {
-      console.error('Nostr controlplane bootstrap failed:', result.reason);
-      return;
-    }
-
-    // Flagged rollback path only: bridge legacy SSE into the same dashboard activity state.
-    sseRollbackActive = true;
-    connectEventStream({ onEvent: ingestLegacyEvent });
+    console.error('Nostr controlplane bootstrap failed:', result.reason);
   });
 }
 
 export function unsubscribeFromEvents() {
-  if (sseRollbackActive) {
-    disconnectEventStream();
-    sseRollbackActive = false;
-  }
   disconnectControlplane();
   inFlight.events = null;
 }

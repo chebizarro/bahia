@@ -21,7 +21,7 @@ const ACTIVITY_BACKFILL_SECONDS = 7 * 24 * 60 * 60;
 const CANONICAL_READ_MODEL_KINDS = BAHIA_READ_MODEL_KINDS.filter((kind) => kind !== KINDS.LOOM_WORKER_AD);
 
 export const controlplaneConnection = $state({
-  status: 'idle', // idle | discovering | connecting | bootstrapping | live | rollback_sse | error | disconnected
+  status: 'idle', // idle | discovering | connecting | bootstrapping | live | error | disconnected
   connected: false,
   ready: false,
   bootstrapComplete: false,
@@ -30,8 +30,6 @@ export const controlplaneConnection = $state({
   lastError: null,
   lastEoseAt: null,
   lastEventAt: null,
-  rollbackToSse: false,
-  legacySseEnabled: false,
   reconnects: 0
 });
 
@@ -128,8 +126,6 @@ export function resetControlplaneStore() {
   controlplaneConnection.lastError = null;
   controlplaneConnection.lastEoseAt = null;
   controlplaneConnection.lastEventAt = null;
-  controlplaneConnection.rollbackToSse = false;
-  controlplaneConnection.legacySseEnabled = false;
   controlplaneConnection.reconnects = 0;
   lastConnected = false;
 }
@@ -364,16 +360,6 @@ export function applyControlplaneEvent(event) {
   return changed;
 }
 
-export function ingestLegacyEvent(event) {
-  if (!event?.id || activityMap.has(event.id)) return false;
-  activityMap.set(event.id, {
-    ...event,
-    time: event.time || event.timestamp || new Date().toISOString()
-  });
-  refreshCollections();
-  return true;
-}
-
 function subscribeToConnectionState() {
   if (connectedUnsubscribe) return;
   connectedUnsubscribe = nostr.connected.subscribe((connected) => {
@@ -407,15 +393,14 @@ function startLiveSubscription(since) {
 }
 
 export async function bootstrapControlplane({ force = false } = {}) {
-  if (!browser || !api) return { ok: false, rollbackToSse: false, reason: 'not_browser' };
+  if (!browser || !api) return { ok: false, reason: 'not_browser' };
   if (bootstrapPromise && !force) return bootstrapPromise;
-  if (controlplaneConnection.ready && !force) return { ok: true, rollbackToSse: false };
+  if (controlplaneConnection.ready && !force) return { ok: true };
 
   bootstrapPromise = (async () => {
     const bootstrapSince = Math.floor(Date.now() / 1000);
     controlplaneConnection.status = 'discovering';
     controlplaneConnection.lastError = null;
-    controlplaneConnection.rollbackToSse = false;
     setAllLoading(true);
 
     try {
@@ -423,7 +408,6 @@ export async function bootstrapControlplane({ force = false } = {}) {
       const relays = resolveBrowserRelays(systemInfo);
       controlplaneConnection.relays = relays;
       controlplaneConnection.servicePubkey = systemInfo?.nostr?.service_pubkey || '';
-      controlplaneConnection.legacySseEnabled = Boolean(systemInfo?.features?.legacy_sse);
 
       if (!systemInfo?.features?.relay_read_models) {
         throw new Error('Relay read models are not advertised by /system/info');
@@ -454,19 +438,14 @@ export async function bootstrapControlplane({ force = false } = {}) {
       controlplaneConnection.status = 'live';
       startLiveSubscription(bootstrapSince);
       refreshCollections();
-      return { ok: true, rollbackToSse: false };
+      return { ok: true };
     } catch (err) {
       controlplaneConnection.status = 'error';
       controlplaneConnection.ready = false;
       controlplaneConnection.bootstrapComplete = false;
       controlplaneConnection.lastError = err?.message || String(err);
-      controlplaneConnection.rollbackToSse = controlplaneConnection.legacySseEnabled;
-      if (controlplaneConnection.rollbackToSse) {
-        controlplaneConnection.status = 'rollback_sse';
-      }
       return {
         ok: false,
-        rollbackToSse: controlplaneConnection.rollbackToSse,
         reason: controlplaneConnection.lastError
       };
     } finally {

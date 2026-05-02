@@ -46,7 +46,7 @@ func New(nostrCfg config.NostrConfig, logger *zap.Logger) (*Server, error) {
 	relay.ServiceURL = nostrCfg.Sidecar.PublicURL
 	relay.Info.Name = "Bahia Relay Sidecar"
 	relay.Info.Description = "Local Khatru relay sidecar for Bahia browser bootstrap and control-plane events."
-	relay.Info.PostingPolicy = "Phase-1 scaffold: in-memory storage, no upstream mirroring, browser read models not projected yet."
+	relay.Info.PostingPolicy = "Bahia sidecar-first control-plane relay: accepts authorized 596x requests, Bahia-signed 696x/796x/3196x projections, and configured open interop kinds. If mirror_external is enabled, this relay is the upstream boundary and Bahia will not also connect directly to mirrored public upstream relays."
 	relay.Info.SupportedNIPs = []any{1, 11, 42, 70}
 
 	if servicePubkey, ok, err := deriveFiatjafPubkey(nostrCfg.PrivateKey); err != nil {

@@ -37,7 +37,6 @@ type RouterDeps struct {
 	Artifacts        repository.ArtifactRepository
 	Signatures       repository.ArtifactSignatureRepository
 	SignVerifier     SignatureVerifier
-	EventHub         *handlers.EventStreamHub
 	Policies         *service.PolicyService
 	Adoption         *service.AdoptionService
 	RuntimeLifecycle *service.RuntimeLifecycleService
@@ -101,8 +100,6 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 
 	// Auth middleware (applied to API routes, not health checks).
 	authMiddleware := routeAuthConfig(deps, authCfg...)
-	jwtSecret := authMiddleware.JWTSecret
-
 	// Health, readiness, and metrics (unauthenticated).
 	r.Get("/health", func(w http.ResponseWriter, r *http.Request) {
 		handlers.WriteHealthJSON(w, http.StatusOK, dto.HealthResponse{Status: "ok", Version: Version})
@@ -150,13 +147,6 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 
 	if deps.Config != nil {
 		r.With(middleware.ContentType, middleware.RateLimit(readLimiter)).Get("/api/v1/system/info", systemH.GetInfo)
-	}
-
-	// Public auth exchange endpoint (unauthenticated)
-	// This must be registered BEFORE the authenticated routes to allow JWT acquisition
-	if jwtSecret != "" {
-		authExchangeH := handlers.NewAuthExchangeHandler(jwtSecret)
-		r.Post("/api/v1/auth/nostr", authExchangeH.Exchange)
 	}
 
 	// API v1 routes (authenticated when auth is enabled).
@@ -223,11 +213,6 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 				payH := handlers.NewPaymentHandler(deps.Payments)
 				r.Get("/deployments/runs/{id}/cost", payH.GetRunCost)
 				r.Get("/payments/history", payH.GetPaymentHistory)
-			}
-
-			// Event stream (SSE)
-			if deps.EventHub != nil {
-				r.Get("/events/stream", deps.EventHub.StreamSSE)
 			}
 
 			// Policies (read)
@@ -371,14 +356,6 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 
 			if deps.MCP != nil {
 				r.Post("/mcp", deps.MCP.HandleJSONRPC)
-
-				// Deprecated Agent Tools API compatibility shim. Native MCP clients should use /mcp or /api/v1/mcp.
-				r.Group(func(r chi.Router) {
-					r.Use(deprecatedControlPlaneEndpoint)
-					r.Get("/agent/info", deps.MCP.GetServerInfo)
-					r.Post("/agent/tools/list", deps.MCP.ListTools)
-					r.Post("/agent/tools/call", deps.MCP.CallTool)
-				})
 			}
 		})
 
@@ -443,13 +420,6 @@ func adoptionEnabled(cfg *config.Config) bool {
 
 func directRuntimeEnabled(cfg *config.Config) bool {
 	return cfg != nil && cfg.DirectRuntime.Enabled
-}
-
-func deprecatedControlPlaneEndpoint(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		handlers.SetDeprecationHeaders(w)
-		next.ServeHTTP(w, r)
-	})
 }
 
 func operatorAccessMiddlewareConfig(cfg config.OperatorAccessConfig, resolver *auth.NIP05Resolver) middleware.OperatorAccessConfig {

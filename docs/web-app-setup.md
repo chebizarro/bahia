@@ -55,23 +55,15 @@ The web app does not currently use environment variables. All configuration is c
 
 ## Authentication & Authorization
 
-### JWT Authentication
+### Nostr Authentication (NIP-07 + NIP-98)
 
-The web app uses JWT bearer tokens for API authentication:
-
-- **Token Storage**: `localStorage.setItem('bahia_token', token)`
-- **Token Key**: `bahia_token`
-- **Header Format**: `Authorization: Bearer <token>`
-
-### Nostr Authentication (NIP-07)
-
-For Soul Factory provisioning, the app uses NIP-07 browser extensions for Nostr event signing:
+The first-party web app uses NIP-07 browser extensions for identity and signing. Protected HTTP requests are authorized directly with NIP-98 headers (`Authorization: Nostr <base64event>`); the app no longer stores `bahia_token` or calls `/api/v1/auth/nostr`.
 
 1. **Install a NIP-07 Extension**: nos2x, Alby, or Nostore
-2. **Grant Permission**: The app will request signing permission when you create a Soul
-3. **Event Signing**: Provisioning requests are signed with your Nostr private key
+2. **Grant Permission**: The app requests signing permission for authenticated actions
+3. **HTTP Request Signing**: The API client signs protected requests with your Nostr key
 
-The app detects `window.nostr` on page load and enables Soul Factory features if available.
+The app detects `window.nostr` on page load and enables signed actions when available.
 
 ### NIP-46 (Nostr Connect/Bunker)
 
@@ -93,9 +85,9 @@ NIP-46 remote signing support is planned but not yet implemented.
 **Problem**: `401 Unauthorized` on API requests
 
 **Solutions**:
-- Check if `bahia_token` exists: Open DevTools → Application → Local Storage
-- Verify token is valid (not expired)
-- Clear token and re-authenticate: `localStorage.removeItem('bahia_token')`
+- Verify a NIP-07 browser extension is installed and unlocked
+- Reload the app and grant signing permission when prompted
+- Check `/api/v1/system/info` advertises `direct_nostr_http_auth: true` when backend auth is enabled
 
 ### NIP-07 Extension Not Detected
 
@@ -112,10 +104,10 @@ NIP-46 remote signing support is planned but not yet implemented.
 **Problem**: Dashboard/events page not showing live updates
 
 **Solutions**:
-- Check SSE connection status indicator (top-right corner)
-- Verify backend SSE endpoint is accessible: `/api/v1/events/stream`
-- Open DevTools → Network → Filter by "EventSource" to see connection status
-- Check backend logs for SSE hub errors
+- Check the relay connection status indicator (top-right corner)
+- Verify `/api/v1/system/info` advertises `relay_sidecar` and `relay_read_models`
+- Open DevTools → Network and confirm the `/relay` WebSocket is connected
+- Check Bahia and relay sidecar logs for publish/subscribe errors
 
 ### Development Server Issues
 
@@ -147,8 +139,8 @@ The web app is tested on:
 ### Known Limitations
 
 - **NIP-07 on Mobile**: Limited browser extension support (use Nostore on iOS Safari)
-- **EventSource (SSE)**: Not supported in older browsers (use modern browsers)
-- **localStorage**: Required for auth; private browsing may clear tokens on close
+- **WebSocket relay**: Required for live control-plane updates
+- **localStorage**: Stores non-secret session metadata; private browsing may clear sessions on close
 
 ## Next Steps
 

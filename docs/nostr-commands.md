@@ -1,178 +1,69 @@
-# Bahia Nostr Command Events
+# Bahia Nostr Control-Plane Events
 
-Bahia can be operated entirely via Nostr events, without the REST API.
-Inbound command events are ingested by the Nostr subscriber, persisted to the
-`nostr_events` audit table, and processed by the event processor.
+Bahia's supported Nostr command contract is the canonical 596x request series handled by `internal/controlplane/reactor.go`. The browser and agents observe status/results/read models from the sidecar relay; they do not use SSE or request/response polling.
 
-## Event Kind Overview
+## Canonical Kind Families
 
-| Kind  | Label                       | REST Equivalent              |
-|-------|-----------------------------|------------------------------|
-| 31100 | `build.register`            | `POST /api/v1/builds`        |
-| 31101 | `artifact.register`         | `POST /api/v1/artifacts`     |
-| 31102 | `deployment.intent.create`  | `POST /api/v1/intents`       |
-| 31103 | `deployment.intent.approve` | `POST /api/v1/intents/:id/approve` |
-| 31104 | `deployment.intent.reject`  | `POST /api/v1/intents/:id/reject`  |
-| 31105 | `rollback.request`          | `POST /api/v1/rollback`      |
+| Family | Kinds | Direction | Purpose |
+|--------|-------|-----------|---------|
+| Requests | 5961–5968 | inbound | Operator/agent commands |
+| Status | 6961–6962 | outbound | Progress updates |
+| Results | 7961–7966 | outbound | Terminal operation results |
+| Read models | 31961–31963 | outbound replaceable | Current browser/agent state |
+| Audit/activity | 31000–31099 | outbound append-only | Recent activity feed |
 
-## Common Structure
+## Request Kinds
 
-All command events are **parameterized replaceable** (kind 31000–31999) and
-MUST be signed by a key authorized to perform the corresponding action.
+| Kind | Name | Description |
+|------|------|-------------|
+| 5961 | `DeployRequest` | Deploy an artifact to an environment |
+| 5962 | `RollbackRequest` | Roll back a service/environment |
+| 5963 | `ServiceAction` | Lifecycle action such as restart/stop |
+| 5964 | `ServiceCreate` | Register a service |
+| 5965 | `EnvironmentCreate` | Register an environment |
+| 5966 | `DeploymentApproval` | Approve or reject an intent |
+| 5967 | `ObservationSubmit` | Submit runtime observation |
+| 5968 | `DriftRemediate` | Request drift remediation |
+
+All inbound requests must be valid signed Nostr events from an authorized pubkey. The sidecar verifies event ID/signature/timestamp and accepts request kinds only from `nostr.authorized_pubkeys`; Bahia services remain the final authority for business authorization.
+
+## Common Tags
+
+Use tags for routing and correlation so subscribers do not need to parse content to filter:
+
+- `["service", "<service_id>"]`
+- `["environment", "<environment_id>"]`
+- `["artifact", "<artifact_id>"]`
+- `["intent", "<intent_id>"]`
+- `["run", "<run_id>"]`
+- `["e", "<request_event_id>", "", "reply"]` on status/result replies
+- `["p", "<requester_pubkey>"]` on status/result replies
+- `["status", "..."]` and `["step", "..."]` on progress events
+
+## Example Deploy Request
 
 ```json
 {
-  "kind": 31100,
-  "pubkey": "<author-pubkey-hex>",
-  "content": "<JSON-encoded command payload>",
+  "kind": 5961,
+  "content": "{\"service_id\":\"...\",\"environment_id\":\"...\",\"artifact_id\":\"...\"}",
   "tags": [
-    ["d", "<idempotency-key>"],
-    ["t", "build.register"]
-  ],
-  "created_at": 1234567890,
-  "sig": "<schnorr-signature>"
+    ["service", "<service_id>"],
+    ["environment", "<environment_id>"],
+    ["artifact", "<artifact_id>"]
+  ]
 }
 ```
 
-- The `d` tag is the idempotency key — re-publishing the same `d` value
-  replaces the previous event (NIP-33).
-- The `t` tag contains the human-readable label.
-- The `content` field is a JSON object matching the corresponding REST request DTO.
+## Replaceable Read Models
 
-## Kind 31100 — `build.register`
+| Kind | d-tag | Description |
+|------|-------|-------------|
+| 31961 | `service_id:environment_id` | Current service state in an environment |
+| 31962 | `service_id` | Service registry entry |
+| 31963 | `environment_id` | Environment registry entry |
 
-Register a new build.
+Read-model events are Bahia-signed projections from the database. Clients should query them, wait for EOSE, then keep the live subscription open. Latest `created_at` wins for each `(kind, pubkey, d-tag)` key. Deletions use tombstones (`deleted=true`) rather than relying on Nostr delete events.
 
-**Content** (JSON):
-```json
-{
-  "service_id": "uuid",
-  "git_sha": "abc123",
-  "git_ref": "refs/heads/main",
-  "ci_system": "hive-ci",
-  "ci_run_id": "run-42",
-  "status": "succeeded",
-  "metadata": {}
-}
-```
+## Legacy 311xx Bridge
 
-**Tags**:
-- `["d", "<service_id>-<git_sha>"]`
-- `["t", "build.register"]`
-- `["service", "<service_id>"]` — enables filtering by service
-
-## Kind 31101 — `artifact.register`
-
-Register a new container artifact.
-
-**Content** (JSON):
-```json
-{
-  "build_id": "uuid",
-  "service_id": "uuid",
-  "image_repo": "ghcr.io/org/app",
-  "image_tag": "v1.2.3",
-  "image_digest": "sha256:abc...",
-  "manifest_media_type": "application/vnd.oci.image.manifest.v1+json",
-  "size_bytes": 52428800,
-  "metadata": {}
-}
-```
-
-**Tags**:
-- `["d", "<image_digest>"]`
-- `["t", "artifact.register"]`
-- `["service", "<service_id>"]`
-
-## Kind 31102 — `deployment.intent.create`
-
-Create a deployment intent (request to deploy an artifact to an environment).
-
-**Content** (JSON):
-```json
-{
-  "service_id": "uuid",
-  "environment_id": "uuid",
-  "artifact_id": "uuid",
-  "requested_by": "npub...",
-  "source_kind": "nostr",
-  "metadata": {}
-}
-```
-
-**Tags**:
-- `["d", "<service_id>-<environment_id>-<artifact_id>"]`
-- `["t", "deployment.intent.create"]`
-- `["service", "<service_id>"]`
-- `["environment", "<environment_id>"]`
-
-**Note**: When auth is enabled, `requested_by` is overridden with the event
-author's pubkey (same as the REST API `resolveActor` behaviour).
-
-## Kind 31103 — `deployment.intent.approve`
-
-Approve a pending deployment intent.
-
-**Content** (JSON):
-```json
-{
-  "intent_id": "uuid"
-}
-```
-
-**Tags**:
-- `["d", "<intent_id>-approve"]`
-- `["t", "deployment.intent.approve"]`
-- `["e", "<intent_id>"]` — references the intent
-
-## Kind 31104 — `deployment.intent.reject`
-
-Reject a pending deployment intent.
-
-**Content** (JSON):
-```json
-{
-  "intent_id": "uuid",
-  "reason": "optional reason string"
-}
-```
-
-**Tags**:
-- `["d", "<intent_id>-reject"]`
-- `["t", "deployment.intent.reject"]`
-- `["e", "<intent_id>"]`
-
-## Kind 31105 — `rollback.request`
-
-Request a rollback to the previous successful deployment.
-
-**Content** (JSON):
-```json
-{
-  "service_id": "uuid",
-  "environment_id": "uuid",
-  "requested_by": "npub..."
-}
-```
-
-**Tags**:
-- `["d", "<service_id>-<environment_id>-rollback-<timestamp>"]`
-- `["t", "rollback.request"]`
-- `["service", "<service_id>"]`
-- `["environment", "<environment_id>"]`
-
-## Relationship to Outbound Audit Events
-
-Outbound events (published *by* Bahia) use kinds 31000–31005:
-
-| Kind  | Label                   | Direction |
-|-------|-------------------------|-----------|
-| 31000 | `build.registered`      | Outbound  |
-| 31001 | `artifact.registered`   | Outbound  |
-| 31002 | `deployment.created`    | Outbound  |
-| 31003 | `deployment.completed`  | Outbound  |
-| 31004 | `drift.detected`        | Outbound  |
-| 31005 | `runtime.observation`   | Outbound  |
-
-Inbound commands (31100–31105) trigger the same domain logic as REST calls,
-which in turn publishes the corresponding outbound audit events (31000–31005).
+Kinds 31100–31105 are deprecated compatibility commands. They are not the supported control-plane contract and new integrations must not publish them. If received, Bahia logs a deprecation warning and operators should migrate publishers to the 596x request kinds above.

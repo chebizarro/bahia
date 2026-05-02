@@ -553,47 +553,6 @@ func TestListOrgMembers(t *testing.T) {
 	}
 }
 
-func TestStreamEvents(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Accept") != "text/event-stream" {
-			t.Errorf("Accept = %s, want text/event-stream", r.Header.Get("Accept"))
-		}
-		w.Header().Set("Content-Type", "text/event-stream")
-		w.WriteHeader(http.StatusOK)
-		flusher := w.(http.Flusher)
-
-		// Send a test event
-		w.Write([]byte("event: test.event\n"))
-		w.Write([]byte(`data: {"type":"test.event","entity_id":"123","data":{"key":"value"}}` + "\n\n"))
-		flusher.Flush()
-	}))
-	defer server.Close()
-
-	c := New(server.URL)
-	c.httpClient.Timeout = 2 * time.Second
-
-	var received []Event
-	var mu sync.Mutex
-
-	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
-	defer cancel()
-
-	_ = c.StreamEvents(ctx, []string{"test.event"}, func(ev Event) {
-		mu.Lock()
-		received = append(received, ev)
-		mu.Unlock()
-	})
-
-	mu.Lock()
-	defer mu.Unlock()
-	if len(received) != 1 {
-		t.Errorf("received %d events, want 1", len(received))
-	}
-	if len(received) > 0 && received[0].EntityID != "123" {
-		t.Errorf("EntityID = %s, want 123", received[0].EntityID)
-	}
-}
-
 func TestStreamLiveLogs(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !strings.Contains(r.URL.Path, "/logs") {

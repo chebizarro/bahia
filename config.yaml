@@ -45,6 +45,7 @@ nostr:
     enabled: false
     listen_addr: "0.0.0.0:3334"
     public_url: "ws://localhost:3000/relay"
+    backend_url: "ws://localhost:3334"
     data_dir: "./data/relay-sidecar"
     mirror_external: false
     event_retention: 168h

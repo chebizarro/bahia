@@ -102,14 +102,6 @@ test.beforeEach(async ({ page }) => {
     window.WebSocket = MockWebSocket;
   });
   
-  // Mock SSE endpoint
-  await page.route('**/api/v1/events/stream', (route) => {
-    return route.fulfill({
-      status: 200,
-      contentType: 'text/event-stream',
-      body: ''
-    });
-  });
   
   // Mock souls gallery endpoint
   await page.route('**/api/v1/souls', (route) => {

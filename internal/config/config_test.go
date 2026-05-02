@@ -336,6 +336,7 @@ func TestLoadRelaySidecarConfigFromYAML(t *testing.T) {
     enabled: true
     listen_addr: "127.0.0.1:3334"
     public_url: "ws://localhost:3000/relay"
+    backend_url: "ws://relay:3334"
     data_dir: "/tmp/bahia-relay"
     mirror_external: false
     event_retention: 168h
@@ -359,6 +360,9 @@ func TestLoadRelaySidecarConfigFromYAML(t *testing.T) {
 	}
 	if cfg.Nostr.Sidecar.EventRetention != 168*time.Hour {
 		t.Errorf("EventRetention = %s", cfg.Nostr.Sidecar.EventRetention)
+	}
+	if cfg.Nostr.Sidecar.BackendURL != "ws://relay:3334" {
+		t.Errorf("BackendURL = %q", cfg.Nostr.Sidecar.BackendURL)
 	}
 	if got := cfg.Nostr.BrowserRelays; len(got) != 1 || got[0] != "ws://localhost:3000/relay" {
 		t.Fatalf("BrowserRelays = %#v", got)

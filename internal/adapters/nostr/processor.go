@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"strconv"
 
-	gonostr "github.com/nbd-wtf/go-nostr"
 	"github.com/google/uuid"
+	gonostr "github.com/nbd-wtf/go-nostr"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/repository"
 	"github.com/openagentsinc/bahia/internal/service"
@@ -48,6 +48,12 @@ func (p *Processor) Handle(ctx context.Context, ev *gonostr.Event) {
 	}
 
 	var err error
+	if isDeprecatedCommandKind(ev.Kind) {
+		p.logger.Warn("deprecated 311xx Bahia command event received; use canonical 596x control-plane requests instead",
+			zap.String("event_id", ev.ID),
+			zap.Int("kind", ev.Kind),
+		)
+	}
 	switch ev.Kind {
 	// --- Bahia command kinds (inbound) ---
 	case KindCmdBuildRegister:
@@ -87,6 +93,15 @@ func (p *Processor) Handle(ctx context.Context, ev *gonostr.Event) {
 			zap.String("event_id", ev.ID),
 			zap.Int("kind", ev.Kind),
 		)
+	}
+}
+
+func isDeprecatedCommandKind(kind int) bool {
+	switch kind {
+	case KindCmdBuildRegister, KindCmdArtifactRegister, KindCmdIntentCreate, KindCmdIntentApprove, KindCmdIntentReject, KindCmdRollbackRequest:
+		return true
+	default:
+		return false
 	}
 }
 
@@ -272,13 +287,13 @@ func (p *Processor) handleWorkerAdvertisement(ctx context.Context, ev *gonostr.E
 	}
 
 	w := &domain.Worker{
-		PubKey:            ev.PubKey,
-		Name:              content.Name,
-		Description:       content.Description,
-		MaxConcurrentJobs: content.MaxConcurrentJobs,
-		CurrentQueueDepth: content.CurrentQueueDepth,
+		PubKey:              ev.PubKey,
+		Name:                content.Name,
+		Description:         content.Description,
+		MaxConcurrentJobs:   content.MaxConcurrentJobs,
+		CurrentQueueDepth:   content.CurrentQueueDepth,
 		LastAdvertisementAt: ev.CreatedAt.Time(),
-		Status:            domain.WorkerStatusOnline,
+		Status:              domain.WorkerStatusOnline,
 	}
 
 	// Parse tags.

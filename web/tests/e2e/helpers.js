@@ -8,15 +8,15 @@ const DEFAULT_SYSTEM_INFO = {
   features: {
     relay_sidecar: true,
     relay_read_models: true,
-    legacy_sse: true
+    legacy_sse: false
   }
 };
 
 /**
  * Install browser-side mocks that must exist before Svelte mounts.
- * This gives protected-route smoke tests a persisted backend session and a
- * deterministic NIP-07/EventSource/WebSocket relay environment without requiring
- * extensions, a live backend, or a live relay.
+ * This gives protected-route smoke tests a persisted NIP-07 identity and a
+ * deterministic WebSocket relay environment without requiring extensions, a live
+ * backend, or a live relay.
  */
 export async function installE2EMocks(
   page,
@@ -34,7 +34,7 @@ export async function installE2EMocks(
     sessionStorage.removeItem('bahia_dashboard_pending_deployments');
 
     if (authenticated) {
-      localStorage.setItem('bahia_token', 'e2e-test-token');
+      localStorage.removeItem('bahia_token');
       localStorage.setItem('bahia_auth_session', JSON.stringify({
         pubkey,
         relays: {

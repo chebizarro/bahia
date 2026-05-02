@@ -8,7 +8,7 @@ The Bahia web app uses a unified API client (`web/src/lib/api/client.js`) for al
 
 **Responsibilities**:
 - HTTP request/response handling
-- JWT authentication token management
+- Direct NIP-98 authorization via an auth provider
 - Bahia API envelope unwrapping
 - Query parameter serialization
 - Error normalization
@@ -40,27 +40,19 @@ const services = await api.listServices();
 // services = [{ "id": "svc-123", "name": "web-api" }]
 ```
 
-## Token Storage
+## HTTP Authentication
 
-JWT tokens are stored in browser `localStorage`:
+The first-party browser no longer stores `bahia_token` or exchanges NIP-98 events for JWTs. Protected requests use an auth provider that signs each HTTP request with direct NIP-98:
 
-- **Key**: `bahia_token`
-- **Get**: `localStorage.getItem('bahia_token')`
-- **Set**: `api.setToken(token)` (also saves to localStorage)
-- **Clear**: `api.setToken(null)` (also removes from localStorage)
-
-**Token Lifecycle**:
 ```javascript
-// After Nostr auth exchange
-const { token } = await api.exchangeNostrAuth(signedEvent);
-api.setToken(token);
-
-// Token is now included in all subsequent requests:
-// Authorization: Bearer <token>
-
-// Logout
-api.setToken(null);
+api.setAuthProvider({
+  getAuthorizationHeader: async ({ method, url }) => {
+    return signHttpRequestWithNip07({ method, url }); // returns `Nostr <base64event>`
+  }
+});
 ```
+
+If no auth provider is configured, requests are sent without `Authorization` and protected endpoints will reject them when auth is enabled.
 
 ## Client Methods by Domain
 
@@ -285,20 +277,12 @@ await api.listDriftedStates();
 ### Authentication
 
 ```javascript
-// Exchange Nostr-signed authentication event for JWT
-await api.exchangeNostrAuth({
-  id: '...',
-  pubkey: '...',
-  created_at: 1234567890,
-  kind: 27235,
-  tags: [...],
-  content: '',
-  sig: '...'
+api.setAuthProvider({
+  getAuthorizationHeader: async ({ method, url }) => `Nostr ${signedEventBase64}`
 });
-// Returns: { token: 'eyJhbGciOiJIUzI1NiIsInR5...' }
 ```
 
-**Note**: This method does NOT send the existing bearer token, even if one is set.
+`POST /api/v1/auth/nostr` and `api.exchangeNostrAuth()` have been removed; use direct NIP-98 request signing instead.
 
 ## Error Handling
 

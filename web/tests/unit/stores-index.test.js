@@ -5,8 +5,7 @@ vi.mock('../../src/lib/api/client.js', () => {
     listServices: vi.fn(),
     listEnvironments: vi.fn(),
     listStates: vi.fn(),
-    listWorkers: vi.fn(),
-    streamEvents: vi.fn()
+    listWorkers: vi.fn()
   };
   return { api: mockApi };
 });
@@ -18,23 +17,16 @@ const controlplaneMock = vi.hoisted(() => ({
   workers: [],
   events: [],
   loading: { services: false, environments: false, states: false, workers: false },
-  controlplaneConnection: { status: 'idle', ready: false, rollbackToSse: false },
+  controlplaneConnection: { status: 'idle', ready: false },
   bootstrapControlplane: vi.fn(),
-  disconnectControlplane: vi.fn(),
-  ingestLegacyEvent: vi.fn()
+  disconnectControlplane: vi.fn()
 }));
 
 vi.mock('../../src/lib/stores/controlplane.svelte.js', () => controlplaneMock);
 
-vi.mock('../../src/lib/stores/sse.svelte.js', () => ({
-  connectEventStream: vi.fn(),
-  disconnectEventStream: vi.fn()
-}));
-
 describe('Global Stores (index.js)', () => {
   let storesModule;
   let mockApi;
-  let sseModule;
 
   beforeEach(async () => {
     vi.resetModules();
@@ -46,8 +38,8 @@ describe('Global Stores (index.js)', () => {
     controlplaneMock.workers.length = 0;
     controlplaneMock.events.length = 0;
     Object.assign(controlplaneMock.loading, { services: false, environments: false, states: false, workers: false });
-    Object.assign(controlplaneMock.controlplaneConnection, { status: 'idle', ready: false, rollbackToSse: false });
-    controlplaneMock.bootstrapControlplane.mockResolvedValue({ ok: true, rollbackToSse: false });
+    Object.assign(controlplaneMock.controlplaneConnection, { status: 'idle', ready: false });
+    controlplaneMock.bootstrapControlplane.mockResolvedValue({ ok: true });
 
     const apiModule = await import('../../src/lib/api/client.js');
     mockApi = apiModule.api;
@@ -67,9 +59,6 @@ describe('Global Stores (index.js)', () => {
       { pubkey: 'worker-1', status: 'active' },
       { pubkey: 'worker-2', status: 'idle' }
     ]);
-    mockApi.streamEvents.mockReturnValue(() => {});
-
-    sseModule = await import('../../src/lib/stores/sse.svelte.js');
     storesModule = await import('../../src/lib/stores/index.js');
   });
 
@@ -120,7 +109,7 @@ describe('Global Stores (index.js)', () => {
   });
 
   it('loadAll uses REST fallback when relay bootstrap fails', async () => {
-    controlplaneMock.bootstrapControlplane.mockResolvedValueOnce({ ok: false, rollbackToSse: true, reason: 'no relay' });
+    controlplaneMock.bootstrapControlplane.mockResolvedValueOnce({ ok: false, reason: 'no relay' });
 
     await storesModule.loadAll();
 
@@ -130,35 +119,19 @@ describe('Global Stores (index.js)', () => {
     expect(mockApi.listWorkers).toHaveBeenCalledTimes(1);
   });
 
-  it('subscribeToEvents starts Nostr bootstrap and does not call api.streamEvents', async () => {
+  it('subscribeToEvents starts Nostr bootstrap without SSE fallback', async () => {
     storesModule.subscribeToEvents();
     await Promise.resolve();
 
     expect(controlplaneMock.bootstrapControlplane).toHaveBeenCalledTimes(1);
-    expect(mockApi.streamEvents).not.toHaveBeenCalled();
-    expect(sseModule.connectEventStream).not.toHaveBeenCalled();
   });
 
-  it('uses the SSE store only as a flagged rollback bridge', async () => {
-    controlplaneMock.bootstrapControlplane.mockResolvedValueOnce({ ok: false, rollbackToSse: true, reason: 'relay unavailable' });
-
+  it('unsubscribe tears down the live relay subscription', async () => {
     storesModule.subscribeToEvents();
-    await Promise.resolve();
-    await Promise.resolve();
-
-    expect(mockApi.streamEvents).not.toHaveBeenCalled();
-    expect(sseModule.connectEventStream).toHaveBeenCalledWith({ onEvent: controlplaneMock.ingestLegacyEvent });
-  });
-
-  it('unsubscribe tears down rollback SSE and live relay subscription', async () => {
-    controlplaneMock.bootstrapControlplane.mockResolvedValueOnce({ ok: false, rollbackToSse: true, reason: 'relay unavailable' });
-    storesModule.subscribeToEvents();
-    await Promise.resolve();
     await Promise.resolve();
 
     storesModule.unsubscribeFromEvents();
 
-    expect(sseModule.disconnectEventStream).toHaveBeenCalledTimes(1);
     expect(controlplaneMock.disconnectControlplane).toHaveBeenCalled();
   });
 

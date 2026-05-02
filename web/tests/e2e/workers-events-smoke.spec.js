@@ -138,7 +138,7 @@ test.beforeEach(async ({ page }) => {
       features: {
         relay_sidecar: true,
         relay_read_models: true,
-        legacy_sse: true
+        legacy_sse: false
       }
     }
   });
@@ -185,16 +185,6 @@ test.beforeEach(async ({ page }) => {
       status: 200,
       contentType: 'application/json',
       body: JSON.stringify({ data: mockEvents })
-    });
-  });
-  
-  // Mock SSE endpoint - EventSource connection
-  await page.route('**/api/v1/events/stream', (route) => {
-    // Return empty SSE stream
-    return route.fulfill({
-      status: 200,
-      contentType: 'text/event-stream',
-      body: 'retry: 10000\n\n'
     });
   });
   

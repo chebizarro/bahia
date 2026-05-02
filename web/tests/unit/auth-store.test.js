@@ -282,25 +282,20 @@ describe('Auth Store', () => {
       }));
     });
 
-    it('falls back to deprecated JWT exchange when direct NIP-98 is unavailable', async () => {
-      nip07Module.signEvent.mockImplementation(async (event) => ({ ...event, id: 'event-id', sig: 'signature' }));
-      global.fetch
-        .mockResolvedValueOnce({
-          ok: true,
-          headers: new Map([['content-type', 'application/json']]),
-          json: async () => ({ data: { features: { nostr_auth_exchange: true } } })
-        })
-        .mockResolvedValueOnce({
-          ok: true,
-          json: async () => ({ data: { token: 'legacy-token', expires_at: 1893456000 } })
-        });
+    it('does not fall back to JWT exchange when direct NIP-98 is unavailable', async () => {
+      localStorage.setItem('bahia_token', 'legacy-token');
+      global.fetch.mockResolvedValueOnce({
+        ok: true,
+        headers: new Map([['content-type', 'application/json']]),
+        json: async () => ({ data: { features: { nostr_auth_exchange: true, direct_nostr_http_auth: false } } })
+      });
 
       await authModule.login();
 
-      expect(authModule.authState.backendAuthenticated).toBe(true);
+      expect(authModule.authState.backendAuthenticated).toBe(false);
       expect(authModule.authState.directNip98Ready).toBe(false);
-      expect(localStorage.getItem('bahia_token')).toBe('legacy-token');
-      expect(global.fetch).toHaveBeenCalledWith('/api/v1/auth/nostr', expect.objectContaining({ method: 'POST' }));
+      expect(localStorage.getItem('bahia_token')).toBeNull();
+      expect(global.fetch).not.toHaveBeenCalledWith('/api/v1/auth/nostr', expect.any(Object));
     });
   });
 

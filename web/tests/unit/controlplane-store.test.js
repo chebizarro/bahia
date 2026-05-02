@@ -77,7 +77,7 @@ describe('controlplane store', () => {
       },
       features: {
         relay_read_models: true,
-        legacy_sse: true
+        legacy_sse: false
       }
     });
 
@@ -249,7 +249,7 @@ describe('controlplane store', () => {
     expect(store.controlplaneConnection.reconnects).toBe(1);
   });
 
-  it('marks bootstrap as SSE rollback eligible when relay bootstrap fails and legacy_sse is advertised', async () => {
+  it('marks bootstrap as an error when relay bootstrap fails', async () => {
     nostrMock.connect.mockImplementation(async () => {
       nostrMock.connected.set(false);
     });
@@ -257,7 +257,7 @@ describe('controlplane store', () => {
     const result = await store.bootstrapControlplane();
 
     expect(result.ok).toBe(false);
-    expect(result.rollbackToSse).toBe(true);
-    expect(store.controlplaneConnection.status).toBe('rollback_sse');
+    expect(result.reason).toBe('Unable to connect to any advertised browser relay');
+    expect(store.controlplaneConnection.status).toBe('error');
   });
 });

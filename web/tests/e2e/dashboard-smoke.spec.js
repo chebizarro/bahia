@@ -195,7 +195,7 @@ function dashboardNostrEvents({ services = mockServices, environments = mockEnvi
 
 const relaySystemInfo = {
   nostr: { browser_relays: ['ws://relay.test.local'], service_pubkey: SERVICE_PUBKEY },
-  features: { relay_sidecar: true, relay_read_models: true, legacy_sse: true }
+  features: { relay_sidecar: true, relay_read_models: true, legacy_sse: false }
 };
 
 test.beforeEach(async ({ page }) => {
@@ -271,14 +271,6 @@ test.beforeEach(async ({ page }) => {
     });
   });
   
-  // Mock SSE endpoint
-  await page.route('**/api/v1/events/stream', (route) => {
-    return route.fulfill({
-      status: 200,
-      contentType: 'text/event-stream',
-      body: ''
-    });
-  });
 });
 
 test.describe('Dashboard Smoke Test', () => {

@@ -9,7 +9,7 @@ A SvelteKit-based web dashboard for the Bahia Deployment Registry.
 - **Environments**: List all deployment environments
 - **Workers**: View available Loom workers and pricing
 - **Policies**: Manage deployment policies
-- **Events**: Real-time event stream via SSE
+- **Events**: Real-time event stream via Nostr relay read models
 
 ## Development
 
@@ -61,5 +61,5 @@ Currently uses JWT tokens stored in localStorage. Future versions will support:
 - `GET /api/v1/state` - List deployment states
 - `GET /api/v1/workers` - List Loom workers
 - `GET /api/v1/policies` - List deployment policies
-- `GET /api/v1/events/stream` - SSE event stream
+- Nostr relay read models via `/relay` WebSocket (discovered from `/api/v1/system/info`)
 - `GET /api/v1/services/{id}/environments/{envId}/logs?follow=true` - Live log stream

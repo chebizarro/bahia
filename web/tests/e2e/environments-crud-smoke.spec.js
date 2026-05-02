@@ -110,14 +110,6 @@ test.beforeEach(async ({ page }) => {
     });
   });
   
-  // Mock SSE endpoint
-  await page.route('**/api/v1/events/stream', (route) => {
-    return route.fulfill({
-      status: 200,
-      contentType: 'text/event-stream',
-      body: ''
-    });
-  });
   
   // Mock other common endpoints
   await page.route('**/api/v1/services', (route) => {

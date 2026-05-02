@@ -51,6 +51,7 @@ type App struct {
 	NostrPub    *nostrAdapter.Publisher
 	Telemetry   *telemetry.Provider
 	Background  *BackgroundManager
+	relayPools  []*nostrAdapter.RelayPool
 }
 
 // New creates and wires together all application components.
@@ -118,34 +119,22 @@ func New(cfg *config.Config) (*App, error) {
 	publisher := events.NewInProcessPublisher(logger)
 
 	// Adapters.
-	// Shared relay pool for Nostr and Loom connections.
-	relayURLs := append([]string(nil), cfg.Nostr.Relays...)
-	if cfg.Nostr.Sidecar.Enabled && cfg.Nostr.Sidecar.PublicURL != "" {
-		found := false
-		for _, existing := range relayURLs {
-			if cfg.Nostr.Sidecar.PublicURL == existing {
-				found = true
-				break
-			}
-		}
-		if !found {
-			relayURLs = append(relayURLs, cfg.Nostr.Sidecar.PublicURL)
-		}
-	}
-	for _, r := range cfg.Loom.Relays {
-		found := false
-		for _, existing := range relayURLs {
-			if r == existing {
-				found = true
-				break
-			}
-		}
-		if !found {
-			relayURLs = append(relayURLs, r)
-		}
-	}
-	relayPool := nostrAdapter.NewRelayPool(relayURLs, logger)
+	// Sidecar-first topology uses a dedicated relay pool for Bahia's own
+	// control-plane/projector publishes. Interop relays use a separate pool so
+	// optional sidecar upstream mirroring cannot create duplicate publish loops.
+	controlPlaneRelays := controlPlaneRelayURLs(cfg.Nostr)
+	controlPlanePool := nostrAdapter.NewRelayPool(controlPlaneRelays, logger, nostrAdapter.WithPrivateKey(cfg.Nostr.PrivateKey))
+	controlPlanePool.Connect(ctx)
+
+	relayURLs := interopRelayURLs(cfg, controlPlaneRelays)
+	relayPool := nostrAdapter.NewRelayPool(relayURLs, logger, nostrAdapter.WithPrivateKey(cfg.Nostr.PrivateKey))
 	relayPool.Connect(ctx)
+	logger.Info("nostr relay topology initialized",
+		zap.Strings("control_plane_relays", controlPlaneRelays),
+		zap.Strings("interop_relays", relayURLs),
+		zap.Bool("sidecar_enabled", cfg.Nostr.Sidecar.Enabled),
+		zap.Bool("mirror_external", cfg.Nostr.Sidecar.MirrorExternal),
+	)
 
 	loomClient := loom.NewClient(cfg.Loom, cfg.Nostr.PrivateKey, relayPool, logger,
 		loom.WithWorkerRepo(workerRepo),
@@ -245,7 +234,7 @@ func New(cfg *config.Config) (*App, error) {
 	// Nostr read-model projector. This owns canonical 3196x projections and
 	// the 310xx audit/activity feed for relay consumers; the legacy Publisher is
 	// retained for relay pool lifecycle compatibility.
-	nostrProjector := nostrAdapter.NewProjector(cfg.Nostr, registry, relayPool, nostrEventRepo, logger)
+	nostrProjector := nostrAdapter.NewProjector(cfg.Nostr, registry, controlPlanePool, nostrEventRepo, logger)
 	nostrProjector.SetupSubscriptions(publisher)
 	if nostrProjector.Enabled() {
 		bgManager.Register(nostrProjector)
@@ -338,28 +327,24 @@ func New(cfg *config.Config) (*App, error) {
 	}
 	notifDispatcher.SetupSubscriptions(publisher)
 
-	// Real-time event stream hub.
-	eventHub := handlers.NewEventStreamHub(publisher, logger)
-
 	// MCP (Model Context Protocol) server for AI agent integration.
 	mcpServer := mcp.NewServer(registry, logger)
 	mcpHandler := handlers.NewMCPHandler(mcpServer, logger)
 	logger.Info("mcp server initialized")
 
 	// Nostr control plane reactor for event-driven deployment operations.
-	if len(cfg.Nostr.Relays) > 0 && cfg.Nostr.PrivateKey != "" {
+	if len(controlPlaneRelays) > 0 && cfg.Nostr.PrivateKey != "" {
 		reactorConfig := controlplane.Config{
-			Relays:            cfg.Nostr.Relays,
-			PrivateRelays:     cfg.Nostr.PrivateRelays,
+			Relays:            controlPlaneRelays,
 			PrivateKey:        cfg.Nostr.PrivateKey,
 			AuthorizedPubkeys: cfg.Nostr.AuthorizedPubkeys,
 		}
 		// Pass nil for signer to use local key signing.
 		// To enable NIP-46 remote signing via Signet, create a signet.Client
 		// and pass it here: controlplane.NewReactor(..., signetClient, logger)
-		reactor := controlplane.NewReactor(reactorConfig, registry, relayPool, nil, logger)
+		reactor := controlplane.NewReactor(reactorConfig, registry, controlPlanePool, nil, logger)
 		bgManager.Register(&controlplaneRunner{reactor: reactor})
-		logger.Info("nostr control plane reactor registered")
+		logger.Info("nostr control plane reactor registered", zap.Strings("relays", controlPlaneRelays))
 	}
 
 	// Tenant RBAC.
@@ -388,7 +373,6 @@ func New(cfg *config.Config) (*App, error) {
 			Payments:         paymentSvc,
 			SBOMs:            sbomRepo,
 			Artifacts:        artifactRepo,
-			EventHub:         eventHub,
 			Policies:         policySvc,
 			Adoption:         adoptionSvc,
 			RuntimeLifecycle: runtimeLifecycleSvc,
@@ -424,6 +408,7 @@ func New(cfg *config.Config) (*App, error) {
 		NostrPub:    nostrPub,
 		Telemetry:   telemetryProvider,
 		Background:  bgManager,
+		relayPools:  []*nostrAdapter.RelayPool{controlPlanePool, relayPool},
 	}, nil
 }
 
@@ -471,14 +456,73 @@ func (a *App) Run() error {
 	}
 
 	// Close Nostr relay connections.
-	if a.NostrPub != nil {
-		a.NostrPub.Close()
-	}
+	closeRelayPools(a.relayPools...)
 
 	a.DB.Close()
 	_ = a.Logger.Sync()
 	a.Logger.Info("server stopped gracefully")
 	return nil
+}
+
+func controlPlaneRelayURLs(cfg config.NostrConfig) []string {
+	if cfg.Sidecar.Enabled {
+		if cfg.Sidecar.BackendURL != "" {
+			return []string{cfg.Sidecar.BackendURL}
+		}
+		if cfg.Sidecar.PublicURL != "" {
+			return []string{cfg.Sidecar.PublicURL}
+		}
+	}
+	return append([]string(nil), cfg.Relays...)
+}
+
+func interopRelayURLs(cfg *config.Config, controlPlaneRelays []string) []string {
+	var relays []string
+	if cfg.Nostr.Sidecar.Enabled && cfg.Nostr.Sidecar.MirrorExternal {
+		// The sidecar is the upstream mirror boundary. Subscribe through it for
+		// public interop/audit traffic instead of also connecting Bahia directly to
+		// cfg.Nostr.Relays, which would create duplicate publish/subscribe loops.
+		for _, r := range controlPlaneRelays {
+			relays = appendUniqueRelay(relays, r)
+		}
+	} else {
+		for _, r := range cfg.Nostr.Relays {
+			relays = appendUniqueRelay(relays, r)
+		}
+	}
+	for _, r := range cfg.Nostr.PrivateRelays {
+		relays = appendUniqueRelay(relays, r)
+	}
+	for _, r := range cfg.Loom.Relays {
+		relays = appendUniqueRelay(relays, r)
+	}
+	return relays
+}
+
+func closeRelayPools(pools ...*nostrAdapter.RelayPool) {
+	seen := make(map[*nostrAdapter.RelayPool]struct{}, len(pools))
+	for _, pool := range pools {
+		if pool == nil {
+			continue
+		}
+		if _, ok := seen[pool]; ok {
+			continue
+		}
+		seen[pool] = struct{}{}
+		pool.Close()
+	}
+}
+
+func appendUniqueRelay(relays []string, relay string) []string {
+	if relay == "" {
+		return relays
+	}
+	for _, existing := range relays {
+		if existing == relay {
+			return relays
+		}
+	}
+	return append(relays, relay)
 }
 
 // reconcilerRunner adapts the reconcile.Reconciler to the BackgroundRunner interface.

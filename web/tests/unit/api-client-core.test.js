@@ -21,17 +21,10 @@ describe('BahiaClient - Core Functionality', () => {
     // We'll create a new instance using the same constructor logic
     BahiaClient = class {
       constructor() {
-        this.token = typeof localStorage !== 'undefined' ? localStorage.getItem('bahia_token') : null;
+        this.authProvider = null;
       }
-      setToken(token) {
-        this.token = token;
-        if (typeof localStorage !== 'undefined') {
-          if (token) {
-            localStorage.setItem('bahia_token', token);
-          } else {
-            localStorage.removeItem('bahia_token');
-          }
-        }
+      setAuthProvider(provider) {
+        this.authProvider = provider || null;
       }
       query(params) {
         if (!params || typeof params !== 'object') return '';
@@ -53,8 +46,9 @@ describe('BahiaClient - Core Functionality', () => {
           'Content-Type': 'application/json',
           ...options.headers
         };
-        if (this.token) {
-          headers['Authorization'] = `Bearer ${this.token}`;
+        if (!headers.Authorization && this.authProvider?.getAuthorizationHeader) {
+          const authorization = await this.authProvider.getAuthorizationHeader({ method: options.method || 'GET', url: `/api/v1${path}` });
+          if (authorization) headers.Authorization = authorization;
         }
         const res = await fetch(`/api/v1${path}`, { ...options, headers });
         if (!res.ok) {
@@ -97,40 +91,16 @@ describe('BahiaClient - Core Functionality', () => {
     client = new BahiaClient();
   });
 
-  describe('Token Persistence', () => {
-    it('should initialize with token from localStorage if available', () => {
+  describe('Auth Provider', () => {
+    it('starts without localStorage bearer token state', () => {
       localStorage.setItem('bahia_token', 'existing-token');
       const newClient = new BahiaClient();
-      expect(newClient.token).toBe('existing-token');
+      expect(newClient.authProvider).toBeNull();
+      expect(newClient.token).toBeUndefined();
     });
 
-    it('should initialize with null token when localStorage is empty', () => {
-      expect(client.token).toBeNull();
-    });
-
-    it('should persist token through setToken', () => {
-      client.setToken('new-token-abc');
-      expect(client.token).toBe('new-token-abc');
-      expect(localStorage.getItem('bahia_token')).toBe('new-token-abc');
-    });
-
-    it('should remove token when setToken(null) is called', () => {
-      client.setToken('token-to-clear');
-      client.setToken(null);
-      expect(client.token).toBeNull();
-      expect(localStorage.getItem('bahia_token')).toBeNull();
-    });
-
-    it('should survive instance recreation after setToken', () => {
-      client.setToken('persistent-token');
-      const newClient = new BahiaClient();
-      expect(newClient.token).toBe('persistent-token');
-    });
-  });
-
-  describe('Auth Header Injection', () => {
-    it('should include Authorization header when token is set', async () => {
-      client.setToken('auth-token-123');
+    it('should include Authorization header from auth provider when configured', async () => {
+      client.setAuthProvider({ getAuthorizationHeader: vi.fn().mockResolvedValue('Nostr signed-event') });
       
       global.fetch.mockResolvedValueOnce({
         ok: true,
@@ -144,13 +114,13 @@ describe('BahiaClient - Core Functionality', () => {
         '/api/v1/test-endpoint',
         expect.objectContaining({
           headers: expect.objectContaining({
-            'Authorization': 'Bearer auth-token-123'
+            'Authorization': 'Nostr signed-event'
           })
         })
       );
     });
 
-    it('should not include Authorization header when no token is set', async () => {
+    it('should not include Authorization header when no provider is set', async () => {
       global.fetch.mockResolvedValueOnce({
         ok: true,
         headers: new Map([['content-type', 'application/json']]),
@@ -163,8 +133,8 @@ describe('BahiaClient - Core Functionality', () => {
       expect(callArgs.headers).not.toHaveProperty('Authorization');
     });
 
-    it('should update Authorization header after token change', async () => {
-      client.setToken('first-token');
+    it('should update Authorization header after provider change', async () => {
+      client.setAuthProvider({ getAuthorizationHeader: vi.fn().mockResolvedValue('Nostr first') });
       
       global.fetch.mockResolvedValueOnce({
         ok: true,
@@ -177,12 +147,12 @@ describe('BahiaClient - Core Functionality', () => {
         '/api/v1/test-endpoint',
         expect.objectContaining({
           headers: expect.objectContaining({
-            'Authorization': 'Bearer first-token'
+            'Authorization': 'Nostr first'
           })
         })
       );
 
-      client.setToken('second-token');
+      client.setAuthProvider({ getAuthorizationHeader: vi.fn().mockResolvedValue('Nostr second') });
       global.fetch.mockClear();
       global.fetch.mockResolvedValueOnce({
         ok: true,
@@ -195,7 +165,7 @@ describe('BahiaClient - Core Functionality', () => {
         '/api/v1/another-endpoint',
         expect.objectContaining({
           headers: expect.objectContaining({
-            'Authorization': 'Bearer second-token'
+            'Authorization': 'Nostr second'
           })
         })
       );

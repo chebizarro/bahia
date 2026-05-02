@@ -3,24 +3,11 @@ const BASE_URL = '/api/v1';
 
 export class BahiaClient {
   constructor() {
-    // Transitional compatibility: token remains as a deprecated fallback only.
-    this.token = typeof localStorage !== 'undefined' ? localStorage.getItem('bahia_token') : null;
     this.authProvider = null;
   }
 
   setAuthProvider(provider) {
     this.authProvider = provider || null;
-  }
-
-  setToken(token) {
-    this.token = token;
-    if (typeof localStorage !== 'undefined') {
-      if (token) {
-        localStorage.setItem('bahia_token', token);
-      } else {
-        localStorage.removeItem('bahia_token');
-      }
-    }
   }
 
   // Query parameter helper
@@ -59,10 +46,6 @@ export class BahiaClient {
       if (authorization) {
         headers.Authorization = authorization;
       }
-    }
-
-    if (!headers.Authorization && this.token) {
-      headers.Authorization = `Bearer ${this.token}`;
     }
 
     const res = await fetch(url, { ...options, method, headers });
@@ -339,30 +322,6 @@ export class BahiaClient {
     });
   }
 
-  // SSE Event Stream
-  streamEvents(types = [], onEvent, onError) {
-    const url = types.length > 0 
-      ? `${BASE_URL}/events/stream?types=${types.join(',')}`
-      : `${BASE_URL}/events/stream`;
-    
-    const eventSource = new EventSource(url);
-    
-    eventSource.onmessage = (e) => {
-      try {
-        const data = JSON.parse(e.data);
-        onEvent(data);
-      } catch (err) {
-        console.error('Failed to parse SSE event:', err);
-      }
-    };
-
-    eventSource.onerror = (err) => {
-      if (onError) onError(err);
-    };
-
-    return () => eventSource.close();
-  }
-
   // Live Logs SSE
   streamLogs(serviceId, envId, tail = 100, onLog, onError) {
     const url = `${BASE_URL}/services/${serviceId}/environments/${envId}/logs?follow=true&tail=${tail}`;
@@ -437,49 +396,6 @@ export class BahiaClient {
    */
   async getBlossomStats() {
     return this.fetch('/blossom/stats').then(r => r ?? {});
-  }
-
-  // Auth Exchange
-  // Deprecated compatibility shim: first-party flows should use setAuthProvider()
-  // with direct NIP-98 signing instead of exchanging for persistent JWT state.
-  async exchangeNostrAuth(event) {
-    // This endpoint is unauthenticated, so we temporarily clear the token
-    const savedToken = this.token;
-    this.token = null;
-    
-    try {
-      const res = await fetch(`${BASE_URL}/auth/nostr`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({ event })
-      });
-
-      if (!res.ok) {
-        let errorMessage = `HTTP ${res.status}: ${res.statusText}`;
-        try {
-          const errorData = await res.json();
-          if (errorData.error) {
-            errorMessage = errorData.error;
-          }
-        } catch {
-          // Response body is not JSON or empty
-        }
-        throw new Error(errorMessage);
-      }
-
-      const data = await res.json();
-      
-      if (data.error) {
-        throw new Error(data.error);
-      }
-      
-      return data.data;
-    } finally {
-      // Restore the saved token
-      this.token = savedToken;
-    }
   }
 
   // ============ Organizations ============

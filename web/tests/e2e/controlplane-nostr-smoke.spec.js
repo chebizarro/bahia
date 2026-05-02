@@ -25,7 +25,7 @@ const relaySystemInfo = {
   features: {
     relay_sidecar: true,
     relay_read_models: true,
-    legacy_sse: true
+    legacy_sse: false
   }
 };
 

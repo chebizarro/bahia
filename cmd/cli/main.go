@@ -58,7 +58,6 @@ func main() {
 		policiesCommands(),
 		secretsCommands(),
 		orgsCommands(),
-		eventsCommands(),
 		soulFactoryCommands(),
 	)
 
@@ -385,20 +384,12 @@ func deployCommands() *cobra.Command {
 			envID, _ := cmd.Flags().GetString("environment")
 			artifactID, _ := cmd.Flags().GetString("artifact")
 			requestedBy, _ := cmd.Flags().GetString("requested-by")
-			follow, _ := cmd.Flags().GetBool("follow")
 
 			intent, err := apiClient.CreateDeploymentIntent(cmd.Context(), serviceID, envID, artifactID, requestedBy)
 			if err != nil {
 				return err
 			}
 			fmt.Printf("✓ Deployment intent created: %s (status: %s)\n", intent.ID, intent.Status)
-
-			if follow {
-				fmt.Println("\nFollowing deployment events (Ctrl+C to stop)...")
-				return apiClient.StreamEvents(cmd.Context(), []string{"deployment.run.started", "deployment.run.completed"}, func(ev client.Event) {
-					fmt.Printf("[%s] %s: %v\n", ev.Time, ev.Type, ev.Data)
-				})
-			}
 			return nil
 		},
 	}
@@ -406,7 +397,6 @@ func deployCommands() *cobra.Command {
 	deployCmd.Flags().String("environment", "", "Environment ID")
 	deployCmd.Flags().String("artifact", "", "Artifact ID")
 	deployCmd.Flags().String("requested-by", "", "Who requested the deployment")
-	deployCmd.Flags().BoolP("follow", "f", false, "Follow deployment progress via SSE")
 	_ = deployCmd.MarkFlagRequired("service")
 	_ = deployCmd.MarkFlagRequired("environment")
 	_ = deployCmd.MarkFlagRequired("artifact")
@@ -1022,29 +1012,6 @@ func orgsCommands() *cobra.Command {
 
 	membersCmd.AddCommand(membersListCmd, membersAddCmd, membersRemoveCmd)
 	cmd.AddCommand(listCmd, getCmd, createCmd, membersCmd)
-	return cmd
-}
-
-// --- Events Commands ---
-
-func eventsCommands() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "events",
-		Short: "Stream real-time events",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			types, _ := cmd.Flags().GetStringSlice("types")
-			fmt.Println("Streaming events (Ctrl+C to stop)...")
-			return apiClient.StreamEvents(cmd.Context(), types, func(ev client.Event) {
-				if outputFormat == "json" {
-					b, _ := json.Marshal(ev)
-					fmt.Println(string(b))
-				} else {
-					fmt.Printf("[%s] %s: %s %v\n", ev.Time, ev.Type, ev.EntityID, ev.Data)
-				}
-			})
-		},
-	}
-	cmd.Flags().StringSlice("types", nil, "Event types to filter (comma-separated)")
 	return cmd
 }
 

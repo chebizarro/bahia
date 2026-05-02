@@ -38,6 +38,7 @@ services:
       BAHIA_RECONCILE_INTERVAL: "60s"
       BAHIA_NOSTR__SIDECAR__ENABLED: "true"
       BAHIA_NOSTR__SIDECAR__PUBLIC_URL: "ws://localhost:3000/relay"
+      BAHIA_NOSTR__SIDECAR__BACKEND_URL: "ws://relay:3334"
       BAHIA_NOSTR__SIDECAR__LISTEN_ADDR: "0.0.0.0:3334"
     depends_on:
       postgres:
@@ -65,6 +66,7 @@ services:
       BAHIA_NOSTR__SIDECAR__ENABLED: "true"
       BAHIA_NOSTR__SIDECAR__LISTEN_ADDR: "0.0.0.0:3334"
       BAHIA_NOSTR__SIDECAR__PUBLIC_URL: "ws://localhost:3000/relay"
+      BAHIA_NOSTR__SIDECAR__BACKEND_URL: "ws://relay:3334"
       BAHIA_NOSTR__SIDECAR__DATA_DIR: "/var/lib/bahia/relay-sidecar"
       BAHIA_NOSTR__SIDECAR__MAX_QUERY_LIMIT: "500"
     restart: unless-stopped

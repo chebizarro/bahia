@@ -16,7 +16,6 @@
     bootstrapping: '🟡 Waiting for EOSE',
     live: '🟢 Connected via Nostr relay',
     disconnected: '⚪ Relay disconnected',
-    rollback_sse: '🟠 Rollback: legacy SSE',
     error: '🔴 Relay error'
   }[controlplaneConnection.status] || '⚪ Unknown');
 

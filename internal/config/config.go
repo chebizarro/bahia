@@ -113,6 +113,7 @@ type RelaySidecarConfig struct {
 	Enabled          bool          `koanf:"enabled"`
 	ListenAddr       string        `koanf:"listen_addr"`
 	PublicURL        string        `koanf:"public_url"`
+	BackendURL       string        `koanf:"backend_url"`
 	DataDir          string        `koanf:"data_dir"`
 	MirrorExternal   bool          `koanf:"mirror_external"`
 	EventRetention   time.Duration `koanf:"event_retention"`
@@ -330,6 +331,7 @@ func Defaults() *Config {
 				Enabled:          false,
 				ListenAddr:       "0.0.0.0:3334",
 				PublicURL:        "ws://localhost:3334",
+				BackendURL:       "ws://localhost:3334",
 				DataDir:          "./data/relay-sidecar",
 				MirrorExternal:   false,
 				EventRetention:   7 * 24 * time.Hour,
