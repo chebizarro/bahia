@@ -13,6 +13,14 @@
   import RepositoryPicker from '$lib/components/repositories/RepositoryPicker.svelte';
   import { api } from '$lib/api/client.js';
   import {
+    DEFAULT_DEPLOY_ESTIMATED_DURATION_SECS,
+    formatDurationSecs,
+    formatPricePerSecond,
+    formatSats,
+    isValidEstimatedDurationSecs,
+    summarizeDeploymentCostEstimates
+  } from '../deploy-cost-estimate.js';
+  import {
     repositories,
     createManualRepositorySelection,
     resolveSelectionFromRepoUrl,
@@ -91,11 +99,15 @@
   let deployPolicyPreviewLoading = $state(false);
   let deployPolicyPreviewError = $state(null);
   let deployPolicyPreviewKey = $state('');
+  let deployCostEstimateWorkers = $state([]);
+  let deployCostEstimateLoading = $state(false);
+  let deployCostEstimateError = $state(null);
+  let deployCostEstimateSequence = 0;
+  let deployEstimatedDurationSecs = $state(DEFAULT_DEPLOY_ESTIMATED_DURATION_SECS);
   let deployForm = $state({
     environment_id: '',
     artifact_id: ''
   });
-  const COST_ESTIMATE_UNAVAILABLE_COPY = 'Cost estimate unavailable before run creation: the current API estimates cost from a deployment run ID, which does not exist until after an intent is approved and executed.';
 
   // Rollback modal state
   let rollbackOpen = $state(false);
@@ -261,6 +273,40 @@
     return preview.allowed === false ? 'error' : 'success';
   }
 
+  function costRangeLabel(summary) {
+    if (!summary || summary.available_workers === 0) return '—';
+    if (summary.min_cost_sats === summary.max_cost_sats) return formatSats(summary.min_cost_sats);
+    return `${formatSats(summary.min_cost_sats)} – ${formatSats(summary.max_cost_sats)}`;
+  }
+
+  function resetDeployCostEstimate() {
+    deployCostEstimateWorkers = [];
+    deployCostEstimateError = null;
+    deployCostEstimateLoading = false;
+    deployCostEstimateSequence += 1;
+    deployEstimatedDurationSecs = DEFAULT_DEPLOY_ESTIMATED_DURATION_SECS;
+  }
+
+  async function loadDeploymentCostEstimateWorkers() {
+    const sequence = ++deployCostEstimateSequence;
+    deployCostEstimateLoading = true;
+    deployCostEstimateError = null;
+
+    try {
+      const workers = await api.listWorkers();
+      if (sequence !== deployCostEstimateSequence) return;
+      deployCostEstimateWorkers = Array.isArray(workers) ? workers : [];
+    } catch (err) {
+      if (sequence !== deployCostEstimateSequence) return;
+      deployCostEstimateWorkers = [];
+      deployCostEstimateError = err.message || 'Cost estimate is not available';
+    } finally {
+      if (sequence === deployCostEstimateSequence) {
+        deployCostEstimateLoading = false;
+      }
+    }
+  }
+
   function openEditModal() {
     if (!service) return;
     
@@ -341,7 +387,9 @@
     };
     deployError = null;
     resetDeployPreview();
+    resetDeployCostEstimate();
     deployOpen = true;
+    void loadDeploymentCostEstimateWorkers();
   }
 
   function closeDeployModal() {
@@ -349,6 +397,7 @@
     deployOpen = false;
     deployError = null;
     resetDeployPreview();
+    resetDeployCostEstimate();
   }
 
   async function loadDeploymentPolicyPreview(environmentId, artifactId) {
@@ -737,6 +786,8 @@
   let selectedDeployArtifact = $derived(artifacts.find(artifact => artifact.id === deployForm.artifact_id));
   let selectedRollbackEnvironment = $derived(environments.find(environment => environment.id === rollbackForm.environment_id));
   let selectedRollbackArtifact = $derived(artifacts.find(artifact => artifact.id === rollbackForm.artifact_id));
+  let deployDurationError = $derived(isValidEstimatedDurationSecs(deployEstimatedDurationSecs) ? '' : 'Enter a positive whole number of seconds to preview cost.');
+  let deploymentCostEstimate = $derived(summarizeDeploymentCostEstimates(deployCostEstimateWorkers, deployEstimatedDurationSecs));
   let selectedDeployArtifactBuild = $derived.by(() => {
     if (!selectedDeployArtifact) return null;
     const buildId = selectedDeployArtifact.build_id || selectedDeployArtifact.metadata?.build_id;
@@ -1139,9 +1190,71 @@
         {/if}
       </section>
 
-      <section class="preview-card">
-        <h3>Cost Estimate</h3>
-        <p class="preview-muted">{COST_ESTIMATE_UNAVAILABLE_COPY}</p>
+      <section class="preview-card cost-estimate-card" aria-live="polite">
+        <div class="preview-card-header">
+          <h3>Cost Estimate</h3>
+          <span class="status-pill muted">Pre-deploy</span>
+        </div>
+
+        <div class="cost-duration-field">
+          <label for="deploy-estimated-duration">Estimated run duration</label>
+          <div class="cost-duration-input-row">
+            <input
+              id="deploy-estimated-duration"
+              class="cost-duration-input"
+              type="number"
+              min="1"
+              step="1"
+              bind:value={deployEstimatedDurationSecs}
+              disabled={deploying}
+            />
+            <span>seconds</span>
+          </div>
+        </div>
+
+        {#if deployDurationError}
+          <p class="preview-warning">{deployDurationError}</p>
+        {:else if !deployForm.environment_id || !deployForm.artifact_id}
+          <p class="preview-muted">Select an environment and artifact to preview deployment cost from current worker pricing.</p>
+        {:else if deployCostEstimateLoading}
+          <p class="preview-muted">Loading worker pricing...</p>
+        {:else if deployCostEstimateError}
+          <p class="preview-warning">Cost estimate unavailable: {deployCostEstimateError}</p>
+        {:else if deploymentCostEstimate.available_workers === 0}
+          <p class="preview-muted">No workers with advertised sat pricing are available yet. Final payment estimation runs after worker assignment.</p>
+        {:else}
+          <div class="cost-highlight">
+            <span class="cost-value">{formatSats(deploymentCostEstimate.cheapest.estimated_cost_sats)}</span>
+            <span class="cost-caption">lowest advertised estimate</span>
+          </div>
+
+          <dl class="cost-details">
+            <div>
+              <dt>Range</dt>
+              <dd>{costRangeLabel(deploymentCostEstimate)}</dd>
+            </div>
+            <div>
+              <dt>Duration</dt>
+              <dd>{formatDurationSecs(deploymentCostEstimate.estimated_secs)}</dd>
+            </div>
+            <div>
+              <dt>Workers priced</dt>
+              <dd>{deploymentCostEstimate.available_workers}</dd>
+            </div>
+            <div>
+              <dt>Lowest worker</dt>
+              <dd>{deploymentCostEstimate.cheapest.worker_name}</dd>
+            </div>
+            <div>
+              <dt>Rate</dt>
+              <dd>{formatPricePerSecond(deploymentCostEstimate.cheapest.price_per_second, deploymentCostEstimate.cheapest.unit)}</dd>
+            </div>
+          </dl>
+
+          <p class="preview-muted">
+            Estimate uses current worker pricing before a run exists. The final payment estimate may change after worker assignment and run creation.
+          </p>
+        {/if}
       </section>
     </div>
 
@@ -1702,6 +1815,63 @@
   }
   .preview-warning {
     color: var(--warning, #d97706);
+  }
+  .cost-duration-field {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    margin-top: 0.75rem;
+  }
+  .cost-duration-field label,
+  .cost-details dt {
+    color: var(--text-muted);
+    font-size: 0.75rem;
+  }
+  .cost-duration-input-row {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    color: var(--text-muted);
+    font-size: 0.8rem;
+  }
+  .cost-duration-input {
+    width: 7rem;
+    padding: 0.45rem 0.6rem;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    background: var(--bg);
+    color: var(--text-primary);
+  }
+  .cost-highlight {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+    margin-top: 0.85rem;
+  }
+  .cost-value {
+    color: var(--text-primary);
+    font-size: 1.5rem;
+    font-weight: 700;
+  }
+  .cost-caption {
+    color: var(--text-muted);
+    font-size: 0.75rem;
+  }
+  .cost-details {
+    display: grid;
+    gap: 0.55rem;
+    margin: 0.85rem 0 0;
+  }
+  .cost-details div {
+    display: flex;
+    justify-content: space-between;
+    gap: 0.75rem;
+  }
+  .cost-details dd {
+    margin: 0;
+    color: var(--text-primary);
+    font-size: 0.8rem;
+    text-align: right;
   }
   .status-pill {
     border-radius: 999px;

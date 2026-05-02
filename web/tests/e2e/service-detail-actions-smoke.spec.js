@@ -30,6 +30,21 @@ const mockEnvironments = [
   { id: 'env-stage', name: 'staging', protected: false }
 ];
 
+const mockWorkers = [
+  {
+    pubkey: 'worker-cheap',
+    name: 'Cheap Worker',
+    status: 'online',
+    pricing: [{ mint_url: 'https://mint.example.com', price_per_second: 4, unit: 'sat' }]
+  },
+  {
+    pubkey: 'worker-expensive',
+    name: 'Expensive Worker',
+    status: 'online',
+    pricing: [{ mint_url: 'https://mint.example.com', price_per_second: 8, unit: 'sat' }]
+  }
+];
+
 test.describe('Service Detail Edit/Delete Actions', () => {
   test.beforeEach(async ({ page }) => {
     await installE2EMocks(page);
@@ -102,7 +117,7 @@ test.describe('Service Detail Edit/Delete Actions', () => {
       route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data: [] }) })
     );
     await page.route('**/api/v1/workers', (route) =>
-      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data: [] }) })
+      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data: mockWorkers }) })
     );
 
     await page.route('**/api/v1/system/info', (route) =>
@@ -245,12 +260,16 @@ test.describe('Service Detail Edit/Delete Actions', () => {
     await expect(dialog.getByText('abcdef1 · refs/heads/main')).toBeVisible();
     await expect(dialog.getByText('Allowed')).toBeVisible();
     await expect(page.getByText('Signature required')).toBeVisible();
-    await expect(page.getByText(/Cost estimate unavailable before run creation/)).toBeVisible();
+    await expect(dialog.getByLabel('Estimated run duration')).toHaveValue('300');
+    await expect(dialog.locator('.cost-value')).toHaveText('1,200 sat');
+    await expect(dialog.getByText('lowest advertised estimate')).toBeVisible();
+    await expect(dialog.getByText('1,200 sat – 2,400 sat')).toBeVisible();
+    await expect(dialog.getByText('Cheap Worker')).toBeVisible();
 
     const createRequestPromise = page.waitForRequest(
       (request) => request.method() === 'POST' && request.url().endsWith('/api/v1/deployments/intents')
     );
-    await page.getByRole('button', { name: 'Create Intent' }).click();
+    await dialog.getByRole('button', { name: 'Create Intent' }).click();
 
     const createPayload = (await createRequestPromise).postDataJSON();
     expect(createPayload).toEqual({
