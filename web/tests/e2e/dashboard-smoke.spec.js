@@ -107,6 +107,50 @@ const mockPendingIntents = [
   }
 ];
 
+const mockPaymentHistoryByWorker = {
+  npub1worker1abc: [
+    {
+      id: 'payment-1',
+      deployment_run_id: 'run-1',
+      worker_pubkey: 'npub1worker1abc',
+      amount_sats: 1200,
+      direction: 'payment',
+      status: 'sent',
+      created_at: new Date().toISOString()
+    },
+    {
+      id: 'payment-change-1',
+      deployment_run_id: 'run-1',
+      worker_pubkey: 'npub1worker1abc',
+      amount_sats: 100,
+      direction: 'change',
+      status: 'redeemed',
+      created_at: new Date().toISOString()
+    }
+  ],
+  npub1worker2def: [
+    {
+      id: 'payment-2',
+      deployment_run_id: 'run-2',
+      worker_pubkey: 'npub1worker2def',
+      amount_sats: 800,
+      direction: 'payment',
+      status: 'redeemed',
+      created_at: new Date(Date.now() - 60000).toISOString()
+    },
+    {
+      id: 'payment-failed-1',
+      deployment_run_id: 'run-3',
+      worker_pubkey: 'npub1worker2def',
+      amount_sats: 500,
+      direction: 'payment',
+      status: 'failed',
+      created_at: new Date(Date.now() - 120000).toISOString()
+    }
+  ],
+  npub1worker3ghi: []
+};
+
 const mockEvents = [
   {
     id: 'event-1',
@@ -263,6 +307,18 @@ test.beforeEach(async ({ page }) => {
     });
   });
   
+  // Mock payment history per worker for dashboard cost summary
+  await page.route('**/api/v1/payments/history**', (route) => {
+    const url = new URL(route.request().url());
+    const worker = url.searchParams.get('worker');
+
+    return route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ data: mockPaymentHistoryByWorker[worker] || [] })
+    });
+  });
+
   // Mock events endpoint
   await page.route('**/api/v1/events', (route) => {
     return route.fulfill({
@@ -358,6 +414,58 @@ test.describe('Dashboard Smoke Test', () => {
     
     // Verify the SvelteKit link points to the pending deployments page.
     await expect(pendingLink.first()).toHaveAttribute('href', '/deployments/pending');
+  });
+
+  test('should display recent spend cost summary card', async ({ page }) => {
+    await page.goto('/');
+
+    const spendCard = page.locator('main a[href="/payments"] .card:has-text("Recent Spend")');
+    await expect(spendCard).toBeVisible();
+    await expect(spendCard.locator('.card-value')).toHaveText('2,000 sats');
+    await expect(spendCard.locator('.card-subtitle')).toHaveText('2 recent payments');
+  });
+
+  test('should show empty recent spend state when payment history is empty', async ({ page }) => {
+    await page.route('**/api/v1/payments/history**', (route) => route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ data: [] })
+    }));
+
+    await page.goto('/');
+
+    const spendCard = page.locator('main a[href="/payments"] .card:has-text("Recent Spend")');
+    await expect(spendCard).toBeVisible();
+    await expect(spendCard.locator('.card-value')).toHaveText('0 sats');
+    await expect(spendCard.locator('.card-subtitle')).toHaveText('No recent spend');
+  });
+
+  test('should keep recent spend totals when one worker history request fails', async ({ page }) => {
+    await page.route('**/api/v1/payments/history**', (route) => {
+      const url = new URL(route.request().url());
+      const worker = url.searchParams.get('worker');
+
+      if (worker === 'npub1worker2def') {
+        return route.fulfill({
+          status: 500,
+          contentType: 'application/json',
+          body: JSON.stringify({ error: 'worker history unavailable' })
+        });
+      }
+
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ data: mockPaymentHistoryByWorker[worker] || [] })
+      });
+    });
+
+    await page.goto('/');
+
+    const spendCard = page.locator('main a[href="/payments"] .card:has-text("Recent Spend")');
+    await expect(spendCard).toBeVisible();
+    await expect(spendCard.locator('.card-value')).toHaveText('1,200 sats');
+    await expect(spendCard.locator('.card-subtitle')).toHaveText('1 recent payment; 1 worker unavailable');
   });
   
   test('should display quick actions section', async ({ page }) => {

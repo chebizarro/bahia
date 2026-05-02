@@ -4,6 +4,7 @@
   import Badge from '$lib/components/Badge.svelte';
   import { api } from '$lib/api/client.js';
   import { services, environments, states, workers, driftedStates, events, loading } from '$lib/stores';
+  import { formatDashboardSats, normalizePaymentHistory, summarizeRecentSpend } from './dashboard-cost-summary.js';
 
   // Pending deployments state
   let pendingDeployments = $state([]);
@@ -12,9 +13,18 @@
   let pendingCacheLoadedAt = null;
   let pendingPairFailures = 0;
 
+  // Dashboard cost summary state
+  let costSummary = $state({ totalSats: 0, paymentCount: 0, workerCount: 0, latestPaymentAt: '' });
+  let costSummaryLoading = $state(false);
+  let costSummaryError = $state(null);
+  let costSummaryPartialFailures = $state(0);
+  let costSummaryLoadSequence = 0;
+  let lastCostSummaryWorkerKey = null;
+
   // Cache configuration
   const PENDING_CACHE_KEY = 'bahia_dashboard_pending_deployments';
   const PENDING_CACHE_TTL_MS = 30000; // 30 seconds
+  const COST_HISTORY_LIMIT_PER_WORKER = 25;
 
 
 
@@ -57,6 +67,18 @@
   function firstPresentString(...values) {
     const value = values.find((candidate) => candidate !== null && candidate !== undefined && String(candidate).trim() !== '');
     return value === undefined ? '' : String(value);
+  }
+
+  function dashboardWorkerPubkey(worker) {
+    return firstPresentString(worker?.pubkey, worker?.worker_pubkey, worker?.id);
+  }
+
+  function pluralize(count, singular, plural = `${singular}s`) {
+    return count === 1 ? singular : plural;
+  }
+
+  function emptyCostSummary(workerCount = 0) {
+    return { totalSats: 0, paymentCount: 0, workerCount, latestPaymentAt: '' };
   }
 
   function eventData(row) {
@@ -173,7 +195,57 @@
     }
   }
 
-  // Load pending deployments
+  // Load dashboard cost summary
+  async function loadDashboardCostSummary(workerPubkeys) {
+    const sequence = ++costSummaryLoadSequence;
+    costSummaryError = null;
+    costSummaryPartialFailures = 0;
+
+    if (!api || workerPubkeys.length === 0) {
+      costSummary = emptyCostSummary(workerPubkeys.length);
+      costSummaryLoading = false;
+      return;
+    }
+
+    costSummaryLoading = true;
+
+    try {
+      const paymentGroups = await withBoundedConcurrency(
+        workerPubkeys.map((worker) => async () => {
+          try {
+            return {
+              payments: normalizePaymentHistory(
+                await api.getPaymentHistory({ worker, limit: COST_HISTORY_LIMIT_PER_WORKER })
+              ),
+              error: null
+            };
+          } catch (err) {
+            return { payments: [], error: err };
+          }
+        }),
+        4
+      );
+
+      if (sequence !== costSummaryLoadSequence) return;
+
+      const failedWorkers = paymentGroups.filter((group) => group.error).length;
+      costSummaryPartialFailures = failedWorkers;
+      costSummary = summarizeRecentSpend(paymentGroups.flatMap((group) => group.payments), { workerCount: workerPubkeys.length });
+      if (failedWorkers === workerPubkeys.length) {
+        costSummaryError = 'Failed to load payment history';
+      }
+    } catch (err) {
+      if (sequence !== costSummaryLoadSequence) return;
+      console.error('Failed to load dashboard cost summary:', err);
+      costSummaryError = err.message || 'Failed to load payment history';
+      costSummary = emptyCostSummary(workerPubkeys.length);
+    } finally {
+      if (sequence === costSummaryLoadSequence) {
+        costSummaryLoading = false;
+      }
+    }
+  }
+
   async function loadPendingDeployments() {
     if (!api) {
       pendingDeployments = [];
@@ -260,6 +332,17 @@
     queueMicrotask(() => loadPendingDeployments());
   });
 
+  $effect(() => {
+    const workerPubkeys = Array.from(new Set(workers.map(dashboardWorkerPubkey).filter(Boolean))).sort();
+    const workerKey = workerPubkeys.join('|');
+
+    queueMicrotask(() => {
+      if (workerKey === lastCostSummaryWorkerKey) return;
+      lastCostSummaryWorkerKey = workerKey;
+      void loadDashboardCostSummary(workerPubkeys);
+    });
+  });
+
   let stateColumns = $derived([
     { key: 'service_id', label: 'Service', render: (r) => `<code>${escapeHtml(r.service_id?.slice(0, 8) || '')}...</code>` },
     { key: 'environment_id', label: 'Environment', render: (r) => `<code>${escapeHtml(r.environment_id?.slice(0, 8) || '')}...</code>` },
@@ -286,6 +369,19 @@
     : pendingCount > 0
       ? 'Needs review'
       : 'All clear');
+  let costSummaryValue = $derived(costSummaryLoading ? '...' : formatDashboardSats(costSummary.totalSats));
+  let costSummarySubtitle = $derived(costSummaryError
+    ? 'Unable to load payment history'
+    : costSummaryLoading
+      ? 'Loading payment history'
+      : costSummary.paymentCount > 0
+        ? `${costSummary.paymentCount} recent ${pluralize(costSummary.paymentCount, 'payment')}${costSummaryPartialFailures > 0 ? `; ${costSummaryPartialFailures} ${pluralize(costSummaryPartialFailures, 'worker')} unavailable` : ''}`
+        : workers.length === 0
+          ? 'No workers yet'
+          : costSummaryPartialFailures > 0
+            ? `${costSummaryPartialFailures} ${pluralize(costSummaryPartialFailures, 'worker')} unavailable`
+            : 'No recent spend');
+  let costSummaryStatus = $derived(costSummaryError ? 'error' : costSummary.paymentCount > 0 ? 'warning' : 'success');
 </script>
 
 <div class="dashboard">
@@ -316,6 +412,14 @@
         value={pendingLoading ? '...' : pendingCount}
         subtitle={pendingSubtitle}
         status={pendingError ? 'error' : pendingCount > 0 ? 'warning' : 'success'}
+      />
+    </a>
+    <a href="/payments" class="card-link" aria-label="Review payment history cost summary">
+      <Card
+        title="Recent Spend"
+        value={costSummaryValue}
+        subtitle={costSummarySubtitle}
+        status={costSummaryStatus}
       />
     </a>
   </div>
