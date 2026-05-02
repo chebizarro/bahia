@@ -34,6 +34,15 @@ func TestSetup_Enabled(t *testing.T) {
 	if p == nil {
 		t.Fatal("expected non-nil provider")
 	}
+	if !p.config.Enabled {
+		t.Fatal("expected provider config to remain enabled")
+	}
+	if p.config.ServiceName != "test-service" {
+		t.Fatalf("expected service name to be preserved, got %q", p.config.ServiceName)
+	}
+	if p.config.OTLPEndpoint != "localhost:4317" {
+		t.Fatalf("expected OTLP endpoint to be preserved, got %q", p.config.OTLPEndpoint)
+	}
 }
 
 func TestMetrics_RecordHTTPRequest(t *testing.T) {

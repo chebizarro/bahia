@@ -229,8 +229,9 @@ func New(cfg *config.Config) (*App, error) {
 
 	// Telemetry.
 	telemetryProvider := telemetry.Setup(telemetry.Config{
-		Enabled:     true,
-		ServiceName: "bahia",
+		Enabled:      cfg.Telemetry.Enabled,
+		ServiceName:  cfg.Telemetry.ServiceName,
+		OTLPEndpoint: cfg.Telemetry.OTLPEndpoint,
 	}, logger)
 
 	// Background runner manager.

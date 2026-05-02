@@ -164,19 +164,19 @@ func TestPublishResult_AcceptedVsRejected(t *testing.T) {
 // Test EOSE handling in subscriber
 
 func TestSubscriber_CaughtUpState(t *testing.T) {
-	t.Run("initially not caught up", func(t *testing.T) {
-		// A subscriber starts not caught up
-		// This is a conceptual test - actual subscriber requires relay connections
-		// We're testing the atomic boolean behavior
-		var caughtUp bool
-		require.False(t, caughtUp, "subscriber should start not caught up")
-	})
+	sub := &Subscriber{
+		logger: zap.NewNop(),
+		kinds:  []int{30100, 5101},
+	}
 
-	t.Run("caught up after EOSE", func(t *testing.T) {
-		// After receiving EOSE, subscriber should be caught up
-		caughtUp := true // simulating EOSE received
-		require.True(t, caughtUp, "subscriber should be caught up after EOSE")
-	})
+	require.False(t, sub.IsCaughtUp(), "subscriber should start not caught up")
+
+	sub.handleEOSE()
+	require.True(t, sub.IsCaughtUp(), "subscriber should report caught up after EOSE")
+
+	// Repeated EOSE notifications should be harmless.
+	sub.handleEOSE()
+	require.True(t, sub.IsCaughtUp(), "subscriber should remain caught up after duplicate EOSE")
 }
 
 // Test MergedSubscription EOSE behavior

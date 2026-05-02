@@ -166,18 +166,22 @@ func (s *Subscriber) subscribe(ctx context.Context) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-merged.EndOfStoredEvents:
-			if !s.caughtUp.Load() {
-				s.caughtUp.Store(true)
-				s.logger.Info("EOSE received: caught up with stored events",
-					zap.Ints("kinds", s.kinds),
-				)
-			}
+			s.handleEOSE()
 		case ev, ok := <-merged.Events:
 			if !ok {
 				return nil // channel closed
 			}
 			s.handleEvent(ctx, ev)
 		}
+	}
+}
+
+func (s *Subscriber) handleEOSE() {
+	if !s.caughtUp.Load() {
+		s.caughtUp.Store(true)
+		s.logger.Info("EOSE received: caught up with stored events",
+			zap.Ints("kinds", s.kinds),
+		)
 	}
 }
 

@@ -64,12 +64,6 @@ const (
 	KindLLMRouteState       = 31965 // Replaceable LLM route state (d=route:env)
 )
 
-// DefaultAuthorizedPubkeys is the list of pubkeys allowed to control Bahia via Nostr.
-var DefaultAuthorizedPubkeys = []string{
-	"cdee943cbb19c51ab847a66d5d774373aa9f63d287246bb59b0827fa5e637400", // Biz
-	"14907326f89ebdfc9cfdabe17bd492aa48abbd59ad5d8cc25295760bdf0e5015", // Stew
-}
-
 // Config holds reactor configuration.
 type Config struct {
 	// Relays is the list of public relay URLs for subscriptions and results.
@@ -881,11 +875,10 @@ func stringFromAny(v any) string {
 
 // isAuthorized checks if a pubkey is authorized to use the control plane.
 func (r *Reactor) isAuthorized(pubkey string) bool {
-	authorized := r.config.AuthorizedPubkeys
-	if len(authorized) == 0 {
-		authorized = DefaultAuthorizedPubkeys
+	if len(r.config.AuthorizedPubkeys) == 0 {
+		return false
 	}
-	return slices.Contains(authorized, pubkey)
+	return slices.Contains(r.config.AuthorizedPubkeys, pubkey)
 }
 
 // parseDeployRequest extracts deployment request data from an event.

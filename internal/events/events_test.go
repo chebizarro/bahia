@@ -4,7 +4,6 @@ import (
 	"context"
 	"sync"
 	"testing"
-	"time"
 
 	"go.uber.org/zap"
 )
@@ -15,8 +14,11 @@ func TestInProcessPublisher(t *testing.T) {
 
 	var mu sync.Mutex
 	var received []Event
+	var wg sync.WaitGroup
+	wg.Add(1)
 
 	pub.Subscribe(EventBuildRegistered, func(ctx context.Context, e Event) {
+		defer wg.Done()
 		mu.Lock()
 		defer mu.Unlock()
 		received = append(received, e)
@@ -28,8 +30,7 @@ func TestInProcessPublisher(t *testing.T) {
 		Data:     "test data",
 	})
 
-	// Wait for async handler to complete.
-	time.Sleep(50 * time.Millisecond)
+	wg.Wait()
 
 	mu.Lock()
 	defer mu.Unlock()
@@ -49,9 +50,12 @@ func TestInProcessPublisherMultipleHandlers(t *testing.T) {
 
 	var mu sync.Mutex
 	count := 0
+	var wg sync.WaitGroup
+	wg.Add(3)
 
 	for i := 0; i < 3; i++ {
 		pub.Subscribe(EventArtifactRegistered, func(ctx context.Context, e Event) {
+			defer wg.Done()
 			mu.Lock()
 			defer mu.Unlock()
 			count++
@@ -59,7 +63,7 @@ func TestInProcessPublisherMultipleHandlers(t *testing.T) {
 	}
 
 	pub.Publish(context.Background(), Event{Type: EventArtifactRegistered})
-	time.Sleep(50 * time.Millisecond)
+	wg.Wait()
 
 	mu.Lock()
 	defer mu.Unlock()
@@ -80,11 +84,15 @@ func TestPublisherPanicRecovery(t *testing.T) {
 	logger := zap.NewNop()
 	pub := NewInProcessPublisher(logger)
 
+	var wg sync.WaitGroup
+	wg.Add(1)
+
 	pub.Subscribe(EventBuildRegistered, func(ctx context.Context, e Event) {
+		defer wg.Done()
 		panic("test panic")
 	})
 
 	// Should not panic the caller.
 	pub.Publish(context.Background(), Event{Type: EventBuildRegistered})
-	time.Sleep(50 * time.Millisecond)
+	wg.Wait()
 }

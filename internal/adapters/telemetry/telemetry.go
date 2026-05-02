@@ -131,16 +131,19 @@ func Setup(cfg Config, logger *zap.Logger) *Provider {
 		serviceName = "bahia"
 	}
 
-	// In production, this would initialize OTLP exporters:
-	// - go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc
-	// - go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc
-	// For now, we use manual metrics collection that exports via /metrics
+	// OTLP exporters are not wired yet. This provider currently offers
+	// in-process metrics collection surfaced via /metrics only.
+	if cfg.OTLPEndpoint != "" {
+		logger.Warn("telemetry OTLP endpoint configured but exporters are not implemented; endpoint will be ignored",
+			zap.String("otlp_endpoint", cfg.OTLPEndpoint),
+		)
+	}
 
 	logger.Info("telemetry initialized",
 		zap.String("service", serviceName),
 		zap.String("version", cfg.ServiceVersion),
 		zap.String("environment", cfg.Environment),
-		zap.String("otlp_endpoint", cfg.OTLPEndpoint),
+		zap.String("export_mode", "manual_metrics_only"),
 	)
 
 	return p
