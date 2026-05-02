@@ -192,7 +192,7 @@ func (h *SystemHandler) GetInfo(w http.ResponseWriter, r *http.Request) {
 		"auth":                   h.cfg.Auth.Enabled,
 		"nostr_auth_exchange":    h.cfg.Auth.JWTSecret != "",
 		"relay_sidecar":          h.cfg.Nostr.Sidecar.Enabled,
-		"relay_read_models":      false,
+		"relay_read_models":      h.cfg.Nostr.Sidecar.Enabled && h.cfg.Nostr.PublishEnabled,
 		"direct_nostr_http_auth": h.cfg.Auth.NIP98Enabled,
 		"mcp_transport":          false,
 		"legacy_sse":             true,

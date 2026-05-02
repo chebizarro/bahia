@@ -142,6 +142,17 @@ describe('SSE Store', () => {
       expect(events[1]).toEqual(event1);
     });
 
+    it('should call optional rollback bridge callback for incoming messages', () => {
+      const onEvent = vi.fn();
+      sseModule.connectEventStream({ onEvent });
+      MockEventSource.lastInstance.simulateOpen();
+
+      const event = { id: 'rollback-event', type: 'service.created' };
+      MockEventSource.lastInstance.simulateMessage(JSON.stringify(event));
+
+      expect(onEvent).toHaveBeenCalledWith(event);
+    });
+
     it('should update lastMessageAt on each message', () => {
       sseModule.connectEventStream();
       MockEventSource.lastInstance.simulateOpen();

@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { installE2EMocks, seedSseEvents } from './helpers.js';
+import { installE2EMocks, seedNostrEvents } from './helpers.js';
 
 // Mock data
 const mockWorkers = [
@@ -82,8 +82,66 @@ const mockEvents = [
   }
 ];
 
+function mockNostrActivityEvents(events) {
+  const pubkey = 'b'.repeat(64);
+  const base = Math.floor(Date.now() / 1000);
+  return events.map((event, index) => ({
+    id: `nostr-${event.id}`,
+    pubkey,
+    created_at: base - index * 60,
+    kind: 31000 + index,
+    tags: [
+      ['event_type', event.type],
+      ['d', event.id],
+      ['service', event.data?.service_id || event.entity_id || '']
+    ],
+    content: JSON.stringify({
+      event_type: event.type,
+      entity_id: event.entity_id,
+      data: event.data
+    })
+  }));
+}
+
+function mockNostrWorkerEvents(workers) {
+  const base = Math.floor(Date.now() / 1000);
+  return workers.map((worker, index) => ({
+    id: `nostr-worker-${index}`,
+    pubkey: worker.pubkey,
+    created_at: base - index,
+    kind: 10100,
+    tags: [
+      ['status', worker.status],
+      ['endpoint', worker.relay_url || '']
+    ],
+    content: JSON.stringify({
+      status: worker.status,
+      capabilities: worker.capabilities || [],
+      metadata: worker.metadata || {},
+      relay_url: worker.relay_url,
+      last_seen: worker.last_seen
+    })
+  }));
+}
+
 test.beforeEach(async ({ page }) => {
-  await installE2EMocks(page, { sseEvents: mockEvents });
+  await installE2EMocks(page, {
+    nostrEvents: [
+      ...mockNostrWorkerEvents(mockWorkers),
+      ...mockNostrActivityEvents(mockEvents)
+    ],
+    systemInfo: {
+      nostr: {
+        browser_relays: ['ws://localhost:10547/relay'],
+        service_pubkey: 'b'.repeat(64)
+      },
+      features: {
+        relay_sidecar: true,
+        relay_read_models: true,
+        legacy_sse: true
+      }
+    }
+  });
 
   // Mock workers list
   await page.route('**/api/v1/workers', (route) => {
@@ -96,7 +154,15 @@ test.beforeEach(async ({ page }) => {
   
   // Mock worker detail
   await page.route('**/api/v1/workers/*', (route) => {
-    const pubkey = route.request().url().match(/workers\/([^\/\?]+)/)?.[1];
+    const pathname = new URL(route.request().url()).pathname;
+    if (pathname.endsWith('/api/v1/workers')) {
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ data: mockWorkers })
+      });
+    }
+    const pubkey = pathname.match(/\/workers\/([^/]+)$/)?.[1];
     
     if (pubkey === 'npub1worker1abc123def456') {
       return route.fulfill({
@@ -251,13 +317,11 @@ test.describe('Workers and Events Smoke Test', () => {
     const table = page.locator('table, .events-table, .table');
     await expect(table.first()).toBeVisible();
     
-    // Event data is delivered through EventSource; this smoke assertion only
-    // requires the table shell to render safely under Svelte 5.
-    await expect(table.first()).toBeVisible();
+    await expect(page.getByText('deployment.started')).toBeVisible();
   });
   
   test('should display event timestamps', async ({ page }) => {
-    await seedSseEvents(page, mockEvents);
+    await seedNostrEvents(page, mockNostrActivityEvents(mockEvents));
     
     await page.goto('/events');
     await page.waitForLoadState('networkidle');
@@ -270,17 +334,16 @@ test.describe('Workers and Events Smoke Test', () => {
   });
   
   test('should show event types with badges or labels', async ({ page }) => {
-    await seedSseEvents(page, mockEvents);
+    await seedNostrEvents(page, mockNostrActivityEvents(mockEvents));
     
     await page.goto('/events');
     await page.waitForLoadState('networkidle');
     await page.waitForTimeout(800);
     
-    // Event type badges or the empty table should render safely.
-    await expect(page.locator('table, .events-table, .table').first()).toBeVisible();
+    await expect(page.getByText('drift.detected')).toBeVisible();
   });
   
-  test('should handle SSE connection gracefully', async ({ page }) => {
+  test('should handle relay connection gracefully', async ({ page }) => {
     const consoleErrors = [];
     page.on('console', (msg) => {
       if (msg.type() === 'error') {
@@ -292,13 +355,13 @@ test.describe('Workers and Events Smoke Test', () => {
     await page.waitForLoadState('networkidle');
     await page.waitForTimeout(1000);
     
-    // SSE-related errors are expected in test environment, but page should still render
+    // Relay-related errors are expected in test environment, but page should still render.
     const pageContent = await page.locator('body');
     await expect(pageContent).toBeVisible();
   });
   
   test('should show empty state when no events', async ({ page }) => {
-    await seedSseEvents(page, []);
+    await seedNostrEvents(page, []);
     
     await page.goto('/events');
     await page.waitForLoadState('networkidle');

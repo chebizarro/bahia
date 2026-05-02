@@ -12,8 +12,81 @@ export const KINDS = {
   PROVISIONING_STATUS: 6950,
   PROVISIONING_RESULT: 7950,
   SOUL_ACTION: 1950,
-  REPOSITORY: 30617
+  REPOSITORY: 30617,
+
+  // Bahia canonical control-plane/read-model kinds
+  BAHIA_REQUEST_DEPLOY: 5961,
+  BAHIA_REQUEST_ROLLBACK: 5962,
+  BAHIA_REQUEST_SERVICE_ACTION: 5963,
+  BAHIA_REQUEST_SERVICE_CREATE: 5964,
+  BAHIA_REQUEST_ENVIRONMENT_CREATE: 5965,
+  BAHIA_REQUEST_DEPLOYMENT_APPROVAL: 5966,
+  BAHIA_REQUEST_OBSERVATION_SUBMIT: 5967,
+  BAHIA_REQUEST_DRIFT_REMEDIATE: 5968,
+  BAHIA_DEPLOYMENT_STATUS: 6961,
+  BAHIA_SERVICE_STATUS: 6962,
+  BAHIA_DEPLOYMENT_RESULT: 7961,
+  BAHIA_ACTION_RESULT: 7962,
+  BAHIA_SERVICE_CREATE_RESULT: 7963,
+  BAHIA_ENVIRONMENT_CREATE_RESULT: 7964,
+  BAHIA_OBSERVATION_RESULT: 7965,
+  BAHIA_REMEDIATION_RESULT: 7966,
+  BAHIA_SERVICE_STATE: 31961,
+  BAHIA_SERVICE_REGISTRY: 31962,
+  BAHIA_ENVIRONMENT_REGISTRY: 31963,
+  LOOM_WORKER_AD: 10100
 };
+
+export const BAHIA_KINDS = {
+  DEPLOY_REQUEST: KINDS.BAHIA_REQUEST_DEPLOY,
+  ROLLBACK_REQUEST: KINDS.BAHIA_REQUEST_ROLLBACK,
+  SERVICE_ACTION: KINDS.BAHIA_REQUEST_SERVICE_ACTION,
+  SERVICE_CREATE: KINDS.BAHIA_REQUEST_SERVICE_CREATE,
+  ENVIRONMENT_CREATE: KINDS.BAHIA_REQUEST_ENVIRONMENT_CREATE,
+  DEPLOYMENT_APPROVAL: KINDS.BAHIA_REQUEST_DEPLOYMENT_APPROVAL,
+  OBSERVATION_SUBMIT: KINDS.BAHIA_REQUEST_OBSERVATION_SUBMIT,
+  DRIFT_REMEDIATE: KINDS.BAHIA_REQUEST_DRIFT_REMEDIATE,
+  DEPLOYMENT_STATUS: KINDS.BAHIA_DEPLOYMENT_STATUS,
+  SERVICE_STATUS: KINDS.BAHIA_SERVICE_STATUS,
+  DEPLOYMENT_RESULT: KINDS.BAHIA_DEPLOYMENT_RESULT,
+  ACTION_RESULT: KINDS.BAHIA_ACTION_RESULT,
+  SERVICE_CREATE_RESULT: KINDS.BAHIA_SERVICE_CREATE_RESULT,
+  ENVIRONMENT_CREATE_RESULT: KINDS.BAHIA_ENVIRONMENT_CREATE_RESULT,
+  OBSERVATION_RESULT: KINDS.BAHIA_OBSERVATION_RESULT,
+  REMEDIATION_RESULT: KINDS.BAHIA_REMEDIATION_RESULT,
+  SERVICE_STATE: KINDS.BAHIA_SERVICE_STATE,
+  SERVICE_REGISTRY: KINDS.BAHIA_SERVICE_REGISTRY,
+  ENVIRONMENT_REGISTRY: KINDS.BAHIA_ENVIRONMENT_REGISTRY,
+  WORKER_ADVERTISEMENT: KINDS.LOOM_WORKER_AD,
+  AUDIT_MIN: 31000,
+  AUDIT_MAX: 31099
+};
+
+export const BAHIA_READ_MODEL_KINDS = [
+  KINDS.BAHIA_SERVICE_REGISTRY,
+  KINDS.BAHIA_ENVIRONMENT_REGISTRY,
+  KINDS.BAHIA_SERVICE_STATE,
+  KINDS.LOOM_WORKER_AD
+];
+
+export const BAHIA_STATUS_KINDS = [
+  KINDS.BAHIA_DEPLOYMENT_STATUS,
+  KINDS.BAHIA_SERVICE_STATUS,
+  KINDS.BAHIA_DEPLOYMENT_RESULT,
+  KINDS.BAHIA_ACTION_RESULT,
+  KINDS.BAHIA_SERVICE_CREATE_RESULT,
+  KINDS.BAHIA_ENVIRONMENT_CREATE_RESULT,
+  KINDS.BAHIA_OBSERVATION_RESULT,
+  KINDS.BAHIA_REMEDIATION_RESULT
+];
+
+export const BAHIA_AUDIT_KINDS = Array.from({ length: 100 }, (_, i) => 31000 + i);
+
+export const BAHIA_CONTROLPLANE_KINDS = [
+  ...BAHIA_READ_MODEL_KINDS,
+  ...BAHIA_STATUS_KINDS,
+  ...BAHIA_AUDIT_KINDS
+];
 
 // Default relays - can be overridden via localStorage or connect() parameter
 const DEFAULT_RELAYS = [
@@ -75,9 +148,72 @@ export function getDefaultRelays() {
   return [...DEFAULT_RELAYS];
 }
 
-class NostrClient {
-  constructor() {
-    this.relays = getConfiguredRelays();
+export function getTagValues(event, name) {
+  if (!event || !Array.isArray(event.tags)) return [];
+  return event.tags
+    .filter(tag => Array.isArray(tag) && tag[0] === name && tag[1])
+    .map(tag => tag[1]);
+}
+
+export function getTagValue(event, name, fallback = '') {
+  const values = getTagValues(event, name);
+  return values.length > 0 ? values[values.length - 1] : fallback;
+}
+
+export function getDTag(event) {
+  return getTagValue(event, 'd', '');
+}
+
+export function replaceableKey(event) {
+  if (!event || !event.kind || !event.pubkey) return '';
+  const d = getDTag(event);
+  return d ? `${event.kind}:${event.pubkey}:${d}` : `${event.kind}:${event.pubkey}`;
+}
+
+export function parseJsonContent(event, fallback = {}) {
+  if (!event || !event.content) return fallback;
+  try {
+    return JSON.parse(event.content);
+  } catch {
+    return fallback;
+  }
+}
+
+export function isReplaceableTombstone(event) {
+  const content = parseJsonContent(event, {});
+  if (content?.deleted === true) return true;
+  return getTagValue(event, 'deleted') === 'true';
+}
+
+export function shouldAcceptReplaceableEvent(existing, incoming) {
+  if (!incoming?.id) return false;
+  if (!existing) return true;
+  if (existing.id === incoming.id) return false;
+  const incomingCreated = Number(incoming.created_at || 0);
+  const existingCreated = Number(existing.created_at || 0);
+  if (incomingCreated > existingCreated) return true;
+  if (incomingCreated < existingCreated) return false;
+  return String(incoming.id) > String(existing.id);
+}
+
+export function upsertReplaceableEvent(map, event) {
+  const key = replaceableKey(event);
+  if (!key) return { accepted: false, key: '', deleted: false };
+  const existing = map.get(key);
+  if (!shouldAcceptReplaceableEvent(existing, event)) {
+    return { accepted: false, key, deleted: false };
+  }
+  if (isReplaceableTombstone(event)) {
+    map.set(key, event);
+    return { accepted: true, key, deleted: true };
+  }
+  map.set(key, event);
+  return { accepted: true, key, deleted: false };
+}
+
+export class NostrClient {
+  constructor({ relays = getConfiguredRelays() } = {}) {
+    this.relays = relays;
     this.sockets = new Map();
     this.subscriptions = new Map();
     this.subIdCounter = 0;
@@ -85,6 +221,7 @@ class NostrClient {
     this.connectionStatus = writable({});
     this.reconnectAttempts = new Map();
     this.reconnectTimers = new Map();
+    this.manuallyDisconnected = false;
   }
 
   // Calculate exponential backoff delay
@@ -109,6 +246,7 @@ class NostrClient {
 
   // Connect to all relays
   async connect(relays = this.relays) {
+    this.manuallyDisconnected = false;
     this.relays = relays;
     console.log(`[nostr] Connecting to ${relays.length} relay(s):`, relays);
     
@@ -153,6 +291,7 @@ class NostrClient {
         this.connectionStatus.update(s => ({ ...s, [url]: 'connected' }));
         this.reconnectAttempts.set(url, 0);
         this.updateConnectedStatus();
+        this.reissueSubscriptions(url, ws);
         resolve();
       };
 
@@ -161,7 +300,10 @@ class NostrClient {
         this.sockets.delete(url);
         this.connectionStatus.update(s => ({ ...s, [url]: 'disconnected' }));
         this.updateConnectedStatus();
-        this.scheduleReconnect(url);
+        this.notifyRelayClosed(url, 'relay connection closed');
+        if (!this.manuallyDisconnected) {
+          this.scheduleReconnect(url);
+        }
       };
 
       ws.onerror = (err) => {
@@ -251,6 +393,15 @@ class NostrClient {
           const [eventId, success, message] = rest;
           break;
 
+        case 'CLOSED': {
+          const reason = rest[0] || '';
+          const subClosed = this.subscriptions.get(subId);
+          if (subClosed && subClosed.onClosed) {
+            subClosed.onClosed(reason, relay);
+          }
+          break;
+        }
+
         case 'NOTICE':
           console.log(`[nostr] Notice from ${relay}:`, rest[0]);
           break;
@@ -261,17 +412,12 @@ class NostrClient {
   }
 
   // Subscribe to events
-  subscribe(filters, { onEvent, onEose } = {}) {
+  subscribe(filters, { onEvent, onEose, onClosed } = {}) {
     const subId = `sub_${++this.subIdCounter}`;
     
-    this.subscriptions.set(subId, { filters, onEvent, onEose, events: [] });
+    this.subscriptions.set(subId, { filters, onEvent, onEose, onClosed, events: [] });
 
-    const req = JSON.stringify(['REQ', subId, ...filters]);
-    this.sockets.forEach((ws, url) => {
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.send(req);
-      }
-    });
+    this.sendSubscription(subId);
 
     return () => {
       this.subscriptions.delete(subId);
@@ -282,6 +428,80 @@ class NostrClient {
         }
       });
     };
+  }
+
+  sendSubscription(subId, relayUrl = null) {
+    const sub = this.subscriptions.get(subId);
+    if (!sub) return;
+
+    const req = JSON.stringify(['REQ', subId, ...sub.filters]);
+    if (relayUrl) {
+      const ws = this.sockets.get(relayUrl);
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(req);
+      }
+      return;
+    }
+
+    this.sockets.forEach((ws) => {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(req);
+      }
+    });
+  }
+
+  reissueSubscriptions(relayUrl, ws) {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    this.subscriptions.forEach((_sub, subId) => {
+      this.sendSubscription(subId, relayUrl);
+    });
+  }
+
+  notifyRelayClosed(relayUrl, reason) {
+    this.subscriptions.forEach((sub) => {
+      if (sub.onClosed) {
+        sub.onClosed(reason, relayUrl);
+      }
+    });
+  }
+
+  // One-shot query that resolves only when all currently connected relays send EOSE.
+  async queryUntilEose(filters) {
+    return new Promise((resolve) => {
+      const events = [];
+      const pendingRelays = new Set(
+        Array.from(this.sockets.entries())
+          .filter(([, ws]) => ws.readyState === WebSocket.OPEN)
+          .map(([url]) => url)
+      );
+
+      if (pendingRelays.size === 0) {
+        resolve([]);
+        return;
+      }
+
+      const unsub = this.subscribe(filters, {
+        onEvent: (event) => {
+          if (!events.find(e => e.id === event.id)) {
+            events.push(event);
+          }
+        },
+        onEose: (relay) => {
+          pendingRelays.delete(relay);
+          if (pendingRelays.size === 0) {
+            unsub();
+            resolve(events);
+          }
+        },
+        onClosed: (_reason, relay) => {
+          pendingRelays.delete(relay);
+          if (pendingRelays.size === 0) {
+            unsub();
+            resolve(events);
+          }
+        }
+      });
+    });
   }
 
   // One-shot query
@@ -335,6 +555,7 @@ class NostrClient {
 
   // Close all connections
   disconnect() {
+    this.manuallyDisconnected = true;
     this.subscriptions.clear();
     
     this.reconnectTimers.forEach(timer => clearTimeout(timer));

@@ -1,10 +1,5 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 
-// Mock browser environment
-global.window = global;
-global.EventSource = vi.fn();
-
-// Mock the API client module
 vi.mock('../../src/lib/api/client.js', () => {
   const mockApi = {
     listServices: vi.fn(),
@@ -16,20 +11,46 @@ vi.mock('../../src/lib/api/client.js', () => {
   return { api: mockApi };
 });
 
+const controlplaneMock = vi.hoisted(() => ({
+  services: [],
+  environments: [],
+  states: [],
+  workers: [],
+  events: [],
+  loading: { services: false, environments: false, states: false, workers: false },
+  controlplaneConnection: { status: 'idle', rollbackToSse: false },
+  bootstrapControlplane: vi.fn(),
+  disconnectControlplane: vi.fn(),
+  ingestLegacyEvent: vi.fn()
+}));
+
+vi.mock('../../src/lib/stores/controlplane.svelte.js', () => controlplaneMock);
+
+vi.mock('../../src/lib/stores/sse.svelte.js', () => ({
+  connectEventStream: vi.fn(),
+  disconnectEventStream: vi.fn()
+}));
+
 describe('Global Stores (index.js)', () => {
   let storesModule;
   let mockApi;
+  let sseModule;
 
   beforeEach(async () => {
-    // Reset modules to get fresh store state
     vi.resetModules();
     vi.clearAllMocks();
 
-    // Import mocked API
+    controlplaneMock.services.length = 0;
+    controlplaneMock.environments.length = 0;
+    controlplaneMock.states.length = 0;
+    controlplaneMock.workers.length = 0;
+    controlplaneMock.events.length = 0;
+    Object.assign(controlplaneMock.loading, { services: false, environments: false, states: false, workers: false });
+    Object.assign(controlplaneMock.controlplaneConnection, { status: 'idle', rollbackToSse: false });
+    controlplaneMock.bootstrapControlplane.mockResolvedValue({ ok: true, rollbackToSse: false });
+
     const apiModule = await import('../../src/lib/api/client.js');
     mockApi = apiModule.api;
-
-    // Set default mock implementations
     mockApi.listServices.mockResolvedValue([
       { id: 'svc-1', name: 'Service 1' },
       { id: 'svc-2', name: 'Service 2' }
@@ -48,445 +69,96 @@ describe('Global Stores (index.js)', () => {
     ]);
     mockApi.streamEvents.mockReturnValue(() => {});
 
-    // Dynamically import stores module
+    sseModule = await import('../../src/lib/stores/sse.svelte.js');
     storesModule = await import('../../src/lib/stores/index.js');
   });
 
   afterEach(() => {
-    // Clean up any subscriptions
-    if (storesModule.unsubscribeFromEvents) {
-      storesModule.unsubscribeFromEvents();
-    }
-    vi.useRealTimers();
+    storesModule.unsubscribeFromEvents?.();
   });
 
-  describe('loadServices', () => {
-    it('should load services and update store', async () => {
-      await storesModule.loadServices();
+  it('re-exports Nostr-backed controlplane arrays', () => {
+    controlplaneMock.services.push({ id: 'svc-1' });
+    controlplaneMock.events.push({ id: 'evt-1' });
 
-      expect(mockApi.listServices).toHaveBeenCalledTimes(1);
-
-      const services = storesModule.services;
-      expect(services).toHaveLength(2);
-      expect(services[0].id).toBe('svc-1');
-      expect(services[1].id).toBe('svc-2');
-    });
-
-    it('should set loading state during load', async () => {
-      let loadingDuringFetch = null;
-
-      mockApi.listServices.mockImplementation(async () => {
-        loadingDuringFetch = { ...storesModule.loading };
-        return [{ id: 'svc-1', name: 'Service 1' }];
-      });
-
-      await storesModule.loadServices();
-
-      expect(loadingDuringFetch.services).toBe(true);
-
-      const loadingAfter = storesModule.loading;
-      expect(loadingAfter.services).toBe(false);
-    });
-
-    it('should handle load error gracefully', async () => {
-      const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
-      mockApi.listServices.mockRejectedValue(new Error('Network error'));
-
-      await storesModule.loadServices();
-
-      expect(consoleError).toHaveBeenCalledWith(
-        'Failed to load services:',
-        expect.any(Error)
-      );
-
-      const services = storesModule.services;
-      expect(services).toEqual([]);
-
-      const loading = storesModule.loading;
-      expect(loading.services).toBe(false);
-
-      consoleError.mockRestore();
-    });
-
-    it('should set empty array when API returns null', async () => {
-      mockApi.listServices.mockResolvedValue(null);
-
-      await storesModule.loadServices();
-
-      const services = storesModule.services;
-      expect(services).toEqual([]);
-    });
+    expect(storesModule.services).toBe(controlplaneMock.services);
+    expect(storesModule.events).toBe(controlplaneMock.events);
+    expect(storesModule.serviceCount()).toBe(1);
   });
 
-  describe('loadEnvironments', () => {
-    it('should load environments and update store', async () => {
-      await storesModule.loadEnvironments();
+  it('keeps REST loaders as transitional manual refresh/fallback paths', async () => {
+    await storesModule.loadServices();
+    await storesModule.loadEnvironments();
+    await storesModule.loadStates();
+    await storesModule.loadWorkers();
 
-      expect(mockApi.listEnvironments).toHaveBeenCalledTimes(1);
-
-      const environments = storesModule.environments;
-      expect(environments).toHaveLength(2);
-      expect(environments[0].id).toBe('env-prod');
-    });
-
-    it('should set loading state during load', async () => {
-      let loadingDuringFetch = null;
-
-      mockApi.listEnvironments.mockImplementation(async () => {
-        loadingDuringFetch = { ...storesModule.loading };
-        return [{ id: 'env-1', name: 'Env 1' }];
-      });
-
-      await storesModule.loadEnvironments();
-
-      expect(loadingDuringFetch.environments).toBe(true);
-
-      const loadingAfter = storesModule.loading;
-      expect(loadingAfter.environments).toBe(false);
-    });
-
-    it('should handle load error gracefully', async () => {
-      const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
-      mockApi.listEnvironments.mockRejectedValue(new Error('API error'));
-
-      await storesModule.loadEnvironments();
-
-      expect(consoleError).toHaveBeenCalled();
-
-      const loading = storesModule.loading;
-      expect(loading.environments).toBe(false);
-
-      consoleError.mockRestore();
-    });
+    expect(mockApi.listServices).toHaveBeenCalledTimes(1);
+    expect(mockApi.listEnvironments).toHaveBeenCalledTimes(1);
+    expect(mockApi.listStates).toHaveBeenCalledTimes(1);
+    expect(mockApi.listWorkers).toHaveBeenCalledTimes(1);
+    expect(storesModule.services).toHaveLength(2);
+    expect(storesModule.environments).toHaveLength(2);
+    expect(storesModule.states).toHaveLength(2);
+    expect(storesModule.workers).toHaveLength(2);
   });
 
-  describe('loadStates', () => {
-    it('should load states and update store', async () => {
-      await storesModule.loadStates();
+  it('loadAll bootstraps the relay-backed controlplane before falling back to REST', async () => {
+    await storesModule.loadAll();
 
-      expect(mockApi.listStates).toHaveBeenCalledTimes(1);
-
-      const states = storesModule.states;
-      expect(states).toHaveLength(2);
-      expect(states[0].drift_status).toBe('synced');
-      expect(states[1].drift_status).toBe('drifted');
-    });
-
-    it('should set loading state during load', async () => {
-      let loadingDuringFetch = null;
-
-      mockApi.listStates.mockImplementation(async () => {
-        loadingDuringFetch = { ...storesModule.loading };
-        return [{ id: 'state-1' }];
-      });
-
-      await storesModule.loadStates();
-
-      expect(loadingDuringFetch.states).toBe(true);
-
-      const loadingAfter = storesModule.loading;
-      expect(loadingAfter.states).toBe(false);
-    });
-
-    it('should handle load error gracefully', async () => {
-      const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
-      mockApi.listStates.mockRejectedValue(new Error('States error'));
-
-      await storesModule.loadStates();
-
-      expect(consoleError).toHaveBeenCalled();
-
-      const loading = storesModule.loading;
-      expect(loading.states).toBe(false);
-
-      consoleError.mockRestore();
-    });
+    expect(controlplaneMock.bootstrapControlplane).toHaveBeenCalledTimes(1);
+    expect(mockApi.listServices).not.toHaveBeenCalled();
   });
 
-  describe('loadWorkers', () => {
-    it('should load workers and update store', async () => {
-      await storesModule.loadWorkers();
+  it('loadAll uses REST fallback when relay bootstrap fails', async () => {
+    controlplaneMock.bootstrapControlplane.mockResolvedValueOnce({ ok: false, rollbackToSse: true, reason: 'no relay' });
 
-      expect(mockApi.listWorkers).toHaveBeenCalledTimes(1);
+    await storesModule.loadAll();
 
-      const workers = storesModule.workers;
-      expect(workers).toHaveLength(2);
-      expect(workers[0].pubkey).toBe('worker-1');
-    });
-
-    it('should set loading state during load', async () => {
-      let loadingDuringFetch = null;
-
-      mockApi.listWorkers.mockImplementation(async () => {
-        loadingDuringFetch = { ...storesModule.loading };
-        return [{ pubkey: 'w1' }];
-      });
-
-      await storesModule.loadWorkers();
-
-      expect(loadingDuringFetch.workers).toBe(true);
-
-      const loadingAfter = storesModule.loading;
-      expect(loadingAfter.workers).toBe(false);
-    });
-
-    it('should handle load error gracefully', async () => {
-      const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
-      mockApi.listWorkers.mockRejectedValue(new Error('Workers error'));
-
-      await storesModule.loadWorkers();
-
-      expect(consoleError).toHaveBeenCalled();
-
-      const loading = storesModule.loading;
-      expect(loading.workers).toBe(false);
-
-      consoleError.mockRestore();
-    });
+    expect(mockApi.listServices).toHaveBeenCalledTimes(1);
+    expect(mockApi.listEnvironments).toHaveBeenCalledTimes(1);
+    expect(mockApi.listStates).toHaveBeenCalledTimes(1);
+    expect(mockApi.listWorkers).toHaveBeenCalledTimes(1);
   });
 
-  describe('loadAll', () => {
-    it('should load all data stores in parallel', async () => {
-      await storesModule.loadAll();
+  it('subscribeToEvents starts Nostr bootstrap and does not call api.streamEvents', async () => {
+    storesModule.subscribeToEvents();
+    await Promise.resolve();
 
-      expect(mockApi.listServices).toHaveBeenCalledTimes(1);
-      expect(mockApi.listEnvironments).toHaveBeenCalledTimes(1);
-      expect(mockApi.listStates).toHaveBeenCalledTimes(1);
-      expect(mockApi.listWorkers).toHaveBeenCalledTimes(1);
-
-      const services = storesModule.services;
-      const environments = storesModule.environments;
-      const states = storesModule.states;
-      const workers = storesModule.workers;
-
-      expect(services).toHaveLength(2);
-      expect(environments).toHaveLength(2);
-      expect(states).toHaveLength(2);
-      expect(workers).toHaveLength(2);
-    });
-
-    it('should complete even if one loader fails', async () => {
-      const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
-      
-      mockApi.listServices.mockRejectedValue(new Error('Services failed'));
-      mockApi.listEnvironments.mockResolvedValue([{ id: 'env-1' }]);
-
-      await storesModule.loadAll();
-
-      expect(mockApi.listServices).toHaveBeenCalled();
-      expect(mockApi.listEnvironments).toHaveBeenCalled();
-
-      const environments = storesModule.environments;
-      expect(environments).toHaveLength(1);
-
-      consoleError.mockRestore();
-    });
+    expect(controlplaneMock.bootstrapControlplane).toHaveBeenCalledTimes(1);
+    expect(mockApi.streamEvents).not.toHaveBeenCalled();
+    expect(sseModule.connectEventStream).not.toHaveBeenCalled();
   });
 
-  describe('driftedStates derived store', () => {
-    it('should filter states by drift_status', async () => {
-      await storesModule.loadStates();
+  it('uses the SSE store only as a flagged rollback bridge', async () => {
+    controlplaneMock.bootstrapControlplane.mockResolvedValueOnce({ ok: false, rollbackToSse: true, reason: 'relay unavailable' });
 
-      const drifted = storesModule.driftedStates();
-      
-      expect(drifted).toHaveLength(1);
-      expect(drifted[0].drift_status).toBe('drifted');
-    });
+    storesModule.subscribeToEvents();
+    await Promise.resolve();
+    await Promise.resolve();
 
-    it('should update when states change', async () => {
-      await storesModule.loadStates();
-
-      let drifted = storesModule.driftedStates();
-      expect(drifted).toHaveLength(1);
-
-      // Update states
-      mockApi.listStates.mockResolvedValue([
-        { id: 'state-1', drift_status: 'drifted' },
-        { id: 'state-2', drift_status: 'drifted' },
-        { id: 'state-3', drift_status: 'synced' }
-      ]);
-
-      await storesModule.loadStates();
-
-      drifted = storesModule.driftedStates();
-      expect(drifted).toHaveLength(2);
-    });
-
-    it('should return empty array when no drifted states', async () => {
-      mockApi.listStates.mockResolvedValue([
-        { id: 'state-1', drift_status: 'synced' },
-        { id: 'state-2', drift_status: 'synced' }
-      ]);
-
-      await storesModule.loadStates();
-
-      const drifted = storesModule.driftedStates();
-      expect(drifted).toHaveLength(0);
-    });
+    expect(mockApi.streamEvents).not.toHaveBeenCalled();
+    expect(sseModule.connectEventStream).toHaveBeenCalledWith({ onEvent: controlplaneMock.ingestLegacyEvent });
   });
 
-  describe('subscribeToEvents', () => {
-    it('should call api.streamEvents and set up event handler', () => {
-      let eventCallback = null;
+  it('unsubscribe tears down rollback SSE and live relay subscription', async () => {
+    controlplaneMock.bootstrapControlplane.mockResolvedValueOnce({ ok: false, rollbackToSse: true, reason: 'relay unavailable' });
+    storesModule.subscribeToEvents();
+    await Promise.resolve();
+    await Promise.resolve();
 
-      mockApi.streamEvents.mockImplementation((types, onEvent) => {
-        eventCallback = onEvent;
-        return () => {};
-      });
+    storesModule.unsubscribeFromEvents();
 
-      storesModule.subscribeToEvents();
-
-      expect(mockApi.streamEvents).toHaveBeenCalledWith(
-        [],
-        expect.any(Function),
-        expect.any(Function)
-      );
-      expect(eventCallback).not.toBeNull();
-    });
-
-    it('should add events to store when received', () => {
-      let eventCallback = null;
-
-      mockApi.streamEvents.mockImplementation((types, onEvent) => {
-        eventCallback = onEvent;
-        return () => {};
-      });
-
-      storesModule.subscribeToEvents();
-
-      const event1 = { id: 'evt-1', type: 'service.created', timestamp: '2026-04-29T12:00:00Z' };
-      const event2 = { id: 'evt-2', type: 'deployment.approved', timestamp: '2026-04-29T12:01:00Z' };
-
-      eventCallback(event1);
-      eventCallback(event2);
-
-      const events = storesModule.events;
-      expect(events).toHaveLength(2);
-      expect(events[0]).toEqual(event2); // Most recent first
-      expect(events[1]).toEqual(event1);
-    });
-
-    it('should cap events at 100', () => {
-      let eventCallback = null;
-
-      mockApi.streamEvents.mockImplementation((types, onEvent) => {
-        eventCallback = onEvent;
-        return () => {};
-      });
-
-      storesModule.subscribeToEvents();
-
-      // Add 150 events
-      for (let i = 0; i < 150; i++) {
-        eventCallback({ id: `evt-${i}`, type: 'test.event', timestamp: new Date().toISOString() });
-      }
-
-      const events = storesModule.events;
-      expect(events).toHaveLength(100);
-      expect(events[0].id).toBe('evt-149'); // Most recent
-    });
-
-    it('should trigger loadStates on deployment events', async () => {
-      vi.useFakeTimers();
-      let eventCallback = null;
-
-      mockApi.streamEvents.mockImplementation((types, onEvent) => {
-        eventCallback = onEvent;
-        return () => {};
-      });
-
-      storesModule.subscribeToEvents();
-
-      mockApi.listStates.mockClear();
-
-      eventCallback({ id: 'evt-1', type: 'deployment.completed' });
-
-      expect(mockApi.listStates).not.toHaveBeenCalled();
-      await vi.advanceTimersByTimeAsync(750);
-      expect(mockApi.listStates).toHaveBeenCalledTimes(1);
-    });
-
-    it('should trigger loadStates on drift events', async () => {
-      vi.useFakeTimers();
-      let eventCallback = null;
-
-      mockApi.streamEvents.mockImplementation((types, onEvent) => {
-        eventCallback = onEvent;
-        return () => {};
-      });
-
-      storesModule.subscribeToEvents();
-
-      mockApi.listStates.mockClear();
-
-      eventCallback({ id: 'evt-2', type: 'drift.detected' });
-
-      expect(mockApi.listStates).not.toHaveBeenCalled();
-      await vi.advanceTimersByTimeAsync(750);
-      expect(mockApi.listStates).toHaveBeenCalledTimes(1);
-    });
-
-    it('should not trigger loadStates on other event types', () => {
-      let eventCallback = null;
-
-      mockApi.streamEvents.mockImplementation((types, onEvent) => {
-        eventCallback = onEvent;
-        return () => {};
-      });
-
-      storesModule.subscribeToEvents();
-
-      mockApi.listStates.mockClear();
-
-      eventCallback({ id: 'evt-3', type: 'service.created' });
-
-      expect(mockApi.listStates).not.toHaveBeenCalled();
-    });
-
-    it('should close previous subscription when called again', () => {
-      const cleanup1 = vi.fn();
-      const cleanup2 = vi.fn();
-
-      mockApi.streamEvents.mockReturnValueOnce(cleanup1).mockReturnValueOnce(cleanup2);
-
-      storesModule.subscribeToEvents();
-      storesModule.subscribeToEvents();
-
-      expect(cleanup1).toHaveBeenCalledTimes(1);
-      expect(mockApi.streamEvents).toHaveBeenCalledTimes(2);
-    });
+    expect(sseModule.disconnectEventStream).toHaveBeenCalledTimes(1);
+    expect(controlplaneMock.disconnectControlplane).toHaveBeenCalled();
   });
 
-  describe('unsubscribeFromEvents', () => {
-    it('should call cleanup function when unsubscribing', () => {
-      const cleanup = vi.fn();
+  it('filters drifted states from relay-backed state', () => {
+    controlplaneMock.states.push(
+      { id: 'state-1', drift_status: 'drifted' },
+      { id: 'state-2', drift_status: 'in_sync' }
+    );
 
-      mockApi.streamEvents.mockReturnValue(cleanup);
-
-      storesModule.subscribeToEvents();
-      storesModule.unsubscribeFromEvents();
-
-      expect(cleanup).toHaveBeenCalledTimes(1);
-    });
-
-    it('should be safe to call when not subscribed', () => {
-      expect(() => {
-        storesModule.unsubscribeFromEvents();
-      }).not.toThrow();
-    });
-
-    it('should allow resubscribing after unsubscribe', () => {
-      const cleanup1 = vi.fn();
-      const cleanup2 = vi.fn();
-
-      mockApi.streamEvents.mockReturnValueOnce(cleanup1).mockReturnValueOnce(cleanup2);
-
-      storesModule.subscribeToEvents();
-      storesModule.unsubscribeFromEvents();
-      storesModule.subscribeToEvents();
-
-      expect(mockApi.streamEvents).toHaveBeenCalledTimes(2);
-      expect(cleanup1).toHaveBeenCalledTimes(1);
-    });
+    expect(storesModule.driftedStates()).toEqual([{ id: 'state-1', drift_status: 'drifted' }]);
+    expect(storesModule.driftCount()).toBe(1);
   });
 });

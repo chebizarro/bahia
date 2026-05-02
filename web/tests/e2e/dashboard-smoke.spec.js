@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { installE2EMocks, seedSseEvents } from './helpers.js';
+import { installE2EMocks, seedNostrEvents } from './helpers.js';
 
 // Mock data
 const mockServices = [
@@ -150,8 +150,56 @@ const mockEvents = [
   }
 ];
 
+const SERVICE_PUBKEY = 'b'.repeat(64);
+const now = Math.floor(Date.now() / 1000);
+
+function nostrEvent({ id, kind, pubkey = SERVICE_PUBKEY, created_at = now, tags = [], content = {} }) {
+  return { id, kind, pubkey, created_at, tags, content: JSON.stringify(content), sig: '0'.repeat(128) };
+}
+
+function dashboardNostrEvents({ services = mockServices, environments = mockEnvironments, states = mockStates, workers = mockWorkers, events = mockEvents } = {}) {
+  return [
+    ...services.map((svc, index) => nostrEvent({
+      id: `svc-${index}`,
+      kind: 31962,
+      tags: [['d', svc.id], ['deleted', 'false'], ['name', svc.name]],
+      content: { ...svc, deleted: false }
+    })),
+    ...environments.map((env, index) => nostrEvent({
+      id: `env-${index}`,
+      kind: 31963,
+      tags: [['d', env.id], ['deleted', 'false'], ['name', env.name]],
+      content: { ...env, deleted: false }
+    })),
+    ...states.map((state, index) => nostrEvent({
+      id: `state-${index}`,
+      kind: 31961,
+      tags: [['d', state.id || `${state.service_id}:${state.environment_id}`], ['service', state.service_id], ['environment', state.environment_id], ['deleted', 'false']],
+      content: { ...state, deleted: false }
+    })),
+    ...workers.map((worker, index) => nostrEvent({
+      id: `worker-${index}`,
+      kind: 10100,
+      pubkey: worker.pubkey,
+      content: { ...worker, name: worker.name || worker.pubkey }
+    })),
+    ...events.map((event, index) => nostrEvent({
+      id: `activity-${index}`,
+      kind: 31006,
+      created_at: now - index * 60,
+      tags: [['event_type', event.type], ['d', event.entity_id || event.id]],
+      content: { event_type: event.type, entity_id: event.entity_id, data: event.data }
+    }))
+  ];
+}
+
+const relaySystemInfo = {
+  nostr: { browser_relays: ['ws://relay.test.local'], service_pubkey: SERVICE_PUBKEY },
+  features: { relay_sidecar: true, relay_read_models: true, legacy_sse: true }
+};
+
 test.beforeEach(async ({ page }) => {
-  await installE2EMocks(page, { sseEvents: mockEvents });
+  await installE2EMocks(page, { systemInfo: relaySystemInfo, nostrEvents: dashboardNostrEvents() });
 
   // Mock services
   await page.route('**/api/v1/services', (route) => {
@@ -390,8 +438,8 @@ test.describe('Dashboard Smoke Test', () => {
   });
   
   test('should handle empty recent activity gracefully', async ({ page }) => {
-    // Override events to return empty
-    await seedSseEvents(page, []);
+    // Override relay activity to return empty
+    await seedNostrEvents(page, dashboardNostrEvents({ events: [] }));
     
     await page.goto('/');
     await page.waitForLoadState('networkidle');

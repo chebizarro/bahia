@@ -8,6 +8,10 @@ describe('Nostr Client - Parsing Functions', () => {
   let parseSoulEvent;
   let parseTemplateEvent;
   let KINDS;
+  let replaceableKey;
+  let shouldAcceptReplaceableEvent;
+  let isReplaceableTombstone;
+  let NostrClient;
 
   beforeEach(async () => {
     // Reset modules to avoid state leakage
@@ -18,6 +22,12 @@ describe('Nostr Client - Parsing Functions', () => {
     parseSoulEvent = module.parseSoulEvent;
     parseTemplateEvent = module.parseTemplateEvent;
     KINDS = module.KINDS;
+    replaceableKey = module.replaceableKey;
+    shouldAcceptReplaceableEvent = module.shouldAcceptReplaceableEvent;
+    isReplaceableTombstone = module.isReplaceableTombstone;
+    NostrClient = module.NostrClient;
+    global.WebSocket.OPEN = 1;
+    global.WebSocket.CONNECTING = 0;
   });
 
   describe('KINDS constants', () => {
@@ -29,6 +39,51 @@ describe('Nostr Client - Parsing Functions', () => {
       expect(KINDS.PROVISIONING_STATUS).toBe(6950);
       expect(KINDS.PROVISIONING_RESULT).toBe(7950);
       expect(KINDS.SOUL_ACTION).toBe(1950);
+    });
+
+    it('should export Bahia controlplane event kinds', () => {
+      expect(KINDS.BAHIA_SERVICE_STATE).toBe(31961);
+      expect(KINDS.BAHIA_SERVICE_REGISTRY).toBe(31962);
+      expect(KINDS.BAHIA_ENVIRONMENT_REGISTRY).toBe(31963);
+      expect(KINDS.LOOM_WORKER_AD).toBe(10100);
+      expect(KINDS.BAHIA_DEPLOYMENT_STATUS).toBe(6961);
+      expect(KINDS.BAHIA_DEPLOYMENT_RESULT).toBe(7961);
+    });
+  });
+
+  describe('replaceable event helpers', () => {
+    it('should build replaceable keys using kind, pubkey, and d-tag', () => {
+      const pubkey = 'a'.repeat(64);
+      expect(replaceableKey({ kind: 31962, pubkey, tags: [['d', 'svc-1']] })).toBe(`31962:${pubkey}:svc-1`);
+      expect(replaceableKey({ kind: 10100, pubkey, tags: [] })).toBe(`10100:${pubkey}`);
+    });
+
+    it('should accept latest replaceable events and reject stale duplicates', () => {
+      const existing = { id: 'old', created_at: 100 };
+      expect(shouldAcceptReplaceableEvent(existing, { id: 'new', created_at: 101 })).toBe(true);
+      expect(shouldAcceptReplaceableEvent(existing, { id: 'stale', created_at: 99 })).toBe(false);
+      expect(shouldAcceptReplaceableEvent(existing, { id: 'old', created_at: 100 })).toBe(false);
+    });
+
+    it('should detect replaceable tombstones from content or tags', () => {
+      expect(isReplaceableTombstone({ content: JSON.stringify({ deleted: true }), tags: [] })).toBe(true);
+      expect(isReplaceableTombstone({ content: '{}', tags: [['deleted', 'true']] })).toBe(true);
+      expect(isReplaceableTombstone({ content: '{}', tags: [['deleted', 'false']] })).toBe(false);
+    });
+  });
+
+  describe('queryUntilEose', () => {
+    it('resolves pending bootstrap queries when a relay transport closes', async () => {
+      const client = new NostrClient({ relays: [] });
+      const socket = { readyState: WebSocket.OPEN, send: vi.fn() };
+      client.sockets.set('ws://relay.example', socket);
+
+      const query = client.queryUntilEose([{ kinds: [31962] }]);
+      expect(socket.send).toHaveBeenCalledWith(expect.stringContaining('"REQ"'));
+
+      client.notifyRelayClosed('ws://relay.example', 'relay connection closed');
+
+      await expect(query).resolves.toEqual([]);
     });
   });
 

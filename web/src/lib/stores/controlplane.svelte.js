@@ -1,0 +1,463 @@
+import { browser } from '$app/environment';
+import { get } from 'svelte/store';
+import { api } from '../api/client.js';
+import {
+  nostr,
+  KINDS,
+  BAHIA_READ_MODEL_KINDS,
+  BAHIA_STATUS_KINDS,
+  BAHIA_AUDIT_KINDS,
+  getDTag,
+  getTagValue,
+  isReplaceableTombstone,
+  parseJsonContent,
+  upsertReplaceableEvent
+} from '../nostr/client.js';
+
+const MAX_ACTIVITY = 100;
+const ACTIVITY_BACKFILL_LIMIT = 100;
+const READ_MODEL_LIMIT = 1000;
+const ACTIVITY_BACKFILL_SECONDS = 7 * 24 * 60 * 60;
+
+export const controlplaneConnection = $state({
+  status: 'idle', // idle | discovering | connecting | bootstrapping | live | rollback_sse | error | disconnected
+  connected: false,
+  ready: false,
+  bootstrapComplete: false,
+  relays: [],
+  servicePubkey: '',
+  lastError: null,
+  lastEoseAt: null,
+  lastEventAt: null,
+  rollbackToSse: false,
+  legacySseEnabled: false,
+  reconnects: 0
+});
+
+export const services = $state([]);
+export const environments = $state([]);
+export const states = $state([]);
+export const workers = $state([]);
+export const events = $state([]);
+
+export const loading = $state({
+  services: false,
+  environments: false,
+  states: false,
+  workers: false
+});
+
+const replaceableEvents = new Map();
+const seenEventIds = new Set();
+const serviceMap = new Map();
+const environmentMap = new Map();
+const stateMap = new Map();
+const workerMap = new Map();
+const activityMap = new Map();
+
+let bootstrapPromise = null;
+let liveUnsubscribe = null;
+let connectedUnsubscribe = null;
+let lastConnected = false;
+
+function setAllLoading(value) {
+  loading.services = value;
+  loading.environments = value;
+  loading.states = value;
+  loading.workers = value;
+}
+
+function resetArrays() {
+  services.length = 0;
+  environments.length = 0;
+  states.length = 0;
+  workers.length = 0;
+  events.length = 0;
+}
+
+function replaceArray(target, values) {
+  target.length = 0;
+  target.push(...values);
+}
+
+function sortByNameOrId(a, b) {
+  const left = String(a.name || a.id || a.pubkey || '');
+  const right = String(b.name || b.id || b.pubkey || '');
+  return left.localeCompare(right);
+}
+
+function refreshCollections() {
+  replaceArray(services, Array.from(serviceMap.values()).sort(sortByNameOrId));
+  replaceArray(environments, Array.from(environmentMap.values()).sort(sortByNameOrId));
+  replaceArray(states, Array.from(stateMap.values()).sort(sortByNameOrId));
+  replaceArray(workers, Array.from(workerMap.values()).sort(sortByNameOrId));
+  replaceArray(
+    events,
+    Array.from(activityMap.values())
+      .sort((a, b) => String(b.time || '').localeCompare(String(a.time || '')))
+      .slice(0, MAX_ACTIVITY)
+  );
+}
+
+export function resetControlplaneStore() {
+  if (liveUnsubscribe) {
+    liveUnsubscribe();
+    liveUnsubscribe = null;
+  }
+  if (connectedUnsubscribe) {
+    connectedUnsubscribe();
+    connectedUnsubscribe = null;
+  }
+  bootstrapPromise = null;
+  replaceableEvents.clear();
+  seenEventIds.clear();
+  serviceMap.clear();
+  environmentMap.clear();
+  stateMap.clear();
+  workerMap.clear();
+  activityMap.clear();
+  resetArrays();
+  setAllLoading(false);
+  controlplaneConnection.status = 'idle';
+  controlplaneConnection.connected = false;
+  controlplaneConnection.ready = false;
+  controlplaneConnection.bootstrapComplete = false;
+  controlplaneConnection.relays = [];
+  controlplaneConnection.servicePubkey = '';
+  controlplaneConnection.lastError = null;
+  controlplaneConnection.lastEoseAt = null;
+  controlplaneConnection.lastEventAt = null;
+  controlplaneConnection.rollbackToSse = false;
+  controlplaneConnection.legacySseEnabled = false;
+  controlplaneConnection.reconnects = 0;
+  lastConnected = false;
+}
+
+function normalizeRelayUrl(url) {
+  if (!url || typeof url !== 'string') return '';
+  if (url.startsWith('ws://') || url.startsWith('wss://')) return url;
+  if (url.startsWith('https://')) return `wss://${url.slice('https://'.length)}`;
+  if (url.startsWith('http://')) return `ws://${url.slice('http://'.length)}`;
+  return url;
+}
+
+export function resolveBrowserRelays(systemInfo) {
+  const nostrInfo = systemInfo?.nostr || {};
+  const relays = [];
+
+  if (Array.isArray(nostrInfo.browser_relays)) {
+    relays.push(...nostrInfo.browser_relays);
+  }
+  if (nostrInfo.sidecar_url) {
+    relays.push(nostrInfo.sidecar_url);
+  }
+  if (relays.length === 0 && Array.isArray(nostrInfo.relays)) {
+    relays.push(...nostrInfo.relays);
+  }
+
+  return Array.from(new Set(relays.map(normalizeRelayUrl).filter(Boolean)));
+}
+
+function readModelFilters() {
+  return [
+    { kinds: BAHIA_READ_MODEL_KINDS, limit: READ_MODEL_LIMIT },
+    {
+      kinds: [...BAHIA_AUDIT_KINDS, ...BAHIA_STATUS_KINDS],
+      since: Math.floor(Date.now() / 1000) - ACTIVITY_BACKFILL_SECONDS,
+      limit: ACTIVITY_BACKFILL_LIMIT
+    }
+  ];
+}
+
+function liveFilters(since) {
+  return [
+    { kinds: BAHIA_READ_MODEL_KINDS, since },
+    { kinds: [...BAHIA_AUDIT_KINDS, ...BAHIA_STATUS_KINDS], since }
+  ];
+}
+
+function contentWithEventMeta(event) {
+  const content = parseJsonContent(event, {});
+  return {
+    ...content,
+    nostr_event_id: event.id,
+    nostr_pubkey: event.pubkey,
+    nostr_created_at: event.created_at
+  };
+}
+
+function applyServiceEvent(event) {
+  const { accepted } = upsertReplaceableEvent(replaceableEvents, event);
+  if (!accepted) return false;
+
+  const content = contentWithEventMeta(event);
+  const id = content.id || getDTag(event);
+  if (!id) return false;
+
+  if (isReplaceableTombstone(event)) {
+    serviceMap.delete(id);
+  } else {
+    serviceMap.set(id, { ...content, id });
+  }
+  return true;
+}
+
+function applyEnvironmentEvent(event) {
+  const { accepted } = upsertReplaceableEvent(replaceableEvents, event);
+  if (!accepted) return false;
+
+  const content = contentWithEventMeta(event);
+  const id = content.id || getDTag(event);
+  if (!id) return false;
+
+  if (isReplaceableTombstone(event)) {
+    environmentMap.delete(id);
+  } else {
+    environmentMap.set(id, { ...content, id });
+  }
+  return true;
+}
+
+function applyStateEvent(event) {
+  const { accepted, key } = upsertReplaceableEvent(replaceableEvents, event);
+  if (!accepted) return false;
+
+  const content = contentWithEventMeta(event);
+  const dTag = getDTag(event);
+  const serviceID = content.service_id || getTagValue(event, 'service');
+  const environmentID = content.environment_id || getTagValue(event, 'environment');
+  const id = content.id || dTag || (serviceID && environmentID ? `${serviceID}:${environmentID}` : key);
+  if (!id) return false;
+
+  if (isReplaceableTombstone(event)) {
+    stateMap.delete(id);
+  } else {
+    stateMap.set(id, {
+      ...content,
+      id,
+      service_id: serviceID,
+      environment_id: environmentID
+    });
+  }
+  return true;
+}
+
+function applyWorkerEvent(event) {
+  const { accepted } = upsertReplaceableEvent(replaceableEvents, event);
+  if (!accepted) return false;
+
+  const content = contentWithEventMeta(event);
+  const pubkey = event.pubkey;
+  if (!pubkey) return false;
+
+  if (isReplaceableTombstone(event)) {
+    workerMap.delete(pubkey);
+  } else {
+    workerMap.set(pubkey, {
+      ...content,
+      pubkey,
+      status: content.status || 'online',
+      last_advertisement_at: new Date((event.created_at || 0) * 1000).toISOString()
+    });
+  }
+  return true;
+}
+
+function activityType(event, content) {
+  if (content.event_type) return content.event_type;
+  if (event.kind === KINDS.BAHIA_DEPLOYMENT_STATUS || event.kind === KINDS.BAHIA_SERVICE_STATUS) return 'controlplane.status';
+  if (BAHIA_STATUS_KINDS.includes(event.kind)) return 'controlplane.result';
+  return `nostr.kind.${event.kind}`;
+}
+
+function activityEntityId(event, content) {
+  return content.entity_id ||
+    content.service_id ||
+    getTagValue(event, 'service') ||
+    getTagValue(event, 'environment') ||
+    getTagValue(event, 'intent') ||
+    getTagValue(event, 'run') ||
+    getTagValue(event, 'artifact') ||
+    getDTag(event) ||
+    event.id;
+}
+
+function applyActivityEvent(event) {
+  if (!event?.id || activityMap.has(event.id)) return false;
+  const content = parseJsonContent(event, {});
+  const time = new Date((event.created_at || 0) * 1000).toISOString();
+  activityMap.set(event.id, {
+    id: event.id,
+    kind: event.kind,
+    type: activityType(event, content),
+    entity_id: activityEntityId(event, content),
+    data: content.data ?? content,
+    time,
+    pubkey: event.pubkey,
+    nostr_event: event
+  });
+
+  if (activityMap.size > MAX_ACTIVITY * 2) {
+    const trimmed = Array.from(activityMap.values())
+      .sort((a, b) => String(b.time || '').localeCompare(String(a.time || '')))
+      .slice(0, MAX_ACTIVITY);
+    activityMap.clear();
+    for (const activity of trimmed) {
+      activityMap.set(activity.id, activity);
+    }
+  }
+  return true;
+}
+
+export function applyControlplaneEvent(event) {
+  if (!event?.id || typeof event.kind !== 'number') return false;
+  if (seenEventIds.has(event.id)) return false;
+  seenEventIds.add(event.id);
+
+  let changed = false;
+  switch (event.kind) {
+    case KINDS.BAHIA_SERVICE_REGISTRY:
+      changed = applyServiceEvent(event);
+      break;
+    case KINDS.BAHIA_ENVIRONMENT_REGISTRY:
+      changed = applyEnvironmentEvent(event);
+      break;
+    case KINDS.BAHIA_SERVICE_STATE:
+      changed = applyStateEvent(event);
+      break;
+    case KINDS.LOOM_WORKER_AD:
+      changed = applyWorkerEvent(event);
+      break;
+    default:
+      changed = applyActivityEvent(event);
+      break;
+  }
+
+  if (changed) {
+    controlplaneConnection.lastEventAt = new Date().toISOString();
+    refreshCollections();
+  }
+  return changed;
+}
+
+export function ingestLegacyEvent(event) {
+  if (!event?.id || activityMap.has(event.id)) return false;
+  activityMap.set(event.id, {
+    ...event,
+    time: event.time || event.timestamp || new Date().toISOString()
+  });
+  refreshCollections();
+  return true;
+}
+
+function subscribeToConnectionState() {
+  if (connectedUnsubscribe) return;
+  connectedUnsubscribe = nostr.connected.subscribe((connected) => {
+    controlplaneConnection.connected = connected;
+    if (lastConnected && !connected && controlplaneConnection.status === 'live') {
+      controlplaneConnection.status = 'disconnected';
+    }
+    if (!lastConnected && connected && controlplaneConnection.bootstrapComplete) {
+      controlplaneConnection.reconnects += 1;
+      controlplaneConnection.status = 'live';
+    }
+    lastConnected = connected;
+  });
+}
+
+function startLiveSubscription(since) {
+  if (liveUnsubscribe) {
+    liveUnsubscribe();
+    liveUnsubscribe = null;
+  }
+
+  liveUnsubscribe = nostr.subscribe(liveFilters(since), {
+    onEvent: (event) => applyControlplaneEvent(event),
+    onClosed: (reason, relay) => {
+      controlplaneConnection.lastError = reason || `subscription closed by ${relay}`;
+      if (controlplaneConnection.status === 'live') {
+        controlplaneConnection.status = 'disconnected';
+      }
+    }
+  });
+}
+
+export async function bootstrapControlplane({ force = false } = {}) {
+  if (!browser || !api) return { ok: false, rollbackToSse: false, reason: 'not_browser' };
+  if (bootstrapPromise && !force) return bootstrapPromise;
+  if (controlplaneConnection.ready && !force) return { ok: true, rollbackToSse: false };
+
+  bootstrapPromise = (async () => {
+    const bootstrapSince = Math.floor(Date.now() / 1000);
+    controlplaneConnection.status = 'discovering';
+    controlplaneConnection.lastError = null;
+    controlplaneConnection.rollbackToSse = false;
+    setAllLoading(true);
+
+    try {
+      const systemInfo = await api.getSystemInfo();
+      const relays = resolveBrowserRelays(systemInfo);
+      controlplaneConnection.relays = relays;
+      controlplaneConnection.servicePubkey = systemInfo?.nostr?.service_pubkey || '';
+      controlplaneConnection.legacySseEnabled = Boolean(systemInfo?.features?.legacy_sse);
+
+      if (!systemInfo?.features?.relay_read_models) {
+        throw new Error('Relay read models are not advertised by /system/info');
+      }
+
+      if (relays.length === 0) {
+        throw new Error('No browser Nostr relays advertised by /system/info');
+      }
+
+      controlplaneConnection.status = 'connecting';
+      subscribeToConnectionState();
+      nostr.setRelays(relays, false);
+      await nostr.connect(relays);
+
+      if (!get(nostr.connected)) {
+        throw new Error('Unable to connect to any advertised browser relay');
+      }
+
+      controlplaneConnection.status = 'bootstrapping';
+      const initialEvents = await nostr.queryUntilEose(readModelFilters());
+      for (const event of initialEvents) {
+        applyControlplaneEvent(event);
+      }
+
+      controlplaneConnection.ready = true;
+      controlplaneConnection.bootstrapComplete = true;
+      controlplaneConnection.lastEoseAt = new Date().toISOString();
+      controlplaneConnection.status = 'live';
+      startLiveSubscription(bootstrapSince);
+      refreshCollections();
+      return { ok: true, rollbackToSse: false };
+    } catch (err) {
+      controlplaneConnection.status = 'error';
+      controlplaneConnection.ready = false;
+      controlplaneConnection.bootstrapComplete = false;
+      controlplaneConnection.lastError = err?.message || String(err);
+      controlplaneConnection.rollbackToSse = controlplaneConnection.legacySseEnabled;
+      if (controlplaneConnection.rollbackToSse) {
+        controlplaneConnection.status = 'rollback_sse';
+      }
+      return {
+        ok: false,
+        rollbackToSse: controlplaneConnection.rollbackToSse,
+        reason: controlplaneConnection.lastError
+      };
+    } finally {
+      setAllLoading(false);
+      bootstrapPromise = null;
+    }
+  })();
+
+  return bootstrapPromise;
+}
+
+export function disconnectControlplane() {
+  if (liveUnsubscribe) {
+    liveUnsubscribe();
+    liveUnsubscribe = null;
+  }
+  controlplaneConnection.status = controlplaneConnection.ready ? 'disconnected' : 'idle';
+}

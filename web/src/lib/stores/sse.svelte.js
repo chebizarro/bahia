@@ -39,13 +39,14 @@ function getBackoffDelay(attempt) {
  * @param {Object} options - Configuration options
  * @param {string[]} options.types - Event types to filter
  * @param {number} options.maxEvents - Maximum events to keep in memory
+ * @param {(event: Object) => void} options.onEvent - Optional rollback bridge callback
  */
 export function connectEventStream(options = {}) {
   if (!browser || typeof EventSource === 'undefined') {
     return;
   }
 
-  const { types = [], maxEvents = 100 } = options;
+  const { types = [], maxEvents = 100, onEvent = null } = options;
   currentOptions = options;
 
   // Close existing connection if any
@@ -94,6 +95,9 @@ export function connectEventStream(options = {}) {
         sseEvents.unshift(event);
         if (sseEvents.length > maxEvents) {
           sseEvents.length = maxEvents;
+        }
+        if (typeof onEvent === 'function') {
+          onEvent(event);
         }
       } catch (err) {
         console.error('Failed to parse SSE event:', err);

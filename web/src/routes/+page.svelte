@@ -245,7 +245,7 @@
       <h2>Recent Activity</h2>
       <Table columns={eventColumns} data={events.slice(0, 10)} />
       {#if events.length === 0}
-        <p class="hint">Events will appear here in real-time via SSE</p>
+        <p class="hint">Events will appear here in real-time from the relay-backed control plane</p>
       {/if}
     </section>
   </div>

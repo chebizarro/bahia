@@ -44,8 +44,8 @@ func TestSystemHandler_GetInfo_ExposesRelaySidecarCapabilities(t *testing.T) {
 	if !payload.Data.Features["relay_sidecar"] {
 		t.Fatalf("expected relay_sidecar feature to be true")
 	}
-	if payload.Data.Features["relay_read_models"] {
-		t.Fatalf("expected relay_read_models feature to remain false until projector work lands")
+	if !payload.Data.Features["relay_read_models"] {
+		t.Fatalf("expected relay_read_models feature to be true when sidecar publishing is enabled")
 	}
 	if !payload.Data.Features["direct_nostr_http_auth"] {
 		t.Fatalf("expected direct_nostr_http_auth feature to be true")
