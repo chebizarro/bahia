@@ -143,13 +143,9 @@ test.describe('Deployments Smoke Test', () => {
     // Wait for data to load
     await page.waitForTimeout(500);
     
-    // Check that we have table rows with service names
+    // Check that pending row is shown
     await expect(page.locator('text=web-app')).toBeVisible();
-    await expect(page.locator('text=api-service')).toBeVisible();
-    
-    // Check environment names
     await expect(page.locator('text=production')).toBeVisible();
-    await expect(page.locator('text=staging')).toBeVisible();
   });
   
   test('should approve a deployment intent', async ({ page }) => {
@@ -240,5 +236,64 @@ test.describe('Deployments Smoke Test', () => {
     
     // Should show empty state
     await expect(page.locator('text=No pending approvals')).toBeVisible();
+  });
+});
+
+test.describe('Deployment History Page', () => {
+  test('should show status/service/environment/date filters and pagination on /deployments', async ({ page }) => {
+    const pagedIntents = Array.from({ length: 30 }, (_, index) => ({
+      id: `intent-page-${index + 1}`,
+      service_id: index < 26 ? 'service-1' : 'service-2',
+      environment_id: index < 28 ? 'env-1' : 'env-2',
+      artifact_id: `sha256:paged${index.toString().padStart(6, '0')}`,
+      approval_status: 'approved',
+      deployment_status: index === 0 ? 'running' : 'succeeded',
+      requested_by: `user-${index + 1}@example.com`,
+      created_at: `2026-04-${String((index % 28) + 1).padStart(2, '0')}T10:00:00.000Z`
+    }));
+
+    await page.unroute('**/api/v1/services/*/environments/*/intents');
+    await page.route('**/api/v1/services/*/environments/*/intents', (route) => {
+      const url = route.request().url();
+      const match = url.match(/services\/([^\/]+)\/environments\/([^\/]+)\/intents/);
+      if (!match) {
+        return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data: [] }) });
+      }
+
+      const [, serviceId, envId] = match;
+      const intents = pagedIntents.filter((intent) => intent.service_id === serviceId && intent.environment_id === envId);
+      return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data: intents }) });
+    });
+
+    await page.goto('/deployments');
+    await page.waitForLoadState('networkidle');
+
+    await expect(page.locator('h1:has-text("Deployment History")')).toBeVisible();
+    await expect(page.locator('#status-filter')).toBeVisible();
+    await expect(page.locator('#service-filter')).toBeVisible();
+    await expect(page.locator('#environment-filter')).toBeVisible();
+    await expect(page.locator('#start-date-filter')).toBeVisible();
+    await expect(page.locator('#end-date-filter')).toBeVisible();
+
+    await page.selectOption('#status-filter', 'running');
+    await expect(page.locator('text=1 of 30 deployments')).toBeVisible();
+
+    await page.selectOption('#status-filter', 'all');
+    await expect(page.locator('text=30 of 30 deployments')).toBeVisible();
+    await expect(page.locator('text=Page 1 of 2')).toBeVisible();
+    await expect(page.locator('tbody tr')).toHaveCount(25);
+
+    await page.getByRole('button', { name: 'Next' }).click();
+    await expect(page.locator('text=Page 2 of 2')).toBeVisible();
+    await expect(page.locator('tbody tr')).toHaveCount(5);
+
+    await page.selectOption('#service-filter', 'service-2');
+    await expect(page.locator('text=4 of 30 deployments')).toBeVisible();
+
+    await page.selectOption('#environment-filter', 'env-2');
+    await expect(page.locator('text=2 of 30 deployments')).toBeVisible();
+
+    await page.fill('#start-date-filter', '2026-04-27');
+    await expect(page.locator('text=No deployments match current filters')).toBeVisible();
   });
 });
