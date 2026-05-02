@@ -34,7 +34,12 @@ export class BahiaClient {
   }
 
   async fetch(path, options = {}) {
-    const { retries: retryOverride, ...fetchOptions } = options;
+    const {
+      retries: retryOverride,
+      retryDelayMs: retryDelayOverride,
+      retryStatuses: retryStatusesOverride,
+      ...fetchOptions
+    } = options;
     const method = fetchOptions.method || 'GET';
     const url = `${BASE_URL}${path}`;
     const headers = {
@@ -50,17 +55,37 @@ export class BahiaClient {
     }
 
     const retries = Number.isInteger(retryOverride) ? Math.max(0, retryOverride) : (method === 'GET' ? 1 : 0);
+    const retryDelayMs = Number.isFinite(retryDelayOverride) ? Math.max(0, retryDelayOverride) : 200;
+    const retryStatuses = Array.isArray(retryStatusesOverride) ? new Set(retryStatusesOverride) : null;
+    const isRetriableStatus = (status) => {
+      if (retryStatuses) {
+        return retryStatuses.has(status);
+      }
+      return status >= 500 && status <= 599;
+    };
+
+    const waitForRetry = (attempt) => new Promise((resolve) => {
+      setTimeout(resolve, retryDelayMs * (2 ** attempt));
+    });
 
     let res;
     for (let attempt = 0; ; attempt++) {
       try {
         res = await fetch(url, { ...fetchOptions, method, headers });
-        break;
       } catch (error) {
         if (attempt >= retries) {
           throw error;
         }
+        await waitForRetry(attempt);
+        continue;
       }
+
+      if (!res.ok && isRetriableStatus(res.status) && attempt < retries) {
+        await waitForRetry(attempt);
+        continue;
+      }
+
+      break;
     }
     
     // Handle non-2xx responses
