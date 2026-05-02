@@ -8,7 +8,7 @@ type WorkerStatus string
 const (
 	WorkerStatusOnline  WorkerStatus = "online"
 	WorkerStatusStale   WorkerStatus = "stale"   // no ad for >5 minutes
-	WorkerStatusOffline WorkerStatus = "offline"  // no ad for >30 minutes
+	WorkerStatusOffline WorkerStatus = "offline" // no ad for >30 minutes
 )
 
 // WorkerSoftware describes an installed software entry from the S tag.
@@ -25,24 +25,52 @@ type WorkerPricing struct {
 	Unit           string `json:"unit"` // e.g. "sat"
 }
 
+// WorkerResources describes host-level resources advertised by a worker.
+type WorkerResources struct {
+	CPUCores int `json:"cpu_cores,omitempty"`
+	MemoryGB int `json:"memory_gb,omitempty"`
+	DiskGB   int `json:"disk_gb,omitempty"`
+}
+
+// WorkerAccelerator describes one accelerator class available on a worker.
+type WorkerAccelerator struct {
+	Vendor   string `json:"vendor,omitempty"`
+	Model    string `json:"model,omitempty"`
+	Count    int    `json:"count,omitempty"`
+	MemoryGB int    `json:"memory_gb,omitempty"`
+	Driver   string `json:"driver,omitempty"`
+}
+
+// WorkerRuntimeTarget describes where Bahia may deploy runtime-managed work for a worker.
+type WorkerRuntimeTarget struct {
+	Type          RuntimeType `json:"type,omitempty"`
+	EndpointRef   string      `json:"endpoint_ref,omitempty"`
+	ComposeDir    string      `json:"compose_dir,omitempty"`
+	KubeNamespace string      `json:"kube_namespace,omitempty"`
+	PublicBaseURL string      `json:"public_base_url,omitempty"`
+}
+
 // Worker represents a Loom compute worker discovered via Kind 10100 events.
 type Worker struct {
-	PubKey             string           `json:"pubkey"`
-	Name               string           `json:"name"`
-	Description        string           `json:"description,omitempty"`
-	Architecture       string           `json:"architecture,omitempty"`    // e.g. "linux/amd64"
-	MaxConcurrentJobs  int              `json:"max_concurrent_jobs"`
-	CurrentQueueDepth  int              `json:"current_queue_depth"`
-	Software           []WorkerSoftware `json:"software,omitempty"`
-	Pricing            []WorkerPricing  `json:"pricing,omitempty"`
-	MinDurationSecs    int              `json:"min_duration_secs,omitempty"`
-	MaxDurationSecs    int              `json:"max_duration_secs,omitempty"`
-	Geohash            string           `json:"geohash,omitempty"`
-	PreferredRelays    []string         `json:"preferred_relays,omitempty"`
-	LastAdvertisementAt time.Time       `json:"last_advertisement_at"`
-	Status             WorkerStatus     `json:"status"`
-	CreatedAt          time.Time        `json:"created_at"`
-	UpdatedAt          time.Time        `json:"updated_at"`
+	PubKey              string               `json:"pubkey"`
+	Name                string               `json:"name"`
+	Description         string               `json:"description,omitempty"`
+	Architecture        string               `json:"architecture,omitempty"` // e.g. "linux/amd64"
+	MaxConcurrentJobs   int                  `json:"max_concurrent_jobs"`
+	CurrentQueueDepth   int                  `json:"current_queue_depth"`
+	Software            []WorkerSoftware     `json:"software,omitempty"`
+	Pricing             []WorkerPricing      `json:"pricing,omitempty"`
+	Resources           *WorkerResources     `json:"resources,omitempty"`
+	Accelerators        []WorkerAccelerator  `json:"accelerators,omitempty"`
+	RuntimeTarget       *WorkerRuntimeTarget `json:"runtime_target,omitempty"`
+	MinDurationSecs     int                  `json:"min_duration_secs,omitempty"`
+	MaxDurationSecs     int                  `json:"max_duration_secs,omitempty"`
+	Geohash             string               `json:"geohash,omitempty"`
+	PreferredRelays     []string             `json:"preferred_relays,omitempty"`
+	LastAdvertisementAt time.Time            `json:"last_advertisement_at"`
+	Status              WorkerStatus         `json:"status"`
+	CreatedAt           time.Time            `json:"created_at"`
+	UpdatedAt           time.Time            `json:"updated_at"`
 }
 
 // StaleThreshold is the duration after which a worker is considered stale.

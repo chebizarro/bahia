@@ -167,6 +167,62 @@ type EnvironmentServiceStateRepository interface {
 	ListAll(ctx context.Context) ([]domain.EnvironmentServiceState, error)
 }
 
+// LLMRouteRepository manages LLM route records.
+type LLMRouteRepository interface {
+	Create(ctx context.Context, route *domain.LLMRoute) error
+	GetByID(ctx context.Context, id uuid.UUID) (*domain.LLMRoute, error)
+	GetByName(ctx context.Context, name string) (*domain.LLMRoute, error)
+	List(ctx context.Context, limit, offset int) ([]domain.LLMRoute, error)
+	Update(ctx context.Context, route *domain.LLMRoute) error
+	Delete(ctx context.Context, id uuid.UUID) error
+}
+
+// LLMReleaseRepository manages immutable LLM release records.
+type LLMReleaseRepository interface {
+	Create(ctx context.Context, release *domain.LLMRelease) error
+	GetByID(ctx context.Context, id uuid.UUID) (*domain.LLMRelease, error)
+	GetByRouteVersion(ctx context.Context, routeID uuid.UUID, version string) (*domain.LLMRelease, error)
+	ListByRoute(ctx context.Context, routeID uuid.UUID, limit, offset int) ([]domain.LLMRelease, error)
+}
+
+// LLMDeploymentIntentRepository manages LLM deployment intents.
+type LLMDeploymentIntentRepository interface {
+	Create(ctx context.Context, intent *domain.LLMDeploymentIntent) error
+	GetByID(ctx context.Context, id uuid.UUID) (*domain.LLMDeploymentIntent, error)
+	ListByRouteEnv(ctx context.Context, routeID, envID uuid.UUID, limit, offset int) ([]domain.LLMDeploymentIntent, error)
+	UpdateStatus(ctx context.Context, id uuid.UUID, status domain.DeploymentIntentStatus) error
+	UpdateApproval(ctx context.Context, id uuid.UUID, status domain.ApprovalStatus) error
+}
+
+// LLMDeploymentRunRepository manages LLM deployment runs and queue operations.
+type LLMDeploymentRunRepository interface {
+	Create(ctx context.Context, run *domain.LLMDeploymentRun) error
+	GetByID(ctx context.Context, id uuid.UUID) (*domain.LLMDeploymentRun, error)
+	ListByIntent(ctx context.Context, intentID uuid.UUID) ([]domain.LLMDeploymentRun, error)
+	EnsureQueuedRunForNextReadyIntent(ctx context.Context) (*domain.LLMDeploymentRun, error)
+	ClaimNextQueuedRun(ctx context.Context) (*domain.LLMDeploymentRun, error)
+	RequeueStaleRunning(ctx context.Context, olderThan time.Duration) (int, error)
+	Update(ctx context.Context, run *domain.LLMDeploymentRun) error
+	UpdateStatus(ctx context.Context, id uuid.UUID, status domain.DeploymentRunStatus, exitCode *int) error
+}
+
+// LLMRouteObservationRepository manages LLM route observations.
+type LLMRouteObservationRepository interface {
+	Create(ctx context.Context, observation *domain.LLMRouteObservation) error
+	GetLatest(ctx context.Context, routeID, envID uuid.UUID) (*domain.LLMRouteObservation, error)
+	ListByRouteEnv(ctx context.Context, routeID, envID uuid.UUID, limit int) ([]domain.LLMRouteObservation, error)
+}
+
+// LLMRouteStateRepository manages denormalized LLM route state.
+type LLMRouteStateRepository interface {
+	Upsert(ctx context.Context, state *domain.LLMRouteState) error
+	Get(ctx context.Context, routeID, envID uuid.UUID) (*domain.LLMRouteState, error)
+	ListByEnvironment(ctx context.Context, envID uuid.UUID) ([]domain.LLMRouteState, error)
+	ListByRoute(ctx context.Context, routeID uuid.UUID) ([]domain.LLMRouteState, error)
+	ListDrifted(ctx context.Context) ([]domain.LLMRouteState, error)
+	ListAll(ctx context.Context) ([]domain.LLMRouteState, error)
+}
+
 // OCIRegistryRepository manages OCI manifest/blob/tag metadata.
 type OCIRegistryRepository interface {
 	EnsureRepository(ctx context.Context, name string) (*domain.OCIRepository, error)
