@@ -9,6 +9,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	chimiddleware "github.com/go-chi/chi/v5/middleware"
 	"github.com/openagentsinc/bahia/internal/adapters/blossom"
+	runtimeadapter "github.com/openagentsinc/bahia/internal/adapters/runtime"
 	"github.com/openagentsinc/bahia/internal/adapters/secrets"
 	"github.com/openagentsinc/bahia/internal/adapters/telemetry"
 	"github.com/openagentsinc/bahia/internal/api/dto"
@@ -32,6 +33,11 @@ type RouterDeps struct {
 	Config           *config.Config
 	AuthMiddleware   auth.MiddlewareConfig
 	Workers          repository.WorkerRepository
+	Runs             repository.DeploymentRunRepository
+	Services         repository.ServiceRepository
+	Environments     repository.EnvironmentRepository
+	EnvStates        repository.EnvironmentServiceStateRepository
+	RuntimeResolver  runtimeadapter.RuntimeResolver
 	Payments         *service.PaymentService
 	SBOMs            repository.SBOMRepository
 	Artifacts        repository.ArtifactRepository
@@ -132,6 +138,15 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 	repoCIHandler := handlers.NewRepositoryCIHandler(deps.HiveCI)
 	systemH := handlers.NewSystemHandler(deps.Config, handlers.WithSystemMCPTransport(deps.MCP != nil))
 
+	var logsH *handlers.LogHandler
+	if deps.Runs != nil && deps.Services != nil && deps.Environments != nil {
+		var logService *runtimeadapter.LogService
+		if deps.Blossom != nil {
+			logService = runtimeadapter.NewLogService(deps.Blossom, nil, logger)
+		}
+		logsH = handlers.NewLogHandlerWithResolver(logService, deps.RuntimeResolver, deps.Runs, deps.Services, deps.Environments, deps.EnvStates, logger)
+	}
+
 	var tenantH *handlers.TenantHandler
 	if deps.Orgs != nil && deps.OrgMembers != nil && deps.OrgInvites != nil && deps.RBAC != nil {
 		tenantH = handlers.NewTenantHandler(deps.Orgs, deps.OrgMembers, deps.OrgInvites, deps.RBAC, logger)
@@ -190,6 +205,14 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 			// Deployment Runs (read)
 			r.Get("/deployments/runs/{id}", deployH.GetRun)
 			r.Get("/deployments/intents/{intentId}/runs", deployH.ListRuns)
+			if logsH != nil && deps.Blossom != nil {
+				r.Get("/deployments/runs/{id}/logs", logsH.GetRunLogs)
+			}
+
+			// Live logs (read, SSE)
+			if logsH != nil && deps.RuntimeResolver != nil {
+				r.Get("/services/{id}/environments/{envId}/logs", logsH.StreamLiveLogs)
+			}
 
 			// State (read)
 			r.Get("/state", stateH.ListAll)
