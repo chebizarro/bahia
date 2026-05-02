@@ -21,6 +21,52 @@ const mockEnvironments = [
   }
 ];
 
+const mockStates = [
+  {
+    id: 'state-1',
+    service_id: 'svc-1',
+    environment_id: 'env-1',
+    artifact_id: 'artifact-aaa111',
+    status: 'running',
+    drift_status: 'in_sync',
+    deployed_at: new Date().toISOString()
+  },
+  {
+    id: 'state-2',
+    service_id: 'svc-2',
+    environment_id: 'env-1',
+    artifact_id: 'artifact-bbb222',
+    status: 'running',
+    drift_status: 'drifted',
+    deployed_at: new Date().toISOString()
+  }
+];
+
+const mockIntentsByService = {
+  'svc-1': [
+    {
+      id: 'intent-1',
+      service_id: 'svc-1',
+      environment_id: 'env-1',
+      artifact_id: 'artifact-aaa111',
+      approval_status: 'approved',
+      deployment_status: 'completed',
+      created_at: new Date().toISOString()
+    }
+  ],
+  'svc-2': [
+    {
+      id: 'intent-2',
+      service_id: 'svc-2',
+      environment_id: 'env-1',
+      artifact_id: 'artifact-bbb222',
+      approval_status: 'pending',
+      deployment_status: '',
+      created_at: new Date(Date.now() - 60_000).toISOString()
+    }
+  ]
+};
+
 test.beforeEach(async ({ page }) => {
   await installE2EMocks(page);
 
@@ -106,7 +152,22 @@ test.beforeEach(async ({ page }) => {
     return route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify({ data: [] })
+      body: JSON.stringify({ data: mockStates })
+    });
+  });
+
+  await page.route('**/api/v1/services/*/environments/*/intents', (route) => {
+    const url = route.request().url();
+    const match = url.match(/\/services\/([^\/]+)\/environments\/([^\/\?]+)\/intents/);
+    const serviceId = match?.[1];
+    const envId = match?.[2];
+
+    const intents = envId === 'env-1' && serviceId ? (mockIntentsByService[serviceId] || []) : [];
+
+    return route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ data: intents })
     });
   });
   
@@ -241,13 +302,23 @@ test.describe('Environments CRUD Smoke Test', () => {
     expect(page.url()).toMatch(/\/environments\/env-1/);
   });
   
-  test('should show edit environment option on detail page', async ({ page }) => {
+  test('should show environment config, state/drift, deployment history, and edit action on detail page', async ({ page }) => {
     await page.goto('/environments/env-1');
     await page.waitForLoadState('networkidle');
     
     // Should show environment name
     await expect(page.locator('text=production')).toBeVisible();
-    
+
+    // Should show config/state sections
+    await expect(page.locator('h2:has-text("Runtime Configuration")')).toBeVisible();
+    await expect(page.locator('h2:has-text("Deployed Services (2)")')).toBeVisible();
+    await expect(page.locator('h2:has-text("Deployment History (2)")')).toBeVisible();
+
+    // Should show current drift state summary
+    await expect(page.locator('text=Current State')).toBeVisible();
+    await expect(page.locator('text=Drifted Services')).toBeVisible();
+    await expect(page.locator('text=In-Sync Services')).toBeVisible();
+
     // Should have an edit button or action
     const editButton = page.locator('button:has-text("Edit"), a:has-text("Edit")');
     await expect(editButton.first()).toBeVisible();

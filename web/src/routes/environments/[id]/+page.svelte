@@ -15,6 +15,7 @@
 
   let environment = $state(null);
   let states = $state([]);
+  let deploymentHistory = $state([]);
   let loading = $state(true);
   let error = $state(null);
 
@@ -54,6 +55,7 @@
     error = null;
     environment = null;
     states = [];
+    deploymentHistory = [];
 
     try {
       environment = await api.getEnvironment(id);
@@ -67,6 +69,32 @@
         console.error('Failed to load states:', err);
         states = [];
       }
+
+      if (states.length > 0) {
+        const serviceIds = [...new Set(states.map((state) => state.service_id).filter(Boolean))];
+        const historyChunks = await Promise.all(
+          serviceIds.map(async (serviceId) => {
+            try {
+              const intents = await api.listIntents(serviceId, id);
+              return (Array.isArray(intents) ? intents : []).map((intent) => ({ ...intent, service_id: serviceId }));
+            } catch (historyErr) {
+              console.error(`Failed to load deployment history for service ${serviceId}:`, historyErr);
+              return [];
+            }
+          })
+        );
+
+        const intentMap = new Map();
+        historyChunks.flat().forEach((intent) => {
+          if (intent.id) intentMap.set(intent.id, intent);
+        });
+
+        deploymentHistory = Array.from(intentMap.values()).sort((a, b) => {
+          const dateA = a.created_at ? new Date(a.created_at) : new Date(0);
+          const dateB = b.created_at ? new Date(b.created_at) : new Date(0);
+          return dateB - dateA;
+        });
+      }
     } catch (err) {
       error = err.message;
     } finally {
@@ -74,11 +102,36 @@
     }
   }
 
+  function getIntentStatus(intent) {
+    const approvalStatus = String(intent.approval_status || '').toLowerCase();
+    const deploymentStatus = String(intent.deployment_status || '').toLowerCase();
+
+    if (approvalStatus === 'rejected') return 'rejected';
+    if (approvalStatus === 'pending') return 'pending';
+    if (deploymentStatus) return deploymentStatus;
+    if (approvalStatus === 'approved') return 'approved';
+    return 'pending';
+  }
+
+  let driftedStates = $derived(states.filter((state) => String(state.drift_status || '').toLowerCase() === 'drifted'));
+  let inSyncStates = $derived(states.filter((state) => String(state.drift_status || '').toLowerCase() === 'in_sync'));
+  let environmentDriftStatus = $derived(
+    states.length === 0 ? 'unknown' : driftedStates.length > 0 ? 'drifted' : 'in_sync'
+  );
+
   let stateColumns = $derived([
     { key: 'service_id', label: 'Service', render: (r) => `<code>${r.service_id?.slice(0, 12)}...</code>` },
     { key: 'artifact_id', label: 'Artifact', render: (r) => `<code>${r.artifact_id?.slice(0, 12)}...</code>` },
     { key: 'status', label: 'Status' },
+    { key: 'drift_status', label: 'Drift' },
     { key: 'deployed_at', label: 'Deployed', render: (r) => r.deployed_at ? new Date(r.deployed_at).toLocaleString() : '-' }
+  ]);
+
+  let historyColumns = $derived([
+    { key: 'service_id', label: 'Service', render: (r) => `<code>${r.service_id?.slice(0, 12)}...</code>` },
+    { key: 'artifact_id', label: 'Artifact', render: (r) => `<code>${r.artifact_id?.slice(0, 12)}...</code>` },
+    { key: 'intent_status', label: 'Status', render: (r) => getIntentStatus(r) },
+    { key: 'created_at', label: 'Requested', render: (r) => r.created_at ? new Date(r.created_at).toLocaleString() : '-' }
   ]);
 
   function openEditModal() {
@@ -204,6 +257,9 @@
       <Card title="Deploy Strategy" value={environment.deploy_strategy || 'replace'} />
       <Card title="Protected" value={environment.protected ? '🔒 Yes' : 'No'} />
       <Card title="Worker Selector" value={environment.loom_worker_selector || '-'} />
+      <Card title="Current State" value={environmentDriftStatus === 'drifted' ? '⚠️ Drifted' : environmentDriftStatus === 'in_sync' ? '✅ In Sync' : 'Unknown'} />
+      <Card title="Drifted Services" value={String(driftedStates.length)} />
+      <Card title="In-Sync Services" value={String(inSyncStates.length)} />
       <Card title="ID" value={environment.id?.slice(0, 16) + '...' || '-'} />
     </div>
 
@@ -223,6 +279,19 @@
           icon="📦"
           title="No services deployed"
           message="No services are currently deployed to this environment"
+        />
+      {/if}
+    </section>
+
+    <section>
+      <h2>Deployment History ({deploymentHistory.length})</h2>
+      {#if deploymentHistory.length > 0}
+        <Table columns={historyColumns} data={deploymentHistory} />
+      {:else}
+        <EmptyState
+          icon="🕘"
+          title="No deployment history"
+          message="No deployment intents have been recorded for this environment yet"
         />
       {/if}
     </section>
