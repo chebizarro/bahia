@@ -142,6 +142,40 @@ printf '%s|%s\n' "$MY_SERVICE_IMAGE" "$*" >> "$COMPOSE_CALL_LOG"
 	}
 }
 
+func TestComposeRuntimeObserveResolvesImageDigestFromRunningContainer(t *testing.T) {
+	composeBin := writeFakeComposeBinary(t, `#!/bin/sh
+printf '%s' '{"ID":"running-id","Image":"registry.example/app:v2","State":"running","Status":"Up"}'
+`)
+	dockerBin := writeFakeNamedBinary(t, "docker", `#!/bin/sh
+case "$*" in
+	"container inspect running-id")
+	printf '%s' '[{"Id":"running-id","Image":"sha256:runningimage","Config":{"Image":"registry.example/app:v2"}}]'
+	;;
+	"image inspect sha256:runningimage")
+	printf '%s' '[{"Id":"sha256:runningimage","RepoDigests":["registry.example/app@sha256:runningdigest"]}]'
+	;;
+	"image inspect registry.example/app:v2")
+	echo "tag inspect fallback should not be used" >&2
+	exit 1
+	;;
+	*)
+  echo "unexpected docker args: $*" >&2
+  exit 1
+	;;
+esac
+`)
+	t.Setenv("PATH", filepath.Dir(dockerBin)+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	r := &ComposeRuntime{binary: composeBin, dockerHost: "tcp://docker:2375", logger: zap.NewNop()}
+	obs, err := r.Observe(context.Background(), uuid.New(), uuid.New(), "app")
+	if err != nil {
+		t.Fatalf("Observe() error = %v", err)
+	}
+	if obs.ObservedImageRepo != "registry.example/app" || obs.ObservedImageDigest != "sha256:runningdigest" {
+		t.Fatalf("digest-aware observe mismatch: repo=%q digest=%q", obs.ObservedImageRepo, obs.ObservedImageDigest)
+	}
+}
+
 func TestComposeRuntimeObserveParsesJSONArrayAndPrefersRunningEntry(t *testing.T) {
 	bin := writeFakeComposeBinary(t, `#!/bin/sh
 printf '%s' '[{"ID":"stopped-id","Image":"registry.example/app:v1","State":"exited","Status":"Exited"},{"ID":"running-id","Image":"registry.example/app:v2","State":"running","Status":"Up"}]'
@@ -229,9 +263,14 @@ printf '%s' 'not-json'
 
 func writeFakeComposeBinary(t *testing.T, content string) string {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "fake-compose")
+	return writeFakeNamedBinary(t, "fake-compose", content)
+}
+
+func writeFakeNamedBinary(t *testing.T, name, content string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), name)
 	if err := os.WriteFile(path, []byte(content), 0o755); err != nil {
-		t.Fatalf("write fake compose binary: %v", err)
+		t.Fatalf("write fake binary %s: %v", name, err)
 	}
 	return path
 }

@@ -104,6 +104,47 @@ func TestAdoptionServiceImportSeedsModelsAndIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestAdoptionServiceComposeTakeoverPolicyWarningsAndBlocksImport(t *testing.T) {
+	ctx := context.Background()
+	server := newAdoptionDockerServer(t)
+	defer server.Close()
+
+	registry, svcRepo, envRepo, buildRepo, artifactRepo, _, _ := newTestRegistry()
+	adoption := NewAdoptionService(
+		registry, svcRepo, envRepo, buildRepo, artifactRepo, registry.state, registry.observations, &events.NoopPublisher{}, zap.NewNop(),
+		WithAdoptionComposeTakeoverPolicy(false),
+	)
+
+	previews, err := adoption.Scan(ctx, AdoptionScanRequest{Targets: []AdoptionTarget{{Name: "local", DockerHost: server.URL, EnvironmentName: "prod"}}})
+	if err != nil {
+		t.Fatalf("Scan returned error: %v", err)
+	}
+	if len(previews) != 1 || len(previews[0].Containers) != 1 {
+		t.Fatalf("unexpected previews: %#v", previews)
+	}
+	candidate := previews[0].Containers[0]
+	if candidate.Adoptable {
+		t.Fatalf("compose-origin candidate should be non-adoptable when takeover is disabled")
+	}
+	if !containsString(candidate.Warnings, "compose-origin workload will be taken over by Bahia direct Docker runtime actions") || !containsString(candidate.Warnings, "compose takeover is disabled by adoption policy") {
+		t.Fatalf("compose takeover warnings missing: %#v", candidate.Warnings)
+	}
+
+	results, err := adoption.Import(ctx, AdoptionImportRequest{
+		Targets:   []AdoptionTarget{{Name: "local", DockerHost: server.URL, EnvironmentName: "prod"}},
+		ImportAll: true,
+	})
+	if err != nil {
+		t.Fatalf("Import returned error: %v", err)
+	}
+	if len(results) != 1 || results[0].Status != adoptionStatusFailed || !strings.Contains(results[0].Error, "unsupported adoption warnings") {
+		t.Fatalf("expected compose takeover import failure, got %#v", results)
+	}
+	if len(svcRepo.services) != 0 || len(envRepo.envs) != 0 || len(buildRepo.builds) != 0 || len(artifactRepo.artifacts) != 0 {
+		t.Fatalf("blocked compose takeover should not create rows")
+	}
+}
+
 func TestAdoptionServiceImportTransactionalRollbackOnStateFailure(t *testing.T) {
 	ctx := context.Background()
 	server := newAdoptionDockerServer(t)

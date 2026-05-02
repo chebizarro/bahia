@@ -209,6 +209,7 @@ func TestRuntimeLifecycleErrorStatusMapping(t *testing.T) {
 		{name: "not found", err: errors.New("service 123 not found"), status: http.StatusNotFound},
 		{name: "bad request", err: errors.New("no desired artifact for service"), status: http.StatusBadRequest},
 		{name: "conflict", err: errors.New("runtime docker does not support restart"), status: http.StatusConflict},
+		{name: "direct runtime guardrail conflict", err: errors.New("direct runtime actions are only allowed for adopted direct_runtime workloads"), status: http.StatusConflict},
 		{name: "internal", err: errors.New("docker daemon unavailable"), status: http.StatusInternalServerError},
 	}
 	for _, tt := range tests {

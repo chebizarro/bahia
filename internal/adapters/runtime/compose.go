@@ -95,6 +95,7 @@ func (r *ComposeRuntime) Observe(ctx context.Context, serviceID, envID uuid.UUID
 	health := domain.HealthStatusStopped
 	containerID := ""
 	image := ""
+	imageDigest := ""
 	if len(entries) > 0 {
 		representative := entries[0]
 		for _, entry := range entries {
@@ -109,12 +110,19 @@ func (r *ComposeRuntime) Observe(ctx context.Context, serviceID, envID uuid.UUID
 		}
 		containerID = representative.ID
 		image = representative.Image
+		if repo, digest := r.resolveObservedComposeImage(ctx, containerID, image); repo != "" || digest != "" {
+			if repo != "" {
+				image = repo
+			}
+			imageDigest = digest
+		}
 	}
 
 	return &domain.RuntimeObservation{
 		ServiceID:           serviceID,
 		EnvironmentID:       envID,
 		ObservedImageRepo:   image,
+		ObservedImageDigest: imageDigest,
 		ObservedContainerID: containerID,
 		HealthStatus:        health,
 		Source:              "compose",
@@ -260,6 +268,104 @@ func (r *ComposeRuntime) runCommandStdout(ctx context.Context, extraEnv []string
 	cmd.Stderr = &stderr
 	err := cmd.Run()
 	return stdout.String(), stderr.String(), err
+}
+
+func (r *ComposeRuntime) resolveObservedComposeImage(ctx context.Context, containerID, image string) (string, string) {
+	image = strings.TrimSpace(image)
+	if image == "" {
+		return "", ""
+	}
+	if repo, digest := splitRepoDigest(image); digest != "" {
+		return repo, digest
+	}
+	logger := r.logger
+	if logger == nil {
+		logger = zap.NewNop()
+	}
+	if strings.TrimSpace(containerID) != "" {
+		if imageID, configuredImage, ok := r.inspectComposeContainerImage(ctx, logger, containerID); ok {
+			if repo, digest := r.inspectDockerImage(ctx, logger, imageID, firstNonEmptyString(configuredImage, image)); repo != "" || digest != "" {
+				return repo, digest
+			}
+		}
+	}
+	return r.inspectDockerImage(ctx, logger, image, image)
+}
+
+func (r *ComposeRuntime) inspectComposeContainerImage(ctx context.Context, logger *zap.Logger, containerID string) (string, string, bool) {
+	stdout, stderr, err := r.runDockerStdout(ctx, "container", "inspect", containerID)
+	if err != nil {
+		logger.Debug("failed to inspect compose container for image digest", zap.String("container_id", containerID), zap.String("stderr", strings.TrimSpace(stderr)), zap.Error(err))
+		return "", "", false
+	}
+	var inspected []composeContainerInspect
+	if err := json.Unmarshal([]byte(stdout), &inspected); err != nil || len(inspected) == 0 {
+		var single composeContainerInspect
+		if singleErr := json.Unmarshal([]byte(stdout), &single); singleErr != nil {
+			logger.Debug("failed to parse compose container inspect output", zap.String("container_id", containerID), zap.Error(err))
+			return "", "", false
+		}
+		inspected = []composeContainerInspect{single}
+	}
+	return strings.TrimSpace(inspected[0].Image), strings.TrimSpace(inspected[0].Config.Image), strings.TrimSpace(inspected[0].Image) != ""
+}
+
+func (r *ComposeRuntime) inspectDockerImage(ctx context.Context, logger *zap.Logger, inspectRef, fallbackRepo string) (string, string) {
+	inspectRef = strings.TrimSpace(inspectRef)
+	fallbackRepo = strings.TrimSpace(fallbackRepo)
+	if inspectRef == "" {
+		return fallbackRepo, digestFromReference(fallbackRepo)
+	}
+	stdout, stderr, err := r.runDockerStdout(ctx, "image", "inspect", inspectRef)
+	if err != nil {
+		logger.Debug("failed to inspect compose image for digest", zap.String("image", inspectRef), zap.String("stderr", strings.TrimSpace(stderr)), zap.Error(err))
+		return fallbackRepo, digestFromReference(inspectRef)
+	}
+	var inspected []dockerImageInspect
+	if err := json.Unmarshal([]byte(stdout), &inspected); err != nil || len(inspected) == 0 {
+		var single dockerImageInspect
+		if singleErr := json.Unmarshal([]byte(stdout), &single); singleErr != nil {
+			logger.Debug("failed to parse compose image inspect output", zap.String("image", inspectRef), zap.Error(err))
+			return fallbackRepo, digestFromReference(inspectRef)
+		}
+		inspected = []dockerImageInspect{single}
+	}
+	for _, candidate := range inspected {
+		for _, repoDigest := range candidate.RepoDigests {
+			if repo, digest := splitRepoDigest(repoDigest); digest != "" {
+				return repo, digest
+			}
+		}
+		if digest := digestFromReference(candidate.ID); digest != "" {
+			return fallbackRepo, digest
+		}
+	}
+	return fallbackRepo, ""
+}
+
+func (r *ComposeRuntime) runDockerStdout(ctx context.Context, args ...string) (string, string, error) {
+	cmd := exec.CommandContext(ctx, "docker", args...)
+	cmd.Env = r.commandEnv(nil)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	return stdout.String(), stderr.String(), err
+}
+
+type composeContainerInspect struct {
+	Image  string `json:"Image"`
+	Config struct {
+		Image string `json:"Image"`
+	} `json:"Config"`
+}
+
+func digestFromReference(ref string) string {
+	if !strings.Contains(ref, "sha256:") {
+		return ""
+	}
+	return extractDigest(ref)
 }
 
 func (r *ComposeRuntime) commandEnv(extraEnv []string) []string {

@@ -80,6 +80,9 @@ adoption:
   # Privileged adoption scan/import routes are disabled by default.
   # To enable, set auth.enabled=true and configure at least one operator allowlist.
   enabled: false
+  # Compose-origin containers are blocked unless operators explicitly accept
+  # direct Docker takeover semantics for those workloads.
+  allow_compose_takeover: false
   allowed_subjects: []
   allowed_pubkeys: []
   allowed_emails: []

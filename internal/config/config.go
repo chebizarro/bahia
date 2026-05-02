@@ -197,6 +197,7 @@ func (c OperatorAccessConfig) Empty() bool {
 type AdoptionConfig struct {
 	Enabled              bool `koanf:"enabled"`
 	AllowRawDockerHosts  bool `koanf:"allow_raw_docker_hosts"`
+	AllowComposeTakeover bool `koanf:"allow_compose_takeover"`
 	OperatorAccessConfig `koanf:",squash"`
 }
 

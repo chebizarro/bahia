@@ -103,7 +103,7 @@ func writeRuntimeLifecycleError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusNotFound, msg)
 	case strings.Contains(msg, "no desired artifact"), strings.Contains(msg, "belongs to service"):
 		writeError(w, http.StatusBadRequest, msg)
-	case strings.Contains(msg, "does not support"):
+	case strings.Contains(msg, "does not support"), strings.Contains(msg, "adopted direct_runtime workloads"):
 		writeError(w, http.StatusConflict, msg)
 	default:
 		writeError(w, http.StatusInternalServerError, msg)

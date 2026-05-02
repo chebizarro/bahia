@@ -409,6 +409,7 @@ func TestLoadPrivilegedRouteConfigFromYAML(t *testing.T) {
   jwt_secret: test-secret
 adoption:
   enabled: true
+  allow_compose_takeover: true
   allowed_subjects:
     - ops-user
   allowed_pubkeys:
@@ -428,7 +429,7 @@ direct_runtime_actions:
 	if err != nil {
 		t.Fatalf("Load() error: %v", err)
 	}
-	if !cfg.Adoption.Enabled || len(cfg.Adoption.AllowedSubjects) != 1 || cfg.Adoption.AllowedSubjects[0] != "ops-user" {
+	if !cfg.Adoption.Enabled || !cfg.Adoption.AllowComposeTakeover || len(cfg.Adoption.AllowedSubjects) != 1 || cfg.Adoption.AllowedSubjects[0] != "ops-user" {
 		t.Fatalf("adoption config not loaded: %+v", cfg.Adoption)
 	}
 	if !cfg.DirectRuntime.Enabled || len(cfg.DirectRuntime.AllowedSubjects) != 1 || cfg.DirectRuntime.AllowedSubjects[0] != "runtime-user" {

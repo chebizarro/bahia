@@ -17,6 +17,8 @@ const (
 	runtimeActionDeployEvent  = events.EventType("runtime.deploy")
 	runtimeActionRestartEvent = events.EventType("runtime.restart")
 	runtimeActionStopEvent    = events.EventType("runtime.stop")
+
+	directRuntimeGuardrailMessage = "direct runtime actions are only allowed for adopted direct_runtime workloads"
 )
 
 // RuntimeLifecycleService performs direct runtime actions for services resolved to a runtime.
@@ -97,11 +99,6 @@ func (s *RuntimeLifecycleService) Deploy(ctx context.Context, serviceID, envID u
 		return nil, err
 	}
 
-	if artifactID != nil {
-		if err := s.updateDesiredArtifact(ctx, serviceID, envID, *artifactID); err != nil {
-			return nil, err
-		}
-	}
 	if opts.Labels == nil {
 		opts.Labels = map[string]string{}
 	}
@@ -110,6 +107,9 @@ func (s *RuntimeLifecycleService) Deploy(ctx context.Context, serviceID, envID u
 
 	if err := rt.Deploy(ctx, targetName, imageRefForArtifact(artifact), opts); err != nil {
 		return nil, fmt.Errorf("deploying runtime target %q: %w", targetName, err)
+	}
+	if err := s.updateDesiredArtifact(ctx, serviceID, envID, artifact.ID); err != nil {
+		return nil, err
 	}
 	obs, err := rt.Observe(ctx, serviceID, envID, targetName)
 	if err != nil {
@@ -190,11 +190,54 @@ func (s *RuntimeLifecycleService) resolve(ctx context.Context, serviceID, envID 
 	if env == nil {
 		return nil, nil, nil, fmt.Errorf("environment %s not found", envID)
 	}
+	if err := validateDirectRuntimeWorkload(svc, env); err != nil {
+		return nil, nil, nil, err
+	}
+	if err := s.validateDirectRuntimeState(ctx, svc.ID, env.ID); err != nil {
+		return nil, nil, nil, err
+	}
 	rt, err := s.resolver.Resolve(svc, env)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("resolving runtime: %w", err)
 	}
 	return svc, env, rt, nil
+}
+
+func (s *RuntimeLifecycleService) validateDirectRuntimeState(ctx context.Context, serviceID, envID uuid.UUID) error {
+	if s.state == nil {
+		return fmt.Errorf(directRuntimeGuardrailMessage)
+	}
+	st, err := s.state.Get(ctx, serviceID, envID)
+	if err != nil {
+		return fmt.Errorf("looking up direct runtime state: %w", err)
+	}
+	if st == nil {
+		return fmt.Errorf(directRuntimeGuardrailMessage)
+	}
+	return nil
+}
+
+func validateDirectRuntimeWorkload(svc *domain.Service, env *domain.Environment) error {
+	if svc == nil || svc.RuntimeConfig == nil || svc.RuntimeConfig.Adopted == nil {
+		return fmt.Errorf(directRuntimeGuardrailMessage)
+	}
+	if env == nil || env.RuntimeConfig == nil {
+		return fmt.Errorf(directRuntimeGuardrailMessage)
+	}
+	mode, _ := stringFromAny(env.RuntimeConfig["management_mode"])
+	if mode != "direct_runtime" {
+		return fmt.Errorf(directRuntimeGuardrailMessage)
+	}
+	adopted := svc.RuntimeConfig.Adopted
+	hostAlias, _ := stringFromAny(env.RuntimeConfig["host_alias"])
+	if adopted.HostAlias == "" || hostAlias != adopted.HostAlias {
+		return fmt.Errorf(directRuntimeGuardrailMessage)
+	}
+	envEndpointRef, _ := stringFromAny(env.RuntimeConfig["endpoint_ref"])
+	if envEndpointRef != adopted.EndpointRef {
+		return fmt.Errorf(directRuntimeGuardrailMessage)
+	}
+	return nil
 }
 
 func (s *RuntimeLifecycleService) resolveDeployArtifact(ctx context.Context, serviceID, envID uuid.UUID, artifactID *uuid.UUID) (*domain.Artifact, error) {

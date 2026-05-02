@@ -42,9 +42,10 @@ type AdoptionService struct {
 	publisher    events.Publisher
 	logger       *zap.Logger
 
-	secretEncryptor     *secretsAdapter.Encryptor
-	runtimeCfg          config.RuntimeConfig
-	allowRawDockerHosts bool
+	secretEncryptor      *secretsAdapter.Encryptor
+	runtimeCfg           config.RuntimeConfig
+	allowRawDockerHosts  bool
+	allowComposeTakeover bool
 }
 
 // AdoptionServiceOption configures adoption runtime governance behavior.
@@ -55,6 +56,14 @@ func WithAdoptionRuntimeConfig(runtimeCfg config.RuntimeConfig, allowRawDockerHo
 	return func(s *AdoptionService) {
 		s.runtimeCfg = runtimeCfg
 		s.allowRawDockerHosts = allowRawDockerHosts
+	}
+}
+
+// WithAdoptionComposeTakeoverPolicy controls whether Compose-origin containers
+// may be imported into Bahia's direct Docker runtime management mode.
+func WithAdoptionComposeTakeoverPolicy(allow bool) AdoptionServiceOption {
+	return func(s *AdoptionService) {
+		s.allowComposeTakeover = allow
 	}
 }
 
@@ -93,16 +102,17 @@ func NewAdoptionService(
 		publisher = &events.NoopPublisher{}
 	}
 	svc := &AdoptionService{
-		registry:            registry,
-		services:            services,
-		environments:        environments,
-		builds:              builds,
-		artifacts:           artifacts,
-		state:               state,
-		observations:        observations,
-		publisher:           publisher,
-		logger:              logger,
-		allowRawDockerHosts: true,
+		registry:             registry,
+		services:             services,
+		environments:         environments,
+		builds:               builds,
+		artifacts:            artifacts,
+		state:                state,
+		observations:         observations,
+		publisher:            publisher,
+		logger:               logger,
+		allowRawDockerHosts:  true,
+		allowComposeTakeover: true,
 	}
 	for _, opt := range opts {
 		opt(svc)
@@ -261,11 +271,20 @@ func (s *AdoptionService) buildPreviews(ctx context.Context, targets []AdoptionT
 			classified := classifyDiscoveredSensitiveData(discovered)
 			proposed := s.proposedServiceName(ctx, target, discovered, usedNames)
 			existing, _ := s.services.GetByName(ctx, proposed)
+			warnings := append([]string(nil), discovered.Warnings...)
+			adoptable := discovered.Adoptable
+			if isComposeOrigin(discovered) {
+				warnings = append(warnings, "compose-origin workload will be taken over by Bahia direct Docker runtime actions")
+				if !s.allowComposeTakeover {
+					warnings = append(warnings, "compose takeover is disabled by adoption policy")
+					adoptable = false
+				}
+			}
 			candidate := AdoptionPreviewContainer{
 				Discovered:              discovered,
 				ProposedServiceName:     proposed,
-				Warnings:                append([]string(nil), discovered.Warnings...),
-				Adoptable:               discovered.Adoptable,
+				Warnings:                warnings,
+				Adoptable:               adoptable,
 				SafeEnvironment:         classified.SafeEnvironment,
 				SafeLabels:              classified.SafeLabels,
 				RedactedEnvironmentKeys: classified.SensitiveEnvironmentKeys,
@@ -817,6 +836,10 @@ func sameAdoptedTarget(svc *domain.Service, target AdoptionTarget, discovered ru
 	}
 	adopted := svc.RuntimeConfig.Adopted
 	return adopted.TargetName == discovered.TargetName && adopted.HostAlias == target.Name
+}
+
+func isComposeOrigin(discovered runtime.DiscoveredContainer) bool {
+	return strings.EqualFold(strings.TrimSpace(discovered.SourceRuntime), "compose") || discovered.Compose != nil
 }
 
 func adoptionRunID(target AdoptionTarget, discovered runtime.DiscoveredContainer) string {

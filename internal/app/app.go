@@ -200,6 +200,7 @@ func New(cfg *config.Config) (*App, error) {
 		adoptionSvc = service.NewAdoptionService(
 			registry, serviceRepo, envRepo, buildRepo, artifactRepo, stateRepo, obsRepo, publisher, logger,
 			service.WithAdoptionRuntimeConfig(cfg.Runtime, cfg.Adoption.AllowRawDockerHosts),
+			service.WithAdoptionComposeTakeoverPolicy(cfg.Adoption.AllowComposeTakeover),
 			service.WithAdoptionSecrets(secretRepo, secretEncryptor),
 			service.WithAdoptionTxExecutor(repository.NewPgTxExecutor(pool)),
 		)

@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -91,6 +92,79 @@ func TestRuntimeLifecycleDeployMergesEffectiveSecretsOverAdoptedEnvironment(t *t
 	}
 }
 
+func TestRuntimeLifecycleDeployFailureDoesNotMutateDesiredState(t *testing.T) {
+	ctx := context.Background()
+	registry, svcRepo, envRepo, _, artifactRepo, _, _ := newTestRegistry()
+	stateRepo := registry.state.(*mockStateRepo)
+	rt := &lifecycleMockRuntime{deployErr: fmt.Errorf("simulated deploy failure")}
+	lifecycle := NewRuntimeLifecycleService(registry, svcRepo, envRepo, artifactRepo, stateRepo, &mockRuntimeResolver{rt: rt}, &events.NoopPublisher{}, zap.NewNop())
+
+	svc, env, artifact := seedRuntimeLifecycleFixtures(t, registry)
+	oldArtifactID := uuid.New()
+	if err := stateRepo.Upsert(ctx, &domain.EnvironmentServiceState{ServiceID: svc.ID, EnvironmentID: env.ID, DesiredArtifactID: &oldArtifactID, DriftStatus: domain.DriftStatusInSync}); err != nil {
+		t.Fatalf("seed state: %v", err)
+	}
+
+	_, err := lifecycle.Deploy(ctx, svc.ID, env.ID, &artifact.ID)
+	if err == nil || !strings.Contains(err.Error(), "simulated deploy failure") {
+		t.Fatalf("expected deploy failure, got %v", err)
+	}
+	state := stateRepo.states[stateKey(svc.ID, env.ID)]
+	if state == nil || state.DesiredArtifactID == nil || *state.DesiredArtifactID != oldArtifactID || state.DriftStatus != domain.DriftStatusInSync {
+		t.Fatalf("failed deploy should preserve desired state and drift: %#v", state)
+	}
+}
+
+func TestRuntimeLifecycleRejectsNonAdoptedOrNonDirectRuntimeWorkloads(t *testing.T) {
+	ctx := context.Background()
+	registry, svcRepo, envRepo, _, artifactRepo, _, _ := newTestRegistry()
+	stateRepo := registry.state.(*mockStateRepo)
+	rt := &lifecycleMockRuntime{}
+	lifecycle := NewRuntimeLifecycleService(registry, svcRepo, envRepo, artifactRepo, stateRepo, &mockRuntimeResolver{rt: rt}, &events.NoopPublisher{}, zap.NewNop())
+
+	svc, env, artifact := seedRuntimeLifecycleFixtures(t, registry)
+	env.RuntimeConfig["management_mode"] = "deployment_controller"
+	if err := envRepo.Update(ctx, env); err != nil {
+		t.Fatalf("update env: %v", err)
+	}
+	_, err := lifecycle.Deploy(ctx, svc.ID, env.ID, &artifact.ID)
+	if err == nil || !strings.Contains(err.Error(), directRuntimeGuardrailMessage) {
+		t.Fatalf("expected management mode guardrail, got %v", err)
+	}
+	if rt.deployTarget != "" {
+		t.Fatalf("runtime deploy should not be called, got target %q", rt.deployTarget)
+	}
+
+	env.RuntimeConfig["management_mode"] = "direct_runtime"
+	env.RuntimeConfig["host_alias"] = "other-host"
+	if err := envRepo.Update(ctx, env); err != nil {
+		t.Fatalf("restore env: %v", err)
+	}
+	_, err = lifecycle.Stop(ctx, svc.ID, env.ID)
+	if err == nil || !strings.Contains(err.Error(), directRuntimeGuardrailMessage) {
+		t.Fatalf("expected host alias guardrail, got %v", err)
+	}
+	if rt.stopTarget != "" {
+		t.Fatalf("runtime stop should not be called, got target %q", rt.stopTarget)
+	}
+
+	env.RuntimeConfig["host_alias"] = "local"
+	if err := envRepo.Update(ctx, env); err != nil {
+		t.Fatalf("restore env host alias: %v", err)
+	}
+	svc.RuntimeConfig = nil
+	if err := svcRepo.Update(ctx, svc); err != nil {
+		t.Fatalf("update service: %v", err)
+	}
+	_, err = lifecycle.Restart(ctx, svc.ID, env.ID)
+	if err == nil || !strings.Contains(err.Error(), directRuntimeGuardrailMessage) {
+		t.Fatalf("expected adopted workload guardrail, got %v", err)
+	}
+	if rt.restartTarget != "" {
+		t.Fatalf("runtime restart should not be called, got target %q", rt.restartTarget)
+	}
+}
+
 func TestRuntimeLifecycleDeploySecretDecryptFailureDoesNotMutateDesiredState(t *testing.T) {
 	ctx := context.Background()
 	registry, svcRepo, envRepo, _, artifactRepo, _, _ := newTestRegistry()
@@ -108,6 +182,7 @@ func TestRuntimeLifecycleDeploySecretDecryptFailureDoesNotMutateDesiredState(t *
 		t.Fatalf("create invalid secret: %v", err)
 	}
 
+	before := *stateRepo.states[stateKey(svc.ID, env.ID)]
 	_, err := lifecycle.Deploy(ctx, svc.ID, env.ID, &artifact.ID)
 	if err == nil || !strings.Contains(err.Error(), "decrypting effective secret") {
 		t.Fatalf("expected decrypt error, got %v", err)
@@ -115,8 +190,9 @@ func TestRuntimeLifecycleDeploySecretDecryptFailureDoesNotMutateDesiredState(t *
 	if rt.deployTarget != "" {
 		t.Fatalf("runtime deploy should not be called, got target %q", rt.deployTarget)
 	}
-	if state := stateRepo.states[stateKey(svc.ID, env.ID)]; state != nil {
-		t.Fatalf("state should not be mutated on secret merge failure: %#v", state)
+	after := stateRepo.states[stateKey(svc.ID, env.ID)]
+	if after == nil || after.DesiredArtifactID == nil || before.DesiredArtifactID == nil || *after.DesiredArtifactID != *before.DesiredArtifactID || after.DriftStatus != before.DriftStatus {
+		t.Fatalf("state should not be mutated on secret merge failure: before=%#v after=%#v", before, after)
 	}
 }
 
@@ -204,7 +280,7 @@ func seedRuntimeLifecycleFixtures(t *testing.T, registry *RegistryService) (*dom
 	if err := registry.CreateService(ctx, svc); err != nil {
 		t.Fatalf("CreateService: %v", err)
 	}
-	env := &domain.Environment{Name: "prod", RuntimeConfig: map[string]any{"type": "docker", "docker_host": "unix:///docker.sock"}}
+	env := &domain.Environment{Name: "prod", RuntimeConfig: map[string]any{"type": "docker", "docker_host": "unix:///docker.sock", "host_alias": "local", "management_mode": "direct_runtime"}}
 	if err := registry.CreateEnvironment(ctx, env); err != nil {
 		t.Fatalf("CreateEnvironment: %v", err)
 	}
@@ -215,6 +291,9 @@ func seedRuntimeLifecycleFixtures(t *testing.T, registry *RegistryService) (*dom
 	artifact := &domain.Artifact{BuildID: build.ID, ServiceID: svc.ID, ImageRepo: "ghcr.io/org/api", ImageTag: "v1", ImageDigest: "sha256:abc123", ScanStatus: domain.ScanStatusUnknown}
 	if err := registry.artifacts.Create(ctx, artifact); err != nil {
 		t.Fatalf("Create artifact: %v", err)
+	}
+	if err := registry.state.Upsert(ctx, &domain.EnvironmentServiceState{ServiceID: svc.ID, EnvironmentID: env.ID, DesiredArtifactID: &artifact.ID, DriftStatus: domain.DriftStatusUnknown}); err != nil {
+		t.Fatalf("seed direct runtime state: %v", err)
 	}
 	return svc, env, artifact
 }
@@ -231,6 +310,7 @@ type lifecycleMockRuntime struct {
 	deployTarget  string
 	deployImage   string
 	deployOpts    runtime.DeployOptions
+	deployErr     error
 	restartTarget string
 	stopTarget    string
 }
@@ -241,7 +321,7 @@ func (m *lifecycleMockRuntime) Deploy(_ context.Context, serviceName, image stri
 	m.deployTarget = serviceName
 	m.deployImage = image
 	m.deployOpts = opts
-	return nil
+	return m.deployErr
 }
 
 func (m *lifecycleMockRuntime) Undeploy(_ context.Context, _ string) error { return nil }
