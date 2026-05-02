@@ -24,6 +24,8 @@ type Config struct {
 	Runtime       RuntimeConfig         `koanf:"runtime"`
 	Log           LogConfig             `koanf:"log"`
 	Auth          AuthConfig            `koanf:"auth"`
+	Adoption      AdoptionConfig        `koanf:"adoption"`
+	DirectRuntime DirectRuntimeConfig   `koanf:"direct_runtime_actions"`
 	CORS          CORSConfig            `koanf:"cors"`
 	Blossom       BlossomConfig         `koanf:"blossom"`
 	OCI           OCIServerConfig       `koanf:"oci"`
@@ -151,8 +153,33 @@ type LogConfig struct {
 
 // AuthConfig holds authentication settings.
 type AuthConfig struct {
-	Enabled   bool   `koanf:"enabled"`
-	JWTSecret string `koanf:"jwt_secret"`
+	Enabled      bool   `koanf:"enabled"`
+	JWTSecret    string `koanf:"jwt_secret"`
+	NIP98Enabled bool   `koanf:"nip98_enabled"`
+}
+
+// OperatorAccessConfig holds system-operator allowlists for privileged API routes.
+type OperatorAccessConfig struct {
+	AllowedSubjects []string `koanf:"allowed_subjects"`
+	AllowedPubkeys  []string `koanf:"allowed_pubkeys"`
+	AllowedEmails   []string `koanf:"allowed_emails"`
+}
+
+// Empty reports whether no operator identities are configured.
+func (c OperatorAccessConfig) Empty() bool {
+	return len(c.AllowedSubjects) == 0 && len(c.AllowedPubkeys) == 0 && len(c.AllowedEmails) == 0
+}
+
+// AdoptionConfig holds privileged adoption route settings.
+type AdoptionConfig struct {
+	Enabled              bool `koanf:"enabled"`
+	OperatorAccessConfig `koanf:",squash"`
+}
+
+// DirectRuntimeConfig holds privileged direct runtime action route settings.
+type DirectRuntimeConfig struct {
+	Enabled              bool `koanf:"enabled"`
+	OperatorAccessConfig `koanf:",squash"`
 }
 
 // CORSConfig holds CORS middleware settings.
@@ -276,6 +303,12 @@ func Defaults() *Config {
 		Auth: AuthConfig{
 			Enabled: false,
 		},
+		Adoption: AdoptionConfig{
+			Enabled: false,
+		},
+		DirectRuntime: DirectRuntimeConfig{
+			Enabled: false,
+		},
 		CORS: CORSConfig{
 			AllowedOrigins: []string{}, // secure default: no cross-origin requests
 		},
@@ -367,6 +400,28 @@ func Load(configPath string) (*Config, error) {
 }
 
 func (c *Config) validate() error {
+	if c.Adoption.Enabled {
+		if !c.Auth.Enabled {
+			return fmt.Errorf("config validation failed: auth.enabled=true is required when adoption.enabled=true")
+		}
+		if strings.TrimSpace(c.Auth.JWTSecret) == "" && !c.Auth.NIP98Enabled {
+			return fmt.Errorf("config validation failed: auth.jwt_secret or auth.nip98_enabled=true is required when adoption.enabled=true")
+		}
+		if c.Adoption.OperatorAccessConfig.Empty() {
+			return fmt.Errorf("config validation failed: adoption operator allowlist is required when adoption.enabled=true")
+		}
+	}
+	if c.DirectRuntime.Enabled {
+		if !c.Auth.Enabled {
+			return fmt.Errorf("config validation failed: auth.enabled=true is required when direct_runtime_actions.enabled=true")
+		}
+		if strings.TrimSpace(c.Auth.JWTSecret) == "" && !c.Auth.NIP98Enabled {
+			return fmt.Errorf("config validation failed: auth.jwt_secret or auth.nip98_enabled=true is required when direct_runtime_actions.enabled=true")
+		}
+		if c.DirectRuntime.OperatorAccessConfig.Empty() {
+			return fmt.Errorf("config validation failed: direct_runtime_actions operator allowlist is required when direct_runtime_actions.enabled=true")
+		}
+	}
 	if c.OCI.Enabled {
 		if strings.TrimSpace(c.OCI.PublicHost) == "" {
 			return fmt.Errorf("config validation failed: oci.public_host is required when oci.enabled=true")

@@ -52,29 +52,32 @@ func MiddlewareFromConfig(cfg MiddlewareConfig) func(http.Handler) http.Handler 
 		if !cfg.Enabled {
 			return next
 		}
-
-		if cfg.JWTSecret == "" {
-			// Fail closed: if auth is enabled but no secret is configured, reject all requests.
+		if cfg.JWTSecret == "" && cfg.NIP98Validator == nil {
+			// Fail closed: if auth is enabled but no method is configured, reject all requests.
 			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				http.Error(w, `{"error":"auth enabled but jwt_secret not configured"}`, http.StatusInternalServerError)
+				writeAuthError(w, http.StatusInternalServerError, "auth enabled but jwt_secret not configured")
 			})
 		}
 
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			authHeader := r.Header.Get("Authorization")
 			if authHeader == "" {
-				http.Error(w, `{"error":"missing Authorization header"}`, http.StatusUnauthorized)
+				writeAuthError(w, http.StatusUnauthorized, "missing Authorization header")
 				return
 			}
 
 			// Dispatch based on auth scheme.
 			switch {
 			case strings.HasPrefix(authHeader, "Bearer "):
+				if cfg.JWTSecret == "" {
+					writeAuthError(w, http.StatusInternalServerError, "auth enabled but jwt_secret not configured")
+					return
+				}
 				handleBearer(w, r, next, authHeader, cfg.JWTSecret)
 			case strings.HasPrefix(authHeader, "Nostr "):
 				handleNostr(w, r, next, authHeader, cfg.NIP98Validator, cfg.NIP05Resolver)
 			default:
-				http.Error(w, `{"error":"unsupported Authorization scheme"}`, http.StatusUnauthorized)
+				writeAuthError(w, http.StatusUnauthorized, "unsupported Authorization scheme")
 			}
 		})
 	}
@@ -84,13 +87,13 @@ func MiddlewareFromConfig(cfg MiddlewareConfig) func(http.Handler) http.Handler 
 func handleBearer(w http.ResponseWriter, r *http.Request, next http.Handler, authHeader, jwtSecret string) {
 	tokenString := strings.TrimPrefix(authHeader, "Bearer ")
 	if tokenString == "" {
-		http.Error(w, `{"error":"empty bearer token"}`, http.StatusUnauthorized)
+		writeAuthError(w, http.StatusUnauthorized, "empty bearer token")
 		return
 	}
 
 	claims, err := ValidateToken(tokenString, jwtSecret)
 	if err != nil {
-		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err.Error()), http.StatusUnauthorized)
+		writeAuthError(w, http.StatusUnauthorized, err.Error())
 		return
 	}
 
@@ -110,19 +113,19 @@ func handleBearer(w http.ResponseWriter, r *http.Request, next http.Handler, aut
 // handleNostr validates a NIP-98 Nostr auth event and sets a Principal on the context.
 func handleNostr(w http.ResponseWriter, r *http.Request, next http.Handler, authHeader string, validator *NIP98Validator, resolver *NIP05Resolver) {
 	if validator == nil {
-		http.Error(w, `{"error":"NIP-98 auth not configured"}`, http.StatusUnauthorized)
+		writeAuthError(w, http.StatusUnauthorized, "NIP-98 auth not configured")
 		return
 	}
 
 	token := strings.TrimPrefix(authHeader, "Nostr ")
 	if token == "" {
-		http.Error(w, `{"error":"empty Nostr auth token"}`, http.StatusUnauthorized)
+		writeAuthError(w, http.StatusUnauthorized, "empty Nostr auth token")
 		return
 	}
 
 	principal, err := validator.Validate(token, r)
 	if err != nil {
-		http.Error(w, fmt.Sprintf(`{"error":"NIP-98 validation failed: %s"}`, err.Error()), http.StatusUnauthorized)
+		writeAuthError(w, http.StatusUnauthorized, fmt.Sprintf("NIP-98 validation failed: %s", err.Error()))
 		return
 	}
 
@@ -250,4 +253,10 @@ func computeHMACSHA256(input, secret string) ([]byte, error) {
 		return nil, err
 	}
 	return mac.Sum(nil), nil
+}
+
+func writeAuthError(w http.ResponseWriter, status int, msg string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(map[string]string{"error": msg})
 }

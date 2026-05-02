@@ -92,7 +92,7 @@ func TestScanAdoption(t *testing.T) {
 			t.Fatalf("decoding request: %v", err)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{"data": []AdoptionPreview{{Target: gotBody.Targets[0], Containers: []AdoptionPreviewContainer{{ProposedServiceName: "legacy-api", Adoptable: true}}}}})
+		json.NewEncoder(w).Encode(map[string]any{"data": []AdoptionPreview{{Target: gotBody.Targets[0], Containers: []AdoptionPreviewContainer{{Discovered: DiscoveredContainer{HealthStatus: "healthy", Compose: &ComposeMetadata{ProjectName: "legacy"}}, ProposedServiceName: "legacy-api", Adoptable: true}}}}})
 	}))
 	defer server.Close()
 
@@ -106,6 +106,9 @@ func TestScanAdoption(t *testing.T) {
 	}
 	if len(result) != 1 || result[0].Containers[0].ProposedServiceName != "legacy-api" {
 		t.Fatalf("unexpected result: %#v", result)
+	}
+	if result[0].Containers[0].Discovered.HealthStatus != "healthy" || result[0].Containers[0].Discovered.Compose.ProjectName != "legacy" {
+		t.Fatalf("unexpected discovered response shape: %#v", result[0].Containers[0].Discovered)
 	}
 }
 
@@ -151,13 +154,22 @@ func TestRuntimeActionMethods(t *testing.T) {
 			}
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{"data": RuntimeActionResult{Action: strings.TrimPrefix(r.URL.Path[strings.LastIndex(r.URL.Path, "/"):], "/"), ServiceID: "svc", EnvironmentID: "env"}})
+		json.NewEncoder(w).Encode(map[string]any{"data": RuntimeActionResult{
+			Action:        strings.TrimPrefix(r.URL.Path[strings.LastIndex(r.URL.Path, "/"):], "/"),
+			ServiceID:     "svc",
+			EnvironmentID: "env",
+			Observation:   &RuntimeObservation{ID: "obs", ServiceID: "svc", EnvironmentID: "env", HealthStatus: "healthy"},
+		}})
 	}))
 	defer server.Close()
 
 	c := New(server.URL)
-	if _, err := c.DeployServiceRuntime(context.Background(), "svc", "env", &artifactID); err != nil {
+	result, err := c.DeployServiceRuntime(context.Background(), "svc", "env", &artifactID)
+	if err != nil {
 		t.Fatalf("DeployServiceRuntime() error = %v", err)
+	}
+	if result.Observation == nil || result.Observation.HealthStatus != "healthy" {
+		t.Fatalf("unexpected runtime action response shape: %#v", result)
 	}
 	if _, err := c.RestartServiceRuntime(context.Background(), "svc", "env"); err != nil {
 		t.Fatalf("RestartServiceRuntime() error = %v", err)

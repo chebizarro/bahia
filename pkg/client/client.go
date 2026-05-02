@@ -65,28 +65,36 @@ type AdoptionImportRequest struct {
 
 // DiscoveredContainer is a normalized container preview returned by adoption scan.
 type DiscoveredContainer struct {
-	TargetName      string                  `json:"target_name"`
-	EnvironmentName string                  `json:"environment_name"`
-	ContainerID     string                  `json:"container_id"`
-	ContainerName   string                  `json:"container_name"`
-	ImageRef        string                  `json:"image_ref"`
-	ImageRepo       string                  `json:"image_repo"`
-	ImageTag        string                  `json:"image_tag"`
-	ImageDigest     string                  `json:"image_digest"`
-	SourceRuntime   string                  `json:"source_runtime"`
-	Labels          map[string]string       `json:"labels,omitempty"`
-	Environment     map[string]string       `json:"environment,omitempty"`
-	Ports           []string                `json:"ports,omitempty"`
-	Volumes         []string                `json:"volumes,omitempty"`
-	Restart         string                  `json:"restart,omitempty"`
-	Command         []string                `json:"command,omitempty"`
-	Entrypoint      []string                `json:"entrypoint,omitempty"`
-	WorkingDir      string                  `json:"working_dir,omitempty"`
-	NetworkMode     string                  `json:"network_mode,omitempty"`
-	Compose         *domain.ComposeMetadata `json:"compose,omitempty"`
-	HealthStatus    domain.HealthStatus     `json:"health_status"`
-	Warnings        []string                `json:"warnings,omitempty"`
-	Adoptable       bool                    `json:"adoptable"`
+	TargetName      string            `json:"target_name"`
+	EnvironmentName string            `json:"environment_name"`
+	ContainerID     string            `json:"container_id"`
+	ContainerName   string            `json:"container_name"`
+	ImageRef        string            `json:"image_ref"`
+	ImageRepo       string            `json:"image_repo"`
+	ImageTag        string            `json:"image_tag"`
+	ImageDigest     string            `json:"image_digest"`
+	SourceRuntime   string            `json:"source_runtime"`
+	Labels          map[string]string `json:"labels,omitempty"`
+	Environment     map[string]string `json:"environment,omitempty"`
+	Ports           []string          `json:"ports,omitempty"`
+	Volumes         []string          `json:"volumes,omitempty"`
+	Restart         string            `json:"restart,omitempty"`
+	Command         []string          `json:"command,omitempty"`
+	Entrypoint      []string          `json:"entrypoint,omitempty"`
+	WorkingDir      string            `json:"working_dir,omitempty"`
+	NetworkMode     string            `json:"network_mode,omitempty"`
+	Compose         *ComposeMetadata  `json:"compose,omitempty"`
+	HealthStatus    string            `json:"health_status"`
+	Warnings        []string          `json:"warnings,omitempty"`
+	Adoptable       bool              `json:"adoptable"`
+}
+
+// ComposeMetadata preserves public Docker Compose origin metadata.
+type ComposeMetadata struct {
+	ProjectName string   `json:"project_name,omitempty"`
+	ServiceName string   `json:"service_name,omitempty"`
+	WorkingDir  string   `json:"working_dir,omitempty"`
+	ConfigFiles []string `json:"config_files,omitempty"`
 }
 
 // AdoptionPreviewContainer is one discovered container plus import proposal metadata.
@@ -123,10 +131,26 @@ type AdoptionImportResult struct {
 
 // RuntimeActionResult reports a direct runtime action result.
 type RuntimeActionResult struct {
-	Action        string                     `json:"action"`
-	ServiceID     string                     `json:"service_id"`
-	EnvironmentID string                     `json:"environment_id"`
-	Observation   *domain.RuntimeObservation `json:"observation,omitempty"`
+	Action        string              `json:"action"`
+	ServiceID     string              `json:"service_id"`
+	EnvironmentID string              `json:"environment_id"`
+	Observation   *RuntimeObservation `json:"observation,omitempty"`
+}
+
+// RuntimeObservation is the public runtime observation response shape.
+type RuntimeObservation struct {
+	ID                  string         `json:"id"`
+	ServiceID           string         `json:"service_id"`
+	EnvironmentID       string         `json:"environment_id"`
+	ObservedImageDigest string         `json:"observed_image_digest"`
+	ObservedImageRepo   string         `json:"observed_image_repo,omitempty"`
+	ObservedContainerID string         `json:"observed_container_id,omitempty"`
+	ObservedHost        string         `json:"observed_host,omitempty"`
+	ObservedVersion     string         `json:"observed_version,omitempty"`
+	HealthStatus        string         `json:"health_status"`
+	Source              string         `json:"source"`
+	Metadata            map[string]any `json:"metadata,omitempty"`
+	ObservedAt          time.Time      `json:"observed_at"`
 }
 
 type apiResponse struct {

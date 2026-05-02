@@ -43,6 +43,15 @@ func TestDefaults(t *testing.T) {
 	if cfg.Runtime.Type != "docker" {
 		t.Errorf("expected default runtime type docker, got %s", cfg.Runtime.Type)
 	}
+	if cfg.Adoption.Enabled {
+		t.Error("expected adoption disabled by default")
+	}
+	if cfg.DirectRuntime.Enabled {
+		t.Error("expected direct runtime actions disabled by default")
+	}
+	if cfg.Auth.NIP98Enabled {
+		t.Error("expected NIP-98 auth disabled by default")
+	}
 }
 
 func TestDBConfigDSN(t *testing.T) {
@@ -294,6 +303,98 @@ func TestLoadNestedRuntimeConfigFromYAML(t *testing.T) {
 	staging := cfg.Runtime.Environments["staging"]
 	if staging.Type != "kubernetes" || staging.KubeContext != "staging-cluster" || staging.KubeNamespace != "staging" {
 		t.Errorf("staging runtime target = %+v", staging)
+	}
+}
+
+func TestPrivilegedRouteConfigValidation(t *testing.T) {
+	t.Run("adoption requires auth", func(t *testing.T) {
+		cfg := Defaults()
+		cfg.Adoption.Enabled = true
+		cfg.Adoption.AllowedSubjects = []string{"ops"}
+		err := cfg.validate()
+		if err == nil || !strings.Contains(err.Error(), "auth.enabled=true") {
+			t.Fatalf("validate error = %v, want auth requirement", err)
+		}
+	})
+
+	t.Run("adoption requires allowlist", func(t *testing.T) {
+		cfg := Defaults()
+		cfg.Auth.Enabled = true
+		cfg.Auth.JWTSecret = "secret"
+		cfg.Adoption.Enabled = true
+		err := cfg.validate()
+		if err == nil || !strings.Contains(err.Error(), "adoption operator allowlist") {
+			t.Fatalf("validate error = %v, want adoption allowlist requirement", err)
+		}
+	})
+
+	t.Run("direct runtime requires allowlist", func(t *testing.T) {
+		cfg := Defaults()
+		cfg.Auth.Enabled = true
+		cfg.Auth.JWTSecret = "secret"
+		cfg.DirectRuntime.Enabled = true
+		err := cfg.validate()
+		if err == nil || !strings.Contains(err.Error(), "direct_runtime_actions operator allowlist") {
+			t.Fatalf("validate error = %v, want direct runtime allowlist requirement", err)
+		}
+	})
+
+	t.Run("enabled with auth and allowlists is valid", func(t *testing.T) {
+		cfg := Defaults()
+		cfg.Auth.Enabled = true
+		cfg.Auth.JWTSecret = "secret"
+		cfg.Adoption.Enabled = true
+		cfg.Adoption.AllowedSubjects = []string{"ops"}
+		cfg.DirectRuntime.Enabled = true
+		cfg.DirectRuntime.AllowedPubkeys = []string{"abcdef"}
+		if err := cfg.validate(); err != nil {
+			t.Fatalf("validate error = %v", err)
+		}
+	})
+
+	t.Run("nip98 can satisfy privileged auth method", func(t *testing.T) {
+		cfg := Defaults()
+		cfg.Auth.Enabled = true
+		cfg.Auth.NIP98Enabled = true
+		cfg.Adoption.Enabled = true
+		cfg.Adoption.AllowedPubkeys = []string{"abcdef"}
+		if err := cfg.validate(); err != nil {
+			t.Fatalf("validate error = %v", err)
+		}
+	})
+}
+
+func TestLoadPrivilegedRouteConfigFromYAML(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	content := []byte(`auth:
+  enabled: true
+  jwt_secret: test-secret
+adoption:
+  enabled: true
+  allowed_subjects:
+    - ops-user
+  allowed_pubkeys:
+    - abc123
+  allowed_emails:
+    - ops@example.com
+direct_runtime_actions:
+  enabled: true
+  allowed_subjects:
+    - runtime-user
+`)
+	if err := os.WriteFile(path, content, 0o644); err != nil {
+		t.Fatalf("writing temp config: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if !cfg.Adoption.Enabled || len(cfg.Adoption.AllowedSubjects) != 1 || cfg.Adoption.AllowedSubjects[0] != "ops-user" {
+		t.Fatalf("adoption config not loaded: %+v", cfg.Adoption)
+	}
+	if !cfg.DirectRuntime.Enabled || len(cfg.DirectRuntime.AllowedSubjects) != 1 || cfg.DirectRuntime.AllowedSubjects[0] != "runtime-user" {
+		t.Fatalf("direct runtime config not loaded: %+v", cfg.DirectRuntime)
 	}
 }
 

@@ -187,8 +187,15 @@ func New(cfg *config.Config) (*App, error) {
 	logger.Info("runtime resolver initialized", zap.String("default_type", cfg.Runtime.Type))
 
 	// Adopted workload orchestration and direct runtime lifecycle services.
-	adoptionSvc := service.NewAdoptionService(registry, serviceRepo, envRepo, buildRepo, artifactRepo, stateRepo, obsRepo, publisher, logger)
-	runtimeLifecycleSvc := service.NewRuntimeLifecycleService(registry, serviceRepo, envRepo, artifactRepo, stateRepo, runtimeResolver, publisher, logger)
+	// Privileged routes are opt-in; keep services nil unless their route family is enabled.
+	var adoptionSvc *service.AdoptionService
+	if cfg.Adoption.Enabled {
+		adoptionSvc = service.NewAdoptionService(registry, serviceRepo, envRepo, buildRepo, artifactRepo, stateRepo, obsRepo, publisher, logger)
+	}
+	var runtimeLifecycleSvc *service.RuntimeLifecycleService
+	if cfg.DirectRuntime.Enabled {
+		runtimeLifecycleSvc = service.NewRuntimeLifecycleService(registry, serviceRepo, envRepo, artifactRepo, stateRepo, runtimeResolver, publisher, logger)
+	}
 
 	// Reconciler (created here but started in Run() with the lifecycle context).
 	var rec *reconcile.Reconciler
@@ -327,11 +334,26 @@ func New(cfg *config.Config) (*App, error) {
 
 	// Tenant RBAC.
 	rbac := auth.NewRBAC(orgMemberRepo)
+	var nip98Validator *auth.NIP98Validator
+	var nip05Resolver *auth.NIP05Resolver
+	if cfg.Auth.Enabled && cfg.Auth.NIP98Enabled {
+		nip98Validator = auth.NewNIP98Validator(auth.DefaultNIP98Config())
+		if len(cfg.Adoption.AllowedEmails) > 0 || len(cfg.DirectRuntime.AllowedEmails) > 0 {
+			nip05Resolver = auth.NewNIP05Resolver()
+		}
+	}
+	authMiddleware := auth.MiddlewareConfig{
+		Enabled:        cfg.Auth.Enabled,
+		JWTSecret:      cfg.Auth.JWTSecret,
+		NIP98Validator: nip98Validator,
+		NIP05Resolver:  nip05Resolver,
+	}
 
 	// HTTP router.
 	handler := router.NewWithDeps(registry, logger, cfg.CORS, telemetryProvider,
 		router.RouterDeps{
 			Config:           cfg,
+			AuthMiddleware:   authMiddleware,
 			Workers:          workerRepo,
 			Payments:         paymentSvc,
 			SBOMs:            sbomRepo,

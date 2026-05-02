@@ -73,3 +73,21 @@ log:
 auth:
   enabled: false
   jwt_secret: ""
+  # NIP-98 is off by default; enable only when Nostr HTTP auth should be accepted.
+  nip98_enabled: false
+
+adoption:
+  # Privileged adoption scan/import routes are disabled by default.
+  # To enable, set auth.enabled=true and configure at least one operator allowlist.
+  enabled: false
+  allowed_subjects: []
+  allowed_pubkeys: []
+  allowed_emails: []
+
+direct_runtime_actions:
+  # Direct deploy/restart/stop runtime routes are disabled by default.
+  # To enable, set auth.enabled=true and configure at least one operator allowlist.
+  enabled: false
+  allowed_subjects: []
+  allowed_pubkeys: []
+  allowed_emails: []

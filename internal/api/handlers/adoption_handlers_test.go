@@ -43,6 +43,7 @@ func TestAdoptionHandlerScanMapsRequestAndResponse(t *testing.T) {
 				ContainerID:   "abc123",
 				ContainerName: "legacy-api",
 				ImageRef:      "ghcr.io/org/api:v1",
+				Compose:       &domain.ComposeMetadata{ProjectName: "legacy", ServiceName: "api", ConfigFiles: []string{"compose.yml"}},
 				HealthStatus:  domain.HealthStatusHealthy,
 				Adoptable:     true,
 			},
@@ -72,6 +73,12 @@ func TestAdoptionHandlerScanMapsRequestAndResponse(t *testing.T) {
 	container := resp.Data[0].Containers[0]
 	if container.ProposedServiceName != "legacy-api" || !container.WillUpdate || container.ExistingServiceID == nil || *container.ExistingServiceID != serviceID {
 		t.Fatalf("unexpected preview container: %#v", container)
+	}
+	if container.Discovered.HealthStatus != string(domain.HealthStatusHealthy) {
+		t.Fatalf("health_status = %q, want %q", container.Discovered.HealthStatus, domain.HealthStatusHealthy)
+	}
+	if container.Discovered.Compose == nil || container.Discovered.Compose.ProjectName != "legacy" || len(container.Discovered.Compose.ConfigFiles) != 1 {
+		t.Fatalf("compose metadata not mapped to DTO: %#v", container.Discovered.Compose)
 	}
 }
 
@@ -151,6 +158,15 @@ func TestServiceActionHandlerDeployParsesIDsAndArtifact(t *testing.T) {
 
 	if stub.deployServiceID != serviceID || stub.deployEnvID != envID || stub.deployArtifact == nil || *stub.deployArtifact != artifactID {
 		t.Fatalf("deploy args not mapped: %#v", stub)
+	}
+	var resp struct {
+		Data dto.RuntimeActionResponse `json:"data"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Data.Observation == nil || resp.Data.Observation.HealthStatus != string(domain.HealthStatusHealthy) {
+		t.Fatalf("runtime observation not mapped to DTO: %#v", resp.Data.Observation)
 	}
 }
 

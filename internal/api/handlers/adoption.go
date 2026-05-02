@@ -3,11 +3,13 @@ package handlers
 import (
 	"context"
 	"net/http"
+	"reflect"
 	"regexp"
 	"strings"
 
 	"github.com/openagentsinc/bahia/internal/adapters/runtime"
 	"github.com/openagentsinc/bahia/internal/api/dto"
+	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/service"
 )
 
@@ -23,6 +25,9 @@ type AdoptionHandler struct {
 
 // NewAdoptionHandler creates an AdoptionHandler.
 func NewAdoptionHandler(adoption adoptionService) *AdoptionHandler {
+	if isNilHandlerDependency(adoption) {
+		adoption = nil
+	}
 	return &AdoptionHandler{adoption: adoption}
 }
 
@@ -249,10 +254,22 @@ func mapDiscoveredContainerResponse(discovered runtime.DiscoveredContainer) dto.
 		Entrypoint:      append([]string(nil), discovered.Entrypoint...),
 		WorkingDir:      discovered.WorkingDir,
 		NetworkMode:     discovered.NetworkMode,
-		Compose:         discovered.Compose,
-		HealthStatus:    discovered.HealthStatus,
+		Compose:         mapComposeMetadataResponse(discovered.Compose),
+		HealthStatus:    string(discovered.HealthStatus),
 		Warnings:        append([]string(nil), discovered.Warnings...),
 		Adoptable:       discovered.Adoptable,
+	}
+}
+
+func mapComposeMetadataResponse(compose *domain.ComposeMetadata) *dto.ComposeMetadataResponse {
+	if compose == nil {
+		return nil
+	}
+	return &dto.ComposeMetadataResponse{
+		ProjectName: compose.ProjectName,
+		ServiceName: compose.ServiceName,
+		WorkingDir:  compose.WorkingDir,
+		ConfigFiles: append([]string(nil), compose.ConfigFiles...),
 	}
 }
 
@@ -265,4 +282,17 @@ func copyStringMap(in map[string]string) map[string]string {
 		out[k] = v
 	}
 	return out
+}
+
+func isNilHandlerDependency(v any) bool {
+	if v == nil {
+		return true
+	}
+	rv := reflect.ValueOf(v)
+	switch rv.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return rv.IsNil()
+	default:
+		return false
+	}
 }

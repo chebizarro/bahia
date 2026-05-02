@@ -30,6 +30,7 @@ var Version = "dev"
 // RouterDeps holds optional dependencies for the router.
 type RouterDeps struct {
 	Config           *config.Config
+	AuthMiddleware   auth.MiddlewareConfig
 	Workers          repository.WorkerRepository
 	Payments         *service.PaymentService
 	SBOMs            repository.SBOMRepository
@@ -84,12 +85,8 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 	})
 
 	// Auth middleware (applied to API routes, not health checks).
-	var authEnabled bool
-	var jwtSecret string
-	if len(authCfg) > 0 {
-		authEnabled = authCfg[0].Enabled
-		jwtSecret = authCfg[0].JWTSecret
-	}
+	authMiddleware := routeAuthConfig(deps, authCfg...)
+	jwtSecret := authMiddleware.JWTSecret
 
 	// Health, readiness, and metrics (unauthenticated).
 	r.Get("/health", func(w http.ResponseWriter, r *http.Request) {
@@ -133,7 +130,7 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 	// API v1 routes (authenticated when auth is enabled).
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Use(middleware.ContentType)
-		r.Use(auth.Middleware(authEnabled, jwtSecret))
+		r.Use(auth.MiddlewareFromConfig(authMiddleware))
 
 		// Read routes: GET/list endpoints with read rate limit.
 		r.Group(func(r chi.Router) {
@@ -274,13 +271,23 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 			r.Post("/services", svcH.Create)
 			r.Put("/services/{id}", svcH.Update)
 			r.Delete("/services/{id}", svcH.Delete)
-			r.Post("/services/{serviceId}/environments/{envId}/deploy", serviceActionH.Deploy)
-			r.Post("/services/{serviceId}/environments/{envId}/restart", serviceActionH.Restart)
-			r.Post("/services/{serviceId}/environments/{envId}/stop", serviceActionH.Stop)
+			if directRuntimeEnabled(deps.Config) {
+				r.Group(func(r chi.Router) {
+					r.Use(middleware.RequireOperator(operatorAccessMiddlewareConfig(deps.Config.DirectRuntime.OperatorAccessConfig, authMiddleware.NIP05Resolver)))
+					r.Post("/services/{serviceId}/environments/{envId}/deploy", serviceActionH.Deploy)
+					r.Post("/services/{serviceId}/environments/{envId}/restart", serviceActionH.Restart)
+					r.Post("/services/{serviceId}/environments/{envId}/stop", serviceActionH.Stop)
+				})
+			}
 
 			// Adoption (write)
-			r.Post("/adoption/scan", adoptionH.Scan)
-			r.Post("/adoption/import", adoptionH.Import)
+			if adoptionEnabled(deps.Config) {
+				r.Group(func(r chi.Router) {
+					r.Use(middleware.RequireOperator(operatorAccessMiddlewareConfig(deps.Config.Adoption.OperatorAccessConfig, authMiddleware.NIP05Resolver)))
+					r.Post("/adoption/scan", adoptionH.Scan)
+					r.Post("/adoption/import", adoptionH.Import)
+				})
+			}
 
 			// Environments (write)
 			r.Post("/environments", envH.Create)
@@ -366,4 +373,40 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 	})
 
 	return r
+}
+
+func routeAuthConfig(deps RouterDeps, authCfg ...config.AuthConfig) auth.MiddlewareConfig {
+	if deps.AuthMiddleware.Enabled || deps.AuthMiddleware.JWTSecret != "" || deps.AuthMiddleware.NIP98Validator != nil || deps.AuthMiddleware.NIP05Resolver != nil {
+		return deps.AuthMiddleware
+	}
+	if len(authCfg) > 0 {
+		return auth.MiddlewareConfig{
+			Enabled:   authCfg[0].Enabled,
+			JWTSecret: authCfg[0].JWTSecret,
+		}
+	}
+	if deps.Config != nil {
+		return auth.MiddlewareConfig{
+			Enabled:   deps.Config.Auth.Enabled,
+			JWTSecret: deps.Config.Auth.JWTSecret,
+		}
+	}
+	return auth.MiddlewareConfig{}
+}
+
+func adoptionEnabled(cfg *config.Config) bool {
+	return cfg != nil && cfg.Adoption.Enabled
+}
+
+func directRuntimeEnabled(cfg *config.Config) bool {
+	return cfg != nil && cfg.DirectRuntime.Enabled
+}
+
+func operatorAccessMiddlewareConfig(cfg config.OperatorAccessConfig, resolver *auth.NIP05Resolver) middleware.OperatorAccessConfig {
+	return middleware.OperatorAccessConfig{
+		AllowedSubjects: cfg.AllowedSubjects,
+		AllowedPubkeys:  cfg.AllowedPubkeys,
+		AllowedEmails:   cfg.AllowedEmails,
+		NIP05Resolver:   resolver,
+	}
 }
