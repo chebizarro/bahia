@@ -1,0 +1,193 @@
+package service
+
+import (
+	"context"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/openagentsinc/bahia/internal/adapters/runtime"
+	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/events"
+	"go.uber.org/zap"
+)
+
+func TestRuntimeLifecycleDeployUsesAdoptedTargetAndRecordsObservation(t *testing.T) {
+	ctx := context.Background()
+	registry, svcRepo, envRepo, _, artifactRepo, _, _ := newTestRegistry()
+	stateRepo := registry.state.(*mockStateRepo)
+	publisher := &capturePublisher{}
+	rt := &lifecycleMockRuntime{}
+	resolver := &mockRuntimeResolver{rt: rt}
+	lifecycle := NewRuntimeLifecycleService(registry, svcRepo, envRepo, artifactRepo, stateRepo, resolver, publisher, zap.NewNop())
+
+	svc, env, artifact := seedRuntimeLifecycleFixtures(t, registry)
+	obs, err := lifecycle.Deploy(ctx, svc.ID, env.ID, &artifact.ID)
+	if err != nil {
+		t.Fatalf("Deploy returned error: %v", err)
+	}
+	if obs == nil || obs.ObservedContainerID == "" {
+		t.Fatalf("expected deploy observation, got %#v", obs)
+	}
+	if rt.deployTarget != "legacy-api" {
+		t.Fatalf("expected deploy target legacy-api, got %q", rt.deployTarget)
+	}
+	if rt.deployImage != "ghcr.io/org/api@sha256:abc123" {
+		t.Fatalf("unexpected deploy image: %q", rt.deployImage)
+	}
+	if rt.deployOpts.Environment["APP_ENV"] != "prod" || rt.deployOpts.Labels["bahia.service"] != "api" || rt.deployOpts.Labels["bahia.managed"] != "true" || rt.deployOpts.Labels["existing"] != "label" {
+		t.Fatalf("unexpected deploy opts env/labels: %#v", rt.deployOpts)
+	}
+	if strings.Join(rt.deployOpts.Ports, ",") != "8080:80" || rt.deployOpts.Restart != "unless-stopped" || rt.deployOpts.NetworkMode != "host" {
+		t.Fatalf("adopted runtime shape was not preserved: %#v", rt.deployOpts)
+	}
+	state := stateRepo.states[stateKey(svc.ID, env.ID)]
+	if state == nil || state.DesiredArtifactID == nil || *state.DesiredArtifactID != artifact.ID || state.CurrentObservationID == nil {
+		t.Fatalf("state was not updated from deploy observation: %#v", state)
+	}
+	if !publisher.hasEvent(runtimeActionDeployEvent) {
+		t.Fatalf("expected runtime.deploy event, got %#v", publisher.events)
+	}
+}
+
+func TestRuntimeLifecycleDeployRejectsForeignArtifact(t *testing.T) {
+	ctx := context.Background()
+	registry, svcRepo, envRepo, _, artifactRepo, _, _ := newTestRegistry()
+	stateRepo := registry.state.(*mockStateRepo)
+	rt := &lifecycleMockRuntime{}
+	lifecycle := NewRuntimeLifecycleService(registry, svcRepo, envRepo, artifactRepo, stateRepo, &mockRuntimeResolver{rt: rt}, &events.NoopPublisher{}, zap.NewNop())
+
+	svc, env, _ := seedRuntimeLifecycleFixtures(t, registry)
+	foreignBuildID := uuid.New()
+	foreignArtifact := &domain.Artifact{BuildID: foreignBuildID, ServiceID: uuid.New(), ImageRepo: "ghcr.io/other/api", ImageTag: "v2", ImageDigest: "sha256:foreign", ScanStatus: domain.ScanStatusUnknown}
+	if err := artifactRepo.Create(ctx, foreignArtifact); err != nil {
+		t.Fatalf("Create foreign artifact: %v", err)
+	}
+	_, err := lifecycle.Deploy(ctx, svc.ID, env.ID, &foreignArtifact.ID)
+	if err == nil || !strings.Contains(err.Error(), "belongs to service") {
+		t.Fatalf("expected foreign artifact error, got %v", err)
+	}
+	if rt.deployTarget != "" {
+		t.Fatalf("runtime deploy should not be called, got target %q", rt.deployTarget)
+	}
+}
+
+func TestRuntimeLifecycleRestartAndStopUseAdoptedTarget(t *testing.T) {
+	ctx := context.Background()
+	registry, svcRepo, envRepo, _, artifactRepo, _, _ := newTestRegistry()
+	stateRepo := registry.state.(*mockStateRepo)
+	rt := &lifecycleMockRuntime{}
+	lifecycle := NewRuntimeLifecycleService(registry, svcRepo, envRepo, artifactRepo, stateRepo, &mockRuntimeResolver{rt: rt}, &events.NoopPublisher{}, zap.NewNop())
+
+	svc, env, _ := seedRuntimeLifecycleFixtures(t, registry)
+	if _, err := lifecycle.Restart(ctx, svc.ID, env.ID); err != nil {
+		t.Fatalf("Restart returned error: %v", err)
+	}
+	if rt.restartTarget != "legacy-api" {
+		t.Fatalf("expected restart target legacy-api, got %q", rt.restartTarget)
+	}
+	if _, err := lifecycle.Stop(ctx, svc.ID, env.ID); err != nil {
+		t.Fatalf("Stop returned error: %v", err)
+	}
+	if rt.stopTarget != "legacy-api" {
+		t.Fatalf("expected stop target legacy-api, got %q", rt.stopTarget)
+	}
+}
+
+func seedRuntimeLifecycleFixtures(t *testing.T, registry *RegistryService) (*domain.Service, *domain.Environment, *domain.Artifact) {
+	t.Helper()
+	ctx := context.Background()
+	svc := &domain.Service{
+		Name:         "api",
+		ArtifactRepo: "ghcr.io/org/api",
+		RuntimeType:  domain.RuntimeTypeDocker,
+		RuntimeConfig: &domain.ServiceRuntimeConfig{Adopted: &domain.AdoptedRuntimeConfig{
+			TargetName:  "legacy-api",
+			HostAlias:   "local",
+			Environment: map[string]string{"APP_ENV": "prod"},
+			Labels:      map[string]string{"existing": "label"},
+			Ports:       []string{"8080:80"},
+			Volumes:     []string{"/host:/data:ro"},
+			Restart:     "unless-stopped",
+			Command:     []string{"serve"},
+			Entrypoint:  []string{"/entrypoint.sh"},
+			WorkingDir:  "/app",
+			NetworkMode: "host",
+		}},
+	}
+	if err := registry.CreateService(ctx, svc); err != nil {
+		t.Fatalf("CreateService: %v", err)
+	}
+	env := &domain.Environment{Name: "prod", RuntimeConfig: map[string]any{"type": "docker", "docker_host": "unix:///docker.sock"}}
+	if err := registry.CreateEnvironment(ctx, env); err != nil {
+		t.Fatalf("CreateEnvironment: %v", err)
+	}
+	build := &domain.Build{ServiceID: svc.ID, GitSHA: "abc", GitRef: "main", CISystem: "test", CIRunID: uuid.NewString(), Status: domain.BuildStatusSucceeded}
+	if err := registry.builds.Create(ctx, build); err != nil {
+		t.Fatalf("Create build: %v", err)
+	}
+	artifact := &domain.Artifact{BuildID: build.ID, ServiceID: svc.ID, ImageRepo: "ghcr.io/org/api", ImageTag: "v1", ImageDigest: "sha256:abc123", ScanStatus: domain.ScanStatusUnknown}
+	if err := registry.artifacts.Create(ctx, artifact); err != nil {
+		t.Fatalf("Create artifact: %v", err)
+	}
+	return svc, env, artifact
+}
+
+type mockRuntimeResolver struct {
+	rt runtime.Runtime
+}
+
+func (r *mockRuntimeResolver) Resolve(_ *domain.Service, _ *domain.Environment) (runtime.Runtime, error) {
+	return r.rt, nil
+}
+
+type lifecycleMockRuntime struct {
+	deployTarget  string
+	deployImage   string
+	deployOpts    runtime.DeployOptions
+	restartTarget string
+	stopTarget    string
+}
+
+func (m *lifecycleMockRuntime) Type() domain.RuntimeType { return domain.RuntimeTypeDocker }
+
+func (m *lifecycleMockRuntime) Deploy(_ context.Context, serviceName, image string, opts runtime.DeployOptions) error {
+	m.deployTarget = serviceName
+	m.deployImage = image
+	m.deployOpts = opts
+	return nil
+}
+
+func (m *lifecycleMockRuntime) Undeploy(_ context.Context, _ string) error { return nil }
+
+func (m *lifecycleMockRuntime) StreamLogs(_ context.Context, _ string, _ runtime.LogOptions) (<-chan runtime.LogEntry, error) {
+	ch := make(chan runtime.LogEntry)
+	close(ch)
+	return ch, nil
+}
+
+func (m *lifecycleMockRuntime) Restart(_ context.Context, targetName string) error {
+	m.restartTarget = targetName
+	return nil
+}
+
+func (m *lifecycleMockRuntime) Stop(_ context.Context, targetName string) error {
+	m.stopTarget = targetName
+	return nil
+}
+
+func (m *lifecycleMockRuntime) Observe(_ context.Context, serviceID, envID uuid.UUID, serviceName string) (*domain.RuntimeObservation, error) {
+	return &domain.RuntimeObservation{
+		ServiceID:           serviceID,
+		EnvironmentID:       envID,
+		ObservedImageDigest: "sha256:abc123",
+		ObservedImageRepo:   "ghcr.io/org/api",
+		ObservedContainerID: serviceName + "-container",
+		HealthStatus:        domain.HealthStatusHealthy,
+		Source:              "mock",
+		ObservedAt:          time.Now().UTC(),
+	}, nil
+}
+
+var _ runtime.LifecycleRuntime = (*lifecycleMockRuntime)(nil)

@@ -1,0 +1,328 @@
+package service
+
+import (
+	"context"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	"github.com/google/uuid"
+	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/events"
+	"go.uber.org/zap"
+)
+
+func TestAdoptionServiceImportSeedsModelsAndIsIdempotent(t *testing.T) {
+	ctx := context.Background()
+	server := newAdoptionDockerServer(t)
+	defer server.Close()
+
+	registry, svcRepo, envRepo, buildRepo, artifactRepo, _, _ := newTestRegistry()
+	stateRepo := registry.state.(*mockStateRepo)
+	obsRepo := registry.observations.(*mockObsRepo)
+	publisher := &capturePublisher{}
+	adoption := NewAdoptionService(registry, svcRepo, envRepo, buildRepo, artifactRepo, stateRepo, obsRepo, publisher, zap.NewNop())
+
+	results, err := adoption.Import(ctx, AdoptionImportRequest{
+		Targets:   []AdoptionTarget{{Name: "local", DockerHost: server.URL, EnvironmentName: "prod"}},
+		ImportAll: true,
+	})
+	if err != nil {
+		t.Fatalf("Import returned error: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 import result, got %d", len(results))
+	}
+	if results[0].Status != adoptionStatusCreated || results[0].Error != "" {
+		t.Fatalf("unexpected import result: %#v", results[0])
+	}
+
+	env, err := envRepo.GetByName(ctx, "prod")
+	if err != nil || env == nil {
+		t.Fatalf("expected environment to be created, env=%#v err=%v", env, err)
+	}
+	if env.RuntimeConfig["type"] != "docker" || env.RuntimeConfig["docker_host"] != server.URL || env.RuntimeConfig["host_alias"] != "local" || env.RuntimeConfig["management_mode"] != "direct_runtime" {
+		t.Fatalf("unexpected environment runtime config: %#v", env.RuntimeConfig)
+	}
+
+	svc, err := svcRepo.GetByName(ctx, "demo-web")
+	if err != nil || svc == nil {
+		t.Fatalf("expected service demo-web, svc=%#v err=%v", svc, err)
+	}
+	if svc.RuntimeConfig == nil || svc.RuntimeConfig.Adopted == nil {
+		t.Fatalf("expected adopted runtime config: %#v", svc.RuntimeConfig)
+	}
+	adopted := svc.RuntimeConfig.Adopted
+	if adopted.TargetName != "demo-web-1" || adopted.HostAlias != "local" || adopted.SourceRuntime != "compose" {
+		t.Fatalf("unexpected adopted identity: %#v", adopted)
+	}
+	if adopted.Environment["APP_ENV"] != "prod" || adopted.Ports[0] != "8080:80" || adopted.Restart != "unless-stopped" || adopted.Compose == nil {
+		t.Fatalf("unexpected adopted runtime shape: %#v", adopted)
+	}
+
+	if len(buildRepo.builds) != 1 {
+		t.Fatalf("expected one synthetic build, got %d", len(buildRepo.builds))
+	}
+	if len(artifactRepo.artifacts) != 1 {
+		t.Fatalf("expected one artifact, got %d", len(artifactRepo.artifacts))
+	}
+	state := stateRepo.states[stateKey(*results[0].ServiceID, *results[0].EnvironmentID)]
+	if state == nil || state.DesiredArtifactID == nil || *state.DesiredArtifactID != *results[0].ArtifactID {
+		t.Fatalf("state was not seeded with desired artifact: %#v result=%#v", state, results[0])
+	}
+	if state.CurrentObservationID == nil {
+		t.Fatalf("state was not updated with current observation: %#v", state)
+	}
+	if len(obsRepo.observations) != 1 {
+		t.Fatalf("expected one recorded observation, got %d", len(obsRepo.observations))
+	}
+	if !publisher.hasEvent(adoptionImportedEvent) {
+		t.Fatalf("expected adoption.imported event, got %#v", publisher.events)
+	}
+
+	results, err = adoption.Import(ctx, AdoptionImportRequest{
+		Targets:   []AdoptionTarget{{Name: "local", DockerHost: server.URL, EnvironmentName: "prod"}},
+		ImportAll: true,
+	})
+	if err != nil {
+		t.Fatalf("second Import returned error: %v", err)
+	}
+	if len(results) != 1 || results[0].Status != adoptionStatusUpdated {
+		t.Fatalf("expected idempotent update result, got %#v", results)
+	}
+	if len(buildRepo.builds) != 1 || len(artifactRepo.artifacts) != 1 {
+		t.Fatalf("expected build/artifact dedupe, builds=%d artifacts=%d", len(buildRepo.builds), len(artifactRepo.artifacts))
+	}
+	if len(obsRepo.observations) != 2 {
+		t.Fatalf("expected re-import to record another observation, got %d", len(obsRepo.observations))
+	}
+}
+
+func TestAdoptionServiceImportUsesExistingAdoptedIdentityDespiteNewOverride(t *testing.T) {
+	ctx := context.Background()
+	server := newAdoptionDockerServer(t)
+	defer server.Close()
+	registry, svcRepo, envRepo, buildRepo, artifactRepo, _, _ := newTestRegistry()
+	adoption := NewAdoptionService(registry, svcRepo, envRepo, buildRepo, artifactRepo, registry.state, registry.observations, &events.NoopPublisher{}, zap.NewNop())
+
+	first, err := adoption.Import(ctx, AdoptionImportRequest{
+		Targets:    []AdoptionTarget{{Name: "local", DockerHost: server.URL, EnvironmentName: "prod"}},
+		Selections: []AdoptionSelection{{TargetName: "local", ContainerID: "container-123", ServiceNameOverride: "first-name"}},
+	})
+	if err != nil || len(first) != 1 || first[0].Status != adoptionStatusCreated {
+		t.Fatalf("first import failed: results=%#v err=%v", first, err)
+	}
+	second, err := adoption.Import(ctx, AdoptionImportRequest{
+		Targets:    []AdoptionTarget{{Name: "local", DockerHost: server.URL, EnvironmentName: "prod"}},
+		Selections: []AdoptionSelection{{TargetName: "local", ContainerID: "container-123", ServiceNameOverride: "second-name"}},
+	})
+	if err != nil || len(second) != 1 || second[0].Status != adoptionStatusUpdated {
+		t.Fatalf("second import failed: results=%#v err=%v", second, err)
+	}
+	if second[0].ServiceName != "first-name" || second[0].ServiceID == nil || first[0].ServiceID == nil || *second[0].ServiceID != *first[0].ServiceID {
+		t.Fatalf("expected re-import to update canonical service, first=%#v second=%#v", first[0], second[0])
+	}
+	if len(svcRepo.services) != 1 {
+		t.Fatalf("expected one service after re-import, got %d", len(svcRepo.services))
+	}
+}
+
+func TestAdoptionServiceImportRejectsForeignArtifactDigest(t *testing.T) {
+	ctx := context.Background()
+	server := newAdoptionDockerServer(t)
+	defer server.Close()
+	registry, svcRepo, envRepo, buildRepo, artifactRepo, _, _ := newTestRegistry()
+	foreignServiceID := uuid.New()
+	foreignBuildID := uuid.New()
+	if err := artifactRepo.Create(ctx, &domain.Artifact{BuildID: foreignBuildID, ServiceID: foreignServiceID, ImageRepo: "registry.example/web", ImageTag: "other", ImageDigest: "sha256:repo123", ScanStatus: domain.ScanStatusUnknown}); err != nil {
+		t.Fatalf("seed foreign artifact: %v", err)
+	}
+	adoption := NewAdoptionService(registry, svcRepo, envRepo, buildRepo, artifactRepo, registry.state, registry.observations, &events.NoopPublisher{}, zap.NewNop())
+
+	results, err := adoption.Import(ctx, AdoptionImportRequest{
+		Targets:   []AdoptionTarget{{Name: "local", DockerHost: server.URL, EnvironmentName: "prod"}},
+		ImportAll: true,
+	})
+	if err != nil {
+		t.Fatalf("Import returned error: %v", err)
+	}
+	if len(results) != 1 || results[0].Status != adoptionStatusFailed || !strings.Contains(results[0].Error, "already belongs to service") {
+		t.Fatalf("expected foreign artifact failure, got %#v", results)
+	}
+}
+
+func TestAdoptionServiceImportRejectsIncompatibleExistingEnvironment(t *testing.T) {
+	ctx := context.Background()
+	server := newAdoptionDockerServer(t)
+	defer server.Close()
+	registry, svcRepo, envRepo, buildRepo, artifactRepo, _, _ := newTestRegistry()
+	if err := envRepo.Create(ctx, &domain.Environment{Name: "prod", RuntimeConfig: map[string]any{"type": "compose", "compose_dir": "/srv/app"}}); err != nil {
+		t.Fatalf("seed environment: %v", err)
+	}
+	adoption := NewAdoptionService(registry, svcRepo, envRepo, buildRepo, artifactRepo, registry.state, registry.observations, &events.NoopPublisher{}, zap.NewNop())
+
+	results, err := adoption.Import(ctx, AdoptionImportRequest{
+		Targets:   []AdoptionTarget{{Name: "local", DockerHost: server.URL, EnvironmentName: "prod"}},
+		ImportAll: true,
+	})
+	if err != nil {
+		t.Fatalf("Import returned error: %v", err)
+	}
+	if len(results) != 1 || results[0].Status != adoptionStatusFailed || !strings.Contains(results[0].Error, "incompatible runtime type") {
+		t.Fatalf("expected incompatible environment failure, got %#v", results)
+	}
+}
+
+func TestAdoptionServiceImportSelectionReportsScanFailure(t *testing.T) {
+	ctx := context.Background()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "docker unavailable", http.StatusInternalServerError)
+	}))
+	defer server.Close()
+	registry, svcRepo, envRepo, buildRepo, artifactRepo, _, _ := newTestRegistry()
+	adoption := NewAdoptionService(registry, svcRepo, envRepo, buildRepo, artifactRepo, registry.state, registry.observations, &events.NoopPublisher{}, zap.NewNop())
+
+	results, err := adoption.Import(ctx, AdoptionImportRequest{
+		Targets:    []AdoptionTarget{{Name: "local", DockerHost: server.URL, EnvironmentName: "prod"}},
+		Selections: []AdoptionSelection{{TargetName: "local", ContainerID: "container-123"}},
+	})
+	if err != nil {
+		t.Fatalf("Import returned error: %v", err)
+	}
+	if len(results) != 1 || results[0].Status != adoptionStatusFailed || results[0].ContainerID != "container-123" {
+		t.Fatalf("expected selected scan failure result, got %#v", results)
+	}
+}
+
+func TestAdoptionServiceImportSelectionReportsUndiscoveredContainer(t *testing.T) {
+	ctx := context.Background()
+	server := newAdoptionDockerServer(t)
+	defer server.Close()
+	registry, svcRepo, envRepo, buildRepo, artifactRepo, _, _ := newTestRegistry()
+	adoption := NewAdoptionService(registry, svcRepo, envRepo, buildRepo, artifactRepo, registry.state, registry.observations, &events.NoopPublisher{}, zap.NewNop())
+
+	results, err := adoption.Import(ctx, AdoptionImportRequest{
+		Targets:    []AdoptionTarget{{Name: "local", DockerHost: server.URL, EnvironmentName: "prod"}},
+		Selections: []AdoptionSelection{{TargetName: "local", ContainerID: "missing-container"}},
+	})
+	if err != nil {
+		t.Fatalf("Import returned error: %v", err)
+	}
+	if len(results) != 1 || results[0].Status != adoptionStatusFailed || !strings.Contains(results[0].Error, "not discovered") {
+		t.Fatalf("expected undiscovered selection failure, got %#v", results)
+	}
+}
+
+func TestAdoptionServiceScanReportsNonAdoptableWarnings(t *testing.T) {
+	ctx := context.Background()
+	server := newUnsafeAdoptionDockerServer(t)
+	defer server.Close()
+
+	registry, svcRepo, envRepo, buildRepo, artifactRepo, _, _ := newTestRegistry()
+	adoption := NewAdoptionService(registry, svcRepo, envRepo, buildRepo, artifactRepo, registry.state, registry.observations, &events.NoopPublisher{}, zap.NewNop())
+
+	previews, err := adoption.Scan(ctx, AdoptionScanRequest{Targets: []AdoptionTarget{{Name: "local", DockerHost: server.URL}}})
+	if err != nil {
+		t.Fatalf("Scan returned error: %v", err)
+	}
+	if len(previews) != 1 || len(previews[0].Containers) != 1 {
+		t.Fatalf("unexpected previews: %#v", previews)
+	}
+	container := previews[0].Containers[0]
+	if container.Adoptable {
+		t.Fatalf("expected unsafe container to be non-adoptable")
+	}
+	if len(container.Warnings) == 0 {
+		t.Fatalf("expected warnings for unsafe container")
+	}
+}
+
+func newAdoptionDockerServer(t *testing.T) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/v1.43/containers/json":
+			if r.URL.Query().Get("all") != "1" {
+				t.Errorf("containers query did not include all=1")
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`[{"Id":"container-123","Names":["/demo-web-1"],"Image":"registry.example/web:1.2.3","ImageID":"sha256:image123","State":"running"}]`))
+		case r.Method == http.MethodGet && r.URL.Path == "/v1.43/containers/container-123/json":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{
+				"Id":"container-123",
+				"Name":"/demo-web-1",
+				"Image":"sha256:image123",
+				"Config":{
+					"Image":"registry.example/web:1.2.3",
+					"Env":["APP_ENV=prod"],
+					"Labels":{
+						"com.docker.compose.project":"demo",
+						"com.docker.compose.service":"web",
+						"org.opencontainers.image.revision":"abc123"
+					},
+					"Cmd":["serve"],
+					"Entrypoint":["/entrypoint.sh"],
+					"WorkingDir":"/app"
+				},
+				"State":{"Status":"running","Health":{"Status":"healthy"}},
+				"HostConfig":{"Binds":["/host/data:/data:ro"],"NetworkMode":"demo_default","RestartPolicy":{"Name":"unless-stopped"}},
+				"NetworkSettings":{"Ports":{"80/tcp":[{"HostPort":"8080"}]},"Networks":{"demo_default":{"Aliases":["web","demo-web-1"]}}}
+			}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/v1.43/images/sha256:image123/json":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"Id":"sha256:image123","RepoDigests":["registry.example/web@sha256:repo123"]}`))
+		default:
+			http.Error(w, fmt.Sprintf("unexpected request: %s %s", r.Method, r.URL.String()), http.StatusNotFound)
+		}
+	}))
+}
+
+func newUnsafeAdoptionDockerServer(t *testing.T) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/v1.43/containers/json":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`[{"Id":"container-unsafe","Names":["/unsafe"],"Image":"registry.example/unsafe:latest","ImageID":"sha256:unsafe","State":"running"}]`))
+		case r.Method == http.MethodGet && r.URL.Path == "/v1.43/containers/container-unsafe/json":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{
+				"Id":"container-unsafe",
+				"Name":"/unsafe",
+				"Image":"sha256:unsafe",
+				"Config":{"Image":"registry.example/unsafe:latest","Labels":{}},
+				"State":{"Status":"running"},
+				"HostConfig":{"NetworkMode":"custom"},
+				"Mounts":[{"Type":"tmpfs","Destination":"/cache"}],
+				"NetworkSettings":{"Ports":{"80/tcp":[{"HostIP":"127.0.0.1","HostPort":"8080"},{"HostIP":"::","HostPort":"8080"}]},"Networks":{"custom":{"Aliases":["surprise"]}}}
+			}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/v1.43/images/sha256:unsafe/json":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"Id":"sha256:unsafe","RepoDigests":["registry.example/unsafe@sha256:unsafe"]}`))
+		default:
+			http.Error(w, fmt.Sprintf("unexpected request: %s %s", r.Method, r.URL.String()), http.StatusNotFound)
+		}
+	}))
+}
+
+type capturePublisher struct {
+	events []events.Event
+}
+
+func (p *capturePublisher) Publish(_ context.Context, e events.Event) {
+	p.events = append(p.events, e)
+}
+
+func (p *capturePublisher) Subscribe(_ events.EventType, _ events.Handler) {}
+
+func (p *capturePublisher) hasEvent(eventType events.EventType) bool {
+	for _, event := range p.events {
+		if event.Type == eventType {
+			return true
+		}
+	}
+	return false
+}

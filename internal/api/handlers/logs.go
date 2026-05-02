@@ -173,7 +173,7 @@ func (h *LogHandler) StreamLiveLogs(w http.ResponseWriter, r *http.Request) {
 	follow := r.URL.Query().Get("follow") == "true"
 
 	opts := runtime.LiveLogOptions{
-		ServiceName: svc.Name,
+		ServiceName: svc.RuntimeTargetName(),
 		ServiceID:   serviceID,
 		EnvID:       envID,
 		Tail:        tail,
@@ -207,6 +207,7 @@ func (h *LogHandler) StreamLiveLogs(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		h.logger.Error("failed to start log stream",
 			zap.String("service", svc.Name),
+			zap.String("runtime_target", opts.ServiceName),
 			zap.Error(err),
 		)
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to stream logs: %v", err))

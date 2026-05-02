@@ -60,10 +60,10 @@ type mockServiceRepo struct {
 	err error
 }
 
-func (m *mockServiceRepo) Create(_ context.Context, _ *domain.Service) error     { return nil }
-func (m *mockServiceRepo) Update(_ context.Context, _ *domain.Service) error     { return nil }
-func (m *mockServiceRepo) Delete(_ context.Context, _ uuid.UUID) error           { return nil }
-func (m *mockServiceRepo) List(_ context.Context) ([]domain.Service, error)      { return nil, nil }
+func (m *mockServiceRepo) Create(_ context.Context, _ *domain.Service) error { return nil }
+func (m *mockServiceRepo) Update(_ context.Context, _ *domain.Service) error { return nil }
+func (m *mockServiceRepo) Delete(_ context.Context, _ uuid.UUID) error       { return nil }
+func (m *mockServiceRepo) List(_ context.Context) ([]domain.Service, error)  { return nil, nil }
 func (m *mockServiceRepo) GetByName(_ context.Context, _ string) (*domain.Service, error) {
 	return m.svc, m.err
 }
@@ -80,10 +80,10 @@ type mockEnvRepo struct {
 	err error
 }
 
-func (m *mockEnvRepo) Create(_ context.Context, _ *domain.Environment) error     { return nil }
-func (m *mockEnvRepo) Update(_ context.Context, _ *domain.Environment) error     { return nil }
-func (m *mockEnvRepo) Delete(_ context.Context, _ uuid.UUID) error               { return nil }
-func (m *mockEnvRepo) List(_ context.Context) ([]domain.Environment, error)      { return nil, nil }
+func (m *mockEnvRepo) Create(_ context.Context, _ *domain.Environment) error { return nil }
+func (m *mockEnvRepo) Update(_ context.Context, _ *domain.Environment) error { return nil }
+func (m *mockEnvRepo) Delete(_ context.Context, _ uuid.UUID) error           { return nil }
+func (m *mockEnvRepo) List(_ context.Context) ([]domain.Environment, error)  { return nil, nil }
 func (m *mockEnvRepo) GetByName(_ context.Context, _ string) (*domain.Environment, error) {
 	return m.env, m.err
 }
@@ -95,6 +95,33 @@ func (m *mockEnvRepo) GetByID(_ context.Context, _ uuid.UUID) (*domain.Environme
 }
 
 // mockEnvStateRepo is a test mock for EnvironmentServiceStateRepository
+type mockLiveLogResolver struct {
+	rt runtime.Runtime
+}
+
+func (m *mockLiveLogResolver) Resolve(_ *domain.Service, _ *domain.Environment) (runtime.Runtime, error) {
+	return m.rt, nil
+}
+
+type mockLiveLogRuntime struct {
+	serviceName string
+}
+
+func (m *mockLiveLogRuntime) Type() domain.RuntimeType { return domain.RuntimeTypeDocker }
+func (m *mockLiveLogRuntime) Observe(_ context.Context, serviceID, envID uuid.UUID, _ string) (*domain.RuntimeObservation, error) {
+	return &domain.RuntimeObservation{ServiceID: serviceID, EnvironmentID: envID}, nil
+}
+func (m *mockLiveLogRuntime) Deploy(_ context.Context, _, _ string, _ runtime.DeployOptions) error {
+	return nil
+}
+func (m *mockLiveLogRuntime) Undeploy(_ context.Context, _ string) error { return nil }
+func (m *mockLiveLogRuntime) StreamLogs(_ context.Context, serviceName string, _ runtime.LogOptions) (<-chan runtime.LogEntry, error) {
+	m.serviceName = serviceName
+	ch := make(chan runtime.LogEntry)
+	close(ch)
+	return ch, nil
+}
+
 type mockEnvStateRepo struct{}
 
 func (m *mockEnvStateRepo) Upsert(_ context.Context, _ *domain.EnvironmentServiceState) error {
@@ -401,6 +428,37 @@ func TestLogHandler_StreamLiveLogs_ServiceNotFound(t *testing.T) {
 
 	if rr.Code != http.StatusNotFound {
 		t.Errorf("StreamLiveLogs() status = %d, want %d", rr.Code, http.StatusNotFound)
+	}
+}
+
+func TestLogHandler_StreamLiveLogs_UsesRuntimeTargetName(t *testing.T) {
+	serviceID := uuid.New()
+	envID := uuid.New()
+	svcRepo := &mockServiceRepo{svc: &domain.Service{
+		ID:   serviceID,
+		Name: "api",
+		RuntimeConfig: &domain.ServiceRuntimeConfig{Adopted: &domain.AdoptedRuntimeConfig{
+			TargetName: "legacy-api",
+		}},
+	}}
+	envRepo := &mockEnvRepo{env: &domain.Environment{ID: envID, Name: "prod"}}
+	rt := &mockLiveLogRuntime{}
+	handler := NewLogHandlerWithResolver(nil, &mockLiveLogResolver{rt: rt}, nil, svcRepo, envRepo, &mockEnvStateRepo{}, testZapLogger())
+
+	req := httptest.NewRequest("GET", "/services/"+serviceID.String()+"/environments/"+envID.String()+"/logs", nil)
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add("id", serviceID.String())
+	rctx.URLParams.Add("envId", envID.String())
+	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
+
+	rr := httptest.NewRecorder()
+	handler.StreamLiveLogs(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("StreamLiveLogs() status = %d, want %d", rr.Code, http.StatusOK)
+	}
+	if rt.serviceName != "legacy-api" {
+		t.Fatalf("StreamLogs called with serviceName %q, want legacy-api", rt.serviceName)
 	}
 }
 
