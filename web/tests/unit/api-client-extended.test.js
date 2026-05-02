@@ -722,6 +722,116 @@ describe('BahiaClient - Extended API Coverage', () => {
     });
   });
 
+  describe('Adoption and Direct Runtime Methods', () => {
+    it('should call scanAdoption with POST and payload and return [] when data is null', async () => {
+      const payload = {
+        targets: [{ name: 'host-a', endpoint_ref: 'host-a', environment_name: 'prod' }]
+      };
+
+      global.fetch.mockResolvedValueOnce({
+        ok: true,
+        headers: new Map([['content-type', 'application/json']]),
+        json: async () => ({ data: null })
+      });
+
+      const result = await api.scanAdoption(payload);
+
+      expect(global.fetch).toHaveBeenCalledWith(
+        '/api/v1/adoption/scan',
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify(payload)
+        })
+      );
+      expect(result).toEqual([]);
+    });
+
+    it('should call importAdoption with POST and payload', async () => {
+      const payload = {
+        targets: [{ name: 'host-a', endpoint_ref: 'host-a' }],
+        import_all: true
+      };
+
+      global.fetch.mockResolvedValueOnce({
+        ok: true,
+        headers: new Map([['content-type', 'application/json']]),
+        json: async () => ({ data: [{ target_name: 'host-a', success: true }] })
+      });
+
+      const result = await api.importAdoption(payload);
+
+      expect(global.fetch).toHaveBeenCalledWith(
+        '/api/v1/adoption/import',
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify(payload)
+        })
+      );
+      expect(result).toEqual([{ target_name: 'host-a', success: true }]);
+    });
+
+    it('should call deployService with encoded IDs and artifact body', async () => {
+      const serviceId = 'svc/alpha';
+      const envId = 'env/prod';
+      const artifactId = '11111111-1111-1111-1111-111111111111';
+
+      global.fetch.mockResolvedValueOnce({
+        ok: true,
+        headers: new Map([['content-type', 'application/json']]),
+        json: async () => ({ data: { action: 'deploy', service_id: serviceId, environment_id: envId } })
+      });
+
+      const result = await api.deployService(serviceId, envId, artifactId);
+
+      expect(global.fetch).toHaveBeenCalledWith(
+        `/api/v1/services/${encodeURIComponent(serviceId)}/environments/${encodeURIComponent(envId)}/deploy`,
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({ artifact_id: artifactId })
+        })
+      );
+      expect(result).toEqual({ action: 'deploy', service_id: serviceId, environment_id: envId });
+    });
+
+    it('should call restartService with encoded IDs', async () => {
+      const serviceId = 'svc/alpha';
+      const envId = 'env/prod';
+
+      global.fetch.mockResolvedValueOnce({
+        ok: true,
+        headers: new Map([['content-type', 'application/json']]),
+        json: async () => ({ data: { action: 'restart' } })
+      });
+
+      const result = await api.restartService(serviceId, envId);
+
+      expect(global.fetch).toHaveBeenCalledWith(
+        `/api/v1/services/${encodeURIComponent(serviceId)}/environments/${encodeURIComponent(envId)}/restart`,
+        expect.objectContaining({ method: 'POST' })
+      );
+      expect(result).toEqual({ action: 'restart' });
+    });
+
+    it('should call stopService with encoded IDs', async () => {
+      const serviceId = 'svc/alpha';
+      const envId = 'env/prod';
+
+      global.fetch.mockResolvedValueOnce({
+        ok: true,
+        headers: new Map([['content-type', 'application/json']]),
+        json: async () => ({ data: { action: 'stop' } })
+      });
+
+      const result = await api.stopService(serviceId, envId);
+
+      expect(global.fetch).toHaveBeenCalledWith(
+        `/api/v1/services/${encodeURIComponent(serviceId)}/environments/${encodeURIComponent(envId)}/stop`,
+        expect.objectContaining({ method: 'POST' })
+      );
+      expect(result).toEqual({ action: 'stop' });
+    });
+  });
+
   describe('Notification Methods', () => {
     it('should list notification channels with query parameters', async () => {
       global.fetch.mockResolvedValueOnce({

@@ -222,6 +222,39 @@ export class BahiaClient {
     });
   }
 
+  // Adoption
+  scanAdoption(payload) {
+    return this.fetch('/adoption/scan', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }).then(r => r ?? []);
+  }
+  importAdoption(payload) {
+    return this.fetch('/adoption/import', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }).then(r => r ?? []);
+  }
+
+  // Direct runtime actions
+  deployService(serviceId, envId, artifactId = null) {
+    const body = artifactId ? { artifact_id: artifactId } : undefined;
+    return this.fetch(`/services/${encodeURIComponent(serviceId)}/environments/${encodeURIComponent(envId)}/deploy`, {
+      method: 'POST',
+      ...(body ? { body: JSON.stringify(body) } : {})
+    });
+  }
+  restartService(serviceId, envId) {
+    return this.fetch(`/services/${encodeURIComponent(serviceId)}/environments/${encodeURIComponent(envId)}/restart`, {
+      method: 'POST'
+    });
+  }
+  stopService(serviceId, envId) {
+    return this.fetch(`/services/${encodeURIComponent(serviceId)}/environments/${encodeURIComponent(envId)}/stop`, {
+      method: 'POST'
+    });
+  }
+
   // Workers
   listWorkers() { return this.fetch('/workers').then(r => r ?? []); }
   getWorker(pubkey) { return this.fetch(`/workers/${encodeURIComponent(pubkey)}`); }
