@@ -137,6 +137,18 @@ export class BahiaClient {
   // State
   listStates() { return this.fetch('/state').then(r => r ?? []); }
   listDriftedStates() { return this.fetch('/state/drifted').then(r => r ?? []); }
+  getStateByServiceEnv(serviceId, envId) {
+    return this.fetch(`/services/${encodeURIComponent(serviceId)}/environments/${encodeURIComponent(envId)}/state`);
+  }
+  listStatesByEnvironment(envId) {
+    return this.fetch(`/environments/${encodeURIComponent(envId)}/state`).then(r => r ?? []);
+  }
+  recordObservation(payload) {
+    return this.fetch('/observations', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    });
+  }
 
   // Deployments
   listIntents(serviceId, envId) {

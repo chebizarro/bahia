@@ -132,6 +132,72 @@ describe('BahiaClient - Extended API Coverage', () => {
     });
   });
 
+  describe('State Methods', () => {
+    it('should call getStateByServiceEnv with encoded service/environment IDs', async () => {
+      const serviceId = 'svc/alpha';
+      const envId = 'env/prod';
+
+      global.fetch.mockResolvedValueOnce({
+        ok: true,
+        headers: new Map([['content-type', 'application/json']]),
+        json: async () => ({ data: { service_id: serviceId, environment_id: envId } })
+      });
+
+      const result = await api.getStateByServiceEnv(serviceId, envId);
+
+      expect(global.fetch).toHaveBeenCalledWith(
+        `/api/v1/services/${encodeURIComponent(serviceId)}/environments/${encodeURIComponent(envId)}/state`,
+        expect.any(Object)
+      );
+      expect(result).toEqual({ service_id: serviceId, environment_id: envId });
+    });
+
+    it('should call listStatesByEnvironment with encoded environment ID and return [] for null payload', async () => {
+      const envId = 'env/prod';
+
+      global.fetch.mockResolvedValueOnce({
+        ok: true,
+        headers: new Map([['content-type', 'application/json']]),
+        json: async () => ({ data: null })
+      });
+
+      const result = await api.listStatesByEnvironment(envId);
+
+      expect(global.fetch).toHaveBeenCalledWith(
+        `/api/v1/environments/${encodeURIComponent(envId)}/state`,
+        expect.any(Object)
+      );
+      expect(result).toEqual([]);
+    });
+
+    it('should call recordObservation with POST and body', async () => {
+      const payload = {
+        service_id: '0f3cc322-9484-4fee-b7d1-448318791e6c',
+        environment_id: '654edaf0-7ca7-4cb6-acf8-13058de4ea4a',
+        observed_image_digest: 'sha256:abcd',
+        health_status: 'healthy',
+        source: 'agent'
+      };
+
+      global.fetch.mockResolvedValueOnce({
+        ok: true,
+        headers: new Map([['content-type', 'application/json']]),
+        json: async () => ({ data: { id: 'obs-1', ...payload } })
+      });
+
+      const result = await api.recordObservation(payload);
+
+      expect(global.fetch).toHaveBeenCalledWith(
+        '/api/v1/observations',
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify(payload)
+        })
+      );
+      expect(result).toEqual({ id: 'obs-1', ...payload });
+    });
+  });
+
   describe('Policy Methods', () => {
     it('should call createPolicy with correct method and body', async () => {
       const payload = {
