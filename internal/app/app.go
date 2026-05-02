@@ -190,7 +190,10 @@ func New(cfg *config.Config) (*App, error) {
 	// Privileged routes are opt-in; keep services nil unless their route family is enabled.
 	var adoptionSvc *service.AdoptionService
 	if cfg.Adoption.Enabled {
-		adoptionSvc = service.NewAdoptionService(registry, serviceRepo, envRepo, buildRepo, artifactRepo, stateRepo, obsRepo, publisher, logger)
+		adoptionSvc = service.NewAdoptionService(
+			registry, serviceRepo, envRepo, buildRepo, artifactRepo, stateRepo, obsRepo, publisher, logger,
+			service.WithAdoptionRuntimeConfig(cfg.Runtime, cfg.Adoption.AllowRawDockerHosts),
+		)
 	}
 	var runtimeLifecycleSvc *service.RuntimeLifecycleService
 	if cfg.DirectRuntime.Enabled {

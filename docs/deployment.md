@@ -104,7 +104,11 @@ Nested runtime target settings use double underscores in environment variables:
 export BAHIA_RUNTIME__DEFAULT__TYPE=compose
 export BAHIA_RUNTIME__DEFAULT__COMPOSE_DIR=/srv/bahia/compose/default
 export BAHIA_RUNTIME__ENVIRONMENTS__production__COMPOSE_DIR=/srv/bahia/compose/production
-export BAHIA_RUNTIME__ENVIRONMENTS__production__DOCKER_HOST=tcp://docker-prod.example.com:2375
+export BAHIA_RUNTIME__ENVIRONMENTS__production__ENDPOINT_REF=prod-docker
+export BAHIA_RUNTIME__ENDPOINTS__prod-docker__DOCKER_HOST=tcp://docker-prod.example.com:2376
+export BAHIA_RUNTIME__ENDPOINTS__prod-docker__CA_CERT_FILE=/etc/bahia/docker/ca.pem
+export BAHIA_RUNTIME__ENDPOINTS__prod-docker__CLIENT_CERT_FILE=/etc/bahia/docker/cert.pem
+export BAHIA_RUNTIME__ENDPOINTS__prod-docker__CLIENT_KEY_FILE=/etc/bahia/docker/key.pem
 ```
 
 ## Runtime Targeting
@@ -122,15 +126,35 @@ runtime:
     docker_host: unix:///var/run/docker.sock
     compose_dir: /srv/bahia/compose/default
 
+  endpoints:
+    prod-docker:
+      docker_host: tcp://docker-prod.example.com:2376
+      ca_cert_file: /etc/bahia/docker/ca.pem
+      client_cert_file: /etc/bahia/docker/cert.pem
+      client_key_file: /etc/bahia/docker/key.pem
+      # Compatibility only; prefer verified TLS for live endpoints.
+      insecure_skip_verify: false
+
   environments:
     staging:
       compose_dir: /srv/bahia/compose/staging
     production:
-      docker_host: tcp://docker-prod.example.com:2375
+      endpoint_ref: prod-docker
       compose_dir: /srv/bahia/compose/production
 ```
 
-Resolution order is: legacy flat `runtime.*`, then `runtime.default.*`, then `runtime.environments.<environment-name>.*`, then the persisted `Environment.runtime_config` keys (`type`, `docker_host`, `podman_host`, `compose_dir`, `kube_context`, `kube_namespace`, `kube_config`). A service's `runtime_type` remains authoritative for whether Bahia uses Docker, Compose, Kubernetes, or Podman; environment-specific `type` overrides are rejected if they conflict with the service.
+Resolution order is: legacy flat `runtime.*`, then `runtime.default.*`, then `runtime.environments.<environment-name>.*`, then the persisted `Environment.runtime_config` keys (`type`, `endpoint_ref`, `docker_host`, `podman_host`, `compose_dir`, `kube_context`, `kube_namespace`, `kube_config`). When `endpoint_ref` is present, Bahia resolves the concrete Docker host and TLS material from server-managed `runtime.endpoints` and does not need callers or imported environments to carry raw Docker credentials. A service's `runtime_type` remains authoritative for whether Bahia uses Docker, Compose, Kubernetes, or Podman; environment-specific `type` overrides are rejected if they conflict with the service.
+
+Docker API access accepts individual CA/client certificate file paths. Docker Compose uses the Docker CLI `DOCKER_CERT_PATH` convention, so configured Compose endpoint certificates must live in one directory with Docker's standard names (`ca.pem`, `cert.pem`, `key.pem`).
+
+For adoption, prefer endpoint aliases:
+
+```bash
+bahia adopt scan --target prod-docker
+bahia adopt import --target prod-docker --all
+```
+
+Raw Docker hosts are a compatibility path only. They require the server to set `adoption.allow_raw_docker_hosts: true` and the CLI to use `--raw-target alias=dockerHost`.
 
 ## Podman Runtime
 

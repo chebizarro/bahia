@@ -12,9 +12,27 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"go.uber.org/zap"
 )
+
+func TestNewDockerObserverWithEndpointNormalizesTLSHost(t *testing.T) {
+	observer, err := NewDockerObserverWithEndpoint(config.RuntimeEndpointConfig{
+		Ref:                "prod-docker",
+		DockerHost:         "tcp://docker.example:2376",
+		InsecureSkipVerify: true,
+	}, zap.NewNop())
+	if err != nil {
+		t.Fatalf("NewDockerObserverWithEndpoint() error = %v", err)
+	}
+	if observer.host != "https://docker.example:2376" {
+		t.Fatalf("observer.host = %q, want https://docker.example:2376", observer.host)
+	}
+	if observer.observedHost != "prod-docker" {
+		t.Fatalf("observer.observedHost = %q, want alias", observer.observedHost)
+	}
+}
 
 func TestDockerDeployAddsPortBindingsAndVolumes(t *testing.T) {
 	t.Parallel()

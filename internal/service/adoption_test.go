@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/events"
 	"go.uber.org/zap"
@@ -97,6 +98,63 @@ func TestAdoptionServiceImportSeedsModelsAndIsIdempotent(t *testing.T) {
 	}
 	if len(obsRepo.observations) != 2 {
 		t.Fatalf("expected re-import to record another observation, got %d", len(obsRepo.observations))
+	}
+}
+
+func TestAdoptionServiceUsesManagedEndpointRefAndDoesNotPersistDockerHost(t *testing.T) {
+	ctx := context.Background()
+	server := newAdoptionDockerServer(t)
+	defer server.Close()
+
+	registry, svcRepo, envRepo, buildRepo, artifactRepo, _, _ := newTestRegistry()
+	adoption := NewAdoptionService(
+		registry, svcRepo, envRepo, buildRepo, artifactRepo, registry.state, registry.observations, &events.NoopPublisher{}, zap.NewNop(),
+		WithAdoptionRuntimeConfig(config.RuntimeConfig{
+			Endpoints: map[string]config.RuntimeEndpointConfig{
+				"prod-docker": {DockerHost: server.URL},
+			},
+		}, false),
+	)
+
+	results, err := adoption.Import(ctx, AdoptionImportRequest{
+		Targets:   []AdoptionTarget{{Name: "prod", EndpointRef: "prod-docker"}},
+		ImportAll: true,
+	})
+	if err != nil {
+		t.Fatalf("Import returned error: %v", err)
+	}
+	if len(results) != 1 || results[0].Status != adoptionStatusCreated {
+		t.Fatalf("unexpected import result: %#v", results)
+	}
+	env, err := envRepo.GetByName(ctx, "prod")
+	if err != nil || env == nil {
+		t.Fatalf("expected environment, env=%#v err=%v", env, err)
+	}
+	if env.RuntimeConfig["endpoint_ref"] != "prod-docker" {
+		t.Fatalf("endpoint_ref not persisted: %#v", env.RuntimeConfig)
+	}
+	if _, ok := env.RuntimeConfig["docker_host"]; ok {
+		t.Fatalf("managed endpoint import persisted docker_host: %#v", env.RuntimeConfig)
+	}
+	svc, err := svcRepo.GetByName(ctx, "demo-web")
+	if err != nil || svc == nil || svc.RuntimeConfig == nil || svc.RuntimeConfig.Adopted == nil {
+		t.Fatalf("expected adopted service, svc=%#v err=%v", svc, err)
+	}
+	if svc.RuntimeConfig.Adopted.EndpointRef != "prod-docker" {
+		t.Fatalf("adopted endpoint_ref = %q", svc.RuntimeConfig.Adopted.EndpointRef)
+	}
+}
+
+func TestAdoptionServiceRejectsRawDockerHostWhenPolicyDisabled(t *testing.T) {
+	registry, svcRepo, envRepo, buildRepo, artifactRepo, _, _ := newTestRegistry()
+	adoption := NewAdoptionService(
+		registry, svcRepo, envRepo, buildRepo, artifactRepo, registry.state, registry.observations, &events.NoopPublisher{}, zap.NewNop(),
+		WithAdoptionRuntimeConfig(config.RuntimeConfig{Endpoints: map[string]config.RuntimeEndpointConfig{}}, false),
+	)
+
+	_, err := adoption.Scan(context.Background(), AdoptionScanRequest{Targets: []AdoptionTarget{{Name: "local", DockerHost: "unix:///docker.sock"}}})
+	if err == nil || !strings.Contains(err.Error(), "raw docker_host targets are disabled") {
+		t.Fatalf("Scan error = %v, want raw host policy rejection", err)
 	}
 }
 

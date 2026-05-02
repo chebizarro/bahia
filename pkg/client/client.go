@@ -40,7 +40,8 @@ func (c *Client) SetAuthToken(token string) {
 // AdoptionTarget identifies one Docker host for adoption scan/import.
 type AdoptionTarget struct {
 	Name            string `json:"name"`
-	DockerHost      string `json:"docker_host"`
+	EndpointRef     string `json:"endpoint_ref,omitempty"`
+	DockerHost      string `json:"docker_host,omitempty"`
 	EnvironmentName string `json:"environment_name,omitempty"`
 }
 

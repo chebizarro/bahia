@@ -116,10 +116,32 @@ type ReconcileConfig struct {
 type RuntimeTargetConfig struct {
 	Type          string `koanf:"type"`
 	DockerHost    string `koanf:"docker_host"`
+	EndpointRef   string `koanf:"endpoint_ref"`
 	ComposeDir    string `koanf:"compose_dir"`
 	KubeContext   string `koanf:"kube_context"`
 	KubeNamespace string `koanf:"kube_namespace"`
 	KubeConfig    string `koanf:"kube_config"`
+
+	ResolvedEndpoint RuntimeEndpointConfig `koanf:"-"`
+}
+
+// RuntimeEndpointConfig holds server-managed Docker endpoint transport settings.
+type RuntimeEndpointConfig struct {
+	Ref                string `koanf:"-"`
+	DockerHost         string `koanf:"docker_host"`
+	CACertFile         string `koanf:"ca_cert_file"`
+	ClientCertFile     string `koanf:"client_cert_file"`
+	ClientKeyFile      string `koanf:"client_key_file"`
+	InsecureSkipVerify bool   `koanf:"insecure_skip_verify"`
+}
+
+// Empty reports whether no endpoint transport settings are configured.
+func (c RuntimeEndpointConfig) Empty() bool {
+	return strings.TrimSpace(c.DockerHost) == "" &&
+		strings.TrimSpace(c.CACertFile) == "" &&
+		strings.TrimSpace(c.ClientCertFile) == "" &&
+		strings.TrimSpace(c.ClientKeyFile) == "" &&
+		!c.InsecureSkipVerify
 }
 
 // RuntimeConfig holds runtime targeting settings.
@@ -141,8 +163,9 @@ type RuntimeConfig struct {
 	KubeConfig    string `koanf:"kube_config"`
 
 	// Environment-targeted fields.
-	Default      RuntimeTargetConfig            `koanf:"default"`
-	Environments map[string]RuntimeTargetConfig `koanf:"environments"`
+	Default      RuntimeTargetConfig              `koanf:"default"`
+	Environments map[string]RuntimeTargetConfig   `koanf:"environments"`
+	Endpoints    map[string]RuntimeEndpointConfig `koanf:"endpoints"`
 }
 
 // LogConfig holds logging settings.
@@ -173,6 +196,7 @@ func (c OperatorAccessConfig) Empty() bool {
 // AdoptionConfig holds privileged adoption route settings.
 type AdoptionConfig struct {
 	Enabled              bool `koanf:"enabled"`
+	AllowRawDockerHosts  bool `koanf:"allow_raw_docker_hosts"`
 	OperatorAccessConfig `koanf:",squash"`
 }
 
@@ -295,6 +319,7 @@ func Defaults() *Config {
 			Type:         "docker",
 			DockerHost:   "unix:///var/run/docker.sock",
 			Environments: map[string]RuntimeTargetConfig{},
+			Endpoints:    map[string]RuntimeEndpointConfig{},
 		},
 		Log: LogConfig{
 			Level:  "info",
@@ -411,6 +436,20 @@ func (c *Config) validate() error {
 			return fmt.Errorf("config validation failed: adoption operator allowlist is required when adoption.enabled=true")
 		}
 	}
+	for name, endpoint := range c.Runtime.Endpoints {
+		if strings.TrimSpace(name) == "" {
+			return fmt.Errorf("config validation failed: runtime endpoint names must not be empty")
+		}
+		if strings.TrimSpace(endpoint.DockerHost) == "" {
+			return fmt.Errorf("config validation failed: runtime endpoint %q requires docker_host", name)
+		}
+		if (strings.TrimSpace(endpoint.ClientCertFile) == "") != (strings.TrimSpace(endpoint.ClientKeyFile) == "") {
+			return fmt.Errorf("config validation failed: runtime endpoint %q requires both client_cert_file and client_key_file", name)
+		}
+	}
+	if err := c.validateRuntimeEndpointRefs(); err != nil {
+		return err
+	}
 	if c.DirectRuntime.Enabled {
 		if !c.Auth.Enabled {
 			return fmt.Errorf("config validation failed: auth.enabled=true is required when direct_runtime_actions.enabled=true")
@@ -441,6 +480,24 @@ func (c *Config) validate() error {
 	}
 	if c.HiveCI.MaxRetries <= 0 {
 		return fmt.Errorf("config validation failed: hiveci.max_retries must be > 0")
+	}
+	return nil
+}
+
+func (c *Config) validateRuntimeEndpointRefs() error {
+	if ref := strings.TrimSpace(c.Runtime.Default.EndpointRef); ref != "" {
+		if _, ok := c.Runtime.Endpoints[ref]; !ok {
+			return fmt.Errorf("config validation failed: runtime.default.endpoint_ref %q is not configured", ref)
+		}
+	}
+	for name, target := range c.Runtime.Environments {
+		ref := strings.TrimSpace(target.EndpointRef)
+		if ref == "" {
+			continue
+		}
+		if _, ok := c.Runtime.Endpoints[ref]; !ok {
+			return fmt.Errorf("config validation failed: runtime.environments.%s.endpoint_ref %q is not configured", name, ref)
+		}
 	}
 	return nil
 }

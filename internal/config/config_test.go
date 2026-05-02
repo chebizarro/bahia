@@ -271,12 +271,19 @@ func TestLoadNestedRuntimeConfigFromYAML(t *testing.T) {
     compose_dir: /srv/bahia/default
   environments:
     production:
+      endpoint_ref: prod-docker
       compose_dir: /srv/bahia/production
       docker_host: tcp://prod:2375
     staging:
       type: kubernetes
       kube_context: staging-cluster
       kube_namespace: staging
+  endpoints:
+    prod-docker:
+      docker_host: tcp://docker-prod.example.com:2376
+      ca_cert_file: /etc/bahia/docker/ca.pem
+      client_cert_file: /etc/bahia/docker/cert.pem
+      client_key_file: /etc/bahia/docker/key.pem
 `)
 	if err := os.WriteFile(path, content, 0o644); err != nil {
 		t.Fatalf("writing temp config: %v", err)
@@ -297,12 +304,16 @@ func TestLoadNestedRuntimeConfigFromYAML(t *testing.T) {
 		t.Errorf("Runtime.Default.ComposeDir = %q", cfg.Runtime.Default.ComposeDir)
 	}
 	prod := cfg.Runtime.Environments["production"]
-	if prod.ComposeDir != "/srv/bahia/production" || prod.DockerHost != "tcp://prod:2375" {
+	if prod.ComposeDir != "/srv/bahia/production" || prod.DockerHost != "tcp://prod:2375" || prod.EndpointRef != "prod-docker" {
 		t.Errorf("production runtime target = %+v", prod)
 	}
 	staging := cfg.Runtime.Environments["staging"]
 	if staging.Type != "kubernetes" || staging.KubeContext != "staging-cluster" || staging.KubeNamespace != "staging" {
 		t.Errorf("staging runtime target = %+v", staging)
+	}
+	endpoint := cfg.Runtime.Endpoints["prod-docker"]
+	if endpoint.DockerHost != "tcp://docker-prod.example.com:2376" || endpoint.ClientKeyFile == "" {
+		t.Errorf("runtime endpoint not loaded: %+v", endpoint)
 	}
 }
 
@@ -349,6 +360,33 @@ func TestPrivilegedRouteConfigValidation(t *testing.T) {
 		cfg.DirectRuntime.AllowedPubkeys = []string{"abcdef"}
 		if err := cfg.validate(); err != nil {
 			t.Fatalf("validate error = %v", err)
+		}
+	})
+
+	t.Run("runtime endpoint requires docker host", func(t *testing.T) {
+		cfg := Defaults()
+		cfg.Runtime.Endpoints["prod"] = RuntimeEndpointConfig{}
+		err := cfg.validate()
+		if err == nil || !strings.Contains(err.Error(), "runtime endpoint \"prod\" requires docker_host") {
+			t.Fatalf("validate error = %v, want endpoint docker_host requirement", err)
+		}
+	})
+
+	t.Run("runtime endpoint requires cert key pair", func(t *testing.T) {
+		cfg := Defaults()
+		cfg.Runtime.Endpoints["prod"] = RuntimeEndpointConfig{DockerHost: "tcp://docker:2376", ClientCertFile: "cert.pem"}
+		err := cfg.validate()
+		if err == nil || !strings.Contains(err.Error(), "requires both client_cert_file and client_key_file") {
+			t.Fatalf("validate error = %v, want endpoint cert pair requirement", err)
+		}
+	})
+
+	t.Run("runtime endpoint refs must exist", func(t *testing.T) {
+		cfg := Defaults()
+		cfg.Runtime.Environments["prod"] = RuntimeTargetConfig{EndpointRef: "missing"}
+		err := cfg.validate()
+		if err == nil || !strings.Contains(err.Error(), `endpoint_ref "missing" is not configured`) {
+			t.Fatalf("validate error = %v, want unknown endpoint_ref requirement", err)
 		}
 	})
 
@@ -402,7 +440,9 @@ func TestLoadNestedRuntimeConfigFromEnvVars(t *testing.T) {
 	t.Setenv("BAHIA_RUNTIME__DEFAULT__TYPE", "compose")
 	t.Setenv("BAHIA_RUNTIME__DEFAULT__COMPOSE_DIR", "/srv/bahia/default")
 	t.Setenv("BAHIA_RUNTIME__ENVIRONMENTS__production__DOCKER_HOST", "tcp://prod:2375")
+	t.Setenv("BAHIA_RUNTIME__ENVIRONMENTS__production__ENDPOINT_REF", "prod")
 	t.Setenv("BAHIA_RUNTIME__ENVIRONMENTS__production__COMPOSE_DIR", "/srv/bahia/production")
+	t.Setenv("BAHIA_RUNTIME__ENDPOINTS__prod__DOCKER_HOST", "tcp://docker-prod:2376")
 
 	cfg, err := Load("")
 	if err != nil {
@@ -419,8 +459,11 @@ func TestLoadNestedRuntimeConfigFromEnvVars(t *testing.T) {
 	if !ok {
 		t.Fatalf("missing production environment target: %+v", cfg.Runtime.Environments)
 	}
-	if prod.DockerHost != "tcp://prod:2375" || prod.ComposeDir != "/srv/bahia/production" {
+	if prod.DockerHost != "tcp://prod:2375" || prod.ComposeDir != "/srv/bahia/production" || prod.EndpointRef != "prod" {
 		t.Errorf("production runtime target = %+v", prod)
+	}
+	if cfg.Runtime.Endpoints["prod"].DockerHost != "tcp://docker-prod:2376" {
+		t.Errorf("runtime endpoint env config = %+v", cfg.Runtime.Endpoints)
 	}
 }
 

@@ -139,7 +139,8 @@ type RecordObservationRequest struct {
 // AdoptionTargetRequest identifies one Docker host to scan/import.
 type AdoptionTargetRequest struct {
 	Name            string `json:"name"`
-	DockerHost      string `json:"docker_host"`
+	EndpointRef     string `json:"endpoint_ref,omitempty"`
+	DockerHost      string `json:"docker_host,omitempty"`
 	EnvironmentName string `json:"environment_name,omitempty"`
 }
 

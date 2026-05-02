@@ -30,7 +30,8 @@ type HealthResponse struct {
 // AdoptionTargetResponse identifies one scanned/imported Docker host.
 type AdoptionTargetResponse struct {
 	Name            string `json:"name"`
-	DockerHost      string `json:"docker_host"`
+	EndpointRef     string `json:"endpoint_ref,omitempty"`
+	DockerHost      string `json:"docker_host,omitempty"`
 	EnvironmentName string `json:"environment_name"`
 }
 

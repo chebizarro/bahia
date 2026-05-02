@@ -3,16 +3,20 @@ package runtime
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"go.uber.org/zap"
 )
@@ -88,38 +92,142 @@ type DockerContainer struct {
 
 // DockerObserver queries the Docker Engine API for container state.
 type DockerObserver struct {
-	httpClient *http.Client
-	host       string
-	logger     *zap.Logger
+	httpClient   *http.Client
+	host         string
+	observedHost string
+	logger       *zap.Logger
 }
 
 // NewDockerObserver creates a new DockerObserver.
 func NewDockerObserver(dockerHost string, logger *zap.Logger) *DockerObserver {
-	var client *http.Client
+	observer, err := newDockerObserverWithEndpoint(config.RuntimeEndpointConfig{DockerHost: dockerHost}, logger)
+	if err != nil {
+		// This legacy constructor cannot return errors. It is only used without
+		// TLS material, so retain the historical best-effort behavior.
+		return &DockerObserver{httpClient: &http.Client{Timeout: 10 * time.Second}, host: normalizeDockerHTTPHost(dockerHost, false), logger: logger}
+	}
+	return observer
+}
 
+// NewDockerObserverWithEndpoint creates a DockerObserver from server-managed
+// endpoint transport settings, including remote Docker TLS/mTLS.
+func NewDockerObserverWithEndpoint(endpoint config.RuntimeEndpointConfig, logger *zap.Logger) (*DockerObserver, error) {
+	return newDockerObserverWithEndpoint(endpoint, logger)
+}
+
+func newDockerObserverWithEndpoint(endpoint config.RuntimeEndpointConfig, logger *zap.Logger) (*DockerObserver, error) {
+	if logger == nil {
+		logger = zap.NewNop()
+	}
+	dockerHost := strings.TrimSpace(endpoint.DockerHost)
+	if dockerHost == "" {
+		dockerHost = "unix:///var/run/docker.sock"
+	}
 	if strings.HasPrefix(dockerHost, "unix://") {
 		socketPath := strings.TrimPrefix(dockerHost, "unix://")
-		client = &http.Client{
-			Transport: &http.Transport{
-				DialContext: func(_ context.Context, _, _ string) (net.Conn, error) {
-					return net.Dial("unix", socketPath)
+		host := "http://localhost"
+		return &DockerObserver{
+			httpClient: &http.Client{
+				Transport: &http.Transport{
+					DialContext: func(_ context.Context, _, _ string) (net.Conn, error) {
+						return net.Dial("unix", socketPath)
+					},
 				},
+				Timeout: 10 * time.Second,
 			},
-			Timeout: 10 * time.Second,
-		}
-		dockerHost = "http://localhost"
-	} else {
-		client = &http.Client{Timeout: 10 * time.Second}
-		if !strings.HasPrefix(dockerHost, "http") {
-			dockerHost = "http://" + dockerHost
-		}
+			host:         host,
+			observedHost: dockerObservedHost(endpoint, host),
+			logger:       logger,
+		}, nil
 	}
 
-	return &DockerObserver{
-		httpClient: client,
-		host:       dockerHost,
-		logger:     logger,
+	tlsEnabled := dockerEndpointUsesTLS(endpoint)
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	if tlsEnabled {
+		tlsConfig, err := dockerTLSConfig(endpoint)
+		if err != nil {
+			return nil, err
+		}
+		transport.TLSClientConfig = tlsConfig
 	}
+	host := normalizeDockerHTTPHost(dockerHost, tlsEnabled)
+	return &DockerObserver{
+		httpClient:   &http.Client{Transport: transport, Timeout: 10 * time.Second},
+		host:         host,
+		observedHost: dockerObservedHost(endpoint, host),
+		logger:       logger,
+	}, nil
+}
+
+func dockerObservedHost(endpoint config.RuntimeEndpointConfig, fallback string) string {
+	if ref := strings.TrimSpace(endpoint.Ref); ref != "" {
+		return ref
+	}
+	return fallback
+}
+
+func dockerEndpointUsesTLS(endpoint config.RuntimeEndpointConfig) bool {
+	host := strings.TrimSpace(endpoint.DockerHost)
+	return strings.HasPrefix(host, "https://") ||
+		strings.TrimSpace(endpoint.CACertFile) != "" ||
+		strings.TrimSpace(endpoint.ClientCertFile) != "" ||
+		strings.TrimSpace(endpoint.ClientKeyFile) != "" ||
+		endpoint.InsecureSkipVerify
+}
+
+func dockerTLSConfig(endpoint config.RuntimeEndpointConfig) (*tls.Config, error) {
+	cfg := &tls.Config{MinVersion: tls.VersionTLS12, InsecureSkipVerify: endpoint.InsecureSkipVerify} //nolint:gosec // explicit endpoint compatibility option.
+	if caFile := strings.TrimSpace(endpoint.CACertFile); caFile != "" {
+		pem, err := os.ReadFile(caFile)
+		if err != nil {
+			return nil, fmt.Errorf("reading docker endpoint CA cert: %w", err)
+		}
+		pool, err := x509.SystemCertPool()
+		if err != nil || pool == nil {
+			pool = x509.NewCertPool()
+		}
+		if ok := pool.AppendCertsFromPEM(pem); !ok {
+			return nil, fmt.Errorf("loading docker endpoint CA cert %q", caFile)
+		}
+		cfg.RootCAs = pool
+	}
+	certFile := strings.TrimSpace(endpoint.ClientCertFile)
+	keyFile := strings.TrimSpace(endpoint.ClientKeyFile)
+	if certFile != "" || keyFile != "" {
+		if certFile == "" || keyFile == "" {
+			return nil, fmt.Errorf("docker endpoint client_cert_file and client_key_file must be configured together")
+		}
+		cert, err := tls.LoadX509KeyPair(certFile, keyFile)
+		if err != nil {
+			return nil, fmt.Errorf("loading docker endpoint client certificate: %w", err)
+		}
+		cfg.Certificates = []tls.Certificate{cert}
+	}
+	return cfg, nil
+}
+
+func normalizeDockerHTTPHost(dockerHost string, tlsEnabled bool) string {
+	dockerHost = strings.TrimSpace(dockerHost)
+	if dockerHost == "" {
+		dockerHost = "unix:///var/run/docker.sock"
+	}
+	if strings.HasPrefix(dockerHost, "unix://") {
+		return "http://localhost"
+	}
+	if strings.HasPrefix(dockerHost, "http://") || strings.HasPrefix(dockerHost, "https://") {
+		return dockerHost
+	}
+	if strings.HasPrefix(dockerHost, "tcp://") {
+		host := strings.TrimPrefix(dockerHost, "tcp://")
+		if tlsEnabled {
+			return "https://" + host
+		}
+		return "http://" + host
+	}
+	if tlsEnabled {
+		return "https://" + dockerHost
+	}
+	return "http://" + dockerHost
 }
 
 // Observe queries Docker for containers matching the given service name or runtime target name.
@@ -161,11 +269,20 @@ func (o *DockerObserver) Observe(ctx context.Context, serviceID, envID uuid.UUID
 		ObservedImageDigest: digest,
 		ObservedImageRepo:   repo,
 		ObservedContainerID: container.ID,
-		ObservedHost:        o.host,
+		ObservedHost:        firstNonEmptyString(o.observedHost, o.host),
 		HealthStatus:        health,
 		Source:              "docker",
 		ObservedAt:          time.Now().UTC(),
 	}, nil
+}
+
+func firstNonEmptyString(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 // Type returns the docker runtime type.

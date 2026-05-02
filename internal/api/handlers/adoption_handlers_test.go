@@ -37,7 +37,7 @@ func (s *stubAdoptionService) Import(_ context.Context, req service.AdoptionImpo
 func TestAdoptionHandlerScanMapsRequestAndResponse(t *testing.T) {
 	serviceID := uuid.New()
 	stub := &stubAdoptionService{scanResp: []service.AdoptionPreview{{
-		Target: service.AdoptionTarget{Name: "local", DockerHost: "unix:///var/run/docker.sock", EnvironmentName: "prod"},
+		Target: service.AdoptionTarget{Name: "local", EndpointRef: "local-docker", DockerHost: "tcp://docker.internal:2376", EnvironmentName: "prod"},
 		Containers: []service.AdoptionPreviewContainer{{
 			Discovered: runtime.DiscoveredContainer{
 				ContainerID:   "abc123",
@@ -55,7 +55,7 @@ func TestAdoptionHandlerScanMapsRequestAndResponse(t *testing.T) {
 	}}}
 	h := NewAdoptionHandler(stub)
 
-	w := postJSON(t, h.Scan, dto.ScanAdoptionRequest{Targets: []dto.AdoptionTargetRequest{{Name: " local ", DockerHost: " unix:///var/run/docker.sock ", EnvironmentName: " prod "}}})
+	w := postJSON(t, h.Scan, dto.ScanAdoptionRequest{Targets: []dto.AdoptionTargetRequest{{Name: " local ", EndpointRef: "local-docker", EnvironmentName: " prod "}}})
 	assertStatus(t, w, http.StatusOK)
 	if len(stub.scanReq.Targets) != 1 || stub.scanReq.Targets[0].Name != "local" || stub.scanReq.Targets[0].EnvironmentName != "prod" {
 		t.Fatalf("request was not mapped/trimmed: %#v", stub.scanReq)
@@ -69,6 +69,9 @@ func TestAdoptionHandlerScanMapsRequestAndResponse(t *testing.T) {
 	}
 	if len(resp.Data) != 1 || len(resp.Data[0].Containers) != 1 {
 		t.Fatalf("unexpected response: %#v", resp.Data)
+	}
+	if resp.Data[0].Target.EndpointRef != "local-docker" || resp.Data[0].Target.DockerHost != "" {
+		t.Fatalf("managed endpoint response leaked docker_host: %#v", resp.Data[0].Target)
 	}
 	container := resp.Data[0].Containers[0]
 	if container.ProposedServiceName != "legacy-api" || !container.WillUpdate || container.ExistingServiceID == nil || *container.ExistingServiceID != serviceID {

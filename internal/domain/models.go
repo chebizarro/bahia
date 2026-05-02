@@ -151,6 +151,7 @@ type AdoptedRuntimeConfig struct {
 	TargetName    string            `json:"target_name"`
 	SourceRuntime string            `json:"source_runtime"`
 	HostAlias     string            `json:"host_alias"`
+	EndpointRef   string            `json:"endpoint_ref,omitempty"`
 	Environment   map[string]string `json:"environment,omitempty"`
 	Ports         []string          `json:"ports,omitempty"`
 	Volumes       []string          `json:"volumes,omitempty"`

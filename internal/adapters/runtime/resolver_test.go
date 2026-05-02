@@ -155,6 +155,44 @@ func TestConfigRuntimeResolver_CachesByResolvedTarget(t *testing.T) {
 	}
 }
 
+func TestConfigRuntimeResolver_EndpointRef(t *testing.T) {
+	resolver := NewConfigRuntimeResolver(config.RuntimeConfig{
+		Default: config.RuntimeTargetConfig{Type: "docker"},
+		Endpoints: map[string]config.RuntimeEndpointConfig{
+			"prod-docker": {
+				DockerHost:         "tcp://docker-prod:2376",
+				InsecureSkipVerify: true,
+			},
+		},
+	}, zap.NewNop())
+
+	rt, err := resolver.Resolve(
+		resolverTestService(domain.RuntimeTypeDocker),
+		resolverTestEnv("production", map[string]any{"endpoint_ref": "prod-docker"}),
+	)
+	if err != nil {
+		t.Fatalf("Resolve() error: %v", err)
+	}
+	docker, ok := rt.(*DockerObserver)
+	if !ok {
+		t.Fatalf("Resolve() returned %T, want *DockerObserver", rt)
+	}
+	if docker.host != "https://docker-prod:2376" {
+		t.Fatalf("docker host = %q, want TLS endpoint host", docker.host)
+	}
+}
+
+func TestConfigRuntimeResolver_UnknownEndpointRef(t *testing.T) {
+	resolver := NewConfigRuntimeResolver(config.RuntimeConfig{}, zap.NewNop())
+	_, err := resolver.Resolve(
+		resolverTestService(domain.RuntimeTypeDocker),
+		resolverTestEnv("production", map[string]any{"endpoint_ref": "missing"}),
+	)
+	if err == nil || !strings.Contains(err.Error(), `endpoint_ref "missing"`) {
+		t.Fatalf("Resolve() error = %v, want unknown endpoint_ref", err)
+	}
+}
+
 func resolverTestService(rt domain.RuntimeType) *domain.Service {
 	return &domain.Service{
 		ID:          uuid.New(),

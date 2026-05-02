@@ -105,8 +105,8 @@ func validateAdoptionTargets(targets []dto.AdoptionTargetRequest) error {
 			return errBadRequest("target names must be unique after normalization")
 		}
 		seen[name] = struct{}{}
-		if strings.TrimSpace(target.DockerHost) == "" {
-			return errBadRequest("target docker_host is required")
+		if strings.TrimSpace(target.EndpointRef) != "" && strings.TrimSpace(target.DockerHost) != "" {
+			return errBadRequest("target endpoint_ref cannot be combined with docker_host")
 		}
 		if strings.TrimSpace(target.EnvironmentName) != "" && normalizeAdoptionName(target.EnvironmentName) == "" {
 			return errBadRequest("target environment_name is invalid")
@@ -156,7 +156,7 @@ func normalizeAdoptionName(name string) string {
 
 func writeAdoptionServiceError(w http.ResponseWriter, err error) {
 	msg := err.Error()
-	if strings.Contains(msg, "adoption target") || strings.Contains(msg, "docker_host") || strings.Contains(msg, "import requires") || strings.Contains(msg, "selection") {
+	if strings.Contains(msg, "adoption target") || strings.Contains(msg, "docker_host") || strings.Contains(msg, "endpoint_ref") || strings.Contains(msg, "raw docker_host") || strings.Contains(msg, "import requires") || strings.Contains(msg, "selection") {
 		writeError(w, http.StatusBadRequest, msg)
 		return
 	}
@@ -168,6 +168,7 @@ func mapAdoptionTargets(targets []dto.AdoptionTargetRequest) []service.AdoptionT
 	for _, target := range targets {
 		mapped = append(mapped, service.AdoptionTarget{
 			Name:            normalizeAdoptionName(target.Name),
+			EndpointRef:     strings.TrimSpace(target.EndpointRef),
 			DockerHost:      strings.TrimSpace(target.DockerHost),
 			EnvironmentName: normalizeAdoptionName(target.EnvironmentName),
 		})
@@ -231,7 +232,11 @@ func mapAdoptionImportResultResponses(results []service.AdoptionImportResult) []
 }
 
 func mapAdoptionTargetResponse(target service.AdoptionTarget) dto.AdoptionTargetResponse {
-	return dto.AdoptionTargetResponse{Name: target.Name, DockerHost: target.DockerHost, EnvironmentName: target.EnvironmentName}
+	resp := dto.AdoptionTargetResponse{Name: target.Name, EndpointRef: target.EndpointRef, EnvironmentName: target.EnvironmentName}
+	if target.EndpointRef == "" {
+		resp.DockerHost = target.DockerHost
+	}
+	return resp
 }
 
 func mapDiscoveredContainerResponse(discovered runtime.DiscoveredContainer) dto.DiscoveredContainerResponse {

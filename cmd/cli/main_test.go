@@ -51,22 +51,32 @@ func TestCommandGroupsExposeExpectedSubcommands(t *testing.T) {
 }
 
 func TestParseAdoptionTargets(t *testing.T) {
-	targets, err := parseAdoptionTargets([]string{"local=unix:///docker.sock", "prod=tcp://docker.example:2376"}, []string{"local=dev", "prod=prod"})
+	targets, err := parseAdoptionTargets([]string{"local", "prod=prod-docker"}, nil, []string{"local=dev", "prod=prod"})
 	if err != nil {
 		t.Fatalf("parseAdoptionTargets returned error: %v", err)
 	}
-	if len(targets) != 2 || targets[0].Name != "local" || targets[0].DockerHost != "unix:///docker.sock" || targets[0].EnvironmentName != "dev" {
+	if len(targets) != 2 || targets[0].Name != "local" || targets[0].EndpointRef != "local" || targets[0].EnvironmentName != "dev" {
 		t.Fatalf("unexpected targets: %#v", targets)
 	}
+	if targets[1].EndpointRef != "prod-docker" {
+		t.Fatalf("endpoint_ref not parsed: %#v", targets[1])
+	}
 
-	if _, err := parseAdoptionTargets([]string{"local=unix:///docker.sock", "local=tcp://other"}, nil); err == nil {
+	if _, err := parseAdoptionTargets([]string{"local", "local=other"}, nil, nil); err == nil {
 		t.Fatal("expected duplicate alias error")
 	}
-	if _, err := parseAdoptionTargets([]string{"Local=unix:///docker.sock", "local=tcp://other"}, nil); err == nil {
+	if _, err := parseAdoptionTargets([]string{"Local", "local=other"}, nil, nil); err == nil {
 		t.Fatal("expected normalized duplicate alias error")
 	}
-	if _, err := parseAdoptionTargets([]string{"local=unix:///docker.sock"}, []string{"missing=prod"}); err == nil {
+	if _, err := parseAdoptionTargets([]string{"local"}, nil, []string{"missing=prod"}); err == nil {
 		t.Fatal("expected unmatched environment alias error")
+	}
+	raw, err := parseAdoptionTargets(nil, []string{"local=unix:///docker.sock"}, nil)
+	if err != nil {
+		t.Fatalf("parse raw targets returned error: %v", err)
+	}
+	if len(raw) != 1 || raw[0].DockerHost != "unix:///docker.sock" || raw[0].EndpointRef != "" {
+		t.Fatalf("unexpected raw targets: %#v", raw)
 	}
 }
 

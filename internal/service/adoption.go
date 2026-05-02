@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/adapters/runtime"
+	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/events"
 	"github.com/openagentsinc/bahia/internal/repository"
@@ -34,6 +35,20 @@ type AdoptionService struct {
 	observations repository.RuntimeObservationRepository
 	publisher    events.Publisher
 	logger       *zap.Logger
+
+	runtimeCfg          config.RuntimeConfig
+	allowRawDockerHosts bool
+}
+
+// AdoptionServiceOption configures adoption runtime governance behavior.
+type AdoptionServiceOption func(*AdoptionService)
+
+// WithAdoptionRuntimeConfig enables server-managed endpoint resolution and raw-host policy.
+func WithAdoptionRuntimeConfig(runtimeCfg config.RuntimeConfig, allowRawDockerHosts bool) AdoptionServiceOption {
+	return func(s *AdoptionService) {
+		s.runtimeCfg = runtimeCfg
+		s.allowRawDockerHosts = allowRawDockerHosts
+	}
 }
 
 // NewAdoptionService creates an AdoptionService.
@@ -47,6 +62,7 @@ func NewAdoptionService(
 	observations repository.RuntimeObservationRepository,
 	publisher events.Publisher,
 	logger *zap.Logger,
+	opts ...AdoptionServiceOption,
 ) *AdoptionService {
 	if logger == nil {
 		logger = zap.NewNop()
@@ -54,17 +70,22 @@ func NewAdoptionService(
 	if publisher == nil {
 		publisher = &events.NoopPublisher{}
 	}
-	return &AdoptionService{
-		registry:     registry,
-		services:     services,
-		environments: environments,
-		builds:       builds,
-		artifacts:    artifacts,
-		state:        state,
-		observations: observations,
-		publisher:    publisher,
-		logger:       logger,
+	svc := &AdoptionService{
+		registry:            registry,
+		services:            services,
+		environments:        environments,
+		builds:              builds,
+		artifacts:           artifacts,
+		state:               state,
+		observations:        observations,
+		publisher:           publisher,
+		logger:              logger,
+		allowRawDockerHosts: true,
 	}
+	for _, opt := range opts {
+		opt(svc)
+	}
+	return svc
 }
 
 // AdoptionScanRequest requests a scan of one or more Docker targets.
@@ -76,6 +97,8 @@ type AdoptionScanRequest struct {
 type AdoptionTarget struct {
 	Name            string
 	DockerHost      string
+	EndpointRef     string
+	Endpoint        config.RuntimeEndpointConfig
 	EnvironmentName string
 }
 
@@ -127,7 +150,7 @@ type AdoptionImportResult struct {
 
 // Scan discovers containers and proposes Bahia service names.
 func (s *AdoptionService) Scan(ctx context.Context, req AdoptionScanRequest) ([]AdoptionPreview, error) {
-	targets, err := normalizeAdoptionTargets(req.Targets)
+	targets, err := s.normalizeAdoptionTargets(req.Targets)
 	if err != nil {
 		return nil, err
 	}
@@ -140,7 +163,7 @@ func (s *AdoptionService) Scan(ctx context.Context, req AdoptionScanRequest) ([]
 
 // Import scans targets and imports selected containers. Individual candidate failures are returned in result rows.
 func (s *AdoptionService) Import(ctx context.Context, req AdoptionImportRequest) ([]AdoptionImportResult, error) {
-	targets, err := normalizeAdoptionTargets(req.Targets)
+	targets, err := s.normalizeAdoptionTargets(req.Targets)
 	if err != nil {
 		return nil, err
 	}
@@ -356,9 +379,13 @@ func (s *AdoptionService) ensureAdoptionEnvironment(ctx context.Context, target 
 	}
 	config := map[string]any{
 		"type":            string(domain.RuntimeTypeDocker),
-		"docker_host":     target.DockerHost,
 		"host_alias":      target.Name,
 		"management_mode": "direct_runtime",
+	}
+	if target.EndpointRef != "" {
+		config["endpoint_ref"] = target.EndpointRef
+	} else {
+		config["docker_host"] = target.DockerHost
 	}
 	if existing == nil {
 		env := &domain.Environment{
@@ -380,10 +407,22 @@ func (s *AdoptionService) ensureAdoptionEnvironment(ctx context.Context, target 
 	if currentMode, ok := stringFromAny(existing.RuntimeConfig["management_mode"]); ok && currentMode != "" && currentMode != "direct_runtime" {
 		return nil, fmt.Errorf("environment %q has incompatible management_mode %q", target.EnvironmentName, currentMode)
 	}
+	if currentEndpointRef, ok := stringFromAny(existing.RuntimeConfig["endpoint_ref"]); ok && currentEndpointRef != "" && currentEndpointRef != target.EndpointRef {
+		return nil, fmt.Errorf("environment %q already targets endpoint_ref %q", target.EnvironmentName, currentEndpointRef)
+	}
 	if currentHost, ok := stringFromAny(existing.RuntimeConfig["docker_host"]); ok && currentHost != "" && currentHost != target.DockerHost {
 		return nil, fmt.Errorf("environment %q already targets docker_host %q", target.EnvironmentName, currentHost)
 	}
 	changed := false
+	if target.EndpointRef != "" {
+		if _, ok := existing.RuntimeConfig["docker_host"]; ok {
+			delete(existing.RuntimeConfig, "docker_host")
+			changed = true
+		}
+	} else if _, ok := existing.RuntimeConfig["endpoint_ref"]; ok {
+		delete(existing.RuntimeConfig, "endpoint_ref")
+		changed = true
+	}
 	for k, v := range config {
 		if existing.RuntimeConfig[k] != v {
 			existing.RuntimeConfig[k] = v
@@ -483,13 +522,15 @@ func (s *AdoptionService) ensureAdoptionBuild(ctx context.Context, target Adopti
 		Metadata: map[string]any{
 			"import_source":  "adoption",
 			"target_name":    target.Name,
-			"docker_host":    target.DockerHost,
 			"container_id":   discovered.ContainerID,
 			"container_name": discovered.ContainerName,
 			"image_ref":      discovered.ImageRef,
 			"source_runtime": discovered.SourceRuntime,
 			"compose":        discovered.Compose,
 		},
+	}
+	for k, v := range targetTransportMetadata(target) {
+		build.Metadata[k] = v
 	}
 	finished := time.Now().UTC()
 	build.StartedAt = &finished
@@ -536,7 +577,7 @@ func (s *AdoptionService) ensureAdoptionArtifact(ctx context.Context, discovered
 	return artifact, nil
 }
 
-func normalizeAdoptionTargets(targets []AdoptionTarget) ([]AdoptionTarget, error) {
+func (s *AdoptionService) normalizeAdoptionTargets(targets []AdoptionTarget) ([]AdoptionTarget, error) {
 	if len(targets) == 0 {
 		return nil, fmt.Errorf("at least one adoption target is required")
 	}
@@ -545,6 +586,7 @@ func normalizeAdoptionTargets(targets []AdoptionTarget) ([]AdoptionTarget, error
 	for _, target := range targets {
 		target.Name = normalizeResourceName(target.Name)
 		target.DockerHost = strings.TrimSpace(target.DockerHost)
+		target.EndpointRef = strings.TrimSpace(target.EndpointRef)
 		if target.EnvironmentName == "" {
 			target.EnvironmentName = target.Name
 		}
@@ -552,8 +594,30 @@ func normalizeAdoptionTargets(targets []AdoptionTarget) ([]AdoptionTarget, error
 		if target.Name == "" {
 			return nil, fmt.Errorf("adoption target name is required")
 		}
-		if target.DockerHost == "" {
-			return nil, fmt.Errorf("docker_host is required for target %q", target.Name)
+		if target.EndpointRef == "" && target.DockerHost == "" {
+			target.EndpointRef = target.Name
+		}
+		if target.EndpointRef != "" && target.DockerHost != "" {
+			return nil, fmt.Errorf("adoption target %q cannot combine endpoint_ref with docker_host", target.Name)
+		}
+		if target.EndpointRef != "" {
+			endpoint, ok := s.runtimeCfg.Endpoints[target.EndpointRef]
+			if !ok {
+				return nil, fmt.Errorf("adoption target %q references unknown endpoint_ref %q", target.Name, target.EndpointRef)
+			}
+			if strings.TrimSpace(endpoint.DockerHost) == "" {
+				return nil, fmt.Errorf("adoption target %q endpoint_ref %q has no docker_host", target.Name, target.EndpointRef)
+			}
+			endpoint.Ref = target.EndpointRef
+			target.Endpoint = endpoint
+			target.DockerHost = strings.TrimSpace(endpoint.DockerHost)
+		} else {
+			if !s.allowRawDockerHosts {
+				return nil, fmt.Errorf("raw docker_host targets are disabled by adoption policy")
+			}
+			if target.DockerHost == "" {
+				return nil, fmt.Errorf("docker_host is required for target %q", target.Name)
+			}
 		}
 		if _, ok := seen[target.Name]; ok {
 			return nil, fmt.Errorf("duplicate adoption target %q", target.Name)
@@ -590,7 +654,7 @@ func normalizeAdoptionSelections(req AdoptionImportRequest) (map[string]Adoption
 func toDockerDiscoveryTargets(targets []AdoptionTarget) []runtime.DockerDiscoveryTarget {
 	out := make([]runtime.DockerDiscoveryTarget, 0, len(targets))
 	for _, target := range targets {
-		out = append(out, runtime.DockerDiscoveryTarget{Name: target.Name, DockerHost: target.DockerHost, EnvironmentName: target.EnvironmentName})
+		out = append(out, runtime.DockerDiscoveryTarget{Name: target.Name, DockerHost: target.DockerHost, Endpoint: target.Endpoint, EnvironmentName: target.EnvironmentName})
 	}
 	return out
 }
@@ -607,6 +671,7 @@ func adoptedRuntimeConfig(target AdoptionTarget, discovered runtime.DiscoveredCo
 		TargetName:    discovered.TargetName,
 		SourceRuntime: discovered.SourceRuntime,
 		HostAlias:     target.Name,
+		EndpointRef:   target.EndpointRef,
 		Environment:   copyStringMap(discovered.Environment),
 		Ports:         append([]string(nil), discovered.Ports...),
 		Volumes:       append([]string(nil), discovered.Volumes...),
@@ -633,7 +698,7 @@ func adoptionRunID(target AdoptionTarget, discovered runtime.DiscoveredContainer
 }
 
 func observationFromDiscovered(target AdoptionTarget, serviceID, envID uuid.UUID, discovered runtime.DiscoveredContainer) *domain.RuntimeObservation {
-	return &domain.RuntimeObservation{
+	obs := &domain.RuntimeObservation{
 		ServiceID:           serviceID,
 		EnvironmentID:       envID,
 		ObservedImageDigest: discovered.ImageDigest,
@@ -646,13 +711,26 @@ func observationFromDiscovered(target AdoptionTarget, serviceID, envID uuid.UUID
 		Metadata: map[string]any{
 			"import_source":  "adoption",
 			"target_name":    target.Name,
-			"docker_host":    target.DockerHost,
 			"container_name": discovered.ContainerName,
 			"source_runtime": discovered.SourceRuntime,
 			"warnings":       discovered.Warnings,
 		},
 		ObservedAt: time.Now().UTC(),
 	}
+	for k, v := range targetTransportMetadata(target) {
+		obs.Metadata[k] = v
+	}
+	return obs
+}
+
+func targetTransportMetadata(target AdoptionTarget) map[string]any {
+	if target.EndpointRef != "" {
+		return map[string]any{"endpoint_ref": target.EndpointRef}
+	}
+	if target.DockerHost != "" {
+		return map[string]any{"docker_host": target.DockerHost}
+	}
+	return nil
 }
 
 func selectionsForTarget(selections map[string]AdoptionSelection, targetName string) []AdoptionSelection {

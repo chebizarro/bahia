@@ -47,7 +47,10 @@ func (r *ConfigRuntimeResolver) Resolve(service *domain.Service, env *domain.Env
 		return nil, fmt.Errorf("environment is required for runtime resolution")
 	}
 
-	target, envTypeExplicit := r.resolveTarget(env)
+	target, envTypeExplicit, err := r.resolveTarget(env)
+	if err != nil {
+		return nil, err
+	}
 	serviceType := service.RuntimeType
 	if serviceType != "" && envTypeExplicit && target.Type != "" && domain.RuntimeType(target.Type) != serviceType {
 		return nil, fmt.Errorf("runtime type conflict for environment %q: service %q requires %q but environment target config specifies %q", env.Name, service.Name, serviceType, target.Type)
@@ -69,6 +72,7 @@ func (r *ConfigRuntimeResolver) Resolve(service *domain.Service, env *domain.Env
 		Type:          target.Type,
 		DockerHost:    target.DockerHost,
 		ComposeDir:    target.ComposeDir,
+		Endpoint:      target.ResolvedEndpoint,
 		KubeContext:   target.KubeContext,
 		KubeNamespace: target.KubeNamespace,
 		KubeConfig:    target.KubeConfig,
@@ -80,10 +84,11 @@ func (r *ConfigRuntimeResolver) Resolve(service *domain.Service, env *domain.Env
 	return rt, nil
 }
 
-func (r *ConfigRuntimeResolver) resolveTarget(env *domain.Environment) (config.RuntimeTargetConfig, bool) {
+func (r *ConfigRuntimeResolver) resolveTarget(env *domain.Environment) (config.RuntimeTargetConfig, bool, error) {
 	target := config.RuntimeTargetConfig{
 		Type:          r.cfg.Type,
 		DockerHost:    r.cfg.DockerHost,
+		EndpointRef:   "",
 		ComposeDir:    r.cfg.ComposeDir,
 		KubeContext:   r.cfg.KubeContext,
 		KubeNamespace: r.cfg.KubeNamespace,
@@ -108,7 +113,10 @@ func (r *ConfigRuntimeResolver) resolveTarget(env *domain.Environment) (config.R
 		envTypeExplicit = envTypeExplicit || fromRuntimeConfig
 	}
 
-	return target, envTypeExplicit
+	if err := r.applyEndpointRef(&target); err != nil {
+		return target, envTypeExplicit, err
+	}
+	return target, envTypeExplicit, nil
 }
 
 func overlayTarget(base, override config.RuntimeTargetConfig) config.RuntimeTargetConfig {
@@ -117,6 +125,9 @@ func overlayTarget(base, override config.RuntimeTargetConfig) config.RuntimeTarg
 	}
 	if override.DockerHost != "" {
 		base.DockerHost = override.DockerHost
+	}
+	if override.EndpointRef != "" {
+		base.EndpointRef = override.EndpointRef
 	}
 	if override.ComposeDir != "" {
 		base.ComposeDir = override.ComposeDir
@@ -146,6 +157,8 @@ func overlayRuntimeConfig(base config.RuntimeTargetConfig, values map[string]any
 			typeExplicit = true
 		case "docker_host":
 			base.DockerHost = value
+		case "endpoint_ref":
+			base.EndpointRef = value
 		case "compose_dir":
 			base.ComposeDir = value
 		case "kube_context":
@@ -157,6 +170,25 @@ func overlayRuntimeConfig(base config.RuntimeTargetConfig, values map[string]any
 		}
 	}
 	return base, typeExplicit
+}
+
+func (r *ConfigRuntimeResolver) applyEndpointRef(target *config.RuntimeTargetConfig) error {
+	ref := strings.TrimSpace(target.EndpointRef)
+	if ref == "" {
+		return nil
+	}
+	endpoint, ok := r.cfg.Endpoints[ref]
+	if !ok {
+		return fmt.Errorf("runtime endpoint_ref %q is not configured", ref)
+	}
+	if strings.TrimSpace(endpoint.DockerHost) == "" {
+		return fmt.Errorf("runtime endpoint_ref %q has no docker_host", ref)
+	}
+	endpoint.Ref = ref
+	target.EndpointRef = ref
+	target.DockerHost = endpoint.DockerHost
+	target.ResolvedEndpoint = endpoint
+	return nil
 }
 
 func sortedRuntimeConfigKeys(values map[string]any) []string {
@@ -180,6 +212,11 @@ func runtimeCacheKey(target config.RuntimeTargetConfig) string {
 	return strings.Join([]string{
 		target.Type,
 		target.DockerHost,
+		target.EndpointRef,
+		target.ResolvedEndpoint.CACertFile,
+		target.ResolvedEndpoint.ClientCertFile,
+		target.ResolvedEndpoint.ClientKeyFile,
+		fmt.Sprintf("%t", target.ResolvedEndpoint.InsecureSkipVerify),
 		target.ComposeDir,
 		target.KubeContext,
 		target.KubeNamespace,

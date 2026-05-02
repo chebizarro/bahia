@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"go.uber.org/zap"
 )
@@ -18,6 +19,7 @@ import (
 type DockerDiscoveryTarget struct {
 	Name            string
 	DockerHost      string
+	Endpoint        config.RuntimeEndpointConfig
 	EnvironmentName string
 }
 
@@ -68,6 +70,18 @@ func NewDockerDiscovery(dockerHost string, logger *zap.Logger) *DockerDiscovery 
 	return &DockerDiscovery{observer: NewDockerObserver(dockerHost, logger), logger: logger}
 }
 
+// NewDockerDiscoveryWithEndpoint creates a discovery client using managed endpoint transport settings.
+func NewDockerDiscoveryWithEndpoint(endpoint config.RuntimeEndpointConfig, logger *zap.Logger) (*DockerDiscovery, error) {
+	if logger == nil {
+		logger = zap.NewNop()
+	}
+	observer, err := NewDockerObserverWithEndpoint(endpoint, logger)
+	if err != nil {
+		return nil, err
+	}
+	return &DockerDiscovery{observer: observer, logger: logger}, nil
+}
+
 // DiscoverDockerTargets scans targets concurrently with bounded host-level parallelism and preserves input order.
 func DiscoverDockerTargets(ctx context.Context, targets []DockerDiscoveryTarget, logger *zap.Logger) ([]DockerDiscoveryResult, error) {
 	if logger == nil {
@@ -91,7 +105,12 @@ func DiscoverDockerTargets(ctx context.Context, targets []DockerDiscoveryTarget,
 				return
 			}
 
-			containers, err := NewDockerDiscovery(target.DockerHost, logger).Discover(ctx, target)
+			discovery, err := dockerDiscoveryForTarget(target, logger)
+			if err != nil {
+				results[i].Error = err.Error()
+				return
+			}
+			containers, err := discovery.Discover(ctx, target)
 			if err != nil {
 				results[i].Error = err.Error()
 				return
@@ -105,6 +124,13 @@ func DiscoverDockerTargets(ctx context.Context, targets []DockerDiscoveryTarget,
 	}
 	markDuplicateDiscoveredTargets(results)
 	return results, nil
+}
+
+func dockerDiscoveryForTarget(target DockerDiscoveryTarget, logger *zap.Logger) (*DockerDiscovery, error) {
+	if !target.Endpoint.Empty() {
+		return NewDockerDiscoveryWithEndpoint(target.Endpoint, logger)
+	}
+	return NewDockerDiscovery(target.DockerHost, logger), nil
 }
 
 // Discover scans all containers on a Docker host and normalizes inspect data.

@@ -3,7 +3,9 @@ package runtime
 import (
 	"fmt"
 	"os"
+	"strings"
 
+	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"go.uber.org/zap"
 )
@@ -14,6 +16,7 @@ type RuntimeConfig struct {
 	DockerHost    string // Docker socket or TCP address
 	PodmanHost    string // Podman socket path (defaults to rootless user socket)
 	ComposeDir    string // Directory containing docker-compose.yml
+	Endpoint      config.RuntimeEndpointConfig
 	KubeContext   string // Kubernetes context name
 	KubeNamespace string // Kubernetes namespace
 	KubeConfig    string // Path to kubeconfig file
@@ -28,18 +31,25 @@ func NewRuntime(cfg RuntimeConfig, logger *zap.Logger) (Runtime, error) {
 
 	switch rt {
 	case domain.RuntimeTypeDocker:
-		host := cfg.DockerHost
-		if host == "" {
-			host = "unix:///var/run/docker.sock"
+		endpoint := cfg.Endpoint
+		if strings.TrimSpace(endpoint.DockerHost) == "" {
+			endpoint.DockerHost = cfg.DockerHost
 		}
-		return NewDockerObserver(host, logger), nil
+		if strings.TrimSpace(endpoint.DockerHost) == "" {
+			endpoint.DockerHost = "unix:///var/run/docker.sock"
+		}
+		return NewDockerObserverWithEndpoint(endpoint, logger)
 
 	case domain.RuntimeTypeCompose:
 		dir := cfg.ComposeDir
 		if dir == "" {
 			return nil, fmt.Errorf("compose_dir is required for compose runtime")
 		}
-		return NewComposeRuntimeWithDockerHost(dir, cfg.DockerHost, logger), nil
+		endpoint := cfg.Endpoint
+		if strings.TrimSpace(endpoint.DockerHost) == "" {
+			endpoint.DockerHost = cfg.DockerHost
+		}
+		return NewComposeRuntimeWithEndpoint(dir, endpoint, logger)
 
 	case domain.RuntimeTypeK8s:
 		return NewKubernetesRuntime(

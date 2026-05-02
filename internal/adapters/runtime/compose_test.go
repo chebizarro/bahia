@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"go.uber.org/zap"
 )
@@ -41,6 +42,40 @@ func TestComposeRuntimeCommandEnvMergesDockerHostAndExtraEnv(t *testing.T) {
 	}
 	if got := envValue(env, "MY_SERVICE_IMAGE"); got != "registry.example/app:v2" {
 		t.Fatalf("MY_SERVICE_IMAGE = %q, want registry.example/app:v2", got)
+	}
+}
+
+func TestComposeRuntimeEndpointAddsTLSEnvAndCertPath(t *testing.T) {
+	certDir := t.TempDir()
+	ca := filepath.Join(certDir, "ca.pem")
+	cert := filepath.Join(certDir, "cert.pem")
+	key := filepath.Join(certDir, "key.pem")
+	for _, path := range []string{ca, cert, key} {
+		if err := os.WriteFile(path, []byte("pem"), 0o600); err != nil {
+			t.Fatalf("write cert fixture: %v", err)
+		}
+	}
+
+	r, err := NewComposeRuntimeWithEndpoint("/srv/app", config.RuntimeEndpointConfig{
+		DockerHost:     "tcp://docker:2376",
+		CACertFile:     ca,
+		ClientCertFile: cert,
+		ClientKeyFile:  key,
+	}, zap.NewNop())
+	if err != nil {
+		t.Fatalf("NewComposeRuntimeWithEndpoint() error = %v", err)
+	}
+
+	env := r.commandEnv(nil)
+	if got := envValue(env, "DOCKER_HOST"); got != "tcp://docker:2376" {
+		t.Fatalf("DOCKER_HOST = %q", got)
+	}
+	if got := envValue(env, "DOCKER_TLS_VERIFY"); got != "1" {
+		t.Fatalf("DOCKER_TLS_VERIFY = %q, want 1", got)
+	}
+	certPath := envValue(env, "DOCKER_CERT_PATH")
+	if certPath != certDir {
+		t.Fatalf("DOCKER_CERT_PATH = %q, want %q", certPath, certDir)
 	}
 }
 

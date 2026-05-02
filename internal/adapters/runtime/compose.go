@@ -7,21 +7,24 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 	"unicode"
 
 	"github.com/google/uuid"
+	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"go.uber.org/zap"
 )
 
 // ComposeRuntime implements Runtime using Docker Compose CLI.
 type ComposeRuntime struct {
-	projectDir string // working directory with docker-compose.yml
-	dockerHost string // optional DOCKER_HOST override for compose commands
-	binary     string // "docker-compose" or "docker compose"
-	logger     *zap.Logger
+	projectDir   string // working directory with docker-compose.yml
+	dockerHost   string // optional DOCKER_HOST override for compose commands
+	dockerTLSEnv []string
+	binary       string // "docker-compose" or "docker compose"
+	logger       *zap.Logger
 }
 
 // NewComposeRuntime creates a new Docker Compose runtime.
@@ -39,6 +42,18 @@ func NewComposeRuntimeWithDockerHost(projectDir, dockerHost string, logger *zap.
 		binary:     binary,
 		logger:     logger,
 	}
+}
+
+// NewComposeRuntimeWithEndpoint creates a Docker Compose runtime bound to a
+// server-managed Docker endpoint, including CLI TLS environment wiring.
+func NewComposeRuntimeWithEndpoint(projectDir string, endpoint config.RuntimeEndpointConfig, logger *zap.Logger) (*ComposeRuntime, error) {
+	r := NewComposeRuntimeWithDockerHost(projectDir, strings.TrimSpace(endpoint.DockerHost), logger)
+	tlsEnv, err := composeDockerTLSEnv(endpoint)
+	if err != nil {
+		return nil, err
+	}
+	r.dockerTLSEnv = tlsEnv
+	return r, nil
 }
 
 // detectComposeBinary checks if "docker compose" (v2) or "docker-compose" (v1) is available.
@@ -252,10 +267,69 @@ func (r *ComposeRuntime) commandEnv(extraEnv []string) []string {
 	if r.dockerHost != "" {
 		env = upsertEnv(env, "DOCKER_HOST="+r.dockerHost)
 	}
+	for _, entry := range r.dockerTLSEnv {
+		env = upsertEnv(env, entry)
+	}
 	for _, entry := range extraEnv {
 		env = upsertEnv(env, entry)
 	}
 	return env
+}
+
+func composeDockerTLSEnv(endpoint config.RuntimeEndpointConfig) ([]string, error) {
+	if !dockerEndpointUsesTLS(endpoint) {
+		return nil, nil
+	}
+	env := []string{}
+	if endpoint.InsecureSkipVerify {
+		env = append(env, "DOCKER_TLS=1")
+		env = append(env, "DOCKER_TLS_VERIFY=")
+	} else {
+		env = append(env, "DOCKER_TLS_VERIFY=1")
+	}
+
+	caFile := strings.TrimSpace(endpoint.CACertFile)
+	certFile := strings.TrimSpace(endpoint.ClientCertFile)
+	keyFile := strings.TrimSpace(endpoint.ClientKeyFile)
+	if caFile == "" && certFile == "" && keyFile == "" {
+		return env, nil
+	}
+	if (certFile == "") != (keyFile == "") {
+		return nil, fmt.Errorf("docker endpoint client_cert_file and client_key_file must be configured together")
+	}
+	certDir, err := composeCertDir(caFile, certFile, keyFile)
+	if err != nil {
+		return nil, err
+	}
+	env = append(env, "DOCKER_CERT_PATH="+certDir)
+	return env, nil
+}
+
+func composeCertDir(caFile, certFile, keyFile string) (string, error) {
+	var certDir string
+	files := map[string]string{
+		caFile:   "ca.pem",
+		certFile: "cert.pem",
+		keyFile:  "key.pem",
+	}
+	for file, wantBase := range files {
+		if file == "" {
+			continue
+		}
+		if filepath.Base(file) != wantBase {
+			return "", fmt.Errorf("compose docker TLS requires %s to be named %s for DOCKER_CERT_PATH", file, wantBase)
+		}
+		dir := filepath.Dir(file)
+		if certDir == "" {
+			certDir = dir
+		} else if certDir != dir {
+			return "", fmt.Errorf("compose docker TLS files must share one directory for DOCKER_CERT_PATH")
+		}
+		if _, err := os.Stat(file); err != nil {
+			return "", fmt.Errorf("checking docker cert file %q: %w", file, err)
+		}
+	}
+	return certDir, nil
 }
 
 func upsertEnv(env []string, entry string) []string {
