@@ -105,6 +105,21 @@
     value: ''
   });
 
+  // Secret update modal state
+  let secretUpdateOpen = $state(false);
+  let secretUpdating = $state(false);
+  let secretUpdateError = $state(null);
+  let secretToUpdate = $state(null);
+  let secretUpdateValue = $state('');
+
+  // Secret reveal modal state
+  let secretRevealOpen = $state(false);
+  let secretRevealWarningAccepted = $state(false);
+  let secretRevealValue = $state('');
+  let secretRevealName = $state('');
+  let secretRevealCopyStatus = $state('');
+  let secretValueCache = $state({});
+
   // Secret delete modal state
   let secretDeleteOpen = $state(false);
   let secretDeleting = $state(false);
@@ -420,6 +435,53 @@
     secretForm.value = '';
   }
 
+  function openSecretUpdateModal(secret) {
+    secretToUpdate = secret;
+    secretUpdateValue = '';
+    secretUpdateError = null;
+    secretUpdateOpen = true;
+  }
+
+  function closeSecretUpdateModal() {
+    secretUpdateOpen = false;
+    secretUpdateError = null;
+    secretToUpdate = null;
+    secretUpdateValue = '';
+  }
+
+  function openSecretRevealModal(secretName, value) {
+    secretRevealName = secretName;
+    secretRevealValue = value;
+    secretRevealWarningAccepted = false;
+    secretRevealCopyStatus = '';
+    secretRevealOpen = true;
+  }
+
+  function closeSecretRevealModal() {
+    secretRevealOpen = false;
+    secretRevealWarningAccepted = false;
+    secretRevealValue = '';
+    secretRevealName = '';
+    secretRevealCopyStatus = '';
+  }
+
+  function handleSecretReveal(secret) {
+    const value = secretValueCache[secret.id];
+    if (!value) return;
+    openSecretRevealModal(secret.name, value);
+  }
+
+  async function handleCopyRevealedSecret() {
+    if (!secretRevealValue) return;
+
+    try {
+      await navigator.clipboard.writeText(secretRevealValue);
+      secretRevealCopyStatus = 'Copied';
+    } catch {
+      secretRevealCopyStatus = 'Copy failed';
+    }
+  }
+
   async function handleSecretCreate() {
     // Validate required fields
     if (!secretForm.name.trim()) {
@@ -435,22 +497,66 @@
     secretCreateError = null;
 
     try {
-      await api.createSecret(serviceId, {
+      const createdSecret = await api.createSecret(serviceId, {
         name: secretForm.name.trim(),
         value: secretForm.value
       });
-      
+
+      const createdValue = secretForm.value;
+
       // Clear value immediately for security
       secretForm.value = '';
       
       // Close modal and reload secrets
       closeSecretCreateModal();
       await reloadSecrets();
+
+      if (createdSecret?.id && createdValue) {
+        secretValueCache = {
+          ...secretValueCache,
+          [createdSecret.id]: createdValue
+        };
+        openSecretRevealModal(createdSecret.name || secretForm.name.trim(), createdValue);
+      }
     } catch (err) {
       // Never log the secret value
       secretCreateError = err.message || 'Failed to create secret';
     } finally {
       secretCreating = false;
+    }
+  }
+
+  async function handleSecretUpdate() {
+    if (!secretToUpdate) return;
+    if (!secretUpdateValue) {
+      secretUpdateError = 'Secret value is required';
+      return;
+    }
+
+    secretUpdating = true;
+    secretUpdateError = null;
+
+    try {
+      const secretName = secretToUpdate.name;
+      const updatedSecret = await api.updateSecret(serviceId, secretToUpdate.id, {
+        value: secretUpdateValue
+      });
+
+      const updatedValue = secretUpdateValue;
+      closeSecretUpdateModal();
+      await reloadSecrets();
+
+      if (updatedSecret?.id && updatedValue) {
+        secretValueCache = {
+          ...secretValueCache,
+          [updatedSecret.id]: updatedValue
+        };
+        openSecretRevealModal(secretName, updatedValue);
+      }
+    } catch (err) {
+      secretUpdateError = err.message || 'Failed to update secret';
+    } finally {
+      secretUpdating = false;
     }
   }
 
@@ -698,12 +804,27 @@
                   <span class="secret-scope">env: {secret.environment_id}</span>
                 {/if}
               </div>
-              <LoadingButton 
-                variant="danger" 
-                      onclick={() => openSecretDeleteModal(secret)}
-              >
-                Delete
-              </LoadingButton>
+              <div class="secret-actions">
+                <LoadingButton
+                  variant="secondary"
+                  disabled={!secretValueCache[secret.id]}
+                  onclick={() => handleSecretReveal(secret)}
+                >
+                  Reveal
+                </LoadingButton>
+                <LoadingButton
+                  variant="secondary"
+                  onclick={() => openSecretUpdateModal(secret)}
+                >
+                  Update
+                </LoadingButton>
+                <LoadingButton 
+                  variant="danger" 
+                  onclick={() => openSecretDeleteModal(secret)}
+                >
+                  Delete
+                </LoadingButton>
+              </div>
             </div>
           {/each}
         </div>
@@ -1044,6 +1165,67 @@
   </form>
 </Modal>
 
+<!-- Secret Update Modal -->
+<Modal bind:open={secretUpdateOpen} title="Update Secret" onClose={closeSecretUpdateModal}>
+  <form onsubmit={(event) => { event.preventDefault(); handleSecretUpdate(); }} class="secret-form">
+    <div class="form-field">
+      <label for="secret-update-name">Name</label>
+      <Input id="secret-update-name" value={secretToUpdate?.name || ''} disabled />
+    </div>
+
+    <div class="form-field">
+      <label for="secret-update-value">New Value *</label>
+      <Textarea
+        id="secret-update-value"
+        bind:value={secretUpdateValue}
+        placeholder="Enter the new secret value..."
+        rows={6}
+        required
+        disabled={secretUpdating}
+      />
+      <span class="field-hint">The old value cannot be viewed. Save this value securely.</span>
+    </div>
+
+    {#if secretUpdateError}
+      <p class="error">{secretUpdateError}</p>
+    {/if}
+
+    <div class="form-actions">
+      <LoadingButton type="button" variant="secondary" onclick={closeSecretUpdateModal} disabled={secretUpdating}>
+        Cancel
+      </LoadingButton>
+      <LoadingButton type="submit" variant="primary" loading={secretUpdating}>
+        Update Secret
+      </LoadingButton>
+    </div>
+  </form>
+</Modal>
+
+<!-- Secret Reveal Warning Modal -->
+<Modal bind:open={secretRevealOpen} title="Reveal Secret Value" onClose={closeSecretRevealModal}>
+  <div class="secret-reveal-flow">
+    <p class="warning">Warning: this will display the plaintext value for <code>{secretRevealName}</code> on screen.</p>
+
+    {#if !secretRevealWarningAccepted}
+      <div class="form-actions">
+        <LoadingButton type="button" variant="secondary" onclick={closeSecretRevealModal}>Cancel</LoadingButton>
+        <LoadingButton type="button" variant="danger" onclick={() => { secretRevealWarningAccepted = true; }}>Reveal Value</LoadingButton>
+      </div>
+    {:else}
+      <div class="revealed-secret" role="status">
+        <code>{secretRevealValue}</code>
+      </div>
+      <div class="form-actions">
+        <LoadingButton type="button" variant="secondary" onclick={closeSecretRevealModal}>Close</LoadingButton>
+        <LoadingButton type="button" variant="primary" onclick={handleCopyRevealedSecret}>Copy to Clipboard</LoadingButton>
+      </div>
+      {#if secretRevealCopyStatus}
+        <p class="field-hint">{secretRevealCopyStatus}</p>
+      {/if}
+    {/if}
+  </div>
+</Modal>
+
 <!-- Secret Delete Confirmation Dialog -->
 <ConfirmDialog
   bind:open={secretDeleteOpen}
@@ -1260,6 +1442,23 @@
     align-items: center;
     gap: 0.75rem;
     flex: 1;
+  }
+  .secret-actions {
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+  }
+  .secret-reveal-flow {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+  }
+  .revealed-secret {
+    padding: 0.75rem;
+    border-radius: 4px;
+    border: 1px solid var(--border-color);
+    background: var(--hover-bg);
+    word-break: break-all;
   }
   .secret-name {
     font-weight: 500;

@@ -180,6 +180,14 @@ test.describe('Service Secrets Smoke Test', () => {
     expect(pageContent.toLowerCase()).not.toContain('password123');
   });
   
+  test('should keep reveal disabled for secrets that have no cached value', async ({ page }) => {
+    await page.goto('/services/service-1');
+    await page.waitForLoadState('networkidle');
+
+    const row = page.locator('.secret-row:has-text("DATABASE_URL")');
+    await expect(row.getByRole('button', { name: 'Reveal' })).toBeDisabled();
+  });
+
   test('should open Add Secret modal', async ({ page }) => {
     await page.goto('/services/service-1');
     await page.waitForLoadState('networkidle');
@@ -305,9 +313,83 @@ test.describe('Service Secrets Smoke Test', () => {
     expect(pageContent).not.toContain('super-secret-value-123');
     
     // Secret name should be visible
-    await expect(page.locator('text=NEW_SECRET')).toBeVisible();
+    await expect(page.locator('.secret-row:has-text("NEW_SECRET")')).toBeVisible();
   });
   
+  test('should update a secret and reveal with warning + copy', async ({ page }) => {
+    const apiCalls = {
+      put: null,
+      clipboard: null
+    };
+
+    await page.route('**/api/v1/services/service-1/secrets/*', (route) => {
+      if (route.request().method() === 'PUT') {
+        apiCalls.put = route.request().postDataJSON();
+        return route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            data: {
+              id: 'secret-1',
+              service_id: 'service-1',
+              name: 'DATABASE_URL',
+              version: 2,
+              created_at: new Date().toISOString(),
+              updated_at: new Date().toISOString()
+            }
+          })
+        });
+      }
+
+      if (route.request().method() === 'DELETE') {
+        return route.fulfill({
+          status: 204,
+          contentType: 'application/json',
+          body: ''
+        });
+      }
+    });
+
+    await page.addInitScript(() => {
+      Object.defineProperty(window.navigator, 'clipboard', {
+        configurable: true,
+        value: {
+          writeText: async (text) => {
+            window.__copied_secret_value = text;
+          }
+        }
+      });
+      window.__copied_secret_value = null;
+    });
+
+    await page.goto('/services/service-1');
+    await page.waitForLoadState('networkidle');
+
+    await page.locator('.secret-row:has-text("DATABASE_URL") button:has-text("Update")').click();
+    await expect(page.getByRole('dialog', { name: 'Update Secret' })).toBeVisible();
+
+    await page.fill('#secret-update-value', 'updated-secret-value-xyz');
+    await page.getByRole('dialog', { name: 'Update Secret' }).getByRole('button', { name: 'Update Secret' }).click();
+
+    expect(apiCalls.put).toMatchObject({ value: 'updated-secret-value-xyz' });
+
+    await expect(page.getByRole('dialog', { name: 'Reveal Secret Value' })).toBeVisible();
+    await expect(page.locator('text=updated-secret-value-xyz')).not.toBeVisible();
+
+    await page.getByRole('dialog', { name: 'Reveal Secret Value' }).getByRole('button', { name: 'Reveal Value' }).click();
+    await expect(page.locator('text=updated-secret-value-xyz')).toBeVisible();
+
+    await page.getByRole('dialog', { name: 'Reveal Secret Value' }).getByRole('button', { name: 'Copy to Clipboard' }).click();
+    await expect(page.locator('text=Copied')).toBeVisible();
+
+    apiCalls.clipboard = await page.evaluate(() => window.__copied_secret_value);
+    expect(apiCalls.clipboard).toBe('updated-secret-value-xyz');
+
+    await page.getByRole('dialog', { name: 'Reveal Secret Value' }).getByText('Close', { exact: true }).click();
+
+    await expect(page.locator('.secret-row:has-text("DATABASE_URL") button:has-text("Reveal")')).toBeEnabled();
+  });
+
   test('should show delete secret confirmation', async ({ page }) => {
     await page.goto('/services/service-1');
     await page.waitForLoadState('networkidle');
