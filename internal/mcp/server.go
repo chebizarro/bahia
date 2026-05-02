@@ -4,6 +4,8 @@ package mcp
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -11,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 	adapterruntime "github.com/openagentsinc/bahia/internal/adapters/runtime"
+	adapterSBOM "github.com/openagentsinc/bahia/internal/adapters/sbom"
 	"github.com/openagentsinc/bahia/internal/adapters/secrets"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/notifications"
@@ -32,6 +35,7 @@ type Server struct {
 	workers          repository.WorkerRepository       // optional: for worker management tools
 	logService       *adapterruntime.LogService        // optional: for deployment run log tools
 	payments         *service.PaymentService           // optional: for payment tools
+	sboms            repository.SBOMRepository         // optional: for SBOM tools
 }
 
 // Config holds MCP server configuration.
@@ -51,6 +55,7 @@ type ServerDeps struct {
 	Workers                repository.WorkerRepository
 	LogService             *adapterruntime.LogService
 	Payments               *service.PaymentService
+	SBOMs                  repository.SBOMRepository
 }
 
 // NewServer creates a new MCP server for Bahia.
@@ -81,6 +86,7 @@ func NewServerWithOptions(registry *service.RegistryService, logger *zap.Logger,
 		workers:          deps.Workers,
 		logService:       deps.LogService,
 		payments:         deps.Payments,
+		sboms:            deps.SBOMs,
 	}
 }
 
@@ -503,6 +509,79 @@ func (s *Server) GetTools() []Tool {
 					},
 				},
 				"required": []string{"build_id", "service_id", "image_repo", "image_tag", "image_digest"},
+			},
+		},
+		// SBOM operations
+		{
+			Name:        "bahia_get_sbom",
+			Description: "Get the parsed SBOM metadata for an artifact",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"artifact_id": map[string]interface{}{
+						"type":        "string",
+						"description": "Artifact UUID",
+					},
+				},
+				"required": []string{"artifact_id"},
+			},
+		},
+		{
+			Name:        "bahia_get_sbom_packages",
+			Description: "List packages parsed from an artifact's SBOM",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"artifact_id": map[string]interface{}{
+						"type":        "string",
+						"description": "Artifact UUID",
+					},
+				},
+				"required": []string{"artifact_id"},
+			},
+		},
+		{
+			Name:        "bahia_search_sbom_packages",
+			Description: "Search packages across ingested SBOMs by package name",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"query": map[string]interface{}{
+						"type":        "string",
+						"description": "Package name search query",
+					},
+					"package": map[string]interface{}{
+						"type":        "string",
+						"description": "Package name search query (REST API alias)",
+					},
+					"limit": map[string]interface{}{
+						"type":        "integer",
+						"description": "Maximum number of results",
+						"default":     100,
+					},
+				},
+			},
+		},
+		{
+			Name:        "bahia_ingest_sbom",
+			Description: "Parse and store an SPDX or CycloneDX JSON SBOM document for an artifact",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"artifact_id": map[string]interface{}{
+						"type":        "string",
+						"description": "Artifact UUID",
+					},
+					"sbom_data": map[string]interface{}{
+						"type":        "string",
+						"description": "Raw SPDX or CycloneDX JSON SBOM document",
+					},
+					"source_url": map[string]interface{}{
+						"type":        "string",
+						"description": "SBOM source URL or OCI referrer (optional)",
+					},
+				},
+				"required": []string{"artifact_id", "sbom_data"},
 			},
 		},
 		// Build operations
@@ -1362,6 +1441,15 @@ func (s *Server) CallTool(ctx context.Context, name string, arguments map[string
 		return s.handleGetArtifact(ctx, arguments)
 	case "bahia_register_artifact":
 		return s.handleRegisterArtifact(ctx, arguments)
+	// SBOM operations
+	case "bahia_get_sbom":
+		return s.handleGetSBOM(ctx, arguments)
+	case "bahia_get_sbom_packages":
+		return s.handleGetSBOMPackages(ctx, arguments)
+	case "bahia_search_sbom_packages":
+		return s.handleSearchSBOMPackages(ctx, arguments)
+	case "bahia_ingest_sbom":
+		return s.handleIngestSBOM(ctx, arguments)
 	// Build operations
 	case "bahia_list_builds":
 		return s.handleListBuilds(ctx, arguments)
@@ -2112,6 +2200,147 @@ func (s *Server) handleRegisterArtifact(ctx context.Context, args map[string]int
 			"sbom_url":            artifact.SBOMURL,
 			"manifest_media_type": artifact.ManifestMediaType,
 		},
+	}
+	return jsonResult(result)
+}
+
+func (s *Server) handleGetSBOM(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
+	if s.sboms == nil {
+		return errorResult("SBOM tools are not configured"), nil
+	}
+
+	artifactID, err := parseRequiredUUIDArg(args, "artifact_id")
+	if err != nil {
+		return errorResult(err.Error()), nil
+	}
+
+	sbom, err := s.sboms.GetSBOMByArtifact(ctx, artifactID)
+	if err != nil {
+		if err == repository.ErrNotFound {
+			return errorResult("SBOM not found for artifact"), nil
+		}
+		return errorResult(fmt.Sprintf("failed to get SBOM: %v", err)), nil
+	}
+
+	return jsonResult(sbomToMap(sbom))
+}
+
+func (s *Server) handleGetSBOMPackages(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
+	if s.sboms == nil {
+		return errorResult("SBOM tools are not configured"), nil
+	}
+
+	artifactID, err := parseRequiredUUIDArg(args, "artifact_id")
+	if err != nil {
+		return errorResult(err.Error()), nil
+	}
+
+	sbom, err := s.sboms.GetSBOMByArtifact(ctx, artifactID)
+	if err != nil {
+		if err == repository.ErrNotFound {
+			return errorResult("SBOM not found for artifact"), nil
+		}
+		return errorResult(fmt.Sprintf("failed to get SBOM: %v", err)), nil
+	}
+
+	packages, err := s.sboms.ListPackagesBySBOM(ctx, sbom.ID)
+	if err != nil {
+		return errorResult(fmt.Sprintf("failed to list SBOM packages: %v", err)), nil
+	}
+
+	result := map[string]interface{}{
+		"artifact_id": artifactID.String(),
+		"sbom_id":     sbom.ID.String(),
+		"packages":    sbomPackagesToMaps(packages),
+		"total":       len(packages),
+	}
+	return jsonResult(result)
+}
+
+func (s *Server) handleSearchSBOMPackages(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
+	if s.sboms == nil {
+		return errorResult("SBOM tools are not configured"), nil
+	}
+
+	query, _ := args["query"].(string)
+	if query == "" {
+		query, _ = args["package"].(string)
+	}
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return errorResult("query is required"), nil
+	}
+	limit := optionalIntArg(args, "limit", 100)
+
+	packages, err := s.sboms.SearchPackagesByName(ctx, query, limit)
+	if err != nil {
+		return errorResult(fmt.Sprintf("failed to search SBOM packages: %v", err)), nil
+	}
+
+	result := map[string]interface{}{
+		"query":    query,
+		"packages": sbomPackagesToMaps(packages),
+		"total":    len(packages),
+	}
+	return jsonResult(result)
+}
+
+func (s *Server) handleIngestSBOM(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
+	if s.sboms == nil {
+		return errorResult("SBOM tools are not configured"), nil
+	}
+	if s.registry == nil {
+		return errorResult("registry service is not configured"), nil
+	}
+
+	artifactID, err := parseRequiredUUIDArg(args, "artifact_id")
+	if err != nil {
+		return errorResult(err.Error()), nil
+	}
+	if _, err := s.registry.GetArtifact(ctx, artifactID); err != nil {
+		if err == repository.ErrNotFound {
+			return errorResult("artifact not found"), nil
+		}
+		return errorResult(fmt.Sprintf("failed to get artifact: %v", err)), nil
+	}
+
+	data, err := sbomDataArg(args)
+	if err != nil {
+		return errorResult(err.Error()), nil
+	}
+
+	hash := sha256.Sum256(data)
+	rawHash := hex.EncodeToString(hash[:])
+	if existing, err := s.sboms.GetSBOMByHash(ctx, rawHash); err == nil && existing != nil {
+		result := map[string]interface{}{
+			"status": "existing",
+			"sbom":   sbomToMap(existing),
+		}
+		return jsonResult(result)
+	}
+
+	parsed, err := adapterSBOM.Parse(data, artifactID)
+	if err != nil {
+		return errorResult(fmt.Sprintf("parsing SBOM: %v", err)), nil
+	}
+	if sourceURL, _ := args["source_url"].(string); strings.TrimSpace(sourceURL) != "" {
+		parsed.SBOM.SourceURL = strings.TrimSpace(sourceURL)
+	}
+
+	if err := s.sboms.CreateSBOM(ctx, &parsed.SBOM); err != nil {
+		return errorResult(fmt.Sprintf("storing SBOM: %v", err)), nil
+	}
+	if len(parsed.Packages) > 0 {
+		if err := s.sboms.CreatePackages(ctx, parsed.Packages); err != nil {
+			return errorResult(fmt.Sprintf("storing SBOM packages: %v", err)), nil
+		}
+	}
+
+	result := map[string]interface{}{
+		"status":        "created",
+		"sbom_id":       parsed.SBOM.ID.String(),
+		"package_count": len(parsed.Packages),
+		"sbom":          sbomToMap(&parsed.SBOM),
 	}
 	return jsonResult(result)
 }
@@ -3005,6 +3234,42 @@ func artifactsToMaps(artifacts []domain.Artifact) []map[string]interface{} {
 			"image_digest": a.ImageDigest,
 			"scan_status":  a.ScanStatus,
 			"created_at":   a.CreatedAt.Format("2006-01-02T15:04:05Z"),
+		}
+	}
+	return result
+}
+
+func sbomToMap(s *domain.ArtifactSBOM) map[string]interface{} {
+	if s == nil {
+		return nil
+	}
+	return map[string]interface{}{
+		"id":                  s.ID.String(),
+		"artifact_id":         s.ArtifactID.String(),
+		"format":              string(s.Format),
+		"source_url":          s.SourceURL,
+		"package_count":       s.PackageCount,
+		"vulnerability_count": s.VulnerabilityCount,
+		"critical_count":      s.CriticalCount,
+		"high_count":          s.HighCount,
+		"raw_hash":            s.RawHash,
+		"metadata":            s.Metadata,
+		"created_at":          s.CreatedAt.Format("2006-01-02T15:04:05Z"),
+	}
+}
+
+func sbomPackagesToMaps(packages []domain.SBOMPackage) []map[string]interface{} {
+	result := make([]map[string]interface{}, len(packages))
+	for i, p := range packages {
+		result[i] = map[string]interface{}{
+			"id":        p.ID.String(),
+			"sbom_id":   p.SBOMID.String(),
+			"name":      p.Name,
+			"version":   p.Version,
+			"ecosystem": p.Ecosystem,
+			"license":   p.License,
+			"purl":      p.PURL,
+			"cpe":       p.CPE,
 		}
 	}
 	return result
@@ -4130,6 +4395,32 @@ func optionalIntArg(args map[string]interface{}, name string, defaultValue int) 
 		}
 	}
 	return defaultValue
+}
+
+func sbomDataArg(args map[string]interface{}) ([]byte, error) {
+	for _, name := range []string{"sbom_data", "document", "sbom"} {
+		raw, ok := args[name]
+		if !ok {
+			continue
+		}
+		switch value := raw.(type) {
+		case string:
+			value = strings.TrimSpace(value)
+			if value == "" {
+				return nil, fmt.Errorf("%s is required", name)
+			}
+			return []byte(value), nil
+		case map[string]interface{}, []interface{}:
+			data, err := json.Marshal(value)
+			if err != nil {
+				return nil, fmt.Errorf("marshaling %s: %w", name, err)
+			}
+			return data, nil
+		default:
+			return nil, fmt.Errorf("%s must be a JSON string or object", name)
+		}
+	}
+	return nil, fmt.Errorf("sbom_data is required")
 }
 
 func parseNotificationChannelType(args map[string]interface{}) (domain.ChannelType, error) {
