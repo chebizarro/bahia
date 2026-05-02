@@ -37,6 +37,98 @@ func (c *Client) SetAuthToken(token string) {
 	c.authToken = token
 }
 
+// AdoptionTarget identifies one Docker host for adoption scan/import.
+type AdoptionTarget struct {
+	Name            string `json:"name"`
+	DockerHost      string `json:"docker_host"`
+	EnvironmentName string `json:"environment_name,omitempty"`
+}
+
+// AdoptionScanRequest requests an adoption preview scan.
+type AdoptionScanRequest struct {
+	Targets []AdoptionTarget `json:"targets"`
+}
+
+// AdoptionSelection selects one discovered container for import.
+type AdoptionSelection struct {
+	TargetName          string `json:"target_name"`
+	ContainerID         string `json:"container_id"`
+	ServiceNameOverride string `json:"service_name_override,omitempty"`
+}
+
+// AdoptionImportRequest requests adoption import for selected or all containers.
+type AdoptionImportRequest struct {
+	Targets    []AdoptionTarget    `json:"targets"`
+	Selections []AdoptionSelection `json:"selections,omitempty"`
+	ImportAll  bool                `json:"import_all,omitempty"`
+}
+
+// DiscoveredContainer is a normalized container preview returned by adoption scan.
+type DiscoveredContainer struct {
+	TargetName      string                  `json:"target_name"`
+	EnvironmentName string                  `json:"environment_name"`
+	ContainerID     string                  `json:"container_id"`
+	ContainerName   string                  `json:"container_name"`
+	ImageRef        string                  `json:"image_ref"`
+	ImageRepo       string                  `json:"image_repo"`
+	ImageTag        string                  `json:"image_tag"`
+	ImageDigest     string                  `json:"image_digest"`
+	SourceRuntime   string                  `json:"source_runtime"`
+	Labels          map[string]string       `json:"labels,omitempty"`
+	Environment     map[string]string       `json:"environment,omitempty"`
+	Ports           []string                `json:"ports,omitempty"`
+	Volumes         []string                `json:"volumes,omitempty"`
+	Restart         string                  `json:"restart,omitempty"`
+	Command         []string                `json:"command,omitempty"`
+	Entrypoint      []string                `json:"entrypoint,omitempty"`
+	WorkingDir      string                  `json:"working_dir,omitempty"`
+	NetworkMode     string                  `json:"network_mode,omitempty"`
+	Compose         *domain.ComposeMetadata `json:"compose,omitempty"`
+	HealthStatus    domain.HealthStatus     `json:"health_status"`
+	Warnings        []string                `json:"warnings,omitempty"`
+	Adoptable       bool                    `json:"adoptable"`
+}
+
+// AdoptionPreviewContainer is one discovered container plus import proposal metadata.
+type AdoptionPreviewContainer struct {
+	Discovered          DiscoveredContainer `json:"discovered"`
+	ProposedServiceName string              `json:"proposed_service_name"`
+	ExistingServiceID   *string             `json:"existing_service_id,omitempty"`
+	WillUpdate          bool                `json:"will_update"`
+	Warnings            []string            `json:"warnings,omitempty"`
+	Adoptable           bool                `json:"adoptable"`
+}
+
+// AdoptionPreview groups discovered containers for one target.
+type AdoptionPreview struct {
+	Target     AdoptionTarget             `json:"target"`
+	Containers []AdoptionPreviewContainer `json:"containers"`
+	Error      string                     `json:"error,omitempty"`
+}
+
+// AdoptionImportResult reports one import candidate outcome.
+type AdoptionImportResult struct {
+	TargetName    string   `json:"target_name"`
+	ContainerID   string   `json:"container_id,omitempty"`
+	ContainerName string   `json:"container_name,omitempty"`
+	ServiceName   string   `json:"service_name,omitempty"`
+	ServiceID     *string  `json:"service_id,omitempty"`
+	EnvironmentID *string  `json:"environment_id,omitempty"`
+	BuildID       *string  `json:"build_id,omitempty"`
+	ArtifactID    *string  `json:"artifact_id,omitempty"`
+	Status        string   `json:"status"`
+	Warnings      []string `json:"warnings,omitempty"`
+	Error         string   `json:"error,omitempty"`
+}
+
+// RuntimeActionResult reports a direct runtime action result.
+type RuntimeActionResult struct {
+	Action        string                     `json:"action"`
+	ServiceID     string                     `json:"service_id"`
+	EnvironmentID string                     `json:"environment_id"`
+	Observation   *domain.RuntimeObservation `json:"observation,omitempty"`
+}
+
 type apiResponse struct {
 	Data    json.RawMessage `json:"data"`
 	Error   string          `json:"error"`
@@ -91,6 +183,26 @@ func (c *Client) do(ctx context.Context, method, path string, body any, result a
 	return nil
 }
 
+// --- Adoption ---
+
+// ScanAdoption previews adoptable containers on one or more Docker targets.
+func (c *Client) ScanAdoption(ctx context.Context, req AdoptionScanRequest) ([]AdoptionPreview, error) {
+	var previews []AdoptionPreview
+	if err := c.do(ctx, http.MethodPost, "/api/v1/adoption/scan", req, &previews); err != nil {
+		return nil, err
+	}
+	return previews, nil
+}
+
+// ImportAdoption imports selected or all discovered containers into Bahia models.
+func (c *Client) ImportAdoption(ctx context.Context, req AdoptionImportRequest) ([]AdoptionImportResult, error) {
+	var results []AdoptionImportResult
+	if err := c.do(ctx, http.MethodPost, "/api/v1/adoption/import", req, &results); err != nil {
+		return nil, err
+	}
+	return results, nil
+}
+
 // --- Services ---
 
 // ListServices returns all registered services.
@@ -123,6 +235,40 @@ func (c *Client) CreateService(ctx context.Context, name, artifactRepo string, r
 		return nil, err
 	}
 	return &svc, nil
+}
+
+// DeployServiceRuntime deploys the desired or explicit artifact directly through the resolved runtime.
+func (c *Client) DeployServiceRuntime(ctx context.Context, serviceID, envID string, artifactID *string) (*RuntimeActionResult, error) {
+	body := map[string]any{}
+	if artifactID != nil && *artifactID != "" {
+		body["artifact_id"] = *artifactID
+	}
+	var result RuntimeActionResult
+	path := "/api/v1/services/" + serviceID + "/environments/" + envID + "/deploy"
+	if err := c.do(ctx, http.MethodPost, path, body, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+// RestartServiceRuntime restarts a service directly through the resolved runtime.
+func (c *Client) RestartServiceRuntime(ctx context.Context, serviceID, envID string) (*RuntimeActionResult, error) {
+	var result RuntimeActionResult
+	path := "/api/v1/services/" + serviceID + "/environments/" + envID + "/restart"
+	if err := c.do(ctx, http.MethodPost, path, nil, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+// StopServiceRuntime stops a service directly through the resolved runtime.
+func (c *Client) StopServiceRuntime(ctx context.Context, serviceID, envID string) (*RuntimeActionResult, error) {
+	var result RuntimeActionResult
+	path := "/api/v1/services/" + serviceID + "/environments/" + envID + "/stop"
+	if err := c.do(ctx, http.MethodPost, path, nil, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
 }
 
 // --- Environments ---

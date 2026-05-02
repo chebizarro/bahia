@@ -21,8 +21,8 @@ import (
 	secretsAdapter "github.com/openagentsinc/bahia/internal/adapters/secrets"
 	"github.com/openagentsinc/bahia/internal/adapters/telemetry"
 	"github.com/openagentsinc/bahia/internal/api/handlers"
-	"github.com/openagentsinc/bahia/internal/auth"
 	"github.com/openagentsinc/bahia/internal/api/router"
+	"github.com/openagentsinc/bahia/internal/auth"
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/controlplane"
 	"github.com/openagentsinc/bahia/internal/db"
@@ -186,6 +186,10 @@ func New(cfg *config.Config) (*App, error) {
 	runtimeResolver := runtime.NewConfigRuntimeResolver(cfg.Runtime, logger)
 	logger.Info("runtime resolver initialized", zap.String("default_type", cfg.Runtime.Type))
 
+	// Adopted workload orchestration and direct runtime lifecycle services.
+	adoptionSvc := service.NewAdoptionService(registry, serviceRepo, envRepo, buildRepo, artifactRepo, stateRepo, obsRepo, publisher, logger)
+	runtimeLifecycleSvc := service.NewRuntimeLifecycleService(registry, serviceRepo, envRepo, artifactRepo, stateRepo, runtimeResolver, publisher, logger)
+
 	// Reconciler (created here but started in Run() with the lifecycle context).
 	var rec *reconcile.Reconciler
 	if cfg.Reconcile.Enabled {
@@ -327,24 +331,26 @@ func New(cfg *config.Config) (*App, error) {
 	// HTTP router.
 	handler := router.NewWithDeps(registry, logger, cfg.CORS, telemetryProvider,
 		router.RouterDeps{
-			Config:        cfg,
-			Workers:       workerRepo,
-			Payments:      paymentSvc,
-			SBOMs:         sbomRepo,
-			Artifacts:     artifactRepo,
-			EventHub:      eventHub,
-			Policies:      policySvc,
-			Secrets:       secretRepo,
-			Encryptor:     secretEncryptor,
-			Notifications: notifRepo,
-			Dispatcher:    notifDispatcher,
-			MCP:           mcpHandler,
-			Blossom:       blossomClient,
-			OCI:           ociHandler,
-			Orgs:          orgRepo,
-			OrgMembers:    orgMemberRepo,
-			OrgInvites:    orgInviteRepo,
-			RBAC:          rbac,
+			Config:           cfg,
+			Workers:          workerRepo,
+			Payments:         paymentSvc,
+			SBOMs:            sbomRepo,
+			Artifacts:        artifactRepo,
+			EventHub:         eventHub,
+			Policies:         policySvc,
+			Adoption:         adoptionSvc,
+			RuntimeLifecycle: runtimeLifecycleSvc,
+			Secrets:          secretRepo,
+			Encryptor:        secretEncryptor,
+			Notifications:    notifRepo,
+			Dispatcher:       notifDispatcher,
+			MCP:              mcpHandler,
+			Blossom:          blossomClient,
+			OCI:              ociHandler,
+			Orgs:             orgRepo,
+			OrgMembers:       orgMemberRepo,
+			OrgInvites:       orgInviteRepo,
+			RBAC:             rbac,
 		}, cfg.Auth)
 
 	httpServer := &http.Server{

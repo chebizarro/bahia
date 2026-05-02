@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -51,6 +52,7 @@ func main() {
 		environmentsCommands(),
 		stateCommands(),
 		deployCommands(),
+		adoptCommands(),
 		workersCommands(),
 		logsCommands(),
 		policiesCommands(),
@@ -194,7 +196,79 @@ func servicesCommands() *cobra.Command {
 	_ = createCmd.MarkFlagRequired("name")
 	_ = createCmd.MarkFlagRequired("artifact-repo")
 
-	cmd.AddCommand(listCmd, getCmd, createCmd)
+	actionsCmd := serviceActionsCommands()
+
+	cmd.AddCommand(listCmd, getCmd, createCmd, actionsCmd)
+	return cmd
+}
+
+func serviceActionsCommands() *cobra.Command {
+	cmd := &cobra.Command{Use: "actions", Short: "Direct runtime lifecycle actions"}
+
+	deployCmd := &cobra.Command{
+		Use:   "deploy",
+		Short: "Deploy a service directly through its resolved runtime",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			serviceID, _ := cmd.Flags().GetString("service")
+			envID, _ := cmd.Flags().GetString("environment")
+			artifactID, _ := cmd.Flags().GetString("artifact")
+			var artifact *string
+			if artifactID != "" {
+				artifact = &artifactID
+			}
+			result, err := apiClient.DeployServiceRuntime(cmd.Context(), serviceID, envID, artifact)
+			if err != nil {
+				return err
+			}
+			return outputSingle(result)
+		},
+	}
+	deployCmd.Flags().String("service", "", "Service ID")
+	deployCmd.Flags().String("environment", "", "Environment ID")
+	deployCmd.Flags().String("artifact", "", "Artifact ID (optional; defaults to desired artifact)")
+	_ = deployCmd.MarkFlagRequired("service")
+	_ = deployCmd.MarkFlagRequired("environment")
+
+	restartCmd := &cobra.Command{
+		Use:   "restart",
+		Short: "Restart a service directly through its resolved runtime",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			serviceID, _ := cmd.Flags().GetString("service")
+			envID, _ := cmd.Flags().GetString("environment")
+			result, err := apiClient.RestartServiceRuntime(cmd.Context(), serviceID, envID)
+			if err != nil {
+				return err
+			}
+			return outputSingle(result)
+		},
+	}
+	restartCmd.Flags().String("service", "", "Service ID")
+	restartCmd.Flags().String("environment", "", "Environment ID")
+	_ = restartCmd.MarkFlagRequired("service")
+	_ = restartCmd.MarkFlagRequired("environment")
+
+	stopCmd := &cobra.Command{
+		Use:   "stop",
+		Short: "Stop a service directly through its resolved runtime",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			serviceID, _ := cmd.Flags().GetString("service")
+			envID, _ := cmd.Flags().GetString("environment")
+			result, err := apiClient.StopServiceRuntime(cmd.Context(), serviceID, envID)
+			if err != nil {
+				return err
+			}
+			return outputSingle(result)
+		},
+	}
+	stopCmd.Flags().String("service", "", "Service ID")
+	stopCmd.Flags().String("environment", "", "Environment ID")
+	_ = stopCmd.MarkFlagRequired("service")
+	_ = stopCmd.MarkFlagRequired("environment")
+
+	cmd.AddCommand(deployCmd, restartCmd, stopCmd)
 	return cmd
 }
 
@@ -368,6 +442,224 @@ func deployCommands() *cobra.Command {
 	}
 	deploymentsCmd.AddCommand(deployCmd, rollbackCmd)
 	return deploymentsCmd
+}
+
+// --- Adoption Commands ---
+
+func adoptCommands() *cobra.Command {
+	cmd := &cobra.Command{Use: "adopt", Short: "Scan and import existing Docker workloads"}
+
+	var scanTargets []string
+	var scanEnvironments []string
+	scanCmd := &cobra.Command{
+		Use:   "scan",
+		Short: "Preview adoptable containers from Docker targets",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			targets, err := parseAdoptionTargets(scanTargets, scanEnvironments)
+			if err != nil {
+				return err
+			}
+			previews, err := apiClient.ScanAdoption(cmd.Context(), client.AdoptionScanRequest{Targets: targets})
+			if err != nil {
+				return err
+			}
+			if outputFormat != "table" {
+				return outputJSONorYAML(previews)
+			}
+			rows := flattenAdoptionPreviewRows(previews)
+			return output(rows, []string{"TARGET", "CONTAINER", "SERVICE", "IMAGE", "HEALTH", "ADOPTABLE", "WARNINGS"}, func(row adoptionPreviewRow) []string {
+				return []string{row.Target, row.Container, row.Service, row.Image, row.Health, row.Adoptable, row.Warnings}
+			})
+		},
+	}
+	scanCmd.Flags().StringArrayVar(&scanTargets, "target", nil, "Docker target as alias=dockerHost (repeatable)")
+	scanCmd.Flags().StringArrayVar(&scanEnvironments, "environment", nil, "Environment name as alias=environmentName (repeatable)")
+	_ = scanCmd.MarkFlagRequired("target")
+
+	var importTargets []string
+	var importEnvironments []string
+	var importSelections []string
+	var importAll bool
+	importCmd := &cobra.Command{
+		Use:   "import",
+		Short: "Import selected or all discovered containers into Bahia",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			targets, err := parseAdoptionTargets(importTargets, importEnvironments)
+			if err != nil {
+				return err
+			}
+			selections, err := parseAdoptionSelections(importSelections)
+			if err != nil {
+				return err
+			}
+			if !importAll && len(selections) == 0 {
+				return fmt.Errorf("specify --all or at least one --select alias/containerID")
+			}
+			results, err := apiClient.ImportAdoption(cmd.Context(), client.AdoptionImportRequest{Targets: targets, Selections: selections, ImportAll: importAll})
+			if err != nil {
+				return err
+			}
+			return output(results, []string{"TARGET", "CONTAINER", "SERVICE", "STATUS", "ERROR"}, func(row client.AdoptionImportResult) []string {
+				return []string{row.TargetName, firstNonEmpty(row.ContainerName, row.ContainerID), row.ServiceName, row.Status, row.Error}
+			})
+		},
+	}
+	importCmd.Flags().StringArrayVar(&importTargets, "target", nil, "Docker target as alias=dockerHost (repeatable)")
+	importCmd.Flags().StringArrayVar(&importEnvironments, "environment", nil, "Environment name as alias=environmentName (repeatable)")
+	importCmd.Flags().StringArrayVar(&importSelections, "select", nil, "Container selection as alias/containerID[=serviceName] (repeatable)")
+	importCmd.Flags().BoolVar(&importAll, "all", false, "Import all adoptable containers from the scanned targets")
+	_ = importCmd.MarkFlagRequired("target")
+
+	cmd.AddCommand(scanCmd, importCmd)
+	return cmd
+}
+
+type adoptionPreviewRow struct {
+	Target    string
+	Container string
+	Service   string
+	Image     string
+	Health    string
+	Adoptable string
+	Warnings  string
+}
+
+func flattenAdoptionPreviewRows(previews []client.AdoptionPreview) []adoptionPreviewRow {
+	var rows []adoptionPreviewRow
+	for _, preview := range previews {
+		if preview.Error != "" {
+			rows = append(rows, adoptionPreviewRow{Target: preview.Target.Name, Health: "error", Adoptable: "no", Warnings: preview.Error})
+			continue
+		}
+		for _, container := range preview.Containers {
+			adoptable := "no"
+			if container.Adoptable {
+				adoptable = "yes"
+			}
+			rows = append(rows, adoptionPreviewRow{
+				Target:    preview.Target.Name,
+				Container: firstNonEmpty(container.Discovered.ContainerName, container.Discovered.ContainerID),
+				Service:   container.ProposedServiceName,
+				Image:     firstNonEmpty(container.Discovered.ImageRef, container.Discovered.ImageRepo),
+				Health:    string(container.Discovered.HealthStatus),
+				Adoptable: adoptable,
+				Warnings:  strings.Join(container.Warnings, "; "),
+			})
+		}
+	}
+	return rows
+}
+
+func parseAdoptionTargets(targetFlags, environmentFlags []string) ([]client.AdoptionTarget, error) {
+	environments := map[string]string{}
+	for _, raw := range environmentFlags {
+		alias, envName, err := parseKeyValueFlag(raw, "environment")
+		if err != nil {
+			return nil, err
+		}
+		alias = normalizeAdoptionFlagName(alias)
+		envName = normalizeAdoptionFlagName(envName)
+		if alias == "" || envName == "" {
+			return nil, fmt.Errorf("environment must contain a valid alias and environment name")
+		}
+		environments[alias] = envName
+	}
+	if len(targetFlags) == 0 {
+		return nil, fmt.Errorf("at least one --target alias=dockerHost is required")
+	}
+	targets := make([]client.AdoptionTarget, 0, len(targetFlags))
+	seen := map[string]struct{}{}
+	for _, raw := range targetFlags {
+		alias, host, err := parseKeyValueFlag(raw, "target")
+		if err != nil {
+			return nil, err
+		}
+		alias = normalizeAdoptionFlagName(alias)
+		if alias == "" {
+			return nil, fmt.Errorf("target alias is invalid")
+		}
+		if _, ok := seen[alias]; ok {
+			return nil, fmt.Errorf("duplicate target alias %q", alias)
+		}
+		seen[alias] = struct{}{}
+		targets = append(targets, client.AdoptionTarget{Name: alias, DockerHost: host, EnvironmentName: environments[alias]})
+	}
+	for alias := range environments {
+		if _, ok := seen[alias]; !ok {
+			return nil, fmt.Errorf("environment alias %q has no matching target", alias)
+		}
+	}
+	return targets, nil
+}
+
+func parseAdoptionSelections(selectionFlags []string) ([]client.AdoptionSelection, error) {
+	selections := make([]client.AdoptionSelection, 0, len(selectionFlags))
+	seen := map[string]struct{}{}
+	for _, raw := range selectionFlags {
+		selection := strings.TrimSpace(raw)
+		if selection == "" {
+			return nil, fmt.Errorf("select value cannot be empty")
+		}
+		serviceName := ""
+		if before, after, ok := strings.Cut(selection, "="); ok {
+			selection = strings.TrimSpace(before)
+			serviceName = normalizeAdoptionFlagName(after)
+			if serviceName == "" {
+				return nil, fmt.Errorf("select service name override cannot be empty or invalid")
+			}
+		}
+		alias, containerID, ok := strings.Cut(selection, "/")
+		alias = normalizeAdoptionFlagName(alias)
+		containerID = strings.TrimSpace(containerID)
+		if !ok || alias == "" || containerID == "" {
+			return nil, fmt.Errorf("select must be alias/containerID or alias/containerID=serviceName")
+		}
+		key := alias + "/" + containerID
+		if _, ok := seen[key]; ok {
+			return nil, fmt.Errorf("duplicate selection %q", key)
+		}
+		seen[key] = struct{}{}
+		selections = append(selections, client.AdoptionSelection{TargetName: alias, ContainerID: containerID, ServiceNameOverride: serviceName})
+	}
+	return selections, nil
+}
+
+var invalidAdoptionFlagNameChars = regexp.MustCompile(`[^a-z0-9-]+`)
+
+func normalizeAdoptionFlagName(name string) string {
+	name = strings.ToLower(strings.TrimSpace(name))
+	name = invalidAdoptionFlagNameChars.ReplaceAllString(name, "-")
+	name = strings.Trim(name, "-")
+	for strings.Contains(name, "--") {
+		name = strings.ReplaceAll(name, "--", "-")
+	}
+	return name
+}
+
+func parseKeyValueFlag(raw, flagName string) (string, string, error) {
+	key, value, ok := strings.Cut(strings.TrimSpace(raw), "=")
+	key = strings.TrimSpace(key)
+	value = strings.TrimSpace(value)
+	if !ok || key == "" || value == "" {
+		return "", "", fmt.Errorf("%s must be alias=value", flagName)
+	}
+	return key, value, nil
+}
+
+func outputJSONorYAML(v any) error {
+	if outputFormat == "yaml" {
+		return outputYAML(v)
+	}
+	return outputJSON(v)
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 // --- Workers Commands ---

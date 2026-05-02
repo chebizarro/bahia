@@ -136,6 +136,37 @@ type RecordObservationRequest struct {
 	Metadata            map[string]any `json:"metadata,omitempty"`
 }
 
+// AdoptionTargetRequest identifies one Docker host to scan/import.
+type AdoptionTargetRequest struct {
+	Name            string `json:"name"`
+	DockerHost      string `json:"docker_host"`
+	EnvironmentName string `json:"environment_name,omitempty"`
+}
+
+// ScanAdoptionRequest requests an adoption preview scan across one or more targets.
+type ScanAdoptionRequest struct {
+	Targets []AdoptionTargetRequest `json:"targets"`
+}
+
+// AdoptionSelectionRequest selects one discovered container for import.
+type AdoptionSelectionRequest struct {
+	TargetName          string `json:"target_name"`
+	ContainerID         string `json:"container_id"`
+	ServiceNameOverride string `json:"service_name_override,omitempty"`
+}
+
+// ImportAdoptionRequest imports selected or all discovered containers from targets.
+type ImportAdoptionRequest struct {
+	Targets    []AdoptionTargetRequest    `json:"targets"`
+	Selections []AdoptionSelectionRequest `json:"selections,omitempty"`
+	ImportAll  bool                       `json:"import_all,omitempty"`
+}
+
+// DeployServiceActionRequest requests a direct runtime deploy action.
+type DeployServiceActionRequest struct {
+	ArtifactID *uuid.UUID `json:"artifact_id,omitempty"`
+}
+
 // LookupRepositoryCIRequest is the request payload for batch CI status lookup.
 type LookupRepositoryCIRequest struct {
 	RepoCoordinates         []string `json:"repo_coordinates"`

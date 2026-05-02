@@ -20,7 +20,17 @@ func TestCommandGroupsExposeExpectedSubcommands(t *testing.T) {
 		{
 			name: "services",
 			cmd:  servicesCommands(),
-			want: []string{"list", "get", "create"},
+			want: []string{"list", "get", "create", "actions"},
+		},
+		{
+			name: "service actions",
+			cmd:  serviceActionsCommands(),
+			want: []string{"deploy", "restart", "stop"},
+		},
+		{
+			name: "adopt",
+			cmd:  adoptCommands(),
+			want: []string{"scan", "import"},
 		},
 		{
 			name: "environments",
@@ -37,6 +47,45 @@ func TestCommandGroupsExposeExpectedSubcommands(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestParseAdoptionTargets(t *testing.T) {
+	targets, err := parseAdoptionTargets([]string{"local=unix:///docker.sock", "prod=tcp://docker.example:2376"}, []string{"local=dev", "prod=prod"})
+	if err != nil {
+		t.Fatalf("parseAdoptionTargets returned error: %v", err)
+	}
+	if len(targets) != 2 || targets[0].Name != "local" || targets[0].DockerHost != "unix:///docker.sock" || targets[0].EnvironmentName != "dev" {
+		t.Fatalf("unexpected targets: %#v", targets)
+	}
+
+	if _, err := parseAdoptionTargets([]string{"local=unix:///docker.sock", "local=tcp://other"}, nil); err == nil {
+		t.Fatal("expected duplicate alias error")
+	}
+	if _, err := parseAdoptionTargets([]string{"Local=unix:///docker.sock", "local=tcp://other"}, nil); err == nil {
+		t.Fatal("expected normalized duplicate alias error")
+	}
+	if _, err := parseAdoptionTargets([]string{"local=unix:///docker.sock"}, []string{"missing=prod"}); err == nil {
+		t.Fatal("expected unmatched environment alias error")
+	}
+}
+
+func TestParseAdoptionSelections(t *testing.T) {
+	selections, err := parseAdoptionSelections([]string{"local/abc123", "prod/def456=api-prod"})
+	if err != nil {
+		t.Fatalf("parseAdoptionSelections returned error: %v", err)
+	}
+	if len(selections) != 2 || selections[1].TargetName != "prod" || selections[1].ContainerID != "def456" || selections[1].ServiceNameOverride != "api-prod" {
+		t.Fatalf("unexpected selections: %#v", selections)
+	}
+	if _, err := parseAdoptionSelections([]string{"local/abc123", "local/abc123"}); err == nil {
+		t.Fatal("expected duplicate selection error")
+	}
+	if _, err := parseAdoptionSelections([]string{"bad"}); err == nil {
+		t.Fatal("expected malformed selection error")
+	}
+	if _, err := parseAdoptionSelections([]string{"local/abc123=___"}); err == nil {
+		t.Fatal("expected invalid service override error")
 	}
 }
 

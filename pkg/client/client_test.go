@@ -79,6 +79,107 @@ func TestGetService(t *testing.T) {
 	}
 }
 
+func TestScanAdoption(t *testing.T) {
+	var gotBody AdoptionScanRequest
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Errorf("method = %s, want POST", r.Method)
+		}
+		if r.URL.Path != "/api/v1/adoption/scan" {
+			t.Errorf("path = %s, want /api/v1/adoption/scan", r.URL.Path)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Fatalf("decoding request: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{"data": []AdoptionPreview{{Target: gotBody.Targets[0], Containers: []AdoptionPreviewContainer{{ProposedServiceName: "legacy-api", Adoptable: true}}}}})
+	}))
+	defer server.Close()
+
+	c := New(server.URL)
+	result, err := c.ScanAdoption(context.Background(), AdoptionScanRequest{Targets: []AdoptionTarget{{Name: "local", DockerHost: "unix:///docker.sock", EnvironmentName: "prod"}}})
+	if err != nil {
+		t.Fatalf("ScanAdoption() error = %v", err)
+	}
+	if len(gotBody.Targets) != 1 || gotBody.Targets[0].Name != "local" {
+		t.Fatalf("unexpected request body: %#v", gotBody)
+	}
+	if len(result) != 1 || result[0].Containers[0].ProposedServiceName != "legacy-api" {
+		t.Fatalf("unexpected result: %#v", result)
+	}
+}
+
+func TestImportAdoption(t *testing.T) {
+	var gotBody AdoptionImportRequest
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/adoption/import" {
+			t.Errorf("path = %s, want /api/v1/adoption/import", r.URL.Path)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Fatalf("decoding request: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{"data": []AdoptionImportResult{{TargetName: "local", ContainerID: "abc123", ServiceName: "api", Status: "created"}}})
+	}))
+	defer server.Close()
+
+	c := New(server.URL)
+	result, err := c.ImportAdoption(context.Background(), AdoptionImportRequest{
+		Targets:    []AdoptionTarget{{Name: "local", DockerHost: "unix:///docker.sock"}},
+		Selections: []AdoptionSelection{{TargetName: "local", ContainerID: "abc123", ServiceNameOverride: "api"}},
+	})
+	if err != nil {
+		t.Fatalf("ImportAdoption() error = %v", err)
+	}
+	if len(gotBody.Selections) != 1 || gotBody.Selections[0].ServiceNameOverride != "api" {
+		t.Fatalf("unexpected request body: %#v", gotBody)
+	}
+	if len(result) != 1 || result[0].Status != "created" {
+		t.Fatalf("unexpected result: %#v", result)
+	}
+}
+
+func TestRuntimeActionMethods(t *testing.T) {
+	artifactID := uuid.NewString()
+	var paths []string
+	var deployBody map[string]string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+		if strings.HasSuffix(r.URL.Path, "/deploy") {
+			if err := json.NewDecoder(r.Body).Decode(&deployBody); err != nil {
+				t.Fatalf("decoding deploy request: %v", err)
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{"data": RuntimeActionResult{Action: strings.TrimPrefix(r.URL.Path[strings.LastIndex(r.URL.Path, "/"):], "/"), ServiceID: "svc", EnvironmentID: "env"}})
+	}))
+	defer server.Close()
+
+	c := New(server.URL)
+	if _, err := c.DeployServiceRuntime(context.Background(), "svc", "env", &artifactID); err != nil {
+		t.Fatalf("DeployServiceRuntime() error = %v", err)
+	}
+	if _, err := c.RestartServiceRuntime(context.Background(), "svc", "env"); err != nil {
+		t.Fatalf("RestartServiceRuntime() error = %v", err)
+	}
+	if _, err := c.StopServiceRuntime(context.Background(), "svc", "env"); err != nil {
+		t.Fatalf("StopServiceRuntime() error = %v", err)
+	}
+	wantPaths := []string{
+		"/api/v1/services/svc/environments/env/deploy",
+		"/api/v1/services/svc/environments/env/restart",
+		"/api/v1/services/svc/environments/env/stop",
+	}
+	for i, want := range wantPaths {
+		if paths[i] != want {
+			t.Fatalf("path[%d] = %s, want %s", i, paths[i], want)
+		}
+	}
+	if deployBody["artifact_id"] != artifactID {
+		t.Fatalf("artifact_id = %q, want %q", deployBody["artifact_id"], artifactID)
+	}
+}
+
 func TestCreateService(t *testing.T) {
 	var gotBody map[string]string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

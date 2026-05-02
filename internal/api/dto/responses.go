@@ -1,5 +1,10 @@
 package dto
 
+import (
+	"github.com/google/uuid"
+	"github.com/openagentsinc/bahia/internal/domain"
+)
+
 // APIResponse is a standard JSON wrapper for API responses.
 type APIResponse struct {
 	Data    any    `json:"data,omitempty"`
@@ -19,4 +24,77 @@ type ListResponse struct {
 type HealthResponse struct {
 	Status  string `json:"status"`
 	Version string `json:"version,omitempty"`
+}
+
+// AdoptionTargetResponse identifies one scanned/imported Docker host.
+type AdoptionTargetResponse struct {
+	Name            string `json:"name"`
+	DockerHost      string `json:"docker_host"`
+	EnvironmentName string `json:"environment_name"`
+}
+
+// DiscoveredContainerResponse is a normalized container preview for adoption.
+type DiscoveredContainerResponse struct {
+	TargetName      string                  `json:"target_name"`
+	EnvironmentName string                  `json:"environment_name"`
+	ContainerID     string                  `json:"container_id"`
+	ContainerName   string                  `json:"container_name"`
+	ImageRef        string                  `json:"image_ref"`
+	ImageRepo       string                  `json:"image_repo"`
+	ImageTag        string                  `json:"image_tag"`
+	ImageDigest     string                  `json:"image_digest"`
+	SourceRuntime   string                  `json:"source_runtime"`
+	Labels          map[string]string       `json:"labels,omitempty"`
+	Environment     map[string]string       `json:"environment,omitempty"`
+	Ports           []string                `json:"ports,omitempty"`
+	Volumes         []string                `json:"volumes,omitempty"`
+	Restart         string                  `json:"restart,omitempty"`
+	Command         []string                `json:"command,omitempty"`
+	Entrypoint      []string                `json:"entrypoint,omitempty"`
+	WorkingDir      string                  `json:"working_dir,omitempty"`
+	NetworkMode     string                  `json:"network_mode,omitempty"`
+	Compose         *domain.ComposeMetadata `json:"compose,omitempty"`
+	HealthStatus    domain.HealthStatus     `json:"health_status"`
+	Warnings        []string                `json:"warnings,omitempty"`
+	Adoptable       bool                    `json:"adoptable"`
+}
+
+// AdoptionPreviewContainerResponse is one discovered container plus import proposal metadata.
+type AdoptionPreviewContainerResponse struct {
+	Discovered          DiscoveredContainerResponse `json:"discovered"`
+	ProposedServiceName string                      `json:"proposed_service_name"`
+	ExistingServiceID   *uuid.UUID                  `json:"existing_service_id,omitempty"`
+	WillUpdate          bool                        `json:"will_update"`
+	Warnings            []string                    `json:"warnings,omitempty"`
+	Adoptable           bool                        `json:"adoptable"`
+}
+
+// AdoptionPreviewResponse groups discovered containers for one target.
+type AdoptionPreviewResponse struct {
+	Target     AdoptionTargetResponse             `json:"target"`
+	Containers []AdoptionPreviewContainerResponse `json:"containers"`
+	Error      string                             `json:"error,omitempty"`
+}
+
+// AdoptionImportResultResponse reports one import candidate outcome.
+type AdoptionImportResultResponse struct {
+	TargetName    string     `json:"target_name"`
+	ContainerID   string     `json:"container_id,omitempty"`
+	ContainerName string     `json:"container_name,omitempty"`
+	ServiceName   string     `json:"service_name,omitempty"`
+	ServiceID     *uuid.UUID `json:"service_id,omitempty"`
+	EnvironmentID *uuid.UUID `json:"environment_id,omitempty"`
+	BuildID       *uuid.UUID `json:"build_id,omitempty"`
+	ArtifactID    *uuid.UUID `json:"artifact_id,omitempty"`
+	Status        string     `json:"status"`
+	Warnings      []string   `json:"warnings,omitempty"`
+	Error         string     `json:"error,omitempty"`
+}
+
+// RuntimeActionResponse reports a completed direct runtime action.
+type RuntimeActionResponse struct {
+	Action        string                     `json:"action"`
+	ServiceID     uuid.UUID                  `json:"service_id"`
+	EnvironmentID uuid.UUID                  `json:"environment_id"`
+	Observation   *domain.RuntimeObservation `json:"observation,omitempty"`
 }

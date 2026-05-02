@@ -29,27 +29,29 @@ var Version = "dev"
 // New creates and configures the HTTP router.
 // RouterDeps holds optional dependencies for the router.
 type RouterDeps struct {
-	Config        *config.Config
-	Workers       repository.WorkerRepository
-	Payments      *service.PaymentService
-	SBOMs         repository.SBOMRepository
-	Artifacts     repository.ArtifactRepository
-	Signatures    repository.ArtifactSignatureRepository
-	SignVerifier  SignatureVerifier
-	EventHub      *handlers.EventStreamHub
-	Policies      *service.PolicyService
-	Secrets       repository.SecretRepository
-	Encryptor     *secrets.Encryptor
-	Notifications repository.NotificationRepository
-	Dispatcher    *notifications.Dispatcher
-	MCP           *handlers.MCPHandler
-	HiveCI        repository.HiveCIRepository
-	Blossom       *blossom.Client
-	OCI           http.Handler
-	Orgs          repository.OrganizationRepository
-	OrgMembers    repository.OrgMemberRepository
-	OrgInvites    repository.OrgInviteRepository
-	RBAC          *auth.RBAC
+	Config           *config.Config
+	Workers          repository.WorkerRepository
+	Payments         *service.PaymentService
+	SBOMs            repository.SBOMRepository
+	Artifacts        repository.ArtifactRepository
+	Signatures       repository.ArtifactSignatureRepository
+	SignVerifier     SignatureVerifier
+	EventHub         *handlers.EventStreamHub
+	Policies         *service.PolicyService
+	Adoption         *service.AdoptionService
+	RuntimeLifecycle *service.RuntimeLifecycleService
+	Secrets          repository.SecretRepository
+	Encryptor        *secrets.Encryptor
+	Notifications    repository.NotificationRepository
+	Dispatcher       *notifications.Dispatcher
+	MCP              *handlers.MCPHandler
+	HiveCI           repository.HiveCIRepository
+	Blossom          *blossom.Client
+	OCI              http.Handler
+	Orgs             repository.OrganizationRepository
+	OrgMembers       repository.OrgMemberRepository
+	OrgInvites       repository.OrgInviteRepository
+	RBAC             *auth.RBAC
 }
 
 // SignatureVerifier is the interface for signature verification.
@@ -107,6 +109,8 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 	artifactH := handlers.NewArtifactHandler(registry)
 	deployH := handlers.NewDeploymentHandler(registry)
 	stateH := handlers.NewStateHandler(registry)
+	adoptionH := handlers.NewAdoptionHandler(deps.Adoption)
+	serviceActionH := handlers.NewServiceActionHandler(deps.RuntimeLifecycle)
 	repoCIHandler := handlers.NewRepositoryCIHandler(deps.HiveCI)
 	systemH := handlers.NewSystemHandler(deps.Config)
 
@@ -270,6 +274,13 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 			r.Post("/services", svcH.Create)
 			r.Put("/services/{id}", svcH.Update)
 			r.Delete("/services/{id}", svcH.Delete)
+			r.Post("/services/{serviceId}/environments/{envId}/deploy", serviceActionH.Deploy)
+			r.Post("/services/{serviceId}/environments/{envId}/restart", serviceActionH.Restart)
+			r.Post("/services/{serviceId}/environments/{envId}/stop", serviceActionH.Stop)
+
+			// Adoption (write)
+			r.Post("/adoption/scan", adoptionH.Scan)
+			r.Post("/adoption/import", adoptionH.Import)
 
 			// Environments (write)
 			r.Post("/environments", envH.Create)
