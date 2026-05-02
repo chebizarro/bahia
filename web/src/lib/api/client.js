@@ -309,11 +309,6 @@ export class BahiaClient {
     });
   }
 
-  // Organizations
-  listOrgs() { return this.fetch('/orgs').then(r => r ?? []); }
-  getOrg(id) { return this.fetch(`/orgs/${encodeURIComponent(id)}`); }
-  listOrgMembers(orgId) { return this.fetch(`/orgs/${encodeURIComponent(orgId)}/members`).then(r => r ?? []); }
-
   // Artifacts
   listArtifacts(serviceId) { return this.fetch(`/services/${encodeURIComponent(serviceId)}/artifacts`).then(r => r ?? []); }
   getArtifact(id) { return this.fetch(`/artifacts/${encodeURIComponent(id)}`); }

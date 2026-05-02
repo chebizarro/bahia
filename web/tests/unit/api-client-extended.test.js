@@ -832,6 +832,45 @@ describe('BahiaClient - Extended API Coverage', () => {
     });
   });
 
+  describe('Organization Write Methods', () => {
+    it('should call organization/member/invite write endpoints with expected methods and bodies', async () => {
+      const orgId = 'org-123';
+      const pubkey = 'npub1member';
+      const inviteId = 'invite-123';
+
+      global.fetch
+        .mockResolvedValueOnce({ ok: true, headers: new Map([['content-type', 'application/json']]), json: async () => ({ data: { id: orgId } }) })
+        .mockResolvedValueOnce({ ok: true, headers: new Map([['content-type', 'application/json']]), json: async () => ({ data: { id: orgId, display_name: 'Updated Org' } }) })
+        .mockResolvedValueOnce({ ok: true, status: 204, headers: new Map([['content-type', 'text/plain']]), json: async () => { throw new Error('No content'); } })
+        .mockResolvedValueOnce({ ok: true, headers: new Map([['content-type', 'application/json']]), json: async () => ({ data: { org_id: orgId, pubkey, role: 'member' } }) })
+        .mockResolvedValueOnce({ ok: true, headers: new Map([['content-type', 'application/json']]), json: async () => ({ data: { org_id: orgId, pubkey, role: 'admin' } }) })
+        .mockResolvedValueOnce({ ok: true, status: 204, headers: new Map([['content-type', 'text/plain']]), json: async () => { throw new Error('No content'); } })
+        .mockResolvedValueOnce({ ok: true, headers: new Map([['content-type', 'application/json']]), json: async () => ({ data: { id: inviteId, org_id: orgId } }) })
+        .mockResolvedValueOnce({ ok: true, status: 204, headers: new Map([['content-type', 'text/plain']]), json: async () => { throw new Error('No content'); } })
+        .mockResolvedValueOnce({ ok: true, headers: new Map([['content-type', 'application/json']]), json: async () => ({ data: { accepted: true } }) });
+
+      await api.createOrg({ name: 'acme', displayName: 'Acme Corp' });
+      await api.updateOrg(orgId, { displayName: 'Updated Org' });
+      await api.deleteOrg(orgId);
+      await api.addOrgMember(orgId, { pubkey, role: 'member' });
+      await api.updateOrgMemberRole(orgId, pubkey, { role: 'admin' });
+      await api.removeOrgMember(orgId, pubkey);
+      await api.createOrgInvite(orgId, { pubkey, role: 'member', expiresIn: 3600 });
+      await api.revokeOrgInvite(orgId, inviteId);
+      await api.acceptInvite(inviteId);
+
+      expect(global.fetch).toHaveBeenNthCalledWith(1, '/api/v1/orgs', expect.objectContaining({ method: 'POST', body: JSON.stringify({ name: 'acme', display_name: 'Acme Corp' }) }));
+      expect(global.fetch).toHaveBeenNthCalledWith(2, `/api/v1/orgs/${orgId}`, expect.objectContaining({ method: 'PUT', body: JSON.stringify({ display_name: 'Updated Org' }) }));
+      expect(global.fetch).toHaveBeenNthCalledWith(3, `/api/v1/orgs/${orgId}`, expect.objectContaining({ method: 'DELETE' }));
+      expect(global.fetch).toHaveBeenNthCalledWith(4, `/api/v1/orgs/${orgId}/members`, expect.objectContaining({ method: 'POST', body: JSON.stringify({ pubkey, role: 'member' }) }));
+      expect(global.fetch).toHaveBeenNthCalledWith(5, `/api/v1/orgs/${orgId}/members/${pubkey}`, expect.objectContaining({ method: 'PUT', body: JSON.stringify({ role: 'admin' }) }));
+      expect(global.fetch).toHaveBeenNthCalledWith(6, `/api/v1/orgs/${orgId}/members/${pubkey}`, expect.objectContaining({ method: 'DELETE' }));
+      expect(global.fetch).toHaveBeenNthCalledWith(7, `/api/v1/orgs/${orgId}/invites`, expect.objectContaining({ method: 'POST', body: JSON.stringify({ pubkey, role: 'member', expires_in: 3600 }) }));
+      expect(global.fetch).toHaveBeenNthCalledWith(8, `/api/v1/orgs/${orgId}/invites/${inviteId}`, expect.objectContaining({ method: 'DELETE' }));
+      expect(global.fetch).toHaveBeenNthCalledWith(9, `/api/v1/invites/${inviteId}/accept`, expect.objectContaining({ method: 'POST' }));
+    });
+  });
+
   describe('Notification Methods', () => {
     it('should list notification channels with query parameters', async () => {
       global.fetch.mockResolvedValueOnce({
