@@ -92,16 +92,20 @@ test.describe('Services CRUD Smoke Test', () => {
     await page.selectOption('#runtime-type', 'docker');
     await page.fill('#default-branch', 'main');
     
+    // Repository selection flow is available in modal
+    await expect(page.getByRole('button', { name: 'Choose Repository' })).toBeVisible();
+
     // Submit the form
     await page.click('button[type="submit"]:has-text("Create")');
-    
-    // Wait for the request to complete
-    await page.waitForTimeout(500);
+
+    // Wait for modal to close (request + refresh done)
+    await expect(page.getByRole('dialog', { name: 'Create Service' })).not.toBeVisible();
     
     // Verify POST was called with correct data
     expect(apiCalls.post).not.toBeNull();
     expect(apiCalls.post).toMatchObject({
       name: 'test-service',
+      repo_url: '',
       artifact_repo: 'ghcr.io/test/test-service',
       runtime_type: 'docker',
       default_branch: 'main'

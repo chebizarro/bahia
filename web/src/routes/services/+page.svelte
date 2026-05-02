@@ -11,6 +11,7 @@
   import { createManualRepositorySelection } from '$lib/stores/repositories.js';
   import { fetchRepoBranches, isNostrRepository } from '$lib/nostr/branches.js';
   import { api } from '$lib/api/client.js';
+  import { buildArtifactRepo, validateCreateServiceForm, buildCreateServicePayload } from './create-service-form.js';
 
   // Registry state
   let availableRegistries = $state([]);
@@ -126,17 +127,13 @@
   }
 
   async function handleCreate() {
-    // Validate required fields
-    if (!createForm.name.trim()) {
-      createError = 'Name is required';
-      return;
-    }
-    if (!repoPath.trim()) {
-      createError = 'Repository path is required';
-      return;
-    }
-    if (!createForm.runtime_type) {
-      createError = 'Runtime type is required';
+    const validationError = validateCreateServiceForm({
+      name: createForm.name,
+      artifactRepo: createForm.artifact_repo,
+      runtimeType: createForm.runtime_type
+    });
+    if (validationError) {
+      createError = validationError;
       return;
     }
 
@@ -144,13 +141,7 @@
     createError = null;
 
     try {
-      await api.createService({
-        name: createForm.name.trim(),
-        repo_url: createForm.repositorySelection?.repoUrl || '',
-        artifact_repo: createForm.artifact_repo.trim(),
-        runtime_type: createForm.runtime_type,
-        default_branch: createForm.default_branch.trim() || 'main'
-      });
+      await api.createService(buildCreateServicePayload(createForm));
       
       closeCreateModal();
       await loadServices();
@@ -162,16 +153,11 @@
   }
   // Compute artifact_repo from registry selection + path
   $effect(() => {
-    if (selectedRegistry === 'custom') {
-      createForm.artifact_repo = repoPath;
-    } else {
-      const registry = availableRegistries.find(r => r.id === selectedRegistry);
-      if (registry && repoPath) {
-        createForm.artifact_repo = `${registry.base_url}/${repoPath}`;
-      } else {
-        createForm.artifact_repo = repoPath;
-      }
-    }
+    createForm.artifact_repo = buildArtifactRepo({
+      selectedRegistry,
+      repoPath,
+      availableRegistries
+    });
   });
   let registryOptions = $derived([
     ...availableRegistries.map(r => ({
