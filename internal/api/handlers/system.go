@@ -22,18 +22,19 @@ func NewSystemHandler(cfg *config.Config) *SystemHandler {
 
 // RegistryInfo describes an available artifact registry.
 type RegistryInfo struct {
-	ID       string `json:"id"`
-	Name     string `json:"name"`
-	BaseURL  string `json:"base_url"`
-	Type     string `json:"type"` // native, harbor, ghcr, dockerhub, quay, custom
-	Default  bool   `json:"default,omitempty"`
-	Enabled  bool   `json:"enabled"`
+	ID      string `json:"id"`
+	Name    string `json:"name"`
+	BaseURL string `json:"base_url"`
+	Type    string `json:"type"` // native, harbor, ghcr, dockerhub, quay, custom
+	Default bool   `json:"default,omitempty"`
+	Enabled bool   `json:"enabled"`
 }
 
 // NostrConfig describes the Nostr configuration.
 type NostrConfigInfo struct {
 	Relays         []string `json:"relays"`
-	PrivateRelays  []string `json:"private_relays,omitempty"`
+	BrowserRelays  []string `json:"browser_relays,omitempty"`
+	SidecarURL     string   `json:"sidecar_url,omitempty"`
 	PublishEnabled bool     `json:"publish_enabled"`
 	ServicePubkey  string   `json:"service_pubkey,omitempty"`
 	ServiceNpub    string   `json:"service_npub,omitempty"`
@@ -49,8 +50,8 @@ type BlossomConfigInfo struct {
 
 // RuntimeConfigInfo describes runtime configuration.
 type RuntimeConfigInfo struct {
-	Type          string   `json:"type"`
-	Environments  []string `json:"environments,omitempty"`
+	Type         string   `json:"type"`
+	Environments []string `json:"environments,omitempty"`
 }
 
 // OCIConfigInfo describes OCI registry configuration.
@@ -136,9 +137,14 @@ func (h *SystemHandler) GetInfo(w http.ResponseWriter, r *http.Request) {
 
 	// Build Nostr config info
 	nostrInfo := NostrConfigInfo{
-		Relays:         h.cfg.Nostr.Relays,
-		PrivateRelays:  h.cfg.Nostr.PrivateRelays,
 		PublishEnabled: h.cfg.Nostr.PublishEnabled,
+	}
+	if !h.cfg.Nostr.Sidecar.Enabled {
+		nostrInfo.Relays = h.cfg.Nostr.Relays
+	}
+	if h.cfg.Nostr.Sidecar.Enabled {
+		nostrInfo.BrowserRelays = h.browserRelays()
+		nostrInfo.SidecarURL = h.cfg.Nostr.Sidecar.PublicURL
 	}
 
 	// Derive service pubkey from private key if available
@@ -176,15 +182,22 @@ func (h *SystemHandler) GetInfo(w http.ResponseWriter, r *http.Request) {
 
 	// Feature flags
 	features := map[string]bool{
-		"oci":                h.cfg.OCI.Enabled,
-		"harbor":             h.cfg.Harbor.Enabled,
-		"blossom":            h.cfg.Blossom.Enabled,
-		"hiveci":             h.cfg.HiveCI.Enabled,
-		"cashu":              h.cfg.Cashu.Enabled,
-		"telemetry":          h.cfg.Telemetry.Enabled,
-		"notifications":      h.cfg.Notifications.Enabled,
-		"auth":               h.cfg.Auth.Enabled,
-		"nostr_auth_exchange": h.cfg.Auth.JWTSecret != "",
+		"oci":                    h.cfg.OCI.Enabled,
+		"harbor":                 h.cfg.Harbor.Enabled,
+		"blossom":                h.cfg.Blossom.Enabled,
+		"hiveci":                 h.cfg.HiveCI.Enabled,
+		"cashu":                  h.cfg.Cashu.Enabled,
+		"telemetry":              h.cfg.Telemetry.Enabled,
+		"notifications":          h.cfg.Notifications.Enabled,
+		"auth":                   h.cfg.Auth.Enabled,
+		"nostr_auth_exchange":    h.cfg.Auth.JWTSecret != "",
+		"relay_sidecar":          h.cfg.Nostr.Sidecar.Enabled,
+		"relay_read_models":      false,
+		"direct_nostr_http_auth": h.cfg.Auth.NIP98Enabled,
+		"mcp_transport":          false,
+		"legacy_sse":             true,
+		"legacy_jwt_exchange":    h.cfg.Auth.JWTSecret != "",
+		"legacy_agent_http":      true,
 	}
 
 	resp := SystemInfoResponse{
@@ -201,6 +214,16 @@ func (h *SystemHandler) GetInfo(w http.ResponseWriter, r *http.Request) {
 }
 
 // derivePublicKey derives a public key hex from a private key (hex or nsec).
+func (h *SystemHandler) browserRelays() []string {
+	if len(h.cfg.Nostr.BrowserRelays) > 0 {
+		return h.cfg.Nostr.BrowserRelays
+	}
+	if h.cfg.Nostr.Sidecar.PublicURL != "" {
+		return []string{h.cfg.Nostr.Sidecar.PublicURL}
+	}
+	return nil
+}
+
 func derivePublicKey(privateKey string) string {
 	// Handle nsec format
 	if len(privateKey) > 4 && privateKey[:4] == "nsec" {

@@ -99,11 +99,26 @@ type LoomConfig struct {
 
 // NostrConfig holds Nostr relay and identity settings.
 type NostrConfig struct {
-	PrivateKey        string   `koanf:"private_key"`
-	Relays            []string `koanf:"relays"`
-	PrivateRelays     []string `koanf:"private_relays"`
-	AuthorizedPubkeys []string `koanf:"authorized_pubkeys"`
-	PublishEnabled    bool     `koanf:"publish_enabled"`
+	PrivateKey        string             `koanf:"private_key"`
+	Relays            []string           `koanf:"relays"`
+	PrivateRelays     []string           `koanf:"private_relays"`
+	BrowserRelays     []string           `koanf:"browser_relays"`
+	AuthorizedPubkeys []string           `koanf:"authorized_pubkeys"`
+	PublishEnabled    bool               `koanf:"publish_enabled"`
+	Sidecar           RelaySidecarConfig `koanf:"sidecar"`
+}
+
+// RelaySidecarConfig holds the local Khatru relay sidecar settings.
+type RelaySidecarConfig struct {
+	Enabled          bool          `koanf:"enabled"`
+	ListenAddr       string        `koanf:"listen_addr"`
+	PublicURL        string        `koanf:"public_url"`
+	DataDir          string        `koanf:"data_dir"`
+	MirrorExternal   bool          `koanf:"mirror_external"`
+	EventRetention   time.Duration `koanf:"event_retention"`
+	RequestRetention time.Duration `koanf:"request_retention"`
+	AuthPrivateKey   string        `koanf:"auth_private_key"`
+	MaxQueryLimit    int           `koanf:"max_query_limit"`
 }
 
 // ReconcileConfig holds reconciliation loop settings.
@@ -311,6 +326,16 @@ func Defaults() *Config {
 		},
 		Nostr: NostrConfig{
 			PublishEnabled: true,
+			Sidecar: RelaySidecarConfig{
+				Enabled:          false,
+				ListenAddr:       "0.0.0.0:3334",
+				PublicURL:        "ws://localhost:3334",
+				DataDir:          "./data/relay-sidecar",
+				MirrorExternal:   false,
+				EventRetention:   7 * 24 * time.Hour,
+				RequestRetention: 24 * time.Hour,
+				MaxQueryLimit:    500,
+			},
 		},
 		Reconcile: ReconcileConfig{
 			Interval: 60 * time.Second,
@@ -481,6 +506,35 @@ func (c *Config) validate() error {
 	}
 	if c.HiveCI.MaxRetries <= 0 {
 		return fmt.Errorf("config validation failed: hiveci.max_retries must be > 0")
+	}
+	if err := c.validateRelaySidecar(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (c *Config) validateRelaySidecar() error {
+	sidecar := c.Nostr.Sidecar
+	if !sidecar.Enabled {
+		return nil
+	}
+	if strings.TrimSpace(sidecar.ListenAddr) == "" {
+		return fmt.Errorf("config validation failed: nostr.sidecar.listen_addr is required when sidecar is enabled")
+	}
+	if strings.TrimSpace(sidecar.PublicURL) == "" {
+		return fmt.Errorf("config validation failed: nostr.sidecar.public_url is required when sidecar is enabled")
+	}
+	if strings.TrimSpace(sidecar.DataDir) == "" {
+		return fmt.Errorf("config validation failed: nostr.sidecar.data_dir is required when sidecar is enabled")
+	}
+	if sidecar.EventRetention <= 0 {
+		return fmt.Errorf("config validation failed: nostr.sidecar.event_retention must be > 0 when sidecar is enabled")
+	}
+	if sidecar.RequestRetention <= 0 {
+		return fmt.Errorf("config validation failed: nostr.sidecar.request_retention must be > 0 when sidecar is enabled")
+	}
+	if sidecar.MaxQueryLimit <= 0 {
+		return fmt.Errorf("config validation failed: nostr.sidecar.max_query_limit must be > 0 when sidecar is enabled")
 	}
 	return nil
 }

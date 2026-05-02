@@ -52,6 +52,15 @@ func TestDefaults(t *testing.T) {
 	if cfg.Auth.NIP98Enabled {
 		t.Error("expected NIP-98 auth disabled by default")
 	}
+	if cfg.Nostr.Sidecar.Enabled {
+		t.Error("expected relay sidecar disabled by default")
+	}
+	if cfg.Nostr.Sidecar.ListenAddr != "0.0.0.0:3334" {
+		t.Errorf("default sidecar ListenAddr = %q", cfg.Nostr.Sidecar.ListenAddr)
+	}
+	if cfg.Nostr.Sidecar.MaxQueryLimit != 500 {
+		t.Errorf("default sidecar MaxQueryLimit = %d", cfg.Nostr.Sidecar.MaxQueryLimit)
+	}
 }
 
 func TestDBConfigDSN(t *testing.T) {
@@ -314,6 +323,54 @@ func TestLoadNestedRuntimeConfigFromYAML(t *testing.T) {
 	endpoint := cfg.Runtime.Endpoints["prod-docker"]
 	if endpoint.DockerHost != "tcp://docker-prod.example.com:2376" || endpoint.ClientKeyFile == "" {
 		t.Errorf("runtime endpoint not loaded: %+v", endpoint)
+	}
+}
+
+func TestLoadRelaySidecarConfigFromYAML(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	content := []byte(`nostr:
+  private_key: ""
+  browser_relays:
+    - "ws://localhost:3000/relay"
+  sidecar:
+    enabled: true
+    listen_addr: "127.0.0.1:3334"
+    public_url: "ws://localhost:3000/relay"
+    data_dir: "/tmp/bahia-relay"
+    mirror_external: false
+    event_retention: 168h
+    request_retention: 24h
+    auth_private_key: ""
+    max_query_limit: 250
+`)
+	if err := os.WriteFile(path, content, 0o644); err != nil {
+		t.Fatalf("writing temp config: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if !cfg.Nostr.Sidecar.Enabled {
+		t.Fatal("expected sidecar enabled")
+	}
+	if cfg.Nostr.Sidecar.ListenAddr != "127.0.0.1:3334" {
+		t.Errorf("ListenAddr = %q", cfg.Nostr.Sidecar.ListenAddr)
+	}
+	if cfg.Nostr.Sidecar.EventRetention != 168*time.Hour {
+		t.Errorf("EventRetention = %s", cfg.Nostr.Sidecar.EventRetention)
+	}
+	if got := cfg.Nostr.BrowserRelays; len(got) != 1 || got[0] != "ws://localhost:3000/relay" {
+		t.Fatalf("BrowserRelays = %#v", got)
+	}
+}
+
+func TestRelaySidecarValidation(t *testing.T) {
+	cfg := Defaults()
+	cfg.Nostr.Sidecar.Enabled = true
+	cfg.Nostr.Sidecar.PublicURL = ""
+	if err := cfg.validate(); err == nil || !strings.Contains(err.Error(), "nostr.sidecar.public_url") {
+		t.Fatalf("validate error = %v, want public_url requirement", err)
 	}
 }
 

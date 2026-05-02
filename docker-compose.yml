@@ -36,6 +36,9 @@ services:
       BAHIA_LOG_FORMAT: json
       BAHIA_RECONCILE_ENABLED: "true"
       BAHIA_RECONCILE_INTERVAL: "60s"
+      BAHIA_NOSTR__SIDECAR__ENABLED: "true"
+      BAHIA_NOSTR__SIDECAR__PUBLIC_URL: "ws://localhost:3000/relay"
+      BAHIA_NOSTR__SIDECAR__LISTEN_ADDR: "0.0.0.0:3334"
     depends_on:
       postgres:
         condition: service_healthy
@@ -47,6 +50,31 @@ services:
       retries: 5
       start_period: 10s
 
+  relay:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    entrypoint: ["bahia-relay"]
+    ports:
+      - "3334:3334"
+    volumes:
+      - relaydata:/var/lib/bahia/relay-sidecar
+    environment:
+      BAHIA_LOG_LEVEL: info
+      BAHIA_LOG_FORMAT: json
+      BAHIA_NOSTR__SIDECAR__ENABLED: "true"
+      BAHIA_NOSTR__SIDECAR__LISTEN_ADDR: "0.0.0.0:3334"
+      BAHIA_NOSTR__SIDECAR__PUBLIC_URL: "ws://localhost:3000/relay"
+      BAHIA_NOSTR__SIDECAR__DATA_DIR: "/var/lib/bahia/relay-sidecar"
+      BAHIA_NOSTR__SIDECAR__MAX_QUERY_LIMIT: "500"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --header='Accept: application/nostr+json' -O /dev/null http://localhost:3334/relay"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
   web:
     build:
       context: ./web
@@ -56,7 +84,10 @@ services:
     depends_on:
       bahia:
         condition: service_healthy
+      relay:
+        condition: service_healthy
     restart: unless-stopped
 
 volumes:
   pgdata:
+  relaydata:
