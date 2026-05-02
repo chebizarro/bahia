@@ -15,6 +15,18 @@ Bahia publishes signed Nostr events to relay networks for traceability and autom
 | 31004 | `drift.detected` | Drift has been detected between desired and observed state |
 | 31005 | `runtime.observation` | A runtime observation has been recorded |
 
+## Internal Operational Event Types
+
+Bahia also emits typed in-process audit events used by SSE/automation subscribers and local observability wiring. Adoption and direct-runtime events are deliberately structured around IDs and counts; they must not contain secret values, raw environment values, Docker TLS material, or bearer/NIP-98 credentials.
+
+| Type | Description | Key fields |
+|------|-------------|------------|
+| `adoption.scan_completed` | Adoption dry-run scan completed | `target_count`, `candidate_count`, `target_error_count`, `redacted_env_key_count`, `redacted_label_key_count`, `duration_ms` |
+| `adoption.imported` | One adoption candidate was persisted | `service_id`, `environment_id`, `artifact_id`, `target_name`, `container_id`, `container_name`, `status` |
+| `runtime.deploy` | Direct runtime deploy completed | `service_id`, `environment_id`, `artifact_id`, `runtime_target`, `observation_id`, `health_status` |
+| `runtime.restart` | Direct runtime restart completed | `service_id`, `environment_id`, `runtime_target`, `observation_id`, `health_status` |
+| `runtime.stop` | Direct runtime stop completed | `service_id`, `environment_id`, `runtime_target`, `observation_id`, `health_status` |
+
 ## Event Structure
 
 All events follow this structure:

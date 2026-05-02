@@ -73,6 +73,9 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 	r.Use(middleware.RequestLogger(logger))
 	r.Use(middleware.Recoverer(logger))
 	r.Use(middleware.CORS(middleware.NewCORSConfig(corsCfg.AllowedOrigins)))
+	if telemetryProvider != nil {
+		r.Use(middleware.Metrics(telemetryProvider.GetMetrics()))
+	}
 
 	// Per-IP rate limiting: 100 requests/minute for reads, 30/minute for writes.
 	readLimiter := middleware.NewIPRateLimiter(middleware.RateLimiterConfig{
@@ -81,6 +84,18 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 	})
 	writeLimiter := middleware.NewIPRateLimiter(middleware.RateLimiterConfig{
 		Rate:     30,
+		Interval: time.Minute,
+	})
+	adoptionScanLimiter := middleware.NewIPRateLimiter(middleware.RateLimiterConfig{
+		Rate:     5,
+		Interval: time.Minute,
+	})
+	adoptionImportLimiter := middleware.NewIPRateLimiter(middleware.RateLimiterConfig{
+		Rate:     10,
+		Interval: time.Minute,
+	})
+	directRuntimeActionLimiter := middleware.NewIPRateLimiter(middleware.RateLimiterConfig{
+		Rate:     20,
 		Interval: time.Minute,
 	})
 
@@ -96,7 +111,12 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 		handlers.WriteHealthJSON(w, http.StatusOK, dto.HealthResponse{Status: "ready", Version: Version})
 	})
 	if telemetryProvider != nil {
-		r.Get("/metrics", telemetryProvider.MetricsHandler())
+		metricsHandler := telemetryProvider.MetricsHandler()
+		if authMiddleware.Enabled {
+			r.With(auth.MiddlewareFromConfig(authMiddleware)).Get("/metrics", metricsHandler)
+		} else {
+			r.Get("/metrics", metricsHandler)
+		}
 	}
 
 	// Create handlers.
@@ -106,8 +126,12 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 	artifactH := handlers.NewArtifactHandler(registry)
 	deployH := handlers.NewDeploymentHandler(registry)
 	stateH := handlers.NewStateHandler(registry)
-	adoptionH := handlers.NewAdoptionHandler(deps.Adoption)
-	serviceActionH := handlers.NewServiceActionHandler(deps.RuntimeLifecycle)
+	var metrics *telemetry.Metrics
+	if telemetryProvider != nil {
+		metrics = telemetryProvider.GetMetrics()
+	}
+	adoptionH := handlers.NewAdoptionHandler(deps.Adoption, handlers.WithAdoptionLogger(logger), handlers.WithAdoptionMetrics(metrics))
+	serviceActionH := handlers.NewServiceActionHandler(deps.RuntimeLifecycle, handlers.WithServiceActionLogger(logger), handlers.WithServiceActionMetrics(metrics))
 	repoCIHandler := handlers.NewRepositoryCIHandler(deps.HiveCI)
 	systemH := handlers.NewSystemHandler(deps.Config)
 
@@ -271,24 +295,6 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 			r.Post("/services", svcH.Create)
 			r.Put("/services/{id}", svcH.Update)
 			r.Delete("/services/{id}", svcH.Delete)
-			if directRuntimeEnabled(deps.Config) {
-				r.Group(func(r chi.Router) {
-					r.Use(middleware.RequireOperator(operatorAccessMiddlewareConfig(deps.Config.DirectRuntime.OperatorAccessConfig, authMiddleware.NIP05Resolver)))
-					r.Post("/services/{serviceId}/environments/{envId}/deploy", serviceActionH.Deploy)
-					r.Post("/services/{serviceId}/environments/{envId}/restart", serviceActionH.Restart)
-					r.Post("/services/{serviceId}/environments/{envId}/stop", serviceActionH.Stop)
-				})
-			}
-
-			// Adoption (write)
-			if adoptionEnabled(deps.Config) {
-				r.Group(func(r chi.Router) {
-					r.Use(middleware.RequireOperator(operatorAccessMiddlewareConfig(deps.Config.Adoption.OperatorAccessConfig, authMiddleware.NIP05Resolver)))
-					r.Post("/adoption/scan", adoptionH.Scan)
-					r.Post("/adoption/import", adoptionH.Import)
-				})
-			}
-
 			// Environments (write)
 			r.Post("/environments", envH.Create)
 			r.Put("/environments/{id}", envH.Update)
@@ -370,6 +376,33 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 				r.Post("/agent/tools/call", deps.MCP.CallTool)
 			}
 		})
+
+		// Dedicated operational routes. These are intentionally not covered only
+		// by the generic write limiter because scans and direct runtime actions
+		// are operationally expensive and privileged.
+		if directRuntimeEnabled(deps.Config) {
+			r.Group(func(r chi.Router) {
+				r.Use(middleware.RateLimit(directRuntimeActionLimiter))
+				r.Use(middleware.RequireOperator(operatorAccessMiddlewareConfig(deps.Config.DirectRuntime.OperatorAccessConfig, authMiddleware.NIP05Resolver)))
+				r.Post("/services/{serviceId}/environments/{envId}/deploy", serviceActionH.Deploy)
+				r.Post("/services/{serviceId}/environments/{envId}/restart", serviceActionH.Restart)
+				r.Post("/services/{serviceId}/environments/{envId}/stop", serviceActionH.Stop)
+			})
+		}
+
+		if adoptionEnabled(deps.Config) {
+			r.Group(func(r chi.Router) {
+				r.Use(middleware.RequireOperator(operatorAccessMiddlewareConfig(deps.Config.Adoption.OperatorAccessConfig, authMiddleware.NIP05Resolver)))
+				r.Group(func(r chi.Router) {
+					r.Use(middleware.RateLimit(adoptionScanLimiter))
+					r.Post("/adoption/scan", adoptionH.Scan)
+				})
+				r.Group(func(r chi.Router) {
+					r.Use(middleware.RateLimit(adoptionImportLimiter))
+					r.Post("/adoption/import", adoptionH.Import)
+				})
+			})
+		}
 	})
 
 	return r

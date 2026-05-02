@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -22,6 +23,22 @@ type stubAdoptionService struct {
 	scanResp   []service.AdoptionPreview
 	importReq  service.AdoptionImportRequest
 	importResp []service.AdoptionImportResult
+}
+
+type stubAdoptionMetrics struct {
+	importCandidates int
+	importSuccess    int
+	importFailure    int
+	importRedacted   int
+}
+
+func (m *stubAdoptionMetrics) RecordAdoptionScan(_, _, _ int, _ time.Duration, _ bool) {}
+
+func (m *stubAdoptionMetrics) RecordAdoptionImport(candidates, successCount, failureCount, redactedKeys int, _ time.Duration) {
+	m.importCandidates = candidates
+	m.importSuccess = successCount
+	m.importFailure = failureCount
+	m.importRedacted = redactedKeys
 }
 
 func (s *stubAdoptionService) Scan(_ context.Context, req service.AdoptionScanRequest) ([]service.AdoptionPreview, error) {
@@ -118,6 +135,16 @@ func TestAdoptionHandlerImportRequiresAllOrSelection(t *testing.T) {
 	w := postJSON(t, h.Import, dto.ImportAdoptionRequest{Targets: []dto.AdoptionTargetRequest{{Name: "local", DockerHost: "unix:///docker.sock"}}})
 	assertStatus(t, w, http.StatusBadRequest)
 	assertErrorContains(t, w, "import_all")
+}
+
+func TestAdoptionHandlerImportValidationFailureRecordsMetrics(t *testing.T) {
+	metrics := &stubAdoptionMetrics{}
+	h := NewAdoptionHandler(&stubAdoptionService{}, WithAdoptionMetrics(metrics))
+	w := postJSON(t, h.Import, dto.ImportAdoptionRequest{Targets: []dto.AdoptionTargetRequest{{Name: "local", DockerHost: "unix:///docker.sock"}}})
+	assertStatus(t, w, http.StatusBadRequest)
+	if metrics.importFailure != 1 || metrics.importSuccess != 0 || metrics.importCandidates != 0 {
+		t.Fatalf("unexpected import metrics: %#v", metrics)
+	}
 }
 
 func TestAdoptionHandlerImportMapsSelections(t *testing.T) {

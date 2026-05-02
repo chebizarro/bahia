@@ -66,6 +66,34 @@ func TestMetrics_RecordDeployment(t *testing.T) {
 	}
 }
 
+func TestMetrics_RecordAdoptionAndRuntimeOperations(t *testing.T) {
+	m := NewMetrics()
+
+	m.RecordAdoptionScan(2, 5, 3, 150*time.Millisecond, true)
+	m.RecordAdoptionImport(5, 4, 1, 2, 300*time.Millisecond)
+	m.RecordRuntimeAction("restart", "success", 75*time.Millisecond)
+	m.RecordRuntimeAction("deploy", "failed", 125*time.Millisecond)
+
+	if m.AdoptionScansTotal["success"] != 1 {
+		t.Fatalf("expected one successful adoption scan, got %d", m.AdoptionScansTotal["success"])
+	}
+	if m.AdoptionTargetsScannedTotal != 2 || m.AdoptionCandidatesTotal != 10 {
+		t.Fatalf("unexpected adoption aggregate counts: targets=%d candidates=%d", m.AdoptionTargetsScannedTotal, m.AdoptionCandidatesTotal)
+	}
+	if m.AdoptionRedactedKeysTotal != 5 {
+		t.Fatalf("expected 5 redacted keys, got %d", m.AdoptionRedactedKeysTotal)
+	}
+	if m.AdoptionImportsTotal["partial_failure"] != 1 {
+		t.Fatalf("expected partial failure import count, got %#v", m.AdoptionImportsTotal)
+	}
+	if m.AdoptionImportSuccessTotal != 4 || m.AdoptionImportFailureTotal != 1 {
+		t.Fatalf("unexpected import counts: success=%d failure=%d", m.AdoptionImportSuccessTotal, m.AdoptionImportFailureTotal)
+	}
+	if m.RuntimeActionsTotal["restart:success"] != 1 || m.RuntimeActionsTotal["deploy:failed"] != 1 {
+		t.Fatalf("unexpected runtime action counts: %#v", m.RuntimeActionsTotal)
+	}
+}
+
 func TestMetrics_RecordDriftDetected(t *testing.T) {
 	m := NewMetrics()
 
@@ -175,6 +203,8 @@ func TestProvider_MetricsHandler(t *testing.T) {
 	// Record some metrics
 	m.RecordHTTPRequest("GET", "/test", 200, 100*time.Millisecond)
 	m.RecordDeployment("svc", "prod", "success")
+	m.RecordAdoptionScan(1, 2, 1, 100*time.Millisecond, true)
+	m.RecordRuntimeAction("restart", "success", 100*time.Millisecond)
 	m.RecordDriftDetected()
 	m.SetWorkersActive(5)
 	m.RecordCashuPayment("sent", 100)
@@ -190,6 +220,8 @@ func TestProvider_MetricsHandler(t *testing.T) {
 	checks := []string{
 		"bahia_http_requests_total",
 		"bahia_deployments_total",
+		"bahia_adoption_scans_total",
+		"bahia_runtime_actions_total",
 		"bahia_drift_detected_total",
 		"bahia_workers_active 5",
 		"bahia_cashu_payments_total",

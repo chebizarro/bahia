@@ -22,7 +22,7 @@ import (
 
 const (
 	adoptionCISystem      = "adoption"
-	adoptionImportedEvent = events.EventType("adoption.imported")
+	adoptionImportedEvent = events.EventAdoptionImported
 	adoptionStatusCreated = "created"
 	adoptionStatusUpdated = "updated"
 	adoptionStatusFailed  = "failed"
@@ -188,30 +188,61 @@ type AdoptionImportResult struct {
 
 // Scan discovers containers and proposes Bahia service names.
 func (s *AdoptionService) Scan(ctx context.Context, req AdoptionScanRequest) ([]AdoptionPreview, error) {
+	start := time.Now()
 	targets, err := s.normalizeAdoptionTargets(req.Targets)
 	if err != nil {
+		s.logger.Warn("adoption scan rejected", zap.String("result", "failed"), zap.Error(err), zap.Int64("duration_ms", time.Since(start).Milliseconds()))
 		return nil, err
 	}
 	results, err := runtime.DiscoverDockerTargets(ctx, toDockerDiscoveryTargets(targets), s.logger)
 	if err != nil {
+		s.logger.Warn("adoption scan discovery failed", zap.Int("target_count", len(targets)), zap.String("result", "failed"), zap.Error(err), zap.Int64("duration_ms", time.Since(start).Milliseconds()))
 		return nil, err
 	}
-	return s.buildPreviews(ctx, targets, results), nil
+	previews := s.buildPreviews(ctx, targets, results)
+	candidateCount, redactedEnvKeyCount, redactedLabelKeyCount, targetErrors := adoptionPreviewOperationalStats(previews)
+	duration := time.Since(start)
+	s.publisher.Publish(ctx, events.Event{
+		Type:     events.EventAdoptionScanCompleted,
+		EntityID: "adoption",
+		Data: map[string]any{
+			"target_count":             len(targets),
+			"candidate_count":          candidateCount,
+			"target_error_count":       targetErrors,
+			"redacted_env_key_count":   redactedEnvKeyCount,
+			"redacted_label_key_count": redactedLabelKeyCount,
+			"duration_ms":              duration.Milliseconds(),
+		},
+	})
+	s.logger.Info("adoption scan completed",
+		zap.Int("target_count", len(targets)),
+		zap.Int("candidate_count", candidateCount),
+		zap.Int("target_error_count", targetErrors),
+		zap.Int("redacted_env_key_count", redactedEnvKeyCount),
+		zap.Int("redacted_label_key_count", redactedLabelKeyCount),
+		zap.Int64("duration_ms", duration.Milliseconds()),
+		zap.String("result", "success"),
+	)
+	return previews, nil
 }
 
 // Import scans targets and imports selected containers. Individual candidate failures are returned in result rows.
 func (s *AdoptionService) Import(ctx context.Context, req AdoptionImportRequest) ([]AdoptionImportResult, error) {
+	start := time.Now()
 	targets, err := s.normalizeAdoptionTargets(req.Targets)
 	if err != nil {
+		s.logger.Warn("adoption import rejected", zap.String("result", "failed"), zap.Error(err), zap.Int64("duration_ms", time.Since(start).Milliseconds()))
 		return nil, err
 	}
 	selectionSet, err := normalizeAdoptionSelections(req)
 	if err != nil {
+		s.logger.Warn("adoption import selections rejected", zap.Int("target_count", len(targets)), zap.String("result", "failed"), zap.Error(err), zap.Int64("duration_ms", time.Since(start).Milliseconds()))
 		return nil, err
 	}
 
 	results, err := runtime.DiscoverDockerTargets(ctx, toDockerDiscoveryTargets(targets), s.logger)
 	if err != nil {
+		s.logger.Warn("adoption import discovery failed", zap.Int("target_count", len(targets)), zap.String("result", "failed"), zap.Error(err), zap.Int64("duration_ms", time.Since(start).Milliseconds()))
 		return nil, err
 	}
 	previews := s.buildPreviews(ctx, targets, results)
@@ -254,6 +285,24 @@ func (s *AdoptionService) Import(ctx context.Context, req AdoptionImportRequest)
 			imported = append(imported, AdoptionImportResult{TargetName: selection.TargetName, ContainerID: selection.ContainerID, Status: adoptionStatusFailed, Error: "selected container was not discovered"})
 		}
 	}
+	successCount, failureCount, redactedEnvKeyCount, redactedLabelKeyCount := adoptionImportOperationalStats(imported)
+	result := "success"
+	if failureCount > 0 {
+		result = "partial_failure"
+	}
+	if len(imported) > 0 && successCount == 0 && failureCount > 0 {
+		result = "failed"
+	}
+	s.logger.Info("adoption import completed",
+		zap.Int("target_count", len(targets)),
+		zap.Int("candidate_count", len(imported)),
+		zap.Int("success_count", successCount),
+		zap.Int("failure_count", failureCount),
+		zap.Int("redacted_env_key_count", redactedEnvKeyCount),
+		zap.Int("redacted_label_key_count", redactedLabelKeyCount),
+		zap.Int64("duration_ms", time.Since(start).Milliseconds()),
+		zap.String("result", result),
+	)
 	return imported, nil
 }
 
@@ -340,16 +389,19 @@ func (s *AdoptionService) importCandidate(ctx context.Context, target AdoptionTa
 	if !candidate.Adoptable {
 		result.Status = adoptionStatusFailed
 		result.Error = "container has unsupported adoption warnings"
+		s.logAdoptionImportResult(target, result, "failed")
 		return result
 	}
 	if discovered.ImageRepo == "" || discovered.ImageDigest == "" {
 		result.Status = adoptionStatusFailed
 		result.Error = "container image repo and digest are required for import"
+		s.logAdoptionImportResult(target, result, "failed")
 		return result
 	}
 	if serviceName == "" {
 		result.Status = adoptionStatusFailed
 		result.Error = "service name is required"
+		s.logAdoptionImportResult(target, result, "failed")
 		return result
 	}
 
@@ -359,6 +411,7 @@ func (s *AdoptionService) importCandidate(ctx context.Context, target AdoptionTa
 	if len(classified.SensitiveEnvironment) > 0 && (s.secrets == nil || s.secretEncryptor == nil) {
 		result.Status = adoptionStatusFailed
 		result.Error = "sensitive environment values require configured secret storage and encryption"
+		s.logAdoptionImportResult(target, result, "failed")
 		return result
 	}
 
@@ -451,6 +504,7 @@ func (s *AdoptionService) importCandidate(ctx context.Context, target AdoptionTa
 	if err != nil {
 		result.Status = adoptionStatusFailed
 		result.Error = err.Error()
+		s.logAdoptionImportResult(target, result, "failed")
 		return result
 	}
 	if committedResult.Status != "" {
@@ -459,7 +513,36 @@ func (s *AdoptionService) importCandidate(ctx context.Context, target AdoptionTa
 	if importEvent.Type != "" {
 		s.publisher.Publish(ctx, importEvent)
 	}
+	s.logAdoptionImportResult(target, result, "success")
 	return result
+}
+
+func (s *AdoptionService) logAdoptionImportResult(target AdoptionTarget, result AdoptionImportResult, outcome string) {
+	fields := []zap.Field{
+		zap.String("target_name", target.Name),
+		zap.String("endpoint_ref", target.EndpointRef),
+		zap.String("environment_name", target.EnvironmentName),
+		zap.String("container_id", result.ContainerID),
+		zap.String("container_name", result.ContainerName),
+		zap.String("service_name", result.ServiceName),
+		zap.String("status", result.Status),
+		zap.String("result", outcome),
+		zap.Int("redacted_env_key_count", len(result.RedactedEnvironmentKeys)),
+		zap.Int("redacted_label_key_count", len(result.RedactedLabelKeys)),
+	}
+	if result.ServiceID != nil {
+		fields = append(fields, zap.String("service_id", result.ServiceID.String()))
+	}
+	if result.EnvironmentID != nil {
+		fields = append(fields, zap.String("environment_id", result.EnvironmentID.String()))
+	}
+	if result.ArtifactID != nil {
+		fields = append(fields, zap.String("artifact_id", result.ArtifactID.String()))
+	}
+	if result.Error != "" {
+		fields = append(fields, zap.String("error", result.Error))
+	}
+	s.logger.Info("adoption candidate import completed", fields...)
 }
 
 func isRetryableImportTxError(err error) bool {
@@ -473,6 +556,33 @@ func isRetryableImportTxError(err error) bool {
 	default:
 		return false
 	}
+}
+
+func adoptionPreviewOperationalStats(previews []AdoptionPreview) (candidateCount, redactedEnvKeyCount, redactedLabelKeyCount, targetErrorCount int) {
+	for _, preview := range previews {
+		if preview.Error != "" {
+			targetErrorCount++
+		}
+		candidateCount += len(preview.Containers)
+		for _, container := range preview.Containers {
+			redactedEnvKeyCount += len(container.RedactedEnvironmentKeys)
+			redactedLabelKeyCount += len(container.RedactedLabelKeys)
+		}
+	}
+	return candidateCount, redactedEnvKeyCount, redactedLabelKeyCount, targetErrorCount
+}
+
+func adoptionImportOperationalStats(results []AdoptionImportResult) (successCount, failureCount, redactedEnvKeyCount, redactedLabelKeyCount int) {
+	for _, result := range results {
+		if result.Status == adoptionStatusFailed || result.Error != "" {
+			failureCount++
+		} else {
+			successCount++
+		}
+		redactedEnvKeyCount += len(result.RedactedEnvironmentKeys)
+		redactedLabelKeyCount += len(result.RedactedLabelKeys)
+	}
+	return successCount, failureCount, redactedEnvKeyCount, redactedLabelKeyCount
 }
 
 func (s *AdoptionService) completeTxRepos(repos repository.TxRepos) repository.TxRepos {

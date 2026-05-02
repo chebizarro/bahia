@@ -7,10 +7,13 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
+	chimiddleware "github.com/go-chi/chi/v5/middleware"
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/api/dto"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"go.uber.org/zap"
 )
 
 type runtimeLifecycleService interface {
@@ -19,63 +22,130 @@ type runtimeLifecycleService interface {
 	Stop(context.Context, uuid.UUID, uuid.UUID) (*domain.RuntimeObservation, error)
 }
 
+type runtimeActionMetrics interface {
+	RecordRuntimeAction(action, status string, duration time.Duration)
+}
+
 // ServiceActionHandler exposes direct runtime actions for services.
 type ServiceActionHandler struct {
 	lifecycle runtimeLifecycleService
+	logger    *zap.Logger
+	metrics   runtimeActionMetrics
 }
 
 // NewServiceActionHandler creates a ServiceActionHandler.
-func NewServiceActionHandler(lifecycle runtimeLifecycleService) *ServiceActionHandler {
+func NewServiceActionHandler(lifecycle runtimeLifecycleService, opts ...ServiceActionHandlerOption) *ServiceActionHandler {
 	if isNilHandlerDependency(lifecycle) {
 		lifecycle = nil
 	}
-	return &ServiceActionHandler{lifecycle: lifecycle}
+	h := &ServiceActionHandler{lifecycle: lifecycle, logger: zap.NewNop()}
+	for _, opt := range opts {
+		opt(h)
+	}
+	return h
+}
+
+// ServiceActionHandlerOption configures operational dependencies for ServiceActionHandler.
+type ServiceActionHandlerOption func(*ServiceActionHandler)
+
+// WithServiceActionLogger enables structured direct-runtime audit logs.
+func WithServiceActionLogger(logger *zap.Logger) ServiceActionHandlerOption {
+	return func(h *ServiceActionHandler) {
+		if logger != nil {
+			h.logger = logger
+		}
+	}
+}
+
+// WithServiceActionMetrics enables direct-runtime operational metrics.
+func WithServiceActionMetrics(metrics runtimeActionMetrics) ServiceActionHandlerOption {
+	return func(h *ServiceActionHandler) {
+		if !isNilHandlerDependency(metrics) {
+			h.metrics = metrics
+		}
+	}
 }
 
 // Deploy deploys the desired or explicit artifact directly through the resolved runtime.
 func (h *ServiceActionHandler) Deploy(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
 	serviceID, envID, ok := h.parseIDs(w, r)
 	if !ok {
+		h.recordRuntimeAction(r, "deploy", uuid.Nil, uuid.Nil, nil, start, "failed", "invalid service or environment id")
 		return
 	}
 	req, ok := decodeDeployServiceActionRequest(w, r)
 	if !ok {
+		h.recordRuntimeAction(r, "deploy", serviceID, envID, nil, start, "failed", "invalid request body")
 		return
 	}
 	obs, err := h.lifecycle.Deploy(r.Context(), serviceID, envID, req.ArtifactID)
 	if err != nil {
 		writeRuntimeLifecycleError(w, err)
+		h.recordRuntimeAction(r, "deploy", serviceID, envID, req.ArtifactID, start, "failed", err.Error())
 		return
 	}
+	h.recordRuntimeAction(r, "deploy", serviceID, envID, req.ArtifactID, start, "success", "")
 	writeData(w, http.StatusOK, dto.RuntimeActionResponse{Action: "deploy", ServiceID: serviceID, EnvironmentID: envID, Observation: mapRuntimeObservationResponse(obs)})
 }
 
 // Restart restarts the service directly through the resolved runtime.
 func (h *ServiceActionHandler) Restart(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
 	serviceID, envID, ok := h.parseIDs(w, r)
 	if !ok {
+		h.recordRuntimeAction(r, "restart", uuid.Nil, uuid.Nil, nil, start, "failed", "invalid service or environment id")
 		return
 	}
 	obs, err := h.lifecycle.Restart(r.Context(), serviceID, envID)
 	if err != nil {
 		writeRuntimeLifecycleError(w, err)
+		h.recordRuntimeAction(r, "restart", serviceID, envID, nil, start, "failed", err.Error())
 		return
 	}
+	h.recordRuntimeAction(r, "restart", serviceID, envID, nil, start, "success", "")
 	writeData(w, http.StatusOK, dto.RuntimeActionResponse{Action: "restart", ServiceID: serviceID, EnvironmentID: envID, Observation: mapRuntimeObservationResponse(obs)})
 }
 
 // Stop stops the service directly through the resolved runtime.
 func (h *ServiceActionHandler) Stop(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
 	serviceID, envID, ok := h.parseIDs(w, r)
 	if !ok {
+		h.recordRuntimeAction(r, "stop", uuid.Nil, uuid.Nil, nil, start, "failed", "invalid service or environment id")
 		return
 	}
 	obs, err := h.lifecycle.Stop(r.Context(), serviceID, envID)
 	if err != nil {
 		writeRuntimeLifecycleError(w, err)
+		h.recordRuntimeAction(r, "stop", serviceID, envID, nil, start, "failed", err.Error())
 		return
 	}
+	h.recordRuntimeAction(r, "stop", serviceID, envID, nil, start, "success", "")
 	writeData(w, http.StatusOK, dto.RuntimeActionResponse{Action: "stop", ServiceID: serviceID, EnvironmentID: envID, Observation: mapRuntimeObservationResponse(obs)})
+}
+
+func (h *ServiceActionHandler) recordRuntimeAction(r *http.Request, action string, serviceID, envID uuid.UUID, artifactID *uuid.UUID, start time.Time, result, errMsg string) {
+	duration := time.Since(start)
+	if h.metrics != nil {
+		h.metrics.RecordRuntimeAction(action, result, duration)
+	}
+	fields := requestActorLogFields(r)
+	fields = append(fields,
+		zap.String("request_id", chimiddleware.GetReqID(r.Context())),
+		zap.String("action", action),
+		zap.String("service_id", serviceID.String()),
+		zap.String("environment_id", envID.String()),
+		zap.Int64("duration_ms", duration.Milliseconds()),
+		zap.String("result", result),
+	)
+	if artifactID != nil {
+		fields = append(fields, zap.String("artifact_id", artifactID.String()))
+	}
+	if errMsg != "" {
+		fields = append(fields, zap.String("error", errMsg))
+	}
+	h.logger.Info("direct runtime action completed", fields...)
 }
 
 func (h *ServiceActionHandler) parseIDs(w http.ResponseWriter, r *http.Request) (uuid.UUID, uuid.UUID, bool) {

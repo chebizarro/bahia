@@ -156,6 +156,14 @@ bahia adopt import --target prod-docker --all
 
 Raw Docker hosts are a compatibility path only. They require the server to set `adoption.allow_raw_docker_hosts: true` and the CLI to use `--raw-target alias=dockerHost`.
 
+For production rollout, follow the operator runbook in [`adoption-production-rollout.md`](adoption-production-rollout.md). In short: enable auth, configure operator allowlists, keep raw-host mode off, run a scan-only dry run, import a single low-risk workload first, then monitor adoption/runtime logs and `/metrics` before expanding.
+
+Dedicated operational limits protect runtime endpoints from expensive control-plane bursts:
+
+- adoption scan: 5 requests/minute/IP;
+- adoption import: 10 requests/minute/IP;
+- direct runtime deploy/restart/stop: 20 requests/minute/IP.
+
 ## Podman Runtime
 
 Bahia supports Podman as an alternative to Docker. Since Podman emulates Docker's API, Bahia communicates with Podman via its Docker-compatible socket.

@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/adapters/runtime"
@@ -14,9 +15,9 @@ import (
 )
 
 const (
-	runtimeActionDeployEvent  = events.EventType("runtime.deploy")
-	runtimeActionRestartEvent = events.EventType("runtime.restart")
-	runtimeActionStopEvent    = events.EventType("runtime.stop")
+	runtimeActionDeployEvent  = events.EventRuntimeDeploy
+	runtimeActionRestartEvent = events.EventRuntimeRestart
+	runtimeActionStopEvent    = events.EventRuntimeStop
 
 	directRuntimeGuardrailMessage = "direct runtime actions are only allowed for adopted direct_runtime workloads"
 )
@@ -83,19 +84,23 @@ func NewRuntimeLifecycleService(
 
 // Deploy deploys an artifact directly through the resolved runtime and records a fresh observation.
 func (s *RuntimeLifecycleService) Deploy(ctx context.Context, serviceID, envID uuid.UUID, artifactID *uuid.UUID) (*domain.RuntimeObservation, error) {
+	start := time.Now()
 	svc, env, rt, err := s.resolve(ctx, serviceID, envID)
 	if err != nil {
+		s.logRuntimeAction("deploy", nil, nil, serviceID, envID, artifactID, start, "failed", err)
 		return nil, err
 	}
 
 	artifact, err := s.resolveDeployArtifact(ctx, serviceID, envID, artifactID)
 	if err != nil {
+		s.logRuntimeAction("deploy", svc, env, serviceID, envID, artifactID, start, "failed", err)
 		return nil, err
 	}
 
 	targetName := svc.RuntimeTargetName()
 	opts := deployOptionsFromServiceRuntimeConfig(svc)
 	if err := s.mergeEffectiveSecrets(ctx, serviceID, envID, &opts); err != nil {
+		s.logRuntimeAction("deploy", svc, env, serviceID, envID, &artifact.ID, start, "failed", err)
 		return nil, err
 	}
 
@@ -106,69 +111,90 @@ func (s *RuntimeLifecycleService) Deploy(ctx context.Context, serviceID, envID u
 	opts.Labels["bahia.managed"] = "true"
 
 	if err := rt.Deploy(ctx, targetName, imageRefForArtifact(artifact), opts); err != nil {
+		s.logRuntimeAction("deploy", svc, env, serviceID, envID, &artifact.ID, start, "failed", err)
 		return nil, fmt.Errorf("deploying runtime target %q: %w", targetName, err)
 	}
 	if err := s.updateDesiredArtifact(ctx, serviceID, envID, artifact.ID); err != nil {
+		s.logRuntimeAction("deploy", svc, env, serviceID, envID, &artifact.ID, start, "failed", err)
 		return nil, err
 	}
 	obs, err := rt.Observe(ctx, serviceID, envID, targetName)
 	if err != nil {
+		s.logRuntimeAction("deploy", svc, env, serviceID, envID, &artifact.ID, start, "failed", err)
 		return nil, fmt.Errorf("observing runtime target %q after deploy: %w", targetName, err)
 	}
 	if err := s.registry.RecordObservation(ctx, obs); err != nil {
+		s.logRuntimeAction("deploy", svc, env, serviceID, envID, &artifact.ID, start, "failed", err)
 		return nil, fmt.Errorf("recording deploy observation: %w", err)
 	}
 	s.publishAction(ctx, runtimeActionDeployEvent, svc, env, obs, map[string]any{"artifact_id": artifact.ID})
+	s.logRuntimeAction("deploy", svc, env, serviceID, envID, &artifact.ID, start, "success", nil)
 	return obs, nil
 }
 
 // Restart restarts a service directly through the resolved runtime and records a fresh observation.
 func (s *RuntimeLifecycleService) Restart(ctx context.Context, serviceID, envID uuid.UUID) (*domain.RuntimeObservation, error) {
+	start := time.Now()
 	svc, env, rt, err := s.resolve(ctx, serviceID, envID)
 	if err != nil {
+		s.logRuntimeAction("restart", nil, nil, serviceID, envID, nil, start, "failed", err)
 		return nil, err
 	}
 	lifecycle, ok := rt.(runtime.LifecycleRuntime)
 	if !ok {
-		return nil, fmt.Errorf("runtime %s does not support restart", rt.Type())
+		err := fmt.Errorf("runtime %s does not support restart", rt.Type())
+		s.logRuntimeAction("restart", svc, env, serviceID, envID, nil, start, "failed", err)
+		return nil, err
 	}
 	targetName := svc.RuntimeTargetName()
 	if err := lifecycle.Restart(ctx, targetName); err != nil {
+		s.logRuntimeAction("restart", svc, env, serviceID, envID, nil, start, "failed", err)
 		return nil, fmt.Errorf("restarting runtime target %q: %w", targetName, err)
 	}
 	obs, err := rt.Observe(ctx, serviceID, envID, targetName)
 	if err != nil {
+		s.logRuntimeAction("restart", svc, env, serviceID, envID, nil, start, "failed", err)
 		return nil, fmt.Errorf("observing runtime target %q after restart: %w", targetName, err)
 	}
 	if err := s.registry.RecordObservation(ctx, obs); err != nil {
+		s.logRuntimeAction("restart", svc, env, serviceID, envID, nil, start, "failed", err)
 		return nil, fmt.Errorf("recording restart observation: %w", err)
 	}
 	s.publishAction(ctx, runtimeActionRestartEvent, svc, env, obs, nil)
+	s.logRuntimeAction("restart", svc, env, serviceID, envID, nil, start, "success", nil)
 	return obs, nil
 }
 
 // Stop stops a service directly through the resolved runtime and records a fresh observation.
 func (s *RuntimeLifecycleService) Stop(ctx context.Context, serviceID, envID uuid.UUID) (*domain.RuntimeObservation, error) {
+	start := time.Now()
 	svc, env, rt, err := s.resolve(ctx, serviceID, envID)
 	if err != nil {
+		s.logRuntimeAction("stop", nil, nil, serviceID, envID, nil, start, "failed", err)
 		return nil, err
 	}
 	lifecycle, ok := rt.(runtime.LifecycleRuntime)
 	if !ok {
-		return nil, fmt.Errorf("runtime %s does not support stop", rt.Type())
+		err := fmt.Errorf("runtime %s does not support stop", rt.Type())
+		s.logRuntimeAction("stop", svc, env, serviceID, envID, nil, start, "failed", err)
+		return nil, err
 	}
 	targetName := svc.RuntimeTargetName()
 	if err := lifecycle.Stop(ctx, targetName); err != nil {
+		s.logRuntimeAction("stop", svc, env, serviceID, envID, nil, start, "failed", err)
 		return nil, fmt.Errorf("stopping runtime target %q: %w", targetName, err)
 	}
 	obs, err := rt.Observe(ctx, serviceID, envID, targetName)
 	if err != nil {
+		s.logRuntimeAction("stop", svc, env, serviceID, envID, nil, start, "failed", err)
 		return nil, fmt.Errorf("observing runtime target %q after stop: %w", targetName, err)
 	}
 	if err := s.registry.RecordObservation(ctx, obs); err != nil {
+		s.logRuntimeAction("stop", svc, env, serviceID, envID, nil, start, "failed", err)
 		return nil, fmt.Errorf("recording stop observation: %w", err)
 	}
 	s.publishAction(ctx, runtimeActionStopEvent, svc, env, obs, nil)
+	s.logRuntimeAction("stop", svc, env, serviceID, envID, nil, start, "success", nil)
 	return obs, nil
 }
 
@@ -324,6 +350,40 @@ func (s *RuntimeLifecycleService) publishAction(ctx context.Context, eventType e
 		data[k] = v
 	}
 	s.publisher.Publish(ctx, events.Event{Type: eventType, EntityID: svc.ID.String(), Data: data})
+}
+
+func (s *RuntimeLifecycleService) logRuntimeAction(action string, svc *domain.Service, env *domain.Environment, serviceID, envID uuid.UUID, artifactID *uuid.UUID, start time.Time, result string, err error) {
+	fields := []zap.Field{
+		zap.String("action", action),
+		zap.String("service_id", serviceID.String()),
+		zap.String("environment_id", envID.String()),
+		zap.Int64("duration_ms", time.Since(start).Milliseconds()),
+		zap.String("result", result),
+	}
+	if artifactID != nil {
+		fields = append(fields, zap.String("artifact_id", artifactID.String()))
+	}
+	if svc != nil {
+		fields = append(fields,
+			zap.String("service_name", svc.Name),
+			zap.String("target_name", svc.RuntimeTargetName()),
+		)
+		if svc.RuntimeConfig != nil && svc.RuntimeConfig.Adopted != nil {
+			fields = append(fields, zap.String("endpoint_ref", svc.RuntimeConfig.Adopted.EndpointRef))
+		}
+	}
+	if env != nil {
+		fields = append(fields, zap.String("environment_name", env.Name))
+		if env.RuntimeConfig != nil {
+			if endpointRef, ok := stringFromAny(env.RuntimeConfig["endpoint_ref"]); ok {
+				fields = append(fields, zap.String("endpoint_ref", endpointRef))
+			}
+		}
+	}
+	if err != nil {
+		fields = append(fields, zap.String("error", err.Error()))
+	}
+	s.logger.Info("direct runtime action completed", fields...)
 }
 
 func deployOptionsFromServiceRuntimeConfig(svc *domain.Service) runtime.DeployOptions {

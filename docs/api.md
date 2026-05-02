@@ -6,7 +6,7 @@ All API endpoints (except health checks) are prefixed with `/api/v1`.
 
 ## Authentication
 
-Currently no authentication required for local development. Production deployments should use a reverse proxy with authentication.
+Local development can run with `auth.enabled=false`. Production deployments should enable Bahia API auth with JWT and/or NIP-98. Adoption/import and direct runtime action routes are privileged operator routes: they are mounted only when their feature flag is enabled and the authenticated principal is allowlisted by subject, pubkey, or email.
 
 ## Health
 
@@ -88,6 +88,29 @@ Currently no authentication required for local development. Production deploymen
 | GET | `/api/v1/environments/{envId}/state` | List states by environment |
 | GET | `/api/v1/services/{serviceId}/environments/{envId}/state` | Get specific state |
 | POST | `/api/v1/observations` | Record a runtime observation |
+
+## Adoption / Import (operator only)
+
+These routes are disabled unless `adoption.enabled=true`. They require auth and the adoption operator allowlist.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/api/v1/adoption/scan` | Dry-run discovery of configured Docker endpoint aliases |
+| POST | `/api/v1/adoption/import` | Import selected or all discovered candidates |
+
+Use `endpoint_ref` targets for production. `docker_host` targets are accepted only when raw-host compatibility mode is enabled. Scan/import responses include safe environment and label fields plus `redacted_environment_keys` and `redacted_label_keys`; redacted values are never returned.
+
+## Direct Runtime Actions (operator only)
+
+These routes are disabled unless `direct_runtime_actions.enabled=true`. They require auth and the direct-runtime operator allowlist. Actions are limited to adopted `direct_runtime` workloads.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/api/v1/services/{serviceId}/environments/{envId}/deploy` | Deploy the desired or explicit artifact directly through the runtime |
+| POST | `/api/v1/services/{serviceId}/environments/{envId}/restart` | Restart an adopted runtime target |
+| POST | `/api/v1/services/{serviceId}/environments/{envId}/stop` | Stop an adopted runtime target |
+
+Operational limits are separate from the generic write limiter: scan 5/min/IP, import 10/min/IP, direct runtime actions 20/min/IP. Metrics are exported on `/metrics` when telemetry is enabled; if API auth is enabled, `/metrics` requires the same auth middleware.
 
 ## OCI Registry (Distribution API v2)
 

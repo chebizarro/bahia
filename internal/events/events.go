@@ -13,16 +13,21 @@ import (
 type EventType string
 
 const (
-	EventBuildRegistered         EventType = "build.registered"
-	EventBuildStatusChanged      EventType = "build.status_changed"
-	EventArtifactRegistered      EventType = "artifact.registered"
-	EventDeploymentIntentCreated EventType = "deployment_intent.created"
+	EventBuildRegistered          EventType = "build.registered"
+	EventBuildStatusChanged       EventType = "build.status_changed"
+	EventArtifactRegistered       EventType = "artifact.registered"
+	EventDeploymentIntentCreated  EventType = "deployment_intent.created"
 	EventDeploymentIntentApproved EventType = "deployment_intent.approved"
-	EventDeploymentRunCreated    EventType = "deployment_run.created"
-	EventDeploymentRunCompleted  EventType = "deployment_run.completed"
-	EventRuntimeObservation      EventType = "runtime.observation"
-	EventDriftDetected           EventType = "drift.detected"
-	EventReconcileCompleted      EventType = "reconcile.completed"
+	EventDeploymentRunCreated     EventType = "deployment_run.created"
+	EventDeploymentRunCompleted   EventType = "deployment_run.completed"
+	EventRuntimeObservation       EventType = "runtime.observation"
+	EventDriftDetected            EventType = "drift.detected"
+	EventReconcileCompleted       EventType = "reconcile.completed"
+	EventAdoptionImported         EventType = "adoption.imported"
+	EventAdoptionScanCompleted    EventType = "adoption.scan_completed"
+	EventRuntimeDeploy            EventType = "runtime.deploy"
+	EventRuntimeRestart           EventType = "runtime.restart"
+	EventRuntimeStop              EventType = "runtime.stop"
 )
 
 // Event represents an internal domain event.

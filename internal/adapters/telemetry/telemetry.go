@@ -14,12 +14,12 @@ import (
 
 // Config holds telemetry configuration.
 type Config struct {
-	Enabled       bool
-	ServiceName   string
+	Enabled        bool
+	ServiceName    string
 	ServiceVersion string
-	OTLPEndpoint  string // e.g. "localhost:4317" for gRPC, "localhost:4318" for HTTP
-	OTLPProtocol  string // "grpc" or "http", defaults to "grpc"
-	Environment   string // e.g. "production", "staging"
+	OTLPEndpoint   string // e.g. "localhost:4317" for gRPC, "localhost:4318" for HTTP
+	OTLPProtocol   string // "grpc" or "http", defaults to "grpc"
+	Environment    string // e.g. "production", "staging"
 }
 
 // Provider manages telemetry lifecycle.
@@ -35,13 +35,26 @@ type Metrics struct {
 	mu sync.RWMutex
 
 	// HTTP metrics
-	HTTPRequestsTotal      map[string]int64   // key: method:path:status
-	HTTPRequestDurations   []float64          // in seconds
-	HTTPRequestDurationSum float64            // sum for average calculation
+	HTTPRequestsTotal      map[string]int64 // key: method:path:status
+	HTTPRequestDurations   []float64        // in seconds
+	HTTPRequestDurationSum float64          // sum for average calculation
 
 	// Deployment metrics
 	DeploymentsTotal   map[string]int64 // key: service:env:status
 	DriftDetectedTotal int64
+
+	// Adoption/direct-runtime operational metrics
+	AdoptionScansTotal          map[string]int64 // key: status
+	AdoptionScanDurations       []float64        // in seconds
+	AdoptionTargetsScannedTotal int64
+	AdoptionCandidatesTotal     int64
+	AdoptionRedactedKeysTotal   int64
+	AdoptionImportsTotal        map[string]int64 // key: status
+	AdoptionImportDurations     []float64        // in seconds
+	AdoptionImportSuccessTotal  int64
+	AdoptionImportFailureTotal  int64
+	RuntimeActionsTotal         map[string]int64 // key: action:status
+	RuntimeActionDurations      []float64        // in seconds
 
 	// Reconciliation metrics
 	ReconcileDurations     []float64
@@ -61,8 +74,8 @@ type Metrics struct {
 	NostrBackoffDurations []float64        // backoff durations in seconds
 
 	// Relay health metrics
-	NostrRelayHealthy   map[string]bool    // key: relay_url - is healthy
-	NostrRelayDegraded  map[string]bool    // key: relay_url - is degraded
+	NostrRelayHealthy     map[string]bool    // key: relay_url - is healthy
+	NostrRelayDegraded    map[string]bool    // key: relay_url - is degraded
 	NostrRelaySuccessRate map[string]float64 // key: relay_url - success rate (0-1)
 
 	// Worker metrics
@@ -72,18 +85,21 @@ type Metrics struct {
 	LoomJobsTotal    map[string]int64 // key: status (completed, failed, cancelled)
 
 	// Cashu payment metrics
-	CashuPaymentsTotal  map[string]int64 // key: status (sent, redeemed, failed)
-	CashuPaymentsSats   int64            // total sats paid
-	CashuWalletBalance  map[string]int64 // key: mint_url
+	CashuPaymentsTotal map[string]int64 // key: status (sent, redeemed, failed)
+	CashuPaymentsSats  int64            // total sats paid
+	CashuWalletBalance map[string]int64 // key: mint_url
 }
 
 // NewMetrics creates a new metrics collector.
 func NewMetrics() *Metrics {
 	return &Metrics{
-		HTTPRequestsTotal:    make(map[string]int64),
-		DeploymentsTotal:     make(map[string]int64),
-		NostrEventsPublished: make(map[string]int64),
-		NostrEventsReceived:  make(map[string]int64),
+		HTTPRequestsTotal:     make(map[string]int64),
+		DeploymentsTotal:      make(map[string]int64),
+		AdoptionScansTotal:    make(map[string]int64),
+		AdoptionImportsTotal:  make(map[string]int64),
+		RuntimeActionsTotal:   make(map[string]int64),
+		NostrEventsPublished:  make(map[string]int64),
+		NostrEventsReceived:   make(map[string]int64),
 		NostrPublishOK:        make(map[string]int64),
 		NostrPublishFailed:    make(map[string]int64),
 		NostrReconnects:       make(map[string]int64),
@@ -91,8 +107,8 @@ func NewMetrics() *Metrics {
 		NostrRelayDegraded:    make(map[string]bool),
 		NostrRelaySuccessRate: make(map[string]float64),
 		LoomJobsTotal:         make(map[string]int64),
-		CashuPaymentsTotal:   make(map[string]int64),
-		CashuWalletBalance:   make(map[string]int64),
+		CashuPaymentsTotal:    make(map[string]int64),
+		CashuWalletBalance:    make(map[string]int64),
 	}
 }
 
@@ -150,11 +166,11 @@ func (m *Metrics) RecordHTTPRequest(method, path string, status int, duration ti
 
 	key := fmt.Sprintf("%s:%s:%d", method, path, status)
 	m.HTTPRequestsTotal[key]++
-	
+
 	durSec := duration.Seconds()
 	m.HTTPRequestDurations = append(m.HTTPRequestDurations, durSec)
 	m.HTTPRequestDurationSum += durSec
-	
+
 	// Keep only last 1000 samples for memory efficiency
 	if len(m.HTTPRequestDurations) > 1000 {
 		m.HTTPRequestDurations = m.HTTPRequestDurations[len(m.HTTPRequestDurations)-1000:]
@@ -179,6 +195,60 @@ func (m *Metrics) RecordDriftDetected() {
 	m.DriftDetectedTotal++
 }
 
+// RecordAdoptionScan records an adoption scan operation. It stores only
+// aggregate counts and never stores environment values, labels, or host secrets.
+func (m *Metrics) RecordAdoptionScan(targets, candidates, redactedKeys int, duration time.Duration, success bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	status := "success"
+	if !success {
+		status = "failed"
+	}
+	m.AdoptionScansTotal[status]++
+	m.AdoptionTargetsScannedTotal += int64(targets)
+	m.AdoptionCandidatesTotal += int64(candidates)
+	m.AdoptionRedactedKeysTotal += int64(redactedKeys)
+	m.AdoptionScanDurations = appendBounded(m.AdoptionScanDurations, duration.Seconds(), 1000)
+}
+
+// RecordAdoptionImport records an adoption import batch. It stores aggregate
+// result counts and redaction counts only, not discovered values.
+func (m *Metrics) RecordAdoptionImport(candidates, successCount, failureCount, redactedKeys int, duration time.Duration) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	status := "success"
+	if failureCount > 0 {
+		status = "partial_failure"
+	}
+	if successCount == 0 && failureCount > 0 {
+		status = "failed"
+	}
+	m.AdoptionImportsTotal[status]++
+	m.AdoptionCandidatesTotal += int64(candidates)
+	m.AdoptionImportSuccessTotal += int64(successCount)
+	m.AdoptionImportFailureTotal += int64(failureCount)
+	m.AdoptionRedactedKeysTotal += int64(redactedKeys)
+	m.AdoptionImportDurations = appendBounded(m.AdoptionImportDurations, duration.Seconds(), 1000)
+}
+
+// RecordRuntimeAction records direct runtime action latency and outcome.
+func (m *Metrics) RecordRuntimeAction(action, status string, duration time.Duration) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if action == "" {
+		action = "unknown"
+	}
+	if status == "" {
+		status = "unknown"
+	}
+	key := fmt.Sprintf("%s:%s", action, status)
+	m.RuntimeActionsTotal[key]++
+	m.RuntimeActionDurations = appendBounded(m.RuntimeActionDurations, duration.Seconds(), 1000)
+}
+
 // --- Reconciliation Metrics ---
 
 // RecordReconcile records a reconciliation cycle.
@@ -188,7 +258,7 @@ func (m *Metrics) RecordReconcile(duration time.Duration, statesChecked int) {
 	m.ReconcileDurations = append(m.ReconcileDurations, duration.Seconds())
 	m.ReconcileStatesChecked = int64(statesChecked)
 	m.ReconcileTotal++
-	
+
 	// Keep only last 100 samples
 	if len(m.ReconcileDurations) > 100 {
 		m.ReconcileDurations = m.ReconcileDurations[len(m.ReconcileDurations)-100:]
@@ -360,6 +430,75 @@ func (p *Provider) MetricsHandler() http.HandlerFunc {
 		fmt.Fprintln(w, "# HELP bahia_drift_detected_total Total drift detections")
 		fmt.Fprintln(w, "# TYPE bahia_drift_detected_total counter")
 		fmt.Fprintf(w, "bahia_drift_detected_total %d\n", m.DriftDetectedTotal)
+
+		// Adoption/direct-runtime operational metrics
+		fmt.Fprintln(w, "# HELP bahia_adoption_scans_total Adoption scan requests by status")
+		fmt.Fprintln(w, "# TYPE bahia_adoption_scans_total counter")
+		for status, count := range m.AdoptionScansTotal {
+			fmt.Fprintf(w, "bahia_adoption_scans_total{status=%q} %d\n", status, count)
+		}
+
+		fmt.Fprintln(w, "# HELP bahia_adoption_targets_scanned_total Adoption runtime targets scanned")
+		fmt.Fprintln(w, "# TYPE bahia_adoption_targets_scanned_total counter")
+		fmt.Fprintf(w, "bahia_adoption_targets_scanned_total %d\n", m.AdoptionTargetsScannedTotal)
+
+		fmt.Fprintln(w, "# HELP bahia_adoption_candidates_total Adoption candidates observed or processed")
+		fmt.Fprintln(w, "# TYPE bahia_adoption_candidates_total counter")
+		fmt.Fprintf(w, "bahia_adoption_candidates_total %d\n", m.AdoptionCandidatesTotal)
+
+		fmt.Fprintln(w, "# HELP bahia_adoption_redacted_keys_total Sensitive adoption env/label keys redacted or extracted")
+		fmt.Fprintln(w, "# TYPE bahia_adoption_redacted_keys_total counter")
+		fmt.Fprintf(w, "bahia_adoption_redacted_keys_total %d\n", m.AdoptionRedactedKeysTotal)
+
+		if len(m.AdoptionScanDurations) > 0 {
+			fmt.Fprintln(w, "# HELP bahia_adoption_scan_duration_seconds Adoption scan duration in seconds")
+			fmt.Fprintln(w, "# TYPE bahia_adoption_scan_duration_seconds summary")
+			p50, p90, p99 := calculatePercentiles(m.AdoptionScanDurations)
+			fmt.Fprintf(w, "bahia_adoption_scan_duration_seconds{quantile=\"0.5\"} %.6f\n", p50)
+			fmt.Fprintf(w, "bahia_adoption_scan_duration_seconds{quantile=\"0.9\"} %.6f\n", p90)
+			fmt.Fprintf(w, "bahia_adoption_scan_duration_seconds{quantile=\"0.99\"} %.6f\n", p99)
+			fmt.Fprintf(w, "bahia_adoption_scan_duration_seconds_count %d\n", len(m.AdoptionScanDurations))
+		}
+
+		fmt.Fprintln(w, "# HELP bahia_adoption_imports_total Adoption import batches by status")
+		fmt.Fprintln(w, "# TYPE bahia_adoption_imports_total counter")
+		for status, count := range m.AdoptionImportsTotal {
+			fmt.Fprintf(w, "bahia_adoption_imports_total{status=%q} %d\n", status, count)
+		}
+
+		fmt.Fprintln(w, "# HELP bahia_adoption_import_success_total Adoption import candidates that succeeded")
+		fmt.Fprintln(w, "# TYPE bahia_adoption_import_success_total counter")
+		fmt.Fprintf(w, "bahia_adoption_import_success_total %d\n", m.AdoptionImportSuccessTotal)
+
+		fmt.Fprintln(w, "# HELP bahia_adoption_import_failure_total Adoption import candidates that failed")
+		fmt.Fprintln(w, "# TYPE bahia_adoption_import_failure_total counter")
+		fmt.Fprintf(w, "bahia_adoption_import_failure_total %d\n", m.AdoptionImportFailureTotal)
+
+		if len(m.AdoptionImportDurations) > 0 {
+			fmt.Fprintln(w, "# HELP bahia_adoption_import_duration_seconds Adoption import batch duration in seconds")
+			fmt.Fprintln(w, "# TYPE bahia_adoption_import_duration_seconds summary")
+			p50, p90, p99 := calculatePercentiles(m.AdoptionImportDurations)
+			fmt.Fprintf(w, "bahia_adoption_import_duration_seconds{quantile=\"0.5\"} %.6f\n", p50)
+			fmt.Fprintf(w, "bahia_adoption_import_duration_seconds{quantile=\"0.9\"} %.6f\n", p90)
+			fmt.Fprintf(w, "bahia_adoption_import_duration_seconds{quantile=\"0.99\"} %.6f\n", p99)
+			fmt.Fprintf(w, "bahia_adoption_import_duration_seconds_count %d\n", len(m.AdoptionImportDurations))
+		}
+
+		fmt.Fprintln(w, "# HELP bahia_runtime_actions_total Direct runtime actions by action and status")
+		fmt.Fprintln(w, "# TYPE bahia_runtime_actions_total counter")
+		for key, count := range m.RuntimeActionsTotal {
+			fmt.Fprintf(w, "bahia_runtime_actions_total{key=%q} %d\n", key, count)
+		}
+
+		if len(m.RuntimeActionDurations) > 0 {
+			fmt.Fprintln(w, "# HELP bahia_runtime_action_duration_seconds Direct runtime action duration in seconds")
+			fmt.Fprintln(w, "# TYPE bahia_runtime_action_duration_seconds summary")
+			p50, p90, p99 := calculatePercentiles(m.RuntimeActionDurations)
+			fmt.Fprintf(w, "bahia_runtime_action_duration_seconds{quantile=\"0.5\"} %.6f\n", p50)
+			fmt.Fprintf(w, "bahia_runtime_action_duration_seconds{quantile=\"0.9\"} %.6f\n", p90)
+			fmt.Fprintf(w, "bahia_runtime_action_duration_seconds{quantile=\"0.99\"} %.6f\n", p99)
+			fmt.Fprintf(w, "bahia_runtime_action_duration_seconds_count %d\n", len(m.RuntimeActionDurations))
+		}
 
 		// Reconciliation metrics
 		fmt.Fprintln(w, "# HELP bahia_reconcile_total Total reconciliation cycles")
@@ -545,7 +684,7 @@ func calculatePercentiles(values []float64) (p50, p90, p99 float64) {
 	n := len(sorted)
 	p50 = sorted[n*50/100]
 	p90 = sorted[n*90/100]
-	
+
 	p99Idx := n * 99 / 100
 	if p99Idx >= n {
 		p99Idx = n - 1
@@ -553,4 +692,12 @@ func calculatePercentiles(values []float64) (p50, p90, p99 float64) {
 	p99 = sorted[p99Idx]
 
 	return p50, p90, p99
+}
+
+func appendBounded(values []float64, value float64, max int) []float64 {
+	values = append(values, value)
+	if max > 0 && len(values) > max {
+		return values[len(values)-max:]
+	}
+	return values
 }
