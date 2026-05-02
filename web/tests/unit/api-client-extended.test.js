@@ -286,6 +286,47 @@ describe('BahiaClient - Extended API Coverage', () => {
       expect(result).toEqual({ id: 'secret-1', key: 'API_KEY' });
     });
 
+    it('should call updateSecret with correct path and body', async () => {
+      const serviceId = 'svc-app';
+      const secretId = 'secret-1';
+      const payload = { value: 'rotated-secret' };
+
+      global.fetch.mockResolvedValueOnce({
+        ok: true,
+        headers: new Map([['content-type', 'application/json']]),
+        json: async () => ({ data: { id: secretId, key: 'API_KEY' } })
+      });
+
+      const result = await api.updateSecret(serviceId, secretId, payload);
+
+      expect(global.fetch).toHaveBeenCalledWith(
+        `/api/v1/services/${encodeURIComponent(serviceId)}/secrets/${encodeURIComponent(secretId)}`,
+        expect.objectContaining({
+          method: 'PUT',
+          body: JSON.stringify(payload)
+        })
+      );
+      expect(result).toEqual({ id: secretId, key: 'API_KEY' });
+    });
+
+    it('should encode special characters in updateSecret path parameters', async () => {
+      const serviceId = 'service/with/slash';
+      const secretId = 'secret@test';
+
+      global.fetch.mockResolvedValueOnce({
+        ok: true,
+        headers: new Map([['content-type', 'application/json']]),
+        json: async () => ({ data: { id: secretId } })
+      });
+
+      await api.updateSecret(serviceId, secretId, { value: 'next' });
+
+      expect(global.fetch).toHaveBeenCalledWith(
+        `/api/v1/services/${encodeURIComponent(serviceId)}/secrets/${encodeURIComponent(secretId)}`,
+        expect.any(Object)
+      );
+    });
+
     it('should call deleteSecret with correct path encoding', async () => {
       const serviceId = 'svc-app';
       const secretId = 'secret-1';
