@@ -722,6 +722,118 @@ describe('BahiaClient - Extended API Coverage', () => {
     });
   });
 
+  describe('Notification Methods', () => {
+    it('should list notification channels with query parameters', async () => {
+      global.fetch.mockResolvedValueOnce({
+        ok: true,
+        headers: new Map([['content-type', 'application/json']]),
+        json: async () => ({ data: [{ id: 'ch-1', type: 'slack' }] })
+      });
+
+      const result = await api.listNotificationChannels({ type: 'slack', enabled: true });
+
+      expect(global.fetch).toHaveBeenCalledWith(
+        '/api/v1/notifications/channels?type=slack&enabled=true',
+        expect.any(Object)
+      );
+      expect(result).toEqual([{ id: 'ch-1', type: 'slack' }]);
+    });
+
+    it('should call notification channel CRUD and test endpoints', async () => {
+      const channelId = 'chan/abc';
+      const createPayload = { type: 'slack', config: { webhook_url: 'https://example.test/hook' } };
+      const updatePayload = { enabled: false };
+
+      global.fetch
+        .mockResolvedValueOnce({ ok: true, headers: new Map([['content-type', 'application/json']]), json: async () => ({ data: { id: channelId } }) })
+        .mockResolvedValueOnce({ ok: true, headers: new Map([['content-type', 'application/json']]), json: async () => ({ data: { id: channelId, ...createPayload } }) })
+        .mockResolvedValueOnce({ ok: true, headers: new Map([['content-type', 'application/json']]), json: async () => ({ data: { id: channelId, ...updatePayload } }) })
+        .mockResolvedValueOnce({ ok: true, status: 204, headers: new Map([['content-type', 'text/plain']]), json: async () => { throw new Error('No content'); } })
+        .mockResolvedValueOnce({ ok: true, headers: new Map([['content-type', 'application/json']]), json: async () => ({ data: { sent: true } }) })
+        .mockResolvedValueOnce({ ok: true, status: 204, headers: new Map([['content-type', 'text/plain']]), json: async () => { throw new Error('No content'); } });
+
+      await api.getNotificationChannel(channelId);
+      await api.createNotificationChannel(createPayload);
+      await api.updateNotificationChannel(channelId, updatePayload);
+      await api.deleteNotificationChannel(channelId);
+      await api.testNotificationChannel(channelId);
+      await api.deleteNotificationChannel(channelId);
+
+      expect(global.fetch).toHaveBeenNthCalledWith(1, `/api/v1/notifications/channels/${encodeURIComponent(channelId)}`, expect.any(Object));
+      expect(global.fetch).toHaveBeenNthCalledWith(2, '/api/v1/notifications/channels', expect.objectContaining({ method: 'POST', body: JSON.stringify(createPayload) }));
+      expect(global.fetch).toHaveBeenNthCalledWith(3, `/api/v1/notifications/channels/${encodeURIComponent(channelId)}`, expect.objectContaining({ method: 'PUT', body: JSON.stringify(updatePayload) }));
+      expect(global.fetch).toHaveBeenNthCalledWith(4, `/api/v1/notifications/channels/${encodeURIComponent(channelId)}`, expect.objectContaining({ method: 'DELETE' }));
+      expect(global.fetch).toHaveBeenNthCalledWith(5, `/api/v1/notifications/channels/${encodeURIComponent(channelId)}/test`, expect.objectContaining({ method: 'POST' }));
+      expect(global.fetch).toHaveBeenNthCalledWith(6, `/api/v1/notifications/channels/${encodeURIComponent(channelId)}`, expect.objectContaining({ method: 'DELETE' }));
+    });
+
+    it('should list notification logs and return [] for null data', async () => {
+      global.fetch.mockResolvedValueOnce({
+        ok: true,
+        headers: new Map([['content-type', 'application/json']]),
+        json: async () => ({ data: null })
+      });
+
+      const result = await api.listNotificationLogs({ channel_id: 'ch-1', limit: 10 });
+
+      expect(global.fetch).toHaveBeenCalledWith('/api/v1/notifications/log?channel_id=ch-1&limit=10', expect.any(Object));
+      expect(result).toEqual([]);
+    });
+  });
+
+  describe('Payment and Worker Pricing Methods', () => {
+    it('should call estimateCost with POST body', async () => {
+      const payload = { worker_pubkey: 'worker1', image: 'ghcr.io/acme/app:latest' };
+      global.fetch.mockResolvedValueOnce({
+        ok: true,
+        headers: new Map([['content-type', 'application/json']]),
+        json: async () => ({ data: { estimated_sats: 1234 } })
+      });
+
+      const result = await api.estimateCost(payload);
+      expect(global.fetch).toHaveBeenCalledWith('/api/v1/payments/estimate', expect.objectContaining({ method: 'POST', body: JSON.stringify(payload) }));
+      expect(result).toEqual({ estimated_sats: 1234 });
+    });
+
+    it('should call getRunCost with encoded run id', async () => {
+      const runId = 'run/123';
+      global.fetch.mockResolvedValueOnce({
+        ok: true,
+        headers: new Map([['content-type', 'application/json']]),
+        json: async () => ({ data: { run_id: runId, cost_sats: 99 } })
+      });
+
+      const result = await api.getRunCost(runId);
+      expect(global.fetch).toHaveBeenCalledWith(`/api/v1/deployments/runs/${encodeURIComponent(runId)}/cost`, expect.any(Object));
+      expect(result).toEqual({ run_id: runId, cost_sats: 99 });
+    });
+
+    it('should call getPaymentHistory with query parameters', async () => {
+      global.fetch.mockResolvedValueOnce({
+        ok: true,
+        headers: new Map([['content-type', 'application/json']]),
+        json: async () => ({ data: [{ id: 'p-1' }] })
+      });
+
+      const result = await api.getPaymentHistory({ worker: 'pubkey123', limit: 50 });
+      expect(global.fetch).toHaveBeenCalledWith('/api/v1/payments/history?worker=pubkey123&limit=50', expect.any(Object));
+      expect(result).toEqual([{ id: 'p-1' }]);
+    });
+
+    it('should call getWorkerPricing with encoded pubkey', async () => {
+      const pubkey = 'npub1/test+value';
+      global.fetch.mockResolvedValueOnce({
+        ok: true,
+        headers: new Map([['content-type', 'application/json']]),
+        json: async () => ({ data: { pubkey, sats_per_hour: 1000 } })
+      });
+
+      const result = await api.getWorkerPricing(pubkey);
+      expect(global.fetch).toHaveBeenCalledWith(`/api/v1/workers/${encodeURIComponent(pubkey)}/pricing`, expect.any(Object));
+      expect(result).toEqual({ pubkey, sats_per_hour: 1000 });
+    });
+  });
+
   describe('Signature Methods', () => {
     it('should call listSignatures and default to empty array for null response', async () => {
       const artifactId = 'artifact-signatures';

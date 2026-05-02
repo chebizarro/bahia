@@ -225,6 +225,9 @@ export class BahiaClient {
   // Workers
   listWorkers() { return this.fetch('/workers').then(r => r ?? []); }
   getWorker(pubkey) { return this.fetch(`/workers/${encodeURIComponent(pubkey)}`); }
+  getWorkerPricing(pubkey) {
+    return this.fetch(`/workers/${encodeURIComponent(pubkey)}/pricing`);
+  }
 
   // Policies
   listPolicies() { return this.fetch('/policies').then(r => r ?? []); }
