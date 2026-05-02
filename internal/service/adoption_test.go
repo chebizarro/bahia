@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	secretsAdapter "github.com/openagentsinc/bahia/internal/adapters/secrets"
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/events"
@@ -98,6 +99,118 @@ func TestAdoptionServiceImportSeedsModelsAndIsIdempotent(t *testing.T) {
 	}
 	if len(obsRepo.observations) != 2 {
 		t.Fatalf("expected re-import to record another observation, got %d", len(obsRepo.observations))
+	}
+}
+
+func TestAdoptionServiceScanRedactsSensitiveEnvironmentAndLabels(t *testing.T) {
+	ctx := context.Background()
+	server := newSensitiveAdoptionDockerServer(t)
+	defer server.Close()
+
+	registry, svcRepo, envRepo, buildRepo, artifactRepo, _, _ := newTestRegistry()
+	adoption := NewAdoptionService(registry, svcRepo, envRepo, buildRepo, artifactRepo, registry.state, registry.observations, &events.NoopPublisher{}, zap.NewNop())
+
+	previews, err := adoption.Scan(ctx, AdoptionScanRequest{Targets: []AdoptionTarget{{Name: "local", DockerHost: server.URL, EnvironmentName: "prod"}}})
+	if err != nil {
+		t.Fatalf("Scan returned error: %v", err)
+	}
+	if len(previews) != 1 || len(previews[0].Containers) != 1 {
+		t.Fatalf("unexpected previews: %#v", previews)
+	}
+	container := previews[0].Containers[0]
+	if got := container.SafeEnvironment["APP_ENV"]; got != "prod" {
+		t.Fatalf("safe env APP_ENV = %q", got)
+	}
+	if _, ok := container.SafeEnvironment["DB_PASSWORD"]; ok {
+		t.Fatal("sensitive env DB_PASSWORD leaked into safe preview environment")
+	}
+	if !containsString(container.RedactedEnvironmentKeys, "DB_PASSWORD") || !containsString(container.RedactedEnvironmentKeys, "AWS_SECRET_ACCESS_KEY") || !containsString(container.RedactedEnvironmentKeys, "DATABASE_URL") {
+		t.Fatalf("missing redacted env keys: %#v", container.RedactedEnvironmentKeys)
+	}
+	if _, ok := container.SafeLabels["com.example.secret-token"]; ok {
+		t.Fatal("sensitive label leaked into safe preview labels")
+	}
+	if !containsString(container.RedactedLabelKeys, "com.example.secret-token") {
+		t.Fatalf("missing redacted label keys: %#v", container.RedactedLabelKeys)
+	}
+}
+
+func TestAdoptionServiceImportStoresSensitiveEnvironmentAsSecrets(t *testing.T) {
+	ctx := context.Background()
+	server := newSensitiveAdoptionDockerServer(t)
+	defer server.Close()
+
+	registry, svcRepo, envRepo, buildRepo, artifactRepo, _, _ := newTestRegistry()
+	secretRepo := newMockSecretRepo()
+	encryptor := secretsAdapter.NewEncryptor("test-import-key")
+	adoption := NewAdoptionService(
+		registry, svcRepo, envRepo, buildRepo, artifactRepo, registry.state, registry.observations, &events.NoopPublisher{}, zap.NewNop(),
+		WithAdoptionSecrets(secretRepo, encryptor),
+	)
+
+	results, err := adoption.Import(ctx, AdoptionImportRequest{
+		Targets:   []AdoptionTarget{{Name: "local", DockerHost: server.URL, EnvironmentName: "prod"}},
+		ImportAll: true,
+	})
+	if err != nil {
+		t.Fatalf("Import returned error: %v", err)
+	}
+	if len(results) != 1 || results[0].Status != adoptionStatusCreated {
+		t.Fatalf("unexpected import result: %#v", results)
+	}
+	if !containsString(results[0].RedactedEnvironmentKeys, "DB_PASSWORD") {
+		t.Fatalf("import result missing redacted env keys: %#v", results[0].RedactedEnvironmentKeys)
+	}
+	svc, err := svcRepo.GetByName(ctx, "secret-app")
+	if err != nil || svc == nil || svc.RuntimeConfig == nil || svc.RuntimeConfig.Adopted == nil {
+		t.Fatalf("expected adopted service, svc=%#v err=%v", svc, err)
+	}
+	if svc.RuntimeConfig.Adopted.Environment["APP_ENV"] != "prod" {
+		t.Fatalf("safe env not retained: %#v", svc.RuntimeConfig.Adopted.Environment)
+	}
+	if _, ok := svc.RuntimeConfig.Adopted.Environment["DB_PASSWORD"]; ok {
+		t.Fatalf("sensitive env persisted in plaintext runtime config: %#v", svc.RuntimeConfig.Adopted.Environment)
+	}
+	if _, ok := svc.RuntimeConfig.Adopted.Labels["com.example.secret-token"]; ok {
+		t.Fatalf("sensitive label persisted in adopted labels: %#v", svc.RuntimeConfig.Adopted.Labels)
+	}
+	secrets, err := secretRepo.ListEffective(ctx, svc.ID, *results[0].EnvironmentID)
+	if err != nil {
+		t.Fatalf("ListEffective secrets: %v", err)
+	}
+	secretValues := map[string]string{}
+	for _, secret := range secrets {
+		value, err := encryptor.Decrypt(secret.EncryptedValue, secret.EncryptionMethod)
+		if err != nil {
+			t.Fatalf("decrypt secret %q: %v", secret.Name, err)
+		}
+		secretValues[secret.Name] = value
+	}
+	if secretValues["DB_PASSWORD"] != "super-secret" || secretValues["AWS_SECRET_ACCESS_KEY"] != "aws-secret" || secretValues["DATABASE_URL"] != "postgres://user:pass@db/prod" {
+		t.Fatalf("unexpected imported secret values: %#v", secretValues)
+	}
+}
+
+func TestAdoptionServiceImportRejectsSensitiveEnvironmentWithoutSecrets(t *testing.T) {
+	ctx := context.Background()
+	server := newSensitiveAdoptionDockerServer(t)
+	defer server.Close()
+
+	registry, svcRepo, envRepo, buildRepo, artifactRepo, _, _ := newTestRegistry()
+	adoption := NewAdoptionService(registry, svcRepo, envRepo, buildRepo, artifactRepo, registry.state, registry.observations, &events.NoopPublisher{}, zap.NewNop())
+
+	results, err := adoption.Import(ctx, AdoptionImportRequest{
+		Targets:   []AdoptionTarget{{Name: "local", DockerHost: server.URL, EnvironmentName: "prod"}},
+		ImportAll: true,
+	})
+	if err != nil {
+		t.Fatalf("Import returned error: %v", err)
+	}
+	if len(results) != 1 || results[0].Status != adoptionStatusFailed || !strings.Contains(results[0].Error, "secret storage") {
+		t.Fatalf("expected sensitive import failure, got %#v", results)
+	}
+	if len(svcRepo.services) != 0 || len(envRepo.envs) != 0 {
+		t.Fatalf("sensitive import without secrets should not create service/env, services=%d envs=%d", len(svcRepo.services), len(envRepo.envs))
 	}
 }
 
@@ -338,6 +451,38 @@ func newAdoptionDockerServer(t *testing.T) *httptest.Server {
 	}))
 }
 
+func newSensitiveAdoptionDockerServer(t *testing.T) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/v1.43/containers/json":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`[{"Id":"container-secret","Names":["/secret-app"],"Image":"registry.example/secret-app:2.0.0","ImageID":"sha256:secretimage","State":"running"}]`))
+		case r.Method == http.MethodGet && r.URL.Path == "/v1.43/containers/container-secret/json":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{
+				"Id":"container-secret",
+				"Name":"/secret-app",
+				"Image":"sha256:secretimage",
+				"Config":{
+					"Image":"registry.example/secret-app:2.0.0",
+					"Env":["APP_ENV=prod","DB_PASSWORD=super-secret","AWS_SECRET_ACCESS_KEY=aws-secret","DATABASE_URL=postgres://user:pass@db/prod"],
+					"Labels":{"com.example.owner":"platform","com.example.secret-token":"label-secret"},
+					"Cmd":["serve"]
+				},
+				"State":{"Status":"running"},
+				"HostConfig":{"NetworkMode":"bridge","RestartPolicy":{"Name":"always"}},
+				"NetworkSettings":{"Ports":{},"Networks":{"bridge":{"Aliases":["secret-app"]}}}
+			}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/v1.43/images/sha256:secretimage/json":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"Id":"sha256:secretimage","RepoDigests":["registry.example/secret-app@sha256:secretrepo"]}`))
+		default:
+			http.Error(w, fmt.Sprintf("unexpected request: %s %s", r.Method, r.URL.String()), http.StatusNotFound)
+		}
+	}))
+}
+
 func newUnsafeAdoptionDockerServer(t *testing.T) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -375,6 +520,15 @@ func (p *capturePublisher) Publish(_ context.Context, e events.Event) {
 }
 
 func (p *capturePublisher) Subscribe(_ events.EventType, _ events.Handler) {}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
 
 func (p *capturePublisher) hasEvent(eventType events.EventType) bool {
 	for _, event := range p.events {

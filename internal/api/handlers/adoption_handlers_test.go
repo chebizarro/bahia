@@ -44,13 +44,19 @@ func TestAdoptionHandlerScanMapsRequestAndResponse(t *testing.T) {
 				ContainerName: "legacy-api",
 				ImageRef:      "ghcr.io/org/api:v1",
 				Compose:       &domain.ComposeMetadata{ProjectName: "legacy", ServiceName: "api", ConfigFiles: []string{"compose.yml"}},
+				Environment:   map[string]string{"APP_ENV": "prod", "DB_PASSWORD": "secret"},
+				Labels:        map[string]string{"safe": "label", "secret-token": "secret"},
 				HealthStatus:  domain.HealthStatusHealthy,
 				Adoptable:     true,
 			},
-			ProposedServiceName: "legacy-api",
-			ExistingServiceID:   &serviceID,
-			WillUpdate:          true,
-			Adoptable:           true,
+			SafeEnvironment:         map[string]string{"APP_ENV": "prod"},
+			SafeLabels:              map[string]string{"safe": "label"},
+			RedactedEnvironmentKeys: []string{"DB_PASSWORD"},
+			RedactedLabelKeys:       []string{"secret-token"},
+			ProposedServiceName:     "legacy-api",
+			ExistingServiceID:       &serviceID,
+			WillUpdate:              true,
+			Adoptable:               true,
 		}},
 	}}}
 	h := NewAdoptionHandler(stub)
@@ -83,6 +89,18 @@ func TestAdoptionHandlerScanMapsRequestAndResponse(t *testing.T) {
 	if container.Discovered.Compose == nil || container.Discovered.Compose.ProjectName != "legacy" || len(container.Discovered.Compose.ConfigFiles) != 1 {
 		t.Fatalf("compose metadata not mapped to DTO: %#v", container.Discovered.Compose)
 	}
+	if container.Discovered.Environment["APP_ENV"] != "prod" {
+		t.Fatalf("safe environment not mapped: %#v", container.Discovered.Environment)
+	}
+	if _, ok := container.Discovered.Environment["DB_PASSWORD"]; ok {
+		t.Fatalf("sensitive env leaked in scan response: %#v", container.Discovered.Environment)
+	}
+	if len(container.Discovered.RedactedEnvironmentKeys) != 1 || container.Discovered.RedactedEnvironmentKeys[0] != "DB_PASSWORD" {
+		t.Fatalf("redacted env keys not mapped: %#v", container.Discovered.RedactedEnvironmentKeys)
+	}
+	if _, ok := container.Discovered.Labels["secret-token"]; ok {
+		t.Fatalf("sensitive label leaked in scan response: %#v", container.Discovered.Labels)
+	}
 }
 
 func TestAdoptionHandlerRejectsDuplicateTargetsAfterNormalization(t *testing.T) {
@@ -104,7 +122,7 @@ func TestAdoptionHandlerImportRequiresAllOrSelection(t *testing.T) {
 
 func TestAdoptionHandlerImportMapsSelections(t *testing.T) {
 	serviceID := uuid.New()
-	stub := &stubAdoptionService{importResp: []service.AdoptionImportResult{{TargetName: "local", ContainerID: "abc123", ServiceName: "api", ServiceID: &serviceID, Status: "created"}}}
+	stub := &stubAdoptionService{importResp: []service.AdoptionImportResult{{TargetName: "local", ContainerID: "abc123", ServiceName: "api", ServiceID: &serviceID, Status: "created", RedactedEnvironmentKeys: []string{"DB_PASSWORD"}}}}
 	h := NewAdoptionHandler(stub)
 
 	w := postJSON(t, h.Import, dto.ImportAdoptionRequest{
@@ -114,6 +132,15 @@ func TestAdoptionHandlerImportMapsSelections(t *testing.T) {
 	assertStatus(t, w, http.StatusOK)
 	if len(stub.importReq.Selections) != 1 || stub.importReq.Selections[0].ServiceNameOverride != "api" {
 		t.Fatalf("selection not mapped: %#v", stub.importReq)
+	}
+	var resp struct {
+		Data []dto.AdoptionImportResultResponse `json:"data"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(resp.Data) != 1 || len(resp.Data[0].RedactedEnvironmentKeys) != 1 || resp.Data[0].RedactedEnvironmentKeys[0] != "DB_PASSWORD" {
+		t.Fatalf("redacted import keys not mapped: %#v", resp.Data)
 	}
 }
 

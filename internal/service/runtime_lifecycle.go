@@ -6,6 +6,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/adapters/runtime"
+	secretsAdapter "github.com/openagentsinc/bahia/internal/adapters/secrets"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/events"
 	"github.com/openagentsinc/bahia/internal/repository"
@@ -26,8 +27,22 @@ type RuntimeLifecycleService struct {
 	artifacts    repository.ArtifactRepository
 	state        repository.EnvironmentServiceStateRepository
 	resolver     runtime.RuntimeResolver
+	secrets      repository.SecretRepository
 	publisher    events.Publisher
 	logger       *zap.Logger
+
+	secretEncryptor *secretsAdapter.Encryptor
+}
+
+// RuntimeLifecycleOption configures runtime lifecycle behavior.
+type RuntimeLifecycleOption func(*RuntimeLifecycleService)
+
+// WithRuntimeLifecycleSecrets merges effective Bahia secrets into direct deploy environment options.
+func WithRuntimeLifecycleSecrets(repo repository.SecretRepository, encryptor *secretsAdapter.Encryptor) RuntimeLifecycleOption {
+	return func(s *RuntimeLifecycleService) {
+		s.secrets = repo
+		s.secretEncryptor = encryptor
+	}
 }
 
 // NewRuntimeLifecycleService creates a RuntimeLifecycleService.
@@ -40,6 +55,7 @@ func NewRuntimeLifecycleService(
 	resolver runtime.RuntimeResolver,
 	publisher events.Publisher,
 	logger *zap.Logger,
+	opts ...RuntimeLifecycleOption,
 ) *RuntimeLifecycleService {
 	if logger == nil {
 		logger = zap.NewNop()
@@ -47,7 +63,7 @@ func NewRuntimeLifecycleService(
 	if publisher == nil {
 		publisher = &events.NoopPublisher{}
 	}
-	return &RuntimeLifecycleService{
+	svc := &RuntimeLifecycleService{
 		registry:     registry,
 		services:     services,
 		environments: environments,
@@ -57,6 +73,10 @@ func NewRuntimeLifecycleService(
 		publisher:    publisher,
 		logger:       logger,
 	}
+	for _, opt := range opts {
+		opt(svc)
+	}
+	return svc
 }
 
 // Deploy deploys an artifact directly through the resolved runtime and records a fresh observation.
@@ -71,14 +91,17 @@ func (s *RuntimeLifecycleService) Deploy(ctx context.Context, serviceID, envID u
 		return nil, err
 	}
 
+	targetName := svc.RuntimeTargetName()
+	opts := deployOptionsFromServiceRuntimeConfig(svc)
+	if err := s.mergeEffectiveSecrets(ctx, serviceID, envID, &opts); err != nil {
+		return nil, err
+	}
+
 	if artifactID != nil {
 		if err := s.updateDesiredArtifact(ctx, serviceID, envID, *artifactID); err != nil {
 			return nil, err
 		}
 	}
-
-	targetName := svc.RuntimeTargetName()
-	opts := deployOptionsFromServiceRuntimeConfig(svc)
 	if opts.Labels == nil {
 		opts.Labels = map[string]string{}
 	}
@@ -196,6 +219,36 @@ func (s *RuntimeLifecycleService) resolveDeployArtifact(ctx context.Context, ser
 		return nil, fmt.Errorf("artifact %s belongs to service %s, not %s", artifact.ID, artifact.ServiceID, serviceID)
 	}
 	return artifact, nil
+}
+
+func (s *RuntimeLifecycleService) mergeEffectiveSecrets(ctx context.Context, serviceID, envID uuid.UUID, opts *runtime.DeployOptions) error {
+	if s.secrets == nil {
+		return nil
+	}
+	secrets, err := s.secrets.ListEffective(ctx, serviceID, envID)
+	if err != nil {
+		return fmt.Errorf("loading effective secrets: %w", err)
+	}
+	if len(secrets) == 0 {
+		return nil
+	}
+	if s.secretEncryptor == nil {
+		return fmt.Errorf("effective secrets are configured but secret encryption is unavailable")
+	}
+	if opts.Environment == nil {
+		opts.Environment = map[string]string{}
+	}
+	for _, secret := range secrets {
+		if secret.Name == "" {
+			continue
+		}
+		value, err := s.secretEncryptor.Decrypt(secret.EncryptedValue, secret.EncryptionMethod)
+		if err != nil {
+			return fmt.Errorf("decrypting effective secret %q: %w", secret.Name, err)
+		}
+		opts.Environment[secret.Name] = value
+	}
+	return nil
 }
 
 func (s *RuntimeLifecycleService) updateDesiredArtifact(ctx context.Context, serviceID, envID, artifactID uuid.UUID) error {

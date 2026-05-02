@@ -37,28 +37,30 @@ type AdoptionTargetResponse struct {
 
 // DiscoveredContainerResponse is a normalized container preview for adoption.
 type DiscoveredContainerResponse struct {
-	TargetName      string                   `json:"target_name"`
-	EnvironmentName string                   `json:"environment_name"`
-	ContainerID     string                   `json:"container_id"`
-	ContainerName   string                   `json:"container_name"`
-	ImageRef        string                   `json:"image_ref"`
-	ImageRepo       string                   `json:"image_repo"`
-	ImageTag        string                   `json:"image_tag"`
-	ImageDigest     string                   `json:"image_digest"`
-	SourceRuntime   string                   `json:"source_runtime"`
-	Labels          map[string]string        `json:"labels,omitempty"`
-	Environment     map[string]string        `json:"environment,omitempty"`
-	Ports           []string                 `json:"ports,omitempty"`
-	Volumes         []string                 `json:"volumes,omitempty"`
-	Restart         string                   `json:"restart,omitempty"`
-	Command         []string                 `json:"command,omitempty"`
-	Entrypoint      []string                 `json:"entrypoint,omitempty"`
-	WorkingDir      string                   `json:"working_dir,omitempty"`
-	NetworkMode     string                   `json:"network_mode,omitempty"`
-	Compose         *ComposeMetadataResponse `json:"compose,omitempty"`
-	HealthStatus    string                   `json:"health_status"`
-	Warnings        []string                 `json:"warnings,omitempty"`
-	Adoptable       bool                     `json:"adoptable"`
+	TargetName              string                   `json:"target_name"`
+	EnvironmentName         string                   `json:"environment_name"`
+	ContainerID             string                   `json:"container_id"`
+	ContainerName           string                   `json:"container_name"`
+	ImageRef                string                   `json:"image_ref"`
+	ImageRepo               string                   `json:"image_repo"`
+	ImageTag                string                   `json:"image_tag"`
+	ImageDigest             string                   `json:"image_digest"`
+	SourceRuntime           string                   `json:"source_runtime"`
+	Labels                  map[string]string        `json:"labels,omitempty"`
+	Environment             map[string]string        `json:"environment,omitempty"`
+	RedactedEnvironmentKeys []string                 `json:"redacted_environment_keys,omitempty"`
+	RedactedLabelKeys       []string                 `json:"redacted_label_keys,omitempty"`
+	Ports                   []string                 `json:"ports,omitempty"`
+	Volumes                 []string                 `json:"volumes,omitempty"`
+	Restart                 string                   `json:"restart,omitempty"`
+	Command                 []string                 `json:"command,omitempty"`
+	Entrypoint              []string                 `json:"entrypoint,omitempty"`
+	WorkingDir              string                   `json:"working_dir,omitempty"`
+	NetworkMode             string                   `json:"network_mode,omitempty"`
+	Compose                 *ComposeMetadataResponse `json:"compose,omitempty"`
+	HealthStatus            string                   `json:"health_status"`
+	Warnings                []string                 `json:"warnings,omitempty"`
+	Adoptable               bool                     `json:"adoptable"`
 }
 
 // ComposeMetadataResponse preserves public Docker Compose origin metadata.
@@ -88,17 +90,19 @@ type AdoptionPreviewResponse struct {
 
 // AdoptionImportResultResponse reports one import candidate outcome.
 type AdoptionImportResultResponse struct {
-	TargetName    string     `json:"target_name"`
-	ContainerID   string     `json:"container_id,omitempty"`
-	ContainerName string     `json:"container_name,omitempty"`
-	ServiceName   string     `json:"service_name,omitempty"`
-	ServiceID     *uuid.UUID `json:"service_id,omitempty"`
-	EnvironmentID *uuid.UUID `json:"environment_id,omitempty"`
-	BuildID       *uuid.UUID `json:"build_id,omitempty"`
-	ArtifactID    *uuid.UUID `json:"artifact_id,omitempty"`
-	Status        string     `json:"status"`
-	Warnings      []string   `json:"warnings,omitempty"`
-	Error         string     `json:"error,omitempty"`
+	TargetName              string     `json:"target_name"`
+	ContainerID             string     `json:"container_id,omitempty"`
+	ContainerName           string     `json:"container_name,omitempty"`
+	ServiceName             string     `json:"service_name,omitempty"`
+	ServiceID               *uuid.UUID `json:"service_id,omitempty"`
+	EnvironmentID           *uuid.UUID `json:"environment_id,omitempty"`
+	BuildID                 *uuid.UUID `json:"build_id,omitempty"`
+	ArtifactID              *uuid.UUID `json:"artifact_id,omitempty"`
+	Status                  string     `json:"status"`
+	Warnings                []string   `json:"warnings,omitempty"`
+	RedactedEnvironmentKeys []string   `json:"redacted_environment_keys,omitempty"`
+	RedactedLabelKeys       []string   `json:"redacted_label_keys,omitempty"`
+	Error                   string     `json:"error,omitempty"`
 }
 
 // RuntimeActionResponse reports a completed direct runtime action.

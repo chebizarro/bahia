@@ -141,8 +141,8 @@ func (m *mockBuildRepo) GetByCISystemRunID(_ context.Context, ciSystem, ciRunID 
 }
 
 type mockArtifactRepo struct {
-	artifacts   map[uuid.UUID]*domain.Artifact
-	getByIDErr  error
+	artifacts  map[uuid.UUID]*domain.Artifact
+	getByIDErr error
 }
 
 func newMockArtifactRepo() *mockArtifactRepo {
@@ -198,7 +198,7 @@ func (m *mockArtifactRepo) ListByBuild(_ context.Context, buildID uuid.UUID) ([]
 }
 
 type mockIntentRepo struct {
-	intents        map[uuid.UUID]*domain.DeploymentIntent
+	intents         map[uuid.UUID]*domain.DeploymentIntent
 	updateStatusErr error
 	getByIDErr      error
 }
@@ -408,6 +408,93 @@ func (m *mockStateRepo) ListAll(_ context.Context) ([]domain.EnvironmentServiceS
 	return result, nil
 }
 
+type mockSecretRepo struct {
+	secrets map[uuid.UUID]*domain.ServiceSecret
+}
+
+func newMockSecretRepo() *mockSecretRepo {
+	return &mockSecretRepo{secrets: make(map[uuid.UUID]*domain.ServiceSecret)}
+}
+
+func (m *mockSecretRepo) Create(_ context.Context, s *domain.ServiceSecret) error {
+	if s.ID == uuid.Nil {
+		s.ID = uuid.New()
+	}
+	if s.Version == 0 {
+		s.Version = 1
+	}
+	m.secrets[s.ID] = s
+	return nil
+}
+func (m *mockSecretRepo) GetByID(_ context.Context, id uuid.UUID) (*domain.ServiceSecret, error) {
+	return m.secrets[id], nil
+}
+func (m *mockSecretRepo) ListByService(_ context.Context, serviceID uuid.UUID) ([]domain.ServiceSecret, error) {
+	var result []domain.ServiceSecret
+	for _, s := range m.secrets {
+		if s.ServiceID == serviceID {
+			result = append(result, *s)
+		}
+	}
+	return result, nil
+}
+func (m *mockSecretRepo) ListByServiceAndEnv(_ context.Context, serviceID, envID uuid.UUID) ([]domain.ServiceSecret, error) {
+	var result []domain.ServiceSecret
+	for _, s := range m.secrets {
+		if s.ServiceID == serviceID && s.EnvironmentID != nil && *s.EnvironmentID == envID {
+			result = append(result, *s)
+		}
+	}
+	return result, nil
+}
+func (m *mockSecretRepo) ListEffective(_ context.Context, serviceID, envID uuid.UUID) ([]domain.ServiceSecret, error) {
+	byName := map[string]domain.ServiceSecret{}
+	for _, s := range m.secrets {
+		if s.ServiceID != serviceID {
+			continue
+		}
+		if s.EnvironmentID == nil {
+			byName[s.Name] = *s
+		}
+	}
+	for _, s := range m.secrets {
+		if s.ServiceID == serviceID && s.EnvironmentID != nil && *s.EnvironmentID == envID {
+			byName[s.Name] = *s
+		}
+	}
+	result := make([]domain.ServiceSecret, 0, len(byName))
+	for _, s := range byName {
+		result = append(result, s)
+	}
+	return result, nil
+}
+func (m *mockSecretRepo) Update(_ context.Context, s *domain.ServiceSecret) error {
+	if existing, ok := m.secrets[s.ID]; ok {
+		s.Version = existing.Version + 1
+	}
+	m.secrets[s.ID] = s
+	return nil
+}
+func (m *mockSecretRepo) Delete(_ context.Context, id uuid.UUID) error {
+	delete(m.secrets, id)
+	return nil
+}
+func (m *mockSecretRepo) DeleteByName(_ context.Context, serviceID uuid.UUID, envID *uuid.UUID, name string) error {
+	for id, s := range m.secrets {
+		if s.ServiceID != serviceID || s.Name != name {
+			continue
+		}
+		if envID == nil && s.EnvironmentID == nil {
+			delete(m.secrets, id)
+			continue
+		}
+		if envID != nil && s.EnvironmentID != nil && *envID == *s.EnvironmentID {
+			delete(m.secrets, id)
+		}
+	}
+	return nil
+}
+
 // --- Test Helpers ---
 
 func newTestRegistry() (*RegistryService, *mockServiceRepo, *mockEnvRepo, *mockBuildRepo, *mockArtifactRepo, *mockIntentRepo, *mockRunRepo) {
@@ -464,10 +551,10 @@ func seedArtifact(t *testing.T, registry *RegistryService, svc *domain.Service, 
 	}
 
 	artifact := &domain.Artifact{
-		BuildID:    build.ID,
-		ServiceID:  svc.ID,
-		ImageRepo:  svc.ArtifactRepo,
-		ImageTag:   "v1",
+		BuildID:     build.ID,
+		ServiceID:   svc.ID,
+		ImageRepo:   svc.ArtifactRepo,
+		ImageTag:    "v1",
 		ImageDigest: digest,
 	}
 	if err := registry.RegisterArtifact(ctx, artifact); err != nil {

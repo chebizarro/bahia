@@ -4,11 +4,13 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/adapters/runtime"
+	secretsAdapter "github.com/openagentsinc/bahia/internal/adapters/secrets"
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/events"
@@ -33,9 +35,11 @@ type AdoptionService struct {
 	artifacts    repository.ArtifactRepository
 	state        repository.EnvironmentServiceStateRepository
 	observations repository.RuntimeObservationRepository
+	secrets      repository.SecretRepository
 	publisher    events.Publisher
 	logger       *zap.Logger
 
+	secretEncryptor     *secretsAdapter.Encryptor
 	runtimeCfg          config.RuntimeConfig
 	allowRawDockerHosts bool
 }
@@ -48,6 +52,14 @@ func WithAdoptionRuntimeConfig(runtimeCfg config.RuntimeConfig, allowRawDockerHo
 	return func(s *AdoptionService) {
 		s.runtimeCfg = runtimeCfg
 		s.allowRawDockerHosts = allowRawDockerHosts
+	}
+}
+
+// WithAdoptionSecrets wires imported sensitive environment values into Bahia's existing secrets path.
+func WithAdoptionSecrets(repo repository.SecretRepository, encryptor *secretsAdapter.Encryptor) AdoptionServiceOption {
+	return func(s *AdoptionService) {
+		s.secrets = repo
+		s.secretEncryptor = encryptor
 	}
 }
 
@@ -125,27 +137,33 @@ type AdoptionPreview struct {
 
 // AdoptionPreviewContainer is one discovered container plus Bahia import proposal metadata.
 type AdoptionPreviewContainer struct {
-	Discovered          runtime.DiscoveredContainer
-	ProposedServiceName string
-	ExistingServiceID   *uuid.UUID
-	WillUpdate          bool
-	Warnings            []string
-	Adoptable           bool
+	Discovered              runtime.DiscoveredContainer
+	ProposedServiceName     string
+	ExistingServiceID       *uuid.UUID
+	WillUpdate              bool
+	Warnings                []string
+	Adoptable               bool
+	SafeEnvironment         map[string]string
+	SafeLabels              map[string]string
+	RedactedEnvironmentKeys []string
+	RedactedLabelKeys       []string
 }
 
 // AdoptionImportResult reports per-candidate import outcome.
 type AdoptionImportResult struct {
-	TargetName    string
-	ContainerID   string
-	ContainerName string
-	ServiceName   string
-	ServiceID     *uuid.UUID
-	EnvironmentID *uuid.UUID
-	BuildID       *uuid.UUID
-	ArtifactID    *uuid.UUID
-	Status        string
-	Warnings      []string
-	Error         string
+	TargetName              string
+	ContainerID             string
+	ContainerName           string
+	ServiceName             string
+	ServiceID               *uuid.UUID
+	EnvironmentID           *uuid.UUID
+	BuildID                 *uuid.UUID
+	ArtifactID              *uuid.UUID
+	Status                  string
+	Warnings                []string
+	RedactedEnvironmentKeys []string
+	RedactedLabelKeys       []string
+	Error                   string
 }
 
 // Scan discovers containers and proposes Bahia service names.
@@ -230,13 +248,18 @@ func (s *AdoptionService) buildPreviews(ctx context.Context, targets []AdoptionT
 			continue
 		}
 		for _, discovered := range result.Containers {
+			classified := classifyDiscoveredSensitiveData(discovered)
 			proposed := s.proposedServiceName(ctx, target, discovered, usedNames)
 			existing, _ := s.services.GetByName(ctx, proposed)
 			candidate := AdoptionPreviewContainer{
-				Discovered:          discovered,
-				ProposedServiceName: proposed,
-				Warnings:            append([]string(nil), discovered.Warnings...),
-				Adoptable:           discovered.Adoptable,
+				Discovered:              discovered,
+				ProposedServiceName:     proposed,
+				Warnings:                append([]string(nil), discovered.Warnings...),
+				Adoptable:               discovered.Adoptable,
+				SafeEnvironment:         classified.SafeEnvironment,
+				SafeLabels:              classified.SafeLabels,
+				RedactedEnvironmentKeys: classified.SensitiveEnvironmentKeys,
+				RedactedLabelKeys:       classified.SensitiveLabelKeys,
 			}
 			if existing != nil {
 				candidate.ExistingServiceID = &existing.ID
@@ -277,11 +300,13 @@ func (s *AdoptionService) serviceNameConflicts(ctx context.Context, name string,
 func (s *AdoptionService) importCandidate(ctx context.Context, target AdoptionTarget, candidate AdoptionPreviewContainer, serviceName string) AdoptionImportResult {
 	discovered := candidate.Discovered
 	result := AdoptionImportResult{
-		TargetName:    target.Name,
-		ContainerID:   discovered.ContainerID,
-		ContainerName: discovered.ContainerName,
-		ServiceName:   serviceName,
-		Warnings:      append([]string(nil), candidate.Warnings...),
+		TargetName:              target.Name,
+		ContainerID:             discovered.ContainerID,
+		ContainerName:           discovered.ContainerName,
+		ServiceName:             serviceName,
+		Warnings:                append([]string(nil), candidate.Warnings...),
+		RedactedEnvironmentKeys: append([]string(nil), candidate.RedactedEnvironmentKeys...),
+		RedactedLabelKeys:       append([]string(nil), candidate.RedactedLabelKeys...),
 	}
 	if !candidate.Adoptable {
 		result.Status = adoptionStatusFailed
@@ -299,6 +324,15 @@ func (s *AdoptionService) importCandidate(ctx context.Context, target AdoptionTa
 		return result
 	}
 
+	classified := classifyDiscoveredSensitiveData(discovered)
+	result.RedactedEnvironmentKeys = append([]string(nil), classified.SensitiveEnvironmentKeys...)
+	result.RedactedLabelKeys = append([]string(nil), classified.SensitiveLabelKeys...)
+	if len(classified.SensitiveEnvironment) > 0 && (s.secrets == nil || s.secretEncryptor == nil) {
+		result.Status = adoptionStatusFailed
+		result.Error = "sensitive environment values require configured secret storage and encryption"
+		return result
+	}
+
 	env, err := s.ensureAdoptionEnvironment(ctx, target)
 	if err != nil {
 		result.Status = adoptionStatusFailed
@@ -307,7 +341,7 @@ func (s *AdoptionService) importCandidate(ctx context.Context, target AdoptionTa
 	}
 	result.EnvironmentID = &env.ID
 
-	svc, createdService, err := s.ensureAdoptionService(ctx, target, discovered, serviceName)
+	svc, createdService, err := s.ensureAdoptionService(ctx, target, discovered, classified, serviceName)
 	if err != nil {
 		result.Status = adoptionStatusFailed
 		result.Error = err.Error()
@@ -348,6 +382,12 @@ func (s *AdoptionService) importCandidate(ctx context.Context, target AdoptionTa
 	if err := s.registry.RecordObservation(ctx, obs); err != nil {
 		result.Status = adoptionStatusFailed
 		result.Error = fmt.Errorf("recording runtime observation: %w", err).Error()
+		return result
+	}
+
+	if err := s.importSensitiveEnvironmentSecrets(ctx, svc.ID, env.ID, classified.SensitiveEnvironment); err != nil {
+		result.Status = adoptionStatusFailed
+		result.Error = err.Error()
 		return result
 	}
 
@@ -437,8 +477,8 @@ func (s *AdoptionService) ensureAdoptionEnvironment(ctx context.Context, target 
 	return existing, nil
 }
 
-func (s *AdoptionService) ensureAdoptionService(ctx context.Context, target AdoptionTarget, discovered runtime.DiscoveredContainer, serviceName string) (*domain.Service, bool, error) {
-	adopted := adoptedRuntimeConfig(target, discovered)
+func (s *AdoptionService) ensureAdoptionService(ctx context.Context, target AdoptionTarget, discovered runtime.DiscoveredContainer, classified sensitiveDataClassification, serviceName string) (*domain.Service, bool, error) {
+	adopted := adoptedRuntimeConfig(target, discovered, classified)
 	byIdentity, err := s.findServiceByAdoptedTarget(ctx, target, discovered)
 	if err != nil {
 		return nil, false, err
@@ -666,13 +706,13 @@ func proposedServiceName(discovered runtime.DiscoveredContainer) string {
 	return normalizeResourceName(discovered.ContainerName)
 }
 
-func adoptedRuntimeConfig(target AdoptionTarget, discovered runtime.DiscoveredContainer) *domain.AdoptedRuntimeConfig {
+func adoptedRuntimeConfig(target AdoptionTarget, discovered runtime.DiscoveredContainer, classified sensitiveDataClassification) *domain.AdoptedRuntimeConfig {
 	return &domain.AdoptedRuntimeConfig{
 		TargetName:    discovered.TargetName,
 		SourceRuntime: discovered.SourceRuntime,
 		HostAlias:     target.Name,
 		EndpointRef:   target.EndpointRef,
-		Environment:   copyStringMap(discovered.Environment),
+		Environment:   copyStringMap(classified.SafeEnvironment),
 		Ports:         append([]string(nil), discovered.Ports...),
 		Volumes:       append([]string(nil), discovered.Volumes...),
 		Restart:       discovered.Restart,
@@ -680,7 +720,7 @@ func adoptedRuntimeConfig(target AdoptionTarget, discovered runtime.DiscoveredCo
 		Entrypoint:    append([]string(nil), discovered.Entrypoint...),
 		WorkingDir:    discovered.WorkingDir,
 		NetworkMode:   discovered.NetworkMode,
-		Labels:        copyStringMap(discovered.Labels),
+		Labels:        copyStringMap(classified.SafeLabels),
 		Compose:       discovered.Compose,
 	}
 }
@@ -695,6 +735,146 @@ func sameAdoptedTarget(svc *domain.Service, target AdoptionTarget, discovered ru
 
 func adoptionRunID(target AdoptionTarget, discovered runtime.DiscoveredContainer) string {
 	return target.Name + ":" + discovered.ContainerName
+}
+
+func (s *AdoptionService) importSensitiveEnvironmentSecrets(ctx context.Context, serviceID, envID uuid.UUID, sensitiveEnv map[string]string) error {
+	if len(sensitiveEnv) == 0 {
+		return nil
+	}
+	if s.secrets == nil || s.secretEncryptor == nil {
+		return fmt.Errorf("sensitive environment values require configured secret storage and encryption")
+	}
+	keys := sortedStringKeys(sensitiveEnv)
+	for _, key := range keys {
+		value := sensitiveEnv[key]
+		ciphertext, err := s.secretEncryptor.Encrypt(value, domain.EncryptionAES256)
+		if err != nil {
+			return fmt.Errorf("encrypting imported secret %q: %w", key, err)
+		}
+		if err := s.secrets.DeleteByName(ctx, serviceID, &envID, key); err != nil {
+			return fmt.Errorf("replacing imported secret %q: %w", key, err)
+		}
+		secret := &domain.ServiceSecret{
+			ID:               uuid.New(),
+			ServiceID:        serviceID,
+			EnvironmentID:    &envID,
+			Name:             key,
+			EncryptedValue:   ciphertext,
+			EncryptionMethod: domain.EncryptionAES256,
+			Version:          1,
+			CreatedBy:        "adoption",
+		}
+		if err := s.secrets.Create(ctx, secret); err != nil {
+			return fmt.Errorf("creating imported secret %q: %w", key, err)
+		}
+	}
+	return nil
+}
+
+type sensitiveDataClassification struct {
+	SafeEnvironment          map[string]string
+	SensitiveEnvironment     map[string]string
+	SensitiveEnvironmentKeys []string
+	SafeLabels               map[string]string
+	SensitiveLabels          map[string]string
+	SensitiveLabelKeys       []string
+}
+
+func classifyDiscoveredSensitiveData(discovered runtime.DiscoveredContainer) sensitiveDataClassification {
+	return sensitiveDataClassification{
+		SafeEnvironment:          safeEntries(discovered.Environment, isSensitiveEnvironmentKey),
+		SensitiveEnvironment:     sensitiveEntries(discovered.Environment, isSensitiveEnvironmentKey),
+		SensitiveEnvironmentKeys: sensitiveKeys(discovered.Environment, isSensitiveEnvironmentKey),
+		SafeLabels:               safeEntries(discovered.Labels, isSensitiveLabelKey),
+		SensitiveLabels:          sensitiveEntries(discovered.Labels, isSensitiveLabelKey),
+		SensitiveLabelKeys:       sensitiveKeys(discovered.Labels, isSensitiveLabelKey),
+	}
+}
+
+func isSensitiveEnvironmentKey(key string) bool {
+	k := strings.ToUpper(strings.TrimSpace(key))
+	if k == "" {
+		return false
+	}
+	for _, token := range []string{"PASSWORD", "PASSWD", "PASS", "TOKEN", "SECRET", "PRIVATE", "CREDENTIAL", "API_KEY", "ACCESS_KEY", "AUTH", "BEARER", "COOKIE", "SESSION", "JWT", "DATABASE_URL", "DB_URL", "REDIS_URL", "POSTGRES_DSN", "POSTGRES_URL", "MYSQL_DSN", "MYSQL_URL", "MONGODB_URI", "MONGO_URI", "AMQP_URL", "RABBITMQ_URL", "CONNECTION_STRING", "DSN"} {
+		if strings.Contains(k, token) {
+			return true
+		}
+	}
+	for _, prefix := range []string{"AWS_", "GCP_", "GOOGLE_", "AZURE_", "DOCKER_AUTH", "NPM_TOKEN", "GH_TOKEN", "GITHUB_TOKEN", "SLACK_", "STRIPE_", "SENTRY_DSN"} {
+		if strings.HasPrefix(k, prefix) {
+			return true
+		}
+	}
+	return strings.HasSuffix(k, "_KEY") || strings.HasSuffix(k, "_CERT") || strings.HasSuffix(k, "_CERTIFICATE")
+}
+
+func isSensitiveLabelKey(key string) bool {
+	k := strings.ToUpper(strings.TrimSpace(key))
+	if k == "" {
+		return false
+	}
+	for _, token := range []string{"PASSWORD", "PASSWD", "TOKEN", "SECRET", "PRIVATE", "CREDENTIAL", "API_KEY", "ACCESS_KEY", "AUTH", "BEARER", "COOKIE", "SESSION", "JWT"} {
+		if strings.Contains(k, token) {
+			return true
+		}
+	}
+	return false
+}
+
+func safeEntries(in map[string]string, isSensitive func(string) bool) map[string]string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := map[string]string{}
+	for k, v := range in {
+		if !isSensitive(k) {
+			out[k] = v
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func sensitiveEntries(in map[string]string, isSensitive func(string) bool) map[string]string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := map[string]string{}
+	for k, v := range in {
+		if isSensitive(k) {
+			out[k] = v
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func sensitiveKeys(in map[string]string, isSensitive func(string) bool) []string {
+	if len(in) == 0 {
+		return nil
+	}
+	var keys []string
+	for k := range in {
+		if isSensitive(k) {
+			keys = append(keys, k)
+		}
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func sortedStringKeys(in map[string]string) []string {
+	keys := make([]string, 0, len(in))
+	for k := range in {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 func observationFromDiscovered(target AdoptionTarget, serviceID, envID uuid.UUID, discovered runtime.DiscoveredContainer) *domain.RuntimeObservation {

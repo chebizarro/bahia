@@ -194,7 +194,7 @@ func mapAdoptionPreviewResponses(previews []service.AdoptionPreview) []dto.Adopt
 		containers := make([]dto.AdoptionPreviewContainerResponse, 0, len(preview.Containers))
 		for _, container := range preview.Containers {
 			containers = append(containers, dto.AdoptionPreviewContainerResponse{
-				Discovered:          mapDiscoveredContainerResponse(container.Discovered),
+				Discovered:          mapDiscoveredContainerResponse(container.Discovered, container.SafeEnvironment, container.SafeLabels, container.RedactedEnvironmentKeys, container.RedactedLabelKeys),
 				ProposedServiceName: container.ProposedServiceName,
 				ExistingServiceID:   container.ExistingServiceID,
 				WillUpdate:          container.WillUpdate,
@@ -215,17 +215,19 @@ func mapAdoptionImportResultResponses(results []service.AdoptionImportResult) []
 	mapped := make([]dto.AdoptionImportResultResponse, 0, len(results))
 	for _, result := range results {
 		mapped = append(mapped, dto.AdoptionImportResultResponse{
-			TargetName:    result.TargetName,
-			ContainerID:   result.ContainerID,
-			ContainerName: result.ContainerName,
-			ServiceName:   result.ServiceName,
-			ServiceID:     result.ServiceID,
-			EnvironmentID: result.EnvironmentID,
-			BuildID:       result.BuildID,
-			ArtifactID:    result.ArtifactID,
-			Status:        result.Status,
-			Warnings:      append([]string(nil), result.Warnings...),
-			Error:         result.Error,
+			TargetName:              result.TargetName,
+			ContainerID:             result.ContainerID,
+			ContainerName:           result.ContainerName,
+			ServiceName:             result.ServiceName,
+			ServiceID:               result.ServiceID,
+			EnvironmentID:           result.EnvironmentID,
+			BuildID:                 result.BuildID,
+			ArtifactID:              result.ArtifactID,
+			Status:                  result.Status,
+			Warnings:                append([]string(nil), result.Warnings...),
+			RedactedEnvironmentKeys: append([]string(nil), result.RedactedEnvironmentKeys...),
+			RedactedLabelKeys:       append([]string(nil), result.RedactedLabelKeys...),
+			Error:                   result.Error,
 		})
 	}
 	return mapped
@@ -239,30 +241,32 @@ func mapAdoptionTargetResponse(target service.AdoptionTarget) dto.AdoptionTarget
 	return resp
 }
 
-func mapDiscoveredContainerResponse(discovered runtime.DiscoveredContainer) dto.DiscoveredContainerResponse {
+func mapDiscoveredContainerResponse(discovered runtime.DiscoveredContainer, safeEnvironment, safeLabels map[string]string, redactedEnvironmentKeys, redactedLabelKeys []string) dto.DiscoveredContainerResponse {
 	return dto.DiscoveredContainerResponse{
-		TargetName:      discovered.TargetName,
-		EnvironmentName: discovered.EnvironmentName,
-		ContainerID:     discovered.ContainerID,
-		ContainerName:   discovered.ContainerName,
-		ImageRef:        discovered.ImageRef,
-		ImageRepo:       discovered.ImageRepo,
-		ImageTag:        discovered.ImageTag,
-		ImageDigest:     discovered.ImageDigest,
-		SourceRuntime:   discovered.SourceRuntime,
-		Labels:          copyStringMap(discovered.Labels),
-		Environment:     copyStringMap(discovered.Environment),
-		Ports:           append([]string(nil), discovered.Ports...),
-		Volumes:         append([]string(nil), discovered.Volumes...),
-		Restart:         discovered.Restart,
-		Command:         append([]string(nil), discovered.Command...),
-		Entrypoint:      append([]string(nil), discovered.Entrypoint...),
-		WorkingDir:      discovered.WorkingDir,
-		NetworkMode:     discovered.NetworkMode,
-		Compose:         mapComposeMetadataResponse(discovered.Compose),
-		HealthStatus:    string(discovered.HealthStatus),
-		Warnings:        append([]string(nil), discovered.Warnings...),
-		Adoptable:       discovered.Adoptable,
+		TargetName:              discovered.TargetName,
+		EnvironmentName:         discovered.EnvironmentName,
+		ContainerID:             discovered.ContainerID,
+		ContainerName:           discovered.ContainerName,
+		ImageRef:                discovered.ImageRef,
+		ImageRepo:               discovered.ImageRepo,
+		ImageTag:                discovered.ImageTag,
+		ImageDigest:             discovered.ImageDigest,
+		SourceRuntime:           discovered.SourceRuntime,
+		Labels:                  copyStringMap(safeLabels),
+		Environment:             copyStringMap(safeEnvironment),
+		RedactedEnvironmentKeys: append([]string(nil), redactedEnvironmentKeys...),
+		RedactedLabelKeys:       append([]string(nil), redactedLabelKeys...),
+		Ports:                   append([]string(nil), discovered.Ports...),
+		Volumes:                 append([]string(nil), discovered.Volumes...),
+		Restart:                 discovered.Restart,
+		Command:                 append([]string(nil), discovered.Command...),
+		Entrypoint:              append([]string(nil), discovered.Entrypoint...),
+		WorkingDir:              discovered.WorkingDir,
+		NetworkMode:             discovered.NetworkMode,
+		Compose:                 mapComposeMetadataResponse(discovered.Compose),
+		HealthStatus:            string(discovered.HealthStatus),
+		Warnings:                append([]string(nil), discovered.Warnings...),
+		Adoptable:               discovered.Adoptable,
 	}
 }
 

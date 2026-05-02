@@ -92,7 +92,21 @@ func TestScanAdoption(t *testing.T) {
 			t.Fatalf("decoding request: %v", err)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{"data": []AdoptionPreview{{Target: gotBody.Targets[0], Containers: []AdoptionPreviewContainer{{Discovered: DiscoveredContainer{HealthStatus: "healthy", Compose: &ComposeMetadata{ProjectName: "legacy"}}, ProposedServiceName: "legacy-api", Adoptable: true}}}}})
+		preview := AdoptionPreview{
+			Target: gotBody.Targets[0],
+			Containers: []AdoptionPreviewContainer{{
+				Discovered: DiscoveredContainer{
+					HealthStatus:            "healthy",
+					Compose:                 &ComposeMetadata{ProjectName: "legacy"},
+					Environment:             map[string]string{"APP_ENV": "prod"},
+					RedactedEnvironmentKeys: []string{"DB_PASSWORD"},
+					RedactedLabelKeys:       []string{"secret-token"},
+				},
+				ProposedServiceName: "legacy-api",
+				Adoptable:           true,
+			}},
+		}
+		json.NewEncoder(w).Encode(map[string]any{"data": []AdoptionPreview{preview}})
 	}))
 	defer server.Close()
 
@@ -107,8 +121,12 @@ func TestScanAdoption(t *testing.T) {
 	if len(result) != 1 || result[0].Containers[0].ProposedServiceName != "legacy-api" {
 		t.Fatalf("unexpected result: %#v", result)
 	}
-	if result[0].Containers[0].Discovered.HealthStatus != "healthy" || result[0].Containers[0].Discovered.Compose.ProjectName != "legacy" {
-		t.Fatalf("unexpected discovered response shape: %#v", result[0].Containers[0].Discovered)
+	discovered := result[0].Containers[0].Discovered
+	if discovered.HealthStatus != "healthy" || discovered.Compose.ProjectName != "legacy" {
+		t.Fatalf("unexpected discovered response shape: %#v", discovered)
+	}
+	if discovered.Environment["APP_ENV"] != "prod" || len(discovered.RedactedEnvironmentKeys) != 1 || discovered.RedactedEnvironmentKeys[0] != "DB_PASSWORD" || len(discovered.RedactedLabelKeys) != 1 {
+		t.Fatalf("redacted discovered fields not decoded: %#v", discovered)
 	}
 }
 
@@ -122,7 +140,15 @@ func TestImportAdoption(t *testing.T) {
 			t.Fatalf("decoding request: %v", err)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{"data": []AdoptionImportResult{{TargetName: "local", ContainerID: "abc123", ServiceName: "api", Status: "created"}}})
+		result := AdoptionImportResult{
+			TargetName:              "local",
+			ContainerID:             "abc123",
+			ServiceName:             "api",
+			Status:                  "created",
+			RedactedEnvironmentKeys: []string{"DB_PASSWORD"},
+			RedactedLabelKeys:       []string{"secret-token"},
+		}
+		json.NewEncoder(w).Encode(map[string]any{"data": []AdoptionImportResult{result}})
 	}))
 	defer server.Close()
 
@@ -139,6 +165,9 @@ func TestImportAdoption(t *testing.T) {
 	}
 	if len(result) != 1 || result[0].Status != "created" {
 		t.Fatalf("unexpected result: %#v", result)
+	}
+	if len(result[0].RedactedEnvironmentKeys) != 1 || result[0].RedactedEnvironmentKeys[0] != "DB_PASSWORD" || len(result[0].RedactedLabelKeys) != 1 {
+		t.Fatalf("redacted import fields not decoded: %#v", result[0])
 	}
 }
 

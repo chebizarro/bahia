@@ -186,6 +186,13 @@ func New(cfg *config.Config) (*App, error) {
 	runtimeResolver := runtime.NewConfigRuntimeResolver(cfg.Runtime, logger)
 	logger.Info("runtime resolver initialized", zap.String("default_type", cfg.Runtime.Type))
 
+	// Secret encryptor (uses Bahia's Nostr key for at-rest encryption).
+	var secretEncryptor *secretsAdapter.Encryptor
+	if cfg.Nostr.PrivateKey != "" {
+		secretEncryptor = secretsAdapter.NewEncryptor(cfg.Nostr.PrivateKey)
+		logger.Info("secrets encryption enabled")
+	}
+
 	// Adopted workload orchestration and direct runtime lifecycle services.
 	// Privileged routes are opt-in; keep services nil unless their route family is enabled.
 	var adoptionSvc *service.AdoptionService
@@ -193,11 +200,15 @@ func New(cfg *config.Config) (*App, error) {
 		adoptionSvc = service.NewAdoptionService(
 			registry, serviceRepo, envRepo, buildRepo, artifactRepo, stateRepo, obsRepo, publisher, logger,
 			service.WithAdoptionRuntimeConfig(cfg.Runtime, cfg.Adoption.AllowRawDockerHosts),
+			service.WithAdoptionSecrets(secretRepo, secretEncryptor),
 		)
 	}
 	var runtimeLifecycleSvc *service.RuntimeLifecycleService
 	if cfg.DirectRuntime.Enabled {
-		runtimeLifecycleSvc = service.NewRuntimeLifecycleService(registry, serviceRepo, envRepo, artifactRepo, stateRepo, runtimeResolver, publisher, logger)
+		runtimeLifecycleSvc = service.NewRuntimeLifecycleService(
+			registry, serviceRepo, envRepo, artifactRepo, stateRepo, runtimeResolver, publisher, logger,
+			service.WithRuntimeLifecycleSecrets(secretRepo, secretEncryptor),
+		)
 	}
 
 	// Reconciler (created here but started in Run() with the lifecycle context).
@@ -306,13 +317,6 @@ func New(cfg *config.Config) (*App, error) {
 
 	// Real-time event stream hub.
 	eventHub := handlers.NewEventStreamHub(publisher, logger)
-
-	// Secret encryptor (uses Bahia's Nostr key for at-rest encryption).
-	var secretEncryptor *secretsAdapter.Encryptor
-	if cfg.Nostr.PrivateKey != "" {
-		secretEncryptor = secretsAdapter.NewEncryptor(cfg.Nostr.PrivateKey)
-		logger.Info("secrets encryption enabled")
-	}
 
 	// MCP (Model Context Protocol) server for AI agent integration.
 	mcpServer := mcp.NewServer(registry, logger)

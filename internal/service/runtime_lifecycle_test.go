@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/adapters/runtime"
+	secretsAdapter "github.com/openagentsinc/bahia/internal/adapters/secrets"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/events"
 	"go.uber.org/zap"
@@ -48,6 +49,90 @@ func TestRuntimeLifecycleDeployUsesAdoptedTargetAndRecordsObservation(t *testing
 	}
 	if !publisher.hasEvent(runtimeActionDeployEvent) {
 		t.Fatalf("expected runtime.deploy event, got %#v", publisher.events)
+	}
+}
+
+func TestRuntimeLifecycleDeployMergesEffectiveSecretsOverAdoptedEnvironment(t *testing.T) {
+	ctx := context.Background()
+	registry, svcRepo, envRepo, _, artifactRepo, _, _ := newTestRegistry()
+	stateRepo := registry.state.(*mockStateRepo)
+	rt := &lifecycleMockRuntime{}
+	secretRepo := newMockSecretRepo()
+	encryptor := secretsAdapter.NewEncryptor("test-runtime-key")
+	lifecycle := NewRuntimeLifecycleService(
+		registry, svcRepo, envRepo, artifactRepo, stateRepo, &mockRuntimeResolver{rt: rt}, &events.NoopPublisher{}, zap.NewNop(),
+		WithRuntimeLifecycleSecrets(secretRepo, encryptor),
+	)
+
+	svc, env, artifact := seedRuntimeLifecycleFixtures(t, registry)
+	globalCiphertext, err := encryptor.Encrypt("global-token", domain.EncryptionAES256)
+	if err != nil {
+		t.Fatalf("encrypt global secret: %v", err)
+	}
+	if err := secretRepo.Create(ctx, &domain.ServiceSecret{ServiceID: svc.ID, Name: "API_TOKEN", EncryptedValue: globalCiphertext, EncryptionMethod: domain.EncryptionAES256, CreatedBy: "test"}); err != nil {
+		t.Fatalf("create global secret: %v", err)
+	}
+	envCiphertext, err := encryptor.Encrypt("secret-prod", domain.EncryptionAES256)
+	if err != nil {
+		t.Fatalf("encrypt env secret: %v", err)
+	}
+	if err := secretRepo.Create(ctx, &domain.ServiceSecret{ServiceID: svc.ID, EnvironmentID: &env.ID, Name: "APP_ENV", EncryptedValue: envCiphertext, EncryptionMethod: domain.EncryptionAES256, CreatedBy: "test"}); err != nil {
+		t.Fatalf("create env secret: %v", err)
+	}
+
+	if _, err := lifecycle.Deploy(ctx, svc.ID, env.ID, &artifact.ID); err != nil {
+		t.Fatalf("Deploy returned error: %v", err)
+	}
+	if rt.deployOpts.Environment["APP_ENV"] != "secret-prod" {
+		t.Fatalf("secret APP_ENV should override adopted env, got %#v", rt.deployOpts.Environment)
+	}
+	if rt.deployOpts.Environment["API_TOKEN"] != "global-token" {
+		t.Fatalf("effective global secret not merged: %#v", rt.deployOpts.Environment)
+	}
+}
+
+func TestRuntimeLifecycleDeploySecretDecryptFailureDoesNotMutateDesiredState(t *testing.T) {
+	ctx := context.Background()
+	registry, svcRepo, envRepo, _, artifactRepo, _, _ := newTestRegistry()
+	stateRepo := registry.state.(*mockStateRepo)
+	rt := &lifecycleMockRuntime{}
+	secretRepo := newMockSecretRepo()
+	encryptor := secretsAdapter.NewEncryptor("test-runtime-key")
+	lifecycle := NewRuntimeLifecycleService(
+		registry, svcRepo, envRepo, artifactRepo, stateRepo, &mockRuntimeResolver{rt: rt}, &events.NoopPublisher{}, zap.NewNop(),
+		WithRuntimeLifecycleSecrets(secretRepo, encryptor),
+	)
+
+	svc, env, artifact := seedRuntimeLifecycleFixtures(t, registry)
+	if err := secretRepo.Create(ctx, &domain.ServiceSecret{ServiceID: svc.ID, EnvironmentID: &env.ID, Name: "API_TOKEN", EncryptedValue: []byte("not-valid-aes"), EncryptionMethod: domain.EncryptionAES256, CreatedBy: "test"}); err != nil {
+		t.Fatalf("create invalid secret: %v", err)
+	}
+
+	_, err := lifecycle.Deploy(ctx, svc.ID, env.ID, &artifact.ID)
+	if err == nil || !strings.Contains(err.Error(), "decrypting effective secret") {
+		t.Fatalf("expected decrypt error, got %v", err)
+	}
+	if rt.deployTarget != "" {
+		t.Fatalf("runtime deploy should not be called, got target %q", rt.deployTarget)
+	}
+	if state := stateRepo.states[stateKey(svc.ID, env.ID)]; state != nil {
+		t.Fatalf("state should not be mutated on secret merge failure: %#v", state)
+	}
+}
+
+func TestRuntimeLifecycleDeployFallsBackToAdoptedEnvironmentWithoutSecretRepo(t *testing.T) {
+	ctx := context.Background()
+	registry, svcRepo, envRepo, _, artifactRepo, _, _ := newTestRegistry()
+	stateRepo := registry.state.(*mockStateRepo)
+	rt := &lifecycleMockRuntime{}
+	lifecycle := NewRuntimeLifecycleService(registry, svcRepo, envRepo, artifactRepo, stateRepo, &mockRuntimeResolver{rt: rt}, &events.NoopPublisher{}, zap.NewNop())
+
+	svc, env, artifact := seedRuntimeLifecycleFixtures(t, registry)
+	if _, err := lifecycle.Deploy(ctx, svc.ID, env.ID, &artifact.ID); err != nil {
+		t.Fatalf("Deploy returned error: %v", err)
+	}
+	if rt.deployOpts.Environment["APP_ENV"] != "prod" {
+		t.Fatalf("expected adopted env fallback, got %#v", rt.deployOpts.Environment)
 	}
 }
 
