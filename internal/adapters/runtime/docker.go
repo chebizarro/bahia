@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -40,6 +41,13 @@ type Runtime interface {
 	StreamLogs(ctx context.Context, serviceName string, opts LogOptions) (<-chan LogEntry, error)
 }
 
+// LifecycleRuntime is implemented by runtimes that support direct lifecycle actions.
+type LifecycleRuntime interface {
+	Runtime
+	Restart(ctx context.Context, targetName string) error
+	Stop(ctx context.Context, targetName string) error
+}
+
 // DeployOptions configures a deployment operation.
 type DeployOptions struct {
 	Environment map[string]string `json:"environment,omitempty"`
@@ -47,6 +55,10 @@ type DeployOptions struct {
 	Ports       []string          `json:"ports,omitempty"`   // "8080:80" format
 	Volumes     []string          `json:"volumes,omitempty"` // "/host:/container[:ro]" format
 	Restart     string            `json:"restart,omitempty"` // always, unless-stopped, on-failure
+	Command     []string          `json:"command,omitempty"`
+	Entrypoint  []string          `json:"entrypoint,omitempty"`
+	WorkingDir  string            `json:"working_dir,omitempty"`
+	NetworkMode string            `json:"network_mode,omitempty"`
 	PullAlways  bool              `json:"pull_always,omitempty"`
 }
 
@@ -110,29 +122,11 @@ func NewDockerObserver(dockerHost string, logger *zap.Logger) *DockerObserver {
 	}
 }
 
-// Observe queries Docker for containers matching the given service name.
+// Observe queries Docker for containers matching the given service name or runtime target name.
 func (o *DockerObserver) Observe(ctx context.Context, serviceID, envID uuid.UUID, serviceName string) (*domain.RuntimeObservation, error) {
-	// Query containers with label filter for the service name.
-	url := fmt.Sprintf("%s/v1.43/containers/json?filters={\"label\":[\"bahia.service=%s\"]}", o.host, serviceName)
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return nil, fmt.Errorf("creating docker request: %w", err)
-	}
-
-	resp, err := o.httpClient.Do(req)
+	containers, err := o.listContainers(ctx, serviceName)
 	if err != nil {
 		return nil, fmt.Errorf("querying docker: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("docker API returned status %d", resp.StatusCode)
-	}
-
-	var containers []DockerContainer
-	if err := json.NewDecoder(resp.Body).Decode(&containers); err != nil {
-		return nil, fmt.Errorf("decoding docker response: %w", err)
 	}
 
 	if len(containers) == 0 {
@@ -148,13 +142,24 @@ func (o *DockerObserver) Observe(ctx context.Context, serviceID, envID uuid.UUID
 
 	container := containers[0]
 	digest := extractDigest(container.ImageID)
+	repo := container.Image
+	if resolvedRepo, resolvedDigest, err := o.resolveImageRepoDigest(ctx, container.Image, container.ImageID); err == nil {
+		if resolvedRepo != "" {
+			repo = resolvedRepo
+		}
+		if resolvedDigest != "" {
+			digest = resolvedDigest
+		}
+	} else {
+		o.logger.Debug("failed to inspect docker image for digest", zap.String("image_id", container.ImageID), zap.Error(err))
+	}
 	health := mapDockerState(container.State)
 
 	return &domain.RuntimeObservation{
 		ServiceID:           serviceID,
 		EnvironmentID:       envID,
 		ObservedImageDigest: digest,
-		ObservedImageRepo:   container.Image,
+		ObservedImageRepo:   repo,
 		ObservedContainerID: container.ID,
 		ObservedHost:        o.host,
 		HealthStatus:        health,
@@ -196,12 +201,24 @@ func (o *DockerObserver) Deploy(ctx context.Context, serviceName, image string, 
 	if binds := cleanDockerBinds(opts.Volumes); len(binds) > 0 {
 		hostConfig["Binds"] = binds
 	}
+	if opts.NetworkMode != "" {
+		hostConfig["NetworkMode"] = opts.NetworkMode
+	}
 
 	body := map[string]any{
 		"Image":      image,
 		"Labels":     labels,
 		"Env":        env,
 		"HostConfig": hostConfig,
+	}
+	if len(opts.Command) > 0 {
+		body["Cmd"] = opts.Command
+	}
+	if len(opts.Entrypoint) > 0 {
+		body["Entrypoint"] = opts.Entrypoint
+	}
+	if opts.WorkingDir != "" {
+		body["WorkingDir"] = opts.WorkingDir
 	}
 	if len(exposedPorts) > 0 {
 		body["ExposedPorts"] = exposedPorts
@@ -277,6 +294,50 @@ func (o *DockerObserver) Deploy(ctx context.Context, serviceName, image string, 
 // Undeploy stops and removes the container for a service.
 func (o *DockerObserver) Undeploy(ctx context.Context, serviceName string) error {
 	return o.stopAndRemove(ctx, serviceName)
+}
+
+// Restart restarts an existing Docker container by runtime target name.
+func (o *DockerObserver) Restart(ctx context.Context, targetName string) error {
+	container, err := o.firstContainer(ctx, targetName)
+	if err != nil {
+		return err
+	}
+	restartURL := fmt.Sprintf("%s/v1.43/containers/%s/restart?t=10", o.host, container.ID)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, restartURL, nil)
+	if err != nil {
+		return fmt.Errorf("creating docker restart request: %w", err)
+	}
+	resp, err := o.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("restarting container %s: %w", targetName, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("docker restart returned %d", resp.StatusCode)
+	}
+	return nil
+}
+
+// Stop stops an existing Docker container by runtime target name.
+func (o *DockerObserver) Stop(ctx context.Context, targetName string) error {
+	container, err := o.firstContainer(ctx, targetName)
+	if err != nil {
+		return err
+	}
+	stopURL := fmt.Sprintf("%s/v1.43/containers/%s/stop?t=10", o.host, container.ID)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, stopURL, nil)
+	if err != nil {
+		return fmt.Errorf("creating docker stop request: %w", err)
+	}
+	resp, err := o.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("stopping container %s: %w", targetName, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNotModified {
+		return fmt.Errorf("docker stop returned %d", resp.StatusCode)
+	}
+	return nil
 }
 
 // StreamLogs streams container logs for a service.
@@ -444,9 +505,51 @@ func cleanDockerBinds(volumes []string) []string {
 	return binds
 }
 
-func (o *DockerObserver) listContainers(ctx context.Context, serviceName string) ([]DockerContainer, error) {
-	url := fmt.Sprintf("%s/v1.43/containers/json?filters={\"label\":[\"bahia.service=%s\"]}", o.host, serviceName)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+func (o *DockerObserver) listContainers(ctx context.Context, targetName string) ([]DockerContainer, error) {
+	containers, err := o.listContainersByLabel(ctx, targetName)
+	if err != nil {
+		return nil, err
+	}
+	if len(containers) > 0 {
+		return containers, nil
+	}
+
+	containers, err = o.listAllContainers(ctx)
+	if err != nil {
+		return nil, err
+	}
+	matched := containers[:0]
+	for _, container := range containers {
+		if dockerContainerNameMatches(container.Names, targetName) {
+			matched = append(matched, container)
+		}
+	}
+	return matched, nil
+}
+
+func (o *DockerObserver) listContainersByLabel(ctx context.Context, targetName string) ([]DockerContainer, error) {
+	filters, err := json.Marshal(map[string][]string{"label": []string{"bahia.service=" + targetName}})
+	if err != nil {
+		return nil, err
+	}
+	query := url.Values{}
+	query.Set("all", "1")
+	query.Set("filters", string(filters))
+	return o.listContainersRaw(ctx, query)
+}
+
+func (o *DockerObserver) listAllContainers(ctx context.Context) ([]DockerContainer, error) {
+	query := url.Values{}
+	query.Set("all", "1")
+	return o.listContainersRaw(ctx, query)
+}
+
+func (o *DockerObserver) listContainersRaw(ctx context.Context, query url.Values) ([]DockerContainer, error) {
+	requestURL := fmt.Sprintf("%s/v1.43/containers/json", o.host)
+	if len(query) > 0 {
+		requestURL += "?" + query.Encode()
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, requestURL, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -463,6 +566,30 @@ func (o *DockerObserver) listContainers(ctx context.Context, serviceName string)
 		return nil, err
 	}
 	return containers, nil
+}
+
+func (o *DockerObserver) firstContainer(ctx context.Context, targetName string) (*DockerContainer, error) {
+	containers, err := o.listContainers(ctx, targetName)
+	if err != nil {
+		return nil, err
+	}
+	if len(containers) == 0 {
+		return nil, fmt.Errorf("no container found for target %s", targetName)
+	}
+	return &containers[0], nil
+}
+
+func dockerContainerNameMatches(names []string, targetName string) bool {
+	targetName = strings.TrimPrefix(strings.TrimSpace(targetName), "/")
+	if targetName == "" {
+		return false
+	}
+	for _, name := range names {
+		if strings.TrimPrefix(name, "/") == targetName {
+			return true
+		}
+	}
+	return false
 }
 
 func (o *DockerObserver) stopAndRemove(ctx context.Context, serviceName string) error {
@@ -514,10 +641,57 @@ func (o *DockerObserver) pullImage(ctx context.Context, image string) error {
 	return nil
 }
 
+type dockerImageInspect struct {
+	ID          string   `json:"Id"`
+	RepoDigests []string `json:"RepoDigests"`
+}
+
+func (o *DockerObserver) resolveImageRepoDigest(ctx context.Context, imageRef, imageID string) (string, string, error) {
+	inspectRef := imageID
+	if inspectRef == "" {
+		inspectRef = imageRef
+	}
+	if inspectRef == "" {
+		return "", "", nil
+	}
+	requestURL := fmt.Sprintf("%s/v1.43/images/%s/json", o.host, url.PathEscape(inspectRef))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, requestURL, nil)
+	if err != nil {
+		return "", "", err
+	}
+	resp, err := o.httpClient.Do(req)
+	if err != nil {
+		return "", "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", "", fmt.Errorf("docker image inspect returned %d", resp.StatusCode)
+	}
+	var inspected dockerImageInspect
+	if err := json.NewDecoder(resp.Body).Decode(&inspected); err != nil {
+		return "", "", err
+	}
+	for _, repoDigest := range inspected.RepoDigests {
+		if repo, digest := splitRepoDigest(repoDigest); digest != "" {
+			return repo, digest, nil
+		}
+	}
+	return "", extractDigest(inspected.ID), nil
+}
+
+func splitRepoDigest(repoDigest string) (string, string) {
+	parts := strings.SplitN(repoDigest, "@", 2)
+	if len(parts) != 2 {
+		return "", ""
+	}
+	return parts[0], parts[1]
+}
+
 // Compile-time interface checks.
 var (
-	_ Observer = (*DockerObserver)(nil)
-	_ Runtime  = (*DockerObserver)(nil)
+	_ Observer         = (*DockerObserver)(nil)
+	_ Runtime          = (*DockerObserver)(nil)
+	_ LifecycleRuntime = (*DockerObserver)(nil)
 )
 
 func extractDigest(imageID string) string {

@@ -11,6 +11,8 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/google/uuid"
+	"github.com/openagentsinc/bahia/internal/domain"
 	"go.uber.org/zap"
 )
 
@@ -100,6 +102,161 @@ func TestDockerDeployAddsPortBindingsAndVolumes(t *testing.T) {
 	}
 }
 
+func TestDockerObserveUsesAllContainersNameFallbackAndRepoDigest(t *testing.T) {
+	t.Parallel()
+
+	var sawLabelAll, sawFallbackAll atomic.Bool
+	handlerErrors := newDockerHandlerErrors()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/v1.43/containers/json" && strings.Contains(r.URL.RawQuery, "filters="):
+			if r.URL.Query().Get("all") != "1" {
+				handlerErrors.add("label query did not include all=1")
+			}
+			sawLabelAll.Store(true)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`[]`))
+		case r.Method == http.MethodGet && r.URL.Path == "/v1.43/containers/json":
+			if r.URL.Query().Get("all") != "1" {
+				handlerErrors.add("fallback query did not include all=1")
+			}
+			sawFallbackAll.Store(true)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`[{"Id":"container-123","Names":["/adopted-api"],"Image":"registry.example/api:latest","ImageID":"sha256:localdigest","State":"exited"}]`))
+		case r.Method == http.MethodGet && r.URL.Path == "/v1.43/images/sha256:localdigest/json":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"Id":"sha256:localdigest","RepoDigests":["registry.example/api@sha256:repodigest"]}`))
+		default:
+			handlerErrors.add(fmt.Sprintf("unexpected Docker API request: %s %s", r.Method, r.URL.String()))
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	observer := &DockerObserver{httpClient: server.Client(), host: server.URL, logger: zap.NewNop()}
+	obs, err := observer.Observe(context.Background(), uuid.New(), uuid.New(), "adopted-api")
+	if err != nil {
+		t.Fatalf("Observe returned error: %v; handler errors: %v", err, handlerErrors.all())
+	}
+	if errors := handlerErrors.all(); len(errors) > 0 {
+		t.Fatalf("handler errors: %v", errors)
+	}
+	if !sawLabelAll.Load() || !sawFallbackAll.Load() {
+		t.Fatalf("expected label and fallback all-container queries, saw label=%v fallback=%v", sawLabelAll.Load(), sawFallbackAll.Load())
+	}
+	if obs.HealthStatus != domain.HealthStatusStopped {
+		t.Fatalf("expected stopped health, got %s", obs.HealthStatus)
+	}
+	if obs.ObservedImageDigest != "sha256:repodigest" {
+		t.Fatalf("expected repo digest, got %q", obs.ObservedImageDigest)
+	}
+	if obs.ObservedImageRepo != "registry.example/api" {
+		t.Fatalf("expected repo from repo digest, got %q", obs.ObservedImageRepo)
+	}
+}
+
+func TestDockerDeployMapsAdoptedRuntimeOptions(t *testing.T) {
+	t.Parallel()
+
+	createBodies := make(chan map[string]any, 1)
+	handlerErrors := newDockerHandlerErrors()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/v1.43/containers/json":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`[]`))
+		case r.Method == http.MethodPost && r.URL.Path == "/v1.43/containers/create":
+			var body map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				handlerErrors.add(fmt.Sprintf("decode create body: %v", err))
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			createBodies <- body
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"Id":"container-123"}`))
+		case r.Method == http.MethodPost && r.URL.Path == "/v1.43/containers/container-123/start":
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			handlerErrors.add(fmt.Sprintf("unexpected Docker API request: %s %s", r.Method, r.URL.String()))
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	observer := &DockerObserver{httpClient: server.Client(), host: server.URL, logger: zap.NewNop()}
+	err := observer.Deploy(context.Background(), "adopted-api", "registry.example/api:latest", DeployOptions{
+		Command:     []string{"serve", "--port", "80"},
+		Entrypoint:  []string{"/entrypoint.sh"},
+		WorkingDir:  "/srv/app",
+		NetworkMode: "host",
+	})
+	if err != nil {
+		t.Fatalf("Deploy returned error: %v; handler errors: %v", err, handlerErrors.all())
+	}
+
+	var createBody map[string]any
+	select {
+	case createBody = <-createBodies:
+	default:
+		t.Fatal("expected create request body to be captured")
+	}
+	assertStringSlice(t, createBody["Cmd"], []string{"serve", "--port", "80"})
+	assertStringSlice(t, createBody["Entrypoint"], []string{"/entrypoint.sh"})
+	if createBody["WorkingDir"] != "/srv/app" {
+		t.Fatalf("expected WorkingDir, got %#v", createBody["WorkingDir"])
+	}
+	hostConfig, ok := createBody["HostConfig"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected HostConfig object, got %#v", createBody["HostConfig"])
+	}
+	if hostConfig["NetworkMode"] != "host" {
+		t.Fatalf("expected NetworkMode host, got %#v", hostConfig["NetworkMode"])
+	}
+}
+
+func TestDockerRestartAndStopUseTargetNameFallback(t *testing.T) {
+	t.Parallel()
+
+	var restarted, stopped atomic.Bool
+	handlerErrors := newDockerHandlerErrors()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/v1.43/containers/json" && strings.Contains(r.URL.RawQuery, "filters="):
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`[]`))
+		case r.Method == http.MethodGet && r.URL.Path == "/v1.43/containers/json":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`[{"Id":"container-123","Names":["/adopted-api"],"Image":"api","ImageID":"sha256:1","State":"running"}]`))
+		case r.Method == http.MethodPost && r.URL.Path == "/v1.43/containers/container-123/restart":
+			restarted.Store(true)
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodPost && r.URL.Path == "/v1.43/containers/container-123/stop":
+			stopped.Store(true)
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			handlerErrors.add(fmt.Sprintf("unexpected Docker API request: %s %s", r.Method, r.URL.String()))
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	observer := &DockerObserver{httpClient: server.Client(), host: server.URL, logger: zap.NewNop()}
+	if err := observer.Restart(context.Background(), "adopted-api"); err != nil {
+		t.Fatalf("Restart returned error: %v", err)
+	}
+	if err := observer.Stop(context.Background(), "adopted-api"); err != nil {
+		t.Fatalf("Stop returned error: %v", err)
+	}
+	if errors := handlerErrors.all(); len(errors) > 0 {
+		t.Fatalf("handler errors: %v", errors)
+	}
+	if !restarted.Load() || !stopped.Load() {
+		t.Fatalf("expected restart and stop calls, got restart=%v stop=%v", restarted.Load(), stopped.Load())
+	}
+}
+
 func TestDockerDeployInvalidPortDoesNotTouchDocker(t *testing.T) {
 	t.Parallel()
 
@@ -136,6 +293,144 @@ func TestDockerDeployInvalidPortDoesNotTouchDocker(t *testing.T) {
 	}
 	if got := requests.Load(); got != 0 {
 		t.Fatalf("expected no Docker API requests, got %d", got)
+	}
+}
+
+func TestDockerDiscoveryNormalizesContainerInspectData(t *testing.T) {
+	t.Parallel()
+
+	handlerErrors := newDockerHandlerErrors()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/v1.43/containers/json":
+			if r.URL.Query().Get("all") != "1" {
+				handlerErrors.add("discovery query did not include all=1")
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`[{"Id":"container-123","Names":["/web"],"Image":"registry.example/web:1.2.3","ImageID":"sha256:image123","State":"running"}]`))
+		case r.Method == http.MethodGet && r.URL.Path == "/v1.43/containers/container-123/json":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{
+				"Id":"container-123",
+				"Name":"/demo-web-1",
+				"Image":"sha256:image123",
+				"Config":{
+					"Image":"registry.example/web:1.2.3",
+					"Env":["APP_ENV=prod","EMPTY="],
+					"Labels":{
+						"com.docker.compose.project":"demo",
+						"com.docker.compose.service":"web",
+						"com.docker.compose.project.working_dir":"/srv/demo",
+						"com.docker.compose.project.config_files":"compose.yml,compose.prod.yml"
+					},
+					"Cmd":["serve"],
+					"Entrypoint":["/entrypoint.sh"],
+					"WorkingDir":"/app"
+				},
+				"State":{"Status":"running","Health":{"Status":"healthy"}},
+				"HostConfig":{"Binds":["/host/data:/data:ro"],"NetworkMode":"demo_default","RestartPolicy":{"Name":"unless-stopped"}},
+				"NetworkSettings":{"Ports":{"80/tcp":[{"HostPort":"8080"}],"53/udp":[{"HostPort":"5353"}]},"Networks":{"demo_default":{"Aliases":["web","demo-web-1"]}}}
+			}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/v1.43/images/sha256:image123/json":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"Id":"sha256:image123","RepoDigests":["registry.example/web@sha256:repo123"]}`))
+		default:
+			handlerErrors.add(fmt.Sprintf("unexpected Docker API request: %s %s", r.Method, r.URL.String()))
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	discovery := NewDockerDiscovery(server.URL, zap.NewNop())
+	containers, err := discovery.Discover(context.Background(), DockerDiscoveryTarget{Name: "local", DockerHost: server.URL, EnvironmentName: "prod"})
+	if err != nil {
+		t.Fatalf("Discover returned error: %v", err)
+	}
+	if errors := handlerErrors.all(); len(errors) > 0 {
+		t.Fatalf("handler errors: %v", errors)
+	}
+	if len(containers) != 1 {
+		t.Fatalf("expected one container, got %d", len(containers))
+	}
+	got := containers[0]
+	if got.TargetName != "demo-web-1" || got.EnvironmentName != "prod" || got.SourceRuntime != "compose" {
+		t.Fatalf("unexpected identity/runtime fields: %#v", got)
+	}
+	if got.ImageRepo != "registry.example/web" || got.ImageTag != "1.2.3" || got.ImageDigest != "sha256:repo123" {
+		t.Fatalf("unexpected image fields: repo=%q tag=%q digest=%q", got.ImageRepo, got.ImageTag, got.ImageDigest)
+	}
+	if got.HealthStatus != domain.HealthStatusHealthy || !got.Adoptable || len(got.Warnings) != 0 {
+		t.Fatalf("unexpected health/adoptable fields: health=%s adoptable=%v warnings=%v", got.HealthStatus, got.Adoptable, got.Warnings)
+	}
+	if got.Environment["APP_ENV"] != "prod" || got.Environment["EMPTY"] != "" {
+		t.Fatalf("unexpected environment: %#v", got.Environment)
+	}
+	if strings.Join(got.Ports, ",") != "5353:53/udp,8080:80" {
+		t.Fatalf("unexpected ports: %#v", got.Ports)
+	}
+	if len(got.Volumes) != 1 || got.Volumes[0] != "/host/data:/data:ro" {
+		t.Fatalf("unexpected volumes: %#v", got.Volumes)
+	}
+	if got.Restart != "unless-stopped" || got.WorkingDir != "/app" || got.NetworkMode != "demo_default" {
+		t.Fatalf("unexpected runtime config fields: %#v", got)
+	}
+	if got.Compose == nil || got.Compose.ProjectName != "demo" || got.Compose.ServiceName != "web" || len(got.Compose.ConfigFiles) != 2 {
+		t.Fatalf("unexpected compose metadata: %#v", got.Compose)
+	}
+}
+
+func TestDockerDiscoveryWarnsUnsupportedRuntimeShape(t *testing.T) {
+	t.Parallel()
+
+	got := normalizeDiscoveredContainer(DockerDiscoveryTarget{EnvironmentName: "prod"}, &dockerContainerInspect{
+		ID:    "container-unsafe",
+		Name:  "/unsafe",
+		Image: "sha256:unsafe",
+		Config: dockerContainerConfig{
+			Image:  "registry.example/unsafe:latest",
+			Labels: map[string]string{},
+		},
+		HostConfig: dockerContainerHostConfig{NetworkMode: "custom"},
+		Mounts:     []dockerContainerMount{{Type: "tmpfs", Destination: "/cache"}},
+		NetworkSettings: dockerContainerNetworkConfig{
+			Ports: map[string][]dockerPortPublish{
+				"80/tcp": {{HostIP: "127.0.0.1", HostPort: "8080"}, {HostIP: "::", HostPort: "8080"}},
+			},
+			Networks: map[string]dockerContainerAttachment{
+				"custom": {Aliases: []string{"unexpected-alias"}},
+			},
+		},
+	}, &dockerImageInspect{ID: "sha256:unsafe"})
+
+	if got.Adoptable {
+		t.Fatalf("expected unsupported runtime shape to be non-adoptable")
+	}
+	joined := strings.Join(got.Warnings, "\n")
+	for _, want := range []string{
+		"network aliases cannot be represented",
+		"multiple host bindings for port 80/tcp are not supported",
+		"host-specific binding for port 80/tcp is not supported",
+		"unsupported mount type tmpfs",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("expected warning containing %q in %v", want, got.Warnings)
+		}
+	}
+}
+
+func assertStringSlice(t *testing.T, got any, want []string) {
+	t.Helper()
+	gotSlice, ok := got.([]any)
+	if !ok {
+		t.Fatalf("expected JSON array %v, got %#v", want, got)
+	}
+	if len(gotSlice) != len(want) {
+		t.Fatalf("expected %v, got %#v", want, gotSlice)
+	}
+	for i := range want {
+		if gotSlice[i] != want[i] {
+			t.Fatalf("expected %v, got %#v", want, gotSlice)
+		}
 	}
 }
 

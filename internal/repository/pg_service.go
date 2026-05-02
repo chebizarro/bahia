@@ -33,58 +33,69 @@ func (r *PgServiceRepository) Create(ctx context.Context, svc *domain.Service) e
 	if err != nil {
 		return err
 	}
+	runtimeConfigJSON, err := marshalJSON(svc.RuntimeConfig, "service runtime config")
+	if err != nil {
+		return err
+	}
 
 	_, err = r.pool.Exec(ctx, `
-		INSERT INTO services (id, name, repo_url, repository, artifact_repo, default_branch, runtime_type, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-	`, svc.ID, svc.Name, svc.RepoURL, repositoryJSON, svc.ArtifactRepo, svc.DefaultBranch, svc.RuntimeType, svc.CreatedAt, svc.UpdatedAt)
+		INSERT INTO services (id, name, repo_url, repository, artifact_repo, default_branch, runtime_type, runtime_config, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+	`, svc.ID, svc.Name, svc.RepoURL, repositoryJSON, svc.ArtifactRepo, svc.DefaultBranch, svc.RuntimeType, runtimeConfigJSON, svc.CreatedAt, svc.UpdatedAt)
 	if err != nil {
 		return fmt.Errorf("inserting service: %w", err)
 	}
 	return nil
 }
 
-func (r *PgServiceRepository) GetByID(ctx context.Context, id uuid.UUID) (*domain.Service, error) {
+func (r *PgServiceRepository) scanService(row pgx.Row) (*domain.Service, error) {
 	svc := &domain.Service{}
-	var repositoryJSON []byte
-	err := r.pool.QueryRow(ctx, `
-		SELECT id, name, repo_url, repository, artifact_repo, default_branch, runtime_type, created_at, updated_at
+	var repositoryJSON, runtimeConfigJSON []byte
+	if err := row.Scan(&svc.ID, &svc.Name, &svc.RepoURL, &repositoryJSON, &svc.ArtifactRepo, &svc.DefaultBranch, &svc.RuntimeType, &runtimeConfigJSON, &svc.CreatedAt, &svc.UpdatedAt); err != nil {
+		return nil, err
+	}
+	if err := unmarshalJSON(repositoryJSON, &svc.Repository, "repository"); err != nil {
+		return nil, err
+	}
+	if err := unmarshalJSON(runtimeConfigJSON, &svc.RuntimeConfig, "service runtime config"); err != nil {
+		return nil, err
+	}
+	return svc, nil
+}
+
+func (r *PgServiceRepository) GetByID(ctx context.Context, id uuid.UUID) (*domain.Service, error) {
+	row := r.pool.QueryRow(ctx, `
+		SELECT id, name, repo_url, repository, artifact_repo, default_branch, runtime_type, runtime_config, created_at, updated_at
 		FROM services WHERE id = $1
-	`, id).Scan(&svc.ID, &svc.Name, &svc.RepoURL, &repositoryJSON, &svc.ArtifactRepo, &svc.DefaultBranch, &svc.RuntimeType, &svc.CreatedAt, &svc.UpdatedAt)
+	`, id)
+	svc, err := r.scanService(row)
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("querying service by id: %w", err)
 	}
-	if err := unmarshalJSON(repositoryJSON, &svc.Repository, "repository"); err != nil {
-		return nil, err
-	}
 	return svc, nil
 }
 
 func (r *PgServiceRepository) GetByName(ctx context.Context, name string) (*domain.Service, error) {
-	svc := &domain.Service{}
-	var repositoryJSON []byte
-	err := r.pool.QueryRow(ctx, `
-		SELECT id, name, repo_url, repository, artifact_repo, default_branch, runtime_type, created_at, updated_at
+	row := r.pool.QueryRow(ctx, `
+		SELECT id, name, repo_url, repository, artifact_repo, default_branch, runtime_type, runtime_config, created_at, updated_at
 		FROM services WHERE name = $1
-	`, name).Scan(&svc.ID, &svc.Name, &svc.RepoURL, &repositoryJSON, &svc.ArtifactRepo, &svc.DefaultBranch, &svc.RuntimeType, &svc.CreatedAt, &svc.UpdatedAt)
+	`, name)
+	svc, err := r.scanService(row)
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("querying service by name: %w", err)
 	}
-	if err := unmarshalJSON(repositoryJSON, &svc.Repository, "repository"); err != nil {
-		return nil, err
-	}
 	return svc, nil
 }
 
 func (r *PgServiceRepository) List(ctx context.Context) ([]domain.Service, error) {
 	rows, err := r.pool.Query(ctx, `
-		SELECT id, name, repo_url, repository, artifact_repo, default_branch, runtime_type, created_at, updated_at
+		SELECT id, name, repo_url, repository, artifact_repo, default_branch, runtime_type, runtime_config, created_at, updated_at
 		FROM services ORDER BY name
 	`)
 	if err != nil {
@@ -94,15 +105,11 @@ func (r *PgServiceRepository) List(ctx context.Context) ([]domain.Service, error
 
 	var services []domain.Service
 	for rows.Next() {
-		var svc domain.Service
-		var repositoryJSON []byte
-		if err := rows.Scan(&svc.ID, &svc.Name, &svc.RepoURL, &repositoryJSON, &svc.ArtifactRepo, &svc.DefaultBranch, &svc.RuntimeType, &svc.CreatedAt, &svc.UpdatedAt); err != nil {
+		svc, err := r.scanService(rows)
+		if err != nil {
 			return nil, fmt.Errorf("scanning service: %w", err)
 		}
-		if err := unmarshalJSON(repositoryJSON, &svc.Repository, "repository"); err != nil {
-			return nil, err
-		}
-		services = append(services, svc)
+		services = append(services, *svc)
 	}
 	return services, rows.Err()
 }
@@ -113,11 +120,15 @@ func (r *PgServiceRepository) Update(ctx context.Context, svc *domain.Service) e
 	if err != nil {
 		return err
 	}
+	runtimeConfigJSON, err := marshalJSON(svc.RuntimeConfig, "service runtime config")
+	if err != nil {
+		return err
+	}
 
 	cmd, err := r.pool.Exec(ctx, `
-		UPDATE services SET name=$2, repo_url=$3, repository=$4, artifact_repo=$5, default_branch=$6, runtime_type=$7, updated_at=$8
+		UPDATE services SET name=$2, repo_url=$3, repository=$4, artifact_repo=$5, default_branch=$6, runtime_type=$7, runtime_config=$8, updated_at=$9
 		WHERE id=$1
-	`, svc.ID, svc.Name, svc.RepoURL, repositoryJSON, svc.ArtifactRepo, svc.DefaultBranch, svc.RuntimeType, svc.UpdatedAt)
+	`, svc.ID, svc.Name, svc.RepoURL, repositoryJSON, svc.ArtifactRepo, svc.DefaultBranch, svc.RuntimeType, runtimeConfigJSON, svc.UpdatedAt)
 	if err != nil {
 		return fmt.Errorf("updating service: %w", err)
 	}

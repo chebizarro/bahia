@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/adapters/runtime"
+	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/events"
 	"github.com/openagentsinc/bahia/internal/repository"
 	"go.uber.org/zap"
@@ -264,9 +265,9 @@ func (r *Remediator) remediate(ctx context.Context, serviceID, envID uuid.UUID, 
 	var remediateErr error
 	switch action {
 	case ActionRedeploy:
-		remediateErr = r.redeploy(ctx, serviceID, envID, svc.Name)
+		remediateErr = r.redeploy(ctx, serviceID, envID, svc)
 	case ActionRollback:
-		remediateErr = r.rollback(ctx, serviceID, envID, svc.Name)
+		remediateErr = r.rollback(ctx, serviceID, envID, svc.RuntimeTargetName())
 	default:
 		r.logger.Warn("unknown remediation action", zap.String("action", string(action)))
 		return nil
@@ -305,7 +306,8 @@ func (r *Remediator) remediate(ctx context.Context, serviceID, envID uuid.UUID, 
 	return nil
 }
 
-func (r *Remediator) redeploy(ctx context.Context, serviceID, envID uuid.UUID, serviceName string) error {
+func (r *Remediator) redeploy(ctx context.Context, serviceID, envID uuid.UUID, svc *domain.Service) error {
+	serviceName := svc.RuntimeTargetName()
 	// Get the desired artifact for this service/environment.
 	st, err := r.state.Get(ctx, serviceID, envID)
 	if err != nil || st == nil || st.DesiredArtifactID == nil {
@@ -323,13 +325,14 @@ func (r *Remediator) redeploy(ctx context.Context, serviceID, envID uuid.UUID, s
 	}
 
 	// Deploy using the runtime.
-	return r.rt.Deploy(ctx, serviceName, image, runtime.DeployOptions{
-		Labels: map[string]string{
-			"bahia.service":     serviceName,
-			"bahia.remediation": "redeploy",
-		},
-		PullAlways: true,
-	})
+	opts := deployOptionsFromAdoptedConfig(svc)
+	if opts.Labels == nil {
+		opts.Labels = map[string]string{}
+	}
+	opts.Labels["bahia.service"] = svc.Name
+	opts.Labels["bahia.remediation"] = "redeploy"
+	opts.PullAlways = true
+	return r.rt.Deploy(ctx, serviceName, image, opts)
 }
 
 func (r *Remediator) rollback(ctx context.Context, serviceID, envID uuid.UUID, serviceName string) error {
@@ -343,6 +346,35 @@ func (r *Remediator) rollback(ctx context.Context, serviceID, envID uuid.UUID, s
 	)
 
 	return nil
+}
+
+func deployOptionsFromAdoptedConfig(svc *domain.Service) runtime.DeployOptions {
+	if svc == nil || svc.RuntimeConfig == nil || svc.RuntimeConfig.Adopted == nil {
+		return runtime.DeployOptions{}
+	}
+	adopted := svc.RuntimeConfig.Adopted
+	return runtime.DeployOptions{
+		Environment: copyRuntimeStringMap(adopted.Environment),
+		Labels:      copyRuntimeStringMap(adopted.Labels),
+		Ports:       append([]string(nil), adopted.Ports...),
+		Volumes:     append([]string(nil), adopted.Volumes...),
+		Restart:     adopted.Restart,
+		Command:     append([]string(nil), adopted.Command...),
+		Entrypoint:  append([]string(nil), adopted.Entrypoint...),
+		WorkingDir:  adopted.WorkingDir,
+		NetworkMode: adopted.NetworkMode,
+	}
+}
+
+func copyRuntimeStringMap(in map[string]string) map[string]string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
 }
 
 // GetAttempts returns the current attempt count for a service/environment.

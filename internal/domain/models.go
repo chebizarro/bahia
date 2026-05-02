@@ -101,9 +101,9 @@ const (
 type DeployStrategy string
 
 const (
-	DeployStrategyReplace DeployStrategy = "replace"
+	DeployStrategyReplace   DeployStrategy = "replace"
 	DeployStrategyBlueGreen DeployStrategy = "blue_green"
-	DeployStrategyCanary  DeployStrategy = "canary"
+	DeployStrategyCanary    DeployStrategy = "canary"
 )
 
 // RuntimeType identifies the target runtime.
@@ -118,15 +118,57 @@ const (
 
 // Service represents a deployable application component.
 type Service struct {
-	ID            uuid.UUID      `json:"id"`
-	Name          string         `json:"name"`
-	RepoURL       string         `json:"repo_url,omitempty"`
-	Repository    *RepositoryRef `json:"repository,omitempty"`
-	ArtifactRepo  string         `json:"artifact_repo"`
-	DefaultBranch string         `json:"default_branch"`
-	RuntimeType   RuntimeType    `json:"runtime_type"`
-	CreatedAt     time.Time      `json:"created_at"`
-	UpdatedAt     time.Time      `json:"updated_at"`
+	ID            uuid.UUID             `json:"id"`
+	Name          string                `json:"name"`
+	RepoURL       string                `json:"repo_url,omitempty"`
+	Repository    *RepositoryRef        `json:"repository,omitempty"`
+	ArtifactRepo  string                `json:"artifact_repo"`
+	DefaultBranch string                `json:"default_branch"`
+	RuntimeType   RuntimeType           `json:"runtime_type"`
+	RuntimeConfig *ServiceRuntimeConfig `json:"runtime_config,omitempty"`
+	CreatedAt     time.Time             `json:"created_at"`
+	UpdatedAt     time.Time             `json:"updated_at"`
+}
+
+// RuntimeTargetName returns the concrete runtime target for this service.
+func (s *Service) RuntimeTargetName() string {
+	if s != nil && s.RuntimeConfig != nil && s.RuntimeConfig.Adopted != nil && s.RuntimeConfig.Adopted.TargetName != "" {
+		return s.RuntimeConfig.Adopted.TargetName
+	}
+	if s == nil {
+		return ""
+	}
+	return s.Name
+}
+
+// ServiceRuntimeConfig contains service-scoped runtime settings.
+type ServiceRuntimeConfig struct {
+	Adopted *AdoptedRuntimeConfig `json:"adopted,omitempty"`
+}
+
+// AdoptedRuntimeConfig captures runtime settings imported from an existing workload.
+type AdoptedRuntimeConfig struct {
+	TargetName    string            `json:"target_name"`
+	SourceRuntime string            `json:"source_runtime"`
+	HostAlias     string            `json:"host_alias"`
+	Environment   map[string]string `json:"environment,omitempty"`
+	Ports         []string          `json:"ports,omitempty"`
+	Volumes       []string          `json:"volumes,omitempty"`
+	Restart       string            `json:"restart,omitempty"`
+	Command       []string          `json:"command,omitempty"`
+	Entrypoint    []string          `json:"entrypoint,omitempty"`
+	WorkingDir    string            `json:"working_dir,omitempty"`
+	NetworkMode   string            `json:"network_mode,omitempty"`
+	Labels        map[string]string `json:"labels,omitempty"`
+	Compose       *ComposeMetadata  `json:"compose,omitempty"`
+}
+
+// ComposeMetadata preserves Docker Compose origin metadata for adopted workloads.
+type ComposeMetadata struct {
+	ProjectName string   `json:"project_name,omitempty"`
+	ServiceName string   `json:"service_name,omitempty"`
+	WorkingDir  string   `json:"working_dir,omitempty"`
+	ConfigFiles []string `json:"config_files,omitempty"`
 }
 
 // RepositoryRef captures structured source repository metadata for a service.
@@ -159,19 +201,19 @@ type Environment struct {
 
 // Build represents a CI build execution.
 type Build struct {
-	ID            uuid.UUID   `json:"id"`
-	ServiceID     uuid.UUID   `json:"service_id"`
-	GitSHA        string      `json:"git_sha"`
-	GitRef        string      `json:"git_ref"`
-	CISystem      string      `json:"ci_system"`
-	CIRunID       string      `json:"ci_run_id"`
-	LoomJobID     string      `json:"loom_job_id,omitempty"`
-	Status        BuildStatus `json:"status"`
-	SourceEventID string      `json:"source_event_id,omitempty"`
-	StartedAt     *time.Time  `json:"started_at,omitempty"`
-	FinishedAt    *time.Time  `json:"finished_at,omitempty"`
+	ID            uuid.UUID      `json:"id"`
+	ServiceID     uuid.UUID      `json:"service_id"`
+	GitSHA        string         `json:"git_sha"`
+	GitRef        string         `json:"git_ref"`
+	CISystem      string         `json:"ci_system"`
+	CIRunID       string         `json:"ci_run_id"`
+	LoomJobID     string         `json:"loom_job_id,omitempty"`
+	Status        BuildStatus    `json:"status"`
+	SourceEventID string         `json:"source_event_id,omitempty"`
+	StartedAt     *time.Time     `json:"started_at,omitempty"`
+	FinishedAt    *time.Time     `json:"finished_at,omitempty"`
 	Metadata      map[string]any `json:"metadata"`
-	CreatedAt     time.Time   `json:"created_at"`
+	CreatedAt     time.Time      `json:"created_at"`
 }
 
 // Artifact represents an immutable OCI image artifact.
@@ -193,20 +235,20 @@ type Artifact struct {
 
 // DeploymentIntent represents a request to deploy an artifact to an environment.
 type DeploymentIntent struct {
-	ID                  uuid.UUID              `json:"id"`
-	ServiceID           uuid.UUID              `json:"service_id"`
-	EnvironmentID       uuid.UUID              `json:"environment_id"`
-	ArtifactID          uuid.UUID              `json:"artifact_id"`
-	RequestedBy         string                 `json:"requested_by"`
-	SourceKind          SourceKind             `json:"source_kind"`
-	ApprovalStatus      ApprovalStatus         `json:"approval_status"`
-	Status              DeploymentIntentStatus `json:"status"`
-	SupersedesIntentID  *uuid.UUID             `json:"supersedes_intent_id,omitempty"`
-	ApprovalMetadata    map[string]any         `json:"approval_metadata"`
-	Metadata            map[string]any         `json:"metadata"`
-	CreatedAt           time.Time              `json:"created_at"`
-	ApprovedAt          *time.Time             `json:"approved_at,omitempty"`
-	UpdatedAt           time.Time              `json:"updated_at"`
+	ID                 uuid.UUID              `json:"id"`
+	ServiceID          uuid.UUID              `json:"service_id"`
+	EnvironmentID      uuid.UUID              `json:"environment_id"`
+	ArtifactID         uuid.UUID              `json:"artifact_id"`
+	RequestedBy        string                 `json:"requested_by"`
+	SourceKind         SourceKind             `json:"source_kind"`
+	ApprovalStatus     ApprovalStatus         `json:"approval_status"`
+	Status             DeploymentIntentStatus `json:"status"`
+	SupersedesIntentID *uuid.UUID             `json:"supersedes_intent_id,omitempty"`
+	ApprovalMetadata   map[string]any         `json:"approval_metadata"`
+	Metadata           map[string]any         `json:"metadata"`
+	CreatedAt          time.Time              `json:"created_at"`
+	ApprovedAt         *time.Time             `json:"approved_at,omitempty"`
+	UpdatedAt          time.Time              `json:"updated_at"`
 }
 
 // DeploymentRun represents a concrete deployment execution attempt.

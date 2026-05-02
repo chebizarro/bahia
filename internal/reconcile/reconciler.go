@@ -122,7 +122,7 @@ func (r *Reconciler) reconcileOne(ctx context.Context, currentState *domain.Envi
 	}
 
 	// Observe actual runtime state.
-	obs, err := rt.Observe(ctx, currentState.ServiceID, currentState.EnvironmentID, svc.Name)
+	obs, err := rt.Observe(ctx, currentState.ServiceID, currentState.EnvironmentID, svc.RuntimeTargetName())
 	if err != nil {
 		r.logger.Warn("failed to observe runtime",
 			zap.String("service", svc.Name),

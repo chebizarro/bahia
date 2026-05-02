@@ -81,6 +81,34 @@ func TestRegistryServiceIntegration(t *testing.T) {
 	if got.Name != "test-api" {
 		t.Errorf("expected service name test-api, got %s", got.Name)
 	}
+	if got.RuntimeConfig != nil {
+		t.Errorf("expected nil runtime config for service created without one, got %#v", got.RuntimeConfig)
+	}
+
+	svc.RuntimeConfig = &domain.ServiceRuntimeConfig{Adopted: &domain.AdoptedRuntimeConfig{
+		TargetName:    "legacy-api",
+		SourceRuntime: "docker",
+		HostAlias:     "local",
+		Environment:   map[string]string{"APP_ENV": "test"},
+		Ports:         []string{"8080:80"},
+		Volumes:       []string{"/host:/data:ro"},
+		Restart:       "unless-stopped",
+		Command:       []string{"serve"},
+		Entrypoint:    []string{"/entrypoint.sh"},
+		WorkingDir:    "/app",
+		NetworkMode:   "host",
+		Labels:        map[string]string{"tier": "api"},
+	}}
+	if err := registry.UpdateService(ctx, svc); err != nil {
+		t.Fatalf("failed to update service runtime config: %v", err)
+	}
+	got, err = registry.GetService(ctx, svc.ID)
+	if err != nil {
+		t.Fatalf("failed to get service after runtime config update: %v", err)
+	}
+	if got.RuntimeConfig == nil || got.RuntimeConfig.Adopted == nil || got.RuntimeConfig.Adopted.TargetName != "legacy-api" || got.RuntimeConfig.Adopted.Environment["APP_ENV"] != "test" {
+		t.Fatalf("runtime config did not round-trip: %#v", got.RuntimeConfig)
+	}
 
 	services, err := registry.ListServices(ctx)
 	if err != nil {

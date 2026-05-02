@@ -2,6 +2,7 @@ package reconcile
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -180,11 +181,12 @@ func (m *mockStateRepo) ListAll(_ context.Context) ([]domain.EnvironmentServiceS
 }
 
 type mockRuntime struct {
-	mu          sync.Mutex
-	deployed    []string
-	undeployed  []string
-	deployErr   error
-	undeployErr error
+	mu           sync.Mutex
+	deployed     []string
+	deployedOpts []runtime.DeployOptions
+	undeployed   []string
+	deployErr    error
+	undeployErr  error
 }
 
 func (m *mockRuntime) Type() domain.RuntimeType {
@@ -208,6 +210,7 @@ func (m *mockRuntime) Deploy(_ context.Context, serviceName, image string, opts 
 		return m.deployErr
 	}
 	m.deployed = append(m.deployed, serviceName+":"+image)
+	m.deployedOpts = append(m.deployedOpts, opts)
 	return nil
 }
 
@@ -370,6 +373,65 @@ func TestRemediator_OnDriftDetected_Redeploy(t *testing.T) {
 	}
 	if !completed {
 		t.Error("expected remediation.completed event")
+	}
+}
+
+func TestRemediator_RedeployPreservesAdoptedRuntimeConfig(t *testing.T) {
+	serviceID := uuid.New()
+	envID := uuid.New()
+	artifactID := uuid.New()
+
+	svcRepo := &mockServiceRepo{services: map[uuid.UUID]*domain.Service{
+		serviceID: {
+			ID:   serviceID,
+			Name: "api",
+			RuntimeConfig: &domain.ServiceRuntimeConfig{Adopted: &domain.AdoptedRuntimeConfig{
+				TargetName:  "legacy-api",
+				Environment: map[string]string{"APP_ENV": "prod"},
+				Labels:      map[string]string{"existing": "label"},
+				Ports:       []string{"8080:80"},
+				Volumes:     []string{"/host:/data:ro"},
+				Restart:     "unless-stopped",
+				Command:     []string{"serve"},
+				Entrypoint:  []string{"/entrypoint.sh"},
+				WorkingDir:  "/app",
+				NetworkMode: "host",
+			}},
+		},
+	}}
+	envRepo := &mockEnvironmentRepo{envs: map[uuid.UUID]*domain.Environment{
+		envID: {ID: envID, Name: "prod", RuntimeConfig: map[string]any{"auto_remediation": map[string]any{"enabled": true, "on_drift": "redeploy"}}},
+	}}
+	artifactRepo := &mockArtifactRepo{artifacts: map[uuid.UUID]*domain.Artifact{
+		artifactID: {ID: artifactID, ServiceID: serviceID, ImageRepo: "ghcr.io/org/api", ImageTag: "v1.2.3", ImageDigest: "sha256:abc123"},
+	}}
+	stateRepo := &mockStateRepo{states: map[string]*domain.EnvironmentServiceState{
+		stateMapKey(serviceID, envID): {ServiceID: serviceID, EnvironmentID: envID, DesiredArtifactID: &artifactID},
+	}}
+	rt := &mockRuntime{}
+
+	r := NewRemediator(svcRepo, envRepo, artifactRepo, stateRepo, rt, &mockPublisher{}, zap.NewNop())
+	if err := r.OnDriftDetected(context.Background(), serviceID, envID); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	if len(rt.deployed) != 1 || rt.deployed[0] != "legacy-api:ghcr.io/org/api@sha256:abc123" {
+		t.Fatalf("unexpected deployment: %#v", rt.deployed)
+	}
+	if len(rt.deployedOpts) != 1 {
+		t.Fatalf("expected deploy options to be captured")
+	}
+	opts := rt.deployedOpts[0]
+	if opts.Environment["APP_ENV"] != "prod" || opts.Labels["existing"] != "label" || opts.Labels["bahia.service"] != "api" || opts.Labels["bahia.remediation"] != "redeploy" {
+		t.Fatalf("unexpected labels/env: env=%#v labels=%#v", opts.Environment, opts.Labels)
+	}
+	if strings.Join(opts.Ports, ",") != "8080:80" || strings.Join(opts.Volumes, ",") != "/host:/data:ro" {
+		t.Fatalf("unexpected ports/volumes: ports=%#v volumes=%#v", opts.Ports, opts.Volumes)
+	}
+	if opts.Restart != "unless-stopped" || strings.Join(opts.Command, " ") != "serve" || strings.Join(opts.Entrypoint, " ") != "/entrypoint.sh" || opts.WorkingDir != "/app" || opts.NetworkMode != "host" || !opts.PullAlways {
+		t.Fatalf("unexpected deploy options: %#v", opts)
 	}
 }
 
