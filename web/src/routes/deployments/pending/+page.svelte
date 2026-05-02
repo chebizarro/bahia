@@ -27,7 +27,7 @@
       label: 'Artifact', 
       render: (r) => r.artifact_id ? `<code>${r.artifact_id.slice(0, 12)}...</code>` : '-'
     },
-    { key: 'requested_by', label: 'Requested By' },
+    { key: 'requested_by', label: 'Requester' },
     { 
       key: 'created_at', 
       label: 'Created',

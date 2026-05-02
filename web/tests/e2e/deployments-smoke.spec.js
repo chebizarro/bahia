@@ -52,6 +52,15 @@ const mockPendingIntents = [
     approval_status: 'pending',
     requested_by: 'bob@example.com',
     created_at: new Date(Date.now() - 3600000).toISOString()
+  },
+  {
+    id: 'intent-3',
+    service_id: 'service-1',
+    environment_id: 'env-1',
+    artifact_id: 'sha256:zzz999yyy888',
+    approval_status: 'approved',
+    requested_by: 'charlie@example.com',
+    created_at: new Date(Date.now() - 7200000).toISOString()
   }
 ];
 
@@ -139,13 +148,20 @@ test.describe('Deployments Smoke Test', () => {
   test('should display pending intents in table', async ({ page }) => {
     await page.goto('/deployments/pending');
     await page.waitForLoadState('networkidle');
-    
-    // Wait for data to load
-    await page.waitForTimeout(500);
-    
-    // Check that pending row is shown
+
+    await expect(page.getByRole('columnheader', { name: 'Service' })).toBeVisible();
+    await expect(page.getByRole('columnheader', { name: 'Environment' })).toBeVisible();
+    await expect(page.getByRole('columnheader', { name: 'Artifact' })).toBeVisible();
+    await expect(page.getByRole('columnheader', { name: 'Requester' })).toBeVisible();
+    await expect(page.getByRole('columnheader', { name: 'Created' })).toBeVisible();
+
+    // Check that pending rows are shown
     await expect(page.locator('text=web-app')).toBeVisible();
     await expect(page.locator('text=production')).toBeVisible();
+    await expect(page.locator('text=alice@example.com')).toBeVisible();
+
+    // Non-pending intents should not render
+    await expect(page.locator('text=charlie@example.com')).not.toBeVisible();
   });
   
   test('should approve a deployment intent', async ({ page }) => {
