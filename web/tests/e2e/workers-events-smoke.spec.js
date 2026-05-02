@@ -42,6 +42,19 @@ const mockWorkerDetail = {
   total_deployments: 15
 };
 
+const mockWorkerPricing = [
+  {
+    mint_url: 'https://mint.example.com',
+    price_per_second: 10,
+    unit: 'sat'
+  },
+  {
+    mint_url: 'https://backup-mint.example.com',
+    price_per_second: 15,
+    unit: 'sat'
+  }
+];
+
 const mockEvents = [
   {
     id: 'event-1',
@@ -152,6 +165,26 @@ test.beforeEach(async ({ page }) => {
     });
   });
   
+  // Mock worker pricing
+  await page.route('**/api/v1/workers/*/pricing', (route) => {
+    const pathname = new URL(route.request().url()).pathname;
+    const pubkey = pathname.match(/\/workers\/([^/]+)\/pricing$/)?.[1];
+
+    if (pubkey === 'npub1worker1abc123def456') {
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ data: mockWorkerPricing })
+      });
+    }
+
+    return route.fulfill({
+      status: 404,
+      contentType: 'application/json',
+      body: JSON.stringify({ error: 'Worker pricing not found' })
+    });
+  });
+
   // Mock worker detail
   await page.route('**/api/v1/workers/*', (route) => {
     const pathname = new URL(route.request().url()).pathname;
@@ -270,6 +303,43 @@ test.describe('Workers and Events Smoke Test', () => {
     // Capabilities should be listed
     await expect(page.locator('text=docker')).toBeVisible();
     await expect(page.locator('text=kubernetes')).toBeVisible();
+  });
+
+  test('should display worker pricing tiers on detail page', async ({ page }) => {
+    await page.goto('/workers/npub1worker1abc123def456');
+    await page.waitForLoadState('networkidle');
+
+    await expect(page.getByRole('heading', { name: 'Pricing tiers' })).toBeVisible();
+    await expect(page.getByRole('columnheader', { name: 'Mint URL' })).toBeVisible();
+    await expect(page.getByText('https://mint.example.com')).toBeVisible();
+    await expect(page.getByText('10 sat/sec')).toBeVisible();
+    await expect(page.getByText('36000 sat/hour')).toBeVisible();
+    await expect(page.getByText('https://backup-mint.example.com')).toBeVisible();
+    await expect(page.getByText('15 sat/sec')).toBeVisible();
+  });
+
+  test('should render worker detail while pricing tiers are loading', async ({ page }) => {
+    let releasePricing;
+    await page.unroute('**/api/v1/workers/*/pricing');
+    await page.route('**/api/v1/workers/*/pricing', async (route) => {
+      await new Promise((resolve) => {
+        releasePricing = resolve;
+      });
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ data: mockWorkerPricing })
+      });
+    });
+
+    await page.goto('/workers/npub1worker1abc123def456');
+
+    await expect(page.getByRole('heading', { name: 'Public Key' })).toBeVisible();
+    await expect(page.getByText('Loading pricing tiers...')).toBeVisible();
+
+    expect(typeof releasePricing).toBe('function');
+    releasePricing();
+    await expect(page.getByText('https://mint.example.com')).toBeVisible();
   });
   
   test('should show relay URL on worker detail', async ({ page }) => {

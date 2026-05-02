@@ -7,8 +7,12 @@
   import { api } from '$lib/api/client.js';
 
   let worker = $state(null);
+  let pricing = $state([]);
   let loading = $state(true);
+  let pricingLoading = $state(false);
   let error = $state(null);
+  let pricingError = $state(null);
+  let loadSequence = 0;
 
   let pubkey = $derived(page.params.pubkey);
 
@@ -19,18 +23,80 @@
   });
 
   async function loadWorker(key) {
+    const sequence = ++loadSequence;
     loading = true;
+    pricingLoading = true;
     error = null;
+    pricingError = null;
     worker = null;
+    pricing = [];
+
+    let decodedPubkey;
+    try {
+      decodedPubkey = decodeURIComponent(key);
+    } catch (err) {
+      if (isCurrentLoad(sequence)) {
+        error = err.message || 'Failed to load worker';
+        loading = false;
+        pricingLoading = false;
+      }
+      return;
+    }
+
+    void loadPricing(decodedPubkey, sequence);
 
     try {
-      const decodedPubkey = decodeURIComponent(key);
-      worker = await api.getWorker(decodedPubkey);
+      const loadedWorker = await api.getWorker(decodedPubkey);
+      if (!isCurrentLoad(sequence)) return;
+      worker = loadedWorker;
     } catch (err) {
+      if (!isCurrentLoad(sequence)) return;
       error = err.message || 'Failed to load worker';
     } finally {
-      loading = false;
+      if (isCurrentLoad(sequence)) {
+        loading = false;
+      }
     }
+  }
+
+  async function loadPricing(decodedPubkey, sequence) {
+    try {
+      const loadedPricing = await api.getWorkerPricing(decodedPubkey);
+      if (!isCurrentLoad(sequence)) return;
+      pricing = normalizePricingTiers(loadedPricing);
+    } catch (err) {
+      if (!isCurrentLoad(sequence)) return;
+      pricingError = err.message || 'Failed to load pricing tiers';
+    } finally {
+      if (isCurrentLoad(sequence)) {
+        pricingLoading = false;
+      }
+    }
+  }
+
+  function isCurrentLoad(sequence) {
+    return sequence === loadSequence;
+  }
+
+  function normalizePricingTiers(value) {
+    if (Array.isArray(value)) return value;
+    if (Array.isArray(value?.pricing)) return value.pricing;
+    if (value && typeof value === 'object' && ('price_per_second' in value || 'price_per_sec' in value || 'mint_url' in value)) {
+      return [value];
+    }
+    return [];
+  }
+
+  function formatPricePerSecond(tier) {
+    const price = tier.price_per_second ?? tier.price_per_sec;
+    if (price === null || price === undefined || price === '') return 'Not set';
+    return `${price} ${tier.unit || 'sat'}/sec`;
+  }
+
+  function formatHourlyEstimate(tier) {
+    const price = Number(tier.price_per_second ?? tier.price_per_sec);
+    if (!Number.isFinite(price)) return 'Not available';
+    return `${price * 3600} ${tier.unit || 'sat'}/hour`;
   }
 
   let capabilitiesColumns = $derived([
@@ -40,6 +106,18 @@
   let capabilitiesData = $derived(worker?.capabilities 
     ? worker.capabilities.map(cap => ({ name: cap }))
     : []);
+
+  let pricingColumns = $derived([
+    { key: 'mint_url', label: 'Mint URL' },
+    { key: 'price_display', label: 'Price/sec' },
+    { key: 'hourly_display', label: 'Hourly estimate' }
+  ]);
+
+  let pricingData = $derived(pricing.map(tier => ({
+    mint_url: tier.mint_url || 'Default mint',
+    price_display: formatPricePerSecond(tier),
+    hourly_display: formatHourlyEstimate(tier)
+  })));
 </script>
 
 <div class="page">
@@ -58,6 +136,7 @@
       <Card title="Price per Second" value={worker.price_per_sec ? `${worker.price_per_sec} sats/sec` : 'Not available'} />
       <Card title="Last Seen" value={worker.last_seen?.slice(0, 19).replace('T', ' ') || 'Never'} />
       <Card title="Capabilities" value={worker.capabilities?.length || 0} />
+      <Card title="Pricing Tiers" value={pricingLoading ? 'Loading...' : pricingData.length} />
     </div>
 
     <section>
@@ -65,6 +144,19 @@
       <div class="pubkey-container">
         <code class="pubkey">{worker.pubkey}</code>
       </div>
+    </section>
+
+    <section>
+      <h2>Pricing tiers</h2>
+      {#if pricingLoading}
+        <p class="loading inline">Loading pricing tiers...</p>
+      {:else if pricingError}
+        <ErrorState message={pricingError} />
+      {:else if pricingData.length > 0}
+        <Table columns={pricingColumns} data={pricingData} />
+      {:else}
+        <EmptyState message="No pricing tiers advertised" />
+      {/if}
     </section>
 
     {#if capabilitiesData.length > 0}
@@ -159,5 +251,10 @@
     color: var(--text-muted);
     padding: 2rem;
     text-align: center;
+  }
+
+  .loading.inline {
+    padding: 0;
+    text-align: left;
   }
 </style>
