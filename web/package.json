@@ -5,7 +5,11 @@
   "scripts": {
     "dev": "vite dev",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:unit": "vitest run --config vitest.config.js",
+    "test:unit:watch": "vitest --config vitest.config.js",
+    "test:unit:coverage": "vitest run --config vitest.config.js --coverage"
   },
   "devDependencies": {
     "@playwright/test": "^1.59.1",
