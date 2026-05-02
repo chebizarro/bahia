@@ -16,6 +16,15 @@ const ROUTE_ROLE_REQUIREMENTS = {
   '/settings': []
 };
 
+function getRoleRequirements() {
+  const overrides = typeof window !== 'undefined' ? window.__BAHIA_E2E_ROUTE_ROLE_REQUIREMENTS : null;
+  if (!overrides || typeof overrides !== 'object') return ROUTE_ROLE_REQUIREMENTS;
+  return {
+    ...ROUTE_ROLE_REQUIREMENTS,
+    ...overrides
+  };
+}
+
 function toRoleSet(authState = {}) {
   const explicitRoles = Array.isArray(authState.roles) ? authState.roles : [];
   const capabilityRoles = Array.isArray(authState?.capabilities?.roles) ? authState.capabilities.roles : [];
@@ -29,12 +38,13 @@ function normalizePathname(pathname) {
 
 function getRequiredRoles(pathname) {
   const normalized = normalizePathname(pathname);
-  const match = Object.keys(ROUTE_ROLE_REQUIREMENTS)
+  const roleRequirements = getRoleRequirements();
+  const match = Object.keys(roleRequirements)
     .sort((a, b) => b.length - a.length)
     .find((prefix) => normalized.startsWith(prefix));
 
   if (!match) return [];
-  return ROUTE_ROLE_REQUIREMENTS[match] ?? [];
+  return roleRequirements[match] ?? [];
 }
 
 export function getRouteAccess(pathname) {

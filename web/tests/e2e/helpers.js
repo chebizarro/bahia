@@ -20,7 +20,14 @@ const DEFAULT_SYSTEM_INFO = {
  */
 export async function installE2EMocks(
   page,
-  { authenticated = true, extension = true, sseEvents = [], nostrEvents = [], systemInfo = DEFAULT_SYSTEM_INFO } = {}
+  {
+    authenticated = true,
+    extension = true,
+    sseEvents = [],
+    nostrEvents = [],
+    systemInfo = DEFAULT_SYSTEM_INFO,
+    routeRoleRequirements = null
+  } = {}
 ) {
   await page.route('**/api/v1/system/info', (route) => route.fulfill({
     status: 200,
@@ -28,9 +35,14 @@ export async function installE2EMocks(
     body: JSON.stringify({ data: systemInfo })
   }));
 
-  await page.addInitScript(({ authenticated, extension, pubkey, sseEvents, nostrEvents }) => {
+  await page.addInitScript(({ authenticated, extension, pubkey, sseEvents, nostrEvents, routeRoleRequirements }) => {
     localStorage.setItem('__bahia_e2e_sse_events', JSON.stringify(sseEvents || []));
     localStorage.setItem('__bahia_e2e_nostr_events', JSON.stringify(nostrEvents || []));
+    if (routeRoleRequirements && typeof routeRoleRequirements === 'object') {
+      window.__BAHIA_E2E_ROUTE_ROLE_REQUIREMENTS = routeRoleRequirements;
+    } else {
+      delete window.__BAHIA_E2E_ROUTE_ROLE_REQUIREMENTS;
+    }
     sessionStorage.removeItem('bahia_dashboard_pending_deployments');
 
     if (authenticated) {
@@ -212,7 +224,7 @@ export async function installE2EMocks(
     }
 
     window.EventSource = MockEventSource;
-  }, { authenticated, extension, pubkey: TEST_PUBKEY, sseEvents, nostrEvents });
+  }, { authenticated, extension, pubkey: TEST_PUBKEY, sseEvents, nostrEvents, routeRoleRequirements });
 }
 
 export async function seedSseEvents(page, events) {
