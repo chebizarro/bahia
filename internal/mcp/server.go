@@ -31,6 +31,7 @@ type Server struct {
 	notificationDisp *notifications.Dispatcher         // optional: for notification testing
 	workers          repository.WorkerRepository       // optional: for worker management tools
 	logService       *adapterruntime.LogService        // optional: for deployment run log tools
+	payments         *service.PaymentService           // optional: for payment tools
 }
 
 // Config holds MCP server configuration.
@@ -49,6 +50,7 @@ type ServerDeps struct {
 	NotificationDispatcher *notifications.Dispatcher
 	Workers                repository.WorkerRepository
 	LogService             *adapterruntime.LogService
+	Payments               *service.PaymentService
 }
 
 // NewServer creates a new MCP server for Bahia.
@@ -78,6 +80,7 @@ func NewServerWithOptions(registry *service.RegistryService, logger *zap.Logger,
 		notificationDisp: deps.NotificationDispatcher,
 		workers:          deps.Workers,
 		logService:       deps.LogService,
+		payments:         deps.Payments,
 	}
 }
 
@@ -1014,6 +1017,58 @@ func (s *Server) GetTools() []Tool {
 				"required": []string{"pubkey"},
 			},
 		},
+		// Payment operations
+		{
+			Name:        "bahia_estimate_cost",
+			Description: "Estimate the Cashu payment cost for a deployment run based on the assigned worker pricing",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"run_id": map[string]interface{}{
+						"type":        "string",
+						"description": "Deployment run UUID",
+					},
+					"estimated_duration_secs": map[string]interface{}{
+						"type":        "integer",
+						"description": "Optional estimated run duration in seconds. If omitted, worker max duration or service default is used.",
+					},
+				},
+				"required": []string{"run_id"},
+			},
+		},
+		{
+			Name:        "bahia_get_run_cost",
+			Description: "Get Cashu payment records and aggregate cost summary for a deployment run",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"run_id": map[string]interface{}{
+						"type":        "string",
+						"description": "Deployment run UUID",
+					},
+				},
+				"required": []string{"run_id"},
+			},
+		},
+		{
+			Name:        "bahia_get_payment_history",
+			Description: "List Cashu payment history for a worker",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"worker_pubkey": map[string]interface{}{
+						"type":        "string",
+						"description": "Worker public key to list payments for",
+					},
+					"limit": map[string]interface{}{
+						"type":        "integer",
+						"description": "Maximum number of payment records to return (default: 50)",
+						"default":     50,
+					},
+				},
+				"required": []string{"worker_pubkey"},
+			},
+		},
 		// Intent alias operations (REST-aligned naming)
 		{
 			Name:        "bahia_create_intent",
@@ -1364,6 +1419,13 @@ func (s *Server) CallTool(ctx context.Context, name string, arguments map[string
 		return s.handleGetWorker(ctx, arguments)
 	case "bahia_get_worker_pricing":
 		return s.handleGetWorkerPricing(ctx, arguments)
+	// Payment operations
+	case "bahia_estimate_cost":
+		return s.handleEstimateCost(ctx, arguments)
+	case "bahia_get_run_cost":
+		return s.handleGetRunCost(ctx, arguments)
+	case "bahia_get_payment_history":
+		return s.handleGetPaymentHistory(ctx, arguments)
 	// Intent alias operations
 	case "bahia_create_intent":
 		return s.handleDeploy(ctx, arguments) // alias
@@ -2757,6 +2819,85 @@ func (s *Server) handleGetWorkerPricing(ctx context.Context, args map[string]int
 	return jsonResult(result)
 }
 
+func (s *Server) handleEstimateCost(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
+	if s.payments == nil {
+		return errorResult("payment tools are not configured"), nil
+	}
+
+	runID, err := parseRequiredUUIDArg(args, "run_id")
+	if err != nil {
+		return errorResult(err.Error()), nil
+	}
+
+	estimatedDurationSecs := optionalIntArg(args, "estimated_duration_secs", 0)
+	estimate, err := s.payments.EstimateCost(ctx, runID, estimatedDurationSecs)
+	if err != nil {
+		return errorResult(fmt.Sprintf("failed to estimate cost: %v", err)), nil
+	}
+
+	return jsonResult(costEstimateToMap(estimate))
+}
+
+func (s *Server) handleGetRunCost(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
+	if s.payments == nil {
+		return errorResult("payment tools are not configured"), nil
+	}
+
+	runID, err := parseRequiredUUIDArg(args, "run_id")
+	if err != nil {
+		return errorResult(err.Error()), nil
+	}
+
+	summary, err := s.payments.GetRunCostSummary(ctx, runID)
+	if err != nil {
+		return errorResult(fmt.Sprintf("failed to get run cost summary: %v", err)), nil
+	}
+
+	payments, err := s.payments.GetRunPayments(ctx, runID)
+	if err != nil {
+		return errorResult(fmt.Sprintf("failed to get run payments: %v", err)), nil
+	}
+
+	result := map[string]interface{}{
+		"run_id":   runID.String(),
+		"summary":  costSummaryToMap(summary),
+		"payments": paymentRecordsToMaps(payments),
+	}
+	return jsonResult(result)
+}
+
+func (s *Server) handleGetPaymentHistory(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
+	if s.payments == nil {
+		return errorResult("payment tools are not configured"), nil
+	}
+
+	workerPubkey, _ := args["worker_pubkey"].(string)
+	if workerPubkey == "" {
+		workerPubkey, _ = args["worker"].(string)
+	}
+	if workerPubkey == "" {
+		return errorResult("worker_pubkey is required"), nil
+	}
+
+	limit := optionalIntArg(args, "limit", 50)
+	if limit <= 0 {
+		limit = 50
+	}
+
+	records, err := s.payments.GetPaymentHistory(ctx, workerPubkey, limit)
+	if err != nil {
+		return errorResult(fmt.Sprintf("failed to get payment history: %v", err)), nil
+	}
+
+	result := map[string]interface{}{
+		"worker_pubkey": workerPubkey,
+		"payments":      paymentRecordsToMaps(records),
+		"total":         len(records),
+		"limit":         limit,
+	}
+	return jsonResult(result)
+}
+
 func (s *Server) handleGetIntent(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
 	intentIDStr, _ := args["intent_id"].(string)
 	if intentIDStr == "" {
@@ -3104,6 +3245,66 @@ func runLogsToMap(logs *adapterruntime.RunLogs, stream string) map[string]interf
 	}
 	if logs.Duration != "" {
 		m["duration"] = logs.Duration
+	}
+	return m
+}
+
+func costEstimateToMap(estimate *domain.CostEstimate) map[string]interface{} {
+	if estimate == nil {
+		return nil
+	}
+	return map[string]interface{}{
+		"worker_pubkey":       estimate.WorkerPubkey,
+		"worker_name":         estimate.WorkerName,
+		"mint_url":            estimate.MintURL,
+		"price_per_second":    estimate.PricePerSecond,
+		"estimated_secs":      estimate.EstimatedSecs,
+		"estimated_cost_sats": estimate.EstimatedCost,
+		"unit":                estimate.Unit,
+	}
+}
+
+func costSummaryToMap(summary *service.CostSummary) map[string]interface{} {
+	if summary == nil {
+		return nil
+	}
+	return map[string]interface{}{
+		"total_paid_sats":   summary.TotalPaid,
+		"total_change_sats": summary.TotalChange,
+		"net_cost_sats":     summary.NetCost,
+		"payment_count":     summary.PaymentCount,
+		"change_count":      summary.ChangeCount,
+	}
+}
+
+func paymentRecordsToMaps(records []domain.PaymentRecord) []map[string]interface{} {
+	result := make([]map[string]interface{}, len(records))
+	for i := range records {
+		result[i] = paymentRecordToMap(&records[i])
+	}
+	return result
+}
+
+func paymentRecordToMap(rec *domain.PaymentRecord) map[string]interface{} {
+	m := map[string]interface{}{
+		"id":                rec.ID.String(),
+		"deployment_run_id": rec.DeploymentRunID.String(),
+		"worker_pubkey":     rec.WorkerPubkey,
+		"mint_url":          rec.MintURL,
+		"amount_sats":       rec.AmountSats,
+		"direction":         string(rec.Direction),
+		"status":            string(rec.Status),
+		"created_at":        rec.CreatedAt.Format("2006-01-02T15:04:05Z"),
+		"updated_at":        rec.UpdatedAt.Format("2006-01-02T15:04:05Z"),
+	}
+	if rec.TokenHash != "" {
+		m["token_hash"] = rec.TokenHash
+	}
+	if rec.ErrorMessage != "" {
+		m["error_message"] = rec.ErrorMessage
+	}
+	if rec.Metadata != nil {
+		m["metadata"] = rec.Metadata
 	}
 	return m
 }
@@ -3911,6 +4112,24 @@ func parseRequiredUUIDArg(args map[string]interface{}, name string) (uuid.UUID, 
 		return uuid.Nil, fmt.Errorf("invalid %s: %v", name, err)
 	}
 	return id, nil
+}
+
+func optionalIntArg(args map[string]interface{}, name string, defaultValue int) int {
+	switch v := args[name].(type) {
+	case float64:
+		return int(v)
+	case float32:
+		return int(v)
+	case int:
+		return v
+	case int64:
+		return int(v)
+	case json.Number:
+		if parsed, err := v.Int64(); err == nil {
+			return int(parsed)
+		}
+	}
+	return defaultValue
 }
 
 func parseNotificationChannelType(args map[string]interface{}) (domain.ChannelType, error) {

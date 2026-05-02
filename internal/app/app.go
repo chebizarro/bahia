@@ -332,7 +332,7 @@ func New(cfg *config.Config) (*App, error) {
 	notifDispatcher.SetupSubscriptions(publisher)
 
 	// MCP (Model Context Protocol) server for AI agent integration.
-	mcpServer := mcp.NewServerWithOptions(registry, logger, mcp.ServerDeps{LogService: runLogService})
+	mcpServer := mcp.NewServerWithOptions(registry, logger, mcp.ServerDeps{LogService: runLogService, Payments: paymentSvc})
 	mcpHandler := handlers.NewMCPHandler(mcpServer, logger)
 	logger.Info("mcp server initialized")
 
