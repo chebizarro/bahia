@@ -15,6 +15,7 @@ import (
 	adapterruntime "github.com/openagentsinc/bahia/internal/adapters/runtime"
 	adapterSBOM "github.com/openagentsinc/bahia/internal/adapters/sbom"
 	"github.com/openagentsinc/bahia/internal/adapters/secrets"
+	"github.com/openagentsinc/bahia/internal/controlplane"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/notifications"
 	"github.com/openagentsinc/bahia/internal/repository"
@@ -26,6 +27,8 @@ import (
 // It exposes deployment registry functionality as MCP tools.
 type Server struct {
 	registry         *service.RegistryService
+	llmRegistry      *service.LLMRegistryService
+	llmCommands      LLMCommandPublisher
 	logger           *zap.Logger
 	secretsRepo      repository.SecretRepository       // optional: for secret management tools
 	encryptor        *secrets.Encryptor                // optional: for secret encryption/decryption
@@ -60,11 +63,20 @@ type ServerDeps struct {
 	SBOMs                  repository.SBOMRepository
 	Signatures             repository.ArtifactSignatureRepository
 	SignVerifier           SignatureVerifier
+	LLMRegistry            *service.LLMRegistryService
+	LLMCommandPublisher    LLMCommandPublisher
 }
 
 // SignatureVerifier verifies signatures for an artifact.
 type SignatureVerifier interface {
 	VerifySignatures(ctx context.Context, artifact *domain.Artifact) ([]domain.ArtifactSignature, error)
+}
+
+// LLMCommandPublisher emits canonical Nostr request events for async LLM MCP tools.
+type LLMCommandPublisher interface {
+	PublishLLMDeployRequest(ctx context.Context, cmd controlplane.LLMDeployCommand) (*controlplane.LLMCommandReceipt, error)
+	PublishLLMApprovalRequest(ctx context.Context, cmd controlplane.LLMApprovalCommand) (*controlplane.LLMCommandReceipt, error)
+	PublishLLMRollbackRequest(ctx context.Context, cmd controlplane.LLMRollbackCommand) (*controlplane.LLMCommandReceipt, error)
 }
 
 // NewServer creates a new MCP server for Bahia.
@@ -86,6 +98,8 @@ func NewServerWithDeps(registry *service.RegistryService, logger *zap.Logger, se
 func NewServerWithOptions(registry *service.RegistryService, logger *zap.Logger, deps ServerDeps) *Server {
 	return &Server{
 		registry:         registry,
+		llmRegistry:      deps.LLMRegistry,
+		llmCommands:      deps.LLMCommandPublisher,
 		logger:           logger,
 		secretsRepo:      deps.SecretsRepo,
 		encryptor:        deps.Encryptor,
@@ -394,6 +408,102 @@ func (s *Server) GetTools() []Tool {
 				},
 				"required": []string{"intent_id"},
 			},
+		},
+		// LLM route/release registry operations
+		{
+			Name:        "bahia_llm_create_route",
+			Description: "Create an LLM route registry entry",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"name":                     map[string]interface{}{"type": "string", "description": "Unique LLM route name"},
+					"description":              map[string]interface{}{"type": "string", "description": "Optional route description"},
+					"gateway_config":           map[string]interface{}{"type": "object", "description": "Gateway route configuration"},
+					"default_placement_policy": map[string]interface{}{"type": "object", "description": "Default placement policy"},
+					"default_promotion_gate":   map[string]interface{}{"type": "object", "description": "Default promotion gate"},
+					"metadata":                 map[string]interface{}{"type": "object", "description": "Additional metadata"},
+				},
+				"required": []string{"name"},
+			},
+		},
+		{
+			Name:        "bahia_llm_update_route",
+			Description: "Update an LLM route registry entry",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"route_id":                 map[string]interface{}{"type": "string", "description": "LLM route UUID"},
+					"description":              map[string]interface{}{"type": "string", "description": "Replacement route description"},
+					"gateway_config":           map[string]interface{}{"type": "object", "description": "Replacement gateway route configuration"},
+					"default_placement_policy": map[string]interface{}{"type": "object", "description": "Replacement default placement policy"},
+					"default_promotion_gate":   map[string]interface{}{"type": "object", "description": "Replacement default promotion gate"},
+					"metadata":                 map[string]interface{}{"type": "object", "description": "Replacement metadata"},
+				},
+				"required": []string{"route_id"},
+			},
+		},
+		{
+			Name:        "bahia_llm_register_release",
+			Description: "Register an immutable deployable LLM release for a route",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"route_id":            map[string]interface{}{"type": "string", "description": "LLM route UUID"},
+					"version":             map[string]interface{}{"type": "string", "description": "Release version"},
+					"model_ref":           map[string]interface{}{"type": "string", "description": "Model reference"},
+					"model_source":        map[string]interface{}{"type": "string", "description": "Model source"},
+					"model_revision":      map[string]interface{}{"type": "string", "description": "Optional model revision"},
+					"estimated_vram_gb":   map[string]interface{}{"type": "integer", "description": "Estimated VRAM in GB"},
+					"backend_preferences": map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}, "description": "Preferred backend kinds"},
+					"runtime_backend":     map[string]interface{}{"type": "object", "description": "Managed runtime backend config"},
+					"external_backend":    map[string]interface{}{"type": "object", "description": "External backend config"},
+					"placement_policy":    map[string]interface{}{"type": "object", "description": "Release placement policy"},
+					"promotion_gate":      map[string]interface{}{"type": "object", "description": "Release promotion gate"},
+					"metadata":            map[string]interface{}{"type": "object", "description": "Additional metadata"},
+				},
+				"required": []string{"route_id", "version", "model_ref", "model_source"},
+			},
+		},
+		{
+			Name:        "bahia_llm_list_routes",
+			Description: "List LLM route registry entries",
+			InputSchema: map[string]interface{}{"type": "object", "properties": map[string]interface{}{"limit": map[string]interface{}{"type": "integer"}, "offset": map[string]interface{}{"type": "integer"}}},
+		},
+		{
+			Name:        "bahia_llm_list_releases",
+			Description: "List LLM releases for a route",
+			InputSchema: map[string]interface{}{"type": "object", "properties": map[string]interface{}{"route_id": map[string]interface{}{"type": "string"}, "limit": map[string]interface{}{"type": "integer"}, "offset": map[string]interface{}{"type": "integer"}}, "required": []string{"route_id"}},
+		},
+		// Async LLM Nostr command operations
+		{
+			Name:        "bahia_llm_deploy",
+			Description: "Publish a canonical LLM deploy request event and return correlation metadata",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"route_id":       map[string]interface{}{"type": "string", "description": "LLM route UUID"},
+					"environment_id": map[string]interface{}{"type": "string", "description": "Target environment UUID"},
+					"release_id":     map[string]interface{}{"type": "string", "description": "LLM release UUID"},
+					"requested_by":   map[string]interface{}{"type": "string", "description": "Requester identity"},
+					"metadata":       map[string]interface{}{"type": "object", "description": "Additional request metadata"},
+				},
+				"required": []string{"route_id", "environment_id", "release_id"},
+			},
+		},
+		{
+			Name:        "bahia_llm_approve_deployment",
+			Description: "Publish a canonical LLM deployment approval request event and return correlation metadata",
+			InputSchema: map[string]interface{}{"type": "object", "properties": map[string]interface{}{"intent_id": map[string]interface{}{"type": "string"}}, "required": []string{"intent_id"}},
+		},
+		{
+			Name:        "bahia_llm_reject_deployment",
+			Description: "Publish a canonical LLM deployment rejection request event and return correlation metadata",
+			InputSchema: map[string]interface{}{"type": "object", "properties": map[string]interface{}{"intent_id": map[string]interface{}{"type": "string"}}, "required": []string{"intent_id"}},
+		},
+		{
+			Name:        "bahia_llm_rollback",
+			Description: "Publish a canonical LLM rollback request event and return correlation metadata",
+			InputSchema: map[string]interface{}{"type": "object", "properties": map[string]interface{}{"route_id": map[string]interface{}{"type": "string"}, "environment_id": map[string]interface{}{"type": "string"}, "requested_by": map[string]interface{}{"type": "string"}}, "required": []string{"route_id", "environment_id"}},
 		},
 		{
 			Name:        "bahia_delete_service",
@@ -1512,6 +1622,26 @@ func (s *Server) CallTool(ctx context.Context, name string, arguments map[string
 		return s.handleApproveDeployment(ctx, arguments)
 	case "bahia_reject_deployment":
 		return s.handleRejectDeployment(ctx, arguments)
+	// LLM registry operations
+	case "bahia_llm_create_route":
+		return s.handleLLMCreateRoute(ctx, arguments)
+	case "bahia_llm_update_route":
+		return s.handleLLMUpdateRoute(ctx, arguments)
+	case "bahia_llm_register_release":
+		return s.handleLLMRegisterRelease(ctx, arguments)
+	case "bahia_llm_list_routes":
+		return s.handleLLMListRoutes(ctx, arguments)
+	case "bahia_llm_list_releases":
+		return s.handleLLMListReleases(ctx, arguments)
+	// Async LLM Nostr command operations
+	case "bahia_llm_deploy":
+		return s.handleLLMDeploy(ctx, arguments)
+	case "bahia_llm_approve_deployment":
+		return s.handleLLMApproveDeployment(ctx, arguments)
+	case "bahia_llm_reject_deployment":
+		return s.handleLLMRejectDeployment(ctx, arguments)
+	case "bahia_llm_rollback":
+		return s.handleLLMRollback(ctx, arguments)
 	case "bahia_delete_service":
 		return s.handleDeleteService(ctx, arguments)
 	case "bahia_delete_environment":
@@ -2121,6 +2251,257 @@ func (s *Server) handleRejectDeployment(ctx context.Context, args map[string]int
 		"message":   "Deployment intent rejected",
 	}
 	return jsonResult(result)
+}
+
+func (s *Server) requireLLMRegistry() (*service.LLMRegistryService, *ToolResult) {
+	if s.llmRegistry == nil {
+		return nil, errorResult("LLM registry is not configured")
+	}
+	return s.llmRegistry, nil
+}
+
+func (s *Server) requireLLMCommands() (LLMCommandPublisher, *ToolResult) {
+	if s.llmCommands == nil {
+		return nil, errorResult("LLM command publisher is not configured")
+	}
+	return s.llmCommands, nil
+}
+
+func (s *Server) handleLLMCreateRoute(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
+	registry, errResult := s.requireLLMRegistry()
+	if errResult != nil {
+		return errResult, nil
+	}
+	var req struct {
+		Name                   string                         `json:"name"`
+		Description            string                         `json:"description,omitempty"`
+		GatewayConfig          *domain.LLMGatewayRouteConfig  `json:"gateway_config,omitempty"`
+		DefaultPlacementPolicy *domain.LLMPlacementPolicy     `json:"default_placement_policy,omitempty"`
+		DefaultPromotionGate   *domain.LLMPromotionGateConfig `json:"default_promotion_gate,omitempty"`
+		Metadata               map[string]any                 `json:"metadata,omitempty"`
+	}
+	if err := decodeToolArgs(args, &req); err != nil {
+		return errorResult(fmt.Sprintf("invalid LLM route request: %v", err)), nil
+	}
+	route := &domain.LLMRoute{Name: req.Name, Description: req.Description, GatewayConfig: req.GatewayConfig, DefaultPlacementPolicy: req.DefaultPlacementPolicy, DefaultPromotionGate: req.DefaultPromotionGate, Metadata: req.Metadata}
+	if err := registry.CreateRoute(ctx, route); err != nil {
+		return errorResult(fmt.Sprintf("failed to create LLM route: %v", err)), nil
+	}
+	return jsonResult(map[string]interface{}{
+		"status":        "created",
+		"route_id":      route.ID.String(),
+		"registry_kind": controlplane.KindLLMRouteRegistry,
+		"state_kind":    controlplane.KindLLMRouteState,
+		"route":         llmRouteToMap(route),
+	})
+}
+
+func (s *Server) handleLLMUpdateRoute(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
+	registry, errResult := s.requireLLMRegistry()
+	if errResult != nil {
+		return errResult, nil
+	}
+	routeID, err := parseUUIDArg(args, "route_id")
+	if err != nil {
+		return errorResult(err.Error()), nil
+	}
+	route, err := registry.GetRoute(ctx, routeID)
+	if err != nil {
+		return errorResult(fmt.Sprintf("failed to get LLM route: %v", err)), nil
+	}
+	if route == nil {
+		return errorResult("LLM route not found"), nil
+	}
+	var req struct {
+		Description            string                         `json:"description,omitempty"`
+		GatewayConfig          *domain.LLMGatewayRouteConfig  `json:"gateway_config,omitempty"`
+		DefaultPlacementPolicy *domain.LLMPlacementPolicy     `json:"default_placement_policy,omitempty"`
+		DefaultPromotionGate   *domain.LLMPromotionGateConfig `json:"default_promotion_gate,omitempty"`
+		Metadata               map[string]any                 `json:"metadata,omitempty"`
+	}
+	if err := decodeToolArgs(args, &req); err != nil {
+		return errorResult(fmt.Sprintf("invalid LLM route update: %v", err)), nil
+	}
+	if _, ok := args["description"]; ok {
+		route.Description = req.Description
+	}
+	if req.GatewayConfig != nil {
+		route.GatewayConfig = req.GatewayConfig
+	}
+	if req.DefaultPlacementPolicy != nil {
+		route.DefaultPlacementPolicy = req.DefaultPlacementPolicy
+	}
+	if req.DefaultPromotionGate != nil {
+		route.DefaultPromotionGate = req.DefaultPromotionGate
+	}
+	if req.Metadata != nil {
+		route.Metadata = req.Metadata
+	}
+	if err := registry.UpdateRoute(ctx, route); err != nil {
+		return errorResult(fmt.Sprintf("failed to update LLM route: %v", err)), nil
+	}
+	return jsonResult(map[string]interface{}{
+		"status":        "updated",
+		"route_id":      route.ID.String(),
+		"registry_kind": controlplane.KindLLMRouteRegistry,
+		"state_kind":    controlplane.KindLLMRouteState,
+		"route":         llmRouteToMap(route),
+	})
+}
+
+func (s *Server) handleLLMRegisterRelease(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
+	registry, errResult := s.requireLLMRegistry()
+	if errResult != nil {
+		return errResult, nil
+	}
+	var req struct {
+		RouteID            string                                 `json:"route_id"`
+		Version            string                                 `json:"version"`
+		ModelRef           string                                 `json:"model_ref"`
+		ModelSource        string                                 `json:"model_source"`
+		ModelRevision      string                                 `json:"model_revision,omitempty"`
+		EstimatedVRAMGB    int                                    `json:"estimated_vram_gb,omitempty"`
+		BackendPreferences []domain.LLMBackendKind                `json:"backend_preferences,omitempty"`
+		RuntimeBackend     *domain.LLMRuntimeManagedBackendConfig `json:"runtime_backend,omitempty"`
+		ExternalBackend    *domain.LLMExternalBackendConfig       `json:"external_backend,omitempty"`
+		PlacementPolicy    *domain.LLMPlacementPolicy             `json:"placement_policy,omitempty"`
+		PromotionGate      *domain.LLMPromotionGateConfig         `json:"promotion_gate,omitempty"`
+		Metadata           map[string]any                         `json:"metadata,omitempty"`
+	}
+	if err := decodeToolArgs(args, &req); err != nil {
+		return errorResult(fmt.Sprintf("invalid LLM release request: %v", err)), nil
+	}
+	routeID, err := uuid.Parse(req.RouteID)
+	if err != nil {
+		return errorResult(fmt.Sprintf("invalid route_id: %v", err)), nil
+	}
+	release := &domain.LLMRelease{RouteID: routeID, Version: req.Version, ModelRef: req.ModelRef, ModelSource: req.ModelSource, ModelRevision: req.ModelRevision, EstimatedVRAMGB: req.EstimatedVRAMGB, BackendPreferences: req.BackendPreferences, RuntimeBackend: req.RuntimeBackend, ExternalBackend: req.ExternalBackend, PlacementPolicy: req.PlacementPolicy, PromotionGate: req.PromotionGate, Metadata: req.Metadata}
+	if err := registry.CreateRelease(ctx, release); err != nil {
+		return errorResult(fmt.Sprintf("failed to register LLM release: %v", err)), nil
+	}
+	return jsonResult(map[string]interface{}{
+		"status":        "registered",
+		"route_id":      routeID.String(),
+		"release_id":    release.ID.String(),
+		"registry_kind": controlplane.KindLLMRouteRegistry,
+		"state_kind":    controlplane.KindLLMRouteState,
+		"release":       llmReleaseToMap(release),
+	})
+}
+
+func (s *Server) handleLLMListRoutes(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
+	registry, errResult := s.requireLLMRegistry()
+	if errResult != nil {
+		return errResult, nil
+	}
+	limit, offset := limitOffsetArgs(args, 100)
+	routes, err := registry.ListRoutes(ctx, limit, offset)
+	if err != nil {
+		return errorResult(fmt.Sprintf("failed to list LLM routes: %v", err)), nil
+	}
+	out := make([]map[string]interface{}, 0, len(routes))
+	for i := range routes {
+		out = append(out, llmRouteToMap(&routes[i]))
+	}
+	return jsonResult(map[string]interface{}{"routes": out, "total": len(out), "registry_kind": controlplane.KindLLMRouteRegistry})
+}
+
+func (s *Server) handleLLMListReleases(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
+	registry, errResult := s.requireLLMRegistry()
+	if errResult != nil {
+		return errResult, nil
+	}
+	routeID, err := parseUUIDArg(args, "route_id")
+	if err != nil {
+		return errorResult(err.Error()), nil
+	}
+	limit, offset := limitOffsetArgs(args, 100)
+	releases, err := registry.ListReleases(ctx, routeID, limit, offset)
+	if err != nil {
+		return errorResult(fmt.Sprintf("failed to list LLM releases: %v", err)), nil
+	}
+	out := make([]map[string]interface{}, 0, len(releases))
+	for i := range releases {
+		out = append(out, llmReleaseToMap(&releases[i]))
+	}
+	return jsonResult(map[string]interface{}{"route_id": routeID.String(), "releases": out, "total": len(out), "registry_kind": controlplane.KindLLMRouteRegistry})
+}
+
+func (s *Server) handleLLMDeploy(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
+	publisher, errResult := s.requireLLMCommands()
+	if errResult != nil {
+		return errResult, nil
+	}
+	routeID, err := parseUUIDArg(args, "route_id")
+	if err != nil {
+		return errorResult(err.Error()), nil
+	}
+	envID, err := parseUUIDArg(args, "environment_id")
+	if err != nil {
+		return errorResult(err.Error()), nil
+	}
+	releaseID, err := parseUUIDArg(args, "release_id")
+	if err != nil {
+		return errorResult(err.Error()), nil
+	}
+	requestedBy, _ := args["requested_by"].(string)
+	if requestedBy == "" {
+		requestedBy = "mcp-agent"
+	}
+	metadata, _ := args["metadata"].(map[string]interface{})
+	receipt, err := publisher.PublishLLMDeployRequest(ctx, controlplane.LLMDeployCommand{RouteID: routeID, EnvironmentID: envID, ReleaseID: releaseID, RequestedBy: requestedBy, Metadata: metadata})
+	if err != nil {
+		return errorResult(fmt.Sprintf("failed to publish LLM deploy request: %v", err)), nil
+	}
+	return jsonResult(llmCommandReceiptToMap("submitted", receipt))
+}
+
+func (s *Server) handleLLMApproveDeployment(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
+	return s.handleLLMApprovalDecision(ctx, args, "approve")
+}
+
+func (s *Server) handleLLMRejectDeployment(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
+	return s.handleLLMApprovalDecision(ctx, args, "reject")
+}
+
+func (s *Server) handleLLMApprovalDecision(ctx context.Context, args map[string]interface{}, decision string) (*ToolResult, error) {
+	publisher, errResult := s.requireLLMCommands()
+	if errResult != nil {
+		return errResult, nil
+	}
+	intentID, err := parseUUIDArg(args, "intent_id")
+	if err != nil {
+		return errorResult(err.Error()), nil
+	}
+	receipt, err := publisher.PublishLLMApprovalRequest(ctx, controlplane.LLMApprovalCommand{IntentID: intentID, Decision: decision})
+	if err != nil {
+		return errorResult(fmt.Sprintf("failed to publish LLM approval request: %v", err)), nil
+	}
+	return jsonResult(llmCommandReceiptToMap("submitted", receipt))
+}
+
+func (s *Server) handleLLMRollback(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
+	publisher, errResult := s.requireLLMCommands()
+	if errResult != nil {
+		return errResult, nil
+	}
+	routeID, err := parseUUIDArg(args, "route_id")
+	if err != nil {
+		return errorResult(err.Error()), nil
+	}
+	envID, err := parseUUIDArg(args, "environment_id")
+	if err != nil {
+		return errorResult(err.Error()), nil
+	}
+	requestedBy, _ := args["requested_by"].(string)
+	if requestedBy == "" {
+		requestedBy = "mcp-agent"
+	}
+	receipt, err := publisher.PublishLLMRollbackRequest(ctx, controlplane.LLMRollbackCommand{RouteID: routeID, EnvironmentID: envID, RequestedBy: requestedBy})
+	if err != nil {
+		return errorResult(fmt.Sprintf("failed to publish LLM rollback request: %v", err)), nil
+	}
+	return jsonResult(llmCommandReceiptToMap("submitted", receipt))
 }
 
 func (s *Server) handleDeleteService(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
@@ -3382,6 +3763,114 @@ func (s *Server) handleGetIntent(ctx context.Context, args map[string]interface{
 }
 
 // --- Helper Functions ---
+
+func decodeToolArgs(args map[string]interface{}, out interface{}) error {
+	data, err := json.Marshal(args)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(data, out)
+}
+
+func parseUUIDArg(args map[string]interface{}, key string) (uuid.UUID, error) {
+	raw, _ := args[key].(string)
+	if raw == "" {
+		return uuid.Nil, fmt.Errorf("%s is required", key)
+	}
+	id, err := uuid.Parse(raw)
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("invalid %s: %v", key, err)
+	}
+	return id, nil
+}
+
+func limitOffsetArgs(args map[string]interface{}, defaultLimit int) (int, int) {
+	limit := defaultLimit
+	offset := 0
+	if l, ok := args["limit"].(float64); ok && l > 0 {
+		limit = int(l)
+	}
+	if l, ok := args["limit"].(int); ok && l > 0 {
+		limit = l
+	}
+	if o, ok := args["offset"].(float64); ok && o > 0 {
+		offset = int(o)
+	}
+	if o, ok := args["offset"].(int); ok && o > 0 {
+		offset = o
+	}
+	return limit, offset
+}
+
+func llmRouteToMap(route *domain.LLMRoute) map[string]interface{} {
+	if route == nil {
+		return nil
+	}
+	return map[string]interface{}{
+		"id":                       route.ID.String(),
+		"name":                     route.Name,
+		"description":              route.Description,
+		"gateway_config":           route.GatewayConfig,
+		"default_placement_policy": route.DefaultPlacementPolicy,
+		"default_promotion_gate":   route.DefaultPromotionGate,
+		"metadata":                 route.Metadata,
+		"created_at":               route.CreatedAt.Format("2006-01-02T15:04:05Z"),
+		"updated_at":               route.UpdatedAt.Format("2006-01-02T15:04:05Z"),
+	}
+}
+
+func llmReleaseToMap(release *domain.LLMRelease) map[string]interface{} {
+	if release == nil {
+		return nil
+	}
+	return map[string]interface{}{
+		"id":                  release.ID.String(),
+		"route_id":            release.RouteID.String(),
+		"version":             release.Version,
+		"model_ref":           release.ModelRef,
+		"model_source":        release.ModelSource,
+		"model_revision":      release.ModelRevision,
+		"estimated_vram_gb":   release.EstimatedVRAMGB,
+		"backend_preferences": release.BackendPreferences,
+		"runtime_backend":     release.RuntimeBackend,
+		"external_backend":    release.ExternalBackend,
+		"placement_policy":    release.PlacementPolicy,
+		"promotion_gate":      release.PromotionGate,
+		"metadata":            release.Metadata,
+		"created_at":          release.CreatedAt.Format("2006-01-02T15:04:05Z"),
+	}
+}
+
+func llmCommandReceiptToMap(status string, receipt *controlplane.LLMCommandReceipt) map[string]interface{} {
+	result := map[string]interface{}{"status": status}
+	if receipt == nil {
+		return result
+	}
+	result["request_event_id"] = receipt.RequestEventID
+	result["request_pubkey"] = receipt.RequestPubkey
+	result["request_kind"] = receipt.RequestKind
+	result["status_kind"] = receipt.StatusKind
+	result["result_kind"] = receipt.ResultKind
+	result["registry_kind"] = receipt.RegistryKind
+	result["state_kind"] = receipt.StateKind
+	result["published_relays"] = receipt.PublishedRelays
+	if receipt.RouteID != "" {
+		result["route_id"] = receipt.RouteID
+	}
+	if receipt.EnvironmentID != "" {
+		result["environment_id"] = receipt.EnvironmentID
+	}
+	if receipt.ReleaseID != "" {
+		result["release_id"] = receipt.ReleaseID
+	}
+	if receipt.IntentID != "" {
+		result["intent_id"] = receipt.IntentID
+	}
+	if receipt.Decision != "" {
+		result["decision"] = receipt.Decision
+	}
+	return result
+}
 
 func jsonResult(data interface{}) (*ToolResult, error) {
 	jsonBytes, err := json.MarshalIndent(data, "", "  ")

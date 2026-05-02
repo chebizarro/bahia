@@ -379,12 +379,18 @@ func New(cfg *config.Config) (*App, error) {
 	notifDispatcher.SetupSubscriptions(publisher)
 
 	// MCP (Model Context Protocol) server for AI agent integration.
+	var llmCommandPublisher mcp.LLMCommandPublisher
+	if llmRegistry != nil && cfg.Nostr.PrivateKey != "" && controlPlanePool != nil && len(controlPlaneRelays) > 0 {
+		llmCommandPublisher = controlplane.NewLLMCommandPublisher(controlPlanePool, cfg.Nostr.PrivateKey, nil)
+	}
 	mcpServer := mcp.NewServerWithOptions(registry, logger, mcp.ServerDeps{
-		LogService:   runLogService,
-		Payments:     paymentSvc,
-		SBOMs:        sbomRepo,
-		Signatures:   sigRepo,
-		SignVerifier: signVerifier,
+		LogService:          runLogService,
+		Payments:            paymentSvc,
+		SBOMs:               sbomRepo,
+		Signatures:          sigRepo,
+		SignVerifier:        signVerifier,
+		LLMRegistry:         llmRegistry,
+		LLMCommandPublisher: llmCommandPublisher,
 	})
 	mcpHandler := handlers.NewMCPHandler(mcpServer, logger)
 	logger.Info("mcp server initialized")

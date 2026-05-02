@@ -327,6 +327,10 @@ func (s *LLMRegistryService) CompleteDeploymentRun(ctx context.Context, id uuid.
 }
 
 func (s *LLMRegistryService) Rollback(ctx context.Context, routeID, envID uuid.UUID, requestedBy string) (*domain.LLMDeploymentIntent, error) {
+	return s.RollbackWithMetadata(ctx, routeID, envID, requestedBy, nil)
+}
+
+func (s *LLMRegistryService) RollbackWithMetadata(ctx context.Context, routeID, envID uuid.UUID, requestedBy string, metadata map[string]any) (*domain.LLMDeploymentIntent, error) {
 	state, err := s.state.Get(ctx, routeID, envID)
 	if err != nil {
 		return nil, err
@@ -357,7 +361,7 @@ func (s *LLMRegistryService) Rollback(ctx context.Context, routeID, envID uuid.U
 	if targetReleaseID == nil {
 		return nil, fmt.Errorf("no previous successfully deployed LLM release to roll back to")
 	}
-	intent := &domain.LLMDeploymentIntent{RouteID: routeID, EnvironmentID: envID, ReleaseID: *targetReleaseID, RequestedBy: requestedBy, SourceKind: domain.SourceKindRollback, ApprovalStatus: domain.ApprovalStatusNotRequired, Status: domain.IntentStatusApproved, SupersedesIntentID: supersedes}
+	intent := &domain.LLMDeploymentIntent{RouteID: routeID, EnvironmentID: envID, ReleaseID: *targetReleaseID, RequestedBy: requestedBy, SourceKind: domain.SourceKindRollback, ApprovalStatus: domain.ApprovalStatusNotRequired, Status: domain.IntentStatusApproved, SupersedesIntentID: supersedes, Metadata: metadata}
 	if err := s.CreateDeploymentIntent(ctx, intent); err != nil {
 		return nil, err
 	}

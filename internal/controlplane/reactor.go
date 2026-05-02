@@ -25,7 +25,7 @@ import (
 // This is the CANONICAL event kind series for Bahia operations.
 // The 311xx series in internal/adapters/nostr/publisher.go is deprecated.
 const (
-	// Request kinds (5961-5974)
+	// Request kinds (5961-5975)
 	KindDeployRequest         = 5961 // Request to deploy a service
 	KindRollbackRequest       = 5962 // Request to rollback a service
 	KindServiceAction         = 5963 // Lifecycle action (scale, restart, stop)
@@ -38,11 +38,12 @@ const (
 	KindLLMReleaseRegister    = 5972 // Register an LLM release
 	KindLLMDeployRequest      = 5973 // Request LLM route deployment
 	KindLLMDeploymentApproval = 5974 // Approve or reject an LLM deployment
+	KindLLMRollbackRequest    = 5975 // Request LLM route rollback
 
 	// Status kinds (6961-6973)
 	KindDeploymentStatus    = 6961 // Deployment progress updates
 	KindServiceStatus       = 6962 // Service health/state updates
-	KindLLMDeploymentStatus = 6973 // LLM deployment progress updates
+	KindLLMDeploymentStatus = 6973 // LLM deployment/rollback progress updates
 
 	// Result kinds (7961-7973)
 	KindDeploymentResult         = 7961 // Final deployment result
@@ -53,7 +54,7 @@ const (
 	KindRemediationResult        = 7966 // Drift remediation result
 	KindLLMRouteCreateResult     = 7971 // LLM route creation result
 	KindLLMReleaseRegisterResult = 7972 // LLM release registration result
-	KindLLMDeploymentResult      = 7973 // LLM deployment/approval result
+	KindLLMDeploymentResult      = 7973 // LLM deployment/approval/rollback result
 
 	// Replaceable registry kinds (3196x series, d-tag indexed)
 	KindServiceState        = 31961 // Replaceable service state (d=service:env)
@@ -199,6 +200,7 @@ func (r *Reactor) Run(ctx context.Context) error {
 				KindLLMReleaseRegister,
 				KindLLMDeployRequest,
 				KindLLMDeploymentApproval,
+				KindLLMRollbackRequest,
 			},
 			Since: &now,
 		},
@@ -277,6 +279,8 @@ func (r *Reactor) handleEvent(ctx context.Context, event *nostr.Event) {
 		go r.handleLLMDeployRequest(ctx, event)
 	case KindLLMDeploymentApproval:
 		go r.handleLLMDeploymentApproval(ctx, event)
+	case KindLLMRollbackRequest:
+		go r.handleLLMRollbackRequest(ctx, event)
 	default:
 		r.logger.Warn("unexpected event kind", "kind", event.Kind)
 	}
@@ -790,6 +794,55 @@ func (r *Reactor) handleLLMDeploymentApproval(ctx context.Context, event *nostr.
 		intent = &domain.LLMDeploymentIntent{ID: intentID}
 	}
 	r.publishLLMDeploymentResult(ctx, event, intent, content.Decision, "LLM deployment approval decision recorded")
+}
+
+// handleLLMRollbackRequest processes a kind:5975 LLM rollback request.
+func (r *Reactor) handleLLMRollbackRequest(ctx context.Context, event *nostr.Event) {
+	logger := r.logger.With("event_id", event.ID, "requester", event.PubKey)
+	if !r.authorizeLLMRequest(ctx, event, "rollback") {
+		return
+	}
+	var req struct {
+		RouteID       string `json:"route_id,omitempty"`
+		EnvironmentID string `json:"environment_id,omitempty"`
+		RequestedBy   string `json:"requested_by,omitempty"`
+	}
+	_ = json.Unmarshal([]byte(event.Content), &req)
+	if req.RouteID == "" {
+		req.RouteID = tagValueNostr(event.Tags, "route")
+	}
+	if req.EnvironmentID == "" {
+		req.EnvironmentID = tagValueNostr(event.Tags, "environment")
+	}
+	routeID, err := uuid.Parse(req.RouteID)
+	if err != nil {
+		r.publishLLMError(ctx, event, "validation_error", fmt.Sprintf("invalid route_id: %v", err))
+		return
+	}
+	envID, err := uuid.Parse(req.EnvironmentID)
+	if err != nil {
+		r.publishLLMError(ctx, event, "validation_error", fmt.Sprintf("invalid environment_id: %v", err))
+		return
+	}
+	if req.RequestedBy == "" {
+		req.RequestedBy = event.PubKey
+	}
+
+	metadata := map[string]any{
+		"nostr_event_id":         event.ID,
+		"nostr_request_pubkey":   event.PubKey,
+		"nostr_request_kind":     event.Kind,
+		"nostr_request_command":  "llm_rollback",
+		"nostr_requested_by_raw": req.RequestedBy,
+	}
+	intent, err := r.llmRegistry.RollbackWithMetadata(ctx, routeID, envID, req.RequestedBy, metadata)
+	if err != nil {
+		logger.Error("failed to initiate LLM rollback", "error", err)
+		r.publishLLMError(ctx, event, "rollback_error", err.Error())
+		return
+	}
+	logger.Info("LLM rollback intent created", "intent_id", intent.ID.String())
+	r.publishLLMDeploymentStatus(ctx, event, intent, "accepted", "LLM rollback intent accepted")
 }
 
 func (r *Reactor) authorizeLLMRequest(ctx context.Context, event *nostr.Event, step string) bool {
