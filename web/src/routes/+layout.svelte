@@ -6,7 +6,8 @@
   import ToastContainer from '$lib/components/ToastContainer.svelte';
   import { loadAll, subscribeToEvents, unsubscribeFromEvents } from '$lib/stores';
   import { theme } from '$lib/stores/theme.js';
-  import { initializeAuth } from '$lib/stores/auth.js';
+  import { authState, initializeAuth, isAuthenticated } from '$lib/stores/auth.js';
+  import { canAccessRoute } from '$lib/auth/route-access.js';
   /**
    * @typedef {Object} Props
    * @property {import('svelte').Snippet} [children]
@@ -15,22 +16,15 @@
   /** @type {Props} */
   let { children } = $props();
 
-  // Routes that require authentication
-  const protectedPrefixes = [
-    '/souls',
-    '/services',
-    '/deployments',
-    '/policies',
-    '/environments',
-    '/workers',
-    '/artifacts',
-    '/settings',
-    '/events',
-    '/orgs'
-  ];
+  const routeAccess = $derived(
+    canAccessRoute({
+      pathname: page.url.pathname,
+      authState,
+      isAuthenticated: isAuthenticated()
+    })
+  );
 
-  // Check if current route is protected
-  let isProtectedRoute = $derived(protectedPrefixes.some(prefix => page.url.pathname.startsWith(prefix)));
+  const isProtectedRoute = $derived(routeAccess.protectedRoute);
 
   $effect(() => {
     let active = true;
@@ -54,7 +48,7 @@
   <main>
     <ErrorBoundary>
       {#if isProtectedRoute}
-        <AuthGuard>
+        <AuthGuard requiredRoles={routeAccess.requiredRoles}>
           {@render children?.()}
         </AuthGuard>
       {:else}

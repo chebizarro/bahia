@@ -3,7 +3,7 @@
   import { untrack } from 'svelte';
   import { authState, isAuthenticated, initializeAuth } from '$lib/stores/auth.js';
 
-  let { children } = $props();
+  let { children, requiredRoles = [] } = $props();
 
   let initialized = $state(false);
 
@@ -25,6 +25,14 @@
 
   const isAuthorized = $derived(authState.backendAuthenticated || isAuthenticated());
 
+  const roleAuthorized = $derived(
+    requiredRoles.length === 0 ||
+      requiredRoles.some((role) =>
+        (Array.isArray(authState.roles) && authState.roles.includes(role)) ||
+        (Array.isArray(authState?.capabilities?.roles) && authState.capabilities.roles.includes(role))
+      )
+  );
+
   $effect(() => {
     if (!isLoading && !isAuthorized) {
       goto('/');
@@ -37,11 +45,15 @@
     <div class="spinner"></div>
     <p>Checking authentication...</p>
   </div>
-{:else if isAuthorized}
+{:else if isAuthorized && roleAuthorized}
   {@render children?.()}
-{:else}
+{:else if !isAuthorized}
   <div class="auth-redirect">
     <p>Redirecting to login...</p>
+  </div>
+{:else}
+  <div class="auth-redirect">
+    <p>You do not have permission to view this page.</p>
   </div>
 {/if}
 
