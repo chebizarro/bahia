@@ -47,13 +47,17 @@ function updateAuthState(patch) {
   Object.assign(authState, patch);
 }
 
+function isValidHexPubkey(pubkey) {
+  return typeof pubkey === 'string' && /^[0-9a-fA-F]{64}$/.test(pubkey);
+}
+
 function loadPersistedSession() {
   if (!browser) return null;
   try {
     const stored = localStorage.getItem(SESSION_KEY);
     if (!stored) return null;
     const session = JSON.parse(stored);
-    if (!session.pubkey || typeof session.pubkey !== 'string') return null;
+    if (!isValidHexPubkey(session.pubkey)) return null;
     return {
       pubkey: session.pubkey,
       relays: session.relays || {},

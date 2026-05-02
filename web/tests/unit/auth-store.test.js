@@ -154,6 +154,22 @@ describe('Auth Store', () => {
       expect(state.status).toBe('unauthenticated');
     });
 
+    it('should ignore session with invalid pubkey format', async () => {
+      const invalidSession = {
+        pubkey: 'not-a-hex-pubkey',
+        relays: { 'wss://relay.test': { read: true, write: true } },
+        lastAuthenticatedAt: '2026-04-29T12:00:00.000Z'
+      };
+      localStorage.setItem('bahia_auth_session', JSON.stringify(invalidSession));
+
+      await authModule.initializeAuth();
+
+      const state = authModule.authState;
+
+      expect(state.status).toBe('unauthenticated');
+      expect(state.pubkey).toBeNull();
+    });
+
     it('should set error status on initialization failure', async () => {
       nip07Module.waitForNip07.mockRejectedValue(new Error('Init failed'));
       
