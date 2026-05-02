@@ -627,6 +627,62 @@ describe('BahiaClient - Extended API Coverage', () => {
 
       await expect(api.getSBOM(artifactId)).rejects.toThrow('SBOM not found for this artifact');
     });
+
+    it('should call getSBOMPackages with artifact and query params', async () => {
+      const artifactId = 'artifact-abc-123';
+      const params = { ecosystem: 'npm', limit: 25 };
+
+      global.fetch.mockResolvedValueOnce({
+        ok: true,
+        headers: new Map([['content-type', 'application/json']]),
+        json: async () => ({ data: { packages: [{ name: 'svelte' }] } })
+      });
+
+      const result = await api.getSBOMPackages(artifactId, params);
+
+      expect(global.fetch).toHaveBeenCalledWith(
+        `/api/v1/artifacts/${encodeURIComponent(artifactId)}/sbom/packages?ecosystem=npm&limit=25`,
+        expect.any(Object)
+      );
+      expect(result).toEqual({ packages: [{ name: 'svelte' }] });
+    });
+
+    it('should call searchSBOMPackages with query params', async () => {
+      const params = { q: 'openssl', ecosystem: 'deb' };
+
+      global.fetch.mockResolvedValueOnce({
+        ok: true,
+        headers: new Map([['content-type', 'application/json']]),
+        json: async () => ({ data: { results: [{ name: 'openssl' }] } })
+      });
+
+      const result = await api.searchSBOMPackages(params);
+
+      expect(global.fetch).toHaveBeenCalledWith('/api/v1/sbom/search?q=openssl&ecosystem=deb', expect.any(Object));
+      expect(result).toEqual({ results: [{ name: 'openssl' }] });
+    });
+
+    it('should call ingestSBOM with POST and payload', async () => {
+      const artifactId = 'artifact-xyz';
+      const payload = { format: 'spdx-json', content: '{"spdxVersion":"SPDX-2.3"}' };
+
+      global.fetch.mockResolvedValueOnce({
+        ok: true,
+        headers: new Map([['content-type', 'application/json']]),
+        json: async () => ({ data: { ingested: true } })
+      });
+
+      const result = await api.ingestSBOM(artifactId, payload);
+
+      expect(global.fetch).toHaveBeenCalledWith(
+        `/api/v1/artifacts/${encodeURIComponent(artifactId)}/sbom`,
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify(payload)
+        })
+      );
+      expect(result).toEqual({ ingested: true });
+    });
   });
 
   describe('Deployment Run Logs Methods', () => {
@@ -667,6 +723,75 @@ describe('BahiaClient - Extended API Coverage', () => {
   });
 
   describe('Signature Methods', () => {
+    it('should call listSignatures and default to empty array for null response', async () => {
+      const artifactId = 'artifact-signatures';
+
+      global.fetch.mockResolvedValueOnce({
+        ok: true,
+        headers: new Map([['content-type', 'application/json']]),
+        json: async () => ({ data: null })
+      });
+
+      const result = await api.listSignatures(artifactId);
+
+      expect(global.fetch).toHaveBeenCalledWith(
+        `/api/v1/artifacts/${encodeURIComponent(artifactId)}/signatures`,
+        expect.any(Object)
+      );
+      expect(result).toEqual([]);
+    });
+
+    it('should call listVerifiedSignatures and default to empty array for null response', async () => {
+      const artifactId = 'artifact-verified-signatures';
+
+      global.fetch.mockResolvedValueOnce({
+        ok: true,
+        headers: new Map([['content-type', 'application/json']]),
+        json: async () => ({ data: null })
+      });
+
+      const result = await api.listVerifiedSignatures(artifactId);
+
+      expect(global.fetch).toHaveBeenCalledWith(
+        `/api/v1/artifacts/${encodeURIComponent(artifactId)}/signatures/verified`,
+        expect.any(Object)
+      );
+      expect(result).toEqual([]);
+    });
+
+    it('should call hasVerifiedSignature with encoded artifact ID', async () => {
+      const artifactId = 'artifact/v2#sig';
+
+      global.fetch.mockResolvedValueOnce({
+        ok: true,
+        headers: new Map([['content-type', 'application/json']]),
+        json: async () => ({ data: { has_verified_signature: true } })
+      });
+
+      const result = await api.hasVerifiedSignature(artifactId);
+
+      expect(global.fetch).toHaveBeenCalledWith(
+        `/api/v1/artifacts/${encodeURIComponent(artifactId)}/signatures/check`,
+        expect.any(Object)
+      );
+      expect(result).toEqual({ has_verified_signature: true });
+    });
+
+    it('should call getSignature with encoded signature ID', async () => {
+      const id = 'sig/abc:123';
+
+      global.fetch.mockResolvedValueOnce({
+        ok: true,
+        headers: new Map([['content-type', 'application/json']]),
+        json: async () => ({ data: { id, valid: true } })
+      });
+
+      const result = await api.getSignature(id);
+
+      expect(global.fetch).toHaveBeenCalledWith(`/api/v1/signatures/${encodeURIComponent(id)}`, expect.any(Object));
+      expect(result).toEqual({ id, valid: true });
+    });
+
     it('should call verifySignatures with correct method and path', async () => {
       const artifactId = 'artifact-xyz';
 
