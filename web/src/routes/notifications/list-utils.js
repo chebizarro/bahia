@@ -6,6 +6,14 @@ export function normalizeChannels(response) {
   throw new Error('Unexpected notification channel response');
 }
 
+export function normalizeNotificationLogs(response) {
+  if (response == null) return [];
+  if (Array.isArray(response)) return response;
+  if (Array.isArray(response?.logs)) return response.logs;
+  if (Array.isArray(response?.data)) return response.data;
+  throw new Error('Unexpected notification log response');
+}
+
 export function escapeHtml(value) {
   return String(value ?? '')
     .replace(/&/g, '&amp;')
@@ -106,5 +114,35 @@ export function filterChannels(channels, { status = 'all', type = 'all', search 
     ].join(' ').toLowerCase();
 
     return haystack.includes(needle);
+  });
+}
+
+export function channelLabel(channelId, channels = []) {
+  if (!channelId) return 'Unknown channel';
+  const channel = (channels || []).find((candidate) => candidate.id === channelId);
+  return channel?.name || truncateMiddle(channelId, 8, 6);
+}
+
+export function getNotificationLogChannelOptions(logs, channels = []) {
+  const ids = [...new Set(normalizeNotificationLogs(logs).map((log) => log.channel_id).filter(Boolean))].sort((a, b) => {
+    const labelA = channelLabel(a, channels).toLowerCase();
+    const labelB = channelLabel(b, channels).toLowerCase();
+    return labelA.localeCompare(labelB);
+  });
+
+  return ids.map((id) => ({ value: id, label: channelLabel(id, channels) }));
+}
+
+export function getNotificationLogEventTypeOptions(logs) {
+  return [...new Set(normalizeNotificationLogs(logs).map((log) => log.event_type).filter(Boolean))]
+    .sort()
+    .map((eventType) => ({ value: eventType, label: eventType }));
+}
+
+export function filterNotificationLogs(logs, { channel = 'all', eventType = 'all' } = {}) {
+  return normalizeNotificationLogs(logs).filter((log) => {
+    if (channel !== 'all' && log.channel_id !== channel) return false;
+    if (eventType !== 'all' && log.event_type !== eventType) return false;
+    return true;
   });
 }

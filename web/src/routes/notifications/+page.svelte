@@ -147,6 +147,9 @@
       <LoadingButton variant="secondary" loading={loading} onclick={loadChannels}>
         Refresh
       </LoadingButton>
+      <LoadingButton variant="secondary" onclick={() => goto('/notifications/log')}>
+        View log
+      </LoadingButton>
       <LoadingButton variant="primary" onclick={() => goto('/notifications/new')}>
         Create channel
       </LoadingButton>
