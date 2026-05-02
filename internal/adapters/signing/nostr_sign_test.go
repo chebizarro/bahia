@@ -62,6 +62,12 @@ func TestNostrVerifier_ValidTrustedEvent(t *testing.T) {
 	if !sig.Verified {
 		t.Errorf("expected verified, got error: %s", sig.VerificationError)
 	}
+	if sig.VerificationStatus != domain.SignatureStatusVerified {
+		t.Errorf("verification_status = %q, want verified", sig.VerificationStatus)
+	}
+	if sig.VerifiedAt == nil {
+		t.Error("expected verified_at for verified attestation")
+	}
 	if sig.SignatureType != domain.SignatureNostr {
 		t.Errorf("type = %q, want nostr", sig.SignatureType)
 	}
@@ -94,6 +100,12 @@ func TestNostrVerifier_UntrustedPubkey(t *testing.T) {
 	if sig.VerificationError == "" {
 		t.Error("expected verification error message")
 	}
+	if sig.VerificationStatus != domain.SignatureStatusRejected {
+		t.Errorf("verification_status = %q, want rejected", sig.VerificationStatus)
+	}
+	if sig.VerifiedAt != nil {
+		t.Error("expected verified_at to be nil for rejected attestation")
+	}
 }
 
 func TestNostrVerifier_DigestMismatch(t *testing.T) {
@@ -123,6 +135,12 @@ func TestNostrVerifier_DigestMismatch(t *testing.T) {
 	if sig.Verified {
 		t.Error("expected not verified for digest mismatch")
 	}
+	if sig.VerificationStatus != domain.SignatureStatusRejected {
+		t.Errorf("verification_status = %q, want rejected", sig.VerificationStatus)
+	}
+	if sig.VerifiedAt != nil {
+		t.Error("expected verified_at to be nil for rejected attestation")
+	}
 }
 
 func TestNostrVerifier_DisapprovedAttestation(t *testing.T) {
@@ -144,6 +162,12 @@ func TestNostrVerifier_DisapprovedAttestation(t *testing.T) {
 	}
 	if sig.Verified {
 		t.Error("expected not verified for disapproved attestation")
+	}
+	if sig.VerificationStatus != domain.SignatureStatusRejected {
+		t.Errorf("verification_status = %q, want rejected", sig.VerificationStatus)
+	}
+	if sig.VerifiedAt != nil {
+		t.Error("expected verified_at to be nil for rejected attestation")
 	}
 }
 

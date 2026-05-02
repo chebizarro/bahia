@@ -60,17 +60,19 @@ func (v *NostrVerifier) VerifyEvent(ctx context.Context, ev *gonostr.Event, arti
 	}
 	if !ok {
 		now := time.Now().UTC()
-		return &domain.ArtifactSignature{
-			ID:                uuid.New(),
-			ArtifactID:        artifact.ID,
-			SignerIdentity:    ev.PubKey,
-			SignatureType:     domain.SignatureNostr,
-			SignatureRef:      ev.ID,
-			Verified:          false,
-			VerifiedAt:        &now,
-			VerificationError: "invalid Schnorr signature",
-			CreatedAt:         now,
-		}, nil
+		sig := &domain.ArtifactSignature{
+			ID:                 uuid.New(),
+			ArtifactID:         artifact.ID,
+			SignerIdentity:     ev.PubKey,
+			SignatureType:      domain.SignatureNostr,
+			SignatureRef:       ev.ID,
+			Verified:           false,
+			VerificationStatus: domain.SignatureStatusRejected,
+			VerificationError:  "invalid Schnorr signature",
+			CreatedAt:          now,
+		}
+		sig.NormalizeVerificationStatus()
+		return sig, nil
 	}
 
 	// Check trusted pubkey.
@@ -90,7 +92,6 @@ func (v *NostrVerifier) VerifyEvent(ctx context.Context, ev *gonostr.Event, arti
 		SignerIdentity: ev.PubKey,
 		SignatureType:  domain.SignatureNostr,
 		SignatureRef:   ev.ID,
-		VerifiedAt:     &now,
 		CreatedAt:      now,
 		Metadata: map[string]any{
 			"event_kind":    ev.Kind,
@@ -102,22 +103,24 @@ func (v *NostrVerifier) VerifyEvent(ctx context.Context, ev *gonostr.Event, arti
 
 	switch {
 	case attestation.ImageDigest != artifact.ImageDigest:
-		sig.Verified = false
+		sig.VerificationStatus = domain.SignatureStatusRejected
 		sig.VerificationError = fmt.Sprintf("digest mismatch: attestation=%s artifact=%s",
 			attestation.ImageDigest, artifact.ImageDigest)
 	case !attestation.Approved:
-		sig.Verified = false
+		sig.VerificationStatus = domain.SignatureStatusRejected
 		sig.VerificationError = "attestation explicitly disapproved"
 		if attestation.Reason != "" {
 			sig.VerificationError += ": " + attestation.Reason
 		}
 	case !trusted:
-		sig.Verified = false
+		sig.VerificationStatus = domain.SignatureStatusRejected
 		sig.VerificationError = fmt.Sprintf("signer %s is not in trusted pubkey list", ev.PubKey)
 	default:
-		sig.Verified = true
+		sig.VerificationStatus = domain.SignatureStatusVerified
+		sig.VerifiedAt = &now
 	}
 
+	sig.NormalizeVerificationStatus()
 	return sig, nil
 }
 

@@ -90,8 +90,14 @@ func TestCosignVerifier_FindsCosignSignature(t *testing.T) {
 	if sig.SignerIdentity != "alice@example.com" {
 		t.Errorf("signer = %q, want alice@example.com", sig.SignerIdentity)
 	}
-	if !sig.Verified {
-		t.Error("expected verified = true")
+	if sig.Verified {
+		t.Error("expected registry referrer discovery to remain unverified")
+	}
+	if sig.VerificationStatus != domain.SignatureStatusDiscovered {
+		t.Errorf("verification_status = %q, want discovered", sig.VerificationStatus)
+	}
+	if sig.VerifiedAt != nil {
+		t.Error("expected verified_at to be nil for discovered-only referrer")
 	}
 	if sig.ArtifactID != artifactID {
 		t.Errorf("artifact_id = %s, want %s", sig.ArtifactID, artifactID)
@@ -123,6 +129,9 @@ func TestCosignVerifier_FindsSigstoreSignature(t *testing.T) {
 	}
 	if sigs[0].SignatureType != domain.SignatureSigstore {
 		t.Errorf("type = %q, want sigstore", sigs[0].SignatureType)
+	}
+	if sigs[0].Verified || sigs[0].VerificationStatus != domain.SignatureStatusDiscovered {
+		t.Errorf("sigstore referrer status = verified:%v status:%q, want discovered only", sigs[0].Verified, sigs[0].VerificationStatus)
 	}
 }
 

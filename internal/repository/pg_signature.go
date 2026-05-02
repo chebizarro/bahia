@@ -12,7 +12,7 @@ import (
 )
 
 const sigColumns = `id, artifact_id, signer_identity, signature_type, signature_ref,
-	verified, verified_at, verification_error, metadata, created_at`
+	verified, verification_status, verified_at, verification_error, metadata, created_at`
 
 // PgArtifactSignatureRepository implements ArtifactSignatureRepository using PostgreSQL.
 type PgArtifactSignatureRepository struct {
@@ -29,6 +29,7 @@ func (r *PgArtifactSignatureRepository) Create(ctx context.Context, sig *domain.
 	if sig.ID == uuid.Nil {
 		sig.ID = uuid.New()
 	}
+	sig.NormalizeVerificationStatus()
 	sig.CreatedAt = time.Now().UTC()
 
 	metaJSON, err := marshalJSON(sig.Metadata, "metadata")
@@ -39,11 +40,11 @@ func (r *PgArtifactSignatureRepository) Create(ctx context.Context, sig *domain.
 	_, err = r.pool.Exec(ctx,
 		`INSERT INTO artifact_signatures
 			(id, artifact_id, signer_identity, signature_type, signature_ref,
-			 verified, verified_at, verification_error, metadata, created_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+			 verified, verification_status, verified_at, verification_error, metadata, created_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
 		sig.ID, sig.ArtifactID, sig.SignerIdentity, string(sig.SignatureType),
-		sig.SignatureRef, sig.Verified, sig.VerifiedAt, sig.VerificationError,
-		metaJSON, sig.CreatedAt,
+		sig.SignatureRef, sig.Verified, string(sig.VerificationStatus), sig.VerifiedAt,
+		sig.VerificationError, metaJSON, sig.CreatedAt,
 	)
 	if err != nil {
 		return fmt.Errorf("inserting artifact signature: %w", err)
@@ -73,8 +74,8 @@ func (r *PgArtifactSignatureRepository) ListByArtifact(ctx context.Context, arti
 // ListVerifiedByArtifact returns only verified signatures for an artifact.
 func (r *PgArtifactSignatureRepository) ListVerifiedByArtifact(ctx context.Context, artifactID uuid.UUID) ([]domain.ArtifactSignature, error) {
 	rows, err := r.pool.Query(ctx,
-		fmt.Sprintf("SELECT %s FROM artifact_signatures WHERE artifact_id = $1 AND verified = true ORDER BY created_at DESC", sigColumns),
-		artifactID)
+		fmt.Sprintf("SELECT %s FROM artifact_signatures WHERE artifact_id = $1 AND verification_status = $2 ORDER BY created_at DESC", sigColumns),
+		artifactID, string(domain.SignatureStatusVerified))
 	if err != nil {
 		return nil, fmt.Errorf("querying verified signatures: %w", err)
 	}
@@ -82,12 +83,12 @@ func (r *PgArtifactSignatureRepository) ListVerifiedByArtifact(ctx context.Conte
 	return r.scanSigs(rows)
 }
 
-// HasVerifiedSignature checks whether an artifact has at least one verified signature.
+// HasVerifiedSignature checks whether an artifact has at least one cryptographically verified signature.
 func (r *PgArtifactSignatureRepository) HasVerifiedSignature(ctx context.Context, artifactID uuid.UUID) (bool, error) {
 	var exists bool
 	err := r.pool.QueryRow(ctx,
-		"SELECT EXISTS(SELECT 1 FROM artifact_signatures WHERE artifact_id = $1 AND verified = true)",
-		artifactID).Scan(&exists)
+		"SELECT EXISTS(SELECT 1 FROM artifact_signatures WHERE artifact_id = $1 AND verification_status = $2)",
+		artifactID, string(domain.SignatureStatusVerified)).Scan(&exists)
 	if err != nil {
 		return false, fmt.Errorf("checking verified signature: %w", err)
 	}
@@ -97,10 +98,11 @@ func (r *PgArtifactSignatureRepository) HasVerifiedSignature(ctx context.Context
 func (r *PgArtifactSignatureRepository) scanSig(row pgx.Row) (*domain.ArtifactSignature, error) {
 	var sig domain.ArtifactSignature
 	var sigType string
+	var status string
 	var metaJSON []byte
 	err := row.Scan(
 		&sig.ID, &sig.ArtifactID, &sig.SignerIdentity, &sigType,
-		&sig.SignatureRef, &sig.Verified, &sig.VerifiedAt,
+		&sig.SignatureRef, &sig.Verified, &status, &sig.VerifiedAt,
 		&sig.VerificationError, &metaJSON, &sig.CreatedAt,
 	)
 	if err != nil {
@@ -110,6 +112,8 @@ func (r *PgArtifactSignatureRepository) scanSig(row pgx.Row) (*domain.ArtifactSi
 		return nil, fmt.Errorf("scanning signature: %w", err)
 	}
 	sig.SignatureType = domain.SignatureType(sigType)
+	sig.VerificationStatus = domain.SignatureVerificationStatus(status)
+	sig.NormalizeVerificationStatus()
 	if err := unmarshalJSON(metaJSON, &sig.Metadata, "metadata"); err != nil {
 		return nil, err
 	}
@@ -121,16 +125,19 @@ func (r *PgArtifactSignatureRepository) scanSigs(rows pgx.Rows) ([]domain.Artifa
 	for rows.Next() {
 		var sig domain.ArtifactSignature
 		var sigType string
+		var status string
 		var metaJSON []byte
 		err := rows.Scan(
 			&sig.ID, &sig.ArtifactID, &sig.SignerIdentity, &sigType,
-			&sig.SignatureRef, &sig.Verified, &sig.VerifiedAt,
+			&sig.SignatureRef, &sig.Verified, &status, &sig.VerifiedAt,
 			&sig.VerificationError, &metaJSON, &sig.CreatedAt,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("scanning signature row: %w", err)
 		}
 		sig.SignatureType = domain.SignatureType(sigType)
+		sig.VerificationStatus = domain.SignatureVerificationStatus(status)
+		sig.NormalizeVerificationStatus()
 		if err := unmarshalJSON(metaJSON, &sig.Metadata, "metadata"); err != nil {
 			return nil, err
 		}

@@ -116,10 +116,18 @@ func (h *SignatureHandler) Verify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Store discovered signatures.
+	// Store found signatures and report truthful verification state.
 	var stored int
+	counts := map[domain.SignatureVerificationStatus]int{
+		domain.SignatureStatusVerified:   0,
+		domain.SignatureStatusDiscovered: 0,
+		domain.SignatureStatusRejected:   0,
+		domain.SignatureStatusError:      0,
+	}
 	for i := range sigs {
 		sig := &sigs[i]
+		sig.NormalizeVerificationStatus()
+		counts[sig.VerificationStatus]++
 		if err := h.signatures.Create(r.Context(), sig); err != nil {
 			// Log but continue - might be duplicate
 			continue
@@ -128,8 +136,12 @@ func (h *SignatureHandler) Verify(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeData(w, http.StatusOK, map[string]any{
-		"discovered": len(sigs),
+		"found":      len(sigs),
 		"stored":     stored,
+		"verified":   counts[domain.SignatureStatusVerified],
+		"discovered": counts[domain.SignatureStatusDiscovered],
+		"rejected":   counts[domain.SignatureStatusRejected],
+		"errors":     counts[domain.SignatureStatusError],
 		"signatures": sigs,
 	})
 }

@@ -2,6 +2,33 @@ package domain
 
 import "testing"
 
+func TestArtifactSignature_NormalizeVerificationStatus(t *testing.T) {
+	tests := []struct {
+		name       string
+		sig        ArtifactSignature
+		wantStatus SignatureVerificationStatus
+		wantOK     bool
+	}{
+		{"explicit verified derives bool", ArtifactSignature{VerificationStatus: SignatureStatusVerified}, SignatureStatusVerified, true},
+		{"explicit discovered clears bool", ArtifactSignature{Verified: true, VerificationStatus: SignatureStatusDiscovered}, SignatureStatusDiscovered, false},
+		{"legacy verified backfills status", ArtifactSignature{Verified: true}, SignatureStatusVerified, true},
+		{"legacy error backfills rejected", ArtifactSignature{VerificationError: "bad signature"}, SignatureStatusRejected, false},
+		{"empty legacy record is discovered", ArtifactSignature{}, SignatureStatusDiscovered, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tt.sig.NormalizeVerificationStatus()
+			if tt.sig.VerificationStatus != tt.wantStatus {
+				t.Fatalf("status = %q, want %q", tt.sig.VerificationStatus, tt.wantStatus)
+			}
+			if tt.sig.Verified != tt.wantOK {
+				t.Fatalf("verified = %v, want %v", tt.sig.Verified, tt.wantOK)
+			}
+		})
+	}
+}
+
 func TestSigningPolicy_AllowsType(t *testing.T) {
 	tests := []struct {
 		name    string

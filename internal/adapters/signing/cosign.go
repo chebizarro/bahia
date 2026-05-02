@@ -40,7 +40,8 @@ func NewCosignVerifier(inspector registry.ImageInspector, logger *zap.Logger) *C
 }
 
 // VerifySignatures looks up OCI referrers for the artifact's digest and
-// returns signature records for any cosign/sigstore signatures found.
+// returns discovered signature records for any cosign/sigstore referrers found.
+// Referrer presence alone is not cryptographic verification.
 func (v *CosignVerifier) VerifySignatures(ctx context.Context, artifact *domain.Artifact) ([]domain.ArtifactSignature, error) {
 	if artifact.ImageDigest == "" {
 		return nil, fmt.Errorf("artifact has no digest, cannot verify signatures")
@@ -67,18 +68,20 @@ func (v *CosignVerifier) VerifySignatures(ctx context.Context, artifact *domain.
 		}
 
 		sig := domain.ArtifactSignature{
-			ID:            uuid.New(),
-			ArtifactID:    artifact.ID,
-			SignerIdentity: extractSigner(ref),
-			SignatureType: sigType,
-			SignatureRef:  ref.Digest,
-			Verified:      true, // present in registry = verified by registry
-			VerifiedAt:    &now,
-			CreatedAt:     now,
+			ID:                 uuid.New(),
+			ArtifactID:         artifact.ID,
+			SignerIdentity:     extractSigner(ref),
+			SignatureType:      sigType,
+			SignatureRef:       ref.Digest,
+			Verified:           false,
+			VerificationStatus: domain.SignatureStatusDiscovered,
+			CreatedAt:          now,
 			Metadata: map[string]any{
-				"artifact_type": ref.ArtifactType,
-				"media_type":    ref.MediaType,
-				"size":          ref.Size,
+				"artifact_type":     ref.ArtifactType,
+				"media_type":        ref.MediaType,
+				"size":              ref.Size,
+				"discovery_only":    true,
+				"verification_note": "OCI referrer discovered; cryptographic cosign verification not performed",
 			},
 		}
 
@@ -89,8 +92,9 @@ func (v *CosignVerifier) VerifySignatures(ctx context.Context, artifact *domain.
 			}
 		}
 
+		sig.NormalizeVerificationStatus()
 		sigs = append(sigs, sig)
-		v.logger.Info("found signature referrer",
+		v.logger.Info("discovered signature referrer",
 			zap.String("artifact_id", artifact.ID.String()),
 			zap.String("type", string(sigType)),
 			zap.String("ref", ref.Digest),

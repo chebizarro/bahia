@@ -88,20 +88,36 @@ func (m *mockPolicyRepo) Delete(_ context.Context, id uuid.UUID) error {
 
 type mockSigRepo struct {
 	hasSig bool
+	sigs   []domain.ArtifactSignature
 }
 
-func (m *mockSigRepo) Create(_ context.Context, _ *domain.ArtifactSignature) error { return nil }
+func (m *mockSigRepo) Create(_ context.Context, sig *domain.ArtifactSignature) error {
+	sig.NormalizeVerificationStatus()
+	m.sigs = append(m.sigs, *sig)
+	return nil
+}
 func (m *mockSigRepo) GetByID(_ context.Context, _ uuid.UUID) (*domain.ArtifactSignature, error) {
 	return nil, repository.ErrNotFound
 }
 func (m *mockSigRepo) ListByArtifact(_ context.Context, _ uuid.UUID) ([]domain.ArtifactSignature, error) {
-	return nil, nil
+	return m.sigs, nil
 }
 func (m *mockSigRepo) ListVerifiedByArtifact(_ context.Context, _ uuid.UUID) ([]domain.ArtifactSignature, error) {
-	return nil, nil
+	var out []domain.ArtifactSignature
+	for _, sig := range m.sigs {
+		sig.NormalizeVerificationStatus()
+		if sig.VerificationStatus == domain.SignatureStatusVerified {
+			out = append(out, sig)
+		}
+	}
+	return out, nil
 }
-func (m *mockSigRepo) HasVerifiedSignature(_ context.Context, _ uuid.UUID) (bool, error) {
-	return m.hasSig, nil
+func (m *mockSigRepo) HasVerifiedSignature(ctx context.Context, artifactID uuid.UUID) (bool, error) {
+	if m.hasSig {
+		return true, nil
+	}
+	sigs, err := m.ListVerifiedByArtifact(ctx, artifactID)
+	return len(sigs) > 0, err
 }
 
 type mockSBOMRepoForPolicy struct {
@@ -179,6 +195,34 @@ func TestPolicyService_Evaluate_RequireSignature_Pass(t *testing.T) {
 	}
 	if eval.Blockers != 0 {
 		t.Errorf("blockers = %d, want 0", eval.Blockers)
+	}
+}
+
+func TestPolicyService_Evaluate_RequireSignature_DiscoveredOnlyBlocks(t *testing.T) {
+	svc, policyRepo, sigRepo, _ := newTestPolicyService()
+	sigRepo.sigs = []domain.ArtifactSignature{{
+		ArtifactID:         uuid.New(),
+		SignatureType:      domain.SignatureCosign,
+		SignatureRef:       "sha256:cosign-referrer",
+		VerificationStatus: domain.SignatureStatusDiscovered,
+	}}
+
+	policyRepo.Create(context.Background(), &domain.DeploymentPolicy{
+		Name:        "require-sig",
+		Enforcement: domain.PolicyEnforcementBlock,
+		Enabled:     true,
+		Rules:       []domain.PolicyRule{{Type: domain.RuleRequireSignature}},
+	})
+
+	eval, err := svc.Evaluate(context.Background(), uuid.New(), uuid.New())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if eval.Allowed {
+		t.Error("expected blocked when only discovered signatures exist")
+	}
+	if eval.Blockers != 1 {
+		t.Errorf("blockers = %d, want 1", eval.Blockers)
 	}
 }
 
