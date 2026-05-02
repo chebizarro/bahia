@@ -700,6 +700,20 @@ func (s *Server) GetTools() []Tool {
 			},
 		},
 		{
+			Name:        "bahia_get_policy",
+			Description: "Get details for a specific deployment policy",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"policy_id": map[string]interface{}{
+						"type":        "string",
+						"description": "Policy UUID",
+					},
+				},
+				"required": []string{"policy_id"},
+			},
+		},
+		{
 			Name:        "bahia_create_policy",
 			Description: "Create a new deployment policy",
 			InputSchema: map[string]interface{}{
@@ -1065,6 +1079,8 @@ func (s *Server) CallTool(ctx context.Context, name string, arguments map[string
 	// Policy operations
 	case "bahia_list_policies":
 		return s.handleListPolicies(ctx, arguments)
+	case "bahia_get_policy":
+		return s.handleGetPolicy(ctx, arguments)
 	case "bahia_create_policy":
 		return s.handleCreatePolicy(ctx, arguments)
 	case "bahia_update_policy":
@@ -2622,6 +2638,32 @@ func (s *Server) handleListPolicies(ctx context.Context, args map[string]interfa
 	return jsonResult(result)
 }
 
+func (s *Server) handleGetPolicy(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
+	if s.policies == nil {
+		return errorResult("policy tools are not configured"), nil
+	}
+
+	policyIDStr, _ := args["policy_id"].(string)
+	if policyIDStr == "" {
+		return errorResult("policy_id is required"), nil
+	}
+
+	policyID, err := uuid.Parse(policyIDStr)
+	if err != nil {
+		return errorResult(fmt.Sprintf("invalid policy_id: %v", err)), nil
+	}
+
+	policy, err := s.policies.GetPolicy(ctx, policyID)
+	if err != nil {
+		return errorResult(fmt.Sprintf("failed to get policy: %v", err)), nil
+	}
+	if policy == nil {
+		return errorResult("policy not found"), nil
+	}
+
+	return jsonResult(policyToMap(policy))
+}
+
 func (s *Server) handleCreatePolicy(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
 	if s.policies == nil {
 		return errorResult("policy tools are not configured"), nil
@@ -2860,22 +2902,26 @@ func (s *Server) handleEvaluatePolicy(ctx context.Context, args map[string]inter
 
 func policiesToMaps(policies []domain.DeploymentPolicy) []map[string]interface{} {
 	result := make([]map[string]interface{}, len(policies))
-	for i, p := range policies {
-		m := map[string]interface{}{
-			"id":          p.ID.String(),
-			"name":        p.Name,
-			"rules":       p.Rules,
-			"enforcement": string(p.Enforcement),
-			"enabled":     p.Enabled,
-			"created_at":  p.CreatedAt.Format("2006-01-02T15:04:05Z"),
-			"updated_at":  p.UpdatedAt.Format("2006-01-02T15:04:05Z"),
-		}
-		if p.EnvironmentID != nil {
-			m["environment_id"] = p.EnvironmentID.String()
-		}
-		result[i] = m
+	for i := range policies {
+		result[i] = policyToMap(&policies[i])
 	}
 	return result
+}
+
+func policyToMap(p *domain.DeploymentPolicy) map[string]interface{} {
+	m := map[string]interface{}{
+		"id":          p.ID.String(),
+		"name":        p.Name,
+		"rules":       p.Rules,
+		"enforcement": string(p.Enforcement),
+		"enabled":     p.Enabled,
+		"created_at":  p.CreatedAt.Format("2006-01-02T15:04:05Z"),
+		"updated_at":  p.UpdatedAt.Format("2006-01-02T15:04:05Z"),
+	}
+	if p.EnvironmentID != nil {
+		m["environment_id"] = p.EnvironmentID.String()
+	}
+	return m
 }
 
 func policyResultsToMaps(results []domain.PolicyResult) []map[string]interface{} {
