@@ -19,6 +19,7 @@ import (
 	registryAdapter "github.com/openagentsinc/bahia/internal/adapters/registry"
 	"github.com/openagentsinc/bahia/internal/adapters/runtime"
 	secretsAdapter "github.com/openagentsinc/bahia/internal/adapters/secrets"
+	"github.com/openagentsinc/bahia/internal/adapters/signing"
 	"github.com/openagentsinc/bahia/internal/adapters/telemetry"
 	"github.com/openagentsinc/bahia/internal/api/handlers"
 	"github.com/openagentsinc/bahia/internal/api/router"
@@ -142,13 +143,14 @@ func New(cfg *config.Config) (*App, error) {
 
 	// Image verifier: use Harbor (legacy), or the new multi-registry adapter, or no-op.
 	var verifier service.ImageVerifier
+	var signVerifier mcp.SignatureVerifier
 	switch {
 	case cfg.Harbor.Enabled:
 		harborClient := harbor.NewClient(cfg.Harbor, logger)
 		verifier = harbor.NewVerifier(harborClient, logger)
 		logger.Info("harbor image verification enabled", zap.String("url", cfg.Harbor.URL))
 	case cfg.Registry.URL != "" || cfg.Registry.Type != "":
-		v, err := registryAdapter.NewVerifier(registryAdapter.RegistryConfig{
+		inspector, err := registryAdapter.NewInspector(registryAdapter.RegistryConfig{
 			Type:     registryAdapter.RegistryType(cfg.Registry.Type),
 			URL:      cfg.Registry.URL,
 			Username: cfg.Registry.Username,
@@ -157,7 +159,8 @@ func New(cfg *config.Config) (*App, error) {
 		if err != nil {
 			return nil, fmt.Errorf("creating registry verifier: %w", err)
 		}
-		verifier = v
+		verifier = &registryAdapter.VerifierAdapter{Inspector: inspector}
+		signVerifier = signing.NewCosignVerifier(inspector, logger)
 		logger.Info("OCI registry verification enabled",
 			zap.String("type", string(cfg.Registry.Type)),
 			zap.String("url", cfg.Registry.URL))
@@ -332,7 +335,13 @@ func New(cfg *config.Config) (*App, error) {
 	notifDispatcher.SetupSubscriptions(publisher)
 
 	// MCP (Model Context Protocol) server for AI agent integration.
-	mcpServer := mcp.NewServerWithOptions(registry, logger, mcp.ServerDeps{LogService: runLogService, Payments: paymentSvc, SBOMs: sbomRepo})
+	mcpServer := mcp.NewServerWithOptions(registry, logger, mcp.ServerDeps{
+		LogService:   runLogService,
+		Payments:     paymentSvc,
+		SBOMs:        sbomRepo,
+		Signatures:   sigRepo,
+		SignVerifier: signVerifier,
+	})
 	mcpHandler := handlers.NewMCPHandler(mcpServer, logger)
 	logger.Info("mcp server initialized")
 

@@ -36,6 +36,8 @@ type Server struct {
 	logService       *adapterruntime.LogService        // optional: for deployment run log tools
 	payments         *service.PaymentService           // optional: for payment tools
 	sboms            repository.SBOMRepository         // optional: for SBOM tools
+	signatures       repository.ArtifactSignatureRepository
+	signVerifier     SignatureVerifier
 }
 
 // Config holds MCP server configuration.
@@ -56,6 +58,13 @@ type ServerDeps struct {
 	LogService             *adapterruntime.LogService
 	Payments               *service.PaymentService
 	SBOMs                  repository.SBOMRepository
+	Signatures             repository.ArtifactSignatureRepository
+	SignVerifier           SignatureVerifier
+}
+
+// SignatureVerifier verifies signatures for an artifact.
+type SignatureVerifier interface {
+	VerifySignatures(ctx context.Context, artifact *domain.Artifact) ([]domain.ArtifactSignature, error)
 }
 
 // NewServer creates a new MCP server for Bahia.
@@ -87,6 +96,8 @@ func NewServerWithOptions(registry *service.RegistryService, logger *zap.Logger,
 		logService:       deps.LogService,
 		payments:         deps.Payments,
 		sboms:            deps.SBOMs,
+		signatures:       deps.Signatures,
+		signVerifier:     deps.SignVerifier,
 	}
 }
 
@@ -509,6 +520,77 @@ func (s *Server) GetTools() []Tool {
 					},
 				},
 				"required": []string{"build_id", "service_id", "image_repo", "image_tag", "image_digest"},
+			},
+		},
+		// Signature operations
+		{
+			Name:        "bahia_list_signatures",
+			Description: "List all signatures recorded for an artifact",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"artifact_id": map[string]interface{}{
+						"type":        "string",
+						"description": "Artifact UUID",
+					},
+				},
+				"required": []string{"artifact_id"},
+			},
+		},
+		{
+			Name:        "bahia_list_verified_signatures",
+			Description: "List verified signatures recorded for an artifact",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"artifact_id": map[string]interface{}{
+						"type":        "string",
+						"description": "Artifact UUID",
+					},
+				},
+				"required": []string{"artifact_id"},
+			},
+		},
+		{
+			Name:        "bahia_has_verified_signature",
+			Description: "Check whether an artifact has at least one verified signature",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"artifact_id": map[string]interface{}{
+						"type":        "string",
+						"description": "Artifact UUID",
+					},
+				},
+				"required": []string{"artifact_id"},
+			},
+		},
+		{
+			Name:        "bahia_get_signature",
+			Description: "Get a signature record by ID",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"signature_id": map[string]interface{}{
+						"type":        "string",
+						"description": "Signature UUID",
+					},
+				},
+				"required": []string{"signature_id"},
+			},
+		},
+		{
+			Name:        "bahia_verify_signatures",
+			Description: "Verify signatures for an artifact and store any discovered signature records",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"artifact_id": map[string]interface{}{
+						"type":        "string",
+						"description": "Artifact UUID",
+					},
+				},
+				"required": []string{"artifact_id"},
 			},
 		},
 		// SBOM operations
@@ -1441,6 +1523,17 @@ func (s *Server) CallTool(ctx context.Context, name string, arguments map[string
 		return s.handleGetArtifact(ctx, arguments)
 	case "bahia_register_artifact":
 		return s.handleRegisterArtifact(ctx, arguments)
+	// Signature operations
+	case "bahia_list_signatures":
+		return s.handleListSignatures(ctx, arguments)
+	case "bahia_list_verified_signatures":
+		return s.handleListVerifiedSignatures(ctx, arguments)
+	case "bahia_has_verified_signature":
+		return s.handleHasVerifiedSignature(ctx, arguments)
+	case "bahia_get_signature":
+		return s.handleGetSignature(ctx, arguments)
+	case "bahia_verify_signatures":
+		return s.handleVerifySignatures(ctx, arguments)
 	// SBOM operations
 	case "bahia_get_sbom":
 		return s.handleGetSBOM(ctx, arguments)
@@ -2202,6 +2295,145 @@ func (s *Server) handleRegisterArtifact(ctx context.Context, args map[string]int
 		},
 	}
 	return jsonResult(result)
+}
+
+func (s *Server) handleListSignatures(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
+	if s.signatures == nil {
+		return errorResult("signature tools are not configured"), nil
+	}
+
+	artifactID, err := parseRequiredUUIDArg(args, "artifact_id")
+	if err != nil {
+		return errorResult(err.Error()), nil
+	}
+
+	signatures, err := s.signatures.ListByArtifact(ctx, artifactID)
+	if err != nil {
+		return errorResult(fmt.Sprintf("failed to list signatures: %v", err)), nil
+	}
+
+	return jsonResult(map[string]interface{}{
+		"artifact_id": artifactID.String(),
+		"signatures":  signaturesToMaps(signatures),
+		"total":       len(signatures),
+	})
+}
+
+func (s *Server) handleListVerifiedSignatures(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
+	if s.signatures == nil {
+		return errorResult("signature tools are not configured"), nil
+	}
+
+	artifactID, err := parseRequiredUUIDArg(args, "artifact_id")
+	if err != nil {
+		return errorResult(err.Error()), nil
+	}
+
+	signatures, err := s.signatures.ListVerifiedByArtifact(ctx, artifactID)
+	if err != nil {
+		return errorResult(fmt.Sprintf("failed to list verified signatures: %v", err)), nil
+	}
+
+	return jsonResult(map[string]interface{}{
+		"artifact_id": artifactID.String(),
+		"signatures":  signaturesToMaps(signatures),
+		"total":       len(signatures),
+	})
+}
+
+func (s *Server) handleHasVerifiedSignature(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
+	if s.signatures == nil {
+		return errorResult("signature tools are not configured"), nil
+	}
+
+	artifactID, err := parseRequiredUUIDArg(args, "artifact_id")
+	if err != nil {
+		return errorResult(err.Error()), nil
+	}
+
+	hasVerified, err := s.signatures.HasVerifiedSignature(ctx, artifactID)
+	if err != nil {
+		return errorResult(fmt.Sprintf("failed to check signature status: %v", err)), nil
+	}
+
+	return jsonResult(map[string]interface{}{
+		"artifact_id":            artifactID.String(),
+		"has_verified_signature": hasVerified,
+	})
+}
+
+func (s *Server) handleGetSignature(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
+	if s.signatures == nil {
+		return errorResult("signature tools are not configured"), nil
+	}
+
+	signatureID, err := parseRequiredUUIDArg(args, "signature_id")
+	if err != nil {
+		return errorResult(err.Error()), nil
+	}
+
+	signature, err := s.signatures.GetByID(ctx, signatureID)
+	if err != nil {
+		if err == repository.ErrNotFound {
+			return errorResult("signature not found"), nil
+		}
+		return errorResult(fmt.Sprintf("failed to get signature: %v", err)), nil
+	}
+
+	return jsonResult(signatureToMap(signature))
+}
+
+func (s *Server) handleVerifySignatures(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
+	if s.signatures == nil {
+		return errorResult("signature tools are not configured"), nil
+	}
+	if s.signVerifier == nil {
+		return errorResult("signature verifier is not configured"), nil
+	}
+	if s.registry == nil {
+		return errorResult("artifact registry is not configured"), nil
+	}
+
+	artifactID, err := parseRequiredUUIDArg(args, "artifact_id")
+	if err != nil {
+		return errorResult(err.Error()), nil
+	}
+
+	artifact, err := s.registry.GetArtifact(ctx, artifactID)
+	if err != nil {
+		if err == repository.ErrNotFound {
+			return errorResult("artifact not found"), nil
+		}
+		return errorResult(fmt.Sprintf("failed to get artifact: %v", err)), nil
+	}
+	if artifact == nil {
+		return errorResult("artifact not found"), nil
+	}
+
+	signatures, err := s.signVerifier.VerifySignatures(ctx, artifact)
+	if err != nil {
+		return errorResult(fmt.Sprintf("failed to verify signatures: %v", err)), nil
+	}
+
+	stored := 0
+	for i := range signatures {
+		if err := s.signatures.Create(ctx, &signatures[i]); err != nil {
+			s.logger.Warn("failed to store signature record",
+				zap.String("artifact_id", artifactID.String()),
+				zap.String("signature_id", signatures[i].ID.String()),
+				zap.Error(err),
+			)
+			continue
+		}
+		stored++
+	}
+
+	return jsonResult(map[string]interface{}{
+		"artifact_id": artifactID.String(),
+		"discovered":  len(signatures),
+		"stored":      stored,
+		"signatures":  signaturesToMaps(signatures),
+	})
 }
 
 func (s *Server) handleGetSBOM(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
@@ -3235,6 +3467,35 @@ func artifactsToMaps(artifacts []domain.Artifact) []map[string]interface{} {
 			"scan_status":  a.ScanStatus,
 			"created_at":   a.CreatedAt.Format("2006-01-02T15:04:05Z"),
 		}
+	}
+	return result
+}
+
+func signatureToMap(sig *domain.ArtifactSignature) map[string]interface{} {
+	if sig == nil {
+		return nil
+	}
+	m := map[string]interface{}{
+		"id":                 sig.ID.String(),
+		"artifact_id":        sig.ArtifactID.String(),
+		"signer_identity":    sig.SignerIdentity,
+		"signature_type":     string(sig.SignatureType),
+		"signature_ref":      sig.SignatureRef,
+		"verified":           sig.Verified,
+		"verification_error": sig.VerificationError,
+		"metadata":           sig.Metadata,
+		"created_at":         sig.CreatedAt.Format("2006-01-02T15:04:05Z"),
+	}
+	if sig.VerifiedAt != nil {
+		m["verified_at"] = sig.VerifiedAt.Format("2006-01-02T15:04:05Z")
+	}
+	return m
+}
+
+func signaturesToMaps(signatures []domain.ArtifactSignature) []map[string]interface{} {
+	result := make([]map[string]interface{}, len(signatures))
+	for i := range signatures {
+		result[i] = signatureToMap(&signatures[i])
 	}
 	return result
 }
