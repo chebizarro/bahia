@@ -5,6 +5,7 @@ describe('route access', () => {
   it('marks configured routes as protected', () => {
     expect(getRouteAccess('/services').protectedRoute).toBe(true);
     expect(getRouteAccess('/payments').protectedRoute).toBe(true);
+    expect(getRouteAccess('/notifications').protectedRoute).toBe(true);
     expect(getRouteAccess('/').protectedRoute).toBe(false);
   });
 

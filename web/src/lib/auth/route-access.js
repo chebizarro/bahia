@@ -7,6 +7,7 @@ const PROTECTED_PREFIXES = [
   '/workers',
   '/artifacts',
   '/payments',
+  '/notifications',
   '/settings',
   '/events',
   '/orgs'
