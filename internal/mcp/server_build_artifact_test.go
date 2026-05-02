@@ -149,10 +149,14 @@ func TestGetTools_IncludesBuildArtifactRegister(t *testing.T) {
 	server := newTestMCPBuildArtifactServer()
 	tools := server.GetTools()
 	foundBuild := false
+	foundUpdateBuildStatus := false
 	foundArtifact := false
 	for _, tool := range tools {
 		if tool.Name == "bahia_register_build" {
 			foundBuild = true
+		}
+		if tool.Name == "bahia_update_build_status" {
+			foundUpdateBuildStatus = true
 		}
 		if tool.Name == "bahia_register_artifact" {
 			foundArtifact = true
@@ -160,6 +164,9 @@ func TestGetTools_IncludesBuildArtifactRegister(t *testing.T) {
 	}
 	if !foundBuild {
 		t.Fatalf("missing bahia_register_build tool")
+	}
+	if !foundUpdateBuildStatus {
+		t.Fatalf("missing bahia_update_build_status tool")
 	}
 	if !foundArtifact {
 		t.Fatalf("missing bahia_register_artifact tool")
@@ -243,5 +250,79 @@ func TestCallTool_RegisterBuildAndArtifact_ValidationErrors(t *testing.T) {
 	}
 	if !artifactRes.IsError {
 		t.Fatalf("expected register artifact to fail validation")
+	}
+}
+
+func TestCallTool_UpdateBuildStatus(t *testing.T) {
+	ctx := context.Background()
+	server := newTestMCPBuildArtifactServer()
+	serviceID := uuid.New().String()
+
+	buildRes, err := server.CallTool(ctx, "bahia_register_build", map[string]interface{}{
+		"service_id": serviceID,
+		"git_sha":    "abc1234",
+		"git_ref":    "refs/heads/main",
+		"ci_run_id":  "run-2",
+	})
+	if err != nil {
+		t.Fatalf("register build err: %v", err)
+	}
+	if buildRes.IsError {
+		t.Fatalf("register build returned error: %s", buildRes.Content[0].Text)
+	}
+	buildID := decodeResultMap(t, buildRes)["build_id"].(string)
+
+	updateRes, err := server.CallTool(ctx, "bahia_update_build_status", map[string]interface{}{
+		"build_id": buildID,
+		"status":   "running",
+	})
+	if err != nil {
+		t.Fatalf("update build status err: %v", err)
+	}
+	if updateRes.IsError {
+		t.Fatalf("update build status returned error: %s", updateRes.Content[0].Text)
+	}
+	payload := decodeResultMap(t, updateRes)
+	build := payload["build"].(map[string]interface{})
+	if build["status"] != "running" {
+		t.Fatalf("expected status running, got %v", build["status"])
+	}
+}
+
+func TestCallTool_UpdateBuildStatus_ValidationErrors(t *testing.T) {
+	ctx := context.Background()
+	server := newTestMCPBuildArtifactServer()
+
+	res, err := server.CallTool(ctx, "bahia_update_build_status", map[string]interface{}{
+		"build_id": "not-a-uuid",
+		"status":   "running",
+	})
+	if err != nil {
+		t.Fatalf("update build status err: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("expected update build status to fail for invalid build_id")
+	}
+
+	res, err = server.CallTool(ctx, "bahia_update_build_status", map[string]interface{}{
+		"build_id": uuid.New().String(),
+		"status":   "bogus",
+	})
+	if err != nil {
+		t.Fatalf("update build status err: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("expected update build status to fail for invalid status")
+	}
+
+	res, err = server.CallTool(ctx, "bahia_update_build_status", map[string]interface{}{
+		"build_id": uuid.New().String(),
+		"status":   "running",
+	})
+	if err != nil {
+		t.Fatalf("update build status err: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("expected update build status to fail for missing build")
 	}
 }

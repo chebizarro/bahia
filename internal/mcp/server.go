@@ -578,6 +578,25 @@ func (s *Server) GetTools() []Tool {
 				"required": []string{"service_id", "git_sha", "git_ref", "ci_run_id"},
 			},
 		},
+		{
+			Name:        "bahia_update_build_status",
+			Description: "Update the status of an existing build",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"build_id": map[string]interface{}{
+						"type":        "string",
+						"description": "Build UUID",
+					},
+					"status": map[string]interface{}{
+						"type":        "string",
+						"description": "Build status",
+						"enum":        []string{"queued", "running", "succeeded", "failed", "cancelled"},
+					},
+				},
+				"required": []string{"build_id", "status"},
+			},
+		},
 		// Observability operations
 		{
 			Name:        "bahia_list_states",
@@ -1156,6 +1175,8 @@ func (s *Server) CallTool(ctx context.Context, name string, arguments map[string
 		return s.handleGetBuild(ctx, arguments)
 	case "bahia_register_build":
 		return s.handleRegisterBuild(ctx, arguments)
+	case "bahia_update_build_status":
+		return s.handleUpdateBuildStatus(ctx, arguments)
 	// Observability operations
 	case "bahia_list_states":
 		return s.handleListStates(ctx, arguments)
@@ -1993,6 +2014,35 @@ func (s *Server) handleRegisterBuild(ctx context.Context, args map[string]interf
 			"status":          string(build.Status),
 			"loom_job_id":     build.LoomJobID,
 			"source_event_id": build.SourceEventID,
+		},
+	}
+	return jsonResult(result)
+}
+
+func (s *Server) handleUpdateBuildStatus(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
+	buildIDStr, _ := args["build_id"].(string)
+	statusStr, _ := args["status"].(string)
+
+	buildID, err := uuid.Parse(buildIDStr)
+	if err != nil {
+		return errorResult(fmt.Sprintf("invalid build_id: %v", err)), nil
+	}
+
+	status := domain.BuildStatus(statusStr)
+	if err := domain.ValidateBuildStatus(status); err != nil {
+		return errorResult(err.Error()), nil
+	}
+
+	if err := s.registry.UpdateBuildStatus(ctx, buildID, status); err != nil {
+		return errorResult(fmt.Sprintf("failed to update build status: %v", err)), nil
+	}
+
+	result := map[string]interface{}{
+		"status":   "updated",
+		"build_id": buildID.String(),
+		"build": map[string]interface{}{
+			"id":     buildID.String(),
+			"status": string(status),
 		},
 	}
 	return jsonResult(result)
