@@ -17,7 +17,8 @@ vi.mock('../../src/lib/nostr/client.js', () => {
 
   const mockNostr = {
     subscribe: vi.fn(),
-    query: vi.fn()
+    query: vi.fn(),
+    publish: vi.fn()
   };
 
   const fetchSouls = vi.fn();
@@ -51,6 +52,12 @@ vi.mock('../../src/lib/nostr/client.js', () => {
   };
 });
 
+vi.mock('../../src/lib/stores/auth.js', () => ({
+  authState: { status: 'authenticated', pubkey: 'author-pubkey' },
+  login: vi.fn(async () => {}),
+  signWithAuth: vi.fn(async (event) => ({ ...event, id: 'signed-action-id' }))
+}));
+
 describe('Souls Store', () => {
   let soulsModule;
   let mockNostr;
@@ -58,6 +65,7 @@ describe('Souls Store', () => {
   let fetchTemplates;
   let parseSoulEvent;
   let parseTemplateEvent;
+  let authModule;
 
   beforeEach(async () => {
     // Reset modules to get fresh store state
@@ -71,6 +79,7 @@ describe('Souls Store', () => {
     fetchTemplates = nostrModule.fetchTemplates;
     parseSoulEvent = nostrModule.parseSoulEvent;
     parseTemplateEvent = nostrModule.parseTemplateEvent;
+    authModule = await import('../../src/lib/stores/auth.js');
 
     // Set default mock implementations
     fetchSouls.mockResolvedValue([
@@ -698,6 +707,81 @@ describe('Souls Store', () => {
 
       runs = soulsModule.provisioningRuns;
       expect(runs.has(requestEventId)).toBe(false);
+    });
+  });
+
+  describe('soul management actions', () => {
+    it('buildSoulRef returns a NIP-33 coordinate', () => {
+      const ref = soulsModule.buildSoulRef({ agentId: 'scout', pubkey: 'factory-pubkey' });
+      expect(ref).toBe('31951:factory-pubkey:scout');
+    });
+
+    it('publishSoulAction signs and publishes kind:1950 action event', async () => {
+      mockNostr.publish.mockResolvedValue([{ relay: 'wss://relay', accepted: true, message: '' }]);
+
+      const result = await soulsModule.publishSoulAction({
+        soul: { agentId: 'scout', pubkey: 'factory-pubkey' },
+        action: 'suspend',
+        reason: 'Maintenance window'
+      });
+
+      expect(authModule.signWithAuth).toHaveBeenCalledWith(expect.objectContaining({
+        kind: 1950,
+        pubkey: 'author-pubkey',
+        content: ''
+      }));
+      expect(mockNostr.publish).toHaveBeenCalledWith(expect.objectContaining({ id: 'signed-action-id' }));
+      expect(result.publishResults[0].accepted).toBe(true);
+    });
+
+    it('updateSoulDetails publishes a regenerate action with JSON payload', async () => {
+      mockNostr.publish.mockResolvedValue([{ relay: 'wss://relay', accepted: true, message: '' }]);
+
+      await soulsModule.updateSoulDetails(
+        { agentId: 'scout', pubkey: 'factory-pubkey', tier: 'standard', name: 'Scout', purpose: 'Observe' },
+        { name: 'Scout v2', purpose: 'Observe and report', tier: 'heavy', brief: 'Updated brief', reason: 'ops update' }
+      );
+
+      const signedCall = authModule.signWithAuth.mock.calls.at(-1)?.[0];
+      expect(signedCall.tags).toEqual(expect.arrayContaining([
+        ['soul', '31951:factory-pubkey:scout'],
+        ['action', 'regenerate'],
+        ['reason', 'ops update']
+      ]));
+      expect(JSON.parse(signedCall.content)).toMatchObject({
+        name: 'Scout v2',
+        purpose: 'Observe and report',
+        tier: 'heavy',
+        brief: 'Updated brief'
+      });
+    });
+
+    it('fetchSoulHistory includes soul updates and actions sorted newest-first', async () => {
+      mockNostr.query.mockResolvedValue([
+        {
+          id: 'evt-action',
+          kind: 1950,
+          created_at: 200,
+          pubkey: 'author2',
+          tags: [['action', 'suspend'], ['reason', 'maintenance']]
+        },
+        {
+          id: 'evt-soul',
+          kind: 31951,
+          created_at: 100,
+          pubkey: 'factory',
+          tags: [['status', 'active']]
+        }
+      ]);
+
+      const history = await soulsModule.fetchSoulHistory({ agentId: 'scout', pubkey: 'factory' }, { limit: 10 });
+
+      expect(mockNostr.query).toHaveBeenCalledWith([
+        { kinds: [31951], '#d': ['scout'], limit: 10 },
+        { kinds: [1950], '#soul': ['31951:factory:scout'], limit: 10 }
+      ]);
+      expect(history.map((item) => item.id)).toEqual(['evt-action', 'evt-soul']);
+      expect(history[0].summary).toBe('suspend: maintenance');
     });
   });
 });

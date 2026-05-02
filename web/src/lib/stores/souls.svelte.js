@@ -1,6 +1,7 @@
 // Soul Factory stores
 import { SvelteMap } from 'svelte/reactivity';
 import { nostr, fetchSouls, fetchTemplates, parseSoulEvent, parseTemplateEvent, KINDS } from '$lib/nostr/client.js';
+import { authState, login, signWithAuth } from '$lib/stores/auth.js';
 
 // --- State ---
 
@@ -312,4 +313,134 @@ export function selectSoul(soul) {
 // Clear selection
 export function clearSelection() {
   selectedSoul.value = null;
+}
+
+export function buildSoulRef(soul) {
+  if (!soul?.agentId || !soul?.pubkey) {
+    throw new Error('Soul reference requires both agentId and pubkey');
+  }
+  return `${KINDS.AGENT_SOUL}:${soul.pubkey}:${soul.agentId}`;
+}
+
+function ensureRelayAcceptance(results = [], defaultErrorMessage) {
+  if (results.some((result) => result.accepted === true)) {
+    return;
+  }
+
+  if (results.length === 0) {
+    throw new Error('No connected relays available for publishing');
+  }
+
+  const relayErrors = results
+    .map((result) => {
+      const relayName = result.relay || 'relay';
+      const details = result.message || (result.sent ? 'event rejected' : 'send failed');
+      return `${relayName}: ${details}`;
+    })
+    .join('; ');
+
+  throw new Error(`${defaultErrorMessage}. ${relayErrors}`);
+}
+
+export async function publishSoulAction({ soul, action, reason = '', content = '' }) {
+  if (!soul) throw new Error('Soul is required');
+  if (!action) throw new Error('Action is required');
+
+  if (authState.status !== 'authenticated') {
+    await login();
+  }
+
+  if (authState.status !== 'authenticated' || !authState.pubkey) {
+    throw new Error('Authentication required to manage souls');
+  }
+
+  const tags = [
+    ['soul', buildSoulRef(soul)],
+    ['action', action],
+    ['agent-id', soul.agentId]
+  ];
+
+  if (reason?.trim()) {
+    tags.push(['reason', reason.trim()]);
+  }
+
+  const unsignedEvent = {
+    kind: KINDS.SOUL_ACTION,
+    created_at: Math.floor(Date.now() / 1000),
+    pubkey: authState.pubkey,
+    tags,
+    content
+  };
+
+  const signedEvent = await signWithAuth(unsignedEvent);
+  const publishResults = await nostr.publish(signedEvent);
+
+  ensureRelayAcceptance(publishResults, `Soul action "${action}" was not accepted by any relay`);
+
+  return { event: signedEvent, publishResults };
+}
+
+export async function updateSoulDetails(soul, updates = {}) {
+  const payload = {
+    brief: updates.brief || '',
+    name: updates.name || soul?.name || '',
+    purpose: updates.purpose || soul?.purpose || '',
+    tier: updates.tier || soul?.tier || 'standard'
+  };
+
+  return publishSoulAction({
+    soul,
+    action: 'regenerate',
+    reason: updates.reason || 'Soul details updated',
+    content: JSON.stringify(payload)
+  });
+}
+
+function summarizeHistoryEvent(event, soulRef) {
+  if (event.kind === KINDS.SOUL_ACTION) {
+    const action = (event.tags || []).find((tag) => tag[0] === 'action')?.[1] || 'unknown';
+    const reason = (event.tags || []).find((tag) => tag[0] === 'reason')?.[1] || '';
+    return {
+      id: event.id,
+      kind: event.kind,
+      type: 'action',
+      action,
+      summary: reason ? `${action}: ${reason}` : action,
+      createdAt: event.created_at,
+      pubkey: event.pubkey,
+      event
+    };
+  }
+
+  const status = (event.tags || []).find((tag) => tag[0] === 'status')?.[1] || 'unknown';
+  return {
+    id: event.id,
+    kind: event.kind,
+    type: 'soul_update',
+    action: status,
+    summary: `Soul updated (${status})`,
+    createdAt: event.created_at,
+    pubkey: event.pubkey,
+    soulRef,
+    event
+  };
+}
+
+export async function fetchSoulHistory(soul, { limit = 50 } = {}) {
+  if (!soul?.agentId) return [];
+
+  const soulRef = buildSoulRef(soul);
+  const filters = [
+    { kinds: [KINDS.AGENT_SOUL], '#d': [soul.agentId], limit },
+    { kinds: [KINDS.SOUL_ACTION], '#soul': [soulRef], limit }
+  ];
+
+  const events = await nostr.query(filters);
+  const deduped = new Map();
+  for (const event of events) {
+    if (deduped.has(event.id)) continue;
+    deduped.set(event.id, summarizeHistoryEvent(event, soulRef));
+  }
+
+  return Array.from(deduped.values()).sort((a, b) => b.createdAt - a.createdAt);
 }

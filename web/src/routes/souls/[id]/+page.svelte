@@ -2,11 +2,18 @@
   import { page } from '$app/state';
   import Badge from '$lib/components/Badge.svelte';
   import { nostr, fetchSoul, parseSoulEvent, KINDS } from '$lib/nostr/client.js';
+  import { fetchSoulHistory, publishSoulAction } from '$lib/stores/souls.js';
   
   let soul = $state(null);
   let loading = $state(true);
   let error = $state(null);
   let unsub = null;
+  let actionSubmitting = $state(false);
+  let actionError = $state('');
+  let actionNotice = $state('');
+  let historyLoading = $state(false);
+  let historyError = $state('');
+  let activityHistory = $state([]);
   
   let agentId = $derived(page.params.id);
   
@@ -53,14 +60,43 @@
     }], {
       onEvent: (event) => {
         soul = parseSoulEvent(event);
+        void loadHistory();
       }
     });
   }
-  
+
+  async function loadHistory() {
+    if (!soul) return;
+    historyLoading = true;
+    historyError = '';
+
+    try {
+      activityHistory = await fetchSoulHistory(soul, { limit: 25 });
+    } catch (err) {
+      historyError = err.message || 'Failed to load soul activity';
+    } finally {
+      historyLoading = false;
+    }
+  }
+
   async function handleAction(action) {
-    // TODO: Publish kind:1950 action event
-    console.log(`[soul] Action: ${action} on ${agentId}`);
-    alert(`Action "${action}" would be published to relays`);
+    if (!soul || actionSubmitting) return;
+
+    actionSubmitting = true;
+    actionError = '';
+    actionNotice = '';
+
+    try {
+      const displayAction = action === 'resume' ? 'reactivate' : action;
+      const reason = `Requested from Soul Gallery (${displayAction})`;
+      await publishSoulAction({ soul, action, reason });
+      actionNotice = `Action "${displayAction}" submitted to relays.`;
+      await loadHistory();
+    } catch (err) {
+      actionError = err.message || `Failed to submit ${action}`;
+    } finally {
+      actionSubmitting = false;
+    }
   }
   
   function copyNpub() {
@@ -85,6 +121,8 @@
       await nostr.connect();
       if (cancelled) return;
       await loadSoul(id);
+      if (cancelled) return;
+      await loadHistory();
       if (cancelled) return;
       subscribeToUpdates(id);
     }
@@ -155,23 +193,28 @@
         </div>
         
         <div class="hero-actions">
+          <a class="btn-secondary" href={`/souls/${soul.agentId}/edit`}>
+            Edit Details
+          </a>
           {#if soul.status === 'active'}
-            <button class="btn-warning" onclick={() => handleAction('suspend')}>
+            <button class="btn-warning" onclick={() => handleAction('suspend')} disabled={actionSubmitting}>
               Suspend
             </button>
-            <button class="btn-secondary" onclick={() => handleAction('redeploy')}>
-              Redeploy
-            </button>
           {:else if soul.status === 'suspended'}
-            <button class="btn-primary" onclick={() => handleAction('resume')}>
-              Resume
-            </button>
-            <button class="btn-error" onclick={() => handleAction('revoke')}>
-              Revoke
+            <button class="btn-primary" onclick={() => handleAction('resume')} disabled={actionSubmitting}>
+              Reactivate
             </button>
           {/if}
         </div>
       </div>
+
+      {#if actionNotice}
+        <div class="notice-banner">{actionNotice}</div>
+      {/if}
+
+      {#if actionError}
+        <div class="error-banner">{actionError}</div>
+      {/if}
       
       <!-- Info Grid -->
       <div class="info-grid">
@@ -266,6 +309,28 @@
             <pre>{soul.content || 'No soul content available'}</pre>
           </div>
         </section>
+
+        <section class="info-section wide">
+          <h3>🕰️ Activity & History</h3>
+          {#if historyLoading}
+            <p class="history-muted">Loading activity history...</p>
+          {:else if historyError}
+            <p class="history-error">{historyError}</p>
+          {:else if activityHistory.length === 0}
+            <p class="history-muted">No activity recorded yet.</p>
+          {:else}
+            <ul class="history-list">
+              {#each activityHistory as item (item.id)}
+                <li>
+                  <div class="history-summary">{item.summary}</div>
+                  <div class="history-meta">
+                    {new Date(item.createdAt * 1000).toLocaleString()} · {item.pubkey?.slice(0, 8)}...{item.pubkey?.slice(-8)}
+                  </div>
+                </li>
+              {/each}
+            </ul>
+          {/if}
+        </section>
       </div>
     </div>
   {/if}
@@ -332,6 +397,26 @@
   .error-state p {
     color: var(--text-muted);
     margin: 0 0 1.5rem 0;
+  }
+
+  .notice-banner,
+  .error-banner {
+    border-radius: 8px;
+    padding: 0.75rem 1rem;
+    margin-bottom: 1rem;
+    font-size: 0.875rem;
+  }
+
+  .notice-banner {
+    background: rgba(34, 197, 94, 0.12);
+    border: 1px solid rgba(34, 197, 94, 0.35);
+    color: var(--success);
+  }
+
+  .error-banner {
+    background: rgba(239, 68, 68, 0.12);
+    border: 1px solid rgba(239, 68, 68, 0.35);
+    color: var(--error);
   }
   
   /* Hero */
@@ -412,7 +497,7 @@
     flex-shrink: 0;
   }
   
-  .btn-primary, .btn-secondary, .btn-warning, .btn-error {
+  .btn-primary, .btn-secondary, .btn-warning {
     padding: 0.5rem 1rem;
     border-radius: 6px;
     border: none;
@@ -431,6 +516,7 @@
     background: transparent;
     border: 1px solid var(--border-color);
     color: var(--text-muted);
+    text-decoration: none;
   }
   
   .btn-warning {
@@ -439,10 +525,10 @@
     border: 1px solid var(--warning);
   }
   
-  .btn-error {
-    background: rgba(239, 68, 68, 0.15);
-    color: var(--error);
-    border: 1px solid var(--error);
+  .btn-primary:disabled,
+  .btn-warning:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
   }
   
   /* Info Grid */
@@ -607,6 +693,40 @@
     font-size: 0.85rem;
     white-space: pre-wrap;
     word-break: break-word;
+  }
+
+  .history-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+  }
+
+  .history-list li {
+    background: var(--bg);
+    border-radius: 8px;
+    border: 1px solid var(--border-color);
+    padding: 0.75rem;
+  }
+
+  .history-summary {
+    font-size: 0.85rem;
+    margin-bottom: 0.25rem;
+  }
+
+  .history-meta,
+  .history-muted {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    margin: 0;
+  }
+
+  .history-error {
+    color: var(--error);
+    font-size: 0.8rem;
+    margin: 0;
   }
   
   @media (max-width: 768px) {
