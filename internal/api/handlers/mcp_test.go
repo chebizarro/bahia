@@ -1,0 +1,68 @@
+package handlers
+
+import (
+	"bytes"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+
+	mcpserver "github.com/openagentsinc/bahia/internal/mcp"
+	"go.uber.org/zap"
+)
+
+func TestMCPHandler_HandleJSONRPCInitializeAndListTools(t *testing.T) {
+	h := NewMCPHandler(mcpserver.NewServer(nil, zap.NewNop()), zap.NewNop())
+
+	for _, tc := range []struct {
+		name   string
+		method string
+	}{
+		{name: "initialize", method: "initialize"},
+		{name: "tools list", method: "tools/list"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body := []byte(`{"jsonrpc":"2.0","id":1,"method":"` + tc.method + `"}`)
+			req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader(body))
+			w := httptest.NewRecorder()
+
+			h.HandleJSONRPC(w, req)
+
+			if w.Code != http.StatusOK {
+				t.Fatalf("expected 200, got %d", w.Code)
+			}
+			var resp map[string]any
+			if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+				t.Fatalf("decode response: %v", err)
+			}
+			if resp["jsonrpc"] != "2.0" || resp["error"] != nil || resp["result"] == nil {
+				t.Fatalf("unexpected response: %#v", resp)
+			}
+		})
+	}
+}
+
+func TestMCPHandler_NostrCorrelationMetadataExtractsIDs(t *testing.T) {
+	h := NewMCPHandler(mcpserver.NewServer(nil, zap.NewNop()), zap.NewNop())
+	result := &mcpserver.ToolResult{Content: []mcpserver.Content{{Type: "text", Text: `{"status":"submitted","intent_id":"intent-1","service_id":"svc-1"}`}}}
+
+	meta := h.nostrCorrelationMetadata("bahia_deploy", map[string]interface{}{"environment_id": "env-1"}, result)
+
+	if meta["intent_id"] != "intent-1" || meta["service_id"] != "svc-1" || meta["environment_id"] != "env-1" {
+		t.Fatalf("expected request/result identifiers in metadata, got %#v", meta)
+	}
+	if len(meta["status_kinds"].([]int)) == 0 || len(meta["result_kinds"].([]int)) == 0 {
+		t.Fatalf("expected follow-up kind catalogs in metadata: %#v", meta)
+	}
+}
+
+func TestMCPHandler_NostrCorrelationMetadataMapsGenericIDs(t *testing.T) {
+	h := NewMCPHandler(mcpserver.NewServer(nil, zap.NewNop()), zap.NewNop())
+	result := &mcpserver.ToolResult{Content: []mcpserver.Content{{Type: "text", Text: `{"id":"svc-1","name":"api"}`}}}
+
+	meta := h.nostrCorrelationMetadata("bahia_get_service", nil, result)
+
+	if meta["service_id"] != "svc-1" {
+		t.Fatalf("expected generic id to map to service_id, got %#v", meta)
+	}
+}

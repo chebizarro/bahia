@@ -133,7 +133,7 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 	adoptionH := handlers.NewAdoptionHandler(deps.Adoption, handlers.WithAdoptionLogger(logger), handlers.WithAdoptionMetrics(metrics))
 	serviceActionH := handlers.NewServiceActionHandler(deps.RuntimeLifecycle, handlers.WithServiceActionLogger(logger), handlers.WithServiceActionMetrics(metrics))
 	repoCIHandler := handlers.NewRepositoryCIHandler(deps.HiveCI)
-	systemH := handlers.NewSystemHandler(deps.Config)
+	systemH := handlers.NewSystemHandler(deps.Config, handlers.WithSystemMCPTransport(deps.MCP != nil))
 
 	var tenantH *handlers.TenantHandler
 	if deps.Orgs != nil && deps.OrgMembers != nil && deps.OrgInvites != nil && deps.RBAC != nil {
@@ -142,6 +142,14 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 
 	if deps.OCI != nil {
 		r.Mount("/v2", deps.OCI)
+	}
+
+	if deps.MCP != nil {
+		r.With(middleware.ContentType, auth.MiddlewareFromConfig(authMiddleware), middleware.RateLimit(writeLimiter)).Post("/mcp", deps.MCP.HandleJSONRPC)
+	}
+
+	if deps.Config != nil {
+		r.With(middleware.ContentType, middleware.RateLimit(readLimiter)).Get("/api/v1/system/info", systemH.GetInfo)
 	}
 
 	// Public auth exchange endpoint (unauthenticated)
@@ -201,11 +209,6 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 
 			// Repository CI lookup (read)
 			r.Post("/repositories/ci/lookup", repoCIHandler.Lookup)
-
-			// System info (read)
-			if deps.Config != nil {
-				r.Get("/system/info", systemH.GetInfo)
-			}
 
 			// Workers (read)
 			if deps.Workers != nil {
@@ -366,14 +369,16 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 				r.Post("/notifications/channels/{id}/test", notifH.TestChannel)
 			}
 
-			// Agent Tools API (inspired by MCP, but HTTP-based for direct AI agent access)
-			// NOTE: This is NOT a true MCP implementation (no JSON-RPC 2.0, no SSE transport).
-			// It exposes deployment registry operations as callable tools for AI agents.
-			// For real MCP integration, see internal/mcp/server.go's GetTools/CallTool methods.
 			if deps.MCP != nil {
-				r.Get("/agent/info", deps.MCP.GetServerInfo)
-				r.Post("/agent/tools/list", deps.MCP.ListTools)
-				r.Post("/agent/tools/call", deps.MCP.CallTool)
+				r.Post("/mcp", deps.MCP.HandleJSONRPC)
+
+				// Deprecated Agent Tools API compatibility shim. Native MCP clients should use /mcp or /api/v1/mcp.
+				r.Group(func(r chi.Router) {
+					r.Use(deprecatedControlPlaneEndpoint)
+					r.Get("/agent/info", deps.MCP.GetServerInfo)
+					r.Post("/agent/tools/list", deps.MCP.ListTools)
+					r.Post("/agent/tools/call", deps.MCP.CallTool)
+				})
 			}
 		})
 
@@ -413,18 +418,23 @@ func routeAuthConfig(deps RouterDeps, authCfg ...config.AuthConfig) auth.Middlew
 		return deps.AuthMiddleware
 	}
 	if len(authCfg) > 0 {
-		return auth.MiddlewareConfig{
-			Enabled:   authCfg[0].Enabled,
-			JWTSecret: authCfg[0].JWTSecret,
-		}
+		return middlewareAuthConfig(authCfg[0])
 	}
 	if deps.Config != nil {
-		return auth.MiddlewareConfig{
-			Enabled:   deps.Config.Auth.Enabled,
-			JWTSecret: deps.Config.Auth.JWTSecret,
-		}
+		return middlewareAuthConfig(deps.Config.Auth)
 	}
 	return auth.MiddlewareConfig{}
+}
+
+func middlewareAuthConfig(cfg config.AuthConfig) auth.MiddlewareConfig {
+	out := auth.MiddlewareConfig{
+		Enabled:   cfg.Enabled,
+		JWTSecret: cfg.JWTSecret,
+	}
+	if cfg.NIP98Enabled {
+		out.NIP98Validator = auth.NewNIP98Validator(auth.DefaultNIP98Config())
+	}
+	return out
 }
 
 func adoptionEnabled(cfg *config.Config) bool {
@@ -433,6 +443,13 @@ func adoptionEnabled(cfg *config.Config) bool {
 
 func directRuntimeEnabled(cfg *config.Config) bool {
 	return cfg != nil && cfg.DirectRuntime.Enabled
+}
+
+func deprecatedControlPlaneEndpoint(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		handlers.SetDeprecationHeaders(w)
+		next.ServeHTTP(w, r)
+	})
 }
 
 func operatorAccessMiddlewareConfig(cfg config.OperatorAccessConfig, resolver *auth.NIP05Resolver) middleware.OperatorAccessConfig {

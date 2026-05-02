@@ -23,9 +23,9 @@ type StreamEvent struct {
 // EventStreamHub manages SSE client connections and broadcasts events.
 // It subscribes to the internal event publisher and fans out to connected clients.
 type EventStreamHub struct {
-	mu       sync.RWMutex
-	clients  map[*sseClient]struct{}
-	logger   *zap.Logger
+	mu      sync.RWMutex
+	clients map[*sseClient]struct{}
+	logger  *zap.Logger
 }
 
 type sseClient struct {
@@ -131,6 +131,8 @@ func (h *EventStreamHub) ClientCount() int {
 // StreamSSE handles the SSE endpoint.
 // GET /api/v1/events/stream?types=build.registered,drift.detected
 func (h *EventStreamHub) StreamSSE(w http.ResponseWriter, r *http.Request) {
+	writeDeprecationHeaders(w)
+
 	// Check that we can flush (required for SSE).
 	flusher, ok := w.(http.Flusher)
 	if !ok {

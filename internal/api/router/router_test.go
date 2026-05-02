@@ -3,6 +3,7 @@ package router_test
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -12,11 +13,14 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/nbd-wtf/go-nostr"
+	"github.com/openagentsinc/bahia/internal/api/handlers"
 	"github.com/openagentsinc/bahia/internal/api/router"
 	"github.com/openagentsinc/bahia/internal/config"
-	"github.com/openagentsinc/bahia/internal/repository"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/events"
+	mcpserver "github.com/openagentsinc/bahia/internal/mcp"
+	"github.com/openagentsinc/bahia/internal/repository"
 	"github.com/openagentsinc/bahia/internal/service"
 	"go.uber.org/zap"
 )
@@ -71,7 +75,9 @@ func (m *mockServiceRepo) Delete(_ context.Context, id uuid.UUID) error {
 	return nil
 }
 
-type mockEnvRepo struct{ envs map[uuid.UUID]*domain.Environment }
+type mockEnvRepo struct {
+	envs map[uuid.UUID]*domain.Environment
+}
 
 func newMockEnvRepo() *mockEnvRepo {
 	return &mockEnvRepo{envs: make(map[uuid.UUID]*domain.Environment)}
@@ -152,7 +158,9 @@ func (m *mockBuildRepo) GetByCISystemRunID(_ context.Context, _, _ string) (*dom
 	return nil, nil
 }
 
-type mockArtifactRepo struct{ artifacts map[uuid.UUID]*domain.Artifact }
+type mockArtifactRepo struct {
+	artifacts map[uuid.UUID]*domain.Artifact
+}
 
 func newMockArtifactRepo() *mockArtifactRepo {
 	return &mockArtifactRepo{artifacts: make(map[uuid.UUID]*domain.Artifact)}
@@ -202,7 +210,9 @@ func (m *mockArtifactRepo) GetByImageRepoDigest(_ context.Context, imageRepo, im
 	return nil, nil
 }
 
-type mockIntentRepo struct{ intents map[uuid.UUID]*domain.DeploymentIntent }
+type mockIntentRepo struct {
+	intents map[uuid.UUID]*domain.DeploymentIntent
+}
 
 func newMockIntentRepo() *mockIntentRepo {
 	return &mockIntentRepo{intents: make(map[uuid.UUID]*domain.DeploymentIntent)}
@@ -263,7 +273,9 @@ func (m *mockIntentRepo) GetByHiveResultEventID(_ context.Context, eventID strin
 	return nil, nil
 }
 
-type mockRunRepo struct{ runs map[uuid.UUID]*domain.DeploymentRun }
+type mockRunRepo struct {
+	runs map[uuid.UUID]*domain.DeploymentRun
+}
 
 func newMockRunRepo() *mockRunRepo {
 	return &mockRunRepo{runs: make(map[uuid.UUID]*domain.DeploymentRun)}
@@ -297,7 +309,9 @@ func (m *mockRunRepo) UpdateStatus(_ context.Context, id uuid.UUID, status domai
 	return nil
 }
 
-type mockObsRepo struct{ observations map[uuid.UUID]*domain.RuntimeObservation }
+type mockObsRepo struct {
+	observations map[uuid.UUID]*domain.RuntimeObservation
+}
 
 func newMockObsRepo() *mockObsRepo {
 	return &mockObsRepo{observations: make(map[uuid.UUID]*domain.RuntimeObservation)}
@@ -324,7 +338,9 @@ func (m *mockObsRepo) ListByServiceEnv(_ context.Context, _, _ uuid.UUID, _ int)
 	return nil, nil
 }
 
-type mockStateRepo struct{ states map[string]*domain.EnvironmentServiceState }
+type mockStateRepo struct {
+	states map[string]*domain.EnvironmentServiceState
+}
 
 func newMockStateRepo() *mockStateRepo {
 	return &mockStateRepo{states: make(map[string]*domain.EnvironmentServiceState)}
@@ -414,7 +430,91 @@ func doJSON(t *testing.T, method, url string, body any) (*http.Response, map[str
 	return resp, result
 }
 
+const routerNIP98Key = "9a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b"
+
+func makeRouterNIP98Header(t *testing.T, method, url string) string {
+	t.Helper()
+	ev := nostr.Event{
+		Kind:      27235,
+		CreatedAt: nostr.Timestamp(time.Now().Unix()),
+		Tags:      nostr.Tags{{"u", url}, {"method", method}},
+		Content:   "",
+	}
+	if err := ev.Sign(routerNIP98Key); err != nil {
+		t.Fatalf("sign NIP-98 event: %v", err)
+	}
+	payload, err := json.Marshal(ev)
+	if err != nil {
+		t.Fatalf("marshal NIP-98 event: %v", err)
+	}
+	return "Nostr " + base64.StdEncoding.EncodeToString(payload)
+}
+
 // --- Health / Ready ---
+
+func TestRouter_NativeMCPAndDeprecatedAgentHeaders(t *testing.T) {
+	cfg := config.Defaults()
+	mcpH := handlers.NewMCPHandler(mcpserver.NewServer(nil, zap.NewNop()), zap.NewNop())
+	handler := router.NewWithDeps(nil, zap.NewNop(), config.CORSConfig{AllowedOrigins: []string{"*"}}, nil, router.RouterDeps{
+		Config: cfg,
+		MCP:    mcpH,
+	})
+	srv := httptest.NewServer(handler)
+	defer srv.Close()
+
+	for _, path := range []string{"/mcp", "/api/v1/mcp"} {
+		resp, body := doJSON(t, "POST", srv.URL+path, map[string]any{"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
+		if resp.StatusCode != http.StatusOK || body["error"] != nil || body["result"] == nil {
+			t.Fatalf("%s expected native MCP JSON-RPC success, status=%d body=%#v", path, resp.StatusCode, body)
+		}
+	}
+
+	resp, _ := doJSON(t, "GET", srv.URL+"/api/v1/agent/info", nil)
+	if resp.Header.Get("Deprecation") != "true" || resp.Header.Get("Sunset") == "" {
+		t.Fatalf("expected deprecation headers on legacy agent route, got %#v", resp.Header)
+	}
+}
+
+func TestRouter_SystemInfoIsPublicForAuthCapabilityDiscovery(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.Auth.Enabled = true
+	cfg.Auth.NIP98Enabled = true
+	handler := router.NewWithDeps(nil, zap.NewNop(), config.CORSConfig{AllowedOrigins: []string{"*"}}, nil, router.RouterDeps{Config: cfg})
+	srv := httptest.NewServer(handler)
+	defer srv.Close()
+
+	resp, body := doJSON(t, http.MethodGet, srv.URL+"/api/v1/system/info", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected public system info for auth bootstrap, status=%d body=%#v", resp.StatusCode, body)
+	}
+}
+
+func TestRouter_ConfiguredNIP98AuthAllowsProtectedRoutesWithoutJWT(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.Auth.Enabled = true
+	cfg.Auth.NIP98Enabled = true
+	mcpH := handlers.NewMCPHandler(mcpserver.NewServer(nil, zap.NewNop()), zap.NewNop())
+	handler := router.NewWithDeps(nil, zap.NewNop(), config.CORSConfig{AllowedOrigins: []string{"*"}}, nil, router.RouterDeps{Config: cfg, MCP: mcpH})
+	srv := httptest.NewServer(handler)
+	defer srv.Close()
+
+	url := srv.URL + "/api/v1/mcp"
+	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader([]byte(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`)))
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", makeRouterNIP98Header(t, http.MethodPost, url))
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("do request: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected protected MCP NIP-98 request to succeed without JWT, status=%d body=%s", resp.StatusCode, string(body))
+	}
+}
 
 func TestHealth(t *testing.T) {
 	srv := newTestServer()

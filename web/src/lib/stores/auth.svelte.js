@@ -1,5 +1,5 @@
 // Auth/session store for NIP-07 browser extension authentication
-// UI identity/session state only - does NOT manage bahia_token
+// UI identity/session state only - does NOT manage bahia_token as first-party auth state
 
 import { browser } from '$app/environment';
 import { toast } from '$lib/components/toast.js';
@@ -11,14 +11,12 @@ import {
   signEvent as nip07SignEvent,
   detectNip07
 } from '$lib/nostr/nip07.js';
-import { supportsNostrAuthExchange } from '$lib/auth/capabilities.js';
+import { supportsDirectNip98Auth, supportsNostrAuthExchange } from '$lib/auth/capabilities.js';
 
-// LocalStorage key for session persistence
 const SESSION_KEY = 'bahia_auth_session';
 
-// Initial state
 const initialState = {
-  status: 'unknown', // unknown | checking | unauthenticated | authenticating | authenticated | error
+  status: 'unknown',
   extensionAvailable: false,
   pubkey: null,
   relays: {},
@@ -26,22 +24,18 @@ const initialState = {
   error: null,
   lastAuthenticatedAt: null,
   backendAuthenticated: false,
-  tokenExpiresAt: null
+  tokenExpiresAt: null,
+  directNip98Ready: false
 };
 
-// Create auth state
 export const authState = $state({ ...initialState });
 
-// Derived state helpers
 export function isAuthenticated() {
   return authState.status === 'authenticated';
 }
 
 export function currentUser() {
-  if (authState.status !== 'authenticated' || !authState.pubkey) {
-    return null;
-  }
-
+  if (authState.status !== 'authenticated' || !authState.pubkey) return null;
   return {
     pubkey: authState.pubkey,
     relays: authState.relays,
@@ -54,21 +48,13 @@ function updateAuthState(patch) {
   Object.assign(authState, patch);
 }
 
-// Load persisted session from localStorage
 function loadPersistedSession() {
   if (!browser) return null;
-
   try {
     const stored = localStorage.getItem(SESSION_KEY);
     if (!stored) return null;
-
     const session = JSON.parse(stored);
-
-    // Validate session structure
-    if (!session.pubkey || typeof session.pubkey !== 'string') {
-      return null;
-    }
-
+    if (!session.pubkey || typeof session.pubkey !== 'string') return null;
     return {
       pubkey: session.pubkey,
       relays: session.relays || {},
@@ -80,26 +66,17 @@ function loadPersistedSession() {
   }
 }
 
-// Persist session to localStorage (only non-secret metadata)
 function persistSession(pubkey, relays) {
   if (!browser) return;
-
   try {
-    const session = {
-      pubkey,
-      relays,
-      lastAuthenticatedAt: new Date().toISOString()
-    };
-    localStorage.setItem(SESSION_KEY, JSON.stringify(session));
+    localStorage.setItem(SESSION_KEY, JSON.stringify({ pubkey, relays, lastAuthenticatedAt: new Date().toISOString() }));
   } catch (error) {
     console.error('Failed to persist auth session:', error);
   }
 }
 
-// Clear persisted session
 function clearPersistedSession() {
   if (!browser) return;
-
   try {
     localStorage.removeItem(SESSION_KEY);
   } catch (error) {
@@ -107,38 +84,92 @@ function clearPersistedSession() {
   }
 }
 
-// Track in-flight auth work to prevent duplicate calls
+function base64Encode(value) {
+  if (typeof btoa === 'function') return btoa(value);
+  return Buffer.from(value, 'utf-8').toString('base64');
+}
+
+function absoluteHTTPURL(url) {
+  if (/^https?:\/\//i.test(url)) return url;
+  const origin = browser && window?.location?.origin ? window.location.origin : 'http://localhost';
+  return new URL(url, origin).toString();
+}
+
+async function legacyExchangeBackendToken(api, pubkey) {
+  const unsignedEvent = {
+    kind: 27235,
+    pubkey,
+    created_at: Math.floor(Date.now() / 1000),
+    tags: [['u', '/api/v1/auth/nostr'], ['method', 'POST']],
+    content: ''
+  };
+  const signedEvent = await nip07SignEvent(unsignedEvent);
+  const response = await api.exchangeNostrAuth(signedEvent);
+  api.setAuthProvider(null);
+  api.setToken(response.token);
+  updateAuthState({ backendAuthenticated: true, tokenExpiresAt: response.expires_at, directNip98Ready: false, error: null });
+  return response;
+}
+
+function installDirectNip98Provider(api) {
+  api.setToken(null);
+  api.setAuthProvider({ getAuthorizationHeader: ({ method, url }) => signHttpRequest({ method, url }) });
+}
+
+async function configureBackendAuth(pubkey, { exchangeIfNeeded = false, requireBackend = false } = {}) {
+  if (!browser) throw new Error('Backend auth requires browser environment');
+  const { api } = await import('$lib/api/client.js');
+  if (!api) throw new Error('API client not available');
+
+  const systemInfo = await api.getSystemInfo().catch(() => null);
+  if (supportsDirectNip98Auth(systemInfo)) {
+    installDirectNip98Provider(api);
+    updateAuthState({ backendAuthenticated: true, tokenExpiresAt: null, directNip98Ready: true, error: null });
+    return { method: 'nip98', pubkey };
+  }
+
+  api.setAuthProvider(null);
+  if (supportsNostrAuthExchange(systemInfo) && exchangeIfNeeded) {
+    return legacyExchangeBackendToken(api, pubkey);
+  }
+
+  const backendToken = localStorage.getItem('bahia_token');
+  if (backendToken) {
+    api.setToken(backendToken);
+    updateAuthState({ backendAuthenticated: true, directNip98Ready: false, error: null });
+    return { method: 'jwt', pubkey };
+  }
+
+  updateAuthState({
+    backendAuthenticated: false,
+    tokenExpiresAt: null,
+    directNip98Ready: false,
+    error: requireBackend ? 'Backend direct NIP-98 auth and legacy JWT exchange are not enabled' : null
+  });
+  if (requireBackend) throw new Error('Backend direct NIP-98 auth and legacy JWT exchange are not enabled');
+  return null;
+}
+
+async function authenticateBackendInternal(pubkey) {
+  return configureBackendAuth(pubkey, { exchangeIfNeeded: true });
+}
+
 let initializeInProgress = null;
 let loginInProgress = null;
 
-/**
- * Initialize auth system
- * Should be called once on app mount
- */
 export async function initializeAuth() {
-  if (initializeInProgress) {
-    return initializeInProgress;
-  }
-
+  if (initializeInProgress) return initializeInProgress;
   initializeInProgress = (async () => {
     updateAuthState({ status: 'checking' });
-
     try {
-      // Wait for extension to become available
       const { available } = await waitForNip07({ timeoutMs: 1500 });
-
-      // Update extension availability
       updateAuthState({ extensionAvailable: available });
-
-      // Try to restore previous session
       const persisted = loadPersistedSession();
       const backendToken = localStorage.getItem('bahia_token');
       const backendAuthenticated = Boolean(backendToken);
 
       if (persisted && available) {
-        // Restore session with capabilities
         const capabilities = getCapabilities();
-
         updateAuthState({
           status: 'authenticated',
           pubkey: persisted.pubkey,
@@ -146,137 +177,47 @@ export async function initializeAuth() {
           capabilities,
           lastAuthenticatedAt: persisted.lastAuthenticatedAt,
           backendAuthenticated,
+          directNip98Ready: false,
           error: null
         });
+        try {
+          await configureBackendAuth(persisted.pubkey, { exchangeIfNeeded: false });
+        } catch (backendError) {
+          console.warn('Backend auth provider initialization failed:', backendError.message);
+        }
       } else {
-        // No valid NIP-07 session. Preserve backend auth if a JWT was already stored.
-        updateAuthState({
-          status: 'unauthenticated',
-          backendAuthenticated,
-          error: null
-        });
-
-        // Warn if no NIP-07 extension detected and no backend session exists
+        updateAuthState({ status: 'unauthenticated', backendAuthenticated, directNip98Ready: false, error: null });
         if (!available && !backendAuthenticated) {
           toast.warning('No Nostr extension detected. Install a NIP-07 extension like Alby or nos2x to sign in.');
         }
       }
     } catch (error) {
       console.error('Auth initialization failed:', error);
-      updateAuthState({
-        status: 'error',
-        error: error.message
-      });
+      updateAuthState({ status: 'error', error: error.message });
     } finally {
       initializeInProgress = null;
     }
   })();
-
   return initializeInProgress;
 }
 
-/**
- * Refresh extension availability status
- * Useful if extension was installed after page load
- */
 export async function refreshExtensionStatus() {
   const { available } = detectNip07();
-
-  updateAuthState({
-    extensionAvailable: available,
-    capabilities: available ? getCapabilities() : {}
-  });
-
+  updateAuthState({ extensionAvailable: available, capabilities: available ? getCapabilities() : {} });
   return available;
 }
 
-/**
- * Internal: Authenticate with backend using a known pubkey
- * Called automatically after NIP-07 login succeeds
- * @param {string} pubkey - The authenticated user's public key
- */
-async function authenticateBackendInternal(pubkey) {
-  if (!browser) {
-    throw new Error('Backend auth requires browser environment');
-  }
-
-  // Import API client
-  const { api } = await import('$lib/api/client.js');
-  if (!api) {
-    throw new Error('API client not available');
-  }
-
-  const systemInfo = await api.getSystemInfo().catch(() => null);
-  if (!supportsNostrAuthExchange(systemInfo)) {
-    return null;
-  }
-
-  // Build unsigned NIP-98 event
-  const now = Math.floor(Date.now() / 1000);
-  const unsignedEvent = {
-    kind: 27235,
-    pubkey,
-    created_at: now,
-    tags: [
-      ['u', '/api/v1/auth/nostr'],
-      ['method', 'POST']
-    ],
-    content: ''
-  };
-
-  // Sign the event using NIP-07 extension directly
-  const signedEvent = await nip07SignEvent(unsignedEvent);
-
-  // Exchange for JWT
-  const response = await api.exchangeNostrAuth(signedEvent);
-
-  // Update API client with new token
-  api.setToken(response.token);
-
-  // Update auth state
-  updateAuthState({
-    backendAuthenticated: true,
-    tokenExpiresAt: response.expires_at,
-    error: null
-  });
-
-  return response;
-}
-
-/**
- * Login with NIP-07 extension
- * Prompts user for public key and fetches session data
- */
 export async function login() {
-  // Prevent duplicate login calls
-  if (loginInProgress) {
-    return loginInProgress;
-  }
-
-  // Check if already authenticating
+  if (loginInProgress) return loginInProgress;
   if (authState.status === 'authenticating') {
     console.warn('Login already in progress');
     return;
   }
-
-  // Create login promise
   loginInProgress = (async () => {
     try {
-      updateAuthState({
-        status: 'authenticating',
-        error: null
-      });
-
-      // Get public key from extension (will prompt user)
+      updateAuthState({ status: 'authenticating', error: null });
       const pubkey = await getPublicKey();
-
-      // Get additional session data
-      const [relays, capabilities] = await Promise.all([
-        getRelays().catch(() => ({})),
-        Promise.resolve(getCapabilities())
-      ]);
-
-      // Update state (NIP-07 auth complete)
+      const [relays, capabilities] = await Promise.all([getRelays().catch(() => ({})), Promise.resolve(getCapabilities())]);
       updateAuthState({
         status: 'authenticated',
         extensionAvailable: true,
@@ -286,184 +227,91 @@ export async function login() {
         lastAuthenticatedAt: new Date().toISOString(),
         error: null
       });
-
-      // Persist session
       persistSession(pubkey, relays);
-
-      // Automatically authenticate with backend to get JWT for API access when supported
       try {
-        const backendAuth = await authenticateBackendInternal(pubkey);
-        if (backendAuth) {
-          toast.success('Signed in successfully');
-        } else {
-          updateAuthState({
-            backendAuthenticated: false,
-            tokenExpiresAt: null,
-            error: null
-          });
-          toast.success('Signed in successfully');
-        }
+        await authenticateBackendInternal(pubkey);
+        toast.success('Signed in successfully');
       } catch (backendError) {
-        // Backend auth failed but NIP-07 login succeeded
-        // Log the error but don't fail the login - user can retry backend auth later
         console.warn('Backend authentication failed:', backendError.message);
-        updateAuthState({
-          backendAuthenticated: false,
-          error: `Signed in, but backend auth failed: ${backendError.message}`
-        });
+        updateAuthState({ backendAuthenticated: false, directNip98Ready: false, error: `Signed in, but backend auth failed: ${backendError.message}` });
         toast.error(`Backend auth failed: ${backendError.message}. Some features may be unavailable.`);
       }
     } catch (error) {
       console.error('Login failed:', error);
-
-      // Restore previous state if there was one
       const persisted = loadPersistedSession();
-
       if (persisted) {
-        updateAuthState({
-          status: 'authenticated',
-          pubkey: persisted.pubkey,
-          relays: persisted.relays,
-          capabilities: getCapabilities(),
-          lastAuthenticatedAt: persisted.lastAuthenticatedAt,
-          error: null
-        });
+        updateAuthState({ status: 'authenticated', pubkey: persisted.pubkey, relays: persisted.relays, capabilities: getCapabilities(), lastAuthenticatedAt: persisted.lastAuthenticatedAt, error: null });
       } else {
-        updateAuthState({
-          status: 'error',
-          error: error.message
-        });
+        updateAuthState({ status: 'error', error: error.message });
       }
-
       throw error;
     } finally {
       loginInProgress = null;
     }
   })();
-
   return loginInProgress;
 }
 
-/**
- * Logout and clear session
- * Clears both NIP-07 session and backend API token
- */
 export function logout() {
   clearPersistedSession();
-
-  // Clear backend API token
   if (browser) {
     import('$lib/api/client.js').then(({ api }) => {
       if (api) {
+        api.setAuthProvider(null);
         api.setToken(null);
       }
-    }).catch(err => {
-      console.error('Failed to clear API token:', err);
-    });
+    }).catch(err => console.error('Failed to clear API token:', err));
   }
-
   Object.assign(authState, {
     ...initialState,
     status: 'unauthenticated',
     extensionAvailable: authState.extensionAvailable,
     capabilities: authState.extensionAvailable ? getCapabilities() : {},
     backendAuthenticated: false,
-    tokenExpiresAt: null
+    tokenExpiresAt: null,
+    directNip98Ready: false
   });
 }
 
-/**
- * Sign an event using the authenticated session
- * @param {Object} event - Nostr event to sign
- * @returns {Promise<Object>} Signed event
- * @throws {Error} If not authenticated or signing fails
- */
 export async function signWithAuth(event) {
-  if (authState.status !== 'authenticated') {
-    throw new Error('Not authenticated - please login first');
-  }
-
+  if (authState.status !== 'authenticated') throw new Error('Not authenticated - please login first');
   try {
-    const signedEvent = await nip07SignEvent(event);
-    return signedEvent;
+    return await nip07SignEvent(event);
   } catch (error) {
     console.error('Failed to sign event:', error);
     throw new Error(`Event signing failed: ${error.message}`);
   }
 }
 
-/**
- * Authenticate with the backend API by exchanging a NIP-98 signed event for a JWT token
- * This requires an active NIP-07 session
- * @throws {Error} If not in browser, not authenticated, or exchange fails
- */
-export async function authenticateBackend() {
-  if (!browser) {
-    throw new Error('authenticateBackend() can only be called in the browser');
-  }
-
-  // Import API client
-  const { api } = await import('$lib/api/client.js');
-  if (!api) {
-    throw new Error('API client not available');
-  }
-
-  // Ensure NIP-07 auth exists
+export async function signHttpRequest({ method = 'GET', url }) {
   if (authState.status !== 'authenticated' || !authState.pubkey) {
-    // Try to login first
-    await login();
+    throw new Error('Not authenticated - please login first');
+  }
+  if (!url) throw new Error('HTTP URL is required for NIP-98 signing');
+  const unsignedEvent = {
+    kind: 27235,
+    pubkey: authState.pubkey,
+    created_at: Math.floor(Date.now() / 1000),
+    tags: [['u', absoluteHTTPURL(url)], ['method', method.toUpperCase()]],
+    content: ''
+  };
+  const signedEvent = await nip07SignEvent(unsignedEvent);
+  return `Nostr ${base64Encode(JSON.stringify(signedEvent))}`;
+}
 
+export async function authenticateBackend() {
+  if (!browser) throw new Error('authenticateBackend() can only be called in the browser');
+  if (authState.status !== 'authenticated' || !authState.pubkey) {
+    await login();
     if (authState.status !== 'authenticated' || !authState.pubkey) {
       throw new Error('NIP-07 authentication required before backend auth');
     }
   }
-
   try {
-    const systemInfo = await api.getSystemInfo().catch(() => null);
-    if (!supportsNostrAuthExchange(systemInfo)) {
-      throw new Error('Backend Nostr auth exchange is not enabled on this Bahia server');
-    }
-
-    // Build unsigned NIP-98 event
-    const now = Math.floor(Date.now() / 1000);
-    const unsignedEvent = {
-      kind: 27235,
-      pubkey: authState.pubkey,
-      created_at: now,
-      tags: [
-        ['u', '/api/v1/auth/nostr'],
-        ['method', 'POST']
-      ],
-      content: ''
-    };
-
-    // Sign the event
-    const signedEvent = await signWithAuth(unsignedEvent);
-
-    // Exchange for JWT
-    const response = await api.exchangeNostrAuth(signedEvent);
-
-    // Update API client with new token
-    api.setToken(response.token);
-
-    // Update auth state
-    updateAuthState({
-      backendAuthenticated: true,
-      tokenExpiresAt: response.expires_at,
-      error: null
-    });
-
-    return response;
+    return await configureBackendAuth(authState.pubkey, { exchangeIfNeeded: true, requireBackend: true });
   } catch (error) {
     console.error('Backend authentication failed:', error);
-
-    // Update state to reflect failure
-    updateAuthState({
-      backendAuthenticated: false,
-      tokenExpiresAt: null,
-      error: error.message
-    });
-
+    updateAuthState({ backendAuthenticated: false, tokenExpiresAt: null, directNip98Ready: false, error: error.message });
     throw error;
   }
 }

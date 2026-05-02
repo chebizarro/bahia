@@ -32,9 +32,9 @@ type exchangeRequest struct {
 
 // exchangeResponse is the outgoing response payload.
 type exchangeResponse struct {
-	Token      string              `json:"token"`
-	ExpiresAt  int64               `json:"expires_at"`
-	Principal  exchangePrincipal   `json:"principal"`
+	Token     string            `json:"token"`
+	ExpiresAt int64             `json:"expires_at"`
+	Principal exchangePrincipal `json:"principal"`
 }
 
 type exchangePrincipal struct {
@@ -45,6 +45,8 @@ type exchangePrincipal struct {
 // Exchange validates a NIP-98 signed event and issues a JWT token.
 // POST /api/v1/auth/nostr
 func (h *AuthExchangeHandler) Exchange(w http.ResponseWriter, r *http.Request) {
+	writeDeprecationHeaders(w)
+
 	var req exchangeRequest
 	if err := decodeJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid request body: %s", err.Error()))

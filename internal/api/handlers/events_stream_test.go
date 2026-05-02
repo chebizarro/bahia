@@ -209,6 +209,8 @@ func TestEventStreamHub_SSEHeaders(t *testing.T) {
 
 	require.Equal(t, "text/event-stream", w.Header().Get("Content-Type"))
 	require.Equal(t, "no-cache", w.Header().Get("Cache-Control"))
+	require.Equal(t, "true", w.Header().Get("Deprecation"))
+	require.NotEmpty(t, w.Header().Get("Sunset"))
 }
 
 func TestEventStreamHub_HeartbeatFormat(t *testing.T) {

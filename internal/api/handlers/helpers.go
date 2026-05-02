@@ -20,6 +20,18 @@ func writeData(w http.ResponseWriter, status int, data any) {
 	writeJSON(w, status, dto.APIResponse{Data: data})
 }
 
+const migrationSunset = "Sat, 01 Aug 2026 00:00:00 GMT"
+
+func SetDeprecationHeaders(w http.ResponseWriter) {
+	writeDeprecationHeaders(w)
+}
+
+func writeDeprecationHeaders(w http.ResponseWriter) {
+	w.Header().Set("Deprecation", "true")
+	w.Header().Set("Sunset", migrationSunset)
+	w.Header().Set("Link", "</docs/control-planes.md>; rel=\"deprecation\"")
+}
+
 func writeError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, dto.APIResponse{Error: msg})
 }

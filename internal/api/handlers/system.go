@@ -12,12 +12,25 @@ import (
 
 // SystemHandler handles system info endpoints.
 type SystemHandler struct {
-	cfg *config.Config
+	cfg                 *config.Config
+	mcpTransportEnabled bool
+}
+
+type SystemOption func(*SystemHandler)
+
+func WithSystemMCPTransport(enabled bool) SystemOption {
+	return func(h *SystemHandler) {
+		h.mcpTransportEnabled = enabled
+	}
 }
 
 // NewSystemHandler creates a new SystemHandler.
-func NewSystemHandler(cfg *config.Config) *SystemHandler {
-	return &SystemHandler{cfg: cfg}
+func NewSystemHandler(cfg *config.Config, opts ...SystemOption) *SystemHandler {
+	h := &SystemHandler{cfg: cfg}
+	for _, opt := range opts {
+		opt(h)
+	}
+	return h
 }
 
 // RegistryInfo describes an available artifact registry.
@@ -194,7 +207,7 @@ func (h *SystemHandler) GetInfo(w http.ResponseWriter, r *http.Request) {
 		"relay_sidecar":          h.cfg.Nostr.Sidecar.Enabled,
 		"relay_read_models":      h.cfg.Nostr.Sidecar.Enabled && h.cfg.Nostr.PublishEnabled,
 		"direct_nostr_http_auth": h.cfg.Auth.NIP98Enabled,
-		"mcp_transport":          false,
+		"mcp_transport":          h.mcpTransportEnabled,
 		"legacy_sse":             true,
 		"legacy_jwt_exchange":    h.cfg.Auth.JWTSecret != "",
 		"legacy_agent_http":      true,

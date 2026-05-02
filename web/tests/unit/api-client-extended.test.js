@@ -19,6 +19,38 @@ describe('BahiaClient - Extended API Coverage', () => {
     api = module.api;
   });
 
+  describe('Auth Provider', () => {
+    it('prefers auth provider authorization over deprecated bearer token', async () => {
+      api.setToken('legacy-token');
+      api.setAuthProvider({ getAuthorizationHeader: vi.fn().mockResolvedValue('Nostr signed-event') });
+      global.fetch.mockResolvedValueOnce({
+        ok: true,
+        headers: new Map([['content-type', 'application/json']]),
+        json: async () => ({ data: [] })
+      });
+
+      await api.listServices();
+
+      expect(global.fetch).toHaveBeenCalledWith('/api/v1/services', expect.objectContaining({
+        headers: expect.objectContaining({ Authorization: 'Nostr signed-event' })
+      }));
+    });
+
+    it('passes method and API-relative URL to auth provider', async () => {
+      const provider = { getAuthorizationHeader: vi.fn().mockResolvedValue('Nostr signed-event') };
+      api.setAuthProvider(provider);
+      global.fetch.mockResolvedValueOnce({
+        ok: true,
+        headers: new Map([['content-type', 'application/json']]),
+        json: async () => ({ data: { id: 'svc-1' } })
+      });
+
+      await api.createService({ name: 'api', artifact_repo: 'repo' });
+
+      expect(provider.getAuthorizationHeader).toHaveBeenCalledWith({ method: 'POST', url: '/api/v1/services' });
+    });
+  });
+
   describe('Environment Methods', () => {
     it('should call createEnvironment with correct method and path', async () => {
       const payload = {

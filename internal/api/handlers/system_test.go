@@ -95,6 +95,27 @@ func TestSystemHandler_GetInfo_DoesNotAdvertiseSidecarWhenDisabled(t *testing.T)
 	}
 }
 
+func TestSystemHandler_GetInfo_ExposesMCPTransportOnlyWhenEnabled(t *testing.T) {
+	cfg := config.Defaults()
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/system/info", nil)
+	w := httptest.NewRecorder()
+
+	NewSystemHandler(cfg, WithSystemMCPTransport(true)).GetInfo(w, req)
+
+	var payload struct {
+		Data struct {
+			Features map[string]bool `json:"features"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if !payload.Data.Features["mcp_transport"] {
+		t.Fatalf("expected mcp_transport feature when handler is wired")
+	}
+}
+
 func TestSystemHandler_GetInfo_ExposesNostrAuthExchangeFeature(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.Auth.JWTSecret = "test-secret"

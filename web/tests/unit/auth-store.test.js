@@ -254,6 +254,54 @@ describe('Auth Store', () => {
       expect(state.pubkey).toBe(pubkey);
       expect(state.relays).toEqual({});
     });
+
+    it('installs direct NIP-98 provider instead of exchanging JWT when advertised', async () => {
+      const signedEvent = { id: 'event-id', sig: 'signature', pubkey: 'a'.repeat(64), kind: 27235, tags: [] };
+      nip07Module.signEvent.mockImplementation(async (event) => ({ ...event, ...signedEvent, tags: event.tags }));
+      global.fetch
+        .mockResolvedValueOnce({
+          ok: true,
+          headers: new Map([['content-type', 'application/json']]),
+          json: async () => ({ data: { features: { direct_nostr_http_auth: true } } })
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          headers: new Map([['content-type', 'application/json']]),
+          json: async () => ({ data: [] })
+        });
+
+      await authModule.login();
+      const { api } = await import('../../src/lib/api/client.js');
+      await api.listServices();
+
+      expect(authModule.authState.directNip98Ready).toBe(true);
+      expect(localStorage.getItem('bahia_token')).toBeNull();
+      expect(global.fetch).not.toHaveBeenCalledWith('/api/v1/auth/nostr', expect.any(Object));
+      expect(global.fetch).toHaveBeenLastCalledWith('/api/v1/services', expect.objectContaining({
+        headers: expect.objectContaining({ Authorization: expect.stringMatching(/^Nostr /) })
+      }));
+    });
+
+    it('falls back to deprecated JWT exchange when direct NIP-98 is unavailable', async () => {
+      nip07Module.signEvent.mockImplementation(async (event) => ({ ...event, id: 'event-id', sig: 'signature' }));
+      global.fetch
+        .mockResolvedValueOnce({
+          ok: true,
+          headers: new Map([['content-type', 'application/json']]),
+          json: async () => ({ data: { features: { nostr_auth_exchange: true } } })
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({ data: { token: 'legacy-token', expires_at: 1893456000 } })
+        });
+
+      await authModule.login();
+
+      expect(authModule.authState.backendAuthenticated).toBe(true);
+      expect(authModule.authState.directNip98Ready).toBe(false);
+      expect(localStorage.getItem('bahia_token')).toBe('legacy-token');
+      expect(global.fetch).toHaveBeenCalledWith('/api/v1/auth/nostr', expect.objectContaining({ method: 'POST' }));
+    });
   });
 
   describe('logout', () => {
@@ -347,6 +395,19 @@ describe('Auth Store', () => {
       const event = { kind: 1, content: 'test' };
       
       await expect(authModule.signWithAuth(event)).rejects.toThrow('Event signing failed: Signing failed');
+    });
+
+    it('signHttpRequest returns a NIP-98 authorization header with absolute URL and method tags', async () => {
+      nip07Module.signEvent.mockImplementation(async (event) => ({ ...event, id: 'event-id', sig: 'signature' }));
+      await authModule.login();
+
+      const header = await authModule.signHttpRequest({ method: 'post', url: '/api/v1/services' });
+      const encoded = header.replace('Nostr ', '');
+      const decoded = JSON.parse(Buffer.from(encoded, 'base64').toString('utf-8'));
+
+      expect(decoded.kind).toBe(27235);
+      expect(decoded.tags).toContainEqual(['u', 'http://localhost:3000/api/v1/services']);
+      expect(decoded.tags).toContainEqual(['method', 'POST']);
     });
   });
 

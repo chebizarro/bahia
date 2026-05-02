@@ -1,9 +1,15 @@
 // Bahia API Client
 const BASE_URL = '/api/v1';
 
-class BahiaClient {
+export class BahiaClient {
   constructor() {
+    // Transitional compatibility: token remains as a deprecated fallback only.
     this.token = typeof localStorage !== 'undefined' ? localStorage.getItem('bahia_token') : null;
+    this.authProvider = null;
+  }
+
+  setAuthProvider(provider) {
+    this.authProvider = provider || null;
   }
 
   setToken(token) {
@@ -41,15 +47,25 @@ class BahiaClient {
   }
 
   async fetch(path, options = {}) {
+    const method = options.method || 'GET';
+    const url = `${BASE_URL}${path}`;
     const headers = {
       'Content-Type': 'application/json',
       ...options.headers
     };
-    if (this.token) {
-      headers['Authorization'] = `Bearer ${this.token}`;
+
+    if (!headers.Authorization && this.authProvider?.getAuthorizationHeader) {
+      const authorization = await this.authProvider.getAuthorizationHeader({ method, url });
+      if (authorization) {
+        headers.Authorization = authorization;
+      }
     }
 
-    const res = await fetch(`${BASE_URL}${path}`, { ...options, headers });
+    if (!headers.Authorization && this.token) {
+      headers.Authorization = `Bearer ${this.token}`;
+    }
+
+    const res = await fetch(url, { ...options, method, headers });
     
     // Handle non-2xx responses
     if (!res.ok) {
@@ -424,7 +440,8 @@ class BahiaClient {
   }
 
   // Auth Exchange
-  // Exchange NIP-98 signed event for a JWT token
+  // Deprecated compatibility shim: first-party flows should use setAuthProvider()
+  // with direct NIP-98 signing instead of exchanging for persistent JWT state.
   async exchangeNostrAuth(event) {
     // This endpoint is unauthenticated, so we temporarily clear the token
     const savedToken = this.token;
