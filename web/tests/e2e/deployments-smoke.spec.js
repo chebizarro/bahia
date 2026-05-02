@@ -255,6 +255,106 @@ test.describe('Deployments Smoke Test', () => {
   });
 });
 
+test.describe('Deployment Run Details Page', () => {
+  test('should render run details and stdout/stderr logs tabs', async ({ page }) => {
+    const runId = '11111111-1111-1111-1111-111111111111';
+
+    await page.route(`**/api/v1/deployments/runs/${runId}`, (route) => route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        data: {
+          id: runId,
+          deployment_intent_id: 'intent-1',
+          status: 'succeeded',
+          exit_code: 0,
+          worker_pubkey: 'f'.repeat(64),
+          started_at: '2026-05-01T10:00:00.000Z',
+          finished_at: '2026-05-01T10:02:30.000Z'
+        }
+      })
+    }));
+
+    await page.route(`**/api/v1/deployments/runs/${runId}/logs?tail=500&stream=stdout`, (route) => route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ data: { stdout: 'build started\nbuild done' } })
+    }));
+
+    await page.route(`**/api/v1/deployments/runs/${runId}/logs?tail=500&stream=stderr`, (route) => route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ data: { stderr: 'warning: cache miss' } })
+    }));
+
+    await page.goto(`/deployments/runs/${runId}`);
+    await page.waitForLoadState('networkidle');
+
+    await expect(page.locator('h1:has-text("Deployment Run")')).toBeVisible();
+    await expect(page.locator('text=Transport: JSON snapshot via')).toBeVisible();
+    await expect(page.locator('text=Progress')).toBeVisible();
+    await expect(page.locator('text=Duration')).toBeVisible();
+    await expect(page.locator('text=Exit Code')).toBeVisible();
+    await expect(page.locator('pre.logs')).toContainText('build started');
+
+    await page.getByRole('button', { name: 'stderr' }).click();
+    await expect(page.locator('pre.logs')).toContainText('warning: cache miss');
+  });
+
+  test('should navigate from intent run table row to run details route', async ({ page }) => {
+    const intentId = 'intent-row-nav';
+    const runId = '22222222-2222-2222-2222-222222222222';
+
+    await page.route(`**/api/v1/deployments/intents/${intentId}`, (route) => route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        data: {
+          id: intentId,
+          service_id: 'service-1',
+          environment_id: 'env-1',
+          approval_status: 'approved',
+          deployment_status: 'running',
+          artifact_id: 'sha256:test',
+          requested_by: 'alice@example.com',
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString()
+        }
+      })
+    }));
+
+    await page.route(`**/api/v1/deployments/intents/${intentId}/runs`, (route) => route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ data: [{ id: runId, status: 'running', worker_pubkey: 'abc', created_at: new Date().toISOString() }] })
+    }));
+
+    await page.route(`**/api/v1/services/service-1`, (route) => route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ data: { id: 'service-1', name: 'web-app' } })
+    }));
+
+    await page.route(`**/api/v1/environments/env-1`, (route) => route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ data: { id: 'env-1', name: 'production' } })
+    }));
+
+    await page.route(`**/api/v1/deployments/runs/${runId}`, (route) => route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ data: { id: runId, deployment_intent_id: intentId, status: 'running' } })
+    }));
+
+    await page.goto(`/deployments/${intentId}`);
+    await page.waitForLoadState('networkidle');
+
+    await page.locator('tbody tr').first().click();
+    await expect(page).toHaveURL(`/deployments/runs/${runId}`);
+  });
+});
+
 test.describe('Deployment History Page', () => {
   test('should show status/service/environment/date filters and pagination on /deployments', async ({ page }) => {
     const pagedIntents = Array.from({ length: 30 }, (_, index) => ({

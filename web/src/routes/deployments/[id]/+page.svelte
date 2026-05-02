@@ -301,7 +301,7 @@
           message="Deployment runs will appear here once the intent is approved and executed"
         />
       {:else}
-        <Table columns={runsColumns} data={runs} />
+        <Table columns={runsColumns} data={runs} onRowClick={(row) => goto(`/deployments/runs/${row.id}`)} />
       {/if}
     </div>
   {:else}

@@ -145,8 +145,10 @@ export class BahiaClient {
   
   // Runs
   getRun(id) { return this.fetch(`/deployments/runs/${encodeURIComponent(id)}`); }
-  getRunLogs(id, tail = 100) {
-    return this.fetch(`/deployments/runs/${encodeURIComponent(id)}/logs?tail=${encodeURIComponent(tail)}`);
+  getRunLogs(id, tail = 100, stream = 'merged') {
+    const params = new URLSearchParams({ tail: String(tail) });
+    if (stream) params.set('stream', stream);
+    return this.fetch(`/deployments/runs/${encodeURIComponent(id)}/logs?${params.toString()}`);
   }
   listRuns(intentId) {
     return this.fetch(`/deployments/intents/${encodeURIComponent(intentId)}/runs`).then(r => r ?? []);

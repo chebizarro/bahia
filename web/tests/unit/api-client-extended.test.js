@@ -332,6 +332,43 @@ describe('BahiaClient - Extended API Coverage', () => {
     });
   });
 
+  describe('Deployment Run Logs Methods', () => {
+    it('should request stdout logs via stream query parameter', async () => {
+      const runId = 'run-123';
+
+      global.fetch.mockResolvedValueOnce({
+        ok: true,
+        headers: new Map([['content-type', 'application/json']]),
+        json: async () => ({ data: { stdout: 'line 1\nline 2' } })
+      });
+
+      const result = await api.getRunLogs(runId, 250, 'stdout');
+
+      expect(global.fetch).toHaveBeenCalledWith(
+        `/api/v1/deployments/runs/${encodeURIComponent(runId)}/logs?tail=250&stream=stdout`,
+        expect.any(Object)
+      );
+      expect(result).toEqual({ stdout: 'line 1\nline 2' });
+    });
+
+    it('should default to merged stream when stream is omitted', async () => {
+      const runId = 'run-default';
+
+      global.fetch.mockResolvedValueOnce({
+        ok: true,
+        headers: new Map([['content-type', 'application/json']]),
+        json: async () => ({ data: { stdout: 'out', stderr: 'err' } })
+      });
+
+      await api.getRunLogs(runId, 42);
+
+      expect(global.fetch).toHaveBeenCalledWith(
+        `/api/v1/deployments/runs/${encodeURIComponent(runId)}/logs?tail=42&stream=merged`,
+        expect.any(Object)
+      );
+    });
+  });
+
   describe('Signature Methods', () => {
     it('should call verifySignatures with correct method and path', async () => {
       const artifactId = 'artifact-xyz';
