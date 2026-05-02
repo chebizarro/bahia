@@ -342,6 +342,137 @@ test.describe('Policies CRUD Smoke Test', () => {
     await expect(deleteLink).toHaveAttribute('href', '/policies/policy-rule-count');
   });
 
+  test('should evaluate a policy and support quick enable/disable on detail page', async ({ page }) => {
+    const apiCalls = {
+      put: null,
+      evaluate: null
+    };
+
+    const policy = {
+      id: '11111111-1111-1111-1111-111111111111',
+      name: 'detail-policy',
+      environment_id: 'env-1',
+      enforcement: 'block',
+      enabled: true,
+      rules: [{ type: 'require_sbom' }],
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString()
+    };
+
+    await page.route('**/api/v1/policies/11111111-1111-1111-1111-111111111111', (route) => {
+      if (route.request().method() === 'GET') {
+        return route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({ data: policy })
+        });
+      }
+      if (route.request().method() === 'PUT') {
+        apiCalls.put = route.request().postDataJSON();
+        return route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({ data: { ...policy, ...apiCalls.put, enabled: false } })
+        });
+      }
+      return route.fulfill({ status: 405 });
+    });
+
+    await page.route('**/api/v1/policies/evaluate', (route) => {
+      apiCalls.evaluate = route.request().postDataJSON();
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          data: {
+            allowed: false,
+            warnings: 0,
+            blockers: 1,
+            results: [
+              {
+                policy_id: policy.id,
+                policy_name: policy.name,
+                passed: false,
+                enforcement: 'block',
+                violations: [{ rule: 'require_sbom', message: 'artifact has no SBOM' }]
+              }
+            ]
+          }
+        })
+      });
+    });
+
+    await page.goto('/policies/11111111-1111-1111-1111-111111111111');
+    await page.waitForLoadState('networkidle');
+
+    await page.click('button:has-text("Disable")');
+    expect(apiCalls.put).not.toBeNull();
+    expect(apiCalls.put.enabled).toBe(false);
+
+    await page.selectOption('#eval-environment', 'env-1');
+    await page.fill('#eval-artifact', '22222222-2222-2222-2222-222222222222');
+    await page.click('button:has-text("Run Evaluation")');
+
+    expect(apiCalls.evaluate).toMatchObject({
+      environment_id: 'env-1',
+      artifact_id: '22222222-2222-2222-2222-222222222222'
+    });
+
+    await expect(page.locator('.eval-result')).toContainText('Result:');
+    await expect(page.locator('.eval-result')).toContainText('artifact has no SBOM');
+  });
+
+  test('should edit policy rules with visual editor', async ({ page }) => {
+    const apiCalls = {
+      put: null
+    };
+
+    const policy = {
+      id: '33333333-3333-3333-3333-333333333333',
+      name: 'visual-policy',
+      environment_id: null,
+      enforcement: 'warn',
+      enabled: true,
+      rules: [{ type: 'require_signature' }],
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString()
+    };
+
+    await page.route('**/api/v1/policies/33333333-3333-3333-3333-333333333333', (route) => {
+      if (route.request().method() === 'GET') {
+        return route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({ data: policy })
+        });
+      }
+      if (route.request().method() === 'PUT') {
+        apiCalls.put = route.request().postDataJSON();
+        return route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({ data: { ...policy, ...apiCalls.put } })
+        });
+      }
+      return route.fulfill({ status: 405 });
+    });
+
+    await page.goto('/policies/33333333-3333-3333-3333-333333333333');
+    await page.waitForLoadState('networkidle');
+
+    await page.click('button:has-text("Edit")');
+    await page.click('button:has-text("Add Rule")');
+    await page.selectOption('#rule-type-1', 'max_critical_vulns');
+    await page.fill('#rule-params-1', '{"max": 1}');
+    await page.click('button[type="submit"]:has-text("Save")');
+
+    expect(apiCalls.put).not.toBeNull();
+    expect(apiCalls.put.rules).toEqual([
+      { type: 'require_signature' },
+      { type: 'max_critical_vulns', params: { max: 1 } }
+    ]);
+  });
+
   test('should toggle enabled checkbox', async ({ page }) => {
     const apiCalls = {
       post: null

@@ -29,6 +29,17 @@
     enforcement: 'warn',
     enabled: true
   });
+  let editRulesMode = $state('visual');
+  let visualRules = $state([]);
+
+  // Evaluate tool state
+  let evalForm = $state({
+    environment_id: '',
+    artifact_id: ''
+  });
+  let evaluating = $state(false);
+  let evaluation = $state(null);
+  let evaluationError = $state(null);
 
   // Delete modal state
   let deleteOpen = $state(false);
@@ -38,6 +49,16 @@
   const enforcementOptions = [
     { value: 'warn', label: 'Warn' },
     { value: 'block', label: 'Block' }
+  ];
+
+  const ruleTypeOptions = [
+    { value: 'require_signature', label: 'Require signature' },
+    { value: 'require_sbom', label: 'Require SBOM' },
+    { value: 'max_critical_vulns', label: 'Max critical vulns' },
+    { value: 'max_high_vulns', label: 'Max high vulns' },
+    { value: 'require_scan_status', label: 'Require scan status' },
+    { value: 'block_package', label: 'Block package' },
+    { value: 'require_approval', label: 'Require approval' }
   ];
 
   $effect(() => {
@@ -78,7 +99,7 @@
 
   function openEditModal() {
     if (!policy) return;
-    
+
     editForm = {
       name: policy.name,
       environment_id: policy.environment_id || '',
@@ -86,6 +107,11 @@
       enforcement: policy.enforcement || 'warn',
       enabled: policy.enabled !== undefined ? policy.enabled : true
     };
+    visualRules = (policy.rules || []).map((rule) => ({
+      type: rule?.type || 'require_sbom',
+      params: JSON.stringify(rule?.params || {}, null, 2)
+    }));
+    editRulesMode = 'visual';
     editError = null;
     editOpen = true;
   }
@@ -93,6 +119,36 @@
   function closeEditModal() {
     editOpen = false;
     editError = null;
+  }
+
+  function addVisualRule() {
+    visualRules = [...visualRules, { type: 'require_sbom', params: '{}' }];
+  }
+
+  function removeVisualRule(index) {
+    visualRules = visualRules.filter((_, i) => i !== index);
+  }
+
+  function syncJsonFromVisual() {
+    const rules = visualRules.map((rule) => {
+      let params = {};
+      const raw = (rule.params || '').trim();
+      if (raw) {
+        params = JSON.parse(raw);
+        if (params === null || Array.isArray(params) || typeof params !== 'object') {
+          throw new Error('Rule params must be a JSON object');
+        }
+      }
+
+      const entry = { type: rule.type };
+      if (Object.keys(params).length > 0) {
+        entry.params = params;
+      }
+      return entry;
+    });
+
+    editForm.rules = JSON.stringify(rules, null, 2);
+    return rules;
   }
 
   async function handleEdit() {
@@ -110,13 +166,17 @@
     // Validate and parse rules JSON
     let parsedRules;
     try {
-      parsedRules = JSON.parse(editForm.rules);
+      if (editRulesMode === 'visual') {
+        parsedRules = syncJsonFromVisual();
+      } else {
+        parsedRules = JSON.parse(editForm.rules);
+      }
       if (!Array.isArray(parsedRules)) {
         editError = 'Rules must be a JSON array';
         return;
       }
     } catch (err) {
-      editError = 'Rules must be valid JSON';
+      editError = err?.message || 'Rules must be valid JSON';
       return;
     }
 
@@ -147,6 +207,55 @@
   function openDeleteModal() {
     deleteError = null;
     deleteOpen = true;
+  }
+
+  async function runEvaluation() {
+    if (!evalForm.environment_id) {
+      evaluationError = 'Environment is required';
+      return;
+    }
+    if (!evalForm.artifact_id.trim()) {
+      evaluationError = 'Artifact ID is required';
+      return;
+    }
+
+    evaluating = true;
+    evaluationError = null;
+    evaluation = null;
+
+    try {
+      const result = await api.evaluatePolicy({
+        environment_id: evalForm.environment_id,
+        artifact_id: evalForm.artifact_id.trim()
+      });
+      evaluation = result;
+    } catch (err) {
+      evaluationError = err.message || 'Failed to evaluate policy';
+    } finally {
+      evaluating = false;
+    }
+  }
+
+  let currentPolicyEvaluation = $derived(
+    evaluation?.results?.find((r) => r.policy_id === policy?.id) || null
+  );
+
+  async function togglePolicyEnabled() {
+    if (!policy) return;
+    const nextEnabled = !policy.enabled;
+
+    try {
+      const updated = await api.updatePolicy(policyId, {
+        name: policy.name,
+        rules: policy.rules || [],
+        enforcement: policy.enforcement || 'warn',
+        enabled: nextEnabled,
+        environment_id: policy.environment_id || null
+      });
+      policy = updated;
+    } catch (err) {
+      error = err.message || 'Failed to update policy status';
+    }
   }
 
   function closeDeleteModal() {
@@ -181,6 +290,9 @@
     <div class="header">
       <h1>{policy.name}</h1>
       <div class="actions">
+        <LoadingButton variant="secondary" onclick={togglePolicyEnabled}>
+          {policy.enabled ? 'Disable' : 'Enable'}
+        </LoadingButton>
         <LoadingButton variant="secondary" onclick={openEditModal}>
           Edit
         </LoadingButton>
@@ -220,6 +332,40 @@
     <section>
       <h2>Rules</h2>
       <pre class="rules-json"><code>{formattedRules}</code></pre>
+    </section>
+
+    <section>
+      <h2>Policy Evaluation Test</h2>
+      <div class="eval-grid">
+        <div class="form-field">
+          <label for="eval-environment">Environment</label>
+          <Select id="eval-environment" bind:value={evalForm.environment_id} options={environmentOptions} disabled={evaluating} />
+        </div>
+        <div class="form-field">
+          <label for="eval-artifact">Artifact ID</label>
+          <Input id="eval-artifact" bind:value={evalForm.artifact_id} placeholder="artifact UUID" disabled={evaluating} />
+        </div>
+      </div>
+      <div class="eval-actions">
+        <LoadingButton variant="primary" onclick={runEvaluation} loading={evaluating}>Run Evaluation</LoadingButton>
+      </div>
+      {#if evaluationError}
+        <p class="error-message">{evaluationError}</p>
+      {/if}
+      {#if evaluation && currentPolicyEvaluation}
+        <div class="eval-result">
+          <p><strong>Result:</strong> {currentPolicyEvaluation.passed ? 'Pass' : 'Fail'} ({currentPolicyEvaluation.enforcement || 'warn'})</p>
+          {#if currentPolicyEvaluation.violations?.length > 0}
+            <ul>
+              {#each currentPolicyEvaluation.violations as violation}
+                <li><code>{violation.rule}</code>: {violation.message}</li>
+              {/each}
+            </ul>
+          {/if}
+        </div>
+      {:else if evaluation}
+        <p class="help-text">This policy did not apply to the selected environment.</p>
+      {/if}
     </section>
   {/if}
 </div>
@@ -261,17 +407,71 @@
     </div>
 
     <div class="form-field">
-      <label for="edit-rules">Rules (JSON Array) *</label>
-      <Textarea
-        id="edit-rules"
-        bind:value={editForm.rules}
-        placeholder={'[{"type": "require_sbom"}]'}
-        rows={10}
-        required
+      <label for="edit-rules-mode">Rule Editor</label>
+      <Select
+        id="edit-rules-mode"
+        bind:value={editRulesMode}
+        options={[{ value: 'visual', label: 'Visual editor' }, { value: 'json', label: 'JSON editor' }]}
         disabled={editing}
       />
-      <span class="help-text">Enter policy rules as a JSON array</span>
     </div>
+
+    {#if editRulesMode === 'json'}
+      <div class="form-field">
+        <label for="edit-rules">Rules (JSON Array) *</label>
+        <Textarea
+          id="edit-rules"
+          bind:value={editForm.rules}
+          placeholder={'[{"type": "require_sbom"}]'}
+          rows={10}
+          required
+          disabled={editing}
+        />
+        <span class="help-text">Enter policy rules as a JSON array</span>
+      </div>
+    {:else}
+      <div class="form-field">
+        <label>Rules *</label>
+        {#if visualRules.length === 0}
+          <p class="help-text">No rules configured yet.</p>
+        {/if}
+        {#each visualRules as rule, index}
+          <div class="visual-rule-row">
+            <select
+              id={`rule-type-${index}`}
+              value={rule.type}
+              disabled={editing}
+              onchange={(e) => {
+                visualRules[index].type = e.currentTarget.value;
+                visualRules = [...visualRules];
+              }}
+            >
+              {#each ruleTypeOptions as option}
+                <option value={option.value}>{option.label}</option>
+              {/each}
+            </select>
+            <textarea
+              id={`rule-params-${index}`}
+              rows="3"
+              placeholder={'{}'}
+              disabled={editing}
+              value={rule.params}
+              oninput={(e) => {
+                visualRules[index].params = e.currentTarget.value;
+                visualRules = [...visualRules];
+              }}
+            ></textarea>
+            <LoadingButton type="button" variant="danger" onclick={() => removeVisualRule(index)} disabled={editing}>
+              Remove
+            </LoadingButton>
+          </div>
+        {/each}
+        <LoadingButton type="button" variant="secondary" onclick={addVisualRule} disabled={editing}>
+          Add Rule
+        </LoadingButton>
+        <span class="help-text">Use params JSON object for rule-specific configuration (for example: <code>{'{"max": 0}'}</code>).</span>
+      </div>
+    {/if}
 
     <div class="form-field">
       <Checkbox
@@ -438,6 +638,47 @@
     gap: 0.75rem;
     justify-content: flex-end;
     margin-top: 0.5rem;
+  }
+
+  .eval-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 1rem;
+    margin-bottom: 1rem;
+  }
+  .eval-actions {
+    margin-bottom: 1rem;
+  }
+  .eval-result {
+    padding: 0.75rem;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    background: var(--hover-bg);
+  }
+  .eval-result p {
+    margin: 0 0 0.5rem 0;
+  }
+  .eval-result ul {
+    margin: 0;
+    padding-left: 1.25rem;
+  }
+
+  .visual-rule-row {
+    display: grid;
+    grid-template-columns: minmax(180px, 220px) 1fr auto;
+    gap: 0.75rem;
+    align-items: start;
+    margin-bottom: 0.75rem;
+  }
+  .visual-rule-row select,
+  .visual-rule-row textarea {
+    width: 100%;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    background: var(--input-bg);
+    color: var(--text-primary);
+    padding: 0.5rem;
+    font-size: 0.875rem;
   }
 
   .delete-content {
