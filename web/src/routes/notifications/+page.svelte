@@ -1,4 +1,5 @@
 <script>
+  import { goto } from '$app/navigation';
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
   import EmptyState from '$lib/components/EmptyState.svelte';
   import ErrorState from '$lib/components/ErrorState.svelte';
@@ -142,9 +143,14 @@
       <h1>Notifications</h1>
       <p class="subtitle">Manage webhook and Nostr DM delivery channels for platform events.</p>
     </div>
-    <LoadingButton variant="secondary" loading={loading} onclick={loadChannels}>
-      Refresh
-    </LoadingButton>
+    <div class="header-actions">
+      <LoadingButton variant="secondary" loading={loading} onclick={loadChannels}>
+        Refresh
+      </LoadingButton>
+      <LoadingButton variant="primary" onclick={() => goto('/notifications/new')}>
+        Create channel
+      </LoadingButton>
+    </div>
   </div>
 
   <section class="filters-panel" aria-labelledby="notification-filter-heading">
@@ -187,6 +193,8 @@
       title="No notification channels"
       message="Create a webhook or Nostr DM channel to start receiving platform event notifications."
       icon="🔔"
+      actionLabel="Create channel"
+      onAction={() => goto('/notifications/new')}
     />
   {:else}
     <div class="table-container">
@@ -241,6 +249,14 @@
                   </button>
                   <button
                     type="button"
+                    class="action-button"
+                    disabled={Boolean(actionKey)}
+                    onclick={() => goto(`/notifications/${encodeURIComponent(channel.id)}/edit`)}
+                  >
+                    Edit
+                  </button>
+                  <button
+                    type="button"
                     class="action-button danger"
                     disabled={Boolean(actionKey)}
                     onclick={() => requestDelete(channel)}
@@ -288,6 +304,13 @@
   .subtitle {
     color: var(--text-muted);
     margin-top: 0.25rem;
+  }
+
+  .header-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+    justify-content: flex-end;
   }
 
   .filters-panel {
@@ -458,6 +481,10 @@
   @media (max-width: 760px) {
     .header {
       flex-direction: column;
+    }
+
+    .header-actions {
+      justify-content: flex-start;
     }
 
     .search-field {
