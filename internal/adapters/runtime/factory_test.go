@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"go.uber.org/zap"
 )
@@ -54,6 +55,46 @@ func TestNewRuntime_Compose(t *testing.T) {
 	}
 	if cr.dockerHost != "tcp://compose-docker:2375" {
 		t.Errorf("expected compose docker host override, got %s", cr.dockerHost)
+	}
+}
+
+func TestRuntimeConfigFromWorkerTargetResolvesEndpointRef(t *testing.T) {
+	cfg, err := RuntimeConfigFromWorkerTarget(&domain.WorkerRuntimeTarget{
+		Type:        domain.RuntimeTypeCompose,
+		EndpointRef: "worker-docker",
+		ComposeDir:  "/srv/llm",
+	}, config.RuntimeConfig{
+		Endpoints: map[string]config.RuntimeEndpointConfig{
+			"worker-docker": {DockerHost: "tcp://worker:2376"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Type != "compose" || cfg.ComposeDir != "/srv/llm" {
+		t.Fatalf("unexpected runtime config: %#v", cfg)
+	}
+	if cfg.DockerHost != "tcp://worker:2376" || cfg.Endpoint.Ref != "worker-docker" {
+		t.Fatalf("endpoint_ref not resolved: %#v", cfg)
+	}
+}
+
+func TestRuntimeConfigFromWorkerTargetRejectsMissingEndpointRef(t *testing.T) {
+	_, err := RuntimeConfigFromWorkerTarget(&domain.WorkerRuntimeTarget{
+		Type:        domain.RuntimeTypeDocker,
+		EndpointRef: "missing",
+	}, config.RuntimeConfig{Endpoints: map[string]config.RuntimeEndpointConfig{}})
+	if err == nil {
+		t.Fatal("expected missing endpoint_ref error")
+	}
+}
+
+func TestRuntimeConfigFromWorkerTargetRequiresEndpointRefForDocker(t *testing.T) {
+	_, err := RuntimeConfigFromWorkerTarget(&domain.WorkerRuntimeTarget{
+		Type: domain.RuntimeTypeDocker,
+	}, config.RuntimeConfig{DockerHost: "unix:///var/run/docker.sock"})
+	if err == nil {
+		t.Fatal("expected endpoint_ref required error")
 	}
 }
 
