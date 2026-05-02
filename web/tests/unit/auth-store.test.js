@@ -13,9 +13,20 @@ vi.mock('../../src/lib/nostr/nip07.js', () => ({
   detectNip07: vi.fn()
 }));
 
+// Mock NIP-46 module
+vi.mock('../../src/lib/nostr/nip46.js', () => ({
+  detectNip46: vi.fn(),
+  parseNostrConnectUri: vi.fn(),
+  connectNip46: vi.fn(),
+  disconnectNip46: vi.fn(),
+  signEvent: vi.fn(),
+  getCapabilities: vi.fn()
+}));
+
 describe('Auth Store', () => {
   let authModule;
   let nip07Module;
+  let nip46Module;
 
   beforeEach(async () => {
     // Clear localStorage
@@ -27,6 +38,7 @@ describe('Auth Store', () => {
     
     // Import mocked NIP-07 module
     nip07Module = await import('../../src/lib/nostr/nip07.js');
+    nip46Module = await import('../../src/lib/nostr/nip46.js');
     
     // Set default mock implementations
     nip07Module.waitForNip07.mockResolvedValue({ available: true });
@@ -42,6 +54,26 @@ describe('Auth Store', () => {
       nip44: false
     });
     nip07Module.detectNip07.mockReturnValue({ available: true });
+    nip46Module.detectNip46.mockReturnValue({ available: false, provider: null, reason: 'missing_nip46_provider' });
+    nip46Module.parseNostrConnectUri.mockImplementation((uri) => ({
+      uri,
+      signerPubkey: '9'.repeat(64),
+      relays: ['wss://relay.nip46.test'],
+      secret: 'secret',
+      metadata: null
+    }));
+    nip46Module.connectNip46.mockResolvedValue({
+      uri: 'nostrconnect://'+ '9'.repeat(64) + '?relay=wss://relay.nip46.test&secret=secret',
+      signerPubkey: '9'.repeat(64),
+      pubkey: 'a'.repeat(64),
+      relays: { 'wss://relay.nip46.test': { read: true, write: true } },
+      secret: 'secret',
+      metadata: null,
+      connectedAt: '2026-05-02T00:00:00.000Z'
+    });
+    nip46Module.disconnectNip46.mockResolvedValue();
+    nip46Module.signEvent.mockImplementation(async (event) => ({ ...event, id: 'nip46-event-id', sig: 'nip46-signature' }));
+    nip46Module.getCapabilities.mockReturnValue({ connect: true, disconnect: true, getPublicKey: true, signEvent: true, getRelays: true });
     global.fetch = vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({ data: { token: 'test-token', expires_at: new Date(Date.now() + 3600000).toISOString() } })
@@ -315,6 +347,47 @@ describe('Auth Store', () => {
     });
   });
 
+  describe('loginWithNostrConnect', () => {
+    it('should authenticate and persist session from nostrconnect URI', async () => {
+      const uri = `nostrconnect://${'9'.repeat(64)}?relay=wss://relay.nip46.test&secret=secret`;
+
+      await authModule.loginWithNostrConnect(uri);
+
+      const state = authModule.authState;
+      expect(state.status).toBe('authenticated');
+      expect(state.authMethod).toBe('nip46');
+      expect(state.pubkey).toBe('a'.repeat(64));
+      expect(nip46Module.parseNostrConnectUri).toHaveBeenCalledWith(uri);
+      expect(nip46Module.connectNip46).toHaveBeenCalled();
+
+      const stored = JSON.parse(localStorage.getItem('bahia_auth_session'));
+      expect(stored.authMethod).toBe('nip46');
+      expect(stored.nip46.uri).toContain('nostrconnect://');
+    });
+
+    it('should reconnect persisted NIP-46 session on initialize', async () => {
+      localStorage.setItem('bahia_auth_session', JSON.stringify({
+        pubkey: 'a'.repeat(64),
+        authMethod: 'nip46',
+        relays: { 'wss://relay.nip46.test': { read: true, write: true } },
+        nip46: {
+          uri: `nostrconnect://${'9'.repeat(64)}?relay=wss://relay.nip46.test&secret=secret`,
+          signerPubkey: '9'.repeat(64),
+          relays: ['wss://relay.nip46.test'],
+          secret: 'secret'
+        },
+        lastAuthenticatedAt: '2026-05-02T00:00:00.000Z'
+      }));
+
+      nip46Module.detectNip46.mockReturnValue({ available: true, provider: {} });
+      await authModule.initializeAuth();
+
+      expect(nip46Module.connectNip46).toHaveBeenCalled();
+      expect(authModule.authState.status).toBe('authenticated');
+      expect(authModule.authState.authMethod).toBe('nip46');
+    });
+  });
+
   describe('logout', () => {
     it('should clear session and reset to unauthenticated', async () => {
       // First login
@@ -406,6 +479,17 @@ describe('Auth Store', () => {
       const event = { kind: 1, content: 'test' };
       
       await expect(authModule.signWithAuth(event)).rejects.toThrow('Event signing failed: Signing failed');
+    });
+
+    it('should sign with NIP-46 signer when auth method is nip46', async () => {
+      const uri = `nostrconnect://${'9'.repeat(64)}?relay=wss://relay.nip46.test&secret=secret`;
+      const event = { kind: 1, content: 'nip46', tags: [], created_at: 1700000000 };
+
+      await authModule.loginWithNostrConnect(uri);
+      const signed = await authModule.signWithAuth(event);
+
+      expect(nip46Module.signEvent).toHaveBeenCalledWith(event);
+      expect(signed.id).toBe('nip46-event-id');
     });
 
     it('signHttpRequest returns a NIP-98 authorization header with absolute URL and method tags', async () => {

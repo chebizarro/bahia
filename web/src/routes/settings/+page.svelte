@@ -6,6 +6,7 @@
   import { nostr, saveRelayConfig, getDefaultRelays } from '$lib/nostr/client.js';
   import { theme, toggleTheme } from '$lib/stores/theme.js';
   import { toast } from '$lib/components/toast.js';
+  import { authState, loginWithNostrConnect, canUseNostrConnectUri } from '$lib/stores/auth.js';
 
   // System info from server
   let systemInfo = $state(null);
@@ -106,6 +107,29 @@
     }
   }
 
+  let nostrConnectUri = $state('');
+  let nostrConnectLoading = $state(false);
+
+  async function connectNostrConnect() {
+    const uri = nostrConnectUri.trim();
+    if (!uri) {
+      toast.error('Enter a nostrconnect:// URI');
+      return;
+    }
+
+    nostrConnectLoading = true;
+    try {
+      await canUseNostrConnectUri(uri);
+      await loginWithNostrConnect(uri);
+      nostrConnectUri = '';
+      toast.success('Nostr Connect session saved');
+    } catch (err) {
+      toast.error(err?.message || 'Failed to connect Nostr signer');
+    } finally {
+      nostrConnectLoading = false;
+    }
+  }
+
   function copyToClipboard(text) {
     navigator.clipboard.writeText(text).then(() => {
       toast.success('Copied to clipboard');
@@ -153,6 +177,26 @@
         <LoadingButton variant="secondary" onclick={resetToDefaults}>Reset to Defaults</LoadingButton>
         <LoadingButton variant="primary" loading={relaysSaving} onclick={saveRelays}>Save & Reconnect</LoadingButton>
       </div>
+    </section>
+
+    <!-- NIP-46 Nostr Connect -->
+    <section class="settings-section">
+      <h2>🔐 Nostr Connect (NIP-46)</h2>
+      <p class="section-description">
+        Paste a <code>nostrconnect://</code> URI to use a remote signer session.
+      </p>
+
+      <div class="relay-add">
+        <Input
+          placeholder="nostrconnect://<pubkey>?relay=wss://...&secret=..."
+          bind:value={nostrConnectUri}
+          onkeydown={(e) => e.key === 'Enter' && connectNostrConnect()}
+        />
+        <LoadingButton variant="primary" loading={nostrConnectLoading} onclick={connectNostrConnect}>Connect</LoadingButton>
+      </div>
+      <p class="section-description">
+        Provider status: {authState.nip46Available ? 'available' : 'not detected'}
+      </p>
     </section>
 
     <!-- Theme Section -->

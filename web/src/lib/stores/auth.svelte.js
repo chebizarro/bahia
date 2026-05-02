@@ -1,16 +1,24 @@
-// Auth/session store for NIP-07 browser extension authentication
+// Auth/session store for NIP-07 extension + NIP-46 Nostr Connect authentication
 // UI identity/session state only - does NOT manage bahia_token as first-party auth state
 
 import { browser } from '$app/environment';
 import { toast } from '$lib/components/toast.js';
 import {
   waitForNip07,
-  getPublicKey,
-  getRelays,
-  getCapabilities,
+  getPublicKey as getNip07PublicKey,
+  getRelays as getNip07Relays,
+  getCapabilities as getNip07Capabilities,
   signEvent as nip07SignEvent,
   detectNip07
 } from '$lib/nostr/nip07.js';
+import {
+  detectNip46,
+  parseNostrConnectUri,
+  connectNip46,
+  disconnectNip46,
+  signEvent as nip46SignEvent,
+  getCapabilities as getNip46Capabilities
+} from '$lib/nostr/nip46.js';
 import { supportsDirectNip98Auth } from '$lib/auth/capabilities.js';
 
 const SESSION_KEY = 'bahia_auth_session';
@@ -18,13 +26,16 @@ const SESSION_KEY = 'bahia_auth_session';
 const initialState = {
   status: 'unknown',
   extensionAvailable: false,
+  nip46Available: false,
+  authMethod: null,
   pubkey: null,
   relays: {},
   capabilities: {},
   error: null,
   lastAuthenticatedAt: null,
   backendAuthenticated: false,
-  directNip98Ready: false
+  directNip98Ready: false,
+  nip46: null
 };
 
 export const authState = $state({ ...initialState });
@@ -39,6 +50,7 @@ export function currentUser() {
     pubkey: authState.pubkey,
     relays: authState.relays,
     capabilities: authState.capabilities,
+    authMethod: authState.authMethod,
     lastAuthenticatedAt: authState.lastAuthenticatedAt
   };
 }
@@ -61,6 +73,8 @@ function loadPersistedSession() {
     return {
       pubkey: session.pubkey,
       relays: session.relays || {},
+      authMethod: session.authMethod || 'nip07',
+      nip46: session.nip46 || null,
       lastAuthenticatedAt: session.lastAuthenticatedAt
     };
   } catch (error) {
@@ -69,10 +83,13 @@ function loadPersistedSession() {
   }
 }
 
-function persistSession(pubkey, relays) {
+function persistSession({ pubkey, relays, authMethod = 'nip07', nip46 = null }) {
   if (!browser) return;
   try {
-    localStorage.setItem(SESSION_KEY, JSON.stringify({ pubkey, relays, lastAuthenticatedAt: new Date().toISOString() }));
+    localStorage.setItem(
+      SESSION_KEY,
+      JSON.stringify({ pubkey, relays, authMethod, nip46, lastAuthenticatedAt: new Date().toISOString() })
+    );
   } catch (error) {
     console.error('Failed to persist auth session:', error);
   }
@@ -139,33 +156,58 @@ export async function initializeAuth() {
   initializeInProgress = (async () => {
     updateAuthState({ status: 'checking' });
     try {
-      const { available } = await waitForNip07({ timeoutMs: 1500 });
-      updateAuthState({ extensionAvailable: available });
+      const [{ available: extensionAvailable }, { available: nip46Available }] = await Promise.all([
+        waitForNip07({ timeoutMs: 1500 }),
+        Promise.resolve(detectNip46())
+      ]);
+      updateAuthState({ extensionAvailable, nip46Available });
       const persisted = loadPersistedSession();
       if (browser) localStorage.removeItem('bahia_token');
 
-      if (persisted && available) {
-        const capabilities = getCapabilities();
-        updateAuthState({
-          status: 'authenticated',
-          pubkey: persisted.pubkey,
-          relays: persisted.relays,
-          capabilities,
-          lastAuthenticatedAt: persisted.lastAuthenticatedAt,
-          backendAuthenticated: false,
-          directNip98Ready: false,
-          error: null
-        });
-        try {
-          await configureBackendAuth(persisted.pubkey, { exchangeIfNeeded: false });
-        } catch (backendError) {
-          console.warn('Backend auth provider initialization failed:', backendError.message);
+      if (persisted) {
+        const supportsMethod =
+          (persisted.authMethod === 'nip46' && nip46Available) ||
+          (persisted.authMethod !== 'nip46' && extensionAvailable);
+
+        if (supportsMethod) {
+          if (persisted.authMethod === 'nip46' && persisted.nip46?.uri) {
+            try {
+              const connected = await connectNip46(persisted.nip46);
+              persisted.pubkey = connected.pubkey;
+              persisted.relays = connected.relays;
+              persisted.nip46 = connected;
+            } catch (error) {
+              console.warn('Failed to reconnect NIP-46 session:', error);
+              updateAuthState({ status: 'unauthenticated', backendAuthenticated: false, directNip98Ready: false, error: null });
+              return;
+            }
+          }
+
+          const capabilities = persisted.authMethod === 'nip46' ? getNip46Capabilities() : getNip07Capabilities();
+          updateAuthState({
+            status: 'authenticated',
+            pubkey: persisted.pubkey,
+            relays: persisted.relays,
+            capabilities,
+            authMethod: persisted.authMethod,
+            nip46: persisted.nip46,
+            lastAuthenticatedAt: persisted.lastAuthenticatedAt,
+            backendAuthenticated: false,
+            directNip98Ready: false,
+            error: null
+          });
+          try {
+            await configureBackendAuth(persisted.pubkey);
+          } catch (backendError) {
+            console.warn('Backend auth provider initialization failed:', backendError.message);
+          }
+          return;
         }
-      } else {
-        updateAuthState({ status: 'unauthenticated', backendAuthenticated: false, directNip98Ready: false, error: null });
-        if (!available) {
-          toast.warning('No Nostr extension detected. Install a NIP-07 extension like Alby or nos2x to sign in.');
-        }
+      }
+
+      updateAuthState({ status: 'unauthenticated', backendAuthenticated: false, directNip98Ready: false, error: null });
+      if (!extensionAvailable && !nip46Available) {
+        toast.warning('No Nostr signer detected. Install a NIP-07 extension or NIP-46 provider to sign in.');
       }
     } catch (error) {
       console.error('Auth initialization failed:', error);
@@ -178,9 +220,19 @@ export async function initializeAuth() {
 }
 
 export async function refreshExtensionStatus() {
-  const { available } = detectNip07();
-  updateAuthState({ extensionAvailable: available, capabilities: available ? getCapabilities() : {} });
-  return available;
+  const { available: extensionAvailable } = detectNip07();
+  const { available: nip46Available } = detectNip46();
+  updateAuthState({
+    extensionAvailable,
+    nip46Available,
+    capabilities:
+      authState.status === 'authenticated' && authState.authMethod === 'nip46'
+        ? getNip46Capabilities()
+        : extensionAvailable
+          ? getNip07Capabilities()
+          : {}
+  });
+  return extensionAvailable || nip46Available;
 }
 
 export async function login() {
@@ -192,18 +244,23 @@ export async function login() {
   loginInProgress = (async () => {
     try {
       updateAuthState({ status: 'authenticating', error: null });
-      const pubkey = await getPublicKey();
-      const [relays, capabilities] = await Promise.all([getRelays().catch(() => ({})), Promise.resolve(getCapabilities())]);
+      const pubkey = await getNip07PublicKey();
+      const [relays, capabilities] = await Promise.all([
+        getNip07Relays().catch(() => ({})),
+        Promise.resolve(getNip07Capabilities())
+      ]);
       updateAuthState({
         status: 'authenticated',
         extensionAvailable: true,
+        authMethod: 'nip07',
         pubkey,
         relays,
         capabilities,
+        nip46: null,
         lastAuthenticatedAt: new Date().toISOString(),
         error: null
       });
-      persistSession(pubkey, relays);
+      persistSession({ pubkey, relays, authMethod: 'nip07', nip46: null });
       try {
         await authenticateBackendInternal(pubkey);
         toast.success('Signed in successfully');
@@ -216,7 +273,16 @@ export async function login() {
       console.error('Login failed:', error);
       const persisted = loadPersistedSession();
       if (persisted) {
-        updateAuthState({ status: 'authenticated', pubkey: persisted.pubkey, relays: persisted.relays, capabilities: getCapabilities(), lastAuthenticatedAt: persisted.lastAuthenticatedAt, error: null });
+        updateAuthState({
+          status: 'authenticated',
+          pubkey: persisted.pubkey,
+          relays: persisted.relays,
+          authMethod: persisted.authMethod || 'nip07',
+          capabilities: persisted.authMethod === 'nip46' ? getNip46Capabilities() : getNip07Capabilities(),
+          nip46: persisted.nip46 || null,
+          lastAuthenticatedAt: persisted.lastAuthenticatedAt,
+          error: null
+        });
       } else {
         updateAuthState({ status: 'error', error: error.message });
       }
@@ -228,8 +294,89 @@ export async function login() {
   return loginInProgress;
 }
 
+export async function loginWithNostrConnect(uri) {
+  if (loginInProgress) return loginInProgress;
+  loginInProgress = (async () => {
+    try {
+      updateAuthState({ status: 'authenticating', error: null });
+      const session = parseNostrConnectUri(uri);
+      const connected = await connectNip46(session);
+      const capabilities = getNip46Capabilities();
+
+      updateAuthState({
+        status: 'authenticated',
+        authMethod: 'nip46',
+        nip46Available: true,
+        pubkey: connected.pubkey,
+        relays: connected.relays,
+        capabilities,
+        nip46: connected,
+        lastAuthenticatedAt: new Date().toISOString(),
+        error: null
+      });
+
+      persistSession({
+        pubkey: connected.pubkey,
+        relays: connected.relays,
+        authMethod: 'nip46',
+        nip46: connected
+      });
+
+      try {
+        await authenticateBackendInternal(connected.pubkey);
+        toast.success('Connected signer successfully');
+      } catch (backendError) {
+        console.warn('Backend authentication failed:', backendError.message);
+        updateAuthState({ backendAuthenticated: false, directNip98Ready: false, error: `Connected signer, but backend auth failed: ${backendError.message}` });
+        toast.error(`Backend auth failed: ${backendError.message}. Some features may be unavailable.`);
+      }
+    } catch (error) {
+      console.error('Nostr Connect login failed:', error);
+      const persisted = loadPersistedSession();
+      if (persisted) {
+        updateAuthState({
+          status: 'authenticated',
+          pubkey: persisted.pubkey,
+          relays: persisted.relays,
+          authMethod: persisted.authMethod || 'nip07',
+          capabilities: persisted.authMethod === 'nip46' ? getNip46Capabilities() : getNip07Capabilities(),
+          nip46: persisted.nip46 || null,
+          lastAuthenticatedAt: persisted.lastAuthenticatedAt,
+          error: null
+        });
+      } else {
+        updateAuthState({ status: 'error', error: error.message });
+      }
+      throw error;
+    } finally {
+      loginInProgress = null;
+    }
+  })();
+
+  return loginInProgress;
+}
+
+export async function canUseNostrConnectUri(uri) {
+  const parsed = parseNostrConnectUri(uri);
+  return Boolean(parsed?.uri);
+}
+
+export async function connectNostrConnectSessionFromStorage() {
+  const persisted = loadPersistedSession();
+  if (!persisted || persisted.authMethod !== 'nip46' || !persisted.nip46?.uri) return null;
+  const connected = await connectNip46(persisted.nip46);
+  persistSession({
+    pubkey: connected.pubkey,
+    relays: connected.relays,
+    authMethod: 'nip46',
+    nip46: connected
+  });
+  return connected;
+}
+
 export function logout() {
   clearPersistedSession();
+  void disconnectNip46().catch((err) => console.warn('Failed to disconnect NIP-46 session:', err));
   if (browser) {
     import('$lib/api/client.js').then(({ api }) => {
       if (api) {
@@ -242,7 +389,8 @@ export function logout() {
     ...initialState,
     status: 'unauthenticated',
     extensionAvailable: authState.extensionAvailable,
-    capabilities: authState.extensionAvailable ? getCapabilities() : {},
+    nip46Available: authState.nip46Available,
+    capabilities: authState.extensionAvailable ? getNip07Capabilities() : authState.nip46Available ? getNip46Capabilities() : {},
     backendAuthenticated: false,
     directNip98Ready: false
   });
@@ -251,6 +399,9 @@ export function logout() {
 export async function signWithAuth(event) {
   if (authState.status !== 'authenticated') throw new Error('Not authenticated - please login first');
   try {
+    if (authState.authMethod === 'nip46') {
+      return await nip46SignEvent(event);
+    }
     return await nip07SignEvent(event);
   } catch (error) {
     console.error('Failed to sign event:', error);
@@ -270,7 +421,9 @@ export async function signHttpRequest({ method = 'GET', url }) {
     tags: [['u', absoluteHTTPURL(url)], ['method', method.toUpperCase()]],
     content: ''
   };
-  const signedEvent = await nip07SignEvent(unsignedEvent);
+  const signedEvent = authState.authMethod === 'nip46'
+    ? await nip46SignEvent(unsignedEvent)
+    : await nip07SignEvent(unsignedEvent);
   return `Nostr ${base64Encode(JSON.stringify(signedEvent))}`;
 }
 
@@ -279,7 +432,7 @@ export async function authenticateBackend() {
   if (authState.status !== 'authenticated' || !authState.pubkey) {
     await login();
     if (authState.status !== 'authenticated' || !authState.pubkey) {
-      throw new Error('NIP-07 authentication required before backend auth');
+      throw new Error('Nostr authentication required before backend auth');
     }
   }
   try {
