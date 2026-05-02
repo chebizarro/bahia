@@ -29,12 +29,29 @@
 
   // Helper: escape HTML to prevent XSS (pure string replacement)
   function escapeHtml(text) {
-    return String(text)
-      .replace(/&/g, '&')
-      .replace(/</g, '<')
-      .replace(/>/g, '>')
-      .replace(/"/g, '"')
+    return String(text ?? '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
       .replace(/'/g, '&#039;');
+  }
+
+  function dashboardStateActions(row) {
+    if (String(row?.drift_status || '').toLowerCase() !== 'drifted') return '-';
+
+    const links = [];
+    if (row.environment_id) {
+      const envHref = `/environments/${encodeURIComponent(row.environment_id)}`;
+      links.push(`<a class="row-action-link" href="${envHref}">Review environment</a>`);
+    }
+
+    if (row.service_id) {
+      const serviceHref = `/services/${encodeURIComponent(row.service_id)}`;
+      links.push(`<a class="row-action-link secondary" href="${serviceHref}">Open service</a>`);
+    }
+
+    return links.length > 0 ? `<div class="row-actions">${links.join('')}</div>` : '-';
   }
 
   // Helper: bounded concurrency for async operations
@@ -182,12 +199,14 @@
   });
 
   let stateColumns = $derived([
-    { key: 'service_id', label: 'Service', render: (r) => `<code>${r.service_id?.slice(0, 8)}...</code>` },
-    { key: 'environment_id', label: 'Environment', render: (r) => `<code>${r.environment_id?.slice(0, 8)}...</code>` },
+    { key: 'service_id', label: 'Service', render: (r) => `<code>${escapeHtml(r.service_id?.slice(0, 8) || '')}...</code>` },
+    { key: 'environment_id', label: 'Environment', render: (r) => `<code>${escapeHtml(r.environment_id?.slice(0, 8) || '')}...</code>` },
     { key: 'drift_status', label: 'Drift', render: (r) => {
-      const variant = r.drift_status === 'in_sync' ? 'success' : r.drift_status === 'drifted' ? 'error' : 'default';
-      return `<span class="badge-${variant}">${r.drift_status}</span>`;
-    }}
+      const driftStatus = String(r.drift_status || 'unknown');
+      const variant = driftStatus === 'in_sync' ? 'success' : driftStatus === 'drifted' ? 'error' : 'default';
+      return `<span class="badge-${variant}">${escapeHtml(driftStatus)}</span>`;
+    }},
+    { key: 'actions', label: 'Actions', render: dashboardStateActions }
   ]);
   let eventColumns = $derived([
     { key: 'time', label: 'Time', render: (r) => r.time?.slice(11, 19) || '-' },
@@ -219,12 +238,16 @@
     <Card title="Services" value={services.length} subtitle="Total registered" />
     <Card title="Environments" value={environments.length} subtitle="Configured" />
     <Card title="Workers" value={workers.length} subtitle="Available" />
-    <Card 
-      title="Drifted" 
-      value={driftedStates().length} 
-      subtitle="Need attention"
-      status={driftedStates().length > 0 ? 'error' : 'success'}
-    />
+    <a href="#environment-states" class="card-link drift-card-link" aria-label="Review drifted environment states">
+      <Card 
+        title="Drifted" 
+        value={driftedStates().length} 
+        subtitle={driftedStates().length > 0 ? 'Review drifted rows' : 'All clear'}
+        status={driftedStates().length > 0 ? 'error' : 'success'}
+      >
+        <span class="card-action">Review states</span>
+      </Card>
+    </a>
     <a href="/deployments/pending" class="card-link">
       <Card
         title="Pending Approvals"
@@ -236,7 +259,7 @@
   </div>
 
   <div class="sections">
-    <section>
+    <section id="environment-states">
       <h2>Environment States</h2>
       <Table columns={stateColumns} data={states.slice(0, 10)} />
     </section>
@@ -282,6 +305,22 @@
   .card-link {
     text-decoration: none;
     color: inherit;
+  }
+  .drift-card-link :global(.card) {
+    height: 100%;
+    transition: border-color 0.2s, transform 0.2s;
+  }
+  .drift-card-link:hover :global(.card),
+  .drift-card-link:focus-visible :global(.card) {
+    border-color: var(--primary);
+    transform: translateY(-1px);
+  }
+  .card-action {
+    display: inline-block;
+    margin-top: 0.75rem;
+    color: var(--primary);
+    font-size: 0.75rem;
+    font-weight: 600;
   }
   .sections {
     display: grid;
@@ -336,6 +375,25 @@
     border-radius: 4px;
     font-weight: 500;
     font-size: 0.75rem;
+  }
+  :global(.row-actions) {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+  }
+  :global(.row-action-link) {
+    color: var(--primary);
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-decoration: none;
+    white-space: nowrap;
+  }
+  :global(.row-action-link:hover),
+  :global(.row-action-link:focus-visible) {
+    text-decoration: underline;
+  }
+  :global(.row-action-link.secondary) {
+    color: var(--text-muted);
   }
   :global(.badge.info) {
     background: #1e3a5f;

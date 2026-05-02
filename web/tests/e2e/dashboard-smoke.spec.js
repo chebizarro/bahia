@@ -315,6 +315,24 @@ test.describe('Dashboard Smoke Test', () => {
     // States with drift (1 out of 3 has drift in mock data)
     await expect(page.locator('.card:has-text("Drifted") .card-value')).toHaveText('1');
   });
+
+  test('should expose dashboard actions for drifted states', async ({ page }) => {
+    await page.goto('/');
+    await page.waitForLoadState('networkidle');
+    await page.waitForTimeout(800);
+
+    const driftCardLink = page.locator('main a[aria-label="Review drifted environment states"]');
+    await expect(driftCardLink).toBeVisible();
+    await expect(driftCardLink).toHaveAttribute('href', '#environment-states');
+    await expect(driftCardLink.locator('.card-action')).toHaveText('Review states');
+
+    const environmentStates = page.locator('section#environment-states');
+    await expect(environmentStates.getByRole('heading', { name: 'Environment States' })).toBeVisible();
+
+    const driftedRow = environmentStates.locator('tbody tr:has(.badge-error)').first();
+    await expect(driftedRow.getByRole('link', { name: 'Review environment' })).toHaveAttribute('href', '/environments/env-2');
+    await expect(driftedRow.getByRole('link', { name: 'Open service' })).toHaveAttribute('href', '/services/service-1');
+  });
   
   test('should display pending approvals card', async ({ page }) => {
     await page.goto('/');
