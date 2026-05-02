@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	adapterruntime "github.com/openagentsinc/bahia/internal/adapters/runtime"
 	"github.com/openagentsinc/bahia/internal/adapters/secrets"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/notifications"
@@ -29,6 +30,7 @@ type Server struct {
 	notificationRepo repository.NotificationRepository // optional: for notification tools
 	notificationDisp *notifications.Dispatcher         // optional: for notification testing
 	workers          repository.WorkerRepository       // optional: for worker management tools
+	logService       *adapterruntime.LogService        // optional: for deployment run log tools
 }
 
 // Config holds MCP server configuration.
@@ -46,6 +48,7 @@ type ServerDeps struct {
 	NotificationRepo       repository.NotificationRepository
 	NotificationDispatcher *notifications.Dispatcher
 	Workers                repository.WorkerRepository
+	LogService             *adapterruntime.LogService
 }
 
 // NewServer creates a new MCP server for Bahia.
@@ -74,6 +77,7 @@ func NewServerWithOptions(registry *service.RegistryService, logger *zap.Logger,
 		notificationRepo: deps.NotificationRepo,
 		notificationDisp: deps.NotificationDispatcher,
 		workers:          deps.Workers,
+		logService:       deps.LogService,
 	}
 }
 
@@ -708,6 +712,30 @@ func (s *Server) GetTools() []Tool {
 			},
 		},
 		{
+			Name:        "bahia_get_run_logs",
+			Description: "Retrieve stored stdout/stderr logs for a completed deployment run",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"run_id": map[string]interface{}{
+						"type":        "string",
+						"description": "Deployment run UUID",
+					},
+					"tail": map[string]interface{}{
+						"type":        "integer",
+						"description": "Optional number of lines to return from the end of each stream",
+					},
+					"stream": map[string]interface{}{
+						"type":        "string",
+						"description": "Log stream to return",
+						"enum":        []string{"stdout", "stderr", "merged"},
+						"default":     "merged",
+					},
+				},
+				"required": []string{"run_id"},
+			},
+		},
+		{
 			Name:        "bahia_complete_run",
 			Description: "Mark a deployment run as complete with status and exit code",
 			InputSchema: map[string]interface{}{
@@ -1303,6 +1331,8 @@ func (s *Server) CallTool(ctx context.Context, name string, arguments map[string
 		return s.handleCreateRun(ctx, arguments)
 	case "bahia_get_run":
 		return s.handleGetRun(ctx, arguments)
+	case "bahia_get_run_logs":
+		return s.handleGetRunLogs(ctx, arguments)
 	case "bahia_complete_run":
 		return s.handleCompleteRun(ctx, arguments)
 	// Secret operations
@@ -2352,6 +2382,72 @@ func (s *Server) handleGetRun(ctx context.Context, args map[string]interface{}) 
 	return jsonResult(result)
 }
 
+func (s *Server) handleGetRunLogs(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
+	runIDStr, _ := args["run_id"].(string)
+
+	runID, err := uuid.Parse(runIDStr)
+	if err != nil {
+		return errorResult(fmt.Sprintf("invalid run_id: %v", err)), nil
+	}
+	if s.registry == nil {
+		return errorResult("deployment registry is not configured"), nil
+	}
+	if s.logService == nil {
+		return errorResult("run log tools are not configured"), nil
+	}
+
+	run, err := s.registry.GetDeploymentRun(ctx, runID)
+	if err != nil {
+		if err == repository.ErrNotFound {
+			return errorResult("run not found"), nil
+		}
+		return errorResult(fmt.Sprintf("failed to get run: %v", err)), nil
+	}
+	if run == nil {
+		return errorResult("run not found"), nil
+	}
+	if !isTerminalRunStatus(run.Status) {
+		return errorResult("run is not completed; stored logs are available for terminal runs only"), nil
+	}
+
+	logs, err := s.logService.FetchRunLogs(ctx, run)
+	if err != nil {
+		return errorResult(fmt.Sprintf("failed to fetch run logs: %v", err)), nil
+	}
+
+	tail := 0
+	switch v := args["tail"].(type) {
+	case float64:
+		tail = int(v)
+	case int:
+		tail = v
+	case int64:
+		tail = int(v)
+	}
+	if tail > 0 {
+		logs.Stdout = adapterruntime.TailLogs(logs.Stdout, tail)
+		logs.Stderr = adapterruntime.TailLogs(logs.Stderr, tail)
+	}
+
+	stream, _ := args["stream"].(string)
+	if stream == "" {
+		stream = "merged"
+	}
+	switch stream {
+	case "stdout":
+		logs.Stderr = ""
+	case "stderr":
+		logs.Stdout = ""
+	case "merged":
+		// Return both streams plus a merged convenience field.
+	default:
+		return errorResult("invalid stream parameter; use stdout, stderr, or merged"), nil
+	}
+
+	result := runLogsToMap(logs, stream)
+	return jsonResult(result)
+}
+
 func (s *Server) handleCompleteRun(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
 	runIDStr, _ := args["run_id"].(string)
 	statusStr, _ := args["status"].(string)
@@ -2984,6 +3080,41 @@ func runToMap(r *domain.DeploymentRun) map[string]interface{} {
 		m["finished_at"] = r.FinishedAt.Format("2006-01-02T15:04:05Z")
 	}
 	return m
+}
+
+func runLogsToMap(logs *adapterruntime.RunLogs, stream string) map[string]interface{} {
+	m := map[string]interface{}{
+		"run_id": logs.RunID.String(),
+		"stream": stream,
+	}
+	if logs.Stdout != "" {
+		m["stdout"] = logs.Stdout
+	}
+	if logs.Stderr != "" {
+		m["stderr"] = logs.Stderr
+	}
+	if stream == "merged" {
+		m["logs"] = adapterruntime.MergeLogs(logs.Stdout, logs.Stderr)
+	}
+	if logs.ExitCode != nil {
+		m["exit_code"] = *logs.ExitCode
+	}
+	if !logs.StartedAt.IsZero() {
+		m["started_at"] = logs.StartedAt.Format("2006-01-02T15:04:05Z")
+	}
+	if logs.Duration != "" {
+		m["duration"] = logs.Duration
+	}
+	return m
+}
+
+func isTerminalRunStatus(status domain.DeploymentRunStatus) bool {
+	switch status {
+	case domain.RunStatusSucceeded, domain.RunStatusFailed, domain.RunStatusCancelled, domain.RunStatusTimeout:
+		return true
+	default:
+		return false
+	}
 }
 
 func secretsToMaps(secrets []domain.ServiceSecret) []map[string]interface{} {

@@ -271,6 +271,10 @@ func New(cfg *config.Config) (*App, error) {
 		blossomClient = blossom.NewClient(blossomCfg, slog.Default())
 		logger.Info("blossom client enabled", zap.Strings("servers", blossomCfg.Servers))
 	}
+	var runLogService *runtime.LogService
+	if blossomClient != nil {
+		runLogService = runtime.NewLogService(blossomClient, nil, logger)
+	}
 
 	// OCI Registry wiring.
 	var ociHandler http.Handler
@@ -328,7 +332,7 @@ func New(cfg *config.Config) (*App, error) {
 	notifDispatcher.SetupSubscriptions(publisher)
 
 	// MCP (Model Context Protocol) server for AI agent integration.
-	mcpServer := mcp.NewServer(registry, logger)
+	mcpServer := mcp.NewServerWithOptions(registry, logger, mcp.ServerDeps{LogService: runLogService})
 	mcpHandler := handlers.NewMCPHandler(mcpServer, logger)
 	logger.Info("mcp server initialized")
 
