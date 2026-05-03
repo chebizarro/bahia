@@ -1,8 +1,15 @@
 <script>
   import { page } from '$app/state';
   import { goto } from '$app/navigation';
-  import { api } from '$lib/api/client.js';
   import { authState } from '$lib/stores/auth.js';
+  import {
+    createOrgInvite,
+    deleteOrg as deletePrivateOrg,
+    loadOrgDetail,
+    removeOrgMember,
+    revokeOrgInvite,
+    updateOrgMemberRole
+  } from '$lib/stores/orgs.svelte.js';
   import { toast } from '$lib/components/toast.js';
   import Card from '$lib/components/Card.svelte';
   import Badge from '$lib/components/Badge.svelte';
@@ -50,19 +57,11 @@
     loading = true;
     error = null;
     try {
-      const [orgData, membersData, invitesData] = await Promise.all([
-        api.getOrg(id),
-        api.listOrgMembers(id),
-        canManageMembers ? api.listOrgInvites(id).catch(() => []) : Promise.resolve([])
-      ]);
-      org = orgData;
-      members = membersData;
-      invites = invitesData;
-      
-      // Find my role
-      const myPubkey = authState.pubkey;
-      const myMembership = members.find(m => m.pubkey === myPubkey);
-      myRole = myMembership?.role || org.role; // org.role from list endpoint
+      const detail = await loadOrgDetail(id);
+      org = detail?.org ?? null;
+      members = Array.isArray(detail?.members) ? detail.members : [];
+      invites = Array.isArray(detail?.invites) ? detail.invites : [];
+      myRole = detail?.my_role || null;
     } catch (e) {
       error = e.message;
       toast.error(`Failed to load organization: ${e.message}`);
@@ -79,10 +78,10 @@
     
     inviting = true;
     try {
-      await api.createOrgInvite(orgId, {
+      await createOrgInvite(orgId, {
         pubkey: invitePubkey,
         role: inviteRole,
-        expiresIn: 7 * 24 * 60 * 60 // 7 days in seconds
+        expiresIn: 7 * 24 // 7 days in hours
       });
       toast.success('Invite sent');
       showInviteModal = false;
@@ -98,7 +97,7 @@
 
   async function revokeInvite(invite) {
     try {
-      await api.revokeOrgInvite(orgId, invite.id);
+      await revokeOrgInvite(orgId, invite.id);
       toast.success('Invite revoked');
       await loadData();
     } catch (e) {
@@ -108,7 +107,7 @@
 
   async function updateRole(member, newRole) {
     try {
-      await api.updateOrgMemberRole(orgId, member.pubkey, { role: newRole });
+      await updateOrgMemberRole(orgId, member.pubkey, { role: newRole });
       toast.success(`Updated ${truncatePubkey(member.pubkey)} to ${newRole}`);
       await loadData();
     } catch (e) {
@@ -121,7 +120,7 @@
       return;
     }
     try {
-      await api.removeOrgMember(orgId, member.pubkey);
+      await removeOrgMember(orgId, member.pubkey);
       toast.success('Member removed');
       await loadData();
     } catch (e) {
@@ -132,7 +131,7 @@
   async function deleteOrg() {
     deleting = true;
     try {
-      await api.deleteOrg(orgId);
+      await deletePrivateOrg(orgId);
       toast.success('Organization deleted');
       goto('/orgs');
     } catch (e) {

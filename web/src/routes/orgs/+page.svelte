@@ -1,6 +1,5 @@
 <script>
-  import { api } from '$lib/api/client.js';
-  import { authState } from '$lib/stores/auth.js';
+  import { acceptInvite as acceptPrivateInvite, loadOrgsOverview } from '$lib/stores/orgs.svelte.js';
   import { toast } from '$lib/components/toast.js';
   import Card from '$lib/components/Card.svelte';
   import Badge from '$lib/components/Badge.svelte';
@@ -11,18 +10,7 @@
   let loading = $state(true);
   let error = $state(null);
 
-  const compatibilityReady = $derived(
-    Boolean(authState?.compatibility?.restNip98Ready || authState?.directNip98Ready)
-  );
-
   $effect(() => {
-    if (!compatibilityReady) {
-      loading = false;
-      error = null;
-      orgs = [];
-      myInvites = [];
-      return;
-    }
     void loadData();
   });
 
@@ -30,12 +18,9 @@
     loading = true;
     error = null;
     try {
-      const [orgsData, invitesData] = await Promise.all([
-        api.listOrgs(),
-        api.getMyInvites()
-      ]);
-      orgs = orgsData;
-      myInvites = invitesData;
+      const data = await loadOrgsOverview();
+      orgs = data.orgs;
+      myInvites = data.myInvites;
     } catch (e) {
       error = e.message;
       toast.error(`Failed to load organizations: ${e.message}`);
@@ -46,7 +31,7 @@
 
   async function acceptInvite(invite) {
     try {
-      await api.acceptInvite(invite.id);
+      await acceptPrivateInvite(invite.id);
       toast.success(`Joined ${invite.org_name || 'organization'}`);
       await loadData();
     } catch (e) {
@@ -73,12 +58,7 @@
   <a href="/orgs/new" class="btn-primary">+ New Organization</a>
 </div>
 
-{#if !compatibilityReady}
-  <div class="compatibility-needed" data-testid="orgs-compat-needed">
-    <p>This page requires REST compatibility auth.</p>
-    <p>Enable backend <code>direct_nostr_http_auth</code> to access organizations.</p>
-  </div>
-{:else if loading}
+{#if loading}
   <div class="loading">Loading...</div>
 {:else if error}
   <div class="error-state">
@@ -180,23 +160,6 @@
     text-align: center;
     color: var(--text-muted);
     padding: 2rem;
-  }
-
-  .compatibility-needed {
-    text-align: center;
-    color: var(--text-muted);
-    padding: 2rem;
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
-    align-items: center;
-  }
-
-  code {
-    background: var(--card-bg);
-    border: 1px solid var(--border-color);
-    border-radius: 4px;
-    padding: 0.1rem 0.35rem;
   }
 
   .error-state {

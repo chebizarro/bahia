@@ -8,7 +8,7 @@
   import Input from '$lib/components/Input.svelte';
   import Select from '$lib/components/Select.svelte';
   import { workers, loading, loadWorkers } from '$lib/stores';
-  import { api } from '$lib/api/client.js';
+  import { loadPaymentHistory as loadPrivatePaymentHistory } from '$lib/stores/payments.svelte.js';
   import {
     buildPaymentsCsvFilename,
     escapeHtml,
@@ -130,7 +130,7 @@
     payments = [];
 
     try {
-      const records = await api.getPaymentHistory({ worker, limit: Number(requestedLimit) });
+      const records = await loadPrivatePaymentHistory({ worker, limit: Number(requestedLimit) });
       if (!isCurrentLoad(sequence)) return;
       payments = normalizePayments(records);
       loadedWorker = worker;

@@ -1,6 +1,6 @@
 <script>
   import { goto } from '$app/navigation';
-  import { api } from '$lib/api/client.js';
+  import { createOrg } from '$lib/stores/orgs.svelte.js';
   import { toast } from '$lib/components/toast.js';
   import Card from '$lib/components/Card.svelte';
   import Input from '$lib/components/Input.svelte';
@@ -44,7 +44,7 @@
     
     submitting = true;
     try {
-      const org = await api.createOrg({ name, displayName });
+      const org = await createOrg({ name, displayName });
       toast.success(`Created organization "${displayName}"`);
       goto(`/orgs/${org.id}`);
     } catch (e) {
