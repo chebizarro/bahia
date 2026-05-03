@@ -121,14 +121,22 @@ type LoomConfig struct {
 
 // NostrConfig holds Nostr relay and identity settings.
 type NostrConfig struct {
-	PrivateKey           string             `koanf:"private_key"`
-	Relays               []string           `koanf:"relays"`
-	PrivateRelays        []string           `koanf:"private_relays"`
-	BrowserRelays        []string           `koanf:"browser_relays"`
-	PrivateBrowserRelays []string           `koanf:"private_browser_relays"`
-	AuthorizedPubkeys    []string           `koanf:"authorized_pubkeys"`
-	PublishEnabled       bool               `koanf:"publish_enabled"`
-	Sidecar              RelaySidecarConfig `koanf:"sidecar"`
+	PrivateKey string   `koanf:"private_key"`
+	Relays     []string `koanf:"relays"`
+	// EncryptedRelays are ordinary relays used by the backend for encrypted
+	// request/result Nostr events. PrivateRelays is a deprecated alias retained
+	// for mixed-version rollouts.
+	EncryptedRelays []string `koanf:"encrypted_relays"`
+	PrivateRelays   []string `koanf:"private_relays"`
+	BrowserRelays   []string `koanf:"browser_relays"`
+	// EncryptedBrowserRelays are browser-safe relay URLs advertised for encrypted
+	// request/result Nostr events. PrivateBrowserRelays is a deprecated alias
+	// retained for mixed-version rollouts.
+	EncryptedBrowserRelays []string           `koanf:"encrypted_browser_relays"`
+	PrivateBrowserRelays   []string           `koanf:"private_browser_relays"`
+	AuthorizedPubkeys      []string           `koanf:"authorized_pubkeys"`
+	PublishEnabled         bool               `koanf:"publish_enabled"`
+	Sidecar                RelaySidecarConfig `koanf:"sidecar"`
 }
 
 // RelaySidecarConfig holds the local Khatru relay sidecar settings.
@@ -555,6 +563,9 @@ func (c *Config) validate() error {
 	if err := c.validateRelaySidecar(); err != nil {
 		return err
 	}
+	if err := c.normalizeEncryptedRelayAliases(); err != nil {
+		return err
+	}
 
 	nostrAuthorized, err := normalizePubkeyList(c.Nostr.AuthorizedPubkeys)
 	if err != nil {
@@ -569,6 +580,83 @@ func (c *Config) validate() error {
 	c.Auth.BootstrapOwnerPubkeys = bootstrapOwners
 
 	return nil
+}
+
+func (c *Config) normalizeEncryptedRelayAliases() error {
+	encryptedRelays, err := resolveRelayAlias("nostr.encrypted_relays", c.Nostr.EncryptedRelays, "nostr.private_relays", c.Nostr.PrivateRelays)
+	if err != nil {
+		return err
+	}
+	encryptedBrowserRelays, err := resolveRelayAlias("nostr.encrypted_browser_relays", c.Nostr.EncryptedBrowserRelays, "nostr.private_browser_relays", c.Nostr.PrivateBrowserRelays)
+	if err != nil {
+		return err
+	}
+	c.Nostr.EncryptedRelays = cloneStrings(encryptedRelays)
+	c.Nostr.PrivateRelays = cloneStrings(encryptedRelays)
+	c.Nostr.EncryptedBrowserRelays = cloneStrings(encryptedBrowserRelays)
+	c.Nostr.PrivateBrowserRelays = cloneStrings(encryptedBrowserRelays)
+	return nil
+}
+
+func resolveRelayAlias(canonicalName string, canonical []string, deprecatedName string, deprecated []string) ([]string, error) {
+	canonical = normalizeRelayList(canonical)
+	deprecated = normalizeRelayList(deprecated)
+	if len(canonical) == 0 {
+		return cloneStrings(deprecated), nil
+	}
+	if len(deprecated) == 0 {
+		return cloneStrings(canonical), nil
+	}
+	if !stringSetsEqual(canonical, deprecated) {
+		return nil, fmt.Errorf("config validation failed: %s and deprecated alias %s differ; use matching values during migration", canonicalName, deprecatedName)
+	}
+	return cloneStrings(canonical), nil
+}
+
+func normalizeRelayList(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(values))
+	normalized := make([]string, 0, len(values))
+	for _, raw := range values {
+		value := strings.TrimSpace(raw)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		normalized = append(normalized, value)
+	}
+	if len(normalized) == 0 {
+		return nil
+	}
+	return normalized
+}
+
+func cloneStrings(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	return append([]string(nil), values...)
+}
+
+func stringSetsEqual(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	seen := make(map[string]struct{}, len(left))
+	for _, value := range left {
+		seen[value] = struct{}{}
+	}
+	for _, value := range right {
+		if _, ok := seen[value]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 func normalizePubkeyList(values []string) ([]string, error) {

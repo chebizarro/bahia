@@ -297,13 +297,18 @@ type RuntimeObservation struct {
 
 // SystemInfo contains the narrow system discovery fields needed by clients.
 type SystemInfo struct {
-	Nostr SystemInfoNostr `json:"nostr"`
+	Nostr    SystemInfoNostr `json:"nostr"`
+	Features map[string]bool `json:"features,omitempty"`
 }
 
-// SystemInfoNostr contains browser-safe public relay discovery fields.
+// SystemInfoNostr contains browser-safe relay discovery fields.
 type SystemInfoNostr struct {
-	BrowserRelays []string `json:"browser_relays,omitempty"`
-	SidecarURL    string   `json:"sidecar_url,omitempty"`
+	BrowserRelays          []string `json:"browser_relays,omitempty"`
+	SidecarURL             string   `json:"sidecar_url,omitempty"`
+	EncryptedBrowserRelays []string `json:"encrypted_browser_relays,omitempty"`
+	// PrivateBrowserRelays is a deprecated alias for EncryptedBrowserRelays.
+	PrivateBrowserRelays []string `json:"private_browser_relays,omitempty"`
+	ServicePubkey        string   `json:"service_pubkey,omitempty"`
 }
 
 type apiResponse struct {

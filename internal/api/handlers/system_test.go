@@ -12,7 +12,7 @@ import (
 
 func TestSystemHandler_GetInfo_ExposesRelaySidecarCapabilities(t *testing.T) {
 	cfg := config.Defaults()
-	cfg.Nostr.PrivateRelays = []string{"wss://private.example"}
+	cfg.Nostr.EncryptedRelays = []string{"wss://encrypted.example"}
 	cfg.Nostr.Sidecar.Enabled = true
 	cfg.Nostr.Sidecar.PublicURL = "ws://localhost:3000/relay"
 	cfg.Nostr.BrowserRelays = []string{"ws://localhost:3000/relay"}
@@ -30,11 +30,12 @@ func TestSystemHandler_GetInfo_ExposesRelaySidecarCapabilities(t *testing.T) {
 	var payload struct {
 		Data struct {
 			Nostr struct {
-				Relays               []string `json:"relays"`
-				BrowserRelays        []string `json:"browser_relays"`
-				SidecarURL           string   `json:"sidecar_url"`
-				PrivateRelays        []string `json:"private_relays"`
-				PrivateBrowserRelays []string `json:"private_browser_relays"`
+				Relays                 []string `json:"relays"`
+				BrowserRelays          []string `json:"browser_relays"`
+				SidecarURL             string   `json:"sidecar_url"`
+				PrivateRelays          []string `json:"private_relays"`
+				EncryptedBrowserRelays []string `json:"encrypted_browser_relays"`
+				PrivateBrowserRelays   []string `json:"private_browser_relays"`
 			} `json:"nostr"`
 			Features map[string]bool `json:"features"`
 		} `json:"data"`
@@ -61,19 +62,19 @@ func TestSystemHandler_GetInfo_ExposesRelaySidecarCapabilities(t *testing.T) {
 	if len(payload.Data.Nostr.PrivateRelays) != 0 {
 		t.Fatalf("private_relays should not be exposed in system info: %#v", payload.Data.Nostr.PrivateRelays)
 	}
-	if len(payload.Data.Nostr.PrivateBrowserRelays) != 0 {
-		t.Fatalf("private_browser_relays should only expose explicit browser-private relays: %#v", payload.Data.Nostr.PrivateBrowserRelays)
+	if len(payload.Data.Nostr.EncryptedBrowserRelays) != 0 || len(payload.Data.Nostr.PrivateBrowserRelays) != 0 {
+		t.Fatalf("encrypted browser relays should only expose explicit encrypted browser relays: canonical=%#v deprecated=%#v", payload.Data.Nostr.EncryptedBrowserRelays, payload.Data.Nostr.PrivateBrowserRelays)
 	}
 	if len(payload.Data.Nostr.Relays) != 0 {
 		t.Fatalf("backend relays should not be exposed while sidecar bootstrap is enabled: %#v", payload.Data.Nostr.Relays)
 	}
 }
 
-func TestSystemHandler_GetInfo_ExposesExplicitPrivateBrowserRelays(t *testing.T) {
+func TestSystemHandler_GetInfo_ExposesExplicitEncryptedBrowserRelays(t *testing.T) {
 	cfg := config.Defaults()
 	cfg.Nostr.PrivateKey = "0000000000000000000000000000000000000000000000000000000000000001"
-	cfg.Nostr.PrivateRelays = []string{"wss://backend-private.example"}
-	cfg.Nostr.PrivateBrowserRelays = []string{"wss://browser-private.example"}
+	cfg.Nostr.EncryptedRelays = []string{"wss://backend-encrypted.example"}
+	cfg.Nostr.EncryptedBrowserRelays = []string{"wss://browser-encrypted.example"}
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/system/info", nil)
 	w := httptest.NewRecorder()
@@ -83,8 +84,9 @@ func TestSystemHandler_GetInfo_ExposesExplicitPrivateBrowserRelays(t *testing.T)
 	var payload struct {
 		Data struct {
 			Nostr struct {
-				PrivateRelays        []string `json:"private_relays"`
-				PrivateBrowserRelays []string `json:"private_browser_relays"`
+				PrivateRelays          []string `json:"private_relays"`
+				EncryptedBrowserRelays []string `json:"encrypted_browser_relays"`
+				PrivateBrowserRelays   []string `json:"private_browser_relays"`
 			} `json:"nostr"`
 			Features map[string]bool `json:"features"`
 		} `json:"data"`
@@ -93,20 +95,26 @@ func TestSystemHandler_GetInfo_ExposesExplicitPrivateBrowserRelays(t *testing.T)
 		t.Fatalf("decode response: %v", err)
 	}
 	if len(payload.Data.Nostr.PrivateRelays) != 0 {
-		t.Fatalf("backend private_relays must not be exposed: %#v", payload.Data.Nostr.PrivateRelays)
+		t.Fatalf("backend encrypted relay aliases must not be exposed: %#v", payload.Data.Nostr.PrivateRelays)
 	}
-	if got := payload.Data.Nostr.PrivateBrowserRelays; len(got) != 1 || got[0] != "wss://browser-private.example" {
-		t.Fatalf("private_browser_relays = %#v", got)
+	if got := payload.Data.Nostr.EncryptedBrowserRelays; len(got) != 1 || got[0] != "wss://browser-encrypted.example" {
+		t.Fatalf("encrypted_browser_relays = %#v", got)
+	}
+	if got := payload.Data.Nostr.PrivateBrowserRelays; len(got) != 1 || got[0] != "wss://browser-encrypted.example" {
+		t.Fatalf("deprecated private_browser_relays alias = %#v", got)
+	}
+	if !payload.Data.Features["encrypted_nostr_requests"] {
+		t.Fatalf("expected encrypted_nostr_requests feature when encrypted browser relays and service key are configured")
 	}
 	if !payload.Data.Features["private_nostr_transport"] {
-		t.Fatalf("expected private_nostr_transport feature when browser-private relays and service key are configured")
+		t.Fatalf("expected deprecated private_nostr_transport alias to mirror encrypted_nostr_requests")
 	}
 }
 
-func TestSystemHandler_GetInfo_DoesNotAdvertisePrivateTransportWithoutBackendPrivateRelays(t *testing.T) {
+func TestSystemHandler_GetInfo_DoesNotAdvertiseEncryptedRequestsWithoutBackendEncryptedRelays(t *testing.T) {
 	cfg := config.Defaults()
 	cfg.Nostr.PrivateKey = "0000000000000000000000000000000000000000000000000000000000000001"
-	cfg.Nostr.PrivateBrowserRelays = []string{"wss://browser-private.example"}
+	cfg.Nostr.EncryptedBrowserRelays = []string{"wss://browser-encrypted.example"}
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/system/info", nil)
 	w := httptest.NewRecorder()
@@ -121,8 +129,11 @@ func TestSystemHandler_GetInfo_DoesNotAdvertisePrivateTransportWithoutBackendPri
 	if err := json.NewDecoder(w.Body).Decode(&payload); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
+	if payload.Data.Features["encrypted_nostr_requests"] {
+		t.Fatalf("encrypted_nostr_requests must stay false until backend encrypted_relays are configured")
+	}
 	if payload.Data.Features["private_nostr_transport"] {
-		t.Fatalf("private_nostr_transport must stay false until backend private_relays are configured")
+		t.Fatalf("deprecated private_nostr_transport alias must stay false until backend encrypted_relays are configured")
 	}
 }
 

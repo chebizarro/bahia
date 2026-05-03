@@ -46,8 +46,10 @@ type RegistryInfo struct {
 
 // NostrConfig describes the Nostr configuration.
 type NostrConfigInfo struct {
-	Relays               []string `json:"relays"`
-	BrowserRelays        []string `json:"browser_relays,omitempty"`
+	Relays                 []string `json:"relays"`
+	BrowserRelays          []string `json:"browser_relays,omitempty"`
+	EncryptedBrowserRelays []string `json:"encrypted_browser_relays,omitempty"`
+	// PrivateBrowserRelays is a deprecated alias for EncryptedBrowserRelays.
 	PrivateBrowserRelays []string `json:"private_browser_relays,omitempty"`
 	SidecarURL           string   `json:"sidecar_url,omitempty"`
 	PublishEnabled       bool     `json:"publish_enabled"`
@@ -180,7 +182,9 @@ func (h *SystemHandler) GetInfo(w http.ResponseWriter, r *http.Request) {
 		nostrInfo.BrowserRelays = h.browserRelays()
 		nostrInfo.SidecarURL = h.cfg.Nostr.Sidecar.PublicURL
 	}
-	nostrInfo.PrivateBrowserRelays = h.privateBrowserRelays()
+	encryptedBrowserRelays := h.encryptedBrowserRelays()
+	nostrInfo.EncryptedBrowserRelays = encryptedBrowserRelays
+	nostrInfo.PrivateBrowserRelays = encryptedBrowserRelays
 
 	// Derive service pubkey from private key if available
 	if h.cfg.Nostr.PrivateKey != "" {
@@ -215,27 +219,30 @@ func (h *SystemHandler) GetInfo(w http.ResponseWriter, r *http.Request) {
 		PublicHost: h.cfg.OCI.PublicHost,
 	}
 
+	encryptedNostrRequestsEnabled := len(encryptedBrowserRelays) > 0 && len(h.encryptedRelays()) > 0 && h.cfg.Nostr.PrivateKey != ""
+
 	// Feature flags. The removed legacy compatibility surfaces remain present
 	// as false values for older clients that probe capabilities defensively.
 	features := map[string]bool{
-		"oci":                     h.cfg.OCI.Enabled,
-		"harbor":                  h.cfg.Harbor.Enabled,
-		"blossom":                 h.cfg.Blossom.Enabled,
-		"hiveci":                  h.cfg.HiveCI.Enabled,
-		"cashu":                   h.cfg.Cashu.Enabled,
-		"telemetry":               h.cfg.Telemetry.Enabled,
-		"notifications":           h.cfg.Notifications.Enabled,
-		"auth":                    h.cfg.Auth.Enabled,
-		"nostr_auth_exchange":     false,
-		"relay_sidecar":           h.cfg.Nostr.Sidecar.Enabled,
-		"relay_read_models":       h.cfg.Nostr.Sidecar.Enabled && h.cfg.Nostr.PublishEnabled,
-		"private_nostr_transport": len(h.privateBrowserRelays()) > 0 && len(h.cfg.Nostr.PrivateRelays) > 0 && h.cfg.Nostr.PrivateKey != "",
-		"llm_control_plane":       h.cfg.LLM.Enabled,
-		"direct_nostr_http_auth":  h.cfg.Auth.Enabled,
-		"mcp_transport":           h.mcpTransportEnabled,
-		"legacy_sse":              false,
-		"legacy_jwt_exchange":     false,
-		"legacy_agent_http":       false,
+		"oci":                      h.cfg.OCI.Enabled,
+		"harbor":                   h.cfg.Harbor.Enabled,
+		"blossom":                  h.cfg.Blossom.Enabled,
+		"hiveci":                   h.cfg.HiveCI.Enabled,
+		"cashu":                    h.cfg.Cashu.Enabled,
+		"telemetry":                h.cfg.Telemetry.Enabled,
+		"notifications":            h.cfg.Notifications.Enabled,
+		"auth":                     h.cfg.Auth.Enabled,
+		"nostr_auth_exchange":      false,
+		"relay_sidecar":            h.cfg.Nostr.Sidecar.Enabled,
+		"relay_read_models":        h.cfg.Nostr.Sidecar.Enabled && h.cfg.Nostr.PublishEnabled,
+		"encrypted_nostr_requests": encryptedNostrRequestsEnabled,
+		"private_nostr_transport":  encryptedNostrRequestsEnabled,
+		"llm_control_plane":        h.cfg.LLM.Enabled,
+		"direct_nostr_http_auth":   h.cfg.Auth.Enabled,
+		"mcp_transport":            h.mcpTransportEnabled,
+		"legacy_sse":               false,
+		"legacy_jwt_exchange":      false,
+		"legacy_agent_http":        false,
 	}
 
 	resp := SystemInfoResponse{
@@ -330,11 +337,24 @@ func (h *SystemHandler) browserRelays() []string {
 	return nil
 }
 
-func (h *SystemHandler) privateBrowserRelays() []string {
-	if len(h.cfg.Nostr.PrivateBrowserRelays) == 0 {
-		return nil
+func (h *SystemHandler) encryptedRelays() []string {
+	if len(h.cfg.Nostr.EncryptedRelays) > 0 {
+		return append([]string(nil), h.cfg.Nostr.EncryptedRelays...)
 	}
-	return append([]string(nil), h.cfg.Nostr.PrivateBrowserRelays...)
+	if len(h.cfg.Nostr.PrivateRelays) > 0 {
+		return append([]string(nil), h.cfg.Nostr.PrivateRelays...)
+	}
+	return nil
+}
+
+func (h *SystemHandler) encryptedBrowserRelays() []string {
+	if len(h.cfg.Nostr.EncryptedBrowserRelays) > 0 {
+		return append([]string(nil), h.cfg.Nostr.EncryptedBrowserRelays...)
+	}
+	if len(h.cfg.Nostr.PrivateBrowserRelays) > 0 {
+		return append([]string(nil), h.cfg.Nostr.PrivateBrowserRelays...)
+	}
+	return nil
 }
 
 func derivePublicKey(privateKey string) string {

@@ -184,7 +184,19 @@ func TestGetSystemInfo(t *testing.T) {
 			t.Errorf("path = %s, want /api/v1/system/info", r.URL.Path)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"nostr": map[string]any{"browser_relays": []string{"ws://localhost:3000/relay"}, "sidecar_url": "ws://localhost:3000/relay"}}})
+		json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{
+			"nostr": map[string]any{
+				"browser_relays":           []string{"ws://localhost:3000/relay"},
+				"sidecar_url":              "ws://localhost:3000/relay",
+				"encrypted_browser_relays": []string{"wss://encrypted-browser.example"},
+				"private_browser_relays":   []string{"wss://encrypted-browser.example"},
+				"service_pubkey":           "service-pubkey",
+			},
+			"features": map[string]bool{
+				"encrypted_nostr_requests": true,
+				"private_nostr_transport":  true,
+			},
+		}})
 	}))
 	defer server.Close()
 
@@ -198,6 +210,21 @@ func TestGetSystemInfo(t *testing.T) {
 	}
 	if info.Nostr.SidecarURL != "ws://localhost:3000/relay" {
 		t.Fatalf("sidecar_url = %q", info.Nostr.SidecarURL)
+	}
+	if len(info.Nostr.EncryptedBrowserRelays) != 1 || info.Nostr.EncryptedBrowserRelays[0] != "wss://encrypted-browser.example" {
+		t.Fatalf("encrypted_browser_relays = %#v", info.Nostr.EncryptedBrowserRelays)
+	}
+	if len(info.Nostr.PrivateBrowserRelays) != 1 || info.Nostr.PrivateBrowserRelays[0] != "wss://encrypted-browser.example" {
+		t.Fatalf("private_browser_relays alias = %#v", info.Nostr.PrivateBrowserRelays)
+	}
+	if info.Nostr.ServicePubkey != "service-pubkey" {
+		t.Fatalf("service_pubkey = %q", info.Nostr.ServicePubkey)
+	}
+	if !info.Features["encrypted_nostr_requests"] {
+		t.Fatalf("encrypted_nostr_requests feature was not decoded: %#v", info.Features)
+	}
+	if !info.Features["private_nostr_transport"] {
+		t.Fatalf("deprecated private_nostr_transport alias was not decoded: %#v", info.Features)
 	}
 }
 
