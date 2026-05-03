@@ -13,16 +13,16 @@ import (
 )
 
 const (
-	PrivateOperationNotificationChannelsList   = "notifications.channels.list"
-	PrivateOperationNotificationChannelsGet    = "notifications.channels.get"
-	PrivateOperationNotificationChannelsCreate = "notifications.channels.create"
-	PrivateOperationNotificationChannelsUpdate = "notifications.channels.update"
-	PrivateOperationNotificationChannelsDelete = "notifications.channels.delete"
-	PrivateOperationNotificationChannelsTest   = "notifications.channels.test"
-	PrivateOperationNotificationLogsList       = "notifications.logs.list"
+	EncryptedOperationNotificationChannelsList   = "notifications.channels.list"
+	EncryptedOperationNotificationChannelsGet    = "notifications.channels.get"
+	EncryptedOperationNotificationChannelsCreate = "notifications.channels.create"
+	EncryptedOperationNotificationChannelsUpdate = "notifications.channels.update"
+	EncryptedOperationNotificationChannelsDelete = "notifications.channels.delete"
+	EncryptedOperationNotificationChannelsTest   = "notifications.channels.test"
+	EncryptedOperationNotificationLogsList       = "notifications.logs.list"
 )
 
-type notificationPrivateHandler struct {
+type notificationEncryptedHandler struct {
 	repo       repository.NotificationRepository
 	dispatcher *notifications.Dispatcher
 }
@@ -41,25 +41,25 @@ type notificationLogsPayload struct {
 	Limit     int    `json:"limit,omitempty"`
 }
 
-// RegisterNotificationPrivateHandlers wires notification CRUD/test/log queries
-// onto the encrypted private request/result transport. Notification configs and
+// RegisterNotificationEncryptedHandlers wires notification CRUD/test/log queries
+// onto the encrypted request/result runtime. Notification configs and
 // delivery logs are never projected to the public sidecar; result payloads are
 // encrypted by the transport before publication.
-func RegisterNotificationPrivateHandlers(transport *PrivateTransport, repo repository.NotificationRepository, dispatcher *notifications.Dispatcher) {
+func RegisterNotificationEncryptedHandlers(transport *EncryptedRequestTransport, repo repository.NotificationRepository, dispatcher *notifications.Dispatcher) {
 	if transport == nil || repo == nil {
 		return
 	}
-	h := &notificationPrivateHandler{repo: repo, dispatcher: dispatcher}
-	transport.RegisterHandler(PrivateOperationNotificationChannelsList, h.listChannels)
-	transport.RegisterHandler(PrivateOperationNotificationChannelsGet, h.getChannel)
-	transport.RegisterHandler(PrivateOperationNotificationChannelsCreate, h.createChannel)
-	transport.RegisterHandler(PrivateOperationNotificationChannelsUpdate, h.updateChannel)
-	transport.RegisterHandler(PrivateOperationNotificationChannelsDelete, h.deleteChannel)
-	transport.RegisterHandler(PrivateOperationNotificationChannelsTest, h.testChannel)
-	transport.RegisterHandler(PrivateOperationNotificationLogsList, h.listLogs)
+	h := &notificationEncryptedHandler{repo: repo, dispatcher: dispatcher}
+	transport.RegisterHandler(EncryptedOperationNotificationChannelsList, h.listChannels)
+	transport.RegisterHandler(EncryptedOperationNotificationChannelsGet, h.getChannel)
+	transport.RegisterHandler(EncryptedOperationNotificationChannelsCreate, h.createChannel)
+	transport.RegisterHandler(EncryptedOperationNotificationChannelsUpdate, h.updateChannel)
+	transport.RegisterHandler(EncryptedOperationNotificationChannelsDelete, h.deleteChannel)
+	transport.RegisterHandler(EncryptedOperationNotificationChannelsTest, h.testChannel)
+	transport.RegisterHandler(EncryptedOperationNotificationLogsList, h.listLogs)
 }
 
-func (h *notificationPrivateHandler) listChannels(ctx context.Context, _ PrivateRequest) (any, error) {
+func (h *notificationEncryptedHandler) listChannels(ctx context.Context, _ EncryptedRequest) (any, error) {
 	channels, err := h.repo.ListChannels(ctx, false)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list notification channels")
@@ -67,9 +67,9 @@ func (h *notificationPrivateHandler) listChannels(ctx context.Context, _ Private
 	return map[string]any{"channels": sanitizeNotificationChannels(channels)}, nil
 }
 
-func (h *notificationPrivateHandler) getChannel(ctx context.Context, request PrivateRequest) (any, error) {
+func (h *notificationEncryptedHandler) getChannel(ctx context.Context, request EncryptedRequest) (any, error) {
 	var payload notificationChannelPayload
-	if err := decodeNotificationPrivatePayload(request, &payload); err != nil {
+	if err := decodeNotificationEncryptedPayload(request, &payload); err != nil {
 		return nil, err
 	}
 	id, err := parseNotificationChannelID(payload.ID)
@@ -86,9 +86,9 @@ func (h *notificationPrivateHandler) getChannel(ctx context.Context, request Pri
 	return map[string]any{"channel": sanitizeNotificationChannel(*ch)}, nil
 }
 
-func (h *notificationPrivateHandler) createChannel(ctx context.Context, request PrivateRequest) (any, error) {
+func (h *notificationEncryptedHandler) createChannel(ctx context.Context, request EncryptedRequest) (any, error) {
 	var payload notificationChannelPayload
-	if err := decodeNotificationPrivatePayload(request, &payload); err != nil {
+	if err := decodeNotificationEncryptedPayload(request, &payload); err != nil {
 		return nil, err
 	}
 	if strings.TrimSpace(payload.Name) == "" {
@@ -116,9 +116,9 @@ func (h *notificationPrivateHandler) createChannel(ctx context.Context, request 
 	return map[string]any{"channel": sanitizeNotificationChannel(*ch)}, nil
 }
 
-func (h *notificationPrivateHandler) updateChannel(ctx context.Context, request PrivateRequest) (any, error) {
+func (h *notificationEncryptedHandler) updateChannel(ctx context.Context, request EncryptedRequest) (any, error) {
 	var payload notificationChannelPayload
-	if err := decodeNotificationPrivatePayload(request, &payload); err != nil {
+	if err := decodeNotificationEncryptedPayload(request, &payload); err != nil {
 		return nil, err
 	}
 	id, err := parseNotificationChannelID(payload.ID)
@@ -167,9 +167,9 @@ func (h *notificationPrivateHandler) updateChannel(ctx context.Context, request 
 	return map[string]any{"channel": sanitizeNotificationChannel(*existing)}, nil
 }
 
-func (h *notificationPrivateHandler) deleteChannel(ctx context.Context, request PrivateRequest) (any, error) {
+func (h *notificationEncryptedHandler) deleteChannel(ctx context.Context, request EncryptedRequest) (any, error) {
 	var payload notificationChannelPayload
-	if err := decodeNotificationPrivatePayload(request, &payload); err != nil {
+	if err := decodeNotificationEncryptedPayload(request, &payload); err != nil {
 		return nil, err
 	}
 	id, err := parseNotificationChannelID(payload.ID)
@@ -182,12 +182,12 @@ func (h *notificationPrivateHandler) deleteChannel(ctx context.Context, request 
 	return map[string]any{"status": "deleted", "id": id.String()}, nil
 }
 
-func (h *notificationPrivateHandler) testChannel(ctx context.Context, request PrivateRequest) (any, error) {
+func (h *notificationEncryptedHandler) testChannel(ctx context.Context, request EncryptedRequest) (any, error) {
 	if h.dispatcher == nil {
 		return nil, fmt.Errorf("notification dispatcher is not configured")
 	}
 	var payload notificationChannelPayload
-	if err := decodeNotificationPrivatePayload(request, &payload); err != nil {
+	if err := decodeNotificationEncryptedPayload(request, &payload); err != nil {
 		return nil, err
 	}
 	id, err := parseNotificationChannelID(payload.ID)
@@ -210,9 +210,9 @@ func (h *notificationPrivateHandler) testChannel(ctx context.Context, request Pr
 	return map[string]any{"status": "test sent", "id": ch.ID.String()}, nil
 }
 
-func (h *notificationPrivateHandler) listLogs(ctx context.Context, request PrivateRequest) (any, error) {
+func (h *notificationEncryptedHandler) listLogs(ctx context.Context, request EncryptedRequest) (any, error) {
 	var payload notificationLogsPayload
-	if err := decodeNotificationPrivatePayload(request, &payload); err != nil {
+	if err := decodeNotificationEncryptedPayload(request, &payload); err != nil {
 		return nil, err
 	}
 	limit := payload.Limit
@@ -236,7 +236,7 @@ func (h *notificationPrivateHandler) listLogs(ctx context.Context, request Priva
 	return map[string]any{"logs": logs}, nil
 }
 
-func decodeNotificationPrivatePayload(request PrivateRequest, target any) error {
+func decodeNotificationEncryptedPayload(request EncryptedRequest, target any) error {
 	if len(request.Envelope.Payload) == 0 || string(request.Envelope.Payload) == "null" {
 		return nil
 	}

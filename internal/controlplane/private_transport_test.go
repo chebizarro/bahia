@@ -16,16 +16,16 @@ const (
 	testOtherKey     = "0000000000000000000000000000000000000000000000000000000000000003"
 )
 
-type mockPrivatePublisher struct {
+type mockEncryptedPublisher struct {
 	events []nostr.Event
 }
 
-func (m *mockPrivatePublisher) Publish(_ context.Context, ev nostr.Event) (int, error) {
+func (m *mockEncryptedPublisher) Publish(_ context.Context, ev nostr.Event) (int, error) {
 	m.events = append(m.events, ev)
 	return 1, nil
 }
 
-func newResponder(t *testing.T, publisher *mockPrivatePublisher) *EncryptedResponder {
+func newResponder(t *testing.T, publisher *mockEncryptedPublisher) *EncryptedResponder {
 	t.Helper()
 	signer, err := NewPrivateKeySigner(testServiceKey)
 	if err != nil {
@@ -34,7 +34,7 @@ func newResponder(t *testing.T, publisher *mockPrivatePublisher) *EncryptedRespo
 	return NewEncryptedResponder(publisher, signer, testServiceKey, zap.NewNop())
 }
 
-func makePrivateRequestEvent(t *testing.T, requesterKey string, envelope PrivateRequestEnvelope) *nostr.Event {
+func makeEncryptedRequestEvent(t *testing.T, requesterKey string, envelope EncryptedRequestEnvelope) *nostr.Event {
 	t.Helper()
 	servicePubkey, err := nostr.GetPublicKey(testServiceKey)
 	if err != nil {
@@ -53,9 +53,9 @@ func makePrivateRequestEvent(t *testing.T, requesterKey string, envelope Private
 		t.Fatalf("encrypt request: %v", err)
 	}
 	event := &nostr.Event{
-		Kind:      KindPrivateRequest,
+		Kind:      KindEncryptedRequest,
 		CreatedAt: nostr.Now(),
-		Tags:      nostr.Tags{{"p", servicePubkey}, {"private", PrivateTransportVersion}},
+		Tags:      nostr.Tags{{"p", servicePubkey}, {"private", EncryptedRequestWireVersion}},
 		Content:   ciphertext,
 	}
 	if err := event.Sign(requesterKey); err != nil {
@@ -73,7 +73,7 @@ func hasTag(tags nostr.Tags, name, value string) bool {
 	return false
 }
 
-func decryptResultEnvelope(t *testing.T, ev nostr.Event, requesterKey string) PrivateResultEnvelope {
+func decryptResultEnvelope(t *testing.T, ev nostr.Event, requesterKey string) EncryptedResultEnvelope {
 	t.Helper()
 	servicePubkey, err := nostr.GetPublicKey(testServiceKey)
 	if err != nil {
@@ -87,7 +87,7 @@ func decryptResultEnvelope(t *testing.T, ev nostr.Event, requesterKey string) Pr
 	if err != nil {
 		t.Fatalf("decrypt result: %v", err)
 	}
-	var envelope PrivateResultEnvelope
+	var envelope EncryptedResultEnvelope
 	if err := json.Unmarshal([]byte(plaintext), &envelope); err != nil {
 		t.Fatalf("unmarshal result: %v", err)
 	}
@@ -99,19 +99,19 @@ func TestEncryptedResponder_DecryptRequestContentRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	req := makePrivateRequestEvent(t, testRequesterKey, PrivateRequestEnvelope{
-		Version:         PrivateTransportVersion,
+	req := makeEncryptedRequestEvent(t, testRequesterKey, EncryptedRequestEnvelope{
+		Version:         EncryptedRequestWireVersion,
 		Operation:       "payments.history",
 		RequesterPubkey: requesterPubkey,
 		Payload:         json.RawMessage(`{"limit":25}`),
 	})
-	responder := newResponder(t, &mockPrivatePublisher{})
+	responder := newResponder(t, &mockEncryptedPublisher{})
 
 	plaintext, err := responder.DecryptRequestContent(req)
 	if err != nil {
 		t.Fatalf("DecryptRequestContent: %v", err)
 	}
-	var envelope PrivateRequestEnvelope
+	var envelope EncryptedRequestEnvelope
 	if err := json.Unmarshal(plaintext, &envelope); err != nil {
 		t.Fatalf("unmarshal plaintext: %v", err)
 	}
@@ -121,9 +121,9 @@ func TestEncryptedResponder_DecryptRequestContentRoundTrip(t *testing.T) {
 }
 
 func TestEncryptedResponder_PublishEncryptedResultCorrelatesToRequest(t *testing.T) {
-	publisher := &mockPrivatePublisher{}
+	publisher := &mockEncryptedPublisher{}
 	responder := newResponder(t, publisher)
-	req := makePrivateRequestEvent(t, testRequesterKey, PrivateRequestEnvelope{Version: PrivateTransportVersion, Operation: "orgs.list"})
+	req := makeEncryptedRequestEvent(t, testRequesterKey, EncryptedRequestEnvelope{Version: EncryptedRequestWireVersion, Operation: "orgs.list"})
 
 	if err := responder.PublishEncryptedResult(context.Background(), req, "ok", map[string]any{"count": 2}, nil); err != nil {
 		t.Fatalf("PublishEncryptedResult: %v", err)
@@ -132,7 +132,7 @@ func TestEncryptedResponder_PublishEncryptedResultCorrelatesToRequest(t *testing
 		t.Fatalf("published events = %d", len(publisher.events))
 	}
 	result := publisher.events[0]
-	if result.Kind != KindPrivateResult {
+	if result.Kind != KindEncryptedResult {
 		t.Fatalf("result kind = %d", result.Kind)
 	}
 	if !hasTag(result.Tags, "e", req.ID) || !hasTag(result.Tags, "p", req.PubKey) {
@@ -144,8 +144,8 @@ func TestEncryptedResponder_PublishEncryptedResultCorrelatesToRequest(t *testing
 	}
 }
 
-func TestPrivateTransport_HandleEventPublishesDecryptFailure(t *testing.T) {
-	publisher := &mockPrivatePublisher{}
+func TestEncryptedRequestTransport_HandleEventPublishesDecryptFailure(t *testing.T) {
+	publisher := &mockEncryptedPublisher{}
 	responder := newResponder(t, publisher)
 	requesterPubkey, err := nostr.GetPublicKey(testRequesterKey)
 	if err != nil {
@@ -155,11 +155,11 @@ func TestPrivateTransport_HandleEventPublishesDecryptFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	event := &nostr.Event{Kind: KindPrivateRequest, CreatedAt: nostr.Now(), Tags: nostr.Tags{{"p", servicePubkey}, {"private", PrivateTransportVersion}}, Content: "not-valid-nip44"}
+	event := &nostr.Event{Kind: KindEncryptedRequest, CreatedAt: nostr.Now(), Tags: nostr.Tags{{"p", servicePubkey}, {"private", EncryptedRequestWireVersion}}, Content: "not-valid-nip44"}
 	if err := event.Sign(testRequesterKey); err != nil {
 		t.Fatal(err)
 	}
-	transport := NewPrivateTransport(nil, responder, []string{requesterPubkey}, zap.NewNop())
+	transport := NewEncryptedRequestTransport(nil, responder, []string{requesterPubkey}, zap.NewNop())
 
 	transport.HandleEvent(context.Background(), event)
 
@@ -172,25 +172,25 @@ func TestPrivateTransport_HandleEventPublishesDecryptFailure(t *testing.T) {
 	}
 }
 
-func TestPrivateTransport_HandleEventIgnoresUnroutedPrivateKind(t *testing.T) {
-	publisher := &mockPrivatePublisher{}
+func TestEncryptedRequestTransport_HandleEventIgnoresUnroutedEncryptedKind(t *testing.T) {
+	publisher := &mockEncryptedPublisher{}
 	responder := newResponder(t, publisher)
-	event := makePrivateRequestEvent(t, testRequesterKey, PrivateRequestEnvelope{Version: PrivateTransportVersion, Operation: "notifications.list"})
-	event.Tags = nostr.Tags{{"p", "c" + event.PubKey[1:]}, {"private", PrivateTransportVersion}}
+	event := makeEncryptedRequestEvent(t, testRequesterKey, EncryptedRequestEnvelope{Version: EncryptedRequestWireVersion, Operation: "notifications.list"})
+	event.Tags = nostr.Tags{{"p", "c" + event.PubKey[1:]}, {"private", EncryptedRequestWireVersion}}
 	if err := event.Sign(testRequesterKey); err != nil {
 		t.Fatal(err)
 	}
-	transport := NewPrivateTransport(nil, responder, []string{event.PubKey}, zap.NewNop())
+	transport := NewEncryptedRequestTransport(nil, responder, []string{event.PubKey}, zap.NewNop())
 
 	transport.HandleEvent(context.Background(), event)
 
 	if len(publisher.events) != 0 {
-		t.Fatalf("unrouted private traffic should be ignored, got %d published events", len(publisher.events))
+		t.Fatalf("unrouted encrypted traffic should be ignored, got %d published events", len(publisher.events))
 	}
 }
 
-func TestPrivateTransport_HandleEventRejectsUnauthorizedRequester(t *testing.T) {
-	publisher := &mockPrivatePublisher{}
+func TestEncryptedRequestTransport_HandleEventRejectsUnauthorizedRequester(t *testing.T) {
+	publisher := &mockEncryptedPublisher{}
 	responder := newResponder(t, publisher)
 	requesterPubkey, err := nostr.GetPublicKey(testRequesterKey)
 	if err != nil {
@@ -201,9 +201,9 @@ func TestPrivateTransport_HandleEventRejectsUnauthorizedRequester(t *testing.T) 
 		t.Fatal(err)
 	}
 	called := false
-	event := makePrivateRequestEvent(t, testRequesterKey, PrivateRequestEnvelope{Version: PrivateTransportVersion, Operation: "notifications.list", RequesterPubkey: requesterPubkey})
-	transport := NewPrivateTransport(nil, responder, []string{otherPubkey}, zap.NewNop())
-	transport.RegisterHandler("notifications.list", func(context.Context, PrivateRequest) (any, error) {
+	event := makeEncryptedRequestEvent(t, testRequesterKey, EncryptedRequestEnvelope{Version: EncryptedRequestWireVersion, Operation: "notifications.list", RequesterPubkey: requesterPubkey})
+	transport := NewEncryptedRequestTransport(nil, responder, []string{otherPubkey}, zap.NewNop())
+	transport.RegisterHandler("notifications.list", func(context.Context, EncryptedRequest) (any, error) {
 		called = true
 		return map[string]any{"ok": true}, nil
 	})
@@ -222,16 +222,16 @@ func TestPrivateTransport_HandleEventRejectsUnauthorizedRequester(t *testing.T) 
 	}
 }
 
-func TestPrivateTransport_HandleEventDispatchesAuthorizedOperation(t *testing.T) {
-	publisher := &mockPrivatePublisher{}
+func TestEncryptedRequestTransport_HandleEventDispatchesAuthorizedOperation(t *testing.T) {
+	publisher := &mockEncryptedPublisher{}
 	responder := newResponder(t, publisher)
 	requesterPubkey, err := nostr.GetPublicKey(testRequesterKey)
 	if err != nil {
 		t.Fatal(err)
 	}
-	event := makePrivateRequestEvent(t, testRequesterKey, PrivateRequestEnvelope{Version: PrivateTransportVersion, Operation: "payments.history", RequesterPubkey: requesterPubkey, Payload: json.RawMessage(`{"limit":10}`)})
-	transport := NewPrivateTransport(nil, responder, []string{requesterPubkey}, zap.NewNop())
-	transport.RegisterHandler("payments.history", func(_ context.Context, request PrivateRequest) (any, error) {
+	event := makeEncryptedRequestEvent(t, testRequesterKey, EncryptedRequestEnvelope{Version: EncryptedRequestWireVersion, Operation: "payments.history", RequesterPubkey: requesterPubkey, Payload: json.RawMessage(`{"limit":10}`)})
+	transport := NewEncryptedRequestTransport(nil, responder, []string{requesterPubkey}, zap.NewNop())
+	transport.RegisterHandler("payments.history", func(_ context.Context, request EncryptedRequest) (any, error) {
 		if string(request.Envelope.Payload) != `{"limit":10}` {
 			t.Fatalf("handler payload = %s", request.Envelope.Payload)
 		}

@@ -17,25 +17,25 @@ import (
 )
 
 const (
-	PrivateOperationPaymentsHistory  = "payments.history"
-	PrivateOperationOrgsList         = "orgs.list"
-	PrivateOperationOrgsDetail       = "orgs.detail"
-	PrivateOperationOrgsCreate       = "orgs.create"
-	PrivateOperationOrgsDelete       = "orgs.delete"
-	PrivateOperationOrgsMyInvites    = "orgs.my_invites"
-	PrivateOperationOrgsAcceptInvite = "orgs.accept_invite"
-	PrivateOperationOrgsCreateInvite = "orgs.create_invite"
-	PrivateOperationOrgsRevokeInvite = "orgs.revoke_invite"
-	PrivateOperationOrgsUpdateRole   = "orgs.update_member_role"
-	PrivateOperationOrgsRemoveMember = "orgs.remove_member"
+	EncryptedOperationPaymentsHistory  = "payments.history"
+	EncryptedOperationOrgsList         = "orgs.list"
+	EncryptedOperationOrgsDetail       = "orgs.detail"
+	EncryptedOperationOrgsCreate       = "orgs.create"
+	EncryptedOperationOrgsDelete       = "orgs.delete"
+	EncryptedOperationOrgsMyInvites    = "orgs.my_invites"
+	EncryptedOperationOrgsAcceptInvite = "orgs.accept_invite"
+	EncryptedOperationOrgsCreateInvite = "orgs.create_invite"
+	EncryptedOperationOrgsRevokeInvite = "orgs.revoke_invite"
+	EncryptedOperationOrgsUpdateRole   = "orgs.update_member_role"
+	EncryptedOperationOrgsRemoveMember = "orgs.remove_member"
 )
 
-var privateOrgNameRegex = regexp.MustCompile(`^[a-z][a-z0-9-]{1,38}[a-z0-9]$`)
+var encryptedOrgNameRegex = regexp.MustCompile(`^[a-z][a-z0-9-]{1,38}[a-z0-9]$`)
 
-// PrivateDomainHandlers adapts sensitive REST-backed domains to encrypted
+// EncryptedDomainHandlers adapts sensitive REST-backed domains to encrypted
 // signer-first request/result operations. Payloads stay encrypted end-to-end and
 // are never emitted as public sidecar read models.
-type PrivateDomainHandlers struct {
+type EncryptedDomainHandlers struct {
 	payments              *service.PaymentService
 	orgs                  repository.OrganizationRepository
 	members               repository.OrgMemberRepository
@@ -45,7 +45,7 @@ type PrivateDomainHandlers struct {
 	logger                *zap.Logger
 }
 
-type PrivateDomainHandlersConfig struct {
+type EncryptedDomainHandlersConfig struct {
 	Payments              *service.PaymentService
 	Orgs                  repository.OrganizationRepository
 	Members               repository.OrgMemberRepository
@@ -55,47 +55,47 @@ type PrivateDomainHandlersConfig struct {
 	Logger                *zap.Logger
 }
 
-func NewPrivateDomainHandlers(cfg PrivateDomainHandlersConfig) *PrivateDomainHandlers {
+func NewEncryptedDomainHandlers(cfg EncryptedDomainHandlersConfig) *EncryptedDomainHandlers {
 	logger := cfg.Logger
 	if logger == nil {
 		logger = zap.NewNop()
 	}
 	allowlist := make(map[string]struct{}, len(cfg.BootstrapOwnerPubkeys))
 	for _, pubkey := range cfg.BootstrapOwnerPubkeys {
-		normalized := normalizePrivatePubkey(pubkey)
+		normalized := normalizeEncryptedPubkey(pubkey)
 		if normalized != "" {
 			allowlist[normalized] = struct{}{}
 		}
 	}
-	return &PrivateDomainHandlers{
+	return &EncryptedDomainHandlers{
 		payments:              cfg.Payments,
 		orgs:                  cfg.Orgs,
 		members:               cfg.Members,
 		invites:               cfg.Invites,
 		rbac:                  cfg.RBAC,
 		bootstrapOwnerPubkeys: allowlist,
-		logger:                logger.Named("private-domain-handlers"),
+		logger:                logger.Named("encrypted-domain-handlers"),
 	}
 }
 
-func (h *PrivateDomainHandlers) Register(transport *PrivateTransport) {
+func (h *EncryptedDomainHandlers) Register(transport *EncryptedRequestTransport) {
 	if h == nil || transport == nil {
 		return
 	}
-	transport.RegisterHandler(PrivateOperationPaymentsHistory, h.PaymentHistory)
-	transport.RegisterHandler(PrivateOperationOrgsList, h.ListOrgs)
-	transport.RegisterHandler(PrivateOperationOrgsDetail, h.OrgDetail)
-	transport.RegisterHandler(PrivateOperationOrgsCreate, h.CreateOrg)
-	transport.RegisterHandler(PrivateOperationOrgsDelete, h.DeleteOrg)
-	transport.RegisterHandler(PrivateOperationOrgsMyInvites, h.MyInvites)
-	transport.RegisterHandler(PrivateOperationOrgsAcceptInvite, h.AcceptInvite)
-	transport.RegisterHandler(PrivateOperationOrgsCreateInvite, h.CreateInvite)
-	transport.RegisterHandler(PrivateOperationOrgsRevokeInvite, h.RevokeInvite)
-	transport.RegisterHandler(PrivateOperationOrgsUpdateRole, h.UpdateMemberRole)
-	transport.RegisterHandler(PrivateOperationOrgsRemoveMember, h.RemoveMember)
+	transport.RegisterHandler(EncryptedOperationPaymentsHistory, h.PaymentHistory)
+	transport.RegisterHandler(EncryptedOperationOrgsList, h.ListOrgs)
+	transport.RegisterHandler(EncryptedOperationOrgsDetail, h.OrgDetail)
+	transport.RegisterHandler(EncryptedOperationOrgsCreate, h.CreateOrg)
+	transport.RegisterHandler(EncryptedOperationOrgsDelete, h.DeleteOrg)
+	transport.RegisterHandler(EncryptedOperationOrgsMyInvites, h.MyInvites)
+	transport.RegisterHandler(EncryptedOperationOrgsAcceptInvite, h.AcceptInvite)
+	transport.RegisterHandler(EncryptedOperationOrgsCreateInvite, h.CreateInvite)
+	transport.RegisterHandler(EncryptedOperationOrgsRevokeInvite, h.RevokeInvite)
+	transport.RegisterHandler(EncryptedOperationOrgsUpdateRole, h.UpdateMemberRole)
+	transport.RegisterHandler(EncryptedOperationOrgsRemoveMember, h.RemoveMember)
 }
 
-func (h *PrivateDomainHandlers) PaymentHistory(ctx context.Context, request PrivateRequest) (any, error) {
+func (h *EncryptedDomainHandlers) PaymentHistory(ctx context.Context, request EncryptedRequest) (any, error) {
 	if h.payments == nil {
 		return nil, fmt.Errorf("payments service is not configured")
 	}
@@ -103,7 +103,7 @@ func (h *PrivateDomainHandlers) PaymentHistory(ctx context.Context, request Priv
 		Worker string `json:"worker"`
 		Limit  int    `json:"limit"`
 	}
-	if err := decodePrivatePayload(request, &payload); err != nil {
+	if err := decodeEncryptedPayload(request, &payload); err != nil {
 		return nil, err
 	}
 	worker := strings.TrimSpace(payload.Worker)
@@ -124,7 +124,7 @@ func (h *PrivateDomainHandlers) PaymentHistory(ctx context.Context, request Priv
 	return records, nil
 }
 
-func (h *PrivateDomainHandlers) ListOrgs(ctx context.Context, request PrivateRequest) (any, error) {
+func (h *EncryptedDomainHandlers) ListOrgs(ctx context.Context, request EncryptedRequest) (any, error) {
 	if err := h.requireOrgDeps(); err != nil {
 		return nil, err
 	}
@@ -148,14 +148,14 @@ func (h *PrivateDomainHandlers) ListOrgs(ctx context.Context, request PrivateReq
 	return result, nil
 }
 
-func (h *PrivateDomainHandlers) OrgDetail(ctx context.Context, request PrivateRequest) (any, error) {
+func (h *EncryptedDomainHandlers) OrgDetail(ctx context.Context, request EncryptedRequest) (any, error) {
 	if err := h.requireOrgDeps(); err != nil {
 		return nil, err
 	}
 	var payload struct {
 		ID string `json:"id"`
 	}
-	if err := decodePrivatePayload(request, &payload); err != nil {
+	if err := decodeEncryptedPayload(request, &payload); err != nil {
 		return nil, err
 	}
 	org, err := h.lookupOrg(ctx, payload.ID)
@@ -172,7 +172,7 @@ func (h *PrivateDomainHandlers) OrgDetail(ctx context.Context, request PrivateRe
 	}
 	myRole := ""
 	for _, member := range members {
-		if normalizePrivatePubkey(member.Pubkey) == principal.PubKey {
+		if normalizeEncryptedPubkey(member.Pubkey) == principal.PubKey {
 			myRole = string(member.Role)
 			break
 		}
@@ -192,7 +192,7 @@ func (h *PrivateDomainHandlers) OrgDetail(ctx context.Context, request PrivateRe
 	}, nil
 }
 
-func (h *PrivateDomainHandlers) CreateOrg(ctx context.Context, request PrivateRequest) (any, error) {
+func (h *EncryptedDomainHandlers) CreateOrg(ctx context.Context, request EncryptedRequest) (any, error) {
 	if err := h.requireOrgDeps(); err != nil {
 		return nil, err
 	}
@@ -206,11 +206,11 @@ func (h *PrivateDomainHandlers) CreateOrg(ctx context.Context, request PrivateRe
 		Name        string `json:"name"`
 		DisplayName string `json:"display_name"`
 	}
-	if err := decodePrivatePayload(request, &payload); err != nil {
+	if err := decodeEncryptedPayload(request, &payload); err != nil {
 		return nil, err
 	}
 	name := strings.ToLower(strings.TrimSpace(payload.Name))
-	if !privateOrgNameRegex.MatchString(name) {
+	if !encryptedOrgNameRegex.MatchString(name) {
 		return nil, fmt.Errorf("invalid org name: must be 3-40 lowercase alphanumeric characters or hyphens, starting and ending with alphanumeric")
 	}
 	if _, err := h.orgs.GetByName(ctx, name); err == nil {
@@ -222,27 +222,27 @@ func (h *PrivateDomainHandlers) CreateOrg(ctx context.Context, request PrivateRe
 	}
 	org := &domain.Organization{ID: uuid.New(), Name: name, DisplayName: displayName, OwnerPubkey: principal.PubKey}
 	if err := h.orgs.Create(ctx, org); err != nil {
-		h.logger.Error("failed to create org from private transport", zap.Error(err))
+		h.logger.Error("failed to create org from encrypted request", zap.Error(err))
 		return nil, fmt.Errorf("failed to create organization")
 	}
 	member := &domain.OrgMember{OrgID: org.ID, Pubkey: principal.PubKey, Role: domain.RoleOwner}
 	if err := h.members.Add(ctx, member); err != nil {
-		h.logger.Error("failed to add private transport org creator as owner", zap.Error(err))
+		h.logger.Error("failed to add encrypted request org creator as owner", zap.Error(err))
 	}
 	return org, nil
 }
 
-func (h *PrivateDomainHandlers) DeleteOrg(ctx context.Context, request PrivateRequest) (any, error) {
+func (h *EncryptedDomainHandlers) DeleteOrg(ctx context.Context, request EncryptedRequest) (any, error) {
 	if err := h.requireOrgDeps(); err != nil {
 		return nil, err
 	}
 	var payload struct {
 		ID string `json:"id"`
 	}
-	if err := decodePrivatePayload(request, &payload); err != nil {
+	if err := decodeEncryptedPayload(request, &payload); err != nil {
 		return nil, err
 	}
-	orgID, err := parsePrivateUUID(payload.ID, "org ID")
+	orgID, err := parseEncryptedUUID(payload.ID, "org ID")
 	if err != nil {
 		return nil, err
 	}
@@ -258,7 +258,7 @@ func (h *PrivateDomainHandlers) DeleteOrg(ctx context.Context, request PrivateRe
 	return map[string]string{"message": "organization deleted"}, nil
 }
 
-func (h *PrivateDomainHandlers) MyInvites(ctx context.Context, request PrivateRequest) (any, error) {
+func (h *EncryptedDomainHandlers) MyInvites(ctx context.Context, request EncryptedRequest) (any, error) {
 	if err := h.requireOrgDeps(); err != nil {
 		return nil, err
 	}
@@ -284,17 +284,17 @@ func (h *PrivateDomainHandlers) MyInvites(ctx context.Context, request PrivateRe
 	return result, nil
 }
 
-func (h *PrivateDomainHandlers) AcceptInvite(ctx context.Context, request PrivateRequest) (any, error) {
+func (h *EncryptedDomainHandlers) AcceptInvite(ctx context.Context, request EncryptedRequest) (any, error) {
 	if err := h.requireOrgDeps(); err != nil {
 		return nil, err
 	}
 	var payload struct {
 		InviteID string `json:"invite_id"`
 	}
-	if err := decodePrivatePayload(request, &payload); err != nil {
+	if err := decodeEncryptedPayload(request, &payload); err != nil {
 		return nil, err
 	}
-	inviteID, err := parsePrivateUUID(payload.InviteID, "invite ID")
+	inviteID, err := parseEncryptedUUID(payload.InviteID, "invite ID")
 	if err != nil {
 		return nil, err
 	}
@@ -306,7 +306,7 @@ func (h *PrivateDomainHandlers) AcceptInvite(ctx context.Context, request Privat
 		return nil, fmt.Errorf("failed to fetch invite: %w", err)
 	}
 	principal := requestPrincipal(request)
-	if normalizePrivatePubkey(invite.Pubkey) != principal.PubKey {
+	if normalizeEncryptedPubkey(invite.Pubkey) != principal.PubKey {
 		return nil, fmt.Errorf("invite is for a different user")
 	}
 	if invite.IsExpired() {
@@ -320,7 +320,7 @@ func (h *PrivateDomainHandlers) AcceptInvite(ctx context.Context, request Privat
 	return member, nil
 }
 
-func (h *PrivateDomainHandlers) CreateInvite(ctx context.Context, request PrivateRequest) (any, error) {
+func (h *EncryptedDomainHandlers) CreateInvite(ctx context.Context, request EncryptedRequest) (any, error) {
 	if err := h.requireOrgDeps(); err != nil {
 		return nil, err
 	}
@@ -330,10 +330,10 @@ func (h *PrivateDomainHandlers) CreateInvite(ctx context.Context, request Privat
 		Role      domain.Role `json:"role"`
 		ExpiresIn int         `json:"expires_in"` // hours, same contract as REST handler
 	}
-	if err := decodePrivatePayload(request, &payload); err != nil {
+	if err := decodeEncryptedPayload(request, &payload); err != nil {
 		return nil, err
 	}
-	orgID, err := parsePrivateUUID(payload.OrgID, "org ID")
+	orgID, err := parseEncryptedUUID(payload.OrgID, "org ID")
 	if err != nil {
 		return nil, err
 	}
@@ -341,7 +341,7 @@ func (h *PrivateDomainHandlers) CreateInvite(ctx context.Context, request Privat
 	if err := h.rbac.CheckOrgAccess(ctx, principal, orgID, domain.RoleAdmin); err != nil {
 		return nil, err
 	}
-	pubkey := normalizePrivatePubkey(payload.Pubkey)
+	pubkey := normalizeEncryptedPubkey(payload.Pubkey)
 	if pubkey == "" {
 		return nil, fmt.Errorf("pubkey is required")
 	}
@@ -349,7 +349,7 @@ func (h *PrivateDomainHandlers) CreateInvite(ctx context.Context, request Privat
 	if role == "" {
 		role = domain.RoleViewer
 	}
-	if !validPrivateRole(role) {
+	if !validEncryptedRole(role) {
 		return nil, fmt.Errorf("invalid role")
 	}
 	authz, _ := h.rbac.LoadAuthzContext(ctx, principal, orgID)
@@ -367,7 +367,7 @@ func (h *PrivateDomainHandlers) CreateInvite(ctx context.Context, request Privat
 	return invite, nil
 }
 
-func (h *PrivateDomainHandlers) RevokeInvite(ctx context.Context, request PrivateRequest) (any, error) {
+func (h *EncryptedDomainHandlers) RevokeInvite(ctx context.Context, request EncryptedRequest) (any, error) {
 	if err := h.requireOrgDeps(); err != nil {
 		return nil, err
 	}
@@ -375,14 +375,14 @@ func (h *PrivateDomainHandlers) RevokeInvite(ctx context.Context, request Privat
 		OrgID    string `json:"org_id"`
 		InviteID string `json:"invite_id"`
 	}
-	if err := decodePrivatePayload(request, &payload); err != nil {
+	if err := decodeEncryptedPayload(request, &payload); err != nil {
 		return nil, err
 	}
-	orgID, err := parsePrivateUUID(payload.OrgID, "org ID")
+	orgID, err := parseEncryptedUUID(payload.OrgID, "org ID")
 	if err != nil {
 		return nil, err
 	}
-	inviteID, err := parsePrivateUUID(payload.InviteID, "invite ID")
+	inviteID, err := parseEncryptedUUID(payload.InviteID, "invite ID")
 	if err != nil {
 		return nil, err
 	}
@@ -398,7 +398,7 @@ func (h *PrivateDomainHandlers) RevokeInvite(ctx context.Context, request Privat
 	return map[string]string{"message": "invite revoked"}, nil
 }
 
-func (h *PrivateDomainHandlers) UpdateMemberRole(ctx context.Context, request PrivateRequest) (any, error) {
+func (h *EncryptedDomainHandlers) UpdateMemberRole(ctx context.Context, request EncryptedRequest) (any, error) {
 	if err := h.requireOrgDeps(); err != nil {
 		return nil, err
 	}
@@ -407,18 +407,18 @@ func (h *PrivateDomainHandlers) UpdateMemberRole(ctx context.Context, request Pr
 		Pubkey string      `json:"pubkey"`
 		Role   domain.Role `json:"role"`
 	}
-	if err := decodePrivatePayload(request, &payload); err != nil {
+	if err := decodeEncryptedPayload(request, &payload); err != nil {
 		return nil, err
 	}
-	orgID, err := parsePrivateUUID(payload.OrgID, "org ID")
+	orgID, err := parseEncryptedUUID(payload.OrgID, "org ID")
 	if err != nil {
 		return nil, err
 	}
-	targetPubkey := normalizePrivatePubkey(payload.Pubkey)
+	targetPubkey := normalizeEncryptedPubkey(payload.Pubkey)
 	if targetPubkey == "" {
 		return nil, fmt.Errorf("pubkey is required")
 	}
-	if !validPrivateRole(payload.Role) {
+	if !validEncryptedRole(payload.Role) {
 		return nil, fmt.Errorf("invalid role")
 	}
 	principal := requestPrincipal(request)
@@ -445,7 +445,7 @@ func (h *PrivateDomainHandlers) UpdateMemberRole(ctx context.Context, request Pr
 	return map[string]string{"message": "role updated"}, nil
 }
 
-func (h *PrivateDomainHandlers) RemoveMember(ctx context.Context, request PrivateRequest) (any, error) {
+func (h *EncryptedDomainHandlers) RemoveMember(ctx context.Context, request EncryptedRequest) (any, error) {
 	if err := h.requireOrgDeps(); err != nil {
 		return nil, err
 	}
@@ -453,14 +453,14 @@ func (h *PrivateDomainHandlers) RemoveMember(ctx context.Context, request Privat
 		OrgID  string `json:"org_id"`
 		Pubkey string `json:"pubkey"`
 	}
-	if err := decodePrivatePayload(request, &payload); err != nil {
+	if err := decodeEncryptedPayload(request, &payload); err != nil {
 		return nil, err
 	}
-	orgID, err := parsePrivateUUID(payload.OrgID, "org ID")
+	orgID, err := parseEncryptedUUID(payload.OrgID, "org ID")
 	if err != nil {
 		return nil, err
 	}
-	targetPubkey := normalizePrivatePubkey(payload.Pubkey)
+	targetPubkey := normalizeEncryptedPubkey(payload.Pubkey)
 	if targetPubkey == "" {
 		return nil, fmt.Errorf("pubkey is required")
 	}
@@ -495,7 +495,7 @@ func (h *PrivateDomainHandlers) RemoveMember(ctx context.Context, request Privat
 	return map[string]string{"message": "member removed"}, nil
 }
 
-func (h *PrivateDomainHandlers) lookupOrg(ctx context.Context, idOrName string) (*domain.Organization, error) {
+func (h *EncryptedDomainHandlers) lookupOrg(ctx context.Context, idOrName string) (*domain.Organization, error) {
 	idOrName = strings.TrimSpace(idOrName)
 	if idOrName == "" {
 		return nil, fmt.Errorf("org ID is required")
@@ -514,29 +514,29 @@ func (h *PrivateDomainHandlers) lookupOrg(ctx context.Context, idOrName string) 
 	return org, err
 }
 
-func (h *PrivateDomainHandlers) requireOrgDeps() error {
+func (h *EncryptedDomainHandlers) requireOrgDeps() error {
 	if h.orgs == nil || h.members == nil || h.invites == nil || h.rbac == nil {
 		return fmt.Errorf("organization service is not configured")
 	}
 	return nil
 }
 
-func requestPrincipal(request PrivateRequest) *auth.Principal {
-	pubkey := normalizePrivatePubkey(request.Event.PubKey)
+func requestPrincipal(request EncryptedRequest) *auth.Principal {
+	pubkey := normalizeEncryptedPubkey(request.Event.PubKey)
 	return &auth.Principal{Subject: pubkey, Method: auth.MethodNIP98, PubKey: pubkey}
 }
 
-func decodePrivatePayload(request PrivateRequest, out any) error {
+func decodeEncryptedPayload(request EncryptedRequest, out any) error {
 	if len(request.Envelope.Payload) == 0 || string(request.Envelope.Payload) == "null" {
 		return nil
 	}
 	if err := json.Unmarshal(request.Envelope.Payload, out); err != nil {
-		return fmt.Errorf("invalid private request payload: %w", err)
+		return fmt.Errorf("invalid encrypted request payload: %w", err)
 	}
 	return nil
 }
 
-func parsePrivateUUID(value, field string) (uuid.UUID, error) {
+func parseEncryptedUUID(value, field string) (uuid.UUID, error) {
 	id, err := uuid.Parse(strings.TrimSpace(value))
 	if err != nil {
 		return uuid.Nil, fmt.Errorf("invalid %s", field)
@@ -544,11 +544,11 @@ func parsePrivateUUID(value, field string) (uuid.UUID, error) {
 	return id, nil
 }
 
-func normalizePrivatePubkey(pubkey string) string {
+func normalizeEncryptedPubkey(pubkey string) string {
 	return strings.ToLower(strings.TrimSpace(pubkey))
 }
 
-func validPrivateRole(role domain.Role) bool {
+func validEncryptedRole(role domain.Role) bool {
 	for _, candidate := range domain.AllRoles() {
 		if candidate == role {
 			return true

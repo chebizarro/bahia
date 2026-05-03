@@ -15,27 +15,27 @@ import (
 )
 
 const (
-	PrivateTransportVersion = "bahia-private-v1"
-	KindPrivateRequest      = 5980 // Browser → Bahia encrypted private-domain request
-	KindPrivateResult       = 7980 // Bahia → Browser encrypted private-domain result
+	EncryptedRequestWireVersion = "bahia-private-v1"
+	KindEncryptedRequest        = 5980 // Browser → Bahia encrypted request
+	KindEncryptedResult         = 7980 // Bahia → Browser encrypted result
 )
 
-// PrivateRelaySubscriber is the relay subscription contract used by the private
-// transport runner. RelayPool satisfies this interface.
-type PrivateRelaySubscriber interface {
+// EncryptedRequestSubscriber is the relay subscription contract used by the
+// encrypted request transport runner. RelayPool satisfies this interface.
+type EncryptedRequestSubscriber interface {
 	SubscribeAllWithEOSE(ctx context.Context, filters []nostr.Filter) (*nostrpool.MergedSubscription, error)
 }
 
-// PrivateRequestEnvelope is encrypted inside kind:5980 request content.
-type PrivateRequestEnvelope struct {
+// EncryptedRequestEnvelope is encrypted inside kind:5980 request content.
+type EncryptedRequestEnvelope struct {
 	Version         string          `json:"version"`
 	Operation       string          `json:"operation"`
 	RequesterPubkey string          `json:"requester_pubkey"`
 	Payload         json.RawMessage `json:"payload"`
 }
 
-// PrivateResultEnvelope is encrypted inside kind:7980 result content.
-type PrivateResultEnvelope struct {
+// EncryptedResultEnvelope is encrypted inside kind:7980 result content.
+type EncryptedResultEnvelope struct {
 	Version        string       `json:"version"`
 	RequestEventID string       `json:"request_event_id"`
 	Status         string       `json:"status"`
@@ -43,22 +43,22 @@ type PrivateResultEnvelope struct {
 	Error          *ResultError `json:"error,omitempty"`
 }
 
-// ResultError is the encrypted terminal error shape for private requests.
+// ResultError is the encrypted terminal error shape for encrypted requests.
 type ResultError struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
 }
 
-// PrivateRequest is passed to operation handlers after auth and decryption.
-type PrivateRequest struct {
+// EncryptedRequest is passed to operation handlers after auth and decryption.
+type EncryptedRequest struct {
 	Event    *nostr.Event
-	Envelope PrivateRequestEnvelope
+	Envelope EncryptedRequestEnvelope
 }
 
-// PrivateRequestHandler handles a decrypted private-domain request.
-type PrivateRequestHandler func(ctx context.Context, request PrivateRequest) (any, error)
+// EncryptedRequestHandler handles a decrypted encrypted request.
+type EncryptedRequestHandler func(ctx context.Context, request EncryptedRequest) (any, error)
 
-// EncryptedResponder decrypts incoming private requests and publishes encrypted
+// EncryptedResponder decrypts incoming encrypted requests and publishes encrypted
 // correlated results back to the requester.
 type EncryptedResponder struct {
 	publisher     NostrEventPublisher
@@ -103,7 +103,7 @@ func (r *EncryptedResponder) DecryptRequestContent(event *nostr.Event) ([]byte, 
 	}
 	plaintext, err := nip44.Decrypt(event.Content, conversationKey)
 	if err != nil {
-		return nil, fmt.Errorf("decrypt private request content: %w", err)
+		return nil, fmt.Errorf("decrypt encrypted request content: %w", err)
 	}
 	return []byte(plaintext), nil
 }
@@ -118,8 +118,8 @@ func (r *EncryptedResponder) PublishEncryptedResult(ctx context.Context, request
 	if status == "" {
 		status = "ok"
 	}
-	envelope := PrivateResultEnvelope{
-		Version:        PrivateTransportVersion,
+	envelope := EncryptedResultEnvelope{
+		Version:        EncryptedRequestWireVersion,
 		RequestEventID: requestEvent.ID,
 		Status:         status,
 		Payload:        payload,
@@ -127,7 +127,7 @@ func (r *EncryptedResponder) PublishEncryptedResult(ctx context.Context, request
 	}
 	content, err := json.Marshal(envelope)
 	if err != nil {
-		return fmt.Errorf("marshal private result envelope: %w", err)
+		return fmt.Errorf("marshal encrypted result envelope: %w", err)
 	}
 	conversationKey, err := r.conversationKey(requestEvent.PubKey)
 	if err != nil {
@@ -135,73 +135,73 @@ func (r *EncryptedResponder) PublishEncryptedResult(ctx context.Context, request
 	}
 	ciphertext, err := nip44.Encrypt(string(content), conversationKey)
 	if err != nil {
-		return fmt.Errorf("encrypt private result content: %w", err)
+		return fmt.Errorf("encrypt encrypted result content: %w", err)
 	}
 	event := &nostr.Event{
-		Kind:      KindPrivateResult,
+		Kind:      KindEncryptedResult,
 		CreatedAt: nostr.Now(),
 		Tags: nostr.Tags{
 			{"e", requestEvent.ID, "", "reply"},
 			{"p", requestEvent.PubKey},
-			{"private", PrivateTransportVersion},
+			{"private", EncryptedRequestWireVersion},
 			{"status", status},
 		},
 		Content: ciphertext,
 	}
 	if err := SignGoNostrEvent(ctx, r.signer, event); err != nil {
-		return fmt.Errorf("sign private result event: %w", err)
+		return fmt.Errorf("sign encrypted result event: %w", err)
 	}
 	published, err := r.publisher.Publish(ctx, *event)
 	if err != nil {
-		return fmt.Errorf("publish private result event: %w", err)
+		return fmt.Errorf("publish encrypted result event: %w", err)
 	}
 	if published == 0 {
-		return fmt.Errorf("publish private result event: no relay accepted event")
+		return fmt.Errorf("publish encrypted result event: no relay accepted event")
 	}
 	return nil
 }
 
 func (r *EncryptedResponder) conversationKey(counterpartyPubkey string) ([32]byte, error) {
 	if r == nil || strings.TrimSpace(r.privateKey) == "" {
-		return [32]byte{}, fmt.Errorf("private transport NIP-44 key is not configured")
+		return [32]byte{}, fmt.Errorf("encrypted request NIP-44 key is not configured")
 	}
 	if counterpartyPubkey == "" {
 		return [32]byte{}, fmt.Errorf("counterparty pubkey is required")
 	}
 	conversationKey, err := nip44.GenerateConversationKey(counterpartyPubkey, r.privateKey)
 	if err != nil {
-		return [32]byte{}, fmt.Errorf("generate private transport conversation key: %w", err)
+		return [32]byte{}, fmt.Errorf("generate encrypted request conversation key: %w", err)
 	}
 	return conversationKey, nil
 }
 
-// PrivateTransport subscribes to encrypted private request events and dispatches
-// them to operation handlers. It never publishes private payloads as public
+// EncryptedRequestTransport subscribes to encrypted request events and dispatches
+// them to operation handlers. It never publishes sensitive payloads as public
 // sidecar projections.
-type PrivateTransport struct {
-	subscriber        PrivateRelaySubscriber
+type EncryptedRequestTransport struct {
+	subscriber        EncryptedRequestSubscriber
 	responder         *EncryptedResponder
 	authorizedPubkeys []string
-	handlers          map[string]PrivateRequestHandler
+	handlers          map[string]EncryptedRequestHandler
 	dedup             *nostrpool.EventDeduplicator
 	logger            *zap.Logger
 }
 
-func NewPrivateTransport(subscriber PrivateRelaySubscriber, responder *EncryptedResponder, authorizedPubkeys []string, logger *zap.Logger) *PrivateTransport {
+func NewEncryptedRequestTransport(subscriber EncryptedRequestSubscriber, responder *EncryptedResponder, authorizedPubkeys []string, logger *zap.Logger) *EncryptedRequestTransport {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
-	return &PrivateTransport{
+	return &EncryptedRequestTransport{
 		subscriber:        subscriber,
 		responder:         responder,
 		authorizedPubkeys: append([]string(nil), authorizedPubkeys...),
-		handlers:          make(map[string]PrivateRequestHandler),
+		handlers:          make(map[string]EncryptedRequestHandler),
 		dedup:             nostrpool.NewEventDeduplicator(10000),
-		logger:            logger.Named("private-transport"),
+		logger:            logger.Named("encrypted-request-transport"),
 	}
 }
 
-func (t *PrivateTransport) RegisterHandler(operation string, handler PrivateRequestHandler) {
+func (t *EncryptedRequestTransport) RegisterHandler(operation string, handler EncryptedRequestHandler) {
 	operation = strings.TrimSpace(operation)
 	if operation == "" || handler == nil {
 		return
@@ -209,18 +209,18 @@ func (t *PrivateTransport) RegisterHandler(operation string, handler PrivateRequ
 	t.handlers[operation] = handler
 }
 
-func (t *PrivateTransport) Run(ctx context.Context) error {
+func (t *EncryptedRequestTransport) Run(ctx context.Context) error {
 	if t.subscriber == nil {
-		return fmt.Errorf("private transport subscriber is not configured")
+		return fmt.Errorf("encrypted request subscriber is not configured")
 	}
 	now := nostr.Now()
-	filter := nostr.Filter{Kinds: []int{KindPrivateRequest}, Since: &now, Tags: nostr.TagMap{"private": {PrivateTransportVersion}}}
+	filter := nostr.Filter{Kinds: []int{KindEncryptedRequest}, Since: &now, Tags: nostr.TagMap{"private": {EncryptedRequestWireVersion}}}
 	if servicePubkey := t.responder.ServicePubkey(); servicePubkey != "" {
 		filter.Tags["p"] = []string{servicePubkey}
 	}
 	merged, err := t.subscriber.SubscribeAllWithEOSE(ctx, []nostr.Filter{filter})
 	if err != nil {
-		return fmt.Errorf("subscribe private transport: %w", err)
+		return fmt.Errorf("subscribe encrypted request transport: %w", err)
 	}
 	for {
 		select {
@@ -239,13 +239,13 @@ func (t *PrivateTransport) Run(ctx context.Context) error {
 	}
 }
 
-func (t *PrivateTransport) HandleEvent(ctx context.Context, event *nostr.Event) {
-	if event == nil || event.Kind != KindPrivateRequest {
+func (t *EncryptedRequestTransport) HandleEvent(ctx context.Context, event *nostr.Event) {
+	if event == nil || event.Kind != KindEncryptedRequest {
 		return
 	}
 	ok, err := event.CheckSignature()
 	if err != nil || !ok {
-		t.logger.Warn("invalid private request signature", zap.String("event_id", event.ID), zap.Error(err))
+		t.logger.Warn("invalid encrypted request signature", zap.String("event_id", event.ID), zap.Error(err))
 		return
 	}
 	if t.dedup.IsDuplicate(event.ID) {
@@ -257,24 +257,24 @@ func (t *PrivateTransport) HandleEvent(ctx context.Context, event *nostr.Event) 
 	}
 
 	if !t.authorized(event.PubKey) {
-		t.publishError(ctx, event, "unauthorized", "requester is not authorized for private Bahia transport")
+		t.publishError(ctx, event, "unauthorized", "requester is not authorized for encrypted Bahia requests")
 		return
 	}
 
 	plaintext, err := t.responder.DecryptRequestContent(event)
 	if err != nil {
-		t.logger.Warn("failed to decrypt private request", zap.String("event_id", event.ID), zap.Error(err))
-		t.publishError(ctx, event, "decrypt_failed", "private request content could not be decrypted")
+		t.logger.Warn("failed to decrypt encrypted request", zap.String("event_id", event.ID), zap.Error(err))
+		t.publishError(ctx, event, "decrypt_failed", "encrypted request content could not be decrypted")
 		return
 	}
 
-	var envelope PrivateRequestEnvelope
+	var envelope EncryptedRequestEnvelope
 	if err := json.Unmarshal(plaintext, &envelope); err != nil {
-		t.publishError(ctx, event, "invalid_payload", "private request payload is not valid JSON")
+		t.publishError(ctx, event, "invalid_payload", "encrypted request payload is not valid JSON")
 		return
 	}
-	if envelope.Version != "" && envelope.Version != PrivateTransportVersion {
-		t.publishError(ctx, event, "unsupported_version", "private request version is not supported")
+	if envelope.Version != "" && envelope.Version != EncryptedRequestWireVersion {
+		t.publishError(ctx, event, "unsupported_version", "encrypted request version is not supported")
 		return
 	}
 	if envelope.RequesterPubkey != "" && envelope.RequesterPubkey != event.PubKey {
@@ -283,30 +283,30 @@ func (t *PrivateTransport) HandleEvent(ctx context.Context, event *nostr.Event) 
 	}
 	operation := strings.TrimSpace(envelope.Operation)
 	if operation == "" {
-		t.publishError(ctx, event, "missing_operation", "private request operation is required")
+		t.publishError(ctx, event, "missing_operation", "encrypted request operation is required")
 		return
 	}
 	handler := t.handlers[operation]
 	if handler == nil {
-		t.publishError(ctx, event, "unknown_operation", "private request operation is not registered")
+		t.publishError(ctx, event, "unknown_operation", "encrypted request operation is not registered")
 		return
 	}
-	payload, err := handler(ctx, PrivateRequest{Event: event, Envelope: envelope})
+	payload, err := handler(ctx, EncryptedRequest{Event: event, Envelope: envelope})
 	if err != nil {
 		t.publishError(ctx, event, "handler_failed", err.Error())
 		return
 	}
 	if err := t.responder.PublishEncryptedResult(ctx, event, "ok", payload, nil); err != nil {
-		t.logger.Error("publish private result failed", zap.String("event_id", event.ID), zap.Error(err))
+		t.logger.Error("publish encrypted result failed", zap.String("event_id", event.ID), zap.Error(err))
 	}
 }
 
-func (t *PrivateTransport) authorized(pubkey string) bool {
+func (t *EncryptedRequestTransport) authorized(pubkey string) bool {
 	return len(t.authorizedPubkeys) == 0 || slices.Contains(t.authorizedPubkeys, pubkey)
 }
 
-func (t *PrivateTransport) matchesRoutingTags(event *nostr.Event) bool {
-	if event == nil || !tagContains(event.Tags, "private", PrivateTransportVersion) {
+func (t *EncryptedRequestTransport) matchesRoutingTags(event *nostr.Event) bool {
+	if event == nil || !tagContains(event.Tags, "private", EncryptedRequestWireVersion) {
 		return false
 	}
 	servicePubkey := t.responder.ServicePubkey()
@@ -322,12 +322,12 @@ func tagContains(tags nostr.Tags, name, value string) bool {
 	return false
 }
 
-func (t *PrivateTransport) publishError(ctx context.Context, event *nostr.Event, code, message string) {
+func (t *EncryptedRequestTransport) publishError(ctx context.Context, event *nostr.Event, code, message string) {
 	if t.responder == nil {
-		t.logger.Warn("private transport responder unavailable", zap.String("event_id", event.ID), zap.String("code", code))
+		t.logger.Warn("encrypted request responder unavailable", zap.String("event_id", event.ID), zap.String("code", code))
 		return
 	}
 	if err := t.responder.PublishEncryptedResult(ctx, event, "error", nil, &ResultError{Code: code, Message: message}); err != nil {
-		t.logger.Error("publish private error result failed", zap.String("event_id", event.ID), zap.String("code", code), zap.Error(err))
+		t.logger.Error("publish encrypted error result failed", zap.String("event_id", event.ID), zap.String("code", code), zap.Error(err))
 	}
 }

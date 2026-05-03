@@ -15,67 +15,67 @@ import (
 	"go.uber.org/zap"
 )
 
-type privatePaymentRepo struct {
+type encryptedPaymentRepo struct {
 	lastWorker string
 	lastLimit  int
 	records    []domain.PaymentRecord
 }
 
-func (r *privatePaymentRepo) Create(context.Context, *domain.PaymentRecord) error { return nil }
-func (r *privatePaymentRepo) GetByID(context.Context, uuid.UUID) (*domain.PaymentRecord, error) {
+func (r *encryptedPaymentRepo) Create(context.Context, *domain.PaymentRecord) error { return nil }
+func (r *encryptedPaymentRepo) GetByID(context.Context, uuid.UUID) (*domain.PaymentRecord, error) {
 	return nil, repository.ErrNotFound
 }
-func (r *privatePaymentRepo) ListByRun(context.Context, uuid.UUID) ([]domain.PaymentRecord, error) {
+func (r *encryptedPaymentRepo) ListByRun(context.Context, uuid.UUID) ([]domain.PaymentRecord, error) {
 	return nil, nil
 }
-func (r *privatePaymentRepo) ListByWorker(_ context.Context, workerPubkey string, limit int) ([]domain.PaymentRecord, error) {
+func (r *encryptedPaymentRepo) ListByWorker(_ context.Context, workerPubkey string, limit int) ([]domain.PaymentRecord, error) {
 	r.lastWorker = workerPubkey
 	r.lastLimit = limit
 	return r.records, nil
 }
-func (r *privatePaymentRepo) UpdateStatus(context.Context, uuid.UUID, domain.PaymentStatus, string) error {
+func (r *encryptedPaymentRepo) UpdateStatus(context.Context, uuid.UUID, domain.PaymentStatus, string) error {
 	return nil
 }
-func (r *privatePaymentRepo) GetByTokenHash(context.Context, string) (*domain.PaymentRecord, error) {
+func (r *encryptedPaymentRepo) GetByTokenHash(context.Context, string) (*domain.PaymentRecord, error) {
 	return nil, repository.ErrNotFound
 }
 
-type privateOrgRepo struct {
+type encryptedOrgRepo struct {
 	byID   map[uuid.UUID]*domain.Organization
 	byName map[string]*domain.Organization
 }
 
-func newPrivateOrgRepo() *privateOrgRepo {
-	return &privateOrgRepo{byID: map[uuid.UUID]*domain.Organization{}, byName: map[string]*domain.Organization{}}
+func newEncryptedOrgRepo() *encryptedOrgRepo {
+	return &encryptedOrgRepo{byID: map[uuid.UUID]*domain.Organization{}, byName: map[string]*domain.Organization{}}
 }
-func (r *privateOrgRepo) Create(_ context.Context, org *domain.Organization) error {
+func (r *encryptedOrgRepo) Create(_ context.Context, org *domain.Organization) error {
 	copy := *org
 	r.byID[org.ID] = &copy
 	r.byName[org.Name] = &copy
 	return nil
 }
-func (r *privateOrgRepo) GetByID(_ context.Context, id uuid.UUID) (*domain.Organization, error) {
+func (r *encryptedOrgRepo) GetByID(_ context.Context, id uuid.UUID) (*domain.Organization, error) {
 	if org := r.byID[id]; org != nil {
 		copy := *org
 		return &copy, nil
 	}
 	return nil, repository.ErrNotFound
 }
-func (r *privateOrgRepo) GetByName(_ context.Context, name string) (*domain.Organization, error) {
+func (r *encryptedOrgRepo) GetByName(_ context.Context, name string) (*domain.Organization, error) {
 	if org := r.byName[name]; org != nil {
 		copy := *org
 		return &copy, nil
 	}
 	return nil, repository.ErrNotFound
 }
-func (r *privateOrgRepo) List(context.Context) ([]domain.Organization, error) { return nil, nil }
-func (r *privateOrgRepo) Update(_ context.Context, org *domain.Organization) error {
+func (r *encryptedOrgRepo) List(context.Context) ([]domain.Organization, error) { return nil, nil }
+func (r *encryptedOrgRepo) Update(_ context.Context, org *domain.Organization) error {
 	copy := *org
 	r.byID[org.ID] = &copy
 	r.byName[org.Name] = &copy
 	return nil
 }
-func (r *privateOrgRepo) Delete(_ context.Context, id uuid.UUID) error {
+func (r *encryptedOrgRepo) Delete(_ context.Context, id uuid.UUID) error {
 	org := r.byID[id]
 	if org == nil {
 		return repository.ErrNotFound
@@ -85,15 +85,15 @@ func (r *privateOrgRepo) Delete(_ context.Context, id uuid.UUID) error {
 	return nil
 }
 
-type privateMemberRepo struct {
+type encryptedMemberRepo struct {
 	members []domain.OrgMember
 }
 
-func (r *privateMemberRepo) Add(_ context.Context, member *domain.OrgMember) error {
+func (r *encryptedMemberRepo) Add(_ context.Context, member *domain.OrgMember) error {
 	r.members = append(r.members, *member)
 	return nil
 }
-func (r *privateMemberRepo) GetMember(_ context.Context, orgID uuid.UUID, pubkey string) (*domain.OrgMember, error) {
+func (r *encryptedMemberRepo) GetMember(_ context.Context, orgID uuid.UUID, pubkey string) (*domain.OrgMember, error) {
 	for _, member := range r.members {
 		if member.OrgID == orgID && member.Pubkey == pubkey {
 			copy := member
@@ -102,7 +102,7 @@ func (r *privateMemberRepo) GetMember(_ context.Context, orgID uuid.UUID, pubkey
 	}
 	return nil, repository.ErrNotFound
 }
-func (r *privateMemberRepo) ListByOrg(_ context.Context, orgID uuid.UUID) ([]domain.OrgMember, error) {
+func (r *encryptedMemberRepo) ListByOrg(_ context.Context, orgID uuid.UUID) ([]domain.OrgMember, error) {
 	var out []domain.OrgMember
 	for _, member := range r.members {
 		if member.OrgID == orgID {
@@ -111,7 +111,7 @@ func (r *privateMemberRepo) ListByOrg(_ context.Context, orgID uuid.UUID) ([]dom
 	}
 	return out, nil
 }
-func (r *privateMemberRepo) ListByPubkey(_ context.Context, pubkey string) ([]domain.OrgMember, error) {
+func (r *encryptedMemberRepo) ListByPubkey(_ context.Context, pubkey string) ([]domain.OrgMember, error) {
 	var out []domain.OrgMember
 	for _, member := range r.members {
 		if member.Pubkey == pubkey {
@@ -120,7 +120,7 @@ func (r *privateMemberRepo) ListByPubkey(_ context.Context, pubkey string) ([]do
 	}
 	return out, nil
 }
-func (r *privateMemberRepo) UpdateRole(_ context.Context, orgID uuid.UUID, pubkey string, role domain.Role) error {
+func (r *encryptedMemberRepo) UpdateRole(_ context.Context, orgID uuid.UUID, pubkey string, role domain.Role) error {
 	for i := range r.members {
 		if r.members[i].OrgID == orgID && r.members[i].Pubkey == pubkey {
 			r.members[i].Role = role
@@ -129,7 +129,7 @@ func (r *privateMemberRepo) UpdateRole(_ context.Context, orgID uuid.UUID, pubke
 	}
 	return repository.ErrNotFound
 }
-func (r *privateMemberRepo) Remove(_ context.Context, orgID uuid.UUID, pubkey string) error {
+func (r *encryptedMemberRepo) Remove(_ context.Context, orgID uuid.UUID, pubkey string) error {
 	for i, member := range r.members {
 		if member.OrgID == orgID && member.Pubkey == pubkey {
 			r.members = append(r.members[:i], r.members[i+1:]...)
@@ -139,18 +139,18 @@ func (r *privateMemberRepo) Remove(_ context.Context, orgID uuid.UUID, pubkey st
 	return repository.ErrNotFound
 }
 
-type privateInviteRepo struct {
+type encryptedInviteRepo struct {
 	invites []domain.OrgInvite
 }
 
-func (r *privateInviteRepo) Create(_ context.Context, invite *domain.OrgInvite) error {
+func (r *encryptedInviteRepo) Create(_ context.Context, invite *domain.OrgInvite) error {
 	if invite.ID == uuid.Nil {
 		invite.ID = uuid.New()
 	}
 	r.invites = append(r.invites, *invite)
 	return nil
 }
-func (r *privateInviteRepo) GetByID(_ context.Context, id uuid.UUID) (*domain.OrgInvite, error) {
+func (r *encryptedInviteRepo) GetByID(_ context.Context, id uuid.UUID) (*domain.OrgInvite, error) {
 	for _, invite := range r.invites {
 		if invite.ID == id {
 			copy := invite
@@ -159,7 +159,7 @@ func (r *privateInviteRepo) GetByID(_ context.Context, id uuid.UUID) (*domain.Or
 	}
 	return nil, repository.ErrNotFound
 }
-func (r *privateInviteRepo) ListByOrg(_ context.Context, orgID uuid.UUID) ([]domain.OrgInvite, error) {
+func (r *encryptedInviteRepo) ListByOrg(_ context.Context, orgID uuid.UUID) ([]domain.OrgInvite, error) {
 	var out []domain.OrgInvite
 	for _, invite := range r.invites {
 		if invite.OrgID == orgID {
@@ -168,7 +168,7 @@ func (r *privateInviteRepo) ListByOrg(_ context.Context, orgID uuid.UUID) ([]dom
 	}
 	return out, nil
 }
-func (r *privateInviteRepo) ListByPubkey(_ context.Context, pubkey string) ([]domain.OrgInvite, error) {
+func (r *encryptedInviteRepo) ListByPubkey(_ context.Context, pubkey string) ([]domain.OrgInvite, error) {
 	var out []domain.OrgInvite
 	for _, invite := range r.invites {
 		if invite.Pubkey == pubkey {
@@ -177,7 +177,7 @@ func (r *privateInviteRepo) ListByPubkey(_ context.Context, pubkey string) ([]do
 	}
 	return out, nil
 }
-func (r *privateInviteRepo) Delete(_ context.Context, id uuid.UUID) error {
+func (r *encryptedInviteRepo) Delete(_ context.Context, id uuid.UUID) error {
 	for i, invite := range r.invites {
 		if invite.ID == id {
 			r.invites = append(r.invites[:i], r.invites[i+1:]...)
@@ -186,29 +186,29 @@ func (r *privateInviteRepo) Delete(_ context.Context, id uuid.UUID) error {
 	}
 	return repository.ErrNotFound
 }
-func (r *privateInviteRepo) DeleteExpired(context.Context) (int, error) { return 0, nil }
+func (r *encryptedInviteRepo) DeleteExpired(context.Context) (int, error) { return 0, nil }
 
-func privateRequestForTest(t *testing.T, pubkey string, payload any) PrivateRequest {
+func encryptedRequestForTest(t *testing.T, pubkey string, payload any) EncryptedRequest {
 	t.Helper()
 	encoded, err := json.Marshal(payload)
 	if err != nil {
 		t.Fatalf("marshal payload: %v", err)
 	}
-	return PrivateRequest{Event: &nostr.Event{PubKey: pubkey}, Envelope: PrivateRequestEnvelope{Payload: encoded}}
+	return EncryptedRequest{Event: &nostr.Event{PubKey: pubkey}, Envelope: EncryptedRequestEnvelope{Payload: encoded}}
 }
 
-func TestPrivateDomainHandlers_PaymentHistoryUsesPrivateOperationPayload(t *testing.T) {
+func TestEncryptedDomainHandlers_PaymentHistoryUsesEncryptedOperationPayload(t *testing.T) {
 	requesterPubkey, err := nostr.GetPublicKey(testRequesterKey)
 	if err != nil {
 		t.Fatal(err)
 	}
-	paymentRepo := &privatePaymentRepo{records: []domain.PaymentRecord{{WorkerPubkey: "worker-a", AmountSats: 21}}}
-	handlers := NewPrivateDomainHandlers(PrivateDomainHandlersConfig{
+	paymentRepo := &encryptedPaymentRepo{records: []domain.PaymentRecord{{WorkerPubkey: "worker-a", AmountSats: 21}}}
+	handlers := NewEncryptedDomainHandlers(EncryptedDomainHandlersConfig{
 		Payments: service.NewPaymentService(paymentRepo, nil, nil, zap.NewNop()),
 		Logger:   zap.NewNop(),
 	})
 
-	result, err := handlers.PaymentHistory(context.Background(), privateRequestForTest(t, requesterPubkey, map[string]any{"worker": "worker-a", "limit": 999}))
+	result, err := handlers.PaymentHistory(context.Background(), encryptedRequestForTest(t, requesterPubkey, map[string]any{"worker": "worker-a", "limit": 999}))
 	if err != nil {
 		t.Fatalf("PaymentHistory: %v", err)
 	}
@@ -220,23 +220,23 @@ func TestPrivateDomainHandlers_PaymentHistoryUsesPrivateOperationPayload(t *test
 	}
 }
 
-func TestPrivateDomainHandlers_CreateOrgHonorsBootstrapOwnerAndAddsOwner(t *testing.T) {
+func TestEncryptedDomainHandlers_CreateOrgHonorsBootstrapOwnerAndAddsOwner(t *testing.T) {
 	requesterPubkey, err := nostr.GetPublicKey(testRequesterKey)
 	if err != nil {
 		t.Fatal(err)
 	}
-	orgs := newPrivateOrgRepo()
-	members := &privateMemberRepo{}
-	handlers := NewPrivateDomainHandlers(PrivateDomainHandlersConfig{
+	orgs := newEncryptedOrgRepo()
+	members := &encryptedMemberRepo{}
+	handlers := NewEncryptedDomainHandlers(EncryptedDomainHandlersConfig{
 		Orgs:                  orgs,
 		Members:               members,
-		Invites:               &privateInviteRepo{},
+		Invites:               &encryptedInviteRepo{},
 		RBAC:                  auth.NewRBAC(members),
 		BootstrapOwnerPubkeys: []string{requesterPubkey},
 		Logger:                zap.NewNop(),
 	})
 
-	result, err := handlers.CreateOrg(context.Background(), privateRequestForTest(t, requesterPubkey, map[string]any{"name": "demo-org", "display_name": "Demo Org"}))
+	result, err := handlers.CreateOrg(context.Background(), encryptedRequestForTest(t, requesterPubkey, map[string]any{"name": "demo-org", "display_name": "Demo Org"}))
 	if err != nil {
 		t.Fatalf("CreateOrg: %v", err)
 	}
@@ -253,19 +253,19 @@ func TestPrivateDomainHandlers_CreateOrgHonorsBootstrapOwnerAndAddsOwner(t *test
 	}
 }
 
-func TestPrivateDomainHandlers_CreateInviteRejectsOwnerRoleFromAdmin(t *testing.T) {
+func TestEncryptedDomainHandlers_CreateInviteRejectsOwnerRoleFromAdmin(t *testing.T) {
 	requesterPubkey, err := nostr.GetPublicKey(testRequesterKey)
 	if err != nil {
 		t.Fatal(err)
 	}
 	orgID := uuid.New()
-	orgs := newPrivateOrgRepo()
+	orgs := newEncryptedOrgRepo()
 	_ = orgs.Create(context.Background(), &domain.Organization{ID: orgID, Name: "demo", DisplayName: "Demo", OwnerPubkey: "owner"})
-	members := &privateMemberRepo{members: []domain.OrgMember{{OrgID: orgID, Pubkey: requesterPubkey, Role: domain.RoleAdmin}}}
-	invites := &privateInviteRepo{}
-	handlers := NewPrivateDomainHandlers(PrivateDomainHandlersConfig{Orgs: orgs, Members: members, Invites: invites, RBAC: auth.NewRBAC(members), Logger: zap.NewNop()})
+	members := &encryptedMemberRepo{members: []domain.OrgMember{{OrgID: orgID, Pubkey: requesterPubkey, Role: domain.RoleAdmin}}}
+	invites := &encryptedInviteRepo{}
+	handlers := NewEncryptedDomainHandlers(EncryptedDomainHandlersConfig{Orgs: orgs, Members: members, Invites: invites, RBAC: auth.NewRBAC(members), Logger: zap.NewNop()})
 
-	_, err = handlers.CreateInvite(context.Background(), privateRequestForTest(t, requesterPubkey, map[string]any{
+	_, err = handlers.CreateInvite(context.Background(), encryptedRequestForTest(t, requesterPubkey, map[string]any{
 		"org_id": orgID.String(),
 		"pubkey": "b",
 		"role":   string(domain.RoleOwner),
@@ -278,19 +278,19 @@ func TestPrivateDomainHandlers_CreateInviteRejectsOwnerRoleFromAdmin(t *testing.
 	}
 }
 
-func TestPrivateDomainHandlers_OrgDetailReturnsAdminInvitesPrivately(t *testing.T) {
+func TestEncryptedDomainHandlers_OrgDetailReturnsAdminInvitesEncrypted(t *testing.T) {
 	requesterPubkey, err := nostr.GetPublicKey(testRequesterKey)
 	if err != nil {
 		t.Fatal(err)
 	}
 	orgID := uuid.New()
-	orgs := newPrivateOrgRepo()
+	orgs := newEncryptedOrgRepo()
 	_ = orgs.Create(context.Background(), &domain.Organization{ID: orgID, Name: "demo", DisplayName: "Demo", OwnerPubkey: requesterPubkey})
-	members := &privateMemberRepo{members: []domain.OrgMember{{OrgID: orgID, Pubkey: requesterPubkey, Role: domain.RoleAdmin}}}
-	invites := &privateInviteRepo{invites: []domain.OrgInvite{{ID: uuid.New(), OrgID: orgID, Pubkey: "b", Role: domain.RoleViewer, ExpiresAt: time.Now().Add(time.Hour)}}}
-	handlers := NewPrivateDomainHandlers(PrivateDomainHandlersConfig{Orgs: orgs, Members: members, Invites: invites, RBAC: auth.NewRBAC(members), Logger: zap.NewNop()})
+	members := &encryptedMemberRepo{members: []domain.OrgMember{{OrgID: orgID, Pubkey: requesterPubkey, Role: domain.RoleAdmin}}}
+	invites := &encryptedInviteRepo{invites: []domain.OrgInvite{{ID: uuid.New(), OrgID: orgID, Pubkey: "b", Role: domain.RoleViewer, ExpiresAt: time.Now().Add(time.Hour)}}}
+	handlers := NewEncryptedDomainHandlers(EncryptedDomainHandlersConfig{Orgs: orgs, Members: members, Invites: invites, RBAC: auth.NewRBAC(members), Logger: zap.NewNop()})
 
-	result, err := handlers.OrgDetail(context.Background(), privateRequestForTest(t, requesterPubkey, map[string]any{"id": orgID.String()}))
+	result, err := handlers.OrgDetail(context.Background(), encryptedRequestForTest(t, requesterPubkey, map[string]any{"id": orgID.String()}))
 	if err != nil {
 		t.Fatalf("OrgDetail: %v", err)
 	}

@@ -16,28 +16,28 @@ import (
 )
 
 const (
-	PrivateOperationServiceSecretsList   = "services.secrets.list"
-	PrivateOperationServiceSecretsCreate = "services.secrets.create"
-	PrivateOperationServiceSecretsUpdate = "services.secrets.update"
-	PrivateOperationServiceSecretsDelete = "services.secrets.delete"
-	PrivateOperationServiceSecretsReveal = "services.secrets.reveal"
+	EncryptedOperationServiceSecretsList   = "services.secrets.list"
+	EncryptedOperationServiceSecretsCreate = "services.secrets.create"
+	EncryptedOperationServiceSecretsUpdate = "services.secrets.update"
+	EncryptedOperationServiceSecretsDelete = "services.secrets.delete"
+	EncryptedOperationServiceSecretsReveal = "services.secrets.reveal"
 
-	PrivateOperationDeploymentRunLogsGet = "deployments.run_logs.get"
+	EncryptedOperationDeploymentRunLogsGet = "deployments.run_logs.get"
 
-	PrivateOperationArtifactSignaturesVerify = "artifacts.signatures.verify"
+	EncryptedOperationArtifactSignaturesVerify = "artifacts.signatures.verify"
 )
 
-// RunLogFetcher is the private transport contract for stored deployment run logs.
+// RunLogFetcher is the encrypted request contract for stored deployment run logs.
 type RunLogFetcher interface {
 	FetchRunLogs(ctx context.Context, run *domain.DeploymentRun) (*adapterruntime.RunLogs, error)
 }
 
-// SignatureVerifier is the private transport contract for artifact signature verification.
+// SignatureVerifier is the encrypted request contract for artifact signature verification.
 type SignatureVerifier interface {
 	VerifySignatures(ctx context.Context, artifact *domain.Artifact) ([]domain.ArtifactSignature, error)
 }
 
-type PrivateRouteHandlersConfig struct {
+type EncryptedRouteHandlersConfig struct {
 	Secrets      repository.SecretRepository
 	Encryptor    *secrets.Encryptor
 	Runs         repository.DeploymentRunRepository
@@ -51,7 +51,7 @@ type PrivateRouteHandlersConfig struct {
 	Logger       *zap.Logger
 }
 
-type PrivateRouteHandlers struct {
+type EncryptedRouteHandlers struct {
 	secrets      repository.SecretRepository
 	encryptor    *secrets.Encryptor
 	runs         repository.DeploymentRunRepository
@@ -65,15 +65,15 @@ type PrivateRouteHandlers struct {
 	logger       *zap.Logger
 }
 
-// NewPrivateRouteHandlers adapts sensitive route-only actions onto encrypted
-// signer-first private request/result operations. Secrets, stored run logs, and
+// NewEncryptedRouteHandlers adapts sensitive route-only actions onto encrypted
+// signer-first encrypted request/result operations. Secrets, stored run logs, and
 // signature verification results are never projected to the public sidecar.
-func NewPrivateRouteHandlers(cfg PrivateRouteHandlersConfig) *PrivateRouteHandlers {
+func NewEncryptedRouteHandlers(cfg EncryptedRouteHandlersConfig) *EncryptedRouteHandlers {
 	logger := cfg.Logger
 	if logger == nil {
 		logger = zap.NewNop()
 	}
-	return &PrivateRouteHandlers{
+	return &EncryptedRouteHandlers{
 		secrets:      cfg.Secrets,
 		encryptor:    cfg.Encryptor,
 		runs:         cfg.Runs,
@@ -84,24 +84,24 @@ func NewPrivateRouteHandlers(cfg PrivateRouteHandlersConfig) *PrivateRouteHandle
 		services:     cfg.Services,
 		intents:      cfg.Intents,
 		rbac:         cfg.RBAC,
-		logger:       logger.Named("private-route-handlers"),
+		logger:       logger.Named("encrypted-route-handlers"),
 	}
 }
 
-func (h *PrivateRouteHandlers) Register(transport *PrivateTransport) {
+func (h *EncryptedRouteHandlers) Register(transport *EncryptedRequestTransport) {
 	if h == nil || transport == nil {
 		return
 	}
-	transport.RegisterHandler(PrivateOperationServiceSecretsList, h.ListSecrets)
-	transport.RegisterHandler(PrivateOperationServiceSecretsCreate, h.CreateSecret)
-	transport.RegisterHandler(PrivateOperationServiceSecretsUpdate, h.UpdateSecret)
-	transport.RegisterHandler(PrivateOperationServiceSecretsDelete, h.DeleteSecret)
-	transport.RegisterHandler(PrivateOperationServiceSecretsReveal, h.RevealSecret)
-	transport.RegisterHandler(PrivateOperationDeploymentRunLogsGet, h.GetRunLogs)
-	transport.RegisterHandler(PrivateOperationArtifactSignaturesVerify, h.VerifyArtifactSignatures)
+	transport.RegisterHandler(EncryptedOperationServiceSecretsList, h.ListSecrets)
+	transport.RegisterHandler(EncryptedOperationServiceSecretsCreate, h.CreateSecret)
+	transport.RegisterHandler(EncryptedOperationServiceSecretsUpdate, h.UpdateSecret)
+	transport.RegisterHandler(EncryptedOperationServiceSecretsDelete, h.DeleteSecret)
+	transport.RegisterHandler(EncryptedOperationServiceSecretsReveal, h.RevealSecret)
+	transport.RegisterHandler(EncryptedOperationDeploymentRunLogsGet, h.GetRunLogs)
+	transport.RegisterHandler(EncryptedOperationArtifactSignaturesVerify, h.VerifyArtifactSignatures)
 }
 
-type secretPrivatePayload struct {
+type encryptedSecretPayload struct {
 	ServiceID        string `json:"service_id"`
 	SecretID         string `json:"secret_id,omitempty"`
 	Name             string `json:"name,omitempty"`
@@ -110,22 +110,22 @@ type secretPrivatePayload struct {
 	EncryptionMethod string `json:"encryption_method,omitempty"`
 }
 
-func (h *PrivateRouteHandlers) requireSecretDeps() error {
+func (h *EncryptedRouteHandlers) requireSecretDeps() error {
 	if h.secrets == nil || h.encryptor == nil {
-		return fmt.Errorf("secret private transport is not configured")
+		return fmt.Errorf("encrypted secret request handling is not configured")
 	}
 	return nil
 }
 
-func (h *PrivateRouteHandlers) ListSecrets(ctx context.Context, request PrivateRequest) (any, error) {
+func (h *EncryptedRouteHandlers) ListSecrets(ctx context.Context, request EncryptedRequest) (any, error) {
 	if err := h.requireSecretDeps(); err != nil {
 		return nil, err
 	}
-	var payload secretPrivatePayload
-	if err := decodePrivatePayload(request, &payload); err != nil {
+	var payload encryptedSecretPayload
+	if err := decodeEncryptedPayload(request, &payload); err != nil {
 		return nil, err
 	}
-	serviceID, err := parsePrivateUUID(payload.ServiceID, "service ID")
+	serviceID, err := parseEncryptedUUID(payload.ServiceID, "service ID")
 	if err != nil {
 		return nil, err
 	}
@@ -143,15 +143,15 @@ func (h *PrivateRouteHandlers) ListSecrets(ctx context.Context, request PrivateR
 	return map[string]any{"secrets": refs, "total": len(refs)}, nil
 }
 
-func (h *PrivateRouteHandlers) CreateSecret(ctx context.Context, request PrivateRequest) (any, error) {
+func (h *EncryptedRouteHandlers) CreateSecret(ctx context.Context, request EncryptedRequest) (any, error) {
 	if err := h.requireSecretDeps(); err != nil {
 		return nil, err
 	}
-	var payload secretPrivatePayload
-	if err := decodePrivatePayload(request, &payload); err != nil {
+	var payload encryptedSecretPayload
+	if err := decodeEncryptedPayload(request, &payload); err != nil {
 		return nil, err
 	}
-	serviceID, err := parsePrivateUUID(payload.ServiceID, "service ID")
+	serviceID, err := parseEncryptedUUID(payload.ServiceID, "service ID")
 	if err != nil {
 		return nil, err
 	}
@@ -181,12 +181,12 @@ func (h *PrivateRouteHandlers) CreateSecret(ctx context.Context, request Private
 		EncryptedValue:   encrypted,
 		EncryptionMethod: method,
 		Version:          1,
-		CreatedBy:        normalizePrivatePubkey(request.Event.PubKey),
+		CreatedBy:        normalizeEncryptedPubkey(request.Event.PubKey),
 		CreatedAt:        now,
 		UpdatedAt:        now,
 	}
 	if strings.TrimSpace(payload.EnvironmentID) != "" {
-		envID, err := parsePrivateUUID(payload.EnvironmentID, "environment ID")
+		envID, err := parseEncryptedUUID(payload.EnvironmentID, "environment ID")
 		if err != nil {
 			return nil, err
 		}
@@ -198,19 +198,19 @@ func (h *PrivateRouteHandlers) CreateSecret(ctx context.Context, request Private
 	return map[string]any{"secret": secret.ToRef(), "status": "created"}, nil
 }
 
-func (h *PrivateRouteHandlers) UpdateSecret(ctx context.Context, request PrivateRequest) (any, error) {
+func (h *EncryptedRouteHandlers) UpdateSecret(ctx context.Context, request EncryptedRequest) (any, error) {
 	if err := h.requireSecretDeps(); err != nil {
 		return nil, err
 	}
-	var payload secretPrivatePayload
-	if err := decodePrivatePayload(request, &payload); err != nil {
+	var payload encryptedSecretPayload
+	if err := decodeEncryptedPayload(request, &payload); err != nil {
 		return nil, err
 	}
-	serviceID, err := parsePrivateUUID(payload.ServiceID, "service ID")
+	serviceID, err := parseEncryptedUUID(payload.ServiceID, "service ID")
 	if err != nil {
 		return nil, err
 	}
-	secretID, err := parsePrivateUUID(payload.SecretID, "secret ID")
+	secretID, err := parseEncryptedUUID(payload.SecretID, "secret ID")
 	if err != nil {
 		return nil, err
 	}
@@ -244,19 +244,19 @@ func (h *PrivateRouteHandlers) UpdateSecret(ctx context.Context, request Private
 	return map[string]any{"secret": secret.ToRef(), "status": "updated"}, nil
 }
 
-func (h *PrivateRouteHandlers) DeleteSecret(ctx context.Context, request PrivateRequest) (any, error) {
+func (h *EncryptedRouteHandlers) DeleteSecret(ctx context.Context, request EncryptedRequest) (any, error) {
 	if err := h.requireSecretDeps(); err != nil {
 		return nil, err
 	}
-	var payload secretPrivatePayload
-	if err := decodePrivatePayload(request, &payload); err != nil {
+	var payload encryptedSecretPayload
+	if err := decodeEncryptedPayload(request, &payload); err != nil {
 		return nil, err
 	}
-	serviceID, err := parsePrivateUUID(payload.ServiceID, "service ID")
+	serviceID, err := parseEncryptedUUID(payload.ServiceID, "service ID")
 	if err != nil {
 		return nil, err
 	}
-	secretID, err := parsePrivateUUID(payload.SecretID, "secret ID")
+	secretID, err := parseEncryptedUUID(payload.SecretID, "secret ID")
 	if err != nil {
 		return nil, err
 	}
@@ -272,19 +272,19 @@ func (h *PrivateRouteHandlers) DeleteSecret(ctx context.Context, request Private
 	return map[string]string{"status": "deleted", "secret_id": secretID.String()}, nil
 }
 
-func (h *PrivateRouteHandlers) RevealSecret(ctx context.Context, request PrivateRequest) (any, error) {
+func (h *EncryptedRouteHandlers) RevealSecret(ctx context.Context, request EncryptedRequest) (any, error) {
 	if err := h.requireSecretDeps(); err != nil {
 		return nil, err
 	}
-	var payload secretPrivatePayload
-	if err := decodePrivatePayload(request, &payload); err != nil {
+	var payload encryptedSecretPayload
+	if err := decodeEncryptedPayload(request, &payload); err != nil {
 		return nil, err
 	}
-	serviceID, err := parsePrivateUUID(payload.ServiceID, "service ID")
+	serviceID, err := parseEncryptedUUID(payload.ServiceID, "service ID")
 	if err != nil {
 		return nil, err
 	}
-	secretID, err := parsePrivateUUID(payload.SecretID, "secret ID")
+	secretID, err := parseEncryptedUUID(payload.SecretID, "secret ID")
 	if err != nil {
 		return nil, err
 	}
@@ -302,7 +302,7 @@ func (h *PrivateRouteHandlers) RevealSecret(ctx context.Context, request Private
 	return map[string]any{"secret": secret.ToRef(), "value": value}, nil
 }
 
-func (h *PrivateRouteHandlers) secretForService(ctx context.Context, serviceID, secretID uuid.UUID) (*domain.ServiceSecret, error) {
+func (h *EncryptedRouteHandlers) secretForService(ctx context.Context, serviceID, secretID uuid.UUID) (*domain.ServiceSecret, error) {
 	secret, err := h.secrets.GetByID(ctx, secretID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to look up secret")
@@ -316,9 +316,9 @@ func (h *PrivateRouteHandlers) secretForService(ctx context.Context, serviceID, 
 	return secret, nil
 }
 
-func (h *PrivateRouteHandlers) authorizeServicePermission(ctx context.Context, request PrivateRequest, serviceID uuid.UUID, permission domain.Permission) error {
+func (h *EncryptedRouteHandlers) authorizeServicePermission(ctx context.Context, request EncryptedRequest, serviceID uuid.UUID, permission domain.Permission) error {
 	if h.services == nil || h.rbac == nil {
-		return fmt.Errorf("private route RBAC is not configured")
+		return fmt.Errorf("encrypted route RBAC is not configured")
 	}
 	service, err := h.services.GetByID(ctx, serviceID)
 	if err != nil {
@@ -349,19 +349,19 @@ func parseSecretEncryptionMethod(value string, fallback domain.EncryptionMethod)
 	}
 }
 
-func (h *PrivateRouteHandlers) GetRunLogs(ctx context.Context, request PrivateRequest) (any, error) {
+func (h *EncryptedRouteHandlers) GetRunLogs(ctx context.Context, request EncryptedRequest) (any, error) {
 	if h.runs == nil || h.runLogs == nil {
-		return nil, fmt.Errorf("deployment run log private transport is not configured")
+		return nil, fmt.Errorf("encrypted deployment run log retrieval is not configured")
 	}
 	var payload struct {
 		RunID  string `json:"run_id"`
 		Tail   int    `json:"tail,omitempty"`
 		Stream string `json:"stream,omitempty"`
 	}
-	if err := decodePrivatePayload(request, &payload); err != nil {
+	if err := decodeEncryptedPayload(request, &payload); err != nil {
 		return nil, err
 	}
-	runID, err := parsePrivateUUID(payload.RunID, "run ID")
+	runID, err := parseEncryptedUUID(payload.RunID, "run ID")
 	if err != nil {
 		return nil, err
 	}
@@ -378,12 +378,12 @@ func (h *PrivateRouteHandlers) GetRunLogs(ctx context.Context, request PrivateRe
 	if err := h.authorizeRunPermission(ctx, request, run, domain.PermReadLogs); err != nil {
 		return nil, err
 	}
-	if !isTerminalPrivateRunStatus(run.Status) {
+	if !isTerminalEncryptedRunStatus(run.Status) {
 		return nil, fmt.Errorf("run is still in progress; stored logs are available after completion")
 	}
 	logs, err := h.runLogs.FetchRunLogs(ctx, run)
 	if err != nil {
-		h.logger.Error("failed to fetch private run logs", zap.String("run_id", runID.String()), zap.Error(err))
+		h.logger.Error("failed to fetch encrypted request run logs", zap.String("run_id", runID.String()), zap.Error(err))
 		return nil, fmt.Errorf("failed to fetch logs")
 	}
 	if logs == nil {
@@ -410,7 +410,7 @@ func (h *PrivateRouteHandlers) GetRunLogs(ctx context.Context, request PrivateRe
 	return map[string]any{"logs": logs, "stream": stream}, nil
 }
 
-func (h *PrivateRouteHandlers) authorizeRunPermission(ctx context.Context, request PrivateRequest, run *domain.DeploymentRun, permission domain.Permission) error {
+func (h *EncryptedRouteHandlers) authorizeRunPermission(ctx context.Context, request EncryptedRequest, run *domain.DeploymentRun, permission domain.Permission) error {
 	if h.intents == nil {
 		return fmt.Errorf("deployment intent lookup is not configured")
 	}
@@ -427,7 +427,7 @@ func (h *PrivateRouteHandlers) authorizeRunPermission(ctx context.Context, reque
 	return h.authorizeServicePermission(ctx, request, intent.ServiceID, permission)
 }
 
-func isTerminalPrivateRunStatus(status domain.DeploymentRunStatus) bool {
+func isTerminalEncryptedRunStatus(status domain.DeploymentRunStatus) bool {
 	switch status {
 	case domain.RunStatusSucceeded, domain.RunStatusFailed, domain.RunStatusCancelled, domain.RunStatusTimeout:
 		return true
@@ -436,17 +436,17 @@ func isTerminalPrivateRunStatus(status domain.DeploymentRunStatus) bool {
 	}
 }
 
-func (h *PrivateRouteHandlers) VerifyArtifactSignatures(ctx context.Context, request PrivateRequest) (any, error) {
+func (h *EncryptedRouteHandlers) VerifyArtifactSignatures(ctx context.Context, request EncryptedRequest) (any, error) {
 	if h.signatures == nil || h.artifacts == nil || h.signVerifier == nil {
-		return nil, fmt.Errorf("artifact signature private transport is not configured")
+		return nil, fmt.Errorf("encrypted artifact signature request handling is not configured")
 	}
 	var payload struct {
 		ArtifactID string `json:"artifact_id"`
 	}
-	if err := decodePrivatePayload(request, &payload); err != nil {
+	if err := decodeEncryptedPayload(request, &payload); err != nil {
 		return nil, err
 	}
-	artifactID, err := parsePrivateUUID(payload.ArtifactID, "artifact ID")
+	artifactID, err := parseEncryptedUUID(payload.ArtifactID, "artifact ID")
 	if err != nil {
 		return nil, err
 	}

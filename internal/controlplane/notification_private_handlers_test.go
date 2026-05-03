@@ -106,7 +106,7 @@ func (r *fakeNotificationRepo) ListRetryable(context.Context, int) ([]domain.Not
 	return nil, nil
 }
 
-func privatePayload(t *testing.T, payload any) json.RawMessage {
+func encryptedPayload(t *testing.T, payload any) json.RawMessage {
 	t.Helper()
 	data, err := json.Marshal(payload)
 	if err != nil {
@@ -115,7 +115,7 @@ func privatePayload(t *testing.T, payload any) json.RawMessage {
 	return data
 }
 
-func resultPayloadMap(t *testing.T, envelope PrivateResultEnvelope) map[string]any {
+func resultPayloadMap(t *testing.T, envelope EncryptedResultEnvelope) map[string]any {
 	t.Helper()
 	payload, ok := envelope.Payload.(map[string]any)
 	if !ok {
@@ -124,21 +124,21 @@ func resultPayloadMap(t *testing.T, envelope PrivateResultEnvelope) map[string]a
 	return payload
 }
 
-func TestNotificationPrivateHandlers_CreateListSanitizesWebhookSecret(t *testing.T) {
+func TestNotificationEncryptedHandlers_CreateListSanitizesWebhookSecret(t *testing.T) {
 	repo := newFakeNotificationRepo()
-	publisher := &mockPrivatePublisher{}
-	transport := NewPrivateTransport(nil, newResponder(t, publisher), nil, zap.NewNop())
-	RegisterNotificationPrivateHandlers(transport, repo, nil)
+	publisher := &mockEncryptedPublisher{}
+	transport := NewEncryptedRequestTransport(nil, newResponder(t, publisher), nil, zap.NewNop())
+	RegisterNotificationEncryptedHandlers(transport, repo, nil)
 
 	requesterPubkey, err := nostrPublicKey(testRequesterKey)
 	if err != nil {
 		t.Fatal(err)
 	}
-	event := makePrivateRequestEvent(t, testRequesterKey, PrivateRequestEnvelope{
-		Version:         PrivateTransportVersion,
-		Operation:       PrivateOperationNotificationChannelsCreate,
+	event := makeEncryptedRequestEvent(t, testRequesterKey, EncryptedRequestEnvelope{
+		Version:         EncryptedRequestWireVersion,
+		Operation:       EncryptedOperationNotificationChannelsCreate,
 		RequesterPubkey: requesterPubkey,
-		Payload: privatePayload(t, map[string]any{
+		Payload: encryptedPayload(t, map[string]any{
 			"name":         "Prod webhook",
 			"channel_type": "webhook",
 			"config":       map[string]any{"url": "https://hooks.example/bahia", "secret": "super-secret"},
@@ -163,11 +163,11 @@ func TestNotificationPrivateHandlers_CreateListSanitizesWebhookSecret(t *testing
 		stored = ch
 	}
 	if stored.Config["secret"] != "super-secret" {
-		t.Fatalf("stored secret was not preserved privately: %#v", stored.Config)
+		t.Fatalf("stored secret was not preserved in storage: %#v", stored.Config)
 	}
 
 	publisher.events = nil
-	listEvent := makePrivateRequestEvent(t, testRequesterKey, PrivateRequestEnvelope{Version: PrivateTransportVersion, Operation: PrivateOperationNotificationChannelsList, RequesterPubkey: requesterPubkey})
+	listEvent := makeEncryptedRequestEvent(t, testRequesterKey, EncryptedRequestEnvelope{Version: EncryptedRequestWireVersion, Operation: EncryptedOperationNotificationChannelsList, RequesterPubkey: requesterPubkey})
 	transport.HandleEvent(context.Background(), listEvent)
 	envelope = decryptResultEnvelope(t, publisher.events[0], testRequesterKey)
 	channels := resultPayloadMap(t, envelope)["channels"].([]any)
@@ -177,7 +177,7 @@ func TestNotificationPrivateHandlers_CreateListSanitizesWebhookSecret(t *testing
 	}
 }
 
-func TestNotificationPrivateHandlers_UpdatePreservesOmittedWebhookSecret(t *testing.T) {
+func TestNotificationEncryptedHandlers_UpdatePreservesOmittedWebhookSecret(t *testing.T) {
 	repo := newFakeNotificationRepo()
 	channelID := uuid.New()
 	repo.channels[channelID] = domain.NotificationChannel{
@@ -187,18 +187,18 @@ func TestNotificationPrivateHandlers_UpdatePreservesOmittedWebhookSecret(t *test
 		Config:      map[string]any{"url": "https://hooks.example/old", "secret": "super-secret"},
 		Enabled:     true,
 	}
-	publisher := &mockPrivatePublisher{}
-	transport := NewPrivateTransport(nil, newResponder(t, publisher), nil, zap.NewNop())
-	RegisterNotificationPrivateHandlers(transport, repo, nil)
+	publisher := &mockEncryptedPublisher{}
+	transport := NewEncryptedRequestTransport(nil, newResponder(t, publisher), nil, zap.NewNop())
+	RegisterNotificationEncryptedHandlers(transport, repo, nil)
 	requesterPubkey, err := nostrPublicKey(testRequesterKey)
 	if err != nil {
 		t.Fatal(err)
 	}
-	event := makePrivateRequestEvent(t, testRequesterKey, PrivateRequestEnvelope{
-		Version:         PrivateTransportVersion,
-		Operation:       PrivateOperationNotificationChannelsUpdate,
+	event := makeEncryptedRequestEvent(t, testRequesterKey, EncryptedRequestEnvelope{
+		Version:         EncryptedRequestWireVersion,
+		Operation:       EncryptedOperationNotificationChannelsUpdate,
 		RequesterPubkey: requesterPubkey,
-		Payload: privatePayload(t, map[string]any{
+		Payload: encryptedPayload(t, map[string]any{
 			"id":     channelID.String(),
 			"config": map[string]any{"url": "https://hooks.example/new"},
 		}),
@@ -217,7 +217,7 @@ func TestNotificationPrivateHandlers_UpdatePreservesOmittedWebhookSecret(t *test
 	}
 }
 
-func TestNotificationPrivateHandlers_ListLogsReturnsEncryptedPrivateResult(t *testing.T) {
+func TestNotificationEncryptedHandlers_ListLogsReturnsEncryptedResult(t *testing.T) {
 	repo := newFakeNotificationRepo()
 	channelID := uuid.New()
 	repo.logs = []domain.NotificationLog{{
@@ -228,24 +228,24 @@ func TestNotificationPrivateHandlers_ListLogsReturnsEncryptedPrivateResult(t *te
 		Status:    domain.NotificationStatusSent,
 		Attempts:  1,
 	}}
-	publisher := &mockPrivatePublisher{}
-	transport := NewPrivateTransport(nil, newResponder(t, publisher), nil, zap.NewNop())
-	RegisterNotificationPrivateHandlers(transport, repo, nil)
+	publisher := &mockEncryptedPublisher{}
+	transport := NewEncryptedRequestTransport(nil, newResponder(t, publisher), nil, zap.NewNop())
+	RegisterNotificationEncryptedHandlers(transport, repo, nil)
 	requesterPubkey, err := nostrPublicKey(testRequesterKey)
 	if err != nil {
 		t.Fatal(err)
 	}
-	event := makePrivateRequestEvent(t, testRequesterKey, PrivateRequestEnvelope{
-		Version:         PrivateTransportVersion,
-		Operation:       PrivateOperationNotificationLogsList,
+	event := makeEncryptedRequestEvent(t, testRequesterKey, EncryptedRequestEnvelope{
+		Version:         EncryptedRequestWireVersion,
+		Operation:       EncryptedOperationNotificationLogsList,
 		RequesterPubkey: requesterPubkey,
-		Payload:         privatePayload(t, map[string]any{"limit": 50}),
+		Payload:         encryptedPayload(t, map[string]any{"limit": 50}),
 	})
 
 	transport.HandleEvent(context.Background(), event)
 
-	if got := publisher.events[0]; got.Kind != KindPrivateResult || got.Content == "" || got.Content == "only-in-encrypted-result" {
-		t.Fatalf("log result was not published as encrypted private result: %#v", got)
+	if got := publisher.events[0]; got.Kind != KindEncryptedResult || got.Content == "" || got.Content == "only-in-encrypted-result" {
+		t.Fatalf("log result was not published as encrypted result: %#v", got)
 	}
 	envelope := decryptResultEnvelope(t, publisher.events[0], testRequesterKey)
 	logs := resultPayloadMap(t, envelope)["logs"].([]any)
