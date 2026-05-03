@@ -7,7 +7,8 @@ This guide covers setting up and running the Bahia SvelteKit web application.
 - **Node.js**: v18+ (v20 recommended)
 - **pnpm**: v8+ (`npm install -g pnpm`)
 - **Bahia Backend**: Running locally or remotely (default: `http://localhost:8080`)
-- **NIP-07 Browser Extension** (optional): For Nostr-based Soul Factory provisioning
+- **NIP-07 Browser Extension** (optional): For direct browser signing (NIP-07)
+- **NIP-46 Signer/Bunker** (optional): For remote signing via Nostr Connect
   - [nos2x](https://github.com/fiatjaf/nos2x) (Firefox/Chrome)
   - [Alby](https://getalby.com/) (Firefox/Chrome)
   - [Nostore](https://apps.apple.com/us/app/nostore/id1666553677) (iOS Safari)
@@ -55,19 +56,24 @@ The web app does not currently use environment variables. All configuration is c
 
 ## Authentication & Authorization
 
-### Nostr Authentication (NIP-07 + NIP-98)
+### Signer-first Authentication (NIP-07 and NIP-46)
 
-The first-party web app uses NIP-07 browser extensions for identity and signing. Protected HTTP requests are authorized directly with NIP-98 headers (`Authorization: Nostr <base64event>`); the app no longer stores `bahia_token` or calls `/api/v1/auth/nostr`.
+The first-party web app is signer-first: an authenticated signer session is the primary identity state. Both signer paths are supported:
 
-1. **Install a NIP-07 Extension**: nos2x, Alby, or Nostore
-2. **Grant Permission**: The app requests signing permission for authenticated actions
-3. **HTTP Request Signing**: The API client signs protected requests with your Nostr key
+- **NIP-07 browser extension** (nos2x, Alby, Nostore)
+- **NIP-46 remote signer/bunker** (Nostr Connect)
 
-The app detects `window.nostr` on page load and enables signed actions when available.
+Protected HTTP compatibility requests are signed with NIP-98 headers (`Authorization: Nostr <base64event>`). The app no longer stores `bahia_token` or calls `/api/v1/auth/nostr`.
 
-### NIP-46 (Nostr Connect/Bunker)
+Signer-session auth and REST compatibility are tracked separately:
 
-NIP-46 remote signing support is planned but not yet implemented.
+- signer login can succeed even when REST compatibility is unavailable
+- REST compatibility requires backend `features.direct_nostr_http_auth=true`
+- routes that still depend on REST compatibility show compatibility messaging instead of treating signer login as failed
+
+### REST Compatibility Surface
+
+Most realtime app state is sourced from the Nostr sidecar/control-plane subscriptions. Remaining REST-dependent pages still require direct NIP-98 compatibility to perform HTTP CRUD/query operations. As of this migration stage, `/orgs` is explicitly compatibility-gated in route access.
 
 ## Troubleshooting
 
@@ -88,6 +94,7 @@ NIP-46 remote signing support is planned but not yet implemented.
 - Verify a NIP-07 browser extension is installed and unlocked
 - Reload the app and grant signing permission when prompted
 - Check `/api/v1/system/info` advertises `direct_nostr_http_auth: true` when backend auth is enabled
+- If signer login works but a page reports compatibility required, that route still depends on REST compatibility
 
 ### NIP-07 Extension Not Detected
 
@@ -139,6 +146,7 @@ The web app is tested on:
 ### Known Limitations
 
 - **NIP-07 on Mobile**: Limited browser extension support (use Nostore on iOS Safari)
+- **Compatibility-gated pages**: Some routes still depend on backend direct NIP-98 compatibility while migration to fully Nostr-native read/write flows continues
 - **WebSocket relay**: Required for live control-plane updates
 - **localStorage**: Stores non-secret session metadata; private browsing may clear sessions on close
 

@@ -131,9 +131,12 @@ Clients should wait for EOSE on bootstrap queries, then keep subscriptions open 
 
 ## Authorization
 
+- **Signer-first browser identity**: web sessions are signer-first (NIP-07 or NIP-46), with signer pubkey as the primary user identity.
 - **Nostr requests**: event signatures are verified and request kinds require authorized operator pubkeys.
+- **Control-plane operator allowlist**: `nostr.authorized_pubkeys` is for control-plane/operator request authorization only.
+- **Tenant bootstrap owner allowlist**: `auth.bootstrap_owner_pubkeys` governs who may create organizations over REST compatibility endpoints when configured.
 - **REST and MCP HTTP**: use direct NIP-98 (`Authorization: Nostr <base64event>`) when auth is enabled. `Authorization: Bearer ...` is rejected with `401` rather than treated as a fallback.
-- **Browser sessions**: NIP-07 identity/signing is first-party. The browser signs protected HTTP requests directly and does not maintain a server-issued token session.
+- **REST role in architecture**: REST is a compatibility transport for narrowed CRUD/query surfaces that have not yet moved to Nostr-native flows.
 
 ---
 
