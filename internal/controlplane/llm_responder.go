@@ -3,9 +3,9 @@ package controlplane
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"time"
 
+	canonicalnostr "fiatjaf.com/nostr"
 	"github.com/google/uuid"
 	"github.com/nbd-wtf/go-nostr"
 	nostrpool "github.com/openagentsinc/bahia/internal/adapters/nostr"
@@ -16,14 +16,13 @@ import (
 
 // LLMResponder publishes threaded Nostr lifecycle replies for background LLM provisioning.
 type LLMResponder struct {
-	pool       *nostrpool.RelayPool
-	privateKey string
-	signer     EventSigner
-	logger     *zap.Logger
-	eventRepo  repository.NostrEventRepository
+	pool      *nostrpool.RelayPool
+	signer    canonicalnostr.Signer
+	logger    *zap.Logger
+	eventRepo repository.NostrEventRepository
 }
 
-func NewLLMResponder(pool *nostrpool.RelayPool, privateKey string, signer EventSigner, logger *zap.Logger, eventRepos ...repository.NostrEventRepository) *LLMResponder {
+func NewLLMResponder(pool *nostrpool.RelayPool, signer canonicalnostr.Signer, logger *zap.Logger, eventRepos ...repository.NostrEventRepository) *LLMResponder {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
@@ -31,7 +30,7 @@ func NewLLMResponder(pool *nostrpool.RelayPool, privateKey string, signer EventS
 	if len(eventRepos) > 0 {
 		eventRepo = eventRepos[0]
 	}
-	return &LLMResponder{pool: pool, privateKey: privateKey, signer: signer, logger: logger.Named("llm-responder"), eventRepo: eventRepo}
+	return &LLMResponder{pool: pool, signer: signer, logger: logger.Named("llm-responder"), eventRepo: eventRepo}
 }
 
 func (r *LLMResponder) PublishStatus(ctx context.Context, intent *domain.LLMDeploymentIntent, run *domain.LLMDeploymentRun, step, message string) error {
@@ -116,13 +115,7 @@ func (r *LLMResponder) record(ctx context.Context, ev *nostr.Event, intent *doma
 }
 
 func (r *LLMResponder) sign(ctx context.Context, ev *nostr.Event) error {
-	if r.signer != nil {
-		return r.signer.Sign(ctx, ev)
-	}
-	if r.privateKey == "" {
-		return fmt.Errorf("no private key or signer configured")
-	}
-	return ev.Sign(r.privateKey)
+	return SignGoNostrEvent(ctx, r.signer, ev)
 }
 
 func llmNostrCorrelation(intent *domain.LLMDeploymentIntent) (eventID, pubkey string) {

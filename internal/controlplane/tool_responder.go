@@ -5,9 +5,9 @@ import (
 	"encoding/json"
 	"time"
 
+	canonicalnostr "fiatjaf.com/nostr"
 	"github.com/google/uuid"
 	"github.com/nbd-wtf/go-nostr"
-	nostradapter "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/repository"
 	"go.uber.org/zap"
@@ -15,16 +15,17 @@ import (
 
 // ToolResponder handles publishing tool provisioning status/result events.
 type ToolResponder struct {
-	publisher *nostradapter.Publisher
+	publisher NostrEventPublisher
+	signer    canonicalnostr.Signer
 	nostrRepo repository.NostrEventRepository
 	logger    *zap.Logger
 }
 
-func NewToolResponder(publisher *nostradapter.Publisher, logger *zap.Logger, nostrRepo repository.NostrEventRepository) *ToolResponder {
+func NewToolResponder(publisher NostrEventPublisher, signer canonicalnostr.Signer, logger *zap.Logger, nostrRepo repository.NostrEventRepository) *ToolResponder {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
-	return &ToolResponder{publisher: publisher, nostrRepo: nostrRepo, logger: logger.Named("tool-responder")}
+	return &ToolResponder{publisher: publisher, signer: signer, nostrRepo: nostrRepo, logger: logger.Named("tool-responder")}
 }
 
 // PublishStatus publishes a kind 6976 status update.
@@ -51,9 +52,9 @@ func (r *ToolResponder) PublishApprovalRequest(ctx context.Context, intent *doma
 		return nil
 	}
 	content := map[string]any{
-		"intent_id":      intent.ID.String(),
-		"service_id":     intent.ServiceID.String(),
-		"environment_id": intent.EnvironmentID.String(),
+		"intent_id":       intent.ID.String(),
+		"service_id":      intent.ServiceID.String(),
+		"environment_id":  intent.EnvironmentID.String(),
 		"requested_tools": intent.RequestedTools,
 		"approval_flags":  intent.ApprovalFlags,
 		"status":          intent.Status,
@@ -67,7 +68,10 @@ func (r *ToolResponder) PublishApprovalRequest(ctx context.Context, intent *doma
 		{"service", intent.ServiceID.String()},
 		{"environment", intent.EnvironmentID.String()},
 	}, Content: string(body)}
-	if err := r.publisher.PublishSignedEvent(ctx, ev); err != nil {
+	if err := SignGoNostrEvent(ctx, r.signer, ev); err != nil {
+		return err
+	}
+	if _, err := r.publisher.Publish(ctx, *ev); err != nil {
 		return err
 	}
 	r.record(ctx, ev, "tool.provisioning.approval.request", &intent.ID)
@@ -104,7 +108,10 @@ func (r *ToolResponder) publishReply(ctx context.Context, kind int, requestEvent
 		tags = append(tags, nostr.Tag{"error", errMsg})
 	}
 	ev := &nostr.Event{Kind: kind, CreatedAt: nostr.Now(), Tags: tags, Content: string(body)}
-	if err := r.publisher.PublishSignedEvent(ctx, ev); err != nil {
+	if err := SignGoNostrEvent(ctx, r.signer, ev); err != nil {
+		return err
+	}
+	if _, err := r.publisher.Publish(ctx, *ev); err != nil {
 		return err
 	}
 	r.record(ctx, ev, "tool.provisioning.reply", &intent.ID)

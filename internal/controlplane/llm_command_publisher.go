@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	canonicalnostr "fiatjaf.com/nostr"
 	"github.com/google/uuid"
 	"github.com/nbd-wtf/go-nostr"
 )
@@ -16,14 +17,13 @@ type NostrEventPublisher interface {
 
 // LLMCommandPublisher emits canonical LLM control-plane request events.
 type LLMCommandPublisher struct {
-	publisher  NostrEventPublisher
-	privateKey string
-	signer     EventSigner
+	publisher NostrEventPublisher
+	signer    canonicalnostr.Signer
 }
 
 // NewLLMCommandPublisher creates a publisher for MCP-originated LLM commands.
-func NewLLMCommandPublisher(publisher NostrEventPublisher, privateKey string, signer EventSigner) *LLMCommandPublisher {
-	return &LLMCommandPublisher{publisher: publisher, privateKey: privateKey, signer: signer}
+func NewLLMCommandPublisher(publisher NostrEventPublisher, signer canonicalnostr.Signer) *LLMCommandPublisher {
+	return &LLMCommandPublisher{publisher: publisher, signer: signer}
 }
 
 // LLMDeployCommand describes a canonical LLM deploy request.
@@ -140,17 +140,8 @@ func (p *LLMCommandPublisher) publish(ctx context.Context, kind int, tags nostr.
 		return nil, fmt.Errorf("marshal LLM command content: %w", err)
 	}
 	ev := &nostr.Event{Kind: kind, CreatedAt: nostr.Now(), Tags: tags, Content: string(contentJSON)}
-	if p.signer != nil {
-		if err := p.signer.Sign(ctx, ev); err != nil {
-			return nil, fmt.Errorf("sign LLM command event: %w", err)
-		}
-	} else {
-		if p.privateKey == "" {
-			return nil, fmt.Errorf("LLM command publisher signing key is not configured")
-		}
-		if err := ev.Sign(p.privateKey); err != nil {
-			return nil, fmt.Errorf("sign LLM command event: %w", err)
-		}
+	if err := SignGoNostrEvent(ctx, p.signer, ev); err != nil {
+		return nil, fmt.Errorf("sign LLM command event: %w", err)
 	}
 	published, err := p.publisher.Publish(ctx, *ev)
 	if err != nil {

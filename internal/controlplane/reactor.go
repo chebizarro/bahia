@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	canonicalnostr "fiatjaf.com/nostr"
 	"github.com/google/uuid"
 	"github.com/nbd-wtf/go-nostr"
 	"go.uber.org/zap"
@@ -76,18 +77,11 @@ type Config struct {
 	Relays []string
 	// PrivateRelays is the list of relay URLs for private/draft events.
 	PrivateRelays []string
-	// PrivateKey is the hex-encoded signing key for event publishing.
-	// Used when no Signer is configured.
+	// PrivateKey is the hex-encoded key used only when this reactor must create
+	// its own relay pool with NIP-42 AUTH support. Event signing uses Signer.
 	PrivateKey string
 	// AuthorizedPubkeys is the list of pubkeys allowed to submit requests.
 	AuthorizedPubkeys []string
-}
-
-// EventSigner signs Nostr events. Implementations include local signing
-// (using a private key) or remote signing via NIP-46 bunker (Signet).
-type EventSigner interface {
-	// Sign signs an event in place.
-	Sign(ctx context.Context, event *nostr.Event) error
 }
 
 // Reactor subscribes to Nostr control plane events and dispatches handlers.
@@ -96,7 +90,7 @@ type Reactor struct {
 	pool        *nostrpool.RelayPool
 	registry    *service.RegistryService
 	llmRegistry *service.LLMRegistryService
-	signer      EventSigner // Optional NIP-46 signer
+	signer      canonicalnostr.Signer
 	logger      *slog.Logger
 	zapLog      *zap.Logger
 	dedup       *nostrpool.EventDeduplicator
@@ -148,9 +142,9 @@ func WithToolProvisioningCoordinator(coordinator *service.ToolProvisioningCoordi
 
 // NewReactor creates a new Bahia control plane reactor.
 // If pool is nil, a new pool will be created from the config relays.
-// If signer is provided, it will be used for NIP-46 remote signing; otherwise
-// the config.PrivateKey will be used for local signing.
-func NewReactor(config Config, registry *service.RegistryService, pool *nostrpool.RelayPool, signer EventSigner, zapLog *zap.Logger, opts ...ReactorOption) *Reactor {
+// signer is required for event signing. If pool is nil, config.PrivateKey is
+// only used to configure relay AUTH on the created pool.
+func NewReactor(config Config, registry *service.RegistryService, pool *nostrpool.RelayPool, signer canonicalnostr.Signer, zapLog *zap.Logger, opts ...ReactorOption) *Reactor {
 	if zapLog == nil {
 		zapLog = zap.NewNop()
 	}
@@ -173,7 +167,7 @@ func NewReactor(config Config, registry *service.RegistryService, pool *nostrpoo
 		config:   config,
 		pool:     pool,
 		registry: registry,
-		signer:   signer, // May be nil, signEvent will fall back to local key
+		signer:   signer,
 		logger:   slog.Default().With("component", "controlplane"),
 		zapLog:   zapLog,
 		dedup:    nostrpool.NewEventDeduplicator(10000),
@@ -1174,7 +1168,7 @@ func (r *Reactor) publishStatus(ctx context.Context, requestEvent *nostr.Event, 
 		Content:   message,
 	}
 
-	if err := r.signEvent(event); err != nil {
+	if err := r.signEvent(ctx, event); err != nil {
 		return fmt.Errorf("sign status event: %w", err)
 	}
 
@@ -1207,7 +1201,7 @@ func (r *Reactor) publishDeploymentResult(ctx context.Context, requestEvent *nos
 		Content: string(content),
 	}
 
-	if err := r.signEvent(event); err != nil {
+	if err := r.signEvent(ctx, event); err != nil {
 		return fmt.Errorf("sign result event: %w", err)
 	}
 
@@ -1243,7 +1237,7 @@ func (r *Reactor) publishActionResult(ctx context.Context, requestEvent *nostr.E
 		Content:   string(contentBytes),
 	}
 
-	if signErr := r.signEvent(event); signErr != nil {
+	if signErr := r.signEvent(ctx, event); signErr != nil {
 		return fmt.Errorf("sign action result: %w", signErr)
 	}
 
@@ -1281,7 +1275,7 @@ func (r *Reactor) publishApprovalResult(ctx context.Context, requestEvent *nostr
 		Content:   string(content),
 	}
 
-	if err := r.signEvent(event); err != nil {
+	if err := r.signEvent(ctx, event); err != nil {
 		return fmt.Errorf("sign approval result: %w", err)
 	}
 
@@ -1306,7 +1300,7 @@ func (r *Reactor) publishLLMRouteCreateResult(ctx context.Context, requestEvent 
 		},
 		Content: string(content),
 	}
-	if err := r.signEvent(event); err != nil {
+	if err := r.signEvent(ctx, event); err != nil {
 		return fmt.Errorf("sign LLM route create result: %w", err)
 	}
 	_, err := r.pool.Publish(ctx, *event)
@@ -1332,7 +1326,7 @@ func (r *Reactor) publishLLMReleaseRegisterResult(ctx context.Context, requestEv
 		},
 		Content: string(content),
 	}
-	if err := r.signEvent(event); err != nil {
+	if err := r.signEvent(ctx, event); err != nil {
 		return fmt.Errorf("sign LLM release register result: %w", err)
 	}
 	_, err := r.pool.Publish(ctx, *event)
@@ -1360,7 +1354,7 @@ func (r *Reactor) publishLLMDeploymentStatus(ctx context.Context, requestEvent *
 		{"intent", intent.ID.String()},
 	}
 	event := &nostr.Event{Kind: KindLLMDeploymentStatus, CreatedAt: nostr.Now(), Tags: tags, Content: string(content)}
-	if err := r.signEvent(event); err != nil {
+	if err := r.signEvent(ctx, event); err != nil {
 		return fmt.Errorf("sign LLM deployment status: %w", err)
 	}
 	_, err := r.pool.Publish(ctx, *event)
@@ -1387,7 +1381,7 @@ func (r *Reactor) publishLLMDeploymentResult(ctx context.Context, requestEvent *
 		{"intent", intent.ID.String()},
 	}
 	event := &nostr.Event{Kind: KindLLMDeploymentResult, CreatedAt: nostr.Now(), Tags: tags, Content: string(content)}
-	if err := r.signEvent(event); err != nil {
+	if err := r.signEvent(ctx, event); err != nil {
 		return fmt.Errorf("sign LLM deployment result: %w", err)
 	}
 	_, err := r.pool.Publish(ctx, *event)
@@ -1412,7 +1406,7 @@ func (r *Reactor) publishLLMError(ctx context.Context, requestEvent *nostr.Event
 	}
 	tags = appendLLMRequestTags(tags, requestEvent)
 	event := &nostr.Event{Kind: kind, CreatedAt: nostr.Now(), Tags: tags, Content: string(content)}
-	if err := r.signEvent(event); err != nil {
+	if err := r.signEvent(ctx, event); err != nil {
 		return fmt.Errorf("sign LLM error result: %w", err)
 	}
 	_, err := r.pool.Publish(ctx, *event)
@@ -1481,7 +1475,7 @@ func (r *Reactor) publishServiceCreated(ctx context.Context, requestEvent *nostr
 		Content: string(content),
 	}
 
-	if err := r.signEvent(event); err != nil {
+	if err := r.signEvent(ctx, event); err != nil {
 		return fmt.Errorf("sign service created: %w", err)
 	}
 
@@ -1511,7 +1505,7 @@ func (r *Reactor) publishEnvironmentCreated(ctx context.Context, requestEvent *n
 		Content: string(content),
 	}
 
-	if err := r.signEvent(event); err != nil {
+	if err := r.signEvent(ctx, event); err != nil {
 		return fmt.Errorf("sign environment created: %w", err)
 	}
 
@@ -1536,7 +1530,7 @@ func (r *Reactor) publishError(ctx context.Context, requestEvent *nostr.Event, s
 		Content:   message,
 	}
 
-	if err := r.signEvent(event); err != nil {
+	if err := r.signEvent(ctx, event); err != nil {
 		return fmt.Errorf("sign error event: %w", err)
 	}
 
@@ -1544,19 +1538,9 @@ func (r *Reactor) publishError(ctx context.Context, requestEvent *nostr.Event, s
 	return err
 }
 
-// signEvent signs an event using the NIP-46 signer if configured,
-// otherwise falls back to the local private key.
-func (r *Reactor) signEvent(event *nostr.Event) error {
-	// Prefer NIP-46 remote signing if signer is configured
-	if r.signer != nil {
-		return r.signer.Sign(context.Background(), event)
-	}
-
-	// Fall back to local key signing
-	if r.config.PrivateKey == "" {
-		return fmt.Errorf("no private key or signer configured")
-	}
-	return event.Sign(r.config.PrivateKey)
+// signEvent signs an event through the canonical signer compatibility boundary.
+func (r *Reactor) signEvent(ctx context.Context, event *nostr.Event) error {
+	return SignGoNostrEvent(ctx, r.signer, event)
 }
 
 // GetRun returns the current deployment run for a request event.
@@ -1744,7 +1728,7 @@ func (r *Reactor) publishObservationResult(ctx context.Context, requestEvent *no
 		Content: string(content),
 	}
 
-	if err := r.signEvent(event); err != nil {
+	if err := r.signEvent(ctx, event); err != nil {
 		return fmt.Errorf("sign observation result: %w", err)
 	}
 
@@ -1781,7 +1765,7 @@ func (r *Reactor) publishRemediationResult(ctx context.Context, requestEvent *no
 		event.Tags = append(event.Tags, nostr.Tag{"intent", state.DesiredIntentID.String()})
 	}
 
-	if err := r.signEvent(event); err != nil {
+	if err := r.signEvent(ctx, event); err != nil {
 		return fmt.Errorf("sign remediation result: %w", err)
 	}
 
@@ -1846,7 +1830,7 @@ func (r *Reactor) publishStateEvent(ctx context.Context, serviceID, envID uuid.U
 		event.Tags = append(event.Tags, nostr.Tag{"run", state.LastSuccessfulRunID.String()})
 	}
 
-	if err := r.signEvent(event); err != nil {
+	if err := r.signEvent(ctx, event); err != nil {
 		return fmt.Errorf("sign state event: %w", err)
 	}
 
@@ -1880,7 +1864,7 @@ func (r *Reactor) PublishServiceRegistry(ctx context.Context, svc *domain.Servic
 		Content: string(content),
 	}
 
-	if err := r.signEvent(event); err != nil {
+	if err := r.signEvent(ctx, event); err != nil {
 		return fmt.Errorf("sign service registry event: %w", err)
 	}
 
@@ -1912,7 +1896,7 @@ func (r *Reactor) PublishEnvironmentRegistry(ctx context.Context, env *domain.En
 		Content: string(content),
 	}
 
-	if err := r.signEvent(event); err != nil {
+	if err := r.signEvent(ctx, event); err != nil {
 		return fmt.Errorf("sign environment registry event: %w", err)
 	}
 

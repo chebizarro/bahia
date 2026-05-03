@@ -151,7 +151,12 @@ func TestHandleLLMRollbackRequestCreatesRollbackIntent(t *testing.T) {
 	stateRepo := &reactorLLMStateRepo{state: &domain.LLMRouteState{RouteID: routeID, EnvironmentID: envID, DesiredReleaseID: &currentReleaseID, DesiredIntentID: &currentIntentID, DriftStatus: domain.DriftStatusInSync}}
 	llmRegistry := service.NewLLMRegistryService(routeRepo, releaseRepo, envRepo, intentRepo, nil, nil, stateRepo, events.NewInProcessPublisher(zap.NewNop()), zap.NewNop())
 
-	reactor := NewReactor(Config{PrivateKey: nostr.GeneratePrivateKey(), AuthorizedPubkeys: []string{"authorized-pubkey"}}, nil, nostrpool.NewRelayPool(nil, zap.NewNop()), nil, zap.NewNop(), WithLLMRegistry(llmRegistry))
+	privateKey := nostr.GeneratePrivateKey()
+	signer, err := NewPrivateKeySigner(privateKey)
+	if err != nil {
+		t.Fatalf("create signer: %v", err)
+	}
+	reactor := NewReactor(Config{PrivateKey: privateKey, AuthorizedPubkeys: []string{"authorized-pubkey"}}, nil, nostrpool.NewRelayPool(nil, zap.NewNop()), signer, zap.NewNop(), WithLLMRegistry(llmRegistry))
 	reactor.handleLLMRollbackRequest(ctx, &nostr.Event{ID: "rollback-request", PubKey: "authorized-pubkey", Kind: KindLLMRollbackRequest, Content: `{"route_id":"` + routeID.String() + `","environment_id":"` + envID.String() + `","requested_by":"operator"}`})
 
 	if len(intentRepo.intents) != 3 {

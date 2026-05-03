@@ -22,7 +22,11 @@ func (p *captureNostrPublisher) Publish(_ context.Context, ev nostr.Event) (int,
 func TestLLMCommandPublisherPublishesCanonicalRollbackRequest(t *testing.T) {
 	ctx := context.Background()
 	capture := &captureNostrPublisher{published: 1}
-	publisher := NewLLMCommandPublisher(capture, nostr.GeneratePrivateKey(), nil)
+	signer, err := NewPrivateKeySigner(nostr.GeneratePrivateKey())
+	if err != nil {
+		t.Fatalf("create signer: %v", err)
+	}
+	publisher := NewLLMCommandPublisher(capture, signer)
 	routeID := uuid.New()
 	envID := uuid.New()
 
@@ -60,9 +64,13 @@ func TestLLMCommandPublisherPublishesCanonicalRollbackRequest(t *testing.T) {
 func TestLLMCommandPublisherFailsWhenNoRelayAccepts(t *testing.T) {
 	ctx := context.Background()
 	capture := &captureNostrPublisher{published: 0}
-	publisher := NewLLMCommandPublisher(capture, nostr.GeneratePrivateKey(), nil)
+	signer, err := NewPrivateKeySigner(nostr.GeneratePrivateKey())
+	if err != nil {
+		t.Fatalf("create signer: %v", err)
+	}
+	publisher := NewLLMCommandPublisher(capture, signer)
 
-	_, err := publisher.PublishLLMDeployRequest(ctx, LLMDeployCommand{RouteID: uuid.New(), EnvironmentID: uuid.New(), ReleaseID: uuid.New(), RequestedBy: "operator"})
+	_, err = publisher.PublishLLMDeployRequest(ctx, LLMDeployCommand{RouteID: uuid.New(), EnvironmentID: uuid.New(), ReleaseID: uuid.New(), RequestedBy: "operator"})
 	if err == nil {
 		t.Fatalf("expected no relay acceptance error")
 	}

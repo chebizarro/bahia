@@ -181,7 +181,10 @@ func New(cfg *config.Config) (*App, error) {
 		verifier, publisher, logger,
 	)
 	nostrPub := nostrAdapter.NewPublisher(cfg.Nostr, relayPool, nostrEventRepo, logger)
-	controlPlaneNostrPub := nostrAdapter.NewPublisher(cfg.Nostr, controlPlanePool, nostrEventRepo, logger)
+	controlPlaneSigner, err := controlplane.NewPrivateKeySigner(cfg.Nostr.PrivateKey)
+	if err != nil {
+		return nil, fmt.Errorf("configuring control-plane signer: %w", err)
+	}
 
 	// Worker policy service for environment-specific worker selection.
 	workerPolicySvc := service.NewWorkerPolicyService(workerRepo, logger)
@@ -269,8 +272,8 @@ func New(cfg *config.Config) (*App, error) {
 		coordOpts := []service.LLMProvisioningCoordinatorOption{
 			service.WithLLMCoordinatorIntervals(cfg.LLM.CoordinatorPollInterval, cfg.LLM.StaleRunTimeout),
 		}
-		if cfg.Nostr.PrivateKey != "" && controlPlanePool != nil {
-			llmResponder = controlplane.NewLLMResponder(controlPlanePool, cfg.Nostr.PrivateKey, nil, logger, nostrEventRepo)
+		if controlPlaneSigner != nil && controlPlanePool != nil {
+			llmResponder = controlplane.NewLLMResponder(controlPlanePool, controlPlaneSigner, logger, nostrEventRepo)
 			coordOpts = append(coordOpts, service.WithLLMProvisioningResponder(llmResponder))
 		}
 		llmCoordinator := service.NewLLMProvisioningCoordinator(llmRegistry, envRepo, llmRunRepo, placementSvc, provisioners, gatewayManager, cfg.LLM.DefaultGatewayRef, logger, coordOpts...)
@@ -405,7 +408,7 @@ func New(cfg *config.Config) (*App, error) {
 		toolSecurity,
 		toolBuilder,
 		defaultRuntime,
-		controlplane.NewToolResponder(controlPlaneNostrPub, logger, nostrEventRepo),
+		controlplane.NewToolResponder(controlPlanePool, controlPlaneSigner, logger, nostrEventRepo),
 		notifDispatcher,
 		logger,
 		service.ToolProvisioningConfig{BaseImageRef: "", TargetRegistry: cfg.Registry.URL, TargetRepo: "tools/swarmstr", InstallerVersion: "v1"},
@@ -413,8 +416,8 @@ func New(cfg *config.Config) (*App, error) {
 
 	// MCP (Model Context Protocol) server for AI agent integration.
 	var llmCommandPublisher mcp.LLMCommandPublisher
-	if llmRegistry != nil && cfg.Nostr.PrivateKey != "" && controlPlanePool != nil && len(controlPlaneRelays) > 0 {
-		llmCommandPublisher = controlplane.NewLLMCommandPublisher(controlPlanePool, cfg.Nostr.PrivateKey, nil)
+	if llmRegistry != nil && controlPlaneSigner != nil && controlPlanePool != nil && len(controlPlaneRelays) > 0 {
+		llmCommandPublisher = controlplane.NewLLMCommandPublisher(controlPlanePool, controlPlaneSigner)
 	}
 	mcpServer := mcp.NewServerWithOptions(registry, logger, mcp.ServerDeps{
 		LogService:          runLogService,
@@ -429,24 +432,23 @@ func New(cfg *config.Config) (*App, error) {
 	logger.Info("mcp server initialized")
 
 	// Nostr control plane reactor for event-driven deployment operations.
-	if len(controlPlaneRelays) > 0 && cfg.Nostr.PrivateKey != "" {
+	if len(controlPlaneRelays) > 0 && controlPlaneSigner != nil {
 		reactorConfig := controlplane.Config{
 			Relays:            controlPlaneRelays,
 			PrivateKey:        cfg.Nostr.PrivateKey,
 			AuthorizedPubkeys: cfg.Nostr.AuthorizedPubkeys,
 		}
-		// Pass nil for signer to use local key signing.
-		// To enable NIP-46 remote signing via Signet, create a signet.Client
-		// and pass it here: controlplane.NewReactor(..., signetClient, logger)
+		// Reuse the single canonical control-plane signer for all control-plane
+		// event signing paths.
 		reactorOpts := []controlplane.ReactorOption{
 			controlplane.WithToolProvisioningRepository(toolProvisionRepo),
-			controlplane.WithToolResponder(controlplane.NewToolResponder(controlPlaneNostrPub, logger, nostrEventRepo)),
+			controlplane.WithToolResponder(controlplane.NewToolResponder(controlPlanePool, controlPlaneSigner, logger, nostrEventRepo)),
 			controlplane.WithToolProvisioningCoordinator(toolCoordinator),
 		}
 		if llmRegistry != nil {
 			reactorOpts = append(reactorOpts, controlplane.WithLLMRegistry(llmRegistry))
 		}
-		reactor := controlplane.NewReactor(reactorConfig, registry, controlPlanePool, nil, logger, reactorOpts...)
+		reactor := controlplane.NewReactor(reactorConfig, registry, controlPlanePool, controlPlaneSigner, logger, reactorOpts...)
 		bgManager.Register(&controlplaneRunner{reactor: reactor})
 		logger.Info("nostr control plane reactor registered", zap.Strings("relays", controlPlaneRelays))
 	}
