@@ -17,6 +17,7 @@ import (
 	"github.com/openagentsinc/bahia/internal/adapters/secrets"
 	"github.com/openagentsinc/bahia/internal/controlplane"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/events"
 	"github.com/openagentsinc/bahia/internal/notifications"
 	"github.com/openagentsinc/bahia/internal/repository"
 	"github.com/openagentsinc/bahia/internal/service"
@@ -41,6 +42,7 @@ type Server struct {
 	sboms            repository.SBOMRepository         // optional: for SBOM tools
 	signatures       repository.ArtifactSignatureRepository
 	signVerifier     SignatureVerifier
+	toolProvisioning repository.ToolProvisioningRepository
 }
 
 // Config holds MCP server configuration.
@@ -63,6 +65,7 @@ type ServerDeps struct {
 	SBOMs                  repository.SBOMRepository
 	Signatures             repository.ArtifactSignatureRepository
 	SignVerifier           SignatureVerifier
+	ToolProvisioning       repository.ToolProvisioningRepository
 	LLMRegistry            *service.LLMRegistryService
 	LLMCommandPublisher    LLMCommandPublisher
 }
@@ -112,6 +115,7 @@ func NewServerWithOptions(registry *service.RegistryService, logger *zap.Logger,
 		sboms:            deps.SBOMs,
 		signatures:       deps.Signatures,
 		signVerifier:     deps.SignVerifier,
+		toolProvisioning: deps.ToolProvisioning,
 	}
 }
 
@@ -1409,6 +1413,56 @@ func (s *Server) GetTools() []Tool {
 				"required": []string{"intent_id"},
 			},
 		},
+		// Tool provisioning operations
+		{
+			Name:        "bahia_tool_provision_request",
+			Description: "Request tools to be provisioned for a service",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"service_id":     map[string]interface{}{"type": "string", "description": "Service UUID"},
+					"environment_id": map[string]interface{}{"type": "string", "description": "Environment UUID"},
+					"tools":          map[string]interface{}{"type": "array", "description": "Array of tool objects", "items": map[string]interface{}{"type": "object"}},
+					"reason":         map[string]interface{}{"type": "string", "description": "Reason for tool request"},
+				},
+				"required": []string{"service_id", "environment_id", "tools", "reason"},
+			},
+		},
+		{
+			Name:        "bahia_tool_provision_status",
+			Description: "Get status of a tool provisioning intent",
+			InputSchema: map[string]interface{}{"type": "object", "properties": map[string]interface{}{"intent_id": map[string]interface{}{"type": "string", "description": "Intent UUID"}}, "required": []string{"intent_id"}},
+		},
+		{
+			Name:        "bahia_tool_provision_approve",
+			Description: "Approve a pending tool provisioning request",
+			InputSchema: map[string]interface{}{"type": "object", "properties": map[string]interface{}{"intent_id": map[string]interface{}{"type": "string", "description": "Intent UUID"}, "reason": map[string]interface{}{"type": "string", "description": "Approval reason"}}, "required": []string{"intent_id", "reason"}},
+		},
+		{
+			Name:        "bahia_tool_provision_reject",
+			Description: "Reject a pending tool provisioning request",
+			InputSchema: map[string]interface{}{"type": "object", "properties": map[string]interface{}{"intent_id": map[string]interface{}{"type": "string", "description": "Intent UUID"}, "reason": map[string]interface{}{"type": "string", "description": "Rejection reason"}}, "required": []string{"intent_id", "reason"}},
+		},
+		{
+			Name:        "bahia_tool_denylist_add",
+			Description: "Add a package to the tool denylist",
+			InputSchema: map[string]interface{}{"type": "object", "properties": map[string]interface{}{"package": map[string]interface{}{"type": "string"}, "manager": map[string]interface{}{"type": "string"}, "reason": map[string]interface{}{"type": "string"}}, "required": []string{"package", "manager", "reason"}},
+		},
+		{
+			Name:        "bahia_tool_denylist_remove",
+			Description: "Remove a package from the tool denylist",
+			InputSchema: map[string]interface{}{"type": "object", "properties": map[string]interface{}{"package": map[string]interface{}{"type": "string"}, "manager": map[string]interface{}{"type": "string"}}, "required": []string{"package", "manager"}},
+		},
+		{
+			Name:        "bahia_tool_denylist_list",
+			Description: "List all packages on the tool denylist",
+			InputSchema: map[string]interface{}{"type": "object", "properties": map[string]interface{}{}},
+		},
+		{
+			Name:        "bahia_tool_profile_get",
+			Description: "Get the current tool profile for a service/environment",
+			InputSchema: map[string]interface{}{"type": "object", "properties": map[string]interface{}{"service_id": map[string]interface{}{"type": "string"}, "environment_id": map[string]interface{}{"type": "string"}}, "required": []string{"service_id", "environment_id"}},
+		},
 		// Notification channel operations
 		{
 			Name:        "bahia_list_notification_channels",
@@ -1746,6 +1800,23 @@ func (s *Server) CallTool(ctx context.Context, name string, arguments map[string
 		return s.handleApproveDeployment(ctx, arguments) // alias
 	case "bahia_reject_intent":
 		return s.handleRejectDeployment(ctx, arguments) // alias
+	// Tool provisioning operations
+	case "bahia_tool_provision_request":
+		return s.handleToolProvisionRequest(ctx, arguments)
+	case "bahia_tool_provision_status":
+		return s.handleToolProvisionStatus(ctx, arguments)
+	case "bahia_tool_provision_approve":
+		return s.handleToolProvisionApprove(ctx, arguments)
+	case "bahia_tool_provision_reject":
+		return s.handleToolProvisionReject(ctx, arguments)
+	case "bahia_tool_denylist_add":
+		return s.handleToolDenylistAdd(ctx, arguments)
+	case "bahia_tool_denylist_remove":
+		return s.handleToolDenylistRemove(ctx, arguments)
+	case "bahia_tool_denylist_list":
+		return s.handleToolDenylistList(ctx, arguments)
+	case "bahia_tool_profile_get":
+		return s.handleToolProfileGet(ctx, arguments)
 	// Notification channel operations
 	case "bahia_list_notification_channels":
 		return s.handleListNotificationChannels(ctx, arguments)
@@ -3762,6 +3833,230 @@ func (s *Server) handleGetIntent(ctx context.Context, args map[string]interface{
 	return jsonResult(intentToMap(intent))
 }
 
+func (s *Server) handleToolProvisionRequest(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
+	if s.toolProvisioning == nil {
+		return errorResult("tool provisioning tools are not configured"), nil
+	}
+
+	serviceID, err := parseRequiredUUIDArg(args, "service_id")
+	if err != nil {
+		return errorResult(err.Error()), nil
+	}
+	environmentID, err := parseRequiredUUIDArg(args, "environment_id")
+	if err != nil {
+		return errorResult(err.Error()), nil
+	}
+	reason, _ := args["reason"].(string)
+	if strings.TrimSpace(reason) == "" {
+		return errorResult("reason is required"), nil
+	}
+
+	toolsRaw, ok := args["tools"]
+	if !ok {
+		return errorResult("tools is required"), nil
+	}
+	toolsJSON, err := json.Marshal(toolsRaw)
+	if err != nil {
+		return errorResult(fmt.Sprintf("invalid tools: %v", err)), nil
+	}
+	var tools []domain.ToolRequest
+	if err := json.Unmarshal(toolsJSON, &tools); err != nil {
+		return errorResult(fmt.Sprintf("invalid tools: %v", err)), nil
+	}
+	if len(tools) == 0 {
+		return errorResult("at least one tool is required"), nil
+	}
+	for _, t := range tools {
+		if strings.TrimSpace(t.Name) == "" || strings.TrimSpace(t.Manager) == "" {
+			return errorResult("each tool requires name and manager"), nil
+		}
+	}
+
+	requester, _ := args["requester"].(string)
+	if requester == "" {
+		requester = "mcp"
+	}
+	intent := &domain.ToolProvisionIntent{
+		ID:               uuid.New(),
+		ServiceID:        serviceID,
+		EnvironmentID:    environmentID,
+		RequestedTools:   tools,
+		Status:           domain.ToolProvisionStatusAwaitingApproval,
+		ApprovalRequired: true,
+		ApprovalFlags:    []string{"manual_review_required", reason},
+		RequesterPubkey:  requester,
+		CreatedAt:        time.Now().UTC(),
+	}
+	if err := s.toolProvisioning.CreateIntent(ctx, intent); err != nil {
+		return errorResult(fmt.Sprintf("failed to create tool provision intent: %v", err)), nil
+	}
+
+	if s.notificationDisp != nil {
+		serviceName := ""
+		if svc, svcErr := s.registry.GetService(ctx, serviceID); svcErr == nil && svc != nil {
+			serviceName = svc.Name
+		}
+		baseURL := "http://localhost:7777"
+		payload := map[string]any{
+			"intent_id":     intent.ID,
+			"service_id":    intent.ServiceID,
+			"service_name":  serviceName,
+			"requester":     intent.RequesterPubkey,
+			"tools":         intent.RequestedTools,
+			"flags":         intent.ApprovalFlags,
+			"security_scan": intent.SecurityScanResults,
+			"approve_url":   fmt.Sprintf("%s/tools/%s/approve", baseURL, intent.ID),
+			"reject_url":    fmt.Sprintf("%s/tools/%s/reject", baseURL, intent.ID),
+		}
+		s.notificationDisp.Dispatch(ctx, string(events.EventToolProvisionApprovalRequired), payload)
+	}
+
+	return jsonResult(map[string]interface{}{
+		"status": "created",
+		"intent": toolProvisionIntentToMap(intent),
+	})
+}
+
+func (s *Server) handleToolProvisionStatus(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
+	if s.toolProvisioning == nil {
+		return errorResult("tool provisioning tools are not configured"), nil
+	}
+	intentID, err := parseRequiredUUIDArg(args, "intent_id")
+	if err != nil {
+		return errorResult(err.Error()), nil
+	}
+	intent, err := s.toolProvisioning.GetIntent(ctx, intentID)
+	if err != nil {
+		return errorResult(fmt.Sprintf("failed to get tool provisioning intent: %v", err)), nil
+	}
+	if intent == nil {
+		return errorResult("intent not found"), nil
+	}
+	return jsonResult(toolProvisionIntentToMap(intent))
+}
+
+func (s *Server) handleToolProvisionApprove(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
+	if s.toolProvisioning == nil {
+		return errorResult("tool provisioning tools are not configured"), nil
+	}
+	intentID, err := parseRequiredUUIDArg(args, "intent_id")
+	if err != nil {
+		return errorResult(err.Error()), nil
+	}
+	reason, _ := args["reason"].(string)
+	if strings.TrimSpace(reason) == "" {
+		return errorResult("reason is required"), nil
+	}
+	intent, err := s.toolProvisioning.GetIntent(ctx, intentID)
+	if err != nil {
+		return errorResult(fmt.Sprintf("failed to get tool provisioning intent: %v", err)), nil
+	}
+	if intent == nil {
+		return errorResult("intent not found"), nil
+	}
+	now := time.Now().UTC()
+	intent.Status = domain.ToolProvisionStatusApproved
+	intent.ApprovedAt = &now
+	intent.ApprovedBy = "mcp"
+	if err := s.toolProvisioning.UpdateIntent(ctx, intent); err != nil {
+		return errorResult(fmt.Sprintf("failed to update tool provisioning intent: %v", err)), nil
+	}
+	_ = s.toolProvisioning.LogApproval(ctx, intentID, "approved", "mcp", reason)
+	return jsonResult(map[string]interface{}{"status": "approved", "intent": toolProvisionIntentToMap(intent)})
+}
+
+func (s *Server) handleToolProvisionReject(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
+	if s.toolProvisioning == nil {
+		return errorResult("tool provisioning tools are not configured"), nil
+	}
+	intentID, err := parseRequiredUUIDArg(args, "intent_id")
+	if err != nil {
+		return errorResult(err.Error()), nil
+	}
+	reason, _ := args["reason"].(string)
+	if strings.TrimSpace(reason) == "" {
+		return errorResult("reason is required"), nil
+	}
+	intent, err := s.toolProvisioning.GetIntent(ctx, intentID)
+	if err != nil {
+		return errorResult(fmt.Sprintf("failed to get tool provisioning intent: %v", err)), nil
+	}
+	if intent == nil {
+		return errorResult("intent not found"), nil
+	}
+	intent.Status = domain.ToolProvisionStatusRejected
+	if err := s.toolProvisioning.UpdateIntent(ctx, intent); err != nil {
+		return errorResult(fmt.Sprintf("failed to update tool provisioning intent: %v", err)), nil
+	}
+	_ = s.toolProvisioning.LogApproval(ctx, intentID, "rejected", "mcp", reason)
+	return jsonResult(map[string]interface{}{"status": "rejected", "intent": toolProvisionIntentToMap(intent)})
+}
+
+func (s *Server) handleToolDenylistAdd(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
+	if s.toolProvisioning == nil {
+		return errorResult("tool provisioning tools are not configured"), nil
+	}
+	packageName, _ := args["package"].(string)
+	manager, _ := args["manager"].(string)
+	reason, _ := args["reason"].(string)
+	if strings.TrimSpace(packageName) == "" || strings.TrimSpace(manager) == "" || strings.TrimSpace(reason) == "" {
+		return errorResult("package, manager, and reason are required"), nil
+	}
+	entry := &domain.ToolDenylistEntry{PackageName: packageName, Manager: manager, Reason: reason, BlockedBy: "mcp"}
+	if err := s.toolProvisioning.AddToDenylist(ctx, entry); err != nil {
+		return errorResult(fmt.Sprintf("failed to add denylist entry: %v", err)), nil
+	}
+	return jsonResult(map[string]interface{}{"status": "added", "entry": toolDenylistEntryToMap(entry)})
+}
+
+func (s *Server) handleToolDenylistRemove(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
+	if s.toolProvisioning == nil {
+		return errorResult("tool provisioning tools are not configured"), nil
+	}
+	packageName, _ := args["package"].(string)
+	manager, _ := args["manager"].(string)
+	if strings.TrimSpace(packageName) == "" || strings.TrimSpace(manager) == "" {
+		return errorResult("package and manager are required"), nil
+	}
+	if err := s.toolProvisioning.RemoveFromDenylist(ctx, packageName, manager); err != nil {
+		return errorResult(fmt.Sprintf("failed to remove denylist entry: %v", err)), nil
+	}
+	return jsonResult(map[string]interface{}{"status": "removed"})
+}
+
+func (s *Server) handleToolDenylistList(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
+	if s.toolProvisioning == nil {
+		return errorResult("tool provisioning tools are not configured"), nil
+	}
+	entries, err := s.toolProvisioning.ListDenylist(ctx)
+	if err != nil {
+		return errorResult(fmt.Sprintf("failed to list denylist entries: %v", err)), nil
+	}
+	return jsonResult(map[string]interface{}{"entries": toolDenylistEntriesToMaps(entries), "total": len(entries)})
+}
+
+func (s *Server) handleToolProfileGet(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
+	if s.toolProvisioning == nil {
+		return errorResult("tool provisioning tools are not configured"), nil
+	}
+	serviceID, err := parseRequiredUUIDArg(args, "service_id")
+	if err != nil {
+		return errorResult(err.Error()), nil
+	}
+	environmentID, err := parseRequiredUUIDArg(args, "environment_id")
+	if err != nil {
+		return errorResult(err.Error()), nil
+	}
+	state, err := s.toolProvisioning.GetProfileState(ctx, serviceID, environmentID)
+	if err != nil {
+		return errorResult(fmt.Sprintf("failed to get tool profile: %v", err)), nil
+	}
+	if state == nil {
+		return jsonResult(map[string]interface{}{"state": nil})
+	}
+	return jsonResult(map[string]interface{}{"state": toolProfileStateToMap(state)})
+}
+
 // --- Helper Functions ---
 
 func decodeToolArgs(args map[string]interface{}, out interface{}) error {
@@ -3894,6 +4189,69 @@ func errorResult(message string) *ToolResult {
 		}},
 		IsError: true,
 	}
+}
+
+func toolProvisionIntentToMap(intent *domain.ToolProvisionIntent) map[string]interface{} {
+	if intent == nil {
+		return nil
+	}
+	m := map[string]interface{}{
+		"id":                    intent.ID.String(),
+		"service_id":            intent.ServiceID.String(),
+		"environment_id":        intent.EnvironmentID.String(),
+		"requested_tools":       intent.RequestedTools,
+		"resolved_tools":        intent.ResolvedTools,
+		"security_scan_results": intent.SecurityScanResults,
+		"toolset_hash":          intent.ToolsetHash,
+		"status":                string(intent.Status),
+		"approval_required":     intent.ApprovalRequired,
+		"approval_flags":        intent.ApprovalFlags,
+		"approved_by":           intent.ApprovedBy,
+		"nostr_event_id":        intent.NostrEventID,
+		"requester_pubkey":      intent.RequesterPubkey,
+		"created_at":            intent.CreatedAt.Format("2006-01-02T15:04:05Z"),
+	}
+	if intent.ApprovedAt != nil {
+		m["approved_at"] = intent.ApprovedAt.Format("2006-01-02T15:04:05Z")
+	}
+	return m
+}
+
+func toolProfileStateToMap(state *domain.ToolProfileState) map[string]interface{} {
+	if state == nil {
+		return nil
+	}
+	return map[string]interface{}{
+		"service_id":            state.ServiceID.String(),
+		"environment_id":        state.EnvironmentID.String(),
+		"current_toolset_hash":  state.CurrentToolsetHash,
+		"current_image_digest":  state.CurrentImageDigest,
+		"installed_tools":       state.InstalledTools,
+		"previous_image_digest": state.PreviousImageDigest,
+		"updated_at":            state.UpdatedAt.Format("2006-01-02T15:04:05Z"),
+	}
+}
+
+func toolDenylistEntryToMap(entry *domain.ToolDenylistEntry) map[string]interface{} {
+	if entry == nil {
+		return nil
+	}
+	return map[string]interface{}{
+		"package":    entry.PackageName,
+		"manager":    entry.Manager,
+		"reason":     entry.Reason,
+		"source":     entry.Source,
+		"blocked_at": entry.BlockedAt.Format("2006-01-02T15:04:05Z"),
+		"blocked_by": entry.BlockedBy,
+	}
+}
+
+func toolDenylistEntriesToMaps(entries []domain.ToolDenylistEntry) []map[string]interface{} {
+	result := make([]map[string]interface{}, len(entries))
+	for i := range entries {
+		result[i] = toolDenylistEntryToMap(&entries[i])
+	}
+	return result
 }
 
 func serviceToMap(svc *domain.Service) map[string]interface{} {

@@ -53,6 +53,7 @@ type RouterDeps struct {
 	Encryptor        *secrets.Encryptor
 	Notifications    repository.NotificationRepository
 	Dispatcher       *notifications.Dispatcher
+	ToolProvisioning repository.ToolProvisioningRepository
 	MCP              *handlers.MCPHandler
 	HiveCI           repository.HiveCIRepository
 	Blossom          *blossom.Client
@@ -301,6 +302,15 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 				r.Get("/notifications/log", notifH.ListLogs)
 			}
 
+			// Tool provisioning (read)
+			if deps.ToolProvisioning != nil {
+				toolH := handlers.NewToolHandler(deps.ToolProvisioning, registry)
+				r.With(coreRBAC(deps, authMiddleware, nil, true)).Get("/tools/pending", toolH.ListPending)
+				r.With(coreRBAC(deps, authMiddleware, toolIntentOrgResolver(deps.ToolProvisioning, deps.Services, "id"), true)).Get("/tools/{id}", toolH.GetIntent)
+				r.With(coreRBAC(deps, authMiddleware, nil, true)).Get("/tools/denylist", toolH.ListDenylist)
+				r.With(coreRBAC(deps, authMiddleware, serviceOrgResolver(deps.Services, "id"), true)).Get("/services/{id}/tools", toolH.GetProfile)
+			}
+
 			// Blossom (read)
 			if deps.Blossom != nil {
 				blossomH := handlers.NewBlossomHandler(deps.Blossom)
@@ -408,6 +418,15 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 				r.Put("/notifications/channels/{id}", notifH.UpdateChannel)
 				r.Delete("/notifications/channels/{id}", notifH.DeleteChannel)
 				r.Post("/notifications/channels/{id}/test", notifH.TestChannel)
+			}
+
+			// Tool provisioning (write)
+			if deps.ToolProvisioning != nil {
+				toolH := handlers.NewToolHandler(deps.ToolProvisioning, registry)
+				r.With(coreRBAC(deps, authMiddleware, toolIntentOrgResolver(deps.ToolProvisioning, deps.Services, "id"), true)).Post("/tools/{id}/approve", toolH.ApproveIntent)
+				r.With(coreRBAC(deps, authMiddleware, toolIntentOrgResolver(deps.ToolProvisioning, deps.Services, "id"), true)).Post("/tools/{id}/reject", toolH.RejectIntent)
+				r.With(coreRBAC(deps, authMiddleware, nil, true)).Post("/tools/denylist", toolH.AddDenylist)
+				r.With(coreRBAC(deps, authMiddleware, nil, true)).Delete("/tools/denylist/{package}/{manager}", toolH.RemoveDenylist)
 			}
 
 			if deps.MCP != nil {
@@ -621,6 +640,30 @@ func runOrgResolver(registry *service.RegistryService, services repository.Servi
 		}
 		req := requestWithRouteParam(r, "intentId", run.DeploymentIntentID.String())
 		return intentOrgResolver(registry, services, "intentId")(req)
+	}
+}
+
+func toolIntentOrgResolver(tools repository.ToolProvisioningRepository, services repository.ServiceRepository, param string) middleware.ResourceOrgResolver {
+	return func(r *http.Request) (uuid.UUID, error) {
+		id, err := parseRouteUUID(r, param)
+		if err != nil {
+			return uuid.Nil, err
+		}
+		intent, err := tools.GetIntent(r.Context(), id)
+		if err != nil {
+			return uuid.Nil, err
+		}
+		if intent == nil {
+			return uuid.Nil, middleware.ErrOrgContextNotFound
+		}
+		svc, err := services.GetByID(r.Context(), intent.ServiceID)
+		if err != nil {
+			return uuid.Nil, err
+		}
+		if svc == nil || svc.OrgID == uuid.Nil {
+			return uuid.Nil, middleware.ErrOrgContextNotFound
+		}
+		return svc.OrgID, nil
 	}
 }
 

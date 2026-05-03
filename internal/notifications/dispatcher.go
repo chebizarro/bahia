@@ -49,6 +49,9 @@ func (d *Dispatcher) SetupSubscriptions(pub events.Publisher) {
 		events.EventBuildStatusChanged,
 		events.EventDriftDetected,
 		events.EventReconcileCompleted,
+		events.EventToolProvisionApprovalRequired,
+		events.EventToolProvisionCompleted,
+		events.EventToolProvisionFailed,
 	}
 
 	for _, et := range eventTypes {

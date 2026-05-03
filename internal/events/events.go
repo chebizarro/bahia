@@ -50,6 +50,9 @@ const (
 	EventLLMRouteStateChanged           EventType = "llm_route_state.changed"
 	EventLLMRouteDriftDetected          EventType = "llm_route.drift_detected"
 	EventLLMGatewayRouteSynced          EventType = "llm_gateway_route.synced"
+	EventToolProvisionApprovalRequired  EventType = "tool_provision.approval_required"
+	EventToolProvisionCompleted         EventType = "tool_provision.completed"
+	EventToolProvisionFailed            EventType = "tool_provision.failed"
 )
 
 // ResourceData carries projection-relevant resource identifiers in internal
