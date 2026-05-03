@@ -21,21 +21,17 @@ describe('route access', () => {
     expect(result.authorized).toBe(false);
   });
 
-  it('requires compatibility only on remaining REST-dependent protected routes', () => {
-    const blocked = canAccessRoute({
-      pathname: '/payments',
-      authState: { backendAuthenticated: false },
-      isAuthenticated: true
-    });
+  it('does not require REST compatibility for migrated sensitive route families', () => {
+    for (const pathname of ['/payments', '/orgs']) {
+      const result = canAccessRoute({
+        pathname,
+        authState: { backendAuthenticated: false },
+        isAuthenticated: true
+      });
 
-    const allowed = canAccessRoute({
-      pathname: '/payments',
-      authState: { compatibility: { restNip98Ready: true } },
-      isAuthenticated: true
-    });
-
-    expect(blocked.authorized).toBe(false);
-    expect(allowed.authorized).toBe(true);
+      expect(result.requiresRestCompatibility).toBe(false);
+      expect(result.authorized).toBe(true);
+    }
   });
 
   it('does not require REST compatibility for migrated public route families', () => {

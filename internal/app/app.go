@@ -443,6 +443,7 @@ func New(cfg *config.Config) (*App, error) {
 	if len(privateControlPlaneRelays) > 0 && privateControlPlanePool != nil && controlPlaneSigner != nil && cfg.Nostr.PrivateKey != "" {
 		responder := controlplane.NewEncryptedResponder(privateControlPlanePool, controlPlaneSigner, cfg.Nostr.PrivateKey, logger)
 		privateTransport := controlplane.NewPrivateTransport(privateControlPlanePool, responder, cfg.Nostr.AuthorizedPubkeys, logger)
+		controlplane.RegisterNotificationPrivateHandlers(privateTransport, notifRepo, notifDispatcher)
 		bgManager.Register(&privateTransportRunner{transport: privateTransport})
 		logger.Info("private nostr transport registered", zap.Strings("relays", privateControlPlaneRelays))
 	}

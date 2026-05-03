@@ -4,7 +4,7 @@
   import ErrorState from '$lib/components/ErrorState.svelte';
   import LoadingButton from '$lib/components/LoadingButton.svelte';
   import Select from '$lib/components/Select.svelte';
-  import { api } from '$lib/api/client.js';
+  import { listNotificationChannels, listNotificationLogs } from '$lib/stores/notifications.svelte.js';
   import {
     channelLabel,
     filterNotificationLogs,
@@ -47,10 +47,10 @@
     error = null;
 
     try {
-      logs = normalizeNotificationLogs(await api.listNotificationLogs());
+      logs = normalizeNotificationLogs(await listNotificationLogs({ limit: 50 }));
 
       try {
-        channels = normalizeChannels(await api.listNotificationChannels());
+        channels = normalizeChannels(await listNotificationChannels());
       } catch {
         channels = [];
       }

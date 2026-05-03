@@ -7,7 +7,12 @@
   import LoadingButton from '$lib/components/LoadingButton.svelte';
   import Select from '$lib/components/Select.svelte';
   import { toast } from '$lib/components/toast.js';
-  import { api } from '$lib/api/client.js';
+  import {
+    deleteNotificationChannel,
+    listNotificationChannels,
+    testNotificationChannel,
+    updateNotificationChannel
+  } from '$lib/stores/notifications.svelte.js';
   import {
     channelDestination,
     channelTypeLabel,
@@ -59,7 +64,7 @@
     error = null;
 
     try {
-      channels = normalizeChannels(await api.listNotificationChannels());
+      channels = normalizeChannels(await listNotificationChannels());
     } catch (err) {
       error = err.message || 'Failed to load notification channels';
       channels = [];
@@ -73,7 +78,7 @@
     actionKey = `toggle:${channel.id}`;
 
     try {
-      const updated = await api.updateNotificationChannel(channel.id, { enabled: nextEnabled });
+      const updated = await updateNotificationChannel(channel.id, { enabled: nextEnabled });
       upsertChannel(updated || { ...channel, enabled: nextEnabled });
       toast.success(`${channel.name} ${nextEnabled ? 'enabled' : 'disabled'}`);
     } catch (err) {
@@ -87,7 +92,7 @@
     actionKey = `test:${channel.id}`;
 
     try {
-      await api.testNotificationChannel(channel.id);
+      await testNotificationChannel(channel.id);
       toast.success(`Test notification sent to ${channel.name}`);
     } catch (err) {
       toast.error(`Failed to send test notification: ${err.message}`);
@@ -108,7 +113,7 @@
     actionKey = `delete:${target.id}`;
 
     try {
-      await api.deleteNotificationChannel(target.id);
+      await deleteNotificationChannel(target.id);
       channels = channels.filter((channel) => channel.id !== target.id);
       toast.success(`${target.name} deleted`);
       deleteDialogOpen = false;

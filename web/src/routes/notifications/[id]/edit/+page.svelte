@@ -1,8 +1,8 @@
 <script>
   import { page } from '$app/state';
   import { goto } from '$app/navigation';
-  import { api } from '$lib/api/client.js';
   import ErrorState from '$lib/components/ErrorState.svelte';
+  import { getNotificationChannel, listNotificationChannels, updateNotificationChannel } from '$lib/stores/notifications.svelte.js';
   import { toast } from '$lib/components/toast.js';
   import NotificationChannelForm from '../../NotificationChannelForm.svelte';
 
@@ -26,12 +26,12 @@
     channel = null;
 
     try {
-      channel = await api.getNotificationChannel(id);
+      channel = await getNotificationChannel(id);
 
       // Some notification handlers return the raw channel while the shared API
       // client unwraps `data`; fall back to the list endpoint if needed.
       if (!channel) {
-        const channels = await api.listNotificationChannels();
+        const channels = await listNotificationChannels();
         channel = (channels || []).find((candidate) => candidate.id === id) || null;
       }
 
@@ -50,7 +50,7 @@
     saveError = '';
 
     try {
-      const updated = await api.updateNotificationChannel(channelId, payload);
+      const updated = await updateNotificationChannel(channelId, payload);
       channel = updated || { ...channel, ...payload };
       toast.success(`${channel?.name || payload.name} updated`);
       await goto('/notifications');

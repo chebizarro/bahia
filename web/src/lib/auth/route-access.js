@@ -20,9 +20,7 @@ const ROUTE_ROLE_REQUIREMENTS = {
 
 // Routes that still require REST compatibility in the signer-first migration.
 const ROUTE_COMPATIBILITY_REQUIREMENTS = {
-  '/notifications': true,
-  '/orgs': true,
-  '/payments': true
+  '/notifications': true
 };
 
 function getRoleRequirements() {

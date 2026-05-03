@@ -148,6 +148,18 @@ Browser signer support:
 - NIP-07 is supported only when `window.nostr.nip44.encrypt/decrypt` are available.
 - NIP-46 can participate only if the provider explicitly exposes `provider.nip44.encrypt/decrypt`; NIP-46's internal encrypted RPC channel does not by itself give the web app NIP-44 conversation-key operations. If absent, private route migration is blocked for that signer mode and the UI/tests should surface that exact blocker.
 
+Notification private operations:
+
+| Operation | Payload | Result payload | Notes |
+|-----------|---------|----------------|-------|
+| `notifications.channels.list` | `{}` | `{channels}` | Channel configs are encrypted in transit; webhook `config.secret` is omitted from results. |
+| `notifications.channels.get` | `{id}` | `{channel}` | Returns one sanitized channel or an encrypted terminal error. |
+| `notifications.channels.create` | channel fields | `{channel}` | Webhook secrets are accepted only as encrypted write payloads. |
+| `notifications.channels.update` | `{id, ...fields}` | `{channel}` | Omitted webhook secrets preserve the stored secret; returned channel is sanitized. |
+| `notifications.channels.delete` | `{id}` | `{status,id}` | Deletes the channel over private transport. |
+| `notifications.channels.test` | `{id}` | `{status,id}` | Dispatches directly to the selected channel and returns terminal success/error. |
+| `notifications.logs.list` | `{limit?,channel_id?}` | `{logs}` | Delivery logs and payloads are returned only in encrypted result content. |
+
 ### Correlation Tags
 
 Use tags for relay-side filtering and MCP follow-up subscriptions. Service flows use `service`, `environment`, `artifact`, `intent`, and `run`. LLM flows use `route`, `release`, `environment`, `intent`, and `run`. Status/result replies also include `e` with marker `reply`, `p` for the requester pubkey, plus `status` and `step` where applicable. Private result replies use the same `e`/`p` pattern but keep payloads encrypted. MCP async LLM tools return the request event id and the relevant request/status/result/read-model kind ids so clients can subscribe directly rather than polling.

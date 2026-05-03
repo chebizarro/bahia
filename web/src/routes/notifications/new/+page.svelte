@@ -1,7 +1,7 @@
 <script>
   import { goto } from '$app/navigation';
-  import { api } from '$lib/api/client.js';
   import { toast } from '$lib/components/toast.js';
+  import { createNotificationChannel } from '$lib/stores/notifications.svelte.js';
   import NotificationChannelForm from '../NotificationChannelForm.svelte';
 
   let saving = $state(false);
@@ -12,7 +12,7 @@
     saveError = '';
 
     try {
-      const created = await api.createNotificationChannel(payload);
+      const created = await createNotificationChannel(payload);
       toast.success(`${created?.name || payload.name} created`);
       await goto('/notifications');
     } catch (err) {

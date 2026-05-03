@@ -73,7 +73,7 @@ Signer-session auth and REST compatibility are tracked separately:
 
 ### REST Compatibility Surface
 
-Most realtime app state is sourced from the Nostr sidecar/control-plane subscriptions. Remaining REST-dependent pages still require direct NIP-98 compatibility to perform HTTP CRUD/query operations. As of this migration stage, `/orgs` is explicitly compatibility-gated in route access.
+Most realtime app state is sourced from the Nostr sidecar/control-plane subscriptions. REST compatibility remains a legacy fallback for HTTP CRUD/query operations that have not yet moved to signer-first transports. As of this migration stage, sensitive route families such as `/notifications` use the private encrypted route transport instead of REST compatibility.
 
 ### Private Encrypted Route Transport
 
