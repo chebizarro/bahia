@@ -43,6 +43,8 @@ const (
 	KindLLMRollbackRequest    = 5975 // Request LLM route rollback
 	KindToolProvisionRequest  = 5976 // Agent → Bahia
 	KindToolApprovalRequest   = 5977 // Bahia → Operator
+	KindAdoptionScanRequest   = 5978 // Request adoption scan previews
+	KindAdoptionImportRequest = 5979 // Request adoption import
 	KindServiceUpdate         = 5981 // Update a service registry entry
 	KindServiceDelete         = 5982 // Delete a service registry entry
 	KindEnvironmentUpdate     = 5983 // Update an environment registry entry
@@ -53,13 +55,14 @@ const (
 	KindPolicyDelete          = 5988 // Delete a deployment policy
 	KindPolicyEvaluate        = 5989 // Evaluate deployment policies
 
-	// Status kinds (6961-6973)
+	// Status kinds (6961-6978)
 	KindDeploymentStatus    = 6961 // Deployment progress updates
 	KindServiceStatus       = 6962 // Service health/state updates
 	KindLLMDeploymentStatus = 6973 // LLM deployment/rollback progress updates
 	KindToolProvisionStatus = 6976 // Bahia → Agent (progress)
+	KindAdoptionStatus      = 6978 // Adoption scan/import progress updates
 
-	// Result kinds (7961-7973)
+	// Result kinds (7961-7979)
 	KindDeploymentResult         = 7961 // Final deployment result
 	KindActionResult             = 7962 // Result of a service action
 	KindServiceCreateResult      = 7963 // Service creation result
@@ -71,6 +74,8 @@ const (
 	KindLLMDeploymentResult      = 7973 // LLM deployment/approval/rollback result
 	KindToolProvisionResult      = 7976 // Bahia → Agent (final)
 	KindToolApprovalResponse     = 7977 // Operator → Bahia
+	KindAdoptionScanResult       = 7978 // Adoption scan result
+	KindAdoptionImportResult     = 7979 // Adoption import result
 
 	// Replaceable registry kinds (3196x series, d-tag indexed)
 	KindServiceState             = 31961 // Replaceable service state (d=service:env)
@@ -96,12 +101,16 @@ type Config struct {
 	PrivateKey string
 	// AuthorizedPubkeys is the list of pubkeys allowed to submit requests.
 	AuthorizedPubkeys []string
+	// AdoptionAuthorizedPubkeys is the adoption-specific operator allowlist.
+	// AuthorizedPubkeys remains a global fallback for adoption requests.
+	AdoptionAuthorizedPubkeys []string
 }
 
 // Reactor subscribes to Nostr control plane events and dispatches handlers.
 type Reactor struct {
 	config      Config
 	pool        *nostrpool.RelayPool
+	publisher   NostrEventPublisher
 	registry    *service.RegistryService
 	llmRegistry *service.LLMRegistryService
 	signer      canonicalnostr.Signer
@@ -114,6 +123,7 @@ type Reactor struct {
 	toolResponder    *ToolResponder
 	toolCoordinator  *service.ToolProvisioningCoordinator
 	policyService    *service.PolicyService
+	adoption         AdoptionOperatorService
 
 	mu   sync.Mutex
 	runs map[string]*DeploymentRun // requestEventID -> run
@@ -159,6 +169,20 @@ func WithPolicyService(policies *service.PolicyService) ReactorOption {
 	return func(r *Reactor) { r.policyService = policies }
 }
 
+// WithAdoptionService enables signer-first adoption scan/import request handling.
+func WithAdoptionService(adoption AdoptionOperatorService) ReactorOption {
+	return func(r *Reactor) { r.adoption = adoption }
+}
+
+// WithControlPlanePublisher overrides the result/status publisher, primarily for tests.
+func WithControlPlanePublisher(publisher NostrEventPublisher) ReactorOption {
+	return func(r *Reactor) {
+		if publisher != nil {
+			r.publisher = publisher
+		}
+	}
+}
+
 // NewReactor creates a new Bahia control plane reactor.
 // If pool is nil, a new pool will be created from the config relays.
 // signer is required for event signing. If pool is nil, config.PrivateKey is
@@ -183,15 +207,16 @@ func NewReactor(config Config, registry *service.RegistryService, pool *nostrpoo
 	}
 
 	r := &Reactor{
-		config:   config,
-		pool:     pool,
-		registry: registry,
-		signer:   signer,
-		logger:   slog.Default().With("component", "controlplane"),
-		zapLog:   zapLog,
-		dedup:    nostrpool.NewEventDeduplicator(10000),
-		backoff:  nostrpool.DefaultBackoff(),
-		runs:     make(map[string]*DeploymentRun),
+		config:    config,
+		pool:      pool,
+		publisher: pool,
+		registry:  registry,
+		signer:    signer,
+		logger:    slog.Default().With("component", "controlplane"),
+		zapLog:    zapLog,
+		dedup:     nostrpool.NewEventDeduplicator(10000),
+		backoff:   nostrpool.DefaultBackoff(),
+		runs:      make(map[string]*DeploymentRun),
 	}
 	for _, opt := range opts {
 		opt(r)
@@ -232,6 +257,8 @@ func (r *Reactor) Run(ctx context.Context) error {
 				KindLLMRollbackRequest,
 				KindToolProvisionRequest,
 				KindToolApprovalResponse,
+				KindAdoptionScanRequest,
+				KindAdoptionImportRequest,
 				KindServiceUpdate,
 				KindServiceDelete,
 				KindEnvironmentUpdate,
@@ -325,6 +352,10 @@ func (r *Reactor) handleEvent(ctx context.Context, event *nostr.Event) {
 		go r.handleToolProvisionRequest(ctx, event)
 	case KindToolApprovalResponse:
 		go r.handleToolApprovalResponse(ctx, event)
+	case KindAdoptionScanRequest:
+		go r.handleAdoptionScanRequest(ctx, event)
+	case KindAdoptionImportRequest:
+		go r.handleAdoptionImportRequest(ctx, event)
 	case KindServiceUpdate:
 		go r.handleServiceUpdate(ctx, event)
 	case KindServiceDelete:
@@ -1387,7 +1418,7 @@ func (r *Reactor) handlePolicyEvaluate(ctx context.Context, event *nostr.Event) 
 	tags := nostr.Tags{{"e", event.ID, "", "reply"}, {"p", event.PubKey}, {"status", "success"}, {"action", "policy_evaluate"}, {"artifact", artifactID.String()}, {"environment", envID.String()}}
 	result := &nostr.Event{Kind: KindActionResult, CreatedAt: nostr.Now(), Tags: tags, Content: string(content)}
 	if err := r.signEvent(ctx, result); err == nil {
-		_, _ = r.pool.Publish(ctx, *result)
+		_, _ = r.publishEvent(ctx, result)
 	}
 }
 
@@ -1425,12 +1456,32 @@ func stringFromAny(v any) string {
 	}
 }
 
+type operatorScope string
+
+const (
+	operatorScopeDefault  operatorScope = "default"
+	operatorScopeAdoption operatorScope = "adoption"
+)
+
 // isAuthorized checks if a pubkey is authorized to use the control plane.
 func (r *Reactor) isAuthorized(pubkey string) bool {
-	if len(r.config.AuthorizedPubkeys) == 0 {
+	return r.isAuthorizedFor(pubkey, operatorScopeDefault)
+}
+
+// isAuthorizedFor checks if a pubkey is authorized for a scoped operator path.
+func (r *Reactor) isAuthorizedFor(pubkey string, scope operatorScope) bool {
+	if pubkey == "" {
 		return false
 	}
-	return slices.Contains(r.config.AuthorizedPubkeys, pubkey)
+	if slices.Contains(r.config.AuthorizedPubkeys, pubkey) {
+		return true
+	}
+	switch scope {
+	case operatorScopeAdoption:
+		return slices.Contains(r.config.AdoptionAuthorizedPubkeys, pubkey)
+	default:
+		return false
+	}
 }
 
 // parseDeployRequest extracts deployment request data from an event.
@@ -1577,7 +1628,7 @@ func (r *Reactor) publishStatus(ctx context.Context, requestEvent *nostr.Event, 
 		return fmt.Errorf("sign status event: %w", err)
 	}
 
-	_, err := r.pool.Publish(ctx, *event)
+	_, err := r.publishEvent(ctx, event)
 	return err
 }
 
@@ -1610,7 +1661,7 @@ func (r *Reactor) publishDeploymentResult(ctx context.Context, requestEvent *nos
 		return fmt.Errorf("sign result event: %w", err)
 	}
 
-	_, err := r.pool.Publish(ctx, *event)
+	_, err := r.publishEvent(ctx, event)
 	return err
 }
 
@@ -1646,7 +1697,7 @@ func (r *Reactor) publishActionResult(ctx context.Context, requestEvent *nostr.E
 		return fmt.Errorf("sign action result: %w", signErr)
 	}
 
-	_, pubErr := r.pool.Publish(ctx, *event)
+	_, pubErr := r.publishEvent(ctx, event)
 	return pubErr
 }
 
@@ -1684,7 +1735,7 @@ func (r *Reactor) publishApprovalResult(ctx context.Context, requestEvent *nostr
 		return fmt.Errorf("sign approval result: %w", err)
 	}
 
-	_, err := r.pool.Publish(ctx, *event)
+	_, err := r.publishEvent(ctx, event)
 	return err
 }
 
@@ -1708,7 +1759,7 @@ func (r *Reactor) publishLLMRouteCreateResult(ctx context.Context, requestEvent 
 	if err := r.signEvent(ctx, event); err != nil {
 		return fmt.Errorf("sign LLM route create result: %w", err)
 	}
-	_, err := r.pool.Publish(ctx, *event)
+	_, err := r.publishEvent(ctx, event)
 	return err
 }
 
@@ -1734,7 +1785,7 @@ func (r *Reactor) publishLLMReleaseRegisterResult(ctx context.Context, requestEv
 	if err := r.signEvent(ctx, event); err != nil {
 		return fmt.Errorf("sign LLM release register result: %w", err)
 	}
-	_, err := r.pool.Publish(ctx, *event)
+	_, err := r.publishEvent(ctx, event)
 	return err
 }
 
@@ -1762,7 +1813,7 @@ func (r *Reactor) publishLLMDeploymentStatus(ctx context.Context, requestEvent *
 	if err := r.signEvent(ctx, event); err != nil {
 		return fmt.Errorf("sign LLM deployment status: %w", err)
 	}
-	_, err := r.pool.Publish(ctx, *event)
+	_, err := r.publishEvent(ctx, event)
 	return err
 }
 
@@ -1789,7 +1840,7 @@ func (r *Reactor) publishLLMDeploymentResult(ctx context.Context, requestEvent *
 	if err := r.signEvent(ctx, event); err != nil {
 		return fmt.Errorf("sign LLM deployment result: %w", err)
 	}
-	_, err := r.pool.Publish(ctx, *event)
+	_, err := r.publishEvent(ctx, event)
 	return err
 }
 
@@ -1814,7 +1865,7 @@ func (r *Reactor) publishLLMError(ctx context.Context, requestEvent *nostr.Event
 	if err := r.signEvent(ctx, event); err != nil {
 		return fmt.Errorf("sign LLM error result: %w", err)
 	}
-	_, err := r.pool.Publish(ctx, *event)
+	_, err := r.publishEvent(ctx, event)
 	return err
 }
 
@@ -1884,7 +1935,7 @@ func (r *Reactor) publishServiceCreated(ctx context.Context, requestEvent *nostr
 		return fmt.Errorf("sign service created: %w", err)
 	}
 
-	_, err := r.pool.Publish(ctx, *event)
+	_, err := r.publishEvent(ctx, event)
 	return err
 }
 
@@ -1914,7 +1965,7 @@ func (r *Reactor) publishEnvironmentCreated(ctx context.Context, requestEvent *n
 		return fmt.Errorf("sign environment created: %w", err)
 	}
 
-	_, err := r.pool.Publish(ctx, *event)
+	_, err := r.publishEvent(ctx, event)
 	return err
 }
 
@@ -1939,13 +1990,23 @@ func (r *Reactor) publishError(ctx context.Context, requestEvent *nostr.Event, s
 		return fmt.Errorf("sign error event: %w", err)
 	}
 
-	_, err := r.pool.Publish(ctx, *event)
+	_, err := r.publishEvent(ctx, event)
 	return err
 }
 
 // signEvent signs an event through the canonical signer compatibility boundary.
 func (r *Reactor) signEvent(ctx context.Context, event *nostr.Event) error {
 	return SignGoNostrEvent(ctx, r.signer, event)
+}
+
+func (r *Reactor) publishEvent(ctx context.Context, event *nostr.Event) (int, error) {
+	if r.publisher == nil {
+		return 0, fmt.Errorf("control-plane publisher is not configured")
+	}
+	if event == nil {
+		return 0, fmt.Errorf("nostr event is nil")
+	}
+	return r.publisher.Publish(ctx, *event)
 }
 
 // GetRun returns the current deployment run for a request event.
@@ -2137,7 +2198,7 @@ func (r *Reactor) publishObservationResult(ctx context.Context, requestEvent *no
 		return fmt.Errorf("sign observation result: %w", err)
 	}
 
-	_, err := r.pool.Publish(ctx, *event)
+	_, err := r.publishEvent(ctx, event)
 	return err
 }
 
@@ -2174,7 +2235,7 @@ func (r *Reactor) publishRemediationResult(ctx context.Context, requestEvent *no
 		return fmt.Errorf("sign remediation result: %w", err)
 	}
 
-	_, err := r.pool.Publish(ctx, *event)
+	_, err := r.publishEvent(ctx, event)
 	return err
 }
 
@@ -2239,7 +2300,7 @@ func (r *Reactor) publishStateEvent(ctx context.Context, serviceID, envID uuid.U
 		return fmt.Errorf("sign state event: %w", err)
 	}
 
-	_, err = r.pool.Publish(ctx, *event)
+	_, err = r.publishEvent(ctx, event)
 	return err
 }
 
@@ -2270,7 +2331,7 @@ func (r *Reactor) publishPolicyRegistry(ctx context.Context, policy *domain.Depl
 	if err := r.signEvent(ctx, event); err != nil {
 		return fmt.Errorf("sign policy registry event: %w", err)
 	}
-	_, err := r.pool.Publish(ctx, *event)
+	_, err := r.publishEvent(ctx, event)
 	return err
 }
 
@@ -2304,7 +2365,7 @@ func (r *Reactor) PublishServiceRegistry(ctx context.Context, svc *domain.Servic
 		return fmt.Errorf("sign service registry event: %w", err)
 	}
 
-	_, err := r.pool.Publish(ctx, *event)
+	_, err := r.publishEvent(ctx, event)
 	return err
 }
 
@@ -2336,7 +2397,7 @@ func (r *Reactor) PublishEnvironmentRegistry(ctx context.Context, env *domain.En
 		return fmt.Errorf("sign environment registry event: %w", err)
 	}
 
-	_, err := r.pool.Publish(ctx, *event)
+	_, err := r.publishEvent(ctx, event)
 	return err
 }
 

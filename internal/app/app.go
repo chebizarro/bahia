@@ -473,13 +473,23 @@ func New(cfg *config.Config) (*App, error) {
 	// Nostr control plane reactor for event-driven deployment operations.
 	if len(controlPlaneRelays) > 0 && controlPlaneSigner != nil {
 		reactorConfig := controlplane.Config{
-			Relays:            controlPlaneRelays,
-			PrivateKey:        cfg.Nostr.PrivateKey,
-			AuthorizedPubkeys: cfg.Nostr.AuthorizedPubkeys,
+			Relays:                    controlPlaneRelays,
+			PrivateKey:                cfg.Nostr.PrivateKey,
+			AuthorizedPubkeys:         cfg.Nostr.AuthorizedPubkeys,
+			AdoptionAuthorizedPubkeys: cfg.Adoption.AllowedPubkeys,
 		}
 		// Reuse the single canonical control-plane signer for all control-plane
 		// event signing paths.
+		if cfg.Adoption.Enabled {
+			if len(cfg.Nostr.AuthorizedPubkeys) == 0 && len(cfg.Adoption.AllowedPubkeys) == 0 {
+				logger.Warn("signer-first adoption control plane has no pubkey allowlist", zap.Strings("relays", controlPlaneRelays))
+			}
+			if len(cfg.Adoption.AllowedSubjects) > 0 || len(cfg.Adoption.AllowedEmails) > 0 {
+				logger.Warn("signer-first adoption control plane ignores non-pubkey operator allowlist entries", zap.Strings("allowed_subjects", cfg.Adoption.AllowedSubjects), zap.Strings("allowed_emails", cfg.Adoption.AllowedEmails))
+			}
+		}
 		reactorOpts := []controlplane.ReactorOption{
+			controlplane.WithAdoptionService(adoptionSvc),
 			controlplane.WithToolProvisioningRepository(toolProvisionRepo),
 			controlplane.WithToolResponder(controlplane.NewToolResponder(controlPlanePool, controlPlaneSigner, logger, nostrEventRepo)),
 			controlplane.WithToolProvisioningCoordinator(toolCoordinator),
