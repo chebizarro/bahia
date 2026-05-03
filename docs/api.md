@@ -6,7 +6,7 @@ All API endpoints (except health checks) are prefixed with `/api/v1`.
 
 ## Authentication
 
-Local development can run with `auth.enabled=false`. Production deployments should enable Bahia API auth with JWT and/or NIP-98. Adoption/import and direct runtime action routes are privileged operator routes: they are mounted only when their feature flag is enabled and the authenticated principal is allowlisted by subject, pubkey, or email.
+Local development can run with `auth.enabled=false`. Production deployments should enable Bahia API auth with `auth.enabled=true`; protected HTTP endpoints then accept only NIP-98 direct HTTP auth via `Authorization: Nostr <base64event>`. `Authorization: Bearer ...` tokens are unsupported and must be rejected with `401`. Adoption/import and direct runtime action routes are privileged operator routes: they are mounted only when their feature flag is enabled and the authenticated NIP-98 principal is allowlisted by subject, pubkey, or email.
 
 ## Health
 
@@ -91,7 +91,7 @@ Local development can run with `auth.enabled=false`. Production deployments shou
 
 ## Adoption / Import (operator only)
 
-These routes are disabled unless `adoption.enabled=true`. They require auth and the adoption operator allowlist.
+These routes are disabled unless `adoption.enabled=true`. They require NIP-98 HTTP auth when API auth is enabled and the adoption operator allowlist.
 
 | Method | Path | Description |
 |--------|------|-------------|
@@ -102,7 +102,7 @@ Use `endpoint_ref` targets for production. `docker_host` targets are accepted on
 
 ## Direct Runtime Actions (operator only)
 
-These routes are disabled unless `direct_runtime_actions.enabled=true`. They require auth and the direct-runtime operator allowlist. Actions are limited to adopted `direct_runtime` workloads.
+These routes are disabled unless `direct_runtime_actions.enabled=true`. They require NIP-98 HTTP auth when API auth is enabled and the direct-runtime operator allowlist. Actions are limited to adopted `direct_runtime` workloads.
 
 | Method | Path | Description |
 |--------|------|-------------|
@@ -110,7 +110,7 @@ These routes are disabled unless `direct_runtime_actions.enabled=true`. They req
 | POST | `/api/v1/services/{serviceId}/environments/{envId}/restart` | Restart an adopted runtime target |
 | POST | `/api/v1/services/{serviceId}/environments/{envId}/stop` | Stop an adopted runtime target |
 
-Operational limits are separate from the generic write limiter: scan 5/min/IP, import 10/min/IP, direct runtime actions 20/min/IP. Metrics are exported on `/metrics` when telemetry is enabled; if API auth is enabled, `/metrics` requires the same auth middleware.
+Operational limits are separate from the generic write limiter: scan 5/min/IP, import 10/min/IP, direct runtime actions 20/min/IP. Metrics are exported on `/metrics` when telemetry is enabled; if API auth is enabled, `/metrics` requires the same NIP-98-only auth middleware and rejects Bearer tokens.
 
 ## OCI Registry (Distribution API v2)
 

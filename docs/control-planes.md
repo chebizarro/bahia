@@ -4,7 +4,7 @@ Bahia's supported control-plane contract is now sidecar-first and Nostr-native:
 
 1. **Nostr relay sidecar** — primary async/realtime plane for browser state, operator requests, agent progress, and read models.
 2. **Native MCP JSON-RPC** — synchronous tool discovery/invocation at `/mcp` and `/api/v1/mcp`.
-3. **REST API** — narrowed CRUD/query/log surface protected by direct NIP-98 when auth is enabled.
+3. **REST API** — narrowed CRUD/query/log surface protected by direct NIP-98 when auth is enabled; Bearer credentials are not accepted.
 
 Removed legacy surfaces:
 
@@ -132,8 +132,8 @@ Clients should wait for EOSE on bootstrap queries, then keep subscriptions open 
 ## Authorization
 
 - **Nostr requests**: event signatures are verified and request kinds require authorized operator pubkeys.
-- **REST and MCP HTTP**: use direct NIP-98 (`Authorization: Nostr <base64event>`) when auth is enabled.
-- **Browser sessions**: NIP-07 identity/signing is first-party. The browser no longer exchanges NIP-98 events for persistent JWTs.
+- **REST and MCP HTTP**: use direct NIP-98 (`Authorization: Nostr <base64event>`) when auth is enabled. `Authorization: Bearer ...` is rejected with `401` rather than treated as a fallback.
+- **Browser sessions**: NIP-07 identity/signing is first-party. The browser signs protected HTTP requests directly and does not maintain a server-issued token session.
 
 ---
 

@@ -145,7 +145,7 @@ The Bahia web app is currently a **read-only demo**. This plan outlines the work
 - Add NIP-46 (Nostr Connect/bunker) support for signing
 - Create auth store with login/logout/session management
 - Add protected route wrapper component
-- Implement JWT token refresh flow
+- Implement per-request NIP-98 signing for protected HTTP calls
 
 ### 1.3 Nostr Relay Connection Management
 - Create relay connection state store (discovering/connecting/bootstrapping/live/error)
@@ -732,7 +732,7 @@ The following operations exist in the REST API but lack MCP tools:
 
 ## Dependencies & Prerequisites
 
-1. **Backend Auth**: JWT middleware enabled with valid secrets
+1. **Backend Auth**: NIP-98-only HTTP auth enabled for protected API/MCP routes
 2. **Nostr Relays**: Reliable relay infrastructure for Soul Factory
 3. **Nostr sidecar stability**: relay read-model bootstrap reaches EOSE and live subscriptions stay connected
 4. **Design System**: Finalize color palette, typography, spacing
@@ -741,7 +741,7 @@ The following operations exist in the REST API but lack MCP tools:
 
 ## Open Questions
 
-1. Should we support multiple auth methods (API key, Nostr, OAuth)?
+1. Which Nostr signing methods beyond NIP-07/NIP-46 should the web app support for operator workflows?
 2. What level of RBAC is needed (admin, developer, viewer)?
 3. Should secrets have rotation/expiration policies?
 4. Do we need audit logging in the UI?

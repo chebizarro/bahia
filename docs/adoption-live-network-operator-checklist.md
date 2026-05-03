@@ -16,7 +16,7 @@ Use this document **while executing** the rollout signoff. It is intentionally p
    - mark the row `FAIL` or `BLOCKED`;
    - do **not** mark production ready.
 4. If a row is genuinely not applicable, record `N/A`, explain why, and capture approver signoff for the exception.
-5. Do not paste raw secrets, client keys, JWT secrets, or unredacted sensitive env values into this document.
+5. Do not paste raw secrets, client signing keys, or unredacted sensitive env values into this document.
 
 ## Run metadata
 
@@ -25,7 +25,7 @@ Use this document **while executing** the rollout signoff. It is intentionally p
 | Release commit SHA | `<fill>` |
 | Target environment | `<fill>` |
 | Bahia API base URL | `<fill>` |
-| Auth mode under test | `JWT` / `NIP-98` / `both` |
+| Auth mode under test | `NIP-98-only` |
 | Execution start (UTC) | `<fill>` |
 | Execution end (UTC) | `<fill>` |
 | Primary operator | `<fill>` |
@@ -45,7 +45,7 @@ Check each box before LN-01 starts.
 - [ ] `adoption.allow_raw_docker_hosts=false` unless an explicit break-glass scenario is being tested.
 - [ ] At least two `runtime.endpoints.<ref>` aliases are configured.
 - [ ] At least one endpoint uses remote Docker TLS/mTLS.
-- [ ] Monitoring can reach `/metrics` with the required auth mode.
+- [ ] Monitoring can reach `/metrics` with fresh per-request NIP-98 headers when API auth is enabled.
 - [ ] A non-critical candidate workload is available for import.
 - [ ] Rollback owner/procedure for the candidate workload is confirmed.
 
@@ -75,7 +75,7 @@ Record the release-commit results before manual LN rows begin.
 | Redaction and secret handling | `go test ./internal/service -run 'TestAdoptionService.*Sensitive|Redacts' && go test ./internal/api/handlers -run Adoption` | `<fill>` | `<fill>` |
 | Transactional import and idempotency | `go test ./internal/service -run 'TestAdoptionServiceImportTransactional|TestAdoptionServiceImportRetries|TestAdoptionServiceImportSeeds'` | `<fill>` | `<fill>` |
 | Direct runtime guardrails | `go test ./internal/service -run RuntimeLifecycle && go test ./internal/api/handlers -run RuntimeLifecycle` | `<fill>` | `<fill>` |
-| Client contract | `go test ./pkg/client -run 'Adoption|RuntimeAction|Privileged'` | `<fill>` | `<fill>` |
+| Client contract | `go test ./pkg/client -run 'Adoption|RuntimeAction|Privileged|NIP98'` | `<fill>` | `<fill>` |
 | CLI parsing helpers | `go test ./cmd/cli -run Adoption` | `<fill>` | `<fill>` |
 | Full Go regression | `go test ./...` | `<fill>` | `<fill>` |
 
@@ -97,9 +97,10 @@ Use one section per LN row. Fill every field.
   ```
 - Expected result:
   - no credential => `401`
-  - non-operator => `403`
-  - operator => reaches configured flow
-  - NIP-98 deployments validate signed requests end-to-end
+  - `Authorization: Bearer ...` => `401`
+  - valid NIP-98 non-operator => `403`
+  - valid NIP-98 operator => reaches configured flow
+  - signed requests validate end-to-end through the production ingress/proxy URL
 - Actual result: `<fill>`
 - Evidence paths: `<fill>`
 - Follow-up issue(s): `<fill or none>`

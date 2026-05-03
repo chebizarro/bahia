@@ -5,21 +5,21 @@ This runbook covers the operator-only adoption/import and direct-runtime feature
 ## Safety defaults
 
 - Adoption and direct runtime actions are disabled unless explicitly enabled.
-- Both features require API auth plus an operator allowlist.
+- Both features require API auth plus an operator allowlist; when API auth is enabled, Bahia accepts only NIP-98 `Authorization: Nostr <base64event>` headers and rejects Bearer tokens.
 - Prefer server-managed `runtime.endpoints.<ref>` aliases. Raw `docker_host` request payloads are legacy/dev compatibility only.
 - Scan and import responses redact sensitive environment variables and labels. Sensitive environment values are imported through Bahia secrets when secret storage/encryption is configured.
 - Compose-origin containers are direct-Docker takeover candidates; enable takeover only after operators accept that Bahia, not Compose, will drive restart/deploy/stop actions.
 
 ## Enablement checklist
 
-1. Enable auth with either JWT or NIP-98:
+1. Enable NIP-98-only API auth:
 
    ```yaml
    auth:
      enabled: true
-     jwt_secret: "<from-secret-manager>"
-     # or: nip98_enabled: true
    ```
+
+   Protected REST, MCP, and metrics requests must be signed per request with NIP-98. Do not configure or distribute JWT/Bearer credentials; `Authorization: Bearer ...` is an expected `401` negative test.
 
 2. Configure operator allowlists for adoption and direct runtime actions:
 
@@ -28,13 +28,14 @@ This runbook covers the operator-only adoption/import and direct-runtime feature
      enabled: true
      allow_raw_docker_hosts: false
      allow_compose_takeover: false
-     allowed_subjects: ["ops@example.com"]
-     allowed_pubkeys: []
+     allowed_subjects: []
+     allowed_pubkeys: ["<operator-hex-pubkey>"]
      allowed_emails: []
 
    direct_runtime_actions:
      enabled: true
-     allowed_subjects: ["ops@example.com"]
+     allowed_subjects: []
+     allowed_pubkeys: ["<operator-hex-pubkey>"]
    ```
 
 3. Configure endpoint aliases; do not expose Docker credentials to clients:
@@ -49,7 +50,7 @@ This runbook covers the operator-only adoption/import and direct-runtime feature
          client_key_file: /etc/bahia/docker/prod/key.pem
    ```
 
-4. Ensure `/metrics` is reachable by monitoring with the same API auth method when auth is enabled, and logs include `request_id`, `actor_subject`/`actor_pubkey`, `target_name`, `endpoint_ref`, result counts, and duration fields.
+4. Ensure ingress/proxies preserve the externally signed scheme, host, path, and query string; NIP-98 validation signs the final URL. Ensure `/metrics` is reachable by monitoring with fresh per-request NIP-98 headers when auth is enabled, and logs include `request_id`, `actor_subject`/`actor_pubkey`, `target_name`, `endpoint_ref`, result counts, and duration fields.
 
 ## Dry-run scan
 
