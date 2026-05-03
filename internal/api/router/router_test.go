@@ -543,6 +543,32 @@ func TestRouter_SystemInfoIsPublicForAuthCapabilityDiscovery(t *testing.T) {
 	}
 }
 
+func TestRouter_ConfiguredNIP98AuthRejectsBearerOnProtectedRoutes(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.Auth.Enabled = true
+	mcpH := handlers.NewMCPHandler(mcpserver.NewServer(nil, zap.NewNop()), zap.NewNop())
+	handler := router.NewWithDeps(nil, zap.NewNop(), config.CORSConfig{AllowedOrigins: []string{"*"}}, nil, router.RouterDeps{Config: cfg, MCP: mcpH})
+	srv := httptest.NewServer(handler)
+	defer srv.Close()
+
+	url := srv.URL + "/api/v1/mcp"
+	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader([]byte(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`)))
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer legacy.jwt.token")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("do request: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected protected MCP Bearer request to be rejected, status=%d body=%s", resp.StatusCode, string(body))
+	}
+}
+
 func TestRouter_ConfiguredNIP98AuthAllowsProtectedRoutesWithoutJWT(t *testing.T) {
 	cfg := config.Defaults()
 	cfg.Auth.Enabled = true
