@@ -2,6 +2,7 @@
 package config
 
 import (
+	"encoding/hex"
 	"fmt"
 	"net/url"
 	"strings"
@@ -214,7 +215,8 @@ type LogConfig struct {
 // AuthConfig holds authentication settings.
 // When enabled, protected HTTP routes require NIP-98 Authorization headers.
 type AuthConfig struct {
-	Enabled bool `koanf:"enabled"`
+	Enabled               bool     `koanf:"enabled"`
+	BootstrapOwnerPubkeys []string `koanf:"bootstrap_owner_pubkeys"`
 }
 
 // OperatorAccessConfig holds system-operator allowlists for privileged API routes.
@@ -552,7 +554,49 @@ func (c *Config) validate() error {
 	if err := c.validateRelaySidecar(); err != nil {
 		return err
 	}
+
+	nostrAuthorized, err := normalizePubkeyList(c.Nostr.AuthorizedPubkeys)
+	if err != nil {
+		return fmt.Errorf("config validation failed: nostr.authorized_pubkeys: %w", err)
+	}
+	c.Nostr.AuthorizedPubkeys = nostrAuthorized
+
+	bootstrapOwners, err := normalizePubkeyList(c.Auth.BootstrapOwnerPubkeys)
+	if err != nil {
+		return fmt.Errorf("config validation failed: auth.bootstrap_owner_pubkeys: %w", err)
+	}
+	c.Auth.BootstrapOwnerPubkeys = bootstrapOwners
+
 	return nil
+}
+
+func normalizePubkeyList(values []string) ([]string, error) {
+	if len(values) == 0 {
+		return nil, nil
+	}
+	seen := make(map[string]struct{}, len(values))
+	normalized := make([]string, 0, len(values))
+	for _, raw := range values {
+		pk := strings.ToLower(strings.TrimSpace(raw))
+		if pk == "" {
+			continue
+		}
+		if len(pk) != 64 {
+			return nil, fmt.Errorf("pubkey %q must be 64 hex characters", raw)
+		}
+		if _, err := hex.DecodeString(pk); err != nil {
+			return nil, fmt.Errorf("pubkey %q must be valid hex", raw)
+		}
+		if _, ok := seen[pk]; ok {
+			continue
+		}
+		seen[pk] = struct{}{}
+		normalized = append(normalized, pk)
+	}
+	if len(normalized) == 0 {
+		return nil, nil
+	}
+	return normalized, nil
 }
 
 func (c *Config) validateLLM() error {

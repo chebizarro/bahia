@@ -158,7 +158,11 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 
 	var tenantH *handlers.TenantHandler
 	if deps.Orgs != nil && deps.OrgMembers != nil && deps.OrgInvites != nil && deps.RBAC != nil {
-		tenantH = handlers.NewTenantHandler(deps.Orgs, deps.OrgMembers, deps.OrgInvites, deps.RBAC, logger)
+		var bootstrapOwnerPubkeys []string
+		if deps.Config != nil {
+			bootstrapOwnerPubkeys = deps.Config.Auth.BootstrapOwnerPubkeys
+		}
+		tenantH = handlers.NewTenantHandler(deps.Orgs, deps.OrgMembers, deps.OrgInvites, deps.RBAC, bootstrapOwnerPubkeys, logger)
 	}
 
 	if deps.OCI != nil {

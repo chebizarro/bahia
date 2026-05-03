@@ -16,11 +16,12 @@ import (
 
 // TenantHandler handles organization and member management requests.
 type TenantHandler struct {
-	orgs    repository.OrganizationRepository
-	members repository.OrgMemberRepository
-	invites repository.OrgInviteRepository
-	rbac    *auth.RBAC
-	logger  *zap.Logger
+	orgs                  repository.OrganizationRepository
+	members               repository.OrgMemberRepository
+	invites               repository.OrgInviteRepository
+	rbac                  *auth.RBAC
+	bootstrapOwnerPubkeys map[string]struct{}
+	logger                *zap.Logger
 }
 
 // NewTenantHandler creates a new TenantHandler.
@@ -29,14 +30,24 @@ func NewTenantHandler(
 	members repository.OrgMemberRepository,
 	invites repository.OrgInviteRepository,
 	rbac *auth.RBAC,
+	bootstrapOwnerPubkeys []string,
 	logger *zap.Logger,
 ) *TenantHandler {
+	allowlist := make(map[string]struct{}, len(bootstrapOwnerPubkeys))
+	for _, pubkey := range bootstrapOwnerPubkeys {
+		normalized := strings.ToLower(strings.TrimSpace(pubkey))
+		if normalized == "" {
+			continue
+		}
+		allowlist[normalized] = struct{}{}
+	}
 	return &TenantHandler{
-		orgs:    orgs,
-		members: members,
-		invites: invites,
-		rbac:    rbac,
-		logger:  logger,
+		orgs:                  orgs,
+		members:               members,
+		invites:               invites,
+		rbac:                  rbac,
+		bootstrapOwnerPubkeys: allowlist,
+		logger:                logger,
 	}
 }
 
@@ -50,6 +61,17 @@ func (h *TenantHandler) CreateOrg(w http.ResponseWriter, r *http.Request) {
 	if p == nil || !p.IsAuthenticated() || p.PubKey == "" {
 		writeError(w, http.StatusUnauthorized, "authentication required")
 		return
+	}
+	principalPubkey := strings.ToLower(strings.TrimSpace(p.PubKey))
+	if principalPubkey == "" {
+		writeError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+	if len(h.bootstrapOwnerPubkeys) > 0 {
+		if _, allowed := h.bootstrapOwnerPubkeys[principalPubkey]; !allowed {
+			writeError(w, http.StatusForbidden, "organization creation requires a configured bootstrap owner pubkey")
+			return
+		}
 	}
 
 	var req struct {
@@ -78,7 +100,7 @@ func (h *TenantHandler) CreateOrg(w http.ResponseWriter, r *http.Request) {
 		ID:          uuid.New(),
 		Name:        req.Name,
 		DisplayName: strings.TrimSpace(req.DisplayName),
-		OwnerPubkey: p.PubKey,
+		OwnerPubkey: principalPubkey,
 	}
 	if org.DisplayName == "" {
 		org.DisplayName = org.Name
@@ -93,7 +115,7 @@ func (h *TenantHandler) CreateOrg(w http.ResponseWriter, r *http.Request) {
 	// Add creator as owner
 	member := &domain.OrgMember{
 		OrgID:  org.ID,
-		Pubkey: p.PubKey,
+		Pubkey: principalPubkey,
 		Role:   domain.RoleOwner,
 		NIP05:  p.NIP05,
 	}
@@ -105,7 +127,7 @@ func (h *TenantHandler) CreateOrg(w http.ResponseWriter, r *http.Request) {
 	h.logger.Info("organization created",
 		zap.String("org_id", org.ID.String()),
 		zap.String("name", org.Name),
-		zap.String("owner", p.PubKey),
+		zap.String("owner", principalPubkey),
 	)
 
 	writeData(w, http.StatusCreated, org)

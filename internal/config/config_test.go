@@ -644,6 +644,50 @@ func TestServerAddress(t *testing.T) {
 	}
 }
 
+func TestAuthBootstrapOwnerPubkeysNormalization(t *testing.T) {
+	cfg := Defaults()
+	pkAUpper := "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+	pkALower := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	pkBLower := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	cfg.Auth.BootstrapOwnerPubkeys = []string{"  " + pkAUpper + "  ", pkALower, pkBLower, "   "}
+
+	if err := cfg.validate(); err != nil {
+		t.Fatalf("validate() error = %v", err)
+	}
+
+	if len(cfg.Auth.BootstrapOwnerPubkeys) != 2 {
+		t.Fatalf("len(BootstrapOwnerPubkeys) = %d, want 2", len(cfg.Auth.BootstrapOwnerPubkeys))
+	}
+	if cfg.Auth.BootstrapOwnerPubkeys[0] != pkALower {
+		t.Fatalf("first bootstrap owner = %q, want %q", cfg.Auth.BootstrapOwnerPubkeys[0], pkALower)
+	}
+	if cfg.Auth.BootstrapOwnerPubkeys[1] != pkBLower {
+		t.Fatalf("second bootstrap owner = %q, want %q", cfg.Auth.BootstrapOwnerPubkeys[1], pkBLower)
+	}
+}
+
+func TestAuthBootstrapOwnerPubkeysValidation(t *testing.T) {
+	cfg := Defaults()
+	cfg.Auth.BootstrapOwnerPubkeys = []string{"not-hex"}
+
+	err := cfg.validate()
+	if err == nil || !strings.Contains(err.Error(), "auth.bootstrap_owner_pubkeys") {
+		t.Fatalf("validate() error = %v, want auth.bootstrap_owner_pubkeys validation error", err)
+	}
+}
+
+func TestAuthBootstrapOwnerPubkeysEmptyListIsAllowed(t *testing.T) {
+	cfg := Defaults()
+	cfg.Auth.BootstrapOwnerPubkeys = []string{"   "}
+
+	if err := cfg.validate(); err != nil {
+		t.Fatalf("validate() error = %v", err)
+	}
+	if len(cfg.Auth.BootstrapOwnerPubkeys) != 0 {
+		t.Fatalf("BootstrapOwnerPubkeys = %#v, want empty", cfg.Auth.BootstrapOwnerPubkeys)
+	}
+}
+
 func TestPrivilegedFeatureValidationRequiresAuthAndOperatorAllowlists(t *testing.T) {
 	adoptionNoAuth := Defaults()
 	adoptionNoAuth.Adoption.Enabled = true
