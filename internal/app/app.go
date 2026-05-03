@@ -13,6 +13,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/openagentsinc/bahia/internal/adapters/blossom"
+	"github.com/openagentsinc/bahia/internal/adapters/build"
 	"github.com/openagentsinc/bahia/internal/adapters/harbor"
 	hiveciAdapter "github.com/openagentsinc/bahia/internal/adapters/hiveci"
 	llmadapter "github.com/openagentsinc/bahia/internal/adapters/llm"
@@ -54,8 +55,9 @@ type App struct {
 	Reconciler  *reconcile.Reconciler
 	NostrPub    *nostrAdapter.Publisher
 	Telemetry   *telemetry.Provider
-	Background  *BackgroundManager
-	relayPools  []*nostrAdapter.RelayPool
+	Background       *BackgroundManager
+	toolCoordinator  *service.ToolProvisioningCoordinator
+	relayPools       []*nostrAdapter.RelayPool
 }
 
 // New creates and wires together all application components.
@@ -94,6 +96,7 @@ func New(cfg *config.Config) (*App, error) {
 	runRepo := repository.NewPgDeploymentRunRepository(pool)
 	obsRepo := repository.NewPgRuntimeObservationRepository(pool)
 	stateRepo := repository.NewPgEnvironmentServiceStateRepository(pool)
+	toolProvisionRepo := repository.NewPgToolProvisioningRepository(pool)
 
 	// Nostr event audit repository.
 	nostrEventRepo := repository.NewPgNostrEventRepository(pool)
@@ -178,6 +181,7 @@ func New(cfg *config.Config) (*App, error) {
 		verifier, publisher, logger,
 	)
 	nostrPub := nostrAdapter.NewPublisher(cfg.Nostr, relayPool, nostrEventRepo, logger)
+	controlPlaneNostrPub := nostrAdapter.NewPublisher(cfg.Nostr, controlPlanePool, nostrEventRepo, logger)
 
 	// Worker policy service for environment-specific worker selection.
 	workerPolicySvc := service.NewWorkerPolicyService(workerRepo, logger)
@@ -386,6 +390,27 @@ func New(cfg *config.Config) (*App, error) {
 	}
 	notifDispatcher.SetupSubscriptions(publisher)
 
+	// Tool provisioning orchestration.
+	var toolCoordinator *service.ToolProvisioningCoordinator
+	toolBuilder := build.NewDockerBuilder(cfg.Runtime.DockerHost, logger)
+	toolSecurity := service.NewToolSecurityService(toolProvisionRepo, nil, logger, service.ToolSecurityConfig{})
+	defaultRuntime, rtErr := runtime.NewRuntime(runtime.RuntimeConfig{Type: cfg.Runtime.Type, DockerHost: cfg.Runtime.DockerHost, ComposeDir: cfg.Runtime.ComposeDir, KubeContext: cfg.Runtime.KubeContext, KubeNamespace: cfg.Runtime.KubeNamespace, KubeConfig: cfg.Runtime.KubeConfig}, logger)
+	if rtErr != nil {
+		logger.Warn("default runtime init for tool provisioning failed", zap.Error(rtErr))
+	}
+	toolCoordinator = service.NewToolProvisioningCoordinator(
+		toolProvisionRepo,
+		serviceRepo,
+		envRepo,
+		toolSecurity,
+		toolBuilder,
+		defaultRuntime,
+		controlplane.NewToolResponder(controlPlaneNostrPub, logger, nostrEventRepo),
+		notifDispatcher,
+		logger,
+		service.ToolProvisioningConfig{BaseImageRef: "", TargetRegistry: cfg.Registry.URL, TargetRepo: "tools/swarmstr", InstallerVersion: "v1"},
+	)
+
 	// MCP (Model Context Protocol) server for AI agent integration.
 	var llmCommandPublisher mcp.LLMCommandPublisher
 	if llmRegistry != nil && cfg.Nostr.PrivateKey != "" && controlPlanePool != nil && len(controlPlaneRelays) > 0 {
@@ -413,7 +438,11 @@ func New(cfg *config.Config) (*App, error) {
 		// Pass nil for signer to use local key signing.
 		// To enable NIP-46 remote signing via Signet, create a signet.Client
 		// and pass it here: controlplane.NewReactor(..., signetClient, logger)
-		reactorOpts := []controlplane.ReactorOption{}
+		reactorOpts := []controlplane.ReactorOption{
+			controlplane.WithToolProvisioningRepository(toolProvisionRepo),
+			controlplane.WithToolResponder(controlplane.NewToolResponder(controlPlaneNostrPub, logger, nostrEventRepo)),
+			controlplane.WithToolProvisioningCoordinator(toolCoordinator),
+		}
 		if llmRegistry != nil {
 			reactorOpts = append(reactorOpts, controlplane.WithLLMRegistry(llmRegistry))
 		}
@@ -490,8 +519,9 @@ func New(cfg *config.Config) (*App, error) {
 		Reconciler:  rec,
 		NostrPub:    nostrPub,
 		Telemetry:   telemetryProvider,
-		Background:  bgManager,
-		relayPools:  []*nostrAdapter.RelayPool{controlPlanePool, relayPool},
+		Background:       bgManager,
+		toolCoordinator:  toolCoordinator,
+		relayPools:       []*nostrAdapter.RelayPool{controlPlanePool, relayPool},
 	}, nil
 }
 
@@ -503,6 +533,7 @@ func (a *App) Run() error {
 
 	// Start all registered background runners.
 	a.Background.Start(ctx)
+	go a.runToolProvisioningWorker(ctx)
 
 	errCh := make(chan error, 1)
 	go func() {

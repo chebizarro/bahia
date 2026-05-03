@@ -18,6 +18,7 @@ import (
 
 	nostrpool "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/repository"
 	"github.com/openagentsinc/bahia/internal/service"
 )
 
@@ -39,11 +40,14 @@ const (
 	KindLLMDeployRequest      = 5973 // Request LLM route deployment
 	KindLLMDeploymentApproval = 5974 // Approve or reject an LLM deployment
 	KindLLMRollbackRequest    = 5975 // Request LLM route rollback
+	KindToolProvisionRequest  = 5976 // Agent → Bahia
+	KindToolApprovalRequest   = 5977 // Bahia → Operator
 
 	// Status kinds (6961-6973)
 	KindDeploymentStatus    = 6961 // Deployment progress updates
 	KindServiceStatus       = 6962 // Service health/state updates
 	KindLLMDeploymentStatus = 6973 // LLM deployment/rollback progress updates
+	KindToolProvisionStatus = 6976 // Bahia → Agent (progress)
 
 	// Result kinds (7961-7973)
 	KindDeploymentResult         = 7961 // Final deployment result
@@ -55,6 +59,8 @@ const (
 	KindLLMRouteCreateResult     = 7971 // LLM route creation result
 	KindLLMReleaseRegisterResult = 7972 // LLM release registration result
 	KindLLMDeploymentResult      = 7973 // LLM deployment/approval/rollback result
+	KindToolProvisionResult      = 7976 // Bahia → Agent (final)
+	KindToolApprovalResponse     = 7977 // Operator → Bahia
 
 	// Replaceable registry kinds (3196x series, d-tag indexed)
 	KindServiceState        = 31961 // Replaceable service state (d=service:env)
@@ -96,6 +102,10 @@ type Reactor struct {
 	dedup       *nostrpool.EventDeduplicator
 	backoff     *nostrpool.Backoff
 
+	toolProvisioning repository.ToolProvisioningRepository
+	toolResponder    *ToolResponder
+	toolCoordinator  *service.ToolProvisioningCoordinator
+
 	mu   sync.Mutex
 	runs map[string]*DeploymentRun // requestEventID -> run
 }
@@ -122,6 +132,18 @@ type ReactorOption func(*Reactor)
 // WithLLMRegistry enables LLM Nostr lifecycle request handling.
 func WithLLMRegistry(registry *service.LLMRegistryService) ReactorOption {
 	return func(r *Reactor) { r.llmRegistry = registry }
+}
+
+func WithToolProvisioningRepository(repo repository.ToolProvisioningRepository) ReactorOption {
+	return func(r *Reactor) { r.toolProvisioning = repo }
+}
+
+func WithToolResponder(responder *ToolResponder) ReactorOption {
+	return func(r *Reactor) { r.toolResponder = responder }
+}
+
+func WithToolProvisioningCoordinator(coordinator *service.ToolProvisioningCoordinator) ReactorOption {
+	return func(r *Reactor) { r.toolCoordinator = coordinator }
 }
 
 // NewReactor creates a new Bahia control plane reactor.
@@ -195,6 +217,8 @@ func (r *Reactor) Run(ctx context.Context) error {
 				KindLLMDeployRequest,
 				KindLLMDeploymentApproval,
 				KindLLMRollbackRequest,
+				KindToolProvisionRequest,
+				KindToolApprovalResponse,
 			},
 			Since: &now,
 		},
@@ -275,6 +299,10 @@ func (r *Reactor) handleEvent(ctx context.Context, event *nostr.Event) {
 		go r.handleLLMDeploymentApproval(ctx, event)
 	case KindLLMRollbackRequest:
 		go r.handleLLMRollbackRequest(ctx, event)
+	case KindToolProvisionRequest:
+		go r.handleToolProvisionRequest(ctx, event)
+	case KindToolApprovalResponse:
+		go r.handleToolApprovalResponse(ctx, event)
 	default:
 		r.logger.Warn("unexpected event kind", "kind", event.Kind)
 	}
@@ -837,6 +865,131 @@ func (r *Reactor) handleLLMRollbackRequest(ctx context.Context, event *nostr.Eve
 	}
 	logger.Info("LLM rollback intent created", "intent_id", intent.ID.String())
 	r.publishLLMDeploymentStatus(ctx, event, intent, "accepted", "LLM rollback intent accepted")
+}
+
+func (r *Reactor) handleToolProvisionRequest(ctx context.Context, event *nostr.Event) error {
+	logger := r.zapLog.With(zap.String("event_id", event.ID), zap.String("requester", event.PubKey), zap.Int("kind", event.Kind))
+	if !r.isAuthorized(event.PubKey) {
+		r.publishError(ctx, event, "unauthorized", "requester not in authorized list")
+		return fmt.Errorf("unauthorized requester")
+	}
+	if r.toolProvisioning == nil {
+		r.publishError(ctx, event, "tool_provisioning_unavailable", "tool provisioning repository not configured")
+		return fmt.Errorf("tool provisioning repository not configured")
+	}
+	var req struct {
+		ServiceID     string               `json:"service_id"`
+		EnvironmentID string               `json:"environment_id"`
+		Operation     string               `json:"operation"`
+		Tools         []domain.ToolRequest `json:"tools"`
+		Reason        string               `json:"reason"`
+	}
+	if err := json.Unmarshal([]byte(event.Content), &req); err != nil {
+		r.publishError(ctx, event, "parse_error", err.Error())
+		return fmt.Errorf("parse tool provisioning request: %w", err)
+	}
+	serviceID, err := uuid.Parse(req.ServiceID)
+	if err != nil {
+		r.publishError(ctx, event, "validation_error", fmt.Sprintf("invalid service_id: %v", err))
+		return err
+	}
+	envID, err := uuid.Parse(req.EnvironmentID)
+	if err != nil {
+		r.publishError(ctx, event, "validation_error", fmt.Sprintf("invalid environment_id: %v", err))
+		return err
+	}
+	if len(req.Tools) == 0 {
+		r.publishError(ctx, event, "validation_error", "tools are required")
+		return fmt.Errorf("empty tools")
+	}
+	intent := &domain.ToolProvisionIntent{
+		ID:              uuid.New(),
+		ServiceID:       serviceID,
+		EnvironmentID:   envID,
+		RequestedTools:  req.Tools,
+		Status:          domain.ToolProvisionStatusPending,
+		NostrEventID:    event.ID,
+		RequesterPubkey: event.PubKey,
+		CreatedAt:       time.Now().UTC(),
+	}
+	if err := r.toolProvisioning.CreateIntent(ctx, intent); err != nil {
+		r.publishError(ctx, event, "intent_error", err.Error())
+		return fmt.Errorf("create tool provisioning intent: %w", err)
+	}
+	if r.toolResponder != nil {
+		_ = r.toolResponder.PublishStatus(ctx, event, intent, "queued", "Tool provisioning intent accepted and queued")
+	}
+	logger.Info("tool provisioning request accepted", zap.String("intent_id", intent.ID.String()), zap.String("operation", req.Operation), zap.String("reason", req.Reason), zap.Int("tool_count", len(req.Tools)))
+	return nil
+}
+
+func (r *Reactor) handleToolApprovalResponse(ctx context.Context, event *nostr.Event) error {
+	logger := r.zapLog.With(zap.String("event_id", event.ID), zap.String("operator", event.PubKey), zap.Int("kind", event.Kind))
+	if !r.isAuthorized(event.PubKey) {
+		r.publishError(ctx, event, "unauthorized", "operator not in authorized list")
+		return fmt.Errorf("unauthorized operator")
+	}
+	if r.toolProvisioning == nil {
+		r.publishError(ctx, event, "tool_provisioning_unavailable", "tool provisioning repository not configured")
+		return fmt.Errorf("tool provisioning repository not configured")
+	}
+	var req struct {
+		IntentID string `json:"intent_id"`
+		Action   string `json:"action"`
+		Reason   string `json:"reason"`
+	}
+	if err := json.Unmarshal([]byte(event.Content), &req); err != nil {
+		r.publishError(ctx, event, "parse_error", err.Error())
+		return fmt.Errorf("parse tool approval response: %w", err)
+	}
+	intentID, err := uuid.Parse(req.IntentID)
+	if err != nil {
+		r.publishError(ctx, event, "validation_error", fmt.Sprintf("invalid intent_id: %v", err))
+		return err
+	}
+	if req.Action != "approve" && req.Action != "reject" {
+		r.publishError(ctx, event, "validation_error", "action must be 'approve' or 'reject'")
+		return fmt.Errorf("invalid action")
+	}
+	intent, err := r.toolProvisioning.GetIntent(ctx, intentID)
+	if err != nil {
+		r.publishError(ctx, event, "lookup_error", err.Error())
+		return fmt.Errorf("get tool provisioning intent: %w", err)
+	}
+	if intent == nil {
+		r.publishError(ctx, event, "not_found", "tool provisioning intent not found")
+		return fmt.Errorf("intent not found")
+	}
+	now := time.Now().UTC()
+	if req.Action == "approve" {
+		intent.Status = domain.ToolProvisionStatusApproved
+		intent.ApprovedBy = event.PubKey
+		intent.ApprovedAt = &now
+	} else {
+		intent.Status = domain.ToolProvisionStatusRejected
+	}
+	if err := r.toolProvisioning.UpdateIntent(ctx, intent); err != nil {
+		r.publishError(ctx, event, "update_error", err.Error())
+		return fmt.Errorf("update tool provisioning intent: %w", err)
+	}
+	if err := r.toolProvisioning.LogApproval(ctx, intent.ID, req.Action, event.PubKey, req.Reason); err != nil {
+		logger.Warn("failed to log tool approval action", zap.Error(err))
+	}
+	if req.Action == "approve" {
+		logger.Info("tool provisioning approved and queued", zap.String("intent_id", intent.ID.String()))
+		if r.toolCoordinator != nil {
+			if err := r.toolCoordinator.ProcessApprovedIntent(ctx, intent.ID); err != nil {
+				logger.Error("processing approved tool intent failed", zap.Error(err))
+			}
+		}
+	} else {
+		logger.Info("tool provisioning rejected", zap.String("intent_id", intent.ID.String()))
+	}
+	if r.toolResponder != nil {
+		requestEvent := &nostr.Event{ID: intent.NostrEventID, PubKey: intent.RequesterPubkey}
+		_ = r.toolResponder.PublishResult(ctx, requestEvent, intent, req.Action == "approve", req.Reason)
+	}
+	return nil
 }
 
 func (r *Reactor) authorizeLLMRequest(ctx context.Context, event *nostr.Event, step string) bool {

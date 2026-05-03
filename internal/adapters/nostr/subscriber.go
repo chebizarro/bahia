@@ -27,9 +27,11 @@ var DefaultInboundKinds = []int{
 	// Bahia command kinds (31100-31105) — registered by Phase 1 command definitions.
 	31100, 31101, 31102, 31103, 31104, 31105,
 
-	// Canonical Bahia control-plane request kinds (5961-5968). These are
-	// audited here only; the controlplane.Reactor remains the handler of record.
+	// Canonical Bahia control-plane request kinds. These are audited here only;
+	// the controlplane.Reactor remains the handler of record.
 	5961, 5962, 5963, 5964, 5965, 5966, 5967, 5968,
+	5976, // Tool provisioning request
+	7977, // Tool approval response
 }
 
 // EventHandler is called for each inbound event after persistence.
@@ -357,11 +359,11 @@ func (s *Subscriber) recordLastSeen(kind int, createdAt time.Time) {
 }
 
 func isCanonicalControlPlaneRequest(kind int) bool {
-	return kind >= 5961 && kind <= 5968
+	return (kind >= 5961 && kind <= 5968) || kind == 5976 || kind == 7977
 }
 
 func isAuthorScopedInboundKind(kind int) bool {
-	return (kind >= 5961 && kind <= 5968) || (kind >= 31100 && kind <= 31105)
+	return (kind >= 5961 && kind <= 5968) || kind == 5976 || kind == 7977 || (kind >= 31100 && kind <= 31105)
 }
 
 func timestampFromTime(t time.Time) *nostr.Timestamp {

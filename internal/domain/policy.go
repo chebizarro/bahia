@@ -18,13 +18,16 @@ const (
 type PolicyRuleType string
 
 const (
-	RuleRequireSignature  PolicyRuleType = "require_signature"
-	RuleRequireSBOM       PolicyRuleType = "require_sbom"
-	RuleMaxCriticalVulns  PolicyRuleType = "max_critical_vulns"
-	RuleMaxHighVulns      PolicyRuleType = "max_high_vulns"
-	RuleRequireScanStatus PolicyRuleType = "require_scan_status"
-	RuleBlockPackage      PolicyRuleType = "block_package"
-	RuleRequireApproval   PolicyRuleType = "require_approval"
+	RuleRequireSignature    PolicyRuleType = "require_signature"
+	RuleRequireSBOM         PolicyRuleType = "require_sbom"
+	RuleMaxCriticalVulns    PolicyRuleType = "max_critical_vulns"
+	RuleMaxHighVulns        PolicyRuleType = "max_high_vulns"
+	RuleRequireScanStatus   PolicyRuleType = "require_scan_status"
+	RuleBlockPackage        PolicyRuleType = "block_package"
+	RuleRequireApproval     PolicyRuleType = "require_approval"
+	RulePackageMinAge       PolicyRuleType = "package_min_age"
+	RulePackageMinDownloads PolicyRuleType = "package_min_downloads"
+	RuleTyposquatCheck      PolicyRuleType = "typosquat_check"
 )
 
 // PolicyRule is a single check within a deployment policy.

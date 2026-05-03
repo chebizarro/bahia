@@ -225,6 +225,34 @@ type LLMRouteStateRepository interface {
 	ListAll(ctx context.Context) ([]domain.LLMRouteState, error)
 }
 
+// ToolProvisioningRepository manages tool provisioning intents, runs, state, and approvals.
+type ToolProvisioningRepository interface {
+	// Intents
+	CreateIntent(ctx context.Context, intent *domain.ToolProvisionIntent) error
+	GetIntent(ctx context.Context, id uuid.UUID) (*domain.ToolProvisionIntent, error)
+	UpdateIntent(ctx context.Context, intent *domain.ToolProvisionIntent) error
+	ListPendingApprovalIntents(ctx context.Context) ([]domain.ToolProvisionIntent, error)
+	ListIntentsByStatus(ctx context.Context, statuses ...domain.ToolProvisionStatus) ([]domain.ToolProvisionIntent, error)
+
+	// Runs
+	CreateRun(ctx context.Context, run *domain.ToolProvisionRun) error
+	GetRun(ctx context.Context, id uuid.UUID) (*domain.ToolProvisionRun, error)
+	UpdateRun(ctx context.Context, run *domain.ToolProvisionRun) error
+
+	// State
+	GetProfileState(ctx context.Context, serviceID, envID uuid.UUID) (*domain.ToolProfileState, error)
+	UpsertProfileState(ctx context.Context, state *domain.ToolProfileState) error
+
+	// Denylist
+	AddToDenylist(ctx context.Context, entry *domain.ToolDenylistEntry) error
+	RemoveFromDenylist(ctx context.Context, packageName, manager string) error
+	IsDenylisted(ctx context.Context, packageName, manager string) (bool, error)
+	ListDenylist(ctx context.Context) ([]domain.ToolDenylistEntry, error)
+
+	// Approval log
+	LogApproval(ctx context.Context, intentID uuid.UUID, action, actorPubkey, reason string) error
+}
+
 // OCIRegistryRepository manages OCI manifest/blob/tag metadata.
 type OCIRegistryRepository interface {
 	EnsureRepository(ctx context.Context, name string) (*domain.OCIRepository, error)

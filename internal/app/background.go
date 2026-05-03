@@ -218,3 +218,22 @@ func (m *BackgroundManager) Count() int {
 	defer m.mu.Unlock()
 	return len(m.runners)
 }
+
+// runToolProvisioningWorker polls and processes pending tool provisioning intents.
+func (a *App) runToolProvisioningWorker(ctx context.Context) {
+	if a == nil || a.toolCoordinator == nil {
+		return
+	}
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if err := a.toolCoordinator.ProcessPendingIntents(ctx); err != nil {
+				a.Logger.Error("tool provisioning worker error", zap.Error(err))
+			}
+		}
+	}
+}

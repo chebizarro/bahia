@@ -4,6 +4,7 @@ package nostr
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"time"
 
 	"github.com/nbd-wtf/go-nostr"
@@ -228,6 +229,21 @@ func (p *Publisher) Subscribe(ctx context.Context, kinds []int, handler func(ev 
 	}()
 
 	return nil
+}
+
+// PublishSignedEvent signs and publishes an arbitrary Nostr event.
+func (p *Publisher) PublishSignedEvent(ctx context.Context, ev *nostr.Event) error {
+	if p == nil || p.pool == nil || ev == nil {
+		return nil
+	}
+	if p.privateKey == "" {
+		return fmt.Errorf("nostr publisher private key not configured")
+	}
+	if err := ev.Sign(p.privateKey); err != nil {
+		return fmt.Errorf("signing nostr event: %w", err)
+	}
+	_, err := p.pool.Publish(ctx, *ev)
+	return err
 }
 
 // Close shuts down the relay pool.
