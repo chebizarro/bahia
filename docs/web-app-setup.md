@@ -75,6 +75,16 @@ Signer-session auth and REST compatibility are tracked separately:
 
 Most realtime app state is sourced from the Nostr sidecar/control-plane subscriptions. Remaining REST-dependent pages still require direct NIP-98 compatibility to perform HTTP CRUD/query operations. As of this migration stage, `/orgs` is explicitly compatibility-gated in route access.
 
+### Private Encrypted Route Transport
+
+Sensitive route migrations use a separate signer-first private Nostr transport instead of the public relay sidecar. The backend advertises this only when operators configure backend `nostr.private_relays`, browser-facing `nostr.private_browser_relays`, and a service key; browser code reads `/api/v1/system/info.nostr.private_browser_relays` and publishes kind `5980` encrypted NIP-44 requests to those relays only. Results arrive as kind `7980` events tagged with the original request event id and encrypted back to the requester.
+
+Important signer constraints:
+
+- NIP-07 must expose `window.nostr.nip44.encrypt` and `window.nostr.nip44.decrypt`.
+- NIP-46 works only if the provider exposes `provider.nip44.encrypt/decrypt`; otherwise private routes must remain blocked for that signer with the explicit provider blocker shown.
+- Public sidecar relays from `nostr.browser_relays` are not private relays. Do not copy notification, org, or payment payloads into public read-model events.
+
 ## Troubleshooting
 
 ### API Connection Errors

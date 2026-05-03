@@ -70,10 +70,12 @@ The Nostr reactor subscribes to signed request events and publishes status, term
 |--------|-------|---------|
 | Service requests | 5961–5968 | Inbound service/environment operation requests |
 | LLM requests | 5971–5975 | Inbound LLM route/release/deploy/approval/rollback requests |
+| Private requests | 5980 | Browser → Bahia encrypted private-domain request |
 | Service status | 6961–6962 | Service progress/status updates |
 | LLM status | 6973 | LLM deployment/rollback progress updates |
 | Service results | 7961–7966 | Service terminal operation results |
 | LLM results | 7971–7973 | LLM route/release/deployment terminal results |
+| Private results | 7980 | Bahia → Browser encrypted private-domain result |
 | Registry/read models | 31961–31965 | Replaceable browser/agent read models |
 
 ### Request Events (596x)
@@ -121,9 +123,34 @@ The Nostr reactor subscribes to signed request events and publishes status, term
 | 31964 | `LLMRouteRegistry` | `route_id` | LLM route registry entry |
 | 31965 | `LLMRouteState` | `route_id:environment_id` | Current desired/observed LLM route state |
 
+### Private Encrypted Transport (5980/7980)
+
+Sensitive browser route families (notifications, orgs, payments, and future private-domain migrations) use encrypted request/result events instead of public read models. These events are intentionally **not** accepted by the public relay sidecar policy and must be sent only to operator-configured private relays.
+
+Discovery/config contract:
+
+- Backend-only private relay URLs remain in `nostr.private_relays` and are not exposed by `/api/v1/system/info`.
+- Browser-discoverable private relay URLs must be configured separately as `nostr.private_browser_relays` and are exposed as `nostr.private_browser_relays` only when explicitly set.
+- `/api/v1/system/info.features.private_nostr_transport=true` means the backend has a service key, at least one backend `nostr.private_relays` subscription target, and at least one browser-private relay advertised.
+- Browser clients must keep public `nostr.browser_relays` / `nostr.sidecar_url` separate from `nostr.private_browser_relays`; sensitive payloads must never be published to the public sidecar relay.
+
+Event contract:
+
+- Request kind: `5980`; result kind: `7980`.
+- Request cleartext tags are limited to routing/correlation metadata such as `p=<service_pubkey>` and `private=bahia-private-v1`.
+- Request `content` is NIP-44 encrypted to the Bahia service pubkey and contains `{version, operation, requester_pubkey, payload}`.
+- Result tags include `e=<request_event_id>` with reply marker, `p=<requester_pubkey>`, `private=bahia-private-v1`, and terminal `status`.
+- Result `content` is NIP-44 encrypted to the requester pubkey and contains `{version, request_event_id, status, payload?, error?}`.
+- Backend handlers reject unauthorized requesters before decrypting/dispatching domain operations, publish encrypted terminal errors for decrypt/validation failures, and deduplicate by event id.
+
+Browser signer support:
+
+- NIP-07 is supported only when `window.nostr.nip44.encrypt/decrypt` are available.
+- NIP-46 can participate only if the provider explicitly exposes `provider.nip44.encrypt/decrypt`; NIP-46's internal encrypted RPC channel does not by itself give the web app NIP-44 conversation-key operations. If absent, private route migration is blocked for that signer mode and the UI/tests should surface that exact blocker.
+
 ### Correlation Tags
 
-Use tags for relay-side filtering and MCP follow-up subscriptions. Service flows use `service`, `environment`, `artifact`, `intent`, and `run`. LLM flows use `route`, `release`, `environment`, `intent`, and `run`. Status/result replies also include `e` with marker `reply`, `p` for the requester pubkey, plus `status` and `step` where applicable. MCP async LLM tools return the request event id and the relevant request/status/result/read-model kind ids so clients can subscribe directly rather than polling.
+Use tags for relay-side filtering and MCP follow-up subscriptions. Service flows use `service`, `environment`, `artifact`, `intent`, and `run`. LLM flows use `route`, `release`, `environment`, `intent`, and `run`. Status/result replies also include `e` with marker `reply`, `p` for the requester pubkey, plus `status` and `step` where applicable. Private result replies use the same `e`/`p` pattern but keep payloads encrypted. MCP async LLM tools return the request event id and the relevant request/status/result/read-model kind ids so clients can subscribe directly rather than polling.
 
 Clients should wait for EOSE on bootstrap queries, then keep subscriptions open for live updates. Deduplicate by event id; for replaceable events, latest `created_at` wins for `(kind, pubkey, d-tag)`. Deletions use tombstone content/tags (`deleted=true`), not Nostr delete events.
 

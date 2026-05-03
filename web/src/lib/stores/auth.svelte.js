@@ -428,6 +428,34 @@ export async function signWithAuth(event) {
   }
 }
 
+export async function encryptWithAuth(recipientPubkey, plaintext) {
+  if (authState.status !== 'authenticated') throw new Error('Not authenticated - please login first');
+  try {
+    const signer = resolveActiveSigner();
+    if (typeof signer.encryptNip44 !== 'function') {
+      throw new Error('Active signer does not expose NIP-44 encryption');
+    }
+    return await signer.encryptNip44(recipientPubkey, plaintext);
+  } catch (error) {
+    console.error('Failed to encrypt event content:', error);
+    throw new Error(`Event encryption failed: ${error.message}`);
+  }
+}
+
+export async function decryptWithAuth(senderPubkey, ciphertext) {
+  if (authState.status !== 'authenticated') throw new Error('Not authenticated - please login first');
+  try {
+    const signer = resolveActiveSigner();
+    if (typeof signer.decryptNip44 !== 'function') {
+      throw new Error('Active signer does not expose NIP-44 decryption');
+    }
+    return await signer.decryptNip44(senderPubkey, ciphertext);
+  } catch (error) {
+    console.error('Failed to decrypt event content:', error);
+    throw new Error(`Event decryption failed: ${error.message}`);
+  }
+}
+
 export async function signHttpRequest({ method = 'GET', url }) {
   if (authState.status !== 'authenticated' || !authState.pubkey) {
     throw new Error('Not authenticated - please login first');

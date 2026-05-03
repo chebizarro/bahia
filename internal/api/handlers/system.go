@@ -46,12 +46,13 @@ type RegistryInfo struct {
 
 // NostrConfig describes the Nostr configuration.
 type NostrConfigInfo struct {
-	Relays         []string `json:"relays"`
-	BrowserRelays  []string `json:"browser_relays,omitempty"`
-	SidecarURL     string   `json:"sidecar_url,omitempty"`
-	PublishEnabled bool     `json:"publish_enabled"`
-	ServicePubkey  string   `json:"service_pubkey,omitempty"`
-	ServiceNpub    string   `json:"service_npub,omitempty"`
+	Relays               []string `json:"relays"`
+	BrowserRelays        []string `json:"browser_relays,omitempty"`
+	PrivateBrowserRelays []string `json:"private_browser_relays,omitempty"`
+	SidecarURL           string   `json:"sidecar_url,omitempty"`
+	PublishEnabled       bool     `json:"publish_enabled"`
+	ServicePubkey        string   `json:"service_pubkey,omitempty"`
+	ServiceNpub          string   `json:"service_npub,omitempty"`
 }
 
 // ControlPlaneInfo advertises the canonical Nostr control-plane contract.
@@ -179,6 +180,7 @@ func (h *SystemHandler) GetInfo(w http.ResponseWriter, r *http.Request) {
 		nostrInfo.BrowserRelays = h.browserRelays()
 		nostrInfo.SidecarURL = h.cfg.Nostr.Sidecar.PublicURL
 	}
+	nostrInfo.PrivateBrowserRelays = h.privateBrowserRelays()
 
 	// Derive service pubkey from private key if available
 	if h.cfg.Nostr.PrivateKey != "" {
@@ -216,23 +218,24 @@ func (h *SystemHandler) GetInfo(w http.ResponseWriter, r *http.Request) {
 	// Feature flags. The removed legacy compatibility surfaces remain present
 	// as false values for older clients that probe capabilities defensively.
 	features := map[string]bool{
-		"oci":                    h.cfg.OCI.Enabled,
-		"harbor":                 h.cfg.Harbor.Enabled,
-		"blossom":                h.cfg.Blossom.Enabled,
-		"hiveci":                 h.cfg.HiveCI.Enabled,
-		"cashu":                  h.cfg.Cashu.Enabled,
-		"telemetry":              h.cfg.Telemetry.Enabled,
-		"notifications":          h.cfg.Notifications.Enabled,
-		"auth":                   h.cfg.Auth.Enabled,
-		"nostr_auth_exchange":    false,
-		"relay_sidecar":          h.cfg.Nostr.Sidecar.Enabled,
-		"relay_read_models":      h.cfg.Nostr.Sidecar.Enabled && h.cfg.Nostr.PublishEnabled,
-		"llm_control_plane":      h.cfg.LLM.Enabled,
-		"direct_nostr_http_auth": h.cfg.Auth.Enabled,
-		"mcp_transport":          h.mcpTransportEnabled,
-		"legacy_sse":             false,
-		"legacy_jwt_exchange":    false,
-		"legacy_agent_http":      false,
+		"oci":                     h.cfg.OCI.Enabled,
+		"harbor":                  h.cfg.Harbor.Enabled,
+		"blossom":                 h.cfg.Blossom.Enabled,
+		"hiveci":                  h.cfg.HiveCI.Enabled,
+		"cashu":                   h.cfg.Cashu.Enabled,
+		"telemetry":               h.cfg.Telemetry.Enabled,
+		"notifications":           h.cfg.Notifications.Enabled,
+		"auth":                    h.cfg.Auth.Enabled,
+		"nostr_auth_exchange":     false,
+		"relay_sidecar":           h.cfg.Nostr.Sidecar.Enabled,
+		"relay_read_models":       h.cfg.Nostr.Sidecar.Enabled && h.cfg.Nostr.PublishEnabled,
+		"private_nostr_transport": len(h.privateBrowserRelays()) > 0 && len(h.cfg.Nostr.PrivateRelays) > 0 && h.cfg.Nostr.PrivateKey != "",
+		"llm_control_plane":       h.cfg.LLM.Enabled,
+		"direct_nostr_http_auth":  h.cfg.Auth.Enabled,
+		"mcp_transport":           h.mcpTransportEnabled,
+		"legacy_sse":              false,
+		"legacy_jwt_exchange":     false,
+		"legacy_agent_http":       false,
 	}
 
 	resp := SystemInfoResponse{
@@ -325,6 +328,13 @@ func (h *SystemHandler) browserRelays() []string {
 		return []string{h.cfg.Nostr.Sidecar.PublicURL}
 	}
 	return nil
+}
+
+func (h *SystemHandler) privateBrowserRelays() []string {
+	if len(h.cfg.Nostr.PrivateBrowserRelays) == 0 {
+		return nil
+	}
+	return append([]string(nil), h.cfg.Nostr.PrivateBrowserRelays...)
 }
 
 func derivePublicKey(privateKey string) string {

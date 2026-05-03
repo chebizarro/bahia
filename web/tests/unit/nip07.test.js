@@ -261,6 +261,48 @@ describe('NIP-07 Utilities', () => {
     });
   });
 
+  describe('NIP-44 encryption wrappers', () => {
+    it('encrypts with window.nostr.nip44.encrypt', async () => {
+      global.window.nostr = {
+        nip44: {
+          encrypt: vi.fn().mockResolvedValue('ciphertext'),
+          decrypt: vi.fn()
+        }
+      };
+
+      await expect(nip07Module.encryptNip44('b'.repeat(64), 'secret')).resolves.toBe('ciphertext');
+      expect(global.window.nostr.nip44.encrypt).toHaveBeenCalledWith('b'.repeat(64), 'secret');
+    });
+
+    it('decrypts with window.nostr.nip44.decrypt', async () => {
+      global.window.nostr = {
+        nip44: {
+          encrypt: vi.fn(),
+          decrypt: vi.fn().mockResolvedValue('plaintext')
+        }
+      };
+
+      await expect(nip07Module.decryptNip44('b'.repeat(64), 'ciphertext')).resolves.toBe('plaintext');
+      expect(global.window.nostr.nip44.decrypt).toHaveBeenCalledWith('b'.repeat(64), 'ciphertext');
+    });
+
+    it('documents missing NIP-44 support as a hard blocker', async () => {
+      global.window.nostr = { signEvent: vi.fn() };
+
+      await expect(nip07Module.encryptNip44('b'.repeat(64), 'secret')).rejects.toThrow('does not expose NIP-44');
+      await expect(nip07Module.decryptNip44('b'.repeat(64), 'ciphertext')).rejects.toThrow('does not expose NIP-44');
+    });
+
+    it('validates NIP-44 pubkeys', async () => {
+      global.window.nostr = {
+        nip44: { encrypt: vi.fn(), decrypt: vi.fn() }
+      };
+
+      await expect(nip07Module.encryptNip44('not-hex', 'secret')).rejects.toThrow('Invalid recipient pubkey');
+      await expect(nip07Module.decryptNip44('not-hex', 'ciphertext')).rejects.toThrow('Invalid sender pubkey');
+    });
+  });
+
   describe('getCapabilities', () => {
     it('should return all false when extension not available', () => {
       const caps = nip07Module.getCapabilities();
@@ -343,6 +385,14 @@ describe('NIP-07 Utilities', () => {
         nip04: true,
         nip44: true
       });
+    });
+  });
+
+  describe('getNip07Signer', () => {
+    it('exposes NIP-44 encrypt/decrypt on the signer-shaped contract', () => {
+      const signer = nip07Module.getNip07Signer();
+      expect(signer.encryptNip44).toBe(nip07Module.encryptNip44);
+      expect(signer.decryptNip44).toBe(nip07Module.decryptNip44);
     });
   });
 });

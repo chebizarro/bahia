@@ -76,6 +76,27 @@ function isValidHexPubkey(str) {
          /^[0-9a-fA-F]{64}$/.test(str);
 }
 
+function requireNip44Provider() {
+  const { available, reason } = detectNip07();
+
+  if (!available) {
+    throw new Error(`NIP-07 extension not available: ${reason}`);
+  }
+
+  const provider = window.nostr?.nip44;
+  if (!provider || typeof provider.encrypt !== 'function' || typeof provider.decrypt !== 'function') {
+    throw new Error('NIP-07 signer does not expose NIP-44 encrypt/decrypt support');
+  }
+
+  return provider;
+}
+
+function ensureCryptoPubkey(pubkey, role) {
+  if (!isValidHexPubkey(pubkey)) {
+    throw new Error(`Invalid ${role} pubkey for NIP-44 encryption`);
+  }
+}
+
 /**
  * Get public key from NIP-07 extension
  * @returns {Promise<string>} Hex-encoded public key
@@ -153,6 +174,46 @@ export async function signEvent(event) {
 }
 
 /**
+ * Encrypt plaintext to a recipient with NIP-44 using the active NIP-07 signer.
+ * @param {string} recipientPubkey - Hex-encoded recipient pubkey
+ * @param {string} plaintext - Cleartext payload
+ * @returns {Promise<string>} NIP-44 ciphertext
+ */
+export async function encryptNip44(recipientPubkey, plaintext) {
+  ensureCryptoPubkey(recipientPubkey, 'recipient');
+  if (typeof plaintext !== 'string') {
+    throw new Error('NIP-44 plaintext must be a string');
+  }
+
+  const provider = requireNip44Provider();
+  try {
+    return await provider.encrypt(recipientPubkey, plaintext);
+  } catch (error) {
+    throw new Error(`Failed to encrypt with NIP-44: ${error.message}`);
+  }
+}
+
+/**
+ * Decrypt NIP-44 ciphertext from a sender using the active NIP-07 signer.
+ * @param {string} senderPubkey - Hex-encoded sender pubkey
+ * @param {string} ciphertext - NIP-44 ciphertext payload
+ * @returns {Promise<string>} Cleartext payload
+ */
+export async function decryptNip44(senderPubkey, ciphertext) {
+  ensureCryptoPubkey(senderPubkey, 'sender');
+  if (typeof ciphertext !== 'string' || ciphertext.length === 0) {
+    throw new Error('NIP-44 ciphertext must be a non-empty string');
+  }
+
+  const provider = requireNip44Provider();
+  try {
+    return await provider.decrypt(senderPubkey, ciphertext);
+  } catch (error) {
+    throw new Error(`Failed to decrypt with NIP-44: ${error.message}`);
+  }
+}
+
+/**
  * Get capabilities of the NIP-07 extension
  * @returns {Object} Capability flags for available methods
  */
@@ -192,6 +253,8 @@ export function getNip07Signer() {
   return {
     getPublicKey,
     signEvent,
-    getRelays
+    getRelays,
+    encryptNip44,
+    decryptNip44
   };
 }

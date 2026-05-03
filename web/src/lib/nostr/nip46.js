@@ -9,6 +9,25 @@ function isWebsocketRelay(url) {
   return typeof url === 'string' && /^wss?:\/\//i.test(url);
 }
 
+function nip44Provider(provider) {
+  const crypto = provider?.nip44;
+  if (crypto && typeof crypto.encrypt === 'function' && typeof crypto.decrypt === 'function') {
+    return crypto;
+  }
+  return null;
+}
+
+function nip44Blocker(provider) {
+  if (nip44Provider(provider)) return null;
+  return 'NIP-46 provider does not expose a NIP-44 encrypt/decrypt API to the web app; private Bahia transport requires provider.nip44.encrypt/decrypt or a NIP-07 signer with NIP-44 support';
+}
+
+function ensureCryptoPubkey(pubkey, role) {
+  if (!isValidHexPubkey(pubkey)) {
+    throw new Error(`Invalid ${role} pubkey for NIP-44 encryption`);
+  }
+}
+
 export function detectNip46() {
   if (typeof window === 'undefined') {
     return { available: false, provider: null, reason: 'not_browser' };
@@ -75,16 +94,21 @@ export function getCapabilities() {
       disconnect: false,
       getPublicKey: false,
       signEvent: false,
-      getRelays: false
+      getRelays: false,
+      nip44: false,
+      nip44Blocker: 'NIP-46 provider is not available'
     };
   }
 
+  const hasNip44 = Boolean(nip44Provider(provider));
   return {
     connect: typeof provider.connect === 'function' || typeof provider.bunkerConnect === 'function' || typeof provider.enable === 'function',
     disconnect: typeof provider.disconnect === 'function',
     getPublicKey: typeof provider.getPublicKey === 'function',
     signEvent: typeof provider.signEvent === 'function',
-    getRelays: typeof provider.getRelays === 'function'
+    getRelays: typeof provider.getRelays === 'function',
+    nip44: hasNip44,
+    nip44Blocker: hasNip44 ? null : nip44Blocker(provider)
   };
 }
 
@@ -175,6 +199,48 @@ export async function signEvent(event) {
   return signer.signEvent(event);
 }
 
+export async function encryptNip44(recipientPubkey, plaintext) {
+  ensureCryptoPubkey(recipientPubkey, 'recipient');
+  if (typeof plaintext !== 'string') {
+    throw new Error('NIP-44 plaintext must be a string');
+  }
+
+  const { available, provider, reason } = detectNip46();
+  if (!available) {
+    throw new Error(`NIP-46 provider not available: ${reason}`);
+  }
+  const crypto = nip44Provider(provider);
+  if (!crypto) {
+    throw new Error(nip44Blocker(provider));
+  }
+  try {
+    return await crypto.encrypt(recipientPubkey, plaintext);
+  } catch (error) {
+    throw new Error(`Failed to encrypt with NIP-44 via NIP-46 provider: ${error.message}`);
+  }
+}
+
+export async function decryptNip44(senderPubkey, ciphertext) {
+  ensureCryptoPubkey(senderPubkey, 'sender');
+  if (typeof ciphertext !== 'string' || ciphertext.length === 0) {
+    throw new Error('NIP-44 ciphertext must be a non-empty string');
+  }
+
+  const { available, provider, reason } = detectNip46();
+  if (!available) {
+    throw new Error(`NIP-46 provider not available: ${reason}`);
+  }
+  const crypto = nip44Provider(provider);
+  if (!crypto) {
+    throw new Error(nip44Blocker(provider));
+  }
+  try {
+    return await crypto.decrypt(senderPubkey, ciphertext);
+  } catch (error) {
+    throw new Error(`Failed to decrypt with NIP-44 via NIP-46 provider: ${error.message}`);
+  }
+}
+
 /**
  * Resolve a signer-shaped NIP-46 contract
  * @returns {{getPublicKey: Function, signEvent: Function, getRelays: Function, disconnect: Function}}
@@ -197,6 +263,8 @@ export function getNip46Signer() {
       throw new Error('NIP-46 signer getPublicKey() is unavailable');
     },
     signEvent: (event) => signer.signEvent(event),
+    encryptNip44,
+    decryptNip44,
     getRelays: async () => {
       if (typeof provider.getRelays === 'function') return (await provider.getRelays()) || {};
       return {};

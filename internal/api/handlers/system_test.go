@@ -30,10 +30,11 @@ func TestSystemHandler_GetInfo_ExposesRelaySidecarCapabilities(t *testing.T) {
 	var payload struct {
 		Data struct {
 			Nostr struct {
-				Relays        []string `json:"relays"`
-				BrowserRelays []string `json:"browser_relays"`
-				SidecarURL    string   `json:"sidecar_url"`
-				PrivateRelays []string `json:"private_relays"`
+				Relays               []string `json:"relays"`
+				BrowserRelays        []string `json:"browser_relays"`
+				SidecarURL           string   `json:"sidecar_url"`
+				PrivateRelays        []string `json:"private_relays"`
+				PrivateBrowserRelays []string `json:"private_browser_relays"`
 			} `json:"nostr"`
 			Features map[string]bool `json:"features"`
 		} `json:"data"`
@@ -60,8 +61,68 @@ func TestSystemHandler_GetInfo_ExposesRelaySidecarCapabilities(t *testing.T) {
 	if len(payload.Data.Nostr.PrivateRelays) != 0 {
 		t.Fatalf("private_relays should not be exposed in system info: %#v", payload.Data.Nostr.PrivateRelays)
 	}
+	if len(payload.Data.Nostr.PrivateBrowserRelays) != 0 {
+		t.Fatalf("private_browser_relays should only expose explicit browser-private relays: %#v", payload.Data.Nostr.PrivateBrowserRelays)
+	}
 	if len(payload.Data.Nostr.Relays) != 0 {
 		t.Fatalf("backend relays should not be exposed while sidecar bootstrap is enabled: %#v", payload.Data.Nostr.Relays)
+	}
+}
+
+func TestSystemHandler_GetInfo_ExposesExplicitPrivateBrowserRelays(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.Nostr.PrivateKey = "0000000000000000000000000000000000000000000000000000000000000001"
+	cfg.Nostr.PrivateRelays = []string{"wss://backend-private.example"}
+	cfg.Nostr.PrivateBrowserRelays = []string{"wss://browser-private.example"}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/system/info", nil)
+	w := httptest.NewRecorder()
+
+	NewSystemHandler(cfg).GetInfo(w, req)
+
+	var payload struct {
+		Data struct {
+			Nostr struct {
+				PrivateRelays        []string `json:"private_relays"`
+				PrivateBrowserRelays []string `json:"private_browser_relays"`
+			} `json:"nostr"`
+			Features map[string]bool `json:"features"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(payload.Data.Nostr.PrivateRelays) != 0 {
+		t.Fatalf("backend private_relays must not be exposed: %#v", payload.Data.Nostr.PrivateRelays)
+	}
+	if got := payload.Data.Nostr.PrivateBrowserRelays; len(got) != 1 || got[0] != "wss://browser-private.example" {
+		t.Fatalf("private_browser_relays = %#v", got)
+	}
+	if !payload.Data.Features["private_nostr_transport"] {
+		t.Fatalf("expected private_nostr_transport feature when browser-private relays and service key are configured")
+	}
+}
+
+func TestSystemHandler_GetInfo_DoesNotAdvertisePrivateTransportWithoutBackendPrivateRelays(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.Nostr.PrivateKey = "0000000000000000000000000000000000000000000000000000000000000001"
+	cfg.Nostr.PrivateBrowserRelays = []string{"wss://browser-private.example"}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/system/info", nil)
+	w := httptest.NewRecorder()
+
+	NewSystemHandler(cfg).GetInfo(w, req)
+
+	var payload struct {
+		Data struct {
+			Features map[string]bool `json:"features"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if payload.Data.Features["private_nostr_transport"] {
+		t.Fatalf("private_nostr_transport must stay false until backend private_relays are configured")
 	}
 }
 

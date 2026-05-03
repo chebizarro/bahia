@@ -121,13 +121,14 @@ type LoomConfig struct {
 
 // NostrConfig holds Nostr relay and identity settings.
 type NostrConfig struct {
-	PrivateKey        string             `koanf:"private_key"`
-	Relays            []string           `koanf:"relays"`
-	PrivateRelays     []string           `koanf:"private_relays"`
-	BrowserRelays     []string           `koanf:"browser_relays"`
-	AuthorizedPubkeys []string           `koanf:"authorized_pubkeys"`
-	PublishEnabled    bool               `koanf:"publish_enabled"`
-	Sidecar           RelaySidecarConfig `koanf:"sidecar"`
+	PrivateKey           string             `koanf:"private_key"`
+	Relays               []string           `koanf:"relays"`
+	PrivateRelays        []string           `koanf:"private_relays"`
+	BrowserRelays        []string           `koanf:"browser_relays"`
+	PrivateBrowserRelays []string           `koanf:"private_browser_relays"`
+	AuthorizedPubkeys    []string           `koanf:"authorized_pubkeys"`
+	PublishEnabled       bool               `koanf:"publish_enabled"`
+	Sidecar              RelaySidecarConfig `koanf:"sidecar"`
 }
 
 // RelaySidecarConfig holds the local Khatru relay sidecar settings.

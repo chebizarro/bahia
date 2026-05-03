@@ -133,11 +133,19 @@ func New(cfg *config.Config) (*App, error) {
 	controlPlanePool := nostrAdapter.NewRelayPool(controlPlaneRelays, logger, nostrAdapter.WithPrivateKey(cfg.Nostr.PrivateKey))
 	controlPlanePool.Connect(ctx)
 
+	privateControlPlaneRelays := privateControlPlaneRelayURLs(cfg.Nostr)
+	var privateControlPlanePool *nostrAdapter.RelayPool
+	if len(privateControlPlaneRelays) > 0 {
+		privateControlPlanePool = nostrAdapter.NewRelayPool(privateControlPlaneRelays, logger, nostrAdapter.WithPrivateKey(cfg.Nostr.PrivateKey))
+		privateControlPlanePool.Connect(ctx)
+	}
+
 	relayURLs := interopRelayURLs(cfg, controlPlaneRelays)
 	relayPool := nostrAdapter.NewRelayPool(relayURLs, logger, nostrAdapter.WithPrivateKey(cfg.Nostr.PrivateKey))
 	relayPool.Connect(ctx)
 	logger.Info("nostr relay topology initialized",
 		zap.Strings("control_plane_relays", controlPlaneRelays),
+		zap.Strings("private_control_plane_relays", privateControlPlaneRelays),
 		zap.Strings("interop_relays", relayURLs),
 		zap.Bool("sidecar_enabled", cfg.Nostr.Sidecar.Enabled),
 		zap.Bool("mirror_external", cfg.Nostr.Sidecar.MirrorExternal),
@@ -283,10 +291,13 @@ func New(cfg *config.Config) (*App, error) {
 		logger.Info("LLM control plane enabled", zap.String("default_gateway_ref", cfg.LLM.DefaultGatewayRef))
 	}
 
+	// Policy service.
+	policySvc := service.NewPolicyService(policyRepo, sigRepo, sbomRepo, logger)
+
 	// Nostr read-model projector. This owns canonical 3196x projections and
 	// the 310xx audit/activity feed for relay consumers; the legacy Publisher is
 	// retained for relay pool lifecycle compatibility.
-	projectorOpts := []nostrAdapter.ProjectorOption{}
+	projectorOpts := []nostrAdapter.ProjectorOption{nostrAdapter.WithPolicyProjectionSource(policySvc)}
 	if llmRegistry != nil {
 		projectorOpts = append(projectorOpts, nostrAdapter.WithLLMProjectionSource(llmRegistry))
 	}
@@ -380,9 +391,6 @@ func New(cfg *config.Config) (*App, error) {
 		logger.Info("cashu payment records enabled; live wallet token flows are not wired", zap.String("mint_url", cfg.Cashu.MintURL))
 	}
 
-	// Policy service.
-	policySvc := service.NewPolicyService(policyRepo, sigRepo, sbomRepo, logger)
-
 	// Notification system.
 	notifRepo := repository.NewPgNotificationRepository(pool)
 	notifDispatcher := notifications.NewDispatcher(notifRepo, logger)
@@ -431,6 +439,14 @@ func New(cfg *config.Config) (*App, error) {
 	mcpHandler := handlers.NewMCPHandler(mcpServer, logger)
 	logger.Info("mcp server initialized")
 
+	// Private encrypted Nostr transport foundation for sensitive browser route migrations.
+	if len(privateControlPlaneRelays) > 0 && privateControlPlanePool != nil && controlPlaneSigner != nil && cfg.Nostr.PrivateKey != "" {
+		responder := controlplane.NewEncryptedResponder(privateControlPlanePool, controlPlaneSigner, cfg.Nostr.PrivateKey, logger)
+		privateTransport := controlplane.NewPrivateTransport(privateControlPlanePool, responder, cfg.Nostr.AuthorizedPubkeys, logger)
+		bgManager.Register(&privateTransportRunner{transport: privateTransport})
+		logger.Info("private nostr transport registered", zap.Strings("relays", privateControlPlaneRelays))
+	}
+
 	// Nostr control plane reactor for event-driven deployment operations.
 	if len(controlPlaneRelays) > 0 && controlPlaneSigner != nil {
 		reactorConfig := controlplane.Config{
@@ -444,6 +460,7 @@ func New(cfg *config.Config) (*App, error) {
 			controlplane.WithToolProvisioningRepository(toolProvisionRepo),
 			controlplane.WithToolResponder(controlplane.NewToolResponder(controlPlanePool, controlPlaneSigner, logger, nostrEventRepo)),
 			controlplane.WithToolProvisioningCoordinator(toolCoordinator),
+			controlplane.WithPolicyService(policySvc),
 		}
 		if llmRegistry != nil {
 			reactorOpts = append(reactorOpts, controlplane.WithLLMRegistry(llmRegistry))
@@ -522,7 +539,7 @@ func New(cfg *config.Config) (*App, error) {
 		Telemetry:       telemetryProvider,
 		Background:      bgManager,
 		toolCoordinator: toolCoordinator,
-		relayPools:      []*nostrAdapter.RelayPool{controlPlanePool, relayPool},
+		relayPools:      []*nostrAdapter.RelayPool{controlPlanePool, relayPool, privateControlPlanePool},
 	}, nil
 }
 
@@ -589,6 +606,10 @@ func controlPlaneRelayURLs(cfg config.NostrConfig) []string {
 		}
 	}
 	return append([]string(nil), cfg.Relays...)
+}
+
+func privateControlPlaneRelayURLs(cfg config.NostrConfig) []string {
+	return append([]string(nil), cfg.PrivateRelays...)
 }
 
 func interopRelayURLs(cfg *config.Config, controlPlaneRelays []string) []string {
@@ -667,4 +688,13 @@ type controlplaneRunner struct {
 func (r *controlplaneRunner) Name() string { return "controlplane" }
 func (r *controlplaneRunner) Run(ctx context.Context) error {
 	return r.reactor.Run(ctx)
+}
+
+type privateTransportRunner struct {
+	transport *controlplane.PrivateTransport
+}
+
+func (r *privateTransportRunner) Name() string { return "private-nostr-transport" }
+func (r *privateTransportRunner) Run(ctx context.Context) error {
+	return r.transport.Run(ctx)
 }

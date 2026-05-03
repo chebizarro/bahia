@@ -360,6 +360,8 @@ func TestLoadRelaySidecarConfigFromYAML(t *testing.T) {
   private_key: ""
   browser_relays:
     - "ws://localhost:3000/relay"
+  private_browser_relays:
+    - "wss://private-browser.example"
   sidecar:
     enabled: true
     listen_addr: "127.0.0.1:3334"
@@ -394,6 +396,9 @@ func TestLoadRelaySidecarConfigFromYAML(t *testing.T) {
 	}
 	if got := cfg.Nostr.BrowserRelays; len(got) != 1 || got[0] != "ws://localhost:3000/relay" {
 		t.Fatalf("BrowserRelays = %#v", got)
+	}
+	if got := cfg.Nostr.PrivateBrowserRelays; len(got) != 1 || got[0] != "wss://private-browser.example" {
+		t.Fatalf("PrivateBrowserRelays = %#v", got)
 	}
 }
 

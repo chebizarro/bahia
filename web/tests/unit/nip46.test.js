@@ -30,6 +30,41 @@ describe('NIP-46 Utilities', () => {
     });
   });
 
+  describe('capabilities and NIP-44 wrappers', () => {
+    it('reports an explicit NIP-44 blocker when provider lacks encrypt/decrypt', () => {
+      global.window.nostr = { nip46: { signEvent: vi.fn() } };
+
+      const caps = nip46Module.getCapabilities();
+
+      expect(caps.nip44).toBe(false);
+      expect(caps.nip44Blocker).toContain('does not expose a NIP-44');
+    });
+
+    it('encrypts and decrypts when the NIP-46 provider explicitly exposes nip44', async () => {
+      const provider = {
+        signEvent: vi.fn(),
+        nip44: {
+          encrypt: vi.fn().mockResolvedValue('ciphertext'),
+          decrypt: vi.fn().mockResolvedValue('plaintext')
+        }
+      };
+      global.window.nostr = { nip46: provider };
+
+      expect(nip46Module.getCapabilities().nip44).toBe(true);
+      await expect(nip46Module.encryptNip44('b'.repeat(64), 'secret')).resolves.toBe('ciphertext');
+      await expect(nip46Module.decryptNip44('b'.repeat(64), 'ciphertext')).resolves.toBe('plaintext');
+      expect(provider.nip44.encrypt).toHaveBeenCalledWith('b'.repeat(64), 'secret');
+      expect(provider.nip44.decrypt).toHaveBeenCalledWith('b'.repeat(64), 'ciphertext');
+    });
+
+    it('throws the exact blocker from encrypt/decrypt when nip44 is unavailable', async () => {
+      global.window.nostr = { nip46: { signEvent: vi.fn() } };
+
+      await expect(nip46Module.encryptNip44('b'.repeat(64), 'secret')).rejects.toThrow('NIP-46 provider does not expose a NIP-44');
+      await expect(nip46Module.decryptNip44('b'.repeat(64), 'ciphertext')).rejects.toThrow('NIP-46 provider does not expose a NIP-44');
+    });
+  });
+
   describe('connectNip46', () => {
     it('connects via provider and returns pubkey + relays', async () => {
       const provider = {
