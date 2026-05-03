@@ -452,6 +452,19 @@ func New(cfg *config.Config) (*App, error) {
 			BootstrapOwnerPubkeys: cfg.Auth.BootstrapOwnerPubkeys,
 			Logger:                logger,
 		}).Register(privateTransport)
+		controlplane.NewPrivateRouteHandlers(controlplane.PrivateRouteHandlersConfig{
+			Secrets:      secretRepo,
+			Encryptor:    secretEncryptor,
+			Runs:         runRepo,
+			RunLogs:      runLogService,
+			Artifacts:    artifactRepo,
+			Signatures:   sigRepo,
+			SignVerifier: signVerifier,
+			Services:     serviceRepo,
+			Intents:      intentRepo,
+			RBAC:         auth.NewRBAC(orgMemberRepo),
+			Logger:       logger,
+		}).Register(privateTransport)
 		controlplane.RegisterNotificationPrivateHandlers(privateTransport, notifRepo, notifDispatcher)
 		bgManager.Register(&privateTransportRunner{transport: privateTransport})
 		logger.Info("private nostr transport registered", zap.Strings("relays", privateControlPlaneRelays))

@@ -7,6 +7,7 @@
   import LoadingButton from '$lib/components/LoadingButton.svelte';
   import EmptyState from '$lib/components/EmptyState.svelte';
   import { artifacts, services, loadArtifacts, loadServices } from '$lib/stores';
+  import { verifyArtifactSignatures } from '$lib/stores/artifact-signatures.svelte.js';
 
   let artifact = $state(null);
   let service = $state(null);
@@ -94,7 +95,17 @@
     verifyError = null;
 
     try {
-      verifyError = 'Signature verification requires signed/private transport and is not available on the public relay route yet.';
+      const result = await verifyArtifactSignatures(artifactId);
+      const verifiedSignatures = Array.isArray(result?.signatures) ? result.signatures : [];
+      if (verifiedSignatures.length > 0) {
+        signatures = verifiedSignatures;
+        hasVerifiedSig = verifiedSignatures.some((signature) => signature?.verified === true || signature?.verification_status === 'verified');
+      }
+      if (result?.found === 0) {
+        verifyError = 'No signatures were discovered for this artifact.';
+      }
+    } catch (err) {
+      verifyError = err.message || 'Failed to verify signatures';
     } finally {
       verifying = false;
     }
@@ -257,15 +268,13 @@
               {:else}
                 <Badge variant="default">No Signatures</Badge>
               {/if}
-              {#if signatures.length > 0}
-                <LoadingButton
-                  variant="primary"
-                  loading={verifying}
-                  onclick={handleVerifySignatures}
-                >
-                  Verify Signatures
-                </LoadingButton>
-              {/if}
+              <LoadingButton
+                variant="primary"
+                loading={verifying}
+                onclick={handleVerifySignatures}
+              >
+                Verify via Private Transport
+              </LoadingButton>
             </div>
           </div>
 

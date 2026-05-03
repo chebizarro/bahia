@@ -125,7 +125,7 @@ The Nostr reactor subscribes to signed request events and publishes status, term
 
 ### Private Encrypted Transport (5980/7980)
 
-Sensitive browser route families (notifications, orgs, payments, and future private-domain migrations) use encrypted request/result events instead of public read models. These events are intentionally **not** accepted by the public relay sidecar policy and must be sent only to operator-configured private relays.
+Sensitive browser route families and private-only route actions (notifications, orgs, payments, service secrets, stored deployment run logs, and artifact signature verification) use encrypted request/result events instead of public read models. These events are intentionally **not** accepted by the public relay sidecar policy and must be sent only to operator-configured private relays.
 
 Discovery/config contract:
 
@@ -159,6 +159,18 @@ Notification private operations:
 | `notifications.channels.delete` | `{id}` | `{status,id}` | Deletes the channel over private transport. |
 | `notifications.channels.test` | `{id}` | `{status,id}` | Dispatches directly to the selected channel and returns terminal success/error. |
 | `notifications.logs.list` | `{limit?,channel_id?}` | `{logs}` | Delivery logs and payloads are returned only in encrypted result content. |
+
+Route-private operations:
+
+| Operation | Payload | Result payload | Notes |
+|-----------|---------|----------------|-------|
+| `services.secrets.list` | `{service_id}` | `{secrets,total}` | Returns secret refs only; plaintext/encrypted values are omitted. |
+| `services.secrets.create` | `{service_id,name,value,environment_id?,encryption_method?}` | `{secret,status}` | Secret value is encrypted in the request and at rest; result contains metadata only. |
+| `services.secrets.update` | `{service_id,secret_id,value,encryption_method?}` | `{secret,status}` | Re-encrypts the new value; result contains metadata only. |
+| `services.secrets.delete` | `{service_id,secret_id}` | `{status,secret_id}` | Validates the secret belongs to the service before deletion. |
+| `services.secrets.reveal` | `{service_id,secret_id}` | `{secret,value}` | Plaintext is returned only in the encrypted result for explicit reveal actions. |
+| `deployments.run_logs.get` | `{run_id,tail?,stream?}` | `{logs,stream}` | Stored stdout/stderr snapshots are private result content; public run projections carry metadata only. |
+| `artifacts.signatures.verify` | `{artifact_id}` | `{found,stored,verified,discovered,rejected,errors,signatures}` | Verification is triggered by private signed/encrypted action and stores discovered signature records. |
 
 ### Correlation Tags
 

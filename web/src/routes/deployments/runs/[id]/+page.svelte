@@ -5,6 +5,7 @@
   import LoadingButton from '$lib/components/LoadingButton.svelte';
   import EmptyState from '$lib/components/EmptyState.svelte';
   import { deploymentRuns, loadDeploymentRuns } from '$lib/stores';
+  import { loadDeploymentRunLogs } from '$lib/stores/deployment-run-logs.svelte.js';
 
   let run = $state(null);
   let stdoutLogs = $state('');
@@ -56,9 +57,18 @@
       return;
     }
 
+    logsLoading = true;
     stdoutLogs = '';
     stderrLogs = '';
-    logsError = 'Run log snapshots are not part of the public relay read model yet.';
+    try {
+      const logs = await loadDeploymentRunLogs(id, { tail: 100, stream: 'merged' });
+      stdoutLogs = logs?.stdout || '';
+      stderrLogs = logs?.stderr || '';
+    } catch (err) {
+      logsError = err.message || 'Failed to load stored run logs';
+    } finally {
+      logsLoading = false;
+    }
   }
 
   function calculateProgress(status) {
@@ -168,7 +178,7 @@
 
     <Card>
       <h2>Run Logs</h2>
-      <p class="transport-note">Transport: public relay deployment-run projection. Stored stdout/stderr log snapshots are not projected yet.</p>
+      <p class="transport-note">Transport: public relay run projection + encrypted private transport for stored stdout/stderr snapshots.</p>
 
       {#if !isCompleted}
         <EmptyState

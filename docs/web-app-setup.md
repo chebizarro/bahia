@@ -83,7 +83,7 @@ Important signer constraints:
 
 - NIP-07 must expose `window.nostr.nip44.encrypt` and `window.nostr.nip44.decrypt`.
 - NIP-46 works only if the provider exposes `provider.nip44.encrypt/decrypt`; otherwise private routes must remain blocked for that signer with the explicit provider blocker shown.
-- Public sidecar relays from `nostr.browser_relays` are not private relays. Do not copy notification, org, or payment payloads into public read-model events.
+- Public sidecar relays from `nostr.browser_relays` are not private relays. Do not copy notification, org, payment, service secret, stored run log, or artifact signature verification payloads into public read-model events.
 
 ## Troubleshooting
 

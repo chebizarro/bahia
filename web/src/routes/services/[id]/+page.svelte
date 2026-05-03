@@ -47,6 +47,13 @@
   } from '$lib/stores/repositories.js';
   import { fetchRepoBranches, isNostrRepository } from '$lib/nostr/branches.js';
   import { secretFormSchema, secretValueSchema, serviceFormSchema, validateForm } from '$lib/validation/forms.js';
+  import {
+    createServiceSecret,
+    deleteServiceSecret,
+    listServiceSecrets,
+    revealServiceSecret,
+    updateServiceSecret
+  } from '$lib/stores/service-secrets.svelte.js';
 
   let service = $state(null);
   let builds = $state([]);
@@ -212,7 +219,12 @@
       builds = buildStore.filter((build) => build.service_id === id);
       artifacts = artifactStore.filter((artifact) => artifact.service_id === id);
       environments = [...environmentStore];
-      secrets = [];
+      try {
+        secrets = await listServiceSecrets(id);
+      } catch (secretErr) {
+        secrets = [];
+        console.warn('Failed to load service secrets via private transport:', secretErr);
+      }
 
       await loadRepositories();
     } catch (err) {
@@ -520,7 +532,7 @@
   }
 
   async function reloadSecrets() {
-    secrets = [];
+    secrets = await listServiceSecrets(serviceId);
   }
 
   function openSecretCreateModal() {
@@ -569,10 +581,19 @@
     secretRevealCopyStatus = '';
   }
 
-  function handleSecretReveal(secret) {
-    const value = secretValueCache[secret.id];
-    if (!value) return;
-    openSecretRevealModal(secret.name, value);
+  async function handleSecretReveal(secret) {
+    if (!secret?.id) return;
+    try {
+      const value = secretValueCache[secret.id] || await revealServiceSecret(serviceId, secret.id);
+      secretValueCache = { ...secretValueCache, [secret.id]: value };
+      openSecretRevealModal(secret.name, value);
+    } catch (err) {
+      secretRevealName = secret.name;
+      secretRevealValue = '';
+      secretRevealCopyStatus = err.message || 'Failed to reveal secret';
+      secretRevealWarningAccepted = true;
+      secretRevealOpen = true;
+    }
   }
 
   async function handleCopyRevealedSecret() {
@@ -597,7 +618,13 @@
     secretCreateError = null;
 
     try {
-      secretCreateError = 'Secret management requires the private signer-first transport and is not available on public relay routes yet.';
+      await createServiceSecret(serviceId, {
+        name: secretForm.name.trim(),
+        value: secretForm.value
+      });
+      secretForm.value = '';
+      closeSecretCreateModal();
+      await reloadSecrets();
     } catch (err) {
       // Never log the secret value
       secretCreateError = err.message || 'Failed to create secret';
@@ -619,7 +646,10 @@
     secretUpdateError = null;
 
     try {
-      secretUpdateError = 'Secret management requires the private signer-first transport and is not available on public relay routes yet.';
+      await updateServiceSecret(serviceId, secretToUpdate.id, { value: secretUpdateValue });
+      secretValueCache = { ...secretValueCache, [secretToUpdate.id]: undefined };
+      closeSecretUpdateModal();
+      await reloadSecrets();
     } catch (err) {
       secretUpdateError = err.message || 'Failed to update secret';
     } finally {
@@ -646,7 +676,11 @@
     secretDeleteError = null;
 
     try {
-      secretDeleteError = 'Secret management requires the private signer-first transport and is not available on public relay routes yet.';
+      await deleteServiceSecret(serviceId, secretToDelete.id);
+      const { [secretToDelete.id]: _removed, ...remainingCache } = secretValueCache;
+      secretValueCache = remainingCache;
+      closeSecretDeleteModal();
+      await reloadSecrets();
     } catch (err) {
       secretDeleteError = err.message || 'Failed to delete secret';
     } finally {
@@ -889,7 +923,6 @@
               <div class="secret-actions">
                 <LoadingButton
                   variant="secondary"
-                  disabled={!secretValueCache[secret.id]}
                   onclick={() => handleSecretReveal(secret)}
                 >
                   Reveal
