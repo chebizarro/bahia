@@ -2,7 +2,8 @@ import { authState, decryptWithAuth, encryptWithAuth, signWithAuth } from '$lib/
 import { currentSystemInfo } from '$lib/stores/system.svelte.js';
 import { NostrClient, getTagValues } from './client.js';
 
-export const ENCRYPTED_REQUEST_WIRE_VERSION = 'bahia-private-v1';
+export const ENCRYPTED_REQUEST_ROUTING_TAG = 'encrypted';
+export const ENCRYPTED_REQUEST_WIRE_VERSION = 'bahia-encrypted-v1';
 export const ENCRYPTED_REQUEST_KIND = 5980;
 export const ENCRYPTED_RESULT_KIND = 7980;
 
@@ -62,7 +63,7 @@ function openRelayUrls(client) {
 }
 
 export function encryptedRelayUrlsFromSystemInfo(systemInfo = currentSystemInfo()) {
-  return normalizeRelays(systemInfo?.nostr?.browser_encrypted_request_relays || systemInfo?.nostr?.private_browser_relays || []);
+  return normalizeRelays(systemInfo?.nostr?.browser_encrypted_request_relays || []);
 }
 
 export function servicePubkeyFromSystemInfo(systemInfo = currentSystemInfo()) {
@@ -111,7 +112,7 @@ export class EncryptedControlplaneTransport {
     const mergedTags = [
       ...normalizeTags(tags),
       ['p', this.servicePubkey],
-      ['private', ENCRYPTED_REQUEST_WIRE_VERSION]
+      [ENCRYPTED_REQUEST_ROUTING_TAG, ENCRYPTED_REQUEST_WIRE_VERSION]
     ];
 
     return signWithAuth({

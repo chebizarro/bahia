@@ -223,7 +223,7 @@
         secrets = await listServiceSecrets(id);
       } catch (secretErr) {
         secrets = [];
-        console.warn('Failed to load service secrets via private transport:', secretErr);
+        console.warn('Failed to load service secrets via encrypted Nostr requests:', secretErr);
       }
 
       await loadRepositories();

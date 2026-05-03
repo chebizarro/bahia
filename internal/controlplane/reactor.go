@@ -95,8 +95,8 @@ const (
 type Config struct {
 	// Relays is the list of public relay URLs for subscriptions and results.
 	Relays []string
-	// PrivateRelays is the list of relay URLs for private/draft events.
-	PrivateRelays []string
+	// AdditionalRelays is the supplemental relay URL list for draft/provisioning events.
+	AdditionalRelays []string
 	// PrivateKey is the hex-encoded key used only when this reactor must create
 	// its own relay pool with NIP-42 AUTH support. Event signing uses Signer.
 	PrivateKey string
@@ -210,9 +210,9 @@ func NewReactor(config Config, registry *service.RegistryService, pool *nostrpoo
 		}
 
 		// Copy slices to avoid mutating config's backing array
-		allRelays := make([]string, 0, len(config.Relays)+len(config.PrivateRelays))
+		allRelays := make([]string, 0, len(config.Relays)+len(config.AdditionalRelays))
 		allRelays = append(allRelays, config.Relays...)
-		allRelays = append(allRelays, config.PrivateRelays...)
+		allRelays = append(allRelays, config.AdditionalRelays...)
 		pool = nostrpool.NewRelayPool(allRelays, zapLog, poolOpts...)
 	}
 
@@ -238,7 +238,7 @@ func NewReactor(config Config, registry *service.RegistryService, pool *nostrpoo
 func (r *Reactor) Run(ctx context.Context) error {
 	r.logger.Info("starting bahia control plane reactor",
 		"relays", r.config.Relays,
-		"private_relays", r.config.PrivateRelays,
+		"additional_relays", r.config.AdditionalRelays,
 	)
 
 	// Connect to relays

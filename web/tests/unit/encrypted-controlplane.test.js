@@ -12,7 +12,6 @@ const systemMock = vi.hoisted(() => ({
     nostr: {
       service_pubkey: 'b'.repeat(64),
       browser_encrypted_request_relays: ['wss://requests.example'],
-      private_browser_relays: ['wss://deprecated.example'],
       browser_relays: ['wss://public.example']
     }
   }))
@@ -46,7 +45,6 @@ describe('encrypted controlplane transport', () => {
       nostr: {
         service_pubkey: 'b'.repeat(64),
         browser_encrypted_request_relays: ['wss://requests.example'],
-        private_browser_relays: ['wss://deprecated.example'],
         browser_relays: ['wss://public.example']
       }
     });
@@ -59,14 +57,19 @@ describe('encrypted controlplane transport', () => {
     expect(module.encryptedRequestsAvailable()).toBe(true);
   });
 
-  it('falls back to deprecated private browser relay aliases for older system info', () => {
+  it('does not treat public browser relays as encrypted request relays', () => {
     expect(module.encryptedRelayUrlsFromSystemInfo({
       nostr: {
         service_pubkey: 'b'.repeat(64),
-        private_browser_relays: ['wss://legacy.example'],
         browser_relays: ['wss://public.example']
       }
-    })).toEqual(['wss://legacy.example']);
+    })).toEqual([]);
+    expect(module.encryptedRequestsAvailable({
+      nostr: {
+        service_pubkey: 'b'.repeat(64),
+        browser_relays: ['wss://public.example']
+      }
+    })).toBe(false);
   });
 
   it('builds encrypted request events without targeting public browser relays', async () => {
@@ -77,7 +80,7 @@ describe('encrypted controlplane transport', () => {
     expect(authMock.encryptWithAuth).toHaveBeenCalledWith('b'.repeat(64), expect.stringContaining('payments.history'));
     expect(authMock.signWithAuth).toHaveBeenCalledWith(expect.objectContaining({
       kind: module.ENCRYPTED_REQUEST_KIND,
-      tags: expect.arrayContaining([['p', 'b'.repeat(64)], ['private', module.ENCRYPTED_REQUEST_WIRE_VERSION]]),
+      tags: expect.arrayContaining([['p', 'b'.repeat(64)], [module.ENCRYPTED_REQUEST_ROUTING_TAG, module.ENCRYPTED_REQUEST_WIRE_VERSION]]),
       content: expect.stringMatching(/^cipher:/)
     }));
     expect(event.id).toBe('request-id');

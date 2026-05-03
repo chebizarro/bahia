@@ -35,7 +35,7 @@ var SoulFactoryPubkey = "14907326f89ebdfc9cfdabe17bd492aa48abbd59ad5d8cc25295760
 // Config holds reactor configuration.
 type Config struct {
 	Relays            []string
-	PrivateRelays     []string // For drafts and provisioning events
+	AdditionalRelays  []string // Supplemental relays for drafts and provisioning events
 	SoulFactoryPubkey string
 	AuthorizedPubkeys []string
 	SignetBunkerURI   string
@@ -125,7 +125,7 @@ func NewReactor(config Config, generator SoulGenerator, signer Signer, logger *s
 func (r *Reactor) Run(ctx context.Context) error {
 	r.logger.Info("starting soul factory reactor",
 		"relays", r.config.Relays,
-		"private_relays", r.config.PrivateRelays,
+		"additional_relays", r.config.AdditionalRelays,
 	)
 
 	// Subscribe to provisioning requests and actions
@@ -142,7 +142,7 @@ func (r *Reactor) Run(ctx context.Context) error {
 	}
 
 	// Combine all relays for subscription
-	allRelays := append(r.config.Relays, r.config.PrivateRelays...)
+	allRelays := append(r.config.Relays, r.config.AdditionalRelays...)
 
 	sub := r.pool.SubMany(ctx, allRelays, filters)
 
@@ -421,7 +421,7 @@ func (r *Reactor) PublishStatus(ctx context.Context, requestEvent *nostr.Event, 
 		return fmt.Errorf("sign status event: %w", err)
 	}
 
-	return r.publish(ctx, event, r.config.PrivateRelays)
+	return r.publish(ctx, event, r.config.AdditionalRelays)
 }
 
 // publishResult publishes a kind:7950 success result event.
@@ -459,8 +459,8 @@ func (r *Reactor) publishResult(ctx context.Context, requestEvent *nostr.Event, 
 		return fmt.Errorf("sign result event: %w", err)
 	}
 
-	// Publish to both private and public relays
-	allRelays := append(r.config.PrivateRelays, r.config.Relays...)
+	// Publish to both supplemental and public relays
+	allRelays := append(r.config.AdditionalRelays, r.config.Relays...)
 	return r.publish(ctx, event, allRelays)
 }
 
@@ -483,7 +483,7 @@ func (r *Reactor) publishActionError(ctx context.Context, sourceEvent *nostr.Eve
 	if err := r.signer.Sign(ctx, event); err != nil {
 		return fmt.Errorf("sign action error event: %w", err)
 	}
-	return r.publish(ctx, event, r.config.PrivateRelays)
+	return r.publish(ctx, event, r.config.AdditionalRelays)
 }
 
 // publishError publishes a kind:7950 error result event.
@@ -505,7 +505,7 @@ func (r *Reactor) publishError(ctx context.Context, requestEvent *nostr.Event, s
 		return fmt.Errorf("sign error event: %w", err)
 	}
 
-	return r.publish(ctx, event, r.config.PrivateRelays)
+	return r.publish(ctx, event, r.config.AdditionalRelays)
 }
 
 // publishSoul publishes a kind:31951 agent soul event.

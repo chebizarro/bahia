@@ -652,7 +652,7 @@ func controlPlaneRelayURLs(cfg config.NostrConfig) []string {
 }
 
 func encryptedRequestRelayURLs(cfg config.NostrConfig) []string {
-	return append([]string(nil), cfg.PrivateRelays...)
+	return append([]string(nil), cfg.EncryptedRequestRelays...)
 }
 
 func interopRelayURLs(cfg *config.Config, controlPlaneRelays []string) []string {
@@ -669,7 +669,7 @@ func interopRelayURLs(cfg *config.Config, controlPlaneRelays []string) []string 
 			relays = appendUniqueRelay(relays, r)
 		}
 	}
-	for _, r := range cfg.Nostr.PrivateRelays {
+	for _, r := range cfg.Nostr.EncryptedRequestRelays {
 		relays = appendUniqueRelay(relays, r)
 	}
 	for _, r := range cfg.Loom.Relays {

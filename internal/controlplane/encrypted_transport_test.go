@@ -55,7 +55,7 @@ func makeEncryptedRequestEvent(t *testing.T, requesterKey string, envelope Encry
 	event := &nostr.Event{
 		Kind:      KindEncryptedRequest,
 		CreatedAt: nostr.Now(),
-		Tags:      nostr.Tags{{"p", servicePubkey}, {"private", EncryptedRequestWireVersion}},
+		Tags:      nostr.Tags{{"p", servicePubkey}, {EncryptedRequestRoutingTag, EncryptedRequestWireVersion}},
 		Content:   ciphertext,
 	}
 	if err := event.Sign(requesterKey); err != nil {
@@ -138,6 +138,9 @@ func TestEncryptedResponder_PublishEncryptedResultCorrelatesToRequest(t *testing
 	if !hasTag(result.Tags, "e", req.ID) || !hasTag(result.Tags, "p", req.PubKey) {
 		t.Fatalf("missing correlation tags: %#v", result.Tags)
 	}
+	if !hasTag(result.Tags, EncryptedRequestRoutingTag, EncryptedRequestWireVersion) {
+		t.Fatalf("missing encrypted routing tag: %#v", result.Tags)
+	}
 	envelope := decryptResultEnvelope(t, result, testRequesterKey)
 	if envelope.RequestEventID != req.ID || envelope.Status != "ok" {
 		t.Fatalf("unexpected result envelope: %+v", envelope)
@@ -155,7 +158,7 @@ func TestEncryptedRequestTransport_HandleEventPublishesDecryptFailure(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	event := &nostr.Event{Kind: KindEncryptedRequest, CreatedAt: nostr.Now(), Tags: nostr.Tags{{"p", servicePubkey}, {"private", EncryptedRequestWireVersion}}, Content: "not-valid-nip44"}
+	event := &nostr.Event{Kind: KindEncryptedRequest, CreatedAt: nostr.Now(), Tags: nostr.Tags{{"p", servicePubkey}, {EncryptedRequestRoutingTag, EncryptedRequestWireVersion}}, Content: "not-valid-nip44"}
 	if err := event.Sign(testRequesterKey); err != nil {
 		t.Fatal(err)
 	}
@@ -176,7 +179,7 @@ func TestEncryptedRequestTransport_HandleEventIgnoresUnroutedEncryptedKind(t *te
 	publisher := &mockEncryptedPublisher{}
 	responder := newResponder(t, publisher)
 	event := makeEncryptedRequestEvent(t, testRequesterKey, EncryptedRequestEnvelope{Version: EncryptedRequestWireVersion, Operation: "notifications.list"})
-	event.Tags = nostr.Tags{{"p", "c" + event.PubKey[1:]}, {"private", EncryptedRequestWireVersion}}
+	event.Tags = nostr.Tags{{"p", "c" + event.PubKey[1:]}, {EncryptedRequestRoutingTag, EncryptedRequestWireVersion}}
 	if err := event.Sign(testRequesterKey); err != nil {
 		t.Fatal(err)
 	}

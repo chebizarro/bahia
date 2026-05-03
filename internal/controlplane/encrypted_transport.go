@@ -15,7 +15,8 @@ import (
 )
 
 const (
-	EncryptedRequestWireVersion = "bahia-private-v1"
+	EncryptedRequestRoutingTag  = "encrypted"
+	EncryptedRequestWireVersion = "bahia-encrypted-v1"
 	KindEncryptedRequest        = 5980 // Browser → Bahia encrypted request
 	KindEncryptedResult         = 7980 // Bahia → Browser encrypted result
 )
@@ -143,7 +144,7 @@ func (r *EncryptedResponder) PublishEncryptedResult(ctx context.Context, request
 		Tags: nostr.Tags{
 			{"e", requestEvent.ID, "", "reply"},
 			{"p", requestEvent.PubKey},
-			{"private", EncryptedRequestWireVersion},
+			{EncryptedRequestRoutingTag, EncryptedRequestWireVersion},
 			{"status", status},
 		},
 		Content: ciphertext,
@@ -214,7 +215,7 @@ func (t *EncryptedRequestTransport) Run(ctx context.Context) error {
 		return fmt.Errorf("encrypted request subscriber is not configured")
 	}
 	now := nostr.Now()
-	filter := nostr.Filter{Kinds: []int{KindEncryptedRequest}, Since: &now, Tags: nostr.TagMap{"private": {EncryptedRequestWireVersion}}}
+	filter := nostr.Filter{Kinds: []int{KindEncryptedRequest}, Since: &now, Tags: nostr.TagMap{EncryptedRequestRoutingTag: {EncryptedRequestWireVersion}}}
 	if servicePubkey := t.responder.ServicePubkey(); servicePubkey != "" {
 		filter.Tags["p"] = []string{servicePubkey}
 	}
@@ -306,7 +307,7 @@ func (t *EncryptedRequestTransport) authorized(pubkey string) bool {
 }
 
 func (t *EncryptedRequestTransport) matchesRoutingTags(event *nostr.Event) bool {
-	if event == nil || !tagContains(event.Tags, "private", EncryptedRequestWireVersion) {
+	if event == nil || !tagContains(event.Tags, EncryptedRequestRoutingTag, EncryptedRequestWireVersion) {
 		return false
 	}
 	servicePubkey := t.responder.ServicePubkey()
