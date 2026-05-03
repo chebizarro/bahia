@@ -9,10 +9,8 @@ import (
 	"time"
 
 	chimiddleware "github.com/go-chi/chi/v5/middleware"
-	"github.com/openagentsinc/bahia/internal/adapters/runtime"
 	"github.com/openagentsinc/bahia/internal/api/dto"
 	"github.com/openagentsinc/bahia/internal/auth"
-	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/service"
 	"go.uber.org/zap"
 )
@@ -95,7 +93,7 @@ func (h *AdoptionHandler) Scan(w http.ResponseWriter, r *http.Request) {
 	}
 	candidateCount, redactedEnvKeyCount, redactedLabelKeyCount := adoptionPreviewStats(previews)
 	h.recordScan(r, req.Targets, candidateCount, redactedEnvKeyCount, redactedLabelKeyCount, start, true, "")
-	writeData(w, http.StatusOK, mapAdoptionPreviewResponses(previews))
+	writeData(w, http.StatusOK, dto.AdoptionPreviewResponsesFromService(previews))
 }
 
 // Import imports selected or all discovered containers into Bahia models.
@@ -147,7 +145,7 @@ func (h *AdoptionHandler) Import(w http.ResponseWriter, r *http.Request) {
 		result = "failed"
 	}
 	h.recordImport(r, req.Targets, len(results), successCount, failureCount, redactedEnvKeyCount, redactedLabelKeyCount, start, result, "")
-	writeData(w, http.StatusOK, mapAdoptionImportResultResponses(results))
+	writeData(w, http.StatusOK, dto.AdoptionImportResultResponsesFromService(results))
 }
 
 func (h *AdoptionHandler) recordScan(r *http.Request, targets []dto.AdoptionTargetRequest, candidateCount, redactedEnvKeyCount, redactedLabelKeyCount int, start time.Time, success bool, errMsg string) {
@@ -347,111 +345,6 @@ func mapAdoptionSelections(selections []dto.AdoptionSelectionRequest) []service.
 		})
 	}
 	return mapped
-}
-
-func mapAdoptionPreviewResponses(previews []service.AdoptionPreview) []dto.AdoptionPreviewResponse {
-	mapped := make([]dto.AdoptionPreviewResponse, 0, len(previews))
-	for _, preview := range previews {
-		containers := make([]dto.AdoptionPreviewContainerResponse, 0, len(preview.Containers))
-		for _, container := range preview.Containers {
-			containers = append(containers, dto.AdoptionPreviewContainerResponse{
-				Discovered:          mapDiscoveredContainerResponse(container.Discovered, container.SafeEnvironment, container.SafeLabels, container.RedactedEnvironmentKeys, container.RedactedLabelKeys),
-				ProposedServiceName: container.ProposedServiceName,
-				ExistingServiceID:   container.ExistingServiceID,
-				WillUpdate:          container.WillUpdate,
-				Warnings:            append([]string(nil), container.Warnings...),
-				Adoptable:           container.Adoptable,
-			})
-		}
-		mapped = append(mapped, dto.AdoptionPreviewResponse{
-			Target:     mapAdoptionTargetResponse(preview.Target),
-			Containers: containers,
-			Error:      preview.Error,
-		})
-	}
-	return mapped
-}
-
-func mapAdoptionImportResultResponses(results []service.AdoptionImportResult) []dto.AdoptionImportResultResponse {
-	mapped := make([]dto.AdoptionImportResultResponse, 0, len(results))
-	for _, result := range results {
-		mapped = append(mapped, dto.AdoptionImportResultResponse{
-			TargetName:              result.TargetName,
-			ContainerID:             result.ContainerID,
-			ContainerName:           result.ContainerName,
-			ServiceName:             result.ServiceName,
-			ServiceID:               result.ServiceID,
-			EnvironmentID:           result.EnvironmentID,
-			BuildID:                 result.BuildID,
-			ArtifactID:              result.ArtifactID,
-			Status:                  result.Status,
-			Warnings:                append([]string(nil), result.Warnings...),
-			RedactedEnvironmentKeys: append([]string(nil), result.RedactedEnvironmentKeys...),
-			RedactedLabelKeys:       append([]string(nil), result.RedactedLabelKeys...),
-			Error:                   result.Error,
-		})
-	}
-	return mapped
-}
-
-func mapAdoptionTargetResponse(target service.AdoptionTarget) dto.AdoptionTargetResponse {
-	resp := dto.AdoptionTargetResponse{Name: target.Name, EndpointRef: target.EndpointRef, EnvironmentName: target.EnvironmentName}
-	if target.EndpointRef == "" {
-		resp.DockerHost = target.DockerHost
-	}
-	return resp
-}
-
-func mapDiscoveredContainerResponse(discovered runtime.DiscoveredContainer, safeEnvironment, safeLabels map[string]string, redactedEnvironmentKeys, redactedLabelKeys []string) dto.DiscoveredContainerResponse {
-	return dto.DiscoveredContainerResponse{
-		TargetName:              discovered.TargetName,
-		EnvironmentName:         discovered.EnvironmentName,
-		ContainerID:             discovered.ContainerID,
-		ContainerName:           discovered.ContainerName,
-		ImageRef:                discovered.ImageRef,
-		ImageRepo:               discovered.ImageRepo,
-		ImageTag:                discovered.ImageTag,
-		ImageDigest:             discovered.ImageDigest,
-		SourceRuntime:           discovered.SourceRuntime,
-		Labels:                  copyStringMap(safeLabels),
-		Environment:             copyStringMap(safeEnvironment),
-		RedactedEnvironmentKeys: append([]string(nil), redactedEnvironmentKeys...),
-		RedactedLabelKeys:       append([]string(nil), redactedLabelKeys...),
-		Ports:                   append([]string(nil), discovered.Ports...),
-		Volumes:                 append([]string(nil), discovered.Volumes...),
-		Restart:                 discovered.Restart,
-		Command:                 append([]string(nil), discovered.Command...),
-		Entrypoint:              append([]string(nil), discovered.Entrypoint...),
-		WorkingDir:              discovered.WorkingDir,
-		NetworkMode:             discovered.NetworkMode,
-		Compose:                 mapComposeMetadataResponse(discovered.Compose),
-		HealthStatus:            string(discovered.HealthStatus),
-		Warnings:                append([]string(nil), discovered.Warnings...),
-		Adoptable:               discovered.Adoptable,
-	}
-}
-
-func mapComposeMetadataResponse(compose *domain.ComposeMetadata) *dto.ComposeMetadataResponse {
-	if compose == nil {
-		return nil
-	}
-	return &dto.ComposeMetadataResponse{
-		ProjectName: compose.ProjectName,
-		ServiceName: compose.ServiceName,
-		WorkingDir:  compose.WorkingDir,
-		ConfigFiles: append([]string(nil), compose.ConfigFiles...),
-	}
-}
-
-func copyStringMap(in map[string]string) map[string]string {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make(map[string]string, len(in))
-	for k, v := range in {
-		out[k] = v
-	}
-	return out
 }
 
 func isNilHandlerDependency(v any) bool {

@@ -86,7 +86,7 @@ func (h *ServiceActionHandler) Deploy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.recordRuntimeAction(r, "deploy", serviceID, envID, req.ArtifactID, start, "success", "")
-	writeData(w, http.StatusOK, dto.RuntimeActionResponse{Action: "deploy", ServiceID: serviceID, EnvironmentID: envID, Observation: mapRuntimeObservationResponse(obs)})
+	writeData(w, http.StatusOK, dto.RuntimeActionResponseFromDomain("deploy", serviceID, envID, obs))
 }
 
 // Restart restarts the service directly through the resolved runtime.
@@ -104,7 +104,7 @@ func (h *ServiceActionHandler) Restart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.recordRuntimeAction(r, "restart", serviceID, envID, nil, start, "success", "")
-	writeData(w, http.StatusOK, dto.RuntimeActionResponse{Action: "restart", ServiceID: serviceID, EnvironmentID: envID, Observation: mapRuntimeObservationResponse(obs)})
+	writeData(w, http.StatusOK, dto.RuntimeActionResponseFromDomain("restart", serviceID, envID, obs))
 }
 
 // Stop stops the service directly through the resolved runtime.
@@ -122,7 +122,7 @@ func (h *ServiceActionHandler) Stop(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.recordRuntimeAction(r, "stop", serviceID, envID, nil, start, "success", "")
-	writeData(w, http.StatusOK, dto.RuntimeActionResponse{Action: "stop", ServiceID: serviceID, EnvironmentID: envID, Observation: mapRuntimeObservationResponse(obs)})
+	writeData(w, http.StatusOK, dto.RuntimeActionResponseFromDomain("stop", serviceID, envID, obs))
 }
 
 func (h *ServiceActionHandler) recordRuntimeAction(r *http.Request, action string, serviceID, envID uuid.UUID, artifactID *uuid.UUID, start time.Time, result, errMsg string) {
@@ -194,31 +194,4 @@ func decodeDeployServiceActionRequest(w http.ResponseWriter, r *http.Request) (d
 		return req, false
 	}
 	return req, true
-}
-
-func mapRuntimeObservationResponse(obs *domain.RuntimeObservation) *dto.RuntimeObservationResponse {
-	if obs == nil {
-		return nil
-	}
-	metadata := make(map[string]any, len(obs.Metadata))
-	for k, v := range obs.Metadata {
-		metadata[k] = v
-	}
-	if len(metadata) == 0 {
-		metadata = nil
-	}
-	return &dto.RuntimeObservationResponse{
-		ID:                  obs.ID,
-		ServiceID:           obs.ServiceID,
-		EnvironmentID:       obs.EnvironmentID,
-		ObservedImageDigest: obs.ObservedImageDigest,
-		ObservedImageRepo:   obs.ObservedImageRepo,
-		ObservedContainerID: obs.ObservedContainerID,
-		ObservedHost:        obs.ObservedHost,
-		ObservedVersion:     obs.ObservedVersion,
-		HealthStatus:        string(obs.HealthStatus),
-		Source:              obs.Source,
-		Metadata:            metadata,
-		ObservedAt:          obs.ObservedAt,
-	}
 }
