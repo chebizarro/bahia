@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 
+	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/api/dto"
 	"github.com/openagentsinc/bahia/internal/auth"
 	"github.com/openagentsinc/bahia/internal/domain"
@@ -34,6 +35,9 @@ func resolveActor(r *http.Request, clientSupplied string) string {
 // --- Deployment Intents ---
 
 func (h *DeploymentHandler) CreateIntent(w http.ResponseWriter, r *http.Request) {
+	if !requirePermission(w, r, domain.PermWriteDeployments) {
+		return
+	}
 	var req dto.CreateDeploymentIntentRequest
 	if err := decodeJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -64,6 +68,9 @@ func (h *DeploymentHandler) CreateIntent(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	if !h.validateIntentResourcesInOrg(w, r, req.ServiceID, req.EnvironmentID, req.ArtifactID) {
+		return
+	}
 
 	sourceKind := domain.SourceKind(req.SourceKind)
 	if sourceKind == "" {
@@ -87,6 +94,9 @@ func (h *DeploymentHandler) CreateIntent(w http.ResponseWriter, r *http.Request)
 }
 
 func (h *DeploymentHandler) GetIntent(w http.ResponseWriter, r *http.Request) {
+	if !requireMember(w, r) {
+		return
+	}
 	id, err := uuidParam(r, "id")
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid intent id")
@@ -106,6 +116,9 @@ func (h *DeploymentHandler) GetIntent(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *DeploymentHandler) ListIntents(w http.ResponseWriter, r *http.Request) {
+	if !requireMember(w, r) {
+		return
+	}
 	serviceID, err := uuidParam(r, "serviceId")
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid service id")
@@ -128,6 +141,9 @@ func (h *DeploymentHandler) ListIntents(w http.ResponseWriter, r *http.Request) 
 }
 
 func (h *DeploymentHandler) ApproveIntent(w http.ResponseWriter, r *http.Request) {
+	if !requirePermission(w, r, domain.PermApproveDeployments) {
+		return
+	}
 	id, err := uuidParam(r, "id")
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid intent id")
@@ -145,6 +161,9 @@ func (h *DeploymentHandler) ApproveIntent(w http.ResponseWriter, r *http.Request
 }
 
 func (h *DeploymentHandler) RejectIntent(w http.ResponseWriter, r *http.Request) {
+	if !requirePermission(w, r, domain.PermApproveDeployments) {
+		return
+	}
 	id, err := uuidParam(r, "id")
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid intent id")
@@ -161,9 +180,77 @@ func (h *DeploymentHandler) RejectIntent(w http.ResponseWriter, r *http.Request)
 	writeMessage(w, http.StatusOK, "deployment intent rejected")
 }
 
+func (h *DeploymentHandler) validateServiceInOrg(w http.ResponseWriter, r *http.Request, serviceID uuid.UUID) bool {
+	if authzOrgID(r) == uuid.Nil {
+		return true
+	}
+	svc, err := h.registry.GetService(r.Context(), serviceID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return false
+	}
+	if svc == nil {
+		writeError(w, http.StatusNotFound, "service not found")
+		return false
+	}
+	return serviceInAuthzOrg(w, r, svc.OrgID)
+}
+
+func (h *DeploymentHandler) validateServiceEnvInOrg(w http.ResponseWriter, r *http.Request, serviceID, envID uuid.UUID) bool {
+	if authzOrgID(r) == uuid.Nil {
+		return true
+	}
+	svc, err := h.registry.GetService(r.Context(), serviceID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return false
+	}
+	if svc == nil {
+		writeError(w, http.StatusNotFound, "service not found")
+		return false
+	}
+	env, err := h.registry.GetEnvironment(r.Context(), envID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return false
+	}
+	if env == nil {
+		writeError(w, http.StatusNotFound, "environment not found")
+		return false
+	}
+	if svc.OrgID != env.OrgID {
+		writeError(w, http.StatusForbidden, "access denied")
+		return false
+	}
+	return serviceInAuthzOrg(w, r, svc.OrgID)
+}
+
+func (h *DeploymentHandler) validateIntentResourcesInOrg(w http.ResponseWriter, r *http.Request, serviceID, envID, artifactID uuid.UUID) bool {
+	if !h.validateServiceEnvInOrg(w, r, serviceID, envID) {
+		return false
+	}
+	artifact, err := h.registry.GetArtifact(r.Context(), artifactID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return false
+	}
+	if artifact == nil {
+		writeError(w, http.StatusNotFound, "artifact not found")
+		return false
+	}
+	if artifact.ServiceID != serviceID {
+		writeError(w, http.StatusForbidden, "access denied")
+		return false
+	}
+	return true
+}
+
 // --- Deployment Runs ---
 
 func (h *DeploymentHandler) CreateRun(w http.ResponseWriter, r *http.Request) {
+	if !requirePermission(w, r, domain.PermWriteDeployments) {
+		return
+	}
 	var req dto.CreateDeploymentRunRequest
 	if err := decodeJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -172,6 +259,18 @@ func (h *DeploymentHandler) CreateRun(w http.ResponseWriter, r *http.Request) {
 
 	if err := domain.ValidateRequiredUUID(req.DeploymentIntentID, "deployment_intent_id"); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	intent, err := h.registry.GetDeploymentIntent(r.Context(), req.DeploymentIntentID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if intent == nil {
+		writeError(w, http.StatusNotFound, "deployment intent not found")
+		return
+	}
+	if !h.validateServiceInOrg(w, r, intent.ServiceID) {
 		return
 	}
 
@@ -191,6 +290,9 @@ func (h *DeploymentHandler) CreateRun(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *DeploymentHandler) GetRun(w http.ResponseWriter, r *http.Request) {
+	if !requireMember(w, r) {
+		return
+	}
 	id, err := uuidParam(r, "id")
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid run id")
@@ -210,6 +312,9 @@ func (h *DeploymentHandler) GetRun(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *DeploymentHandler) ListRuns(w http.ResponseWriter, r *http.Request) {
+	if !requireMember(w, r) {
+		return
+	}
 	intentID, err := uuidParam(r, "intentId")
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid intent id")
@@ -225,6 +330,9 @@ func (h *DeploymentHandler) ListRuns(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *DeploymentHandler) CompleteRun(w http.ResponseWriter, r *http.Request) {
+	if !requirePermission(w, r, domain.PermWriteDeployments) {
+		return
+	}
 	id, err := uuidParam(r, "id")
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid run id")
@@ -260,6 +368,9 @@ func (h *DeploymentHandler) CompleteRun(w http.ResponseWriter, r *http.Request) 
 // --- Rollback ---
 
 func (h *DeploymentHandler) Rollback(w http.ResponseWriter, r *http.Request) {
+	if !requirePermission(w, r, domain.PermWriteDeployments) {
+		return
+	}
 	var req dto.RollbackRequest
 	if err := decodeJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -271,6 +382,9 @@ func (h *DeploymentHandler) Rollback(w http.ResponseWriter, r *http.Request) {
 
 	if req.RequestedBy == "" {
 		writeError(w, http.StatusBadRequest, "requested_by is required")
+		return
+	}
+	if !h.validateServiceEnvInOrg(w, r, req.ServiceID, req.EnvironmentID) {
 		return
 	}
 

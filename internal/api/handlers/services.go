@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/api/dto"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/repository"
@@ -21,6 +22,9 @@ func NewServiceHandler(registry *service.RegistryService) *ServiceHandler {
 }
 
 func (h *ServiceHandler) Create(w http.ResponseWriter, r *http.Request) {
+	if !requirePermission(w, r, domain.PermWriteServices) {
+		return
+	}
 	var req dto.CreateServiceRequest
 	if err := decodeJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -45,6 +49,7 @@ func (h *ServiceHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	svc := &domain.Service{
+		OrgID:         authzOrgID(r),
 		Name:          req.Name,
 		RepoURL:       strings.TrimSpace(req.RepoURL),
 		Repository:    mapRepositoryRefRequest(req.Repository),
@@ -61,6 +66,9 @@ func (h *ServiceHandler) Create(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *ServiceHandler) Get(w http.ResponseWriter, r *http.Request) {
+	if !requireMember(w, r) {
+		return
+	}
 	id, err := uuidParam(r, "id")
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid service id")
@@ -80,7 +88,16 @@ func (h *ServiceHandler) Get(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *ServiceHandler) List(w http.ResponseWriter, r *http.Request) {
-	services, err := h.registry.ListServices(r.Context())
+	if !requireMember(w, r) {
+		return
+	}
+	var services []domain.Service
+	var err error
+	if orgID := authzOrgID(r); orgID != uuid.Nil {
+		services, err = h.registry.ListServicesByOrg(r.Context(), orgID)
+	} else {
+		services, err = h.registry.ListServices(r.Context())
+	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -89,6 +106,9 @@ func (h *ServiceHandler) List(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *ServiceHandler) Update(w http.ResponseWriter, r *http.Request) {
+	if !requirePermission(w, r, domain.PermWriteServices) {
+		return
+	}
 	id, err := uuidParam(r, "id")
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid service id")
@@ -241,6 +261,9 @@ func trimDedupeStrings(values []string) []string {
 }
 
 func (h *ServiceHandler) Delete(w http.ResponseWriter, r *http.Request) {
+	if !requirePermission(w, r, domain.PermWriteServices) {
+		return
+	}
 	id, err := uuidParam(r, "id")
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid service id")

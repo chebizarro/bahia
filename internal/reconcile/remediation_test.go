@@ -45,6 +45,15 @@ func (m *mockServiceRepo) List(_ context.Context) ([]domain.Service, error) {
 	}
 	return result, nil
 }
+func (m *mockServiceRepo) ListByOrg(_ context.Context, orgID uuid.UUID) ([]domain.Service, error) {
+	var result []domain.Service
+	for _, s := range m.services {
+		if s.OrgID == orgID {
+			result = append(result, *s)
+		}
+	}
+	return result, nil
+}
 
 func (m *mockServiceRepo) Update(_ context.Context, s *domain.Service) error {
 	m.services[s.ID] = s
@@ -82,6 +91,15 @@ func (m *mockEnvironmentRepo) List(_ context.Context) ([]domain.Environment, err
 	var result []domain.Environment
 	for _, e := range m.envs {
 		result = append(result, *e)
+	}
+	return result, nil
+}
+func (m *mockEnvironmentRepo) ListByOrg(_ context.Context, orgID uuid.UUID) ([]domain.Environment, error) {
+	var result []domain.Environment
+	for _, e := range m.envs {
+		if e.OrgID == orgID {
+			result = append(result, *e)
+		}
 	}
 	return result, nil
 }

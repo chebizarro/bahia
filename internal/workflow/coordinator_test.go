@@ -33,8 +33,11 @@ func (m *stubServiceRepo) GetByName(_ context.Context, _ string) (*domain.Servic
 	return m.svc, nil
 }
 func (m *stubServiceRepo) List(_ context.Context) ([]domain.Service, error) { return nil, nil }
+func (m *stubServiceRepo) ListByOrg(_ context.Context, _ uuid.UUID) ([]domain.Service, error) {
+	return nil, nil
+}
 func (m *stubServiceRepo) Update(_ context.Context, _ *domain.Service) error { return nil }
-func (m *stubServiceRepo) Delete(_ context.Context, _ uuid.UUID) error      { return nil }
+func (m *stubServiceRepo) Delete(_ context.Context, _ uuid.UUID) error       { return nil }
 
 type stubEnvRepo struct{ env *domain.Environment }
 
@@ -52,6 +55,9 @@ func (m *stubEnvRepo) GetByName(_ context.Context, _ string) (*domain.Environmen
 	return m.env, nil
 }
 func (m *stubEnvRepo) List(_ context.Context) ([]domain.Environment, error) { return nil, nil }
+func (m *stubEnvRepo) ListByOrg(_ context.Context, _ uuid.UUID) ([]domain.Environment, error) {
+	return nil, nil
+}
 func (m *stubEnvRepo) Update(_ context.Context, _ *domain.Environment) error { return nil }
 func (m *stubEnvRepo) Delete(_ context.Context, _ uuid.UUID) error           { return nil }
 
@@ -536,12 +542,12 @@ func containsSubstring(s, sub string) bool {
 
 // Verify the stubbed repos implement the interfaces at compile time.
 var (
-	_ repository.ServiceRepository               = (*stubServiceRepo)(nil)
-	_ repository.EnvironmentRepository            = (*stubEnvRepo)(nil)
-	_ repository.BuildRepository                  = (*stubBuildRepo)(nil)
-	_ repository.ArtifactRepository               = (*stubArtifactRepo)(nil)
-	_ repository.DeploymentIntentRepository       = (*stubIntentRepo)(nil)
-	_ repository.DeploymentRunRepository          = (*stubRunRepo)(nil)
-	_ repository.RuntimeObservationRepository     = (*stubObsRepo)(nil)
+	_ repository.ServiceRepository                 = (*stubServiceRepo)(nil)
+	_ repository.EnvironmentRepository             = (*stubEnvRepo)(nil)
+	_ repository.BuildRepository                   = (*stubBuildRepo)(nil)
+	_ repository.ArtifactRepository                = (*stubArtifactRepo)(nil)
+	_ repository.DeploymentIntentRepository        = (*stubIntentRepo)(nil)
+	_ repository.DeploymentRunRepository           = (*stubRunRepo)(nil)
+	_ repository.RuntimeObservationRepository      = (*stubObsRepo)(nil)
 	_ repository.EnvironmentServiceStateRepository = (*stubStateRepo)(nil)
 )

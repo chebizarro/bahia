@@ -43,9 +43,9 @@ func (r *PgServiceRepository) Create(ctx context.Context, svc *domain.Service) e
 	}
 
 	_, err = r.pool.Exec(ctx, `
-		INSERT INTO services (id, name, repo_url, repository, artifact_repo, default_branch, runtime_type, runtime_config, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-	`, svc.ID, svc.Name, svc.RepoURL, repositoryJSON, svc.ArtifactRepo, svc.DefaultBranch, svc.RuntimeType, runtimeConfigJSON, svc.CreatedAt, svc.UpdatedAt)
+		INSERT INTO services (id, org_id, name, repo_url, repository, artifact_repo, default_branch, runtime_type, runtime_config, created_at, updated_at)
+		VALUES ($1, NULLIF($2, '00000000-0000-0000-0000-000000000000'::uuid), $3, $4, $5, $6, $7, $8, $9, $10, $11)
+	`, svc.ID, svc.OrgID, svc.Name, svc.RepoURL, repositoryJSON, svc.ArtifactRepo, svc.DefaultBranch, svc.RuntimeType, runtimeConfigJSON, svc.CreatedAt, svc.UpdatedAt)
 	if err != nil {
 		return fmt.Errorf("inserting service: %w", err)
 	}
@@ -55,7 +55,7 @@ func (r *PgServiceRepository) Create(ctx context.Context, svc *domain.Service) e
 func (r *PgServiceRepository) scanService(row pgx.Row) (*domain.Service, error) {
 	svc := &domain.Service{}
 	var repositoryJSON, runtimeConfigJSON []byte
-	if err := row.Scan(&svc.ID, &svc.Name, &svc.RepoURL, &repositoryJSON, &svc.ArtifactRepo, &svc.DefaultBranch, &svc.RuntimeType, &runtimeConfigJSON, &svc.CreatedAt, &svc.UpdatedAt); err != nil {
+	if err := row.Scan(&svc.ID, &svc.OrgID, &svc.Name, &svc.RepoURL, &repositoryJSON, &svc.ArtifactRepo, &svc.DefaultBranch, &svc.RuntimeType, &runtimeConfigJSON, &svc.CreatedAt, &svc.UpdatedAt); err != nil {
 		return nil, err
 	}
 	if err := unmarshalJSON(repositoryJSON, &svc.Repository, "repository"); err != nil {
@@ -69,7 +69,7 @@ func (r *PgServiceRepository) scanService(row pgx.Row) (*domain.Service, error) 
 
 func (r *PgServiceRepository) GetByID(ctx context.Context, id uuid.UUID) (*domain.Service, error) {
 	row := r.pool.QueryRow(ctx, `
-		SELECT id, name, repo_url, repository, artifact_repo, default_branch, runtime_type, runtime_config, created_at, updated_at
+		SELECT id, COALESCE(org_id, '00000000-0000-0000-0000-000000000000'::uuid), name, repo_url, repository, artifact_repo, default_branch, runtime_type, runtime_config, created_at, updated_at
 		FROM services WHERE id = $1
 	`, id)
 	svc, err := r.scanService(row)
@@ -84,7 +84,7 @@ func (r *PgServiceRepository) GetByID(ctx context.Context, id uuid.UUID) (*domai
 
 func (r *PgServiceRepository) GetByName(ctx context.Context, name string) (*domain.Service, error) {
 	row := r.pool.QueryRow(ctx, `
-		SELECT id, name, repo_url, repository, artifact_repo, default_branch, runtime_type, runtime_config, created_at, updated_at
+		SELECT id, COALESCE(org_id, '00000000-0000-0000-0000-000000000000'::uuid), name, repo_url, repository, artifact_repo, default_branch, runtime_type, runtime_config, created_at, updated_at
 		FROM services WHERE name = $1
 	`, name)
 	svc, err := r.scanService(row)
@@ -99,11 +99,32 @@ func (r *PgServiceRepository) GetByName(ctx context.Context, name string) (*doma
 
 func (r *PgServiceRepository) List(ctx context.Context) ([]domain.Service, error) {
 	rows, err := r.pool.Query(ctx, `
-		SELECT id, name, repo_url, repository, artifact_repo, default_branch, runtime_type, runtime_config, created_at, updated_at
+		SELECT id, COALESCE(org_id, '00000000-0000-0000-0000-000000000000'::uuid), name, repo_url, repository, artifact_repo, default_branch, runtime_type, runtime_config, created_at, updated_at
 		FROM services ORDER BY name
 	`)
 	if err != nil {
 		return nil, fmt.Errorf("listing services: %w", err)
+	}
+	defer rows.Close()
+
+	var services []domain.Service
+	for rows.Next() {
+		svc, err := r.scanService(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scanning service: %w", err)
+		}
+		services = append(services, *svc)
+	}
+	return services, rows.Err()
+}
+
+func (r *PgServiceRepository) ListByOrg(ctx context.Context, orgID uuid.UUID) ([]domain.Service, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT id, COALESCE(org_id, '00000000-0000-0000-0000-000000000000'::uuid), name, repo_url, repository, artifact_repo, default_branch, runtime_type, runtime_config, created_at, updated_at
+		FROM services WHERE org_id = $1 ORDER BY name
+	`, orgID)
+	if err != nil {
+		return nil, fmt.Errorf("listing services by org: %w", err)
 	}
 	defer rows.Close()
 
@@ -130,9 +151,9 @@ func (r *PgServiceRepository) Update(ctx context.Context, svc *domain.Service) e
 	}
 
 	cmd, err := r.pool.Exec(ctx, `
-		UPDATE services SET name=$2, repo_url=$3, repository=$4, artifact_repo=$5, default_branch=$6, runtime_type=$7, runtime_config=$8, updated_at=$9
+		UPDATE services SET org_id=NULLIF($2, '00000000-0000-0000-0000-000000000000'::uuid), name=$3, repo_url=$4, repository=$5, artifact_repo=$6, default_branch=$7, runtime_type=$8, runtime_config=$9, updated_at=$10
 		WHERE id=$1
-	`, svc.ID, svc.Name, svc.RepoURL, repositoryJSON, svc.ArtifactRepo, svc.DefaultBranch, svc.RuntimeType, runtimeConfigJSON, svc.UpdatedAt)
+	`, svc.ID, svc.OrgID, svc.Name, svc.RepoURL, repositoryJSON, svc.ArtifactRepo, svc.DefaultBranch, svc.RuntimeType, runtimeConfigJSON, svc.UpdatedAt)
 	if err != nil {
 		return fmt.Errorf("updating service: %w", err)
 	}

@@ -62,6 +62,9 @@ func toSecretRefResponse(ref domain.SecretRef) secretRefResponse {
 
 // Create handles POST /services/{id}/secrets.
 func (h *SecretHandler) Create(w http.ResponseWriter, r *http.Request) {
+	if !requirePermission(w, r, domain.PermWriteSecrets) {
+		return
+	}
 	serviceID, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid service ID")
@@ -129,6 +132,9 @@ func (h *SecretHandler) Create(w http.ResponseWriter, r *http.Request) {
 
 // List handles GET /services/{id}/secrets.
 func (h *SecretHandler) List(w http.ResponseWriter, r *http.Request) {
+	if !requirePermission(w, r, domain.PermReadSecrets) {
+		return
+	}
 	serviceID, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid service ID")
@@ -151,6 +157,14 @@ func (h *SecretHandler) List(w http.ResponseWriter, r *http.Request) {
 
 // Delete handles DELETE /services/{id}/secrets/{secretId}.
 func (h *SecretHandler) Delete(w http.ResponseWriter, r *http.Request) {
+	if !requirePermission(w, r, domain.PermWriteSecrets) {
+		return
+	}
+	serviceID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid service ID")
+		return
+	}
 	secretID, err := uuid.Parse(chi.URLParam(r, "secretId"))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid secret ID")
@@ -164,6 +178,10 @@ func (h *SecretHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	}
 	if existing == nil {
 		writeError(w, http.StatusNotFound, "secret not found")
+		return
+	}
+	if existing.ServiceID != serviceID {
+		writeError(w, http.StatusForbidden, "access denied")
 		return
 	}
 
@@ -177,6 +195,14 @@ func (h *SecretHandler) Delete(w http.ResponseWriter, r *http.Request) {
 
 // Update handles PUT /services/{id}/secrets/{secretId}.
 func (h *SecretHandler) Update(w http.ResponseWriter, r *http.Request) {
+	if !requirePermission(w, r, domain.PermWriteSecrets) {
+		return
+	}
+	serviceID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid service ID")
+		return
+	}
 	secretID, err := uuid.Parse(chi.URLParam(r, "secretId"))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid secret ID")
@@ -190,6 +216,10 @@ func (h *SecretHandler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 	if existing == nil {
 		writeError(w, http.StatusNotFound, "secret not found")
+		return
+	}
+	if existing.ServiceID != serviceID {
+		writeError(w, http.StatusForbidden, "access denied")
 		return
 	}
 

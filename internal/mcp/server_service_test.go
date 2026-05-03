@@ -79,6 +79,15 @@ func (m *testServiceRepo) List(_ context.Context) ([]domain.Service, error) {
 	}
 	return out, nil
 }
+func (m *testServiceRepo) ListByOrg(_ context.Context, orgID uuid.UUID) ([]domain.Service, error) {
+	out := make([]domain.Service, 0, len(m.services))
+	for _, svc := range m.services {
+		if svc.OrgID == orgID {
+			out = append(out, *svc)
+		}
+	}
+	return out, nil
+}
 
 func (m *testServiceRepo) Update(_ context.Context, svc *domain.Service) error {
 	m.services[svc.ID] = svc

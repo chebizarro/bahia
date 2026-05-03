@@ -194,5 +194,8 @@ func (r *reactorEnvironmentRepo) GetByName(context.Context, string) (*domain.Env
 	return nil, repository.ErrNotFound
 }
 func (r *reactorEnvironmentRepo) List(context.Context) ([]domain.Environment, error) { return nil, nil }
-func (r *reactorEnvironmentRepo) Update(context.Context, *domain.Environment) error  { return nil }
-func (r *reactorEnvironmentRepo) Delete(context.Context, uuid.UUID) error            { return nil }
+func (r *reactorEnvironmentRepo) ListByOrg(context.Context, uuid.UUID) ([]domain.Environment, error) {
+	return nil, nil
+}
+func (r *reactorEnvironmentRepo) Update(context.Context, *domain.Environment) error { return nil }
+func (r *reactorEnvironmentRepo) Delete(context.Context, uuid.UUID) error           { return nil }

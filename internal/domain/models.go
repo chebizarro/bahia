@@ -119,6 +119,7 @@ const (
 // Service represents a deployable application component.
 type Service struct {
 	ID            uuid.UUID             `json:"id"`
+	OrgID         uuid.UUID             `json:"org_id"`
 	Name          string                `json:"name"`
 	RepoURL       string                `json:"repo_url,omitempty"`
 	Repository    *RepositoryRef        `json:"repository,omitempty"`
@@ -192,6 +193,7 @@ type ServiceCIConfig struct {
 // Environment represents a named deployment target.
 type Environment struct {
 	ID                 uuid.UUID      `json:"id"`
+	OrgID              uuid.UUID      `json:"org_id"`
 	Name               string         `json:"name"`
 	LoomWorkerSelector map[string]any `json:"loom_worker_selector"`
 	RuntimeConfig      map[string]any `json:"runtime_config"`

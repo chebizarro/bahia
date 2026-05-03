@@ -8,6 +8,8 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/api/dto"
+	"github.com/openagentsinc/bahia/internal/api/middleware"
+	"github.com/openagentsinc/bahia/internal/domain"
 )
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
@@ -47,6 +49,53 @@ func decodeJSON(r *http.Request, v any) error {
 
 func uuidParam(r *http.Request, name string) (uuid.UUID, error) {
 	return uuid.Parse(chi.URLParam(r, name))
+}
+
+func authzOrgID(r *http.Request) uuid.UUID {
+	if authz := middleware.GetAuthz(r.Context()); authz != nil {
+		return authz.OrgID
+	}
+	return uuid.Nil
+}
+
+func requireMember(w http.ResponseWriter, r *http.Request) bool {
+	authz := middleware.GetAuthz(r.Context())
+	if authz == nil {
+		return true
+	}
+	if err := authz.RequireMember(); err != nil {
+		writeError(w, http.StatusForbidden, "access denied")
+		return false
+	}
+	return true
+}
+
+func serviceInAuthzOrg(w http.ResponseWriter, r *http.Request, svcOrgID uuid.UUID) bool {
+	orgID := authzOrgID(r)
+	if orgID == uuid.Nil {
+		return true
+	}
+	if svcOrgID != orgID {
+		writeError(w, http.StatusForbidden, "access denied")
+		return false
+	}
+	return true
+}
+
+func requirePermission(w http.ResponseWriter, r *http.Request, perm domain.Permission) bool {
+	authz := middleware.GetAuthz(r.Context())
+	if authz == nil {
+		return true
+	}
+	if err := authz.RequireMember(); err != nil {
+		writeError(w, http.StatusForbidden, "access denied")
+		return false
+	}
+	if err := authz.RequirePermission(perm); err != nil {
+		writeError(w, http.StatusForbidden, "access denied")
+		return false
+	}
+	return true
 }
 
 func queryInt(r *http.Request, name string, defaultVal int) int {

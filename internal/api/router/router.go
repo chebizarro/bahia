@@ -3,11 +3,13 @@ package router
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	chimiddleware "github.com/go-chi/chi/v5/middleware"
+	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/adapters/blossom"
 	runtimeadapter "github.com/openagentsinc/bahia/internal/adapters/runtime"
 	"github.com/openagentsinc/bahia/internal/adapters/secrets"
@@ -33,6 +35,7 @@ type RouterDeps struct {
 	Config           *config.Config
 	AuthMiddleware   auth.MiddlewareConfig
 	Workers          repository.WorkerRepository
+	Builds           repository.BuildRepository
 	Runs             repository.DeploymentRunRepository
 	Services         repository.ServiceRepository
 	Environments     repository.EnvironmentRepository
@@ -188,28 +191,28 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 			}
 
 			// Services (read)
-			r.Get("/services", svcH.List)
-			r.Get("/services/{id}", svcH.Get)
+			r.With(coreRBAC(deps, authMiddleware, nil, true)).Get("/services", svcH.List)
+			r.With(coreRBAC(deps, authMiddleware, serviceOrgResolver(deps.Services, "id"), true)).Get("/services/{id}", svcH.Get)
 
 			// Environments (read)
-			r.Get("/environments", envH.List)
-			r.Get("/environments/{id}", envH.Get)
+			r.With(coreRBAC(deps, authMiddleware, nil, true)).Get("/environments", envH.List)
+			r.With(coreRBAC(deps, authMiddleware, environmentOrgResolver(deps.Environments, "id"), true)).Get("/environments/{id}", envH.Get)
 
 			// Builds (read)
-			r.Get("/builds/{id}", buildH.Get)
-			r.Get("/services/{serviceId}/builds", buildH.ListByService)
+			r.With(coreRBAC(deps, authMiddleware, buildOrgResolver(deps.Builds, deps.Services, "id"), true)).Get("/builds/{id}", buildH.Get)
+			r.With(coreRBAC(deps, authMiddleware, serviceOrgResolver(deps.Services, "serviceId"), true)).Get("/services/{serviceId}/builds", buildH.ListByService)
 
 			// Artifacts (read)
-			r.Get("/artifacts/{id}", artifactH.Get)
-			r.Get("/services/{serviceId}/artifacts", artifactH.ListByService)
+			r.With(coreRBAC(deps, authMiddleware, artifactOrgResolver(deps.Artifacts, deps.Services, "id"), true)).Get("/artifacts/{id}", artifactH.Get)
+			r.With(coreRBAC(deps, authMiddleware, serviceOrgResolver(deps.Services, "serviceId"), true)).Get("/services/{serviceId}/artifacts", artifactH.ListByService)
 
 			// Deployment Intents (read)
-			r.Get("/deployments/intents/{id}", deployH.GetIntent)
-			r.Get("/services/{serviceId}/environments/{envId}/intents", deployH.ListIntents)
+			r.With(coreRBAC(deps, authMiddleware, intentOrgResolver(registry, deps.Services, "id"), true)).Get("/deployments/intents/{id}", deployH.GetIntent)
+			r.With(coreRBAC(deps, authMiddleware, serviceEnvOrgResolver(deps.Services, deps.Environments, "serviceId", "envId"), true)).Get("/services/{serviceId}/environments/{envId}/intents", deployH.ListIntents)
 
 			// Deployment Runs (read)
-			r.Get("/deployments/runs/{id}", deployH.GetRun)
-			r.Get("/deployments/intents/{intentId}/runs", deployH.ListRuns)
+			r.With(coreRBAC(deps, authMiddleware, runOrgResolver(registry, deps.Services, "id"), true)).Get("/deployments/runs/{id}", deployH.GetRun)
+			r.With(coreRBAC(deps, authMiddleware, intentOrgResolver(registry, deps.Services, "intentId"), true)).Get("/deployments/intents/{intentId}/runs", deployH.ListRuns)
 			if logsH != nil && deps.Blossom != nil {
 				r.Get("/deployments/runs/{id}/logs", logsH.GetRunLogs)
 			}
@@ -277,16 +280,17 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 			// Signatures (read)
 			if deps.Signatures != nil && deps.Artifacts != nil && deps.SignVerifier != nil {
 				sigH := handlers.NewSignatureHandler(deps.Signatures, deps.Artifacts, deps.SignVerifier)
-				r.Get("/artifacts/{id}/signatures", sigH.List)
-				r.Get("/artifacts/{id}/signatures/verified", sigH.ListVerified)
-				r.Get("/artifacts/{id}/signatures/check", sigH.HasVerified)
-				r.Get("/signatures/{id}", sigH.Get)
+				artifactRBAC := coreRBAC(deps, authMiddleware, artifactOrgResolver(deps.Artifacts, deps.Services, "id"), true)
+				r.With(artifactRBAC).Get("/artifacts/{id}/signatures", sigH.List)
+				r.With(artifactRBAC).Get("/artifacts/{id}/signatures/verified", sigH.ListVerified)
+				r.With(artifactRBAC).Get("/artifacts/{id}/signatures/check", sigH.HasVerified)
+				r.With(coreRBAC(deps, authMiddleware, signatureOrgResolver(deps.Signatures, deps.Artifacts, deps.Services, "id"), true)).Get("/signatures/{id}", sigH.Get)
 			}
 
 			// Secrets (read)
 			if deps.Secrets != nil && deps.Encryptor != nil {
 				secretH := handlers.NewSecretHandler(deps.Secrets, deps.Encryptor)
-				r.Get("/services/{id}/secrets", secretH.List)
+				r.With(coreRBAC(deps, authMiddleware, serviceOrgResolver(deps.Services, "id"), true)).Get("/services/{id}/secrets", secretH.List)
 			}
 
 			// Notifications (read)
@@ -324,25 +328,25 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 			}
 
 			// Services (write)
-			r.Post("/services", svcH.Create)
-			r.Put("/services/{id}", svcH.Update)
-			r.Delete("/services/{id}", svcH.Delete)
+			r.With(coreRBAC(deps, authMiddleware, nil, true)).Post("/services", svcH.Create)
+			r.With(coreRBAC(deps, authMiddleware, serviceOrgResolver(deps.Services, "id"), true)).Put("/services/{id}", svcH.Update)
+			r.With(coreRBAC(deps, authMiddleware, serviceOrgResolver(deps.Services, "id"), true)).Delete("/services/{id}", svcH.Delete)
 			// Environments (write)
-			r.Post("/environments", envH.Create)
-			r.Put("/environments/{id}", envH.Update)
-			r.Delete("/environments/{id}", envH.Delete)
+			r.With(coreRBAC(deps, authMiddleware, nil, true)).Post("/environments", envH.Create)
+			r.With(coreRBAC(deps, authMiddleware, environmentOrgResolver(deps.Environments, "id"), true)).Put("/environments/{id}", envH.Update)
+			r.With(coreRBAC(deps, authMiddleware, environmentOrgResolver(deps.Environments, "id"), true)).Delete("/environments/{id}", envH.Delete)
 
 			// Builds (write)
-			r.Post("/builds", buildH.Register)
-			r.Patch("/builds/{id}/status", buildH.UpdateStatus)
+			r.With(coreRBAC(deps, authMiddleware, nil, true)).Post("/builds", buildH.Register)
+			r.With(coreRBAC(deps, authMiddleware, buildOrgResolver(deps.Builds, deps.Services, "id"), true)).Patch("/builds/{id}/status", buildH.UpdateStatus)
 
 			// Artifacts (write)
-			r.Post("/artifacts", artifactH.Register)
+			r.With(coreRBAC(deps, authMiddleware, nil, true)).Post("/artifacts", artifactH.Register)
 
 			// Deployment Intents (write)
-			r.Post("/deployments/intents", deployH.CreateIntent)
-			r.Post("/deployments/intents/{id}/approve", deployH.ApproveIntent)
-			r.Post("/deployments/intents/{id}/reject", deployH.RejectIntent)
+			r.With(coreRBAC(deps, authMiddleware, nil, true)).Post("/deployments/intents", deployH.CreateIntent)
+			r.With(coreRBAC(deps, authMiddleware, intentOrgResolver(registry, deps.Services, "id"), true)).Post("/deployments/intents/{id}/approve", deployH.ApproveIntent)
+			r.With(coreRBAC(deps, authMiddleware, intentOrgResolver(registry, deps.Services, "id"), true)).Post("/deployments/intents/{id}/reject", deployH.RejectIntent)
 
 			// LLM control plane (write)
 			if llmH != nil {
@@ -352,11 +356,11 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 			}
 
 			// Deployment Runs (write)
-			r.Post("/deployments/runs", deployH.CreateRun)
-			r.Post("/deployments/runs/{id}/complete", deployH.CompleteRun)
+			r.With(coreRBAC(deps, authMiddleware, nil, true)).Post("/deployments/runs", deployH.CreateRun)
+			r.With(coreRBAC(deps, authMiddleware, runOrgResolver(registry, deps.Services, "id"), true)).Post("/deployments/runs/{id}/complete", deployH.CompleteRun)
 
 			// Rollback
-			r.Post("/rollback", deployH.Rollback)
+			r.With(coreRBAC(deps, authMiddleware, nil, true)).Post("/rollback", deployH.Rollback)
 
 			// Runtime Observations (write)
 			r.Post("/observations", stateH.RecordObservation)
@@ -376,7 +380,7 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 			// Signatures (write)
 			if deps.Signatures != nil && deps.Artifacts != nil && deps.SignVerifier != nil {
 				sigH := handlers.NewSignatureHandler(deps.Signatures, deps.Artifacts, deps.SignVerifier)
-				r.Post("/artifacts/{id}/signatures/verify", sigH.Verify)
+				r.With(coreRBAC(deps, authMiddleware, artifactOrgResolver(deps.Artifacts, deps.Services, "id"), true)).Post("/artifacts/{id}/signatures/verify", sigH.Verify)
 			}
 
 			// Policies (write)
@@ -391,9 +395,10 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 			// Secrets (write)
 			if deps.Secrets != nil && deps.Encryptor != nil {
 				secretH := handlers.NewSecretHandler(deps.Secrets, deps.Encryptor)
-				r.Post("/services/{id}/secrets", secretH.Create)
-				r.Put("/services/{id}/secrets/{secretId}", secretH.Update)
-				r.Delete("/services/{id}/secrets/{secretId}", secretH.Delete)
+				secretRBAC := coreRBAC(deps, authMiddleware, serviceOrgResolver(deps.Services, "id"), true)
+				r.With(secretRBAC).Post("/services/{id}/secrets", secretH.Create)
+				r.With(secretRBAC).Put("/services/{id}/secrets/{secretId}", secretH.Update)
+				r.With(secretRBAC).Delete("/services/{id}/secrets/{secretId}", secretH.Delete)
 			}
 
 			// Notifications (write)
@@ -453,6 +458,209 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 	})
 
 	return r
+}
+
+func coreRBACEnabled(deps RouterDeps, authCfg auth.MiddlewareConfig) bool {
+	return authCfg.Enabled && deps.RBAC != nil
+}
+
+func coreRBAC(deps RouterDeps, authCfg auth.MiddlewareConfig, resolver middleware.ResourceOrgResolver, requireOrg bool) func(http.Handler) http.Handler {
+	if authCfg.Enabled && deps.RBAC == nil {
+		return func(next http.Handler) http.Handler {
+			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				http.Error(w, `{"error":"authorization not configured"}`, http.StatusInternalServerError)
+			})
+		}
+	}
+	if !coreRBACEnabled(deps, authCfg) {
+		return func(next http.Handler) http.Handler { return next }
+	}
+	return middleware.RBAC(middleware.RBACConfig{
+		RBAC:          deps.RBAC,
+		Required:      true,
+		RequireOrg:    requireOrg,
+		OrgIDResolver: resolver,
+	})
+}
+
+func serviceOrgResolver(services repository.ServiceRepository, param string) middleware.ResourceOrgResolver {
+	return func(r *http.Request) (uuid.UUID, error) {
+		id, err := parseRouteUUID(r, param)
+		if err != nil {
+			return uuid.Nil, err
+		}
+		svc, err := services.GetByID(r.Context(), id)
+		if err != nil {
+			return uuid.Nil, err
+		}
+		if svc == nil || svc.OrgID == uuid.Nil {
+			return uuid.Nil, middleware.ErrOrgContextNotFound
+		}
+		return svc.OrgID, nil
+	}
+}
+
+func environmentOrgResolver(environments repository.EnvironmentRepository, param string) middleware.ResourceOrgResolver {
+	return func(r *http.Request) (uuid.UUID, error) {
+		id, err := parseRouteUUID(r, param)
+		if err != nil {
+			return uuid.Nil, err
+		}
+		env, err := environments.GetByID(r.Context(), id)
+		if err != nil {
+			return uuid.Nil, err
+		}
+		if env == nil || env.OrgID == uuid.Nil {
+			return uuid.Nil, middleware.ErrOrgContextNotFound
+		}
+		return env.OrgID, nil
+	}
+}
+
+func buildOrgResolver(builds repository.BuildRepository, services repository.ServiceRepository, param string) middleware.ResourceOrgResolver {
+	return func(r *http.Request) (uuid.UUID, error) {
+		id, err := parseRouteUUID(r, param)
+		if err != nil {
+			return uuid.Nil, err
+		}
+		build, err := builds.GetByID(r.Context(), id)
+		if err != nil {
+			return uuid.Nil, err
+		}
+		if build == nil {
+			return uuid.Nil, middleware.ErrOrgContextNotFound
+		}
+		svc, err := services.GetByID(r.Context(), build.ServiceID)
+		if err != nil {
+			return uuid.Nil, err
+		}
+		if svc == nil || svc.OrgID == uuid.Nil {
+			return uuid.Nil, middleware.ErrOrgContextNotFound
+		}
+		return svc.OrgID, nil
+	}
+}
+
+func artifactOrgResolver(artifacts repository.ArtifactRepository, services repository.ServiceRepository, param string) middleware.ResourceOrgResolver {
+	return func(r *http.Request) (uuid.UUID, error) {
+		id, err := parseRouteUUID(r, param)
+		if err != nil {
+			return uuid.Nil, err
+		}
+		artifact, err := artifacts.GetByID(r.Context(), id)
+		if err != nil {
+			return uuid.Nil, err
+		}
+		if artifact == nil {
+			return uuid.Nil, middleware.ErrOrgContextNotFound
+		}
+		svc, err := services.GetByID(r.Context(), artifact.ServiceID)
+		if err != nil {
+			return uuid.Nil, err
+		}
+		if svc == nil || svc.OrgID == uuid.Nil {
+			return uuid.Nil, middleware.ErrOrgContextNotFound
+		}
+		return svc.OrgID, nil
+	}
+}
+
+func serviceEnvOrgResolver(services repository.ServiceRepository, environments repository.EnvironmentRepository, serviceParam, envParam string) middleware.ResourceOrgResolver {
+	return func(r *http.Request) (uuid.UUID, error) {
+		svcOrg, err := serviceOrgResolver(services, serviceParam)(r)
+		if err != nil {
+			return uuid.Nil, err
+		}
+		envOrg, err := environmentOrgResolver(environments, envParam)(r)
+		if err != nil {
+			return uuid.Nil, err
+		}
+		if svcOrg != envOrg {
+			return uuid.Nil, middleware.ErrOrgContextNotFound
+		}
+		return svcOrg, nil
+	}
+}
+
+func intentOrgResolver(registry *service.RegistryService, services repository.ServiceRepository, param string) middleware.ResourceOrgResolver {
+	return func(r *http.Request) (uuid.UUID, error) {
+		id, err := parseRouteUUID(r, param)
+		if err != nil {
+			return uuid.Nil, err
+		}
+		intent, err := registry.GetDeploymentIntent(r.Context(), id)
+		if err != nil {
+			return uuid.Nil, err
+		}
+		if intent == nil {
+			return uuid.Nil, middleware.ErrOrgContextNotFound
+		}
+		svc, err := services.GetByID(r.Context(), intent.ServiceID)
+		if err != nil {
+			return uuid.Nil, err
+		}
+		if svc == nil || svc.OrgID == uuid.Nil {
+			return uuid.Nil, middleware.ErrOrgContextNotFound
+		}
+		return svc.OrgID, nil
+	}
+}
+
+func runOrgResolver(registry *service.RegistryService, services repository.ServiceRepository, param string) middleware.ResourceOrgResolver {
+	return func(r *http.Request) (uuid.UUID, error) {
+		id, err := parseRouteUUID(r, param)
+		if err != nil {
+			return uuid.Nil, err
+		}
+		run, err := registry.GetDeploymentRun(r.Context(), id)
+		if err != nil {
+			return uuid.Nil, err
+		}
+		if run == nil {
+			return uuid.Nil, middleware.ErrOrgContextNotFound
+		}
+		req := requestWithRouteParam(r, "intentId", run.DeploymentIntentID.String())
+		return intentOrgResolver(registry, services, "intentId")(req)
+	}
+}
+
+func signatureOrgResolver(signatures repository.ArtifactSignatureRepository, artifacts repository.ArtifactRepository, services repository.ServiceRepository, param string) middleware.ResourceOrgResolver {
+	return func(r *http.Request) (uuid.UUID, error) {
+		id, err := parseRouteUUID(r, param)
+		if err != nil {
+			return uuid.Nil, err
+		}
+		sig, err := signatures.GetByID(r.Context(), id)
+		if err != nil {
+			if errors.Is(err, repository.ErrNotFound) {
+				return uuid.Nil, middleware.ErrOrgContextNotFound
+			}
+			return uuid.Nil, err
+		}
+		if sig == nil {
+			return uuid.Nil, middleware.ErrOrgContextNotFound
+		}
+		req := requestWithRouteParam(r, "artifactId", sig.ArtifactID.String())
+		return artifactOrgResolver(artifacts, services, "artifactId")(req)
+	}
+}
+
+func parseRouteUUID(r *http.Request, param string) (uuid.UUID, error) {
+	id, err := uuid.Parse(chi.URLParam(r, param))
+	if err != nil {
+		return uuid.Nil, middleware.ErrInvalidOrgID
+	}
+	return id, nil
+}
+
+func requestWithRouteParam(r *http.Request, name, value string) *http.Request {
+	rctx := chi.RouteContext(r.Context())
+	copyCtx := chi.NewRouteContext()
+	if rctx != nil {
+		*copyCtx = *rctx
+	}
+	copyCtx.URLParams.Add(name, value)
+	return r.WithContext(context.WithValue(r.Context(), chi.RouteCtxKey, copyCtx))
 }
 
 func routeAuthConfig(deps RouterDeps, authCfg ...config.AuthConfig) auth.MiddlewareConfig {

@@ -15,6 +15,7 @@ type ServiceRepository interface {
 	GetByID(ctx context.Context, id uuid.UUID) (*domain.Service, error)
 	GetByName(ctx context.Context, name string) (*domain.Service, error)
 	List(ctx context.Context) ([]domain.Service, error)
+	ListByOrg(ctx context.Context, orgID uuid.UUID) ([]domain.Service, error)
 	Update(ctx context.Context, svc *domain.Service) error
 	Delete(ctx context.Context, id uuid.UUID) error
 }
@@ -25,6 +26,7 @@ type EnvironmentRepository interface {
 	GetByID(ctx context.Context, id uuid.UUID) (*domain.Environment, error)
 	GetByName(ctx context.Context, name string) (*domain.Environment, error)
 	List(ctx context.Context) ([]domain.Environment, error)
+	ListByOrg(ctx context.Context, orgID uuid.UUID) ([]domain.Environment, error)
 	Update(ctx context.Context, env *domain.Environment) error
 	Delete(ctx context.Context, id uuid.UUID) error
 }

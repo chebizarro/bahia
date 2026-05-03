@@ -257,8 +257,11 @@ func (m *mockEnvRepo) GetByName(_ context.Context, name string) (*domain.Environ
 	return m.byName[name], nil
 }
 func (m *mockEnvRepo) List(_ context.Context) ([]domain.Environment, error) { return nil, nil }
+func (m *mockEnvRepo) ListByOrg(_ context.Context, _ uuid.UUID) ([]domain.Environment, error) {
+	return nil, nil
+}
 func (m *mockEnvRepo) Update(_ context.Context, _ *domain.Environment) error { return nil }
-func (m *mockEnvRepo) Delete(_ context.Context, _ uuid.UUID) error          { return nil }
+func (m *mockEnvRepo) Delete(_ context.Context, _ uuid.UUID) error           { return nil }
 
 func newBridgeForTest(h *mockHiveRepo, b *mockBuildRepo, a *mockArtifactRepo, i *mockIntentRepo, e *mockEnvRepo, o *mockOCIRepo) *Bridge {
 	return NewBridge(h, b, a, i, e, o, []string{"trusted-pub"}, nil)
@@ -408,7 +411,7 @@ func TestBridge_ProtectedEnvCreatesPendingIntent(t *testing.T) {
 	h.policy = &domain.HiveCIPipelinePolicy{
 		ServiceID:     uuid.New(),
 		EnvironmentID: envID,
-		Metadata: map[string]any{"auto_deploy_staging": true},
+		Metadata:      map[string]any{"auto_deploy_staging": true},
 	}
 	b := newMockBuildRepo()
 	a := newMockArtifactRepo()
@@ -442,7 +445,7 @@ func TestBridge_DuplicateIntentReused(t *testing.T) {
 	h.policy = &domain.HiveCIPipelinePolicy{
 		ServiceID:     uuid.New(),
 		EnvironmentID: envID,
-		Metadata: map[string]any{"auto_deploy_staging": true},
+		Metadata:      map[string]any{"auto_deploy_staging": true},
 	}
 	b := newMockBuildRepo()
 	a := newMockArtifactRepo()

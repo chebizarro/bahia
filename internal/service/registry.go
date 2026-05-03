@@ -135,6 +135,17 @@ func (s *RegistryService) ListServices(ctx context.Context) ([]domain.Service, e
 	return svcs, nil
 }
 
+func (s *RegistryService) ListServicesByOrg(ctx context.Context, orgID uuid.UUID) ([]domain.Service, error) {
+	svcs, err := s.services.ListByOrg(ctx, orgID)
+	if err != nil {
+		return nil, err
+	}
+	for i := range svcs {
+		normalizeServiceRepositoryForRead(&svcs[i])
+	}
+	return svcs, nil
+}
+
 func (s *RegistryService) UpdateService(ctx context.Context, svc *domain.Service) error {
 	normalizeServiceRepositoryForWrite(svc)
 	if err := s.services.Update(ctx, svc); err != nil {
@@ -305,6 +316,10 @@ func (s *RegistryService) GetEnvironmentByName(ctx context.Context, name string)
 
 func (s *RegistryService) ListEnvironments(ctx context.Context) ([]domain.Environment, error) {
 	return s.environments.List(ctx)
+}
+
+func (s *RegistryService) ListEnvironmentsByOrg(ctx context.Context, orgID uuid.UUID) ([]domain.Environment, error) {
+	return s.environments.ListByOrg(ctx, orgID)
 }
 
 func (s *RegistryService) UpdateEnvironment(ctx context.Context, env *domain.Environment) error {
@@ -513,6 +528,12 @@ func (s *RegistryService) CreateDeploymentIntent(ctx context.Context, di *domain
 	}
 	if artifact == nil {
 		return fmt.Errorf("artifact %s not found", di.ArtifactID)
+	}
+	if (svc.OrgID != uuid.Nil || env.OrgID != uuid.Nil) && svc.OrgID != env.OrgID {
+		return fmt.Errorf("service and environment must belong to the same organization")
+	}
+	if artifact.ServiceID != di.ServiceID {
+		return fmt.Errorf("artifact %s does not belong to service %s", di.ArtifactID, di.ServiceID)
 	}
 
 	// Auto-set approval for non-protected environments.

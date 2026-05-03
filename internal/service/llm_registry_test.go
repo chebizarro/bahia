@@ -99,8 +99,11 @@ func (r *fakeEnvRepo) GetByName(context.Context, string) (*domain.Environment, e
 	return nil, nil
 }
 func (r *fakeEnvRepo) List(context.Context) ([]domain.Environment, error) { return nil, nil }
-func (r *fakeEnvRepo) Update(context.Context, *domain.Environment) error  { return nil }
-func (r *fakeEnvRepo) Delete(context.Context, uuid.UUID) error            { return nil }
+func (r *fakeEnvRepo) ListByOrg(context.Context, uuid.UUID) ([]domain.Environment, error) {
+	return nil, nil
+}
+func (r *fakeEnvRepo) Update(context.Context, *domain.Environment) error { return nil }
+func (r *fakeEnvRepo) Delete(context.Context, uuid.UUID) error           { return nil }
 
 type fakeLLMIntentRepo struct {
 	byID map[uuid.UUID]*domain.LLMDeploymentIntent

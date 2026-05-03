@@ -64,6 +64,9 @@ func (m *mockServiceRepo) Create(_ context.Context, _ *domain.Service) error { r
 func (m *mockServiceRepo) Update(_ context.Context, _ *domain.Service) error { return nil }
 func (m *mockServiceRepo) Delete(_ context.Context, _ uuid.UUID) error       { return nil }
 func (m *mockServiceRepo) List(_ context.Context) ([]domain.Service, error)  { return nil, nil }
+func (m *mockServiceRepo) ListByOrg(_ context.Context, orgID uuid.UUID) ([]domain.Service, error) {
+	return m.List(context.Background())
+}
 func (m *mockServiceRepo) GetByName(_ context.Context, _ string) (*domain.Service, error) {
 	return m.svc, m.err
 }
@@ -84,6 +87,9 @@ func (m *mockEnvRepo) Create(_ context.Context, _ *domain.Environment) error { r
 func (m *mockEnvRepo) Update(_ context.Context, _ *domain.Environment) error { return nil }
 func (m *mockEnvRepo) Delete(_ context.Context, _ uuid.UUID) error           { return nil }
 func (m *mockEnvRepo) List(_ context.Context) ([]domain.Environment, error)  { return nil, nil }
+func (m *mockEnvRepo) ListByOrg(_ context.Context, _ uuid.UUID) ([]domain.Environment, error) {
+	return nil, nil
+}
 func (m *mockEnvRepo) GetByName(_ context.Context, _ string) (*domain.Environment, error) {
 	return m.env, m.err
 }

@@ -16,6 +16,7 @@ import (
 	"github.com/nbd-wtf/go-nostr"
 	"github.com/openagentsinc/bahia/internal/api/handlers"
 	"github.com/openagentsinc/bahia/internal/api/router"
+	"github.com/openagentsinc/bahia/internal/auth"
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/events"
@@ -57,6 +58,15 @@ func (m *mockServiceRepo) List(_ context.Context) ([]domain.Service, error) {
 	var result []domain.Service
 	for _, s := range m.services {
 		result = append(result, *s)
+	}
+	return result, nil
+}
+func (m *mockServiceRepo) ListByOrg(_ context.Context, orgID uuid.UUID) ([]domain.Service, error) {
+	var result []domain.Service
+	for _, s := range m.services {
+		if s.OrgID == orgID {
+			result = append(result, *s)
+		}
 	}
 	return result, nil
 }
@@ -104,6 +114,15 @@ func (m *mockEnvRepo) List(_ context.Context) ([]domain.Environment, error) {
 	var result []domain.Environment
 	for _, e := range m.envs {
 		result = append(result, *e)
+	}
+	return result, nil
+}
+func (m *mockEnvRepo) ListByOrg(_ context.Context, orgID uuid.UUID) ([]domain.Environment, error) {
+	var result []domain.Environment
+	for _, e := range m.envs {
+		if e.OrgID == orgID {
+			result = append(result, *e)
+		}
 	}
 	return result, nil
 }
@@ -390,6 +409,29 @@ func (m *mockStateRepo) ListAll(_ context.Context) ([]domain.EnvironmentServiceS
 
 // --- Test Setup ---
 
+type rbacMemberLookup struct {
+	members map[uuid.UUID]map[string]domain.Role
+}
+
+func (m *rbacMemberLookup) GetMember(_ context.Context, orgID uuid.UUID, pubkey string) (*domain.OrgMember, error) {
+	if roles, ok := m.members[orgID]; ok {
+		if role, ok := roles[pubkey]; ok {
+			return &domain.OrgMember{OrgID: orgID, Pubkey: pubkey, Role: role}, nil
+		}
+	}
+	return nil, repository.ErrNotFound
+}
+
+func (m *rbacMemberLookup) ListByPubkey(_ context.Context, pubkey string) ([]domain.OrgMember, error) {
+	var out []domain.OrgMember
+	for orgID, roles := range m.members {
+		if role, ok := roles[pubkey]; ok {
+			out = append(out, domain.OrgMember{OrgID: orgID, Pubkey: pubkey, Role: role})
+		}
+	}
+	return out, nil
+}
+
 func newTestServer() *httptest.Server {
 	registry := service.NewRegistryService(
 		newMockServiceRepo(), newMockEnvRepo(), newMockBuildRepo(), newMockArtifactRepo(),
@@ -551,6 +593,78 @@ func TestReady(t *testing.T) {
 }
 
 // --- Service CRUD ---
+
+func TestCoreRoutesEnforceTenantRBAC(t *testing.T) {
+	const rbacTestSecret = "router-rbac-test-secret"
+	orgA := uuid.New()
+	orgB := uuid.New()
+	svcA := &domain.Service{ID: uuid.New(), OrgID: orgA, Name: "svc-a", ArtifactRepo: "harbor/svc-a", DefaultBranch: "main", RuntimeType: domain.RuntimeTypeDocker}
+	svcB := &domain.Service{ID: uuid.New(), OrgID: orgB, Name: "svc-b", ArtifactRepo: "harbor/svc-b", DefaultBranch: "main", RuntimeType: domain.RuntimeTypeDocker}
+	svcRepo := newMockServiceRepo()
+	svcRepo.services[svcA.ID] = svcA
+	svcRepo.services[svcB.ID] = svcB
+
+	registry := service.NewRegistryService(
+		svcRepo, newMockEnvRepo(), newMockBuildRepo(), newMockArtifactRepo(),
+		newMockIntentRepo(), newMockRunRepo(), newMockObsRepo(), newMockStateRepo(),
+		nil, &events.NoopPublisher{}, zap.NewNop(),
+	)
+	lookup := &rbacMemberLookup{members: map[uuid.UUID]map[string]domain.Role{
+		orgA: {"alice": domain.RoleViewer},
+	}}
+	handler := router.NewWithDeps(registry, zap.NewNop(), config.CORSConfig{AllowedOrigins: []string{"*"}}, nil, router.RouterDeps{
+		AuthMiddleware: auth.MiddlewareConfig{Enabled: true, JWTSecret: rbacTestSecret},
+		Services:       svcRepo,
+		Builds:         newMockBuildRepo(),
+		Artifacts:      newMockArtifactRepo(),
+		RBAC:           auth.NewRBAC(lookup),
+	})
+	srv := httptest.NewServer(handler)
+	defer srv.Close()
+
+	tokenAlice, err := auth.GenerateTokenWithPubKey("alice", "alice", rbacTestSecret, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tokenBob, err := auth.GenerateTokenWithPubKey("bob", "bob", rbacTestSecret, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	client := http.DefaultClient
+	allowedReq, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/v1/services/"+svcA.ID.String(), nil)
+	allowedReq.Header.Set("Authorization", "Bearer "+tokenAlice)
+	resp, err := client.Do(allowedReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("member read status = %d, want 200", resp.StatusCode)
+	}
+
+	crossReq, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/v1/services/"+svcB.ID.String(), nil)
+	crossReq.Header.Set("Authorization", "Bearer "+tokenAlice)
+	resp, err = client.Do(crossReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("cross-org read status = %d, want 403", resp.StatusCode)
+	}
+
+	nonMemberReq, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/v1/services/"+svcA.ID.String(), nil)
+	nonMemberReq.Header.Set("Authorization", "Bearer "+tokenBob)
+	resp, err = client.Do(nonMemberReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("non-member read status = %d, want 403", resp.StatusCode)
+	}
+}
 
 func TestServiceCRUD(t *testing.T) {
 	srv := newTestServer()

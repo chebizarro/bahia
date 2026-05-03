@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 
+	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/api/dto"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/repository"
@@ -20,6 +21,9 @@ func NewEnvironmentHandler(registry *service.RegistryService) *EnvironmentHandle
 }
 
 func (h *EnvironmentHandler) Create(w http.ResponseWriter, r *http.Request) {
+	if !requirePermission(w, r, domain.PermWriteEnvironments) {
+		return
+	}
 	var req dto.CreateEnvironmentRequest
 	if err := decodeJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -35,6 +39,7 @@ func (h *EnvironmentHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	env := &domain.Environment{
+		OrgID:              authzOrgID(r),
 		Name:               req.Name,
 		LoomWorkerSelector: req.LoomWorkerSelector,
 		RuntimeConfig:      req.RuntimeConfig,
@@ -50,6 +55,9 @@ func (h *EnvironmentHandler) Create(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *EnvironmentHandler) Get(w http.ResponseWriter, r *http.Request) {
+	if !requireMember(w, r) {
+		return
+	}
 	id, err := uuidParam(r, "id")
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid environment id")
@@ -69,7 +77,16 @@ func (h *EnvironmentHandler) Get(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *EnvironmentHandler) List(w http.ResponseWriter, r *http.Request) {
-	environments, err := h.registry.ListEnvironments(r.Context())
+	if !requireMember(w, r) {
+		return
+	}
+	var environments []domain.Environment
+	var err error
+	if orgID := authzOrgID(r); orgID != uuid.Nil {
+		environments, err = h.registry.ListEnvironmentsByOrg(r.Context(), orgID)
+	} else {
+		environments, err = h.registry.ListEnvironments(r.Context())
+	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -78,6 +95,9 @@ func (h *EnvironmentHandler) List(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *EnvironmentHandler) Update(w http.ResponseWriter, r *http.Request) {
+	if !requirePermission(w, r, domain.PermWriteEnvironments) {
+		return
+	}
 	id, err := uuidParam(r, "id")
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid environment id")
@@ -128,6 +148,9 @@ func (h *EnvironmentHandler) Update(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *EnvironmentHandler) Delete(w http.ResponseWriter, r *http.Request) {
+	if !requirePermission(w, r, domain.PermWriteEnvironments) {
+		return
+	}
 	id, err := uuidParam(r, "id")
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid environment id")

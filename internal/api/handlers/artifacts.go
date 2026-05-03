@@ -18,6 +18,9 @@ func NewArtifactHandler(registry *service.RegistryService) *ArtifactHandler {
 }
 
 func (h *ArtifactHandler) Register(w http.ResponseWriter, r *http.Request) {
+	if !requirePermission(w, r, domain.PermWriteServices) {
+		return
+	}
 	var req dto.RegisterArtifactRequest
 	if err := decodeJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -48,6 +51,18 @@ func (h *ArtifactHandler) Register(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	svc, err := h.registry.GetService(r.Context(), req.ServiceID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if svc == nil {
+		writeError(w, http.StatusNotFound, "service not found")
+		return
+	}
+	if !serviceInAuthzOrg(w, r, svc.OrgID) {
+		return
+	}
 
 	a := &domain.Artifact{
 		BuildID:           req.BuildID,
@@ -71,6 +86,9 @@ func (h *ArtifactHandler) Register(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *ArtifactHandler) Get(w http.ResponseWriter, r *http.Request) {
+	if !requireMember(w, r) {
+		return
+	}
 	id, err := uuidParam(r, "id")
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid artifact id")
@@ -90,6 +108,9 @@ func (h *ArtifactHandler) Get(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *ArtifactHandler) ListByService(w http.ResponseWriter, r *http.Request) {
+	if !requireMember(w, r) {
+		return
+	}
 	serviceID, err := uuidParam(r, "serviceId")
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid service id")

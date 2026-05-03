@@ -53,6 +53,15 @@ func (m *testEnvironmentRepo) List(_ context.Context) ([]domain.Environment, err
 	}
 	return out, nil
 }
+func (m *testEnvironmentRepo) ListByOrg(_ context.Context, orgID uuid.UUID) ([]domain.Environment, error) {
+	out := make([]domain.Environment, 0, len(m.environments))
+	for _, env := range m.environments {
+		if env.OrgID == orgID {
+			out = append(out, *env)
+		}
+	}
+	return out, nil
+}
 
 func (m *testEnvironmentRepo) Update(_ context.Context, env *domain.Environment) error {
 	m.environments[env.ID] = env

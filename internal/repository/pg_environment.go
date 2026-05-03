@@ -42,9 +42,9 @@ func (r *PgEnvironmentRepository) Create(ctx context.Context, env *domain.Enviro
 	}
 
 	_, err = r.pool.Exec(ctx, `
-		INSERT INTO environments (id, name, loom_worker_selector, runtime_config, deploy_strategy, protected, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-	`, env.ID, env.Name, selectorJSON, configJSON, env.DeployStrategy, env.Protected, env.CreatedAt, env.UpdatedAt)
+		INSERT INTO environments (id, org_id, name, loom_worker_selector, runtime_config, deploy_strategy, protected, created_at, updated_at)
+		VALUES ($1, NULLIF($2, '00000000-0000-0000-0000-000000000000'::uuid), $3, $4, $5, $6, $7, $8, $9)
+	`, env.ID, env.OrgID, env.Name, selectorJSON, configJSON, env.DeployStrategy, env.Protected, env.CreatedAt, env.UpdatedAt)
 	if err != nil {
 		return fmt.Errorf("inserting environment: %w", err)
 	}
@@ -54,7 +54,7 @@ func (r *PgEnvironmentRepository) Create(ctx context.Context, env *domain.Enviro
 func (r *PgEnvironmentRepository) scanEnv(row pgx.Row) (*domain.Environment, error) {
 	env := &domain.Environment{}
 	var selectorJSON, configJSON []byte
-	err := row.Scan(&env.ID, &env.Name, &selectorJSON, &configJSON, &env.DeployStrategy, &env.Protected, &env.CreatedAt, &env.UpdatedAt)
+	err := row.Scan(&env.ID, &env.OrgID, &env.Name, &selectorJSON, &configJSON, &env.DeployStrategy, &env.Protected, &env.CreatedAt, &env.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -69,7 +69,7 @@ func (r *PgEnvironmentRepository) scanEnv(row pgx.Row) (*domain.Environment, err
 
 func (r *PgEnvironmentRepository) GetByID(ctx context.Context, id uuid.UUID) (*domain.Environment, error) {
 	row := r.pool.QueryRow(ctx, `
-		SELECT id, name, loom_worker_selector, runtime_config, deploy_strategy, protected, created_at, updated_at
+		SELECT id, COALESCE(org_id, '00000000-0000-0000-0000-000000000000'::uuid), name, loom_worker_selector, runtime_config, deploy_strategy, protected, created_at, updated_at
 		FROM environments WHERE id = $1
 	`, id)
 	env, err := r.scanEnv(row)
@@ -84,7 +84,7 @@ func (r *PgEnvironmentRepository) GetByID(ctx context.Context, id uuid.UUID) (*d
 
 func (r *PgEnvironmentRepository) GetByName(ctx context.Context, name string) (*domain.Environment, error) {
 	row := r.pool.QueryRow(ctx, `
-		SELECT id, name, loom_worker_selector, runtime_config, deploy_strategy, protected, created_at, updated_at
+		SELECT id, COALESCE(org_id, '00000000-0000-0000-0000-000000000000'::uuid), name, loom_worker_selector, runtime_config, deploy_strategy, protected, created_at, updated_at
 		FROM environments WHERE name = $1
 	`, name)
 	env, err := r.scanEnv(row)
@@ -99,7 +99,7 @@ func (r *PgEnvironmentRepository) GetByName(ctx context.Context, name string) (*
 
 func (r *PgEnvironmentRepository) List(ctx context.Context) ([]domain.Environment, error) {
 	rows, err := r.pool.Query(ctx, `
-		SELECT id, name, loom_worker_selector, runtime_config, deploy_strategy, protected, created_at, updated_at
+		SELECT id, COALESCE(org_id, '00000000-0000-0000-0000-000000000000'::uuid), name, loom_worker_selector, runtime_config, deploy_strategy, protected, created_at, updated_at
 		FROM environments ORDER BY name
 	`)
 	if err != nil {
@@ -111,7 +111,35 @@ func (r *PgEnvironmentRepository) List(ctx context.Context) ([]domain.Environmen
 	for rows.Next() {
 		var selectorJSON, configJSON []byte
 		var env domain.Environment
-		if err := rows.Scan(&env.ID, &env.Name, &selectorJSON, &configJSON, &env.DeployStrategy, &env.Protected, &env.CreatedAt, &env.UpdatedAt); err != nil {
+		if err := rows.Scan(&env.ID, &env.OrgID, &env.Name, &selectorJSON, &configJSON, &env.DeployStrategy, &env.Protected, &env.CreatedAt, &env.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("scanning environment: %w", err)
+		}
+		if err := unmarshalJSON(selectorJSON, &env.LoomWorkerSelector, "loom worker selector"); err != nil {
+			return nil, fmt.Errorf("reading environment %s: %w", env.ID, err)
+		}
+		if err := unmarshalJSON(configJSON, &env.RuntimeConfig, "runtime config"); err != nil {
+			return nil, fmt.Errorf("reading environment %s: %w", env.ID, err)
+		}
+		envs = append(envs, env)
+	}
+	return envs, rows.Err()
+}
+
+func (r *PgEnvironmentRepository) ListByOrg(ctx context.Context, orgID uuid.UUID) ([]domain.Environment, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT id, COALESCE(org_id, '00000000-0000-0000-0000-000000000000'::uuid), name, loom_worker_selector, runtime_config, deploy_strategy, protected, created_at, updated_at
+		FROM environments WHERE org_id = $1 ORDER BY name
+	`, orgID)
+	if err != nil {
+		return nil, fmt.Errorf("listing environments by org: %w", err)
+	}
+	defer rows.Close()
+
+	var envs []domain.Environment
+	for rows.Next() {
+		var selectorJSON, configJSON []byte
+		var env domain.Environment
+		if err := rows.Scan(&env.ID, &env.OrgID, &env.Name, &selectorJSON, &configJSON, &env.DeployStrategy, &env.Protected, &env.CreatedAt, &env.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("scanning environment: %w", err)
 		}
 		if err := unmarshalJSON(selectorJSON, &env.LoomWorkerSelector, "loom worker selector"); err != nil {
@@ -137,9 +165,9 @@ func (r *PgEnvironmentRepository) Update(ctx context.Context, env *domain.Enviro
 	}
 
 	cmd, err := r.pool.Exec(ctx, `
-		UPDATE environments SET name=$2, loom_worker_selector=$3, runtime_config=$4, deploy_strategy=$5, protected=$6, updated_at=$7
+		UPDATE environments SET org_id=NULLIF($2, '00000000-0000-0000-0000-000000000000'::uuid), name=$3, loom_worker_selector=$4, runtime_config=$5, deploy_strategy=$6, protected=$7, updated_at=$8
 		WHERE id=$1
-	`, env.ID, env.Name, selectorJSON, configJSON, env.DeployStrategy, env.Protected, env.UpdatedAt)
+	`, env.ID, env.OrgID, env.Name, selectorJSON, configJSON, env.DeployStrategy, env.Protected, env.UpdatedAt)
 	if err != nil {
 		return fmt.Errorf("updating environment: %w", err)
 	}

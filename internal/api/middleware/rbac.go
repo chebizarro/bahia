@@ -3,7 +3,9 @@ package middleware
 
 import (
 	"context"
+	"errors"
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -26,14 +28,31 @@ func GetAuthz(ctx context.Context) *auth.AuthzContext {
 	return authz
 }
 
+// ErrOrgContextNotFound indicates a resource lookup could not resolve an org.
+var ErrOrgContextNotFound = errors.New("org context not found")
+
+// ErrInvalidOrgID indicates an org ID or route resource ID was malformed.
+var ErrInvalidOrgID = errors.New("invalid org ID")
+
+// ResourceOrgResolver resolves the tenant organization for a request.
+type ResourceOrgResolver func(*http.Request) (uuid.UUID, error)
+
 // RBACConfig configures the RBAC middleware.
 type RBACConfig struct {
 	// RBAC is the authorization checker.
 	RBAC *auth.RBAC
 	// OrgIDParam is the URL param name for org ID (default: "orgId").
 	OrgIDParam string
+	// OrgIDHeader is the header used for flat routes (default: "X-Bahia-Org-ID").
+	OrgIDHeader string
+	// OrgIDQueryParam is the query parameter used for flat routes (default: "org_id").
+	OrgIDQueryParam string
+	// OrgIDResolver resolves an org from the target resource for flat resource routes.
+	OrgIDResolver ResourceOrgResolver
 	// Required means authentication is required (returns 401 if not authenticated).
 	Required bool
+	// RequireOrg means the request must have a tenant organization context.
+	RequireOrg bool
 }
 
 // RBAC returns middleware that loads the AuthzContext for the current request.
@@ -41,6 +60,12 @@ type RBACConfig struct {
 func RBAC(cfg RBACConfig) func(http.Handler) http.Handler {
 	if cfg.OrgIDParam == "" {
 		cfg.OrgIDParam = "orgId"
+	}
+	if cfg.OrgIDHeader == "" {
+		cfg.OrgIDHeader = "X-Bahia-Org-ID"
+	}
+	if cfg.OrgIDQueryParam == "" {
+		cfg.OrgIDQueryParam = "org_id"
 	}
 
 	return func(next http.Handler) http.Handler {
@@ -53,17 +78,25 @@ func RBAC(cfg RBACConfig) func(http.Handler) http.Handler {
 				return
 			}
 
-			// Get org ID from URL params
-			orgIDStr := chi.URLParam(r, cfg.OrgIDParam)
-			if orgIDStr == "" {
-				// No org context - just pass through
-				next.ServeHTTP(w, r)
+			orgID, err := resolveOrgID(r, cfg)
+			if err != nil {
+				switch {
+				case errors.Is(err, ErrOrgContextNotFound):
+					http.Error(w, `{"error":"resource not found"}`, http.StatusNotFound)
+				case errors.Is(err, ErrInvalidOrgID):
+					http.Error(w, `{"error":"invalid org ID"}`, http.StatusBadRequest)
+				default:
+					http.Error(w, `{"error":"authorization check failed"}`, http.StatusInternalServerError)
+				}
 				return
 			}
-
-			orgID, err := uuid.Parse(orgIDStr)
-			if err != nil {
-				http.Error(w, `{"error":"invalid org ID"}`, http.StatusBadRequest)
+			if orgID == uuid.Nil {
+				if cfg.RequireOrg {
+					http.Error(w, `{"error":"organization context required"}`, http.StatusBadRequest)
+					return
+				}
+				// No org context - just pass through
+				next.ServeHTTP(w, r)
 				return
 			}
 
@@ -79,6 +112,31 @@ func RBAC(cfg RBACConfig) func(http.Handler) http.Handler {
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
+}
+
+func resolveOrgID(r *http.Request, cfg RBACConfig) (uuid.UUID, error) {
+	if cfg.OrgIDResolver != nil {
+		orgID, err := cfg.OrgIDResolver(r)
+		if err != nil || orgID != uuid.Nil {
+			return orgID, err
+		}
+	}
+
+	orgIDStr := strings.TrimSpace(chi.URLParam(r, cfg.OrgIDParam))
+	if orgIDStr == "" {
+		orgIDStr = strings.TrimSpace(r.Header.Get(cfg.OrgIDHeader))
+	}
+	if orgIDStr == "" {
+		orgIDStr = strings.TrimSpace(r.URL.Query().Get(cfg.OrgIDQueryParam))
+	}
+	if orgIDStr == "" {
+		return uuid.Nil, nil
+	}
+	orgID, err := uuid.Parse(orgIDStr)
+	if err != nil {
+		return uuid.Nil, ErrInvalidOrgID
+	}
+	return orgID, nil
 }
 
 // RequireRole returns middleware that requires a minimum role.

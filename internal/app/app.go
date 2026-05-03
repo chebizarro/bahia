@@ -445,6 +445,7 @@ func New(cfg *config.Config) (*App, error) {
 			Config:           cfg,
 			AuthMiddleware:   authMiddleware,
 			Workers:          workerRepo,
+			Builds:           buildRepo,
 			Runs:             runRepo,
 			Services:         serviceRepo,
 			Environments:     envRepo,

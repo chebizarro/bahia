@@ -38,6 +38,9 @@ func NewSignatureHandler(
 // List returns all signatures for an artifact.
 // GET /artifacts/{id}/signatures
 func (h *SignatureHandler) List(w http.ResponseWriter, r *http.Request) {
+	if !requireMember(w, r) {
+		return
+	}
 	artifactID, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid artifact ID")
@@ -56,6 +59,9 @@ func (h *SignatureHandler) List(w http.ResponseWriter, r *http.Request) {
 // ListVerified returns only verified signatures for an artifact.
 // GET /artifacts/{id}/signatures/verified
 func (h *SignatureHandler) ListVerified(w http.ResponseWriter, r *http.Request) {
+	if !requireMember(w, r) {
+		return
+	}
 	artifactID, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid artifact ID")
@@ -74,6 +80,9 @@ func (h *SignatureHandler) ListVerified(w http.ResponseWriter, r *http.Request) 
 // HasVerified checks if an artifact has at least one verified signature.
 // GET /artifacts/{id}/signatures/check
 func (h *SignatureHandler) HasVerified(w http.ResponseWriter, r *http.Request) {
+	if !requireMember(w, r) {
+		return
+	}
 	artifactID, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid artifact ID")
@@ -92,6 +101,9 @@ func (h *SignatureHandler) HasVerified(w http.ResponseWriter, r *http.Request) {
 // Verify triggers signature verification for an artifact and stores any found signatures.
 // POST /artifacts/{id}/signatures/verify
 func (h *SignatureHandler) Verify(w http.ResponseWriter, r *http.Request) {
+	if !requirePermission(w, r, domain.PermWriteServices) {
+		return
+	}
 	artifactID, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid artifact ID")
@@ -106,6 +118,10 @@ func (h *SignatureHandler) Verify(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if artifact == nil {
+		writeError(w, http.StatusNotFound, "artifact not found")
 		return
 	}
 
@@ -149,6 +165,9 @@ func (h *SignatureHandler) Verify(w http.ResponseWriter, r *http.Request) {
 // Get returns a single signature by ID.
 // GET /signatures/{id}
 func (h *SignatureHandler) Get(w http.ResponseWriter, r *http.Request) {
+	if !requireMember(w, r) {
+		return
+	}
 	sigID, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid signature ID")

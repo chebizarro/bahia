@@ -20,6 +20,9 @@ func NewBuildHandler(registry *service.RegistryService) *BuildHandler {
 }
 
 func (h *BuildHandler) Register(w http.ResponseWriter, r *http.Request) {
+	if !requirePermission(w, r, domain.PermWriteServices) {
+		return
+	}
 	var req dto.RegisterBuildRequest
 	if err := decodeJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -46,6 +49,18 @@ func (h *BuildHandler) Register(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	svc, err := h.registry.GetService(r.Context(), req.ServiceID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if svc == nil {
+		writeError(w, http.StatusNotFound, "service not found")
+		return
+	}
+	if !serviceInAuthzOrg(w, r, svc.OrgID) {
+		return
+	}
 
 	b := &domain.Build{
 		ServiceID:     req.ServiceID,
@@ -70,6 +85,9 @@ func (h *BuildHandler) Register(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *BuildHandler) Get(w http.ResponseWriter, r *http.Request) {
+	if !requireMember(w, r) {
+		return
+	}
 	id, err := uuidParam(r, "id")
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid build id")
@@ -89,6 +107,9 @@ func (h *BuildHandler) Get(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *BuildHandler) ListByService(w http.ResponseWriter, r *http.Request) {
+	if !requireMember(w, r) {
+		return
+	}
 	serviceID, err := uuidParam(r, "serviceId")
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid service id")
@@ -106,6 +127,9 @@ func (h *BuildHandler) ListByService(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *BuildHandler) UpdateStatus(w http.ResponseWriter, r *http.Request) {
+	if !requirePermission(w, r, domain.PermWriteServices) {
+		return
+	}
 	id, err := uuidParam(r, "id")
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid build id")
