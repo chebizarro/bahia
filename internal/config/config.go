@@ -538,6 +538,9 @@ func (c *Config) validate() error {
 	if c.HiveCI.MaxRetries <= 0 {
 		return fmt.Errorf("config validation failed: hiveci.max_retries must be > 0")
 	}
+	if c.Cashu.Enabled && strings.TrimSpace(c.Cashu.MintURL) == "" {
+		return fmt.Errorf("config validation failed: cashu.mint_url is required when cashu.enabled=true")
+	}
 	if err := c.validateLLM(); err != nil {
 		return err
 	}

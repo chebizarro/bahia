@@ -34,15 +34,15 @@ var SoulFactoryPubkey = "14907326f89ebdfc9cfdabe17bd492aa48abbd59ad5d8cc25295760
 
 // Config holds reactor configuration.
 type Config struct {
-	Relays              []string
-	PrivateRelays       []string // For drafts and provisioning events
-	SoulFactoryPubkey   string
-	AuthorizedPubkeys   []string
-	SignetBunkerURI     string
-	BlossomURL          string
-	QdrantURL           string
-	AgentMemoryURL      string
-	LemmyURL            string // FLUX avatar generation
+	Relays            []string
+	PrivateRelays     []string // For drafts and provisioning events
+	SoulFactoryPubkey string
+	AuthorizedPubkeys []string
+	SignetBunkerURI   string
+	BlossomURL        string
+	QdrantURL         string
+	AgentMemoryURL    string
+	LemmyURL          string // FLUX avatar generation
 }
 
 // Reactor subscribes to Nostr events and dispatches handlers.
@@ -51,7 +51,7 @@ type Reactor struct {
 	pool        *nostr.SimplePool
 	generator   SoulGenerator
 	signer      Signer
-	provisioner *Provisioner
+	provisioner ProvisioningEngine
 	logger      *slog.Logger
 
 	mu   sync.Mutex
@@ -61,6 +61,31 @@ type Reactor struct {
 // SoulGenerator generates soul content from briefs.
 type SoulGenerator interface {
 	Generate(ctx context.Context, input domain.SoulGeneratorInput) (*domain.SoulGeneratorOutput, error)
+}
+
+// ProvisioningEngine executes provisioning and lifecycle operations without
+// allowing placeholder success paths.
+type ProvisioningEngine interface {
+	Provision(ctx context.Context, req *domain.ProvisioningRequest, run *domain.ProvisioningRun) (*domain.AgentSoul, error)
+	SuspendSoul(ctx context.Context, soulRef, reason string) error
+	ResumeSoul(ctx context.Context, soulRef string) error
+	RevokeSoul(ctx context.Context, soulRef, reason string) error
+	RegenerateSoul(ctx context.Context, soulRef, newBrief string) error
+	RedeploySoul(ctx context.Context, soulRef string) error
+}
+
+// ReactorOption customizes a Reactor.
+type ReactorOption func(*Reactor)
+
+// WithProvisioningEngine installs an explicit provisioning engine. Without this
+// option, provisioning and lifecycle requests fail closed instead of using the
+// legacy partial provisioner.
+func WithProvisioningEngine(engine ProvisioningEngine) ReactorOption {
+	return func(r *Reactor) {
+		if engine != nil {
+			r.provisioner = engine
+		}
+	}
 }
 
 // Signer handles Nostr event signing via NIP-46.
@@ -73,22 +98,26 @@ type Signer interface {
 }
 
 // NewReactor creates a new Soul Factory reactor.
-func NewReactor(config Config, generator SoulGenerator, signer Signer, logger *slog.Logger) *Reactor {
+func NewReactor(config Config, generator SoulGenerator, signer Signer, logger *slog.Logger, opts ...ReactorOption) *Reactor {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	
+
 	r := &Reactor{
-		config:    config,
-		pool:      nostr.NewSimplePool(context.Background()),
-		generator: generator,
-		signer:    signer,
-		logger:    logger.With("component", "soulfactory"),
-		runs:      make(map[string]*domain.ProvisioningRun),
+		config:      config,
+		pool:        nostr.NewSimplePool(context.Background()),
+		generator:   generator,
+		signer:      signer,
+		provisioner: unavailableProvisioningEngine{},
+		logger:      logger.With("component", "soulfactory"),
+		runs:        make(map[string]*domain.ProvisioningRun),
 	}
-	
-	r.provisioner = NewProvisioner(r)
-	
+	for _, opt := range opts {
+		if opt != nil {
+			opt(r)
+		}
+	}
+
 	return r
 }
 
@@ -114,23 +143,21 @@ func (r *Reactor) Run(ctx context.Context) error {
 
 	// Combine all relays for subscription
 	allRelays := append(r.config.Relays, r.config.PrivateRelays...)
-	
+
 	sub := r.pool.SubMany(ctx, allRelays, filters)
-	
+
 	for {
 		select {
 		case <-ctx.Done():
 			r.logger.Info("reactor shutting down")
 			return ctx.Err()
-			
+
 		case ev, ok := <-sub:
 			if !ok {
-				r.logger.Warn("subscription closed, reconnecting...")
-				time.Sleep(5 * time.Second)
-				sub = r.pool.SubMany(ctx, allRelays, filters)
-				continue
+				r.logger.Warn("subscription closed; stopping soul factory reactor because reconnect semantics are not implemented here")
+				return ErrSoulFactoryUnavailable
 			}
-			
+
 			r.handleEvent(ctx, ev.Event)
 		}
 	}
@@ -239,25 +266,31 @@ func (r *Reactor) handleSoulAction(ctx context.Context, event *nostr.Event) {
 	case domain.SoulActionSuspend:
 		if err := r.provisioner.SuspendSoul(ctx, action.SoulRef, action.Reason); err != nil {
 			logger.Error("suspend failed", "error", err)
+			r.publishActionError(ctx, event, action, err.Error())
 		}
 	case domain.SoulActionResume:
 		if err := r.provisioner.ResumeSoul(ctx, action.SoulRef); err != nil {
 			logger.Error("resume failed", "error", err)
+			r.publishActionError(ctx, event, action, err.Error())
 		}
 	case domain.SoulActionRevoke:
 		if err := r.provisioner.RevokeSoul(ctx, action.SoulRef, action.Reason); err != nil {
 			logger.Error("revoke failed", "error", err)
+			r.publishActionError(ctx, event, action, err.Error())
 		}
 	case domain.SoulActionRegenerate:
 		if err := r.provisioner.RegenerateSoul(ctx, action.SoulRef, action.NewBrief); err != nil {
 			logger.Error("regenerate failed", "error", err)
+			r.publishActionError(ctx, event, action, err.Error())
 		}
 	case domain.SoulActionRedeploy:
 		if err := r.provisioner.RedeploySoul(ctx, action.SoulRef); err != nil {
 			logger.Error("redeploy failed", "error", err)
+			r.publishActionError(ctx, event, action, err.Error())
 		}
 	default:
 		logger.Warn("unknown action type", "action", action.Action)
+		r.publishActionError(ctx, event, action, fmt.Sprintf("unknown action type: %s", action.Action))
 	}
 }
 
@@ -394,13 +427,13 @@ func (r *Reactor) PublishStatus(ctx context.Context, requestEvent *nostr.Event, 
 // publishResult publishes a kind:7950 success result event.
 func (r *Reactor) publishResult(ctx context.Context, requestEvent *nostr.Event, soul *domain.AgentSoul) error {
 	content, _ := json.Marshal(map[string]interface{}{
-		"soul_id":          soul.AgentID,
-		"npub":             soul.NostrNpub,
-		"pubkey":           soul.NostrPubkey,
-		"avatar_url":       soul.AvatarURL,
-		"workspace_url":    soul.WorkspaceRepoURL,
+		"soul_id":           soul.AgentID,
+		"npub":              soul.NostrNpub,
+		"pubkey":            soul.NostrPubkey,
+		"avatar_url":        soul.AvatarURL,
+		"workspace_url":     soul.WorkspaceRepoURL,
 		"qdrant_collection": soul.QdrantCollection,
-		"bahia_service_id": soul.BahiaServiceID,
+		"bahia_service_id":  soul.BahiaServiceID,
 	})
 
 	tags := nostr.Tags{
@@ -429,6 +462,28 @@ func (r *Reactor) publishResult(ctx context.Context, requestEvent *nostr.Event, 
 	// Publish to both private and public relays
 	allRelays := append(r.config.PrivateRelays, r.config.Relays...)
 	return r.publish(ctx, event, allRelays)
+}
+
+func (r *Reactor) publishActionError(ctx context.Context, sourceEvent *nostr.Event, action *domain.SoulAction, message string) error {
+	content, _ := json.Marshal(map[string]interface{}{
+		"error": message,
+	})
+	event := &nostr.Event{
+		Kind:      domain.KindSoulAction + 1,
+		CreatedAt: nostr.Now(),
+		Tags: nostr.Tags{
+			{"e", sourceEvent.ID, "", "reply"},
+			{"p", sourceEvent.PubKey},
+			{"soul", action.SoulRef},
+			{"action", string(action.Action)},
+			{"status", "error"},
+		},
+		Content: string(content),
+	}
+	if err := r.signer.Sign(ctx, event); err != nil {
+		return fmt.Errorf("sign action error event: %w", err)
+	}
+	return r.publish(ctx, event, r.config.PrivateRelays)
 }
 
 // publishError publishes a kind:7950 error result event.

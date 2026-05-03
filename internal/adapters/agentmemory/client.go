@@ -5,12 +5,17 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 )
+
+// ErrNotConfigured is returned when an operation is attempted without an explicit agent-memory URL.
+var ErrNotConfigured = errors.New("agent-memory client not configured")
 
 // Client communicates with agent-memory MCP server.
 type Client struct {
@@ -21,15 +26,13 @@ type Client struct {
 
 // Config holds client configuration.
 type Config struct {
-	URL     string        // MCP server URL (e.g., http://192.168.40.104:8282)
+	URL     string        // MCP server URL (e.g., http://localhost:8282)
 	Timeout time.Duration // Request timeout
 }
 
 // NewClient creates a new agent-memory client.
 func NewClient(config Config, logger *slog.Logger) *Client {
-	if config.URL == "" {
-		config.URL = "http://192.168.40.104:8282"
-	}
+	config.URL = strings.TrimRight(strings.TrimSpace(config.URL), "/")
 	if config.Timeout == 0 {
 		config.Timeout = 30 * time.Second
 	}
@@ -44,6 +47,18 @@ func NewClient(config Config, logger *slog.Logger) *Client {
 		},
 		logger: logger.With("component", "agentmemory"),
 	}
+}
+
+// Configured reports whether this client has an explicit agent-memory endpoint.
+func (c *Client) Configured() bool {
+	return c != nil && strings.TrimSpace(c.baseURL) != ""
+}
+
+func (c *Client) requireConfigured() error {
+	if !c.Configured() {
+		return ErrNotConfigured
+	}
+	return nil
 }
 
 // MCPRequest represents an MCP JSON-RPC request.
@@ -170,6 +185,9 @@ func (c *Client) GetAgentContext(ctx context.Context, agentID string) ([]MemoryE
 
 // call makes an MCP JSON-RPC call.
 func (c *Client) call(ctx context.Context, method string, params map[string]interface{}) (json.RawMessage, error) {
+	if err := c.requireConfigured(); err != nil {
+		return nil, err
+	}
 	req := MCPRequest{
 		JSONRPC: "2.0",
 		ID:      1,

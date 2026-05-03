@@ -15,9 +15,9 @@ import (
 
 // WorkspaceManager handles agent workspace initialization.
 type WorkspaceManager struct {
-	giteaURL     string
-	templateDir  string
-	logger       *slog.Logger
+	giteaURL    string
+	templateDir string
+	logger      *slog.Logger
 }
 
 // WorkspaceConfig holds workspace manager configuration.
@@ -28,9 +28,6 @@ type WorkspaceConfig struct {
 
 // NewWorkspaceManager creates a new workspace manager.
 func NewWorkspaceManager(config WorkspaceConfig, logger *slog.Logger) *WorkspaceManager {
-	if config.GiteaURL == "" {
-		config.GiteaURL = "https://git.sharegap.net"
-	}
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -44,6 +41,9 @@ func NewWorkspaceManager(config WorkspaceConfig, logger *slog.Logger) *Workspace
 
 // InitWorkspace creates and pushes an agent workspace repository.
 func (m *WorkspaceManager) InitWorkspace(ctx context.Context, soul *domain.AgentSoul) (repoURL string, err error) {
+	if m.giteaURL == "" {
+		return "", ErrWorkspaceNotConfigured
+	}
 	m.logger.Info("initializing workspace",
 		"agent_id", soul.AgentID,
 		"name", soul.Name,
@@ -179,8 +179,7 @@ func (m *WorkspaceManager) runGit(ctx context.Context, dir string, args ...strin
 func (m *WorkspaceManager) pushWithNgit(ctx context.Context, dir string, soul *domain.AgentSoul) (string, error) {
 	// Check if ngit is available
 	if _, err := exec.LookPath("ngit"); err != nil {
-		m.logger.Warn("ngit not found, skipping NIP-34 push")
-		return fmt.Sprintf("%s/%s/%s", m.giteaURL, soul.NostrPubkey[:20], soul.AgentID), nil
+		return "", fmt.Errorf("ngit not found: %w", err)
 	}
 
 	// Initialize ngit
@@ -191,14 +190,12 @@ func (m *WorkspaceManager) pushWithNgit(ctx context.Context, dir string, soul *d
 	cmd.Dir = dir
 
 	if output, err := cmd.CombinedOutput(); err != nil {
-		m.logger.Warn("ngit init failed", "error", err, "output", string(output))
-		// Continue without NIP-34
+		return "", fmt.Errorf("ngit init: %s: %w", string(output), err)
 	}
 
 	// Push to nostr remote
 	if err := m.runGit(ctx, dir, "push", "nostr", "HEAD:main"); err != nil {
-		m.logger.Warn("ngit push failed, trying direct Gitea push", "error", err)
-		// Fall back to direct Gitea push if available
+		return "", fmt.Errorf("ngit push: %w", err)
 	}
 
 	return fmt.Sprintf("%s/%s/%s", m.giteaURL, soul.NostrPubkey[:20], soul.AgentID), nil
@@ -285,7 +282,7 @@ const openclawTemplate = `{
   "mcpServers": {
     "agent-memory": {
       "transport": "http",
-      "url": "http://192.168.40.104:8282/mcp"
+      "url": "__AGENT_MEMORY_MCP_URL__"
     }
   }
 }

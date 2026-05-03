@@ -3,6 +3,7 @@ package soulfactory
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -43,17 +44,30 @@ type FullProvisionerConfig struct {
 // The bahiaIntegration parameter is optional - pass nil if bahia integration is not needed.
 func NewFullProvisioner(reactor *Reactor, config FullProvisionerConfig, bahiaIntegration *BahiaIntegration) *FullProvisioner {
 	logger := reactor.logger
-
-	return &FullProvisioner{
+	p := &FullProvisioner{
 		reactor:          reactor,
-		avatarGenerator:  llm.NewAvatarGenerator(config.Avatar, logger),
-		blossomClient:    blossom.NewClient(config.Blossom, logger),
 		qdrantClient:     qdrant.NewClient(config.Qdrant, logger),
 		agentMemory:      agentmemory.NewClient(config.AgentMemory, logger),
-		workspaceManager: NewWorkspaceManager(config.Workspace, logger),
-		nip05Manager:     NewNIP05Manager(config.NIP05, logger),
 		bahiaIntegration: bahiaIntegration,
 	}
+	if len(config.Blossom.Servers) > 0 {
+		p.blossomClient = blossom.NewClient(config.Blossom, logger)
+	}
+	if config.Avatar.LemmyURL != "" && p.blossomClient != nil {
+		p.avatarGenerator = llm.NewAvatarGenerator(config.Avatar, logger)
+	}
+	if config.Workspace.GiteaURL != "" {
+		p.workspaceManager = NewWorkspaceManager(config.Workspace, logger)
+	}
+	if config.NIP05.Domain != "" && config.NIP05.WellKnownDir != "" {
+		p.nip05Manager = NewNIP05Manager(config.NIP05, logger)
+	}
+	return p
+}
+
+// Provision executes the configured full provisioning workflow.
+func (p *FullProvisioner) Provision(ctx context.Context, req *domain.ProvisioningRequest, run *domain.ProvisioningRun) (*domain.AgentSoul, error) {
+	return p.ProvisionFull(ctx, req, run)
 }
 
 // ProvisionFull executes the complete provisioning workflow.
@@ -61,15 +75,14 @@ func (p *FullProvisioner) ProvisionFull(ctx context.Context, req *domain.Provisi
 	logger := p.reactor.logger.With("agent_id", req.AgentID, "run_id", run.ID)
 
 	soul := &domain.AgentSoul{
-		ID:               domain.NewUUID(),
-		AgentID:          req.AgentID,
-		Name:             req.Name,
-		Tier:             req.Tier,
-		Status:           domain.SoulStatusProvisioning,
-		TemplateRef:      req.TemplateRef,
-		OriginalBrief:    req.Brief,
-		QdrantCollection: req.AgentID,
-		CreatedAt:        time.Now(),
+		ID:            domain.NewUUID(),
+		AgentID:       req.AgentID,
+		Name:          req.Name,
+		Tier:          req.Tier,
+		Status:        domain.SoulStatusProvisioning,
+		TemplateRef:   req.TemplateRef,
+		OriginalBrief: req.Brief,
+		CreatedAt:     time.Now(),
 	}
 
 	requestEvent := &nostr.Event{
@@ -136,22 +149,28 @@ func (p *FullProvisioner) ProvisionFull(ctx context.Context, req *domain.Provisi
 	p.publishProgress(ctx, requestEvent, domain.StepAvatar, 3, totalSteps, "Generating avatar via FLUX...")
 
 	stepStart = time.Now()
-	avatarResult, err := p.avatarGenerator.Generate(ctx, output.AvatarPrompt, req.AgentID)
-	if err != nil {
-		logger.Warn("avatar generation failed, using placeholder", "error", err)
-		p.recordStep(run, domain.StepAvatar, domain.StepStatusFailed, nil, err, time.Since(stepStart))
-		// Continue without avatar - not fatal
+	if p.avatarGenerator == nil || p.blossomClient == nil {
+		p.recordStep(run, domain.StepAvatar, domain.StepStatusSkipped, map[string]interface{}{
+			"reason": "avatar generator or blossom storage not configured",
+		}, nil, 0)
 	} else {
-		// Upload avatar to Blossom
-		bd, err := p.blossomClient.Upload(ctx, avatarResult.ImageData, avatarResult.ContentType)
+		avatarResult, err := p.avatarGenerator.Generate(ctx, output.AvatarPrompt, req.AgentID)
 		if err != nil {
-			logger.Warn("avatar upload failed", "error", err)
+			logger.Warn("avatar generation failed; continuing without avatar", "error", err)
+			p.recordStep(run, domain.StepAvatar, domain.StepStatusFailed, nil, err, time.Since(stepStart))
+			// Continue without avatar - not fatal
 		} else {
-			soul.AvatarBlobHash = bd.SHA256
-			soul.AvatarURL = bd.URL
-			p.recordStep(run, domain.StepAvatar, domain.StepStatusComplete, map[string]interface{}{
-				"avatar_url": bd.URL,
-			}, nil, time.Since(stepStart))
+			// Upload avatar to Blossom
+			bd, err := p.blossomClient.Upload(ctx, avatarResult.ImageData, avatarResult.ContentType)
+			if err != nil {
+				logger.Warn("avatar upload failed", "error", err)
+			} else {
+				soul.AvatarBlobHash = bd.SHA256
+				soul.AvatarURL = bd.URL
+				p.recordStep(run, domain.StepAvatar, domain.StepStatusComplete, map[string]interface{}{
+					"avatar_url": bd.URL,
+				}, nil, time.Since(stepStart))
+			}
 		}
 	}
 
@@ -161,7 +180,9 @@ func (p *FullProvisioner) ProvisionFull(ctx context.Context, req *domain.Provisi
 	p.publishProgress(ctx, requestEvent, domain.StepProfile, 4, totalSteps, "Publishing Nostr profile (kind:0)...")
 
 	stepStart = time.Now()
-	soul.NIP05 = p.nip05Manager.GetNIP05(soul.AgentID)
+	if p.nip05Manager != nil {
+		soul.NIP05 = p.nip05Manager.GetNIP05(soul.AgentID)
+	}
 	if err := p.publishProfile(ctx, soul); err != nil {
 		p.recordStep(run, domain.StepProfile, domain.StepStatusFailed, nil, err, time.Since(stepStart))
 		return nil, fmt.Errorf("publish profile: %w", err)
@@ -177,14 +198,21 @@ func (p *FullProvisioner) ProvisionFull(ctx context.Context, req *domain.Provisi
 	p.publishProgress(ctx, requestEvent, domain.StepQdrant, 5, totalSteps, "Creating vector memory collection...")
 
 	stepStart = time.Now()
-	if err := p.qdrantClient.CreateCollection(ctx, soul.QdrantCollection, qdrant.DefaultCollectionConfig()); err != nil {
-		logger.Warn("Qdrant collection creation failed", "error", err)
-		p.recordStep(run, domain.StepQdrant, domain.StepStatusFailed, nil, err, time.Since(stepStart))
-		// Continue - not fatal for basic operation
+	if p.qdrantClient == nil || !p.qdrantClient.Configured() {
+		p.recordStep(run, domain.StepQdrant, domain.StepStatusSkipped, map[string]interface{}{
+			"reason": "qdrant url not configured",
+		}, nil, 0)
 	} else {
-		p.recordStep(run, domain.StepQdrant, domain.StepStatusComplete, map[string]interface{}{
-			"collection": soul.QdrantCollection,
-		}, nil, time.Since(stepStart))
+		soul.QdrantCollection = req.AgentID
+		if err := p.qdrantClient.CreateCollection(ctx, soul.QdrantCollection, qdrant.DefaultCollectionConfig()); err != nil {
+			logger.Warn("Qdrant collection creation failed", "error", err)
+			p.recordStep(run, domain.StepQdrant, domain.StepStatusFailed, nil, err, time.Since(stepStart))
+			// Continue - not fatal for basic operation
+		} else {
+			p.recordStep(run, domain.StepQdrant, domain.StepStatusComplete, map[string]interface{}{
+				"collection": soul.QdrantCollection,
+			}, nil, time.Since(stepStart))
+		}
 	}
 
 	// Step 6: Seed agent-memory
@@ -193,22 +221,28 @@ func (p *FullProvisioner) ProvisionFull(ctx context.Context, req *domain.Provisi
 	p.publishProgress(ctx, requestEvent, domain.StepMemory, 6, totalSteps, "Seeding agent memory...")
 
 	stepStart = time.Now()
-	if err := p.agentMemory.RegisterAgent(ctx, soul.AgentID, soul.NostrNpub, map[string]interface{}{
-		"tier":   soul.Tier,
-		"status": "provisioning",
-	}); err != nil {
-		logger.Warn("agent memory registration failed", "error", err)
-		p.recordStep(run, domain.StepMemory, domain.StepStatusFailed, nil, err, time.Since(stepStart))
-		// Continue - not fatal
+	if p.agentMemory == nil || !p.agentMemory.Configured() {
+		p.recordStep(run, domain.StepMemory, domain.StepStatusSkipped, map[string]interface{}{
+			"reason": "agent-memory url not configured",
+		}, nil, 0)
 	} else {
-		// Seed initial memories
-		entries := agentmemory.CreateInitialMemory(soul.AgentID, soul.Name, soul.Purpose, soul.SoulMD)
-		if err := p.agentMemory.SeedMemory(ctx, soul.AgentID, entries); err != nil {
-			logger.Warn("memory seeding failed", "error", err)
+		if err := p.agentMemory.RegisterAgent(ctx, soul.AgentID, soul.NostrNpub, map[string]interface{}{
+			"tier":   soul.Tier,
+			"status": "provisioning",
+		}); err != nil {
+			logger.Warn("agent memory registration failed", "error", err)
+			p.recordStep(run, domain.StepMemory, domain.StepStatusFailed, nil, err, time.Since(stepStart))
+			// Continue - not fatal
+		} else {
+			// Seed initial memories
+			entries := agentmemory.CreateInitialMemory(soul.AgentID, soul.Name, soul.Purpose, soul.SoulMD)
+			if err := p.agentMemory.SeedMemory(ctx, soul.AgentID, entries); err != nil {
+				logger.Warn("memory seeding failed", "error", err)
+			}
+			p.recordStep(run, domain.StepMemory, domain.StepStatusComplete, map[string]interface{}{
+				"entries": len(entries),
+			}, nil, time.Since(stepStart))
 		}
-		p.recordStep(run, domain.StepMemory, domain.StepStatusComplete, map[string]interface{}{
-			"entries": len(entries),
-		}, nil, time.Since(stepStart))
 	}
 
 	// Step 7: Initialize workspace
@@ -217,16 +251,22 @@ func (p *FullProvisioner) ProvisionFull(ctx context.Context, req *domain.Provisi
 	p.publishProgress(ctx, requestEvent, domain.StepWorkspace, 7, totalSteps, "Initializing workspace repository...")
 
 	stepStart = time.Now()
-	repoURL, err := p.workspaceManager.InitWorkspace(ctx, soul)
-	if err != nil {
-		logger.Warn("workspace initialization failed", "error", err)
-		p.recordStep(run, domain.StepWorkspace, domain.StepStatusFailed, nil, err, time.Since(stepStart))
-		// Continue - not fatal
+	if p.workspaceManager == nil {
+		p.recordStep(run, domain.StepWorkspace, domain.StepStatusSkipped, map[string]interface{}{
+			"reason": "workspace remote not configured",
+		}, nil, 0)
 	} else {
-		soul.WorkspaceRepoURL = repoURL
-		p.recordStep(run, domain.StepWorkspace, domain.StepStatusComplete, map[string]interface{}{
-			"repo_url": repoURL,
-		}, nil, time.Since(stepStart))
+		repoURL, err := p.workspaceManager.InitWorkspace(ctx, soul)
+		if err != nil {
+			logger.Warn("workspace initialization failed", "error", err)
+			p.recordStep(run, domain.StepWorkspace, domain.StepStatusFailed, nil, err, time.Since(stepStart))
+			// Continue - not fatal
+		} else {
+			soul.WorkspaceRepoURL = repoURL
+			p.recordStep(run, domain.StepWorkspace, domain.StepStatusComplete, map[string]interface{}{
+				"repo_url": repoURL,
+			}, nil, time.Since(stepStart))
+		}
 	}
 
 	// Step 8: Register NIP-05 and finalize
@@ -237,11 +277,13 @@ func (p *FullProvisioner) ProvisionFull(ctx context.Context, req *domain.Provisi
 	stepStart = time.Now()
 
 	// Register NIP-05
-	if err := p.nip05Manager.Register(ctx, soul.AgentID, soul.NostrPubkey, []string{
-		"wss://relay.sharegap.net",
-		"wss://armada.sharegap.net",
-	}); err != nil {
-		logger.Warn("NIP-05 registration failed", "error", err)
+	if p.nip05Manager != nil {
+		if err := p.nip05Manager.Register(ctx, soul.AgentID, soul.NostrPubkey, []string{
+			"wss://relay.sharegap.net",
+			"wss://armada.sharegap.net",
+		}); err != nil {
+			logger.Warn("NIP-05 registration failed", "error", err)
+		}
 	}
 
 	// Upload soul snapshot to Blossom (birth certificate)
@@ -259,11 +301,13 @@ func (p *FullProvisioner) ProvisionFull(ctx context.Context, req *domain.Provisi
 		"allowed_kinds": soul.AllowedKinds,
 	})
 
-	bd, err := p.blossomClient.Upload(ctx, soulJSON, "application/json")
-	if err != nil {
-		logger.Warn("soul snapshot upload failed", "error", err)
-	} else {
-		soul.SoulBlobHash = bd.SHA256
+	if p.blossomClient != nil {
+		bd, err := p.blossomClient.Upload(ctx, soulJSON, "application/json")
+		if err != nil {
+			logger.Warn("soul snapshot upload failed", "error", err)
+		} else {
+			soul.SoulBlobHash = bd.SHA256
+		}
 	}
 
 	// Mark soul as active
@@ -288,7 +332,11 @@ func (p *FullProvisioner) ProvisionFull(ctx context.Context, req *domain.Provisi
 
 			// Create initial deployment intent
 			if _, err := p.bahiaIntegration.CreateInitialDeployment(ctx, soul, serviceID); err != nil {
-				logger.Warn("bahia initial deployment failed", "error", err)
+				if errors.Is(err, ErrDeployableArtifactRequired) {
+					logger.Info("bahia initial deployment skipped", "reason", err)
+				} else {
+					logger.Warn("bahia initial deployment failed", "error", err)
+				}
 			}
 
 			// Sync status
@@ -302,10 +350,10 @@ func (p *FullProvisioner) ProvisionFull(ctx context.Context, req *domain.Provisi
 	}
 
 	p.recordStep(run, domain.StepDeploy, domain.StepStatusComplete, map[string]interface{}{
-		"nip05":          soul.NIP05,
-		"soul_blob":      soul.SoulBlobHash,
-		"bahia_service":  soul.BahiaServiceID,
-		"deploy_status":  soul.DeployStatus,
+		"nip05":         soul.NIP05,
+		"soul_blob":     soul.SoulBlobHash,
+		"bahia_service": soul.BahiaServiceID,
+		"deploy_status": soul.DeployStatus,
 	}, nil, time.Since(stepStart))
 
 	run.SoulID = &soul.ID
@@ -318,6 +366,26 @@ func (p *FullProvisioner) ProvisionFull(ctx context.Context, req *domain.Provisi
 	)
 
 	return soul, nil
+}
+
+func (p *FullProvisioner) SuspendSoul(context.Context, string, string) error {
+	return ErrLifecycleUnsupported
+}
+
+func (p *FullProvisioner) ResumeSoul(context.Context, string) error {
+	return ErrLifecycleUnsupported
+}
+
+func (p *FullProvisioner) RevokeSoul(context.Context, string, string) error {
+	return ErrLifecycleUnsupported
+}
+
+func (p *FullProvisioner) RegenerateSoul(context.Context, string, string) error {
+	return ErrLifecycleUnsupported
+}
+
+func (p *FullProvisioner) RedeploySoul(context.Context, string) error {
+	return ErrLifecycleUnsupported
 }
 
 func (p *FullProvisioner) publishProgress(ctx context.Context, requestEvent *nostr.Event, step domain.ProvisioningStep, current, total int, message string) {

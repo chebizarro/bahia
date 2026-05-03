@@ -15,9 +15,9 @@ import (
 // BahiaIntegration bridges Soul Factory with bahia's deployment registry.
 // It handles service registration, deployment intents, status sync, and lifecycle actions.
 type BahiaIntegration struct {
-	registry    *service.RegistryService
-	agentEnvID  uuid.UUID // Default environment for agents
-	logger      *slog.Logger
+	registry   *service.RegistryService
+	agentEnvID uuid.UUID // Default environment for agents
+	logger     *slog.Logger
 }
 
 // BahiaIntegrationConfig holds configuration for bahia integration.
@@ -85,22 +85,23 @@ func (bi *BahiaIntegration) CreateInitialDeployment(ctx context.Context, soul *d
 		return nil, nil
 	}
 
+	return nil, ErrDeployableArtifactRequired
+
 	// First, we need to register the agent's "artifact" (container image)
-	// For now, we use a placeholder image based on tier
 	artifact := &domain.Artifact{
-		ID:              uuid.New(),
-		ServiceID:       serviceID,
-		ImageRepo:       fmt.Sprintf("agents/%s", soul.AgentID),
-		ImageTag:        "latest",
-		ImageDigest:     fmt.Sprintf("sha256:%s", soul.SoulBlobHash), // Use soul blob as pseudo-digest
+		ID:                uuid.New(),
+		ServiceID:         serviceID,
+		ImageRepo:         fmt.Sprintf("agents/%s", soul.AgentID),
+		ImageTag:          "latest",
+		ImageDigest:       "",
 		ManifestMediaType: "application/vnd.oci.image.manifest.v1+json",
-		ScanStatus:      domain.ScanStatusUnknown,
+		ScanStatus:        domain.ScanStatusUnknown,
 		Metadata: map[string]interface{}{
-			"soul_id":    soul.ID.String(),
-			"agent_id":   soul.AgentID,
-			"tier":       string(soul.Tier),
-			"npub":       soul.NostrNpub,
-			"soul_type":  "provisioned",
+			"soul_id":   soul.ID.String(),
+			"agent_id":  soul.AgentID,
+			"tier":      string(soul.Tier),
+			"npub":      soul.NostrNpub,
+			"soul_type": "provisioned",
 		},
 		CreatedAt: time.Now().UTC(),
 	}
@@ -204,8 +205,8 @@ func (bi *BahiaIntegration) SyncSoulStatus(ctx context.Context, soul *domain.Age
 // HandleLifecycleAction handles soul lifecycle actions by updating bahia accordingly.
 func (bi *BahiaIntegration) HandleLifecycleAction(ctx context.Context, soul *domain.AgentSoul, action domain.SoulActionType) error {
 	if soul.BahiaServiceID == nil {
-		bi.logger.Debug("no bahia service ID, skipping lifecycle action", "action", action)
-		return nil
+		bi.logger.Debug("no bahia service ID for lifecycle action", "action", action)
+		return ErrLifecycleUnsupported
 	}
 
 	logger := bi.logger.With("agent_id", soul.AgentID, "service_id", *soul.BahiaServiceID, "action", action)
@@ -228,6 +229,8 @@ func (bi *BahiaIntegration) HandleLifecycleAction(ctx context.Context, soul *dom
 
 // suspendDeployment pauses the agent's deployment.
 func (bi *BahiaIntegration) suspendDeployment(ctx context.Context, soul *domain.AgentSoul) error {
+	return ErrLifecycleUnsupported
+
 	logger := bi.logger.With("agent_id", soul.AgentID)
 
 	// For now, we just update metadata to indicate suspended state.
@@ -252,6 +255,8 @@ func (bi *BahiaIntegration) suspendDeployment(ctx context.Context, soul *domain.
 
 // resumeDeployment resumes a suspended agent's deployment.
 func (bi *BahiaIntegration) resumeDeployment(ctx context.Context, soul *domain.AgentSoul) error {
+	return ErrLifecycleUnsupported
+
 	logger := bi.logger.With("agent_id", soul.AgentID)
 
 	svc, err := bi.registry.GetService(ctx, *soul.BahiaServiceID)
@@ -270,6 +275,8 @@ func (bi *BahiaIntegration) resumeDeployment(ctx context.Context, soul *domain.A
 
 // revokeDeployment terminates and removes an agent's deployment.
 func (bi *BahiaIntegration) revokeDeployment(ctx context.Context, soul *domain.AgentSoul) error {
+	return ErrLifecycleUnsupported
+
 	logger := bi.logger.With("agent_id", soul.AgentID)
 
 	// For revocation, we don't delete the service (audit trail)
@@ -295,6 +302,8 @@ func (bi *BahiaIntegration) revokeDeployment(ctx context.Context, soul *domain.A
 
 // redeployAgent triggers a fresh deployment for the agent.
 func (bi *BahiaIntegration) redeployAgent(ctx context.Context, soul *domain.AgentSoul) error {
+	return ErrLifecycleUnsupported
+
 	logger := bi.logger.With("agent_id", soul.AgentID)
 
 	if bi.agentEnvID == uuid.Nil {
@@ -343,10 +352,10 @@ func (bi *BahiaIntegration) EnsureAgentEnvironment(ctx context.Context) (uuid.UU
 
 	// Create the agents environment
 	env := &domain.Environment{
-		ID:            uuid.New(),
-		Name:          envName,
+		ID:             uuid.New(),
+		Name:           envName,
 		DeployStrategy: domain.DeployStrategyReplace,
-		Protected:     false, // Auto-approve agent deployments
+		Protected:      false, // Auto-approve agent deployments
 		RuntimeConfig: map[string]interface{}{
 			"type":        "agents",
 			"description": "Default environment for Soul Factory agents",

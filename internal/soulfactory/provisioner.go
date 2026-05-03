@@ -26,8 +26,14 @@ type ProgressCallback func(step domain.ProvisioningStep, current, total int, mes
 
 // Provision executes the full provisioning workflow.
 func (p *Provisioner) Provision(ctx context.Context, req *domain.ProvisioningRequest, run *domain.ProvisioningRun) (*domain.AgentSoul, error) {
+	if run != nil {
+		run.CurrentStep = domain.StepGenerate
+		p.recordStep(run, domain.StepGenerate, domain.StepStatusFailed, nil, ErrSoulFactoryUnavailable, 0)
+	}
+	return nil, ErrSoulFactoryUnavailable
+
 	logger := p.reactor.logger.With("agent_id", req.AgentID, "run_id", run.ID)
-	
+
 	soul := &domain.AgentSoul{
 		ID:            domain.NewUUID(),
 		AgentID:       req.AgentID,
@@ -51,14 +57,14 @@ func (p *Provisioner) Provision(ctx context.Context, req *domain.ProvisioningReq
 	logger.Info("step 1: generating soul content")
 	run.CurrentStep = domain.StepGenerate
 	p.publishProgress(ctx, requestEvent, domain.StepGenerate, 1, totalSteps, "Generating soul content via LLM...")
-	
+
 	stepStart := time.Now()
 	output, err := p.generateSoul(ctx, req, soul)
 	if err != nil {
 		p.recordStep(run, domain.StepGenerate, domain.StepStatusFailed, nil, err, time.Since(stepStart))
 		return nil, fmt.Errorf("generate soul: %w", err)
 	}
-	
+
 	// Apply generated content
 	soul.SoulMD = output.SoulMD
 	soul.IdentityMD = output.IdentityMD
@@ -70,7 +76,7 @@ func (p *Provisioner) Provision(ctx context.Context, req *domain.ProvisioningReq
 	if soul.Purpose == "" {
 		soul.Purpose = req.Brief // fallback
 	}
-	
+
 	p.recordStep(run, domain.StepGenerate, domain.StepStatusComplete, map[string]interface{}{
 		"allowed_kinds": output.AllowedKinds,
 		"tool_count":    len(output.ToolGrants),
@@ -80,18 +86,18 @@ func (p *Provisioner) Provision(ctx context.Context, req *domain.ProvisioningReq
 	logger.Info("step 2: registering with Signet")
 	run.CurrentStep = domain.StepSignet
 	p.publishProgress(ctx, requestEvent, domain.StepSignet, 2, totalSteps, "Registering keypair with Signet...")
-	
+
 	stepStart = time.Now()
 	pubkey, npub, bunkerURI, err := p.reactor.signer.ProvisionAgent(ctx, req.AgentID, soul.AllowedKinds)
 	if err != nil {
 		p.recordStep(run, domain.StepSignet, domain.StepStatusFailed, nil, err, time.Since(stepStart))
 		return nil, fmt.Errorf("signet provision: %w", err)
 	}
-	
+
 	soul.NostrPubkey = pubkey
 	soul.NostrNpub = npub
 	soul.BunkerURI = bunkerURI
-	
+
 	p.recordStep(run, domain.StepSignet, domain.StepStatusComplete, map[string]interface{}{
 		"pubkey": pubkey[:16] + "...",
 		"npub":   npub,
@@ -107,13 +113,13 @@ func (p *Provisioner) Provision(ctx context.Context, req *domain.ProvisioningReq
 	logger.Info("step 4: publishing Nostr profile")
 	run.CurrentStep = domain.StepProfile
 	p.publishProgress(ctx, requestEvent, domain.StepProfile, 4, totalSteps, "Publishing Nostr profile (kind:0)...")
-	
+
 	stepStart = time.Now()
 	if err := p.publishProfile(ctx, soul); err != nil {
 		p.recordStep(run, domain.StepProfile, domain.StepStatusFailed, nil, err, time.Since(stepStart))
 		return nil, fmt.Errorf("publish profile: %w", err)
 	}
-	
+
 	p.recordStep(run, domain.StepProfile, domain.StepStatusComplete, map[string]interface{}{
 		"nip05": soul.NIP05,
 	}, nil, time.Since(stepStart))
@@ -248,6 +254,8 @@ func (p *Provisioner) recordStep(run *domain.ProvisioningRun, step domain.Provis
 
 // SuspendSoul temporarily disables an agent.
 func (p *Provisioner) SuspendSoul(ctx context.Context, soulRef, reason string) error {
+	return ErrLifecycleUnsupported
+
 	logger := p.reactor.logger.With("soul", soulRef, "action", "suspend")
 	logger.Info("suspending soul", "reason", reason)
 
@@ -284,6 +292,8 @@ func (p *Provisioner) SuspendSoul(ctx context.Context, soulRef, reason string) e
 
 // ResumeSoul re-enables a suspended agent.
 func (p *Provisioner) ResumeSoul(ctx context.Context, soulRef string) error {
+	return ErrLifecycleUnsupported
+
 	logger := p.reactor.logger.With("soul", soulRef, "action", "resume")
 	logger.Info("resuming soul")
 
@@ -323,6 +333,8 @@ func (p *Provisioner) ResumeSoul(ctx context.Context, soulRef string) error {
 
 // RevokeSoul permanently disables an agent.
 func (p *Provisioner) RevokeSoul(ctx context.Context, soulRef, reason string) error {
+	return ErrLifecycleUnsupported
+
 	logger := p.reactor.logger.With("soul", soulRef, "action", "revoke")
 	logger.Info("revoking soul", "reason", reason)
 
@@ -359,6 +371,8 @@ func (p *Provisioner) RevokeSoul(ctx context.Context, soulRef, reason string) er
 
 // RegenerateSoul re-runs LLM generation with a new brief.
 func (p *Provisioner) RegenerateSoul(ctx context.Context, soulRef, newBrief string) error {
+	return ErrLifecycleUnsupported
+
 	logger := p.reactor.logger.With("soul", soulRef, "action", "regenerate")
 	logger.Info("regenerating soul")
 
@@ -407,6 +421,8 @@ func (p *Provisioner) RegenerateSoul(ctx context.Context, soulRef, newBrief stri
 
 // RedeploySoul triggers a bahia redeployment.
 func (p *Provisioner) RedeploySoul(ctx context.Context, soulRef string) error {
+	return ErrLifecycleUnsupported
+
 	logger := p.reactor.logger.With("soul", soulRef, "action", "redeploy")
 	logger.Info("redeploying soul")
 
@@ -444,5 +460,3 @@ func (p *Provisioner) RedeploySoul(ctx context.Context, soulRef string) error {
 	logger.Info("soul redeploy initiated", "service_id", soul.BahiaServiceID)
 	return nil
 }
-
-

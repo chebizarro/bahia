@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -360,11 +361,16 @@ func New(cfg *config.Config) (*App, error) {
 		logger.Info("hive-ci bridge enabled")
 	}
 
-	// Payment service (Cashu integration).
+	// Payment service exposes payment record/history and cost-estimate APIs.
+	// It does not create or redeem Cashu tokens; live wallet flows remain gated
+	// until a mint-backed wallet is explicitly wired into runtime payment paths.
 	var paymentSvc *service.PaymentService
 	if cfg.Cashu.Enabled {
+		if strings.TrimSpace(cfg.Cashu.MintURL) == "" {
+			return nil, fmt.Errorf("cashu.mint_url is required when cashu.enabled=true")
+		}
 		paymentSvc = service.NewPaymentService(paymentRepo, workerRepo, runRepo, logger)
-		logger.Info("cashu payment integration enabled", zap.String("mint_url", cfg.Cashu.MintURL))
+		logger.Info("cashu payment records enabled; live wallet token flows are not wired", zap.String("mint_url", cfg.Cashu.MintURL))
 	}
 
 	// Policy service.

@@ -5,12 +5,17 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 )
+
+// ErrNotConfigured is returned when a Qdrant operation is attempted without an explicit URL.
+var ErrNotConfigured = errors.New("qdrant client not configured")
 
 // Client communicates with Qdrant REST API.
 type Client struct {
@@ -21,7 +26,7 @@ type Client struct {
 
 // Config holds Qdrant client configuration.
 type Config struct {
-	URL     string        // Qdrant REST API URL (e.g., http://192.168.40.104:6333)
+	URL     string        // Qdrant REST API URL (e.g., http://localhost:6333)
 	Timeout time.Duration // Request timeout
 }
 
@@ -35,7 +40,7 @@ type CollectionConfig struct {
 // DefaultCollectionConfig returns the default config for agent collections.
 func DefaultCollectionConfig() CollectionConfig {
 	return CollectionConfig{
-		VectorSize:    768,  // nomic-embed-text dimension
+		VectorSize:    768, // nomic-embed-text dimension
 		Distance:      "Cosine",
 		OnDiskPayload: true,
 	}
@@ -43,9 +48,7 @@ func DefaultCollectionConfig() CollectionConfig {
 
 // NewClient creates a new Qdrant client.
 func NewClient(config Config, logger *slog.Logger) *Client {
-	if config.URL == "" {
-		config.URL = "http://192.168.40.104:6333"
-	}
+	config.URL = strings.TrimRight(strings.TrimSpace(config.URL), "/")
 	if config.Timeout == 0 {
 		config.Timeout = 30 * time.Second
 	}
@@ -62,8 +65,23 @@ func NewClient(config Config, logger *slog.Logger) *Client {
 	}
 }
 
+// Configured reports whether this client has an explicit Qdrant endpoint.
+func (c *Client) Configured() bool {
+	return c != nil && strings.TrimSpace(c.baseURL) != ""
+}
+
+func (c *Client) requireConfigured() error {
+	if !c.Configured() {
+		return ErrNotConfigured
+	}
+	return nil
+}
+
 // CreateCollection creates a new vector collection.
 func (c *Client) CreateCollection(ctx context.Context, name string, config CollectionConfig) error {
+	if err := c.requireConfigured(); err != nil {
+		return err
+	}
 	c.logger.Info("creating Qdrant collection",
 		"name", name,
 		"vector_size", config.VectorSize,
@@ -110,6 +128,9 @@ func (c *Client) CreateCollection(ctx context.Context, name string, config Colle
 
 // CollectionExists checks if a collection exists.
 func (c *Client) CollectionExists(ctx context.Context, name string) (bool, error) {
+	if err := c.requireConfigured(); err != nil {
+		return false, err
+	}
 	url := fmt.Sprintf("%s/collections/%s", c.baseURL, name)
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
@@ -135,6 +156,9 @@ func (c *Client) CollectionExists(ctx context.Context, name string) (bool, error
 
 // DeleteCollection deletes a collection.
 func (c *Client) DeleteCollection(ctx context.Context, name string) error {
+	if err := c.requireConfigured(); err != nil {
+		return err
+	}
 	c.logger.Info("deleting Qdrant collection", "name", name)
 
 	url := fmt.Sprintf("%s/collections/%s", c.baseURL, name)
@@ -159,6 +183,9 @@ func (c *Client) DeleteCollection(ctx context.Context, name string) error {
 
 // UpsertPoints inserts or updates points in a collection.
 func (c *Client) UpsertPoints(ctx context.Context, collection string, points []Point) error {
+	if err := c.requireConfigured(); err != nil {
+		return err
+	}
 	body := map[string]interface{}{
 		"points": points,
 	}
@@ -192,6 +219,9 @@ func (c *Client) UpsertPoints(ctx context.Context, collection string, points []P
 
 // Search performs a vector similarity search.
 func (c *Client) Search(ctx context.Context, collection string, vector []float32, limit int) ([]SearchResult, error) {
+	if err := c.requireConfigured(); err != nil {
+		return nil, err
+	}
 	body := map[string]interface{}{
 		"vector":       vector,
 		"limit":        limit,
@@ -249,6 +279,9 @@ type SearchResult struct {
 
 // Health checks Qdrant connectivity.
 func (c *Client) Health(ctx context.Context) error {
+	if err := c.requireConfigured(); err != nil {
+		return err
+	}
 	url := fmt.Sprintf("%s/", c.baseURL)
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {

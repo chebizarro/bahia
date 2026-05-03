@@ -504,6 +504,19 @@ func TestPrivilegedRouteConfigValidation(t *testing.T) {
 	})
 }
 
+func TestCashuConfigValidation(t *testing.T) {
+	cfg := Defaults()
+	cfg.Cashu.Enabled = true
+	if err := cfg.validate(); err == nil || !strings.Contains(err.Error(), "cashu.mint_url") {
+		t.Fatalf("validate error = %v, want cashu.mint_url requirement", err)
+	}
+
+	cfg.Cashu.MintURL = "https://mint.example.com"
+	if err := cfg.validate(); err != nil {
+		t.Fatalf("validate with mint URL should pass: %v", err)
+	}
+}
+
 func TestLoadPrivilegedRouteConfigFromYAML(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	content := []byte(`auth:

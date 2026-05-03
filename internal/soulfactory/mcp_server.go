@@ -12,9 +12,9 @@ import (
 // MCPServer provides an MCP-compatible interface for Soul Factory operations.
 // This allows agents to interact with Soul Factory programmatically.
 type MCPServer struct {
-	reactor      *Reactor
-	provisioner  *FullProvisioner
-	logger       *slog.Logger
+	reactor     *Reactor
+	provisioner *FullProvisioner
+	logger      *slog.Logger
 }
 
 // MCPServerConfig holds MCP server configuration.
@@ -221,14 +221,7 @@ func (s *MCPServer) CallTool(ctx context.Context, name string, arguments map[str
 }
 
 func (s *MCPServer) handleListSouls(ctx context.Context, args map[string]interface{}) (*MCPToolResult, error) {
-	// In production, query relays for kind:31951 events
-	// For now, return placeholder
-	result := map[string]interface{}{
-		"souls": []map[string]interface{}{},
-		"total": 0,
-		"note":  "Query relays for kind:31951 to get actual souls",
-	}
-	return jsonResult(result)
+	return errorResult("soul listing is unavailable: relay-backed list queries are not implemented"), nil
 }
 
 func (s *MCPServer) handleGetSoul(ctx context.Context, args map[string]interface{}) (*MCPToolResult, error) {
@@ -249,31 +242,7 @@ func (s *MCPServer) handleGetSoul(ctx context.Context, args map[string]interface
 }
 
 func (s *MCPServer) handleListTemplates(ctx context.Context, args map[string]interface{}) (*MCPToolResult, error) {
-	// In production, query relays for kind:31950 events
-	result := map[string]interface{}{
-		"templates": []map[string]interface{}{
-			{
-				"identifier":  "research-agent",
-				"name":        "Research Agent",
-				"description": "Investigates topics and synthesizes findings",
-				"tier":        "standard",
-			},
-			{
-				"identifier":  "code-reviewer",
-				"name":        "Code Reviewer",
-				"description": "Reviews code for quality and security",
-				"tier":        "standard",
-			},
-			{
-				"identifier":  "monitor-agent",
-				"name":        "Monitor Agent",
-				"description": "Monitors systems and alerts on issues",
-				"tier":        "lightweight",
-			},
-		},
-		"note": "Query relays for kind:31950 to get actual templates",
-	}
-	return jsonResult(result)
+	return errorResult("template listing is unavailable: relay-backed template queries are not implemented"), nil
 }
 
 func (s *MCPServer) handleProvision(ctx context.Context, args map[string]interface{}) (*MCPToolResult, error) {
@@ -297,42 +266,14 @@ func (s *MCPServer) handleProvision(ctx context.Context, args map[string]interfa
 		tier = "standard"
 	}
 
-	// Create run tracker (request would be built and published in production)
-	_ = &domain.ProvisioningRequest{
-		AgentID:     agentID,
-		Name:        name,
-		Brief:       brief,
-		Tier:        domain.SoulTier(tier),
-		TemplateRef: template,
-	}
-
-	run := &domain.ProvisioningRun{
-		ID:      domain.NewUUID(),
-		AgentID: agentID,
-		Status:  domain.ProvisioningStatusPending,
-	}
-
-	// Note: In production, this would publish the request event and return
-	// Here we show what would happen
-	result := map[string]interface{}{
-		"status":     "submitted",
-		"request_id": run.ID.String(),
-		"agent_id":   agentID,
-		"message":    "Provisioning request submitted. Use soul_factory_get_status to track progress.",
-	}
-
-	s.logger.Info("provisioning request submitted",
-		"agent_id", agentID,
-		"request_id", run.ID,
-	)
-
-	return jsonResult(result)
+	return errorResult("provisioning is unavailable: MCP server cannot publish a signed Nostr request in this configuration"), nil
 }
 
 func (s *MCPServer) handleAction(ctx context.Context, args map[string]interface{}) (*MCPToolResult, error) {
 	agentID, _ := args["agent_id"].(string)
 	action, _ := args["action"].(string)
 	reason, _ := args["reason"].(string)
+	_ = reason
 
 	if agentID == "" {
 		return errorResult("agent_id is required"), nil
@@ -349,21 +290,7 @@ func (s *MCPServer) handleAction(ctx context.Context, args map[string]interface{
 		return errorResult(fmt.Sprintf("invalid action: %s", action)), nil
 	}
 
-	// In production, publish kind:1950 event
-	result := map[string]interface{}{
-		"status":   "submitted",
-		"agent_id": agentID,
-		"action":   action,
-		"reason":   reason,
-		"message":  fmt.Sprintf("Action '%s' submitted for soul '%s'", action, agentID),
-	}
-
-	s.logger.Info("lifecycle action submitted",
-		"agent_id", agentID,
-		"action", action,
-	)
-
-	return jsonResult(result)
+	return errorResult(fmt.Sprintf("lifecycle action %q is unavailable: MCP server cannot publish a signed Nostr action in this configuration", action)), nil
 }
 
 func (s *MCPServer) handleRegenerate(ctx context.Context, args map[string]interface{}) (*MCPToolResult, error) {
@@ -377,17 +304,7 @@ func (s *MCPServer) handleRegenerate(ctx context.Context, args map[string]interf
 		return errorResult("new_brief is required"), nil
 	}
 
-	// In production, publish kind:1950 with action=regenerate
-	result := map[string]interface{}{
-		"status":    "submitted",
-		"agent_id":  agentID,
-		"new_brief": newBrief[:min(100, len(newBrief))] + "...",
-		"message":   "Regeneration request submitted",
-	}
-
-	s.logger.Info("regenerate request submitted", "agent_id", agentID)
-
-	return jsonResult(result)
+	return errorResult("regeneration is unavailable: MCP server cannot publish a signed Nostr action in this configuration"), nil
 }
 
 func (s *MCPServer) handleGetStatus(ctx context.Context, args map[string]interface{}) (*MCPToolResult, error) {

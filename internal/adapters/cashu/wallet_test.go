@@ -1,6 +1,10 @@
 package cashu
 
 import (
+	"encoding/json"
+	"errors"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"go.uber.org/zap"
@@ -79,6 +83,18 @@ func TestWallet_GetBalance(t *testing.T) {
 
 	if got := wallet.GetBalance("https://mint.example.com"); got != 150 {
 		t.Errorf("GetBalance() = %v, want 150", got)
+	}
+}
+
+func TestWallet_NormalizesMintMapKeys(t *testing.T) {
+	wallet := NewWallet([]MintConfig{{URL: "https://mint.example.com/"}}, zap.NewNop())
+	wallet.AddProofs("https://mint.example.com/", []Proof{{ID: "1", Amount: 10}})
+
+	if got := wallet.GetBalance("https://mint.example.com"); got != 10 {
+		t.Fatalf("GetBalance normalized mint = %d, want 10", got)
+	}
+	if _, _, err := wallet.selectProofs("https://mint.example.com/", 10); err != nil {
+		t.Fatalf("selectProofs with normalized mint error = %v", err)
 	}
 }
 
@@ -187,36 +203,29 @@ func TestWallet_SelectProofs_NoProofs(t *testing.T) {
 	}
 }
 
-func TestToken_RoundTrip(t *testing.T) {
-	// Test that a token can be created and received
-	wallet := NewWallet(nil, zap.NewNop())
+func TestWallet_CreatePaymentToken_UnsupportedInsteadOfFakeToken(t *testing.T) {
 	mintURL := "https://mint.example.com"
-
-	// Add proofs
+	wallet := NewWallet([]MintConfig{{URL: mintURL}}, zap.NewNop())
 	wallet.AddProofs(mintURL, []Proof{
 		{ID: "test1", Amount: 100, Secret: "secret1", C: "commitment1"},
 	})
 
-	// Create a payment token
 	ctx := t.Context()
 	token, err := wallet.CreatePaymentToken(ctx, mintURL, 50, "recipientpubkey123")
-	if err != nil {
-		t.Fatalf("CreatePaymentToken() error = %v", err)
+	if !errors.Is(err, ErrMintBackedFlowUnsupported) {
+		t.Fatalf("CreatePaymentToken() error = %v, want ErrMintBackedFlowUnsupported", err)
 	}
-
-	if token == "" {
-		t.Error("CreatePaymentToken() returned empty token")
+	if token != "" {
+		t.Fatalf("CreatePaymentToken() returned fake token %q", token)
 	}
-
-	// Balance should be reduced
-	if got := wallet.GetBalance(mintURL); got != 50 {
-		t.Errorf("balance after payment = %d, want 50", got)
+	if got := wallet.GetBalance(mintURL); got != 100 {
+		t.Errorf("balance after unsupported payment = %d, want 100", got)
 	}
 }
 
 func TestWallet_CreatePaymentToken_InsufficientBalance(t *testing.T) {
-	wallet := NewWallet(nil, zap.NewNop())
 	mintURL := "https://mint.example.com"
+	wallet := NewWallet([]MintConfig{{URL: mintURL}}, zap.NewNop())
 
 	wallet.AddProofs(mintURL, []Proof{
 		{ID: "1", Amount: 10},
@@ -226,5 +235,55 @@ func TestWallet_CreatePaymentToken_InsufficientBalance(t *testing.T) {
 	_, err := wallet.CreatePaymentToken(ctx, mintURL, 100, "recipient")
 	if err == nil {
 		t.Error("CreatePaymentToken() should error with insufficient balance")
+	}
+}
+
+func TestWallet_ReceiveTokenUnsupported(t *testing.T) {
+	wallet := NewWallet([]MintConfig{{URL: "https://mint.example.com"}}, zap.NewNop())
+	_, _, err := wallet.ReceiveToken(t.Context(), "cashuAdeadbeef")
+	if !errors.Is(err, ErrMintBackedFlowUnsupported) {
+		t.Fatalf("ReceiveToken() error = %v, want ErrMintBackedFlowUnsupported", err)
+	}
+}
+
+func TestWallet_CreateMintQuoteCallsMint(t *testing.T) {
+	var gotPath string
+	var gotAmount int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		var req struct {
+			Amount int64  `json:"amount"`
+			Unit   string `json:"unit"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		gotAmount = req.Amount
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"quote":   "quote-123",
+			"request": "lnbc123",
+			"amount":  req.Amount,
+			"state":   "UNPAID",
+		})
+	}))
+	defer server.Close()
+
+	wallet := NewWallet([]MintConfig{{URL: server.URL}}, zap.NewNop())
+	quote, err := wallet.CreateMintQuote(t.Context(), server.URL+"/", 123)
+	if err != nil {
+		t.Fatalf("CreateMintQuote() error = %v", err)
+	}
+	if gotPath != "/v1/mint/quote/bolt11" {
+		t.Fatalf("mint path = %s, want /v1/mint/quote/bolt11", gotPath)
+	}
+	if gotAmount != 123 || quote.QuoteID != "quote-123" || quote.Request != "lnbc123" {
+		t.Fatalf("quote = %+v, gotAmount=%d", quote, gotAmount)
+	}
+}
+
+func TestWallet_InitializeNoMints(t *testing.T) {
+	wallet := NewWallet(nil, zap.NewNop())
+	if err := wallet.Initialize(t.Context()); !errors.Is(err, ErrNotConfigured) {
+		t.Fatalf("Initialize() error = %v, want ErrNotConfigured", err)
 	}
 }
