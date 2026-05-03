@@ -143,7 +143,7 @@ export class PrivateControlplaneTransport {
     };
   }
 
-  awaitPrivateResult({ requestEventId, resultKinds = [PRIVATE_RESULT_KIND], signal, timeoutMs = null, servicePubkey = this.servicePubkey } = {}) {
+  awaitPrivateResult({ requestEventId, resultKinds = [PRIVATE_RESULT_KIND], signal, servicePubkey = this.servicePubkey } = {}) {
     if (!requestEventId) return Promise.reject(new Error('requestEventId is required'));
     if (!Array.isArray(resultKinds) || resultKinds.length === 0) return Promise.reject(new Error('resultKinds are required'));
     if (authState.status !== 'authenticated' || !authState.pubkey) return Promise.reject(new Error('Nostr authentication is required for private transport'));
@@ -151,15 +151,12 @@ export class PrivateControlplaneTransport {
 
     return new Promise((resolve, reject) => {
       let unsubscribe = null;
-      let timer = null;
       let settled = false;
       const seen = new Set();
       const pendingRelays = openRelayUrls(this.client);
       const requesterPubkey = authState.pubkey;
 
       const cleanup = () => {
-        if (timer) clearTimeout(timer);
-        timer = null;
         if (unsubscribe) unsubscribe();
         unsubscribe = null;
         signal?.removeEventListener?.('abort', onAbort);
@@ -185,12 +182,6 @@ export class PrivateControlplaneTransport {
       }
 
       signal?.addEventListener?.('abort', onAbort, { once: true });
-
-      if (Number.isFinite(timeoutMs) && timeoutMs > 0) {
-        timer = setTimeout(() => {
-          settle(reject, new Error(`Timed out waiting for private Nostr result for ${requestEventId}`));
-        }, timeoutMs);
-      }
 
       const filter = { kinds: resultKinds, '#e': [requestEventId], '#p': [requesterPubkey], authors: [servicePubkey] };
       unsubscribe = this.client.subscribe([filter], {
@@ -226,7 +217,7 @@ export class PrivateControlplaneTransport {
     });
   }
 
-  async requestPrivateResult({ resultKinds = [PRIVATE_RESULT_KIND], signal, timeoutMs = null, ...request } = {}) {
+  async requestPrivateResult({ resultKinds = [PRIVATE_RESULT_KIND], signal, ...request } = {}) {
     await this.connect();
     const event = await this.buildPrivateRequestEvent(request);
     const abortController = typeof AbortController !== 'undefined' ? new AbortController() : null;
@@ -234,7 +225,7 @@ export class PrivateControlplaneTransport {
     const forwardAbort = () => abortController?.abort(signal?.reason);
     signal?.addEventListener?.('abort', forwardAbort, { once: true });
 
-    const resultPromise = this.awaitPrivateResult({ requestEventId: event.id, resultKinds, signal: waitSignal, timeoutMs });
+    const resultPromise = this.awaitPrivateResult({ requestEventId: event.id, resultKinds, signal: waitSignal });
     try {
       const publishResult = await this.publishPrivateRequest(event);
       const result = await resultPromise;

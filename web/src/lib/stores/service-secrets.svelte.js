@@ -7,8 +7,6 @@ export const serviceSecretsState = $state({
   errorByService: {}
 });
 
-const PRIVATE_ACTION_TIMEOUT_MS = 15000;
-
 export const SERVICE_SECRET_PRIVATE_OPERATIONS = {
   list: 'services.secrets.list',
   create: 'services.secrets.create',
@@ -71,8 +69,7 @@ async function privateSecretRequest(operation, payload = {}) {
   const response = await requestPrivateResult({
     operation,
     payload,
-    tags: [['domain', 'service-secrets']],
-    timeoutMs: PRIVATE_ACTION_TIMEOUT_MS
+    tags: [['domain', 'service-secrets']]
   });
   return unwrapPrivateResult(response);
 }

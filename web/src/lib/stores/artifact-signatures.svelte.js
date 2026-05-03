@@ -7,8 +7,6 @@ export const artifactSignatureState = $state({
   lastResultByArtifact: {}
 });
 
-const PRIVATE_ACTION_TIMEOUT_MS = 30000;
-
 export const ARTIFACT_SIGNATURE_PRIVATE_OPERATIONS = {
   verify: 'artifacts.signatures.verify'
 };
@@ -44,8 +42,7 @@ export async function verifyArtifactSignatures(artifactId) {
     const response = await requestPrivateResult({
       operation: ARTIFACT_SIGNATURE_PRIVATE_OPERATIONS.verify,
       payload: { artifact_id: id },
-      tags: [['domain', 'artifact-signatures']],
-      timeoutMs: PRIVATE_ACTION_TIMEOUT_MS
+      tags: [['domain', 'artifact-signatures']]
     });
     const payload = unwrapPrivateResult(response);
     setArtifactState('lastResultByArtifact', id, payload);

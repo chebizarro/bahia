@@ -7,8 +7,6 @@ export const deploymentRunLogsState = $state({
   errorByRun: {}
 });
 
-const PRIVATE_ACTION_TIMEOUT_MS = 15000;
-
 export const DEPLOYMENT_RUN_LOG_PRIVATE_OPERATIONS = {
   get: 'deployments.run_logs.get'
 };
@@ -48,8 +46,7 @@ export async function loadDeploymentRunLogs(runId, { tail = 100, stream = 'merge
     const response = await requestPrivateResult({
       operation: DEPLOYMENT_RUN_LOG_PRIVATE_OPERATIONS.get,
       payload: { run_id: id, tail: Number(tail) || 100, stream },
-      tags: [['domain', 'deployment-run-logs']],
-      timeoutMs: PRIVATE_ACTION_TIMEOUT_MS
+      tags: [['domain', 'deployment-run-logs']]
     });
     const payload = unwrapPrivateResult(response);
     const logs = payload?.logs ?? payload;
