@@ -189,12 +189,10 @@ func TestGetSystemInfo(t *testing.T) {
 				"browser_relays":                   []string{"ws://localhost:3000/relay"},
 				"sidecar_url":                      "ws://localhost:3000/relay",
 				"browser_encrypted_request_relays": []string{"wss://request-browser.example"},
-				"private_browser_relays":           []string{"wss://request-browser.example"},
 				"service_pubkey":                   "service-pubkey",
 			},
 			"features": map[string]bool{
 				"encrypted_nostr_requests": true,
-				"private_nostr_transport":  true,
 			},
 		}})
 	}))
@@ -214,17 +212,14 @@ func TestGetSystemInfo(t *testing.T) {
 	if len(info.Nostr.BrowserEncryptedRequestRelays) != 1 || info.Nostr.BrowserEncryptedRequestRelays[0] != "wss://request-browser.example" {
 		t.Fatalf("browser_encrypted_request_relays = %#v", info.Nostr.BrowserEncryptedRequestRelays)
 	}
-	if len(info.Nostr.PrivateBrowserRelays) != 1 || info.Nostr.PrivateBrowserRelays[0] != "wss://request-browser.example" {
-		t.Fatalf("private_browser_relays alias = %#v", info.Nostr.PrivateBrowserRelays)
-	}
 	if info.Nostr.ServicePubkey != "service-pubkey" {
 		t.Fatalf("service_pubkey = %q", info.Nostr.ServicePubkey)
 	}
 	if !info.Features["encrypted_nostr_requests"] {
 		t.Fatalf("encrypted_nostr_requests feature was not decoded: %#v", info.Features)
 	}
-	if !info.Features["private_nostr_transport"] {
-		t.Fatalf("deprecated private_nostr_transport alias was not decoded: %#v", info.Features)
+	if _, ok := info.Features["private_nostr_transport"]; ok {
+		t.Fatalf("removed private_nostr_transport feature should not be present: %#v", info.Features)
 	}
 }
 

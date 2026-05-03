@@ -306,9 +306,7 @@ type SystemInfoNostr struct {
 	BrowserRelays                 []string `json:"browser_relays,omitempty"`
 	SidecarURL                    string   `json:"sidecar_url,omitempty"`
 	BrowserEncryptedRequestRelays []string `json:"browser_encrypted_request_relays,omitempty"`
-	// PrivateBrowserRelays is a deprecated alias for BrowserEncryptedRequestRelays.
-	PrivateBrowserRelays []string `json:"private_browser_relays,omitempty"`
-	ServicePubkey        string   `json:"service_pubkey,omitempty"`
+	ServicePubkey                 string   `json:"service_pubkey,omitempty"`
 }
 
 type apiResponse struct {

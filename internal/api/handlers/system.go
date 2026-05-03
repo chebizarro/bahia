@@ -49,12 +49,10 @@ type NostrConfigInfo struct {
 	Relays                        []string `json:"relays"`
 	BrowserRelays                 []string `json:"browser_relays,omitempty"`
 	BrowserEncryptedRequestRelays []string `json:"browser_encrypted_request_relays,omitempty"`
-	// PrivateBrowserRelays is a deprecated alias for BrowserEncryptedRequestRelays.
-	PrivateBrowserRelays []string `json:"private_browser_relays,omitempty"`
-	SidecarURL           string   `json:"sidecar_url,omitempty"`
-	PublishEnabled       bool     `json:"publish_enabled"`
-	ServicePubkey        string   `json:"service_pubkey,omitempty"`
-	ServiceNpub          string   `json:"service_npub,omitempty"`
+	SidecarURL                    string   `json:"sidecar_url,omitempty"`
+	PublishEnabled                bool     `json:"publish_enabled"`
+	ServicePubkey                 string   `json:"service_pubkey,omitempty"`
+	ServiceNpub                   string   `json:"service_npub,omitempty"`
 }
 
 // ControlPlaneInfo advertises the canonical Nostr control-plane contract.
@@ -184,7 +182,6 @@ func (h *SystemHandler) GetInfo(w http.ResponseWriter, r *http.Request) {
 	}
 	browserEncryptedRequestRelays := h.browserEncryptedRequestRelays()
 	nostrInfo.BrowserEncryptedRequestRelays = browserEncryptedRequestRelays
-	nostrInfo.PrivateBrowserRelays = browserEncryptedRequestRelays
 
 	// Derive service pubkey from private key if available
 	if h.cfg.Nostr.PrivateKey != "" {
@@ -221,8 +218,6 @@ func (h *SystemHandler) GetInfo(w http.ResponseWriter, r *http.Request) {
 
 	encryptedNostrRequestsEnabled := len(browserEncryptedRequestRelays) > 0 && len(h.encryptedRequestRelays()) > 0 && h.cfg.Nostr.PrivateKey != ""
 
-	// Feature flags. The removed legacy compatibility surfaces remain present
-	// as false values for older clients that probe capabilities defensively.
 	features := map[string]bool{
 		"oci":                      h.cfg.OCI.Enabled,
 		"harbor":                   h.cfg.Harbor.Enabled,
@@ -236,7 +231,6 @@ func (h *SystemHandler) GetInfo(w http.ResponseWriter, r *http.Request) {
 		"relay_sidecar":            h.cfg.Nostr.Sidecar.Enabled,
 		"relay_read_models":        h.cfg.Nostr.Sidecar.Enabled && h.cfg.Nostr.PublishEnabled,
 		"encrypted_nostr_requests": encryptedNostrRequestsEnabled,
-		"private_nostr_transport":  encryptedNostrRequestsEnabled,
 		"llm_control_plane":        h.cfg.LLM.Enabled,
 		"direct_nostr_http_auth":   h.cfg.Auth.Enabled,
 		"mcp_transport":            h.mcpTransportEnabled,
@@ -341,18 +335,12 @@ func (h *SystemHandler) encryptedRequestRelays() []string {
 	if len(h.cfg.Nostr.EncryptedRequestRelays) > 0 {
 		return append([]string(nil), h.cfg.Nostr.EncryptedRequestRelays...)
 	}
-	if len(h.cfg.Nostr.PrivateRelays) > 0 {
-		return append([]string(nil), h.cfg.Nostr.PrivateRelays...)
-	}
 	return nil
 }
 
 func (h *SystemHandler) browserEncryptedRequestRelays() []string {
 	if len(h.cfg.Nostr.BrowserEncryptedRequestRelays) > 0 {
 		return append([]string(nil), h.cfg.Nostr.BrowserEncryptedRequestRelays...)
-	}
-	if len(h.cfg.Nostr.PrivateBrowserRelays) > 0 {
-		return append([]string(nil), h.cfg.Nostr.PrivateBrowserRelays...)
 	}
 	return nil
 }

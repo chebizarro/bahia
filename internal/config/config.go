@@ -124,19 +124,23 @@ type NostrConfig struct {
 	PrivateKey string   `koanf:"private_key"`
 	Relays     []string `koanf:"relays"`
 	// EncryptedRequestRelays are ordinary backend relay URLs used for encrypted
-	// request/result Nostr events. PrivateRelays is a deprecated alias retained
-	// for mixed-version rollouts.
+	// request/result Nostr events.
 	EncryptedRequestRelays []string `koanf:"encrypted_request_relays"`
-	PrivateRelays          []string `koanf:"private_relays"`
 	BrowserRelays          []string `koanf:"browser_relays"`
 	// BrowserEncryptedRequestRelays are browser-safe relay URLs advertised for
-	// encrypted request/result Nostr events. PrivateBrowserRelays is a deprecated alias
-	// retained for mixed-version rollouts.
-	BrowserEncryptedRequestRelays []string           `koanf:"browser_encrypted_request_relays"`
-	PrivateBrowserRelays          []string           `koanf:"private_browser_relays"`
-	AuthorizedPubkeys             []string           `koanf:"authorized_pubkeys"`
-	PublishEnabled                bool               `koanf:"publish_enabled"`
-	Sidecar                       RelaySidecarConfig `koanf:"sidecar"`
+	// encrypted request/result Nostr events.
+	BrowserEncryptedRequestRelays []string `koanf:"browser_encrypted_request_relays"`
+
+	// PrivateRelays and PrivateBrowserRelays are internal mirrors for runtime
+	// callers that have not moved to the canonical field names yet. They are not
+	// loaded from config; nostr.private_relays and nostr.private_browser_relays
+	// are rejected in Load.
+	PrivateRelays        []string `koanf:"-"`
+	PrivateBrowserRelays []string `koanf:"-"`
+
+	AuthorizedPubkeys []string           `koanf:"authorized_pubkeys"`
+	PublishEnabled    bool               `koanf:"publish_enabled"`
+	Sidecar           RelaySidecarConfig `koanf:"sidecar"`
 }
 
 // RelaySidecarConfig holds the local Khatru relay sidecar settings.
@@ -484,6 +488,9 @@ func Load(configPath string) (*Config, error) {
 	if err := rejectRemovedAuthKeys(k); err != nil {
 		return nil, err
 	}
+	if err := rejectRemovedEncryptedRequestKeys(k); err != nil {
+		return nil, err
+	}
 	if err := k.Unmarshal("", cfg); err != nil {
 		return nil, fmt.Errorf("unmarshaling config: %w", err)
 	}
@@ -498,6 +505,23 @@ func rejectRemovedAuthKeys(k *koanf.Koanf) error {
 	for _, key := range []string{"auth.jwt_secret", "auth.nip98_enabled"} {
 		if k.Exists(key) {
 			return fmt.Errorf("config validation failed: %s has been removed; auth.enabled=true now requires NIP-98-only HTTP auth", key)
+		}
+	}
+	return nil
+}
+
+func rejectRemovedEncryptedRequestKeys(k *koanf.Koanf) error {
+	removed := []struct {
+		key      string
+		guidance string
+	}{
+		{"nostr.private_relays", "use nostr.encrypted_request_relays"},
+		{"nostr.private_browser_relays", "use nostr.browser_encrypted_request_relays"},
+		{"features.private_nostr_transport", "use the encrypted_nostr_requests discovery feature; configure nostr.encrypted_request_relays, nostr.browser_encrypted_request_relays, and nostr.private_key to enable it"},
+	}
+	for _, item := range removed {
+		if k.Exists(item.key) {
+			return fmt.Errorf("config validation failed: %s has been removed; %s", item.key, item.guidance)
 		}
 	}
 	return nil
@@ -563,9 +587,7 @@ func (c *Config) validate() error {
 	if err := c.validateRelaySidecar(); err != nil {
 		return err
 	}
-	if err := c.normalizeEncryptedRequestRelayAliases(); err != nil {
-		return err
-	}
+	c.normalizeEncryptedRequestRelays()
 
 	nostrAuthorized, err := normalizePubkeyList(c.Nostr.AuthorizedPubkeys)
 	if err != nil {
@@ -582,35 +604,11 @@ func (c *Config) validate() error {
 	return nil
 }
 
-func (c *Config) normalizeEncryptedRequestRelayAliases() error {
-	encryptedRequestRelays, err := resolveRelayAlias("nostr.encrypted_request_relays", c.Nostr.EncryptedRequestRelays, "nostr.private_relays", c.Nostr.PrivateRelays)
-	if err != nil {
-		return err
-	}
-	browserEncryptedRequestRelays, err := resolveRelayAlias("nostr.browser_encrypted_request_relays", c.Nostr.BrowserEncryptedRequestRelays, "nostr.private_browser_relays", c.Nostr.PrivateBrowserRelays)
-	if err != nil {
-		return err
-	}
-	c.Nostr.EncryptedRequestRelays = cloneStrings(encryptedRequestRelays)
-	c.Nostr.PrivateRelays = cloneStrings(encryptedRequestRelays)
-	c.Nostr.BrowserEncryptedRequestRelays = cloneStrings(browserEncryptedRequestRelays)
-	c.Nostr.PrivateBrowserRelays = cloneStrings(browserEncryptedRequestRelays)
-	return nil
-}
-
-func resolveRelayAlias(canonicalName string, canonical []string, deprecatedName string, deprecated []string) ([]string, error) {
-	canonical = normalizeRelayList(canonical)
-	deprecated = normalizeRelayList(deprecated)
-	if len(canonical) == 0 {
-		return cloneStrings(deprecated), nil
-	}
-	if len(deprecated) == 0 {
-		return cloneStrings(canonical), nil
-	}
-	if !stringSetsEqual(canonical, deprecated) {
-		return nil, fmt.Errorf("config validation failed: %s and deprecated alias %s differ; use matching values during migration", canonicalName, deprecatedName)
-	}
-	return cloneStrings(canonical), nil
+func (c *Config) normalizeEncryptedRequestRelays() {
+	c.Nostr.EncryptedRequestRelays = normalizeRelayList(c.Nostr.EncryptedRequestRelays)
+	c.Nostr.BrowserEncryptedRequestRelays = normalizeRelayList(c.Nostr.BrowserEncryptedRequestRelays)
+	c.Nostr.PrivateRelays = cloneStrings(c.Nostr.EncryptedRequestRelays)
+	c.Nostr.PrivateBrowserRelays = cloneStrings(c.Nostr.BrowserEncryptedRequestRelays)
 }
 
 func normalizeRelayList(values []string) []string {
@@ -641,22 +639,6 @@ func cloneStrings(values []string) []string {
 		return nil
 	}
 	return append([]string(nil), values...)
-}
-
-func stringSetsEqual(left, right []string) bool {
-	if len(left) != len(right) {
-		return false
-	}
-	seen := make(map[string]struct{}, len(left))
-	for _, value := range left {
-		seen[value] = struct{}{}
-	}
-	for _, value := range right {
-		if _, ok := seen[value]; !ok {
-			return false
-		}
-	}
-	return true
 }
 
 func normalizePubkeyList(values []string) ([]string, error) {

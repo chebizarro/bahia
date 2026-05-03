@@ -400,15 +400,11 @@ func TestLoadRelaySidecarConfigFromYAML(t *testing.T) {
 	if got := cfg.Nostr.BrowserEncryptedRequestRelays; len(got) != 1 || got[0] != "wss://request-browser.example" {
 		t.Fatalf("BrowserEncryptedRequestRelays = %#v", got)
 	}
-	if got := cfg.Nostr.PrivateBrowserRelays; len(got) != 1 || got[0] != "wss://request-browser.example" {
-		t.Fatalf("deprecated PrivateBrowserRelays alias = %#v", got)
-	}
 }
 
-func TestEncryptedRelayAliasesFromYAML(t *testing.T) {
-	t.Run("canonical keys mirror deprecated aliases", func(t *testing.T) {
-		path := filepath.Join(t.TempDir(), "config.yaml")
-		content := []byte(`nostr:
+func TestEncryptedRequestRelaysFromYAML(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	content := []byte(`nostr:
   encrypted_request_relays:
     - " wss://request-backend.example "
     - "wss://request-backend.example"
@@ -416,87 +412,85 @@ func TestEncryptedRelayAliasesFromYAML(t *testing.T) {
     - "wss://request-browser.example"
     - ""
 `)
-		if err := os.WriteFile(path, content, 0o644); err != nil {
-			t.Fatalf("writing temp config: %v", err)
-		}
-		cfg, err := Load(path)
-		if err != nil {
-			t.Fatalf("Load() error: %v", err)
-		}
-		wantBackend := []string{"wss://request-backend.example"}
-		wantBrowser := []string{"wss://request-browser.example"}
-		assertStringSlice(t, cfg.Nostr.EncryptedRequestRelays, wantBackend)
-		assertStringSlice(t, cfg.Nostr.PrivateRelays, wantBackend)
-		assertStringSlice(t, cfg.Nostr.BrowserEncryptedRequestRelays, wantBrowser)
-		assertStringSlice(t, cfg.Nostr.PrivateBrowserRelays, wantBrowser)
-	})
+	if err := os.WriteFile(path, content, 0o644); err != nil {
+		t.Fatalf("writing temp config: %v", err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	assertStringSlice(t, cfg.Nostr.EncryptedRequestRelays, []string{"wss://request-backend.example"})
+	assertStringSlice(t, cfg.Nostr.BrowserEncryptedRequestRelays, []string{"wss://request-browser.example"})
+}
 
-	t.Run("deprecated keys remain accepted", func(t *testing.T) {
-		path := filepath.Join(t.TempDir(), "config.yaml")
-		content := []byte(`nostr:
-  private_relays:
-    - "wss://legacy-backend.example"
-  private_browser_relays:
-    - "wss://legacy-browser.example"
-`)
-		if err := os.WriteFile(path, content, 0o644); err != nil {
-			t.Fatalf("writing temp config: %v", err)
-		}
-		cfg, err := Load(path)
-		if err != nil {
-			t.Fatalf("Load() error: %v", err)
-		}
-		assertStringSlice(t, cfg.Nostr.EncryptedRequestRelays, []string{"wss://legacy-backend.example"})
-		assertStringSlice(t, cfg.Nostr.PrivateRelays, []string{"wss://legacy-backend.example"})
-		assertStringSlice(t, cfg.Nostr.BrowserEncryptedRequestRelays, []string{"wss://legacy-browser.example"})
-		assertStringSlice(t, cfg.Nostr.PrivateBrowserRelays, []string{"wss://legacy-browser.example"})
-	})
+func TestLoadRejectsRemovedEncryptedRequestKeys(t *testing.T) {
+	tests := []struct {
+		name        string
+		yaml        string
+		envKey      string
+		envValue    string
+		want        string
+		replacement string
+	}{
+		{
+			name:        "private relays yaml",
+			yaml:        "nostr:\n  private_relays:\n    - wss://legacy-backend.example\n",
+			want:        "nostr.private_relays has been removed",
+			replacement: "use nostr.encrypted_request_relays",
+		},
+		{
+			name:        "private browser relays yaml",
+			yaml:        "nostr:\n  private_browser_relays:\n    - wss://legacy-browser.example\n",
+			want:        "nostr.private_browser_relays has been removed",
+			replacement: "use nostr.browser_encrypted_request_relays",
+		},
+		{
+			name:        "private transport feature yaml",
+			yaml:        "features:\n  private_nostr_transport: true\n",
+			want:        "features.private_nostr_transport has been removed",
+			replacement: "use the encrypted_nostr_requests discovery feature; configure nostr.encrypted_request_relays, nostr.browser_encrypted_request_relays, and nostr.private_key to enable it",
+		},
+		{
+			name:        "private relays env",
+			envKey:      "BAHIA_NOSTR_PRIVATE_RELAYS",
+			envValue:    "wss://legacy-backend.example",
+			want:        "nostr.private_relays has been removed",
+			replacement: "use nostr.encrypted_request_relays",
+		},
+		{
+			name:        "private browser relays env",
+			envKey:      "BAHIA_NOSTR_PRIVATE_BROWSER_RELAYS",
+			envValue:    "wss://legacy-browser.example",
+			want:        "nostr.private_browser_relays has been removed",
+			replacement: "use nostr.browser_encrypted_request_relays",
+		},
+		{
+			name:        "private transport feature env",
+			envKey:      "BAHIA_FEATURES_PRIVATE_NOSTR_TRANSPORT",
+			envValue:    "true",
+			want:        "features.private_nostr_transport has been removed",
+			replacement: "use the encrypted_nostr_requests discovery feature; configure nostr.encrypted_request_relays, nostr.browser_encrypted_request_relays, and nostr.private_key to enable it",
+		},
+	}
 
-	t.Run("matching canonical and deprecated keys are accepted even with different order", func(t *testing.T) {
-		path := filepath.Join(t.TempDir(), "config.yaml")
-		content := []byte(`nostr:
-  encrypted_request_relays:
-    - "wss://backend-a.example"
-    - "wss://backend-b.example"
-  private_relays:
-    - "wss://backend-b.example"
-    - "wss://backend-a.example"
-  browser_encrypted_request_relays:
-    - "wss://browser-a.example"
-    - "wss://browser-b.example"
-  private_browser_relays:
-    - "wss://browser-b.example"
-    - "wss://browser-a.example"
-`)
-		if err := os.WriteFile(path, content, 0o644); err != nil {
-			t.Fatalf("writing temp config: %v", err)
-		}
-		cfg, err := Load(path)
-		if err != nil {
-			t.Fatalf("Load() error: %v", err)
-		}
-		assertStringSlice(t, cfg.Nostr.EncryptedRequestRelays, []string{"wss://backend-a.example", "wss://backend-b.example"})
-		assertStringSlice(t, cfg.Nostr.PrivateRelays, []string{"wss://backend-a.example", "wss://backend-b.example"})
-		assertStringSlice(t, cfg.Nostr.BrowserEncryptedRequestRelays, []string{"wss://browser-a.example", "wss://browser-b.example"})
-		assertStringSlice(t, cfg.Nostr.PrivateBrowserRelays, []string{"wss://browser-a.example", "wss://browser-b.example"})
-	})
-
-	t.Run("conflicting canonical and deprecated keys fail validation", func(t *testing.T) {
-		path := filepath.Join(t.TempDir(), "config.yaml")
-		content := []byte(`nostr:
-  encrypted_request_relays:
-    - "wss://backend.example"
-  private_relays:
-    - "wss://legacy-backend.example"
-`)
-		if err := os.WriteFile(path, content, 0o644); err != nil {
-			t.Fatalf("writing temp config: %v", err)
-		}
-		_, err := Load(path)
-		if err == nil || !strings.Contains(err.Error(), "nostr.encrypted_request_relays and deprecated alias nostr.private_relays differ") {
-			t.Fatalf("Load() error = %v, want encrypted-request/private relay alias conflict", err)
-		}
-	})
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := ""
+			if tt.yaml != "" {
+				path = filepath.Join(t.TempDir(), "config.yaml")
+				if err := os.WriteFile(path, []byte(tt.yaml), 0o644); err != nil {
+					t.Fatalf("writing temp config: %v", err)
+				}
+			}
+			if tt.envKey != "" {
+				t.Setenv(tt.envKey, tt.envValue)
+			}
+			_, err := Load(path)
+			if err == nil || !strings.Contains(err.Error(), tt.want) || !strings.Contains(err.Error(), tt.replacement) {
+				t.Fatalf("Load() error = %v, want %q and %q", err, tt.want, tt.replacement)
+			}
+		})
+	}
 }
 
 func assertStringSlice(t *testing.T, got, want []string) {

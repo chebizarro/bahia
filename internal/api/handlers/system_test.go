@@ -27,20 +27,19 @@ func TestSystemHandler_GetInfo_ExposesRelaySidecarCapabilities(t *testing.T) {
 		t.Fatalf("expected status 200, got %d", w.Code)
 	}
 
+	body := w.Body.Bytes()
 	var payload struct {
 		Data struct {
 			Nostr struct {
 				Relays                        []string `json:"relays"`
 				BrowserRelays                 []string `json:"browser_relays"`
 				SidecarURL                    string   `json:"sidecar_url"`
-				PrivateRelays                 []string `json:"private_relays"`
 				BrowserEncryptedRequestRelays []string `json:"browser_encrypted_request_relays"`
-				PrivateBrowserRelays          []string `json:"private_browser_relays"`
 			} `json:"nostr"`
 			Features map[string]bool `json:"features"`
 		} `json:"data"`
 	}
-	if err := json.NewDecoder(w.Body).Decode(&payload); err != nil {
+	if err := json.Unmarshal(body, &payload); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
 
@@ -59,12 +58,10 @@ func TestSystemHandler_GetInfo_ExposesRelaySidecarCapabilities(t *testing.T) {
 	if len(payload.Data.Nostr.BrowserRelays) != 1 || payload.Data.Nostr.BrowserRelays[0] != "ws://localhost:3000/relay" {
 		t.Fatalf("browser_relays = %#v", payload.Data.Nostr.BrowserRelays)
 	}
-	if len(payload.Data.Nostr.PrivateRelays) != 0 {
-		t.Fatalf("private_relays should not be exposed in system info: %#v", payload.Data.Nostr.PrivateRelays)
+	if len(payload.Data.Nostr.BrowserEncryptedRequestRelays) != 0 {
+		t.Fatalf("request relay URLs should only expose explicit browser-advertised encrypted request relay URLs: %#v", payload.Data.Nostr.BrowserEncryptedRequestRelays)
 	}
-	if len(payload.Data.Nostr.BrowserEncryptedRequestRelays) != 0 || len(payload.Data.Nostr.PrivateBrowserRelays) != 0 {
-		t.Fatalf("request relay URLs should only expose explicit browser-advertised encrypted request relay URLs: canonical=%#v deprecated=%#v", payload.Data.Nostr.BrowserEncryptedRequestRelays, payload.Data.Nostr.PrivateBrowserRelays)
-	}
+	assertRemovedSystemInfoFieldsAbsent(t, body)
 	if len(payload.Data.Nostr.Relays) != 0 {
 		t.Fatalf("backend relays should not be exposed while sidecar bootstrap is enabled: %#v", payload.Data.Nostr.Relays)
 	}
@@ -81,33 +78,24 @@ func TestSystemHandler_GetInfo_ExposesExplicitBrowserEncryptedRequestRelays(t *t
 
 	NewSystemHandler(cfg).GetInfo(w, req)
 
+	body := w.Body.Bytes()
 	var payload struct {
 		Data struct {
 			Nostr struct {
-				PrivateRelays                 []string `json:"private_relays"`
 				BrowserEncryptedRequestRelays []string `json:"browser_encrypted_request_relays"`
-				PrivateBrowserRelays          []string `json:"private_browser_relays"`
 			} `json:"nostr"`
 			Features map[string]bool `json:"features"`
 		} `json:"data"`
 	}
-	if err := json.NewDecoder(w.Body).Decode(&payload); err != nil {
+	if err := json.Unmarshal(body, &payload); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if len(payload.Data.Nostr.PrivateRelays) != 0 {
-		t.Fatalf("backend encrypted request relay aliases must not be exposed: %#v", payload.Data.Nostr.PrivateRelays)
-	}
+	assertRemovedSystemInfoFieldsAbsent(t, body)
 	if got := payload.Data.Nostr.BrowserEncryptedRequestRelays; len(got) != 1 || got[0] != "wss://request-browser.example" {
 		t.Fatalf("browser_encrypted_request_relays = %#v", got)
 	}
-	if got := payload.Data.Nostr.PrivateBrowserRelays; len(got) != 1 || got[0] != "wss://request-browser.example" {
-		t.Fatalf("deprecated private_browser_relays alias = %#v", got)
-	}
 	if !payload.Data.Features["encrypted_nostr_requests"] {
 		t.Fatalf("expected encrypted_nostr_requests feature when browser-advertised relay URLs for encrypted requests and service key are configured")
-	}
-	if !payload.Data.Features["private_nostr_transport"] {
-		t.Fatalf("expected deprecated private_nostr_transport alias to mirror encrypted_nostr_requests")
 	}
 }
 
@@ -131,9 +119,6 @@ func TestSystemHandler_GetInfo_DoesNotAdvertiseEncryptedRequestsWithoutBackendEn
 	}
 	if payload.Data.Features["encrypted_nostr_requests"] {
 		t.Fatalf("encrypted_nostr_requests must stay false until backend encrypted_request_relays are configured")
-	}
-	if payload.Data.Features["private_nostr_transport"] {
-		t.Fatalf("deprecated private_nostr_transport alias must stay false until backend encrypted_request_relays are configured")
 	}
 }
 
@@ -295,6 +280,34 @@ func TestSystemHandler_GetInfo_AdvertisesControlPlaneKinds(t *testing.T) {
 	assertKind("result_kinds", payload.Data.ControlPlane.ResultKinds, "llm_deployment_result", controlplane.KindLLMDeploymentResult)
 	assertKind("read_model_kinds", payload.Data.ControlPlane.ReadModelKinds, "llm_route_registry", controlplane.KindLLMRouteRegistry)
 	assertKind("read_model_kinds", payload.Data.ControlPlane.ReadModelKinds, "llm_route_state", controlplane.KindLLMRouteState)
+}
+
+func assertRemovedSystemInfoFieldsAbsent(t *testing.T, body []byte) {
+	t.Helper()
+	var raw map[string]any
+	if err := json.Unmarshal(body, &raw); err != nil {
+		t.Fatalf("decode raw response: %v", err)
+	}
+	data, ok := raw["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("response data missing or invalid: %#v", raw["data"])
+	}
+	nostr, ok := data["nostr"].(map[string]any)
+	if !ok {
+		t.Fatalf("response nostr missing or invalid: %#v", data["nostr"])
+	}
+	features, ok := data["features"].(map[string]any)
+	if !ok {
+		t.Fatalf("response features missing or invalid: %#v", data["features"])
+	}
+	for _, field := range []string{"private_relays", "private_browser_relays"} {
+		if _, exists := nostr[field]; exists {
+			t.Fatalf("removed nostr field %s should not be present: %#v", field, nostr)
+		}
+	}
+	if _, exists := features["private_nostr_transport"]; exists {
+		t.Fatalf("removed feature private_nostr_transport should not be present: %#v", features)
+	}
 }
 
 func containsString(values []string, target string) bool {
