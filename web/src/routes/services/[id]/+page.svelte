@@ -62,9 +62,13 @@
   let artifactsLoadError = $state(null);
   let environmentsLoadError = $state(null);
   let secrets = $state([]);
+  let secretsLoading = $state(false);
+  let secretsError = $state(null);
+  let repositoriesLoading = $state(false);
   let loading = $state(true);
   let error = $state(null);
   let serviceId = $derived(page.params.id);
+  let loadSequence = 0;
 
 
   // Edit modal state
@@ -198,7 +202,40 @@
     void loadServiceDetail(id);
   });
 
+  async function hydrateServiceSecrets(id, sequence) {
+    secretsLoading = true;
+    secretsError = null;
+    try {
+      const nextSecrets = await listServiceSecrets(id);
+      if (sequence !== loadSequence || id !== serviceId) return;
+      secrets = nextSecrets;
+    } catch (secretErr) {
+      if (sequence !== loadSequence || id !== serviceId) return;
+      secrets = [];
+      secretsError = secretErr?.message || 'Failed to load service secrets';
+      console.warn('Failed to load service secrets via encrypted Nostr requests:', secretErr);
+    } finally {
+      if (sequence === loadSequence && id === serviceId) {
+        secretsLoading = false;
+      }
+    }
+  }
+
+  async function hydrateRepositories(sequence) {
+    repositoriesLoading = true;
+    try {
+      await loadRepositories();
+    } catch (repoErr) {
+      console.warn('Failed to load repositories for service editor:', repoErr);
+    } finally {
+      if (sequence === loadSequence) {
+        repositoriesLoading = false;
+      }
+    }
+  }
+
   async function loadServiceDetail(id) {
+    const sequence = ++loadSequence;
     loading = true;
     error = null;
     service = null;
@@ -208,9 +245,12 @@
     artifactsLoadError = null;
     environmentsLoadError = null;
     secrets = [];
+    secretsLoading = false;
+    secretsError = null;
 
     try {
       await Promise.all([loadServices(), loadBuilds(), loadArtifacts(), loadEnvironments()]);
+      if (sequence !== loadSequence || id !== serviceId) return;
 
       service = serviceStore.find((candidate) => candidate.id === id) || null;
       if (!service) {
@@ -219,17 +259,13 @@
       builds = buildStore.filter((build) => build.service_id === id);
       artifacts = artifactStore.filter((artifact) => artifact.service_id === id);
       environments = [...environmentStore];
-      try {
-        secrets = await listServiceSecrets(id);
-      } catch (secretErr) {
-        secrets = [];
-        console.warn('Failed to load service secrets via encrypted Nostr requests:', secretErr);
-      }
+      loading = false;
 
-      await loadRepositories();
+      void hydrateServiceSecrets(id, sequence);
+      void hydrateRepositories(sequence);
     } catch (err) {
+      if (sequence !== loadSequence || id !== serviceId) return;
       error = err.message;
-    } finally {
       loading = false;
     }
   }
@@ -331,7 +367,11 @@
 
   function openEditModal() {
     if (!service) return;
-    
+
+    if (!repositoriesLoading) {
+      void hydrateRepositories(loadSequence);
+    }
+
     const currentRepositories = repositories;
 
     editForm = {
@@ -532,7 +572,8 @@
   }
 
   async function reloadSecrets() {
-    secrets = await listServiceSecrets(serviceId);
+    if (!serviceId) return;
+    await hydrateServiceSecrets(serviceId, loadSequence);
   }
 
   function openSecretCreateModal() {
@@ -909,7 +950,14 @@
           Add Secret
         </LoadingButton>
       </div>
-      {#if secrets.length > 0}
+      {#if secretsLoading}
+        <p class="muted">Loading secrets…</p>
+      {:else if secretsError}
+        <div class="empty-state">
+          <p class="empty">Failed to load secrets</p>
+          <p class="empty-detail">{secretsError}</p>
+        </div>
+      {:else if secrets.length > 0}
         <div class="secrets-table">
           {#each secrets as secret}
             <div class="secret-row">
