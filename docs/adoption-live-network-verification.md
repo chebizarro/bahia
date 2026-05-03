@@ -1,6 +1,6 @@
 # Adoption / Import Live-Network Verification Matrix
 
-Issue: `bahia-ejj8`  
+Issue: `bahia-y294`  
 Scope: adoption/import and direct-runtime rollout readiness after the hardening work.
 
 This matrix is the production gate. Production enablement remains **blocked** until every automated row is green in CI or the release branch, and every manual staging row has an explicit operator signoff with captured evidence.
@@ -12,8 +12,8 @@ For execution, use [`adoption-live-network-operator-checklist.md`](adoption-live
 | Stage | Gate | Required result |
 | --- | --- | --- |
 | 0. Code regression | In-repo automated tests listed below | All pass on the release commit. |
-| 1. Auth/governance staging | Bahia staging runs with `auth.enabled=true`, `adoption.enabled=true`, `direct_runtime_actions.enabled=true`, operator allowlists set, and `adoption.allow_raw_docker_hosts=false` | Unauthenticated callers receive 401; Bearer credentials receive 401; valid NIP-98 non-operators receive 403; valid NIP-98 operators reach handlers. |
-| 2. Managed endpoint staging | At least two `runtime.endpoints.<ref>` aliases are configured, including one remote Docker TLS/mTLS endpoint | Scans/imports use endpoint refs only; no raw Docker host or cert material appears in API responses, DB runtime config, logs, or metrics labels. |
+| 1. Auth/governance staging | Bahia staging runs with `auth.enabled=true`, `adoption.enabled=true`, `direct_runtime_actions.enabled=true`, operator allowlists set, and `adoption.allow_raw_docker_hosts=false` | Unauthenticated callers receive 401; Bearer credentials receive 401; valid NIP-98 non-operators receive 403; valid NIP-98 operators reach handlers. `/api/v1/system/info` reports `features.direct_nostr_http_auth=true`. |
+| 2. Managed endpoint staging | At least two `runtime.endpoints.<ref>` aliases are configured, including one remote Docker TLS/mTLS endpoint | Scans/imports use endpoint refs only; no raw Docker host or cert material appears in API responses, DB runtime config, logs, or metrics labels. If web/relay validation is in scope for the same release candidate, verify sidecar pathing via `/relay` and ensure private transport checks use `nostr.private_browser_relays` plus `features.private_nostr_transport=true` (not public sidecar relays). |
 | 3. First workload import | One non-critical Docker-origin workload is imported by explicit selection | Service, environment, build, artifact, state, runtime observation, audit event, and metrics are all present. |
 | 4. Direct runtime action validation | Restart/stop/deploy are exercised only against the imported direct-runtime workload | Actions pass for adopted direct-runtime workloads and fail closed for non-adopted or mismatched-host workloads. |
 | 5. Rollback validation | Disable adoption and direct-runtime flags, restart Bahia, and verify operational rollback procedure | Privileged routes return 404; already imported state remains inspectable; original workload owner can resume control. |
@@ -61,6 +61,7 @@ Before production enablement, record:
 - output from the automated commands above;
 - staging config excerpt with secrets and cert paths redacted;
 - endpoint refs exercised and workload IDs imported;
+- auth/topology preflight evidence (`/api/v1/system/info`, relay `/relay` reachability if applicable, and `features.private_nostr_transport` with `nostr.private_browser_relays` when private web flows are validated);
 - manual matrix rows LN-01 through LN-11 with pass/fail, evidence location, and approver;
 - explicit decision for compose takeover (`disabled`, `enabled for named services only`, or `not applicable`);
 - rollback rehearsal timestamp and approver.

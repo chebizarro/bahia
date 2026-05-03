@@ -51,6 +51,10 @@ This runbook covers the operator-only adoption/import and direct-runtime feature
    ```
 
 4. Ensure ingress/proxies preserve the externally signed scheme, host, path, and query string; NIP-98 validation signs the final URL. Ensure `/metrics` is reachable by monitoring with fresh per-request NIP-98 headers when auth is enabled, and logs include `request_id`, `actor_subject`/`actor_pubkey`, `target_name`, `endpoint_ref`, result counts, and duration fields.
+5. Capture `/api/v1/system/info` as rollout evidence and verify current capability/topology flags for this release candidate:
+   - `features.direct_nostr_http_auth=true`
+   - when web/relay checks are in scope, sidecar/browser relay endpoints use explicit `/relay` pathing
+   - when private web flows are in scope, `nostr.private_browser_relays` is present and `features.private_nostr_transport=true`
 
 ## Dry-run scan
 
@@ -136,8 +140,16 @@ If adoption causes unexpected behavior:
 3. If a workload should no longer be Bahia-managed, remove or quarantine the imported service/environment state through the normal registry/admin path after exporting audit records.
 4. Keep endpoint aliases configured until rollback verification is complete so observations can still be inspected if needed.
 
+## Topology/auth alignment checks (prep)
+
+Before operator LN-01..LN-11 execution, confirm docs and environment match shipped topology:
+
+- Sidecar-first relay topology uses explicit `/relay` mount path for browser and compose backend URLs.
+- Signer-first auth model is NIP-98-only for protected HTTP routes; Bearer remains a negative test (`401`).
+- Private web route transport discovery/capability is separate from public sidecar discovery (`nostr.private_browser_relays` + `features.private_nostr_transport`).
+
 ## Caveats
 
 - Raw-host mode (`allow_raw_docker_hosts: true`) is a temporary compatibility mode for trusted development or break-glass use only.
 - Compose takeover changes the operational owner of the container. Do not enable it globally without staging validation.
-- Final live-network verification and production signoff remain in `bahia-ejj8`.
+- Final live-network verification and production signoff remain in `bahia-y294`.

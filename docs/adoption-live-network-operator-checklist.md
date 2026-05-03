@@ -32,6 +32,9 @@ Use this document **while executing** the rollout signoff. It is intentionally p
 | Additional approvers | `<fill>` |
 | Evidence bundle location | `<fill path / ticket / object store URL>` |
 | Compose takeover policy for this environment | `disabled` / `enabled for named services only` / `not applicable` |
+| `/api/v1/system/info` evidence captured | `<fill path + timestamp>` |
+| Relay sidecar `/relay` check (if applicable) | `<fill pass/fail + evidence>` |
+| Private transport evidence (if private web flows in scope) | `<fill private_browser_relays + feature flag evidence or N/A>` |
 
 ## Environment prerequisites
 
@@ -46,6 +49,9 @@ Check each box before LN-01 starts.
 - [ ] At least two `runtime.endpoints.<ref>` aliases are configured.
 - [ ] At least one endpoint uses remote Docker TLS/mTLS.
 - [ ] Monitoring can reach `/metrics` with fresh per-request NIP-98 headers when API auth is enabled.
+- [ ] `/api/v1/system/info` confirms `features.direct_nostr_http_auth=true`.
+- [ ] If sidecar/web verification is in scope, `/relay` is reachable and aligned with the configured sidecar URL/path.
+- [ ] If private web flows are in scope, `/api/v1/system/info` exposes `nostr.private_browser_relays` and `features.private_nostr_transport=true`.
 - [ ] A non-critical candidate workload is available for import.
 - [ ] Rollback owner/procedure for the candidate workload is confirmed.
 
@@ -57,6 +63,9 @@ Collect these artifacts as files or links under the evidence bundle location.
 - [ ] Redacted staging config excerpt
 - [ ] Command transcript or shell log
 - [ ] API request/response captures with secrets redacted
+- [ ] `/api/v1/system/info` capture showing auth/topology capability flags
+- [ ] Relay `/relay` reachability capture when web/sidecar validation is in scope
+- [ ] Private transport discovery capture (`nostr.private_browser_relays`, `features.private_nostr_transport`) when private web flows are in scope
 - [ ] Relevant log excerpts with request IDs
 - [ ] Metrics snapshots
 - [ ] Database row IDs / record references for imported entities
@@ -85,7 +94,7 @@ Use one section per LN row. Fill every field.
 
 ### LN-01 — Auth-enabled operator access
 
-**Goal**: prove privileged adoption/direct-runtime routes enforce production auth and operator authorization.
+**Goal**: prove privileged adoption/direct-runtime routes enforce production auth and operator authorization, with current signer-first capability advertising in `/api/v1/system/info`.
 
 - Status: `PASS` / `FAIL` / `BLOCKED` / `N/A`
 - Start / end time (UTC): `<fill>`
