@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/nbd-wtf/go-nostr"
@@ -177,12 +178,12 @@ func (p *RelayPool) publishToRelay(ctx context.Context, mr *managedRelay, ev nos
 	err := mr.relay.Publish(ctx, ev)
 	if err != nil {
 		errStr := err.Error()
-		
+
 		// Check if this is an OK=false response (rejection) vs transport error.
 		// go-nostr returns errors starting with "msg:" for OK=false.
 		if strings.HasPrefix(errStr, "msg:") {
 			reason := strings.TrimPrefix(errStr, "msg: ")
-			
+
 			// Log different rejection types at appropriate levels.
 			if strings.HasPrefix(reason, "auth-required:") {
 				p.logger.Warn("relay requires authentication",
@@ -225,7 +226,7 @@ func (p *RelayPool) publishToRelay(ctx context.Context, mr *managedRelay, ev nos
 				return fmt.Errorf("relay %s rejected event: %s", mr.url, reason)
 			}
 		}
-		
+
 		// Transport/connection error - mark as disconnected.
 		mr.connected = false
 		mr.lastErr = err
@@ -236,7 +237,7 @@ func (p *RelayPool) publishToRelay(ctx context.Context, mr *managedRelay, ev nos
 		)
 		return fmt.Errorf("publishing to %s: %w", mr.url, err)
 	}
-	
+
 	// Success - relay accepted the event.
 	p.logger.Debug("event accepted by relay",
 		zap.String("relay", mr.url),
@@ -305,11 +306,7 @@ func (p *RelayPool) SubscribeAllWithEOSE(ctx context.Context, filters []nostr.Fi
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 
-	merged := make(chan *nostr.Event, 64)
-	eoseChan := make(chan struct{})
-	var wg sync.WaitGroup
-	var eoseWg sync.WaitGroup
-	subscribed := 0
+	subs := make([]*nostr.Subscription, 0, len(p.relays))
 
 	for _, mr := range p.relays {
 		mr.mu.Lock()
@@ -332,37 +329,68 @@ func (p *RelayPool) SubscribeAllWithEOSE(ctx context.Context, filters []nostr.Fi
 			continue
 		}
 
-		subscribed++
-		wg.Add(1)
-		eoseWg.Add(1)
+		subs = append(subs, sub)
+	}
+
+	if len(subs) == 0 {
+		return nil, fmt.Errorf("no relays available for subscription")
+	}
+
+	return mergeSubscriptions(ctx, subs, 64), nil
+}
+
+func mergeSubscriptions(ctx context.Context, subs []*nostr.Subscription, buffer int) *MergedSubscription {
+	merged := make(chan *nostr.Event, buffer)
+	eoseChan := make(chan struct{})
+	if len(subs) == 0 {
+		close(merged)
+		close(eoseChan)
+		return &MergedSubscription{Events: merged, EndOfStoredEvents: eoseChan}
+	}
+
+	var eventsWg sync.WaitGroup
+	var eoseCount atomic.Int32
+	var closeEOSE sync.Once
+
+	eventsWg.Add(len(subs))
+	for _, sub := range subs {
 		go func(s *nostr.Subscription) {
-			defer wg.Done()
-			eoseReceived := false
-			for {
+			defer eventsWg.Done()
+			var eoseCh <-chan struct{}
+			if s != nil {
+				eoseCh = s.EndOfStoredEvents
+			}
+			var eventsCh <-chan *nostr.Event
+			if s != nil {
+				eventsCh = s.Events
+			}
+			eoseSent := false
+			markEOSE := func() {
+				if eoseSent {
+					return
+				}
+				eoseSent = true
+				if eoseCount.Add(1) == int32(len(subs)) {
+					closeEOSE.Do(func() { close(eoseChan) })
+				}
+			}
+
+			for eoseCh != nil || eventsCh != nil {
 				select {
 				case <-ctx.Done():
-					if !eoseReceived {
-						eoseWg.Done()
-					}
 					return
-				case <-s.EndOfStoredEvents:
-					if !eoseReceived {
-						eoseReceived = true
-						eoseWg.Done()
+				case _, ok := <-eoseCh:
+					if ok || eoseCh != nil {
+						markEOSE()
 					}
-				case ev, ok := <-s.Events:
+					eoseCh = nil
+				case ev, ok := <-eventsCh:
 					if !ok {
-						if !eoseReceived {
-							eoseWg.Done()
-						}
 						return
 					}
 					select {
 					case merged <- ev:
 					case <-ctx.Done():
-						if !eoseReceived {
-							eoseWg.Done()
-						}
 						return
 					}
 				}
@@ -370,28 +398,12 @@ func (p *RelayPool) SubscribeAllWithEOSE(ctx context.Context, filters []nostr.Fi
 		}(sub)
 	}
 
-	if subscribed == 0 {
-		close(merged)
-		close(eoseChan)
-		return nil, fmt.Errorf("no relays available for subscription")
-	}
-
-	// Signal EOSE when all relays have sent EOSE.
 	go func() {
-		eoseWg.Wait()
-		close(eoseChan)
-	}()
-
-	// Close merged channel when all subscriptions end.
-	go func() {
-		wg.Wait()
+		eventsWg.Wait()
 		close(merged)
 	}()
 
-	return &MergedSubscription{
-		Events:            merged,
-		EndOfStoredEvents: eoseChan,
-	}, nil
+	return &MergedSubscription{Events: merged, EndOfStoredEvents: eoseChan}
 }
 
 // URLs returns the list of configured relay URLs.

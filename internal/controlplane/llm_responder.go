@@ -110,7 +110,7 @@ func (r *LLMResponder) record(ctx context.Context, ev *nostr.Event, intent *doma
 	if entityID == uuid.Nil {
 		entityID = intent.ID
 	}
-	if err := r.eventRepo.Record(ctx, &repository.NostrEventRecord{ID: ev.ID, Kind: ev.Kind, PubKey: ev.PubKey, Content: ev.Content, Tags: tagsJSON, Sig: ev.Sig, CreatedAt: ev.CreatedAt.Time(), ReceivedAt: time.Now().UTC(), EntityType: "llm.provisioning.reply", EntityID: &entityID}); err != nil {
+	if _, err := r.eventRepo.Record(ctx, &repository.NostrEventRecord{ID: ev.ID, Kind: ev.Kind, PubKey: ev.PubKey, Content: ev.Content, Tags: tagsJSON, Sig: ev.Sig, CreatedAt: ev.CreatedAt.Time(), ReceivedAt: time.Now().UTC(), EntityType: "llm.provisioning.reply", EntityID: &entityID}); err != nil {
 		r.logger.Warn("failed to record LLM provisioning reply", zap.String("event_id", ev.ID), zap.Error(err))
 	}
 }

@@ -164,7 +164,7 @@ func (p *Publisher) publishEvent(ctx context.Context, kind int, label string, e 
 			CreatedAt:  ev.CreatedAt.Time(),
 			EntityType: label,
 		}
-		if recordErr := p.eventRepo.Record(ctx, rec); recordErr != nil {
+		if _, recordErr := p.eventRepo.Record(ctx, rec); recordErr != nil {
 			p.logger.Warn("failed to record nostr event to audit table",
 				zap.String("event_id", ev.ID),
 				zap.Error(recordErr),
@@ -182,24 +182,48 @@ func (p *Publisher) publishEvent(ctx context.Context, kind int, label string, e 
 }
 
 // Subscribe listens for incoming Nostr events on all connected relays.
+// Deprecated: use Subscriber for production inbound handling; it supports scoped filters,
+// EOSE state, persistence, and duplicate-safe handler invocation.
 func (p *Publisher) Subscribe(ctx context.Context, kinds []int, handler func(ev *nostr.Event)) error {
 	if !p.enabled {
 		return nil
 	}
 
+	since := nostr.Timestamp(time.Now().Unix())
+	if p.eventRepo != nil {
+		latest, err := p.eventRepo.LatestCreatedAtForKinds(ctx, kinds)
+		if err != nil {
+			return err
+		}
+		if latest != nil {
+			since = nostr.Timestamp(latest.Unix() - 1)
+		}
+	}
+
 	filters := []nostr.Filter{{
 		Kinds: kinds,
-		Since: func() *nostr.Timestamp { t := nostr.Timestamp(time.Now().Unix()); return &t }(),
+		Since: &since,
 	}}
 
-	events, err := p.pool.SubscribeAll(ctx, filters)
+	merged, err := p.pool.SubscribeAllWithEOSE(ctx, filters)
 	if err != nil {
 		return err
 	}
 
 	go func() {
-		for ev := range events {
-			handler(ev)
+		eoseCh := merged.EndOfStoredEvents
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-eoseCh:
+				eoseCh = nil
+			case ev, ok := <-merged.Events:
+				if !ok {
+					return
+				}
+				handler(ev)
+			}
 		}
 	}()
 

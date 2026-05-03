@@ -754,7 +754,7 @@ func (p *Projector) publishSigned(ctx context.Context, kind int, tags gonostr.Ta
 	}
 	if p.eventRepo != nil {
 		tagsJSON, _ := json.Marshal(ev.Tags)
-		if err := p.eventRepo.Record(ctx, &repository.NostrEventRecord{
+		if _, err := p.eventRepo.Record(ctx, &repository.NostrEventRecord{
 			ID:         ev.ID,
 			Kind:       ev.Kind,
 			PubKey:     ev.PubKey,

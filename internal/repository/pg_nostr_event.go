@@ -2,13 +2,15 @@ package repository
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // NostrEventRecord represents a row in the nostr_events audit table.
@@ -27,27 +29,40 @@ type NostrEventRecord struct {
 
 // NostrEventRepository manages the nostr_events audit trail.
 type NostrEventRepository interface {
-	Record(ctx context.Context, rec *NostrEventRecord) error
+	// Record inserts rec idempotently. It returns true only when the row was newly inserted.
+	Record(ctx context.Context, rec *NostrEventRecord) (bool, error)
 	GetByID(ctx context.Context, id string) (*NostrEventRecord, error)
 	ListByKind(ctx context.Context, kind int, limit int) ([]NostrEventRecord, error)
 	ListByEntity(ctx context.Context, entityType string, entityID uuid.UUID, limit int) ([]NostrEventRecord, error)
+	LatestCreatedAtForKinds(ctx context.Context, kinds []int) (*time.Time, error)
+	LatestCreatedAtForKindsAndAuthors(ctx context.Context, kinds []int, authors []string) (*time.Time, error)
+}
+
+type nostrEventDB interface {
+	Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error)
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
 }
 
 // PgNostrEventRepository is a PostgreSQL implementation of NostrEventRepository.
 type PgNostrEventRepository struct {
-	pool *pgxpool.Pool
+	pool nostrEventDB
 }
 
 // NewPgNostrEventRepository creates a new PgNostrEventRepository.
 func NewPgNostrEventRepository(pool *pgxpool.Pool) *PgNostrEventRepository {
-	return &PgNostrEventRepository{pool: pool}
+	return newPgNostrEventRepositoryWithDB(pool)
+}
+
+func newPgNostrEventRepositoryWithDB(db nostrEventDB) *PgNostrEventRepository {
+	return &PgNostrEventRepository{pool: db}
 }
 
 const nostrEventColumns = `id, kind, pubkey, content, tags, sig, created_at, received_at, entity_type, entity_id`
 
 // Record inserts a Nostr event into the audit table.
-// Duplicate event IDs are silently ignored (idempotent).
-func (r *PgNostrEventRepository) Record(ctx context.Context, rec *NostrEventRecord) error {
+// Duplicate event IDs are ignored idempotently and reported as inserted=false.
+func (r *PgNostrEventRepository) Record(ctx context.Context, rec *NostrEventRecord) (bool, error) {
 	if rec.ReceivedAt.IsZero() {
 		rec.ReceivedAt = time.Now().UTC()
 	}
@@ -57,15 +72,15 @@ func (r *PgNostrEventRepository) Record(ctx context.Context, rec *NostrEventReco
 		tagsJSON = json.RawMessage("[]")
 	}
 
-	_, err := r.pool.Exec(ctx, `
+	tag, err := r.pool.Exec(ctx, `
 		INSERT INTO nostr_events (id, kind, pubkey, content, tags, sig, created_at, received_at, entity_type, entity_id)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 		ON CONFLICT (id) DO NOTHING
 	`, rec.ID, rec.Kind, rec.PubKey, rec.Content, tagsJSON, rec.Sig, rec.CreatedAt, rec.ReceivedAt, rec.EntityType, rec.EntityID)
 	if err != nil {
-		return fmt.Errorf("recording nostr event: %w", err)
+		return false, fmt.Errorf("recording nostr event: %w", err)
 	}
-	return nil
+	return tag.RowsAffected() == 1, nil
 }
 
 // GetByID retrieves a Nostr event by its ID.
@@ -106,6 +121,33 @@ func (r *PgNostrEventRepository) ListByEntity(ctx context.Context, entityType st
 	}
 	defer rows.Close()
 	return scanNostrEventRows(rows)
+}
+
+// LatestCreatedAtForKinds returns the newest persisted created_at cursor for any of kinds.
+func (r *PgNostrEventRepository) LatestCreatedAtForKinds(ctx context.Context, kinds []int) (*time.Time, error) {
+	if len(kinds) == 0 {
+		return nil, nil
+	}
+	return r.latestCreatedAt(ctx, `SELECT MAX(created_at) FROM nostr_events WHERE kind = ANY($1)`, kinds)
+}
+
+// LatestCreatedAtForKindsAndAuthors returns the newest cursor for events matching kinds and authors.
+func (r *PgNostrEventRepository) LatestCreatedAtForKindsAndAuthors(ctx context.Context, kinds []int, authors []string) (*time.Time, error) {
+	if len(kinds) == 0 || len(authors) == 0 {
+		return nil, nil
+	}
+	return r.latestCreatedAt(ctx, `SELECT MAX(created_at) FROM nostr_events WHERE kind = ANY($1) AND pubkey = ANY($2)`, kinds, authors)
+}
+
+func (r *PgNostrEventRepository) latestCreatedAt(ctx context.Context, query string, args ...any) (*time.Time, error) {
+	var latest sql.NullTime
+	if err := r.pool.QueryRow(ctx, query, args...).Scan(&latest); err != nil {
+		return nil, fmt.Errorf("querying latest nostr event cursor: %w", err)
+	}
+	if !latest.Valid {
+		return nil, nil
+	}
+	return &latest.Time, nil
 }
 
 func scanNostrEventRows(rows pgx.Rows) ([]NostrEventRecord, error) {

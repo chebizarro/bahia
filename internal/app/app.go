@@ -300,6 +300,7 @@ func New(cfg *config.Config) (*App, error) {
 	// Nostr inbound subscriber: listens for Hive-CI, Loom, and Bahia events.
 	nostrSub := nostrAdapter.NewSubscriber(relayPool, nostrEventRepo, logger,
 		nostrAdapter.WithHandler(nostrProcessor.Handle),
+		nostrAdapter.WithAuthorizedAuthors(cfg.Nostr.AuthorizedPubkeys),
 	)
 	bgManager.Register(nostrSub)
 

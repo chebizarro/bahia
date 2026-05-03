@@ -3,6 +3,7 @@ package nostr
 import (
 	"context"
 	"encoding/json"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -39,13 +40,19 @@ type EventHandler func(ctx context.Context, ev *nostr.Event)
 // Subscriber connects to Nostr relays and persists inbound events
 // to the nostr_events audit table. It implements app.BackgroundRunner.
 type Subscriber struct {
-	pool          *RelayPool
-	eventRepo     repository.NostrEventRepository
-	kinds         []int
-	handlers      []EventHandler
-	logger        *zap.Logger
-	dedup         *EventDeduplicator
-	backfillLimit int // max events to fetch on catch-up (0 = no limit)
+	pool              *RelayPool
+	eventRepo         repository.NostrEventRepository
+	kinds             []int
+	handlers          []EventHandler
+	logger            *zap.Logger
+	dedup             *EventDeduplicator
+	backfillLimit     int // max events to fetch on catch-up (0 = no limit)
+	authorizedAuthors []string
+	now               func() time.Time
+
+	// lastSeenByKind tracks newest created_at values processed in this process.
+	lastSeenMu     sync.Mutex
+	lastSeenByKind map[int]int64
 
 	// caughtUp indicates whether EOSE has been received (caught up with stored events).
 	caughtUp atomic.Bool
@@ -76,6 +83,21 @@ func WithBackfillLimit(limit int) SubscriberOption {
 	return func(s *Subscriber) { s.backfillLimit = limit }
 }
 
+// WithAuthorizedAuthors scopes Bahia command subscriptions to known operator pubkeys.
+func WithAuthorizedAuthors(pubkeys []string) SubscriberOption {
+	return func(s *Subscriber) {
+		s.authorizedAuthors = append([]string(nil), pubkeys...)
+	}
+}
+
+func withClock(now func() time.Time) SubscriberOption {
+	return func(s *Subscriber) {
+		if now != nil {
+			s.now = now
+		}
+	}
+}
+
 // NewSubscriber creates a new inbound event subscriber.
 func NewSubscriber(
 	pool *RelayPool,
@@ -84,12 +106,14 @@ func NewSubscriber(
 	opts ...SubscriberOption,
 ) *Subscriber {
 	s := &Subscriber{
-		pool:          pool,
-		eventRepo:     eventRepo,
-		kinds:         DefaultInboundKinds,
-		logger:        logger.Named("nostr-subscriber"),
-		dedup:         NewEventDeduplicator(10000), // Default: track last 10k events
-		backfillLimit: 1000,                        // Default: limit catch-up to 1000 events
+		pool:           pool,
+		eventRepo:      eventRepo,
+		kinds:          DefaultInboundKinds,
+		logger:         logger.Named("nostr-subscriber"),
+		dedup:          NewEventDeduplicator(10000), // Default: track last 10k events
+		backfillLimit:  1000,                        // Default: limit catch-up to 1000 events
+		now:            func() time.Time { return time.Now().UTC() },
+		lastSeenByKind: make(map[int]int64),
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -135,17 +159,10 @@ func (s *Subscriber) subscribe(ctx context.Context) error {
 	// Reset caught-up state on new subscription.
 	s.caughtUp.Store(false)
 
-	filter := nostr.Filter{
-		Kinds: s.kinds,
-		Since: nowTimestamp(),
+	filters, err := s.buildSubscriptionFilters(ctx)
+	if err != nil {
+		return err
 	}
-
-	// Apply backfill limit to prevent memory pressure on reconnect.
-	if s.backfillLimit > 0 {
-		filter.Limit = s.backfillLimit
-	}
-
-	filters := []nostr.Filter{filter}
 
 	merged, err := s.pool.SubscribeAllWithEOSE(ctx, filters)
 	if err != nil {
@@ -167,6 +184,7 @@ func (s *Subscriber) subscribe(ctx context.Context) error {
 			return ctx.Err()
 		case <-merged.EndOfStoredEvents:
 			s.handleEOSE()
+			merged.EndOfStoredEvents = nil
 		case ev, ok := <-merged.Events:
 			if !ok {
 				return nil // channel closed
@@ -186,20 +204,10 @@ func (s *Subscriber) handleEOSE() {
 }
 
 // handleEvent persists the event and invokes registered handlers.
-// Uses deduplication to prevent handlers from being invoked multiple times
-// for the same event (which can happen with multi-relay delivery or reconnects).
+// Repository insert state gates handlers so overlap backfill and multi-relay
+// duplicates cannot re-run side effects across process restarts.
 func (s *Subscriber) handleEvent(ctx context.Context, ev *nostr.Event) {
 	if ev == nil {
-		return
-	}
-
-	// Check for duplicate - if we've already processed this event, skip handlers.
-	// This prevents side effects from being triggered multiple times.
-	if s.dedup.IsDuplicate(ev.ID) {
-		s.logger.Debug("skipping duplicate event",
-			zap.String("event_id", ev.ID),
-			zap.Int("kind", ev.Kind),
-		)
 		return
 	}
 
@@ -224,20 +232,30 @@ func (s *Subscriber) handleEvent(ctx context.Context, ev *nostr.Event) {
 		ReceivedAt: time.Now().UTC(),
 	}
 
-	// Persist (idempotent — duplicate IDs silently ignored).
-	if err := s.eventRepo.Record(ctx, rec); err != nil {
+	inserted, err := s.eventRepo.Record(ctx, rec)
+	if err != nil {
 		s.logger.Warn("failed to persist inbound event",
 			zap.String("event_id", ev.ID),
 			zap.Int("kind", ev.Kind),
 			zap.Error(err),
 		)
-	} else {
-		s.logger.Debug("inbound event persisted",
+		return
+	}
+	if !inserted {
+		s.logger.Debug("skipping already-persisted event",
 			zap.String("event_id", ev.ID),
 			zap.Int("kind", ev.Kind),
-			zap.String("pubkey", ev.PubKey),
 		)
+		return
 	}
+
+	s.recordLastSeen(ev.Kind, ev.CreatedAt.Time())
+	s.dedup.MarkSeen(ev.ID)
+	s.logger.Debug("inbound event persisted",
+		zap.String("event_id", ev.ID),
+		zap.Int("kind", ev.Kind),
+		zap.String("pubkey", ev.PubKey),
+	)
 
 	if isCanonicalControlPlaneRequest(ev.Kind) {
 		return
@@ -249,11 +267,108 @@ func (s *Subscriber) handleEvent(ctx context.Context, ev *nostr.Event) {
 	}
 }
 
+func (s *Subscriber) buildSubscriptionFilters(ctx context.Context) ([]nostr.Filter, error) {
+	openKinds := make([]int, 0, len(s.kinds))
+	authorScopedKinds := make([]int, 0, len(s.kinds))
+	for _, kind := range s.kinds {
+		if len(s.authorizedAuthors) > 0 && isAuthorScopedInboundKind(kind) {
+			authorScopedKinds = append(authorScopedKinds, kind)
+			continue
+		}
+		openKinds = append(openKinds, kind)
+	}
+
+	filters := make([]nostr.Filter, 0, 2)
+	if len(openKinds) > 0 {
+		since, err := s.subscriptionSince(ctx, openKinds, nil)
+		if err != nil {
+			return nil, err
+		}
+		filters = append(filters, s.filterForKinds(openKinds, since, nil))
+	}
+	if len(authorScopedKinds) > 0 {
+		since, err := s.subscriptionSince(ctx, authorScopedKinds, s.authorizedAuthors)
+		if err != nil {
+			return nil, err
+		}
+		filters = append(filters, s.filterForKinds(authorScopedKinds, since, s.authorizedAuthors))
+	}
+	return filters, nil
+}
+
+func (s *Subscriber) filterForKinds(kinds []int, since *nostr.Timestamp, authors []string) nostr.Filter {
+	filter := nostr.Filter{Kinds: append([]int(nil), kinds...), Since: since}
+	if len(authors) > 0 {
+		filter.Authors = append([]string(nil), authors...)
+	}
+	if s.backfillLimit > 0 {
+		filter.Limit = s.backfillLimit
+	}
+	return filter
+}
+
+func (s *Subscriber) subscriptionSince(ctx context.Context, kinds []int, authors []string) (*nostr.Timestamp, error) {
+	cursorUnix := s.latestSeenForKinds(kinds)
+	if s.eventRepo != nil {
+		var latest *time.Time
+		var err error
+		if len(authors) > 0 {
+			latest, err = s.eventRepo.LatestCreatedAtForKindsAndAuthors(ctx, kinds, authors)
+		} else {
+			latest, err = s.eventRepo.LatestCreatedAtForKinds(ctx, kinds)
+		}
+		if err != nil {
+			return nil, err
+		}
+		if latest != nil && latest.Unix() > cursorUnix {
+			cursorUnix = latest.Unix()
+		}
+	}
+
+	if cursorUnix == 0 {
+		return timestampFromTime(s.now()), nil
+	}
+
+	// Nostr timestamps are second-resolution. Overlap by one second so reconnects
+	// replay the disconnect boundary, then suppress duplicates via repository insert state.
+	return timestampFromUnix(cursorUnix - 1), nil
+}
+
+func (s *Subscriber) latestSeenForKinds(kinds []int) int64 {
+	s.lastSeenMu.Lock()
+	defer s.lastSeenMu.Unlock()
+
+	var latest int64
+	for _, kind := range kinds {
+		if seen := s.lastSeenByKind[kind]; seen > latest {
+			latest = seen
+		}
+	}
+	return latest
+}
+
+func (s *Subscriber) recordLastSeen(kind int, createdAt time.Time) {
+	unix := createdAt.Unix()
+	s.lastSeenMu.Lock()
+	defer s.lastSeenMu.Unlock()
+	if unix > s.lastSeenByKind[kind] {
+		s.lastSeenByKind[kind] = unix
+	}
+}
+
 func isCanonicalControlPlaneRequest(kind int) bool {
 	return kind >= 5961 && kind <= 5968
 }
 
-func nowTimestamp() *nostr.Timestamp {
-	ts := nostr.Timestamp(time.Now().Unix())
+func isAuthorScopedInboundKind(kind int) bool {
+	return (kind >= 5961 && kind <= 5968) || (kind >= 31100 && kind <= 31105)
+}
+
+func timestampFromTime(t time.Time) *nostr.Timestamp {
+	return timestampFromUnix(t.Unix())
+}
+
+func timestampFromUnix(unix int64) *nostr.Timestamp {
+	ts := nostr.Timestamp(unix)
 	return &ts
 }
