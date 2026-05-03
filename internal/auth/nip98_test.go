@@ -249,7 +249,6 @@ func TestMiddleware_NostrScheme_Integration(t *testing.T) {
 	var principal *Principal
 	handler := MiddlewareFromConfig(MiddlewareConfig{
 		Enabled:        true,
-		JWTSecret:      testSecret,
 		NIP98Validator: validator,
 	})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		principal = GetPrincipal(r.Context())
@@ -276,10 +275,9 @@ func TestMiddleware_NostrScheme_Integration(t *testing.T) {
 }
 
 func TestMiddleware_NostrScheme_NoValidator(t *testing.T) {
-	// NIP98Validator is nil → NIP-98 auth should be rejected.
+	// NIP98Validator is nil → auth fails closed before request handling.
 	handler := MiddlewareFromConfig(MiddlewareConfig{
-		Enabled:   true,
-		JWTSecret: testSecret,
+		Enabled: true,
 	})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -289,7 +287,7 @@ func TestMiddleware_NostrScheme_NoValidator(t *testing.T) {
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
 
-	if w.Code != http.StatusUnauthorized {
-		t.Errorf("expected 401 when NIP98Validator is nil, got %d", w.Code)
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("expected 500 when NIP98Validator is nil, got %d", w.Code)
 	}
 }

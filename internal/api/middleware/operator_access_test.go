@@ -22,7 +22,7 @@ func TestRequireOperator(t *testing.T) {
 		},
 		{
 			name:      "subject allowed",
-			principal: &auth.Principal{Subject: "ops", Method: auth.MethodJWT},
+			principal: &auth.Principal{Subject: "ops", Method: auth.MethodNIP98},
 			cfg:       OperatorAccessConfig{AllowedSubjects: []string{"ops"}},
 			want:      http.StatusOK,
 		},
@@ -40,19 +40,19 @@ func TestRequireOperator(t *testing.T) {
 		},
 		{
 			name:      "subject email allowed",
-			principal: &auth.Principal{Subject: "ops@example.com", Method: auth.MethodJWT},
+			principal: &auth.Principal{Subject: "ops@example.com", Method: auth.MethodNIP98},
 			cfg:       OperatorAccessConfig{AllowedEmails: []string{"ops@example.com"}},
 			want:      http.StatusOK,
 		},
 		{
 			name:      "authenticated but not allowed",
-			principal: &auth.Principal{Subject: "developer", Method: auth.MethodJWT},
+			principal: &auth.Principal{Subject: "developer", Method: auth.MethodNIP98},
 			cfg:       OperatorAccessConfig{AllowedSubjects: []string{"ops"}},
 			want:      http.StatusForbidden,
 		},
 		{
 			name:      "empty allowlist denies",
-			principal: &auth.Principal{Subject: "ops", Method: auth.MethodJWT},
+			principal: &auth.Principal{Subject: "ops", Method: auth.MethodNIP98},
 			cfg:       OperatorAccessConfig{},
 			want:      http.StatusForbidden,
 		},

@@ -476,13 +476,18 @@ const routerNIP98Key = "9a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d
 
 func makeRouterNIP98Header(t *testing.T, method, url string) string {
 	t.Helper()
+	return makeRouterNIP98HeaderWithKey(t, routerNIP98Key, method, url)
+}
+
+func makeRouterNIP98HeaderWithKey(t *testing.T, privateKey, method, url string) string {
+	t.Helper()
 	ev := nostr.Event{
 		Kind:      27235,
 		CreatedAt: nostr.Timestamp(time.Now().Unix()),
-		Tags:      nostr.Tags{{"u", url}, {"method", method}},
+		Tags:      nostr.Tags{{"u", url}, {"method", method}, {"nonce", uuid.NewString()}},
 		Content:   "",
 	}
-	if err := ev.Sign(routerNIP98Key); err != nil {
+	if err := ev.Sign(privateKey); err != nil {
 		t.Fatalf("sign NIP-98 event: %v", err)
 	}
 	payload, err := json.Marshal(ev)
@@ -528,7 +533,6 @@ func TestRouter_NativeMCPRemovesLegacyAgentHTTP(t *testing.T) {
 func TestRouter_SystemInfoIsPublicForAuthCapabilityDiscovery(t *testing.T) {
 	cfg := config.Defaults()
 	cfg.Auth.Enabled = true
-	cfg.Auth.NIP98Enabled = true
 	handler := router.NewWithDeps(nil, zap.NewNop(), config.CORSConfig{AllowedOrigins: []string{"*"}}, nil, router.RouterDeps{Config: cfg})
 	srv := httptest.NewServer(handler)
 	defer srv.Close()
@@ -542,7 +546,6 @@ func TestRouter_SystemInfoIsPublicForAuthCapabilityDiscovery(t *testing.T) {
 func TestRouter_ConfiguredNIP98AuthAllowsProtectedRoutesWithoutJWT(t *testing.T) {
 	cfg := config.Defaults()
 	cfg.Auth.Enabled = true
-	cfg.Auth.NIP98Enabled = true
 	mcpH := handlers.NewMCPHandler(mcpserver.NewServer(nil, zap.NewNop()), zap.NewNop())
 	handler := router.NewWithDeps(nil, zap.NewNop(), config.CORSConfig{AllowedOrigins: []string{"*"}}, nil, router.RouterDeps{Config: cfg, MCP: mcpH})
 	srv := httptest.NewServer(handler)
@@ -595,7 +598,15 @@ func TestReady(t *testing.T) {
 // --- Service CRUD ---
 
 func TestCoreRoutesEnforceTenantRBAC(t *testing.T) {
-	const rbacTestSecret = "router-rbac-test-secret"
+	const aliceKey = "0000000000000000000000000000000000000000000000000000000000000001"
+	const bobKey = "0000000000000000000000000000000000000000000000000000000000000002"
+	alicePubkey, err := nostr.GetPublicKey(aliceKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := nostr.GetPublicKey(bobKey); err != nil {
+		t.Fatal(err)
+	}
 	orgA := uuid.New()
 	orgB := uuid.New()
 	svcA := &domain.Service{ID: uuid.New(), OrgID: orgA, Name: "svc-a", ArtifactRepo: "harbor/svc-a", DefaultBranch: "main", RuntimeType: domain.RuntimeTypeDocker}
@@ -610,10 +621,10 @@ func TestCoreRoutesEnforceTenantRBAC(t *testing.T) {
 		nil, &events.NoopPublisher{}, zap.NewNop(),
 	)
 	lookup := &rbacMemberLookup{members: map[uuid.UUID]map[string]domain.Role{
-		orgA: {"alice": domain.RoleViewer},
+		orgA: {alicePubkey: domain.RoleViewer},
 	}}
 	handler := router.NewWithDeps(registry, zap.NewNop(), config.CORSConfig{AllowedOrigins: []string{"*"}}, nil, router.RouterDeps{
-		AuthMiddleware: auth.MiddlewareConfig{Enabled: true, JWTSecret: rbacTestSecret},
+		AuthMiddleware: auth.MiddlewareConfig{Enabled: true, NIP98Validator: auth.NewNIP98Validator(auth.DefaultNIP98Config())},
 		Services:       svcRepo,
 		Builds:         newMockBuildRepo(),
 		Artifacts:      newMockArtifactRepo(),
@@ -622,18 +633,10 @@ func TestCoreRoutesEnforceTenantRBAC(t *testing.T) {
 	srv := httptest.NewServer(handler)
 	defer srv.Close()
 
-	tokenAlice, err := auth.GenerateTokenWithPubKey("alice", "alice", rbacTestSecret, time.Hour)
-	if err != nil {
-		t.Fatal(err)
-	}
-	tokenBob, err := auth.GenerateTokenWithPubKey("bob", "bob", rbacTestSecret, time.Hour)
-	if err != nil {
-		t.Fatal(err)
-	}
-
 	client := http.DefaultClient
-	allowedReq, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/v1/services/"+svcA.ID.String(), nil)
-	allowedReq.Header.Set("Authorization", "Bearer "+tokenAlice)
+	allowedReqURL := srv.URL + "/api/v1/services/" + svcA.ID.String()
+	allowedReq, _ := http.NewRequest(http.MethodGet, allowedReqURL, nil)
+	allowedReq.Header.Set("Authorization", makeRouterNIP98HeaderWithKey(t, aliceKey, http.MethodGet, allowedReqURL))
 	resp, err := client.Do(allowedReq)
 	if err != nil {
 		t.Fatal(err)
@@ -643,8 +646,9 @@ func TestCoreRoutesEnforceTenantRBAC(t *testing.T) {
 		t.Fatalf("member read status = %d, want 200", resp.StatusCode)
 	}
 
-	crossReq, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/v1/services/"+svcB.ID.String(), nil)
-	crossReq.Header.Set("Authorization", "Bearer "+tokenAlice)
+	crossReqURL := srv.URL + "/api/v1/services/" + svcB.ID.String()
+	crossReq, _ := http.NewRequest(http.MethodGet, crossReqURL, nil)
+	crossReq.Header.Set("Authorization", makeRouterNIP98HeaderWithKey(t, aliceKey, http.MethodGet, crossReqURL))
 	resp, err = client.Do(crossReq)
 	if err != nil {
 		t.Fatal(err)
@@ -654,8 +658,9 @@ func TestCoreRoutesEnforceTenantRBAC(t *testing.T) {
 		t.Fatalf("cross-org read status = %d, want 403", resp.StatusCode)
 	}
 
-	nonMemberReq, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/v1/services/"+svcA.ID.String(), nil)
-	nonMemberReq.Header.Set("Authorization", "Bearer "+tokenBob)
+	nonMemberReqURL := srv.URL + "/api/v1/services/" + svcA.ID.String()
+	nonMemberReq, _ := http.NewRequest(http.MethodGet, nonMemberReqURL, nil)
+	nonMemberReq.Header.Set("Authorization", makeRouterNIP98HeaderWithKey(t, bobKey, http.MethodGet, nonMemberReqURL))
 	resp, err = client.Do(nonMemberReq)
 	if err != nil {
 		t.Fatal(err)

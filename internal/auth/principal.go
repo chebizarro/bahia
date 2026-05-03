@@ -1,9 +1,8 @@
-// Package auth provides multi-method authentication middleware.
+// Package auth provides NIP-98 authentication middleware.
 //
-// The Principal type is a unified identity representation that abstracts
-// over multiple authentication methods (JWT, NIP-98, system/internal).
-// Downstream handlers call GetPrincipal(ctx) instead of being coupled
-// to a specific auth scheme.
+// The Principal type is a unified identity representation for external
+// NIP-98 auth and internal/system callers. Downstream handlers call
+// GetPrincipal(ctx) instead of being coupled to transport details.
 package auth
 
 import "context"
@@ -14,8 +13,6 @@ type AuthMethod string
 const (
 	// MethodNone indicates no authentication (auth disabled).
 	MethodNone AuthMethod = ""
-	// MethodJWT indicates authentication via HMAC-SHA256 JWT.
-	MethodJWT AuthMethod = "jwt"
 	// MethodNIP98 indicates authentication via Nostr NIP-98 HTTP Auth event.
 	MethodNIP98 AuthMethod = "nip98"
 	// MethodSystem is used for internal / service-to-service calls.
@@ -28,8 +25,7 @@ type Principal struct {
 	Subject string `json:"sub"`
 	// Method is the authentication method used to establish identity.
 	Method AuthMethod `json:"method"`
-	// PubKey is the Nostr public key (hex), populated for NIP-98 and optionally
-	// for JWT principals that have a pubkey claim.
+	// PubKey is the Nostr public key (hex), populated for NIP-98 principals.
 	PubKey string `json:"pubkey,omitempty"`
 	// NIP05 is the resolved NIP-05 identifier (e.g. "user@domain.com").
 	// Empty if resolution failed or was not attempted.

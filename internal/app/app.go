@@ -44,20 +44,20 @@ import (
 
 // App holds all application components.
 type App struct {
-	Config      *config.Config
-	Logger      *zap.Logger
-	DB          *pgxpool.Pool
-	Registry    *service.RegistryService
-	LLMRegistry *service.LLMRegistryService
-	HTTPServer  *http.Server
-	Publisher   events.Publisher
-	Coordinator *workflow.Coordinator
-	Reconciler  *reconcile.Reconciler
-	NostrPub    *nostrAdapter.Publisher
-	Telemetry   *telemetry.Provider
-	Background       *BackgroundManager
-	toolCoordinator  *service.ToolProvisioningCoordinator
-	relayPools       []*nostrAdapter.RelayPool
+	Config          *config.Config
+	Logger          *zap.Logger
+	DB              *pgxpool.Pool
+	Registry        *service.RegistryService
+	LLMRegistry     *service.LLMRegistryService
+	HTTPServer      *http.Server
+	Publisher       events.Publisher
+	Coordinator     *workflow.Coordinator
+	Reconciler      *reconcile.Reconciler
+	NostrPub        *nostrAdapter.Publisher
+	Telemetry       *telemetry.Provider
+	Background      *BackgroundManager
+	toolCoordinator *service.ToolProvisioningCoordinator
+	relayPools      []*nostrAdapter.RelayPool
 }
 
 // New creates and wires together all application components.
@@ -455,15 +455,14 @@ func New(cfg *config.Config) (*App, error) {
 	rbac := auth.NewRBAC(orgMemberRepo)
 	var nip98Validator *auth.NIP98Validator
 	var nip05Resolver *auth.NIP05Resolver
-	if cfg.Auth.Enabled && cfg.Auth.NIP98Enabled {
+	if cfg.Auth.Enabled {
 		nip98Validator = auth.NewNIP98Validator(auth.DefaultNIP98Config())
-		if len(cfg.Adoption.AllowedEmails) > 0 || len(cfg.DirectRuntime.AllowedEmails) > 0 {
+		if len(cfg.Adoption.AllowedEmails) > 0 || len(cfg.DirectRuntime.AllowedEmails) > 0 || len(cfg.LLM.AllowedEmails) > 0 {
 			nip05Resolver = auth.NewNIP05Resolver()
 		}
 	}
 	authMiddleware := auth.MiddlewareConfig{
 		Enabled:        cfg.Auth.Enabled,
-		JWTSecret:      cfg.Auth.JWTSecret,
 		NIP98Validator: nip98Validator,
 		NIP05Resolver:  nip05Resolver,
 	}
@@ -508,20 +507,20 @@ func New(cfg *config.Config) (*App, error) {
 	}
 
 	return &App{
-		Config:      cfg,
-		Logger:      logger,
-		DB:          pool,
-		Registry:    registry,
-		LLMRegistry: llmRegistry,
-		HTTPServer:  httpServer,
-		Publisher:   publisher,
-		Coordinator: coord,
-		Reconciler:  rec,
-		NostrPub:    nostrPub,
-		Telemetry:   telemetryProvider,
-		Background:       bgManager,
-		toolCoordinator:  toolCoordinator,
-		relayPools:       []*nostrAdapter.RelayPool{controlPlanePool, relayPool},
+		Config:          cfg,
+		Logger:          logger,
+		DB:              pool,
+		Registry:        registry,
+		LLMRegistry:     llmRegistry,
+		HTTPServer:      httpServer,
+		Publisher:       publisher,
+		Coordinator:     coord,
+		Reconciler:      rec,
+		NostrPub:        nostrPub,
+		Telemetry:       telemetryProvider,
+		Background:      bgManager,
+		toolCoordinator: toolCoordinator,
+		relayPools:      []*nostrAdapter.RelayPool{controlPlanePool, relayPool},
 	}, nil
 }
 

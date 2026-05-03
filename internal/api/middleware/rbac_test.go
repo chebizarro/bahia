@@ -126,7 +126,7 @@ func TestRBACMiddleware_InvalidOrgID(t *testing.T) {
 	}))
 
 	req := httptest.NewRequest("GET", "/orgs/invalid/test", nil)
-	principal := &auth.Principal{Subject: "test", Method: auth.MethodJWT}
+	principal := &auth.Principal{Subject: "test", Method: auth.MethodNIP98}
 	ctx := auth.ContextWithPrincipal(req.Context(), principal)
 
 	rctx := chi.NewRouteContext()

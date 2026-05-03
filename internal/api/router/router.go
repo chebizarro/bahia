@@ -707,7 +707,7 @@ func requestWithRouteParam(r *http.Request, name, value string) *http.Request {
 }
 
 func routeAuthConfig(deps RouterDeps, authCfg ...config.AuthConfig) auth.MiddlewareConfig {
-	if deps.AuthMiddleware.Enabled || deps.AuthMiddleware.JWTSecret != "" || deps.AuthMiddleware.NIP98Validator != nil || deps.AuthMiddleware.NIP05Resolver != nil {
+	if deps.AuthMiddleware.Enabled || deps.AuthMiddleware.NIP98Validator != nil || deps.AuthMiddleware.NIP05Resolver != nil {
 		return deps.AuthMiddleware
 	}
 	if len(authCfg) > 0 {
@@ -721,10 +721,9 @@ func routeAuthConfig(deps RouterDeps, authCfg ...config.AuthConfig) auth.Middlew
 
 func middlewareAuthConfig(cfg config.AuthConfig) auth.MiddlewareConfig {
 	out := auth.MiddlewareConfig{
-		Enabled:   cfg.Enabled,
-		JWTSecret: cfg.JWTSecret,
+		Enabled: cfg.Enabled,
 	}
-	if cfg.NIP98Enabled {
+	if cfg.Enabled {
 		out.NIP98Validator = auth.NewNIP98Validator(auth.DefaultNIP98Config())
 	}
 	return out

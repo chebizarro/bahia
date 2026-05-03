@@ -52,9 +52,6 @@ func TestDefaults(t *testing.T) {
 	if cfg.LLM.AllowOperationalREST {
 		t.Error("expected LLM operational REST disabled by default")
 	}
-	if cfg.Auth.NIP98Enabled {
-		t.Error("expected NIP-98 auth disabled by default")
-	}
 	if cfg.Nostr.Sidecar.Enabled {
 		t.Error("expected relay sidecar disabled by default")
 	}
@@ -209,7 +206,6 @@ func TestLoadFromEnvVars(t *testing.T) {
 		"BAHIA_SERVER_PORT":           "3000",
 		"BAHIA_NOSTR_PUBLISH_ENABLED": "false",
 		"BAHIA_RUNTIME_DOCKER_HOST":   "tcp://remote:2375",
-		"BAHIA_AUTH_JWT_SECRET":       "supersecret",
 		"BAHIA_LOG_LEVEL":             "debug",
 		"BAHIA_RECONCILE_ENABLED":     "false",
 	}
@@ -243,15 +239,44 @@ func TestLoadFromEnvVars(t *testing.T) {
 	if cfg.Runtime.DockerHost != "tcp://remote:2375" {
 		t.Errorf("Runtime.DockerHost = %q, want %q", cfg.Runtime.DockerHost, "tcp://remote:2375")
 	}
-	if cfg.Auth.JWTSecret != "supersecret" {
-		t.Errorf("Auth.JWTSecret = %q, want %q", cfg.Auth.JWTSecret, "supersecret")
-	}
 	if cfg.Log.Level != "debug" {
 		t.Errorf("Log.Level = %q, want %q", cfg.Log.Level, "debug")
 	}
 	if cfg.Reconcile.Enabled != false {
 		t.Error("Reconcile.Enabled should be false")
 	}
+}
+
+func TestLoadRejectsRemovedAuthKeys(t *testing.T) {
+	t.Run("jwt_secret yaml", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "config.yaml")
+		if err := os.WriteFile(path, []byte("auth:\n  jwt_secret: test-secret\n"), 0o644); err != nil {
+			t.Fatalf("writing temp config: %v", err)
+		}
+		_, err := Load(path)
+		if err == nil || !strings.Contains(err.Error(), "auth.jwt_secret has been removed") {
+			t.Fatalf("Load() error = %v, want removed jwt_secret error", err)
+		}
+	})
+
+	t.Run("nip98_enabled yaml", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "config.yaml")
+		if err := os.WriteFile(path, []byte("auth:\n  enabled: true\n  nip98_enabled: true\n"), 0o644); err != nil {
+			t.Fatalf("writing temp config: %v", err)
+		}
+		_, err := Load(path)
+		if err == nil || !strings.Contains(err.Error(), "auth.nip98_enabled has been removed") {
+			t.Fatalf("Load() error = %v, want removed nip98_enabled error", err)
+		}
+	})
+
+	t.Run("jwt_secret env", func(t *testing.T) {
+		t.Setenv("BAHIA_AUTH_JWT_SECRET", "test-secret")
+		_, err := Load("")
+		if err == nil || !strings.Contains(err.Error(), "auth.jwt_secret has been removed") {
+			t.Fatalf("Load() error = %v, want removed jwt_secret error", err)
+		}
+	})
 }
 
 func TestLoadFromEnvVars_DoubleUnderscore(t *testing.T) {
@@ -395,7 +420,6 @@ func TestPrivilegedRouteConfigValidation(t *testing.T) {
 	t.Run("adoption requires allowlist", func(t *testing.T) {
 		cfg := Defaults()
 		cfg.Auth.Enabled = true
-		cfg.Auth.JWTSecret = "secret"
 		cfg.Adoption.Enabled = true
 		err := cfg.validate()
 		if err == nil || !strings.Contains(err.Error(), "adoption operator allowlist") {
@@ -406,7 +430,6 @@ func TestPrivilegedRouteConfigValidation(t *testing.T) {
 	t.Run("direct runtime requires allowlist", func(t *testing.T) {
 		cfg := Defaults()
 		cfg.Auth.Enabled = true
-		cfg.Auth.JWTSecret = "secret"
 		cfg.DirectRuntime.Enabled = true
 		err := cfg.validate()
 		if err == nil || !strings.Contains(err.Error(), "direct_runtime_actions operator allowlist") {
@@ -428,7 +451,6 @@ func TestPrivilegedRouteConfigValidation(t *testing.T) {
 	t.Run("LLM operational REST requires allowlist", func(t *testing.T) {
 		cfg := Defaults()
 		cfg.Auth.Enabled = true
-		cfg.Auth.JWTSecret = "secret"
 		cfg.LLM.Enabled = true
 		cfg.LLM.AllowOperationalREST = true
 		err := cfg.validate()
@@ -440,7 +462,6 @@ func TestPrivilegedRouteConfigValidation(t *testing.T) {
 	t.Run("LLM operational REST requires LLM subsystem", func(t *testing.T) {
 		cfg := Defaults()
 		cfg.Auth.Enabled = true
-		cfg.Auth.JWTSecret = "secret"
 		cfg.LLM.AllowOperationalREST = true
 		cfg.LLM.AllowedSubjects = []string{"ops"}
 		err := cfg.validate()
@@ -452,7 +473,6 @@ func TestPrivilegedRouteConfigValidation(t *testing.T) {
 	t.Run("enabled with auth and allowlists is valid", func(t *testing.T) {
 		cfg := Defaults()
 		cfg.Auth.Enabled = true
-		cfg.Auth.JWTSecret = "secret"
 		cfg.Adoption.Enabled = true
 		cfg.Adoption.AllowedSubjects = []string{"ops"}
 		cfg.DirectRuntime.Enabled = true
@@ -492,10 +512,9 @@ func TestPrivilegedRouteConfigValidation(t *testing.T) {
 		}
 	})
 
-	t.Run("nip98 can satisfy privileged auth method", func(t *testing.T) {
+	t.Run("auth enabled satisfies privileged auth method", func(t *testing.T) {
 		cfg := Defaults()
 		cfg.Auth.Enabled = true
-		cfg.Auth.NIP98Enabled = true
 		cfg.Adoption.Enabled = true
 		cfg.Adoption.AllowedPubkeys = []string{"abcdef"}
 		if err := cfg.validate(); err != nil {
@@ -521,7 +540,6 @@ func TestLoadPrivilegedRouteConfigFromYAML(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	content := []byte(`auth:
   enabled: true
-  jwt_secret: test-secret
 adoption:
   enabled: true
   allow_compose_takeover: true
@@ -633,16 +651,8 @@ func TestPrivilegedFeatureValidationRequiresAuthAndOperatorAllowlists(t *testing
 		t.Fatalf("adoption without auth error = %v", err)
 	}
 
-	adoptionNoCredential := Defaults()
-	adoptionNoCredential.Auth.Enabled = true
-	adoptionNoCredential.Adoption.Enabled = true
-	if err := adoptionNoCredential.validate(); err == nil || !strings.Contains(err.Error(), "auth.jwt_secret or auth.nip98_enabled=true is required when adoption.enabled=true") {
-		t.Fatalf("adoption without auth credential error = %v", err)
-	}
-
 	adoptionNoAllowlist := Defaults()
 	adoptionNoAllowlist.Auth.Enabled = true
-	adoptionNoAllowlist.Auth.JWTSecret = "test-secret"
 	adoptionNoAllowlist.Adoption.Enabled = true
 	if err := adoptionNoAllowlist.validate(); err == nil || !strings.Contains(err.Error(), "adoption operator allowlist is required") {
 		t.Fatalf("adoption without allowlist error = %v", err)
@@ -650,7 +660,6 @@ func TestPrivilegedFeatureValidationRequiresAuthAndOperatorAllowlists(t *testing
 
 	adoptionAllowed := Defaults()
 	adoptionAllowed.Auth.Enabled = true
-	adoptionAllowed.Auth.JWTSecret = "test-secret"
 	adoptionAllowed.Adoption.Enabled = true
 	adoptionAllowed.Adoption.AllowedSubjects = []string{"ops"}
 	if err := adoptionAllowed.validate(); err != nil {
@@ -665,7 +674,6 @@ func TestPrivilegedFeatureValidationRequiresAuthAndOperatorAllowlists(t *testing
 
 	directNoAllowlist := Defaults()
 	directNoAllowlist.Auth.Enabled = true
-	directNoAllowlist.Auth.NIP98Enabled = true
 	directNoAllowlist.DirectRuntime.Enabled = true
 	if err := directNoAllowlist.validate(); err == nil || !strings.Contains(err.Error(), "direct_runtime_actions operator allowlist is required") {
 		t.Fatalf("direct runtime without allowlist error = %v", err)
@@ -673,7 +681,6 @@ func TestPrivilegedFeatureValidationRequiresAuthAndOperatorAllowlists(t *testing
 
 	directAllowed := Defaults()
 	directAllowed.Auth.Enabled = true
-	directAllowed.Auth.NIP98Enabled = true
 	directAllowed.DirectRuntime.Enabled = true
 	directAllowed.DirectRuntime.AllowedPubkeys = []string{"0123456789abcdef"}
 	if err := directAllowed.validate(); err != nil {
@@ -689,7 +696,6 @@ func TestPrivilegedFeatureValidationRequiresAuthAndOperatorAllowlists(t *testing
 
 	llmOperationalNoAllowlist := Defaults()
 	llmOperationalNoAllowlist.Auth.Enabled = true
-	llmOperationalNoAllowlist.Auth.NIP98Enabled = true
 	llmOperationalNoAllowlist.LLM.Enabled = true
 	llmOperationalNoAllowlist.LLM.AllowOperationalREST = true
 	if err := llmOperationalNoAllowlist.validate(); err == nil || !strings.Contains(err.Error(), "llm operator allowlist is required") {
@@ -698,7 +704,6 @@ func TestPrivilegedFeatureValidationRequiresAuthAndOperatorAllowlists(t *testing
 
 	llmOperationalNoLLM := Defaults()
 	llmOperationalNoLLM.Auth.Enabled = true
-	llmOperationalNoLLM.Auth.NIP98Enabled = true
 	llmOperationalNoLLM.LLM.AllowOperationalREST = true
 	llmOperationalNoLLM.LLM.AllowedPubkeys = []string{"0123456789abcdef"}
 	if err := llmOperationalNoLLM.validate(); err == nil || !strings.Contains(err.Error(), "llm.enabled=true is required") {
@@ -707,7 +712,6 @@ func TestPrivilegedFeatureValidationRequiresAuthAndOperatorAllowlists(t *testing
 
 	llmOperationalAllowed := Defaults()
 	llmOperationalAllowed.Auth.Enabled = true
-	llmOperationalAllowed.Auth.NIP98Enabled = true
 	llmOperationalAllowed.LLM.Enabled = true
 	llmOperationalAllowed.LLM.AllowOperationalREST = true
 	llmOperationalAllowed.LLM.AllowedPubkeys = []string{"0123456789abcdef"}

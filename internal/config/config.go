@@ -212,10 +212,9 @@ type LogConfig struct {
 }
 
 // AuthConfig holds authentication settings.
+// When enabled, protected HTTP routes require NIP-98 Authorization headers.
 type AuthConfig struct {
-	Enabled      bool   `koanf:"enabled"`
-	JWTSecret    string `koanf:"jwt_secret"`
-	NIP98Enabled bool   `koanf:"nip98_enabled"`
+	Enabled bool `koanf:"enabled"`
 }
 
 // OperatorAccessConfig holds system-operator allowlists for privileged API routes.
@@ -471,6 +470,9 @@ func Load(configPath string) (*Config, error) {
 		return nil, fmt.Errorf("loading environment config: %w", err)
 	}
 
+	if err := rejectRemovedAuthKeys(k); err != nil {
+		return nil, err
+	}
 	if err := k.Unmarshal("", cfg); err != nil {
 		return nil, fmt.Errorf("unmarshaling config: %w", err)
 	}
@@ -481,13 +483,19 @@ func Load(configPath string) (*Config, error) {
 	return cfg, nil
 }
 
+func rejectRemovedAuthKeys(k *koanf.Koanf) error {
+	for _, key := range []string{"auth.jwt_secret", "auth.nip98_enabled"} {
+		if k.Exists(key) {
+			return fmt.Errorf("config validation failed: %s has been removed; auth.enabled=true now requires NIP-98-only HTTP auth", key)
+		}
+	}
+	return nil
+}
+
 func (c *Config) validate() error {
 	if c.Adoption.Enabled {
 		if !c.Auth.Enabled {
 			return fmt.Errorf("config validation failed: auth.enabled=true is required when adoption.enabled=true")
-		}
-		if strings.TrimSpace(c.Auth.JWTSecret) == "" && !c.Auth.NIP98Enabled {
-			return fmt.Errorf("config validation failed: auth.jwt_secret or auth.nip98_enabled=true is required when adoption.enabled=true")
 		}
 		if c.Adoption.OperatorAccessConfig.Empty() {
 			return fmt.Errorf("config validation failed: adoption operator allowlist is required when adoption.enabled=true")
@@ -510,9 +518,6 @@ func (c *Config) validate() error {
 	if c.DirectRuntime.Enabled {
 		if !c.Auth.Enabled {
 			return fmt.Errorf("config validation failed: auth.enabled=true is required when direct_runtime_actions.enabled=true")
-		}
-		if strings.TrimSpace(c.Auth.JWTSecret) == "" && !c.Auth.NIP98Enabled {
-			return fmt.Errorf("config validation failed: auth.jwt_secret or auth.nip98_enabled=true is required when direct_runtime_actions.enabled=true")
 		}
 		if c.DirectRuntime.OperatorAccessConfig.Empty() {
 			return fmt.Errorf("config validation failed: direct_runtime_actions operator allowlist is required when direct_runtime_actions.enabled=true")
@@ -554,9 +559,6 @@ func (c *Config) validateLLM() error {
 	if c.LLM.AllowOperationalREST {
 		if !c.Auth.Enabled {
 			return fmt.Errorf("config validation failed: auth.enabled=true is required when llm.allow_operational_rest=true")
-		}
-		if strings.TrimSpace(c.Auth.JWTSecret) == "" && !c.Auth.NIP98Enabled {
-			return fmt.Errorf("config validation failed: auth.jwt_secret or auth.nip98_enabled=true is required when llm.allow_operational_rest=true")
 		}
 		if c.LLM.OperatorAccessConfig.Empty() {
 			return fmt.Errorf("config validation failed: llm operator allowlist is required when llm.allow_operational_rest=true")

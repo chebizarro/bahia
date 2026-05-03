@@ -87,10 +87,8 @@ log:
   format: json
 
 auth:
+  # When enabled, protected HTTP routes require NIP-98 Authorization headers.
   enabled: false
-  jwt_secret: ""
-  # NIP-98 is off by default; enable only when Nostr HTTP auth should be accepted.
-  nip98_enabled: false
 
 adoption:
   # Privileged adoption scan/import routes are disabled by default.

@@ -5,8 +5,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
+	"github.com/nbd-wtf/go-nostr"
 	"github.com/openagentsinc/bahia/internal/api/router"
 	"github.com/openagentsinc/bahia/internal/auth"
 	"github.com/openagentsinc/bahia/internal/config"
@@ -63,47 +63,42 @@ func TestLLMOperationalRESTRoutesDisabledByDefault(t *testing.T) {
 }
 
 func TestLLMOperationalRESTCompatibilityRequiresOperatorAccess(t *testing.T) {
-	const secret = "test-secret"
+	operatorPubkey, err := nostr.GetPublicKey(routerNIP98Key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const userKey = "0000000000000000000000000000000000000000000000000000000000000004"
 	cfg := config.Defaults()
 	cfg.Auth.Enabled = true
-	cfg.Auth.JWTSecret = secret
 	cfg.LLM.Enabled = true
 	cfg.LLM.AllowOperationalREST = true
-	cfg.LLM.AllowedSubjects = []string{"ops"}
+	cfg.LLM.AllowedPubkeys = []string{operatorPubkey}
 
 	h := router.NewWithDeps(nil, zap.NewNop(), config.CORSConfig{}, nil, router.RouterDeps{
 		Config: cfg,
 		AuthMiddleware: auth.MiddlewareConfig{
-			Enabled:   true,
-			JWTSecret: secret,
+			Enabled:        true,
+			NIP98Validator: auth.NewNIP98Validator(auth.DefaultNIP98Config()),
 		},
 		LLMRegistry: &service.LLMRegistryService{},
 	})
 
-	operatorToken, err := auth.GenerateToken("ops", secret, time.Hour)
-	if err != nil {
-		t.Fatalf("operator token: %v", err)
-	}
-	userToken, err := auth.GenerateToken("developer", secret, time.Hour)
-	if err != nil {
-		t.Fatalf("user token: %v", err)
-	}
-
 	tests := []struct {
 		name       string
-		token      string
+		key        string
 		wantStatus int
 	}{
 		{name: "unauthorized", wantStatus: http.StatusUnauthorized},
-		{name: "forbidden", token: userToken, wantStatus: http.StatusForbidden},
-		{name: "operator reaches compatibility handler", token: operatorToken, wantStatus: http.StatusBadRequest},
+		{name: "forbidden", key: userKey, wantStatus: http.StatusForbidden},
+		{name: "operator reaches compatibility handler", key: routerNIP98Key, wantStatus: http.StatusBadRequest},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			req := httptest.NewRequest(http.MethodPost, "/api/v1/llm/intents", strings.NewReader(`not-json`))
+			reqPath := "/api/v1/llm/intents"
+			req := httptest.NewRequest(http.MethodPost, reqPath, strings.NewReader(`not-json`))
 			req.Header.Set("Content-Type", "application/json")
-			if tt.token != "" {
-				req.Header.Set("Authorization", "Bearer "+tt.token)
+			if tt.key != "" {
+				req.Header.Set("Authorization", makeRouterNIP98HeaderWithKey(t, tt.key, http.MethodPost, "http://example.com"+reqPath))
 			}
 			w := httptest.NewRecorder()
 

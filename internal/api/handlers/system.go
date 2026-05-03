@@ -228,7 +228,7 @@ func (h *SystemHandler) GetInfo(w http.ResponseWriter, r *http.Request) {
 		"relay_sidecar":          h.cfg.Nostr.Sidecar.Enabled,
 		"relay_read_models":      h.cfg.Nostr.Sidecar.Enabled && h.cfg.Nostr.PublishEnabled,
 		"llm_control_plane":      h.cfg.LLM.Enabled,
-		"direct_nostr_http_auth": h.cfg.Auth.NIP98Enabled,
+		"direct_nostr_http_auth": h.cfg.Auth.Enabled,
 		"mcp_transport":          h.mcpTransportEnabled,
 		"legacy_sse":             false,
 		"legacy_jwt_exchange":    false,

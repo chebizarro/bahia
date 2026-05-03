@@ -246,8 +246,7 @@ func TestPrincipal_NIP05Field(t *testing.T) {
 func TestMiddlewareConfig_NIP05Resolver(t *testing.T) {
 	cfg := MiddlewareConfig{
 		Enabled:        true,
-		JWTSecret:      "secret",
-		NIP98Validator: nil,
+		NIP98Validator: NewNIP98Validator(DefaultNIP98Config()),
 		NIP05Resolver:  NewNIP05Resolver(),
 	}
 

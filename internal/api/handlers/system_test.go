@@ -16,7 +16,7 @@ func TestSystemHandler_GetInfo_ExposesRelaySidecarCapabilities(t *testing.T) {
 	cfg.Nostr.Sidecar.Enabled = true
 	cfg.Nostr.Sidecar.PublicURL = "ws://localhost:3000/relay"
 	cfg.Nostr.BrowserRelays = []string{"ws://localhost:3000/relay"}
-	cfg.Auth.NIP98Enabled = true
+	cfg.Auth.Enabled = true
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/system/info", nil)
 	w := httptest.NewRecorder()
@@ -236,7 +236,7 @@ func containsString(values []string, target string) bool {
 
 func TestSystemHandler_GetInfo_AdvertisesRemovedLegacyFeaturesAsDisabled(t *testing.T) {
 	cfg := config.Defaults()
-	cfg.Auth.JWTSecret = "test-secret"
+	cfg.Auth.Enabled = true
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/system/info", nil)
 	w := httptest.NewRecorder()

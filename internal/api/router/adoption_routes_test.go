@@ -7,8 +7,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
+	"github.com/nbd-wtf/go-nostr"
 	"github.com/openagentsinc/bahia/internal/api/router"
 	"github.com/openagentsinc/bahia/internal/auth"
 	"github.com/openagentsinc/bahia/internal/config"
@@ -46,52 +46,46 @@ func TestPrivilegedRoutesDisabledByDefault(t *testing.T) {
 }
 
 func TestPrivilegedRoutesRequireOperatorAccess(t *testing.T) {
-	const secret = "test-secret"
+	operatorPubkey, err := nostr.GetPublicKey(routerNIP98Key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const userKey = "0000000000000000000000000000000000000000000000000000000000000003"
 	cfg := config.Defaults()
 	cfg.Auth.Enabled = true
-	cfg.Auth.JWTSecret = secret
 	cfg.Adoption.Enabled = true
-	cfg.Adoption.AllowedSubjects = []string{"ops"}
+	cfg.Adoption.AllowedPubkeys = []string{operatorPubkey}
 	cfg.DirectRuntime.Enabled = true
-	cfg.DirectRuntime.AllowedSubjects = []string{"ops"}
+	cfg.DirectRuntime.AllowedPubkeys = []string{operatorPubkey}
 
 	h := router.NewWithDeps(nil, zap.NewNop(), config.CORSConfig{}, nil, router.RouterDeps{
 		Config: cfg,
 		AuthMiddleware: auth.MiddlewareConfig{
-			Enabled:   true,
-			JWTSecret: secret,
+			Enabled:        true,
+			NIP98Validator: auth.NewNIP98Validator(auth.DefaultNIP98Config()),
 		},
 	})
-
-	operatorToken, err := auth.GenerateToken("ops", secret, time.Hour)
-	if err != nil {
-		t.Fatalf("operator token: %v", err)
-	}
-	userToken, err := auth.GenerateToken("developer", secret, time.Hour)
-	if err != nil {
-		t.Fatalf("user token: %v", err)
-	}
 
 	tests := []struct {
 		name       string
 		path       string
-		token      string
+		key        string
 		wantStatus int
 	}{
 		{name: "adoption unauthorized", path: "/api/v1/adoption/scan", wantStatus: http.StatusUnauthorized},
-		{name: "adoption forbidden", path: "/api/v1/adoption/scan", token: userToken, wantStatus: http.StatusForbidden},
-		{name: "adoption operator reaches handler", path: "/api/v1/adoption/scan", token: operatorToken, wantStatus: http.StatusServiceUnavailable},
+		{name: "adoption forbidden", path: "/api/v1/adoption/scan", key: userKey, wantStatus: http.StatusForbidden},
+		{name: "adoption operator reaches handler", path: "/api/v1/adoption/scan", key: routerNIP98Key, wantStatus: http.StatusServiceUnavailable},
 		{name: "runtime unauthorized", path: "/api/v1/services/11111111-1111-1111-1111-111111111111/environments/22222222-2222-2222-2222-222222222222/restart", wantStatus: http.StatusUnauthorized},
-		{name: "runtime forbidden", path: "/api/v1/services/11111111-1111-1111-1111-111111111111/environments/22222222-2222-2222-2222-222222222222/restart", token: userToken, wantStatus: http.StatusForbidden},
-		{name: "runtime operator reaches handler", path: "/api/v1/services/11111111-1111-1111-1111-111111111111/environments/22222222-2222-2222-2222-222222222222/restart", token: operatorToken, wantStatus: http.StatusServiceUnavailable},
+		{name: "runtime forbidden", path: "/api/v1/services/11111111-1111-1111-1111-111111111111/environments/22222222-2222-2222-2222-222222222222/restart", key: userKey, wantStatus: http.StatusForbidden},
+		{name: "runtime operator reaches handler", path: "/api/v1/services/11111111-1111-1111-1111-111111111111/environments/22222222-2222-2222-2222-222222222222/restart", key: routerNIP98Key, wantStatus: http.StatusServiceUnavailable},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			req := httptest.NewRequest(http.MethodPost, tt.path, strings.NewReader(`{}`))
 			req.Header.Set("Content-Type", "application/json")
-			if tt.token != "" {
-				req.Header.Set("Authorization", "Bearer "+tt.token)
+			if tt.key != "" {
+				req.Header.Set("Authorization", makeRouterNIP98HeaderWithKey(t, tt.key, http.MethodPost, "http://example.com"+tt.path))
 			}
 			w := httptest.NewRecorder()
 			h.ServeHTTP(w, req)
@@ -103,7 +97,10 @@ func TestPrivilegedRoutesRequireOperatorAccess(t *testing.T) {
 }
 
 func TestAdoptionRoutesScanManagedEndpointsWithOperatorAuth(t *testing.T) {
-	const secret = "test-secret"
+	operatorPubkey, err := nostr.GetPublicKey(routerNIP98Key)
+	if err != nil {
+		t.Fatal(err)
+	}
 	hostA := newManagedEndpointDockerServer(t, "container-a", "legacy-api-a", "registry.example/api-a", "sha256:repoa")
 	defer hostA.Close()
 	hostB := newManagedEndpointDockerServer(t, "container-b", "legacy-api-b", "registry.example/api-b", "sha256:repob")
@@ -123,9 +120,8 @@ func TestAdoptionRoutesScanManagedEndpointsWithOperatorAuth(t *testing.T) {
 
 	cfg := config.Defaults()
 	cfg.Auth.Enabled = true
-	cfg.Auth.JWTSecret = secret
 	cfg.Adoption.Enabled = true
-	cfg.Adoption.AllowedSubjects = []string{"ops"}
+	cfg.Adoption.AllowedPubkeys = []string{operatorPubkey}
 	cfg.Adoption.AllowRawDockerHosts = false
 	cfg.Runtime.Endpoints = map[string]config.RuntimeEndpointConfig{
 		"host-a": {DockerHost: hostA.URL},
@@ -140,18 +136,15 @@ func TestAdoptionRoutesScanManagedEndpointsWithOperatorAuth(t *testing.T) {
 		Config:   cfg,
 		Adoption: adoptionSvc,
 		AuthMiddleware: auth.MiddlewareConfig{
-			Enabled:   true,
-			JWTSecret: secret,
+			Enabled:        true,
+			NIP98Validator: auth.NewNIP98Validator(auth.DefaultNIP98Config()),
 		},
 	})
-	operatorToken, err := auth.GenerateToken("ops", secret, time.Hour)
-	if err != nil {
-		t.Fatalf("operator token: %v", err)
-	}
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/adoption/scan", strings.NewReader(`{"targets":[{"name":"host-a","endpoint_ref":"host-a"},{"name":"host-b","endpoint_ref":"host-b"}]}`))
+	reqPath := "/api/v1/adoption/scan"
+	req := httptest.NewRequest(http.MethodPost, reqPath, strings.NewReader(`{"targets":[{"name":"host-a","endpoint_ref":"host-a"},{"name":"host-b","endpoint_ref":"host-b"}]}`))
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+operatorToken)
+	req.Header.Set("Authorization", makeRouterNIP98HeaderWithKey(t, routerNIP98Key, http.MethodPost, "http://example.com"+reqPath))
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
@@ -206,9 +199,10 @@ func TestAdoptionRoutesScanManagedEndpointsWithOperatorAuth(t *testing.T) {
 		t.Fatalf("missing host scan result(s): %#v", seen)
 	}
 
-	rawReq := httptest.NewRequest(http.MethodPost, "/api/v1/adoption/scan", strings.NewReader(`{"targets":[{"name":"raw","docker_host":"`+hostA.URL+`"}]}`))
+	rawReqPath := "/api/v1/adoption/scan"
+	rawReq := httptest.NewRequest(http.MethodPost, rawReqPath, strings.NewReader(`{"targets":[{"name":"raw","docker_host":"`+hostA.URL+`"}]}`))
 	rawReq.Header.Set("Content-Type", "application/json")
-	rawReq.Header.Set("Authorization", "Bearer "+operatorToken)
+	rawReq.Header.Set("Authorization", makeRouterNIP98HeaderWithKey(t, routerNIP98Key, http.MethodPost, "http://example.com"+rawReqPath))
 	rawW := httptest.NewRecorder()
 	h.ServeHTTP(rawW, rawReq)
 	if rawW.Code != http.StatusBadRequest || !strings.Contains(rawW.Body.String(), "raw docker_host targets are disabled") {

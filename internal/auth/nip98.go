@@ -27,6 +27,8 @@ func DefaultNIP98Config() NIP98Config {
 }
 
 // NIP98Validator validates NIP-98 HTTP Auth events and provides replay protection.
+// Clients must sign a fresh event for each request attempt; include fresh entropy
+// such as a nonce tag when repeating the same method/URL within the same second.
 type NIP98Validator struct {
 	cfg NIP98Config
 
