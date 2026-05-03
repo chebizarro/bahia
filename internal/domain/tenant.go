@@ -53,7 +53,7 @@ type Organization struct {
 	ID          uuid.UUID `json:"id"`
 	Name        string    `json:"name"`         // Unique slug (lowercase, no spaces)
 	DisplayName string    `json:"display_name"` // Human-readable name
-	OwnerPubkey string    `json:"owner_pubkey"` // Nostr pubkey of the owner
+	OwnerPubkey string    `json:"owner_pubkey"` // Canonical lowercase hex Nostr pubkey of the owner
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
 }
@@ -61,7 +61,7 @@ type Organization struct {
 // OrgMember represents a user's membership in an organization.
 type OrgMember struct {
 	OrgID     uuid.UUID `json:"org_id"`
-	Pubkey    string    `json:"pubkey"`     // Nostr pubkey
+	Pubkey    string    `json:"pubkey"`     // Canonical lowercase hex Nostr pubkey
 	Role      Role      `json:"role"`       // viewer, deployer, admin, owner
 	NIP05     string    `json:"nip05"`      // Resolved NIP-05 identifier (cached)
 	JoinedAt  time.Time `json:"joined_at"`
@@ -72,9 +72,9 @@ type OrgMember struct {
 type OrgInvite struct {
 	ID        uuid.UUID `json:"id"`
 	OrgID     uuid.UUID `json:"org_id"`
-	Pubkey    string    `json:"pubkey"`    // Invitee's Nostr pubkey
+	Pubkey    string    `json:"pubkey"`    // Invitee's canonical lowercase hex Nostr pubkey
 	Role      Role      `json:"role"`      // Role to grant upon acceptance
-	InvitedBy string    `json:"invited_by"` // Inviter's pubkey
+	InvitedBy string    `json:"invited_by"` // Inviter's canonical lowercase hex Nostr pubkey
 	ExpiresAt time.Time `json:"expires_at"`
 	CreatedAt time.Time `json:"created_at"`
 }

@@ -27,10 +27,9 @@ Issue: `bahia-4tw4.5`
 - A follow-up implementation issue is required to normalize tenant pubkeys before persistence and to document the invariant.
 
 ### Data migration status
-- A read-only live-data query was not run in this docs/audit task.
-- Need follow-up to run a read-only DB audit query for uppercase/mixed-case rows and decide if a one-time migration is required.
+- Read-only audit executed against local compose Postgres (`docker compose exec -T postgres psql -U bahia -d bahia ...`) on 2026-05-03.
 
-Suggested read-only query set:
+Exact query set:
 ```sql
 SELECT COUNT(*) AS mixed_owner_pubkeys
 FROM organizations
@@ -45,6 +44,17 @@ FROM org_invites
 WHERE pubkey <> lower(pubkey)
    OR invited_by <> lower(invited_by);
 ```
+
+Result:
+```text
+mixed_owner_pubkeys: 0
+mixed_member_pubkeys: 0
+mixed_invite_pubkeys: 0
+```
+
+Conclusion:
+- No mixed-case rows found in audited tables.
+- No follow-up data-normalization migration bead is required from this audit run.
 
 ## 2) Remaining REST compatibility route audit
 

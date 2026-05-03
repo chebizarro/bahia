@@ -3,10 +3,12 @@ package repository
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/openagentsinc/bahia/internal/domain"
 )
@@ -41,14 +43,28 @@ type OrgInviteRepository interface {
 	DeleteExpired(ctx context.Context) (int, error)
 }
 
+type tenantDB interface {
+	Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error)
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
+
 // PgOrganizationRepository implements OrganizationRepository with PostgreSQL.
 type PgOrganizationRepository struct {
-	pool *pgxpool.Pool
+	pool tenantDB
 }
 
 // NewPgOrganizationRepository creates a new PgOrganizationRepository.
 func NewPgOrganizationRepository(pool *pgxpool.Pool) *PgOrganizationRepository {
-	return &PgOrganizationRepository{pool: pool}
+	return newPgOrganizationRepositoryWithDB(pool)
+}
+
+func newPgOrganizationRepositoryWithDB(db tenantDB) *PgOrganizationRepository {
+	return &PgOrganizationRepository{pool: db}
+}
+
+func normalizeTenantPubkey(pubkey string) string {
+	return strings.ToLower(strings.TrimSpace(pubkey))
 }
 
 func (r *PgOrganizationRepository) Create(ctx context.Context, org *domain.Organization) error {
@@ -58,6 +74,8 @@ func (r *PgOrganizationRepository) Create(ctx context.Context, org *domain.Organ
 	now := time.Now().UTC()
 	org.CreatedAt = now
 	org.UpdatedAt = now
+
+	org.OwnerPubkey = normalizeTenantPubkey(org.OwnerPubkey)
 
 	_, err := r.pool.Exec(ctx, `
 		INSERT INTO organizations (id, name, display_name, owner_pubkey, created_at, updated_at)
@@ -122,6 +140,7 @@ func (r *PgOrganizationRepository) List(ctx context.Context) ([]domain.Organizat
 }
 
 func (r *PgOrganizationRepository) Update(ctx context.Context, org *domain.Organization) error {
+	org.OwnerPubkey = normalizeTenantPubkey(org.OwnerPubkey)
 	org.UpdatedAt = time.Now().UTC()
 	tag, err := r.pool.Exec(ctx, `
 		UPDATE organizations SET display_name = $2, owner_pubkey = $3, updated_at = $4
@@ -149,16 +168,21 @@ func (r *PgOrganizationRepository) Delete(ctx context.Context, id uuid.UUID) err
 
 // PgOrgMemberRepository implements OrgMemberRepository with PostgreSQL.
 type PgOrgMemberRepository struct {
-	pool *pgxpool.Pool
+	pool tenantDB
 }
 
 // NewPgOrgMemberRepository creates a new PgOrgMemberRepository.
 func NewPgOrgMemberRepository(pool *pgxpool.Pool) *PgOrgMemberRepository {
-	return &PgOrgMemberRepository{pool: pool}
+	return newPgOrgMemberRepositoryWithDB(pool)
+}
+
+func newPgOrgMemberRepositoryWithDB(db tenantDB) *PgOrgMemberRepository {
+	return &PgOrgMemberRepository{pool: db}
 }
 
 func (r *PgOrgMemberRepository) Add(ctx context.Context, member *domain.OrgMember) error {
 	now := time.Now().UTC()
+	member.Pubkey = normalizeTenantPubkey(member.Pubkey)
 	member.JoinedAt = now
 	member.UpdatedAt = now
 
@@ -230,6 +254,7 @@ func (r *PgOrgMemberRepository) ListByPubkey(ctx context.Context, pubkey string)
 }
 
 func (r *PgOrgMemberRepository) UpdateRole(ctx context.Context, orgID uuid.UUID, pubkey string, role domain.Role) error {
+	pubkey = normalizeTenantPubkey(pubkey)
 	tag, err := r.pool.Exec(ctx, `
 		UPDATE org_members SET role = $3, updated_at = $4
 		WHERE org_id = $1 AND pubkey = $2
@@ -244,6 +269,7 @@ func (r *PgOrgMemberRepository) UpdateRole(ctx context.Context, orgID uuid.UUID,
 }
 
 func (r *PgOrgMemberRepository) Remove(ctx context.Context, orgID uuid.UUID, pubkey string) error {
+	pubkey = normalizeTenantPubkey(pubkey)
 	tag, err := r.pool.Exec(ctx, `DELETE FROM org_members WHERE org_id = $1 AND pubkey = $2`, orgID, pubkey)
 	if err != nil {
 		return err
@@ -256,18 +282,24 @@ func (r *PgOrgMemberRepository) Remove(ctx context.Context, orgID uuid.UUID, pub
 
 // PgOrgInviteRepository implements OrgInviteRepository with PostgreSQL.
 type PgOrgInviteRepository struct {
-	pool *pgxpool.Pool
+	pool tenantDB
 }
 
 // NewPgOrgInviteRepository creates a new PgOrgInviteRepository.
 func NewPgOrgInviteRepository(pool *pgxpool.Pool) *PgOrgInviteRepository {
-	return &PgOrgInviteRepository{pool: pool}
+	return newPgOrgInviteRepositoryWithDB(pool)
+}
+
+func newPgOrgInviteRepositoryWithDB(db tenantDB) *PgOrgInviteRepository {
+	return &PgOrgInviteRepository{pool: db}
 }
 
 func (r *PgOrgInviteRepository) Create(ctx context.Context, invite *domain.OrgInvite) error {
 	if invite.ID == uuid.Nil {
 		invite.ID = uuid.New()
 	}
+	invite.Pubkey = normalizeTenantPubkey(invite.Pubkey)
+	invite.InvitedBy = normalizeTenantPubkey(invite.InvitedBy)
 	invite.CreatedAt = time.Now().UTC()
 
 	_, err := r.pool.Exec(ctx, `
