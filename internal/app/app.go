@@ -145,7 +145,7 @@ func New(cfg *config.Config) (*App, error) {
 	relayPool.Connect(ctx)
 	logger.Info("nostr relay topology initialized",
 		zap.Strings("control_plane_relays", controlPlaneRelays),
-		zap.Strings("encrypted_request_relays", encryptedRequestRelays),
+		zap.Strings("encrypted_request_relay_urls", encryptedRequestRelays),
 		zap.Strings("interop_relays", relayURLs),
 		zap.Bool("sidecar_enabled", cfg.Nostr.Sidecar.Enabled),
 		zap.Bool("mirror_external", cfg.Nostr.Sidecar.MirrorExternal),
@@ -439,7 +439,7 @@ func New(cfg *config.Config) (*App, error) {
 	mcpHandler := handlers.NewMCPHandler(mcpServer, logger)
 	logger.Info("mcp server initialized")
 
-	// Encrypted Nostr request/result runtime for sensitive browser route migrations.
+	// Encrypted request/result event runtime for sensitive browser route migrations.
 	if len(encryptedRequestRelays) > 0 && encryptedRequestPool != nil && controlPlaneSigner != nil && cfg.Nostr.PrivateKey != "" {
 		responder := controlplane.NewEncryptedResponder(encryptedRequestPool, controlPlaneSigner, cfg.Nostr.PrivateKey, logger)
 		encryptedRequestTransport := controlplane.NewEncryptedRequestTransport(encryptedRequestPool, responder, cfg.Nostr.AuthorizedPubkeys, logger)
@@ -467,7 +467,7 @@ func New(cfg *config.Config) (*App, error) {
 		}).Register(encryptedRequestTransport)
 		controlplane.RegisterNotificationEncryptedHandlers(encryptedRequestTransport, notifRepo, notifDispatcher)
 		bgManager.Register(&encryptedRequestTransportRunner{transport: encryptedRequestTransport})
-		logger.Info("encrypted nostr request runtime registered", zap.Strings("relays", encryptedRequestRelays))
+		logger.Info("encrypted request/result event runtime registered", zap.Strings("relay_urls_for_encrypted_nostr_requests", encryptedRequestRelays))
 	}
 
 	// Nostr control plane reactor for event-driven deployment operations.
@@ -737,7 +737,7 @@ type encryptedRequestTransportRunner struct {
 	transport *controlplane.EncryptedRequestTransport
 }
 
-func (r *encryptedRequestTransportRunner) Name() string { return "encrypted-nostr-requests" }
+func (r *encryptedRequestTransportRunner) Name() string { return "encrypted-request-result-events" }
 func (r *encryptedRequestTransportRunner) Run(ctx context.Context) error {
 	return r.transport.Run(ctx)
 }

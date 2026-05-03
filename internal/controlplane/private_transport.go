@@ -21,7 +21,7 @@ const (
 )
 
 // EncryptedRequestSubscriber is the relay subscription contract used by the
-// encrypted request transport runner. RelayPool satisfies this interface.
+// encrypted request/result event runtime. RelayPool satisfies this interface.
 type EncryptedRequestSubscriber interface {
 	SubscribeAllWithEOSE(ctx context.Context, filters []nostr.Filter) (*nostrpool.MergedSubscription, error)
 }
@@ -197,7 +197,7 @@ func NewEncryptedRequestTransport(subscriber EncryptedRequestSubscriber, respond
 		authorizedPubkeys: append([]string(nil), authorizedPubkeys...),
 		handlers:          make(map[string]EncryptedRequestHandler),
 		dedup:             nostrpool.NewEventDeduplicator(10000),
-		logger:            logger.Named("encrypted-request-transport"),
+		logger:            logger.Named("encrypted-request-result-events"),
 	}
 }
 
@@ -220,7 +220,7 @@ func (t *EncryptedRequestTransport) Run(ctx context.Context) error {
 	}
 	merged, err := t.subscriber.SubscribeAllWithEOSE(ctx, []nostr.Filter{filter})
 	if err != nil {
-		return fmt.Errorf("subscribe encrypted request transport: %w", err)
+		return fmt.Errorf("subscribe to encrypted request/result events: %w", err)
 	}
 	for {
 		select {
