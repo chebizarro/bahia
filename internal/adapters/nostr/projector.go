@@ -24,8 +24,19 @@ type ProjectionSource interface {
 	GetEnvironment(ctx context.Context, id uuid.UUID) (*domain.Environment, error)
 	ListAllStates(ctx context.Context) ([]domain.EnvironmentServiceState, error)
 	GetEnvironmentServiceState(ctx context.Context, serviceID, envID uuid.UUID) (*domain.EnvironmentServiceState, error)
+	GetBuild(ctx context.Context, id uuid.UUID) (*domain.Build, error)
+	ListBuilds(ctx context.Context, serviceID uuid.UUID, limit, offset int) ([]domain.Build, error)
+	GetArtifact(ctx context.Context, id uuid.UUID) (*domain.Artifact, error)
+	ListArtifacts(ctx context.Context, serviceID uuid.UUID, limit, offset int) ([]domain.Artifact, error)
 	GetDeploymentIntent(ctx context.Context, id uuid.UUID) (*domain.DeploymentIntent, error)
+	ListDeploymentIntents(ctx context.Context, serviceID, envID uuid.UUID, limit, offset int) ([]domain.DeploymentIntent, error)
 	GetDeploymentRun(ctx context.Context, id uuid.UUID) (*domain.DeploymentRun, error)
+	ListDeploymentRuns(ctx context.Context, intentID uuid.UUID) ([]domain.DeploymentRun, error)
+}
+
+type PolicyProjectionSource interface {
+	ListPolicies(ctx context.Context, enabledOnly bool) ([]domain.DeploymentPolicy, error)
+	GetPolicy(ctx context.Context, id uuid.UUID) (*domain.DeploymentPolicy, error)
 }
 
 // LLMProjectionSource is the authoritative LLM state reader used by the projector.
@@ -50,6 +61,7 @@ type ProjectionPublisher interface {
 type Projector struct {
 	source         ProjectionSource
 	llmSource      LLMProjectionSource
+	policySource   PolicyProjectionSource
 	publisher      ProjectionPublisher
 	eventRepo      repository.NostrEventRepository
 	privateKey     string
@@ -69,6 +81,10 @@ func WithProjectorRepairInterval(interval time.Duration) ProjectorOption {
 
 func WithLLMProjectionSource(source LLMProjectionSource) ProjectorOption {
 	return func(p *Projector) { p.llmSource = source }
+}
+
+func WithPolicyProjectionSource(source PolicyProjectionSource) ProjectorOption {
+	return func(p *Projector) { p.policySource = source }
 }
 
 // NewProjector creates a canonical Nostr read-model projector.
@@ -211,6 +227,8 @@ func (p *Projector) RepublishSnapshot(ctx context.Context) error {
 			)
 		}
 	}
+	buildsPublished, artifactsPublished, intentsPublished, runsPublished := p.publishPublicRouteSnapshots(ctx, services, envs)
+	policiesPublished := p.publishPolicySnapshots(ctx)
 	llmRoutes := 0
 	llmStates := 0
 	if p.llmSource != nil {
@@ -241,7 +259,7 @@ func (p *Projector) RepublishSnapshot(ctx context.Context) error {
 			}
 		}
 	}
-	p.logger.Info("Nostr projection snapshot republished", zap.Int("services", len(services)), zap.Int("environments", len(envs)), zap.Int("states", len(states)), zap.Int("llm_routes", llmRoutes), zap.Int("llm_states", llmStates))
+	p.logger.Info("Nostr projection snapshot republished", zap.Int("services", len(services)), zap.Int("environments", len(envs)), zap.Int("states", len(states)), zap.Int("builds", buildsPublished), zap.Int("artifacts", artifactsPublished), zap.Int("deployment_intents", intentsPublished), zap.Int("deployment_runs", runsPublished), zap.Int("policies", policiesPublished), zap.Int("llm_routes", llmRoutes), zap.Int("llm_route_states", llmStates))
 	return nil
 }
 
@@ -255,6 +273,36 @@ func (p *Projector) handleEvent(ctx context.Context, e events.Event) {
 
 	res := resourceFromEvent(e)
 	switch e.Type {
+	case events.EventBuildRegistered, events.EventBuildStatusChanged:
+		if id, ok := parseUUID(e.EntityID); ok {
+			if build, err := p.source.GetBuild(ctx, id); err == nil && build != nil {
+				_ = p.publishBuildRegistry(ctx, build, false)
+			}
+		}
+	case events.EventArtifactRegistered:
+		if id, ok := parseUUID(e.EntityID); ok {
+			if artifact, err := p.source.GetArtifact(ctx, id); err == nil && artifact != nil {
+				_ = p.publishArtifactRegistry(ctx, artifact, false)
+			}
+		}
+	case events.EventDeploymentIntentCreated, events.EventDeploymentIntentApproved, events.EventDeploymentIntentRejected:
+		if id, ok := parseUUID(firstString(res.IntentID, e.EntityID)); ok {
+			if intent, err := p.source.GetDeploymentIntent(ctx, id); err == nil && intent != nil {
+				_ = p.publishDeploymentIntentRegistry(ctx, intent, false)
+			}
+		}
+		if id, ok := parseUUID(firstString(res.IntentID, e.EntityID)); ok {
+			p.publishStateForIntent(ctx, id)
+		}
+	case events.EventDeploymentRunCreated, events.EventDeploymentRunStatusChanged, events.EventDeploymentRunCompleted:
+		if id, ok := parseUUID(firstString(res.RunID, e.EntityID)); ok {
+			if run, err := p.source.GetDeploymentRun(ctx, id); err == nil && run != nil {
+				_ = p.publishDeploymentRunRegistry(ctx, run, false)
+			}
+			p.publishStateForRun(ctx, id)
+		} else if id, ok := parseUUID(res.IntentID); ok {
+			p.publishStateForIntent(ctx, id)
+		}
 	case events.EventServiceCreated, events.EventServiceUpdated:
 		p.publishServiceByID(ctx, firstUUID(res.ServiceID, e.EntityID))
 	case events.EventServiceDeleted:
@@ -266,16 +314,6 @@ func (p *Projector) handleEvent(ctx context.Context, e events.Event) {
 	case events.EventEnvironmentDeleted:
 		if id, ok := parseUUID(firstString(res.EnvironmentID, e.EntityID)); ok {
 			_ = p.publishEnvironmentRegistry(ctx, &domain.Environment{ID: id, UpdatedAt: time.Now().UTC()}, true)
-		}
-	case events.EventDeploymentIntentCreated, events.EventDeploymentIntentApproved, events.EventDeploymentIntentRejected:
-		if id, ok := parseUUID(firstString(res.IntentID, e.EntityID)); ok {
-			p.publishStateForIntent(ctx, id)
-		}
-	case events.EventDeploymentRunCreated, events.EventDeploymentRunStatusChanged, events.EventDeploymentRunCompleted:
-		if id, ok := parseUUID(firstString(res.RunID, e.EntityID)); ok {
-			p.publishStateForRun(ctx, id)
-		} else if id, ok := parseUUID(res.IntentID); ok {
-			p.publishStateForIntent(ctx, id)
 		}
 	case events.EventRuntimeObservation, events.EventEnvironmentServiceStateChanged, events.EventDriftDetected, events.EventRuntimeDeploy, events.EventRuntimeRestart, events.EventRuntimeStop, events.EventAdoptionImported:
 		if res.Deleted {
@@ -475,6 +513,154 @@ func (p *Projector) publishLLMStateForIDs(ctx context.Context, routeID, envID uu
 	if err := p.publishLLMRouteState(ctx, state); err != nil {
 		p.logger.Warn("publish LLM route state projection failed", zap.String("route_id", routeID.String()), zap.String("environment_id", envID.String()), zap.Error(err))
 	}
+}
+
+func (p *Projector) publishPublicRouteSnapshots(ctx context.Context, services []domain.Service, envs []domain.Environment) (int, int, int, int) {
+	const pageSize = 1000
+	buildsPublished, artifactsPublished, intentsPublished, runsPublished := 0, 0, 0, 0
+	for i := range services {
+		for offset := 0; ; offset += pageSize {
+			builds, err := p.source.ListBuilds(ctx, services[i].ID, pageSize, offset)
+			if err != nil {
+				p.logger.Warn("list builds for projection failed", zap.String("service_id", services[i].ID.String()), zap.Error(err))
+				break
+			}
+			for j := range builds {
+				if err := p.publishBuildRegistry(ctx, &builds[j], false); err != nil {
+					p.logger.Warn("publish build projection failed", zap.String("build_id", builds[j].ID.String()), zap.Error(err))
+				} else {
+					buildsPublished++
+				}
+			}
+			if len(builds) < pageSize {
+				break
+			}
+		}
+		for offset := 0; ; offset += pageSize {
+			artifacts, err := p.source.ListArtifacts(ctx, services[i].ID, pageSize, offset)
+			if err != nil {
+				p.logger.Warn("list artifacts for projection failed", zap.String("service_id", services[i].ID.String()), zap.Error(err))
+				break
+			}
+			for j := range artifacts {
+				if err := p.publishArtifactRegistry(ctx, &artifacts[j], false); err != nil {
+					p.logger.Warn("publish artifact projection failed", zap.String("artifact_id", artifacts[j].ID.String()), zap.Error(err))
+				} else {
+					artifactsPublished++
+				}
+			}
+			if len(artifacts) < pageSize {
+				break
+			}
+		}
+		for j := range envs {
+			for offset := 0; ; offset += pageSize {
+				intents, err := p.source.ListDeploymentIntents(ctx, services[i].ID, envs[j].ID, pageSize, offset)
+				if err != nil {
+					p.logger.Warn("list deployment intents for projection failed", zap.String("service_id", services[i].ID.String()), zap.String("environment_id", envs[j].ID.String()), zap.Error(err))
+					break
+				}
+				for k := range intents {
+					if err := p.publishDeploymentIntentRegistry(ctx, &intents[k], false); err != nil {
+						p.logger.Warn("publish deployment intent projection failed", zap.String("intent_id", intents[k].ID.String()), zap.Error(err))
+					} else {
+						intentsPublished++
+					}
+					runs, err := p.source.ListDeploymentRuns(ctx, intents[k].ID)
+					if err != nil {
+						p.logger.Warn("list deployment runs for projection failed", zap.String("intent_id", intents[k].ID.String()), zap.Error(err))
+						continue
+					}
+					for l := range runs {
+						if err := p.publishDeploymentRunRegistry(ctx, &runs[l], false); err != nil {
+							p.logger.Warn("publish deployment run projection failed", zap.String("run_id", runs[l].ID.String()), zap.Error(err))
+						} else {
+							runsPublished++
+						}
+					}
+				}
+				if len(intents) < pageSize {
+					break
+				}
+			}
+		}
+	}
+	return buildsPublished, artifactsPublished, intentsPublished, runsPublished
+}
+
+func (p *Projector) publishPolicySnapshots(ctx context.Context) int {
+	if p.policySource == nil {
+		return 0
+	}
+	policies, err := p.policySource.ListPolicies(ctx, false)
+	if err != nil {
+		p.logger.Warn("list policies for projection failed", zap.Error(err))
+		return 0
+	}
+	published := 0
+	for i := range policies {
+		if err := p.publishPolicyRegistry(ctx, &policies[i], false); err != nil {
+			p.logger.Warn("publish policy projection failed", zap.String("policy_id", policies[i].ID.String()), zap.Error(err))
+		} else {
+			published++
+		}
+	}
+	return published
+}
+
+func (p *Projector) publishReplaceableJSON(ctx context.Context, kind int, dTag string, tags gonostr.Tags, value any, entityType string, entityID *uuid.UUID) error {
+	content, _ := json.Marshal(value)
+	baseTags := gonostr.Tags{{"d", dTag}, {"deleted", "false"}}
+	baseTags = append(baseTags, tags...)
+	return p.publishSigned(ctx, kind, baseTags, string(content), entityType, entityID)
+}
+
+func (p *Projector) publishBuildRegistry(ctx context.Context, build *domain.Build, deleted bool) error {
+	if deleted {
+		return nil
+	}
+	return p.publishReplaceableJSON(ctx, KindBuildRegistry, build.ID.String(), gonostr.Tags{{"service", build.ServiceID.String()}, {"build", build.ID.String()}, {"status", string(build.Status)}}, map[string]any{"deleted": false, "id": build.ID.String(), "service_id": build.ServiceID.String(), "git_sha": build.GitSHA, "git_ref": build.GitRef, "ci_system": build.CISystem, "ci_run_id": build.CIRunID, "loom_job_id": build.LoomJobID, "status": string(build.Status), "source_event_id": build.SourceEventID, "started_at": build.StartedAt, "finished_at": build.FinishedAt, "metadata": build.Metadata, "created_at": formatTime(build.CreatedAt)}, "build.projection", &build.ID)
+}
+
+func (p *Projector) publishArtifactRegistry(ctx context.Context, artifact *domain.Artifact, deleted bool) error {
+	if deleted {
+		return nil
+	}
+	return p.publishReplaceableJSON(ctx, KindArtifactRegistry, artifact.ID.String(), gonostr.Tags{{"service", artifact.ServiceID.String()}, {"artifact", artifact.ID.String()}, {"build", artifact.BuildID.String()}}, map[string]any{"deleted": false, "id": artifact.ID.String(), "build_id": artifact.BuildID.String(), "service_id": artifact.ServiceID.String(), "image_repo": artifact.ImageRepo, "image_tag": artifact.ImageTag, "image_digest": artifact.ImageDigest, "manifest_media_type": artifact.ManifestMediaType, "size_bytes": artifact.SizeBytes, "sbom_url": artifact.SBOMURL, "signature_ref": artifact.SignatureRef, "scan_status": string(artifact.ScanStatus), "metadata": artifact.Metadata, "created_at": formatTime(artifact.CreatedAt)}, "artifact.projection", &artifact.ID)
+}
+
+func (p *Projector) publishDeploymentIntentRegistry(ctx context.Context, intent *domain.DeploymentIntent, deleted bool) error {
+	if deleted {
+		return nil
+	}
+	return p.publishReplaceableJSON(ctx, KindDeploymentIntentRegistry, intent.ID.String(), gonostr.Tags{{"service", intent.ServiceID.String()}, {"environment", intent.EnvironmentID.String()}, {"artifact", intent.ArtifactID.String()}, {"intent", intent.ID.String()}, {"status", string(intent.Status)}, {"approval", string(intent.ApprovalStatus)}}, map[string]any{"deleted": false, "id": intent.ID.String(), "service_id": intent.ServiceID.String(), "environment_id": intent.EnvironmentID.String(), "artifact_id": intent.ArtifactID.String(), "requested_by": intent.RequestedBy, "source_kind": string(intent.SourceKind), "approval_status": string(intent.ApprovalStatus), "status": string(intent.Status), "deployment_status": string(intent.Status), "approval_metadata": intent.ApprovalMetadata, "metadata": intent.Metadata, "created_at": formatTime(intent.CreatedAt), "approved_at": intent.ApprovedAt, "updated_at": formatTime(intent.UpdatedAt)}, "deployment_intent.projection", &intent.ID)
+}
+
+func (p *Projector) publishDeploymentRunRegistry(ctx context.Context, run *domain.DeploymentRun, deleted bool) error {
+	if deleted {
+		return nil
+	}
+	return p.publishReplaceableJSON(ctx, KindDeploymentRunRegistry, run.ID.String(), gonostr.Tags{{"intent", run.DeploymentIntentID.String()}, {"run", run.ID.String()}, {"status", string(run.Status)}}, map[string]any{"deleted": false, "id": run.ID.String(), "deployment_intent_id": run.DeploymentIntentID.String(), "loom_job_id": run.LoomJobID, "worker_pubkey": run.WorkerPubkey, "worker_name": run.WorkerName, "status": string(run.Status), "exit_code": run.ExitCode, "stdout_ref": run.StdoutRef, "stderr_ref": run.StderrRef, "started_at": run.StartedAt, "finished_at": run.FinishedAt, "metadata": run.Metadata, "created_at": formatTime(run.CreatedAt), "updated_at": formatTime(run.UpdatedAt)}, "deployment_run.projection", &run.ID)
+}
+
+func (p *Projector) publishPolicyRegistry(ctx context.Context, policy *domain.DeploymentPolicy, deleted bool) error {
+	content := map[string]any{"deleted": deleted, "id": policy.ID.String(), "updated_at": formatTime(policy.UpdatedAt)}
+	tags := gonostr.Tags{{"policy", policy.ID.String()}, {"deleted", fmt.Sprintf("%t", deleted)}}
+	if !deleted {
+		content["name"] = policy.Name
+		if policy.EnvironmentID != nil {
+			content["environment_id"] = policy.EnvironmentID.String()
+			tags = append(tags, gonostr.Tag{"environment", policy.EnvironmentID.String()})
+		}
+		content["rules"] = policy.Rules
+		content["rule_count"] = len(policy.Rules)
+		content["enforcement"] = string(policy.Enforcement)
+		content["enabled"] = policy.Enabled
+		content["created_at"] = formatTime(policy.CreatedAt)
+		tags = append(tags, gonostr.Tag{"name", policy.Name}, gonostr.Tag{"enabled", fmt.Sprintf("%t", policy.Enabled)}, gonostr.Tag{"enforcement", string(policy.Enforcement)})
+	}
+	contentJSON, _ := json.Marshal(content)
+	return p.publishSigned(ctx, KindPolicyRegistry, append(gonostr.Tags{{"d", policy.ID.String()}}, tags...), string(contentJSON), "policy.projection", &policy.ID)
 }
 
 func (p *Projector) publishServiceRegistry(ctx context.Context, svc *domain.Service, deleted bool) error {

@@ -119,13 +119,13 @@ func deriveFiatjafPubkey(raw string) (nostr.PubKey, bool, error) {
 }
 
 func isRequestKind(kind nostr.Kind) bool {
-	return kind >= 5961 && kind <= 5968
+	return kind >= 5961 && kind <= 5989
 }
 
 func isBahiaProjectionKind(kind nostr.Kind) bool {
-	return (kind >= 6961 && kind <= 6962) ||
-		(kind >= 7961 && kind <= 7966) ||
-		(kind >= 31961 && kind <= 31963) ||
+	return (kind >= 6961 && kind <= 6976) ||
+		(kind >= 7961 && kind <= 7977) ||
+		(kind >= 31961 && kind <= 31970) ||
 		(kind >= 31000 && kind <= 31099)
 }
 

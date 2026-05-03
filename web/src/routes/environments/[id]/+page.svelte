@@ -11,7 +11,15 @@
   import LoadingButton from '$lib/components/LoadingButton.svelte';
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
   import EmptyState from '$lib/components/EmptyState.svelte';
-  import { api } from '$lib/api/client.js';
+  import {
+    environments,
+    states as allStates,
+    deploymentIntents,
+    loadEnvironments,
+    loadStates,
+    loadDeploymentIntents
+  } from '$lib/stores';
+  import { updateEnvironment, deleteEnvironment } from '$lib/stores/public-controlplane.svelte.js';
   import { environmentFormSchema, parseRuntimeConfig, validateForm } from '$lib/validation/forms.js';
 
   let environment = $state(null);
@@ -59,43 +67,20 @@
     deploymentHistory = [];
 
     try {
-      environment = await api.getEnvironment(id);
-      
-      // Load all states and filter by environment_id
-      try {
-        const allStates = await api.listStates();
-        states = allStates.filter(state => state.environment_id === id);
-      } catch (err) {
-        // If listStates fails, still show environment details
-        console.error('Failed to load states:', err);
-        states = [];
+      await Promise.all([loadEnvironments(), loadStates(), loadDeploymentIntents()]);
+      environment = environments.find((candidate) => candidate.id === id) || null;
+      if (!environment) {
+        throw new Error('Environment not found');
       }
 
-      if (states.length > 0) {
-        const serviceIds = [...new Set(states.map((state) => state.service_id).filter(Boolean))];
-        const historyChunks = await Promise.all(
-          serviceIds.map(async (serviceId) => {
-            try {
-              const intents = await api.listIntents(serviceId, id);
-              return (Array.isArray(intents) ? intents : []).map((intent) => ({ ...intent, service_id: serviceId }));
-            } catch (historyErr) {
-              console.error(`Failed to load deployment history for service ${serviceId}:`, historyErr);
-              return [];
-            }
-          })
-        );
-
-        const intentMap = new Map();
-        historyChunks.flat().forEach((intent) => {
-          if (intent.id) intentMap.set(intent.id, intent);
-        });
-
-        deploymentHistory = Array.from(intentMap.values()).sort((a, b) => {
+      states = allStates.filter(state => state.environment_id === id);
+      deploymentHistory = deploymentIntents
+        .filter((intent) => intent.environment_id === id)
+        .sort((a, b) => {
           const dateA = a.created_at ? new Date(a.created_at) : new Date(0);
           const dateB = b.created_at ? new Date(b.created_at) : new Date(0);
           return dateB - dateA;
         });
-      }
     } catch (err) {
       error = err.message;
     } finally {
@@ -177,16 +162,21 @@
     editError = null;
 
     try {
-      const updated = await api.updateEnvironment(environmentId, {
+      await updateEnvironment(environmentId, {
         name: editForm.name.trim(),
         loom_worker_selector: editForm.loom_worker_selector.trim(),
         runtime_config: parsedRuntimeConfig,
         deploy_strategy: editForm.deploy_strategy,
         protected: editForm.protected
       });
-      
-      // Update local environment with response
-      environment = updated;
+      environment = {
+        ...environment,
+        name: editForm.name.trim(),
+        loom_worker_selector: editForm.loom_worker_selector.trim(),
+        runtime_config: parsedRuntimeConfig,
+        deploy_strategy: editForm.deploy_strategy,
+        protected: editForm.protected
+      };
       closeEditModal();
     } catch (err) {
       editError = err.message || 'Failed to update environment';
@@ -210,8 +200,7 @@
     deleteError = null;
 
     try {
-      await api.deleteEnvironment(environmentId);
-      // Navigate back to environments list on success
+      await deleteEnvironment(environmentId);
       goto('/environments');
     } catch (err) {
       deleteError = err.message || 'Failed to delete environment';

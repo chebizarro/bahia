@@ -43,6 +43,15 @@ const (
 	KindLLMRollbackRequest    = 5975 // Request LLM route rollback
 	KindToolProvisionRequest  = 5976 // Agent → Bahia
 	KindToolApprovalRequest   = 5977 // Bahia → Operator
+	KindServiceUpdate         = 5981 // Update a service registry entry
+	KindServiceDelete         = 5982 // Delete a service registry entry
+	KindEnvironmentUpdate     = 5983 // Update an environment registry entry
+	KindEnvironmentDelete     = 5984 // Delete an environment registry entry
+	KindArtifactRegister      = 5985 // Register an artifact
+	KindPolicyCreate          = 5986 // Create a deployment policy
+	KindPolicyUpdate          = 5987 // Update a deployment policy
+	KindPolicyDelete          = 5988 // Delete a deployment policy
+	KindPolicyEvaluate        = 5989 // Evaluate deployment policies
 
 	// Status kinds (6961-6973)
 	KindDeploymentStatus    = 6961 // Deployment progress updates
@@ -64,11 +73,16 @@ const (
 	KindToolApprovalResponse     = 7977 // Operator → Bahia
 
 	// Replaceable registry kinds (3196x series, d-tag indexed)
-	KindServiceState        = 31961 // Replaceable service state (d=service:env)
-	KindServiceRegistry     = 31962 // Replaceable service registry entry (d=service_id)
-	KindEnvironmentRegistry = 31963 // Replaceable environment registry entry (d=env_id)
-	KindLLMRouteRegistry    = 31964 // Replaceable LLM route registry entry (d=route_id)
-	KindLLMRouteState       = 31965 // Replaceable LLM route state (d=route:env)
+	KindServiceState             = 31961 // Replaceable service state (d=service:env)
+	KindServiceRegistry          = 31962 // Replaceable service registry entry (d=service_id)
+	KindEnvironmentRegistry      = 31963 // Replaceable environment registry entry (d=env_id)
+	KindLLMRouteRegistry         = 31964 // Replaceable LLM route registry entry (d=route_id)
+	KindLLMRouteState            = 31965 // Replaceable LLM route state (d=route:env)
+	KindArtifactRegistry         = 31966 // Replaceable artifact registry entry (d=artifact_id)
+	KindDeploymentIntentRegistry = 31967 // Replaceable deployment intent entry (d=intent_id)
+	KindDeploymentRunRegistry    = 31968 // Replaceable deployment run entry (d=run_id)
+	KindBuildRegistry            = 31969 // Replaceable build registry entry (d=build_id)
+	KindPolicyRegistry           = 31970 // Replaceable policy registry entry (d=policy_id)
 )
 
 // Config holds reactor configuration.
@@ -99,6 +113,7 @@ type Reactor struct {
 	toolProvisioning repository.ToolProvisioningRepository
 	toolResponder    *ToolResponder
 	toolCoordinator  *service.ToolProvisioningCoordinator
+	policyService    *service.PolicyService
 
 	mu   sync.Mutex
 	runs map[string]*DeploymentRun // requestEventID -> run
@@ -138,6 +153,10 @@ func WithToolResponder(responder *ToolResponder) ReactorOption {
 
 func WithToolProvisioningCoordinator(coordinator *service.ToolProvisioningCoordinator) ReactorOption {
 	return func(r *Reactor) { r.toolCoordinator = coordinator }
+}
+
+func WithPolicyService(policies *service.PolicyService) ReactorOption {
+	return func(r *Reactor) { r.policyService = policies }
 }
 
 // NewReactor creates a new Bahia control plane reactor.
@@ -213,6 +232,15 @@ func (r *Reactor) Run(ctx context.Context) error {
 				KindLLMRollbackRequest,
 				KindToolProvisionRequest,
 				KindToolApprovalResponse,
+				KindServiceUpdate,
+				KindServiceDelete,
+				KindEnvironmentUpdate,
+				KindEnvironmentDelete,
+				KindArtifactRegister,
+				KindPolicyCreate,
+				KindPolicyUpdate,
+				KindPolicyDelete,
+				KindPolicyEvaluate,
 			},
 			Since: &now,
 		},
@@ -297,6 +325,24 @@ func (r *Reactor) handleEvent(ctx context.Context, event *nostr.Event) {
 		go r.handleToolProvisionRequest(ctx, event)
 	case KindToolApprovalResponse:
 		go r.handleToolApprovalResponse(ctx, event)
+	case KindServiceUpdate:
+		go r.handleServiceUpdate(ctx, event)
+	case KindServiceDelete:
+		go r.handleServiceDelete(ctx, event)
+	case KindEnvironmentUpdate:
+		go r.handleEnvironmentUpdate(ctx, event)
+	case KindEnvironmentDelete:
+		go r.handleEnvironmentDelete(ctx, event)
+	case KindArtifactRegister:
+		go r.handleArtifactRegister(ctx, event)
+	case KindPolicyCreate:
+		go r.handlePolicyCreate(ctx, event)
+	case KindPolicyUpdate:
+		go r.handlePolicyUpdate(ctx, event)
+	case KindPolicyDelete:
+		go r.handlePolicyDelete(ctx, event)
+	case KindPolicyEvaluate:
+		go r.handlePolicyEvaluate(ctx, event)
 	default:
 		r.logger.Warn("unexpected event kind", "kind", event.Kind)
 	}
@@ -576,6 +622,207 @@ func (r *Reactor) handleEnvironmentCreate(ctx context.Context, event *nostr.Even
 
 	logger.Info("environment created", "environment_id", env.ID, "name", env.Name)
 	r.publishEnvironmentCreated(ctx, event, env)
+}
+
+func (r *Reactor) handleServiceUpdate(ctx context.Context, event *nostr.Event) {
+	logger := r.logger.With("event_id", event.ID, "requester", event.PubKey)
+	if !r.isAuthorized(event.PubKey) {
+		r.publishError(ctx, event, "unauthorized", "requester not in authorized list")
+		return
+	}
+	var req struct {
+		ID            string                       `json:"id"`
+		Name          string                       `json:"name"`
+		ArtifactRepo  string                       `json:"artifact_repo"`
+		RepoURL       string                       `json:"repo_url,omitempty"`
+		DefaultBranch string                       `json:"default_branch,omitempty"`
+		RuntimeType   string                       `json:"runtime_type,omitempty"`
+		RuntimeConfig *domain.ServiceRuntimeConfig `json:"runtime_config,omitempty"`
+	}
+	if err := json.Unmarshal([]byte(event.Content), &req); err != nil {
+		r.publishError(ctx, event, "parse_error", err.Error())
+		return
+	}
+	if req.ID == "" {
+		req.ID = tagValueNostr(event.Tags, "service")
+	}
+	id, err := uuid.Parse(req.ID)
+	if err != nil {
+		r.publishError(ctx, event, "validation_error", fmt.Sprintf("invalid service id: %v", err))
+		return
+	}
+	svc, err := r.registry.GetService(ctx, id)
+	if err != nil || svc == nil {
+		r.publishError(ctx, event, "not_found", "service not found")
+		return
+	}
+	if req.Name != "" {
+		svc.Name = req.Name
+	}
+	if req.ArtifactRepo != "" {
+		svc.ArtifactRepo = req.ArtifactRepo
+	}
+	svc.RepoURL = req.RepoURL
+	if req.DefaultBranch != "" {
+		svc.DefaultBranch = req.DefaultBranch
+	}
+	if req.RuntimeType != "" {
+		svc.RuntimeType = domain.RuntimeType(req.RuntimeType)
+	}
+	if req.RuntimeConfig != nil {
+		svc.RuntimeConfig = req.RuntimeConfig
+	}
+	if err := r.registry.UpdateService(ctx, svc); err != nil {
+		logger.Error("failed to update service", "error", err)
+		r.publishError(ctx, event, "update_error", err.Error())
+		return
+	}
+	r.publishActionResult(ctx, event, "service_update", "success", nil)
+}
+
+func (r *Reactor) handleServiceDelete(ctx context.Context, event *nostr.Event) {
+	if !r.isAuthorized(event.PubKey) {
+		r.publishError(ctx, event, "unauthorized", "requester not in authorized list")
+		return
+	}
+	var req struct {
+		ID    string `json:"id"`
+		Force bool   `json:"force,omitempty"`
+	}
+	_ = json.Unmarshal([]byte(event.Content), &req)
+	if req.ID == "" {
+		req.ID = tagValueNostr(event.Tags, "service")
+	}
+	id, err := uuid.Parse(req.ID)
+	if err != nil {
+		r.publishError(ctx, event, "validation_error", fmt.Sprintf("invalid service id: %v", err))
+		return
+	}
+	if err := r.registry.DeleteService(ctx, id, req.Force); err != nil {
+		r.publishError(ctx, event, "delete_error", err.Error())
+		return
+	}
+	r.publishActionResult(ctx, event, "service_delete", "success", nil)
+}
+
+func (r *Reactor) handleEnvironmentUpdate(ctx context.Context, event *nostr.Event) {
+	logger := r.logger.With("event_id", event.ID, "requester", event.PubKey)
+	if !r.isAuthorized(event.PubKey) {
+		r.publishError(ctx, event, "unauthorized", "requester not in authorized list")
+		return
+	}
+	var req struct {
+		ID                 string         `json:"id"`
+		Name               string         `json:"name"`
+		LoomWorkerSelector map[string]any `json:"loom_worker_selector,omitempty"`
+		RuntimeConfig      map[string]any `json:"runtime_config,omitempty"`
+		DeployStrategy     string         `json:"deploy_strategy,omitempty"`
+		Protected          bool           `json:"protected,omitempty"`
+	}
+	if err := json.Unmarshal([]byte(event.Content), &req); err != nil {
+		r.publishError(ctx, event, "parse_error", err.Error())
+		return
+	}
+	if req.ID == "" {
+		req.ID = tagValueNostr(event.Tags, "environment")
+	}
+	id, err := uuid.Parse(req.ID)
+	if err != nil {
+		r.publishError(ctx, event, "validation_error", fmt.Sprintf("invalid environment id: %v", err))
+		return
+	}
+	env, err := r.registry.GetEnvironment(ctx, id)
+	if err != nil || env == nil {
+		r.publishError(ctx, event, "not_found", "environment not found")
+		return
+	}
+	if req.Name != "" {
+		env.Name = req.Name
+	}
+	if req.LoomWorkerSelector != nil {
+		env.LoomWorkerSelector = req.LoomWorkerSelector
+	}
+	if req.RuntimeConfig != nil {
+		env.RuntimeConfig = req.RuntimeConfig
+	}
+	if req.DeployStrategy != "" {
+		env.DeployStrategy = domain.DeployStrategy(req.DeployStrategy)
+	}
+	env.Protected = req.Protected
+	if err := r.registry.UpdateEnvironment(ctx, env); err != nil {
+		logger.Error("failed to update environment", "error", err)
+		r.publishError(ctx, event, "update_error", err.Error())
+		return
+	}
+	r.publishActionResult(ctx, event, "environment_update", "success", nil)
+}
+
+func (r *Reactor) handleEnvironmentDelete(ctx context.Context, event *nostr.Event) {
+	if !r.isAuthorized(event.PubKey) {
+		r.publishError(ctx, event, "unauthorized", "requester not in authorized list")
+		return
+	}
+	var req struct {
+		ID    string `json:"id"`
+		Force bool   `json:"force,omitempty"`
+	}
+	_ = json.Unmarshal([]byte(event.Content), &req)
+	if req.ID == "" {
+		req.ID = tagValueNostr(event.Tags, "environment")
+	}
+	id, err := uuid.Parse(req.ID)
+	if err != nil {
+		r.publishError(ctx, event, "validation_error", fmt.Sprintf("invalid environment id: %v", err))
+		return
+	}
+	if err := r.registry.DeleteEnvironment(ctx, id, req.Force); err != nil {
+		r.publishError(ctx, event, "delete_error", err.Error())
+		return
+	}
+	r.publishActionResult(ctx, event, "environment_delete", "success", nil)
+}
+
+func (r *Reactor) handleArtifactRegister(ctx context.Context, event *nostr.Event) {
+	if !r.isAuthorized(event.PubKey) {
+		r.publishError(ctx, event, "unauthorized", "requester not in authorized list")
+		return
+	}
+	var req struct {
+		BuildID           string         `json:"build_id"`
+		ServiceID         string         `json:"service_id"`
+		ImageRepo         string         `json:"image_repo"`
+		ImageTag          string         `json:"image_tag"`
+		ImageDigest       string         `json:"image_digest"`
+		ManifestMediaType string         `json:"manifest_media_type,omitempty"`
+		SizeBytes         *int64         `json:"size_bytes,omitempty"`
+		SBOMURL           string         `json:"sbom_url,omitempty"`
+		SignatureRef      string         `json:"signature_ref,omitempty"`
+		ScanStatus        string         `json:"scan_status,omitempty"`
+		Metadata          map[string]any `json:"metadata,omitempty"`
+	}
+	if err := json.Unmarshal([]byte(event.Content), &req); err != nil {
+		r.publishError(ctx, event, "parse_error", err.Error())
+		return
+	}
+	buildID, err := uuid.Parse(req.BuildID)
+	if err != nil {
+		r.publishError(ctx, event, "validation_error", fmt.Sprintf("invalid build_id: %v", err))
+		return
+	}
+	serviceID, err := uuid.Parse(req.ServiceID)
+	if err != nil {
+		r.publishError(ctx, event, "validation_error", fmt.Sprintf("invalid service_id: %v", err))
+		return
+	}
+	if req.ScanStatus == "" {
+		req.ScanStatus = string(domain.ScanStatusUnknown)
+	}
+	artifact := &domain.Artifact{BuildID: buildID, ServiceID: serviceID, ImageRepo: req.ImageRepo, ImageTag: req.ImageTag, ImageDigest: req.ImageDigest, ManifestMediaType: req.ManifestMediaType, SizeBytes: req.SizeBytes, SBOMURL: req.SBOMURL, SignatureRef: req.SignatureRef, ScanStatus: domain.ScanStatus(req.ScanStatus), Metadata: req.Metadata}
+	if err := r.registry.RegisterArtifact(ctx, artifact); err != nil {
+		r.publishError(ctx, event, "register_error", err.Error())
+		return
+	}
+	r.publishActionResult(ctx, event, "artifact_register", "success", nil)
 }
 
 // handleDeploymentApproval processes a kind:5966 deployment approval/rejection.
@@ -984,6 +1231,164 @@ func (r *Reactor) handleToolApprovalResponse(ctx context.Context, event *nostr.E
 		_ = r.toolResponder.PublishResult(ctx, requestEvent, intent, req.Action == "approve", req.Reason)
 	}
 	return nil
+}
+
+func (r *Reactor) handlePolicyCreate(ctx context.Context, event *nostr.Event) {
+	if !r.isAuthorized(event.PubKey) {
+		r.publishError(ctx, event, "unauthorized", "requester not in authorized list")
+		return
+	}
+	if r.policyService == nil {
+		r.publishError(ctx, event, "policy_unavailable", "policy service is not configured")
+		return
+	}
+	var req struct {
+		Name          string              `json:"name"`
+		EnvironmentID *string             `json:"environment_id,omitempty"`
+		Rules         []domain.PolicyRule `json:"rules"`
+		Enforcement   string              `json:"enforcement"`
+		Enabled       bool                `json:"enabled"`
+	}
+	if err := json.Unmarshal([]byte(event.Content), &req); err != nil {
+		r.publishError(ctx, event, "parse_error", err.Error())
+		return
+	}
+	policy := &domain.DeploymentPolicy{Name: req.Name, Rules: req.Rules, Enforcement: domain.PolicyEnforcement(req.Enforcement), Enabled: req.Enabled}
+	if req.EnvironmentID != nil && *req.EnvironmentID != "" {
+		id, err := uuid.Parse(*req.EnvironmentID)
+		if err != nil {
+			r.publishError(ctx, event, "validation_error", fmt.Sprintf("invalid environment_id: %v", err))
+			return
+		}
+		policy.EnvironmentID = &id
+	}
+	if policy.Enforcement == "" {
+		policy.Enforcement = domain.PolicyEnforcementWarn
+	}
+	if err := r.policyService.CreatePolicy(ctx, policy); err != nil {
+		r.publishError(ctx, event, "create_error", err.Error())
+		return
+	}
+	r.publishPolicyRegistry(ctx, policy, false)
+	r.publishActionResult(ctx, event, "policy_create", "success", nil)
+}
+
+func (r *Reactor) handlePolicyUpdate(ctx context.Context, event *nostr.Event) {
+	if !r.isAuthorized(event.PubKey) {
+		r.publishError(ctx, event, "unauthorized", "requester not in authorized list")
+		return
+	}
+	if r.policyService == nil {
+		r.publishError(ctx, event, "policy_unavailable", "policy service is not configured")
+		return
+	}
+	var req struct {
+		ID            string              `json:"id"`
+		Name          string              `json:"name"`
+		EnvironmentID *string             `json:"environment_id,omitempty"`
+		Rules         []domain.PolicyRule `json:"rules"`
+		Enforcement   string              `json:"enforcement"`
+		Enabled       bool                `json:"enabled"`
+	}
+	if err := json.Unmarshal([]byte(event.Content), &req); err != nil {
+		r.publishError(ctx, event, "parse_error", err.Error())
+		return
+	}
+	if req.ID == "" {
+		req.ID = tagValueNostr(event.Tags, "policy")
+	}
+	id, err := uuid.Parse(req.ID)
+	if err != nil {
+		r.publishError(ctx, event, "validation_error", fmt.Sprintf("invalid policy id: %v", err))
+		return
+	}
+	policy := &domain.DeploymentPolicy{ID: id, Name: req.Name, Rules: req.Rules, Enforcement: domain.PolicyEnforcement(req.Enforcement), Enabled: req.Enabled}
+	if req.EnvironmentID != nil && *req.EnvironmentID != "" {
+		envID, err := uuid.Parse(*req.EnvironmentID)
+		if err != nil {
+			r.publishError(ctx, event, "validation_error", fmt.Sprintf("invalid environment_id: %v", err))
+			return
+		}
+		policy.EnvironmentID = &envID
+	}
+	if policy.Enforcement == "" {
+		policy.Enforcement = domain.PolicyEnforcementWarn
+	}
+	if err := r.policyService.UpdatePolicy(ctx, policy); err != nil {
+		r.publishError(ctx, event, "update_error", err.Error())
+		return
+	}
+	r.publishPolicyRegistry(ctx, policy, false)
+	r.publishActionResult(ctx, event, "policy_update", "success", nil)
+}
+
+func (r *Reactor) handlePolicyDelete(ctx context.Context, event *nostr.Event) {
+	if !r.isAuthorized(event.PubKey) {
+		r.publishError(ctx, event, "unauthorized", "requester not in authorized list")
+		return
+	}
+	if r.policyService == nil {
+		r.publishError(ctx, event, "policy_unavailable", "policy service is not configured")
+		return
+	}
+	var req struct {
+		ID string `json:"id"`
+	}
+	_ = json.Unmarshal([]byte(event.Content), &req)
+	if req.ID == "" {
+		req.ID = tagValueNostr(event.Tags, "policy")
+	}
+	id, err := uuid.Parse(req.ID)
+	if err != nil {
+		r.publishError(ctx, event, "validation_error", fmt.Sprintf("invalid policy id: %v", err))
+		return
+	}
+	if err := r.policyService.DeletePolicy(ctx, id); err != nil {
+		r.publishError(ctx, event, "delete_error", err.Error())
+		return
+	}
+	r.publishPolicyRegistry(ctx, &domain.DeploymentPolicy{ID: id, UpdatedAt: time.Now().UTC()}, true)
+	r.publishActionResult(ctx, event, "policy_delete", "success", nil)
+}
+
+func (r *Reactor) handlePolicyEvaluate(ctx context.Context, event *nostr.Event) {
+	if !r.isAuthorized(event.PubKey) {
+		r.publishError(ctx, event, "unauthorized", "requester not in authorized list")
+		return
+	}
+	if r.policyService == nil {
+		r.publishError(ctx, event, "policy_unavailable", "policy service is not configured")
+		return
+	}
+	var req struct {
+		ArtifactID    string `json:"artifact_id"`
+		EnvironmentID string `json:"environment_id"`
+	}
+	if err := json.Unmarshal([]byte(event.Content), &req); err != nil {
+		r.publishError(ctx, event, "parse_error", err.Error())
+		return
+	}
+	artifactID, err := uuid.Parse(req.ArtifactID)
+	if err != nil {
+		r.publishError(ctx, event, "validation_error", fmt.Sprintf("invalid artifact_id: %v", err))
+		return
+	}
+	envID, err := uuid.Parse(req.EnvironmentID)
+	if err != nil {
+		r.publishError(ctx, event, "validation_error", fmt.Sprintf("invalid environment_id: %v", err))
+		return
+	}
+	evaluation, err := r.policyService.Evaluate(ctx, artifactID, envID)
+	if err != nil {
+		r.publishError(ctx, event, "evaluate_error", err.Error())
+		return
+	}
+	content, _ := json.Marshal(evaluation)
+	tags := nostr.Tags{{"e", event.ID, "", "reply"}, {"p", event.PubKey}, {"status", "success"}, {"action", "policy_evaluate"}, {"artifact", artifactID.String()}, {"environment", envID.String()}}
+	result := &nostr.Event{Kind: KindActionResult, CreatedAt: nostr.Now(), Tags: tags, Content: string(content)}
+	if err := r.signEvent(ctx, result); err == nil {
+		_, _ = r.pool.Publish(ctx, *result)
+	}
 }
 
 func (r *Reactor) authorizeLLMRequest(ctx context.Context, event *nostr.Event, step string) bool {
@@ -1835,6 +2240,37 @@ func (r *Reactor) publishStateEvent(ctx context.Context, serviceID, envID uuid.U
 	}
 
 	_, err = r.pool.Publish(ctx, *event)
+	return err
+}
+
+func (r *Reactor) publishPolicyRegistry(ctx context.Context, policy *domain.DeploymentPolicy, deleted bool) error {
+	content := map[string]any{"deleted": deleted, "id": policy.ID.String()}
+	if !deleted {
+		content["name"] = policy.Name
+		content["environment_id"] = nil
+		if policy.EnvironmentID != nil {
+			content["environment_id"] = policy.EnvironmentID.String()
+		}
+		content["rules"] = policy.Rules
+		content["rule_count"] = len(policy.Rules)
+		content["enforcement"] = string(policy.Enforcement)
+		content["enabled"] = policy.Enabled
+		content["created_at"] = policy.CreatedAt.Format(time.RFC3339)
+	}
+	content["updated_at"] = policy.UpdatedAt.Format(time.RFC3339)
+	contentJSON, _ := json.Marshal(content)
+	tags := nostr.Tags{{"d", policy.ID.String()}, {"policy", policy.ID.String()}, {"deleted", fmt.Sprintf("%t", deleted)}}
+	if !deleted {
+		tags = append(tags, nostr.Tag{"name", policy.Name}, nostr.Tag{"enabled", fmt.Sprintf("%t", policy.Enabled)}, nostr.Tag{"enforcement", string(policy.Enforcement)})
+		if policy.EnvironmentID != nil {
+			tags = append(tags, nostr.Tag{"environment", policy.EnvironmentID.String()})
+		}
+	}
+	event := &nostr.Event{Kind: KindPolicyRegistry, CreatedAt: nostr.Now(), Tags: tags, Content: string(contentJSON)}
+	if err := r.signEvent(ctx, event); err != nil {
+		return fmt.Errorf("sign policy registry event: %w", err)
+	}
+	_, err := r.pool.Publish(ctx, *event)
 	return err
 }
 

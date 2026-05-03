@@ -1,6 +1,5 @@
 import { authState } from '$lib/stores/auth.js';
 import { nostr, fetchRepositories } from '$lib/nostr/client.js';
-import { api } from '$lib/api/client.js';
 
 export const repositories = $state([]);
 
@@ -114,74 +113,19 @@ export async function loadRepositories({ authors = null, force = false } = {}) {
 }
 
 export async function enrichRepositoriesWithCI(repoList) {
-  const coords = [...new Set(
-    repoList
-      .map(r => r.repoCoordinate)
-      .filter(Boolean)
-  )];
+  const currentSeq = ciMeta.requestSeq + 1;
+  ciMeta.requestSeq = currentSeq;
+  ciLoading.value = false;
+  ciError.value = null;
 
-  if (coords.length === 0) {
-    repoList.forEach(r => {
-      r.ci = { state: 'unsupported', lookup: null, error: null };
-    });
-    return;
-  }
-
-  // Mark as loading
   repoList.forEach(r => {
     r.ci = r.repoCoordinate
-      ? { state: 'loading', lookup: null, error: null }
+      ? { state: 'empty', lookup: null, error: null }
       : { state: 'unsupported', lookup: null, error: null };
   });
 
-  const currentSeq = ciMeta.requestSeq + 1;
-  ciMeta.requestSeq = currentSeq;
-  ciLoading.value = true;
-  ciError.value = null;
-
-  try {
-    const results = await api.lookupRepositoryCI(coords);
-
-    // Check for stale response
-    if (ciMeta.requestSeq !== currentSeq) return;
-
-    // Build lookup map
-    const lookupMap = new Map();
-    for (const result of results) {
-      lookupMap.set(result.repo_coordinate, result);
-    }
-
-    // Enrich repos
-    repoList.forEach(r => {
-      if (!r.repoCoordinate) return;
-      const lookup = lookupMap.get(r.repoCoordinate);
-      if (lookup) {
-        const hasRun = !!lookup.latest_run;
-        const hasPolicies = lookup.policies?.length > 0;
-        r.ci = {
-          state: (hasRun || hasPolicies) ? 'ready' : 'empty',
-          lookup,
-          error: null
-        };
-      } else {
-        r.ci = { state: 'empty', lookup: null, error: null };
-      }
-    });
-
+  if (ciMeta.requestSeq === currentSeq) {
     ciMeta.lastLoadedAt = Date.now();
-  } catch (err) {
-    if (ciMeta.requestSeq === currentSeq) {
-      ciError.value = err?.message || 'Failed to load CI status';
-      repoList.forEach(r => {
-        if (r.repoCoordinate && r.ci?.state === 'loading') {
-          r.ci = { state: 'error', lookup: null, error: err?.message };
-        }
-      });
-    }
-  } finally {
-    if (ciMeta.requestSeq === currentSeq) {
-      ciLoading.value = false;
-    }
   }
 }
 

@@ -8,11 +8,10 @@
   import Checkbox from '$lib/components/Checkbox.svelte';
   import LoadingButton from '$lib/components/LoadingButton.svelte';
   import EmptyState from '$lib/components/EmptyState.svelte';
-  import { api } from '$lib/api/client.js';
+  import { policies, environments, loadPolicies, loadEnvironments } from '$lib/stores';
+  import { createPolicy as createPolicyCommand } from '$lib/stores/public-controlplane.svelte.js';
   import { policyFormSchema, validateForm } from '$lib/validation/forms.js';
 
-  let policies = $state([]);
-  let environments = $state([]);
   let loading = $state(true);
   let error = $state(null);
   let enforcementFilter = $state('all');
@@ -42,10 +41,7 @@
 
   async function loadPolicyList() {
     try {
-      [policies, environments] = await Promise.all([
-        api.listPolicies().catch(() => []),
-        api.listEnvironments().catch(() => [])
-      ]);
+      await Promise.all([loadPolicies(), loadEnvironments()]);
     } catch (err) {
       console.error('Failed to load data:', err);
       error = err.message;
@@ -170,11 +166,10 @@
         payload.environment_id = createForm.environment_id;
       }
 
-      await api.createPolicy(payload);
+      await createPolicyCommand(payload);
       
       closeCreateModal();
-      // Reload policies
-      policies = await api.listPolicies();
+      await loadPolicies();
     } catch (err) {
       createError = err.message || 'Failed to create policy';
     } finally {

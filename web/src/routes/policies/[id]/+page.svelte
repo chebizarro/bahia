@@ -9,7 +9,13 @@
   import Checkbox from '$lib/components/Checkbox.svelte';
   import LoadingButton from '$lib/components/LoadingButton.svelte';
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
-  import { api } from '$lib/api/client.js';
+  import {
+    policies as policyStore,
+    environments as environmentStore,
+    loadPolicies,
+    loadEnvironments
+  } from '$lib/stores';
+  import { updatePolicy, deletePolicy, evaluatePolicy } from '$lib/stores/public-controlplane.svelte.js';
   import { policyFormSchema, validateForm } from '$lib/validation/forms.js';
 
   let policy = $state(null);
@@ -74,10 +80,12 @@
     policy = null;
 
     try {
-      [policy, environments] = await Promise.all([
-        api.getPolicy(id),
-        api.listEnvironments().catch(() => [])
-      ]);
+      await Promise.all([loadPolicies(), loadEnvironments()]);
+      policy = policyStore.find((candidate) => candidate.id === id) || null;
+      if (!policy) {
+        throw new Error('Policy not found');
+      }
+      environments = [...environmentStore];
     } catch (err) {
       error = err.message;
     } finally {
@@ -191,10 +199,8 @@
         environment_id: editForm.environment_id || null
       };
 
-      const updated = await api.updatePolicy(policyId, payload);
-      
-      // Update local policy with response
-      policy = updated;
+      await updatePolicy(policyId, payload);
+      policy = { ...policy, ...payload };
       closeEditModal();
     } catch (err) {
       editError = err.message || 'Failed to update policy';
@@ -223,11 +229,10 @@
     evaluation = null;
 
     try {
-      const result = await api.evaluatePolicy({
+      evaluation = await evaluatePolicy({
         environment_id: evalForm.environment_id,
         artifact_id: evalForm.artifact_id.trim()
       });
-      evaluation = result;
     } catch (err) {
       evaluationError = err.message || 'Failed to evaluate policy';
     } finally {
@@ -244,14 +249,14 @@
     const nextEnabled = !policy.enabled;
 
     try {
-      const updated = await api.updatePolicy(policyId, {
+      await updatePolicy(policyId, {
         name: policy.name,
         rules: policy.rules || [],
         enforcement: policy.enforcement || 'warn',
         enabled: nextEnabled,
         environment_id: policy.environment_id || null
       });
-      policy = updated;
+      policy = { ...policy, enabled: nextEnabled };
     } catch (err) {
       error = err.message || 'Failed to update policy status';
     }
@@ -267,8 +272,7 @@
     deleteError = null;
 
     try {
-      await api.deletePolicy(policyId);
-      // Navigate back to policies list on success
+      await deletePolicy(policyId);
       goto('/policies');
     } catch (err) {
       deleteError = err.message || 'Failed to delete policy';
@@ -430,7 +434,7 @@
       </div>
     {:else}
       <div class="form-field">
-        <label>Rules *</label>
+        <span class="field-label">Rules *</span>
         {#if visualRules.length === 0}
           <p class="help-text">No rules configured yet.</p>
         {/if}

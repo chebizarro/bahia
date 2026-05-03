@@ -43,21 +43,13 @@ describe('repositories store', () => {
     store = await import('$lib/stores/repositories.svelte.js');
   });
 
-  it('loads repositories, uses auth relays, and enriches CI state', async () => {
+  it('loads repositories, uses auth relays, and marks CI as public read-model only', async () => {
     const repos = [
       { displayName: 'Alpha', repoCoordinate: 'github.com/org/alpha', primaryUrl: 'https://github.com/org/alpha' },
       { displayName: 'Beta', repoCoordinate: 'github.com/org/beta', primaryUrl: 'https://github.com/org/beta' }
     ];
 
     nostrModule.fetchRepositories.mockResolvedValue(repos);
-    apiModule.api.lookupRepositoryCI.mockResolvedValue([
-      {
-        repo_coordinate: 'github.com/org/alpha',
-        latest_run: { id: 'run-1' },
-        policies: []
-      }
-    ]);
-
     const result = await store.loadRepositories({ authors: ['bob', 'alice', 'bob'] });
 
     expect(nostrModule.nostr.connect).toHaveBeenCalledWith(['wss://auth-read.example']);
@@ -66,8 +58,8 @@ describe('repositories store', () => {
 
     await Promise.resolve();
 
-    expect(apiModule.api.lookupRepositoryCI).toHaveBeenCalledWith(['github.com/org/alpha', 'github.com/org/beta']);
-    expect(store.repositories[0].ci.state).toBe('ready');
+    expect(apiModule.api.lookupRepositoryCI).not.toHaveBeenCalled();
+    expect(store.repositories[0].ci.state).toBe('empty');
     expect(store.repositories[1].ci.state).toBe('empty');
   });
 
@@ -92,14 +84,15 @@ describe('repositories store', () => {
     expect(repoList[0].ci).toEqual({ state: 'unsupported', lookup: null, error: null });
   });
 
-  it('marks CI error and repository error state when CI lookup fails', async () => {
+  it('does not call REST CI lookup while enriching public repository cards', async () => {
     const repoList = [{ displayName: 'Alpha', repoCoordinate: 'github.com/org/alpha' }];
     apiModule.api.lookupRepositoryCI.mockRejectedValue(new Error('CI backend unavailable'));
 
     await store.enrichRepositoriesWithCI(repoList);
 
-    expect(store.ciError.value).toBe('CI backend unavailable');
-    expect(repoList[0].ci).toEqual({ state: 'error', lookup: null, error: 'CI backend unavailable' });
+    expect(apiModule.api.lookupRepositoryCI).not.toHaveBeenCalled();
+    expect(store.ciError.value).toBe(null);
+    expect(repoList[0].ci).toEqual({ state: 'empty', lookup: null, error: null });
     expect(store.ciLoading.value).toBe(false);
   });
 

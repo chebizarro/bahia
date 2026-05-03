@@ -9,7 +9,7 @@
   import LoadingButton from '$lib/components/LoadingButton.svelte';
   import EmptyState from '$lib/components/EmptyState.svelte';
   import { environments, loading, loadEnvironments } from '$lib/stores';
-  import { api } from '$lib/api/client.js';
+  import { createEnvironment as createEnvironmentCommand } from '$lib/stores/public-controlplane.svelte.js';
   import { environmentFormSchema, parseRuntimeConfig, validateForm } from '$lib/validation/forms.js';
 
   $effect(() => {
@@ -79,7 +79,7 @@
     createError = null;
 
     try {
-      await api.createEnvironment({
+      await createEnvironmentCommand({
         name: createForm.name.trim(),
         loom_worker_selector: createForm.loom_worker_selector.trim(),
         runtime_config: parsedRuntimeConfig,

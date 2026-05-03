@@ -11,7 +11,26 @@
   import Checkbox from '$lib/components/Checkbox.svelte';
   import Textarea from '$lib/components/Textarea.svelte';
   import RepositoryPicker from '$lib/components/repositories/RepositoryPicker.svelte';
-  import { api } from '$lib/api/client.js';
+  import {
+    services as serviceStore,
+    builds as buildStore,
+    artifacts as artifactStore,
+    environments as environmentStore,
+    workers as workerStore,
+    loadServices,
+    loadBuilds,
+    loadArtifacts,
+    loadEnvironments,
+    loadWorkers
+  } from '$lib/stores';
+  import {
+    updateService,
+    deleteService,
+    evaluatePolicy,
+    createDeploymentIntent,
+    rollbackDeployment,
+    registerArtifact
+  } from '$lib/stores/public-controlplane.svelte.js';
   import {
     DEFAULT_DEPLOY_ESTIMATED_DURATION_SECS,
     formatDurationSecs,
@@ -184,25 +203,16 @@
     secrets = [];
 
     try {
-      const [loadedService, loadedBuilds, loadedArtifacts, loadedEnvironments, loadedSecrets] = await Promise.all([
-        api.getService(id),
-        api.listBuilds(id).catch(() => []),
-        api.listArtifacts(id).catch((err) => {
-          artifactsLoadError = err.message || 'Failed to load artifacts';
-          return [];
-        }),
-        api.listEnvironments().catch((err) => {
-          environmentsLoadError = err.message || 'Failed to load environments';
-          return [];
-        }),
-        api.listSecrets(id).catch(() => [])
-      ]);
+      await Promise.all([loadServices(), loadBuilds(), loadArtifacts(), loadEnvironments()]);
 
-      service = loadedService;
-      builds = loadedBuilds;
-      artifacts = loadedArtifacts;
-      environments = loadedEnvironments;
-      secrets = loadedSecrets;
+      service = serviceStore.find((candidate) => candidate.id === id) || null;
+      if (!service) {
+        throw new Error('Service not found');
+      }
+      builds = buildStore.filter((build) => build.service_id === id);
+      artifacts = artifactStore.filter((artifact) => artifact.service_id === id);
+      environments = [...environmentStore];
+      secrets = [];
 
       await loadRepositories();
     } catch (err) {
@@ -293,9 +303,9 @@
     deployCostEstimateError = null;
 
     try {
-      const workers = await api.listWorkers();
+      await loadWorkers();
       if (sequence !== deployCostEstimateSequence) return;
-      deployCostEstimateWorkers = Array.isArray(workers) ? workers : [];
+      deployCostEstimateWorkers = Array.isArray(workerStore) ? [...workerStore] : [];
     } catch (err) {
       if (sequence !== deployCostEstimateSequence) return;
       deployCostEstimateWorkers = [];
@@ -343,16 +353,15 @@
     editError = null;
 
     try {
-      const updated = await api.updateService(serviceId, {
+      const payload = {
         name: editForm.name.trim(),
         repo_url: editForm.repositorySelection?.repoUrl || '',
         artifact_repo: editForm.artifact_repo.trim(),
         runtime_type: editForm.runtime_type,
         default_branch: editForm.default_branch.trim() || 'main'
-      });
-      
-      // Update local service with response
-      service = updated;
+      };
+      await updateService(serviceId, payload);
+      service = { ...service, ...payload };
       closeEditModal();
     } catch (err) {
       editError = err.message || 'Failed to update service';
@@ -408,7 +417,7 @@
     deployPolicyPreviewLoading = true;
 
     try {
-      const preview = await api.evaluatePolicy({
+      const preview = await evaluatePolicy({
         artifact_id: artifactId,
         environment_id: environmentId
       });
@@ -440,7 +449,7 @@
     deployError = null;
 
     try {
-      await api.createIntent(serviceId, deployForm.environment_id, deployForm.artifact_id);
+      await createDeploymentIntent(serviceId, deployForm.environment_id, deployForm.artifact_id);
       deployOpen = false;
       goto('/deployments');
     } catch (err) {
@@ -482,12 +491,9 @@
 
     try {
       if (rollbackForm.mode === 'previous') {
-        await api.rollback({
-          service_id: serviceId,
-          environment_id: rollbackForm.environment_id
-        });
+        await rollbackDeployment(serviceId, rollbackForm.environment_id);
       } else {
-        await api.createIntent(serviceId, rollbackForm.environment_id, rollbackForm.artifact_id);
+        await createDeploymentIntent(serviceId, rollbackForm.environment_id, rollbackForm.artifact_id);
       }
       rollbackOpen = false;
       goto('/deployments');
@@ -503,7 +509,7 @@
     deleteError = null;
 
     try {
-      await api.deleteService(serviceId, deleteForce);
+      await deleteService(serviceId, deleteForce);
       // Navigate back to services list on success
       goto('/services');
     } catch (err) {
@@ -514,12 +520,7 @@
   }
 
   async function reloadSecrets() {
-    try {
-      secrets = await api.listSecrets(serviceId);
-    } catch (err) {
-      // Keep current list intact on reload failure
-      console.error('Failed to reload secrets:', err);
-    }
+    secrets = [];
   }
 
   function openSecretCreateModal() {
@@ -596,27 +597,7 @@
     secretCreateError = null;
 
     try {
-      const createdSecret = await api.createSecret(serviceId, {
-        name: secretForm.name.trim(),
-        value: secretForm.value
-      });
-
-      const createdValue = secretForm.value;
-
-      // Clear value immediately for security
-      secretForm.value = '';
-      
-      // Close modal and reload secrets
-      closeSecretCreateModal();
-      await reloadSecrets();
-
-      if (createdSecret?.id && createdValue) {
-        secretValueCache = {
-          ...secretValueCache,
-          [createdSecret.id]: createdValue
-        };
-        openSecretRevealModal(createdSecret.name || secretForm.name.trim(), createdValue);
-      }
+      secretCreateError = 'Secret management requires the private signer-first transport and is not available on public relay routes yet.';
     } catch (err) {
       // Never log the secret value
       secretCreateError = err.message || 'Failed to create secret';
@@ -638,22 +619,7 @@
     secretUpdateError = null;
 
     try {
-      const secretName = secretToUpdate.name;
-      const updatedSecret = await api.updateSecret(serviceId, secretToUpdate.id, {
-        value: secretUpdateValue
-      });
-
-      const updatedValue = secretUpdateValue;
-      closeSecretUpdateModal();
-      await reloadSecrets();
-
-      if (updatedSecret?.id && updatedValue) {
-        secretValueCache = {
-          ...secretValueCache,
-          [updatedSecret.id]: updatedValue
-        };
-        openSecretRevealModal(secretName, updatedValue);
-      }
+      secretUpdateError = 'Secret management requires the private signer-first transport and is not available on public relay routes yet.';
     } catch (err) {
       secretUpdateError = err.message || 'Failed to update secret';
     } finally {
@@ -680,11 +646,7 @@
     secretDeleteError = null;
 
     try {
-      await api.deleteSecret(serviceId, secretToDelete.id);
-      
-      // Close dialog and reload secrets
-      closeSecretDeleteModal();
-      await reloadSecrets();
+      secretDeleteError = 'Secret management requires the private signer-first transport and is not available on public relay routes yet.';
     } catch (err) {
       secretDeleteError = err.message || 'Failed to delete secret';
     } finally {
@@ -694,7 +656,8 @@
 
   async function reloadArtifacts() {
     try {
-      artifacts = await api.listArtifacts(serviceId);
+      await loadArtifacts();
+      artifacts = artifactStore.filter((artifact) => artifact.service_id === serviceId);
     } catch (err) {
       console.error('Failed to reload artifacts:', err);
     }
@@ -746,14 +709,25 @@
     artifactRegisterError = null;
 
     try {
-      await api.registerArtifact({
+      const buildId = metadata?.build_id || builds[0]?.id;
+      if (!buildId) {
+        artifactRegisterError = 'Build ID is required to register an artifact on the public relay. Include metadata.build_id or wait for a build projection.';
+        return;
+      }
+      await registerArtifact({
         service_id: serviceId,
-        name: artifactForm.name.trim(),
-        version: artifactForm.version.trim(),
-        digest: artifactForm.digest.trim(),
-        metadata: metadata
+        build_id: buildId,
+        image_repo: service?.artifact_repo || artifactForm.name.trim(),
+        image_tag: artifactForm.version.trim(),
+        image_digest: artifactForm.digest.trim(),
+        metadata: {
+          ...(metadata || {}),
+          name: artifactForm.name.trim(),
+          version: artifactForm.version.trim(),
+          build_id: buildId
+        }
       });
-      
+
       // Close modal and reload artifacts
       closeArtifactRegisterModal();
       await reloadArtifacts();

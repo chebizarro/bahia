@@ -4,7 +4,7 @@
   import Card from '$lib/components/Card.svelte';
   import LoadingButton from '$lib/components/LoadingButton.svelte';
   import EmptyState from '$lib/components/EmptyState.svelte';
-  import { api } from '$lib/api/client.js';
+  import { deploymentRuns, loadDeploymentRuns } from '$lib/stores';
 
   let run = $state(null);
   let stdoutLogs = $state('');
@@ -33,7 +33,11 @@
     logsError = null;
 
     try {
-      run = await api.getRun(id);
+      await loadDeploymentRuns();
+      run = deploymentRuns.find((candidate) => candidate.id === id) || null;
+      if (!run) {
+        throw new Error('Deployment run not found');
+      }
       await loadLogs(id);
     } catch (err) {
       error = err.message || 'Failed to load deployment run';
@@ -52,16 +56,9 @@
       return;
     }
 
-    try {
-      const stdout = await api.getRunLogs(id, 500, 'stdout');
-      const stderr = await api.getRunLogs(id, 500, 'stderr');
-      stdoutLogs = stdout?.stdout || '';
-      stderrLogs = stderr?.stderr || '';
-    } catch (err) {
-      logsError = err.message || 'Failed to load run logs';
-      stdoutLogs = '';
-      stderrLogs = '';
-    }
+    stdoutLogs = '';
+    stderrLogs = '';
+    logsError = 'Run log snapshots are not part of the public relay read model yet.';
   }
 
   function calculateProgress(status) {
@@ -171,7 +168,7 @@
 
     <Card>
       <h2>Run Logs</h2>
-      <p class="transport-note">Transport: JSON snapshot via <code>GET /api/v1/deployments/runs/:id/logs</code> (stream filters: stdout/stderr/merged).</p>
+      <p class="transport-note">Transport: public relay deployment-run projection. Stored stdout/stderr log snapshots are not projected yet.</p>
 
       {#if !isCompleted}
         <EmptyState

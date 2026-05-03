@@ -95,20 +95,17 @@ describe('Global Stores (index.js)', () => {
     expect(storesModule.serviceCount()).toBe(1);
   });
 
-  it('keeps REST loaders as transitional manual refresh/fallback paths', async () => {
+  it('public loaders bootstrap relay read models without REST fallback', async () => {
     await storesModule.loadServices();
     await storesModule.loadEnvironments();
     await storesModule.loadStates();
     await storesModule.loadWorkers();
 
-    expect(mockApi.listServices).toHaveBeenCalledTimes(1);
-    expect(mockApi.listEnvironments).toHaveBeenCalledTimes(1);
-    expect(mockApi.listStates).toHaveBeenCalledTimes(1);
-    expect(mockApi.listWorkers).toHaveBeenCalledTimes(1);
-    expect(storesModule.services).toHaveLength(2);
-    expect(storesModule.environments).toHaveLength(2);
-    expect(storesModule.states).toHaveLength(2);
-    expect(storesModule.workers).toHaveLength(2);
+    expect(controlplaneMock.bootstrapControlplane).toHaveBeenCalledTimes(4);
+    expect(mockApi.listServices).not.toHaveBeenCalled();
+    expect(mockApi.listEnvironments).not.toHaveBeenCalled();
+    expect(mockApi.listStates).not.toHaveBeenCalled();
+    expect(mockApi.listWorkers).not.toHaveBeenCalled();
   });
 
   it('does not let REST refreshes overwrite authoritative relay-backed state', async () => {
@@ -121,7 +118,7 @@ describe('Global Stores (index.js)', () => {
     expect(storesModule.services).toEqual([{ id: 'svc-relay', name: 'Relay Service' }]);
   });
 
-  it('loadAll bootstraps the relay-backed controlplane before falling back to REST', async () => {
+  it('loadAll bootstraps the relay-backed controlplane without REST fallback', async () => {
     await storesModule.loadAll();
 
     expect(mockApi.getSystemInfo).toHaveBeenCalledTimes(1);
@@ -129,15 +126,18 @@ describe('Global Stores (index.js)', () => {
     expect(mockApi.listServices).not.toHaveBeenCalled();
   });
 
-  it('loadAll uses REST fallback when relay bootstrap fails', async () => {
+  it('loadAll logs relay bootstrap failures without falling back to REST', async () => {
+    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     controlplaneMock.bootstrapControlplane.mockResolvedValueOnce({ ok: false, reason: 'no relay' });
 
     await storesModule.loadAll();
 
-    expect(mockApi.listServices).toHaveBeenCalledTimes(1);
-    expect(mockApi.listEnvironments).toHaveBeenCalledTimes(1);
-    expect(mockApi.listStates).toHaveBeenCalledTimes(1);
-    expect(mockApi.listWorkers).toHaveBeenCalledTimes(1);
+    expect(consoleSpy).toHaveBeenCalledWith('Nostr controlplane bootstrap failed:', 'no relay');
+    expect(mockApi.listServices).not.toHaveBeenCalled();
+    expect(mockApi.listEnvironments).not.toHaveBeenCalled();
+    expect(mockApi.listStates).not.toHaveBeenCalled();
+    expect(mockApi.listWorkers).not.toHaveBeenCalled();
+    consoleSpy.mockRestore();
   });
 
   it('subscribeToEvents starts Nostr bootstrap without SSE fallback', async () => {

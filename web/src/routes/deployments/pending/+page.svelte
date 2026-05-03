@@ -4,7 +4,15 @@
   import EmptyState from '$lib/components/EmptyState.svelte';
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
   import LoadingButton from '$lib/components/LoadingButton.svelte';
-  import { api } from '$lib/api/client.js';
+  import {
+    deploymentIntents,
+    services,
+    environments,
+    loadDeploymentIntents,
+    loadServices,
+    loadEnvironments
+  } from '$lib/stores';
+  import { approveDeploymentIntent, rejectDeploymentIntent } from '$lib/stores/public-controlplane.svelte.js';
 
   let pendingIntents = $state([]);
   let loading = $state(true);
@@ -54,60 +62,22 @@
     error = null;
 
     try {
-      // Load services and environments
-      const [services, environments] = await Promise.all([
-        api.listServices(),
-        api.listEnvironments()
-      ]);
+      await Promise.all([loadDeploymentIntents(), loadServices(), loadEnvironments()]);
+      const serviceById = new Map(services.map((service) => [service.id, service]));
+      const environmentById = new Map(environments.map((environment) => [environment.id, environment]));
 
-      // Load intents for every service/environment pair
-      const intentPromises = [];
-
-      for (const service of services) {
-        for (const env of environments) {
-          const promise = api.listIntents(service.id, env.id)
-            .then(result => {
-              const intentList = Array.isArray(result) ? result : [];
-              return intentList.map(intent => ({
-                ...intent,
-                service_name: service.name,
-                environment_name: env.name
-              }));
-            })
-            .catch(err => {
-              // Log but don't fail the whole page if one pair fails
-              console.warn(`Failed to load intents for ${service.name}/${env.name}:`, err);
-              return [];
-            });
-          
-          intentPromises.push(promise);
-        }
-      }
-
-      // Wait for all intent requests
-      const intentArrays = await Promise.all(intentPromises);
-      
-      // Flatten and deduplicate by intent ID
-      const allIntents = intentArrays.flat();
-      const intentMap = new Map();
-      allIntents.forEach(intent => {
-        if (intent.id) {
-          intentMap.set(intent.id, intent);
-        }
-      });
-
-      // Filter to only pending approvals and sort by created_at descending
-      pendingIntents = Array.from(intentMap.values())
-        .filter(intent => {
-          const approvalStatus = String(intent.approval_status || '').toLowerCase();
-          return approvalStatus === 'pending';
-        })
+      pendingIntents = deploymentIntents
+        .filter(intent => String(intent.approval_status || '').toLowerCase() === 'pending')
+        .map((intent) => ({
+          ...intent,
+          service_name: serviceById.get(intent.service_id)?.name || intent.service_id || 'Unknown service',
+          environment_name: environmentById.get(intent.environment_id)?.name || intent.environment_id || 'Unknown environment'
+        }))
         .sort((a, b) => {
           const dateA = a.created_at ? new Date(a.created_at) : new Date(0);
           const dateB = b.created_at ? new Date(b.created_at) : new Date(0);
           return dateB - dateA;
         });
-
     } catch (err) {
       error = err.message || 'Failed to load pending approvals';
       console.error('Error loading pending approvals:', err);
@@ -144,12 +114,8 @@
     actionError = null;
 
     try {
-      await api.approveIntent(actionIntent.id);
-      
-      // Remove from local list
+      await approveDeploymentIntent(actionIntent.id);
       pendingIntents = pendingIntents.filter(i => i.id !== actionIntent.id);
-      
-      // Close dialog
       approveOpen = false;
       actionIntent = null;
     } catch (err) {
@@ -167,12 +133,8 @@
     actionError = null;
 
     try {
-      await api.rejectIntent(actionIntent.id);
-      
-      // Remove from local list
+      await rejectDeploymentIntent(actionIntent.id);
       pendingIntents = pendingIntents.filter(i => i.id !== actionIntent.id);
-      
-      // Close dialog
       rejectOpen = false;
       actionIntent = null;
     } catch (err) {

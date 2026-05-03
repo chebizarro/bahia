@@ -6,7 +6,7 @@
   import Badge from '$lib/components/Badge.svelte';
   import LoadingButton from '$lib/components/LoadingButton.svelte';
   import EmptyState from '$lib/components/EmptyState.svelte';
-  import { api } from '$lib/api/client.js';
+  import { artifacts, services, loadArtifacts, loadServices } from '$lib/stores';
 
   let artifact = $state(null);
   let service = $state(null);
@@ -71,49 +71,16 @@
     error = null;
 
     try {
-      // Load artifact details (another agent is adding this method)
-      artifact = await api.getArtifact(id);
-
-      // Load service if service_id exists
-      if (artifact.service_id) {
-        try {
-          service = await api.getService(artifact.service_id);
-        } catch (err) {
-          console.warn('Failed to load service:', err);
-        }
+      await Promise.all([loadArtifacts(), loadServices()]);
+      artifact = artifacts.find((candidate) => candidate.id === id) || null;
+      if (!artifact) {
+        throw new Error('Artifact not found');
       }
 
-      // Load SBOM packages
-      try {
-        sbomPackages = await api.getSBOMPackages(id);
-        if (!Array.isArray(sbomPackages)) {
-          sbomPackages = [];
-        }
-      } catch (err) {
-        console.warn('Failed to load SBOM packages:', err);
-        sbomPackages = [];
-      }
-
-      // Load signatures
-      try {
-        signatures = await api.listSignatures(id);
-        if (!Array.isArray(signatures)) {
-          signatures = [];
-        }
-      } catch (err) {
-        console.warn('Failed to load signatures:', err);
-        signatures = [];
-      }
-
-      // Check verification status
-      try {
-        const result = await api.hasVerifiedSignature(id);
-        hasVerifiedSig = result?.verified || false;
-      } catch (err) {
-        console.warn('Failed to check verification status:', err);
-        hasVerifiedSig = false;
-      }
-
+      service = artifact.service_id ? services.find((candidate) => candidate.id === artifact.service_id) || null : null;
+      sbomPackages = Array.isArray(artifact.sbom_packages) ? artifact.sbom_packages : [];
+      signatures = Array.isArray(artifact.signatures) ? artifact.signatures : [];
+      hasVerifiedSig = signatures.some((signature) => signature?.verified === true) || Boolean(artifact.signature_ref || artifact.verified_signature);
     } catch (err) {
       error = err.message || 'Failed to load artifact';
       console.error('Error loading artifact:', err);
@@ -127,14 +94,7 @@
     verifyError = null;
 
     try {
-      await api.verifySignatures(artifactId);
-      
-      // Reload signatures and verification status
-      signatures = await api.listSignatures(artifactId);
-      const result = await api.hasVerifiedSignature(artifactId);
-      hasVerifiedSig = result?.verified || false;
-    } catch (err) {
-      verifyError = err.message || 'Failed to verify signatures';
+      verifyError = 'Signature verification requires signed/private transport and is not available on the public relay route yet.';
     } finally {
       verifying = false;
     }

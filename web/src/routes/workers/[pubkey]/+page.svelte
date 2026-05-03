@@ -4,7 +4,7 @@
   import Table from '$lib/components/Table.svelte';
   import ErrorState from '$lib/components/ErrorState.svelte';
   import EmptyState from '$lib/components/EmptyState.svelte';
-  import { api } from '$lib/api/client.js';
+  import { workers, loadWorkers } from '$lib/stores';
 
   let worker = $state(null);
   let pricing = $state([]);
@@ -43,32 +43,20 @@
       return;
     }
 
-    void loadPricing(decodedPubkey, sequence);
-
     try {
-      const loadedWorker = await api.getWorker(decodedPubkey);
+      await loadWorkers();
       if (!isCurrentLoad(sequence)) return;
+      const loadedWorker = workers.find((candidate) => candidate.pubkey === decodedPubkey);
+      if (!loadedWorker) throw new Error('Worker not found');
       worker = loadedWorker;
+      pricing = normalizePricingTiers(loadedWorker.pricing || loadedWorker.prices);
     } catch (err) {
       if (!isCurrentLoad(sequence)) return;
       error = err.message || 'Failed to load worker';
-    } finally {
-      if (isCurrentLoad(sequence)) {
-        loading = false;
-      }
-    }
-  }
-
-  async function loadPricing(decodedPubkey, sequence) {
-    try {
-      const loadedPricing = await api.getWorkerPricing(decodedPubkey);
-      if (!isCurrentLoad(sequence)) return;
-      pricing = normalizePricingTiers(loadedPricing);
-    } catch (err) {
-      if (!isCurrentLoad(sequence)) return;
       pricingError = err.message || 'Failed to load pricing tiers';
     } finally {
       if (isCurrentLoad(sequence)) {
+        loading = false;
         pricingLoading = false;
       }
     }

@@ -45,8 +45,11 @@ type fakeProjectionSource struct {
 	services   map[uuid.UUID]domain.Service
 	envs       map[uuid.UUID]domain.Environment
 	states     map[string]domain.EnvironmentServiceState
+	builds     map[uuid.UUID]domain.Build
+	artifacts  map[uuid.UUID]domain.Artifact
 	intents    map[uuid.UUID]domain.DeploymentIntent
 	runs       map[uuid.UUID]domain.DeploymentRun
+	policies   map[uuid.UUID]domain.DeploymentPolicy
 	llmRoutes  map[uuid.UUID]domain.LLMRoute
 	llmStates  map[string]domain.LLMRouteState
 	llmIntents map[uuid.UUID]domain.LLMDeploymentIntent
@@ -58,8 +61,11 @@ func newFakeProjectionSource() *fakeProjectionSource {
 		services:   map[uuid.UUID]domain.Service{},
 		envs:       map[uuid.UUID]domain.Environment{},
 		states:     map[string]domain.EnvironmentServiceState{},
+		builds:     map[uuid.UUID]domain.Build{},
+		artifacts:  map[uuid.UUID]domain.Artifact{},
 		intents:    map[uuid.UUID]domain.DeploymentIntent{},
 		runs:       map[uuid.UUID]domain.DeploymentRun{},
+		policies:   map[uuid.UUID]domain.DeploymentPolicy{},
 		llmRoutes:  map[uuid.UUID]domain.LLMRoute{},
 		llmStates:  map[string]domain.LLMRouteState{},
 		llmIntents: map[uuid.UUID]domain.LLMDeploymentIntent{},
@@ -115,6 +121,42 @@ func (s *fakeProjectionSource) GetEnvironmentServiceState(_ context.Context, ser
 	return &state, nil
 }
 
+func (s *fakeProjectionSource) GetBuild(_ context.Context, id uuid.UUID) (*domain.Build, error) {
+	build, ok := s.builds[id]
+	if !ok {
+		return nil, nil
+	}
+	return &build, nil
+}
+
+func (s *fakeProjectionSource) ListBuilds(_ context.Context, serviceID uuid.UUID, limit, offset int) ([]domain.Build, error) {
+	out := []domain.Build{}
+	for _, build := range s.builds {
+		if build.ServiceID == serviceID {
+			out = append(out, build)
+		}
+	}
+	return out, nil
+}
+
+func (s *fakeProjectionSource) GetArtifact(_ context.Context, id uuid.UUID) (*domain.Artifact, error) {
+	artifact, ok := s.artifacts[id]
+	if !ok {
+		return nil, nil
+	}
+	return &artifact, nil
+}
+
+func (s *fakeProjectionSource) ListArtifacts(_ context.Context, serviceID uuid.UUID, limit, offset int) ([]domain.Artifact, error) {
+	out := []domain.Artifact{}
+	for _, artifact := range s.artifacts {
+		if artifact.ServiceID == serviceID {
+			out = append(out, artifact)
+		}
+	}
+	return out, nil
+}
+
 func (s *fakeProjectionSource) GetDeploymentIntent(_ context.Context, id uuid.UUID) (*domain.DeploymentIntent, error) {
 	intent, ok := s.intents[id]
 	if !ok {
@@ -123,12 +165,50 @@ func (s *fakeProjectionSource) GetDeploymentIntent(_ context.Context, id uuid.UU
 	return &intent, nil
 }
 
+func (s *fakeProjectionSource) ListDeploymentIntents(_ context.Context, serviceID, envID uuid.UUID, limit, offset int) ([]domain.DeploymentIntent, error) {
+	out := []domain.DeploymentIntent{}
+	for _, intent := range s.intents {
+		if intent.ServiceID == serviceID && intent.EnvironmentID == envID {
+			out = append(out, intent)
+		}
+	}
+	return out, nil
+}
+
 func (s *fakeProjectionSource) GetDeploymentRun(_ context.Context, id uuid.UUID) (*domain.DeploymentRun, error) {
 	run, ok := s.runs[id]
 	if !ok {
 		return nil, nil
 	}
 	return &run, nil
+}
+
+func (s *fakeProjectionSource) ListDeploymentRuns(_ context.Context, intentID uuid.UUID) ([]domain.DeploymentRun, error) {
+	out := []domain.DeploymentRun{}
+	for _, run := range s.runs {
+		if run.DeploymentIntentID == intentID {
+			out = append(out, run)
+		}
+	}
+	return out, nil
+}
+
+func (s *fakeProjectionSource) ListPolicies(_ context.Context, enabledOnly bool) ([]domain.DeploymentPolicy, error) {
+	out := []domain.DeploymentPolicy{}
+	for _, policy := range s.policies {
+		if !enabledOnly || policy.Enabled {
+			out = append(out, policy)
+		}
+	}
+	return out, nil
+}
+
+func (s *fakeProjectionSource) GetPolicy(_ context.Context, id uuid.UUID) (*domain.DeploymentPolicy, error) {
+	policy, ok := s.policies[id]
+	if !ok {
+		return nil, nil
+	}
+	return &policy, nil
 }
 
 func (s *fakeProjectionSource) ListLLMRoutes(_ context.Context, limit, offset int) ([]domain.LLMRoute, error) {

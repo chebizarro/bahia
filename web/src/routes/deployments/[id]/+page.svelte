@@ -6,7 +6,17 @@
   import LoadingButton from '$lib/components/LoadingButton.svelte';
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
   import EmptyState from '$lib/components/EmptyState.svelte';
-  import { api } from '$lib/api/client.js';
+  import {
+    deploymentIntents,
+    deploymentRuns,
+    services,
+    environments,
+    loadDeploymentIntents,
+    loadDeploymentRuns,
+    loadServices,
+    loadEnvironments
+  } from '$lib/stores';
+  import { approveDeploymentIntent, rejectDeploymentIntent } from '$lib/stores/public-controlplane.svelte.js';
 
   let intent = $state(null);
   let runs = $state([]);
@@ -79,38 +89,15 @@
     error = null;
 
     try {
-      // Load intent
-      intent = await api.getIntent(id);
-
-      // Load runs for this intent
-      try {
-        runs = await api.listRuns(id);
-        if (!Array.isArray(runs)) {
-          runs = [];
-        }
-      } catch (err) {
-        console.warn('Failed to load runs:', err);
-        runs = [];
+      await Promise.all([loadDeploymentIntents(), loadDeploymentRuns(), loadServices(), loadEnvironments()]);
+      intent = deploymentIntents.find((candidate) => candidate.id === id) || null;
+      if (!intent) {
+        throw new Error('Deployment intent not found');
       }
 
-      // Load service name if service_id exists
-      if (intent.service_id) {
-        try {
-          service = await api.getService(intent.service_id);
-        } catch (err) {
-          console.warn('Failed to load service:', err);
-        }
-      }
-
-      // Load environment name if environment_id exists
-      if (intent.environment_id) {
-        try {
-          environment = await api.getEnvironment(intent.environment_id);
-        } catch (err) {
-          console.warn('Failed to load environment:', err);
-        }
-      }
-
+      runs = deploymentRuns.filter((run) => run.deployment_intent_id === id || run.intent_id === id);
+      service = intent.service_id ? services.find((candidate) => candidate.id === intent.service_id) || null : null;
+      environment = intent.environment_id ? environments.find((candidate) => candidate.id === intent.environment_id) || null : null;
     } catch (err) {
       error = err.message || 'Failed to load deployment intent';
       console.error('Error loading intent:', err);
@@ -126,12 +113,9 @@
     actionError = null;
 
     try {
-      await api.approveIntent(intent.id);
-      
-      // Reload intent and runs to get updated state
+      await approveDeploymentIntent(intent.id);
       await loadIntent();
-      
-      // Close dialog
+      intent = { ...intent, approval_status: 'approved' };
       approveOpen = false;
     } catch (err) {
       actionError = err.message || 'Failed to approve intent';
@@ -148,12 +132,9 @@
     actionError = null;
 
     try {
-      await api.rejectIntent(intent.id);
-      
-      // Reload intent and runs to get updated state
+      await rejectDeploymentIntent(intent.id);
       await loadIntent();
-      
-      // Close dialog
+      intent = { ...intent, approval_status: 'rejected' };
       rejectOpen = false;
     } catch (err) {
       actionError = err.message || 'Failed to reject intent';

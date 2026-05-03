@@ -7,10 +7,10 @@
   import LoadingButton from '$lib/components/LoadingButton.svelte';
   import EmptyState from '$lib/components/EmptyState.svelte';
   import RepositoryPicker from '$lib/components/repositories/RepositoryPicker.svelte';
-  import { services, loading, loadServices } from '$lib/stores';
+  import { services, loading, loadServices, systemInfo, loadSystemInfo } from '$lib/stores';
   import { createManualRepositorySelection } from '$lib/stores/repositories.js';
   import { fetchRepoBranches, isNostrRepository } from '$lib/nostr/branches.js';
-  import { api } from '$lib/api/client.js';
+  import { createService as createServiceCommand } from '$lib/stores/public-controlplane.svelte.js';
   import { buildArtifactRepo, validateCreateServiceForm, buildCreateServicePayload } from './create-service-form.js';
 
   // Registry state
@@ -27,7 +27,7 @@
     loadServices();
     // Load available registries
     try {
-      const info = await api.getSystemInfo();
+      const info = systemInfo.data || await loadSystemInfo();
       availableRegistries = info?.registries || [];
       // Auto-select default registry if available
       const defaultReg = availableRegistries.find(r => r.default);
@@ -185,7 +185,7 @@
     createError = null;
 
     try {
-      await api.createService(buildCreateServicePayload(createForm));
+      await createServiceCommand(buildCreateServicePayload(createForm));
       
       closeCreateModal();
       await loadServices();

@@ -3,7 +3,7 @@
   import Table from '$lib/components/Table.svelte';
   import Badge from '$lib/components/Badge.svelte';
   import EmptyState from '$lib/components/EmptyState.svelte';
-  import { api } from '$lib/api/client.js';
+  import { artifacts as registryArtifacts, services, loadArtifacts, loadServices } from '$lib/stores';
 
   // Tab state
   let activeTab = $state('registry');
@@ -11,7 +11,7 @@
   // Registry artifacts state
   let registryLoading = $state(true);
   let artifacts = $state([]);
-  let services = [];
+  let serviceList = [];
   let serviceMap = $state({});
 
   // Blossom state
@@ -30,17 +30,13 @@
   async function loadRegistryArtifacts() {
     // Load registry artifacts
     try {
-      services = await api.listServices();
-      serviceMap = services.reduce((map, service) => {
+      await Promise.all([loadServices(), loadArtifacts()]);
+      serviceList = services;
+      serviceMap = serviceList.reduce((map, service) => {
         map[service.id] = service.name;
         return map;
       }, {});
-
-      const artifactPromises = services.map(service => 
-        api.listArtifacts(service.id).catch(() => [])
-      );
-      const artifactsByService = await Promise.all(artifactPromises);
-      artifacts = artifactsByService.flat();
+      artifacts = registryArtifacts;
     } catch (err) {
       console.error('Failed to load artifacts:', err);
     } finally {
@@ -55,16 +51,10 @@
     blossomError = null;
     
     try {
-      // Load servers and health in parallel
-      const [servers, health, blobs] = await Promise.all([
-        api.getBlossomServers().catch(() => []),
-        api.checkBlossomHealth().catch(() => ({})),
-        api.listBlossomBlobs(pubkeyFilter || null)
-      ]);
-      
-      blossomServers = servers;
-      blossomHealth = health;
-      blossomBlobs = blobs;
+      blossomServers = [];
+      blossomHealth = {};
+      blossomBlobs = [];
+      blossomError = 'Blossom browsing is not part of the public relay read model yet.';
     } catch (err) {
       console.error('Failed to load Blossom blobs:', err);
       blossomError = err.message;

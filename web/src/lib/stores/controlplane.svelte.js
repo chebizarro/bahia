@@ -38,6 +38,11 @@ export const environments = $state([]);
 export const states = $state([]);
 export const llmRoutes = $state([]);
 export const llmRouteStates = $state([]);
+export const artifacts = $state([]);
+export const builds = $state([]);
+export const deploymentIntents = $state([]);
+export const deploymentRuns = $state([]);
+export const policies = $state([]);
 export const workers = $state([]);
 export const events = $state([]);
 
@@ -45,6 +50,11 @@ export const loading = $state({
   services: false,
   environments: false,
   states: false,
+  artifacts: false,
+  builds: false,
+  deploymentIntents: false,
+  deploymentRuns: false,
+  policies: false,
   workers: false
 });
 
@@ -55,6 +65,11 @@ const environmentMap = new Map();
 const stateMap = new Map();
 const llmRouteMap = new Map();
 const llmRouteStateMap = new Map();
+const artifactMap = new Map();
+const buildMap = new Map();
+const deploymentIntentMap = new Map();
+const deploymentRunMap = new Map();
+const policyMap = new Map();
 const workerMap = new Map();
 const activityMap = new Map();
 
@@ -76,6 +91,11 @@ function resetArrays() {
   states.length = 0;
   llmRoutes.length = 0;
   llmRouteStates.length = 0;
+  artifacts.length = 0;
+  builds.length = 0;
+  deploymentIntents.length = 0;
+  deploymentRuns.length = 0;
+  policies.length = 0;
   workers.length = 0;
   events.length = 0;
 }
@@ -97,6 +117,11 @@ function refreshCollections() {
   replaceArray(states, Array.from(stateMap.values()).sort(sortByNameOrId));
   replaceArray(llmRoutes, Array.from(llmRouteMap.values()).sort(sortByNameOrId));
   replaceArray(llmRouteStates, Array.from(llmRouteStateMap.values()).sort(sortByNameOrId));
+  replaceArray(artifacts, Array.from(artifactMap.values()).sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || ''))));
+  replaceArray(builds, Array.from(buildMap.values()).sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || ''))));
+  replaceArray(deploymentIntents, Array.from(deploymentIntentMap.values()).sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || ''))));
+  replaceArray(deploymentRuns, Array.from(deploymentRunMap.values()).sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || ''))));
+  replaceArray(policies, Array.from(policyMap.values()).sort(sortByNameOrId));
   replaceArray(workers, Array.from(workerMap.values()).sort(sortByNameOrId));
   replaceArray(
     events,
@@ -123,6 +148,11 @@ export function resetControlplaneStore() {
   stateMap.clear();
   llmRouteMap.clear();
   llmRouteStateMap.clear();
+  artifactMap.clear();
+  buildMap.clear();
+  deploymentIntentMap.clear();
+  deploymentRunMap.clear();
+  policyMap.clear();
   workerMap.clear();
   activityMap.clear();
   resetArrays();
@@ -311,6 +341,28 @@ function applyLLMRouteStateEvent(event) {
   return true;
 }
 
+function applyProjectedEntity(event, targetMap, idKeys = ['id']) {
+  const { accepted } = upsertReplaceableEvent(replaceableEvents, event);
+  if (!accepted) return false;
+
+  const content = contentWithEventMeta(event);
+  let id = getDTag(event);
+  for (const key of idKeys) {
+    if (content[key]) {
+      id = content[key];
+      break;
+    }
+  }
+  if (!id) return false;
+
+  if (isReplaceableTombstone(event) || content.deleted === true) {
+    targetMap.delete(id);
+  } else {
+    targetMap.set(id, { ...content, id });
+  }
+  return true;
+}
+
 function applyWorkerEvent(event) {
   const { accepted } = upsertReplaceableEvent(replaceableEvents, event);
   if (!accepted) return false;
@@ -406,6 +458,21 @@ export function applyControlplaneEvent(event) {
       break;
     case KINDS.BAHIA_LLM_ROUTE_STATE:
       changed = applyLLMRouteStateEvent(event);
+      break;
+    case KINDS.BAHIA_ARTIFACT_REGISTRY:
+      changed = applyProjectedEntity(event, artifactMap, ['id', 'artifact_id']);
+      break;
+    case KINDS.BAHIA_BUILD_REGISTRY:
+      changed = applyProjectedEntity(event, buildMap, ['id', 'build_id']);
+      break;
+    case KINDS.BAHIA_DEPLOYMENT_INTENT_REGISTRY:
+      changed = applyProjectedEntity(event, deploymentIntentMap, ['id', 'intent_id']);
+      break;
+    case KINDS.BAHIA_DEPLOYMENT_RUN_REGISTRY:
+      changed = applyProjectedEntity(event, deploymentRunMap, ['id', 'run_id']);
+      break;
+    case KINDS.BAHIA_POLICY_REGISTRY:
+      changed = applyProjectedEntity(event, policyMap, ['id', 'policy_id']);
       break;
     case KINDS.LOOM_WORKER_AD:
       changed = applyWorkerEvent(event);

@@ -42,11 +42,16 @@ const (
 // with internal/controlplane/reactor.go without importing that package (the
 // reactor already imports this adapter package for RelayPool).
 const (
-	KindServiceState        = 31961
-	KindServiceRegistry     = 31962
-	KindEnvironmentRegistry = 31963
-	KindLLMRouteRegistry    = 31964
-	KindLLMRouteState       = 31965
+	KindServiceState             = 31961
+	KindServiceRegistry          = 31962
+	KindEnvironmentRegistry      = 31963
+	KindLLMRouteRegistry         = 31964
+	KindLLMRouteState            = 31965
+	KindArtifactRegistry         = 31966
+	KindDeploymentIntentRegistry = 31967
+	KindDeploymentRunRegistry    = 31968
+	KindBuildRegistry            = 31969
+	KindPolicyRegistry           = 31970
 )
 
 // Nostr event kinds for Bahia inbound command events (311xx series).

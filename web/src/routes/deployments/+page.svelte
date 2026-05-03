@@ -4,13 +4,12 @@
   import EmptyState from '$lib/components/EmptyState.svelte';
   import Select from '$lib/components/Select.svelte';
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
-  import { api } from '$lib/api/client.js';
+  import { services, environments, deploymentIntents, artifacts as allArtifacts, loadServices, loadEnvironments, loadDeploymentIntents, loadArtifacts } from '$lib/stores';
+  import { createDeploymentIntent, rollbackDeployment } from '$lib/stores/public-controlplane.svelte.js';
 
   const PAGE_SIZE = 25;
 
   let intents = $state([]);
-  let services = $state([]);
-  let environments = $state([]);
   let loading = $state(true);
   let error = $state(null);
 
@@ -183,34 +182,15 @@
     error = null;
 
     try {
-      [services, environments] = await Promise.all([api.listServices(), api.listEnvironments()]);
-
-      const intentPromises = [];
-
-      for (const service of services) {
-        for (const env of environments) {
-          const promise = api
-            .listIntents(service.id, env.id)
-            .then((result) => {
-              const intentList = Array.isArray(result) ? result : [];
-              return intentList.map((intent) => ({
-                ...intent,
-                service_name: service.name,
-                environment_name: env.name,
-                intent_status: getIntentStatus(intent)
-              }));
-            })
-            .catch((err) => {
-              console.warn(`Failed to load intents for ${service.name}/${env.name}:`, err);
-              return [];
-            });
-
-          intentPromises.push(promise);
-        }
-      }
-
-      const intentArrays = await Promise.all(intentPromises);
-      const allIntents = intentArrays.flat();
+      await Promise.all([loadServices(), loadEnvironments(), loadDeploymentIntents()]);
+      const serviceById = new Map(services.map((service) => [service.id, service]));
+      const environmentById = new Map(environments.map((environment) => [environment.id, environment]));
+      const allIntents = deploymentIntents.map((intent) => ({
+        ...intent,
+        service_name: serviceById.get(intent.service_id)?.name || intent.service_id,
+        environment_name: environmentById.get(intent.environment_id)?.name || intent.environment_id,
+        intent_status: getIntentStatus(intent)
+      }));
       const intentMap = new Map();
       allIntents.forEach((intent) => {
         if (intent.id) intentMap.set(intent.id, intent);
@@ -237,7 +217,8 @@
     rollbackArtifacts = [];
 
     try {
-      rollbackArtifacts = await api.listArtifacts(intent.service_id);
+      await loadArtifacts();
+      rollbackArtifacts = allArtifacts.filter((artifact) => artifact.service_id === intent.service_id);
     } catch (err) {
       rollbackError = err.message || 'Failed to load artifacts';
     }
@@ -257,12 +238,9 @@
 
     try {
       if (rollbackTargetMode === 'previous') {
-        await api.rollback({
-          service_id: rollbackIntent.service_id,
-          environment_id: rollbackIntent.environment_id
-        });
+        await rollbackDeployment(rollbackIntent.service_id, rollbackIntent.environment_id);
       } else {
-        await api.createIntent(
+        await createDeploymentIntent(
           rollbackIntent.service_id,
           rollbackIntent.environment_id,
           rollbackArtifactId
