@@ -3,7 +3,7 @@
   import { untrack } from 'svelte';
   import { authState, isAuthenticated, initializeAuth } from '$lib/stores/auth.js';
 
-  let { children, requiredRoles = [] } = $props();
+  let { children, requiredRoles = [], requiresRestCompatibility = false } = $props();
 
   let initialized = $state(false);
 
@@ -23,7 +23,11 @@
       authState.status === 'authenticating'
   );
 
-  const isAuthorized = $derived(authState.backendAuthenticated || isAuthenticated());
+  const isAuthorized = $derived(isAuthenticated());
+
+  const compatibilityAuthorized = $derived(
+    !requiresRestCompatibility || Boolean(authState?.compatibility?.restNip98Ready || authState?.directNip98Ready)
+  );
 
   const roleAuthorized = $derived(
     requiredRoles.length === 0 ||
@@ -44,6 +48,11 @@
   <div class="auth-loading">
     <div class="spinner"></div>
     <p>Checking authentication...</p>
+  </div>
+{:else if isAuthorized && !compatibilityAuthorized}
+  <div class="auth-redirect">
+    <p>This page currently requires REST compatibility auth.</p>
+    <p>Enable backend <code>direct_nostr_http_auth</code> to access it.</p>
   </div>
 {:else if isAuthorized && roleAuthorized}
   {@render children?.()}
@@ -67,7 +76,7 @@
     gap: 1rem;
     color: var(--text-muted);
   }
-  
+
   .spinner {
     width: 32px;
     height: 32px;
@@ -76,7 +85,14 @@
     border-radius: 50%;
     animation: spin 0.8s linear infinite;
   }
-  
+
+  code {
+    background: var(--card-bg);
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    padding: 0.1rem 0.35rem;
+  }
+
   @keyframes spin {
     to { transform: rotate(360deg); }
   }

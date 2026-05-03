@@ -1,5 +1,5 @@
 import { api } from '../api/client.js';
-import { isAuthenticated, currentUser } from './auth.js';
+import { authState, isAuthenticated, currentUser } from './auth.js';
 import {
   services,
   environments,
@@ -100,7 +100,12 @@ export async function loadWorkers() {
   return loadViaRest('workers', () => api.listWorkers(), workers);
 }
 
+function canUseRestCompatibility() {
+  return Boolean(authState?.compatibility?.restNip98Ready || authState?.directNip98Ready);
+}
+
 async function loadAllViaRest() {
+  if (!canUseRestCompatibility()) return;
   await Promise.all([
     loadServices(),
     loadEnvironments(),
@@ -115,8 +120,12 @@ export async function loadAll() {
   inFlight.all = (async () => {
     const result = await bootstrapControlplane();
     if (!result.ok) {
-      // Keep REST bootstrap as a temporary rollback companion to legacy SSE.
-      await loadAllViaRest();
+      if (canUseRestCompatibility()) {
+        // Keep REST bootstrap as a temporary rollback companion to legacy SSE.
+        await loadAllViaRest();
+      } else {
+        console.error('Nostr controlplane bootstrap failed and REST compatibility is unavailable:', result.reason);
+      }
     }
   })();
 

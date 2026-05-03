@@ -11,7 +11,18 @@
   let loading = $state(true);
   let error = $state(null);
 
+  const compatibilityReady = $derived(
+    Boolean(authState?.compatibility?.restNip98Ready || authState?.directNip98Ready)
+  );
+
   $effect(() => {
+    if (!compatibilityReady) {
+      loading = false;
+      error = null;
+      orgs = [];
+      myInvites = [];
+      return;
+    }
     void loadData();
   });
 
@@ -62,7 +73,12 @@
   <a href="/orgs/new" class="btn-primary">+ New Organization</a>
 </div>
 
-{#if loading}
+{#if !compatibilityReady}
+  <div class="compatibility-needed" data-testid="orgs-compat-needed">
+    <p>This page requires REST compatibility auth.</p>
+    <p>Enable backend <code>direct_nostr_http_auth</code> to access organizations.</p>
+  </div>
+{:else if loading}
   <div class="loading">Loading...</div>
 {:else if error}
   <div class="error-state">
@@ -164,6 +180,23 @@
     text-align: center;
     color: var(--text-muted);
     padding: 2rem;
+  }
+
+  .compatibility-needed {
+    text-align: center;
+    color: var(--text-muted);
+    padding: 2rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    align-items: center;
+  }
+
+  code {
+    background: var(--card-bg);
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    padding: 0.1rem 0.35rem;
   }
 
   .error-state {

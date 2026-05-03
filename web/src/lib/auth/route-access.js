@@ -18,11 +18,25 @@ const ROUTE_ROLE_REQUIREMENTS = {
   '/settings': []
 };
 
+// Routes that still require REST compatibility in the signer-first migration.
+const ROUTE_COMPATIBILITY_REQUIREMENTS = {
+  '/orgs': true
+};
+
 function getRoleRequirements() {
   const overrides = typeof window !== 'undefined' ? window.__BAHIA_E2E_ROUTE_ROLE_REQUIREMENTS : null;
   if (!overrides || typeof overrides !== 'object') return ROUTE_ROLE_REQUIREMENTS;
   return {
     ...ROUTE_ROLE_REQUIREMENTS,
+    ...overrides
+  };
+}
+
+function getCompatibilityRequirements() {
+  const overrides = typeof window !== 'undefined' ? window.__BAHIA_E2E_ROUTE_COMPAT_REQUIREMENTS : null;
+  if (!overrides || typeof overrides !== 'object') return ROUTE_COMPATIBILITY_REQUIREMENTS;
+  return {
+    ...ROUTE_COMPATIBILITY_REQUIREMENTS,
     ...overrides
   };
 }
@@ -49,30 +63,44 @@ function getRequiredRoles(pathname) {
   return roleRequirements[match] ?? [];
 }
 
+function requiresRestCompatibility(pathname) {
+  const normalized = normalizePathname(pathname);
+  const compatibilityRequirements = getCompatibilityRequirements();
+  return Object.keys(compatibilityRequirements)
+    .sort((a, b) => b.length - a.length)
+    .some((prefix) => normalized.startsWith(prefix) && compatibilityRequirements[prefix]);
+}
+
 export function getRouteAccess(pathname) {
   const normalized = normalizePathname(pathname);
   const protectedRoute = PROTECTED_PREFIXES.some((prefix) => normalized.startsWith(prefix));
   const requiredRoles = protectedRoute ? getRequiredRoles(normalized) : [];
+  const compatibilityRequired = protectedRoute ? requiresRestCompatibility(normalized) : false;
   return {
     pathname: normalized,
     protectedRoute,
-    requiredRoles
+    requiredRoles,
+    requiresRestCompatibility: compatibilityRequired
   };
 }
 
 export function canAccessRoute({ pathname, authState, isAuthenticated }) {
   const access = getRouteAccess(pathname);
   if (!access.protectedRoute) {
-    return { ...access, authorized: true, roleAuthorized: true };
+    return { ...access, authorized: true, roleAuthorized: true, compatibilityAuthorized: true };
   }
 
-  const authenticated = Boolean(authState?.backendAuthenticated || isAuthenticated);
+  const authenticated = Boolean(isAuthenticated);
   if (!authenticated) {
-    return { ...access, authorized: false, roleAuthorized: false };
+    return { ...access, authorized: false, roleAuthorized: false, compatibilityAuthorized: false };
   }
+
+  const compatibilityAuthorized =
+    !access.requiresRestCompatibility ||
+    Boolean(authState?.compatibility?.restNip98Ready || authState?.directNip98Ready);
 
   if (access.requiredRoles.length === 0) {
-    return { ...access, authorized: true, roleAuthorized: true };
+    return { ...access, authorized: compatibilityAuthorized, roleAuthorized: true, compatibilityAuthorized };
   }
 
   const roles = toRoleSet(authState);
@@ -80,12 +108,14 @@ export function canAccessRoute({ pathname, authState, isAuthenticated }) {
 
   return {
     ...access,
-    authorized: roleAuthorized,
-    roleAuthorized
+    authorized: roleAuthorized && compatibilityAuthorized,
+    roleAuthorized,
+    compatibilityAuthorized
   };
 }
 
 export const routeAccessConfig = {
   protectedPrefixes: PROTECTED_PREFIXES,
-  roleRequirements: ROUTE_ROLE_REQUIREMENTS
+  roleRequirements: ROUTE_ROLE_REQUIREMENTS,
+  compatibilityRequirements: ROUTE_COMPATIBILITY_REQUIREMENTS
 };

@@ -43,3 +43,39 @@ test('shows permission denied when user lacks required route role', async ({ pag
   await expect(page).toHaveURL('/settings');
   await expect(page.getByText('You do not have permission to view this page.')).toBeVisible();
 });
+
+test('shows compatibility-needed state on /orgs when REST compatibility is unavailable', async ({ page }) => {
+  let orgsRequestCount = 0;
+
+  await page.route('**/api/v1/orgs**', (route) => {
+    orgsRequestCount += 1;
+    return route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ data: [] })
+    });
+  });
+
+  await installE2EMocks(page, {
+    authenticated: true,
+    extension: true,
+    systemInfo: {
+      nostr: {
+        browser_relays: [],
+        service_pubkey: 'b'.repeat(64)
+      },
+      features: {
+        relay_sidecar: true,
+        relay_read_models: true,
+        legacy_sse: false
+      }
+    }
+  });
+
+  await page.goto('/orgs');
+
+  await expect(page).toHaveURL('/orgs');
+  await expect(page.getByText('This page currently requires REST compatibility auth.')).toBeVisible();
+  await expect(page.getByText('Enable backend direct_nostr_http_auth to access it.')).toBeVisible();
+  await expect.poll(() => orgsRequestCount).toBe(0);
+});

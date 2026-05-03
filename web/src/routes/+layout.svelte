@@ -4,7 +4,7 @@
   import ErrorBoundary from '$lib/components/ErrorBoundary.svelte';
   import AuthGuard from '$lib/components/AuthGuard.svelte';
   import ToastContainer from '$lib/components/ToastContainer.svelte';
-  import { loadAll, subscribeToEvents, unsubscribeFromEvents } from '$lib/stores';
+  import { loadAll, unsubscribeFromEvents } from '$lib/stores';
   import { theme } from '$lib/stores/theme.js';
   import { authState, initializeAuth, isAuthenticated } from '$lib/stores/auth.js';
   import { canAccessRoute } from '$lib/auth/route-access.js';
@@ -31,9 +31,10 @@
 
     queueMicrotask(() => {
       if (!active) return;
-      loadAll();
-      subscribeToEvents();
-      initializeAuth();
+      initializeAuth().finally(() => {
+        if (!active) return;
+        loadAll();
+      });
     });
 
     return () => {
@@ -48,7 +49,7 @@
   <main>
     <ErrorBoundary>
       {#if isProtectedRoute}
-        <AuthGuard requiredRoles={routeAccess.requiredRoles}>
+        <AuthGuard requiredRoles={routeAccess.requiredRoles} requiresRestCompatibility={routeAccess.requiresRestCompatibility}>
           {@render children?.()}
         </AuthGuard>
       {:else}
