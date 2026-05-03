@@ -6,7 +6,9 @@ import (
 	"iter"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
+	"strings"
 	"time"
 
 	"fiatjaf.com/nostr"
@@ -83,7 +85,38 @@ func New(nostrCfg config.NostrConfig, logger *zap.Logger) (*Server, error) {
 // Handler returns the relay HTTP handler. It supports NIP-11 over HTTP and
 // Nostr WebSocket traffic on the configured public URL/path.
 func (s *Server) Handler() http.Handler {
-	return s.relay
+	publicPath := sidecarPublicPath(s.cfg.PublicURL)
+	if publicPath == "/" {
+		return s.relay
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/" {
+			http.NotFound(w, r)
+			return
+		}
+		rewritten := r.Clone(r.Context())
+		urlCopy := *r.URL
+		urlCopy.Path = publicPath
+		rewritten.URL = &urlCopy
+		s.relay.ServeHTTP(w, rewritten)
+	})
+	mux.Handle(publicPath, s.relay)
+	mux.Handle(publicPath+"/", s.relay)
+	return mux
+}
+
+func sidecarPublicPath(rawURL string) string {
+	parsed, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil {
+		return "/"
+	}
+	path := strings.TrimSpace(parsed.Path)
+	if path == "" || path == "/" {
+		return "/"
+	}
+	return "/" + strings.Trim(path, "/")
 }
 
 // Relay returns the underlying Khatru relay for focused package tests.

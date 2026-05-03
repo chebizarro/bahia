@@ -2,6 +2,8 @@ package relaysidecar
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"fiatjaf.com/nostr"
@@ -113,6 +115,70 @@ func TestSidecarCountIsNotCappedByQueryLimit(t *testing.T) {
 	}
 	if count != 2 {
 		t.Fatalf("Count() = %d, want 2", count)
+	}
+}
+
+func TestSidecarServesWebsocketAtRootAndConfiguredPath(t *testing.T) {
+	cfg := config.Defaults().Nostr
+	cfg.Sidecar.Enabled = true
+	cfg.Sidecar.PublicURL = "ws://localhost:3334/relay"
+
+	server, err := New(cfg, zap.NewNop())
+	if err != nil {
+		t.Fatalf("New() error: %v", err)
+	}
+
+	httpServer := httptest.NewServer(server.Handler())
+	defer httpServer.Close()
+
+	for _, path := range []string{"/", "/relay"} {
+		req, err := http.NewRequest(http.MethodGet, httpServer.URL+path, nil)
+		if err != nil {
+			t.Fatalf("new request %q: %v", path, err)
+		}
+		req.Header.Set("Connection", "Upgrade")
+		req.Header.Set("Upgrade", "websocket")
+		req.Header.Set("Sec-WebSocket-Version", "13")
+		req.Header.Set("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==")
+
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("GET %q: %v", path, err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode == http.StatusNotFound {
+			t.Fatalf("status at %q = %d, expected non-404 websocket handling", path, resp.StatusCode)
+		}
+	}
+}
+
+func TestSidecarServesNIP11OnConfiguredPath(t *testing.T) {
+	cfg := config.Defaults().Nostr
+	cfg.Sidecar.Enabled = true
+	cfg.Sidecar.PublicURL = "ws://localhost:3334/relay"
+
+	server, err := New(cfg, zap.NewNop())
+	if err != nil {
+		t.Fatalf("New() error: %v", err)
+	}
+
+	httpServer := httptest.NewServer(server.Handler())
+	defer httpServer.Close()
+
+	req, err := http.NewRequest(http.MethodGet, httpServer.URL+"/relay", nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("Accept", "application/nostr+json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET /relay: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusOK)
 	}
 }
 
