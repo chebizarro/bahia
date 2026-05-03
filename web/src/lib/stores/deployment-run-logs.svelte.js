@@ -1,4 +1,4 @@
-import { requestPrivateResult, privateTransportAvailable } from '$lib/nostr/private-controlplane.js';
+import { requestEncryptedResult, encryptedRequestsAvailable } from '$lib/nostr/encrypted-controlplane.js';
 import { currentSystemInfo, loadSystemInfo } from './system.svelte.js';
 
 export const deploymentRunLogsState = $state({
@@ -7,23 +7,23 @@ export const deploymentRunLogsState = $state({
   errorByRun: {}
 });
 
-export const DEPLOYMENT_RUN_LOG_PRIVATE_OPERATIONS = {
+export const DEPLOYMENT_RUN_LOG_ENCRYPTED_OPERATIONS = {
   get: 'deployments.run_logs.get'
 };
 
-async function ensurePrivateRunLogTransport() {
+async function ensureEncryptedRunLogRequests() {
   let info = currentSystemInfo();
   if (!info) info = await loadSystemInfo();
-  if (!privateTransportAvailable(info)) {
-    throw new Error('Private Nostr transport is not available. Configure nostr.private_browser_relays and a Bahia service pubkey before loading stored run logs.');
+  if (!encryptedRequestsAvailable(info)) {
+    throw new Error('Encrypted Nostr requests are not available. Configure nostr.encrypted_browser_relays and a Bahia service pubkey before loading stored run logs.');
   }
   return info;
 }
 
-function unwrapPrivateResult(response, fallback = {}) {
+function unwrapEncryptedResult(response, fallback = {}) {
   const envelope = response?.result ?? response;
   if (envelope?.status === 'error') {
-    throw new Error(envelope?.error?.message || 'Private deployment run log request failed');
+    throw new Error(envelope?.error?.message || 'Encrypted deployment run log request failed');
   }
   return envelope?.payload ?? fallback;
 }
@@ -42,13 +42,13 @@ export async function loadDeploymentRunLogs(runId, { tail = 100, stream = 'merge
   setRunState('loadingByRun', id, true);
   setRunState('errorByRun', id, null);
   try {
-    await ensurePrivateRunLogTransport();
-    const response = await requestPrivateResult({
-      operation: DEPLOYMENT_RUN_LOG_PRIVATE_OPERATIONS.get,
+    await ensureEncryptedRunLogRequests();
+    const response = await requestEncryptedResult({
+      operation: DEPLOYMENT_RUN_LOG_ENCRYPTED_OPERATIONS.get,
       payload: { run_id: id, tail: Number(tail) || 100, stream },
       tags: [['domain', 'deployment-run-logs']]
     });
-    const payload = unwrapPrivateResult(response);
+    const payload = unwrapEncryptedResult(response);
     const logs = payload?.logs ?? payload;
     setRunState('logsByRun', id, logs || null);
     return logs || null;

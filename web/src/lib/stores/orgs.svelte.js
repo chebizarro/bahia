@@ -1,4 +1,4 @@
-import { requestPrivateResult } from '$lib/nostr/private-controlplane.js';
+import { requestEncryptedResult } from '$lib/nostr/encrypted-controlplane.js';
 
 export const orgsState = $state({
   orgs: [],
@@ -16,21 +16,21 @@ export const orgDetailState = $state({
   error: null
 });
 
-function unwrapPrivateResult(response, fallback = null) {
+function unwrapEncryptedResult(response, fallback = null) {
   const envelope = response?.result;
   if (envelope?.status === 'error') {
-    throw new Error(envelope?.error?.message || 'Private org request failed');
+    throw new Error(envelope?.error?.message || 'Encrypted org request failed');
   }
   return envelope?.payload ?? fallback;
 }
 
-async function privateOrgRequest(operation, payload = {}) {
-  const response = await requestPrivateResult({
+async function encryptedOrgRequest(operation, payload = {}) {
+  const response = await requestEncryptedResult({
     operation,
     payload,
     tags: [['domain', 'orgs']]
   });
-  return unwrapPrivateResult(response);
+  return unwrapEncryptedResult(response);
 }
 
 export function resetOrgsState() {
@@ -54,8 +54,8 @@ export async function loadOrgsOverview() {
   orgsState.error = null;
   try {
     const [orgs, myInvites] = await Promise.all([
-      privateOrgRequest('orgs.list'),
-      privateOrgRequest('orgs.my_invites')
+      encryptedOrgRequest('orgs.list'),
+      encryptedOrgRequest('orgs.my_invites')
     ]);
     orgsState.orgs = Array.isArray(orgs) ? orgs : [];
     orgsState.myInvites = Array.isArray(myInvites) ? myInvites : [];
@@ -78,7 +78,7 @@ export async function loadOrgDetail(id) {
   orgDetailState.loading = true;
   orgDetailState.error = null;
   try {
-    const detail = await privateOrgRequest('orgs.detail', { id: orgId });
+    const detail = await encryptedOrgRequest('orgs.detail', { id: orgId });
     orgDetailState.org = detail?.org ?? null;
     orgDetailState.members = Array.isArray(detail?.members) ? detail.members : [];
     orgDetailState.invites = Array.isArray(detail?.invites) ? detail.invites : [];
@@ -93,19 +93,19 @@ export async function loadOrgDetail(id) {
 }
 
 export async function createOrg({ name, displayName }) {
-  return privateOrgRequest('orgs.create', { name, display_name: displayName });
+  return encryptedOrgRequest('orgs.create', { name, display_name: displayName });
 }
 
 export async function deleteOrg(id) {
-  return privateOrgRequest('orgs.delete', { id });
+  return encryptedOrgRequest('orgs.delete', { id });
 }
 
 export async function acceptInvite(inviteId) {
-  return privateOrgRequest('orgs.accept_invite', { invite_id: inviteId });
+  return encryptedOrgRequest('orgs.accept_invite', { invite_id: inviteId });
 }
 
 export async function createOrgInvite(orgId, { pubkey, role, expiresIn = 72 } = {}) {
-  return privateOrgRequest('orgs.create_invite', {
+  return encryptedOrgRequest('orgs.create_invite', {
     org_id: orgId,
     pubkey,
     role,
@@ -114,13 +114,13 @@ export async function createOrgInvite(orgId, { pubkey, role, expiresIn = 72 } = 
 }
 
 export async function revokeOrgInvite(orgId, inviteId) {
-  return privateOrgRequest('orgs.revoke_invite', { org_id: orgId, invite_id: inviteId });
+  return encryptedOrgRequest('orgs.revoke_invite', { org_id: orgId, invite_id: inviteId });
 }
 
 export async function updateOrgMemberRole(orgId, pubkey, { role }) {
-  return privateOrgRequest('orgs.update_member_role', { org_id: orgId, pubkey, role });
+  return encryptedOrgRequest('orgs.update_member_role', { org_id: orgId, pubkey, role });
 }
 
 export async function removeOrgMember(orgId, pubkey) {
-  return privateOrgRequest('orgs.remove_member', { org_id: orgId, pubkey });
+  return encryptedOrgRequest('orgs.remove_member', { org_id: orgId, pubkey });
 }

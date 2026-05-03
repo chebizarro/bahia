@@ -178,7 +178,7 @@
 
     <Card>
       <h2>Run Logs</h2>
-      <p class="transport-note">Transport: public relay run projection + encrypted private transport for stored stdout/stderr snapshots.</p>
+      <p class="transport-note">Transport: public relay run projection + encrypted Nostr request/result fetch for stored stdout/stderr snapshots.</p>
 
       {#if !isCompleted}
         <EmptyState

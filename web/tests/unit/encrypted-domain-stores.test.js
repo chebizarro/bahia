@@ -1,18 +1,18 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('$lib/nostr/private-controlplane.js', () => ({
-  requestPrivateResult: vi.fn()
+vi.mock('$lib/nostr/encrypted-controlplane.js', () => ({
+  requestEncryptedResult: vi.fn()
 }));
 
-describe('private payments/orgs stores', () => {
-  let privateTransport;
+describe('encrypted payments/orgs stores', () => {
+  let encryptedRequests;
   let paymentsStore;
   let orgsStore;
 
   beforeEach(async () => {
     vi.resetModules();
     vi.clearAllMocks();
-    privateTransport = await import('$lib/nostr/private-controlplane.js');
+    encryptedRequests = await import('$lib/nostr/encrypted-controlplane.js');
     paymentsStore = await import('$lib/stores/payments.svelte.js');
     orgsStore = await import('$lib/stores/orgs.svelte.js');
     paymentsStore.resetPaymentHistory();
@@ -20,8 +20,8 @@ describe('private payments/orgs stores', () => {
     orgsStore.resetOrgDetailState();
   });
 
-  it('loads payment history through encrypted private transport only', async () => {
-    privateTransport.requestPrivateResult.mockResolvedValue({
+  it('loads payment history through encrypted Nostr requests only', async () => {
+    encryptedRequests.requestEncryptedResult.mockResolvedValue({
       result: {
         status: 'ok',
         payload: [{ id: 'pay-1', worker_pubkey: 'worker-a', amount_sats: 42 }]
@@ -30,7 +30,7 @@ describe('private payments/orgs stores', () => {
 
     const records = await paymentsStore.loadPaymentHistory({ worker: ' worker-a ', limit: 25 });
 
-    expect(privateTransport.requestPrivateResult).toHaveBeenCalledWith({
+    expect(encryptedRequests.requestEncryptedResult).toHaveBeenCalledWith({
       operation: 'payments.history',
       payload: { worker: 'worker-a', limit: 25 },
       tags: [['domain', 'payments']]
@@ -39,8 +39,8 @@ describe('private payments/orgs stores', () => {
     expect(paymentsStore.paymentHistoryState.loadedWorker).toBe('worker-a');
   });
 
-  it('throws encrypted private result errors without falling back to REST', async () => {
-    privateTransport.requestPrivateResult.mockResolvedValue({
+  it('throws encrypted result errors without falling back to REST', async () => {
+    encryptedRequests.requestEncryptedResult.mockResolvedValue({
       result: {
         status: 'error',
         error: { code: 'handler_failed', message: 'worker is required' }
@@ -52,8 +52,8 @@ describe('private payments/orgs stores', () => {
     expect(paymentsStore.paymentHistoryState.error).toBe('worker is required');
   });
 
-  it('loads org overview and accepts invites through private operations', async () => {
-    privateTransport.requestPrivateResult
+  it('loads org overview and accepts invites through encrypted operations', async () => {
+    encryptedRequests.requestEncryptedResult
       .mockResolvedValueOnce({ result: { status: 'ok', payload: [{ id: 'org-1', role: 'owner' }] } })
       .mockResolvedValueOnce({ result: { status: 'ok', payload: [{ id: 'invite-1', org_name: 'demo' }] } })
       .mockResolvedValueOnce({ result: { status: 'ok', payload: { org_id: 'org-1', role: 'viewer' } } });
@@ -61,17 +61,17 @@ describe('private payments/orgs stores', () => {
     const overview = await orgsStore.loadOrgsOverview();
     const accepted = await orgsStore.acceptInvite('invite-1');
 
-    expect(privateTransport.requestPrivateResult).toHaveBeenNthCalledWith(1, {
+    expect(encryptedRequests.requestEncryptedResult).toHaveBeenNthCalledWith(1, {
       operation: 'orgs.list',
       payload: {},
       tags: [['domain', 'orgs']]
     });
-    expect(privateTransport.requestPrivateResult).toHaveBeenNthCalledWith(2, {
+    expect(encryptedRequests.requestEncryptedResult).toHaveBeenNthCalledWith(2, {
       operation: 'orgs.my_invites',
       payload: {},
       tags: [['domain', 'orgs']]
     });
-    expect(privateTransport.requestPrivateResult).toHaveBeenNthCalledWith(3, {
+    expect(encryptedRequests.requestEncryptedResult).toHaveBeenNthCalledWith(3, {
       operation: 'orgs.accept_invite',
       payload: { invite_id: 'invite-1' },
       tags: [['domain', 'orgs']]
@@ -81,8 +81,8 @@ describe('private payments/orgs stores', () => {
     expect(accepted).toEqual({ org_id: 'org-1', role: 'viewer' });
   });
 
-  it('loads org detail and sends member mutations as private operations', async () => {
-    privateTransport.requestPrivateResult
+  it('loads org detail and sends member mutations as encrypted operations', async () => {
+    encryptedRequests.requestEncryptedResult
       .mockResolvedValueOnce({
         result: {
           status: 'ok',
@@ -97,12 +97,12 @@ describe('private payments/orgs stores', () => {
     await orgsStore.createOrgInvite('org-1', { pubkey: 'carol', role: 'viewer', expiresIn: 168 });
 
     expect(orgsStore.orgDetailState.myRole).toBe('owner');
-    expect(privateTransport.requestPrivateResult).toHaveBeenNthCalledWith(2, {
+    expect(encryptedRequests.requestEncryptedResult).toHaveBeenNthCalledWith(2, {
       operation: 'orgs.update_member_role',
       payload: { org_id: 'org-1', pubkey: 'bob', role: 'admin' },
       tags: [['domain', 'orgs']]
     });
-    expect(privateTransport.requestPrivateResult).toHaveBeenNthCalledWith(3, {
+    expect(encryptedRequests.requestEncryptedResult).toHaveBeenNthCalledWith(3, {
       operation: 'orgs.create_invite',
       payload: { org_id: 'org-1', pubkey: 'carol', role: 'viewer', expires_in: 168 },
       tags: [['domain', 'orgs']]

@@ -1,4 +1,4 @@
-import { requestPrivateResult } from '$lib/nostr/private-controlplane.js';
+import { requestEncryptedResult } from '$lib/nostr/encrypted-controlplane.js';
 
 export const paymentHistoryState = $state({
   records: [],
@@ -7,10 +7,10 @@ export const paymentHistoryState = $state({
   loadedWorker: ''
 });
 
-function unwrapPrivateResult(response) {
+function unwrapEncryptedResult(response) {
   const envelope = response?.result;
   if (envelope?.status === 'error') {
-    throw new Error(envelope?.error?.message || 'Private payments request failed');
+    throw new Error(envelope?.error?.message || 'Encrypted payments request failed');
   }
   return envelope?.payload ?? [];
 }
@@ -33,12 +33,12 @@ export async function loadPaymentHistory({ worker, limit = 50 } = {}) {
   paymentHistoryState.error = null;
 
   try {
-    const response = await requestPrivateResult({
+    const response = await requestEncryptedResult({
       operation: 'payments.history',
       payload: { worker: workerPubkey, limit: Number(limit) || 50 },
       tags: [['domain', 'payments']]
     });
-    const records = unwrapPrivateResult(response);
+    const records = unwrapEncryptedResult(response);
     paymentHistoryState.records = Array.isArray(records) ? records : [];
     paymentHistoryState.loadedWorker = workerPubkey;
     return paymentHistoryState.records;

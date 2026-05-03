@@ -11,7 +11,8 @@ const systemMock = vi.hoisted(() => ({
   currentSystemInfo: vi.fn(() => ({
     nostr: {
       service_pubkey: 'b'.repeat(64),
-      private_browser_relays: ['wss://private.example'],
+      encrypted_browser_relays: ['wss://encrypted.example'],
+      private_browser_relays: ['wss://deprecated.example'],
       browser_relays: ['wss://public.example']
     }
   }))
@@ -22,14 +23,14 @@ vi.mock('$lib/stores/system.svelte.js', () => systemMock);
 
 function fakeClient() {
   return {
-    sockets: new Map([['wss://private.example', { readyState: 1 }]]),
+    sockets: new Map([['wss://encrypted.example', { readyState: 1 }]]),
     connect: vi.fn().mockResolvedValue(),
-    publish: vi.fn().mockResolvedValue([{ relay: 'wss://private.example', sent: true, accepted: true, message: '' }]),
+    publish: vi.fn().mockResolvedValue([{ relay: 'wss://encrypted.example', sent: true, accepted: true, message: '' }]),
     subscribe: vi.fn(() => vi.fn())
   };
 }
 
-describe('private controlplane transport', () => {
+describe('encrypted controlplane transport', () => {
   let module;
   let client;
 
@@ -44,55 +45,66 @@ describe('private controlplane transport', () => {
     systemMock.currentSystemInfo.mockReturnValue({
       nostr: {
         service_pubkey: 'b'.repeat(64),
-        private_browser_relays: ['wss://private.example'],
+        encrypted_browser_relays: ['wss://encrypted.example'],
+        private_browser_relays: ['wss://deprecated.example'],
         browser_relays: ['wss://public.example']
       }
     });
     client = fakeClient();
-    module = await import('../../src/lib/nostr/private-controlplane.js');
+    module = await import('../../src/lib/nostr/encrypted-controlplane.js');
   });
 
-  it('discovers only explicit private browser relays', () => {
-    expect(module.privateRelayUrlsFromSystemInfo()).toEqual(['wss://private.example']);
-    expect(module.privateTransportAvailable()).toBe(true);
+  it('prefers canonical encrypted browser relays and ignores public relays', () => {
+    expect(module.encryptedRelayUrlsFromSystemInfo()).toEqual(['wss://encrypted.example']);
+    expect(module.encryptedRequestsAvailable()).toBe(true);
+  });
+
+  it('falls back to deprecated private browser relay aliases for older system info', () => {
+    expect(module.encryptedRelayUrlsFromSystemInfo({
+      nostr: {
+        service_pubkey: 'b'.repeat(64),
+        private_browser_relays: ['wss://legacy.example'],
+        browser_relays: ['wss://public.example']
+      }
+    })).toEqual(['wss://legacy.example']);
   });
 
   it('builds encrypted request events without targeting public browser relays', async () => {
-    const transport = new module.PrivateControlplaneTransport({ client, relays: ['wss://private.example'], servicePubkey: 'b'.repeat(64) });
+    const transport = new module.EncryptedControlplaneTransport({ client, relays: ['wss://encrypted.example'], servicePubkey: 'b'.repeat(64) });
 
-    const event = await transport.buildPrivateRequestEvent({ operation: 'payments.history', payload: { limit: 10 } });
+    const event = await transport.buildEncryptedRequestEvent({ operation: 'payments.history', payload: { limit: 10 } });
 
     expect(authMock.encryptWithAuth).toHaveBeenCalledWith('b'.repeat(64), expect.stringContaining('payments.history'));
     expect(authMock.signWithAuth).toHaveBeenCalledWith(expect.objectContaining({
-      kind: module.PRIVATE_REQUEST_KIND,
-      tags: expect.arrayContaining([['p', 'b'.repeat(64)], ['private', module.PRIVATE_TRANSPORT_VERSION]]),
+      kind: module.ENCRYPTED_REQUEST_KIND,
+      tags: expect.arrayContaining([['p', 'b'.repeat(64)], ['private', module.ENCRYPTED_REQUEST_WIRE_VERSION]]),
       content: expect.stringMatching(/^cipher:/)
     }));
     expect(event.id).toBe('request-id');
   });
 
-  it('publishes only through the private client and requires an accepted OK', async () => {
-    const transport = new module.PrivateControlplaneTransport({ client, relays: ['wss://private.example'], servicePubkey: 'b'.repeat(64) });
-    const event = { id: 'request-id', kind: module.PRIVATE_REQUEST_KIND, tags: [], content: 'cipher' };
+  it('publishes through the encrypted-request client and requires an accepted OK', async () => {
+    const transport = new module.EncryptedControlplaneTransport({ client, relays: ['wss://encrypted.example'], servicePubkey: 'b'.repeat(64) });
+    const event = { id: 'request-id', kind: module.ENCRYPTED_REQUEST_KIND, tags: [], content: 'cipher' };
 
-    await expect(transport.publishPrivateRequest(event)).resolves.toMatchObject({ requestEventId: 'request-id' });
-    expect(client.connect).toHaveBeenCalledWith(['wss://private.example']);
+    await expect(transport.publishEncryptedRequest(event)).resolves.toMatchObject({ requestEventId: 'request-id' });
+    expect(client.connect).toHaveBeenCalledWith(['wss://encrypted.example']);
     expect(client.publish).toHaveBeenCalledWith(event);
 
-    client.publish.mockResolvedValueOnce([{ relay: 'wss://private.example', sent: true, accepted: false, message: 'blocked: no' }]);
-    await expect(transport.publishPrivateRequest(event)).rejects.toThrow('blocked: no');
+    client.publish.mockResolvedValueOnce([{ relay: 'wss://encrypted.example', sent: true, accepted: false, message: 'blocked: no' }]);
+    await expect(transport.publishEncryptedRequest(event)).rejects.toThrow('blocked: no');
   });
 
-  it('awaitPrivateResult resolves only correlated encrypted results and unsubscribes', async () => {
+  it('awaitEncryptedResult resolves only correlated encrypted results and unsubscribes', async () => {
     let handlers;
     const unsubscribe = vi.fn();
     client.subscribe.mockImplementation((_filters, nextHandlers) => {
       handlers = nextHandlers;
       return unsubscribe;
     });
-    const transport = new module.PrivateControlplaneTransport({ client, relays: ['wss://private.example'], servicePubkey: 'b'.repeat(64) });
+    const transport = new module.EncryptedControlplaneTransport({ client, relays: ['wss://encrypted.example'], servicePubkey: 'b'.repeat(64) });
 
-    const promise = transport.awaitPrivateResult({ requestEventId: 'req-1' });
+    const promise = transport.awaitEncryptedResult({ requestEventId: 'req-1' });
     await handlers.onEvent({ id: 'other', pubkey: 'b'.repeat(64), tags: [['e', 'other'], ['p', 'a'.repeat(64)]], content: 'cipher:{}' });
     await handlers.onEvent({ id: 'spoofed', pubkey: 'c'.repeat(64), tags: [['e', 'req-1'], ['p', 'a'.repeat(64)]], content: 'cipher:{}' });
     await handlers.onEvent({ id: 'result-1', pubkey: 'b'.repeat(64), tags: [['e', 'req-1'], ['p', 'a'.repeat(64)]], content: 'cipher:{"request_event_id":"req-1","status":"ok","payload":{"count":1}}' });
@@ -101,7 +113,7 @@ describe('private controlplane transport', () => {
     await expect(promise).resolves.toMatchObject({ payload: { status: 'ok', payload: { count: 1 } } });
     expect(unsubscribe).toHaveBeenCalledTimes(1);
     expect(client.subscribe).toHaveBeenCalledWith(
-      [{ kinds: [module.PRIVATE_RESULT_KIND], '#e': ['req-1'], '#p': ['a'.repeat(64)], authors: ['b'.repeat(64)] }],
+      [{ kinds: [module.ENCRYPTED_RESULT_KIND], '#e': ['req-1'], '#p': ['a'.repeat(64)], authors: ['b'.repeat(64)] }],
       expect.objectContaining({ onEvent: expect.any(Function), onClosed: expect.any(Function) })
     );
   });
@@ -109,10 +121,10 @@ describe('private controlplane transport', () => {
   it('cleans up result subscription when publish fails', async () => {
     const unsubscribe = vi.fn();
     client.subscribe.mockReturnValueOnce(unsubscribe);
-    client.publish.mockResolvedValueOnce([{ relay: 'wss://private.example', sent: true, accepted: false, message: 'blocked: no' }]);
-    const transport = new module.PrivateControlplaneTransport({ client, relays: ['wss://private.example'], servicePubkey: 'b'.repeat(64) });
+    client.publish.mockResolvedValueOnce([{ relay: 'wss://encrypted.example', sent: true, accepted: false, message: 'blocked: no' }]);
+    const transport = new module.EncryptedControlplaneTransport({ client, relays: ['wss://encrypted.example'], servicePubkey: 'b'.repeat(64) });
 
-    await expect(transport.requestPrivateResult({ operation: 'payments.history', payload: { limit: 5 } })).rejects.toThrow('blocked: no');
+    await expect(transport.requestEncryptedResult({ operation: 'payments.history', payload: { limit: 5 } })).rejects.toThrow('blocked: no');
 
     expect(unsubscribe).toHaveBeenCalledTimes(1);
   });
@@ -124,9 +136,9 @@ describe('private controlplane transport', () => {
       return vi.fn();
     });
     authMock.decryptWithAuth.mockRejectedValueOnce(new Error('bad ciphertext'));
-    const transport = new module.PrivateControlplaneTransport({ client, relays: ['wss://private.example'], servicePubkey: 'b'.repeat(64) });
+    const transport = new module.EncryptedControlplaneTransport({ client, relays: ['wss://encrypted.example'], servicePubkey: 'b'.repeat(64) });
 
-    const promise = transport.awaitPrivateResult({ requestEventId: 'req-1' });
+    const promise = transport.awaitEncryptedResult({ requestEventId: 'req-1' });
     await handlers.onEvent({ id: 'result-1', pubkey: 'b'.repeat(64), tags: [['e', 'req-1'], ['p', 'a'.repeat(64)]], content: 'not-decryptable' });
 
     await expect(promise).rejects.toThrow('bad ciphertext');

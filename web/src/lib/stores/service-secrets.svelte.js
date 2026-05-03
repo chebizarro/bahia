@@ -1,4 +1,4 @@
-import { requestPrivateResult, privateTransportAvailable } from '$lib/nostr/private-controlplane.js';
+import { requestEncryptedResult, encryptedRequestsAvailable } from '$lib/nostr/encrypted-controlplane.js';
 import { currentSystemInfo, loadSystemInfo } from './system.svelte.js';
 
 export const serviceSecretsState = $state({
@@ -7,7 +7,7 @@ export const serviceSecretsState = $state({
   errorByService: {}
 });
 
-export const SERVICE_SECRET_PRIVATE_OPERATIONS = {
+export const SERVICE_SECRET_ENCRYPTED_OPERATIONS = {
   list: 'services.secrets.list',
   create: 'services.secrets.create',
   update: 'services.secrets.update',
@@ -15,19 +15,19 @@ export const SERVICE_SECRET_PRIVATE_OPERATIONS = {
   reveal: 'services.secrets.reveal'
 };
 
-async function ensurePrivateSecretsTransport() {
+async function ensureEncryptedSecrets() {
   let info = currentSystemInfo();
   if (!info) info = await loadSystemInfo();
-  if (!privateTransportAvailable(info)) {
-    throw new Error('Private Nostr transport is not available. Configure nostr.private_browser_relays and a Bahia service pubkey before managing service secrets.');
+  if (!encryptedRequestsAvailable(info)) {
+    throw new Error('Encrypted Nostr requests are not available. Configure nostr.encrypted_browser_relays and a Bahia service pubkey before managing service secrets.');
   }
   return info;
 }
 
-function unwrapPrivateResult(response, fallback = {}) {
+function unwrapEncryptedResult(response, fallback = {}) {
   const envelope = response?.result ?? response;
   if (envelope?.status === 'error') {
-    throw new Error(envelope?.error?.message || 'Private service secret request failed');
+    throw new Error(envelope?.error?.message || 'Encrypted service secret request failed');
   }
   return envelope?.payload ?? fallback;
 }
@@ -64,14 +64,14 @@ function setServiceError(serviceId, error) {
   serviceSecretsState.errorByService = { ...serviceSecretsState.errorByService, [serviceId]: error };
 }
 
-async function privateSecretRequest(operation, payload = {}) {
-  await ensurePrivateSecretsTransport();
-  const response = await requestPrivateResult({
+async function encryptedSecretRequest(operation, payload = {}) {
+  await ensureEncryptedSecrets();
+  const response = await requestEncryptedResult({
     operation,
     payload,
     tags: [['domain', 'service-secrets']]
   });
-  return unwrapPrivateResult(response);
+  return unwrapEncryptedResult(response);
 }
 
 export function getServiceSecrets(serviceId) {
@@ -84,7 +84,7 @@ export async function listServiceSecrets(serviceId) {
   setServiceLoading(id, true);
   setServiceError(id, null);
   try {
-    const payload = await privateSecretRequest(SERVICE_SECRET_PRIVATE_OPERATIONS.list, { service_id: id });
+    const payload = await encryptedSecretRequest(SERVICE_SECRET_ENCRYPTED_OPERATIONS.list, { service_id: id });
     const secrets = normalizeSecretsPayload(payload);
     setServiceSecrets(id, secrets);
     return secrets;
@@ -99,7 +99,7 @@ export async function listServiceSecrets(serviceId) {
 
 export async function createServiceSecret(serviceId, payload) {
   const id = String(serviceId || '').trim();
-  const result = await privateSecretRequest(SERVICE_SECRET_PRIVATE_OPERATIONS.create, { service_id: id, ...payload });
+  const result = await encryptedSecretRequest(SERVICE_SECRET_ENCRYPTED_OPERATIONS.create, { service_id: id, ...payload });
   const secret = result?.secret ?? result;
   if (secret?.id) upsertServiceSecret(id, secret);
   return secret;
@@ -107,7 +107,7 @@ export async function createServiceSecret(serviceId, payload) {
 
 export async function updateServiceSecret(serviceId, secretId, payload) {
   const id = String(serviceId || '').trim();
-  const result = await privateSecretRequest(SERVICE_SECRET_PRIVATE_OPERATIONS.update, { service_id: id, secret_id: secretId, ...payload });
+  const result = await encryptedSecretRequest(SERVICE_SECRET_ENCRYPTED_OPERATIONS.update, { service_id: id, secret_id: secretId, ...payload });
   const secret = result?.secret ?? result;
   if (secret?.id) upsertServiceSecret(id, secret);
   return secret;
@@ -115,7 +115,7 @@ export async function updateServiceSecret(serviceId, secretId, payload) {
 
 export async function deleteServiceSecret(serviceId, secretId) {
   const id = String(serviceId || '').trim();
-  const result = await privateSecretRequest(SERVICE_SECRET_PRIVATE_OPERATIONS.delete, { service_id: id, secret_id: secretId });
+  const result = await encryptedSecretRequest(SERVICE_SECRET_ENCRYPTED_OPERATIONS.delete, { service_id: id, secret_id: secretId });
   const current = serviceSecretsState.secretsByService[id] || [];
   setServiceSecrets(id, current.filter((secret) => secret.id !== secretId));
   return result;
@@ -123,7 +123,7 @@ export async function deleteServiceSecret(serviceId, secretId) {
 
 export async function revealServiceSecret(serviceId, secretId) {
   const id = String(serviceId || '').trim();
-  const result = await privateSecretRequest(SERVICE_SECRET_PRIVATE_OPERATIONS.reveal, { service_id: id, secret_id: secretId });
+  const result = await encryptedSecretRequest(SERVICE_SECRET_ENCRYPTED_OPERATIONS.reveal, { service_id: id, secret_id: secretId });
   return result?.value || '';
 }
 

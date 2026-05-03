@@ -273,7 +273,7 @@
                 loading={verifying}
                 onclick={handleVerifySignatures}
               >
-                Verify via Private Transport
+                Verify via Encrypted Nostr
               </LoadingButton>
             </div>
           </div>

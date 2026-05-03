@@ -1,4 +1,4 @@
-import { requestPrivateResult, privateTransportAvailable } from '$lib/nostr/private-controlplane.js';
+import { requestEncryptedResult, encryptedRequestsAvailable } from '$lib/nostr/encrypted-controlplane.js';
 import { currentSystemInfo, loadSystemInfo } from './system.svelte.js';
 
 export const artifactSignatureState = $state({
@@ -7,23 +7,23 @@ export const artifactSignatureState = $state({
   lastResultByArtifact: {}
 });
 
-export const ARTIFACT_SIGNATURE_PRIVATE_OPERATIONS = {
+export const ARTIFACT_SIGNATURE_ENCRYPTED_OPERATIONS = {
   verify: 'artifacts.signatures.verify'
 };
 
-async function ensurePrivateSignatureTransport() {
+async function ensureEncryptedSignatureRequests() {
   let info = currentSystemInfo();
   if (!info) info = await loadSystemInfo();
-  if (!privateTransportAvailable(info)) {
-    throw new Error('Private Nostr transport is not available. Configure nostr.private_browser_relays and a Bahia service pubkey before verifying artifact signatures.');
+  if (!encryptedRequestsAvailable(info)) {
+    throw new Error('Encrypted Nostr requests are not available. Configure nostr.encrypted_browser_relays and a Bahia service pubkey before verifying artifact signatures.');
   }
   return info;
 }
 
-function unwrapPrivateResult(response, fallback = {}) {
+function unwrapEncryptedResult(response, fallback = {}) {
   const envelope = response?.result ?? response;
   if (envelope?.status === 'error') {
-    throw new Error(envelope?.error?.message || 'Private artifact signature request failed');
+    throw new Error(envelope?.error?.message || 'Encrypted artifact signature request failed');
   }
   return envelope?.payload ?? fallback;
 }
@@ -38,13 +38,13 @@ export async function verifyArtifactSignatures(artifactId) {
   setArtifactState('verifyingByArtifact', id, true);
   setArtifactState('errorByArtifact', id, null);
   try {
-    await ensurePrivateSignatureTransport();
-    const response = await requestPrivateResult({
-      operation: ARTIFACT_SIGNATURE_PRIVATE_OPERATIONS.verify,
+    await ensureEncryptedSignatureRequests();
+    const response = await requestEncryptedResult({
+      operation: ARTIFACT_SIGNATURE_ENCRYPTED_OPERATIONS.verify,
       payload: { artifact_id: id },
       tags: [['domain', 'artifact-signatures']]
     });
-    const payload = unwrapPrivateResult(response);
+    const payload = unwrapEncryptedResult(response);
     setArtifactState('lastResultByArtifact', id, payload);
     return payload;
   } catch (error) {
