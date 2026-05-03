@@ -20,24 +20,31 @@ describe('route access', () => {
     expect(result.authorized).toBe(false);
   });
 
-  it('allows protected routes when authenticated', () => {
-    const result = canAccessRoute({
+  it('requires compatibility on REST-dependent protected routes', () => {
+    const blocked = canAccessRoute({
       pathname: '/workers',
       authState: { backendAuthenticated: false },
       isAuthenticated: true
     });
 
-    expect(result.authorized).toBe(true);
-  });
-
-  it('supports role checks when required roles are configured', () => {
-    const adminResult = canAccessRoute({
-      pathname: '/settings',
-      authState: { backendAuthenticated: true, roles: ['admin'] },
+    const allowed = canAccessRoute({
+      pathname: '/workers',
+      authState: { compatibility: { restNip98Ready: true } },
       isAuthenticated: true
     });
 
-    expect(adminResult.requiredRoles).toEqual([]);
-    expect(adminResult.authorized).toBe(true);
+    expect(blocked.authorized).toBe(false);
+    expect(allowed.authorized).toBe(true);
+  });
+
+  it('allows signer-authenticated access on protected routes without REST compatibility requirement', () => {
+    const result = canAccessRoute({
+      pathname: '/events',
+      authState: { backendAuthenticated: false },
+      isAuthenticated: true
+    });
+
+    expect(result.requiredRoles).toEqual([]);
+    expect(result.authorized).toBe(true);
   });
 });

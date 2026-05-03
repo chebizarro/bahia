@@ -63,22 +63,23 @@ Conclusion:
 - Route usage search for direct REST client calls (`api.*`) under `web/src/routes/**`
 
 ### Findings
-- Explicit compatibility gating is currently configured only for `/orgs`.
-- Direct REST client calls remain across many protected route groups, including:
-  - `/services`
+- Protected route prefixes with direct REST client usage (`$lib/api/client.js`) are:
+  - `/artifacts`
   - `/deployments`
   - `/environments`
-  - `/artifacts`
   - `/notifications`
-  - `/policies`
-  - `/payments`
-  - `/workers`
-  - `/settings`
   - `/orgs`
-- This indicates broader REST dependence than the current explicit compatibility-gated set.
+  - `/payments`
+  - `/policies`
+  - `/services`
+  - `/settings`
+  - `/workers`
+- Protected prefixes currently **without** direct REST client usage in route pages:
+  - `/events`
+  - `/souls`
+- Route gating has now been updated so the direct-REST prefixes above are marked `requiresRestCompatibility` in `web/src/lib/auth/route-access.js`.
 
 ### Conclusion
-- Additional route-by-route compatibility classification is still needed.
-- Follow-up issue filed to classify and either:
-  1) mark REST-required routes in route-access, or
-  2) migrate those routes to Nostr/store-first flows.
+- Compatibility gating now matches the currently known direct-REST protected surface.
+- `/events` and `/souls` remain signer-only gated for now.
+- Follow-up migration issues are required to move the REST-dependent route groups to Nostr/store-first flows so compatibility gating can be reduced over time.
