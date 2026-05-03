@@ -1,11 +1,23 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 
+const authMock = vi.hoisted(() => ({
+  authState: {
+    compatibility: { restNip98Ready: true },
+    directNip98Ready: true
+  },
+  isAuthenticated: vi.fn(() => true),
+  currentUser: vi.fn(() => ({ pubkey: 'a'.repeat(64) }))
+}));
+
+vi.mock('../../src/lib/stores/auth.js', () => authMock);
+
 vi.mock('../../src/lib/api/client.js', () => {
   const mockApi = {
     listServices: vi.fn(),
     listEnvironments: vi.fn(),
     listStates: vi.fn(),
-    listWorkers: vi.fn()
+    listWorkers: vi.fn(),
+    getSystemInfo: vi.fn()
   };
   return { api: mockApi };
 });
@@ -39,6 +51,10 @@ describe('Global Stores (index.js)', () => {
     controlplaneMock.events.length = 0;
     Object.assign(controlplaneMock.loading, { services: false, environments: false, states: false, workers: false });
     Object.assign(controlplaneMock.controlplaneConnection, { status: 'idle', ready: false });
+    Object.assign(authMock.authState, {
+      compatibility: { restNip98Ready: true },
+      directNip98Ready: true
+    });
     controlplaneMock.bootstrapControlplane.mockResolvedValue({ ok: true });
 
     const apiModule = await import('../../src/lib/api/client.js');
@@ -59,6 +75,10 @@ describe('Global Stores (index.js)', () => {
       { pubkey: 'worker-1', status: 'active' },
       { pubkey: 'worker-2', status: 'idle' }
     ]);
+    mockApi.getSystemInfo.mockResolvedValue({
+      features: { relay_read_models: true, direct_nostr_http_auth: true },
+      nostr: { browser_relays: ['ws://relay.test/relay'], service_pubkey: 'a'.repeat(64) }
+    });
     storesModule = await import('../../src/lib/stores/index.js');
   });
 
@@ -104,6 +124,7 @@ describe('Global Stores (index.js)', () => {
   it('loadAll bootstraps the relay-backed controlplane before falling back to REST', async () => {
     await storesModule.loadAll();
 
+    expect(mockApi.getSystemInfo).toHaveBeenCalledTimes(1);
     expect(controlplaneMock.bootstrapControlplane).toHaveBeenCalledTimes(1);
     expect(mockApi.listServices).not.toHaveBeenCalled();
   });

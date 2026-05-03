@@ -4,7 +4,7 @@
   import ErrorBoundary from '$lib/components/ErrorBoundary.svelte';
   import AuthGuard from '$lib/components/AuthGuard.svelte';
   import ToastContainer from '$lib/components/ToastContainer.svelte';
-  import { loadAll, unsubscribeFromEvents } from '$lib/stores';
+  import { loadAll, loadSystemInfo, unsubscribeFromEvents } from '$lib/stores';
   import { theme } from '$lib/stores/theme.js';
   import { authState, initializeAuth, isAuthenticated } from '$lib/stores/auth.js';
   import { canAccessRoute } from '$lib/auth/route-access.js';
@@ -31,10 +31,15 @@
 
     queueMicrotask(() => {
       if (!active) return;
-      initializeAuth().finally(() => {
-        if (!active) return;
-        loadAll();
-      });
+      initializeAuth()
+        .then(() => loadSystemInfo())
+        .catch((error) => {
+          console.error('Shared bootstrap failed before controlplane load:', error);
+        })
+        .finally(() => {
+          if (!active) return;
+          loadAll();
+        });
     });
 
     return () => {

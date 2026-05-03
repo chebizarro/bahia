@@ -6,6 +6,7 @@ describe('route access', () => {
     expect(getRouteAccess('/services').protectedRoute).toBe(true);
     expect(getRouteAccess('/payments').protectedRoute).toBe(true);
     expect(getRouteAccess('/notifications').protectedRoute).toBe(true);
+    expect(getRouteAccess('/settings').protectedRoute).toBe(true);
     expect(getRouteAccess('/').protectedRoute).toBe(false);
   });
 
@@ -39,7 +40,7 @@ describe('route access', () => {
 
   it('allows signer-authenticated access on protected routes without REST compatibility requirement', () => {
     const result = canAccessRoute({
-      pathname: '/events',
+      pathname: '/settings',
       authState: { backendAuthenticated: false },
       isAuthenticated: true
     });

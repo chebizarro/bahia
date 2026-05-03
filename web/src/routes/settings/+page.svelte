@@ -2,16 +2,16 @@
   import Card from '$lib/components/Card.svelte';
   import Input from '$lib/components/Input.svelte';
   import LoadingButton from '$lib/components/LoadingButton.svelte';
-  import { api } from '$lib/api/client.js';
   import { nostr, saveRelayConfig, getDefaultRelays } from '$lib/nostr/client.js';
   import { theme, toggleTheme } from '$lib/stores/theme.js';
   import { toast } from '$lib/components/toast.js';
   import { authState, loginWithNostrConnect, canUseNostrConnectUri } from '$lib/stores/auth.js';
+  import { systemInfo as sharedSystemInfo, loadSystemInfo as loadSharedSystemInfo } from '$lib/stores';
 
-  // System info from server
-  let systemInfo = $state(null);
-  let systemLoading = $state(true);
-  let systemError = $state(null);
+  // Shared public system info from app bootstrap
+  const systemInfo = $derived(sharedSystemInfo.data);
+  const systemLoading = $derived(sharedSystemInfo.loading);
+  const systemError = $derived(sharedSystemInfo.error);
 
   // Relay configuration (client-side)
   let relayInput = $state('');
@@ -26,23 +26,13 @@
 
     // Load current relay config
     relays = nostr.getRelays();
-    void loadSystemInfo();
+    void loadSharedSystemInfo().catch(() => {});
 
     return () => {
       unsubscribe();
     };
   });
 
-  async function loadSystemInfo() {
-    // Load system info from server
-    try {
-      systemInfo = await api.getSystemInfo();
-    } catch (err) {
-      systemError = err?.message || 'Failed to load system info';
-    } finally {
-      systemLoading = false;
-    }
-  }
 
   function addRelay() {
     const url = relayInput.trim();

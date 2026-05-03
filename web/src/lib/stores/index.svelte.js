@@ -1,5 +1,6 @@
 import { api } from '../api/client.js';
 import { authState, isAuthenticated, currentUser } from './auth.js';
+import { systemInfo, loadSystemInfo, currentSystemInfo } from './system.svelte.js';
 import {
   services,
   environments,
@@ -19,6 +20,9 @@ export { theme, toggleTheme } from './theme.js';
 
 // Auth state (compat exports)
 export { isAuthenticated, currentUser };
+
+// Shared public bootstrap/system state
+export { systemInfo, loadSystemInfo, currentSystemInfo };
 
 // Nostr-backed dashboard/read-model state
 export { services, environments, states, llmRoutes, llmRouteStates, workers, events, loading, controlplaneConnection };
@@ -118,6 +122,11 @@ export async function loadAll() {
   if (inFlight.all) return inFlight.all;
 
   inFlight.all = (async () => {
+    try {
+      await loadSystemInfo();
+    } catch (error) {
+      console.error('Failed to load shared system info before controlplane bootstrap:', error);
+    }
     const result = await bootstrapControlplane();
     if (!result.ok) {
       if (canUseRestCompatibility()) {

@@ -28,7 +28,6 @@ const ROUTE_COMPATIBILITY_REQUIREMENTS = {
   '/payments': true,
   '/policies': true,
   '/services': true,
-  '/settings': true,
   '/workers': true
 };
 

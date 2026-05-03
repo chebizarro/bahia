@@ -20,6 +20,7 @@ import {
   getCapabilities as getNip46Capabilities
 } from '$lib/nostr/nip46.js';
 import { supportsDirectNip98Auth } from '$lib/auth/capabilities.js';
+import { currentSystemInfo, loadSystemInfo } from './system.svelte.js';
 
 const SESSION_KEY = 'bahia_auth_session';
 
@@ -149,7 +150,7 @@ async function configureBackendAuth(pubkey, { requireBackend = false } = {}) {
   const { api } = await import('$lib/api/client.js');
   if (!api) throw new Error('API client not available');
 
-  const systemInfo = await api.getSystemInfo().catch(() => null);
+  const systemInfo = currentSystemInfo() || await loadSystemInfo().catch(() => null);
   if (supportsDirectNip98Auth(systemInfo)) {
     installDirectNip98Provider(api);
     updateAuthState({ ...compatibilityPatch({ restNip98Advertised: true, restNip98Ready: true }), error: null });

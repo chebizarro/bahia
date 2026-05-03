@@ -1,6 +1,6 @@
 import { browser } from '$app/environment';
 import { get } from 'svelte/store';
-import { api } from '../api/client.js';
+import { loadSystemInfo } from './system.svelte.js';
 import {
   nostr,
   KINDS,
@@ -455,7 +455,7 @@ function startLiveSubscription(since) {
 }
 
 export async function bootstrapControlplane({ force = false } = {}) {
-  if (!browser || !api) return { ok: false, reason: 'not_browser' };
+  if (!browser) return { ok: false, reason: 'not_browser' };
   if (bootstrapPromise && !force) return bootstrapPromise;
   if (controlplaneConnection.ready && !force) return { ok: true };
 
@@ -466,7 +466,7 @@ export async function bootstrapControlplane({ force = false } = {}) {
     setAllLoading(true);
 
     try {
-      const systemInfo = await api.getSystemInfo();
+      const systemInfo = await loadSystemInfo({ force });
       const relays = resolveBrowserRelays(systemInfo);
       controlplaneConnection.relays = relays;
       controlplaneConnection.servicePubkey = systemInfo?.nostr?.service_pubkey || '';
