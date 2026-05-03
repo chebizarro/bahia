@@ -3,6 +3,8 @@ package main
 import (
 	"testing"
 
+	"github.com/nbd-wtf/go-nostr"
+	"github.com/openagentsinc/bahia/pkg/client"
 	"github.com/spf13/cobra"
 )
 
@@ -37,6 +39,11 @@ func TestCommandGroupsExposeExpectedSubcommands(t *testing.T) {
 			cmd:  environmentsCommands(),
 			want: []string{"list", "get", "create"},
 		},
+		{
+			name: "auth",
+			cmd:  authCommands(),
+			want: []string{"inspect"},
+		},
 	}
 
 	for _, tt := range tests {
@@ -47,6 +54,78 @@ func TestCommandGroupsExposeExpectedSubcommands(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestResolveNostrPrivateKeyInputPrecedence(t *testing.T) {
+	resetNostrKeyGlobals(t)
+	envKey := nostr.GeneratePrivateKey()
+	flagKey := nostr.GeneratePrivateKey()
+	t.Setenv("BAHIA_NOSTR_NSEC", envKey)
+	t.Setenv("BAHIA_NOSTR_PRIVATE_KEY", "")
+
+	cmd := newAuthFlagTestCommand()
+	if err := cmd.PersistentFlags().Set("privkey", flagKey); err != nil {
+		t.Fatalf("set privkey flag: %v", err)
+	}
+	got, err := resolveNostrPrivateKeyInput(cmd)
+	if err != nil {
+		t.Fatalf("resolveNostrPrivateKeyInput() error = %v", err)
+	}
+	if got != flagKey {
+		t.Fatalf("key = %q, want flag key", got)
+	}
+}
+
+func TestResolveNostrPrivateKeyInputRejectsAmbiguousFlags(t *testing.T) {
+	resetNostrKeyGlobals(t)
+	cmd := newAuthFlagTestCommand()
+	if err := cmd.PersistentFlags().Set("nsec", nostr.GeneratePrivateKey()); err != nil {
+		t.Fatalf("set nsec flag: %v", err)
+	}
+	if err := cmd.PersistentFlags().Set("privkey", nostr.GeneratePrivateKey()); err != nil {
+		t.Fatalf("set privkey flag: %v", err)
+	}
+	if _, err := resolveNostrPrivateKeyInput(cmd); err == nil {
+		t.Fatal("expected ambiguous flag error")
+	}
+}
+
+func TestResolveNIP98ProviderValidatesKey(t *testing.T) {
+	resetNostrKeyGlobals(t)
+	cmd := newAuthFlagTestCommand()
+	if err := cmd.PersistentFlags().Set("privkey", "not-a-key"); err != nil {
+		t.Fatalf("set privkey flag: %v", err)
+	}
+	if _, err := resolveNIP98Provider(cmd); err == nil {
+		t.Fatal("expected invalid key error")
+	}
+
+	cmd = newAuthFlagTestCommand()
+	key := nostr.GeneratePrivateKey()
+	if err := cmd.PersistentFlags().Set("privkey", key); err != nil {
+		t.Fatalf("set privkey flag: %v", err)
+	}
+	provider, err := resolveNIP98Provider(cmd)
+	if err != nil {
+		t.Fatalf("resolveNIP98Provider() error = %v", err)
+	}
+	pubkey, err := provider.PublicKey()
+	if err != nil {
+		t.Fatalf("PublicKey() error = %v", err)
+	}
+	wantPubkey, _ := nostr.GetPublicKey(key)
+	if pubkey != wantPubkey {
+		t.Fatalf("pubkey = %s, want %s", pubkey, wantPubkey)
+	}
+}
+
+func TestConfigureClientAuthAllowsNoKeyForPublicEndpoints(t *testing.T) {
+	resetNostrKeyGlobals(t)
+	t.Setenv("BAHIA_NOSTR_NSEC", "")
+	t.Setenv("BAHIA_NOSTR_PRIVATE_KEY", "")
+	if err := configureClientAuth(newAuthFlagTestCommand(), client.New("http://example.com")); err != nil {
+		t.Fatalf("configureClientAuth() error = %v", err)
 	}
 }
 
@@ -106,4 +185,21 @@ func findDirectChild(cmd *cobra.Command, name string) *cobra.Command {
 		}
 	}
 	return nil
+}
+
+func newAuthFlagTestCommand() *cobra.Command {
+	cmd := &cobra.Command{Use: "test"}
+	cmd.PersistentFlags().StringVar(&nostrNsec, "nsec", "", "")
+	cmd.PersistentFlags().StringVar(&nostrPrivateKey, "privkey", "", "")
+	return cmd
+}
+
+func resetNostrKeyGlobals(t *testing.T) {
+	t.Helper()
+	nostrNsec = ""
+	nostrPrivateKey = ""
+	t.Cleanup(func() {
+		nostrNsec = ""
+		nostrPrivateKey = ""
+	})
 }

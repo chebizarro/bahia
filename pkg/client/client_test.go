@@ -2,7 +2,9 @@ package client
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -11,6 +13,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/nbd-wtf/go-nostr"
 	"github.com/openagentsinc/bahia/internal/domain"
 )
 
@@ -24,11 +27,12 @@ func TestNew(t *testing.T) {
 	}
 }
 
-func TestSetAuthToken(t *testing.T) {
+func TestSetAuthorizationProvider(t *testing.T) {
 	c := New("http://localhost:8080")
-	c.SetAuthToken("test-token")
-	if c.authToken != "test-token" {
-		t.Errorf("authToken = %s, want test-token", c.authToken)
+	provider := staticAuthorizationProvider("Nostr test")
+	c.SetAuthorizationProvider(provider)
+	if c.authorizationProvider == nil {
+		t.Fatal("authorizationProvider was not set")
 	}
 }
 
@@ -171,8 +175,7 @@ func TestImportAdoption(t *testing.T) {
 	}
 }
 
-func TestPrivilegedMethodsSendBearerToken(t *testing.T) {
-	wantToken := "Bearer operator-token"
+func TestPrivilegedMethodsSendNIP98Authorization(t *testing.T) {
 	seen := map[string]string{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		seen[r.Method+" "+r.URL.Path] = r.Header.Get("Authorization")
@@ -188,8 +191,12 @@ func TestPrivilegedMethodsSendBearerToken(t *testing.T) {
 	}))
 	defer server.Close()
 
+	provider, err := NewNIP98PrivateKeyProvider(nostr.GeneratePrivateKey())
+	if err != nil {
+		t.Fatalf("NewNIP98PrivateKeyProvider() error = %v", err)
+	}
 	c := New(server.URL)
-	c.SetAuthToken("operator-token")
+	c.SetAuthorizationProvider(provider)
 	ctx := context.Background()
 	if _, err := c.ScanAdoption(ctx, AdoptionScanRequest{Targets: []AdoptionTarget{{Name: "prod", EndpointRef: "prod-docker"}}}); err != nil {
 		t.Fatalf("ScanAdoption() error = %v", err)
@@ -207,16 +214,15 @@ func TestPrivilegedMethodsSendBearerToken(t *testing.T) {
 		t.Fatalf("StopServiceRuntime() error = %v", err)
 	}
 
-	for _, key := range []string{
-		"POST /api/v1/adoption/scan",
-		"POST /api/v1/adoption/import",
-		"POST /api/v1/services/svc/environments/env/deploy",
-		"POST /api/v1/services/svc/environments/env/restart",
-		"POST /api/v1/services/svc/environments/env/stop",
+	for key, want := range map[string]string{
+		"POST /api/v1/adoption/scan":                         server.URL + "/api/v1/adoption/scan",
+		"POST /api/v1/adoption/import":                       server.URL + "/api/v1/adoption/import",
+		"POST /api/v1/services/svc/environments/env/deploy":  server.URL + "/api/v1/services/svc/environments/env/deploy",
+		"POST /api/v1/services/svc/environments/env/restart": server.URL + "/api/v1/services/svc/environments/env/restart",
+		"POST /api/v1/services/svc/environments/env/stop":    server.URL + "/api/v1/services/svc/environments/env/stop",
 	} {
-		if seen[key] != wantToken {
-			t.Fatalf("%s Authorization = %q, want %q (all seen: %#v)", key, seen[key], wantToken, seen)
-		}
+		event := decodeNIP98Header(t, seen[key])
+		assertNIP98Event(t, event, http.MethodPost, want)
 	}
 }
 
@@ -389,7 +395,7 @@ func TestAPIError(t *testing.T) {
 	}
 }
 
-func TestAuthTokenHeader(t *testing.T) {
+func TestNIP98AuthorizationHeader(t *testing.T) {
 	var gotAuth string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotAuth = r.Header.Get("Authorization")
@@ -398,13 +404,16 @@ func TestAuthTokenHeader(t *testing.T) {
 	}))
 	defer server.Close()
 
+	provider, err := NewNIP98PrivateKeyProvider(nostr.GeneratePrivateKey())
+	if err != nil {
+		t.Fatalf("NewNIP98PrivateKeyProvider() error = %v", err)
+	}
 	c := New(server.URL)
-	c.SetAuthToken("my-token")
+	c.SetAuthorizationProvider(provider)
 	_, _ = c.ListServices(context.Background())
 
-	if gotAuth != "Bearer my-token" {
-		t.Errorf("Authorization = %s, want Bearer my-token", gotAuth)
-	}
+	event := decodeNIP98Header(t, gotAuth)
+	assertNIP98Event(t, event, http.MethodGet, server.URL+"/api/v1/services")
 }
 
 func TestListWorkers(t *testing.T) {
@@ -553,8 +562,107 @@ func TestListOrgMembers(t *testing.T) {
 	}
 }
 
-func TestStreamLiveLogs(t *testing.T) {
+func TestAuthorizationProviderErrorPreventsRequest(t *testing.T) {
+	providerErr := errors.New("signer unavailable")
+	called := false
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	c := New(server.URL)
+	c.SetAuthorizationProvider(errorAuthorizationProvider{err: providerErr})
+	_, err := c.ListServices(context.Background())
+	if !errors.Is(err, providerErr) {
+		t.Fatalf("ListServices() error = %v, want %v", err, providerErr)
+	}
+	if called {
+		t.Fatal("server was called after authorization provider failed")
+	}
+}
+
+func TestNIP98ProviderCreatesFreshEventPerRequest(t *testing.T) {
+	provider, err := NewNIP98PrivateKeyProvider(nostr.GeneratePrivateKey())
+	if err != nil {
+		t.Fatalf("NewNIP98PrivateKeyProvider() error = %v", err)
+	}
+	provider.Clock = func() time.Time { return time.Unix(1700000000, 0) }
+
+	first, err := provider.AuthorizationHeader(context.Background(), http.MethodGet, "https://example.com/api")
+	if err != nil {
+		t.Fatalf("first AuthorizationHeader() error = %v", err)
+	}
+	second, err := provider.AuthorizationHeader(context.Background(), http.MethodGet, "https://example.com/api")
+	if err != nil {
+		t.Fatalf("second AuthorizationHeader() error = %v", err)
+	}
+	if first == second {
+		t.Fatal("NIP-98 provider reused an authorization header")
+	}
+	firstEvent := decodeNIP98Header(t, first)
+	secondEvent := decodeNIP98Header(t, second)
+	if firstEvent.ID == secondEvent.ID {
+		t.Fatalf("NIP-98 provider reused event ID %s", firstEvent.ID)
+	}
+	assertNIP98Event(t, firstEvent, http.MethodGet, "https://example.com/api")
+	assertNIP98Event(t, secondEvent, http.MethodGet, "https://example.com/api")
+}
+
+type staticAuthorizationProvider string
+
+func (p staticAuthorizationProvider) AuthorizationHeader(ctx context.Context, method, absoluteURL string) (string, error) {
+	return string(p), nil
+}
+
+type errorAuthorizationProvider struct {
+	err error
+}
+
+func (p errorAuthorizationProvider) AuthorizationHeader(ctx context.Context, method, absoluteURL string) (string, error) {
+	return "", p.err
+}
+
+func decodeNIP98Header(t *testing.T, header string) nostr.Event {
+	t.Helper()
+	if !strings.HasPrefix(header, "Nostr ") {
+		t.Fatalf("Authorization header = %q, want Nostr scheme", header)
+	}
+	eventJSON, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(header, "Nostr "))
+	if err != nil {
+		t.Fatalf("decode NIP-98 event: %v", err)
+	}
+	var event nostr.Event
+	if err := json.Unmarshal(eventJSON, &event); err != nil {
+		t.Fatalf("unmarshal NIP-98 event: %v", err)
+	}
+	return event
+}
+
+func assertNIP98Event(t *testing.T, event nostr.Event, method, absoluteURL string) {
+	t.Helper()
+	if event.Kind != 27235 {
+		t.Fatalf("event.Kind = %d, want 27235", event.Kind)
+	}
+	if !event.CheckID() {
+		t.Fatal("event ID does not match serialized event")
+	}
+	ok, err := event.CheckSignature()
+	if err != nil || !ok {
+		t.Fatalf("event signature valid = %v, err = %v", ok, err)
+	}
+	if got := event.Tags.GetFirst([]string{"u"}); got == nil || got.Value() != absoluteURL {
+		t.Fatalf("u tag = %v, want %s", got, absoluteURL)
+	}
+	if got := event.Tags.GetFirst([]string{"method"}); got == nil || got.Value() != method {
+		t.Fatalf("method tag = %v, want %s", got, method)
+	}
+}
+
+func TestStreamLiveLogs(t *testing.T) {
+	var gotAuth string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
 		if !strings.Contains(r.URL.Path, "/logs") {
 			t.Errorf("unexpected path: %s", r.URL.Path)
 		}
@@ -567,7 +675,12 @@ func TestStreamLiveLogs(t *testing.T) {
 	}))
 	defer server.Close()
 
+	provider, err := NewNIP98PrivateKeyProvider(nostr.GeneratePrivateKey())
+	if err != nil {
+		t.Fatalf("NewNIP98PrivateKeyProvider() error = %v", err)
+	}
 	c := New(server.URL)
+	c.SetAuthorizationProvider(provider)
 	c.httpClient.Timeout = 2 * time.Second
 
 	var received []LogLine
@@ -590,4 +703,6 @@ func TestStreamLiveLogs(t *testing.T) {
 	if len(received) > 0 && received[0].Message != "hello" {
 		t.Errorf("Message = %s, want hello", received[0].Message)
 	}
+	event := decodeNIP98Header(t, gotAuth)
+	assertNIP98Event(t, event, http.MethodGet, server.URL+"/api/v1/services/svc-123/environments/env-456/logs?follow=true&tail=100")
 }

@@ -5,6 +5,9 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -12,14 +15,23 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nbd-wtf/go-nostr"
+	"github.com/nbd-wtf/go-nostr/nip19"
 	"github.com/openagentsinc/bahia/internal/domain"
 )
 
 // Client is an HTTP client for the Bahia API.
 type Client struct {
-	baseURL    string
-	httpClient *http.Client
-	authToken  string
+	baseURL               string
+	httpClient            *http.Client
+	authorizationProvider AuthorizationProvider
+}
+
+// AuthorizationProvider returns an Authorization header value for one HTTP request.
+// Implementations must create a fresh value for each call; NIP-98 validators reject
+// replayed event IDs.
+type AuthorizationProvider interface {
+	AuthorizationHeader(ctx context.Context, method, absoluteURL string) (string, error)
 }
 
 // New creates a new Bahia API client.
@@ -32,9 +44,134 @@ func New(baseURL string) *Client {
 	}
 }
 
-// SetAuthToken sets the authentication token for requests.
-func (c *Client) SetAuthToken(token string) {
-	c.authToken = token
+// SetAuthorizationProvider sets the per-request authorization provider.
+func (c *Client) SetAuthorizationProvider(provider AuthorizationProvider) {
+	c.authorizationProvider = provider
+}
+
+// NIP98PrivateKeyProvider signs Bahia HTTP requests with NIP-98 using local key material.
+// PrivateKey may be a 64-character hex private key or an nsec value.
+type NIP98PrivateKeyProvider struct {
+	PrivateKey string
+	Clock      func() time.Time
+}
+
+// NewNIP98PrivateKeyProvider validates key material and returns a NIP-98 signer.
+func NewNIP98PrivateKeyProvider(privateKey string) (*NIP98PrivateKeyProvider, error) {
+	provider := &NIP98PrivateKeyProvider{PrivateKey: privateKey}
+	if _, err := provider.normalizedPrivateKey(); err != nil {
+		return nil, err
+	}
+	return provider, nil
+}
+
+// AuthorizationHeader returns a fresh NIP-98 Authorization header for method and absoluteURL.
+func (p *NIP98PrivateKeyProvider) AuthorizationHeader(ctx context.Context, method, absoluteURL string) (string, error) {
+	select {
+	case <-ctx.Done():
+		return "", ctx.Err()
+	default:
+	}
+
+	privateKey, err := p.normalizedPrivateKey()
+	if err != nil {
+		return "", err
+	}
+	createdAt := nostr.Now()
+	if p.Clock != nil {
+		createdAt = nostr.Timestamp(p.Clock().Unix())
+	}
+	nonce, err := randomNonce()
+	if err != nil {
+		return "", fmt.Errorf("generate NIP-98 nonce: %w", err)
+	}
+
+	event := nostr.Event{
+		Kind:      27235,
+		CreatedAt: createdAt,
+		Tags: nostr.Tags{
+			{"u", absoluteURL},
+			{"method", strings.ToUpper(method)},
+			{"nonce", nonce},
+		},
+		Content: "",
+	}
+	if err := event.Sign(privateKey); err != nil {
+		return "", fmt.Errorf("sign NIP-98 event: %w", err)
+	}
+	eventJSON, err := json.Marshal(event)
+	if err != nil {
+		return "", fmt.Errorf("encode NIP-98 event: %w", err)
+	}
+	return "Nostr " + base64.StdEncoding.EncodeToString(eventJSON), nil
+}
+
+// PublicKey returns the hex public key derived from the provider's private key.
+func (p *NIP98PrivateKeyProvider) PublicKey() (string, error) {
+	privateKey, err := p.normalizedPrivateKey()
+	if err != nil {
+		return "", err
+	}
+	pubkey, err := nostr.GetPublicKey(privateKey)
+	if err != nil {
+		return "", fmt.Errorf("derive Nostr public key: %w", err)
+	}
+	return pubkey, nil
+}
+
+// Npub returns the NIP-19 npub form of the provider's public key.
+func (p *NIP98PrivateKeyProvider) Npub() (string, error) {
+	pubkey, err := p.PublicKey()
+	if err != nil {
+		return "", err
+	}
+	npub, err := nip19.EncodePublicKey(pubkey)
+	if err != nil {
+		return "", fmt.Errorf("encode npub: %w", err)
+	}
+	return npub, nil
+}
+
+func (p *NIP98PrivateKeyProvider) normalizedPrivateKey() (string, error) {
+	return NormalizeNostrPrivateKey(p.PrivateKey)
+}
+
+// NormalizeNostrPrivateKey returns a 64-character hex private key from hex or nsec input.
+func NormalizeNostrPrivateKey(privateKey string) (string, error) {
+	key := strings.TrimSpace(privateKey)
+	if key == "" {
+		return "", fmt.Errorf("nostr private key is required")
+	}
+	if strings.HasPrefix(key, "nsec") {
+		prefix, value, err := nip19.Decode(key)
+		if err != nil {
+			return "", fmt.Errorf("decode nsec: %w", err)
+		}
+		if prefix != "nsec" {
+			return "", fmt.Errorf("expected nsec key, got %s", prefix)
+		}
+		sk, ok := value.(string)
+		if !ok || sk == "" {
+			return "", fmt.Errorf("decoded nsec did not contain a private key")
+		}
+		key = sk
+	}
+	decoded, err := hex.DecodeString(key)
+	if err != nil || len(decoded) != 32 {
+		return "", fmt.Errorf("nostr private key must be 32 bytes of hex or nsec")
+	}
+	if _, err := nostr.GetPublicKey(key); err != nil {
+		return "", fmt.Errorf("derive Nostr public key: %w", err)
+	}
+	return strings.ToLower(key), nil
+}
+
+func randomNonce() (string, error) {
+	var nonce [16]byte
+	if _, err := rand.Read(nonce[:]); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(nonce[:]), nil
 }
 
 // AdoptionTarget identifies one Docker host for adoption scan/import.
@@ -179,8 +316,8 @@ func (c *Client) do(ctx context.Context, method, path string, body any, result a
 		return fmt.Errorf("creating request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if c.authToken != "" {
-		req.Header.Set("Authorization", "Bearer "+c.authToken)
+	if err := c.applyAuthorization(ctx, req); err != nil {
+		return err
 	}
 
 	resp, err := c.httpClient.Do(req)
@@ -209,6 +346,20 @@ func (c *Client) do(ctx context.Context, method, path string, body any, result a
 		}
 	}
 
+	return nil
+}
+
+func (c *Client) applyAuthorization(ctx context.Context, req *http.Request) error {
+	if c.authorizationProvider == nil {
+		return nil
+	}
+	header, err := c.authorizationProvider.AuthorizationHeader(ctx, req.Method, req.URL.String())
+	if err != nil {
+		return fmt.Errorf("creating authorization header: %w", err)
+	}
+	if strings.TrimSpace(header) != "" {
+		req.Header.Set("Authorization", header)
+	}
 	return nil
 }
 
@@ -466,8 +617,8 @@ func (c *Client) StreamLiveLogs(ctx context.Context, serviceID, envID string, ta
 		return err
 	}
 	req.Header.Set("Accept", "text/event-stream")
-	if c.authToken != "" {
-		req.Header.Set("Authorization", "Bearer "+c.authToken)
+	if err := c.applyAuthorization(ctx, req); err != nil {
+		return err
 	}
 
 	streamClient := *c.httpClient

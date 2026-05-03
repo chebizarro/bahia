@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"text/tabwriter"
@@ -18,32 +17,28 @@ import (
 )
 
 var (
-	serverURL    string
-	outputFormat string
-	apiClient    *client.Client
-	configDir    string
+	serverURL       string
+	outputFormat    string
+	apiClient       *client.Client
+	nostrNsec       string
+	nostrPrivateKey string
 )
 
 func main() {
-	// Determine config directory
-	home, _ := os.UserHomeDir()
-	configDir = filepath.Join(home, ".bahia")
-
 	rootCmd := &cobra.Command{
 		Use:   "bahia",
 		Short: "Bahia Deployment Registry CLI",
 		Long:  "Command-line interface for the Bahia Nostr-Native Deployment Registry Service",
-		PersistentPreRun: func(cmd *cobra.Command, args []string) {
+		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 			apiClient = client.New(serverURL)
-			// Load saved auth token
-			if token := loadAuthToken(); token != "" {
-				apiClient.SetAuthToken(token)
-			}
+			return configureClientAuth(cmd, apiClient)
 		},
 	}
 
 	rootCmd.PersistentFlags().StringVar(&serverURL, "server", getEnvOrDefault("BAHIA_SERVER", "http://localhost:8080"), "Bahia server URL")
 	rootCmd.PersistentFlags().StringVarP(&outputFormat, "output", "o", "table", "Output format: table, json, yaml")
+	rootCmd.PersistentFlags().StringVar(&nostrNsec, "nsec", "", "Nostr secret key (nsec) for per-request NIP-98 auth")
+	rootCmd.PersistentFlags().StringVar(&nostrPrivateKey, "privkey", "", "Nostr private key hex for per-request NIP-98 auth")
 
 	// Add all command groups
 	rootCmd.AddCommand(
@@ -69,75 +64,34 @@ func main() {
 // --- Auth Commands ---
 
 func authCommands() *cobra.Command {
-	authCmd := &cobra.Command{Use: "auth", Short: "Authentication commands"}
+	authCmd := &cobra.Command{Use: "auth", Short: "Inspect Nostr HTTP auth identity"}
 
-	loginCmd := &cobra.Command{
-		Use:   "login",
-		Short: "Authenticate with the server",
-		Long:  "Login using a JWT token, nsec key, or NIP-46 connection string",
+	inspectCmd := &cobra.Command{
+		Use:   "inspect",
+		Short: "Show the Nostr identity used for per-request NIP-98 auth",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			token, _ := cmd.Flags().GetString("token")
-			nsec, _ := cmd.Flags().GetString("nsec")
-			nip46, _ := cmd.Flags().GetString("nip46")
-
-			if token != "" {
-				// Direct JWT token
-				if err := saveAuthToken(token); err != nil {
-					return fmt.Errorf("saving token: %w", err)
-				}
-				fmt.Println("✓ Logged in with token")
-				return nil
-			}
-
-			if nsec != "" {
-				// TODO: Generate NIP-98 auth event and exchange for token
-				fmt.Println("⚠ nsec authentication not yet implemented")
-				fmt.Println("  Use --token with a JWT token for now")
-				return nil
-			}
-
-			if nip46 != "" {
-				// TODO: NIP-46 Nostr Connect flow
-				fmt.Println("⚠ NIP-46 authentication not yet implemented")
-				fmt.Println("  Use --token with a JWT token for now")
-				return nil
-			}
-
-			return fmt.Errorf("specify --token, --nsec, or --nip46")
-		},
-	}
-	loginCmd.Flags().String("token", "", "JWT token")
-	loginCmd.Flags().String("nsec", "", "Nostr secret key (nsec)")
-	loginCmd.Flags().String("nip46", "", "NIP-46 connection string (bunker://...)")
-
-	logoutCmd := &cobra.Command{
-		Use:   "logout",
-		Short: "Clear saved credentials",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := clearAuthToken(); err != nil {
+			provider, err := resolveNIP98Provider(cmd)
+			if err != nil {
 				return err
 			}
-			fmt.Println("✓ Logged out")
-			return nil
-		},
-	}
-
-	whoamiCmd := &cobra.Command{
-		Use:   "whoami",
-		Short: "Show current authentication status",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			token := loadAuthToken()
-			if token == "" {
-				fmt.Println("Not logged in")
-				return nil
+			if provider == nil {
+				return fmt.Errorf("provide --nsec, --privkey, BAHIA_NOSTR_NSEC, or BAHIA_NOSTR_PRIVATE_KEY")
 			}
-			fmt.Println("Logged in (token saved)")
-			// TODO: Decode JWT and show subject/pubkey
+			pubkey, err := provider.PublicKey()
+			if err != nil {
+				return err
+			}
+			npub, err := provider.Npub()
+			if err != nil {
+				return err
+			}
+			fmt.Printf("pubkey: %s\n", pubkey)
+			fmt.Printf("npub: %s\n", npub)
 			return nil
 		},
 	}
 
-	authCmd.AddCommand(loginCmd, logoutCmd, whoamiCmd)
+	authCmd.AddCommand(inspectCmd)
 	return authCmd
 }
 
@@ -1074,26 +1028,55 @@ func getEnvOrDefault(key, def string) string {
 	return def
 }
 
-// --- Auth Token Storage ---
+// --- NIP-98 Auth Helpers ---
 
-func loadAuthToken() string {
-	path := filepath.Join(configDir, "token")
-	data, err := os.ReadFile(path)
+func configureClientAuth(cmd *cobra.Command, c *client.Client) error {
+	provider, err := resolveNIP98Provider(cmd)
 	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(data))
-}
-
-func saveAuthToken(token string) error {
-	if err := os.MkdirAll(configDir, 0700); err != nil {
 		return err
 	}
-	path := filepath.Join(configDir, "token")
-	return os.WriteFile(path, []byte(token), 0600)
+	if provider != nil {
+		c.SetAuthorizationProvider(provider)
+	}
+	return nil
 }
 
-func clearAuthToken() error {
-	path := filepath.Join(configDir, "token")
-	return os.Remove(path)
+func resolveNIP98Provider(cmd *cobra.Command) (*client.NIP98PrivateKeyProvider, error) {
+	key, err := resolveNostrPrivateKeyInput(cmd)
+	if err != nil || key == "" {
+		return nil, err
+	}
+	return client.NewNIP98PrivateKeyProvider(key)
+}
+
+func resolveNostrPrivateKeyInput(cmd *cobra.Command) (string, error) {
+	flagNsec := strings.TrimSpace(nostrNsec)
+	flagPrivateKey := strings.TrimSpace(nostrPrivateKey)
+
+	if cmd != nil && cmd.Root() != nil {
+		flags := cmd.Root().PersistentFlags()
+		if flags != nil {
+			flagNsecChanged := flags.Changed("nsec")
+			flagPrivateKeyChanged := flags.Changed("privkey")
+			if flagNsecChanged || flagPrivateKeyChanged {
+				if flagNsecChanged && flagPrivateKeyChanged {
+					return "", fmt.Errorf("specify only one of --nsec or --privkey")
+				}
+				if flagNsecChanged {
+					return flagNsec, nil
+				}
+				return flagPrivateKey, nil
+			}
+		}
+	}
+
+	envNsec := strings.TrimSpace(os.Getenv("BAHIA_NOSTR_NSEC"))
+	envPrivateKey := strings.TrimSpace(os.Getenv("BAHIA_NOSTR_PRIVATE_KEY"))
+	if envNsec != "" && envPrivateKey != "" {
+		return "", fmt.Errorf("specify only one of BAHIA_NOSTR_NSEC or BAHIA_NOSTR_PRIVATE_KEY")
+	}
+	if envNsec != "" {
+		return envNsec, nil
+	}
+	return envPrivateKey, nil
 }
