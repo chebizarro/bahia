@@ -68,7 +68,7 @@ func TestSidecarRejectsBroadReadFilters(t *testing.T) {
 	}
 }
 
-func TestSidecarDoesNotExposeRequestKindsToPublicReads(t *testing.T) {
+func TestSidecarRejectsBroadRequestKindReadsWithoutAuthorizedAuthors(t *testing.T) {
 	cfg := config.Defaults().Nostr
 	cfg.Sidecar.Enabled = true
 	cfg.Sidecar.PublicURL = "ws://localhost:3334"
@@ -78,12 +78,56 @@ func TestSidecarDoesNotExposeRequestKindsToPublicReads(t *testing.T) {
 		t.Fatalf("New() error: %v", err)
 	}
 
-	reject, msg := server.Relay().OnRequest(context.Background(), nostr.Filter{Kinds: []nostr.Kind{5961}})
+	reject, msg := server.Relay().OnRequest(context.Background(), nostr.Filter{Kinds: []nostr.Kind{5963}})
 	if !reject {
 		t.Fatalf("expected request kind read filter to be rejected")
 	}
 	if msg == "" {
 		t.Fatalf("expected rejection message")
+	}
+}
+
+func TestSidecarAllowsAuthorScopedRequestKindReadsForAuthorizedOperators(t *testing.T) {
+	cfg := config.Defaults().Nostr
+	cfg.Sidecar.Enabled = true
+	cfg.Sidecar.PublicURL = "ws://localhost:3334"
+
+	sk := nostr.Generate()
+	pubkey := nostr.GetPublicKey(sk)
+	cfg.AuthorizedPubkeys = []string{pubkey.Hex()}
+
+	server, err := New(cfg, zap.NewNop())
+	if err != nil {
+		t.Fatalf("New() error: %v", err)
+	}
+
+	filter := nostr.Filter{Kinds: []nostr.Kind{5963, 5978, 5979}, Authors: []nostr.PubKey{pubkey}}
+	reject, msg := server.Relay().OnRequest(context.Background(), filter)
+	if reject {
+		t.Fatalf("expected author-scoped request kind read filter to be accepted, got rejection %q", msg)
+	}
+
+	encryptedFilter := nostr.Filter{Kinds: []nostr.Kind{5980}, Authors: []nostr.PubKey{pubkey}}
+	reject, msg = server.Relay().OnRequest(context.Background(), encryptedFilter)
+	if !reject {
+		t.Fatalf("expected encrypted request kind read filter to remain blocked")
+	}
+}
+
+func TestSidecarAllowsSignerFirstOperatorStatusAndResultKinds(t *testing.T) {
+	cfg := config.Defaults().Nostr
+	cfg.Sidecar.Enabled = true
+	cfg.Sidecar.PublicURL = "ws://localhost:3334"
+
+	server, err := New(cfg, zap.NewNop())
+	if err != nil {
+		t.Fatalf("New() error: %v", err)
+	}
+
+	filter := nostr.Filter{Kinds: []nostr.Kind{6963, 6978, 7962, 7978, 7979}}
+	reject, msg := server.Relay().OnRequest(context.Background(), filter)
+	if reject {
+		t.Fatalf("expected signer-first operator status/result kinds to be readable, got rejection %q", msg)
 	}
 }
 

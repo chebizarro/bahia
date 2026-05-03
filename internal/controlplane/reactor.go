@@ -279,7 +279,8 @@ func (r *Reactor) Run(ctx context.Context) error {
 				KindPolicyDelete,
 				KindPolicyEvaluate,
 			},
-			Since: &now,
+			Authors: r.requestSubscriptionAuthors(),
+			Since:   &now,
 		},
 	}
 
@@ -1486,6 +1487,22 @@ const (
 	operatorScopeAdoption      operatorScope = "adoption"
 	operatorScopeDirectRuntime operatorScope = "direct_runtime"
 )
+
+func (r *Reactor) requestSubscriptionAuthors() []string {
+	seen := make(map[string]struct{}, len(r.config.AuthorizedPubkeys))
+	authors := make([]string, 0, len(r.config.AuthorizedPubkeys))
+	for _, pubkey := range r.config.AuthorizedPubkeys {
+		if pubkey == "" {
+			continue
+		}
+		if _, ok := seen[pubkey]; ok {
+			continue
+		}
+		seen[pubkey] = struct{}{}
+		authors = append(authors, pubkey)
+	}
+	return authors
+}
 
 // isAuthorized checks if a pubkey is authorized to use the control plane.
 func (r *Reactor) isAuthorized(pubkey string) bool {

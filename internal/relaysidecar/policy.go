@@ -85,6 +85,12 @@ func (p *policy) acceptFilter(ctx context.Context, filter nostr.Filter) (bool, s
 		return false, ""
 	}
 	for _, kind := range filter.Kinds {
+		if isAuthorScopedReadableRequestKind(kind) {
+			if !p.hasAuthorizedAuthors(filter.Authors) {
+				return true, fmt.Sprintf("blocked: request kind %d reads must scope authors to authorized operator pubkeys", kind)
+			}
+			continue
+		}
 		if !isReadableKind(kind) {
 			return true, fmt.Sprintf("blocked: event kind %d is not readable from the Bahia sidecar", kind)
 		}
@@ -123,8 +129,8 @@ func isRequestKind(kind nostr.Kind) bool {
 }
 
 func isBahiaProjectionKind(kind nostr.Kind) bool {
-	return (kind >= 6961 && kind <= 6976) ||
-		(kind >= 7961 && kind <= 7977) ||
+	return (kind >= 6961 && kind <= 6978) ||
+		(kind >= 7961 && kind <= 7979) ||
 		(kind >= 31961 && kind <= 31970) ||
 		(kind >= 31000 && kind <= 31099)
 }
@@ -136,6 +142,22 @@ func isOpenInteropKind(kind nostr.Kind) bool {
 	default:
 		return false
 	}
+}
+
+func (p *policy) hasAuthorizedAuthors(authors []nostr.PubKey) bool {
+	if len(authors) == 0 {
+		return false
+	}
+	for _, pk := range authors {
+		if _, ok := p.authorized[pk]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+func isAuthorScopedReadableRequestKind(kind nostr.Kind) bool {
+	return isRequestKind(kind) && kind != 5980
 }
 
 func isReadableKind(kind nostr.Kind) bool {
