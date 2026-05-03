@@ -175,6 +175,32 @@ func TestImportAdoption(t *testing.T) {
 	}
 }
 
+func TestGetSystemInfo(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			t.Errorf("method = %s, want GET", r.Method)
+		}
+		if r.URL.Path != "/api/v1/system/info" {
+			t.Errorf("path = %s, want /api/v1/system/info", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"nostr": map[string]any{"browser_relays": []string{"ws://localhost:3000/relay"}, "sidecar_url": "ws://localhost:3000/relay"}}})
+	}))
+	defer server.Close()
+
+	c := New(server.URL)
+	info, err := c.GetSystemInfo(context.Background())
+	if err != nil {
+		t.Fatalf("GetSystemInfo() error = %v", err)
+	}
+	if len(info.Nostr.BrowserRelays) != 1 || info.Nostr.BrowserRelays[0] != "ws://localhost:3000/relay" {
+		t.Fatalf("browser_relays = %#v", info.Nostr.BrowserRelays)
+	}
+	if info.Nostr.SidecarURL != "ws://localhost:3000/relay" {
+		t.Fatalf("sidecar_url = %q", info.Nostr.SidecarURL)
+	}
+}
+
 func TestPrivilegedMethodsSendNIP98Authorization(t *testing.T) {
 	seen := map[string]string{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
