@@ -26,7 +26,7 @@ async function ensureEncryptedNotifications() {
     info = await loadSystemInfo();
   }
   if (!encryptedRequestsAvailable(info)) {
-    throw new Error('Encrypted Nostr requests are not available. Configure nostr.encrypted_browser_relays and a Bahia service pubkey before using notification settings.');
+    throw new Error('Encrypted Nostr requests are not available. Configure relay URLs for encrypted Nostr requests (`nostr.browser_encrypted_request_relays`) and a Bahia service pubkey before using notification settings.');
   }
   return info;
 }

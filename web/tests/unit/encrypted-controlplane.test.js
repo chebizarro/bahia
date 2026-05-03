@@ -11,7 +11,7 @@ const systemMock = vi.hoisted(() => ({
   currentSystemInfo: vi.fn(() => ({
     nostr: {
       service_pubkey: 'b'.repeat(64),
-      encrypted_browser_relays: ['wss://encrypted.example'],
+      browser_encrypted_request_relays: ['wss://requests.example'],
       private_browser_relays: ['wss://deprecated.example'],
       browser_relays: ['wss://public.example']
     }
@@ -23,9 +23,9 @@ vi.mock('$lib/stores/system.svelte.js', () => systemMock);
 
 function fakeClient() {
   return {
-    sockets: new Map([['wss://encrypted.example', { readyState: 1 }]]),
+    sockets: new Map([['wss://requests.example', { readyState: 1 }]]),
     connect: vi.fn().mockResolvedValue(),
-    publish: vi.fn().mockResolvedValue([{ relay: 'wss://encrypted.example', sent: true, accepted: true, message: '' }]),
+    publish: vi.fn().mockResolvedValue([{ relay: 'wss://requests.example', sent: true, accepted: true, message: '' }]),
     subscribe: vi.fn(() => vi.fn())
   };
 }
@@ -45,7 +45,7 @@ describe('encrypted controlplane transport', () => {
     systemMock.currentSystemInfo.mockReturnValue({
       nostr: {
         service_pubkey: 'b'.repeat(64),
-        encrypted_browser_relays: ['wss://encrypted.example'],
+        browser_encrypted_request_relays: ['wss://requests.example'],
         private_browser_relays: ['wss://deprecated.example'],
         browser_relays: ['wss://public.example']
       }
@@ -54,8 +54,8 @@ describe('encrypted controlplane transport', () => {
     module = await import('../../src/lib/nostr/encrypted-controlplane.js');
   });
 
-  it('prefers canonical encrypted browser relays and ignores public relays', () => {
-    expect(module.encryptedRelayUrlsFromSystemInfo()).toEqual(['wss://encrypted.example']);
+  it('prefers canonical relay URLs for encrypted request events and ignores public relays', () => {
+    expect(module.encryptedRelayUrlsFromSystemInfo()).toEqual(['wss://requests.example']);
     expect(module.encryptedRequestsAvailable()).toBe(true);
   });
 
@@ -70,7 +70,7 @@ describe('encrypted controlplane transport', () => {
   });
 
   it('builds encrypted request events without targeting public browser relays', async () => {
-    const transport = new module.EncryptedControlplaneTransport({ client, relays: ['wss://encrypted.example'], servicePubkey: 'b'.repeat(64) });
+    const transport = new module.EncryptedControlplaneTransport({ client, relays: ['wss://requests.example'], servicePubkey: 'b'.repeat(64) });
 
     const event = await transport.buildEncryptedRequestEvent({ operation: 'payments.history', payload: { limit: 10 } });
 
@@ -84,14 +84,14 @@ describe('encrypted controlplane transport', () => {
   });
 
   it('publishes through the encrypted-request client and requires an accepted OK', async () => {
-    const transport = new module.EncryptedControlplaneTransport({ client, relays: ['wss://encrypted.example'], servicePubkey: 'b'.repeat(64) });
+    const transport = new module.EncryptedControlplaneTransport({ client, relays: ['wss://requests.example'], servicePubkey: 'b'.repeat(64) });
     const event = { id: 'request-id', kind: module.ENCRYPTED_REQUEST_KIND, tags: [], content: 'cipher' };
 
     await expect(transport.publishEncryptedRequest(event)).resolves.toMatchObject({ requestEventId: 'request-id' });
-    expect(client.connect).toHaveBeenCalledWith(['wss://encrypted.example']);
+    expect(client.connect).toHaveBeenCalledWith(['wss://requests.example']);
     expect(client.publish).toHaveBeenCalledWith(event);
 
-    client.publish.mockResolvedValueOnce([{ relay: 'wss://encrypted.example', sent: true, accepted: false, message: 'blocked: no' }]);
+    client.publish.mockResolvedValueOnce([{ relay: 'wss://requests.example', sent: true, accepted: false, message: 'blocked: no' }]);
     await expect(transport.publishEncryptedRequest(event)).rejects.toThrow('blocked: no');
   });
 
@@ -102,7 +102,7 @@ describe('encrypted controlplane transport', () => {
       handlers = nextHandlers;
       return unsubscribe;
     });
-    const transport = new module.EncryptedControlplaneTransport({ client, relays: ['wss://encrypted.example'], servicePubkey: 'b'.repeat(64) });
+    const transport = new module.EncryptedControlplaneTransport({ client, relays: ['wss://requests.example'], servicePubkey: 'b'.repeat(64) });
 
     const promise = transport.awaitEncryptedResult({ requestEventId: 'req-1' });
     await handlers.onEvent({ id: 'other', pubkey: 'b'.repeat(64), tags: [['e', 'other'], ['p', 'a'.repeat(64)]], content: 'cipher:{}' });
@@ -121,8 +121,8 @@ describe('encrypted controlplane transport', () => {
   it('cleans up result subscription when publish fails', async () => {
     const unsubscribe = vi.fn();
     client.subscribe.mockReturnValueOnce(unsubscribe);
-    client.publish.mockResolvedValueOnce([{ relay: 'wss://encrypted.example', sent: true, accepted: false, message: 'blocked: no' }]);
-    const transport = new module.EncryptedControlplaneTransport({ client, relays: ['wss://encrypted.example'], servicePubkey: 'b'.repeat(64) });
+    client.publish.mockResolvedValueOnce([{ relay: 'wss://requests.example', sent: true, accepted: false, message: 'blocked: no' }]);
+    const transport = new module.EncryptedControlplaneTransport({ client, relays: ['wss://requests.example'], servicePubkey: 'b'.repeat(64) });
 
     await expect(transport.requestEncryptedResult({ operation: 'payments.history', payload: { limit: 5 } })).rejects.toThrow('blocked: no');
 
@@ -136,7 +136,7 @@ describe('encrypted controlplane transport', () => {
       return vi.fn();
     });
     authMock.decryptWithAuth.mockRejectedValueOnce(new Error('bad ciphertext'));
-    const transport = new module.EncryptedControlplaneTransport({ client, relays: ['wss://encrypted.example'], servicePubkey: 'b'.repeat(64) });
+    const transport = new module.EncryptedControlplaneTransport({ client, relays: ['wss://requests.example'], servicePubkey: 'b'.repeat(64) });
 
     const promise = transport.awaitEncryptedResult({ requestEventId: 'req-1' });
     await handlers.onEvent({ id: 'result-1', pubkey: 'b'.repeat(64), tags: [['e', 'req-1'], ['p', 'a'.repeat(64)]], content: 'not-decryptable' });

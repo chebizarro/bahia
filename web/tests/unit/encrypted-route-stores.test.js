@@ -6,8 +6,8 @@ const encryptedRequestsMock = vi.hoisted(() => ({
 }));
 
 const systemMock = vi.hoisted(() => ({
-  currentSystemInfo: vi.fn(() => ({ nostr: { service_pubkey: 'b'.repeat(64), encrypted_browser_relays: ['wss://encrypted.example'] } })),
-  loadSystemInfo: vi.fn(async () => ({ nostr: { service_pubkey: 'b'.repeat(64), encrypted_browser_relays: ['wss://encrypted.example'] } }))
+  currentSystemInfo: vi.fn(() => ({ nostr: { service_pubkey: 'b'.repeat(64), browser_encrypted_request_relays: ['wss://requests.example'] } })),
+  loadSystemInfo: vi.fn(async () => ({ nostr: { service_pubkey: 'b'.repeat(64), browser_encrypted_request_relays: ['wss://requests.example'] } }))
 }));
 
 vi.mock('$lib/nostr/encrypted-controlplane.js', () => encryptedRequestsMock);
@@ -18,7 +18,7 @@ describe('encrypted route stores', () => {
     vi.resetModules();
     vi.clearAllMocks();
     encryptedRequestsMock.encryptedRequestsAvailable.mockReturnValue(true);
-    systemMock.currentSystemInfo.mockReturnValue({ nostr: { service_pubkey: 'b'.repeat(64), encrypted_browser_relays: ['wss://encrypted.example'] } });
+    systemMock.currentSystemInfo.mockReturnValue({ nostr: { service_pubkey: 'b'.repeat(64), browser_encrypted_request_relays: ['wss://requests.example'] } });
   });
 
   it('lists, creates, reveals, and deletes service secrets through encrypted operations', async () => {

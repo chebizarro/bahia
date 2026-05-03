@@ -15,7 +15,7 @@ async function ensureEncryptedSignatureRequests() {
   let info = currentSystemInfo();
   if (!info) info = await loadSystemInfo();
   if (!encryptedRequestsAvailable(info)) {
-    throw new Error('Encrypted Nostr requests are not available. Configure nostr.encrypted_browser_relays and a Bahia service pubkey before verifying artifact signatures.');
+    throw new Error('Encrypted Nostr requests are not available. Configure relay URLs advertised for encrypted request/result events (`nostr.browser_encrypted_request_relays`) and a Bahia service pubkey before verifying artifact signatures.');
   }
   return info;
 }

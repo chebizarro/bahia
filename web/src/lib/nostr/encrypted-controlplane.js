@@ -62,7 +62,7 @@ function openRelayUrls(client) {
 }
 
 export function encryptedRelayUrlsFromSystemInfo(systemInfo = currentSystemInfo()) {
-  return normalizeRelays(systemInfo?.nostr?.encrypted_browser_relays || systemInfo?.nostr?.private_browser_relays || []);
+  return normalizeRelays(systemInfo?.nostr?.browser_encrypted_request_relays || systemInfo?.nostr?.private_browser_relays || []);
 }
 
 export function servicePubkeyFromSystemInfo(systemInfo = currentSystemInfo()) {
@@ -83,7 +83,7 @@ export class EncryptedControlplaneTransport {
 
   async connect() {
     if (this.relays.length === 0) {
-      throw new Error('No encrypted browser relays are configured for Bahia encrypted Nostr requests');
+      throw new Error('No relay URLs are advertised for Bahia encrypted Nostr requests');
     }
     if (!this.connected) {
       await this.client.connect(this.relays);
