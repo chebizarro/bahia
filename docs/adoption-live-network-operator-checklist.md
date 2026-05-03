@@ -1,7 +1,13 @@
 # Adoption / Import Live-Network Operator Checklist and Evidence Template
 
+> **Deprecated legacy checklist**
+> 
+> This document validates the legacy privileged HTTP/NIP-98 operator surface.
+> It is retained for historical/reference purposes only and is no longer the primary rollout gate for Bahia's signer-first direction.
+> Use `docs/adoption-signer-first-operator-checklist.md` for the replacement signer-first operator checklist draft and track replacement work under `bahia-sqfx`.
+
 Issue: `bahia-y294`  
-Purpose: agent-usable execution checklist and evidence template for the manual staging/live-network signoff required before production enablement.
+Purpose: agent-usable execution checklist and evidence template for the manual staging/live-network signoff required before production enablement of the deprecated HTTP/NIP-98 operator surface.
 
 Use this document **while executing** the rollout signoff. It is intentionally procedural. The verification matrix in [`adoption-live-network-verification.md`](adoption-live-network-verification.md) remains the normative gate definition; this checklist turns that matrix into an operator run sheet.
 

@@ -1,6 +1,12 @@
 # Adoption and Direct Runtime Production Rollout Runbook
 
-This runbook covers the operator-only adoption/import and direct-runtime feature set. The live-network verification matrix and final production gate live in [`adoption-live-network-verification.md`](adoption-live-network-verification.md); the concrete execution sheet and evidence template for `bahia-y294` live in [`adoption-live-network-operator-checklist.md`](adoption-live-network-operator-checklist.md). This document is the operational procedure, not final production signoff.
+> **Deprecated legacy runbook**
+>
+> This runbook describes rollout of the legacy privileged HTTP/NIP-98 operator surface.
+> It remains as a compatibility/reference artifact while Bahia moves adoption/import operator workflows to a signer-first model.
+> Track the replacement work under `bahia-sqfx` and use `docs/adoption-signer-first-operator-checklist.md` as the draft replacement checklist.
+
+This runbook covers the operator-only adoption/import and direct-runtime feature set for the deprecated HTTP/NIP-98 operator surface. The live-network verification matrix and final production gate live in [`adoption-live-network-verification.md`](adoption-live-network-verification.md).
 
 ## Safety defaults
 

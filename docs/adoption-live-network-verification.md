@@ -1,7 +1,13 @@
 # Adoption / Import Live-Network Verification Matrix
 
+> **Deprecated legacy matrix**
+>
+> This matrix verifies the legacy privileged HTTP/NIP-98 operator surface.
+> It is no longer the primary rollout gate for the signer-first operator direction.
+> Use `docs/adoption-signer-first-operator-checklist.md` as the replacement checklist draft and track the replacement verification work under `bahia-sqfx`.
+
 Issue: `bahia-y294`  
-Scope: adoption/import and direct-runtime rollout readiness after the hardening work.
+Scope: adoption/import and direct-runtime rollout readiness for the deprecated HTTP/NIP-98 operator surface.
 
 This matrix is the production gate. Production enablement remains **blocked** until every automated row is green in CI or the release branch, and every manual staging row has an explicit operator signoff with captured evidence.
 
