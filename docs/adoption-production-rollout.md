@@ -1,6 +1,6 @@
 # Adoption and Direct Runtime Production Rollout Runbook
 
-This runbook covers the operator-only adoption/import and direct-runtime feature set. The live-network verification matrix and final production gate live in [`adoption-live-network-verification.md`](adoption-live-network-verification.md); this document is the operational procedure, not final production signoff.
+This runbook covers the operator-only adoption/import and direct-runtime feature set. The live-network verification matrix and final production gate live in [`adoption-live-network-verification.md`](adoption-live-network-verification.md); the concrete execution sheet and evidence template for `bahia-y294` live in [`adoption-live-network-operator-checklist.md`](adoption-live-network-operator-checklist.md). This document is the operational procedure, not final production signoff.
 
 ## Safety defaults
 

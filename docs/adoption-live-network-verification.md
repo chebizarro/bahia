@@ -5,6 +5,8 @@ Scope: adoption/import and direct-runtime rollout readiness after the hardening 
 
 This matrix is the production gate. Production enablement remains **blocked** until every automated row is green in CI or the release branch, and every manual staging row has an explicit operator signoff with captured evidence.
 
+For execution, use [`adoption-live-network-operator-checklist.md`](adoption-live-network-operator-checklist.md). That document turns this matrix into an operator/agent run sheet plus evidence template.
+
 ## Stage gates
 
 | Stage | Gate | Required result |
