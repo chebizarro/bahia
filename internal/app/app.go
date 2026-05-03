@@ -473,10 +473,11 @@ func New(cfg *config.Config) (*App, error) {
 	// Nostr control plane reactor for event-driven deployment operations.
 	if len(controlPlaneRelays) > 0 && controlPlaneSigner != nil {
 		reactorConfig := controlplane.Config{
-			Relays:                    controlPlaneRelays,
-			PrivateKey:                cfg.Nostr.PrivateKey,
-			AuthorizedPubkeys:         cfg.Nostr.AuthorizedPubkeys,
-			AdoptionAuthorizedPubkeys: cfg.Adoption.AllowedPubkeys,
+			Relays:                         controlPlaneRelays,
+			PrivateKey:                     cfg.Nostr.PrivateKey,
+			AuthorizedPubkeys:              cfg.Nostr.AuthorizedPubkeys,
+			AdoptionAuthorizedPubkeys:      cfg.Adoption.AllowedPubkeys,
+			DirectRuntimeAuthorizedPubkeys: cfg.DirectRuntime.AllowedPubkeys,
 		}
 		// Reuse the single canonical control-plane signer for all control-plane
 		// event signing paths.
@@ -488,8 +489,17 @@ func New(cfg *config.Config) (*App, error) {
 				logger.Warn("signer-first adoption control plane ignores non-pubkey operator allowlist entries", zap.Strings("allowed_subjects", cfg.Adoption.AllowedSubjects), zap.Strings("allowed_emails", cfg.Adoption.AllowedEmails))
 			}
 		}
+		if cfg.DirectRuntime.Enabled {
+			if len(cfg.Nostr.AuthorizedPubkeys) == 0 && len(cfg.DirectRuntime.AllowedPubkeys) == 0 {
+				logger.Warn("signer-first direct-runtime control plane has no pubkey allowlist", zap.Strings("relays", controlPlaneRelays))
+			}
+			if len(cfg.DirectRuntime.AllowedSubjects) > 0 || len(cfg.DirectRuntime.AllowedEmails) > 0 {
+				logger.Warn("signer-first direct-runtime control plane ignores non-pubkey operator allowlist entries", zap.Strings("allowed_subjects", cfg.DirectRuntime.AllowedSubjects), zap.Strings("allowed_emails", cfg.DirectRuntime.AllowedEmails))
+			}
+		}
 		reactorOpts := []controlplane.ReactorOption{
 			controlplane.WithAdoptionService(adoptionSvc),
+			controlplane.WithRuntimeLifecycleService(runtimeLifecycleSvc),
 			controlplane.WithToolProvisioningRepository(toolProvisionRepo),
 			controlplane.WithToolResponder(controlplane.NewToolResponder(controlPlanePool, controlPlaneSigner, logger, nostrEventRepo)),
 			controlplane.WithToolProvisioningCoordinator(toolCoordinator),

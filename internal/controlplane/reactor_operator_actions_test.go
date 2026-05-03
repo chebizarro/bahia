@@ -16,6 +16,47 @@ import (
 	"go.uber.org/zap"
 )
 
+type stubRuntimeLifecycleOperatorService struct {
+	deployServiceID  uuid.UUID
+	deployEnvID      uuid.UUID
+	deployArtifact   *uuid.UUID
+	restartServiceID uuid.UUID
+	restartEnvID     uuid.UUID
+	stopServiceID    uuid.UUID
+	stopEnvID        uuid.UUID
+	deployResp       *domain.RuntimeObservation
+	restartResp      *domain.RuntimeObservation
+	stopResp         *domain.RuntimeObservation
+	deployErr        error
+	restartErr       error
+	stopErr          error
+	deployCalled     bool
+	restartCalled    bool
+	stopCalled       bool
+}
+
+func (s *stubRuntimeLifecycleOperatorService) Deploy(_ context.Context, serviceID, envID uuid.UUID, artifactID *uuid.UUID) (*domain.RuntimeObservation, error) {
+	s.deployCalled = true
+	s.deployServiceID = serviceID
+	s.deployEnvID = envID
+	s.deployArtifact = artifactID
+	return s.deployResp, s.deployErr
+}
+
+func (s *stubRuntimeLifecycleOperatorService) Restart(_ context.Context, serviceID, envID uuid.UUID) (*domain.RuntimeObservation, error) {
+	s.restartCalled = true
+	s.restartServiceID = serviceID
+	s.restartEnvID = envID
+	return s.restartResp, s.restartErr
+}
+
+func (s *stubRuntimeLifecycleOperatorService) Stop(_ context.Context, serviceID, envID uuid.UUID) (*domain.RuntimeObservation, error) {
+	s.stopCalled = true
+	s.stopServiceID = serviceID
+	s.stopEnvID = envID
+	return s.stopResp, s.stopErr
+}
+
 type stubAdoptionOperatorService struct {
 	scanReq      service.AdoptionScanRequest
 	scanResp     []service.AdoptionPreview
@@ -37,6 +78,140 @@ func (s *stubAdoptionOperatorService) Import(_ context.Context, req service.Adop
 	s.importCalled = true
 	s.importReq = req
 	return s.importResp, s.importErr
+}
+
+func TestHandleServiceActionRoutesDirectRuntimeDeploy(t *testing.T) {
+	capture := &captureNostrPublisher{published: 1}
+	serviceID := uuid.New()
+	envID := uuid.New()
+	artifactID := uuid.New()
+	obsID := uuid.New()
+	runtimeStub := &stubRuntimeLifecycleOperatorService{deployResp: &domain.RuntimeObservation{
+		ID:                  obsID,
+		ServiceID:           serviceID,
+		EnvironmentID:       envID,
+		ObservedImageDigest: "sha256:abc",
+		ObservedContainerID: "container-1",
+		HealthStatus:        domain.HealthStatusHealthy,
+		Source:              "direct_runtime",
+	}}
+	reactor := newOperatorActionTestReactor(t, Config{DirectRuntimeAuthorizedPubkeys: []string{"operator"}}, capture, nil, runtimeStub)
+
+	reactor.handleServiceAction(context.Background(), &nostr.Event{ID: "deploy-request", PubKey: "operator", Kind: KindServiceAction, Content: `{"action":"deploy","service_id":"` + serviceID.String() + `","environment_id":"` + envID.String() + `","artifact_id":"` + artifactID.String() + `"}`})
+
+	if !runtimeStub.deployCalled || runtimeStub.deployServiceID != serviceID || runtimeStub.deployEnvID != envID || runtimeStub.deployArtifact == nil || *runtimeStub.deployArtifact != artifactID {
+		t.Fatalf("deploy was not dispatched correctly: %#v", runtimeStub)
+	}
+	if len(capture.events) != 2 {
+		t.Fatalf("published events = %d, want status and result", len(capture.events))
+	}
+	statusEvent, resultEvent := capture.events[0], capture.events[1]
+	if statusEvent.Kind != KindActionStatus || resultEvent.Kind != KindActionResult {
+		t.Fatalf("unexpected event kinds: status=%d result=%d", statusEvent.Kind, resultEvent.Kind)
+	}
+	assertReactorTag(t, statusEvent.Tags, "status", "processing")
+	assertReactorTag(t, statusEvent.Tags, "step", "executing")
+	assertReactorTag(t, statusEvent.Tags, "action", "deploy")
+	assertReactorTag(t, statusEvent.Tags, "service", serviceID.String())
+	assertReactorTag(t, statusEvent.Tags, "environment", envID.String())
+	assertReactorTag(t, statusEvent.Tags, "artifact", artifactID.String())
+	assertReactorTag(t, resultEvent.Tags, "status", "success")
+	assertReactorTag(t, resultEvent.Tags, "action", "deploy")
+	assertSignedEvent(t, statusEvent)
+	assertSignedEvent(t, resultEvent)
+
+	var payload dto.RuntimeActionResponse
+	if err := json.Unmarshal([]byte(resultEvent.Content), &payload); err != nil {
+		t.Fatalf("decode runtime action result: %v", err)
+	}
+	if payload.Action != "deploy" || payload.ServiceID != serviceID || payload.EnvironmentID != envID || payload.Observation == nil || payload.Observation.ID != obsID {
+		t.Fatalf("unexpected runtime action payload: %#v", payload)
+	}
+}
+
+func TestHandleServiceActionDirectRuntimeScopedAuth(t *testing.T) {
+	capture := &captureNostrPublisher{published: 1}
+	serviceID := uuid.New()
+	envID := uuid.New()
+	runtimeStub := &stubRuntimeLifecycleOperatorService{}
+	reactor := newOperatorActionTestReactor(t, Config{DirectRuntimeAuthorizedPubkeys: []string{"allowed"}}, capture, nil, runtimeStub)
+
+	reactor.handleServiceAction(context.Background(), &nostr.Event{ID: "restart-request", PubKey: "denied", Kind: KindServiceAction, Content: `{"action":"restart","service_id":"` + serviceID.String() + `","environment_id":"` + envID.String() + `"}`})
+
+	if runtimeStub.restartCalled {
+		t.Fatal("runtime lifecycle service should not be called for unauthorized requester")
+	}
+	if len(capture.events) != 1 {
+		t.Fatalf("published events = %d, want failure result", len(capture.events))
+	}
+	result := capture.events[0]
+	if result.Kind != KindActionResult {
+		t.Fatalf("result kind = %d, want %d", result.Kind, KindActionResult)
+	}
+	assertReactorTag(t, result.Tags, "status", "failed")
+	assertReactorTag(t, result.Tags, "action", "restart")
+	assertReactorTag(t, result.Tags, "service", serviceID.String())
+	assertReactorTag(t, result.Tags, "environment", envID.String())
+}
+
+func TestHandleServiceActionDirectRuntimeValidation(t *testing.T) {
+	capture := &captureNostrPublisher{published: 1}
+	serviceID := uuid.New()
+	envID := uuid.New()
+	runtimeStub := &stubRuntimeLifecycleOperatorService{}
+	reactor := newOperatorActionTestReactor(t, Config{DirectRuntimeAuthorizedPubkeys: []string{"operator"}}, capture, nil, runtimeStub)
+
+	reactor.handleServiceAction(context.Background(), &nostr.Event{ID: "stop-request", PubKey: "operator", Kind: KindServiceAction, Content: `{"action":"stop","service_id":"` + serviceID.String() + `","environment_id":"` + envID.String() + `","artifact_id":"` + uuid.NewString() + `"}`})
+
+	if runtimeStub.stopCalled {
+		t.Fatal("runtime lifecycle service should not be called for invalid stop artifact_id")
+	}
+	if len(capture.events) != 1 {
+		t.Fatalf("published events = %d, want validation failure result", len(capture.events))
+	}
+	result := capture.events[0]
+	assertReactorTag(t, result.Tags, "status", "failed")
+	assertReactorTag(t, result.Tags, "action", "stop")
+	if !strings.Contains(result.Content, "artifact_id") {
+		t.Fatalf("validation result does not mention artifact_id: %s", result.Content)
+	}
+}
+
+func TestHandleServiceActionDirectRuntimeFailure(t *testing.T) {
+	capture := &captureNostrPublisher{published: 1}
+	serviceID := uuid.New()
+	envID := uuid.New()
+	runtimeStub := &stubRuntimeLifecycleOperatorService{restartErr: errors.New("runtime docker does not support restart")}
+	reactor := newOperatorActionTestReactor(t, Config{AuthorizedPubkeys: []string{"global-operator"}}, capture, nil, runtimeStub)
+
+	reactor.handleServiceAction(context.Background(), &nostr.Event{ID: "restart-request", PubKey: "global-operator", Kind: KindServiceAction, Content: `{"action":"restart","service_id":"` + serviceID.String() + `","environment_id":"` + envID.String() + `"}`})
+
+	if !runtimeStub.restartCalled {
+		t.Fatal("restart was not dispatched")
+	}
+	if len(capture.events) != 2 {
+		t.Fatalf("published events = %d, want status and failure result", len(capture.events))
+	}
+	result := capture.events[1]
+	assertReactorTag(t, result.Tags, "status", "failed")
+	assertReactorTag(t, result.Tags, "action", "restart")
+	if !strings.Contains(result.Content, "does not support restart") {
+		t.Fatalf("failure result = %s", result.Content)
+	}
+}
+
+func TestHandleServiceActionPreservesLegacyAcknowledgement(t *testing.T) {
+	capture := &captureNostrPublisher{published: 1}
+	reactor := newOperatorActionTestReactor(t, Config{AuthorizedPubkeys: []string{"operator"}}, capture, nil, nil)
+
+	reactor.handleServiceAction(context.Background(), &nostr.Event{ID: "legacy-request", PubKey: "operator", Kind: KindServiceAction, Tags: nostr.Tags{{"service", "svc-1"}, {"action", "scale"}, {"reason", "capacity"}}})
+
+	if len(capture.events) != 1 {
+		t.Fatalf("published events = %d, want legacy acknowledgement", len(capture.events))
+	}
+	result := capture.events[0]
+	assertReactorTag(t, result.Tags, "status", "acknowledged")
+	assertReactorTag(t, result.Tags, "action", "scale")
 }
 
 func TestHandleAdoptionScanRequestRejectsUnauthorized(t *testing.T) {
@@ -216,11 +391,16 @@ func TestHandleAdoptionScanRequestPublishesOperationFailure(t *testing.T) {
 
 func newAdoptionTestReactor(t *testing.T, cfg Config, capture *captureNostrPublisher, adoption AdoptionOperatorService) *Reactor {
 	t.Helper()
+	return newOperatorActionTestReactor(t, cfg, capture, adoption, nil)
+}
+
+func newOperatorActionTestReactor(t *testing.T, cfg Config, capture *captureNostrPublisher, adoption AdoptionOperatorService, runtimeLifecycle RuntimeLifecycleOperatorService) *Reactor {
+	t.Helper()
 	signer, err := NewPrivateKeySigner(nostr.GeneratePrivateKey())
 	if err != nil {
 		t.Fatalf("create signer: %v", err)
 	}
-	return NewReactor(cfg, nil, nil, signer, zap.NewNop(), WithControlPlanePublisher(capture), WithAdoptionService(adoption))
+	return NewReactor(cfg, nil, nil, signer, zap.NewNop(), WithControlPlanePublisher(capture), WithAdoptionService(adoption), WithRuntimeLifecycleService(runtimeLifecycle))
 }
 
 func assertSignedEvent(t *testing.T, ev nostr.Event) {

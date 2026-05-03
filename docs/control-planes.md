@@ -64,17 +64,20 @@ This avoids duplicate event loops: Bahia publishes canonical 696x/796x/3196x/rea
 
 ## Nostr Control Plane
 
-The Nostr reactor subscribes to signed request events and publishes status, terminal results, and replaceable read models. Service operations delegate to `RegistryService`; LLM route/release/deploy/approval/rollback operations delegate to `LLMRegistryService`. LLM deploy, approval, and rollback are Nostr-first async actions; REST is only a narrowed registry/query/compatibility surface.
+The Nostr reactor subscribes to signed request events and publishes status, terminal results, and replaceable read models. Service registry operations delegate to `RegistryService`; adoption scan/import delegates to `AdoptionService`; direct-runtime `deploy|restart|stop` delegates to `RuntimeLifecycleService`; LLM route/release/deploy/approval/rollback operations delegate to `LLMRegistryService`. LLM deploy, adoption/import, and direct-runtime actions are Nostr-first async actions; REST is only a narrowed registry/query/compatibility surface.
 
 | Series | Range | Purpose |
 |--------|-------|---------|
 | Service requests | 5961–5968 | Inbound service/environment operation requests |
 | LLM requests | 5971–5975 | Inbound LLM route/release/deploy/approval/rollback requests |
+| Adoption requests | 5978–5979 | Inbound adoption scan/import operator requests |
 | Private requests | 5980 | Browser → Bahia encrypted private-domain request |
-| Service status | 6961–6962 | Service progress/status updates |
+| Service/action status | 6961–6963 | Service deployment/action progress/status updates |
 | LLM status | 6973 | LLM deployment/rollback progress updates |
+| Adoption status | 6978 | Adoption scan/import progress updates |
 | Service results | 7961–7966 | Service terminal operation results |
 | LLM results | 7971–7973 | LLM route/release/deployment terminal results |
+| Adoption results | 7978–7979 | Adoption scan/import terminal results |
 | Private results | 7980 | Bahia → Browser encrypted private-domain result |
 | Registry/read models | 31961–31965 | Replaceable browser/agent read models |
 
@@ -84,7 +87,7 @@ The Nostr reactor subscribes to signed request events and publishes status, term
 |------|------|-------------|
 | 5961 | `DeployRequest` | Request to deploy an artifact |
 | 5962 | `RollbackRequest` | Request to roll back a service |
-| 5963 | `ServiceAction` | Lifecycle action |
+| 5963 | `ServiceAction` | Lifecycle action; signer-first direct-runtime `deploy`, `restart`, `stop` |
 | 5964 | `ServiceCreate` | Create a service |
 | 5965 | `EnvironmentCreate` | Create an environment |
 | 5966 | `DeploymentApproval` | Approve/reject a deployment |
@@ -95,6 +98,8 @@ The Nostr reactor subscribes to signed request events and publishes status, term
 | 5973 | `LLMDeployRequest` | Request LLM route deployment |
 | 5974 | `LLMDeploymentApproval` | Approve/reject an LLM deployment intent |
 | 5975 | `LLMRollbackRequest` | Request LLM route rollback |
+| 5978 | `AdoptionScanRequest` | Request adoption previews for managed endpoint targets |
+| 5979 | `AdoptionImportRequest` | Request adoption import for managed endpoint targets |
 
 ### Status and Result Events
 
@@ -102,7 +107,9 @@ The Nostr reactor subscribes to signed request events and publishes status, term
 |------|------|-------------|
 | 6961 | `DeploymentStatus` | Service deployment progress |
 | 6962 | `ServiceStatus` | Service health/state updates |
+| 6963 | `ActionStatus` | Direct-runtime service action progress |
 | 6973 | `LLMDeploymentStatus` | LLM deployment/rollback progress |
+| 6978 | `AdoptionStatus` | Adoption scan/import progress |
 | 7961 | `DeploymentResult` | Service deployment terminal result |
 | 7962 | `ActionResult` | Service action terminal result |
 | 7963 | `ServiceCreateResult` | Service creation terminal result |
@@ -112,6 +119,8 @@ The Nostr reactor subscribes to signed request events and publishes status, term
 | 7971 | `LLMRouteCreateResult` | LLM route creation terminal result |
 | 7972 | `LLMReleaseRegisterResult` | LLM release registration terminal result |
 | 7973 | `LLMDeploymentResult` | LLM deploy/approval/rollback terminal result |
+| 7978 | `AdoptionScanResult` | Adoption scan terminal result |
+| 7979 | `AdoptionImportResult` | Adoption import terminal result |
 
 ### Replaceable Read Models
 
@@ -122,6 +131,87 @@ The Nostr reactor subscribes to signed request events and publishes status, term
 | 31963 | `EnvironmentRegistry` | `environment_id` | Environment registry entry |
 | 31964 | `LLMRouteRegistry` | `route_id` | LLM route registry entry |
 | 31965 | `LLMRouteState` | `route_id:environment_id` | Current desired/observed LLM route state |
+
+### Signer-First Operator Actions
+
+Operator workflows are public signed control-plane requests. They are not RPC and must be consumed as event streams: publish the request, subscribe for `e=<request_event_id>` replies, process `696x`/`697x` status events as progress, and treat the corresponding `796x`/`797x` result event as terminal. Clients should not poll or use timeout-based completion; use EOSE for historical catch-up and keep the subscription open for realtime replies.
+
+Authorization uses event pubkeys only:
+
+- `nostr.authorized_pubkeys` is the global fallback for all public operator requests.
+- `adoption.allowed_pubkeys` additionally authorizes `5978`/`5979` adoption requests.
+- `direct_runtime_actions.allowed_pubkeys` additionally authorizes direct-runtime `5963` requests.
+- Subject/email operator allowlists remain HTTP/NIP-98 compatibility settings and are ignored by signer-first public events.
+
+#### Adoption scan/import (`5978`/`5979`)
+
+Adoption requests are public relay-visible content, so targets must reference server-managed runtime endpoints. Raw Docker transport material is forbidden.
+
+Scan request content:
+
+```json
+{
+  "targets": [
+    {
+      "name": "prod",
+      "endpoint_ref": "prod-docker",
+      "environment_name": "prod"
+    }
+  ]
+}
+```
+
+Import request content:
+
+```json
+{
+  "targets": [{ "name": "prod", "endpoint_ref": "prod-docker" }],
+  "import_all": true,
+  "selections": [
+    {
+      "target_name": "prod",
+      "container_id": "abc123",
+      "service_name_override": "api"
+    }
+  ]
+}
+```
+
+Rules:
+
+- `targets` is required and non-empty.
+- Each target requires normalized `name` and non-empty `endpoint_ref`.
+- `docker_host` is rejected on the public signer-first path.
+- Import requires `import_all=true` or at least one `selection`.
+
+Progress is published as `6978 AdoptionStatus` with `status=processing`, `operation=scan|import`, repeated `target`, `endpoint_ref`, and optional `environment_name` tags. Terminal results are:
+
+- `7978 AdoptionScanResult` with content `[]AdoptionPreviewResponse`.
+- `7979 AdoptionImportResult` with content `[]AdoptionImportResultResponse`.
+
+Both result payloads reuse the HTTP-safe DTO projection: only safe env/labels are included, redacted key names are preserved, and managed endpoint `docker_host` values are omitted.
+
+#### Direct-runtime actions (`5963`)
+
+Signer-first direct-runtime actions reuse `5963 ServiceAction` with JSON content:
+
+```json
+{
+  "action": "deploy",
+  "service_id": "...",
+  "environment_id": "...",
+  "artifact_id": "..."
+}
+```
+
+Rules:
+
+- `action` must be one of `deploy`, `restart`, or `stop`.
+- `service_id` and `environment_id` are required UUIDs.
+- `artifact_id` is optional for `deploy` and invalid for `restart`/`stop`.
+- Existing non-direct-runtime `5963` tag-based actions remain compatibility acknowledgements.
+
+Progress is published as `6963 ActionStatus` with `status=processing`, `step=executing`, `action`, `service`, `environment`, and optional `artifact` tags. Success publishes `7962 ActionResult` with content `RuntimeActionResponse`, including the runtime observation when available. Failures publish `7962 ActionResult` with `status=failed`, `action`, resource tags, and error content.
 
 ### Private Encrypted Transport (5980/7980)
 

@@ -21,10 +21,11 @@ func TestReactorIsAuthorized(t *testing.T) {
 	})
 }
 
-func TestReactorIsAuthorizedForAdoption(t *testing.T) {
+func TestReactorIsAuthorizedForScopedOperatorPaths(t *testing.T) {
 	reactor := NewReactor(Config{
-		AuthorizedPubkeys:         []string{"global-operator"},
-		AdoptionAuthorizedPubkeys: []string{"adoption-operator"},
+		AuthorizedPubkeys:              []string{"global-operator"},
+		AdoptionAuthorizedPubkeys:      []string{"adoption-operator"},
+		DirectRuntimeAuthorizedPubkeys: []string{"runtime-operator"},
 	}, nil, nil, nil, nil)
 
 	if !reactor.isAuthorizedFor("global-operator", operatorScopeAdoption) {
@@ -36,7 +37,19 @@ func TestReactorIsAuthorizedForAdoption(t *testing.T) {
 	if reactor.isAuthorizedFor("adoption-operator", operatorScopeDefault) {
 		t.Fatal("expected adoption-scoped operator to be rejected for default scope")
 	}
-	if reactor.isAuthorizedFor("unknown", operatorScopeAdoption) {
-		t.Fatal("expected unknown operator to be rejected for adoption")
+	if reactor.isAuthorizedFor("adoption-operator", operatorScopeDirectRuntime) {
+		t.Fatal("expected adoption-scoped operator to be rejected for direct runtime")
+	}
+	if !reactor.isAuthorizedFor("global-operator", operatorScopeDirectRuntime) {
+		t.Fatal("expected global operator to be authorized for direct runtime")
+	}
+	if !reactor.isAuthorizedFor("runtime-operator", operatorScopeDirectRuntime) {
+		t.Fatal("expected runtime operator to be authorized for direct runtime")
+	}
+	if reactor.isAuthorizedFor("runtime-operator", operatorScopeAdoption) {
+		t.Fatal("expected runtime-scoped operator to be rejected for adoption")
+	}
+	if reactor.isAuthorizedFor("unknown", operatorScopeAdoption) || reactor.isAuthorizedFor("unknown", operatorScopeDirectRuntime) {
+		t.Fatal("expected unknown operator to be rejected for scoped paths")
 	}
 }

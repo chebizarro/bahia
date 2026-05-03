@@ -58,6 +58,7 @@ const (
 	// Status kinds (6961-6978)
 	KindDeploymentStatus    = 6961 // Deployment progress updates
 	KindServiceStatus       = 6962 // Service health/state updates
+	KindActionStatus        = 6963 // Service action progress updates
 	KindLLMDeploymentStatus = 6973 // LLM deployment/rollback progress updates
 	KindToolProvisionStatus = 6976 // Bahia → Agent (progress)
 	KindAdoptionStatus      = 6978 // Adoption scan/import progress updates
@@ -104,6 +105,9 @@ type Config struct {
 	// AdoptionAuthorizedPubkeys is the adoption-specific operator allowlist.
 	// AuthorizedPubkeys remains a global fallback for adoption requests.
 	AdoptionAuthorizedPubkeys []string
+	// DirectRuntimeAuthorizedPubkeys is the direct-runtime-specific operator allowlist.
+	// AuthorizedPubkeys remains a global fallback for direct-runtime action requests.
+	DirectRuntimeAuthorizedPubkeys []string
 }
 
 // Reactor subscribes to Nostr control plane events and dispatches handlers.
@@ -124,6 +128,7 @@ type Reactor struct {
 	toolCoordinator  *service.ToolProvisioningCoordinator
 	policyService    *service.PolicyService
 	adoption         AdoptionOperatorService
+	runtimeLifecycle RuntimeLifecycleOperatorService
 
 	mu   sync.Mutex
 	runs map[string]*DeploymentRun // requestEventID -> run
@@ -172,6 +177,11 @@ func WithPolicyService(policies *service.PolicyService) ReactorOption {
 // WithAdoptionService enables signer-first adoption scan/import request handling.
 func WithAdoptionService(adoption AdoptionOperatorService) ReactorOption {
 	return func(r *Reactor) { r.adoption = adoption }
+}
+
+// WithRuntimeLifecycleService enables signer-first direct-runtime action handling.
+func WithRuntimeLifecycleService(runtimeLifecycle RuntimeLifecycleOperatorService) ReactorOption {
+	return func(r *Reactor) { r.runtimeLifecycle = runtimeLifecycle }
 }
 
 // WithControlPlanePublisher overrides the result/status publisher, primarily for tests.
@@ -522,6 +532,19 @@ func (r *Reactor) handleRollbackRequest(ctx context.Context, event *nostr.Event)
 func (r *Reactor) handleServiceAction(ctx context.Context, event *nostr.Event) {
 	logger := r.logger.With("event_id", event.ID, "requester", event.PubKey)
 	logger.Info("received service action")
+
+	if req, ok, err := parseDirectRuntimeActionRequest(event); ok || err != nil {
+		if err != nil {
+			action := directRuntimeActionFromContent(event.Content)
+			if action == "" {
+				action = "direct_runtime"
+			}
+			r.publishActionResult(ctx, event, action, "failed", err)
+			return
+		}
+		r.handleDirectRuntimeActionRequest(ctx, event, req)
+		return
+	}
 
 	if !r.isAuthorized(event.PubKey) {
 		logger.Warn("unauthorized service action")
@@ -1459,8 +1482,9 @@ func stringFromAny(v any) string {
 type operatorScope string
 
 const (
-	operatorScopeDefault  operatorScope = "default"
-	operatorScopeAdoption operatorScope = "adoption"
+	operatorScopeDefault       operatorScope = "default"
+	operatorScopeAdoption      operatorScope = "adoption"
+	operatorScopeDirectRuntime operatorScope = "direct_runtime"
 )
 
 // isAuthorized checks if a pubkey is authorized to use the control plane.
@@ -1479,6 +1503,8 @@ func (r *Reactor) isAuthorizedFor(pubkey string, scope operatorScope) bool {
 	switch scope {
 	case operatorScopeAdoption:
 		return slices.Contains(r.config.AdoptionAuthorizedPubkeys, pubkey)
+	case operatorScopeDirectRuntime:
+		return slices.Contains(r.config.DirectRuntimeAuthorizedPubkeys, pubkey)
 	default:
 		return false
 	}

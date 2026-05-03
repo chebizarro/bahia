@@ -7,8 +7,10 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/google/uuid"
 	"github.com/nbd-wtf/go-nostr"
 	"github.com/openagentsinc/bahia/internal/api/dto"
+	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/service"
 )
 
@@ -17,6 +19,28 @@ import (
 type AdoptionOperatorService interface {
 	Scan(context.Context, service.AdoptionScanRequest) ([]service.AdoptionPreview, error)
 	Import(context.Context, service.AdoptionImportRequest) ([]service.AdoptionImportResult, error)
+}
+
+// RuntimeLifecycleOperatorService is the narrow service surface required by the
+// signer-first direct-runtime control-plane transport.
+type RuntimeLifecycleOperatorService interface {
+	Deploy(context.Context, uuid.UUID, uuid.UUID, *uuid.UUID) (*domain.RuntimeObservation, error)
+	Restart(context.Context, uuid.UUID, uuid.UUID) (*domain.RuntimeObservation, error)
+	Stop(context.Context, uuid.UUID, uuid.UUID) (*domain.RuntimeObservation, error)
+}
+
+type directRuntimeActionEventRequest struct {
+	Action        string `json:"action"`
+	ServiceID     string `json:"service_id"`
+	EnvironmentID string `json:"environment_id"`
+	ArtifactID    string `json:"artifact_id,omitempty"`
+}
+
+type parsedDirectRuntimeActionRequest struct {
+	Action        string
+	ServiceID     uuid.UUID
+	EnvironmentID uuid.UUID
+	ArtifactID    *uuid.UUID
 }
 
 type adoptionScanEventRequest struct {
@@ -40,6 +64,94 @@ type adoptionEventSelection struct {
 	TargetName          string `json:"target_name"`
 	ContainerID         string `json:"container_id"`
 	ServiceNameOverride string `json:"service_name_override,omitempty"`
+}
+
+func directRuntimeActionFromContent(content string) string {
+	var raw directRuntimeActionEventRequest
+	if json.Unmarshal([]byte(content), &raw) != nil {
+		return ""
+	}
+	action := strings.ToLower(strings.TrimSpace(raw.Action))
+	if !isDirectRuntimeAction(action) {
+		return ""
+	}
+	return action
+}
+
+func parseDirectRuntimeActionRequest(event *nostr.Event) (parsedDirectRuntimeActionRequest, bool, error) {
+	var raw directRuntimeActionEventRequest
+	if strings.TrimSpace(event.Content) == "" {
+		return parsedDirectRuntimeActionRequest{}, false, nil
+	}
+	if err := json.Unmarshal([]byte(event.Content), &raw); err != nil {
+		return parsedDirectRuntimeActionRequest{}, false, nil
+	}
+	action := strings.ToLower(strings.TrimSpace(raw.Action))
+	if !isDirectRuntimeAction(action) {
+		return parsedDirectRuntimeActionRequest{}, false, nil
+	}
+	serviceID, err := uuid.Parse(strings.TrimSpace(raw.ServiceID))
+	if err != nil {
+		return parsedDirectRuntimeActionRequest{}, true, fmt.Errorf("invalid service_id: %w", err)
+	}
+	environmentID, err := uuid.Parse(strings.TrimSpace(raw.EnvironmentID))
+	if err != nil {
+		return parsedDirectRuntimeActionRequest{}, true, fmt.Errorf("invalid environment_id: %w", err)
+	}
+	var artifactID *uuid.UUID
+	if strings.TrimSpace(raw.ArtifactID) != "" {
+		parsedArtifactID, err := uuid.Parse(strings.TrimSpace(raw.ArtifactID))
+		if err != nil {
+			return parsedDirectRuntimeActionRequest{}, true, fmt.Errorf("invalid artifact_id: %w", err)
+		}
+		artifactID = &parsedArtifactID
+	}
+	if action != "deploy" && artifactID != nil {
+		return parsedDirectRuntimeActionRequest{}, true, fmt.Errorf("artifact_id is only valid for deploy actions")
+	}
+	return parsedDirectRuntimeActionRequest{Action: action, ServiceID: serviceID, EnvironmentID: environmentID, ArtifactID: artifactID}, true, nil
+}
+
+func isDirectRuntimeAction(action string) bool {
+	switch action {
+	case "deploy", "restart", "stop":
+		return true
+	default:
+		return false
+	}
+}
+
+func (r *Reactor) handleDirectRuntimeActionRequest(ctx context.Context, event *nostr.Event, req parsedDirectRuntimeActionRequest) {
+	logger := r.logger.With("event_id", event.ID, "requester", event.PubKey, "action", req.Action, "service_id", req.ServiceID.String(), "environment_id", req.EnvironmentID.String())
+	if !r.isAuthorizedFor(event.PubKey, operatorScopeDirectRuntime) {
+		logger.Warn("unauthorized direct-runtime action request")
+		r.publishActionResult(ctx, event, req.Action, "failed", fmt.Errorf("requester not in authorized direct-runtime list"))
+		return
+	}
+	if r.runtimeLifecycle == nil {
+		r.publishActionResult(ctx, event, req.Action, "failed", fmt.Errorf("runtime lifecycle service is not configured"))
+		return
+	}
+
+	_ = r.publishActionStatus(ctx, event, req.Action, "executing", "Direct runtime action started")
+	var obs *domain.RuntimeObservation
+	var err error
+	switch req.Action {
+	case "deploy":
+		obs, err = r.runtimeLifecycle.Deploy(ctx, req.ServiceID, req.EnvironmentID, req.ArtifactID)
+	case "restart":
+		obs, err = r.runtimeLifecycle.Restart(ctx, req.ServiceID, req.EnvironmentID)
+	case "stop":
+		obs, err = r.runtimeLifecycle.Stop(ctx, req.ServiceID, req.EnvironmentID)
+	}
+	if err != nil {
+		logger.Error("direct-runtime action failed", "error", err)
+		r.publishActionResult(ctx, event, req.Action, "failed", err)
+		return
+	}
+	if err := r.publishRuntimeActionResult(ctx, event, req.Action, req.ServiceID, req.EnvironmentID, obs); err != nil {
+		logger.Error("failed to publish direct-runtime action result", "error", err)
+	}
 }
 
 func (r *Reactor) handleAdoptionScanRequest(ctx context.Context, event *nostr.Event) {
@@ -218,6 +330,46 @@ func adoptionImportStatus(results []service.AdoptionImportResult) string {
 		return "partial_failure"
 	}
 	return "success"
+}
+
+func (r *Reactor) publishActionStatus(ctx context.Context, requestEvent *nostr.Event, action, step, message string) error {
+	tags := nostr.Tags{
+		{"e", requestEvent.ID, "", "reply"},
+		{"p", requestEvent.PubKey},
+		{"status", "processing"},
+		{"action", action},
+		{"step", step},
+	}
+	tags = r.appendRequestResourceTags(ctx, tags, requestEvent)
+	event := &nostr.Event{Kind: KindActionStatus, CreatedAt: nostr.Now(), Tags: tags, Content: message}
+	if err := r.signEvent(ctx, event); err != nil {
+		return fmt.Errorf("sign action status: %w", err)
+	}
+	_, err := r.publishEvent(ctx, event)
+	return err
+}
+
+func (r *Reactor) publishRuntimeActionResult(ctx context.Context, requestEvent *nostr.Event, action string, serviceID, environmentID uuid.UUID, obs *domain.RuntimeObservation) error {
+	payload := dto.RuntimeActionResponseFromDomain(action, serviceID, environmentID, obs)
+	content, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("marshal runtime action result: %w", err)
+	}
+	tags := nostr.Tags{
+		{"e", requestEvent.ID, "", "reply"},
+		{"p", requestEvent.PubKey},
+		{"status", "success"},
+		{"action", action},
+		{"service", serviceID.String()},
+		{"environment", environmentID.String()},
+	}
+	tags = r.appendRequestResourceTags(ctx, tags, requestEvent)
+	event := &nostr.Event{Kind: KindActionResult, CreatedAt: nostr.Now(), Tags: tags, Content: string(content)}
+	if err := r.signEvent(ctx, event); err != nil {
+		return fmt.Errorf("sign runtime action result: %w", err)
+	}
+	_, err = r.publishEvent(ctx, event)
+	return err
 }
 
 func (r *Reactor) publishAdoptionStatus(ctx context.Context, requestEvent *nostr.Event, operation string, targets []service.AdoptionTarget, message string) error {
