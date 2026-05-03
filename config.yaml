@@ -40,17 +40,17 @@ nostr:
   # Deprecated alias still accepted during migration: private_relays.
   # For rollback-safe deployments, keep private_relays with identical values
   # until all older Bahia binaries have been retired.
-  encrypted_relays: []
+  encrypted_request_relays: []
   # private_relays: []
   # Browser-safe relay endpoints advertised by /api/v1/system/info only when
   # nostr.sidecar.enabled=true. Use the nginx /relay proxy for the web app.
   browser_relays:
     - "ws://localhost:3000/relay"
-  # Browser-safe relay endpoints advertised for encrypted request/result Nostr
+  # Browser-safe relay URLs advertised for encrypted request/result Nostr
   # events. Deprecated alias still accepted during migration:
   # private_browser_relays. For rollback-safe deployments, keep both keys with
   # identical values until all older Bahia binaries have been retired.
-  encrypted_browser_relays: []
+  browser_encrypted_request_relays: []
   # private_browser_relays: []
   publish_enabled: false
   sidecar:

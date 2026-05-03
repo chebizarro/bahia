@@ -46,10 +46,10 @@ type RegistryInfo struct {
 
 // NostrConfig describes the Nostr configuration.
 type NostrConfigInfo struct {
-	Relays                 []string `json:"relays"`
-	BrowserRelays          []string `json:"browser_relays,omitempty"`
-	EncryptedBrowserRelays []string `json:"encrypted_browser_relays,omitempty"`
-	// PrivateBrowserRelays is a deprecated alias for EncryptedBrowserRelays.
+	Relays                        []string `json:"relays"`
+	BrowserRelays                 []string `json:"browser_relays,omitempty"`
+	BrowserEncryptedRequestRelays []string `json:"browser_encrypted_request_relays,omitempty"`
+	// PrivateBrowserRelays is a deprecated alias for BrowserEncryptedRequestRelays.
 	PrivateBrowserRelays []string `json:"private_browser_relays,omitempty"`
 	SidecarURL           string   `json:"sidecar_url,omitempty"`
 	PublishEnabled       bool     `json:"publish_enabled"`
@@ -182,9 +182,9 @@ func (h *SystemHandler) GetInfo(w http.ResponseWriter, r *http.Request) {
 		nostrInfo.BrowserRelays = h.browserRelays()
 		nostrInfo.SidecarURL = h.cfg.Nostr.Sidecar.PublicURL
 	}
-	encryptedBrowserRelays := h.encryptedBrowserRelays()
-	nostrInfo.EncryptedBrowserRelays = encryptedBrowserRelays
-	nostrInfo.PrivateBrowserRelays = encryptedBrowserRelays
+	browserEncryptedRequestRelays := h.browserEncryptedRequestRelays()
+	nostrInfo.BrowserEncryptedRequestRelays = browserEncryptedRequestRelays
+	nostrInfo.PrivateBrowserRelays = browserEncryptedRequestRelays
 
 	// Derive service pubkey from private key if available
 	if h.cfg.Nostr.PrivateKey != "" {
@@ -219,7 +219,7 @@ func (h *SystemHandler) GetInfo(w http.ResponseWriter, r *http.Request) {
 		PublicHost: h.cfg.OCI.PublicHost,
 	}
 
-	encryptedNostrRequestsEnabled := len(encryptedBrowserRelays) > 0 && len(h.encryptedRelays()) > 0 && h.cfg.Nostr.PrivateKey != ""
+	encryptedNostrRequestsEnabled := len(browserEncryptedRequestRelays) > 0 && len(h.encryptedRequestRelays()) > 0 && h.cfg.Nostr.PrivateKey != ""
 
 	// Feature flags. The removed legacy compatibility surfaces remain present
 	// as false values for older clients that probe capabilities defensively.
@@ -337,9 +337,9 @@ func (h *SystemHandler) browserRelays() []string {
 	return nil
 }
 
-func (h *SystemHandler) encryptedRelays() []string {
-	if len(h.cfg.Nostr.EncryptedRelays) > 0 {
-		return append([]string(nil), h.cfg.Nostr.EncryptedRelays...)
+func (h *SystemHandler) encryptedRequestRelays() []string {
+	if len(h.cfg.Nostr.EncryptedRequestRelays) > 0 {
+		return append([]string(nil), h.cfg.Nostr.EncryptedRequestRelays...)
 	}
 	if len(h.cfg.Nostr.PrivateRelays) > 0 {
 		return append([]string(nil), h.cfg.Nostr.PrivateRelays...)
@@ -347,9 +347,9 @@ func (h *SystemHandler) encryptedRelays() []string {
 	return nil
 }
 
-func (h *SystemHandler) encryptedBrowserRelays() []string {
-	if len(h.cfg.Nostr.EncryptedBrowserRelays) > 0 {
-		return append([]string(nil), h.cfg.Nostr.EncryptedBrowserRelays...)
+func (h *SystemHandler) browserEncryptedRequestRelays() []string {
+	if len(h.cfg.Nostr.BrowserEncryptedRequestRelays) > 0 {
+		return append([]string(nil), h.cfg.Nostr.BrowserEncryptedRequestRelays...)
 	}
 	if len(h.cfg.Nostr.PrivateBrowserRelays) > 0 {
 		return append([]string(nil), h.cfg.Nostr.PrivateBrowserRelays...)

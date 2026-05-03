@@ -123,20 +123,20 @@ type LoomConfig struct {
 type NostrConfig struct {
 	PrivateKey string   `koanf:"private_key"`
 	Relays     []string `koanf:"relays"`
-	// EncryptedRelays are ordinary relays used by the backend for encrypted
+	// EncryptedRequestRelays are ordinary backend relay URLs used for encrypted
 	// request/result Nostr events. PrivateRelays is a deprecated alias retained
 	// for mixed-version rollouts.
-	EncryptedRelays []string `koanf:"encrypted_relays"`
-	PrivateRelays   []string `koanf:"private_relays"`
-	BrowserRelays   []string `koanf:"browser_relays"`
-	// EncryptedBrowserRelays are browser-safe relay URLs advertised for encrypted
-	// request/result Nostr events. PrivateBrowserRelays is a deprecated alias
+	EncryptedRequestRelays []string `koanf:"encrypted_request_relays"`
+	PrivateRelays          []string `koanf:"private_relays"`
+	BrowserRelays          []string `koanf:"browser_relays"`
+	// BrowserEncryptedRequestRelays are browser-safe relay URLs advertised for
+	// encrypted request/result Nostr events. PrivateBrowserRelays is a deprecated alias
 	// retained for mixed-version rollouts.
-	EncryptedBrowserRelays []string           `koanf:"encrypted_browser_relays"`
-	PrivateBrowserRelays   []string           `koanf:"private_browser_relays"`
-	AuthorizedPubkeys      []string           `koanf:"authorized_pubkeys"`
-	PublishEnabled         bool               `koanf:"publish_enabled"`
-	Sidecar                RelaySidecarConfig `koanf:"sidecar"`
+	BrowserEncryptedRequestRelays []string           `koanf:"browser_encrypted_request_relays"`
+	PrivateBrowserRelays          []string           `koanf:"private_browser_relays"`
+	AuthorizedPubkeys             []string           `koanf:"authorized_pubkeys"`
+	PublishEnabled                bool               `koanf:"publish_enabled"`
+	Sidecar                       RelaySidecarConfig `koanf:"sidecar"`
 }
 
 // RelaySidecarConfig holds the local Khatru relay sidecar settings.
@@ -563,7 +563,7 @@ func (c *Config) validate() error {
 	if err := c.validateRelaySidecar(); err != nil {
 		return err
 	}
-	if err := c.normalizeEncryptedRelayAliases(); err != nil {
+	if err := c.normalizeEncryptedRequestRelayAliases(); err != nil {
 		return err
 	}
 
@@ -582,19 +582,19 @@ func (c *Config) validate() error {
 	return nil
 }
 
-func (c *Config) normalizeEncryptedRelayAliases() error {
-	encryptedRelays, err := resolveRelayAlias("nostr.encrypted_relays", c.Nostr.EncryptedRelays, "nostr.private_relays", c.Nostr.PrivateRelays)
+func (c *Config) normalizeEncryptedRequestRelayAliases() error {
+	encryptedRequestRelays, err := resolveRelayAlias("nostr.encrypted_request_relays", c.Nostr.EncryptedRequestRelays, "nostr.private_relays", c.Nostr.PrivateRelays)
 	if err != nil {
 		return err
 	}
-	encryptedBrowserRelays, err := resolveRelayAlias("nostr.encrypted_browser_relays", c.Nostr.EncryptedBrowserRelays, "nostr.private_browser_relays", c.Nostr.PrivateBrowserRelays)
+	browserEncryptedRequestRelays, err := resolveRelayAlias("nostr.browser_encrypted_request_relays", c.Nostr.BrowserEncryptedRequestRelays, "nostr.private_browser_relays", c.Nostr.PrivateBrowserRelays)
 	if err != nil {
 		return err
 	}
-	c.Nostr.EncryptedRelays = cloneStrings(encryptedRelays)
-	c.Nostr.PrivateRelays = cloneStrings(encryptedRelays)
-	c.Nostr.EncryptedBrowserRelays = cloneStrings(encryptedBrowserRelays)
-	c.Nostr.PrivateBrowserRelays = cloneStrings(encryptedBrowserRelays)
+	c.Nostr.EncryptedRequestRelays = cloneStrings(encryptedRequestRelays)
+	c.Nostr.PrivateRelays = cloneStrings(encryptedRequestRelays)
+	c.Nostr.BrowserEncryptedRequestRelays = cloneStrings(browserEncryptedRequestRelays)
+	c.Nostr.PrivateBrowserRelays = cloneStrings(browserEncryptedRequestRelays)
 	return nil
 }
 
