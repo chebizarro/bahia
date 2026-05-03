@@ -10,6 +10,7 @@ vi.mock('../../src/lib/nostr/nip07.js', () => ({
   getRelays: vi.fn(),
   getCapabilities: vi.fn(),
   signEvent: vi.fn(),
+  getNip07Signer: vi.fn(),
   detectNip07: vi.fn()
 }));
 
@@ -20,6 +21,7 @@ vi.mock('../../src/lib/nostr/nip46.js', () => ({
   connectNip46: vi.fn(),
   disconnectNip46: vi.fn(),
   signEvent: vi.fn(),
+  getNip46Signer: vi.fn(),
   getCapabilities: vi.fn()
 }));
 
@@ -54,6 +56,11 @@ describe('Auth Store', () => {
       nip44: false
     });
     nip07Module.detectNip07.mockReturnValue({ available: true });
+    nip07Module.getNip07Signer.mockReturnValue({
+      getPublicKey: nip07Module.getPublicKey,
+      signEvent: nip07Module.signEvent,
+      getRelays: nip07Module.getRelays
+    });
     nip46Module.detectNip46.mockReturnValue({ available: false, provider: null, reason: 'missing_nip46_provider' });
     nip46Module.parseNostrConnectUri.mockImplementation((uri) => ({
       uri,
@@ -74,6 +81,12 @@ describe('Auth Store', () => {
     nip46Module.disconnectNip46.mockResolvedValue();
     nip46Module.signEvent.mockImplementation(async (event) => ({ ...event, id: 'nip46-event-id', sig: 'nip46-signature' }));
     nip46Module.getCapabilities.mockReturnValue({ connect: true, disconnect: true, getPublicKey: true, signEvent: true, getRelays: true });
+    nip46Module.getNip46Signer.mockReturnValue({
+      getPublicKey: vi.fn().mockResolvedValue('a'.repeat(64)),
+      signEvent: nip46Module.signEvent,
+      getRelays: vi.fn().mockResolvedValue({ 'wss://relay.nip46.test': { read: true, write: true } }),
+      disconnect: nip46Module.disconnectNip46
+    });
     global.fetch = vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({ data: { token: 'test-token', expires_at: new Date(Date.now() + 3600000).toISOString() } })
@@ -98,6 +111,8 @@ describe('Auth Store', () => {
       expect(state.extensionAvailable).toBe(true);
       expect(state.pubkey).toBeNull();
       expect(state.error).toBeNull();
+      expect(state.compatibility.restNip98Ready).toBe(false);
+      expect(state.compatibility.restNip98LastError).toBeNull();
     });
 
     it('should restore session from localStorage when available', async () => {
@@ -159,6 +174,28 @@ describe('Auth Store', () => {
       const state = authModule.authState;
       
       expect(state.capabilities).toEqual(capabilities);
+    });
+
+    it('keeps signer session authenticated when direct NIP-98 is unavailable during initialize', async () => {
+      localStorage.setItem('bahia_auth_session', JSON.stringify({
+        pubkey: 'd'.repeat(64),
+        relays: { 'wss://relay.test': { read: true, write: true } },
+        authMethod: 'nip07',
+        lastAuthenticatedAt: '2026-04-29T12:00:00.000Z'
+      }));
+
+      global.fetch.mockResolvedValueOnce({
+        ok: true,
+        headers: new Map([['content-type', 'application/json']]),
+        json: async () => ({ data: { features: { direct_nostr_http_auth: false } } })
+      });
+
+      await authModule.initializeAuth();
+
+      expect(authModule.authState.status).toBe('authenticated');
+      expect(authModule.authState.error).toBeNull();
+      expect(authModule.authState.compatibility.restNip98Ready).toBe(false);
+      expect(authModule.authState.compatibility.restNip98LastError).toContain('not enabled');
     });
 
     it('should handle invalid session data gracefully', async () => {
@@ -323,6 +360,9 @@ describe('Auth Store', () => {
       await api.listServices();
 
       expect(authModule.authState.directNip98Ready).toBe(true);
+      expect(authModule.authState.compatibility.restNip98Advertised).toBe(true);
+      expect(authModule.authState.compatibility.restNip98Ready).toBe(true);
+      expect(authModule.authState.compatibility.restNip98LastError).toBeNull();
       expect(localStorage.getItem('bahia_token')).toBeNull();
       expect(global.fetch).not.toHaveBeenCalledWith('/api/v1/auth/nostr', expect.any(Object));
       expect(global.fetch).toHaveBeenLastCalledWith('/api/v1/services', expect.objectContaining({
@@ -342,6 +382,10 @@ describe('Auth Store', () => {
 
       expect(authModule.authState.backendAuthenticated).toBe(false);
       expect(authModule.authState.directNip98Ready).toBe(false);
+      expect(authModule.authState.status).toBe('authenticated');
+      expect(authModule.authState.error).toBeNull();
+      expect(authModule.authState.compatibility.restNip98Ready).toBe(false);
+      expect(authModule.authState.compatibility.restNip98LastError).toContain('not enabled');
       expect(localStorage.getItem('bahia_token')).toBeNull();
       expect(global.fetch).not.toHaveBeenCalledWith('/api/v1/auth/nostr', expect.any(Object));
     });

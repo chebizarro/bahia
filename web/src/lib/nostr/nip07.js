@@ -183,3 +183,15 @@ export function getCapabilities() {
            typeof nostr.nip44.decrypt === 'function'
   };
 }
+
+/**
+ * Resolve a signer-shaped NIP-07 contract
+ * @returns {{getPublicKey: Function, signEvent: Function, getRelays: Function}}
+ */
+export function getNip07Signer() {
+  return {
+    getPublicKey,
+    signEvent,
+    getRelays
+  };
+}

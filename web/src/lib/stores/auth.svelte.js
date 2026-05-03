@@ -8,7 +8,7 @@ import {
   getPublicKey as getNip07PublicKey,
   getRelays as getNip07Relays,
   getCapabilities as getNip07Capabilities,
-  signEvent as nip07SignEvent,
+  getNip07Signer,
   detectNip07
 } from '$lib/nostr/nip07.js';
 import {
@@ -16,7 +16,7 @@ import {
   parseNostrConnectUri,
   connectNip46,
   disconnectNip46,
-  signEvent as nip46SignEvent,
+  getNip46Signer,
   getCapabilities as getNip46Capabilities
 } from '$lib/nostr/nip46.js';
 import { supportsDirectNip98Auth } from '$lib/auth/capabilities.js';
@@ -33,6 +33,11 @@ const initialState = {
   capabilities: {},
   error: null,
   lastAuthenticatedAt: null,
+  compatibility: {
+    restNip98Advertised: false,
+    restNip98Ready: false,
+    restNip98LastError: null
+  },
   backendAuthenticated: false,
   directNip98Ready: false,
   nip46: null
@@ -61,6 +66,25 @@ function updateAuthState(patch) {
 
 function isValidHexPubkey(pubkey) {
   return typeof pubkey === 'string' && /^[0-9a-fA-F]{64}$/.test(pubkey);
+}
+
+function compatibilityPatch({ restNip98Advertised = false, restNip98Ready = false, restNip98LastError = null } = {}) {
+  return {
+    compatibility: {
+      restNip98Advertised,
+      restNip98Ready,
+      restNip98LastError
+    },
+    backendAuthenticated: restNip98Ready,
+    directNip98Ready: restNip98Ready
+  };
+}
+
+function resolveActiveSigner() {
+  if (authState.authMethod === 'nip46') {
+    return getNip46Signer();
+  }
+  return getNip07Signer();
 }
 
 function loadPersistedSession() {
@@ -128,19 +152,21 @@ async function configureBackendAuth(pubkey, { requireBackend = false } = {}) {
   const systemInfo = await api.getSystemInfo().catch(() => null);
   if (supportsDirectNip98Auth(systemInfo)) {
     installDirectNip98Provider(api);
-    updateAuthState({ backendAuthenticated: true, directNip98Ready: true, error: null });
+    updateAuthState({ ...compatibilityPatch({ restNip98Advertised: true, restNip98Ready: true }), error: null });
     return { method: 'nip98', pubkey };
   }
 
   api.setAuthProvider(null);
   if (browser) localStorage.removeItem('bahia_token');
 
-  updateAuthState({
-    backendAuthenticated: false,
-    directNip98Ready: false,
-    error: requireBackend ? 'Backend direct NIP-98 auth is not enabled' : null
-  });
-  if (requireBackend) throw new Error('Backend direct NIP-98 auth is not enabled');
+  const compatibilityError = 'Backend direct NIP-98 auth is not enabled';
+  updateAuthState(compatibilityPatch({
+    restNip98Advertised: false,
+    restNip98Ready: false,
+    restNip98LastError: compatibilityError
+  }));
+
+  if (requireBackend) throw new Error(compatibilityError);
   return null;
 }
 
@@ -178,7 +204,7 @@ export async function initializeAuth() {
               persisted.nip46 = connected;
             } catch (error) {
               console.warn('Failed to reconnect NIP-46 session:', error);
-              updateAuthState({ status: 'unauthenticated', backendAuthenticated: false, directNip98Ready: false, error: null });
+              updateAuthState({ status: 'unauthenticated', ...compatibilityPatch(), error: null });
               return;
             }
           }
@@ -192,8 +218,7 @@ export async function initializeAuth() {
             authMethod: persisted.authMethod,
             nip46: persisted.nip46,
             lastAuthenticatedAt: persisted.lastAuthenticatedAt,
-            backendAuthenticated: false,
-            directNip98Ready: false,
+            ...compatibilityPatch(),
             error: null
           });
           try {
@@ -205,7 +230,7 @@ export async function initializeAuth() {
         }
       }
 
-      updateAuthState({ status: 'unauthenticated', backendAuthenticated: false, directNip98Ready: false, error: null });
+      updateAuthState({ status: 'unauthenticated', ...compatibilityPatch(), error: null });
       if (!extensionAvailable && !nip46Available) {
         toast.warning('No Nostr signer detected. Install a NIP-07 extension or NIP-46 provider to sign in.');
       }
@@ -263,12 +288,10 @@ export async function login() {
       persistSession({ pubkey, relays, authMethod: 'nip07', nip46: null });
       try {
         await authenticateBackendInternal(pubkey);
-        toast.success('Signed in successfully');
       } catch (backendError) {
         console.warn('Backend authentication failed:', backendError.message);
-        updateAuthState({ backendAuthenticated: false, directNip98Ready: false, error: `Signed in, but backend auth failed: ${backendError.message}` });
-        toast.error(`Backend auth failed: ${backendError.message}. Some features may be unavailable.`);
       }
+      toast.success('Signed in successfully');
     } catch (error) {
       console.error('Login failed:', error);
       const persisted = loadPersistedSession();
@@ -324,12 +347,10 @@ export async function loginWithNostrConnect(uri) {
 
       try {
         await authenticateBackendInternal(connected.pubkey);
-        toast.success('Connected signer successfully');
       } catch (backendError) {
         console.warn('Backend authentication failed:', backendError.message);
-        updateAuthState({ backendAuthenticated: false, directNip98Ready: false, error: `Connected signer, but backend auth failed: ${backendError.message}` });
-        toast.error(`Backend auth failed: ${backendError.message}. Some features may be unavailable.`);
       }
+      toast.success('Connected signer successfully');
     } catch (error) {
       console.error('Nostr Connect login failed:', error);
       const persisted = loadPersistedSession();
@@ -391,18 +412,15 @@ export function logout() {
     extensionAvailable: authState.extensionAvailable,
     nip46Available: authState.nip46Available,
     capabilities: authState.extensionAvailable ? getNip07Capabilities() : authState.nip46Available ? getNip46Capabilities() : {},
-    backendAuthenticated: false,
-    directNip98Ready: false
+    ...compatibilityPatch()
   });
 }
 
 export async function signWithAuth(event) {
   if (authState.status !== 'authenticated') throw new Error('Not authenticated - please login first');
   try {
-    if (authState.authMethod === 'nip46') {
-      return await nip46SignEvent(event);
-    }
-    return await nip07SignEvent(event);
+    const signer = resolveActiveSigner();
+    return await signer.signEvent(event);
   } catch (error) {
     console.error('Failed to sign event:', error);
     throw new Error(`Event signing failed: ${error.message}`);
@@ -421,9 +439,8 @@ export async function signHttpRequest({ method = 'GET', url }) {
     tags: [['u', absoluteHTTPURL(url)], ['method', method.toUpperCase()]],
     content: ''
   };
-  const signedEvent = authState.authMethod === 'nip46'
-    ? await nip46SignEvent(unsignedEvent)
-    : await nip07SignEvent(unsignedEvent);
+  const signer = resolveActiveSigner();
+  const signedEvent = await signer.signEvent(unsignedEvent);
   return `Nostr ${base64Encode(JSON.stringify(signedEvent))}`;
 }
 
@@ -439,7 +456,11 @@ export async function authenticateBackend() {
     return await configureBackendAuth(authState.pubkey, { requireBackend: true });
   } catch (error) {
     console.error('Backend authentication failed:', error);
-    updateAuthState({ backendAuthenticated: false, directNip98Ready: false, error: error.message });
+    updateAuthState(compatibilityPatch({
+      restNip98Advertised: false,
+      restNip98Ready: false,
+      restNip98LastError: error.message
+    }));
     throw error;
   }
 }

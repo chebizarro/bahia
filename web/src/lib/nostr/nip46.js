@@ -168,13 +168,21 @@ export async function disconnectNip46() {
 }
 
 export async function signEvent(event) {
+  const signer = getNip46Signer();
+  if (!event || typeof event !== 'object') {
+    throw new Error('Invalid event object');
+  }
+  return signer.signEvent(event);
+}
+
+/**
+ * Resolve a signer-shaped NIP-46 contract
+ * @returns {{getPublicKey: Function, signEvent: Function, getRelays: Function, disconnect: Function}}
+ */
+export function getNip46Signer() {
   const { available, provider, reason } = detectNip46();
   if (!available) {
     throw new Error(`NIP-46 provider not available: ${reason}`);
-  }
-
-  if (!event || typeof event !== 'object') {
-    throw new Error('Invalid event object');
   }
 
   const signer = getProviderSigner(provider);
@@ -182,5 +190,21 @@ export async function signEvent(event) {
     throw new Error('NIP-46 signer API is unavailable');
   }
 
-  return signer.signEvent(event);
+  return {
+    getPublicKey: async () => {
+      if (typeof provider.getPublicKey === 'function') return provider.getPublicKey();
+      if (typeof signer.getPublicKey === 'function') return signer.getPublicKey();
+      throw new Error('NIP-46 signer getPublicKey() is unavailable');
+    },
+    signEvent: (event) => signer.signEvent(event),
+    getRelays: async () => {
+      if (typeof provider.getRelays === 'function') return (await provider.getRelays()) || {};
+      return {};
+    },
+    disconnect: async () => {
+      if (typeof provider.disconnect === 'function') {
+        await provider.disconnect();
+      }
+    }
+  };
 }
