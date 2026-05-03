@@ -230,15 +230,14 @@ Discovery/config contract:
 - Backend-only relay URLs for encrypted request/result handling are configured as `nostr.encrypted_request_relays` and are not exposed by `/api/v1/system/info`.
 - Browser-discoverable relay URLs for encrypted request/result handling are configured as `nostr.browser_encrypted_request_relays` and are exposed as `nostr.browser_encrypted_request_relays`.
 - `/api/v1/system/info.features.encrypted_nostr_requests=true` means the backend has a service key, at least one backend `nostr.encrypted_request_relays` subscription target, and at least one browser encrypted-request relay URL advertised.
-- Deprecated aliases are retained for compatibility: `private_relays`, `private_browser_relays`, and `private_nostr_transport`.
 - Browser clients must keep public `nostr.browser_relays` / `nostr.sidecar_url` separate from `nostr.browser_encrypted_request_relays`; sensitive payloads must never be published to the public sidecar relay.
 
 Event contract:
 
 - Request kind: `5980`; result kind: `7980`.
-- Request cleartext tags are limited to routing/correlation metadata such as `p=<service_pubkey>` and `private=bahia-private-v1` (legacy v1 routing marker retained for compatibility).
+- Request cleartext tags are limited to routing/correlation metadata such as `p=<service_pubkey>` and `encrypted=bahia-encrypted-v1`.
 - Request `content` is NIP-44 encrypted to the Bahia service pubkey and contains `{version, operation, requester_pubkey, payload}`.
-- Result tags include `e=<request_event_id>` with reply marker, `p=<requester_pubkey>`, `private=bahia-private-v1`, and terminal `status`.
+- Result tags include `e=<request_event_id>` with reply marker, `p=<requester_pubkey>`, `encrypted=bahia-encrypted-v1`, and terminal `status`.
 - Result `content` is NIP-44 encrypted to the requester pubkey and contains `{version, request_event_id, status, payload?, error?}`.
 - Backend handlers reject unauthorized requesters before decrypting/dispatching domain operations, publish encrypted terminal errors for decrypt/validation failures, and deduplicate by event id.
 

@@ -210,8 +210,8 @@ soul_factory:
   relays:
     - wss://relay.sharegap.net
     - wss://armada.sharegap.net
-  private_relays:
-    - wss://private.relay.example.com
+  additional_relays:
+    - wss://encrypted.relay.example.com
   signet_bunker_uri: bunker://...
   blossom_url: https://blossom.example.com
   qdrant_url: http://localhost:6333

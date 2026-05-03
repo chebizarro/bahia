@@ -119,8 +119,7 @@ Important signer constraints:
 Compatibility notes for renamed keys:
 
 - Canonical names: `nostr.encrypted_request_relays`, `nostr.browser_encrypted_request_relays`, `features.encrypted_nostr_requests`.
-- Deprecated aliases still accepted/advertised for mixed-version operator rollouts: `private_relays`, `private_browser_relays`, `private_nostr_transport`.
-- Wire marker `bahia-private-v1` remains unchanged as a legacy v1 routing marker.
+- Wire marker for encrypted request/result routing is `encrypted=bahia-encrypted-v1`.
 
 ### Real-Time Events Not Updating
 
