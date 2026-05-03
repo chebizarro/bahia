@@ -1,50 +1,47 @@
 # Adoption and Direct Runtime Production Rollout Runbook
 
-> **Deprecated legacy runbook**
->
-> This runbook describes rollout of the legacy privileged HTTP/NIP-98 operator surface.
-> It remains as a compatibility/reference artifact while Bahia moves adoption/import operator workflows to a signer-first model.
-> Track the replacement work under `bahia-sqfx` and use `docs/adoption-signer-first-operator-checklist.md` as the draft replacement checklist.
+Scope: production/staging rollout of signer-first adoption/import and direct-runtime operator workflows.
+Normative gate: [`adoption-live-network-verification.md`](adoption-live-network-verification.md)
+Execution checklist: [`adoption-signer-first-operator-checklist.md`](adoption-signer-first-operator-checklist.md)
 
-This runbook covers the operator-only adoption/import and direct-runtime feature set for the deprecated HTTP/NIP-98 operator surface. The live-network verification matrix and final production gate live in [`adoption-live-network-verification.md`](adoption-live-network-verification.md).
+This runbook now assumes signer-first operator execution over Nostr control-plane requests.
+Legacy privileged HTTP/NIP-98 paths remain compatibility-only and secondary.
 
 ## Safety defaults
 
 - Adoption and direct runtime actions are disabled unless explicitly enabled.
-- Both features require API auth plus an operator allowlist; when API auth is enabled, Bahia accepts only NIP-98 `Authorization: Nostr <base64event>` headers and rejects Bearer tokens.
-- Prefer server-managed `runtime.endpoints.<ref>` aliases. Raw `docker_host` request payloads are legacy/dev compatibility only.
+- Signer-first operator execution is authorized by operator pubkeys and signed event verification.
+- Prefer server-managed `runtime.endpoints.<ref>` aliases. Raw `docker_host` request payloads are compatibility/break-glass only.
+- CLI defaults to signer-first operator transport for `bahia adopt ...` and `bahia services actions ...`.
+- HTTP fallback is explicit only (`--http-fallback` or `BAHIA_OPERATOR_HTTP_FALLBACK=true`) and is safe only before any relay accepts the signed request.
 - Scan and import responses redact sensitive environment variables and labels. Sensitive environment values are imported through Bahia secrets when secret storage/encryption is configured.
 - Compose-origin containers are direct-Docker takeover candidates; enable takeover only after operators accept that Bahia, not Compose, will drive restart/deploy/stop actions.
 
 ## Enablement checklist
 
-1. Enable NIP-98-only API auth:
-
-   ```yaml
-   auth:
-     enabled: true
-   ```
-
-   Protected REST, MCP, and metrics requests must be signed per request with NIP-98. Do not configure or distribute JWT/Bearer credentials; `Authorization: Bearer ...` is an expected `401` negative test.
-
-2. Configure operator allowlists for adoption and direct runtime actions:
+1. Enable signer-first operator features and allowlists:
 
    ```yaml
    adoption:
      enabled: true
      allow_raw_docker_hosts: false
      allow_compose_takeover: false
-     allowed_subjects: []
      allowed_pubkeys: ["<operator-hex-pubkey>"]
-     allowed_emails: []
 
    direct_runtime_actions:
      enabled: true
-     allowed_subjects: []
      allowed_pubkeys: ["<operator-hex-pubkey>"]
+
+   nostr:
+     authorized_pubkeys: ["<global-operator-hex-pubkey>"]
    ```
 
-3. Configure endpoint aliases; do not expose Docker credentials to clients:
+   Notes:
+   - `adoption.allowed_pubkeys` and `direct_runtime_actions.allowed_pubkeys` scope signer-first operator execution.
+   - `nostr.authorized_pubkeys` remains the global fallback for public operator request authorization.
+   - Subject/email operator allowlists are compatibility-only and do not authorize signer-first public events.
+
+2. Configure endpoint aliases; do not expose Docker credentials to clients:
 
    ```yaml
    runtime:
@@ -56,18 +53,22 @@ This runbook covers the operator-only adoption/import and direct-runtime feature
          client_key_file: /etc/bahia/docker/prod/key.pem
    ```
 
-4. Ensure ingress/proxies preserve the externally signed scheme, host, path, and query string; NIP-98 validation signs the final URL. Ensure `/metrics` is reachable by monitoring with fresh per-request NIP-98 headers when auth is enabled, and logs include `request_id`, `actor_subject`/`actor_pubkey`, `target_name`, `endpoint_ref`, result counts, and duration fields.
-5. Capture `/api/v1/system/info` as rollout evidence and verify current capability/topology flags for this release candidate:
-   - `features.direct_nostr_http_auth=true`
-   - when web/relay checks are in scope, sidecar/browser relay endpoints use explicit `/relay` pathing
-   - when private web flows are in scope, `nostr.private_browser_relays` is present and `features.private_nostr_transport=true`
+3. Confirm signer-first discovery and topology evidence:
+   - `/api/v1/system/info` is captured for the release candidate
+   - relay URLs are available either via explicit `--relay`, `BAHIA_NOSTR_RELAYS`, or `/api/v1/system/info` discovery (`nostr.browser_relays`, `nostr.sidecar_url`)
+   - if sidecar/web validation is in scope, verify `/relay` pathing and reachability
+
+4. Prepare signer/operator execution inputs:
+   - signer key material is available via `--nsec`, `--privkey`, `BAHIA_NOSTR_NSEC`, or `BAHIA_NOSTR_PRIVATE_KEY`
+   - operators know whether compatibility HTTP fallback is approved for this rollout
+   - evidence capture includes request event IDs and correlated status/result event IDs
 
 ## Dry-run scan
 
-Run a scan before importing anything:
+Run a signer-first scan before importing anything:
 
 ```bash
-bahia adopt scan --target prod-docker
+bahia --relay wss://relay.example/relay adopt scan --target prod-docker
 ```
 
 Validate:
@@ -76,7 +77,8 @@ Validate:
 - every candidate has an image digest;
 - `redacted_environment_keys` / `redacted_label_keys` contain only key names, never values;
 - compose-origin warnings are understood before enabling `allow_compose_takeover`;
-- logs show the operator actor and endpoint alias, not raw secrets or certificate material.
+- logs show the operator actor pubkey and endpoint alias, not raw secrets or certificate material;
+- CLI status appears on `stderr` only, while final result output remains clean on `stdout`.
 
 ## Import rollout
 
@@ -84,35 +86,55 @@ Validate:
 2. Import by explicit selection before using `--all`:
 
    ```bash
-   bahia adopt import --target prod-docker --select prod-docker/<container-id>=<name>
+   bahia --relay wss://relay.example/relay adopt import --target prod-docker --select prod-docker/<container-id>=<name>
    ```
 
 3. Confirm:
 
    - service, environment, build, artifact, state, and runtime observation rows exist;
-   - `adoption.imported` events were emitted after persistence;
+   - request, status, and terminal result event IDs are captured;
    - metrics advanced: `bahia_adoption_imports_total`, success/failure counters, redaction counters;
-   - no raw sensitive env values are present in API responses or logs.
+   - no raw sensitive env values are present in results or logs.
 
-4. Only then import additional workloads or enable `import_all` for a bounded target.
+4. Only then import additional workloads or use `--all` for a bounded target.
 
 ## Direct runtime actions
 
-Direct runtime actions are intended only for imported direct-runtime workloads. Failed guardrails return conflict responses and should not be bypassed.
+Direct runtime actions are intended only for imported direct-runtime workloads. Failed guardrails must fail closed and should not be bypassed.
 
-Use dedicated action endpoints only after import validation:
+Use signer-first CLI actions after import validation:
 
-```http
-POST /api/v1/services/{serviceId}/environments/{envId}/restart
-POST /api/v1/services/{serviceId}/environments/{envId}/stop
-POST /api/v1/services/{serviceId}/environments/{envId}/deploy
+```bash
+bahia --relay wss://relay.example/relay services actions restart --service <service-id> --environment <env-id>
+bahia --relay wss://relay.example/relay services actions stop --service <service-id> --environment <env-id>
+bahia --relay wss://relay.example/relay services actions deploy --service <service-id> --environment <env-id> --artifact <artifact-id>
 ```
 
-Monitor `bahia_runtime_actions_total` and runtime action duration metrics. Logs should include `service_id`, `environment_id`, optional `artifact_id`, `target_name`, `endpoint_ref`, `result`, and `duration_ms`.
+Monitor:
+
+- correlated `6963` action status and `7962` terminal result events;
+- `bahia_runtime_actions_total` and duration metrics;
+- logs with `service_id`, `environment_id`, optional `artifact_id`, `target_name`, `endpoint_ref`, `result`, `request_id`, and request event id.
+
+## Compatibility-only fallback mode
+
+Fallback is not the primary operator path.
+Use it only when explicitly approved.
+
+- Enable with `--http-fallback` or `BAHIA_OPERATOR_HTTP_FALLBACK=true`.
+- Fallback is allowed only before any relay accepts the signer-first request.
+- `--raw-target` is compatibility-only and requires explicit fallback approval.
+- Do not use fallback to bypass signer-first terminal failures, authorization failures after acceptance, or runtime guardrails.
+
+Example compatibility-only raw-target invocation:
+
+```bash
+bahia --http-fallback adopt scan --raw-target breakglass=tcp://127.0.0.1:2375
+```
 
 ## Rate limits and telemetry
 
-Dedicated operational rate limits are applied separately from the generic write limiter:
+Dedicated operational rate limits remain separate from the generic write limiter:
 
 - adoption scan: 5 requests/minute/IP;
 - adoption import: 10 requests/minute/IP;
@@ -131,9 +153,9 @@ Prometheus-style metrics include:
 
 ## Rollback / disable
 
-If adoption causes unexpected behavior:
+If adoption or direct-runtime execution causes unexpected behavior:
 
-1. Disable privileged routes and restart Bahia:
+1. Disable the execution surface and restart Bahia:
 
    ```yaml
    adoption:
@@ -142,20 +164,13 @@ If adoption causes unexpected behavior:
      enabled: false
    ```
 
-2. Stop issuing direct runtime actions. For compose-origin workloads, return to the Compose project and run the normal Compose deployment/restart flow from the original project directory.
-3. If a workload should no longer be Bahia-managed, remove or quarantine the imported service/environment state through the normal registry/admin path after exporting audit records.
-4. Keep endpoint aliases configured until rollback verification is complete so observations can still be inspected if needed.
+2. Retry signer-first operator requests and verify they fail closed.
+3. Stop issuing direct runtime actions. For compose-origin workloads, return to the Compose project and run the normal Compose deployment/restart flow from the original project directory.
+4. If a workload should no longer be Bahia-managed, remove or quarantine the imported service/environment state through the normal registry/admin path after exporting audit records.
+5. Keep endpoint aliases configured until rollback verification is complete so observations can still be inspected if needed.
 
-## Topology/auth alignment checks (prep)
+## Compatibility notes
 
-Before operator LN-01..LN-11 execution, confirm docs and environment match shipped topology:
-
-- Sidecar-first relay topology uses explicit `/relay` mount path for browser and compose backend URLs.
-- Signer-first auth model is NIP-98-only for protected HTTP routes; Bearer remains a negative test (`401`).
-- Private web route transport discovery/capability is separate from public sidecar discovery (`nostr.private_browser_relays` + `features.private_nostr_transport`).
-
-## Caveats
-
-- Raw-host mode (`allow_raw_docker_hosts: true`) is a temporary compatibility mode for trusted development or break-glass use only.
-- Compose takeover changes the operational owner of the container. Do not enable it globally without staging validation.
-- Final live-network verification and production signoff remain in `bahia-y294`.
+- HTTP privileged adoption/import/direct-runtime endpoints are no longer the primary rollout gate.
+- Bearer rejection (`401`) and any legacy NIP-98 execution checks are compatibility evidence only.
+- If a release requirement still depends on the legacy HTTP operator path, record that dependency explicitly in the signoff evidence.

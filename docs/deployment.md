@@ -156,7 +156,7 @@ bahia adopt import --target prod-docker --all
 
 Raw Docker hosts are a compatibility path only. They require the server to set `adoption.allow_raw_docker_hosts: true` and the CLI to use `--raw-target alias=dockerHost`.
 
-For production rollout, follow the operator runbook in [`adoption-production-rollout.md`](adoption-production-rollout.md). In short: enable auth, configure operator allowlists, keep raw-host mode off, run a scan-only dry run, import a single low-risk workload first, then monitor adoption/runtime logs and `/metrics` before expanding.
+For production rollout, follow the signer-first operator runbook in [`adoption-production-rollout.md`](adoption-production-rollout.md). In short: configure signer/operator pubkeys and relay discovery, keep raw-host mode off, run a signer-first scan-only dry run, import a single low-risk workload first, then monitor correlated adoption/runtime events, logs, and `/metrics` before expanding.
 
 Dedicated operational limits protect runtime endpoints from expensive control-plane bursts:
 

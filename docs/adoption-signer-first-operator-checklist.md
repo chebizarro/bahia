@@ -1,44 +1,26 @@
-# Adoption / Import Signer-First Operator Checklist (Draft)
+# Adoption / Import Signer-First Operator Checklist and Evidence Template
 
-Status: **Draft replacement checklist**  
+Status: **Primary signer-first execution checklist**
 Epic: `bahia-sqfx`  
-Drafting task: `bahia-sqfx.1`  
-Execution successor to legacy signoff: `bahia-sqfx.5`
+Verification/signoff execution: `bahia-sqfx.5`
 
-This document is the draft replacement for the deprecated HTTP/NIP-98 adoption/import operator checklist.
-It defines the **target-state signer-first operator verification flow** for adoption/import and direct-runtime actions.
+This document is the operator run sheet and evidence template for staged/live signer-first rollout verification of adoption/import and direct-runtime actions.
 
-## Important current-state note
-
-**Do not execute this checklist as a production gate yet.**
-
-As of this draft:
-- the legacy HTTP/NIP-98 operator checklist has been deprecated;
-- the signer-first operator rollout gate is **not yet fully implemented**;
-- signer-first adoption/import/direct-runtime execution is being tracked by:
-  - `bahia-sqfx.2` — signer-first operator transport
-  - `bahia-sqfx.3` — signer-first CLI/operator workflow
-  - `bahia-sqfx.4` — final signer-first verification matrix/runbook
-  - `bahia-sqfx.5` — staged/live signer-first signoff execution
-
-Use this document to shape implementation and future staged/live evidence capture.
+It is now the primary execution checklist for this feature set.
+Legacy HTTP/NIP-98 operator verification remains compatibility-only and secondary.
 
 ## Scope
 
-This checklist assumes operator workflows no longer treat privileged HTTP routes as the primary control surface.
-Instead, operator actions are expected to run through signer-first control-plane requests over Nostr event flows, with operator authorization based on pubkey policy and event verification.
-
-In scope:
-- adoption scan/import operator requests
-- direct-runtime lifecycle operator requests
-- signer-first request publication and result/status correlation
+Primary control surface under test:
+- signer-first adoption scan/import over public Nostr control-plane requests
+- signer-first direct-runtime `deploy` / `restart` / `stop`
 - operator pubkey authorization
-- managed runtime endpoint governance
-- redaction, rollback, concurrency, observability, and rollback/disable checks
+- status/result correlation via relay subscriptions
+- managed endpoint governance, redaction, rollback, concurrency, observability, and disable/rollback checks
 
-Out of scope for this draft:
-- legacy HTTP/NIP-98 privileged route validation as the primary gate
-- treating `Authorization: Nostr ...` rollout checks as the canonical operator signoff surface
+Secondary / compatibility-only:
+- legacy privileged HTTP/NIP-98 operator endpoints
+- raw Docker host request mode behind explicit break-glass/fallback behavior
 
 ## Operator instructions
 
@@ -59,8 +41,9 @@ Out of scope for this draft:
 | --- | --- |
 | Release commit SHA | `<fill>` |
 | Target environment | `<fill>` |
+| Bahia API base URL | `<fill>` |
 | Control-plane relay URL(s) under test | `<fill>` |
-| Signer mode under test | `NIP-07` / `NIP-46` / `local keyer` / `<fill>` |
+| Signer mode under test | `local keyer` / `NIP-46` / `<fill>` |
 | Operator pubkey(s) | `<fill redacted if needed>` |
 | Execution start (UTC) | `<fill>` |
 | Execution end (UTC) | `<fill>` |
@@ -70,16 +53,17 @@ Out of scope for this draft:
 | Managed endpoint refs under test | `<fill>` |
 | Compose takeover policy for this environment | `disabled` / `enabled for named services only` / `not applicable` |
 | `/api/v1/system/info` capability evidence | `<fill path + timestamp>` |
-| Relay `/relay` reachability evidence | `<fill path + timestamp>` |
-| Signer capability evidence (`signEvent`, correlation-capable request flow, any required crypto capability) | `<fill>` |
+| Relay `/relay` reachability evidence | `<fill path + timestamp or N/A>` |
+| Signer capability evidence (`signEvent`, request/result correlation path) | `<fill>` |
+| Compatibility HTTP fallback approved? | `yes` / `no` |
 
-## Target-state prerequisites
+## Environment prerequisites
 
-Check each box before signer-first LN rows begin.
+Check each box before SF-01 starts.
 
 - [ ] Release commit is deployed to staging/live-like environment.
 - [ ] Signer-first operator transport for adoption/import/direct-runtime is enabled.
-- [ ] Operator signer is available and can publish the required request events.
+- [ ] Operator signer is available and can publish signed request events.
 - [ ] Operator pubkeys are allowlisted for signer-first adoption/import/direct-runtime actions.
 - [ ] At least two `runtime.endpoints.<ref>` aliases are configured.
 - [ ] At least one endpoint uses remote Docker TLS/mTLS.
@@ -91,35 +75,52 @@ Check each box before signer-first LN rows begin.
 
 ## Evidence bundle requirements
 
+Collect these artifacts as files or links under the evidence bundle location.
+
 - [ ] Release manifest / deployment record
 - [ ] Redacted staging config excerpt
 - [ ] Signer/operator setup notes (no secrets)
-- [ ] Event publication transcript or CLI transcript
+- [ ] CLI transcript showing signer-first request publication and terminal result handling
 - [ ] Request event IDs and correlated status/result event IDs
 - [ ] `/api/v1/system/info` capture
 - [ ] Relay `/relay` reachability capture when sidecar validation is in scope
-- [ ] Relevant logs with request IDs / event IDs
+- [ ] Relevant logs with request IDs / event IDs / actor pubkey
 - [ ] Metrics snapshots
 - [ ] Database row IDs / imported entity references
 - [ ] Follow-up issue IDs for failures/blockers
 - [ ] Final approver signoff note
 
-## Draft execution template
+## Automated gate confirmation
+
+Record release-commit results before manual SF rows begin.
+
+| Check | Command | Result (`PASS`/`FAIL`) | Evidence |
+| --- | --- | --- | --- |
+| Config and operator allowlist safety | `go test ./internal/config` | `<fill>` | `<fill>` |
+| Signer-first control-plane operator transport | `go test ./internal/controlplane` | `<fill>` | `<fill>` |
+| Managed endpoint governance and redaction | `go test ./internal/service -run 'TestAdoptionService.*Endpoint|TestAdoptionServiceRejectsRaw|TestAdoptionService.*Sensitive|Redacts' && go test ./internal/api/handlers -run Adoption` | `<fill>` | `<fill>` |
+| Transactional import and idempotency | `go test ./internal/service -run 'TestAdoptionServiceImportTransactional|TestAdoptionServiceImportRetries|TestAdoptionServiceImportSeeds'` | `<fill>` | `<fill>` |
+| Direct-runtime guardrails | `go test ./internal/service -run RuntimeLifecycle && go test ./internal/api/handlers -run RuntimeLifecycle` | `<fill>` | `<fill>` |
+| Signer-first operator client contract | `go test ./pkg/client -run 'Operator|SystemInfo|Adoption|RuntimeAction'` | `<fill>` | `<fill>` |
+| Signer-first CLI workflow | `go test ./cmd/cli -run 'Operator|Adoption'` | `<fill>` | `<fill>` |
+| Full Go regression | `go test ./...` | `<fill>` | `<fill>` |
+
+## Manual execution template
+
+Use one section per SF row. Fill every field.
 
 ### SF-01 — Signer/operator authorization
 
-**Goal**: prove signer-first operator requests enforce operator pubkey authorization and reject invalid or unauthorized requests.
-
 - Status: `PASS` / `FAIL` / `BLOCKED` / `N/A`
-- Commands / actions executed:
+- Commands executed:
   ```text
   <fill>
   ```
-- Expected result:
-  - unsigned / malformed request is rejected
+- Checks:
+  - malformed or unsigned request is rejected
   - valid signed non-operator request is rejected
-  - valid signed operator request is accepted into the configured flow
-  - result/status correlation is tied to the originating request event
+  - valid signed operator request is accepted
+  - status/result events correlate to the originating request event id and operator pubkey
 - Actual result: `<fill>`
 - Evidence paths: `<fill>`
 - Follow-up issue(s): `<fill or none>`
@@ -128,103 +129,156 @@ Check each box before signer-first LN rows begin.
 ### SF-02 — Relay routing and result/status correlation
 
 - Status: `PASS` / `FAIL` / `BLOCKED` / `N/A`
+- Commands executed:
+  ```text
+  <fill>
+  ```
 - Checks:
-  - operator request reaches the intended relay path/topology
+  - signer-first request reaches the intended relay path/topology
   - status/result events correlate to the request event id
   - duplicate or unrelated events are ignored safely
   - operator sees terminal success/failure without HTTP polling assumptions
-- Evidence: `<fill>`
+- Evidence paths: `<fill>`
 - Notes: `<fill>`
 
 ### SF-03 — Multi-host managed endpoint scan
 
 - Status: `PASS` / `FAIL` / `BLOCKED` / `N/A`
+- Commands executed:
+  ```text
+  bahia adopt scan --target <host-a> --target <host-b>
+  ```
 - Checks:
-  - signer-first operator scan can target at least two managed endpoint refs
-  - responses and correlated results use endpoint refs only
+  - scan can target at least two managed endpoint refs
+  - request/result surfaces use endpoint refs only
   - no raw Docker host or cert material leaks into operator-visible surfaces
-- Evidence: `<fill>`
+- Evidence paths: `<fill>`
 - Notes: `<fill>`
 
-### SF-04 — Raw-host rejection
+### SF-04 — Raw-host rejection / compatibility boundary
 
 - Status: `PASS` / `FAIL` / `BLOCKED` / `N/A`
+- Commands executed:
+  ```text
+  bahia adopt scan --raw-target breakglass=tcp://127.0.0.1:2375
+  ```
 - Checks:
-  - raw-host scan/import requests are rejected when disabled
-  - no runtime call is made
-- Evidence: `<fill>`
+  - signer-first path rejects raw-host usage
+  - compatibility HTTP fallback requires explicit `--http-fallback`
+  - no unmanaged runtime call occurs when raw-host mode is disabled
+- Evidence paths: `<fill>`
 - Notes: `<fill>`
 
 ### SF-05 — Redaction / secret import
 
 - Status: `PASS` / `FAIL` / `BLOCKED` / `N/A`
+- Commands executed:
+  ```text
+  <fill>
+  ```
 - Checks:
   - scan/import responses expose only safe values and redacted key names
   - imported sensitive env exists only in Bahia secrets
   - deploy merges secrets correctly
-- Evidence: `<fill>`
+- Evidence paths: `<fill>`
 - Notes: `<fill>`
 
 ### SF-06 — Transaction rollback on controlled failure
 
 - Status: `PASS` / `FAIL` / `BLOCKED` / `N/A`
+- Commands executed:
+  ```text
+  <fill>
+  ```
 - Checks:
   - failed import reports failure through signer-first result flow
   - no partial service/environment/build/artifact/state/observation rows remain
-- Evidence: `<fill>`
+- Evidence paths: `<fill>`
 - Notes: `<fill>`
 
 ### SF-07 — Concurrent duplicate import
 
 - Status: `PASS` / `FAIL` / `BLOCKED` / `N/A`
+- Commands executed:
+  ```text
+  <fill two concurrent invocations>
+  ```
 - Checks:
   - concurrent signer-first imports converge to one canonical identity set
   - no duplicate service/build/artifact identities remain
-- Evidence: `<fill>`
+- Evidence paths: `<fill>`
 - Notes: `<fill>`
 
 ### SF-08 — Direct-runtime guardrails
 
 - Status: `PASS` / `FAIL` / `BLOCKED` / `N/A`
+- Commands executed:
+  ```text
+  bahia services actions restart --service <service-id> --environment <env-id>
+  bahia services actions stop --service <service-id> --environment <env-id>
+  bahia services actions deploy --service <service-id> --environment <env-id> [--artifact <artifact-id>]
+  ```
 - Checks:
   - adopted workload action succeeds
   - non-adopted or mismatched-host actions fail closed
   - failed runtime actions do not mutate desired state first
-- Evidence: `<fill>`
+- Evidence paths: `<fill>`
 - Notes: `<fill>`
 
 ### SF-09 — Compose takeover decision
 
 - Status: `PASS` / `FAIL` / `BLOCKED` / `N/A`
+- Decision: `disabled` / `approved for named services only` / `not applicable`
+- Commands executed:
+  ```text
+  <fill>
+  ```
 - Checks:
   - takeover-disabled scan marks compose candidates non-adoptable
   - if enabled, operator explicitly signs off and restart/deploy semantics are accepted
+- Evidence paths: `<fill>`
 - Approver: `<fill>`
-- Evidence: `<fill>`
 - Notes: `<fill>`
 
 ### SF-10 — Observability / audit
 
 - Status: `PASS` / `FAIL` / `BLOCKED` / `N/A`
+- Commands / dashboards inspected:
+  ```text
+  <fill>
+  ```
 - Checks:
   - typed adoption/runtime events publish after persistence
-  - logs include request/event IDs, actor pubkey (or mapped operator identity), endpoint ref, result
+  - logs include request/event IDs, actor pubkey, endpoint ref, result
   - no secret leakage in logs/metrics/events
   - operators can follow status/result progress without polling
-- Evidence: `<fill>`
+- Evidence paths: `<fill>`
 - Notes: `<fill>`
 
 ### SF-11 — Rollback / disable
 
 - Status: `PASS` / `FAIL` / `BLOCKED` / `N/A`
+- Commands executed:
+  ```text
+  <fill>
+  ```
 - Checks:
   - disabling signer-first adoption/direct-runtime paths closes the execution surface
   - existing imported state remains inspectable
   - original workload owner can resume control
-- Evidence: `<fill>`
+- Evidence paths: `<fill>`
 - Notes: `<fill>`
+
+## Secondary compatibility-only checks
+
+Run only if the release owner explicitly requires legacy HTTP compatibility evidence.
+These checks are not the primary production gate.
+
+- HTTP privileged endpoints still reject `Authorization: Bearer ...` with `401` when auth is enabled.
+- Any legacy NIP-98 operator flow under test is documented as compatibility-only.
+- Compatibility failures do not override signer-first production signoff unless a release requirement explicitly depends on them.
 
 ## Production readiness statement
 
-This draft becomes the primary production signoff checklist only after the signer-first operator path exists and `bahia-sqfx.2`, `bahia-sqfx.3`, and `bahia-sqfx.4` are complete.
-Until then, this document is a planning and implementation target, not an executable signoff artifact.
+Production readiness for adoption/import/direct-runtime now depends on signer-first operator verification.
+Do not use the legacy HTTP/NIP-98 checklist as the primary signoff surface.
