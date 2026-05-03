@@ -2,9 +2,11 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/signal"
 	"regexp"
 	"strings"
 	"text/tabwriter"
@@ -17,14 +19,25 @@ import (
 )
 
 var (
-	serverURL       string
-	outputFormat    string
-	apiClient       *client.Client
-	nostrNsec       string
-	nostrPrivateKey string
+	serverURL            string
+	outputFormat         string
+	apiClient            *client.Client
+	nostrNsec            string
+	nostrPrivateKey      string
+	operatorRelays       []string
+	operatorHTTPFallback bool
 )
 
 func main() {
+	rootCmd := newRootCommand()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+	if err := rootCmd.ExecuteContext(ctx); err != nil {
+		os.Exit(1)
+	}
+}
+
+func newRootCommand() *cobra.Command {
 	rootCmd := &cobra.Command{
 		Use:   "bahia",
 		Short: "Bahia Deployment Registry CLI",
@@ -37,8 +50,10 @@ func main() {
 
 	rootCmd.PersistentFlags().StringVar(&serverURL, "server", getEnvOrDefault("BAHIA_SERVER", "http://localhost:8080"), "Bahia server URL")
 	rootCmd.PersistentFlags().StringVarP(&outputFormat, "output", "o", "table", "Output format: table, json, yaml")
-	rootCmd.PersistentFlags().StringVar(&nostrNsec, "nsec", "", "Nostr secret key (nsec) for per-request NIP-98 auth")
-	rootCmd.PersistentFlags().StringVar(&nostrPrivateKey, "privkey", "", "Nostr private key hex for per-request NIP-98 auth")
+	rootCmd.PersistentFlags().StringVar(&nostrNsec, "nsec", "", "Nostr secret key (nsec) for NIP-98 auth and signer-first operator requests")
+	rootCmd.PersistentFlags().StringVar(&nostrPrivateKey, "privkey", "", "Nostr private key hex for NIP-98 auth and signer-first operator requests")
+	rootCmd.PersistentFlags().StringArrayVar(&operatorRelays, "relay", nil, "Nostr relay URL for signer-first operator requests (repeatable; env BAHIA_NOSTR_RELAYS)")
+	rootCmd.PersistentFlags().BoolVar(&operatorHTTPFallback, "http-fallback", getEnvBool("BAHIA_OPERATOR_HTTP_FALLBACK"), "Allow explicit HTTP compatibility fallback only before any relay accepts a signer-first operator request")
 
 	// Add all command groups
 	rootCmd.AddCommand(
@@ -56,9 +71,7 @@ func main() {
 		soulFactoryCommands(),
 	)
 
-	if err := rootCmd.Execute(); err != nil {
-		os.Exit(1)
-	}
+	return rootCmd
 }
 
 // --- Auth Commands ---
@@ -170,7 +183,9 @@ func serviceActionsCommands() *cobra.Command {
 			if artifactID != "" {
 				artifact = &artifactID
 			}
-			result, err := apiClient.DeployServiceRuntime(cmd.Context(), serviceID, envID, artifact)
+			result, err := runRuntimeActionNostrFirst(cmd, "deploy", serviceID, envID, artifact, func(ctx context.Context) (*client.RuntimeActionResult, error) {
+				return apiClient.DeployServiceRuntime(ctx, serviceID, envID, artifact)
+			})
 			if err != nil {
 				return err
 			}
@@ -190,7 +205,9 @@ func serviceActionsCommands() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			serviceID, _ := cmd.Flags().GetString("service")
 			envID, _ := cmd.Flags().GetString("environment")
-			result, err := apiClient.RestartServiceRuntime(cmd.Context(), serviceID, envID)
+			result, err := runRuntimeActionNostrFirst(cmd, "restart", serviceID, envID, nil, func(ctx context.Context) (*client.RuntimeActionResult, error) {
+				return apiClient.RestartServiceRuntime(ctx, serviceID, envID)
+			})
 			if err != nil {
 				return err
 			}
@@ -209,7 +226,9 @@ func serviceActionsCommands() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			serviceID, _ := cmd.Flags().GetString("service")
 			envID, _ := cmd.Flags().GetString("environment")
-			result, err := apiClient.StopServiceRuntime(cmd.Context(), serviceID, envID)
+			result, err := runRuntimeActionNostrFirst(cmd, "stop", serviceID, envID, nil, func(ctx context.Context) (*client.RuntimeActionResult, error) {
+				return apiClient.StopServiceRuntime(ctx, serviceID, envID)
+			})
 			if err != nil {
 				return err
 			}
@@ -404,7 +423,9 @@ func adoptCommands() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			previews, err := apiClient.ScanAdoption(cmd.Context(), client.AdoptionScanRequest{Targets: targets})
+			previews, err := runAdoptionScanNostrFirst(cmd, client.AdoptionScanRequest{Targets: targets}, len(scanRawTargets) > 0, func(ctx context.Context) ([]client.AdoptionPreview, error) {
+				return apiClient.ScanAdoption(ctx, client.AdoptionScanRequest{Targets: targets})
+			})
 			if err != nil {
 				return err
 			}
@@ -441,7 +462,10 @@ func adoptCommands() *cobra.Command {
 			if !importAll && len(selections) == 0 {
 				return fmt.Errorf("specify --all or at least one --select alias/containerID")
 			}
-			results, err := apiClient.ImportAdoption(cmd.Context(), client.AdoptionImportRequest{Targets: targets, Selections: selections, ImportAll: importAll})
+			req := client.AdoptionImportRequest{Targets: targets, Selections: selections, ImportAll: importAll}
+			results, err := runAdoptionImportNostrFirst(cmd, req, len(importRawTargets) > 0, func(ctx context.Context) ([]client.AdoptionImportResult, error) {
+				return apiClient.ImportAdoption(ctx, req)
+			})
 			if err != nil {
 				return err
 			}

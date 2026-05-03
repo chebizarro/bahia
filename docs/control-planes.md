@@ -136,6 +136,14 @@ The Nostr reactor subscribes to signed request events and publishes status, term
 
 Operator workflows are public signed control-plane requests. They are not RPC and must be consumed as event streams: publish the request, subscribe for `e=<request_event_id>` replies, process `696x`/`697x` status events as progress, and treat the corresponding `796x`/`797x` result event as terminal. Clients should not poll or use timeout-based completion; use EOSE for historical catch-up and keep the subscription open for realtime replies.
 
+CLI behavior:
+
+- `bahia adopt scan|import` and `bahia services actions deploy|restart|stop` use signer-first Nostr requests by default.
+- Relay resolution is deterministic: repeatable `--relay` flags, then comma-separated `BAHIA_NOSTR_RELAYS`, then `/api/v1/system/info` discovery from `nostr.browser_relays` plus `nostr.sidecar_url`.
+- Live status chatter is written to stderr only in table mode; JSON/YAML stdout remains reserved for the final result payload.
+- `--http-fallback` (or `BAHIA_OPERATOR_HTTP_FALLBACK=true`) is explicit compatibility mode and is only safe before any relay accepts the signed request, such as signer/relay discovery failure or publish with zero accepted relays.
+- `--raw-target` is compatibility-only. It skips the public signer-first adoption path and requires explicit `--http-fallback`; use `--target` endpoint refs for the signer-first path.
+
 Authorization uses event pubkeys only:
 
 - `nostr.authorized_pubkeys` is the global fallback for all public operator requests.
