@@ -9,6 +9,11 @@
 Issue lineage: superseded by `bahia-sqfx.5`
 Purpose: compatibility-only reference checklist for the deprecated HTTP/NIP-98 operator surface.
 
+Terminology compatibility note:
+- Canonical names: `nostr.encrypted_request_relays`, `nostr.browser_encrypted_request_relays`, `features.encrypted_nostr_requests`.
+- Deprecated aliases in mixed-version evidence: `private_relays`, `private_browser_relays`, `private_nostr_transport`.
+- Wire marker `bahia-private-v1` remains a legacy v1 routing marker.
+
 Use this document **while executing** the rollout signoff. It is intentionally procedural. The verification matrix in [`adoption-live-network-verification.md`](adoption-live-network-verification.md) remains the normative gate definition; this checklist turns that matrix into an operator run sheet.
 
 ## Operator instructions
@@ -40,7 +45,7 @@ Use this document **while executing** the rollout signoff. It is intentionally p
 | Compose takeover policy for this environment | `disabled` / `enabled for named services only` / `not applicable` |
 | `/api/v1/system/info` evidence captured | `<fill path + timestamp>` |
 | Relay sidecar `/relay` check (if applicable) | `<fill pass/fail + evidence>` |
-| Private transport evidence (if private web flows in scope) | `<fill private_browser_relays + feature flag evidence or N/A>` |
+| Encrypted request/result evidence (if encrypted web flows in scope) | `<fill browser_encrypted_request_relays + feature flag evidence or N/A>` |
 
 ## Environment prerequisites
 
@@ -57,7 +62,7 @@ Check each box before LN-01 starts.
 - [ ] Monitoring can reach `/metrics` with fresh per-request NIP-98 headers when API auth is enabled.
 - [ ] `/api/v1/system/info` confirms `features.direct_nostr_http_auth=true`.
 - [ ] If sidecar/web verification is in scope, `/relay` is reachable and aligned with the configured sidecar URL/path.
-- [ ] If private web flows are in scope, `/api/v1/system/info` exposes `nostr.private_browser_relays` and `features.private_nostr_transport=true`.
+- [ ] If encrypted web flows are in scope, `/api/v1/system/info` exposes `nostr.browser_encrypted_request_relays` and `features.encrypted_nostr_requests=true`.
 - [ ] A non-critical candidate workload is available for import.
 - [ ] Rollback owner/procedure for the candidate workload is confirmed.
 
@@ -71,7 +76,7 @@ Collect these artifacts as files or links under the evidence bundle location.
 - [ ] API request/response captures with secrets redacted
 - [ ] `/api/v1/system/info` capture showing auth/topology capability flags
 - [ ] Relay `/relay` reachability capture when web/sidecar validation is in scope
-- [ ] Private transport discovery capture (`nostr.private_browser_relays`, `features.private_nostr_transport`) when private web flows are in scope
+- [ ] Encrypted request/result discovery capture (`nostr.browser_encrypted_request_relays`, `features.encrypted_nostr_requests`) when encrypted web flows are in scope
 - [ ] Relevant log excerpts with request IDs
 - [ ] Metrics snapshots
 - [ ] Database row IDs / record references for imported entities

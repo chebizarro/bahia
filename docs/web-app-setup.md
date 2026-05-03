@@ -73,17 +73,17 @@ Signer-session auth and REST compatibility are tracked separately:
 
 ### REST Compatibility Surface
 
-Most realtime app state is sourced from the Nostr sidecar/control-plane subscriptions. REST compatibility remains a legacy fallback for HTTP CRUD/query operations that have not yet moved to signer-first transports. As of this migration stage, sensitive route families such as `/notifications` use the private encrypted route transport instead of REST compatibility.
+Most realtime app state is sourced from the Nostr sidecar/control-plane subscriptions. REST compatibility remains a legacy fallback for HTTP CRUD/query operations that have not yet moved to signer-first transports. As of this migration stage, sensitive route families such as `/notifications` use encrypted Nostr request/result flows instead of REST compatibility.
 
-### Private Encrypted Route Transport
+### Encrypted Nostr Request/Result Flows
 
-Sensitive route migrations use a separate signer-first private Nostr transport instead of the public relay sidecar. The backend advertises this only when operators configure backend `nostr.private_relays`, browser-facing `nostr.private_browser_relays`, and a service key; browser code reads `/api/v1/system/info.nostr.private_browser_relays` and publishes kind `5980` encrypted NIP-44 requests to those relays only. Results arrive as kind `7980` events tagged with the original request event id and encrypted back to the requester.
+Sensitive route migrations use a separate signer-first encrypted Nostr request/result flow instead of the public relay sidecar. The backend advertises this only when operators configure backend `nostr.encrypted_request_relays`, browser-facing `nostr.browser_encrypted_request_relays`, and a service key; browser code reads `/api/v1/system/info.nostr.browser_encrypted_request_relays` and publishes kind `5980` encrypted NIP-44 requests to those relay URLs only. Results arrive as kind `7980` events tagged with the original request event id and encrypted back to the requester.
 
 Important signer constraints:
 
 - NIP-07 must expose `window.nostr.nip44.encrypt` and `window.nostr.nip44.decrypt`.
-- NIP-46 works only if the provider exposes `provider.nip44.encrypt/decrypt`; otherwise private routes must remain blocked for that signer with the explicit provider blocker shown.
-- Public sidecar relays from `nostr.browser_relays` are not private relays. Do not copy notification, org, payment, service secret, stored run log, or artifact signature verification payloads into public read-model events.
+- NIP-46 works only if the provider exposes `provider.nip44.encrypt/decrypt`; otherwise encrypted request/result routes must remain blocked for that signer with the explicit provider blocker shown.
+- Public sidecar relays from `nostr.browser_relays` are not encrypted-request relay URLs. Do not copy notification, org, payment, service secret, stored run log, or artifact signature verification payloads into public read-model events.
 
 ## Troubleshooting
 
@@ -115,6 +115,12 @@ Important signer constraints:
 - Reload the page after installing the extension
 - Grant the app permission when prompted
 - Check browser console for `window.nostr` availability
+
+Compatibility notes for renamed keys:
+
+- Canonical names: `nostr.encrypted_request_relays`, `nostr.browser_encrypted_request_relays`, `features.encrypted_nostr_requests`.
+- Deprecated aliases still accepted/advertised for mixed-version operator rollouts: `private_relays`, `private_browser_relays`, `private_nostr_transport`.
+- Wire marker `bahia-private-v1` remains unchanged as a legacy v1 routing marker.
 
 ### Real-Time Events Not Updating
 

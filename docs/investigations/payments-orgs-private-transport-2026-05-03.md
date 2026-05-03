@@ -1,11 +1,11 @@
-# Payments and orgs private transport migration
+# Payments and orgs encrypted Nostr request/result migration
 
 Date: 2026-05-03
 Issue: `bahia-xfke`
 
 ## Summary
 
-`/payments` and `/orgs` no longer require REST compatibility auth. Both route families use the encrypted signer-first private transport (`kind:5980` request, `kind:7980` result) and keep payment history, organization membership, and invite data out of public sidecar projections.
+`/payments` and `/orgs` no longer require REST compatibility auth. Both route families use encrypted signer-first Nostr request/result events (`kind:5980` request, `kind:7980` result) and keep payment history, organization membership, and invite data out of public sidecar projections.
 
 ## Operations
 
@@ -23,9 +23,13 @@ Issue: `bahia-xfke`
 | orgs | `orgs.update_member_role` | `{org_id, pubkey, role}` | terminal status |
 | orgs | `orgs.remove_member` | `{org_id, pubkey}` | terminal status |
 
+Filename note: this document filename retains `private-transport` for historical continuity; terminology in-body uses the canonical encrypted request/result names.
+
 ## Guardrails
 
 - No org membership, invite, or payment data is published as public read-model sidecar events.
-- Browser route code uses `web/src/lib/stores/payments.svelte.js` and `web/src/lib/stores/orgs.svelte.js`, which call `requestPrivateResult()`.
+- Browser route code uses `web/src/lib/stores/payments.svelte.js` and `web/src/lib/stores/orgs.svelte.js`, which call encrypted request/result helpers.
 - Backend operation handlers live in `internal/controlplane/private_domain_handlers.go` and reuse existing repository/RBAC/payment service logic.
 - The `/payments` and `/orgs` compatibility gates were removed only after all route files under those prefixes stopped importing the REST API client.
+- Canonical operator-facing names are `nostr.encrypted_request_relays`, `nostr.browser_encrypted_request_relays`, and `features.encrypted_nostr_requests`; deprecated aliases `private_relays`, `private_browser_relays`, and `private_nostr_transport` remain compatibility references.
+- Wire marker `bahia-private-v1` remains unchanged as a legacy v1 routing marker.

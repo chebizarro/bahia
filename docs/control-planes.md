@@ -56,7 +56,7 @@ Browser and Bahia control-plane traffic should target the relay sidecar first.
 - Bahia backend connection: `nostr.sidecar.backend_url` when set, otherwise `nostr.sidecar.public_url`
 - Bahia-owned control-plane reactor/projector traffic uses only the sidecar backend URL in sidecar mode.
 - Upstream relays: configure `nostr.relays` for public interop/audit traffic. If `nostr.sidecar.mirror_external=true`, Bahia treats the sidecar as the upstream mirror boundary and does not also connect directly to those URLs.
-- Private and Loom relays remain explicitly configured for their own traffic and are not used for Bahia read-model publication.
+- Encrypted-request relay URLs and Loom relays remain explicitly configured for their own traffic and are not used for Bahia read-model publication.
 
 This avoids duplicate event loops: Bahia publishes canonical 696x/796x/3196x/read-model traffic to the sidecar pool only, while optional upstream mirroring is isolated behind the sidecar boundary.
 
@@ -71,14 +71,14 @@ The Nostr reactor subscribes to signed request events and publishes status, term
 | Service requests | 5961–5968 | Inbound service/environment operation requests |
 | LLM requests | 5971–5975 | Inbound LLM route/release/deploy/approval/rollback requests |
 | Adoption requests | 5978–5979 | Inbound adoption scan/import operator requests |
-| Private requests | 5980 | Browser → Bahia encrypted private-domain request |
+| Encrypted requests | 5980 | Browser → Bahia encrypted request-domain request |
 | Service/action status | 6961–6963 | Service deployment/action progress/status updates |
 | LLM status | 6973 | LLM deployment/rollback progress updates |
 | Adoption status | 6978 | Adoption scan/import progress updates |
 | Service results | 7961–7966 | Service terminal operation results |
 | LLM results | 7971–7973 | LLM route/release/deployment terminal results |
 | Adoption results | 7978–7979 | Adoption scan/import terminal results |
-| Private results | 7980 | Bahia → Browser encrypted private-domain result |
+| Encrypted results | 7980 | Bahia → Browser encrypted request-domain result |
 | Registry/read models | 31961–31965 | Replaceable browser/agent read models |
 
 ### Request Events (596x)
@@ -221,21 +221,22 @@ Rules:
 
 Progress is published as `6963 ActionStatus` with `status=processing`, `step=executing`, `action`, `service`, `environment`, and optional `artifact` tags. Success publishes `7962 ActionResult` with content `RuntimeActionResponse`, including the runtime observation when available. Failures publish `7962 ActionResult` with `status=failed`, `action`, resource tags, and error content.
 
-### Private Encrypted Transport (5980/7980)
+### Encrypted Request/Result Events (5980/7980)
 
-Sensitive browser route families and private-only route actions (notifications, orgs, payments, service secrets, stored deployment run logs, and artifact signature verification) use encrypted request/result events instead of public read models. These events are intentionally **not** accepted by the public relay sidecar policy and must be sent only to operator-configured private relays.
+Sensitive browser route families and encrypted request-domain actions (notifications, orgs, payments, service secrets, stored deployment run logs, and artifact signature verification) use encrypted request/result events instead of public read models. These events are intentionally **not** accepted by the public relay sidecar policy and must be sent only to operator-configured relay URLs for encrypted request/result traffic.
 
 Discovery/config contract:
 
-- Backend-only private relay URLs remain in `nostr.private_relays` and are not exposed by `/api/v1/system/info`.
-- Browser-discoverable private relay URLs must be configured separately as `nostr.private_browser_relays` and are exposed as `nostr.private_browser_relays` only when explicitly set.
-- `/api/v1/system/info.features.private_nostr_transport=true` means the backend has a service key, at least one backend `nostr.private_relays` subscription target, and at least one browser-private relay advertised.
-- Browser clients must keep public `nostr.browser_relays` / `nostr.sidecar_url` separate from `nostr.private_browser_relays`; sensitive payloads must never be published to the public sidecar relay.
+- Backend-only relay URLs for encrypted request/result handling are configured as `nostr.encrypted_request_relays` and are not exposed by `/api/v1/system/info`.
+- Browser-discoverable relay URLs for encrypted request/result handling are configured as `nostr.browser_encrypted_request_relays` and are exposed as `nostr.browser_encrypted_request_relays`.
+- `/api/v1/system/info.features.encrypted_nostr_requests=true` means the backend has a service key, at least one backend `nostr.encrypted_request_relays` subscription target, and at least one browser encrypted-request relay URL advertised.
+- Deprecated aliases are retained for compatibility: `private_relays`, `private_browser_relays`, and `private_nostr_transport`.
+- Browser clients must keep public `nostr.browser_relays` / `nostr.sidecar_url` separate from `nostr.browser_encrypted_request_relays`; sensitive payloads must never be published to the public sidecar relay.
 
 Event contract:
 
 - Request kind: `5980`; result kind: `7980`.
-- Request cleartext tags are limited to routing/correlation metadata such as `p=<service_pubkey>` and `private=bahia-private-v1`.
+- Request cleartext tags are limited to routing/correlation metadata such as `p=<service_pubkey>` and `private=bahia-private-v1` (legacy v1 routing marker retained for compatibility).
 - Request `content` is NIP-44 encrypted to the Bahia service pubkey and contains `{version, operation, requester_pubkey, payload}`.
 - Result tags include `e=<request_event_id>` with reply marker, `p=<requester_pubkey>`, `private=bahia-private-v1`, and terminal `status`.
 - Result `content` is NIP-44 encrypted to the requester pubkey and contains `{version, request_event_id, status, payload?, error?}`.
@@ -244,9 +245,9 @@ Event contract:
 Browser signer support:
 
 - NIP-07 is supported only when `window.nostr.nip44.encrypt/decrypt` are available.
-- NIP-46 can participate only if the provider explicitly exposes `provider.nip44.encrypt/decrypt`; NIP-46's internal encrypted RPC channel does not by itself give the web app NIP-44 conversation-key operations. If absent, private route migration is blocked for that signer mode and the UI/tests should surface that exact blocker.
+- NIP-46 can participate only if the provider explicitly exposes `provider.nip44.encrypt/decrypt`; NIP-46's internal encrypted RPC channel does not by itself give the web app NIP-44 conversation-key operations. If absent, encrypted request/result route migration is blocked for that signer mode and the UI/tests should surface that exact blocker.
 
-Notification private operations:
+Notification encrypted operations:
 
 | Operation | Payload | Result payload | Notes |
 |-----------|---------|----------------|-------|
@@ -254,11 +255,11 @@ Notification private operations:
 | `notifications.channels.get` | `{id}` | `{channel}` | Returns one sanitized channel or an encrypted terminal error. |
 | `notifications.channels.create` | channel fields | `{channel}` | Webhook secrets are accepted only as encrypted write payloads. |
 | `notifications.channels.update` | `{id, ...fields}` | `{channel}` | Omitted webhook secrets preserve the stored secret; returned channel is sanitized. |
-| `notifications.channels.delete` | `{id}` | `{status,id}` | Deletes the channel over private transport. |
+| `notifications.channels.delete` | `{id}` | `{status,id}` | Deletes the channel over encrypted request/result events. |
 | `notifications.channels.test` | `{id}` | `{status,id}` | Dispatches directly to the selected channel and returns terminal success/error. |
 | `notifications.logs.list` | `{limit?,channel_id?}` | `{logs}` | Delivery logs and payloads are returned only in encrypted result content. |
 
-Route-private operations:
+Encrypted route operations:
 
 | Operation | Payload | Result payload | Notes |
 |-----------|---------|----------------|-------|
@@ -267,12 +268,12 @@ Route-private operations:
 | `services.secrets.update` | `{service_id,secret_id,value,encryption_method?}` | `{secret,status}` | Re-encrypts the new value; result contains metadata only. |
 | `services.secrets.delete` | `{service_id,secret_id}` | `{status,secret_id}` | Validates the secret belongs to the service before deletion. |
 | `services.secrets.reveal` | `{service_id,secret_id}` | `{secret,value}` | Plaintext is returned only in the encrypted result for explicit reveal actions. |
-| `deployments.run_logs.get` | `{run_id,tail?,stream?}` | `{logs,stream}` | Stored stdout/stderr snapshots are private result content; public run projections carry metadata only. |
-| `artifacts.signatures.verify` | `{artifact_id}` | `{found,stored,verified,discovered,rejected,errors,signatures}` | Verification is triggered by private signed/encrypted action and stores discovered signature records. |
+| `deployments.run_logs.get` | `{run_id,tail?,stream?}` | `{logs,stream}` | Stored stdout/stderr snapshots are encrypted result content; public run projections carry metadata only. |
+| `artifacts.signatures.verify` | `{artifact_id}` | `{found,stored,verified,discovered,rejected,errors,signatures}` | Verification is triggered by encrypted signed requests and stores discovered signature records. |
 
 ### Correlation Tags
 
-Use tags for relay-side filtering and MCP follow-up subscriptions. Service flows use `service`, `environment`, `artifact`, `intent`, and `run`. LLM flows use `route`, `release`, `environment`, `intent`, and `run`. Status/result replies also include `e` with marker `reply`, `p` for the requester pubkey, plus `status` and `step` where applicable. Private result replies use the same `e`/`p` pattern but keep payloads encrypted. MCP async LLM tools return the request event id and the relevant request/status/result/read-model kind ids so clients can subscribe directly rather than polling.
+Use tags for relay-side filtering and MCP follow-up subscriptions. Service flows use `service`, `environment`, `artifact`, `intent`, and `run`. LLM flows use `route`, `release`, `environment`, `intent`, and `run`. Status/result replies also include `e` with marker `reply`, `p` for the requester pubkey, plus `status` and `step` where applicable. Encrypted result replies use the same `e`/`p` pattern but keep payloads encrypted. MCP async LLM tools return the request event id and the relevant request/status/result/read-model kind ids so clients can subscribe directly rather than polling.
 
 Clients should wait for EOSE on bootstrap queries, then keep subscriptions open for live updates. Deduplicate by event id; for replaceable events, latest `created_at` wins for `(kind, pubkey, d-tag)`. Deletions use tombstone content/tags (`deleted=true`), not Nostr delete events.
 
