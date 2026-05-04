@@ -1,0 +1,142 @@
+{
+  "feature_id": "SIGNER_FIRST_OPERATOR_ADOPTION_RUNTIME",
+  "title": "Signer-first adoption/import and direct-runtime operator flow",
+  "status": "fully_verified",
+  "source_evidence": [
+    "docs/control-planes.md",
+    "docs/adoption-production-rollout.md",
+    "internal/controlplane/operator_actions.go",
+    "internal/controlplane/reactor_operator_actions_test.go",
+    "internal/api/handlers/adoption_handlers_test.go",
+    "pkg/client/operator_nostr.go",
+    "pkg/client/operator_nostr_test.go",
+    "cmd/cli/operator_nostr.go",
+    "cmd/cli/operator_nostr_test.go",
+    "pstf/product_map.md"
+  ],
+  "actors": [
+    {
+      "name": "operator_signer",
+      "role": "signs public Nostr operator requests for adoption scan/import and direct runtime actions"
+    },
+    {
+      "name": "bahia_reactor",
+      "role": "authorizes operator pubkeys, validates request payloads, dispatches services, and publishes correlated status/result events"
+    },
+    {
+      "name": "operator_cli",
+      "role": "resolves signer and relay inputs, publishes signer-first requests by default, and uses HTTP fallback only before any relay accepts the request"
+    },
+    {
+      "name": "runtime_target",
+      "role": "server-managed runtime endpoint alias that scan/import/deploy/restart/stop operations act against"
+    }
+  ],
+  "description": "This slice covers the signer-first operator workflow for adoption scan/import and direct-runtime deploy/restart/stop. It includes public request event construction, scoped operator authorization, signer-first relay usage, validation that raw Docker coordinates do not ride the public event path, correlated status/result handling, CLI fallback rules, and sanitized DTO/result shaping.",
+  "in_scope": [
+    "Public request kinds `5978` and `5979` for adoption scan/import and `5963` for direct-runtime `deploy`, `restart`, and `stop`",
+    "Scoped operator authorization via `adoption.allowed_pubkeys`, `direct_runtime_actions.allowed_pubkeys`, and `nostr.authorized_pubkeys` fallback",
+    "CLI signer-first defaults and relay resolution precedence in `cmd/cli/operator_nostr.go`",
+    "Operator client subscribe-before-publish behavior, correlated status/result handling, and explicit pre-acceptance fallback boundary in `pkg/client/operator_nostr.go`",
+    "Sanitized adoption preview/import result payload shaping and direct-runtime result DTO shaping"
+  ],
+  "out_of_scope": [
+    "Legacy privileged HTTP/NIP-98 execution as a primary product path",
+    "Encrypted browser request/result flows for notifications, orgs, payments, secrets, or run logs",
+    "Public service/deployment CRUD flows outside operator adoption/runtime actions",
+    "Human staged/live signoff execution against production-like environments"
+  ],
+  "preconditions": [
+    "Signer-first operator features are enabled in Bahia config for the relevant flow",
+    "The operator has a signer private key and at least one relay URL via `--relay`, `BAHIA_NOSTR_RELAYS`, or `/api/v1/system/info` discovery",
+    "Requested targets use server-managed `runtime.endpoints.<ref>` aliases on the signer-first path",
+    "The operator pubkey is allowlisted for the requested scope or covered by the global operator fallback allowlist"
+  ],
+  "postconditions": [
+    "A valid operator request produces correlated status and terminal result events or a validated terminal failure",
+    "Adoption scan/import results stay sanitized and do not leak raw Docker host values or redacted secret values",
+    "HTTP fallback is used only before any relay accepts the signer-first request and never after terminal signer-first failure"
+  ],
+  "happy_paths": [
+    {
+      "id": "SFOAR-HP-001",
+      "title": "Signer-first adoption scan publishes a public request and returns a sanitized preview result",
+      "steps": [
+        "CLI/operator client resolves signer and relay inputs",
+        "Client subscribes to correlated reply kinds before publish",
+        "Client publishes a signed `5978` request with trimmed target metadata and JSON payload containing endpoint refs only",
+        "Reactor authorizes the requester, validates targets, dispatches the adoption scan service, publishes `6978` progress, and returns `7978` preview DTOs"
+      ]
+    },
+    {
+      "id": "SFOAR-HP-002",
+      "title": "Signer-first adoption import publishes a public request and returns partial or full import results",
+      "steps": [
+        "Client publishes a signed `5979` import request containing explicit selections or `import_all` when provided",
+        "Client publishes signed `5979` request",
+        "Reactor dispatches import, publishes `6978` progress, and returns `7979` import DTOs with per-container outcomes"
+      ]
+    },
+    {
+      "id": "SFOAR-HP-003",
+      "title": "Signer-first direct-runtime action publishes `5963` and returns a runtime action result",
+      "steps": [
+        "Client publishes signed `5963` content with `action`, `service_id`, `environment_id`, and optional `artifact_id` for deploy",
+        "Reactor authorizes and validates the request, emits `6963` processing status, executes the runtime lifecycle service, and returns `7962` with runtime observation data"
+      ]
+    }
+  ],
+  "failure_paths": [
+    {
+      "id": "SFOAR-FP-001",
+      "title": "Unauthorized operator request",
+      "behavior": "Requests from pubkeys outside the scoped or global allowlist fail closed and return a terminal failure result without invoking the underlying service"
+    },
+    {
+      "id": "SFOAR-FP-002",
+      "title": "Forbidden signer-first adoption target payload",
+      "behavior": "A signer-first adoption request containing `docker_host` fails validation before service execution instead of exposing raw Docker coordinates on the public event path"
+    },
+    {
+      "id": "SFOAR-FP-003",
+      "title": "Invalid direct-runtime artifact usage or unauthorized requester",
+      "behavior": "An `artifact_id` supplied for `restart` or `stop`, or a requester outside the direct-runtime allowlist, fails before runtime execution"
+    },
+    {
+      "id": "SFOAR-FP-004",
+      "title": "No relay accepted the signer-first request",
+      "behavior": "The operator client returns a pre-acceptance error that explicitly permits HTTP fallback if and only if fallback was requested"
+    },
+    {
+      "id": "SFOAR-FP-005",
+      "title": "Terminal signer-first failure after request acceptance",
+      "behavior": "Once any relay accepts the request, terminal result failure is surfaced to the operator and must not trigger HTTP fallback"
+    }
+  ],
+  "edge_cases": [
+    "Reply subscriptions must be opened before publish and deduplicate duplicate status/result events by event id",
+    "Operator reply handling must ignore invalid signatures, stale/future timestamps, uncorrelated `#e`/`#p` tags, and duplicate reply events",
+    "CLI status chatter must go to stderr only in table mode so stdout stays reserved for final structured results"
+  ],
+  "non_functional_requirements": [
+    "Public signer-first adoption requests must never carry raw Docker coordinates in event payloads",
+    "Sanitized scan/import DTOs must preserve redacted key names while withholding sensitive values and managed endpoint docker hosts",
+    "Request/result correlation must be explicit via request event id and requester pubkey tags",
+    "HTTP fallback must be explicit and bounded to pre-acceptance failures only"
+  ],
+  "dependencies": [
+    "Runtime endpoint alias configuration under `runtime.endpoints.<ref>`",
+    "Operator authorization config in `adoption.allowed_pubkeys`, `direct_runtime_actions.allowed_pubkeys`, and `nostr.authorized_pubkeys`",
+    "Public relay connectivity for publish/subscribe",
+    "Adoption service and runtime lifecycle service implementations behind the reactor interfaces"
+  ],
+  "ambiguities": [
+    {
+      "type": "release_gate",
+      "note": "The code and focused tests verify the signer-first operator path, but formal staged/live execution remains a separate operational signoff step rather than part of this slice's automated verification evidence."
+    }
+  ],
+  "human_decisions": [
+    "Should this operator slice require a browser/MCP-assisted rehearsal artifact as a release gate, or are backend/CLI tests plus the rollout runbook sufficient for PSTF verification?"
+  ]
+}

@@ -160,10 +160,10 @@ func TestOperatorHTTPFallbackOnlyForExplicitPreAcceptanceFailures(t *testing.T) 
 func TestRawTargetRequiresExplicitFallbackAndSkipsNostrWhenAllowed(t *testing.T) {
 	resetOperatorGlobals(t)
 	cmd := newOperatorFlagTestCommand(t)
-	req := client.AdoptionScanRequest{Targets: []client.AdoptionTarget{{Name: "local", DockerHost: "unix:///docker.sock"}}}
+	scanReq := client.AdoptionScanRequest{Targets: []client.AdoptionTarget{{Name: "local", DockerHost: "unix:///docker.sock"}}}
 
 	fallbackCalls := 0
-	_, err := runAdoptionScanNostrFirst(cmd, req, true, func(ctx context.Context) ([]client.AdoptionPreview, error) {
+	_, err := runAdoptionScanNostrFirst(cmd, scanReq, true, func(ctx context.Context) ([]client.AdoptionPreview, error) {
 		fallbackCalls++
 		return nil, nil
 	})
@@ -174,16 +174,36 @@ func TestRawTargetRequiresExplicitFallbackAndSkipsNostrWhenAllowed(t *testing.T)
 		t.Fatalf("fallback called without --http-fallback")
 	}
 
+	importReq := client.AdoptionImportRequest{Targets: []client.AdoptionTarget{{Name: "local", DockerHost: "unix:///docker.sock"}}, Selections: []client.AdoptionSelection{{TargetName: "local", ContainerID: "abc123"}}}
+	_, err = runAdoptionImportNostrFirst(cmd, importReq, true, func(ctx context.Context) ([]client.AdoptionImportResult, error) {
+		return nil, nil
+	})
+	if err == nil || !strings.Contains(err.Error(), "--raw-target") {
+		t.Fatalf("import error = %v, want raw-target fallback error", err)
+	}
+
 	operatorHTTPFallback = true
-	previews, err := runAdoptionScanNostrFirst(cmd, req, true, func(ctx context.Context) ([]client.AdoptionPreview, error) {
+	previews, err := runAdoptionScanNostrFirst(cmd, scanReq, true, func(ctx context.Context) ([]client.AdoptionPreview, error) {
 		fallbackCalls++
-		return []client.AdoptionPreview{{Target: req.Targets[0]}}, nil
+		return []client.AdoptionPreview{{Target: scanReq.Targets[0]}}, nil
 	})
 	if err != nil {
 		t.Fatalf("raw fallback error = %v", err)
 	}
 	if fallbackCalls != 1 || len(previews) != 1 {
 		t.Fatalf("fallbackCalls=%d previews=%#v", fallbackCalls, previews)
+	}
+
+	importFallbackCalls := 0
+	results, err := runAdoptionImportNostrFirst(cmd, importReq, true, func(ctx context.Context) ([]client.AdoptionImportResult, error) {
+		importFallbackCalls++
+		return []client.AdoptionImportResult{{TargetName: "local", ContainerID: "abc123", Status: "created"}}, nil
+	})
+	if err != nil {
+		t.Fatalf("raw import fallback error = %v", err)
+	}
+	if importFallbackCalls != 1 || len(results) != 1 {
+		t.Fatalf("importFallbackCalls=%d results=%#v", importFallbackCalls, results)
 	}
 }
 
