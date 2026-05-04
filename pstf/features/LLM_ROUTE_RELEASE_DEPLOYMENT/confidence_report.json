@@ -1,10 +1,10 @@
 {
   "feature_id": "LLM_ROUTE_RELEASE_DEPLOYMENT",
-  "status": "needs_more_tests",
+  "status": "ready_for_human_review",
   "threshold": 0.9,
-  "raw_confidence": 0.84,
-  "confidence": 0.84,
-  "threshold_met": false,
+  "raw_confidence": 0.93,
+  "confidence": 0.93,
+  "threshold_met": true,
   "weights_total": 1.0,
   "components": {
     "acceptance_criteria_coverage": {
@@ -13,7 +13,7 @@
       "weighted_score": 0.3,
       "evidence": [
         "All 9 approved acceptance criteria in `acceptance_criteria.json` have at least one linked test in `test_matrix.json`.",
-        "Rollback-specific criteria were explicitly deferred by HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-004 and are not part of the approved AC denominator."
+        "Rollback-specific criteria remain explicitly deferred by HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-004 and are not part of the approved denominator."
       ]
     },
     "test_pass_rate": {
@@ -22,16 +22,17 @@
       "weighted_score": 0.25,
       "evidence": [
         "All 19 tests in `test_matrix.json` are marked `pass`.",
-        "`verification_report.md` records passing targeted Go suites, passing browser unit suites, passing dedicated browser E2E coverage, and a passing production build."
+        "`verification_report.md` records passing targeted Go suites, passing browser unit suites, a passing dedicated `/llm` Playwright workflow, and a passing production build."
       ]
     },
     "code_coverage": {
-      "score": 0.0,
+      "score": 0.6,
       "weight": 0.15,
-      "weighted_score": 0.0,
+      "weighted_score": 0.09,
       "evidence": [
-        "No coverage artifact such as `coverage.out`, LCOV, or per-module coverage report was found in the repository for the touched modules.",
-        "Per prompt rules, missing coverage evidence scores 0.0 unless explicitly accepted by a human decision; no such exception exists here."
+        "Backend coverage artifact `pstf/features/LLM_ROUTE_RELEASE_DEPLOYMENT/coverage/go_coverage.out` exists, with `go_coverage_summary.txt` showing directly touched backend functions for `llm_command_publisher.go`, `server.go`, `pg_llm_deployment.go`, and `llm_provisioning_coordinator.go` covered in the 57.1%-100% range, including critical success/failure paths at 63.6%-100%.",
+        "Frontend coverage artifact `pstf/features/LLM_ROUTE_RELEASE_DEPLOYMENT/coverage/web/coverage-summary.json` exists and reports 89.84% statements across the extracted touched browser-logic modules `route-access.js`, `nav-model.js`, and `page-model.js`.",
+        "This score is intentionally conservative at 0.6 rather than 0.8+ because the Go artifact is package-scoped rather than a pure touched-file aggregate, and the browser artifact covers extracted `/llm` logic modules while the outer Svelte entry wrappers are proven separately by build and E2E rather than line-instrumented coverage."
       ]
     },
     "edge_case_coverage": {
@@ -49,9 +50,9 @@
       "weighted_score": 0.1,
       "evidence": [
         "`go test ./internal/controlplane ./internal/service ./internal/repository ./internal/mcp` passed after the backend changes.",
-        "`cd /Users/bizarro/Documents/Projects/bahia/web && npm test -- --run tests/unit/public-controlplane.test.js tests/unit/controlplane-store.test.js` passed after the browser helper and store changes.",
-        "`cd /Users/bizarro/Documents/Projects/bahia/web && npm run test:e2e -- tests/e2e/llm-route-release-deployment.spec.js` passed for the new browser workflow.",
-        "`cd /Users/bizarro/Documents/Projects/bahia/web && npm run build` passed, proving the new route compiles in production mode."
+        "`cd /Users/bizarro/Documents/Projects/bahia/web && npm test -- --run tests/unit/route-access.test.js tests/unit/nav.test.js tests/unit/llm-page.test.js tests/unit/stores-index.test.js tests/unit/public-controlplane.test.js tests/unit/controlplane-store.test.js` passed after the browser coverage refactor.",
+        "`cd /Users/bizarro/Documents/Projects/bahia/web && npm run test:e2e -- tests/e2e/llm-route-release-deployment.spec.js` passed for the dedicated browser workflow.",
+        "`cd /Users/bizarro/Documents/Projects/bahia/web && npm run build` passed, proving the `/llm` route and updated nav compile in production mode."
       ]
     },
     "defect_resolution": {
@@ -60,7 +61,7 @@
       "weighted_score": 0.05,
       "evidence": [
         "`defects.json` contains no open defects for the approved non-rollback slice; D-001 through D-005 are all `verified`.",
-        "The prior blocker defects for AC-006 and AC-009 are now resolved by passing automated coverage and implementation changes."
+        "The remaining deferred work is rollback semantics, which is explicitly out of scope for this approved slice per HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-004."
       ]
     },
     "human_alignment": {
@@ -69,8 +70,8 @@
       "weighted_score": 0.05,
       "evidence": [
         "Spec approval exists via HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-005.",
-        "Material ambiguity decisions exist for user surface, REST compatibility, rollback deferral, and canonical signer-first route/release behavior via HITL-001/002/003/004/009.",
-        "A prior release review exists via HITL-006/007/008, but a fresh final release decision has not yet been collected after the latest fixes."
+        "Material ambiguity decisions exist for user surface, REST compatibility, rollback deferral, canonical signer-first route/release behavior, and the coverage-gate exception rejection via HITL-001/002/003/004/009/010.",
+        "A fresh final release decision has not yet been collected after the confidence gate cleared, so the next stage is final human review rather than approval."
       ]
     }
   },
@@ -120,15 +121,13 @@
   },
   "hard_gate_failures": [],
   "caps_applied": [],
-  "blocking_findings": [
-    "No behavioral defect blocks the approved non-rollback slice, but the score remains below the 0.90 threshold because code-coverage evidence is absent for the touched modules."
-  ],
+  "blocking_findings": [],
   "evidence_gaps": [
     "Schema input `schemas/confidence_report.schema.json` was not present in the repository, so this report follows the prompt-defined structure and constraints rather than a file-backed schema.",
-    "No code coverage artifact was available for the touched modules."
+    "The browser coverage artifact line-instruments the extracted `/llm` logic modules rather than the outer Svelte entry wrappers; those wrappers are covered separately by build and deterministic Playwright evidence."
   ],
   "recommendation": {
-    "next_stage": "collect_coverage_then_final_human_review",
-    "summary": "Status is `needs_more_tests` only because the confidence gate lacks code-coverage evidence. Behaviorally the approved non-rollback slice is verified. Generate coverage artifacts for the touched modules or obtain an explicit policy/HITL exception for missing coverage, then return to final human review."
+    "next_stage": "final_human_review",
+    "summary": "The approved non-rollback slice now meets the 0.90 confidence threshold. The remaining work is a final human release decision, not more implementation or test generation."
   }
 }

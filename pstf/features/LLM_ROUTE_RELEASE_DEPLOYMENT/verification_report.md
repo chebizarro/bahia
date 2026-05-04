@@ -59,12 +59,11 @@ Existing deferred rollback ambiguity remains unchanged:
 - **High confidence** in AC-002 through AC-006 because request publication, reactor handling, async coordinator behavior, and browser-visible request flows are now all covered by passing automated tests.
 - **High confidence** in AC-007 and AC-008 because the authoritative projection and browser-consumption tests remain passing.
 - **High confidence** in AC-009 because the dedicated `/llm` workflow now exists, builds, and passes deterministic end-to-end browser coverage without falling back to deprecated REST mutation endpoints.
-- **Process caveat:** the separate confidence gate may still remain below threshold until module coverage artifacts are generated, because the repo does not currently provide code-coverage evidence for the touched modules.
+- **Confidence gate evidence:** touched-module coverage artifacts now exist at `pstf/features/LLM_ROUTE_RELEASE_DEPLOYMENT/coverage/go_coverage.out`, `go_coverage_summary.txt`, and `coverage/web/coverage-summary.json`, covering both the touched backend entry points and the extracted `/llm` browser-logic modules.
 
 ## Recommendation
 Behaviorally, the approved non-rollback slice is verified.
 
 Recommended next sequence:
-1. Run the PSTF confidence gate again and either generate coverage artifacts for the touched modules or explicitly accept the missing coverage evidence by policy/HITL.
-2. Return to final human review for release approval of the approved non-rollback slice.
-3. Keep rollback out of release claims until its deferred semantics are explicitly approved.
+1. Return to final human review for release approval of the approved non-rollback slice.
+2. Keep rollback out of release claims until its deferred semantics are explicitly approved.

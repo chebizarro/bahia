@@ -2,11 +2,9 @@
   import { page } from '$app/stores';
   import { theme, toggleTheme } from '$lib/stores/theme.js';
   import { authState, isAuthenticated, login, logout } from '$lib/stores/auth.js';
+  import { NAV_LINKS, authPresentation, isActiveNavLink } from '$lib/components/nav-model.js';
 
-  function truncatePubkey(pubkey) {
-    if (!pubkey || pubkey.length < 16) return pubkey;
-    return `${pubkey.slice(0, 8)}...${pubkey.slice(-4)}`;
-  }
+  let authUi = $derived(authPresentation(authState, isAuthenticated()));
 
   async function handleLogin() {
     try {
@@ -28,46 +26,37 @@
   </div>
   
   <ul class="nav-links">
-    <li><a href="/" class:active={$page.url.pathname === '/'}>Dashboard</a></li>
-    <li><a href="/orgs" class:active={$page.url.pathname.startsWith('/orgs')}>Orgs</a></li>
-    <li><a href="/souls" class:active={$page.url.pathname.startsWith('/souls')}>Souls</a></li>
-    <li><a href="/services" class:active={$page.url.pathname.startsWith('/services')}>Services</a></li>
-    <li><a href="/artifacts" class:active={$page.url.pathname.startsWith('/artifacts')}>Artifacts</a></li>
-    <li><a href="/environments" class:active={$page.url.pathname.startsWith('/environments')}>Environments</a></li>
-    <li><a href="/workers" class:active={$page.url.pathname.startsWith('/workers')}>Workers</a></li>
-    <li><a href="/llm" class:active={$page.url.pathname.startsWith('/llm')}>LLM</a></li>
-    <li><a href="/payments" class:active={$page.url.pathname.startsWith('/payments')}>Payments</a></li>
-    <li><a href="/policies" class:active={$page.url.pathname.startsWith('/policies')}>Policies</a></li>
-    <li><a href="/deployments" class:active={$page.url.pathname.startsWith('/deployments') && !$page.url.pathname.startsWith('/deployments/pending')}>Deployments</a></li>
-    <li>
-      <a href="/deployments/pending" class:active={$page.url.pathname.startsWith('/deployments/pending')} class="with-badge">
-        Pending Approvals
-        <span class="badge">!</span>
-      </a>
-    </li>
-    <li><a href="/events" class:active={$page.url.pathname === '/events'}>Events</a></li>
-    <li><a href="/settings" class:active={$page.url.pathname === '/settings'}>⚙️ Settings</a></li>
+    {#each NAV_LINKS as link}
+      <li>
+        <a href={link.href} class:active={isActiveNavLink($page.url.pathname, link.href)} class:with-badge={link.badge}>
+          {link.label}
+          {#if link.badge}
+            <span class="badge">{link.badge}</span>
+          {/if}
+        </a>
+      </li>
+    {/each}
   </ul>
   
   <div class="nav-actions">
     <div class="auth-section">
-      {#if authState.status === 'checking' || authState.status === 'authenticating'}
+      {#if authUi.mode === 'loading'}
         <span class="auth-loading">
           <span class="spinner"></span>
-          {authState.status === 'checking' ? 'Checking...' : 'Signing in...'}
+          {authUi.label}
         </span>
-      {:else if isAuthenticated()}
+      {:else if authUi.mode === 'authenticated'}
         <div class="user-info">
-          <span class="user-pubkey" title={authState.pubkey}>
-            {#if authState.backendAuthenticated}
+          <span class="user-pubkey" title={authUi.pubkey}>
+            {#if authUi.backendAuthenticated}
               ✅
             {:else}
               🔑
             {/if}
-            {truncatePubkey(authState.pubkey)}
+            {authUi.truncatedPubkey}
           </span>
-          {#if !authState.backendAuthenticated && authState.error}
-            <span class="auth-warning" title={authState.error}>⚠️</span>
+          {#if authUi.showWarning}
+            <span class="auth-warning" title={authUi.warning}>⚠️</span>
           {/if}
           <button class="logout-btn" onclick={handleLogout}>
             Logout
@@ -77,17 +66,13 @@
         <button
           class="login-btn"
           onclick={handleLogin}
-          disabled={!authState.extensionAvailable}
-          title={authState.extensionAvailable ? 'Login with Nostr extension' : 'No Nostr extension detected (NIP-07)'}
+          disabled={!authUi.extensionAvailable}
+          title={authUi.buttonTitle}
         >
-          {#if authState.extensionAvailable}
-            🔐 Login with Nostr
-          {:else}
-            ⚠️ No Extension
-          {/if}
+          {authUi.buttonLabel}
         </button>
-        {#if authState.status === 'error' && authState.error}
-          <span class="auth-error" title={authState.error}>⚠️</span>
+        {#if authUi.showError}
+          <span class="auth-error" title={authUi.error}>⚠️</span>
         {/if}
       {/if}
     </div>

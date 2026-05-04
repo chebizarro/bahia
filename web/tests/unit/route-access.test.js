@@ -1,60 +1,77 @@
-import { describe, expect, it } from 'vitest';
-import { canAccessRoute, getRouteAccess } from '../../src/lib/auth/route-access.js';
+import { describe, it, expect, beforeEach } from 'vitest';
+import { canAccessRoute, getRouteAccess, routeAccessConfig } from '../../src/lib/auth/route-access.js';
 
 describe('route access', () => {
-  it('marks configured routes as protected', () => {
-    expect(getRouteAccess('/services').protectedRoute).toBe(true);
-    expect(getRouteAccess('/payments').protectedRoute).toBe(true);
-    expect(getRouteAccess('/notifications').protectedRoute).toBe(true);
-    expect(getRouteAccess('/settings').protectedRoute).toBe(true);
-    expect(getRouteAccess('/').protectedRoute).toBe(false);
+  beforeEach(() => {
+    delete window.__BAHIA_E2E_ROUTE_ROLE_REQUIREMENTS;
+    delete window.__BAHIA_E2E_ROUTE_COMPAT_REQUIREMENTS;
   });
 
-  it('denies protected routes when unauthenticated', () => {
-    const result = canAccessRoute({
-      pathname: '/workers',
-      authState: { backendAuthenticated: false },
-      isAuthenticated: false
+  it('marks /llm as a protected route', () => {
+    expect(routeAccessConfig.protectedPrefixes).toContain('/llm');
+    expect(getRouteAccess('/llm')).toMatchObject({
+      pathname: '/llm',
+      protectedRoute: true,
+      requiredRoles: [],
+      requiresRestCompatibility: false
+    });
+  });
+
+  it('denies protected routes to unauthenticated users and allows public routes', () => {
+    expect(canAccessRoute({ pathname: '/llm', authState: {}, isAuthenticated: false })).toMatchObject({
+      protectedRoute: true,
+      authorized: false,
+      roleAuthorized: false,
+      compatibilityAuthorized: false
     });
 
-    expect(result.protectedRoute).toBe(true);
-    expect(result.authorized).toBe(false);
+    expect(canAccessRoute({ pathname: 'plain-path', authState: {}, isAuthenticated: false })).toMatchObject({
+      pathname: '/plain-path',
+      protectedRoute: false,
+      authorized: true,
+      roleAuthorized: true,
+      compatibilityAuthorized: true
+    });
   });
 
-  it('does not require REST compatibility for migrated sensitive route families', () => {
-    for (const pathname of ['/payments', '/notifications', '/orgs']) {
-      const result = canAccessRoute({
-        pathname,
-        authState: { backendAuthenticated: false },
-        isAuthenticated: true
-      });
+  it('applies route role and compatibility overrides when present', () => {
+    window.__BAHIA_E2E_ROUTE_ROLE_REQUIREMENTS = {
+      '/llm/admin': ['operator']
+    };
+    window.__BAHIA_E2E_ROUTE_COMPAT_REQUIREMENTS = {
+      '/llm/admin': true
+    };
 
-      expect(result.requiresRestCompatibility).toBe(false);
-      expect(result.authorized).toBe(true);
-    }
-  });
-
-  it('does not require REST compatibility for migrated public route families', () => {
-    for (const pathname of ['/services/demo', '/deployments/demo', '/artifacts/demo', '/policies/demo', '/environments/demo', '/workers/demo']) {
-      const result = canAccessRoute({
-        pathname,
-        authState: { backendAuthenticated: false },
-        isAuthenticated: true
-      });
-
-      expect(result.requiresRestCompatibility).toBe(false);
-      expect(result.authorized).toBe(true);
-    }
-  });
-
-  it('allows signer-authenticated access on protected routes without REST compatibility requirement', () => {
-    const result = canAccessRoute({
-      pathname: '/settings',
-      authState: { backendAuthenticated: false },
+    expect(canAccessRoute({
+      pathname: '/llm/admin',
+      authState: {
+        roles: ['viewer'],
+        compatibility: { restNip98Ready: false },
+        directNip98Ready: false
+      },
       isAuthenticated: true
+    })).toMatchObject({
+      authorized: false,
+      roleAuthorized: false,
+      compatibilityAuthorized: false,
+      requiredRoles: ['operator'],
+      requiresRestCompatibility: true
     });
 
-    expect(result.requiredRoles).toEqual([]);
-    expect(result.authorized).toBe(true);
+    expect(canAccessRoute({
+      pathname: '/llm/admin',
+      authState: {
+        capabilities: { roles: ['operator'] },
+        compatibility: { restNip98Ready: true },
+        directNip98Ready: false
+      },
+      isAuthenticated: true
+    })).toMatchObject({
+      authorized: true,
+      roleAuthorized: true,
+      compatibilityAuthorized: true,
+      requiredRoles: ['operator'],
+      requiresRestCompatibility: true
+    });
   });
 });

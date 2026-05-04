@@ -6,7 +6,7 @@
 - Framework: PSTF
 - Interaction Mode: RepoPrompt ask-user tool
 - Current Stage: human_review
-- Last Updated: 2026-05-04T21:25:09Z
+- Last Updated: 2026-05-04T22:12:00Z
 
 ---
 
@@ -382,6 +382,46 @@ REQUIRE_CANONICAL_SIGNER_FIRST_5971_5972_BEFORE_RELEASE
 
 ---
 
+### Decision HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-010 — Coverage exception rejection for confidence gate
+
+**Stage:** human_review
+**Agent:** HITL Review Agent
+**Decision Type:** risk_acceptance
+**Status:** active
+
+**Context Summary:**
+The approved non-rollback slice was behaviorally verified, but the confidence gate still failed because no touched-module coverage artifact existed. The release path needed an explicit choice between accepting that gap as policy exception or requiring additional frontend coverage work before return to final review.
+
+**Question Asked:**
+For the LLM route deployment confidence gate, should the release proceed with a coverage exception or require more frontend coverage first?
+
+**Options Presented:**
+- A) ACCEPT_COVERAGE_EXCEPTION_FOR_THIS_RELEASE
+- B) REQUIRE_ADDITIONAL_FRONTEND_COVERAGE_BEFORE_RELEASE
+
+**User Selection:**
+B
+
+**User Notes:**
+None.
+
+**Decision:**
+REQUIRE_ADDITIONAL_FRONTEND_COVERAGE_BEFORE_RELEASE
+
+**Impact:**
+- Feature Spec: none
+- Acceptance Criteria: none
+- Tests: updated — added direct unit coverage for `route-access.js`, extracted `nav-model.js`, and extracted `page-model.js` to cover the dedicated `/llm` workflow logic with deterministic browser-unit tests.
+- Defects: none
+- Confidence / Release: adjusted — the confidence gate cannot rely on a policy exception and must be resolved with real coverage artifacts before final human review.
+
+**Required Follow-Up Actions:**
+- [x] Generate touched-module frontend coverage artifacts for the `/llm` browser workflow logic.
+- [x] Re-run the confidence gate with the new coverage evidence.
+- [x] Return to final human review without relying on a coverage exception.
+
+---
+
 ## Summary
 
 - Final Status: PENDING
@@ -404,3 +444,4 @@ REQUIRE_CANONICAL_SIGNER_FIRST_5971_5972_BEFORE_RELEASE
 | HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-007 | LLMRD-AC-006 | T-012, T-013 | D-003 | hitl_decisions.md, verification_report.md | D-003 is a blocker, so the release gate outcome is NEEDS_WORK rather than APPROVED_WITH_RISK. |
 | HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-008 | LLMRD-AC-009 | T-018 | D-001 | hitl_decisions.md, verification_report.md | Missing browser workflow is explicitly treated as a blocker at this stage. |
 | HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-009 | LLMRD-AC-002, LLMRD-AC-003 | T-002, T-003, T-004, T-005, T-018 | D-005 | hitl_decisions.md, verification_report.md, defects.json | Route/release operations must use canonical signer-first 5971/5972 publishing before release. |
+| HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-010 | none | coverage support for T-016, T-018 and new browser-helper tests | none | hitl_decisions.md, confidence_report.json | Coverage exception rejected; real frontend coverage was required before return to final review. |

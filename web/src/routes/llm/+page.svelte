@@ -10,13 +10,26 @@
   } from '$lib/stores/public-controlplane.svelte.js';
   import { currentRequesterPubkey } from '$lib/nostr/controlplane-requests.js';
   import { KINDS, getTagValue } from '$lib/nostr/client.js';
+  import {
+    activityData,
+    activityTag,
+    buildCreateRoutePayload,
+    buildDeployPayload,
+    buildEnvironmentOptions,
+    buildLLMActivityKinds,
+    buildLLMEventHistory,
+    buildPendingApprovals,
+    buildRecentReleases,
+    buildReleaseOptions,
+    buildReleasePayload,
+    buildRouteOptions,
+    buildRouteStateRows,
+    environmentName,
+    kindLabel,
+    routeName
+  } from './page-model.js';
 
-  const LLM_ACTIVITY_KINDS = new Set([
-    KINDS.BAHIA_LLM_ROUTE_CREATE_RESULT,
-    KINDS.BAHIA_LLM_RELEASE_REGISTER_RESULT,
-    KINDS.BAHIA_LLM_DEPLOYMENT_STATUS,
-    KINDS.BAHIA_LLM_DEPLOYMENT_RESULT
-  ]);
+  const LLM_ACTIVITY_KINDS = buildLLMActivityKinds(KINDS);
 
   let loading = $state(true);
   let error = $state(null);
@@ -74,37 +87,6 @@
     loading = false;
   }
 
-  function activityData(activity) {
-    return activity?.data && typeof activity.data === 'object' ? activity.data : {};
-  }
-
-  function activityTag(activity, name) {
-    return getTagValue(activity?.nostr_event, name);
-  }
-
-  function routeName(routeId) {
-    return llmRoutes.find((route) => route.id === routeId || route.route_id === routeId)?.name || routeId || 'Unknown route';
-  }
-
-  function environmentName(environmentId) {
-    return environments.find((environment) => environment.id === environmentId)?.name || environmentId || 'Unknown environment';
-  }
-
-  function kindLabel(kind) {
-    switch (kind) {
-      case KINDS.BAHIA_LLM_ROUTE_CREATE_RESULT:
-        return 'Route created';
-      case KINDS.BAHIA_LLM_RELEASE_REGISTER_RESULT:
-        return 'Release registered';
-      case KINDS.BAHIA_LLM_DEPLOYMENT_STATUS:
-        return 'Deploy status';
-      case KINDS.BAHIA_LLM_DEPLOYMENT_RESULT:
-        return 'Deploy result';
-      default:
-        return `Kind ${kind}`;
-    }
-  }
-
   function resetNotice() {
     notice = null;
   }
@@ -117,100 +99,37 @@
     notice = { type: 'error', message };
   }
 
-  let llmEventHistory = $derived.by(() =>
-    events
-      .filter((activity) => LLM_ACTIVITY_KINDS.has(activity.kind))
-      .sort((a, b) => String(b.time || '').localeCompare(String(a.time || '')))
-  );
+  let llmEventHistory = $derived.by(() => buildLLMEventHistory(events, LLM_ACTIVITY_KINDS));
 
   let llmActivity = $derived.by(() => llmEventHistory.slice(0, 20));
 
-  let recentReleases = $derived.by(() => {
-    const releases = new Map();
-    for (const activity of llmEventHistory) {
-      if (activity.kind !== KINDS.BAHIA_LLM_RELEASE_REGISTER_RESULT) continue;
-      const data = activityData(activity);
-      const releaseId = data.release_id || activityTag(activity, 'release');
-      const routeId = data.route_id || activityTag(activity, 'route');
-      if (!releaseId || !routeId || releases.has(releaseId)) continue;
-      releases.set(releaseId, {
-        id: releaseId,
-        route_id: routeId,
-        version: data.version || releaseId,
-        created_at: activity.time || '',
-        status: data.status || activityTag(activity, 'status') || ''
-      });
-    }
-    return Array.from(releases.values()).sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')));
-  });
+  let recentReleases = $derived.by(() => buildRecentReleases(
+    llmEventHistory.filter((activity) => activity.kind === KINDS.BAHIA_LLM_RELEASE_REGISTER_RESULT),
+    getTagValue
+  ));
 
-  let routeStateRows = $derived.by(() =>
-    llmRouteStates
-      .map((state) => ({
-        ...state,
-        route_name: routeName(state.route_id),
-        environment_name: environmentName(state.environment_id),
-        desired_release_label: recentReleases.find((release) => release.id === state.desired_release_id)?.version || state.desired_release_id || '-',
-        desired_intent_label: state.desired_intent_id || '-',
-        active_run_label: state.active_run_id || '-'
-      }))
-      .sort((a, b) => `${a.route_name}:${a.environment_name}`.localeCompare(`${b.route_name}:${b.environment_name}`))
-  );
+  let routeStateRows = $derived.by(() => buildRouteStateRows(llmRouteStates, llmRoutes, environments, recentReleases));
 
-  let pendingApprovals = $derived.by(() => {
-    const terminalIntentIds = new Set();
-    const acceptedByIntent = new Map();
+  let pendingApprovals = $derived.by(() => buildPendingApprovals(
+    llmEventHistory,
+    llmRouteStates,
+    llmRoutes,
+    environments,
+    recentReleases,
+    KINDS,
+    getTagValue
+  ));
 
-    for (const activity of llmEventHistory) {
-      const data = activityData(activity);
-      const intentId = data.intent_id || activityTag(activity, 'intent');
-      if (!intentId) continue;
-      if (activity.kind === KINDS.BAHIA_LLM_DEPLOYMENT_STATUS && (data.step || activityTag(activity, 'step')) === 'accepted' && !acceptedByIntent.has(intentId)) {
-        acceptedByIntent.set(intentId, {
-          intent_id: intentId,
-          route_id: data.route_id || activityTag(activity, 'route'),
-          environment_id: data.environment_id || activityTag(activity, 'environment'),
-          release_id: data.release_id || activityTag(activity, 'release'),
-          requested_by: data.requested_by || data.requester || 'relay-request',
-          accepted_at: activity.time || ''
-        });
-      }
-      if (activity.kind === KINDS.BAHIA_LLM_DEPLOYMENT_RESULT) {
-        terminalIntentIds.add(intentId);
-      }
-    }
-
-    return Array.from(acceptedByIntent.values())
-      .filter((approval) => {
-        if (terminalIntentIds.has(approval.intent_id)) return false;
-        return llmRouteStates.some((state) => state.desired_intent_id === approval.intent_id && !state.active_run_id);
-      })
-      .map((approval) => ({
-        ...approval,
-        route_name: routeName(approval.route_id),
-        environment_name: environmentName(approval.environment_id),
-        release_label: recentReleases.find((release) => release.id === approval.release_id)?.version || approval.release_id || '-'
-      }))
-      .sort((a, b) => String(b.accepted_at || '').localeCompare(String(a.accepted_at || '')));
-  });
-
-  let routeOptions = $derived(llmRoutes.map((route) => ({ value: route.id || route.route_id, label: route.name || route.id || route.route_id })));
-  let environmentOptions = $derived(environments.map((environment) => ({ value: environment.id, label: environment.name || environment.id })));
-  let releaseOptions = $derived(recentReleases.filter((release) => !deployForm.route_id || release.route_id === deployForm.route_id));
+  let routeOptions = $derived(buildRouteOptions(llmRoutes));
+  let environmentOptions = $derived(buildEnvironmentOptions(environments));
+  let releaseOptions = $derived(buildReleaseOptions(recentReleases, deployForm.route_id));
 
   async function handleCreateRoute(event) {
     event.preventDefault();
     routeSubmitting = true;
     resetNotice();
     try {
-      const result = await createLLMRoute({
-        name: routeForm.name,
-        description: routeForm.description,
-        gateway_config: {
-          public_model: routeForm.public_model,
-          path: routeForm.path || undefined
-        }
-      });
+      const result = await createLLMRoute(buildCreateRoutePayload(routeForm));
       const content = resultContent(result);
       if (!releaseForm.route_id && content.route_id) releaseForm.route_id = content.route_id;
       if (!deployForm.route_id && content.route_id) deployForm.route_id = content.route_id;
@@ -228,25 +147,7 @@
     releaseSubmitting = true;
     resetNotice();
     try {
-      const payload = {
-        route_id: releaseForm.route_id,
-        version: releaseForm.version,
-        model_ref: releaseForm.model_ref,
-        model_source: releaseForm.model_source
-      };
-      if (releaseForm.backend_mode === 'external') {
-        payload.backend_preferences = ['external_api'];
-        payload.external_backend = { base_url: releaseForm.external_base_url };
-      } else {
-        payload.backend_preferences = ['vllm'];
-        payload.runtime_backend = {
-          image: releaseForm.runtime_image,
-          container_port: Number(releaseForm.runtime_container_port),
-          host_port: Number(releaseForm.runtime_host_port),
-          health_path: releaseForm.runtime_health_path
-        };
-      }
-      const result = await registerLLMRelease(payload);
+      const result = await registerLLMRelease(buildReleasePayload(releaseForm));
       const content = resultContent(result);
       deployForm.route_id = content.route_id || deployForm.route_id;
       deployForm.release_id = content.release_id || deployForm.release_id;
@@ -269,12 +170,7 @@
     deploySubmitting = true;
     resetNotice();
     try {
-      const { event: statusEvent } = await requestLLMDeploy({
-        route_id: deployForm.route_id,
-        environment_id: deployForm.environment_id,
-        release_id: deployForm.release_id,
-        requested_by: deployForm.requested_by || currentRequesterPubkey() || ''
-      });
+      const { event: statusEvent } = await requestLLMDeploy(buildDeployPayload(deployForm, currentRequesterPubkey()));
       const content = resultContent(statusEvent);
       setSuccess(content.message || 'LLM deployment request accepted for async processing');
     } catch (err) {
@@ -436,7 +332,7 @@
             <select bind:value={deployForm.release_id} name="deploy-release" required>
               <option value="">Select release</option>
               {#each releaseOptions as option}
-                <option value={option.id}>{option.version} · {routeName(option.route_id)}</option>
+                <option value={option.id}>{option.version} · {routeName(llmRoutes, option.route_id)}</option>
               {/each}
             </select>
           </label>
@@ -549,9 +445,9 @@
               {#each llmActivity as activity}
                 <tr>
                   <td>{activity.time ? new Date(activity.time).toLocaleString() : '-'}</td>
-                  <td>{kindLabel(activity.kind)}</td>
-                  <td>{activityData(activity).status || activityTag(activity, 'status') || '-'}</td>
-                  <td>{routeName(activityData(activity).route_id || activityTag(activity, 'route'))}</td>
+                  <td>{kindLabel(KINDS, activity.kind)}</td>
+                  <td>{activityData(activity).status || activityTag(activity, getTagValue, 'status') || '-'}</td>
+                  <td>{routeName(llmRoutes, activityData(activity).route_id || activityTag(activity, getTagValue, 'route'))}</td>
                   <td>{activityData(activity).message || activityData(activity).version || activityData(activity).name || '-'}</td>
                 </tr>
               {/each}
