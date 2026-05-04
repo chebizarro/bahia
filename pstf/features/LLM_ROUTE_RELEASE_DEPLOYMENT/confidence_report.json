@@ -1,9 +1,9 @@
 {
   "feature_id": "LLM_ROUTE_RELEASE_DEPLOYMENT",
-  "status": "needs_patch",
+  "status": "needs_more_tests",
   "threshold": 0.9,
-  "raw_confidence": 0.721,
-  "confidence": 0.721,
+  "raw_confidence": 0.84,
+  "confidence": 0.84,
   "threshold_met": false,
   "weights_total": 1.0,
   "components": {
@@ -12,19 +12,17 @@
       "weight": 0.3,
       "weighted_score": 0.3,
       "evidence": [
-        "All 9 approved must-level acceptance criteria in `acceptance_criteria.json` have at least one linked test in `test_matrix.json`.",
+        "All 9 approved acceptance criteria in `acceptance_criteria.json` have at least one linked test in `test_matrix.json`.",
         "Rollback-specific criteria were explicitly deferred by HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-004 and are not part of the approved AC denominator."
       ]
     },
     "test_pass_rate": {
-      "score": 0.842,
+      "score": 1.0,
       "weight": 0.25,
-      "weighted_score": 0.2105,
+      "weighted_score": 0.25,
       "evidence": [
-        "16 of 19 tests in `test_matrix.json` are marked `pass`.",
-        "2 required tests (`LLMRD-T-012`, `LLMRD-T-013`) are not implemented.",
-        "1 required test (`LLMRD-T-018`) is blocked because the browser workflow does not exist.",
-        "`verification_report.md` records zero failing executed tests, but not all required tests are executable yet."
+        "All 19 tests in `test_matrix.json` are marked `pass`.",
+        "`verification_report.md` records passing targeted Go suites, passing browser unit suites, passing dedicated browser E2E coverage, and a passing production build."
       ]
     },
     "code_coverage": {
@@ -37,33 +35,32 @@
       ]
     },
     "edge_case_coverage": {
-      "score": 0.6,
+      "score": 0.9,
       "weight": 0.1,
-      "weighted_score": 0.06,
+      "weighted_score": 0.09,
       "evidence": [
-        "Negative and edge-path evidence exists for spoofed-author rejection (`LLMRD-T-017`), invalid approval decision handling (`LLMRD-T-009`), zero-accept deploy failure (`LLMRD-T-006`), and desired-state rejection repair (`LLMRD-T-010`).",
-        "Meaningful async failure/recovery coverage for provisioning is still missing because `LLMRD-T-013` is not implemented.",
-        "No browser workflow edge coverage exists because `LLMRD-T-018` is blocked by the missing workflow."
+        "Negative and edge-path evidence exists for spoofed-author rejection (`LLMRD-T-017`), invalid approval decision handling (`LLMRD-T-009`), zero-accept publish failure (`LLMRD-T-006`), coordinator failure terminal-error publication (`LLMRD-T-013`), and explicit browser avoidance of deprecated REST mutation endpoints (`LLMRD-T-018`).",
+        "The matrix still does not include large-payload, concurrency, or property/fuzz coverage for this slice, so the score is high but not maximal."
       ]
     },
     "regression_safety": {
-      "score": 0.8,
+      "score": 1.0,
       "weight": 0.1,
-      "weighted_score": 0.08,
+      "weighted_score": 0.1,
       "evidence": [
-        "`verification_report.md` records passing targeted suites for `./internal/controlplane`, `./internal/service`, broad Go package verification, and the browser control-plane store unit suite.",
-        "Relevant existing contract/integration tests still pass after the latest LLM reactor and store changes.",
-        "Regression safety is not full-strength because the async coordinator path and end-to-end browser workflow remain unverified."
+        "`go test ./internal/controlplane ./internal/service ./internal/repository ./internal/mcp` passed after the backend changes.",
+        "`cd /Users/bizarro/Documents/Projects/bahia/web && npm test -- --run tests/unit/public-controlplane.test.js tests/unit/controlplane-store.test.js` passed after the browser helper and store changes.",
+        "`cd /Users/bizarro/Documents/Projects/bahia/web && npm run test:e2e -- tests/e2e/llm-route-release-deployment.spec.js` passed for the new browser workflow.",
+        "`cd /Users/bizarro/Documents/Projects/bahia/web && npm run build` passed, proving the new route compiles in production mode."
       ]
     },
     "defect_resolution": {
-      "score": 0.4,
+      "score": 1.0,
       "weight": 0.05,
-      "weighted_score": 0.02,
+      "weighted_score": 0.05,
       "evidence": [
-        "Open defects remain: `LLMRD-D-001` (major), `LLMRD-D-003` (minor), and `LLMRD-D-005` (minor).",
-        "Verified defects `LLMRD-D-002` and `LLMRD-D-004` improve the score but do not offset the open major defect and two open minors.",
-        "Human review classified `D-001` and `D-003` as blocking and only `D-005` as accepted risk."
+        "`defects.json` contains no open defects for the approved non-rollback slice; D-001 through D-005 are all `verified`.",
+        "The prior blocker defects for AC-006 and AC-009 are now resolved by passing automated coverage and implementation changes."
       ]
     },
     "human_alignment": {
@@ -72,8 +69,8 @@
       "weighted_score": 0.05,
       "evidence": [
         "Spec approval exists via HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-005.",
-        "Material ambiguity decisions exist for user surface, REST compatibility, and rollback semantics via HITL-001/002/003/004.",
-        "Final release review decisions exist via HITL-006/007/008, with the current human-aligned gate status recorded as `NEEDS_WORK`."
+        "Material ambiguity decisions exist for user surface, REST compatibility, rollback deferral, and canonical signer-first route/release behavior via HITL-001/002/003/004/009.",
+        "A prior release review exists via HITL-006/007/008, but a fresh final release decision has not yet been collected after the latest fixes."
       ]
     }
   },
@@ -99,7 +96,7 @@
     "every_must_ac_has_test": {
       "passed": true,
       "evidence": [
-        "All 9 must-level ACs have at least one linked test in the matrix."
+        "All 9 approved ACs have at least one linked test in the matrix."
       ]
     },
     "verification_report_exists": {
@@ -122,30 +119,16 @@
     }
   },
   "hard_gate_failures": [],
-  "caps_applied": [
-    {
-      "name": "open_major_defect_cap",
-      "description": "Any open major defect => max confidence 0.84",
-      "triggered": true,
-      "max_confidence": 0.84,
-      "evidence": [
-        "`LLMRD-D-001` is open with severity `major`."
-      ]
-    }
-  ],
+  "caps_applied": [],
   "blocking_findings": [
-    "Open major defect `LLMRD-D-001`: approved dedicated browser workflow is missing, and `AC-009` is failed.",
-    "Open minor defect `LLMRD-D-003`: required coordinator tests `LLMRD-T-012` and `LLMRD-T-013` are not implemented, so `AC-006` remains unverified.",
-    "Open minor defect `LLMRD-D-005`: requester-side relay-acceptance verification for route/release requests remains unproven; human review accepted this as risk, not as resolved evidence."
+    "No behavioral defect blocks the approved non-rollback slice, but the score remains below the 0.90 threshold because code-coverage evidence is absent for the touched modules."
   ],
   "evidence_gaps": [
     "Schema input `schemas/confidence_report.schema.json` was not present in the repository, so this report follows the prompt-defined structure and constraints rather than a file-backed schema.",
-    "No code coverage artifact was available for touched modules.",
-    "No executable coordinator test coverage exists for the async provisioning path.",
-    "No browser workflow exists yet, so the required E2E test remains blocked."
+    "No code coverage artifact was available for the touched modules."
   ],
   "recommendation": {
-    "next_stage": "implement_and_reverify",
-    "summary": "Status is `needs_patch`. Implement the missing browser workflow (`LLMRD-D-001`), add provisioning coordinator success/failure tests (`LLMRD-D-003` / `LLMRD-T-012` / `LLMRD-T-013`), then rerun PSTF verification and confidence scoring. `LLMRD-D-005` can remain an accepted risk only if the same human decision remains in force."
+    "next_stage": "collect_coverage_then_final_human_review",
+    "summary": "Status is `needs_more_tests` only because the confidence gate lacks code-coverage evidence. Behaviorally the approved non-rollback slice is verified. Generate coverage artifacts for the touched modules or obtain an explicit policy/HITL exception for missing coverage, then return to final human review."
   }
 }

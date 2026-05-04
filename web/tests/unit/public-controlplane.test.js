@@ -90,6 +90,104 @@ describe('public controlplane command helpers', () => {
     });
   });
 
+  it('creates LLM routes through canonical signer-first route-create requests', async () => {
+    const payload = {
+      name: 'chat-prod',
+      description: 'Public chat completions route',
+      gateway_config: {
+        public_model: 'bahia/chat',
+        path: '/v1/models/chat-prod'
+      }
+    };
+
+    await api.createLLMRoute(payload);
+
+    expect(publishRequestMock).toHaveBeenCalledWith({
+      kind: 5971,
+      tags: [],
+      content: payload
+    });
+    expect(awaitResultMock).toHaveBeenCalledWith({
+      requestEventId: 'req-1',
+      resultKinds: [7971]
+    });
+  });
+
+  it('registers LLM releases through canonical signer-first release-register requests', async () => {
+    const payload = {
+      route_id: 'llm-route-1',
+      version: 'v1',
+      model_ref: 'hf://meta-llama/Llama-3',
+      model_source: 'huggingface',
+      backend_preferences: ['external_api'],
+      external_backend: { base_url: 'https://llm.example.com' }
+    };
+
+    await api.registerLLMRelease(payload);
+
+    expect(publishRequestMock).toHaveBeenCalledWith({
+      kind: 5972,
+      tags: [['route', 'llm-route-1']],
+      content: payload
+    });
+    expect(awaitResultMock).toHaveBeenCalledWith({
+      requestEventId: 'req-1',
+      resultKinds: [7972]
+    });
+  });
+
+  it('requests LLM deploys through canonical signer-first deploy requests and awaits accepted/completed responses', async () => {
+    awaitResultMock.mockResolvedValueOnce({
+      id: 'result-llm-deploy',
+      kind: 6973,
+      tags: [['e', 'req-1'], ['status', 'processing'], ['step', 'accepted']],
+      content: JSON.stringify({ status: 'processing', step: 'accepted', message: 'accepted' })
+    });
+
+    const result = await api.requestLLMDeploy({
+      route_id: 'llm-route-1',
+      environment_id: 'env-prod',
+      release_id: 'llm-release-1',
+      requested_by: 'f'.repeat(64)
+    });
+
+    expect(publishRequestMock).toHaveBeenCalledWith({
+      kind: 5973,
+      tags: [['route', 'llm-route-1'], ['environment', 'env-prod'], ['release', 'llm-release-1']],
+      content: {
+        route_id: 'llm-route-1',
+        environment_id: 'env-prod',
+        release_id: 'llm-release-1',
+        requested_by: 'f'.repeat(64)
+      }
+    });
+    expect(awaitResultMock).toHaveBeenCalledWith({
+      requestEventId: 'req-1',
+      resultKinds: [6973, 7973]
+    });
+    expect(result).toMatchObject({
+      requestEventId: 'req-1',
+      event: {
+        id: 'result-llm-deploy',
+        kind: 6973
+      }
+    });
+  });
+
+  it('approves LLM deployment intents through signer-first approval requests', async () => {
+    await api.approveLLMDeploymentIntent('llm-intent-1');
+
+    expect(publishRequestMock).toHaveBeenCalledWith({
+      kind: 5974,
+      tags: [['intent', 'llm-intent-1'], ['decision', 'approve']],
+      content: { intent_id: 'llm-intent-1', decision: 'approve' }
+    });
+    expect(awaitResultMock).toHaveBeenCalledWith({
+      requestEventId: 'req-1',
+      resultKinds: [7973]
+    });
+  });
+
   it('evaluates deployment policy through signer-first requests and returns parsed payload', async () => {
     awaitResultMock.mockResolvedValueOnce({
       id: 'result-policy',

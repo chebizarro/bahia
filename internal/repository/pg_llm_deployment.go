@@ -225,14 +225,11 @@ func (r *PgLLMDeploymentRunRepository) EnsureQueuedRunForNextReadyIntent(ctx con
 	run.Status = domain.RunStatusQueued
 	run.CreatedAt = now
 	run.UpdatedAt = now
-	metaJSON, err := marshalJSON(map[string]any{}, "LLM run metadata")
-	if err != nil {
-		return nil, err
-	}
-
 	created, err := r.scanRun(r.pool.QueryRow(ctx, `
 		WITH next_intent AS (
-			SELECT i.id
+			SELECT i.id, i.route_id, i.release_id, i.environment_id,
+			       i.metadata->>'nostr_event_id' AS nostr_event_id,
+			       i.metadata->>'nostr_request_pubkey' AS nostr_request_pubkey
 			FROM llm_deployment_intents i
 			JOIN llm_route_state s
 			  ON s.route_id = i.route_id
@@ -249,10 +246,16 @@ func (r *PgLLMDeploymentRunRepository) EnsureQueuedRunForNextReadyIntent(ctx con
 			LIMIT 1
 		)
 		INSERT INTO llm_deployment_runs (`+llmRunColumns+`)
-		SELECT $1, id, '', '', '', '', '', $2, NULL, '', '', $3, NULL, NULL, $4, $5
+		SELECT $1, id, '', '', '', '', '', $2, NULL, '', '', jsonb_build_object(
+			'route_id', route_id,
+			'release_id', release_id,
+			'environment_id', environment_id,
+			'nostr_event_id', nostr_event_id,
+			'nostr_request_pubkey', nostr_request_pubkey
+		), NULL, NULL, $3, $4
 		FROM next_intent
 		RETURNING `+llmRunColumns+`
-	`, run.ID, run.Status, metaJSON, run.CreatedAt, run.UpdatedAt))
+	`, run.ID, run.Status, run.CreatedAt, run.UpdatedAt))
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			return nil, nil

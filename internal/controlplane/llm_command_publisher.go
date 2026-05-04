@@ -8,6 +8,7 @@ import (
 	canonicalnostr "fiatjaf.com/nostr"
 	"github.com/google/uuid"
 	"github.com/nbd-wtf/go-nostr"
+	"github.com/openagentsinc/bahia/internal/domain"
 )
 
 // NostrEventPublisher publishes signed Nostr events to the control-plane relay set.
@@ -24,6 +25,32 @@ type LLMCommandPublisher struct {
 // NewLLMCommandPublisher creates a publisher for MCP-originated LLM commands.
 func NewLLMCommandPublisher(publisher NostrEventPublisher, signer canonicalnostr.Signer) *LLMCommandPublisher {
 	return &LLMCommandPublisher{publisher: publisher, signer: signer}
+}
+
+// LLMRouteCreateCommand describes a canonical LLM route-create request.
+type LLMRouteCreateCommand struct {
+	Name                   string
+	Description            string
+	GatewayConfig          *domain.LLMGatewayRouteConfig
+	DefaultPlacementPolicy *domain.LLMPlacementPolicy
+	DefaultPromotionGate   *domain.LLMPromotionGateConfig
+	Metadata               map[string]any
+}
+
+// LLMReleaseRegisterCommand describes a canonical LLM release-register request.
+type LLMReleaseRegisterCommand struct {
+	RouteID            uuid.UUID
+	Version            string
+	ModelRef           string
+	ModelSource        string
+	ModelRevision      string
+	EstimatedVRAMGB    int
+	BackendPreferences []domain.LLMBackendKind
+	RuntimeBackend     *domain.LLMRuntimeManagedBackendConfig
+	ExternalBackend    *domain.LLMExternalBackendConfig
+	PlacementPolicy    *domain.LLMPlacementPolicy
+	PromotionGate      *domain.LLMPromotionGateConfig
+	Metadata           map[string]any
 }
 
 // LLMDeployCommand describes a canonical LLM deploy request.
@@ -53,7 +80,7 @@ type LLMCommandReceipt struct {
 	RequestEventID  string `json:"request_event_id"`
 	RequestPubkey   string `json:"request_pubkey"`
 	RequestKind     int    `json:"request_kind"`
-	StatusKind      int    `json:"status_kind"`
+	StatusKind      int    `json:"status_kind,omitempty"`
 	ResultKind      int    `json:"result_kind"`
 	RegistryKind    int    `json:"registry_kind"`
 	StateKind       int    `json:"state_kind"`
@@ -63,6 +90,69 @@ type LLMCommandReceipt struct {
 	ReleaseID       string `json:"release_id,omitempty"`
 	IntentID        string `json:"intent_id,omitempty"`
 	Decision        string `json:"decision,omitempty"`
+}
+
+// PublishLLMRouteCreateRequest publishes kind:5971 and returns correlation metadata.
+func (p *LLMCommandPublisher) PublishLLMRouteCreateRequest(ctx context.Context, cmd LLMRouteCreateCommand) (*LLMCommandReceipt, error) {
+	content := map[string]any{
+		"name": cmd.Name,
+	}
+	if cmd.Description != "" {
+		content["description"] = cmd.Description
+	}
+	if cmd.GatewayConfig != nil {
+		content["gateway_config"] = cmd.GatewayConfig
+	}
+	if cmd.DefaultPlacementPolicy != nil {
+		content["default_placement_policy"] = cmd.DefaultPlacementPolicy
+	}
+	if cmd.DefaultPromotionGate != nil {
+		content["default_promotion_gate"] = cmd.DefaultPromotionGate
+	}
+	if len(cmd.Metadata) > 0 {
+		content["metadata"] = cmd.Metadata
+	}
+	return p.publish(ctx, KindLLMRouteCreate, 0, KindLLMRouteCreateResult, nil, content)
+}
+
+// PublishLLMReleaseRegisterRequest publishes kind:5972 and returns correlation metadata.
+func (p *LLMCommandPublisher) PublishLLMReleaseRegisterRequest(ctx context.Context, cmd LLMReleaseRegisterCommand) (*LLMCommandReceipt, error) {
+	content := map[string]any{
+		"route_id":     cmd.RouteID.String(),
+		"version":      cmd.Version,
+		"model_ref":    cmd.ModelRef,
+		"model_source": cmd.ModelSource,
+	}
+	if cmd.ModelRevision != "" {
+		content["model_revision"] = cmd.ModelRevision
+	}
+	if cmd.EstimatedVRAMGB > 0 {
+		content["estimated_vram_gb"] = cmd.EstimatedVRAMGB
+	}
+	if len(cmd.BackendPreferences) > 0 {
+		content["backend_preferences"] = cmd.BackendPreferences
+	}
+	if cmd.RuntimeBackend != nil {
+		content["runtime_backend"] = cmd.RuntimeBackend
+	}
+	if cmd.ExternalBackend != nil {
+		content["external_backend"] = cmd.ExternalBackend
+	}
+	if cmd.PlacementPolicy != nil {
+		content["placement_policy"] = cmd.PlacementPolicy
+	}
+	if cmd.PromotionGate != nil {
+		content["promotion_gate"] = cmd.PromotionGate
+	}
+	if len(cmd.Metadata) > 0 {
+		content["metadata"] = cmd.Metadata
+	}
+	tags := nostr.Tags{{"route", cmd.RouteID.String()}}
+	receipt, err := p.publish(ctx, KindLLMReleaseRegister, 0, KindLLMReleaseRegisterResult, tags, content)
+	if receipt != nil {
+		receipt.RouteID = cmd.RouteID.String()
+	}
+	return receipt, err
 }
 
 // PublishLLMDeployRequest publishes kind:5973 and returns correlation metadata.
@@ -83,7 +173,7 @@ func (p *LLMCommandPublisher) PublishLLMDeployRequest(ctx context.Context, cmd L
 		{"environment", cmd.EnvironmentID.String()},
 		{"release", cmd.ReleaseID.String()},
 	}
-	receipt, err := p.publish(ctx, KindLLMDeployRequest, tags, content)
+	receipt, err := p.publish(ctx, KindLLMDeployRequest, KindLLMDeploymentStatus, KindLLMDeploymentResult, tags, content)
 	if receipt != nil {
 		receipt.RouteID = cmd.RouteID.String()
 		receipt.EnvironmentID = cmd.EnvironmentID.String()
@@ -102,7 +192,7 @@ func (p *LLMCommandPublisher) PublishLLMApprovalRequest(ctx context.Context, cmd
 		{"intent", cmd.IntentID.String()},
 		{"decision", cmd.Decision},
 	}
-	receipt, err := p.publish(ctx, KindLLMDeploymentApproval, tags, content)
+	receipt, err := p.publish(ctx, KindLLMDeploymentApproval, KindLLMDeploymentStatus, KindLLMDeploymentResult, tags, content)
 	if receipt != nil {
 		receipt.IntentID = cmd.IntentID.String()
 		receipt.Decision = cmd.Decision
@@ -123,7 +213,7 @@ func (p *LLMCommandPublisher) PublishLLMRollbackRequest(ctx context.Context, cmd
 		{"route", cmd.RouteID.String()},
 		{"environment", cmd.EnvironmentID.String()},
 	}
-	receipt, err := p.publish(ctx, KindLLMRollbackRequest, tags, content)
+	receipt, err := p.publish(ctx, KindLLMRollbackRequest, KindLLMDeploymentStatus, KindLLMDeploymentResult, tags, content)
 	if receipt != nil {
 		receipt.RouteID = cmd.RouteID.String()
 		receipt.EnvironmentID = cmd.EnvironmentID.String()
@@ -131,7 +221,7 @@ func (p *LLMCommandPublisher) PublishLLMRollbackRequest(ctx context.Context, cmd
 	return receipt, err
 }
 
-func (p *LLMCommandPublisher) publish(ctx context.Context, kind int, tags nostr.Tags, content map[string]any) (*LLMCommandReceipt, error) {
+func (p *LLMCommandPublisher) publish(ctx context.Context, kind, statusKind, resultKind int, tags nostr.Tags, content map[string]any) (*LLMCommandReceipt, error) {
 	if p == nil || p.publisher == nil {
 		return nil, fmt.Errorf("LLM command publisher is not configured")
 	}
@@ -154,8 +244,8 @@ func (p *LLMCommandPublisher) publish(ctx context.Context, kind int, tags nostr.
 		RequestEventID:  ev.ID,
 		RequestPubkey:   ev.PubKey,
 		RequestKind:     kind,
-		StatusKind:      KindLLMDeploymentStatus,
-		ResultKind:      KindLLMDeploymentResult,
+		StatusKind:      statusKind,
+		ResultKind:      resultKind,
 		RegistryKind:    KindLLMRouteRegistry,
 		StateKind:       KindLLMRouteState,
 		PublishedRelays: published,

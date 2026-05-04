@@ -75,8 +75,10 @@ type SignatureVerifier interface {
 	VerifySignatures(ctx context.Context, artifact *domain.Artifact) ([]domain.ArtifactSignature, error)
 }
 
-// LLMCommandPublisher emits canonical Nostr request events for async LLM MCP tools.
+// LLMCommandPublisher emits canonical Nostr request events for signer-first LLM MCP tools.
 type LLMCommandPublisher interface {
+	PublishLLMRouteCreateRequest(ctx context.Context, cmd controlplane.LLMRouteCreateCommand) (*controlplane.LLMCommandReceipt, error)
+	PublishLLMReleaseRegisterRequest(ctx context.Context, cmd controlplane.LLMReleaseRegisterCommand) (*controlplane.LLMCommandReceipt, error)
 	PublishLLMDeployRequest(ctx context.Context, cmd controlplane.LLMDeployCommand) (*controlplane.LLMCommandReceipt, error)
 	PublishLLMApprovalRequest(ctx context.Context, cmd controlplane.LLMApprovalCommand) (*controlplane.LLMCommandReceipt, error)
 	PublishLLMRollbackRequest(ctx context.Context, cmd controlplane.LLMRollbackCommand) (*controlplane.LLMCommandReceipt, error)
@@ -416,7 +418,7 @@ func (s *Server) GetTools() []Tool {
 		// LLM route/release registry operations
 		{
 			Name:        "bahia_llm_create_route",
-			Description: "Create an LLM route registry entry",
+			Description: "Publish a canonical LLM route-create request event and return correlation metadata",
 			InputSchema: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
@@ -448,7 +450,7 @@ func (s *Server) GetTools() []Tool {
 		},
 		{
 			Name:        "bahia_llm_register_release",
-			Description: "Register an immutable deployable LLM release for a route",
+			Description: "Publish a canonical LLM release-register request event and return correlation metadata",
 			InputSchema: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
@@ -2339,7 +2341,7 @@ func (s *Server) requireLLMCommands() (LLMCommandPublisher, *ToolResult) {
 }
 
 func (s *Server) handleLLMCreateRoute(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	registry, errResult := s.requireLLMRegistry()
+	publisher, errResult := s.requireLLMCommands()
 	if errResult != nil {
 		return errResult, nil
 	}
@@ -2354,17 +2356,18 @@ func (s *Server) handleLLMCreateRoute(ctx context.Context, args map[string]inter
 	if err := decodeToolArgs(args, &req); err != nil {
 		return errorResult(fmt.Sprintf("invalid LLM route request: %v", err)), nil
 	}
-	route := &domain.LLMRoute{Name: req.Name, Description: req.Description, GatewayConfig: req.GatewayConfig, DefaultPlacementPolicy: req.DefaultPlacementPolicy, DefaultPromotionGate: req.DefaultPromotionGate, Metadata: req.Metadata}
-	if err := registry.CreateRoute(ctx, route); err != nil {
-		return errorResult(fmt.Sprintf("failed to create LLM route: %v", err)), nil
-	}
-	return jsonResult(map[string]interface{}{
-		"status":        "created",
-		"route_id":      route.ID.String(),
-		"registry_kind": controlplane.KindLLMRouteRegistry,
-		"state_kind":    controlplane.KindLLMRouteState,
-		"route":         llmRouteToMap(route),
+	receipt, err := publisher.PublishLLMRouteCreateRequest(ctx, controlplane.LLMRouteCreateCommand{
+		Name:                   req.Name,
+		Description:            req.Description,
+		GatewayConfig:          req.GatewayConfig,
+		DefaultPlacementPolicy: req.DefaultPlacementPolicy,
+		DefaultPromotionGate:   req.DefaultPromotionGate,
+		Metadata:               req.Metadata,
 	})
+	if err != nil {
+		return errorResult(fmt.Sprintf("failed to publish LLM route create request: %v", err)), nil
+	}
+	return jsonResult(llmCommandReceiptToMap("submitted", receipt))
 }
 
 func (s *Server) handleLLMUpdateRoute(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
@@ -2421,7 +2424,7 @@ func (s *Server) handleLLMUpdateRoute(ctx context.Context, args map[string]inter
 }
 
 func (s *Server) handleLLMRegisterRelease(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	registry, errResult := s.requireLLMRegistry()
+	publisher, errResult := s.requireLLMCommands()
 	if errResult != nil {
 		return errResult, nil
 	}
@@ -2446,18 +2449,24 @@ func (s *Server) handleLLMRegisterRelease(ctx context.Context, args map[string]i
 	if err != nil {
 		return errorResult(fmt.Sprintf("invalid route_id: %v", err)), nil
 	}
-	release := &domain.LLMRelease{RouteID: routeID, Version: req.Version, ModelRef: req.ModelRef, ModelSource: req.ModelSource, ModelRevision: req.ModelRevision, EstimatedVRAMGB: req.EstimatedVRAMGB, BackendPreferences: req.BackendPreferences, RuntimeBackend: req.RuntimeBackend, ExternalBackend: req.ExternalBackend, PlacementPolicy: req.PlacementPolicy, PromotionGate: req.PromotionGate, Metadata: req.Metadata}
-	if err := registry.CreateRelease(ctx, release); err != nil {
-		return errorResult(fmt.Sprintf("failed to register LLM release: %v", err)), nil
-	}
-	return jsonResult(map[string]interface{}{
-		"status":        "registered",
-		"route_id":      routeID.String(),
-		"release_id":    release.ID.String(),
-		"registry_kind": controlplane.KindLLMRouteRegistry,
-		"state_kind":    controlplane.KindLLMRouteState,
-		"release":       llmReleaseToMap(release),
+	receipt, err := publisher.PublishLLMReleaseRegisterRequest(ctx, controlplane.LLMReleaseRegisterCommand{
+		RouteID:            routeID,
+		Version:            req.Version,
+		ModelRef:           req.ModelRef,
+		ModelSource:        req.ModelSource,
+		ModelRevision:      req.ModelRevision,
+		EstimatedVRAMGB:    req.EstimatedVRAMGB,
+		BackendPreferences: req.BackendPreferences,
+		RuntimeBackend:     req.RuntimeBackend,
+		ExternalBackend:    req.ExternalBackend,
+		PlacementPolicy:    req.PlacementPolicy,
+		PromotionGate:      req.PromotionGate,
+		Metadata:           req.Metadata,
 	})
+	if err != nil {
+		return errorResult(fmt.Sprintf("failed to publish LLM release register request: %v", err)), nil
+	}
+	return jsonResult(llmCommandReceiptToMap("submitted", receipt))
 }
 
 func (s *Server) handleLLMListRoutes(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
@@ -4144,7 +4153,9 @@ func llmCommandReceiptToMap(status string, receipt *controlplane.LLMCommandRecei
 	result["request_event_id"] = receipt.RequestEventID
 	result["request_pubkey"] = receipt.RequestPubkey
 	result["request_kind"] = receipt.RequestKind
-	result["status_kind"] = receipt.StatusKind
+	if receipt.StatusKind > 0 {
+		result["status_kind"] = receipt.StatusKind
+	}
 	result["result_kind"] = receipt.ResultKind
 	result["registry_kind"] = receipt.RegistryKind
 	result["state_kind"] = receipt.StateKind

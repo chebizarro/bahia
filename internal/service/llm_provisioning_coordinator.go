@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	llmadapter "github.com/openagentsinc/bahia/internal/adapters/llm"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/repository"
@@ -107,22 +108,22 @@ func (c *LLMProvisioningCoordinator) processRun(ctx context.Context, run *domain
 	_ = c.registry.MarkDeploymentRunCreated(ctx, run)
 	intent, err := c.registry.GetDeploymentIntent(ctx, run.DeploymentIntentID)
 	if err != nil {
-		return c.failRun(ctx, run, fmt.Errorf("load intent: %w", err), nil, llmadapter.ProvisionCandidateRequest{})
+		return c.failRun(ctx, run, nil, fmt.Errorf("load intent: %w", err), nil, llmadapter.ProvisionCandidateRequest{})
 	}
 	if intent == nil {
-		return c.failRun(ctx, run, fmt.Errorf("intent %s not found", run.DeploymentIntentID), nil, llmadapter.ProvisionCandidateRequest{})
+		return c.failRun(ctx, run, nil, fmt.Errorf("intent %s not found", run.DeploymentIntentID), nil, llmadapter.ProvisionCandidateRequest{})
 	}
 	route, release, env, err := c.registry.loadRouteReleaseEnvironment(ctx, intent.RouteID, intent.ReleaseID, intent.EnvironmentID)
 	if err != nil {
-		return c.failRun(ctx, run, err, nil, llmadapter.ProvisionCandidateRequest{})
+		return c.failRun(ctx, run, intent, err, nil, llmadapter.ProvisionCandidateRequest{})
 	}
 	candidate, err := c.placement.SelectCandidate(ctx, route, release, env)
 	if err != nil {
-		return c.failRun(ctx, run, err, nil, llmadapter.ProvisionCandidateRequest{})
+		return c.failRun(ctx, run, intent, err, nil, llmadapter.ProvisionCandidateRequest{})
 	}
 	provisioner, err := c.provisioners.Resolve(candidate.BackendKind)
 	if err != nil {
-		return c.failRun(ctx, run, err, nil, llmadapter.ProvisionCandidateRequest{})
+		return c.failRun(ctx, run, intent, err, nil, llmadapter.ProvisionCandidateRequest{})
 	}
 
 	req := llmadapter.ProvisionCandidateRequest{Route: route, Release: release, Environment: env, Run: run, BackendKind: candidate.BackendKind, Worker: candidate.Worker}
@@ -142,7 +143,7 @@ func (c *LLMProvisioningCoordinator) processRun(ctx context.Context, run *domain
 	c.publishStatus(ctx, intent, run, "provisioning_backend", "provisioning LLM backend")
 	result, err := provisioner.Provision(ctx, req)
 	if err != nil {
-		return c.failRun(ctx, run, err, provisioner, req)
+		return c.failRun(ctx, run, intent, err, provisioner, req)
 	}
 	run.BackendKind = result.BackendKind
 	run.BackendEndpoint = result.BackendEndpoint
@@ -157,7 +158,7 @@ func (c *LLMProvisioningCoordinator) processRun(ctx context.Context, run *domain
 
 	state, err := c.registry.GetRouteState(ctx, intent.RouteID, intent.EnvironmentID)
 	if err != nil {
-		return c.failRun(ctx, run, err, provisioner, req)
+		return c.failRun(ctx, run, intent, err, provisioner, req)
 	}
 	if state == nil || state.DesiredIntentID == nil || *state.DesiredIntentID != intent.ID {
 		_ = provisioner.Deprovision(ctx, req)
@@ -172,18 +173,18 @@ func (c *LLMProvisioningCoordinator) processRun(ctx context.Context, run *domain
 		if err == nil {
 			err = fmt.Errorf("promotion gate failed")
 		}
-		return c.failRun(ctx, run, err, provisioner, req)
+		return c.failRun(ctx, run, intent, err, provisioner, req)
 	}
 
 	gatewayRef := c.gatewayRef(env)
 	if strings.TrimSpace(gatewayRef) == "" {
-		return c.failRun(ctx, run, fmt.Errorf("no llm gateway configured for environment %s", env.ID), provisioner, req)
+		return c.failRun(ctx, run, intent, fmt.Errorf("no llm gateway configured for environment %s", env.ID), provisioner, req)
 	}
 	c.publishStatus(ctx, intent, run, "syncing_gateway", "syncing LLM gateway route")
 	spec := BuildLLMGatewayRouteSpec(route, result.BackendEndpoint)
 	gatewayObs, err := c.gateway.UpsertRoute(ctx, gatewayRef, spec)
 	if err != nil {
-		return c.failRun(ctx, run, err, provisioner, req)
+		return c.failRun(ctx, run, intent, err, provisioner, req)
 	}
 	backendObs, err := provisioner.Observe(ctx, req)
 	if err != nil {
@@ -207,23 +208,95 @@ func (c *LLMProvisioningCoordinator) processRun(ctx context.Context, run *domain
 	return nil
 }
 
-func (c *LLMProvisioningCoordinator) failRun(ctx context.Context, run *domain.LLMDeploymentRun, cause error, provisioner llmadapter.Provisioner, req llmadapter.ProvisionCandidateRequest) error {
+func (c *LLMProvisioningCoordinator) failRun(ctx context.Context, run *domain.LLMDeploymentRun, intent *domain.LLMDeploymentIntent, cause error, provisioner llmadapter.Provisioner, req llmadapter.ProvisionCandidateRequest) error {
 	if provisioner != nil {
 		_ = provisioner.Deprovision(ctx, req)
 	}
+	correlationIntent := c.failureIntent(intent, run, req)
 	mergeRunMetadata(run, map[string]any{"error": cause.Error()})
 	_ = c.runs.Update(ctx, run)
+	if correlationIntent != nil {
+		c.publishError(ctx, correlationIntent, run, "failed", cause)
+	}
 	if err := c.registry.CompleteDeploymentRun(ctx, run.ID, domain.RunStatusFailed, nil); err != nil {
 		return err
 	}
-	if req.Route != nil && req.Release != nil && req.Environment != nil {
-		intent := &domain.LLMDeploymentIntent{ID: run.DeploymentIntentID, RouteID: req.Route.ID, ReleaseID: req.Release.ID, EnvironmentID: req.Environment.ID, Metadata: map[string]any{}}
-		if loaded, err := c.registry.GetDeploymentIntent(ctx, run.DeploymentIntentID); err == nil && loaded != nil {
-			intent = loaded
-		}
-		c.publishError(ctx, intent, run, "failed", cause)
-	}
 	return cause
+}
+
+func (c *LLMProvisioningCoordinator) failureIntent(intent *domain.LLMDeploymentIntent, run *domain.LLMDeploymentRun, req llmadapter.ProvisionCandidateRequest) *domain.LLMDeploymentIntent {
+	if intent != nil {
+		return intent
+	}
+	if req.Route != nil && req.Release != nil && req.Environment != nil {
+		return &domain.LLMDeploymentIntent{
+			ID:            run.DeploymentIntentID,
+			RouteID:       req.Route.ID,
+			ReleaseID:     req.Release.ID,
+			EnvironmentID: req.Environment.ID,
+			Metadata:      metadataSubset(run.Metadata, "nostr_event_id", "nostr_request_pubkey"),
+		}
+	}
+	if run == nil || run.Metadata == nil {
+		return nil
+	}
+	routeID, routeOK := metadataUUID(run.Metadata, "route_id")
+	releaseID, releaseOK := metadataUUID(run.Metadata, "release_id")
+	envID, envOK := metadataUUID(run.Metadata, "environment_id")
+	if !routeOK || !releaseOK || !envOK {
+		return nil
+	}
+	return &domain.LLMDeploymentIntent{
+		ID:            run.DeploymentIntentID,
+		RouteID:       routeID,
+		ReleaseID:     releaseID,
+		EnvironmentID: envID,
+		Metadata:      metadataSubset(run.Metadata, "nostr_event_id", "nostr_request_pubkey"),
+	}
+}
+
+func metadataSubset(values map[string]any, keys ...string) map[string]any {
+	out := make(map[string]any, len(keys))
+	for _, key := range keys {
+		if value, ok := metadataString(values, key); ok {
+			out[key] = value
+		}
+	}
+	return out
+}
+
+func metadataString(values map[string]any, key string) (string, bool) {
+	if values == nil {
+		return "", false
+	}
+	raw, ok := values[key]
+	if !ok {
+		return "", false
+	}
+	text, ok := raw.(string)
+	if !ok || strings.TrimSpace(text) == "" {
+		return "", false
+	}
+	return text, true
+}
+
+func metadataUUID(values map[string]any, key string) (uuid.UUID, bool) {
+	if values == nil {
+		return uuid.Nil, false
+	}
+	raw, ok := values[key]
+	if !ok {
+		return uuid.Nil, false
+	}
+	text, ok := raw.(string)
+	if !ok || strings.TrimSpace(text) == "" {
+		return uuid.Nil, false
+	}
+	id, err := uuid.Parse(text)
+	if err != nil {
+		return uuid.Nil, false
+	}
+	return id, true
 }
 
 func (c *LLMProvisioningCoordinator) publishStatus(ctx context.Context, intent *domain.LLMDeploymentIntent, run *domain.LLMDeploymentRun, step, message string) {

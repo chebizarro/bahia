@@ -132,9 +132,21 @@ func (r *testLLMReleaseRepo) ListByRoute(_ context.Context, routeID uuid.UUID, l
 }
 
 type captureLLMCommandPublisher struct {
-	deploy   *controlplane.LLMDeployCommand
-	approval *controlplane.LLMApprovalCommand
-	rollback *controlplane.LLMRollbackCommand
+	routeCreate     *controlplane.LLMRouteCreateCommand
+	releaseRegister *controlplane.LLMReleaseRegisterCommand
+	deploy          *controlplane.LLMDeployCommand
+	approval        *controlplane.LLMApprovalCommand
+	rollback        *controlplane.LLMRollbackCommand
+}
+
+func (p *captureLLMCommandPublisher) PublishLLMRouteCreateRequest(_ context.Context, cmd controlplane.LLMRouteCreateCommand) (*controlplane.LLMCommandReceipt, error) {
+	p.routeCreate = &cmd
+	return &controlplane.LLMCommandReceipt{RequestEventID: "route-create-event", RequestPubkey: "mcp-pubkey", RequestKind: controlplane.KindLLMRouteCreate, ResultKind: controlplane.KindLLMRouteCreateResult, RegistryKind: controlplane.KindLLMRouteRegistry, StateKind: controlplane.KindLLMRouteState, PublishedRelays: 1}, nil
+}
+
+func (p *captureLLMCommandPublisher) PublishLLMReleaseRegisterRequest(_ context.Context, cmd controlplane.LLMReleaseRegisterCommand) (*controlplane.LLMCommandReceipt, error) {
+	p.releaseRegister = &cmd
+	return &controlplane.LLMCommandReceipt{RequestEventID: "release-register-event", RequestPubkey: "mcp-pubkey", RequestKind: controlplane.KindLLMReleaseRegister, ResultKind: controlplane.KindLLMReleaseRegisterResult, RegistryKind: controlplane.KindLLMRouteRegistry, StateKind: controlplane.KindLLMRouteState, PublishedRelays: 1, RouteID: cmd.RouteID.String()}, nil
 }
 
 func (p *captureLLMCommandPublisher) PublishLLMDeployRequest(_ context.Context, cmd controlplane.LLMDeployCommand) (*controlplane.LLMCommandReceipt, error) {
@@ -186,9 +198,11 @@ func TestGetTools_IncludesLLMTools(t *testing.T) {
 	}
 }
 
-func TestCallTool_LLMRegistryTools(t *testing.T) {
+func TestCallTool_LLMRouteReleaseToolsPublishCanonicalNostrRequests(t *testing.T) {
 	ctx := context.Background()
-	server, routeRepo, releaseRepo := newTestLLMRegistryServer()
+	publisher := &captureLLMCommandPublisher{}
+	server := NewServerWithOptions(nil, zap.NewNop(), ServerDeps{LLMCommandPublisher: publisher})
+	routeID := uuid.New()
 
 	createRes, err := server.CallTool(ctx, "bahia_llm_create_route", map[string]interface{}{
 		"name":           "chat",
@@ -202,26 +216,14 @@ func TestCallTool_LLMRegistryTools(t *testing.T) {
 		t.Fatalf("create route returned error: %s", createRes.Content[0].Text)
 	}
 	createPayload := decodeResultMap(t, createRes)
-	routeID := uuid.MustParse(createPayload["route_id"].(string))
-	if createPayload["registry_kind"].(float64) != float64(controlplane.KindLLMRouteRegistry) {
-		t.Fatalf("unexpected registry kind: %#v", createPayload)
+	if createPayload["request_kind"].(float64) != float64(controlplane.KindLLMRouteCreate) || createPayload["result_kind"].(float64) != float64(controlplane.KindLLMRouteCreateResult) {
+		t.Fatalf("unexpected create route payload: %#v", createPayload)
 	}
-	if routeRepo.routes[routeID] == nil {
-		t.Fatalf("expected route to be persisted")
+	if _, ok := createPayload["status_kind"]; ok {
+		t.Fatalf("route-create payload should not include status_kind: %#v", createPayload)
 	}
-
-	updateRes, err := server.CallTool(ctx, "bahia_llm_update_route", map[string]interface{}{
-		"route_id":    routeID.String(),
-		"description": "updated",
-	})
-	if err != nil {
-		t.Fatalf("update route call err: %v", err)
-	}
-	if updateRes.IsError {
-		t.Fatalf("update route returned error: %s", updateRes.Content[0].Text)
-	}
-	if routeRepo.routes[routeID].Description != "updated" {
-		t.Fatalf("expected route description to update")
+	if publisher.routeCreate == nil || publisher.routeCreate.Name != "chat" || publisher.routeCreate.Description != "chat completions" {
+		t.Fatalf("unexpected captured route-create command: %#v", publisher.routeCreate)
 	}
 
 	releaseRes, err := server.CallTool(ctx, "bahia_llm_register_release", map[string]interface{}{
@@ -239,9 +241,38 @@ func TestCallTool_LLMRegistryTools(t *testing.T) {
 	if releaseRes.IsError {
 		t.Fatalf("register release returned error: %s", releaseRes.Content[0].Text)
 	}
-	releaseID := uuid.MustParse(decodeResultMap(t, releaseRes)["release_id"].(string))
-	if releaseRepo.releases[releaseID] == nil {
-		t.Fatalf("expected release to be persisted")
+	releasePayload := decodeResultMap(t, releaseRes)
+	if releasePayload["request_kind"].(float64) != float64(controlplane.KindLLMReleaseRegister) || releasePayload["result_kind"].(float64) != float64(controlplane.KindLLMReleaseRegisterResult) {
+		t.Fatalf("unexpected release-register payload: %#v", releasePayload)
+	}
+	if _, ok := releasePayload["status_kind"]; ok {
+		t.Fatalf("release-register payload should not include status_kind: %#v", releasePayload)
+	}
+	if publisher.releaseRegister == nil || publisher.releaseRegister.RouteID != routeID || publisher.releaseRegister.Version != "v1" || publisher.releaseRegister.ModelRef != "hf://example/model" {
+		t.Fatalf("unexpected captured release-register command: %#v", publisher.releaseRegister)
+	}
+}
+
+func TestCallTool_LLMUpdateRoutePersistsRegistryMetadata(t *testing.T) {
+	ctx := context.Background()
+	server, routeRepo, _ := newTestLLMRegistryServer()
+	route := &domain.LLMRoute{ID: uuid.New(), Name: "chat", Description: "before"}
+	if err := routeRepo.Create(ctx, route); err != nil {
+		t.Fatalf("seed route: %v", err)
+	}
+
+	updateRes, err := server.CallTool(ctx, "bahia_llm_update_route", map[string]interface{}{
+		"route_id":    route.ID.String(),
+		"description": "updated",
+	})
+	if err != nil {
+		t.Fatalf("update route call err: %v", err)
+	}
+	if updateRes.IsError {
+		t.Fatalf("update route returned error: %s", updateRes.Content[0].Text)
+	}
+	if routeRepo.routes[route.ID].Description != "updated" {
+		t.Fatalf("expected route description to update")
 	}
 }
 

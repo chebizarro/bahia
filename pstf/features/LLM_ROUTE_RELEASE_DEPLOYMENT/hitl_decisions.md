@@ -6,7 +6,7 @@
 - Framework: PSTF
 - Interaction Mode: RepoPrompt ask-user tool
 - Current Stage: human_review
-- Last Updated: 2026-05-04T19:46:08Z
+- Last Updated: 2026-05-04T21:25:09Z
 
 ---
 
@@ -339,13 +339,56 @@ BLOCKER
 - [ ] Add and run the blocked E2E workflow test `LLMRD-T-018` once the workflow exists.
 - [ ] Re-run PSTF verification after D-001 is addressed.
 
+
+### Decision HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-009 — Canonical signer-first route/release requirement for release scope
+
+**Stage:** human_review
+**Agent:** HITL Review Agent
+**Decision Type:** ambiguity_resolution
+**Status:** active
+
+**Context Summary:**
+The adversarial review identified that route creation and release registration still used direct MCP registry mutation instead of the canonical signer-first `5971` / `5972` request path required by the approved contract. Release scope needed an explicit decision before verification could continue.
+
+**Question Asked:**
+How should route creation and release registration be treated for this release?
+
+**Options Presented:**
+- A) Require canonical signer-first `5971` / `5972` request publishing before release
+- B) Allow direct MCP registry mutation as a temporary compatibility path for this release
+- C) Defer route/release creation from the approved release scope until canonical publishing exists
+- D) Revise AC-002 and AC-003 to describe the mixed contract explicitly
+
+**User Selection:**
+A
+
+**User Notes:**
+None.
+
+**Decision:**
+REQUIRE_CANONICAL_SIGNER_FIRST_5971_5972_BEFORE_RELEASE
+
+**Impact:**
+- Feature Spec: none — this confirms the existing intended contract rather than changing it.
+- Acceptance Criteria: none — AC-002 and AC-003 remain in force as written.
+- Tests: updated — route/release requester coverage now includes publisher, MCP, browser-helper, and E2E evidence for canonical signer-first behavior.
+- Defects: updated — D-005 is no longer an accepted-risk escape hatch and is now resolved by implementation plus passing coverage.
+- Confidence / Release: adjusted — release scope no longer permits direct MCP registry mutation as an alternative contract for route/release operations.
+
+**Required Follow-Up Actions:**
+- [x] Implement canonical signer-first requester publishing for route creation and release registration.
+- [x] Verify that MCP tooling uses the canonical publisher path instead of direct registry mutation.
+- [x] Update PSTF verification artifacts to remove D-005 as an accepted risk.
+
+---
+
 ## Summary
 
-- Final Status: NEEDS_WORK
+- Final Status: PENDING
 - Open Questions: 1 — what explicit rollback target-selection rule should replace the current implementation
-- Accepted Risks: 1 — D-005 requester-side relay-acceptance verification for signer-first route/release requests
+- Accepted Risks: 0 — none currently recorded for the approved non-rollback slice
 - Deferred Items: 1 — rollback-specific acceptance criteria and tests remain deferred until replacement semantics are approved
-- Blocking Issues: 2 — D-003 missing provisioning coordinator verification for AC-006; D-001 missing approved browser workflow for AC-009
+- Blocking Issues: 0 — historical blocker decisions for D-001 and D-003 are now satisfied by verified fixes; a fresh final release decision has not yet been collected
 - Superseded Decisions: 1 — HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-006 was superseded by HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-007
 
 ## Traceability
@@ -360,3 +403,4 @@ BLOCKER
 | HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-006 | release gate | none | D-001, D-003, D-005 | hitl_decisions.md | Initial APPROVED_WITH_RISK response was not self-consistent once risk scope was clarified. |
 | HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-007 | LLMRD-AC-006 | T-012, T-013 | D-003 | hitl_decisions.md, verification_report.md | D-003 is a blocker, so the release gate outcome is NEEDS_WORK rather than APPROVED_WITH_RISK. |
 | HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-008 | LLMRD-AC-009 | T-018 | D-001 | hitl_decisions.md, verification_report.md | Missing browser workflow is explicitly treated as a blocker at this stage. |
+| HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-009 | LLMRD-AC-002, LLMRD-AC-003 | T-002, T-003, T-004, T-005, T-018 | D-005 | hitl_decisions.md, verification_report.md, defects.json | Route/release operations must use canonical signer-first 5971/5972 publishing before release. |

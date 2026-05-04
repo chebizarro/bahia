@@ -40,18 +40,22 @@ func TestPgLLMDeploymentRunRepository_QueueClaimAndUpdate(t *testing.T) {
 
 	repo := newPgLLMDeploymentRunRepositoryWithDB(mock)
 	intentID := uuid.New()
+	routeID := uuid.New()
+	releaseID := uuid.New()
+	envID := uuid.New()
 	runID := uuid.New()
 	now := time.Now().UTC()
 
 	mock.ExpectQuery("WITH next_intent").
-		WithArgs(pgxmock.AnyArg(), domain.RunStatusQueued, pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).
+		WithArgs(pgxmock.AnyArg(), domain.RunStatusQueued, pgxmock.AnyArg(), pgxmock.AnyArg()).
 		WillReturnRows(pgxmock.NewRows(llmRunMockRows()).
-			AddRow(runID, intentID, "", "", "", "", "", domain.RunStatusQueued, nil, "", "", []byte(`{}`), nil, nil, now, now))
+			AddRow(runID, intentID, "", "", "", "", "", domain.RunStatusQueued, nil, "", "", []byte(`{"route_id":"`+routeID.String()+`","release_id":"`+releaseID.String()+`","environment_id":"`+envID.String()+`","nostr_event_id":"req-1","nostr_request_pubkey":"pub-1"}`), nil, nil, now, now))
 
 	queued, err := repo.EnsureQueuedRunForNextReadyIntent(ctx)
 	require.NoError(t, err)
 	require.NotNil(t, queued)
 	require.Equal(t, domain.RunStatusQueued, queued.Status)
+	require.Equal(t, map[string]any{"route_id": routeID.String(), "release_id": releaseID.String(), "environment_id": envID.String(), "nostr_event_id": "req-1", "nostr_request_pubkey": "pub-1"}, queued.Metadata)
 
 	mock.ExpectQuery("UPDATE llm_deployment_runs").
 		WithArgs(pgxmock.AnyArg()).

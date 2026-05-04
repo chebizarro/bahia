@@ -75,6 +75,63 @@ export function rejectDeploymentIntent(id) {
   return publishCommand({ kind: KINDS.BAHIA_REQUEST_DEPLOYMENT_APPROVAL, tags: [['intent', id], ['decision', 'reject']], content: { intent_id: id, decision: 'reject' } });
 }
 
+export function createLLMRoute(payload) {
+  return publishCommand({
+    kind: KINDS.BAHIA_REQUEST_LLM_ROUTE_CREATE,
+    content: payload,
+    resultKinds: [KINDS.BAHIA_LLM_ROUTE_CREATE_RESULT]
+  });
+}
+
+export function registerLLMRelease(payload) {
+  return publishCommand({
+    kind: KINDS.BAHIA_REQUEST_LLM_RELEASE_REGISTER,
+    tags: [['route', payload.route_id]].filter((tag) => tag[1]),
+    content: payload,
+    resultKinds: [KINDS.BAHIA_LLM_RELEASE_REGISTER_RESULT]
+  });
+}
+
+export async function requestLLMDeploy(payload) {
+  await bootstrapControlplane();
+  const tags = [
+    ['route', payload.route_id],
+    ['environment', payload.environment_id],
+    ['release', payload.release_id]
+  ].filter((tag) => tag[1]);
+  const { requestEventId } = await publishRequest({
+    kind: KINDS.BAHIA_REQUEST_LLM_DEPLOY,
+    tags,
+    content: payload
+  });
+  const event = await awaitResult({
+    requestEventId,
+    resultKinds: [KINDS.BAHIA_LLM_DEPLOYMENT_STATUS, KINDS.BAHIA_LLM_DEPLOYMENT_RESULT]
+  });
+  return {
+    requestEventId,
+    event: throwIfErrorResult(event)
+  };
+}
+
+export function approveLLMDeploymentIntent(id) {
+  return publishCommand({
+    kind: KINDS.BAHIA_REQUEST_LLM_DEPLOYMENT_APPROVAL,
+    tags: [['intent', id], ['decision', 'approve']],
+    content: { intent_id: id, decision: 'approve' },
+    resultKinds: [KINDS.BAHIA_LLM_DEPLOYMENT_RESULT]
+  });
+}
+
+export function rejectLLMDeploymentIntent(id) {
+  return publishCommand({
+    kind: KINDS.BAHIA_REQUEST_LLM_DEPLOYMENT_APPROVAL,
+    tags: [['intent', id], ['decision', 'reject']],
+    content: { intent_id: id, decision: 'reject' },
+    resultKinds: [KINDS.BAHIA_LLM_DEPLOYMENT_RESULT]
+  });
+}
+
 export function registerArtifact(payload) {
   return publishCommand({ kind: KINDS.BAHIA_REQUEST_ARTIFACT_REGISTER, tags: [['service', payload.service_id], ['build', payload.build_id]].filter((tag) => tag[1]), content: payload });
 }

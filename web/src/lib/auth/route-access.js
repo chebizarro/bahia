@@ -5,6 +5,7 @@ const PROTECTED_PREFIXES = [
   '/policies',
   '/environments',
   '/workers',
+  '/llm',
   '/artifacts',
   '/payments',
   '/notifications',

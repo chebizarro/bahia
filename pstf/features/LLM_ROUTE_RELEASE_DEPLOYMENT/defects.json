@@ -5,7 +5,7 @@
       "defect_id": "LLMRD-D-001",
       "title": "Dedicated end-user LLM browser workflow is missing",
       "severity": "major",
-      "status": "open",
+      "status": "verified",
       "related_ac_ids": [
         "LLMRD-AC-009"
       ],
@@ -13,13 +13,17 @@
         "LLMRD-T-018"
       ],
       "evidence": [
-        "RepoPrompt path search under `web/src/routes` for `llm` returned no matches on 2026-05-04.",
-        "pstf/features/LLM_ROUTE_RELEASE_DEPLOYMENT/feature_spec.json (contradiction LLMRD-CON-002)",
-        "pstf/features/LLM_ROUTE_RELEASE_DEPLOYMENT/acceptance_criteria.json (LLMRD-AC-009)",
-        "internal/api/router/llm_routes_test.go"
+        "web/src/routes/llm/+page.svelte",
+        "web/src/lib/stores/public-controlplane.svelte.js",
+        "web/src/lib/components/Nav.svelte",
+        "web/src/lib/auth/route-access.js",
+        "web/tests/e2e/harnesses/llm-controlplane-public.js",
+        "web/tests/e2e/llm-route-release-deployment.spec.js",
+        "`cd /Users/bizarro/Documents/Projects/bahia/web && npm run build` passed on 2026-05-04.",
+        "`cd /Users/bizarro/Documents/Projects/bahia/web && npm run test:e2e -- tests/e2e/llm-route-release-deployment.spec.js` passed on 2026-05-04."
       ],
       "suspected_root_cause": "The approved user-facing LLM workflow was never implemented in the web route surface; current browser support stops at shared relay-backed state consumption.",
-      "recommended_fix": "Implement a dedicated browser LLM workflow that supports route creation, release registration, deploy initiation, approval visibility, and relay-backed route/activity views using signer-first Nostr requests.",
+      "recommended_fix": "No further fix required for this defect; keep the dedicated `/llm` workflow and its deterministic Playwright coverage passing.",
       "requires_human_decision": false
     },
     {
@@ -56,7 +60,7 @@
       "defect_id": "LLMRD-D-003",
       "title": "Missing provisioning coordinator verification for async LLM deployment lifecycle",
       "severity": "minor",
-      "status": "open",
+      "status": "verified",
       "related_ac_ids": [
         "LLMRD-AC-006"
       ],
@@ -65,12 +69,14 @@
         "LLMRD-T-013"
       ],
       "evidence": [
-        "RepoPrompt path search for `internal/service/llm_provisioning_coordinator_test.go` returned no matches on 2026-05-04.",
-        "internal/service/llm_provisioning_coordinator.go:120-251",
-        "pstf/features/LLM_ROUTE_RELEASE_DEPLOYMENT/test_matrix.json"
+        "internal/service/llm_provisioning_coordinator.go",
+        "internal/service/llm_provisioning_coordinator_test.go",
+        "internal/repository/pg_llm_deployment.go",
+        "internal/repository/pg_llm_deployment_test.go",
+        "`go test ./internal/controlplane ./internal/service ./internal/repository ./internal/mcp` passed on 2026-05-04."
       ],
       "suspected_root_cause": "The async provisioning path was implemented without a dedicated fake-backed coordinator test harness.",
-      "recommended_fix": "Add coordinator tests that exercise `ProcessOnce` success and failure paths with capture responders and fake placement/provisioner/gateway dependencies.",
+      "recommended_fix": "No further fix required for this defect; keep the coordinator success/failure regression tests passing.",
       "requires_human_decision": false
     },
     {
@@ -99,7 +105,7 @@
       "defect_id": "LLMRD-D-005",
       "title": "Missing requester-side relay-acceptance verification for signer-first LLM route/release requests",
       "severity": "minor",
-      "status": "open",
+      "status": "verified",
       "related_ac_ids": [
         "LLMRD-AC-002",
         "LLMRD-AC-003"
@@ -109,12 +115,19 @@
         "LLMRD-T-004"
       ],
       "evidence": [
-        "internal/controlplane/reactor_llm_requests_test.go injects signed request events directly into `handleLLMRouteCreate` and `handleLLMReleaseRegister`.",
-        "No route-create or release-register requester/publisher test exists analogous to `internal/controlplane/llm_command_publisher_test.go` for deploy.",
-        "pstf/features/LLM_ROUTE_RELEASE_DEPLOYMENT/acceptance_criteria.json requires at least one accepted relay publish for AC-002 and AC-003."
+        "internal/controlplane/llm_command_publisher.go",
+        "internal/controlplane/llm_command_publisher_test.go",
+        "internal/mcp/server.go",
+        "internal/mcp/server_llm_test.go",
+        "web/src/lib/stores/public-controlplane.svelte.js",
+        "web/tests/unit/public-controlplane.test.js",
+        "web/tests/e2e/llm-route-release-deployment.spec.js",
+        "`go test ./internal/controlplane ./internal/service ./internal/repository ./internal/mcp` passed on 2026-05-04.",
+        "`cd /Users/bizarro/Documents/Projects/bahia/web && npm test -- --run tests/unit/public-controlplane.test.js tests/unit/controlplane-store.test.js` passed on 2026-05-04.",
+        "`cd /Users/bizarro/Documents/Projects/bahia/web && npm run test:e2e -- tests/e2e/llm-route-release-deployment.spec.js` passed on 2026-05-04."
       ],
-      "suspected_root_cause": "The Bahia-side reactor contract was tested, but requester-side publish acceptance for 5971/5972 is either unimplemented in this repository or untested.",
-      "recommended_fix": "Add requester/publisher-path coverage for route-create and release-register acceptance semantics, or explicitly narrow the verification claim if that responsibility lives outside this repository.",
+      "suspected_root_cause": "The requester-side route-create and release-register path previously bypassed canonical signer-first publishing and lacked direct frontend request coverage.",
+      "recommended_fix": "No further fix required for this defect; canonical signer-first 5971/5972 publishing is now implemented and covered across MCP, publisher, browser helper, and E2E layers.",
       "requires_human_decision": false
     }
   ]

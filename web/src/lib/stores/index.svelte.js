@@ -29,7 +29,7 @@ export { isAuthenticated, currentUser };
 export { systemInfo, loadSystemInfo, currentSystemInfo };
 
 // Nostr-backed dashboard/read-model state
-export { services, environments, states, llmRoutes, llmRouteStates, artifacts, builds, deploymentIntents, deploymentRuns, policies, workers, events, loading, controlplaneConnection };
+export { services, environments, states, llmRoutes, llmRouteStates, artifacts, builds, deploymentIntents, deploymentRuns, policies, workers, events, loading, controlplaneConnection, bootstrapControlplane };
 
 // Derived state helpers
 export function driftedStates() {

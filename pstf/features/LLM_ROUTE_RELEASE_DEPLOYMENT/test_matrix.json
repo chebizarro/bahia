@@ -418,8 +418,8 @@
         "Exercise `ProcessOnce` directly instead of ticker-based `Run` to avoid timer-driven tests.",
         "Assert callback order deterministically from the capture responder."
       ],
-      "status": "not_implemented",
-      "failure_reason": "No `internal/service/llm_provisioning_coordinator_test.go` file exists, so the successful async progress/completion path is unverified by automated tests."
+      "status": "pass",
+      "failure_reason": null
     },
     {
       "test_id": "LLMRD-T-013",
@@ -454,8 +454,8 @@
       "determinism_notes": [
         "Drive failures directly through fake dependencies; avoid sleeps or external runtime dependencies."
       ],
-      "status": "not_implemented",
-      "failure_reason": "No `internal/service/llm_provisioning_coordinator_test.go` file exists, so async failure-path status/result behavior is unverified by automated tests."
+      "status": "pass",
+      "failure_reason": null
     },
     {
       "test_id": "LLMRD-T-014",
@@ -597,7 +597,7 @@
       "type": "e2e",
       "existing_or_new": "new",
       "target_path": "web/tests/e2e/llm-route-release-deployment.spec.js",
-      "description": "Define the end-to-end browser proof for the approved user-facing contract. Estimated implementation difficulty: high because the workflow is not currently present in the web app.",
+      "description": "Dedicated browser workflow proof for the approved user-facing contract. Implemented via a deterministic relay-backed Playwright harness and dedicated `/llm` route. Estimated implementation difficulty: high; now completed.",
       "preconditions": [
         "The web app exposes a dedicated LLM workflow page or route.",
         "Signer-first browser request helpers and relay-backed read models are wired for the LLM slice.",
@@ -622,11 +622,12 @@
         "Stable environment, route, release, and requester fixtures suitable for repeatable browser automation."
       ],
       "determinism_notes": [
-        "Do not rely on live external relays or model providers; use the local Bahia test harness and deterministic relay events.",
-        "This test remains blocked until the dedicated workflow exists."
+        "Uses a deterministic Bahia Playwright harness that intercepts signer-first WebSocket publishes and synthesizes correlated relay-visible projections/results.",
+        "Does not rely on live external relays or model providers.",
+        "Explicitly asserts the browser workflow avoids deprecated `/api/v1/llm/**` mutation endpoints."
       ],
-      "status": "blocked",
-      "failure_reason": "No dedicated end-user LLM browser workflow is implemented under `web/src/routes`, so the approved UX contract cannot yet be exercised end to end."
+      "status": "pass",
+      "failure_reason": null
     },
     {
       "test_id": "LLMRD-T-019",
@@ -663,20 +664,16 @@
     "criteria_total": 9,
     "criteria_with_tests": 9,
     "known_gaps": [
-      "Requester-side relay-acceptance semantics for signer-first route-create and release-register requests are still not directly proven by automated coverage in this repository; current tests prove Bahia-side correlation and result handling only.",
-      "The async provisioning path has no existing coordinator tests for ordered 6973 progress replies, terminal 7973 success/error results, or failed-run state recording.",
-      "The approved end-user browser workflow test is blocked because no dedicated LLM workflow currently exists in `web/src/routes`.",
-      "Rollback-specific tests are intentionally excluded from this matrix because rollback acceptance criteria were deferred by HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-004."
+      "Rollback-specific tests remain intentionally excluded because rollback acceptance criteria were deferred by HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-004."
     ]
   },
   "implementation_notes": [
-    "`internal/controlplane/reactor_llm_requests_test.go` now covers Bahia-side signed request/result correlation for route create, release register, deploy acceptance, approval, rejection, and invalid decision handling.",
-    "`internal/controlplane/llm_command_publisher_test.go` now asserts canonical deploy request tags and positive publish behavior alongside the existing zero-accept failure case.",
-    "`internal/service/llm_registry_test.go` now verifies rejection repair restores desired route state to the previous deployed intent/release when one exists.",
-    "Route-create and release-register requester-side relay acceptance semantics still need separate coverage or a narrowed verification claim, because the new reactor tests inject signed request events directly.",
-    "High-effort additions still outstanding: introduce `internal/service/llm_provisioning_coordinator_test.go` with full fake placement/provisioner/gateway/responder dependencies and build a deterministic browser e2e harness for the future dedicated LLM workflow.",
-    "Current existing coverage is strongest around system discovery, MCP request shaping, projection publication, registry/reconcile state shaping, and relay-backed browser store consumption.",
-    "Because AC-009 is approved but the corresponding product surface is absent, this matrix is ready for implementation planning but not fully verifiable until that workflow is built.",
-    "`web/tests/unit/controlplane-store.test.js` now includes an explicit spoofed non-Bahia LLM route/state/activity regression test, closing the AC-008 negative-coverage gap."
+    "`internal/controlplane/reactor_llm_requests_test.go` covers Bahia-side signed request/result correlation for route create, release register, deploy acceptance, approval, rejection, and invalid decision handling.",
+    "`internal/controlplane/llm_command_publisher_test.go` now covers canonical route-create and release-register publisher paths in addition to deploy and rollback publisher contracts.",
+    "`internal/mcp/server_llm_test.go` now proves MCP route-create and release-register tools publish canonical signer-first Nostr requests instead of mutating the registry directly.",
+    "`internal/service/llm_provisioning_coordinator_test.go` now verifies coordinator success-path progress/completion and failure-path terminal error behavior for AC-006.",
+    "`web/tests/unit/public-controlplane.test.js` adds direct browser-request helper coverage for signer-first LLM route, release, deploy, and approval requests.",
+    "`web/src/routes/llm/+page.svelte`, `web/tests/e2e/harnesses/llm-controlplane-public.js`, and `web/tests/e2e/llm-route-release-deployment.spec.js` now provide deterministic end-to-end coverage for the dedicated browser workflow required by AC-009.",
+    "`web/tests/unit/controlplane-store.test.js` includes explicit spoofed non-Bahia LLM route/state/activity regression coverage for AC-008."
   ]
 }

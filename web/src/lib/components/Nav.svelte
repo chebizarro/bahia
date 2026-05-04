@@ -35,6 +35,7 @@
     <li><a href="/artifacts" class:active={$page.url.pathname.startsWith('/artifacts')}>Artifacts</a></li>
     <li><a href="/environments" class:active={$page.url.pathname.startsWith('/environments')}>Environments</a></li>
     <li><a href="/workers" class:active={$page.url.pathname.startsWith('/workers')}>Workers</a></li>
+    <li><a href="/llm" class:active={$page.url.pathname.startsWith('/llm')}>LLM</a></li>
     <li><a href="/payments" class:active={$page.url.pathname.startsWith('/payments')}>Payments</a></li>
     <li><a href="/policies" class:active={$page.url.pathname.startsWith('/policies')}>Policies</a></li>
     <li><a href="/deployments" class:active={$page.url.pathname.startsWith('/deployments') && !$page.url.pathname.startsWith('/deployments/pending')}>Deployments</a></li>
