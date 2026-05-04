@@ -1,0 +1,297 @@
+{
+  "feature_id": "LLM_ROUTE_RELEASE_DEPLOYMENT",
+  "status": "approved",
+  "approval_decision_refs": [
+    "HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-004",
+    "HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-005"
+  ],
+  "criteria": [
+    {
+      "ac_id": "LLMRD-AC-001",
+      "feature_id": "LLM_ROUTE_RELEASE_DEPLOYMENT",
+      "title": "System discovery advertises the LLM control-plane contract only when LLM is enabled",
+      "type": "contract",
+      "priority": "must",
+      "assertion": "`/api/v1/system/info` must advertise `llm_routes`, `llm_deployments`, and `llm_rollback` capabilities plus the LLM request kinds `5971-5975`, status kind `6973`, result kinds `7971-7973`, and read-model kinds `31964-31965` only when the LLM feature is enabled, and must omit those LLM-specific entries when the feature is disabled.",
+      "testable_by": [
+        "unit",
+        "contract"
+      ],
+      "preconditions": [
+        "System info handler is exercised once with `llmEnabled=true` and once with `llmEnabled=false`."
+      ],
+      "steps": [
+        "Request or construct the control-plane info payload in both enabled and disabled configurations.",
+        "Inspect capabilities, request kinds, status kinds, result kinds, read-model kinds, correlation tags, and MCP fields."
+      ],
+      "expected_result": "The enabled payload contains the full LLM contract surface; the disabled payload does not advertise it.",
+      "negative_cases": [
+        "If the disabled payload still advertises LLM control-plane kinds or capabilities, the criterion fails.",
+        "If the enabled payload omits any of the canonical LLM kinds or route/release correlation fields, the criterion fails."
+      ],
+      "source_evidence": [
+        "internal/api/handlers/system.go:256-318",
+        "docs/control-planes.md:66-115",
+        "pstf/features/LLM_ROUTE_RELEASE_DEPLOYMENT/feature_spec.json"
+      ],
+      "requires_human_approval": false
+    },
+    {
+      "ac_id": "LLMRD-AC-002",
+      "feature_id": "LLM_ROUTE_RELEASE_DEPLOYMENT",
+      "title": "LLM route creation uses a signer-first correlated request/result contract",
+      "type": "functional",
+      "priority": "must",
+      "assertion": "Creating an LLM route must publish a signed kind `5971` request, require at least one accepted relay publish, and produce a correlated kind `7971` terminal result carrying `route_id`, `status=success`, and reply tags linking the result to the originating requester and request event.",
+      "testable_by": [
+        "integration",
+        "contract"
+      ],
+      "preconditions": [
+        "A signer-capable caller can publish canonical LLM request events.",
+        "At least one control-plane relay is reachable for the success case."
+      ],
+      "steps": [
+        "Publish an LLM route create request with valid route payload.",
+        "Observe publish acceptance and the correlated terminal result event."
+      ],
+      "expected_result": "The request is signed, at least one relay accepts it, and a correlated `7971` result resolves the operation with the created `route_id`.",
+      "negative_cases": [
+        "If zero relays accept the request and the caller is still told the route was created, the criterion fails.",
+        "If the terminal result lacks correlation to the originating request or requester, the criterion fails."
+      ],
+      "source_evidence": [
+        "internal/controlplane/reactor.go:944-969",
+        "internal/controlplane/reactor.go:1785-1807",
+        "internal/controlplane/llm_command_publisher.go",
+        "docs/event-spec.md:176-202"
+      ],
+      "requires_human_approval": false
+    },
+    {
+      "ac_id": "LLMRD-AC-003",
+      "feature_id": "LLM_ROUTE_RELEASE_DEPLOYMENT",
+      "title": "LLM release registration uses a signer-first correlated request/result contract",
+      "type": "functional",
+      "priority": "must",
+      "assertion": "Registering an LLM release must publish a signed kind `5972` request scoped to a route, require at least one accepted relay publish, and produce a correlated kind `7972` terminal result carrying `route_id`, `release_id`, and `status=success`.",
+      "testable_by": [
+        "integration",
+        "contract"
+      ],
+      "preconditions": [
+        "A valid route already exists.",
+        "A signer-capable caller can publish canonical LLM request events."
+      ],
+      "steps": [
+        "Publish an LLM release registration request containing route and release payload fields.",
+        "Observe publish acceptance and the correlated terminal result event."
+      ],
+      "expected_result": "The request is signed, at least one relay accepts it, and a correlated `7972` result resolves the operation with the created `release_id`.",
+      "negative_cases": [
+        "If the release request is accepted without route correlation, the criterion fails.",
+        "If the terminal result omits `release_id` or fails to correlate to the originating requester and request event, the criterion fails."
+      ],
+      "source_evidence": [
+        "internal/controlplane/reactor.go:974-1011",
+        "internal/controlplane/reactor.go:1809-1833",
+        "docs/control-planes.md:82-115"
+      ],
+      "requires_human_approval": false
+    },
+    {
+      "ac_id": "LLMRD-AC-004",
+      "feature_id": "LLM_ROUTE_RELEASE_DEPLOYMENT",
+      "title": "LLM deploy requests are signer-first, explicitly tagged, and accepted asynchronously",
+      "type": "functional",
+      "priority": "must",
+      "assertion": "Deploying an LLM release must publish a signed kind `5973` request carrying explicit `route`, `environment`, and `release` correlation tags, fail pre-acceptance when no relay accepts the request, and on acceptance return a correlated kind `6973` reply whose semantic meaning is `accepted for async processing`, not terminal success.",
+      "testable_by": [
+        "integration",
+        "contract"
+      ],
+      "preconditions": [
+        "A route, release, and environment are available.",
+        "A signer-capable caller can publish canonical LLM request events."
+      ],
+      "steps": [
+        "Publish a valid deploy request.",
+        "Observe relay acceptance behavior and the first correlated reply event."
+      ],
+      "expected_result": "The request is signed and explicitly tagged, zero-accept publish fails locally, and successful acceptance yields a correlated `6973` reply with `status=processing` and step `accepted`.",
+      "negative_cases": [
+        "If the caller treats the initial accepted status as a completed deployment, the criterion fails.",
+        "If a deploy request can succeed without explicit route/environment/release correlation tags, the criterion fails."
+      ],
+      "source_evidence": [
+        "internal/controlplane/reactor.go:1013-1071",
+        "internal/controlplane/reactor.go:1835-1861",
+        "internal/controlplane/llm_command_publisher.go",
+        "internal/controlplane/llm_command_publisher_test.go"
+      ],
+      "requires_human_approval": false
+    },
+    {
+      "ac_id": "LLMRD-AC-005",
+      "feature_id": "LLM_ROUTE_RELEASE_DEPLOYMENT",
+      "title": "LLM deployment approval and rejection remain signer-first and stateful",
+      "type": "data_integrity",
+      "priority": "must",
+      "assertion": "Approving or rejecting a protected-environment LLM deployment intent must use a signed kind `5974` request correlated by `intent` and `decision`, reject invalid decisions before mutation, publish a correlated kind `7973` terminal result, and on rejection repair the desired route state away from the rejected intent.",
+      "testable_by": [
+        "integration",
+        "contract"
+      ],
+      "preconditions": [
+        "A pending protected-environment LLM deployment intent exists."
+      ],
+      "steps": [
+        "Publish an approval request for a pending intent.",
+        "Publish a rejection request for a pending intent in a separate run.",
+        "Inspect the resulting terminal replies and route-state mutation."
+      ],
+      "expected_result": "Valid decisions mutate intent state and publish correlated terminal `7973` replies; rejection removes the rejected intent from desired route-state selection; invalid decisions fail with validation error and no mutation.",
+      "negative_cases": [
+        "If a decision other than `approve` or `reject` mutates deployment state, the criterion fails.",
+        "If rejected intents remain the desired route state after rejection repair should have run, the criterion fails."
+      ],
+      "source_evidence": [
+        "internal/controlplane/reactor.go:1074-1114",
+        "internal/service/llm_registry.go:188-231",
+        "internal/service/llm_registry.go:503-530"
+      ],
+      "requires_human_approval": false
+    },
+    {
+      "ac_id": "LLMRD-AC-006",
+      "feature_id": "LLM_ROUTE_RELEASE_DEPLOYMENT",
+      "title": "Accepted LLM deployments emit progress and terminal outcomes through the async provisioning path",
+      "type": "functional",
+      "priority": "must",
+      "assertion": "After an LLM deploy request has been accepted, the asynchronous provisioning path must emit correlated `6973` progress replies for meaningful deployment stages and eventually publish a terminal `7973` result with completed or error status; failures must complete the run as failed and must not be reported as successful deployment completion.",
+      "testable_by": [
+        "integration",
+        "manual_review"
+      ],
+      "preconditions": [
+        "An accepted LLM deployment intent exists and the provisioning coordinator is active."
+      ],
+      "steps": [
+        "Run a successful LLM deployment from accepted intent through completion.",
+        "Run a failing LLM deployment that hits provisioning, gate, or gateway-sync failure."
+      ],
+      "expected_result": "Successful runs emit progress then terminal completion; failing runs emit progress up to failure and a terminal error result, with run/state records reflecting failure instead of success.",
+      "negative_cases": [
+        "If a failed run emits a success terminal result, the criterion fails.",
+        "If accepted deployments never emit a terminal `7973` outcome, the criterion fails."
+      ],
+      "source_evidence": [
+        "internal/service/llm_provisioning_coordinator.go:120-251",
+        "internal/controlplane/llm_responder.go",
+        "internal/service/llm_registry.go:252-327"
+      ],
+      "requires_human_approval": false
+    },
+    {
+      "ac_id": "LLMRD-AC-007",
+      "feature_id": "LLM_ROUTE_RELEASE_DEPLOYMENT",
+      "title": "Authoritative LLM route and route-state projections are published and reconciled",
+      "type": "data_integrity",
+      "priority": "must",
+      "assertion": "Bahia must publish replaceable `31964` LLM route registry projections and `31965` LLM route-state projections from authoritative state, and the route-state projection must reflect desired release/intent plus observed backend and gateway status after observation/reconcile updates.",
+      "testable_by": [
+        "unit",
+        "integration"
+      ],
+      "preconditions": [
+        "Authoritative route, release, intent, run, or observation state exists."
+      ],
+      "steps": [
+        "Republish or update LLM route and route-state projections from authoritative state.",
+        "Record an observation or run reconcile against backend and gateway state."
+      ],
+      "expected_result": "`31964` and `31965` projections are published, and route-state content tracks desired-vs-observed backend/gateway state including drift and gateway status changes.",
+      "negative_cases": [
+        "If LLM route-state changes are not projected after authoritative state changes, the criterion fails.",
+        "If reconcile observations cannot influence projected backend/gateway state, the criterion fails."
+      ],
+      "source_evidence": [
+        "internal/adapters/nostr/projector.go:107-352",
+        "internal/reconcile/llm_reconciler.go",
+        "internal/reconcile/llm_reconciler_test.go",
+        "internal/service/llm_registry_test.go"
+      ],
+      "requires_human_approval": false
+    },
+    {
+      "ac_id": "LLMRD-AC-008",
+      "feature_id": "LLM_ROUTE_RELEASE_DEPLOYMENT",
+      "title": "Browser-visible LLM control-plane state comes from Bahia-authored relay events",
+      "type": "functional",
+      "priority": "must",
+      "assertion": "The shared browser control-plane store must populate `llmRoutes`, `llmRouteStates`, and LLM deployment activity from Bahia-authored relay events, ignore spoofed authors, and keep the collections reactive to live `31964`, `31965`, `6973`, and `797x` events after bootstrap.",
+      "testable_by": [
+        "unit",
+        "e2e"
+      ],
+      "preconditions": [
+        "The browser has bootstrapped the shared control-plane store with an advertised Bahia service pubkey."
+      ],
+      "steps": [
+        "Bootstrap the shared control-plane store.",
+        "Deliver valid LLM route/state/status/result events from the Bahia service pubkey.",
+        "Deliver spoofed events from a non-Bahia author."
+      ],
+      "expected_result": "Valid Bahia-authored events update LLM route/state/activity collections; spoofed authors are ignored; live updates remain reactive after bootstrap.",
+      "negative_cases": [
+        "If spoofed non-Bahia events populate LLM route or state collections, the criterion fails.",
+        "If live LLM events stop updating browser-visible state after bootstrap, the criterion fails."
+      ],
+      "source_evidence": [
+        "web/src/lib/stores/controlplane.svelte.js:304-489",
+        "web/tests/unit/controlplane-store.test.js:190-269",
+        "web/src/lib/nostr/client.js:1-160"
+      ],
+      "requires_human_approval": false
+    },
+    {
+      "ac_id": "LLMRD-AC-009",
+      "feature_id": "LLM_ROUTE_RELEASE_DEPLOYMENT",
+      "title": "Approved product contract requires a dedicated end-user browser workflow and excludes legacy operational REST mutations",
+      "type": "ux",
+      "priority": "must",
+      "assertion": "The approved product contract for this slice requires a dedicated browser-visible workflow that lets an end user create an LLM route, register a release, initiate deployment, review approval state, and observe resulting route-state/activity using signer-first Nostr requests plus relay-backed read models; that workflow must not depend on the deprecated operational REST mutation endpoints `/api/v1/llm/intents`, `/approve`, `/reject`, `/rollback`, `/hosts`, or `/observations` as normative behavior.",
+      "testable_by": [
+        "e2e",
+        "manual_review",
+        "contract"
+      ],
+      "preconditions": [
+        "The LLM control-plane feature is enabled for the browser-facing product surface."
+      ],
+      "steps": [
+        "Exercise the browser-visible LLM workflow from route/release creation through deploy and approval visibility.",
+        "Inspect the transport and route dependencies used by that workflow."
+      ],
+      "expected_result": "The workflow is present and user-visible, uses signer-first LLM request kinds plus relay-backed read models, and does not require the deprecated operational REST mutation surface as part of the approved contract.",
+      "negative_cases": [
+        "If the product exposes only passive shared-store visibility with no dedicated user workflow, the criterion fails.",
+        "If the approved browser workflow relies on `/api/v1/llm/intents`, `/approve`, `/reject`, `/rollback`, `/hosts`, or `/observations` as normative mutations, the criterion fails."
+      ],
+      "source_evidence": [
+        "pstf/features/LLM_ROUTE_RELEASE_DEPLOYMENT/hitl_decisions.md#decision-hitl-llm_route_release_deployment-001--intended-user-surface-classification",
+        "pstf/features/LLM_ROUTE_RELEASE_DEPLOYMENT/hitl_decisions.md#decision-hitl-llm_route_release_deployment-002--operational-rest-compatibility-contract-classification",
+        "pstf/features/LLM_ROUTE_RELEASE_DEPLOYMENT/hitl_decisions.md#decision-hitl-llm_route_release_deployment-005--acceptance-criteria-approval"
+      ],
+      "requires_human_approval": false
+    }
+  ],
+  "coverage_notes": [
+    "This approved AC set covers the non-rollback portion of the LLM control-plane slice because rollback semantics were explicitly deferred by HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-004.",
+    "Several criteria are grounded in current backend, projection, and shared-store evidence, while the dedicated end-user browser workflow criterion is authorized by prior HITL and is expected to fail until that workflow is implemented.",
+    "Observed operational REST mutation routes remain useful legacy evidence, but they are not part of the approved intended contract for future test generation."
+  ],
+  "unresolved_questions": [
+    "What explicit rollback target-selection and supersedence rule should replace the current implementation before rollback-specific acceptance criteria and tests are generated?"
+  ]
+}

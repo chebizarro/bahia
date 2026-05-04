@@ -137,10 +137,10 @@ FIX_CURRENT_ROLLBACK_SELECTION_RULE
 
 ## Summary
 
-- Final Status: decisions captured
+- Final Status: APPROVE_AS_IS for the current non-rollback AC set
 - Open Questions: 1 — what explicit rollback target-selection rule should replace the current implementation
 - Accepted Risks: 0
-- Deferred Items: 0
+- Deferred Items: 1 — rollback-specific acceptance criteria and tests remain deferred until replacement semantics are approved
 - Blocking Issues: 1 — intended full web workflow is approved but not currently observed as a dedicated route/page implementation
 - Superseded Decisions: 0
 
@@ -148,6 +148,90 @@ FIX_CURRENT_ROLLBACK_SELECTION_RULE
 
 | Decision ID | Affects ACs | Affects Tests | Affects Defects | Affects Artifacts | Notes |
 | --- | --- | --- | --- | --- | --- |
-| HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-001 | future LLM AC set | future browser/E2E coverage | possible web-workflow gap issue | feature_spec.json, future acceptance_criteria.json | Current shared-store-only web visibility is not the approved end state. |
-| HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-002 | future LLM AC set | router compatibility tests become observed-only evidence | deprecation/removal follow-up | feature_spec.json, future acceptance_criteria.json | Operational REST mutations are not part of the approved intended contract. |
-| HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-003 | future rollback ACs | future rollback tests | rollback semantic-fix follow-up | feature_spec.json, future acceptance_criteria.json | Rollback remains in scope, but its current selection rule is not approved. |
+| HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-001 | LLMRD-AC-009 | future browser/E2E coverage | possible web-workflow gap issue | feature_spec.json, acceptance_criteria.json | Current shared-store-only web visibility is not the approved end state. |
+| HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-002 | LLMRD-AC-009 | router compatibility tests become observed-only evidence | deprecation/removal follow-up | feature_spec.json, acceptance_criteria.json | Operational REST mutations are not part of the approved intended contract. |
+| HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-003 | future rollback AC set | future rollback tests | rollback semantic-fix follow-up | feature_spec.json, future acceptance_criteria.json | Rollback remains in scope, but its current selection rule is not approved. |
+| HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-004 | rollback AC scope | rollback test generation | none | acceptance_criteria.json, hitl_decisions.md | Rollback ACs are intentionally omitted until replacement semantics are approved. |
+| HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-005 | LLMRD-AC-001..009 | non-rollback test generation | none | acceptance_criteria.json, hitl_decisions.md | Current AC set approved as written. |
+
+---
+
+### Decision HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-004 — Rollback acceptance-criteria scope during semantic deferral
+
+**Stage:** human_review
+**Agent:** PSTF Acceptance Criteria Agent
+**Decision Type:** scope_classification
+**Status:** active
+
+**Context Summary:**
+The feature spec keeps rollback in scope, but the current rollback target-selection and supersedence logic was explicitly classified as `FIX`, not approved behavior. The acceptance-criteria artifact needed a decision on whether to encode temporary rollback criteria anyway or defer them until replacement semantics are defined.
+
+**Question Asked:**
+How should rollback be represented in the acceptance criteria for `LLM_ROUTE_RELEASE_DEPLOYMENT` right now?
+
+**Options Presented:**
+- A) Keep rollback ACs at transport/visibility level only (request, correlation, user-visible action), and defer target-selection semantics until a later decision
+- B) Defer all rollback acceptance criteria until the replacement rollback rule is decided
+- C) Freeze the current rollback-selection behavior as temporary acceptance criteria anyway
+
+**User Selection:**
+B
+
+**User Notes:**
+None.
+
+**Decision:**
+DEFER_ALL_ROLLBACK_ACCEPTANCE_CRITERIA
+
+**Impact:**
+- Feature Spec: none
+- Acceptance Criteria: updated — rollback-specific ACs are excluded from this artifact until replacement semantics are approved
+- Tests: rollback test generation is blocked on a future semantic decision
+- Defects: none
+- Confidence / Release: adjusted — the feature slice remains approved for non-rollback criteria, but rollback verification is intentionally deferred
+
+**Required Follow-Up Actions:**
+- [ ] Capture the replacement rollback-selection rule before generating rollback-specific tests or final rollback ACs.
+- [ ] Re-open the AC artifact to add rollback criteria once the replacement semantics are approved.
+
+---
+
+### Decision HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-005 — Acceptance criteria approval
+
+**Stage:** human_review
+**Agent:** PSTF Acceptance Criteria Agent
+**Decision Type:** spec_approval
+**Status:** active
+
+**Context Summary:**
+A draft AC set was prepared for system discovery, signer-first route/release/deploy/approval flows, route-state projection, browser-visible LLM state, the required end-user web workflow, and exclusion of the deprecated operational REST mutation surface. Rollback ACs were removed from the draft pending a replacement rollback rule.
+
+**Question Asked:**
+Do you approve the acceptance criteria for `LLM_ROUTE_RELEASE_DEPLOYMENT` on that basis?
+
+**Options Presented:**
+- A) APPROVE_AS_IS
+- B) APPROVE_WITH_EDITS
+- C) REJECT_AND_REVISE
+- D) DEFER_FEATURE
+
+**User Selection:**
+APPROVE_AS_IS
+
+**User Notes:**
+None.
+
+**Decision:**
+APPROVE_AS_IS
+
+**Impact:**
+- Feature Spec: none
+- Acceptance Criteria: updated — artifact status promoted to `approved`
+- Tests: non-rollback test design may proceed from the approved AC set
+- Defects: none
+- Confidence / Release: adjusted — ACs are approved for the scoped non-rollback behavior, with rollback intentionally deferred
+
+**Required Follow-Up Actions:**
+- [x] Write `pstf/features/LLM_ROUTE_RELEASE_DEPLOYMENT/acceptance_criteria.json` with the approved AC set.
+- [ ] Add rollback ACs in a later revision after the replacement rollback rule is decided.
+
