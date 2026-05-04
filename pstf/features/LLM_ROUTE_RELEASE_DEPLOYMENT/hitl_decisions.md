@@ -6,7 +6,7 @@
 - Framework: PSTF
 - Interaction Mode: RepoPrompt ask-user tool
 - Current Stage: human_review
-- Last Updated: 2026-05-04
+- Last Updated: 2026-05-04T19:46:08Z
 
 ---
 
@@ -135,27 +135,6 @@ FIX_CURRENT_ROLLBACK_SELECTION_RULE
 
 ---
 
-## Summary
-
-- Final Status: APPROVE_AS_IS for the current non-rollback AC set
-- Open Questions: 1 — what explicit rollback target-selection rule should replace the current implementation
-- Accepted Risks: 0
-- Deferred Items: 1 — rollback-specific acceptance criteria and tests remain deferred until replacement semantics are approved
-- Blocking Issues: 1 — intended full web workflow is approved but not currently observed as a dedicated route/page implementation
-- Superseded Decisions: 0
-
-## Traceability
-
-| Decision ID | Affects ACs | Affects Tests | Affects Defects | Affects Artifacts | Notes |
-| --- | --- | --- | --- | --- | --- |
-| HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-001 | LLMRD-AC-009 | future browser/E2E coverage | possible web-workflow gap issue | feature_spec.json, acceptance_criteria.json | Current shared-store-only web visibility is not the approved end state. |
-| HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-002 | LLMRD-AC-009 | router compatibility tests become observed-only evidence | deprecation/removal follow-up | feature_spec.json, acceptance_criteria.json | Operational REST mutations are not part of the approved intended contract. |
-| HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-003 | future rollback AC set | future rollback tests | rollback semantic-fix follow-up | feature_spec.json, future acceptance_criteria.json | Rollback remains in scope, but its current selection rule is not approved. |
-| HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-004 | rollback AC scope | rollback test generation | none | acceptance_criteria.json, hitl_decisions.md | Rollback ACs are intentionally omitted until replacement semantics are approved. |
-| HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-005 | LLMRD-AC-001..009 | non-rollback test generation | none | acceptance_criteria.json, hitl_decisions.md | Current AC set approved as written. |
-
----
-
 ### Decision HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-004 — Rollback acceptance-criteria scope during semantic deferral
 
 **Stage:** human_review
@@ -235,3 +214,149 @@ APPROVE_AS_IS
 - [x] Write `pstf/features/LLM_ROUTE_RELEASE_DEPLOYMENT/acceptance_criteria.json` with the approved AC set.
 - [ ] Add rollback ACs in a later revision after the replacement rollback rule is decided.
 
+---
+
+### Decision HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-006 — Initial final release selection
+
+**Stage:** human_review
+**Agent:** HITL Review Agent
+**Decision Type:** release_approval
+**Status:** superseded
+
+**Context Summary:**
+Verification at the current gate showed AC-001, AC-004, AC-005, AC-007, and AC-008 verified; AC-002 and AC-003 only partially verified; AC-006 unverified due missing provisioning coordinator tests; and AC-009 failed because the approved browser workflow does not exist.
+
+**Question Asked:**
+For `LLM_ROUTE_RELEASE_DEPLOYMENT`, what is the final release decision at this gate?
+
+**Options Presented:**
+- A) NEEDS_WORK
+- B) APPROVED_WITH_RISK
+- C) DEFERRED
+- D) APPROVED
+- E) REJECTED
+
+**User Selection:**
+APPROVED_WITH_RISK
+
+**User Notes:**
+Later clarified that only D-005 was an accepted risk and that D-003 should still block release.
+
+**Decision:**
+APPROVED_WITH_RISK
+
+**Impact:**
+- Feature Spec: none
+- Acceptance Criteria: none
+- Tests: none
+- Defects: follow-up triage required for D-001, D-003, and D-005 to resolve approval scope
+- Confidence / Release: adjusted — this release selection was not internally consistent until risk scope was clarified
+
+**Required Follow-Up Actions:**
+- [x] Ask which unresolved defects are explicit accepted risks.
+- [x] Clarify whether any non-accepted unresolved defect remains a blocker.
+
+---
+
+### Decision HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-007 — Release gate clarification after risk scoping
+
+**Stage:** human_review
+**Agent:** HITL Review Agent
+**Decision Type:** release_approval
+**Status:** active
+
+**Context Summary:**
+After the initial `APPROVED_WITH_RISK` answer, the human accepted only D-005 as release risk. That left D-001 (missing approved browser workflow) and D-003 (missing coordinator verification for AC-006) unresolved and not accepted as risk, so the release posture still needed explicit clarification.
+
+**Question Asked:**
+How should this approval be scoped given that D-001 and D-003 were not accepted risks?
+
+**Options Presented:**
+- A) Scope approval to the currently verified/partially verified non-browser slice; defer D-001 and D-003 follow-up
+- B) Treat D-001 as a blocker; release should actually be NEEDS_WORK
+- C) Treat D-003 as a blocker; release should actually be NEEDS_WORK
+
+**User Selection:**
+C
+
+**User Notes:**
+D-005 remains an accepted risk; D-003 is the blocker that prevents release approval.
+
+**Decision:**
+NEEDS_WORK
+
+**Impact:**
+- Feature Spec: none
+- Acceptance Criteria: none
+- Tests: update needed — T-012 and T-013 remain required before AC-006 can be marked verified
+- Defects: update/keep open — D-003 remains open and blocking; D-005 is accepted risk; D-001 still needs explicit triage
+- Confidence / Release: blocks approval — the feature cannot be released until D-003 is addressed
+
+**Required Follow-Up Actions:**
+- [ ] Implement coordinator success/failure coverage for AC-006 (`LLMRD-T-012`, `LLMRD-T-013`).
+- [ ] Re-run PSTF verification after D-003 is addressed.
+- [x] Triage D-001 explicitly as blocker, follow-up, accepted risk, or not-a-defect.
+
+---
+
+### Decision HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-008 — Missing browser workflow defect triage
+
+**Stage:** human_review
+**Agent:** HITL Review Agent
+**Decision Type:** defect_triage
+**Status:** active
+
+**Context Summary:**
+`LLMRD-D-001` is a major product defect: the approved dedicated end-user LLM browser workflow required by AC-009 is still missing under `web/src/routes`. After release clarification, this defect still needed explicit triage so downstream work can distinguish “fix now” from “follow-up later.”
+
+**Question Asked:**
+How should D-001 be handled at this stage? D-001 = the approved dedicated end-user LLM browser workflow in AC-009 is still missing.
+
+**Options Presented:**
+- A) DEFER_TO_FOLLOWUP
+- B) BLOCKER
+- C) ACCEPTED_RISK
+- D) NOT_A_DEFECT
+
+**User Selection:**
+BLOCKER
+
+**User Notes:**
+None.
+
+**Decision:**
+BLOCKER
+
+**Impact:**
+- Feature Spec: none
+- Acceptance Criteria: none
+- Tests: update needed — T-018 remains blocked until the browser workflow exists
+- Defects: update/keep open — D-001 is explicitly blocking at this stage
+- Confidence / Release: blocks approval — AC-009 remains a known failed product behavior
+
+**Required Follow-Up Actions:**
+- [ ] Implement the dedicated browser workflow required by AC-009.
+- [ ] Add and run the blocked E2E workflow test `LLMRD-T-018` once the workflow exists.
+- [ ] Re-run PSTF verification after D-001 is addressed.
+
+## Summary
+
+- Final Status: NEEDS_WORK
+- Open Questions: 1 — what explicit rollback target-selection rule should replace the current implementation
+- Accepted Risks: 1 — D-005 requester-side relay-acceptance verification for signer-first route/release requests
+- Deferred Items: 1 — rollback-specific acceptance criteria and tests remain deferred until replacement semantics are approved
+- Blocking Issues: 2 — D-003 missing provisioning coordinator verification for AC-006; D-001 missing approved browser workflow for AC-009
+- Superseded Decisions: 1 — HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-006 was superseded by HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-007
+
+## Traceability
+
+| Decision ID | Affects ACs | Affects Tests | Affects Defects | Affects Artifacts | Notes |
+| --- | --- | --- | --- | --- | --- |
+| HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-001 | LLMRD-AC-009 | future browser/E2E coverage | possible web-workflow gap issue | feature_spec.json, acceptance_criteria.json | Current shared-store-only web visibility is not the approved end state. |
+| HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-002 | LLMRD-AC-009 | router compatibility tests become observed-only evidence | deprecation/removal follow-up | feature_spec.json, acceptance_criteria.json | Operational REST mutations are not part of the approved intended contract. |
+| HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-003 | future rollback AC set | future rollback tests | rollback semantic-fix follow-up | feature_spec.json, future acceptance_criteria.json | Rollback remains in scope, but its current selection rule is not approved. |
+| HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-004 | rollback AC scope | rollback test generation | none | acceptance_criteria.json, hitl_decisions.md | Rollback ACs are intentionally omitted until replacement semantics are approved. |
+| HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-005 | LLMRD-AC-001..009 | non-rollback test generation | none | acceptance_criteria.json, hitl_decisions.md | Current AC set approved as written. |
+| HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-006 | release gate | none | D-001, D-003, D-005 | hitl_decisions.md | Initial APPROVED_WITH_RISK response was not self-consistent once risk scope was clarified. |
+| HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-007 | LLMRD-AC-006 | T-012, T-013 | D-003 | hitl_decisions.md, verification_report.md | D-003 is a blocker, so the release gate outcome is NEEDS_WORK rather than APPROVED_WITH_RISK. |
+| HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-008 | LLMRD-AC-009 | T-018 | D-001 | hitl_decisions.md, verification_report.md | Missing browser workflow is explicitly treated as a blocker at this stage. |
