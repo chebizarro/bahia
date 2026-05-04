@@ -59,10 +59,10 @@ APPROVED_WITH_RISK
 **Stage:** human_review
 **Agent:** HITL Review Agent
 **Decision Type:** risk_acceptance
-**Status:** active
+**Status:** superseded
 
 **Context Summary:**
-The implementation and focused tests are verified, but the slice still had one governance question: whether operator-only signer-first slices must include a stored local rehearsal or staged/live signoff artifact in addition to deterministic package-test evidence and rollout docs.
+The implementation and focused tests were verified, but the slice still had one governance question: whether operator-only signer-first slices must include a stored local rehearsal or staged/live signoff artifact in addition to deterministic package-test evidence and rollout docs.
 
 **Question Asked:**
 How should rehearsal evidence be treated for this operator slice?
@@ -82,15 +82,15 @@ None.
 DEFER_TO_FOLLOWUP
 
 **Impact:**
-- Feature Spec: update needed — keep the governance ambiguity explicit only as a deferred process question
+- Feature Spec: updated later — this temporary deferral was resolved by HITL-SIGNER_FIRST_OPERATOR_ADOPTION_RUNTIME-004
 - Acceptance Criteria: none
 - Tests: none
 - Defects: none
-- Confidence / Release: adjusted — does not block current slice approval, but requires tracked process follow-up
+- Confidence / Release: adjusted at the time — final policy now requires a stored rehearsal artifact before release approval
 
 **Required Follow-Up Actions:**
 - [x] Create a follow-up issue for rehearsal-gate policy (`bahia-rn20`).
-- [ ] Resolve whether rehearsal artifacts become a formal acceptance/release gate for future operator slices.
+- [x] Resolve whether rehearsal artifacts become a formal acceptance/release gate for future operator slices.
 
 ---
 
@@ -134,19 +134,59 @@ APPROVE_AS_IS
 
 ---
 
+### Decision HITL-SIGNER_FIRST_OPERATOR_ADOPTION_RUNTIME-004 — Rehearsal artifact gate formalization
+
+**Stage:** human_review
+**Agent:** HITL Review Agent
+**Decision Type:** risk_acceptance
+**Status:** active
+
+**Context Summary:**
+The slice was already approved with risk while rehearsal-gate policy was deferred. The remaining decision was whether a stored local Docker+relay rehearsal artifact is optional, required for PSTF verification, or required before release approval while keeping staged/live signoff as the production gate.
+
+**Question Asked:**
+For operator-only signer-first PSTF slices, how should local Docker+relay rehearsal evidence be treated?
+
+**Options Presented:**
+- A) Required before release approval; staged/live signoff still required for production enablement
+- B) Optional supporting evidence only; deterministic tests and staged/live signoff are sufficient
+- C) Required for PSTF slice verification itself
+
+**User Selection:**
+Required before release approval; staged/live signoff still required for production enablement
+
+**User Notes:**
+None.
+
+**Decision:**
+REQUIRED_BEFORE_RELEASE_APPROVAL
+
+**Impact:**
+- Feature Spec: updated — release-gate ambiguity removed and replaced with explicit policy
+- Acceptance Criteria: updated — rollout evidence policy synchronized in coverage notes
+- Tests: none
+- Defects: none
+- Confidence / Release: adjusted — slice remains implementation-verified, but release approval now requires a stored rehearsal artifact and production enablement still requires staged/live signoff
+
+**Required Follow-Up Actions:**
+- [x] Update rollout docs to require a stored local Docker+relay rehearsal artifact before release approval.
+- [x] Update PSTF slice artifacts to remove the deferred policy ambiguity.
+- [ ] Capture a rehearsal artifact bundle for the release candidate before release approval (`bahia-noxg`).
+
 ## Summary
 
 - Final Status: APPROVED_WITH_RISK
 - Open Questions: 0
 - Accepted Risks: 0
-- Deferred Items: 1 — rehearsal artifact gate policy tracked in `bahia-rn20`
-- Blocking Issues: 0
-- Superseded Decisions: 0
+- Deferred Items: 0
+- Blocking Issues: 0 — implementation approved, but release approval requires a stored rehearsal artifact
+- Superseded Decisions: 1 — HITL-SIGNER_FIRST_OPERATOR_ADOPTION_RUNTIME-002 superseded by HITL-SIGNER_FIRST_OPERATOR_ADOPTION_RUNTIME-004
 
 ## Traceability
 
 | Decision ID | Affects ACs | Affects Tests | Affects Defects | Affects Artifacts | Notes |
 | --- | --- | --- | --- | --- | --- |
 | HITL-SIGNER_FIRST_OPERATOR_ADOPTION_RUNTIME-001 | SFOAR-AC-001..011 | none | none | acceptance_criteria.json, hitl_decisions.md | Slice approved with explicit deferred process follow-up. |
-| HITL-SIGNER_FIRST_OPERATOR_ADOPTION_RUNTIME-002 | none | none | none | feature_spec.json, verification_report.md, hitl_decisions.md | Rehearsal-gate policy deferred to follow-up bead `bahia-rn20`. |
+| HITL-SIGNER_FIRST_OPERATOR_ADOPTION_RUNTIME-002 | none | none | none | feature_spec.json, verification_report.md, hitl_decisions.md | Temporary deferral later superseded by HITL-SIGNER_FIRST_OPERATOR_ADOPTION_RUNTIME-004. |
 | HITL-SIGNER_FIRST_OPERATOR_ADOPTION_RUNTIME-003 | SFOAR-AC-001..011 | none | none | acceptance_criteria.json, hitl_decisions.md | Acceptance criteria approved as written. |
+| HITL-SIGNER_FIRST_OPERATOR_ADOPTION_RUNTIME-004 | none | none | none | feature_spec.json, acceptance_criteria.json, verification_report.md, hitl_decisions.md, rollout docs | Local rehearsal artifact is required before release approval; staged/live signoff remains the production gate. |

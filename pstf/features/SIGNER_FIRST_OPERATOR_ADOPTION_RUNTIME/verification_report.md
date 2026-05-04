@@ -2,7 +2,7 @@
 
 ## Summary
 
-The signer-first adoption/import and direct-runtime operator slice is **fully verified against the current draft acceptance criteria and ready test matrix**.
+The signer-first adoption/import and direct-runtime operator slice is **fully verified against the approved acceptance criteria and ready test matrix**.
 
 Current evidence covers:
 - CLI relay precedence and explicit fallback boundaries
@@ -15,7 +15,7 @@ Current evidence covers:
 - direct-runtime artifact validation, scoped authorization, processing status, and runtime result DTOs across deploy, restart, and stop
 - stderr-only progress reporting in table mode
 
-The remaining open question is governance-level: whether a stored rehearsal/signoff artifact should also be required for this slice beyond the deterministic package tests and runbook evidence.
+Policy is now explicit: deterministic package tests establish the implementation slice, a stored local Docker+relay rehearsal artifact is required before release approval, and staged/live signer-first signoff remains the production enablement gate.
 
 ## Commands Run
 
@@ -69,7 +69,7 @@ No open product defects or open test defects were identified for the current sig
 Resolved in HITL review:
 - Slice approval posture: `APPROVED_WITH_RISK`
 - Acceptance criteria: `APPROVE_AS_IS`
-- Rehearsal artifact gate: `DEFER_TO_FOLLOWUP` (tracked in `bahia-rn20`)
+- Rehearsal artifact gate: `REQUIRED_BEFORE_RELEASE_APPROVAL`
 
 ## Confidence Assessment
 
@@ -78,7 +78,7 @@ Resolved in HITL review:
 Why:
 - Verification spans the reactor, HTTP DTO mirror, operator client, and CLI boundary.
 - The exercised tests explicitly cover the signer-first path and its fallback boundaries rather than relying on legacy REST execution.
-- The remaining question is about release-governance evidence, not observed behavior in the implementation under test.
+- The remaining work is operational evidence capture, not an implementation or specification ambiguity.
 
 ## Recommendation
 
@@ -86,4 +86,5 @@ Treat `SIGNER_FIRST_OPERATOR_ADOPTION_RUNTIME` as fully verified for current imp
 
 Recommended next moves:
 1. Use this slice as the reference PSTF pattern for future operator-only signer-first flows.
-2. Resolve `bahia-rn20` if operator-slice release policy should require a stored rehearsal artifact.
+2. Require a stored Docker+relay rehearsal artifact before release approval for operator-only signer-first slices.
+3. Keep staged/live SF-01 through SF-11 as the production enablement gate.

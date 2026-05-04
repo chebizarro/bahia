@@ -365,9 +365,8 @@
   "coverage_notes": [
     "These criteria cover the signer-first operator path as implemented today across the reactor, operator client, CLI, and rollout docs; they do not treat the HTTP compatibility path as the primary product contract.",
     "The slice relies on deterministic Go tests rather than browser E2E because the operator experience is CLI-first and relay/event-driven rather than a first-party browser route.",
-    "Live-network signoff remains an operational rollout step separate from this PSTF slice's artifact verification."
+    "Live-network signoff remains an operational rollout step separate from this PSTF slice's artifact verification.",
+    "Release approval additionally requires a stored local Docker+relay rehearsal artifact; that evidence requirement is distinct from both deterministic package tests and staged/live signoff."
   ],
-  "unresolved_questions": [
-    "Should this slice require a stored rehearsal/signoff artifact from a Docker+relay simulation run in addition to deterministic package tests and runbook evidence?"
-  ]
+  "unresolved_questions": []
 }

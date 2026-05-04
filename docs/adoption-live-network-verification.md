@@ -8,11 +8,22 @@ For execution, use [`adoption-signer-first-operator-checklist.md`](adoption-sign
 
 Legacy privileged HTTP/NIP-98 verification is compatibility-only and secondary. It is not the primary production gate.
 
+## Gate policy
+
+Operator-only signer-first slices now require three distinct evidence layers:
+
+1. deterministic in-repo verification for implementation behavior;
+2. a stored local rehearsal artifact from a Docker+relay signer-first simulation before release approval;
+3. staged/live signer-first execution using SF-01 through SF-11 before production enablement.
+
+The local rehearsal artifact is a release gate, not a substitute for staged/live signoff.
+
 ## Stage gates
 
 | Stage | Gate | Required result |
 | --- | --- | --- |
 | 0. Code regression | In-repo automated tests listed below | All pass on the release commit. |
+| 0.5 Local rehearsal artifact | Stored Docker+relay signer-first rehearsal evidence captured from the release commit | Release approval stays blocked until a local rehearsal bundle proves scan/import/direct-runtime behavior over relay subscriptions without HTTP polling assumptions. |
 | 1. Signer/operator staging | Bahia staging runs with signer-first operator transport enabled, operator pubkeys configured, and signer-capable CLI execution available | Valid signed operator requests are accepted; invalid/unauthorized requests fail closed; `/api/v1/system/info` and relay topology evidence match the release candidate. |
 | 2. Managed endpoint staging | At least two `runtime.endpoints.<ref>` aliases are configured, including one remote Docker TLS/mTLS endpoint | Scans/imports use endpoint refs only; no raw Docker host or cert material appears in operator-visible request/result/log/metric surfaces. |
 | 3. First workload import | One non-critical Docker-origin workload is imported by explicit selection through the signer-first CLI path | Service, environment, build, artifact, state, runtime observation, audit event, and metrics are all present. |
@@ -67,6 +78,7 @@ Run these only if the release owner explicitly requires legacy HTTP compatibilit
 Before production enablement, record:
 
 - release commit SHA;
+- stored local rehearsal artifact bundle location and timestamp;
 - output from the automated commands above;
 - staged config excerpt with secrets and cert paths redacted;
 - relay URLs exercised and signer mode used;

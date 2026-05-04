@@ -9,6 +9,16 @@ This document is the operator run sheet and evidence template for staged/live si
 It is now the primary execution checklist for this feature set.
 Legacy HTTP/NIP-98 operator verification remains compatibility-only and secondary.
 
+## Gate policy
+
+For operator-only signer-first slices, evidence is now layered:
+
+1. deterministic in-repo verification establishes implementation behavior;
+2. a stored local Docker+relay rehearsal artifact is required before release approval;
+3. staged/live execution of SF-01 through SF-11 remains required for production enablement.
+
+This checklist covers the staged/live layer. The rehearsal artifact is mandatory input to release approval, but it does not replace staged/live signoff.
+
 ## Scope
 
 Primary control surface under test:
@@ -50,6 +60,7 @@ Secondary / compatibility-only:
 | Primary operator | `<fill>` |
 | Additional approvers | `<fill>` |
 | Evidence bundle location | `<fill>` |
+| Local rehearsal artifact bundle | `<fill path + timestamp>` |
 | Managed endpoint refs under test | `<fill>` |
 | Compose takeover policy for this environment | `disabled` / `enabled for named services only` / `not applicable` |
 | `/api/v1/system/info` capability evidence | `<fill path + timestamp>` |
@@ -69,6 +80,7 @@ Check each box before SF-01 starts.
 - [ ] At least one endpoint uses remote Docker TLS/mTLS.
 - [ ] `adoption.allow_raw_docker_hosts=false` unless explicit break-glass testing is approved.
 - [ ] `/api/v1/system/info` and relay/topology evidence are captured for the release candidate.
+- [ ] A stored local Docker+relay signer-first rehearsal artifact exists for this release commit.
 - [ ] A non-critical candidate workload is available for import.
 - [ ] Rollback owner/procedure for the candidate workload is confirmed.
 - [ ] Event/status/result subscriptions and observability capture are available for operators.
@@ -80,6 +92,7 @@ Collect these artifacts as files or links under the evidence bundle location.
 - [ ] Release manifest / deployment record
 - [ ] Redacted staging config excerpt
 - [ ] Signer/operator setup notes (no secrets)
+- [ ] Local rehearsal artifact bundle (Docker+relay simulation)
 - [ ] CLI transcript showing signer-first request publication and terminal result handling
 - [ ] Request event IDs and correlated status/result event IDs
 - [ ] `/api/v1/system/info` capture
@@ -281,4 +294,6 @@ These checks are not the primary production gate.
 ## Production readiness statement
 
 Production readiness for adoption/import/direct-runtime now depends on signer-first operator verification.
+Release approval requires a stored local rehearsal artifact plus passing automated gates.
+Production enablement additionally requires passing staged/live SF-01 through SF-11.
 Do not use the legacy HTTP/NIP-98 checklist as the primary signoff surface.

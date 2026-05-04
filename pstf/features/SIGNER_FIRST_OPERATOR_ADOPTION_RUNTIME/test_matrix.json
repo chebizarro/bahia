@@ -204,13 +204,11 @@
   "coverage_summary": {
     "criteria_total": 11,
     "criteria_with_tests": 11,
-    "known_gaps": [
-      "No committed rehearsal artifact or browser/MCP-assisted simulation is attached to this slice; current verification relies on deterministic Go package tests plus rollout/runbook evidence."
-    ]
+    "known_gaps": []
   },
   "implementation_notes": [
     "The slice is verified primarily through deterministic Go tests across reactor, API handler, operator client, and CLI packages.",
     "HTTP compatibility behavior is covered only to the extent needed to prove the signer-first fallback boundary.",
-    "A future HITL decision can determine whether to require a stored operator rehearsal artifact as part of release gating for this slice."
+    "Release approval now requires a stored local Docker+relay rehearsal artifact in addition to the deterministic tests tracked here."
   ]
 }

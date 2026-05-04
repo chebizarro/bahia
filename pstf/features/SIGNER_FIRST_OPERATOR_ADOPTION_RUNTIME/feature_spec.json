@@ -130,13 +130,8 @@
     "Public relay connectivity for publish/subscribe",
     "Adoption service and runtime lifecycle service implementations behind the reactor interfaces"
   ],
-  "ambiguities": [
-    {
-      "type": "release_gate",
-      "note": "The code and focused tests verify the signer-first operator path, but formal staged/live execution remains a separate operational signoff step rather than part of this slice's automated verification evidence."
-    }
-  ],
+  "ambiguities": [],
   "human_decisions": [
-    "Should this operator slice require a browser/MCP-assisted rehearsal artifact as a release gate, or are backend/CLI tests plus the rollout runbook sufficient for PSTF verification?"
+    "Release approval for operator-only signer-first slices requires a stored local Docker+relay rehearsal artifact; staged/live SF-01 through SF-11 remain required for production enablement."
   ]
 }
