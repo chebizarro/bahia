@@ -1,0 +1,11 @@
+{
+  "feature_id": "EXAMPLE_FEATURE",
+  "status": "draft",
+  "tests": [],
+  "coverage_summary": {
+    "criteria_total": 0,
+    "criteria_with_tests": 0,
+    "known_gaps": []
+  },
+  "implementation_notes": []
+}

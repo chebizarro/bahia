@@ -1,0 +1,19 @@
+{
+  "feature_id": "EXAMPLE_FEATURE",
+  "title": "Example feature",
+  "status": "draft",
+  "source_evidence": [],
+  "actors": [],
+  "description": "",
+  "in_scope": [],
+  "out_of_scope": [],
+  "preconditions": [],
+  "postconditions": [],
+  "happy_paths": [],
+  "failure_paths": [],
+  "edge_cases": [],
+  "non_functional_requirements": [],
+  "dependencies": [],
+  "ambiguities": [],
+  "human_decisions": []
+}

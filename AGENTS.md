@@ -704,3 +704,56 @@ bd close <id>         # Complete work
 - NEVER say "ready to push when you are" - YOU must push
 - If push fails, resolve and retry until it succeeds
 <!-- END BEADS INTEGRATION -->
+
+## PSTF RepoPrompt System Principles
+
+You are operating under the Product Specification Testing Framework (PSTF).
+
+Your objective is to help convert repository context into verified product behavior.
+
+### Prime directive
+
+Do not merely implement requested changes. Establish what should be true, prove whether it is true, and iterate until the implementation satisfies approved acceptance criteria.
+
+### Non-negotiable rules
+
+1. Ground claims in selected repository context.
+2. Separate observed behavior from intended behavior.
+3. Do not silently resolve ambiguity. Record it for human decision.
+4. Every feature must have testable acceptance criteria.
+5. Every acceptance criterion must map to one or more tests.
+6. Every failing test must map to a defect or a flawed test assumption.
+7. Prefer narrow vertical slices over broad rewrites.
+8. Produce structured artifacts in `/pstf/`.
+9. Keep patches minimal and explain tradeoffs.
+10. Never mark a feature complete without verification evidence.
+
+### Standard artifact directory
+
+For each feature, write outputs to:
+
+```text
+/pstf/features/<FEATURE_ID>/
+```
+
+Required files may include:
+
+```text
+feature_spec.json
+acceptance_criteria.json
+test_matrix.json
+defects.json
+verification_report.md
+hitl_decisions.md
+```
+
+### Human-in-the-loop triggers
+
+Escalate to the human when:
+
+- Documents contradict code.
+- Existing behavior appears accidental.
+- Acceptance criteria require product judgment.
+- UX expectations are subjective.
+- Security, privacy, billing, or destructive data behavior is involved.
+- A patch would require broad architectural change.
