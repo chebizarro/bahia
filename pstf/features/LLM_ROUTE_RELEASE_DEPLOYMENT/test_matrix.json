@@ -37,11 +37,11 @@
       "ac_ids": [
         "LLMRD-AC-002"
       ],
-      "title": "LLM route create request publishes kind 5971 and resolves with correlated 7971 result",
+      "title": "LLM route create reactor emits correlated 7971 result for a signed 5971 request",
       "type": "integration",
       "existing_or_new": "new",
       "target_path": "internal/controlplane/reactor_llm_requests_test.go",
-      "description": "Add a reactor-level contract test that delivers a signed route-create event and inspects the published correlated terminal result. Estimated implementation difficulty: medium.",
+      "description": "Reactor-level handler contract test that delivers a signed route-create event and inspects the published correlated terminal result. This proves request/result correlation and persistence on the Bahia side, but not requester-side relay acceptance semantics. Estimated implementation difficulty: medium.",
       "preconditions": [
         "A reactor instance can be configured with an authorized requester and capture publisher.",
         "A signer-generated 5971 request event can be produced deterministically in test."
@@ -51,7 +51,7 @@
         "Handle the event through the reactor.",
         "Inspect the published terminal reply event and decode its payload."
       ],
-      "expected_result": "At least one accepted publish is required up front, and the reactor emits a kind 7971 result tagged back to the original request event and requester with `status=success` and a created `route_id`.",
+      "expected_result": "The reactor emits a signed kind 7971 result tagged back to the original request event and requester with `status=success` and a created `route_id`.",
       "fixtures": [
         "capture Nostr publisher",
         "in-memory LLM registry dependencies"
@@ -64,11 +64,12 @@
         "Deterministic request pubkey and signed event id."
       ],
       "determinism_notes": [
-        "Keep the test fully in-process; inject the request event directly rather than using live relays.",
-        "Assert reply tags include `e` and `p` correlation plus created `route` identifiers."
+        "Keep the test fully in-process; inject the signed request event directly rather than using live relays.",
+        "Assert reply tags include `e` and `p` correlation plus created `route` identifiers.",
+        "This test does not prove requester-side relay acceptance semantics."
       ],
-      "status": "not_implemented",
-      "failure_reason": "Required reactor-level signer-first route-create contract test is missing; `internal/controlplane/reactor_llm_requests_test.go` does not exist."
+      "status": "pass",
+      "failure_reason": null
     },
     {
       "test_id": "LLMRD-T-003",
@@ -107,11 +108,11 @@
       "ac_ids": [
         "LLMRD-AC-003"
       ],
-      "title": "LLM release register request publishes kind 5972 and resolves with correlated 7972 result",
+      "title": "LLM release register reactor emits correlated 7972 result for a signed 5972 request",
       "type": "integration",
       "existing_or_new": "new",
       "target_path": "internal/controlplane/reactor_llm_requests_test.go",
-      "description": "Add a reactor-level contract test for signed release registration and correlated terminal result emission. Estimated implementation difficulty: medium.",
+      "description": "Reactor-level handler contract test for signed release registration and correlated terminal result emission. This proves route-scoped result correlation on the Bahia side, but not requester-side relay acceptance semantics. Estimated implementation difficulty: medium.",
       "preconditions": [
         "A valid LLM route exists in the in-memory registry.",
         "A reactor instance can be configured with an authorized requester and capture publisher."
@@ -121,7 +122,7 @@
         "Handle the event through the reactor.",
         "Inspect the published kind 7972 terminal result and decode its content."
       ],
-      "expected_result": "The request resolves with a correlated kind 7972 result containing `route_id`, `release_id`, and `status=success`.",
+      "expected_result": "The reactor resolves the request with a correlated kind 7972 result containing `route_id`, `release_id`, and `status=success`.",
       "fixtures": [
         "capture Nostr publisher",
         "in-memory LLM registry dependencies"
@@ -134,10 +135,11 @@
         "Deterministic request pubkey and signed event id."
       ],
       "determinism_notes": [
-        "No live relay dependency; inject signed request event directly and assert `e`/`p` reply tags."
+        "No live relay dependency; inject signed request event directly and assert `e`/`p` reply tags.",
+        "This test does not prove requester-side relay acceptance semantics."
       ],
-      "status": "not_implemented",
-      "failure_reason": "Required reactor-level signer-first release-register contract test is missing; `internal/controlplane/reactor_llm_requests_test.go` does not exist."
+      "status": "pass",
+      "failure_reason": null
     },
     {
       "test_id": "LLMRD-T-005",
@@ -202,8 +204,8 @@
         "Pure publisher test; no live relay required.",
         "Current suite already covers the zero-accept branch and needs the positive deploy-tag assertion added."
       ],
-      "status": "not_implemented",
-      "failure_reason": "Current command publisher suite covers rollback publication and zero-accept deploy failure, but it does not assert the successful deploy request's explicit route/environment/release tags."
+      "status": "pass",
+      "failure_reason": null
     },
     {
       "test_id": "LLMRD-T-007",
@@ -239,8 +241,8 @@
         "Inspect reply ordering directly from the in-process capture publisher.",
         "Assert `e`, `p`, `route`, `environment`, and `release` correlation tags."
       ],
-      "status": "not_implemented",
-      "failure_reason": "No reactor-level test proves the first correlated deploy reply is kind 6973 `processing/accepted`; `internal/controlplane/reactor_llm_requests_test.go` does not exist."
+      "status": "pass",
+      "failure_reason": null
     },
     {
       "test_id": "LLMRD-T-008",
@@ -309,8 +311,8 @@
       "determinism_notes": [
         "Keep approve, reject, and invalid-decision cases isolated so state mutations remain explicit."
       ],
-      "status": "not_implemented",
-      "failure_reason": "No reactor-level approval/reject contract test exists for valid approve/reject flows and invalid decision rejection; `internal/controlplane/reactor_llm_requests_test.go` does not exist."
+      "status": "pass",
+      "failure_reason": null
     },
     {
       "test_id": "LLMRD-T-010",
@@ -344,8 +346,8 @@
       "determinism_notes": [
         "No relay dependency; assert state repository contents directly after rejection repair."
       ],
-      "status": "not_implemented",
-      "failure_reason": "No registry test currently proves rejection repair clears the rejected desired intent from route state."
+      "status": "pass",
+      "failure_reason": null
     },
     {
       "test_id": "LLMRD-T-011",
@@ -661,16 +663,18 @@
     "criteria_total": 9,
     "criteria_with_tests": 9,
     "known_gaps": [
-      "Canonical reactor-level signer-first contract tests are still missing for route create (5971/7971), release register (5972/7972), deploy acceptance (5973/6973), and approval/reject terminal handling (5974/7973).",
+      "Requester-side relay-acceptance semantics for signer-first route-create and release-register requests are still not directly proven by automated coverage in this repository; current tests prove Bahia-side correlation and result handling only.",
       "The async provisioning path has no existing coordinator tests for ordered 6973 progress replies, terminal 7973 success/error results, or failed-run state recording.",
       "The approved end-user browser workflow test is blocked because no dedicated LLM workflow currently exists in `web/src/routes`.",
       "Rollback-specific tests are intentionally excluded from this matrix because rollback acceptance criteria were deferred by HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-004."
     ]
   },
   "implementation_notes": [
-    "Low-effort extensions: add explicit deploy-tag coverage in `internal/controlplane/llm_command_publisher_test.go` and explicit spoofed-LLM-author coverage in `web/tests/unit/controlplane-store.test.js`.",
-    "Medium-effort additions: create reactor-level request/result contract tests that exercise signed request events, reply correlation tags, validation failures, and desired-state repair for rejection.",
-    "High-effort additions: introduce `internal/service/llm_provisioning_coordinator_test.go` with full fake placement/provisioner/gateway/responder dependencies and build a deterministic browser e2e harness for the future dedicated LLM workflow.",
+    "`internal/controlplane/reactor_llm_requests_test.go` now covers Bahia-side signed request/result correlation for route create, release register, deploy acceptance, approval, rejection, and invalid decision handling.",
+    "`internal/controlplane/llm_command_publisher_test.go` now asserts canonical deploy request tags and positive publish behavior alongside the existing zero-accept failure case.",
+    "`internal/service/llm_registry_test.go` now verifies rejection repair restores desired route state to the previous deployed intent/release when one exists.",
+    "Route-create and release-register requester-side relay acceptance semantics still need separate coverage or a narrowed verification claim, because the new reactor tests inject signed request events directly.",
+    "High-effort additions still outstanding: introduce `internal/service/llm_provisioning_coordinator_test.go` with full fake placement/provisioner/gateway/responder dependencies and build a deterministic browser e2e harness for the future dedicated LLM workflow.",
     "Current existing coverage is strongest around system discovery, MCP request shaping, projection publication, registry/reconcile state shaping, and relay-backed browser store consumption.",
     "Because AC-009 is approved but the corresponding product surface is absent, this matrix is ready for implementation planning but not fully verifiable until that workflow is built.",
     "`web/tests/unit/controlplane-store.test.js` now includes an explicit spoofed non-Bahia LLM route/state/activity regression test, closing the AC-008 negative-coverage gap."

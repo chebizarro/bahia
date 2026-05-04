@@ -61,6 +61,50 @@ func TestLLMCommandPublisherPublishesCanonicalRollbackRequest(t *testing.T) {
 	}
 }
 
+func TestLLMCommandPublisherPublishesCanonicalDeployRequest(t *testing.T) {
+	ctx := context.Background()
+	capture := &captureNostrPublisher{published: 1}
+	signer, err := NewPrivateKeySigner(nostr.GeneratePrivateKey())
+	if err != nil {
+		t.Fatalf("create signer: %v", err)
+	}
+	publisher := NewLLMCommandPublisher(capture, signer)
+	routeID := uuid.New()
+	envID := uuid.New()
+	releaseID := uuid.New()
+
+	receipt, err := publisher.PublishLLMDeployRequest(ctx, LLMDeployCommand{RouteID: routeID, EnvironmentID: envID, ReleaseID: releaseID, RequestedBy: "operator"})
+	if err != nil {
+		t.Fatalf("publish deploy: %v", err)
+	}
+	if receipt.RequestKind != KindLLMDeployRequest || receipt.StatusKind != KindLLMDeploymentStatus || receipt.ResultKind != KindLLMDeploymentResult {
+		t.Fatalf("unexpected receipt kinds: %#v", receipt)
+	}
+	if receipt.RequestEventID == "" || receipt.RequestPubkey == "" {
+		t.Fatalf("missing signed event correlation metadata: %#v", receipt)
+	}
+	if len(capture.events) != 1 {
+		t.Fatalf("expected one event, got %d", len(capture.events))
+	}
+	ev := capture.events[0]
+	if ev.Kind != KindLLMDeployRequest {
+		t.Fatalf("expected deploy kind %d, got %d", KindLLMDeployRequest, ev.Kind)
+	}
+	if ok, err := ev.CheckSignature(); err != nil || !ok {
+		t.Fatalf("published event signature invalid: ok=%v err=%v", ok, err)
+	}
+	assertReactorTag(t, ev.Tags, "route", routeID.String())
+	assertReactorTag(t, ev.Tags, "environment", envID.String())
+	assertReactorTag(t, ev.Tags, "release", releaseID.String())
+	var content map[string]any
+	if err := json.Unmarshal([]byte(ev.Content), &content); err != nil {
+		t.Fatalf("decode content: %v", err)
+	}
+	if content["route_id"] != routeID.String() || content["environment_id"] != envID.String() || content["release_id"] != releaseID.String() || content["requested_by"] != "operator" {
+		t.Fatalf("unexpected deploy content: %#v", content)
+	}
+}
+
 func TestLLMCommandPublisherFailsWhenNoRelayAccepts(t *testing.T) {
 	ctx := context.Background()
 	capture := &captureNostrPublisher{published: 0}

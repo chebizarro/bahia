@@ -26,7 +26,7 @@
       "defect_id": "LLMRD-D-002",
       "title": "Missing reactor-level signer-first contract tests for LLM request/result flows",
       "severity": "minor",
-      "status": "open",
+      "status": "verified",
       "related_ac_ids": [
         "LLMRD-AC-002",
         "LLMRD-AC-003",
@@ -42,12 +42,14 @@
         "LLMRD-T-010"
       ],
       "evidence": [
-        "RepoPrompt path search for `internal/controlplane/reactor_llm_requests_test.go` returned no matches on 2026-05-04.",
-        "pstf/features/LLM_ROUTE_RELEASE_DEPLOYMENT/test_matrix.json",
-        "go test ./internal/controlplane passed, but no targeted file exists for the required signer-first LLM request/result cases."
+        "internal/controlplane/reactor_llm_requests_test.go",
+        "internal/controlplane/llm_command_publisher_test.go",
+        "internal/service/llm_registry_test.go",
+        "`go test ./internal/controlplane ./internal/service` passed on 2026-05-04, exercising the new signer-first reactor and rejection-repair coverage.",
+        "pstf/features/LLM_ROUTE_RELEASE_DEPLOYMENT/test_matrix.json"
       ],
-      "suspected_root_cause": "Coverage stopped at helper tests and MCP request-shaping tests; no reactor-level end-to-end event contract tests were added for LLM flows.",
-      "recommended_fix": "Add a dedicated reactor LLM request test file covering route create, release register, deploy acceptance, approval, rejection, invalid decisions, and reply correlation tags.",
+      "suspected_root_cause": "Coverage had stopped at helper tests and MCP request-shaping tests until the signer-first reactor and rejection-repair cases were added.",
+      "recommended_fix": "No further fix required for this defect; keep the new reactor-level and registry regression tests passing as part of the suite.",
       "requires_human_decision": false
     },
     {
@@ -91,6 +93,28 @@
       ],
       "suspected_root_cause": "The browser store suite verifies a generic spoofed service-registry event but does not include an LLM-specific negative case.",
       "recommended_fix": "Extend `web/tests/unit/controlplane-store.test.js` with spoofed non-Bahia LLM route, route-state, and deployment activity events and assert they are ignored.",
+      "requires_human_decision": false
+    },
+    {
+      "defect_id": "LLMRD-D-005",
+      "title": "Missing requester-side relay-acceptance verification for signer-first LLM route/release requests",
+      "severity": "minor",
+      "status": "open",
+      "related_ac_ids": [
+        "LLMRD-AC-002",
+        "LLMRD-AC-003"
+      ],
+      "related_test_ids": [
+        "LLMRD-T-002",
+        "LLMRD-T-004"
+      ],
+      "evidence": [
+        "internal/controlplane/reactor_llm_requests_test.go injects signed request events directly into `handleLLMRouteCreate` and `handleLLMReleaseRegister`.",
+        "No route-create or release-register requester/publisher test exists analogous to `internal/controlplane/llm_command_publisher_test.go` for deploy.",
+        "pstf/features/LLM_ROUTE_RELEASE_DEPLOYMENT/acceptance_criteria.json requires at least one accepted relay publish for AC-002 and AC-003."
+      ],
+      "suspected_root_cause": "The Bahia-side reactor contract was tested, but requester-side publish acceptance for 5971/5972 is either unimplemented in this repository or untested.",
+      "recommended_fix": "Add requester/publisher-path coverage for route-create and release-register acceptance semantics, or explicitly narrow the verification claim if that responsibility lives outside this repository.",
       "requires_human_decision": false
     }
   ]
