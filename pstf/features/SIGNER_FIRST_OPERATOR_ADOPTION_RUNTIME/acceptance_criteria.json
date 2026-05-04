@@ -1,6 +1,6 @@
 {
   "feature_id": "SIGNER_FIRST_OPERATOR_ADOPTION_RUNTIME",
-  "status": "draft",
+  "status": "approved",
   "criteria": [
     {
       "ac_id": "SFOAR-AC-001",
@@ -8,12 +8,30 @@
       "type": "functional",
       "priority": "must",
       "assertion": "Operator relay resolution uses `--relay` first, then `BAHIA_NOSTR_RELAYS`, then `/api/v1/system/info` discovery from `nostr.browser_relays` plus `nostr.sidecar_url`, with duplicate URLs removed.",
-      "preconditions": ["CLI root command is initialized with operator flags.", "A system info client is available when discovery fallback is used."],
-      "steps": ["Provide relay URLs via command flag, environment variable, and system info in separate runs.", "Resolve relay URLs for the operator path."],
+      "preconditions": [
+        "CLI root command is initialized with operator flags.",
+        "A system info client is available when discovery fallback is used."
+      ],
+      "steps": [
+        "Provide relay URLs via command flag, environment variable, and system info in separate runs.",
+        "Resolve relay URLs for the operator path."
+      ],
       "expected_result": "The resolved relay list follows the documented precedence and contains only unique URLs.",
-      "negative_cases": ["If system discovery is used when `--relay` or `BAHIA_NOSTR_RELAYS` is present, the criterion fails.", "If duplicate relay URLs survive normalization, the criterion fails."],
-      "observability": {"logs": [], "metrics": [], "ui_signals": [], "database_effects": []},
-      "source_evidence": ["cmd/cli/operator_nostr.go", "cmd/cli/operator_nostr_test.go", "docs/adoption-production-rollout.md"],
+      "negative_cases": [
+        "If system discovery is used when `--relay` or `BAHIA_NOSTR_RELAYS` is present, the criterion fails.",
+        "If duplicate relay URLs survive normalization, the criterion fails."
+      ],
+      "observability": {
+        "logs": [],
+        "metrics": [],
+        "ui_signals": [],
+        "database_effects": []
+      },
+      "source_evidence": [
+        "cmd/cli/operator_nostr.go",
+        "cmd/cli/operator_nostr_test.go",
+        "docs/adoption-production-rollout.md"
+      ],
       "requires_human_approval": false
     },
     {
@@ -22,12 +40,28 @@
       "type": "security",
       "priority": "must",
       "assertion": "`--raw-target` requests do not use the signer-first Nostr path; they fail unless explicit HTTP fallback is enabled, and when fallback is enabled they skip signer-first publish entirely.",
-      "preconditions": ["CLI adoption command is invoked with `--raw-target`."],
-      "steps": ["Run adoption scan/import with `--raw-target` and no fallback.", "Repeat with explicit HTTP fallback enabled."],
+      "preconditions": [
+        "CLI adoption command is invoked with `--raw-target`."
+      ],
+      "steps": [
+        "Run adoption scan/import with `--raw-target` and no fallback.",
+        "Repeat with explicit HTTP fallback enabled."
+      ],
       "expected_result": "Without fallback the command errors before using the Nostr operator client; with fallback it executes the compatibility handler only.",
-      "negative_cases": ["If a raw-target request is published as a public signer-first event, the criterion fails.", "If raw-target proceeds without explicit fallback approval, the criterion fails."],
-      "observability": {"logs": [], "metrics": [], "ui_signals": [], "database_effects": []},
-      "source_evidence": ["cmd/cli/operator_nostr.go", "cmd/cli/operator_nostr_test.go"],
+      "negative_cases": [
+        "If a raw-target request is published as a public signer-first event, the criterion fails.",
+        "If raw-target proceeds without explicit fallback approval, the criterion fails."
+      ],
+      "observability": {
+        "logs": [],
+        "metrics": [],
+        "ui_signals": [],
+        "database_effects": []
+      },
+      "source_evidence": [
+        "cmd/cli/operator_nostr.go",
+        "cmd/cli/operator_nostr_test.go"
+      ],
       "requires_human_approval": false
     },
     {
@@ -36,12 +70,28 @@
       "type": "data_integrity",
       "priority": "must",
       "assertion": "The operator client opens the reply subscription before publishing the signed request event and resolves only correlated replies whose `#e` equals the request event id and whose `#p` equals the requester pubkey.",
-      "preconditions": ["Operator client is initialized with a signer and at least one relay transport."],
-      "steps": ["Issue a signer-first runtime or adoption request through the operator client.", "Inject unrelated, duplicate, and correctly correlated reply events."],
+      "preconditions": [
+        "Operator client is initialized with a signer and at least one relay transport."
+      ],
+      "steps": [
+        "Issue a signer-first runtime or adoption request through the operator client.",
+        "Inject unrelated, duplicate, and correctly correlated reply events."
+      ],
       "expected_result": "Subscription occurs before publish, unrelated or duplicate replies are ignored, and only the correctly correlated terminal result resolves the request.",
-      "negative_cases": ["If publish occurs before subscription, the criterion fails.", "If a reply with mismatched `#e` or `#p` resolves the request, the criterion fails."],
-      "observability": {"logs": [], "metrics": [], "ui_signals": [], "database_effects": []},
-      "source_evidence": ["pkg/client/operator_nostr.go", "pkg/client/operator_nostr_test.go"],
+      "negative_cases": [
+        "If publish occurs before subscription, the criterion fails.",
+        "If a reply with mismatched `#e` or `#p` resolves the request, the criterion fails."
+      ],
+      "observability": {
+        "logs": [],
+        "metrics": [],
+        "ui_signals": [],
+        "database_effects": []
+      },
+      "source_evidence": [
+        "pkg/client/operator_nostr.go",
+        "pkg/client/operator_nostr_test.go"
+      ],
       "requires_human_approval": false
     },
     {
@@ -50,12 +100,31 @@
       "type": "security",
       "priority": "must",
       "assertion": "Public signer-first adoption scan requests reject targets that contain `docker_host`, and valid signer-first requests publish endpoint-ref-only target content without raw Docker coordinates; target-name normalization happens reactor-side before service dispatch and status tagging.",
-      "preconditions": ["A signer-first adoption scan request is constructed from CLI or client input."],
-      "steps": ["Attempt scan with a target containing `docker_host`.", "Attempt scan with a valid target using `endpoint_ref`.", "Inspect the published request or validation failure."],
+      "preconditions": [
+        "A signer-first adoption scan request is constructed from CLI or client input."
+      ],
+      "steps": [
+        "Attempt scan with a target containing `docker_host`.",
+        "Attempt scan with a valid target using `endpoint_ref`.",
+        "Inspect the published request or validation failure."
+      ],
       "expected_result": "Invalid raw-Docker targets fail before service execution, and valid signer-first requests include endpoint refs without raw Docker coordinates while the reactor emits normalized target tags for downstream status/result events.",
-      "negative_cases": ["If `docker_host` appears in a signer-first adoption request payload, the criterion fails.", "If the reactor status/result path does not normalize target-name tags consistently for the same logical target, the criterion fails."],
-      "observability": {"logs": [], "metrics": [], "ui_signals": [], "database_effects": []},
-      "source_evidence": ["internal/controlplane/operator_actions.go", "internal/controlplane/reactor_operator_actions_test.go", "pkg/client/operator_nostr.go", "pkg/client/operator_nostr_test.go"],
+      "negative_cases": [
+        "If `docker_host` appears in a signer-first adoption request payload, the criterion fails.",
+        "If the reactor status/result path does not normalize target-name tags consistently for the same logical target, the criterion fails."
+      ],
+      "observability": {
+        "logs": [],
+        "metrics": [],
+        "ui_signals": [],
+        "database_effects": []
+      },
+      "source_evidence": [
+        "internal/controlplane/operator_actions.go",
+        "internal/controlplane/reactor_operator_actions_test.go",
+        "pkg/client/operator_nostr.go",
+        "pkg/client/operator_nostr_test.go"
+      ],
       "requires_human_approval": false
     },
     {
@@ -64,12 +133,30 @@
       "type": "security",
       "priority": "must",
       "assertion": "When the requester pubkey is not authorized for adoption, the reactor publishes a failed adoption result with an unauthorized step and does not call the adoption service.",
-      "preconditions": ["Reactor is configured with an adoption allowlist that excludes the requester pubkey."],
-      "steps": ["Deliver a signed `5978` or `5979` request from an unauthorized pubkey.", "Observe service invocation and published result events."],
+      "preconditions": [
+        "Reactor is configured with an adoption allowlist that excludes the requester pubkey."
+      ],
+      "steps": [
+        "Deliver a signed `5978` or `5979` request from an unauthorized pubkey.",
+        "Observe service invocation and published result events."
+      ],
       "expected_result": "The adoption service is not called and one failed result event is published with unauthorized error metadata.",
-      "negative_cases": ["If the adoption service is called for an unauthorized requester, the criterion fails.", "If the request fails silently with no terminal result, the criterion fails."],
-      "observability": {"logs": ["Unauthorized request warning in reactor logs."], "metrics": [], "ui_signals": [], "database_effects": []},
-      "source_evidence": ["internal/controlplane/operator_actions.go", "internal/controlplane/reactor_operator_actions_test.go"],
+      "negative_cases": [
+        "If the adoption service is called for an unauthorized requester, the criterion fails.",
+        "If the request fails silently with no terminal result, the criterion fails."
+      ],
+      "observability": {
+        "logs": [
+          "Unauthorized request warning in reactor logs."
+        ],
+        "metrics": [],
+        "ui_signals": [],
+        "database_effects": []
+      },
+      "source_evidence": [
+        "internal/controlplane/operator_actions.go",
+        "internal/controlplane/reactor_operator_actions_test.go"
+      ],
       "requires_human_approval": false
     },
     {
@@ -78,12 +165,32 @@
       "type": "data_integrity",
       "priority": "must",
       "assertion": "Successful signer-first adoption scan results preserve safe environment values and labels, preserve redacted key names, and omit managed-endpoint `docker_host` values from the result payload.",
-      "preconditions": ["Adoption scan service returns a preview containing both safe and redacted runtime metadata."],
-      "steps": ["Execute a successful signer-first adoption scan.", "Decode the published result payload or HTTP DTO mirror used by the signer-first result."],
+      "preconditions": [
+        "Adoption scan service returns a preview containing both safe and redacted runtime metadata."
+      ],
+      "steps": [
+        "Execute a successful signer-first adoption scan.",
+        "Decode the published result payload or HTTP DTO mirror used by the signer-first result."
+      ],
       "expected_result": "Safe values are preserved, redacted key names are listed, raw secret values are absent, and target `docker_host` is omitted.",
-      "negative_cases": ["If raw environment secret values or raw sensitive labels appear in the result payload, the criterion fails.", "If managed endpoint `docker_host` is exposed in the result payload, the criterion fails."],
-      "observability": {"logs": [], "metrics": ["Adoption redaction metrics advance during import/scan flows when configured."], "ui_signals": [], "database_effects": []},
-      "source_evidence": ["internal/controlplane/operator_actions.go", "internal/controlplane/reactor_operator_actions_test.go", "internal/api/handlers/adoption_handlers_test.go", "docs/adoption-production-rollout.md"],
+      "negative_cases": [
+        "If raw environment secret values or raw sensitive labels appear in the result payload, the criterion fails.",
+        "If managed endpoint `docker_host` is exposed in the result payload, the criterion fails."
+      ],
+      "observability": {
+        "logs": [],
+        "metrics": [
+          "Adoption redaction metrics advance during import/scan flows when configured."
+        ],
+        "ui_signals": [],
+        "database_effects": []
+      },
+      "source_evidence": [
+        "internal/controlplane/operator_actions.go",
+        "internal/controlplane/reactor_operator_actions_test.go",
+        "internal/api/handlers/adoption_handlers_test.go",
+        "docs/adoption-production-rollout.md"
+      ],
       "requires_human_approval": false
     },
     {
@@ -92,12 +199,31 @@
       "type": "functional",
       "priority": "must",
       "assertion": "Mixed adoption import outcomes produce a terminal result tagged `partial_failure` with per-container statuses and error details preserved.",
-      "preconditions": ["A signer-first adoption import request is prepared."],
-      "steps": ["Execute import with mixed successful and failed container outcomes.", "Inspect the terminal result tags and per-container payload fields."],
+      "preconditions": [
+        "A signer-first adoption import request is prepared."
+      ],
+      "steps": [
+        "Execute import with mixed successful and failed container outcomes.",
+        "Inspect the terminal result tags and per-container payload fields."
+      ],
       "expected_result": "Mixed outcomes publish a terminal result tagged `partial_failure` that preserves per-result status and error fields.",
-      "negative_cases": ["If mixed outcomes collapse to `success` instead of `partial_failure`, the criterion fails.", "If per-container error details are dropped from the terminal result payload, the criterion fails."],
-      "observability": {"logs": [], "metrics": ["Import success/failure counters advance consistently with per-container outcomes."], "ui_signals": [], "database_effects": []},
-      "source_evidence": ["internal/controlplane/operator_actions.go", "internal/controlplane/reactor_operator_actions_test.go", "internal/api/handlers/adoption_handlers_test.go"],
+      "negative_cases": [
+        "If mixed outcomes collapse to `success` instead of `partial_failure`, the criterion fails.",
+        "If per-container error details are dropped from the terminal result payload, the criterion fails."
+      ],
+      "observability": {
+        "logs": [],
+        "metrics": [
+          "Import success/failure counters advance consistently with per-container outcomes."
+        ],
+        "ui_signals": [],
+        "database_effects": []
+      },
+      "source_evidence": [
+        "internal/controlplane/operator_actions.go",
+        "internal/controlplane/reactor_operator_actions_test.go",
+        "internal/api/handlers/adoption_handlers_test.go"
+      ],
       "requires_human_approval": false
     },
     {
@@ -106,12 +232,34 @@
       "type": "functional",
       "priority": "must",
       "assertion": "Direct-runtime requests reject `artifact_id` on `restart` and `stop`, and unauthorized requesters fail before runtime execution while valid authorized actions dispatch to the runtime lifecycle service.",
-      "preconditions": ["A signer-first `5963` request is delivered to the reactor or operator client."],
-      "steps": ["Submit invalid runtime action shapes, including `artifact_id` on `stop`.", "Submit a valid action from an unauthorized requester.", "Submit a valid authorized action."],
+      "preconditions": [
+        "A signer-first `5963` request is delivered to the reactor or operator client."
+      ],
+      "steps": [
+        "Submit invalid runtime action shapes, including `artifact_id` on `stop`.",
+        "Submit a valid action from an unauthorized requester.",
+        "Submit a valid authorized action."
+      ],
       "expected_result": "Invalid artifact usage fails with a terminal validation result, unauthorized requests fail with a terminal failure result, and valid authorized actions reach the runtime lifecycle service.",
-      "negative_cases": ["If `artifact_id` is accepted for `restart` or `stop`, the criterion fails.", "If an unauthorized runtime action reaches the runtime lifecycle service, the criterion fails."],
-      "observability": {"logs": ["Unauthorized or failed direct-runtime action logs include action and resource context."], "metrics": ["Runtime action counters and duration metrics advance when the action executes."], "ui_signals": [], "database_effects": []},
-      "source_evidence": ["internal/controlplane/operator_actions.go", "internal/controlplane/reactor_operator_actions_test.go", "pkg/client/operator_nostr.go"],
+      "negative_cases": [
+        "If `artifact_id` is accepted for `restart` or `stop`, the criterion fails.",
+        "If an unauthorized runtime action reaches the runtime lifecycle service, the criterion fails."
+      ],
+      "observability": {
+        "logs": [
+          "Unauthorized or failed direct-runtime action logs include action and resource context."
+        ],
+        "metrics": [
+          "Runtime action counters and duration metrics advance when the action executes."
+        ],
+        "ui_signals": [],
+        "database_effects": []
+      },
+      "source_evidence": [
+        "internal/controlplane/operator_actions.go",
+        "internal/controlplane/reactor_operator_actions_test.go",
+        "pkg/client/operator_nostr.go"
+      ],
       "requires_human_approval": false
     },
     {
@@ -120,12 +268,31 @@
       "type": "functional",
       "priority": "must",
       "assertion": "A successful signer-first direct-runtime action publishes a `6963` processing status tagged with action/service/environment context and a `7962` success result whose payload matches `RuntimeActionResponse` including runtime observation details when present.",
-      "preconditions": ["Runtime lifecycle service returns a runtime observation for the requested action."],
-      "steps": ["Execute a successful signer-first deploy, restart, or stop action.", "Inspect the published status event and terminal result payload."],
+      "preconditions": [
+        "Runtime lifecycle service returns a runtime observation for the requested action."
+      ],
+      "steps": [
+        "Execute a successful signer-first deploy, restart, or stop action.",
+        "Inspect the published status event and terminal result payload."
+      ],
       "expected_result": "Exactly one processing status precedes one success result, both are signed, and the result payload decodes into the expected runtime action DTO.",
-      "negative_cases": ["If the terminal result is emitted without a prior processing status, the criterion fails.", "If the result payload is not decodable as `RuntimeActionResponse`, the criterion fails."],
-      "observability": {"logs": [], "metrics": ["Runtime action totals and duration metrics can be correlated with the successful action."], "ui_signals": [], "database_effects": []},
-      "source_evidence": ["internal/controlplane/operator_actions.go", "internal/controlplane/reactor_operator_actions_test.go", "pkg/client/operator_nostr_test.go"],
+      "negative_cases": [
+        "If the terminal result is emitted without a prior processing status, the criterion fails.",
+        "If the result payload is not decodable as `RuntimeActionResponse`, the criterion fails."
+      ],
+      "observability": {
+        "logs": [],
+        "metrics": [
+          "Runtime action totals and duration metrics can be correlated with the successful action."
+        ],
+        "ui_signals": [],
+        "database_effects": []
+      },
+      "source_evidence": [
+        "internal/controlplane/operator_actions.go",
+        "internal/controlplane/reactor_operator_actions_test.go",
+        "pkg/client/operator_nostr_test.go"
+      ],
       "requires_human_approval": false
     },
     {
@@ -134,12 +301,34 @@
       "type": "security",
       "priority": "must",
       "assertion": "When `--http-fallback` is enabled, CLI fallback occurs only for `ControlPlaneRequestError` cases where `RequestAccepted=false`; accepted signer-first requests that later fail must surface the terminal signer-first failure and must not invoke fallback.",
-      "preconditions": ["CLI operator path is invoked with explicit HTTP fallback enabled.", "Fallback handler is available for the command under test."],
-      "steps": ["Trigger a pre-acceptance failure such as relay subscription or zero-accept publish.", "Trigger a terminal failure after request acceptance."],
+      "preconditions": [
+        "CLI operator path is invoked with explicit HTTP fallback enabled.",
+        "Fallback handler is available for the command under test."
+      ],
+      "steps": [
+        "Trigger a pre-acceptance failure such as relay subscription or zero-accept publish.",
+        "Trigger a terminal failure after request acceptance."
+      ],
       "expected_result": "The pre-acceptance failure uses HTTP fallback; the post-acceptance terminal failure does not.",
-      "negative_cases": ["If fallback executes after any relay accepted the signer-first request, the criterion fails.", "If pre-acceptance failures are treated as terminal without allowing explicit fallback, the criterion fails."],
-      "observability": {"logs": [], "metrics": [], "ui_signals": ["In table mode, stderr explicitly notes fallback activation for pre-acceptance failures."], "database_effects": []},
-      "source_evidence": ["cmd/cli/operator_nostr.go", "cmd/cli/operator_nostr_test.go", "pkg/client/operator_nostr.go", "pkg/client/operator_nostr_test.go", "docs/adoption-production-rollout.md"],
+      "negative_cases": [
+        "If fallback executes after any relay accepted the signer-first request, the criterion fails.",
+        "If pre-acceptance failures are treated as terminal without allowing explicit fallback, the criterion fails."
+      ],
+      "observability": {
+        "logs": [],
+        "metrics": [],
+        "ui_signals": [
+          "In table mode, stderr explicitly notes fallback activation for pre-acceptance failures."
+        ],
+        "database_effects": []
+      },
+      "source_evidence": [
+        "cmd/cli/operator_nostr.go",
+        "cmd/cli/operator_nostr_test.go",
+        "pkg/client/operator_nostr.go",
+        "pkg/client/operator_nostr_test.go",
+        "docs/adoption-production-rollout.md"
+      ],
       "requires_human_approval": false
     },
     {
@@ -148,12 +337,28 @@
       "type": "ux",
       "priority": "should",
       "assertion": "Operator status updates are written only to stderr in table mode; JSON or YAML stdout remains reserved for the final structured result payload.",
-      "preconditions": ["CLI operator command is executed in both table and structured output modes."],
-      "steps": ["Emit operator status callbacks in JSON mode.", "Emit operator status callbacks in table mode and capture stderr/stdout."],
+      "preconditions": [
+        "CLI operator command is executed in both table and structured output modes."
+      ],
+      "steps": [
+        "Emit operator status callbacks in JSON mode.",
+        "Emit operator status callbacks in table mode and capture stderr/stdout."
+      ],
       "expected_result": "Structured modes produce no status chatter, while table mode writes human-readable progress lines to stderr only.",
-      "negative_cases": ["If JSON/YAML stdout contains progress chatter, the criterion fails.", "If table mode does not expose progress lines when status events occur, the criterion fails."],
-      "observability": {"logs": [], "metrics": [], "ui_signals": [], "database_effects": []},
-      "source_evidence": ["cmd/cli/operator_nostr.go", "cmd/cli/operator_nostr_test.go"],
+      "negative_cases": [
+        "If JSON/YAML stdout contains progress chatter, the criterion fails.",
+        "If table mode does not expose progress lines when status events occur, the criterion fails."
+      ],
+      "observability": {
+        "logs": [],
+        "metrics": [],
+        "ui_signals": [],
+        "database_effects": []
+      },
+      "source_evidence": [
+        "cmd/cli/operator_nostr.go",
+        "cmd/cli/operator_nostr_test.go"
+      ],
       "requires_human_approval": false
     }
   ],

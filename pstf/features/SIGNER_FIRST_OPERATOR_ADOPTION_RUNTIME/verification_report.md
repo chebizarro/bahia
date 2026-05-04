@@ -66,7 +66,10 @@ No open product defects or open test defects were identified for the current sig
 
 ## Ambiguities / Human Decisions Needed
 
-1. Decide whether this slice should require a stored local rehearsal or staged/live signoff artifact in addition to the deterministic package-test evidence already captured here.
+Resolved in HITL review:
+- Slice approval posture: `APPROVED_WITH_RISK`
+- Acceptance criteria: `APPROVE_AS_IS`
+- Rehearsal artifact gate: `DEFER_TO_FOLLOWUP` (tracked in `bahia-rn20`)
 
 ## Confidence Assessment
 
@@ -83,4 +86,4 @@ Treat `SIGNER_FIRST_OPERATOR_ADOPTION_RUNTIME` as fully verified for current imp
 
 Recommended next moves:
 1. Use this slice as the reference PSTF pattern for future operator-only signer-first flows.
-2. Decide whether to elevate a local Docker+relay rehearsal artifact into a formal acceptance or release gate for operator slices.
+2. Resolve `bahia-rn20` if operator-slice release policy should require a stored rehearsal artifact.
