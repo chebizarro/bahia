@@ -5,48 +5,60 @@
       "defect_id": "ECPN-D-001",
       "title": "Missing negative-path automated coverage for encrypted notification log retrieval",
       "severity": "minor",
-      "status": "open",
-      "related_ac_ids": ["ECPN-AC-008"],
-      "related_test_ids": ["ECPN-T-010"],
-      "evidence": [
-        "pstf/features/ENCRYPTED_CONTROL_PLANE_NOTIFICATIONS/test_matrix.json",
-        "web/tests/unit/notifications-store.test.js",
-        "web/src/lib/stores/notifications.svelte.js"
+      "status": "verified",
+      "related_ac_ids": [
+        "ECPN-AC-008"
       ],
-      "suspected_root_cause": "The notifications store tests cover only the success path for `listNotificationLogs()` and do not assert the required failure semantics for clearing stale logs and setting `logsError`.",
-      "recommended_fix": "Add a Vitest case to seed `notificationState.logs`, force an encrypted terminal error or rejection on the next `listNotificationLogs()` call, and assert that stale logs are cleared while `logsError` is populated.",
+      "related_test_ids": [
+        "ECPN-T-010"
+      ],
+      "evidence": [
+        "web/tests/unit/notifications-store.test.js",
+        "pstf/features/ENCRYPTED_CONTROL_PLANE_NOTIFICATIONS/test_matrix.json",
+        "pstf/features/ENCRYPTED_CONTROL_PLANE_NOTIFICATIONS/verification_report.md"
+      ],
+      "suspected_root_cause": "Resolved by adding a unit test for the encrypted logs failure path.",
+      "recommended_fix": "Implemented in `web/tests/unit/notifications-store.test.js`.",
       "requires_human_decision": false
     },
     {
       "defect_id": "ECPN-D-002",
       "title": "Missing browser verification for notification form state retention after encrypted submit failure",
       "severity": "minor",
-      "status": "open",
-      "related_ac_ids": ["ECPN-AC-010"],
-      "related_test_ids": ["ECPN-T-013"],
-      "evidence": [
-        "pstf/features/ENCRYPTED_CONTROL_PLANE_NOTIFICATIONS/test_matrix.json",
-        "web/src/routes/notifications/new/+page.svelte",
-        "web/src/routes/notifications/NotificationChannelForm.svelte"
+      "status": "verified",
+      "related_ac_ids": [
+        "ECPN-AC-010"
       ],
-      "suspected_root_cause": "The current browser suite exercises only successful encrypted notification create/test flows and never forces a terminal error on form submission.",
-      "recommended_fix": "Add a Playwright test harness variant that returns an encrypted terminal error for create or update submission and assert that the form keeps the entered values while surfacing the error in the alert region.",
+      "related_test_ids": [
+        "ECPN-T-013"
+      ],
+      "evidence": [
+        "web/tests/e2e/notifications-form-error.spec.js",
+        "pstf/features/ENCRYPTED_CONTROL_PLANE_NOTIFICATIONS/test_matrix.json",
+        "pstf/features/ENCRYPTED_CONTROL_PLANE_NOTIFICATIONS/verification_report.md"
+      ],
+      "suspected_root_cause": "Resolved by adding deterministic Playwright coverage for encrypted create and update failures.",
+      "recommended_fix": "Implemented in `web/tests/e2e/notifications-form-error.spec.js`.",
       "requires_human_decision": false
     },
     {
       "defect_id": "ECPN-D-003",
       "title": "Accessibility assertions for notifications routes are incomplete",
       "severity": "trivial",
-      "status": "open",
-      "related_ac_ids": ["ECPN-AC-011"],
-      "related_test_ids": ["ECPN-T-014"],
-      "evidence": [
-        "pstf/features/ENCRYPTED_CONTROL_PLANE_NOTIFICATIONS/test_matrix.json",
-        "web/tests/e2e/notifications-encrypted-smoke.spec.js",
-        "web/src/routes/notifications/NotificationChannelForm.svelte"
+      "status": "verified",
+      "related_ac_ids": [
+        "ECPN-AC-011"
       ],
-      "suspected_root_cause": "The existing smoke test checks high-level route headings but does not assert label-addressable controls or alert semantics under an error condition.",
-      "recommended_fix": "Extend the Playwright coverage or add a dedicated accessibility-focused test that asserts labeled controls on `/notifications/new` and verifies `role=alert` rendering after a forced submission error.",
+      "related_test_ids": [
+        "ECPN-T-014"
+      ],
+      "evidence": [
+        "web/tests/e2e/notifications-form-error.spec.js",
+        "web/tests/e2e/notifications-encrypted-smoke.spec.js",
+        "pstf/features/ENCRYPTED_CONTROL_PLANE_NOTIFICATIONS/verification_report.md"
+      ],
+      "suspected_root_cause": "Resolved by adding explicit browser assertions for labels, headings, and alert semantics.",
+      "recommended_fix": "Implemented in `web/tests/e2e/notifications-form-error.spec.js`.",
       "requires_human_decision": false
     }
   ]

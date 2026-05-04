@@ -2,23 +2,27 @@
 
 ## Summary
 
-The encrypted notifications slice is **mostly verified but not fully verified**.
+The encrypted notifications slice is **fully verified against the current acceptance criteria and test matrix**.
 
-Current automated evidence confirms the core encrypted transport, notification channel list/mutation flows, backend decrypt/authorization handling, and the browser notifications journey over encrypted relays. The implementation satisfies every acceptance criterion that has executable coverage today.
+Current automated evidence covers:
+- encrypted discovery availability and relay selection
+- encrypted request construction and accepted-OK publish handling
+- correlated encrypted result resolution and cleanup
+- notifications channel list/create/update/delete/test flows
+- encrypted log success and failure state handling
+- backend decrypt failure and unauthorized requester handling
+- browser create/update form failure retention
+- browser accessibility-critical headings, labels, and alert regions
+- end-to-end proof that the browser notifications journey publishes only to encrypted relay URLs
 
-The slice is not fully verified because three criteria still depend on tests that do not exist yet:
-- `ECPN-AC-008` lacks negative-path verification for encrypted log retrieval failure handling.
-- `ECPN-AC-010` lacks browser proof that valid form data survives encrypted submit failure.
-- `ECPN-AC-011` lacks explicit accessibility assertions for labeled controls and alert behavior.
-
-Those are verification gaps, not confirmed product defects.
+No open product defects or open test defects remain for this slice.
 
 ## Commands Run
 
 ```bash
-npm --prefix web run test:unit -- tests/unit/encrypted-controlplane.test.js tests/unit/notifications-store.test.js
+npm --prefix web run test:unit -- tests/unit/notifications-store.test.js tests/unit/encrypted-controlplane.test.js
 go test ./internal/controlplane -run 'TestEncrypted'
-npm --prefix web run test:e2e -- tests/e2e/notifications-encrypted-smoke.spec.js
+npm --prefix web run test:e2e -- tests/e2e/notifications-encrypted-smoke.spec.js tests/e2e/notifications-form-error.spec.js
 ```
 
 ## Acceptance Criteria Status
@@ -31,72 +35,62 @@ npm --prefix web run test:e2e -- tests/e2e/notifications-encrypted-smoke.spec.js
 | ECPN-AC-004 | pass | `web/tests/unit/encrypted-controlplane.test.js` proves publish requires an accepted OK and propagates relay rejection reasons. |
 | ECPN-AC-005 | pass | `web/tests/unit/encrypted-controlplane.test.js` proves correlation by `#e`, `#p`, service author, and duplicate-safe cleanup. |
 | ECPN-AC-006 | pass | `web/tests/unit/notifications-store.test.js` and `web/tests/e2e/notifications-encrypted-smoke.spec.js` prove channel listing loads and renders via encrypted transport. |
-| ECPN-AC-007 | pass | `web/tests/unit/notifications-store.test.js` plus `web/tests/e2e/notifications-encrypted-smoke.spec.js` prove channel create/test flow stays on encrypted operations and updates local state. |
-| ECPN-AC-008 | partial | Success-path coverage exists in `web/tests/unit/notifications-store.test.js`, but failure semantics for clearing stale logs and setting `logsError` are not automated. Source inspection of `web/src/lib/stores/notifications.svelte.js` indicates the intended behavior is implemented. |
+| ECPN-AC-007 | pass | `web/tests/unit/notifications-store.test.js` plus `web/tests/e2e/notifications-encrypted-smoke.spec.js` prove channel mutation flows stay on encrypted operations and update local state deterministically. |
+| ECPN-AC-008 | pass | `web/tests/unit/notifications-store.test.js` now proves both encrypted log success and failure semantics, including stale-log clearing and `logsError` population. |
 | ECPN-AC-009 | pass | `internal/controlplane/encrypted_transport_test.go` proves decrypt failures and unauthorized requesters receive terminal encrypted errors without handler dispatch. |
-| ECPN-AC-010 | partial | Source inspection of `web/src/routes/notifications/new/+page.svelte` and `web/src/routes/notifications/NotificationChannelForm.svelte` indicates form values should persist after submit failure, but no automated test proves it. |
-| ECPN-AC-011 | partial | Source inspection shows headings, labels, and `role=alert` markup, but the selected test suite does not explicitly assert those accessibility behaviors. |
+| ECPN-AC-010 | pass | `web/tests/e2e/notifications-form-error.spec.js` proves both create and edit routes preserve valid field values while surfacing terminal encrypted errors. |
+| ECPN-AC-011 | pass | `web/tests/e2e/notifications-form-error.spec.js` proves the notifications routes expose headings, labeled controls, and an alert region for submission failures. |
 | ECPN-AC-012 | pass | `web/tests/e2e/notifications-encrypted-smoke.spec.js` proves the browser journey publishes only to encrypted relay URLs and not to public relay URLs. |
 
 ## Test Matrix Status
 
-### Executed tests
-
 | Test ID | Status | Evidence |
 |---|---|---|
-| ECPN-T-001 | pass | Included in `npm --prefix web run test:unit -- tests/unit/notifications-store.test.js` (12/12 tests passed across both unit files). |
-| ECPN-T-002 | pass | Included in `npm --prefix web run test:unit -- tests/unit/encrypted-controlplane.test.js tests/unit/notifications-store.test.js`. |
-| ECPN-T-003 | pass | Same unit run as above. |
-| ECPN-T-004 | pass | Same unit run as above. |
-| ECPN-T-005 | pass | Same unit run as above. |
-| ECPN-T-006 | pass | `npm --prefix web run test:e2e -- tests/e2e/notifications-encrypted-smoke.spec.js` passed (1/1). |
+| ECPN-T-001 | pass | Included in the notifications store unit run. |
+| ECPN-T-002 | pass | Included in the encrypted controlplane unit run. |
+| ECPN-T-003 | pass | Included in the encrypted controlplane unit run. |
+| ECPN-T-004 | pass | Included in the encrypted controlplane unit run. |
+| ECPN-T-005 | pass | Included in the encrypted controlplane unit run. |
+| ECPN-T-006 | pass | `npm --prefix web run test:e2e -- tests/e2e/notifications-encrypted-smoke.spec.js tests/e2e/notifications-form-error.spec.js` passed (4/4 total Playwright tests). |
 | ECPN-T-007 | pass | Same Playwright run as above. |
 | ECPN-T-008 | pass | Included in the notifications store unit run. |
 | ECPN-T-009 | pass | Included in the notifications store unit run. |
+| ECPN-T-010 | pass | Included in the notifications store unit run. |
 | ECPN-T-011 | pass | `go test ./internal/controlplane -run 'TestEncrypted'` passed. |
 | ECPN-T-012 | pass | Same Go test run as above. |
+| ECPN-T-013 | pass | `web/tests/e2e/notifications-form-error.spec.js` now covers encrypted create and update failure retention. |
+| ECPN-T-014 | pass | `web/tests/e2e/notifications-form-error.spec.js` now covers notifications accessibility-critical labels, headings, and alert behavior. |
 
-### Missing tests
-
-| Test ID | Status | Classification |
-|---|---|---|
-| ECPN-T-010 | not_implemented | test defect / verification gap |
-| ECPN-T-013 | not_implemented | test defect / verification gap |
-| ECPN-T-014 | not_implemented | test defect / verification gap |
-
-Overall matrix status: **draft**.
+Overall matrix status: **ready**.
 
 ## Defects
 
-The current verification produced **three open test defects** and **no confirmed product defects**.
-
+Resolved and verified:
 - `ECPN-D-001` — Missing negative-path automated coverage for encrypted notification log retrieval
 - `ECPN-D-002` — Missing browser verification for notification form state retention after encrypted submit failure
-- `ECPN-D-003` — Accessibility assertions for notifications routes are incomplete
+- `ECPN-D-003` — Accessibility assertions for notifications routes were incomplete
 
-See `pstf/features/ENCRYPTED_CONTROL_PLANE_NOTIFICATIONS/defects.json` for structured details.
+All three are now marked `verified` in `pstf/features/ENCRYPTED_CONTROL_PLANE_NOTIFICATIONS/defects.json`.
 
 ## Ambiguities / Human Decisions Needed
 
-1. Should the slice remain in `draft` acceptance status until the three missing tests exist, or is source inspection sufficient to upgrade `ECPN-AC-010` and `ECPN-AC-011` to approved with manual evidence?
-2. Should encrypted notification log failure semantics (`ECPN-AC-008`) be release-gating, or is success-path coverage sufficient for this onboarding slice?
-3. Should accessibility coverage for this slice stay browser-E2E based, or should there be a dedicated accessibility test layer for PSTF slices?
+1. `acceptance_criteria.json` still carries `status: draft`. The implementation is fully verified against the current criteria, but human approval may still be needed if your PSTF workflow distinguishes verification from approval.
+2. If this slice is intended to remain the reference onboarding slice, decide whether to formally promote the encrypted operation catalog to a normative spec table alongside the public control-plane command families.
 
 ## Confidence Assessment
 
-**Confidence: medium-high**
+**Confidence: high**
 
 Why:
-- The implemented transport and core browser flow have direct passing automated evidence.
-- The remaining gaps are narrow and test-focused rather than broad architectural unknowns.
-- The slice is not fully verified because three acceptance criteria still rely on source inspection instead of executable evidence.
+- All matrix tests now exist and pass.
+- Coverage spans frontend unit behavior, backend transport behavior, and browser-level encrypted flows.
+- The remaining questions are process/spec-governance questions, not implementation or verification gaps.
 
 ## Recommendation
 
-Do **not** treat `ENCRYPTED_CONTROL_PLANE_NOTIFICATIONS` as fully verified yet.
+Treat `ENCRYPTED_CONTROL_PLANE_NOTIFICATIONS` as fully verified for implementation behavior.
 
-Recommended next steps:
-1. Implement `ECPN-T-010` to close the encrypted log failure-path gap.
-2. Implement `ECPN-T-013` to verify form-value persistence after encrypted submit failure.
-3. Implement `ECPN-T-014` to verify accessibility-critical labels and alert behavior.
-4. After those tests pass, rerun PSTF verification and upgrade the slice from `draft` to `fully_verified` if no product defects emerge.
+Recommended next moves:
+1. If desired by your PSTF workflow, promote `acceptance_criteria.json` from `draft` to `approved` after human review.
+2. Use this slice as the reference pattern for the next signer-first encrypted slice.
+3. Keep the shared encrypted Playwright harness for future sensitive-route verification rather than duplicating per-feature relay mocks.

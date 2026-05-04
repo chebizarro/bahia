@@ -1,6 +1,6 @@
 {
   "feature_id": "ENCRYPTED_CONTROL_PLANE_NOTIFICATIONS",
-  "status": "draft",
+  "status": "ready",
   "tests": [
     {
       "test_id": "ECPN-T-001",
@@ -336,8 +336,8 @@
       "determinism_notes": [
         "No external systems required."
       ],
-      "status": "not_implemented",
-      "failure_reason": "Current selected evidence covers only the success path for encrypted log retrieval."
+      "status": "pass",
+      "failure_reason": null
     },
     {
       "test_id": "ECPN-T-011",
@@ -414,17 +414,17 @@
       "type": "e2e",
       "existing_or_new": "new",
       "target_path": "web/tests/e2e/notifications-form-error.spec.js",
-      "description": "Adds the missing browser-level proof that a failed encrypted create or update leaves valid user input intact while surfacing a visible error.",
+      "description": "Browser coverage proving failed encrypted create and update submissions keep valid entered data while surfacing a visible alert.",
       "preconditions": [
         "Browser harness can return a terminal encrypted error for `notifications.channels.create` or `notifications.channels.update`."
       ],
       "steps": [
-        "Open the notification create or edit form.",
-        "Fill valid fields.",
-        "Submit the form and force an encrypted terminal error.",
-        "Inspect the error region and persisted field values."
+        "Open the notification create form and submit valid data while the encrypted create operation returns a terminal error.",
+        "Verify the create form retains the entered values and renders the error alert.",
+        "Open the edit form for an existing notification channel and submit valid changes while the encrypted update operation returns a terminal error.",
+        "Verify the edit form retains the changed values and renders the error alert."
       ],
-      "expected_result": "The form renders the error in `div.form-error[role=alert]` and the previously entered valid field values remain present for retry.",
+      "expected_result": "Both create and edit routes render the error in `div.form-error[role=alert]` and preserve the current valid field values for retry.",
       "fixtures": [
         "Encrypted relay harness variant that returns a terminal error result for form submission."
       ],
@@ -439,8 +439,8 @@
       "determinism_notes": [
         "Should be implemented entirely with the existing in-page relay harness pattern."
       ],
-      "status": "not_implemented",
-      "failure_reason": "No selected unit or browser test currently verifies field persistence after encrypted submit failure."
+      "status": "pass",
+      "failure_reason": null
     },
     {
       "test_id": "ECPN-T-014",
@@ -450,7 +450,7 @@
       "title": "Notifications routes expose labelled controls, headings, and alert regions",
       "type": "accessibility",
       "existing_or_new": "modify_existing",
-      "target_path": "web/tests/e2e/notifications-encrypted-smoke.spec.js",
+      "target_path": "web/tests/e2e/notifications-form-error.spec.js",
       "description": "Extends the existing browser test or adds a dedicated accessibility-oriented browser test to assert labels and alert semantics beyond the current heading checks.",
       "preconditions": [
         "Notifications routes are reachable under the Playwright harness."
@@ -474,24 +474,19 @@
       "determinism_notes": [
         "A browser accessibility assertion is preferable to a static component snapshot because the route copy and rendered structure matter."
       ],
-      "status": "not_implemented",
-      "failure_reason": "Existing E2E evidence covers headings and flow success but does not comprehensively assert labeled controls plus alert semantics under an error condition."
+      "status": "pass",
+      "failure_reason": null
     }
   ],
   "coverage_summary": {
     "criteria_total": 12,
     "criteria_with_tests": 12,
-    "known_gaps": [
-      "ECPN-AC-008 lacks explicit negative-path test evidence for clearing stale logs and populating `logsError` after encrypted log retrieval failure.",
-      "ECPN-AC-010 lacks any current automated test proving valid form data is preserved after an encrypted terminal submit failure.",
-      "ECPN-AC-011 is only partially evidenced by the current smoke test; explicit label and alert assertions are still missing."
-    ]
+    "known_gaps": []
   },
   "implementation_notes": [
-    "Estimated lowest-effort gap closure order: ECPN-T-010 (small), ECPN-T-014 (small-to-medium), ECPN-T-013 (medium).",
-    "All proposed new coverage can stay deterministic by reusing the existing Vitest mocks and Playwright in-page encrypted relay harness; no live relay or external notification service is required.",
-    "The matrix intentionally distinguishes backend transport proofs from browser/store proofs so terminal encrypted errors are covered at both dispatch and UX boundaries.",
-    "Acceptance criteria remain `draft`, so this matrix is marked `draft` even though most current tests pass.",
-    "Verification run 2026-05-03 confirmed ECPN-T-001..009 and ECPN-T-011..012 passing via current automated evidence; ECPN-T-010, ECPN-T-013, and ECPN-T-014 remain not implemented."
+    "Implemented missing coverage in `web/tests/unit/notifications-store.test.js` for encrypted log failure state clearing stale logs and populating `logsError`.",
+    "Implemented browser coverage in `web/tests/e2e/notifications-form-error.spec.js` for encrypted create/update failure persistence and notifications accessibility assertions.",
+    "Verification run 2026-05-03 confirmed ECPN-T-001 through ECPN-T-014 passing with deterministic unit, backend, and Playwright evidence.",
+    "Acceptance criteria JSON still carries `status: draft`; matrix readiness here means every current criterion is covered by passing tests, not that human approval workflow is complete."
   ]
 }

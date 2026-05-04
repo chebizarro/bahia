@@ -79,6 +79,31 @@ describe('notifications encrypted store', () => {
       payload: { limit: 50 }
     });
     expect(store.notificationState.logs).toHaveLength(1);
+    expect(store.notificationState.logsError).toBeNull();
+    expect(store.notificationState.logsLoading).toBe(false);
+  });
+
+  it('clears stale log entries and sets logsError when encrypted log retrieval fails', async () => {
+    encryptedRequestsMock.requestEncryptedResult
+      .mockResolvedValueOnce({
+        result: { status: 'ok', payload: { logs: [{ id: 'log-1', payload: { detail: 'private' } }] } }
+      })
+      .mockResolvedValueOnce({
+        result: { status: 'error', error: { code: 'handler_failed', message: 'failed to list notification logs' } }
+      });
+
+    await expect(store.listNotificationLogs({ limit: 50 })).resolves.toHaveLength(1);
+    expect(store.notificationState.logs).toHaveLength(1);
+
+    await expect(store.listNotificationLogs({ limit: 25 })).rejects.toThrow('failed to list notification logs');
+
+    expect(encryptedRequestsMock.requestEncryptedResult).toHaveBeenNthCalledWith(2, {
+      operation: store.NOTIFICATION_ENCRYPTED_OPERATIONS.listLogs,
+      payload: { limit: 25 }
+    });
+    expect(store.notificationState.logs).toEqual([]);
+    expect(store.notificationState.logsError).toBe('failed to list notification logs');
+    expect(store.notificationState.logsLoading).toBe(false);
   });
 
   it('fails before publishing when encrypted Nostr requests are not advertised', async () => {
