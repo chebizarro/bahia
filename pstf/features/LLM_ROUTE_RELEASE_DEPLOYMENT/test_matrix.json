@@ -4,7 +4,9 @@
   "tests": [
     {
       "test_id": "LLMRD-T-001",
-      "ac_ids": ["LLMRD-AC-001"],
+      "ac_ids": [
+        "LLMRD-AC-001"
+      ],
       "title": "System info advertises LLM control-plane kinds only when enabled",
       "type": "contract",
       "existing_or_new": "existing",
@@ -32,7 +34,9 @@
     },
     {
       "test_id": "LLMRD-T-002",
-      "ac_ids": ["LLMRD-AC-002"],
+      "ac_ids": [
+        "LLMRD-AC-002"
+      ],
       "title": "LLM route create request publishes kind 5971 and resolves with correlated 7971 result",
       "type": "integration",
       "existing_or_new": "new",
@@ -64,11 +68,13 @@
         "Assert reply tags include `e` and `p` correlation plus created `route` identifiers."
       ],
       "status": "not_implemented",
-      "failure_reason": null
+      "failure_reason": "Required reactor-level signer-first route-create contract test is missing; `internal/controlplane/reactor_llm_requests_test.go` does not exist."
     },
     {
       "test_id": "LLMRD-T-003",
-      "ac_ids": ["LLMRD-AC-002"],
+      "ac_ids": [
+        "LLMRD-AC-002"
+      ],
       "title": "LLM registry MCP route-create tool persists route metadata",
       "type": "unit",
       "existing_or_new": "existing",
@@ -98,7 +104,9 @@
     },
     {
       "test_id": "LLMRD-T-004",
-      "ac_ids": ["LLMRD-AC-003"],
+      "ac_ids": [
+        "LLMRD-AC-003"
+      ],
       "title": "LLM release register request publishes kind 5972 and resolves with correlated 7972 result",
       "type": "integration",
       "existing_or_new": "new",
@@ -129,11 +137,13 @@
         "No live relay dependency; inject signed request event directly and assert `e`/`p` reply tags."
       ],
       "status": "not_implemented",
-      "failure_reason": null
+      "failure_reason": "Required reactor-level signer-first release-register contract test is missing; `internal/controlplane/reactor_llm_requests_test.go` does not exist."
     },
     {
       "test_id": "LLMRD-T-005",
-      "ac_ids": ["LLMRD-AC-003"],
+      "ac_ids": [
+        "LLMRD-AC-003"
+      ],
       "title": "LLM registry MCP release-register tool persists release metadata",
       "type": "unit",
       "existing_or_new": "existing",
@@ -164,7 +174,9 @@
     },
     {
       "test_id": "LLMRD-T-006",
-      "ac_ids": ["LLMRD-AC-004"],
+      "ac_ids": [
+        "LLMRD-AC-004"
+      ],
       "title": "LLM deploy request publisher emits explicit route/environment/release tags and fails on zero accept",
       "type": "contract",
       "existing_or_new": "modify_existing",
@@ -191,11 +203,13 @@
         "Current suite already covers the zero-accept branch and needs the positive deploy-tag assertion added."
       ],
       "status": "not_implemented",
-      "failure_reason": null
+      "failure_reason": "Current command publisher suite covers rollback publication and zero-accept deploy failure, but it does not assert the successful deploy request's explicit route/environment/release tags."
     },
     {
       "test_id": "LLMRD-T-007",
-      "ac_ids": ["LLMRD-AC-004"],
+      "ac_ids": [
+        "LLMRD-AC-004"
+      ],
       "title": "Accepted deploy request emits initial correlated 6973 processing status",
       "type": "integration",
       "existing_or_new": "new",
@@ -226,11 +240,13 @@
         "Assert `e`, `p`, `route`, `environment`, and `release` correlation tags."
       ],
       "status": "not_implemented",
-      "failure_reason": null
+      "failure_reason": "No reactor-level test proves the first correlated deploy reply is kind 6973 `processing/accepted`; `internal/controlplane/reactor_llm_requests_test.go` does not exist."
     },
     {
       "test_id": "LLMRD-T-008",
-      "ac_ids": ["LLMRD-AC-004"],
+      "ac_ids": [
+        "LLMRD-AC-004"
+      ],
       "title": "MCP deploy tool returns canonical request/status/result metadata",
       "type": "unit",
       "existing_or_new": "existing",
@@ -260,7 +276,9 @@
     },
     {
       "test_id": "LLMRD-T-009",
-      "ac_ids": ["LLMRD-AC-005"],
+      "ac_ids": [
+        "LLMRD-AC-005"
+      ],
       "title": "LLM approval and rejection requests validate decision values and publish correlated 7973 results",
       "type": "integration",
       "existing_or_new": "new",
@@ -292,11 +310,13 @@
         "Keep approve, reject, and invalid-decision cases isolated so state mutations remain explicit."
       ],
       "status": "not_implemented",
-      "failure_reason": null
+      "failure_reason": "No reactor-level approval/reject contract test exists for valid approve/reject flows and invalid decision rejection; `internal/controlplane/reactor_llm_requests_test.go` does not exist."
     },
     {
       "test_id": "LLMRD-T-010",
-      "ac_ids": ["LLMRD-AC-005"],
+      "ac_ids": [
+        "LLMRD-AC-005"
+      ],
       "title": "Rejected LLM intent is repaired out of desired route state",
       "type": "integration",
       "existing_or_new": "new",
@@ -325,11 +345,13 @@
         "No relay dependency; assert state repository contents directly after rejection repair."
       ],
       "status": "not_implemented",
-      "failure_reason": null
+      "failure_reason": "No registry test currently proves rejection repair clears the rejected desired intent from route state."
     },
     {
       "test_id": "LLMRD-T-011",
-      "ac_ids": ["LLMRD-AC-005"],
+      "ac_ids": [
+        "LLMRD-AC-005"
+      ],
       "title": "MCP approval and rejection tools shape canonical request metadata",
       "type": "unit",
       "existing_or_new": "existing",
@@ -359,7 +381,9 @@
     },
     {
       "test_id": "LLMRD-T-012",
-      "ac_ids": ["LLMRD-AC-006"],
+      "ac_ids": [
+        "LLMRD-AC-006"
+      ],
       "title": "Successful provisioning run emits staged 6973 progress and terminal 7973 completion",
       "type": "integration",
       "existing_or_new": "new",
@@ -393,11 +417,13 @@
         "Assert callback order deterministically from the capture responder."
       ],
       "status": "not_implemented",
-      "failure_reason": null
+      "failure_reason": "No `internal/service/llm_provisioning_coordinator_test.go` file exists, so the successful async progress/completion path is unverified by automated tests."
     },
     {
       "test_id": "LLMRD-T-013",
-      "ac_ids": ["LLMRD-AC-006"],
+      "ac_ids": [
+        "LLMRD-AC-006"
+      ],
       "title": "Provisioning failure emits terminal error result and leaves run failed",
       "type": "integration",
       "existing_or_new": "new",
@@ -427,11 +453,13 @@
         "Drive failures directly through fake dependencies; avoid sleeps or external runtime dependencies."
       ],
       "status": "not_implemented",
-      "failure_reason": null
+      "failure_reason": "No `internal/service/llm_provisioning_coordinator_test.go` file exists, so async failure-path status/result behavior is unverified by automated tests."
     },
     {
       "test_id": "LLMRD-T-014",
-      "ac_ids": ["LLMRD-AC-007"],
+      "ac_ids": [
+        "LLMRD-AC-007"
+      ],
       "title": "Projector republishes authoritative LLM route and route-state read models",
       "type": "integration",
       "existing_or_new": "existing",
@@ -461,7 +489,9 @@
     },
     {
       "test_id": "LLMRD-T-015",
-      "ac_ids": ["LLMRD-AC-007"],
+      "ac_ids": [
+        "LLMRD-AC-007"
+      ],
       "title": "Registry and reconciler propagate observed backend and gateway state into LLM route state",
       "type": "integration",
       "existing_or_new": "existing",
@@ -491,7 +521,9 @@
     },
     {
       "test_id": "LLMRD-T-016",
-      "ac_ids": ["LLMRD-AC-008"],
+      "ac_ids": [
+        "LLMRD-AC-008"
+      ],
       "title": "Browser control-plane store bootstraps and applies Bahia-authored LLM read models and activity events",
       "type": "unit",
       "existing_or_new": "existing",
@@ -523,7 +555,9 @@
     },
     {
       "test_id": "LLMRD-T-017",
-      "ac_ids": ["LLMRD-AC-008"],
+      "ac_ids": [
+        "LLMRD-AC-008"
+      ],
       "title": "Browser control-plane store ignores spoofed non-Bahia LLM events",
       "type": "unit",
       "existing_or_new": "modify_existing",
@@ -550,11 +584,13 @@
         "Extend the existing mocked-store suite; no external services are required."
       ],
       "status": "not_implemented",
-      "failure_reason": null
+      "failure_reason": "The browser store suite has a spoofed-author check for generic service registry events, but no explicit spoofed LLM route/state/activity case."
     },
     {
       "test_id": "LLMRD-T-018",
-      "ac_ids": ["LLMRD-AC-009"],
+      "ac_ids": [
+        "LLMRD-AC-009"
+      ],
       "title": "Dedicated browser LLM workflow exercises route creation, release registration, deploy initiation, approval visibility, and relay-backed state",
       "type": "e2e",
       "existing_or_new": "new",
@@ -592,7 +628,9 @@
     },
     {
       "test_id": "LLMRD-T-019",
-      "ac_ids": ["LLMRD-AC-009"],
+      "ac_ids": [
+        "LLMRD-AC-009"
+      ],
       "title": "Legacy operational REST mutation endpoints stay disabled by default and compatibility-only behind operator access",
       "type": "contract",
       "existing_or_new": "existing",

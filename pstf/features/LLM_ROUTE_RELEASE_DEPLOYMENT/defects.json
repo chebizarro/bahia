@@ -1,0 +1,95 @@
+{
+  "feature_id": "LLM_ROUTE_RELEASE_DEPLOYMENT",
+  "defects": [
+    {
+      "defect_id": "LLMRD-D-001",
+      "title": "Dedicated end-user LLM browser workflow is missing",
+      "severity": "major",
+      "status": "open",
+      "related_ac_ids": [
+        "LLMRD-AC-009"
+      ],
+      "related_test_ids": [
+        "LLMRD-T-018"
+      ],
+      "evidence": [
+        "RepoPrompt path search under `web/src/routes` for `llm` returned no matches on 2026-05-04.",
+        "pstf/features/LLM_ROUTE_RELEASE_DEPLOYMENT/feature_spec.json (contradiction LLMRD-CON-002)",
+        "pstf/features/LLM_ROUTE_RELEASE_DEPLOYMENT/acceptance_criteria.json (LLMRD-AC-009)",
+        "internal/api/router/llm_routes_test.go"
+      ],
+      "suspected_root_cause": "The approved user-facing LLM workflow was never implemented in the web route surface; current browser support stops at shared relay-backed state consumption.",
+      "recommended_fix": "Implement a dedicated browser LLM workflow that supports route creation, release registration, deploy initiation, approval visibility, and relay-backed route/activity views using signer-first Nostr requests.",
+      "requires_human_decision": false
+    },
+    {
+      "defect_id": "LLMRD-D-002",
+      "title": "Missing reactor-level signer-first contract tests for LLM request/result flows",
+      "severity": "minor",
+      "status": "open",
+      "related_ac_ids": [
+        "LLMRD-AC-002",
+        "LLMRD-AC-003",
+        "LLMRD-AC-004",
+        "LLMRD-AC-005"
+      ],
+      "related_test_ids": [
+        "LLMRD-T-002",
+        "LLMRD-T-004",
+        "LLMRD-T-006",
+        "LLMRD-T-007",
+        "LLMRD-T-009",
+        "LLMRD-T-010"
+      ],
+      "evidence": [
+        "RepoPrompt path search for `internal/controlplane/reactor_llm_requests_test.go` returned no matches on 2026-05-04.",
+        "pstf/features/LLM_ROUTE_RELEASE_DEPLOYMENT/test_matrix.json",
+        "go test ./internal/controlplane passed, but no targeted file exists for the required signer-first LLM request/result cases."
+      ],
+      "suspected_root_cause": "Coverage stopped at helper tests and MCP request-shaping tests; no reactor-level end-to-end event contract tests were added for LLM flows.",
+      "recommended_fix": "Add a dedicated reactor LLM request test file covering route create, release register, deploy acceptance, approval, rejection, invalid decisions, and reply correlation tags.",
+      "requires_human_decision": false
+    },
+    {
+      "defect_id": "LLMRD-D-003",
+      "title": "Missing provisioning coordinator verification for async LLM deployment lifecycle",
+      "severity": "minor",
+      "status": "open",
+      "related_ac_ids": [
+        "LLMRD-AC-006"
+      ],
+      "related_test_ids": [
+        "LLMRD-T-012",
+        "LLMRD-T-013"
+      ],
+      "evidence": [
+        "RepoPrompt path search for `internal/service/llm_provisioning_coordinator_test.go` returned no matches on 2026-05-04.",
+        "internal/service/llm_provisioning_coordinator.go:120-251",
+        "pstf/features/LLM_ROUTE_RELEASE_DEPLOYMENT/test_matrix.json"
+      ],
+      "suspected_root_cause": "The async provisioning path was implemented without a dedicated fake-backed coordinator test harness.",
+      "recommended_fix": "Add coordinator tests that exercise `ProcessOnce` success and failure paths with capture responders and fake placement/provisioner/gateway dependencies.",
+      "requires_human_decision": false
+    },
+    {
+      "defect_id": "LLMRD-D-004",
+      "title": "Missing explicit spoofed-author LLM browser-store negative test",
+      "severity": "minor",
+      "status": "open",
+      "related_ac_ids": [
+        "LLMRD-AC-008"
+      ],
+      "related_test_ids": [
+        "LLMRD-T-017"
+      ],
+      "evidence": [
+        "web/tests/unit/controlplane-store.test.js",
+        "RepoPrompt content search for explicit spoofed LLM route/state/activity coverage returned no matches on 2026-05-04.",
+        "pstf/features/LLM_ROUTE_RELEASE_DEPLOYMENT/test_matrix.json"
+      ],
+      "suspected_root_cause": "The browser store suite verifies a generic spoofed service-registry event but does not include an LLM-specific negative case.",
+      "recommended_fix": "Extend `web/tests/unit/controlplane-store.test.js` with spoofed non-Bahia LLM route, route-state, and deployment activity events and assert they are ignored.",
+      "requires_human_decision": false
+    }
+  ]
+}
