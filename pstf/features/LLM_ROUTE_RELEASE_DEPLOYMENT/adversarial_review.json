@@ -1,0 +1,120 @@
+{
+  "feature_id": "LLM_ROUTE_RELEASE_DEPLOYMENT",
+  "recommendation": "block_until_major_findings_resolved",
+  "overall_risk": "high",
+  "schema_validation": {
+    "schema_path": "schemas/adversarial_review.schema.json",
+    "schema_found": false,
+    "note": "The requested schema file was not present in the repository, so this artifact uses the prompt-defined structure without schema-backed validation."
+  },
+  "findings": [
+    {
+      "finding_id": "ADV-001",
+      "title": "Approved end-user browser workflow is still absent, so AC-009 is unsatisfied in the product surface users are supposed to ship",
+      "severity": "major",
+      "category": "ux",
+      "evidence": [
+        "AC `LLMRD-AC-009` explicitly requires a dedicated browser-visible workflow for route creation, release registration, deploy initiation, approval visibility, and route-state/activity observation.",
+        "`verification_report.md` marks `LLMRD-AC-009` as `Failed` and records that no dedicated LLM workflow exists under `web/src/routes`.",
+        "`test_matrix.json` shows `LLMRD-T-018` blocked because no dedicated end-user LLM workflow exists.",
+        "`defects.json` records `LLMRD-D-001` as an open major defect, and `hitl_decisions.md` decision `HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-008` classifies it as a `BLOCKER`."
+      ],
+      "affected_acs": [
+        "LLMRD-AC-009"
+      ],
+      "affected_tests": [
+        "LLMRD-T-018",
+        "LLMRD-T-019"
+      ],
+      "suggested_action": "Do not treat the current shared-store visibility plus REST-compatibility evidence as release-worthy substitute behavior. Implement the dedicated browser workflow and unblock the corresponding E2E proof.",
+      "requires_hitl_decision": false,
+      "proposed_hitl_question": null
+    },
+    {
+      "finding_id": "ADV-002",
+      "title": "Several accepted deployment failure branches can fail the run without emitting the terminal error reply AC-006 requires",
+      "severity": "major",
+      "category": "correctness",
+      "evidence": [
+        "`internal/service/llm_provisioning_coordinator.go:108-127` calls `failRun(...)` before `req` is populated when loading the intent fails, the intent is missing, route/release/environment loading fails, candidate selection fails, or provisioner resolution fails.",
+        "`internal/service/llm_provisioning_coordinator.go:220-236` only calls `publishError(...)` when `req.Route`, `req.Release`, and `req.Environment` are all non-nil.",
+        "That means early post-acceptance failures can mark the run failed via `registry.CompleteDeploymentRun(..., domain.RunStatusFailed, ...)` but emit no terminal responder error event at all.",
+        "AC `LLMRD-AC-006` requires that accepted deployments eventually publish a terminal `7973` error result for failures, and `test_matrix.json` shows the success/failure coordinator tests (`LLMRD-T-012`, `LLMRD-T-013`) are still not implemented."
+      ],
+      "affected_acs": [
+        "LLMRD-AC-006"
+      ],
+      "affected_tests": [
+        "LLMRD-T-012",
+        "LLMRD-T-013"
+      ],
+      "suggested_action": "Patch the coordinator failure path so every accepted deployment failure emits a terminal error result with enough correlation data, then add focused success/failure coordinator tests to prove it.",
+      "requires_hitl_decision": false,
+      "proposed_hitl_question": null
+    },
+    {
+      "finding_id": "ADV-003",
+      "title": "Route creation and release registration still bypass the canonical signer-first request path, so AC-002 and AC-003 are weaker than the accepted product contract suggests",
+      "severity": "major",
+      "category": "spec_gap",
+      "evidence": [
+        "`internal/controlplane/llm_command_publisher.go` only implements `PublishLLMDeployRequest`, `PublishLLMApprovalRequest`, and `PublishLLMRollbackRequest`; there is no publisher method for route-create (`5971`) or release-register (`5972`).",
+        "`internal/mcp/server.go:77-82` defines the MCP `LLMCommandPublisher` interface with only deploy, approval, and rollback methods.",
+        "`internal/mcp/server.go:2341-2460` shows `handleLLMCreateRoute` and `handleLLMRegisterRelease` directly calling `registry.CreateRoute(...)` and `registry.CreateRelease(...)` instead of publishing canonical signed Nostr requests.",
+        "`verification_report.md` already marks `LLMRD-AC-002` and `LLMRD-AC-003` only partially verified, and `defects.json` records `LLMRD-D-005` as an open gap.",
+        "`hitl_decisions.md` accepts `D-005` as release risk, but the source evidence shows this is not only a missing test; the current requester-facing MCP path is structurally different from the accepted signer-first contract."
+      ],
+      "affected_acs": [
+        "LLMRD-AC-002",
+        "LLMRD-AC-003"
+      ],
+      "affected_tests": [
+        "LLMRD-T-002",
+        "LLMRD-T-003",
+        "LLMRD-T-004",
+        "LLMRD-T-005"
+      ],
+      "suggested_action": "Either implement canonical requester-side 5971/5972 publishing for route/release operations and test relay-acceptance behavior, or narrow the accepted contract so direct registry mutation is explicitly allowed for this release. The current state mixes both stories.",
+      "requires_hitl_decision": true,
+      "proposed_hitl_question": {
+        "question": "How should route creation and release registration be treated for this release given that current MCP tooling still mutates the registry directly instead of publishing canonical 5971/5972 requests?",
+        "type": "single_choice",
+        "options": [
+          "Require canonical signer-first 5971/5972 request publishing before release",
+          "Allow direct MCP registry mutation as a temporary compatibility path for this release",
+          "Defer route/release creation from the approved release scope until canonical publishing exists",
+          "Revise AC-002 and AC-003 to describe the mixed contract explicitly"
+        ]
+      }
+    },
+    {
+      "finding_id": "ADV-004",
+      "title": "Schema-backed artifact validation is missing, which weakens machine-checkable review discipline",
+      "severity": "minor",
+      "category": "operability",
+      "evidence": [
+        "The requested schema file `schemas/adversarial_review.schema.json` was not present in the repository.",
+        "The earlier confidence step also recorded that `schemas/confidence_report.schema.json` was missing.",
+        "Without the schema files, artifact structure cannot be validated mechanically even though the prompts require schema conformance."
+      ],
+      "affected_acs": [],
+      "affected_tests": [],
+      "suggested_action": "Add the missing schema files or document the canonical JSON structure in-repo so future PSTF artifacts can be validated automatically.",
+      "requires_hitl_decision": false,
+      "proposed_hitl_question": null
+    }
+  ],
+  "suggested_hitl_questions": [
+    {
+      "question": "How should route creation and release registration be treated for this release given that current MCP tooling still mutates the registry directly instead of publishing canonical 5971/5972 requests?",
+      "type": "single_choice",
+      "options": [
+        "Require canonical signer-first 5971/5972 request publishing before release",
+        "Allow direct MCP registry mutation as a temporary compatibility path for this release",
+        "Defer route/release creation from the approved release scope until canonical publishing exists",
+        "Revise AC-002 and AC-003 to describe the mixed contract explicitly"
+      ]
+    }
+  ],
+  "next_recommended_stage": "hitl_clarification_then_patch_and_reverify"
+}
