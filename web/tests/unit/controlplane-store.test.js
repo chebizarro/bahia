@@ -263,6 +263,38 @@ describe('controlplane store', () => {
     expect(store.services).toEqual([]);
   });
 
+  it('ignores spoofed non-Bahia LLM route, state, and activity events', async () => {
+    await store.bootstrapControlplane();
+
+    expect(store.applyControlplaneEvent(event({
+      id: 'spoofed-llm-route',
+      kind: KINDS.BAHIA_LLM_ROUTE_REGISTRY,
+      pubkey: 'f'.repeat(64),
+      tags: [['d', 'route-spoof'], ['route', 'route-spoof'], ['deleted', 'false']],
+      content: { id: 'route-spoof', name: 'Spoofed Route', deleted: false }
+    }))).toBe(false);
+
+    expect(store.applyControlplaneEvent(event({
+      id: 'spoofed-llm-state',
+      kind: KINDS.BAHIA_LLM_ROUTE_STATE,
+      pubkey: 'f'.repeat(64),
+      tags: [['d', 'route-spoof:env-spoof'], ['route', 'route-spoof'], ['environment', 'env-spoof'], ['deleted', 'false']],
+      content: { route_id: 'route-spoof', environment_id: 'env-spoof', gateway_status: 'synced', deleted: false }
+    }))).toBe(false);
+
+    expect(store.applyControlplaneEvent(event({
+      id: 'spoofed-llm-status',
+      kind: KINDS.BAHIA_LLM_DEPLOYMENT_STATUS,
+      pubkey: 'f'.repeat(64),
+      tags: [['route', 'route-spoof'], ['environment', 'env-spoof'], ['status', 'processing']],
+      content: { status: 'processing', route_id: 'route-spoof', environment_id: 'env-spoof' }
+    }))).toBe(false);
+
+    expect(store.llmRoutes).toEqual([]);
+    expect(store.llmRouteStates).toEqual([]);
+    expect(store.events).toEqual([]);
+  });
+
   it('tracks reconnect status from the shared Nostr client connection store', async () => {
     await store.bootstrapControlplane();
     expect(store.controlplaneConnection.status).toBe('live');

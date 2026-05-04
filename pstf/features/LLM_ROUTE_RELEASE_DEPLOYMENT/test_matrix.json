@@ -583,8 +583,8 @@
       "determinism_notes": [
         "Extend the existing mocked-store suite; no external services are required."
       ],
-      "status": "not_implemented",
-      "failure_reason": "The browser store suite has a spoofed-author check for generic service registry events, but no explicit spoofed LLM route/state/activity case."
+      "status": "pass",
+      "failure_reason": null
     },
     {
       "test_id": "LLMRD-T-018",
@@ -663,7 +663,6 @@
     "known_gaps": [
       "Canonical reactor-level signer-first contract tests are still missing for route create (5971/7971), release register (5972/7972), deploy acceptance (5973/6973), and approval/reject terminal handling (5974/7973).",
       "The async provisioning path has no existing coordinator tests for ordered 6973 progress replies, terminal 7973 success/error results, or failed-run state recording.",
-      "The browser store suite needs one explicit spoofed-author LLM event case to fully prove AC-008 for LLM route/state/activity collections.",
       "The approved end-user browser workflow test is blocked because no dedicated LLM workflow currently exists in `web/src/routes`.",
       "Rollback-specific tests are intentionally excluded from this matrix because rollback acceptance criteria were deferred by HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-004."
     ]
@@ -673,6 +672,7 @@
     "Medium-effort additions: create reactor-level request/result contract tests that exercise signed request events, reply correlation tags, validation failures, and desired-state repair for rejection.",
     "High-effort additions: introduce `internal/service/llm_provisioning_coordinator_test.go` with full fake placement/provisioner/gateway/responder dependencies and build a deterministic browser e2e harness for the future dedicated LLM workflow.",
     "Current existing coverage is strongest around system discovery, MCP request shaping, projection publication, registry/reconcile state shaping, and relay-backed browser store consumption.",
-    "Because AC-009 is approved but the corresponding product surface is absent, this matrix is ready for implementation planning but not fully verifiable until that workflow is built."
+    "Because AC-009 is approved but the corresponding product surface is absent, this matrix is ready for implementation planning but not fully verifiable until that workflow is built.",
+    "`web/tests/unit/controlplane-store.test.js` now includes an explicit spoofed non-Bahia LLM route/state/activity regression test, closing the AC-008 negative-coverage gap."
   ]
 }

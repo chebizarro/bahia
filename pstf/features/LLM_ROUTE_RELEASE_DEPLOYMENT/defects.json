@@ -75,7 +75,7 @@
       "defect_id": "LLMRD-D-004",
       "title": "Missing explicit spoofed-author LLM browser-store negative test",
       "severity": "minor",
-      "status": "open",
+      "status": "verified",
       "related_ac_ids": [
         "LLMRD-AC-008"
       ],
@@ -85,7 +85,9 @@
       "evidence": [
         "web/tests/unit/controlplane-store.test.js",
         "RepoPrompt content search for explicit spoofed LLM route/state/activity coverage returned no matches on 2026-05-04.",
-        "pstf/features/LLM_ROUTE_RELEASE_DEPLOYMENT/test_matrix.json"
+        "pstf/features/LLM_ROUTE_RELEASE_DEPLOYMENT/test_matrix.json",
+        "`web/tests/unit/controlplane-store.test.js` now includes `ignores spoofed non-Bahia LLM route, state, and activity events`.",
+        "`cd /Users/bizarro/Documents/Projects/bahia/web && npm test -- --run tests/unit/controlplane-store.test.js` passed with 9 tests on 2026-05-04."
       ],
       "suspected_root_cause": "The browser store suite verifies a generic spoofed service-registry event but does not include an LLM-specific negative case.",
       "recommended_fix": "Extend `web/tests/unit/controlplane-store.test.js` with spoofed non-Bahia LLM route, route-state, and deployment activity events and assert they are ignored.",
