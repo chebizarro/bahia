@@ -1,0 +1,78 @@
+{
+  "feature_id": "CORE_SERVICE_TO_DEPLOYMENT",
+  "status": "fully_verified",
+  "criteria": [
+    {
+      "id": "CSTD-AC-001",
+      "title": "Public relay bootstrap is canonical for core service/deployment state",
+      "statement": "The web app must bootstrap services, environments, artifacts, builds, deployment intents, and deployment runs from public relay read models authored by the advertised Bahia service pubkey rather than REST CRUD endpoints.",
+      "priority": "must",
+      "evidence_level": "high"
+    },
+    {
+      "id": "CSTD-AC-002",
+      "title": "Service creation uses signer-first public command flow",
+      "statement": "Creating a service from `/services` must publish kind 5964 `ServiceCreate`, await a correlated 7963 result, and not require a REST POST `/api/v1/services` path in the current web route implementation.",
+      "priority": "must",
+      "evidence_level": "high"
+    },
+    {
+      "id": "CSTD-AC-003",
+      "title": "Deployment policy preview is signer-first and advisory",
+      "statement": "The service-detail deployment modal must use a signer-first public policy-evaluation request rather than a REST `policies/evaluate` call, and deployment intent creation remains separately authoritative from that preview.",
+      "priority": "should",
+      "evidence_level": "medium"
+    },
+    {
+      "id": "CSTD-AC-004",
+      "title": "Deployment intent creation uses signer-first public request/result flow",
+      "statement": "Creating a deployment intent from `/services/[id]` must publish kind 5961 with service/environment/artifact tags and await a correlated 7961 result.",
+      "priority": "must",
+      "evidence_level": "high"
+    },
+    {
+      "id": "CSTD-AC-005",
+      "title": "Deployment approval uses signer-first public request/result flow",
+      "statement": "Approving a pending deployment from `/deployments/pending` must publish kind 5966 with intent/decision tags and await a correlated public result without relying on REST approve endpoints.",
+      "priority": "must",
+      "evidence_level": "high"
+    },
+    {
+      "id": "CSTD-AC-006",
+      "title": "Deployment history stays reactive to relay-backed store state",
+      "statement": "`/deployments` must derive rendered intents from the shared relay-backed controlplane store so navigation is not stuck on a stale one-shot snapshot when 31967 projections arrive after the route loads.",
+      "priority": "must",
+      "evidence_level": "high"
+    },
+    {
+      "id": "CSTD-AC-007",
+      "title": "Pending approvals stay reactive to relay-backed store state",
+      "statement": "`/deployments/pending` must derive pending intents from the shared relay-backed controlplane store so approved/rejected 31967 updates remove rows without requiring REST refresh logic.",
+      "priority": "must",
+      "evidence_level": "high"
+    },
+    {
+      "id": "CSTD-AC-008",
+      "title": "Browser-level signer-first journey exists for the core flow",
+      "statement": "At least one browser E2E must prove the current signer-first public journey covering service-create request publication, deployment intent creation, approval, and deployment history/detail rendering without REST CRUD mocks.",
+      "priority": "must",
+      "evidence_level": "high"
+    },
+    {
+      "id": "CSTD-AC-009",
+      "title": "Core public deployment flow stays off encrypted request kind 5980",
+      "statement": "The selected core service-to-deployment browser journey must use the public request kinds 5964/5989/5961/5966 and must not depend on encrypted request kind 5980, which belongs to the separate encrypted run-log slice.",
+      "priority": "must",
+      "evidence_level": "high"
+    }
+  ],
+  "coverage_notes": [
+    "Selected evidence intentionally excludes the older REST-shaped deployment E2Es as authoritative slice verification.",
+    "The slice now includes direct unit evidence for the domain-specific public-controlplane command helpers and a browser E2E with no REST CRUD route mocks.",
+    "A real route-level reactivity bug was found and fixed in `/deployments` and `/deployments/pending` during verification."
+  ],
+  "unresolved_questions": [
+    "Should immediate post-create service list hydration become a MUST once the service-registry projection timing is explicitly guaranteed?",
+    "Should AC-003 policy-preview coverage be upgraded from SHOULD to MUST for release gating?"
+  ]
+}

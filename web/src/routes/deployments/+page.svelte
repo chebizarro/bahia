@@ -9,7 +9,6 @@
 
   const PAGE_SIZE = 25;
 
-  let intents = $state([]);
   let loading = $state(true);
   let error = $state(null);
 
@@ -130,6 +129,27 @@
     }
   ]);
 
+  let intents = $derived.by(() => {
+    const serviceById = new Map(services.map((service) => [service.id, service]));
+    const environmentById = new Map(environments.map((environment) => [environment.id, environment]));
+    const allIntents = deploymentIntents.map((intent) => ({
+      ...intent,
+      service_name: serviceById.get(intent.service_id)?.name || intent.service_id,
+      environment_name: environmentById.get(intent.environment_id)?.name || intent.environment_id,
+      intent_status: getIntentStatus(intent)
+    }));
+    const intentMap = new Map();
+    allIntents.forEach((intent) => {
+      if (intent.id) intentMap.set(intent.id, intent);
+    });
+
+    return Array.from(intentMap.values()).sort((a, b) => {
+      const dateA = a.created_at ? new Date(a.created_at) : new Date(0);
+      const dateB = b.created_at ? new Date(b.created_at) : new Date(0);
+      return dateB - dateA;
+    });
+  });
+
   let filteredIntents = $derived(intents.filter((intent) => {
     if (statusFilter !== 'all' && intent.intent_status !== statusFilter) return false;
     if (serviceFilter !== 'all' && intent.service_id !== serviceFilter) return false;
@@ -183,24 +203,6 @@
 
     try {
       await Promise.all([loadServices(), loadEnvironments(), loadDeploymentIntents()]);
-      const serviceById = new Map(services.map((service) => [service.id, service]));
-      const environmentById = new Map(environments.map((environment) => [environment.id, environment]));
-      const allIntents = deploymentIntents.map((intent) => ({
-        ...intent,
-        service_name: serviceById.get(intent.service_id)?.name || intent.service_id,
-        environment_name: environmentById.get(intent.environment_id)?.name || intent.environment_id,
-        intent_status: getIntentStatus(intent)
-      }));
-      const intentMap = new Map();
-      allIntents.forEach((intent) => {
-        if (intent.id) intentMap.set(intent.id, intent);
-      });
-
-      intents = Array.from(intentMap.values()).sort((a, b) => {
-        const dateA = a.created_at ? new Date(a.created_at) : new Date(0);
-        const dateB = b.created_at ? new Date(b.created_at) : new Date(0);
-        return dateB - dateA;
-      });
     } catch (err) {
       error = err.message || 'Failed to load deployment history';
       console.error('Error loading deployment history:', err);

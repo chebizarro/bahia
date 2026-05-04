@@ -14,7 +14,6 @@
   } from '$lib/stores';
   import { approveDeploymentIntent, rejectDeploymentIntent } from '$lib/stores/public-controlplane.svelte.js';
 
-  let pendingIntents = $state([]);
   let loading = $state(true);
   let error = $state(null);
 
@@ -25,6 +24,24 @@
   let actionError = $state(null);
   let approveOpen = $state(false);
   let rejectOpen = $state(false);
+
+  let pendingIntents = $derived.by(() => {
+    const serviceById = new Map(services.map((service) => [service.id, service]));
+    const environmentById = new Map(environments.map((environment) => [environment.id, environment]));
+
+    return deploymentIntents
+      .filter(intent => String(intent.approval_status || '').toLowerCase() === 'pending')
+      .map((intent) => ({
+        ...intent,
+        service_name: serviceById.get(intent.service_id)?.name || intent.service_id || 'Unknown service',
+        environment_name: environmentById.get(intent.environment_id)?.name || intent.environment_id || 'Unknown environment'
+      }))
+      .sort((a, b) => {
+        const dateA = a.created_at ? new Date(a.created_at) : new Date(0);
+        const dateB = b.created_at ? new Date(b.created_at) : new Date(0);
+        return dateB - dateA;
+      });
+  });
 
   // Columns for the pending intents table
   let columns = $derived([
@@ -63,21 +80,6 @@
 
     try {
       await Promise.all([loadDeploymentIntents(), loadServices(), loadEnvironments()]);
-      const serviceById = new Map(services.map((service) => [service.id, service]));
-      const environmentById = new Map(environments.map((environment) => [environment.id, environment]));
-
-      pendingIntents = deploymentIntents
-        .filter(intent => String(intent.approval_status || '').toLowerCase() === 'pending')
-        .map((intent) => ({
-          ...intent,
-          service_name: serviceById.get(intent.service_id)?.name || intent.service_id || 'Unknown service',
-          environment_name: environmentById.get(intent.environment_id)?.name || intent.environment_id || 'Unknown environment'
-        }))
-        .sort((a, b) => {
-          const dateA = a.created_at ? new Date(a.created_at) : new Date(0);
-          const dateB = b.created_at ? new Date(b.created_at) : new Date(0);
-          return dateB - dateA;
-        });
     } catch (err) {
       error = err.message || 'Failed to load pending approvals';
       console.error('Error loading pending approvals:', err);
@@ -115,7 +117,6 @@
 
     try {
       await approveDeploymentIntent(actionIntent.id);
-      pendingIntents = pendingIntents.filter(i => i.id !== actionIntent.id);
       approveOpen = false;
       actionIntent = null;
     } catch (err) {
@@ -134,7 +135,6 @@
 
     try {
       await rejectDeploymentIntent(actionIntent.id);
-      pendingIntents = pendingIntents.filter(i => i.id !== actionIntent.id);
       rejectOpen = false;
       actionIntent = null;
     } catch (err) {

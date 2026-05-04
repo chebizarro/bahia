@@ -1,0 +1,137 @@
+{
+  "feature_id": "CORE_SERVICE_TO_DEPLOYMENT",
+  "title": "Core signer-first service-to-deployment flow",
+  "status": "fully_verified",
+  "source_evidence": [
+    "docs/control-planes.md",
+    "docs/nostr-commands.md",
+    "docs/deployment.md",
+    "web/src/lib/stores/public-controlplane.svelte.js",
+    "web/src/lib/stores/controlplane.svelte.js",
+    "web/src/routes/services/+page.svelte",
+    "web/src/routes/services/[id]/+page.svelte",
+    "web/src/routes/deployments/+page.svelte",
+    "web/src/routes/deployments/pending/+page.svelte",
+    "web/src/routes/deployments/[id]/+page.svelte",
+    "web/src/lib/stores/deployment-run-logs.svelte.js",
+    "web/tests/unit/controlplane-requests.test.js",
+    "web/tests/unit/controlplane-store.test.js",
+    "web/tests/unit/public-controlplane.test.js",
+    "web/tests/e2e/service-deployment-public-smoke.spec.js",
+    "web/tests/e2e/deployment-workflow-critical.spec.js",
+    "docs/investigations/pstf-discovery-2026-05-03.md",
+    "pstf/product_map.md",
+    "pstf/spec_gap_report.md"
+  ],
+  "actors": [
+    {
+      "name": "authenticated_signer",
+      "role": "browser-side requester that signs public service/deployment commands"
+    },
+    {
+      "name": "bahia_service",
+      "role": "canonical control-plane publisher for public results and replaceable read models"
+    },
+    {
+      "name": "public_browser_relays",
+      "role": "browser-discovered relay set used for public read models and signer-first service/deployment requests"
+    }
+  ],
+  "description": "This slice covers the core public service-to-deployment path in the current web app: relay-read-model bootstrap for services, environments, artifacts, builds, deployment intents, and deployment runs; signer-first public request/result commands for service creation, policy evaluation, deployment intent creation, and deployment approval; and deployment history/detail rendering from public read models.",
+  "in_scope": [
+    "services list bootstrap from public read models",
+    "service creation request flow on `/services`",
+    "deployment intent creation from `/services/[id]`",
+    "approval flow from `/deployments/pending`",
+    "deployment history/detail consumption of public read models on `/deployments` and `/deployments/[id]`",
+    "the public request/result transport kinds 5964, 5989, 5961, and 5966 together with their correlated 796x results"
+  ],
+  "out_of_scope": [
+    "encrypted deployment run log retrieval on `/deployments/runs/[id]`",
+    "service secrets, notifications, orgs, payments, or other encrypted request domains",
+    "legacy REST compatibility endpoints except as stale evidence to classify",
+    "direct-runtime operator actions, adoption/import, and LLM deployment flows"
+  ],
+  "preconditions": [
+    "The browser has an authenticated signer session",
+    "`/api/v1/system/info` advertises `relay_read_models` and at least one public browser relay URL plus a Bahia service pubkey",
+    "The Bahia relay sidecar or equivalent public relay set is reachable",
+    "The requester pubkey is authorized for the public command families it invokes"
+  ],
+  "postconditions": [
+    "Service/deployment commands complete through correlated public Nostr result events rather than REST CRUD responses",
+    "Deployment history and pending-approval pages derive rendered state from public replaceable read models rather than one-shot REST fetches",
+    "The core public slice does not require encrypted request kind 5980; encrypted run-log retrieval remains a separate slice"
+  ],
+  "happy_paths": [
+    {
+      "id": "CSTD-HP-001",
+      "title": "Create a service from the services list",
+      "steps": [
+        "Browser bootstraps public read models from the advertised relay set",
+        "User opens the create-service modal on `/services`",
+        "Frontend publishes kind 5964 `ServiceCreate` and awaits a correlated 7963 result",
+        "Service registry read models eventually include the created service"
+      ]
+    },
+    {
+      "id": "CSTD-HP-002",
+      "title": "Create and approve a deployment intent",
+      "steps": [
+        "User opens `/services/[id]` for a service with available artifacts and environments",
+        "Frontend optionally issues a public signer-first policy evaluation preview for the selected artifact/environment",
+        "Frontend publishes kind 5961 `DeployRequest` and awaits a correlated 7961 result",
+        "Deployment intent read models surface the pending intent on history and pending-approval pages",
+        "Frontend publishes kind 5966 `DeploymentApproval` for approval",
+        "Updated intent/run read models surface the approved deployment state and run projection"
+      ]
+    }
+  ],
+  "failure_paths": [
+    {
+      "id": "CSTD-FP-001",
+      "title": "Public request publish rejection",
+      "behavior": "If no relay accepts the signed public request, the command fails and the caller receives the relay rejection reason rather than a false success"
+    },
+    {
+      "id": "CSTD-FP-002",
+      "title": "Terminal public command error",
+      "behavior": "If the correlated 796x result carries `status=error|failed`, the frontend surfaces the backend-provided error instead of treating the command as successful"
+    },
+    {
+      "id": "CSTD-FP-003",
+      "title": "Deployment pages race late-arriving store state",
+      "behavior": "Deployment history and pending-approval pages must remain reactive to the shared controlplane store so a late-arriving 31967 update is rendered after navigation"
+    }
+  ],
+  "edge_cases": [
+    "Public request/result correlation must ignore spoofed results from non-service authors",
+    "Read-model bootstrap must prefer latest replaceable events and tombstones by `(kind, pubkey, d-tag)`",
+    "Service creation terminal success does not by itself normatively guarantee immediate list hydration; the authoritative list view remains the relay-backed service registry projection"
+  ],
+  "non_functional_requirements": [
+    "Public command publication must be signer-first and event-driven rather than REST CRUD",
+    "Bootstrap and live state must be derived from relay read models and remain reactive after navigation",
+    "The public slice must stay separate from encrypted request domains, especially deployment run log retrieval"
+  ],
+  "dependencies": [
+    "`/api/v1/system/info` public relay discovery contract",
+    "public request/result helpers in `web/src/lib/nostr/controlplane-requests.js` and `web/src/lib/stores/public-controlplane.svelte.js`",
+    "public read-model bootstrap in `web/src/lib/stores/controlplane.svelte.js`",
+    "backend canonical control-plane kinds documented in `docs/control-planes.md` and `docs/nostr-commands.md`"
+  ],
+  "ambiguities": [
+    {
+      "type": "observed_not_specified",
+      "note": "`web/tests/e2e/deployment-workflow-critical.spec.js` still models the old REST CRUD workflow and is not authoritative evidence for the current signer-first slice."
+    },
+    {
+      "type": "eventual_consistency_boundary",
+      "note": "The backend emits terminal 7963 service-create results and publishes service registry projections through the projector path; immediate user-visible list hydration depends on projection timing and is not separately specified as part of this slice."
+    }
+  ],
+  "human_decisions": [
+    "Should immediate post-create service list hydration be promoted to an explicit acceptance criterion once backend projection timing is guaranteed?",
+    "Should signer-first policy preview be treated as a required user-visible part of the deployment flow, or remain advisory/non-blocking?"
+  ]
+}
