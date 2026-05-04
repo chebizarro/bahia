@@ -1,0 +1,19 @@
+Error: --raw-target is compatibility-only and requires explicit --http-fallback; use --target endpoint refs for signer-first adoption
+Usage:
+  bahia adopt scan [flags]
+
+Flags:
+      --environment stringArray   Environment name as alias=environmentName (repeatable)
+  -h, --help                      help for scan
+      --raw-target stringArray    Compatibility raw Docker target as alias=dockerHost (requires server allow_raw_docker_hosts)
+      --target stringArray        Server-managed endpoint target as endpointRef or alias=endpointRef (repeatable)
+
+Global Flags:
+      --http-fallback       Allow explicit HTTP compatibility fallback only before any relay accepts a signer-first operator request
+      --nsec string         Nostr secret key (nsec) for NIP-98 auth and signer-first operator requests
+  -o, --output string       Output format: table, json, yaml (default "table")
+      --privkey string      Nostr private key hex for NIP-98 auth and signer-first operator requests
+      --relay stringArray   Nostr relay URL for signer-first operator requests (repeatable; env BAHIA_NOSTR_RELAYS)
+      --server string       Bahia server URL (default "http://localhost:8080")
+
+exit status 1

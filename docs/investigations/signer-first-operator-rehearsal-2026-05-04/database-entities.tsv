@@ -1,0 +1,8 @@
+entity_type	id	service_id	environment_id	related_id	notes
+service	765f99b7-e2f4-4f8f-a88b-1db4328cbefb	765f99b7-e2f4-4f8f-a88b-1db4328cbefb	22f7d96b-b18f-41ac-a620-227a46c4b9ce		Imported service created from signer-first adopt import
+environment	22f7d96b-b18f-41ac-a620-227a46c4b9ce	765f99b7-e2f4-4f8f-a88b-1db4328cbefb	22f7d96b-b18f-41ac-a620-227a46c4b9ce		Imported environment created for target local-a
+build	314b3283-8c52-43ec-af80-8a32d10af377	765f99b7-e2f4-4f8f-a88b-1db4328cbefb	22f7d96b-b18f-41ac-a620-227a46c4b9ce		Build identity created during import
+artifact	c71d2439-48c3-4b89-9dfe-5dc4d0dee72e	765f99b7-e2f4-4f8f-a88b-1db4328cbefb	22f7d96b-b18f-41ac-a620-227a46c4b9ce	314b3283-8c52-43ec-af80-8a32d10af377	Artifact linked to imported build
+observation_restart	b9874a48-e1bd-4363-9c6e-99ff7750640d	765f99b7-e2f4-4f8f-a88b-1db4328cbefb	22f7d96b-b18f-41ac-a620-227a46c4b9ce	c8698ab4949db569e7c172e93c103957f811625f1d1a0747bb2007cb8108a5ad	Restart action observation on host local-a
+observation_stop	795a0f96-2449-4451-a61b-e39645bab446	765f99b7-e2f4-4f8f-a88b-1db4328cbefb	22f7d96b-b18f-41ac-a620-227a46c4b9ce	c8698ab4949db569e7c172e93c103957f811625f1d1a0747bb2007cb8108a5ad	Stop action observation on host local-a
+observation_deploy	1ee2466e-2dcd-4766-9e62-7b18077ff426	765f99b7-e2f4-4f8f-a88b-1db4328cbefb	22f7d96b-b18f-41ac-a620-227a46c4b9ce	44c60d58bb51cc91e615311e128564d83dcb4474255a94de66d8d4ef0306c6d0	Deploy action observation on host local-a; container replaced after deploy

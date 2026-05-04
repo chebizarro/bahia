@@ -1,0 +1,29 @@
+nostr:
+  private_key: <redacted-local-test-key>
+  browser_relays:
+    - ws://127.0.0.1:13334/relay
+  authorized_pubkeys:
+    - 4f355bdcb7cc0af728ef3cceb9615d90684bb5b2ca5f859ab0f0b704075871aa
+auth:
+  enabled: true
+adoption:
+  enabled: true
+  allow_raw_docker_hosts: false
+  allow_compose_takeover: false
+  allowed_pubkeys:
+    - 4f355bdcb7cc0af728ef3cceb9615d90684bb5b2ca5f859ab0f0b704075871aa
+direct_runtime_actions:
+  enabled: true
+  allowed_pubkeys:
+    - 4f355bdcb7cc0af728ef3cceb9615d90684bb5b2ca5f859ab0f0b704075871aa
+runtime:
+  endpoints:
+    local-a:
+      docker_host: unix:///var/run/docker.sock
+    local-b:
+      docker_host: unix:///var/run/docker.sock
+log:
+  level: debug
+  format: json
+reconcile:
+  enabled: false

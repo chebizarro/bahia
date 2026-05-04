@@ -1,0 +1,9 @@
+event_count	15
+kind_5978	1
+kind_5979	1
+kind_5963	3
+kind_6978	2
+kind_7978	1
+kind_7979	1
+kind_6963	3
+kind_7962	3

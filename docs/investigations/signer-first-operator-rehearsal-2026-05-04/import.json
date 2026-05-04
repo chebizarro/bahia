@@ -1,0 +1,13 @@
+[
+  {
+    "target_name": "local-a",
+    "container_id": "c8698ab4949db569e7c172e93c103957f811625f1d1a0747bb2007cb8108a5ad",
+    "container_name": "bahia-rehearsal-nginx",
+    "service_name": "bahia-rehearsal-nginx",
+    "service_id": "765f99b7-e2f4-4f8f-a88b-1db4328cbefb",
+    "environment_id": "22f7d96b-b18f-41ac-a620-227a46c4b9ce",
+    "build_id": "314b3283-8c52-43ec-af80-8a32d10af377",
+    "artifact_id": "c71d2439-48c3-4b89-9dfe-5dc4d0dee72e",
+    "status": "created"
+  }
+]

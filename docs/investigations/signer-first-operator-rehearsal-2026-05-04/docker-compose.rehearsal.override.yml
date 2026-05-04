@@ -1,0 +1,21 @@
+services:
+  bahia:
+    command: ["--config", "/config/rehearsal.yaml"]
+    environment:
+      BAHIA_RECONCILE_ENABLED: "false"
+      BAHIA_NOSTR__SIDECAR__PUBLIC_URL: "ws://127.0.0.1:13334/relay"
+    ports:
+      - "18081:8080"
+    volumes:
+      - ./config.redacted.yaml:/config/rehearsal.yaml:ro
+  relay:
+    command: ["--config", "/config/rehearsal.yaml"]
+    environment:
+      BAHIA_NOSTR__SIDECAR__PUBLIC_URL: "ws://127.0.0.1:13334/relay"
+    ports:
+      - "13334:3334"
+    volumes:
+      - ./config.redacted.yaml:/config/rehearsal.yaml:ro
+  web:
+    ports:
+      - "13001:80"

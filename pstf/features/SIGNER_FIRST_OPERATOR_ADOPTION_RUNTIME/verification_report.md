@@ -17,6 +17,8 @@ Current evidence covers:
 
 Policy is now explicit: deterministic package tests establish the implementation slice, a stored local Docker+relay rehearsal artifact is required before release approval, and staged/live signer-first signoff remains the production enablement gate.
 
+Local rehearsal evidence for release commit `afb06407c45d4ac307d4168fefc516e41835548f` is now stored at `docs/investigations/signer-first-operator-rehearsal-2026-05-04/`.
+
 ## Commands Run
 
 ```bash
@@ -78,7 +80,7 @@ Resolved in HITL review:
 Why:
 - Verification spans the reactor, HTTP DTO mirror, operator client, and CLI boundary.
 - The exercised tests explicitly cover the signer-first path and its fallback boundaries rather than relying on legacy REST execution.
-- The remaining work is operational evidence capture, not an implementation or specification ambiguity.
+- The remaining work is staged/live operator signoff, not local implementation or specification ambiguity.
 
 ## Recommendation
 
@@ -86,5 +88,5 @@ Treat `SIGNER_FIRST_OPERATOR_ADOPTION_RUNTIME` as fully verified for current imp
 
 Recommended next moves:
 1. Use this slice as the reference PSTF pattern for future operator-only signer-first flows.
-2. Require a stored Docker+relay rehearsal artifact before release approval for operator-only signer-first slices.
+2. Local Docker+relay rehearsal evidence has been captured for release commit `afb06407c45d4ac307d4168fefc516e41835548f` at `docs/investigations/signer-first-operator-rehearsal-2026-05-04/`.
 3. Keep staged/live SF-01 through SF-11 as the production enablement gate.

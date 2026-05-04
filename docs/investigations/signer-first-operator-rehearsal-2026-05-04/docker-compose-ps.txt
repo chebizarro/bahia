@@ -1,0 +1,5 @@
+NAME                         IMAGE                   COMMAND                  SERVICE    CREATED          STATUS                                     PORTS
+bahia-rehearsal-bahia-1      bahia-rehearsal-bahia   "bahia-server --conf…"   bahia      13 seconds ago   Up 5 seconds (healthy)                     3334/tcp, 0.0.0.0:8080->8080/tcp, 0.0.0.0:8081->8080/tcp, 0.0.0.0:18081->8080/tcp
+bahia-rehearsal-postgres-1   postgres:16-alpine      "docker-entrypoint.s…"   postgres   13 seconds ago   Up 11 seconds (healthy)                    0.0.0.0:5432->5432/tcp
+bahia-rehearsal-relay-1      bahia-rehearsal-relay   "bahia-relay --confi…"   relay      13 seconds ago   Up 11 seconds (healthy)                    0.0.0.0:3334->3334/tcp, 8080/tcp, 0.0.0.0:13334->3334/tcp
+bahia-rehearsal-web-1        bahia-rehearsal-web     "/docker-entrypoint.…"   web        12 seconds ago   Up Less than a second (health: starting)   0.0.0.0:3000->80/tcp, 0.0.0.0:3001->80/tcp, 0.0.0.0:13001->80/tcp

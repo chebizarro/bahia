@@ -1,0 +1,17 @@
+{
+  "action": "deploy",
+  "service_id": "765f99b7-e2f4-4f8f-a88b-1db4328cbefb",
+  "environment_id": "22f7d96b-b18f-41ac-a620-227a46c4b9ce",
+  "observation": {
+    "id": "1ee2466e-2dcd-4766-9e62-7b18077ff426",
+    "service_id": "765f99b7-e2f4-4f8f-a88b-1db4328cbefb",
+    "environment_id": "22f7d96b-b18f-41ac-a620-227a46c4b9ce",
+    "observed_image_digest": "sha256:5616878291a2eed594aee8db4dade5878cf7edcb475e59193904b198d9b830de",
+    "observed_image_repo": "nginx",
+    "observed_container_id": "44c60d58bb51cc91e615311e128564d83dcb4474255a94de66d8d4ef0306c6d0",
+    "observed_host": "local-a",
+    "health_status": "healthy",
+    "source": "docker",
+    "observed_at": "2026-05-04T08:44:36.366460843Z"
+  }
+}

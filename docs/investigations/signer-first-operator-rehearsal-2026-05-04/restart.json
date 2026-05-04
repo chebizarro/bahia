@@ -1,0 +1,17 @@
+{
+  "action": "restart",
+  "service_id": "765f99b7-e2f4-4f8f-a88b-1db4328cbefb",
+  "environment_id": "22f7d96b-b18f-41ac-a620-227a46c4b9ce",
+  "observation": {
+    "id": "b9874a48-e1bd-4363-9c6e-99ff7750640d",
+    "service_id": "765f99b7-e2f4-4f8f-a88b-1db4328cbefb",
+    "environment_id": "22f7d96b-b18f-41ac-a620-227a46c4b9ce",
+    "observed_image_digest": "sha256:5616878291a2eed594aee8db4dade5878cf7edcb475e59193904b198d9b830de",
+    "observed_image_repo": "nginx",
+    "observed_container_id": "c8698ab4949db569e7c172e93c103957f811625f1d1a0747bb2007cb8108a5ad",
+    "observed_host": "local-a",
+    "health_status": "healthy",
+    "source": "docker",
+    "observed_at": "2026-05-04T08:44:35.269095717Z"
+  }
+}

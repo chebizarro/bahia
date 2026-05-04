@@ -171,7 +171,7 @@ REQUIRED_BEFORE_RELEASE_APPROVAL
 **Required Follow-Up Actions:**
 - [x] Update rollout docs to require a stored local Docker+relay rehearsal artifact before release approval.
 - [x] Update PSTF slice artifacts to remove the deferred policy ambiguity.
-- [ ] Capture a rehearsal artifact bundle for the release candidate before release approval (`bahia-noxg`).
+- [x] Capture a rehearsal artifact bundle for the release candidate before release approval (`bahia-noxg`): `docs/investigations/signer-first-operator-rehearsal-2026-05-04/` (executed 2026-05-04 UTC).
 
 ## Summary
 
@@ -179,7 +179,7 @@ REQUIRED_BEFORE_RELEASE_APPROVAL
 - Open Questions: 0
 - Accepted Risks: 0
 - Deferred Items: 0
-- Blocking Issues: 0 — implementation approved, but release approval requires a stored rehearsal artifact
+- Blocking Issues: 0 — local rehearsal artifact captured; staged/live signer-first signoff remains the remaining production enablement gate
 - Superseded Decisions: 1 — HITL-SIGNER_FIRST_OPERATOR_ADOPTION_RUNTIME-002 superseded by HITL-SIGNER_FIRST_OPERATOR_ADOPTION_RUNTIME-004
 
 ## Traceability
@@ -189,4 +189,4 @@ REQUIRED_BEFORE_RELEASE_APPROVAL
 | HITL-SIGNER_FIRST_OPERATOR_ADOPTION_RUNTIME-001 | SFOAR-AC-001..011 | none | none | acceptance_criteria.json, hitl_decisions.md | Slice approved with explicit deferred process follow-up. |
 | HITL-SIGNER_FIRST_OPERATOR_ADOPTION_RUNTIME-002 | none | none | none | feature_spec.json, verification_report.md, hitl_decisions.md | Temporary deferral later superseded by HITL-SIGNER_FIRST_OPERATOR_ADOPTION_RUNTIME-004. |
 | HITL-SIGNER_FIRST_OPERATOR_ADOPTION_RUNTIME-003 | SFOAR-AC-001..011 | none | none | acceptance_criteria.json, hitl_decisions.md | Acceptance criteria approved as written. |
-| HITL-SIGNER_FIRST_OPERATOR_ADOPTION_RUNTIME-004 | none | none | none | feature_spec.json, acceptance_criteria.json, verification_report.md, hitl_decisions.md, rollout docs | Local rehearsal artifact is required before release approval; staged/live signoff remains the production gate. |
+| HITL-SIGNER_FIRST_OPERATOR_ADOPTION_RUNTIME-004 | none | none | none | feature_spec.json, acceptance_criteria.json, verification_report.md, hitl_decisions.md, rollout docs | Local rehearsal artifact is required before release approval; evidence captured at `docs/investigations/signer-first-operator-rehearsal-2026-05-04/`; staged/live signoff remains the production gate. |

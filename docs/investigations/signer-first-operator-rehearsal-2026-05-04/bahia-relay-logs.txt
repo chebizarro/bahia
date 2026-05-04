@@ -1,0 +1,60 @@
+relay-1  | {"level":"info","ts":1777884260.5592694,"caller":"relaysidecar/server.go:141","msg":"relay sidecar starting","addr":"0.0.0.0:3334","public_url":"ws://127.0.0.1:13334/relay"}
+bahia-1  | {"level":"info","ts":1777884266.212686,"caller":"db/db.go:39","msg":"database connection established","host":"postgres","port":5432,"database":"bahia"}
+bahia-1  | {"level":"info","ts":1777884266.2560635,"caller":"db/migrate.go:86","msg":"migration applied","version":"000001_init"}
+bahia-1  | {"level":"info","ts":1777884266.257667,"caller":"db/migrate.go:86","msg":"migration applied","version":"000002_auth_events"}
+bahia-1  | {"level":"info","ts":1777884266.25907,"caller":"db/migrate.go:86","msg":"migration applied","version":"000003_nostr_events_direction"}
+bahia-1  | {"level":"info","ts":1777884266.2611134,"caller":"db/migrate.go:86","msg":"migration applied","version":"000004_workers"}
+bahia-1  | {"level":"info","ts":1777884266.2632844,"caller":"db/migrate.go:86","msg":"migration applied","version":"000005_artifact_signatures"}
+bahia-1  | {"level":"info","ts":1777884266.266096,"caller":"db/migrate.go:86","msg":"migration applied","version":"000006_payment_records"}
+bahia-1  | {"level":"info","ts":1777884266.2699485,"caller":"db/migrate.go:86","msg":"migration applied","version":"000007_sbom"}
+bahia-1  | {"level":"info","ts":1777884266.2723575,"caller":"db/migrate.go:86","msg":"migration applied","version":"000008_deployment_policies"}
+bahia-1  | {"level":"info","ts":1777884266.275531,"caller":"db/migrate.go:86","msg":"migration applied","version":"000009_service_secrets"}
+bahia-1  | {"level":"info","ts":1777884266.2789736,"caller":"db/migrate.go:86","msg":"migration applied","version":"000010_rollout_plans"}
+bahia-1  | {"level":"info","ts":1777884266.2817364,"caller":"db/migrate.go:86","msg":"migration applied","version":"000011_notifications"}
+bahia-1  | {"level":"info","ts":1777884266.2900627,"caller":"db/migrate.go:86","msg":"migration applied","version":"000012_oci_registry"}
+bahia-1  | {"level":"info","ts":1777884266.2949815,"caller":"db/migrate.go:86","msg":"migration applied","version":"000013_hiveci_pipeline"}
+bahia-1  | {"level":"info","ts":1777884266.2959414,"caller":"db/migrate.go:86","msg":"migration applied","version":"000014_hiveci_retry_tracking"}
+bahia-1  | {"level":"info","ts":1777884266.29664,"caller":"db/migrate.go:86","msg":"migration applied","version":"000015_services_repository_ref"}
+bahia-1  | {"level":"info","ts":1777884266.2972305,"caller":"db/migrate.go:86","msg":"migration applied","version":"000016_hiveci_repo_lookup_indexes"}
+bahia-1  | {"level":"info","ts":1777884266.2978332,"caller":"db/migrate.go:86","msg":"migration applied","version":"000017_service_runtime_config"}
+bahia-1  | {"level":"info","ts":1777884266.2986069,"caller":"db/migrate.go:86","msg":"migration applied","version":"000018_worker_runtime_capabilities"}
+bahia-1  | {"level":"info","ts":1777884266.3117595,"caller":"db/migrate.go:86","msg":"migration applied","version":"000019_llm_controlplane"}
+bahia-1  | {"level":"info","ts":1777884266.3132749,"caller":"db/migrate.go:86","msg":"migration applied","version":"000020_artifact_signature_status"}
+bahia-1  | {"level":"info","ts":1777884266.3211815,"caller":"db/migrate.go:86","msg":"migration applied","version":"000020_tool_provisioning"}
+bahia-1  | {"level":"info","ts":1777884266.32525,"caller":"db/migrate.go:86","msg":"migration applied","version":"000021_core_resource_org_ownership"}
+bahia-1  | {"level":"info","ts":1777884266.332046,"caller":"db/migrate.go:86","msg":"migration applied","version":"000022_tenant_schema"}
+bahia-1  | {"level":"info","ts":1777884266.335192,"caller":"app/app.go:146","msg":"nostr relay topology initialized","control_plane_relays":["ws://relay:3334/relay"],"encrypted_request_relay_urls":[],"interop_relays":[],"sidecar_enabled":true,"mirror_external":false}
+bahia-1  | {"level":"info","ts":1777884266.3352294,"caller":"app/app.go:182","msg":"image verification disabled, artifacts will not be verified against registry"}
+bahia-1  | {"level":"info","ts":1777884266.3432724,"caller":"app/app.go:208","msg":"runtime resolver initialized","default_type":"docker"}
+bahia-1  | {"level":"info","ts":1777884266.3433068,"caller":"app/app.go:214","msg":"secrets encryption enabled"}
+bahia-1  | {"level":"info","ts":1777884266.3435352,"caller":"telemetry/telemetry.go:125","msg":"telemetry disabled"}
+bahia-1  | {"level":"info","ts":1777884266.3435717,"caller":"app/background.go:181","msg":"background runner registered","name":"nostr-projector"}
+bahia-1  | {"level":"info","ts":1777884266.343588,"caller":"app/app.go:308","msg":"nostr read-model projector registered"}
+bahia-1  | {"level":"info","ts":1777884266.3436053,"caller":"app/background.go:181","msg":"background runner registered","name":"nostr-subscriber"}
+bahia-1  | {"level":"info","ts":1777884266.343838,"caller":"app/app.go:440","msg":"mcp server initialized"}
+bahia-1  | {"level":"info","ts":1777884266.3438988,"caller":"app/background.go:181","msg":"background runner registered","name":"controlplane"}
+bahia-1  | {"level":"info","ts":1777884266.3439062,"caller":"app/app.go:513","msg":"nostr control plane reactor registered","relays":["ws://relay:3334/relay"]}
+bahia-1  | {"level":"info","ts":1777884266.3443048,"caller":"app/app.go:601","msg":"HTTP server starting","addr":"0.0.0.0:8080"}
+bahia-1  | {"level":"info","ts":1777884266.3443606,"caller":"app/background.go:195","msg":"background runner starting","name":"nostr-projector"}
+bahia-1  | {"level":"info","ts":1777884266.344423,"caller":"app/background.go:195","msg":"background runner starting","name":"controlplane"}
+bahia-1  | {"level":"info","ts":1777884266.3444488,"caller":"app/background.go:195","msg":"background runner starting","name":"nostr-subscriber"}
+bahia-1  | 2026/05/04 08:44:26 INFO starting bahia control plane reactor component=controlplane relays=[ws://relay:3334/relay] additional_relays=[]
+bahia-1  | 2026/05/04 08:44:26 INFO subscribed to control plane events component=controlplane
+bahia-1  | {"level":"warn","ts":1777884266.3493826,"logger":"nostr-subscriber","caller":"nostr/subscriber.go:140","msg":"subscription ended, reconnecting with backoff","error":"no relays available for subscription","delay":0.662269312,"attempt":1}
+bahia-1  | {"level":"info","ts":1777884266.350768,"logger":"nostr-projector","caller":"nostr/projector.go:262","msg":"Nostr projection snapshot republished","services":0,"environments":0,"states":0,"builds":0,"artifacts":0,"deployment_intents":0,"deployment_runs":0,"policies":0,"llm_routes":0,"llm_route_states":0}
+bahia-1  | {"level":"warn","ts":1777884267.0236373,"logger":"nostr-subscriber","caller":"nostr/subscriber.go:140","msg":"subscription ended, reconnecting with backoff","error":"no relays available for subscription","delay":2.067187934,"attempt":2}
+bahia-1  | {"level":"warn","ts":1777884269.097842,"logger":"nostr-subscriber","caller":"nostr/subscriber.go:140","msg":"subscription ended, reconnecting with backoff","error":"no relays available for subscription","delay":4.490826825,"attempt":3}
+bahia-1  | {"level":"info","ts":1777884271.2125793,"caller":"middleware/logging.go:37","msg":"http request","method":"GET","path":"/health","status":200,"duration":0.000396542,"remote_addr":"[::1]:55176"}
+bahia-1  | {"level":"info","ts":1777884271.899155,"caller":"middleware/logging.go:37","msg":"http request","method":"GET","path":"/health","status":200,"duration":0.000027958,"remote_addr":"192.168.65.1:63860"}
+bahia-1  | {"level":"info","ts":1777884271.9213414,"caller":"middleware/logging.go:37","msg":"http request","method":"GET","path":"/api/v1/system/info","status":200,"duration":0.002475458,"remote_addr":"192.168.65.1:35706"}
+bahia-1  | {"level":"warn","ts":1777884273.6435015,"logger":"nostr-subscriber","caller":"nostr/subscriber.go:140","msg":"subscription ended, reconnecting with backoff","error":"no relays available for subscription","delay":11.401950023,"attempt":4}
+bahia-1  | {"level":"info","ts":1777884273.7708251,"caller":"service/adoption.go:217","msg":"adoption scan completed","target_count":2,"candidate_count":50,"target_error_count":0,"redacted_env_key_count":120,"redacted_label_key_count":0,"duration_ms":668,"result":"success"}
+bahia-1  | {"level":"info","ts":1777884274.6245897,"caller":"service/adoption.go:545","msg":"adoption candidate import completed","target_name":"local-a","endpoint_ref":"local-a","environment_name":"local-a","container_id":"c8698ab4949db569e7c172e93c103957f811625f1d1a0747bb2007cb8108a5ad","container_name":"bahia-rehearsal-nginx","service_name":"bahia-rehearsal-nginx","status":"created","result":"success","redacted_env_key_count":0,"redacted_label_key_count":0,"service_id":"765f99b7-e2f4-4f8f-a88b-1db4328cbefb","environment_id":"22f7d96b-b18f-41ac-a620-227a46c4b9ce","artifact_id":"c71d2439-48c3-4b89-9dfe-5dc4d0dee72e"}
+bahia-1  | {"level":"info","ts":1777884274.6246412,"caller":"service/adoption.go:296","msg":"adoption import completed","target_count":1,"candidate_count":1,"success_count":1,"failure_count":0,"redacted_env_key_count":0,"redacted_label_key_count":0,"duration_ms":521,"result":"success"}
+bahia-1  | 2026/05/04 08:44:34 INFO received service action component=controlplane event_id=6a53812418968a758e6b4bda3409fe2f8be357fea4e525f9d330de201a0997ea requester=4f355bdcb7cc0af728ef3cceb9615d90684bb5b2ca5f859ab0f0b704075871aa
+bahia-1  | {"level":"info","ts":1777884275.2719357,"caller":"service/runtime_lifecycle.go:386","msg":"direct runtime action completed","action":"restart","service_id":"765f99b7-e2f4-4f8f-a88b-1db4328cbefb","environment_id":"22f7d96b-b18f-41ac-a620-227a46c4b9ce","duration_ms":428,"result":"success","service_name":"bahia-rehearsal-nginx","target_name":"bahia-rehearsal-nginx","endpoint_ref":"local-a","environment_name":"local-a","endpoint_ref":"local-a"}
+bahia-1  | 2026/05/04 08:44:35 INFO received service action component=controlplane event_id=d942a260b988b798a970889c9da256a61b3c700fdc7fd1f9cb39ab4f30c8c69b requester=4f355bdcb7cc0af728ef3cceb9615d90684bb5b2ca5f859ab0f0b704075871aa
+bahia-1  | {"level":"info","ts":1777884275.8602781,"caller":"service/runtime_lifecycle.go:386","msg":"direct runtime action completed","action":"stop","service_id":"765f99b7-e2f4-4f8f-a88b-1db4328cbefb","environment_id":"22f7d96b-b18f-41ac-a620-227a46c4b9ce","duration_ms":329,"result":"success","service_name":"bahia-rehearsal-nginx","target_name":"bahia-rehearsal-nginx","endpoint_ref":"local-a","environment_name":"local-a","endpoint_ref":"local-a"}
+bahia-1  | 2026/05/04 08:44:36 INFO received service action component=controlplane event_id=22582b0b8bc543c048c8f0d0c3fe95a10b8a01bbe4b2867f324445631ba72238 requester=4f355bdcb7cc0af728ef3cceb9615d90684bb5b2ca5f859ab0f0b704075871aa
+bahia-1  | {"level":"info","ts":1777884276.2751775,"caller":"runtime/docker.go:403","msg":"container deployed","service":"bahia-rehearsal-nginx","image":"nginx@sha256:5616878291a2eed594aee8db4dade5878cf7edcb475e59193904b198d9b830de","container_id":"44c60d58bb51cc91e615311e128564d83dcb4474255a94de66d8d4ef0306c6d0"}
+bahia-1  | {"level":"info","ts":1777884276.3676257,"caller":"service/runtime_lifecycle.go:386","msg":"direct runtime action completed","action":"deploy","service_id":"765f99b7-e2f4-4f8f-a88b-1db4328cbefb","environment_id":"22f7d96b-b18f-41ac-a620-227a46c4b9ce","duration_ms":304,"result":"success","artifact_id":"c71d2439-48c3-4b89-9dfe-5dc4d0dee72e","service_name":"bahia-rehearsal-nginx","target_name":"bahia-rehearsal-nginx","endpoint_ref":"local-a","environment_name":"local-a","endpoint_ref":"local-a"}
