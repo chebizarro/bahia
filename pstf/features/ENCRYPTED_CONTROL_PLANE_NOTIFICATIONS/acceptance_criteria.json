@@ -427,7 +427,6 @@
     "Observability fields are intentionally sparse where the implementation exposes user-visible state changes but no explicit log or metric contract in the selected evidence."
   ],
   "unresolved_questions": [
-    "Should encrypted-domain browser E2E breadth be expanded beyond list/create/test to require explicit edit/delete/log browser journeys as release-gating evidence?",
-    "Should the encrypted operation catalog be promoted to a first-class normative contract table alongside the public control-plane command families?"
+    "Should encrypted-domain browser E2E breadth be expanded beyond list/create/test to require explicit edit/delete/log browser journeys as release-gating evidence?"
   ]
 }

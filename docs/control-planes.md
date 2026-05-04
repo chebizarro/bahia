@@ -246,6 +246,10 @@ Browser signer support:
 - NIP-07 is supported only when `window.nostr.nip44.encrypt/decrypt` are available.
 - NIP-46 can participate only if the provider explicitly exposes `provider.nip44.encrypt/decrypt`; NIP-46's internal encrypted RPC channel does not by itself give the web app NIP-44 conversation-key operations. If absent, encrypted request/result route migration is blocked for that signer mode and the UI/tests should surface that exact blocker.
 
+Encrypted operation catalog:
+
+The following operation names are normative for the `5980`/`7980` encrypted request/result family. New encrypted browser-facing operations must be added here when introduced so the documented contract stays aligned with the implementation.
+
 Notification encrypted operations:
 
 | Operation | Payload | Result payload | Notes |
@@ -257,6 +261,22 @@ Notification encrypted operations:
 | `notifications.channels.delete` | `{id}` | `{status,id}` | Deletes the channel over encrypted request/result events. |
 | `notifications.channels.test` | `{id}` | `{status,id}` | Dispatches directly to the selected channel and returns terminal success/error. |
 | `notifications.logs.list` | `{limit?,channel_id?}` | `{logs}` | Delivery logs and payloads are returned only in encrypted result content. |
+
+Encrypted domain operations:
+
+| Operation | Payload | Result payload | Notes |
+|-----------|---------|----------------|-------|
+| `payments.history` | `{worker,limit?}` | `PaymentRecord[]` | `worker` is required; `limit` defaults to 50 and is capped at 250. |
+| `orgs.list` | `{}` | `({org fields..., role})[]` | Returns orgs visible to the requester pubkey with the caller's role attached to each row. |
+| `orgs.detail` | `{id}` | `{org,members,invites,my_role}` | `id` may be an org UUID or org name; `invites` is populated only when the requester has admin access. |
+| `orgs.create` | `{name,display_name?}` | `Organization` | Creates an organization for an authorized requester and returns the created org object directly. |
+| `orgs.delete` | `{id}` | `{message}` | Deletes the organization when the requester is authorized. |
+| `orgs.my_invites` | `{}` | `InviteWithOrg[]` | Returns invites for the requester pubkey enriched with org name/display name. |
+| `orgs.accept_invite` | `{invite_id}` | `OrgMember` | Accepts an org invite for the requester pubkey and returns the created membership directly. |
+| `orgs.create_invite` | `{org_id,pubkey,role?,expires_in?}` | `OrgInvite` | `role` defaults to `viewer`; `expires_in` is in hours and defaults to 72. |
+| `orgs.revoke_invite` | `{org_id,invite_id}` | `{message}` | Revokes an existing invite. |
+| `orgs.update_member_role` | `{org_id,pubkey,role}` | `{message}` | Updates member role state through encrypted transport. |
+| `orgs.remove_member` | `{org_id,pubkey}` | `{message}` | Removes a member from the org. |
 
 Encrypted route operations:
 

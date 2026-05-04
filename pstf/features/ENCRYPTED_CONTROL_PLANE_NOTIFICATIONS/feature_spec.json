@@ -128,16 +128,11 @@
   ],
   "ambiguities": [
     {
-      "type": "doc_gap",
-      "note": "The encrypted operation catalog is not documented as comprehensively as the public control-plane families; notifications are well-evidenced, but other encrypted domains share the transport with less explicit narrative coverage."
-    },
-    {
       "type": "transport_boundary",
       "note": "The slice is clear on browser encrypted-request relays versus public browser relays, but end-to-end relay topology verification is currently stronger in unit tests and docs than in selected browser E2E evidence."
     }
   ],
   "human_decisions": [
-    "Should the encrypted operation catalog be promoted to a first-class normative table alongside public command families?",
     "Should encrypted-domain browser journeys receive explicit E2E coverage as a release gate, or is unit/backend transport coverage sufficient for this slice?"
   ]
 }

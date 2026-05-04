@@ -89,8 +89,8 @@ PROMOTE_NOW
 - Confidence / Release: adjusted — removes an avoidable spec-governance gap once completed
 
 **Required Follow-Up Actions:**
-- [ ] Complete `bahia-u28c` to promote the encrypted operation catalog to a normative spec table alongside public control-plane command families.
-- [ ] Update relevant docs and PSTF references to point at the normative encrypted operation catalog once published.
+- [x] Complete `bahia-u28c` to promote the encrypted operation catalog to a normative spec table alongside public control-plane command families.
+- [x] Update relevant docs and PSTF references to point at the normative encrypted operation catalog once published.
 
 ---
 
