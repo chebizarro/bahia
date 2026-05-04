@@ -49,8 +49,8 @@ APPROVED_WITH_RISK
 - Confidence / Release: adjusted — enables release recommendation with explicit process/spec risk acknowledged
 
 **Required Follow-Up Actions:**
-- [ ] Update `pstf/features/ENCRYPTED_CONTROL_PLANE_NOTIFICATIONS/acceptance_criteria.json` status from `draft` to `approved` to reflect human approval.
-- [ ] Keep the release note/risk note explicit until the criteria artifact is synchronized.
+- [x] Update `pstf/features/ENCRYPTED_CONTROL_PLANE_NOTIFICATIONS/acceptance_criteria.json` status from `draft` to `approved` to reflect human approval.
+- [x] Keep the release note/risk note explicit until the criteria artifact is synchronized.
 
 ---
 
@@ -98,7 +98,7 @@ PROMOTE_NOW
 
 - Final Status: APPROVED_WITH_RISK
 - Open Questions: 0
-- Accepted Risks: 1 — acceptance criteria artifact still marked `draft` even though the slice is now human-approved
+- Accepted Risks: 0
 - Deferred Items: 0
 - Blocking Issues: 0
 - Superseded Decisions: 0

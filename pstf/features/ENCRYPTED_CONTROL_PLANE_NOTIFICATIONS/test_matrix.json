@@ -487,6 +487,6 @@
     "Implemented missing coverage in `web/tests/unit/notifications-store.test.js` for encrypted log failure state clearing stale logs and populating `logsError`.",
     "Implemented browser coverage in `web/tests/e2e/notifications-form-error.spec.js` for encrypted create/update failure persistence and notifications accessibility assertions.",
     "Verification run 2026-05-03 confirmed ECPN-T-001 through ECPN-T-014 passing with deterministic unit, backend, and Playwright evidence.",
-    "Acceptance criteria JSON still carries `status: draft`; matrix readiness here means every current criterion is covered by passing tests, not that human approval workflow is complete."
+    "Acceptance criteria JSON is approved and synchronized with the recorded HITL decision; matrix readiness means every approved criterion is covered by passing tests."
   ]
 }

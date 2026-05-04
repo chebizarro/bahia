@@ -74,8 +74,7 @@ All three are now marked `verified` in `pstf/features/ENCRYPTED_CONTROL_PLANE_NO
 
 ## Ambiguities / Human Decisions Needed
 
-1. `acceptance_criteria.json` still carries `status: draft`. The implementation is fully verified against the current criteria, but human approval may still be needed if your PSTF workflow distinguishes verification from approval.
-2. If this slice is intended to remain the reference onboarding slice, decide whether to formally promote the encrypted operation catalog to a normative spec table alongside the public control-plane command families.
+None at this time. The acceptance criteria artifact is now synchronized with the recorded HITL approval, and the encrypted operation catalog has been promoted to the normative control-plane documentation.
 
 ## Confidence Assessment
 
@@ -91,6 +90,5 @@ Why:
 Treat `ENCRYPTED_CONTROL_PLANE_NOTIFICATIONS` as fully verified for implementation behavior.
 
 Recommended next moves:
-1. If desired by your PSTF workflow, promote `acceptance_criteria.json` from `draft` to `approved` after human review.
-2. Use this slice as the reference pattern for the next signer-first encrypted slice.
-3. Keep the shared encrypted Playwright harness for future sensitive-route verification rather than duplicating per-feature relay mocks.
+1. Use this slice as the reference pattern for the next signer-first encrypted slice.
+2. Keep the shared encrypted Playwright harness for future sensitive-route verification rather than duplicating per-feature relay mocks.
