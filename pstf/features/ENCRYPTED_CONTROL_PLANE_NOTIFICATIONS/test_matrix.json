@@ -4,7 +4,9 @@
   "tests": [
     {
       "test_id": "ECPN-T-001",
-      "ac_ids": ["ECPN-AC-001"],
+      "ac_ids": [
+        "ECPN-AC-001"
+      ],
       "title": "Notifications store rejects locally when encrypted discovery is unavailable",
       "type": "unit",
       "existing_or_new": "existing",
@@ -35,7 +37,9 @@
     },
     {
       "test_id": "ECPN-T-002",
-      "ac_ids": ["ECPN-AC-002"],
+      "ac_ids": [
+        "ECPN-AC-002"
+      ],
       "title": "Encrypted relay discovery ignores public browser relays",
       "type": "unit",
       "existing_or_new": "existing",
@@ -65,7 +69,9 @@
     },
     {
       "test_id": "ECPN-T-003",
-      "ac_ids": ["ECPN-AC-003"],
+      "ac_ids": [
+        "ECPN-AC-003"
+      ],
       "title": "Encrypted notification request event uses canonical kind, recipient, and routing marker",
       "type": "unit",
       "existing_or_new": "existing",
@@ -99,7 +105,9 @@
     },
     {
       "test_id": "ECPN-T-004",
-      "ac_ids": ["ECPN-AC-004"],
+      "ac_ids": [
+        "ECPN-AC-004"
+      ],
       "title": "Encrypted publish succeeds only with at least one accepted OK",
       "type": "unit",
       "existing_or_new": "existing",
@@ -128,7 +136,9 @@
     },
     {
       "test_id": "ECPN-T-005",
-      "ac_ids": ["ECPN-AC-005"],
+      "ac_ids": [
+        "ECPN-AC-005"
+      ],
       "title": "Encrypted result resolution requires correlation by request id, requester pubkey, and service author",
       "type": "unit",
       "existing_or_new": "existing",
@@ -158,7 +168,10 @@
     },
     {
       "test_id": "ECPN-T-006",
-      "ac_ids": ["ECPN-AC-006", "ECPN-AC-012"],
+      "ac_ids": [
+        "ECPN-AC-006",
+        "ECPN-AC-012"
+      ],
       "title": "Notifications browser journey loads channel list over encrypted relays only",
       "type": "e2e",
       "existing_or_new": "existing",
@@ -194,7 +207,10 @@
     },
     {
       "test_id": "ECPN-T-007",
-      "ac_ids": ["ECPN-AC-007", "ECPN-AC-012"],
+      "ac_ids": [
+        "ECPN-AC-007",
+        "ECPN-AC-012"
+      ],
       "title": "Notifications create and test actions remain on encrypted operations",
       "type": "e2e",
       "existing_or_new": "existing",
@@ -227,7 +243,9 @@
     },
     {
       "test_id": "ECPN-T-008",
-      "ac_ids": ["ECPN-AC-007"],
+      "ac_ids": [
+        "ECPN-AC-007"
+      ],
       "title": "Notification store mutation helpers upsert and delete channel state through encrypted operations",
       "type": "unit",
       "existing_or_new": "existing",
@@ -257,7 +275,9 @@
     },
     {
       "test_id": "ECPN-T-009",
-      "ac_ids": ["ECPN-AC-008"],
+      "ac_ids": [
+        "ECPN-AC-008"
+      ],
       "title": "Notification logs success path uses encrypted log operation and stores returned entries",
       "type": "unit",
       "existing_or_new": "existing",
@@ -288,7 +308,9 @@
     },
     {
       "test_id": "ECPN-T-010",
-      "ac_ids": ["ECPN-AC-008"],
+      "ac_ids": [
+        "ECPN-AC-008"
+      ],
       "title": "Notification logs failure path clears stale log entries and sets `logsError`",
       "type": "unit",
       "existing_or_new": "modify_existing",
@@ -319,7 +341,9 @@
     },
     {
       "test_id": "ECPN-T-011",
-      "ac_ids": ["ECPN-AC-009"],
+      "ac_ids": [
+        "ECPN-AC-009"
+      ],
       "title": "Backend publishes correlated encrypted terminal error for decrypt failures",
       "type": "integration",
       "existing_or_new": "existing",
@@ -350,7 +374,9 @@
     },
     {
       "test_id": "ECPN-T-012",
-      "ac_ids": ["ECPN-AC-009"],
+      "ac_ids": [
+        "ECPN-AC-009"
+      ],
       "title": "Backend rejects unauthorized encrypted requesters without invoking the domain handler",
       "type": "integration",
       "existing_or_new": "existing",
@@ -381,7 +407,9 @@
     },
     {
       "test_id": "ECPN-T-013",
-      "ac_ids": ["ECPN-AC-010"],
+      "ac_ids": [
+        "ECPN-AC-010"
+      ],
       "title": "Notification form preserves valid entered data after terminal encrypted submit failure",
       "type": "e2e",
       "existing_or_new": "new",
@@ -416,7 +444,9 @@
     },
     {
       "test_id": "ECPN-T-014",
-      "ac_ids": ["ECPN-AC-011"],
+      "ac_ids": [
+        "ECPN-AC-011"
+      ],
       "title": "Notifications routes expose labelled controls, headings, and alert regions",
       "type": "accessibility",
       "existing_or_new": "modify_existing",
@@ -461,6 +491,7 @@
     "Estimated lowest-effort gap closure order: ECPN-T-010 (small), ECPN-T-014 (small-to-medium), ECPN-T-013 (medium).",
     "All proposed new coverage can stay deterministic by reusing the existing Vitest mocks and Playwright in-page encrypted relay harness; no live relay or external notification service is required.",
     "The matrix intentionally distinguishes backend transport proofs from browser/store proofs so terminal encrypted errors are covered at both dispatch and UX boundaries.",
-    "Acceptance criteria remain `draft`, so this matrix is marked `draft` even though most current tests pass."
+    "Acceptance criteria remain `draft`, so this matrix is marked `draft` even though most current tests pass.",
+    "Verification run 2026-05-03 confirmed ECPN-T-001..009 and ECPN-T-011..012 passing via current automated evidence; ECPN-T-010, ECPN-T-013, and ECPN-T-014 remain not implemented."
   ]
 }
