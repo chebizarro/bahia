@@ -1,153 +1,466 @@
 {
   "feature_id": "ENCRYPTED_CONTROL_PLANE_NOTIFICATIONS",
-  "status": "fully_verified",
+  "status": "draft",
   "tests": [
     {
-      "criterion_id": "ECPN-AC-001",
-      "test_id": "WEB-UNIT-ENC-001",
+      "test_id": "ECPN-T-001",
+      "ac_ids": ["ECPN-AC-001"],
+      "title": "Notifications store rejects locally when encrypted discovery is unavailable",
       "type": "unit",
-      "source": "web/tests/unit/encrypted-controlplane.test.js",
-      "test_name": "prefers canonical relay URLs for encrypted request events and ignores public relays",
-      "status": "passing",
-      "notes": "Confirms canonical encrypted-request relay discovery and availability calculation."
+      "existing_or_new": "existing",
+      "target_path": "web/tests/unit/notifications-store.test.js",
+      "description": "Verifies the store refuses to publish when encrypted request discovery does not advertise a service pubkey plus encrypted request relays.",
+      "preconditions": [
+        "Notifications store is loaded under Vitest.",
+        "`encryptedRequestsAvailable()` mock returns false."
+      ],
+      "steps": [
+        "Call `listNotificationChannels()`.",
+        "Observe thrown error, publish mock calls, and store error state."
+      ],
+      "expected_result": "The call rejects with the availability error, `requestEncryptedResult` is never called, and `notificationState.channelsError` is populated.",
+      "fixtures": [],
+      "mocks": [
+        "`$lib/nostr/encrypted-controlplane.js`",
+        "`$lib/stores/system.svelte.js`"
+      ],
+      "data_requirements": [
+        "Deterministic system info object without `browser_encrypted_request_relays`."
+      ],
+      "determinism_notes": [
+        "No network or timer dependency."
+      ],
+      "status": "pass",
+      "failure_reason": null
     },
     {
-      "criterion_id": "ECPN-AC-001",
-      "test_id": "WEB-UNIT-ENC-002",
+      "test_id": "ECPN-T-002",
+      "ac_ids": ["ECPN-AC-002"],
+      "title": "Encrypted relay discovery ignores public browser relays",
       "type": "unit",
-      "source": "web/tests/unit/encrypted-controlplane.test.js",
-      "test_name": "does not treat public browser relays as encrypted request relays",
-      "status": "passing",
-      "notes": "Guards against accidental use of public relay set."
+      "existing_or_new": "existing",
+      "target_path": "web/tests/unit/encrypted-controlplane.test.js",
+      "description": "Confirms encrypted relay resolution uses only `browser_encrypted_request_relays` and does not become available from `browser_relays` alone.",
+      "preconditions": [
+        "Encrypted controlplane module is loaded under Vitest."
+      ],
+      "steps": [
+        "Call `encryptedRelayUrlsFromSystemInfo()` with only `browser_relays` set.",
+        "Call `encryptedRequestsAvailable()` with the same input."
+      ],
+      "expected_result": "Resolved encrypted relay list is empty and encrypted request availability is false.",
+      "fixtures": [],
+      "mocks": [
+        "`$lib/stores/auth.js`",
+        "`$lib/stores/system.svelte.js`"
+      ],
+      "data_requirements": [
+        "Deterministic system info containing `service_pubkey` and only `browser_relays`."
+      ],
+      "determinism_notes": [
+        "Pure function assertions."
+      ],
+      "status": "pass",
+      "failure_reason": null
     },
     {
-      "criterion_id": "ECPN-AC-002",
-      "test_id": "WEB-UNIT-NOTIF-004",
+      "test_id": "ECPN-T-003",
+      "ac_ids": ["ECPN-AC-003"],
+      "title": "Encrypted notification request event uses canonical kind, recipient, and routing marker",
       "type": "unit",
-      "source": "web/tests/unit/notifications-store.test.js",
-      "test_name": "fails before publishing when encrypted Nostr requests are not advertised",
-      "status": "passing",
-      "notes": "Confirms local failure before publish when encrypted discovery contract is missing."
+      "existing_or_new": "existing",
+      "target_path": "web/tests/unit/encrypted-controlplane.test.js",
+      "description": "Builds an encrypted request event and verifies kind `5980`, service pubkey targeting, encrypted wire tag, and ciphertext payload construction.",
+      "preconditions": [
+        "Authenticated signer mocks are configured.",
+        "Encrypted relay list and service pubkey are available."
+      ],
+      "steps": [
+        "Construct an `EncryptedControlplaneTransport`.",
+        "Build an encrypted request event for a sample operation.",
+        "Inspect the signed event passed to `signWithAuth`."
+      ],
+      "expected_result": "The event is kind `5980`, tagged with `['p', service_pubkey]` and `['encrypted', 'bahia-encrypted-v1']`, and contains ciphertext rather than plaintext JSON.",
+      "fixtures": [],
+      "mocks": [
+        "`encryptWithAuth`",
+        "`signWithAuth`",
+        "fake Nostr client"
+      ],
+      "data_requirements": [
+        "Stable requester pubkey and service pubkey strings.",
+        "Deterministic sample payload."
+      ],
+      "determinism_notes": [
+        "Ciphertext is mocked as a string prefix; no real relay needed."
+      ],
+      "status": "pass",
+      "failure_reason": null
     },
     {
-      "criterion_id": "ECPN-AC-003",
-      "test_id": "WEB-UNIT-ENC-003",
+      "test_id": "ECPN-T-004",
+      "ac_ids": ["ECPN-AC-004"],
+      "title": "Encrypted publish succeeds only with at least one accepted OK",
       "type": "unit",
-      "source": "web/tests/unit/encrypted-controlplane.test.js",
-      "test_name": "builds encrypted request events without targeting public browser relays",
-      "status": "passing",
-      "notes": "Validates kind, routing tags, recipient pubkey, and ciphertext construction."
+      "existing_or_new": "existing",
+      "target_path": "web/tests/unit/encrypted-controlplane.test.js",
+      "description": "Exercises publish success and relay rejection handling in the encrypted transport client.",
+      "preconditions": [
+        "Encrypted transport has one connected relay client mock."
+      ],
+      "steps": [
+        "Publish an encrypted request event with `accepted=true`.",
+        "Repeat with `accepted=false` and a relay rejection message."
+      ],
+      "expected_result": "The first publish resolves successfully; the second rejects with the relay-provided reason.",
+      "fixtures": [],
+      "mocks": [
+        "fake Nostr client `publish()` results"
+      ],
+      "data_requirements": [
+        "Stable test request event object."
+      ],
+      "determinism_notes": [
+        "No live relay; OK responses are fully mocked."
+      ],
+      "status": "pass",
+      "failure_reason": null
     },
     {
-      "criterion_id": "ECPN-AC-004",
-      "test_id": "WEB-UNIT-ENC-004",
+      "test_id": "ECPN-T-005",
+      "ac_ids": ["ECPN-AC-005"],
+      "title": "Encrypted result resolution requires correlation by request id, requester pubkey, and service author",
       "type": "unit",
-      "source": "web/tests/unit/encrypted-controlplane.test.js",
-      "test_name": "publishes through the encrypted-request client and requires an accepted OK",
-      "status": "passing",
-      "notes": "Proves publish success requires accepted OK and rejection reasons propagate."
+      "existing_or_new": "existing",
+      "target_path": "web/tests/unit/encrypted-controlplane.test.js",
+      "description": "Validates that unrelated, spoofed, and duplicate result events do not resolve the request and that the correlated event does.",
+      "preconditions": [
+        "Encrypted result subscription is opened by the transport client."
+      ],
+      "steps": [
+        "Emit unrelated result events with wrong `#e` and wrong author.",
+        "Emit one correctly correlated event.",
+        "Emit a duplicate correlated event."
+      ],
+      "expected_result": "Only the correctly correlated event resolves the request and the subscription is unsubscribed exactly once.",
+      "fixtures": [],
+      "mocks": [
+        "fake Nostr client `subscribe()`"
+      ],
+      "data_requirements": [
+        "Stable requester pubkey, service pubkey, and request id."
+      ],
+      "determinism_notes": [
+        "Events are injected directly through subscription callbacks."
+      ],
+      "status": "pass",
+      "failure_reason": null
     },
     {
-      "criterion_id": "ECPN-AC-005",
-      "test_id": "WEB-UNIT-ENC-005",
-      "type": "unit",
-      "source": "web/tests/unit/encrypted-controlplane.test.js",
-      "test_name": "awaitEncryptedResult resolves only correlated encrypted results and unsubscribes",
-      "status": "passing",
-      "notes": "Covers correlation by `#e`, `#p`, author, duplicate suppression, and unsubscribe cleanup."
-    },
-    {
-      "criterion_id": "ECPN-AC-006",
-      "test_id": "GO-UNIT-ENC-001",
-      "type": "backend_unit",
-      "source": "internal/controlplane/encrypted_transport_test.go",
-      "test_name": "TestEncryptedRequestTransport_HandleEventPublishesDecryptFailure",
-      "status": "passing",
-      "notes": "Confirms undecryptable requests yield encrypted terminal error results."
-    },
-    {
-      "criterion_id": "ECPN-AC-006",
-      "test_id": "GO-UNIT-ENC-002",
-      "type": "backend_unit",
-      "source": "internal/controlplane/encrypted_transport_test.go",
-      "test_name": "TestEncryptedRequestTransport_HandleEventRejectsUnauthorizedRequester",
-      "status": "passing",
-      "notes": "Confirms unauthorized requesters do not reach handlers and receive encrypted error results."
-    },
-    {
-      "criterion_id": "ECPN-AC-007",
-      "test_id": "WEB-UNIT-NOTIF-001",
-      "type": "unit",
-      "source": "web/tests/unit/notifications-store.test.js",
-      "test_name": "loads channels through encrypted Nostr request operations",
-      "status": "passing",
-      "notes": "Confirms list path goes through encrypted request operation."
-    },
-    {
-      "criterion_id": "ECPN-AC-007",
-      "test_id": "WEB-UNIT-NOTIF-002",
-      "type": "unit",
-      "source": "web/tests/unit/notifications-store.test.js",
-      "test_name": "creates, updates, deletes, and tests channels through encrypted operations",
-      "status": "passing",
-      "notes": "Confirms create/update/test/delete all use encrypted operations."
-    },
-    {
-      "criterion_id": "ECPN-AC-007",
-      "test_id": "WEB-UNIT-NOTIF-003",
-      "type": "unit",
-      "source": "web/tests/unit/notifications-store.test.js",
-      "test_name": "loads delivery logs only through encrypted result operations",
-      "status": "passing",
-      "notes": "Confirms logs are fetched through encrypted operation path."
-    },
-    {
-      "criterion_id": "ECPN-AC-008",
-      "test_id": "WEB-UNIT-NOTIF-005",
-      "type": "unit",
-      "source": "web/tests/unit/notifications-store.test.js",
-      "test_name": "surfaces encrypted terminal errors from result events",
-      "status": "passing",
-      "notes": "Confirms backend terminal errors propagate to callers."
-    },
-    {
-      "criterion_id": "ECPN-AC-009",
-      "test_id": "WEB-UNIT-ENC-001",
-      "type": "unit",
-      "source": "web/tests/unit/encrypted-controlplane.test.js",
-      "test_name": "prefers canonical relay URLs for encrypted request events and ignores public relays",
-      "status": "passing",
-      "notes": "Primary relay-boundary proof."
-    },
-    {
-      "criterion_id": "ECPN-AC-009",
-      "test_id": "WEB-UNIT-ENC-003",
-      "type": "unit",
-      "source": "web/tests/unit/encrypted-controlplane.test.js",
-      "test_name": "builds encrypted request events without targeting public browser relays",
-      "status": "passing",
-      "notes": "Confirms encrypted request publication uses the encrypted-request client."
-    },
-    {
-      "criterion_id": "ECPN-AC-010",
-      "test_id": "WEB-E2E-NOTIF-001",
+      "test_id": "ECPN-T-006",
+      "ac_ids": ["ECPN-AC-006", "ECPN-AC-012"],
+      "title": "Notifications browser journey loads channel list over encrypted relays only",
       "type": "e2e",
-      "source": "web/tests/e2e/notifications-encrypted-smoke.spec.js",
-      "test_name": "browser notifications flow uses encrypted request/result transport end-to-end",
-      "status": "passing",
-      "notes": "Covers list -> create -> return -> test action and asserts encrypted relay usage rather than public relay usage."
+      "existing_or_new": "existing",
+      "target_path": "web/tests/e2e/notifications-encrypted-smoke.spec.js",
+      "description": "Runs the browser flow against mocked public and encrypted relay URLs and asserts that notifications list loading stays on encrypted relays.",
+      "preconditions": [
+        "Playwright harness provides deterministic system info with both public and encrypted relay URLs.",
+        "Browser signer and nip44 mocks are installed."
+      ],
+      "steps": [
+        "Open `/notifications`.",
+        "Observe initial table render and transport trace."
+      ],
+      "expected_result": "The notifications page renders the existing channel and all encrypted publishes target the encrypted relay URL, not the public relay URL.",
+      "fixtures": [
+        "Mock system info with `browser_relays` and `browser_encrypted_request_relays`.",
+        "Initial notification channel fixture."
+      ],
+      "mocks": [
+        "Playwright `window.nostr.nip44` shim",
+        "Patched WebSocket relay harness",
+        "E2E system info mock"
+      ],
+      "data_requirements": [
+        "Stable service pubkey and relay URLs.",
+        "Deterministic initial channel row."
+      ],
+      "determinism_notes": [
+        "Relay responses are synthesized in-page; no external services are used."
+      ],
+      "status": "pass",
+      "failure_reason": null
+    },
+    {
+      "test_id": "ECPN-T-007",
+      "ac_ids": ["ECPN-AC-007", "ECPN-AC-012"],
+      "title": "Notifications create and test actions remain on encrypted operations",
+      "type": "e2e",
+      "existing_or_new": "existing",
+      "target_path": "web/tests/e2e/notifications-encrypted-smoke.spec.js",
+      "description": "Covers create and test actions in the browser and inspects the encrypted operation trace.",
+      "preconditions": [
+        "Playwright encrypted relay harness is installed.",
+        "Notifications list route is accessible to the mocked signer."
+      ],
+      "steps": [
+        "Create a notification channel.",
+        "Trigger the test action.",
+        "Inspect recorded operations and publish relay URLs."
+      ],
+      "expected_result": "The trace includes `notifications.channels.create` and `notifications.channels.test`, the new row appears in the UI, success toasts render, and no publish targets a public relay.",
+      "fixtures": [
+        "Deterministic initial channels and empty log list."
+      ],
+      "mocks": [
+        "Playwright encrypted notification harness"
+      ],
+      "data_requirements": [
+        "Stable created channel name and webhook URL."
+      ],
+      "determinism_notes": [
+        "Harness mutates in-memory notification state only."
+      ],
+      "status": "pass",
+      "failure_reason": null
+    },
+    {
+      "test_id": "ECPN-T-008",
+      "ac_ids": ["ECPN-AC-007"],
+      "title": "Notification store mutation helpers upsert and delete channel state through encrypted operations",
+      "type": "unit",
+      "existing_or_new": "existing",
+      "target_path": "web/tests/unit/notifications-store.test.js",
+      "description": "Verifies create, update, test, and delete helper methods call the expected encrypted operation names and leave local channel state deterministic.",
+      "preconditions": [
+        "Notifications store is reset before test execution."
+      ],
+      "steps": [
+        "Mock sequential encrypted results for create, update, test, and delete.",
+        "Call each store method in order.",
+        "Inspect request payloads and final channel state."
+      ],
+      "expected_result": "Each method invokes the correct encrypted operation; delete removes the channel and update does not leave duplicate rows.",
+      "fixtures": [],
+      "mocks": [
+        "`requestEncryptedResult` sequential result queue"
+      ],
+      "data_requirements": [
+        "Stable channel id `ch-1` and update payload."
+      ],
+      "determinism_notes": [
+        "Pure mocked store behavior."
+      ],
+      "status": "pass",
+      "failure_reason": null
+    },
+    {
+      "test_id": "ECPN-T-009",
+      "ac_ids": ["ECPN-AC-008"],
+      "title": "Notification logs success path uses encrypted log operation and stores returned entries",
+      "type": "unit",
+      "existing_or_new": "existing",
+      "target_path": "web/tests/unit/notifications-store.test.js",
+      "description": "Confirms `listNotificationLogs()` uses `notifications.logs.list` and stores returned log entries.",
+      "preconditions": [
+        "Notifications store is reset.",
+        "Encrypted requests are available."
+      ],
+      "steps": [
+        "Mock a successful encrypted logs result.",
+        "Call `listNotificationLogs({ limit: 50 })`.",
+        "Inspect invoked operation and stored log state."
+      ],
+      "expected_result": "The store calls `notifications.logs.list` with the provided payload and populates `notificationState.logs` from the decrypted result.",
+      "fixtures": [],
+      "mocks": [
+        "`requestEncryptedResult`"
+      ],
+      "data_requirements": [
+        "Stable log fixture with private payload content."
+      ],
+      "determinism_notes": [
+        "No relay dependency."
+      ],
+      "status": "pass",
+      "failure_reason": null
+    },
+    {
+      "test_id": "ECPN-T-010",
+      "ac_ids": ["ECPN-AC-008"],
+      "title": "Notification logs failure path clears stale log entries and sets `logsError`",
+      "type": "unit",
+      "existing_or_new": "modify_existing",
+      "target_path": "web/tests/unit/notifications-store.test.js",
+      "description": "Adds the missing negative-path coverage for encrypted log retrieval failure semantics required by the acceptance criteria.",
+      "preconditions": [
+        "Store contains a pre-existing log entry from an earlier successful load.",
+        "Next encrypted logs request resolves with an error or rejects."
+      ],
+      "steps": [
+        "Seed `notificationState.logs` through a successful call.",
+        "Invoke `listNotificationLogs()` again with an error result.",
+        "Inspect `notificationState.logs`, `logsLoading`, and `logsError`."
+      ],
+      "expected_result": "The stale log list is cleared, `logsLoading` becomes false, and `logsError` contains the terminal error.",
+      "fixtures": [],
+      "mocks": [
+        "`requestEncryptedResult` success then error sequence"
+      ],
+      "data_requirements": [
+        "One stable seed log entry and one stable terminal error payload."
+      ],
+      "determinism_notes": [
+        "No external systems required."
+      ],
+      "status": "not_implemented",
+      "failure_reason": "Current selected evidence covers only the success path for encrypted log retrieval."
+    },
+    {
+      "test_id": "ECPN-T-011",
+      "ac_ids": ["ECPN-AC-009"],
+      "title": "Backend publishes correlated encrypted terminal error for decrypt failures",
+      "type": "integration",
+      "existing_or_new": "existing",
+      "target_path": "internal/controlplane/encrypted_transport_test.go",
+      "description": "Verifies undecryptable encrypted requests yield a correlated terminal error result with `decrypt_failed`.",
+      "preconditions": [
+        "Encrypted responder and publisher test harness are initialized."
+      ],
+      "steps": [
+        "Deliver an invalid NIP-44 encrypted request event to the transport.",
+        "Inspect the published encrypted result envelope."
+      ],
+      "expected_result": "The backend publishes one encrypted result with status `error` and error code `decrypt_failed`.",
+      "fixtures": [
+        "Mock encrypted publisher",
+        "Deterministic service and requester private keys"
+      ],
+      "mocks": [],
+      "data_requirements": [
+        "Stable invalid ciphertext string.",
+        "Stable routing tags targeting the service pubkey."
+      ],
+      "determinism_notes": [
+        "All cryptographic material is local test data."
+      ],
+      "status": "pass",
+      "failure_reason": null
+    },
+    {
+      "test_id": "ECPN-T-012",
+      "ac_ids": ["ECPN-AC-009"],
+      "title": "Backend rejects unauthorized encrypted requesters without invoking the domain handler",
+      "type": "integration",
+      "existing_or_new": "existing",
+      "target_path": "internal/controlplane/encrypted_transport_test.go",
+      "description": "Verifies unauthorized encrypted requests produce a correlated error and do not reach the registered handler.",
+      "preconditions": [
+        "Encrypted request transport is configured with an allowlist that excludes the requester pubkey."
+      ],
+      "steps": [
+        "Register a handler that would flip a boolean if invoked.",
+        "Deliver a decryptable request from an unauthorized pubkey.",
+        "Inspect handler invocation and published result."
+      ],
+      "expected_result": "The handler is never called and one encrypted result is published with error code `unauthorized`.",
+      "fixtures": [
+        "Mock encrypted publisher",
+        "Deterministic requester and non-authorized pubkeys"
+      ],
+      "mocks": [],
+      "data_requirements": [
+        "Stable encrypted request envelope for `notifications.list`."
+      ],
+      "determinism_notes": [
+        "No relay or network involved."
+      ],
+      "status": "pass",
+      "failure_reason": null
+    },
+    {
+      "test_id": "ECPN-T-013",
+      "ac_ids": ["ECPN-AC-010"],
+      "title": "Notification form preserves valid entered data after terminal encrypted submit failure",
+      "type": "e2e",
+      "existing_or_new": "new",
+      "target_path": "web/tests/e2e/notifications-form-error.spec.js",
+      "description": "Adds the missing browser-level proof that a failed encrypted create or update leaves valid user input intact while surfacing a visible error.",
+      "preconditions": [
+        "Browser harness can return a terminal encrypted error for `notifications.channels.create` or `notifications.channels.update`."
+      ],
+      "steps": [
+        "Open the notification create or edit form.",
+        "Fill valid fields.",
+        "Submit the form and force an encrypted terminal error.",
+        "Inspect the error region and persisted field values."
+      ],
+      "expected_result": "The form renders the error in `div.form-error[role=alert]` and the previously entered valid field values remain present for retry.",
+      "fixtures": [
+        "Encrypted relay harness variant that returns a terminal error result for form submission."
+      ],
+      "mocks": [
+        "Playwright `window.nostr.nip44` shim",
+        "Patched WebSocket relay harness"
+      ],
+      "data_requirements": [
+        "Stable channel name and webhook URL used for form entry.",
+        "Stable terminal error payload."
+      ],
+      "determinism_notes": [
+        "Should be implemented entirely with the existing in-page relay harness pattern."
+      ],
+      "status": "not_implemented",
+      "failure_reason": "No selected unit or browser test currently verifies field persistence after encrypted submit failure."
+    },
+    {
+      "test_id": "ECPN-T-014",
+      "ac_ids": ["ECPN-AC-011"],
+      "title": "Notifications routes expose labelled controls, headings, and alert regions",
+      "type": "accessibility",
+      "existing_or_new": "modify_existing",
+      "target_path": "web/tests/e2e/notifications-encrypted-smoke.spec.js",
+      "description": "Extends the existing browser test or adds a dedicated accessibility-oriented browser test to assert labels and alert semantics beyond the current heading checks.",
+      "preconditions": [
+        "Notifications routes are reachable under the Playwright harness."
+      ],
+      "steps": [
+        "Open `/notifications` and `/notifications/new`.",
+        "Assert the expected headings.",
+        "Assert form controls are discoverable by accessible label.",
+        "Trigger a form error and assert an alert region is exposed."
+      ],
+      "expected_result": "The list and create routes expose the expected top-level headings, key inputs are label-addressable, and submission errors are available via an alert region.",
+      "fixtures": [
+        "Same deterministic system info and encrypted harness as the notifications smoke test."
+      ],
+      "mocks": [
+        "Playwright encrypted notification harness"
+      ],
+      "data_requirements": [
+        "Stable route copy for headings and labels."
+      ],
+      "determinism_notes": [
+        "A browser accessibility assertion is preferable to a static component snapshot because the route copy and rendered structure matter."
+      ],
+      "status": "not_implemented",
+      "failure_reason": "Existing E2E evidence covers headings and flow success but does not comprehensively assert labeled controls plus alert semantics under an error condition."
     }
   ],
   "coverage_summary": {
-    "criteria_total": 10,
-    "criteria_with_tests": 10,
-    "criteria_fully_passing": 10,
-    "criteria_with_known_gaps": [],
-    "known_gaps": []
+    "criteria_total": 12,
+    "criteria_with_tests": 12,
+    "known_gaps": [
+      "ECPN-AC-008 lacks explicit negative-path test evidence for clearing stale logs and populating `logsError` after encrypted log retrieval failure.",
+      "ECPN-AC-010 lacks any current automated test proving valid form data is preserved after an encrypted terminal submit failure.",
+      "ECPN-AC-011 is only partially evidenced by the current smoke test; explicit label and alert assertions are still missing."
+    ]
   },
   "implementation_notes": [
-    "The slice now has passing browser E2E evidence in addition to unit and backend transport coverage.",
-    "Removing `/notifications` from route-level REST compatibility gating was required to make the E2E verification reflect actual product behavior rather than a harness override.",
-    "`/api/v1/system/info` remains a core part of the feature contract because the encrypted browser transport cannot bootstrap safely without it."
+    "Estimated lowest-effort gap closure order: ECPN-T-010 (small), ECPN-T-014 (small-to-medium), ECPN-T-013 (medium).",
+    "All proposed new coverage can stay deterministic by reusing the existing Vitest mocks and Playwright in-page encrypted relay harness; no live relay or external notification service is required.",
+    "The matrix intentionally distinguishes backend transport proofs from browser/store proofs so terminal encrypted errors are covered at both dispatch and UX boundaries.",
+    "Acceptance criteria remain `draft`, so this matrix is marked `draft` even though most current tests pass."
   ]
 }
