@@ -1,6 +1,6 @@
 {
   "feature_id": "LLM_ROUTE_RELEASE_DEPLOYMENT",
-  "status": "ready_for_human_review",
+  "status": "approved",
   "threshold": 0.9,
   "raw_confidence": 0.93,
   "confidence": 0.93,
@@ -71,7 +71,7 @@
       "evidence": [
         "Spec approval exists via HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-005.",
         "Material ambiguity decisions exist for user surface, REST compatibility, rollback deferral, canonical signer-first route/release behavior, and the coverage-gate exception rejection via HITL-001/002/003/004/009/010.",
-        "A fresh final release decision has not yet been collected after the confidence gate cleared, so the next stage is final human review rather than approval."
+        "Final human approval for the approved non-rollback slice is now captured in HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-011."
       ]
     }
   },
@@ -127,7 +127,7 @@
     "The browser coverage artifact line-instruments the extracted `/llm` logic modules rather than the outer Svelte entry wrappers; those wrappers are covered separately by build and deterministic Playwright evidence."
   ],
   "recommendation": {
-    "next_stage": "final_human_review",
-    "summary": "The approved non-rollback slice now meets the 0.90 confidence threshold. The remaining work is a final human release decision, not more implementation or test generation."
+    "next_stage": "approved",
+    "summary": "The approved non-rollback slice is fully verified, exceeds the 0.90 confidence threshold, and now has explicit final human approval. Rollback remains deferred and out of this approval scope."
   }
 }

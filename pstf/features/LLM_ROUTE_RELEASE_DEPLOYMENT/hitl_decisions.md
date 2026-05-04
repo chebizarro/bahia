@@ -6,7 +6,7 @@
 - Framework: PSTF
 - Interaction Mode: RepoPrompt ask-user tool
 - Current Stage: human_review
-- Last Updated: 2026-05-04T22:12:00Z
+- Last Updated: 2026-05-04T22:19:18Z
 
 ---
 
@@ -422,13 +422,56 @@ REQUIRE_ADDITIONAL_FRONTEND_COVERAGE_BEFORE_RELEASE
 
 ---
 
+
+### Decision HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-011 — Final release approval for approved non-rollback slice
+
+**Stage:** human_review
+**Agent:** HITL Review Agent
+**Decision Type:** release_approval
+**Status:** active
+
+**Context Summary:**
+The approved non-rollback slice of `LLM_ROUTE_RELEASE_DEPLOYMENT` reached the final release gate with AC-001 through AC-009 verified, 19/19 mapped tests passing, no open defects for the approved slice, and confidence scoring at 0.93. Rollback remains explicitly deferred and is not part of this approval decision.
+
+**Question Asked:**
+What is the final release decision for the approved non-rollback slice of `LLM_ROUTE_RELEASE_DEPLOYMENT`?
+
+**Options Presented:**
+- A) APPROVED
+- B) APPROVED_WITH_RISK
+- C) NEEDS_WORK
+- D) REJECTED
+- E) DEFERRED
+
+**User Selection:**
+APPROVED
+
+**User Notes:**
+None.
+
+**Decision:**
+APPROVED
+
+**Impact:**
+- Feature Spec: none
+- Acceptance Criteria: none
+- Tests: none
+- Defects: none
+- Confidence / Release: updated — final human approval now exists for the approved non-rollback slice.
+
+**Required Follow-Up Actions:**
+- [x] Update `confidence_report.json` to reflect final approval.
+- [x] Keep rollback out of release claims until replacement semantics are explicitly approved.
+
+---
+
 ## Summary
 
-- Final Status: PENDING
+- Final Status: APPROVED
 - Open Questions: 1 — what explicit rollback target-selection rule should replace the current implementation
 - Accepted Risks: 0 — none currently recorded for the approved non-rollback slice
 - Deferred Items: 1 — rollback-specific acceptance criteria and tests remain deferred until replacement semantics are approved
-- Blocking Issues: 0 — historical blocker decisions for D-001 and D-003 are now satisfied by verified fixes; a fresh final release decision has not yet been collected
+- Blocking Issues: 0 — none for the approved non-rollback slice; rollback remains deferred and out of this approval scope
 - Superseded Decisions: 1 — HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-006 was superseded by HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-007
 
 ## Traceability
@@ -445,3 +488,4 @@ REQUIRE_ADDITIONAL_FRONTEND_COVERAGE_BEFORE_RELEASE
 | HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-008 | LLMRD-AC-009 | T-018 | D-001 | hitl_decisions.md, verification_report.md | Missing browser workflow is explicitly treated as a blocker at this stage. |
 | HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-009 | LLMRD-AC-002, LLMRD-AC-003 | T-002, T-003, T-004, T-005, T-018 | D-005 | hitl_decisions.md, verification_report.md, defects.json | Route/release operations must use canonical signer-first 5971/5972 publishing before release. |
 | HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-010 | none | coverage support for T-016, T-018 and new browser-helper tests | none | hitl_decisions.md, confidence_report.json | Coverage exception rejected; real frontend coverage was required before return to final review. |
+| HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-011 | none | none | none | hitl_decisions.md, confidence_report.json | Final human approval granted for the approved non-rollback slice only. |
