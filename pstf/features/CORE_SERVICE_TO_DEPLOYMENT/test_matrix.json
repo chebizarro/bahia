@@ -127,15 +127,6 @@
       "test_name": "creates a service and drives deployment approval/history over signer-first public Nostr flows",
       "status": "passing",
       "notes": "The browser trace includes only public request kinds and explicitly excludes encrypted request kind 5980."
-    },
-    {
-      "criterion_id": "CSTD-AC-001",
-      "test_id": "STALE-WEB-E2E-DEPLOY-REST-001",
-      "type": "stale_evidence",
-      "source": "web/tests/e2e/deployment-workflow-critical.spec.js",
-      "test_name": "covers create service, deploy intent, approve, run logs, and deployment history",
-      "status": "excluded",
-      "notes": "Excluded from authoritative PSTF evidence because it still mocks the legacy REST CRUD workflow rather than the current signer-first public controlplane path."
     }
   ],
   "coverage_summary": {
@@ -148,6 +139,6 @@
   "implementation_notes": [
     "The slice added explicit domain-level unit coverage for public command helpers because the existing generic request-helper tests were transport-focused, not feature-focused.",
     "Verification found and fixed a real reactivity bug in `/deployments` and `/deployments/pending`, where both pages copied relay-backed state once on mount instead of deriving from the shared controlplane store.",
-    "Legacy REST-shaped deployment E2Es remain in the repo but are intentionally classified as stale compatibility evidence rather than authoritative verification for this slice."
+    "REST-shaped deployment E2Es were retired after slice verification so the active browser suite no longer implies the old CRUD contract."
   ]
 }

@@ -12,7 +12,7 @@ The verified scope is the current core public service-to-deployment path:
 - signer-first deployment approval
 - deployment history/detail rendering from public read models
 
-The older REST-shaped deployment E2Es were intentionally excluded from authoritative evidence because they no longer match the implemented product contract.
+Older REST-shaped deployment E2Es were retired after slice verification so the active browser suite no longer signals the wrong product contract.
 
 ## Commands Run
 
@@ -56,11 +56,11 @@ npm --prefix web run test:e2e -- tests/e2e/service-deployment-public-smoke.spec.
   - Problem: `web/src/routes/deployments/pending/+page.svelte` copied `deploymentIntents` into local component state and manually filtered rows after approval/rejection.
   - Resolution: derive `pendingIntents` reactively from the shared controlplane store and let approved/rejected 31967 updates drive the UI.
 
-### Classified but not treated as current-slice defects
+### Follow-up completed after verification
 
-- **REST-shaped deployment E2Es are stale evidence**
-  - `web/tests/e2e/deployment-workflow-critical.spec.js` and related smoke tests still encode the older REST CRUD workflow.
-  - They were not used to verify this slice because the current implementation routes core service/deployment writes through the public signer-first controlplane.
+- **REST-shaped deployment E2Es retired**
+  - The older REST-shaped deployment browser tests were removed once signer-first replacement coverage was in place.
+  - Active deployment browser evidence now points at the same signer-first contract captured by this slice.
 
 ## Confidence Assessment
 
@@ -86,6 +86,6 @@ Why high:
 Treat `CORE_SERVICE_TO_DEPLOYMENT` as fully verified for the current signer-first public service/deployment path.
 
 Recommended next moves:
-1. Classify or retire the remaining REST-shaped deployment E2Es so they stop implying the wrong product contract.
-2. Decide whether immediate post-create service list hydration should become an explicit release criterion once the projector timing is treated as normative behavior.
-3. Continue PSTF onboarding with the next adjacent slice that touches artifacts/builds or deployment run logs.
+1. Decide whether immediate post-create service list hydration should become an explicit release criterion once the projector timing is treated as normative behavior.
+2. Continue PSTF onboarding with the next adjacent slice that touches artifacts/builds or deployment run logs.
+3. Add signer-first replacements for service-detail edit/delete/rollback and deployment run-log/detail browser coverage.

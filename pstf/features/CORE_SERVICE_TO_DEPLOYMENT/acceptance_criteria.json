@@ -67,7 +67,7 @@
     }
   ],
   "coverage_notes": [
-    "Selected evidence intentionally excludes the older REST-shaped deployment E2Es as authoritative slice verification.",
+    "Older REST-shaped deployment E2Es were retired after this slice was verified so active browser evidence now aligns with the signer-first contract.",
     "The slice now includes direct unit evidence for the domain-specific public-controlplane command helpers and a browser E2E with no REST CRUD route mocks.",
     "A real route-level reactivity bug was found and fixed in `/deployments` and `/deployments/pending` during verification."
   ],

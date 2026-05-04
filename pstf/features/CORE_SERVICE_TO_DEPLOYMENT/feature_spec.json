@@ -18,7 +18,6 @@
     "web/tests/unit/controlplane-store.test.js",
     "web/tests/unit/public-controlplane.test.js",
     "web/tests/e2e/service-deployment-public-smoke.spec.js",
-    "web/tests/e2e/deployment-workflow-critical.spec.js",
     "docs/investigations/pstf-discovery-2026-05-03.md",
     "pstf/product_map.md",
     "pstf/spec_gap_report.md"
@@ -49,7 +48,7 @@
   "out_of_scope": [
     "encrypted deployment run log retrieval on `/deployments/runs/[id]`",
     "service secrets, notifications, orgs, payments, or other encrypted request domains",
-    "legacy REST compatibility endpoints except as stale evidence to classify",
+    "legacy REST compatibility endpoints as normative service/deployment behavior in this slice",
     "direct-runtime operator actions, adoption/import, and LLM deployment flows"
   ],
   "preconditions": [
@@ -121,10 +120,6 @@
     "backend canonical control-plane kinds documented in `docs/control-planes.md` and `docs/nostr-commands.md`"
   ],
   "ambiguities": [
-    {
-      "type": "observed_not_specified",
-      "note": "`web/tests/e2e/deployment-workflow-critical.spec.js` still models the old REST CRUD workflow and is not authoritative evidence for the current signer-first slice."
-    },
     {
       "type": "eventual_consistency_boundary",
       "note": "The backend emits terminal 7963 service-create results and publishes service registry projections through the projector path; immediate user-visible list hydration depends on projection timing and is not separately specified as part of this slice."

@@ -185,7 +185,7 @@ Primary files:
 - `web/src/lib/stores/public-controlplane.svelte.js`
 - `web/src/routes/services/+page.svelte`
 - `web/src/routes/deployments/+page.svelte`
-- `web/tests/e2e/deployment-workflow-critical.spec.js`
+- `web/tests/e2e/service-deployment-public-smoke.spec.js`
 
 ### Slice 3 — Adoption/import and direct-runtime operator flow
 Why third:
