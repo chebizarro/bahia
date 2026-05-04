@@ -1,85 +1,433 @@
 {
   "feature_id": "ENCRYPTED_CONTROL_PLANE_NOTIFICATIONS",
-  "status": "fully_verified",
+  "status": "draft",
   "criteria": [
     {
-      "id": "ECPN-AC-001",
-      "title": "Encrypted-request relay discovery is explicit",
-      "statement": "The browser must derive encrypted-request relay URLs only from `nostr.browser_encrypted_request_relays` and must not treat `nostr.browser_relays` as encrypted-request relays.",
+      "ac_id": "ECPN-AC-001",
+      "title": "Encrypted notifications fail locally when discovery does not advertise encrypted request support",
+      "type": "functional",
       "priority": "must",
-      "evidence_level": "high"
+      "assertion": "When notification operations are invoked and current system discovery does not advertise both `nostr.service_pubkey` and at least one `nostr.browser_encrypted_request_relays` value, the notifications store rejects locally before publish and does not call `requestEncryptedResult`.",
+      "preconditions": [
+        "The requester is using the browser notifications store.",
+        "`encryptedRequestsAvailable(info)` returns false for current or lazily loaded system info."
+      ],
+      "steps": [
+        "Invoke `listNotificationChannels()` or `listNotificationLogs()` from the notifications store.",
+        "Observe store-side availability checks before any transport publish call."
+      ],
+      "expected_result": "The operation throws an availability error, no encrypted request is published, and the corresponding store error field is populated.",
+      "negative_cases": [
+        "If the store proceeds to `requestEncryptedResult` when encrypted discovery is unavailable, the criterion fails.",
+        "If the store leaves stale channel or log data in place after an availability failure, the criterion fails."
+      ],
+      "observability": {
+        "logs": [],
+        "metrics": [],
+        "ui_signals": [
+          "Notifications list route renders an error state when channel loading fails.",
+          "Store error fields contain the availability message."
+        ],
+        "database_effects": []
+      },
+      "source_evidence": [
+        "web/src/lib/stores/notifications.svelte.js",
+        "web/tests/unit/notifications-store.test.js",
+        "pstf/features/ENCRYPTED_CONTROL_PLANE_NOTIFICATIONS/feature_spec.json"
+      ],
+      "requires_human_approval": false
     },
     {
-      "id": "ECPN-AC-002",
-      "title": "Encrypted transport availability is gated by system discovery",
-      "statement": "Sensitive browser stores must fail before publish when system discovery does not advertise both a Bahia service pubkey and encrypted-request relay URLs.",
+      "ac_id": "ECPN-AC-002",
+      "title": "Encrypted relay discovery excludes public browser relays",
+      "type": "security",
       "priority": "must",
-      "evidence_level": "high"
+      "assertion": "Encrypted notification transport derives relay URLs only from `nostr.browser_encrypted_request_relays` and must not treat `nostr.browser_relays` as eligible encrypted request/result relays.",
+      "preconditions": [
+        "System discovery contains `nostr.service_pubkey`.",
+        "System discovery may contain both `browser_relays` and `browser_encrypted_request_relays`."
+      ],
+      "steps": [
+        "Resolve encrypted relay URLs from system info.",
+        "Build or execute an encrypted notification request."
+      ],
+      "expected_result": "Only URLs advertised in `browser_encrypted_request_relays` are used for encrypted publish and result subscription.",
+      "negative_cases": [
+        "If a public relay URL from `browser_relays` is selected as an encrypted request relay, the criterion fails.",
+        "If encrypted availability becomes true with only `browser_relays` present, the criterion fails."
+      ],
+      "observability": {
+        "logs": [],
+        "metrics": [],
+        "ui_signals": [],
+        "database_effects": []
+      },
+      "source_evidence": [
+        "web/src/lib/nostr/encrypted-controlplane.js",
+        "web/tests/unit/encrypted-controlplane.test.js",
+        "web/tests/e2e/notifications-encrypted-smoke.spec.js"
+      ],
+      "requires_human_approval": false
     },
     {
-      "id": "ECPN-AC-003",
-      "title": "Encrypted requests are constructed for the Bahia service pubkey",
-      "statement": "The browser must build kind `5980` request events, encrypt the envelope to the Bahia service pubkey, and include `['p', service_pubkey]` plus `['encrypted', 'bahia-encrypted-v1']` tags.",
+      "ac_id": "ECPN-AC-003",
+      "title": "Encrypted notification requests are addressed to the Bahia service pubkey with the canonical wire marker",
+      "type": "security",
       "priority": "must",
-      "evidence_level": "high"
+      "assertion": "Each encrypted notification request is published as kind `5980`, encrypted to the Bahia service pubkey, and tagged with both `['p', service_pubkey]` and `['encrypted', 'bahia-encrypted-v1']`.",
+      "preconditions": [
+        "The browser signer is authenticated.",
+        "The encrypted transport has a valid 64-character service pubkey and at least one encrypted relay URL."
+      ],
+      "steps": [
+        "Build an encrypted request event for a notification operation such as `notifications.channels.list`.",
+        "Inspect the signed event before publish."
+      ],
+      "expected_result": "The request event carries kind `5980`, targets the service pubkey, contains ciphertext rather than plaintext JSON, and includes the canonical encrypted routing tag.",
+      "negative_cases": [
+        "If the request omits the `p` tag for the Bahia service pubkey, the criterion fails.",
+        "If the request omits the encrypted routing tag or leaks plaintext content, the criterion fails."
+      ],
+      "observability": {
+        "logs": [],
+        "metrics": [],
+        "ui_signals": [],
+        "database_effects": []
+      },
+      "source_evidence": [
+        "web/src/lib/nostr/encrypted-controlplane.js",
+        "web/tests/unit/encrypted-controlplane.test.js",
+        "internal/controlplane/encrypted_transport.go"
+      ],
+      "requires_human_approval": false
     },
     {
-      "id": "ECPN-AC-004",
-      "title": "Publish success requires at least one accepted OK",
-      "statement": "The browser transport must treat encrypted request publish as successful only when at least one encrypted-request relay returns an accepted OK, and must surface relay rejection reasons when all relays reject.",
+      "ac_id": "ECPN-AC-004",
+      "title": "Encrypted publish success requires at least one accepted OK response",
+      "type": "functional",
       "priority": "must",
-      "evidence_level": "high"
+      "assertion": "Publishing an encrypted notification request succeeds only when at least one encrypted relay returns `accepted=true`; when all relays reject, the caller receives the aggregated rejection reason.",
+      "preconditions": [
+        "An encrypted notification request event has been built.",
+        "At least one encrypted relay connection is available to the transport client."
+      ],
+      "steps": [
+        "Publish the encrypted request through the transport client.",
+        "Observe relay OK responses."
+      ],
+      "expected_result": "The publish path returns success only with at least one accepted OK and returns an error containing relay rejection details when every OK is rejected.",
+      "negative_cases": [
+        "If the transport treats `accepted=false` as success, the criterion fails.",
+        "If relay rejection reasons are discarded when all relays reject, the criterion fails."
+      ],
+      "observability": {
+        "logs": [],
+        "metrics": [],
+        "ui_signals": [
+          "Page-level notification actions surface the backend or relay error to the user via inline error or toast."
+        ],
+        "database_effects": []
+      },
+      "source_evidence": [
+        "web/src/lib/nostr/encrypted-controlplane.js",
+        "web/tests/unit/encrypted-controlplane.test.js"
+      ],
+      "requires_human_approval": false
     },
     {
-      "id": "ECPN-AC-005",
-      "title": "Encrypted results are strictly correlated",
-      "statement": "The browser must resolve encrypted results only when they match the request event id, requester pubkey, and Bahia service pubkey author, and it must ignore mismatched or spoofed results.",
+      "ac_id": "ECPN-AC-005",
+      "title": "Encrypted notification results are correlated by request id, requester pubkey, and service author",
+      "type": "data_integrity",
       "priority": "must",
-      "evidence_level": "high"
+      "assertion": "The encrypted transport resolves a notification request only from an encrypted result event whose author matches the Bahia service pubkey and whose tags contain both the originating request event id and the requester pubkey.",
+      "preconditions": [
+        "An encrypted notification request has been published.",
+        "The result subscription is active."
+      ],
+      "steps": [
+        "Deliver non-matching encrypted events with wrong `#e`, wrong `#p`, or a spoofed author.",
+        "Deliver the correctly correlated encrypted result event."
+      ],
+      "expected_result": "Non-matching events are ignored, the correctly correlated event resolves the request, and the subscription is cleaned up after terminal resolution.",
+      "negative_cases": [
+        "If a spoofed author can resolve the request, the criterion fails.",
+        "If duplicate correlated events trigger duplicate resolution or leave the subscription open, the criterion fails."
+      ],
+      "observability": {
+        "logs": [],
+        "metrics": [],
+        "ui_signals": [],
+        "database_effects": []
+      },
+      "source_evidence": [
+        "web/src/lib/nostr/encrypted-controlplane.js",
+        "web/tests/unit/encrypted-controlplane.test.js",
+        "internal/controlplane/encrypted_transport_test.go"
+      ],
+      "requires_human_approval": false
     },
     {
-      "id": "ECPN-AC-006",
-      "title": "Backend unauthorized and decrypt failures return encrypted terminal errors",
-      "statement": "The backend encrypted transport must publish correlated encrypted terminal error results for undecryptable requests and unauthorized requesters, and must not dispatch unauthorized requests to handlers.",
+      "ac_id": "ECPN-AC-006",
+      "title": "Notification channel listing populates canonical channel state through encrypted transport",
+      "type": "functional",
       "priority": "must",
-      "evidence_level": "high"
+      "assertion": "Loading the notifications list executes the `notifications.channels.list` encrypted operation, stores the returned channel array in `notificationState.channels`, clears prior channel errors, and turns off the loading indicator when the request completes.",
+      "preconditions": [
+        "The requester can access `/notifications`.",
+        "Encrypted request discovery and signer requirements are satisfied."
+      ],
+      "steps": [
+        "Load the notifications list route or call `listNotificationChannels()` directly.",
+        "Allow a successful correlated encrypted result to return one or more channels."
+      ],
+      "expected_result": "The page renders the notifications heading and returned channels, `channelsLoading` becomes false, and `channelsError` is null after success.",
+      "negative_cases": [
+        "If the route falls back to REST for the current first-party store path, the criterion fails.",
+        "If successful results do not replace the in-memory channel list, the criterion fails."
+      ],
+      "observability": {
+        "logs": [],
+        "metrics": [],
+        "ui_signals": [
+          "`/notifications` shows `Notifications` heading.",
+          "The returned channel name and destination are visible in the table."
+        ],
+        "database_effects": []
+      },
+      "source_evidence": [
+        "web/src/lib/stores/notifications.svelte.js",
+        "web/src/routes/notifications/+page.svelte",
+        "web/tests/unit/notifications-store.test.js",
+        "web/tests/e2e/notifications-encrypted-smoke.spec.js"
+      ],
+      "requires_human_approval": false
     },
     {
-      "id": "ECPN-AC-007",
-      "title": "Notifications use encrypted operations only",
-      "statement": "Notification channel list/create/update/test/delete and log retrieval must execute through encrypted request/result operations rather than direct REST calls in the current web store path.",
+      "ac_id": "ECPN-AC-007",
+      "title": "Notification channel mutations remain on encrypted operations and update local channel state deterministically",
+      "type": "data_integrity",
       "priority": "must",
-      "evidence_level": "high"
+      "assertion": "Creating, updating, testing, and deleting notification channels use only the encrypted operations `notifications.channels.create`, `notifications.channels.update`, `notifications.channels.test`, and `notifications.channels.delete`; create and update upsert the returned channel by id, and delete removes the deleted id from local channel state.",
+      "preconditions": [
+        "Encrypted request discovery and signer requirements are satisfied.",
+        "The notifications UI or store is able to invoke channel mutation actions."
+      ],
+      "steps": [
+        "Create a new channel through the notifications form or store.",
+        "Update an existing channel.",
+        "Send a test notification for that channel.",
+        "Delete the channel."
+      ],
+      "expected_result": "Only encrypted notification operations are invoked, created and updated channel payloads are reflected in local state, and deletion removes the channel from local state after a successful result.",
+      "negative_cases": [
+        "If create, update, test, or delete uses a direct REST channel endpoint in the current store path, the criterion fails.",
+        "If update creates duplicate local rows instead of upserting by id, the criterion fails."
+      ],
+      "observability": {
+        "logs": [],
+        "metrics": [],
+        "ui_signals": [
+          "Successful create shows a success toast and returns to `/notifications`.",
+          "Successful test shows a success toast naming the channel.",
+          "Successful delete removes the row from the channel table."
+        ],
+        "database_effects": []
+      },
+      "source_evidence": [
+        "web/src/lib/stores/notifications.svelte.js",
+        "web/src/routes/notifications/+page.svelte",
+        "web/src/routes/notifications/new/+page.svelte",
+        "web/tests/unit/notifications-store.test.js",
+        "web/tests/e2e/notifications-encrypted-smoke.spec.js"
+      ],
+      "requires_human_approval": false
     },
     {
-      "id": "ECPN-AC-008",
-      "title": "Terminal encrypted errors surface to callers",
-      "statement": "If an encrypted result carries terminal error status, the frontend notification store must surface the backend-provided error message to the caller and local error state.",
+      "ac_id": "ECPN-AC-008",
+      "title": "Encrypted notification logs are loaded only through the encrypted logs operation",
+      "type": "functional",
       "priority": "must",
-      "evidence_level": "high"
+      "assertion": "Retrieving notification delivery logs executes only `notifications.logs.list`, stores the returned entries in `notificationState.logs`, and sets `logsLoading` and `logsError` consistently around success and failure.",
+      "preconditions": [
+        "Encrypted request discovery and signer requirements are satisfied."
+      ],
+      "steps": [
+        "Invoke `listNotificationLogs()` with optional query parameters.",
+        "Observe store state before and after the encrypted result resolves."
+      ],
+      "expected_result": "The logs request uses the encrypted logs operation, successful results populate `notificationState.logs`, and failures clear logs and populate `logsError`.",
+      "negative_cases": [
+        "If delivery logs are fetched through a REST log endpoint in the current store path, the criterion fails.",
+        "If log failures leave stale log entries visible in `notificationState.logs`, the criterion fails."
+      ],
+      "observability": {
+        "logs": [],
+        "metrics": [],
+        "ui_signals": [
+          "The notifications log route can render encrypted-log results returned by the store."
+        ],
+        "database_effects": []
+      },
+      "source_evidence": [
+        "web/src/lib/stores/notifications.svelte.js",
+        "web/tests/unit/notifications-store.test.js",
+        "internal/controlplane/notification_encrypted_handlers.go"
+      ],
+      "requires_human_approval": false
     },
     {
-      "id": "ECPN-AC-009",
-      "title": "Sensitive browser traffic stays off public relays",
-      "statement": "The encrypted browser transport must not use public browser relay URLs for sensitive request publication or result subscription.",
+      "ac_id": "ECPN-AC-009",
+      "title": "Backend decrypt failures and unauthorized requests return terminal encrypted errors without dispatch",
+      "type": "security",
       "priority": "must",
-      "evidence_level": "high"
+      "assertion": "If an encrypted notification request cannot be decrypted or the requester pubkey is unauthorized for the targeted encrypted domain, Bahia publishes a correlated encrypted terminal error result and does not invoke the domain handler.",
+      "preconditions": [
+        "The backend encrypted transport is subscribed to encrypted request events.",
+        "A malformed or unauthorized notification request is delivered."
+      ],
+      "steps": [
+        "Send an undecryptable encrypted notification request, or send a decryptable request from an unauthorized pubkey.",
+        "Observe the backend encrypted result and handler behavior."
+      ],
+      "expected_result": "A correlated terminal error result is published with an error code/message, and the protected notification handler path is not executed for the rejected request.",
+      "negative_cases": [
+        "If the backend silently drops decrypt failures without a terminal result, the criterion fails.",
+        "If unauthorized requests reach the notification handler, the criterion fails."
+      ],
+      "observability": {
+        "logs": [],
+        "metrics": [],
+        "ui_signals": [
+          "Frontend callers surface the terminal error instead of proceeding as if the operation succeeded."
+        ],
+        "database_effects": []
+      },
+      "source_evidence": [
+        "internal/controlplane/encrypted_transport.go",
+        "internal/controlplane/encrypted_transport_test.go",
+        "internal/controlplane/notification_encrypted_handlers.go",
+        "pstf/features/ENCRYPTED_CONTROL_PLANE_NOTIFICATIONS/feature_spec.json"
+      ],
+      "requires_human_approval": false
     },
     {
-      "id": "ECPN-AC-010",
-      "title": "Feature-level browser journey evidence exists",
-      "statement": "The slice should have at least one end-to-end browser-level verification path proving the notifications journey on top of the encrypted transport in addition to unit and backend transport tests.",
+      "ac_id": "ECPN-AC-010",
+      "title": "Terminal encrypted errors are surfaced to users without losing valid entered data",
+      "type": "ux",
       "priority": "should",
-      "evidence_level": "medium"
+      "assertion": "When an encrypted notification create or update action fails after the user has entered valid data, the route shows a visible error message and leaves the current form field values intact so the user can correct or retry without re-entering valid inputs.",
+      "preconditions": [
+        "The notification create or edit form is open.",
+        "The user has entered syntactically valid form data."
+      ],
+      "steps": [
+        "Submit the form.",
+        "Return a terminal encrypted error from the store path."
+      ],
+      "expected_result": "A visible error is rendered in the form error region and the previously entered values remain in the form controls.",
+      "negative_cases": [
+        "If form submission failure clears valid fields, the criterion fails.",
+        "If the user receives no visible error signal after an encrypted terminal error, the criterion fails."
+      ],
+      "observability": {
+        "logs": [],
+        "metrics": [],
+        "ui_signals": [
+          "`NotificationChannelForm` renders `div.form-error[role=alert]` when `displayError` is non-empty.",
+          "The route-specific `saveError` is passed back into the form component after failed submit."
+        ],
+        "database_effects": []
+      },
+      "source_evidence": [
+        "web/src/routes/notifications/new/+page.svelte",
+        "web/src/routes/notifications/NotificationChannelForm.svelte",
+        "web/src/lib/stores/notifications.svelte.js"
+      ],
+      "requires_human_approval": false
+    },
+    {
+      "ac_id": "ECPN-AC-011",
+      "title": "Notifications routes expose labelled controls and alert regions for browser assistive technologies",
+      "type": "accessibility",
+      "priority": "should",
+      "assertion": "The notifications list and create flows expose semantic headings, form labels, and alert/status regions needed for browser-level automation and assistive technology to understand the page structure and error state.",
+      "preconditions": [
+        "The user can access `/notifications` or `/notifications/new`."
+      ],
+      "steps": [
+        "Load the notifications list route.",
+        "Load the create-notification route.",
+        "Trigger a form error in the channel form."
+      ],
+      "expected_result": "The list route exposes a top-level `Notifications` heading and labelled filter controls; the form route exposes a top-level `Create notification channel` heading, labelled required inputs, and an error container with `role=alert` when submission fails.",
+      "negative_cases": [
+        "If key filter or form controls are rendered without labels, the criterion fails.",
+        "If form submission errors are not exposed via an alert region, the criterion fails."
+      ],
+      "observability": {
+        "logs": [],
+        "metrics": [],
+        "ui_signals": [
+          "`/notifications` renders `h1` text `Notifications`.",
+          "`/notifications/new` renders `h1` text `Create notification channel`.",
+          "`NotificationChannelForm` error container uses `role=alert`."
+        ],
+        "database_effects": []
+      },
+      "source_evidence": [
+        "web/src/routes/notifications/+page.svelte",
+        "web/src/routes/notifications/new/+page.svelte",
+        "web/src/routes/notifications/NotificationChannelForm.svelte",
+        "web/tests/e2e/notifications-encrypted-smoke.spec.js"
+      ],
+      "requires_human_approval": false
+    },
+    {
+      "ac_id": "ECPN-AC-012",
+      "title": "Notifications browser journey stays on encrypted relays and off public relays end to end",
+      "type": "security",
+      "priority": "must",
+      "assertion": "In the first-party notifications browser journey, encrypted request publication and correlated result handling use only encrypted-request relays; the same journey must not publish sensitive notification payloads to public browser relays.",
+      "preconditions": [
+        "System discovery advertises both public and encrypted relay URLs.",
+        "The user is authenticated with a signer that supports encryption."
+      ],
+      "steps": [
+        "Load `/notifications`.",
+        "Create a notification channel.",
+        "Send a test notification.",
+        "Inspect the browser transport trace for publish relays and operations."
+      ],
+      "expected_result": "The trace contains encrypted notification operations such as `notifications.channels.list`, `notifications.channels.create`, and `notifications.channels.test`; every corresponding publish relay is an encrypted-request relay URL and none is a public browser relay URL.",
+      "negative_cases": [
+        "If the browser publishes notification requests to a public relay URL, the criterion fails.",
+        "If the encrypted browser journey still depends on a REST compatibility override, the criterion fails."
+      ],
+      "observability": {
+        "logs": [],
+        "metrics": [],
+        "ui_signals": [
+          "The notifications table shows the existing and newly created channels.",
+          "A success toast confirms the test notification was sent."
+        ],
+        "database_effects": []
+      },
+      "source_evidence": [
+        "web/tests/e2e/notifications-encrypted-smoke.spec.js",
+        "web/src/lib/nostr/encrypted-controlplane.js",
+        "web/src/lib/auth/route-access.js",
+        "web/tests/unit/route-access.test.js"
+      ],
+      "requires_human_approval": false
     }
   ],
   "coverage_notes": [
-    "The slice now has unit, backend transport, route-access, and browser E2E evidence.",
-    "Notifications encrypted browser access no longer depends on a test-only compatibility override because `/notifications` was removed from REST-compat route gating.",
-    "This slice still treats `/api/v1/system/info` as part of the effective feature contract because encrypted browser operations depend on its discovery fields."
+    "These criteria are grounded in the current signer-first encrypted notifications implementation and existing browser/unit evidence, not the legacy REST compatibility client.",
+    "No quantified performance budget is currently specified in the selected source evidence, so no explicit performance acceptance criterion is asserted here.",
+    "Observability fields are intentionally sparse where the implementation exposes user-visible state changes but no explicit log or metric contract in the selected evidence."
   ],
   "unresolved_questions": [
-    "Should AC-010 be upgraded from SHOULD to MUST for release gating?",
-    "Should the encrypted operation catalog be versioned/documented per domain as normative API surface?"
+    "Should encrypted-domain browser E2E breadth be expanded beyond list/create/test to require explicit edit/delete/log browser journeys as release-gating evidence?",
+    "Should the encrypted operation catalog be promoted to a first-class normative contract table alongside the public control-plane command families?"
   ]
 }
