@@ -1,6 +1,6 @@
 {
   "feature_id": "ENCRYPTED_CONTROL_PLANE_NOTIFICATIONS",
-  "status": "current_evidence",
+  "status": "fully_verified",
   "tests": [
     {
       "criterion_id": "ECPN-AC-001",
@@ -130,29 +130,24 @@
     },
     {
       "criterion_id": "ECPN-AC-010",
-      "test_id": "GAP-E2E-001",
-      "type": "gap",
-      "source": "selected test inventory",
-      "test_name": "notifications encrypted browser journey E2E",
-      "status": "missing",
-      "notes": "No selected browser E2E test currently proves the notifications page end-to-end over encrypted transport."
+      "test_id": "WEB-E2E-NOTIF-001",
+      "type": "e2e",
+      "source": "web/tests/e2e/notifications-encrypted-smoke.spec.js",
+      "test_name": "browser notifications flow uses encrypted request/result transport end-to-end",
+      "status": "passing",
+      "notes": "Covers list -> create -> return -> test action and asserts encrypted relay usage rather than public relay usage."
     }
   ],
   "coverage_summary": {
     "criteria_total": 10,
     "criteria_with_tests": 10,
-    "criteria_fully_passing": 9,
-    "criteria_with_known_gaps": [
-      "ECPN-AC-010"
-    ],
-    "known_gaps": [
-      "No selected browser E2E test for the notifications encrypted journey.",
-      "Selected evidence proves the transport and notification store strongly, but not a full UI workflow with a real signer and relay topology."
-    ]
+    "criteria_fully_passing": 10,
+    "criteria_with_known_gaps": [],
+    "known_gaps": []
   },
   "implementation_notes": [
-    "The backend/frontend transport contract is unusually well aligned for this slice.",
-    "Notifications are the strongest feature-domain proof for the encrypted transport family.",
-    "`/api/v1/system/info` must be treated as part of this feature’s effective contract even though it is not itself an encrypted operation."
+    "The slice now has passing browser E2E evidence in addition to unit and backend transport coverage.",
+    "Removing `/notifications` from route-level REST compatibility gating was required to make the E2E verification reflect actual product behavior rather than a harness override.",
+    "`/api/v1/system/info` remains a core part of the feature contract because the encrypted browser transport cannot bootstrap safely without it."
   ]
 }

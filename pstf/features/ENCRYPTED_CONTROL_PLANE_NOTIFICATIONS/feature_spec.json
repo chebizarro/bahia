@@ -1,7 +1,7 @@
 {
   "feature_id": "ENCRYPTED_CONTROL_PLANE_NOTIFICATIONS",
   "title": "Encrypted control plane for notifications and sensitive browser request/result flows",
-  "status": "grounded_draft",
+  "status": "fully_verified",
   "source_evidence": [
     "docs/control-planes.md",
     "internal/api/handlers/system.go",
@@ -16,7 +16,10 @@
     "internal/controlplane/encrypted_transport_test.go",
     "docs/investigations/pstf-discovery-2026-05-03.md",
     "pstf/product_map.md",
-    "pstf/spec_gap_report.md"
+    "pstf/spec_gap_report.md",
+    "web/tests/e2e/notifications-encrypted-smoke.spec.js",
+    "web/src/lib/auth/route-access.js",
+    "web/tests/unit/route-access.test.js"
   ],
   "actors": [
     {

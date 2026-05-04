@@ -22,7 +22,7 @@ describe('route access', () => {
   });
 
   it('does not require REST compatibility for migrated sensitive route families', () => {
-    for (const pathname of ['/payments', '/orgs']) {
+    for (const pathname of ['/payments', '/notifications', '/orgs']) {
       const result = canAccessRoute({
         pathname,
         authState: { backendAuthenticated: false },

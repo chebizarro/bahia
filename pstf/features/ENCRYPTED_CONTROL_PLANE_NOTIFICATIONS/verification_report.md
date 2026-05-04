@@ -2,30 +2,39 @@
 
 ## Summary
 
-This PSTF slice is grounded and largely verified at the unit and backend transport layers.
+This PSTF slice is now fully verified against the selected evidence set.
 
-The encrypted control-plane contract for notifications is well-supported by:
+The encrypted control-plane contract for notifications is supported by:
 - current control-plane docs
-- frontend encrypted transport tests
-- frontend notification-store tests
+- frontend encrypted transport unit tests
+- frontend notification-store unit tests
 - backend encrypted transport tests
+- route-access unit coverage for signer-first access
+- a browser E2E proving the notifications journey over encrypted transport
 
-The main remaining weakness is the lack of selected browser E2E evidence for the full notifications journey over the encrypted transport.
+A real product inconsistency was found during verification:
+- `/notifications` was still gated by REST compatibility in `route-access.js`
+
+That gate was removed, the route-access unit coverage was updated, and the browser E2E now passes without any test-only compatibility override.
 
 ## Commands Run
 
 ```bash
-npm --prefix web run test:unit -- tests/unit/encrypted-controlplane.test.js tests/unit/notifications-store.test.js
+npm --prefix web run test:unit -- tests/unit/route-access.test.js tests/unit/encrypted-controlplane.test.js tests/unit/notifications-store.test.js
 go test ./internal/controlplane -run 'TestEncrypted'
+npm --prefix web run test:e2e -- tests/e2e/notifications-encrypted-smoke.spec.js
 ```
 
 ## Results
 
-- `npm --prefix web run test:unit -- tests/unit/encrypted-controlplane.test.js tests/unit/notifications-store.test.js`
+- `npm --prefix web run test:unit -- tests/unit/route-access.test.js tests/unit/encrypted-controlplane.test.js tests/unit/notifications-store.test.js`
   - **passed**
-  - 2 files, 12 tests
+  - 3 files, 17 tests
 - `go test ./internal/controlplane -run 'TestEncrypted'`
   - **passed**
+- `npm --prefix web run test:e2e -- tests/e2e/notifications-encrypted-smoke.spec.js`
+  - **passed**
+  - 1 Playwright browser E2E
 
 ## Acceptance Criteria Status
 
@@ -40,43 +49,47 @@ go test ./internal/controlplane -run 'TestEncrypted'
 | ECPN-AC-007 | pass | Notification channel/log operations are covered as encrypted-only store paths. |
 | ECPN-AC-008 | pass | Terminal encrypted errors surface to callers. |
 | ECPN-AC-009 | pass | Public relay set is not treated as encrypted-request relay set. |
-| ECPN-AC-010 | gap | No selected browser E2E proves the notifications page over encrypted transport end-to-end. |
+| ECPN-AC-010 | pass | Browser E2E now proves the notifications page over encrypted transport end-to-end. |
 
 ## Test Matrix Status
 
 - Criteria total: 10
-- Criteria fully passing: 9
-- Criteria with known gaps: 1
-- Overall current-evidence status: **strong but not complete**
+- Criteria with tests: 10
+- Criteria fully passing: 10
+- Known gaps in current selected evidence: 0
+- Overall slice status: **fully verified**
 
 ## Defects
 
-No implementation defect was identified while producing this PSTF slice.
+### Resolved during verification
+- **Stale route gate for `/notifications`**
+  - Problem: the route still required REST compatibility even though the page uses encrypted signer-first transport.
+  - Evidence: browser E2E initially needed a test-only override to access `/notifications`.
+  - Resolution: removed `/notifications` from `ROUTE_COMPATIBILITY_REQUIREMENTS` and updated `web/tests/unit/route-access.test.js`.
 
-The main issue is a verification/documentation gap rather than a confirmed behavioral defect:
-- missing browser E2E coverage for the notifications encrypted journey
-- encrypted operation catalog not documented as comprehensively as the public control-plane families
+No remaining behavioral defects were identified in the selected slice.
 
 ## Ambiguities / Human Decisions Needed
 
-1. Should encrypted-domain browser journeys have mandatory E2E coverage before being considered production-complete?
-2. Should the encrypted operation catalog become a first-class normative spec table per domain?
-3. Is the current split between unit/backend transport verification and route-level verification acceptable for this slice?
+1. Should the encrypted operation catalog be promoted to a first-class normative table alongside public command families?
+2. Is one browser E2E for notifications sufficient release evidence for the encrypted control-plane slice, or should additional edit/delete/log scenarios be required?
+
+These do not block the current slice from being considered fully verified against the selected acceptance criteria.
 
 ## Confidence Assessment
 
-**Confidence: medium-high**
+**Confidence: high**
 
-Why not full high:
-- The transport and store behavior are strongly evidenced.
-- The backend decrypt/authorize/result flow is strongly evidenced.
-- The selected evidence does not yet include a full browser E2E proof for the notifications feature journey.
+Why high:
+- Unit tests cover relay discovery, request construction, publish OK handling, result correlation, and notification store behavior.
+- Backend tests cover decrypt failure, unauthorized requester handling, and encrypted result publication.
+- Browser E2E now proves an actual notifications journey over encrypted transport without relying on a compatibility-gate override.
 
 ## Recommendation
 
-This slice is suitable as the **first PSTF onboarding slice**.
+Treat `ENCRYPTED_CONTROL_PLANE_NOTIFICATIONS` as the reference PSTF onboarding slice.
 
-Next actions:
-1. Treat the current artifacts as the working feature contract.
-2. Add at least one browser E2E path for notifications over encrypted transport.
-3. Decide whether to formalize the encrypted operation catalog at the same level as the public command families.
+Recommended next moves:
+1. Reuse this slice structure for the core service-to-deployment slice.
+2. Decide whether to formalize the encrypted operation catalog as a normative spec table.
+3. Optionally expand browser E2E coverage to edit/delete/log scenarios if you want broader regression protection, but this is no longer required to call the current slice fully verified.

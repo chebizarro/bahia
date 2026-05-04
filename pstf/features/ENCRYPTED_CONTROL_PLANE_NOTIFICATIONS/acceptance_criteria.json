@@ -1,6 +1,6 @@
 {
   "feature_id": "ENCRYPTED_CONTROL_PLANE_NOTIFICATIONS",
-  "status": "grounded_draft",
+  "status": "fully_verified",
   "criteria": [
     {
       "id": "ECPN-AC-001",
@@ -74,9 +74,9 @@
     }
   ],
   "coverage_notes": [
-    "Current evidence is strongest at unit and backend transport levels.",
-    "Selected evidence does not include a notifications browser E2E test, so AC-010 is currently a known gap rather than a passing criterion.",
-    "This slice deliberately treats `/api/v1/system/info` as part of the feature contract because the browser cannot safely bootstrap encrypted operations without it."
+    "The slice now has unit, backend transport, route-access, and browser E2E evidence.",
+    "Notifications encrypted browser access no longer depends on a test-only compatibility override because `/notifications` was removed from REST-compat route gating.",
+    "This slice still treats `/api/v1/system/info` as part of the effective feature contract because encrypted browser operations depend on its discovery fields."
   ],
   "unresolved_questions": [
     "Should AC-010 be upgraded from SHOULD to MUST for release gating?",
