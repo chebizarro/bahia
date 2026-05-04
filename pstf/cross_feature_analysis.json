@@ -1,0 +1,502 @@
+{
+  "generated_at": "2026-05-04",
+  "analysis_scope": {
+    "completed_or_in_progress_features": [
+      {
+        "feature_id": "CORE_SERVICE_TO_DEPLOYMENT",
+        "status": "fully_verified"
+      },
+      {
+        "feature_id": "ENCRYPTED_CONTROL_PLANE_NOTIFICATIONS",
+        "status": "fully_verified"
+      },
+      {
+        "feature_id": "SIGNER_FIRST_OPERATOR_ADOPTION_RUNTIME",
+        "status": "fully_verified"
+      },
+      {
+        "feature_id": "LLM_ROUTE_RELEASE_DEPLOYMENT",
+        "status": "approved_non_rollback_slice"
+      }
+    ],
+    "promoted_backlog_candidates_considered": [
+      "SYSTEM_DISCOVERY_RELAY_BOOTSTRAP",
+      "HIVECI_RESULT_INGESTION_PIPELINE",
+      "SOUL_FACTORY_PROVISIONING_TRACKING",
+      "ENCRYPTED_DEPLOYMENT_RUN_LOGS",
+      "ENCRYPTED_SERVICE_SECRETS_CRUD_REVEAL",
+      "ORG_MEMBERSHIP_INVITES_ENCRYPTED_ADMIN",
+      "PAYMENTS_HISTORY_FILTER_EXPORT"
+    ]
+  },
+  "overall_risk": "high",
+  "portfolio_recommendation": "request_hitl_and_expand_cross_feature_coverage_before_broad_release_planning",
+  "feature_interaction_graph": {
+    "nodes": [
+      {"feature_id": "SYSTEM_DISCOVERY_RELAY_BOOTSTRAP", "status": "promoted_candidate"},
+      {"feature_id": "CORE_SERVICE_TO_DEPLOYMENT", "status": "fully_verified"},
+      {"feature_id": "ENCRYPTED_CONTROL_PLANE_NOTIFICATIONS", "status": "fully_verified"},
+      {"feature_id": "SIGNER_FIRST_OPERATOR_ADOPTION_RUNTIME", "status": "fully_verified"},
+      {"feature_id": "LLM_ROUTE_RELEASE_DEPLOYMENT", "status": "approved_non_rollback_slice"},
+      {"feature_id": "ENCRYPTED_DEPLOYMENT_RUN_LOGS", "status": "ranked_candidate"},
+      {"feature_id": "HIVECI_RESULT_INGESTION_PIPELINE", "status": "promoted_candidate"},
+      {"feature_id": "SOUL_FACTORY_PROVISIONING_TRACKING", "status": "promoted_candidate"},
+      {"feature_id": "ENCRYPTED_SERVICE_SECRETS_CRUD_REVEAL", "status": "ranked_candidate"},
+      {"feature_id": "ORG_MEMBERSHIP_INVITES_ENCRYPTED_ADMIN", "status": "ranked_candidate"},
+      {"feature_id": "PAYMENTS_HISTORY_FILTER_EXPORT", "status": "ranked_candidate"}
+    ],
+    "edges": [
+      {
+        "source": "SYSTEM_DISCOVERY_RELAY_BOOTSTRAP",
+        "target": "CORE_SERVICE_TO_DEPLOYMENT",
+        "relationship": "gates",
+        "evidence": [
+          "`CORE_SERVICE_TO_DEPLOYMENT/feature_spec.json` preconditions require `/api/v1/system/info` to advertise relay-read-model capability, public relay URLs, and a service pubkey.",
+          "`pstf/feature_backlog.md` ranks `SYSTEM_DISCOVERY_RELAY_BOOTSTRAP` first because every relay-backed browser flow depends on this contract."
+        ]
+      },
+      {
+        "source": "SYSTEM_DISCOVERY_RELAY_BOOTSTRAP",
+        "target": "ENCRYPTED_CONTROL_PLANE_NOTIFICATIONS",
+        "relationship": "gates",
+        "evidence": [
+          "`ENCRYPTED_CONTROL_PLANE_NOTIFICATIONS/feature_spec.json` preconditions require `/api/v1/system/info` to advertise `nostr.service_pubkey` and `nostr.browser_encrypted_request_relays`.",
+          "`pstf/spec_gap_report.md` marks `/api/v1/system/info` as a critical under-documented contract."
+        ]
+      },
+      {
+        "source": "SYSTEM_DISCOVERY_RELAY_BOOTSTRAP",
+        "target": "LLM_ROUTE_RELEASE_DEPLOYMENT",
+        "relationship": "gates",
+        "evidence": [
+          "`LLM_ROUTE_RELEASE_DEPLOYMENT/feature_spec.json` dependencies require `/api/v1/system/info` feature-gated advertisement of LLM kinds.",
+          "`internal/api/handlers/system.go` exposes public relay, encrypted relay, service pubkey, and control-plane kind advertisement from one payload."
+        ]
+      },
+      {
+        "source": "SYSTEM_DISCOVERY_RELAY_BOOTSTRAP",
+        "target": "SIGNER_FIRST_OPERATOR_ADOPTION_RUNTIME",
+        "relationship": "produces_for",
+        "evidence": [
+          "`cmd/cli/operator_nostr.go` resolves operator relays from `BrowserRelays` and `SidecarURL` in `/api/v1/system/info` when flags and env are absent.",
+          "`SIGNER_FIRST_OPERATOR_ADOPTION_RUNTIME/feature_spec.json` preconditions allow relay discovery from `/api/v1/system/info`."
+        ]
+      },
+      {
+        "source": "CORE_SERVICE_TO_DEPLOYMENT",
+        "target": "LLM_ROUTE_RELEASE_DEPLOYMENT",
+        "relationship": "shares_state_with",
+        "evidence": [
+          "Both slices depend on `web/src/lib/stores/controlplane.svelte.js` for Bahia-signed relay read models and activity feeds.",
+          "`controlplane.svelte.js` maintains both deployment collections and LLM route/route-state collections in one shared store."
+        ]
+      },
+      {
+        "source": "CORE_SERVICE_TO_DEPLOYMENT",
+        "target": "SIGNER_FIRST_OPERATOR_ADOPTION_RUNTIME",
+        "relationship": "overlaps_with",
+        "evidence": [
+          "Both slices standardize public signer-first request/result behavior and explicit pre/post-acceptance semantics.",
+          "Both slices exclude REST as the normative execution contract."
+        ]
+      },
+      {
+        "source": "ENCRYPTED_CONTROL_PLANE_NOTIFICATIONS",
+        "target": "ENCRYPTED_SERVICE_SECRETS_CRUD_REVEAL",
+        "relationship": "gates",
+        "evidence": [
+          "`ENCRYPTED_CONTROL_PLANE_NOTIFICATIONS/verification_report.md` recommends using this slice as the reference pattern for the next signer-first encrypted slice.",
+          "`pstf/feature_backlog.md` identifies secrets as another encrypted browser domain on the same transport family."
+        ]
+      },
+      {
+        "source": "ENCRYPTED_CONTROL_PLANE_NOTIFICATIONS",
+        "target": "ORG_MEMBERSHIP_INVITES_ENCRYPTED_ADMIN",
+        "relationship": "gates",
+        "evidence": [
+          "Notifications proves the encrypted browser request/result transport; org/member/invite flows are explicitly called out as sharing that transport family.",
+          "`pstf/feature_backlog.md` ranks org membership/invites as a separate encrypted admin slice."
+        ]
+      },
+      {
+        "source": "ENCRYPTED_CONTROL_PLANE_NOTIFICATIONS",
+        "target": "PAYMENTS_HISTORY_FILTER_EXPORT",
+        "relationship": "gates",
+        "evidence": [
+          "`pstf/spec_gap_report.md` identifies payments as another encrypted domain with an under-explained transport split.",
+          "`pstf/feature_backlog.md` ranks payment history/filter/export as a separate encrypted slice."
+        ]
+      },
+      {
+        "source": "CORE_SERVICE_TO_DEPLOYMENT",
+        "target": "ENCRYPTED_DEPLOYMENT_RUN_LOGS",
+        "relationship": "depends_on",
+        "evidence": [
+          "`CORE_SERVICE_TO_DEPLOYMENT/feature_spec.json` explicitly places encrypted run-log retrieval out of scope while `/deployments/runs/[id]` remains part of the deployment journey.",
+          "`pstf/feature_backlog.md` ranks `ENCRYPTED_DEPLOYMENT_RUN_LOGS` as a separate partially mapped candidate."
+        ]
+      },
+      {
+        "source": "ENCRYPTED_CONTROL_PLANE_NOTIFICATIONS",
+        "target": "ENCRYPTED_DEPLOYMENT_RUN_LOGS",
+        "relationship": "shares_state_with",
+        "evidence": [
+          "Both use the encrypted browser request/result transport family driven by `web/src/lib/nostr/encrypted-controlplane.js` and backend encrypted handlers.",
+          "`internal/controlplane/encrypted_route_handlers.go` hosts deployment run-log retrieval on the same encrypted transport family."
+        ]
+      },
+      {
+        "source": "HIVECI_RESULT_INGESTION_PIPELINE",
+        "target": "CORE_SERVICE_TO_DEPLOYMENT",
+        "relationship": "produces_for",
+        "evidence": [
+          "`pstf/feature_backlog.md` describes the Hive-CI slice as the CI/OCI bridge into build-artifact behavior.",
+          "`CORE_SERVICE_TO_DEPLOYMENT/feature_spec.json` includes artifacts and builds in the relay bootstrap and deployment intent journey."
+        ]
+      },
+      {
+        "source": "SOUL_FACTORY_PROVISIONING_TRACKING",
+        "target": "SIGNER_FIRST_OPERATOR_ADOPTION_RUNTIME",
+        "relationship": "conflicts_with",
+        "evidence": [
+          "`pstf/spec_gap_report.md` states Soul provisioning still uses timeout-based failure behavior.",
+          "The repository-level AGENTS instructions require event-driven completion and forbid timeout-based completion logic for signer-first/event-driven flows."
+        ]
+      }
+    ]
+  },
+  "issues": [
+    {
+      "issue_id": "XFA-001",
+      "title": "System discovery and relay bootstrap remain an unverified shared contract even though they gate every verified relay-backed slice",
+      "severity": "major",
+      "category": "spec_gap",
+      "confidence": "proven",
+      "affected_features": [
+        "CORE_SERVICE_TO_DEPLOYMENT",
+        "ENCRYPTED_CONTROL_PLANE_NOTIFICATIONS",
+        "SIGNER_FIRST_OPERATOR_ADOPTION_RUNTIME",
+        "LLM_ROUTE_RELEASE_DEPLOYMENT",
+        "SYSTEM_DISCOVERY_RELAY_BOOTSTRAP"
+      ],
+      "summary": "The current portfolio treats `/api/v1/system/info` as normative for public relay discovery, encrypted relay discovery, service pubkey discovery, and control-plane kind advertisement, but no completed PSTF slice yet verifies that contract directly as a first-class product feature.",
+      "evidence": [
+        "`pstf/spec_gap_report.md` marks `/api/v1/system/info` and relay-read-model-first frontend behavior as high-risk missing specification areas.",
+        "`pstf/feature_backlog.md` ranks `SYSTEM_DISCOVERY_RELAY_BOOTSTRAP` first because every relay-backed browser flow depends on it.",
+        "`internal/api/handlers/system.go` emits `browser_relays`, `browser_encrypted_request_relays`, `sidecar_url`, `service_pubkey`, and control-plane kinds from the same payload.",
+        "Completed slices for core deployments, encrypted notifications, operator signer-first CLI discovery, and LLM all list `/api/v1/system/info` as a dependency or precondition."
+      ],
+      "recommended_actions": [
+        {
+          "action": "create_new_feature_slice",
+          "target": "SYSTEM_DISCOVERY_RELAY_BOOTSTRAP",
+          "details": "Promote this slice before broad release planning so the shared contract is verified once rather than assumed by downstream slices."
+        },
+        {
+          "action": "add_cross_feature_test",
+          "target": "system_info_contract_consumers",
+          "details": "Add one contract test that proves the same `/api/v1/system/info` payload satisfies browser public bootstrap, browser encrypted transport gating, and operator CLI relay discovery."
+        }
+      ]
+    },
+    {
+      "issue_id": "XFA-002",
+      "title": "No cross-feature browser test proves mixed public and encrypted flows stay separated while sharing the same authenticated session and discovery payload",
+      "severity": "major",
+      "category": "test_gap",
+      "confidence": "proven",
+      "affected_features": [
+        "CORE_SERVICE_TO_DEPLOYMENT",
+        "ENCRYPTED_CONTROL_PLANE_NOTIFICATIONS",
+        "LLM_ROUTE_RELEASE_DEPLOYMENT",
+        "SYSTEM_DISCOVERY_RELAY_BOOTSTRAP"
+      ],
+      "summary": "The portfolio has per-slice public and encrypted browser evidence, but no test proves that one browser session can bootstrap from one system-info contract, execute public signer-first flows and encrypted flows, and preserve the public-vs-encrypted relay boundary end to end.",
+      "evidence": [
+        "`CORE_SERVICE_TO_DEPLOYMENT/verification_report.md` points to `service-deployment-public-smoke.spec.js` for the public browser journey.",
+        "`ENCRYPTED_CONTROL_PLANE_NOTIFICATIONS/verification_report.md` points to `notifications-encrypted-smoke.spec.js` and `notifications-form-error.spec.js` for encrypted browser journeys.",
+        "`LLM_ROUTE_RELEASE_DEPLOYMENT/verification_report.md` points to `llm-route-release-deployment.spec.js` for the dedicated `/llm` browser flow.",
+        "None of the verified reports records a combined browser scenario spanning both public and encrypted flows under one authenticated session and one discovery payload.",
+        "`pstf/spec_gap_report.md` explicitly calls the mixed transport model a high-risk area."
+      ],
+      "recommended_actions": [
+        {
+          "action": "add_cross_feature_test",
+          "target": "web/tests/e2e/mixed-controlplane-transport.spec.js",
+          "details": "Exercise one authenticated browser session that loads `/api/v1/system/info`, executes one public service/deployment or LLM command, executes one encrypted notifications command, and asserts the correct relay set is used for each flow."
+        },
+        {
+          "action": "update_existing_acceptance_criteria",
+          "target": [
+            "CORE_SERVICE_TO_DEPLOYMENT",
+            "ENCRYPTED_CONTROL_PLANE_NOTIFICATIONS",
+            "LLM_ROUTE_RELEASE_DEPLOYMENT"
+          ],
+          "details": "Add explicit cross-slice boundary notes so public success evidence cannot silently stand in for encrypted separation evidence, or vice versa."
+        }
+      ]
+    },
+    {
+      "issue_id": "XFA-003",
+      "title": "Transport policy is fragmented across feature slices instead of being specified once as a shared portfolio rule",
+      "severity": "major",
+      "category": "spec_gap",
+      "confidence": "proven",
+      "affected_features": [
+        "CORE_SERVICE_TO_DEPLOYMENT",
+        "ENCRYPTED_CONTROL_PLANE_NOTIFICATIONS",
+        "SIGNER_FIRST_OPERATOR_ADOPTION_RUNTIME",
+        "LLM_ROUTE_RELEASE_DEPLOYMENT",
+        "PAYMENTS_HISTORY_FILTER_EXPORT",
+        "ORG_MEMBERSHIP_INVITES_ENCRYPTED_ADMIN",
+        "ENCRYPTED_SERVICE_SECRETS_CRUD_REVEAL",
+        "ENCRYPTED_DEPLOYMENT_RUN_LOGS"
+      ],
+      "summary": "Each slice states its own transport boundary, but there is no single approved policy that defines when a browser flow must use public signer-first events, when it must use encrypted request/result transport, and when compatibility-only REST/NIP-98 fallback is acceptable.",
+      "evidence": [
+        "`pstf/spec_gap_report.md` describes the mixed transport model as high-risk and explicitly calls public-vs-encrypted separation security-critical.",
+        "`web/src/lib/auth/route-access.js` contains route-level REST compatibility machinery, but `ROUTE_COMPATIBILITY_REQUIREMENTS` is empty, so the portfolio-level compatibility map is still implicit rather than explicit.",
+        "`CORE_SERVICE_TO_DEPLOYMENT/feature_spec.json` excludes encrypted request kind `5980` from the approved public deployment flow.",
+        "`ENCRYPTED_CONTROL_PLANE_NOTIFICATIONS/feature_spec.json` requires `browser_encrypted_request_relays` and forbids treating public relay URLs as encrypted request relays.",
+        "`SIGNER_FIRST_OPERATOR_ADOPTION_RUNTIME/feature_spec.json` permits explicit HTTP fallback only for pre-acceptance failures.",
+        "`LLM_ROUTE_RELEASE_DEPLOYMENT/hitl_decisions.md` removes operational REST mutations from the intended product contract."
+      ],
+      "recommended_actions": [
+        {
+          "action": "request_hitl_decision",
+          "target": "shared_transport_policy",
+          "details": "Decide whether Bahia needs a dedicated shared transport-policy slice now, or whether transport governance remains embedded per feature family."
+        },
+        {
+          "action": "create_new_feature_slice",
+          "target": "SYSTEM_DISCOVERY_RELAY_BOOTSTRAP_or_TRANSPORT_POLICY",
+          "details": "If HITL chooses a shared rule, create a small slice that defines discovery, public signer-first, encrypted browser, and compatibility fallback boundaries once."
+        }
+      ],
+      "proposed_hitl_question": {
+        "question": "How should transport policy be governed across public browser flows, encrypted browser flows, and compatibility-only operator/browser fallback?",
+        "type": "single_choice",
+        "options": [
+          "Create one dedicated shared transport-policy slice now and update dependent features to reference it",
+          "Keep transport policy embedded per feature slice",
+          "Standardize browser transport now, but keep operator fallback policy feature-specific",
+          "Defer and accept the current cross-feature transport-policy risk for this release"
+        ]
+      }
+    },
+    {
+      "issue_id": "XFA-004",
+      "title": "Deployment run logs are a broken handoff between the verified public deployment journey and the encrypted transport family",
+      "severity": "major",
+      "category": "correctness",
+      "confidence": "proven",
+      "affected_features": [
+        "CORE_SERVICE_TO_DEPLOYMENT",
+        "ENCRYPTED_CONTROL_PLANE_NOTIFICATIONS",
+        "ENCRYPTED_DEPLOYMENT_RUN_LOGS"
+      ],
+      "summary": "The public deployment slice verifies the main deployment journey, but the deployment-detail run-log experience remains outside that slice and also outside the encrypted notifications slice. That leaves a user-visible deployment subflow without integrated acceptance coverage.",
+      "evidence": [
+        "`CORE_SERVICE_TO_DEPLOYMENT/feature_spec.json` marks encrypted deployment run-log retrieval on `/deployments/runs/[id]` out of scope.",
+        "`CORE_SERVICE_TO_DEPLOYMENT/verification_report.md` recommends adding signer-first replacements for deployment run-log/detail browser coverage.",
+        "`pstf/feature_backlog.md` ranks `ENCRYPTED_DEPLOYMENT_RUN_LOGS` as a separate partially mapped feature candidate.",
+        "`internal/controlplane/encrypted_route_handlers.go` hosts encrypted route handlers for deployment run-log retrieval on the same transport family as other encrypted operations."
+      ],
+      "recommended_actions": [
+        {
+          "action": "create_new_feature_slice",
+          "target": "ENCRYPTED_DEPLOYMENT_RUN_LOGS",
+          "details": "Promote a bounded slice for encrypted run-log retrieval and rendering on the deployment detail journey."
+        },
+        {
+          "action": "add_cross_feature_test",
+          "target": "deployment_history_to_run_logs",
+          "details": "Cover the handoff from public deployment history/detail to encrypted run-log retrieval in one deterministic browser scenario."
+        }
+      ]
+    },
+    {
+      "issue_id": "XFA-005",
+      "title": "Rollback policy is not standardized across deployment domains",
+      "severity": "major",
+      "category": "spec_gap",
+      "confidence": "proven",
+      "affected_features": [
+        "CORE_SERVICE_TO_DEPLOYMENT",
+        "LLM_ROUTE_RELEASE_DEPLOYMENT"
+      ],
+      "summary": "Rollback is adjacent to both deployment domains, but one slice leaves rollback follow-up coverage for later and the other explicitly defers all rollback acceptance criteria because semantics are not approved. That makes rollback a portfolio-level policy gap, not only an LLM-local gap.",
+      "evidence": [
+        "`LLM_ROUTE_RELEASE_DEPLOYMENT/hitl_decisions.md` records HITL-004 deferring all rollback acceptance criteria until replacement semantics are approved.",
+        "`LLM_ROUTE_RELEASE_DEPLOYMENT/feature_spec.json` keeps rollback in feature scope but classifies the current target-selection rule as FIX rather than intended behavior.",
+        "`CORE_SERVICE_TO_DEPLOYMENT/verification_report.md` recommends adding signer-first replacements for service-detail edit/delete/rollback in future coverage."
+      ],
+      "recommended_actions": [
+        {
+          "action": "request_hitl_decision",
+          "target": "shared_rollback_policy",
+          "details": "Decide whether rollback semantics should be standardized across service deployments and LLM deployments, or remain domain-specific."
+        },
+        {
+          "action": "create_new_feature_slice",
+          "target": "ROLLBACK_POLICY_OR_DOMAIN_SPECIFIC_ROLLBACK_SLICES",
+          "details": "Use the HITL decision to determine whether to create one shared rollback-policy slice or separate domain-specific rollback follow-up slices."
+        }
+      ],
+      "proposed_hitl_question": {
+        "question": "How should rollback target-selection and user-visible semantics be handled across core service deployments and LLM deployments?",
+        "type": "single_choice",
+        "options": [
+          "Standardize one rollback policy across both domains",
+          "Keep rollback domain-specific and verify each slice separately",
+          "Defer rollback standardization and create a dedicated rollback-policy slice",
+          "Exclude rollback from the current release train entirely until a policy is approved"
+        ]
+      }
+    },
+    {
+      "issue_id": "XFA-006",
+      "title": "The promoted Hive-CI slice produces artifacts/build state consumed by deployments, but the handoff is still not end-to-end proven",
+      "severity": "major",
+      "category": "test_gap",
+      "confidence": "proven",
+      "affected_features": [
+        "HIVECI_RESULT_INGESTION_PIPELINE",
+        "CORE_SERVICE_TO_DEPLOYMENT"
+      ],
+      "summary": "Deployment-facing slices assume artifact/build availability, but the ingestion path that should populate that state is still called out as under-proven.",
+      "evidence": [
+        "`pstf/spec_gap_report.md` states the selected CI-to-registry-to-artifact integration file is mostly scaffold and does not prove the flow end to end.",
+        "`pstf/backlog_decisions.md` records `HIVECI_RESULT_INGESTION_PIPELINE` as one of the promoted next slices.",
+        "`pstf/feature_backlog.md` describes the Hive-CI slice as the CI/OCI bridge into the build-artifact pipeline."
+      ],
+      "recommended_actions": [
+        {
+          "action": "create_new_feature_slice",
+          "target": "HIVECI_RESULT_INGESTION_PIPELINE",
+          "details": "Complete this promoted slice before claiming the artifact/build side of the deployment journey is portfolio-complete."
+        },
+        {
+          "action": "add_cross_feature_test",
+          "target": "hiveci_to_artifact_to_deploy",
+          "details": "Add an integration scenario that proves CI result ingestion creates or enriches the artifact/build state that downstream deployment flows depend on."
+        }
+      ]
+    },
+    {
+      "issue_id": "XFA-007",
+      "title": "PSTF artifact refresh sequencing is inconsistent across the portfolio",
+      "severity": "minor",
+      "category": "operability",
+      "confidence": "proven",
+      "affected_features": [
+        "LLM_ROUTE_RELEASE_DEPLOYMENT"
+      ],
+      "summary": "At least one downstream artifact remained stale after later verification work, which means portfolio-level reporting can drift unless artifact refresh order is treated as a shared process rule.",
+      "evidence": [
+        "`pstf/features/LLM_ROUTE_RELEASE_DEPLOYMENT/adversarial_review.json` still says no coverage artifact exists and recommends coverage generation.",
+        "`pstf/features/LLM_ROUTE_RELEASE_DEPLOYMENT/confidence_report.json` now records coverage artifacts and a 0.93 approved confidence score.",
+        "This is not a product bug, but it is a real process inconsistency in the PSTF artifact set."
+      ],
+      "recommended_actions": [
+        {
+          "action": "update_existing_acceptance_criteria",
+          "target": "PSTF_process",
+          "details": "Document artifact refresh order for follow-up steps such as confidence and adversarial review so later evidence cannot leave stale contradictory reports behind."
+        },
+        {
+          "action": "defer_with_known_risk",
+          "target": "artifact_schema_and_refresh_policy",
+          "details": "Track this as process debt if product release planning is otherwise blocked by larger system issues."
+        }
+      ]
+    }
+  ],
+  "shared_policy_gaps": [
+    {
+      "policy_id": "POL-001",
+      "title": "System discovery contract governance",
+      "evidence": [
+        "`/api/v1/system/info` is used by browser public bootstrap, browser encrypted gating, and CLI relay discovery.",
+        "No completed PSTF slice yet owns this contract directly."
+      ]
+    },
+    {
+      "policy_id": "POL-002",
+      "title": "Transport boundary governance",
+      "evidence": [
+        "Per-slice transport boundaries exist, but no single shared transport policy is approved.",
+        "`route-access.js` has compatibility hooks with an empty compatibility map."
+      ]
+    },
+    {
+      "policy_id": "POL-003",
+      "title": "Rollback semantics governance",
+      "evidence": [
+        "LLM rollback semantics are explicitly deferred.",
+        "Core deployment rollback remains future signer-first follow-up coverage."
+      ]
+    }
+  ],
+  "candidate_cross_feature_tests": [
+    {
+      "test_id": "XFT-001",
+      "title": "Single-session mixed transport journey",
+      "covers_features": [
+        "SYSTEM_DISCOVERY_RELAY_BOOTSTRAP",
+        "CORE_SERVICE_TO_DEPLOYMENT",
+        "ENCRYPTED_CONTROL_PLANE_NOTIFICATIONS",
+        "LLM_ROUTE_RELEASE_DEPLOYMENT"
+      ],
+      "type": "e2e",
+      "description": "In one authenticated browser session, bootstrap from `/api/v1/system/info`, execute one public signer-first command, execute one encrypted notification command, visit `/llm`, and assert public relay URLs are never used for encrypted requests while encrypted relay URLs are never used for public commands."
+    },
+    {
+      "test_id": "XFT-002",
+      "title": "System-info multi-consumer contract",
+      "covers_features": [
+        "SYSTEM_DISCOVERY_RELAY_BOOTSTRAP",
+        "ENCRYPTED_CONTROL_PLANE_NOTIFICATIONS",
+        "SIGNER_FIRST_OPERATOR_ADOPTION_RUNTIME",
+        "LLM_ROUTE_RELEASE_DEPLOYMENT"
+      ],
+      "type": "integration",
+      "description": "Use one canonical `/api/v1/system/info` fixture to prove browser public bootstrap, browser encrypted transport gating, LLM kind discovery, and CLI operator relay discovery all succeed without per-consumer divergence."
+    },
+    {
+      "test_id": "XFT-003",
+      "title": "Deployment history to encrypted run-log handoff",
+      "covers_features": [
+        "CORE_SERVICE_TO_DEPLOYMENT",
+        "ENCRYPTED_DEPLOYMENT_RUN_LOGS"
+      ],
+      "type": "e2e",
+      "description": "Prove a user can traverse from the public deployment history/detail flow into encrypted run-log retrieval on a specific run without switching to a contradictory transport contract."
+    },
+    {
+      "test_id": "XFT-004",
+      "title": "Hive-CI ingestion to artifact-backed deploy",
+      "covers_features": [
+        "HIVECI_RESULT_INGESTION_PIPELINE",
+        "CORE_SERVICE_TO_DEPLOYMENT"
+      ],
+      "type": "integration",
+      "description": "Prove that subscribed Hive-CI result ingestion produces or enriches the artifact/build state that the deployment slice expects when creating an intent."
+    },
+    {
+      "test_id": "XFT-005",
+      "title": "Public signer-first requester policy consistency",
+      "covers_features": [
+        "CORE_SERVICE_TO_DEPLOYMENT",
+        "SIGNER_FIRST_OPERATOR_ADOPTION_RUNTIME",
+        "LLM_ROUTE_RELEASE_DEPLOYMENT"
+      ],
+      "type": "contract",
+      "description": "Verify that all public signer-first request families consistently subscribe before publish, require accepted relay OK responses, preserve correlation tags, and treat post-acceptance failures as terminal rather than fallback-eligible."
+    }
+  ],
+  "next_recommended_stage": {
+    "stage": "cross_feature_hitl_then_new_slices",
+    "summary": "Before broad release planning, capture HITL decisions on shared transport policy and rollback governance, then promote `SYSTEM_DISCOVERY_RELAY_BOOTSTRAP` and `ENCRYPTED_DEPLOYMENT_RUN_LOGS`, and add at least one mixed-transport browser scenario plus one system-info multi-consumer contract test."
+  }
+}
