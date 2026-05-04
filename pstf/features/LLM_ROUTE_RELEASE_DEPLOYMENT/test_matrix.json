@@ -1,0 +1,640 @@
+{
+  "feature_id": "LLM_ROUTE_RELEASE_DEPLOYMENT",
+  "status": "ready",
+  "tests": [
+    {
+      "test_id": "LLMRD-T-001",
+      "ac_ids": ["LLMRD-AC-001"],
+      "title": "System info advertises LLM control-plane kinds only when enabled",
+      "type": "contract",
+      "existing_or_new": "existing",
+      "target_path": "internal/api/handlers/system_test.go",
+      "description": "Reuses handler coverage for enabled and disabled `/api/v1/system/info` payloads. Estimated implementation difficulty: none; already covered.",
+      "preconditions": [
+        "System handler can be constructed with `cfg.LLM.Enabled=true` and `cfg.LLM.Enabled=false`."
+      ],
+      "steps": [
+        "Request system info with LLM disabled.",
+        "Request system info with LLM enabled.",
+        "Inspect advertised capabilities and request/status/result/read-model kind maps."
+      ],
+      "expected_result": "LLM capabilities and canonical kind families are present only in the enabled payload and absent in the disabled payload.",
+      "fixtures": [],
+      "mocks": [],
+      "data_requirements": [
+        "Stable handler config with deterministic `LLM.Enabled` values."
+      ],
+      "determinism_notes": [
+        "Pure handler-level contract test; no network or relay dependency."
+      ],
+      "status": "pass",
+      "failure_reason": null
+    },
+    {
+      "test_id": "LLMRD-T-002",
+      "ac_ids": ["LLMRD-AC-002"],
+      "title": "LLM route create request publishes kind 5971 and resolves with correlated 7971 result",
+      "type": "integration",
+      "existing_or_new": "new",
+      "target_path": "internal/controlplane/reactor_llm_requests_test.go",
+      "description": "Add a reactor-level contract test that delivers a signed route-create event and inspects the published correlated terminal result. Estimated implementation difficulty: medium.",
+      "preconditions": [
+        "A reactor instance can be configured with an authorized requester and capture publisher.",
+        "A signer-generated 5971 request event can be produced deterministically in test."
+      ],
+      "steps": [
+        "Publish a signed kind 5971 route-create request with valid content.",
+        "Handle the event through the reactor.",
+        "Inspect the published terminal reply event and decode its payload."
+      ],
+      "expected_result": "At least one accepted publish is required up front, and the reactor emits a kind 7971 result tagged back to the original request event and requester with `status=success` and a created `route_id`.",
+      "fixtures": [
+        "capture Nostr publisher",
+        "in-memory LLM registry dependencies"
+      ],
+      "mocks": [
+        "authorized requester configuration"
+      ],
+      "data_requirements": [
+        "Stable route payload fixture with route name and gateway config.",
+        "Deterministic request pubkey and signed event id."
+      ],
+      "determinism_notes": [
+        "Keep the test fully in-process; inject the request event directly rather than using live relays.",
+        "Assert reply tags include `e` and `p` correlation plus created `route` identifiers."
+      ],
+      "status": "not_implemented",
+      "failure_reason": null
+    },
+    {
+      "test_id": "LLMRD-T-003",
+      "ac_ids": ["LLMRD-AC-002"],
+      "title": "LLM registry MCP route-create tool persists route metadata",
+      "type": "unit",
+      "existing_or_new": "existing",
+      "target_path": "internal/mcp/server_llm_test.go",
+      "description": "Existing MCP test proves route creation persists a route and returns registry metadata, but it does not prove the signer-first 5971/7971 wire contract. Estimated implementation difficulty: none; keep as supporting coverage.",
+      "preconditions": [
+        "MCP server is initialized with in-memory LLM route repository."
+      ],
+      "steps": [
+        "Call `bahia_llm_create_route` with valid route payload.",
+        "Inspect returned `route_id` and registry kind.",
+        "Verify the route was persisted in the fake repository."
+      ],
+      "expected_result": "Route creation succeeds and persists state through the registry service.",
+      "fixtures": [
+        "in-memory route repository"
+      ],
+      "mocks": [],
+      "data_requirements": [
+        "Stable route name and gateway config fixture."
+      ],
+      "determinism_notes": [
+        "Useful supporting evidence only; canonical Nostr request/result correlation is covered by LLMRD-T-002."
+      ],
+      "status": "pass",
+      "failure_reason": null
+    },
+    {
+      "test_id": "LLMRD-T-004",
+      "ac_ids": ["LLMRD-AC-003"],
+      "title": "LLM release register request publishes kind 5972 and resolves with correlated 7972 result",
+      "type": "integration",
+      "existing_or_new": "new",
+      "target_path": "internal/controlplane/reactor_llm_requests_test.go",
+      "description": "Add a reactor-level contract test for signed release registration and correlated terminal result emission. Estimated implementation difficulty: medium.",
+      "preconditions": [
+        "A valid LLM route exists in the in-memory registry.",
+        "A reactor instance can be configured with an authorized requester and capture publisher."
+      ],
+      "steps": [
+        "Publish a signed kind 5972 release-register request scoped to an existing route.",
+        "Handle the event through the reactor.",
+        "Inspect the published kind 7972 terminal result and decode its content."
+      ],
+      "expected_result": "The request resolves with a correlated kind 7972 result containing `route_id`, `release_id`, and `status=success`.",
+      "fixtures": [
+        "capture Nostr publisher",
+        "in-memory LLM registry dependencies"
+      ],
+      "mocks": [
+        "authorized requester configuration"
+      ],
+      "data_requirements": [
+        "Stable route id and release payload fixture.",
+        "Deterministic request pubkey and signed event id."
+      ],
+      "determinism_notes": [
+        "No live relay dependency; inject signed request event directly and assert `e`/`p` reply tags."
+      ],
+      "status": "not_implemented",
+      "failure_reason": null
+    },
+    {
+      "test_id": "LLMRD-T-005",
+      "ac_ids": ["LLMRD-AC-003"],
+      "title": "LLM registry MCP release-register tool persists release metadata",
+      "type": "unit",
+      "existing_or_new": "existing",
+      "target_path": "internal/mcp/server_llm_test.go",
+      "description": "Existing MCP test proves release persistence and returned ids, but not the signer-first 5972/7972 wire contract. Estimated implementation difficulty: none; keep as supporting coverage.",
+      "preconditions": [
+        "MCP server is initialized with in-memory route and release repositories."
+      ],
+      "steps": [
+        "Create a route.",
+        "Call `bahia_llm_register_release` for that route.",
+        "Verify the returned `release_id` was persisted in the fake repository."
+      ],
+      "expected_result": "Release registration succeeds and stores a release associated with the route.",
+      "fixtures": [
+        "in-memory route repository",
+        "in-memory release repository"
+      ],
+      "mocks": [],
+      "data_requirements": [
+        "Stable route id, version, and model reference fixture."
+      ],
+      "determinism_notes": [
+        "Supporting persistence proof only; canonical Nostr request/result coverage belongs in LLMRD-T-004."
+      ],
+      "status": "pass",
+      "failure_reason": null
+    },
+    {
+      "test_id": "LLMRD-T-006",
+      "ac_ids": ["LLMRD-AC-004"],
+      "title": "LLM deploy request publisher emits explicit route/environment/release tags and fails on zero accept",
+      "type": "contract",
+      "existing_or_new": "modify_existing",
+      "target_path": "internal/controlplane/llm_command_publisher_test.go",
+      "description": "Extend command publisher tests to cover deploy, not just rollback, and assert explicit `route`, `environment`, and `release` tags plus zero-accept failure behavior. Estimated implementation difficulty: low.",
+      "preconditions": [
+        "Command publisher can be constructed with a capture publisher and signer."
+      ],
+      "steps": [
+        "Publish a valid deploy command with one accepted relay.",
+        "Inspect emitted request kind, signature, content, and tags.",
+        "Repeat with zero accepted relays."
+      ],
+      "expected_result": "Successful publish emits signed kind 5973 with explicit route/environment/release tags; zero-accept publish returns a local error and no false success receipt.",
+      "fixtures": [
+        "capture Nostr publisher"
+      ],
+      "mocks": [],
+      "data_requirements": [
+        "Stable route, environment, and release UUID fixtures."
+      ],
+      "determinism_notes": [
+        "Pure publisher test; no live relay required.",
+        "Current suite already covers the zero-accept branch and needs the positive deploy-tag assertion added."
+      ],
+      "status": "not_implemented",
+      "failure_reason": null
+    },
+    {
+      "test_id": "LLMRD-T-007",
+      "ac_ids": ["LLMRD-AC-004"],
+      "title": "Accepted deploy request emits initial correlated 6973 processing status",
+      "type": "integration",
+      "existing_or_new": "new",
+      "target_path": "internal/controlplane/reactor_llm_requests_test.go",
+      "description": "Add a reactor test that proves the first reply to an accepted deploy request is a processing status, not terminal success. Estimated implementation difficulty: medium.",
+      "preconditions": [
+        "A valid route, release, and environment exist.",
+        "An authorized requester can publish a signed deploy request."
+      ],
+      "steps": [
+        "Deliver a signed kind 5973 deploy request to the reactor.",
+        "Inspect the first published correlated reply event.",
+        "Decode reply tags and content."
+      ],
+      "expected_result": "The first correlated reply is kind 6973 with `status=processing` and step `accepted`; it is not a terminal success result.",
+      "fixtures": [
+        "capture Nostr publisher",
+        "in-memory LLM registry dependencies"
+      ],
+      "mocks": [
+        "authorized requester configuration"
+      ],
+      "data_requirements": [
+        "Stable route, release, environment, and requester fixtures."
+      ],
+      "determinism_notes": [
+        "Inspect reply ordering directly from the in-process capture publisher.",
+        "Assert `e`, `p`, `route`, `environment`, and `release` correlation tags."
+      ],
+      "status": "not_implemented",
+      "failure_reason": null
+    },
+    {
+      "test_id": "LLMRD-T-008",
+      "ac_ids": ["LLMRD-AC-004"],
+      "title": "MCP deploy tool returns canonical request/status/result metadata",
+      "type": "unit",
+      "existing_or_new": "existing",
+      "target_path": "internal/mcp/server_llm_test.go",
+      "description": "Existing MCP test verifies deploy tool payload shaping and returned canonical kind metadata. Estimated implementation difficulty: none; keep as supporting coverage.",
+      "preconditions": [
+        "MCP server is initialized with capture LLM command publisher."
+      ],
+      "steps": [
+        "Call `bahia_llm_deploy` with route, environment, release, and requester inputs.",
+        "Inspect returned request kind and event id.",
+        "Verify captured deploy command fields."
+      ],
+      "expected_result": "The MCP tool returns canonical deploy kind metadata and forwards the expected route/environment/release/requester values.",
+      "fixtures": [
+        "capture LLM command publisher"
+      ],
+      "mocks": [],
+      "data_requirements": [
+        "Stable route, environment, release, and requester values."
+      ],
+      "determinism_notes": [
+        "Useful API-layer proof only; async acceptance semantics are covered by LLMRD-T-006 and LLMRD-T-007."
+      ],
+      "status": "pass",
+      "failure_reason": null
+    },
+    {
+      "test_id": "LLMRD-T-009",
+      "ac_ids": ["LLMRD-AC-005"],
+      "title": "LLM approval and rejection requests validate decision values and publish correlated 7973 results",
+      "type": "integration",
+      "existing_or_new": "new",
+      "target_path": "internal/controlplane/reactor_llm_requests_test.go",
+      "description": "Add reactor coverage for valid approve/reject requests and invalid decisions. Estimated implementation difficulty: medium.",
+      "preconditions": [
+        "A pending protected-environment LLM deployment intent exists.",
+        "An authorized requester can publish signed kind 5974 requests."
+      ],
+      "steps": [
+        "Deliver an approve request for the pending intent.",
+        "Deliver a reject request for a fresh pending intent.",
+        "Deliver an invalid decision request.",
+        "Inspect terminal reply events and resulting intent state."
+      ],
+      "expected_result": "Approve and reject requests publish correlated kind 7973 results; invalid decisions fail validation without mutating state.",
+      "fixtures": [
+        "capture Nostr publisher",
+        "in-memory LLM registry dependencies"
+      ],
+      "mocks": [
+        "authorized requester configuration"
+      ],
+      "data_requirements": [
+        "Stable pending intent fixtures for approve and reject cases.",
+        "Deterministic request pubkey and signed event ids."
+      ],
+      "determinism_notes": [
+        "Keep approve, reject, and invalid-decision cases isolated so state mutations remain explicit."
+      ],
+      "status": "not_implemented",
+      "failure_reason": null
+    },
+    {
+      "test_id": "LLMRD-T-010",
+      "ac_ids": ["LLMRD-AC-005"],
+      "title": "Rejected LLM intent is repaired out of desired route state",
+      "type": "integration",
+      "existing_or_new": "new",
+      "target_path": "internal/service/llm_registry_test.go",
+      "description": "Add registry coverage that rejection repair clears the rejected intent from desired route-state selection. Estimated implementation difficulty: medium.",
+      "preconditions": [
+        "The registry service can be constructed with fake route, intent, run, observation, and state repositories.",
+        "A pending protected-environment intent is present in desired state."
+      ],
+      "steps": [
+        "Create a desired-state intent for a protected environment.",
+        "Apply rejection through the registry service path used by the reactor.",
+        "Fetch route state after rejection repair."
+      ],
+      "expected_result": "Desired route state no longer points at the rejected intent after rejection repair completes.",
+      "fixtures": [
+        "fake LLM route repository",
+        "fake LLM intent repository",
+        "fake LLM state repository"
+      ],
+      "mocks": [],
+      "data_requirements": [
+        "Stable route, release, environment, and intent UUID fixtures."
+      ],
+      "determinism_notes": [
+        "No relay dependency; assert state repository contents directly after rejection repair."
+      ],
+      "status": "not_implemented",
+      "failure_reason": null
+    },
+    {
+      "test_id": "LLMRD-T-011",
+      "ac_ids": ["LLMRD-AC-005"],
+      "title": "MCP approval and rejection tools shape canonical request metadata",
+      "type": "unit",
+      "existing_or_new": "existing",
+      "target_path": "internal/mcp/server_llm_test.go",
+      "description": "Existing MCP coverage proves approve/reject command shaping and returned decision metadata, but not backend mutation or rejection repair. Estimated implementation difficulty: none; keep as supporting coverage.",
+      "preconditions": [
+        "MCP server is initialized with capture LLM command publisher."
+      ],
+      "steps": [
+        "Call `bahia_llm_approve_deployment`.",
+        "Call `bahia_llm_reject_deployment`.",
+        "Inspect returned decision metadata."
+      ],
+      "expected_result": "Approve and reject tools forward the correct intent id and decision strings through the command publisher boundary.",
+      "fixtures": [
+        "capture LLM command publisher"
+      ],
+      "mocks": [],
+      "data_requirements": [
+        "Stable pending intent UUID."
+      ],
+      "determinism_notes": [
+        "Supporting request-shaping proof only; stateful approval behavior is covered by LLMRD-T-009 and LLMRD-T-010."
+      ],
+      "status": "pass",
+      "failure_reason": null
+    },
+    {
+      "test_id": "LLMRD-T-012",
+      "ac_ids": ["LLMRD-AC-006"],
+      "title": "Successful provisioning run emits staged 6973 progress and terminal 7973 completion",
+      "type": "integration",
+      "existing_or_new": "new",
+      "target_path": "internal/service/llm_provisioning_coordinator_test.go",
+      "description": "Add coordinator coverage for the accepted-intent success path, including responder callbacks for progress and completion. Estimated implementation difficulty: high.",
+      "preconditions": [
+        "A queued run exists for an accepted LLM deployment intent.",
+        "Fake placement, provisioner, gateway, registry, run repository, and responder dependencies are available."
+      ],
+      "steps": [
+        "Invoke `ProcessOnce` for a queued successful run.",
+        "Capture responder status and result callbacks in order.",
+        "Inspect final run status and recorded observation/state."
+      ],
+      "expected_result": "The coordinator emits meaningful progress stages such as placement, provisioning, gate evaluation, gateway sync, and observation recording, then publishes a terminal completion result and marks the run succeeded.",
+      "fixtures": [
+        "fake LLM registry service dependencies",
+        "fake LLM deployment run repository",
+        "fake placement service",
+        "fake backend provisioner",
+        "fake gateway manager",
+        "capture provisioning responder"
+      ],
+      "mocks": [],
+      "data_requirements": [
+        "Stable route, release, environment, intent, run, worker, and gateway-ref fixtures.",
+        "Deterministic successful backend observation and gateway observation payloads."
+      ],
+      "determinism_notes": [
+        "Exercise `ProcessOnce` directly instead of ticker-based `Run` to avoid timer-driven tests.",
+        "Assert callback order deterministically from the capture responder."
+      ],
+      "status": "not_implemented",
+      "failure_reason": null
+    },
+    {
+      "test_id": "LLMRD-T-013",
+      "ac_ids": ["LLMRD-AC-006"],
+      "title": "Provisioning failure emits terminal error result and leaves run failed",
+      "type": "integration",
+      "existing_or_new": "new",
+      "target_path": "internal/service/llm_provisioning_coordinator_test.go",
+      "description": "Add coordinator failure-path coverage for provisioning, promotion-gate, or gateway-sync errors. Estimated implementation difficulty: high.",
+      "preconditions": [
+        "A queued run exists for an accepted LLM deployment intent.",
+        "Fake dependencies can force provisioner, promotion gate, or gateway failures."
+      ],
+      "steps": [
+        "Invoke `ProcessOnce` for a queued run whose provisioner or gateway path fails.",
+        "Capture responder callbacks.",
+        "Inspect final run status and recorded metadata."
+      ],
+      "expected_result": "The coordinator emits progress up to failure, publishes a terminal error result, records failure metadata, and marks the run failed instead of succeeded.",
+      "fixtures": [
+        "fake LLM registry service dependencies",
+        "fake LLM deployment run repository",
+        "fake failing provisioner or gateway manager",
+        "capture provisioning responder"
+      ],
+      "mocks": [],
+      "data_requirements": [
+        "Stable queued intent/run fixtures and deterministic injected failure reason."
+      ],
+      "determinism_notes": [
+        "Drive failures directly through fake dependencies; avoid sleeps or external runtime dependencies."
+      ],
+      "status": "not_implemented",
+      "failure_reason": null
+    },
+    {
+      "test_id": "LLMRD-T-014",
+      "ac_ids": ["LLMRD-AC-007"],
+      "title": "Projector republishes authoritative LLM route and route-state read models",
+      "type": "integration",
+      "existing_or_new": "existing",
+      "target_path": "internal/adapters/nostr/projector_test.go",
+      "description": "Existing projector tests prove republished `31964` and `31965` events are signed and carry route/state tags from authoritative state. Estimated implementation difficulty: none.",
+      "preconditions": [
+        "Fake projection source contains authoritative route, state, release, intent, and run data."
+      ],
+      "steps": [
+        "Run snapshot republish with LLM projection source enabled.",
+        "Inspect emitted route registry and route-state projection events."
+      ],
+      "expected_result": "Signed `31964` and `31965` projection events are published with the expected route, environment, release, intent, run, and gateway-status tags.",
+      "fixtures": [
+        "fake projection source",
+        "capture projection publisher"
+      ],
+      "mocks": [],
+      "data_requirements": [
+        "Stable route, environment, release, intent, and run UUID fixtures."
+      ],
+      "determinism_notes": [
+        "Projection events are captured synchronously and signature-checked locally."
+      ],
+      "status": "pass",
+      "failure_reason": null
+    },
+    {
+      "test_id": "LLMRD-T-015",
+      "ac_ids": ["LLMRD-AC-007"],
+      "title": "Registry and reconciler propagate observed backend and gateway state into LLM route state",
+      "type": "integration",
+      "existing_or_new": "existing",
+      "target_path": "internal/service/llm_registry_test.go; internal/reconcile/llm_reconciler_test.go",
+      "description": "Existing registry and reconciler tests prove desired state becomes in-sync after observation and that reconcile observations carry backend/gateway state. Estimated implementation difficulty: none.",
+      "preconditions": [
+        "Fake registry repositories and reconcile fixtures are available."
+      ],
+      "steps": [
+        "Create an LLM deployment intent and inspect desired route state.",
+        "Record an observation and re-read route state.",
+        "Construct a reconcile observation from backend and gateway inputs."
+      ],
+      "expected_result": "Desired-vs-observed route state becomes in-sync after observation, and backend/gateway fields are preserved through reconcile observation shaping.",
+      "fixtures": [
+        "fake LLM registry repositories"
+      ],
+      "mocks": [],
+      "data_requirements": [
+        "Stable route, release, environment, run, backend, and gateway observation fixtures."
+      ],
+      "determinism_notes": [
+        "Pure in-process tests with deterministic fake repositories and observation inputs."
+      ],
+      "status": "pass",
+      "failure_reason": null
+    },
+    {
+      "test_id": "LLMRD-T-016",
+      "ac_ids": ["LLMRD-AC-008"],
+      "title": "Browser control-plane store bootstraps and applies Bahia-authored LLM read models and activity events",
+      "type": "unit",
+      "existing_or_new": "existing",
+      "target_path": "web/tests/unit/controlplane-store.test.js",
+      "description": "Existing browser-store tests cover EOSE-aware bootstrap, live subscription bridging, and valid LLM route/state/activity event application. Estimated implementation difficulty: none.",
+      "preconditions": [
+        "System info advertises a Bahia service pubkey and browser relay.",
+        "Shared Nostr client is mocked."
+      ],
+      "steps": [
+        "Bootstrap the shared control-plane store.",
+        "Inject Bahia-authored route, route-state, and deployment-status events.",
+        "Inspect `llmRoutes`, `llmRouteStates`, and activity collections."
+      ],
+      "expected_result": "Bootstrap consumes relay-backed events after EOSE, valid Bahia-authored LLM events populate browser-visible collections, and live events remain reactive after bootstrap.",
+      "fixtures": [
+        "mock Nostr client",
+        "mock system info response"
+      ],
+      "mocks": [],
+      "data_requirements": [
+        "Stable Bahia service pubkey, relay URL, and LLM route/state/status event fixtures."
+      ],
+      "determinism_notes": [
+        "Tests inject events directly through mocked query/subscription interfaces; no live relay is used."
+      ],
+      "status": "pass",
+      "failure_reason": null
+    },
+    {
+      "test_id": "LLMRD-T-017",
+      "ac_ids": ["LLMRD-AC-008"],
+      "title": "Browser control-plane store ignores spoofed non-Bahia LLM events",
+      "type": "unit",
+      "existing_or_new": "modify_existing",
+      "target_path": "web/tests/unit/controlplane-store.test.js",
+      "description": "Extend the store suite with an explicit spoofed-author case for LLM route/state or activity events, not just generic service registry events. Estimated implementation difficulty: low.",
+      "preconditions": [
+        "The store has bootstrapped with an advertised Bahia service pubkey."
+      ],
+      "steps": [
+        "Inject spoofed LLM route or route-state events from a non-Bahia pubkey.",
+        "Inject spoofed LLM deployment status/result activity from a non-Bahia pubkey.",
+        "Inspect LLM collections and activity feed."
+      ],
+      "expected_result": "Spoofed non-Bahia LLM events are ignored and do not mutate `llmRoutes`, `llmRouteStates`, or LLM activity state.",
+      "fixtures": [
+        "mock Nostr client",
+        "mock system info response"
+      ],
+      "mocks": [],
+      "data_requirements": [
+        "Stable non-Bahia pubkey and spoofed LLM event fixtures."
+      ],
+      "determinism_notes": [
+        "Extend the existing mocked-store suite; no external services are required."
+      ],
+      "status": "not_implemented",
+      "failure_reason": null
+    },
+    {
+      "test_id": "LLMRD-T-018",
+      "ac_ids": ["LLMRD-AC-009"],
+      "title": "Dedicated browser LLM workflow exercises route creation, release registration, deploy initiation, approval visibility, and relay-backed state",
+      "type": "e2e",
+      "existing_or_new": "new",
+      "target_path": "web/tests/e2e/llm-route-release-deployment.spec.js",
+      "description": "Define the end-to-end browser proof for the approved user-facing contract. Estimated implementation difficulty: high because the workflow is not currently present in the web app.",
+      "preconditions": [
+        "The web app exposes a dedicated LLM workflow page or route.",
+        "Signer-first browser request helpers and relay-backed read models are wired for the LLM slice.",
+        "A deterministic Bahia-backed test harness is available for signed request/result flows."
+      ],
+      "steps": [
+        "Open the dedicated LLM workflow in the browser.",
+        "Create an LLM route.",
+        "Register a release.",
+        "Initiate deployment and observe approval visibility and resulting route-state/activity updates.",
+        "Inspect network or harness traces to confirm signer-first request kinds and relay-backed state usage."
+      ],
+      "expected_result": "The browser workflow exists, is user-visible, drives signer-first LLM request kinds, and surfaces resulting route/state/activity without relying on deprecated operational REST mutation endpoints.",
+      "fixtures": [
+        "Bahia e2e harness with deterministic relay fixtures",
+        "test route/release/environment data"
+      ],
+      "mocks": [
+        "signer fixture for browser automation if required"
+      ],
+      "data_requirements": [
+        "Stable environment, route, release, and requester fixtures suitable for repeatable browser automation."
+      ],
+      "determinism_notes": [
+        "Do not rely on live external relays or model providers; use the local Bahia test harness and deterministic relay events.",
+        "This test remains blocked until the dedicated workflow exists."
+      ],
+      "status": "blocked",
+      "failure_reason": "No dedicated end-user LLM browser workflow is implemented under `web/src/routes`, so the approved UX contract cannot yet be exercised end to end."
+    },
+    {
+      "test_id": "LLMRD-T-019",
+      "ac_ids": ["LLMRD-AC-009"],
+      "title": "Legacy operational REST mutation endpoints stay disabled by default and compatibility-only behind operator access",
+      "type": "contract",
+      "existing_or_new": "existing",
+      "target_path": "internal/api/router/llm_routes_test.go",
+      "description": "Existing router tests prove the deprecated mutation routes are not mounted by default and remain compatibility-only behind explicit operator gating. Estimated implementation difficulty: none.",
+      "preconditions": [
+        "Router can be constructed once with default config and once with `AllowOperationalREST=true` plus operator auth enabled."
+      ],
+      "steps": [
+        "POST to deprecated operational REST mutation endpoints with default config.",
+        "Verify they return 404 by default.",
+        "Repeat intent creation with compatibility mode enabled for unauthorized, forbidden, and operator callers."
+      ],
+      "expected_result": "Deprecated operational REST mutations are absent by default and only reachable as an explicitly gated compatibility surface.",
+      "fixtures": [],
+      "mocks": [],
+      "data_requirements": [
+        "Stable test auth keys for operator and non-operator callers."
+      ],
+      "determinism_notes": [
+        "Pure router contract test; no live relay or browser dependency."
+      ],
+      "status": "pass",
+      "failure_reason": null
+    }
+  ],
+  "coverage_summary": {
+    "criteria_total": 9,
+    "criteria_with_tests": 9,
+    "known_gaps": [
+      "Canonical reactor-level signer-first contract tests are still missing for route create (5971/7971), release register (5972/7972), deploy acceptance (5973/6973), and approval/reject terminal handling (5974/7973).",
+      "The async provisioning path has no existing coordinator tests for ordered 6973 progress replies, terminal 7973 success/error results, or failed-run state recording.",
+      "The browser store suite needs one explicit spoofed-author LLM event case to fully prove AC-008 for LLM route/state/activity collections.",
+      "The approved end-user browser workflow test is blocked because no dedicated LLM workflow currently exists in `web/src/routes`.",
+      "Rollback-specific tests are intentionally excluded from this matrix because rollback acceptance criteria were deferred by HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-004."
+    ]
+  },
+  "implementation_notes": [
+    "Low-effort extensions: add explicit deploy-tag coverage in `internal/controlplane/llm_command_publisher_test.go` and explicit spoofed-LLM-author coverage in `web/tests/unit/controlplane-store.test.js`.",
+    "Medium-effort additions: create reactor-level request/result contract tests that exercise signed request events, reply correlation tags, validation failures, and desired-state repair for rejection.",
+    "High-effort additions: introduce `internal/service/llm_provisioning_coordinator_test.go` with full fake placement/provisioner/gateway/responder dependencies and build a deterministic browser e2e harness for the future dedicated LLM workflow.",
+    "Current existing coverage is strongest around system discovery, MCP request shaping, projection publication, registry/reconcile state shaping, and relay-backed browser store consumption.",
+    "Because AC-009 is approved but the corresponding product surface is absent, this matrix is ready for implementation planning but not fully verifiable until that workflow is built."
+  ]
+}
