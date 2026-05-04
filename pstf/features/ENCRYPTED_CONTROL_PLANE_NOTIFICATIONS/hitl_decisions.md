@@ -1,84 +1,111 @@
-# HITL Review — ENCRYPTED_CONTROL_PLANE_NOTIFICATIONS
+# HITL Decisions — ENCRYPTED_CONTROL_PLANE_NOTIFICATIONS
 
-## Decision Needed
-Approve / Request Changes / Defer / Reject
+## Metadata
+- Feature ID: ENCRYPTED_CONTROL_PLANE_NOTIFICATIONS
+- Task ID: bahia-zv4x
+- Framework: PSTF
+- Interaction Mode: RepoPrompt ask-user tool
+- Current Stage: human_review
+- Last Updated: 2026-05-03
 
-## Feature Intent
+---
 
-This slice defines and verifies Bahia's signer-first encrypted browser request/result flow for sensitive notification operations.
+## Decision Ledger
 
-What it is supposed to do:
-- bootstrap from `/api/v1/system/info` using `nostr.service_pubkey` and `nostr.browser_encrypted_request_relays`
-- publish sensitive browser requests as encrypted kind `5980` events to encrypted-request relays only
-- receive correlated encrypted kind `7980` result events from the Bahia service pubkey
-- support notification channel list/create/update/delete/test and delivery log retrieval without leaking payloads to public relays
-- surface terminal errors in the UI while preserving valid user input where applicable
+### Decision HITL-ENCRYPTED_CONTROL_PLANE_NOTIFICATIONS-001 — Slice approval and release posture
 
-## Acceptance Criteria Summary
+**Stage:** human_review
+**Agent:** HITL Review Agent
+**Decision Type:** release_approval
+**Status:** active
 
-Current criteria cover:
-- discovery availability and relay-boundary enforcement
-- request event kind/tag/content rules
-- accepted-OK publish semantics
-- correlated result filtering and cleanup
-- notification channel read/write operations over encrypted transport
-- encrypted log success and failure handling
-- backend decrypt-failure and unauthorized-request handling
-- create/edit form error retention
-- accessibility-critical headings, labels, and alert regions
-- end-to-end proof that browser notification flows stay off public relays
+**Context Summary:**
+The encrypted notifications slice has passing unit, backend, and Playwright coverage. There are no open product defects or open test defects. The remaining gating question was whether to approve the slice and accept the remaining process/documentation risk.
 
-Status note:
-- the criteria file itself still says `draft`
-- the implementation has been fully verified against those current criteria
+**Question Asked:**
+What is the approval decision for ENCRYPTED_CONTROL_PLANE_NOTIFICATIONS?
 
-## Verification Evidence
+**Options Presented:**
+- A) APPROVED
+- B) APPROVED_WITH_RISK
+- C) NEEDS_WORK
+- D) DEFERRED
+- E) REJECTED
 
-Executed and passing:
-```bash
-npm --prefix web run test:unit -- tests/unit/notifications-store.test.js tests/unit/encrypted-controlplane.test.js
-go test ./internal/controlplane -run 'TestEncrypted'
-npm --prefix web run test:e2e -- tests/e2e/notifications-encrypted-smoke.spec.js tests/e2e/notifications-form-error.spec.js
-```
+**User Selection:**
+APPROVED_WITH_RISK
 
-Observed evidence threshold met:
-- 13 unit tests passed across encrypted controlplane + notifications store
-- encrypted backend transport tests passed
-- 4 Playwright tests passed covering:
-  - encrypted notifications happy path
-  - create-form error retention
-  - edit-form error retention
-  - notifications accessibility-critical UI semantics
+**User Notes:**
+None.
 
-Artifact state:
-- `feature_spec.json` marks the slice `fully_verified`
-- `test_matrix.json` marks the matrix `ready`
-- `defects.json` shows prior gaps resolved and `verified`
-- `verification_report.md` marks the slice fully verified for implementation behavior
+**Decision:**
+APPROVED_WITH_RISK
 
-## Open Risks
+**Impact:**
+- Feature Spec: none
+- Acceptance Criteria: update needed — promote `acceptance_criteria.json` from `draft` to `approved`
+- Tests: none
+- Defects: none
+- Confidence / Release: adjusted — enables release recommendation with explicit process/spec risk acknowledged
 
-There are no open product defects or open test defects for this slice.
+**Required Follow-Up Actions:**
+- [ ] Update `pstf/features/ENCRYPTED_CONTROL_PLANE_NOTIFICATIONS/acceptance_criteria.json` status from `draft` to `approved` to reflect human approval.
+- [ ] Keep the release note/risk note explicit until the criteria artifact is synchronized.
 
-Remaining risks are process/spec-governance only:
-1. `acceptance_criteria.json` is still marked `draft`, so approval state is not yet reflected in the artifact set.
-2. The encrypted operation catalog is still not a first-class normative table in the docs, even though this slice is now well tested.
+---
 
-## Required Human Decisions
-1. Should `ENCRYPTED_CONTROL_PLANE_NOTIFICATIONS` be approved as a completed PSTF slice and `acceptance_criteria.json` promoted from `draft` to `approved`?
-2. Should the encrypted operation catalog be promoted to a normative spec table alongside public control-plane command families, or remain implementation/documentation by example?
+### Decision HITL-ENCRYPTED_CONTROL_PLANE_NOTIFICATIONS-002 — Encrypted operation catalog documentation posture
 
-## Recommended Decision
+**Stage:** human_review
+**Agent:** HITL Review Agent
+**Decision Type:** ambiguity_resolution
+**Status:** active
 
-**Approve**
+**Context Summary:**
+The implementation is verified, but the encrypted operation catalog is still documented mainly by implementation and slice-specific evidence rather than a first-class normative specification table. This affects future consistency more than current slice correctness.
 
-Reason:
-- all currently defined acceptance criteria have executable passing coverage
-- prior verification gaps are closed and reverified
-- no unresolved product defects remain
-- remaining questions are governance/documentation questions, not implementation correctness questions
+**Question Asked:**
+How should the encrypted operation catalog be handled after approving this slice?
 
-If you want to be stricter on PSTF process, approve the slice and separately require a small follow-up to flip `acceptance_criteria.json` to `approved` and record the encrypted operation catalog decision.
+**Options Presented:**
+- A) PROMOTE_NOW
+- B) DEFER_TO_FOLLOWUP
+- C) KEEP_AS_IS
 
-## Decision Log
-- 2026-05-03: Pending human review — packet prepared with recommendation to approve based on passing unit, backend, and Playwright evidence.
+**User Selection:**
+PROMOTE_NOW
+
+**User Notes:**
+None.
+
+**Decision:**
+PROMOTE_NOW
+
+**Impact:**
+- Feature Spec: update needed — add or reference a normative encrypted operation catalog
+- Acceptance Criteria: none
+- Tests: update needed — future encrypted slices should trace to the normative catalog once added
+- Defects: none
+- Confidence / Release: adjusted — removes an avoidable spec-governance gap once completed
+
+**Required Follow-Up Actions:**
+- [ ] Complete `bahia-u28c` to promote the encrypted operation catalog to a normative spec table alongside public control-plane command families.
+- [ ] Update relevant docs and PSTF references to point at the normative encrypted operation catalog once published.
+
+---
+
+## Summary
+
+- Final Status: APPROVED_WITH_RISK
+- Open Questions: 0
+- Accepted Risks: 1 — acceptance criteria artifact still marked `draft` even though the slice is now human-approved
+- Deferred Items: 0
+- Blocking Issues: 0
+- Superseded Decisions: 0
+
+## Traceability
+
+| Decision ID | Affects ACs | Affects Tests | Affects Defects | Affects Artifacts | Notes |
+| --- | --- | --- | --- | --- | --- |
+| HITL-ENCRYPTED_CONTROL_PLANE_NOTIFICATIONS-001 | ECPN-AC-001..012 | none | none | acceptance_criteria.json, hitl_decisions.md | Human approved the slice with explicit process risk acceptance. |
+| HITL-ENCRYPTED_CONTROL_PLANE_NOTIFICATIONS-002 | none | future encrypted-slice tests | none | feature_spec.json, docs/control-planes.md, future PSTF artifacts | Human chose to promote the encrypted operation catalog to a normative spec surface. |
