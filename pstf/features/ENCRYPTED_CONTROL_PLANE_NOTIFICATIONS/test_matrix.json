@@ -1,0 +1,158 @@
+{
+  "feature_id": "ENCRYPTED_CONTROL_PLANE_NOTIFICATIONS",
+  "status": "current_evidence",
+  "tests": [
+    {
+      "criterion_id": "ECPN-AC-001",
+      "test_id": "WEB-UNIT-ENC-001",
+      "type": "unit",
+      "source": "web/tests/unit/encrypted-controlplane.test.js",
+      "test_name": "prefers canonical relay URLs for encrypted request events and ignores public relays",
+      "status": "passing",
+      "notes": "Confirms canonical encrypted-request relay discovery and availability calculation."
+    },
+    {
+      "criterion_id": "ECPN-AC-001",
+      "test_id": "WEB-UNIT-ENC-002",
+      "type": "unit",
+      "source": "web/tests/unit/encrypted-controlplane.test.js",
+      "test_name": "does not treat public browser relays as encrypted request relays",
+      "status": "passing",
+      "notes": "Guards against accidental use of public relay set."
+    },
+    {
+      "criterion_id": "ECPN-AC-002",
+      "test_id": "WEB-UNIT-NOTIF-004",
+      "type": "unit",
+      "source": "web/tests/unit/notifications-store.test.js",
+      "test_name": "fails before publishing when encrypted Nostr requests are not advertised",
+      "status": "passing",
+      "notes": "Confirms local failure before publish when encrypted discovery contract is missing."
+    },
+    {
+      "criterion_id": "ECPN-AC-003",
+      "test_id": "WEB-UNIT-ENC-003",
+      "type": "unit",
+      "source": "web/tests/unit/encrypted-controlplane.test.js",
+      "test_name": "builds encrypted request events without targeting public browser relays",
+      "status": "passing",
+      "notes": "Validates kind, routing tags, recipient pubkey, and ciphertext construction."
+    },
+    {
+      "criterion_id": "ECPN-AC-004",
+      "test_id": "WEB-UNIT-ENC-004",
+      "type": "unit",
+      "source": "web/tests/unit/encrypted-controlplane.test.js",
+      "test_name": "publishes through the encrypted-request client and requires an accepted OK",
+      "status": "passing",
+      "notes": "Proves publish success requires accepted OK and rejection reasons propagate."
+    },
+    {
+      "criterion_id": "ECPN-AC-005",
+      "test_id": "WEB-UNIT-ENC-005",
+      "type": "unit",
+      "source": "web/tests/unit/encrypted-controlplane.test.js",
+      "test_name": "awaitEncryptedResult resolves only correlated encrypted results and unsubscribes",
+      "status": "passing",
+      "notes": "Covers correlation by `#e`, `#p`, author, duplicate suppression, and unsubscribe cleanup."
+    },
+    {
+      "criterion_id": "ECPN-AC-006",
+      "test_id": "GO-UNIT-ENC-001",
+      "type": "backend_unit",
+      "source": "internal/controlplane/encrypted_transport_test.go",
+      "test_name": "TestEncryptedRequestTransport_HandleEventPublishesDecryptFailure",
+      "status": "passing",
+      "notes": "Confirms undecryptable requests yield encrypted terminal error results."
+    },
+    {
+      "criterion_id": "ECPN-AC-006",
+      "test_id": "GO-UNIT-ENC-002",
+      "type": "backend_unit",
+      "source": "internal/controlplane/encrypted_transport_test.go",
+      "test_name": "TestEncryptedRequestTransport_HandleEventRejectsUnauthorizedRequester",
+      "status": "passing",
+      "notes": "Confirms unauthorized requesters do not reach handlers and receive encrypted error results."
+    },
+    {
+      "criterion_id": "ECPN-AC-007",
+      "test_id": "WEB-UNIT-NOTIF-001",
+      "type": "unit",
+      "source": "web/tests/unit/notifications-store.test.js",
+      "test_name": "loads channels through encrypted Nostr request operations",
+      "status": "passing",
+      "notes": "Confirms list path goes through encrypted request operation."
+    },
+    {
+      "criterion_id": "ECPN-AC-007",
+      "test_id": "WEB-UNIT-NOTIF-002",
+      "type": "unit",
+      "source": "web/tests/unit/notifications-store.test.js",
+      "test_name": "creates, updates, deletes, and tests channels through encrypted operations",
+      "status": "passing",
+      "notes": "Confirms create/update/test/delete all use encrypted operations."
+    },
+    {
+      "criterion_id": "ECPN-AC-007",
+      "test_id": "WEB-UNIT-NOTIF-003",
+      "type": "unit",
+      "source": "web/tests/unit/notifications-store.test.js",
+      "test_name": "loads delivery logs only through encrypted result operations",
+      "status": "passing",
+      "notes": "Confirms logs are fetched through encrypted operation path."
+    },
+    {
+      "criterion_id": "ECPN-AC-008",
+      "test_id": "WEB-UNIT-NOTIF-005",
+      "type": "unit",
+      "source": "web/tests/unit/notifications-store.test.js",
+      "test_name": "surfaces encrypted terminal errors from result events",
+      "status": "passing",
+      "notes": "Confirms backend terminal errors propagate to callers."
+    },
+    {
+      "criterion_id": "ECPN-AC-009",
+      "test_id": "WEB-UNIT-ENC-001",
+      "type": "unit",
+      "source": "web/tests/unit/encrypted-controlplane.test.js",
+      "test_name": "prefers canonical relay URLs for encrypted request events and ignores public relays",
+      "status": "passing",
+      "notes": "Primary relay-boundary proof."
+    },
+    {
+      "criterion_id": "ECPN-AC-009",
+      "test_id": "WEB-UNIT-ENC-003",
+      "type": "unit",
+      "source": "web/tests/unit/encrypted-controlplane.test.js",
+      "test_name": "builds encrypted request events without targeting public browser relays",
+      "status": "passing",
+      "notes": "Confirms encrypted request publication uses the encrypted-request client."
+    },
+    {
+      "criterion_id": "ECPN-AC-010",
+      "test_id": "GAP-E2E-001",
+      "type": "gap",
+      "source": "selected test inventory",
+      "test_name": "notifications encrypted browser journey E2E",
+      "status": "missing",
+      "notes": "No selected browser E2E test currently proves the notifications page end-to-end over encrypted transport."
+    }
+  ],
+  "coverage_summary": {
+    "criteria_total": 10,
+    "criteria_with_tests": 10,
+    "criteria_fully_passing": 9,
+    "criteria_with_known_gaps": [
+      "ECPN-AC-010"
+    ],
+    "known_gaps": [
+      "No selected browser E2E test for the notifications encrypted journey.",
+      "Selected evidence proves the transport and notification store strongly, but not a full UI workflow with a real signer and relay topology."
+    ]
+  },
+  "implementation_notes": [
+    "The backend/frontend transport contract is unusually well aligned for this slice.",
+    "Notifications are the strongest feature-domain proof for the encrypted transport family.",
+    "`/api/v1/system/info` must be treated as part of this feature’s effective contract even though it is not itself an encrypted operation."
+  ]
+}

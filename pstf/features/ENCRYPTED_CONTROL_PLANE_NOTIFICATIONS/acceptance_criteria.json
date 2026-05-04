@@ -1,0 +1,85 @@
+{
+  "feature_id": "ENCRYPTED_CONTROL_PLANE_NOTIFICATIONS",
+  "status": "grounded_draft",
+  "criteria": [
+    {
+      "id": "ECPN-AC-001",
+      "title": "Encrypted-request relay discovery is explicit",
+      "statement": "The browser must derive encrypted-request relay URLs only from `nostr.browser_encrypted_request_relays` and must not treat `nostr.browser_relays` as encrypted-request relays.",
+      "priority": "must",
+      "evidence_level": "high"
+    },
+    {
+      "id": "ECPN-AC-002",
+      "title": "Encrypted transport availability is gated by system discovery",
+      "statement": "Sensitive browser stores must fail before publish when system discovery does not advertise both a Bahia service pubkey and encrypted-request relay URLs.",
+      "priority": "must",
+      "evidence_level": "high"
+    },
+    {
+      "id": "ECPN-AC-003",
+      "title": "Encrypted requests are constructed for the Bahia service pubkey",
+      "statement": "The browser must build kind `5980` request events, encrypt the envelope to the Bahia service pubkey, and include `['p', service_pubkey]` plus `['encrypted', 'bahia-encrypted-v1']` tags.",
+      "priority": "must",
+      "evidence_level": "high"
+    },
+    {
+      "id": "ECPN-AC-004",
+      "title": "Publish success requires at least one accepted OK",
+      "statement": "The browser transport must treat encrypted request publish as successful only when at least one encrypted-request relay returns an accepted OK, and must surface relay rejection reasons when all relays reject.",
+      "priority": "must",
+      "evidence_level": "high"
+    },
+    {
+      "id": "ECPN-AC-005",
+      "title": "Encrypted results are strictly correlated",
+      "statement": "The browser must resolve encrypted results only when they match the request event id, requester pubkey, and Bahia service pubkey author, and it must ignore mismatched or spoofed results.",
+      "priority": "must",
+      "evidence_level": "high"
+    },
+    {
+      "id": "ECPN-AC-006",
+      "title": "Backend unauthorized and decrypt failures return encrypted terminal errors",
+      "statement": "The backend encrypted transport must publish correlated encrypted terminal error results for undecryptable requests and unauthorized requesters, and must not dispatch unauthorized requests to handlers.",
+      "priority": "must",
+      "evidence_level": "high"
+    },
+    {
+      "id": "ECPN-AC-007",
+      "title": "Notifications use encrypted operations only",
+      "statement": "Notification channel list/create/update/test/delete and log retrieval must execute through encrypted request/result operations rather than direct REST calls in the current web store path.",
+      "priority": "must",
+      "evidence_level": "high"
+    },
+    {
+      "id": "ECPN-AC-008",
+      "title": "Terminal encrypted errors surface to callers",
+      "statement": "If an encrypted result carries terminal error status, the frontend notification store must surface the backend-provided error message to the caller and local error state.",
+      "priority": "must",
+      "evidence_level": "high"
+    },
+    {
+      "id": "ECPN-AC-009",
+      "title": "Sensitive browser traffic stays off public relays",
+      "statement": "The encrypted browser transport must not use public browser relay URLs for sensitive request publication or result subscription.",
+      "priority": "must",
+      "evidence_level": "high"
+    },
+    {
+      "id": "ECPN-AC-010",
+      "title": "Feature-level browser journey evidence exists",
+      "statement": "The slice should have at least one end-to-end browser-level verification path proving the notifications journey on top of the encrypted transport in addition to unit and backend transport tests.",
+      "priority": "should",
+      "evidence_level": "medium"
+    }
+  ],
+  "coverage_notes": [
+    "Current evidence is strongest at unit and backend transport levels.",
+    "Selected evidence does not include a notifications browser E2E test, so AC-010 is currently a known gap rather than a passing criterion.",
+    "This slice deliberately treats `/api/v1/system/info` as part of the feature contract because the browser cannot safely bootstrap encrypted operations without it."
+  ],
+  "unresolved_questions": [
+    "Should AC-010 be upgraded from SHOULD to MUST for release gating?",
+    "Should the encrypted operation catalog be versioned/documented per domain as normative API surface?"
+  ]
+}

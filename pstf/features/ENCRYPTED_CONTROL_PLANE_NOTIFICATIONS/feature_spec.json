@@ -1,0 +1,140 @@
+{
+  "feature_id": "ENCRYPTED_CONTROL_PLANE_NOTIFICATIONS",
+  "title": "Encrypted control plane for notifications and sensitive browser request/result flows",
+  "status": "grounded_draft",
+  "source_evidence": [
+    "docs/control-planes.md",
+    "internal/api/handlers/system.go",
+    "internal/controlplane/encrypted_transport.go",
+    "internal/controlplane/encrypted_domain_handlers.go",
+    "internal/controlplane/encrypted_route_handlers.go",
+    "internal/controlplane/notification_encrypted_handlers.go",
+    "web/src/lib/nostr/encrypted-controlplane.js",
+    "web/src/lib/stores/notifications.svelte.js",
+    "web/tests/unit/encrypted-controlplane.test.js",
+    "web/tests/unit/notifications-store.test.js",
+    "internal/controlplane/encrypted_transport_test.go",
+    "docs/investigations/pstf-discovery-2026-05-03.md",
+    "pstf/product_map.md",
+    "pstf/spec_gap_report.md"
+  ],
+  "actors": [
+    {
+      "name": "authenticated_signer",
+      "role": "browser-side requester that signs and encrypts sensitive operations"
+    },
+    {
+      "name": "bahia_service",
+      "role": "service pubkey owner that decrypts requests, authorizes operations, dispatches handlers, and publishes encrypted results"
+    },
+    {
+      "name": "encrypted_request_relays",
+      "role": "relay set explicitly configured for encrypted browser request/result traffic"
+    }
+  ],
+  "description": "This slice covers the signer-first encrypted browser request/result transport used for sensitive operations, with notifications as the primary product vertical. It includes system discovery requirements, relay selection rules, request construction, publish/result correlation behavior, backend decrypt/authorize/dispatch behavior, and notification channel/log operations built on that transport.",
+  "in_scope": [
+    "`/api/v1/system/info` fields required for encrypted browser operations: `nostr.service_pubkey`, `nostr.browser_encrypted_request_relays`, and the effective encrypted capability gate used by frontend stores",
+    "browser encrypted transport behavior in `web/src/lib/nostr/encrypted-controlplane.js`",
+    "backend encrypted request/result handling in `internal/controlplane/encrypted_transport.go`",
+    "notification encrypted operations in `internal/controlplane/notification_encrypted_handlers.go` and `web/src/lib/stores/notifications.svelte.js`",
+    "negative behavior for unavailable encrypted transport, publish rejection, decrypt failure, unauthorized requester, and terminal error results"
+  ],
+  "out_of_scope": [
+    "public signer-first command families for services, deployments, policies, and artifacts",
+    "REST compatibility behavior except where it helps define the boundary of this slice",
+    "org/member/invite and payment-history encrypted domains beyond acknowledging that they share the same transport family",
+    "relay-sidecar readable-kind policy for public operator flows",
+    "Soul Factory and LLM control-plane behavior"
+  ],
+  "preconditions": [
+    "The browser has an authenticated signer capable of signing and encrypting requests",
+    "`/api/v1/system/info` advertises a valid Bahia service pubkey and at least one `browser_encrypted_request_relays` URL",
+    "The encrypted transport is enabled in the current deployment topology and the backend is subscribed to the encrypted request kind family",
+    "The requesting pubkey is allowed to invoke the targeted encrypted operation"
+  ],
+  "postconditions": [
+    "Sensitive notification operations complete without publishing payloads to public browser relay URLs",
+    "The requester receives either a correlated encrypted success result or a correlated encrypted terminal error result",
+    "Frontend store state is updated only from decrypted result payloads or explicit local error handling"
+  ],
+  "happy_paths": [
+    {
+      "id": "ECPN-HP-001",
+      "title": "Load notification channels through encrypted request/result transport",
+      "steps": [
+        "Frontend checks encrypted request availability from current system info",
+        "Frontend publishes encrypted request event with operation `notifications.channels.list`",
+        "Backend decrypts, authorizes, dispatches the notification list handler, and publishes a correlated encrypted result",
+        "Frontend decrypts the result and populates notification channel state"
+      ]
+    },
+    {
+      "id": "ECPN-HP-002",
+      "title": "Create, update, test, delete, and list logs for notification channels over encrypted transport",
+      "steps": [
+        "Frontend issues encrypted operations for channel create/update/test/delete and log retrieval",
+        "Backend dispatches the matching encrypted notification handlers",
+        "Frontend updates local channel/log state from decrypted payloads"
+      ]
+    }
+  ],
+  "failure_paths": [
+    {
+      "id": "ECPN-FP-001",
+      "title": "Encrypted transport unavailable before publish",
+      "behavior": "If system discovery does not advertise a service pubkey plus encrypted-request relays, the frontend store must fail locally and not publish any request"
+    },
+    {
+      "id": "ECPN-FP-002",
+      "title": "Publish rejected by all encrypted-request relays",
+      "behavior": "If no relay returns an accepted OK, the request fails and the caller receives the rejection reason"
+    },
+    {
+      "id": "ECPN-FP-003",
+      "title": "Decrypt failure on backend",
+      "behavior": "Malformed or undecryptable encrypted requests yield a correlated encrypted terminal error result with a decrypt-failure code"
+    },
+    {
+      "id": "ECPN-FP-004",
+      "title": "Unauthorized requester",
+      "behavior": "A requester pubkey not authorized for the encrypted domain receives a correlated encrypted terminal error result and the handler is not invoked"
+    },
+    {
+      "id": "ECPN-FP-005",
+      "title": "Encrypted terminal result error",
+      "behavior": "If the backend returns a terminal error payload, the frontend surfaces the error message rather than silently treating the request as successful"
+    }
+  ],
+  "edge_cases": [
+    "Correlated result filtering must ignore mismatched `#e`, mismatched `#p`, and spoofed authors",
+    "Duplicate result events must not cause duplicate resolution of the same request",
+    "Public browser relay URLs must not be treated as encrypted-request relay URLs even if they are present in system info"
+  ],
+  "non_functional_requirements": [
+    "Sensitive browser operations must not leak plaintext payloads onto public browser relays",
+    "Request/result correlation must be explicit and deterministic via request event id and requester pubkey",
+    "The transport must unsubscribe/clean up subscriptions after terminal success or failure",
+    "The transport must propagate publish rejection and terminal error details clearly to callers"
+  ],
+  "dependencies": [
+    "`/api/v1/system/info` discovery contract",
+    "Browser signer implementation in `web/src/lib/stores/auth.svelte.js`",
+    "Encrypted request/result transport code in frontend and backend",
+    "Notification encrypted handlers and store operations"
+  ],
+  "ambiguities": [
+    {
+      "type": "doc_gap",
+      "note": "The encrypted operation catalog is not documented as comprehensively as the public control-plane families; notifications are well-evidenced, but other encrypted domains share the transport with less explicit narrative coverage."
+    },
+    {
+      "type": "transport_boundary",
+      "note": "The slice is clear on browser encrypted-request relays versus public browser relays, but end-to-end relay topology verification is currently stronger in unit tests and docs than in selected browser E2E evidence."
+    }
+  ],
+  "human_decisions": [
+    "Should the encrypted operation catalog be promoted to a first-class normative table alongside public command families?",
+    "Should encrypted-domain browser journeys receive explicit E2E coverage as a release gate, or is unit/backend transport coverage sufficient for this slice?"
+  ]
+}
