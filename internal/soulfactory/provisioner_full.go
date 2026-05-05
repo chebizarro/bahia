@@ -3,7 +3,6 @@ package soulfactory
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"time"
 
@@ -27,6 +26,7 @@ type FullProvisioner struct {
 	workspaceManager *WorkspaceManager
 	nip05Manager     *NIP05Manager
 	bahiaIntegration *BahiaIntegration
+	lookupSoul       func(context.Context, string) (*domain.AgentSoul, error)
 }
 
 // FullProvisionerConfig holds all adapter configurations.
@@ -49,6 +49,7 @@ func NewFullProvisioner(reactor *Reactor, config FullProvisionerConfig, bahiaInt
 		qdrantClient:     qdrant.NewClient(config.Qdrant, logger),
 		agentMemory:      agentmemory.NewClient(config.AgentMemory, logger),
 		bahiaIntegration: bahiaIntegration,
+		lookupSoul:       reactor.GetSoul,
 	}
 	if len(config.Blossom.Servers) > 0 {
 		p.blossomClient = blossom.NewClient(config.Blossom, logger)
@@ -332,11 +333,7 @@ func (p *FullProvisioner) ProvisionFull(ctx context.Context, req *domain.Provisi
 
 			// Create initial deployment intent
 			if _, err := p.bahiaIntegration.CreateInitialDeployment(ctx, soul, serviceID); err != nil {
-				if errors.Is(err, ErrDeployableArtifactRequired) {
-					logger.Info("bahia initial deployment skipped", "reason", err)
-				} else {
-					logger.Warn("bahia initial deployment failed", "error", err)
-				}
+				logger.Warn("bahia initial deployment failed", "error", err)
 			}
 
 			// Sync status
@@ -368,24 +365,147 @@ func (p *FullProvisioner) ProvisionFull(ctx context.Context, req *domain.Provisi
 	return soul, nil
 }
 
-func (p *FullProvisioner) SuspendSoul(context.Context, string, string) error {
-	return ErrLifecycleUnsupported
+func (p *FullProvisioner) SuspendSoul(ctx context.Context, soulRef, reason string) error {
+	soul, err := p.lookupSoul(ctx, soulRef)
+	if err != nil {
+		return fmt.Errorf("load soul: %w", err)
+	}
+	if soul == nil {
+		return fmt.Errorf("soul not found: %s", soulRef)
+	}
+	if p.bahiaIntegration != nil {
+		if err := p.bahiaIntegration.HandleLifecycleAction(ctx, soul, domain.SoulActionSuspend); err != nil {
+			return err
+		}
+	}
+	if soul.NostrPubkey != "" {
+		if err := p.reactor.signer.SuspendAgent(ctx, soul.NostrPubkey); err != nil {
+			return fmt.Errorf("suspend signer access: %w", err)
+		}
+	}
+	soul.Status = domain.SoulStatusSuspended
+	soul.DeployStatus = "stopped"
+	now := time.Now().UTC()
+	soul.SuspendedAt = &now
+	if err := p.reactor.PublishSoul(ctx, soul); err != nil {
+		return fmt.Errorf("publish suspended soul: %w", err)
+	}
+	return nil
 }
 
-func (p *FullProvisioner) ResumeSoul(context.Context, string) error {
-	return ErrLifecycleUnsupported
+func (p *FullProvisioner) ResumeSoul(ctx context.Context, soulRef string) error {
+	soul, err := p.lookupSoul(ctx, soulRef)
+	if err != nil {
+		return fmt.Errorf("load soul: %w", err)
+	}
+	if soul == nil {
+		return fmt.Errorf("soul not found: %s", soulRef)
+	}
+	if soul.Status != domain.SoulStatusSuspended {
+		return fmt.Errorf("cannot resume soul in status %s", soul.Status)
+	}
+	if p.bahiaIntegration != nil {
+		if err := p.bahiaIntegration.HandleLifecycleAction(ctx, soul, domain.SoulActionResume); err != nil {
+			return err
+		}
+	}
+	if soul.NostrPubkey != "" {
+		if err := p.reactor.signer.ResumeAgent(ctx, soul.NostrPubkey); err != nil {
+			return fmt.Errorf("resume signer access: %w", err)
+		}
+	}
+	soul.Status = domain.SoulStatusActive
+	soul.DeployStatus = "deploying"
+	soul.SuspendedAt = nil
+	if err := p.reactor.PublishSoul(ctx, soul); err != nil {
+		return fmt.Errorf("publish resumed soul: %w", err)
+	}
+	return nil
 }
 
-func (p *FullProvisioner) RevokeSoul(context.Context, string, string) error {
-	return ErrLifecycleUnsupported
+func (p *FullProvisioner) RevokeSoul(ctx context.Context, soulRef, reason string) error {
+	soul, err := p.lookupSoul(ctx, soulRef)
+	if err != nil {
+		return fmt.Errorf("load soul: %w", err)
+	}
+	if soul == nil {
+		return fmt.Errorf("soul not found: %s", soulRef)
+	}
+	if p.bahiaIntegration != nil {
+		if err := p.bahiaIntegration.HandleLifecycleAction(ctx, soul, domain.SoulActionRevoke); err != nil {
+			return err
+		}
+	}
+	if soul.NostrPubkey != "" {
+		if err := p.reactor.signer.RevokeAgent(ctx, soul.NostrPubkey); err != nil {
+			return fmt.Errorf("revoke signer access: %w", err)
+		}
+	}
+	soul.Status = domain.SoulStatusRevoked
+	soul.DeployStatus = "stopped"
+	now := time.Now().UTC()
+	soul.RevokedAt = &now
+	if err := p.reactor.PublishSoul(ctx, soul); err != nil {
+		return fmt.Errorf("publish revoked soul: %w", err)
+	}
+	return nil
 }
 
-func (p *FullProvisioner) RegenerateSoul(context.Context, string, string) error {
-	return ErrLifecycleUnsupported
+func (p *FullProvisioner) RegenerateSoul(ctx context.Context, soulRef, newBrief string) error {
+	soul, err := p.lookupSoul(ctx, soulRef)
+	if err != nil {
+		return fmt.Errorf("load soul: %w", err)
+	}
+	if soul == nil {
+		return fmt.Errorf("soul not found: %s", soulRef)
+	}
+	if newBrief == "" {
+		return fmt.Errorf("regenerate requires a new brief")
+	}
+	if soul.Status == domain.SoulStatusRevoked {
+		return fmt.Errorf("cannot regenerate revoked soul")
+	}
+	output, err := p.reactor.generator.Generate(ctx, domain.SoulGeneratorInput{
+		AgentID: soul.AgentID,
+		Name:    soul.Name,
+		Brief:   newBrief,
+		Tier:    soul.Tier,
+	})
+	if err != nil {
+		return fmt.Errorf("regenerate soul: %w", err)
+	}
+	soul.SoulMD = output.SoulMD
+	soul.IdentityMD = output.IdentityMD
+	soul.AllowedKinds = output.AllowedKinds
+	soul.ToolGrants = output.ToolGrants
+	soul.OriginalBrief = newBrief
+	if err := p.reactor.PublishSoul(ctx, soul); err != nil {
+		return fmt.Errorf("publish regenerated soul: %w", err)
+	}
+	return nil
 }
 
-func (p *FullProvisioner) RedeploySoul(context.Context, string) error {
-	return ErrLifecycleUnsupported
+func (p *FullProvisioner) RedeploySoul(ctx context.Context, soulRef string) error {
+	soul, err := p.lookupSoul(ctx, soulRef)
+	if err != nil {
+		return fmt.Errorf("load soul: %w", err)
+	}
+	if soul == nil {
+		return fmt.Errorf("soul not found: %s", soulRef)
+	}
+	if soul.Status != domain.SoulStatusActive {
+		return fmt.Errorf("cannot redeploy soul in status %s", soul.Status)
+	}
+	if p.bahiaIntegration != nil {
+		if err := p.bahiaIntegration.HandleLifecycleAction(ctx, soul, domain.SoulActionRedeploy); err != nil {
+			return err
+		}
+	}
+	soul.DeployStatus = "deploying"
+	if err := p.reactor.PublishSoul(ctx, soul); err != nil {
+		return fmt.Errorf("publish redeployed soul: %w", err)
+	}
+	return nil
 }
 
 func (p *FullProvisioner) publishProgress(ctx context.Context, requestEvent *nostr.Event, step domain.ProvisioningStep, current, total int, message string) {

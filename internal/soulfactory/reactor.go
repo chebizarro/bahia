@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -593,6 +594,11 @@ func (r *Reactor) GetRun(requestID string) *domain.ProvisioningRun {
 
 // GetSoul fetches a soul by its d-tag (agent ID) from the relay network.
 func (r *Reactor) GetSoul(ctx context.Context, agentID string) (*domain.AgentSoul, error) {
+	agentID = normalizeSoulLookupRef(agentID)
+	if agentID == "" {
+		return nil, nil
+	}
+
 	// Query for the soul event using QuerySingle
 	result := r.pool.QuerySingle(ctx, r.config.Relays, nostr.Filter{
 		Kinds:   []int{domain.KindAgentSoul},
@@ -606,6 +612,18 @@ func (r *Reactor) GetSoul(ctx context.Context, agentID string) (*domain.AgentSou
 	}
 
 	return r.parseSoulEvent(result.Event), nil
+}
+
+func normalizeSoulLookupRef(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	parts := strings.Split(value, ":")
+	if len(parts) >= 3 {
+		return strings.TrimSpace(parts[len(parts)-1])
+	}
+	return value
 }
 
 // parseSoulEvent converts a Nostr event to an AgentSoul.

@@ -87,24 +87,23 @@ func (h *LifecycleHandler) HandleAction(ctx context.Context, event *nostr.Event)
 
 // handleSuspend pauses a soul's operation and deployment.
 func (h *LifecycleHandler) handleSuspend(ctx context.Context, soul *domain.AgentSoul, action *domain.SoulAction) error {
-	logger := h.logger.With("agent_id", soul.AgentID)
-
-	// Update soul status
-	soul.Status = domain.SoulStatusSuspended
-	now := time.Now()
-	soul.SuspendedAt = &now
-
-	// Update bahia deployment
 	if h.bahiaIntegration != nil {
 		if err := h.bahiaIntegration.HandleLifecycleAction(ctx, soul, domain.SoulActionSuspend); err != nil {
-			logger.Warn("bahia suspend failed", "error", err)
+			return fmt.Errorf("bahia suspend: %w", err)
 		}
 	}
 
-	// Revoke Signet access (temporarily)
-	// Note: In production, this would call Signet to pause signing capability
+	if soul.NostrPubkey != "" {
+		if err := h.reactor.signer.SuspendAgent(ctx, soul.NostrPubkey); err != nil {
+			return fmt.Errorf("suspend signer access: %w", err)
+		}
+	}
 
-	// Publish updated soul event
+	soul.Status = domain.SoulStatusSuspended
+	soul.DeployStatus = "stopped"
+	now := time.Now()
+	soul.SuspendedAt = &now
+
 	if err := h.publishSoulUpdate(ctx, soul, "suspended", action.Reason); err != nil {
 		return fmt.Errorf("publish soul update: %w", err)
 	}
@@ -115,27 +114,26 @@ func (h *LifecycleHandler) handleSuspend(ctx context.Context, soul *domain.Agent
 
 // handleResume resumes a suspended soul.
 func (h *LifecycleHandler) handleResume(ctx context.Context, soul *domain.AgentSoul, action *domain.SoulAction) error {
-	logger := h.logger.With("agent_id", soul.AgentID)
-
 	if soul.Status != domain.SoulStatusSuspended {
 		return fmt.Errorf("cannot resume soul in status %s", soul.Status)
 	}
 
-	// Update soul status
-	soul.Status = domain.SoulStatusActive
-	soul.SuspendedAt = nil
-
-	// Update bahia deployment
 	if h.bahiaIntegration != nil {
 		if err := h.bahiaIntegration.HandleLifecycleAction(ctx, soul, domain.SoulActionResume); err != nil {
-			logger.Warn("bahia resume failed", "error", err)
+			return fmt.Errorf("bahia resume: %w", err)
 		}
 	}
 
-	// Restore Signet access
-	// Note: In production, this would call Signet to restore signing capability
+	if soul.NostrPubkey != "" {
+		if err := h.reactor.signer.ResumeAgent(ctx, soul.NostrPubkey); err != nil {
+			return fmt.Errorf("resume signer access: %w", err)
+		}
+	}
 
-	// Publish updated soul event
+	soul.Status = domain.SoulStatusActive
+	soul.DeployStatus = "deploying"
+	soul.SuspendedAt = nil
+
 	if err := h.publishSoulUpdate(ctx, soul, "active", ""); err != nil {
 		return fmt.Errorf("publish soul update: %w", err)
 	}
@@ -145,24 +143,22 @@ func (h *LifecycleHandler) handleResume(ctx context.Context, soul *domain.AgentS
 
 // handleRevoke permanently terminates a soul.
 func (h *LifecycleHandler) handleRevoke(ctx context.Context, soul *domain.AgentSoul, action *domain.SoulAction) error {
-	logger := h.logger.With("agent_id", soul.AgentID)
-
-	// Update soul status
-	soul.Status = domain.SoulStatusRevoked
-	now := time.Now()
-	soul.RevokedAt = &now
-
-	// Update bahia deployment (terminate)
 	if h.bahiaIntegration != nil {
 		if err := h.bahiaIntegration.HandleLifecycleAction(ctx, soul, domain.SoulActionRevoke); err != nil {
-			logger.Warn("bahia revoke failed", "error", err)
+			return fmt.Errorf("bahia revoke: %w", err)
 		}
 	}
 
-	// Permanently revoke Signet access
-	if err := h.reactor.signer.RevokeAgent(ctx, soul.AgentID); err != nil {
-		logger.Warn("signet revocation failed", "error", err)
+	if soul.NostrPubkey != "" {
+		if err := h.reactor.signer.RevokeAgent(ctx, soul.NostrPubkey); err != nil {
+			return fmt.Errorf("revoke signer access: %w", err)
+		}
 	}
+
+	soul.Status = domain.SoulStatusRevoked
+	soul.DeployStatus = "stopped"
+	now := time.Now()
+	soul.RevokedAt = &now
 
 	// Unregister from status sync
 	if h.statusSync != nil && soul.BahiaServiceID != nil {
@@ -221,8 +217,6 @@ func (h *LifecycleHandler) handleRegenerate(ctx context.Context, soul *domain.Ag
 
 // handleRedeploy triggers a fresh deployment of the soul.
 func (h *LifecycleHandler) handleRedeploy(ctx context.Context, soul *domain.AgentSoul, action *domain.SoulAction) error {
-	logger := h.logger.With("agent_id", soul.AgentID)
-
 	if soul.Status != domain.SoulStatusActive {
 		return fmt.Errorf("cannot redeploy soul in status %s", soul.Status)
 	}
@@ -233,8 +227,7 @@ func (h *LifecycleHandler) handleRedeploy(ctx context.Context, soul *domain.Agen
 			return fmt.Errorf("bahia redeploy: %w", err)
 		}
 	}
-
-	logger.Info("soul redeployment triggered")
+	soul.DeployStatus = "deploying"
 
 	return h.publishActionResult(ctx, action, "completed", map[string]interface{}{
 		"redeploying": true,
@@ -314,52 +307,11 @@ func (h *LifecycleHandler) isAuthorized(pubkey string, soul *domain.AgentSoul) b
 
 // publishSoulUpdate publishes an updated soul event.
 func (h *LifecycleHandler) publishSoulUpdate(ctx context.Context, soul *domain.AgentSoul, statusOverride, reason string) error {
-	tags := nostr.Tags{
-		{"d", soul.AgentID},
-		{"name", soul.Name},
-		{"status", string(soul.Status)},
-		{"tier", string(soul.Tier)},
-		{"npub", soul.NostrNpub},
-	}
-
 	if statusOverride != "" {
-		// Replace status tag
-		for i, tag := range tags {
-			if tag[0] == "status" {
-				tags[i] = nostr.Tag{"status", statusOverride}
-				break
-			}
-		}
+		soul.Status = domain.SoulStatus(statusOverride)
 	}
-
-	if soul.DeployStatus != "" {
-		tags = append(tags, nostr.Tag{"deploy-status", soul.DeployStatus})
-	}
-	if soul.AvatarURL != "" {
-		tags = append(tags, nostr.Tag{"avatar", soul.AvatarURL})
-	}
-	if soul.NIP05 != "" {
-		tags = append(tags, nostr.Tag{"nip05", soul.NIP05})
-	}
-	if soul.BahiaServiceID != nil {
-		tags = append(tags, nostr.Tag{"bahia-service", soul.BahiaServiceID.String()})
-	}
-	if reason != "" {
-		tags = append(tags, nostr.Tag{"reason", reason})
-	}
-
-	event := &nostr.Event{
-		Kind:      domain.KindAgentSoul,
-		CreatedAt: nostr.Now(),
-		Tags:      tags,
-		Content:   soul.SoulMD,
-	}
-
-	if err := h.reactor.signer.Sign(ctx, event); err != nil {
-		return fmt.Errorf("sign event: %w", err)
-	}
-
-	return h.reactor.publish(ctx, event, h.reactor.config.Relays)
+	_ = reason
+	return h.reactor.PublishSoul(ctx, soul)
 }
 
 // publishActionResult publishes the result of an action.

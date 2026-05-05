@@ -168,8 +168,6 @@ export function unsubscribeFromSoulUpdates() {
   }
 }
 
-const PROVISIONING_EVENT_TIMEOUT_MS = 120000;
-
 // Track a provisioning run
 export function trackProvisioningRun(requestEventId, { onProgress, onComplete, onError } = {}) {
   const run = $state({
@@ -184,31 +182,7 @@ export function trackProvisioningRun(requestEventId, { onProgress, onComplete, o
   provisioningRuns.set(requestEventId, run);
 
   const seenEventIds = new Set();
-  let lastEventAt = Date.now();
   let finished = false;
-
-  const failRun = (message) => {
-    if (finished) return;
-    finished = true;
-
-    const currentRun = provisioningRuns.get(requestEventId);
-    if (currentRun) {
-      currentRun.status = 'failed';
-      currentRun.message = message;
-      currentRun.result = { success: false, data: {}, error: message };
-    }
-
-    clearInterval(timeoutTimer);
-    unsub();
-    if (onError) onError(message);
-  };
-
-  const timeoutTimer = setInterval(() => {
-    if (finished) return;
-    if (Date.now() - lastEventAt > PROVISIONING_EVENT_TIMEOUT_MS) {
-      failRun('Provisioning timed out waiting for relay updates');
-    }
-  }, 1000);
 
   const unsub = nostr.subscribe([
     { kinds: [KINDS.PROVISIONING_STATUS], '#e': [requestEventId] },
@@ -218,7 +192,6 @@ export function trackProvisioningRun(requestEventId, { onProgress, onComplete, o
       if (finished) return;
       if (event?.id && seenEventIds.has(event.id)) return;
       if (event?.id) seenEventIds.add(event.id);
-      lastEventAt = Date.now();
 
       if (event.kind === KINDS.PROVISIONING_STATUS) {
         let step = '';
@@ -274,7 +247,6 @@ export function trackProvisioningRun(requestEventId, { onProgress, onComplete, o
         }
 
         finished = true;
-        clearInterval(timeoutTimer);
         unsub();
 
         if (success) {
@@ -293,13 +265,17 @@ export function trackProvisioningRun(requestEventId, { onProgress, onComplete, o
     },
     onClosed: (reason) => {
       if (finished) return;
-      failRun(reason ? `Provisioning subscription closed: ${reason}` : 'Provisioning subscription closed by relay');
+      const currentRun = provisioningRuns.get(requestEventId);
+      if (currentRun) {
+        currentRun.message = reason
+          ? `Relay closed this subscription: ${reason}. Waiting for an explicit provisioning result…`
+          : 'Relay closed this subscription. Waiting for an explicit provisioning result…';
+      }
     }
   });
 
   return () => {
     finished = true;
-    clearInterval(timeoutTimer);
     unsub();
     provisioningRuns.delete(requestEventId);
   };

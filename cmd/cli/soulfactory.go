@@ -1,12 +1,16 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
 	"time"
 
+	"github.com/nbd-wtf/go-nostr"
+	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/soulfactory"
 	"github.com/spf13/cobra"
 )
 
@@ -43,6 +47,20 @@ var defaultRelays = []string{
 	"wss://armada.sharegap.net",
 }
 
+type cliSoulFactoryClient interface {
+	Close()
+	ListSouls(context.Context, int, string) ([]domain.AgentSoul, error)
+	GetSoul(context.Context, string) (*domain.AgentSoul, error)
+	ListTemplates(context.Context, int, string) ([]domain.SoulTemplate, error)
+	PublishProvisionRequest(context.Context, domain.ProvisioningRequest) (*soulfactory.SoulFactoryRequestReceipt, error)
+	AwaitProvisioningResult(context.Context, *soulfactory.SoulFactoryRequestReceipt, func(soulfactory.SoulFactoryStatusEvent)) (*domain.ProvisioningRun, error)
+	ExecuteSoulAction(context.Context, string, domain.SoulActionType, string, string) (*nostr.Event, error)
+}
+
+var newCLISoulFactoryClient = func(relays []string, privateKey string) (cliSoulFactoryClient, error) {
+	return soulfactory.NewNostrClientFromPrivateKey(relays, privateKey)
+}
+
 func soulFactoryCommands() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "souls",
@@ -73,9 +91,23 @@ func soulsListCommand() *cobra.Command {
 		Use:   "list",
 		Short: "List agent souls",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			_ = status
-			_ = limit
-			return soulFactoryUnavailableErr("list souls")
+			cli, err := buildCLISoulFactoryClient(cmd)
+			if err != nil {
+				return err
+			}
+			defer cli.Close()
+
+			souls, err := cli.ListSouls(cmd.Context(), limit, status)
+			if err != nil {
+				return err
+			}
+			items := make([]Soul, 0, len(souls))
+			for _, soul := range souls {
+				items = append(items, soulToCLI(soul))
+			}
+			return output(items, []string{"AGENT ID", "NAME", "STATUS", "DEPLOY", "TIER", "NPUB"}, func(s Soul) []string {
+				return []string{s.AgentID, s.Name, s.Status, firstNonEmpty(s.DeployStatus, "-"), s.Tier, truncate(s.Npub, 16)}
+			})
 		},
 	}
 
@@ -91,7 +123,20 @@ func soulsGetCommand() *cobra.Command {
 		Short: "Get soul details",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return soulFactoryUnavailableErr("get soul")
+			cli, err := buildCLISoulFactoryClient(cmd)
+			if err != nil {
+				return err
+			}
+			defer cli.Close()
+
+			soul, err := cli.GetSoul(cmd.Context(), args[0])
+			if err != nil {
+				return err
+			}
+			if soul == nil {
+				return fmt.Errorf("soul not found: %s", args[0])
+			}
+			return outputSingle(soul)
 		},
 	}
 }
@@ -114,7 +159,6 @@ func soulsProvisionCommand() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			agentID := args[0]
 
-			// Load brief from file if specified
 			if briefFile != "" {
 				data, err := os.ReadFile(briefFile)
 				if err != nil {
@@ -123,18 +167,53 @@ func soulsProvisionCommand() *cobra.Command {
 				brief = string(data)
 			}
 
-			// Validate
 			if brief == "" && template == "" {
 				return fmt.Errorf("must specify --brief or --template")
 			}
-
 			if name == "" {
 				name = strings.Title(strings.ReplaceAll(agentID, "-", " "))
 			}
+			if tier == "" {
+				tier = string(domain.SoulTierStandard)
+			}
 
-			_ = follow
+			cli, err := buildCLISoulFactoryClient(cmd)
+			if err != nil {
+				return err
+			}
+			defer cli.Close()
+
+			receipt, err := cli.PublishProvisionRequest(cmd.Context(), domain.ProvisioningRequest{
+				AgentID:     agentID,
+				Name:        name,
+				Tier:        domain.SoulTier(tier),
+				TemplateRef: template,
+				Brief:       brief,
+			})
+			if err != nil {
+				return err
+			}
+			if !follow {
+				return outputSingle(receipt)
+			}
+
+			run, err := cli.AwaitProvisioningResult(cmd.Context(), receipt, soulProvisionStatusCallback(cmd))
+			if err != nil {
+				return err
+			}
+			if outputFormat != "table" {
+				if err := outputSingle(run); err != nil {
+					return err
+				}
+			}
+			if run.Status != domain.ProvisioningStatusCompleted {
+				return fmt.Errorf("%s", firstNonEmpty(run.Error, "provisioning failed"))
+			}
+			if outputFormat == "table" {
+				fmt.Fprintf(cmd.OutOrStdout(), "✓ Soul provisioned: %s\n", firstNonEmpty(run.AgentID, agentID))
+			}
 			_ = interactive
-			return soulFactoryUnavailableErr("provision soul")
+			return nil
 		},
 	}
 
@@ -157,11 +236,7 @@ func soulsSuspendCommand() *cobra.Command {
 		Short: "Suspend an agent soul",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			agentID := args[0]
-
-			_ = agentID
-			_ = reason
-			return soulFactoryUnavailableErr("suspend soul")
+			return runSoulActionCommand(cmd, args[0], domain.SoulActionSuspend, reason, "")
 		},
 	}
 
@@ -176,10 +251,7 @@ func soulsResumeCommand() *cobra.Command {
 		Short: "Resume a suspended soul",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			agentID := args[0]
-
-			_ = agentID
-			return soulFactoryUnavailableErr("resume soul")
+			return runSoulActionCommand(cmd, args[0], domain.SoulActionResume, "", "")
 		},
 	}
 }
@@ -194,23 +266,16 @@ func soulsRevokeCommand() *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			agentID := args[0]
-			_ = agentID
-			_ = reason
-			_ = force
-			return soulFactoryUnavailableErr("revoke soul")
-
 			if !force {
-				fmt.Printf("⚠️  This will permanently revoke soul '%s' and cannot be undone.\n", agentID)
-				fmt.Print("Type the agent ID to confirm: ")
+				fmt.Fprintf(cmd.OutOrStdout(), "⚠️  This will permanently revoke soul '%s' and cannot be undone.\n", agentID)
+				fmt.Fprint(cmd.OutOrStdout(), "Type the agent ID to confirm: ")
 				var confirm string
-				fmt.Scanln(&confirm)
+				fmt.Fscanln(cmd.InOrStdin(), &confirm)
 				if confirm != agentID {
 					return fmt.Errorf("confirmation failed")
 				}
 			}
-
-			_ = reason
-			return soulFactoryUnavailableErr("revoke soul")
+			return runSoulActionCommand(cmd, agentID, domain.SoulActionRevoke, reason, "")
 		},
 	}
 
@@ -226,10 +291,7 @@ func soulsRedeployCommand() *cobra.Command {
 		Short: "Trigger a fresh deployment",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			agentID := args[0]
-
-			_ = agentID
-			return soulFactoryUnavailableErr("redeploy soul")
+			return runSoulActionCommand(cmd, args[0], domain.SoulActionRedeploy, "", "")
 		},
 	}
 }
@@ -243,9 +305,6 @@ func soulsRegenerateCommand() *cobra.Command {
 		Short: "Regenerate soul with a new brief",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			agentID := args[0]
-
-			// Load brief from file if specified
 			if briefFile != "" {
 				data, err := os.ReadFile(briefFile)
 				if err != nil {
@@ -253,14 +312,10 @@ func soulsRegenerateCommand() *cobra.Command {
 				}
 				brief = string(data)
 			}
-
 			if brief == "" {
 				return fmt.Errorf("must specify --brief or --brief-file")
 			}
-
-			_ = agentID
-			_ = brief
-			return soulFactoryUnavailableErr("regenerate soul")
+			return runSoulActionCommand(cmd, args[0], domain.SoulActionRegenerate, "", brief)
 		},
 	}
 
@@ -271,6 +326,8 @@ func soulsRegenerateCommand() *cobra.Command {
 }
 
 func templatesCommand() *cobra.Command {
+	var tier string
+	var limit int
 	cmd := &cobra.Command{
 		Use:   "templates",
 		Short: "Manage soul templates",
@@ -280,16 +337,49 @@ func templatesCommand() *cobra.Command {
 		Use:   "list",
 		Short: "List available templates",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return soulFactoryUnavailableErr("list templates")
+			cli, err := buildCLISoulFactoryClient(cmd)
+			if err != nil {
+				return err
+			}
+			defer cli.Close()
+
+			templates, err := cli.ListTemplates(cmd.Context(), limit, tier)
+			if err != nil {
+				return err
+			}
+			items := make([]Template, 0, len(templates))
+			for _, tmpl := range templates {
+				items = append(items, templateToCLI(tmpl))
+			}
+			return output(items, []string{"IDENTIFIER", "NAME", "TIER", "DESCRIPTION"}, func(t Template) []string {
+				return []string{t.Identifier, t.Name, t.Tier, truncate(t.Description, 48)}
+			})
 		},
 	}
+	listCmd.Flags().StringVarP(&tier, "tier", "t", "", "Filter by tier")
+	listCmd.Flags().IntVarP(&limit, "limit", "n", 50, "Maximum number of results")
 
 	getCmd := &cobra.Command{
 		Use:   "get [identifier]",
 		Short: "Get template details",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return soulFactoryUnavailableErr("get template")
+			cli, err := buildCLISoulFactoryClient(cmd)
+			if err != nil {
+				return err
+			}
+			defer cli.Close()
+
+			templates, err := cli.ListTemplates(cmd.Context(), 200, "")
+			if err != nil {
+				return err
+			}
+			for _, tmpl := range templates {
+				if tmpl.Identifier == args[0] {
+					return outputSingle(tmpl)
+				}
+			}
+			return fmt.Errorf("template not found: %s", args[0])
 		},
 	}
 
@@ -297,9 +387,135 @@ func templatesCommand() *cobra.Command {
 	return cmd
 }
 
-// Helper to build provisioning request event
-func soulFactoryUnavailableErr(operation string) error {
-	return fmt.Errorf("cannot %s: Soul Factory CLI does not yet have configured Nostr signing/publish/query support", operation)
+func buildCLISoulFactoryClient(cmd *cobra.Command) (cliSoulFactoryClient, error) {
+	key, err := resolveNostrPrivateKeyInput(cmd)
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(key) == "" {
+		return nil, fmt.Errorf("provide --nsec, --privkey, BAHIA_NOSTR_NSEC, or BAHIA_NOSTR_PRIVATE_KEY for signer-first Soul Factory requests")
+	}
+	var discovery systemInfoClient
+	if apiClient != nil {
+		discovery = apiClient
+	}
+	relays, err := resolveOperatorRelays(cmd.Context(), cmd, discovery)
+	if err != nil {
+		return nil, err
+	}
+	return newCLISoulFactoryClient(relays, key)
+}
+
+func soulProvisionStatusCallback(cmd *cobra.Command) func(soulfactory.SoulFactoryStatusEvent) {
+	if outputFormat != "table" {
+		return nil
+	}
+	return func(status soulfactory.SoulFactoryStatusEvent) {
+		message := strings.TrimSpace(status.Message)
+		if message == "" {
+			message = firstNonEmpty(status.Step, status.Status)
+		}
+		if message == "" {
+			message = "status update"
+		}
+		fmt.Fprintf(cmd.ErrOrStderr(), "→ provisioning: %s\n", message)
+	}
+}
+
+func runSoulActionCommand(cmd *cobra.Command, agentID string, action domain.SoulActionType, reason, newBrief string) error {
+	cli, err := buildCLISoulFactoryClient(cmd)
+	if err != nil {
+		return err
+	}
+	defer cli.Close()
+
+	soul, err := cli.GetSoul(cmd.Context(), agentID)
+	if err != nil {
+		return err
+	}
+	if soul == nil {
+		return fmt.Errorf("soul not found: %s", agentID)
+	}
+
+	resultEvent, err := cli.ExecuteSoulAction(cmd.Context(), soul.AgentID, action, reason, newBrief)
+	if err != nil {
+		return err
+	}
+	if !actionResultAccepted(resultEvent) {
+		return soulActionResultError(string(action), resultEvent)
+	}
+	return outputSingle(map[string]any{
+		"action":   action,
+		"agent_id": soul.AgentID,
+		"event_id": resultEvent.ID,
+		"status":   firstTagValue(resultEvent.Tags, "status"),
+		"result":   decodeJSONContent(resultEvent.Content),
+	})
+}
+
+func actionResultAccepted(event *nostr.Event) bool {
+	return strings.EqualFold(firstTagValue(event.Tags, "status"), "completed") || strings.EqualFold(firstTagValue(event.Tags, "status"), "success")
+}
+
+func soulActionResultError(action string, event *nostr.Event) error {
+	message := firstTagValue(event.Tags, "error")
+	if message == "" {
+		payload := decodeJSONContent(event.Content)
+		if mapped, ok := payload.(map[string]any); ok {
+			if v, ok := mapped["error"].(string); ok {
+				message = v
+			} else if v, ok := mapped["message"].(string); ok {
+				message = v
+			}
+		}
+	}
+	message = firstNonEmpty(strings.TrimSpace(message), strings.TrimSpace(event.Content), "terminal result was not successful")
+	return fmt.Errorf("%s failed: %s", action, message)
+}
+
+func decodeJSONContent(content string) any {
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return map[string]any{}
+	}
+	var payload any
+	if err := json.Unmarshal([]byte(content), &payload); err != nil {
+		return content
+	}
+	return payload
+}
+
+func firstTagValue(tags nostr.Tags, key string) string {
+	for _, tag := range tags {
+		if len(tag) >= 2 && tag[0] == key {
+			return tag[1]
+		}
+	}
+	return ""
+}
+
+func soulToCLI(soul domain.AgentSoul) Soul {
+	return Soul{
+		AgentID:      soul.AgentID,
+		Name:         soul.Name,
+		Status:       string(soul.Status),
+		DeployStatus: soul.DeployStatus,
+		Tier:         string(soul.Tier),
+		Npub:         soul.NostrNpub,
+		NIP05:        soul.NIP05,
+		AvatarURL:    soul.AvatarURL,
+		CreatedAt:    soul.CreatedAt.Format(time.RFC3339),
+	}
+}
+
+func templateToCLI(template domain.SoulTemplate) Template {
+	return Template{
+		Identifier:  template.Identifier,
+		Name:        template.Name,
+		Description: template.Description,
+		Tier:        string(template.Tier),
+		Tags:        append([]string(nil), template.Tags...),
+	}
 }
 
 func buildProvisioningRequestEvent(agentID, name, tier, template, brief string) map[string]interface{} {

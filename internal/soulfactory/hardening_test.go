@@ -104,7 +104,7 @@ func TestFullProvisionerSkipsUnconfiguredOptionalSteps(t *testing.T) {
 	}
 }
 
-func TestMCPServerReturnsUnavailableInsteadOfMockData(t *testing.T) {
+func TestMCPServerReturnsConfigurationErrorInsteadOfMockData(t *testing.T) {
 	server := NewMCPServer(NewReactor(Config{}, fakeGenerator{}, newFakeSigner(t), slog.Default()), nil, slog.Default())
 	for _, tool := range []string{"soul_factory_list_souls", "soul_factory_list_templates"} {
 		result, err := server.CallTool(t.Context(), tool, map[string]interface{}{})
@@ -113,6 +113,9 @@ func TestMCPServerReturnsUnavailableInsteadOfMockData(t *testing.T) {
 		}
 		if result == nil || !result.IsError {
 			t.Fatalf("CallTool(%s) = %+v, want MCP error result", tool, result)
+		}
+		if got := result.Content[0].Text; got == "" || got == "[]" {
+			t.Fatalf("CallTool(%s) error text = %q, want explicit configuration failure", tool, got)
 		}
 	}
 }

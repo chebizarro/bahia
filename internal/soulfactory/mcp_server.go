@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 
+	"github.com/nbd-wtf/go-nostr"
 	"github.com/openagentsinc/bahia/internal/domain"
 )
 
@@ -22,6 +24,19 @@ type MCPServerConfig struct {
 	Name        string `json:"name"`
 	Version     string `json:"version"`
 	Description string `json:"description"`
+}
+
+type mcpSoulFactoryClient interface {
+	Close()
+	ListSouls(context.Context, int, string) ([]domain.AgentSoul, error)
+	GetSoul(context.Context, string) (*domain.AgentSoul, error)
+	ListTemplates(context.Context, int, string) ([]domain.SoulTemplate, error)
+	PublishProvisionRequest(context.Context, domain.ProvisioningRequest) (*SoulFactoryRequestReceipt, error)
+	ExecuteSoulAction(context.Context, string, domain.SoulActionType, string, string) (*nostr.Event, error)
+}
+
+var newMCPSoulFactoryClient = func(relays []string, signer soulClientSigner) (mcpSoulFactoryClient, error) {
+	return NewNostrClient(relays, signer)
 }
 
 // NewMCPServer creates a new MCP server for Soul Factory.
@@ -221,28 +236,56 @@ func (s *MCPServer) CallTool(ctx context.Context, name string, arguments map[str
 }
 
 func (s *MCPServer) handleListSouls(ctx context.Context, args map[string]interface{}) (*MCPToolResult, error) {
-	return errorResult("soul listing is unavailable: relay-backed list queries are not implemented"), nil
+	client, err := s.newClient()
+	if err != nil {
+		return errorResult(err.Error()), nil
+	}
+	defer client.Close()
+
+	status, _ := args["status"].(string)
+	limit := intFromArgs(args, "limit", 50)
+	souls, err := client.ListSouls(ctx, limit, status)
+	if err != nil {
+		return errorResult(fmt.Sprintf("failed to list souls: %v", err)), nil
+	}
+	return jsonResult(souls)
 }
 
 func (s *MCPServer) handleGetSoul(ctx context.Context, args map[string]interface{}) (*MCPToolResult, error) {
 	agentID, ok := args["agent_id"].(string)
-	if !ok {
+	if !ok || strings.TrimSpace(agentID) == "" {
 		return errorResult("agent_id is required"), nil
 	}
 
-	soul, err := s.reactor.GetSoul(ctx, agentID)
+	client, err := s.newClient()
+	if err != nil {
+		return errorResult(err.Error()), nil
+	}
+	defer client.Close()
+
+	soul, err := client.GetSoul(ctx, agentID)
 	if err != nil {
 		return errorResult(fmt.Sprintf("failed to get soul: %v", err)), nil
 	}
 	if soul == nil {
 		return errorResult(fmt.Sprintf("soul not found: %s", agentID)), nil
 	}
-
 	return jsonResult(soulToMap(soul))
 }
 
 func (s *MCPServer) handleListTemplates(ctx context.Context, args map[string]interface{}) (*MCPToolResult, error) {
-	return errorResult("template listing is unavailable: relay-backed template queries are not implemented"), nil
+	client, err := s.newClient()
+	if err != nil {
+		return errorResult(err.Error()), nil
+	}
+	defer client.Close()
+
+	tier, _ := args["tier"].(string)
+	templates, err := client.ListTemplates(ctx, intFromArgs(args, "limit", 50), tier)
+	if err != nil {
+		return errorResult(fmt.Sprintf("failed to list templates: %v", err)), nil
+	}
+	return jsonResult(templates)
 }
 
 func (s *MCPServer) handleProvision(ctx context.Context, args map[string]interface{}) (*MCPToolResult, error) {
@@ -252,59 +295,114 @@ func (s *MCPServer) handleProvision(ctx context.Context, args map[string]interfa
 	tier, _ := args["tier"].(string)
 	template, _ := args["template"].(string)
 
-	if agentID == "" {
+	if strings.TrimSpace(agentID) == "" {
 		return errorResult("agent_id is required"), nil
 	}
-	if brief == "" && template == "" {
+	if strings.TrimSpace(brief) == "" && strings.TrimSpace(template) == "" {
 		return errorResult("brief or template is required"), nil
 	}
-
-	if name == "" {
+	if strings.TrimSpace(name) == "" {
 		name = agentID
 	}
-	if tier == "" {
-		tier = "standard"
+	if strings.TrimSpace(tier) == "" {
+		tier = string(domain.SoulTierStandard)
 	}
 
-	return errorResult("provisioning is unavailable: MCP server cannot publish a signed Nostr request in this configuration"), nil
+	client, err := s.newClient()
+	if err != nil {
+		return errorResult(err.Error()), nil
+	}
+	defer client.Close()
+
+	receipt, err := client.PublishProvisionRequest(ctx, domain.ProvisioningRequest{
+		AgentID:     strings.TrimSpace(agentID),
+		Name:        strings.TrimSpace(name),
+		Brief:       brief,
+		Tier:        domain.SoulTier(strings.TrimSpace(tier)),
+		TemplateRef: strings.TrimSpace(template),
+	})
+	if err != nil {
+		return errorResult(fmt.Sprintf("failed to publish provisioning request: %v", err)), nil
+	}
+	return jsonResult(receipt)
 }
 
 func (s *MCPServer) handleAction(ctx context.Context, args map[string]interface{}) (*MCPToolResult, error) {
 	agentID, _ := args["agent_id"].(string)
 	action, _ := args["action"].(string)
 	reason, _ := args["reason"].(string)
-	_ = reason
 
-	if agentID == "" {
+	if strings.TrimSpace(agentID) == "" {
 		return errorResult("agent_id is required"), nil
 	}
-	if action == "" {
+	if strings.TrimSpace(action) == "" {
 		return errorResult("action is required"), nil
 	}
 
-	// Validate action
-	validActions := map[string]bool{
-		"suspend": true, "resume": true, "revoke": true, "redeploy": true,
-	}
-	if !validActions[action] {
+	parsedAction := domain.SoulActionType(strings.TrimSpace(action))
+	switch parsedAction {
+	case domain.SoulActionSuspend, domain.SoulActionResume, domain.SoulActionRevoke, domain.SoulActionRedeploy:
+	default:
 		return errorResult(fmt.Sprintf("invalid action: %s", action)), nil
 	}
 
-	return errorResult(fmt.Sprintf("lifecycle action %q is unavailable: MCP server cannot publish a signed Nostr action in this configuration", action)), nil
+	client, err := s.newClient()
+	if err != nil {
+		return errorResult(err.Error()), nil
+	}
+	defer client.Close()
+
+	soul, err := client.GetSoul(ctx, agentID)
+	if err != nil {
+		return errorResult(fmt.Sprintf("failed to get soul: %v", err)), nil
+	}
+	if soul == nil {
+		return errorResult(fmt.Sprintf("soul not found: %s", agentID)), nil
+	}
+
+	resultEvent, err := client.ExecuteSoulAction(ctx, soul.AgentID, parsedAction, strings.TrimSpace(reason), "")
+	if err != nil {
+		return errorResult(fmt.Sprintf("failed to execute action: %v", err)), nil
+	}
+	if !actionResultSucceeded(resultEvent) {
+		return errorResult(actionResultMessage(resultEvent, fmt.Sprintf("soul action %q failed", action))), nil
+	}
+	return jsonResult(actionResultEnvelope(resultEvent, soul.AgentID, parsedAction))
 }
 
 func (s *MCPServer) handleRegenerate(ctx context.Context, args map[string]interface{}) (*MCPToolResult, error) {
 	agentID, _ := args["agent_id"].(string)
 	newBrief, _ := args["new_brief"].(string)
 
-	if agentID == "" {
+	if strings.TrimSpace(agentID) == "" {
 		return errorResult("agent_id is required"), nil
 	}
-	if newBrief == "" {
+	if strings.TrimSpace(newBrief) == "" {
 		return errorResult("new_brief is required"), nil
 	}
 
-	return errorResult("regeneration is unavailable: MCP server cannot publish a signed Nostr action in this configuration"), nil
+	client, err := s.newClient()
+	if err != nil {
+		return errorResult(err.Error()), nil
+	}
+	defer client.Close()
+
+	soul, err := client.GetSoul(ctx, agentID)
+	if err != nil {
+		return errorResult(fmt.Sprintf("failed to get soul: %v", err)), nil
+	}
+	if soul == nil {
+		return errorResult(fmt.Sprintf("soul not found: %s", agentID)), nil
+	}
+
+	resultEvent, err := client.ExecuteSoulAction(ctx, soul.AgentID, domain.SoulActionRegenerate, "", newBrief)
+	if err != nil {
+		return errorResult(fmt.Sprintf("failed to regenerate soul: %v", err)), nil
+	}
+	if !actionResultSucceeded(resultEvent) {
+		return errorResult(actionResultMessage(resultEvent, "soul regeneration failed")), nil
+	}
+	return jsonResult(actionResultEnvelope(resultEvent, soul.AgentID, domain.SoulActionRegenerate))
 }
 
 func (s *MCPServer) handleGetStatus(ctx context.Context, args map[string]interface{}) (*MCPToolResult, error) {
@@ -333,6 +431,74 @@ func (s *MCPServer) handleGetStatus(ctx context.Context, args map[string]interfa
 	}
 
 	return jsonResult(result)
+}
+
+func (s *MCPServer) newClient() (mcpSoulFactoryClient, error) {
+	if s == nil || s.reactor == nil || s.reactor.signer == nil {
+		return nil, fmt.Errorf("soul factory signer is not configured")
+	}
+	relays := normalizeSoulRelays(append(append([]string{}, s.reactor.config.Relays...), s.reactor.config.AdditionalRelays...))
+	if len(relays) == 0 {
+		return nil, fmt.Errorf("no Soul Factory relays are configured")
+	}
+	return newMCPSoulFactoryClient(relays, s.reactor.signer)
+}
+
+func intFromArgs(args map[string]interface{}, key string, fallback int) int {
+	value, ok := args[key]
+	if !ok || value == nil {
+		return fallback
+	}
+	switch typed := value.(type) {
+	case int:
+		if typed > 0 {
+			return typed
+		}
+	case float64:
+		if typed > 0 {
+			return int(typed)
+		}
+	case json.Number:
+		if parsed, err := typed.Int64(); err == nil && parsed > 0 {
+			return int(parsed)
+		}
+	}
+	return fallback
+}
+
+func actionResultSucceeded(event *nostr.Event) bool {
+	status := strings.ToLower(strings.TrimSpace(firstTagValue(event.Tags, "status")))
+	return status == "completed" || status == "success"
+}
+
+func actionResultMessage(event *nostr.Event, fallback string) string {
+	message := strings.TrimSpace(firstTagValue(event.Tags, "error"))
+	if message == "" {
+		message = strings.TrimSpace(event.Content)
+	}
+	return firstNonEmpty(message, fallback)
+}
+
+func actionResultEnvelope(event *nostr.Event, agentID string, action domain.SoulActionType) map[string]any {
+	return map[string]any{
+		"agent_id": agentID,
+		"action":   action,
+		"event_id": event.ID,
+		"status":   firstTagValue(event.Tags, "status"),
+		"result":   decodeResultContent(event.Content),
+	}
+}
+
+func decodeResultContent(content string) any {
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return map[string]any{}
+	}
+	var payload any
+	if err := json.Unmarshal([]byte(content), &payload); err != nil {
+		return content
+	}
+	return payload
 }
 
 // --- Helper Functions ---

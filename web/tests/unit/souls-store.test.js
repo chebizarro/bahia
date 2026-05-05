@@ -657,7 +657,7 @@ describe('Souls Store', () => {
       expect(run.message).toBe('Request published. Waiting for live provisioning updates…');
     });
 
-    it('should fail run when relay closes subscription', () => {
+    it('should keep run non-terminal when relay closes subscription', () => {
       const requestEventId = 'req-event-closed';
 
       let handlers = null;
@@ -672,13 +672,14 @@ describe('Souls Store', () => {
       handlers.onClosed('auth required', 'wss://relay.example');
 
       const run = soulsModule.provisioningRuns.get(requestEventId);
-      expect(run.status).toBe('failed');
-      expect(run.result.error).toBe('Provisioning subscription closed: auth required');
-      expect(onError).toHaveBeenCalledWith('Provisioning subscription closed: auth required');
-      expect(unsub).toHaveBeenCalledTimes(1);
+      expect(run.status).toBe('pending');
+      expect(run.result).toBeNull();
+      expect(run.message).toBe('Relay closed this subscription: auth required. Waiting for an explicit provisioning result…');
+      expect(onError).not.toHaveBeenCalled();
+      expect(unsub).not.toHaveBeenCalled();
     });
 
-    it('should fail run on timeout when no relay updates arrive', () => {
+    it('should not fail run solely because local time passes without relay updates', () => {
       vi.useFakeTimers();
 
       const requestEventId = 'req-event-timeout';
@@ -688,9 +689,9 @@ describe('Souls Store', () => {
       vi.advanceTimersByTime(121000);
 
       const run = soulsModule.provisioningRuns.get(requestEventId);
-      expect(run.status).toBe('failed');
-      expect(run.result.error).toBe('Provisioning timed out waiting for relay updates');
-      expect(onError).toHaveBeenCalledWith('Provisioning timed out waiting for relay updates');
+      expect(run.status).toBe('pending');
+      expect(run.result).toBeNull();
+      expect(onError).not.toHaveBeenCalled();
 
       vi.useRealTimers();
     });

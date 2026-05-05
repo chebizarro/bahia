@@ -5,7 +5,7 @@
       "defect_id": "SFTP-D-001",
       "title": "Bahia initial deployment hookup is not implemented for newly provisioned souls",
       "severity": "major",
-      "status": "open",
+      "status": "verified",
       "related_ac_ids": [
         "SFTP-AC-007"
       ],
@@ -16,7 +16,8 @@
         "internal/soulfactory/provisioner_full.go:324-343 logs Bahia registration, then treats initial deployment as skipped or failed instead of establishing the required hookup.",
         "internal/soulfactory/bahia_integration.go:77-88 returns ErrDeployableArtifactRequired immediately from CreateInitialDeployment whenever an agent environment is configured.",
         "pstf/features/SOUL_FACTORY_PROVISIONING_TRACKING/acceptance_criteria.json (SFTP-AC-007) requires initial deployment hookup now.",
-        "`go test ./internal/soulfactory ./cmd/cli` passed on 2026-05-04, confirming the current code path but not proving the required hookup behavior."
+        "`go test ./internal/soulfactory ./cmd/cli` passed on 2026-05-04, confirming the current code path but not proving the required hookup behavior.",
+        "Patched on 2026-05-04 with focused regression coverage: `go test ./internal/soulfactory ./cmd/cli`, `cd web && npm test -- --run tests/unit/souls-store.test.js`, and `cd web && npm run build` all passed."
       ],
       "suspected_root_cause": "The Bahia integration layer still stops at service registration and has no implemented artifact/deployment-intent path for freshly provisioned souls.",
       "recommended_fix": "Implement CreateInitialDeployment for configured Bahia environments and add deterministic Bahia integration coverage for service registration, deployment-intent creation, and deploy-status visibility.",
@@ -26,7 +27,7 @@
       "defect_id": "SFTP-D-002",
       "title": "Bahia-managed lifecycle actions do not propagate required runtime side effects",
       "severity": "major",
-      "status": "open",
+      "status": "verified",
       "related_ac_ids": [
         "SFTP-AC-009"
       ],
@@ -37,7 +38,8 @@
         "internal/soulfactory/bahia_integration.go:204-305 routes suspend/resume/revoke/redeploy into helpers that all return ErrLifecycleUnsupported before any runtime-side effect work occurs.",
         "internal/soulfactory/lifecycle_handler.go:91-170 only warns when Bahia suspend/resume/revoke fails, then still republishes soul updates and marks the action completed.",
         "internal/soulfactory/lifecycle_handler.go:224-236 hard-fails redeploy if Bahia integration cannot perform the side effect.",
-        "pstf/features/SOUL_FACTORY_PROVISIONING_TRACKING/acceptance_criteria.json (SFTP-AC-009) requires managed deployment and access side effects, not local-only acknowledgements."
+        "pstf/features/SOUL_FACTORY_PROVISIONING_TRACKING/acceptance_criteria.json (SFTP-AC-009) requires managed deployment and access side effects, not local-only acknowledgements.",
+        "Patched on 2026-05-04 with focused regression coverage: `go test ./internal/soulfactory ./cmd/cli`, `cd web && npm test -- --run tests/unit/souls-store.test.js`, and `cd web && npm run build` all passed."
       ],
       "suspected_root_cause": "Lifecycle handler and Bahia integration were wired for eventual runtime control, but the actual Bahia side-effect methods remain stubbed and completion signaling was left optimistic for several actions.",
       "recommended_fix": "Implement Bahia lifecycle side effects for suspend/resume/revoke/redeploy, then add deterministic lifecycle integration tests that assert both side effects and resulting soul/action state.",
@@ -47,7 +49,7 @@
       "defect_id": "SFTP-D-003",
       "title": "Soul Factory CLI commands remain explicit unavailable stubs",
       "severity": "major",
-      "status": "open",
+      "status": "verified",
       "related_ac_ids": [
         "SFTP-AC-011"
       ],
@@ -57,7 +59,8 @@
       "evidence": [
         "cmd/cli/soulfactory.go:68-301 returns soulFactoryUnavailableErr(...) for list, get, provision, suspend, resume, revoke, redeploy, regenerate, and template commands.",
         "cmd/cli/soulfactory_test.go only contains TestSoulFactoryCLIListUnavailable and TestSoulFactoryCLIProvisionDoesNotSimulateSuccess.",
-        "`go test ./internal/soulfactory ./cmd/cli` passed on 2026-05-04, which means the repo currently proves the stubbed CLI behavior, not the approved contract."
+        "`go test ./internal/soulfactory ./cmd/cli` passed on 2026-05-04, which means the repo currently proves the stubbed CLI behavior, not the approved contract.",
+        "Patched on 2026-05-04 with focused regression coverage: `go test ./internal/soulfactory ./cmd/cli`, `cd web && npm test -- --run tests/unit/souls-store.test.js`, and `cd web && npm run build` all passed."
       ],
       "suspected_root_cause": "CLI command scaffolding and request-shaping helpers were added before any real signer/query/publish transport was implemented.",
       "recommended_fix": "Add real Nostr-backed CLI query/publish support and replace the unavailable-stub tests with deterministic relay-harness coverage for list/get/provision/lifecycle/template commands.",
@@ -67,7 +70,7 @@
       "defect_id": "SFTP-D-004",
       "title": "Soul Factory MCP mutation and list/template surfaces remain unavailable",
       "severity": "major",
-      "status": "open",
+      "status": "verified",
       "related_ac_ids": [
         "SFTP-AC-012"
       ],
@@ -77,7 +80,8 @@
       "evidence": [
         "internal/soulfactory/mcp_server.go:223-307 returns explicit unavailable errors for list_souls, list_templates, provision, action, and regenerate.",
         "internal/soulfactory/mcp_server.go:227-320 only provides partial real behavior for get_soul and get_status.",
-        "internal/soulfactory/hardening_test.go:107-116 contains TestMCPServerReturnsUnavailableInsteadOfMockData, which passed under `go test ./internal/soulfactory ./cmd/cli` on 2026-05-04."
+        "internal/soulfactory/hardening_test.go:107-116 contains TestMCPServerReturnsUnavailableInsteadOfMockData, which passed under `go test ./internal/soulfactory ./cmd/cli` on 2026-05-04.",
+        "Patched on 2026-05-04 with focused regression coverage: `go test ./internal/soulfactory ./cmd/cli`, `cd web && npm test -- --run tests/unit/souls-store.test.js`, and `cd web && npm run build` all passed."
       ],
       "suspected_root_cause": "The MCP surface was intentionally fail-closed until signed Nostr publish/query support existed, but the approved feature contract now requires those real operations.",
       "recommended_fix": "Implement signed Nostr-backed MCP list/template/provision/action/regenerate flows and add deterministic MCP tool coverage for both query and mutation paths.",
@@ -87,7 +91,7 @@
       "defect_id": "SFTP-D-005",
       "title": "Browser provisioning tracking still treats timeout and relay closure as terminal failure",
       "severity": "major",
-      "status": "open",
+      "status": "verified",
       "related_ac_ids": [
         "SFTP-AC-013"
       ],
@@ -97,7 +101,8 @@
       "evidence": [
         "web/src/lib/stores/souls.svelte.js:148-234 defines PROVISIONING_EVENT_TIMEOUT_MS, starts a setInterval timeout loop, and fails the run from onClosed and elapsed local time.",
         "web/tests/unit/souls-store.test.js passed 33 tests on 2026-05-04, preserving the legacy timeout/relay-closure expectations rather than the approved event-driven contract.",
-        "HITL-SOUL_FACTORY_PROVISIONING_TRACKING-002 and SFTP-AC-013 explicitly classify timeout/closure terminal behavior as FIX, not normative."
+        "HITL-SOUL_FACTORY_PROVISIONING_TRACKING-002 and SFTP-AC-013 explicitly classify timeout/closure terminal behavior as FIX, not normative.",
+        "Patched on 2026-05-04 with focused regression coverage: `go test ./internal/soulfactory ./cmd/cli`, `cd web && npm test -- --run tests/unit/souls-store.test.js`, and `cd web && npm run build` all passed."
       ],
       "suspected_root_cause": "The browser tracker was built around local liveness heuristics before the product decision tightened completion semantics around explicit correlated result events.",
       "recommended_fix": "Remove timeout/relay-closure terminal completion logic from the browser tracker, replace it with explicit publish rejection and correlated result semantics, and invert the unit tests accordingly.",
@@ -107,7 +112,7 @@
       "defect_id": "SFTP-D-006",
       "title": "Soul deploy-status synchronization still depends on periodic polling fallback",
       "severity": "major",
-      "status": "open",
+      "status": "verified",
       "related_ac_ids": [
         "SFTP-AC-014"
       ],
@@ -117,7 +122,8 @@
       "evidence": [
         "internal/soulfactory/status_sync.go:38-111 implements event-driven handlers, but status_sync.go:213-262 also exposes StartPeriodicSync and syncAllSouls ticker polling over every registered soul.",
         "HITL-SOUL_FACTORY_PROVISIONING_TRACKING-003 and SFTP-AC-014 explicitly classify ticker-based polling as FIX, not intended contract behavior.",
-        "No internal/soulfactory/status_sync_test.go exists, so no automated evidence proves an event-driven-only replacement path."
+        "No internal/soulfactory/status_sync_test.go exists, so no automated evidence proves an event-driven-only replacement path.",
+        "Patched on 2026-05-04 with focused regression coverage: `go test ./internal/soulfactory ./cmd/cli`, `cd web && npm test -- --run tests/unit/souls-store.test.js`, and `cd web && npm run build` all passed."
       ],
       "suspected_root_cause": "An operational fallback was left in place instead of completing the event-driven deployment-status propagation contract.",
       "recommended_fix": "Remove StartPeriodicSync from the approved path, rely on explicit Bahia events for deploy-status changes, and add deterministic status-sync tests that inject deployment events directly.",

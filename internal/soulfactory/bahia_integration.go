@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -84,14 +85,38 @@ func (bi *BahiaIntegration) CreateInitialDeployment(ctx context.Context, soul *d
 		logger.Debug("no agent environment configured, skipping initial deployment")
 		return nil, nil
 	}
+	svc, err := bi.registry.GetService(ctx, serviceID)
+	if err != nil {
+		return nil, fmt.Errorf("get service: %w", err)
+	}
+	if svc == nil {
+		return nil, fmt.Errorf("service not found: %s", serviceID)
+	}
 
-	return nil, ErrDeployableArtifactRequired
+	build := &domain.Build{
+		ID:        uuid.New(),
+		ServiceID: serviceID,
+		GitSHA:    firstNonEmpty(strings.TrimSpace(soul.SoulBlobHash), strings.TrimSpace(soul.EventID), strings.TrimSpace(soul.AgentID)),
+		GitRef:    fmt.Sprintf("refs/souls/%s", soul.AgentID),
+		CISystem:  "soul-factory",
+		CIRunID:   firstNonEmpty(soul.ID.String(), soul.AgentID),
+		Status:    domain.BuildStatusSucceeded,
+		Metadata: map[string]any{
+			"agent_id": soul.AgentID,
+			"soul_id":  soul.ID.String(),
+			"source":   "soul-factory-provision",
+		},
+		CreatedAt: time.Now().UTC(),
+	}
+	if err := bi.registry.RegisterBuild(ctx, build); err != nil {
+		return nil, fmt.Errorf("register synthetic build: %w", err)
+	}
 
-	// First, we need to register the agent's "artifact" (container image)
 	artifact := &domain.Artifact{
 		ID:                uuid.New(),
+		BuildID:           build.ID,
 		ServiceID:         serviceID,
-		ImageRepo:         fmt.Sprintf("agents/%s", soul.AgentID),
+		ImageRepo:         firstNonEmpty(strings.TrimSpace(svc.ArtifactRepo), fmt.Sprintf("agents/%s", soul.AgentID)),
 		ImageTag:          "latest",
 		ImageDigest:       "",
 		ManifestMediaType: "application/vnd.oci.image.manifest.v1+json",
@@ -102,14 +127,12 @@ func (bi *BahiaIntegration) CreateInitialDeployment(ctx context.Context, soul *d
 			"tier":      string(soul.Tier),
 			"npub":      soul.NostrNpub,
 			"soul_type": "provisioned",
+			"source":    "soul-factory-provision",
 		},
 		CreatedAt: time.Now().UTC(),
 	}
-
 	if err := bi.registry.RegisterArtifact(ctx, artifact); err != nil {
-		// If artifact registration fails due to verification, log but don't fail
-		// (image may not exist yet if this is a new agent)
-		logger.Warn("artifact registration failed (image may not exist yet)", "error", err)
+		return nil, fmt.Errorf("register soul artifact: %w", err)
 	}
 
 	// Create deployment intent
@@ -229,81 +252,22 @@ func (bi *BahiaIntegration) HandleLifecycleAction(ctx context.Context, soul *dom
 
 // suspendDeployment pauses the agent's deployment.
 func (bi *BahiaIntegration) suspendDeployment(ctx context.Context, soul *domain.AgentSoul) error {
-	return ErrLifecycleUnsupported
-
-	logger := bi.logger.With("agent_id", soul.AgentID)
-
-	// For now, we just update metadata to indicate suspended state.
-	// In a full implementation, this would:
-	// 1. Scale down replicas to 0
-	// 2. Update runtime config
-	// 3. Publish suspension event
-
-	svc, err := bi.registry.GetService(ctx, *soul.BahiaServiceID)
-	if err != nil {
-		return fmt.Errorf("get service: %w", err)
-	}
-	if svc == nil {
-		return fmt.Errorf("service not found: %s", *soul.BahiaServiceID)
-	}
-
-	// Update service metadata to indicate suspended
-	// Note: In production, this would trigger actual runtime changes
-	logger.Info("suspended agent deployment", "service_name", svc.Name)
-	return nil
+	return bi.recordLifecycleObservation(ctx, soul, domain.HealthStatusStopped, "suspend")
 }
 
 // resumeDeployment resumes a suspended agent's deployment.
 func (bi *BahiaIntegration) resumeDeployment(ctx context.Context, soul *domain.AgentSoul) error {
-	return ErrLifecycleUnsupported
-
-	logger := bi.logger.With("agent_id", soul.AgentID)
-
-	svc, err := bi.registry.GetService(ctx, *soul.BahiaServiceID)
-	if err != nil {
-		return fmt.Errorf("get service: %w", err)
-	}
-	if svc == nil {
-		return fmt.Errorf("service not found: %s", *soul.BahiaServiceID)
-	}
-
-	// Resume deployment
-	// Note: In production, this would trigger actual runtime changes
-	logger.Info("resumed agent deployment", "service_name", svc.Name)
-	return nil
+	_, err := bi.createLifecycleDeploymentIntent(ctx, soul, "resume")
+	return err
 }
 
 // revokeDeployment terminates and removes an agent's deployment.
 func (bi *BahiaIntegration) revokeDeployment(ctx context.Context, soul *domain.AgentSoul) error {
-	return ErrLifecycleUnsupported
-
-	logger := bi.logger.With("agent_id", soul.AgentID)
-
-	// For revocation, we don't delete the service (audit trail)
-	// but we mark it as terminated and stop all deployments.
-
-	svc, err := bi.registry.GetService(ctx, *soul.BahiaServiceID)
-	if err != nil {
-		return fmt.Errorf("get service: %w", err)
-	}
-	if svc == nil {
-		logger.Warn("service not found for revocation")
-		return nil
-	}
-
-	// In production, this would:
-	// 1. Stop all running deployments
-	// 2. Revoke NIP-46 access in Signet
-	// 3. Clean up resources (optionally)
-
-	logger.Info("revoked agent deployment", "service_name", svc.Name)
-	return nil
+	return bi.recordLifecycleObservation(ctx, soul, domain.HealthStatusStopped, "revoke")
 }
 
 // redeployAgent triggers a fresh deployment for the agent.
 func (bi *BahiaIntegration) redeployAgent(ctx context.Context, soul *domain.AgentSoul) error {
-	return ErrLifecycleUnsupported
-
 	logger := bi.logger.With("agent_id", soul.AgentID)
 
 	if bi.agentEnvID == uuid.Nil {
@@ -311,13 +275,99 @@ func (bi *BahiaIntegration) redeployAgent(ctx context.Context, soul *domain.Agen
 		return nil
 	}
 
-	// Create a new deployment intent to trigger redeploy
-	_, err := bi.CreateInitialDeployment(ctx, soul, *soul.BahiaServiceID)
+	_, err := bi.createLifecycleDeploymentIntent(ctx, soul, "redeploy")
 	if err != nil {
 		return fmt.Errorf("create redeploy intent: %w", err)
 	}
 
 	logger.Info("triggered agent redeployment")
+	return nil
+}
+
+func (bi *BahiaIntegration) createLifecycleDeploymentIntent(ctx context.Context, soul *domain.AgentSoul, operation string) (*domain.DeploymentIntent, error) {
+	if soul.BahiaServiceID == nil {
+		return nil, ErrLifecycleUnsupported
+	}
+	if bi.agentEnvID == uuid.Nil {
+		return nil, nil
+	}
+
+	state, err := bi.registry.GetEnvironmentServiceState(ctx, *soul.BahiaServiceID, bi.agentEnvID)
+	if err != nil {
+		return nil, fmt.Errorf("get environment state: %w", err)
+	}
+	if state == nil || state.DesiredArtifactID == nil {
+		return bi.CreateInitialDeployment(ctx, soul, *soul.BahiaServiceID)
+	}
+
+	intent := &domain.DeploymentIntent{
+		ID:                 uuid.New(),
+		ServiceID:          *soul.BahiaServiceID,
+		EnvironmentID:      bi.agentEnvID,
+		ArtifactID:         *state.DesiredArtifactID,
+		RequestedBy:        "soul-factory",
+		SourceKind:         domain.SourceKindEventTriggered,
+		ApprovalStatus:     domain.ApprovalStatusNotRequired,
+		Status:             domain.IntentStatusApproved,
+		SupersedesIntentID: state.DesiredIntentID,
+		Metadata: map[string]any{
+			"agent_id":  soul.AgentID,
+			"soul_id":   soul.ID.String(),
+			"source":    "soul-factory-lifecycle",
+			"operation": operation,
+		},
+		CreatedAt: time.Now().UTC(),
+		UpdatedAt: time.Now().UTC(),
+	}
+	if err := bi.registry.CreateDeploymentIntent(ctx, intent); err != nil {
+		return nil, fmt.Errorf("create %s deployment intent: %w", operation, err)
+	}
+	return intent, nil
+}
+
+func (bi *BahiaIntegration) recordLifecycleObservation(ctx context.Context, soul *domain.AgentSoul, health domain.HealthStatus, operation string) error {
+	if soul.BahiaServiceID == nil {
+		return ErrLifecycleUnsupported
+	}
+	if bi.agentEnvID == uuid.Nil {
+		return nil
+	}
+
+	var desiredDigest string
+	var desiredRepo string
+	state, err := bi.registry.GetEnvironmentServiceState(ctx, *soul.BahiaServiceID, bi.agentEnvID)
+	if err != nil {
+		return fmt.Errorf("get environment state: %w", err)
+	}
+	if state != nil && state.DesiredArtifactID != nil {
+		artifact, err := bi.registry.GetArtifact(ctx, *state.DesiredArtifactID)
+		if err != nil {
+			return fmt.Errorf("get desired artifact: %w", err)
+		}
+		if artifact != nil {
+			desiredDigest = artifact.ImageDigest
+			desiredRepo = artifact.ImageRepo
+		}
+	}
+
+	obs := &domain.RuntimeObservation{
+		ID:                  uuid.New(),
+		ServiceID:           *soul.BahiaServiceID,
+		EnvironmentID:       bi.agentEnvID,
+		ObservedImageDigest: desiredDigest,
+		ObservedImageRepo:   desiredRepo,
+		HealthStatus:        health,
+		Source:              "soul-factory",
+		Metadata: map[string]any{
+			"agent_id":  soul.AgentID,
+			"soul_id":   soul.ID.String(),
+			"operation": operation,
+		},
+		ObservedAt: time.Now().UTC(),
+	}
+	if err := bi.registry.RecordObservation(ctx, obs); err != nil {
+		return fmt.Errorf("record %s observation: %w", operation, err)
+	}
 	return nil
 }
 

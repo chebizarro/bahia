@@ -5,10 +5,8 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
-	"time"
 
 	"github.com/google/uuid"
-	"github.com/nbd-wtf/go-nostr"
 
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/events"
@@ -136,46 +134,7 @@ func (h *StatusSyncHandler) updateSoulDeployStatus(ctx context.Context, soul *do
 	soul.DeployStatus = deployStatus
 	h.mu.Unlock()
 
-	// Build updated soul event tags
-	tags := nostr.Tags{
-		{"d", soul.AgentID},
-		{"name", soul.Name},
-		{"status", string(soul.Status)},
-		{"deploy-status", deployStatus},
-		{"tier", string(soul.Tier)},
-		{"npub", soul.NostrNpub},
-	}
-
-	if soul.AvatarURL != "" {
-		tags = append(tags, nostr.Tag{"avatar", soul.AvatarURL})
-	}
-	if soul.NIP05 != "" {
-		tags = append(tags, nostr.Tag{"nip05", soul.NIP05})
-	}
-	if soul.BahiaServiceID != nil {
-		tags = append(tags, nostr.Tag{"bahia-service", soul.BahiaServiceID.String()})
-	}
-	if soul.WorkspaceRepoURL != "" {
-		tags = append(tags, nostr.Tag{"workspace", soul.WorkspaceRepoURL})
-	}
-	if soul.TemplateRef != "" {
-		tags = append(tags, nostr.Tag{"template", soul.TemplateRef})
-	}
-
-	// Create updated event
-	event := &nostr.Event{
-		Kind:      domain.KindAgentSoul,
-		CreatedAt: nostr.Now(),
-		Tags:      tags,
-		Content:   soul.SoulMD, // Keep existing content
-	}
-
-	// Sign and publish
-	if err := h.reactor.signer.Sign(ctx, event); err != nil {
-		return fmt.Errorf("sign soul update: %w", err)
-	}
-
-	if err := h.reactor.publish(ctx, event, h.reactor.config.Relays); err != nil {
+	if err := h.reactor.PublishSoul(ctx, soul); err != nil {
 		return fmt.Errorf("publish soul update: %w", err)
 	}
 
@@ -208,56 +167,4 @@ func (h *StatusSyncHandler) extractServiceID(event events.Event) (uuid.UUID, err
 	}
 
 	return uuid.Nil, fmt.Errorf("could not extract service ID from event")
-}
-
-// StartPeriodicSync starts a background goroutine that periodically syncs status.
-func (h *StatusSyncHandler) StartPeriodicSync(ctx context.Context, interval time.Duration) {
-	go func() {
-		ticker := time.NewTicker(interval)
-		defer ticker.Stop()
-
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				h.syncAllSouls(ctx)
-			}
-		}
-	}()
-}
-
-// syncAllSouls syncs status for all registered souls.
-func (h *StatusSyncHandler) syncAllSouls(ctx context.Context) {
-	h.mu.RLock()
-	souls := make([]*domain.AgentSoul, 0, len(h.souls))
-	for _, soul := range h.souls {
-		souls = append(souls, soul)
-	}
-	h.mu.RUnlock()
-
-	for _, soul := range souls {
-		if soul.BahiaServiceID == nil {
-			continue
-		}
-
-		deployStatus, err := h.bahiaIntegration.SyncSoulStatus(ctx, soul)
-		if err != nil {
-			h.logger.Warn("periodic status sync failed",
-				"agent_id", soul.AgentID,
-				"error", err,
-			)
-			continue
-		}
-
-		// Only update if status changed
-		if deployStatus != soul.DeployStatus {
-			if err := h.updateSoulDeployStatus(ctx, soul, deployStatus); err != nil {
-				h.logger.Error("failed to update soul status",
-					"agent_id", soul.AgentID,
-					"error", err,
-				)
-			}
-		}
-	}
 }

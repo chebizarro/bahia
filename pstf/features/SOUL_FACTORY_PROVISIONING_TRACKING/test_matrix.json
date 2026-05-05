@@ -355,8 +355,8 @@
       "determinism_notes": [
         "Use in-memory registry fakes; do not rely on real runtime adapters or databases."
       ],
-      "status": "not_implemented",
-      "failure_reason": "No Bahia integration test exists; service registration, initial deployment hookup, and deploy-status sync are unverified."
+      "status": "pass",
+      "failure_reason": null
     },
     {
       "test_id": "SFTP-T-011",
@@ -464,8 +464,8 @@
       "determinism_notes": [
         "Record side-effect calls directly in fakes; avoid live runtime dependencies."
       ],
-      "status": "not_implemented",
-      "failure_reason": "No lifecycle side-effect suite exists, and current Bahia lifecycle methods are explicit unsupported stubs."
+      "status": "pass",
+      "failure_reason": null
     },
     {
       "test_id": "SFTP-T-014",
@@ -536,8 +536,8 @@
       "determinism_notes": [
         "Keep CLI tests in-process or against a fully deterministic relay harness; no live relays."
       ],
-      "status": "not_implemented",
-      "failure_reason": "Current cmd/cli/soulfactory_test.go only proves explicit unavailable stubs, not real Nostr-backed CLI behavior."
+      "status": "pass",
+      "failure_reason": null
     },
     {
       "test_id": "SFTP-T-016",
@@ -570,8 +570,8 @@
       "determinism_notes": [
         "Status assertions should use deterministic in-memory run state, not external polling."
       ],
-      "status": "not_implemented",
-      "failure_reason": "No internal/soulfactory/mcp_server_test.go exists; current coverage only proves unavailable mutation/list paths and partial get/status reads."
+      "status": "pass",
+      "failure_reason": null
     },
     {
       "test_id": "SFTP-T-017",
@@ -606,8 +606,8 @@
       "determinism_notes": [
         "The current timeout/closure tests should be inverted or removed once replacement behavior exists."
       ],
-      "status": "not_implemented",
-      "failure_reason": "Current souls-store unit coverage still encodes timeout and relay-closure terminal failure semantics, opposite the approved contract."
+      "status": "pass",
+      "failure_reason": null
     },
     {
       "test_id": "SFTP-T-018",
@@ -642,18 +642,16 @@
       "determinism_notes": [
         "Do not use sleeps or tickers in the test; inject event callbacks directly."
       ],
-      "status": "not_implemented",
-      "failure_reason": "No status_sync_test.go exists; event-driven deploy-status sync is unverified and code still includes StartPeriodicSync polling."
+      "status": "pass",
+      "failure_reason": null
     }
   ],
   "coverage_summary": {
     "criteria_total": 14,
     "criteria_with_tests": 14,
     "known_gaps": [
-      "Required backend reactor/provisioner/lifecycle/status-sync suites are still absent for provisioning request rejection, eight-stage progress, authoritative 31951 publication, action authorization, regenerate semantics, and event-driven deploy-status sync.",
-      "CLI and MCP verification still bottoms out in explicit unavailability stubs instead of real signed Nostr query/mutation behavior.",
+      "Required backend reactor/provisioner verification suites are still absent for provisioning request rejection, eight-stage progress, authoritative 31951 publication, malformed/unauthorized action rejection, and regenerate semantics.",
       "Browser coverage still lacks Souls gallery live-update and freshly provisioned soul visibility journeys.",
-      "The current browser provisioning tracker and backend status sync code both violate approved event-driven reliability requirements (timeout/closure completion and ticker polling).",
       "The existing no-extension Playwright case is stale against current AuthGuard route-protection semantics and does not presently prove the signer-missing contract branch."
     ]
   },
