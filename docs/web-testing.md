@@ -4,10 +4,12 @@ This guide covers testing conventions, tools, and patterns for the Bahia web app
 
 ## Overview
 
+The current web app is **relay-first** for shared state, **signer-first** for public control-plane writes, and uses **encrypted Nostr request/result** flows for sensitive domains. Tests should follow that product shape.
+
 The web app uses two testing frameworks:
 
-- **Vitest**: Unit and integration tests for components, stores, and utilities
-- **Playwright**: End-to-end (E2E) browser tests for user flows
+- **Vitest**: Unit and integration tests for components, stores, auth/capability gates, and control-plane utilities
+- **Playwright**: End-to-end (E2E) browser tests for user flows, relay bootstrap, and encrypted/public control-plane journeys
 
 ## Quick Start
 
@@ -90,7 +92,8 @@ pnpm exec playwright show-report
 
 **Vitest setup**: `web/tests/setup/vitest.setup.js`
 - Configures `jsdom` environment
-- Mocks browser globals (`localStorage`, `window.nostr`, `EventSource`)
+- Mocks browser globals used by current tests (`localStorage`, `window.nostr`, crypto/browser helpers, and fetch-level dependencies as needed)
+- New tests should not depend on `EventSource`/SSE as a primary realtime transport
 
 **Playwright setup**: No custom setup file (uses `playwright.config.js`)
 
@@ -144,6 +147,10 @@ describe('API Client', () => {
 ```
 
 ### Testing Stores
+
+For **REST compatibility stores/routes**, mock the API client before importing the store.
+
+For **shared control-plane state**, prefer testing the relay-backed store modules and control-plane helpers directly (for example `public-controlplane.test.js`, `controlplane-store.test.js`, `encrypted-controlplane.test.js`, and `encrypted-domain-stores.test.js`) instead of treating REST list endpoints as the primary state source.
 
 **Mock dependencies before importing the store**:
 
@@ -311,34 +318,58 @@ test('Soul Factory provisioning with NIP-07', async ({ page }) => {
 });
 ```
 
-### Mocking EventSource (SSE)
+### Mocking Relay Subscriptions and Encrypted Flows
 
-**EventSource is not natively supported in Playwright**. Mock it globally:
+The first-party app no longer treats SSE/EventSource as the primary shared-state/control-plane transport. For control-plane browser tests, prefer the existing relay harnesses under `web/tests/e2e/harnesses/`.
+
+EventSource/SSE is still appropriate for live-log compatibility tests; it is just no longer the primary shared-state/bootstrap transport.
+
+Current harnesses include:
+- `service-deployment-public.js` — public relay bootstrap + service/deployment request/status/result flow
+- `llm-controlplane-public.js` — public relay bootstrap + LLM route/release/deploy flow
+- `notifications-encrypted.js` — encrypted `5980`/`7980` notification request/result flow
+
+Example public relay harness usage:
 
 ```javascript
-test('dashboard with SSE events', async ({ page }) => {
-  await page.addInitScript(() => {
-    class MockEventSource {
-      constructor(url) {
-        this.url = url;
-        this.readyState = 1; // OPEN
-        setTimeout(() => {
-          this.onmessage?.({ data: JSON.stringify({ type: 'deployment', id: 'dep-1' }) });
-        }, 100);
-      }
-      close() {
-        this.readyState = 2; // CLOSED
-      }
-    }
-    window.EventSource = MockEventSource;
+import { test, expect } from '@playwright/test';
+import {
+  installPublicServiceDeploymentHarness,
+  createPublicState,
+  PUBLIC_RELAY
+} from './harnesses/service-deployment-public.js';
+
+test('service deployment page bootstraps from relay projections', async ({ page }) => {
+  await installPublicServiceDeploymentHarness(page, {
+    publicRelay: PUBLIC_RELAY,
+    initialState: createPublicState()
   });
 
-  await page.goto('/');
-
-  // Wait for SSE event to render
-  await expect(page.getByText('deployment')).toBeVisible({ timeout: 5000 });
+  await page.goto('/deployments');
+  await expect(page.getByText('ws://relay.test.local')).toBeVisible();
 });
 ```
+
+Example encrypted harness usage:
+
+```javascript
+import { test, expect } from '@playwright/test';
+import { installEncryptedNotificationHarness } from './harnesses/notifications-encrypted.js';
+
+test('notifications flow stays on encrypted relays for sensitive operations', async ({ page }) => {
+  await installEncryptedNotificationHarness(page);
+  await page.goto('/notifications');
+  await expect(page.getByRole('heading', { name: 'Notifications' })).toBeVisible();
+});
+```
+
+When testing relay-backed bootstrap, assert the behavior that matters:
+- `/api/v1/system/info` discovery is loaded first
+- relay URLs come from the expected discovery fields
+- read-model queries wait for `EOSE` before treating bootstrap as complete
+- live subscriptions remain open for follow-up updates
+- public request flows correlate `e`/`p` replies and terminal result kinds
+- sensitive flows publish `5980` only to encrypted-request relays and resolve from `7980`
 
 ### Testing Form Submissions
 
@@ -519,7 +550,7 @@ pnpm exec vitest --coverage
 - Navigation between pages
 - Form submissions and validations
 - Error states and recovery
-- Real-time updates (SSE)
+- Relay-backed realtime updates and encrypted follow-up fetches
 
 **Not required**:
 - Exhaustive edge case testing (leave to unit tests)
@@ -539,10 +570,10 @@ pnpm exec vitest --coverage
 
 ### E2E Tests
 
-1. **Mock API responses**: Don't rely on real backend state
+1. **Use the right transport harness**: Relay harnesses for public control-plane flows, encrypted harnesses for sensitive domains, and API route interception for remaining REST compatibility surfaces
 2. **Use accessible selectors**: `page.getByText('Create')` > `page.locator('button').nth(2)`
-3. **Wait for UI updates**: Use `await expect(...).toBeVisible()` instead of `setTimeout`
-4. **Test happy paths first**: Smoke tests cover the 80% case
+3. **Wait for UI updates**: Use `await expect(...).toBeVisible()` instead of sleeps or arbitrary timeouts
+4. **Assert protocol behavior, not just copy**: Check relay selection, `EOSE`-gated bootstrap, correlated replies, and encrypted/public transport boundaries where relevant
 5. **Isolate tests**: Each test should be independent (no shared state)
 
 ### Debugging

@@ -1,7 +1,12 @@
-> **⚠️ ARCHIVED DOCUMENT**
+> **⚠️ ARCHIVED DOCUMENT — NOT THE CURRENT PRODUCT CONTRACT**
 >
 > This planning document was written in early 2024. Many items listed as "gaps" or "planned"
-> have since been implemented. For current implementation status, see:
+> have since been implemented, replaced, or deliberately removed.
+>
+> In particular, statements in this file about **JWT auth**, **REST-first interaction**, **legacy dashboard SSE/custom event-stream surfaces**, or **missing Nostr-native control-plane behavior** are historical and must not be read as the current architecture.
+>
+> For current implementation status, see:
+> - [control-planes.md](../control-planes.md) — Current control-plane contract
 > - [protocol-compatibility.md](../protocol-compatibility.md) — What's actually implemented
 > - [architecture.md](../architecture.md) — Current system design
 >

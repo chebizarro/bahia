@@ -1,15 +1,28 @@
 # Bahia Web App Production Readiness Plan
 
-> **Status**: Production-Ready (as of Round 6)
+> **⚠️ Historical planning document with a stale snapshot section**
+>
+> This file mixes a preserved web-app roadmap with a short 2026-04-29 status snapshot. It is **not** the source of truth for Bahia's current auth, transport, or control-plane behavior.
+>
+> Current authoritative docs:
+> - `docs/control-planes.md`
+> - `docs/architecture.md`
+> - `docs/api.md`
+> - `docs/web-app-setup.md`
+> - `docs/web-testing.md`
+>
+> Historical terminology in this file such as **REST-first API-client assumptions**, **planned NIP-46**, or **missing Notifications UI** reflects the planning context at the time and may now be obsolete.
+>
+> **Status**: Historical planning artifact; not current product contract
 > **Created**: 2026-04-29  
-> **Updated**: 2026-04-29 (Round 6 Completion)
-> **Scope**: Web UI, REST API Client, MCP Coverage
+> **Updated**: 2026-05-05 (reclassified as historical / non-authoritative)
+> **Scope**: Historical web planning, migration staging, and roadmap context
 
 ---
 
-## Current Status as of Round 6
+## Snapshot Note
 
-**The Bahia web app is now production-ready.** Round 6 focused on hardening the existing production UI with expanded test coverage, performance optimizations, and comprehensive documentation.
+The short status summary below captures what this document claimed on 2026-04-29. Treat it as a dated snapshot, not as current truth. Round 6 focused on hardening the then-current web UI with expanded test coverage, performance optimizations, and supporting documentation.
 
 ### ✅ Completed in Round 6
 
@@ -50,13 +63,9 @@
 - ✅ Accessibility-focused components (WCAG 2.1 AA)
 - ✅ Production build pipeline (`vite build`)
 
-### Known Limitations
+### Snapshot Caveat
 
-- **NIP-46 (Nostr Connect/Bunker)**: Planned but not yet implemented
-- **RBAC (Role-Based Access Control)**: No role-based permissions (all authenticated users have full access)
-- **Audit Logging in UI**: Backend supports audit logs, but no dedicated UI page
-- **Notifications UI**: Backend supports notification channels, but no management UI
-- **Multi-factor Auth**: Only Nostr-based auth supported
+The limitation bullets that originally appeared here are not maintained as current product truth. Some of those items have since changed materially. Use the authoritative docs listed above for the current state of NIP-46 support, notification flows, auth behavior, and transport architecture.
 
 ---
 
