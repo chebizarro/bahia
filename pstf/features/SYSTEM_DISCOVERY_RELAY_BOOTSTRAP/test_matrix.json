@@ -1,0 +1,433 @@
+{
+  "feature_id": "SYSTEM_DISCOVERY_RELAY_BOOTSTRAP",
+  "status": "ready",
+  "tests": [
+    {
+      "test_id": "SDRB-T-001",
+      "ac_ids": [
+        "SDRB-AC-001"
+      ],
+      "title": "System info handler advertises sidecar-first public bootstrap fields",
+      "type": "contract",
+      "existing_or_new": "modify_existing",
+      "target_path": "internal/api/handlers/system_test.go",
+      "description": "Extend the existing sidecar-capability handler test to assert the full approved public bootstrap contract, including browser bootstrap fields, `relay_read_models`, service-pubkey presence in a service-key configuration, and the non-use of raw `nostr.relays` as the approved browser bootstrap surface.",
+      "preconditions": [
+        "System handler can be exercised with sidecar enabled and Nostr publication enabled.",
+        "A service-key-backed configuration is available for the service-pubkey assertion."
+      ],
+      "steps": [
+        "Construct a sidecar-enabled system config with publish enabled and a service key.",
+        "Call `GET /api/v1/system/info` through the handler test.",
+        "Assert `browser_relays`, `sidecar_url`, `relay_sidecar`, `relay_read_models`, `service_pubkey`, and absence of approved browser-bootstrap reliance on raw `nostr.relays`."
+      ],
+      "expected_result": "The handler advertises the full sidecar-first public bootstrap contract for the approved slice.",
+      "fixtures": [
+        "Deterministic config with sidecar enabled, publish enabled, browser relays configured, and a fixed private key."
+      ],
+      "mocks": [],
+      "data_requirements": [
+        "Stable public relay URL such as `ws://localhost:3000/relay`.",
+        "Deterministic service private key for derived pubkey assertions."
+      ],
+      "determinism_notes": [
+        "Pure handler test; no live relay or clock sensitivity beyond fixed config inputs."
+      ],
+      "status": "not_implemented",
+      "failure_reason": null
+    },
+    {
+      "test_id": "SDRB-T-002",
+      "ac_ids": [
+        "SDRB-AC-002"
+      ],
+      "title": "System info handler conditionally advertises control-plane kinds and legacy false flags",
+      "type": "contract",
+      "existing_or_new": "existing",
+      "target_path": "internal/api/handlers/system_test.go",
+      "description": "Reuse the existing handler tests that verify enabled versus disabled control-plane capability advertisement, MCP async-correlation advertisement, and explicit `false` legacy feature flags.",
+      "preconditions": [
+        "System handler test suite can run with optional features toggled on and off."
+      ],
+      "steps": [
+        "Run the handler tests for enabled and disabled optional feature configurations.",
+        "Inspect `control_plane` maps and legacy feature flags."
+      ],
+      "expected_result": "Enabled payloads advertise only enabled capability surfaces, disabled payloads omit them, and legacy fail-closed flags remain explicit `false` values.",
+      "fixtures": [
+        "Default config with LLM/MCP toggled in test cases."
+      ],
+      "mocks": [],
+      "data_requirements": [
+        "Deterministic handler configs for enabled and disabled branches."
+      ],
+      "determinism_notes": [
+        "Pure handler tests with no network dependency."
+      ],
+      "status": "implemented",
+      "failure_reason": null
+    },
+    {
+      "test_id": "SDRB-T-003",
+      "ac_ids": [
+        "SDRB-AC-003"
+      ],
+      "title": "System-info store caches, deduplicates concurrent loads, and force reloads",
+      "type": "unit",
+      "existing_or_new": "existing",
+      "target_path": "web/tests/unit/system-store.test.js",
+      "description": "Reuse the existing system-store unit suite that proves one-shot caching, concurrent-load deduplication, and force reload behavior.",
+      "preconditions": [
+        "The API client is mocked deterministically."
+      ],
+      "steps": [
+        "Load system info twice sequentially.",
+        "Load system info concurrently from two callers.",
+        "Force reload after an initial load."
+      ],
+      "expected_result": "Normal loads reuse cached data and concurrent callers share one fetch; force reload replaces cached state with a fresh response.",
+      "fixtures": [
+        "Mock system-info payloads with stable feature and Nostr fields."
+      ],
+      "mocks": [
+        "Mock `api.getSystemInfo`."
+      ],
+      "data_requirements": [
+        "Stable mock payloads for original and forced reload responses."
+      ],
+      "determinism_notes": [
+        "No live network; promise-resolution order is controlled in test."
+      ],
+      "status": "implemented",
+      "failure_reason": null
+    },
+    {
+      "test_id": "SDRB-T-004",
+      "ac_ids": [
+        "SDRB-AC-004",
+        "SDRB-AC-006"
+      ],
+      "title": "Control-plane store bootstraps from advertised relays, waits for EOSE, and applies canonical relay state",
+      "type": "unit",
+      "existing_or_new": "existing",
+      "target_path": "web/tests/unit/controlplane-store.test.js",
+      "description": "Reuse the existing control-plane store unit test that resolves browser relays from system info, connects the shared Nostr client, performs `queryUntilEose`, subscribes live, and applies read-model plus activity events.",
+      "preconditions": [
+        "Mock Nostr client supports deterministic `connect`, `queryUntilEose`, and `subscribe` behavior."
+      ],
+      "steps": [
+        "Bootstrap the control-plane store from a deterministic system-info payload.",
+        "Assert relay resolution, connection, `queryUntilEose`, live subscription, and populated shared state."
+      ],
+      "expected_result": "Bootstrap reaches `live` only after the EOSE-bounded query, and canonical state collections are populated from the returned events.",
+      "fixtures": [
+        "Mock Nostr events for service registry, environment registry, service state, worker ad, and optional LLM/state events."
+      ],
+      "mocks": [
+        "Mock `api.getSystemInfo`.",
+        "Mock shared Nostr client."
+      ],
+      "data_requirements": [
+        "Deterministic browser relay URL and Bahia service pubkey.",
+        "Replaceable events with stable ids, kinds, tags, and created_at values."
+      ],
+      "determinism_notes": [
+        "EOSE is simulated by `queryUntilEose` resolution, not sleeps or timers."
+      ],
+      "status": "implemented",
+      "failure_reason": null
+    },
+    {
+      "test_id": "SDRB-T-005",
+      "ac_ids": [
+        "SDRB-AC-004"
+      ],
+      "title": "Dashboard and events pages render relay-backed state after system discovery bootstrap",
+      "type": "e2e",
+      "existing_or_new": "existing",
+      "target_path": "web/tests/e2e/controlplane-nostr-smoke.spec.js",
+      "description": "Reuse the existing Playwright smoke test that bootstraps from a mocked `/api/v1/system/info` payload and renders relay-backed dashboard and events-page state from Nostr mock data.",
+      "preconditions": [
+        "Browser E2E harness can mock `/api/v1/system/info` and WebSocket relay traffic before app mount."
+      ],
+      "steps": [
+        "Install E2E system-info and Nostr-event mocks.",
+        "Visit the dashboard and events page.",
+        "Assert rendered counts, relay status, activity, and discovered relay URL."
+      ],
+      "expected_result": "The browser reflects relay-backed state and live activity sourced from the discovered bootstrap payload and mocked relay stream.",
+      "fixtures": [
+        "Mock system-info payload.",
+        "Mock Nostr event list for services, environments, state, workers, and activity."
+      ],
+      "mocks": [
+        "Playwright route for `/api/v1/system/info`.",
+        "Mock WebSocket implementation in `web/tests/e2e/helpers.js`."
+      ],
+      "data_requirements": [
+        "Stable relay URL and Bahia service pubkey.",
+        "Deterministic event timestamps and ids."
+      ],
+      "determinism_notes": [
+        "Harness delivers stored events followed by explicit EOSE, so no sleep-based waiting is required."
+      ],
+      "status": "implemented",
+      "failure_reason": null
+    },
+    {
+      "test_id": "SDRB-T-006",
+      "ac_ids": [
+        "SDRB-AC-005"
+      ],
+      "title": "Control-plane bootstrap fails closed on missing capability, missing browser URLs, and connection failure",
+      "type": "unit",
+      "existing_or_new": "modify_existing",
+      "target_path": "web/tests/unit/controlplane-store.test.js",
+      "description": "Extend the existing bootstrap-failure coverage beyond connection failure to explicitly cover `relay_read_models=false` and no-advertised-browser-bootstrap-URL cases.",
+      "preconditions": [
+        "The control-plane store can be exercised with custom mocked system-info payloads and Nostr connection outcomes."
+      ],
+      "steps": [
+        "Attempt bootstrap with `relay_read_models=false`.",
+        "Attempt bootstrap with no `browser_relays` and no `sidecar_url`.",
+        "Attempt bootstrap with a valid payload but a Nostr client that never reaches connected state."
+      ],
+      "expected_result": "Each case returns a deterministic bootstrap failure and leaves the store in a non-ready error state.",
+      "fixtures": [
+        "Mock system-info payloads for missing capability and missing browser-bootstrap fields."
+      ],
+      "mocks": [
+        "Mock `api.getSystemInfo`.",
+        "Mock shared Nostr client connect state."
+      ],
+      "data_requirements": [
+        "Stable failure strings for assertion or equivalent structured failure reasons."
+      ],
+      "determinism_notes": [
+        "All negative cases are locally simulated; no live relay needed."
+      ],
+      "status": "not_implemented",
+      "failure_reason": null
+    },
+    {
+      "test_id": "SDRB-T-007",
+      "ac_ids": [
+        "SDRB-AC-006"
+      ],
+      "title": "Control-plane store enforces latest-wins/tombstones and rejects spoofed canonical Bahia events",
+      "type": "unit",
+      "existing_or_new": "existing",
+      "target_path": "web/tests/unit/controlplane-store.test.js",
+      "description": "Reuse the existing store tests that verify replaceable latest-wins semantics, tombstone removal, and canonical-author rejection for spoofed Bahia and LLM events.",
+      "preconditions": [
+        "The store has already discovered a Bahia service pubkey."
+      ],
+      "steps": [
+        "Apply older, stale, newer, tombstone, and replayed replaceable events.",
+        "Apply spoofed canonical events from non-service authors."
+      ],
+      "expected_result": "Only newest valid canonical events remain visible, tombstones remove deleted entities, and spoofed canonical events do not mutate state.",
+      "fixtures": [
+        "Deterministic replaceable and spoofed event objects."
+      ],
+      "mocks": [
+        "Mock shared Nostr client."
+      ],
+      "data_requirements": [
+        "Stable `created_at`, `d` tags, and service pubkeys for replaceable identity comparisons."
+      ],
+      "determinism_notes": [
+        "Pure in-memory state mutation tests."
+      ],
+      "status": "implemented",
+      "failure_reason": null
+    },
+    {
+      "test_id": "SDRB-T-008",
+      "ac_ids": [
+        "SDRB-AC-007"
+      ],
+      "title": "Bootstrap connection status reacts to disconnect and reconnect events",
+      "type": "unit",
+      "existing_or_new": "existing",
+      "target_path": "web/tests/unit/controlplane-store.test.js",
+      "description": "Reuse the existing connection-state unit test that toggles the shared Nostr client connection store after bootstrap and verifies live/disconnected/reconnected state transitions.",
+      "preconditions": [
+        "Bootstrap completed successfully."
+      ],
+      "steps": [
+        "Set shared Nostr client state to disconnected.",
+        "Set shared Nostr client state back to connected."
+      ],
+      "expected_result": "The store status changes to `disconnected` and back to `live`, incrementing the reconnect counter after bootstrap.",
+      "fixtures": [],
+      "mocks": [
+        "Mock shared Nostr client connection store."
+      ],
+      "data_requirements": [
+        "Stable bootstrap success path before toggling the connection store."
+      ],
+      "determinism_notes": [
+        "Pure store-state test; no relay timing dependency."
+      ],
+      "status": "implemented",
+      "failure_reason": null
+    },
+    {
+      "test_id": "SDRB-T-009",
+      "ac_ids": [
+        "SDRB-AC-008"
+      ],
+      "title": "Operator relay resolution respects precedence and fails when discovery has no browser bootstrap URLs",
+      "type": "unit",
+      "existing_or_new": "modify_existing",
+      "target_path": "cmd/cli/operator_nostr_test.go",
+      "description": "Extend the existing CLI precedence tests to add the missing negative branch where `/api/v1/system/info` is consulted but provides no `browser_relays` or `sidecar_url`, which should yield the deterministic discovery error.",
+      "preconditions": [
+        "CLI relay resolution is exercised with explicit-flag, environment, and discovery-only configurations."
+      ],
+      "steps": [
+        "Run the existing precedence branches for flag, environment, and discovery fallback.",
+        "Add a discovery-only branch with empty browser bootstrap fields."
+      ],
+      "expected_result": "Existing precedence is preserved and the discovery-only empty-bootstrap case fails deterministically.",
+      "fixtures": [
+        "Fake system-info client with configurable browser-relay and sidecar fields."
+      ],
+      "mocks": [
+        "Mock system-info client."
+      ],
+      "data_requirements": [
+        "Stable relay URL strings for flag, environment, and discovery branches."
+      ],
+      "determinism_notes": [
+        "Pure CLI/unit path with mocked system-info client."
+      ],
+      "status": "not_implemented",
+      "failure_reason": null
+    },
+    {
+      "test_id": "SDRB-T-010",
+      "ac_ids": [
+        "SDRB-AC-009"
+      ],
+      "title": "Encrypted capability gating is explicit and not implied by public bootstrap metadata",
+      "type": "contract",
+      "existing_or_new": "modify_existing",
+      "target_path": "web/tests/unit/encrypted-controlplane.test.js",
+      "description": "Refine the existing encrypted transport unit coverage so it maps to the approved AC wording: public bootstrap metadata alone must not imply encrypted capability, while explicit encrypted capability indicators still enable the encrypted path without describing that as a relay category.",
+      "preconditions": [
+        "Encrypted transport helper can be exercised with public-only and explicit-encrypted-capability discovery payloads."
+      ],
+      "steps": [
+        "Evaluate encrypted availability using a public-bootstrap-only system-info payload.",
+        "Evaluate encrypted availability using a payload with explicit encrypted capability indicators.",
+        "Confirm public bootstrap metadata is insufficient by itself."
+      ],
+      "expected_result": "Public bootstrap metadata alone does not make encrypted capability available; explicit encrypted capability inputs do.",
+      "fixtures": [
+        "System-info payload with only public bootstrap fields.",
+        "System-info payload with explicit encrypted capability indicators."
+      ],
+      "mocks": [
+        "Mock `currentSystemInfo`.",
+        "Mock auth encrypt/decrypt/sign helpers.",
+        "Mock Nostr client."
+      ],
+      "data_requirements": [
+        "Stable service pubkey and deterministic capability-bearing payloads."
+      ],
+      "determinism_notes": [
+        "No live messaging path required; helper behavior is locally evaluated."
+      ],
+      "status": "not_implemented",
+      "failure_reason": null
+    },
+    {
+      "test_id": "SDRB-T-011",
+      "ac_ids": [
+        "SDRB-AC-001",
+        "SDRB-AC-002",
+        "SDRB-AC-008",
+        "SDRB-AC-009"
+      ],
+      "title": "One canonical system-info payload satisfies public browser bootstrap, encrypted capability gating, and operator CLI discovery",
+      "type": "integration",
+      "existing_or_new": "new",
+      "target_path": "test/integration/system_info_multi_consumer_test.go",
+      "description": "Add a cross-consumer integration contract test that reuses one canonical `/api/v1/system/info` payload and proves it can be decoded and consumed consistently by the shared browser bootstrap path, the encrypted capability gate, and operator CLI discovery precedence logic.",
+      "preconditions": [
+        "A canonical system-info fixture is available with sidecar-first public bootstrap fields, a service pubkey, explicit encrypted capability indicators, and enabled optional capabilities."
+      ],
+      "steps": [
+        "Feed the same system-info payload into the browser system-info consumer, control-plane bootstrap helper, encrypted capability helper, and CLI relay discovery path.",
+        "Assert each consumer derives only the approved fields and behaviors from that one payload."
+      ],
+      "expected_result": "All major consumers interpret the same payload coherently without relying on out-of-band discovery assumptions.",
+      "fixtures": [
+        "Canonical system-info JSON fixture shared across browser and Go test helpers."
+      ],
+      "mocks": [
+        "Mock browser Nostr client for bootstrap helper path.",
+        "Mock CLI discovery client or HTTP server returning the canonical payload."
+      ],
+      "data_requirements": [
+        "Single stable payload covering public bootstrap fields, service pubkey, encrypted capability indicators, and control-plane kinds."
+      ],
+      "determinism_notes": [
+        "Keep this as a fixture-driven contract test; do not hit live relays or live backend services."
+      ],
+      "status": "not_implemented",
+      "failure_reason": null
+    },
+    {
+      "test_id": "SDRB-T-012",
+      "ac_ids": [
+        "SDRB-AC-010"
+      ],
+      "title": "Raw `nostr.relays` fallback is not accepted as approved bootstrap proof",
+      "type": "manual",
+      "existing_or_new": "new",
+      "target_path": null,
+      "description": "Add a release-gate manual/contract check that the approved slice is satisfied only by sidecar-first bootstrap behavior and not by sidecar-disabled raw `nostr.relays` fallback. This remains blocked until the implementation cleanup tracked in `bahia-u6e1` lands.",
+      "preconditions": [
+        "A sidecar-disabled system-info configuration exists for comparison.",
+        "The cleanup issue for raw `nostr.relays` exposure has either landed or is explicitly being evaluated."
+      ],
+      "steps": [
+        "Compare the approved AC set against a sidecar-first configuration and a sidecar-disabled raw-`nostr.relays` configuration.",
+        "Verify that only the sidecar-first path is accepted as proof for this slice."
+      ],
+      "expected_result": "Sidecar-first bootstrap is the only approved success path for the slice; raw `nostr.relays` fallback is rejected as equivalent proof.",
+      "fixtures": [
+        "Documented sidecar-first payload and sidecar-disabled comparison payload."
+      ],
+      "mocks": [],
+      "data_requirements": [
+        "Reference to follow-up issue `bahia-u6e1` for current divergence."
+      ],
+      "determinism_notes": [
+        "This is a manual release-gate check because the implementation currently diverges from the approved contract."
+      ],
+      "status": "blocked",
+      "failure_reason": "Current implementation still exposes or normalizes raw `nostr.relays` fallback; tracked in bahia-u6e1."
+    }
+  ],
+  "coverage_summary": {
+    "criteria_total": 10,
+    "criteria_with_tests": 10,
+    "known_gaps": [
+      "No existing unit test covers the missing `relay_read_models` and missing-browser-bootstrap-URL fail-closed branches for shared browser bootstrap (SDRB-T-006).",
+      "No existing cross-consumer contract test proves one canonical `/api/v1/system/info` payload simultaneously satisfies public browser bootstrap, encrypted capability gating, and operator CLI discovery (SDRB-T-011).",
+      "The explicit rejection of raw `nostr.relays` bootstrap as approved slice proof remains blocked by current implementation divergence tracked in bahia-u6e1 (SDRB-T-012).",
+      "Existing encrypted transport tests use relay-oriented wording that should be narrowed to minimal capability gating to match HITL-SYSTEM_DISCOVERY_RELAY_BOOTSTRAP-003 (SDRB-T-010)."
+    ]
+  },
+  "implementation_notes": [
+    "Lowest-effort additions are SDRB-T-006 and SDRB-T-009 because both extend existing negative-branch unit suites with deterministic mocks.",
+    "SDRB-T-010 is medium effort: coverage mostly exists, but assertions and naming should be adjusted to the approved minimal capability-gating contract rather than relay taxonomy.",
+    "SDRB-T-011 is the highest-value new gap because it converts the current cross-feature concern into one deterministic fixture-driven contract test.",
+    "SDRB-T-012 should stay blocked until the implementation cleanup in bahia-u6e1 resolves the current raw `nostr.relays` fallback divergence.",
+    "Prefer deterministic handler/store/fixture tests over live relay execution; the accepted contract is bootstrap/discovery logic, not network flakiness."
+  ]
+}
