@@ -1,0 +1,501 @@
+{
+  "generated_at": "2026-05-04",
+  "confidence_threshold": 0.9,
+  "summary": {
+    "rows_total": 15,
+    "proven": 0,
+    "partial": 6,
+    "blocked": 2,
+    "unmapped": 7
+  },
+  "rows": [
+    {
+      "row_id": "HEAT-001",
+      "domain": "Shared control-plane foundations",
+      "capability": "System discovery / feature gating",
+      "inferred": false,
+      "mapped_feature_ids": [],
+      "backlog_feature_ids": [
+        "SYSTEM_DISCOVERY_RELAY_BOOTSTRAP"
+      ],
+      "spec_status": "missing",
+      "ac_status": "missing",
+      "test_status": "missing",
+      "verification_status": "not_run",
+      "confidence_score": null,
+      "critic_risk": "unknown",
+      "cross_feature_risk": "high",
+      "hitl_status": "missing",
+      "overall_status": "unmapped",
+      "evidence": [
+        "`pstf/product_map.md` lists system discovery / feature gating as a major capability.",
+        "`pstf/feature_backlog.md` ranks `SYSTEM_DISCOVERY_RELAY_BOOTSTRAP` first and marks it only partially mapped.",
+        "`pstf/cross_feature_analysis.md` XFA-001 identifies this as a shared gating contract for core, encrypted, operator, and LLM slices."
+      ],
+      "next_actions": [
+        "create_feature_slice",
+        "run_spec_reconstruction",
+        "generate_acceptance_criteria",
+        "generate_test_matrix"
+      ]
+    },
+    {
+      "row_id": "HEAT-002",
+      "domain": "Shared control-plane foundations",
+      "capability": "Relay read-model UI",
+      "inferred": false,
+      "mapped_feature_ids": [
+        "CORE_SERVICE_TO_DEPLOYMENT",
+        "LLM_ROUTE_RELEASE_DEPLOYMENT"
+      ],
+      "backlog_feature_ids": [
+        "SYSTEM_DISCOVERY_RELAY_BOOTSTRAP"
+      ],
+      "spec_status": "draft",
+      "ac_status": "partial",
+      "test_status": "partial",
+      "verification_status": "partial",
+      "confidence_score": null,
+      "critic_risk": "unknown",
+      "cross_feature_risk": "high",
+      "hitl_status": "missing",
+      "overall_status": "partial",
+      "evidence": [
+        "`pstf/product_map.md` lists relay read-model UI as a major capability.",
+        "`CORE_SERVICE_TO_DEPLOYMENT` verifies relay-backed deployment views, and `LLM_ROUTE_RELEASE_DEPLOYMENT` verifies relay-backed LLM state consumption.",
+        "`pstf/spec_gap_report.md` says relay-read-model-first frontend behavior is under-specified as a shared contract."
+      ],
+      "next_actions": [
+        "create_feature_slice",
+        "generate_acceptance_criteria",
+        "add_cross_feature_test"
+      ]
+    },
+    {
+      "row_id": "HEAT-003",
+      "domain": "Deployment core",
+      "capability": "Core deployment registry / public service-to-deployment flow",
+      "inferred": false,
+      "mapped_feature_ids": [
+        "CORE_SERVICE_TO_DEPLOYMENT"
+      ],
+      "backlog_feature_ids": [
+        "ENCRYPTED_DEPLOYMENT_RUN_LOGS",
+        "SYSTEM_DISCOVERY_RELAY_BOOTSTRAP",
+        "HIVECI_RESULT_INGESTION_PIPELINE"
+      ],
+      "spec_status": "approved",
+      "ac_status": "complete",
+      "test_status": "complete",
+      "verification_status": "passing",
+      "confidence_score": null,
+      "critic_risk": "unknown",
+      "cross_feature_risk": "high",
+      "hitl_status": "missing",
+      "overall_status": "partial",
+      "evidence": [
+        "`pstf/features/CORE_SERVICE_TO_DEPLOYMENT/feature_spec.json` and `acceptance_criteria.json` exist with verified scope.",
+        "`pstf/features/CORE_SERVICE_TO_DEPLOYMENT/verification_report.md` marks the slice fully verified.",
+        "`pstf/cross_feature_analysis.md` flags unresolved shared dependencies: system discovery, deployment run-log handoff, rollback governance, and Hive-CI artifact provenance."
+      ],
+      "next_actions": [
+        "request_hitl_approval",
+        "run_confidence_scoring",
+        "run_critic_review",
+        "resolve_blocker"
+      ]
+    },
+    {
+      "row_id": "HEAT-004",
+      "domain": "Sensitive browser transport",
+      "capability": "Encrypted browser operations transport family",
+      "inferred": false,
+      "mapped_feature_ids": [
+        "ENCRYPTED_CONTROL_PLANE_NOTIFICATIONS"
+      ],
+      "backlog_feature_ids": [
+        "ENCRYPTED_SERVICE_SECRETS_CRUD_REVEAL",
+        "ORG_MEMBERSHIP_INVITES_ENCRYPTED_ADMIN",
+        "PAYMENTS_HISTORY_FILTER_EXPORT",
+        "ENCRYPTED_DEPLOYMENT_RUN_LOGS"
+      ],
+      "spec_status": "draft",
+      "ac_status": "partial",
+      "test_status": "partial",
+      "verification_status": "partial",
+      "confidence_score": null,
+      "critic_risk": "unknown",
+      "cross_feature_risk": "high",
+      "hitl_status": "pending",
+      "overall_status": "partial",
+      "evidence": [
+        "`pstf/product_map.md` lists encrypted browser operations as a major capability.",
+        "`ENCRYPTED_CONTROL_PLANE_NOTIFICATIONS` verifies one encrypted domain end to end.",
+        "`pstf/cross_feature_analysis.md` XFA-003 says the transport family lacks one shared approved policy across browser and compatibility flows."
+      ],
+      "next_actions": [
+        "request_hitl_approval",
+        "create_feature_slice",
+        "add_cross_feature_test"
+      ]
+    },
+    {
+      "row_id": "HEAT-005",
+      "domain": "Sensitive browser transport",
+      "capability": "Notifications",
+      "inferred": false,
+      "mapped_feature_ids": [
+        "ENCRYPTED_CONTROL_PLANE_NOTIFICATIONS"
+      ],
+      "backlog_feature_ids": [],
+      "spec_status": "approved",
+      "ac_status": "complete",
+      "test_status": "complete",
+      "verification_status": "passing",
+      "confidence_score": null,
+      "critic_risk": "unknown",
+      "cross_feature_risk": "medium",
+      "hitl_status": "approved_with_risk",
+      "overall_status": "partial",
+      "evidence": [
+        "`pstf/features/ENCRYPTED_CONTROL_PLANE_NOTIFICATIONS/verification_report.md` marks the slice fully verified.",
+        "`pstf/features/ENCRYPTED_CONTROL_PLANE_NOTIFICATIONS/hitl_decisions.md` records final status `APPROVED_WITH_RISK`.",
+        "No feature-local open defects remain, but no confidence report or critic artifact exists for this slice."
+      ],
+      "next_actions": [
+        "run_confidence_scoring",
+        "run_critic_review",
+        "run_cross_feature_analysis"
+      ]
+    },
+    {
+      "row_id": "HEAT-006",
+      "domain": "Sensitive browser transport",
+      "capability": "Payments history / filter / export",
+      "inferred": false,
+      "mapped_feature_ids": [],
+      "backlog_feature_ids": [
+        "PAYMENTS_HISTORY_FILTER_EXPORT"
+      ],
+      "spec_status": "missing",
+      "ac_status": "missing",
+      "test_status": "missing",
+      "verification_status": "not_run",
+      "confidence_score": null,
+      "critic_risk": "unknown",
+      "cross_feature_risk": "high",
+      "hitl_status": "missing",
+      "overall_status": "unmapped",
+      "evidence": [
+        "`pstf/product_map.md` lists Payments as a major capability with mixed REST and encrypted behavior.",
+        "`pstf/feature_backlog.md` ranks `PAYMENTS_HISTORY_FILTER_EXPORT` and marks it unmapped.",
+        "`pstf/spec_gap_report.md` flags payments as a risky split-transport domain."
+      ],
+      "next_actions": [
+        "create_feature_slice",
+        "run_spec_reconstruction",
+        "generate_acceptance_criteria",
+        "generate_test_matrix"
+      ]
+    },
+    {
+      "row_id": "HEAT-007",
+      "domain": "Operator control plane",
+      "capability": "Signer-first operator flows (adoption/import + direct runtime actions)",
+      "inferred": false,
+      "mapped_feature_ids": [
+        "SIGNER_FIRST_OPERATOR_ADOPTION_RUNTIME"
+      ],
+      "backlog_feature_ids": [
+        "SYSTEM_DISCOVERY_RELAY_BOOTSTRAP"
+      ],
+      "spec_status": "approved",
+      "ac_status": "complete",
+      "test_status": "complete",
+      "verification_status": "passing",
+      "confidence_score": null,
+      "critic_risk": "unknown",
+      "cross_feature_risk": "medium",
+      "hitl_status": "approved_with_risk",
+      "overall_status": "partial",
+      "evidence": [
+        "`pstf/features/SIGNER_FIRST_OPERATOR_ADOPTION_RUNTIME/verification_report.md` marks the slice fully verified.",
+        "`pstf/features/SIGNER_FIRST_OPERATOR_ADOPTION_RUNTIME/hitl_decisions.md` records final status `APPROVED_WITH_RISK` and a required rehearsal gate before release approval.",
+        "The slice still depends on the unresolved shared system-discovery contract for fallback relay discovery."
+      ],
+      "next_actions": [
+        "run_confidence_scoring",
+        "run_critic_review",
+        "resolve_blocker"
+      ]
+    },
+    {
+      "row_id": "HEAT-008",
+      "domain": "LLM control plane",
+      "capability": "LLM route / release / deploy / approval / rollback control plane",
+      "inferred": false,
+      "mapped_feature_ids": [
+        "LLM_ROUTE_RELEASE_DEPLOYMENT"
+      ],
+      "backlog_feature_ids": [],
+      "spec_status": "draft",
+      "ac_status": "partial",
+      "test_status": "partial",
+      "verification_status": "partial",
+      "confidence_score": 0.93,
+      "critic_risk": "medium",
+      "cross_feature_risk": "high",
+      "hitl_status": "approved",
+      "overall_status": "partial",
+      "evidence": [
+        "`pstf/features/LLM_ROUTE_RELEASE_DEPLOYMENT/confidence_report.json` records `0.93` and status `approved` for the approved non-rollback slice.",
+        "`pstf/features/LLM_ROUTE_RELEASE_DEPLOYMENT/hitl_decisions.md` records final `APPROVED` for the non-rollback slice only.",
+        "Rollback acceptance criteria and tests remain explicitly deferred, so the capability as described in `product_map.md` is not fully covered."
+      ],
+      "next_actions": [
+        "resolve_blocker",
+        "request_hitl_approval",
+        "run_cross_feature_analysis"
+      ]
+    },
+    {
+      "row_id": "HEAT-009",
+      "domain": "Soul Factory",
+      "capability": "Soul Factory provisioning / tracking / soul actions",
+      "inferred": false,
+      "mapped_feature_ids": [],
+      "backlog_feature_ids": [
+        "SOUL_FACTORY_PROVISIONING_TRACKING"
+      ],
+      "spec_status": "missing",
+      "ac_status": "missing",
+      "test_status": "missing",
+      "verification_status": "not_run",
+      "confidence_score": null,
+      "critic_risk": "unknown",
+      "cross_feature_risk": "high",
+      "hitl_status": "missing",
+      "overall_status": "unmapped",
+      "evidence": [
+        "`pstf/product_map.md` lists Soul Factory as a major capability.",
+        "`pstf/backlog_decisions.md` shows `SOUL_FACTORY_PROVISIONING_TRACKING` as a promoted next slice.",
+        "`pstf/spec_gap_report.md` flags Soul Factory lifecycle proof as incomplete and also flags timeout-based failure behavior as risky."
+      ],
+      "next_actions": [
+        "create_feature_slice",
+        "run_spec_reconstruction",
+        "generate_acceptance_criteria",
+        "resolve_blocker"
+      ]
+    },
+    {
+      "row_id": "HEAT-010",
+      "domain": "Artifact / CI pipeline",
+      "capability": "OCI registry + Hive-CI bridge",
+      "inferred": false,
+      "mapped_feature_ids": [],
+      "backlog_feature_ids": [
+        "HIVECI_RESULT_INGESTION_PIPELINE"
+      ],
+      "spec_status": "missing",
+      "ac_status": "missing",
+      "test_status": "missing",
+      "verification_status": "not_run",
+      "confidence_score": null,
+      "critic_risk": "unknown",
+      "cross_feature_risk": "high",
+      "hitl_status": "missing",
+      "overall_status": "unmapped",
+      "evidence": [
+        "`pstf/product_map.md` lists OCI registry + CI bridge as a major capability.",
+        "`pstf/backlog_decisions.md` promotes `HIVECI_RESULT_INGESTION_PIPELINE`.",
+        "`pstf/cross_feature_analysis.md` XFA-006 says deployments consume artifact/build state that is still not end-to-end proven from Hive-CI ingestion."
+      ],
+      "next_actions": [
+        "create_feature_slice",
+        "run_spec_reconstruction",
+        "generate_acceptance_criteria",
+        "generate_test_matrix"
+      ]
+    },
+    {
+      "row_id": "HEAT-011",
+      "domain": "Sensitive browser transport",
+      "capability": "Encrypted service secrets CRUD / reveal",
+      "inferred": true,
+      "mapped_feature_ids": [],
+      "backlog_feature_ids": [
+        "ENCRYPTED_SERVICE_SECRETS_CRUD_REVEAL"
+      ],
+      "spec_status": "missing",
+      "ac_status": "missing",
+      "test_status": "missing",
+      "verification_status": "not_run",
+      "confidence_score": null,
+      "critic_risk": "unknown",
+      "cross_feature_risk": "medium",
+      "hitl_status": "missing",
+      "overall_status": "unmapped",
+      "evidence": [
+        "`pstf/feature_backlog.md` ranks `ENCRYPTED_SERVICE_SECRETS_CRUD_REVEAL` second and marks it unmapped.",
+        "The same backlog notes explicit encrypted route handlers, stores, unit tests, and E2E evidence already exist.",
+        "This capability is inferred from backlog and implementation evidence rather than a standalone row in `product_map.md`."
+      ],
+      "next_actions": [
+        "create_feature_slice",
+        "run_spec_reconstruction",
+        "generate_acceptance_criteria",
+        "generate_test_matrix"
+      ]
+    },
+    {
+      "row_id": "HEAT-012",
+      "domain": "Sensitive browser transport",
+      "capability": "Encrypted org membership / invites / admin",
+      "inferred": true,
+      "mapped_feature_ids": [],
+      "backlog_feature_ids": [
+        "ORG_MEMBERSHIP_INVITES_ENCRYPTED_ADMIN"
+      ],
+      "spec_status": "missing",
+      "ac_status": "missing",
+      "test_status": "missing",
+      "verification_status": "not_run",
+      "confidence_score": null,
+      "critic_risk": "unknown",
+      "cross_feature_risk": "medium",
+      "hitl_status": "missing",
+      "overall_status": "unmapped",
+      "evidence": [
+        "`pstf/feature_backlog.md` ranks `ORG_MEMBERSHIP_INVITES_ENCRYPTED_ADMIN` fourth and marks it unmapped.",
+        "The backlog notes the notifications slice explicitly excluded this admin surface even though routes, stores, handlers, and tests exist.",
+        "This capability is inferred from backlog and encrypted-domain implementation evidence rather than a standalone row in `product_map.md`."
+      ],
+      "next_actions": [
+        "create_feature_slice",
+        "run_spec_reconstruction",
+        "generate_acceptance_criteria",
+        "generate_test_matrix"
+      ]
+    },
+    {
+      "row_id": "HEAT-013",
+      "domain": "Deployment core",
+      "capability": "Encrypted deployment run logs",
+      "inferred": true,
+      "mapped_feature_ids": [],
+      "backlog_feature_ids": [
+        "ENCRYPTED_DEPLOYMENT_RUN_LOGS"
+      ],
+      "spec_status": "missing",
+      "ac_status": "missing",
+      "test_status": "missing",
+      "verification_status": "not_run",
+      "confidence_score": null,
+      "critic_risk": "unknown",
+      "cross_feature_risk": "high",
+      "hitl_status": "missing",
+      "overall_status": "unmapped",
+      "evidence": [
+        "`pstf/feature_backlog.md` marks `ENCRYPTED_DEPLOYMENT_RUN_LOGS` partially mapped and directly tied to deployment detail UX.",
+        "`pstf/cross_feature_analysis.md` XFA-004 identifies run logs as a broken handoff between the verified public deployment slice and the encrypted transport family.",
+        "This capability is inferred from backlog and deployment journey evidence rather than a top-level row in `product_map.md`."
+      ],
+      "next_actions": [
+        "create_feature_slice",
+        "run_spec_reconstruction",
+        "generate_acceptance_criteria",
+        "add_cross_feature_test"
+      ]
+    },
+    {
+      "row_id": "HEAT-014",
+      "domain": "Shared control-plane governance",
+      "capability": "Public vs encrypted vs compatibility fallback transport policy",
+      "inferred": true,
+      "mapped_feature_ids": [],
+      "backlog_feature_ids": [],
+      "spec_status": "missing",
+      "ac_status": "missing",
+      "test_status": "missing",
+      "verification_status": "not_run",
+      "confidence_score": null,
+      "critic_risk": "unknown",
+      "cross_feature_risk": "high",
+      "hitl_status": "pending",
+      "overall_status": "blocked",
+      "evidence": [
+        "`pstf/cross_feature_analysis.md` XFA-003 identifies the transport policy gap as a major cross-feature issue.",
+        "`web/src/lib/auth/route-access.js` contains compatibility hooks, but the compatibility map is empty.",
+        "Existing feature slices each define transport boundaries locally, but there is no single approved shared policy."
+      ],
+      "next_actions": [
+        "request_hitl_approval",
+        "create_feature_slice",
+        "run_spec_reconstruction"
+      ]
+    },
+    {
+      "row_id": "HEAT-015",
+      "domain": "Shared deployment governance",
+      "capability": "Rollback policy across deployment domains",
+      "inferred": true,
+      "mapped_feature_ids": [
+        "LLM_ROUTE_RELEASE_DEPLOYMENT"
+      ],
+      "backlog_feature_ids": [],
+      "spec_status": "draft",
+      "ac_status": "partial",
+      "test_status": "missing",
+      "verification_status": "not_run",
+      "confidence_score": null,
+      "critic_risk": "unknown",
+      "cross_feature_risk": "high",
+      "hitl_status": "pending",
+      "overall_status": "blocked",
+      "evidence": [
+        "`pstf/cross_feature_analysis.md` XFA-005 identifies rollback as a portfolio-level policy gap across deployment domains.",
+        "`pstf/features/LLM_ROUTE_RELEASE_DEPLOYMENT/hitl_decisions.md` explicitly defers rollback acceptance criteria until replacement semantics are approved.",
+        "`pstf/features/CORE_SERVICE_TO_DEPLOYMENT/verification_report.md` recommends future signer-first rollback coverage."
+      ],
+      "next_actions": [
+        "request_hitl_approval",
+        "resolve_blocker",
+        "create_feature_slice"
+      ]
+    }
+  ],
+  "backlog_feed": [
+    {
+      "feature_id": "SYSTEM_DISCOVERY_RELAY_BOOTSTRAP",
+      "recommendation": "keep_or_raise_to_top",
+      "reason": "This is the highest-centrality shared contract and currently gates core deployments, encrypted browser flows, operator relay discovery, and LLM discovery."
+    },
+    {
+      "feature_id": "ENCRYPTED_DEPLOYMENT_RUN_LOGS",
+      "recommendation": "raise_priority",
+      "reason": "Cross-feature analysis identifies deployment run logs as a live handoff gap inside the deployment journey, not just a deferred nice-to-have."
+    },
+    {
+      "feature_id": "HIVECI_RESULT_INGESTION_PIPELINE",
+      "recommendation": "keep_promoted",
+      "reason": "The deployment registry consumes artifact/build state whose upstream ingestion path is still not end-to-end proven."
+    },
+    {
+      "feature_id": "ENCRYPTED_SERVICE_SECRETS_CRUD_REVEAL",
+      "recommendation": "keep_high",
+      "reason": "This is the highest-risk unmapped encrypted user-facing domain after notifications and is already backed by concrete implementation and E2E evidence."
+    },
+    {
+      "feature_id": "TRANSPORT_POLICY_GOVERNANCE",
+      "recommendation": "add_inferred_candidate",
+      "reason": "The portfolio now has enough public/encrypted/compatibility overlap that a dedicated shared transport-policy slice is likely warranted unless HITL explicitly rejects that approach."
+    },
+    {
+      "feature_id": "ROLLBACK_POLICY_GOVERNANCE",
+      "recommendation": "add_inferred_candidate",
+      "reason": "Rollback semantics are now a cross-domain governance gap rather than only an LLM-local follow-up."
+    }
+  ],
+  "recommended_followup_prompt": "prompts/repoprompt/10_feature_backlog_expansion.md"
+}
