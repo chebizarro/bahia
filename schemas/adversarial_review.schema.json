@@ -1,0 +1,135 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openagentsinc.github.io/bahia/schemas/adversarial_review.schema.json",
+  "title": "PSTF Adversarial Review",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "feature_id",
+    "recommendation",
+    "overall_risk",
+    "schema_validation",
+    "findings",
+    "suggested_hitl_questions",
+    "next_recommended_stage"
+  ],
+  "properties": {
+    "feature_id": { "type": "string", "minLength": 1 },
+    "recommendation": {
+      "type": "string",
+      "enum": [
+        "block_release",
+        "block_until_major_findings_resolved",
+        "requires_human_risk_acceptance",
+        "proceed_with_minor_risks",
+        "proceed_to_human_review"
+      ]
+    },
+    "overall_risk": {
+      "type": "string",
+      "enum": ["low", "medium", "high", "critical"]
+    },
+    "schema_validation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_path", "schema_found"],
+      "properties": {
+        "schema_path": { "type": "string", "minLength": 1 },
+        "schema_found": { "type": "boolean" },
+        "note": { "type": "string" }
+      }
+    },
+    "findings": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/finding" }
+    },
+    "suggested_hitl_questions": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/hitlQuestion" }
+    },
+    "next_recommended_stage": { "type": "string", "minLength": 1 }
+  },
+  "$defs": {
+    "finding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "finding_id",
+        "title",
+        "severity",
+        "category",
+        "evidence",
+        "affected_acs",
+        "affected_tests",
+        "suggested_action",
+        "requires_hitl_decision",
+        "proposed_hitl_question"
+      ],
+      "properties": {
+        "finding_id": { "type": "string", "minLength": 1 },
+        "title": { "type": "string", "minLength": 1 },
+        "severity": {
+          "type": "string",
+          "enum": ["critical", "major", "minor", "nit"]
+        },
+        "category": {
+          "type": "string",
+          "enum": [
+            "security",
+            "privacy",
+            "correctness",
+            "reliability",
+            "performance",
+            "ux",
+            "accessibility",
+            "observability",
+            "data_integrity",
+            "regression",
+            "test_gap",
+            "spec_gap",
+            "operability",
+            "compliance",
+            "other"
+          ]
+        },
+        "evidence": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string" }
+        },
+        "affected_acs": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "affected_tests": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "suggested_action": { "type": "string", "minLength": 1 },
+        "requires_hitl_decision": { "type": "boolean" },
+        "proposed_hitl_question": {
+          "oneOf": [
+            { "$ref": "#/$defs/hitlQuestion" },
+            { "type": "null" }
+          ]
+        }
+      }
+    },
+    "hitlQuestion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["question", "type", "options"],
+      "properties": {
+        "question": { "type": "string", "minLength": 1 },
+        "type": {
+          "type": "string",
+          "enum": ["single_choice", "multi_choice", "free_text"]
+        },
+        "options": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    }
+  }
+}

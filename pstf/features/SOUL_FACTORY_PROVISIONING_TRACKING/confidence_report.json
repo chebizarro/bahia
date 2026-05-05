@@ -122,7 +122,6 @@
   "caps_applied": [],
   "blocking_findings": [],
   "evidence_gaps": [
-    "The requested schema file `schemas/confidence_report.schema.json` is still not present in the repository, so this report follows the prompt-defined structure rather than a repo-backed schema.",
     "The browser coverage artifact line-instruments the extracted Souls logic modules rather than the outer Svelte entry wrappers; those wrappers are covered separately by build and deterministic Playwright evidence."
   ],
   "recommendation": {

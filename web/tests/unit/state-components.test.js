@@ -17,6 +17,11 @@ const loadingStateSource = readFileSync(
   'utf8'
 );
 
+const cardSource = readFileSync(
+  resolve(process.cwd(), 'src/lib/components/Card.svelte'),
+  'utf8'
+);
+
 describe('state components contract', () => {
   it('keeps EmptyState configurable for title/message/icon/actions', () => {
     expect(emptyStateSource).toContain("title = 'No data'");
@@ -40,5 +45,10 @@ describe('state components contract', () => {
     expect(loadingStateSource).toContain('showSpinner = true');
     expect(loadingStateSource).toContain('class="spinner"');
     expect(loadingStateSource).toContain('aria-busy="true"');
+  });
+
+  it('renders zero-valued Card metrics instead of hiding them behind truthy checks', () => {
+    expect(cardSource).toContain("const hasValue = $derived(value !== '' && value !== null && value !== undefined);");
+    expect(cardSource).toContain('{#if hasValue}');
   });
 });

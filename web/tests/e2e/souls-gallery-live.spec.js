@@ -61,4 +61,5 @@ test('Souls gallery bootstraps from relays and reflects live soul updates', asyn
   await expect(page.getByText('Handle escalations with live updates')).toBeVisible();
   await expect(page.getByRole('link', { name: /Bravo(?! Prime)/ })).toHaveCount(0);
   await expect(statsGrid.getByText('Active').locator('..')).toContainText('2');
+  await expect(statsGrid.getByText('Suspended').locator('..')).toContainText('0');
 });

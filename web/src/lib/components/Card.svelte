@@ -6,13 +6,15 @@
     status = 'default',
     children
   } = $props();
+
+  const hasValue = $derived(value !== '' && value !== null && value !== undefined);
 </script>
 
 <div class="card {status}">
   {#if title}
     <div class="card-title">{title}</div>
   {/if}
-  {#if value}
+  {#if hasValue}
     <div class="card-value">{value}</div>
   {/if}
   {#if subtitle}

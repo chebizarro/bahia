@@ -1,0 +1,131 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openagentsinc.github.io/bahia/schemas/confidence_report.schema.json",
+  "title": "PSTF Confidence Report",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "feature_id",
+    "status",
+    "threshold",
+    "raw_confidence",
+    "confidence",
+    "threshold_met",
+    "weights_total",
+    "components",
+    "hard_gates",
+    "hard_gate_failures",
+    "caps_applied",
+    "blocking_findings",
+    "evidence_gaps",
+    "recommendation"
+  ],
+  "properties": {
+    "feature_id": { "type": "string", "minLength": 1 },
+    "status": {
+      "type": "string",
+      "enum": [
+        "blocked",
+        "needs_more_tests",
+        "needs_patch",
+        "ready_for_human_review",
+        "approved",
+        "approved_with_risk",
+        "rejected"
+      ]
+    },
+    "threshold": { "type": "number", "minimum": 0, "maximum": 1 },
+    "raw_confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+    "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+    "threshold_met": { "type": "boolean" },
+    "weights_total": { "type": "number" },
+    "components": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "acceptance_criteria_coverage",
+        "test_pass_rate",
+        "code_coverage",
+        "edge_case_coverage",
+        "regression_safety",
+        "defect_resolution",
+        "human_alignment"
+      ],
+      "properties": {
+        "acceptance_criteria_coverage": { "$ref": "#/$defs/scoredComponent" },
+        "test_pass_rate": { "$ref": "#/$defs/scoredComponent" },
+        "code_coverage": { "$ref": "#/$defs/scoredComponent" },
+        "edge_case_coverage": { "$ref": "#/$defs/scoredComponent" },
+        "regression_safety": { "$ref": "#/$defs/scoredComponent" },
+        "defect_resolution": { "$ref": "#/$defs/scoredComponent" },
+        "human_alignment": { "$ref": "#/$defs/scoredComponent" }
+      }
+    },
+    "hard_gates": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": { "$ref": "#/$defs/hardGate" }
+    },
+    "hard_gate_failures": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "caps_applied": {
+      "type": "array",
+      "items": {
+        "oneOf": [
+          { "type": "string" },
+          { "type": "object", "additionalProperties": true }
+        ]
+      }
+    },
+    "blocking_findings": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "evidence_gaps": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "recommendation": { "$ref": "#/$defs/recommendation" }
+  },
+  "$defs": {
+    "scoredComponent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["score", "weight", "weighted_score", "evidence"],
+      "properties": {
+        "score": { "type": "number", "minimum": 0, "maximum": 1 },
+        "weight": { "type": "number", "minimum": 0, "maximum": 1 },
+        "weighted_score": { "type": "number", "minimum": 0, "maximum": 1 },
+        "evidence": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "hardGate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["passed", "evidence"],
+      "properties": {
+        "passed": { "type": "boolean" },
+        "evidence": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "recommendation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["next_stage", "summary"],
+      "properties": {
+        "next_stage": { "type": "string", "minLength": 1 },
+        "summary": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}
