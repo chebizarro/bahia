@@ -1,0 +1,241 @@
+{
+  "feature_id": "SYSTEM_DISCOVERY_RELAY_BOOTSTRAP",
+  "title": "System discovery and relay bootstrap contract",
+  "priority": "P1",
+  "status": "draft_requires_followup",
+  "description": "Reconstructed PSTF feature for the shared discovery contract rooted at `/api/v1/system/info` and the browser relay bootstrap path that consumes it. The approved slice covers sidecar-first public relay discovery, service-pubkey and feature-gate advertisement, control-plane kind advertisement, cached system-info loading, EOSE-bounded read-model bootstrap, transition into live subscriptions, and the discovery inputs consumed by public browser flows, encrypted browser gating, and signer-first operator relay discovery.",
+  "source_evidence": [
+    "pstf/product_map.md:17-18,29-31,95-101",
+    "pstf/planning_docs_index.md:18-19,49-57",
+    "pstf/spec_gap_report.md:11-21,95-102,149-163",
+    "pstf/feature_backlog.json:45-87",
+    "pstf/cross_feature_analysis.md:43-50,74-94,246-256",
+    "docs/control-planes.md:1-20,38-49,246-275,313-315",
+    "docs/relay-sidecar.md:1-43",
+    "internal/api/handlers/system.go:36-367",
+    "internal/api/handlers/system_test.go:13-349",
+    "web/src/lib/stores/system.svelte.js:1-45",
+    "web/src/lib/stores/controlplane.svelte.js:173-589",
+    "web/tests/unit/system-store.test.js:1-65",
+    "web/tests/unit/controlplane-store.test.js:1-321",
+    "web/tests/e2e/controlplane-nostr-smoke.spec.js:1-95",
+    "cmd/cli/operator_nostr.go:1-217"
+  ],
+  "dependencies": [
+    "A reachable Bahia relay sidecar or equivalent advertised public browser relay set",
+    "`/api/v1/system/info` served by `internal/api/handlers/system.go`",
+    "A Bahia service pubkey when canonical Bahia-authored read models or encrypted transport are in use",
+    "The shared browser stores `web/src/lib/stores/system.svelte.js` and `web/src/lib/stores/controlplane.svelte.js`",
+    "Nostr client subscribe/query support with explicit EOSE handling",
+    "Transport-policy decisions recorded in PSTF backlog decisions for public versus encrypted relay separation"
+  ],
+  "actors": [
+    {
+      "name": "browser_shared_state_bootstrap",
+      "role": "loads system info once, resolves relay bootstrap inputs, queries canonical read models until EOSE, and keeps live subscriptions open",
+      "evidence": [
+        "web/src/lib/stores/system.svelte.js",
+        "web/src/lib/stores/controlplane.svelte.js",
+        "web/tests/unit/system-store.test.js",
+        "web/tests/unit/controlplane-store.test.js"
+      ]
+    },
+    {
+      "name": "bahia_service",
+      "role": "publishes discovery metadata, owns the canonical service pubkey, and authors canonical Bahia read-model and status/result events",
+      "evidence": [
+        "internal/api/handlers/system.go",
+        "internal/api/handlers/system_test.go",
+        "docs/control-planes.md"
+      ]
+    },
+    {
+      "name": "encrypted_browser_consumers",
+      "role": "use system discovery to decide whether encrypted request/result transport is available and which relay set is safe for sensitive traffic",
+      "evidence": [
+        "docs/control-planes.md:161-175",
+        "internal/api/handlers/system.go:194-214",
+        "pstf/features/ENCRYPTED_CONTROL_PLANE_NOTIFICATIONS/feature_spec.json"
+      ]
+    },
+    {
+      "name": "operator_cli",
+      "role": "falls back to `/api/v1/system/info` for relay discovery after explicit flags and environment variables",
+      "evidence": [
+        "cmd/cli/operator_nostr.go"
+      ]
+    }
+  ],
+  "feature_boundary": {
+    "in_scope": [
+      "`/api/v1/system/info` advertisement of sidecar-first public browser relay bootstrap fields (`nostr.browser_relays`, `nostr.sidecar_url`)",
+      "Advertisement of `nostr.service_pubkey` and `features.relay_read_models` required by shared browser read-model bootstrap",
+      "Advertisement of `nostr.browser_encrypted_request_relays` and `features.encrypted_nostr_requests` as discovery inputs for encrypted browser domains",
+      "Advertisement of `control_plane.version`, capabilities, request/status/result/read-model kind maps, correlation tags, and MCP async-correlation metadata",
+      "Shared browser system-info caching, concurrent-load dedupe, and force-reload behavior",
+      "Shared browser control-plane bootstrap behavior: fail closed unless relay-read-model capability is advertised, query until EOSE, then transition into live subscriptions",
+      "Canonical-author filtering for Bahia-owned read models and status/result activity once the service pubkey is known",
+      "Signer-first operator relay discovery fallback from `/api/v1/system/info` using `browser_relays` plus `sidecar_url`"
+    ],
+    "out_of_scope": [
+      "Public command publication semantics for specific service/deployment, adoption/runtime, Soul Factory, or LLM actions beyond their dependence on the discovery contract",
+      "Encrypted request/result payload semantics for notifications, orgs, payments, secrets, run logs, or other encrypted operations beyond discovery and relay separation",
+      "Legacy REST/SSE/JWT/browser-auth exchanges as normative product behavior",
+      "Direct `nostr.relays` discovery as an approved browser bootstrap contract when the sidecar is disabled",
+      "Release-specific transport governance beyond the discovery contract itself"
+    ]
+  },
+  "observed_behavior": {
+    "summary": [
+      "`GET /api/v1/system/info` returns a wrapped `data` payload containing registry, Nostr, control-plane, runtime, OCI, Blossom, and feature information.",
+      "When sidecar mode is enabled, the handler advertises `nostr.browser_relays` and `nostr.sidecar_url`; when sidecar mode is disabled, the handler currently exposes `nostr.relays` instead.",
+      "The handler derives `nostr.service_pubkey` and `nostr.service_npub` from the configured service private key when available.",
+      "`features.relay_read_models` is currently true only when the sidecar is enabled and Nostr publication is enabled.",
+      "`features.encrypted_nostr_requests` is currently true only when browser encrypted-request relay URLs, backend encrypted-request relay URLs, and a service private key are all configured.",
+      "`web/src/lib/stores/system.svelte.js` caches the first successful system-info load, deduplicates concurrent loads, and supports explicit force reload.",
+      "`web/src/lib/stores/controlplane.svelte.js` resolves browser relays from `browser_relays` plus `sidecar_url`, falls back to `nostr.relays` only if those are absent, requires `features.relay_read_models`, queries the relay until EOSE, applies replaceable latest-wins semantics, and then keeps a live subscription open.",
+      "The shared control-plane store rejects canonical Bahia read-model and status/result events when they are not authored by the advertised Bahia service pubkey.",
+      "The operator CLI resolves relays from `--relay`, then `BAHIA_NOSTR_RELAYS`, then `/api/v1/system/info` using `browser_relays` and `sidecar_url`; it does not use `nostr.relays` from system discovery."
+    ],
+    "questionable_or_legacy_behavior": [
+      {
+        "behavior": "The handler still exposes `nostr.relays` when the sidecar is disabled, and the browser helper can normalize that field if present.",
+        "evidence": [
+          "internal/api/handlers/system.go:148-158",
+          "web/src/lib/stores/controlplane.svelte.js:178-191"
+        ],
+        "classification": "FIX_OR_REMOVE_FROM_INTENDED_CONTRACT",
+        "decision_ref": "HITL-SYSTEM_DISCOVERY_RELAY_BOOTSTRAP-001"
+      }
+    ]
+  },
+  "intended_behavior": {
+    "summary": [
+      "`/api/v1/system/info` is the authoritative discovery contract for relay-backed shared browser state and related consumer gating.",
+      "The approved bootstrap contract is sidecar-first: browser public relay discovery comes from `nostr.browser_relays` and `nostr.sidecar_url`, not from raw `nostr.relays` exposure.",
+      "The shared browser bootstrap path must fail closed unless `features.relay_read_models=true` and at least one browser relay URL is advertised.",
+      "The browser must load system info once per bootstrap cycle, deduplicate concurrent loads, and avoid per-store refetching of the same discovery payload unless a force reload is explicitly requested.",
+      "After discovery, the browser must query canonical read models and recent activity/status through scoped relay filters, wait for EOSE to complete historical catch-up, and then remain subscribed for realtime updates.",
+      "Canonical Bahia read models and status/result activity must be filtered by the advertised Bahia service pubkey once that pubkey is known.",
+      "Sensitive encrypted browser flows must derive availability only from `nostr.browser_encrypted_request_relays`, `nostr.service_pubkey`, and `features.encrypted_nostr_requests`, while keeping those relay URLs separate from public browser relays.",
+      "`control_plane` kind advertisement is part of the intended discovery contract because browser public flows, encrypted browser flows, MCP async consumers, and LLM/operator consumers all depend on it."
+    ],
+    "approved_decisions": [
+      {
+        "decision_ref": "HITL-SYSTEM_DISCOVERY_RELAY_BOOTSTRAP-001",
+        "effect": "Direct `nostr.relays` exposure when the sidecar is disabled is not part of the intended discovery behavior for this slice and should be fixed or removed rather than preserved."
+      }
+    ]
+  },
+  "preconditions": [
+    "The browser or client can reach `/api/v1/system/info`.",
+    "When public relay-backed shared state is intended, the deployment advertises sidecar-first browser relay URLs and `features.relay_read_models=true`.",
+    "When canonical Bahia read-model filtering is intended, the deployment has a service key so `nostr.service_pubkey` is advertised.",
+    "When encrypted browser transport is intended, both browser and backend encrypted-request relay sets are configured and a service key is present."
+  ],
+  "postconditions": [
+    "A conforming browser bootstrap resolves its relay inputs and Bahia service pubkey from `/api/v1/system/info` without hidden per-feature discovery calls.",
+    "Historical shared state is loaded through relay queries bounded by EOSE before the client transitions into live subscriptions.",
+    "Public and encrypted relay sets remain distinct in the discovery contract.",
+    "Consumers that depend on control-plane kinds can subscribe using the advertised kind maps and correlation tags rather than out-of-band constants alone."
+  ],
+  "happy_paths": [
+    {
+      "id": "SDRB-HP-001",
+      "title": "Shared browser bootstrap discovers sidecar-first relays and becomes live after EOSE",
+      "steps": [
+        "Browser loads `/api/v1/system/info` and caches the result",
+        "Browser resolves relay URLs from `nostr.browser_relays` plus `nostr.sidecar_url` and reads `nostr.service_pubkey`",
+        "Browser requires `features.relay_read_models=true` before continuing",
+        "Browser connects to the advertised relay set, queries canonical read models plus recent activity until EOSE, applies latest-wins/tombstone behavior, and then opens live subscriptions"
+      ]
+    },
+    {
+      "id": "SDRB-HP-002",
+      "title": "Encrypted browser domains use discovery only to gate encrypted transport",
+      "steps": [
+        "Browser loads `/api/v1/system/info`",
+        "Browser checks `nostr.service_pubkey`, `nostr.browser_encrypted_request_relays`, and `features.encrypted_nostr_requests`",
+        "Browser enables encrypted request/result flows only when those encrypted discovery inputs are coherently advertised and keeps them separate from public browser relay URLs"
+      ]
+    },
+    {
+      "id": "SDRB-HP-003",
+      "title": "Operator CLI falls back to system discovery after explicit relay inputs",
+      "steps": [
+        "Operator CLI checks `--relay` first and `BAHIA_NOSTR_RELAYS` second",
+        "If neither is present, CLI loads `/api/v1/system/info`",
+        "CLI resolves relays from `browser_relays` plus `sidecar_url` and uses those for signer-first operator requests"
+      ]
+    }
+  ],
+  "failure_paths": [
+    {
+      "id": "SDRB-FP-001",
+      "title": "Relay read models not advertised",
+      "behavior": "If `features.relay_read_models` is false, the shared browser bootstrap fails locally instead of silently falling back to unsupported shared-state behavior"
+    },
+    {
+      "id": "SDRB-FP-002",
+      "title": "No browser relays advertised",
+      "behavior": "If no browser relay URLs are advertised for the sidecar-first path, the shared browser bootstrap fails closed with a deterministic discovery error"
+    },
+    {
+      "id": "SDRB-FP-003",
+      "title": "No relay accepted connection during bootstrap",
+      "behavior": "If the browser cannot connect to any advertised browser relay, bootstrap fails and shared state does not claim readiness"
+    },
+    {
+      "id": "SDRB-FP-004",
+      "title": "Encrypted transport incompletely configured",
+      "behavior": "If only public browser relays are present, or browser/backend encrypted relay sets or the service key are incomplete, encrypted transport remains unavailable and must not be inferred from public discovery fields"
+    }
+  ],
+  "edge_cases": [
+    "Concurrent `loadSystemInfo()` calls must deduplicate to a single fetch.",
+    "Force reload must refresh cached system-info state rather than returning stale discovery metadata.",
+    "Canonical Bahia events from non-service authors must be ignored after the service pubkey is known.",
+    "Replaceable read models must obey latest-wins and tombstone semantics by `(kind, pubkey, d-tag)`.",
+    "System discovery must continue advertising removed legacy feature flags as explicit `false` values so old clients fail closed.",
+    "Kind advertisement for optional domains such as LLM must disappear when the corresponding feature is disabled."
+  ],
+  "non_functional_requirements": [
+    "Bootstrap must remain event-driven: historical catch-up is bounded by EOSE and live subscriptions stay open afterward.",
+    "Public relay discovery and encrypted relay discovery must remain separate security boundaries.",
+    "System discovery must be cacheable and deterministic enough that multiple consumers can share one payload instead of independently probing transport state.",
+    "The discovery contract must be specific enough that downstream consumers do not need to guess control-plane kind ids or legacy-surface availability."
+  ],
+  "dependencies_on_other_slices": [
+    "CORE_SERVICE_TO_DEPLOYMENT",
+    "ENCRYPTED_CONTROL_PLANE_NOTIFICATIONS",
+    "SIGNER_FIRST_OPERATOR_ADOPTION_RUNTIME",
+    "LLM_ROUTE_RELEASE_DEPLOYMENT"
+  ],
+  "contradictions_and_gaps": [
+    {
+      "type": "documentation_gap",
+      "note": "`docs/api.md` omits `/api/v1/system/info` even though product docs, code, tests, and other PSTF slices treat it as a hard bootstrap contract.",
+      "evidence": [
+        "pstf/spec_gap_report.md:11-21"
+      ]
+    },
+    {
+      "type": "implementation_vs_intended_contract",
+      "note": "The handler still exposes `nostr.relays` when sidecar mode is disabled, but the approved intended contract for this slice is sidecar-first and explicitly excludes that fallback.",
+      "evidence": [
+        "internal/api/handlers/system.go:148-158",
+        "HITL-SYSTEM_DISCOVERY_RELAY_BOOTSTRAP-001"
+      ]
+    },
+    {
+      "type": "cross_feature_test_gap",
+      "note": "Current selected tests prove local browser bootstrap behavior and local control-plane state handling, but the portfolio still lacks one multi-consumer contract test showing a single `/api/v1/system/info` payload satisfies public browser bootstrap, encrypted browser gating, and operator CLI discovery together.",
+      "evidence": [
+        "pstf/cross_feature_analysis.md:246-256"
+      ]
+    }
+  ],
+  "human_decisions": [
+    "HITL-SYSTEM_DISCOVERY_RELAY_BOOTSTRAP-001"
+  ]
+}
