@@ -342,30 +342,55 @@ func (s *LLMRegistryService) RollbackWithMetadata(ctx context.Context, routeID, 
 	if err != nil {
 		return nil, err
 	}
-	var targetReleaseID *uuid.UUID
-	var supersedes *uuid.UUID
-	for i := range intents {
-		intent := intents[i]
-		if intent.Status != domain.IntentStatusDeployed {
-			continue
-		}
-		if supersedes == nil {
-			supersedes = &intent.ID
-		}
-		if intent.ReleaseID == *state.DesiredReleaseID {
-			continue
-		}
-		targetReleaseID = &intent.ReleaseID
-		break
+	selection, err := selectRollbackTarget(*state.DesiredReleaseID, intents)
+	if err != nil {
+		return nil, err
 	}
-	if targetReleaseID == nil {
-		return nil, fmt.Errorf("no previous successfully deployed LLM release to roll back to")
-	}
-	intent := &domain.LLMDeploymentIntent{RouteID: routeID, EnvironmentID: envID, ReleaseID: *targetReleaseID, RequestedBy: requestedBy, SourceKind: domain.SourceKindRollback, ApprovalStatus: domain.ApprovalStatusNotRequired, Status: domain.IntentStatusApproved, SupersedesIntentID: supersedes, Metadata: metadata}
+	intent := &domain.LLMDeploymentIntent{RouteID: routeID, EnvironmentID: envID, ReleaseID: selection.targetReleaseID, RequestedBy: requestedBy, SourceKind: domain.SourceKindRollback, ApprovalStatus: domain.ApprovalStatusNotRequired, Status: domain.IntentStatusApproved, SupersedesIntentID: selection.supersedesIntentID, Metadata: metadata}
 	if err := s.CreateDeploymentIntent(ctx, intent); err != nil {
 		return nil, err
 	}
 	return intent, nil
+}
+
+var errNoPreviousDeployedDifferentRelease = fmt.Errorf("no previous successfully deployed LLM release to roll back to")
+
+type rollbackTargetSelection struct {
+	targetReleaseID    uuid.UUID
+	supersedesIntentID *uuid.UUID
+}
+
+func selectRollbackTarget(currentDesiredReleaseID uuid.UUID, intents []domain.LLMDeploymentIntent) (*rollbackTargetSelection, error) {
+	deployed := deployedIntentsNewestFirst(intents)
+	if len(deployed) == 0 {
+		return nil, errNoPreviousDeployedDifferentRelease
+	}
+	supersedesIntentID := deployed[0].ID
+	targetReleaseID, ok := selectPreviousDeployedDifferentRelease(currentDesiredReleaseID, deployed)
+	if !ok {
+		return nil, errNoPreviousDeployedDifferentRelease
+	}
+	return &rollbackTargetSelection{targetReleaseID: targetReleaseID, supersedesIntentID: &supersedesIntentID}, nil
+}
+
+func deployedIntentsNewestFirst(intents []domain.LLMDeploymentIntent) []domain.LLMDeploymentIntent {
+	deployed := make([]domain.LLMDeploymentIntent, 0, len(intents))
+	for i := range intents {
+		if intents[i].Status == domain.IntentStatusDeployed {
+			deployed = append(deployed, intents[i])
+		}
+	}
+	return deployed
+}
+
+func selectPreviousDeployedDifferentRelease(currentDesiredReleaseID uuid.UUID, deployedIntentsNewestFirst []domain.LLMDeploymentIntent) (uuid.UUID, bool) {
+	for i := range deployedIntentsNewestFirst {
+		if deployedIntentsNewestFirst[i].ReleaseID == currentDesiredReleaseID {
+			continue
+		}
+		return deployedIntentsNewestFirst[i].ReleaseID, true
+	}
+	return uuid.Nil, false
 }
 
 func (s *LLMRegistryService) RecordObservation(ctx context.Context, obs *domain.LLMRouteObservation) error {

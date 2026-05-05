@@ -112,6 +112,40 @@ func TestLLMRegistryRollbackSelectsPreviousDeployedDifferentRelease(t *testing.T
 	}
 }
 
+func TestLLMRegistryRollbackSkipsRepeatedCurrentReleaseDeployments(t *testing.T) {
+	routeID, previousReleaseID, currentReleaseID, envID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	repos := newLLMRegistryFakes(routeID, currentReleaseID, envID)
+	repos.releases.byID[previousReleaseID] = &domain.LLMRelease{ID: previousReleaseID, RouteID: routeID, Version: "v0", ModelRef: "hf/previous", ModelSource: domain.ModelSourceHuggingFace, ExternalBackend: &domain.LLMExternalBackendConfig{BaseURL: "https://prev.example.com"}}
+	reg := NewLLMRegistryService(repos.routes, repos.releases, repos.envs, repos.intents, repos.runs, repos.obs, repos.states, nil, zap.NewNop())
+
+	previous := &domain.LLMDeploymentIntent{RouteID: routeID, ReleaseID: previousReleaseID, EnvironmentID: envID, RequestedBy: "previous", SourceKind: domain.SourceKindManual, ApprovalStatus: domain.ApprovalStatusNotRequired, Status: domain.IntentStatusDeployed}
+	if err := repos.intents.Create(t.Context(), previous); err != nil {
+		t.Fatalf("seed previous intent: %v", err)
+	}
+	currentOld := &domain.LLMDeploymentIntent{RouteID: routeID, ReleaseID: currentReleaseID, EnvironmentID: envID, RequestedBy: "current-old", SourceKind: domain.SourceKindManual, ApprovalStatus: domain.ApprovalStatusNotRequired, Status: domain.IntentStatusDeployed}
+	if err := repos.intents.Create(t.Context(), currentOld); err != nil {
+		t.Fatalf("seed earlier current intent: %v", err)
+	}
+	currentNewest := &domain.LLMDeploymentIntent{RouteID: routeID, ReleaseID: currentReleaseID, EnvironmentID: envID, RequestedBy: "current-newest", SourceKind: domain.SourceKindManual, ApprovalStatus: domain.ApprovalStatusNotRequired, Status: domain.IntentStatusDeployed}
+	if err := repos.intents.Create(t.Context(), currentNewest); err != nil {
+		t.Fatalf("seed newest current intent: %v", err)
+	}
+	if err := repos.states.Upsert(t.Context(), &domain.LLMRouteState{RouteID: routeID, EnvironmentID: envID, DesiredReleaseID: &currentReleaseID, DesiredIntentID: &currentNewest.ID, DriftStatus: domain.DriftStatusInSync}); err != nil {
+		t.Fatalf("seed route state: %v", err)
+	}
+
+	rollbackIntent, err := reg.RollbackWithMetadata(t.Context(), routeID, envID, "operator", map[string]any{"source": "test"})
+	if err != nil {
+		t.Fatalf("rollback: %v", err)
+	}
+	if rollbackIntent.ReleaseID != previousReleaseID {
+		t.Fatalf("expected rollback to skip repeated current release and select %s, got %s", previousReleaseID, rollbackIntent.ReleaseID)
+	}
+	if rollbackIntent.SupersedesIntentID == nil || *rollbackIntent.SupersedesIntentID != currentNewest.ID {
+		t.Fatalf("expected rollback to supersede newest current deployment, got %#v", rollbackIntent.SupersedesIntentID)
+	}
+}
+
 func TestLLMRegistryRollbackFailsClosedWithoutPreviousDeployedDifferentRelease(t *testing.T) {
 	routeID, currentReleaseID, envID := uuid.New(), uuid.New(), uuid.New()
 	repos := newLLMRegistryFakes(routeID, currentReleaseID, envID)

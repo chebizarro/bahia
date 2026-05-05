@@ -6,12 +6,14 @@ Fresh verification evidence supports the full approved slice of `LLM_ROUTE_RELEA
 - **Verified:** AC-001 through AC-012
 - **Tests rerun in this verification pass:** mapped Go suites, mapped web unit suites, dedicated `/llm` rollback e2e suite, and web production build
 - **Current failure count:** `0`
-- **Open implementation tradeoff:** rollback target selection is behaviorally verified but still encoded through deployed-intent scan ordering rather than an explicit named selector
+- **Implementation follow-up resolved:** rollback target selection is now expressed through an explicit selector with regression coverage for repeated current-release deployments
 
 Current implementation satisfies the approved acceptance criteria and the current test matrix.
 
 ## Commands Run
 - `go test ./internal/controlplane ./internal/service ./internal/repository ./internal/mcp`
+  - Result: pass
+- `go test ./internal/service ./internal/controlplane`
   - Result: pass
 - `cd /Users/bizarro/Documents/Projects/bahia/web && npm test -- --run tests/unit/public-controlplane.test.js tests/unit/llm-page.test.js tests/unit/controlplane-store.test.js`
   - Result: pass (`3` files, `26` tests)
@@ -33,7 +35,7 @@ Current implementation satisfies the approved acceptance criteria and the curren
 | LLMRD-AC-008 | Verified | `web/tests/unit/controlplane-store.test.js` covers valid Bahia-authored LLM events, live updates after bootstrap, and spoofed-author rejection. |
 | LLMRD-AC-009 | Verified | `web/src/routes/llm/+page.svelte` and `web/tests/e2e/llm-route-release-deployment.spec.js` prove the dedicated browser workflow for route creation, release registration, deploy initiation, approval, relay-backed state/activity visibility, and explicit non-use of deprecated `/api/v1/llm/**` mutation endpoints. |
 | LLMRD-AC-010 | Verified | `internal/controlplane/llm_command_publisher_test.go` proves signed `5975` request shaping plus zero-accept failure, `internal/controlplane/reactor_llm_requests_test.go` proves the first rollback reply is correlated `6973 accepted`, and `web/tests/unit/public-controlplane.test.js` proves the browser rollback helper awaits the accepted/completed async lifecycle on the canonical kinds. |
-| LLMRD-AC-011 | Verified | `internal/service/llm_registry_test.go` proves rollback selects the previous deployed different release, supersedes the current desired deployed intent, moves desired state accordingly, and fails closed without mutation when no previous deployed different release exists. |
+| LLMRD-AC-011 | Verified | `internal/service/llm_registry_test.go` proves rollback selects the previous deployed different release, skips repeated current-release deployments, supersedes the current desired deployed intent, moves desired state accordingly, and fails closed without mutation when no previous deployed different release exists. |
 | LLMRD-AC-012 | Verified | `web/src/routes/llm/+page.svelte`, `web/tests/e2e/harnesses/llm-controlplane-public.js`, and `web/tests/e2e/llm-route-release-deployment.spec.js` prove the dedicated `/llm` workflow exposes rollback, uses signer-first `5975`, surfaces positive and negative rollback outcomes from relay-backed activity/state, and does not rely on deprecated `/api/v1/llm/**` mutation endpoints. |
 
 ## Test Matrix Status
@@ -83,4 +85,4 @@ Behaviorally, the full approved feature slice is verified.
 Recommended next sequence:
 1. Treat rollback as part of the verified LLM control-plane contract.
 2. Keep the current test matrix as the release verification baseline for this feature.
-3. Track any future refactor of `RollbackWithMetadata` as an implementation-quality improvement, not as a blocker to the current verified behavior.
+3. Keep the explicit rollback-selector regression tests in the baseline suite so future changes cannot drift back to implicit scan-order coupling.
