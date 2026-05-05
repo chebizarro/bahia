@@ -1,0 +1,105 @@
+{
+  "feature_id": "SYSTEM_DISCOVERY_RELAY_BOOTSTRAP",
+  "recommendation": "block_until_major_findings_resolved",
+  "overall_risk": "high",
+  "schema_validation": {
+    "schema_path": "schemas/adversarial_review.schema.json",
+    "schema_found": true,
+    "note": "Review JSON validated against the repository schema."
+  },
+  "findings": [
+    {
+      "finding_id": "ADV-001",
+      "title": "Confidence gate is still blocked by missing touched-module coverage evidence",
+      "severity": "major",
+      "category": "test_gap",
+      "evidence": [
+        "pstf/features/SYSTEM_DISCOVERY_RELAY_BOOTSTRAP/confidence_report.json sets status to `needs_more_tests`, raw/final confidence to 0.85, and threshold to 0.90.",
+        "The same report scores `code_coverage` at 0.0 and records the explicit evidence gap: no Go or web coverage report exists under pstf/features/SYSTEM_DISCOVERY_RELAY_BOOTSTRAP/.",
+        "Repo tree for pstf/features/SYSTEM_DISCOVERY_RELAY_BOOTSTRAP contains no coverage/ directory or other coverage artifacts, so the release-evidence gap is real rather than stale bookkeeping."
+      ],
+      "affected_acs": [
+        "SDRB-AC-001",
+        "SDRB-AC-002",
+        "SDRB-AC-003",
+        "SDRB-AC-004",
+        "SDRB-AC-005",
+        "SDRB-AC-006",
+        "SDRB-AC-007",
+        "SDRB-AC-008",
+        "SDRB-AC-009",
+        "SDRB-AC-010"
+      ],
+      "affected_tests": [],
+      "suggested_action": "Generate touched-module Go and web coverage artifacts for the discovery/bootstrap slice, store them under the feature folder, and rerun confidence scoring before final human review.",
+      "requires_hitl_decision": false,
+      "proposed_hitl_question": null
+    },
+    {
+      "finding_id": "ADV-002",
+      "title": "Operator settings still depend on a removed `systemInfo.nostr.relays` field with no replacement contract or regression proof",
+      "severity": "major",
+      "category": "regression",
+      "evidence": [
+        "internal/api/handlers/system.go no longer populates `nostr.relays`, and the approved slice explicitly removed raw `nostr.relays` from the intended discovery contract.",
+        "web/src/routes/settings/+page.svelte:232-246 still renders `systemInfo.nostr.relays` as the operator-visible \u201cServer Relays\u201d setting.",
+        "A repo-wide test search found no settings-page or equivalent regression test covering the disappearance or replacement of that field after the discovery cleanup.",
+        "HITL-SYSTEM_DISCOVERY_RELAY_BOOTSTRAP-001 decided that raw `nostr.relays` should be fixed/removed from the bootstrap contract, but did not decide whether operator-facing relay visibility should still exist through another field."
+      ],
+      "affected_acs": [
+        "SDRB-AC-001",
+        "SDRB-AC-010"
+      ],
+      "affected_tests": [],
+      "suggested_action": "Decide whether operator-visible backend relay configuration should remain available after the sidecar-first cleanup. Then either add an explicit non-goal plus UI cleanup, or add a replacement contract and regression coverage for the settings surface.",
+      "requires_hitl_decision": true,
+      "proposed_hitl_question": {
+        "question": "After removing raw `nostr.relays` from the approved system discovery contract, how should the operator settings page handle server relay visibility?",
+        "type": "single_choice",
+        "options": [
+          "Expose backend relay configuration through a new explicit operator-only field and test it",
+          "Remove server relay visibility from the settings UI and treat it as out of scope for this release",
+          "Keep current settings behavior by restoring `nostr.relays` for operator surfaces only",
+          "Defer the settings-page decision into a dedicated follow-up slice before release"
+        ]
+      }
+    },
+    {
+      "finding_id": "ADV-003",
+      "title": "Several PSTF artifacts still describe superseded behavior, which weakens traceability for human review",
+      "severity": "minor",
+      "category": "spec_gap",
+      "evidence": [
+        "pstf/features/SYSTEM_DISCOVERY_RELAY_BOOTSTRAP/feature_spec.json still says the handler exposes `nostr.relays` when the sidecar is disabled and that the browser helper falls back to that field, even though the implementation and verification artifacts say this was fixed.",
+        "The same feature_spec.json still lists a missing multi-consumer contract test in `contradictions_and_gaps`, but verification_report.md and test_matrix.json now mark SDRB-T-011 as passing.",
+        "pstf/features/SYSTEM_DISCOVERY_RELAY_BOOTSTRAP/test_matrix.json marks SDRB-T-012 as `pass`, but its title/description/preconditions still describe it as a blocked manual gate waiting on `bahia-u6e1`.",
+        "pstf/features/SYSTEM_DISCOVERY_RELAY_BOOTSTRAP/hitl_decisions.md metadata still says `Current Stage: acceptance_criteria`, which no longer matches the feature\u2019s verification/confidence state."
+      ],
+      "affected_acs": [
+        "SDRB-AC-001",
+        "SDRB-AC-009",
+        "SDRB-AC-010"
+      ],
+      "affected_tests": [
+        "SDRB-T-011",
+        "SDRB-T-012"
+      ],
+      "suggested_action": "Refresh the stale feature spec, test-matrix text, and HITL metadata before final human review so reviewers do not have to reconcile obsolete statements against the live verification outcome.",
+      "requires_hitl_decision": false,
+      "proposed_hitl_question": null
+    }
+  ],
+  "suggested_hitl_questions": [
+    {
+      "question": "After removing raw `nostr.relays` from the approved system discovery contract, how should the operator settings page handle server relay visibility?",
+      "type": "single_choice",
+      "options": [
+        "Expose backend relay configuration through a new explicit operator-only field and test it",
+        "Remove server relay visibility from the settings UI and treat it as out of scope for this release",
+        "Keep current settings behavior by restoring `nostr.relays` for operator surfaces only",
+        "Defer the settings-page decision into a dedicated follow-up slice before release"
+      ]
+    }
+  ],
+  "next_recommended_stage": "resolve_major_findings_then_rerun_confidence_or_hitl_review"
+}
