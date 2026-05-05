@@ -10,7 +10,9 @@
         "LLMRD-AC-009"
       ],
       "related_test_ids": [
-        "LLMRD-T-018"
+        "LLMRD-T-018",
+        "LLMRD-T-024",
+        "LLMRD-T-025"
       ],
       "evidence": [
         "web/src/routes/llm/+page.svelte",
@@ -19,8 +21,10 @@
         "web/src/lib/auth/route-access.js",
         "web/tests/e2e/harnesses/llm-controlplane-public.js",
         "web/tests/e2e/llm-route-release-deployment.spec.js",
-        "`cd /Users/bizarro/Documents/Projects/bahia/web && npm run build` passed on 2026-05-04.",
-        "`cd /Users/bizarro/Documents/Projects/bahia/web && npm run test:e2e -- tests/e2e/llm-route-release-deployment.spec.js` passed on 2026-05-04."
+        "`cd /Users/bizarro/Documents/Projects/bahia/web && npm run build` passed on 2026-05-05.",
+        "`cd /Users/bizarro/Documents/Projects/bahia/web && npm run test:e2e -- tests/e2e/llm-route-release-deployment.spec.js` passed on 2026-05-05.",
+        "web/tests/unit/public-controlplane.test.js",
+        "`cd /Users/bizarro/Documents/Projects/bahia/web && npm test -- --run tests/unit/public-controlplane.test.js tests/unit/llm-page.test.js tests/unit/controlplane-store.test.js` passed on 2026-05-05."
       ],
       "suspected_root_cause": "The approved user-facing LLM workflow was never implemented in the web route surface; current browser support stops at shared relay-backed state consumption.",
       "recommended_fix": "No further fix required for this defect; keep the dedicated `/llm` workflow and its deterministic Playwright coverage passing.",
@@ -49,7 +53,7 @@
         "internal/controlplane/reactor_llm_requests_test.go",
         "internal/controlplane/llm_command_publisher_test.go",
         "internal/service/llm_registry_test.go",
-        "`go test ./internal/controlplane ./internal/service` passed on 2026-05-04, exercising the new signer-first reactor and rejection-repair coverage.",
+        "`go test ./internal/controlplane ./internal/service` passed on 2026-05-05, exercising the new signer-first reactor and rejection-repair coverage.",
         "pstf/features/LLM_ROUTE_RELEASE_DEPLOYMENT/test_matrix.json"
       ],
       "suspected_root_cause": "Coverage had stopped at helper tests and MCP request-shaping tests until the signer-first reactor and rejection-repair cases were added.",
@@ -73,7 +77,7 @@
         "internal/service/llm_provisioning_coordinator_test.go",
         "internal/repository/pg_llm_deployment.go",
         "internal/repository/pg_llm_deployment_test.go",
-        "`go test ./internal/controlplane ./internal/service ./internal/repository ./internal/mcp` passed on 2026-05-04."
+        "`go test ./internal/controlplane ./internal/service ./internal/repository ./internal/mcp` passed on 2026-05-05."
       ],
       "suspected_root_cause": "The async provisioning path was implemented without a dedicated fake-backed coordinator test harness.",
       "recommended_fix": "No further fix required for this defect; keep the coordinator success/failure regression tests passing.",
@@ -92,10 +96,10 @@
       ],
       "evidence": [
         "web/tests/unit/controlplane-store.test.js",
-        "RepoPrompt content search for explicit spoofed LLM route/state/activity coverage returned no matches on 2026-05-04.",
+        "RepoPrompt content search for explicit spoofed LLM route/state/activity coverage returned no matches on 2026-05-05.",
         "pstf/features/LLM_ROUTE_RELEASE_DEPLOYMENT/test_matrix.json",
         "`web/tests/unit/controlplane-store.test.js` now includes `ignores spoofed non-Bahia LLM route, state, and activity events`.",
-        "`cd /Users/bizarro/Documents/Projects/bahia/web && npm test -- --run tests/unit/controlplane-store.test.js` passed with 9 tests on 2026-05-04."
+        "`cd /Users/bizarro/Documents/Projects/bahia/web && npm test -- --run tests/unit/controlplane-store.test.js` passed with 9 tests on 2026-05-05."
       ],
       "suspected_root_cause": "The browser store suite verifies a generic spoofed service-registry event but does not include an LLM-specific negative case.",
       "recommended_fix": "Extend `web/tests/unit/controlplane-store.test.js` with spoofed non-Bahia LLM route, route-state, and deployment activity events and assert they are ignored.",
@@ -122,12 +126,58 @@
         "web/src/lib/stores/public-controlplane.svelte.js",
         "web/tests/unit/public-controlplane.test.js",
         "web/tests/e2e/llm-route-release-deployment.spec.js",
-        "`go test ./internal/controlplane ./internal/service ./internal/repository ./internal/mcp` passed on 2026-05-04.",
-        "`cd /Users/bizarro/Documents/Projects/bahia/web && npm test -- --run tests/unit/public-controlplane.test.js tests/unit/controlplane-store.test.js` passed on 2026-05-04.",
-        "`cd /Users/bizarro/Documents/Projects/bahia/web && npm run test:e2e -- tests/e2e/llm-route-release-deployment.spec.js` passed on 2026-05-04."
+        "`go test ./internal/controlplane ./internal/service ./internal/repository ./internal/mcp` passed on 2026-05-05.",
+        "`cd /Users/bizarro/Documents/Projects/bahia/web && npm test -- --run tests/unit/public-controlplane.test.js tests/unit/controlplane-store.test.js` passed on 2026-05-05.",
+        "`cd /Users/bizarro/Documents/Projects/bahia/web && npm run test:e2e -- tests/e2e/llm-route-release-deployment.spec.js` passed on 2026-05-05.",
+        "`cd /Users/bizarro/Documents/Projects/bahia/web && npm test -- --run tests/unit/public-controlplane.test.js tests/unit/llm-page.test.js tests/unit/controlplane-store.test.js` passed on 2026-05-05."
       ],
       "suspected_root_cause": "The requester-side route-create and release-register path previously bypassed canonical signer-first publishing and lacked direct frontend request coverage.",
       "recommended_fix": "No further fix required for this defect; canonical signer-first 5971/5972 publishing is now implemented and covered across MCP, publisher, browser helper, and E2E layers.",
+      "requires_human_decision": false
+    },
+    {
+      "defect_id": "LLMRD-D-006",
+      "title": "Dedicated `/llm` browser rollback action was missing from the approved user workflow",
+      "severity": "major",
+      "status": "verified",
+      "related_ac_ids": [
+        "LLMRD-AC-012"
+      ],
+      "related_test_ids": [
+        "LLMRD-T-024",
+        "LLMRD-T-025"
+      ],
+      "evidence": [
+        "web/src/routes/llm/+page.svelte",
+        "web/src/routes/llm/page-model.js",
+        "web/src/lib/stores/public-controlplane.svelte.js",
+        "web/tests/unit/public-controlplane.test.js",
+        "web/tests/e2e/harnesses/llm-controlplane-public.js",
+        "web/tests/e2e/llm-route-release-deployment.spec.js",
+        "`cd /Users/bizarro/Documents/Projects/bahia/web && npm run test:e2e -- tests/e2e/llm-route-release-deployment.spec.js` passed on 2026-05-05."
+      ],
+      "suspected_root_cause": "The dedicated `/llm` route implemented route, release, deploy, and approval behavior but stopped short of exposing the rollback action required by the approved browser contract.",
+      "recommended_fix": "No further fix required for this defect; keep the `/llm` rollback action and its positive/negative deterministic Playwright coverage passing.",
+      "requires_human_decision": false
+    },
+    {
+      "defect_id": "LLMRD-D-007",
+      "title": "Rollback action in the `/llm` route-state panel could be occluded by adjacent panel overflow",
+      "severity": "minor",
+      "status": "verified",
+      "related_ac_ids": [
+        "LLMRD-AC-012"
+      ],
+      "related_test_ids": [
+        "LLMRD-T-024"
+      ],
+      "evidence": [
+        "web/src/routes/llm/+page.svelte",
+        "web/tests/e2e/llm-route-release-deployment.spec.js",
+        "`cd /Users/bizarro/Documents/Projects/bahia/web && npm run test:e2e -- tests/e2e/llm-route-release-deployment.spec.js` passed on 2026-05-05."
+      ],
+      "suspected_root_cause": "The route-state and activity panels could overflow horizontally, allowing the adjacent activity table to intercept pointer events over the rollback button.",
+      "recommended_fix": "Keep the panel overflow guard in `web/src/routes/llm/+page.svelte` and retain deterministic browser coverage that clicks the rollback action without forcing the event.",
       "requires_human_decision": false
     }
   ]
