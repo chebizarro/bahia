@@ -2,11 +2,11 @@
 
 ## Metadata
 - Feature ID: SYSTEM_DISCOVERY_RELAY_BOOTSTRAP
-- Task ID: bahia-dmhu
+- Task ID: bahia-vfee
 - Framework: PSTF
 - Interaction Mode: RepoPrompt ask-user tool
-- Current Stage: spec_reconstruction
-- Last Updated: 2026-05-05T06:59:02Z
+- Current Stage: acceptance_criteria
+- Last Updated: 2026-05-05T07:10:07Z
 
 ---
 
@@ -52,9 +52,89 @@ FIX_OR_REMOVE_DIRECT_NOSTR_RELAYS_EXPOSURE
 
 ---
 
+### Decision HITL-SYSTEM_DISCOVERY_RELAY_BOOTSTRAP-002 — Acceptance-criteria approval
+
+**Stage:** acceptance_criteria
+**Agent:** PSTF Acceptance Criteria Agent
+**Decision Type:** spec_approval
+**Status:** active
+
+**Context Summary:**
+The draft AC set for `SYSTEM_DISCOVERY_RELAY_BOOTSTRAP` covered sidecar-first public bootstrap advertisement, conditional control-plane kind/feature advertisement, shared system-info caching, EOSE-bounded relay bootstrap, fail-closed bootstrap errors, canonical-author filtering, operator CLI relay discovery precedence, and an encrypted-capability-related criterion. PSTF requires explicit human approval before moving on to test design.
+
+**Question Asked:**
+Do you approve the acceptance criteria for SYSTEM_DISCOVERY_RELAY_BOOTSTRAP?
+
+**Options Presented:**
+- A) APPROVE_AS_IS
+- B) APPROVE_WITH_EDITS
+- C) REJECT_AND_REVISE
+- D) DEFER_FEATURE
+
+**User Selection:**
+B
+
+**User Notes:**
+The initial edit request was: “Remove the encrypted relay AC, this doesn't make sense, there is no such thing as an encrypted relay”.
+
+**Decision:**
+APPROVE_WITH_EDITS
+
+**Impact:**
+- Feature Spec: no immediate rewrite applied here, but the AC set must avoid inventing relay-level encrypted semantics not approved by the user.
+- Acceptance Criteria: updated — the encrypted-discovery criterion must be narrowed and reframed before final approval.
+- Tests: future tests should not assert a relay-class taxonomy that the user rejected.
+- Defects: none created at this stage.
+- Confidence / Release: enables AC finalization once the requested edit is applied.
+
+**Required Follow-Up Actions:**
+- [ ] Reframe or remove the encrypted-relay AC so it does not describe encrypted behavior as a relay category.
+- [ ] Capture the final encrypted-capability scope decision before writing `acceptance_criteria.json`.
+
+---
+
+### Decision HITL-SYSTEM_DISCOVERY_RELAY_BOOTSTRAP-003 — Encrypted capability scope inside discovery ACs
+
+**Stage:** acceptance_criteria
+**Agent:** PSTF Acceptance Criteria Agent
+**Decision Type:** ambiguity_resolution
+**Status:** active
+
+**Context Summary:**
+Current code and docs advertise `features.encrypted_nostr_requests` and browser-facing encrypted discovery fields in `/api/v1/system/info`, but the user rejected describing this as an “encrypted relay” requirement. The AC set needed a product-correct way to classify whether encrypted-request discovery remains part of this slice at all.
+
+**Question Asked:**
+For SYSTEM_DISCOVERY_RELAY_BOOTSTRAP, should encrypted-request discovery stay out of scope?
+
+**Options Presented:**
+- A) Yes — defer encrypted-request discovery from this slice; keep these ACs public-bootstrap only
+- B) No — keep a minimal encrypted capability-gating requirement in this slice, but do not phrase it as relay behavior
+
+**User Selection:**
+B
+
+**User Notes:**
+“Encrypted messaging is dealt with at the individual event level using NIP-44/NIP-27.”
+
+**Decision:**
+KEEP_MINIMAL_ENCRYPTED_CAPABILITY_GATING_BUT_NOT_AS_RELAY_BEHAVIOR
+
+**Impact:**
+- Feature Spec: update may eventually be needed so wording stays aligned with this narrower AC framing.
+- Acceptance Criteria: updated — the encrypted-related AC is now limited to explicit capability gating and separation from public bootstrap, not relay-class semantics.
+- Tests: future tests should prove that public bootstrap metadata alone does not imply encrypted capability.
+- Defects: none created at this stage.
+- Confidence / Release: keeps the AC set aligned with current implementation evidence while respecting the product-correct wording constraint.
+
+**Required Follow-Up Actions:**
+- [ ] Keep only a minimal encrypted capability-gating AC in `acceptance_criteria.json`.
+- [ ] Avoid phrasing encrypted messaging support as a relay category in downstream PSTF artifacts.
+
+---
+
 ## Summary
 
-- Final Status: PENDING
+- Final Status: APPROVED
 - Open Questions: 0
 - Accepted Risks: 0
 - Deferred Items: 0
@@ -66,3 +146,5 @@ FIX_OR_REMOVE_DIRECT_NOSTR_RELAYS_EXPOSURE
 | Decision ID | Affects ACs | Affects Tests | Affects Defects | Affects Artifacts | Notes |
 | --- | --- | --- | --- | --- | --- |
 | HITL-SYSTEM_DISCOVERY_RELAY_BOOTSTRAP-001 | future ACs for sidecar-first discovery bootstrap | future system-info and bootstrap contract tests | likely future legacy-cleanup defect | feature_spec.json | Removes direct `nostr.relays` exposure from the intended slice |
+| HITL-SYSTEM_DISCOVERY_RELAY_BOOTSTRAP-002 | full AC set | future discovery/bootstrap tests | none | acceptance_criteria.json | AC set approved only after applying requested wording edit |
+| HITL-SYSTEM_DISCOVERY_RELAY_BOOTSTRAP-003 | SDRB-AC-009 | future encrypted-capability discovery tests | none | acceptance_criteria.json | Keeps only minimal encrypted capability gating, not relay-class semantics |
