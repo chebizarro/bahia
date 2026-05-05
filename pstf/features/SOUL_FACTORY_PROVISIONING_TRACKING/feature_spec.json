@@ -1,0 +1,312 @@
+{
+  "feature_id": "SOUL_FACTORY_PROVISIONING_TRACKING",
+  "title": "Soul Factory provisioning, lifecycle, and tracking",
+  "priority": "P2",
+  "status": "draft_requires_followup",
+  "description": "Reconstructed PSTF feature for Soul Factory as an intended full-lifecycle Nostr-native capability. The intended contract includes relay-backed browser flows, signer-first provisioning requests, backend orchestration across the documented eight provisioning steps, lifecycle actions, Bahia deployment integration, CLI access, and MCP access. Current repository evidence proves substantial domain and backend structure plus strong browser-store coverage, but also shows explicit unavailability and incomplete lifecycle paths that keep the feature only partially realized.",
+  "source_evidence": [
+    "pstf/product_map.md:68-81",
+    "pstf/planning_docs_index.md:24-63",
+    "pstf/spec_gap_report.md:59-168",
+    "docs/soul-factory.md:1-220",
+    "docs/protocol-compatibility.md:410-444",
+    "docs/investigations/pstf-discovery-2026-05-03.md",
+    "internal/domain/soul.go",
+    "internal/soulfactory/reactor.go",
+    "internal/soulfactory/provisioner_full.go",
+    "internal/soulfactory/lifecycle_handler.go",
+    "internal/soulfactory/bahia_integration.go",
+    "internal/soulfactory/status_sync.go",
+    "internal/soulfactory/workspace.go",
+    "internal/soulfactory/mcp_server.go",
+    "internal/soulfactory/errors.go",
+    "internal/soulfactory/hardening_test.go",
+    "cmd/cli/soulfactory.go",
+    "cmd/cli/soulfactory_test.go",
+    "web/src/lib/stores/souls.svelte.js",
+    "web/src/routes/souls/+page.svelte",
+    "web/src/routes/souls/new/+page.svelte",
+    "web/src/routes/souls/[id]/+page.svelte",
+    "web/src/routes/souls/[id]/edit/+page.svelte",
+    "web/tests/unit/souls-store.test.js",
+    "web/tests/e2e/soul-signing-smoke.spec.js",
+    "pstf/features/SOUL_FACTORY_PROVISIONING_TRACKING/hitl_decisions.md"
+  ],
+  "dependencies": [
+    "Nostr relays for public soul/template events and provisioning request/status/result events",
+    "NIP-07 browser signing for Souls UI request and action publishing",
+    "NIP-46 / Signet support for backend agent key provisioning and signing",
+    "Soul Factory generator, provisioning engine, and signer implementations wired into `internal/soulfactory`",
+    "optional integrations: Blossom, Qdrant, agent-memory, workspace/ngit, NIP-05 registration, Bahia registry/deployment services",
+    "Bahia service/deployment event stream for deployment status propagation back into soul read models"
+  ],
+  "actors": [
+    {
+      "name": "fleet_operator_or_authorized_requester",
+      "role": "authorized human or system actor that signs provisioning requests and lifecycle actions",
+      "evidence": [
+        "internal/soulfactory/reactor.go:18-27",
+        "web/src/routes/souls/new/+page.svelte",
+        "web/src/lib/stores/souls.svelte.js"
+      ]
+    },
+    {
+      "name": "soul_factory_reactor",
+      "role": "subscribes to provisioning and lifecycle events, authorizes requesters, dispatches provisioning, and publishes correlated status and result events",
+      "evidence": [
+        "internal/soulfactory/reactor.go"
+      ]
+    },
+    {
+      "name": "full_provisioner",
+      "role": "executes the eight-step provisioning workflow and publishes the resulting soul event",
+      "evidence": [
+        "internal/soulfactory/provisioner_full.go"
+      ]
+    },
+    {
+      "name": "bahia_integration_and_status_sync",
+      "role": "registers provisioned souls as Bahia services, attempts initial deployment integration, and mirrors deployment status back into soul events",
+      "evidence": [
+        "internal/soulfactory/bahia_integration.go",
+        "internal/soulfactory/status_sync.go"
+      ]
+    },
+    {
+      "name": "browser_souls_ui",
+      "role": "queries soul and template events, subscribes to updates, publishes provisioning requests and lifecycle actions, and shows provisioning progress/history",
+      "evidence": [
+        "web/src/lib/stores/souls.svelte.js",
+        "web/src/routes/souls/+page.svelte",
+        "web/src/routes/souls/new/+page.svelte",
+        "web/src/routes/souls/[id]/+page.svelte",
+        "web/src/routes/souls/[id]/edit/+page.svelte"
+      ]
+    },
+    {
+      "name": "cli_and_mcp_clients",
+      "role": "intended non-browser clients for listing, provisioning, lifecycle actions, and status inspection",
+      "evidence": [
+        "docs/soul-factory.md:25-107",
+        "cmd/cli/soulfactory.go",
+        "internal/soulfactory/mcp_server.go"
+      ]
+    }
+  ],
+  "feature_boundary": {
+    "in_scope": [
+      "Soul template and agent soul event model (`31950`, `31951`, `31952`, `5950`, `6950`, `7950`, `1950`)",
+      "browser Souls gallery, detail, edit, and provisioning wizard flows",
+      "signer-first provisioning request publication and correlated provisioning progress/result tracking",
+      "full backend provisioning orchestration across generate, Signet, avatar, profile, Qdrant, memory, workspace, and deploy/finalize steps",
+      "publication of provisioned soul events and lifecycle action events/results",
+      "Bahia registration, deployment-intent hookup, and deploy-status propagation into soul state",
+      "CLI and MCP surfaces for Soul Factory operations as intended user-facing contracts",
+      "event-driven status propagation and lifecycle management semantics"
+    ],
+    "out_of_scope": [
+      "non-Soul Bahia deployment surfaces unrelated to provisioned agents",
+      "LLM route control plane, encrypted notifications, payments, or adoption/import flows outside Soul Factory",
+      "UI styling specifics beyond functional browser behavior",
+      "replacement design for currently unapproved timeout-based browser failure handling",
+      "replacement design for currently unapproved ticker-based backend polling fallback"
+    ]
+  },
+  "observed_behavior": {
+    "summary": [
+      "Domain models define Soul Factory event kinds, statuses, lifecycle action types, and eight provisioning steps.",
+      "The browser Souls flow is real and relay-backed: it loads souls/templates from relays, subscribes to live soul updates, publishes signed provisioning requests, tracks `6950` / `7950` replies, publishes `1950` lifecycle actions, and renders soul detail/edit/history pages.",
+      "The backend reactor subscribes to `5950` provisioning requests and `1950` lifecycle actions, authorizes requesters, publishes correlated `6950` progress and `7950` result events, and can publish `31951` soul events.",
+      "`FullProvisioner` implements the documented eight-step provisioning workflow and integrates optional adapters for avatar generation, blob storage, vector memory, agent-memory, workspace creation, NIP-05 registration, and Bahia registration/status sync.",
+      "Current CLI commands and several MCP operations are intentionally fail-closed: tests prove they return explicit unavailable errors instead of simulating success.",
+      "Current configured lifecycle engine paths remain incomplete: `Provisioner`, `FullProvisioner`, and multiple `BahiaIntegration` lifecycle methods return explicit unsupported/unavailable errors for lifecycle operations.",
+      "Current browser provisioning tracking still marks runs failed on relay closure or after a 120-second local timeout, and backend status sync still includes a ticker-based polling fallback."
+    ],
+    "evidence": [
+      "internal/domain/soul.go",
+      "web/src/lib/stores/souls.svelte.js",
+      "web/tests/unit/souls-store.test.js",
+      "web/tests/e2e/soul-signing-smoke.spec.js",
+      "web/src/routes/souls/new/+page.svelte",
+      "web/src/routes/souls/[id]/+page.svelte",
+      "internal/soulfactory/reactor.go",
+      "internal/soulfactory/provisioner_full.go",
+      "internal/soulfactory/hardening_test.go",
+      "cmd/cli/soulfactory.go",
+      "cmd/cli/soulfactory_test.go",
+      "internal/soulfactory/mcp_server.go",
+      "internal/soulfactory/bahia_integration.go",
+      "internal/soulfactory/status_sync.go"
+    ]
+  },
+  "approved_intended_behavior": {
+    "summary": [
+      "Soul Factory is intended now as a full lifecycle feature, not merely a browser tracking slice.",
+      "Approved intended behavior is Nostr-native and event-driven: provisioning and lifecycle flows should be driven by signed events, subscriptions, and correlated result events rather than timeout-based completion or polling-based status reconciliation.",
+      "CLI and MCP surfaces are part of the intended contract even though current selected code shows explicit unavailability in several operations.",
+      "Browser run tracking should not rely on arbitrary local timeout or relay-closure failure as normative completion behavior.",
+      "Bahia-to-soul deployment status propagation should be event-driven, not ticker-polled, as the approved contract for this slice."
+    ],
+    "decision_refs": [
+      "HITL-SOUL_FACTORY_PROVISIONING_TRACKING-001",
+      "HITL-SOUL_FACTORY_PROVISIONING_TRACKING-002",
+      "HITL-SOUL_FACTORY_PROVISIONING_TRACKING-003"
+    ]
+  },
+  "happy_paths": [
+    {
+      "id": "SFTP-HP-001",
+      "title": "Provision a soul from the browser wizard",
+      "observed_or_intended": "observed_browser_and_intended_full_flow",
+      "steps": [
+        "User opens `/souls/new`, authenticates with a browser signer, and provides template/brief/tier context.",
+        "The browser signs and publishes a `5950` provisioning request with `agent-id`, `name`, `tier`, and optional `template` tags.",
+        "The browser subscribes for correlated `6950` and `7950` replies and updates visible provisioning progress.",
+        "The backend reactor authorizes the requester, runs provisioning, and publishes a terminal `7950` result.",
+        "The resulting `31951` soul becomes visible in the Souls UI and future live subscriptions."
+      ]
+    },
+    {
+      "id": "SFTP-HP-002",
+      "title": "Complete full backend provisioning for an agent",
+      "observed_or_intended": "observed_backend_structure_and_intended_product_flow",
+      "steps": [
+        "Soul content is generated from the brief.",
+        "Signet provisions an agent keypair and bunker connection.",
+        "Optional avatar, profile, vector memory, agent-memory, workspace, NIP-05, and snapshot publication work is attempted according to configured integrations.",
+        "Soul Factory publishes the final `31951` soul event.",
+        "If Bahia integration is configured, the soul is registered as a service and deploy status is synchronized back into soul state."
+      ]
+    },
+    {
+      "id": "SFTP-HP-003",
+      "title": "Lifecycle action updates soul state",
+      "observed_or_intended": "observed_ui_publish_and_partially_observed_backend",
+      "steps": [
+        "A user triggers a suspend, resume, revoke, regenerate, or redeploy action from the soul detail or edit flow.",
+        "The browser signs and publishes a `1950` action event referencing the soul coordinate.",
+        "The backend parses the action, authorizes the initiator, applies supported lifecycle logic, republishes updated soul state, and emits a correlated action result."
+      ]
+    }
+  ],
+  "failure_paths": [
+    {
+      "id": "SFTP-FP-001",
+      "title": "Unauthorized or malformed provisioning request",
+      "behavior": "Unauthorized requesters and malformed `5950` requests are rejected by the reactor and should receive correlated error results rather than false success.",
+      "evidence": [
+        "internal/soulfactory/reactor.go:178-241",
+        "internal/soulfactory/reactor.go:306-358",
+        "internal/soulfactory/reactor.go:489-509"
+      ]
+    },
+    {
+      "id": "SFTP-FP-002",
+      "title": "Unavailable CLI or MCP transport",
+      "behavior": "Current CLI and MCP surfaces explicitly fail closed when they cannot perform real signed Nostr publish/query work, rather than simulating lifecycle success.",
+      "evidence": [
+        "cmd/cli/soulfactory.go:68-302",
+        "cmd/cli/soulfactory_test.go",
+        "internal/soulfactory/mcp_server.go:223-316",
+        "internal/soulfactory/hardening_test.go:107-116"
+      ]
+    },
+    {
+      "id": "SFTP-FP-003",
+      "title": "Unsupported lifecycle action in configured engine",
+      "behavior": "Current provisioning engines and Bahia lifecycle hooks still return explicit unsupported errors for multiple lifecycle actions, leaving the intended full lifecycle only partially implemented.",
+      "evidence": [
+        "internal/soulfactory/provisioner.go:256-423",
+        "internal/soulfactory/provisioner_full.go:371-388",
+        "internal/soulfactory/bahia_integration.go:206-317"
+      ]
+    },
+    {
+      "id": "SFTP-FP-004",
+      "title": "Timeout- or polling-based status conclusions",
+      "behavior": "Current browser timeout failure and backend ticker polling are observed behaviors but were explicitly classified as FIX rather than approved contract behavior.",
+      "decision_refs": [
+        "HITL-SOUL_FACTORY_PROVISIONING_TRACKING-002",
+        "HITL-SOUL_FACTORY_PROVISIONING_TRACKING-003"
+      ],
+      "evidence": [
+        "web/src/lib/stores/souls.svelte.js",
+        "web/tests/unit/souls-store.test.js",
+        "internal/soulfactory/status_sync.go:213-262"
+      ]
+    }
+  ],
+  "non_functional_requirements": [
+    "Provisioning and lifecycle completion must be derived from signed event streams and explicit correlated result events, not arbitrary local sleeps, timeouts, or polling loops.",
+    "Request/result correlation must remain explicit through event IDs and routing tags so browser, CLI, MCP, and backend participants can follow the same run.",
+    "If real event transport or provisioning engine support is unavailable, callers must fail closed with explicit errors rather than fabricate success.",
+    "Soul updates must respect replaceable-event semantics and latest-wins read-model behavior.",
+    "Deployment status propagation from Bahia into soul state should use event-driven mechanisms rather than ticker-based polling fallback."
+  ],
+  "contradictions": [
+    {
+      "id": "SFTP-CON-001",
+      "type": "docs_vs_code",
+      "note": "`docs/soul-factory.md` presents CLI and MCP flows as available product behavior, while current CLI and MCP code explicitly return unavailable errors for multiple operations.",
+      "evidence": [
+        "docs/soul-factory.md:25-107",
+        "cmd/cli/soulfactory.go:68-302",
+        "cmd/cli/soulfactory_test.go",
+        "internal/soulfactory/mcp_server.go:223-316"
+      ]
+    },
+    {
+      "id": "SFTP-CON-002",
+      "type": "docs_vs_code",
+      "note": "`docs/soul-factory.md` describes full lifecycle management, while `docs/protocol-compatibility.md` still lists Soul Lifecycle as an incomplete known gap and current engine methods still return unsupported errors for several lifecycle operations.",
+      "evidence": [
+        "docs/soul-factory.md:3-19",
+        "docs/protocol-compatibility.md:417-426",
+        "internal/soulfactory/provisioner_full.go:371-388",
+        "internal/soulfactory/bahia_integration.go:206-317"
+      ]
+    },
+    {
+      "id": "SFTP-CON-003",
+      "type": "approved_contract_vs_observed_legacy",
+      "note": "Current browser provisioning tracking can fail locally on relay closure or after 120 seconds without a terminal result, but HITL classified that behavior as FIX rather than intended contract behavior.",
+      "decision_ref": "HITL-SOUL_FACTORY_PROVISIONING_TRACKING-002",
+      "evidence": [
+        "web/src/lib/stores/souls.svelte.js",
+        "web/tests/unit/souls-store.test.js"
+      ]
+    },
+    {
+      "id": "SFTP-CON-004",
+      "type": "approved_contract_vs_observed_legacy",
+      "note": "Backend status sync includes `StartPeriodicSync` ticker polling even though HITL classified polling-based status reconciliation as FIX rather than intended contract behavior.",
+      "decision_ref": "HITL-SOUL_FACTORY_PROVISIONING_TRACKING-003",
+      "evidence": [
+        "internal/soulfactory/status_sync.go:213-262"
+      ]
+    },
+    {
+      "id": "SFTP-CON-005",
+      "type": "intended_vs_observed",
+      "note": "HITL approved the full lifecycle as intended now, but current selected tests primarily prove the browser store and smoke-signing slice rather than the full CLI/MCP/backend lifecycle described in docs.",
+      "decision_ref": "HITL-SOUL_FACTORY_PROVISIONING_TRACKING-001",
+      "evidence": [
+        "web/tests/unit/souls-store.test.js",
+        "web/tests/e2e/soul-signing-smoke.spec.js",
+        "internal/soulfactory/hardening_test.go"
+      ]
+    }
+  ],
+  "missing_decisions": [
+    {
+      "id": "SFTP-MD-001",
+      "note": "No replacement product rule has been approved yet for browser behavior when provisioning subscriptions stall or close before a terminal result arrives. HITL only established that the current timeout/closure behavior should be fixed.",
+      "related_decision": "HITL-SOUL_FACTORY_PROVISIONING_TRACKING-002"
+    },
+    {
+      "id": "SFTP-MD-002",
+      "note": "No replacement product rule has been approved yet for how Bahia deployment status should reconcile into soul state without ticker polling fallback. HITL only established that the current polling path should be fixed.",
+      "related_decision": "HITL-SOUL_FACTORY_PROVISIONING_TRACKING-003"
+    }
+  ]
+}
