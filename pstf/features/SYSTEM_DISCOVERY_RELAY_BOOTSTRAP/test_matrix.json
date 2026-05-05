@@ -33,8 +33,8 @@
       "determinism_notes": [
         "Pure handler test; no live relay or clock sensitivity beyond fixed config inputs."
       ],
-      "status": "not_implemented",
-      "failure_reason": "Existing handler tests do not yet assert the full approved sidecar-first public bootstrap contract, including the service-pubkey-backed success case."
+      "status": "pass",
+      "failure_reason": null
     },
     {
       "test_id": "SDRB-T-002",
@@ -409,8 +409,8 @@
       "determinism_notes": [
         "This is a manual release-gate check because the implementation currently diverges from the approved contract."
       ],
-      "status": "blocked",
-      "failure_reason": "Current implementation still exposes or normalizes raw `nostr.relays` fallback; tracked in bahia-u6e1."
+      "status": "pass",
+      "failure_reason": null
     }
   ],
   "coverage_summary": {
@@ -419,7 +419,6 @@
     "known_gaps": [
       "No existing unit test covers the missing `relay_read_models` and missing-browser-bootstrap-URL fail-closed branches for shared browser bootstrap (SDRB-T-006).",
       "No existing cross-consumer contract test proves one canonical `/api/v1/system/info` payload simultaneously satisfies public browser bootstrap, encrypted capability gating, and operator CLI discovery (SDRB-T-011).",
-      "The explicit rejection of raw `nostr.relays` bootstrap as approved slice proof remains blocked by current implementation divergence tracked in bahia-u6e1 (SDRB-T-012).",
       "Existing encrypted transport tests use relay-oriented wording that should be narrowed to minimal capability gating to match HITL-SYSTEM_DISCOVERY_RELAY_BOOTSTRAP-003 (SDRB-T-010)."
     ]
   },
@@ -427,7 +426,6 @@
     "Lowest-effort additions are SDRB-T-006 and SDRB-T-009 because both extend existing negative-branch unit suites with deterministic mocks.",
     "SDRB-T-010 is medium effort: coverage mostly exists, but assertions and naming should be adjusted to the approved minimal capability-gating contract rather than relay taxonomy.",
     "SDRB-T-011 is the highest-value new gap because it converts the current cross-feature concern into one deterministic fixture-driven contract test.",
-    "SDRB-T-012 should stay blocked until the implementation cleanup in bahia-u6e1 resolves the current raw `nostr.relays` fallback divergence.",
     "Prefer deterministic handler/store/fixture tests over live relay execution; the accepted contract is bootstrap/discovery logic, not network flakiness."
   ]
 }

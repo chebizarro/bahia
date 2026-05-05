@@ -96,6 +96,14 @@ describe('controlplane store', () => {
     })).toEqual(['wss://relay.example', 'ws://localhost:10547/relay']);
   });
 
+  it('does not treat raw nostr.relays as approved browser bootstrap input', () => {
+    expect(store.resolveBrowserRelays({
+      nostr: {
+        relays: ['wss://backend.example']
+      }
+    })).toEqual([]);
+  });
+
   it('applies replaceable latest-wins dedupe and tombstones', () => {
     const older = event({
       id: 'svc-old',

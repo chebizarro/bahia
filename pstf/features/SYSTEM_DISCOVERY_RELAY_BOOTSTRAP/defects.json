@@ -5,7 +5,7 @@
       "defect_id": "SDRB-D-001",
       "title": "System discovery still exposes and normalizes raw `nostr.relays` outside the approved sidecar-first contract",
       "severity": "major",
-      "status": "open",
+      "status": "verified",
       "related_ac_ids": [
         "SDRB-AC-010"
       ],
@@ -13,19 +13,21 @@
         "SDRB-T-012"
       ],
       "evidence": [
-        "internal/api/handlers/system.go:154-158 exposes `nostr.relays` when sidecar mode is disabled.",
-        "web/src/lib/stores/controlplane.svelte.js:184-191 still falls back to `nostr.relays` when `browser_relays` and `sidecar_url` are absent.",
+        "internal/api/handlers/system.go no longer populates `nostr.relays` and omits the field from system discovery responses.",
+        "web/src/lib/stores/controlplane.svelte.js resolves browser bootstrap only from `browser_relays` and `sidecar_url`.",
+        "internal/api/handlers/system_test.go now asserts raw `nostr.relays` is absent in both sidecar-enabled and sidecar-disabled responses.",
+        "web/tests/unit/controlplane-store.test.js now proves raw `nostr.relays` is ignored as browser bootstrap input.",
         "HITL-SYSTEM_DISCOVERY_RELAY_BOOTSTRAP-001 classified direct `nostr.relays` exposure as FIX/REMOVE rather than intended behavior."
       ],
-      "suspected_root_cause": "Legacy sidecar-disabled compatibility behavior remains in both the system-info handler and the browser relay-resolution helper even though the approved slice is sidecar-first only.",
-      "recommended_fix": "Remove or quarantine raw `nostr.relays` exposure and normalization for browser bootstrap, then add contract coverage proving the approved sidecar-first path is the only accepted success path.",
+      "suspected_root_cause": "Resolved: legacy sidecar-disabled compatibility behavior was removed from both the handler and browser relay-resolution helper.",
+      "recommended_fix": null,
       "requires_human_decision": false
     },
     {
       "defect_id": "SDRB-D-002",
       "title": "Sidecar-first public bootstrap contract is only partially covered in handler tests",
       "severity": "minor",
-      "status": "open",
+      "status": "verified",
       "related_ac_ids": [
         "SDRB-AC-001"
       ],
@@ -33,11 +35,12 @@
         "SDRB-T-001"
       ],
       "evidence": [
-        "internal/api/handlers/system_test.go proves browser relay, sidecar URL, and feature flags, but does not assert the service-key-backed public bootstrap success case required by the approved contract.",
-        "test_matrix.json marks SDRB-T-001 as `modify_existing` and not implemented."
+        "internal/api/handlers/system_test.go now exercises a deterministic service-key-backed sidecar configuration.",
+        "The updated handler test asserts `browser_relays`, `sidecar_url`, `relay_read_models`, derived `service_pubkey`, and absence of raw `nostr.relays` in the approved sidecar-first success case.",
+        "test_matrix.json now marks SDRB-T-001 as passing."
       ],
-      "suspected_root_cause": "The original handler test suite predates the PSTF-approved sidecar-first AC set and stops short of the full approved bootstrap contract.",
-      "recommended_fix": "Extend the sidecar-capability handler test with a deterministic service-key-backed configuration and explicit assertions for the full approved bootstrap surface.",
+      "suspected_root_cause": "Resolved: the handler contract suite now covers the approved sidecar-first success path instead of the older partial assertion set.",
+      "recommended_fix": null,
       "requires_human_decision": false
     },
     {

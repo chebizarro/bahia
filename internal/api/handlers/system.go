@@ -46,7 +46,7 @@ type RegistryInfo struct {
 
 // NostrConfig describes the Nostr configuration.
 type NostrConfigInfo struct {
-	Relays                        []string `json:"relays"`
+	Relays                        []string `json:"relays,omitempty"`
 	BrowserRelays                 []string `json:"browser_relays,omitempty"`
 	BrowserEncryptedRequestRelays []string `json:"browser_encrypted_request_relays,omitempty"`
 	SidecarURL                    string   `json:"sidecar_url,omitempty"`
@@ -172,9 +172,6 @@ func (h *SystemHandler) GetInfo(w http.ResponseWriter, r *http.Request) {
 	// Build Nostr config info
 	nostrInfo := NostrConfigInfo{
 		PublishEnabled: h.cfg.Nostr.PublishEnabled,
-	}
-	if !h.cfg.Nostr.Sidecar.Enabled {
-		nostrInfo.Relays = h.cfg.Nostr.Relays
 	}
 	if h.cfg.Nostr.Sidecar.Enabled {
 		nostrInfo.BrowserRelays = h.browserRelays()

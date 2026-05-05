@@ -188,9 +188,6 @@ export function resolveBrowserRelays(systemInfo) {
   if (nostrInfo.sidecar_url) {
     relays.push(nostrInfo.sidecar_url);
   }
-  if (relays.length === 0 && Array.isArray(nostrInfo.relays)) {
-    relays.push(...nostrInfo.relays);
-  }
 
   return Array.from(new Set(relays.map(normalizeRelayUrl).filter(Boolean)));
 }

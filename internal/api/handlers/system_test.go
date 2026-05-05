@@ -12,6 +12,7 @@ import (
 
 func TestSystemHandler_GetInfo_ExposesRelaySidecarCapabilities(t *testing.T) {
 	cfg := config.Defaults()
+	cfg.Nostr.PrivateKey = "0000000000000000000000000000000000000000000000000000000000000001"
 	cfg.Nostr.EncryptedRequestRelays = []string{"wss://request.example"}
 	cfg.Nostr.Sidecar.Enabled = true
 	cfg.Nostr.Sidecar.PublicURL = "ws://localhost:3000/relay"
@@ -35,6 +36,7 @@ func TestSystemHandler_GetInfo_ExposesRelaySidecarCapabilities(t *testing.T) {
 				BrowserRelays                 []string `json:"browser_relays"`
 				SidecarURL                    string   `json:"sidecar_url"`
 				BrowserEncryptedRequestRelays []string `json:"browser_encrypted_request_relays"`
+				ServicePubkey                 string   `json:"service_pubkey"`
 			} `json:"nostr"`
 			Features map[string]bool `json:"features"`
 		} `json:"data"`
@@ -58,6 +60,9 @@ func TestSystemHandler_GetInfo_ExposesRelaySidecarCapabilities(t *testing.T) {
 	if len(payload.Data.Nostr.BrowserRelays) != 1 || payload.Data.Nostr.BrowserRelays[0] != "ws://localhost:3000/relay" {
 		t.Fatalf("browser_relays = %#v", payload.Data.Nostr.BrowserRelays)
 	}
+	if payload.Data.Nostr.ServicePubkey != derivePublicKey(cfg.Nostr.PrivateKey) {
+		t.Fatalf("service_pubkey = %q", payload.Data.Nostr.ServicePubkey)
+	}
 	if len(payload.Data.Nostr.BrowserEncryptedRequestRelays) != 0 {
 		t.Fatalf("request relay URLs should only expose explicit browser-advertised encrypted request relay URLs: %#v", payload.Data.Nostr.BrowserEncryptedRequestRelays)
 	}
@@ -65,6 +70,7 @@ func TestSystemHandler_GetInfo_ExposesRelaySidecarCapabilities(t *testing.T) {
 	if len(payload.Data.Nostr.Relays) != 0 {
 		t.Fatalf("backend relays should not be exposed while sidecar bootstrap is enabled: %#v", payload.Data.Nostr.Relays)
 	}
+	assertRawRelaysFieldAbsent(t, body)
 }
 
 func TestSystemHandler_GetInfo_ExposesExplicitBrowserEncryptedRequestRelays(t *testing.T) {
@@ -125,6 +131,7 @@ func TestSystemHandler_GetInfo_DoesNotAdvertiseEncryptedRequestsWithoutBackendEn
 func TestSystemHandler_GetInfo_DoesNotAdvertiseSidecarWhenDisabled(t *testing.T) {
 	cfg := config.Defaults()
 	cfg.Nostr.Sidecar.Enabled = false
+	cfg.Nostr.Relays = []string{"wss://backend.example"}
 	cfg.Nostr.Sidecar.PublicURL = "ws://localhost:3000/relay"
 	cfg.Nostr.BrowserRelays = []string{"ws://localhost:3000/relay"}
 
@@ -133,16 +140,18 @@ func TestSystemHandler_GetInfo_DoesNotAdvertiseSidecarWhenDisabled(t *testing.T)
 
 	NewSystemHandler(cfg).GetInfo(w, req)
 
+	body := w.Body.Bytes()
 	var payload struct {
 		Data struct {
 			Nostr struct {
 				BrowserRelays []string `json:"browser_relays"`
 				SidecarURL    string   `json:"sidecar_url"`
+				Relays        []string `json:"relays"`
 			} `json:"nostr"`
 			Features map[string]bool `json:"features"`
 		} `json:"data"`
 	}
-	if err := json.NewDecoder(w.Body).Decode(&payload); err != nil {
+	if err := json.Unmarshal(body, &payload); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
 	if payload.Data.Features["relay_sidecar"] {
@@ -151,6 +160,10 @@ func TestSystemHandler_GetInfo_DoesNotAdvertiseSidecarWhenDisabled(t *testing.T)
 	if payload.Data.Nostr.SidecarURL != "" || len(payload.Data.Nostr.BrowserRelays) != 0 {
 		t.Fatalf("disabled sidecar should not advertise relay bootstrap fields: %+v", payload.Data.Nostr)
 	}
+	if len(payload.Data.Nostr.Relays) != 0 {
+		t.Fatalf("disabled sidecar should not expose raw relays in system info: %#v", payload.Data.Nostr.Relays)
+	}
+	assertRawRelaysFieldAbsent(t, body)
 }
 
 func TestSystemHandler_GetInfo_ExposesMCPTransportOnlyWhenEnabled(t *testing.T) {
@@ -307,6 +320,25 @@ func assertRemovedSystemInfoFieldsAbsent(t *testing.T, body []byte) {
 	}
 	if _, exists := features["private_nostr_transport"]; exists {
 		t.Fatalf("removed feature private_nostr_transport should not be present: %#v", features)
+	}
+}
+
+func assertRawRelaysFieldAbsent(t *testing.T, body []byte) {
+	t.Helper()
+	var raw map[string]any
+	if err := json.Unmarshal(body, &raw); err != nil {
+		t.Fatalf("decode raw response: %v", err)
+	}
+	data, ok := raw["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("response data missing or invalid: %#v", raw["data"])
+	}
+	nostr, ok := data["nostr"].(map[string]any)
+	if !ok {
+		t.Fatalf("response nostr missing or invalid: %#v", data["nostr"])
+	}
+	if _, exists := nostr["relays"]; exists {
+		t.Fatalf("raw nostr.relays should not be present in system discovery: %#v", nostr)
 	}
 }
 
