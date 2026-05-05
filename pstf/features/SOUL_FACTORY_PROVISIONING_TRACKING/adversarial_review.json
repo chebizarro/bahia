@@ -1,0 +1,86 @@
+{
+  "feature_id": "SOUL_FACTORY_PROVISIONING_TRACKING",
+  "recommendation": "requires_human_risk_acceptance",
+  "overall_risk": "medium",
+  "schema_validation": {
+    "schema_path": "schemas/adversarial_review.schema.json",
+    "schema_found": false,
+    "note": "The requested schema file was not present in the repository, so this artifact uses the prompt-defined structure without schema-backed validation."
+  },
+  "findings": [
+    {
+      "finding_id": "ADV-001",
+      "title": "The feature does not clear the confidence threshold because touched-module coverage evidence is still missing",
+      "severity": "major",
+      "category": "test_gap",
+      "evidence": [
+        "`confidence_report.json` scores the slice at `0.83`, below the default `0.90` threshold.",
+        "The score penalty is entirely driven by `code_coverage = 0.0`; no coverage artifact exists under `pstf/features/SOUL_FACTORY_PROVISIONING_TRACKING/coverage/` or an equivalent location for the touched backend and web modules.",
+        "`verification_report.md` shows 14/14 ACs verified and 18/18 mapped tests passing, so this is not a behavior failure; it is an evidence-quality gap that the confidence model explicitly treats as release-significant."
+      ],
+      "affected_acs": [],
+      "affected_tests": [],
+      "suggested_action": "Either generate touched-module coverage evidence for the backend and browser suites or accept release explicitly as a risk exception rather than as a threshold-clearing approval.",
+      "requires_hitl_decision": true,
+      "proposed_hitl_question": {
+        "question": "The Soul Factory slice is behaviorally verified but still scores 0.83 because no touched-module coverage artifact exists. How should release proceed?",
+        "type": "single_choice",
+        "options": [
+          "APPROVED_WITH_RISK \u2014 ship this slice and accept the missing coverage evidence as a documented release risk",
+          "NEEDS_WORK \u2014 require coverage artifacts before release approval",
+          "DEFERRED \u2014 do not decide release now; revisit after broader release planning",
+          "REJECTED \u2014 do not release this slice in its current state"
+        ]
+      }
+    },
+    {
+      "finding_id": "ADV-002",
+      "title": "Soul Gallery stat cards hide zero values, which weakens operator visibility after live updates",
+      "severity": "minor",
+      "category": "ux",
+      "evidence": [
+        "During `web/tests/e2e/souls-gallery-live.spec.js`, the Suspended count disappeared after a live update drove the count to zero, which required the test to assert the updated cards indirectly rather than via an explicit `0` value.",
+        "`web/src/lib/components/Card.svelte` only renders the value block when `{#if value}` is truthy, so `0` is omitted entirely.",
+        "This follow-up is already tracked as beads issue `bahia-ijo8`."
+      ],
+      "affected_acs": [
+        "SFTP-AC-001"
+      ],
+      "affected_tests": [
+        "SFTP-T-002"
+      ],
+      "suggested_action": "Render zero-valued card counts explicitly so live-update statistics remain visible to operators.",
+      "requires_hitl_decision": false,
+      "proposed_hitl_question": null
+    },
+    {
+      "finding_id": "ADV-003",
+      "title": "Schema-backed validation for PSTF confidence and adversarial artifacts is still absent",
+      "severity": "minor",
+      "category": "operability",
+      "evidence": [
+        "The requested schema files `schemas/confidence_report.schema.json` and `schemas/adversarial_review.schema.json` are not present in the repository.",
+        "Both this review and the confidence report therefore rely on prompt-defined structure rather than repo-backed machine validation.",
+        "This does not invalidate the feature behavior, but it weakens repeatable artifact checking at release time."
+      ],
+      "affected_acs": [],
+      "affected_tests": [],
+      "suggested_action": "Add the missing PSTF schema files or document the canonical structures in-repo so future gate artifacts can be validated mechanically.",
+      "requires_hitl_decision": false,
+      "proposed_hitl_question": null
+    }
+  ],
+  "suggested_hitl_questions": [
+    {
+      "question": "The Soul Factory slice is behaviorally verified but still scores 0.83 because no touched-module coverage artifact exists. How should release proceed?",
+      "type": "single_choice",
+      "options": [
+        "APPROVED_WITH_RISK \u2014 ship this slice and accept the missing coverage evidence as a documented release risk",
+        "NEEDS_WORK \u2014 require coverage artifacts before release approval",
+        "DEFERRED \u2014 do not decide release now; revisit after broader release planning",
+        "REJECTED \u2014 do not release this slice in its current state"
+      ]
+    }
+  ],
+  "next_recommended_stage": "hitl_release_review"
+}

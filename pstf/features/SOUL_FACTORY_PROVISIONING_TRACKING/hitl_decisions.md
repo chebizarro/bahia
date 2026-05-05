@@ -5,8 +5,8 @@
 - Task ID: bahia-gktu
 - Framework: PSTF
 - Interaction Mode: RepoPrompt ask-user tool
-- Current Stage: acceptance_criteria
-- Last Updated: 2026-05-05T04:59:06Z
+- Current Stage: human_review
+- Last Updated: 2026-05-05T06:28:05Z
 
 ---
 
@@ -257,13 +257,56 @@ APPROVE_AS_IS
 
 ---
 
+
+### Decision HITL-SOUL_FACTORY_PROVISIONING_TRACKING-007 — Final release review after confidence and adversarial gating
+
+**Stage:** human_review
+**Agent:** HITL Review Agent
+**Decision Type:** release_approval
+**Status:** active
+
+**Context Summary:**
+`SOUL_FACTORY_PROVISIONING_TRACKING` is behaviorally verified against the approved contract: all 14 acceptance criteria are verified and all 18 mapped tests pass. The remaining gate gap is evidence quality rather than product behavior. The confidence report scores the slice at 0.84 instead of the 0.90 threshold because no touched-module coverage artifact exists, and adversarial review surfaced that gap as the only major release concern.
+
+**Question Asked:**
+What is the final release decision for `SOUL_FACTORY_PROVISIONING_TRACKING`?
+
+**Options Presented:**
+- A) APPROVED_WITH_RISK — release the verified slice and explicitly accept the missing coverage evidence risk
+- B) NEEDS_WORK — require coverage artifacts before release approval
+- C) DEFERRED — do not make a release decision for this slice yet
+- D) REJECTED — do not release this slice in its current state
+
+**User Selection:**
+NEEDS_WORK — require coverage artifacts before release approval
+
+**User Notes:**
+None.
+
+**Decision:**
+NEEDS_WORK
+
+**Impact:**
+- Feature Spec: none
+- Acceptance Criteria: none
+- Tests: update needed — generate touched-module coverage artifacts so the confidence gate can score code coverage above `0.0`
+- Defects: none — there are no open PSTF defects, but release remains blocked by evidence quality
+- Confidence / Release: blocks approval — the feature remains below the default 0.90 confidence threshold and is not approved for release at this gate
+
+**Required Follow-Up Actions:**
+- [ ] Generate touched-module coverage artifacts for the Soul Factory backend and web suites.
+- [ ] Re-run confidence scoring after coverage evidence exists.
+- [ ] Repeat HITL release review once the confidence gate is re-evaluated.
+
+---
+
 ## Summary
 
-- Final Status: APPROVED
+- Final Status: NEEDS_WORK
 - Open Questions: 0
 - Accepted Risks: 0
 - Deferred Items: 0
-- Blocking Issues: 0 at the AC-approval stage; implementation gaps remain for later verification
+- Blocking Issues: 1 — missing touched-module coverage evidence keeps confidence below threshold and blocks release approval
 - Superseded Decisions: 0
 
 ## Traceability
@@ -276,3 +319,4 @@ APPROVE_AS_IS
 | HITL-SOUL_FACTORY_PROVISIONING_TRACKING-004 | SFTP-AC-013, SFTP-AC-014 | future matrix | future defects | acceptance_criteria.json | Approved high-level event-driven ACs without replacement-detail invention. |
 | HITL-SOUL_FACTORY_PROVISIONING_TRACKING-005 | SFTP-AC-007, SFTP-AC-009 | future matrix | future defects | acceptance_criteria.json | Bahia integration remains strict must-have behavior. |
 | HITL-SOUL_FACTORY_PROVISIONING_TRACKING-006 | whole AC set | future matrix | future defects | acceptance_criteria.json | AC artifact approved as written. |
+| HITL-SOUL_FACTORY_PROVISIONING_TRACKING-007 | none | coverage follow-up for existing matrix | none | confidence_report.json, hitl_decisions.md | Final release decision = NEEDS_WORK until coverage evidence exists. |
