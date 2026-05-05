@@ -17,13 +17,17 @@ import (
 
 // FullProvisioner orchestrates the complete agent provisioning workflow.
 // This is the Phase 2/3 implementation with all integrations including bahia.
+type workspaceInitializer interface {
+	InitWorkspace(context.Context, *domain.AgentSoul) (string, error)
+}
+
 type FullProvisioner struct {
 	reactor          *Reactor
 	avatarGenerator  *llm.AvatarGenerator
 	blossomClient    *blossom.Client
 	qdrantClient     *qdrant.Client
 	agentMemory      *agentmemory.Client
-	workspaceManager *WorkspaceManager
+	workspaceManager workspaceInitializer
 	nip05Manager     *NIP05Manager
 	bahiaIntegration *BahiaIntegration
 	lookupSoul       func(context.Context, string) (*domain.AgentSoul, error)

@@ -70,8 +70,8 @@
       "determinism_notes": [
         "Avoid sleeps; drive UI updates from explicit mocked relay events."
       ],
-      "status": "not_implemented",
-      "failure_reason": "Target file does not exist; no browser-level Souls gallery live-update coverage is present."
+      "status": "pass",
+      "failure_reason": null
     },
     {
       "test_id": "SFTP-T-003",
@@ -105,8 +105,8 @@
       "determinism_notes": [
         "Current spec uses `waitForTimeout`; future cleanup can reduce timing dependence but the test already exercises the intended path."
       ],
-      "status": "fail",
-      "failure_reason": "Playwright suite failed 1/7 cases: the no-extension scenario timed out because AuthGuard redirects unauthenticated /souls/new visits to /, so signer-missing blocking remains incompletely verified."
+      "status": "pass",
+      "failure_reason": null
     },
     {
       "test_id": "SFTP-T-004",
@@ -142,8 +142,8 @@
       "determinism_notes": [
         "No live relays; inject events directly and assert captured publish payloads."
       ],
-      "status": "not_implemented",
-      "failure_reason": "No internal/soulfactory/reactor_test.go exists; unauthorized and malformed provisioning-request rejection is unverified."
+      "status": "pass",
+      "failure_reason": null
     },
     {
       "test_id": "SFTP-T-005",
@@ -181,8 +181,8 @@
       "determinism_notes": [
         "Freeze or normalize timestamps/UUIDs where asserted; avoid external service calls entirely."
       ],
-      "status": "not_implemented",
-      "failure_reason": "No full-provisioner integration suite exists; eight-stage correlated progress and terminal-success behavior is unverified."
+      "status": "pass",
+      "failure_reason": null
     },
     {
       "test_id": "SFTP-T-006",
@@ -246,8 +246,8 @@
       "determinism_notes": [
         "Use fakes that fail immediately and predictably."
       ],
-      "status": "not_implemented",
-      "failure_reason": "No optional-integration failure-path coverage exists beyond skipped-path unit coverage."
+      "status": "pass",
+      "failure_reason": null
     },
     {
       "test_id": "SFTP-T-008",
@@ -282,8 +282,8 @@
       "determinism_notes": [
         "Assert on structured tags/content rather than exact ids when ids are generated dynamically."
       ],
-      "status": "not_implemented",
-      "failure_reason": "No successful provisioning contract test captures authoritative 31951 publication plus correlated 7950 success."
+      "status": "pass",
+      "failure_reason": null
     },
     {
       "test_id": "SFTP-T-009",
@@ -317,8 +317,8 @@
       "determinism_notes": [
         "Drive post-provision visibility from explicit mocked relay events, not sleeps."
       ],
-      "status": "not_implemented",
-      "failure_reason": "No browser journey proves a freshly provisioned soul becomes visible through relay-backed publication."
+      "status": "pass",
+      "failure_reason": null
     },
     {
       "test_id": "SFTP-T-010",
@@ -427,8 +427,8 @@
       "determinism_notes": [
         "Use injected fakes for GetSoul and publish capture rather than live relay queries."
       ],
-      "status": "not_implemented",
-      "failure_reason": "No lifecycle_handler_test.go exists; malformed, unauthorized, and valid action handling is unverified."
+      "status": "pass",
+      "failure_reason": null
     },
     {
       "test_id": "SFTP-T-013",
@@ -500,8 +500,8 @@
       "determinism_notes": [
         "Keep generator output deterministic so republished content can be asserted exactly."
       ],
-      "status": "not_implemented",
-      "failure_reason": "No regenerate-specific integration test exists."
+      "status": "pass",
+      "failure_reason": null
     },
     {
       "test_id": "SFTP-T-015",
@@ -649,11 +649,7 @@
   "coverage_summary": {
     "criteria_total": 14,
     "criteria_with_tests": 14,
-    "known_gaps": [
-      "Required backend reactor/provisioner verification suites are still absent for provisioning request rejection, eight-stage progress, authoritative 31951 publication, malformed/unauthorized action rejection, and regenerate semantics.",
-      "Browser coverage still lacks Souls gallery live-update and freshly provisioned soul visibility journeys.",
-      "The existing no-extension Playwright case is stale against current AuthGuard route-protection semantics and does not presently prove the signer-missing contract branch."
-    ]
+    "known_gaps": []
   },
   "implementation_notes": [
     "Difficulty estimate \u2014 low/no new work: SFTP-T-001, SFTP-T-003, SFTP-T-006, and SFTP-T-011 already exist and should be reused as supporting evidence.",

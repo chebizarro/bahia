@@ -1,242 +1,81 @@
 import { test, expect } from '@playwright/test';
 import { installE2EMocks } from './helpers.js';
 
-// Mock window.nostr NIP-07 extension
-const mockNostrExtension = () => {
-  return {
-    getPublicKey: async () => {
-      return 'ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff';
-    },
-    signEvent: async (event) => {
-      // Simple mock signature
-      return {
-        ...event,
-        id: 'mock-event-id-' + Date.now(),
-        sig: 'mock-signature-' + Math.random().toString(36).slice(2),
-        pubkey: 'ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff'
-      };
-    },
-    getRelays: async () => {
-      return {
-        'wss://relay.damus.io': { read: true, write: true },
-        'wss://relay.nostr.band': { read: true, write: true }
-      };
-    },
-    nip04: {
-      encrypt: async (pubkey, plaintext) => {
-        return btoa(plaintext);
-      },
-      decrypt: async (pubkey, ciphertext) => {
-        return atob(ciphertext);
-      }
-    }
-  };
-};
-
 test.beforeEach(async ({ page }) => {
-  await installE2EMocks(page);
-
-  // Inject mock window.nostr before page loads
-  await page.addInitScript(() => {
-    window.nostr = {
-      getPublicKey: async () => {
-        return 'ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff';
-      },
-      signEvent: async (event) => {
-        // Return signed event
-        return {
-          ...event,
-          id: 'mock-event-id-' + Date.now(),
-          sig: 'mock-signature-' + Math.random().toString(36).slice(2),
-          pubkey: 'ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff'
-        };
-      },
-      getRelays: async () => {
-        return {
-          'wss://relay.damus.io': { read: true, write: true },
-          'wss://relay.nostr.band': { read: true, write: true }
-        };
-      }
-    };
-  });
-  
-  // Mock WebSocket for relay connections
-  await page.addInitScript(() => {
-    class MockWebSocket {
-      static CONNECTING = 0;
-      static OPEN = 1;
-      static CLOSED = 3;
-
-      constructor(url) {
-        this.url = url;
-        this.readyState = 1; // OPEN
-        setTimeout(() => {
-          if (this.onopen) this.onopen({ type: 'open' });
-        }, 10);
-      }
-      
-      send(data) {
-        // Mock relay OK response
-        setTimeout(() => {
-          if (this.onmessage) {
-            const event = JSON.parse(data);
-            if (Array.isArray(event) && event[0] === 'REQ') {
-              this.onmessage({
-                data: JSON.stringify(['EOSE', event[1]])
-              });
-            } else if (Array.isArray(event) && event[0] === 'EVENT') {
-              this.onmessage({
-                data: JSON.stringify(['OK', event[1]?.id, true, ''])
-              });
-            }
-          }
-        }, 10);
-      }
-      
-      close() {
-        this.readyState = 3; // CLOSED
-        if (this.onclose) this.onclose({ type: 'close' });
-      }
-    }
-    
-    window.WebSocket = MockWebSocket;
-  });
-  
-  
-  // Mock souls gallery endpoint
-  await page.route('**/api/v1/souls', (route) => {
-    return route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({ data: [] })
-    });
-  });
+  await installE2EMocks(page, { authenticated: true, extension: true, nostrEvents: [] });
 });
 
 test.describe('Soul Signing Smoke Test', () => {
   test('should complete soul provisioning flow with NIP-07 signing', async ({ page }) => {
-    const publishedEvents = [];
-    
-    // Capture signed events via WebSocket interception
-    await page.exposeFunction('captureEvent', (event) => {
-      publishedEvents.push(event);
-    });
-    
     await page.goto('/souls/new');
-    await page.waitForLoadState('domcontentloaded');
-    
-    // Step 1: Template selection (skip for now, just continue)
-    await expect(page.locator('h1:has-text("Create New Soul")')).toBeVisible();
-    await page.click('button:has-text("Continue")');
-    await page.click('button:has-text("Continue")');
-    
-    // Step 2: Configure
+
+    await expect(page.getByRole('heading', { name: 'Create New Soul' })).toBeVisible();
+    await page.getByRole('button', { name: 'Continue' }).click();
+    await page.getByRole('button', { name: 'Continue' }).click();
+
     await expect(page.locator('.wizard-progress .progress-step.active:has-text("Configure")')).toBeVisible();
-    
-    // Fill agent identity
+
     await page.fill('#agentName', 'Test Agent');
     await page.fill('#agentId', 'test-agent');
-    
-    // Select tier
     await page.selectOption('#tier', 'standard');
-    
-    // Fill brief
     await page.fill('#brief', 'This is a test agent for smoke testing');
-    
-    // Check auth status - should show authenticated with mock extension
+
     await expect(page.locator('.auth-status:has-text("Authenticated")')).toBeVisible();
-    
-    // Submit provisioning
-    await page.click('button:has-text("Provision Soul")');
-    
-    // Wait for signing and publishing
-    await page.waitForTimeout(1000);
-    
-    // Step 3: Should move to provisioning step
+
+    await page.getByRole('button', { name: 'Provision Soul' }).click();
+
     await expect(page.locator('.wizard-progress .progress-step.active:has-text("Provision")')).toBeVisible();
-    
-    // Should show event published
-    await expect(page.locator('text=Event Signed & Published')).toBeVisible();
-    await expect(page.locator('text=Request ID:')).toBeVisible();
+    await expect(page.getByText('Event Signed & Published')).toBeVisible();
+    await expect(page.getByText('Request ID:')).toBeVisible();
   });
-  
+
   test('should show NIP-07 extension status', async ({ page }) => {
     await page.goto('/souls/new');
-    await page.waitForLoadState('domcontentloaded');
-    
-    // Continue to configure step
-    await page.click('button:has-text("Continue")');
-    await page.click('button:has-text("Continue")');
-    
-    // Should show auth status banner
+
+    await page.getByRole('button', { name: 'Continue' }).click();
+    await page.getByRole('button', { name: 'Continue' }).click();
+
     await expect(page.locator('.auth-status')).toBeVisible();
-    
-    // With mock extension, should show authenticated
     await expect(page.locator('.auth-status:has-text("Authenticated")')).toBeVisible();
   });
-  
-  test('should show error when no extension available', async ({ page }) => {
-    // Override init script to remove window.nostr
-    await page.addInitScript(() => {
-      delete window.nostr;
-    });
-    
+
+  test('should block the provisioning route when no signer session is available', async ({ page }) => {
+    await installE2EMocks(page, { authenticated: false, extension: false, nostrEvents: [] });
+
     await page.goto('/souls/new');
-    await page.waitForLoadState('domcontentloaded');
-    
-    // Continue to configure step
-    await page.click('button:has-text("Continue")');
-    await page.click('button:has-text("Continue")');
-    
-    // Should show extension required message
-    await expect(page.locator('text=NIP-07 Extension Required')).toBeVisible();
-    
-    // Provision button should be disabled
-    await expect(page.locator('button:has-text("Provision Soul")')).toBeDisabled();
+
+    await expect(page).toHaveURL(/\/$/);
+    await expect(page.getByRole('heading', { name: 'Dashboard' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Create New Soul' })).toHaveCount(0);
   });
-  
+
   test('should generate agent ID from name', async ({ page }) => {
     await page.goto('/souls/new');
-    await page.waitForLoadState('domcontentloaded');
-    
-    // Continue to configure step
-    await page.click('button:has-text("Continue")');
-    await page.click('button:has-text("Continue")');
-    
-    // Fill agent name
+
+    await page.getByRole('button', { name: 'Continue' }).click();
+    await page.getByRole('button', { name: 'Continue' }).click();
+
     await page.fill('#agentName', 'My Test Agent');
-    
-    // Blur to trigger ID generation
     await page.locator('#agentName').blur();
-    
-    // Wait for ID generation
-    await page.waitForTimeout(100);
-    
-    // Check that agent ID was auto-generated (slugified)
-    const agentId = await page.inputValue('#agentId');
-    expect(agentId).toMatch(/my-test-agent/);
+
+    await expect(page.locator('#agentId')).toHaveValue(/my-test-agent/);
   });
-  
+
   test('should allow navigation between wizard steps', async ({ page }) => {
     await page.goto('/souls/new');
-    await page.waitForLoadState('domcontentloaded');
-    
-    // Start at step 1
+
     await expect(page.locator('.wizard-progress .progress-step.active:has-text("Template")')).toBeVisible();
-    
-    // Go to repository step
-    await page.click('button:has-text("Continue")');
+
+    await page.getByRole('button', { name: 'Continue' }).click();
     await expect(page.locator('.wizard-progress .progress-step.active:has-text("Repository")')).toBeVisible();
 
-    // Go to configure step
-    await page.click('button:has-text("Continue")');
+    await page.getByRole('button', { name: 'Continue' }).click();
     await expect(page.locator('.wizard-progress .progress-step.active:has-text("Configure")')).toBeVisible();
-    
-    // Go back to repository step
-    await page.click('button:has-text("Back")');
+
+    await page.getByRole('button', { name: 'Back' }).click();
     await expect(page.locator('.wizard-progress .progress-step.active:has-text("Repository")')).toBeVisible();
   });
-  
+
   test('should show relay rejection error when publish is not accepted', async ({ page }) => {
     await page.addInitScript(() => {
       class RejectingWebSocket {
@@ -249,17 +88,21 @@ test.describe('Soul Signing Smoke Test', () => {
           this.readyState = 1;
           setTimeout(() => {
             if (this.onopen) this.onopen({ type: 'open' });
-          }, 10);
+          }, 0);
         }
 
         send(data) {
           setTimeout(() => {
             if (!this.onmessage) return;
             const event = JSON.parse(data);
+            if (Array.isArray(event) && event[0] === 'REQ') {
+              this.onmessage({ data: JSON.stringify(['EOSE', event[1]]) });
+              return;
+            }
             if (Array.isArray(event) && event[0] === 'EVENT') {
               this.onmessage({ data: JSON.stringify(['OK', event[1]?.id, false, 'auth required']) });
             }
-          }, 10);
+          }, 0);
         }
 
         close() {
@@ -272,25 +115,21 @@ test.describe('Soul Signing Smoke Test', () => {
     });
 
     await page.goto('/souls/new');
-    await page.waitForLoadState('domcontentloaded');
 
-    await page.click('button:has-text("Continue")');
-    await page.click('button:has-text("Continue")');
+    await page.getByRole('button', { name: 'Continue' }).click();
+    await page.getByRole('button', { name: 'Continue' }).click();
 
     await page.fill('#agentName', 'Reject Agent');
     await page.fill('#agentId', 'reject-agent');
     await page.fill('#brief', 'Should fail due to relay rejection');
 
-    await page.click('button:has-text("Provision Soul")');
+    await page.getByRole('button', { name: 'Provision Soul' }).click();
 
     await expect(page.locator('.error-banner')).toContainText('not accepted by any relay');
     await expect(page.locator('.wizard-progress .progress-step.active:has-text("Configure")')).toBeVisible();
   });
 
   test('should include provisioning request tags', async ({ page }) => {
-    let capturedEvent = null;
-    
-    // Intercept signEvent to capture the unsigned event structure
     await page.addInitScript(() => {
       const originalSign = window.nostr.signEvent;
       window.nostr.signEvent = async (event) => {
@@ -298,43 +137,34 @@ test.describe('Soul Signing Smoke Test', () => {
         return originalSign(event);
       };
     });
-    
+
     await page.goto('/souls/new');
-    await page.waitForLoadState('domcontentloaded');
-    
-    // Continue to configure
-    await page.click('button:has-text("Continue")');
-    await page.click('button:has-text("Continue")');
-    
-    // Fill form
+
+    await page.getByRole('button', { name: 'Continue' }).click();
+    await page.getByRole('button', { name: 'Continue' }).click();
+
     await page.fill('#agentName', 'Test Agent');
     await page.fill('#agentId', 'test-agent');
     await page.fill('#brief', 'Test brief');
     await page.selectOption('#tier', 'lightweight');
-    
-    // Submit
-    await page.click('button:has-text("Provision Soul")');
-    await page.waitForTimeout(500);
-    
-    // Check that event was captured with expected structure
-    capturedEvent = await page.evaluate(() => window._capturedEvent);
-    
-    if (capturedEvent) {
-      expect(capturedEvent.tags).toBeDefined();
-      
-      // Should have agent-id, name, tier, and output tags
-      const tags = capturedEvent.tags;
-      const agentIdTag = tags.find(t => t[0] === 'agent-id');
-      const nameTag = tags.find(t => t[0] === 'name');
-      const tierTag = tags.find(t => t[0] === 'tier');
-      const outputTag = tags.find(t => t[0] === 'output');
-      
-      expect(agentIdTag).toBeDefined();
-      expect(agentIdTag[1]).toContain('test-agent');
-      expect(nameTag).toBeDefined();
-      expect(tierTag).toBeDefined();
-      expect(tierTag[1]).toBe('lightweight');
-      expect(outputTag).toBeDefined();
-    }
+
+    await page.getByRole('button', { name: 'Provision Soul' }).click();
+    await page.waitForFunction(() => Boolean(window._capturedEvent));
+
+    const capturedEvent = await page.evaluate(() => window._capturedEvent);
+
+    expect(capturedEvent.tags).toBeDefined();
+    const tags = capturedEvent.tags;
+    const agentIdTag = tags.find((tag) => tag[0] === 'agent-id');
+    const nameTag = tags.find((tag) => tag[0] === 'name');
+    const tierTag = tags.find((tag) => tag[0] === 'tier');
+    const outputTag = tags.find((tag) => tag[0] === 'output');
+
+    expect(agentIdTag).toBeDefined();
+    expect(agentIdTag[1]).toContain('test-agent');
+    expect(nameTag).toBeDefined();
+    expect(tierTag).toBeDefined();
+    expect(tierTag[1]).toBe('lightweight');
+    expect(outputTag).toBeDefined();
   });
 });

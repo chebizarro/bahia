@@ -133,7 +133,7 @@
       "defect_id": "SFTP-D-007",
       "title": "Required backend provisioning and lifecycle verification suites are missing",
       "severity": "minor",
-      "status": "open",
+      "status": "verified",
       "related_ac_ids": [
         "SFTP-AC-003",
         "SFTP-AC-004",
@@ -152,7 +152,8 @@
       "evidence": [
         "RepoPrompt path search on 2026-05-04 found no internal/soulfactory/reactor_test.go, provisioner_full_integration_test.go, or lifecycle_handler_test.go files.",
         "internal/soulfactory/reactor.go, provisioner_full.go, and lifecycle_handler.go contain logic for request rejection, progress publication, soul publication, action authorization, and regenerate semantics, but no required automated verification suite currently exercises those contracts.",
-        "pstf/features/SOUL_FACTORY_PROVISIONING_TRACKING/test_matrix.json maps these ACs to missing tests T-004, T-005, T-007, T-008, T-012, and T-014."
+        "pstf/features/SOUL_FACTORY_PROVISIONING_TRACKING/test_matrix.json maps these ACs to missing tests T-004, T-005, T-007, T-008, T-012, and T-014.",
+        "Added deterministic backend suites in `internal/soulfactory/reactor_test.go` and `internal/soulfactory/lifecycle_handler_test.go`; `go test ./internal/soulfactory ./cmd/cli` passed on 2026-05-04."
       ],
       "suspected_root_cause": "The full-lifecycle acceptance criteria were approved before corresponding in-process backend regression harnesses were built.",
       "recommended_fix": "Add deterministic in-process tests for reactor request/result handling, eight-stage provisioning, authoritative 31951 publication, action authorization, and regenerate semantics.",
@@ -162,7 +163,7 @@
       "defect_id": "SFTP-D-008",
       "title": "Browser verification coverage is incomplete and one required Playwright case is stale",
       "severity": "minor",
-      "status": "open",
+      "status": "verified",
       "related_ac_ids": [
         "SFTP-AC-001",
         "SFTP-AC-002",
@@ -177,7 +178,8 @@
         "RepoPrompt path search on 2026-05-04 found no web/tests/e2e/souls-gallery-live.spec.js or soul-provisioned-visibility.spec.js files.",
         "`cd /Users/bizarro/Documents/Projects/bahia/web && npm run test:e2e -- tests/e2e/soul-signing-smoke.spec.js` failed on 2026-05-04: 6 passed, 1 failed.",
         "web/test-results/soul-signing-smoke-Soul-Si-0683c-when-no-extension-available-chromium/error-context.md shows the failing no-extension test landed on Dashboard because AuthGuard redirected unauthenticated /souls/new access to / before any Continue button existed.",
-        "web/src/lib/components/AuthGuard.svelte:39-43 redirects unauthenticated protected-route access to /."
+        "web/src/lib/components/AuthGuard.svelte:39-43 redirects unauthenticated protected-route access to /.",
+        "Added browser journeys in `web/tests/e2e/souls-gallery-live.spec.js` and `web/tests/e2e/soul-provisioned-visibility.spec.js`, and rewrote the stale signer-missing case in `web/tests/e2e/soul-signing-smoke.spec.js`; `cd web && npm run test:e2e -- tests/e2e/soul-signing-smoke.spec.js tests/e2e/souls-gallery-live.spec.js tests/e2e/soul-provisioned-visibility.spec.js` passed on 2026-05-04."
       ],
       "suspected_root_cause": "Browser verification never grew beyond the original smoke wizard, and one negative-case assumption no longer matches current route-protection behavior.",
       "recommended_fix": "Add explicit Souls gallery and post-provision visibility journeys, and rewrite the no-extension negative case to assert the currently intended signer-missing behavior instead of relying on the old unauthenticated wizard path.",

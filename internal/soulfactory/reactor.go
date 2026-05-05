@@ -54,6 +54,8 @@ type Reactor struct {
 	signer      Signer
 	provisioner ProvisioningEngine
 	logger      *slog.Logger
+	publishFn   func(context.Context, *nostr.Event, []string) error
+	getSoulFn   func(context.Context, string) (*domain.AgentSoul, error)
 
 	mu   sync.Mutex
 	runs map[string]*domain.ProvisioningRun // requestID -> run
@@ -576,6 +578,9 @@ func (r *Reactor) PublishSoul(ctx context.Context, soul *domain.AgentSoul) error
 
 // publish sends an event to the specified relays.
 func (r *Reactor) publish(ctx context.Context, event *nostr.Event, relays []string) error {
+	if r.publishFn != nil {
+		return r.publishFn(ctx, event, relays)
+	}
 	for _, relay := range relays {
 		if err := r.pool.PublishMany(ctx, []string{relay}, *event); err != nil {
 			r.logger.Warn("failed to publish to relay", "relay", relay, "error", err)
@@ -594,6 +599,9 @@ func (r *Reactor) GetRun(requestID string) *domain.ProvisioningRun {
 
 // GetSoul fetches a soul by its d-tag (agent ID) from the relay network.
 func (r *Reactor) GetSoul(ctx context.Context, agentID string) (*domain.AgentSoul, error) {
+	if r.getSoulFn != nil {
+		return r.getSoulFn(ctx, agentID)
+	}
 	agentID = normalizeSoulLookupRef(agentID)
 	if agentID == "" {
 		return nil, nil

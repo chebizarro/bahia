@@ -36,8 +36,14 @@ export async function installE2EMocks(
   }));
 
   await page.addInitScript(({ authenticated, extension, pubkey, sseEvents, nostrEvents, routeRoleRequirements }) => {
-    localStorage.setItem('__bahia_e2e_sse_events', JSON.stringify(sseEvents || []));
-    localStorage.setItem('__bahia_e2e_nostr_events', JSON.stringify(nostrEvents || []));
+    const existingSseEvents = localStorage.getItem('__bahia_e2e_sse_events');
+    if (!existingSseEvents || (Array.isArray(sseEvents) && sseEvents.length > 0)) {
+      localStorage.setItem('__bahia_e2e_sse_events', JSON.stringify(sseEvents || []));
+    }
+    const existingNostrEvents = localStorage.getItem('__bahia_e2e_nostr_events');
+    if (!existingNostrEvents || (Array.isArray(nostrEvents) && nostrEvents.length > 0)) {
+      localStorage.setItem('__bahia_e2e_nostr_events', JSON.stringify(nostrEvents || []));
+    }
     if (routeRoleRequirements && typeof routeRoleRequirements === 'object') {
       window.__BAHIA_E2E_ROUTE_ROLE_REQUIREMENTS = routeRoleRequirements;
     } else {
@@ -100,6 +106,22 @@ export async function installE2EMocks(
       return true;
     }
 
+    window.__BAHIA_E2E_WS_CONNECTIONS = [];
+
+    function deliverMockEvent(socket, subId, event) {
+      if (socket.readyState !== MockWebSocket.OPEN) return;
+      socket.onmessage?.({ data: JSON.stringify(['EVENT', subId, event]) });
+    }
+
+    function persistMockNostrEvent(event) {
+      const events = readMockNostrEvents();
+      if (!event?.id || events.some((existing) => existing?.id === event.id)) {
+        return;
+      }
+      events.push(event);
+      localStorage.setItem('__bahia_e2e_nostr_events', JSON.stringify(events));
+    }
+
     class MockWebSocket {
       static CONNECTING = 0;
       static OPEN = 1;
@@ -113,7 +135,17 @@ export async function installE2EMocks(
         this.onmessage = null;
         this.onerror = null;
         this.onclose = null;
+        this.subscriptions = new Map();
+        window.__BAHIA_E2E_WS_CONNECTIONS.push(this);
         setTimeout(() => this.onopen?.({ type: 'open', target: this }), 0);
+      }
+
+      emitEvent(event) {
+        this.subscriptions.forEach((filters, subId) => {
+          if (filters.some((filter) => matchesFilter(event, filter))) {
+            deliverMockEvent(this, subId, event);
+          }
+        });
       }
 
       send(data) {
@@ -127,21 +159,21 @@ export async function installE2EMocks(
         if (Array.isArray(message) && message[0] === 'REQ') {
           const subId = message[1];
           const filters = message.slice(2);
+          this.subscriptions.set(subId, filters);
           const events = readMockNostrEvents().filter((event) => filters.some((filter) => matchesFilter(event, filter)));
           events.forEach((event, index) => {
-            setTimeout(() => {
-              if (this.readyState === MockWebSocket.OPEN) {
-                this.onmessage?.({ data: JSON.stringify(['EVENT', subId, event]) });
-              }
-            }, index * 5);
+            setTimeout(() => deliverMockEvent(this, subId, event), index * 5);
           });
           setTimeout(() => {
             if (this.readyState === MockWebSocket.OPEN) {
               this.onmessage?.({ data: JSON.stringify(['EOSE', subId]) });
             }
           }, events.length * 5);
+        } else if (Array.isArray(message) && message[0] === 'CLOSE') {
+          this.subscriptions.delete(message[1]);
         } else if (Array.isArray(message) && message[0] === 'EVENT') {
           const event = message[1];
+          persistMockNostrEvent(event);
           setTimeout(() => {
             this.onmessage?.({ data: JSON.stringify(['OK', event?.id, true, '']) });
           }, 0);
@@ -150,11 +182,18 @@ export async function installE2EMocks(
 
       close() {
         this.readyState = MockWebSocket.CLOSED;
+        window.__BAHIA_E2E_WS_CONNECTIONS = (window.__BAHIA_E2E_WS_CONNECTIONS || []).filter((socket) => socket !== this);
         this.onclose?.({ type: 'close', target: this });
       }
     }
 
     window.WebSocket = MockWebSocket;
+    window.__bahiaPushNostrEvent = (event) => {
+      persistMockNostrEvent(event);
+      for (const socket of window.__BAHIA_E2E_WS_CONNECTIONS || []) {
+        socket.emitEvent?.(event);
+      }
+    };
 
     class MockEventSource {
       static CONNECTING = 0;
