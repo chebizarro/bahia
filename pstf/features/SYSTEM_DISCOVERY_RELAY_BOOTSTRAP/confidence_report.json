@@ -1,0 +1,145 @@
+{
+  "feature_id": "SYSTEM_DISCOVERY_RELAY_BOOTSTRAP",
+  "status": "needs_more_tests",
+  "threshold": 0.9,
+  "raw_confidence": 0.85,
+  "confidence": 0.85,
+  "threshold_met": false,
+  "weights_total": 1.0,
+  "components": {
+    "acceptance_criteria_coverage": {
+      "score": 1.0,
+      "weight": 0.3,
+      "weighted_score": 0.3,
+      "evidence": [
+        "acceptance_criteria.json contains 10 approved criteria.",
+        "test_matrix.json maps all 10 criteria to at least one test and marks each mapped test as passing.",
+        "verification_report.md marks SDRB-AC-001 through SDRB-AC-010 verified."
+      ]
+    },
+    "test_pass_rate": {
+      "score": 1.0,
+      "weight": 0.25,
+      "weighted_score": 0.25,
+      "evidence": [
+        "verification_report.md records 12 passing tests and 0 not implemented / blocked tests for this slice.",
+        "Executed suites passed: go test ./internal/api/handlers ./pkg/client ./cmd/cli; web unit suites; and tests/e2e/controlplane-nostr-smoke.spec.js.",
+        "test_matrix.json marks SDRB-T-001 through SDRB-T-012 as pass."
+      ]
+    },
+    "code_coverage": {
+      "score": 0.0,
+      "weight": 0.15,
+      "weighted_score": 0.0,
+      "evidence": [
+        "No touched-module coverage artifact exists under pstf/features/SYSTEM_DISCOVERY_RELAY_BOOTSTRAP/.",
+        "The feature folder contains no coverage/ subdirectory and no Go or web coverage summary file.",
+        "Per the PSTF scoring rule, missing coverage evidence scores 0.0 unless explicitly accepted by human decision."
+      ]
+    },
+    "edge_case_coverage": {
+      "score": 1.0,
+      "weight": 0.1,
+      "weighted_score": 0.1,
+      "evidence": [
+        "controlplane-store tests cover missing relay_read_models, missing browser bootstrap URLs, and connection failure.",
+        "Handler and store tests cover raw nostr.relays rejection, spoofed-author rejection, replaceable latest-wins, and tombstones.",
+        "CLI tests cover explicit flag precedence, environment precedence, canonical discovery fallback, and empty-discovery failure.",
+        "encrypted-controlplane tests cover public-only bootstrap not implying encrypted capability."
+      ]
+    },
+    "regression_safety": {
+      "score": 1.0,
+      "weight": 0.1,
+      "weighted_score": 0.1,
+      "evidence": [
+        "Existing handler, client, CLI, browser unit, and relay-backed smoke suites all passed after the patch series.",
+        "The e2e relay-backed smoke test still proves dashboard and events pages render from discovered relay state.",
+        "The canonical shared fixture is reused across browser and CLI tests, reducing consumer drift in the discovery contract."
+      ]
+    },
+    "defect_resolution": {
+      "score": 1.0,
+      "weight": 0.05,
+      "weighted_score": 0.05,
+      "evidence": [
+        "defects.json marks SDRB-D-001 through SDRB-D-005 verified.",
+        "No open critical, major, or minor defects remain in defects.json for this feature slice."
+      ]
+    },
+    "human_alignment": {
+      "score": 1.0,
+      "weight": 0.05,
+      "weighted_score": 0.05,
+      "evidence": [
+        "hitl_decisions.md records the product decision removing raw nostr.relays from the approved slice (HITL-SYSTEM_DISCOVERY_RELAY_BOOTSTRAP-001).",
+        "hitl_decisions.md records AC approval and the narrowed encrypted-capability framing (HITL-SYSTEM_DISCOVERY_RELAY_BOOTSTRAP-002 and -003).",
+        "All required HITL decisions for spec and AC approval are present for this pre-release confidence cycle."
+      ]
+    }
+  },
+  "hard_gates": {
+    "feature_spec_exists": {
+      "passed": true,
+      "evidence": [
+        "pstf/features/SYSTEM_DISCOVERY_RELAY_BOOTSTRAP/feature_spec.json exists."
+      ]
+    },
+    "acceptance_criteria_exists": {
+      "passed": true,
+      "evidence": [
+        "pstf/features/SYSTEM_DISCOVERY_RELAY_BOOTSTRAP/acceptance_criteria.json exists and is approved."
+      ]
+    },
+    "test_matrix_exists": {
+      "passed": true,
+      "evidence": [
+        "pstf/features/SYSTEM_DISCOVERY_RELAY_BOOTSTRAP/test_matrix.json exists and is status=ready."
+      ]
+    },
+    "every_must_ac_has_test": {
+      "passed": true,
+      "evidence": [
+        "All 10 approved criteria are mapped to tests in test_matrix.json.",
+        "All must-level ACs have at least one linked passing test."
+      ]
+    },
+    "verification_report_exists": {
+      "passed": true,
+      "evidence": [
+        "pstf/features/SYSTEM_DISCOVERY_RELAY_BOOTSTRAP/verification_report.md exists and marks the approved slice verified."
+      ]
+    },
+    "no_open_critical_defects": {
+      "passed": true,
+      "evidence": [
+        "defects.json contains no open critical defects."
+      ]
+    },
+    "hitl_spec_approval_exists": {
+      "passed": true,
+      "evidence": [
+        "hitl_decisions.md records AC approval in HITL-SYSTEM_DISCOVERY_RELAY_BOOTSTRAP-002 and the required product-intent decisions."
+      ]
+    },
+    "no_open_major_defects": {
+      "passed": true,
+      "evidence": [
+        "defects.json contains no open major defects; all listed defects are verified."
+      ]
+    }
+  },
+  "hard_gate_failures": [],
+  "caps_applied": [],
+  "blocking_findings": [
+    "Threshold 0.90 is not met because code_coverage scores 0.0 without a touched-module coverage artifact."
+  ],
+  "evidence_gaps": [
+    "No Go or web coverage report for the touched discovery/bootstrap modules is stored under pstf/features/SYSTEM_DISCOVERY_RELAY_BOOTSTRAP/.",
+    "No HITL or policy exception accepts missing code-coverage evidence for this feature."
+  ],
+  "recommendation": {
+    "next_stage": "implement_coverage_evidence",
+    "summary": "Generate touched-module coverage artifacts for the discovery/bootstrap slice, then rerun confidence scoring; the feature is otherwise ready for human review evidence-wise."
+  }
+}
