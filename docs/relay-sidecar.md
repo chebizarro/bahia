@@ -25,7 +25,7 @@ nostr:
 
 - `public_url` / `browser_relays` are exposed by `/api/v1/system/info` to the frontend.
 - `backend_url` is used by Bahia itself for publish/subscribe in sidecar-first mode. In Docker Compose this should point at `ws://relay:3334/relay` so backend and browser both target the explicit relay mount.
-- When sidecar mode is enabled, Bahia's own control-plane reactor/projector use the sidecar URL instead of connecting directly to `nostr.relays`. This keeps canonical 696x/796x/3196x/read-model publication sidecar-only.
+- When sidecar mode is enabled, Bahia's own control-plane reactor/projector use the sidecar URL instead of connecting directly to `nostr.relays`. This keeps canonical 696x/796x/3196x projection traffic and public 596x/597x/598x control-plane traffic sidecar-first.
 - Interop subscribers use `nostr.relays` unless `mirror_external=true`; with mirroring enabled, Bahia uses the sidecar as the public upstream boundary and does not also connect directly to mirrored upstream URLs. Private and Loom relays stay direct and separate.
 
 ## Local topology
@@ -48,8 +48,9 @@ Browser flow:
 
 The sidecar validates event IDs, signatures, and timestamp bounds before persistence.
 
-- `5961`-`5968` requests require `nostr.authorized_pubkeys`.
-- `696x`, `796x`, `31961`-`31963`, and `310xx` Bahia projections require Bahia's service pubkey.
+- Operator-authored public control-plane events require authorized pubkeys on the sidecar. That includes inbound request/write kinds `5961`-`5968`, `5971`-`5976`, `5978`-`5979`, `5981`-`5989`, plus the operator-authored `7977` tool approval response.
+- Bahia-authored projection/control-plane events require Bahia's service pubkey. That includes `5977`, `6961`-`6978`, `7961`-`7976`, `7978`-`7979`, `31961`-`31970`, and `31000`-`31099`.
+- `5980` encrypted requests are intentionally excluded from the public sidecar policy; they belong on encrypted-request relays only.
 - `10100`, `30100`, `5101`, `5102`, `5401`, and `5402` interop events accept any valid signature; Bahia services still decide whether to act.
 
 ## Upstream mirroring guardrail

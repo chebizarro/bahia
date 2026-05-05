@@ -1,463 +1,275 @@
 # Bahia Protocol Compatibility Matrix
 
-This document describes which protocols and event kinds Bahia implements,
-whether as a publisher (outbound), subscriber (inbound), or both.
+This document summarizes the protocols and event families Bahia currently uses and how they fit the **current** product shape.
 
-## Quick Reference
+## Important scope note
 
-| Protocol    | Purpose                          | Status      |
-|-------------|----------------------------------|-------------|
-| Loom        | Distributed job execution        | ✅ Complete |
-| NIP-98      | HTTP authentication              | ✅ Complete (API), ⚠️ Stubbed (Blossom) |
-| NIP-05      | Identity verification            | ✅ Complete |
-| NIP-46      | Nostr Connect (remote signing)   | ⚠️ Stubbed  |
-| Blossom     | Media/blob storage               | ✅ Complete (upload/download) |
-| Cashu       | Ecash payments                   | ✅ Complete |
+Bahia's product contract is no longer well-described by a REST-only or registry-only model.
 
----
+Current reality:
+- Bahia is a **deployment/runtime control plane**
+- the **public control plane is Nostr-native**
+- the **relay sidecar is the primary realtime/public boundary**
+- browser/operator identity is **signer-first**
+- sensitive browser domains may use **encrypted Nostr request/result** flows
+- REST and MCP remain important, but they are narrowed compatibility/query/tooling surfaces
 
-## Nostr Event Kinds
-
-### Loom Protocol Events
-
-Bahia integrates with [Loom](https://github.com/openagentsinc/loom), a Nostr-native
-distributed compute protocol. Bahia acts as a **job requester** (client) that
-submits deployment jobs to Loom workers.
-
-| Kind  | Name                | Direction | Description                           |
-|-------|---------------------|-----------|---------------------------------------|
-| 10100 | Worker Advertisement | Inbound   | Replaceable event advertising worker capabilities |
-| 5100  | Job Request         | Outbound  | Request to execute a deployment job   |
-| 30100 | Job Status Update   | Inbound   | Parameterized replaceable progress updates |
-| 5101  | Job Result          | Inbound   | Final result of a completed job       |
-| 5102  | Job Cancellation    | Outbound  | Request to cancel a running job       |
-
-#### Kind 10100 — Worker Advertisement (Inbound)
-
-Workers publish replaceable events advertising their capabilities. Bahia's
-\`WorkerDiscovery\` service subscribes to these events and maintains a catalog.
-
-\`\`\`json
-{
-  "kind": 10100,
-  "pubkey": "<worker-pubkey>",
-  "content": "{\"name\":\"deploy-worker-1\",\"capabilities\":[\"docker\",\"compose\"],\"price_per_sec\":10,\"mint_url\":\"https://mint.example.com\"}",
-  "tags": [
-    ["d", "worker-ad"],
-    ["relay", "wss://relay.example.com"]
-  ]
-}
-\`\`\`
-
-**Content fields:**
-- \`name\`: Human-readable worker name
-- \`capabilities\`: Array of supported deployment types
-- \`price_per_sec\`: Price in satoshis per second of compute
-- \`mint_url\`: Cashu mint URL for payments
-
-#### Kind 5100 — Job Request (Outbound)
-
-Bahia publishes job requests when a deployment run is created.
-
-\`\`\`json
-{
-  "kind": 5100,
-  "pubkey": "<bahia-pubkey>",
-  "content": "{\"type\":\"docker-deploy\",\"image\":\"ghcr.io/org/app:v1.2.3\",\"env\":{\"PORT\":\"8080\"}}",
-  "tags": [
-    ["p", "<target-worker-pubkey>"],
-    ["bid", "1000"],
-    ["expiration", "1704067200"]
-  ]
-}
-\`\`\`
-
-**Tags:**
-- \`p\`: Target worker pubkey
-- \`bid\`: Maximum payment in satoshis
-- \`expiration\`: Unix timestamp after which job should not be accepted
-
-#### Kind 30100 — Job Status Update (Inbound)
-
-Workers publish parameterized replaceable events with progress updates.
-
-\`\`\`json
-{
-  "kind": 30100,
-  "pubkey": "<worker-pubkey>",
-  "content": "",
-  "tags": [
-    ["d", "<job-event-id>"],
-    ["e", "<job-event-id>"],
-    ["status", "running"],
-    ["progress", "50"]
-  ]
-}
-\`\`\`
-
-**Status values:** \`accepted\`, \`running\`, \`completed\`, \`failed\`, \`cancelled\`
-
-#### Kind 5101 — Job Result (Inbound)
-
-Workers publish the final result when a job completes.
-
-\`\`\`json
-{
-  "kind": 5101,
-  "pubkey": "<worker-pubkey>",
-  "content": "{\"exit_code\":0,\"stdout_ref\":\"https://blossom.example.com/abc123\",\"stderr_ref\":\"https://blossom.example.com/def456\"}",
-  "tags": [
-    ["e", "<job-event-id>"],
-    ["status", "completed"],
-    ["amount", "850"]
-  ]
-}
-\`\`\`
-
-**Content fields:**
-- \`exit_code\`: Process exit code
-- \`stdout_ref\`: Blossom URL for stdout logs
-- \`stderr_ref\`: Blossom URL for stderr logs
-
-#### Kind 5102 — Job Cancellation (Outbound)
-
-Bahia can request job cancellation.
-
-\`\`\`json
-{
-  "kind": 5102,
-  "pubkey": "<bahia-pubkey>",
-  "content": "",
-  "tags": [
-    ["e", "<job-event-id>"]
-  ]
-}
-\`\`\`
+For the canonical control-plane contract, prefer:
+- `docs/control-planes.md`
+- `docs/nostr-commands.md`
+- `docs/event-spec.md`
 
 ---
 
-### NIP-98 HTTP Authentication
+## Quick reference
 
-Bahia supports [NIP-98](https://github.com/nostr-protocol/nips/blob/master/98.md)
-HTTP Auth for authenticating API requests using Nostr keys.
-
-| Kind  | Name      | Direction | Description                    |
-|-------|-----------|-----------|--------------------------------|
-| 27235 | HTTP Auth | Inbound   | Authentication event in header |
-
-\`\`\`json
-{
-  "kind": 27235,
-  "pubkey": "<user-pubkey>",
-  "content": "",
-  "tags": [
-    ["u", "https://bahia.example.com/api/v1/services"],
-    ["method", "GET"]
-  ],
-  "created_at": 1704067200,
-  "sig": "<signature>"
-}
-\`\`\`
-
-The event is base64-encoded and sent in the \`Authorization\` header:
-\`\`\`
-Authorization: Nostr <base64-encoded-event>
-\`\`\`
-
-**Validation:**
-- Kind must be 27235
-- URL tag must match request URL
-- Method tag must match HTTP method
-- Event must be recent (default: 60 second max skew)
-- Signature must be valid
-- Event ID must not be reused (replay protection)
+| Protocol / surface | Purpose | Current status |
+|---|---|---|
+| Nostr public control plane | canonical requests, status/results, read models, activity | ✅ primary |
+| Relay sidecar | primary browser/backend public relay boundary | ✅ primary |
+| Encrypted Nostr request/result | sensitive browser-facing operations | ✅ implemented |
+| NIP-98 | Bahia HTTP authentication and OCI push auth | ✅ implemented |
+| NIP-05 | identity enrichment / verification | ✅ implemented |
+| NIP-46 | signer / bunker support | ✅ implemented in Signet + browser signer flows; some CLI-specific auth UX remains incomplete |
+| Loom | distributed job execution | ✅ implemented |
+| Hive-CI | workflow event ingestion | ✅ implemented |
+| OCI Distribution API | registry push/pull | ✅ implemented |
+| Blossom | blob/log storage backend | ✅ implemented |
+| Cashu | worker payment surface | ✅ implemented |
+| REST API | narrowed CRUD/query/log compatibility surface | ✅ implemented |
+| MCP JSON-RPC | tooling surface with async correlation metadata | ✅ implemented |
 
 ---
 
-### Bahia Command Events (Inbound)
+## Control-plane transport hierarchy
 
-Bahia can be operated entirely via Nostr events. See [nostr-commands.md](nostr-commands.md)
-for full details.
+### 1. Public Nostr control plane (primary)
+This is the canonical public event contract for Bahia.
 
-| Kind  | Label                       | Description                          |
-|-------|-----------------------------|--------------------------------------|
-| 31100 | \`build.register\`            | Register a new build                 |
-| 31101 | \`artifact.register\`         | Register a container artifact        |
-| 31102 | \`deployment.intent.create\`  | Create deployment intent             |
-| 31103 | \`deployment.intent.approve\` | Approve pending deployment           |
-| 31104 | \`deployment.intent.reject\`  | Reject pending deployment            |
-| 31105 | \`rollback.request\`          | Request rollback                     |
+Main families:
+- **service requests**: `5961-5968`
+- **LLM requests**: `5971-5975`
+- **tool/adoption workflow**: `5976`, `5977`, `6976`, `7976`, `7977`, `5978-5979`
+- **service/environment/policy/artifact public writes**: `5981-5989`
+- **service status**: `6961-6963`
+- **LLM status**: `6973`
+- **adoption status**: `6978`
+- **service results**: `7961-7966`
+- **LLM results**: `7971-7973`
+- **adoption results**: `7978-7979`
+- **replaceable read models**: `31961-31970`
+- **audit/activity events**: `31000-31099`
 
-These are **parameterized replaceable** events (NIP-33) with:
-- \`d\` tag for idempotency key
-- \`t\` tag for human-readable label
-- JSON content matching REST API DTOs
+### 2. Encrypted Nostr request/result plane
+Sensitive browser-facing domains use:
+- request kind `5980`
+- result kind `7980`
 
----
+These flows are intentionally separate from the public relay sidecar and use encrypted-request relay URLs where configured.
 
-### Bahia Audit Events (Outbound)
-
-Bahia publishes audit events for significant domain actions. These provide
-a verifiable audit trail and enable event-driven integrations.
-
-| Kind  | Label                   | Trigger                           |
-|-------|-------------------------|-----------------------------------|
-| 31000 | \`build.registered\`      | Build created via API/event       |
-| 31001 | \`artifact.registered\`   | Artifact created                  |
-| 31002 | \`deployment.created\`    | Deployment intent approved        |
-| 31003 | \`deployment.completed\`  | Deployment run finished           |
-| 31004 | \`drift.detected\`        | Observed state differs from desired |
-| 31005 | \`runtime.observation\`   | Container health check result     |
-
-Example audit event:
-\`\`\`json
-{
-  "kind": 31002,
-  "pubkey": "<bahia-pubkey>",
-  "content": "{\"intent_id\":\"uuid\",\"service\":\"my-app\",\"environment\":\"production\",\"artifact\":\"sha256:abc...\"}",
-  "tags": [
-    ["d", "<intent-id>"],
-    ["t", "deployment.created"],
-    ["service", "<service-id>"],
-    ["environment", "<environment-id>"]
-  ]
-}
-\`\`\`
+### 3. MCP and REST
+- **MCP** (`/mcp`, `/api/v1/mcp`) is a first-class tooling surface.
+- **REST** remains for narrowed CRUD/query/log/registry compatibility.
+- For async Nostr-native workflows, HTTP should not be treated as the sole source of completion truth.
 
 ---
 
-## Blossom Protocol
+## Canonical Nostr event families
 
-Bahia uses [Blossom](https://github.com/hzrd149/blossom) (BUD-01) for storing
-deployment artifacts and logs. Blossom is a simple HTTP-based blob storage
-protocol with content-addressable (SHA-256) URLs.
+### Public request kinds
 
-### Operations
+| Range / Kind | Purpose |
+|---|---|
+| `5961` | deploy request |
+| `5962` | rollback request |
+| `5963` | service action / direct-runtime action |
+| `5964` | service create |
+| `5965` | environment create |
+| `5966` | deployment approval |
+| `5967` | observation submit |
+| `5968` | drift remediation |
+| `5971-5975` | LLM route/release/deploy/approval/rollback |
+| `5976` | tool provisioning request (agent → Bahia) |
+| `5977` | tool approval handoff request (Bahia → operator) |
+| `5978-5979` | adoption scan / adoption import |
+| `5981-5989` | service/environment update/delete, artifact register, policy create/update/delete/evaluate |
 
-| Method | Endpoint      | Direction | Description              |
-|--------|---------------|-----------|--------------------------|
-| PUT    | \`/upload\`     | Outbound  | Upload blob, get URL     |
-| GET    | \`/<sha256>\`   | Both      | Download blob by hash    |
-| HEAD   | \`/<sha256>\`   | Outbound  | Check blob existence     |
+### Status kinds
 
-### URL Format
+| Range / Kind | Purpose |
+|---|---|
+| `6961-6963` | deployment/service/action progress |
+| `6973` | LLM deployment progress |
+| `6976` | tool provisioning progress |
+| `6978` | adoption progress |
 
-Blossom URLs are content-addressed:
-\`\`\`
-https://blossom.example.com/abc123def456...
-\`\`\`
+### Result kinds
 
-Where the path is the SHA-256 hash of the content. This enables:
-- Integrity verification on download
-- Multi-server redundancy (same hash = same content)
-- Deduplication
+| Range / Kind | Purpose |
+|---|---|
+| `7961-7966` | deployment/action/create/observation/remediation terminal results |
+| `7971-7973` | LLM terminal results |
+| `7976` | tool provisioning terminal result (Bahia → agent) |
+| `7977` | tool approval response (operator → Bahia) |
+| `7978-7979` | adoption terminal results |
+| `7980` | encrypted terminal result |
 
-### Usage in Bahia
+### Replaceable read models
 
-| Data Type         | Storage                                |
-|-------------------|----------------------------------------|
-| Deployment logs   | stdout/stderr uploaded after job completion |
-| SBOM files        | Software Bill of Materials (future)    |
-| Build artifacts   | Container layers (future)              |
+| Range / Kind | Purpose |
+|---|---|
+| `31961-31963` | service state + service/environment registries |
+| `31964-31965` | LLM route registry + route state |
+| `31966-31970` | artifact, deployment intent/run, build, and policy registries |
 
----
+### Audit / activity events
 
-## Cashu Payments
-
-Bahia uses [Cashu](https://cashu.space/) ecash for paying Loom workers.
-Cashu provides privacy-preserving Bitcoin payments without requiring
-on-chain transactions.
-
-### Flow
-
-1. **Job Request**: Bahia includes a \`bid\` tag with max payment
-2. **Job Completion**: Worker returns \`amount\` tag with actual cost
-3. **Payment**: Bahia creates Cashu token and sends to worker
-4. **Redemption**: Worker redeems token at mint
-
-### Implementation
-
-| Component          | Description                              |
-|--------------------|------------------------------------------|
-| \`CashuWallet\`      | Manages mint connections and tokens      |
-| \`PaymentService\`   | Orchestrates payments for deployment runs |
-| \`PaymentRecord\`    | Audit trail of all payments              |
-
-### Mint Configuration
-
-\`\`\`yaml
-cashu:
-  default_mint: "https://mint.example.com"
-  mints:
-    - url: "https://mint.example.com"
-      unit: "sat"
-\`\`\`
+| Range / Kind | Purpose |
+|---|---|
+| `31000-31019` | build/artifact/deployment/drift/runtime/LLM lifecycle audit activity |
 
 ---
 
-## NIP-05 Identity
+## Legacy 311xx bridge
 
-Bahia resolves [NIP-05](https://github.com/nostr-protocol/nips/blob/master/05.md)
-identifiers to enrich user principals with human-readable identities.
+The `31100-31105` command bridge exists only as **deprecated compatibility behavior**.
 
-| Operation      | Direction | Description                    |
-|----------------|-----------|--------------------------------|
-| Lookup         | Outbound  | Resolve pubkey → identifier    |
-| Verification   | Outbound  | Verify identifier → pubkey     |
+- It is **not** the supported control-plane contract.
+- New integrations must publish the canonical 596x/597x/598x request kinds instead.
+- Current docs should not treat 311xx as the normal way to integrate with Bahia.
 
-When a user authenticates via NIP-98, Bahia attempts to resolve their
-pubkey to a NIP-05 identifier (e.g., \`alice@example.com\`) and includes
-it in the Principal for display purposes.
+If you need command details, use `docs/nostr-commands.md` rather than assuming the old 311xx bridge is authoritative.
 
-### Caching
+---
 
-- Successful lookups: cached for 1 hour
-- Failed lookups: negative cached for 5 minutes
-- Background cleanup removes expired entries
+## NIP-98 HTTP authentication
+
+Bahia supports NIP-98 direct HTTP auth for protected HTTP surfaces.
+
+### Current usage
+- protected REST routes
+- protected MCP routes
+- OCI push auth
+
+### Behavior
+- `Authorization: Nostr <base64event>` is the supported auth header when auth is enabled
+- `Authorization: Bearer ...` should be rejected by protected Bahia HTTP endpoints
+- browser-compatible direct NIP-98 capability is advertised via `/api/v1/system/info`
 
 ---
 
 ## NIP-46 Nostr Connect
 
-[NIP-46](https://github.com/nostr-protocol/nips/blob/master/46.md) enables
-remote signing, allowing users to authenticate without exposing their
-private keys to Bahia.
+NIP-46 support is **implemented**, but some surfaces are more complete than others.
 
-| Status | Description                              |
-|--------|------------------------------------------|
-| ✅     | Signet client implements full NIP-46 bunker protocol |
-| ⚠️     | CLI `--nip46` flag for user auth not yet implemented |
+### Implemented
+- Signet client bunker support
+- browser signer/session flows that use NIP-46 where available
+- signing support for control-plane actions
 
-**Signet client** (`internal/adapters/signet/client.go`):
-- `Connect()` — Establishes NIP-46 session with bunker via go-nostr
-- `Sign()` — Signs events through bunker's `sign_event` RPC
-- `SignAs()` — Signs as provisioned agent via agent-specific bunker connection
-- `ProvisionAgent()` — Calls Signet's custom `provision_agent` RPC
-- `RevokeAgent()` — Calls Signet's custom `revoke_agent` RPC
-- `GetPublicKey()` — Retrieves bunker's public key
-- **Mock mode**: Falls back to local key generation when no bunker URI configured
+### Still incomplete / narrower
+- some CLI-specific auth UX remains separate from Signet support
+- encrypted browser flows additionally require exposed NIP-44 encrypt/decrypt capability from the provider
 
-**CLI auth**: The `bahia auth login --nip46` flag for user authentication is
-separate from the Signet client and not yet implemented.
-
-Connection string format:
-```
-bunker://<remote-signer-pubkey>?relay=wss://relay.example.com&secret=<secret>
-```
+This means “NIP-46 is stubbed” is no longer an accurate summary of the current repo state.
 
 ---
 
-## OCI Distribution Specification
+## Loom protocol
 
-Bahia implements the [OCI Distribution Spec v2](https://github.com/opencontainers/distribution-spec) as an internal container registry.
+Bahia integrates with Loom as a deployment/job execution path.
 
-| Endpoint | Direction | Status | Description |
-|----------|-----------|--------|-------------|
-| `GET /v2/` | Inbound | ✅ | API version check |
-| `GET /v2/{name}/manifests/{ref}` | Inbound | ✅ | Pull manifest |
-| `HEAD /v2/{name}/manifests/{ref}` | Inbound | ✅ | Check manifest |
-| `PUT /v2/{name}/manifests/{ref}` | Inbound | ✅ | Push manifest |
-| `GET /v2/{name}/blobs/{digest}` | Inbound | ✅ | Pull blob |
-| `HEAD /v2/{name}/blobs/{digest}` | Inbound | ✅ | Check blob |
-| `POST /v2/{name}/blobs/uploads/` | Inbound | ✅ | Start upload |
-| `PATCH /v2/{name}/blobs/uploads/{uuid}` | Inbound | ✅ | Chunk upload |
-| `PUT /v2/{name}/blobs/uploads/{uuid}` | Inbound | ✅ | Complete upload |
-| `GET /v2/{name}/tags/list` | Inbound | ✅ | List tags |
-| `GET /v2/{name}/referrers/{digest}` | Inbound | ✅ | List referrers |
+| Kind | Name | Direction | Purpose |
+|------|------|-----------|---------|
+| `10100` | Worker Advertisement | inbound | discover worker capabilities |
+| `5100` | Job Request | outbound | submit deployment/build job |
+| `30100` | Job Status Update | inbound | observe progress |
+| `5101` | Job Result | inbound | receive final result |
+| `5102` | Job Cancellation | outbound | cancel job |
 
-**Storage Backend:**
-- Manifests: PostgreSQL (BYTEA for digest stability)
-- Blobs: Blossom (content-addressed)
-- Tags: PostgreSQL
+This remains an important execution protocol, but it now sits inside a broader Nostr-native control-plane story rather than defining the whole product architecture.
 
-**Authentication:**
+---
+
+## Hive-CI protocol
+
+Bahia subscribes to Hive-CI workflow events and converts them into build/artifact/deployment state.
+
+| Kind | Name | Direction | Purpose |
+|------|------|-----------|---------|
+| `5401` | Workflow Run | inbound | workflow started |
+| `5402` | Workflow Result | inbound | workflow completed |
+
+Current processing expectations:
+1. validate trusted dispatcher / publisher relationship
+2. create build state
+3. verify image in registry
+4. create artifact state
+5. optionally create deployment intent
+
+---
+
+## OCI Distribution API
+
+Bahia implements the OCI Distribution API at `/v2/*`.
+
+Main capabilities:
+- push/pull manifests
+- push/pull blobs
+- tag listing
+- referrer listing
+
+Storage model:
+- manifests/tags in PostgreSQL
+- blobs/logs via Blossom-backed storage
+
+Authentication model:
 - NIP-98 for push operations
-- Basic auth service accounts
-- Anonymous pull from configured CIDRs
+- service-account basic auth where configured
+- anonymous pull from allowed CIDRs where configured
 
 ---
 
-## Hive-CI Protocol
+## Blossom
 
-Bahia subscribes to [Hive-CI](../hive-ci-protocol/SPECIFICATION.md) workflow events to auto-ingest CI results.
+Bahia uses Blossom as a blob/log storage backend.
 
-| Kind | Name | Direction | Status | Description |
-|------|------|-----------|--------|-------------|
-| 5401 | Workflow Run | Inbound | ✅ | CI workflow started |
-| 5402 | Workflow Result | Inbound | ✅ | CI workflow completed |
-
-### Kind 5401 — Workflow Run (Inbound)
-
-Bahia subscribes to trusted CI dispatcher pubkeys and records workflow runs.
-
-**Required tags parsed:**
-- `a` — NIP-34 repository coordinate
-- `commit` — Git commit hash
-- `branch` — Git branch name
-- `workflow` — Workflow file path
-- `triggered-by` — User who triggered
-- `publisher` — Ephemeral pubkey for result
-
-### Kind 5402 — Workflow Result (Inbound)
-
-Bahia validates ephemeral publisher key matches 5401, then processes:
-
-**Required tags parsed:**
-- `e` — Reference to 5401 event
-- `status` — `success` or `failure`
-- `exit_code` — Process exit code
-- `duration` — Execution duration
-- `log_url` — Blossom URL for logs
-- `image_repo` — Container image repository (Bahia-specific)
-- `image_tag` — Container image tag (Bahia-specific)
-- `image_digest` — Container image digest (Bahia-specific)
-
-**Processing flow:**
-1. Validate publisher key relationship
-2. Create Build record
-3. Verify image in OCI registry
-4. Create Artifact record
-5. (Optional) Create staging DeploymentIntent
+Typical uses:
+- OCI blob storage backend
+- workflow logs
+- deployment stdout/stderr references
+- other content-addressed binary payloads where configured
 
 ---
 
-## Known Gaps
+## Cashu
 
-These features have interfaces defined but implementations are incomplete:
+Bahia includes a Cashu-backed payment surface for worker/job cost accounting and payment workflows.
 
-| Gap | File | Description |
-|-----|------|-------------|
-| Soul Lifecycle | `internal/soulfactory/provisioner.go` | Suspend/Resume/Revoke/Regenerate |
-| Worker Stats | `internal/service/worker_catalog.go` | JobsCompleted, AvgDuration tracking |
-| Reputation Scoring | `internal/service/worker_policy.go` | Worker reputation calculation |
-| CLI NIP-46 Auth | `cmd/cli/main.go` | User auth via bunker (separate from Signet) |
+Current role:
+- worker payment coordination
+- payment history / cost reporting surfaces
+- integration with deployment/job execution economics
 
 ---
 
-## Implementation Status Summary
+## Known gaps / caution areas
 
-| Protocol/Kind | Direction | Status | File                           |
-|---------------|-----------|--------|--------------------------------|
-| Kind 10100    | Inbound   | ✅     | \`internal/adapters/loom/discovery.go\` |
-| Kind 5100     | Outbound  | ✅     | \`internal/adapters/loom/client.go\` |
-| Kind 30100    | Inbound   | ✅     | \`internal/adapters/loom/client.go\` |
-| Kind 5101     | Inbound   | ✅     | \`internal/adapters/loom/client.go\` |
-| Kind 5102     | Outbound  | ✅     | \`internal/adapters/loom/client.go\` |
-| Kind 27235    | Inbound   | ✅     | \`internal/auth/nip98.go\` |
-| Kind 31000-31005 | Outbound | ✅  | \`internal/events/publisher.go\` |
-| Kind 31100-31105 | Inbound | ✅   | \`internal/adapters/nostr/processor.go\` |
-| Blossom       | Both      | ✅     | \`internal/adapters/blossom/\` |
-| Cashu         | Outbound  | ✅     | \`internal/adapters/cashu/\` |
-| NIP-05        | Outbound  | ✅     | \`internal/auth/nip05.go\` |
-| NIP-46        | Both      | ✅     | `internal/adapters/signet/client.go` |
-| OCI Dist v2   | Inbound   | ✅     | `internal/api/handlers/registry.go` |
-| Kind 5401     | Inbound   | ✅     | `internal/adapters/hiveci/subscriber.go` |
-| Kind 5402     | Inbound   | ✅     | `internal/adapters/hiveci/subscriber.go` |
+These are the main gaps that still matter for readers of this doc:
+
+| Gap | Notes |
+|-----|------|
+| Soul lifecycle completeness | some lifecycle paths still need careful verification before being described as fully complete everywhere |
+| Worker stats / reputation depth | supporting metrics/scoring remain less mature than core deployment flow |
+| CLI-specific NIP-46 auth UX | narrower/incomplete compared with Signet + browser signer support |
+| Documentation drift | older REST-first / JWT-first descriptions still exist in some files and must not be treated as authoritative |
 
 ---
 
-## Related Documentation
+## Recommended reading order
 
-- [nostr-commands.md](nostr-commands.md) — Detailed Bahia command event specifications
-- [event-spec.md](event-spec.md) — Internal event system documentation
-- [api.md](api.md) — REST API reference
+1. `docs/control-planes.md`
+2. `docs/nostr-commands.md`
+3. `docs/event-spec.md`
+4. `docs/api.md`
+5. `docs/relay-sidecar.md`

@@ -1,14 +1,35 @@
-# Bahia API Reference
+# Bahia HTTP API Reference
 
 Base URL: `http://localhost:8080`
 
-All API endpoints (except health checks) are prefixed with `/api/v1`.
+Most API endpoints are mounted under `/api/v1`. Root-level exceptions include `/health`, `/ready`, `/mcp`, and `/v2/*`.
+
+## Important scope note
+
+This document covers Bahia's **HTTP surfaces**.
+
+It does **not** by itself describe the full product interaction model.
+
+Current Bahia behavior is:
+- shared browser state is primarily bootstrapped from `/api/v1/system/info` and relay-backed read models
+- many control-plane writes are published as signed Nostr request events
+- sensitive browser domains use encrypted Nostr request/result events
+- REST remains a narrowed compatibility/query/log surface
+- MCP at `/mcp` and `/api/v1/mcp` is a first-class tooling surface
+
+For the full control-plane contract, see:
+- `docs/control-planes.md`
+- `docs/nostr-commands.md`
+- `docs/event-spec.md`
 
 ## Authentication
 
-Local development can run with `auth.enabled=false`. Production deployments should enable Bahia API auth with `auth.enabled=true`; protected HTTP endpoints then accept only NIP-98 direct HTTP auth via `Authorization: Nostr <base64event>`. `Authorization: Bearer ...` tokens are unsupported and must be rejected with `401`. Adoption/import and direct runtime action routes are privileged operator routes: they are mounted only when their feature flag is enabled and the authenticated NIP-98 principal is allowlisted by subject, pubkey, or email.
+Local development can run with `auth.enabled=false`.
 
-## Health
+When Bahia HTTP auth is enabled:
+- protected HTTP endpoints accept **direct NIP-98** via `Authorization: Nostr <base64event>`
+- `Authorization: Bearer ...` is unsupported and should be rejected with `401`
+- adoption/import and direct runtime action routes are privileged operator routes gated by their feature flags and allowlists
 
 ## Health
 
@@ -17,27 +38,54 @@ Local development can run with `auth.enabled=false`. Production deployments shou
 | GET | `/health` | Health check |
 | GET | `/ready` | Readiness check |
 
-## Services
+## Discovery and tooling bootstrap
+
+### System info
+
+`GET /api/v1/system/info`
+
+Returns discovery/capability metadata used by the browser and tooling, including:
+- registries
+- Nostr relay topology
+- service pubkey
+- core control-plane kind maps
+- runtime / OCI / Blossom metadata
+- feature flags such as `relay_read_models`, `direct_nostr_http_auth`, and `encrypted_nostr_requests`
+
+The `control_plane` payload is currently a core discovery subset. Broader command families such as tool provisioning, public compatibility writes, and the extended 31966–31970 read models are documented in `docs/control-planes.md` and `docs/nostr-commands.md`.
+
+### Native MCP
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/mcp` | Native MCP JSON-RPC endpoint |
+| POST | `/api/v1/mcp` | Alternate native MCP JSON-RPC endpoint |
+
+MCP tool responses may include Nostr correlation metadata so clients can subscribe to async truth on relays rather than polling HTTP for completion.
+
+## Core registry routes
+
+### Services
 
 | Method | Path | Description |
 |--------|------|-------------|
 | POST | `/api/v1/services` | Create a service |
-| GET | `/api/v1/services` | List all services |
+| GET | `/api/v1/services` | List services |
 | GET | `/api/v1/services/{id}` | Get a service |
 | PUT | `/api/v1/services/{id}` | Update a service |
 | DELETE | `/api/v1/services/{id}` | Delete a service |
 
-## Environments
+### Environments
 
 | Method | Path | Description |
 |--------|------|-------------|
 | POST | `/api/v1/environments` | Create an environment |
-| GET | `/api/v1/environments` | List all environments |
+| GET | `/api/v1/environments` | List environments |
 | GET | `/api/v1/environments/{id}` | Get an environment |
 | PUT | `/api/v1/environments/{id}` | Update an environment |
 | DELETE | `/api/v1/environments/{id}` | Delete an environment |
 
-## Builds
+### Builds
 
 | Method | Path | Description |
 |--------|------|-------------|
@@ -46,7 +94,7 @@ Local development can run with `auth.enabled=false`. Production deployments shou
 | PATCH | `/api/v1/builds/{id}/status` | Update build status |
 | GET | `/api/v1/services/{serviceId}/builds` | List builds by service |
 
-## Artifacts
+### Artifacts
 
 | Method | Path | Description |
 |--------|------|-------------|
@@ -54,67 +102,203 @@ Local development can run with `auth.enabled=false`. Production deployments shou
 | GET | `/api/v1/artifacts/{id}` | Get an artifact |
 | GET | `/api/v1/services/{serviceId}/artifacts` | List artifacts by service |
 
-## Deployment Intents
+## Deployment routes
+
+### Deployment intents
 
 | Method | Path | Description |
 |--------|------|-------------|
-| POST | `/api/v1/deployments/intents` | Create a deployment intent |
-| GET | `/api/v1/deployments/intents/{id}` | Get a deployment intent |
-| POST | `/api/v1/deployments/intents/{id}/approve` | Approve an intent |
-| POST | `/api/v1/deployments/intents/{id}/reject` | Reject an intent |
+| POST | `/api/v1/deployments/intents` | Create deployment intent |
+| GET | `/api/v1/deployments/intents/{id}` | Get deployment intent |
+| POST | `/api/v1/deployments/intents/{id}/approve` | Approve intent |
+| POST | `/api/v1/deployments/intents/{id}/reject` | Reject intent |
 | GET | `/api/v1/services/{serviceId}/environments/{envId}/intents` | List intents |
 
-## Deployment Runs
+### Deployment runs
 
 | Method | Path | Description |
 |--------|------|-------------|
-| POST | `/api/v1/deployments/runs` | Create a deployment run |
-| GET | `/api/v1/deployments/runs/{id}` | Get a deployment run |
-| POST | `/api/v1/deployments/runs/{id}/complete` | Complete a run |
+| POST | `/api/v1/deployments/runs` | Create deployment run |
+| GET | `/api/v1/deployments/runs/{id}` | Get deployment run |
+| POST | `/api/v1/deployments/runs/{id}/complete` | Complete a deployment run |
 | GET | `/api/v1/deployments/intents/{intentId}/runs` | List runs by intent |
+| GET | `/api/v1/deployments/runs/{id}/logs` | Stored run logs |
 
-## Rollback
-
-| Method | Path | Description |
-|--------|------|-------------|
-| POST | `/api/v1/rollback` | Create a rollback intent |
-
-## State & Observations
+### Rollback
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/api/v1/state` | List all states |
-| GET | `/api/v1/state/drifted` | List drifted states |
-| GET | `/api/v1/environments/{envId}/state` | List states by environment |
-| GET | `/api/v1/services/{serviceId}/environments/{envId}/state` | Get specific state |
-| POST | `/api/v1/observations` | Record a runtime observation |
+| POST | `/api/v1/rollback` | Create rollback intent |
 
-## Adoption / Import (operator only)
-
-These routes are disabled unless `adoption.enabled=true`. They require NIP-98 HTTP auth when API auth is enabled and the adoption operator allowlist.
+## State and observations
 
 | Method | Path | Description |
 |--------|------|-------------|
-| POST | `/api/v1/adoption/scan` | Dry-run discovery of configured Docker endpoint aliases |
+| GET | `/api/v1/state` | List all state |
+| GET | `/api/v1/state/drifted` | List drifted state |
+| GET | `/api/v1/environments/{envId}/state` | List state by environment |
+| GET | `/api/v1/services/{serviceId}/environments/{envId}/state` | Get state for one service/environment |
+| POST | `/api/v1/observations` | Record runtime observation |
+| GET | `/api/v1/services/{id}/environments/{envId}/logs?follow=true` | Live log stream |
+
+## Repository / worker / policy / payment routes
+
+### Repository CI lookup
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/api/v1/repositories/ci/lookup` | Lookup CI/provider metadata for repositories |
+
+### Workers
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/v1/workers` | List workers |
+| GET | `/api/v1/workers/{pubkey}` | Get worker |
+| GET | `/api/v1/workers/{pubkey}/pricing` | Get worker pricing |
+
+### Policies
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/v1/policies` | List policies |
+| GET | `/api/v1/policies/{id}` | Get policy |
+| POST | `/api/v1/policies` | Create policy |
+| PUT | `/api/v1/policies/{id}` | Update policy |
+| DELETE | `/api/v1/policies/{id}` | Delete policy |
+| POST | `/api/v1/policies/evaluate` | Evaluate policy |
+
+### Payments
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/api/v1/payments/estimate` | Estimate run cost |
+| GET | `/api/v1/deployments/runs/{id}/cost` | Get run cost |
+| GET | `/api/v1/payments/history` | Get payment history |
+
+## SBOM / signatures / secrets / notifications
+
+### SBOM
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/v1/artifacts/{id}/sbom` | Get SBOM |
+| GET | `/api/v1/artifacts/{id}/sbom/packages` | Get SBOM packages |
+| GET | `/api/v1/sbom/search` | Search SBOM packages |
+| POST | `/api/v1/artifacts/{id}/sbom` | Ingest SBOM |
+
+### Signatures
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/v1/artifacts/{id}/signatures` | List signatures |
+| GET | `/api/v1/artifacts/{id}/signatures/verified` | List verified signatures |
+| GET | `/api/v1/artifacts/{id}/signatures/check` | Check whether verified signatures exist |
+| GET | `/api/v1/signatures/{id}` | Get signature record |
+| POST | `/api/v1/artifacts/{id}/signatures/verify` | Verify signatures |
+
+### Secrets
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/v1/services/{id}/secrets` | List secrets for service |
+| POST | `/api/v1/services/{id}/secrets` | Create secret |
+| PUT | `/api/v1/services/{id}/secrets/{secretId}` | Update secret |
+| DELETE | `/api/v1/services/{id}/secrets/{secretId}` | Delete secret |
+
+### Notifications
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/v1/notifications/channels` | List channels |
+| GET | `/api/v1/notifications/channels/{id}` | Get channel |
+| POST | `/api/v1/notifications/channels` | Create channel |
+| PUT | `/api/v1/notifications/channels/{id}` | Update channel |
+| DELETE | `/api/v1/notifications/channels/{id}` | Delete channel |
+| POST | `/api/v1/notifications/channels/{id}/test` | Send test notification |
+| GET | `/api/v1/notifications/log` | List notification logs |
+
+## Organization routes
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/v1/orgs` | List organizations visible to caller |
+| GET | `/api/v1/orgs/{id}` | Get organization |
+| GET | `/api/v1/orgs/{id}/members` | List members |
+| GET | `/api/v1/orgs/{id}/invites` | List invites |
+| GET | `/api/v1/me/invites` | List caller invites |
+| POST | `/api/v1/orgs` | Create organization |
+| PUT | `/api/v1/orgs/{id}` | Update organization |
+| DELETE | `/api/v1/orgs/{id}` | Delete organization |
+| POST | `/api/v1/orgs/{id}/members` | Add member |
+| PUT | `/api/v1/orgs/{id}/members/{pubkey}` | Update member role |
+| DELETE | `/api/v1/orgs/{id}/members/{pubkey}` | Remove member |
+| POST | `/api/v1/orgs/{id}/invites` | Create invite |
+| DELETE | `/api/v1/orgs/{id}/invites/{inviteId}` | Revoke invite |
+
+## LLM routes
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/v1/llm/routes` | List LLM routes |
+| GET | `/api/v1/llm/routes/{id}` | Get route |
+| POST | `/api/v1/llm/routes` | Create route |
+| PUT | `/api/v1/llm/routes/{id}` | Update route |
+| POST | `/api/v1/llm/routes/{routeId}/releases` | Create release |
+| GET | `/api/v1/llm/routes/{routeId}/releases` | List releases |
+| GET | `/api/v1/llm/releases/{id}` | Get release |
+| GET | `/api/v1/llm/intents/{id}` | Get intent |
+| GET | `/api/v1/llm/routes/{routeId}/environments/{envId}/intents` | List intents |
+| GET | `/api/v1/llm/runs/{id}` | Get run |
+| GET | `/api/v1/llm/intents/{intentId}/runs` | List runs |
+| GET | `/api/v1/llm/state` | List LLM state |
+| GET | `/api/v1/llm/state/drifted` | List drifted LLM state |
+| GET | `/api/v1/llm/environments/{envId}/state` | List LLM state by environment |
+| GET | `/api/v1/llm/routes/{routeId}/environments/{envId}/state` | Get LLM route state |
+
+Operational REST endpoints may also be mounted for LLM deploy/approve/reject/rollback/host registration when `llm.allow_operational_rest=true`.
+
+## Adoption / import (operator only)
+
+These routes are disabled unless `adoption.enabled=true`.
+
+They require NIP-98 HTTP auth when API auth is enabled and the adoption operator allowlist.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/api/v1/adoption/scan` | Dry-run discovery of configured runtime endpoint aliases |
 | POST | `/api/v1/adoption/import` | Import selected or all discovered candidates |
 
-Use `endpoint_ref` targets for production. `docker_host` targets are accepted only when raw-host compatibility mode is enabled. Scan/import responses include safe environment and label fields plus `redacted_environment_keys` and `redacted_label_keys`; redacted values are never returned.
+Use `endpoint_ref` targets for production. `docker_host` targets are accepted only when raw-host compatibility mode is enabled.
 
-## Direct Runtime Actions (operator only)
+## Direct runtime actions (operator only)
 
-These routes are disabled unless `direct_runtime_actions.enabled=true`. They require NIP-98 HTTP auth when API auth is enabled and the direct-runtime operator allowlist. Actions are limited to adopted `direct_runtime` workloads.
+These routes are disabled unless `direct_runtime_actions.enabled=true`.
+
+They require NIP-98 HTTP auth when API auth is enabled and the direct-runtime operator allowlist. Actions are limited to adopted `direct_runtime` workloads.
 
 | Method | Path | Description |
 |--------|------|-------------|
 | POST | `/api/v1/services/{serviceId}/environments/{envId}/deploy` | Deploy the desired or explicit artifact directly through the runtime |
-| POST | `/api/v1/services/{serviceId}/environments/{envId}/restart` | Restart an adopted runtime target |
-| POST | `/api/v1/services/{serviceId}/environments/{envId}/stop` | Stop an adopted runtime target |
+| POST | `/api/v1/services/{serviceId}/environments/{envId}/restart` | Restart adopted runtime target |
+| POST | `/api/v1/services/{serviceId}/environments/{envId}/stop` | Stop adopted runtime target |
 
-Operational limits are separate from the generic write limiter: scan 5/min/IP, import 10/min/IP, direct runtime actions 20/min/IP. Metrics are exported on `/metrics` when telemetry is enabled; if API auth is enabled, `/metrics` requires the same NIP-98-only auth middleware and rejects Bearer tokens.
+Operational limits are separate from the generic write limiter: scan 5/min/IP, import 10/min/IP, direct runtime actions 20/min/IP.
 
-## OCI Registry (Distribution API v2)
+## Sensitive browser flows that may not use REST even when REST routes exist
 
-The OCI registry endpoints are mounted at `/v2` (outside `/api/v1`) and implement the [OCI Distribution Spec](https://github.com/opencontainers/distribution-spec).
+The following domains are important examples where the first-party web app may prefer encrypted Nostr request/result flows over REST, despite compatible HTTP routes existing:
+- notifications
+- payments history
+- organizations / invites / membership operations
+- service secrets
+- deployment run logs and artifact signature verification
+
+Use `docs/control-planes.md` as the source of truth for those transport choices.
+
+## OCI registry (Distribution API v2)
+
+The OCI registry endpoints are mounted at `/v2` and implement the OCI Distribution Spec.
 
 ### Authentication
 
@@ -122,7 +306,7 @@ The OCI registry endpoints are mounted at `/v2` (outside `/api/v1`) and implemen
 |--------|-------------|
 | NIP-98 | Nostr-signed HTTP auth for push operations |
 | Basic Auth | Service account credentials |
-| Anonymous | Pull from allowed CIDRs (internal network) |
+| Anonymous | Pull from allowed CIDRs |
 
 ### Endpoints
 
@@ -140,20 +324,9 @@ The OCI registry endpoints are mounted at `/v2` (outside `/api/v1`) and implemen
 | GET | `/v2/{name}/tags/list` | List tags |
 | GET | `/v2/{name}/referrers/{digest}` | List referrers |
 
-### Usage
+## Response format
 
-```bash
-# Push with docker (requires auth)
-docker tag myapp:latest registry.sharegap.net/cascadia/myapp:v1.0.0
-docker push registry.sharegap.net/cascadia/myapp:v1.0.0
-
-# Pull (anonymous from internal network)
-docker pull registry.sharegap.net/cascadia/myapp:v1.0.0
-```
-
-## Response Format
-
-All responses follow this format:
+Most REST responses use a Bahia envelope:
 
 ```json
 {
@@ -163,7 +336,7 @@ All responses follow this format:
 }
 ```
 
-List responses include pagination:
+List responses may include pagination metadata:
 
 ```json
 {

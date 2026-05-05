@@ -20,7 +20,7 @@ Removed legacy surfaces:
 
 > **Base paths**: `/mcp` and `/api/v1/mcp`
 
-MCP clients use JSON-RPC 2.0 over HTTP. Tool implementations are backed by `internal/mcp/server.go`; long-running tool results include Nostr correlation metadata (`request_event_id`, `request_kind`, `service_id`, `route_id`, `release_id`, `environment_id`, `intent_id`, `run_id`, status/result/read-model kinds) so agents can follow async truth on the relay. `/api/v1/system/info` advertises the same contract under `control_plane` for clients that need kind discovery before subscribing.
+MCP clients use JSON-RPC 2.0 over HTTP. Tool implementations are backed by `internal/mcp/server.go`; long-running tool results include Nostr correlation metadata (`request_event_id`, `request_kind`, `service_id`, `route_id`, `release_id`, `environment_id`, `intent_id`, `run_id`, status/result/read-model kinds) so agents can follow async truth on the relay. `/api/v1/system/info` advertises core `control_plane` discovery metadata for clients that need bootstrap information before subscribing; broader command families are documented here and in `docs/nostr-commands.md`.
 
 Example:
 
@@ -70,7 +70,9 @@ The Nostr reactor subscribes to signed request events and publishes status, term
 |--------|-------|---------|
 | Service requests | 5961–5968 | Inbound service/environment operation requests |
 | LLM requests | 5971–5975 | Inbound LLM route/release/deploy/approval/rollback requests |
+| Tool provisioning loop | 5976, 5977, 6976, 7976, 7977 | Agent request, Bahia→operator approval handoff, progress, final result, and operator approval response |
 | Adoption requests | 5978–5979 | Inbound adoption scan/import operator requests |
+| Public compatibility writes | 5981–5989 | Public signed service/environment/artifact/policy write operations |
 | Encrypted requests | 5980 | Browser → Bahia encrypted request-domain request |
 | Service/action status | 6961–6963 | Service deployment/action progress/status updates |
 | LLM status | 6973 | LLM deployment/rollback progress updates |
@@ -79,7 +81,7 @@ The Nostr reactor subscribes to signed request events and publishes status, term
 | LLM results | 7971–7973 | LLM route/release/deployment terminal results |
 | Adoption results | 7978–7979 | Adoption scan/import terminal results |
 | Encrypted results | 7980 | Bahia → Browser encrypted request-domain result |
-| Registry/read models | 31961–31965 | Replaceable browser/agent read models |
+| Registry/read models | 31961–31970 | Replaceable browser/agent read models |
 
 ### Request Events (596x)
 
@@ -98,8 +100,19 @@ The Nostr reactor subscribes to signed request events and publishes status, term
 | 5973 | `LLMDeployRequest` | Request LLM route deployment |
 | 5974 | `LLMDeploymentApproval` | Approve/reject an LLM deployment intent |
 | 5975 | `LLMRollbackRequest` | Request LLM route rollback |
+| 5976 | `ToolProvisionRequest` | Agent → Bahia tool provisioning workflow request |
+| 5977 | `ToolApprovalRequest` | Bahia → operator approval handoff event for tool provisioning |
 | 5978 | `AdoptionScanRequest` | Request adoption previews for managed endpoint targets |
 | 5979 | `AdoptionImportRequest` | Request adoption import for managed endpoint targets |
+| 5981 | `ServiceUpdate` | Update a service registry entry |
+| 5982 | `ServiceDelete` | Delete a service registry entry |
+| 5983 | `EnvironmentUpdate` | Update an environment registry entry |
+| 5984 | `EnvironmentDelete` | Delete an environment registry entry |
+| 5985 | `ArtifactRegister` | Register an artifact |
+| 5986 | `PolicyCreate` | Create a deployment policy |
+| 5987 | `PolicyUpdate` | Update a deployment policy |
+| 5988 | `PolicyDelete` | Delete a deployment policy |
+| 5989 | `PolicyEvaluate` | Evaluate deployment policies |
 
 ### Status and Result Events
 
@@ -109,6 +122,7 @@ The Nostr reactor subscribes to signed request events and publishes status, term
 | 6962 | `ServiceStatus` | Service health/state updates |
 | 6963 | `ActionStatus` | Direct-runtime service action progress |
 | 6973 | `LLMDeploymentStatus` | LLM deployment/rollback progress |
+| 6976 | `ToolProvisionStatus` | Tool provisioning progress |
 | 6978 | `AdoptionStatus` | Adoption scan/import progress |
 | 7961 | `DeploymentResult` | Service deployment terminal result |
 | 7962 | `ActionResult` | Service action terminal result |
@@ -119,6 +133,8 @@ The Nostr reactor subscribes to signed request events and publishes status, term
 | 7971 | `LLMRouteCreateResult` | LLM route creation terminal result |
 | 7972 | `LLMReleaseRegisterResult` | LLM release registration terminal result |
 | 7973 | `LLMDeploymentResult` | LLM deploy/approval/rollback terminal result |
+| 7976 | `ToolProvisionResult` | Tool provisioning terminal result |
+| 7977 | `ToolApprovalResponse` | Operator → Bahia approval response for tool provisioning |
 | 7978 | `AdoptionScanResult` | Adoption scan terminal result |
 | 7979 | `AdoptionImportResult` | Adoption import terminal result |
 
@@ -131,6 +147,11 @@ The Nostr reactor subscribes to signed request events and publishes status, term
 | 31963 | `EnvironmentRegistry` | `environment_id` | Environment registry entry |
 | 31964 | `LLMRouteRegistry` | `route_id` | LLM route registry entry |
 | 31965 | `LLMRouteState` | `route_id:environment_id` | Current desired/observed LLM route state |
+| 31966 | `ArtifactRegistry` | `artifact_id` | Artifact registry entry |
+| 31967 | `DeploymentIntentRegistry` | `intent_id` | Deployment intent registry entry |
+| 31968 | `DeploymentRunRegistry` | `run_id` | Deployment run registry entry |
+| 31969 | `BuildRegistry` | `build_id` | Build registry entry |
+| 31970 | `PolicyRegistry` | `policy_id` | Policy registry entry |
 
 ### Signer-First Operator Actions
 

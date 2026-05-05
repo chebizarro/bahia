@@ -1,6 +1,6 @@
 # Bahia Nostr Control-Plane Events
 
-Bahia's supported Nostr command contract is the canonical 596x request series handled by `internal/controlplane/reactor.go`. The browser and agents observe status/results/read models from the sidecar relay; they do not use SSE or request/response polling.
+Bahia's supported Nostr control-plane contract is the canonical 596x/597x/598x public event surface handled by `internal/controlplane/reactor.go`, together with the related 696x/796x status-result kinds and 3196x read models. The browser and agents observe status/results/read models from the sidecar relay; they do not use SSE or request/response polling.
 
 ## Canonical Kind Families
 
@@ -8,11 +8,18 @@ Bahia's supported Nostr command contract is the canonical 596x request series ha
 |--------|-------|-----------|---------|
 | Service requests | 5961–5968 | inbound | Service/environment operator commands |
 | LLM requests | 5971–5975 | inbound | LLM route/release/deploy/approval/rollback commands |
-| Service status | 6961–6962 | outbound | Service progress updates |
+| Tool provisioning / approval loop | 5976, 5977, 6976, 7976, 7977 | mixed | Agent request, Bahia→operator approval handoff, progress, final result, and operator response |
+| Adoption requests | 5978–5979 | inbound | Adoption/import operator commands |
+| Public compatibility writes | 5981–5989 | inbound | Service/environment update-delete, artifact register, and policy commands |
+| Encrypted requests | 5980 | inbound | Encrypted browser request envelope |
+| Service status | 6961–6963 | outbound | Service/action progress updates |
 | LLM status | 6973 | outbound | LLM deployment/rollback progress updates |
+| Adoption status | 6978 | outbound | Adoption progress |
 | Service results | 7961–7966 | outbound | Service terminal operation results |
 | LLM results | 7971–7973 | outbound | LLM route/release/deployment terminal results |
-| Read models | 31961–31965 | outbound replaceable | Current browser/agent state |
+| Adoption results | 7978–7979 | outbound | Adoption terminal results |
+| Encrypted results | 7980 | outbound | Encrypted browser terminal result envelope |
+| Read models | 31961–31970 | outbound replaceable | Current browser/agent state |
 | Audit/activity | 31000–31099 | outbound append-only | Recent activity feed |
 
 ## Request Kinds
@@ -32,8 +39,22 @@ Bahia's supported Nostr command contract is the canonical 596x request series ha
 | 5973 | `LLMDeployRequest` | Deploy an LLM release to an environment |
 | 5974 | `LLMDeploymentApproval` | Approve or reject an LLM deployment intent |
 | 5975 | `LLMRollbackRequest` | Roll back an LLM route/environment |
+| 5976 | `ToolProvisionRequest` | Agent → Bahia tool provisioning workflow request |
+| 5977 | `ToolApprovalRequest` | Bahia → operator approval handoff event for tool provisioning |
+| 5978 | `AdoptionScanRequest` | Request adoption scan previews |
+| 5979 | `AdoptionImportRequest` | Request adoption import |
+| 5980 | `EncryptedRequest` | Encrypted browser request envelope |
+| 5981 | `ServiceUpdate` | Update a service registry entry |
+| 5982 | `ServiceDelete` | Delete a service registry entry |
+| 5983 | `EnvironmentUpdate` | Update an environment registry entry |
+| 5984 | `EnvironmentDelete` | Delete an environment registry entry |
+| 5985 | `ArtifactRegister` | Register an artifact |
+| 5986 | `PolicyCreate` | Create a deployment policy |
+| 5987 | `PolicyUpdate` | Update a deployment policy |
+| 5988 | `PolicyDelete` | Delete a deployment policy |
+| 5989 | `PolicyEvaluate` | Evaluate a deployment policy |
 
-All inbound requests must be valid signed Nostr events from an authorized pubkey. The sidecar verifies event ID/signature/timestamp and accepts request kinds only from `nostr.authorized_pubkeys`; Bahia services remain the final authority for business authorization.
+Public inbound operator-authored events must be valid signed Nostr events from an authorized pubkey. That includes the normal request/write families (`5961`-`5968`, `5971`-`5976`, `5978`-`5979`, `5981`-`5989`) plus the operator-authored `7977` tool approval response. `5977` is Bahia-authored outbound, not an inbound operator request. `5980` encrypted requests must be sent only to encrypted-request relays, not to the public sidecar. Bahia services remain the final authority for business authorization after relay-side validation.
 
 ## Common Tags
 
@@ -145,8 +166,19 @@ MCP LLM tools publish these canonical request events and return `request_event_i
 | 31963 | `environment_id` | Environment registry entry |
 | 31964 | `route_id` | LLM route registry entry |
 | 31965 | `route_id:environment_id` | Current LLM route state in an environment |
+| 31966 | `artifact_id` | Artifact registry entry |
+| 31967 | `intent_id` | Deployment intent registry entry |
+| 31968 | `run_id` | Deployment run registry entry |
+| 31969 | `build_id` | Build registry entry |
+| 31970 | `policy_id` | Policy registry entry |
 
 Read-model events are Bahia-signed projections from the database. Clients should query them, wait for EOSE, then keep the live subscription open. Latest `created_at` wins for each `(kind, pubkey, d-tag)` key. Deletions use tombstones (`deleted=true`) rather than relying on Nostr delete events.
+
+`7977` is not a normal Bahia result event. It is the operator's signed response back to Bahia after a prior `5977` approval handoff.
+
+## Encrypted request/result note
+
+Kind `5980` requests and kind `7980` results are used for sensitive browser-facing operations such as notifications, org/member flows, payments history, secrets, and selected log/signature actions. These requests should be sent only to encrypted-request relays, not to the public relay sidecar.
 
 ## Legacy 311xx Bridge
 
