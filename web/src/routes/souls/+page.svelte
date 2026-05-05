@@ -2,35 +2,25 @@
   import SoulCard from '$lib/components/SoulCard.svelte';
   import Card from '$lib/components/Card.svelte';
   import { nostr } from '$lib/nostr/client.js';
-  import { 
-    souls, 
-    soulCounts, 
-    loading, 
+  import {
+    emptyStateMessage,
+    filterSouls,
+    SOUL_STATUS_FILTERS
+  } from './page-model.js';
+  import {
+    souls,
+    soulCounts,
+    loading,
     error,
-    loadSouls, 
+    loadSouls,
     subscribeToSoulUpdates,
     unsubscribeFromSoulUpdates
   } from '$lib/stores/souls.js';
-  
+
   let filter = $state('all');
   let search = $state('');
-  
-  let filteredSouls = $derived(souls.filter(soul => {
-    // Status filter
-    if (filter !== 'all' && soul.status !== filter) return false;
-    
-    // Search filter
-    if (search) {
-      const q = search.toLowerCase();
-      return (
-        soul.name?.toLowerCase().includes(q) ||
-        soul.agentId?.toLowerCase().includes(q) ||
-        soul.purpose?.toLowerCase().includes(q)
-      );
-    }
-    
-    return true;
-  }));
+
+  let filteredSouls = $derived(filterSouls(souls, filter, search));
   
   $effect(() => {
     let cancelled = false;
@@ -79,34 +69,15 @@
   <!-- Filters -->
   <div class="filters">
     <div class="filter-tabs">
-      <button 
-        class="filter-tab" 
-        class:active={filter === 'all'} 
-        onclick={() => filter = 'all'}
-      >
-        All
-      </button>
-      <button 
-        class="filter-tab" 
-        class:active={filter === 'active'} 
-        onclick={() => filter = 'active'}
-      >
-        Active
-      </button>
-      <button 
-        class="filter-tab" 
-        class:active={filter === 'provisioning'} 
-        onclick={() => filter = 'provisioning'}
-      >
-        Provisioning
-      </button>
-      <button 
-        class="filter-tab" 
-        class:active={filter === 'suspended'} 
-        onclick={() => filter = 'suspended'}
-      >
-        Suspended
-      </button>
+      {#each SOUL_STATUS_FILTERS as option}
+        <button
+          class="filter-tab"
+          class:active={filter === option.value}
+          onclick={() => filter = option.value}
+        >
+          {option.label}
+        </button>
+      {/each}
     </div>
     
     <div class="search-box">
@@ -136,15 +107,7 @@
     <div class="empty-state">
       <div class="empty-icon">🤖</div>
       <h3>No souls found</h3>
-      <p>
-        {#if search}
-          No souls match your search. Try a different query.
-        {:else if filter !== 'all'}
-          No souls with status "{filter}".
-        {:else}
-          Get started by creating your first agent soul.
-        {/if}
-      </p>
+      <p>{emptyStateMessage(filter, search)}</p>
       {#if !search && filter === 'all'}
         <a href="/souls/new" class="btn-primary">Create Soul</a>
       {/if}

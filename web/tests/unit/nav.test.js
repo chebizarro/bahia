@@ -2,8 +2,11 @@ import { describe, it, expect } from 'vitest';
 import { NAV_LINKS, authPresentation, isActiveNavLink, truncatePubkey } from '../../src/lib/components/nav-model.js';
 
 describe('nav model helpers', () => {
-  it('includes the dedicated LLM link and computes active states correctly', () => {
+  it('includes the Souls and LLM links and computes active states correctly', () => {
+    expect(NAV_LINKS).toContainEqual({ href: '/souls', label: 'Souls' });
     expect(NAV_LINKS).toContainEqual({ href: '/llm', label: 'LLM' });
+    expect(isActiveNavLink('/souls', '/souls')).toBe(true);
+    expect(isActiveNavLink('/souls/new', '/souls')).toBe(true);
     expect(isActiveNavLink('/llm', '/llm')).toBe(true);
     expect(isActiveNavLink('/llm/history', '/llm')).toBe(true);
     expect(isActiveNavLink('/deployments', '/deployments')).toBe(true);

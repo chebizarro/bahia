@@ -1,4 +1,4 @@
-.PHONY: build run test lint clean migrate docker docker-compose
+.PHONY: build run test lint clean migrate docker docker-compose pstf-soulfactory-coverage
 
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 LDFLAGS := -ldflags "-X github.com/openagentsinc/bahia/internal/api/router.Version=$(VERSION)"
@@ -29,6 +29,12 @@ test-short:
 test-coverage:
 	go test ./... -coverprofile=coverage.out -count=1
 	go tool cover -html=coverage.out -o coverage.html
+
+pstf-soulfactory-coverage:
+	mkdir -p pstf/features/SOUL_FACTORY_PROVISIONING_TRACKING/coverage
+	go test ./internal/soulfactory ./cmd/cli -coverprofile=pstf/features/SOUL_FACTORY_PROVISIONING_TRACKING/coverage/go_coverage.out -count=1
+	go tool cover -func=pstf/features/SOUL_FACTORY_PROVISIONING_TRACKING/coverage/go_coverage.out > pstf/features/SOUL_FACTORY_PROVISIONING_TRACKING/coverage/go_coverage_summary.txt
+	cd web && npm run test:unit:coverage:soulfactory
 
 # Lint
 lint:

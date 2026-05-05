@@ -7,8 +7,15 @@ describe('route access', () => {
     delete window.__BAHIA_E2E_ROUTE_COMPAT_REQUIREMENTS;
   });
 
-  it('marks /llm as a protected route', () => {
+  it('marks /souls and /llm as protected routes', () => {
+    expect(routeAccessConfig.protectedPrefixes).toContain('/souls');
     expect(routeAccessConfig.protectedPrefixes).toContain('/llm');
+    expect(getRouteAccess('/souls')).toMatchObject({
+      pathname: '/souls',
+      protectedRoute: true,
+      requiredRoles: [],
+      requiresRestCompatibility: false
+    });
     expect(getRouteAccess('/llm')).toMatchObject({
       pathname: '/llm',
       protectedRoute: true,
@@ -18,6 +25,13 @@ describe('route access', () => {
   });
 
   it('denies protected routes to unauthenticated users and allows public routes', () => {
+    expect(canAccessRoute({ pathname: '/souls', authState: {}, isAuthenticated: false })).toMatchObject({
+      protectedRoute: true,
+      authorized: false,
+      roleAuthorized: false,
+      compatibilityAuthorized: false
+    });
+
     expect(canAccessRoute({ pathname: '/llm', authState: {}, isAuthenticated: false })).toMatchObject({
       protectedRoute: true,
       authorized: false,

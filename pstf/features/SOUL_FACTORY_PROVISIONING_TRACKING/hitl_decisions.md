@@ -6,7 +6,7 @@
 - Framework: PSTF
 - Interaction Mode: RepoPrompt ask-user tool
 - Current Stage: human_review
-- Last Updated: 2026-05-05T06:28:05Z
+- Last Updated: 2026-05-05T06:37:39Z
 
 ---
 
@@ -263,7 +263,7 @@ APPROVE_AS_IS
 **Stage:** human_review
 **Agent:** HITL Review Agent
 **Decision Type:** release_approval
-**Status:** active
+**Status:** superseded
 
 **Context Summary:**
 `SOUL_FACTORY_PROVISIONING_TRACKING` is behaviorally verified against the approved contract: all 14 acceptance criteria are verified and all 18 mapped tests pass. The remaining gate gap is evidence quality rather than product behavior. The confidence report scores the slice at 0.84 instead of the 0.90 threshold because no touched-module coverage artifact exists, and adversarial review surfaced that gap as the only major release concern.
@@ -294,20 +294,61 @@ NEEDS_WORK
 - Confidence / Release: blocks approval — the feature remains below the default 0.90 confidence threshold and is not approved for release at this gate
 
 **Required Follow-Up Actions:**
-- [ ] Generate touched-module coverage artifacts for the Soul Factory backend and web suites.
-- [ ] Re-run confidence scoring after coverage evidence exists.
-- [ ] Repeat HITL release review once the confidence gate is re-evaluated.
+- [x] Generate touched-module coverage artifacts for the Soul Factory backend and web suites.
+- [x] Re-run confidence scoring after coverage evidence exists.
+- [x] Repeat HITL release review once the confidence gate is re-evaluated.
+
+---
+
+### Decision HITL-SOUL_FACTORY_PROVISIONING_TRACKING-008 — Final release approval after coverage remediation
+
+**Stage:** human_review
+**Agent:** HITL Review Agent
+**Decision Type:** release_approval
+**Status:** active
+
+**Context Summary:**
+`SOUL_FACTORY_PROVISIONING_TRACKING` remained behaviorally verified after the coverage-focused refactor: all 14 acceptance criteria are verified, all 18 mapped tests still pass, `make pstf-soulfactory-coverage` now generates durable backend and browser coverage artifacts, and the regenerated confidence report scores the slice at 0.93. The only remaining open items are minor non-blocking follow-ups for zero-valued stat rendering and missing PSTF schemas.
+
+**Question Asked:**
+What is the final release decision for `SOUL_FACTORY_PROVISIONING_TRACKING` now that coverage evidence exists?
+
+**Options Presented:**
+- A) APPROVED
+- B) APPROVED_WITH_RISK
+- C) NEEDS_WORK
+- D) DEFERRED
+- E) REJECTED
+
+**User Selection:**
+APPROVED
+
+**User Notes:**
+None.
+
+**Decision:**
+APPROVED
+
+**Impact:**
+- Feature Spec: none
+- Acceptance Criteria: none
+- Tests: updated — reproducible backend/browser coverage commands and artifacts now exist for the approved slice
+- Defects: none — there are no open PSTF defects for this feature
+- Confidence / Release: enables approval — confidence now exceeds the default 0.90 threshold and the feature is explicitly approved for release
+
+**Required Follow-Up Actions:**
+- [ ] Keep minor non-blocking follow-ups (`bahia-ijo8`, `bahia-x0hs`) tracked separately from this approved slice.
 
 ---
 
 ## Summary
 
-- Final Status: NEEDS_WORK
+- Final Status: APPROVED
 - Open Questions: 0
 - Accepted Risks: 0
 - Deferred Items: 0
-- Blocking Issues: 1 — missing touched-module coverage evidence keeps confidence below threshold and blocks release approval
-- Superseded Decisions: 0
+- Blocking Issues: 0
+- Superseded Decisions: 1 — HITL-SOUL_FACTORY_PROVISIONING_TRACKING-007
 
 ## Traceability
 
@@ -319,4 +360,5 @@ NEEDS_WORK
 | HITL-SOUL_FACTORY_PROVISIONING_TRACKING-004 | SFTP-AC-013, SFTP-AC-014 | future matrix | future defects | acceptance_criteria.json | Approved high-level event-driven ACs without replacement-detail invention. |
 | HITL-SOUL_FACTORY_PROVISIONING_TRACKING-005 | SFTP-AC-007, SFTP-AC-009 | future matrix | future defects | acceptance_criteria.json | Bahia integration remains strict must-have behavior. |
 | HITL-SOUL_FACTORY_PROVISIONING_TRACKING-006 | whole AC set | future matrix | future defects | acceptance_criteria.json | AC artifact approved as written. |
-| HITL-SOUL_FACTORY_PROVISIONING_TRACKING-007 | none | coverage follow-up for existing matrix | none | confidence_report.json, hitl_decisions.md | Final release decision = NEEDS_WORK until coverage evidence exists. |
+| HITL-SOUL_FACTORY_PROVISIONING_TRACKING-007 | none | coverage follow-up for existing matrix | none | confidence_report.json, hitl_decisions.md | Superseded after coverage artifacts landed; initial release decision was NEEDS_WORK. |
+| HITL-SOUL_FACTORY_PROVISIONING_TRACKING-008 | none | coverage artifacts for existing matrix | none | confidence_report.json, hitl_decisions.md | Final release decision = APPROVED after confidence reached 0.93. |

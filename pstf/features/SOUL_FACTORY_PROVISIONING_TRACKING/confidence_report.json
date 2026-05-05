@@ -1,77 +1,77 @@
 {
   "feature_id": "SOUL_FACTORY_PROVISIONING_TRACKING",
-  "status": "needs_more_tests",
+  "status": "approved",
   "threshold": 0.9,
-  "raw_confidence": 0.84,
-  "confidence": 0.84,
-  "threshold_met": false,
+  "raw_confidence": 0.93,
+  "confidence": 0.93,
+  "threshold_met": true,
   "weights_total": 1.0,
   "components": {
     "acceptance_criteria_coverage": {
       "score": 1.0,
       "weight": 0.3,
+      "weighted_score": 0.3,
       "evidence": [
         "All 14 approved must-level acceptance criteria in `acceptance_criteria.json` have at least one linked test in `test_matrix.json`.",
-        "`test_matrix.json` now shows 18/18 mapped tests passing, with no remaining criteria gaps."
-      ],
-      "weighted_score": 0.3
+        "`test_matrix.json` now shows all 18 mapped tests passing, with no remaining criteria gaps."
+      ]
     },
     "test_pass_rate": {
       "score": 1.0,
       "weight": 0.25,
+      "weighted_score": 0.25,
       "evidence": [
         "All 18 executed required tests in `test_matrix.json` are marked `pass`.",
-        "`verification_report.md` records passing Go suites, passing Souls store unit coverage, passing focused Playwright browser journeys, and a passing production web build."
-      ],
-      "weighted_score": 0.25
+        "`verification_report.md` records passing Go suites, passing Souls store/browser unit suites, passing focused Playwright browser journeys, and a passing production web build."
+      ]
     },
     "code_coverage": {
-      "score": 0.0,
+      "score": 0.6,
       "weight": 0.15,
+      "weighted_score": 0.09,
       "evidence": [
-        "No module coverage artifact exists for this feature slice under `pstf/features/SOUL_FACTORY_PROVISIONING_TRACKING/coverage/` or an equivalent location.",
-        "The repository contains focused execution evidence and a passing build, but the confidence model treats missing coverage evidence as `0.0` unless a human exception is recorded."
-      ],
-      "weighted_score": 0.0
+        "Backend coverage artifact `pstf/features/SOUL_FACTORY_PROVISIONING_TRACKING/coverage/go_coverage.out` exists, with `go_coverage_summary.txt` showing directly touched Soul Factory backend and CLI functions in the ~61%-100% range for core flows such as `CreateInitialDeployment`, `SyncSoulStatus`, `HandleAction`, `ProvisionFull`, `handleProvisioningRequest`, `HandleEvent`, and the signer-first Soul CLI commands. Some helper and unexecuted branches still remain at 0.0%.",
+        "Frontend coverage artifact `pstf/features/SOUL_FACTORY_PROVISIONING_TRACKING/coverage/web/coverage-summary.json` exists and reports 85.38% statements / 87.66% lines across the focused browser logic modules `route-access.js`, `nav-model.js`, `souls.svelte.js`, and `src/routes/souls/page-model.js`.",
+        "This score is intentionally conservative at 0.6 rather than 0.8+ because the Go artifact is package-scoped and includes untouched helpers alongside the critical Soul Factory paths, and the outer Svelte route wrappers are proven separately by build and Playwright evidence rather than line-instrumented coverage."
+      ]
     },
     "edge_case_coverage": {
       "score": 0.9,
       "weight": 0.1,
+      "weighted_score": 0.09,
       "evidence": [
         "The matrix covers unauthorized and malformed provisioning requests, relay publish rejection, protected-route signer absence, optional integration failure, malformed and unauthorized lifecycle actions, regenerate-without-brief rejection, and non-terminal timeout/relay-closure behavior.",
-        "The suite does not include dedicated concurrency, duplicate-delivery, or property/fuzz coverage, so this score is high but not maximal."
-      ],
-      "weighted_score": 0.09
+        "The suite still does not include dedicated concurrency, duplicate-delivery, or property/fuzz coverage, so this score is high but not maximal."
+      ]
     },
     "regression_safety": {
       "score": 1.0,
       "weight": 0.1,
+      "weighted_score": 0.1,
       "evidence": [
-        "`go test ./internal/soulfactory ./cmd/cli` passed after the backend verification additions.",
-        "`cd /Users/bizarro/Documents/Projects/bahia/web && npm test -- --run tests/unit/souls-store.test.js` passed after the browser-store changes.",
-        "`cd /Users/bizarro/Documents/Projects/bahia/web && npm run test:e2e -- tests/e2e/soul-signing-smoke.spec.js tests/e2e/souls-gallery-live.spec.js tests/e2e/soul-provisioned-visibility.spec.js` passed for the focused browser flows.",
-        "`cd /Users/bizarro/Documents/Projects/bahia/web && npm run build` passed, proving the Souls routes compile in production mode."
-      ],
-      "weighted_score": 0.1
+        "`make pstf-soulfactory-coverage` passed, generating the reproducible backend and browser coverage artifacts.",
+        "`cd /Users/bizarro/Documents/Projects/bahia/web && npm run test:e2e -- tests/e2e/soul-signing-smoke.spec.js tests/e2e/souls-gallery-live.spec.js tests/e2e/soul-provisioned-visibility.spec.js` passed after the Souls page-model refactor.",
+        "`cd /Users/bizarro/Documents/Projects/bahia/web && npm run build` passed, proving the Souls routes still compile in production mode."
+      ]
     },
     "defect_resolution": {
       "score": 1.0,
       "weight": 0.05,
+      "weighted_score": 0.05,
       "evidence": [
         "`defects.json` contains no open PSTF defects for this feature; SFTP-D-001 through SFTP-D-008 are all `verified`.",
-        "The prior backend and browser verification debts were closed before this scoring step."
-      ],
-      "weighted_score": 0.05
+        "The remaining open issues are minor non-PSTF follow-ups (`bahia-ijo8` and `bahia-x0hs`), not release-blocking feature defects."
+      ]
     },
     "human_alignment": {
       "score": 1.0,
       "weight": 0.05,
+      "weighted_score": 0.05,
       "evidence": [
         "Spec approval exists via HITL-SOUL_FACTORY_PROVISIONING_TRACKING-006.",
-        "Material ambiguity decisions exist for full scope, timeout/relay-closure behavior, polling fallback, and Bahia integration strictness via HITL-SOUL_FACTORY_PROVISIONING_TRACKING-001 through -005.",
-        "Final human release review is now captured in HITL-SOUL_FACTORY_PROVISIONING_TRACKING-007 with decision `NEEDS_WORK`."
-      ],
-      "weighted_score": 0.05
+        "Material ambiguity decisions exist for full scope, timeout/relay-closure behavior, polling fallback, Bahia integration strictness, and the earlier coverage-gate hold via HITL-SOUL_FACTORY_PROVISIONING_TRACKING-001 through -007.",
+        "Final human release approval after coverage remediation is now captured in HITL-SOUL_FACTORY_PROVISIONING_TRACKING-008."
+      ]
     }
   },
   "hard_gates": {
@@ -114,21 +114,19 @@
     "hitl_spec_approval_exists": {
       "passed": true,
       "evidence": [
-        "HITL-SOUL_FACTORY_PROVISIONING_TRACKING-006 records AC approval as written."
+        "HITL-SOUL_FACTORY_PROVISIONING_TRACKING-006 records `APPROVE_AS_IS` for the AC set."
       ]
     }
   },
   "hard_gate_failures": [],
   "caps_applied": [],
-  "blocking_findings": [
-    "Final HITL release review recorded `NEEDS_WORK` because the feature does not clear the 0.90 confidence threshold without touched-module coverage artifacts."
-  ],
+  "blocking_findings": [],
   "evidence_gaps": [
-    "The requested schema file `schemas/confidence_report.schema.json` is not present in the repository, so this report follows the prompt-defined structure rather than a repo-backed schema.",
-    "No Go or browser coverage artifact exists for the touched Soul Factory modules, so code coverage scores `0.0` under the default scoring rules."
+    "The requested schema file `schemas/confidence_report.schema.json` is still not present in the repository, so this report follows the prompt-defined structure rather than a repo-backed schema.",
+    "The browser coverage artifact line-instruments the extracted Souls logic modules rather than the outer Svelte entry wrappers; those wrappers are covered separately by build and deterministic Playwright evidence."
   ],
   "recommendation": {
-    "next_stage": "generate_coverage_evidence_then_repeat_human_review",
-    "summary": "Feature behavior is fully verified, but final human review declined release approval until touched-module coverage artifacts exist and the confidence gate clears or is explicitly re-triaged."
+    "next_stage": "approved",
+    "summary": "The full approved Soul Factory slice is verified, now has durable touched-module coverage evidence, exceeds the 0.90 confidence threshold, and has explicit final human release approval."
   }
 }
