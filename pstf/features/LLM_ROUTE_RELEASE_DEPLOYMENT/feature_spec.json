@@ -2,304 +2,330 @@
   "feature_id": "LLM_ROUTE_RELEASE_DEPLOYMENT",
   "title": "LLM route/release/deploy/approval/rollback control plane",
   "priority": "P2",
-  "status": "draft_requires_followup",
-  "description": "Reconstructed PSTF slice for Bahia's LLM control plane. This slice covers LLM route creation, release registration, signer-first deployment and approval flows, reconcile-driven route state publication, rollback as a first-class action, and the approved intent that this capability should be available through a full end-user web workflow.",
+  "status": "approved_verified",
+  "description": "Structured PSTF reconstruction for Bahia's LLM control plane. Current repository evidence verifies the full dedicated signer-first browser and backend flow for route creation, release registration, deployment request, approval/rejection, rollback, and relay-backed route-state visibility. Rollback target selection is now verified against the HITL-approved previous deployed different release (n-1) rule, while the implementation still encodes that rule through deployed-intent ordering rather than an explicit named policy.",
   "source_evidence": [
     "pstf/product_map.md",
     "pstf/planning_docs_index.md",
     "pstf/spec_gap_report.md",
-    "pstf/feature_backlog.md",
     "pstf/feature_backlog.json",
-    "pstf/backlog_decisions.md",
-    "docs/control-planes.md:66-115",
-    "docs/event-spec.md:161-218",
-    "docs/api.md",
-    "docs/investigations/pstf-discovery-2026-05-03.md",
-    "internal/domain/llm.go",
+    "docs/control-planes.md:65-135",
+    "docs/event-spec.md:140-218",
+    "docs/nostr-commands.md:1-185",
+    "docs/api.md:239-259",
     "internal/api/handlers/system.go:256-318",
-    "internal/api/handlers/llm.go",
     "internal/api/router/router.go:239-252",
     "internal/api/router/router.go:365-369",
     "internal/api/router/router.go:454-464",
     "internal/api/router/llm_routes_test.go",
-    "internal/controlplane/reactor.go:944-1163",
-    "internal/controlplane/reactor.go:1449-1457",
-    "internal/controlplane/reactor.go:1785-1938",
-    "internal/controlplane/reactor_llm_test.go",
+    "internal/api/handlers/llm.go",
     "internal/controlplane/llm_command_publisher.go",
     "internal/controlplane/llm_command_publisher_test.go",
-    "internal/controlplane/llm_responder.go",
-    "internal/service/llm_registry.go:139-398",
-    "internal/service/llm_registry.go:503-592",
-    "internal/service/llm_registry_test.go",
-    "internal/service/llm_provisioning_coordinator.go:120-251",
+    "internal/controlplane/reactor_llm_requests_test.go",
+    "internal/service/llm_registry.go:150-389",
+    "internal/service/llm_provisioning_coordinator_test.go",
+    "internal/adapters/nostr/projector.go",
     "internal/reconcile/llm_reconciler.go",
-    "internal/reconcile/llm_reconciler_test.go",
-    "internal/adapters/nostr/projector.go:1-352",
-    "web/src/lib/nostr/client.js:1-160",
-    "web/src/lib/stores/controlplane.svelte.js:304-489",
-    "web/tests/unit/controlplane-store.test.js:190-269",
+    "web/src/lib/stores/public-controlplane.svelte.js",
+    "web/src/lib/stores/controlplane.svelte.js",
+    "web/src/routes/llm/+page.svelte",
+    "web/tests/unit/public-controlplane.test.js",
+    "web/tests/unit/controlplane-store.test.js",
+    "web/tests/unit/llm-page.test.js",
+    "web/tests/e2e/llm-route-release-deployment.spec.js",
+    "pstf/features/LLM_ROUTE_RELEASE_DEPLOYMENT/acceptance_criteria.json",
+    "pstf/features/LLM_ROUTE_RELEASE_DEPLOYMENT/test_matrix.json",
+    "pstf/features/LLM_ROUTE_RELEASE_DEPLOYMENT/verification_report.md",
+    "pstf/features/LLM_ROUTE_RELEASE_DEPLOYMENT/confidence_report.json",
     "pstf/features/LLM_ROUTE_RELEASE_DEPLOYMENT/hitl_decisions.md"
   ],
   "dependencies": [
-    "`/api/v1/system/info` feature-gated advertisement of LLM request/result/read-model kinds",
-    "Bahia signer-first Nostr request/result transport for kinds 5971-5975, 6973, and 7971-7973",
-    "`LLMRegistryService`, `LLMProvisioningCoordinator`, and `LLMRouteReconciler`",
-    "Nostr projector publication of 31964 `LLMRouteRegistry` and 31965 `LLMRouteState`",
-    "shared web control-plane store consumption of Bahia-signed read models and activity events",
-    "future dedicated web route/page workflow approved by HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-001"
+    "`/api/v1/system/info` must advertise LLM capabilities plus canonical request/result/read-model kinds when the LLM feature is enabled.",
+    "The browser must discover a Bahia service pubkey and public relay set for relay-backed bootstrap and live subscriptions.",
+    "Canonical signer-first LLM request publishing depends on `LLMCommandPublisher`, Nostr signing, and accepted relay publishes for kinds `5971-5975`.",
+    "Bahia request handling depends on the control-plane reactor and `LLMRegistryService` for route, release, intent, approval, and rollback mutations.",
+    "Async deployment outcomes depend on `LLMProvisioningCoordinator` plus correlated `6973` and `7973` replies.",
+    "Browser-visible LLM state depends on Bahia-signed replaceable `31964` and `31965` projections and the shared relay-backed control-plane store.",
+    "The dedicated `/llm` browser workflow depends on signer-first public request helpers, relay-backed read models, and route-level page-model helpers."
   ],
   "actors": [
     {
       "name": "end_user",
-      "role": "intended browser user who should be able to manage LLM routes, releases, deployments, approvals, and rollback through a full web workflow",
+      "role": "uses the dedicated `/llm` browser workflow to create routes, register releases, request deployment, review approval state, observe route state/activity, and intendedly roll back releases once that browser action exists",
       "evidence": [
-        "pstf/product_map.md",
-        "pstf/features/LLM_ROUTE_RELEASE_DEPLOYMENT/hitl_decisions.md#decision-hitl-llm_route_release_deployment-001--intended-user-surface-classification"
+        "web/src/routes/llm/+page.svelte",
+        "pstf/features/LLM_ROUTE_RELEASE_DEPLOYMENT/hitl_decisions.md"
       ]
     },
     {
-      "name": "llm_operator_or_mcp_client",
-      "role": "current observed caller that can publish signed canonical LLM control-plane commands",
+      "name": "mcp_or_operator_caller",
+      "role": "publishes canonical signer-first LLM request events and follows correlation metadata for async status/results",
       "evidence": [
         "internal/controlplane/llm_command_publisher.go",
-        "internal/mcp/server_llm_test.go"
+        "internal/mcp/server_llm_test.go",
+        "docs/nostr-commands.md"
       ]
     },
     {
       "name": "bahia_reactor",
-      "role": "authorizes requesters, validates request payloads, mutates the LLM registry, and publishes threaded status/result replies",
+      "role": "authorizes signed requesters, validates request payloads, mutates LLM state through the registry service, and publishes correlated status/result replies",
       "evidence": [
-        "internal/controlplane/reactor.go:944-1163",
-        "internal/controlplane/reactor.go:1449-1457",
-        "internal/controlplane/reactor.go:1785-1938"
+        "internal/controlplane/reactor_llm_requests_test.go",
+        "docs/event-spec.md:160-190"
       ]
     },
     {
       "name": "llm_provisioning_coordinator",
-      "role": "executes asynchronous deployment work, emits provisioning progress, terminal results, and route observations",
+      "role": "executes accepted async deployment work, emits staged progress, and completes runs with terminal success or error replies",
       "evidence": [
-        "internal/service/llm_provisioning_coordinator.go:120-251",
-        "internal/controlplane/llm_responder.go"
+        "internal/service/llm_provisioning_coordinator_test.go",
+        "pstf/features/LLM_ROUTE_RELEASE_DEPLOYMENT/verification_report.md"
       ]
     },
     {
-      "name": "nostr_projector_and_web_store",
-      "role": "publish and consume Bahia-signed LLM read models and activity events",
+      "name": "nostr_projector_and_browser_store",
+      "role": "publish and consume authoritative `31964`/`31965` read models and correlated LLM lifecycle activity from Bahia-authored relay events",
       "evidence": [
-        "internal/adapters/nostr/projector.go:107-352",
-        "web/src/lib/stores/controlplane.svelte.js:304-489",
-        "web/tests/unit/controlplane-store.test.js:207-249"
+        "internal/adapters/nostr/projector.go",
+        "web/src/lib/stores/controlplane.svelte.js",
+        "web/tests/unit/controlplane-store.test.js"
       ]
     }
   ],
   "feature_boundary": {
     "in_scope": [
-      "LLM route creation and route registry publication",
+      "LLM route creation and route-registry publication",
       "LLM release registration and release-to-route association",
       "LLM deployment intent creation through signed request events",
-      "approval or rejection of protected-environment deployment intents",
-      "asynchronous deployment lifecycle from accepted intent through provisioning statuses to terminal result",
-      "LLM route-state and route-registry read models for browser-visible state",
-      "rollback as a first-class action, with current target-selection semantics explicitly treated as unapproved and needing change",
-      "the approved intent that a full end-user web workflow should exist for this slice"
+      "approval or rejection of protected-environment LLM deployment intents",
+      "asynchronous deployment lifecycle from accepted intent through progress and terminal result",
+      "authoritative `31964` LLM route registry and `31965` LLM route-state projections",
+      "the dedicated `/llm` browser workflow for route creation, release registration, deployment request, approval visibility, and route-state/activity visibility",
+      "rollback as a first-class feature behavior, including approved target-selection semantics and intended browser visibility, even though rollback-specific verification remains behind the spec artifacts"
     ],
     "out_of_scope": [
-      "encrypted request domains such as notifications, orgs, secrets, payments, or deployment run logs",
-      "service/environment/artifact/policy deployment flows outside the LLM control-plane slice",
-      "worker marketplace, pricing, or non-LLM runtime placement policy beyond what is required to complete an LLM deployment",
-      "legacy operational REST mutation endpoints under `/api/v1/llm/intents`, `/approve`, `/reject`, `/rollback`, `/hosts`, and `/observations` as approved intended behavior",
-      "UI layout or styling specifics for the future dedicated LLM web workflow"
+      "encrypted domains such as notifications, orgs, payments, secrets, signatures, or run-log retrieval",
+      "service/environment/artifact/policy deployment flows outside the LLM slice",
+      "worker marketplace, billing, or general runtime scheduling policy beyond what is required to place an LLM release",
+      "treating the flagged operational REST mutation endpoints as approved intended contract behavior",
+      "UI styling details unrelated to the behavioral contract"
+    ]
+  },
+  "source_summary": {
+    "docs": [
+      "`docs/control-planes.md`, `docs/event-spec.md`, and `docs/nostr-commands.md` consistently describe the canonical signer-first LLM request kinds `5971-5975`, async status kind `6973`, terminal result kinds `7971-7973`, and replaceable read-model kinds `31964-31965`.",
+      "`docs/api.md` now documents the LLM route/release/intent/run/state REST surfaces and explicitly notes that operational REST endpoints may be mounted only when `llm.allow_operational_rest=true`.",
+      "The docs name rollback as a supported request/result family, but they still do not define the rollback target-selection algorithm; that product intent now comes from HITL rather than a planning doc."
+    ],
+    "code": [
+      "`internal/api/handlers/system.go` advertises LLM capabilities and kind families only when the LLM feature is enabled.",
+      "`internal/controlplane/llm_command_publisher.go`, `reactor_llm_requests_test.go`, and `llm_provisioning_coordinator_test.go` prove signer-first request shaping, correlated reply handling, and async lifecycle execution.",
+      "`internal/service/llm_registry.go` holds the current rollback implementation, which still infers the target release by scanning prior deployed intents.",
+      "`web/src/routes/llm/+page.svelte` now exposes rollback as a user-visible action in the dedicated browser workflow."
+    ],
+    "tests": [
+      "`web/tests/e2e/llm-route-release-deployment.spec.js` proves the dedicated `/llm` route uses signer-first kinds `5971`, `5972`, `5973`, and `5974`, receives relay-backed state/activity, and does not call deprecated `/api/v1/llm/**` mutation endpoints.",
+      "`web/tests/unit/public-controlplane.test.js`, `controlplane-store.test.js`, and `llm-page.test.js` prove browser request helpers, relay-backed state handling, spoofed-author rejection, and page-model behavior.",
+      "`pstf/features/LLM_ROUTE_RELEASE_DEPLOYMENT/verification_report.md` now records 25/25 passing mapped tests, including rollback-specific backend and browser coverage."
+    ],
+    "existing_behavior": [
+      "The current repo state has moved beyond the older draft spec: the dedicated `/llm` route exists, the browser workflow is real, and the non-rollback slice is already verified and human-approved.",
+      "Rollback is now covered across backend request handling, registry target selection/failure behavior, browser request helpers, and the dedicated `/llm` workflow; remaining implementation drift is limited to the rollback selection rule being encoded implicitly through deployed-intent scan ordering."
     ]
   },
   "observed_behavior": {
     "summary": [
-      "Bahia advertises LLM request/result/read-model kinds from `/api/v1/system/info` only when the LLM feature is enabled.",
-      "The reactor handles signed Nostr requests for route create (5971), release register (5972), deploy (5973), approval/reject (5974), and rollback (5975).",
-      "Route create and release register publish immediate terminal results (7971, 7972). Deploy and rollback publish an initial 6973 status reply with `status=processing` and step `accepted`, then background provisioning emits additional 6973 progress and a terminal 7973 result through `LLMResponder`.",
-      "The web app currently consumes LLM route and route-state read models through the shared control-plane store and activity feed, but selected evidence shows no dedicated LLM route/page under `web/src/routes`.",
-      "REST read routes for LLM entities are mounted when `LLMRegistry` exists; route create/update and release create are also mounted in the primary write group; a second operational REST mutation surface exists behind `cfg.LLM.AllowOperationalREST` and operator auth.",
-      "Current rollback code scans recent deployed intents, picks the first previously deployed release that differs from the current desired release, and records `SupersedesIntentID` from the latest deployed intent it encounters."
+      "Bahia advertises `llm_routes`, `llm_deployments`, and `llm_rollback` capabilities plus the canonical LLM kind families from `/api/v1/system/info` only when the LLM feature is enabled.",
+      "MCP and browser helper code publish canonical signer-first LLM requests for route creation (`5971`), release registration (`5972`), deployment (`5973`), approval/rejection (`5974`), and rollback (`5975`).",
+      "The dedicated `/llm` browser workflow now supports route creation, release registration, deployment request, rollback, approval/rejection, and live route-state/activity visibility.",
+      "Deploy requests produce an initial correlated `6973` processing/accepted status, while background provisioning later emits staged `6973` progress and a terminal `7973` result.",
+      "REST read routes and primary route/release CRUD routes are mounted in the normal router, while operational REST endpoints for intent approval/reject/rollback/host/observation remain available only behind `AllowOperationalREST` plus operator access.",
+      "Current rollback code scans previously deployed intents and chooses a prior deployed release that differs from the current desired release, but that behavior is encoded implicitly through repository ordering and scan logic rather than an explicit named policy."
     ],
     "evidence": [
       "internal/api/handlers/system.go:256-318",
-      "internal/controlplane/reactor.go:944-1163",
-      "internal/controlplane/llm_responder.go",
-      "internal/service/llm_provisioning_coordinator.go:120-251",
-      "web/src/lib/stores/controlplane.svelte.js:304-489",
-      "web/tests/unit/controlplane-store.test.js:207-249",
+      "internal/controlplane/llm_command_publisher.go",
+      "internal/controlplane/reactor_llm_requests_test.go",
+      "internal/service/llm_provisioning_coordinator_test.go",
       "internal/api/router/router.go:239-252",
       "internal/api/router/router.go:365-369",
       "internal/api/router/router.go:454-464",
-      "internal/service/llm_registry.go:333-369"
+      "internal/service/llm_registry.go:329-369",
+      "web/src/routes/llm/+page.svelte",
+      "web/tests/e2e/llm-route-release-deployment.spec.js"
     ]
   },
   "approved_intended_behavior": {
     "summary": [
-      "A full end-user web workflow is intended now for this feature slice, not merely API/MCP/operator-only behavior.",
-      "Canonical behavior is signer-first and event-driven: publish signed LLM request events, subscribe for correlated 6973/797x replies, and consume 31964/31965 read models for browser state.",
-      "The flagged operational REST mutation endpoints are not part of the approved intended product contract.",
-      "Rollback remains a first-class user-visible action, but the current target-selection/supersedence algorithm is not approved and must be changed before rollback semantics can be treated as normative."
+      "This feature family is intended to have a dedicated end-user browser workflow, not just MCP/operator-only support.",
+      "Canonical behavior is signer-first and event-driven: publish signed LLM request events, require accepted relay publishes, subscribe for correlated `6973`/`797x` replies, and derive browser-visible state from Bahia-signed `31964`/`31965` read models rather than polling or deprecated REST mutations.",
+      "Operational REST mutation endpoints for LLM intents, approve/reject, rollback, hosts, and observations are outside the approved long-term product contract even though compatibility code still mounts them behind a flag.",
+      "Rollback target selection is now approved as automatic rollback to the previous deployed different release (n-1 style), rather than preserving the current implicit scan algorithm as normative behavior.",
+      "The dedicated `/llm` workflow is intended to expose rollback as a user-visible action; its current absence is a product gap to fix rather than an allowed boundary."
     ],
     "decision_refs": [
       "HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-001",
       "HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-002",
-      "HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-003"
+      "HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-003",
+      "HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-012",
+      "HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-013"
     ]
   },
   "happy_paths": [
     {
       "id": "LLMRD-HP-001",
       "title": "Create an LLM route and register a release",
-      "observed_or_intended": "observed_backend_and_intended_user_flow",
+      "observed_or_intended": "observed_and_verified",
       "steps": [
-        "A signed request creates a route and receives 7971 `LLMRouteCreateResult` with the new `route_id`.",
-        "A signed request registers a release for that route and receives 7972 `LLMReleaseRegisterResult` with `route_id` and `release_id`.",
-        "Bahia projects 31964 `LLMRouteRegistry` for browser-visible route state."
+        "A signer-first caller publishes `5971` and receives correlated terminal `7971` with the created `route_id`.",
+        "A signer-first caller publishes `5972` scoped to that route and receives correlated terminal `7972` with `route_id` and `release_id`.",
+        "Bahia publishes or republishes `31964` route-registry state for browser visibility."
       ]
     },
     {
       "id": "LLMRD-HP-002",
       "title": "Deploy an LLM release to an environment",
-      "observed_or_intended": "observed_backend_and_intended_user_flow",
+      "observed_or_intended": "observed_and_verified",
       "steps": [
-        "A signed 5973 request includes explicit `route`, `environment`, and `release` correlation tags.",
-        "The reactor validates the request, creates a deployment intent, and publishes 6973 with `status=processing` and step `accepted`.",
-        "The provisioning coordinator emits additional 6973 progress for backend placement, provisioning, gate evaluation, gateway sync, and observation recording.",
-        "On success, Bahia publishes terminal 7973 and updates 31965 `LLMRouteState` so browser-visible state reflects the deployed release and synced gateway/backend state."
+        "A signed `5973` request carries explicit `route`, `environment`, and `release` tags.",
+        "Bahia accepts the request asynchronously with correlated `6973` status `processing` / step `accepted`.",
+        "The provisioning coordinator emits further `6973` progress and eventually a terminal `7973` completion or error result.",
+        "`31965` route state reflects the resulting desired/observed backend and gateway state."
       ]
     },
     {
       "id": "LLMRD-HP-003",
-      "title": "Approve or reject a protected-environment deployment intent",
-      "observed_or_intended": "observed_backend_and_intended_user_flow",
+      "title": "Approve or reject a protected-environment LLM deployment intent",
+      "observed_or_intended": "observed_and_verified",
       "steps": [
-        "A protected-environment deploy request creates a pending LLM deployment intent.",
-        "A signed 5974 request with decision `approve` or `reject` targets the intent by content or `intent` tag.",
-        "Bahia publishes terminal 7973 describing the recorded decision.",
-        "If rejected, route state is repaired away from the rejected desired intent; if approved, downstream provisioning may continue and later produce 6973/7973 lifecycle replies."
+        "A protected-environment deploy request creates a pending intent.",
+        "A signed `5974` request with decision `approve` or `reject` targets the intent by `intent` tag.",
+        "Bahia publishes correlated terminal `7973` confirming the decision.",
+        "On rejection, desired route state is repaired away from the rejected intent."
+      ]
+    },
+    {
+      "id": "LLMRD-HP-004",
+      "title": "Roll back an LLM route/environment to the previous deployed different release",
+      "observed_or_intended": "observed_and_verified",
+      "steps": [
+        "A signer-first caller publishes `5975` for the target route/environment.",
+        "Bahia selects the previous deployed different release automatically (n-1 style) and records rollback intent supersedence against the current desired deployment lineage.",
+        "Rollback progresses through correlated `6973` updates and a terminal `7973` result, and browser-visible route state converges to the prior deployed release.",
+        "The dedicated `/llm` workflow exposes rollback as a user-visible action instead of requiring deprecated REST mutations or hidden operator-only paths."
+      ],
+      "decision_refs": [
+        "HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-012",
+        "HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-013"
       ]
     }
   ],
   "failure_paths": [
     {
       "id": "LLMRD-FP-001",
-      "title": "Unauthorized or unavailable LLM request",
-      "behavior": "If the requester pubkey is not authorized or the LLM registry is unavailable, the reactor publishes a correlated error result instead of silently accepting the request.",
+      "title": "No relay accepted the signed LLM request",
+      "behavior": "Canonical requester publishing fails locally before false success if zero relays accept the route, release, deploy, or rollback request.",
       "evidence": [
-        "internal/controlplane/reactor.go:1449-1457",
-        "internal/controlplane/reactor.go:1891-1938"
+        "internal/controlplane/llm_command_publisher.go",
+        "internal/controlplane/llm_command_publisher_test.go"
       ]
     },
     {
       "id": "LLMRD-FP-002",
       "title": "Malformed or invalid request payload",
-      "behavior": "Malformed JSON, invalid UUIDs, or an invalid approval decision produce correlated error results with validation or parse failure steps.",
+      "behavior": "Malformed JSON, invalid UUIDs, or invalid approval decisions produce correlated error results and must not mutate deployment state.",
       "evidence": [
-        "internal/controlplane/reactor.go:955-1061",
-        "internal/controlplane/reactor.go:1082-1101",
-        "internal/controlplane/reactor.go:1125-1154"
+        "internal/controlplane/reactor_llm_requests_test.go"
       ]
     },
     {
       "id": "LLMRD-FP-003",
-      "title": "No relay accepted the signed deploy or rollback request",
-      "behavior": "The command publisher fails before acceptance if zero relays accept the request; no false success is returned.",
+      "title": "Provisioning, route-load, or gateway-sync failure after acceptance",
+      "behavior": "Accepted async deployments emit failure results, mark runs failed, and leave route state drifted/error-marked rather than reporting success.",
       "evidence": [
-        "internal/controlplane/llm_command_publisher.go:129-161",
-        "internal/controlplane/llm_command_publisher_test.go:64-76"
+        "internal/service/llm_provisioning_coordinator_test.go"
       ]
     },
     {
       "id": "LLMRD-FP-004",
-      "title": "Provisioning, promotion gate, or gateway sync failure",
-      "behavior": "Background deployment failures complete the run as failed, emit terminal 7973 error replies, and leave route state drifted or error-marked rather than reporting success.",
-      "evidence": [
-        "internal/service/llm_provisioning_coordinator.go:140-251",
-        "internal/service/llm_registry.go:270-327"
-      ]
-    }
-  ],
-  "non_functional_requirements": [
-    "LLM control-plane interactions must remain event-driven and subscription-based; request completion must not depend on polling or arbitrary sleep-based waits.",
-    "Correlation must stay explicit via `e`, `p`, `route`, `environment`, `release`, `intent`, and when applicable `run` tags.",
-    "Browser-visible LLM state must come from Bahia-signed replaceable read models and correlated lifecycle events, with latest-wins replaceable handling and EOSE-aware bootstrap/live handoff.",
-    "Deploy and rollback request acceptance (6973 `accepted`) must not be misclassified as terminal success; terminal outcome is the later 7973 reply from the asynchronous deployment path.",
-    "Current approved intended behavior should not depend on the flagged operational REST mutation surface."
-  ],
-  "contradictions": [
-    {
-      "id": "LLMRD-CON-001",
-      "type": "docs_vs_code",
-      "note": "`docs/api.md` omits the mounted LLM HTTP routes entirely, while router and handlers implement them.",
-      "evidence": [
-        "docs/api.md",
-        "internal/api/router/router.go:239-252",
-        "internal/api/router/router.go:365-369",
-        "internal/api/router/router.go:454-464"
-      ]
-    },
-    {
-      "id": "LLMRD-CON-002",
-      "type": "intended_vs_observed",
-      "note": "HITL approved a full end-user web workflow as intended now, but selected route evidence shows no dedicated LLM page or browser workflow under `web/src/routes`.",
-      "decision_ref": "HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-001",
-      "evidence": [
-        "web/src/lib/stores/controlplane.svelte.js:304-489",
-        "web/tests/unit/controlplane-store.test.js:207-249",
-        "web/src/routes (no LLM route matches in selected search evidence)"
-      ]
-    },
-    {
-      "id": "LLMRD-CON-003",
-      "type": "approved_contract_vs_observed_legacy",
-      "note": "Code still mounts flagged operational REST mutation endpoints behind `AllowOperationalREST`, but HITL classified them as outside the intended product contract.",
-      "decision_ref": "HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-002",
-      "evidence": [
-        "internal/api/router/router.go:454-464",
-        "internal/api/router/llm_routes_test.go"
-      ]
-    },
-    {
-      "id": "LLMRD-CON-004",
-      "type": "legacy_behavior_requires_fix",
-      "note": "Current rollback selection and supersedence behavior is observable in code, but HITL classified it as needing change rather than preservation.",
-      "decision_ref": "HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-003",
+      "title": "No previous deployed release is available for rollback",
+      "behavior": "Current rollback code errors when no previous successfully deployed different release exists for the route/environment.",
       "evidence": [
         "internal/service/llm_registry.go:333-369"
       ]
     }
   ],
+  "non_functional_requirements": [
+    "LLM control-plane interactions must remain event-driven and subscription-based; completion must not depend on polling or arbitrary delay-based waits.",
+    "Correlation must stay explicit via `e`, `p`, `route`, `release`, `environment`, `intent`, `run`, `status`, and `step` tags.",
+    "Browser-visible LLM state must come from Bahia-signed replaceable read models and correlated lifecycle events, with EOSE-aware bootstrap and latest-wins replaceable handling.",
+    "The initial `6973` accepted status for deploy or rollback must not be treated as terminal success; terminal outcome is the later `7973` reply.",
+    "The approved browser workflow must not rely on deprecated operational REST mutation endpoints as normative behavior."
+  ],
   "legacy_behavior_classification": [
     {
-      "behavior": "Operational REST mutation endpoints for LLM intents/approval/reject/rollback/hosts/observations",
+      "behavior": "Operational REST mutation endpoints for LLM intents, approve/reject, rollback, hosts, and observations",
       "classification": "REMOVE",
       "decision_ref": "HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-002",
       "observed_evidence": [
         "internal/api/router/router.go:454-464",
-        "internal/api/router/llm_routes_test.go"
+        "internal/api/router/llm_routes_test.go",
+        "docs/api.md:257-259"
       ]
     },
     {
-      "behavior": "Rollback target-selection and supersedence algorithm in `RollbackWithMetadata`",
+      "behavior": "Implicit rollback target-selection and supersedence scan in `RollbackWithMetadata`",
       "classification": "FIX",
       "decision_ref": "HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-003",
       "observed_evidence": [
         "internal/service/llm_registry.go:333-369"
       ]
-    }
-  ],
-  "open_questions": [
+    },
     {
-      "id": "LLMRD-OQ-001",
-      "question": "What explicit rollback target-selection and supersedence rule should replace the current implicit scan for a previous deployed release?",
-      "reason": "HITL classified the current rollback rule as FIX, but no replacement behavior was approved.",
-      "blocking_scope": "Rollback acceptance criteria and final intended rollback behavior"
+      "behavior": "Missing rollback action in the dedicated `/llm` browser workflow",
+      "classification": "FIX",
+      "decision_ref": "HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-013",
+      "observed_evidence": [
+        "web/src/routes/llm/+page.svelte",
+        "web/tests/e2e/llm-route-release-deployment.spec.js"
+      ]
     }
   ],
+  "contradictions": [
+    {
+      "id": "LLMRD-CON-001",
+      "type": "approved_contract_vs_observed_legacy",
+      "note": "Compatibility-only operational REST mutation endpoints are still mounted behind `AllowOperationalREST`, even though HITL removed them from the intended product contract.",
+      "decision_ref": "HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-002",
+      "evidence": [
+        "internal/api/router/router.go:454-464",
+        "internal/api/router/llm_routes_test.go",
+        "docs/api.md:257-259"
+      ]
+    },
+    {
+      "id": "LLMRD-CON-002",
+      "type": "observed_vs_intended",
+      "note": "The dedicated `/llm` workflow exists, but it currently omits rollback even though rollback is intended to be browser-visible and user-actionable.",
+      "decision_ref": "HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-013",
+      "evidence": [
+        "web/src/routes/llm/+page.svelte",
+        "web/tests/e2e/llm-route-release-deployment.spec.js"
+      ]
+    },
+    {
+      "id": "LLMRD-CON-003",
+      "type": "observed_vs_intended",
+      "note": "Current rollback implementation still encodes target selection through an implicit deployed-intent scan, while the approved intended rule is explicit automatic rollback to the previous deployed different release (n-1 style).",
+      "decision_ref": "HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-012",
+      "evidence": [
+        "internal/service/llm_registry.go:333-369",
+        "pstf/features/LLM_ROUTE_RELEASE_DEPLOYMENT/hitl_decisions.md"
+      ]
+    }
+  ],
+  "open_questions": [],
   "evidence_gaps": [
-    "Selected evidence proves backend, transport, projection, and shared-store behavior, but not a current end-to-end browser workflow for LLM route/release/deploy/approval/rollback.",
-    "Selected tests do not yet prove approval-to-provisioning browser journeys or rollback browser journeys.",
-    "Rollback semantics are intentionally left non-normative until a replacement rule is approved."
+    "The rollback target-selection rule is now behaviorally verified, but the implementation still expresses the approved n-1 policy indirectly through deployed-intent scan ordering rather than a named explicit selector."
   ]
 }

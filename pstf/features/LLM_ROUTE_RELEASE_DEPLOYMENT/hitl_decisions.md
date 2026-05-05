@@ -6,7 +6,7 @@
 - Framework: PSTF
 - Interaction Mode: RepoPrompt ask-user tool
 - Current Stage: human_review
-- Last Updated: 2026-05-04T22:19:18Z
+- Last Updated: 2026-05-06T00:20:00Z
 
 ---
 
@@ -140,7 +140,8 @@ FIX_CURRENT_ROLLBACK_SELECTION_RULE
 **Stage:** human_review
 **Agent:** PSTF Acceptance Criteria Agent
 **Decision Type:** scope_classification
-**Status:** active
+**Status:** superseded
+**Superseded By:** HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-012
 
 **Context Summary:**
 The feature spec keeps rollback in scope, but the current rollback target-selection and supersedence logic was explicitly classified as `FIX`, not approved behavior. The acceptance-criteria artifact needed a decision on whether to encode temporary rollback criteria anyway or defer them until replacement semantics are defined.
@@ -465,14 +466,138 @@ APPROVED
 
 ---
 
+### Decision HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-012 — Replacement rollback target-selection rule
+
+**Stage:** human_review
+**Agent:** PSTF Spec Reconstruction Agent
+**Decision Type:** ambiguity_resolution
+**Status:** active
+
+**Context Summary:**
+The current rollback implementation in `internal/service/llm_registry.go` was previously classified as `FIX`, not approved behavior, and the docs still do not define which prior release rollback should target. The reconstructed feature spec needed an explicit replacement rule before it could stop treating rollback semantics as unresolved product intent.
+
+**Question Asked:**
+How should LLM rollback target selection be handled in the reconstructed spec right now?
+
+**Options Presented:**
+- A) DEFER (recommended): keep rollback in feature scope but leave its exact target-selection semantics unspecified until a later decision
+- B) Rollback to previous deployed different release automatically (n-1 style)
+- C) Rollback must require explicit release selection by the user/operator
+- D) Rollback to the last successful deployment before the current desired release, with current desired intent superseded
+
+**User Selection:**
+B
+
+**User Notes:**
+None.
+
+**Decision:**
+APPROVE_N_MINUS_1_AUTOMATIC_LLM_ROLLBACK_SELECTION
+
+**Impact:**
+- Feature Spec: updated — rollback target selection is now explicitly intended as automatic rollback to the previous deployed different release (n-1 style).
+- Acceptance Criteria: rollback-specific criteria may now be authored/refreshed from an approved semantic rule instead of staying fully deferred for lack of product intent.
+- Tests: rollback tests can now be designed against explicit target-selection semantics once the AC artifact is refreshed.
+- Defects: implementation review remains needed because the current code still encodes rollback through an implicit deployed-intent scan rather than an explicit named n-1 rule.
+- Confidence / Release: unchanged for the approved non-rollback slice; rollback remains outside verified release claims until rollback ACs/tests/browser coverage are added.
+
+**Required Follow-Up Actions:**
+- [ ] Refresh `acceptance_criteria.json` with rollback-specific criteria based on the approved n-1 rule.
+- [ ] Refresh `test_matrix.json` with rollback-specific tests.
+- [ ] Re-verify `RollbackWithMetadata` against explicit n-1 ordering and supersedence expectations.
+
+---
+
+### Decision HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-013 — Browser-visible rollback classification
+
+**Stage:** human_review
+**Agent:** PSTF Spec Reconstruction Agent
+**Decision Type:** legacy_behavior_classification
+**Status:** active
+
+**Context Summary:**
+The current dedicated `/llm` browser workflow supports route creation, release registration, deployment request, approval/rejection, and relay-backed route-state/activity visibility, but it does not expose rollback. Earlier PSTF decisions approved a full end-user workflow for this feature family, and the new rollback target-selection decision removed the last semantic blocker to deciding whether the missing browser rollback action is acceptable or a product gap.
+
+**Question Asked:**
+How should browser-visible rollback be treated in the spec right now?
+
+**Options Presented:**
+- A) FIX (recommended): dedicated `/llm` workflow is intended to expose rollback, and its current absence is a product gap
+- B) DEFER: rollback semantics are approved, but browser rollback UI is not yet required in the current intended workflow
+- C) REMOVE: rollback should remain API/MCP/operator-only, not part of the dedicated browser workflow
+
+**User Selection:**
+A
+
+**User Notes:**
+None.
+
+**Decision:**
+FIX_MISSING_BROWSER_ROLLBACK_ACTION
+
+**Impact:**
+- Feature Spec: updated — rollback remains part of the intended dedicated browser workflow, and the missing browser action is now classified as a product gap instead of an allowed omission.
+- Acceptance Criteria: future rollback criteria should include browser-visible rollback behavior, not just transport/backend semantics.
+- Tests: browser and E2E rollback coverage is now required once rollback ACs are refreshed.
+- Defects: a follow-up defect/work item is implied because `web/src/routes/llm/+page.svelte` still lacks rollback UI/action handling.
+- Confidence / Release: unchanged for the approved non-rollback slice; rollback still is not part of the verified release scope.
+
+**Required Follow-Up Actions:**
+- [ ] Add rollback action support to the dedicated `/llm` workflow.
+- [ ] Add browser/E2E rollback coverage once the workflow exists.
+- [ ] Keep rollback out of verified release claims until the browser gap is closed and rollback is re-verified.
+
+---
+
+### Decision HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-014 — Acceptance criteria approval for rollback-aware AC refresh
+
+**Stage:** human_review
+**Agent:** PSTF Acceptance Criteria Agent
+**Decision Type:** spec_approval
+**Status:** active
+
+**Context Summary:**
+The feature spec now explicitly approves rollback target selection as automatic previous deployed different release (n-1 style) and classifies missing browser rollback in `/llm` as a FIX. The acceptance-criteria artifact therefore needed to be refreshed by preserving the verified non-rollback ACs and adding rollback-specific ACs for signer-first rollback request semantics, rollback target-selection behavior, and the intended browser-visible rollback action.
+
+**Question Asked:**
+Do you approve the updated acceptance-criteria direction for `LLM_ROUTE_RELEASE_DEPLOYMENT`?
+
+**Options Presented:**
+- A) APPROVE_AS_IS (recommended)
+- B) APPROVE_WITH_EDITS
+- C) REJECT_AND_REVISE
+
+**User Selection:**
+APPROVE_AS_IS
+
+**User Notes:**
+None.
+
+**Decision:**
+APPROVE_ROLLBACK_AWARE_AC_REFRESH_AS_IS
+
+**Impact:**
+- Feature Spec: none
+- Acceptance Criteria: updated — AC-001 through AC-009 remain intact, and AC-010 through AC-012 now capture rollback request semantics, n-1 rollback selection, and browser-visible rollback expectations.
+- Tests: updated — future test generation may now include rollback-specific backend and browser coverage.
+- Defects: none directly, though the existing missing browser rollback action remains a FIX-classified product gap per HITL-013.
+- Confidence / Release: unchanged for the approved non-rollback slice; rollback is newly specified but not yet re-verified.
+
+**Required Follow-Up Actions:**
+- [x] Refresh `acceptance_criteria.json` with rollback-aware criteria.
+- [ ] Refresh `test_matrix.json` to add rollback-specific tests.
+- [ ] Re-verify rollback implementation and browser workflow against the new AC set.
+
+---
+
 ## Summary
 
 - Final Status: APPROVED
-- Open Questions: 1 — what explicit rollback target-selection rule should replace the current implementation
+- Open Questions: 0 — rollback product intent is now explicitly captured by HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-012 and HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-013
 - Accepted Risks: 0 — none currently recorded for the approved non-rollback slice
-- Deferred Items: 1 — rollback-specific acceptance criteria and tests remain deferred until replacement semantics are approved
-- Blocking Issues: 0 — none for the approved non-rollback slice; rollback remains deferred and out of this approval scope
-- Superseded Decisions: 1 — HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-006 was superseded by HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-007
+- Deferred Items: 0 — semantic deferral is resolved; rollback artifact refresh and browser follow-up remain implementation work
+- Blocking Issues: 0 — none for the approved non-rollback slice; rollback still is not re-verified
+- Superseded Decisions: 2 — HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-004 was superseded by HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-012, and HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-006 was superseded by HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-007
 
 ## Traceability
 
@@ -481,7 +606,7 @@ APPROVED
 | HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-001 | LLMRD-AC-009 | future browser/E2E coverage | possible web-workflow gap issue | feature_spec.json, acceptance_criteria.json | Current shared-store-only web visibility is not the approved end state. |
 | HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-002 | LLMRD-AC-009 | router compatibility tests become observed-only evidence | deprecation/removal follow-up | feature_spec.json, acceptance_criteria.json | Operational REST mutations are not part of the approved intended contract. |
 | HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-003 | future rollback AC set | future rollback tests | rollback semantic-fix follow-up | feature_spec.json, future acceptance_criteria.json | Rollback remains in scope, but its current selection rule is not approved. |
-| HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-004 | rollback AC scope | rollback test generation | none | acceptance_criteria.json, hitl_decisions.md | Rollback ACs are intentionally omitted until replacement semantics are approved. |
+| HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-004 | rollback AC scope | rollback test generation | none | acceptance_criteria.json, hitl_decisions.md | Superseded by HITL-012 once rollback target-selection semantics were approved. |
 | HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-005 | LLMRD-AC-001..009 | non-rollback test generation | none | acceptance_criteria.json, hitl_decisions.md | Current AC set approved as written. |
 | HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-006 | release gate | none | D-001, D-003, D-005 | hitl_decisions.md | Initial APPROVED_WITH_RISK response was not self-consistent once risk scope was clarified. |
 | HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-007 | LLMRD-AC-006 | T-012, T-013 | D-003 | hitl_decisions.md, verification_report.md | D-003 is a blocker, so the release gate outcome is NEEDS_WORK rather than APPROVED_WITH_RISK. |
@@ -489,3 +614,6 @@ APPROVED
 | HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-009 | LLMRD-AC-002, LLMRD-AC-003 | T-002, T-003, T-004, T-005, T-018 | D-005 | hitl_decisions.md, verification_report.md, defects.json | Route/release operations must use canonical signer-first 5971/5972 publishing before release. |
 | HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-010 | none | coverage support for T-016, T-018 and new browser-helper tests | none | hitl_decisions.md, confidence_report.json | Coverage exception rejected; real frontend coverage was required before return to final review. |
 | HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-011 | none | none | none | hitl_decisions.md, confidence_report.json | Final human approval granted for the approved non-rollback slice only. |
+| HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-012 | future rollback AC set | future rollback tests | rollback implementation/browser follow-up | feature_spec.json, future acceptance_criteria.json, future test_matrix.json | Rollback target selection is now approved as automatic n-1 rollback to the previous deployed different release. |
+| HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-013 | future rollback AC set | future browser/E2E rollback coverage | missing browser rollback action follow-up | feature_spec.json, future acceptance_criteria.json, future test_matrix.json | The dedicated `/llm` workflow is intended to expose rollback; its current absence is a FIX-classified product gap. |
+| HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-014 | LLMRD-AC-010, LLMRD-AC-011, LLMRD-AC-012 | future rollback backend/browser tests | browser rollback follow-up remains open | acceptance_criteria.json, hitl_decisions.md | Updated acceptance criteria approved with rollback-specific ACs added to the artifact. |

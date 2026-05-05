@@ -185,7 +185,7 @@ func TestLLMCommandPublisherPublishesCanonicalDeployRequest(t *testing.T) {
 	}
 }
 
-func TestLLMCommandPublisherFailsWhenNoRelayAccepts(t *testing.T) {
+func TestLLMCommandPublisherFailsWhenNoRelayAcceptsDeployOrRollback(t *testing.T) {
 	ctx := context.Background()
 	capture := &captureNostrPublisher{published: 0}
 	signer, err := NewPrivateKeySigner(nostr.GeneratePrivateKey())
@@ -196,6 +196,11 @@ func TestLLMCommandPublisherFailsWhenNoRelayAccepts(t *testing.T) {
 
 	_, err = publisher.PublishLLMDeployRequest(ctx, LLMDeployCommand{RouteID: uuid.New(), EnvironmentID: uuid.New(), ReleaseID: uuid.New(), RequestedBy: "operator"})
 	if err == nil {
-		t.Fatalf("expected no relay acceptance error")
+		t.Fatalf("expected deploy no relay acceptance error")
+	}
+
+	_, err = publisher.PublishLLMRollbackRequest(ctx, LLMRollbackCommand{RouteID: uuid.New(), EnvironmentID: uuid.New(), RequestedBy: "operator"})
+	if err == nil {
+		t.Fatalf("expected rollback no relay acceptance error")
 	}
 }

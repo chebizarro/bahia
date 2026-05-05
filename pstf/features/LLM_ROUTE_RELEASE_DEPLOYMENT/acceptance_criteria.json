@@ -2,8 +2,8 @@
   "feature_id": "LLM_ROUTE_RELEASE_DEPLOYMENT",
   "status": "approved",
   "approval_decision_refs": [
-    "HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-004",
-    "HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-005"
+    "HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-005",
+    "HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-014"
   ],
   "criteria": [
     {
@@ -27,11 +27,11 @@
       "expected_result": "The enabled payload contains the full LLM contract surface; the disabled payload does not advertise it.",
       "negative_cases": [
         "If the disabled payload still advertises LLM control-plane kinds or capabilities, the criterion fails.",
-        "If the enabled payload omits any of the canonical LLM kinds or route/release correlation fields, the criterion fails."
+        "If the enabled payload omits any canonical LLM kind family or route/release correlation field, the criterion fails."
       ],
       "source_evidence": [
         "internal/api/handlers/system.go:256-318",
-        "docs/control-planes.md:66-115",
+        "docs/control-planes.md:65-135",
         "pstf/features/LLM_ROUTE_RELEASE_DEPLOYMENT/feature_spec.json"
       ],
       "requires_human_approval": false
@@ -61,10 +61,9 @@
         "If the terminal result lacks correlation to the originating request or requester, the criterion fails."
       ],
       "source_evidence": [
-        "internal/controlplane/reactor.go:944-969",
-        "internal/controlplane/reactor.go:1785-1807",
         "internal/controlplane/llm_command_publisher.go",
-        "docs/event-spec.md:176-202"
+        "docs/event-spec.md:140-190",
+        "pstf/features/LLM_ROUTE_RELEASE_DEPLOYMENT/feature_spec.json"
       ],
       "requires_human_approval": false
     },
@@ -93,9 +92,9 @@
         "If the terminal result omits `release_id` or fails to correlate to the originating requester and request event, the criterion fails."
       ],
       "source_evidence": [
-        "internal/controlplane/reactor.go:974-1011",
-        "internal/controlplane/reactor.go:1809-1833",
-        "docs/control-planes.md:82-115"
+        "internal/controlplane/llm_command_publisher.go",
+        "docs/control-planes.md:87-104",
+        "pstf/features/LLM_ROUTE_RELEASE_DEPLOYMENT/feature_spec.json"
       ],
       "requires_human_approval": false
     },
@@ -124,10 +123,9 @@
         "If a deploy request can succeed without explicit route/environment/release correlation tags, the criterion fails."
       ],
       "source_evidence": [
-        "internal/controlplane/reactor.go:1013-1071",
-        "internal/controlplane/reactor.go:1835-1861",
-        "internal/controlplane/llm_command_publisher.go",
-        "internal/controlplane/llm_command_publisher_test.go"
+        "internal/controlplane/llm_command_publisher.go:159-177",
+        "docs/event-spec.md:140-190",
+        "pstf/features/LLM_ROUTE_RELEASE_DEPLOYMENT/feature_spec.json"
       ],
       "requires_human_approval": false
     },
@@ -156,9 +154,8 @@
         "If rejected intents remain the desired route state after rejection repair should have run, the criterion fails."
       ],
       "source_evidence": [
-        "internal/controlplane/reactor.go:1074-1114",
-        "internal/service/llm_registry.go:188-231",
-        "internal/service/llm_registry.go:503-530"
+        "docs/event-spec.md:160-190",
+        "pstf/features/LLM_ROUTE_RELEASE_DEPLOYMENT/feature_spec.json"
       ],
       "requires_human_approval": false
     },
@@ -186,9 +183,8 @@
         "If accepted deployments never emit a terminal `7973` outcome, the criterion fails."
       ],
       "source_evidence": [
-        "internal/service/llm_provisioning_coordinator.go:120-251",
-        "internal/controlplane/llm_responder.go",
-        "internal/service/llm_registry.go:252-327"
+        "docs/event-spec.md:156-190",
+        "pstf/features/LLM_ROUTE_RELEASE_DEPLOYMENT/feature_spec.json"
       ],
       "requires_human_approval": false
     },
@@ -216,10 +212,8 @@
         "If reconcile observations cannot influence projected backend/gateway state, the criterion fails."
       ],
       "source_evidence": [
-        "internal/adapters/nostr/projector.go:107-352",
-        "internal/reconcile/llm_reconciler.go",
-        "internal/reconcile/llm_reconciler_test.go",
-        "internal/service/llm_registry_test.go"
+        "docs/event-spec.md:176-210",
+        "pstf/features/LLM_ROUTE_RELEASE_DEPLOYMENT/feature_spec.json"
       ],
       "requires_human_approval": false
     },
@@ -248,16 +242,15 @@
         "If live LLM events stop updating browser-visible state after bootstrap, the criterion fails."
       ],
       "source_evidence": [
-        "web/src/lib/stores/controlplane.svelte.js:304-489",
-        "web/tests/unit/controlplane-store.test.js:190-269",
-        "web/src/lib/nostr/client.js:1-160"
+        "docs/event-spec.md:176-210",
+        "pstf/features/LLM_ROUTE_RELEASE_DEPLOYMENT/feature_spec.json"
       ],
       "requires_human_approval": false
     },
     {
       "ac_id": "LLMRD-AC-009",
       "feature_id": "LLM_ROUTE_RELEASE_DEPLOYMENT",
-      "title": "Approved product contract requires a dedicated end-user browser workflow and excludes legacy operational REST mutations",
+      "title": "Approved product contract requires a dedicated end-user browser workflow for route, release, deploy, and approval behavior and excludes legacy operational REST mutations",
       "type": "ux",
       "priority": "must",
       "assertion": "The approved product contract for this slice requires a dedicated browser-visible workflow that lets an end user create an LLM route, register a release, initiate deployment, review approval state, and observe resulting route-state/activity using signer-first Nostr requests plus relay-backed read models; that workflow must not depend on the deprecated operational REST mutation endpoints `/api/v1/llm/intents`, `/approve`, `/reject`, `/rollback`, `/hosts`, or `/observations` as normative behavior.",
@@ -281,17 +274,117 @@
       "source_evidence": [
         "pstf/features/LLM_ROUTE_RELEASE_DEPLOYMENT/hitl_decisions.md#decision-hitl-llm_route_release_deployment-001--intended-user-surface-classification",
         "pstf/features/LLM_ROUTE_RELEASE_DEPLOYMENT/hitl_decisions.md#decision-hitl-llm_route_release_deployment-002--operational-rest-compatibility-contract-classification",
-        "pstf/features/LLM_ROUTE_RELEASE_DEPLOYMENT/hitl_decisions.md#decision-hitl-llm_route_release_deployment-005--acceptance-criteria-approval"
+        "web/src/routes/llm/+page.svelte"
+      ],
+      "requires_human_approval": false
+    },
+    {
+      "ac_id": "LLMRD-AC-010",
+      "feature_id": "LLM_ROUTE_RELEASE_DEPLOYMENT",
+      "title": "LLM rollback requests are signer-first, explicitly tagged, and accepted asynchronously",
+      "type": "functional",
+      "priority": "must",
+      "assertion": "Requesting rollback of an LLM route/environment must publish a signed kind `5975` request carrying explicit `route` and `environment` correlation tags, fail pre-acceptance when no relay accepts the request, and on acceptance return a correlated kind `6973` reply whose semantic meaning is `accepted for async processing`, not terminal success.",
+      "testable_by": [
+        "integration",
+        "contract"
+      ],
+      "preconditions": [
+        "A route and environment exist.",
+        "A signer-capable caller can publish canonical LLM rollback requests."
+      ],
+      "steps": [
+        "Publish a valid rollback request.",
+        "Observe relay acceptance behavior and the first correlated reply event."
+      ],
+      "expected_result": "The request is signed and explicitly tagged, zero-accept publish fails locally, and successful acceptance yields a correlated `6973` reply that represents async acceptance rather than terminal success.",
+      "negative_cases": [
+        "If the caller treats the initial accepted status as a completed rollback, the criterion fails.",
+        "If a rollback request can succeed without explicit route/environment correlation tags, the criterion fails."
+      ],
+      "source_evidence": [
+        "internal/controlplane/llm_command_publisher.go:186-216",
+        "docs/control-planes.md:65-135",
+        "docs/event-spec.md:140-190",
+        "pstf/features/LLM_ROUTE_RELEASE_DEPLOYMENT/hitl_decisions.md#decision-hitl-llm_route_release_deployment-012--replacement-rollback-target-selection-rule"
+      ],
+      "requires_human_approval": false
+    },
+    {
+      "ac_id": "LLMRD-AC-011",
+      "feature_id": "LLM_ROUTE_RELEASE_DEPLOYMENT",
+      "title": "LLM rollback selects the previous deployed different release and fails closed when no prior deployed release exists",
+      "type": "data_integrity",
+      "priority": "must",
+      "assertion": "After an accepted rollback request, Bahia must target the most recent previously deployed different release for the same route/environment (n-1 style), create a rollback deployment intent for that release, and reject rollback with a correlated error and no state mutation when no previous deployed different release exists.",
+      "testable_by": [
+        "integration",
+        "contract",
+        "manual_review"
+      ],
+      "preconditions": [
+        "The route/environment has a current desired deployed release.",
+        "Historical deployment state exists for at least one earlier deployed release in the success case."
+      ],
+      "steps": [
+        "Seed a route/environment with a current deployed release and at least one earlier deployed different release.",
+        "Request rollback.",
+        "Inspect the created rollback intent and resulting desired route state.",
+        "Repeat with no previous deployed different release available."
+      ],
+      "expected_result": "Rollback targets the previous deployed different release, records a rollback deployment intent for that release, and moves desired route state toward that prior release; if no previous deployed different release exists, rollback fails without silently keeping or reselecting the current desired release.",
+      "negative_cases": [
+        "If rollback targets the current desired release again, the criterion fails.",
+        "If rollback selects an undeployed or unrelated release, the criterion fails.",
+        "If no prior deployed different release exists and rollback still mutates desired state, the criterion fails."
+      ],
+      "source_evidence": [
+        "internal/service/llm_registry.go:329-369",
+        "pstf/features/LLM_ROUTE_RELEASE_DEPLOYMENT/feature_spec.json",
+        "pstf/features/LLM_ROUTE_RELEASE_DEPLOYMENT/hitl_decisions.md#decision-hitl-llm_route_release_deployment-012--replacement-rollback-target-selection-rule"
+      ],
+      "requires_human_approval": false
+    },
+    {
+      "ac_id": "LLMRD-AC-012",
+      "feature_id": "LLM_ROUTE_RELEASE_DEPLOYMENT",
+      "title": "The dedicated `/llm` browser workflow must expose signer-first rollback and surface its outcome without deprecated REST mutations",
+      "type": "ux",
+      "priority": "must",
+      "assertion": "The dedicated browser-visible `/llm` workflow must let an end user initiate rollback for a route/environment, use signer-first kind `5975` plus relay-backed status/result/read-model handling, surface rollback progress or terminal failure/success to the user, and avoid treating `/api/v1/llm/rollback` or the broader operational REST mutation surface as normative behavior.",
+      "testable_by": [
+        "e2e",
+        "manual_review",
+        "contract"
+      ],
+      "preconditions": [
+        "The `/llm` workflow is enabled for browser users.",
+        "The target route/environment has rollback-eligible deployment history for the success case."
+      ],
+      "steps": [
+        "Open the dedicated `/llm` workflow.",
+        "Initiate rollback for a route/environment with rollback-eligible history.",
+        "Observe the request kind, resulting activity/state updates, and any browser-visible status/notice.",
+        "Repeat for a route/environment with no rollback-eligible prior release."
+      ],
+      "expected_result": "Rollback is user-visible in the dedicated workflow, publishes signer-first `5975`, updates browser-visible activity and route state from Bahia-authored relay events, and surfaces failure when no rollback target exists without falling back to deprecated REST mutations.",
+      "negative_cases": [
+        "If rollback is only available through API/MCP/operator-only paths and not the intended dedicated browser workflow, the criterion fails.",
+        "If the browser rollback path relies on `/api/v1/llm/rollback` or related operational REST mutation endpoints as normative behavior, the criterion fails.",
+        "If a no-target rollback case appears successful in the browser despite backend failure, the criterion fails."
+      ],
+      "source_evidence": [
+        "web/src/routes/llm/+page.svelte",
+        "pstf/features/LLM_ROUTE_RELEASE_DEPLOYMENT/feature_spec.json",
+        "pstf/features/LLM_ROUTE_RELEASE_DEPLOYMENT/hitl_decisions.md#decision-hitl-llm_route_release_deployment-013--browser-visible-rollback-classification"
       ],
       "requires_human_approval": false
     }
   ],
   "coverage_notes": [
-    "This approved AC set covers the non-rollback portion of the LLM control-plane slice because rollback semantics were explicitly deferred by HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-004.",
-    "Several criteria are grounded in current backend, projection, and shared-store evidence, while the dedicated end-user browser workflow criterion is authorized by prior HITL and is expected to fail until that workflow is implemented.",
-    "Observed operational REST mutation routes remain useful legacy evidence, but they are not part of the approved intended contract for future test generation."
+    "AC-001 through AC-009 remain verified for the previously approved non-rollback slice.",
+    "AC-010 through AC-012 are now represented in the test matrix and verification artifacts through rollback-specific publisher, reactor, registry, browser-helper, and deterministic `/llm` browser coverage.",
+    "Observed operational REST mutation routes remain useful legacy evidence, but they are not part of the approved intended contract for rollback or browser verification."
   ],
-  "unresolved_questions": [
-    "What explicit rollback target-selection and supersedence rule should replace the current implementation before rollback-specific acceptance criteria and tests are generated?"
-  ]
+  "unresolved_questions": []
 }

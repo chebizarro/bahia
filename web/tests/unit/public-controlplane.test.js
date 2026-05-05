@@ -174,6 +174,42 @@ describe('public controlplane command helpers', () => {
     });
   });
 
+  it('requests LLM rollback through canonical signer-first rollback requests and awaits accepted/completed responses', async () => {
+    awaitResultMock.mockResolvedValueOnce({
+      id: 'result-llm-rollback',
+      kind: 6973,
+      tags: [['e', 'req-1'], ['status', 'processing'], ['step', 'accepted']],
+      content: JSON.stringify({ status: 'processing', step: 'accepted', message: 'rollback accepted' })
+    });
+
+    const result = await api.requestLLMRollback({
+      route_id: 'llm-route-1',
+      environment_id: 'env-prod',
+      requested_by: 'f'.repeat(64)
+    });
+
+    expect(publishRequestMock).toHaveBeenCalledWith({
+      kind: 5975,
+      tags: [['route', 'llm-route-1'], ['environment', 'env-prod']],
+      content: {
+        route_id: 'llm-route-1',
+        environment_id: 'env-prod',
+        requested_by: 'f'.repeat(64)
+      }
+    });
+    expect(awaitResultMock).toHaveBeenCalledWith({
+      requestEventId: 'req-1',
+      resultKinds: [6973, 7973]
+    });
+    expect(result).toMatchObject({
+      requestEventId: 'req-1',
+      event: {
+        id: 'result-llm-rollback',
+        kind: 6973
+      }
+    });
+  });
+
   it('approves LLM deployment intents through signer-first approval requests', async () => {
     await api.approveLLMDeploymentIntent('llm-intent-1');
 

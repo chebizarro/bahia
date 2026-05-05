@@ -658,22 +658,227 @@
       ],
       "status": "pass",
       "failure_reason": null
+    },
+    {
+      "test_id": "LLMRD-T-020",
+      "ac_ids": [
+        "LLMRD-AC-010"
+      ],
+      "title": "LLM rollback request publisher emits explicit route/environment tags and fails on zero accept",
+      "type": "contract",
+      "existing_or_new": "modify_existing",
+      "target_path": "internal/controlplane/llm_command_publisher_test.go",
+      "description": "Extends canonical rollback publisher coverage to prove explicit `route` / `environment` tagging, signed `5975` publication, and local failure when zero relays accept the request.",
+      "preconditions": [
+        "LLM command publisher can be constructed with a capture publisher and signer."
+      ],
+      "steps": [
+        "Publish a valid rollback command with one accepted relay.",
+        "Inspect emitted request kind, signature, content, and tags.",
+        "Repeat with zero accepted relays."
+      ],
+      "expected_result": "Successful publish emits signed kind `5975` with explicit route/environment tags; zero-accept publish returns a local error and no false success receipt.",
+      "fixtures": [
+        "capture Nostr publisher"
+      ],
+      "mocks": [],
+      "data_requirements": [
+        "Stable route and environment UUID fixtures."
+      ],
+      "determinism_notes": [
+        "Pure publisher test; no live relay required."
+      ],
+      "status": "pass",
+      "failure_reason": null
+    },
+    {
+      "test_id": "LLMRD-T-021",
+      "ac_ids": [
+        "LLMRD-AC-010"
+      ],
+      "title": "Accepted rollback request emits initial correlated 6973 processing status",
+      "type": "integration",
+      "existing_or_new": "new",
+      "target_path": "internal/controlplane/reactor_llm_requests_test.go",
+      "description": "Reactor-level rollback contract test that proves the first reply to an accepted kind `5975` request is a correlated `6973` accepted status for async processing rather than terminal success.",
+      "preconditions": [
+        "A route/environment exists with a current deployed release and a rollback-eligible previous deployed different release.",
+        "An authorized requester can publish a signed rollback request."
+      ],
+      "steps": [
+        "Deliver a signed kind `5975` rollback request to the reactor.",
+        "Inspect the created rollback intent and the first published correlated reply event.",
+        "Decode reply tags and content."
+      ],
+      "expected_result": "The reactor creates a rollback intent and publishes a correlated kind `6973` reply with `status=processing`, step `accepted`, and rollback target release correlation.",
+      "fixtures": [
+        "capture Nostr publisher",
+        "in-memory LLM registry dependencies"
+      ],
+      "mocks": [
+        "authorized requester configuration"
+      ],
+      "data_requirements": [
+        "Stable route, environment, previous release, current release, and requester fixtures."
+      ],
+      "determinism_notes": [
+        "Inspect reply ordering directly from the in-process capture publisher.",
+        "Assert `e`, `p`, `route`, `environment`, `release`, and `intent` tags."
+      ],
+      "status": "pass",
+      "failure_reason": null
+    },
+    {
+      "test_id": "LLMRD-T-022",
+      "ac_ids": [
+        "LLMRD-AC-011"
+      ],
+      "title": "Rollback selects the previous deployed different release and supersedes the current desired intent",
+      "type": "integration",
+      "existing_or_new": "new",
+      "target_path": "internal/service/llm_registry_test.go",
+      "description": "Registry-level rollback coverage for the approved n-1 rule, including rollback intent creation, supersedence of the current deployed intent, and desired state movement to the previous deployed different release.",
+      "preconditions": [
+        "The route/environment has a current deployed release and at least one earlier deployed different release."
+      ],
+      "steps": [
+        "Seed previous and current deployed intents plus desired route state.",
+        "Call `RollbackWithMetadata`.",
+        "Inspect the returned rollback intent and resulting route state."
+      ],
+      "expected_result": "Rollback targets the previous deployed different release, records `source_kind=rollback`, supersedes the current deployed intent, and moves desired route state to the prior release and new rollback intent.",
+      "fixtures": [
+        "fake LLM registry repositories"
+      ],
+      "mocks": [],
+      "data_requirements": [
+        "Stable route, environment, release, and deployed-intent fixtures."
+      ],
+      "determinism_notes": [
+        "Pure in-process registry test with deterministic fake repositories."
+      ],
+      "status": "pass",
+      "failure_reason": null
+    },
+    {
+      "test_id": "LLMRD-T-023",
+      "ac_ids": [
+        "LLMRD-AC-011"
+      ],
+      "title": "Rollback fails closed without a previous deployed different release",
+      "type": "integration",
+      "existing_or_new": "new",
+      "target_path": "internal/service/llm_registry_test.go",
+      "description": "Registry-level negative rollback coverage proving the no-target path returns an error, leaves desired route state unchanged, and does not create a new rollback intent.",
+      "preconditions": [
+        "The route/environment has only the current deployed release and no earlier deployed different release."
+      ],
+      "steps": [
+        "Seed only the current deployed intent plus desired route state.",
+        "Call `RollbackWithMetadata`.",
+        "Inspect the error, route state, and intent repository contents."
+      ],
+      "expected_result": "Rollback fails with no target-selection fallback, desired route state remains unchanged, and no new rollback intent is created.",
+      "fixtures": [
+        "fake LLM registry repositories"
+      ],
+      "mocks": [],
+      "data_requirements": [
+        "Stable route, environment, release, and deployed-intent fixtures."
+      ],
+      "determinism_notes": [
+        "Pure in-process registry negative test; no relay dependency."
+      ],
+      "status": "pass",
+      "failure_reason": null
+    },
+    {
+      "test_id": "LLMRD-T-024",
+      "ac_ids": [
+        "LLMRD-AC-012"
+      ],
+      "title": "Dedicated `/llm` browser workflow exposes signer-first rollback and converges route state back to the previous release",
+      "type": "e2e",
+      "existing_or_new": "new",
+      "target_path": "web/tests/e2e/llm-route-release-deployment.spec.js",
+      "description": "Deterministic Playwright coverage for the full positive browser rollback workflow: deploy v1, deploy v2, request rollback, observe signer-first `5975`, observe correlated accepted/completed relay activity, and confirm route state converges to v1 without deprecated REST mutations.",
+      "preconditions": [
+        "The dedicated `/llm` workflow is present in the browser.",
+        "Deterministic relay-backed test harness is available."
+      ],
+      "steps": [
+        "Create a route, register v1, deploy and approve it.",
+        "Register v2, deploy and approve it.",
+        "Trigger rollback from the route-state table.",
+        "Inspect request trace, route-state projection, and rollback activity history."
+      ],
+      "expected_result": "The browser publishes signer-first `5975`, surfaces rollback outcome in the dedicated `/llm` workflow, and route state converges to the previous deployed different release without calling deprecated `/api/v1/llm/**` mutation endpoints.",
+      "fixtures": [
+        "Bahia e2e harness with deterministic relay fixtures",
+        "test route/release/environment data"
+      ],
+      "mocks": [
+        "browser relay/request harness"
+      ],
+      "data_requirements": [
+        "Stable route, release, environment, and requester fixtures suitable for repeatable browser automation."
+      ],
+      "determinism_notes": [
+        "Harness intercepts signer-first WebSocket publishes and synthesizes correlated relay-visible projections, accepted statuses, and terminal results.",
+        "Explicitly asserts the browser workflow avoids deprecated `/api/v1/llm/**` mutation endpoints."
+      ],
+      "status": "pass",
+      "failure_reason": null
+    },
+    {
+      "test_id": "LLMRD-T-025",
+      "ac_ids": [
+        "LLMRD-AC-012"
+      ],
+      "title": "Dedicated `/llm` browser rollback surfaces no-target failure without mutating route state",
+      "type": "e2e",
+      "existing_or_new": "new",
+      "target_path": "web/tests/e2e/llm-route-release-deployment.spec.js",
+      "description": "Deterministic Playwright negative coverage for a rollback request when no previous deployed different release exists.",
+      "preconditions": [
+        "The dedicated `/llm` workflow is present in the browser.",
+        "A route/environment exists with only a single deployed release in rollback history."
+      ],
+      "steps": [
+        "Open the seeded `/llm` workflow.",
+        "Trigger rollback from the route-state table.",
+        "Inspect the failure notice, request trace, and resulting route state."
+      ],
+      "expected_result": "The browser surfaces the backend no-target rollback failure, still records signer-first `5975`, and leaves route state unchanged without calling deprecated `/api/v1/llm/**` mutation endpoints.",
+      "fixtures": [
+        "Bahia e2e harness with seeded single-release route state"
+      ],
+      "mocks": [
+        "browser relay/request harness"
+      ],
+      "data_requirements": [
+        "Stable single-release route, environment, and requester fixtures."
+      ],
+      "determinism_notes": [
+        "Harness deterministically synthesizes the backend error result for the no-target rollback path."
+      ],
+      "status": "pass",
+      "failure_reason": null
     }
   ],
   "coverage_summary": {
-    "criteria_total": 9,
-    "criteria_with_tests": 9,
-    "known_gaps": [
-      "Rollback-specific tests remain intentionally excluded because rollback acceptance criteria were deferred by HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-004."
-    ]
+    "criteria_total": 12,
+    "criteria_with_tests": 12,
+    "known_gaps": []
   },
   "implementation_notes": [
-    "`internal/controlplane/reactor_llm_requests_test.go` covers Bahia-side signed request/result correlation for route create, release register, deploy acceptance, approval, rejection, and invalid decision handling.",
-    "`internal/controlplane/llm_command_publisher_test.go` now covers canonical route-create and release-register publisher paths in addition to deploy and rollback publisher contracts.",
-    "`internal/mcp/server_llm_test.go` now proves MCP route-create and release-register tools publish canonical signer-first Nostr requests instead of mutating the registry directly.",
-    "`internal/service/llm_provisioning_coordinator_test.go` now verifies coordinator success-path progress/completion and failure-path terminal error behavior for AC-006.",
-    "`web/tests/unit/public-controlplane.test.js` adds direct browser-request helper coverage for signer-first LLM route, release, deploy, and approval requests.",
-    "`web/src/routes/llm/+page.svelte`, `web/tests/e2e/harnesses/llm-controlplane-public.js`, and `web/tests/e2e/llm-route-release-deployment.spec.js` now provide deterministic end-to-end coverage for the dedicated browser workflow required by AC-009.",
+    "`internal/controlplane/reactor_llm_requests_test.go` now covers Bahia-side signed request/result correlation for route create, release register, deploy acceptance, rollback acceptance, approval, rejection, and invalid decision handling.",
+    "`internal/controlplane/llm_command_publisher_test.go` now covers canonical route-create, release-register, deploy, and rollback publisher contracts, including zero-accept failure for both deploy and rollback.",
+    "`internal/service/llm_registry_test.go` now verifies rollback n-1 target selection, supersedence, and fail-closed behavior when no previous deployed different release exists.",
+    "`internal/mcp/server_llm_test.go` proves MCP route-create, release-register, deploy, and approval/rejection tools publish canonical signer-first Nostr requests instead of mutating the registry directly.",
+    "`internal/service/llm_provisioning_coordinator_test.go` verifies coordinator success-path progress/completion and failure-path terminal error behavior for AC-006.",
+    "`web/tests/unit/public-controlplane.test.js` adds direct browser-request helper coverage for signer-first LLM rollback requests alongside route, release, deploy, and approval requests.",
+    "`web/src/routes/llm/+page.svelte`, `web/tests/e2e/harnesses/llm-controlplane-public.js`, and `web/tests/e2e/llm-route-release-deployment.spec.js` now provide deterministic end-to-end coverage for both positive and negative rollback behavior in the dedicated `/llm` browser workflow required by AC-012.",
     "`web/tests/unit/controlplane-store.test.js` includes explicit spoofed non-Bahia LLM route/state/activity regression coverage for AC-008."
   ]
 }

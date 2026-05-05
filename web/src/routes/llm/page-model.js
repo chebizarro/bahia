@@ -165,3 +165,11 @@ export function buildDeployPayload(deployForm, requesterPubkey) {
     requested_by: deployForm.requested_by || requesterPubkey || ''
   };
 }
+
+export function buildRollbackPayload(routeState, requesterPubkey) {
+  return {
+    route_id: routeState.route_id,
+    environment_id: routeState.environment_id,
+    requested_by: routeState.requested_by || requesterPubkey || ''
+  };
+}

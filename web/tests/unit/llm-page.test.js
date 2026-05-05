@@ -3,6 +3,7 @@ import {
   activityData,
   buildCreateRoutePayload,
   buildDeployPayload,
+  buildRollbackPayload,
   buildEnvironmentOptions,
   buildLLMActivityKinds,
   buildLLMEventHistory,
@@ -94,6 +95,16 @@ describe('llm page model helpers', () => {
       route_id: 'llm-route-1',
       environment_id: 'env-prod',
       release_id: 'llm-release-1',
+      requested_by: 'f'.repeat(64)
+    });
+
+    expect(buildRollbackPayload({
+      route_id: 'llm-route-1',
+      environment_id: 'env-prod',
+      requested_by: ''
+    }, 'f'.repeat(64))).toEqual({
+      route_id: 'llm-route-1',
+      environment_id: 'env-prod',
       requested_by: 'f'.repeat(64)
     });
   });

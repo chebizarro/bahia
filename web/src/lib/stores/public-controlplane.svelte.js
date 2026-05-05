@@ -92,15 +92,10 @@ export function registerLLMRelease(payload) {
   });
 }
 
-export async function requestLLMDeploy(payload) {
+async function requestLLMAsyncLifecycle(kind, payload, tags) {
   await bootstrapControlplane();
-  const tags = [
-    ['route', payload.route_id],
-    ['environment', payload.environment_id],
-    ['release', payload.release_id]
-  ].filter((tag) => tag[1]);
   const { requestEventId } = await publishRequest({
-    kind: KINDS.BAHIA_REQUEST_LLM_DEPLOY,
+    kind,
     tags,
     content: payload
   });
@@ -112,6 +107,29 @@ export async function requestLLMDeploy(payload) {
     requestEventId,
     event: throwIfErrorResult(event)
   };
+}
+
+export function requestLLMDeploy(payload) {
+  return requestLLMAsyncLifecycle(
+    KINDS.BAHIA_REQUEST_LLM_DEPLOY,
+    payload,
+    [
+      ['route', payload.route_id],
+      ['environment', payload.environment_id],
+      ['release', payload.release_id]
+    ].filter((tag) => tag[1])
+  );
+}
+
+export function requestLLMRollback(payload) {
+  return requestLLMAsyncLifecycle(
+    KINDS.BAHIA_REQUEST_LLM_ROLLBACK,
+    payload,
+    [
+      ['route', payload.route_id],
+      ['environment', payload.environment_id]
+    ].filter((tag) => tag[1])
+  );
 }
 
 export function approveLLMDeploymentIntent(id) {

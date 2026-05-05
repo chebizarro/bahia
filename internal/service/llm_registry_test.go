@@ -69,6 +69,78 @@ func TestLLMRegistryRejectIntentRepairsDesiredStateToPreviousDeployment(t *testi
 	}
 }
 
+func TestLLMRegistryRollbackSelectsPreviousDeployedDifferentRelease(t *testing.T) {
+	routeID, previousReleaseID, currentReleaseID, envID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	repos := newLLMRegistryFakes(routeID, currentReleaseID, envID)
+	repos.releases.byID[previousReleaseID] = &domain.LLMRelease{ID: previousReleaseID, RouteID: routeID, Version: "v0", ModelRef: "hf/previous", ModelSource: domain.ModelSourceHuggingFace, ExternalBackend: &domain.LLMExternalBackendConfig{BaseURL: "https://prev.example.com"}}
+	reg := NewLLMRegistryService(repos.routes, repos.releases, repos.envs, repos.intents, repos.runs, repos.obs, repos.states, nil, zap.NewNop())
+
+	previous := &domain.LLMDeploymentIntent{RouteID: routeID, ReleaseID: previousReleaseID, EnvironmentID: envID, RequestedBy: "previous", SourceKind: domain.SourceKindManual, ApprovalStatus: domain.ApprovalStatusNotRequired, Status: domain.IntentStatusDeployed}
+	if err := repos.intents.Create(t.Context(), previous); err != nil {
+		t.Fatalf("seed previous intent: %v", err)
+	}
+	current := &domain.LLMDeploymentIntent{RouteID: routeID, ReleaseID: currentReleaseID, EnvironmentID: envID, RequestedBy: "current", SourceKind: domain.SourceKindManual, ApprovalStatus: domain.ApprovalStatusNotRequired, Status: domain.IntentStatusDeployed}
+	if err := repos.intents.Create(t.Context(), current); err != nil {
+		t.Fatalf("seed current intent: %v", err)
+	}
+	if err := repos.states.Upsert(t.Context(), &domain.LLMRouteState{RouteID: routeID, EnvironmentID: envID, DesiredReleaseID: &currentReleaseID, DesiredIntentID: &current.ID, DriftStatus: domain.DriftStatusInSync}); err != nil {
+		t.Fatalf("seed route state: %v", err)
+	}
+
+	rollbackIntent, err := reg.RollbackWithMetadata(t.Context(), routeID, envID, "operator", map[string]any{"source": "test"})
+	if err != nil {
+		t.Fatalf("rollback: %v", err)
+	}
+	if rollbackIntent.ReleaseID != previousReleaseID {
+		t.Fatalf("expected rollback to previous release %s, got %s", previousReleaseID, rollbackIntent.ReleaseID)
+	}
+	if rollbackIntent.SourceKind != domain.SourceKindRollback {
+		t.Fatalf("expected rollback source kind, got %s", rollbackIntent.SourceKind)
+	}
+	if rollbackIntent.SupersedesIntentID == nil || *rollbackIntent.SupersedesIntentID != current.ID {
+		t.Fatalf("expected rollback to supersede current deployed intent, got %#v", rollbackIntent.SupersedesIntentID)
+	}
+	state, err := reg.GetRouteState(t.Context(), routeID, envID)
+	if err != nil || state == nil {
+		t.Fatalf("state after rollback: %v %#v", err, state)
+	}
+	if state.DesiredReleaseID == nil || *state.DesiredReleaseID != previousReleaseID {
+		t.Fatalf("expected desired release to move to previous deployment, got %#v", state)
+	}
+	if state.DesiredIntentID == nil || *state.DesiredIntentID != rollbackIntent.ID {
+		t.Fatalf("expected desired intent to point at rollback intent, got %#v", state)
+	}
+}
+
+func TestLLMRegistryRollbackFailsClosedWithoutPreviousDeployedDifferentRelease(t *testing.T) {
+	routeID, currentReleaseID, envID := uuid.New(), uuid.New(), uuid.New()
+	repos := newLLMRegistryFakes(routeID, currentReleaseID, envID)
+	reg := NewLLMRegistryService(repos.routes, repos.releases, repos.envs, repos.intents, repos.runs, repos.obs, repos.states, nil, zap.NewNop())
+
+	current := &domain.LLMDeploymentIntent{RouteID: routeID, ReleaseID: currentReleaseID, EnvironmentID: envID, RequestedBy: "current", SourceKind: domain.SourceKindManual, ApprovalStatus: domain.ApprovalStatusNotRequired, Status: domain.IntentStatusDeployed}
+	if err := repos.intents.Create(t.Context(), current); err != nil {
+		t.Fatalf("seed current intent: %v", err)
+	}
+	if err := repos.states.Upsert(t.Context(), &domain.LLMRouteState{RouteID: routeID, EnvironmentID: envID, DesiredReleaseID: &currentReleaseID, DesiredIntentID: &current.ID, DriftStatus: domain.DriftStatusInSync}); err != nil {
+		t.Fatalf("seed route state: %v", err)
+	}
+
+	_, err := reg.RollbackWithMetadata(t.Context(), routeID, envID, "operator", map[string]any{"source": "test"})
+	if err == nil {
+		t.Fatalf("expected rollback failure without previous deployed different release")
+	}
+	state, stateErr := reg.GetRouteState(t.Context(), routeID, envID)
+	if stateErr != nil || state == nil {
+		t.Fatalf("state after rollback failure: %v %#v", stateErr, state)
+	}
+	if state.DesiredReleaseID == nil || *state.DesiredReleaseID != currentReleaseID {
+		t.Fatalf("expected desired release to remain unchanged, got %#v", state)
+	}
+	if len(repos.intents.byID) != 1 {
+		t.Fatalf("expected no new rollback intent to be created, got %d intents", len(repos.intents.byID))
+	}
+}
+
 type llmRegistryFakes struct {
 	routes   *fakeLLMRouteRepo
 	releases *fakeLLMReleaseRepo

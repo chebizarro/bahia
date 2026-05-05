@@ -6,6 +6,7 @@
     registerLLMRelease,
     rejectLLMDeploymentIntent,
     requestLLMDeploy,
+    requestLLMRollback,
     resultContent
   } from '$lib/stores/public-controlplane.svelte.js';
   import { currentRequesterPubkey } from '$lib/nostr/controlplane-requests.js';
@@ -16,6 +17,7 @@
     buildCreateRoutePayload,
     buildDeployPayload,
     buildEnvironmentOptions,
+    buildRollbackPayload,
     buildLLMActivityKinds,
     buildLLMEventHistory,
     buildPendingApprovals,
@@ -38,6 +40,7 @@
   let routeSubmitting = $state(false);
   let releaseSubmitting = $state(false);
   let deploySubmitting = $state(false);
+  let rollbackSubmitting = $state('');
   let decisionSubmitting = $state('');
 
   let routeForm = $state({
@@ -180,6 +183,24 @@
     }
   }
 
+  function rollbackKey(routeState) {
+    return `${routeState.route_id}:${routeState.environment_id}`;
+  }
+
+  async function handleRollback(routeState) {
+    rollbackSubmitting = rollbackKey(routeState);
+    resetNotice();
+    try {
+      const { event: statusEvent } = await requestLLMRollback(buildRollbackPayload(routeState, currentRequesterPubkey()));
+      const content = resultContent(statusEvent);
+      setSuccess(content.message || 'LLM rollback request accepted for async processing');
+    } catch (err) {
+      setFailure(err.message || 'Failed to request LLM rollback');
+    } finally {
+      rollbackSubmitting = '';
+    }
+  }
+
   async function handleDecision(intentId, decision) {
     decisionSubmitting = `${decision}:${intentId}`;
     resetNotice();
@@ -201,7 +222,7 @@
   <div class="page-header">
     <div>
       <h1>LLM Control Plane</h1>
-      <p class="subtitle">Signer-first route creation, release registration, deployment, approval, and relay-backed route-state visibility.</p>
+      <p class="subtitle">Signer-first route creation, release registration, deployment, rollback, approval, and relay-backed route-state visibility.</p>
     </div>
     <div class="connection-card" data-testid="llm-connection-status">
       <strong>{controlplaneConnection.status}</strong>
@@ -404,6 +425,7 @@
                 <th>Active run</th>
                 <th>Drift</th>
                 <th>Gateway</th>
+                <th>Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -416,6 +438,20 @@
                   <td><code>{state.active_run_label}</code></td>
                   <td>{state.drift_status || '-'}</td>
                   <td>{state.gateway_status || '-'}</td>
+                  <td>
+                    {#if state.desired_release_id}
+                      <button
+                        type="button"
+                        data-testid={`rollback-${state.route_id}-${state.environment_id}`}
+                        disabled={rollbackSubmitting === rollbackKey(state)}
+                        onclick={() => handleRollback(state)}
+                      >
+                        {rollbackSubmitting === rollbackKey(state) ? 'Rolling back…' : 'Rollback'}
+                      </button>
+                    {:else}
+                      -
+                    {/if}
+                  </td>
                 </tr>
               {/each}
             </tbody>
@@ -493,6 +529,8 @@
     gap: 1rem;
   }
   .panel {
+    min-width: 0;
+    overflow-x: auto;
     background: var(--card-bg);
     border: 1px solid var(--border-color);
     border-radius: 12px;

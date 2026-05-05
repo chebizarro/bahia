@@ -267,6 +267,76 @@ func TestHandleLLMDeployRequestPublishesAcceptedStatus(t *testing.T) {
 	}
 }
 
+func TestHandleLLMRollbackRequestPublishesAcceptedStatus(t *testing.T) {
+	ctx := context.Background()
+	capture := &captureNostrPublisher{published: 1}
+	routeID := uuid.New()
+	envID := uuid.New()
+	previousReleaseID := uuid.New()
+	currentReleaseID := uuid.New()
+	currentIntentID := uuid.New()
+	currentIntent := &domain.LLMDeploymentIntent{ID: currentIntentID, RouteID: routeID, EnvironmentID: envID, ReleaseID: currentReleaseID, RequestedBy: "current", SourceKind: domain.SourceKindManual, ApprovalStatus: domain.ApprovalStatusNotRequired, Status: domain.IntentStatusDeployed}
+	routeRepo := &reactorLLMRouteRepo{routes: map[uuid.UUID]*domain.LLMRoute{routeID: {ID: routeID, Name: "chat-prod", GatewayConfig: &domain.LLMGatewayRouteConfig{PublicModel: "bahia/chat"}}}}
+	releaseRepo := &reactorLLMReleaseRepo{releases: map[uuid.UUID]*domain.LLMRelease{
+		previousReleaseID: {ID: previousReleaseID, RouteID: routeID, Version: "v1", ModelRef: "hf://previous", ModelSource: domain.ModelSourceHuggingFace, ExternalBackend: &domain.LLMExternalBackendConfig{BaseURL: "https://prev.example.com"}},
+		currentReleaseID:  {ID: currentReleaseID, RouteID: routeID, Version: "v2", ModelRef: "hf://current", ModelSource: domain.ModelSourceHuggingFace, ExternalBackend: &domain.LLMExternalBackendConfig{BaseURL: "https://current.example.com"}},
+	}}
+	envRepo := &reactorEnvironmentRepo{envs: map[uuid.UUID]*domain.Environment{envID: {ID: envID, Name: "prod", Protected: false}}}
+	intentRepo := &reactorLLMIntentRepo{intents: map[uuid.UUID]*domain.LLMDeploymentIntent{}, order: []uuid.UUID{}}
+	if err := intentRepo.Create(ctx, &domain.LLMDeploymentIntent{RouteID: routeID, EnvironmentID: envID, ReleaseID: previousReleaseID, RequestedBy: "previous", SourceKind: domain.SourceKindManual, ApprovalStatus: domain.ApprovalStatusNotRequired, Status: domain.IntentStatusDeployed}); err != nil {
+		t.Fatalf("seed previous intent: %v", err)
+	}
+	if err := intentRepo.Create(ctx, currentIntent); err != nil {
+		t.Fatalf("seed current intent: %v", err)
+	}
+	stateRepo := &reactorLLMStateRepo{state: &domain.LLMRouteState{RouteID: routeID, EnvironmentID: envID, DesiredReleaseID: &currentReleaseID, DesiredIntentID: &currentIntentID, DriftStatus: domain.DriftStatusInSync}}
+	llmRegistry := service.NewLLMRegistryService(routeRepo, releaseRepo, envRepo, intentRepo, nil, nil, stateRepo, events.NewInProcessPublisher(zap.NewNop()), zap.NewNop())
+	requestKey := nostr.GeneratePrivateKey()
+	requestPubkey, err := nostr.GetPublicKey(requestKey)
+	if err != nil {
+		t.Fatalf("request pubkey: %v", err)
+	}
+	reactor := newLLMRequestTestReactor(t, Config{AuthorizedPubkeys: []string{requestPubkey}}, capture, llmRegistry)
+	request := signedLLMRequest(t, requestKey, KindLLMRollbackRequest, `{}`, nostr.Tags{{"route", routeID.String()}, {"environment", envID.String()}})
+
+	reactor.handleLLMRollbackRequest(ctx, request)
+
+	if len(intentRepo.order) != 3 {
+		t.Fatalf("expected rollback intent to be created, got %d intents", len(intentRepo.order))
+	}
+	intent := intentRepo.intents[intentRepo.order[0]]
+	if intent == nil || intent.RouteID != routeID || intent.EnvironmentID != envID || intent.ReleaseID != previousReleaseID {
+		t.Fatalf("stored rollback intent mismatch: %#v", intent)
+	}
+	if intent.RequestedBy != requestPubkey {
+		t.Fatalf("requested_by = %q, want requester pubkey %q", intent.RequestedBy, requestPubkey)
+	}
+	if intent.Metadata["nostr_event_id"] != request.ID || intent.Metadata["nostr_request_pubkey"] != requestPubkey {
+		t.Fatalf("missing Nostr metadata: %#v", intent.Metadata)
+	}
+	if len(capture.events) != 1 {
+		t.Fatalf("published events = %d, want 1", len(capture.events))
+	}
+	status := capture.events[0]
+	if status.Kind != KindLLMDeploymentStatus {
+		t.Fatalf("status kind = %d, want %d", status.Kind, KindLLMDeploymentStatus)
+	}
+	assertReactorTag(t, status.Tags, "e", request.ID)
+	assertReactorTag(t, status.Tags, "p", requestPubkey)
+	assertReactorTag(t, status.Tags, "status", "processing")
+	assertReactorTag(t, status.Tags, "step", "accepted")
+	assertReactorTag(t, status.Tags, "route", routeID.String())
+	assertReactorTag(t, status.Tags, "environment", envID.String())
+	assertReactorTag(t, status.Tags, "release", previousReleaseID.String())
+	assertReactorTag(t, status.Tags, "intent", intent.ID.String())
+	assertSignedEvent(t, status)
+
+	payload := decodeLLMJSONMap(t, status.Content)
+	if payload["status"] != "processing" || payload["step"] != "accepted" {
+		t.Fatalf("unexpected status payload: %#v", payload)
+	}
+}
+
 func TestHandleLLMDeploymentApprovalApprovesPendingIntent(t *testing.T) {
 	ctx := context.Background()
 	capture := &captureNostrPublisher{published: 1}

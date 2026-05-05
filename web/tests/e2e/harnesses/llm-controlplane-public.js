@@ -23,6 +23,7 @@ export function createLLMState(overrides = {}) {
     nextReleaseId: overrides.nextReleaseId ?? 2,
     nextIntentId: overrides.nextIntentId ?? 2,
     nextRunId: overrides.nextRunId ?? 2,
+    deploymentHistory: (overrides.deploymentHistory || []).map((item) => ({ ...item })),
     environments: (overrides.environments || [
       {
         id: 'env-prod',
@@ -80,6 +81,7 @@ export async function installPublicLLMControlplaneHarness(
         nextReleaseId: initialState.nextReleaseId || 2,
         nextIntentId: initialState.nextIntentId || 2,
         nextRunId: initialState.nextRunId || 2,
+        deploymentHistory: (initialState.deploymentHistory || []).map((item) => ({ ...item })),
         environments: (initialState.environments || []).map((item) => ({ ...item })),
         routes: (initialState.routes || []).map((item) => ({ ...item })),
         releases: (initialState.releases || []).map((item) => ({ ...item })),
@@ -372,10 +374,143 @@ export async function installPublicLLMControlplaneHarness(
             }
           })
         : null;
+      if (payload.decision === 'approve') {
+        state.deploymentHistory = [
+          {
+            route_id: routeState.route_id,
+            environment_id: routeState.environment_id,
+            release_id: routeState.desired_release_id,
+            intent_id: payload.intent_id,
+            deployed_at: new Date().toISOString(),
+            source_kind: 'deploy'
+          },
+          ...state.deploymentHistory.filter((entry) => entry.intent_id !== payload.intent_id)
+        ];
+      }
       recordActivity(decisionResult);
       if (completionResult) recordActivity(completionResult);
       persistReadModels();
       return { projections: [projection], events: completionResult ? [decisionResult, completionResult] : [decisionResult] };
+    }
+
+    function rollbackAcceptedResult(requestEvent, payload) {
+      const state = window.__BAHIA_E2E_LLM_STATE;
+      const current = state.routeStates.find((routeState) => routeState.route_id === payload.route_id && routeState.environment_id === payload.environment_id);
+      if (!current || !current.desired_release_id) {
+        const errorResult = nostrEvent({
+          id: `result-${requestEvent.id}`,
+          kind: 7973,
+          tags: [['e', requestEvent.id], ['p', requestEvent.pubkey], ['status', 'error'], ['error', 'no LLM route state exists for this route/environment']],
+          content: { status: 'error', error: 'no LLM route state exists for this route/environment', route_id: payload.route_id, environment_id: payload.environment_id }
+        });
+        recordActivity(errorResult);
+        persistReadModels();
+        return { projections: [], events: [errorResult] };
+      }
+
+      const previousDeployment = (state.deploymentHistory || []).find((entry) => (
+        entry.route_id === payload.route_id
+        && entry.environment_id === payload.environment_id
+        && entry.release_id !== current.desired_release_id
+      ));
+      if (!previousDeployment) {
+        const errorResult = nostrEvent({
+          id: `result-${requestEvent.id}`,
+          kind: 7973,
+          tags: [['e', requestEvent.id], ['p', requestEvent.pubkey], ['status', 'error'], ['error', 'no previous successfully deployed LLM release to roll back to']],
+          content: {
+            status: 'error',
+            error: 'no previous successfully deployed LLM release to roll back to',
+            route_id: payload.route_id,
+            environment_id: payload.environment_id
+          }
+        });
+        recordActivity(errorResult);
+        persistReadModels();
+        return { projections: [], events: [errorResult] };
+      }
+
+      const release = state.releases.find((candidate) => candidate.id === previousDeployment.release_id) || null;
+      const intentId = `llm-intent-${state.nextIntentId++}`;
+      const acceptedState = {
+        ...current,
+        desired_release_id: previousDeployment.release_id,
+        desired_intent_id: intentId,
+        active_run_id: null,
+        drift_status: 'deploying',
+        gateway_status: 'pending',
+        backend_health: 'unknown',
+        updated_at: new Date().toISOString()
+      };
+      upsertRouteState(acceptedState);
+      const acceptedProjection = nostrEvent({
+        id: `rollback-state-${payload.route_id}-${payload.environment_id}-${Date.now()}`,
+        kind: 31965,
+        tags: [['d', `${payload.route_id}:${payload.environment_id}`], ['route', payload.route_id], ['environment', payload.environment_id]],
+        content: acceptedState
+      });
+      const acceptedStatus = nostrEvent({
+        id: `status-${requestEvent.id}`,
+        kind: 6973,
+        tags: [['e', requestEvent.id], ['p', requestEvent.pubkey], ['status', 'processing'], ['step', 'accepted'], ['route', payload.route_id], ['environment', payload.environment_id], ['release', previousDeployment.release_id], ['intent', intentId]],
+        content: {
+          intent_id: intentId,
+          route_id: payload.route_id,
+          environment_id: payload.environment_id,
+          release_id: previousDeployment.release_id,
+          requested_by: payload.requested_by || requesterPubkey,
+          status: 'processing',
+          step: 'accepted',
+          message: 'LLM rollback intent accepted'
+        }
+      });
+      recordActivity(acceptedStatus);
+      persistReadModels();
+
+      const completedState = {
+        ...acceptedState,
+        active_run_id: `llm-run-${state.nextRunId++}`,
+        drift_status: 'in_sync',
+        gateway_status: 'synced',
+        backend_health: 'healthy',
+        backend_endpoint: release?.external_backend?.base_url || 'http://worker.example.com:8000',
+        updated_at: new Date().toISOString()
+      };
+      upsertRouteState(completedState);
+      state.deploymentHistory = [
+        {
+          route_id: payload.route_id,
+          environment_id: payload.environment_id,
+          release_id: previousDeployment.release_id,
+          intent_id: intentId,
+          deployed_at: new Date().toISOString(),
+          source_kind: 'rollback'
+        },
+        ...state.deploymentHistory.filter((entry) => entry.intent_id !== intentId)
+      ];
+      const completedProjection = nostrEvent({
+        id: `rollback-complete-${payload.route_id}-${payload.environment_id}-${Date.now()}`,
+        kind: 31965,
+        tags: [['d', `${payload.route_id}:${payload.environment_id}`], ['route', payload.route_id], ['environment', payload.environment_id]],
+        content: completedState
+      });
+      const completionResult = nostrEvent({
+        id: `result-${requestEvent.id}`,
+        kind: 7973,
+        tags: [['e', requestEvent.id], ['p', requestEvent.pubkey], ['status', 'completed'], ['intent', intentId], ['route', payload.route_id], ['environment', payload.environment_id], ['release', previousDeployment.release_id]],
+        content: {
+          intent_id: intentId,
+          route_id: payload.route_id,
+          environment_id: payload.environment_id,
+          release_id: previousDeployment.release_id,
+          run_id: completedState.active_run_id,
+          status: 'completed',
+          message: 'LLM rollback completed'
+        }
+      });
+      recordActivity(completionResult);
+      persistReadModels();
+      return { projections: [acceptedProjection, completedProjection], events: [acceptedStatus, completionResult] };
     }
 
     function handleRequest(requestEvent) {
@@ -389,6 +524,8 @@ export async function installPublicLLMControlplaneHarness(
           return deployAcceptedResult(requestEvent, payload);
         case 5974:
           return approvalDecisionResult(requestEvent, payload);
+        case 5975:
+          return rollbackAcceptedResult(requestEvent, payload);
         default:
           return { projections: [], events: [] };
       }
@@ -434,7 +571,7 @@ export async function installPublicLLMControlplaneHarness(
         this.__bahiaSubs?.delete(message[1]);
         return originalSend.call(this, data);
       }
-      if (Array.isArray(message) && message[0] === 'EVENT' && [5971, 5972, 5973, 5974].includes(message[1]?.kind)) {
+      if (Array.isArray(message) && message[0] === 'EVENT' && [5971, 5972, 5973, 5974, 5975].includes(message[1]?.kind)) {
         const requestEvent = message[1];
         window.__BAHIA_E2E_LLM_REQUESTS.push({
           relay: this.url,
