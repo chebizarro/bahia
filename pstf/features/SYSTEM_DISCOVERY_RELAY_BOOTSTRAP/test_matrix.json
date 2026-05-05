@@ -34,7 +34,7 @@
         "Pure handler test; no live relay or clock sensitivity beyond fixed config inputs."
       ],
       "status": "not_implemented",
-      "failure_reason": null
+      "failure_reason": "Existing handler tests do not yet assert the full approved sidecar-first public bootstrap contract, including the service-pubkey-backed success case."
     },
     {
       "test_id": "SDRB-T-002",
@@ -64,7 +64,7 @@
       "determinism_notes": [
         "Pure handler tests with no network dependency."
       ],
-      "status": "implemented",
+      "status": "pass",
       "failure_reason": null
     },
     {
@@ -98,7 +98,7 @@
       "determinism_notes": [
         "No live network; promise-resolution order is controlled in test."
       ],
-      "status": "implemented",
+      "status": "pass",
       "failure_reason": null
     },
     {
@@ -134,7 +134,7 @@
       "determinism_notes": [
         "EOSE is simulated by `queryUntilEose` resolution, not sleeps or timers."
       ],
-      "status": "implemented",
+      "status": "pass",
       "failure_reason": null
     },
     {
@@ -171,7 +171,7 @@
       "determinism_notes": [
         "Harness delivers stored events followed by explicit EOSE, so no sleep-based waiting is required."
       ],
-      "status": "implemented",
+      "status": "pass",
       "failure_reason": null
     },
     {
@@ -207,7 +207,7 @@
         "All negative cases are locally simulated; no live relay needed."
       ],
       "status": "not_implemented",
-      "failure_reason": null
+      "failure_reason": "Existing bootstrap-failure coverage only proves connection failure; required fail-closed cases for missing `relay_read_models` and missing browser bootstrap URLs are absent."
     },
     {
       "test_id": "SDRB-T-007",
@@ -239,7 +239,7 @@
       "determinism_notes": [
         "Pure in-memory state mutation tests."
       ],
-      "status": "implemented",
+      "status": "pass",
       "failure_reason": null
     },
     {
@@ -270,7 +270,7 @@
       "determinism_notes": [
         "Pure store-state test; no relay timing dependency."
       ],
-      "status": "implemented",
+      "status": "pass",
       "failure_reason": null
     },
     {
@@ -304,7 +304,7 @@
         "Pure CLI/unit path with mocked system-info client."
       ],
       "status": "not_implemented",
-      "failure_reason": null
+      "failure_reason": "Existing CLI precedence tests do not cover the required discovery fallback failure when `/api/v1/system/info` advertises no browser bootstrap URLs."
     },
     {
       "test_id": "SDRB-T-010",
@@ -341,7 +341,7 @@
         "No live messaging path required; helper behavior is locally evaluated."
       ],
       "status": "not_implemented",
-      "failure_reason": null
+      "failure_reason": "Existing encrypted transport tests prove some separation from public bootstrap, but they do not yet verify the approved minimal capability-gating contract in the AC wording."
     },
     {
       "test_id": "SDRB-T-011",
@@ -378,7 +378,7 @@
         "Keep this as a fixture-driven contract test; do not hit live relays or live backend services."
       ],
       "status": "not_implemented",
-      "failure_reason": null
+      "failure_reason": "No cross-consumer contract test currently proves one canonical `/api/v1/system/info` payload satisfies browser bootstrap, encrypted capability gating, and CLI discovery together."
     },
     {
       "test_id": "SDRB-T-012",
