@@ -3,7 +3,12 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -77,6 +82,51 @@ func TestResolveOperatorRelaysPrecedence(t *testing.T) {
 			t.Fatalf("system info calls = %d, want 1", sys.calls)
 		}
 	})
+
+	t.Run("system info without browser bootstrap urls fails deterministically", func(t *testing.T) {
+		resetOperatorGlobals(t)
+		t.Setenv("BAHIA_NOSTR_RELAYS", "")
+		cmd := newOperatorFlagTestCommand(t)
+		sys := &fakeSystemInfoClient{info: &client.SystemInfo{}}
+		relays, err := resolveOperatorRelays(context.Background(), cmd, sys)
+		if err == nil || !strings.Contains(err.Error(), "no operator relays discovered") {
+			t.Fatalf("resolveOperatorRelays() error = %v, want discovery-empty failure", err)
+		}
+		if relays != nil {
+			t.Fatalf("relays = %#v, want nil on discovery-empty failure", relays)
+		}
+		if sys.calls != 1 {
+			t.Fatalf("system info calls = %d, want 1", sys.calls)
+		}
+	})
+}
+
+func TestCanonicalSystemInfoFixtureSatisfiesOperatorDiscovery(t *testing.T) {
+	resetOperatorGlobals(t)
+	t.Setenv("BAHIA_NOSTR_RELAYS", "")
+	cmd := newOperatorFlagTestCommand(t)
+	fixture := loadSystemInfoFixture(t, "system_info_sidecar_first.json")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			t.Errorf("method = %s, want GET", r.Method)
+		}
+		if r.URL.Path != "/api/v1/system/info" {
+			t.Errorf("path = %s, want /api/v1/system/info", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(map[string]any{"data": fixture}); err != nil {
+			t.Fatalf("encode response: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	relays, err := resolveOperatorRelays(context.Background(), cmd, client.New(server.URL))
+	if err != nil {
+		t.Fatalf("resolveOperatorRelays() error = %v", err)
+	}
+	if strings.Join(relays, ",") != "wss://public.example,ws://localhost:3000/relay" {
+		t.Fatalf("relays = %#v, want canonical fixture relays", relays)
+	}
 }
 
 func TestServiceActionCommandUsesSignerFirstClientByDefault(t *testing.T) {
@@ -310,4 +360,18 @@ func resetOperatorGlobals(t *testing.T) {
 		operatorRelays = nil
 		operatorHTTPFallback = false
 	})
+}
+
+func loadSystemInfoFixture(t *testing.T, name string) *client.SystemInfo {
+	t.Helper()
+	path := filepath.Join("..", "..", "test", "fixtures", name)
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read fixture %s: %v", path, err)
+	}
+	var info client.SystemInfo
+	if err := json.Unmarshal(body, &info); err != nil {
+		t.Fatalf("decode fixture %s: %v", path, err)
+	}
+	return &info
 }

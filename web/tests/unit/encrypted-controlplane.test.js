@@ -1,4 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 
 const authMock = vi.hoisted(() => ({
   authState: { status: 'authenticated', pubkey: 'a'.repeat(64) },
@@ -6,6 +8,10 @@ const authMock = vi.hoisted(() => ({
   decryptWithAuth: vi.fn(),
   signWithAuth: vi.fn()
 }));
+
+const canonicalSystemInfoFixture = JSON.parse(
+  readFileSync(resolve(process.cwd(), '../test/fixtures/system_info_sidecar_first.json'), 'utf8')
+);
 
 const systemMock = vi.hoisted(() => ({
   currentSystemInfo: vi.fn(() => ({
@@ -70,6 +76,24 @@ describe('encrypted controlplane transport', () => {
         browser_relays: ['wss://public.example']
       }
     })).toBe(false);
+  });
+
+  it('requires explicit encrypted capability indicators rather than public bootstrap fields alone', () => {
+    const publicOnly = {
+      nostr: {
+        browser_relays: canonicalSystemInfoFixture.nostr.browser_relays,
+        sidecar_url: canonicalSystemInfoFixture.nostr.sidecar_url
+      },
+      features: {
+        relay_sidecar: true,
+        relay_read_models: true
+      }
+    };
+
+    expect(module.encryptedRequestsAvailable(publicOnly)).toBe(false);
+    expect(module.encryptedRelayUrlsFromSystemInfo(publicOnly)).toEqual([]);
+    expect(module.encryptedRequestsAvailable(canonicalSystemInfoFixture)).toBe(true);
+    expect(module.encryptedRelayUrlsFromSystemInfo(canonicalSystemInfoFixture)).toEqual(['wss://requests.example']);
   });
 
   it('builds encrypted request events without targeting public browser relays', async () => {

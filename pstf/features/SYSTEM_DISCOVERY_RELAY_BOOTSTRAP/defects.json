@@ -47,7 +47,7 @@
       "defect_id": "SDRB-D-003",
       "title": "Fail-closed browser bootstrap negatives for missing capability and missing browser bootstrap URLs are untested",
       "severity": "minor",
-      "status": "open",
+      "status": "verified",
       "related_ac_ids": [
         "SDRB-AC-005"
       ],
@@ -55,18 +55,19 @@
         "SDRB-T-006"
       ],
       "evidence": [
-        "web/tests/unit/controlplane-store.test.js currently proves only the relay-connection failure branch.",
-        "The AC requires deterministic failure for `relay_read_models=false` and for no advertised browser bootstrap URLs, but those branches are not exercised."
+        "web/tests/unit/controlplane-store.test.js now proves deterministic failure when `relay_read_models` is false.",
+        "web/tests/unit/controlplane-store.test.js now proves deterministic failure when no `browser_relays` or `sidecar_url` are advertised.",
+        "Full web verification suite passed with these new cases."
       ],
-      "suspected_root_cause": "Bootstrap failure coverage was added incrementally and never expanded to the full fail-closed discovery contract.",
-      "recommended_fix": "Add unit cases for missing `relay_read_models` and missing `browser_relays`/`sidecar_url` to `web/tests/unit/controlplane-store.test.js`.",
+      "suspected_root_cause": "Resolved: the control-plane bootstrap unit suite now covers the full approved fail-closed discovery branches.",
+      "recommended_fix": null,
       "requires_human_decision": false
     },
     {
       "defect_id": "SDRB-D-004",
       "title": "Operator discovery fallback lacks a required negative test for empty browser bootstrap advertisement",
       "severity": "minor",
-      "status": "open",
+      "status": "verified",
       "related_ac_ids": [
         "SDRB-AC-008"
       ],
@@ -74,18 +75,18 @@
         "SDRB-T-009"
       ],
       "evidence": [
-        "cmd/cli/operator_nostr_test.go proves precedence for flag, environment, and discovery dedupe, but does not cover the no-browser-bootstrap-URLs failure branch.",
-        "The approved AC requires deterministic failure when discovery returns no `browser_relays` or `sidecar_url`."
+        "cmd/cli/operator_nostr_test.go now exercises the discovery-empty branch and asserts the deterministic `no operator relays discovered` failure.",
+        "go test ./cmd/cli passed with the new negative branch."
       ],
-      "suspected_root_cause": "The CLI precedence suite focused on positive precedence behavior and omitted the discovery-empty negative branch.",
-      "recommended_fix": "Add a fake system-info client case that returns no browser bootstrap URLs and assert the deterministic discovery error.",
+      "suspected_root_cause": "Resolved: the CLI precedence suite now covers discovery fallback failure when system info advertises no browser bootstrap URLs.",
+      "recommended_fix": null,
       "requires_human_decision": false
     },
     {
       "defect_id": "SDRB-D-005",
       "title": "Encrypted capability gating and multi-consumer discovery coherence are not fully proven against the approved contract",
       "severity": "minor",
-      "status": "open",
+      "status": "verified",
       "related_ac_ids": [
         "SDRB-AC-009",
         "SDRB-AC-001",
@@ -97,12 +98,12 @@
         "SDRB-T-011"
       ],
       "evidence": [
-        "web/tests/unit/encrypted-controlplane.test.js proves that public browser relays are not treated as encrypted request targets, but it does not assert the approved minimal capability-gating framing end to end.",
-        "No current integration test proves one canonical `/api/v1/system/info` payload satisfies browser bootstrap, encrypted capability gating, and operator CLI discovery together.",
-        "pstf/cross_feature_analysis.md identified this cross-consumer system-info contract as a portfolio-level gap."
+        "web/tests/unit/encrypted-controlplane.test.js now proves encrypted capability requires explicit encrypted indicators and is not implied by public bootstrap fields alone.",
+        "test/fixtures/system_info_sidecar_first.json is shared by `web/tests/unit/controlplane-store.test.js`, `web/tests/unit/encrypted-controlplane.test.js`, and `cmd/cli/operator_nostr_test.go` to prove one canonical payload satisfies browser bootstrap, encrypted capability gating, and CLI discovery.",
+        "go and web verification suites passed using the shared canonical fixture and existing relay-backed smoke coverage."
       ],
-      "suspected_root_cause": "Consumer-specific tests were added independently, leaving the shared discovery contract under-proven across consumers.",
-      "recommended_fix": "Narrow the encrypted helper assertions to the approved capability-gating contract and add one shared fixture-driven system-info multi-consumer contract test.",
+      "suspected_root_cause": "Resolved: the shared discovery contract is now proven across the browser bootstrap helper, encrypted capability helper, and operator CLI discovery path using one canonical fixture.",
+      "recommended_fix": null,
       "requires_human_decision": false
     }
   ]

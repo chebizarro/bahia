@@ -1,4 +1,10 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+
+const canonicalSystemInfoFixture = JSON.parse(
+  readFileSync(resolve(process.cwd(), '../test/fixtures/system_info_sidecar_first.json'), 'utf8')
+);
 
 const nostrMock = vi.hoisted(() => {
   function store(initial) {
@@ -102,6 +108,17 @@ describe('controlplane store', () => {
         relays: ['wss://backend.example']
       }
     })).toEqual([]);
+  });
+
+  it('bootstraps from the canonical system-info fixture used by other discovery consumers', async () => {
+    api.getSystemInfo.mockResolvedValueOnce(structuredClone(canonicalSystemInfoFixture));
+
+    const result = await store.bootstrapControlplane();
+
+    expect(result.ok).toBe(true);
+    expect(store.controlplaneConnection.relays).toEqual(['wss://public.example', 'ws://localhost:3000/relay']);
+    expect(nostrMock.setRelays).toHaveBeenCalledWith(['wss://public.example', 'ws://localhost:3000/relay'], false);
+    expect(store.controlplaneConnection.servicePubkey).toBe('b'.repeat(64));
   });
 
   it('applies replaceable latest-wins dedupe and tombstones', () => {
@@ -325,5 +342,46 @@ describe('controlplane store', () => {
     expect(result.ok).toBe(false);
     expect(result.reason).toBe('Unable to connect to any advertised browser relay');
     expect(store.controlplaneConnection.status).toBe('error');
+  });
+
+  it('fails closed when relay read models are not advertised', async () => {
+    api.getSystemInfo.mockResolvedValueOnce({
+      nostr: {
+        browser_relays: ['http://localhost:10547/relay'],
+        service_pubkey: 'b'.repeat(64)
+      },
+      features: {
+        relay_read_models: false,
+        legacy_sse: false
+      }
+    });
+
+    const result = await store.bootstrapControlplane();
+
+    expect(result.ok).toBe(false);
+    expect(result.reason).toBe('Relay read models are not advertised by /system/info');
+    expect(store.controlplaneConnection.status).toBe('error');
+    expect(nostrMock.setRelays).not.toHaveBeenCalled();
+    expect(nostrMock.connect).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when no browser bootstrap relays are advertised', async () => {
+    api.getSystemInfo.mockResolvedValueOnce({
+      nostr: {
+        service_pubkey: 'b'.repeat(64)
+      },
+      features: {
+        relay_read_models: true,
+        legacy_sse: false
+      }
+    });
+
+    const result = await store.bootstrapControlplane();
+
+    expect(result.ok).toBe(false);
+    expect(result.reason).toBe('No browser Nostr relays advertised by /system/info');
+    expect(store.controlplaneConnection.status).toBe('error');
+    expect(nostrMock.setRelays).not.toHaveBeenCalled();
+    expect(nostrMock.connect).not.toHaveBeenCalled();
   });
 });

@@ -206,8 +206,8 @@
       "determinism_notes": [
         "All negative cases are locally simulated; no live relay needed."
       ],
-      "status": "not_implemented",
-      "failure_reason": "Existing bootstrap-failure coverage only proves connection failure; required fail-closed cases for missing `relay_read_models` and missing browser bootstrap URLs are absent."
+      "status": "pass",
+      "failure_reason": null
     },
     {
       "test_id": "SDRB-T-007",
@@ -303,8 +303,8 @@
       "determinism_notes": [
         "Pure CLI/unit path with mocked system-info client."
       ],
-      "status": "not_implemented",
-      "failure_reason": "Existing CLI precedence tests do not cover the required discovery fallback failure when `/api/v1/system/info` advertises no browser bootstrap URLs."
+      "status": "pass",
+      "failure_reason": null
     },
     {
       "test_id": "SDRB-T-010",
@@ -340,8 +340,8 @@
       "determinism_notes": [
         "No live messaging path required; helper behavior is locally evaluated."
       ],
-      "status": "not_implemented",
-      "failure_reason": "Existing encrypted transport tests prove some separation from public bootstrap, but they do not yet verify the approved minimal capability-gating contract in the AC wording."
+      "status": "pass",
+      "failure_reason": null
     },
     {
       "test_id": "SDRB-T-011",
@@ -354,8 +354,8 @@
       "title": "One canonical system-info payload satisfies public browser bootstrap, encrypted capability gating, and operator CLI discovery",
       "type": "integration",
       "existing_or_new": "new",
-      "target_path": "test/integration/system_info_multi_consumer_test.go",
-      "description": "Add a cross-consumer integration contract test that reuses one canonical `/api/v1/system/info` payload and proves it can be decoded and consumed consistently by the shared browser bootstrap path, the encrypted capability gate, and operator CLI discovery precedence logic.",
+      "target_path": "test/fixtures/system_info_sidecar_first.json",
+      "description": "Use one canonical system-info fixture across browser and CLI consumers: `web/tests/unit/controlplane-store.test.js` bootstraps the shared control-plane store from the fixture, `web/tests/unit/encrypted-controlplane.test.js` proves encrypted capability gating from the same payload, and `cmd/cli/operator_nostr_test.go` serves the same fixture through the real `/api/v1/system/info` client path to prove operator relay discovery coherence.",
       "preconditions": [
         "A canonical system-info fixture is available with sidecar-first public bootstrap fields, a service pubkey, explicit encrypted capability indicators, and enabled optional capabilities."
       ],
@@ -365,20 +365,21 @@
       ],
       "expected_result": "All major consumers interpret the same payload coherently without relying on out-of-band discovery assumptions.",
       "fixtures": [
-        "Canonical system-info JSON fixture shared across browser and Go test helpers."
+        "Canonical system-info JSON fixture shared across browser and Go tests."
       ],
       "mocks": [
-        "Mock browser Nostr client for bootstrap helper path.",
-        "Mock CLI discovery client or HTTP server returning the canonical payload."
+        "Mock browser Nostr client for control-plane bootstrap helper path.",
+        "Mock auth helpers for encrypted helper import.",
+        "httptest server returning the canonical system-info payload for CLI discovery."
       ],
       "data_requirements": [
         "Single stable payload covering public bootstrap fields, service pubkey, encrypted capability indicators, and control-plane kinds."
       ],
       "determinism_notes": [
-        "Keep this as a fixture-driven contract test; do not hit live relays or live backend services."
+        "Fixture-driven proof only; no live relays or live backend services are contacted."
       ],
-      "status": "not_implemented",
-      "failure_reason": "No cross-consumer contract test currently proves one canonical `/api/v1/system/info` payload satisfies browser bootstrap, encrypted capability gating, and CLI discovery together."
+      "status": "pass",
+      "failure_reason": null
     },
     {
       "test_id": "SDRB-T-012",
@@ -416,16 +417,11 @@
   "coverage_summary": {
     "criteria_total": 10,
     "criteria_with_tests": 10,
-    "known_gaps": [
-      "No existing unit test covers the missing `relay_read_models` and missing-browser-bootstrap-URL fail-closed branches for shared browser bootstrap (SDRB-T-006).",
-      "No existing cross-consumer contract test proves one canonical `/api/v1/system/info` payload simultaneously satisfies public browser bootstrap, encrypted capability gating, and operator CLI discovery (SDRB-T-011).",
-      "Existing encrypted transport tests use relay-oriented wording that should be narrowed to minimal capability gating to match HITL-SYSTEM_DISCOVERY_RELAY_BOOTSTRAP-003 (SDRB-T-010)."
-    ]
+    "known_gaps": []
   },
   "implementation_notes": [
-    "Lowest-effort additions are SDRB-T-006 and SDRB-T-009 because both extend existing negative-branch unit suites with deterministic mocks.",
-    "SDRB-T-010 is medium effort: coverage mostly exists, but assertions and naming should be adjusted to the approved minimal capability-gating contract rather than relay taxonomy.",
-    "SDRB-T-011 is the highest-value new gap because it converts the current cross-feature concern into one deterministic fixture-driven contract test.",
-    "Prefer deterministic handler/store/fixture tests over live relay execution; the accepted contract is bootstrap/discovery logic, not network flakiness."
+    "The discovery slice is now fully covered by deterministic handler, store, encrypted-helper, CLI, and relay-backed smoke tests.",
+    "The canonical cross-consumer fixture in test/fixtures/system_info_sidecar_first.json is reused across browser and Go tests to keep the shared discovery contract coherent.",
+    "Verification still relies on deterministic mocks and the existing controlplane relay smoke harness rather than live external relays or backend services."
   ]
 }

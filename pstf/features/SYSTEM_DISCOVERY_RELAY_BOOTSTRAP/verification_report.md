@@ -1,68 +1,62 @@
 # Verification Report — SYSTEM_DISCOVERY_RELAY_BOOTSTRAP
 
 ## Summary
-- Verified: `SDRB-AC-001`, `SDRB-AC-002`, `SDRB-AC-003`, `SDRB-AC-004`, `SDRB-AC-006`, `SDRB-AC-007`, `SDRB-AC-010`
-- Partially verified: `SDRB-AC-005`, `SDRB-AC-008`, `SDRB-AC-009`
-- Current recommendation: do **not** mark `SYSTEM_DISCOVERY_RELAY_BOOTSTRAP` fully verified yet
+- Verified: `SDRB-AC-001`, `SDRB-AC-002`, `SDRB-AC-003`, `SDRB-AC-004`, `SDRB-AC-005`, `SDRB-AC-006`, `SDRB-AC-007`, `SDRB-AC-008`, `SDRB-AC-009`, `SDRB-AC-010`
+- Current recommendation: `SYSTEM_DISCOVERY_RELAY_BOOTSTRAP` is verified for the approved sidecar-first slice
 
-The highest-risk contract failure is fixed: system discovery no longer exposes raw `nostr.relays`, and the shared browser bootstrap helper no longer treats that field as a valid public bootstrap surface. The handler suite now also proves the approved service-key-backed sidecar-first bootstrap contract. Remaining work is narrower and test-oriented: fail-closed browser negatives, the CLI empty-discovery negative branch, and the multi-consumer encrypted/discovery coherence proof are still missing.
+The discovery/bootstrap slice now has complete proof across the approved contract. The handler no longer exposes raw `nostr.relays`, the browser bootstrap path fails closed on missing capability or missing relay advertisement, the encrypted helper proves explicit capability gating separate from public bootstrap, and the operator CLI proves both precedence and deterministic discovery-empty failure. One canonical system-info fixture is now reused across browser and CLI tests to demonstrate shared consumer coherence.
 
 ## Commands Run
 - `go test ./internal/api/handlers ./pkg/client ./cmd/cli`
 - `cd web && npm test -- --run tests/unit/system-store.test.js tests/unit/controlplane-store.test.js tests/unit/stores-index.test.js tests/unit/encrypted-controlplane.test.js tests/unit/api-client-retry-and-edges.test.js`
 - `cd web && npm run test:e2e -- tests/e2e/controlplane-nostr-smoke.spec.js`
-- `go test ./internal/api/handlers`
-- `cd web && npm test -- --run tests/unit/controlplane-store.test.js`
+- `go test ./cmd/cli`
+- `cd web && npm test -- --run tests/unit/controlplane-store.test.js tests/unit/encrypted-controlplane.test.js`
 
 ## Acceptance Criteria Status
 - `SDRB-AC-001` — **Verified**
-  - Evidence: `internal/api/handlers/system_test.go` now proves the sidecar-first public bootstrap contract in a service-key-backed configuration, including `browser_relays`, `sidecar_url`, `relay_read_models`, derived `service_pubkey`, and non-reliance on raw `nostr.relays`.
+  - Evidence: `internal/api/handlers/system_test.go` proves the sidecar-first public bootstrap contract in a service-key-backed configuration, including `browser_relays`, `sidecar_url`, `relay_read_models`, derived `service_pubkey`, and non-reliance on raw `nostr.relays`.
 - `SDRB-AC-002` — **Verified**
   - Evidence: `internal/api/handlers/system_test.go` covers conditional kind advertisement and explicit legacy false flags.
 - `SDRB-AC-003` — **Verified**
   - Evidence: `web/tests/unit/system-store.test.js` proves cache, concurrent dedupe, and force reload.
 - `SDRB-AC-004` — **Verified**
   - Evidence: `web/tests/unit/controlplane-store.test.js` and `web/tests/e2e/controlplane-nostr-smoke.spec.js` prove discovered public bootstrap, EOSE-bounded query, and live subscription handoff.
-- `SDRB-AC-005` — **Partially verified**
-  - Evidence: connection failure is covered, but required fail-closed branches for missing `relay_read_models` and missing browser bootstrap URLs remain untested.
+- `SDRB-AC-005` — **Verified**
+  - Evidence: `web/tests/unit/controlplane-store.test.js` now covers all required fail-closed branches: missing `relay_read_models`, missing browser bootstrap URLs, and unreachable advertised relays.
 - `SDRB-AC-006` — **Verified**
   - Evidence: replaceable latest-wins, tombstones, and spoofed-author rejection pass in `web/tests/unit/controlplane-store.test.js`.
 - `SDRB-AC-007` — **Verified**
   - Evidence: reconnect/disconnect reactivity passes in `web/tests/unit/controlplane-store.test.js`.
-- `SDRB-AC-008` — **Partially verified**
-  - Evidence: CLI precedence tests pass, but the required discovery-empty negative branch is still missing.
-- `SDRB-AC-009` — **Partially verified**
-  - Evidence: encrypted transport helper tests prove some separation from public bootstrap, but the approved minimal capability-gating contract is not yet fully asserted and there is no multi-consumer coherence test.
+- `SDRB-AC-008` — **Verified**
+  - Evidence: `cmd/cli/operator_nostr_test.go` proves precedence for explicit flags, environment variables, canonical system discovery fallback, and deterministic failure when system discovery advertises no browser bootstrap URLs.
+- `SDRB-AC-009` — **Verified**
+  - Evidence: `web/tests/unit/encrypted-controlplane.test.js` proves public bootstrap metadata alone does not imply encrypted capability, while the explicit encrypted indicators in the canonical fixture enable the encrypted path separately.
 - `SDRB-AC-010` — **Verified**
   - Evidence: `internal/api/handlers/system.go` no longer emits raw `nostr.relays`; `web/src/lib/stores/controlplane.svelte.js` no longer normalizes that fallback; the updated handler and store tests explicitly prove raw `nostr.relays` is not accepted as the approved bootstrap path.
 
 ## Test Matrix Status
-- Passing tests: `8`
-  - `SDRB-T-001`, `SDRB-T-002`, `SDRB-T-003`, `SDRB-T-004`, `SDRB-T-005`, `SDRB-T-007`, `SDRB-T-008`, `SDRB-T-012`
-- Not implemented / incomplete proof: `4`
-  - `SDRB-T-006`, `SDRB-T-009`, `SDRB-T-010`, `SDRB-T-011`
+- Passing tests: `12`
+  - `SDRB-T-001`, `SDRB-T-002`, `SDRB-T-003`, `SDRB-T-004`, `SDRB-T-005`, `SDRB-T-006`, `SDRB-T-007`, `SDRB-T-008`, `SDRB-T-009`, `SDRB-T-010`, `SDRB-T-011`, `SDRB-T-012`
+- Not implemented / incomplete proof: `0`
+- Blocked: `0`
 
 ## Defects
 - `SDRB-D-001` verified — raw `nostr.relays` is no longer exposed or normalized for approved browser bootstrap
-- `SDRB-D-002` verified — sidecar-first public bootstrap handler coverage now includes the approved service-key-backed success case
-- `SDRB-D-003` open — fail-closed browser bootstrap negatives are untested
-- `SDRB-D-004` open — operator discovery fallback lacks the required empty-discovery negative case
-- `SDRB-D-005` open — encrypted capability gating and multi-consumer system-info coherence remain under-proven
+- `SDRB-D-002` verified — sidecar-first public bootstrap handler coverage includes the approved service-key-backed success case
+- `SDRB-D-003` verified — fail-closed browser bootstrap negatives are covered
+- `SDRB-D-004` verified — operator discovery fallback covers the required empty-discovery negative case
+- `SDRB-D-005` verified — encrypted capability gating and multi-consumer system-info coherence are proven against the approved contract
 
 ## Ambiguities / Human Decisions Needed
-- No new product-intent ambiguity was discovered during this patch.
+- No new product-intent ambiguity was discovered.
 - Existing HITL decisions remain sufficient.
-- The remaining blockers are evidence gaps, not specification conflicts.
+- No additional human decision is needed for this verification cycle.
 
 ## Confidence Assessment
-- Confidence is **medium to high** for the sidecar-first browser bootstrap contract after removal of raw `nostr.relays` exposure and the new handler/store regression coverage.
-- Confidence is still **medium** for the full slice because three must-level ACs remain only partially verified due to missing negative-path and cross-consumer proof.
+- Confidence is **high** for the approved sidecar-first discovery/bootstrap slice.
+- The remaining noise in the E2E run is limited to unrelated Vite proxy `ECONNREFUSED` warnings for REST endpoints; the relay-backed discovery assertions still pass and do not rely on REST fallback for this slice.
 
 ## Recommendation
-- Do **not** mark `SYSTEM_DISCOVERY_RELAY_BOOTSTRAP` fully verified yet.
-- Next patch should add the remaining proof for:
-  - `SDRB-T-006`
-  - `SDRB-T-009`
-  - `SDRB-T-010`
-  - `SDRB-T-011`
-- After those land, rerun PSTF verification for the slice.
+- Mark `SYSTEM_DISCOVERY_RELAY_BOOTSTRAP` verified for the approved sidecar-first slice.
+- Next PSTF stage should be confidence scoring, then critic review / HITL release review for this feature.
