@@ -1,0 +1,449 @@
+{
+  "feature_id": "SOUL_FACTORY_PROVISIONING_TRACKING",
+  "status": "approved",
+  "approval_decision_refs": [
+    "HITL-SOUL_FACTORY_PROVISIONING_TRACKING-004",
+    "HITL-SOUL_FACTORY_PROVISIONING_TRACKING-005",
+    "HITL-SOUL_FACTORY_PROVISIONING_TRACKING-006"
+  ],
+  "criteria": [
+    {
+      "ac_id": "SFTP-AC-001",
+      "feature_id": "SOUL_FACTORY_PROVISIONING_TRACKING",
+      "title": "Souls UI bootstraps from relay data and stays live with soul updates",
+      "type": "functional",
+      "priority": "must",
+      "assertion": "The Souls browser experience must load soul and template data from relay-backed events, order the resulting collections deterministically for display, and keep the visible soul collection updated from live `31951` events after bootstrap.",
+      "testable_by": [
+        "unit",
+        "e2e"
+      ],
+      "preconditions": [
+        "The browser has relay connectivity and a Soul Factory pubkey / author context.",
+        "Relay responses contain at least one template or soul event for the bootstrap case."
+      ],
+      "steps": [
+        "Load the Souls gallery and template list from relay-backed queries.",
+        "Deliver a live `31951` update for an existing soul and for a newly discovered soul."
+      ],
+      "expected_result": "Bootstrap renders the relay-backed collections, templates are available for provisioning flows, and live soul events update or insert visible soul state without requiring a page reload.",
+      "negative_cases": [
+        "If the browser depends on a REST route instead of relay-backed soul/template queries for this feature, the criterion fails.",
+        "If live soul updates are ignored after bootstrap, the criterion fails."
+      ],
+      "source_evidence": [
+        "web/src/lib/stores/souls.svelte.js",
+        "web/src/routes/souls/+page.svelte",
+        "web/tests/unit/souls-store.test.js",
+        "pstf/features/SOUL_FACTORY_PROVISIONING_TRACKING/feature_spec.json"
+      ],
+      "requires_human_approval": false
+    },
+    {
+      "ac_id": "SFTP-AC-002",
+      "feature_id": "SOUL_FACTORY_PROVISIONING_TRACKING",
+      "title": "Browser provisioning requests are signer-first and explicitly tagged",
+      "type": "contract",
+      "priority": "must",
+      "assertion": "Creating a soul from the browser must require signer-backed auth, publish a signed `5950` request with explicit `agent-id`, `name`, `tier`, and optional `template` tags, include the provisioning brief in content, and fail locally when no relay accepts the publish.",
+      "testable_by": [
+        "unit",
+        "e2e",
+        "contract"
+      ],
+      "preconditions": [
+        "A user has access to a browser signing surface.",
+        "A relay is configured for the request publish path."
+      ],
+      "steps": [
+        "Attempt provisioning without signer availability.",
+        "Attempt provisioning with a signer and valid request fields.",
+        "Attempt provisioning when every relay rejects or fails the publish."
+      ],
+      "expected_result": "Unsigned provisioning is blocked, valid requests are signed and published with the required tags/content, and zero-accept publish attempts fail rather than reporting provisioning success.",
+      "negative_cases": [
+        "If the browser can publish a provisioning request without a signer-backed identity, the criterion fails.",
+        "If a request missing required tags is treated as valid request output, the criterion fails.",
+        "If zero accepted relay publishes still transition the UI into a successful provisioning state, the criterion fails."
+      ],
+      "source_evidence": [
+        "web/src/routes/souls/new/+page.svelte",
+        "web/tests/e2e/soul-signing-smoke.spec.js",
+        "cmd/cli/soulfactory.go:305-325"
+      ],
+      "requires_human_approval": false
+    },
+    {
+      "ac_id": "SFTP-AC-003",
+      "feature_id": "SOUL_FACTORY_PROVISIONING_TRACKING",
+      "title": "The reactor rejects unauthorized or malformed provisioning requests with correlated terminal errors",
+      "type": "data_integrity",
+      "priority": "must",
+      "assertion": "The Soul Factory reactor must reject unauthorized requesters and malformed `5950` payloads, and must publish a correlated `7950` error result that references the original request event and requester instead of silently accepting or dropping the request.",
+      "testable_by": [
+        "integration",
+        "contract"
+      ],
+      "preconditions": [
+        "The reactor is running with an authorized-provisioner configuration.",
+        "A requester can publish provisioning requests to the subscribed relays."
+      ],
+      "steps": [
+        "Publish a `5950` request from an unauthorized pubkey.",
+        "Publish malformed `5950` requests that omit required data such as `agent-id` or any brief/template/draft source."
+      ],
+      "expected_result": "Each rejected request yields a correlated terminal `7950` error result describing the failure reason, and no soul is provisioned.",
+      "negative_cases": [
+        "If unauthorized requesters can provision souls, the criterion fails.",
+        "If malformed requests are accepted without a correlated terminal error, the criterion fails."
+      ],
+      "source_evidence": [
+        "internal/soulfactory/reactor.go:178-241",
+        "internal/soulfactory/reactor.go:306-358",
+        "internal/soulfactory/reactor.go:489-509"
+      ],
+      "requires_human_approval": false
+    },
+    {
+      "ac_id": "SFTP-AC-004",
+      "feature_id": "SOUL_FACTORY_PROVISIONING_TRACKING",
+      "title": "Successful provisioning follows the documented eight-step event-driven workflow",
+      "type": "functional",
+      "priority": "must",
+      "assertion": "A successful provisioning run must progress through the documented generate, Signet, avatar, profile, Qdrant, memory, workspace, and deploy/finalize stages, emit correlated `6950` progress for meaningful steps, and end with a correlated `7950` success result rather than implicit completion.",
+      "testable_by": [
+        "integration",
+        "manual_review"
+      ],
+      "preconditions": [
+        "A valid provisioning request has been accepted.",
+        "A non-placeholder provisioning engine is configured."
+      ],
+      "steps": [
+        "Execute a successful provisioning run from accepted `5950` request through completion.",
+        "Observe correlated progress and terminal result events plus recorded run state."
+      ],
+      "expected_result": "The run records eight ordered stages, emits progress/status during provisioning, and ends only when a correlated terminal result is published.",
+      "negative_cases": [
+        "If provisioning reports completion without a terminal correlated `7950` result, the criterion fails.",
+        "If a configured successful run skips mandatory stages without explicit skipped/failure accounting, the criterion fails."
+      ],
+      "source_evidence": [
+        "internal/soulfactory/provisioner_full.go",
+        "internal/domain/soul.go",
+        "docs/soul-factory.md:108-122"
+      ],
+      "requires_human_approval": false
+    },
+    {
+      "ac_id": "SFTP-AC-005",
+      "feature_id": "SOUL_FACTORY_PROVISIONING_TRACKING",
+      "title": "Provisioning outputs are truthful about optional integration success, failure, and skip states",
+      "type": "data_integrity",
+      "priority": "must",
+      "assertion": "Soul Factory must only claim avatar, vector-memory, agent-memory, workspace, NIP-05, snapshot, or deployment-related outputs that were actually produced; when optional integrations are unconfigured or fail non-fatally, the run must explicitly record skipped or failed step state instead of inventing successful outputs.",
+      "testable_by": [
+        "unit",
+        "integration"
+      ],
+      "preconditions": [
+        "Provisioning is executed once with optional adapters absent and once with at least one optional step failing non-fatally."
+      ],
+      "steps": [
+        "Run provisioning with optional adapters unconfigured.",
+        "Run provisioning where an optional integration fails after provisioning has begun.",
+        "Inspect step results and final soul outputs."
+      ],
+      "expected_result": "Skipped or failed optional steps are explicit in run state, and the final soul omits outputs that were not actually produced.",
+      "negative_cases": [
+        "If an unconfigured optional step still populates synthetic avatar, workspace, vector-memory, or related outputs, the criterion fails.",
+        "If optional-step failure is hidden as success, the criterion fails."
+      ],
+      "source_evidence": [
+        "internal/soulfactory/provisioner_full.go",
+        "internal/soulfactory/hardening_test.go:77-105"
+      ],
+      "requires_human_approval": false
+    },
+    {
+      "ac_id": "SFTP-AC-006",
+      "feature_id": "SOUL_FACTORY_PROVISIONING_TRACKING",
+      "title": "Successful provisioning publishes an authoritative `31951` soul that the browser can consume",
+      "type": "functional",
+      "priority": "must",
+      "assertion": "After successful provisioning, Soul Factory must publish a `31951` soul event containing the soul\u2019s replaceable identity coordinate and authoritative metadata needed for downstream visibility, and the browser must be able to surface that published soul through normal relay-backed reads or live updates.",
+      "testable_by": [
+        "integration",
+        "e2e",
+        "contract"
+      ],
+      "preconditions": [
+        "A provisioning run has completed successfully."
+      ],
+      "steps": [
+        "Observe the published `31951` event after successful provisioning.",
+        "Reload or live-update the Souls browser view against the relevant relays."
+      ],
+      "expected_result": "The `31951` event includes authoritative soul identity/state fields, and the provisioned soul becomes discoverable in the browser experience without extra side channels.",
+      "negative_cases": [
+        "If successful provisioning completes without publishing a `31951` soul event, the criterion fails.",
+        "If the browser cannot consume the published soul through the relay-backed flow, the criterion fails."
+      ],
+      "source_evidence": [
+        "internal/soulfactory/reactor.go:511-602",
+        "internal/soulfactory/provisioner_full.go:319-369",
+        "web/src/lib/stores/souls.svelte.js"
+      ],
+      "requires_human_approval": false
+    },
+    {
+      "ac_id": "SFTP-AC-007",
+      "feature_id": "SOUL_FACTORY_PROVISIONING_TRACKING",
+      "title": "Provisioned souls must integrate with Bahia deployment state end to end when Bahia integration is configured",
+      "type": "functional",
+      "priority": "must",
+      "assertion": "When Bahia integration is configured, a successfully provisioned soul must be registered as a Bahia service, receive initial deployment hookup for the configured agent environment, and expose deploy-status visibility that can be reflected back into the soul\u2019s published state.",
+      "testable_by": [
+        "integration",
+        "manual_review"
+      ],
+      "preconditions": [
+        "Bahia integration is configured with a registry and agent environment.",
+        "A provisioning run completes successfully."
+      ],
+      "steps": [
+        "Provision a soul with Bahia integration enabled.",
+        "Inspect service registration, deployment-hookup behavior, and resulting deploy-status visibility in soul state."
+      ],
+      "expected_result": "The provisioned soul is represented as a Bahia-managed service, initial deployment integration occurs for the configured environment, and soul state can surface deployment status rather than remaining disconnected from Bahia.",
+      "negative_cases": [
+        "If the soul registers as a service but never gains initial deployment hookup for the configured environment, the criterion fails.",
+        "If deploy-status visibility cannot be surfaced back into soul state when Bahia integration is configured, the criterion fails."
+      ],
+      "source_evidence": [
+        "docs/soul-factory.md:147-152",
+        "internal/soulfactory/bahia_integration.go",
+        "internal/soulfactory/provisioner_full.go:327-349",
+        "pstf/features/SOUL_FACTORY_PROVISIONING_TRACKING/hitl_decisions.md"
+      ],
+      "requires_human_approval": false
+    },
+    {
+      "ac_id": "SFTP-AC-008",
+      "feature_id": "SOUL_FACTORY_PROVISIONING_TRACKING",
+      "title": "Lifecycle actions are signer-first, authorized, and correlated to the target soul",
+      "type": "contract",
+      "priority": "must",
+      "assertion": "Suspend, resume, revoke, redeploy, and regenerate operations must be initiated as signed `1950` soul-action events that explicitly reference the target soul and action type, and unauthorized or malformed actions must fail rather than mutating state silently.",
+      "testable_by": [
+        "unit",
+        "integration",
+        "contract"
+      ],
+      "preconditions": [
+        "A target soul exists.",
+        "An initiator can attempt signed and unsigned or unauthorized action publishes."
+      ],
+      "steps": [
+        "Publish valid signed lifecycle actions for an existing soul.",
+        "Attempt malformed or unauthorized lifecycle actions."
+      ],
+      "expected_result": "Valid actions are correlated to the target soul and processed; malformed or unauthorized actions are rejected without silent state mutation.",
+      "negative_cases": [
+        "If an action can mutate soul state without explicit soul/action correlation, the criterion fails.",
+        "If unauthorized lifecycle actions succeed, the criterion fails."
+      ],
+      "source_evidence": [
+        "web/src/lib/stores/souls.svelte.js",
+        "internal/soulfactory/reactor.go:243-304",
+        "internal/soulfactory/lifecycle_handler.go:31-83"
+      ],
+      "requires_human_approval": false
+    },
+    {
+      "ac_id": "SFTP-AC-009",
+      "feature_id": "SOUL_FACTORY_PROVISIONING_TRACKING",
+      "title": "Suspend, resume, revoke, and redeploy must propagate both soul-state and managed-runtime effects",
+      "type": "data_integrity",
+      "priority": "must",
+      "assertion": "For Bahia-managed souls, suspend, resume, revoke, and redeploy must do more than publish local soul-state changes: they must also propagate the corresponding managed deployment and agent-access side effects, and the resulting soul/action state must reflect the completed lifecycle outcome.",
+      "testable_by": [
+        "integration",
+        "manual_review"
+      ],
+      "preconditions": [
+        "A Bahia-managed soul exists.",
+        "Lifecycle action handlers and downstream integrations are active."
+      ],
+      "steps": [
+        "Execute suspend, resume, revoke, and redeploy actions against a managed soul in separate runs.",
+        "Inspect resulting soul state, action-result signaling, and managed deployment / access side effects."
+      ],
+      "expected_result": "Each lifecycle action updates soul state and causes the corresponding managed effect rather than stopping at a UI-only or event-only acknowledgment.",
+      "negative_cases": [
+        "If lifecycle actions report completion while Bahia-managed deployment state remains unchanged, the criterion fails.",
+        "If revoke completes without the expected termination or access-revocation side effects, the criterion fails."
+      ],
+      "source_evidence": [
+        "docs/soul-factory.md:147-152",
+        "internal/soulfactory/lifecycle_handler.go",
+        "internal/soulfactory/bahia_integration.go",
+        "pstf/features/SOUL_FACTORY_PROVISIONING_TRACKING/hitl_decisions.md"
+      ],
+      "requires_human_approval": false
+    },
+    {
+      "ac_id": "SFTP-AC-010",
+      "feature_id": "SOUL_FACTORY_PROVISIONING_TRACKING",
+      "title": "Regenerate must require a new brief and republish revised soul identity content",
+      "type": "functional",
+      "priority": "must",
+      "assertion": "Regenerating a soul must require a new brief, regenerate the soul\u2019s identity content from that brief, republish the updated soul state, and publish a correlated action result that reflects the regeneration outcome.",
+      "testable_by": [
+        "integration",
+        "contract"
+      ],
+      "preconditions": [
+        "An existing soul is available for regeneration.",
+        "A signed regenerate action can be published."
+      ],
+      "steps": [
+        "Publish a regenerate action without a new brief.",
+        "Publish a regenerate action with a valid new brief.",
+        "Inspect the resulting soul publication and action result."
+      ],
+      "expected_result": "Missing-brief regenerate attempts fail; valid regenerate attempts produce updated soul content and a correlated completion result.",
+      "negative_cases": [
+        "If regenerate succeeds without a new brief, the criterion fails.",
+        "If a successful regenerate does not republish updated soul content, the criterion fails."
+      ],
+      "source_evidence": [
+        "internal/soulfactory/lifecycle_handler.go:181-220",
+        "web/src/routes/souls/[id]/edit/+page.svelte",
+        "web/src/lib/stores/souls.svelte.js"
+      ],
+      "requires_human_approval": false
+    },
+    {
+      "ac_id": "SFTP-AC-011",
+      "feature_id": "SOUL_FACTORY_PROVISIONING_TRACKING",
+      "title": "Soul Factory CLI commands must perform real Nostr-backed query and mutation flows",
+      "type": "functional",
+      "priority": "must",
+      "assertion": "The Soul Factory CLI surface must support list, get, provision, suspend, resume, revoke, redeploy, regenerate, and template commands through real signed Nostr publish/query behavior rather than returning explicit unavailability stubs.",
+      "testable_by": [
+        "integration",
+        "manual_review"
+      ],
+      "preconditions": [
+        "CLI auth/signing and relay connectivity are configured."
+      ],
+      "steps": [
+        "Run each supported Soul Factory CLI command against a configured environment.",
+        "Inspect whether it performs real query or signed publish work."
+      ],
+      "expected_result": "Each command executes the intended Soul Factory operation using real Nostr-backed behavior and returns real results or real correlated failures from the underlying system.",
+      "negative_cases": [
+        "If a supported CLI command still returns the current explicit unavailability stub, the criterion fails.",
+        "If a CLI command simulates success without real publish/query work, the criterion fails."
+      ],
+      "source_evidence": [
+        "docs/soul-factory.md:25-61",
+        "cmd/cli/soulfactory.go",
+        "cmd/cli/soulfactory_test.go"
+      ],
+      "requires_human_approval": false
+    },
+    {
+      "ac_id": "SFTP-AC-012",
+      "feature_id": "SOUL_FACTORY_PROVISIONING_TRACKING",
+      "title": "Soul Factory MCP tools must perform real query, mutation, and status flows",
+      "type": "functional",
+      "priority": "must",
+      "assertion": "The Soul Factory MCP surface must support real list/get/template/provision/action/regenerate/status behavior through actual query, signed publish, and correlated status/result flows rather than static unavailability responses.",
+      "testable_by": [
+        "integration",
+        "manual_review"
+      ],
+      "preconditions": [
+        "An MCP caller can invoke Soul Factory tools against a configured environment."
+      ],
+      "steps": [
+        "Invoke the Soul Factory MCP tools for querying, provisioning, lifecycle action, regeneration, and status retrieval.",
+        "Inspect whether the tools perform real query or mutation work and expose real run status."
+      ],
+      "expected_result": "The MCP surface returns real query data, can initiate real provisioning and lifecycle operations, and exposes real provisioning status rather than configuration-level unavailability errors.",
+      "negative_cases": [
+        "If list/template/provision/action/regenerate tools still return explicit unavailability messages instead of real work, the criterion fails.",
+        "If MCP status cannot reflect real provisioning runs, the criterion fails."
+      ],
+      "source_evidence": [
+        "docs/soul-factory.md:63-107",
+        "internal/soulfactory/mcp_server.go",
+        "internal/soulfactory/hardening_test.go:107-116"
+      ],
+      "requires_human_approval": false
+    },
+    {
+      "ac_id": "SFTP-AC-013",
+      "feature_id": "SOUL_FACTORY_PROVISIONING_TRACKING",
+      "title": "Browser provisioning tracking must remain event-driven and non-terminal until correlated result or explicit rejection",
+      "type": "reliability",
+      "priority": "must",
+      "assertion": "The browser\u2019s provisioning-run tracker must not treat elapsed local time or relay-subscription closure by itself as the normative terminal failure signal for a provisioning run; terminal success or failure must remain correlated to explicit provisioning result semantics or explicit pre-acceptance publish rejection.",
+      "testable_by": [
+        "unit",
+        "integration"
+      ],
+      "preconditions": [
+        "A browser provisioning run has been started.",
+        "The test can simulate missing progress, delayed results, and relay closure conditions."
+      ],
+      "steps": [
+        "Start provisioning tracking for a request that does not immediately receive a terminal result.",
+        "Simulate elapsed time and subscription closure before a correlated terminal result arrives.",
+        "Simulate explicit publish rejection and explicit correlated terminal error result cases."
+      ],
+      "expected_result": "Explicit publish rejection and explicit correlated terminal result events can conclude the run; elapsed time or subscription closure alone are not treated as the approved terminal contract behavior.",
+      "negative_cases": [
+        "If the browser still marks a provisioning run terminally failed solely because a local timer elapsed, the criterion fails.",
+        "If relay closure alone is treated as the normative terminal failure result, the criterion fails."
+      ],
+      "source_evidence": [
+        "web/src/lib/stores/souls.svelte.js",
+        "web/tests/unit/souls-store.test.js",
+        "pstf/features/SOUL_FACTORY_PROVISIONING_TRACKING/hitl_decisions.md"
+      ],
+      "requires_human_approval": false
+    },
+    {
+      "ac_id": "SFTP-AC-014",
+      "feature_id": "SOUL_FACTORY_PROVISIONING_TRACKING",
+      "title": "Bahia-to-soul deploy-status propagation must use event-driven synchronization rather than ticker polling",
+      "type": "reliability",
+      "priority": "must",
+      "assertion": "Soul deploy-status updates sourced from Bahia must propagate into soul state through event-driven synchronization behavior, and the approved product contract for this feature must not depend on ticker-based polling as the normal mechanism for keeping soul deploy status current.",
+      "testable_by": [
+        "integration",
+        "manual_review"
+      ],
+      "preconditions": [
+        "A Bahia-managed soul exists and Bahia emits deployment-state changes relevant to that soul."
+      ],
+      "steps": [
+        "Trigger deployment-state changes for a Bahia-managed soul.",
+        "Observe how soul deploy status is synchronized and republished."
+      ],
+      "expected_result": "Soul deploy-status updates are driven by explicit Bahia event changes and republished into soul state without depending on ticker polling as the approved synchronization contract.",
+      "negative_cases": [
+        "If ticker polling remains the required or normative mechanism for deploy-status freshness, the criterion fails.",
+        "If Bahia deployment-state changes cannot be reflected back into soul state without polling, the criterion fails."
+      ],
+      "source_evidence": [
+        "internal/soulfactory/status_sync.go",
+        "pstf/features/SOUL_FACTORY_PROVISIONING_TRACKING/hitl_decisions.md"
+      ],
+      "requires_human_approval": false
+    }
+  ]
+}

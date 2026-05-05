@@ -5,8 +5,8 @@
 - Task ID: bahia-gktu
 - Framework: PSTF
 - Interaction Mode: RepoPrompt ask-user tool
-- Current Stage: spec_reconstruction
-- Last Updated: 2026-05-05T04:11:12Z
+- Current Stage: acceptance_criteria
+- Last Updated: 2026-05-05T04:59:06Z
 
 ---
 
@@ -135,19 +135,144 @@ FIX_TICKER_BASED_STATUS_POLLING_FALLBACK
 
 ---
 
+
+### Decision HITL-SOUL_FACTORY_PROVISIONING_TRACKING-004 — Acceptance-criteria treatment for unresolved event-driven replacements
+
+**Stage:** acceptance_criteria
+**Agent:** PSTF Acceptance Criteria Agent
+**Decision Type:** ambiguity_resolution
+**Status:** active
+
+**Context Summary:**
+The feature spec explicitly classifies browser timeout / relay-closure terminal failure and backend ticker-based status polling as `FIX`, not intended behavior. Acceptance criteria still needed to decide whether to block on replacement product details or approve a higher-level event-driven contract now.
+
+**Question Asked:**
+How should the acceptance criteria handle the unresolved replacement semantics for timeout-free browser tracking and event-driven backend status sync?
+
+**Options Presented:**
+- A) Keep high-level event-driven ACs now, but do not specify replacement UX/operability details yet
+- B) Defer ACs for those two behaviors until a later decision defines the replacements
+- C) Defer the entire Soul Factory AC set until those replacements are fully defined
+
+**User Selection:**
+A
+
+**User Notes:**
+None.
+
+**Decision:**
+KEEP_HIGH_LEVEL_EVENT_DRIVEN_ACS_NOW
+
+**Impact:**
+- Feature Spec: none
+- Acceptance Criteria: updated — the AC set includes high-level event-driven prohibitions against timeout-based browser completion and ticker-based backend polling without inventing replacement UX/operability detail.
+- Tests: future tests must prove the negative contract (no timeout/polling as normative behavior) while leaving detailed replacement behavior for a later decision.
+- Defects: future timeout/polling defects remain expected where code still violates this contract.
+- Confidence / Release: adjusted — the AC artifact can proceed without waiting for full redesign detail.
+
+**Required Follow-Up Actions:**
+- [ ] Capture replacement browser UX for stalled provisioning subscriptions in a later decision.
+- [ ] Capture replacement non-polling deploy-status synchronization design in a later decision.
+
+---
+
+### Decision HITL-SOUL_FACTORY_PROVISIONING_TRACKING-005 — Bahia integration strictness for acceptance criteria
+
+**Stage:** acceptance_criteria
+**Agent:** PSTF Acceptance Criteria Agent
+**Decision Type:** product_intent
+**Status:** active
+
+**Context Summary:**
+Soul Factory docs describe deep Bahia integration, but current code only clearly proves service registration and partial deploy-status logic while initial deployment hookup and multiple lifecycle hooks remain incomplete or fail-closed. The AC set needed an explicit ruling on whether Bahia integration should be treated as a must-have now or narrowed to a smaller verified slice.
+
+**Question Asked:**
+How strict should the Soul Factory acceptance criteria be about Bahia deployment integration in this feature slice?
+
+**Options Presented:**
+- A) Require full Bahia integration now: service registration, initial deployment hookup, deploy-status sync, and lifecycle propagation are all must-have
+- B) Require service registration and deploy-status visibility now; allow initial deployment hookup and lifecycle propagation to be follow-up work
+- C) Defer Bahia integration beyond basic soul publication for this slice
+
+**User Selection:**
+A
+
+**User Notes:**
+None.
+
+**Decision:**
+REQUIRE_FULL_BAHIA_INTEGRATION_NOW
+
+**Impact:**
+- Feature Spec: none
+- Acceptance Criteria: updated — ACs now require service registration, initial deployment hookup, deploy-status visibility, and lifecycle propagation for Bahia-managed souls.
+- Tests: future matrices must include Bahia integration and lifecycle propagation coverage instead of treating those paths as optional follow-up work.
+- Defects: current incomplete Bahia hooks are expected to surface as product defects during verification.
+- Confidence / Release: adjusted — the approved ACs are intentionally stricter than currently verified behavior.
+
+**Required Follow-Up Actions:**
+- [ ] Add Bahia integration coverage for initial deployment hookup and lifecycle propagation in the test matrix.
+- [ ] Treat current unsupported Bahia lifecycle hooks as implementation gaps rather than scope exclusions.
+
+---
+
+### Decision HITL-SOUL_FACTORY_PROVISIONING_TRACKING-006 — Acceptance criteria approval
+
+**Stage:** acceptance_criteria
+**Agent:** PSTF Acceptance Criteria Agent
+**Decision Type:** spec_approval
+**Status:** active
+
+**Context Summary:**
+A draft AC set was prepared for the full intended Soul Factory lifecycle: relay-backed browser flows, signer-first provisioning and lifecycle actions, the backend eight-step provisioning workflow, authoritative soul publication, full Bahia integration, real CLI/MCP behavior, and high-level event-driven constraints that reject timeout-based browser completion and ticker-based backend polling as normative behavior.
+
+**Question Asked:**
+Do you approve the acceptance criteria for `SOUL_FACTORY_PROVISIONING_TRACKING` on that basis?
+
+**Options Presented:**
+- A) APPROVE_AS_IS
+- B) APPROVE_WITH_EDITS
+- C) REJECT_AND_REVISE
+- D) DEFER_FEATURE
+
+**User Selection:**
+APPROVE_AS_IS
+
+**User Notes:**
+None.
+
+**Decision:**
+APPROVE_AS_IS
+
+**Impact:**
+- Feature Spec: none
+- Acceptance Criteria: updated — artifact status promoted to `approved`
+- Tests: test-matrix generation may proceed against the full approved lifecycle contract
+- Defects: none
+- Confidence / Release: adjusted — the approved AC set is now the explicit release-quality contract, even where current implementation is expected to fail it
+
+**Required Follow-Up Actions:**
+- [x] Write `pstf/features/SOUL_FACTORY_PROVISIONING_TRACKING/acceptance_criteria.json` with the approved AC set.
+- [ ] Use the approved AC set, not the narrower browser-only slice, for subsequent test design and verification.
+
+---
+
 ## Summary
 
-- Final Status: PENDING
+- Final Status: APPROVED
 - Open Questions: 0
 - Accepted Risks: 0
 - Deferred Items: 0
-- Blocking Issues: 4 — CLI surface explicitly unavailable; MCP mutation/list surfaces explicitly unavailable; lifecycle actions remain unsupported in configured provisioning engines; Bahia initial deployment and lifecycle integration contain incomplete / fail-closed paths.
+- Blocking Issues: 0 at the AC-approval stage; implementation gaps remain for later verification
 - Superseded Decisions: 0
 
 ## Traceability
 
 | Decision ID | Affects ACs | Affects Tests | Affects Defects | Affects Artifacts | Notes |
 | --- | --- | --- | --- | --- | --- |
-| HITL-SOUL_FACTORY_PROVISIONING_TRACKING-001 | future Soul Factory AC set | future Soul Factory matrix | future Soul Factory defects | feature_spec.json | Intended scope is full lifecycle now, despite partial current proof. |
-| HITL-SOUL_FACTORY_PROVISIONING_TRACKING-002 | future Soul Factory AC set | `web/tests/unit/souls-store.test.js` | future Soul Factory defects | feature_spec.json | Timeout/relay-close run failure is not normative behavior. |
-| HITL-SOUL_FACTORY_PROVISIONING_TRACKING-003 | future Soul Factory AC set | future status-sync coverage | future Soul Factory defects | feature_spec.json | Ticker-based deployment status polling is not normative behavior. |
+| HITL-SOUL_FACTORY_PROVISIONING_TRACKING-001 | whole AC set | future matrix | future defects | feature_spec.json, acceptance_criteria.json | Full lifecycle remains the intended scope. |
+| HITL-SOUL_FACTORY_PROVISIONING_TRACKING-002 | SFTP-AC-013 | future matrix | future defects | feature_spec.json, acceptance_criteria.json | Timeout/relay-close terminal behavior is not normative. |
+| HITL-SOUL_FACTORY_PROVISIONING_TRACKING-003 | SFTP-AC-014 | future matrix | future defects | feature_spec.json, acceptance_criteria.json | Ticker polling is not normative status-sync behavior. |
+| HITL-SOUL_FACTORY_PROVISIONING_TRACKING-004 | SFTP-AC-013, SFTP-AC-014 | future matrix | future defects | acceptance_criteria.json | Approved high-level event-driven ACs without replacement-detail invention. |
+| HITL-SOUL_FACTORY_PROVISIONING_TRACKING-005 | SFTP-AC-007, SFTP-AC-009 | future matrix | future defects | acceptance_criteria.json | Bahia integration remains strict must-have behavior. |
+| HITL-SOUL_FACTORY_PROVISIONING_TRACKING-006 | whole AC set | future matrix | future defects | acceptance_criteria.json | AC artifact approved as written. |
