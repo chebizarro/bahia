@@ -1,0 +1,667 @@
+{
+  "feature_id": "SOUL_FACTORY_PROVISIONING_TRACKING",
+  "status": "ready",
+  "tests": [
+    {
+      "test_id": "SFTP-T-001",
+      "ac_ids": [
+        "SFTP-AC-001"
+      ],
+      "title": "Souls store bootstrap and live soul-update subscription coverage",
+      "type": "unit",
+      "existing_or_new": "existing",
+      "target_path": "web/tests/unit/souls-store.test.js",
+      "description": "Existing store-level coverage proves relay-backed load of souls/templates, deterministic ordering, and live soul update insertion/update behavior. Difficulty: none; already present.",
+      "preconditions": [
+        "Mock relay query/subscription helpers are available.",
+        "Soul/template fixtures are deterministic."
+      ],
+      "steps": [
+        "Load souls and templates through the store.",
+        "Deliver live `31951` events for existing and new souls.",
+        "Inspect store ordering and update semantics."
+      ],
+      "expected_result": "Store bootstrap uses relay-backed data and live soul events update the visible collection without reload.",
+      "fixtures": [
+        "mock `fetchSouls` and `fetchTemplates` responses",
+        "mock `nostr.subscribe` callback capture"
+      ],
+      "mocks": [
+        "parsed soul/template event helpers"
+      ],
+      "data_requirements": [
+        "Stable `31951` and `31950` fixtures with deterministic timestamps."
+      ],
+      "determinism_notes": [
+        "Pure store unit coverage; no network dependency."
+      ],
+      "status": "implemented",
+      "failure_reason": null
+    },
+    {
+      "test_id": "SFTP-T-002",
+      "ac_ids": [
+        "SFTP-AC-001"
+      ],
+      "title": "Souls gallery browser bootstrap and live-update journey",
+      "type": "e2e",
+      "existing_or_new": "new",
+      "target_path": "web/tests/e2e/souls-gallery-live.spec.js",
+      "description": "New browser-level test should prove the actual `/souls` page renders relay-backed souls/templates and reflects a live update, not just store state in isolation. Difficulty: medium.",
+      "preconditions": [
+        "Playwright relay/WebSocket harness can inject initial soul/template events and a follow-up live `31951` event."
+      ],
+      "steps": [
+        "Open `/souls` against deterministic relay mocks.",
+        "Assert initial gallery content from bootstrap data.",
+        "Inject a live update and verify the UI refreshes accordingly."
+      ],
+      "expected_result": "The page shows relay-backed soul data on load and changes in response to a live soul event.",
+      "fixtures": [
+        "Playwright Nostr relay mock",
+        "deterministic soul/template event fixtures"
+      ],
+      "mocks": [
+        "mock WebSocket relay responses including EOSE and live EVENT frames"
+      ],
+      "data_requirements": [
+        "At least one template and two soul records with stable ids and timestamps."
+      ],
+      "determinism_notes": [
+        "Avoid sleeps; drive UI updates from explicit mocked relay events."
+      ],
+      "status": "not_implemented",
+      "failure_reason": null
+    },
+    {
+      "test_id": "SFTP-T-003",
+      "ac_ids": [
+        "SFTP-AC-002"
+      ],
+      "title": "Browser provisioning request signing, tag shaping, and zero-accept rejection",
+      "type": "e2e",
+      "existing_or_new": "existing",
+      "target_path": "web/tests/e2e/soul-signing-smoke.spec.js",
+      "description": "Existing smoke coverage proves NIP-07 gating, provisioning request tag capture, step navigation, and explicit relay-rejection handling. Difficulty: none; already present.",
+      "preconditions": [
+        "Mock NIP-07 signer and relay WebSocket harness are installed."
+      ],
+      "steps": [
+        "Open `/souls/new` with and without signer availability.",
+        "Submit a valid provisioning request.",
+        "Repeat with rejecting relay responses."
+      ],
+      "expected_result": "Valid requests are signed with required tags; missing signer blocks submit; rejecting relays surface a publish failure and do not report success.",
+      "fixtures": [
+        "mock window.nostr signer",
+        "mock WebSocket relay"
+      ],
+      "mocks": [
+        "relay OK true/false responses"
+      ],
+      "data_requirements": [
+        "Stable agent name/id/brief/tier inputs for the wizard flow."
+      ],
+      "determinism_notes": [
+        "Current spec uses `waitForTimeout`; future cleanup can reduce timing dependence but the test already exercises the intended path."
+      ],
+      "status": "implemented",
+      "failure_reason": null
+    },
+    {
+      "test_id": "SFTP-T-004",
+      "ac_ids": [
+        "SFTP-AC-003"
+      ],
+      "title": "Reactor publishes correlated 7950 errors for unauthorized and malformed 5950 requests",
+      "type": "integration",
+      "existing_or_new": "new",
+      "target_path": "internal/soulfactory/reactor_test.go",
+      "description": "New in-process reactor test should inject signed provisioning requests and capture published error events for unauthorized and malformed inputs. Difficulty: medium.",
+      "preconditions": [
+        "A reactor can be built with fake signer/generator and capture publisher.",
+        "Authorized and unauthorized request pubkeys are deterministic."
+      ],
+      "steps": [
+        "Deliver an unauthorized provisioning request.",
+        "Deliver malformed requests missing `agent-id` and missing brief/template/draft source.",
+        "Inspect the captured result events."
+      ],
+      "expected_result": "Each rejected request yields a correlated `7950` error event with `e` and `p` reply tags and no successful soul publication.",
+      "fixtures": [
+        "fake signer",
+        "capture publisher",
+        "authorized pubkey fixture"
+      ],
+      "mocks": [
+        "in-process relay publish capture"
+      ],
+      "data_requirements": [
+        "Stable signed `5950` event fixtures for valid and invalid shapes."
+      ],
+      "determinism_notes": [
+        "No live relays; inject events directly and assert captured publish payloads."
+      ],
+      "status": "not_implemented",
+      "failure_reason": null
+    },
+    {
+      "test_id": "SFTP-T-005",
+      "ac_ids": [
+        "SFTP-AC-004"
+      ],
+      "title": "Full provisioner success path records eight stages and emits correlated progress and terminal success",
+      "type": "integration",
+      "existing_or_new": "new",
+      "target_path": "internal/soulfactory/provisioner_full_integration_test.go",
+      "description": "New integration suite should drive a successful `FullProvisioner` run with deterministic fakes and assert eight-step accounting plus correlated `6950` and `7950` behavior through the reactor. Difficulty: high.",
+      "preconditions": [
+        "Fake generator, signer, publisher, and optional adapters are available.",
+        "A non-placeholder provisioning engine is wired into the reactor."
+      ],
+      "steps": [
+        "Execute a successful provisioning request through the reactor/full provisioner.",
+        "Capture progress and terminal result events.",
+        "Inspect run step ordering and completion state."
+      ],
+      "expected_result": "The run records the documented eight stages, emits meaningful progress, and concludes with correlated terminal success rather than implicit completion.",
+      "fixtures": [
+        "fake generator",
+        "fake signer",
+        "capture publisher",
+        "fake optional adapters"
+      ],
+      "mocks": [
+        "relay publish capture",
+        "optional integration clients"
+      ],
+      "data_requirements": [
+        "Stable brief, agent id, allowed kinds, tool grants, and deterministic ids/timestamps where assertions depend on ordering."
+      ],
+      "determinism_notes": [
+        "Freeze or normalize timestamps/UUIDs where asserted; avoid external service calls entirely."
+      ],
+      "status": "not_implemented",
+      "failure_reason": null
+    },
+    {
+      "test_id": "SFTP-T-006",
+      "ac_ids": [
+        "SFTP-AC-005"
+      ],
+      "title": "Unconfigured optional integrations are recorded as skipped without fake outputs",
+      "type": "unit",
+      "existing_or_new": "existing",
+      "target_path": "internal/soulfactory/hardening_test.go",
+      "description": "Existing hardening coverage proves optional avatar/Qdrant/memory/workspace steps are skipped and do not populate fake outputs when unconfigured. Difficulty: none; already present.",
+      "preconditions": [
+        "FullProvisioner is constructed without optional adapter configuration."
+      ],
+      "steps": [
+        "Run provisioning with optional integrations absent.",
+        "Inspect final soul outputs and recorded step statuses."
+      ],
+      "expected_result": "Skipped steps are explicit and optional outputs remain empty.",
+      "fixtures": [
+        "fake generator",
+        "fake signer"
+      ],
+      "mocks": [],
+      "data_requirements": [
+        "Stable provisioning request fixture with standard tier."
+      ],
+      "determinism_notes": [
+        "Pure in-process coverage; no external services involved."
+      ],
+      "status": "implemented",
+      "failure_reason": null
+    },
+    {
+      "test_id": "SFTP-T-007",
+      "ac_ids": [
+        "SFTP-AC-005"
+      ],
+      "title": "Optional integration failures are surfaced as failed steps without fabricated success",
+      "type": "integration",
+      "existing_or_new": "new",
+      "target_path": "internal/soulfactory/provisioner_full_integration_test.go",
+      "description": "Extend provisioner coverage with deterministic optional-adapter failures so the matrix proves non-fatal failure accounting, not just skipped-path behavior. Difficulty: medium.",
+      "preconditions": [
+        "At least one optional adapter can be replaced with a deterministic failing fake."
+      ],
+      "steps": [
+        "Run provisioning with avatar, Qdrant, memory, or workspace adapters configured to fail non-fatally.",
+        "Inspect step results and final soul outputs."
+      ],
+      "expected_result": "The failed optional step is recorded as failed, downstream provisioning continues where intended, and absent outputs are not fabricated.",
+      "fixtures": [
+        "failing fake avatar/Qdrant/memory/workspace adapters"
+      ],
+      "mocks": [
+        "capture publisher if progress assertions are included"
+      ],
+      "data_requirements": [
+        "Stable optional-step failure messages for assertions."
+      ],
+      "determinism_notes": [
+        "Use fakes that fail immediately and predictably."
+      ],
+      "status": "not_implemented",
+      "failure_reason": null
+    },
+    {
+      "test_id": "SFTP-T-008",
+      "ac_ids": [
+        "SFTP-AC-006"
+      ],
+      "title": "Successful provisioning publishes authoritative 31951 metadata and correlated 7950 success payload",
+      "type": "contract",
+      "existing_or_new": "new",
+      "target_path": "internal/soulfactory/reactor_test.go",
+      "description": "New contract test should capture the published `31951` soul event and the terminal `7950` success payload after successful provisioning. Difficulty: medium.",
+      "preconditions": [
+        "A successful provisioning run can be executed in-process with a capture publisher."
+      ],
+      "steps": [
+        "Execute successful provisioning through the reactor.",
+        "Capture the published `31951` event and terminal result event.",
+        "Inspect required tags and payload fields."
+      ],
+      "expected_result": "`31951` carries authoritative soul metadata and the terminal result references the published soul through correlated success data.",
+      "fixtures": [
+        "fake generator",
+        "fake signer",
+        "capture publisher"
+      ],
+      "mocks": [
+        "relay publish capture"
+      ],
+      "data_requirements": [
+        "Stable agent id, npub/pubkey, and metadata fixtures."
+      ],
+      "determinism_notes": [
+        "Assert on structured tags/content rather than exact ids when ids are generated dynamically."
+      ],
+      "status": "not_implemented",
+      "failure_reason": null
+    },
+    {
+      "test_id": "SFTP-T-009",
+      "ac_ids": [
+        "SFTP-AC-006"
+      ],
+      "title": "Browser can discover a freshly provisioned soul from relay-backed publication",
+      "type": "e2e",
+      "existing_or_new": "new",
+      "target_path": "web/tests/e2e/soul-provisioned-visibility.spec.js",
+      "description": "New browser journey should bridge successful provisioning to subsequent relay-backed soul discovery in the UI. Difficulty: high.",
+      "preconditions": [
+        "Playwright harness can inject a provisioning success result and a follow-up `31951` publication."
+      ],
+      "steps": [
+        "Complete a mocked successful provisioning flow.",
+        "Navigate to or refresh the Souls gallery.",
+        "Deliver or expose the resulting `31951` event and inspect UI visibility."
+      ],
+      "expected_result": "The newly provisioned soul appears through normal relay-backed browsing rather than an out-of-band UI shortcut.",
+      "fixtures": [
+        "mock NIP-07 signer",
+        "mock relay with provisioning/result/soul events"
+      ],
+      "mocks": [
+        "WebSocket EVENT/EOSE/OK responses"
+      ],
+      "data_requirements": [
+        "Consistent request id, soul coordinate, and display metadata across provisioning and gallery assertions."
+      ],
+      "determinism_notes": [
+        "Drive post-provision visibility from explicit mocked relay events, not sleeps."
+      ],
+      "status": "not_implemented",
+      "failure_reason": null
+    },
+    {
+      "test_id": "SFTP-T-010",
+      "ac_ids": [
+        "SFTP-AC-007"
+      ],
+      "title": "Bahia integration registers the provisioned soul as a service, attempts initial deployment hookup, and syncs deploy status",
+      "type": "integration",
+      "existing_or_new": "new",
+      "target_path": "internal/soulfactory/bahia_integration_test.go",
+      "description": "New Bahia integration suite should verify service registration, initial deployment-hookup behavior, and deploy-status mapping for a provisioned soul. Difficulty: high.",
+      "preconditions": [
+        "A fake or in-memory RegistryService can record created services, intents, observations, and environment state.",
+        "BahiaIntegration is configured with an agent environment id."
+      ],
+      "steps": [
+        "Register a provisioned soul as a service.",
+        "Invoke initial deployment hookup.",
+        "Simulate environment state and latest observation lookups for deploy-status sync."
+      ],
+      "expected_result": "Service registration succeeds, deployment hookup behavior is exercised for the configured environment, and sync returns publishable deploy-status values.",
+      "fixtures": [
+        "fake registry service",
+        "stable soul fixture",
+        "configured agent environment UUID"
+      ],
+      "mocks": [
+        "registry create/get methods",
+        "observation lookup"
+      ],
+      "data_requirements": [
+        "Stable service/environment UUIDs and representative drift/health states."
+      ],
+      "determinism_notes": [
+        "Use in-memory registry fakes; do not rely on real runtime adapters or databases."
+      ],
+      "status": "not_implemented",
+      "failure_reason": null
+    },
+    {
+      "test_id": "SFTP-T-011",
+      "ac_ids": [
+        "SFTP-AC-008"
+      ],
+      "title": "Browser lifecycle action publisher signs and correlates 1950 action events",
+      "type": "unit",
+      "existing_or_new": "existing",
+      "target_path": "web/tests/unit/souls-store.test.js",
+      "description": "Existing unit coverage proves `publishSoulAction` and `updateSoulDetails` emit signed `1950` action events with soul/action/reason correlation tags. Difficulty: none; already present.",
+      "preconditions": [
+        "Authenticated browser-store auth mock and Nostr publish mock are available."
+      ],
+      "steps": [
+        "Publish a lifecycle action from the store.",
+        "Publish a regenerate/update action with JSON payload.",
+        "Inspect the signed event shape."
+      ],
+      "expected_result": "The store signs and publishes correlated `1950` action events with the expected soul coordinate and action metadata.",
+      "fixtures": [
+        "mock auth state",
+        "mock signWithAuth",
+        "mock nostr.publish"
+      ],
+      "mocks": [
+        "browser auth helpers"
+      ],
+      "data_requirements": [
+        "Stable soul coordinate and reason/brief payloads."
+      ],
+      "determinism_notes": [
+        "Pure store unit coverage; no relay dependency."
+      ],
+      "status": "implemented",
+      "failure_reason": null
+    },
+    {
+      "test_id": "SFTP-T-012",
+      "ac_ids": [
+        "SFTP-AC-008"
+      ],
+      "title": "Lifecycle handler rejects malformed or unauthorized actions and processes valid correlated actions",
+      "type": "integration",
+      "existing_or_new": "new",
+      "target_path": "internal/soulfactory/lifecycle_handler_test.go",
+      "description": "New lifecycle-handler suite should prove malformed/unauthorized rejection and valid action processing against an existing soul. Difficulty: medium.",
+      "preconditions": [
+        "LifecycleHandler can be built with fake reactor, signer, and optional Bahia integration/status sync fakes."
+      ],
+      "steps": [
+        "Deliver malformed action events missing soul or action tags.",
+        "Deliver unauthorized action events.",
+        "Deliver valid signed suspend/resume/regenerate/redeploy actions."
+      ],
+      "expected_result": "Malformed and unauthorized actions fail without state mutation; valid actions are processed against the target soul and publish correlated updates/results.",
+      "fixtures": [
+        "fake reactor GetSoul/publish/signer",
+        "stable existing soul fixture"
+      ],
+      "mocks": [
+        "Bahia integration fake",
+        "status sync fake"
+      ],
+      "data_requirements": [
+        "Stable action events with predictable soul coordinates and auth identities."
+      ],
+      "determinism_notes": [
+        "Use injected fakes for GetSoul and publish capture rather than live relay queries."
+      ],
+      "status": "not_implemented",
+      "failure_reason": null
+    },
+    {
+      "test_id": "SFTP-T-013",
+      "ac_ids": [
+        "SFTP-AC-009"
+      ],
+      "title": "Managed lifecycle actions propagate deployment/runtime side effects for Bahia-managed souls",
+      "type": "integration",
+      "existing_or_new": "new",
+      "target_path": "internal/soulfactory/lifecycle_handler_test.go",
+      "description": "New lifecycle/Bahia integration coverage should verify suspend, resume, revoke, and redeploy perform managed side effects instead of only republishing soul state. Difficulty: high.",
+      "preconditions": [
+        "A Bahia-managed soul fixture exists with service id.",
+        "Bahia integration and signer side-effect collaborators can be observed deterministically."
+      ],
+      "steps": [
+        "Execute suspend, resume, revoke, and redeploy actions against the managed soul.",
+        "Inspect downstream integration calls and resulting soul/action state."
+      ],
+      "expected_result": "Each lifecycle action triggers the corresponding managed side effect plus the expected soul/action result signaling.",
+      "fixtures": [
+        "Bahia-managed soul fixture",
+        "fake registry/service side-effect recorder",
+        "fake signer revocation/suspend/resume recorder"
+      ],
+      "mocks": [
+        "Bahia integration methods",
+        "status sync unregister path"
+      ],
+      "data_requirements": [
+        "Stable service UUID and lifecycle action fixtures."
+      ],
+      "determinism_notes": [
+        "Record side-effect calls directly in fakes; avoid live runtime dependencies."
+      ],
+      "status": "not_implemented",
+      "failure_reason": null
+    },
+    {
+      "test_id": "SFTP-T-014",
+      "ac_ids": [
+        "SFTP-AC-010"
+      ],
+      "title": "Regenerate requires a new brief and republishes updated soul identity content",
+      "type": "integration",
+      "existing_or_new": "new",
+      "target_path": "internal/soulfactory/lifecycle_handler_test.go",
+      "description": "New regenerate-specific handler coverage should prove missing-brief failure and successful republish of updated soul content plus correlated action result. Difficulty: medium.",
+      "preconditions": [
+        "LifecycleHandler is configured with fake generator, signer, and publish capture."
+      ],
+      "steps": [
+        "Execute regenerate without a new brief.",
+        "Execute regenerate with a valid new brief.",
+        "Inspect updated soul publication and action result."
+      ],
+      "expected_result": "Missing-brief regenerate fails; valid regenerate repopulates soul identity content and publishes a correlated completion result.",
+      "fixtures": [
+        "fake generator with deterministic regenerated content",
+        "existing soul fixture",
+        "publish capture"
+      ],
+      "mocks": [
+        "Bahia integration optional noop fake"
+      ],
+      "data_requirements": [
+        "Stable original and replacement briefs with expected generated outputs."
+      ],
+      "determinism_notes": [
+        "Keep generator output deterministic so republished content can be asserted exactly."
+      ],
+      "status": "not_implemented",
+      "failure_reason": null
+    },
+    {
+      "test_id": "SFTP-T-015",
+      "ac_ids": [
+        "SFTP-AC-011"
+      ],
+      "title": "CLI Soul Factory commands perform real Nostr-backed query and mutation flows",
+      "type": "integration",
+      "existing_or_new": "modify_existing",
+      "target_path": "cmd/cli/soulfactory_test.go",
+      "description": "Current CLI tests prove unavailability stubs. They must be replaced or extended to assert real list/get/provision/lifecycle/template behavior once transport is implemented. Difficulty: high.",
+      "preconditions": [
+        "CLI signing/auth and relay query/publish support exist.",
+        "Deterministic relay fixtures or an in-process relay harness are available."
+      ],
+      "steps": [
+        "Run each Soul Factory CLI command against deterministic fixtures.",
+        "Inspect query output, publish behavior, and surfaced correlated failures."
+      ],
+      "expected_result": "CLI commands perform real query or signed publish work instead of returning explicit unavailability errors.",
+      "fixtures": [
+        "CLI relay harness",
+        "stable auth key material",
+        "stable souls/templates/provisioning fixtures"
+      ],
+      "mocks": [
+        "in-process relay or transport fake"
+      ],
+      "data_requirements": [
+        "Stable command-line args and output fixtures for list/get/provision/lifecycle/template commands."
+      ],
+      "determinism_notes": [
+        "Keep CLI tests in-process or against a fully deterministic relay harness; no live relays."
+      ],
+      "status": "not_implemented",
+      "failure_reason": null
+    },
+    {
+      "test_id": "SFTP-T-016",
+      "ac_ids": [
+        "SFTP-AC-012"
+      ],
+      "title": "MCP Soul Factory tools perform real query, mutation, and status flows",
+      "type": "integration",
+      "existing_or_new": "modify_existing",
+      "target_path": "internal/soulfactory/mcp_server_test.go",
+      "description": "Current MCP-related coverage proves unavailability for list/template and only partial get/status behavior. A real MCP suite is needed once signed publish/query support exists. Difficulty: high.",
+      "preconditions": [
+        "MCP server can be configured with real or fake signed Nostr publish/query capabilities and run state capture."
+      ],
+      "steps": [
+        "Invoke list/get/template/provision/action/regenerate/status tools.",
+        "Inspect whether each tool performs real work and returns real query or run-status data."
+      ],
+      "expected_result": "The MCP surface performs real Soul Factory operations instead of returning static unavailability errors.",
+      "fixtures": [
+        "MCP request fixtures for each tool",
+        "in-process reactor/publisher/query harness"
+      ],
+      "mocks": [
+        "fake signer and query/publish transport where needed"
+      ],
+      "data_requirements": [
+        "Stable tool argument fixtures and predictable run ids/results."
+      ],
+      "determinism_notes": [
+        "Status assertions should use deterministic in-memory run state, not external polling."
+      ],
+      "status": "not_implemented",
+      "failure_reason": null
+    },
+    {
+      "test_id": "SFTP-T-017",
+      "ac_ids": [
+        "SFTP-AC-013"
+      ],
+      "title": "Provisioning tracker no longer treats timeout or relay closure alone as normative terminal failure",
+      "type": "unit",
+      "existing_or_new": "modify_existing",
+      "target_path": "web/tests/unit/souls-store.test.js",
+      "description": "Existing store tests currently assert the opposite contract: they expect terminal failure on local timeout and relay closure. Those tests must be rewritten to encode the approved event-driven semantics. Difficulty: medium.",
+      "preconditions": [
+        "Store-level provisioning tracker can be exercised with fake timers and mocked relay callbacks."
+      ],
+      "steps": [
+        "Start a provisioning run without terminal result events.",
+        "Advance time and close the subscription before a correlated terminal result arrives.",
+        "Exercise explicit publish rejection and explicit correlated terminal error cases."
+      ],
+      "expected_result": "Local time passage and closure alone are non-terminal; only explicit rejection or correlated terminal results conclude the run.",
+      "fixtures": [
+        "mock `nostr.subscribe` handlers",
+        "fake timers",
+        "publish rejection/result fixtures"
+      ],
+      "mocks": [
+        "browser auth and relay helpers"
+      ],
+      "data_requirements": [
+        "Stable request ids and deterministic result payloads/errors."
+      ],
+      "determinism_notes": [
+        "The current timeout/closure tests should be inverted or removed once replacement behavior exists."
+      ],
+      "status": "not_implemented",
+      "failure_reason": null
+    },
+    {
+      "test_id": "SFTP-T-018",
+      "ac_ids": [
+        "SFTP-AC-014"
+      ],
+      "title": "Status sync republishes deploy-status from Bahia events without relying on ticker polling",
+      "type": "integration",
+      "existing_or_new": "new",
+      "target_path": "internal/soulfactory/status_sync_test.go",
+      "description": "New status-sync coverage should prove deployment-intent and deployment-run events can update soul deploy status and republish soul state, while the approved contract does not depend on `StartPeriodicSync`. Difficulty: medium.",
+      "preconditions": [
+        "StatusSyncHandler can be built with fake reactor signer/publisher and fake Bahia events."
+      ],
+      "steps": [
+        "Register a Bahia-managed soul.",
+        "Deliver deployment-intent-created and deployment-run-completed events.",
+        "Inspect republished soul state and deploy-status transitions."
+      ],
+      "expected_result": "Deploy-status updates are driven by explicit events and republished into soul state without requiring ticker-based refresh as the normative mechanism.",
+      "fixtures": [
+        "fake reactor signer/publisher",
+        "Bahia-managed soul fixture",
+        "deployment event fixtures"
+      ],
+      "mocks": [
+        "Bahia event payloads and service-id lookup inputs"
+      ],
+      "data_requirements": [
+        "Stable service UUID, event types, drift/health status fixtures."
+      ],
+      "determinism_notes": [
+        "Do not use sleeps or tickers in the test; inject event callbacks directly."
+      ],
+      "status": "not_implemented",
+      "failure_reason": null
+    }
+  ],
+  "coverage_summary": {
+    "criteria_total": 14,
+    "criteria_with_tests": 14,
+    "known_gaps": [
+      "No reactor-level provisioning request/result suite currently exists for unauthorized, malformed, or successful provisioning paths.",
+      "No backend suite currently proves authoritative `31951` publication, Bahia initial deployment hookup, or lifecycle propagation side effects.",
+      "Existing browser-store tests still encode timeout and relay-closure terminal failure semantics that now contradict approved AC-013.",
+      "Current CLI and MCP tests prove fail-closed stubs rather than the approved real transport/query behavior.",
+      "No browser E2E currently proves a freshly provisioned soul becomes visible in the relay-backed Souls gallery."
+    ]
+  },
+  "implementation_notes": [
+    "Difficulty estimate \u2014 low/no new work: SFTP-T-001, SFTP-T-003, SFTP-T-006, and SFTP-T-011 already exist and should be reused as supporting evidence.",
+    "Difficulty estimate \u2014 medium: SFTP-T-004, SFTP-T-007, SFTP-T-008, SFTP-T-012, SFTP-T-014, SFTP-T-017, and SFTP-T-018 are in-process unit/integration additions with deterministic fakes.",
+    "Difficulty estimate \u2014 high: SFTP-T-002, SFTP-T-005, SFTP-T-009, SFTP-T-010, SFTP-T-013, SFTP-T-015, and SFTP-T-016 depend on broader missing implementation or multi-surface harnessing.",
+    "Recommended sequence: first add backend in-process tests for reactor/provisioner/lifecycle/status-sync semantics, then add Bahia integration coverage, then update browser tests, and only after implementation matures replace the CLI/MCP stub tests.",
+    "Use deterministic helpers throughout: fake signer, fake generator, capture publisher, fixed UUID/time fixtures where assertions depend on ordering, and mocked relay EVENT/EOSE/OK frames rather than live relays or sleeps."
+  ]
+}
