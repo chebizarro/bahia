@@ -1,0 +1,365 @@
+{
+  "generated_at": "2026-05-04",
+  "generated_by": "BacklogExpansionAgent",
+  "source_inputs": [
+    "pstf/product_map.md",
+    "pstf/planning_docs_index.md",
+    "pstf/spec_gap_report.md",
+    "pstf/features/CORE_SERVICE_TO_DEPLOYMENT/feature_spec.json",
+    "pstf/features/ENCRYPTED_CONTROL_PLANE_NOTIFICATIONS/feature_spec.json",
+    "pstf/features/SIGNER_FIRST_OPERATOR_ADOPTION_RUNTIME/feature_spec.json"
+  ],
+  "existing_feature_coverage": {
+    "fully_mapped": [
+      "CORE_SERVICE_TO_DEPLOYMENT",
+      "ENCRYPTED_CONTROL_PLANE_NOTIFICATIONS",
+      "SIGNER_FIRST_OPERATOR_ADOPTION_RUNTIME"
+    ],
+    "notes": [
+      "Core service/deployment, encrypted notifications transport, and signer-first operator adoption/runtime already have PSTF feature directories.",
+      "Several additional capabilities are only referenced as dependencies or explicitly marked out of scope in the existing slices.",
+      "LLM_ROUTE_RELEASE_DEPLOYMENT is no longer unmapped: the approved non-rollback slice is complete, while rollback follow-up remains domain-specific and deferred."
+    ],
+    "approved_partial": [
+      "LLM_ROUTE_RELEASE_DEPLOYMENT"
+    ]
+  },
+  "ranking_method": {
+    "dimensions": [
+      "user_value",
+      "centrality",
+      "risk",
+      "coverage_gap"
+    ],
+    "scale": "1-5 where 5 is highest",
+    "coverage_gap_mapping": {
+      "unmapped": 5,
+      "partially_mapped": 4,
+      "fully_mapped": 1
+    },
+    "total_score_formula": "user_value + centrality + risk + coverage_gap"
+  },
+  "candidates": [
+    {
+      "rank": 1,
+      "feature_id": "SYSTEM_DISCOVERY_RELAY_BOOTSTRAP",
+      "title": "System discovery and relay bootstrap contract",
+      "current_coverage": "partially_mapped",
+      "scores": {
+        "user_value": 5,
+        "centrality": 5,
+        "risk": 5,
+        "coverage_gap": 4,
+        "total": 19
+      },
+      "slice_summary": "Verify `/api/v1/system/info` as the authoritative bootstrap contract for browser relays, encrypted-request relays, service pubkey discovery, feature gating, control-plane kind advertisement, cached system-info loading, EOSE-bounded read-model bootstrap, and transition into live subscriptions.",
+      "why_this_is_a_gap": "Existing PSTF slices depend on `/api/v1/system/info` and relay bootstrap behavior, but none verify that contract as its own feature. `pstf/spec_gap_report.md` calls both `/api/v1/system/info` and relay-read-model-first frontend behavior under-specified.",
+      "proposed_acceptance_focus": [
+        "`/api/v1/system/info` advertises public relays, encrypted-request relays, service pubkey, feature flags, and control-plane kind maps coherently.",
+        "The browser caches and deduplicates system-info loads instead of refetching per store.",
+        "Public control-plane bootstrap waits for EOSE, applies stored read models, and then stays live through subscriptions.",
+        "Bootstrap fails closed when relay-read-model capability or browser relays are not advertised."
+      ],
+      "source_evidence": [
+        "pstf/product_map.md \u2014 'System discovery and relay bootstrap' flow and product summary",
+        "pstf/planning_docs_index.md \u2014 `docs/control-planes.md` and `internal/api/handlers/system.go` called out as high-authority onboarding sources",
+        "pstf/spec_gap_report.md \u2014 Missing specification #1 (`/api/v1/system/info`) and #2 (relay-read-model-first frontend behavior)",
+        "internal/api/handlers/system.go:47-126 \u2014 `NostrConfigInfo`, `ControlPlaneInfo`, and `SystemInfoResponse` define the advertised bootstrap payload",
+        "internal/api/handlers/system.go:229-245,256-318 \u2014 feature flags plus control-plane request/result/read-model kind advertisement, including optional LLM kinds",
+        "internal/api/handlers/system_test.go \u2014 payload coverage for encrypted relay fields, feature flags, and control-plane fields",
+        "web/src/lib/stores/system.svelte.js:13-45 \u2014 cached `currentSystemInfo`, force-reload behavior, and concurrent-load dedupe",
+        "web/src/lib/stores/controlplane.svelte.js:535-568 \u2014 browser relay resolution, `queryUntilEose(readModelFilters())`, and live subscription handoff",
+        "web/tests/unit/system-store.test.js \u2014 'loads public system info once' and 'deduplicates concurrent system info loads'",
+        "web/tests/unit/controlplane-store.test.js \u2014 relay discovery and relay-backed bootstrap assertions"
+      ]
+    },
+    {
+      "rank": 2,
+      "feature_id": "ENCRYPTED_SERVICE_SECRETS_CRUD_REVEAL",
+      "title": "Encrypted service secrets CRUD and reveal safety",
+      "current_coverage": "unmapped",
+      "scores": {
+        "user_value": 4,
+        "centrality": 4,
+        "risk": 5,
+        "coverage_gap": 5,
+        "total": 18
+      },
+      "slice_summary": "Verify encrypted secrets list/create/update/delete/reveal operations, including the boundary that secret values are never rendered in list views, reveal is explicit, and the reveal-after-update workflow stays scoped to encrypted request/result transport.",
+      "why_this_is_a_gap": "The encrypted notifications feature intentionally scopes itself to notifications and excludes other encrypted domains. Secrets are implemented as a separate encrypted route domain with both transport-level and page-level behavior, but there is no dedicated PSTF feature for it.",
+      "proposed_acceptance_focus": [
+        "Secrets CRUD uses encrypted request/result operations rather than public relays or plain REST as the normative contract.",
+        "List views and post-create refreshes never expose plaintext secret values.",
+        "Reveal requires an explicit action and returns plaintext only to the requester context.",
+        "Update + reveal + clipboard copy behaves deterministically and leaves reveal disabled when no value is cached."
+      ],
+      "source_evidence": [
+        "pstf/spec_gap_report.md \u2014 Missing specification #3 (encrypted operation catalog incomplete)",
+        "pstf/features/ENCRYPTED_CONTROL_PLANE_NOTIFICATIONS/feature_spec.json \u2014 encrypted transport is verified, but org/payment and other encrypted domains are out of scope",
+        "internal/controlplane/encrypted_route_handlers.go:18-41 \u2014 `services.secrets.list/create/update/delete/reveal` encrypted operation catalog",
+        "internal/controlplane/encrypted_route_handlers_test.go \u2014 encrypted route handler coverage for secrets operations and auth boundaries",
+        "web/src/lib/stores/service-secrets.svelte.js:10-16,100-126 \u2014 encrypted operations and create/update/delete/reveal helpers",
+        "web/tests/unit/encrypted-route-stores.test.js:35-43 \u2014 encrypted store calls for list/create/reveal/delete",
+        "web/tests/e2e/service-secrets-smoke.spec.js:162-190 \u2014 existing secrets visible without values and reveal disabled when no cached value exists",
+        "web/tests/e2e/service-secrets-smoke.spec.js:260-317 \u2014 created secret values are never rendered back in the page body",
+        "web/tests/e2e/service-secrets-smoke.spec.js:319-390 \u2014 update, reveal, and clipboard-copy flow"
+      ]
+    },
+    {
+      "rank": 3,
+      "feature_id": "LLM_ROUTE_RELEASE_DEPLOYMENT",
+      "title": "LLM route/release/deploy/approval/rollback control plane",
+      "current_coverage": "approved_non_rollback_slice",
+      "scores": {
+        "user_value": 4,
+        "centrality": 4,
+        "risk": 5,
+        "coverage_gap": 5,
+        "total": 18
+      },
+      "slice_summary": "Verify the LLM control-plane vertical from route creation through release registration, deployment intent creation, approval or rejection, route-state publication, and rollback correlation.",
+      "why_this_is_a_gap": "The non-rollback slice is now approved and verified. Remaining backlog relevance is limited to the deferred rollback portion, which should stay domain-specific rather than being replaced by a shared rollback-governance slice.",
+      "proposed_acceptance_focus": [
+        "System discovery advertises LLM request/result/read-model kinds only when the LLM feature is enabled.",
+        "Route, release, deploy, approval, and rollback requests each preserve explicit Nostr correlation tags and terminal results.",
+        "LLM route state reflects desired and observed backend/gateway state after reconcile.",
+        "Rollback remains a first-class operator-visible behavior, not an implicit rewrite of the latest deployment state."
+      ],
+      "source_evidence": [
+        "pstf/product_map.md \u2014 major capability 'LLM control plane' and LLM actor",
+        "pstf/spec_gap_report.md \u2014 Untested behavior #3 (LLM route control plane has limited selected flow coverage)",
+        "internal/api/handlers/system.go:288-300 \u2014 `/system/info` conditionally advertises `llm_route_create`, `llm_release_register`, `llm_deploy_request`, `llm_deployment_approval`, `llm_rollback_request`, plus read models `llm_route_registry` and `llm_route_state`",
+        "docs/control-planes.md:72,96-100,132-133 \u2014 LLM request family `5971-5975` and read models `31964-31965`",
+        "internal/domain/llm.go:1-140 \u2014 `LLMRoute`, `LLMRelease`, `LLMDeploymentIntent`, placement policy, and backend configuration models",
+        "internal/controlplane/reactor.go:352-361,944-1118 \u2014 dedicated handlers for LLM route create, release register, deploy request, deployment approval, and rollback request",
+        "internal/controlplane/reactor_llm_test.go \u2014 request tagging and correlation metadata tests",
+        "internal/reconcile/llm_reconciler_test.go \u2014 backend + gateway observation shaping into route state",
+        "internal/api/handlers/llm.go:28-318 \u2014 REST compatibility surfaces for routes, releases, intents, and rollback"
+      ],
+      "backlog_scope_note": "Do not re-run this full slice as a top backlog item; only the deferred rollback follow-up remains open under this feature family."
+    },
+    {
+      "rank": 4,
+      "feature_id": "ORG_MEMBERSHIP_INVITES_ENCRYPTED_ADMIN",
+      "title": "Organization membership, invites, and role management over encrypted transport",
+      "current_coverage": "unmapped",
+      "scores": {
+        "user_value": 4,
+        "centrality": 4,
+        "risk": 5,
+        "coverage_gap": 5,
+        "total": 18
+      },
+      "slice_summary": "Verify the encrypted orgs domain for org listing/detail, invite issuance and acceptance, member-role updates, and member removal, with explicit RBAC expectations.",
+      "why_this_is_a_gap": "The encrypted notifications feature explicitly excludes org/member/invite operations, but the repo contains a complete encrypted org-management surface with stores, handlers, and routes.",
+      "proposed_acceptance_focus": [
+        "Org admin operations use encrypted request/result operations with `domain=orgs` tags.",
+        "Invite acceptance, invite revocation, and member-role changes respect role-based access boundaries.",
+        "Org detail refresh reflects role/invite mutations without mixing in unrelated public read-model state.",
+        "Org names and identifiers validate consistently between encrypted handlers and route/store helpers."
+      ],
+      "source_evidence": [
+        "pstf/spec_gap_report.md \u2014 Missing specification #3 (encrypted operation catalog incomplete)",
+        "pstf/features/ENCRYPTED_CONTROL_PLANE_NOTIFICATIONS/feature_spec.json \u2014 org/member/invite domains explicitly out of scope",
+        "docs/investigations/payments-orgs-private-transport-2026-05-03.md \u2014 dedicated investigation for private org/payment transport",
+        "internal/controlplane/encrypted_domain_handlers.go:19-38 \u2014 encrypted operation catalog for `orgs.list/detail/create/delete/my_invites/accept_invite/create_invite/revoke_invite/update_member_role/remove_member`",
+        "internal/controlplane/encrypted_domain_handlers_test.go \u2014 encrypted org handler and RBAC coverage",
+        "web/src/lib/stores/orgs.svelte.js:56-58,107-125 \u2014 org bootstrap plus invite creation, role update, and member removal helpers",
+        "web/tests/unit/encrypted-domain-stores.test.js:68-99 \u2014 encrypted calls for `orgs.my_invites`, `updateOrgMemberRole`, and `createOrgInvite`",
+        "web/src/routes/orgs/[id]/+page.svelte:6-12,79-123 \u2014 org detail actions for invite creation, role updates, and member removal"
+      ]
+    },
+    {
+      "rank": 5,
+      "feature_id": "HIVECI_RESULT_INGESTION_PIPELINE",
+      "title": "Hive-CI workflow run/result ingestion into the build-artifact pipeline",
+      "current_coverage": "unmapped",
+      "scores": {
+        "user_value": 4,
+        "centrality": 4,
+        "risk": 4,
+        "coverage_gap": 5,
+        "total": 17
+      },
+      "slice_summary": "Verify relay-driven ingestion of Hive-CI workflow run (`5401`) and workflow result (`5402`) events, including signature validation, trusted-publisher checks, orphan-result handling, and downstream mapping into repository CI state or artifact/build workflows.",
+      "why_this_is_a_gap": "The product map calls out OCI registry + CI bridge as a major capability, but the spec-gap report says the current integration proof is thin and the named end-to-end integration file is mostly scaffold.",
+      "proposed_acceptance_focus": [
+        "The subscriber consumes both workflow run and result events via subscriptions, not polling.",
+        "Invalid signatures or publisher mismatches are rejected before persistence or downstream processing.",
+        "Result-before-run ordering is handled deterministically through pending/orphan states.",
+        "Repository CI lookup reflects linked policies and latest run/result state once ingestion succeeds."
+      ],
+      "source_evidence": [
+        "pstf/product_map.md \u2014 major capability 'OCI registry + CI bridge'",
+        "pstf/spec_gap_report.md \u2014 Untested behavior #1 (CI-to-registry-to-artifact flow not proven end to end)",
+        "internal/domain/hiveci.go:23-79,112-114 \u2014 `HiveCIWorkflowRun`, `HiveCIWorkflowResult`, `HiveCIPipelinePolicy`, and repository CI lookup models",
+        "internal/adapters/hiveci/subscriber.go:17-136 \u2014 event-kind constants, relay subscription with EOSE, signature validation, trusted-publisher filtering, and run/result parsing",
+        "internal/adapters/hiveci/subscriber.go:205-284 \u2014 result processing, publisher-match enforcement, and pending-run vs pending-result handling",
+        "internal/adapters/hiveci/subscriber_test.go:98-116 \u2014 publisher validation test for 5401/5402 correlation",
+        "internal/api/handlers/repository_ci.go \u2014 repository CI lookup API surface",
+        "test/integration/e2e_ci_registry_test.go \u2014 current integration test scaffold for the CI/registry path"
+      ]
+    },
+    {
+      "rank": 6,
+      "feature_id": "PAYMENTS_HISTORY_FILTER_EXPORT",
+      "title": "Encrypted payment history load, filtering, and CSV export",
+      "current_coverage": "unmapped",
+      "scores": {
+        "user_value": 4,
+        "centrality": 3,
+        "risk": 5,
+        "coverage_gap": 5,
+        "total": 17
+      },
+      "slice_summary": "Verify worker-scoped encrypted payment history loading plus client-side filtering and CSV export, including formula-injection-safe CSV escaping.",
+      "why_this_is_a_gap": "Payments appear in the product map and spec-gap report as a split transport surface. The current encrypted payments history UI is real, but no dedicated PSTF feature covers its worker-scoped load contract or export behavior.",
+      "proposed_acceptance_focus": [
+        "Payment history uses encrypted `payments.history` with explicit worker scoping.",
+        "Missing worker context fails locally instead of silently loading unscoped payment data.",
+        "CSV export escapes spreadsheet formula prefixes and preserves stable filenames.",
+        "Filtering and URL-driven load parameters do not mutate the underlying encrypted result payloads."
+      ],
+      "source_evidence": [
+        "pstf/product_map.md \u2014 major capability 'Payments'",
+        "pstf/spec_gap_report.md \u2014 Risky behavior #3 (payments split across encrypted and REST surfaces)",
+        "pstf/features/ENCRYPTED_CONTROL_PLANE_NOTIFICATIONS/feature_spec.json \u2014 payment-history domain explicitly out of scope",
+        "docs/investigations/payments-orgs-private-transport-2026-05-03.md \u2014 private transport investigation for payments/orgs",
+        "internal/controlplane/encrypted_domain_handlers.go:19-20 \u2014 `payments.history` encrypted operation",
+        "web/src/lib/stores/payments.svelte.js:25-39 \u2014 worker-scoped encrypted payment-history request",
+        "web/tests/unit/encrypted-domain-stores.test.js:31-50 \u2014 encrypted operation call and missing-worker failure path",
+        "web/src/routes/payments/+page.svelte:11-21,126-190 \u2014 load flow, filtering helpers, and CSV export trigger",
+        "web/tests/unit/payments-list-utils.test.js:55-65 \u2014 CSV escaping, formula-injection protection, and filename stability"
+      ]
+    },
+    {
+      "rank": 7,
+      "feature_id": "ENCRYPTED_DEPLOYMENT_RUN_LOGS",
+      "title": "Encrypted deployment run-log retrieval",
+      "current_coverage": "partially_mapped",
+      "scores": {
+        "user_value": 4,
+        "centrality": 4,
+        "risk": 4,
+        "coverage_gap": 4,
+        "total": 16
+      },
+      "slice_summary": "Verify encrypted deployment run-log retrieval for a deployment run, including run-id scoping, tail/stream parameters, encrypted relay routing, and detail-page rendering.",
+      "why_this_is_a_gap": "The core service-to-deployment feature explicitly excludes encrypted run-log retrieval, and the notifications slice does not cover it. The repo already has dedicated encrypted handlers, store helpers, and E2E checks for this behavior.",
+      "proposed_acceptance_focus": [
+        "Run-log fetches use `deployments.run_logs.get` on encrypted request relays, not public relays.",
+        "The request carries stable run-id, tail, and stream parameters and ignores unrelated encrypted results.",
+        "The detail page renders decrypted log lines for the targeted run only.",
+        "Failure or authorization errors surface as terminal encrypted results rather than empty log panes."
+      ],
+      "source_evidence": [
+        "pstf/features/CORE_SERVICE_TO_DEPLOYMENT/feature_spec.json \u2014 deployment run logs explicitly listed as out of scope",
+        "internal/controlplane/encrypted_route_handlers.go:18-41 \u2014 `deployments.run_logs.get` encrypted operation and run-log fetcher contract",
+        "internal/controlplane/encrypted_route_handlers_test.go:342-344 \u2014 route-handler test for run-id, tail, and stream request handling",
+        "web/src/lib/stores/deployment-run-logs.svelte.js:10-12,39-49 \u2014 encrypted run-log operation and request payload shaping",
+        "web/tests/e2e/deployment-history-and-run-details.spec.js:177-179,309-311 \u2014 E2E verifies run-log requests use `deployments.run_logs.get` and only encrypted relays",
+        "pstf/spec_gap_report.md \u2014 encrypted route domains beyond notifications remain incompletely specified"
+      ]
+    },
+    {
+      "rank": 8,
+      "feature_id": "SOUL_FACTORY_PROVISIONING_TRACKING",
+      "title": "Soul Factory template bootstrap, provisioning tracking, and soul actions",
+      "current_coverage": "unmapped",
+      "scores": {
+        "user_value": 4,
+        "centrality": 3,
+        "risk": 4,
+        "coverage_gap": 5,
+        "total": 16
+      },
+      "slice_summary": "Verify the relay-backed Soul Factory browser flow for template discovery, provisioning request tracking across `5950/6950/7950`, EOSE handling, and lifecycle action publishing (`1950`).",
+      "why_this_is_a_gap": "The product map lists Soul Factory as a real capability, but the spec-gap report says the lifecycle boundary is still only partly proven. There is strong store and E2E evidence without a dedicated PSTF feature directory.",
+      "proposed_acceptance_focus": [
+        "Template and soul bootstrap use relay-backed reads rather than hidden REST fetches.",
+        "Provisioning run tracking stays correlated to the originating request event and handles progress, completion, EOSE, and relay closure coherently.",
+        "Soul lifecycle actions publish the correct action event and update the visible run/state model.",
+        "Open ambiguity: local timeout failure behavior should be reviewed against the repo's event-driven Nostr guardrails."
+      ],
+      "source_evidence": [
+        "pstf/product_map.md \u2014 major capability 'Soul Factory' and known relay-backed flow",
+        "pstf/spec_gap_report.md \u2014 Missing specification #5 and Untested behavior #4; Risky behavior #4 flags timeout-based provisioning tracking",
+        "docs/soul-factory.md:19-24 \u2014 Soul Factory event kind table for `31950-31952`, `5950`, `6950`, `7950`, and `1950`",
+        "internal/domain/soul.go:15-104 \u2014 soul event kinds, statuses, provisioning steps, and soul action types",
+        "web/src/lib/stores/souls.svelte.js:106-131,174-289,345-391 \u2014 template bootstrap, provisioning-run tracking with `onEose`, and soul action publishing",
+        "web/tests/unit/souls-store.test.js:223-300 \u2014 template loading coverage",
+        "web/tests/unit/souls-store.test.js:492-723 \u2014 provisioning-run tracking, `onEose`, relay closure, cleanup, timeout, and soul-action publishing",
+        "web/tests/e2e/soul-signing-smoke.spec.js \u2014 signer-first Soul Factory browser flow"
+      ]
+    }
+  ],
+  "last_priority_update": "2026-05-04",
+  "decision_adjustments": {
+    "transport_policy_decision": {
+      "decision": "CREATE_SHARED_TRANSPORT_POLICY_SLICE_NOW",
+      "source": "RepoPrompt ask-user tool",
+      "question": "How should transport policy be governed across public browser flows, encrypted browser flows, and compatibility-only operator/browser fallback?",
+      "selected_option": "Create one dedicated shared transport-policy slice now"
+    },
+    "rollback_policy_decision": {
+      "decision": "KEEP_ROLLBACK_DOMAIN_SPECIFIC",
+      "source": "RepoPrompt ask-user tool",
+      "question": "How should rollback target-selection and user-visible semantics be handled across core service deployments and LLM deployments?",
+      "selected_option": "Keep rollback domain-specific and verify each slice separately"
+    }
+  },
+  "priority_overrides": [
+    {
+      "rank": 1,
+      "feature_id": "SYSTEM_DISCOVERY_RELAY_BOOTSTRAP",
+      "reason": "Still the highest-centrality shared contract; every relay-backed browser flow and operator discovery path depends on it."
+    },
+    {
+      "rank": 2,
+      "feature_id": "TRANSPORT_POLICY_GOVERNANCE",
+      "reason": "User chose to create a dedicated shared transport-policy slice now, so this becomes an explicit backlog item rather than remaining cross-feature debt."
+    },
+    {
+      "rank": 3,
+      "feature_id": "HIVECI_RESULT_INGESTION_PIPELINE",
+      "reason": "Already user-promoted and still a cross-feature blocker because deployments consume artifact/build state whose upstream ingestion path remains under-proven."
+    },
+    {
+      "rank": 4,
+      "feature_id": "ENCRYPTED_DEPLOYMENT_RUN_LOGS",
+      "reason": "Cross-feature analysis elevated deployment run logs from deferred detail to an active handoff gap in the deployment journey."
+    },
+    {
+      "rank": 5,
+      "feature_id": "SOUL_FACTORY_PROVISIONING_TRACKING",
+      "reason": "Previously user-promoted; still important, but now follows the shared transport and deployment handoff blockers."
+    },
+    {
+      "rank": 6,
+      "feature_id": "ENCRYPTED_SERVICE_SECRETS_CRUD_REVEAL",
+      "reason": "Remains the strongest high-risk unmapped encrypted domain after the transport-policy slice is added."
+    }
+  ],
+  "inferred_candidates_added": [
+    {
+      "feature_id": "TRANSPORT_POLICY_GOVERNANCE",
+      "title": "Shared transport policy for public signer-first, encrypted browser, and compatibility fallback flows",
+      "why_added_now": "Explicit HITL decision selected a dedicated shared transport-policy slice now.",
+      "proposed_acceptance_focus": [
+        "Public browser flows that are signer-first and must not rely on encrypted request relays.",
+        "Encrypted browser flows that must use only encrypted request relays and never public browser relays.",
+        "Compatibility-only fallback boundaries for operator and browser surfaces, including explicit opt-in and pre-acceptance limits where applicable.",
+        "Shared route-level or capability-level mapping so compatibility exceptions are explicit rather than implicit."
+      ]
+    }
+  ],
+  "domain_specific_followups": {
+    "rollback_policy": {
+      "decision": "shared rollback governance slice not added",
+      "followups": [
+        "Keep rollback semantics and verification domain-specific for CORE_SERVICE_TO_DEPLOYMENT follow-up work.",
+        "Keep rollback semantics and verification domain-specific for the deferred rollback portion of LLM_ROUTE_RELEASE_DEPLOYMENT."
+      ]
+    }
+  }
+}
