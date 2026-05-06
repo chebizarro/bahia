@@ -1,6 +1,6 @@
 {
   "feature_id": "LLM_ROUTE_RELEASE_DEPLOYMENT",
-  "status": "approved",
+  "status": "ready_for_human_review",
   "threshold": 0.9,
   "raw_confidence": 0.93,
   "confidence": 0.93,
@@ -12,8 +12,8 @@
       "weight": 0.3,
       "weighted_score": 0.3,
       "evidence": [
-        "All 9 approved acceptance criteria in `acceptance_criteria.json` have at least one linked test in `test_matrix.json`.",
-        "Rollback-specific criteria remain explicitly deferred by HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-004 and are not part of the approved denominator."
+        "`acceptance_criteria.json` is `approved` and contains 12 must-level criteria for the rollback-aware slice.",
+        "`test_matrix.json` reports `criteria_total=12` and `criteria_with_tests=12`, so every approved AC has at least one linked test."
       ]
     },
     "test_pass_rate": {
@@ -21,8 +21,8 @@
       "weight": 0.25,
       "weighted_score": 0.25,
       "evidence": [
-        "All 19 tests in `test_matrix.json` are marked `pass`.",
-        "`verification_report.md` records passing targeted Go suites, passing browser unit suites, a passing dedicated `/llm` Playwright workflow, and a passing production build."
+        "`test_matrix.json` reports 25 mapped tests and all 25 are marked `pass`.",
+        "`verification_report.md` records passing targeted Go suites, passing web unit suites, a passing dedicated `/llm` rollback E2E suite, and a passing web production build with current failure count `0`."
       ]
     },
     "code_coverage": {
@@ -30,9 +30,9 @@
       "weight": 0.15,
       "weighted_score": 0.09,
       "evidence": [
-        "Backend coverage artifact `pstf/features/LLM_ROUTE_RELEASE_DEPLOYMENT/coverage/go_coverage.out` exists, with `go_coverage_summary.txt` showing directly touched backend functions for `llm_command_publisher.go`, `server.go`, `pg_llm_deployment.go`, and `llm_provisioning_coordinator.go` covered in the 57.1%-100% range, including critical success/failure paths at 63.6%-100%.",
-        "Frontend coverage artifact `pstf/features/LLM_ROUTE_RELEASE_DEPLOYMENT/coverage/web/coverage-summary.json` exists and reports 89.84% statements across the extracted touched browser-logic modules `route-access.js`, `nav-model.js`, and `page-model.js`.",
-        "This score is intentionally conservative at 0.6 rather than 0.8+ because the Go artifact is package-scoped rather than a pure touched-file aggregate, and the browser artifact covers extracted `/llm` logic modules while the outer Svelte entry wrappers are proven separately by build and E2E rather than line-instrumented coverage."
+        "Fresh backend coverage artifact `pstf/features/LLM_ROUTE_RELEASE_DEPLOYMENT/coverage/go_coverage.out` exists, with `go_coverage_summary.txt` showing current rollback-aware functions covered in the relevant path: `RollbackWithMetadata` 73.3%, `PublishLLMRollbackRequest` 100.0%, `handleLLMRollbackRequest` 70.4%, `handleLLMDeployRequest` 69.2%, and `handleLLMDeploymentApproval` 74.1%.",
+        "Fresh frontend coverage artifact `pstf/features/LLM_ROUTE_RELEASE_DEPLOYMENT/coverage/web/coverage-summary.json` exists and reports 77.09% statements across the targeted browser modules `controlplane.svelte.js`, `public-controlplane.svelte.js`, and `page-model.js`, with `page-model.js` at 85.24% statements and `public-controlplane.svelte.js` at 66.66% statements.",
+        "This stays at 0.6 rather than 0.8 because the Go artifact is package-scoped and still includes unrelated uncovered functions, while the browser artifact is targeted to the current `/llm` workflow modules rather than every outer Svelte wrapper."
       ]
     },
     "edge_case_coverage": {
@@ -40,8 +40,8 @@
       "weight": 0.1,
       "weighted_score": 0.09,
       "evidence": [
-        "Negative and edge-path evidence exists for spoofed-author rejection (`LLMRD-T-017`), invalid approval decision handling (`LLMRD-T-009`), zero-accept publish failure (`LLMRD-T-006`), coordinator failure terminal-error publication (`LLMRD-T-013`), and explicit browser avoidance of deprecated REST mutation endpoints (`LLMRD-T-018`).",
-        "The matrix still does not include large-payload, concurrency, or property/fuzz coverage for this slice, so the score is high but not maximal."
+        "The matrix covers meaningful negative and boundary paths: zero-accept publish failure (`LLMRD-T-006`, `LLMRD-T-020`), invalid approval decision handling (`LLMRD-T-009`), provisioning failure (`LLMRD-T-013`), spoofed-author rejection (`LLMRD-T-017`), rollback no-target fail-closed behavior (`LLMRD-T-023`, `LLMRD-T-025`), and repeated current-release rollback selection regression coverage in `internal/service/llm_registry_test.go`.",
+        "The matrix does not include large-payload, concurrency/race, property, or fuzz coverage for this slice, so the score remains high but not maximal."
       ]
     },
     "regression_safety": {
@@ -49,10 +49,10 @@
       "weight": 0.1,
       "weighted_score": 0.1,
       "evidence": [
-        "`go test ./internal/controlplane ./internal/service ./internal/repository ./internal/mcp` passed after the backend changes.",
-        "`cd /Users/bizarro/Documents/Projects/bahia/web && npm test -- --run tests/unit/route-access.test.js tests/unit/nav.test.js tests/unit/llm-page.test.js tests/unit/stores-index.test.js tests/unit/public-controlplane.test.js tests/unit/controlplane-store.test.js` passed after the browser coverage refactor.",
-        "`cd /Users/bizarro/Documents/Projects/bahia/web && npm run test:e2e -- tests/e2e/llm-route-release-deployment.spec.js` passed for the dedicated browser workflow.",
-        "`cd /Users/bizarro/Documents/Projects/bahia/web && npm run build` passed, proving the `/llm` route and updated nav compile in production mode."
+        "`go test ./internal/controlplane ./internal/service ./internal/repository ./internal/mcp` passed in the verification report for the rollback-aware slice.",
+        "`go test ./internal/service ./internal/controlplane` passed again after the explicit rollback-selector refactor in bahia-3nsy.",
+        "`cd /Users/bizarro/Documents/Projects/bahia/web && npm test -- --run tests/unit/public-controlplane.test.js tests/unit/llm-page.test.js tests/unit/controlplane-store.test.js` passed in the verification report, and the same 26 tests passed again under targeted coverage.",
+        "`cd /Users/bizarro/Documents/Projects/bahia/web && npm run test:e2e -- tests/e2e/llm-route-release-deployment.spec.js` and `npm run build` both passed in the verification report."
       ]
     },
     "defect_resolution": {
@@ -60,8 +60,8 @@
       "weight": 0.05,
       "weighted_score": 0.05,
       "evidence": [
-        "`defects.json` contains no open defects for the approved non-rollback slice; D-001 through D-005 are all `verified`.",
-        "The remaining deferred work is rollback semantics, which is explicitly out of scope for this approved slice per HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-004."
+        "`defects.json` contains no open critical, major, or minor defects for the current slice; all listed defects are `verified`.",
+        "`verification_report.md` explicitly states that no open product defects, no test defects, and no environment/setup blockers were produced by the current verification pass."
       ]
     },
     "human_alignment": {
@@ -69,9 +69,9 @@
       "weight": 0.05,
       "weighted_score": 0.05,
       "evidence": [
-        "Spec approval exists via HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-005.",
-        "Material ambiguity decisions exist for user surface, REST compatibility, rollback deferral, canonical signer-first route/release behavior, and the coverage-gate exception rejection via HITL-001/002/003/004/009/010.",
-        "Final human approval for the approved non-rollback slice is now captured in HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-011."
+        "Spec and AC approvals exist for the rollback-aware slice via HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-012, HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-013, and HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-014.",
+        "Earlier ambiguity decisions for user surface, REST compatibility, signer-first route/release behavior, and coverage policy are captured in `hitl_decisions.md`.",
+        "No additional HITL decision is required to proceed to final human review; `verification_report.md` states that no new human decision is required to verify the approved rollback-aware slice."
       ]
     }
   },
@@ -97,13 +97,13 @@
     "every_must_ac_has_test": {
       "passed": true,
       "evidence": [
-        "All 9 approved ACs have at least one linked test in the matrix."
+        "All 12 must-level ACs have at least one linked test in `test_matrix.json`."
       ]
     },
     "verification_report_exists": {
       "passed": true,
       "evidence": [
-        "`pstf/features/LLM_ROUTE_RELEASE_DEPLOYMENT/verification_report.md` exists."
+        "`pstf/features/LLM_ROUTE_RELEASE_DEPLOYMENT/verification_report.md` exists and records the current rollback-aware verification pass."
       ]
     },
     "no_open_critical_defects": {
@@ -115,7 +115,7 @@
     "hitl_spec_approval_exists": {
       "passed": true,
       "evidence": [
-        "HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-005 records `APPROVE_AS_IS` for the AC set."
+        "HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-014 records approval of the rollback-aware AC refresh, and the feature-level rollback intent decisions are captured in HITL-012 and HITL-013."
       ]
     }
   },
@@ -123,11 +123,12 @@
   "caps_applied": [],
   "blocking_findings": [],
   "evidence_gaps": [
-    "Schema input `schemas/confidence_report.schema.json` was not present in the repository, so this report follows the prompt-defined structure and constraints rather than a file-backed schema.",
-    "The browser coverage artifact line-instruments the extracted `/llm` logic modules rather than the outer Svelte entry wrappers; those wrappers are covered separately by build and deterministic Playwright evidence."
+    "Backend code coverage evidence is package-scoped rather than a pure touched-file aggregate, so the code-coverage component remains conservative even though the rollback-aware paths themselves are covered.",
+    "The browser coverage artifact line-instruments the current `/llm` workflow logic modules rather than the outer Svelte entry wrappers; wrapper behavior is covered separately by build and deterministic Playwright evidence.",
+    "`feature_spec.json` still contains stale wording from before bahia-3nsy that describes rollback target selection as implicitly encoded; `verification_report.md` and the current code now reflect the explicit selector."
   ],
   "recommendation": {
-    "next_stage": "approved",
-    "summary": "The approved non-rollback slice is fully verified, exceeds the 0.90 confidence threshold, and now has explicit final human approval. Rollback remains deferred and out of this approval scope."
+    "next_stage": "final_human_review",
+    "summary": "The full rollback-aware slice clears the 0.90 threshold with 12/12 ACs mapped, 25/25 mapped tests passing, no open defects, and refreshed coverage artifacts. It is ready for final human review, but it is not yet `approved` because no final human release decision exists for the current 12-criterion slice."
   }
 }
