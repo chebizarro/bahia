@@ -1,0 +1,150 @@
+{
+  "feature_id": "CORE_SERVICE_TO_DEPLOYMENT",
+  "recommendation": "block_until_major_findings_resolved",
+  "overall_risk": "high",
+  "schema_validation": {
+    "schema_path": "schemas/adversarial_review.schema.json",
+    "schema_found": true,
+    "note": "Schema file was inspected during this critic review."
+  },
+  "findings": [
+    {
+      "finding_id": "MAJ-001",
+      "title": "Policy gate is bypassable through the canonical 5961 request surface",
+      "severity": "major",
+      "category": "security",
+      "evidence": [
+        "`web/src/routes/services/[id]/+page.svelte` enforces the gate only in the browser: `deployPolicyGateError` disables submit and `handleDeploy()` returns early when preview is loading, failed, or blocked.",
+        "`internal/controlplane/reactor.go:400-479` creates deployment intents after only validating service/environment/artifact existence; it never calls `policyService.Evaluate` before `registry.CreateDeploymentIntent(...)`.",
+        "`internal/controlplane/reactor.go:1409-1444` implements policy evaluation as a separate `5989` handler, and `internal/service/policy.go:49-70` shows blocked policy results set `Allowed=false` and increment `Blockers`.",
+        "`docs/control-planes.md:67-115,156-173` and `docs/nostr-commands.md:1-81` describe kinds `5961` and `5989` as canonical signer-first public events, so any authorized client can publish `5961` directly without using the web modal.",
+        "`docs/archive/REVIEW-AND-ROADMAP-2024.md:821-824` explicitly says to evaluate policies during `CreateDeploymentIntent` and block or warn based on enforcement level."
+      ],
+      "affected_acs": [
+        "CSTD-AC-005",
+        "CSTD-AC-006",
+        "CSTD-AC-010"
+      ],
+      "affected_tests": [
+        "CSTD-T-007",
+        "CSTD-T-008",
+        "CSTD-T-009",
+        "CSTD-T-012"
+      ],
+      "suggested_action": "Decide whether policy gating is only a web-route UX requirement or an authoritative rule of the signer-first control-plane contract. If the gate is meant to be authoritative, enforce policy evaluation in the backend `5961` path and add direct-request negative coverage that proves blocked artifacts cannot create intents even when a client bypasses the modal.",
+      "requires_hitl_decision": true,
+      "proposed_hitl_question": {
+        "question": "Should deployment policy gating be enforced only in the web `/services/[id]` UX, or must backend `5961` deployment-intent creation reject policy-blocked requests from any authorized signer-first client?",
+        "type": "single_choice",
+        "options": [
+          "Enforce policy during backend 5961 intent creation for all signer-first clients",
+          "Keep backend permissive and require the gate only in the web `/services/[id]` UX",
+          "Enforce backend blocking only for `block` policies and treat warnings as UI-only preflight",
+          "Defer policy-gate scope from this release"
+        ]
+      }
+    },
+    {
+      "finding_id": "MAJ-002",
+      "title": "Immediate post-create visibility is implemented by clearing user list state without an approved product decision",
+      "severity": "major",
+      "category": "ux",
+      "evidence": [
+        "`web/src/routes/services/+page.svelte:188-205` forces `searchQuery = ''`, `runtimeFilter = 'all'`, and `currentPage = 1` immediately after successful create.",
+        "`pstf/features/CORE_SERVICE_TO_DEPLOYMENT/acceptance_criteria.json` CSTD-AC-003 requires the new service to be visible immediately, but it does not say whether active filters, search state, or pagination may be cleared to accomplish that.",
+        "`pstf/features/CORE_SERVICE_TO_DEPLOYMENT/hitl_decisions.md` HITL-CORE_SERVICE_TO_DEPLOYMENT-001 approves immediate visibility after create, but it does not decide how that should interact with an operator's current list context.",
+        "`web/tests/e2e/service-deployment-public-smoke.spec.js:17-31` exercises only the default unfiltered first page, so there is no evidence that the chosen behavior is acceptable when the user is already searching, filtered, or paged away from the first page."
+      ],
+      "affected_acs": [
+        "CSTD-AC-003",
+        "CSTD-AC-010"
+      ],
+      "affected_tests": [
+        "CSTD-T-004",
+        "CSTD-T-012"
+      ],
+      "suggested_action": "Get a product decision on whether create is allowed to reset search/runtime/page state. Then add browser coverage for the approved behavior under active filters and non-first-page conditions.",
+      "requires_hitl_decision": true,
+      "proposed_hitl_question": {
+        "question": "When a new service is created while `/services` is filtered, searched, or paged away from the first page, how should immediate visibility work?",
+        "type": "single_choice",
+        "options": [
+          "Reset filters and pagination so the new service is always shown immediately",
+          "Preserve current list state and show a success message with a \"view service\" action",
+          "Preserve current list state and only auto-show/highlight the new service when it already matches the current view",
+          "Defer filtered-view behavior from this release"
+        ]
+      }
+    },
+    {
+      "finding_id": "MIN-003",
+      "title": "The verification set does not prove the in-flight preview-loading branch of the required gate",
+      "severity": "minor",
+      "category": "test_gap",
+      "evidence": [
+        "`web/src/routes/services/[id]/+page.svelte:852-857` has an explicit loading-state gate: `deployPolicyPreviewLoading` yields `Policy preview must finish before you can create an intent.`",
+        "`pstf/features/CORE_SERVICE_TO_DEPLOYMENT/acceptance_criteria.json` CSTD-AC-005 says deployment intent creation must stay blocked until policy preview succeeds, which includes the in-flight period before a result exists.",
+        "`pstf/features/CORE_SERVICE_TO_DEPLOYMENT/test_matrix.json` contains failure coverage (CSTD-T-007), blocker coverage (CSTD-T-008), and a happy-path smoke journey (CSTD-T-012), but no test dedicated to a slow or still-loading preview.",
+        "`web/tests/e2e/service-deployment-policy-gate.spec.js` uses harness modes that return immediate preview failure or blocker responses; it never holds the preview request open to prove the loading branch keeps `5961` unpublished."
+      ],
+      "affected_acs": [
+        "CSTD-AC-005"
+      ],
+      "affected_tests": [
+        "CSTD-T-007",
+        "CSTD-T-008",
+        "CSTD-T-012"
+      ],
+      "suggested_action": "Add a delayed-preview harness mode or a component-level test that keeps `deployPolicyPreviewLoading` true long enough to prove the button remains disabled and no `5961` publish occurs until preview resolves.",
+      "requires_hitl_decision": false,
+      "proposed_hitl_question": null
+    },
+    {
+      "finding_id": "MIN-004",
+      "title": "Readiness artifacts overstate coverage by mis-mapping acceptance criteria and omitting structured confidence evidence",
+      "severity": "minor",
+      "category": "spec_gap",
+      "evidence": [
+        "`pstf/features/CORE_SERVICE_TO_DEPLOYMENT/acceptance_criteria.json` defines CSTD-AC-008 as `/deployments` reactivity and CSTD-AC-009 as `/deployments/pending` reactivity; it does not define a separate acceptance criterion for deployment detail rendering.",
+        "`pstf/features/CORE_SERVICE_TO_DEPLOYMENT/verification_report.md` claims `CSTD-AC-009 | pass | Deployment detail and history remain rendered from public read models`, which does not match the AC-009 text in the criteria file.",
+        "`web/tests/e2e/service-deployment-public-smoke.spec.js:73-86` does visit the deployment detail page, but `pstf/features/CORE_SERVICE_TO_DEPLOYMENT/test_matrix.json` only maps CSTD-T-011 to AC-008/AC-009 and treats detail rendering as part of the broad smoke test rather than an explicit functional requirement.",
+        "The feature directory currently has no `confidence_report.json` or `defects.json`; the only readiness claim is the free-form `Confidence: high` section in `verification_report.md`."
+      ],
+      "affected_acs": [
+        "CSTD-AC-008",
+        "CSTD-AC-009",
+        "CSTD-AC-010"
+      ],
+      "affected_tests": [
+        "CSTD-T-011",
+        "CSTD-T-012"
+      ],
+      "suggested_action": "Either add an explicit acceptance criterion and test mapping for deployment detail rendering or remove that claim from the verification report. If structured confidence/defect artifacts are intentionally omitted for this slice, say so explicitly instead of relying only on a narrative confidence statement.",
+      "requires_hitl_decision": false,
+      "proposed_hitl_question": null
+    }
+  ],
+  "suggested_hitl_questions": [
+    {
+      "question": "Should deployment policy gating be enforced only in the web `/services/[id]` UX, or must backend `5961` deployment-intent creation reject policy-blocked requests from any authorized signer-first client?",
+      "type": "single_choice",
+      "options": [
+        "Enforce policy during backend 5961 intent creation for all signer-first clients",
+        "Keep backend permissive and require the gate only in the web `/services/[id]` UX",
+        "Enforce backend blocking only for `block` policies and treat warnings as UI-only preflight",
+        "Defer policy-gate scope from this release"
+      ]
+    },
+    {
+      "question": "When a new service is created while `/services` is filtered, searched, or paged away from the first page, how should immediate visibility work?",
+      "type": "single_choice",
+      "options": [
+        "Reset filters and pagination so the new service is always shown immediately",
+        "Preserve current list state and show a success message with a \"view service\" action",
+        "Preserve current list state and only auto-show/highlight the new service when it already matches the current view",
+        "Defer filtered-view behavior from this release"
+      ]
+    }
+  ],
+  "next_recommended_stage": "hitl_risk_review_then_spec_and_test_matrix_revision"
+}

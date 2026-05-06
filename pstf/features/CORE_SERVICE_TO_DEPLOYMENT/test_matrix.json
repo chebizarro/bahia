@@ -1,178 +1,683 @@
 {
   "feature_id": "CORE_SERVICE_TO_DEPLOYMENT",
-  "status": "ready",
+  "status": "draft",
   "tests": [
     {
       "test_id": "CSTD-T-001",
-      "ac_ids": [
-        "CSTD-AC-001"
-      ],
-      "title": "Control-plane store bootstraps from system-info relays, waits for EOSE, then subscribes live",
+      "ac_ids": ["CSTD-AC-001"],
+      "title": "Control-plane store bootstraps from advertised public relays, waits for EOSE, then subscribes live",
       "type": "unit",
       "existing_or_new": "existing",
       "target_path": "web/tests/unit/controlplane-store.test.js",
-      "description": "Reuses the existing relay-bootstrap store test proving public discovery, EOSE-bounded catch-up, canonical author filtering, and live subscription startup for core read models.",
+      "description": "Proves the browser bootstrap path uses `/system/info` relay discovery, queries canonical Bahia-authored read models through historical catch-up, and stays in live subscription mode afterward.",
+      "preconditions": [
+        "Mock `/system/info` advertises `features.relay_read_models=true`, at least one browser relay, and the Bahia service pubkey.",
+        "Mock Nostr client exposes deterministic `queryUntilEose` and `subscribe` behavior."
+      ],
+      "steps": [
+        "Call `bootstrapControlplane()`.",
+        "Assert relay discovery, connect, `queryUntilEose`, and `subscribe` are called with Bahia-authored read-model filters.",
+        "Assert the store transitions to `ready=true`, `bootstrapComplete=true`, and `status='live'`."
+      ],
+      "expected_result": "Shared control-plane state is populated from public relay read models and live subscriptions remain active after catch-up.",
+      "fixtures": [
+        "test/fixtures/system_info_sidecar_first.json"
+      ],
+      "mocks": [
+        "`api.getSystemInfo`",
+        "`nostr.setRelays`",
+        "`nostr.connect`",
+        "`nostr.queryUntilEose`",
+        "`nostr.subscribe`"
+      ],
+      "data_requirements": [
+        "Canonical Bahia service pubkey",
+        "At least one service, environment, and state event authored by that pubkey"
+      ],
+      "determinism_notes": [
+        "Relay responses are fully mocked; no live relay is used.",
+        "Historical catch-up is driven by deterministic fixture events rather than timers or sleeps."
+      ],
       "status": "pass",
       "failure_reason": null
     },
     {
       "test_id": "CSTD-T-002",
-      "ac_ids": [
-        "CSTD-AC-002"
-      ],
-      "title": "Public command helpers create services through signer-first request/result wiring",
+      "ac_ids": ["CSTD-AC-001"],
+      "title": "Bootstrap fails closed when relay-read-model prerequisites are missing",
       "type": "unit",
       "existing_or_new": "existing",
-      "target_path": "web/tests/unit/public-controlplane.test.js",
-      "description": "Reuses the current helper-level unit test for kind `5964` plus correlated `7963` handling.",
+      "target_path": "web/tests/unit/controlplane-store.test.js",
+      "description": "Covers the negative bootstrap branches where relay read models are not advertised or no browser relays are exposed by `/system/info`.",
+      "preconditions": [
+        "Mock `/system/info` can be varied per test case."
+      ],
+      "steps": [
+        "Call `bootstrapControlplane()` with `relay_read_models=false`.",
+        "Call `bootstrapControlplane()` with no browser relay list.",
+        "Assert the store reports an error and does not attempt relay connection in either case."
+      ],
+      "expected_result": "The browser does not silently fall back to non-canonical bootstrap behavior when public relay prerequisites are absent.",
+      "fixtures": [],
+      "mocks": [
+        "`api.getSystemInfo`",
+        "`nostr.setRelays`",
+        "`nostr.connect`"
+      ],
+      "data_requirements": [
+        "One system-info payload with `relay_read_models=false`",
+        "One system-info payload with missing `nostr.browser_relays`"
+      ],
+      "determinism_notes": [
+        "Both branches are local unit cases with no network dependencies."
+      ],
       "status": "pass",
       "failure_reason": null
     },
     {
       "test_id": "CSTD-T-003",
-      "ac_ids": [
-        "CSTD-AC-002",
-        "CSTD-AC-006",
-        "CSTD-AC-007",
-        "CSTD-AC-011"
-      ],
-      "title": "Browser smoke journey uses signer-first public request kinds end to end",
-      "type": "e2e",
+      "ac_ids": ["CSTD-AC-002"],
+      "title": "Service create helper publishes kind 5964 and awaits correlated 7963/7961 results",
+      "type": "unit",
       "existing_or_new": "existing",
-      "target_path": "web/tests/e2e/service-deployment-public-smoke.spec.js",
-      "description": "Reuses the existing smoke journey that publishes public request kinds for service create, policy preview, deployment intent creation, and approval while excluding encrypted request kind `5980`.",
+      "target_path": "web/tests/unit/public-controlplane.test.js",
+      "description": "Verifies helper-level signer-first request shaping for service creation without REST CRUD dependence.",
+      "preconditions": [
+        "Public command helper module is loaded with mocked request publication and result-await helpers."
+      ],
+      "steps": [
+        "Call `createService(payload)`.",
+        "Assert `publishRequest` receives kind `5964` with the payload.",
+        "Assert `awaitResult` is called with the correlated request id and service result kinds."
+      ],
+      "expected_result": "Service creation uses the signer-first public command/result contract at the helper layer.",
+      "fixtures": [],
+      "mocks": [
+        "`publishRequest`",
+        "`awaitResult`",
+        "`bootstrapControlplane`"
+      ],
+      "data_requirements": [
+        "Valid service create payload including name, artifact repo, runtime type, and default branch"
+      ],
+      "determinism_notes": [
+        "The request event id and result event are stubbed and deterministic."
+      ],
       "status": "pass",
       "failure_reason": null
     },
     {
       "test_id": "CSTD-T-004",
-      "ac_ids": [
-        "CSTD-AC-003"
-      ],
-      "title": "Successful service creation immediately renders the new service on `/services`",
+      "ac_ids": ["CSTD-AC-002", "CSTD-AC-011"],
+      "title": "Browser smoke journey uses signer-first public request kinds and excludes encrypted 5980",
       "type": "e2e",
-      "existing_or_new": "modify_existing",
+      "existing_or_new": "existing",
       "target_path": "web/tests/e2e/service-deployment-public-smoke.spec.js",
-      "description": "Extend the current browser smoke test so it asserts the created service row appears on `/services` immediately after the successful signer-first create flow, without page reload or navigation away.",
+      "description": "Exercises the browser route and records the emitted request kinds across create, preview, deploy-intent, and approval operations.",
+      "preconditions": [
+        "The public service/deployment browser harness is installed.",
+        "Public system info advertises relay-read-model support and a canonical service pubkey."
+      ],
+      "steps": [
+        "Create a service from `/services`.",
+        "Create a deployment intent from `/services/[id]`.",
+        "Approve the pending deployment from `/deployments/pending`.",
+        "Read the recorded published request kinds from the E2E trace."
+      ],
+      "expected_result": "The flow uses public request kinds `5964`, `5989`, `5961`, and `5966`, and the captured trace does not contain encrypted request kind `5980`.",
+      "fixtures": [
+        "`createPublicSystemInfo()`",
+        "`createPublicState()`"
+      ],
+      "mocks": [
+        "`installE2EMocks()`",
+        "`installPublicServiceDeploymentHarness()`"
+      ],
+      "data_requirements": [
+        "One existing service, artifact, and environment in the public harness state"
+      ],
+      "determinism_notes": [
+        "The harness records published kinds in browser-local state; no live relay or REST service is required.",
+        "The assertion is based on captured request trace, not time-based observation."
+      ],
       "status": "pass",
       "failure_reason": null
     },
     {
       "test_id": "CSTD-T-005",
-      "ac_ids": [
-        "CSTD-AC-004"
-      ],
-      "title": "Public command helpers request deployment policy preview through kind `5989`",
-      "type": "unit",
+      "ac_ids": ["CSTD-AC-003"],
+      "title": "Successful service creation immediately renders the new service on `/services` in the default list state",
+      "type": "e2e",
       "existing_or_new": "existing",
-      "target_path": "web/tests/unit/public-controlplane.test.js",
-      "description": "Reuses the existing helper-level unit test for signer-first deployment policy preview request shaping and parsed result handling.",
+      "target_path": "web/tests/e2e/service-deployment-public-smoke.spec.js",
+      "description": "Proves immediate service-list hydration from the successful create-result path by suppressing the synthetic live create projection.",
+      "preconditions": [
+        "The public browser harness is installed with `emitCreateServiceProjection=false`.",
+        "`/services` starts in the default unfiltered, first-page state."
+      ],
+      "steps": [
+        "Open `/services`.",
+        "Submit the create-service modal with a valid new service.",
+        "Assert the modal closes and the new service row appears without manual refresh or navigation away."
+      ],
+      "expected_result": "The created service is visible immediately in the same browser session even when the relay projection is intentionally withheld.",
+      "fixtures": [
+        "`createPublicSystemInfo()`",
+        "`createPublicState()`"
+      ],
+      "mocks": [
+        "`installE2EMocks()`",
+        "`installPublicServiceDeploymentHarness({ emitCreateServiceProjection: false })`"
+      ],
+      "data_requirements": [
+        "Initial state with exactly one visible service",
+        "New service payload with distinct name and artifact repo"
+      ],
+      "determinism_notes": [
+        "The harness suppresses the synthetic projection so visibility depends on the route's result-handling code path.",
+        "This test covers only the default list context, not active filters or non-first pages."
+      ],
       "status": "pass",
       "failure_reason": null
     },
     {
       "test_id": "CSTD-T-006",
-      "ac_ids": [
-        "CSTD-AC-004"
-      ],
-      "title": "Browser smoke journey publishes policy preview before deployment intent creation",
+      "ac_ids": ["CSTD-AC-003"],
+      "title": "Immediate visibility behavior under active search, runtime filter, or non-first-page state is explicitly verified",
       "type": "e2e",
-      "existing_or_new": "existing",
-      "target_path": "web/tests/e2e/service-deployment-public-smoke.spec.js",
-      "description": "Reuses the current browser smoke test trace that includes kind `5989` in the deployment-modal path.",
-      "status": "pass",
-      "failure_reason": null
+      "existing_or_new": "new",
+      "target_path": "web/tests/e2e/service-create-visibility-context.spec.js",
+      "description": "Proposed browser coverage for the currently unresolved product decision around whether successful create is allowed to reset list state in order to show the new service immediately.",
+      "preconditions": [
+        "A human decision exists for filtered/paged `/services` behavior after create, or the test remains blocked pending that decision.",
+        "Harness state contains enough services to exercise pagination and filter/search mismatches."
+      ],
+      "steps": [
+        "Open `/services` with a non-default search, runtime filter, or page selection active.",
+        "Create a new service that may or may not match the current view.",
+        "Assert the page behaves exactly as approved by HitL: either reset state to show the new row, preserve state with alternate affordance, or only auto-show when the new service already matches the current view."
+      ],
+      "expected_result": "Immediate post-create visibility behavior under non-default list state is proved against an explicit product decision rather than implied by the default-view smoke test.",
+      "fixtures": [
+        "Expanded `createPublicState()` fixture with multiple services and mixed runtime types"
+      ],
+      "mocks": [
+        "`installE2EMocks()`",
+        "`installPublicServiceDeploymentHarness({ emitCreateServiceProjection: false })`"
+      ],
+      "data_requirements": [
+        "At least one page boundary or search mismatch scenario",
+        "A newly created service whose visibility outcome differs depending on the approved UX rule"
+      ],
+      "determinism_notes": [
+        "The same suppressed-projection harness should be used so the test still targets immediate hydration rather than later projection arrival.",
+        "No deterministic assertion is possible until HitL settles the filter-reset behavior."
+      ],
+      "status": "blocked",
+      "failure_reason": "Blocked by adversarial finding MAJ-002: HITL has approved immediate visibility, but not whether create may reset active search/filter/pagination state to accomplish it."
     },
     {
       "test_id": "CSTD-T-007",
-      "ac_ids": [
-        "CSTD-AC-005"
+      "ac_ids": ["CSTD-AC-004"],
+      "title": "Policy preview helper publishes kind 5989 and returns parsed evaluation payload",
+      "type": "unit",
+      "existing_or_new": "existing",
+      "target_path": "web/tests/unit/public-controlplane.test.js",
+      "description": "Verifies helper-level signer-first request shaping for deployment policy preview and parsed result handling.",
+      "preconditions": [
+        "Public command helper module is loaded with mocked request publication and result-await helpers."
       ],
-      "title": "Deployment intent creation stays blocked when policy preview fails",
-      "type": "e2e",
-      "existing_or_new": "new",
-      "target_path": "web/tests/e2e/service-deployment-policy-gate.spec.js",
-      "description": "New browser coverage should drive the service-detail deploy modal with a failing policy-preview result and prove that no `5961` deployment-intent publish occurs while the user sees blocking feedback.",
+      "steps": [
+        "Call `evaluatePolicy({ artifact_id, environment_id })`.",
+        "Assert `publishRequest` receives kind `5989` with `artifact` and `environment` tags.",
+        "Assert the parsed preview payload is returned to the caller."
+      ],
+      "expected_result": "Policy preview uses the signer-first public request/result contract instead of a REST evaluation endpoint.",
+      "fixtures": [],
+      "mocks": [
+        "`publishRequest`",
+        "`awaitResult`"
+      ],
+      "data_requirements": [
+        "Artifact id and environment id",
+        "Mocked `7962` preview result payload with `allowed`, `warnings`, `blockers`, and `results`"
+      ],
+      "determinism_notes": [
+        "The preview result event is stubbed directly and parsed synchronously by the helper."
+      ],
       "status": "pass",
       "failure_reason": null
     },
     {
       "test_id": "CSTD-T-008",
-      "ac_ids": [
-        "CSTD-AC-005"
-      ],
-      "title": "Deployment intent creation stays blocked when policy preview reports blockers",
+      "ac_ids": ["CSTD-AC-004"],
+      "title": "Browser deploy flow requests policy preview before attempting deployment intent creation",
       "type": "e2e",
-      "existing_or_new": "new",
-      "target_path": "web/tests/e2e/service-deployment-policy-gate.spec.js",
-      "description": "New browser coverage should return a successful preview payload with blockers and prove the modal refuses to publish kind `5961` until the blocking condition is cleared.",
+      "existing_or_new": "existing",
+      "target_path": "web/tests/e2e/service-deployment-public-smoke.spec.js",
+      "description": "Confirms the browser deploy modal triggers the signer-first preview path as part of the real route interaction.",
+      "preconditions": [
+        "The public browser harness is installed in preview-allow mode."
+      ],
+      "steps": [
+        "Open `/services/[id]` and launch the deploy modal.",
+        "Select an environment and artifact.",
+        "Inspect the recorded request kinds after the modal flow runs."
+      ],
+      "expected_result": "The request trace contains kind `5989` as part of the deploy-modal journey.",
+      "fixtures": [
+        "`createPublicSystemInfo()`",
+        "`createPublicState()`"
+      ],
+      "mocks": [
+        "`installE2EMocks()`",
+        "`installPublicServiceDeploymentHarness({ policyPreviewMode: 'allow' })`"
+      ],
+      "data_requirements": [
+        "One deployable service with at least one artifact and one environment"
+      ],
+      "determinism_notes": [
+        "The trace is captured from the harness request log, so the assertion does not depend on network timing."
+      ],
       "status": "pass",
       "failure_reason": null
     },
     {
       "test_id": "CSTD-T-009",
-      "ac_ids": [
-        "CSTD-AC-006"
-      ],
-      "title": "Public command helpers create deployment intents with service/environment/artifact routing tags",
-      "type": "unit",
+      "ac_ids": ["CSTD-AC-005"],
+      "title": "Deployment intent creation stays blocked when policy preview fails",
+      "type": "e2e",
       "existing_or_new": "existing",
-      "target_path": "web/tests/unit/public-controlplane.test.js",
-      "description": "Reuses the current helper-level unit test for kind `5961` routing tags and correlated deployment-result handling.",
+      "target_path": "web/tests/e2e/service-deployment-policy-gate.spec.js",
+      "description": "Covers the route-level failure branch where preview returns an error and the modal must refuse to publish the deploy-intent request.",
+      "preconditions": [
+        "The public browser harness is installed with `policyPreviewMode='error'`."
+      ],
+      "steps": [
+        "Open the deploy modal for an existing service.",
+        "Select environment and artifact to trigger preview.",
+        "Assert blocking feedback is shown and the Create Intent button stays disabled.",
+        "Force form submission and verify no kind `5961` request is recorded."
+      ],
+      "expected_result": "Preview failure keeps intent creation blocked and only the preview request kind is emitted.",
+      "fixtures": [
+        "`createPublicSystemInfo()`",
+        "`createPublicState()`"
+      ],
+      "mocks": [
+        "`installE2EMocks()`",
+        "`installPublicServiceDeploymentHarness({ policyPreviewMode: 'error' })`"
+      ],
+      "data_requirements": [
+        "Deterministic preview error string such as `preview backend offline`"
+      ],
+      "determinism_notes": [
+        "The harness returns the preview error immediately; no asynchronous wait loop is required."
+      ],
       "status": "pass",
       "failure_reason": null
     },
     {
       "test_id": "CSTD-T-010",
-      "ac_ids": [
-        "CSTD-AC-007"
-      ],
-      "title": "Public command helpers approve deployment intents through signer-first approval requests",
-      "type": "unit",
+      "ac_ids": ["CSTD-AC-005"],
+      "title": "Deployment intent creation stays blocked when policy preview reports blockers",
+      "type": "e2e",
       "existing_or_new": "existing",
-      "target_path": "web/tests/unit/public-controlplane.test.js",
-      "description": "Reuses the current helper-level unit test for kind `5966` request shaping and correlated approval-result handling.",
+      "target_path": "web/tests/e2e/service-deployment-policy-gate.spec.js",
+      "description": "Covers the route-level blocker branch where preview succeeds structurally but returns blocking policy violations.",
+      "preconditions": [
+        "The public browser harness is installed with `policyPreviewMode='block'`."
+      ],
+      "steps": [
+        "Open the deploy modal for an existing service.",
+        "Select environment and artifact to trigger preview.",
+        "Assert blocking policy text is shown and the Create Intent button stays disabled.",
+        "Force form submission and verify no kind `5961` request is recorded."
+      ],
+      "expected_result": "Preview blockers prevent deployment-intent publication and present blocking feedback to the user.",
+      "fixtures": [
+        "`createPublicSystemInfo()`",
+        "`createPublicState()`"
+      ],
+      "mocks": [
+        "`installE2EMocks()`",
+        "`installPublicServiceDeploymentHarness({ policyPreviewMode: 'block' })`"
+      ],
+      "data_requirements": [
+        "Deterministic blocker payload containing at least one failed `block` policy result"
+      ],
+      "determinism_notes": [
+        "The harness returns a fixed blocked preview payload and captures request kinds locally."
+      ],
       "status": "pass",
       "failure_reason": null
     },
     {
       "test_id": "CSTD-T-011",
-      "ac_ids": [
-        "CSTD-AC-008",
-        "CSTD-AC-009"
-      ],
-      "title": "Deployment history and pending approvals remain reactive to relay-backed state",
+      "ac_ids": ["CSTD-AC-005"],
+      "title": "Deployment intent creation remains blocked while policy preview is still in flight",
       "type": "e2e",
+      "existing_or_new": "new",
+      "target_path": "web/tests/e2e/service-deployment-policy-gate.spec.js",
+      "description": "Proposed negative-path coverage for the explicit loading branch in the deploy modal before any preview result exists.",
+      "preconditions": [
+        "The public browser harness supports a delayed preview response or manual preview-resolution control.",
+        "The deploy modal is opened for a service with a selectable environment and artifact."
+      ],
+      "steps": [
+        "Trigger policy preview and hold the preview request open.",
+        "Assert the Create Intent button is disabled and the route shows loading-state gate text.",
+        "Attempt form submission while preview is unresolved and verify no kind `5961` request is published.",
+        "Resolve the preview and verify the gate only clears after a successful no-blocker result."
+      ],
+      "expected_result": "The deploy modal stays blocked during the in-flight preview period and does not emit a deployment-intent request early.",
+      "fixtures": [
+        "`createPublicSystemInfo()`",
+        "`createPublicState()`"
+      ],
+      "mocks": [
+        "`installE2EMocks()`",
+        "Extended `installPublicServiceDeploymentHarness()` with delayed preview mode"
+      ],
+      "data_requirements": [
+        "A preview response that can be manually resolved after UI assertions are made"
+      ],
+      "determinism_notes": [
+        "This test should avoid sleeps by holding the preview promise open and releasing it under test control.",
+        "The current harness does not yet expose this mode."
+      ],
+      "status": "not_implemented",
+      "failure_reason": "Gap identified in adversarial finding MIN-003: current browser coverage proves failure and blocker branches, but not the explicit loading-state gate branch."
+    },
+    {
+      "test_id": "CSTD-T-012",
+      "ac_ids": ["CSTD-AC-005", "CSTD-AC-006"],
+      "title": "Direct canonical 5961 requests are rejected when policy evaluation would block deployment intent creation",
+      "type": "contract",
+      "existing_or_new": "new",
+      "target_path": "internal/controlplane/reactor_policy_gate_test.go",
+      "description": "Proposed backend contract test for the unresolved question of whether policy gating is authoritative for any signer-first client or only a browser UX rule.",
+      "preconditions": [
+        "A human decision exists on whether backend `5961` handling must enforce policy evaluation.",
+        "A test reactor can be constructed with deterministic service, environment, artifact, registry, and policy-service collaborators."
+      ],
+      "steps": [
+        "Publish or inject a canonical kind `5961` request event that references a policy-blocked artifact/environment pair.",
+        "Observe the backend result without going through the web modal.",
+        "Assert the backend rejects the request and does not create a deployment intent if the authoritative contract requires policy enforcement."
+      ],
+      "expected_result": "The canonical deployment-intent request surface either enforces policy gating for all authorized clients or is explicitly documented and tested as a UI-only preflight, per HitL decision.",
+      "fixtures": [
+        "In-memory registry/service repositories",
+        "Deterministic policy evaluation stub returning `allowed=false` with blockers"
+      ],
+      "mocks": [
+        "Policy service stub or fake",
+        "Result publisher spy"
+      ],
+      "data_requirements": [
+        "Valid service id, environment id, and artifact id",
+        "A blocked policy evaluation outcome with at least one `block` violation"
+      ],
+      "determinism_notes": [
+        "The test should inject a deterministic Nostr event and assert on created intents or published result events directly.",
+        "No browser or live relay is required."
+      ],
+      "status": "blocked",
+      "failure_reason": "Blocked by adversarial finding MAJ-001: current AC text is route-scoped, but docs and canonical request surface imply a broader contract decision that still needs HitL resolution."
+    },
+    {
+      "test_id": "CSTD-T-013",
+      "ac_ids": ["CSTD-AC-006"],
+      "title": "Deployment-intent helper publishes kind 5961 with service, environment, and artifact routing tags",
+      "type": "unit",
       "existing_or_new": "existing",
-      "target_path": "web/tests/e2e/service-deployment-public-smoke.spec.js",
-      "description": "Reuses the current browser smoke test that proves `/deployments` and `/deployments/pending` update from relay-backed state after approval.",
+      "target_path": "web/tests/unit/public-controlplane.test.js",
+      "description": "Verifies helper-level request shaping and correlated result handling for deployment intent creation.",
+      "preconditions": [
+        "Public command helper module is loaded with mocked request publication and result-await helpers."
+      ],
+      "steps": [
+        "Call `createDeploymentIntent(serviceId, environmentId, artifactId)`.",
+        "Assert `publishRequest` receives kind `5961` with the expected routing tags and content.",
+        "Assert `awaitResult` waits for the correlated `7961` result."
+      ],
+      "expected_result": "Deployment intent creation uses the signer-first public request/result contract with explicit routing tags.",
+      "fixtures": [],
+      "mocks": [
+        "`publishRequest`",
+        "`awaitResult`"
+      ],
+      "data_requirements": [
+        "Service id, environment id, and artifact id"
+      ],
+      "determinism_notes": [
+        "Request event id and result kinds are asserted from stubs rather than live traffic."
+      ],
       "status": "pass",
       "failure_reason": null
     },
     {
-      "test_id": "CSTD-T-012",
-      "ac_ids": [
-        "CSTD-AC-010"
+      "test_id": "CSTD-T-014",
+      "ac_ids": ["CSTD-AC-007"],
+      "title": "Deployment approval helper publishes kind 5966 and awaits correlated public result",
+      "type": "unit",
+      "existing_or_new": "existing",
+      "target_path": "web/tests/unit/public-controlplane.test.js",
+      "description": "Verifies helper-level request shaping for signer-first deployment approval.",
+      "preconditions": [
+        "Public command helper module is loaded with mocked request publication and result-await helpers."
       ],
-      "title": "Browser E2E proves the approved end-to-end core public flow",
+      "steps": [
+        "Call `approveDeploymentIntent(intentId)`.",
+        "Assert `publishRequest` receives kind `5966` with `intent` and `decision=approve` tags.",
+        "Assert `awaitResult` waits for the configured approval result kinds."
+      ],
+      "expected_result": "Deployment approval uses the signer-first public request/result contract rather than a REST approval endpoint.",
+      "fixtures": [],
+      "mocks": [
+        "`publishRequest`",
+        "`awaitResult`"
+      ],
+      "data_requirements": [
+        "Pending deployment intent id"
+      ],
+      "determinism_notes": [
+        "The approval request is asserted entirely from mocked helper collaborators."
+      ],
+      "status": "pass",
+      "failure_reason": null
+    },
+    {
+      "test_id": "CSTD-T-015",
+      "ac_ids": ["CSTD-AC-007"],
+      "title": "Pending-approval browser flow publishes kind 5966 and converges to approved state",
       "type": "e2e",
-      "existing_or_new": "modify_existing",
+      "existing_or_new": "existing",
       "target_path": "web/tests/e2e/service-deployment-public-smoke.spec.js",
-      "description": "Upgrade the existing smoke journey so one browser test proves the full approved contract: immediate service visibility after create, successful policy preview as a gate, deployment intent creation, approval, relay-backed history/detail rendering, and continued exclusion of encrypted request kind `5980`.",
+      "description": "Exercises the route-level approval flow from `/deployments/pending` through the public request/result path.",
+      "preconditions": [
+        "Harness state contains a pending deployment intent by the time the pending page is opened."
+      ],
+      "steps": [
+        "Open `/deployments/pending`.",
+        "Approve the first pending deployment.",
+        "Inspect the request-kind trace and resulting in-memory deployment state."
+      ],
+      "expected_result": "Approval emits kind `5966`, creates a completed run, and changes the intent approval status to `approved`.",
+      "fixtures": [
+        "`createPublicSystemInfo()`",
+        "`createPublicState()`"
+      ],
+      "mocks": [
+        "`installE2EMocks()`",
+        "`installPublicServiceDeploymentHarness()`"
+      ],
+      "data_requirements": [
+        "One pending deployment intent in harness state by the time approval is attempted"
+      ],
+      "determinism_notes": [
+        "The harness mutates deterministic in-browser state and records request kinds locally."
+      ],
+      "status": "pass",
+      "failure_reason": null
+    },
+    {
+      "test_id": "CSTD-T-016",
+      "ac_ids": ["CSTD-AC-008"],
+      "title": "Deployment history page remains reactive to relay-backed intent and run projections",
+      "type": "e2e",
+      "existing_or_new": "existing",
+      "target_path": "web/tests/e2e/service-deployment-public-smoke.spec.js",
+      "description": "Confirms `/deployments` reflects later projection updates from the shared relay-backed store instead of freezing a one-shot snapshot.",
+      "preconditions": [
+        "The smoke journey has already created and approved a deployment intent so updated run state exists."
+      ],
+      "steps": [
+        "Navigate to `/deployments` after deployment approval completes.",
+        "Assert the history table contains the target service and updated status from relay-backed state."
+      ],
+      "expected_result": "Deployment history reflects the later-approved/completed state from the shared control-plane store.",
+      "fixtures": [
+        "`createPublicSystemInfo()`",
+        "`createPublicState()`"
+      ],
+      "mocks": [
+        "`installE2EMocks()`",
+        "`installPublicServiceDeploymentHarness()`"
+      ],
+      "data_requirements": [
+        "At least one deployment intent and one resulting deployment run after approval"
+      ],
+      "determinism_notes": [
+        "State changes are driven by harnessed projection updates rather than API refresh calls."
+      ],
+      "status": "pass",
+      "failure_reason": null
+    },
+    {
+      "test_id": "CSTD-T-017",
+      "ac_ids": ["CSTD-AC-009"],
+      "title": "Pending approvals page removes rows reactively after approval without refresh logic",
+      "type": "e2e",
+      "existing_or_new": "existing",
+      "target_path": "web/tests/e2e/service-deployment-public-smoke.spec.js",
+      "description": "Confirms `/deployments/pending` derives pending rows from the shared relay-backed store and reacts when approval updates the intent projection.",
+      "preconditions": [
+        "Harness state reaches a pending deployment intent before the page is loaded.",
+        "An approval action is available from the pending page."
+      ],
+      "steps": [
+        "Open `/deployments/pending`.",
+        "Approve a pending deployment.",
+        "Assert the page renders `No pending approvals` after the relay-backed state updates."
+      ],
+      "expected_result": "Approved intents disappear from the pending list without REST refresh behavior.",
+      "fixtures": [
+        "`createPublicSystemInfo()`",
+        "`createPublicState()`"
+      ],
+      "mocks": [
+        "`installE2EMocks()`",
+        "`installPublicServiceDeploymentHarness()`"
+      ],
+      "data_requirements": [
+        "At least one pending deployment intent that can transition to approved"
+      ],
+      "determinism_notes": [
+        "The page behavior is asserted after deterministic harness state mutation rather than server polling."
+      ],
+      "status": "pass",
+      "failure_reason": null
+    },
+    {
+      "test_id": "CSTD-T-018",
+      "ac_ids": ["CSTD-AC-010"],
+      "title": "One browser smoke journey proves the approved signer-first public service-to-deployment flow",
+      "type": "e2e",
+      "existing_or_new": "existing",
+      "target_path": "web/tests/e2e/service-deployment-public-smoke.spec.js",
+      "description": "Acts as the vertical-slice browser proof for the approved journey: create service, observe immediate hydration, request policy preview, create deployment intent, approve deployment, and observe history/detail state.",
+      "preconditions": [
+        "Public system info and public state harnesses are installed.",
+        "Synthetic service projection emission is suppressed so immediate hydration must come from create-result handling."
+      ],
+      "steps": [
+        "Create a service from `/services`.",
+        "Assert the created row is visible immediately.",
+        "Navigate to service detail, open deploy modal, and create a deployment intent after successful preview.",
+        "Approve the pending deployment and inspect `/deployments`, `/deployments/pending`, and deployment detail rendering."
+      ],
+      "expected_result": "A single browser journey proves the approved public-controlplane slice end to end without REST CRUD mocks.",
+      "fixtures": [
+        "`createPublicSystemInfo()`",
+        "`createPublicState()`"
+      ],
+      "mocks": [
+        "`installE2EMocks()`",
+        "`installPublicServiceDeploymentHarness({ emitCreateServiceProjection: false, policyPreviewMode: 'allow' })`"
+      ],
+      "data_requirements": [
+        "One deployable existing service with artifact and environment",
+        "One newly created service from the browser flow"
+      ],
+      "determinism_notes": [
+        "The smoke test is deterministic because all relay traffic, request traces, and read-model projections are harnessed locally.",
+        "This test proves the main approved journey but does not settle the unresolved filtered-view service-list behavior or broader backend policy-enforcement question."
+      ],
+      "status": "pass",
+      "failure_reason": null
+    },
+    {
+      "test_id": "CSTD-T-019",
+      "ac_ids": ["CSTD-AC-011"],
+      "title": "Core public browser journey remains off encrypted request kind 5980",
+      "type": "security",
+      "existing_or_new": "existing",
+      "target_path": "web/tests/e2e/service-deployment-public-smoke.spec.js",
+      "description": "Uses the recorded browser request trace to verify the selected core journey does not depend on the encrypted request kind reserved for another slice.",
+      "preconditions": [
+        "The smoke journey has run through service create, preview, intent creation, and approval."
+      ],
+      "steps": [
+        "Read the recorded request-kind trace from browser-local harness state.",
+        "Assert kind `5980` does not appear anywhere in the flow."
+      ],
+      "expected_result": "The approved core public slice remains isolated from the encrypted request surface.",
+      "fixtures": [
+        "`createPublicSystemInfo()`",
+        "`createPublicState()`"
+      ],
+      "mocks": [
+        "`installE2EMocks()`",
+        "`installPublicServiceDeploymentHarness()`"
+      ],
+      "data_requirements": [
+        "Captured request-kind trace from the smoke journey"
+      ],
+      "determinism_notes": [
+        "The assertion is a pure inspection of the recorded harness trace."
+      ],
       "status": "pass",
       "failure_reason": null
     }
   ],
   "coverage_summary": {
     "criteria_total": 11,
-    "criteria_with_full_passing_evidence": 11,
-    "criteria_with_partial_or_missing_evidence": 0,
-    "criteria_with_known_gaps": [],
-    "known_gaps": []
+    "criteria_with_tests": 11,
+    "known_gaps": [
+      "CSTD-AC-003 is only actively proven for the default unfiltered first-page `/services` state; filtered/search/pagination behavior remains blocked on HitL decision MAJ-002.",
+      "CSTD-AC-005 lacks explicit active coverage for the in-flight preview-loading branch; proposed test CSTD-T-011 is not yet implemented.",
+      "The broader question of whether policy gating is authoritative for direct canonical `5961` clients is unresolved; proposed contract test CSTD-T-012 is blocked on HitL decision MAJ-001.",
+      "Current browser coverage proves deployment detail rendering as part of the smoke journey, but the AC set does not isolate deployment detail as a separate requirement."
+    ]
   },
   "implementation_notes": [
-    "This matrix tracks the approved intent recorded in HITL-CORE_SERVICE_TO_DEPLOYMENT-001 and -002 and now has active passing coverage for those decisions.",
-    "Immediate service visibility is proven in the smoke journey with the synthetic service projection suppressed so the UI must hydrate from the signer-first create result path.",
-    "Policy preview gating is proven in browser coverage for both preview failure and blocker responses, while existing passing evidence for relay bootstrap, signer-first request shaping, approval flow, and relay-backed history reactivity remains preserved."
+    "Matrix status is `draft` because the prior artifact overstated readiness; all ACs are mapped, but two adversarially important tests are not yet implementable or approved.",
+    "Lowest-effort gap: CSTD-T-011 is a low/medium-difficulty harness extension. Add a delayed preview mode that holds the preview promise open without sleeps, then assert the modal remains blocked until resolution.",
+    "Medium-difficulty gap: CSTD-T-006 needs a product decision first, then an E2E fixture with multiple services, active filters, and pagination so immediate-visibility behavior can be asserted deterministically.",
+    "Highest-risk gap: CSTD-T-012 is medium/high difficulty because it depends on whether the policy gate is a UI-only preflight or an authoritative backend contract. If the latter is approved, coverage should live in backend control-plane tests near `internal/controlplane/reactor.go` and should verify a direct kind `5961` request cannot bypass policy blocking.",
+    "Existing unit coverage already proves helper-level command shaping and negative terminal-result propagation, but it does not by itself prove route-level gating or UX behavior.",
+    "All proposed tests should remain deterministic and relay-harnessed; do not introduce live external relay dependence or sleep-based waiting."
   ]
 }
