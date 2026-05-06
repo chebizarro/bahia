@@ -1,78 +1,221 @@
 {
   "feature_id": "CORE_SERVICE_TO_DEPLOYMENT",
-  "status": "fully_verified",
+  "status": "approved",
+  "approval_decision_refs": [
+    "HITL-CORE_SERVICE_TO_DEPLOYMENT-001",
+    "HITL-CORE_SERVICE_TO_DEPLOYMENT-002"
+  ],
   "criteria": [
     {
-      "id": "CSTD-AC-001",
+      "ac_id": "CSTD-AC-001",
+      "feature_id": "CORE_SERVICE_TO_DEPLOYMENT",
       "title": "Public relay bootstrap is canonical for core service/deployment state",
-      "statement": "The web app must bootstrap services, environments, artifacts, builds, deployment intents, and deployment runs from public relay read models authored by the advertised Bahia service pubkey rather than REST CRUD endpoints.",
+      "type": "contract",
       "priority": "must",
-      "evidence_level": "high"
+      "assertion": "The web app must bootstrap services, environments, artifacts, builds, deployment intents, and deployment runs from public relay read models authored by the advertised Bahia service pubkey rather than REST CRUD endpoints.",
+      "testable_by": [
+        "unit",
+        "e2e"
+      ],
+      "source_evidence": [
+        "web/src/lib/stores/index.svelte.js:61-69",
+        "web/src/lib/stores/controlplane.svelte.js:181-586",
+        "web/tests/unit/controlplane-store.test.js:134-195",
+        "web/tests/e2e/service-deployment-public-smoke.spec.js:12-84"
+      ],
+      "requires_human_approval": false
     },
     {
-      "id": "CSTD-AC-002",
+      "ac_id": "CSTD-AC-002",
+      "feature_id": "CORE_SERVICE_TO_DEPLOYMENT",
       "title": "Service creation uses signer-first public command flow",
-      "statement": "Creating a service from `/services` must publish kind 5964 `ServiceCreate`, await a correlated 7963 result, and not require a REST POST `/api/v1/services` path in the current web route implementation.",
+      "type": "functional",
       "priority": "must",
-      "evidence_level": "high"
+      "assertion": "Creating a service from `/services` must publish kind `5964` `ServiceCreate`, await a correlated `7963` result, and not require a REST `POST /api/v1/services` path in the current web route implementation.",
+      "testable_by": [
+        "unit",
+        "e2e"
+      ],
+      "source_evidence": [
+        "web/src/lib/stores/public-controlplane.svelte.js:21-30",
+        "web/src/routes/services/+page.svelte:176-191",
+        "web/tests/unit/public-controlplane.test.js:21-58",
+        "web/tests/e2e/service-deployment-public-smoke.spec.js:18-31"
+      ],
+      "requires_human_approval": false
     },
     {
-      "id": "CSTD-AC-003",
-      "title": "Deployment policy preview is signer-first and advisory",
-      "statement": "The service-detail deployment modal must use a signer-first public policy-evaluation request rather than a REST `policies/evaluate` call, and deployment intent creation remains separately authoritative from that preview.",
-      "priority": "should",
-      "evidence_level": "medium"
+      "ac_id": "CSTD-AC-003",
+      "feature_id": "CORE_SERVICE_TO_DEPLOYMENT",
+      "title": "Successful service creation immediately hydrates the services list",
+      "type": "functional",
+      "priority": "must",
+      "assertion": "After a successful signer-first service-create command, `/services` must visibly show the created service in the same browser session without requiring manual refresh, navigation away, or waiting for incidental later projection visibility.",
+      "testable_by": [
+        "e2e",
+        "component"
+      ],
+      "source_evidence": [
+        "pstf/features/CORE_SERVICE_TO_DEPLOYMENT/feature_spec.json",
+        "pstf/features/CORE_SERVICE_TO_DEPLOYMENT/hitl_decisions.md",
+        "web/src/routes/services/+page.svelte:176-191"
+      ],
+      "decision_refs": [
+        "HITL-CORE_SERVICE_TO_DEPLOYMENT-001"
+      ],
+      "requires_human_approval": false
     },
     {
-      "id": "CSTD-AC-004",
+      "ac_id": "CSTD-AC-004",
+      "feature_id": "CORE_SERVICE_TO_DEPLOYMENT",
+      "title": "Deployment policy preview uses signer-first public request flow",
+      "type": "functional",
+      "priority": "must",
+      "assertion": "The service-detail deployment modal must request policy preview through signer-first public kind `5989` rather than a REST `policies/evaluate` call.",
+      "testable_by": [
+        "unit",
+        "e2e"
+      ],
+      "source_evidence": [
+        "web/src/lib/stores/public-controlplane.svelte.js:169-172",
+        "web/src/routes/services/[id]/+page.svelte:458-487",
+        "web/tests/unit/public-controlplane.test.js:229-258",
+        "web/tests/e2e/service-deployment-public-smoke.spec.js:31-44,84-85"
+      ],
+      "requires_human_approval": false
+    },
+    {
+      "ac_id": "CSTD-AC-005",
+      "feature_id": "CORE_SERVICE_TO_DEPLOYMENT",
+      "title": "Deployment policy preview is a required gate before intent creation",
+      "type": "functional",
+      "priority": "must",
+      "assertion": "Deployment intent creation from `/services/[id]` must stay blocked until policy preview succeeds, and preview-reported blockers must prevent publishing the deployment-intent request.",
+      "testable_by": [
+        "e2e",
+        "component"
+      ],
+      "source_evidence": [
+        "pstf/features/CORE_SERVICE_TO_DEPLOYMENT/feature_spec.json",
+        "pstf/features/CORE_SERVICE_TO_DEPLOYMENT/hitl_decisions.md",
+        "web/src/routes/services/[id]/+page.svelte:464-527,1213-1219"
+      ],
+      "decision_refs": [
+        "HITL-CORE_SERVICE_TO_DEPLOYMENT-002"
+      ],
+      "requires_human_approval": false
+    },
+    {
+      "ac_id": "CSTD-AC-006",
+      "feature_id": "CORE_SERVICE_TO_DEPLOYMENT",
       "title": "Deployment intent creation uses signer-first public request/result flow",
-      "statement": "Creating a deployment intent from `/services/[id]` must publish kind 5961 with service/environment/artifact tags and await a correlated 7961 result.",
+      "type": "functional",
       "priority": "must",
-      "evidence_level": "high"
+      "assertion": "Creating a deployment intent from `/services/[id]` must publish kind `5961` with service/environment/artifact tags and await a correlated `7961` result.",
+      "testable_by": [
+        "unit",
+        "e2e"
+      ],
+      "source_evidence": [
+        "web/src/lib/stores/public-controlplane.svelte.js:52-59",
+        "web/tests/unit/public-controlplane.test.js:60-77",
+        "web/tests/e2e/service-deployment-public-smoke.spec.js:33-44"
+      ],
+      "requires_human_approval": false
     },
     {
-      "id": "CSTD-AC-005",
+      "ac_id": "CSTD-AC-007",
+      "feature_id": "CORE_SERVICE_TO_DEPLOYMENT",
       "title": "Deployment approval uses signer-first public request/result flow",
-      "statement": "Approving a pending deployment from `/deployments/pending` must publish kind 5966 with intent/decision tags and await a correlated public result without relying on REST approve endpoints.",
+      "type": "functional",
       "priority": "must",
-      "evidence_level": "high"
+      "assertion": "Approving a pending deployment from `/deployments/pending` must publish kind `5966` with intent/decision tags and await a correlated public result without relying on REST approve endpoints.",
+      "testable_by": [
+        "unit",
+        "e2e"
+      ],
+      "source_evidence": [
+        "web/src/lib/stores/public-controlplane.svelte.js:70-76",
+        "web/src/routes/deployments/pending/+page.svelte:93-128",
+        "web/tests/unit/public-controlplane.test.js:79-95",
+        "web/tests/e2e/service-deployment-public-smoke.spec.js:53-66"
+      ],
+      "requires_human_approval": false
     },
     {
-      "id": "CSTD-AC-006",
+      "ac_id": "CSTD-AC-008",
+      "feature_id": "CORE_SERVICE_TO_DEPLOYMENT",
       "title": "Deployment history stays reactive to relay-backed store state",
-      "statement": "`/deployments` must derive rendered intents from the shared relay-backed controlplane store so navigation is not stuck on a stale one-shot snapshot when 31967 projections arrive after the route loads.",
+      "type": "functional",
       "priority": "must",
-      "evidence_level": "high"
+      "assertion": "`/deployments` must derive rendered intents from the shared relay-backed controlplane store so navigation is not stuck on a stale one-shot snapshot when later deployment projections arrive after route load.",
+      "testable_by": [
+        "e2e"
+      ],
+      "source_evidence": [
+        "web/src/routes/deployments/+page.svelte:112-220",
+        "web/tests/e2e/service-deployment-public-smoke.spec.js:45-72"
+      ],
+      "requires_human_approval": false
     },
     {
-      "id": "CSTD-AC-007",
+      "ac_id": "CSTD-AC-009",
+      "feature_id": "CORE_SERVICE_TO_DEPLOYMENT",
       "title": "Pending approvals stay reactive to relay-backed store state",
-      "statement": "`/deployments/pending` must derive pending intents from the shared relay-backed controlplane store so approved/rejected 31967 updates remove rows without requiring REST refresh logic.",
+      "type": "functional",
       "priority": "must",
-      "evidence_level": "high"
+      "assertion": "`/deployments/pending` must derive pending intents from the shared relay-backed controlplane store so approved or rejected projection updates remove rows without REST refresh logic.",
+      "testable_by": [
+        "e2e"
+      ],
+      "source_evidence": [
+        "web/src/routes/deployments/pending/+page.svelte:17-81",
+        "web/tests/e2e/service-deployment-public-smoke.spec.js:53-66"
+      ],
+      "requires_human_approval": false
     },
     {
-      "id": "CSTD-AC-008",
-      "title": "Browser-level signer-first journey exists for the core flow",
-      "statement": "At least one browser E2E must prove the current signer-first public journey covering service-create request publication, deployment intent creation, approval, and deployment history/detail rendering without REST CRUD mocks.",
+      "ac_id": "CSTD-AC-010",
+      "feature_id": "CORE_SERVICE_TO_DEPLOYMENT",
+      "title": "Browser-level signer-first journey proves the approved core flow",
+      "type": "verification",
       "priority": "must",
-      "evidence_level": "high"
+      "assertion": "At least one browser E2E must prove the approved signer-first public journey covering immediate service-list hydration, successful policy preview, deployment intent creation, approval, and deployment history/detail rendering without REST CRUD mocks.",
+      "testable_by": [
+        "e2e"
+      ],
+      "source_evidence": [
+        "pstf/features/CORE_SERVICE_TO_DEPLOYMENT/feature_spec.json",
+        "pstf/features/CORE_SERVICE_TO_DEPLOYMENT/hitl_decisions.md",
+        "web/tests/e2e/service-deployment-public-smoke.spec.js"
+      ],
+      "decision_refs": [
+        "HITL-CORE_SERVICE_TO_DEPLOYMENT-001",
+        "HITL-CORE_SERVICE_TO_DEPLOYMENT-002"
+      ],
+      "requires_human_approval": false
     },
     {
-      "id": "CSTD-AC-009",
+      "ac_id": "CSTD-AC-011",
+      "feature_id": "CORE_SERVICE_TO_DEPLOYMENT",
       "title": "Core public deployment flow stays off encrypted request kind 5980",
-      "statement": "The selected core service-to-deployment browser journey must use the public request kinds 5964/5989/5961/5966 and must not depend on encrypted request kind 5980, which belongs to the separate encrypted run-log slice.",
+      "type": "security_boundary",
       "priority": "must",
-      "evidence_level": "high"
+      "assertion": "The selected core service-to-deployment browser journey must use public request kinds `5964`/`5989`/`5961`/`5966` and must not depend on encrypted request kind `5980`, which belongs to the separate encrypted run-log slice.",
+      "testable_by": [
+        "e2e"
+      ],
+      "source_evidence": [
+        "web/tests/e2e/service-deployment-public-smoke.spec.js:80-86",
+        "pstf/features/CORE_SERVICE_TO_DEPLOYMENT/feature_spec.json"
+      ],
+      "requires_human_approval": false
     }
   ],
   "coverage_notes": [
-    "Older REST-shaped deployment E2Es were retired after this slice was verified so active browser evidence now aligns with the signer-first contract.",
-    "The slice now includes direct unit evidence for the domain-specific public-controlplane command helpers and a browser E2E with no REST CRUD route mocks.",
-    "A real route-level reactivity bug was found and fixed in `/deployments` and `/deployments/pending` during verification."
+    "HITL decisions resolved the previously open questions about immediate service-list hydration and policy-preview posture.",
+    "The approved acceptance contract now exceeds current verified behavior in two places: immediate `/services` hydration and policy-preview gating.",
+    "Relay-backed deployment history and pending-approval reactivity remain approved and still have passing evidence from the prior verification pass."
   ],
-  "unresolved_questions": [
-    "Should immediate post-create service list hydration become a MUST once the service-registry projection timing is explicitly guaranteed?",
-    "Should AC-003 policy-preview coverage be upgraded from SHOULD to MUST for release gating?"
-  ]
+  "unresolved_questions": []
 }

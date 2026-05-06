@@ -1,144 +1,186 @@
 {
   "feature_id": "CORE_SERVICE_TO_DEPLOYMENT",
-  "status": "fully_verified",
+  "status": "ready",
   "tests": [
     {
-      "criterion_id": "CSTD-AC-001",
-      "test_id": "WEB-UNIT-CTRL-001",
+      "test_id": "CSTD-T-001",
+      "ac_ids": [
+        "CSTD-AC-001"
+      ],
+      "title": "Control-plane store bootstraps from system-info relays, waits for EOSE, then subscribes live",
       "type": "unit",
-      "source": "web/tests/unit/controlplane-store.test.js",
-      "test_name": "bootstraps from system-info relays, waits for EOSE query, then subscribes live",
-      "status": "passing",
-      "notes": "Confirms public relay bootstrap for canonical read models and activity/status kinds authored by the advertised service pubkey."
+      "existing_or_new": "existing",
+      "target_path": "web/tests/unit/controlplane-store.test.js",
+      "description": "Reuses the existing relay-bootstrap store test proving public discovery, EOSE-bounded catch-up, canonical author filtering, and live subscription startup for core read models.",
+      "status": "pass",
+      "failure_reason": null
     },
     {
-      "criterion_id": "CSTD-AC-001",
-      "test_id": "WEB-E2E-CSTD-001",
-      "type": "e2e",
-      "source": "web/tests/e2e/service-deployment-public-smoke.spec.js",
-      "test_name": "creates a service and drives deployment approval/history over signer-first public Nostr flows",
-      "status": "passing",
-      "notes": "Confirms the browser journey consumes public read-model state for deployment history/detail rather than REST CRUD mocks."
-    },
-    {
-      "criterion_id": "CSTD-AC-002",
-      "test_id": "WEB-UNIT-PUBLIC-001",
+      "test_id": "CSTD-T-002",
+      "ac_ids": [
+        "CSTD-AC-002"
+      ],
+      "title": "Public command helpers create services through signer-first request/result wiring",
       "type": "unit",
-      "source": "web/tests/unit/public-controlplane.test.js",
-      "test_name": "creates services through signer-first public request/result helpers",
-      "status": "passing",
-      "notes": "Directly verifies kind 5964 plus correlated 7963 result family."
+      "existing_or_new": "existing",
+      "target_path": "web/tests/unit/public-controlplane.test.js",
+      "description": "Reuses the current helper-level unit test for kind `5964` plus correlated `7963` handling.",
+      "status": "pass",
+      "failure_reason": null
     },
     {
-      "criterion_id": "CSTD-AC-002",
-      "test_id": "WEB-E2E-CSTD-001",
+      "test_id": "CSTD-T-003",
+      "ac_ids": [
+        "CSTD-AC-002",
+        "CSTD-AC-006",
+        "CSTD-AC-007",
+        "CSTD-AC-011"
+      ],
+      "title": "Browser smoke journey uses signer-first public request kinds end to end",
       "type": "e2e",
-      "source": "web/tests/e2e/service-deployment-public-smoke.spec.js",
-      "test_name": "creates a service and drives deployment approval/history over signer-first public Nostr flows",
-      "status": "passing",
-      "notes": "Records service-create request publication in the browser journey without REST service mocks."
+      "existing_or_new": "existing",
+      "target_path": "web/tests/e2e/service-deployment-public-smoke.spec.js",
+      "description": "Reuses the existing smoke journey that publishes public request kinds for service create, policy preview, deployment intent creation, and approval while excluding encrypted request kind `5980`.",
+      "status": "pass",
+      "failure_reason": null
     },
     {
-      "criterion_id": "CSTD-AC-003",
-      "test_id": "WEB-UNIT-PUBLIC-004",
+      "test_id": "CSTD-T-004",
+      "ac_ids": [
+        "CSTD-AC-003"
+      ],
+      "title": "Successful service creation immediately renders the new service on `/services`",
+      "type": "e2e",
+      "existing_or_new": "modify_existing",
+      "target_path": "web/tests/e2e/service-deployment-public-smoke.spec.js",
+      "description": "Extend the current browser smoke test so it asserts the created service row appears on `/services` immediately after the successful signer-first create flow, without page reload or navigation away.",
+      "status": "missing",
+      "failure_reason": "Current active tests prove request publication and eventual relay-backed state only; they do not prove the HITL-required immediate list hydration."
+    },
+    {
+      "test_id": "CSTD-T-005",
+      "ac_ids": [
+        "CSTD-AC-004"
+      ],
+      "title": "Public command helpers request deployment policy preview through kind `5989`",
       "type": "unit",
-      "source": "web/tests/unit/public-controlplane.test.js",
-      "test_name": "evaluates deployment policy through signer-first requests and returns parsed payload",
-      "status": "passing",
-      "notes": "Confirms the deployment policy preview request uses public signer-first command wiring."
+      "existing_or_new": "existing",
+      "target_path": "web/tests/unit/public-controlplane.test.js",
+      "description": "Reuses the existing helper-level unit test for signer-first deployment policy preview request shaping and parsed result handling.",
+      "status": "pass",
+      "failure_reason": null
     },
     {
-      "criterion_id": "CSTD-AC-003",
-      "test_id": "WEB-E2E-CSTD-001",
+      "test_id": "CSTD-T-006",
+      "ac_ids": [
+        "CSTD-AC-004"
+      ],
+      "title": "Browser smoke journey publishes policy preview before deployment intent creation",
       "type": "e2e",
-      "source": "web/tests/e2e/service-deployment-public-smoke.spec.js",
-      "test_name": "creates a service and drives deployment approval/history over signer-first public Nostr flows",
-      "status": "passing",
-      "notes": "Browser trace includes kind 5989 in the deployment modal path."
+      "existing_or_new": "existing",
+      "target_path": "web/tests/e2e/service-deployment-public-smoke.spec.js",
+      "description": "Reuses the current browser smoke test trace that includes kind `5989` in the deployment-modal path.",
+      "status": "pass",
+      "failure_reason": null
     },
     {
-      "criterion_id": "CSTD-AC-004",
-      "test_id": "WEB-UNIT-PUBLIC-002",
+      "test_id": "CSTD-T-007",
+      "ac_ids": [
+        "CSTD-AC-005"
+      ],
+      "title": "Deployment intent creation stays blocked when policy preview fails",
+      "type": "e2e",
+      "existing_or_new": "new",
+      "target_path": "web/tests/e2e/service-deployment-policy-gate.spec.js",
+      "description": "New browser coverage should drive the service-detail deploy modal with a failing policy-preview result and prove that no `5961` deployment-intent publish occurs while the user sees blocking feedback.",
+      "status": "missing",
+      "failure_reason": "Current implementation and tests explicitly allow deployment intent creation when policy preview is unavailable."
+    },
+    {
+      "test_id": "CSTD-T-008",
+      "ac_ids": [
+        "CSTD-AC-005"
+      ],
+      "title": "Deployment intent creation stays blocked when policy preview reports blockers",
+      "type": "e2e",
+      "existing_or_new": "new",
+      "target_path": "web/tests/e2e/service-deployment-policy-gate.spec.js",
+      "description": "New browser coverage should return a successful preview payload with blockers and prove the modal refuses to publish kind `5961` until the blocking condition is cleared.",
+      "status": "missing",
+      "failure_reason": "No active test proves blocker-driven gating, and current UI copy treats preview as advisory rather than authoritative gate behavior."
+    },
+    {
+      "test_id": "CSTD-T-009",
+      "ac_ids": [
+        "CSTD-AC-006"
+      ],
+      "title": "Public command helpers create deployment intents with service/environment/artifact routing tags",
       "type": "unit",
-      "source": "web/tests/unit/public-controlplane.test.js",
-      "test_name": "creates deployment intents with service/environment/artifact routing tags",
-      "status": "passing",
-      "notes": "Verifies kind 5961 routing tags and correlated 7961 result family."
+      "existing_or_new": "existing",
+      "target_path": "web/tests/unit/public-controlplane.test.js",
+      "description": "Reuses the current helper-level unit test for kind `5961` routing tags and correlated deployment-result handling.",
+      "status": "pass",
+      "failure_reason": null
     },
     {
-      "criterion_id": "CSTD-AC-004",
-      "test_id": "WEB-E2E-CSTD-001",
-      "type": "e2e",
-      "source": "web/tests/e2e/service-deployment-public-smoke.spec.js",
-      "test_name": "creates a service and drives deployment approval/history over signer-first public Nostr flows",
-      "status": "passing",
-      "notes": "Browser trace includes kind 5961 and updated deployment-intent projection state."
-    },
-    {
-      "criterion_id": "CSTD-AC-005",
-      "test_id": "WEB-UNIT-PUBLIC-003",
+      "test_id": "CSTD-T-010",
+      "ac_ids": [
+        "CSTD-AC-007"
+      ],
+      "title": "Public command helpers approve deployment intents through signer-first approval requests",
       "type": "unit",
-      "source": "web/tests/unit/public-controlplane.test.js",
-      "test_name": "approves deployment intents through signer-first approval requests",
-      "status": "passing",
-      "notes": "Verifies kind 5966 routing tags and result family."
+      "existing_or_new": "existing",
+      "target_path": "web/tests/unit/public-controlplane.test.js",
+      "description": "Reuses the current helper-level unit test for kind `5966` request shaping and correlated approval-result handling.",
+      "status": "pass",
+      "failure_reason": null
     },
     {
-      "criterion_id": "CSTD-AC-005",
-      "test_id": "WEB-E2E-CSTD-001",
+      "test_id": "CSTD-T-011",
+      "ac_ids": [
+        "CSTD-AC-008",
+        "CSTD-AC-009"
+      ],
+      "title": "Deployment history and pending approvals remain reactive to relay-backed state",
       "type": "e2e",
-      "source": "web/tests/e2e/service-deployment-public-smoke.spec.js",
-      "test_name": "creates a service and drives deployment approval/history over signer-first public Nostr flows",
-      "status": "passing",
-      "notes": "Browser trace includes kind 5966 and approved deployment run projection state."
+      "existing_or_new": "existing",
+      "target_path": "web/tests/e2e/service-deployment-public-smoke.spec.js",
+      "description": "Reuses the current browser smoke test that proves `/deployments` and `/deployments/pending` update from relay-backed state after approval.",
+      "status": "pass",
+      "failure_reason": null
     },
     {
-      "criterion_id": "CSTD-AC-006",
-      "test_id": "WEB-E2E-CSTD-001",
+      "test_id": "CSTD-T-012",
+      "ac_ids": [
+        "CSTD-AC-010"
+      ],
+      "title": "Browser E2E proves the approved end-to-end core public flow",
       "type": "e2e",
-      "source": "web/tests/e2e/service-deployment-public-smoke.spec.js",
-      "test_name": "creates a service and drives deployment approval/history over signer-first public Nostr flows",
-      "status": "passing",
-      "notes": "Verifies `/deployments` renders updated history from relay-backed state after the route-level reactivity fix."
-    },
-    {
-      "criterion_id": "CSTD-AC-007",
-      "test_id": "WEB-E2E-CSTD-001",
-      "type": "e2e",
-      "source": "web/tests/e2e/service-deployment-public-smoke.spec.js",
-      "test_name": "creates a service and drives deployment approval/history over signer-first public Nostr flows",
-      "status": "passing",
-      "notes": "Verifies `/deployments/pending` clears the approved intent from relay-backed state after the route-level reactivity fix."
-    },
-    {
-      "criterion_id": "CSTD-AC-008",
-      "test_id": "WEB-E2E-CSTD-001",
-      "type": "e2e",
-      "source": "web/tests/e2e/service-deployment-public-smoke.spec.js",
-      "test_name": "creates a service and drives deployment approval/history over signer-first public Nostr flows",
-      "status": "passing",
-      "notes": "This is the slice-level browser proof and intentionally avoids REST CRUD route mocks."
-    },
-    {
-      "criterion_id": "CSTD-AC-009",
-      "test_id": "WEB-E2E-CSTD-001",
-      "type": "e2e",
-      "source": "web/tests/e2e/service-deployment-public-smoke.spec.js",
-      "test_name": "creates a service and drives deployment approval/history over signer-first public Nostr flows",
-      "status": "passing",
-      "notes": "The browser trace includes only public request kinds and explicitly excludes encrypted request kind 5980."
+      "existing_or_new": "modify_existing",
+      "target_path": "web/tests/e2e/service-deployment-public-smoke.spec.js",
+      "description": "Upgrade the existing smoke journey so one browser test proves the full approved contract: immediate service visibility after create, successful policy preview as a gate, deployment intent creation, approval, relay-backed history/detail rendering, and continued exclusion of encrypted request kind `5980`.",
+      "status": "missing",
+      "failure_reason": "The current smoke test proves the older advisory/eventual contract, not the newly approved immediate-hydration and policy-gating journey."
     }
   ],
   "coverage_summary": {
-    "criteria_total": 9,
-    "criteria_with_tests": 9,
-    "criteria_fully_passing": 9,
-    "criteria_with_known_gaps": [],
-    "known_gaps": []
+    "criteria_total": 11,
+    "criteria_with_full_passing_evidence": 8,
+    "criteria_with_partial_or_missing_evidence": 3,
+    "criteria_with_known_gaps": [
+      "CSTD-AC-003",
+      "CSTD-AC-005",
+      "CSTD-AC-010"
+    ],
+    "known_gaps": [
+      "Immediate `/services` list hydration after successful signer-first create is approved intent but not yet proven by active tests.",
+      "Policy preview gating on `/services/[id]` is approved intent but active behavior and tests still allow deployment intent creation when preview fails or is only advisory.",
+      "No single browser E2E currently proves the full approved core public journey after the 2026-05-05 HITL decisions."
+    ]
   },
   "implementation_notes": [
-    "The slice added explicit domain-level unit coverage for public command helpers because the existing generic request-helper tests were transport-focused, not feature-focused.",
-    "Verification found and fixed a real reactivity bug in `/deployments` and `/deployments/pending`, where both pages copied relay-backed state once on mount instead of deriving from the shared controlplane store.",
-    "REST-shaped deployment E2Es were retired after slice verification so the active browser suite no longer implies the old CRUD contract."
+    "This matrix now tracks the approved intent recorded in HITL-CORE_SERVICE_TO_DEPLOYMENT-001 and -002 rather than the previously verified eventual/advisory behavior.",
+    "Existing passing evidence for relay bootstrap, signer-first public request shaping, approval flow, and relay-backed history reactivity remains valid and is preserved.",
+    "The slice should not be treated as fully verified again until the immediate-hydration and policy-gating gaps are implemented and covered."
   ]
 }
