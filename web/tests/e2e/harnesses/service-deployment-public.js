@@ -78,10 +78,13 @@ export async function installPublicServiceDeploymentHarness(
     servicePubkey = SERVICE_PUBKEY,
     publicRelay = PUBLIC_RELAY,
     initialState = createPublicState(),
-    nowSeconds = Math.floor(Date.now() / 1000)
+    nowSeconds = Math.floor(Date.now() / 1000),
+    policyPreviewMode = 'allow',
+    policyPreviewError = 'policy preview unavailable',
+    emitCreateServiceProjection = true
   } = {}
 ) {
-  await page.addInitScript(({ servicePubkey, publicRelay, initialState, nowSeconds }) => {
+  await page.addInitScript(({ servicePubkey, publicRelay, initialState, nowSeconds, policyPreviewMode, policyPreviewError, emitCreateServiceProjection }) => {
     function loadPersistedJson(key, fallback) {
       try {
         const value = JSON.parse(localStorage.getItem(key) || 'null');
@@ -251,12 +254,12 @@ export async function installPublicServiceDeploymentHarness(
       state.services = [...state.services, service];
       persistReadModelEvents();
       return {
-        projections: [nostrEvent({
+        projections: emitCreateServiceProjection ? [nostrEvent({
           id: `svc-reg-live-${service.id}`,
           kind: 31962,
           tags: [['d', service.id], ['deleted', 'false'], ['name', service.name]],
           content: service
-        })],
+        })] : [],
         resultEvent: (requestEvent) => nostrEvent({
           id: `result-${requestEvent.id}`,
           kind: 7963,
@@ -335,6 +338,44 @@ export async function installPublicServiceDeploymentHarness(
     }
 
     function policyEvaluateResult(requestEvent, payload) {
+      if (policyPreviewMode === 'error') {
+        return {
+          projections: [],
+          resultEvent: () => nostrEvent({
+            id: `result-${requestEvent.id}`,
+            kind: 7962,
+            tags: [['e', requestEvent.id], ['status', 'failed'], ['error', policyPreviewError]],
+            content: { status: 'failed', error: policyPreviewError }
+          })
+        };
+      }
+
+      if (policyPreviewMode === 'block') {
+        return {
+          projections: [],
+          resultEvent: () => nostrEvent({
+            id: `result-${requestEvent.id}`,
+            kind: 7962,
+            tags: [['e', requestEvent.id]],
+            content: {
+              status: 'ok',
+              allowed: false,
+              warnings: 0,
+              blockers: 1,
+              results: [{
+                policy_id: 'policy-signatures',
+                policy_name: 'Signature required',
+                passed: false,
+                enforcement: 'block',
+                artifact_id: payload.artifact_id,
+                environment_id: payload.environment_id,
+                violations: [{ rule: 'signature-required', message: 'Artifact is missing a required signature.' }]
+              }]
+            }
+          })
+        };
+      }
+
       return {
         projections: [],
         resultEvent: () => nostrEvent({
@@ -591,5 +632,5 @@ export async function installPublicServiceDeploymentHarness(
     };
 
     window.__BAHIA_E2E_PUBLIC_EXPECTED_RELAY = publicRelay;
-  }, { servicePubkey, publicRelay, initialState, nowSeconds });
+  }, { servicePubkey, publicRelay, initialState, nowSeconds, policyPreviewMode, policyPreviewError, emitCreateServiceProjection });
 }

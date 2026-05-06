@@ -131,6 +131,19 @@ function refreshCollections() {
   );
 }
 
+export function upsertServiceProjection(service) {
+  const id = service?.id;
+  if (!id) return;
+
+  if (service.deleted) {
+    serviceMap.delete(id);
+  } else {
+    serviceMap.set(id, { ...(serviceMap.get(id) || {}), ...service, id });
+  }
+
+  refreshCollections();
+}
+
 export function resetControlplaneStore() {
   if (liveUnsubscribe) {
     liveUnsubscribe();

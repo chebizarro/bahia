@@ -7,10 +7,10 @@
   import LoadingButton from '$lib/components/LoadingButton.svelte';
   import EmptyState from '$lib/components/EmptyState.svelte';
   import RepositoryPicker from '$lib/components/repositories/RepositoryPicker.svelte';
-  import { services, loading, loadServices, systemInfo, loadSystemInfo } from '$lib/stores';
+  import { services, loading, loadServices, systemInfo, loadSystemInfo, upsertServiceProjection } from '$lib/stores';
   import { createManualRepositorySelection } from '$lib/stores/repositories.js';
   import { fetchRepoBranches, isNostrRepository } from '$lib/nostr/branches.js';
-  import { createService as createServiceCommand } from '$lib/stores/public-controlplane.svelte.js';
+  import { createService as createServiceCommand, resultContent } from '$lib/stores/public-controlplane.svelte.js';
   import { buildArtifactRepo, validateCreateServiceForm, buildCreateServicePayload } from './create-service-form.js';
 
   // Registry state
@@ -185,8 +185,22 @@
     createError = null;
 
     try {
-      await createServiceCommand(buildCreateServicePayload(createForm));
-      
+      const payload = buildCreateServicePayload(createForm);
+      const resultEvent = await createServiceCommand(payload);
+      const result = resultContent(resultEvent);
+      const serviceId = result?.service?.id || result?.service_id || result?.id;
+      if (serviceId) {
+        upsertServiceProjection({
+          ...payload,
+          ...(result?.service || {}),
+          id: serviceId,
+          deleted: false
+        });
+      }
+      searchQuery = '';
+      runtimeFilter = 'all';
+      currentPage = 1;
+
       closeCreateModal();
       await loadServices();
     } catch (err) {

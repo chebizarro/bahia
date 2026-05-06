@@ -2,8 +2,8 @@
   "feature_id": "CORE_SERVICE_TO_DEPLOYMENT",
   "title": "Core signer-first service-to-deployment flow",
   "priority": "P2",
-  "status": "draft_requires_followup",
-  "description": "Reconstructed PSTF feature for Bahia's core public service-to-deployment journey. Current repo evidence verifies relay-backed shared state plus signer-first public commands for service creation, deployment intent creation, approval, and deployment history/detail visibility. Human decision capture on 2026-05-05 changed the approved intended behavior in two important ways: successful service creation must hydrate the `/services` list immediately, and deployment policy preview must become a required gate before deployment intent creation. Because current implementation and active tests still encode the older eventual/advisory behavior, this slice now requires follow-up rather than remaining fully verified.",
+  "status": "approved_verified",
+  "description": "Reconstructed PSTF feature for Bahia's core public service-to-deployment journey. Current repo evidence now verifies relay-backed shared state plus signer-first public commands for service creation, mandatory deployment policy preview, deployment intent creation, approval, and deployment history/detail visibility. HITL decisions on 2026-05-05 requiring immediate `/services` hydration after successful create and policy-preview gating before deployment intent creation are now implemented and covered by active browser evidence.",
   "source_evidence": [
     "pstf/product_map.md",
     "pstf/planning_docs_index.md",
@@ -85,55 +85,35 @@
       "`internal/api/handlers/system.go` advertises relay-read-model capability and service pubkey discovery consumed by the browser bootstrap path.",
       "`web/src/lib/stores/index.svelte.js` routes `loadServices`, `loadEnvironments`, `loadArtifacts`, `loadBuilds`, and `loadDeploymentIntents` through shared relay bootstrap rather than REST list endpoints.",
       "`web/src/lib/stores/public-controlplane.svelte.js` implements signer-first public command helpers for service create, deployment intent create, approval/rejection, and policy evaluation.",
-      "`web/src/routes/services/+page.svelte` creates services through signer-first requests and then calls `loadServices()`, but does not add a created row locally or force a projection refresh.",
-      "`web/src/routes/services/[id]/+page.svelte` treats policy preview as best-effort UX today: preview failures do not block `handleDeploy()`, and the modal text explicitly says backend enforcement remains authoritative.",
-      "`web/src/routes/deployments/+page.svelte` and `/deployments/pending/+page.svelte` now derive rendered state reactively from the shared relay-backed store."
+      "`web/src/routes/services/+page.svelte` creates services through signer-first requests, hydrates the created service into the shared store from the successful `7963` result, and resets list filters/pagination so the new row is immediately visible.",
+      "`web/src/routes/services/[id]/+page.svelte` now treats policy preview as a required gate: preview failure or blocker results disable submission and `handleDeploy()` refuses to publish kind `5961` until preview succeeds with no blockers.",
+      "`web/src/routes/deployments/+page.svelte` and `/deployments/pending/+page.svelte` derive rendered state reactively from the shared relay-backed store."
     ],
     "tests": [
       "`web/tests/unit/controlplane-store.test.js` proves discovery-driven relay bootstrap, EOSE-bounded catch-up, canonical-author filtering, replaceable latest-wins behavior, and live subscription continuity.",
       "`web/tests/unit/public-controlplane.test.js` proves signer-first command shaping for service create, policy evaluate, deployment intent create, and deployment approval, including correlated terminal error propagation.",
-      "`web/tests/e2e/service-deployment-public-smoke.spec.js` proves a browser journey that publishes kinds `5964`, `5989`, `5961`, and `5966`, renders relay-backed deployment history/detail state, and avoids encrypted request kind `5980`.",
-      "The active E2E does not currently assert immediate post-create list hydration, and it traces policy preview publication but not preview-as-gate behavior."
+      "`web/tests/e2e/service-deployment-public-smoke.spec.js` proves a browser journey that publishes kinds `5964`, `5989`, `5961`, and `5966`, renders relay-backed deployment history/detail state, avoids encrypted request kind `5980`, and now asserts immediate service visibility after create with the synthetic create projection suppressed.",
+      "`web/tests/e2e/service-deployment-policy-gate.spec.js` proves deployment intent creation stays blocked when policy preview fails or reports blockers, and confirms no kind `5961` publish occurs in either case."
     ],
     "issues_or_bugs": [
-      "`bahia-xl4y` tracks PSTF work for this slice and now needs follow-up because the approved intended behavior exceeds the currently verified implementation."
+      "`bahia-xl4y` tracks PSTF work for this slice; follow-up bugs `bahia-uv87` and `bahia-ahkp` implemented the HITL-approved immediate-hydration and policy-gating requirements and are now backed by active verification evidence."
     ],
     "existing_behavior": [
-      "The currently verified product behavior is a signer-first public flow with eventual relay-backed state convergence and advisory policy preview UX.",
-      "Two route-level reactivity bugs on `/deployments` and `/deployments/pending` were previously fixed and are reflected in the active verification artifacts."
+      "The currently verified product behavior is a signer-first public flow with immediate `/services` hydration after successful create, mandatory successful policy preview before deployment intent creation, and relay-backed convergence for later projections.",
+      "Two route-level reactivity bugs on `/deployments` and `/deployments/pending` were previously fixed and remain reflected in the active verification artifacts."
     ]
   },
   "observed_behavior": {
     "summary": [
       "The browser loads shared system info, resolves public relays plus the Bahia service pubkey, queries canonical read models until EOSE, and then stays subscribed for live updates.",
-      "`/services` creates a service by publishing kind `5964`, awaiting a correlated `7963` result, closing the modal, and then calling `loadServices()`.",
-      "`loadServices()` is just shared relay bootstrap; it does not guarantee a fresh service projection beyond the normal relay-backed eventual consistency path.",
-      "`/services/[id]` requests policy preview through kind `5989`, but preview failure only shows a warning and does not block deployment intent creation.",
+      "`/services` creates a service by publishing kind `5964`, awaiting a correlated `7963` result, upserting the created service into the shared store, resetting list filters/pagination, and closing the modal with the new row visible immediately.",
+      "Later relay projections still reconcile through the shared read-model store, but immediate visibility no longer depends on projector timing alone.",
+      "`/services/[id]` requests policy preview through kind `5989`, and preview failure or blocker results keep deployment intent creation disabled and blocked in `handleDeploy()`.",
       "`/services/[id]` creates deployment intents through kind `5961` with `service`, `environment`, and `artifact` tags.",
       "`/deployments/pending` approves or rejects pending intents through kind `5966`, and the pending/history pages update reactively from the relay-backed store.",
       "The current browser slice uses public request kinds only; the active E2E explicitly excludes encrypted request kind `5980`."
     ],
-    "questionable_or_legacy_behavior": [
-      {
-        "behavior": "Service-create success does not currently prove or guarantee immediate `/services` list hydration in the same session.",
-        "evidence": [
-          "web/src/routes/services/+page.svelte:176-191",
-          "web/src/lib/stores/index.svelte.js:61-69",
-          "web/tests/e2e/service-deployment-public-smoke.spec.js:12-31"
-        ],
-        "classification": "FIX",
-        "decision_ref": "HITL-CORE_SERVICE_TO_DEPLOYMENT-001"
-      },
-      {
-        "behavior": "Policy preview is currently advisory and non-blocking even when preview fails, which is now below the approved product intent.",
-        "evidence": [
-          "web/src/routes/services/[id]/+page.svelte:464-527",
-          "web/src/routes/services/[id]/+page.svelte:1206-1244"
-        ],
-        "classification": "FIX",
-        "decision_ref": "HITL-CORE_SERVICE_TO_DEPLOYMENT-002"
-      }
-    ]
+    "questionable_or_legacy_behavior": []
   },
   "approved_intended_behavior": {
     "summary": [
@@ -230,36 +210,7 @@
   "dependencies_on_other_slices": [
     "SYSTEM_DISCOVERY_RELAY_BOOTSTRAP"
   ],
-  "contradictions_and_gaps": [
-    {
-      "type": "implementation_vs_approved_intent",
-      "note": "Current `/services` behavior proves signer-first create success but does not prove the newly approved immediate-hydration requirement.",
-      "evidence": [
-        "web/src/routes/services/+page.svelte:176-191",
-        "HITL-CORE_SERVICE_TO_DEPLOYMENT-001"
-      ]
-    },
-    {
-      "type": "implementation_vs_approved_intent",
-      "note": "Current deployment modal copy and logic explicitly allow intent creation when policy preview is unavailable, which conflicts with the newly approved gating requirement.",
-      "evidence": [
-        "web/src/routes/services/[id]/+page.svelte:464-527",
-        "web/src/routes/services/[id]/+page.svelte:1217-1219",
-        "HITL-CORE_SERVICE_TO_DEPLOYMENT-002"
-      ]
-    },
-    {
-      "type": "artifact_sync_gap",
-      "note": "Existing acceptance and verification artifacts for this slice still reflect the older eventual-consistency/advisory-preview stance and need synchronization with the new HITL-approved intent.",
-      "evidence": [
-        "pstf/features/CORE_SERVICE_TO_DEPLOYMENT/acceptance_criteria.json",
-        "pstf/features/CORE_SERVICE_TO_DEPLOYMENT/test_matrix.json",
-        "pstf/features/CORE_SERVICE_TO_DEPLOYMENT/verification_report.md",
-        "HITL-CORE_SERVICE_TO_DEPLOYMENT-001",
-        "HITL-CORE_SERVICE_TO_DEPLOYMENT-002"
-      ]
-    }
-  ],
+  "contradictions_and_gaps": [],
   "human_decisions": [
     "HITL-CORE_SERVICE_TO_DEPLOYMENT-001",
     "HITL-CORE_SERVICE_TO_DEPLOYMENT-002"

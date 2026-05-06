@@ -321,14 +321,23 @@
     return environment.name || environment.slug || environment.id;
   }
 
+  function policyPreviewBlocked(preview) {
+    if (!preview) return false;
+    if (preview.allowed === false) return true;
+    if (Number(preview.blockers || 0) > 0) return true;
+    return Array.isArray(preview.results)
+      ? preview.results.some((result) => result?.passed === false && String(result?.enforcement || '').toLowerCase() === 'block')
+      : false;
+  }
+
   function policyStatusLabel(preview) {
     if (!preview) return 'Not evaluated';
-    return preview.allowed === false ? 'Blocked' : 'Allowed';
+    return policyPreviewBlocked(preview) ? 'Blocked' : 'Allowed';
   }
 
   function policyStatusClass(preview) {
     if (!preview) return 'muted';
-    return preview.allowed === false ? 'error' : 'success';
+    return policyPreviewBlocked(preview) ? 'error' : 'success';
   }
 
   function costRangeLabel(summary) {
@@ -494,6 +503,11 @@
     }
     if (!deployForm.artifact_id) {
       deployError = 'Select an artifact';
+      return;
+    }
+
+    if (deployPolicyGateError) {
+      deployError = deployPolicyGateError;
       return;
     }
 
@@ -835,6 +849,15 @@
   let selectedDeployArtifact = $derived(artifacts.find(artifact => artifact.id === deployForm.artifact_id));
   let selectedRollbackEnvironment = $derived(environments.find(environment => environment.id === rollbackForm.environment_id));
   let selectedRollbackArtifact = $derived(artifacts.find(artifact => artifact.id === rollbackForm.artifact_id));
+  let deployPolicyGateError = $derived.by(() => {
+    if (!deployForm.environment_id || !deployForm.artifact_id) return '';
+    if (deployPolicyPreviewLoading) return 'Policy preview must finish before you can create an intent.';
+    if (deployPolicyPreviewError) return `Policy preview must succeed before you can create an intent: ${deployPolicyPreviewError}`;
+    if (!deployPolicyPreview) return 'Policy preview is required before you can create an intent.';
+    if (policyPreviewBlocked(deployPolicyPreview)) return 'Resolve policy blockers before you can create an intent.';
+    return '';
+  });
+  let deployCreateDisabled = $derived(!deployForm.environment_id || !deployForm.artifact_id || Boolean(deployPolicyGateError));
   let deployDurationError = $derived(isValidEstimatedDurationSecs(deployEstimatedDurationSecs) ? '' : 'Enter a positive whole number of seconds to preview cost.');
   let deploymentCostEstimate = $derived(summarizeDeploymentCostEstimates(deployCostEstimateWorkers, deployEstimatedDurationSecs));
   let selectedDeployArtifactBuild = $derived.by(() => {
@@ -1216,7 +1239,7 @@
           <p class="preview-muted">Evaluating policies...</p>
         {:else if deployPolicyPreviewError}
           <p class="preview-warning">
-            Policy preview unavailable: {deployPolicyPreviewError}. You can still create the intent; backend policy enforcement remains authoritative.
+            Policy preview unavailable: {deployPolicyPreviewError}. A successful preview is required before creating a deployment intent.
           </p>
         {:else if deployPolicyPreview}
           <p class="preview-muted">
@@ -1224,6 +1247,9 @@
             {deployPolicyPreview.warnings || 0} warning{(deployPolicyPreview.warnings || 0) === 1 ? '' : 's'} ·
             {deployPolicyPreview.blockers || 0} blocker{(deployPolicyPreview.blockers || 0) === 1 ? '' : 's'}
           </p>
+          {#if policyPreviewBlocked(deployPolicyPreview)}
+            <p class="preview-warning">Policy preview reported blocking failures. Resolve them before creating a deployment intent.</p>
+          {/if}
           {#if deployPolicyPreview.results?.length > 0}
             <ul class="policy-results">
               {#each deployPolicyPreview.results as result}
@@ -1330,7 +1356,7 @@
         type="submit"
         variant="primary"
         loading={deploying}
-        disabled={!deployForm.environment_id || !deployForm.artifact_id}
+        disabled={deployCreateDisabled}
       >
         Create Intent
       </LoadingButton>

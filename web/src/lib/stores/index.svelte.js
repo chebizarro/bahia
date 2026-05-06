@@ -16,7 +16,8 @@ import {
   loading,
   controlplaneConnection,
   bootstrapControlplane,
-  disconnectControlplane
+  disconnectControlplane,
+  upsertServiceProjection
 } from './controlplane.svelte.js';
 
 // Re-export theme store
@@ -29,7 +30,7 @@ export { isAuthenticated, currentUser };
 export { systemInfo, loadSystemInfo, currentSystemInfo };
 
 // Nostr-backed dashboard/read-model state
-export { services, environments, states, llmRoutes, llmRouteStates, artifacts, builds, deploymentIntents, deploymentRuns, policies, workers, events, loading, controlplaneConnection, bootstrapControlplane };
+export { services, environments, states, llmRoutes, llmRouteStates, artifacts, builds, deploymentIntents, deploymentRuns, policies, workers, events, loading, controlplaneConnection, bootstrapControlplane, upsertServiceProjection };
 
 // Derived state helpers
 export function driftedStates() {

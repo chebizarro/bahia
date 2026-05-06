@@ -54,8 +54,8 @@
       "existing_or_new": "modify_existing",
       "target_path": "web/tests/e2e/service-deployment-public-smoke.spec.js",
       "description": "Extend the current browser smoke test so it asserts the created service row appears on `/services` immediately after the successful signer-first create flow, without page reload or navigation away.",
-      "status": "missing",
-      "failure_reason": "Current active tests prove request publication and eventual relay-backed state only; they do not prove the HITL-required immediate list hydration."
+      "status": "pass",
+      "failure_reason": null
     },
     {
       "test_id": "CSTD-T-005",
@@ -93,8 +93,8 @@
       "existing_or_new": "new",
       "target_path": "web/tests/e2e/service-deployment-policy-gate.spec.js",
       "description": "New browser coverage should drive the service-detail deploy modal with a failing policy-preview result and prove that no `5961` deployment-intent publish occurs while the user sees blocking feedback.",
-      "status": "missing",
-      "failure_reason": "Current implementation and tests explicitly allow deployment intent creation when policy preview is unavailable."
+      "status": "pass",
+      "failure_reason": null
     },
     {
       "test_id": "CSTD-T-008",
@@ -106,8 +106,8 @@
       "existing_or_new": "new",
       "target_path": "web/tests/e2e/service-deployment-policy-gate.spec.js",
       "description": "New browser coverage should return a successful preview payload with blockers and prove the modal refuses to publish kind `5961` until the blocking condition is cleared.",
-      "status": "missing",
-      "failure_reason": "No active test proves blocker-driven gating, and current UI copy treats preview as advisory rather than authoritative gate behavior."
+      "status": "pass",
+      "failure_reason": null
     },
     {
       "test_id": "CSTD-T-009",
@@ -159,28 +159,20 @@
       "existing_or_new": "modify_existing",
       "target_path": "web/tests/e2e/service-deployment-public-smoke.spec.js",
       "description": "Upgrade the existing smoke journey so one browser test proves the full approved contract: immediate service visibility after create, successful policy preview as a gate, deployment intent creation, approval, relay-backed history/detail rendering, and continued exclusion of encrypted request kind `5980`.",
-      "status": "missing",
-      "failure_reason": "The current smoke test proves the older advisory/eventual contract, not the newly approved immediate-hydration and policy-gating journey."
+      "status": "pass",
+      "failure_reason": null
     }
   ],
   "coverage_summary": {
     "criteria_total": 11,
-    "criteria_with_full_passing_evidence": 8,
-    "criteria_with_partial_or_missing_evidence": 3,
-    "criteria_with_known_gaps": [
-      "CSTD-AC-003",
-      "CSTD-AC-005",
-      "CSTD-AC-010"
-    ],
-    "known_gaps": [
-      "Immediate `/services` list hydration after successful signer-first create is approved intent but not yet proven by active tests.",
-      "Policy preview gating on `/services/[id]` is approved intent but active behavior and tests still allow deployment intent creation when preview fails or is only advisory.",
-      "No single browser E2E currently proves the full approved core public journey after the 2026-05-05 HITL decisions."
-    ]
+    "criteria_with_full_passing_evidence": 11,
+    "criteria_with_partial_or_missing_evidence": 0,
+    "criteria_with_known_gaps": [],
+    "known_gaps": []
   },
   "implementation_notes": [
-    "This matrix now tracks the approved intent recorded in HITL-CORE_SERVICE_TO_DEPLOYMENT-001 and -002 rather than the previously verified eventual/advisory behavior.",
-    "Existing passing evidence for relay bootstrap, signer-first public request shaping, approval flow, and relay-backed history reactivity remains valid and is preserved.",
-    "The slice should not be treated as fully verified again until the immediate-hydration and policy-gating gaps are implemented and covered."
+    "This matrix tracks the approved intent recorded in HITL-CORE_SERVICE_TO_DEPLOYMENT-001 and -002 and now has active passing coverage for those decisions.",
+    "Immediate service visibility is proven in the smoke journey with the synthetic service projection suppressed so the UI must hydrate from the signer-first create result path.",
+    "Policy preview gating is proven in browser coverage for both preview failure and blocker responses, while existing passing evidence for relay bootstrap, signer-first request shaping, approval flow, and relay-backed history reactivity remains preserved."
   ]
 }

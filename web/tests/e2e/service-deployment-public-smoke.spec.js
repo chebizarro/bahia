@@ -7,7 +7,10 @@ const initialState = createPublicState();
 
 test.beforeEach(async ({ page }) => {
   await installE2EMocks(page, { systemInfo });
-  await installPublicServiceDeploymentHarness(page, { initialState });
+  await installPublicServiceDeploymentHarness(page, {
+    initialState,
+    emitCreateServiceProjection: false
+  });
 });
 
 test.describe('Core service-to-deployment public controlplane smoke', () => {
@@ -24,6 +27,8 @@ test.describe('Core service-to-deployment public controlplane smoke', () => {
     await page.getByRole('dialog', { name: 'Create Service' }).getByRole('button', { name: 'Create' }).click();
 
     await expect(page.getByRole('dialog', { name: 'Create Service' })).not.toBeVisible();
+    await expect(page.getByRole('cell', { name: 'created-service', exact: true })).toBeVisible();
+    await expect(page.getByText('2 services')).toBeVisible();
 
     await page.goto('/services/svc-existing-1');
     await expect(page.getByRole('heading', { name: 'existing-service' })).toBeVisible();
