@@ -1,5 +1,6 @@
 <script>
   import { goto } from '$app/navigation';
+  import { untrack } from 'svelte';
   import Table from '$lib/components/Table.svelte';
   import Modal from '$lib/components/Modal.svelte';
   import Input from '$lib/components/Input.svelte';
@@ -18,9 +19,12 @@
   let registriesLoading = $state(true);
   let selectedRegistry = $state('custom');
   let repoPath = $state('');
+  let servicesPageInitialized = $state(false);
 
   $effect(() => {
-    void initializeServicesPage();
+    if (servicesPageInitialized) return;
+    servicesPageInitialized = true;
+    void untrack(() => initializeServicesPage());
   });
 
   async function initializeServicesPage() {
@@ -197,12 +201,9 @@
           deleted: false
         });
       }
-      searchQuery = '';
-      runtimeFilter = 'all';
-      currentPage = 1;
 
       closeCreateModal();
-      await loadServices();
+      void loadServices();
     } catch (err) {
       createError = err.message || 'Failed to create service';
     } finally {

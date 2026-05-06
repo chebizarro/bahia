@@ -1,6 +1,7 @@
 <script>
   import { page } from '$app/state';
   import { goto } from '$app/navigation';
+  import { untrack } from 'svelte';
   import Card from '$lib/components/Card.svelte';
   import Table from '$lib/components/Table.svelte';
   import Modal from '$lib/components/Modal.svelte';
@@ -128,7 +129,7 @@
   let deployPolicyPreview = $state(null);
   let deployPolicyPreviewLoading = $state(false);
   let deployPolicyPreviewError = $state(null);
-  let deployPolicyPreviewKey = $state('');
+  let deployPolicyPreviewRequestToken = 0;
   let deployCostEstimateWorkers = $state([]);
   let deployCostEstimateLoading = $state(false);
   let deployCostEstimateError = $state(null);
@@ -444,10 +445,10 @@
   }
 
   function resetDeployPreview() {
+    deployPolicyPreviewRequestToken += 1;
     deployPolicyPreview = null;
     deployPolicyPreviewError = null;
     deployPolicyPreviewLoading = false;
-    deployPolicyPreviewKey = '';
   }
 
   function openDeployModal() {
@@ -471,8 +472,7 @@
   }
 
   async function loadDeploymentPolicyPreview(environmentId, artifactId) {
-    const key = `${environmentId}:${artifactId}`;
-    deployPolicyPreviewKey = key;
+    const requestToken = ++deployPolicyPreviewRequestToken;
     deployPolicyPreview = null;
     deployPolicyPreviewError = null;
     deployPolicyPreviewLoading = true;
@@ -482,15 +482,15 @@
         artifact_id: artifactId,
         environment_id: environmentId
       });
-      if (deployPolicyPreviewKey === key) {
+      if (deployPolicyPreviewRequestToken === requestToken) {
         deployPolicyPreview = preview;
       }
     } catch (err) {
-      if (deployPolicyPreviewKey === key) {
+      if (deployPolicyPreviewRequestToken === requestToken) {
         deployPolicyPreviewError = err.message || 'Policy preview is not available';
       }
     } finally {
-      if (deployPolicyPreviewKey === key) {
+      if (deployPolicyPreviewRequestToken === requestToken) {
         deployPolicyPreviewLoading = false;
       }
     }
@@ -871,10 +871,10 @@
     const environmentId = deployForm.environment_id;
     const artifactId = deployForm.artifact_id;
     if (!environmentId || !artifactId) {
-      resetDeployPreview();
+      untrack(() => resetDeployPreview());
       return;
     }
-    void loadDeploymentPolicyPreview(environmentId, artifactId);
+    void untrack(() => loadDeploymentPolicyPreview(environmentId, artifactId));
   });
 
   let buildColumns = $derived([

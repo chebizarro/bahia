@@ -105,6 +105,9 @@ export async function installPublicServiceDeploymentHarness(
     window.__BAHIA_E2E_PUBLIC_REQUESTS = loadPersistedJson('__BAHIA_E2E_PUBLIC_REQUESTS', []);
     window.__BAHIA_E2E_PUBLIC_SEEN_REQUEST_IDS = new Set();
     window.__BAHIA_E2E_PUBLIC_PENDING_EVENTS = [];
+    window.__BAHIA_E2E_PUBLIC_PENDING_POLICY_PREVIEWS = new Map();
+    window.__BAHIA_E2E_PUBLIC_RESOLVE_POLICY_PREVIEW = null;
+    window.__BAHIA_E2E_PUBLIC_LIST_PENDING_POLICY_PREVIEWS = () => Array.from(window.__BAHIA_E2E_PUBLIC_PENDING_POLICY_PREVIEWS.keys());
 
     function cloneInitialState() {
       return {
@@ -210,33 +213,47 @@ export async function installPublicServiceDeploymentHarness(
       localStorage.setItem('__bahia_e2e_nostr_events', JSON.stringify(currentReadModelEvents()));
     }
 
-    function emitToMatchingSubscriptions(socket, event) {
+    function emitToMatchingSubscriptions(socket, event, requireCorrelationId = null) {
       const subs = socket.__bahiaSubs || new Map();
-      for (const [subId, filters] of subs.entries()) {
-        if (Array.isArray(filters) && filters.some((filter) => matchesFilter(event, filter))) {
-          socket.__bahiaDeliveredCount = (socket.__bahiaDeliveredCount || 0) + 1;
-          socket.onmessage?.({ data: JSON.stringify(['EVENT', subId, event]) });
-        }
-      }
-    }
-
-    function emitToAllMatchingSubscriptions(event) {
       let delivered = false;
-      for (const socket of window.__BAHIA_E2E_PUBLIC_SOCKETS || []) {
-        const before = socket.__bahiaDeliveredCount || 0;
-        emitToMatchingSubscriptions(socket, event);
-        if ((socket.__bahiaDeliveredCount || 0) > before) delivered = true;
+      let correlated = requireCorrelationId == null;
+      for (const [subId, filters] of subs.entries()) {
+        if (!Array.isArray(filters)) continue;
+        const matchingFilters = filters.filter((filter) => matchesFilter(event, filter));
+        if (matchingFilters.length === 0) continue;
+        delivered = true;
+        if (requireCorrelationId != null && matchingFilters.some((filter) => Array.isArray(filter?.['#e']) && filter['#e'].includes(requireCorrelationId))) {
+          correlated = true;
+        }
+        socket.__bahiaDeliveredCount = (socket.__bahiaDeliveredCount || 0) + 1;
+        socket.onmessage?.({ data: JSON.stringify(['EVENT', subId, event]) });
       }
-      return delivered;
+      return { delivered, correlated };
     }
 
-    function queueRelayEvent(event) {
-      window.__BAHIA_E2E_PUBLIC_PENDING_EVENTS.push(event);
+    function emitToAllMatchingSubscriptions(event, requireCorrelationId = null) {
+      let delivered = false;
+      let correlated = requireCorrelationId == null;
+      for (const socket of window.__BAHIA_E2E_PUBLIC_SOCKETS || []) {
+        const result = emitToMatchingSubscriptions(socket, event, requireCorrelationId);
+        delivered = delivered || result.delivered;
+        correlated = correlated || result.correlated;
+      }
+      return { delivered, correlated };
+    }
+
+    function queueRelayEvent(event, { requireCorrelationId = null } = {}) {
+      window.__BAHIA_E2E_PUBLIC_PENDING_EVENTS.push({ event, requireCorrelationId });
       deliverPendingRelayEvents();
     }
 
     function deliverPendingRelayEvents() {
-      window.__BAHIA_E2E_PUBLIC_PENDING_EVENTS = window.__BAHIA_E2E_PUBLIC_PENDING_EVENTS.filter((event) => !emitToAllMatchingSubscriptions(event));
+      window.__BAHIA_E2E_PUBLIC_PENDING_EVENTS = window.__BAHIA_E2E_PUBLIC_PENDING_EVENTS.filter((entry) => {
+        const { delivered, correlated } = emitToAllMatchingSubscriptions(entry.event, entry.requireCorrelationId);
+        if (!delivered) return true;
+        if (entry.requireCorrelationId != null && !correlated) return true;
+        return false;
+      });
     }
 
     function serviceCreateResult(payload) {
@@ -337,59 +354,61 @@ export async function installPublicServiceDeploymentHarness(
       };
     }
 
-    function policyEvaluateResult(requestEvent, payload) {
-      if (policyPreviewMode === 'error') {
-        return {
-          projections: [],
-          resultEvent: () => nostrEvent({
-            id: `result-${requestEvent.id}`,
-            kind: 7962,
-            tags: [['e', requestEvent.id], ['status', 'failed'], ['error', policyPreviewError]],
-            content: { status: 'failed', error: policyPreviewError }
-          })
-        };
+    function buildPolicyEvaluateResultEvent(requestEvent, payload, mode) {
+      if (mode === 'error') {
+        return nostrEvent({
+          id: `result-${requestEvent.id}`,
+          kind: 7962,
+          tags: [['e', requestEvent.id], ['status', 'failed'], ['error', policyPreviewError]],
+          content: { status: 'failed', error: policyPreviewError }
+        });
       }
-
-      if (policyPreviewMode === 'block') {
-        return {
-          projections: [],
-          resultEvent: () => nostrEvent({
-            id: `result-${requestEvent.id}`,
-            kind: 7962,
-            tags: [['e', requestEvent.id]],
-            content: {
-              status: 'ok',
-              allowed: false,
-              warnings: 0,
-              blockers: 1,
-              results: [{
-                policy_id: 'policy-signatures',
-                policy_name: 'Signature required',
-                passed: false,
-                enforcement: 'block',
-                artifact_id: payload.artifact_id,
-                environment_id: payload.environment_id,
-                violations: [{ rule: 'signature-required', message: 'Artifact is missing a required signature.' }]
-              }]
-            }
-          })
-        };
-      }
-
-      return {
-        projections: [],
-        resultEvent: () => nostrEvent({
+      if (mode === 'block') {
+        return nostrEvent({
           id: `result-${requestEvent.id}`,
           kind: 7962,
           tags: [['e', requestEvent.id]],
           content: {
             status: 'ok',
-            allowed: true,
+            allowed: false,
             warnings: 0,
-            blockers: 0,
-            results: [{ policy_id: 'policy-signatures', policy_name: 'Signature required', passed: true, enforcement: 'block', artifact_id: payload.artifact_id, environment_id: payload.environment_id }]
+            blockers: 1,
+            results: [{
+              policy_id: 'policy-signatures',
+              policy_name: 'Signature required',
+              passed: false,
+              enforcement: 'block',
+              artifact_id: payload.artifact_id,
+              environment_id: payload.environment_id,
+              violations: [{ rule: 'signature-required', message: 'Artifact is missing a required signature.' }]
+            }]
           }
-        })
+        });
+      }
+      return nostrEvent({
+        id: `result-${requestEvent.id}`,
+        kind: 7962,
+        tags: [['e', requestEvent.id]],
+        content: {
+          status: 'ok',
+          allowed: true,
+          warnings: 0,
+          blockers: 0,
+          results: [{ policy_id: 'policy-signatures', policy_name: 'Signature required', passed: true, enforcement: 'block', artifact_id: payload.artifact_id, environment_id: payload.environment_id }]
+        }
+      });
+    }
+
+    function policyEvaluateResult(requestEvent, payload) {
+      if (policyPreviewMode === 'delay') {
+        return {
+          projections: [],
+          delayedResultEvent: () => buildPolicyEvaluateResultEvent(requestEvent, payload, 'allow')
+        };
+      }
+      return {
+        projections: [],
+        resultEvent: () => buildPolicyEvaluateResultEvent(requestEvent, payload, policyPreviewMode)
       };
     }
 
@@ -623,9 +642,36 @@ export async function installPublicServiceDeploymentHarness(
         originalSend.call(this, data);
         if (window.__BAHIA_E2E_PUBLIC_SEEN_REQUEST_IDS.has(requestEvent.id)) return;
         window.__BAHIA_E2E_PUBLIC_SEEN_REQUEST_IDS.add(requestEvent.id);
-        const { projections, resultEvent } = handlePublicRequest(requestEvent);
+        const { projections, resultEvent, delayedResultEvent } = handlePublicRequest(requestEvent);
         for (const projection of projections) queueRelayEvent(projection);
-        queueRelayEvent(resultEvent(requestEvent));
+        if (delayedResultEvent) {
+          window.__BAHIA_E2E_PUBLIC_PENDING_POLICY_PREVIEWS.set(requestEvent.id, {
+            requestEvent,
+            payload: JSON.parse(requestEvent.content || '{}')
+          });
+          window.__BAHIA_E2E_PUBLIC_RESOLVE_POLICY_PREVIEW = (requestEventIdOrMode = 'allow', maybeMode = 'allow') => {
+            let requestEventId = requestEventIdOrMode;
+            let mode = maybeMode;
+            if (requestEventIdOrMode === 'allow' || requestEventIdOrMode === 'block' || requestEventIdOrMode === 'error') {
+              requestEventId = window.__BAHIA_E2E_PUBLIC_LIST_PENDING_POLICY_PREVIEWS()[0];
+              mode = requestEventIdOrMode;
+            }
+            const pending = window.__BAHIA_E2E_PUBLIC_PENDING_POLICY_PREVIEWS.get(requestEventId);
+            if (!pending) {
+              return false;
+            }
+            queueRelayEvent(buildPolicyEvaluateResultEvent(pending.requestEvent, pending.payload, mode), {
+              requireCorrelationId: pending.requestEvent.id
+            });
+            window.__BAHIA_E2E_PUBLIC_PENDING_POLICY_PREVIEWS.delete(requestEventId);
+            if (window.__BAHIA_E2E_PUBLIC_PENDING_POLICY_PREVIEWS.size === 0) {
+              window.__BAHIA_E2E_PUBLIC_RESOLVE_POLICY_PREVIEW = null;
+            }
+            return true;
+          };
+          return;
+        }
+        queueRelayEvent(resultEvent(requestEvent), { requireCorrelationId: requestEvent.id });
         return;
       }
       return originalSend.call(this, data);

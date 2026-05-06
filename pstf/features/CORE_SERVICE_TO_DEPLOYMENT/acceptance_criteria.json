@@ -3,7 +3,9 @@
   "status": "approved",
   "approval_decision_refs": [
     "HITL-CORE_SERVICE_TO_DEPLOYMENT-001",
-    "HITL-CORE_SERVICE_TO_DEPLOYMENT-002"
+    "HITL-CORE_SERVICE_TO_DEPLOYMENT-002",
+    "HITL-CORE_SERVICE_TO_DEPLOYMENT-003",
+    "HITL-CORE_SERVICE_TO_DEPLOYMENT-004"
   ],
   "criteria": [
     {
@@ -50,7 +52,7 @@
       "title": "Successful service creation immediately hydrates the services list",
       "type": "functional",
       "priority": "must",
-      "assertion": "After a successful signer-first service-create command, `/services` must visibly show the created service in the same browser session without requiring manual refresh, navigation away, or waiting for incidental later projection visibility.",
+      "assertion": "After a successful signer-first service-create command, `/services` must preserve the operator's active search, runtime filter, and pagination state. If the created service already matches the active view, it must become visible immediately in the same browser session without manual refresh or navigation away; if it does not match the active view, the UI must not forcibly reset list state just to reveal it.",
       "testable_by": [
         "e2e",
         "component"
@@ -58,10 +60,12 @@
       "source_evidence": [
         "pstf/features/CORE_SERVICE_TO_DEPLOYMENT/feature_spec.json",
         "pstf/features/CORE_SERVICE_TO_DEPLOYMENT/hitl_decisions.md",
-        "web/src/routes/services/+page.svelte:176-191"
+        "web/src/routes/services/+page.svelte:176-201",
+        "web/tests/e2e/service-create-visibility-context.spec.js:1-117"
       ],
       "decision_refs": [
-        "HITL-CORE_SERVICE_TO_DEPLOYMENT-001"
+        "HITL-CORE_SERVICE_TO_DEPLOYMENT-001",
+        "HITL-CORE_SERVICE_TO_DEPLOYMENT-004"
       ],
       "requires_human_approval": false
     },
@@ -90,7 +94,7 @@
       "title": "Deployment policy preview is a required gate before intent creation",
       "type": "functional",
       "priority": "must",
-      "assertion": "Deployment intent creation from `/services/[id]` must stay blocked until policy preview succeeds, and preview-reported blockers must prevent publishing the deployment-intent request.",
+      "assertion": "Deployment intent creation from `/services/[id]` must stay blocked until policy preview succeeds, preview-reported blockers must prevent publishing the deployment-intent request, and backend canonical `5961` handling must reject policy-blocked deployment-intent requests from any authorized signer-first client.",
       "testable_by": [
         "e2e",
         "component"
@@ -98,10 +102,14 @@
       "source_evidence": [
         "pstf/features/CORE_SERVICE_TO_DEPLOYMENT/feature_spec.json",
         "pstf/features/CORE_SERVICE_TO_DEPLOYMENT/hitl_decisions.md",
-        "web/src/routes/services/[id]/+page.svelte:464-527,1213-1219"
+        "web/src/routes/services/[id]/+page.svelte:464-527,852-857,1213-1219",
+        "web/tests/e2e/service-deployment-policy-gate.spec.js:1-113",
+        "internal/controlplane/reactor.go:394-484",
+        "internal/controlplane/reactor_policy_gate_test.go:1-274"
       ],
       "decision_refs": [
-        "HITL-CORE_SERVICE_TO_DEPLOYMENT-002"
+        "HITL-CORE_SERVICE_TO_DEPLOYMENT-002",
+        "HITL-CORE_SERVICE_TO_DEPLOYMENT-003"
       ],
       "requires_human_approval": false
     },
@@ -213,9 +221,9 @@
     }
   ],
   "coverage_notes": [
-    "HITL decisions resolved the previously open questions about immediate service-list hydration and policy-preview posture.",
-    "The approved acceptance contract now exceeds current verified behavior in two places: immediate `/services` hydration and policy-preview gating.",
-    "Relay-backed deployment history and pending-approval reactivity remain approved and still have passing evidence from the prior verification pass."
+    "HITL decisions on 2026-05-05 and 2026-05-06 now explicitly govern immediate service visibility, preserved `/services` list state, required policy-preview gating, and backend canonical `5961` enforcement.",
+    "Current active browser and backend evidence covers the default happy path, preserved list-state behavior, preview failure/blocker/loading branches, and direct canonical policy-blocked request rejection.",
+    "Relay-backed deployment history and pending-approval reactivity remain approved and still have active passing evidence from the smoke journey."
   ],
   "unresolved_questions": []
 }

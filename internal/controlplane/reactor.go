@@ -430,6 +430,24 @@ func (r *Reactor) handleDeployRequest(ctx context.Context, event *nostr.Event) {
 		return
 	}
 
+	if r.policyService == nil {
+		logger.Error("policy service is not configured")
+		r.publishError(ctx, event, "policy_unavailable", "policy service is not configured")
+		return
+	}
+	evaluation, err := r.policyService.Evaluate(ctx, req.ArtifactID, req.EnvironmentID)
+	if err != nil {
+		logger.Error("policy evaluation failed", "error", err)
+		r.publishError(ctx, event, "policy_evaluation_error", err.Error())
+		return
+	}
+	if evaluation != nil && (!evaluation.Allowed || evaluation.Blockers > 0) {
+		reason := summarizePolicyBlockReason(evaluation)
+		logger.Warn("deployment blocked by policy evaluation", "blockers", evaluation.Blockers, "warnings", evaluation.Warnings, "reason", reason)
+		r.publishError(ctx, event, "policy_blocked", reason)
+		return
+	}
+
 	// Create run tracker
 	run := &DeploymentRun{
 		ID:              uuid.New(),
@@ -482,6 +500,35 @@ func (r *Reactor) handleDeployRequest(ctx context.Context, event *nostr.Event) {
 	logger.Info("deployment intent created", "intent_id", intent.ID)
 
 	r.publishDeploymentResult(ctx, event, intent)
+}
+
+func summarizePolicyBlockReason(evaluation *domain.PolicyEvaluation) string {
+	if evaluation == nil {
+		return "deployment blocked by policy evaluation"
+	}
+	for _, result := range evaluation.Results {
+		if result.Passed || result.Enforcement != domain.PolicyEnforcementBlock {
+			continue
+		}
+		for _, violation := range result.Violations {
+			if violation.Message != "" {
+				return fmt.Sprintf("deployment blocked by policy evaluation: %s", violation.Message)
+			}
+			if violation.Rule != "" {
+				return fmt.Sprintf("deployment blocked by policy evaluation: %s", violation.Rule)
+			}
+		}
+		if result.PolicyName != "" {
+			return fmt.Sprintf("deployment blocked by policy evaluation: %s", result.PolicyName)
+		}
+		if result.PolicyID != uuid.Nil {
+			return fmt.Sprintf("deployment blocked by policy evaluation: %s", result.PolicyID.String())
+		}
+	}
+	if evaluation.Blockers > 0 {
+		return fmt.Sprintf("deployment blocked by policy evaluation: %d blocking policy result(s)", evaluation.Blockers)
+	}
+	return "deployment blocked by policy evaluation"
 }
 
 // handleRollbackRequest processes a kind:5962 rollback request.

@@ -1,10 +1,12 @@
 {
   "feature_id": "CORE_SERVICE_TO_DEPLOYMENT",
-  "status": "draft",
+  "status": "ready",
   "tests": [
     {
       "test_id": "CSTD-T-001",
-      "ac_ids": ["CSTD-AC-001"],
+      "ac_ids": [
+        "CSTD-AC-001"
+      ],
       "title": "Control-plane store bootstraps from advertised public relays, waits for EOSE, then subscribes live",
       "type": "unit",
       "existing_or_new": "existing",
@@ -43,7 +45,9 @@
     },
     {
       "test_id": "CSTD-T-002",
-      "ac_ids": ["CSTD-AC-001"],
+      "ac_ids": [
+        "CSTD-AC-001"
+      ],
       "title": "Bootstrap fails closed when relay-read-model prerequisites are missing",
       "type": "unit",
       "existing_or_new": "existing",
@@ -76,7 +80,9 @@
     },
     {
       "test_id": "CSTD-T-003",
-      "ac_ids": ["CSTD-AC-002"],
+      "ac_ids": [
+        "CSTD-AC-002"
+      ],
       "title": "Service create helper publishes kind 5964 and awaits correlated 7963/7961 results",
       "type": "unit",
       "existing_or_new": "existing",
@@ -108,7 +114,10 @@
     },
     {
       "test_id": "CSTD-T-004",
-      "ac_ids": ["CSTD-AC-002", "CSTD-AC-011"],
+      "ac_ids": [
+        "CSTD-AC-002",
+        "CSTD-AC-011"
+      ],
       "title": "Browser smoke journey uses signer-first public request kinds and excludes encrypted 5980",
       "type": "e2e",
       "existing_or_new": "existing",
@@ -145,7 +154,9 @@
     },
     {
       "test_id": "CSTD-T-005",
-      "ac_ids": ["CSTD-AC-003"],
+      "ac_ids": [
+        "CSTD-AC-003"
+      ],
       "title": "Successful service creation immediately renders the new service on `/services` in the default list state",
       "type": "e2e",
       "existing_or_new": "existing",
@@ -182,15 +193,17 @@
     },
     {
       "test_id": "CSTD-T-006",
-      "ac_ids": ["CSTD-AC-003"],
+      "ac_ids": [
+        "CSTD-AC-003"
+      ],
       "title": "Immediate visibility behavior under active search, runtime filter, or non-first-page state is explicitly verified",
       "type": "e2e",
       "existing_or_new": "new",
       "target_path": "web/tests/e2e/service-create-visibility-context.spec.js",
-      "description": "Proposed browser coverage for the currently unresolved product decision around whether successful create is allowed to reset list state in order to show the new service immediately.",
+      "description": "Browser coverage now proves `/services` preserves active search/filter/pagination state after create and only auto-shows the created service when it already matches the active view.",
       "preconditions": [
-        "A human decision exists for filtered/paged `/services` behavior after create, or the test remains blocked pending that decision.",
-        "Harness state contains enough services to exercise pagination and filter/search mismatches."
+        "The public browser harness is installed with `emitCreateServiceProjection=false`.",
+        "The test case explicitly configures search, runtime-filter, or pagination state before creating the service."
       ],
       "steps": [
         "Open `/services` with a non-default search, runtime filter, or page selection active.",
@@ -210,15 +223,17 @@
         "A newly created service whose visibility outcome differs depending on the approved UX rule"
       ],
       "determinism_notes": [
-        "The same suppressed-projection harness should be used so the test still targets immediate hydration rather than later projection arrival.",
-        "No deterministic assertion is possible until HitL settles the filter-reset behavior."
+        "The suppressed-projection harness keeps the assertion focused on immediate create-result hydration rather than later relay projection arrival.",
+        "The test now deterministically covers preserved search, runtime-filter, and pagination behavior without live services or timing sleeps."
       ],
-      "status": "blocked",
-      "failure_reason": "Blocked by adversarial finding MAJ-002: HITL has approved immediate visibility, but not whether create may reset active search/filter/pagination state to accomplish it."
+      "status": "pass",
+      "failure_reason": null
     },
     {
       "test_id": "CSTD-T-007",
-      "ac_ids": ["CSTD-AC-004"],
+      "ac_ids": [
+        "CSTD-AC-004"
+      ],
       "title": "Policy preview helper publishes kind 5989 and returns parsed evaluation payload",
       "type": "unit",
       "existing_or_new": "existing",
@@ -250,7 +265,9 @@
     },
     {
       "test_id": "CSTD-T-008",
-      "ac_ids": ["CSTD-AC-004"],
+      "ac_ids": [
+        "CSTD-AC-004"
+      ],
       "title": "Browser deploy flow requests policy preview before attempting deployment intent creation",
       "type": "e2e",
       "existing_or_new": "existing",
@@ -284,7 +301,9 @@
     },
     {
       "test_id": "CSTD-T-009",
-      "ac_ids": ["CSTD-AC-005"],
+      "ac_ids": [
+        "CSTD-AC-005"
+      ],
       "title": "Deployment intent creation stays blocked when policy preview fails",
       "type": "e2e",
       "existing_or_new": "existing",
@@ -319,7 +338,9 @@
     },
     {
       "test_id": "CSTD-T-010",
-      "ac_ids": ["CSTD-AC-005"],
+      "ac_ids": [
+        "CSTD-AC-005"
+      ],
       "title": "Deployment intent creation stays blocked when policy preview reports blockers",
       "type": "e2e",
       "existing_or_new": "existing",
@@ -354,15 +375,17 @@
     },
     {
       "test_id": "CSTD-T-011",
-      "ac_ids": ["CSTD-AC-005"],
+      "ac_ids": [
+        "CSTD-AC-005"
+      ],
       "title": "Deployment intent creation remains blocked while policy preview is still in flight",
       "type": "e2e",
       "existing_or_new": "new",
       "target_path": "web/tests/e2e/service-deployment-policy-gate.spec.js",
-      "description": "Proposed negative-path coverage for the explicit loading branch in the deploy modal before any preview result exists.",
+      "description": "Browser coverage now proves the explicit preview-loading branch keeps deployment intent creation disabled and unpublished until a delayed successful preview resolves.",
       "preconditions": [
-        "The public browser harness supports a delayed preview response or manual preview-resolution control.",
-        "The deploy modal is opened for a service with a selectable environment and artifact."
+        "The public browser harness exposes delayed preview resolution for one or more pending preview requests.",
+        "The deploy modal is opened for a service with selectable environment and artifact values."
       ],
       "steps": [
         "Trigger policy preview and hold the preview request open.",
@@ -383,20 +406,23 @@
         "A preview response that can be manually resolved after UI assertions are made"
       ],
       "determinism_notes": [
-        "This test should avoid sleeps by holding the preview promise open and releasing it under test control.",
-        "The current harness does not yet expose this mode."
+        "The test holds preview requests open and resolves them under browser-test control instead of using sleeps.",
+        "Coverage now includes both the basic loading-state gate and a stale delayed-preview response being ignored after a newer request supersedes it."
       ],
-      "status": "not_implemented",
-      "failure_reason": "Gap identified in adversarial finding MIN-003: current browser coverage proves failure and blocker branches, but not the explicit loading-state gate branch."
+      "status": "pass",
+      "failure_reason": null
     },
     {
       "test_id": "CSTD-T-012",
-      "ac_ids": ["CSTD-AC-005", "CSTD-AC-006"],
+      "ac_ids": [
+        "CSTD-AC-005",
+        "CSTD-AC-006"
+      ],
       "title": "Direct canonical 5961 requests are rejected when policy evaluation would block deployment intent creation",
       "type": "contract",
       "existing_or_new": "new",
       "target_path": "internal/controlplane/reactor_policy_gate_test.go",
-      "description": "Proposed backend contract test for the unresolved question of whether policy gating is authoritative for any signer-first client or only a browser UX rule.",
+      "description": "Backend contract coverage now proves canonical kind `5961` deployment-intent requests are rejected before intent creation when policy evaluation blocks the artifact/environment pair.",
       "preconditions": [
         "A human decision exists on whether backend `5961` handling must enforce policy evaluation.",
         "A test reactor can be constructed with deterministic service, environment, artifact, registry, and policy-service collaborators."
@@ -423,12 +449,14 @@
         "The test should inject a deterministic Nostr event and assert on created intents or published result events directly.",
         "No browser or live relay is required."
       ],
-      "status": "blocked",
-      "failure_reason": "Blocked by adversarial finding MAJ-001: current AC text is route-scoped, but docs and canonical request surface imply a broader contract decision that still needs HitL resolution."
+      "status": "pass",
+      "failure_reason": null
     },
     {
       "test_id": "CSTD-T-013",
-      "ac_ids": ["CSTD-AC-006"],
+      "ac_ids": [
+        "CSTD-AC-006"
+      ],
       "title": "Deployment-intent helper publishes kind 5961 with service, environment, and artifact routing tags",
       "type": "unit",
       "existing_or_new": "existing",
@@ -459,7 +487,9 @@
     },
     {
       "test_id": "CSTD-T-014",
-      "ac_ids": ["CSTD-AC-007"],
+      "ac_ids": [
+        "CSTD-AC-007"
+      ],
       "title": "Deployment approval helper publishes kind 5966 and awaits correlated public result",
       "type": "unit",
       "existing_or_new": "existing",
@@ -490,7 +520,9 @@
     },
     {
       "test_id": "CSTD-T-015",
-      "ac_ids": ["CSTD-AC-007"],
+      "ac_ids": [
+        "CSTD-AC-007"
+      ],
       "title": "Pending-approval browser flow publishes kind 5966 and converges to approved state",
       "type": "e2e",
       "existing_or_new": "existing",
@@ -524,7 +556,9 @@
     },
     {
       "test_id": "CSTD-T-016",
-      "ac_ids": ["CSTD-AC-008"],
+      "ac_ids": [
+        "CSTD-AC-008"
+      ],
       "title": "Deployment history page remains reactive to relay-backed intent and run projections",
       "type": "e2e",
       "existing_or_new": "existing",
@@ -557,7 +591,9 @@
     },
     {
       "test_id": "CSTD-T-017",
-      "ac_ids": ["CSTD-AC-009"],
+      "ac_ids": [
+        "CSTD-AC-009"
+      ],
       "title": "Pending approvals page removes rows reactively after approval without refresh logic",
       "type": "e2e",
       "existing_or_new": "existing",
@@ -592,7 +628,9 @@
     },
     {
       "test_id": "CSTD-T-018",
-      "ac_ids": ["CSTD-AC-010"],
+      "ac_ids": [
+        "CSTD-AC-010"
+      ],
       "title": "One browser smoke journey proves the approved signer-first public service-to-deployment flow",
       "type": "e2e",
       "existing_or_new": "existing",
@@ -630,7 +668,9 @@
     },
     {
       "test_id": "CSTD-T-019",
-      "ac_ids": ["CSTD-AC-011"],
+      "ac_ids": [
+        "CSTD-AC-011"
+      ],
       "title": "Core public browser journey remains off encrypted request kind 5980",
       "type": "security",
       "existing_or_new": "existing",
@@ -665,19 +705,13 @@
   "coverage_summary": {
     "criteria_total": 11,
     "criteria_with_tests": 11,
-    "known_gaps": [
-      "CSTD-AC-003 is only actively proven for the default unfiltered first-page `/services` state; filtered/search/pagination behavior remains blocked on HitL decision MAJ-002.",
-      "CSTD-AC-005 lacks explicit active coverage for the in-flight preview-loading branch; proposed test CSTD-T-011 is not yet implemented.",
-      "The broader question of whether policy gating is authoritative for direct canonical `5961` clients is unresolved; proposed contract test CSTD-T-012 is blocked on HitL decision MAJ-001.",
-      "Current browser coverage proves deployment detail rendering as part of the smoke journey, but the AC set does not isolate deployment detail as a separate requirement."
-    ]
+    "known_gaps": []
   },
   "implementation_notes": [
-    "Matrix status is `draft` because the prior artifact overstated readiness; all ACs are mapped, but two adversarially important tests are not yet implementable or approved.",
-    "Lowest-effort gap: CSTD-T-011 is a low/medium-difficulty harness extension. Add a delayed preview mode that holds the preview promise open without sleeps, then assert the modal remains blocked until resolution.",
-    "Medium-difficulty gap: CSTD-T-006 needs a product decision first, then an E2E fixture with multiple services, active filters, and pagination so immediate-visibility behavior can be asserted deterministically.",
-    "Highest-risk gap: CSTD-T-012 is medium/high difficulty because it depends on whether the policy gate is a UI-only preflight or an authoritative backend contract. If the latter is approved, coverage should live in backend control-plane tests near `internal/controlplane/reactor.go` and should verify a direct kind `5961` request cannot bypass policy blocking.",
-    "Existing unit coverage already proves helper-level command shaping and negative terminal-result propagation, but it does not by itself prove route-level gating or UX behavior.",
-    "All proposed tests should remain deterministic and relay-harnessed; do not introduce live external relay dependence or sleep-based waiting."
+    "Matrix status is `ready`: all approved acceptance criteria are mapped to active coverage, including the 2026-05-06 follow-up decisions on backend `5961` enforcement and preserved `/services` list state.",
+    "CSTD-T-006 now proves preserved search, runtime filter, and pagination behavior after create, and immediate visibility only when the created service already matches the active view.",
+    "CSTD-T-011 now proves the in-flight preview-loading branch with a deterministic delayed-preview harness path that avoids sleep-based waiting.",
+    "CSTD-T-012 now proves canonical backend signer-first requests cannot bypass policy blocking by publishing kind `5961` directly.",
+    "The browser and backend coverage remain deterministic and relay-harnessed; no live external services are required."
   ]
 }
