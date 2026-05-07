@@ -1,0 +1,147 @@
+{
+  "feature_id": "TRANSPORT_POLICY_GOVERNANCE",
+  "recommendation": "block_until_major_findings_resolved",
+  "overall_risk": "high",
+  "schema_validation": {
+    "schema_path": "schemas/adversarial_review.schema.json",
+    "schema_found": true,
+    "note": "Schema file was present and the review payload was shaped to match it. Full external JSON Schema validation was not run because the jsonschema Python package is not installed in this environment."
+  },
+  "findings": [
+    {
+      "finding_id": "CRIT-001",
+      "title": "Core public-flow acceptance criterion is still unproven because accepted relay OK is not asserted anywhere",
+      "severity": "major",
+      "category": "test_gap",
+      "evidence": [
+        "TPG-AC-002 requires a representative public signer-first browser flow to \"require at least one accepted OK response\" before completion.",
+        "TPG-T-002 in test_matrix.json is still `not_implemented` with failure reason: the existing public smoke does not record accepted relay OK responses or assert that accepted OK is required.",
+        "verification_report.md marks TPG-AC-002 only `partial` and repeats that accepted relay OK handling is not asserted by the current harness.",
+        "web/tests/e2e/service-deployment-public-smoke.spec.js only checks request kinds, relay URLs, intent/run counts, and resulting UI state; it never inspects relay OK responses."
+      ],
+      "affected_acs": [
+        "TPG-AC-002"
+      ],
+      "affected_tests": [
+        "TPG-T-002"
+      ],
+      "suggested_action": "Do not treat the current public smoke as sufficient proof. Extend the public harness and smoke test to record publish OK frames and assert that a public workflow does not count as complete without at least one accepted relay OK.",
+      "requires_hitl_decision": false,
+      "proposed_hitl_question": null
+    },
+    {
+      "finding_id": "CRIT-002",
+      "title": "Verification overclaims encrypted completion coverage: relay-close failure path is claimed but not exercised",
+      "severity": "major",
+      "category": "correctness",
+      "evidence": [
+        "TPG-T-014 in test_matrix.json says the encrypted completion proof should exercise decrypt-failure and relay-close paths.",
+        "verification_report.md marks TPG-AC-011 as pass on the basis that TPG-T-013 and TPG-T-014 are passing, and describes encrypted completion as grounded in explicit result/decrypt/relay-close signals.",
+        "web/src/lib/nostr/encrypted-controlplane.js contains an `onClosed` branch in `awaitEncryptedResult(...)` that rejects when all relays close or when the close reason implies auth.",
+        "web/tests/unit/encrypted-controlplane.test.js has no `onClosed` match at all and no test that invokes the subscription close handler; the current passing suite proves accepted/rejected publish and decrypt failure, but not relay-close failure behavior."
+      ],
+      "affected_acs": [
+        "TPG-AC-011"
+      ],
+      "affected_tests": [
+        "TPG-T-014"
+      ],
+      "suggested_action": "Downgrade the current claim or add explicit unit coverage for relay-close failure handling (including all-relays-closed and auth-related close reasons) before continuing to cite TPG-T-014 as full evidence for AC-011.",
+      "requires_hitl_decision": false,
+      "proposed_hitl_question": null
+    },
+    {
+      "finding_id": "CRIT-003",
+      "title": "Browser log-transport contract is underspecified, so the planned EventSource-exclusion proof can be gamed by scanning too little",
+      "severity": "major",
+      "category": "spec_gap",
+      "evidence": [
+        "TPG-AC-007 says \"A first-party browser log experience covered by this transport-policy slice\" must not require EventSource-based `streamLogs(...)`, but it does not enumerate which browser log surfaces are in scope.",
+        "TPG-T-009 in test_matrix.json proposes a contract test over an \"approved browser slice module allowlist\", but no allowlist artifact exists in the feature folder and the target test file does not exist yet.",
+        "verification_report.md already acknowledges that the dedicated EventSource-exclusion proof does not exist and keeps TPG-AC-007 at `not_verified`.",
+        "Without a stable in-scope surface list, a future contract test could pass by checking only a narrow subset of modules while missing a real browser log path that still depends on EventSource."
+      ],
+      "affected_acs": [
+        "TPG-AC-007"
+      ],
+      "affected_tests": [
+        "TPG-T-009"
+      ],
+      "suggested_action": "Before implementing TPG-T-009, define the exact browser log surfaces that belong to this feature slice and treat that list as a durable artifact or explicit test input.",
+      "requires_hitl_decision": true,
+      "proposed_hitl_question": {
+        "question": "Which browser log surfaces are in scope for TPG-AC-007 in this transport-policy slice?",
+        "type": "single_choice",
+        "options": [
+          "Only deployment run-log retrieval surfaces already governed by encrypted log flows",
+          "All first-party browser log viewers, including any service log pages that still use streamLogs/EventSource",
+          "Only settings/admin log surfaces for this release",
+          "Defer browser log-surface classification and remove TPG-AC-007 from this release gate"
+        ]
+      }
+    },
+    {
+      "finding_id": "CRIT-004",
+      "title": "Settings relay-visibility path is still proving the wrong transport boundary and remains a live blocker",
+      "severity": "major",
+      "category": "regression",
+      "evidence": [
+        "TPG-AC-010 requires operator-facing relay visibility to come from a service-authored NIP-51 kind `30002` relay-list event rather than raw `systemInfo.nostr.relays` discovery data.",
+        "web/src/routes/settings/+page.svelte` still renders `systemInfo.nostr.relays` directly under the \"Server Relays\" row.",
+        "defects.json keeps TPG-D-002 open at severity `major` with recommended fix to replace raw discovery fields with a kind `30002` relay-list path.",
+        "HITL-TRANSPORT_POLICY_GOVERNANCE-005 explicitly classifies TPG-D-002 as `BLOCKER`, and verification_report.md keeps TPG-AC-010 at `fail` with TPG-T-012 not implemented."
+      ],
+      "affected_acs": [
+        "TPG-AC-010"
+      ],
+      "affected_tests": [
+        "TPG-T-012"
+      ],
+      "suggested_action": "Treat the settings page as a release blocker until it is rewired to the service-authored relay-list event and a deterministic e2e proof exists for that path.",
+      "requires_hitl_decision": false,
+      "proposed_hitl_question": null
+    },
+    {
+      "finding_id": "CRIT-005",
+      "title": "Confidence scoring masks unverified must-level ACs by awarding full AC coverage for linked-but-unproven tests",
+      "severity": "minor",
+      "category": "other",
+      "evidence": [
+        "confidence_report.json assigns `acceptance_criteria_coverage.score = 1.0` because all 12 must-level ACs have at least one linked test row.",
+        "verification_report.md simultaneously reports TPG-AC-002 and TPG-AC-004 as `partial`, TPG-AC-007 and TPG-AC-012 as `not_verified`, and TPG-AC-010 as `fail`.",
+        "Five linked required tests are still `not_implemented`: TPG-T-002, TPG-T-005, TPG-T-009, TPG-T-012, and TPG-T-015.",
+        "The report status remains `needs_patch`, but the 1.0 AC-coverage component can still mislead a downstream reader into believing the must-level contract is fully evidenced rather than merely fully mapped."
+      ],
+      "affected_acs": [
+        "TPG-AC-002",
+        "TPG-AC-004",
+        "TPG-AC-007",
+        "TPG-AC-010",
+        "TPG-AC-012"
+      ],
+      "affected_tests": [
+        "TPG-T-002",
+        "TPG-T-005",
+        "TPG-T-009",
+        "TPG-T-012",
+        "TPG-T-015"
+      ],
+      "suggested_action": "Keep the current overall status blocked, but consider adding a second AC-evidence metric or explicit cap for failing/unverified must-level ACs so future confidence reports do not present full linkage as full proof.",
+      "requires_hitl_decision": false,
+      "proposed_hitl_question": null
+    }
+  ],
+  "suggested_hitl_questions": [
+    {
+      "question": "Which browser log surfaces are in scope for TPG-AC-007 in this transport-policy slice?",
+      "type": "single_choice",
+      "options": [
+        "Only deployment run-log retrieval surfaces already governed by encrypted log flows",
+        "All first-party browser log viewers, including any service log pages that still use streamLogs/EventSource",
+        "Only settings/admin log surfaces for this release",
+        "Defer browser log-surface classification and remove TPG-AC-007 from this release gate"
+      ]
+    }
+  ],
+  "next_recommended_stage": "hitl_review_or_test_design_revision"
+}
