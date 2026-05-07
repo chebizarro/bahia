@@ -16,26 +16,52 @@ import (
 
 // Config is the top-level configuration for Bahia.
 type Config struct {
-	Server        ServerConfig          `koanf:"server"`
-	DB            DBConfig              `koanf:"db"`
-	Harbor        HarborConfig          `koanf:"harbor"`
-	Loom          LoomConfig            `koanf:"loom"`
-	Nostr         NostrConfig           `koanf:"nostr"`
-	Reconcile     ReconcileConfig       `koanf:"reconcile"`
-	Runtime       RuntimeConfig         `koanf:"runtime"`
-	Log           LogConfig             `koanf:"log"`
-	Auth          AuthConfig            `koanf:"auth"`
-	Adoption      AdoptionConfig        `koanf:"adoption"`
-	DirectRuntime DirectRuntimeConfig   `koanf:"direct_runtime_actions"`
-	CORS          CORSConfig            `koanf:"cors"`
-	Blossom       BlossomConfig         `koanf:"blossom"`
-	OCI           OCIServerConfig       `koanf:"oci"`
-	HiveCI        HiveCIConfig          `koanf:"hiveci"`
-	Cashu         CashuConfig           `koanf:"cashu"`
-	Telemetry     TelemetryConfig       `koanf:"telemetry"`
-	Notifications NotificationsConfig   `koanf:"notifications"`
-	Registry      RegistryAdapterConfig `koanf:"registry"`
-	LLM           LLMControlplaneConfig `koanf:"llm"`
+	Server        ServerConfig              `koanf:"server"`
+	DB            DBConfig                  `koanf:"db"`
+	Harbor        HarborConfig              `koanf:"harbor"`
+	Loom          LoomConfig                `koanf:"loom"`
+	Nostr         NostrConfig               `koanf:"nostr"`
+	Reconcile     ReconcileConfig           `koanf:"reconcile"`
+	Runtime       RuntimeConfig             `koanf:"runtime"`
+	Log           LogConfig                 `koanf:"log"`
+	Auth          AuthConfig                `koanf:"auth"`
+	Adoption      AdoptionConfig            `koanf:"adoption"`
+	DirectRuntime DirectRuntimeConfig       `koanf:"direct_runtime_actions"`
+	CORS          CORSConfig                `koanf:"cors"`
+	Blossom       BlossomConfig             `koanf:"blossom"`
+	OCI           OCIServerConfig           `koanf:"oci"`
+	HiveCI        HiveCIConfig              `koanf:"hiveci"`
+	Cashu         CashuConfig               `koanf:"cashu"`
+	Telemetry     TelemetryConfig           `koanf:"telemetry"`
+	Notifications NotificationsConfig       `koanf:"notifications"`
+	Registry      RegistryAdapterConfig     `koanf:"registry"`
+	LLM           LLMControlplaneConfig     `koanf:"llm"`
+	Packages      PackageControlplaneConfig `koanf:"packages"`
+}
+
+// PackageControlplaneConfig registers package repository backends and source-fetch guardrails.
+type PackageControlplaneConfig struct {
+	Enabled            bool                            `koanf:"enabled"`
+	AllowedSourceHosts []string                        `koanf:"allowed_source_hosts"`
+	AllowHTTPSource    bool                            `koanf:"allow_http_source"`
+	AllowFileSource    bool                            `koanf:"allow_file_source"`
+	Backends           map[string]PackageBackendConfig `koanf:"backends"`
+}
+
+// PackageBackendConfig describes one named package backend connector.
+// Secrets must be referenced by name/path and resolved by the secrets layer;
+// inline passwords, tokens, or private key material are intentionally not part
+// of this config shape.
+type PackageBackendConfig struct {
+	Type               string            `koanf:"type"`
+	BaseURL            string            `koanf:"base_url"`
+	RootDir            string            `koanf:"root_dir"`
+	PublicBaseURL      string            `koanf:"public_base_url"`
+	Timeout            time.Duration     `koanf:"timeout"`
+	InsecureSkipVerify bool              `koanf:"insecure_skip_verify"`
+	AuthSecretRef      string            `koanf:"auth_secret_ref"`
+	TLSSecretRef       string            `koanf:"tls_secret_ref"`
+	SecretRefs         map[string]string `koanf:"secret_refs"`
 }
 
 // LLMControlplaneConfig holds DB-first LLM provisioning control-plane settings.
@@ -392,6 +418,11 @@ func Defaults() *Config {
 			ReconcileInterval:       60 * time.Second,
 			Gateways:                map[string]LLMGatewayEndpointConfig{},
 		},
+		Packages: PackageControlplaneConfig{
+			Enabled:            false,
+			AllowedSourceHosts: []string{},
+			Backends:           map[string]PackageBackendConfig{},
+		},
 		Log: LogConfig{
 			Level:  "info",
 			Format: "json",
@@ -584,6 +615,9 @@ func (c *Config) validate() error {
 	if err := c.validateLLM(); err != nil {
 		return err
 	}
+	if err := c.validatePackages(); err != nil {
+		return err
+	}
 	if err := c.validateRelaySidecar(); err != nil {
 		return err
 	}
@@ -717,6 +751,81 @@ func (c *Config) validateLLM() error {
 	return nil
 }
 
+func (c *Config) validatePackages() error {
+	if c.Packages.Backends == nil {
+		c.Packages.Backends = map[string]PackageBackendConfig{}
+	}
+	if len(c.Packages.AllowedSourceHosts) > 0 {
+		seenHosts := make(map[string]struct{}, len(c.Packages.AllowedSourceHosts))
+		normalizedHosts := make([]string, 0, len(c.Packages.AllowedSourceHosts))
+		for _, raw := range c.Packages.AllowedSourceHosts {
+			host := strings.ToLower(strings.TrimSpace(raw))
+			if host == "" {
+				continue
+			}
+			if strings.Contains(host, "://") {
+				return fmt.Errorf("config validation failed: packages.allowed_source_hosts entries must be hostnames, not URLs: %q", raw)
+			}
+			if _, ok := seenHosts[host]; ok {
+				continue
+			}
+			seenHosts[host] = struct{}{}
+			normalizedHosts = append(normalizedHosts, host)
+		}
+		c.Packages.AllowedSourceHosts = normalizedHosts
+	}
+
+	if c.Packages.Enabled && len(c.Packages.Backends) == 0 {
+		return fmt.Errorf("config validation failed: packages.backends requires at least one backend when packages.enabled=true")
+	}
+
+	for ref, backend := range c.Packages.Backends {
+		name := strings.TrimSpace(ref)
+		if name == "" {
+			return fmt.Errorf("config validation failed: packages backend names must not be empty")
+		}
+		backendType := strings.TrimSpace(backend.Type)
+		switch backendType {
+		case "nexus", "pulp", "filesystem_mock":
+		default:
+			return fmt.Errorf("config validation failed: packages.backends.%s.type %q is unsupported", name, backend.Type)
+		}
+		if backend.Timeout < 0 {
+			return fmt.Errorf("config validation failed: packages.backends.%s.timeout must not be negative", name)
+		}
+		if backend.Timeout == 0 {
+			backend.Timeout = 30 * time.Second
+		}
+		if strings.TrimSpace(backend.PublicBaseURL) != "" {
+			parsed, err := url.Parse(backend.PublicBaseURL)
+			if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+				return fmt.Errorf("config validation failed: packages.backends.%s.public_base_url must be a valid URL", name)
+			}
+		}
+		for key, value := range backend.SecretRefs {
+			if strings.TrimSpace(key) == "" || strings.TrimSpace(value) == "" {
+				return fmt.Errorf("config validation failed: packages.backends.%s.secret_refs must have non-empty keys and values", name)
+			}
+		}
+		switch backendType {
+		case "nexus", "pulp":
+			parsed, err := url.Parse(backend.BaseURL)
+			if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+				return fmt.Errorf("config validation failed: packages.backends.%s.base_url is required and must be a valid URL", name)
+			}
+			if parsed.Scheme != "https" && parsed.Scheme != "http" {
+				return fmt.Errorf("config validation failed: packages.backends.%s.base_url must use http or https", name)
+			}
+		case "filesystem_mock":
+			if strings.TrimSpace(backend.RootDir) == "" {
+				return fmt.Errorf("config validation failed: packages.backends.%s.root_dir is required for filesystem_mock", name)
+			}
+		}
+		c.Packages.Backends[ref] = backend
+	}
+	return nil
+}
+
 func (c *Config) validateRelaySidecar() error {
 	sidecar := c.Nostr.Sidecar
 	if !sidecar.Enabled {
@@ -741,6 +850,15 @@ func (c *Config) validateRelaySidecar() error {
 		return fmt.Errorf("config validation failed: nostr.sidecar.max_query_limit must be > 0 when sidecar is enabled")
 	}
 	return nil
+}
+
+// PackageBackend returns a configured package backend by reference after trimming whitespace.
+func (c *Config) PackageBackend(ref string) (PackageBackendConfig, bool) {
+	if c == nil || c.Packages.Backends == nil {
+		return PackageBackendConfig{}, false
+	}
+	backend, ok := c.Packages.Backends[strings.TrimSpace(ref)]
+	return backend, ok
 }
 
 func (c *Config) validateRuntimeEndpointRefs() error {

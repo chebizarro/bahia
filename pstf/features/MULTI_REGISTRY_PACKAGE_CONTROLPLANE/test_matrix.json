@@ -1,0 +1,49 @@
+{
+  "feature_id": "MULTI_REGISTRY_PACKAGE_CONTROLPLANE",
+  "status": "foundation_ready",
+  "tests": [
+    {
+      "test_id": "MRPC-T-001",
+      "ac_ids": ["MRPC-AC-001"],
+      "title": "Package formats are first-class values",
+      "type": "unit",
+      "target_path": "internal/domain/package_registry_test.go",
+      "status": "implemented",
+      "determinism_notes": ["Pure domain helper assertions; no timers or network."]
+    },
+    {
+      "test_id": "MRPC-T-002",
+      "ac_ids": ["MRPC-AC-002"],
+      "title": "Package backend config registration and validation",
+      "type": "unit",
+      "target_path": "internal/config/package_controlplane_test.go",
+      "status": "implemented",
+      "determinism_notes": ["Pure config validation; no secret values resolved."]
+    },
+    {
+      "test_id": "MRPC-T-003",
+      "ac_ids": ["MRPC-AC-003", "MRPC-AC-004"],
+      "title": "Package PG projection repository upserts and scans foundation state",
+      "type": "unit",
+      "target_path": "internal/repository/pg_package_controlplane_test.go",
+      "status": "implemented",
+      "determinism_notes": ["Uses pgxmock; no live PostgreSQL, relay, sleeps, or polling."]
+    },
+    {
+      "test_id": "MRPC-T-004",
+      "ac_ids": ["MRPC-AC-005"],
+      "title": "Manual scope inspection for no REST/handler/tool/CLI additions",
+      "type": "review",
+      "target_path": "git diff / file list",
+      "status": "manual_required",
+      "determinism_notes": ["Verify touched files remain limited to domain/config/repository/migrations/tests/PSTF for Item 1."]
+    }
+  ],
+  "coverage_summary": {
+    "criteria_total": 5,
+    "criteria_with_tests_or_review": 5,
+    "known_gaps": [
+      "Runtime Nostr reactor, MCP, CLI, and backend contract criteria are intentionally deferred to later plan items."
+    ]
+  }
+}

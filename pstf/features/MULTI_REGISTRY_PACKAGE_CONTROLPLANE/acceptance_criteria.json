@@ -1,0 +1,54 @@
+{
+  "feature_id": "MULTI_REGISTRY_PACKAGE_CONTROLPLANE",
+  "status": "draft_foundation",
+  "criteria": [
+    {
+      "ac_id": "MRPC-AC-001",
+      "title": "Requested package formats are first-class domain and schema values",
+      "type": "data_model",
+      "priority": "must",
+      "assertion": "The core domain and migration explicitly support npm, pypi, conan, deb, rpm, pub, go_modules, and gradle formats without collapsing them to a generic placeholder.",
+      "expected_result": "Format enums and CHECK constraints preserve the requested values; unsupported formats are rejected by domain helpers or schema constraints.",
+      "status": "covered_foundation"
+    },
+    {
+      "ac_id": "MRPC-AC-002",
+      "title": "Package backend registration is config-driven and uses secret references",
+      "type": "configuration",
+      "priority": "must",
+      "assertion": "Package control-plane config can register nexus, pulp, and filesystem_mock backend refs and validates required backend fields while exposing secret references, not inline password/token fields.",
+      "expected_result": "Enabled package config requires at least one valid backend; HTTP backends require a base URL; filesystem_mock requires root_dir; secret material is represented by auth_secret_ref, tls_secret_ref, or secret_refs.",
+      "status": "covered_foundation"
+    },
+    {
+      "ac_id": "MRPC-AC-003",
+      "title": "Package projection repository stores repositories, artifacts, and publication/promotion state",
+      "type": "data_model",
+      "priority": "must",
+      "assertion": "The repository interface, PG implementation, and migration cover package repositories, artifacts, and publication/promotion projections.",
+      "expected_result": "Repository methods and tables exist for repository, artifact, and publication projections, including policy decision and promotion status fields.",
+      "status": "covered_foundation"
+    },
+    {
+      "ac_id": "MRPC-AC-004",
+      "title": "Nostr-derived idempotency/projection cache exists without making DB the source of truth",
+      "type": "architecture",
+      "priority": "must",
+      "assertion": "Durable package intent rows are keyed by request_event_id and projection rows carry last_event_created_at/last_event_id ordering metadata, with docs/comments identifying DB as projection/cache only.",
+      "expected_result": "Duplicate request event IDs upsert one cached intent; stale projection writes are suppressed by event ordering predicates.",
+      "status": "covered_foundation"
+    },
+    {
+      "ac_id": "MRPC-AC-005",
+      "title": "No reactor, MCP, CLI, backend adapter, or REST CRUD behavior is introduced in Item 1",
+      "type": "scope_control",
+      "priority": "must",
+      "assertion": "This phase adds only foundation scaffolding and does not introduce package mutation handlers, tools, commands, adapters, or REST CRUD endpoints.",
+      "expected_result": "No package REST routes or command/tool handlers are added; later items must implement Nostr-first mutation behavior.",
+      "status": "documented_not_runtime_verified"
+    }
+  ],
+  "coverage_notes": [
+    "This acceptance set intentionally covers Item 1 only. Later feature phases must add Nostr reactor/MCP/CLI/backend acceptance criteria before the full capability can be marked complete."
+  ]
+}

@@ -225,6 +225,28 @@ type LLMRouteStateRepository interface {
 	ListAll(ctx context.Context) ([]domain.LLMRouteState, error)
 }
 
+// PackageControlPlaneRepository manages Nostr-derived package repository projections and request idempotency caches.
+type PackageControlPlaneRepository interface {
+	UpsertRepository(ctx context.Context, repo *domain.PackageRepository) error
+	GetRepository(ctx context.Context, id uuid.UUID) (*domain.PackageRepository, error)
+	GetRepositoryByName(ctx context.Context, name string) (*domain.PackageRepository, error)
+	ListRepositories(ctx context.Context, includeDeleted bool) ([]domain.PackageRepository, error)
+
+	UpsertArtifact(ctx context.Context, artifact *domain.PackageArtifact) error
+	GetArtifact(ctx context.Context, repositoryID uuid.UUID, namespace, packageName, version, filename string) (*domain.PackageArtifact, error)
+	ListArtifacts(ctx context.Context, repositoryID uuid.UUID, limit, offset int) ([]domain.PackageArtifact, error)
+
+	UpsertPublication(ctx context.Context, publication *domain.PackagePublication) error
+	GetPublication(ctx context.Context, id uuid.UUID) (*domain.PackagePublication, error)
+	ListPublicationsByArtifact(ctx context.Context, artifactID uuid.UUID) ([]domain.PackagePublication, error)
+	ListPublicationsByRepository(ctx context.Context, repositoryID uuid.UUID, includeTerminal bool) ([]domain.PackagePublication, error)
+
+	UpsertIntent(ctx context.Context, intent *domain.PackageIntent) error
+	GetIntent(ctx context.Context, id uuid.UUID) (*domain.PackageIntent, error)
+	GetIntentByRequestEventID(ctx context.Context, requestEventID string) (*domain.PackageIntent, error)
+	ListNonTerminalIntents(ctx context.Context, limit int) ([]domain.PackageIntent, error)
+}
+
 // ToolProvisioningRepository manages tool provisioning intents, runs, state, and approvals.
 type ToolProvisioningRepository interface {
 	// Intents

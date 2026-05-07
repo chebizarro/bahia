@@ -1,0 +1,52 @@
+{
+  "feature_id": "MULTI_REGISTRY_PACKAGE_CONTROLPLANE",
+  "title": "Nostr-first multi-registry package repository control-plane",
+  "status": "foundation_scaffold",
+  "scope_phase": "Item 1: package domain, config, projection repository, migration, and PSTF foundation only",
+  "description": "Bahia will manage package repositories and package artifact publication/promotion as signed Nostr-owned desired state, with backend adapters storing and serving bytes and PostgreSQL used only as a projection/cache for queries, idempotency, and recovery. This phase establishes the stable domain/config/repository foundation for later reactor, MCP, CLI, and backend adapter work.",
+  "in_scope": [
+    "First-class package formats: npm, pypi, conan, deb, rpm, pub, go_modules, gradle",
+    "First-class backend types: nexus, pulp, filesystem_mock",
+    "Config-driven backend registration with validation and secret references instead of inline secret values",
+    "Domain models for repositories, artifacts, publication/promotion state, policy decisions, and Nostr request intents",
+    "PostgreSQL projection/cache interfaces and implementation for package repositories, artifacts, publications, and idempotent Nostr request intents",
+    "Additive migration for package projection/cache tables"
+  ],
+  "out_of_scope_for_this_phase": [
+    "Control-plane reactor package request handlers",
+    "MCP package tools",
+    "CLI package commands",
+    "REST CRUD endpoints",
+    "Nexus/Pulp/filesystem_mock backend adapter implementations",
+    "Package byte upload or source_url fetching",
+    "Format-specific index generation"
+  ],
+  "architectural_constraints": [
+    "Nostr events remain the source of truth for desired package state; DB tables added here are projections/caches only.",
+    "No polling, request/response, or REST CRUD path is introduced by this foundation.",
+    "Backend credentials are represented only by secret references and must be resolved by a later secrets layer.",
+    "Projection upserts are stale-write-safe using last_event_created_at plus last_event_id ordering."
+  ],
+  "design_tradeoffs": [
+    {
+      "topic": "package formats",
+      "decision": "Use the user-requested package formats as first-class domain and migration values now instead of generic-only.",
+      "reason": "The user brief explicitly required npm, pypi, conan, deb, rpm, pub, go modules, and gradle to be preserved in this phase. Ecosystem-specific behavior remains deferred."
+    },
+    {
+      "topic": "secrets",
+      "decision": "Expose auth_secret_ref, tls_secret_ref, and secret_refs rather than username/password/token config fields.",
+      "reason": "The brief requires secrets by reference, not inline secret values."
+    }
+  ],
+  "source_evidence": [
+    "internal/domain/package_registry.go",
+    "internal/config/config.go",
+    "internal/repository/interfaces.go",
+    "internal/repository/pg_package_controlplane.go",
+    "internal/db/migrations/000023_package_controlplane.up.sql",
+    "internal/domain/package_registry_test.go",
+    "internal/config/package_controlplane_test.go",
+    "internal/repository/pg_package_controlplane_test.go"
+  ]
+}
