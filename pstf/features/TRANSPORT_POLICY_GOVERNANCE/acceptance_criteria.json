@@ -1,0 +1,350 @@
+{
+  "feature_id": "TRANSPORT_POLICY_GOVERNANCE",
+  "status": "approved",
+  "approval_decision_refs": [
+    "HITL-TRANSPORT_POLICY_GOVERNANCE-004"
+  ],
+  "criteria": [
+    {
+      "ac_id": "TPG-AC-001",
+      "feature_id": "TRANSPORT_POLICY_GOVERNANCE",
+      "title": "System discovery keeps public bootstrap and encrypted capability gating distinct",
+      "type": "contract",
+      "priority": "must",
+      "assertion": "`/api/v1/system/info` must advertise public browser bootstrap inputs (`browser_relays` and/or `sidecar_url`) separately from encrypted browser capability inputs (`browser_encrypted_request_relays`, `service_pubkey`, and `features.encrypted_nostr_requests`). Public bootstrap fields alone must not imply encrypted capability.",
+      "testable_by": ["unit", "contract"],
+      "preconditions": [
+        "System-info payloads are available for public-only and public-plus-encrypted configurations."
+      ],
+      "steps": [
+        "Inspect a payload with only public bootstrap fields.",
+        "Inspect a payload with both public bootstrap fields and encrypted capability indicators."
+      ],
+      "expected_result": "Public bootstrap remains usable without implying encrypted capability, and encrypted capability becomes available only when its dedicated discovery inputs are present.",
+      "negative_cases": [
+        "If encrypted capability is inferred from `browser_relays` or `sidecar_url` alone, the criterion fails.",
+        "If encrypted-request relay URLs are required for public bootstrap success, the criterion fails."
+      ],
+      "source_evidence": [
+        "internal/api/handlers/system.go:47-245",
+        "docs/control-planes.md:38-49,241-315",
+        "pstf/features/SYSTEM_DISCOVERY_RELAY_BOOTSTRAP/feature_spec.json",
+        "web/tests/unit/encrypted-controlplane.test.js:1-95"
+      ],
+      "requires_human_approval": false
+    },
+    {
+      "ac_id": "TPG-AC-002",
+      "feature_id": "TRANSPORT_POLICY_GOVERNANCE",
+      "title": "Representative public signer-first browser proof stays on the public relay plane",
+      "type": "contract",
+      "priority": "must",
+      "assertion": "A representative approved public signer-first browser proof surface — drawn from either `CORE_SERVICE_TO_DEPLOYMENT` or `LLM_ROUTE_RELEASE_DEPLOYMENT` — must stay on the public relay plane, require at least one accepted OK response, and resolve from correlated status/result events and relay-backed read models rather than REST mutation responses or encrypted-request transport.",
+      "testable_by": ["contract", "e2e", "manual_review"],
+      "preconditions": [
+        "A signer-authenticated browser session exists.",
+        "Public browser relays and the Bahia service pubkey are advertised by system discovery."
+      ],
+      "steps": [
+        "Execute one approved public signer-first browser flow from `CORE_SERVICE_TO_DEPLOYMENT` or `LLM_ROUTE_RELEASE_DEPLOYMENT`.",
+        "Inspect publish relays, relay OK responses, and completion signals for that flow."
+      ],
+      "expected_result": "The request publishes through public browser relays, succeeds only after accepted relay OK, and completes through correlated Nostr events and resulting read-model state.",
+      "negative_cases": [
+        "If the browser treats a REST mutation response as the canonical completion signal for the flow, the criterion fails.",
+        "If the browser publishes the canonical public request through encrypted-request relays, the criterion fails."
+      ],
+      "source_evidence": [
+        "docs/control-planes.md:52-176",
+        "docs/nostr-commands.md:1-94",
+        "pstf/features/CORE_SERVICE_TO_DEPLOYMENT/feature_spec.json",
+        "pstf/features/LLM_ROUTE_RELEASE_DEPLOYMENT/feature_spec.json"
+      ],
+      "requires_human_approval": false
+    },
+    {
+      "ac_id": "TPG-AC-003",
+      "feature_id": "TRANSPORT_POLICY_GOVERNANCE",
+      "title": "Representative encrypted browser proof uses only encrypted request/result transport",
+      "type": "security",
+      "priority": "must",
+      "assertion": "A representative approved encrypted browser proof surface — drawn from either `ENCRYPTED_CONTROL_PLANE_NOTIFICATIONS` or browser payment-history behavior — must publish only encrypted kind `5980` events to `browser_encrypted_request_relays`, target the Bahia service pubkey, and resolve only correlated encrypted kind `7980` results from the Bahia service author. Sensitive browser payloads must never be published to public browser relays.",
+      "testable_by": ["unit", "contract", "e2e"],
+      "preconditions": [
+        "Encrypted capability is advertised by system discovery.",
+        "The signer session supports the required encryption operations."
+      ],
+      "steps": [
+        "Execute one approved encrypted browser flow from `ENCRYPTED_CONTROL_PLANE_NOTIFICATIONS` or browser payment history.",
+        "Inspect relay selection, request kind, routing tags, and result correlation for that flow."
+      ],
+      "expected_result": "Only encrypted-request relays are used for publish/subscribe, the request targets the service pubkey, and the flow resolves only from a correlated encrypted Bahia-authored result.",
+      "negative_cases": [
+        "If any sensitive browser request is published to a public relay URL, the criterion fails.",
+        "If a spoofed or uncorrelated encrypted result can resolve the request, the criterion fails."
+      ],
+      "source_evidence": [
+        "web/src/lib/nostr/encrypted-controlplane.js:1-260",
+        "docs/control-planes.md:241-315",
+        "web/tests/unit/encrypted-controlplane.test.js:1-173",
+        "pstf/features/ENCRYPTED_CONTROL_PLANE_NOTIFICATIONS/acceptance_criteria.json"
+      ],
+      "requires_human_approval": false
+    },
+    {
+      "ac_id": "TPG-AC-004",
+      "feature_id": "TRANSPORT_POLICY_GOVERNANCE",
+      "title": "Encrypted browser flows fail closed when encrypted capability or signer encryption support is absent",
+      "type": "reliability",
+      "priority": "must",
+      "assertion": "When system discovery does not advertise encrypted capability inputs, or when the active signer mode does not expose the required NIP-44 encrypt/decrypt operations to the browser, encrypted browser flows must fail locally and must not fall back to public relays or pretend encrypted transport is available.",
+      "testable_by": ["unit", "contract", "manual_review"],
+      "preconditions": [
+        "One scenario lacks encrypted discovery inputs.",
+        "One scenario uses a signer mode without exposed browser encryption capability."
+      ],
+      "steps": [
+        "Invoke a sensitive browser flow under each unsupported scenario.",
+        "Observe availability checks before publish."
+      ],
+      "expected_result": "The browser reports encrypted transport unavailable, performs no encrypted publish, and does not substitute public-relay publication for the sensitive flow.",
+      "negative_cases": [
+        "If the browser silently retries the sensitive request on public relays, the criterion fails.",
+        "If encrypted transport is marked available without browser-visible encrypt/decrypt support, the criterion fails."
+      ],
+      "source_evidence": [
+        "docs/control-planes.md:261-268",
+        "web/src/lib/nostr/encrypted-controlplane.js:66-113",
+        "web/tests/unit/encrypted-controlplane.test.js:57-95",
+        "pstf/features/TRANSPORT_POLICY_GOVERNANCE/hitl_decisions.md"
+      ],
+      "requires_human_approval": false
+    },
+    {
+      "ac_id": "TPG-AC-005",
+      "feature_id": "TRANSPORT_POLICY_GOVERNANCE",
+      "title": "Route-level REST compatibility gating is not part of the approved browser transport policy",
+      "type": "contract",
+      "priority": "must",
+      "assertion": "Protected browser routes in the approved transport-policy slice must not require blanket route-level REST compatibility gating by default. The empty `ROUTE_COMPATIBILITY_REQUIREMENTS` policy is the approved browser contract unless a future route receives an explicit new compatibility decision.",
+      "testable_by": ["unit", "manual_review"],
+      "preconditions": [
+        "The route-access policy is loaded from the current browser auth helpers."
+      ],
+      "steps": [
+        "Inspect protected routes under the current route-access policy.",
+        "Evaluate whether any approved route requires REST compatibility solely because of route prefix."
+      ],
+      "expected_result": "Protected browser routes may still require authentication or role checks, but they do not require a blanket `requiresRestCompatibility` policy by default.",
+      "negative_cases": [
+        "If a protected route is classified as requiring REST compatibility without a separate explicit product decision, the criterion fails.",
+        "If stale audit text is treated as normative browser policy over the approved current route-access behavior, the criterion fails."
+      ],
+      "source_evidence": [
+        "web/src/lib/auth/route-access.js:1-120",
+        "docs/investigations/signer-first-auth-audit-2026-05-03.md:50-85",
+        "HITL-TRANSPORT_POLICY_GOVERNANCE-001"
+      ],
+      "requires_human_approval": false
+    },
+    {
+      "ac_id": "TPG-AC-006",
+      "feature_id": "TRANSPORT_POLICY_GOVERNANCE",
+      "title": "Browser-visible payment surfaces use encrypted transport rather than REST",
+      "type": "security",
+      "priority": "must",
+      "assertion": "A browser-visible payment flow, including payment-history and spend-summary surfaces, must not rely on REST payment endpoints as its canonical data source. Approved browser payment behavior uses encrypted transport instead, and any remaining browser REST payment read is a migration defect rather than an accepted transport mode.",
+      "testable_by": ["unit", "e2e", "manual_review"],
+      "preconditions": [
+        "A browser payment surface is exercised, such as `/payments` or a dashboard spend summary."
+      ],
+      "steps": [
+        "Load the browser payment surface.",
+        "Inspect the data source and transport used for payment records or spend totals."
+      ],
+      "expected_result": "The browser payment surface obtains payment data from the approved encrypted transport path and does not depend on REST `payments/history` for canonical behavior.",
+      "negative_cases": [
+        "If a browser-visible payment flow depends on REST `payments/history` to satisfy the approved contract, the criterion fails.",
+        "If encrypted payment history is treated as optional while REST remains the canonical browser path, the criterion fails."
+      ],
+      "source_evidence": [
+        "web/src/lib/stores/payments.svelte.js:1-53",
+        "web/src/routes/payments/+page.svelte:1-179",
+        "web/src/routes/+page.svelte:195-241",
+        "HITL-TRANSPORT_POLICY_GOVERNANCE-002"
+      ],
+      "requires_human_approval": false
+    },
+    {
+      "ac_id": "TPG-AC-007",
+      "feature_id": "TRANSPORT_POLICY_GOVERNANCE",
+      "title": "EventSource browser log streaming is excluded from the approved browser transport contract",
+      "type": "contract",
+      "priority": "must",
+      "assertion": "A first-party browser log experience covered by this transport-policy slice must not require EventSource-based `streamLogs(...)` behavior as part of the approved contract. Approved browser log retrieval must instead use the Nostr-native or encrypted event-driven log path selected by the relevant feature slice.",
+      "testable_by": ["unit", "manual_review", "contract"],
+      "preconditions": [
+        "A browser log-viewing path is identified for review."
+      ],
+      "steps": [
+        "Inspect whether the browser log path depends on EventSource streaming.",
+        "Compare the path to approved Nostr-native or encrypted log retrieval behavior."
+      ],
+      "expected_result": "The approved browser contract does not require EventSource streaming, and any remaining EventSource helper is treated as legacy drift rather than contract proof.",
+      "negative_cases": [
+        "If EventSource streaming is required to satisfy the approved browser transport contract, the criterion fails.",
+        "If EventSource coverage is used as the sole approval evidence for browser log transport, the criterion fails."
+      ],
+      "source_evidence": [
+        "web/src/lib/api/client.js:422-439",
+        "web/tests/unit/api-client-retry-and-edges.test.js:157-183",
+        "docs/control-planes.md:1-20,299-315",
+        "HITL-TRANSPORT_POLICY_GOVERNANCE-003"
+      ],
+      "requires_human_approval": false
+    },
+    {
+      "ac_id": "TPG-AC-008",
+      "feature_id": "TRANSPORT_POLICY_GOVERNANCE",
+      "title": "Operator HTTP fallback remains explicit and pre-acceptance only",
+      "type": "reliability",
+      "priority": "must",
+      "assertion": "For signer-first operator flows, HTTP fallback is allowed only as an explicit compatibility mode before any relay accepts the signed request. Once any relay has accepted the signer-first request, terminal failure remains terminal and must not trigger HTTP fallback.",
+      "testable_by": ["unit", "integration", "contract"],
+      "preconditions": [
+        "An operator signer-first request path is exercised with both pre-acceptance and post-acceptance failure scenarios."
+      ],
+      "steps": [
+        "Trigger a pre-acceptance failure with explicit fallback enabled.",
+        "Trigger a post-acceptance terminal failure for the same class of operation."
+      ],
+      "expected_result": "Fallback is permitted only in the pre-acceptance case and is forbidden after any relay accepted the signer-first request.",
+      "negative_cases": [
+        "If post-acceptance terminal failure can fall back to HTTP, the criterion fails.",
+        "If HTTP fallback occurs without explicit fallback enablement, the criterion fails."
+      ],
+      "source_evidence": [
+        "docs/control-planes.md:163-216",
+        "pstf/features/SIGNER_FIRST_OPERATOR_ADOPTION_RUNTIME/feature_spec.json",
+        "pstf/features/SIGNER_FIRST_OPERATOR_ADOPTION_RUNTIME/acceptance_criteria.json"
+      ],
+      "requires_human_approval": false
+    },
+    {
+      "ac_id": "TPG-AC-009",
+      "feature_id": "TRANSPORT_POLICY_GOVERNANCE",
+      "title": "Legacy 311xx command handling remains compatibility-only",
+      "type": "contract",
+      "priority": "must",
+      "assertion": "The legacy 31100–31105 command bridge may remain present as compatibility behavior, but it is not an approved primary transport surface. New integrations and PSTF acceptance evidence for this slice must use canonical 596x/597x/598x request families instead of relying on 311xx behavior.",
+      "testable_by": ["contract", "manual_review"],
+      "preconditions": [
+        "The evaluated transport proof includes at least one command-based flow."
+      ],
+      "steps": [
+        "Inspect the command families used by the evaluated flow and any supporting docs/tests.",
+        "Check whether 311xx is being used as canonical proof rather than compatibility-only evidence."
+      ],
+      "expected_result": "Canonical transport proof uses the modern request families, and 311xx is treated only as deprecated compatibility behavior.",
+      "negative_cases": [
+        "If a new integration or acceptance proof relies on 311xx as the approved normal contract, the criterion fails.",
+        "If docs or test acceptance language describe 311xx as the primary supported transport, the criterion fails."
+      ],
+      "source_evidence": [
+        "docs/control-planes.md:329-341",
+        "docs/protocol-compatibility.md:121-149",
+        "docs/nostr-commands.md:1-94"
+      ],
+      "requires_human_approval": false
+    },
+    {
+      "ac_id": "TPG-AC-010",
+      "feature_id": "TRANSPORT_POLICY_GOVERNANCE",
+      "title": "Operator-facing relay visibility uses the service NIP-51 relay-list event rather than raw system discovery fields",
+      "type": "contract",
+      "priority": "must",
+      "assertion": "When operator-facing relay visibility is surfaced in the browser, the approved source is a service-authored NIP-51 kind `30002` relay-list event rather than raw `systemInfo.nostr.relays` discovery data.",
+      "testable_by": ["contract", "manual_review", "e2e"],
+      "preconditions": [
+        "An operator-facing relay-visibility surface exists, such as the settings page."
+      ],
+      "steps": [
+        "Inspect the data source and author expectations for displayed server relay visibility.",
+        "Compare the implementation to the approved NIP-51 relay-list sourcing rule."
+      ],
+      "expected_result": "Operator relay visibility is sourced from a service-authored kind `30002` relay-list event and does not depend on raw `systemInfo.nostr.relays` for approved behavior.",
+      "negative_cases": [
+        "If the approved operator relay-visibility path still depends on `systemInfo.nostr.relays`, the criterion fails.",
+        "If no distinction is maintained between browser bootstrap relays and operator relay visibility, the criterion fails."
+      ],
+      "source_evidence": [
+        "pstf/features/SYSTEM_DISCOVERY_RELAY_BOOTSTRAP/hitl_decisions.md:132-181",
+        "web/src/routes/settings/+page.svelte:220-260",
+        "HITL-SYSTEM_DISCOVERY_RELAY_BOOTSTRAP-004"
+      ],
+      "requires_human_approval": false
+    },
+    {
+      "ac_id": "TPG-AC-011",
+      "feature_id": "TRANSPORT_POLICY_GOVERNANCE",
+      "title": "Canonical relay-backed flows derive completion from event-driven semantics rather than timeout or polling heuristics",
+      "type": "reliability",
+      "priority": "must",
+      "assertion": "A canonical public or encrypted relay-backed flow covered by this slice must derive completion and failure from event-driven semantics: accepted relay OK handling, subscriptions, EOSE-bounded catch-up where relevant, and correlated terminal result events. Arbitrary timeout or polling heuristics must not be treated as normative completion behavior.",
+      "testable_by": ["contract", "manual_review", "integration"],
+      "preconditions": [
+        "At least one relay-backed public or encrypted flow is available for review."
+      ],
+      "steps": [
+        "Inspect how the evaluated flow determines successful or terminal completion.",
+        "Check whether timeout or polling heuristics are being relied on as normative contract behavior."
+      ],
+      "expected_result": "Completion and failure are grounded in explicit event-driven signals, and timeout/polling heuristics are either absent or treated only as known legacy defects outside the approved contract.",
+      "negative_cases": [
+        "If a canonical relay-backed flow requires arbitrary timeout or polling logic to satisfy the approved contract, the criterion fails.",
+        "If a known FIX-class timeout/polling behavior is silently promoted into approval evidence, the criterion fails."
+      ],
+      "source_evidence": [
+        "docs/control-planes.md:156-176,313-315",
+        "pstf/features/SOUL_FACTORY_PROVISIONING_TRACKING/feature_spec.json:123-240",
+        "HITL-SOUL_FACTORY_PROVISIONING_TRACKING-002"
+      ],
+      "requires_human_approval": false
+    },
+    {
+      "ac_id": "TPG-AC-012",
+      "feature_id": "TRANSPORT_POLICY_GOVERNANCE",
+      "title": "A mixed public-plus-encrypted browser session preserves relay separation end to end",
+      "type": "e2e",
+      "priority": "must",
+      "assertion": "Within one authenticated browser session, the acceptance proof for this slice must demonstrate both (a) one approved public signer-first browser flow from `CORE_SERVICE_TO_DEPLOYMENT` and (b) one approved encrypted browser flow from `ENCRYPTED_CONTROL_PLANE_NOTIFICATIONS`, both driven by the same system-discovery contract while preserving relay separation: the public flow stays on public relays, the encrypted flow stays on encrypted-request relays, and neither flow depends on the wrong relay set for completion.",
+      "testable_by": ["e2e", "integration"],
+      "preconditions": [
+        "System discovery advertises both public and encrypted browser transport inputs.",
+        "The browser session is authenticated with a signer mode that supports the encrypted journey."
+      ],
+      "steps": [
+        "Execute one approved public signer-first browser action from `CORE_SERVICE_TO_DEPLOYMENT` in the session.",
+        "Execute one approved encrypted browser action from `ENCRYPTED_CONTROL_PLANE_NOTIFICATIONS` in the same session.",
+        "Inspect relay usage and completion signals for both actions."
+      ],
+      "expected_result": "Both journeys complete successfully, the public journey uses only public relay transport, the sensitive journey uses only encrypted-request relay transport, and the shared session does not blur the two transport boundaries.",
+      "negative_cases": [
+        "If the public journey depends on encrypted-request relays, the criterion fails.",
+        "If the sensitive journey depends on public relays or REST compatibility overrides, the criterion fails."
+      ],
+      "source_evidence": [
+        "pstf/cross_feature_analysis.md:74-94,246-256",
+        "pstf/features/TRANSPORT_POLICY_GOVERNANCE/feature_spec.json",
+        "HITL-TRANSPORT_POLICY_GOVERNANCE-004"
+      ],
+      "requires_human_approval": false
+    }
+  ],
+  "coverage_notes": [
+    "These ACs govern shared transport boundaries across multiple feature slices rather than re-specifying each domain payload schema.",
+    "Several criteria intentionally classify current REST/SSE behavior as non-approved legacy evidence so later test design can distinguish implementation drift from approved contract behavior.",
+    "`TPG-AC-012` turns the previously identified mixed-transport cross-feature gap into explicit acceptance scope for future test generation."
+  ],
+  "unresolved_questions": []
+}

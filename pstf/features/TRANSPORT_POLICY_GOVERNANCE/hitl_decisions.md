@@ -2,10 +2,10 @@
 
 ## Metadata
 - Feature ID: TRANSPORT_POLICY_GOVERNANCE
-- Task ID: bahia-shl1
+- Task ID: bahia-z1ak
 - Framework: PSTF
 - Interaction Mode: RepoPrompt ask-user tool
-- Current Stage: spec_reconstruction
+- Current Stage: acceptance_criteria
 - Last Updated: 2026-05-06
 
 ---
@@ -132,6 +132,47 @@ REMOVE_EVENTSOURCE_LOG_STREAMING_FROM_INTENDED_BROWSER_CONTRACT
 
 ---
 
+### Decision HITL-TRANSPORT_POLICY_GOVERNANCE-004 — Acceptance criteria approval
+
+**Stage:** acceptance_criteria
+**Agent:** PSTF Acceptance Criteria Agent
+**Decision Type:** spec_approval
+**Status:** active
+
+**Context Summary:**
+A draft AC set was prepared for the shared transport-policy slice covering public signer-first relay boundaries, encrypted browser relay boundaries, fail-closed encrypted capability gating, the approved absence of route-level REST compatibility gating, encrypted-only browser payment policy, EventSource log-stream deprecation, explicit pre-acceptance operator HTTP fallback, compatibility-only 311xx handling, operator relay visibility via NIP-51 kind `30002`, event-driven completion rules, and end-to-end mixed-transport relay separation.
+
+**Question Asked:**
+Do you approve the acceptance-criteria direction for `TRANSPORT_POLICY_GOVERNANCE` so I can finalize `acceptance_criteria.json`?
+
+**Options Presented:**
+- A) APPROVE_AS_IS
+- B) APPROVE_WITH_EDITS
+- C) REJECT_AND_REVISE
+- D) DEFER_FEATURE
+
+**User Selection:**
+APPROVE_AS_IS
+
+**User Notes:**
+None.
+
+**Decision:**
+APPROVE_AS_IS
+
+**Impact:**
+- Feature Spec: none
+- Acceptance Criteria: approved — `acceptance_criteria.json` may be finalized with the drafted AC set
+- Tests: test design may proceed from the approved ACs
+- Defects: none created by this approval decision
+- Confidence / Release: raises confidence that subsequent test generation is grounded in explicitly approved transport-policy criteria
+
+**Required Follow-Up Actions:**
+- [x] Write `pstf/features/TRANSPORT_POLICY_GOVERNANCE/acceptance_criteria.json` with the approved AC set.
+- [ ] Use the approved AC ids as the basis for PSTF test-matrix generation.
+
+---
+
 ## Summary
 
 - Final Status: active decisions captured
@@ -148,3 +189,4 @@ REMOVE_EVENTSOURCE_LOG_STREAMING_FROM_INTENDED_BROWSER_CONTRACT
 | HITL-TRANSPORT_POLICY_GOVERNANCE-001 | future transport-policy ACs around browser compatibility | old route-gating assertions become stale | stale-doc cleanup implied | feature_spec.json, hitl_decisions.md | Confirms empty route-level REST compatibility map is intended now. |
 | HITL-TRANSPORT_POLICY_GOVERNANCE-002 | future payment transport ACs | dashboard/browser REST payment tests become legacy evidence | browser payment migration implied | feature_spec.json, hitl_decisions.md | Browser payment surfaces should move fully to encrypted transport. |
 | HITL-TRANSPORT_POLICY_GOVERNANCE-003 | future browser log-transport ACs | SSE log-stream tests become legacy evidence | EventSource deprecation/removal implied | feature_spec.json, hitl_decisions.md | Removes EventSource streaming from the intended browser contract. |
+| HITL-TRANSPORT_POLICY_GOVERNANCE-004 | TPG-AC-001..012 | future test matrix for transport-policy slice | none | acceptance_criteria.json, hitl_decisions.md | Human approved the AC direction as drafted. |
