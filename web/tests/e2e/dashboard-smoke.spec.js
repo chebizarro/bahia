@@ -196,6 +196,7 @@ const mockEvents = [
 ];
 
 const SERVICE_PUBKEY = 'b'.repeat(64);
+const ENCRYPTED_RELAY = 'ws://encrypted.test.local';
 const now = Math.floor(Date.now() / 1000);
 
 function nostrEvent({ id, kind, pubkey = SERVICE_PUBKEY, created_at = now, tags = [], content = {} }) {
@@ -239,12 +240,118 @@ function dashboardNostrEvents({ services = mockServices, environments = mockEnvi
 }
 
 const relaySystemInfo = {
-  nostr: { browser_relays: ['ws://relay.test.local'], service_pubkey: SERVICE_PUBKEY },
-  features: { relay_sidecar: true, relay_read_models: true, legacy_sse: false }
+  nostr: {
+    browser_relays: ['ws://relay.test.local'],
+    browser_encrypted_request_relays: [ENCRYPTED_RELAY],
+    service_pubkey: SERVICE_PUBKEY
+  },
+  features: { relay_sidecar: true, relay_read_models: true, encrypted_nostr_requests: true, legacy_sse: false }
 };
+
+async function installEncryptedDashboardPaymentHarness(page) {
+  await page.addInitScript(({ servicePubkey }) => {
+    function matchesFilter(event, filter) {
+      if (!filter || typeof filter !== 'object') return true;
+      if (Array.isArray(filter.kinds) && !filter.kinds.includes(event.kind)) return false;
+      if (Array.isArray(filter.authors) && !filter.authors.includes(event.pubkey)) return false;
+      for (const [key, values] of Object.entries(filter)) {
+        if (!key.startsWith('#') || !Array.isArray(values)) continue;
+        const tagName = key.slice(1);
+        const tags = Array.isArray(event.tags) ? event.tags : [];
+        if (!tags.some((tag) => Array.isArray(tag) && tag[0] === tagName && values.includes(tag[1]))) {
+          return false;
+        }
+      }
+      return true;
+    }
+
+    window.__BAHIA_E2E_DASHBOARD_PAYMENT_HISTORY = window.__BAHIA_E2E_DASHBOARD_PAYMENT_HISTORY || {};
+    window.__BAHIA_E2E_DASHBOARD_PAYMENT_ERRORS = window.__BAHIA_E2E_DASHBOARD_PAYMENT_ERRORS || {};
+    window.__BAHIA_E2E_DASHBOARD_ENCRYPTED_PAYMENT_TRACE = [];
+    window.nostr = {
+      ...(window.nostr || {}),
+      nip44: {
+        encrypt: async (_recipientPubkey, plaintext) => `enc44:${plaintext}`,
+        decrypt: async (_senderPubkey, ciphertext) => {
+          if (typeof ciphertext !== 'string' || !ciphertext.startsWith('enc44:')) {
+            throw new Error('bad ciphertext');
+          }
+          return ciphertext.slice('enc44:'.length);
+        }
+      }
+    };
+
+    const originalSend = window.WebSocket.prototype.send;
+    window.WebSocket.prototype.send = function patchedSend(data) {
+      let message;
+      try {
+        message = JSON.parse(data);
+      } catch {
+        return originalSend.call(this, data);
+      }
+
+      if (Array.isArray(message) && message[0] === 'EVENT' && message[1]?.kind === 5980) {
+        const event = message[1];
+        const plaintext = String(event.content || '').replace(/^enc44:/, '');
+        const envelope = JSON.parse(plaintext);
+        if (envelope.operation === 'payments.history') {
+          const worker = String(envelope.payload?.worker || '');
+          const trace = window.__BAHIA_E2E_DASHBOARD_ENCRYPTED_PAYMENT_TRACE || [];
+          trace.push({ relay: this.url, operation: envelope.operation, worker });
+          window.__BAHIA_E2E_DASHBOARD_ENCRYPTED_PAYMENT_TRACE = trace;
+
+          const error = window.__BAHIA_E2E_DASHBOARD_PAYMENT_ERRORS?.[worker];
+          const resultEnvelope = error
+            ? {
+                request_event_id: event.id,
+                status: 'error',
+                error: typeof error === 'string' ? { code: 'handler_failed', message: error } : error
+              }
+            : {
+                request_event_id: event.id,
+                status: 'ok',
+                payload: window.__BAHIA_E2E_DASHBOARD_PAYMENT_HISTORY?.[worker] || []
+              };
+          const resultEvent = {
+            id: `result-${event.id}`,
+            kind: 7980,
+            pubkey: servicePubkey,
+            created_at: Math.floor(Date.now() / 1000),
+            tags: [['e', event.id], ['p', event.pubkey], ['encrypted', 'bahia-encrypted-v1']],
+            content: `enc44:${JSON.stringify(resultEnvelope)}`,
+            sig: '0'.repeat(128)
+          };
+
+          const sent = originalSend.call(this, data);
+          setTimeout(() => {
+            if (this.readyState !== window.WebSocket.OPEN) return;
+            for (const [subId, filters] of this.subscriptions?.entries() || []) {
+              if (filters.some((filter) => matchesFilter(resultEvent, filter))) {
+                this.onmessage?.({ data: JSON.stringify(['EVENT', subId, resultEvent]) });
+              }
+            }
+          }, 0);
+          return sent;
+        }
+      }
+
+      return originalSend.call(this, data);
+    };
+  }, { servicePubkey: SERVICE_PUBKEY });
+}
+
+async function seedEncryptedDashboardPayments(page, { paymentHistoryByWorker = mockPaymentHistoryByWorker, paymentErrorsByWorker = {} } = {}) {
+  await page.addInitScript(({ paymentHistoryByWorker, paymentErrorsByWorker }) => {
+    window.__BAHIA_E2E_DASHBOARD_PAYMENT_HISTORY = structuredClone(paymentHistoryByWorker || {});
+    window.__BAHIA_E2E_DASHBOARD_PAYMENT_ERRORS = structuredClone(paymentErrorsByWorker || {});
+    window.__BAHIA_E2E_DASHBOARD_ENCRYPTED_PAYMENT_TRACE = [];
+  }, { paymentHistoryByWorker, paymentErrorsByWorker });
+}
 
 test.beforeEach(async ({ page }) => {
   await installE2EMocks(page, { systemInfo: relaySystemInfo, nostrEvents: dashboardNostrEvents() });
+  await installEncryptedDashboardPaymentHarness(page);
+  await seedEncryptedDashboardPayments(page);
 
   // Mock services
   await page.route('**/api/v1/services', (route) => {
@@ -307,17 +414,12 @@ test.beforeEach(async ({ page }) => {
     });
   });
   
-  // Mock payment history per worker for dashboard cost summary
-  await page.route('**/api/v1/payments/history**', (route) => {
-    const url = new URL(route.request().url());
-    const worker = url.searchParams.get('worker');
-
-    return route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({ data: mockPaymentHistoryByWorker[worker] || [] })
-    });
-  });
+  // Guard against legacy REST payment reads for dashboard cost summary.
+  await page.route('**/api/v1/payments/history**', (route) => route.fulfill({
+    status: 500,
+    contentType: 'application/json',
+    body: JSON.stringify({ error: 'legacy REST payment history should not be called' })
+  }));
 
   // Mock events endpoint
   await page.route('**/api/v1/events', (route) => {
@@ -423,14 +525,22 @@ test.describe('Dashboard Smoke Test', () => {
     await expect(spendCard).toBeVisible();
     await expect(spendCard.locator('.card-value')).toHaveText('2,000 sats');
     await expect(spendCard.locator('.card-subtitle')).toHaveText('2 recent payments');
+
+    await expect.poll(() => page.evaluate(() => window.__BAHIA_E2E_DASHBOARD_ENCRYPTED_PAYMENT_TRACE)).toEqual([
+      { relay: ENCRYPTED_RELAY, operation: 'payments.history', worker: 'npub1worker1abc' },
+      { relay: ENCRYPTED_RELAY, operation: 'payments.history', worker: 'npub1worker2def' },
+      { relay: ENCRYPTED_RELAY, operation: 'payments.history', worker: 'npub1worker3ghi' }
+    ]);
   });
 
   test('should show empty recent spend state when payment history is empty', async ({ page }) => {
-    await page.route('**/api/v1/payments/history**', (route) => route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({ data: [] })
-    }));
+    await seedEncryptedDashboardPayments(page, {
+      paymentHistoryByWorker: {
+        npub1worker1abc: [],
+        npub1worker2def: [],
+        npub1worker3ghi: []
+      }
+    });
 
     await page.goto('/');
 
@@ -441,23 +551,10 @@ test.describe('Dashboard Smoke Test', () => {
   });
 
   test('should keep recent spend totals when one worker history request fails', async ({ page }) => {
-    await page.route('**/api/v1/payments/history**', (route) => {
-      const url = new URL(route.request().url());
-      const worker = url.searchParams.get('worker');
-
-      if (worker === 'npub1worker2def') {
-        return route.fulfill({
-          status: 500,
-          contentType: 'application/json',
-          body: JSON.stringify({ error: 'worker history unavailable' })
-        });
+    await seedEncryptedDashboardPayments(page, {
+      paymentErrorsByWorker: {
+        npub1worker2def: 'worker history unavailable'
       }
-
-      return route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        body: JSON.stringify({ data: mockPaymentHistoryByWorker[worker] || [] })
-      });
     });
 
     await page.goto('/');

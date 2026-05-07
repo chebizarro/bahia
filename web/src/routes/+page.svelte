@@ -3,6 +3,7 @@
   import Table from '$lib/components/Table.svelte';
   import Badge from '$lib/components/Badge.svelte';
   import { api } from '$lib/api/client.js';
+  import { requestPaymentHistoryRecords } from '$lib/stores/payments.svelte.js';
   import { services, environments, states, workers, driftedStates, events, loading } from '$lib/stores';
   import { formatDashboardSats, normalizePaymentHistory, summarizeRecentSpend } from './dashboard-cost-summary.js';
 
@@ -201,7 +202,7 @@
     costSummaryError = null;
     costSummaryPartialFailures = 0;
 
-    if (!api || workerPubkeys.length === 0) {
+    if (workerPubkeys.length === 0) {
       costSummary = emptyCostSummary(workerPubkeys.length);
       costSummaryLoading = false;
       return;
@@ -215,7 +216,7 @@
           try {
             return {
               payments: normalizePaymentHistory(
-                await api.getPaymentHistory({ worker, limit: COST_HISTORY_LIMIT_PER_WORKER })
+                await requestPaymentHistoryRecords({ worker, limit: COST_HISTORY_LIMIT_PER_WORKER })
               ),
               error: null
             };

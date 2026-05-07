@@ -5,7 +5,7 @@
       "defect_id": "TPG-D-001",
       "title": "Dashboard recent-spend summary still uses REST payment history instead of encrypted browser transport",
       "severity": "major",
-      "status": "open",
+      "status": "verified",
       "related_ac_ids": [
         "TPG-AC-006"
       ],
@@ -13,13 +13,18 @@
         "TPG-T-008"
       ],
       "evidence": [
-        "web/src/routes/+page.svelte:214-221",
-        "web/tests/e2e/dashboard-smoke.spec.js:311-318",
-        "web/tests/e2e/dashboard-smoke.spec.js:429-455",
+        "web/src/lib/stores/payments.svelte.js:25-39",
+        "web/src/lib/stores/payments.svelte.js:41-53",
+        "web/src/routes/+page.svelte:203-229",
+        "web/tests/unit/encrypted-domain-stores.test.js:48-77",
+        "web/tests/unit/encrypted-domain-stores.test.js:79-99",
+        "web/tests/e2e/dashboard-smoke.spec.js:244-344",
+        "web/tests/e2e/dashboard-smoke.spec.js:521-565",
+        "Patch verification: vitest encrypted-domain-stores + dashboard-cost-summary passed (10 tests), playwright dashboard-smoke passed (22 tests)",
         "HITL-TRANSPORT_POLICY_GOVERNANCE-002"
       ],
-      "suspected_root_cause": "The dashboard cost-summary loader still calls `api.getPaymentHistory(...)` per worker and the e2e harness still mocks `**/api/v1/payments/history**` as the canonical source for Recent Spend.",
-      "recommended_fix": "Route dashboard payment-summary reads through an approved encrypted browser transport path and replace REST payment-history mocks with deterministic encrypted request/result fixtures.",
+      "suspected_root_cause": "Dashboard cost-summary reads were still calling the REST payment-history API directly instead of reusing the encrypted browser transport path already approved for payment surfaces.",
+      "recommended_fix": null,
       "requires_human_decision": false
     },
     {

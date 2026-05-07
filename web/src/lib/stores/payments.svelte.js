@@ -1,4 +1,6 @@
-import { requestEncryptedResult } from '$lib/nostr/encrypted-controlplane.js';
+import { encryptedRequestsAvailable, requestEncryptedResult } from '$lib/nostr/encrypted-controlplane.js';
+import { authState, initializeAuth } from '$lib/stores/auth.js';
+import { currentSystemInfo, loadSystemInfo } from '$lib/stores/system.svelte.js';
 
 export const paymentHistoryState = $state({
   records: [],
@@ -22,6 +24,37 @@ export function resetPaymentHistory() {
   paymentHistoryState.loadedWorker = '';
 }
 
+async function ensureEncryptedPaymentHistoryRequests() {
+  let info = currentSystemInfo();
+  if (!info) {
+    info = await loadSystemInfo();
+  }
+  if (!encryptedRequestsAvailable(info)) {
+    throw new Error('Encrypted Nostr requests are not available. Configure relay URLs for encrypted Nostr requests (`nostr.browser_encrypted_request_relays`) and a Bahia service pubkey before loading payment history.');
+  }
+  if (authState.status === 'unknown' || authState.status === 'checking') {
+    await initializeAuth();
+  }
+  return info;
+}
+
+export async function requestPaymentHistoryRecords({ worker, limit = 50 } = {}) {
+  const workerPubkey = String(worker || '').trim();
+  if (!workerPubkey) {
+    return [];
+  }
+
+  await ensureEncryptedPaymentHistoryRequests();
+
+  const response = await requestEncryptedResult({
+    operation: 'payments.history',
+    payload: { worker: workerPubkey, limit: Number(limit) || 50 },
+    tags: [['domain', 'payments']]
+  });
+  const records = unwrapEncryptedResult(response);
+  return Array.isArray(records) ? records : [];
+}
+
 export async function loadPaymentHistory({ worker, limit = 50 } = {}) {
   const workerPubkey = String(worker || '').trim();
   if (!workerPubkey) {
@@ -33,13 +66,7 @@ export async function loadPaymentHistory({ worker, limit = 50 } = {}) {
   paymentHistoryState.error = null;
 
   try {
-    const response = await requestEncryptedResult({
-      operation: 'payments.history',
-      payload: { worker: workerPubkey, limit: Number(limit) || 50 },
-      tags: [['domain', 'payments']]
-    });
-    const records = unwrapEncryptedResult(response);
-    paymentHistoryState.records = Array.isArray(records) ? records : [];
+    paymentHistoryState.records = await requestPaymentHistoryRecords({ worker: workerPubkey, limit });
     paymentHistoryState.loadedWorker = workerPubkey;
     return paymentHistoryState.records;
   } catch (error) {
