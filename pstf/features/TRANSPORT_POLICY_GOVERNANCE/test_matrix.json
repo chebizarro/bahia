@@ -1,0 +1,522 @@
+{
+  "feature_id": "TRANSPORT_POLICY_GOVERNANCE",
+  "status": "ready",
+  "tests": [
+    {
+      "test_id": "TPG-T-001",
+      "ac_ids": ["TPG-AC-001"],
+      "title": "System discovery separates public bootstrap from encrypted capability inputs",
+      "type": "unit",
+      "existing_or_new": "existing",
+      "target_path": "web/tests/unit/controlplane-store.test.js; web/tests/unit/encrypted-controlplane.test.js",
+      "description": "Reuses the current discovery and encrypted-controlplane unit coverage to prove that browser bootstrap relays are resolved from approved public inputs while encrypted capability remains gated by dedicated encrypted-request relay plus service-pubkey inputs.",
+      "preconditions": [
+        "Canonical public-only and sidecar-first system-info fixtures are available.",
+        "Unit tests can mock the browser auth and system stores."
+      ],
+      "steps": [
+        "Resolve browser relay bootstrap inputs from system info and confirm `nostr.relays` is ignored for browser bootstrap.",
+        "Evaluate encrypted capability against a public-only payload and a payload with encrypted-request relay plus service-pubkey inputs."
+      ],
+      "expected_result": "Public bootstrap succeeds without implying encrypted capability, and encrypted capability becomes available only when dedicated encrypted discovery inputs are present.",
+      "fixtures": [
+        "test/fixtures/system_info_sidecar_first.json"
+      ],
+      "mocks": [
+        "mock api.getSystemInfo",
+        "mock auth store",
+        "mock system store"
+      ],
+      "data_requirements": [
+        "One payload with only public browser relay bootstrap fields.",
+        "One payload with browser encrypted request relays and service pubkey."
+      ],
+      "determinism_notes": [
+        "Pure fixture-driven unit coverage; no live relays or HTTP services required."
+      ],
+      "status": "implemented",
+      "failure_reason": null
+    },
+    {
+      "test_id": "TPG-T-002",
+      "ac_ids": ["TPG-AC-002"],
+      "title": "Representative public signer-first browser flow records accepted OK and completes from public relay events",
+      "type": "e2e",
+      "existing_or_new": "modify_existing",
+      "target_path": "web/tests/e2e/service-deployment-public-smoke.spec.js; web/tests/e2e/harnesses/service-deployment-public.js",
+      "description": "Extend the existing public service-to-deployment smoke to record accepted relay OK responses alongside request/result/read-model traces so the test proves canonical public completion semantics rather than only public request kind usage.",
+      "preconditions": [
+        "A signer-authenticated browser session is mocked by the Playwright harness.",
+        "System discovery advertises only public browser relays for the representative flow under test."
+      ],
+      "steps": [
+        "Execute the existing create-service and deployment approval journey.",
+        "Capture public publish relay URLs, accepted OK responses, correlated result events, and resulting read-model projections.",
+        "Assert no encrypted request kind or REST mutation response is treated as canonical completion evidence."
+      ],
+      "expected_result": "The representative public flow publishes only through public relays, requires at least one accepted OK per canonical request, and completes from correlated public result plus read-model events.",
+      "fixtures": [
+        "public system-info fixture",
+        "public deployment state harness"
+      ],
+      "mocks": [
+        "public WebSocket relay harness with OK/EVENT/EOSE support"
+      ],
+      "data_requirements": [
+        "Stable public request kind set for service create, policy preview, deployment intent, and approval.",
+        "Deterministic deployment intent and run projection payloads."
+      ],
+      "determinism_notes": [
+        "All relay traffic is injected by the local Playwright harness; no external relays are contacted.",
+        "The harness should assert correlation by request id instead of using arbitrary wait thresholds."
+      ],
+      "status": "not_implemented",
+      "failure_reason": null
+    },
+    {
+      "test_id": "TPG-T-003",
+      "ac_ids": ["TPG-AC-003"],
+      "title": "Encrypted controlplane transport publishes only 5980 requests and resolves only correlated 7980 results",
+      "type": "unit",
+      "existing_or_new": "existing",
+      "target_path": "web/tests/unit/encrypted-controlplane.test.js",
+      "description": "Uses the existing transport unit suite to prove request kind, relay selection, accepted-OK handling, correlated encrypted result filtering, dedupe, and spoof rejection for encrypted browser traffic.",
+      "preconditions": [
+        "Browser auth helpers can sign and encrypt test events.",
+        "Encrypted relay URLs and service pubkey are available from mocked system info."
+      ],
+      "steps": [
+        "Build an encrypted request event for a sensitive browser operation.",
+        "Publish the event through the encrypted controlplane client and inspect OK handling.",
+        "Inject unrelated, spoofed, duplicate, and correlated encrypted results."
+      ],
+      "expected_result": "Only 5980 encrypted requests are published, only encrypted-request relays are used, and only the correlated service-authored 7980 result resolves the request.",
+      "fixtures": [],
+      "mocks": [
+        "mock auth store encrypt/decrypt/sign helpers",
+        "fake encrypted Nostr client"
+      ],
+      "data_requirements": [
+        "Stable requester pubkey, service pubkey, request event id, and correlated result payload."
+      ],
+      "determinism_notes": [
+        "All events are injected synchronously into mocked handlers; no live relays or timers are required for completion."
+      ],
+      "status": "implemented",
+      "failure_reason": null
+    },
+    {
+      "test_id": "TPG-T-004",
+      "ac_ids": ["TPG-AC-003"],
+      "title": "Representative notifications browser flow stays entirely on encrypted request/result relays",
+      "type": "e2e",
+      "existing_or_new": "existing",
+      "target_path": "web/tests/e2e/notifications-encrypted-smoke.spec.js; web/tests/e2e/harnesses/notifications-encrypted.js",
+      "description": "Reuses the notification encrypted transport smoke as the representative browser proof that a sensitive domain publishes and resolves end to end on encrypted request/result relays only.",
+      "preconditions": [
+        "System discovery advertises both public and encrypted relay inputs.",
+        "The browser signer mock exposes NIP-44 encryption helpers."
+      ],
+      "steps": [
+        "Load the notifications route.",
+        "Create and test a notification channel.",
+        "Inspect encrypted relay and operation traces."
+      ],
+      "expected_result": "The browser performs list/create/test notification operations only on the encrypted relay set and never publishes the sensitive payloads to the public relay set.",
+      "fixtures": [
+        "encrypted notifications system-info fixture",
+        "initial notification channel fixture"
+      ],
+      "mocks": [
+        "encrypted WebSocket relay harness"
+      ],
+      "data_requirements": [
+        "Stable notification channel form data and encrypted operation names."
+      ],
+      "determinism_notes": [
+        "Relay publish and result events are generated entirely inside the Playwright harness."
+      ],
+      "status": "implemented",
+      "failure_reason": null
+    },
+    {
+      "test_id": "TPG-T-005",
+      "ac_ids": ["TPG-AC-004"],
+      "title": "Encrypted browser flows fail closed when capability or signer support is absent",
+      "type": "unit",
+      "existing_or_new": "modify_existing",
+      "target_path": "web/tests/unit/encrypted-controlplane.test.js; web/tests/unit/encrypted-route-stores.test.js",
+      "description": "Extend the current fail-closed unit coverage so it proves both halves of the AC: missing encrypted discovery inputs and signer/browser modes that do not expose usable NIP-44 encrypt/decrypt helpers.",
+      "preconditions": [
+        "One test scenario omits encrypted discovery inputs.",
+        "One test scenario reports encrypted requests unavailable to route stores."
+      ],
+      "steps": [
+        "Evaluate encrypted availability against a public-only system-info payload.",
+        "Call an encrypted route-store operation when encrypted requests are unavailable.",
+        "Attempt an encrypted browser operation with a signer mock that lacks usable browser-visible NIP-44 encrypt/decrypt support."
+      ],
+      "expected_result": "Encrypted transport is reported unavailable, no encrypted publish occurs, and no public-relay fallback path is attempted for the sensitive flow in either the missing-discovery or missing-signer-capability scenario.",
+      "fixtures": [],
+      "mocks": [
+        "mock encryptedRequestsAvailable",
+        "mock requestEncryptedResult",
+        "signer/auth mock without browser-visible NIP-44 support"
+      ],
+      "data_requirements": [
+        "Stable public-only system info payload.",
+        "Deterministic unavailable-capability error text for both discovery-missing and signer-capability-missing cases."
+      ],
+      "determinism_notes": [
+        "Coverage is local and synchronous apart from resolved mock promises."
+      ],
+      "status": "not_implemented",
+      "failure_reason": null
+    },
+    {
+      "test_id": "TPG-T-006",
+      "ac_ids": ["TPG-AC-005"],
+      "title": "Protected browser routes do not require blanket REST compatibility by default",
+      "type": "unit",
+      "existing_or_new": "existing",
+      "target_path": "web/tests/unit/route-access.test.js",
+      "description": "Uses the existing route-access suite to prove the default protected-route policy leaves `requiresRestCompatibility` false unless an explicit override is injected.",
+      "preconditions": [
+        "Default route-access configuration is loaded with no E2E compatibility overrides."
+      ],
+      "steps": [
+        "Inspect protected prefixes such as `/souls` and `/llm` under the default route-access policy.",
+        "Inject an explicit compatibility override and confirm the override path is the only path requiring REST compatibility."
+      ],
+      "expected_result": "Protected routes remain auth-guarded, but blanket REST compatibility is not required by default.",
+      "fixtures": [],
+      "mocks": [
+        "window.__BAHIA_E2E_ROUTE_ROLE_REQUIREMENTS",
+        "window.__BAHIA_E2E_ROUTE_COMPAT_REQUIREMENTS"
+      ],
+      "data_requirements": [
+        "Stable protected route paths and one explicit override path."
+      ],
+      "determinism_notes": [
+        "Pure in-memory policy evaluation with no network dependency."
+      ],
+      "status": "implemented",
+      "failure_reason": null
+    },
+    {
+      "test_id": "TPG-T-007",
+      "ac_ids": ["TPG-AC-006"],
+      "title": "Payments page history surface loads through encrypted browser requests only",
+      "type": "unit",
+      "existing_or_new": "existing",
+      "target_path": "web/tests/unit/encrypted-domain-stores.test.js",
+      "description": "Reuses the encrypted payments store tests to prove the `/payments` payment-history surface requests data through encrypted transport and surfaces encrypted errors without a REST fallback path. This row intentionally covers only the `/payments` surface; the dashboard spend-summary half of AC6 remains tracked separately by TPG-T-008.",
+      "preconditions": [
+        "The payments store is loaded with a mocked encrypted request helper."
+      ],
+      "steps": [
+        "Load payment history for a worker.",
+        "Inspect the encrypted operation and payload.",
+        "Return an encrypted error envelope and verify local error handling."
+      ],
+      "expected_result": "The payments page uses `payments.history` over encrypted transport and does not substitute REST when the encrypted result fails.",
+      "fixtures": [],
+      "mocks": [
+        "mock requestEncryptedResult"
+      ],
+      "data_requirements": [
+        "Stable worker pubkey, limit, and encrypted payment-history payload."
+      ],
+      "determinism_notes": [
+        "Store behavior is exercised with mocked promises only."
+      ],
+      "status": "implemented",
+      "failure_reason": null
+    },
+    {
+      "test_id": "TPG-T-008",
+      "ac_ids": ["TPG-AC-006"],
+      "title": "Dashboard recent-spend summary stops depending on REST payments history",
+      "type": "e2e",
+      "existing_or_new": "modify_existing",
+      "target_path": "web/tests/e2e/dashboard-smoke.spec.js; web/src/routes/+page.svelte",
+      "description": "Replace the current REST `payments/history` dashboard mocks with an encrypted spend-summary harness or shared encrypted-store path so the dashboard spend card proves the approved encrypted browser transport instead of legacy REST drift.",
+      "preconditions": [
+        "The dashboard exposes a Recent Spend card.",
+        "Encrypted browser capability is available in the test harness."
+      ],
+      "steps": [
+        "Load the dashboard with deterministic worker and spend fixtures.",
+        "Capture all payment-related transport activity and assert no REST `payments/history` request is used as the canonical data source.",
+        "Exercise an encrypted partial-failure case for one worker and verify the UI still reflects encrypted-source semantics."
+      ],
+      "expected_result": "The dashboard spend summary is sourced from the approved encrypted transport path and no longer depends on REST `payments/history` for canonical browser behavior.",
+      "fixtures": [
+        "deterministic worker list fixture",
+        "deterministic recent payment fixture per worker"
+      ],
+      "mocks": [
+        "encrypted request/result relay harness for payment summaries",
+        "fetch interceptor asserting zero canonical `payments/history` reads"
+      ],
+      "data_requirements": [
+        "At least one successful worker payment response and one partial-failure scenario.",
+        "Deterministic total and count outputs for the Recent Spend card."
+      ],
+      "determinism_notes": [
+        "The test should fail if the page requires REST payment-history mocks, which is the current implementation drift captured by HITL-TRANSPORT_POLICY_GOVERNANCE-002."
+      ],
+      "status": "not_implemented",
+      "failure_reason": null
+    },
+    {
+      "test_id": "TPG-T-009",
+      "ac_ids": ["TPG-AC-007"],
+      "title": "Approved browser transport slices do not depend on EventSource log streaming",
+      "type": "contract",
+      "existing_or_new": "new",
+      "target_path": "web/tests/unit/transport-policy-contract.test.js",
+      "description": "Add a transport-policy contract test that enumerates approved browser slices and asserts none of them import or require `streamLogs(...)` / EventSource as approval evidence. The legacy `api-client-retry-and-edges.test.js` coverage remains negative implementation evidence only.",
+      "preconditions": [
+        "Approved browser slices for this feature are enumerated in the contract test.",
+        "Legacy EventSource helper coverage remains present for drift visibility."
+      ],
+      "steps": [
+        "Resolve module dependencies or exported route helpers for the approved browser transport slices.",
+        "Assert no approved slice references `BahiaClient.streamLogs` or constructs EventSource for canonical behavior.",
+        "Document legacy SSE coverage as non-approval evidence."
+      ],
+      "expected_result": "Approved browser transport proof does not require EventSource streaming, and legacy SSE helper coverage cannot satisfy the transport-policy contract by itself.",
+      "fixtures": [
+        "approved browser slice module allowlist"
+      ],
+      "mocks": [
+        "module import spy or static dependency scan helper"
+      ],
+      "data_requirements": [
+        "Stable list of approved routes/stores covered by TRANSPORT_POLICY_GOVERNANCE."
+      ],
+      "determinism_notes": [
+        "A static dependency assertion is preferred over browser waits so the proof stays deterministic and does not confuse legacy SSE code with approved transport behavior."
+      ],
+      "status": "not_implemented",
+      "failure_reason": null
+    },
+    {
+      "test_id": "TPG-T-010",
+      "ac_ids": ["TPG-AC-008"],
+      "title": "Operator HTTP fallback remains limited to explicit pre-acceptance failures",
+      "type": "unit",
+      "existing_or_new": "existing",
+      "target_path": "cmd/cli/operator_nostr_test.go; pkg/client/operator_nostr_test.go; pstf/features/SIGNER_FIRST_OPERATOR_ADOPTION_RUNTIME/test_matrix.json",
+      "description": "Reuses the signer-first operator adoption runtime tests that already prove fallback behavior is explicit, compatibility-only, and forbidden after any relay has accepted the signer-first request.",
+      "preconditions": [
+        "Operator CLI/client tests can construct synthetic pre-acceptance and post-acceptance failures."
+      ],
+      "steps": [
+        "Trigger a pre-acceptance signer-first error with fallback enabled.",
+        "Trigger a post-acceptance terminal signer-first error under the same fallback configuration."
+      ],
+      "expected_result": "Fallback executes only for the pre-acceptance case and never after an accepted signer-first request.",
+      "fixtures": [],
+      "mocks": [
+        "operator client factory",
+        "fallback callback"
+      ],
+      "data_requirements": [
+        "Stable synthetic `ControlPlaneRequestError` values with request-accepted true and false variants."
+      ],
+      "determinism_notes": [
+        "Existing focused Go unit coverage already exercises this behavior without live relay dependencies."
+      ],
+      "status": "implemented",
+      "failure_reason": null
+    },
+    {
+      "test_id": "TPG-T-011",
+      "ac_ids": ["TPG-AC-009"],
+      "title": "Canonical approval evidence uses 596x/597x/598x families while 311xx remains compatibility-only",
+      "type": "manual",
+      "existing_or_new": "new",
+      "target_path": "docs/control-planes.md; docs/protocol-compatibility.md; docs/nostr-commands.md; web/tests/e2e/service-deployment-public-smoke.spec.js; web/tests/e2e/notifications-encrypted-smoke.spec.js",
+      "description": "Run a fixed review checklist over the docs and approval-backed test corpus to confirm that 31100–31105 references remain compatibility-only and that primary acceptance proof uses modern public or encrypted request families instead.",
+      "preconditions": [
+        "The current approval-backed public and encrypted test files are identified.",
+        "Documentation references for legacy 311xx handling are available."
+      ],
+      "steps": [
+        "Inspect canonical transport docs for how 311xx is classified.",
+        "Inspect the representative public and encrypted approval-backed tests for request families used as proof.",
+        "Record whether any new approval evidence promotes 311xx as a primary transport family."
+      ],
+      "expected_result": "Approved proof relies on 596x/597x/598x request families, and 311xx remains documented and treated as compatibility-only behavior.",
+      "fixtures": [],
+      "mocks": [],
+      "data_requirements": [
+        "Stable set of approval-backed docs and representative test files."
+      ],
+      "determinism_notes": [
+        "This review is manual because the current requirement is about classification across docs and proof artifacts, not runtime behavior. If regressions recur, replace this with a doc-lint check."
+      ],
+      "status": "not_implemented",
+      "failure_reason": null
+    },
+    {
+      "test_id": "TPG-T-012",
+      "ac_ids": ["TPG-AC-010"],
+      "title": "Settings relay visibility is sourced from a service-authored NIP-51 kind 30002 event",
+      "type": "e2e",
+      "existing_or_new": "new",
+      "target_path": "web/tests/e2e/settings-relay-visibility.spec.js; web/src/routes/settings/+page.svelte",
+      "description": "Add a settings-page regression that seeds a service-authored NIP-51 kind 30002 relay-list event and verifies the operator-facing UI renders that data without relying on raw `systemInfo.nostr.relays` discovery fields.",
+      "preconditions": [
+        "A service-authored kind 30002 relay-list event is available to the browser in the harness.",
+        "The settings page can be loaded without `systemInfo.nostr.relays` populated."
+      ],
+      "steps": [
+        "Load settings with system info that omits raw `nostr.relays` but includes the standard service identity and browser bootstrap inputs.",
+        "Inject a service-authored kind 30002 relay-list event.",
+        "Verify the UI shows operator-facing server relay visibility from the kind 30002 event and keeps it distinct from browser bootstrap relay configuration."
+      ],
+      "expected_result": "Operator relay visibility is rendered from the service-authored NIP-51 event and does not regress to raw system discovery fields.",
+      "fixtures": [
+        "service-authored kind 30002 relay-list event fixture",
+        "system-info fixture without raw `nostr.relays`"
+      ],
+      "mocks": [
+        "relay subscription harness capable of serving kind 30002 events"
+      ],
+      "data_requirements": [
+        "Stable service pubkey and stable ordered relay URL list for operator display."
+      ],
+      "determinism_notes": [
+        "This test should be implemented only with deterministic injected relay events; do not query live relays for kind 30002 in CI."
+      ],
+      "status": "not_implemented",
+      "failure_reason": null
+    },
+    {
+      "test_id": "TPG-T-013",
+      "ac_ids": ["TPG-AC-011"],
+      "title": "Public controlplane bootstrap uses EOSE-bounded catch-up then live subscriptions",
+      "type": "unit",
+      "existing_or_new": "existing",
+      "target_path": "web/tests/unit/controlplane-store.test.js",
+      "description": "Reuses the controlplane store tests that prove public relay-backed state bootstraps through `queryUntilEose`, then transitions to a live subscription, and fails closed when relay-read-model capability is absent.",
+      "preconditions": [
+        "A mocked Nostr client exposes `queryUntilEose`, `subscribe`, and connection-state hooks."
+      ],
+      "steps": [
+        "Bootstrap the controlplane store from system-info relays.",
+        "Inspect the EOSE-bounded historical query, live subscription setup, and resulting connection state.",
+        "Verify failure when relay-read-model capability is not advertised."
+      ],
+      "expected_result": "Public relay-backed bootstrap derives readiness from historical query completion plus live subscription setup, not polling heuristics.",
+      "fixtures": [
+        "relay-backed service/environment/state/worker events"
+      ],
+      "mocks": [
+        "mock Nostr client with queryUntilEose and subscribe hooks"
+      ],
+      "data_requirements": [
+        "Stable read-model event kinds and a deterministic service pubkey author."
+      ],
+      "determinism_notes": [
+        "Historical and live events are injected directly; no sleeps are required to prove bootstrap semantics."
+      ],
+      "status": "implemented",
+      "failure_reason": null
+    },
+    {
+      "test_id": "TPG-T-014",
+      "ac_ids": ["TPG-AC-011"],
+      "title": "Encrypted request/result completion depends on accepted OK and correlated terminal events",
+      "type": "unit",
+      "existing_or_new": "existing",
+      "target_path": "web/tests/unit/encrypted-controlplane.test.js",
+      "description": "Reuses encrypted transport unit coverage to prove that encrypted completion and failure derive from accepted publish responses, subscription events, correlated requester/service tags, and relay-closure handling rather than timeout or polling heuristics.",
+      "preconditions": [
+        "Encrypted transport client and result subscription handlers are mocked."
+      ],
+      "steps": [
+        "Publish an encrypted request with both accepted and rejected OK scenarios.",
+        "Inject unrelated, spoofed, duplicate, and correlated terminal result events.",
+        "Exercise decrypt-failure and relay-close paths."
+      ],
+      "expected_result": "Encrypted completion depends on accepted publish plus correlated terminal result events, and failure paths surface from explicit result/decrypt/relay-close signals rather than arbitrary waits.",
+      "fixtures": [],
+      "mocks": [
+        "mock auth encrypt/decrypt/sign helpers",
+        "fake encrypted Nostr client subscribe/publish hooks"
+      ],
+      "data_requirements": [
+        "Stable request id, requester pubkey, service pubkey, and terminal result envelope."
+      ],
+      "determinism_notes": [
+        "Completion is driven directly by injected handlers; no polling loop is involved."
+      ],
+      "status": "implemented",
+      "failure_reason": null
+    },
+    {
+      "test_id": "TPG-T-015",
+      "ac_ids": ["TPG-AC-012"],
+      "title": "One authenticated browser session keeps public and encrypted journeys on separate relay sets",
+      "type": "e2e",
+      "existing_or_new": "new",
+      "target_path": "web/tests/e2e/mixed-transport-session.spec.js",
+      "description": "Add a dual-transport Playwright proof that, within one authenticated browser session, a representative public service/deployment action and a representative encrypted notification action both complete successfully while staying on their respective relay sets end to end.",
+      "preconditions": [
+        "System discovery advertises both public browser relays and encrypted request relays.",
+        "The shared browser auth harness supports both signer-first public requests and encrypted NIP-44 operations."
+      ],
+      "steps": [
+        "In one browser session, execute a representative public service/deployment action.",
+        "Without resetting the session, execute a representative encrypted notifications action.",
+        "Inspect public and encrypted transport traces together and verify neither flow depends on the wrong relay set or REST compatibility overrides."
+      ],
+      "expected_result": "The public journey uses only public relay transport, the sensitive journey uses only encrypted request/result transport, both complete in one session, and the shared discovery contract does not blur the transport boundary.",
+      "fixtures": [
+        "dual-capability system-info fixture",
+        "public deployment state fixture",
+        "encrypted notifications state fixture"
+      ],
+      "mocks": [
+        "combined public relay harness",
+        "combined encrypted relay harness",
+        "shared browser auth harness"
+      ],
+      "data_requirements": [
+        "Stable request ids and relay URLs for both relay sets.",
+        "Deterministic public and encrypted domain payloads for the selected representative flows."
+      ],
+      "determinism_notes": [
+        "Use the existing local public and encrypted harness patterns; do not rely on `waitForTimeout` or live relay timing to prove separation."
+      ],
+      "status": "not_implemented",
+      "failure_reason": null
+    }
+  ],
+  "coverage_summary": {
+    "criteria_total": 12,
+    "criteria_with_tests": 12,
+    "known_gaps": [
+      "TPG-T-002: the current public service/deployment smoke proves public request kinds and read-model progression, but it does not yet record accepted OK responses explicitly.",
+      "TPG-T-005: current unit coverage still needs an explicit signer-without-browser-visible-NIP-44 scenario to fully satisfy the fail-closed half of AC4.",
+      "TPG-T-008: dashboard Recent Spend still depends on REST `payments/history` in current implementation, so encrypted-only browser proof is missing for that surface.",
+      "TPG-T-009: EventSource exclusion has no dedicated contract test yet; current SSE unit coverage is legacy evidence only.",
+      "TPG-T-012: settings relay visibility still expects raw `systemInfo.nostr.relays`; approved NIP-51 kind 30002 sourcing is not yet covered or implemented.",
+      "TPG-T-015: there is no single-session mixed public-plus-encrypted browser proof yet."
+    ]
+  },
+  "implementation_notes": [
+    "Low implementation effort: TPG-T-001, TPG-T-003, TPG-T-004, TPG-T-005, TPG-T-006, TPG-T-007, TPG-T-010, TPG-T-013, and TPG-T-014 already map cleanly to existing deterministic test assets.",
+    "Medium effort: TPG-T-002 requires extending the existing public relay harness to emit and record accepted OK responses without weakening event-driven semantics.",
+    "Medium effort: TPG-T-005 requires adding a signer/auth mock that lacks browser-visible NIP-44 support so the fail-closed path is proven without relying only on missing-discovery cases.",
+    "Medium effort: TPG-T-008 requires replacing dashboard REST payment mocks with an encrypted spend-summary harness or equivalent encrypted store path; current drift is tracked by HITL-TRANSPORT_POLICY_GOVERNANCE-002 and follow-up issue bahia-6t0c.",
+    "Medium effort: TPG-T-009 can likely be implemented as a static dependency/contract test over approved browser modules rather than a browser-run test.",
+    "High effort: TPG-T-012 depends on implementing or surfacing a service-authored NIP-51 kind 30002 relay-list path for the settings UI, consistent with HITL-SYSTEM_DISCOVERY_RELAY_BOOTSTRAP-004.",
+    "High effort: TPG-T-015 needs a combined Playwright harness that preserves one authenticated session while tracing both public and encrypted relay traffic separately.",
+    "TPG-T-011 is manual today because it checks classification across docs and approval evidence; if 311xx regressions recur, replace it with a doc-lint or proof-lint job."
+  ]
+}
