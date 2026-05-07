@@ -1,0 +1,153 @@
+{
+  "feature_id": "TRANSPORT_POLICY_GOVERNANCE",
+  "status": "needs_patch",
+  "threshold": 0.9,
+  "raw_confidence": 0.6717,
+  "confidence": 0.6717,
+  "threshold_met": false,
+  "weights_total": 1.0,
+  "components": {
+    "acceptance_criteria_coverage": {
+      "score": 1.0,
+      "weight": 0.3,
+      "weighted_score": 0.3,
+      "evidence": [
+        "acceptance_criteria.json status is `approved` and all 12 criteria are approved ACs.",
+        "test_matrix.json coverage_summary reports `criteria_total=12` and `criteria_with_tests=12`.",
+        "All 12 must-level ACs have at least one linked test row, so the coverage formula is 12/12 = 1.0."
+      ]
+    },
+    "test_pass_rate": {
+      "score": 0.6667,
+      "weight": 0.25,
+      "weighted_score": 0.1667,
+      "evidence": [
+        "test_matrix.json contains 15 required tests total.",
+        "10 tests are marked `pass`: TPG-T-001, TPG-T-003, TPG-T-004, TPG-T-006, TPG-T-007, TPG-T-008, TPG-T-010, TPG-T-011, TPG-T-013, and TPG-T-014.",
+        "5 required tests remain `not_implemented`: TPG-T-002, TPG-T-005, TPG-T-009, TPG-T-012, and TPG-T-015.",
+        "Scored conservatively as 10 passing required tests out of 15 required tests because missing required executions are not treated as implied passes."
+      ]
+    },
+    "code_coverage": {
+      "score": 0.0,
+      "weight": 0.15,
+      "weighted_score": 0.0,
+      "evidence": [
+        "No coverage artifact is present in `pstf/features/TRANSPORT_POLICY_GOVERNANCE/`.",
+        "No CI or coverage report for touched modules was supplied alongside the verification artifacts.",
+        "Per the prompt rules, missing coverage evidence scores 0.0 unless explicitly accepted by human decision; no such acceptance exists in `hitl_decisions.md`."
+      ]
+    },
+    "edge_case_coverage": {
+      "score": 0.6,
+      "weight": 0.1,
+      "weighted_score": 0.06,
+      "evidence": [
+        "Covered edge paths include empty recent-spend state, partial worker failure, encrypted error handling, spoofed/unrelated/duplicate encrypted results, relay-close/decrypt-failure handling, and pre-acceptance vs post-acceptance fallback boundaries.",
+        "The dashboard payment patch also added a readiness-path regression for auth/system-info cold start in `web/tests/unit/encrypted-domain-stores.test.js` and REST-guarded e2e coverage in `dashboard-smoke.spec.js`.",
+        "Important edge categories are still missing: signer-without-browser-visible-NIP-44 support (TPG-T-005), EventSource exclusion contract proof (TPG-T-009), settings NIP-51 relay visibility (TPG-T-012), and mixed public+encrypted session separation (TPG-T-015)."
+      ]
+    },
+    "regression_safety": {
+      "score": 0.7,
+      "weight": 0.1,
+      "weighted_score": 0.07,
+      "evidence": [
+        "verification_report.md records passing deterministic regression evidence across unit, Playwright, and Go suites for the implemented subset.",
+        "The targeted payment-transport patch added regression coverage that explicitly fails if dashboard spend summary regresses to REST `payments/history`.",
+        "Regression safety is not higher because no persisted CI artifact or full-suite result is attached, and several required proof rows are still missing entirely."
+      ]
+    },
+    "defect_resolution": {
+      "score": 0.5,
+      "weight": 0.05,
+      "weighted_score": 0.025,
+      "evidence": [
+        "defects.json shows TPG-D-001 verified, but TPG-D-002 remains open with severity `major`.",
+        "HITL-TRANSPORT_POLICY_GOVERNANCE-005 explicitly classifies TPG-D-002 as `BLOCKER`.",
+        "Because an open major defect remains, defect resolution is materially incomplete and release approval is blocked."
+      ]
+    },
+    "human_alignment": {
+      "score": 1.0,
+      "weight": 0.05,
+      "weighted_score": 0.05,
+      "evidence": [
+        "Spec approval is present: HITL-TRANSPORT_POLICY_GOVERNANCE-004 = APPROVE_AS_IS.",
+        "Ambiguity and product-intent decisions are recorded in HITL-TRANSPORT_POLICY_GOVERNANCE-001 through 003.",
+        "Final review decisions are recorded: HITL-TRANSPORT_POLICY_GOVERNANCE-005 marks the remaining defect as BLOCKER and HITL-TRANSPORT_POLICY_GOVERNANCE-006 sets the release decision to NEEDS_WORK."
+      ]
+    }
+  },
+  "hard_gates": {
+    "feature_spec_exists": {
+      "passed": true,
+      "evidence": [
+        "`pstf/features/TRANSPORT_POLICY_GOVERNANCE/feature_spec.json` exists."
+      ]
+    },
+    "acceptance_criteria_exists": {
+      "passed": true,
+      "evidence": [
+        "`pstf/features/TRANSPORT_POLICY_GOVERNANCE/acceptance_criteria.json` exists and is marked `approved`."
+      ]
+    },
+    "test_matrix_exists": {
+      "passed": true,
+      "evidence": [
+        "`pstf/features/TRANSPORT_POLICY_GOVERNANCE/test_matrix.json` exists and is marked `ready`."
+      ]
+    },
+    "every_must_ac_has_test": {
+      "passed": true,
+      "evidence": [
+        "All 12 ACs are must-level ACs.",
+        "All 12 ACs have at least one linked test row in `test_matrix.json`."
+      ]
+    },
+    "verification_report_exists": {
+      "passed": true,
+      "evidence": [
+        "`pstf/features/TRANSPORT_POLICY_GOVERNANCE/verification_report.md` exists and includes executed commands and AC/test status tables."
+      ]
+    },
+    "no_open_critical_defects": {
+      "passed": true,
+      "evidence": [
+        "defects.json contains one open major defect and zero open critical defects."
+      ]
+    },
+    "hitl_spec_approval_exists": {
+      "passed": true,
+      "evidence": [
+        "HITL-TRANSPORT_POLICY_GOVERNANCE-004 records AC/spec approval as APPROVE_AS_IS."
+      ]
+    }
+  },
+  "hard_gate_failures": [],
+  "caps_applied": [
+    {
+      "cap": "open_major_defect",
+      "max_confidence": 0.84,
+      "trigger": "TPG-D-002 is open with severity `major` and is marked BLOCKER in HITL-TRANSPORT_POLICY_GOVERNANCE-005.",
+      "binding": false,
+      "effect": "Recorded because the open-major-defect cap applies, but the raw score 0.6717 is already below the cap."
+    }
+  ],
+  "blocking_findings": [
+    "TPG-D-002 remains open, severity `major`, and is explicitly classified as a BLOCKER by HITL-TRANSPORT_POLICY_GOVERNANCE-005.",
+    "TPG-AC-010 is still failing and TPG-T-012 is not implemented because settings relay visibility still uses raw discovery relays instead of a service-authored kind 30002 event.",
+    "Required proof rows TPG-T-002, TPG-T-005, TPG-T-009, and TPG-T-015 are still not implemented, so the verified subset does not cover the full feature boundary.",
+    "Final human release decision HITL-TRANSPORT_POLICY_GOVERNANCE-006 is NEEDS_WORK, so the feature is not eligible for approval status."
+  ],
+  "evidence_gaps": [
+    "No code coverage report for touched modules or the feature slice was provided, so code_coverage is scored 0.0.",
+    "No persisted CI artifact or full regression run artifact accompanies the verification report; only command/output summaries are recorded in markdown.",
+    "Five required tests are still unimplemented: TPG-T-002, TPG-T-005, TPG-T-009, TPG-T-012, and TPG-T-015.",
+    "There is no normalized executable-test manifest separating executed-vs-proposed tests beyond the matrix statuses, so test_pass_rate is conservatively estimated from required-test counts."
+  ],
+  "recommendation": {
+    "next_stage": "diagnose_patch",
+    "summary": "Do not advance to approval. Fix blocker defect TPG-D-002, implement the remaining required proof rows (TPG-T-002, TPG-T-005, TPG-T-009, TPG-T-012, TPG-T-015), then re-run verification and recompute confidence."
+  }
+}
