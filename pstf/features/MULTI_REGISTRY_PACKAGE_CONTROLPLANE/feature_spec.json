@@ -1,31 +1,34 @@
 {
   "feature_id": "MULTI_REGISTRY_PACKAGE_CONTROLPLANE",
   "title": "Nostr-first multi-registry package repository control-plane",
-  "status": "foundation_scaffold",
-  "scope_phase": "Item 1: package domain, config, projection repository, migration, and PSTF foundation only",
-  "description": "Bahia will manage package repositories and package artifact publication/promotion as signed Nostr-owned desired state, with backend adapters storing and serving bytes and PostgreSQL used only as a projection/cache for queries, idempotency, and recovery. This phase establishes the stable domain/config/repository foundation for later reactor, MCP, CLI, and backend adapter work.",
+  "status": "nostr_mcp_slice_ready",
+  "scope_phase": "Item 3: package Nostr reactor lifecycle, signer-first MCP surface, promotion/drift events, and app wiring; CLI remains deferred",
+  "description": "Bahia manages package repositories and package artifact publication/promotion as signed Nostr-owned desired state, with backend adapters storing/serving bytes and PostgreSQL used only as projection/cache for queries, idempotency, and recovery. Items 1/2 established foundations and backends; Item 3 wires package lifecycle events into the signer-first control plane and MCP surface without adding REST CRUD or CLI commands.",
   "in_scope": [
     "First-class package formats: npm, pypi, conan, deb, rpm, pub, go_modules, gradle",
     "First-class backend types: nexus, pulp, filesystem_mock",
     "Config-driven backend registration with validation and secret references instead of inline secret values",
     "Domain models for repositories, artifacts, publication/promotion state, policy decisions, and Nostr request intents",
     "PostgreSQL projection/cache interfaces and implementation for package repositories, artifacts, publications, and idempotent Nostr request intents",
-    "Additive migration for package projection/cache tables"
+    "Additive migration for package projection/cache tables",
+    "Canonical package Nostr request/status/result/projection kinds for repository, upload/publication, promotion, yank/deprecate, and drift lifecycle events",
+    "Controlplane reactor handlers for package lifecycle processing, policy-check status events, idempotent intent projection, replaceable package registries, and drift observations",
+    "Signer-first MCP package tools for repository apply/delete, upload, promote, yank/deprecate, drift detect, list, get, and status",
+    "Startup wiring for package service/projection/command publisher when packages.enabled=true"
   ],
   "out_of_scope_for_this_phase": [
-    "Control-plane reactor package request handlers",
-    "MCP package tools",
     "CLI package commands",
     "REST CRUD endpoints",
-    "Nexus/Pulp/filesystem_mock backend adapter implementations",
-    "Package byte upload or source_url fetching",
     "Format-specific index generation"
   ],
   "architectural_constraints": [
     "Nostr events remain the source of truth for desired package state; DB tables added here are projections/caches only.",
     "No polling, request/response, or REST CRUD path is introduced by this foundation.",
     "Backend credentials are represented only by secret references and must be resolved by a later secrets layer.",
-    "Projection upserts are stale-write-safe using last_event_created_at plus last_event_id ordering."
+    "Projection upserts are stale-write-safe using last_event_created_at plus last_event_id ordering.",
+    "Package mutation flows are signer-first: MCP publishes Nostr intents and returns receipts; reactor performs backend mutation after policy checks.",
+    "Promotion is modeled as first-class package publication/promotion projection state with pending, approved, running, succeeded, failed, rejected, and rolled_back vocabulary.",
+    "Drift checks are event-initiated observations comparing projected desired state, backend observation, and signed event correlation metadata."
   ],
   "design_tradeoffs": [
     {
@@ -47,6 +50,13 @@
     "internal/db/migrations/000023_package_controlplane.up.sql",
     "internal/domain/package_registry_test.go",
     "internal/config/package_controlplane_test.go",
-    "internal/repository/pg_package_controlplane_test.go"
+    "internal/repository/pg_package_controlplane_test.go",
+    "internal/controlplane/package_commands.go",
+    "internal/controlplane/package_handlers.go",
+    "internal/mcp/package_tools.go",
+    "internal/controlplane/package_command_publisher_test.go",
+    "internal/controlplane/package_handlers_test.go",
+    "internal/mcp/package_tools_test.go",
+    "internal/db/migrations/000024_package_lifecycle_events.up.sql"
   ]
 }

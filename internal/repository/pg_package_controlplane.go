@@ -228,7 +228,7 @@ func (r *PgPackageControlPlaneRepository) ListPublicationsByRepository(ctx conte
 	query := `SELECT ` + packagePublicationColumns + ` FROM package_publications_projection WHERE repository_id = $1`
 	args := []any{repositoryID}
 	if !includeTerminal {
-		query += ` AND status NOT IN ('promoted', 'rejected', 'rolled_back', 'failed')`
+		query += ` AND status NOT IN ('succeeded', 'promoted', 'rejected', 'rolled_back', 'failed')`
 	}
 	query += ` ORDER BY updated_at DESC`
 	rows, err := r.pool.Query(ctx, query, args...)

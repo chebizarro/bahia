@@ -2,9 +2,10 @@
 
 ## Phase
 
-Item 2 backend abstraction and package service/policy core.
+Item 3 signer-first Nostr control-plane and MCP surface wiring.
 
 Item 1 foundation was completed in commit `9bb6298`.
+Item 2 backend abstraction/service core was completed in commit `8e2194f`.
 
 ## Verification status
 
@@ -12,11 +13,27 @@ Verified locally on 2026-05-06.
 
 ## Evidence
 
-- `GOCACHE=/tmp/bahia-go-cache go test ./internal/backends/... ./internal/service` passed.
+- `GOCACHE=/tmp/bahia-go-cache go test ./internal/controlplane ./internal/mcp ./internal/adapters/nostr ./internal/relaysidecar ./internal/app ./internal/domain ./internal/repository` passed.
 - `GOCACHE=/tmp/bahia-go-cache go test ./...` passed.
-- Scope review: Item 2 changes are limited to `internal/backends/**`, `internal/service/package_registry*`, and PSTF updates. No package reactor handlers, MCP tools, CLI commands, API handlers, router entries, or REST CRUD endpoints were added.
+- Scope review: Item 3 adds package reactor handlers, package command publisher, MCP tools, package event kind admission/auditing, app wiring, lifecycle migration, and focused tests. It does not add CLI package commands or REST CRUD routes.
 
-## Item 2 behavior covered
+## Item 3 behavior covered
+
+- Added package lifecycle request/status/result/projection kinds for repository apply/delete, publication intent/upload, promotion, yank/deprecate, and drift detection.
+- Added control-plane package handlers that:
+  - run through the existing signer-first reactor dispatch path;
+  - use event ID deduplication plus durable `request_event_id` package intent idempotency;
+  - publish explicit `policy_check`, accepted/executing, replaceable registry, terminal result, and drift observation events;
+  - keep package repository/artifact/promotion tables as projections/caches derived from signed events and backend observations.
+- Added `PackageCommandPublisher` for MCP-originated signer-first package requests.
+- Added MCP package tools:
+  - signer-first mutations: repository apply/delete, upload, promote, yank/deprecate, drift detect;
+  - projection reads: list, get, status.
+- Wired package service/projection/command publisher into app startup when `packages.enabled=true`.
+- Extended inbound Nostr subscriber and relay-sidecar policy to admit/audit package request and projection kinds.
+- Extended promotion/publication status vocabulary with the required first-class statuses: pending, approved, running, succeeded, failed, rejected, rolled_back.
+
+## Prior Item 2 behavior retained
 
 - Added a pluggable package backend contract with capabilities advertising the requested formats: npm, pypi, conan, deb, rpm, pub, go_modules, and gradle.
 - Added backend packages:
@@ -30,7 +47,7 @@ Verified locally on 2026-05-06.
 
 ## Current limitations / deferred work
 
-This is not the full package control-plane capability. Reactor handlers, package command publishers, MCP tools, CLI commands, and Nostr workflow integration remain out of scope for Item 2.
+CLI package commands remain intentionally deferred to Item 4 per the user boundary.
 
 Nexus and Pulp adapters are meaningful skeletons behind the interface, but production deployment details remain HITL decisions:
 

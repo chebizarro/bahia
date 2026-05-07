@@ -27,22 +27,24 @@ import (
 // Server provides an MCP-compatible interface for Bahia operations.
 // It exposes deployment registry functionality as MCP tools.
 type Server struct {
-	registry         *service.RegistryService
-	llmRegistry      *service.LLMRegistryService
-	llmCommands      LLMCommandPublisher
-	logger           *zap.Logger
-	secretsRepo      repository.SecretRepository       // optional: for secret management tools
-	encryptor        *secrets.Encryptor                // optional: for secret encryption/decryption
-	policies         *service.PolicyService            // optional: for policy management tools
-	notificationRepo repository.NotificationRepository // optional: for notification tools
-	notificationDisp *notifications.Dispatcher         // optional: for notification testing
-	workers          repository.WorkerRepository       // optional: for worker management tools
-	logService       *adapterruntime.LogService        // optional: for deployment run log tools
-	payments         *service.PaymentService           // optional: for payment tools
-	sboms            repository.SBOMRepository         // optional: for SBOM tools
-	signatures       repository.ArtifactSignatureRepository
-	signVerifier     SignatureVerifier
-	toolProvisioning repository.ToolProvisioningRepository
+	registry          *service.RegistryService
+	llmRegistry       *service.LLMRegistryService
+	llmCommands       LLMCommandPublisher
+	packageCommands   PackageCommandPublisher
+	packageProjection repository.PackageControlPlaneRepository
+	logger            *zap.Logger
+	secretsRepo       repository.SecretRepository       // optional: for secret management tools
+	encryptor         *secrets.Encryptor                // optional: for secret encryption/decryption
+	policies          *service.PolicyService            // optional: for policy management tools
+	notificationRepo  repository.NotificationRepository // optional: for notification tools
+	notificationDisp  *notifications.Dispatcher         // optional: for notification testing
+	workers           repository.WorkerRepository       // optional: for worker management tools
+	logService        *adapterruntime.LogService        // optional: for deployment run log tools
+	payments          *service.PaymentService           // optional: for payment tools
+	sboms             repository.SBOMRepository         // optional: for SBOM tools
+	signatures        repository.ArtifactSignatureRepository
+	signVerifier      SignatureVerifier
+	toolProvisioning  repository.ToolProvisioningRepository
 }
 
 // Config holds MCP server configuration.
@@ -54,20 +56,22 @@ type Config struct {
 
 // ServerDeps holds optional dependencies for the MCP server.
 type ServerDeps struct {
-	SecretsRepo            repository.SecretRepository
-	Encryptor              *secrets.Encryptor
-	Policies               *service.PolicyService
-	NotificationRepo       repository.NotificationRepository
-	NotificationDispatcher *notifications.Dispatcher
-	Workers                repository.WorkerRepository
-	LogService             *adapterruntime.LogService
-	Payments               *service.PaymentService
-	SBOMs                  repository.SBOMRepository
-	Signatures             repository.ArtifactSignatureRepository
-	SignVerifier           SignatureVerifier
-	ToolProvisioning       repository.ToolProvisioningRepository
-	LLMRegistry            *service.LLMRegistryService
-	LLMCommandPublisher    LLMCommandPublisher
+	SecretsRepo             repository.SecretRepository
+	Encryptor               *secrets.Encryptor
+	Policies                *service.PolicyService
+	NotificationRepo        repository.NotificationRepository
+	NotificationDispatcher  *notifications.Dispatcher
+	Workers                 repository.WorkerRepository
+	LogService              *adapterruntime.LogService
+	Payments                *service.PaymentService
+	SBOMs                   repository.SBOMRepository
+	Signatures              repository.ArtifactSignatureRepository
+	SignVerifier            SignatureVerifier
+	ToolProvisioning        repository.ToolProvisioningRepository
+	LLMRegistry             *service.LLMRegistryService
+	LLMCommandPublisher     LLMCommandPublisher
+	PackageCommandPublisher PackageCommandPublisher
+	PackageProjection       repository.PackageControlPlaneRepository
 }
 
 // SignatureVerifier verifies signatures for an artifact.
@@ -82,6 +86,16 @@ type LLMCommandPublisher interface {
 	PublishLLMDeployRequest(ctx context.Context, cmd controlplane.LLMDeployCommand) (*controlplane.LLMCommandReceipt, error)
 	PublishLLMApprovalRequest(ctx context.Context, cmd controlplane.LLMApprovalCommand) (*controlplane.LLMCommandReceipt, error)
 	PublishLLMRollbackRequest(ctx context.Context, cmd controlplane.LLMRollbackCommand) (*controlplane.LLMCommandReceipt, error)
+}
+
+// PackageCommandPublisher emits canonical Nostr request events for signer-first package MCP tools.
+type PackageCommandPublisher interface {
+	PublishPackageRepositoryApplyRequest(ctx context.Context, cmd controlplane.PackageRepositoryApplyCommand) (*controlplane.PackageCommandReceipt, error)
+	PublishPackageRepositoryDeleteRequest(ctx context.Context, cmd controlplane.PackageRepositoryDeleteCommand) (*controlplane.PackageCommandReceipt, error)
+	PublishPackagePublishRequest(ctx context.Context, cmd controlplane.PackagePublishCommand) (*controlplane.PackageCommandReceipt, error)
+	PublishPackagePromotionRequest(ctx context.Context, cmd controlplane.PackagePromotionCommand) (*controlplane.PackageCommandReceipt, error)
+	PublishPackageYankRequest(ctx context.Context, cmd controlplane.PackageYankCommand) (*controlplane.PackageCommandReceipt, error)
+	PublishPackageDriftDetectRequest(ctx context.Context, cmd controlplane.PackageDriftDetectCommand) (*controlplane.PackageCommandReceipt, error)
 }
 
 // NewServer creates a new MCP server for Bahia.
@@ -102,22 +116,24 @@ func NewServerWithDeps(registry *service.RegistryService, logger *zap.Logger, se
 // This is the canonical constructor; other constructors delegate to this.
 func NewServerWithOptions(registry *service.RegistryService, logger *zap.Logger, deps ServerDeps) *Server {
 	return &Server{
-		registry:         registry,
-		llmRegistry:      deps.LLMRegistry,
-		llmCommands:      deps.LLMCommandPublisher,
-		logger:           logger,
-		secretsRepo:      deps.SecretsRepo,
-		encryptor:        deps.Encryptor,
-		policies:         deps.Policies,
-		notificationRepo: deps.NotificationRepo,
-		notificationDisp: deps.NotificationDispatcher,
-		workers:          deps.Workers,
-		logService:       deps.LogService,
-		payments:         deps.Payments,
-		sboms:            deps.SBOMs,
-		signatures:       deps.Signatures,
-		signVerifier:     deps.SignVerifier,
-		toolProvisioning: deps.ToolProvisioning,
+		registry:          registry,
+		llmRegistry:       deps.LLMRegistry,
+		llmCommands:       deps.LLMCommandPublisher,
+		packageCommands:   deps.PackageCommandPublisher,
+		packageProjection: deps.PackageProjection,
+		logger:            logger,
+		secretsRepo:       deps.SecretsRepo,
+		encryptor:         deps.Encryptor,
+		policies:          deps.Policies,
+		notificationRepo:  deps.NotificationRepo,
+		notificationDisp:  deps.NotificationDispatcher,
+		workers:           deps.Workers,
+		logService:        deps.LogService,
+		payments:          deps.Payments,
+		sboms:             deps.SBOMs,
+		signatures:        deps.Signatures,
+		signVerifier:      deps.SignVerifier,
+		toolProvisioning:  deps.ToolProvisioning,
 	}
 }
 
@@ -144,7 +160,7 @@ type Content struct {
 
 // GetTools returns the list of available MCP tools.
 func (s *Server) GetTools() []Tool {
-	return []Tool{
+	tools := []Tool{
 		// Service operations
 		{
 			Name:        "bahia_list_services",
@@ -1642,6 +1658,7 @@ func (s *Server) GetTools() []Tool {
 			},
 		},
 	}
+	return append(tools, packageToolDefinitions()...)
 }
 
 // CallTool handles an MCP tool call.
@@ -1819,6 +1836,25 @@ func (s *Server) CallTool(ctx context.Context, name string, arguments map[string
 		return s.handleToolDenylistList(ctx, arguments)
 	case "bahia_tool_profile_get":
 		return s.handleToolProfileGet(ctx, arguments)
+	// Package control-plane operations
+	case "bahia_package_repository_apply":
+		return s.handlePackageRepositoryApply(ctx, arguments)
+	case "bahia_package_repository_delete":
+		return s.handlePackageRepositoryDelete(ctx, arguments)
+	case "bahia_package_upload":
+		return s.handlePackageUpload(ctx, arguments)
+	case "bahia_package_promote":
+		return s.handlePackagePromote(ctx, arguments)
+	case "bahia_package_yank":
+		return s.handlePackageYank(ctx, arguments)
+	case "bahia_package_drift_detect":
+		return s.handlePackageDriftDetect(ctx, arguments)
+	case "bahia_package_list":
+		return s.handlePackageList(ctx, arguments)
+	case "bahia_package_get":
+		return s.handlePackageGet(ctx, arguments)
+	case "bahia_package_status":
+		return s.handlePackageStatus(ctx, arguments)
 	// Notification channel operations
 	case "bahia_list_notification_channels":
 		return s.handleListNotificationChannels(ctx, arguments)

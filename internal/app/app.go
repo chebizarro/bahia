@@ -27,6 +27,7 @@ import (
 	"github.com/openagentsinc/bahia/internal/api/handlers"
 	"github.com/openagentsinc/bahia/internal/api/router"
 	"github.com/openagentsinc/bahia/internal/auth"
+	packagefactory "github.com/openagentsinc/bahia/internal/backends/factory"
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/controlplane"
 	"github.com/openagentsinc/bahia/internal/db"
@@ -294,6 +295,22 @@ func New(cfg *config.Config) (*App, error) {
 	// Policy service.
 	policySvc := service.NewPolicyService(policyRepo, sigRepo, sbomRepo, logger)
 
+	// Package repository control plane.
+	var packageProjection repository.PackageControlPlaneRepository
+	var packageRegistrySvc *service.PackageRegistryService
+	if cfg.Packages.Enabled {
+		packageProjection = repository.NewPgPackageControlPlaneRepository(pool)
+		packageBackends, err := packagefactory.BuildRegistry(cfg.Packages)
+		if err != nil {
+			return nil, fmt.Errorf("building package backends: %w", err)
+		}
+		packageRegistrySvc, err = service.NewPackageRegistryService(cfg.Packages, packageBackends, packageProjection, nil, logger)
+		if err != nil {
+			return nil, fmt.Errorf("creating package registry service: %w", err)
+		}
+		logger.Info("package control plane enabled", zap.Int("backends", len(cfg.Packages.Backends)))
+	}
+
 	// Nostr read-model projector. This owns canonical 3196x projections and
 	// the 310xx audit/activity feed for relay consumers; the legacy Publisher is
 	// retained for relay pool lifecycle compatibility.
@@ -427,14 +444,20 @@ func New(cfg *config.Config) (*App, error) {
 	if llmRegistry != nil && controlPlaneSigner != nil && controlPlanePool != nil && len(controlPlaneRelays) > 0 {
 		llmCommandPublisher = controlplane.NewLLMCommandPublisher(controlPlanePool, controlPlaneSigner)
 	}
+	var packageCommandPublisher mcp.PackageCommandPublisher
+	if packageRegistrySvc != nil && controlPlaneSigner != nil && controlPlanePool != nil && len(controlPlaneRelays) > 0 {
+		packageCommandPublisher = controlplane.NewPackageCommandPublisher(controlPlanePool, controlPlaneSigner)
+	}
 	mcpServer := mcp.NewServerWithOptions(registry, logger, mcp.ServerDeps{
-		LogService:          runLogService,
-		Payments:            paymentSvc,
-		SBOMs:               sbomRepo,
-		Signatures:          sigRepo,
-		SignVerifier:        signVerifier,
-		LLMRegistry:         llmRegistry,
-		LLMCommandPublisher: llmCommandPublisher,
+		LogService:              runLogService,
+		Payments:                paymentSvc,
+		SBOMs:                   sbomRepo,
+		Signatures:              sigRepo,
+		SignVerifier:            signVerifier,
+		LLMRegistry:             llmRegistry,
+		LLMCommandPublisher:     llmCommandPublisher,
+		PackageCommandPublisher: packageCommandPublisher,
+		PackageProjection:       packageProjection,
 	})
 	mcpHandler := handlers.NewMCPHandler(mcpServer, logger)
 	logger.Info("mcp server initialized")
@@ -507,6 +530,13 @@ func New(cfg *config.Config) (*App, error) {
 		}
 		if llmRegistry != nil {
 			reactorOpts = append(reactorOpts, controlplane.WithLLMRegistry(llmRegistry))
+		}
+		if packageRegistrySvc != nil {
+			reactorOpts = append(reactorOpts,
+				controlplane.WithPackageRegistryService(packageRegistrySvc),
+				controlplane.WithPackageProjectionRepository(packageProjection),
+				controlplane.WithNostrEventRepository(nostrEventRepo),
+			)
 		}
 		reactor := controlplane.NewReactor(reactorConfig, registry, controlPlanePool, controlPlaneSigner, logger, reactorOpts...)
 		bgManager.Register(&controlplaneRunner{reactor: reactor})

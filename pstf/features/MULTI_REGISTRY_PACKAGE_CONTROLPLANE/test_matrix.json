@@ -1,103 +1,218 @@
 {
   "feature_id": "MULTI_REGISTRY_PACKAGE_CONTROLPLANE",
-  "status": "backend_service_slice_ready",
+  "status": "nostr_mcp_slice_ready",
   "tests": [
     {
       "test_id": "MRPC-T-001",
-      "ac_ids": ["MRPC-AC-001"],
+      "ac_ids": [
+        "MRPC-AC-001"
+      ],
       "title": "Package formats are first-class values",
       "type": "unit",
       "target_path": "internal/domain/package_registry_test.go",
       "status": "implemented",
-      "determinism_notes": ["Pure domain helper assertions; no timers or network."]
+      "determinism_notes": [
+        "Pure domain helper assertions; no timers or network."
+      ]
     },
     {
       "test_id": "MRPC-T-002",
-      "ac_ids": ["MRPC-AC-002"],
+      "ac_ids": [
+        "MRPC-AC-002"
+      ],
       "title": "Package backend config registration and validation",
       "type": "unit",
       "target_path": "internal/config/package_controlplane_test.go",
       "status": "implemented",
-      "determinism_notes": ["Pure config validation; no secret values resolved."]
+      "determinism_notes": [
+        "Pure config validation; no secret values resolved."
+      ]
     },
     {
       "test_id": "MRPC-T-003",
-      "ac_ids": ["MRPC-AC-003", "MRPC-AC-004"],
+      "ac_ids": [
+        "MRPC-AC-003",
+        "MRPC-AC-004"
+      ],
       "title": "Package PG projection repository upserts and scans foundation state",
       "type": "unit",
       "target_path": "internal/repository/pg_package_controlplane_test.go",
       "status": "implemented",
-      "determinism_notes": ["Uses pgxmock; no live PostgreSQL, relay, sleeps, or polling."]
+      "determinism_notes": [
+        "Uses pgxmock; no live PostgreSQL, relay, sleeps, or polling."
+      ]
     },
     {
       "test_id": "MRPC-T-004",
-      "ac_ids": ["MRPC-AC-005"],
+      "ac_ids": [
+        "MRPC-AC-005"
+      ],
       "title": "Manual Item 1 scope inspection",
       "type": "review",
       "target_path": "git diff / file list",
       "status": "implemented",
-      "determinism_notes": ["Verified Item 1 did not add package REST routes, tools, commands, or backend adapters."]
+      "determinism_notes": [
+        "Verified Item 1 did not add package REST routes, tools, commands, or backend adapters."
+      ]
     },
     {
       "test_id": "MRPC-T-005",
-      "ac_ids": ["MRPC-AC-006", "MRPC-AC-007"],
+      "ac_ids": [
+        "MRPC-AC-006",
+        "MRPC-AC-007"
+      ],
       "title": "Filesystem mock backend contract lifecycle",
       "type": "unit",
       "target_path": "internal/backends/filesystem_mock/filesystem_mock_test.go",
       "status": "implemented",
-      "determinism_notes": ["Uses t.TempDir and in-process streams; no relay, live network, or sleep-based event waiting."]
+      "determinism_notes": [
+        "Uses t.TempDir and in-process streams; no relay, live network, or sleep-based event waiting."
+      ]
     },
     {
       "test_id": "MRPC-T-006",
-      "ac_ids": ["MRPC-AC-006", "MRPC-AC-008"],
+      "ac_ids": [
+        "MRPC-AC-006",
+        "MRPC-AC-008"
+      ],
       "title": "Nexus adapter HTTP skeleton behavior",
       "type": "unit",
       "target_path": "internal/backends/nexus/nexus_test.go",
       "status": "implemented",
-      "determinism_notes": ["Uses httptest.Server to assert request sequence/path construction."]
+      "determinism_notes": [
+        "Uses httptest.Server to assert request sequence/path construction."
+      ]
     },
     {
       "test_id": "MRPC-T-007",
-      "ac_ids": ["MRPC-AC-006", "MRPC-AC-008"],
+      "ac_ids": [
+        "MRPC-AC-006",
+        "MRPC-AC-008"
+      ],
       "title": "Pulp adapter HTTP skeleton behavior and task handling",
       "type": "unit",
       "target_path": "internal/backends/pulp/pulp_test.go",
       "status": "implemented",
-      "determinism_notes": ["Uses httptest.Server and bounded context/timer task polling internal to the backend adapter only."]
+      "determinism_notes": [
+        "Uses httptest.Server and bounded context/timer task polling internal to the backend adapter only."
+      ]
     },
     {
       "test_id": "MRPC-T-008",
-      "ac_ids": ["MRPC-AC-002", "MRPC-AC-006"],
+      "ac_ids": [
+        "MRPC-AC-002",
+        "MRPC-AC-006"
+      ],
       "title": "Package backend factory rejects unwired secret refs explicitly",
       "type": "unit",
       "target_path": "internal/backends/factory/factory_test.go",
       "status": "implemented",
-      "determinism_notes": ["Pure factory validation; no secrets are resolved in Item 2."]
+      "determinism_notes": [
+        "Pure factory validation; no secrets are resolved in Item 2."
+      ]
     },
     {
       "test_id": "MRPC-T-009",
-      "ac_ids": ["MRPC-AC-006", "MRPC-AC-009"],
+      "ac_ids": [
+        "MRPC-AC-006",
+        "MRPC-AC-009"
+      ],
       "title": "Package service policy, publish, promote, yank, and drift helpers",
       "type": "unit",
       "target_path": "internal/service/package_registry_test.go",
       "status": "implemented",
-      "determinism_notes": ["Uses filesystem_mock plus file:// sources explicitly enabled for tests; no REST CRUD or Nostr event handling."]
+      "determinism_notes": [
+        "Uses filesystem_mock plus file:// sources explicitly enabled for tests; no REST CRUD or Nostr event handling."
+      ]
     },
     {
       "test_id": "MRPC-T-010",
-      "ac_ids": ["MRPC-AC-010"],
+      "ac_ids": [
+        "MRPC-AC-010"
+      ],
       "title": "Manual Item 2 scope inspection",
       "type": "review",
       "target_path": "git diff / file list",
       "status": "implemented",
-      "determinism_notes": ["Verified changes are limited to internal/backends, internal/service package service/tests, and PSTF updates."]
+      "determinism_notes": [
+        "Verified changes are limited to internal/backends, internal/service package service/tests, and PSTF updates."
+      ]
+    },
+    {
+      "test_id": "MRPC-T-011",
+      "ac_ids": [
+        "MRPC-AC-011",
+        "MRPC-AC-013"
+      ],
+      "title": "Package command publisher emits signed canonical upload requests",
+      "type": "unit",
+      "target_path": "internal/controlplane/package_command_publisher_test.go",
+      "status": "implemented",
+      "determinism_notes": [
+        "Uses in-memory capture publisher and local signer; asserts canonical tags/content/signature with no relay polling."
+      ]
+    },
+    {
+      "test_id": "MRPC-T-012",
+      "ac_ids": [
+        "MRPC-AC-011",
+        "MRPC-AC-012",
+        "MRPC-AC-013"
+      ],
+      "title": "Package reactor repository apply lifecycle and idempotent terminal replay",
+      "type": "unit",
+      "target_path": "internal/controlplane/package_handlers_test.go",
+      "status": "implemented",
+      "determinism_notes": [
+        "Calls handlers synchronously with filesystem_mock and in-memory projection; no sleeps or relay waits."
+      ]
+    },
+    {
+      "test_id": "MRPC-T-013",
+      "ac_ids": [
+        "MRPC-AC-014"
+      ],
+      "title": "Package MCP tools publish signer-first requests",
+      "type": "unit",
+      "target_path": "internal/mcp/package_tools_test.go",
+      "status": "implemented",
+      "determinism_notes": [
+        "Uses fake command publisher to prove mutating MCP tools submit Nostr commands instead of touching package service/backend directly."
+      ]
+    },
+    {
+      "test_id": "MRPC-T-014",
+      "ac_ids": [
+        "MRPC-AC-011",
+        "MRPC-AC-015"
+      ],
+      "title": "Package inbound/audit and relay-sidecar kind admission",
+      "type": "unit",
+      "target_path": "internal/adapters/nostr/subscriber_test.go; internal/relaysidecar/policy.go package tests",
+      "status": "covered_by_existing_package_tests",
+      "determinism_notes": [
+        "Targeted package go test covers subscriber/sidecar packages after adding package request/projection kind ranges."
+      ]
+    },
+    {
+      "test_id": "MRPC-T-015",
+      "ac_ids": [
+        "MRPC-AC-014"
+      ],
+      "title": "Application wiring exposes package service/projection/publisher when packages are enabled",
+      "type": "compile_smoke",
+      "target_path": "internal/app/app.go",
+      "status": "implemented",
+      "determinism_notes": [
+        "Targeted internal/app go test compiles startup wiring without enabling REST CRUD routes."
+      ]
     }
   ],
   "coverage_summary": {
-    "criteria_total": 10,
-    "criteria_with_tests_or_review": 10,
+    "criteria_total": 15,
+    "criteria_with_tests_or_review": 15,
     "known_gaps": [
-      "Runtime Nostr reactor, MCP, and CLI criteria are intentionally deferred to later plan items.",
+      "CLI package commands are intentionally deferred to Item 4.",
       "Nexus/Pulp production auth secret resolution and exact API/version variants remain HITL follow-up decisions."
     ]
   }

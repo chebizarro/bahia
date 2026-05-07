@@ -1,6 +1,6 @@
 {
   "feature_id": "MULTI_REGISTRY_PACKAGE_CONTROLPLANE",
-  "status": "backend_service_slice_ready",
+  "status": "nostr_mcp_slice_ready",
   "criteria": [
     {
       "ac_id": "MRPC-AC-001",
@@ -91,10 +91,56 @@
       "assertion": "The backend/service phase does not add package reactor handlers, MCP tools, CLI commands, or HTTP CRUD routes.",
       "expected_result": "Changes remain limited to internal/backends, internal/service package service/tests, and PSTF updates.",
       "status": "covered_item_2"
+    },
+    {
+      "ac_id": "MRPC-AC-011",
+      "title": "Package lifecycle mutations enter through signed Nostr request events",
+      "type": "control_plane",
+      "priority": "must",
+      "assertion": "Repository apply/delete, artifact publication intent, promotion, yank/deprecate, and drift detection are modeled as canonical package Nostr request kinds handled by the controlplane reactor.",
+      "expected_result": "The reactor subscribes to package request kinds, verifies/dedupes through existing event flow, publishes package status/result events, and records replaceable package repository/artifact/promotion projections.",
+      "status": "covered_item_3"
+    },
+    {
+      "ac_id": "MRPC-AC-012",
+      "title": "Package processing is idempotent and projection-backed without making DB authoritative",
+      "type": "architecture",
+      "priority": "must",
+      "assertion": "Package handlers use request_event_id intent rows as durable idempotency/recovery caches while signed Nostr events remain desired-state authority.",
+      "expected_result": "Duplicate terminal package request IDs replay cached terminal results instead of re-executing backend mutation; non-terminal requests report already_processing.",
+      "status": "covered_item_3"
+    },
+    {
+      "ac_id": "MRPC-AC-013",
+      "title": "Policy checks emit explicit package lifecycle events before upload and promotion",
+      "type": "event_contract",
+      "priority": "must",
+      "assertion": "Upload and promotion handlers publish package status events for policy_check before backend mutation and terminal package result events for success/rejection/failure.",
+      "expected_result": "Policy approval/rejection is visible in kind 6991/7991 events and package publication/promotion projections carry policy decision/status fields.",
+      "status": "covered_item_3"
+    },
+    {
+      "ac_id": "MRPC-AC-014",
+      "title": "Package MCP mutations are signer-first and reads use projections",
+      "type": "mcp_surface",
+      "priority": "must",
+      "assertion": "MCP package upload/promote/yank/repository/drift tools publish signed Nostr request events rather than calling package service/backends directly, while list/get/status tools read projection caches.",
+      "expected_result": "Mutating package MCP tools return submitted receipts with request/status/result/projection kind metadata; missing publisher/projection dependencies fail clearly.",
+      "status": "covered_item_3"
+    },
+    {
+      "ac_id": "MRPC-AC-015",
+      "title": "Drift detection compares desired projection and backend observations and emits drift events",
+      "type": "observability",
+      "priority": "must",
+      "assertion": "A package drift request compares projected repository/artifact desired state with backend-observed state and emits a package drift event containing observations and drift status.",
+      "expected_result": "Kind 7992 drift events include repository correlation, observations, and projected last_event_id context for signed Nostr package state.",
+      "status": "covered_item_3"
     }
   ],
   "coverage_notes": [
-    "Item 2 covers backend and service core only. Later feature phases must add Nostr reactor, MCP, and CLI acceptance criteria before the full capability can be marked complete.",
-    "Nexus/Pulp adapters are meaningful skeletons using isolated HTTP flows; production auth secret resolution and exact deployment API variants remain HITL decisions."
+    "Items 1 and 2 cover package foundation/backend/service core; Item 3 adds signer-first Nostr reactor and MCP surface wiring.",
+    "CLI package commands remain intentionally deferred to Item 4 per user boundary.",
+    "Nexus/Pulp production auth secret resolution and exact deployment API variants remain HITL decisions."
   ]
 }

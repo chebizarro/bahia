@@ -88,6 +88,9 @@ type PackagePublicationStatus string
 
 const (
 	PackagePublicationStatusPending    PackagePublicationStatus = "pending"
+	PackagePublicationStatusApproved   PackagePublicationStatus = "approved"
+	PackagePublicationStatusRunning    PackagePublicationStatus = "running"
+	PackagePublicationStatusSucceeded  PackagePublicationStatus = "succeeded"
 	PackagePublicationStatusPublished  PackagePublicationStatus = "published"
 	PackagePublicationStatusPromoting  PackagePublicationStatus = "promoting"
 	PackagePublicationStatusPromoted   PackagePublicationStatus = "promoted"
@@ -115,6 +118,9 @@ const (
 	PackageOperationArtifactPublish  PackageOperation = "artifact_publish"
 	PackageOperationArtifactDelete   PackageOperation = "artifact_delete"
 	PackageOperationPromote          PackageOperation = "promote"
+	PackageOperationYank             PackageOperation = "yank"
+	PackageOperationDeprecate        PackageOperation = "deprecate"
+	PackageOperationDriftDetect      PackageOperation = "drift_detect"
 )
 
 // PackageIntentStatus is durable request-event processing state used for idempotent replay/recovery.

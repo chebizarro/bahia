@@ -28,32 +28,38 @@ import (
 // The 311xx series in internal/adapters/nostr/publisher.go is deprecated.
 const (
 	// Request kinds (5961-5975)
-	KindDeployRequest         = 5961 // Request to deploy a service
-	KindRollbackRequest       = 5962 // Request to rollback a service
-	KindServiceAction         = 5963 // Lifecycle action (scale, restart, stop)
-	KindServiceCreate         = 5964 // Create a new service
-	KindEnvironmentCreate     = 5965 // Create a new environment
-	KindDeploymentApproval    = 5966 // Approve or reject a deployment
-	KindObservationSubmit     = 5967 // Submit runtime observation
-	KindDriftRemediate        = 5968 // Request drift remediation
-	KindLLMRouteCreate        = 5971 // Create an LLM route
-	KindLLMReleaseRegister    = 5972 // Register an LLM release
-	KindLLMDeployRequest      = 5973 // Request LLM route deployment
-	KindLLMDeploymentApproval = 5974 // Approve or reject an LLM deployment
-	KindLLMRollbackRequest    = 5975 // Request LLM route rollback
-	KindToolProvisionRequest  = 5976 // Agent → Bahia
-	KindToolApprovalRequest   = 5977 // Bahia → Operator
-	KindAdoptionScanRequest   = 5978 // Request adoption scan previews
-	KindAdoptionImportRequest = 5979 // Request adoption import
-	KindServiceUpdate         = 5981 // Update a service registry entry
-	KindServiceDelete         = 5982 // Delete a service registry entry
-	KindEnvironmentUpdate     = 5983 // Update an environment registry entry
-	KindEnvironmentDelete     = 5984 // Delete an environment registry entry
-	KindArtifactRegister      = 5985 // Register an artifact
-	KindPolicyCreate          = 5986 // Create a deployment policy
-	KindPolicyUpdate          = 5987 // Update a deployment policy
-	KindPolicyDelete          = 5988 // Delete a deployment policy
-	KindPolicyEvaluate        = 5989 // Evaluate deployment policies
+	KindDeployRequest           = 5961 // Request to deploy a service
+	KindRollbackRequest         = 5962 // Request to rollback a service
+	KindServiceAction           = 5963 // Lifecycle action (scale, restart, stop)
+	KindServiceCreate           = 5964 // Create a new service
+	KindEnvironmentCreate       = 5965 // Create a new environment
+	KindDeploymentApproval      = 5966 // Approve or reject a deployment
+	KindObservationSubmit       = 5967 // Submit runtime observation
+	KindDriftRemediate          = 5968 // Request drift remediation
+	KindLLMRouteCreate          = 5971 // Create an LLM route
+	KindLLMReleaseRegister      = 5972 // Register an LLM release
+	KindLLMDeployRequest        = 5973 // Request LLM route deployment
+	KindLLMDeploymentApproval   = 5974 // Approve or reject an LLM deployment
+	KindLLMRollbackRequest      = 5975 // Request LLM route rollback
+	KindToolProvisionRequest    = 5976 // Agent → Bahia
+	KindToolApprovalRequest     = 5977 // Bahia → Operator
+	KindAdoptionScanRequest     = 5978 // Request adoption scan previews
+	KindAdoptionImportRequest   = 5979 // Request adoption import
+	KindServiceUpdate           = 5981 // Update a service registry entry
+	KindServiceDelete           = 5982 // Delete a service registry entry
+	KindEnvironmentUpdate       = 5983 // Update an environment registry entry
+	KindEnvironmentDelete       = 5984 // Delete an environment registry entry
+	KindArtifactRegister        = 5985 // Register an artifact
+	KindPolicyCreate            = 5986 // Create a deployment policy
+	KindPolicyUpdate            = 5987 // Update a deployment policy
+	KindPolicyDelete            = 5988 // Delete a deployment policy
+	KindPolicyEvaluate          = 5989 // Evaluate deployment policies
+	KindPackageRepositoryApply  = 5991 // Create/update a package repository
+	KindPackageRepositoryDelete = 5992 // Delete a package repository
+	KindPackagePublishIntent    = 5993 // Request package artifact publication/upload from source_url
+	KindPackagePromotionRequest = 5994 // Request package promotion to a target repository/channel
+	KindPackageYankRequest      = 5995 // Yank/deprecate a package artifact
+	KindPackageDriftDetect      = 5996 // Observe package backend drift
 
 	// Status kinds (6961-6978)
 	KindDeploymentStatus    = 6961 // Deployment progress updates
@@ -62,6 +68,7 @@ const (
 	KindLLMDeploymentStatus = 6973 // LLM deployment/rollback progress updates
 	KindToolProvisionStatus = 6976 // Bahia → Agent (progress)
 	KindAdoptionStatus      = 6978 // Adoption scan/import progress updates
+	KindPackageStatus       = 6991 // Package lifecycle progress/policy events
 
 	// Result kinds (7961-7979)
 	KindDeploymentResult         = 7961 // Final deployment result
@@ -77,18 +84,23 @@ const (
 	KindToolApprovalResponse     = 7977 // Operator → Bahia
 	KindAdoptionScanResult       = 7978 // Adoption scan result
 	KindAdoptionImportResult     = 7979 // Adoption import result
+	KindPackageResult            = 7991 // Package lifecycle terminal result
+	KindPackageDriftEvent        = 7992 // Package drift observation result
 
 	// Replaceable registry kinds (3196x series, d-tag indexed)
-	KindServiceState             = 31961 // Replaceable service state (d=service:env)
-	KindServiceRegistry          = 31962 // Replaceable service registry entry (d=service_id)
-	KindEnvironmentRegistry      = 31963 // Replaceable environment registry entry (d=env_id)
-	KindLLMRouteRegistry         = 31964 // Replaceable LLM route registry entry (d=route_id)
-	KindLLMRouteState            = 31965 // Replaceable LLM route state (d=route:env)
-	KindArtifactRegistry         = 31966 // Replaceable artifact registry entry (d=artifact_id)
-	KindDeploymentIntentRegistry = 31967 // Replaceable deployment intent entry (d=intent_id)
-	KindDeploymentRunRegistry    = 31968 // Replaceable deployment run entry (d=run_id)
-	KindBuildRegistry            = 31969 // Replaceable build registry entry (d=build_id)
-	KindPolicyRegistry           = 31970 // Replaceable policy registry entry (d=policy_id)
+	KindServiceState              = 31961 // Replaceable service state (d=service:env)
+	KindServiceRegistry           = 31962 // Replaceable service registry entry (d=service_id)
+	KindEnvironmentRegistry       = 31963 // Replaceable environment registry entry (d=env_id)
+	KindLLMRouteRegistry          = 31964 // Replaceable LLM route registry entry (d=route_id)
+	KindLLMRouteState             = 31965 // Replaceable LLM route state (d=route:env)
+	KindArtifactRegistry          = 31966 // Replaceable artifact registry entry (d=artifact_id)
+	KindDeploymentIntentRegistry  = 31967 // Replaceable deployment intent entry (d=intent_id)
+	KindDeploymentRunRegistry     = 31968 // Replaceable deployment run entry (d=run_id)
+	KindBuildRegistry             = 31969 // Replaceable build registry entry (d=build_id)
+	KindPolicyRegistry            = 31970 // Replaceable policy registry entry (d=policy_id)
+	KindPackageRepositoryRegistry = 31971 // Replaceable package repository state (d=repository_id)
+	KindPackageArtifactRegistry   = 31972 // Replaceable package artifact state (d=artifact_id)
+	KindPackagePromotionRegistry  = 31973 // Replaceable package promotion/publication state (d=publication_id)
 )
 
 // Config holds reactor configuration.
@@ -123,12 +135,15 @@ type Reactor struct {
 	dedup       *nostrpool.EventDeduplicator
 	backoff     *nostrpool.Backoff
 
-	toolProvisioning repository.ToolProvisioningRepository
-	toolResponder    *ToolResponder
-	toolCoordinator  *service.ToolProvisioningCoordinator
-	policyService    *service.PolicyService
-	adoption         AdoptionOperatorService
-	runtimeLifecycle RuntimeLifecycleOperatorService
+	toolProvisioning  repository.ToolProvisioningRepository
+	toolResponder     *ToolResponder
+	toolCoordinator   *service.ToolProvisioningCoordinator
+	policyService     *service.PolicyService
+	adoption          AdoptionOperatorService
+	runtimeLifecycle  RuntimeLifecycleOperatorService
+	packageService    *service.PackageRegistryService
+	packageProjection repository.PackageControlPlaneRepository
+	nostrEvents       repository.NostrEventRepository
 
 	mu   sync.Mutex
 	runs map[string]*DeploymentRun // requestEventID -> run
@@ -182,6 +197,18 @@ func WithAdoptionService(adoption AdoptionOperatorService) ReactorOption {
 // WithRuntimeLifecycleService enables signer-first direct-runtime action handling.
 func WithRuntimeLifecycleService(runtimeLifecycle RuntimeLifecycleOperatorService) ReactorOption {
 	return func(r *Reactor) { r.runtimeLifecycle = runtimeLifecycle }
+}
+
+func WithPackageRegistryService(packageService *service.PackageRegistryService) ReactorOption {
+	return func(r *Reactor) { r.packageService = packageService }
+}
+
+func WithPackageProjectionRepository(repo repository.PackageControlPlaneRepository) ReactorOption {
+	return func(r *Reactor) { r.packageProjection = repo }
+}
+
+func WithNostrEventRepository(repo repository.NostrEventRepository) ReactorOption {
+	return func(r *Reactor) { r.nostrEvents = repo }
 }
 
 // WithControlPlanePublisher overrides the result/status publisher, primarily for tests.
@@ -278,6 +305,12 @@ func (r *Reactor) Run(ctx context.Context) error {
 				KindPolicyUpdate,
 				KindPolicyDelete,
 				KindPolicyEvaluate,
+				KindPackageRepositoryApply,
+				KindPackageRepositoryDelete,
+				KindPackagePublishIntent,
+				KindPackagePromotionRequest,
+				KindPackageYankRequest,
+				KindPackageDriftDetect,
 			},
 			Authors: r.requestSubscriptionAuthors(),
 			Since:   &now,
@@ -290,6 +323,7 @@ func (r *Reactor) Run(ctx context.Context) error {
 	}
 
 	r.logger.Info("subscribed to control plane events")
+	go r.recoverPackageIntents(ctx)
 
 	for {
 		select {
@@ -385,6 +419,18 @@ func (r *Reactor) handleEvent(ctx context.Context, event *nostr.Event) {
 		go r.handlePolicyDelete(ctx, event)
 	case KindPolicyEvaluate:
 		go r.handlePolicyEvaluate(ctx, event)
+	case KindPackageRepositoryApply:
+		go r.handlePackageRepositoryApply(ctx, event)
+	case KindPackageRepositoryDelete:
+		go r.handlePackageRepositoryDelete(ctx, event)
+	case KindPackagePublishIntent:
+		go r.handlePackagePublishIntent(ctx, event)
+	case KindPackagePromotionRequest:
+		go r.handlePackagePromotionRequest(ctx, event)
+	case KindPackageYankRequest:
+		go r.handlePackageYankRequest(ctx, event)
+	case KindPackageDriftDetect:
+		go r.handlePackageDriftDetect(ctx, event)
 	default:
 		r.logger.Warn("unexpected event kind", "kind", event.Kind)
 	}
@@ -2096,7 +2142,25 @@ func (r *Reactor) publishEvent(ctx context.Context, event *nostr.Event) (int, er
 	if event == nil {
 		return 0, fmt.Errorf("nostr event is nil")
 	}
-	return r.publisher.Publish(ctx, *event)
+	published, err := r.publisher.Publish(ctx, *event)
+	if err == nil && published > 0 && r.nostrEvents != nil {
+		tagsJSON, marshalErr := json.Marshal(event.Tags)
+		if marshalErr != nil {
+			r.logger.Warn("failed to marshal outbound event tags for audit", "event_id", event.ID, "error", marshalErr)
+		} else if _, recordErr := r.nostrEvents.Record(ctx, &repository.NostrEventRecord{
+			ID:         event.ID,
+			Kind:       event.Kind,
+			PubKey:     event.PubKey,
+			Content:    event.Content,
+			Tags:       tagsJSON,
+			Sig:        event.Sig,
+			CreatedAt:  event.CreatedAt.Time(),
+			ReceivedAt: time.Now().UTC(),
+		}); recordErr != nil {
+			r.logger.Warn("failed to audit outbound control-plane event", "event_id", event.ID, "kind", event.Kind, "error", recordErr)
+		}
+	}
+	return published, err
 }
 
 // GetRun returns the current deployment run for a request event.
