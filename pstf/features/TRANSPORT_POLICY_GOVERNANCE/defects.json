@@ -1,0 +1,46 @@
+{
+  "feature_id": "TRANSPORT_POLICY_GOVERNANCE",
+  "defects": [
+    {
+      "defect_id": "TPG-D-001",
+      "title": "Dashboard recent-spend summary still uses REST payment history instead of encrypted browser transport",
+      "severity": "major",
+      "status": "open",
+      "related_ac_ids": [
+        "TPG-AC-006"
+      ],
+      "related_test_ids": [
+        "TPG-T-008"
+      ],
+      "evidence": [
+        "web/src/routes/+page.svelte:214-221",
+        "web/tests/e2e/dashboard-smoke.spec.js:311-318",
+        "web/tests/e2e/dashboard-smoke.spec.js:429-455",
+        "HITL-TRANSPORT_POLICY_GOVERNANCE-002"
+      ],
+      "suspected_root_cause": "The dashboard cost-summary loader still calls `api.getPaymentHistory(...)` per worker and the e2e harness still mocks `**/api/v1/payments/history**` as the canonical source for Recent Spend.",
+      "recommended_fix": "Route dashboard payment-summary reads through an approved encrypted browser transport path and replace REST payment-history mocks with deterministic encrypted request/result fixtures.",
+      "requires_human_decision": false
+    },
+    {
+      "defect_id": "TPG-D-002",
+      "title": "Settings relay visibility still depends on raw system discovery relays instead of service-authored NIP-51 relay-list data",
+      "severity": "major",
+      "status": "open",
+      "related_ac_ids": [
+        "TPG-AC-010"
+      ],
+      "related_test_ids": [
+        "TPG-T-012"
+      ],
+      "evidence": [
+        "web/src/routes/settings/+page.svelte:241-246",
+        "pstf/features/SYSTEM_DISCOVERY_RELAY_BOOTSTRAP/hitl_decisions.md:159-172",
+        "HITL-SYSTEM_DISCOVERY_RELAY_BOOTSTRAP-004"
+      ],
+      "suspected_root_cause": "The settings page still renders `systemInfo.nostr.relays` directly and no relay-list event subscription path has been implemented for operator-facing server relay visibility.",
+      "recommended_fix": "Implement operator relay visibility from a service-authored kind 30002 relay-list event and remove the settings-page dependency on raw `systemInfo.nostr.relays` for approved behavior.",
+      "requires_human_decision": false
+    }
+  ]
+}

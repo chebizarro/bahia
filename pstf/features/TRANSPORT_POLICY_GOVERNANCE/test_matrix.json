@@ -4,7 +4,9 @@
   "tests": [
     {
       "test_id": "TPG-T-001",
-      "ac_ids": ["TPG-AC-001"],
+      "ac_ids": [
+        "TPG-AC-001"
+      ],
       "title": "System discovery separates public bootstrap from encrypted capability inputs",
       "type": "unit",
       "existing_or_new": "existing",
@@ -34,12 +36,14 @@
       "determinism_notes": [
         "Pure fixture-driven unit coverage; no live relays or HTTP services required."
       ],
-      "status": "implemented",
+      "status": "pass",
       "failure_reason": null
     },
     {
       "test_id": "TPG-T-002",
-      "ac_ids": ["TPG-AC-002"],
+      "ac_ids": [
+        "TPG-AC-002"
+      ],
       "title": "Representative public signer-first browser flow records accepted OK and completes from public relay events",
       "type": "e2e",
       "existing_or_new": "modify_existing",
@@ -71,11 +75,13 @@
         "The harness should assert correlation by request id instead of using arbitrary wait thresholds."
       ],
       "status": "not_implemented",
-      "failure_reason": null
+      "failure_reason": "Existing public smoke passes, but it does not record accepted relay OK responses or assert that accepted OK is required for canonical completion."
     },
     {
       "test_id": "TPG-T-003",
-      "ac_ids": ["TPG-AC-003"],
+      "ac_ids": [
+        "TPG-AC-003"
+      ],
       "title": "Encrypted controlplane transport publishes only 5980 requests and resolves only correlated 7980 results",
       "type": "unit",
       "existing_or_new": "existing",
@@ -102,12 +108,14 @@
       "determinism_notes": [
         "All events are injected synchronously into mocked handlers; no live relays or timers are required for completion."
       ],
-      "status": "implemented",
+      "status": "pass",
       "failure_reason": null
     },
     {
       "test_id": "TPG-T-004",
-      "ac_ids": ["TPG-AC-003"],
+      "ac_ids": [
+        "TPG-AC-003"
+      ],
       "title": "Representative notifications browser flow stays entirely on encrypted request/result relays",
       "type": "e2e",
       "existing_or_new": "existing",
@@ -136,12 +144,14 @@
       "determinism_notes": [
         "Relay publish and result events are generated entirely inside the Playwright harness."
       ],
-      "status": "implemented",
+      "status": "pass",
       "failure_reason": null
     },
     {
       "test_id": "TPG-T-005",
-      "ac_ids": ["TPG-AC-004"],
+      "ac_ids": [
+        "TPG-AC-004"
+      ],
       "title": "Encrypted browser flows fail closed when capability or signer support is absent",
       "type": "unit",
       "existing_or_new": "modify_existing",
@@ -171,11 +181,13 @@
         "Coverage is local and synchronous apart from resolved mock promises."
       ],
       "status": "not_implemented",
-      "failure_reason": null
+      "failure_reason": "Current unit coverage proves missing encrypted discovery and generic unavailable capability paths, but it does not yet exercise a signer/browser mode without usable NIP-44 encrypt/decrypt support."
     },
     {
       "test_id": "TPG-T-006",
-      "ac_ids": ["TPG-AC-005"],
+      "ac_ids": [
+        "TPG-AC-005"
+      ],
       "title": "Protected browser routes do not require blanket REST compatibility by default",
       "type": "unit",
       "existing_or_new": "existing",
@@ -200,12 +212,14 @@
       "determinism_notes": [
         "Pure in-memory policy evaluation with no network dependency."
       ],
-      "status": "implemented",
+      "status": "pass",
       "failure_reason": null
     },
     {
       "test_id": "TPG-T-007",
-      "ac_ids": ["TPG-AC-006"],
+      "ac_ids": [
+        "TPG-AC-006"
+      ],
       "title": "Payments page history surface loads through encrypted browser requests only",
       "type": "unit",
       "existing_or_new": "existing",
@@ -230,12 +244,14 @@
       "determinism_notes": [
         "Store behavior is exercised with mocked promises only."
       ],
-      "status": "implemented",
+      "status": "pass",
       "failure_reason": null
     },
     {
       "test_id": "TPG-T-008",
-      "ac_ids": ["TPG-AC-006"],
+      "ac_ids": [
+        "TPG-AC-006"
+      ],
       "title": "Dashboard recent-spend summary stops depending on REST payments history",
       "type": "e2e",
       "existing_or_new": "modify_existing",
@@ -267,11 +283,13 @@
         "The test should fail if the page requires REST payment-history mocks, which is the current implementation drift captured by HITL-TRANSPORT_POLICY_GOVERNANCE-002."
       ],
       "status": "not_implemented",
-      "failure_reason": null
+      "failure_reason": "Current dashboard implementation still loads spend summary data through REST `payments/history`, so the encrypted-only browser proof cannot yet be satisfied."
     },
     {
       "test_id": "TPG-T-009",
-      "ac_ids": ["TPG-AC-007"],
+      "ac_ids": [
+        "TPG-AC-007"
+      ],
       "title": "Approved browser transport slices do not depend on EventSource log streaming",
       "type": "contract",
       "existing_or_new": "new",
@@ -300,11 +318,13 @@
         "A static dependency assertion is preferred over browser waits so the proof stays deterministic and does not confuse legacy SSE code with approved transport behavior."
       ],
       "status": "not_implemented",
-      "failure_reason": null
+      "failure_reason": "Target contract test file `web/tests/unit/transport-policy-contract.test.js` does not exist yet."
     },
     {
       "test_id": "TPG-T-010",
-      "ac_ids": ["TPG-AC-008"],
+      "ac_ids": [
+        "TPG-AC-008"
+      ],
       "title": "Operator HTTP fallback remains limited to explicit pre-acceptance failures",
       "type": "unit",
       "existing_or_new": "existing",
@@ -329,17 +349,19 @@
       "determinism_notes": [
         "Existing focused Go unit coverage already exercises this behavior without live relay dependencies."
       ],
-      "status": "implemented",
+      "status": "pass",
       "failure_reason": null
     },
     {
       "test_id": "TPG-T-011",
-      "ac_ids": ["TPG-AC-009"],
+      "ac_ids": [
+        "TPG-AC-009"
+      ],
       "title": "Canonical approval evidence uses 596x/597x/598x families while 311xx remains compatibility-only",
       "type": "manual",
-      "existing_or_new": "new",
+      "existing_or_new": "existing",
       "target_path": "docs/control-planes.md; docs/protocol-compatibility.md; docs/nostr-commands.md; web/tests/e2e/service-deployment-public-smoke.spec.js; web/tests/e2e/notifications-encrypted-smoke.spec.js",
-      "description": "Run a fixed review checklist over the docs and approval-backed test corpus to confirm that 31100–31105 references remain compatibility-only and that primary acceptance proof uses modern public or encrypted request families instead.",
+      "description": "Run a fixed review checklist over the docs and approval-backed test corpus to confirm that 31100\u201331105 references remain compatibility-only and that primary acceptance proof uses modern public or encrypted request families instead.",
       "preconditions": [
         "The current approval-backed public and encrypted test files are identified.",
         "Documentation references for legacy 311xx handling are available."
@@ -358,12 +380,14 @@
       "determinism_notes": [
         "This review is manual because the current requirement is about classification across docs and proof artifacts, not runtime behavior. If regressions recur, replace this with a doc-lint check."
       ],
-      "status": "not_implemented",
+      "status": "pass",
       "failure_reason": null
     },
     {
       "test_id": "TPG-T-012",
-      "ac_ids": ["TPG-AC-010"],
+      "ac_ids": [
+        "TPG-AC-010"
+      ],
       "title": "Settings relay visibility is sourced from a service-authored NIP-51 kind 30002 event",
       "type": "e2e",
       "existing_or_new": "new",
@@ -393,11 +417,13 @@
         "This test should be implemented only with deterministic injected relay events; do not query live relays for kind 30002 in CI."
       ],
       "status": "not_implemented",
-      "failure_reason": null
+      "failure_reason": "Target e2e test file `web/tests/e2e/settings-relay-visibility.spec.js` does not exist, and the current settings page still reads `systemInfo.nostr.relays` directly."
     },
     {
       "test_id": "TPG-T-013",
-      "ac_ids": ["TPG-AC-011"],
+      "ac_ids": [
+        "TPG-AC-011"
+      ],
       "title": "Public controlplane bootstrap uses EOSE-bounded catch-up then live subscriptions",
       "type": "unit",
       "existing_or_new": "existing",
@@ -424,12 +450,14 @@
       "determinism_notes": [
         "Historical and live events are injected directly; no sleeps are required to prove bootstrap semantics."
       ],
-      "status": "implemented",
+      "status": "pass",
       "failure_reason": null
     },
     {
       "test_id": "TPG-T-014",
-      "ac_ids": ["TPG-AC-011"],
+      "ac_ids": [
+        "TPG-AC-011"
+      ],
       "title": "Encrypted request/result completion depends on accepted OK and correlated terminal events",
       "type": "unit",
       "existing_or_new": "existing",
@@ -455,12 +483,14 @@
       "determinism_notes": [
         "Completion is driven directly by injected handlers; no polling loop is involved."
       ],
-      "status": "implemented",
+      "status": "pass",
       "failure_reason": null
     },
     {
       "test_id": "TPG-T-015",
-      "ac_ids": ["TPG-AC-012"],
+      "ac_ids": [
+        "TPG-AC-012"
+      ],
       "title": "One authenticated browser session keeps public and encrypted journeys on separate relay sets",
       "type": "e2e",
       "existing_or_new": "new",
@@ -494,7 +524,7 @@
         "Use the existing local public and encrypted harness patterns; do not rely on `waitForTimeout` or live relay timing to prove separation."
       ],
       "status": "not_implemented",
-      "failure_reason": null
+      "failure_reason": "Target e2e test file `web/tests/e2e/mixed-transport-session.spec.js` does not exist yet."
     }
   ],
   "coverage_summary": {
