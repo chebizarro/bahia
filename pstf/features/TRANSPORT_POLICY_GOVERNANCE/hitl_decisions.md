@@ -2,10 +2,10 @@
 
 ## Metadata
 - Feature ID: TRANSPORT_POLICY_GOVERNANCE
-- Task ID: bahia-z1ak
+- Task ID: bahia-zjm1
 - Framework: PSTF
 - Interaction Mode: RepoPrompt ask-user tool
-- Current Stage: acceptance_criteria
+- Current Stage: human_review
 - Last Updated: 2026-05-06
 
 ---
@@ -173,13 +173,98 @@ APPROVE_AS_IS
 
 ---
 
+### Decision HITL-TRANSPORT_POLICY_GOVERNANCE-005 — Remaining settings relay-visibility defect triage
+
+**Stage:** human_review
+**Agent:** HITL Review Agent
+**Decision Type:** defect_triage
+**Status:** active
+
+**Context Summary:**
+Current verification shows one remaining open product defect: `TPG-D-002`. The settings page still renders `systemInfo.nostr.relays` directly instead of using a service-authored kind `30002` relay-list event, which leaves `TPG-AC-010` failing and `TPG-T-012` unimplemented.
+
+**Question Asked:**
+How should defect `TPG-D-002` be handled at this stage?
+
+**Options Presented:**
+- A) BLOCKER — must fix before approval
+- B) ACCEPTED_RISK — may ship with explicit risk
+- C) DEFER_TO_FOLLOWUP — do not approve now; track separately
+- D) NOT_A_DEFECT — update spec/tests instead
+
+**User Selection:**
+BLOCKER — must fix before approval
+
+**User Notes:**
+None.
+
+**Decision:**
+BLOCKER
+
+**Impact:**
+- Feature Spec: none
+- Acceptance Criteria: none — `TPG-AC-010` remains required as written
+- Tests: none — `TPG-T-012` remains required and should be implemented after the defect fix
+- Defects: update needed — `TPG-D-002` remains open and explicitly blocks approval
+- Confidence / Release: blocks approval until the settings relay-visibility defect is fixed and re-verified
+
+**Required Follow-Up Actions:**
+- [ ] Fix `TPG-D-002` by sourcing settings relay visibility from a service-authored kind `30002` relay-list event.
+- [ ] Implement and run `TPG-T-012` after the fix.
+- [ ] Update `defects.json`, `test_matrix.json`, and `verification_report.md` after re-verification.
+
+---
+
+### Decision HITL-TRANSPORT_POLICY_GOVERNANCE-006 — Final release decision at current verification gate
+
+**Stage:** human_review
+**Agent:** HITL Review Agent
+**Decision Type:** release_approval
+**Status:** active
+
+**Context Summary:**
+The feature has strong verified coverage for several transport boundaries and one previously open payment-transport defect is now fixed. However, one product defect (`TPG-D-002`) remains open and blocked, and four proof rows (`TPG-T-002`, `TPG-T-005`, `TPG-T-009`, `TPG-T-015`) are still missing or incomplete.
+
+**Question Asked:**
+What is the final release decision for `TRANSPORT_POLICY_GOVERNANCE` at this gate?
+
+**Options Presented:**
+- A) NEEDS_WORK
+- B) APPROVED_WITH_RISK
+- C) APPROVED
+- D) DEFERRED
+- E) REJECTED
+
+**User Selection:**
+NEEDS_WORK
+
+**User Notes:**
+None.
+
+**Decision:**
+NEEDS_WORK
+
+**Impact:**
+- Feature Spec: none
+- Acceptance Criteria: none
+- Tests: update needed — missing proof rows remain required before release approval
+- Defects: update needed — `TPG-D-002` remains blocking
+- Confidence / Release: release is not approved; more implementation and verification work is required
+
+**Required Follow-Up Actions:**
+- [ ] Resolve blocker `TPG-D-002`.
+- [ ] Implement missing proof for `TPG-T-002`, `TPG-T-005`, `TPG-T-009`, and `TPG-T-015`.
+- [ ] Re-run verification and update `verification_report.md`, `test_matrix.json`, and `defects.json` before the next release gate.
+
+---
+
 ## Summary
 
-- Final Status: active decisions captured
-- Open Questions: 0 for this reconstruction pass
+- Final Status: NEEDS_WORK
+- Open Questions: 0
 - Accepted Risks: 0
 - Deferred Items: 0
-- Blocking Issues: 0 newly created by this ledger
+- Blocking Issues: 2 — `TPG-D-002` blocker defect; missing proof set `TPG-T-002` / `TPG-T-005` / `TPG-T-009` / `TPG-T-015`
 - Superseded Decisions: 0
 
 ## Traceability
@@ -190,3 +275,5 @@ APPROVE_AS_IS
 | HITL-TRANSPORT_POLICY_GOVERNANCE-002 | future payment transport ACs | dashboard/browser REST payment tests become legacy evidence | browser payment migration implied | feature_spec.json, hitl_decisions.md | Browser payment surfaces should move fully to encrypted transport. |
 | HITL-TRANSPORT_POLICY_GOVERNANCE-003 | future browser log-transport ACs | SSE log-stream tests become legacy evidence | EventSource deprecation/removal implied | feature_spec.json, hitl_decisions.md | Removes EventSource streaming from the intended browser contract. |
 | HITL-TRANSPORT_POLICY_GOVERNANCE-004 | TPG-AC-001..012 | future test matrix for transport-policy slice | none | acceptance_criteria.json, hitl_decisions.md | Human approved the AC direction as drafted. |
+| HITL-TRANSPORT_POLICY_GOVERNANCE-005 | TPG-AC-010 | TPG-T-012 | TPG-D-002 | hitl_decisions.md, defects.json, test_matrix.json, verification_report.md | Human classified the remaining settings relay-visibility defect as a blocker. |
+| HITL-TRANSPORT_POLICY_GOVERNANCE-006 | TPG-AC-010, TPG-AC-012 | TPG-T-002, TPG-T-005, TPG-T-009, TPG-T-012, TPG-T-015 | TPG-D-002 | hitl_decisions.md, verification_report.md | Final release decision at this gate is NEEDS_WORK. |
