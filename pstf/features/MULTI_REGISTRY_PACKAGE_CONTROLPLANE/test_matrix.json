@@ -1,6 +1,6 @@
 {
   "feature_id": "MULTI_REGISTRY_PACKAGE_CONTROLPLANE",
-  "status": "foundation_ready",
+  "status": "backend_service_slice_ready",
   "tests": [
     {
       "test_id": "MRPC-T-001",
@@ -32,18 +32,73 @@
     {
       "test_id": "MRPC-T-004",
       "ac_ids": ["MRPC-AC-005"],
-      "title": "Manual scope inspection for no REST/handler/tool/CLI additions",
+      "title": "Manual Item 1 scope inspection",
       "type": "review",
       "target_path": "git diff / file list",
-      "status": "manual_required",
-      "determinism_notes": ["Verify touched files remain limited to domain/config/repository/migrations/tests/PSTF for Item 1."]
+      "status": "implemented",
+      "determinism_notes": ["Verified Item 1 did not add package REST routes, tools, commands, or backend adapters."]
+    },
+    {
+      "test_id": "MRPC-T-005",
+      "ac_ids": ["MRPC-AC-006", "MRPC-AC-007"],
+      "title": "Filesystem mock backend contract lifecycle",
+      "type": "unit",
+      "target_path": "internal/backends/filesystem_mock/filesystem_mock_test.go",
+      "status": "implemented",
+      "determinism_notes": ["Uses t.TempDir and in-process streams; no relay, live network, or sleep-based event waiting."]
+    },
+    {
+      "test_id": "MRPC-T-006",
+      "ac_ids": ["MRPC-AC-006", "MRPC-AC-008"],
+      "title": "Nexus adapter HTTP skeleton behavior",
+      "type": "unit",
+      "target_path": "internal/backends/nexus/nexus_test.go",
+      "status": "implemented",
+      "determinism_notes": ["Uses httptest.Server to assert request sequence/path construction."]
+    },
+    {
+      "test_id": "MRPC-T-007",
+      "ac_ids": ["MRPC-AC-006", "MRPC-AC-008"],
+      "title": "Pulp adapter HTTP skeleton behavior and task handling",
+      "type": "unit",
+      "target_path": "internal/backends/pulp/pulp_test.go",
+      "status": "implemented",
+      "determinism_notes": ["Uses httptest.Server and bounded context/timer task polling internal to the backend adapter only."]
+    },
+    {
+      "test_id": "MRPC-T-008",
+      "ac_ids": ["MRPC-AC-002", "MRPC-AC-006"],
+      "title": "Package backend factory rejects unwired secret refs explicitly",
+      "type": "unit",
+      "target_path": "internal/backends/factory/factory_test.go",
+      "status": "implemented",
+      "determinism_notes": ["Pure factory validation; no secrets are resolved in Item 2."]
+    },
+    {
+      "test_id": "MRPC-T-009",
+      "ac_ids": ["MRPC-AC-006", "MRPC-AC-009"],
+      "title": "Package service policy, publish, promote, yank, and drift helpers",
+      "type": "unit",
+      "target_path": "internal/service/package_registry_test.go",
+      "status": "implemented",
+      "determinism_notes": ["Uses filesystem_mock plus file:// sources explicitly enabled for tests; no REST CRUD or Nostr event handling."]
+    },
+    {
+      "test_id": "MRPC-T-010",
+      "ac_ids": ["MRPC-AC-010"],
+      "title": "Manual Item 2 scope inspection",
+      "type": "review",
+      "target_path": "git diff / file list",
+      "status": "implemented",
+      "determinism_notes": ["Verified changes are limited to internal/backends, internal/service package service/tests, and PSTF updates."]
     }
   ],
   "coverage_summary": {
-    "criteria_total": 5,
-    "criteria_with_tests_or_review": 5,
+    "criteria_total": 10,
+    "criteria_with_tests_or_review": 10,
     "known_gaps": [
-      "Runtime Nostr reactor, MCP, CLI, and backend contract criteria are intentionally deferred to later plan items."
+      "Runtime Nostr reactor, MCP, and CLI criteria are intentionally deferred to later plan items.",
+      "Nexus/Pulp production auth secret resolution and exact API/version variants remain HITL follow-up decisions."
     ]
   }
 }

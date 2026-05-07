@@ -1,6 +1,6 @@
 {
   "feature_id": "MULTI_REGISTRY_PACKAGE_CONTROLPLANE",
-  "status": "draft_foundation",
+  "status": "backend_service_slice_ready",
   "criteria": [
     {
       "ac_id": "MRPC-AC-001",
@@ -43,12 +43,58 @@
       "title": "No reactor, MCP, CLI, backend adapter, or REST CRUD behavior is introduced in Item 1",
       "type": "scope_control",
       "priority": "must",
-      "assertion": "This phase adds only foundation scaffolding and does not introduce package mutation handlers, tools, commands, adapters, or REST CRUD endpoints.",
+      "assertion": "The foundation phase adds only scaffolding and does not introduce package mutation handlers, tools, commands, adapters, or REST CRUD endpoints.",
       "expected_result": "No package REST routes or command/tool handlers are added; later items must implement Nostr-first mutation behavior.",
-      "status": "documented_not_runtime_verified"
+      "status": "covered_foundation"
+    },
+    {
+      "ac_id": "MRPC-AC-006",
+      "title": "Package backend abstraction advertises capabilities and requested formats",
+      "type": "backend_contract",
+      "priority": "must",
+      "assertion": "A pluggable package backend interface exists outside service core and advertises supported package formats and operations.",
+      "expected_result": "Backends report support for npm, pypi, conan, deb, rpm, pub, go_modules, and gradle plus repository/artifact/promotion/yank capabilities.",
+      "status": "covered_item_2"
+    },
+    {
+      "ac_id": "MRPC-AC-007",
+      "title": "filesystem_mock backend supports deterministic local repository and artifact lifecycle",
+      "type": "backend_contract",
+      "priority": "must",
+      "assertion": "The filesystem_mock backend can create repositories, store/get/list/promote/yank artifacts, and reject digest/size mismatches deterministically.",
+      "expected_result": "Artifact paths are stable and scoped under the configured root; missing/yanked deletes are idempotent; non-force repository delete rejects non-empty repositories.",
+      "status": "covered_item_2"
+    },
+    {
+      "ac_id": "MRPC-AC-008",
+      "title": "Nexus and Pulp adapters exist behind the backend interface with tested HTTP behavior",
+      "type": "backend_contract",
+      "priority": "must",
+      "assertion": "Nexus and Pulp implementations are isolated under internal/backends and can be constructed behind the same interface without hard-coding backend logic into service core.",
+      "expected_result": "Adapter tests verify repository ensure, upload path construction, yank/delete behavior, and Pulp task/distribution failure handling.",
+      "status": "covered_item_2"
+    },
+    {
+      "ac_id": "MRPC-AC-009",
+      "title": "Package service enforces pre-upload and pre-promotion policy before backend mutation",
+      "type": "service_policy",
+      "priority": "must",
+      "assertion": "The package service validates repository specs, backend immutability, source URL schemes/hosts, digest/size, media type/name policies, overwrite policy, and promotion approval requirements before delegating to backends.",
+      "expected_result": "Policy failures are deterministic service errors; idempotent same-digest publish/promote returns existing state; drift helpers compare projections with backend observations.",
+      "status": "covered_item_2"
+    },
+    {
+      "ac_id": "MRPC-AC-010",
+      "title": "No reactor, MCP, CLI, or REST CRUD behavior is introduced in Item 2",
+      "type": "scope_control",
+      "priority": "must",
+      "assertion": "The backend/service phase does not add package reactor handlers, MCP tools, CLI commands, or HTTP CRUD routes.",
+      "expected_result": "Changes remain limited to internal/backends, internal/service package service/tests, and PSTF updates.",
+      "status": "covered_item_2"
     }
   ],
   "coverage_notes": [
-    "This acceptance set intentionally covers Item 1 only. Later feature phases must add Nostr reactor/MCP/CLI/backend acceptance criteria before the full capability can be marked complete."
+    "Item 2 covers backend and service core only. Later feature phases must add Nostr reactor, MCP, and CLI acceptance criteria before the full capability can be marked complete.",
+    "Nexus/Pulp adapters are meaningful skeletons using isolated HTTP flows; production auth secret resolution and exact deployment API variants remain HITL decisions."
   ]
 }
