@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { get } from 'svelte/store';
 
 // Mock browser environment
 global.window = global;
@@ -155,6 +156,72 @@ describe('Nostr Client - Parsing Functions', () => {
       await expect(client.publish({ kind: 5950, tags: [], content: '' })).rejects.toThrow(
         'Cannot publish event without id'
       );
+    });
+  });
+
+  describe('connect', () => {
+    it('reports relay connection progress and returns a summary', async () => {
+      class MockWebSocket {
+        static CONNECTING = 0;
+        static OPEN = 1;
+        static CLOSED = 3;
+
+        constructor(url) {
+          this.url = url;
+          this.readyState = MockWebSocket.CONNECTING;
+          setTimeout(() => {
+            this.readyState = MockWebSocket.OPEN;
+            this.onopen?.();
+          }, 0);
+        }
+
+        close() {
+          this.readyState = MockWebSocket.CLOSED;
+          this.onclose?.();
+        }
+
+        send() {}
+      }
+
+      global.WebSocket = MockWebSocket;
+      const client = new NostrClient({ relays: ['wss://relay.example'] });
+
+      const connectPromise = client.connect(['wss://relay.example']);
+      expect(get(client.connectionStatus)).toEqual({
+        'wss://relay.example': 'connecting'
+      });
+
+      await expect(connectPromise).resolves.toEqual({
+        total: 1,
+        connected: 1,
+        failed: 0,
+        connecting: 0,
+        relays: [
+          { url: 'wss://relay.example', status: 'connected' }
+        ]
+      });
+    });
+
+    it('resolves pending relay work when a configured relay is removed', async () => {
+      const client = new NostrClient({ relays: ['wss://relay.example'] });
+      const socket = {
+        readyState: WebSocket.OPEN,
+        send: vi.fn(),
+        close: vi.fn()
+      };
+      client.sockets.set('wss://relay.example', socket);
+
+      const publishPromise = client.publish({ id: 'evt-remove', kind: 5950, tags: [], content: '' });
+      await client.connect([]);
+
+      await expect(publishPromise).resolves.toEqual([
+        {
+          relay: 'wss://relay.example',
+          sent: false,
+          accepted: false,
+          message: 'relay removed from configuration'
+        }
+      ]);
     });
   });
 

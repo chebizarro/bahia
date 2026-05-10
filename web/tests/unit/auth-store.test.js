@@ -11,7 +11,8 @@ vi.mock('../../src/lib/nostr/nip07.js', () => ({
   getCapabilities: vi.fn(),
   signEvent: vi.fn(),
   getNip07Signer: vi.fn(),
-  detectNip07: vi.fn()
+  detectNip07: vi.fn(),
+  watchNip07Availability: vi.fn()
 }));
 
 // Mock NIP-46 module
@@ -56,6 +57,10 @@ describe('Auth Store', () => {
       nip44: false
     });
     nip07Module.detectNip07.mockReturnValue({ available: true });
+    nip07Module.watchNip07Availability.mockImplementation((onChange, { fireImmediately = true } = {}) => {
+      if (fireImmediately) onChange({ available: true });
+      return vi.fn();
+    });
     nip07Module.getNip07Signer.mockReturnValue({
       getPublicKey: nip07Module.getPublicKey,
       signEvent: nip07Module.signEvent,
@@ -248,6 +253,25 @@ describe('Auth Store', () => {
       
       expect(state.status).toBe('error');
       expect(state.error).toBe('Init failed');
+    });
+
+    it('updates extension availability when the watcher reports a late provider injection', async () => {
+      let handleAvailabilityChange = null;
+      nip07Module.waitForNip07.mockResolvedValue({ available: false });
+      nip07Module.detectNip07.mockReturnValue({ available: false });
+      nip07Module.watchNip07Availability.mockImplementation((onChange, { fireImmediately = true } = {}) => {
+        handleAvailabilityChange = onChange;
+        if (fireImmediately) onChange({ available: false });
+        return vi.fn();
+      });
+
+      await authModule.initializeAuth();
+      expect(authModule.authState.extensionAvailable).toBe(false);
+
+      nip07Module.detectNip07.mockReturnValue({ available: true });
+      handleAvailabilityChange?.({ available: true });
+
+      expect(authModule.authState.extensionAvailable).toBe(true);
     });
   });
 

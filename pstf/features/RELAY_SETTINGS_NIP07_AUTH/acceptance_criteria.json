@@ -1,0 +1,22 @@
+[
+  {
+    "id": "AC-1",
+    "statement": "When a NIP-07 provider appears after initial page load, the login affordance updates from a disabled no-extension state to an enabled Nostr login state without a full reload."
+  },
+  {
+    "id": "AC-2",
+    "statement": "When a signer becomes available after bootstrap, the stale missing-signer warning is removed."
+  },
+  {
+    "id": "AC-3",
+    "statement": "Relay connection attempts surface an explicit connecting state before the socket opens or fails."
+  },
+  {
+    "id": "AC-4",
+    "statement": "Saving relay settings reports a concrete connected/total relay summary instead of a generic success message."
+  },
+  {
+    "id": "AC-5",
+    "statement": "Removing a configured relay does not strand pending relay work; pending publishes/queries resolve with a relay-removal outcome."
+  }
+]

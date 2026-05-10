@@ -1,0 +1,37 @@
+[
+  {
+    "acceptance_id": "AC-1",
+    "coverage": [
+      "web/tests/unit/nip07.test.js",
+      "web/tests/unit/auth-store.test.js",
+      "Playwright MCP delayed window.nostr injection replay"
+    ]
+  },
+  {
+    "acceptance_id": "AC-2",
+    "coverage": [
+      "Playwright MCP delayed window.nostr injection replay"
+    ]
+  },
+  {
+    "acceptance_id": "AC-3",
+    "coverage": [
+      "web/tests/unit/nostr-client-parsing.test.js",
+      "Playwright MCP mocked WebSocket relay summary replay"
+    ]
+  },
+  {
+    "acceptance_id": "AC-4",
+    "coverage": [
+      "web/src/routes/settings/+page.svelte implementation review",
+      "web/tests/unit/nostr-client-parsing.test.js",
+      "Playwright MCP mocked WebSocket relay summary replay"
+    ]
+  },
+  {
+    "acceptance_id": "AC-5",
+    "coverage": [
+      "web/tests/unit/nostr-client-parsing.test.js"
+    ]
+  }
+]

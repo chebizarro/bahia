@@ -18,6 +18,7 @@
   let relays = $state([]);
   let relaysSaving = $state(false);
   let connectionStatus = $state({});
+  let relaySummary = $derived(relayConnectionSummary(relays, connectionStatus));
 
   $effect(() => {
     const unsubscribe = nostr.connectionStatus.subscribe(status => {
@@ -57,13 +58,32 @@
     relays = relays.filter(r => r !== url);
   }
 
+  function relayConnectionSummary(relayList, statusMap) {
+    const total = relayList.length;
+    const connected = relayList.filter((relay) => statusMap[relay] === 'connected').length;
+    const connecting = relayList.filter((relay) => statusMap[relay] === 'connecting').length;
+    const failed = relayList.filter((relay) =>
+      ['error', 'failed', 'disconnected'].includes(statusMap[relay])
+    ).length;
+
+    return { total, connected, connecting, failed };
+  }
+
   async function saveRelays() {
     relaysSaving = true;
     try {
       saveRelayConfig(relays);
       nostr.setRelays(relays, true);
-      await nostr.connect(relays);
-      toast.success('Relay configuration saved');
+      const summary = await nostr.connect(relays);
+      if (summary.total === 0) {
+        toast.warning('Relay configuration saved with no relays configured');
+      } else if (summary.connected === summary.total) {
+        toast.success(`Relay configuration saved — connected to ${summary.connected}/${summary.total} relays`);
+      } else if (summary.connected > 0) {
+        toast.warning(`Relay configuration saved — connected to ${summary.connected}/${summary.total} relays`);
+      } else {
+        toast.error(`Relay configuration saved, but no relays connected (${summary.connected}/${summary.total})`);
+      }
     } catch (err) {
       toast.error('Failed to save relay configuration');
     } finally {
@@ -167,6 +187,16 @@
         <LoadingButton variant="secondary" onclick={resetToDefaults}>Reset to Defaults</LoadingButton>
         <LoadingButton variant="primary" loading={relaysSaving} onclick={saveRelays}>Save & Reconnect</LoadingButton>
       </div>
+
+      <p class="section-description relay-summary">
+        {#if relaySummary.total === 0}
+          No relays configured.
+        {:else if relaySummary.connecting > 0}
+          Connecting to {relaySummary.connecting} relay{relaySummary.connecting === 1 ? '' : 's'}…
+        {:else}
+          Connected {relaySummary.connected}/{relaySummary.total} relays{relaySummary.failed > 0 ? ` • ${relaySummary.failed} unavailable` : ''}.
+        {/if}
+      </p>
     </section>
 
     <!-- NIP-46 Nostr Connect -->
@@ -465,6 +495,11 @@
     display: flex;
     gap: 0.5rem;
     justify-content: flex-end;
+  }
+
+  .relay-summary {
+    margin-top: 0.75rem;
+    margin-bottom: 0;
   }
 
   /* Theme styles */

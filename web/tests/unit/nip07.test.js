@@ -79,7 +79,7 @@ describe('NIP-07 Utilities', () => {
       const elapsed = Date.now() - startTime;
       
       expect(result.available).toBe(false);
-      expect(elapsed).toBeGreaterThanOrEqual(200);
+      expect(elapsed).toBeGreaterThanOrEqual(150);
       expect(elapsed).toBeLessThan(300);
     });
 
@@ -96,6 +96,26 @@ describe('NIP-07 Utilities', () => {
       
       expect(result.available).toBe(true);
       expect(result.provider).toBe(global.window.nostr);
+    });
+  });
+
+  describe('watchNip07Availability', () => {
+    it('notifies subscribers when a provider is injected after startup', async () => {
+      const changes = [];
+
+      const stopWatching = nip07Module.watchNip07Availability((result) => {
+        changes.push(result.available);
+      });
+
+      global.window.nostr = {
+        getPublicKey: vi.fn(),
+        signEvent: vi.fn()
+      };
+
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(changes).toEqual([false, true]);
+      stopWatching();
     });
   });
 

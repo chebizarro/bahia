@@ -2,14 +2,15 @@
 // UI identity/session state only - does NOT manage bahia_token as first-party auth state
 
 import { browser } from '$app/environment';
-import { toast } from '$lib/components/toast.js';
+import { toast, removeToast } from '$lib/components/toast.js';
 import {
   waitForNip07,
   getPublicKey as getNip07PublicKey,
   getRelays as getNip07Relays,
   getCapabilities as getNip07Capabilities,
   getNip07Signer,
-  detectNip07
+  detectNip07,
+  watchNip07Availability
 } from '$lib/nostr/nip07.js';
 import {
   detectNip46,
@@ -177,17 +178,85 @@ async function authenticateBackendInternal(pubkey) {
 
 let initializeInProgress = null;
 let loginInProgress = null;
+let missingSignerToastId = null;
+let stopWatchingNip07Availability = null;
+let signerLifecycleWatcherInstalled = false;
+
+function dismissMissingSignerToast() {
+  if (missingSignerToastId == null) return;
+  removeToast(missingSignerToastId);
+  missingSignerToastId = null;
+}
+
+function showMissingSignerToast() {
+  if (missingSignerToastId != null) return;
+  missingSignerToastId = toast.warning(
+    'No Nostr signer detected. Install a NIP-07 extension or NIP-46 provider to sign in.'
+  );
+}
+
+function resolveAvailabilityCapabilities(extensionAvailable, nip46Available) {
+  if (authState.status === 'authenticated') {
+    if (authState.authMethod === 'nip46') {
+      return nip46Available ? getNip46Capabilities() : {};
+    }
+    if (authState.authMethod === 'nip07') {
+      return extensionAvailable ? getNip07Capabilities() : {};
+    }
+  }
+
+  if (extensionAvailable) return getNip07Capabilities();
+  if (nip46Available) return getNip46Capabilities();
+  return {};
+}
+
+function syncSignerAvailability({ extensionAvailable, nip46Available }) {
+  updateAuthState({
+    extensionAvailable,
+    nip46Available,
+    capabilities: resolveAvailabilityCapabilities(extensionAvailable, nip46Available)
+  });
+
+  if (extensionAvailable || nip46Available) {
+    dismissMissingSignerToast();
+  }
+}
+
+function ensureSignerAvailabilityWatcher() {
+  if (!browser) return;
+
+  if (!stopWatchingNip07Availability) {
+    stopWatchingNip07Availability = watchNip07Availability(({ available: extensionAvailable }) => {
+      const { available: nip46Available } = detectNip46();
+      syncSignerAvailability({ extensionAvailable, nip46Available });
+    });
+  }
+
+  if (!signerLifecycleWatcherInstalled) {
+    signerLifecycleWatcherInstalled = true;
+    const refreshFromRuntime = () => {
+      const { available: extensionAvailable } = detectNip07();
+      const { available: nip46Available } = detectNip46();
+      syncSignerAvailability({ extensionAvailable, nip46Available });
+    };
+
+    window.addEventListener?.('focus', refreshFromRuntime);
+    window.addEventListener?.('pageshow', refreshFromRuntime);
+    document?.addEventListener?.('visibilitychange', refreshFromRuntime);
+  }
+}
 
 export async function initializeAuth() {
   if (initializeInProgress) return initializeInProgress;
   initializeInProgress = (async () => {
     updateAuthState({ status: 'checking' });
+    ensureSignerAvailabilityWatcher();
     try {
       const [{ available: extensionAvailable }, { available: nip46Available }] = await Promise.all([
         waitForNip07({ timeoutMs: 1500 }),
         Promise.resolve(detectNip46())
       ]);
-      updateAuthState({ extensionAvailable, nip46Available });
+      syncSignerAvailability({ extensionAvailable, nip46Available });
       const persisted = loadPersistedSession();
       if (browser) localStorage.removeItem('bahia_token');
 
@@ -233,7 +302,7 @@ export async function initializeAuth() {
 
       updateAuthState({ status: 'unauthenticated', ...compatibilityPatch(), error: null });
       if (!extensionAvailable && !nip46Available) {
-        toast.warning('No Nostr signer detected. Install a NIP-07 extension or NIP-46 provider to sign in.');
+        showMissingSignerToast();
       }
     } catch (error) {
       console.error('Auth initialization failed:', error);
@@ -248,16 +317,7 @@ export async function initializeAuth() {
 export async function refreshExtensionStatus() {
   const { available: extensionAvailable } = detectNip07();
   const { available: nip46Available } = detectNip46();
-  updateAuthState({
-    extensionAvailable,
-    nip46Available,
-    capabilities:
-      authState.status === 'authenticated' && authState.authMethod === 'nip46'
-        ? getNip46Capabilities()
-        : extensionAvailable
-          ? getNip07Capabilities()
-          : {}
-  });
+  syncSignerAvailability({ extensionAvailable, nip46Available });
   return extensionAvailable || nip46Available;
 }
 
@@ -286,6 +346,7 @@ export async function login() {
         lastAuthenticatedAt: new Date().toISOString(),
         error: null
       });
+      dismissMissingSignerToast();
       persistSession({ pubkey, relays, authMethod: 'nip07', nip46: null });
       try {
         await authenticateBackendInternal(pubkey);
@@ -338,6 +399,7 @@ export async function loginWithNostrConnect(uri) {
         lastAuthenticatedAt: new Date().toISOString(),
         error: null
       });
+      dismissMissingSignerToast();
 
       persistSession({
         pubkey: connected.pubkey,

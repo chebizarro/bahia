@@ -8,26 +8,113 @@
 export function detectNip07() {
   // SSR safety check
   if (typeof window === 'undefined') {
-    return { 
-      available: false, 
-      provider: null, 
-      reason: 'not_browser' 
+    return {
+      available: false,
+      provider: null,
+      reason: 'not_browser'
     };
   }
 
   // Check for window.nostr
   if (!window.nostr) {
-    return { 
-      available: false, 
-      provider: null, 
-      reason: 'missing_window_nostr' 
+    return {
+      available: false,
+      provider: null,
+      reason: 'missing_window_nostr'
     };
   }
 
-  return { 
-    available: true, 
-    provider: window.nostr, 
-    reason: null 
+  return {
+    available: true,
+    provider: window.nostr,
+    reason: null
+  };
+}
+
+const nip07AvailabilityWatchers = new Set();
+let nip07ObserverInstalled = false;
+let lastKnownNip07Availability = null;
+let lastKnownNip07Provider = null;
+
+function notifyNip07AvailabilityWatchers({ force = false } = {}) {
+  const result = detectNip07();
+  const providerChanged = result.provider !== lastKnownNip07Provider;
+  if (!force && result.available === lastKnownNip07Availability && !providerChanged) {
+    return result;
+  }
+
+  lastKnownNip07Availability = result.available;
+  lastKnownNip07Provider = result.provider;
+  nip07AvailabilityWatchers.forEach((watcher) => watcher(result));
+  return result;
+}
+
+function installNip07Observer() {
+  if (typeof window === 'undefined' || nip07ObserverInstalled) return;
+  nip07ObserverInstalled = true;
+  const initial = detectNip07();
+  lastKnownNip07Availability = initial.available;
+  lastKnownNip07Provider = initial.provider;
+
+  const scheduleCheck = () => {
+    queueMicrotask(() => {
+      notifyNip07AvailabilityWatchers();
+    });
+  };
+
+  const descriptor = Object.getOwnPropertyDescriptor(window, 'nostr');
+  if (!descriptor || descriptor.configurable) {
+    let currentValue = descriptor?.get ? descriptor.get.call(window) : window.nostr;
+
+    Object.defineProperty(window, 'nostr', {
+      configurable: true,
+      enumerable: descriptor?.enumerable ?? true,
+      get() {
+        return descriptor?.get ? descriptor.get.call(window) : currentValue;
+      },
+      set(value) {
+        if (descriptor?.set) {
+          descriptor.set.call(window, value);
+        }
+        currentValue = descriptor?.get ? descriptor.get.call(window) : value;
+        scheduleCheck();
+      }
+    });
+  }
+
+  window.addEventListener?.('focus', scheduleCheck);
+  window.addEventListener?.('pageshow', scheduleCheck);
+  document?.addEventListener?.('visibilitychange', scheduleCheck);
+}
+
+/**
+ * Subscribe to NIP-07 availability changes.
+ * Reacts to late provider injection and focus/visibility changes without polling.
+ * @param {(result: {available: boolean, provider: any, reason: string | null}) => void} onChange
+ * @param {{fireImmediately?: boolean}} options
+ * @returns {() => void}
+ */
+export function watchNip07Availability(onChange, { fireImmediately = true } = {}) {
+  if (typeof onChange !== 'function') {
+    return () => {};
+  }
+
+  if (typeof window === 'undefined') {
+    if (fireImmediately) {
+      onChange(detectNip07());
+    }
+    return () => {};
+  }
+
+  installNip07Observer();
+  nip07AvailabilityWatchers.add(onChange);
+
+  if (fireImmediately) {
+    onChange(detectNip07());
+  }
+
+  return () => {
+    nip07AvailabilityWatchers.delete(onChange);
   };
 }
 
@@ -40,28 +127,30 @@ export function detectNip07() {
  * @returns {Promise<Object>} Detection result
  */
 export function waitForNip07({ timeoutMs = 1500, intervalMs = 100 } = {}) {
+  void intervalMs;
+
+  const initial = detectNip07();
+  if (initial.available || typeof window === 'undefined' || timeoutMs <= 0) {
+    return Promise.resolve(initial);
+  }
+
   return new Promise((resolve) => {
-    const startTime = Date.now();
+    let settled = false;
 
-    const check = () => {
-      const result = detectNip07();
-      
-      if (result.available) {
-        resolve(result);
-        return;
-      }
+    const stopWatching = watchNip07Availability((result) => {
+      if (!result.available || settled) return;
+      settled = true;
+      clearTimeout(timeoutId);
+      stopWatching();
+      resolve(result);
+    }, { fireImmediately: false });
 
-      // Check if timeout exceeded
-      if (Date.now() - startTime >= timeoutMs) {
-        resolve(result);
-        return;
-      }
-
-      // Continue polling
-      setTimeout(check, intervalMs);
-    };
-
-    check();
+    const timeoutId = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      stopWatching();
+      resolve(detectNip07());
+    }, timeoutMs);
   });
 }
 

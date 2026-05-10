@@ -1,0 +1,19 @@
+{
+  "feature_id": "RELAY_SETTINGS_NIP07_AUTH",
+  "title": "Relay settings connection feedback and late NIP-07 signer detection",
+  "status": "verified",
+  "observed_behavior": {
+    "relay_settings": "Saving relay changes did not confirm which relays actually connected, and new relays could remain visually ambiguous until a socket opened or failed.",
+    "nip07_auth": "If window.nostr appeared after initial bootstrap, the UI stayed stuck in a no-extension state and continued showing the missing-signer warning."
+  },
+  "intended_behavior": {
+    "relay_settings": "Saving relay settings should expose connecting/connected state and report how many configured relays successfully connected.",
+    "nip07_auth": "The auth UI should react when a signer appears after startup and clear stale missing-signer warnings once a signer is available."
+  },
+  "scope": [
+    "web/src/lib/nostr/nip07.js",
+    "web/src/lib/stores/auth.svelte.js",
+    "web/src/lib/nostr/client.js",
+    "web/src/routes/settings/+page.svelte"
+  ]
+}

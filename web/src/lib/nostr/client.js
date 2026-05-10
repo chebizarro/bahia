@@ -272,6 +272,32 @@ export function upsertReplaceableEvent(map, event) {
   return { accepted: true, key, deleted: false };
 }
 
+function relayConnectionStateForSocket(socket) {
+  if (!socket) return 'disconnected';
+  if (socket.readyState === WebSocket.OPEN) return 'connected';
+  if (socket.readyState === WebSocket.CONNECTING) return 'connecting';
+  return 'disconnected';
+}
+
+function summarizeRelayConnections(relays, statusMap = {}) {
+  const relayStatuses = relays.map((url) => ({
+    url,
+    status: statusMap[url] || 'unknown'
+  }));
+
+  const connected = relayStatuses.filter((relay) => relay.status === 'connected').length;
+  const failed = relayStatuses.filter((relay) => ['error', 'failed', 'disconnected'].includes(relay.status)).length;
+  const connecting = relayStatuses.filter((relay) => relay.status === 'connecting').length;
+
+  return {
+    total: relays.length,
+    connected,
+    failed,
+    connecting,
+    relays: relayStatuses
+  };
+}
+
 export class NostrClient {
   constructor({ relays = getConfiguredRelays() } = {}) {
     this.relays = relays;
@@ -309,18 +335,50 @@ export class NostrClient {
   // Connect to all relays
   async connect(relays = this.relays) {
     this.manuallyDisconnected = false;
-    this.relays = relays;
-    console.log(`[nostr] Connecting to ${relays.length} relay(s):`, relays);
+    this.relays = Array.isArray(relays) ? [...relays] : [];
+    console.log(`[nostr] Connecting to ${this.relays.length} relay(s):`, this.relays);
+
+    const configuredRelays = new Set(this.relays);
+    Array.from(this.reconnectTimers.entries()).forEach(([url, timer]) => {
+      if (!configuredRelays.has(url)) {
+        clearTimeout(timer);
+        this.reconnectTimers.delete(url);
+      }
+    });
+
+    Array.from(this.sockets.entries()).forEach(([url, socket]) => {
+      if (configuredRelays.has(url)) return;
+      this.rejectPendingPublishesForRelay(url, 'relay removed from configuration');
+      this.notifyRelayClosed(url, 'relay removed from configuration');
+      socket.onclose = null;
+      socket.onerror = null;
+      socket.onmessage = null;
+      try {
+        socket.close();
+      } catch {}
+      this.sockets.delete(url);
+      this.reconnectAttempts.delete(url);
+    });
+
+    this.connectionStatus.update(() =>
+      Object.fromEntries(
+        this.relays.map((url) => {
+          const currentState = relayConnectionStateForSocket(this.sockets.get(url));
+          return [url, currentState === 'connected' ? 'connected' : 'connecting'];
+        })
+      )
+    );
     
     // Reset reconnect attempts for fresh connection
-    relays.forEach(url => this.reconnectAttempts.set(url, 0));
-    const promises = relays.map(url => this.connectRelay(url));
-    const results = await Promise.allSettled(promises);
+    this.relays.forEach(url => this.reconnectAttempts.set(url, 0));
+    const promises = this.relays.map(url => this.connectRelay(url));
+    await Promise.allSettled(promises);
     
-    const connected = results.filter(r => r.status === 'fulfilled').length;
-    console.log(`[nostr] Connected to ${connected}/${relays.length} relays`);
+    const summary = summarizeRelayConnections(this.relays, get(this.connectionStatus));
+    console.log(`[nostr] Connected to ${summary.connected}/${summary.total} relays`);
     
     this.updateConnectedStatus();
+    return summary;
   }
 
   // Connect to a single relay
@@ -333,6 +391,7 @@ export class NostrClient {
       }
 
       if (this.sockets.has(url) && this.sockets.get(url).readyState === WebSocket.OPEN) {
+        this.connectionStatus.update(s => ({ ...s, [url]: 'connected' }));
         resolve();
         return;
       }
@@ -346,6 +405,8 @@ export class NostrClient {
         resolve();
         return;
       }
+
+      this.connectionStatus.update(s => ({ ...s, [url]: 'connecting' }));
       
       ws.onopen = () => {
         console.log(`[nostr] ✓ Connected to ${url}`);
@@ -706,6 +767,7 @@ export class NostrClient {
     });
     this.sockets.clear();
     this.connected.set(false);
+    this.connectionStatus.set({});
   }
 }
 
