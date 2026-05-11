@@ -13,9 +13,15 @@ import (
 )
 
 // Inbound event kinds the subscriber listens for.
+//
+// Protocol boundary:
+// - 5401/5402 are the Hive CI workflow events Bahia consumes.
+// - 5100 is the Loom job request Bahia publishes later when dispatching work.
+// - Legacy NIP-90 kind 5900 belongs to the old upstream dvm-cicd-runner path and is
+//   not part of this subscriber contract.
 var DefaultInboundKinds = []int{
 	// Hive-CI protocol kinds.
-	5401, // Hive-CI workflow run request
+	5401, // Hive-CI workflow run
 	5402, // Hive-CI workflow result
 
 	// Loom protocol kinds.

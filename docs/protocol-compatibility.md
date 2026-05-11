@@ -39,6 +39,135 @@ For the canonical control-plane contract, prefer:
 | REST API | narrowed CRUD/query/log compatibility surface | ✅ implemented |
 | MCP JSON-RPC | tooling surface with async correlation metadata | ✅ implemented |
 
+### Hive CI Protocol Events
+
+Bahia's CI/deployment bridge is aligned to the **Hive CI protocol** and its Loom execution hand-off:
+
+| Kind | Name | Direction | Description |
+|------|------|-----------|-------------|
+| 5401 | Workflow Run | Inbound | Trusted CI trigger / workflow-run fact |
+| 5402 | Workflow Result | Inbound | Trusted build outcome fact |
+| 5100 | Loom Job Request | Outbound | Actual compute dispatch for build/deploy work |
+
+> **Boundary note:** `kind:5900` is **not** part of Bahia's Hive CI integration. `5900` belongs to the older upstream NIP-90 `dvm-cicd-runner` path. Bahia's subscriber and pipeline bridge are designed around `5401` / `5402`, with `5100` as the execution transport.
+
+### Loom Protocol Events
+
+Bahia integrates with [Loom](https://github.com/openagentsinc/loom), a Nostr-native
+distributed compute protocol. Bahia acts as a **job requester** (client) that
+submits deployment jobs to Loom workers.
+
+| Kind  | Name                | Direction | Description                           |
+|-------|---------------------|-----------|---------------------------------------|
+| 10100 | Worker Advertisement | Inbound   | Replaceable event advertising worker capabilities |
+| 5100  | Job Request         | Outbound  | Request to execute a deployment job   |
+| 30100 | Job Status Update   | Inbound   | Parameterized replaceable progress updates |
+| 5101  | Job Result          | Inbound   | Final result of a completed job       |
+| 5102  | Job Cancellation    | Outbound  | Request to cancel a running job       |
+
+#### Kind 10100 — Worker Advertisement (Inbound)
+
+Workers publish replaceable events advertising their capabilities. Bahia's
+\`WorkerDiscovery\` service subscribes to these events and maintains a catalog.
+
+\`\`\`json
+{
+  "kind": 10100,
+  "pubkey": "<worker-pubkey>",
+  "content": "{\"name\":\"deploy-worker-1\",\"capabilities\":[\"docker\",\"compose\"],\"price_per_sec\":10,\"mint_url\":\"https://mint.example.com\"}",
+  "tags": [
+    ["d", "worker-ad"],
+    ["relay", "wss://relay.example.com"]
+  ]
+}
+\`\`\`
+
+**Content fields:**
+- \`name\`: Human-readable worker name
+- \`capabilities\`: Array of supported deployment types
+- \`price_per_sec\`: Price in satoshis per second of compute
+- \`mint_url\`: Cashu mint URL for payments
+
+#### Kind 5100 — Job Request (Outbound)
+
+Bahia publishes job requests when a deployment run is created.
+
+\`\`\`json
+{
+  "kind": 5100,
+  "pubkey": "<bahia-pubkey>",
+  "content": "{\"type\":\"docker-deploy\",\"image\":\"ghcr.io/org/app:v1.2.3\",\"env\":{\"PORT\":\"8080\"}}",
+  "tags": [
+    ["p", "<target-worker-pubkey>"],
+    ["bid", "1000"],
+    ["expiration", "1704067200"]
+  ]
+}
+\`\`\`
+
+**Tags:**
+- \`p\`: Target worker pubkey
+- \`bid\`: Maximum payment in satoshis
+- \`expiration\`: Unix timestamp after which job should not be accepted
+
+#### Kind 30100 — Job Status Update (Inbound)
+
+Workers publish parameterized replaceable events with progress updates.
+
+\`\`\`json
+{
+  "kind": 30100,
+  "pubkey": "<worker-pubkey>",
+  "content": "",
+  "tags": [
+    ["d", "<job-event-id>"],
+    ["e", "<job-event-id>"],
+    ["status", "running"],
+    ["progress", "50"]
+  ]
+}
+\`\`\`
+
+**Status values:** \`accepted\`, \`running\`, \`completed\`, \`failed\`, \`cancelled\`
+
+#### Kind 5101 — Job Result (Inbound)
+
+Workers publish the final result when a job completes.
+
+\`\`\`json
+{
+  "kind": 5101,
+  "pubkey": "<worker-pubkey>",
+  "content": "{\"exit_code\":0,\"stdout_ref\":\"https://blossom.example.com/abc123\",\"stderr_ref\":\"https://blossom.example.com/def456\"}",
+  "tags": [
+    ["e", "<job-event-id>"],
+    ["status", "completed"],
+    ["amount", "850"]
+  ]
+}
+\`\`\`
+
+**Content fields:**
+- \`exit_code\`: Process exit code
+- \`stdout_ref\`: Blossom URL for stdout logs
+- \`stderr_ref\`: Blossom URL for stderr logs
+
+#### Kind 5102 — Job Cancellation (Outbound)
+
+Bahia can request job cancellation.
+
+\`\`\`json
+{
+  "kind": 5102,
+  "pubkey": "<bahia-pubkey>",
+  "content": "",
+  "tags": [
+    ["e", "<job-event-id>"]
+  ]
+}
+\`\`\`
+>>>>>>> 99d1c51 (docs: clarify Hive CI protocol boundaries)
+
 ---
 
 ## Control-plane transport hierarchy
