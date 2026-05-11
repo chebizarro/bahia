@@ -2,12 +2,14 @@ package workflow
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	runtimeadapter "github.com/openagentsinc/bahia/internal/adapters/runtime"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/events"
 	"github.com/openagentsinc/bahia/internal/repository"
@@ -245,6 +247,41 @@ func (m *stubStateRepo) ListAll(_ context.Context) ([]domain.EnvironmentServiceS
 }
 
 // --- Mock Loom Client ---
+
+type stubRuntime struct {
+	runtimeType domain.RuntimeType
+	lastService string
+	lastImage   string
+	deployErr   error
+	deployCalls int
+}
+
+func (s *stubRuntime) Type() domain.RuntimeType { return s.runtimeType }
+func (s *stubRuntime) Observe(_ context.Context, _, _ uuid.UUID, _ string) (*domain.RuntimeObservation, error) {
+	return nil, nil
+}
+func (s *stubRuntime) Deploy(_ context.Context, serviceName, image string, _ runtimeadapter.DeployOptions) error {
+	s.lastService = serviceName
+	s.lastImage = image
+	s.deployCalls++
+	return s.deployErr
+}
+func (s *stubRuntime) Undeploy(_ context.Context, _ string) error { return nil }
+func (s *stubRuntime) StreamLogs(_ context.Context, _ string, _ runtimeadapter.LogOptions) (<-chan runtimeadapter.LogEntry, error) {
+	return nil, nil
+}
+
+type stubRuntimeResolver struct {
+	rt  runtimeadapter.Runtime
+	err error
+}
+
+func (s *stubRuntimeResolver) Resolve(_ *domain.Service, _ *domain.Environment) (runtimeadapter.Runtime, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	return s.rt, nil
+}
 
 // mockLoomClient is a controllable fake that replaces the real loom.Client.
 // Since loom.Client is a concrete struct (not an interface), we test the coordinator
@@ -503,6 +540,92 @@ func TestExecuteDeployment_RejectsNonExistentIntent(t *testing.T) {
 	}
 	if !containsSubstring(err.Error(), "not found") {
 		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestExecuteDeployment_UsesDirectRuntimeForLocalComposeArtifact(t *testing.T) {
+	svcRepo, envRepo, artRepo, intentRepo, runRepo, stateRepo := newTestCoordinatorDeps()
+
+	svc := &domain.Service{Name: "gitea", ArtifactRepo: "local/gitea", RuntimeType: domain.RuntimeTypeCompose}
+	_ = svcRepo.Create(context.Background(), svc)
+	env := &domain.Environment{Name: "edge-01-staging", DeployStrategy: domain.DeployStrategyReplace}
+	_ = envRepo.Create(context.Background(), env)
+	art := &domain.Artifact{BuildID: uuid.New(), ServiceID: svc.ID, ImageRepo: "local/gitea", ImageTag: "migration", ImageDigest: "sha256:abc"}
+	_ = artRepo.Create(context.Background(), art)
+
+	registry := newTestRegistry(svcRepo, envRepo, artRepo, intentRepo, runRepo, stateRepo)
+	logger := zap.NewNop()
+	stubRT := &stubRuntime{runtimeType: domain.RuntimeTypeCompose}
+	coord := NewCoordinator(registry, nil, &events.NoopPublisher{}, logger, WithRuntimeResolver(&stubRuntimeResolver{rt: stubRT}))
+
+	di := &domain.DeploymentIntent{
+		ServiceID: svc.ID, EnvironmentID: env.ID, ArtifactID: art.ID,
+		RequestedBy: "test", SourceKind: domain.SourceKindManual,
+		ApprovalStatus: domain.ApprovalStatusNotRequired, Status: domain.IntentStatusApproved,
+	}
+	_ = registry.CreateDeploymentIntent(context.Background(), di)
+	intentRepo.mu.Lock()
+	intentRepo.intents[di.ID].Status = domain.IntentStatusApproved
+	intentRepo.mu.Unlock()
+
+	if err := coord.ExecuteDeployment(context.Background(), di.ID); err != nil {
+		t.Fatalf("ExecuteDeployment() error = %v", err)
+	}
+	if stubRT.deployCalls != 1 {
+		t.Fatalf("expected 1 direct deploy call, got %d", stubRT.deployCalls)
+	}
+	if stubRT.lastService != "gitea" {
+		t.Fatalf("expected service gitea, got %q", stubRT.lastService)
+	}
+	if stubRT.lastImage != "" {
+		t.Fatalf("expected compose local artifact to resolve via compose file image, got %q", stubRT.lastImage)
+	}
+	if len(runRepo.runs) != 1 {
+		t.Fatalf("expected 1 deployment run, got %d", len(runRepo.runs))
+	}
+	for _, run := range runRepo.runs {
+		if run.Status != domain.RunStatusSucceeded {
+			t.Fatalf("expected succeeded run, got %s", run.Status)
+		}
+		if run.LoomJobID != "runtime:direct" {
+			t.Fatalf("expected direct runtime marker, got %q", run.LoomJobID)
+		}
+	}
+}
+
+func TestExecuteDeployment_DirectRuntimeFailureMarksRunFailed(t *testing.T) {
+	svcRepo, envRepo, artRepo, intentRepo, runRepo, stateRepo := newTestCoordinatorDeps()
+
+	svc := &domain.Service{Name: "gitea", ArtifactRepo: "local/gitea", RuntimeType: domain.RuntimeTypeCompose}
+	_ = svcRepo.Create(context.Background(), svc)
+	env := &domain.Environment{Name: "edge-01-staging", DeployStrategy: domain.DeployStrategyReplace}
+	_ = envRepo.Create(context.Background(), env)
+	art := &domain.Artifact{BuildID: uuid.New(), ServiceID: svc.ID, ImageRepo: "local/gitea", ImageTag: "migration", ImageDigest: "sha256:abc"}
+	_ = artRepo.Create(context.Background(), art)
+
+	registry := newTestRegistry(svcRepo, envRepo, artRepo, intentRepo, runRepo, stateRepo)
+	logger := zap.NewNop()
+	stubRT := &stubRuntime{runtimeType: domain.RuntimeTypeCompose, deployErr: fmt.Errorf("boom")}
+	coord := NewCoordinator(registry, nil, &events.NoopPublisher{}, logger, WithRuntimeResolver(&stubRuntimeResolver{rt: stubRT}))
+
+	di := &domain.DeploymentIntent{
+		ServiceID: svc.ID, EnvironmentID: env.ID, ArtifactID: art.ID,
+		RequestedBy: "test", SourceKind: domain.SourceKindManual,
+		ApprovalStatus: domain.ApprovalStatusNotRequired, Status: domain.IntentStatusApproved,
+	}
+	_ = registry.CreateDeploymentIntent(context.Background(), di)
+	intentRepo.mu.Lock()
+	intentRepo.intents[di.ID].Status = domain.IntentStatusApproved
+	intentRepo.mu.Unlock()
+
+	err := coord.ExecuteDeployment(context.Background(), di.ID)
+	if err == nil || !containsSubstring(err.Error(), "direct runtime deploy failed") {
+		t.Fatalf("expected direct runtime failure, got %v", err)
+	}
+	for _, run := range runRepo.runs {
+		if run.Status != domain.RunStatusFailed {
+			t.Fatalf("expected failed run, got %s", run.Status)
+		}
 	}
 }
 
