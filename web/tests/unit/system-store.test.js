@@ -1,19 +1,17 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
-vi.mock('../../src/lib/api/client.js', () => ({
-  api: {
-    getSystemInfo: vi.fn()
-  }
+vi.mock('../../src/lib/stores/discovery.svelte.js', () => ({
+  discoverSystemInfo: vi.fn()
 }));
 
 describe('system info store', () => {
-  let api;
+  let discovery;
   let store;
 
   beforeEach(async () => {
     vi.resetModules();
     vi.clearAllMocks();
-    api = (await import('../../src/lib/api/client.js')).api;
+    discovery = await import('../../src/lib/stores/discovery.svelte.js');
     store = await import('../../src/lib/stores/system.svelte.js');
     store.resetSystemInfoStore();
   });
@@ -23,12 +21,12 @@ describe('system info store', () => {
       features: { relay_read_models: true, direct_nostr_http_auth: true },
       nostr: { browser_relays: ['ws://relay.test/relay'], service_pubkey: 'a'.repeat(64) }
     };
-    api.getSystemInfo.mockResolvedValue(info);
+    discovery.discoverSystemInfo.mockResolvedValue(info);
 
     await expect(store.loadSystemInfo()).resolves.toEqual(info);
     await expect(store.loadSystemInfo()).resolves.toEqual(info);
 
-    expect(api.getSystemInfo).toHaveBeenCalledTimes(1);
+    expect(discovery.discoverSystemInfo).toHaveBeenCalledTimes(1);
     expect(store.currentSystemInfo()).toEqual(info);
     expect(store.systemInfo.data).toEqual(info);
     expect(store.systemInfo.loading).toBe(false);
@@ -41,25 +39,25 @@ describe('system info store', () => {
     const infoPromise = new Promise((resolve) => {
       resolveInfo = resolve;
     });
-    api.getSystemInfo.mockReturnValue(infoPromise);
+    discovery.discoverSystemInfo.mockReturnValue(infoPromise);
 
     const first = store.loadSystemInfo();
     const second = store.loadSystemInfo();
     resolveInfo({ features: { relay_read_models: true } });
 
     await expect(Promise.all([first, second])).resolves.toHaveLength(2);
-    expect(api.getSystemInfo).toHaveBeenCalledTimes(1);
+    expect(discovery.discoverSystemInfo).toHaveBeenCalledTimes(1);
   });
 
   it('reloads when force is requested', async () => {
-    api.getSystemInfo
+    discovery.discoverSystemInfo
       .mockResolvedValueOnce({ version: 'old' })
       .mockResolvedValueOnce({ version: 'new' });
 
     await store.loadSystemInfo();
     await store.loadSystemInfo({ force: true });
 
-    expect(api.getSystemInfo).toHaveBeenCalledTimes(2);
+    expect(discovery.discoverSystemInfo).toHaveBeenCalledTimes(2);
     expect(store.currentSystemInfo()).toEqual({ version: 'new' });
   });
 });

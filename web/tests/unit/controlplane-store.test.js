@@ -6,6 +6,10 @@ const canonicalSystemInfoFixture = JSON.parse(
   readFileSync(resolve(process.cwd(), '../test/fixtures/system_info_sidecar_first.json'), 'utf8')
 );
 
+const systemInfoMock = vi.hoisted(() => ({
+  loadSystemInfo: vi.fn()
+}));
+
 const nostrMock = vi.hoisted(() => {
   function store(initial) {
     let value = initial;
@@ -35,10 +39,8 @@ const nostrMock = vi.hoisted(() => {
   };
 });
 
-vi.mock('../../src/lib/api/client.js', () => ({
-  api: {
-    getSystemInfo: vi.fn()
-  }
+vi.mock('../../src/lib/stores/system.svelte.js', () => ({
+  loadSystemInfo: systemInfoMock.loadSystemInfo
 }));
 
 vi.mock('../../src/lib/nostr/client.js', async () => {
@@ -62,7 +64,6 @@ function event({ id, kind, pubkey = 'a'.repeat(64), created_at = 100, tags = [],
 
 describe('controlplane store', () => {
   let store;
-  let api;
   let KINDS;
 
   beforeEach(async () => {
@@ -75,8 +76,7 @@ describe('controlplane store', () => {
     nostrMock.queryUntilEose.mockResolvedValue([]);
     nostrMock.subscribe.mockReturnValue(vi.fn());
 
-    api = (await import('../../src/lib/api/client.js')).api;
-    api.getSystemInfo.mockResolvedValue({
+    systemInfoMock.loadSystemInfo.mockResolvedValue({
       nostr: {
         browser_relays: ['http://localhost:10547/relay'],
         service_pubkey: 'b'.repeat(64)
@@ -111,7 +111,7 @@ describe('controlplane store', () => {
   });
 
   it('bootstraps from the canonical system-info fixture used by other discovery consumers', async () => {
-    api.getSystemInfo.mockResolvedValueOnce(structuredClone(canonicalSystemInfoFixture));
+    systemInfoMock.loadSystemInfo.mockResolvedValueOnce(structuredClone(canonicalSystemInfoFixture));
 
     const result = await store.bootstrapControlplane();
 
@@ -204,7 +204,7 @@ describe('controlplane store', () => {
     const result = await store.bootstrapControlplane();
 
     expect(result.ok).toBe(true);
-    expect(api.getSystemInfo).toHaveBeenCalledTimes(1);
+    expect(systemInfoMock.loadSystemInfo).toHaveBeenCalledTimes(1);
     expect(nostrMock.setRelays).toHaveBeenCalledWith(['ws://localhost:10547/relay'], false);
     expect(nostrMock.connect).toHaveBeenCalledWith(['ws://localhost:10547/relay']);
     expect(nostrMock.queryUntilEose).toHaveBeenCalledWith(expect.arrayContaining([
@@ -345,7 +345,7 @@ describe('controlplane store', () => {
   });
 
   it('fails closed when relay read models are not advertised', async () => {
-    api.getSystemInfo.mockResolvedValueOnce({
+    systemInfoMock.loadSystemInfo.mockResolvedValueOnce({
       nostr: {
         browser_relays: ['http://localhost:10547/relay'],
         service_pubkey: 'b'.repeat(64)
@@ -359,14 +359,14 @@ describe('controlplane store', () => {
     const result = await store.bootstrapControlplane();
 
     expect(result.ok).toBe(false);
-    expect(result.reason).toBe('Relay read models are not advertised by /system/info');
+    expect(result.reason).toBe('Relay read models are not advertised by Nostr system discovery');
     expect(store.controlplaneConnection.status).toBe('error');
     expect(nostrMock.setRelays).not.toHaveBeenCalled();
     expect(nostrMock.connect).not.toHaveBeenCalled();
   });
 
   it('fails closed when no browser bootstrap relays are advertised', async () => {
-    api.getSystemInfo.mockResolvedValueOnce({
+    systemInfoMock.loadSystemInfo.mockResolvedValueOnce({
       nostr: {
         service_pubkey: 'b'.repeat(64)
       },
@@ -379,7 +379,7 @@ describe('controlplane store', () => {
     const result = await store.bootstrapControlplane();
 
     expect(result.ok).toBe(false);
-    expect(result.reason).toBe('No browser Nostr relays advertised by /system/info');
+    expect(result.reason).toBe('No browser Nostr relays advertised by Nostr system discovery');
     expect(store.controlplaneConnection.status).toBe('error');
     expect(nostrMock.setRelays).not.toHaveBeenCalled();
     expect(nostrMock.connect).not.toHaveBeenCalled();

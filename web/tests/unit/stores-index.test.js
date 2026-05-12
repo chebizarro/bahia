@@ -121,7 +121,7 @@ describe('Global Stores (index.js)', () => {
   it('loadAll bootstraps the relay-backed controlplane without REST fallback', async () => {
     await storesModule.loadAll();
 
-    expect(mockApi.getSystemInfo).toHaveBeenCalledTimes(1);
+    expect(mockApi.getSystemInfo).not.toHaveBeenCalled();
     expect(controlplaneMock.bootstrapControlplane).toHaveBeenCalledTimes(1);
     expect(mockApi.listServices).not.toHaveBeenCalled();
   });

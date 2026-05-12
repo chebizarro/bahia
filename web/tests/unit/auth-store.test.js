@@ -3,6 +3,17 @@ import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 // Mock browser environment
 global.window = global;
 
+const systemStoreMock = vi.hoisted(() => ({
+  info: null,
+  currentSystemInfo: vi.fn(() => systemStoreMock.info),
+  loadSystemInfo: vi.fn(async () => systemStoreMock.info)
+}));
+
+vi.mock('../../src/lib/stores/system.svelte.js', () => ({
+  currentSystemInfo: systemStoreMock.currentSystemInfo,
+  loadSystemInfo: systemStoreMock.loadSystemInfo
+}));
+
 // Mock NIP-07 module
 vi.mock('../../src/lib/nostr/nip07.js', () => ({
   waitForNip07: vi.fn(),
@@ -38,6 +49,7 @@ describe('Auth Store', () => {
     // Reset all mocks
     vi.clearAllMocks();
     vi.resetModules();
+    systemStoreMock.info = null;
     
     // Import mocked NIP-07 module
     nip07Module = await import('../../src/lib/nostr/nip07.js');
@@ -367,17 +379,12 @@ describe('Auth Store', () => {
     it('installs direct NIP-98 provider instead of exchanging JWT when advertised', async () => {
       const signedEvent = { id: 'event-id', sig: 'signature', pubkey: 'a'.repeat(64), kind: 27235, tags: [] };
       nip07Module.signEvent.mockImplementation(async (event) => ({ ...event, ...signedEvent, tags: event.tags }));
-      global.fetch
-        .mockResolvedValueOnce({
-          ok: true,
-          headers: new Map([['content-type', 'application/json']]),
-          json: async () => ({ data: { features: { direct_nostr_http_auth: true } } })
-        })
-        .mockResolvedValueOnce({
-          ok: true,
-          headers: new Map([['content-type', 'application/json']]),
-          json: async () => ({ data: [] })
-        });
+      systemStoreMock.info = { features: { direct_nostr_http_auth: true } };
+      global.fetch.mockResolvedValueOnce({
+        ok: true,
+        headers: new Map([['content-type', 'application/json']]),
+        json: async () => ({ data: [] })
+      });
 
       await authModule.login();
       const { api } = await import('../../src/lib/api/client.js');

@@ -1,5 +1,5 @@
 import { browser } from '$app/environment';
-import { api } from '../api/client.js';
+import { discoverSystemInfo } from './discovery.svelte.js';
 
 export const systemInfo = $state({
   data: null,
@@ -23,7 +23,7 @@ export function resetSystemInfoStore() {
 }
 
 export async function loadSystemInfo({ force = false } = {}) {
-  if (!browser || !api) return null;
+  if (!browser) return null;
   if (systemInfo.data && !force) return systemInfo.data;
   if (loadPromise && !force) return loadPromise;
 
@@ -32,7 +32,7 @@ export async function loadSystemInfo({ force = false } = {}) {
 
   loadPromise = (async () => {
     try {
-      const info = await api.getSystemInfo();
+      const info = await discoverSystemInfo({ force });
       systemInfo.data = info;
       systemInfo.loadedAt = new Date().toISOString();
       systemInfo.error = null;

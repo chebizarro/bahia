@@ -1,5 +1,6 @@
 import { isAuthenticated, currentUser } from './auth.js';
 import { systemInfo, loadSystemInfo, currentSystemInfo } from './system.svelte.js';
+export { discoveryState, discoverSystemInfo, resetDiscoveryStore } from './discovery.svelte.js';
 import {
   services,
   environments,
@@ -73,11 +74,6 @@ export async function loadAll() {
   if (inFlight.all) return inFlight.all;
 
   inFlight.all = (async () => {
-    try {
-      await loadSystemInfo();
-    } catch (error) {
-      console.error('Failed to load shared system info before controlplane bootstrap:', error);
-    }
     const result = await bootstrapControlplane();
     if (!result.ok) {
       console.error('Nostr controlplane bootstrap failed:', result.reason);

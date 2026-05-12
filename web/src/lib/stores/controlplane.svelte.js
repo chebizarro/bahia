@@ -549,11 +549,11 @@ export async function bootstrapControlplane({ force = false } = {}) {
       controlplaneConnection.servicePubkey = systemInfo?.nostr?.service_pubkey || '';
 
       if (!systemInfo?.features?.relay_read_models) {
-        throw new Error('Relay read models are not advertised by /system/info');
+        throw new Error('Relay read models are not advertised by Nostr system discovery');
       }
 
       if (relays.length === 0) {
-        throw new Error('No browser Nostr relays advertised by /system/info');
+        throw new Error('No browser Nostr relays advertised by Nostr system discovery');
       }
 
       controlplaneConnection.status = 'connecting';
