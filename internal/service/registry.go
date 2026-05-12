@@ -583,6 +583,18 @@ func (s *RegistryService) CreateDeploymentIntent(ctx context.Context, di *domain
 		EntityID: di.ID.String(),
 		Data:     di,
 	})
+	if di.Status == domain.IntentStatusApproved {
+		s.publisher.Publish(ctx, events.Event{
+			Type:     events.EventDeploymentIntentApproved,
+			EntityID: di.ID.String(),
+			Data: events.ResourceData{
+				ServiceID:     di.ServiceID.String(),
+				EnvironmentID: di.EnvironmentID.String(),
+				ArtifactID:    di.ArtifactID.String(),
+				IntentID:      di.ID.String(),
+			},
+		})
+	}
 
 	s.logger.Info("deployment intent created",
 		zap.String("intent_id", di.ID.String()),

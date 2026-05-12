@@ -4,11 +4,13 @@ package workflow
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/adapters/loom"
+	runtimeadapter "github.com/openagentsinc/bahia/internal/adapters/runtime"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/events"
 	"github.com/openagentsinc/bahia/internal/service"
@@ -21,6 +23,7 @@ type Coordinator struct {
 	loom          *loom.Client
 	workerPolicy  *service.WorkerPolicyService
 	workerCatalog *service.WorkerCatalogService
+	runtimeResolver runtimeadapter.RuntimeResolver
 	publisher     events.Publisher
 	logger        *zap.Logger
 
@@ -63,6 +66,11 @@ func WithWorkerPolicy(wp *service.WorkerPolicyService) CoordinatorOption {
 // WithWorkerCatalog enables job stats tracking.
 func WithWorkerCatalog(wc *service.WorkerCatalogService) CoordinatorOption {
 	return func(c *Coordinator) { c.workerCatalog = wc }
+}
+
+// WithRuntimeResolver enables direct runtime deployments for resolvable targets.
+func WithRuntimeResolver(resolver runtimeadapter.RuntimeResolver) CoordinatorOption {
+	return func(c *Coordinator) { c.runtimeResolver = resolver }
 }
 
 // Shutdown cancels all in-flight poll goroutines and waits for them to finish.
@@ -117,6 +125,15 @@ func (c *Coordinator) ExecuteDeployment(ctx context.Context, intentID uuid.UUID)
 		return fmt.Errorf("getting environment for intent: %w", err)
 	}
 
+	resolvedImage := strings.TrimSpace(artifact.ImageRepo)
+	if tag := strings.TrimSpace(artifact.ImageTag); tag != "" {
+		resolvedImage = resolvedImage + ":" + tag
+	}
+
+	if c.shouldUseDirectRuntimeDeployment(svc, artifact) {
+		return c.executeDirectRuntimeDeployment(ctx, intentID, svc, env, resolvedImage)
+	}
+
 	// Select a worker using the environment's worker policy (if configured).
 	var workerPubkey string
 	if c.workerPolicy != nil {
@@ -140,7 +157,7 @@ func (c *Coordinator) ExecuteDeployment(ctx context.Context, intentID uuid.UUID)
 	jobReq := loom.JobRequest{
 		ID:           uuid.New().String(),
 		Type:         "deploy",
-		Image:        artifact.ImageRepo + ":" + artifact.ImageTag,
+		Image:        resolvedImage,
 		Digest:       artifact.ImageDigest,
 		Environment:  env.Name,
 		Service:      svc.Name,
@@ -183,6 +200,85 @@ func (c *Coordinator) ExecuteDeployment(ctx context.Context, intentID uuid.UUID)
 	}()
 
 	return nil
+}
+
+func (c *Coordinator) shouldUseDirectRuntimeDeployment(svc *domain.Service, artifact *domain.Artifact) bool {
+	if c.runtimeResolver == nil || svc == nil || artifact == nil {
+		return false
+	}
+	if svc.RuntimeType != domain.RuntimeTypeCompose {
+		return false
+	}
+	return isLocalImageRepo(artifact.ImageRepo)
+}
+
+func (c *Coordinator) executeDirectRuntimeDeployment(ctx context.Context, intentID uuid.UUID, svc *domain.Service, env *domain.Environment, image string) error {
+	rt, err := c.runtimeResolver.Resolve(svc, env)
+	if err != nil {
+		return fmt.Errorf("resolving runtime for direct deployment: %w", err)
+	}
+
+	now := time.Now().UTC()
+	run := &domain.DeploymentRun{
+		DeploymentIntentID: intentID,
+		LoomJobID:          "runtime:direct",
+		Status:             domain.RunStatusQueued,
+		StartedAt:          &now,
+		Metadata: map[string]any{
+			"execution_mode": "direct-runtime",
+			"runtime_type":   string(rt.Type()),
+		},
+	}
+	if err := c.registry.CreateDeploymentRun(ctx, run); err != nil {
+		return fmt.Errorf("creating deployment run: %w", err)
+	}
+
+	deployImage := image
+	if rt.Type() == domain.RuntimeTypeCompose && isLocalImageRef(image) {
+		deployImage = ""
+		run.Metadata["image_resolution"] = "compose-file"
+	}
+
+	c.logger.Info("executing direct runtime deployment",
+		zap.String("intent_id", intentID.String()),
+		zap.String("run_id", run.ID.String()),
+		zap.String("service", svc.Name),
+		zap.String("environment", env.Name),
+		zap.String("runtime_type", string(rt.Type())),
+		zap.String("requested_image", image),
+		zap.String("deploy_image", deployImage),
+	)
+
+	if err := rt.Deploy(ctx, svc.Name, deployImage, runtimeadapter.DeployOptions{
+		Labels: map[string]string{"bahia.service": svc.Name},
+	}); err != nil {
+		exitCode := 1
+		completeCtx, completeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer completeCancel()
+		if completeErr := c.registry.CompleteDeploymentRun(completeCtx, run.ID, domain.RunStatusFailed, &exitCode); completeErr != nil {
+			c.logger.Error("failed to mark direct runtime deployment as failed",
+				zap.String("run_id", run.ID.String()),
+				zap.Error(completeErr),
+			)
+		}
+		return fmt.Errorf("direct runtime deploy failed: %w", err)
+	}
+
+	completeCtx, completeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer completeCancel()
+	if err := c.registry.CompleteDeploymentRun(completeCtx, run.ID, domain.RunStatusSucceeded, nil); err != nil {
+		return fmt.Errorf("completing direct runtime deployment run: %w", err)
+	}
+
+	return nil
+}
+
+func isLocalImageRepo(repo string) bool {
+	return strings.HasPrefix(strings.TrimSpace(repo), "local/")
+}
+
+func isLocalImageRef(image string) bool {
+	return strings.HasPrefix(strings.TrimSpace(image), "local/")
 }
 
 func (c *Coordinator) pollForCompletion(ctx context.Context, runID uuid.UUID, jobEventID string, workerPubkey string, startTime time.Time) {

@@ -15,6 +15,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/nbd-wtf/go-nostr"
@@ -375,13 +376,27 @@ func buildDeployScript(job JobRequest) string {
 	if job.Digest != "" {
 		ref += "@" + job.Digest
 	}
+
+	prepareImage := fmt.Sprintf("docker pull %s", ref)
+	if isLocalImageRef(job.Image) {
+		prepareImage = fmt.Sprintf("docker image inspect %s >/dev/null", shellQuote(job.Image))
+	}
+
 	return fmt.Sprintf(
-		`set -e; echo "Deploying %s to %s/%s"; docker pull %s && docker stop %s 2>/dev/null || true && docker rm %s 2>/dev/null || true && docker run -d --name %s %s; echo "Deploy complete"`,
+		`set -e; echo "Deploying %s to %s/%s"; %s && docker stop %s 2>/dev/null || true && docker rm %s 2>/dev/null || true && docker run -d --name %s %s; echo "Deploy complete"`,
 		ref, job.Environment, job.Service,
-		ref,
+		prepareImage,
 		job.Service, job.Service,
 		job.Service, ref,
 	)
+}
+
+func isLocalImageRef(image string) bool {
+	return strings.HasPrefix(image, "local/")
+}
+
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'"'"'`) + "'"
 }
 
 // parseJobResult extracts a JobStatus from a Kind 5101 result event.

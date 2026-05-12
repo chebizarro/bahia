@@ -198,15 +198,16 @@ func New(cfg *config.Config) (*App, error) {
 	// Worker policy service for environment-specific worker selection.
 	workerPolicySvc := service.NewWorkerPolicyService(workerRepo, logger)
 
-	// Workflow coordinator.
-	coord := workflow.NewCoordinator(registry, loomClient, publisher, logger,
-		workflow.WithWorkerPolicy(workerPolicySvc),
-	)
-	coord.SetupEventHandlers(publisher)
-
 	// Runtime resolver — selects Docker, Compose, or Kubernetes per service/environment.
 	runtimeResolver := runtime.NewConfigRuntimeResolver(cfg.Runtime, logger)
 	logger.Info("runtime resolver initialized", zap.String("default_type", cfg.Runtime.Type))
+
+	// Workflow coordinator.
+	coord := workflow.NewCoordinator(registry, loomClient, publisher, logger,
+		workflow.WithWorkerPolicy(workerPolicySvc),
+		workflow.WithRuntimeResolver(runtimeResolver),
+	)
+	coord.SetupEventHandlers(publisher)
 
 	// Secret encryptor (uses Bahia's Nostr key for at-rest encryption).
 	var secretEncryptor *secretsAdapter.Encryptor

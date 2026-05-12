@@ -106,6 +106,15 @@ func (p *InProcessPublisher) Publish(ctx context.Context, e Event) {
 	handlers := p.handlers[e.Type]
 	p.mu.RUnlock()
 
+	handlerCtx := context.Background()
+	if ctx != nil {
+		if deadline, ok := ctx.Deadline(); ok {
+			var cancel context.CancelFunc
+			handlerCtx, cancel = context.WithDeadline(handlerCtx, deadline)
+			defer cancel()
+		}
+	}
+
 	for _, h := range handlers {
 		h := h
 		go func() {
@@ -117,7 +126,7 @@ func (p *InProcessPublisher) Publish(ctx context.Context, e Event) {
 					)
 				}
 			}()
-			h(ctx, e)
+			h(handlerCtx, e)
 		}()
 	}
 }
