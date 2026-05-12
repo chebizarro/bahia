@@ -3,12 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
-	"net/http"
-	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -29,104 +24,47 @@ func TestRootCommandExposesOperatorFlags(t *testing.T) {
 }
 
 func TestResolveOperatorRelaysPrecedence(t *testing.T) {
-	t.Run("flag beats env and system info", func(t *testing.T) {
+	t.Run("flag beats env", func(t *testing.T) {
 		resetOperatorGlobals(t)
 		t.Setenv("BAHIA_NOSTR_RELAYS", "wss://env.example")
 		cmd := newOperatorFlagTestCommand(t)
 		if err := cmd.Root().PersistentFlags().Set("relay", "wss://flag.example,wss://flag.example/"); err != nil {
 			t.Fatalf("set relay flag: %v", err)
 		}
-		sys := &fakeSystemInfoClient{info: &client.SystemInfo{Nostr: client.SystemInfoNostr{BrowserRelays: []string{"wss://system.example"}}}}
-		relays, err := resolveOperatorRelays(context.Background(), cmd, sys)
+		relays, err := resolveOperatorRelays(cmd)
 		if err != nil {
 			t.Fatalf("resolveOperatorRelays() error = %v", err)
 		}
 		if strings.Join(relays, ",") != "wss://flag.example" {
 			t.Fatalf("relays = %#v, want flag relay only", relays)
 		}
-		if sys.calls != 0 {
-			t.Fatalf("system info was called despite flag relays")
-		}
 	})
 
-	t.Run("env beats system info", func(t *testing.T) {
+	t.Run("env is used when flag is absent", func(t *testing.T) {
 		resetOperatorGlobals(t)
 		t.Setenv("BAHIA_NOSTR_RELAYS", "wss://env1.example, wss://env2.example")
 		cmd := newOperatorFlagTestCommand(t)
-		sys := &fakeSystemInfoClient{info: &client.SystemInfo{Nostr: client.SystemInfoNostr{BrowserRelays: []string{"wss://system.example"}}}}
-		relays, err := resolveOperatorRelays(context.Background(), cmd, sys)
+		relays, err := resolveOperatorRelays(cmd)
 		if err != nil {
 			t.Fatalf("resolveOperatorRelays() error = %v", err)
 		}
 		if strings.Join(relays, ",") != "wss://env1.example,wss://env2.example" {
 			t.Fatalf("relays = %#v, want env relays", relays)
 		}
-		if sys.calls != 0 {
-			t.Fatalf("system info was called despite env relays")
-		}
 	})
 
-	t.Run("system info appends sidecar and dedupes", func(t *testing.T) {
+	t.Run("missing explicit relay configuration fails deterministically", func(t *testing.T) {
 		resetOperatorGlobals(t)
 		t.Setenv("BAHIA_NOSTR_RELAYS", "")
 		cmd := newOperatorFlagTestCommand(t)
-		sys := &fakeSystemInfoClient{info: &client.SystemInfo{Nostr: client.SystemInfoNostr{BrowserRelays: []string{"ws://localhost:3000/relay"}, SidecarURL: "ws://localhost:3000/relay/"}}}
-		relays, err := resolveOperatorRelays(context.Background(), cmd, sys)
-		if err != nil {
-			t.Fatalf("resolveOperatorRelays() error = %v", err)
-		}
-		if len(relays) != 1 || relays[0] != "ws://localhost:3000/relay" {
-			t.Fatalf("relays = %#v, want deduped system relay", relays)
-		}
-		if sys.calls != 1 {
-			t.Fatalf("system info calls = %d, want 1", sys.calls)
-		}
-	})
-
-	t.Run("system info without browser bootstrap urls fails deterministically", func(t *testing.T) {
-		resetOperatorGlobals(t)
-		t.Setenv("BAHIA_NOSTR_RELAYS", "")
-		cmd := newOperatorFlagTestCommand(t)
-		sys := &fakeSystemInfoClient{info: &client.SystemInfo{}}
-		relays, err := resolveOperatorRelays(context.Background(), cmd, sys)
-		if err == nil || !strings.Contains(err.Error(), "no operator relays discovered") {
-			t.Fatalf("resolveOperatorRelays() error = %v, want discovery-empty failure", err)
+		relays, err := resolveOperatorRelays(cmd)
+		if err == nil || !strings.Contains(err.Error(), "no operator relays configured") {
+			t.Fatalf("resolveOperatorRelays() error = %v, want explicit relay failure", err)
 		}
 		if relays != nil {
-			t.Fatalf("relays = %#v, want nil on discovery-empty failure", relays)
-		}
-		if sys.calls != 1 {
-			t.Fatalf("system info calls = %d, want 1", sys.calls)
+			t.Fatalf("relays = %#v, want nil on missing explicit config", relays)
 		}
 	})
-}
-
-func TestCanonicalSystemInfoFixtureSatisfiesOperatorDiscovery(t *testing.T) {
-	resetOperatorGlobals(t)
-	t.Setenv("BAHIA_NOSTR_RELAYS", "")
-	cmd := newOperatorFlagTestCommand(t)
-	fixture := loadSystemInfoFixture(t, "system_info_sidecar_first.json")
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			t.Errorf("method = %s, want GET", r.Method)
-		}
-		if r.URL.Path != "/api/v1/system/info" {
-			t.Errorf("path = %s, want /api/v1/system/info", r.URL.Path)
-		}
-		w.Header().Set("Content-Type", "application/json")
-		if err := json.NewEncoder(w).Encode(map[string]any{"data": fixture}); err != nil {
-			t.Fatalf("encode response: %v", err)
-		}
-	}))
-	defer server.Close()
-
-	relays, err := resolveOperatorRelays(context.Background(), cmd, client.New(server.URL))
-	if err != nil {
-		t.Fatalf("resolveOperatorRelays() error = %v", err)
-	}
-	if strings.Join(relays, ",") != "wss://public.example,ws://localhost:3000/relay" {
-		t.Fatalf("relays = %#v, want canonical fixture relays", relays)
-	}
 }
 
 func TestServiceActionCommandUsesSignerFirstClientByDefault(t *testing.T) {
@@ -282,20 +220,6 @@ func TestOperatorStatusCallbackWritesOnlyInTableModeToStderr(t *testing.T) {
 	}
 }
 
-type fakeSystemInfoClient struct {
-	info  *client.SystemInfo
-	err   error
-	calls int
-}
-
-func (f *fakeSystemInfoClient) GetSystemInfo(ctx context.Context) (*client.SystemInfo, error) {
-	f.calls++
-	if f.err != nil {
-		return nil, f.err
-	}
-	return f.info, nil
-}
-
 type fakeCLIOperatorClient struct {
 	restartErr error
 }
@@ -360,18 +284,4 @@ func resetOperatorGlobals(t *testing.T) {
 		operatorRelays = nil
 		operatorHTTPFallback = false
 	})
-}
-
-func loadSystemInfoFixture(t *testing.T, name string) *client.SystemInfo {
-	t.Helper()
-	path := filepath.Join("..", "..", "test", "fixtures", name)
-	body, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read fixture %s: %v", path, err)
-	}
-	var info client.SystemInfo
-	if err := json.Unmarshal(body, &info); err != nil {
-		t.Fatalf("decode fixture %s: %v", path, err)
-	}
-	return &info
 }

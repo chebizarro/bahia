@@ -10,7 +10,7 @@
       "assertion": "When notification operations are invoked and current system discovery does not advertise both `nostr.service_pubkey` and at least one `nostr.browser_encrypted_request_relays` value, the notifications store rejects locally before publish and does not call `requestEncryptedResult`.",
       "preconditions": [
         "The requester is using the browser notifications store.",
-        "`encryptedRequestsAvailable(info)` returns false for current or lazily loaded system info."
+        "`encryptedRequestsAvailable(info)` returns false for current or lazily loaded Nostr discovery."
       ],
       "steps": [
         "Invoke `listNotificationChannels()` or `listNotificationLogs()` from the notifications store.",
@@ -48,7 +48,7 @@
         "System discovery may contain both `browser_relays` and `browser_encrypted_request_relays`."
       ],
       "steps": [
-        "Resolve encrypted relay URLs from system info.",
+        "Resolve encrypted relay URLs from Nostr discovery.",
         "Build or execute an encrypted notification request."
       ],
       "expected_result": "Only URLs advertised in `browser_encrypted_request_relays` are used for encrypted publish and result subscription.",

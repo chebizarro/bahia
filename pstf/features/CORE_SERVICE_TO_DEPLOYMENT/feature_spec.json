@@ -10,7 +10,7 @@
     "pstf/spec_gap_report.md",
     "docs/control-planes.md:65-149,332-341",
     "docs/nostr-commands.md:1-81",
-    "internal/api/handlers/system.go:36-260",
+    "internal/adapters/nostr/projector.go:36-260",
     "internal/api/router/router.go:198-223,344-377",
     "internal/domain/models.go",
     "web/src/lib/stores/index.svelte.js:1-105",
@@ -30,7 +30,7 @@
     "internal/controlplane/reactor_policy_gate_test.go:1-274"
   ],
   "dependencies": [
-    "`/api/v1/system/info` must advertise `features.relay_read_models`, at least one public browser relay, and a Bahia service pubkey for canonical read-model filtering.",
+    "`Nostr discovery events (kind 31974 + NIP-51 kind 30002)` must advertise `features.relay_read_models`, at least one public browser relay, and a Bahia service pubkey for canonical read-model filtering.",
     "The shared browser control-plane bootstrap must connect to public relays, query until EOSE, and keep live subscriptions open.",
     "Signer-first public request publication depends on `web/src/lib/nostr/controlplane-requests.js`, accepted relay publishes, and correlated result events.",
     "Bahia request handling depends on the canonical control-plane kinds documented in `docs/control-planes.md` and `docs/nostr-commands.md`.",
@@ -49,7 +49,7 @@
       "name": "bahia_service",
       "role": "advertises discovery metadata, validates public commands, and publishes correlated results plus replaceable read models",
       "evidence": [
-        "internal/api/handlers/system.go",
+        "internal/adapters/nostr/projector.go",
         "docs/nostr-commands.md:1-81"
       ]
     },
@@ -87,7 +87,7 @@
       "Follow-up HITL risk review on 2026-05-06 resolved two remaining product ambiguities: backend canonical `5961` requests must enforce policy blocking for all signer-first clients, and `/services` must preserve active search/filter/pagination state after create rather than resetting the operator view."
     ],
     "code": [
-      "`internal/api/handlers/system.go` advertises relay-read-model capability and service pubkey discovery consumed by the browser bootstrap path.",
+      "`internal/adapters/nostr/projector.go` advertises relay-read-model capability and service pubkey discovery consumed by the browser bootstrap path.",
       "`web/src/lib/stores/index.svelte.js` routes `loadServices`, `loadEnvironments`, `loadArtifacts`, `loadBuilds`, and `loadDeploymentIntents` through shared relay bootstrap rather than REST list endpoints.",
       "`web/src/lib/stores/public-controlplane.svelte.js` implements signer-first public command helpers for service create, deployment intent create, approval/rejection, and policy evaluation.",
       "`web/src/routes/services/+page.svelte` creates services through signer-first requests, hydrates the created service into the shared store from the successful `7963` result, and now preserves active search/runtime/page state instead of forcibly resetting the operator list context after create.",
@@ -113,7 +113,7 @@
   },
   "observed_behavior": {
     "summary": [
-      "The browser loads shared system info, resolves public relays plus the Bahia service pubkey, queries canonical read models until EOSE, and then stays subscribed for live updates.",
+      "The browser loads shared Nostr discovery, resolves public relays plus the Bahia service pubkey, queries canonical read models until EOSE, and then stays subscribed for live updates.",
       "`/services` creates a service by publishing kind `5964`, awaiting a correlated `7963` result, and upserting the created service into the shared store without resetting active search, runtime filter, or pagination state.",
       "If the created service already matches the current `/services` view it appears immediately; if it does not match the active filtered/search/paged view, the UI preserves the operator context instead of forcibly revealing the new row.",
       "Later relay projections still reconcile through the shared read-model store, but immediate visibility no longer depends on projector timing alone.",
@@ -143,7 +143,7 @@
   },
   "preconditions": [
     "The browser has an authenticated signer session.",
-    "`/api/v1/system/info` advertises `relay_read_models`, at least one public browser relay URL, and a Bahia service pubkey.",
+    "`Nostr discovery events (kind 31974 + NIP-51 kind 30002)` advertises `relay_read_models`, at least one public browser relay URL, and a Bahia service pubkey.",
     "Public browser relays are reachable and accept relay-backed read-model subscriptions.",
     "The requester pubkey is authorized for the public command families it invokes."
   ],

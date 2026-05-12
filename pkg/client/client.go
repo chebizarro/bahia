@@ -295,20 +295,6 @@ type RuntimeObservation struct {
 	ObservedAt          time.Time      `json:"observed_at"`
 }
 
-// SystemInfo contains the narrow system discovery fields needed by clients.
-type SystemInfo struct {
-	Nostr    SystemInfoNostr `json:"nostr"`
-	Features map[string]bool `json:"features,omitempty"`
-}
-
-// SystemInfoNostr contains browser-safe relay discovery fields.
-type SystemInfoNostr struct {
-	BrowserRelays                 []string `json:"browser_relays,omitempty"`
-	SidecarURL                    string   `json:"sidecar_url,omitempty"`
-	BrowserEncryptedRequestRelays []string `json:"browser_encrypted_request_relays,omitempty"`
-	ServicePubkey                 string   `json:"service_pubkey,omitempty"`
-}
-
 type apiResponse struct {
 	Data    json.RawMessage `json:"data"`
 	Error   string          `json:"error"`
@@ -375,15 +361,6 @@ func (c *Client) applyAuthorization(ctx context.Context, req *http.Request) erro
 		req.Header.Set("Authorization", header)
 	}
 	return nil
-}
-
-// GetSystemInfo returns narrow system discovery information needed by clients.
-func (c *Client) GetSystemInfo(ctx context.Context) (*SystemInfo, error) {
-	var info SystemInfo
-	if err := c.do(ctx, http.MethodGet, "/api/v1/system/info", nil, &info); err != nil {
-		return nil, err
-	}
-	return &info, nil
 }
 
 // --- Adoption ---

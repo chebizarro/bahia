@@ -8,7 +8,7 @@ What is verified now:
 - Representative encrypted browser e2e coverage is passing.
 - Representative public browser e2e coverage is passing for public-relay usage and relay-backed progression, but it still lacks the accepted-OK assertion required by the matrix.
 - The dashboard Recent Spend surface now sources worker payment history through encrypted browser transport, and the dashboard e2e harness explicitly fails if canonical REST `payments/history` reads are attempted.
-- Existing Go coverage for explicit pre-acceptance-only operator HTTP fallback is passing.
+- Existing Go coverage for explicit pre-acceptance-only operator explicit relay configuration is passing.
 - Manual review with explicit recorded findings confirms the canonical evidence corpus treats 311xx as compatibility-only and uses 596x/598x families for approved proof.
 
 What still blocks a full verification result:

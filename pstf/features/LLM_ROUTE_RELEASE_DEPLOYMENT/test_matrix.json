@@ -7,17 +7,17 @@
       "ac_ids": [
         "LLMRD-AC-001"
       ],
-      "title": "System info advertises LLM control-plane kinds only when enabled",
+      "title": "Nostr discovery advertises LLM control-plane kinds only when enabled",
       "type": "contract",
       "existing_or_new": "existing",
       "target_path": "internal/api/handlers/system_test.go",
-      "description": "Reuses handler coverage for enabled and disabled `/api/v1/system/info` payloads. Estimated implementation difficulty: none; already covered.",
+      "description": "Reuses handler coverage for enabled and disabled `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` payloads. Estimated implementation difficulty: none; already covered.",
       "preconditions": [
         "System handler can be constructed with `cfg.LLM.Enabled=true` and `cfg.LLM.Enabled=false`."
       ],
       "steps": [
-        "Request system info with LLM disabled.",
-        "Request system info with LLM enabled.",
+        "Request Nostr discovery with LLM disabled.",
+        "Request Nostr discovery with LLM enabled.",
         "Inspect advertised capabilities and request/status/result/read-model kind maps."
       ],
       "expected_result": "LLM capabilities and canonical kind families are present only in the enabled payload and absent in the disabled payload.",
@@ -532,7 +532,7 @@
       "target_path": "web/tests/unit/controlplane-store.test.js",
       "description": "Existing browser-store tests cover EOSE-aware bootstrap, live subscription bridging, and valid LLM route/state/activity event application. Estimated implementation difficulty: none.",
       "preconditions": [
-        "System info advertises a Bahia service pubkey and browser relay.",
+        "Nostr discovery advertises a Bahia service pubkey and browser relay.",
         "Shared Nostr client is mocked."
       ],
       "steps": [
@@ -543,7 +543,7 @@
       "expected_result": "Bootstrap consumes relay-backed events after EOSE, valid Bahia-authored LLM events populate browser-visible collections, and live events remain reactive after bootstrap.",
       "fixtures": [
         "mock Nostr client",
-        "mock system info response"
+        "mock Nostr discovery response"
       ],
       "mocks": [],
       "data_requirements": [
@@ -576,7 +576,7 @@
       "expected_result": "Spoofed non-Bahia LLM events are ignored and do not mutate `llmRoutes`, `llmRouteStates`, or LLM activity state.",
       "fixtures": [
         "mock Nostr client",
-        "mock system info response"
+        "mock Nostr discovery response"
       ],
       "mocks": [],
       "data_requirements": [

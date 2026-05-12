@@ -13,7 +13,7 @@ Legacy privileged HTTP/NIP-98 paths remain compatibility-only and secondary.
 - Signer-first operator execution is authorized by operator pubkeys and signed event verification.
 - Prefer server-managed `runtime.endpoints.<ref>` aliases. Raw `docker_host` request payloads are compatibility/break-glass only.
 - CLI defaults to signer-first operator transport for `bahia adopt ...` and `bahia services actions ...`.
-- HTTP fallback is explicit only (`--http-fallback` or `BAHIA_OPERATOR_HTTP_FALLBACK=true`) and is safe only before any relay accepts the signed request.
+- explicit relay configuration is explicit only (`--http-fallback` or `BAHIA_OPERATOR_HTTP_FALLBACK=true`) and is safe only before any relay accepts the signed request.
 - Scan and import responses redact sensitive environment variables and labels. Sensitive environment values are imported through Bahia secrets when secret storage/encryption is configured.
 - Compose-origin containers are direct-Docker takeover candidates; enable takeover only after operators accept that Bahia, not Compose, will drive restart/deploy/stop actions.
 
@@ -54,14 +54,14 @@ Legacy privileged HTTP/NIP-98 paths remain compatibility-only and secondary.
    ```
 
 3. Confirm signer-first discovery and topology evidence:
-   - `/api/v1/system/info` is captured for the release candidate
-   - relay URLs are available either via explicit `--relay`, `BAHIA_NOSTR_RELAYS`, or `/api/v1/system/info` discovery (`nostr.browser_relays`, `nostr.sidecar_url`)
-   - if encrypted request/result web validation is in scope, verify `/api/v1/system/info` advertises `nostr.browser_encrypted_request_relays` and `features.encrypted_nostr_requests`
+   - `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` is captured for the release candidate
+   - relay URLs are available either via explicit `--relay`, `BAHIA_NOSTR_RELAYS`, or `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` discovery (`nostr.browser_relays`, `nostr.sidecar_url`)
+   - if encrypted request/result web validation is in scope, verify `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` advertises `nostr.browser_encrypted_request_relays` and `features.encrypted_nostr_requests`
    - if sidecar/web validation is in scope, verify `/relay` pathing and reachability
 
 4. Prepare signer/operator execution inputs:
    - signer key material is available via `--nsec`, `--privkey`, `BAHIA_NOSTR_NSEC`, or `BAHIA_NOSTR_PRIVATE_KEY`
-   - operators know whether compatibility HTTP fallback is approved for this rollout
+   - operators know whether compatibility explicit relay configuration is approved for this rollout
    - evidence capture includes request event IDs and correlated status/result event IDs
 
 ## Dry-run scan

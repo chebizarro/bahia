@@ -13,19 +13,19 @@
       "target_path": "web/tests/unit/controlplane-store.test.js; web/tests/unit/encrypted-controlplane.test.js",
       "description": "Reuses the current discovery and encrypted-controlplane unit coverage to prove that browser bootstrap relays are resolved from approved public inputs while encrypted capability remains gated by dedicated encrypted-request relay plus service-pubkey inputs.",
       "preconditions": [
-        "Canonical public-only and sidecar-first system-info fixtures are available.",
+        "Canonical public-only and sidecar-first Nostr discovery fixtures are available.",
         "Unit tests can mock the browser auth and system stores."
       ],
       "steps": [
-        "Resolve browser relay bootstrap inputs from system info and confirm `nostr.relays` is ignored for browser bootstrap.",
+        "Resolve browser relay bootstrap inputs from Nostr discovery and confirm `nostr.relays` is ignored for browser bootstrap.",
         "Evaluate encrypted capability against a public-only payload and a payload with encrypted-request relay plus service-pubkey inputs."
       ],
       "expected_result": "Public bootstrap succeeds without implying encrypted capability, and encrypted capability becomes available only when dedicated encrypted discovery inputs are present.",
       "fixtures": [
-        "test/fixtures/system_info_sidecar_first.json"
+        "test/fixtures/system_discovery_sidecar_first.json"
       ],
       "mocks": [
-        "mock api.getSystemInfo",
+        "mock discoverSystemInfo",
         "mock auth store",
         "mock system store"
       ],
@@ -60,7 +60,7 @@
       ],
       "expected_result": "The representative public flow publishes only through public relays, requires at least one accepted OK per canonical request, and completes from correlated public result plus read-model events.",
       "fixtures": [
-        "public system-info fixture",
+        "public Nostr discovery fixture",
         "public deployment state harness"
       ],
       "mocks": [
@@ -89,7 +89,7 @@
       "description": "Uses the existing transport unit suite to prove request kind, relay selection, accepted-OK handling, correlated encrypted result filtering, dedupe, and spoof rejection for encrypted browser traffic.",
       "preconditions": [
         "Browser auth helpers can sign and encrypt test events.",
-        "Encrypted relay URLs and service pubkey are available from mocked system info."
+        "Encrypted relay URLs and service pubkey are available from mocked Nostr discovery."
       ],
       "steps": [
         "Build an encrypted request event for a sensitive browser operation.",
@@ -132,7 +132,7 @@
       ],
       "expected_result": "The browser performs list/create/test notification operations only on the encrypted relay set and never publishes the sensitive payloads to the public relay set.",
       "fixtures": [
-        "encrypted notifications system-info fixture",
+        "encrypted notifications Nostr discovery fixture",
         "initial notification channel fixture"
       ],
       "mocks": [
@@ -162,7 +162,7 @@
         "One test scenario reports encrypted requests unavailable to route stores."
       ],
       "steps": [
-        "Evaluate encrypted availability against a public-only system-info payload.",
+        "Evaluate encrypted availability against a public-only Nostr discovery payload.",
         "Call an encrypted route-store operation when encrypted requests are unavailable.",
         "Attempt an encrypted browser operation with a signer mock that lacks usable browser-visible NIP-44 encrypt/decrypt support."
       ],
@@ -174,7 +174,7 @@
         "signer/auth mock without browser-visible NIP-44 support"
       ],
       "data_requirements": [
-        "Stable public-only system info payload.",
+        "Stable public-only Nostr discovery payload.",
         "Deterministic unavailable-capability error text for both discovery-missing and signer-capability-missing cases."
       ],
       "determinism_notes": [
@@ -325,7 +325,7 @@
       "ac_ids": [
         "TPG-AC-008"
       ],
-      "title": "Operator HTTP fallback remains limited to explicit pre-acceptance failures",
+      "title": "Operator explicit relay configuration remains limited to explicit pre-acceptance failures",
       "type": "unit",
       "existing_or_new": "existing",
       "target_path": "cmd/cli/operator_nostr_test.go; pkg/client/operator_nostr_test.go; pstf/features/SIGNER_FIRST_OPERATOR_ADOPTION_RUNTIME/test_matrix.json",
@@ -398,14 +398,14 @@
         "The settings page can be loaded without `systemInfo.nostr.relays` populated."
       ],
       "steps": [
-        "Load settings with system info that omits raw `nostr.relays` but includes the standard service identity and browser bootstrap inputs.",
+        "Load settings with Nostr discovery that omits raw `nostr.relays` but includes the standard service identity and browser bootstrap inputs.",
         "Inject a service-authored kind 30002 relay-list event.",
         "Verify the UI shows operator-facing server relay visibility from the kind 30002 event and keeps it distinct from browser bootstrap relay configuration."
       ],
       "expected_result": "Operator relay visibility is rendered from the service-authored NIP-51 event and does not regress to raw system discovery fields.",
       "fixtures": [
         "service-authored kind 30002 relay-list event fixture",
-        "system-info fixture without raw `nostr.relays`"
+        "Nostr discovery fixture without raw `nostr.relays`"
       ],
       "mocks": [
         "relay subscription harness capable of serving kind 30002 events"
@@ -433,7 +433,7 @@
         "A mocked Nostr client exposes `queryUntilEose`, `subscribe`, and connection-state hooks."
       ],
       "steps": [
-        "Bootstrap the controlplane store from system-info relays.",
+        "Bootstrap the controlplane store from Nostr discovery relays.",
         "Inspect the EOSE-bounded historical query, live subscription setup, and resulting connection state.",
         "Verify failure when relay-read-model capability is not advertised."
       ],
@@ -507,7 +507,7 @@
       ],
       "expected_result": "The public journey uses only public relay transport, the sensitive journey uses only encrypted request/result transport, both complete in one session, and the shared discovery contract does not blur the transport boundary.",
       "fixtures": [
-        "dual-capability system-info fixture",
+        "dual-capability Nostr discovery fixture",
         "public deployment state fixture",
         "encrypted notifications state fixture"
       ],

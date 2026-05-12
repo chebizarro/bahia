@@ -24,7 +24,7 @@ The HTTP API and MCP server still matter, but they are now **narrowed compatibil
 ## Control-plane hierarchy
 
 ### 1. System discovery
-`GET /api/v1/system/info` advertises:
+`Nostr discovery events (kind 31974 + NIP-51 kind 30002)` advertises:
 - browser relay URLs
 - sidecar URL
 - service pubkey
@@ -57,7 +57,7 @@ REST remains for narrowed CRUD, query, logs, registry, and operational compatibi
 ## Major components
 
 ### Browser / CLI / MCP clients
-Clients discover capabilities from `/api/v1/system/info`, then interact with Bahia through a mix of:
+Clients discover capabilities from `Nostr discovery events (kind 31974 + NIP-51 kind 30002)`, then interact with Bahia through a mix of:
 - public relay traffic
 - encrypted relay traffic
 - MCP JSON-RPC
@@ -150,7 +150,7 @@ Bahia persists canonical state in PostgreSQL and stores selected blobs/logs in B
 ## Key browser/runtime flows
 
 ### Browser bootstrap flow
-1. Browser requests `/api/v1/system/info`
+1. Browser requests `Nostr discovery events (kind 31974 + NIP-51 kind 30002)`
 2. Browser discovers relay topology and feature flags
 3. Browser connects to advertised relays
 4. Browser queries read models until EOSE

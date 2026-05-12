@@ -4,7 +4,7 @@ vi.mock('../../src/lib/stores/discovery.svelte.js', () => ({
   discoverSystemInfo: vi.fn()
 }));
 
-describe('system info store', () => {
+describe('Nostr discovery store', () => {
   let discovery;
   let store;
 
@@ -16,7 +16,7 @@ describe('system info store', () => {
     store.resetSystemInfoStore();
   });
 
-  it('loads public system info once and serves cached bootstrap data', async () => {
+  it('loads public Nostr discovery once and serves cached bootstrap data', async () => {
     const info = {
       features: { relay_read_models: true, direct_nostr_http_auth: true },
       nostr: { browser_relays: ['ws://relay.test/relay'], service_pubkey: 'a'.repeat(64) }
@@ -34,7 +34,7 @@ describe('system info store', () => {
     expect(store.systemInfo.loadedAt).toEqual(expect.any(String));
   });
 
-  it('deduplicates concurrent system info loads', async () => {
+  it('deduplicates concurrent Nostr discovery loads', async () => {
     let resolveInfo;
     const infoPromise = new Promise((resolve) => {
       resolveInfo = resolve;

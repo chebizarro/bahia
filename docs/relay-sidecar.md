@@ -23,7 +23,7 @@ nostr:
     max_query_limit: 500
 ```
 
-- `public_url` / `browser_relays` are exposed by `/api/v1/system/info` to the frontend.
+- `public_url` / `browser_relays` are exposed by `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` to the frontend.
 - `backend_url` is used by Bahia itself for publish/subscribe in sidecar-first mode. In Docker Compose this should point at `ws://relay:3334/relay` so backend and browser both target the explicit relay mount.
 - When sidecar mode is enabled, Bahia's own control-plane reactor/projector use the sidecar URL instead of connecting directly to `nostr.relays`. This keeps canonical 696x/796x/3196x projection traffic and public 596x/597x/598x control-plane traffic sidecar-first.
 - Interop subscribers use `nostr.relays` unless `mirror_external=true`; with mirroring enabled, Bahia uses the sidecar as the public upstream boundary and does not also connect directly to mirrored upstream URLs. Private and Loom relays stay direct and separate.
@@ -38,7 +38,7 @@ nostr:
 
 Browser flow:
 
-1. Fetch `/api/v1/system/info`
+1. Fetch `Nostr discovery events (kind 31974 + NIP-51 kind 30002)`
 2. Read `nostr.browser_relays`
 3. Connect to `/relay` WebSocket
 4. Query 31961/31962/31963 + activity/status kinds and wait for EOSE

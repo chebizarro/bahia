@@ -13,7 +13,7 @@
     "docs/event-spec.md:140-218",
     "docs/nostr-commands.md:1-185",
     "docs/api.md:239-259",
-    "internal/api/handlers/system.go:256-318",
+    "internal/adapters/nostr/projector.go:256-318",
     "internal/api/router/router.go:239-252",
     "internal/api/router/router.go:365-369",
     "internal/api/router/router.go:454-464",
@@ -40,7 +40,7 @@
     "pstf/features/LLM_ROUTE_RELEASE_DEPLOYMENT/hitl_decisions.md"
   ],
   "dependencies": [
-    "`/api/v1/system/info` must advertise LLM capabilities plus canonical request/result/read-model kinds when the LLM feature is enabled.",
+    "`Nostr discovery events (kind 31974 + NIP-51 kind 30002)` must advertise LLM capabilities plus canonical request/result/read-model kinds when the LLM feature is enabled.",
     "The browser must discover a Bahia service pubkey and public relay set for relay-backed bootstrap and live subscriptions.",
     "Canonical signer-first LLM request publishing depends on `LLMCommandPublisher`, Nostr signing, and accepted relay publishes for kinds `5971-5975`.",
     "Bahia request handling depends on the control-plane reactor and `LLMRegistryService` for route, release, intent, approval, and rollback mutations.",
@@ -118,7 +118,7 @@
       "The docs name rollback as a supported request/result family, but they still do not define the rollback target-selection algorithm; that product intent now comes from HITL rather than a planning doc."
     ],
     "code": [
-      "`internal/api/handlers/system.go` advertises LLM capabilities and kind families only when the LLM feature is enabled.",
+      "`internal/adapters/nostr/projector.go` advertises LLM capabilities and kind families only when the LLM feature is enabled.",
       "`internal/controlplane/llm_command_publisher.go`, `reactor_llm_requests_test.go`, and `llm_provisioning_coordinator_test.go` prove signer-first request shaping, correlated reply handling, and async lifecycle execution.",
       "`internal/service/llm_registry.go` holds the current rollback implementation, which still infers the target release by scanning prior deployed intents.",
       "`web/src/routes/llm/+page.svelte` now exposes rollback as a user-visible action in the dedicated browser workflow."
@@ -135,7 +135,7 @@
   },
   "observed_behavior": {
     "summary": [
-      "Bahia advertises `llm_routes`, `llm_deployments`, and `llm_rollback` capabilities plus the canonical LLM kind families from `/api/v1/system/info` only when the LLM feature is enabled.",
+      "Bahia advertises `llm_routes`, `llm_deployments`, and `llm_rollback` capabilities plus the canonical LLM kind families from `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` only when the LLM feature is enabled.",
       "MCP and browser helper code publish canonical signer-first LLM requests for route creation (`5971`), release registration (`5972`), deployment (`5973`), approval/rejection (`5974`), and rollback (`5975`).",
       "The dedicated `/llm` browser workflow now supports route creation, release registration, deployment request, rollback, approval/rejection, and live route-state/activity visibility.",
       "Deploy requests produce an initial correlated `6973` processing/accepted status, while background provisioning later emits staged `6973` progress and a terminal `7973` result.",
@@ -143,7 +143,7 @@
       "Current rollback code scans previously deployed intents and chooses a prior deployed release that differs from the current desired release, but that behavior is encoded implicitly through repository ordering and scan logic rather than an explicit named policy."
     ],
     "evidence": [
-      "internal/api/handlers/system.go:256-318",
+      "internal/adapters/nostr/projector.go:256-318",
       "internal/controlplane/llm_command_publisher.go",
       "internal/controlplane/reactor_llm_requests_test.go",
       "internal/service/llm_provisioning_coordinator_test.go",

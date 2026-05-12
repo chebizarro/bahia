@@ -13,12 +13,12 @@ export class BahiaClient {
   // Query parameter helper
   query(params) {
     if (!params || typeof params !== 'object') return '';
-    
+
     const pairs = [];
     for (const [key, value] of Object.entries(params)) {
       // Omit null, undefined, and empty string values
       if (value === null || value === undefined || value === '') continue;
-      
+
       // Handle arrays by comma-joining
       if (Array.isArray(value)) {
         if (value.length > 0) {
@@ -29,7 +29,7 @@ export class BahiaClient {
         pairs.push(`${encodeURIComponent(key)}=${encodeURIComponent(String(value))}`);
       }
     }
-    
+
     return pairs.length > 0 ? `?${pairs.join('&')}` : '';
   }
 
@@ -87,7 +87,7 @@ export class BahiaClient {
 
       break;
     }
-    
+
     // Handle non-2xx responses
     if (!res.ok) {
       let errorMessage = `HTTP ${res.status}: ${res.statusText}`;
@@ -109,7 +109,7 @@ export class BahiaClient {
     }
 
     const data = await res.json();
-    
+
     if (data.error) {
       throw new Error(data.error);
     }
@@ -192,7 +192,7 @@ export class BahiaClient {
   rejectIntent(id) {
     return this.fetch(`/deployments/intents/${encodeURIComponent(id)}/reject`, { method: 'POST' });
   }
-  
+
   // Runs
   getRun(id) { return this.fetch(`/deployments/runs/${encodeURIComponent(id)}`); }
   getRunLogs(id, tail = 100, stream = 'merged') {
@@ -451,10 +451,6 @@ export class BahiaClient {
     return payload?.results || [];
   }
 
-  // System Info
-  async getSystemInfo() {
-    return this.fetch('/system/info');
-  }
 
   // Blossom Artifacts
   /**

@@ -51,7 +51,7 @@
         "target": "CORE_SERVICE_TO_DEPLOYMENT",
         "relationship": "gates",
         "evidence": [
-          "`CORE_SERVICE_TO_DEPLOYMENT/feature_spec.json` preconditions require `/api/v1/system/info` to advertise relay-read-model capability, public relay URLs, and a service pubkey.",
+          "`CORE_SERVICE_TO_DEPLOYMENT/feature_spec.json` preconditions require `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` to advertise relay-read-model capability, public relay URLs, and a service pubkey.",
           "`pstf/feature_backlog.md` ranks `SYSTEM_DISCOVERY_RELAY_BOOTSTRAP` first because every relay-backed browser flow depends on this contract."
         ]
       },
@@ -60,8 +60,8 @@
         "target": "ENCRYPTED_CONTROL_PLANE_NOTIFICATIONS",
         "relationship": "gates",
         "evidence": [
-          "`ENCRYPTED_CONTROL_PLANE_NOTIFICATIONS/feature_spec.json` preconditions require `/api/v1/system/info` to advertise `nostr.service_pubkey` and `nostr.browser_encrypted_request_relays`.",
-          "`pstf/spec_gap_report.md` marks `/api/v1/system/info` as a critical under-documented contract."
+          "`ENCRYPTED_CONTROL_PLANE_NOTIFICATIONS/feature_spec.json` preconditions require `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` to advertise `nostr.service_pubkey` and `nostr.browser_encrypted_request_relays`.",
+          "`pstf/spec_gap_report.md` marks `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` as a critical under-documented contract."
         ]
       },
       {
@@ -69,8 +69,8 @@
         "target": "LLM_ROUTE_RELEASE_DEPLOYMENT",
         "relationship": "gates",
         "evidence": [
-          "`LLM_ROUTE_RELEASE_DEPLOYMENT/feature_spec.json` dependencies require `/api/v1/system/info` feature-gated advertisement of LLM kinds.",
-          "`internal/api/handlers/system.go` exposes public relay, encrypted relay, service pubkey, and control-plane kind advertisement from one payload."
+          "`LLM_ROUTE_RELEASE_DEPLOYMENT/feature_spec.json` dependencies require `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` feature-gated advertisement of LLM kinds.",
+          "`internal/adapters/nostr/projector.go` exposes public relay, encrypted relay, service pubkey, and control-plane kind advertisement from one payload."
         ]
       },
       {
@@ -78,8 +78,8 @@
         "target": "SIGNER_FIRST_OPERATOR_ADOPTION_RUNTIME",
         "relationship": "produces_for",
         "evidence": [
-          "`cmd/cli/operator_nostr.go` resolves operator relays from `BrowserRelays` and `SidecarURL` in `/api/v1/system/info` when flags and env are absent.",
-          "`SIGNER_FIRST_OPERATOR_ADOPTION_RUNTIME/feature_spec.json` preconditions allow relay discovery from `/api/v1/system/info`."
+          "`cmd/cli/operator_nostr.go` resolves operator relays from `BrowserRelays` and `SidecarURL` in `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` when flags and env are absent.",
+          "`SIGNER_FIRST_OPERATOR_ADOPTION_RUNTIME/feature_spec.json` preconditions allow relay discovery from `Nostr discovery events (kind 31974 + NIP-51 kind 30002)`."
         ]
       },
       {
@@ -179,12 +179,12 @@
         "LLM_ROUTE_RELEASE_DEPLOYMENT",
         "SYSTEM_DISCOVERY_RELAY_BOOTSTRAP"
       ],
-      "summary": "The current portfolio treats `/api/v1/system/info` as normative for public relay discovery, encrypted relay discovery, service pubkey discovery, and control-plane kind advertisement, but no completed PSTF slice yet verifies that contract directly as a first-class product feature.",
+      "summary": "The current portfolio treats `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` as normative for public relay discovery, encrypted relay discovery, service pubkey discovery, and control-plane kind advertisement, but no completed PSTF slice yet verifies that contract directly as a first-class product feature.",
       "evidence": [
-        "`pstf/spec_gap_report.md` marks `/api/v1/system/info` and relay-read-model-first frontend behavior as high-risk missing specification areas.",
+        "`pstf/spec_gap_report.md` marks `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` and relay-read-model-first frontend behavior as high-risk missing specification areas.",
         "`pstf/feature_backlog.md` ranks `SYSTEM_DISCOVERY_RELAY_BOOTSTRAP` first because every relay-backed browser flow depends on it.",
-        "`internal/api/handlers/system.go` emits `browser_relays`, `browser_encrypted_request_relays`, `sidecar_url`, `service_pubkey`, and control-plane kinds from the same payload.",
-        "Completed slices for core deployments, encrypted notifications, operator signer-first CLI discovery, and LLM all list `/api/v1/system/info` as a dependency or precondition."
+        "`internal/adapters/nostr/projector.go` emits `browser_relays`, `browser_encrypted_request_relays`, `sidecar_url`, `service_pubkey`, and control-plane kinds from the same payload.",
+        "Completed slices for core deployments, encrypted notifications, operator signer-first CLI discovery, and LLM all list `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` as a dependency or precondition."
       ],
       "recommended_actions": [
         {
@@ -194,8 +194,8 @@
         },
         {
           "action": "add_cross_feature_test",
-          "target": "system_info_contract_consumers",
-          "details": "Add one contract test that proves the same `/api/v1/system/info` payload satisfies browser public bootstrap, browser encrypted transport gating, and operator CLI relay discovery."
+          "target": "nostr_discovery_contract_consumers",
+          "details": "Add one contract test that proves the same `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` payload satisfies browser public bootstrap, browser encrypted transport gating, and operator CLI relay discovery."
         }
       ]
     },
@@ -211,7 +211,7 @@
         "LLM_ROUTE_RELEASE_DEPLOYMENT",
         "SYSTEM_DISCOVERY_RELAY_BOOTSTRAP"
       ],
-      "summary": "The portfolio has per-slice public and encrypted browser evidence, but no test proves that one browser session can bootstrap from one system-info contract, execute public signer-first flows and encrypted flows, and preserve the public-vs-encrypted relay boundary end to end.",
+      "summary": "The portfolio has per-slice public and encrypted browser evidence, but no test proves that one browser session can bootstrap from one Nostr discovery contract, execute public signer-first flows and encrypted flows, and preserve the public-vs-encrypted relay boundary end to end.",
       "evidence": [
         "`CORE_SERVICE_TO_DEPLOYMENT/verification_report.md` points to `service-deployment-public-smoke.spec.js` for the public browser journey.",
         "`ENCRYPTED_CONTROL_PLANE_NOTIFICATIONS/verification_report.md` points to `notifications-encrypted-smoke.spec.js` and `notifications-form-error.spec.js` for encrypted browser journeys.",
@@ -223,7 +223,7 @@
         {
           "action": "add_cross_feature_test",
           "target": "web/tests/e2e/mixed-controlplane-transport.spec.js",
-          "details": "Exercise one authenticated browser session that loads `/api/v1/system/info`, executes one public service/deployment or LLM command, executes one encrypted notifications command, and asserts the correct relay set is used for each flow."
+          "details": "Exercise one authenticated browser session that loads `Nostr discovery events (kind 31974 + NIP-51 kind 30002)`, executes one public service/deployment or LLM command, executes one encrypted notifications command, and asserts the correct relay set is used for each flow."
         },
         {
           "action": "update_existing_acceptance_criteria",
@@ -258,7 +258,7 @@
         "`web/src/lib/auth/route-access.js` contains route-level REST compatibility machinery, but `ROUTE_COMPATIBILITY_REQUIREMENTS` is empty, so the portfolio-level compatibility map is still implicit rather than explicit.",
         "`CORE_SERVICE_TO_DEPLOYMENT/feature_spec.json` excludes encrypted request kind `5980` from the approved public deployment flow.",
         "`ENCRYPTED_CONTROL_PLANE_NOTIFICATIONS/feature_spec.json` requires `browser_encrypted_request_relays` and forbids treating public relay URLs as encrypted request relays.",
-        "`SIGNER_FIRST_OPERATOR_ADOPTION_RUNTIME/feature_spec.json` permits explicit HTTP fallback only for pre-acceptance failures.",
+        "`SIGNER_FIRST_OPERATOR_ADOPTION_RUNTIME/feature_spec.json` permits explicit explicit relay configuration only for pre-acceptance failures.",
         "`LLM_ROUTE_RELEASE_DEPLOYMENT/hitl_decisions.md` removes operational REST mutations from the intended product contract."
       ],
       "recommended_actions": [
@@ -417,7 +417,7 @@
       "policy_id": "POL-001",
       "title": "System discovery contract governance",
       "evidence": [
-        "`/api/v1/system/info` is used by browser public bootstrap, browser encrypted gating, and CLI relay discovery.",
+        "`Nostr discovery events (kind 31974 + NIP-51 kind 30002)` is used by browser public bootstrap, browser encrypted gating, and CLI relay discovery.",
         "No completed PSTF slice yet owns this contract directly."
       ]
     },
@@ -449,11 +449,11 @@
         "LLM_ROUTE_RELEASE_DEPLOYMENT"
       ],
       "type": "e2e",
-      "description": "In one authenticated browser session, bootstrap from `/api/v1/system/info`, execute one public signer-first command, execute one encrypted notification command, visit `/llm`, and assert public relay URLs are never used for encrypted requests while encrypted relay URLs are never used for public commands."
+      "description": "In one authenticated browser session, bootstrap from `Nostr discovery events (kind 31974 + NIP-51 kind 30002)`, execute one public signer-first command, execute one encrypted notification command, visit `/llm`, and assert public relay URLs are never used for encrypted requests while encrypted relay URLs are never used for public commands."
     },
     {
       "test_id": "XFT-002",
-      "title": "System-info multi-consumer contract",
+      "title": "Nostr discovery multi-consumer contract",
       "covers_features": [
         "SYSTEM_DISCOVERY_RELAY_BOOTSTRAP",
         "ENCRYPTED_CONTROL_PLANE_NOTIFICATIONS",
@@ -461,7 +461,7 @@
         "LLM_ROUTE_RELEASE_DEPLOYMENT"
       ],
       "type": "integration",
-      "description": "Use one canonical `/api/v1/system/info` fixture to prove browser public bootstrap, browser encrypted transport gating, LLM kind discovery, and CLI operator relay discovery all succeed without per-consumer divergence."
+      "description": "Use one canonical `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` fixture to prove browser public bootstrap, browser encrypted transport gating, LLM kind discovery, and CLI operator relay discovery all succeed without per-consumer divergence."
     },
     {
       "test_id": "XFT-003",
@@ -497,6 +497,6 @@
   ],
   "next_recommended_stage": {
     "stage": "cross_feature_hitl_then_new_slices",
-    "summary": "Before broad release planning, capture HITL decisions on shared transport policy and rollback governance, then promote `SYSTEM_DISCOVERY_RELAY_BOOTSTRAP` and `ENCRYPTED_DEPLOYMENT_RUN_LOGS`, and add at least one mixed-transport browser scenario plus one system-info multi-consumer contract test."
+    "summary": "Before broad release planning, capture HITL decisions on shared transport policy and rollback governance, then promote `SYSTEM_DISCOVERY_RELAY_BOOTSTRAP` and `ENCRYPTED_DEPLOYMENT_RUN_LOGS`, and add at least one mixed-transport browser scenario plus one Nostr discovery multi-consumer contract test."
   }
 }

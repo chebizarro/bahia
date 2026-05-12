@@ -4,7 +4,7 @@
 - Verified: `SDRB-AC-001`, `SDRB-AC-002`, `SDRB-AC-003`, `SDRB-AC-004`, `SDRB-AC-005`, `SDRB-AC-006`, `SDRB-AC-007`, `SDRB-AC-008`, `SDRB-AC-009`, `SDRB-AC-010`
 - Current recommendation: `SYSTEM_DISCOVERY_RELAY_BOOTSTRAP` is verified for the approved sidecar-first slice
 
-The discovery/bootstrap slice now has complete proof across the approved contract. The handler no longer exposes raw `nostr.relays`, the browser bootstrap path fails closed on missing capability or missing relay advertisement, the encrypted helper proves explicit capability gating separate from public bootstrap, and the operator CLI proves both precedence and deterministic discovery-empty failure. One canonical system-info fixture is now reused across browser and CLI tests to demonstrate shared consumer coherence.
+The discovery/bootstrap slice now has complete proof across the approved contract. The handler no longer exposes raw `nostr.relays`, the browser bootstrap path fails closed on missing capability or missing relay advertisement, the encrypted helper proves explicit capability gating separate from public bootstrap, and the operator CLI proves both precedence and deterministic discovery-empty failure. One canonical Nostr discovery fixture is now reused across browser and CLI tests to demonstrate shared consumer coherence.
 
 ## Commands Run
 - `go test ./internal/api/handlers ./pkg/client ./cmd/cli`
@@ -33,7 +33,7 @@ The discovery/bootstrap slice now has complete proof across the approved contrac
 - `SDRB-AC-009` — **Verified**
   - Evidence: `web/tests/unit/encrypted-controlplane.test.js` proves public bootstrap metadata alone does not imply encrypted capability, while the explicit encrypted indicators in the canonical fixture enable the encrypted path separately.
 - `SDRB-AC-010` — **Verified**
-  - Evidence: `internal/api/handlers/system.go` no longer emits raw `nostr.relays`; `web/src/lib/stores/controlplane.svelte.js` no longer normalizes that fallback; the updated handler and store tests explicitly prove raw `nostr.relays` is not accepted as the approved bootstrap path.
+  - Evidence: `internal/adapters/nostr/projector.go` no longer emits raw `nostr.relays`; `web/src/lib/stores/controlplane.svelte.js` no longer normalizes that fallback; the updated handler and store tests explicitly prove raw `nostr.relays` is not accepted as the approved bootstrap path.
 
 ## Test Matrix Status
 - Passing tests: `12`
@@ -46,7 +46,7 @@ The discovery/bootstrap slice now has complete proof across the approved contrac
 - `SDRB-D-002` verified — sidecar-first public bootstrap handler coverage includes the approved service-key-backed success case
 - `SDRB-D-003` verified — fail-closed browser bootstrap negatives are covered
 - `SDRB-D-004` verified — operator discovery fallback covers the required empty-discovery negative case
-- `SDRB-D-005` verified — encrypted capability gating and multi-consumer system-info coherence are proven against the approved contract
+- `SDRB-D-005` verified — encrypted capability gating and multi-consumer Nostr discovery coherence are proven against the approved contract
 
 ## Ambiguities / Human Decisions Needed
 - No new product-intent ambiguity was discovered.

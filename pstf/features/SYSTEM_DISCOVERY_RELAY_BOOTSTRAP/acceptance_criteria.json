@@ -12,17 +12,17 @@
       "title": "System discovery advertises the sidecar-first public bootstrap contract",
       "type": "contract",
       "priority": "must",
-      "assertion": "`/api/v1/system/info` must advertise the approved public bootstrap contract through `features.relay_sidecar=true`, `features.relay_read_models=true` when sidecar publishing is enabled, at least one browser bootstrap URL in `nostr.browser_relays` or `nostr.sidecar_url`, and `nostr.service_pubkey` when canonical Bahia-authored read models are expected. While sidecar-first bootstrap is enabled, raw backend `nostr.relays` must not be the approved browser bootstrap surface.",
+      "assertion": "`Nostr discovery events (kind 31974 + NIP-51 kind 30002)` must advertise the approved public bootstrap contract through `features.relay_sidecar=true`, `features.relay_read_models=true` when sidecar publishing is enabled, at least one browser bootstrap URL in `nostr.browser_relays` or `nostr.sidecar_url`, and `nostr.service_pubkey` when canonical Bahia-authored read models are expected. While sidecar-first bootstrap is enabled, raw backend `nostr.relays` must not be the approved browser bootstrap surface.",
       "testable_by": [
         "unit",
         "contract"
       ],
       "preconditions": [
-        "System info handler is exercised in a sidecar-enabled configuration with Nostr publication enabled.",
+        "Nostr discovery handler is exercised in a sidecar-enabled configuration with Nostr publication enabled.",
         "A service key is configured for the canonical-author success case."
       ],
       "steps": [
-        "Request or construct the `/api/v1/system/info` payload for the sidecar-enabled configuration.",
+        "Request or construct the `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` payload for the sidecar-enabled configuration.",
         "Inspect `features`, `nostr.browser_relays`, `nostr.sidecar_url`, `nostr.service_pubkey`, and `nostr.relays`."
       ],
       "expected_result": "The payload advertises the sidecar-first public bootstrap fields required by the approved slice and does not require raw `nostr.relays` for browser bootstrap.",
@@ -31,7 +31,7 @@
         "If browser bootstrap for the approved path depends on raw `nostr.relays`, the criterion fails."
       ],
       "source_evidence": [
-        "internal/api/handlers/system.go:148-214",
+        "internal/adapters/nostr/projector.go:148-214",
         "internal/api/handlers/system_test.go:13-61",
         "docs/control-planes.md:38-49",
         "docs/relay-sidecar.md:18-39",
@@ -45,13 +45,13 @@
       "title": "System discovery advertises conditional control-plane capabilities and legacy fail-closed flags explicitly",
       "type": "contract",
       "priority": "must",
-      "assertion": "`/api/v1/system/info.control_plane` must advertise the canonical control-plane version, correlation tags, and request/status/result/read-model kind maps for enabled capabilities only. Optional domains such as LLM and MCP async correlation must disappear when disabled, while removed legacy feature keys (`nostr_auth_exchange`, `legacy_sse`, `legacy_jwt_exchange`, `legacy_agent_http`) remain explicitly `false` so older clients fail closed.",
+      "assertion": "`Nostr discovery events (kind 31974 + NIP-51 kind 30002).control_plane` must advertise the canonical control-plane version, correlation tags, and request/status/result/read-model kind maps for enabled capabilities only. Optional domains such as LLM and MCP async correlation must disappear when disabled, while removed legacy feature keys (`nostr_auth_exchange`, `legacy_sse`, `legacy_jwt_exchange`, `legacy_agent_http`) remain explicitly `false` so older clients fail closed.",
       "testable_by": [
         "unit",
         "contract"
       ],
       "preconditions": [
-        "System info handler is exercised across enabled and disabled optional-feature configurations."
+        "Nostr discovery handler is exercised across enabled and disabled optional-feature configurations."
       ],
       "steps": [
         "Construct or request one payload with optional features enabled and one with them disabled.",
@@ -63,7 +63,7 @@
         "If removed legacy features disappear or become truthy instead of remaining explicit `false` values, the criterion fails."
       ],
       "source_evidence": [
-        "internal/api/handlers/system.go:216-318",
+        "internal/adapters/nostr/projector.go:216-318",
         "internal/api/handlers/system_test.go:143-349",
         "docs/control-planes.md:1-20,66-115"
       ],
@@ -72,15 +72,15 @@
     {
       "ac_id": "SDRB-AC-003",
       "feature_id": "SYSTEM_DISCOVERY_RELAY_BOOTSTRAP",
-      "title": "System-info loading is shared, cached, deduplicated, and force-refreshable",
+      "title": "Nostr discovery loading is shared, cached, deduplicated, and force-refreshable",
       "type": "functional",
       "priority": "must",
-      "assertion": "The shared browser system-info store must fetch `/api/v1/system/info` once for normal bootstrap, serve cached discovery data to subsequent consumers, deduplicate concurrent loads into one request, and only refetch when an explicit force reload is requested.",
+      "assertion": "The shared browser Nostr discovery store must fetch `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` once for normal bootstrap, serve cached discovery data to subsequent consumers, deduplicate concurrent loads into one request, and only refetch when an explicit force reload is requested.",
       "testable_by": [
         "unit"
       ],
       "preconditions": [
-        "The browser store is exercised with a deterministic system-info API mock."
+        "The browser store is exercised with a deterministic Nostr discovery API mock."
       ],
       "steps": [
         "Call `loadSystemInfo()` twice in sequence.",
@@ -114,7 +114,7 @@
         "At least one advertised relay is reachable for the success case."
       ],
       "steps": [
-        "Bootstrap the shared control-plane store from a deterministic system-info payload.",
+        "Bootstrap the shared control-plane store from a deterministic Nostr discovery payload.",
         "Observe relay resolution, connection setup, the EOSE-bounded query call, and the subsequent live subscription."
       ],
       "expected_result": "Bootstrap becomes ready only after the initial EOSE-bounded query completes, shared state is populated from the returned events, and the connection status transitions to live with an open live subscription.",
@@ -228,7 +228,7 @@
       "title": "Operator CLI relay resolution uses explicit inputs first and system discovery second",
       "type": "contract",
       "priority": "must",
-      "assertion": "Signer-first operator relay resolution must use `--relay` first, then `BAHIA_NOSTR_RELAYS`, and only then fall back to `/api/v1/system/info` discovery using the sidecar-first public bootstrap fields. If system discovery is used and provides no browser bootstrap URLs, the CLI must fail with a deterministic error instead of inventing relay targets.",
+      "assertion": "Signer-first operator relay resolution must use `--relay` first, then `BAHIA_NOSTR_RELAYS`, and only then fall back to `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` discovery using the sidecar-first public bootstrap fields. If system discovery is used and provides no browser bootstrap URLs, the CLI must fail with a deterministic error instead of inventing relay targets.",
       "testable_by": [
         "unit",
         "integration",
@@ -240,8 +240,8 @@
       "steps": [
         "Resolve relays with explicit `--relay` flags.",
         "Resolve relays with `BAHIA_NOSTR_RELAYS` and no explicit flags.",
-        "Resolve relays from `/api/v1/system/info` when no other source is present.",
-        "Resolve relays from `/api/v1/system/info` when discovery advertises no browser bootstrap URLs."
+        "Resolve relays from `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` when no other source is present.",
+        "Resolve relays from `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` when discovery advertises no browser bootstrap URLs."
       ],
       "expected_result": "Each precedence branch is respected exactly, and the discovery fallback uses only the approved public bootstrap fields with deterministic failure when they are absent.",
       "negative_cases": [
@@ -280,7 +280,7 @@
         "If consumers of this slice treat the public bootstrap path as proof of encrypted messaging support, the criterion fails."
       ],
       "source_evidence": [
-        "internal/api/handlers/system.go:194-214",
+        "internal/adapters/nostr/projector.go:194-214",
         "internal/api/handlers/system_test.go:63-108",
         "pstf/features/ENCRYPTED_CONTROL_PLANE_NOTIFICATIONS/acceptance_criteria.json",
         "pstf/features/SYSTEM_DISCOVERY_RELAY_BOOTSTRAP/hitl_decisions.md"

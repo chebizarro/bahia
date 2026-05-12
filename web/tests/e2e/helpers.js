@@ -1,6 +1,6 @@
 export const TEST_PUBKEY = 'f'.repeat(64);
 
-const DEFAULT_SYSTEM_INFO = {
+const DEFAULT_DISCOVERY_INFO = {
   nostr: {
     browser_relays: [],
     service_pubkey: 'b'.repeat(64)
@@ -25,24 +25,67 @@ export async function installE2EMocks(
     extension = true,
     sseEvents = [],
     nostrEvents = [],
-    systemInfo = DEFAULT_SYSTEM_INFO,
+    systemInfo = DEFAULT_DISCOVERY_INFO,
     routeRoleRequirements = null
   } = {}
 ) {
-  await page.route('**/api/v1/system/info', (route) => route.fulfill({
-    status: 200,
-    contentType: 'application/json',
-    body: JSON.stringify({ data: systemInfo })
-  }));
-
-  await page.addInitScript(({ authenticated, extension, pubkey, sseEvents, nostrEvents, routeRoleRequirements }) => {
+  await page.addInitScript(({ authenticated, extension, pubkey, sseEvents, nostrEvents, systemInfo, routeRoleRequirements }) => {
     const existingSseEvents = localStorage.getItem('__bahia_e2e_sse_events');
     if (!existingSseEvents || (Array.isArray(sseEvents) && sseEvents.length > 0)) {
       localStorage.setItem('__bahia_e2e_sse_events', JSON.stringify(sseEvents || []));
     }
+    const servicePubkey = systemInfo?.nostr?.service_pubkey || 'b'.repeat(64);
+    const browserRelays = systemInfo?.nostr?.browser_relays || [];
+    window.__BAHIA_BOOTSTRAP__ = {
+      schema: 'bahia.bootstrap.v1',
+      relay_urls: browserRelays,
+      service_pubkeys: [servicePubkey]
+    };
+    const discoveryEvents = [
+      {
+        id: 'e2e-system-discovery',
+        kind: 31974,
+        pubkey: servicePubkey,
+        created_at: 1,
+        tags: [['d', 'bahia-system-v1']],
+        content: JSON.stringify({ ...systemInfo, schema: 'bahia.system-discovery.v1' }),
+        sig: 'e2e'
+      },
+      {
+        id: 'e2e-browser-relays',
+        kind: 30002,
+        pubkey: servicePubkey,
+        created_at: 1,
+        tags: [['d', 'bahia-browser-v1'], ...browserRelays.map((relay) => ['relay', relay])],
+        content: '',
+        sig: 'e2e'
+      }
+    ];
+    const requestRelays = systemInfo?.nostr?.browser_encrypted_request_relays || [];
+    if (requestRelays.length > 0) {
+      discoveryEvents.push({
+        id: 'e2e-request-relays',
+        kind: 30002,
+        pubkey: servicePubkey,
+        created_at: 1,
+        tags: [['d', 'bahia-requests-v1'], ...requestRelays.map((relay) => ['relay', relay])],
+        content: '',
+        sig: 'e2e'
+      });
+    }
+    const serviceRelays = systemInfo?.nostr?.service_relays || browserRelays;
+    discoveryEvents.push({
+      id: 'e2e-service-relays',
+      kind: 30002,
+      pubkey: servicePubkey,
+      created_at: 1,
+      tags: [['d', 'bahia-service-v1'], ...serviceRelays.map((relay) => ['relay', relay])],
+      content: '',
+      sig: 'e2e'
+    });
     const existingNostrEvents = localStorage.getItem('__bahia_e2e_nostr_events');
     if (!existingNostrEvents || (Array.isArray(nostrEvents) && nostrEvents.length > 0)) {
-      localStorage.setItem('__bahia_e2e_nostr_events', JSON.stringify(nostrEvents || []));
+      localStorage.setItem('__bahia_e2e_nostr_events', JSON.stringify([...discoveryEvents, ...(nostrEvents || [])]));
     }
     if (routeRoleRequirements && typeof routeRoleRequirements === 'object') {
       window.__BAHIA_E2E_ROUTE_ROLE_REQUIREMENTS = routeRoleRequirements;
@@ -263,7 +306,7 @@ export async function installE2EMocks(
     }
 
     window.EventSource = MockEventSource;
-  }, { authenticated, extension, pubkey: TEST_PUBKEY, sseEvents, nostrEvents, routeRoleRequirements });
+  }, { authenticated, extension, pubkey: TEST_PUBKEY, sseEvents, nostrEvents, systemInfo, routeRoleRequirements });
 }
 
 export async function seedSseEvents(page, events) {

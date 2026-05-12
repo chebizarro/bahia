@@ -54,7 +54,7 @@ Bahia observes runtime state → Bahia publishes status, results, and read model
 
 ```text
 ┌───────────────┐      ┌──────────────────────┐
-│ Browser / CLI │─────▶│ /api/v1/system/info  │
+│ Browser / CLI │─────▶│ Nostr discovery events (kind 31974 + NIP-51 kind 30002)  │
 │ / MCP client  │      │   capability bootstrap│
 └──────┬────────┘      └──────────┬───────────┘
        │                           │
@@ -85,7 +85,7 @@ For a fuller architectural description, see [`docs/architecture.md`](docs/archit
 - ✅ Deployment intents, approvals, execution, and rollback workflows
 - ✅ Runtime observation and drift detection (Docker, Podman, Compose, Kubernetes)
 - ✅ Nostr-native control plane with canonical request/status/result/read-model kinds
-- ✅ Sidecar-first relay discovery via `/api/v1/system/info`
+- ✅ Sidecar-first relay discovery via `Nostr discovery events (kind 31974 + NIP-51 kind 30002)`
 - ✅ Signer-first browser auth and direct NIP-98 HTTP compatibility auth
 - ✅ Encrypted Nostr request/result flows for sensitive domains
 - ✅ PostgreSQL persistence
@@ -136,17 +136,17 @@ Bahia currently exposes three main control-plane surfaces:
 2. **Native MCP** — JSON-RPC tools over HTTP at `/mcp` and `/api/v1/mcp`
 3. **REST API** — narrowed CRUD/query/log/compatibility surface
 
-Important: the web app's shared state is **not** primarily a REST polling client. It bootstraps from `/api/v1/system/info`, connects to relays, waits for EOSE on read models, and then stays live on subscriptions.
+Important: the web app's shared state is **not** primarily a REST polling client. It bootstraps from `Nostr discovery events (kind 31974 + NIP-51 kind 30002)`, connects to relays, waits for EOSE on read models, and then stays live on subscriptions.
 
-Also note: `/api/v1/system/info` currently exposes a **core** control-plane discovery map. Broader kind families are documented in `docs/control-planes.md` and `docs/nostr-commands.md`.
+Also note: `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` currently exposes a **core** control-plane discovery map. Broader kind families are documented in `docs/control-planes.md` and `docs/nostr-commands.md`.
 
-## Key HTTP endpoints
+## Key Nostr event contracts
 
 Full HTTP reference: [`docs/api.md`](docs/api.md)
 
 | Endpoint | Description |
 |----------|-------------|
-| `GET /api/v1/system/info` | Capability + relay/bootstrap discovery (core kind map; broader families documented separately) |
+| `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` | Capability + relay/bootstrap discovery (core kind map; broader families documented separately) |
 | `POST /mcp` | Native MCP JSON-RPC endpoint |
 | `POST /api/v1/services` | Create a service (REST compatibility surface) |
 | `POST /api/v1/deployments/intents` | Create deployment intent |

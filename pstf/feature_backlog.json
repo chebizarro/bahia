@@ -52,24 +52,24 @@
         "coverage_gap": 4,
         "total": 19
       },
-      "slice_summary": "Verify `/api/v1/system/info` as the authoritative bootstrap contract for browser relays, encrypted-request relays, service pubkey discovery, feature gating, control-plane kind advertisement, cached system-info loading, EOSE-bounded read-model bootstrap, and transition into live subscriptions.",
-      "why_this_is_a_gap": "Existing PSTF slices depend on `/api/v1/system/info` and relay bootstrap behavior, but none verify that contract as its own feature. `pstf/spec_gap_report.md` calls both `/api/v1/system/info` and relay-read-model-first frontend behavior under-specified.",
+      "slice_summary": "Verify `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` as the authoritative bootstrap contract for browser relays, encrypted-request relays, service pubkey discovery, feature gating, control-plane kind advertisement, cached Nostr discovery loading, EOSE-bounded read-model bootstrap, and transition into live subscriptions.",
+      "why_this_is_a_gap": "Existing PSTF slices depend on `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` and relay bootstrap behavior, but none verify that contract as its own feature. `pstf/spec_gap_report.md` calls both `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` and relay-read-model-first frontend behavior under-specified.",
       "proposed_acceptance_focus": [
-        "`/api/v1/system/info` advertises public relays, encrypted-request relays, service pubkey, feature flags, and control-plane kind maps coherently.",
-        "The browser caches and deduplicates system-info loads instead of refetching per store.",
+        "`Nostr discovery events (kind 31974 + NIP-51 kind 30002)` advertises public relays, encrypted-request relays, service pubkey, feature flags, and control-plane kind maps coherently.",
+        "The browser caches and deduplicates Nostr discovery loads instead of refetching per store.",
         "Public control-plane bootstrap waits for EOSE, applies stored read models, and then stays live through subscriptions.",
         "Bootstrap fails closed when relay-read-model capability or browser relays are not advertised."
       ],
       "source_evidence": [
         "pstf/product_map.md \u2014 'System discovery and relay bootstrap' flow and product summary",
-        "pstf/planning_docs_index.md \u2014 `docs/control-planes.md` and `internal/api/handlers/system.go` called out as high-authority onboarding sources",
-        "pstf/spec_gap_report.md \u2014 Missing specification #1 (`/api/v1/system/info`) and #2 (relay-read-model-first frontend behavior)",
-        "internal/api/handlers/system.go:47-126 \u2014 `NostrConfigInfo`, `ControlPlaneInfo`, and `SystemInfoResponse` define the advertised bootstrap payload",
-        "internal/api/handlers/system.go:229-245,256-318 \u2014 feature flags plus control-plane request/result/read-model kind advertisement, including optional LLM kinds",
+        "pstf/planning_docs_index.md \u2014 `docs/control-planes.md` and `internal/adapters/nostr/projector.go` called out as high-authority onboarding sources",
+        "pstf/spec_gap_report.md \u2014 Missing specification #1 (`Nostr discovery events (kind 31974 + NIP-51 kind 30002)`) and #2 (relay-read-model-first frontend behavior)",
+        "internal/adapters/nostr/projector.go:47-126 \u2014 `NostrConfigInfo`, `ControlPlaneInfo`, and `SystemInfoResponse` define the advertised bootstrap payload",
+        "internal/adapters/nostr/projector.go:229-245,256-318 \u2014 feature flags plus control-plane request/result/read-model kind advertisement, including optional LLM kinds",
         "internal/api/handlers/system_test.go \u2014 payload coverage for encrypted relay fields, feature flags, and control-plane fields",
         "web/src/lib/stores/system.svelte.js:13-45 \u2014 cached `currentSystemInfo`, force-reload behavior, and concurrent-load dedupe",
         "web/src/lib/stores/controlplane.svelte.js:535-568 \u2014 browser relay resolution, `queryUntilEose(readModelFilters())`, and live subscription handoff",
-        "web/tests/unit/system-store.test.js \u2014 'loads public system info once' and 'deduplicates concurrent system info loads'",
+        "web/tests/unit/system-store.test.js \u2014 'loads public Nostr discovery once' and 'deduplicates concurrent Nostr discovery loads'",
         "web/tests/unit/controlplane-store.test.js \u2014 relay discovery and relay-backed bootstrap assertions"
       ]
     },
@@ -128,7 +128,7 @@
       "source_evidence": [
         "pstf/product_map.md \u2014 major capability 'LLM control plane' and LLM actor",
         "pstf/spec_gap_report.md \u2014 Untested behavior #3 (LLM route control plane has limited selected flow coverage)",
-        "internal/api/handlers/system.go:288-300 \u2014 `/system/info` conditionally advertises `llm_route_create`, `llm_release_register`, `llm_deploy_request`, `llm_deployment_approval`, `llm_rollback_request`, plus read models `llm_route_registry` and `llm_route_state`",
+        "internal/adapters/nostr/projector.go:288-300 \u2014 `Nostr discovery events` conditionally advertises `llm_route_create`, `llm_release_register`, `llm_deploy_request`, `llm_deployment_approval`, `llm_rollback_request`, plus read models `llm_route_registry` and `llm_route_state`",
         "docs/control-planes.md:72,96-100,132-133 \u2014 LLM request family `5971-5975` and read models `31964-31965`",
         "internal/domain/llm.go:1-140 \u2014 `LLMRoute`, `LLMRelease`, `LLMDeploymentIntent`, placement policy, and backend configuration models",
         "internal/controlplane/reactor.go:352-361,944-1118 \u2014 dedicated handlers for LLM route create, release register, deploy request, deployment approval, and rollback request",
@@ -255,7 +255,7 @@
       "source_evidence": [
         "pstf/features/CORE_SERVICE_TO_DEPLOYMENT/feature_spec.json \u2014 deployment run logs explicitly listed as out of scope",
         "internal/controlplane/encrypted_route_handlers.go:18-41 \u2014 `deployments.run_logs.get` encrypted operation and run-log fetcher contract",
-        "internal/controlplane/encrypted_route_handlers_test.go:342-344 \u2014 route-handler test for run-id, tail, and stream request handling",
+        "internal/controlplane/encrypted_route_handlers_test.go:342-344 \u2014 route-projector test for run-id, tail, and stream request handling",
         "web/src/lib/stores/deployment-run-logs.svelte.js:10-12,39-49 \u2014 encrypted run-log operation and request payload shaping",
         "web/tests/e2e/deployment-history-and-run-details.spec.js:177-179,309-311 \u2014 E2E verifies run-log requests use `deployments.run_logs.get` and only encrypted relays",
         "pstf/spec_gap_report.md \u2014 encrypted route domains beyond notifications remain incompletely specified"

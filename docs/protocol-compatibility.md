@@ -282,8 +282,8 @@ Bahia supports NIP-98 direct HTTP auth for protected HTTP surfaces.
 
 ### Behavior
 - `Authorization: Nostr <base64event>` is the supported auth header when auth is enabled
-- `Authorization: Bearer ...` should be rejected by protected Bahia HTTP endpoints
-- browser-compatible direct NIP-98 capability is advertised via `/api/v1/system/info`
+- `Authorization: Bearer ...` should be rejected by protected Bahia Nostr event contracts
+- browser-compatible direct NIP-98 capability is advertised via `Nostr discovery events (kind 31974 + NIP-51 kind 30002)`
 
 ---
 

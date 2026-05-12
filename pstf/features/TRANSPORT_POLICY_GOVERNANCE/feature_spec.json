@@ -16,7 +16,7 @@
     "docs/protocol-compatibility.md:1-149,167-190",
     "docs/investigations/signer-first-auth-audit-2026-05-03.md:50-85",
     "docs/investigations/payments-orgs-private-transport-2026-05-03.md:1-35",
-    "internal/api/handlers/system.go:47-245,256-318",
+    "internal/adapters/nostr/projector.go:47-245,256-318",
     "web/src/lib/auth/route-access.js:1-120",
     "web/src/lib/nostr/encrypted-controlplane.js:1-260",
     "web/src/lib/api/client.js:1-114,118-259,372-424,520-591",
@@ -40,7 +40,7 @@
     "pstf/features/SOUL_FACTORY_PROVISIONING_TRACKING/hitl_decisions.md"
   ],
   "dependencies": [
-    "`/api/v1/system/info` as the shared discovery contract for public browser relay bootstrap, encrypted browser capability gating, and service-pubkey discovery",
+    "`Nostr discovery events (kind 31974 + NIP-51 kind 30002)` as the shared discovery contract for public browser relay bootstrap, encrypted browser capability gating, and service-pubkey discovery",
     "Canonical public control-plane kinds, encrypted operation catalog, and relay separation rules documented in `docs/control-planes.md` and `docs/nostr-commands.md`",
     "Existing feature slices that already verify domain-specific transport behavior: `CORE_SERVICE_TO_DEPLOYMENT`, `ENCRYPTED_CONTROL_PLANE_NOTIFICATIONS`, `SIGNER_FIRST_OPERATOR_ADOPTION_RUNTIME`, `LLM_ROUTE_RELEASE_DEPLOYMENT`, and `SYSTEM_DISCOVERY_RELAY_BOOTSTRAP`",
     "NIP-07 or NIP-46 signer identity for browser/operator flows plus explicit NIP-44 encrypt/decrypt support when encrypted browser flows are used",
@@ -77,7 +77,7 @@
       "name": "bahia_service",
       "role": "advertises discovery metadata, enforces transport boundaries, verifies signatures and authorization, and publishes correlated status/result/read-model events",
       "evidence": [
-        "internal/api/handlers/system.go",
+        "internal/adapters/nostr/projector.go",
         "docs/control-planes.md",
         "docs/nostr-commands.md"
       ]
@@ -87,7 +87,7 @@
       "role": "serve narrowed REST, direct NIP-98, and MCP needs without replacing relay-backed async truth for canonical control-plane flows",
       "evidence": [
         "docs/control-planes.md:1-36,313-328",
-        "internal/api/handlers/system.go",
+        "internal/adapters/nostr/projector.go",
         "web/src/lib/api/client.js"
       ]
     }
@@ -96,7 +96,7 @@
     "in_scope": [
       "Classification of browser-visible public signer-first flows onto public browser relays / sidecar-backed control-plane transport",
       "Classification of sensitive browser-visible flows onto encrypted request/result transport (`5980`/`7980`) using only browser encrypted-request relays plus the Bahia service pubkey",
-      "Classification of compatibility-only HTTP behavior, including direct NIP-98-protected REST/MCP surfaces and explicit pre-acceptance operator HTTP fallback",
+      "Classification of compatibility-only HTTP behavior, including direct NIP-98-protected REST/MCP surfaces and explicit pre-acceptance operator explicit relay configuration",
       "Shared policy for deprecated or quarantined transport surfaces such as EventSource log streaming and the legacy 311xx command bridge",
       "Cross-feature transport boundaries already implied by existing PSTF slices and the discovery contract",
       "Browser payment and browser log-transport policy decisions captured in this reconstruction"
@@ -117,7 +117,7 @@
       "`pstf/cross_feature_analysis.md`, `pstf/spec_gap_report.md`, and `pstf/feature_backlog.json` all identify shared transport governance as a high-risk cross-feature gap rather than a single-slice detail."
     ],
     "code": [
-      "`internal/api/handlers/system.go` advertises the public-vs-encrypted discovery inputs that every browser flow relies on: `browser_relays`, `browser_encrypted_request_relays`, `service_pubkey`, and feature gates such as `relay_read_models` and `encrypted_nostr_requests`.",
+      "`internal/adapters/nostr/projector.go` advertises the public-vs-encrypted discovery inputs that every browser flow relies on: `browser_relays`, `browser_encrypted_request_relays`, `service_pubkey`, and feature gates such as `relay_read_models` and `encrypted_nostr_requests`.",
       "`web/src/lib/nostr/encrypted-controlplane.js` enforces the browser encrypted transport boundary in code by deriving relay URLs only from `browser_encrypted_request_relays`, requiring the service pubkey, filtering correlated results by service author and requester pubkey, and rejecting publishes with no accepted OK.",
       "`web/src/lib/auth/route-access.js` currently has an empty `ROUTE_COMPATIBILITY_REQUIREMENTS` map, which directly contradicts an older auth audit but matches the user-approved intended browser policy captured in this session.",
       "`web/src/routes/payments/+page.svelte`, `/orgs`, and `/notifications` are currently browser-store driven for sensitive domains, while `web/src/routes/+page.svelte` still uses REST payment history for dashboard cost summary and `web/src/lib/api/client.js` still exposes EventSource log streaming and numerous REST compatibility methods."
@@ -133,13 +133,13 @@
       "`pstf/features/SOUL_FACTORY_PROVISIONING_TRACKING/hitl_decisions.md` already classifies timeout/relay-closure browser failure and ticker-based backend polling as FIX, not intended behavior."
     ],
     "existing_behavior": [
-      "Bahia currently operates with a mixed transport implementation: public signer-first relay flows, encrypted browser request/result flows, narrowed REST/MCP compatibility surfaces, explicit operator HTTP fallback, and some remaining legacy browser REST/SSE usage.",
+      "Bahia currently operates with a mixed transport implementation: public signer-first relay flows, encrypted browser request/result flows, narrowed REST/MCP compatibility surfaces, explicit operator explicit relay configuration, and some remaining legacy browser REST/SSE usage.",
       "The shared policy gap was real enough that the PSTF backlog explicitly promoted this new feature slice by prior HITL decision before this reconstruction pass began."
     ]
   },
   "observed_behavior": {
     "summary": [
-      "Public browser/service/LLM/operator flows are implemented as signer-first Nostr request/result/read-model behavior on the public relay plane, with `/api/v1/system/info` discovery feeding relay bootstrap and kind selection.",
+      "Public browser/service/LLM/operator flows are implemented as signer-first Nostr request/result/read-model behavior on the public relay plane, with `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` discovery feeding relay bootstrap and kind selection.",
       "Sensitive browser domains such as notifications, orgs, service secrets, payment history, deployment run logs, and signature verification are documented and partly implemented through encrypted `5980`/`7980` request/result flows using separate browser encrypted-request relay URLs.",
       "Direct NIP-98-protected REST and MCP surfaces still exist for narrowed CRUD/query/log/tooling compatibility needs.",
       "`web/src/lib/auth/route-access.js` currently applies no route-level REST compatibility gating because `ROUTE_COMPATIBILITY_REQUIREMENTS` is empty.",
@@ -207,7 +207,7 @@
       "EventSource-based browser log streaming is not part of the intended browser transport contract and should be treated as legacy behavior to deprecate in favor of approved Nostr-native or encrypted log flows.",
       "Operator-facing relay visibility should come from the service's NIP-51 kind `30002` relay-list event rather than raw `systemInfo.nostr.relays` discovery fields.",
       "Operational REST mutation surfaces already removed by prior HITL decisions, such as the flagged LLM operational REST endpoints, are not part of the intended long-term product contract even if legacy code paths remain behind flags.",
-      "Explicit compatibility exceptions are still allowed when already approved elsewhere: for example, operator HTTP fallback may exist only as explicit pre-acceptance compatibility mode and must never activate after any relay accepted the signer-first request.",
+      "Explicit compatibility exceptions are still allowed when already approved elsewhere: for example, operator explicit relay configuration may exist only as explicit pre-acceptance compatibility mode and must never activate after any relay accepted the signer-first request.",
       "Event-driven transport governance applies across feature families: timeout- or polling-based completion logic is not normative behavior for relay-backed flows."
     ],
     "decision_refs": [
@@ -222,7 +222,7 @@
     ]
   },
   "preconditions": [
-    "`/api/v1/system/info` advertises coherent public and encrypted browser discovery metadata consistent with the system-discovery slice.",
+    "`Nostr discovery events (kind 31974 + NIP-51 kind 30002)` advertises coherent public and encrypted browser discovery metadata consistent with the system-discovery slice.",
     "The requester is using an authenticated signer session for browser/operator Nostr flows.",
     "Encrypted browser flows have access to a signer mode that exposes the required NIP-44 encrypt/decrypt capability.",
     "Compatibility surfaces that remain in use are explicitly documented as compatibility/tooling behavior rather than silently standing in for canonical control-plane completion."
@@ -239,7 +239,7 @@
       "title": "Public signer-first browser flow stays on the public relay plane",
       "observed_or_intended": "approved_intended_behavior",
       "steps": [
-        "Browser bootstraps from `/api/v1/system/info`, resolves public browser relays, and loads relay-backed shared state until EOSE.",
+        "Browser bootstraps from `Nostr discovery events (kind 31974 + NIP-51 kind 30002)`, resolves public browser relays, and loads relay-backed shared state until EOSE.",
         "Browser publishes a signed public request kind such as service/deployment/LLM/operator action.",
         "At least one relay accepts the publish and the client follows correlated status/result events plus later read-model projections.",
         "No REST mutation or encrypted request transport is used as the canonical completion path for that public workflow."
@@ -263,7 +263,7 @@
       "steps": [
         "An operator client attempts the canonical signer-first public request flow.",
         "Only if no relay accepts the request and fallback was explicitly requested may the client use HTTP compatibility fallback.",
-        "Once any relay accepted the signer-first request, terminal failure remains terminal and must not flip into HTTP fallback."
+        "Once any relay accepted the signer-first request, terminal failure remains terminal and must not flip into explicit relay configuration."
       ]
     }
   ],
@@ -286,7 +286,7 @@
     {
       "id": "TPG-FP-004",
       "title": "Compatibility fallback activated after signer-first request acceptance",
-      "behavior": "HTTP fallback after any relay accepted a signer-first request violates the approved transport boundary for public operator flows."
+      "behavior": "explicit relay configuration after any relay accepted a signer-first request violates the approved transport boundary for public operator flows."
     },
     {
       "id": "TPG-FP-005",

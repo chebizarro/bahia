@@ -11,7 +11,7 @@ This document covers Bahia's **HTTP surfaces**.
 It does **not** by itself describe the full product interaction model.
 
 Current Bahia behavior is:
-- shared browser state is primarily bootstrapped from `/api/v1/system/info` and relay-backed read models
+- shared browser state is primarily bootstrapped from `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` and relay-backed read models
 - many control-plane writes are published as signed Nostr request events
 - sensitive browser domains use encrypted Nostr request/result events
 - REST remains a narrowed compatibility/query/log surface
@@ -27,7 +27,7 @@ For the full control-plane contract, see:
 Local development can run with `auth.enabled=false`.
 
 When Bahia HTTP auth is enabled:
-- protected HTTP endpoints accept **direct NIP-98** via `Authorization: Nostr <base64event>`
+- protected Nostr event contracts accept **direct NIP-98** via `Authorization: Nostr <base64event>`
 - `Authorization: Bearer ...` is unsupported and should be rejected with `401`
 - adoption/import and direct runtime action routes are privileged operator routes gated by their feature flags and allowlists
 
@@ -40,9 +40,9 @@ When Bahia HTTP auth is enabled:
 
 ## Discovery and tooling bootstrap
 
-### System info
+### Nostr discovery
 
-`GET /api/v1/system/info`
+`Nostr discovery events (kind 31974 + NIP-51 kind 30002)`
 
 Returns discovery/capability metadata used by the browser and tooling, including:
 - registries

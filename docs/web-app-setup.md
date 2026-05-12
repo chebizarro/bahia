@@ -77,7 +77,7 @@ Most realtime app state is sourced from the Nostr sidecar/control-plane subscrip
 
 ### Encrypted Nostr Request/Result Flows
 
-Sensitive route migrations use a separate signer-first encrypted Nostr request/result flow instead of the public relay sidecar. The backend advertises this only when operators configure backend `nostr.encrypted_request_relays`, browser-facing `nostr.browser_encrypted_request_relays`, and a service key; browser code reads `/api/v1/system/info.nostr.browser_encrypted_request_relays` and publishes kind `5980` encrypted NIP-44 requests to those relay URLs only. Results arrive as kind `7980` events tagged with the original request event id and encrypted back to the requester.
+Sensitive route migrations use a separate signer-first encrypted Nostr request/result flow instead of the public relay sidecar. The backend advertises this only when operators configure backend `nostr.encrypted_request_relays`, browser-facing `nostr.browser_encrypted_request_relays`, and a service key; browser code reads `Nostr discovery events (kind 31974 + NIP-51 kind 30002).nostr.browser_encrypted_request_relays` and publishes kind `5980` encrypted NIP-44 requests to those relay URLs only. Results arrive as kind `7980` events tagged with the original request event id and encrypted back to the requester.
 
 Important signer constraints:
 
@@ -103,7 +103,7 @@ Important signer constraints:
 **Solutions**:
 - Verify a NIP-07 browser extension is installed and unlocked
 - Reload the app and grant signing permission when prompted
-- Check `/api/v1/system/info` advertises `direct_nostr_http_auth: true` when backend auth is enabled
+- Check `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` advertises `direct_nostr_http_auth: true` when backend auth is enabled
 - If signer login works but a page reports compatibility required, that route still depends on REST compatibility
 
 ### NIP-07 Extension Not Detected
@@ -127,7 +127,7 @@ Compatibility notes for renamed keys:
 
 **Solutions**:
 - Check the relay connection status indicator (top-right corner)
-- Verify `/api/v1/system/info` advertises `relay_sidecar` and `relay_read_models`
+- Verify `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` advertises `relay_sidecar` and `relay_read_models`
 - Open DevTools → Network and confirm the `/relay` WebSocket is connected
 - Check Bahia and relay sidecar logs for publish/subscribe errors
 

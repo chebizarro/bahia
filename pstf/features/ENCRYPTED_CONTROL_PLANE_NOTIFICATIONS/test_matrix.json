@@ -27,7 +27,7 @@
         "`$lib/stores/system.svelte.js`"
       ],
       "data_requirements": [
-        "Deterministic system info object without `browser_encrypted_request_relays`."
+        "Deterministic Nostr discovery object without `browser_encrypted_request_relays`."
       ],
       "determinism_notes": [
         "No network or timer dependency."
@@ -59,7 +59,7 @@
         "`$lib/stores/system.svelte.js`"
       ],
       "data_requirements": [
-        "Deterministic system info containing `service_pubkey` and only `browser_relays`."
+        "Deterministic Nostr discovery containing `service_pubkey` and only `browser_relays`."
       ],
       "determinism_notes": [
         "Pure function assertions."
@@ -178,7 +178,7 @@
       "target_path": "web/tests/e2e/notifications-encrypted-smoke.spec.js",
       "description": "Runs the browser flow against mocked public and encrypted relay URLs and asserts that notifications list loading stays on encrypted relays.",
       "preconditions": [
-        "Playwright harness provides deterministic system info with both public and encrypted relay URLs.",
+        "Playwright harness provides deterministic Nostr discovery with both public and encrypted relay URLs.",
         "Browser signer and nip44 mocks are installed."
       ],
       "steps": [
@@ -187,13 +187,13 @@
       ],
       "expected_result": "The notifications page renders the existing channel and all encrypted publishes target the encrypted relay URL, not the public relay URL.",
       "fixtures": [
-        "Mock system info with `browser_relays` and `browser_encrypted_request_relays`.",
+        "Mock Nostr discovery with `browser_relays` and `browser_encrypted_request_relays`.",
         "Initial notification channel fixture."
       ],
       "mocks": [
         "Playwright `window.nostr.nip44` shim",
         "Patched WebSocket relay harness",
-        "E2E system info mock"
+        "E2E Nostr discovery mock"
       ],
       "data_requirements": [
         "Stable service pubkey and relay URLs.",
@@ -463,7 +463,7 @@
       ],
       "expected_result": "The list and create routes expose the expected top-level headings, key inputs are label-addressable, and submission errors are available via an alert region.",
       "fixtures": [
-        "Same deterministic system info and encrypted harness as the notifications smoke test."
+        "Same deterministic Nostr discovery and encrypted harness as the notifications smoke test."
       ],
       "mocks": [
         "Playwright encrypted notification harness"

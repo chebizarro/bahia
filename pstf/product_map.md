@@ -4,14 +4,14 @@
 
 Bahia is a deployment and runtime control plane. The stable core is service/build/artifact/deployment tracking plus runtime observation and drift detection (`README.md`, `internal/domain/models.go`).
 
-**Observed current shape (2026-05-05):** Bahia is also a **Nostr-native, sidecar-first, signer-first** control plane. The browser bootstraps from `/api/v1/system/info`, reads shared state from relay-backed read models, performs many writes as signed Nostr request events, and uses encrypted Nostr request/result flows for sensitive domains (`docs/control-planes.md`, `internal/api/handlers/system.go`, `web/src/lib/stores/controlplane.svelte.js`, `web/src/lib/stores/auth.svelte.js`).
+**Observed current shape (2026-05-05):** Bahia is also a **Nostr-native, sidecar-first, signer-first** control plane. The browser bootstraps from `Nostr discovery events (kind 31974 + NIP-51 kind 30002)`, reads shared state from relay-backed read models, performs many writes as signed Nostr request events, and uses encrypted Nostr request/result flows for sensitive domains (`docs/control-planes.md`, `internal/adapters/nostr/projector.go`, `web/src/lib/stores/controlplane.svelte.js`, `web/src/lib/stores/auth.svelte.js`).
 
 **Primary evidence**
 - `README.md`
 - `docs/control-planes.md`
 - `internal/domain/models.go`
 - `internal/api/router/router.go`
-- `internal/api/handlers/system.go`
+- `internal/adapters/nostr/projector.go`
 - `web/src/lib/stores/controlplane.svelte.js`
 
 ## User types / actors
@@ -19,7 +19,7 @@ Bahia is a deployment and runtime control plane. The stable core is service/buil
 | Actor | Role | Evidence |
 |---|---|---|
 | Web signer / operator | Uses the web UI, authenticates with NIP-07 or NIP-46, signs control-plane requests | `web/src/lib/stores/auth.svelte.js`, `web/src/routes/` |
-| Backend service (Bahia) | Publishes read models, audit events, status/results, encrypted results, and serves REST/MCP compatibility surfaces | `internal/api/handlers/system.go`, `internal/controlplane/`, `internal/mcp/server.go` |
+| Backend service (Bahia) | Publishes read models, audit events, status/results, encrypted results, and serves REST/MCP compatibility surfaces | `internal/adapters/nostr/projector.go`, `internal/controlplane/`, `internal/mcp/server.go` |
 | Deployment operator | Creates deployment intents, approvals, rollbacks, adoption/import requests, and direct runtime actions | `docs/adoption-production-rollout.md`, `internal/controlplane/operator_actions.go` |
 | CI / Hive-CI publisher | Emits workflow events that Bahia ingests into builds/artifacts/deployments | `docs/event-spec.md`, `internal/adapters/hiveci/` |
 | Runtime target / worker | Executes or hosts workloads (Docker/Compose/Kubernetes/Podman; Loom workers for jobs) | `docs/architecture.md`, `internal/service/runtime_lifecycle.go`, `internal/rollout/` |
@@ -31,7 +31,7 @@ Bahia is a deployment and runtime control plane. The stable core is service/buil
 | Capability | What it does | Main implementation areas | Test surface |
 |---|---|---|---|
 | Core registry | CRUD for services, environments, builds, artifacts, deployment intents/runs, observations, state | `internal/domain/models.go`, `internal/api/handlers/`, `internal/service/registry.go` | Go unit tests, DB integration test, web CRUD tests |
-| System discovery | Advertises relays, service pubkey, feature flags, kind maps, registries, runtime info | `internal/api/handlers/system.go` | `web/tests/unit/system-store.test.js` |
+| System discovery | Advertises relays, service pubkey, feature flags, kind maps, registries, runtime info | `internal/adapters/nostr/projector.go` | `web/tests/unit/system-store.test.js` |
 | Relay-backed shared state | Browser bootstraps via EOSE, then stays live on subscriptions for services, environments, state, workers, activity, LLM models | `web/src/lib/stores/controlplane.svelte.js` | `web/tests/unit/controlplane-store.test.js`, `web/tests/e2e/controlplane-nostr-smoke.spec.js` |
 | Public signer-first writes | Signed Nostr requests for service/deployment/policy actions and correlated result handling | `web/src/lib/stores/public-controlplane.svelte.js`, `web/src/lib/nostr/controlplane-requests.js`, `internal/controlplane/reactor.go` | `web/tests/unit/controlplane-requests.test.js`, public smoke E2E |
 | Encrypted control plane | Sensitive request/result flows for notifications, payments, orgs, secrets, run logs, signatures | `internal/controlplane/encrypted_transport.go`, `internal/controlplane/encrypted_domain_handlers.go`, `internal/controlplane/encrypted_route_handlers.go` | Go unit, Vitest, notifications E2E |
@@ -103,13 +103,13 @@ Sources: `internal/domain/tenant.go`, `internal/domain/notification.go`, `intern
 ## Known flows
 
 ### 1. System discovery and relay bootstrap
-1. Browser loads `/api/v1/system/info`.
+1. Browser loads `Nostr discovery events (kind 31974 + NIP-51 kind 30002)`.
 2. Browser discovers relays, service pubkey, feature flags, and kind maps.
 3. Browser connects to relays.
 4. Browser queries read models until EOSE.
 5. Browser keeps subscriptions open for live updates.
 
-Evidence: `internal/api/handlers/system.go`, `web/src/lib/stores/controlplane.svelte.js`
+Evidence: `internal/adapters/nostr/projector.go`, `web/src/lib/stores/controlplane.svelte.js`
 
 ### 2. Core deployment flow
 1. Build/artifact exist or are ingested from CI.
@@ -130,7 +130,7 @@ Evidence: `internal/domain/models.go`, `internal/api/handlers/deployments.go`, `
 Evidence: `docs/control-planes.md`, `web/src/lib/nostr/controlplane-requests.js`, `internal/controlplane/reactor.go`
 
 ### 4. Encrypted browser flow
-1. Browser discovers encrypted-request capability from `/api/v1/system/info`.
+1. Browser discovers encrypted-request capability from `Nostr discovery events (kind 31974 + NIP-51 kind 30002)`.
 2. Browser encrypts a request to Bahia's pubkey and publishes kind `5980`.
 3. Bahia decrypts, authorizes, performs the operation, and emits encrypted kind `7980` reply.
 4. Browser decrypts the result and updates local state.
@@ -168,7 +168,7 @@ Evidence: `internal/domain/soul.go`, `web/src/lib/stores/souls.svelte.js`, `web/
 
 **Primary files**
 - `docs/control-planes.md`
-- `internal/api/handlers/system.go`
+- `internal/adapters/nostr/projector.go`
 - `internal/controlplane/encrypted_transport.go`
 - `internal/controlplane/notification_encrypted_handlers.go`
 - `web/src/lib/nostr/encrypted-controlplane.js`
@@ -202,7 +202,7 @@ Evidence: `internal/domain/soul.go`, `web/src/lib/stores/souls.svelte.js`, `web/
 
 ## Notes on certainty
 
-- Use `internal/domain/*`, `internal/api/router/router.go`, `internal/api/handlers/system.go`, and `docs/control-planes.md` as primary truth.
+- Use `internal/domain/*`, `internal/api/router/router.go`, `internal/adapters/nostr/projector.go`, and `docs/control-planes.md` as primary truth.
 - Treat `README.md`, `docs/architecture.md`, `docs/protocol-compatibility.md`, `docs/WEB_APP_PRODUCTION_PLAN.md`, and `web/README.md` as lower-authority unless verified against code.
-- `observed_not_specified` examples include `/api/v1/system/info` as a hard bootstrap contract, relay-read-model-first shared state, encrypted payment history in the UI, and relay-backed Souls UI without a REST route.
+- `observed_not_specified` examples include `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` as a hard bootstrap contract, relay-read-model-first shared state, encrypted payment history in the UI, and relay-backed Souls UI without a REST route.
 - `specified_not_observed` examples include adoption as a documented operator surface with no current web route and claimed CI/OCI end-to-end tests that are mostly placeholders.

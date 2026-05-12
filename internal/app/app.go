@@ -315,7 +315,10 @@ func New(cfg *config.Config) (*App, error) {
 	// Nostr read-model projector. This owns canonical 3196x projections and
 	// the 310xx audit/activity feed for relay consumers; the legacy Publisher is
 	// retained for relay pool lifecycle compatibility.
-	projectorOpts := []nostrAdapter.ProjectorOption{nostrAdapter.WithPolicyProjectionSource(policySvc)}
+	projectorOpts := []nostrAdapter.ProjectorOption{
+		nostrAdapter.WithPolicyProjectionSource(policySvc),
+		nostrAdapter.WithSystemDiscoveryConfig(cfg, true),
+	}
 	if llmRegistry != nil {
 		projectorOpts = append(projectorOpts, nostrAdapter.WithLLMProjectionSource(llmRegistry))
 	}

@@ -259,7 +259,7 @@ To become the definitive nostr-first container registry and deployment platform,
 
 #### E. Platform Experience
 - **Real-time event stream** — WebSocket/SSE for live deployment status
-- **Webhook notifications** — notify Slack, Discord, or any HTTP endpoint
+- **Webhook notifications** — notify Slack, Discord, or any Nostr event contract
 - **OpenTelemetry observability** — distributed traces, metrics, and structured logs
 - **Multi-tenant RBAC** — organizations, teams, roles, and permissions
 - **Web dashboard** — visual deployment management and monitoring

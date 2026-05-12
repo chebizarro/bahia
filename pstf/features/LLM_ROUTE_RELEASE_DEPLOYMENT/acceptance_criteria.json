@@ -12,13 +12,13 @@
       "title": "System discovery advertises the LLM control-plane contract only when LLM is enabled",
       "type": "contract",
       "priority": "must",
-      "assertion": "`/api/v1/system/info` must advertise `llm_routes`, `llm_deployments`, and `llm_rollback` capabilities plus the LLM request kinds `5971-5975`, status kind `6973`, result kinds `7971-7973`, and read-model kinds `31964-31965` only when the LLM feature is enabled, and must omit those LLM-specific entries when the feature is disabled.",
+      "assertion": "`Nostr discovery events (kind 31974 + NIP-51 kind 30002)` must advertise `llm_routes`, `llm_deployments`, and `llm_rollback` capabilities plus the LLM request kinds `5971-5975`, status kind `6973`, result kinds `7971-7973`, and read-model kinds `31964-31965` only when the LLM feature is enabled, and must omit those LLM-specific entries when the feature is disabled.",
       "testable_by": [
         "unit",
         "contract"
       ],
       "preconditions": [
-        "System info handler is exercised once with `llmEnabled=true` and once with `llmEnabled=false`."
+        "Nostr discovery handler is exercised once with `llmEnabled=true` and once with `llmEnabled=false`."
       ],
       "steps": [
         "Request or construct the control-plane info payload in both enabled and disabled configurations.",
@@ -30,7 +30,7 @@
         "If the enabled payload omits any canonical LLM kind family or route/release correlation field, the criterion fails."
       ],
       "source_evidence": [
-        "internal/api/handlers/system.go:256-318",
+        "internal/adapters/nostr/projector.go:256-318",
         "docs/control-planes.md:65-135",
         "pstf/features/LLM_ROUTE_RELEASE_DEPLOYMENT/feature_spec.json"
       ],

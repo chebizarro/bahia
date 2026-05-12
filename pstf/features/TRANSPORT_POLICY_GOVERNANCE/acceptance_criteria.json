@@ -11,10 +11,10 @@
       "title": "System discovery keeps public bootstrap and encrypted capability gating distinct",
       "type": "contract",
       "priority": "must",
-      "assertion": "`/api/v1/system/info` must advertise public browser bootstrap inputs (`browser_relays` and/or `sidecar_url`) separately from encrypted browser capability inputs (`browser_encrypted_request_relays`, `service_pubkey`, and `features.encrypted_nostr_requests`). Public bootstrap fields alone must not imply encrypted capability.",
+      "assertion": "`Nostr discovery events (kind 31974 + NIP-51 kind 30002)` must advertise public browser bootstrap inputs (`browser_relays` and/or `sidecar_url`) separately from encrypted browser capability inputs (`browser_encrypted_request_relays`, `service_pubkey`, and `features.encrypted_nostr_requests`). Public bootstrap fields alone must not imply encrypted capability.",
       "testable_by": ["unit", "contract"],
       "preconditions": [
-        "System-info payloads are available for public-only and public-plus-encrypted configurations."
+        "Nostr discovery payloads are available for public-only and public-plus-encrypted configurations."
       ],
       "steps": [
         "Inspect a payload with only public bootstrap fields.",
@@ -26,7 +26,7 @@
         "If encrypted-request relay URLs are required for public bootstrap success, the criterion fails."
       ],
       "source_evidence": [
-        "internal/api/handlers/system.go:47-245",
+        "internal/adapters/nostr/projector.go:47-245",
         "docs/control-planes.md:38-49,241-315",
         "pstf/features/SYSTEM_DISCOVERY_RELAY_BOOTSTRAP/feature_spec.json",
         "web/tests/unit/encrypted-controlplane.test.js:1-95"
@@ -206,10 +206,10 @@
     {
       "ac_id": "TPG-AC-008",
       "feature_id": "TRANSPORT_POLICY_GOVERNANCE",
-      "title": "Operator HTTP fallback remains explicit and pre-acceptance only",
+      "title": "Operator explicit relay configuration remains explicit and pre-acceptance only",
       "type": "reliability",
       "priority": "must",
-      "assertion": "For signer-first operator flows, HTTP fallback is allowed only as an explicit compatibility mode before any relay accepts the signed request. Once any relay has accepted the signer-first request, terminal failure remains terminal and must not trigger HTTP fallback.",
+      "assertion": "For signer-first operator flows, explicit relay configuration is allowed only as an explicit compatibility mode before any relay accepts the signed request. Once any relay has accepted the signer-first request, terminal failure remains terminal and must not trigger explicit relay configuration.",
       "testable_by": ["unit", "integration", "contract"],
       "preconditions": [
         "An operator signer-first request path is exercised with both pre-acceptance and post-acceptance failure scenarios."
@@ -221,7 +221,7 @@
       "expected_result": "Fallback is permitted only in the pre-acceptance case and is forbidden after any relay accepted the signer-first request.",
       "negative_cases": [
         "If post-acceptance terminal failure can fall back to HTTP, the criterion fails.",
-        "If HTTP fallback occurs without explicit fallback enablement, the criterion fails."
+        "If explicit relay configuration occurs without explicit fallback enablement, the criterion fails."
       ],
       "source_evidence": [
         "docs/control-planes.md:163-216",

@@ -12,7 +12,7 @@ Removed legacy surfaces:
 - `POST /api/v1/auth/nostr` NIP-98-to-JWT browser exchange
 - `/api/v1/agent/*` custom MCP-inspired HTTP tools
 
-`/api/v1/system/info` keeps `nostr_auth_exchange`, `legacy_sse`, `legacy_jwt_exchange`, and `legacy_agent_http` keys as `false` values so old clients can fail closed.
+`Nostr discovery events (kind 31974 + NIP-51 kind 30002)` keeps `nostr_auth_exchange`, `legacy_sse`, `legacy_jwt_exchange`, and `legacy_agent_http` keys as `false` values so old clients can fail closed.
 
 ---
 
@@ -20,7 +20,7 @@ Removed legacy surfaces:
 
 > **Base paths**: `/mcp` and `/api/v1/mcp`
 
-MCP clients use JSON-RPC 2.0 over HTTP. Tool implementations are backed by `internal/mcp/server.go`; long-running tool results include Nostr correlation metadata (`request_event_id`, `request_kind`, `service_id`, `route_id`, `release_id`, `environment_id`, `intent_id`, `run_id`, status/result/read-model kinds) so agents can follow async truth on the relay. `/api/v1/system/info` advertises core `control_plane` discovery metadata for clients that need bootstrap information before subscribing; broader command families are documented here and in `docs/nostr-commands.md`.
+MCP clients use JSON-RPC 2.0 over HTTP. Tool implementations are backed by `internal/mcp/server.go`; long-running tool results include Nostr correlation metadata (`request_event_id`, `request_kind`, `service_id`, `route_id`, `release_id`, `environment_id`, `intent_id`, `run_id`, status/result/read-model kinds) so agents can follow async truth on the relay. `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` advertises core `control_plane` discovery metadata for clients that need bootstrap information before subscribing; broader command families are documented here and in `docs/nostr-commands.md`.
 
 Example:
 
@@ -52,7 +52,7 @@ curl -X POST http://localhost:8080/mcp \
 
 Browser and Bahia control-plane traffic should target the relay sidecar first.
 
-- Browser discovery: `/api/v1/system/info` → `nostr.browser_relays` / `nostr.sidecar_url`
+- Browser discovery: `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` → `nostr.browser_relays` / `nostr.sidecar_url`
 - Bahia backend connection: `nostr.sidecar.backend_url` when set, otherwise `nostr.sidecar.public_url`
 - Bahia-owned control-plane reactor/projector traffic uses only the sidecar backend URL in sidecar mode.
 - Upstream relays: configure `nostr.relays` for public interop/audit traffic. If `nostr.sidecar.mirror_external=true`, Bahia treats the sidecar as the upstream mirror boundary and does not also connect directly to those URLs.
@@ -160,7 +160,7 @@ Operator workflows are public signed control-plane requests. They are not RPC an
 CLI behavior:
 
 - `bahia adopt scan|import` and `bahia services actions deploy|restart|stop` use signer-first Nostr requests by default.
-- Relay resolution is deterministic: repeatable `--relay` flags, then comma-separated `BAHIA_NOSTR_RELAYS`, then `/api/v1/system/info` discovery from `nostr.browser_relays` plus `nostr.sidecar_url`.
+- Relay resolution is deterministic: repeatable `--relay` flags, then comma-separated `BAHIA_NOSTR_RELAYS`, then `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` discovery from `nostr.browser_relays` plus `nostr.sidecar_url`.
 - Live status chatter is written to stderr only in table mode; JSON/YAML stdout remains reserved for the final result payload.
 - `--http-fallback` (or `BAHIA_OPERATOR_HTTP_FALLBACK=true`) is explicit compatibility mode and is only safe before any relay accepts the signed request, such as signer/relay discovery failure or publish with zero accepted relays.
 - `--raw-target` is compatibility-only. It skips the public signer-first adoption path and requires explicit `--http-fallback`; use `--target` endpoint refs for the signer-first path.
@@ -248,9 +248,9 @@ Sensitive browser route families and encrypted request-domain actions (notificat
 
 Discovery/config contract:
 
-- Backend-only relay URLs for encrypted request/result handling are configured as `nostr.encrypted_request_relays` and are not exposed by `/api/v1/system/info`.
+- Backend-only relay URLs for encrypted request/result handling are configured as `nostr.encrypted_request_relays` and are not exposed by `Nostr discovery events (kind 31974 + NIP-51 kind 30002)`.
 - Browser-discoverable relay URLs for encrypted request/result handling are configured as `nostr.browser_encrypted_request_relays` and are exposed as `nostr.browser_encrypted_request_relays`.
-- `/api/v1/system/info.features.encrypted_nostr_requests=true` means the backend has a service key, at least one backend `nostr.encrypted_request_relays` subscription target, and at least one browser encrypted-request relay URL advertised.
+- `Nostr discovery events (kind 31974 + NIP-51 kind 30002).features.encrypted_nostr_requests=true` means the backend has a service key, at least one backend `nostr.encrypted_request_relays` subscription target, and at least one browser encrypted-request relay URL advertised.
 - Browser clients must keep public `nostr.browser_relays` / `nostr.sidecar_url` separate from `nostr.browser_encrypted_request_relays`; sensitive payloads must never be published to the public sidecar relay.
 
 Event contract:

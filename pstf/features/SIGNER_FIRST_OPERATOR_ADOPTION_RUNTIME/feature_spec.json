@@ -25,7 +25,7 @@
     },
     {
       "name": "operator_cli",
-      "role": "resolves signer and relay inputs, publishes signer-first requests by default, and uses HTTP fallback only before any relay accepts the request"
+      "role": "resolves signer and relay inputs, publishes signer-first requests by default, and uses explicit relay configuration only before any relay accepts the request"
     },
     {
       "name": "runtime_target",
@@ -48,14 +48,14 @@
   ],
   "preconditions": [
     "Signer-first operator features are enabled in Bahia config for the relevant flow",
-    "The operator has a signer private key and at least one relay URL via `--relay`, `BAHIA_NOSTR_RELAYS`, or `/api/v1/system/info` discovery",
+    "The operator has a signer private key and at least one relay URL via `--relay`, `BAHIA_NOSTR_RELAYS`, or `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` discovery",
     "Requested targets use server-managed `runtime.endpoints.<ref>` aliases on the signer-first path",
     "The operator pubkey is allowlisted for the requested scope or covered by the global operator fallback allowlist"
   ],
   "postconditions": [
     "A valid operator request produces correlated status and terminal result events or a validated terminal failure",
     "Adoption scan/import results stay sanitized and do not leak raw Docker host values or redacted secret values",
-    "HTTP fallback is used only before any relay accepts the signer-first request and never after terminal signer-first failure"
+    "explicit relay configuration is used only before any relay accepts the signer-first request and never after terminal signer-first failure"
   ],
   "happy_paths": [
     {
@@ -105,12 +105,12 @@
     {
       "id": "SFOAR-FP-004",
       "title": "No relay accepted the signer-first request",
-      "behavior": "The operator client returns a pre-acceptance error that explicitly permits HTTP fallback if and only if fallback was requested"
+      "behavior": "The operator client returns a pre-acceptance error that explicitly permits explicit relay configuration if and only if fallback was requested"
     },
     {
       "id": "SFOAR-FP-005",
       "title": "Terminal signer-first failure after request acceptance",
-      "behavior": "Once any relay accepts the request, terminal result failure is surfaced to the operator and must not trigger HTTP fallback"
+      "behavior": "Once any relay accepts the request, terminal result failure is surfaced to the operator and must not trigger explicit relay configuration"
     }
   ],
   "edge_cases": [
@@ -122,7 +122,7 @@
     "Public signer-first adoption requests must never carry raw Docker coordinates in event payloads",
     "Sanitized scan/import DTOs must preserve redacted key names while withholding sensitive values and managed endpoint docker hosts",
     "Request/result correlation must be explicit via request event id and requester pubkey tags",
-    "HTTP fallback must be explicit and bounded to pre-acceptance failures only"
+    "explicit relay configuration must be explicit and bounded to pre-acceptance failures only"
   ],
   "dependencies": [
     "Runtime endpoint alias configuration under `runtime.endpoints.<ref>`",

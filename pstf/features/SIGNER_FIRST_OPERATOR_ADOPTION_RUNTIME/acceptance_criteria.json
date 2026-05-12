@@ -7,13 +7,13 @@
       "title": "Operator CLI resolves signer-first relays with deterministic precedence",
       "type": "functional",
       "priority": "must",
-      "assertion": "Operator relay resolution uses `--relay` first, then `BAHIA_NOSTR_RELAYS`, then `/api/v1/system/info` discovery from `nostr.browser_relays` plus `nostr.sidecar_url`, with duplicate URLs removed.",
+      "assertion": "Operator relay resolution uses `--relay` first, then `BAHIA_NOSTR_RELAYS`, then `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` discovery from `nostr.browser_relays` plus `nostr.sidecar_url`, with duplicate URLs removed.",
       "preconditions": [
         "CLI root command is initialized with operator flags.",
-        "A system info client is available when discovery fallback is used."
+        "A Nostr discovery client is available when discovery fallback is used."
       ],
       "steps": [
-        "Provide relay URLs via command flag, environment variable, and system info in separate runs.",
+        "Provide relay URLs via command flag, environment variable, and Nostr discovery in separate runs.",
         "Resolve relay URLs for the operator path."
       ],
       "expected_result": "The resolved relay list follows the documented precedence and contains only unique URLs.",
@@ -39,13 +39,13 @@
       "title": "Raw-target operator usage is compatibility-only and requires explicit fallback",
       "type": "security",
       "priority": "must",
-      "assertion": "`--raw-target` requests do not use the signer-first Nostr path; they fail unless explicit HTTP fallback is enabled, and when fallback is enabled they skip signer-first publish entirely.",
+      "assertion": "`--raw-target` requests do not use the signer-first Nostr path; they fail unless explicit explicit relay configuration is enabled, and when fallback is enabled they skip signer-first publish entirely.",
       "preconditions": [
         "CLI adoption command is invoked with `--raw-target`."
       ],
       "steps": [
         "Run adoption scan/import with `--raw-target` and no fallback.",
-        "Repeat with explicit HTTP fallback enabled."
+        "Repeat with explicit explicit relay configuration enabled."
       ],
       "expected_result": "Without fallback the command errors before using the Nostr operator client; with fallback it executes the compatibility handler only.",
       "negative_cases": [
@@ -297,19 +297,19 @@
     },
     {
       "ac_id": "SFOAR-AC-010",
-      "title": "Explicit HTTP fallback is allowed only for pre-acceptance operator failures",
+      "title": "Explicit explicit relay configuration is allowed only for pre-acceptance operator failures",
       "type": "security",
       "priority": "must",
       "assertion": "When `--http-fallback` is enabled, CLI fallback occurs only for `ControlPlaneRequestError` cases where `RequestAccepted=false`; accepted signer-first requests that later fail must surface the terminal signer-first failure and must not invoke fallback.",
       "preconditions": [
-        "CLI operator path is invoked with explicit HTTP fallback enabled.",
+        "CLI operator path is invoked with explicit explicit relay configuration enabled.",
         "Fallback handler is available for the command under test."
       ],
       "steps": [
         "Trigger a pre-acceptance failure such as relay subscription or zero-accept publish.",
         "Trigger a terminal failure after request acceptance."
       ],
-      "expected_result": "The pre-acceptance failure uses HTTP fallback; the post-acceptance terminal failure does not.",
+      "expected_result": "The pre-acceptance failure uses explicit relay configuration; the post-acceptance terminal failure does not.",
       "negative_cases": [
         "If fallback executes after any relay accepted the signer-first request, the criterion fails.",
         "If pre-acceptance failures are treated as terminal without allowing explicit fallback, the criterion fails."

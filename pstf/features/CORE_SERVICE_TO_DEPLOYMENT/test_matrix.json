@@ -11,9 +11,9 @@
       "type": "unit",
       "existing_or_new": "existing",
       "target_path": "web/tests/unit/controlplane-store.test.js",
-      "description": "Proves the browser bootstrap path uses `/system/info` relay discovery, queries canonical Bahia-authored read models through historical catch-up, and stays in live subscription mode afterward.",
+      "description": "Proves the browser bootstrap path uses `Nostr discovery events` relay discovery, queries canonical Bahia-authored read models through historical catch-up, and stays in live subscription mode afterward.",
       "preconditions": [
-        "Mock `/system/info` advertises `features.relay_read_models=true`, at least one browser relay, and the Bahia service pubkey.",
+        "Mock `Nostr discovery events` advertises `features.relay_read_models=true`, at least one browser relay, and the Bahia service pubkey.",
         "Mock Nostr client exposes deterministic `queryUntilEose` and `subscribe` behavior."
       ],
       "steps": [
@@ -23,10 +23,10 @@
       ],
       "expected_result": "Shared control-plane state is populated from public relay read models and live subscriptions remain active after catch-up.",
       "fixtures": [
-        "test/fixtures/system_info_sidecar_first.json"
+        "test/fixtures/system_discovery_sidecar_first.json"
       ],
       "mocks": [
-        "`api.getSystemInfo`",
+        "`discoverSystemInfo`",
         "`nostr.setRelays`",
         "`nostr.connect`",
         "`nostr.queryUntilEose`",
@@ -52,9 +52,9 @@
       "type": "unit",
       "existing_or_new": "existing",
       "target_path": "web/tests/unit/controlplane-store.test.js",
-      "description": "Covers the negative bootstrap branches where relay read models are not advertised or no browser relays are exposed by `/system/info`.",
+      "description": "Covers the negative bootstrap branches where relay read models are not advertised or no browser relays are exposed by `Nostr discovery events`.",
       "preconditions": [
-        "Mock `/system/info` can be varied per test case."
+        "Mock `Nostr discovery events` can be varied per test case."
       ],
       "steps": [
         "Call `bootstrapControlplane()` with `relay_read_models=false`.",
@@ -64,13 +64,13 @@
       "expected_result": "The browser does not silently fall back to non-canonical bootstrap behavior when public relay prerequisites are absent.",
       "fixtures": [],
       "mocks": [
-        "`api.getSystemInfo`",
+        "`discoverSystemInfo`",
         "`nostr.setRelays`",
         "`nostr.connect`"
       ],
       "data_requirements": [
-        "One system-info payload with `relay_read_models=false`",
-        "One system-info payload with missing `nostr.browser_relays`"
+        "One Nostr discovery payload with `relay_read_models=false`",
+        "One Nostr discovery payload with missing `nostr.browser_relays`"
       ],
       "determinism_notes": [
         "Both branches are local unit cases with no network dependencies."
@@ -125,7 +125,7 @@
       "description": "Exercises the browser route and records the emitted request kinds across create, preview, deploy-intent, and approval operations.",
       "preconditions": [
         "The public service/deployment browser harness is installed.",
-        "Public system info advertises relay-read-model support and a canonical service pubkey."
+        "Public Nostr discovery advertises relay-read-model support and a canonical service pubkey."
       ],
       "steps": [
         "Create a service from `/services`.",
@@ -637,7 +637,7 @@
       "target_path": "web/tests/e2e/service-deployment-public-smoke.spec.js",
       "description": "Acts as the vertical-slice browser proof for the approved journey: create service, observe immediate hydration, request policy preview, create deployment intent, approve deployment, and observe history/detail state.",
       "preconditions": [
-        "Public system info and public state harnesses are installed.",
+        "Public Nostr discovery and public state harnesses are installed.",
         "Synthetic service projection emission is suppressed so immediate hydration must come from create-result handling."
       ],
       "steps": [

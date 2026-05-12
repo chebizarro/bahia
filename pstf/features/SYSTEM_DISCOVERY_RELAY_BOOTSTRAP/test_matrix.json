@@ -7,18 +7,18 @@
       "ac_ids": [
         "SDRB-AC-001"
       ],
-      "title": "System info handler advertises sidecar-first public bootstrap fields",
+      "title": "Nostr discovery handler advertises sidecar-first public bootstrap fields",
       "type": "contract",
       "existing_or_new": "modify_existing",
       "target_path": "internal/api/handlers/system_test.go",
-      "description": "Extend the existing sidecar-capability handler test to assert the full approved public bootstrap contract, including browser bootstrap fields, `relay_read_models`, service-pubkey presence in a service-key configuration, and the non-use of raw `nostr.relays` as the approved browser bootstrap surface.",
+      "description": "Extend the existing sidecar-capability projector test to assert the full approved public bootstrap contract, including browser bootstrap fields, `relay_read_models`, service-pubkey presence in a service-key configuration, and the non-use of raw `nostr.relays` as the approved browser bootstrap surface.",
       "preconditions": [
         "System handler can be exercised with sidecar enabled and Nostr publication enabled.",
         "A service-key-backed configuration is available for the service-pubkey assertion."
       ],
       "steps": [
         "Construct a sidecar-enabled system config with publish enabled and a service key.",
-        "Call `GET /api/v1/system/info` through the handler test.",
+        "Call `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` through the projector test.",
         "Assert `browser_relays`, `sidecar_url`, `relay_sidecar`, `relay_read_models`, `service_pubkey`, and absence of approved browser-bootstrap reliance on raw `nostr.relays`."
       ],
       "expected_result": "The handler advertises the full sidecar-first public bootstrap contract for the approved slice.",
@@ -31,7 +31,7 @@
         "Deterministic service private key for derived pubkey assertions."
       ],
       "determinism_notes": [
-        "Pure handler test; no live relay or clock sensitivity beyond fixed config inputs."
+        "Pure projector test; no live relay or clock sensitivity beyond fixed config inputs."
       ],
       "status": "pass",
       "failure_reason": null
@@ -41,16 +41,16 @@
       "ac_ids": [
         "SDRB-AC-002"
       ],
-      "title": "System info handler conditionally advertises control-plane kinds and legacy false flags",
+      "title": "Nostr discovery handler conditionally advertises control-plane kinds and legacy false flags",
       "type": "contract",
       "existing_or_new": "existing",
       "target_path": "internal/api/handlers/system_test.go",
-      "description": "Reuse the existing handler tests that verify enabled versus disabled control-plane capability advertisement, MCP async-correlation advertisement, and explicit `false` legacy feature flags.",
+      "description": "Reuse the existing projector tests that verify enabled versus disabled control-plane capability advertisement, MCP async-correlation advertisement, and explicit `false` legacy feature flags.",
       "preconditions": [
-        "System handler test suite can run with optional features toggled on and off."
+        "System projector test suite can run with optional features toggled on and off."
       ],
       "steps": [
-        "Run the handler tests for enabled and disabled optional feature configurations.",
+        "Run the projector tests for enabled and disabled optional feature configurations.",
         "Inspect `control_plane` maps and legacy feature flags."
       ],
       "expected_result": "Enabled payloads advertise only enabled capability surfaces, disabled payloads omit them, and legacy fail-closed flags remain explicit `false` values.",
@@ -62,7 +62,7 @@
         "Deterministic handler configs for enabled and disabled branches."
       ],
       "determinism_notes": [
-        "Pure handler tests with no network dependency."
+        "Pure projector tests with no network dependency."
       ],
       "status": "pass",
       "failure_reason": null
@@ -72,7 +72,7 @@
       "ac_ids": [
         "SDRB-AC-003"
       ],
-      "title": "System-info store caches, deduplicates concurrent loads, and force reloads",
+      "title": "Nostr discovery store caches, deduplicates concurrent loads, and force reloads",
       "type": "unit",
       "existing_or_new": "existing",
       "target_path": "web/tests/unit/system-store.test.js",
@@ -81,16 +81,16 @@
         "The API client is mocked deterministically."
       ],
       "steps": [
-        "Load system info twice sequentially.",
-        "Load system info concurrently from two callers.",
+        "Load Nostr discovery twice sequentially.",
+        "Load Nostr discovery concurrently from two callers.",
         "Force reload after an initial load."
       ],
       "expected_result": "Normal loads reuse cached data and concurrent callers share one fetch; force reload replaces cached state with a fresh response.",
       "fixtures": [
-        "Mock system-info payloads with stable feature and Nostr fields."
+        "Mock Nostr discovery payloads with stable feature and Nostr fields."
       ],
       "mocks": [
-        "Mock `api.getSystemInfo`."
+        "Mock `discoverSystemInfo`."
       ],
       "data_requirements": [
         "Stable mock payloads for original and forced reload responses."
@@ -111,12 +111,12 @@
       "type": "unit",
       "existing_or_new": "existing",
       "target_path": "web/tests/unit/controlplane-store.test.js",
-      "description": "Reuse the existing control-plane store unit test that resolves browser relays from system info, connects the shared Nostr client, performs `queryUntilEose`, subscribes live, and applies read-model plus activity events.",
+      "description": "Reuse the existing control-plane store unit test that resolves browser relays from Nostr discovery, connects the shared Nostr client, performs `queryUntilEose`, subscribes live, and applies read-model plus activity events.",
       "preconditions": [
         "Mock Nostr client supports deterministic `connect`, `queryUntilEose`, and `subscribe` behavior."
       ],
       "steps": [
-        "Bootstrap the control-plane store from a deterministic system-info payload.",
+        "Bootstrap the control-plane store from a deterministic Nostr discovery payload.",
         "Assert relay resolution, connection, `queryUntilEose`, live subscription, and populated shared state."
       ],
       "expected_result": "Bootstrap reaches `live` only after the EOSE-bounded query, and canonical state collections are populated from the returned events.",
@@ -124,7 +124,7 @@
         "Mock Nostr events for service registry, environment registry, service state, worker ad, and optional LLM/state events."
       ],
       "mocks": [
-        "Mock `api.getSystemInfo`.",
+        "Mock `discoverSystemInfo`.",
         "Mock shared Nostr client."
       ],
       "data_requirements": [
@@ -146,22 +146,22 @@
       "type": "e2e",
       "existing_or_new": "existing",
       "target_path": "web/tests/e2e/controlplane-nostr-smoke.spec.js",
-      "description": "Reuse the existing Playwright smoke test that bootstraps from a mocked `/api/v1/system/info` payload and renders relay-backed dashboard and events-page state from Nostr mock data.",
+      "description": "Reuse the existing Playwright smoke test that bootstraps from a mocked `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` payload and renders relay-backed dashboard and events-page state from Nostr mock data.",
       "preconditions": [
-        "Browser E2E harness can mock `/api/v1/system/info` and WebSocket relay traffic before app mount."
+        "Browser E2E harness can mock `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` and WebSocket relay traffic before app mount."
       ],
       "steps": [
-        "Install E2E system-info and Nostr-event mocks.",
+        "Install E2E Nostr discovery and Nostr-event mocks.",
         "Visit the dashboard and events page.",
         "Assert rendered counts, relay status, activity, and discovered relay URL."
       ],
       "expected_result": "The browser reflects relay-backed state and live activity sourced from the discovered bootstrap payload and mocked relay stream.",
       "fixtures": [
-        "Mock system-info payload.",
+        "Mock Nostr discovery payload.",
         "Mock Nostr event list for services, environments, state, workers, and activity."
       ],
       "mocks": [
-        "Playwright route for `/api/v1/system/info`.",
+        "Playwright route for `Nostr discovery events (kind 31974 + NIP-51 kind 30002)`.",
         "Mock WebSocket implementation in `web/tests/e2e/helpers.js`."
       ],
       "data_requirements": [
@@ -185,7 +185,7 @@
       "target_path": "web/tests/unit/controlplane-store.test.js",
       "description": "Extend the existing bootstrap-failure coverage beyond connection failure to explicitly cover `relay_read_models=false` and no-advertised-browser-bootstrap-URL cases.",
       "preconditions": [
-        "The control-plane store can be exercised with custom mocked system-info payloads and Nostr connection outcomes."
+        "The control-plane store can be exercised with custom mocked Nostr discovery payloads and Nostr connection outcomes."
       ],
       "steps": [
         "Attempt bootstrap with `relay_read_models=false`.",
@@ -194,10 +194,10 @@
       ],
       "expected_result": "Each case returns a deterministic bootstrap failure and leaves the store in a non-ready error state.",
       "fixtures": [
-        "Mock system-info payloads for missing capability and missing browser-bootstrap fields."
+        "Mock Nostr discovery payloads for missing capability and missing browser-bootstrap fields."
       ],
       "mocks": [
-        "Mock `api.getSystemInfo`.",
+        "Mock `discoverSystemInfo`.",
         "Mock shared Nostr client connect state."
       ],
       "data_requirements": [
@@ -282,7 +282,7 @@
       "type": "unit",
       "existing_or_new": "modify_existing",
       "target_path": "cmd/cli/operator_nostr_test.go",
-      "description": "Extend the existing CLI precedence tests to add the missing negative branch where `/api/v1/system/info` is consulted but provides no `browser_relays` or `sidecar_url`, which should yield the deterministic discovery error.",
+      "description": "Extend the existing CLI precedence tests to add the missing negative branch where `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` is consulted but provides no `browser_relays` or `sidecar_url`, which should yield the deterministic discovery error.",
       "preconditions": [
         "CLI relay resolution is exercised with explicit-flag, environment, and discovery-only configurations."
       ],
@@ -292,16 +292,16 @@
       ],
       "expected_result": "Existing precedence is preserved and the discovery-only empty-bootstrap case fails deterministically.",
       "fixtures": [
-        "Fake system-info client with configurable browser-relay and sidecar fields."
+        "Fake Nostr discovery client with configurable browser-relay and sidecar fields."
       ],
       "mocks": [
-        "Mock system-info client."
+        "Mock Nostr discovery client."
       ],
       "data_requirements": [
         "Stable relay URL strings for flag, environment, and discovery branches."
       ],
       "determinism_notes": [
-        "Pure CLI/unit path with mocked system-info client."
+        "Pure CLI/unit path with mocked Nostr discovery client."
       ],
       "status": "pass",
       "failure_reason": null
@@ -320,14 +320,14 @@
         "Encrypted transport helper can be exercised with public-only and explicit-encrypted-capability discovery payloads."
       ],
       "steps": [
-        "Evaluate encrypted availability using a public-bootstrap-only system-info payload.",
+        "Evaluate encrypted availability using a public-bootstrap-only Nostr discovery payload.",
         "Evaluate encrypted availability using a payload with explicit encrypted capability indicators.",
         "Confirm public bootstrap metadata is insufficient by itself."
       ],
       "expected_result": "Public bootstrap metadata alone does not make encrypted capability available; explicit encrypted capability inputs do.",
       "fixtures": [
-        "System-info payload with only public bootstrap fields.",
-        "System-info payload with explicit encrypted capability indicators."
+        "Nostr discovery payload with only public bootstrap fields.",
+        "Nostr discovery payload with explicit encrypted capability indicators."
       ],
       "mocks": [
         "Mock `currentSystemInfo`.",
@@ -351,26 +351,26 @@
         "SDRB-AC-008",
         "SDRB-AC-009"
       ],
-      "title": "One canonical system-info payload satisfies public browser bootstrap, encrypted capability gating, and operator CLI discovery",
+      "title": "One canonical Nostr discovery payload satisfies public browser bootstrap, encrypted capability gating, and operator CLI discovery",
       "type": "integration",
       "existing_or_new": "new",
-      "target_path": "test/fixtures/system_info_sidecar_first.json",
-      "description": "Use one canonical system-info fixture across browser and CLI consumers: `web/tests/unit/controlplane-store.test.js` bootstraps the shared control-plane store from the fixture, `web/tests/unit/encrypted-controlplane.test.js` proves encrypted capability gating from the same payload, and `cmd/cli/operator_nostr_test.go` serves the same fixture through the real `/api/v1/system/info` client path to prove operator relay discovery coherence.",
+      "target_path": "test/fixtures/system_discovery_sidecar_first.json",
+      "description": "Use one canonical Nostr discovery fixture across browser and CLI consumers: `web/tests/unit/controlplane-store.test.js` bootstraps the shared control-plane store from the fixture, `web/tests/unit/encrypted-controlplane.test.js` proves encrypted capability gating from the same payload, and `cmd/cli/operator_nostr_test.go` serves the same fixture through the real `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` client path to prove operator relay discovery coherence.",
       "preconditions": [
-        "A canonical system-info fixture is available with sidecar-first public bootstrap fields, a service pubkey, explicit encrypted capability indicators, and enabled optional capabilities."
+        "A canonical Nostr discovery fixture is available with sidecar-first public bootstrap fields, a service pubkey, explicit encrypted capability indicators, and enabled optional capabilities."
       ],
       "steps": [
-        "Feed the same system-info payload into the browser system-info consumer, control-plane bootstrap helper, encrypted capability helper, and CLI relay discovery path.",
+        "Feed the same Nostr discovery payload into the browser Nostr discovery consumer, control-plane bootstrap helper, encrypted capability helper, and CLI relay discovery path.",
         "Assert each consumer derives only the approved fields and behaviors from that one payload."
       ],
       "expected_result": "All major consumers interpret the same payload coherently without relying on out-of-band discovery assumptions.",
       "fixtures": [
-        "Canonical system-info JSON fixture shared across browser and Go tests."
+        "Canonical Nostr discovery JSON fixture shared across browser and Go tests."
       ],
       "mocks": [
         "Mock browser Nostr client for control-plane bootstrap helper path.",
         "Mock auth helpers for encrypted helper import.",
-        "httptest server returning the canonical system-info payload for CLI discovery."
+        "httptest server returning the canonical Nostr discovery payload for CLI discovery."
       ],
       "data_requirements": [
         "Single stable payload covering public bootstrap fields, service pubkey, encrypted capability indicators, and control-plane kinds."
@@ -392,7 +392,7 @@
       "target_path": null,
       "description": "Add a release-gate manual/contract check that the approved slice is satisfied only by sidecar-first bootstrap behavior and not by sidecar-disabled raw `nostr.relays` fallback. This remains blocked until the implementation cleanup tracked in `bahia-u6e1` lands.",
       "preconditions": [
-        "A sidecar-disabled system-info configuration exists for comparison.",
+        "A sidecar-disabled Nostr discovery configuration exists for comparison.",
         "The cleanup issue for raw `nostr.relays` exposure has either landed or is explicitly being evaluated."
       ],
       "steps": [
@@ -421,7 +421,7 @@
   },
   "implementation_notes": [
     "The discovery slice is now fully covered by deterministic handler, store, encrypted-helper, CLI, and relay-backed smoke tests.",
-    "The canonical cross-consumer fixture in test/fixtures/system_info_sidecar_first.json is reused across browser and Go tests to keep the shared discovery contract coherent.",
+    "The canonical cross-consumer fixture in test/fixtures/system_discovery_sidecar_first.json is reused across browser and Go tests to keep the shared discovery contract coherent.",
     "Verification still relies on deterministic mocks and the existing controlplane relay smoke harness rather than live external relays or backend services."
   ]
 }

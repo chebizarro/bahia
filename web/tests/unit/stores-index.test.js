@@ -16,8 +16,7 @@ vi.mock('../../src/lib/api/client.js', () => {
     listServices: vi.fn(),
     listEnvironments: vi.fn(),
     listStates: vi.fn(),
-    listWorkers: vi.fn(),
-    getSystemInfo: vi.fn()
+    listWorkers: vi.fn()
   };
   return { api: mockApi };
 });
@@ -75,10 +74,6 @@ describe('Global Stores (index.js)', () => {
       { pubkey: 'worker-1', status: 'active' },
       { pubkey: 'worker-2', status: 'idle' }
     ]);
-    mockApi.getSystemInfo.mockResolvedValue({
-      features: { relay_read_models: true, direct_nostr_http_auth: true },
-      nostr: { browser_relays: ['ws://relay.test/relay'], service_pubkey: 'a'.repeat(64) }
-    });
     storesModule = await import('../../src/lib/stores/index.js');
   });
 
@@ -121,7 +116,6 @@ describe('Global Stores (index.js)', () => {
   it('loadAll bootstraps the relay-backed controlplane without REST fallback', async () => {
     await storesModule.loadAll();
 
-    expect(mockApi.getSystemInfo).not.toHaveBeenCalled();
     expect(controlplaneMock.bootstrapControlplane).toHaveBeenCalledTimes(1);
     expect(mockApi.listServices).not.toHaveBeenCalled();
   });

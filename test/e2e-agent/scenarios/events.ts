@@ -7,64 +7,39 @@ function step(name: string, status: TestStepResult['status'], duration: number, 
   return { name, status, duration, error };
 }
 
-type SystemInfo = {
-  features?: Record<string, boolean>;
-  nostr?: { browser_relays?: string[] };
-};
-
-type APIEnvelope = {
-  data?: SystemInfo;
-};
-
-async function fetchSystemInfo(apiUrl: string): Promise<SystemInfo> {
-  const response = await fetch(`${apiUrl}/api/v1/system/info`, {
-    signal: AbortSignal.timeout(2000),
-  });
-  if (!response.ok) {
-    throw new Error(`system info failed: ${response.status}`);
-  }
-  const payload = (await response.json()) as APIEnvelope | SystemInfo;
-  if ('data' in payload && payload.data) {
-    return payload.data;
-  }
-  return payload as SystemInfo;
+function splitList(value: string | undefined): string[] {
+  return (value || '').split(',').map((item) => item.trim()).filter(Boolean);
 }
 
 export const sidecarRelayDiscovery: Scenario = {
   name: 'Discover Nostr Sidecar Relay',
-  description: 'Verify /system/info advertises sidecar read models and no legacy SSE/JWT/agent HTTP surfaces',
-  tags: ['events', 'nostr', 'sidecar', 'api', 'smoke'],
+  description: 'Verify explicit Nostr bootstrap seeds are present for sidecar read-model discovery',
+  tags: ['events', 'nostr', 'sidecar', 'smoke'],
 
-  async run(drivers: ScenarioDrivers): Promise<ScenarioResult> {
+  async run(_drivers: ScenarioDrivers): Promise<ScenarioResult> {
     const steps: TestStepResult[] = [];
     const startTime = Date.now();
-    const apiUrl = (drivers.api as any).baseUrl;
 
     try {
       const discoverStart = Date.now();
-      const info = await fetchSystemInfo(apiUrl);
-      steps.push(step('Fetch system info', 'passed', Date.now() - discoverStart));
+      const relays = splitList(process.env.BAHIA_BOOTSTRAP_RELAYS || process.env.BAHIA_NOSTR_RELAYS);
+      const servicePubkeys = splitList(process.env.BAHIA_SERVICE_PUBKEYS || process.env.BAHIA_SERVICE_PUBKEY);
+      steps.push(step('Read explicit Nostr bootstrap seed', 'passed', Date.now() - discoverStart));
 
-      const features = info.features || {};
-      if (features.legacy_sse || features.legacy_jwt_exchange || features.legacy_agent_http || features.nostr_auth_exchange) {
-        throw new Error(`legacy control-plane feature still advertised: ${JSON.stringify(features)}`);
+      if (relays.length === 0) {
+        throw new Error('no explicit Nostr bootstrap relays configured; set BAHIA_BOOTSTRAP_RELAYS or BAHIA_NOSTR_RELAYS');
       }
-      if (!features.relay_sidecar || !features.relay_read_models) {
-        throw new Error('sidecar relay/read-model features are not advertised');
+      if (servicePubkeys.length === 0) {
+        throw new Error('no trusted Bahia service pubkey configured; set BAHIA_SERVICE_PUBKEYS or BAHIA_SERVICE_PUBKEY');
       }
-
-      const relays = info.nostr?.browser_relays || [];
-      if (!Array.isArray(relays) || relays.length === 0) {
-        throw new Error('no browser relay endpoints advertised');
-      }
-      steps.push(step('Validate sidecar-first feature flags', 'passed', Date.now() - discoverStart));
+      steps.push(step('Validate explicit relay and service-pubkey requirements', 'passed', Date.now() - discoverStart));
 
       return {
         name: this.name,
         status: 'passed',
         duration: Date.now() - startTime,
         steps,
-        metadata: { relays },
+        metadata: { relays, servicePubkeys },
       };
     } catch (error) {
       steps.push(step('Error occurred', 'error', Date.now() - startTime, String(error)));

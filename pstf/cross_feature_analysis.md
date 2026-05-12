@@ -1,6 +1,6 @@
 # Cross-Feature Analysis
 
-Date: 2026-05-04  
+Date: 2026-05-04
 Agent: CrossFeatureReasoningAgent
 
 ## Recommendation
@@ -14,7 +14,7 @@ Agent: CrossFeatureReasoningAgent
 The current PSTF portfolio has several strong, verified slices, but they still depend on shared contracts and shared policies that are not yet verified once at the system level.
 
 The most important gap is not another isolated feature bug. It is that Bahia now has multiple approved relay-backed feature families sharing:
-- one discovery contract (`/api/v1/system/info`),
+- one discovery contract (`Nostr discovery events (kind 31974 + NIP-51 kind 30002)`),
 - one mixed transport model (public signer-first, encrypted request/result, compatibility-only fallback), and
 - overlapping deployment-domain semantics (especially rollback and deployment-detail/log handoff).
 
@@ -41,13 +41,13 @@ Promoted / ranked adjacent slices considered for system reasoning:
 
 ### Shared dependency / gating edges
 - `SYSTEM_DISCOVERY_RELAY_BOOTSTRAP` **gates** `CORE_SERVICE_TO_DEPLOYMENT`
-  - Evidence: `CORE_SERVICE_TO_DEPLOYMENT/feature_spec.json` requires `/api/v1/system/info` to advertise relay-read-model capability, public relay URLs, and a service pubkey.
+  - Evidence: `CORE_SERVICE_TO_DEPLOYMENT/feature_spec.json` requires `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` to advertise relay-read-model capability, public relay URLs, and a service pubkey.
 - `SYSTEM_DISCOVERY_RELAY_BOOTSTRAP` **gates** `ENCRYPTED_CONTROL_PLANE_NOTIFICATIONS`
-  - Evidence: `ENCRYPTED_CONTROL_PLANE_NOTIFICATIONS/feature_spec.json` requires `nostr.service_pubkey` and `nostr.browser_encrypted_request_relays` from `/api/v1/system/info`.
+  - Evidence: `ENCRYPTED_CONTROL_PLANE_NOTIFICATIONS/feature_spec.json` requires `nostr.service_pubkey` and `nostr.browser_encrypted_request_relays` from `Nostr discovery events (kind 31974 + NIP-51 kind 30002)`.
 - `SYSTEM_DISCOVERY_RELAY_BOOTSTRAP` **gates** `LLM_ROUTE_RELEASE_DEPLOYMENT`
-  - Evidence: `LLM_ROUTE_RELEASE_DEPLOYMENT/feature_spec.json` depends on LLM kind advertisement from `/api/v1/system/info`.
+  - Evidence: `LLM_ROUTE_RELEASE_DEPLOYMENT/feature_spec.json` depends on LLM kind advertisement from `Nostr discovery events (kind 31974 + NIP-51 kind 30002)`.
 - `SYSTEM_DISCOVERY_RELAY_BOOTSTRAP` **produces_for** `SIGNER_FIRST_OPERATOR_ADOPTION_RUNTIME`
-  - Evidence: `cmd/cli/operator_nostr.go` falls back to `BrowserRelays` and `SidecarURL` from `/api/v1/system/info`.
+  - Evidence: `cmd/cli/operator_nostr.go` falls back to `BrowserRelays` and `SidecarURL` from `Nostr discovery events (kind 31974 + NIP-51 kind 30002)`.
 
 ### Shared state / user-journey edges
 - `CORE_SERVICE_TO_DEPLOYMENT` **shares_state_with** `LLM_ROUTE_RELEASE_DEPLOYMENT`
@@ -82,16 +82,16 @@ Promoted / ranked adjacent slices considered for system reasoning:
   - `LLM_ROUTE_RELEASE_DEPLOYMENT`
   - `SYSTEM_DISCOVERY_RELAY_BOOTSTRAP`
 - Evidence:
-  - `pstf/spec_gap_report.md` identifies `/api/v1/system/info` and relay-read-model-first behavior as high-risk missing specification areas.
+  - `pstf/spec_gap_report.md` identifies `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` and relay-read-model-first behavior as high-risk missing specification areas.
   - `pstf/feature_backlog.md` ranks `SYSTEM_DISCOVERY_RELAY_BOOTSTRAP` first because every relay-backed browser flow depends on it.
-  - `internal/api/handlers/system.go` emits `browser_relays`, `browser_encrypted_request_relays`, `sidecar_url`, `service_pubkey`, and control-plane kind advertisement from one payload.
+  - `internal/adapters/nostr/projector.go` emits `browser_relays`, `browser_encrypted_request_relays`, `sidecar_url`, `service_pubkey`, and control-plane kind advertisement from one payload.
   - All four completed/approved slices consume that contract directly or indirectly.
 - Why this matters:
   - Release planning currently assumes one discovery contract is stable across browser public flows, browser encrypted flows, and operator CLI fallback discovery.
   - That assumption is not yet owned by a completed PSTF slice.
 - Recommended actions:
   - `create_new_feature_slice` → `SYSTEM_DISCOVERY_RELAY_BOOTSTRAP`
-  - `add_cross_feature_test` → prove one `/api/v1/system/info` payload satisfies all major consumers
+  - `add_cross_feature_test` → prove one `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` payload satisfies all major consumers
 
 ### XFA-002 — No cross-feature browser test proves mixed public and encrypted flow separation in one session
 - Severity: `major`
@@ -129,7 +129,7 @@ Promoted / ranked adjacent slices considered for system reasoning:
   - `web/src/lib/auth/route-access.js` has compatibility hooks, but `ROUTE_COMPATIBILITY_REQUIREMENTS` is empty.
   - Core explicitly excludes encrypted transport for the approved deployment journey.
   - Notifications explicitly requires encrypted request relays and forbids using public relay URLs for encrypted requests.
-  - Operator signer-first allows explicit HTTP fallback only for pre-acceptance failures.
+  - Operator signer-first allows explicit explicit relay configuration only for pre-acceptance failures.
   - LLM HITL decisions remove operational REST mutations from the intended product contract.
 - Why this matters:
   - The portfolio has transport rules, but no single approved source of truth for those rules.
@@ -245,7 +245,7 @@ Promoted / ranked adjacent slices considered for system reasoning:
 - Purpose:
   - Prove one authenticated browser session can load system discovery, execute one public signer-first action, execute one encrypted notification action, visit `/llm`, and preserve relay separation throughout.
 
-### XFT-002 — System-info multi-consumer contract
+### XFT-002 — Nostr discovery multi-consumer contract
 - Type: `integration`
 - Covers:
   - `SYSTEM_DISCOVERY_RELAY_BOOTSTRAP`
@@ -253,7 +253,7 @@ Promoted / ranked adjacent slices considered for system reasoning:
   - `SIGNER_FIRST_OPERATOR_ADOPTION_RUNTIME`
   - `LLM_ROUTE_RELEASE_DEPLOYMENT`
 - Purpose:
-  - Prove one canonical `/api/v1/system/info` fixture satisfies browser public bootstrap, browser encrypted transport gating, LLM kind discovery, and CLI operator relay discovery.
+  - Prove one canonical `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` fixture satisfies browser public bootstrap, browser encrypted transport gating, LLM kind discovery, and CLI operator relay discovery.
 
 ### XFT-003 — Deployment history to encrypted run-log handoff
 - Type: `e2e`
@@ -303,7 +303,7 @@ Those questions are proposed above because they change whether the next step is:
    - `ENCRYPTED_DEPLOYMENT_RUN_LOGS`
 3. Add the first mandatory cross-feature tests:
    - `XFT-001` mixed-transport browser journey
-   - `XFT-002` system-info multi-consumer contract
+   - `XFT-002` Nostr discovery multi-consumer contract
 4. Complete the already promoted upstream producer slice:
    - `HIVECI_RESULT_INGESTION_PIPELINE`
 

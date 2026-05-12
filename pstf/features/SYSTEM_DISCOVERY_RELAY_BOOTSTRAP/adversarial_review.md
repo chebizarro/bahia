@@ -23,7 +23,7 @@ high
 - Severity: major
 - Category: regression
 - Evidence:
-  - `internal/api/handlers/system.go` no longer populates `nostr.relays`, and the approved slice removed raw `nostr.relays` from the intended discovery contract.
+  - `internal/adapters/nostr/projector.go` no longer populates `nostr.relays`, and the approved slice removed raw `nostr.relays` from the intended discovery contract.
   - `web/src/routes/settings/+page.svelte` still renders `systemInfo.nostr.relays` as the operator-visible “Server Relays” setting.
   - No settings-page regression test was found covering the disappearance or replacement of that field after the discovery cleanup.
   - `HITL-SYSTEM_DISCOVERY_RELAY_BOOTSTRAP-001` removed `nostr.relays` from the bootstrap contract, but did not decide whether operator-facing relay visibility should still exist via another field.

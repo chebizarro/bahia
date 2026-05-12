@@ -141,7 +141,6 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 	adoptionH := handlers.NewAdoptionHandler(deps.Adoption, handlers.WithAdoptionLogger(logger), handlers.WithAdoptionMetrics(metrics))
 	serviceActionH := handlers.NewServiceActionHandler(deps.RuntimeLifecycle, handlers.WithServiceActionLogger(logger), handlers.WithServiceActionMetrics(metrics))
 	repoCIHandler := handlers.NewRepositoryCIHandler(deps.HiveCI)
-	systemH := handlers.NewSystemHandler(deps.Config, handlers.WithSystemMCPTransport(deps.MCP != nil))
 	var llmH *handlers.LLMHandler
 	if deps.LLMRegistry != nil {
 		llmH = handlers.NewLLMHandler(deps.LLMRegistry)
@@ -171,10 +170,6 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 
 	if deps.MCP != nil {
 		r.With(middleware.ContentType, auth.MiddlewareFromConfig(authMiddleware), middleware.RateLimit(writeLimiter)).Post("/mcp", deps.MCP.HandleJSONRPC)
-	}
-
-	if deps.Config != nil {
-		r.With(middleware.ContentType, middleware.RateLimit(readLimiter)).Get("/api/v1/system/info", systemH.GetInfo)
 	}
 
 	// API v1 routes (authenticated when auth is enabled).

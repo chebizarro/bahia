@@ -2,9 +2,8 @@
   import Card from '$lib/components/Card.svelte';
   import Table from '$lib/components/Table.svelte';
   import Badge from '$lib/components/Badge.svelte';
-  import { api } from '$lib/api/client.js';
   import { requestPaymentHistoryRecords } from '$lib/stores/payments.svelte.js';
-  import { services, environments, states, workers, driftedStates, events, loading } from '$lib/stores';
+  import { services, environments, states, workers, driftedStates, events, loading, deploymentIntents } from '$lib/stores';
   import { formatDashboardSats, normalizePaymentHistory, summarizeRecentSpend } from './dashboard-cost-summary.js';
 
   // Pending deployments state
@@ -248,11 +247,6 @@
   }
 
   async function loadPendingDeployments() {
-    if (!api) {
-      pendingDeployments = [];
-      return;
-    }
-
     // Try to display cached count first
     const cachedCount = getCachedPendingCount();
     if (cachedCount !== null) {
@@ -264,58 +258,12 @@
     pendingPairFailures = 0;
 
     try {
-      // Reuse global stores if available, fallback to API calls
-      let servicesList = services;
-      let envsList = environments;
-
-      if (servicesList.length === 0 || envsList.length === 0) {
-        const [fetchedServices, fetchedEnvs] = await Promise.all([
-          servicesList.length === 0 ? api.listServices().catch(() => []) : servicesList,
-          envsList.length === 0 ? api.listEnvironments().catch(() => []) : envsList
-        ]);
-        servicesList = fetchedServices;
-        envsList = fetchedEnvs;
-      }
-
-      // Skip intent calls if either list is empty
-      if (servicesList.length === 0 || envsList.length === 0) {
-        pendingDeployments = [];
-        cachePendingCount(0);
-        return;
-      }
-
-      // Build tasks for all service/environment pairs
-      const intentTasks = [];
-      const intentMap = new Map(); // dedupe by intent.id
-
-      for (const service of servicesList) {
-        for (const env of envsList) {
-          intentTasks.push(async () => {
-            try {
-              const intents = await api.listIntents(service.id, env.id);
-              if (Array.isArray(intents)) {
-                intents.forEach(intent => {
-                  if (intent?.id) {
-                    intentMap.set(intent.id, intent);
-                  }
-                });
-              }
-            } catch (err) {
-              // Track per-pair failures instead of logging each
-              pendingPairFailures++;
-            }
-          });
-        }
-      }
-
-      // Fetch with bounded concurrency (limit 6)
-      await withBoundedConcurrency(intentTasks, 6);
-
-      // Filter for pending approvals
-      pendingDeployments = Array.from(intentMap.values()).filter(intent => {
+      // Use relay-backed deployment intent read models; do not fall back to REST list calls.
+      pendingDeployments = (deploymentIntents || []).filter(intent => {
         const status = String(intent.approval_status || '').toLowerCase();
         return status === 'pending';
       });
+      pendingPairFailures = 0;
 
       // Cache the fresh result
       cachePendingCount(pendingDeployments.length);

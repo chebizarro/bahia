@@ -7,7 +7,7 @@ This report is based on sampled product docs, backend router/handlers/domain/con
 Primary evidence used repeatedly:
 - `docs/control-planes.md`
 - `internal/api/router/router.go`
-- `internal/api/handlers/system.go`
+- `internal/adapters/nostr/projector.go`
 - `internal/domain/models.go`
 - `web/src/lib/stores/controlplane.svelte.js`
 - `web/src/lib/stores/auth.svelte.js`
@@ -19,11 +19,11 @@ Primary evidence used repeatedly:
 
 ## Missing specification
 
-### 1. `/api/v1/system/info` is a critical contract but under-documented
-The browser depends on `/api/v1/system/info` for relay discovery, feature gating, service pubkey discovery, registry discovery, and control-plane kind maps. `docs/api.md` does not document it even though it is required for normal bootstrap.
+### 1. `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` is a critical contract but under-documented
+The browser depends on `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` for relay discovery, feature gating, service pubkey discovery, registry discovery, and control-plane kind maps. `docs/api.md` does not document it even though it is required for normal bootstrap.
 
 **Evidence**
-- `internal/api/handlers/system.go`
+- `internal/adapters/nostr/projector.go`
 - `internal/api/router/router.go`
 - `web/src/lib/stores/controlplane.svelte.js`
 - `docs/api.md`
@@ -253,7 +253,7 @@ Because GitHub Actions only run web tests, passing CI does not currently prove b
 
 **Primary evidence**
 - `docs/control-planes.md`
-- `internal/api/handlers/system.go`
+- `internal/adapters/nostr/projector.go`
 - `internal/controlplane/encrypted_transport.go`
 - `internal/controlplane/notification_encrypted_handlers.go`
 - `web/src/lib/nostr/encrypted-controlplane.js`
@@ -263,7 +263,7 @@ Because GitHub Actions only run web tests, passing CI does not currently prove b
 - `web/tests/e2e/notifications-encrypted-smoke.spec.js`
 
 **Suggested acceptance concerns**
-1. `/api/v1/system/info` clearly advertises encrypted-request capability and relay separation.
+1. `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` clearly advertises encrypted-request capability and relay separation.
 2. Sensitive request payloads are published only to encrypted-request relays, never public sidecar/browser relays.
 3. Publish rejection (`OK false`) and encrypted terminal errors are surfaced to the caller.
 4. Correlation by request event id and requester pubkey is explicit and testable.

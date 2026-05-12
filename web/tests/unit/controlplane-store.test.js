@@ -2,8 +2,8 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
-const canonicalSystemInfoFixture = JSON.parse(
-  readFileSync(resolve(process.cwd(), '../test/fixtures/system_info_sidecar_first.json'), 'utf8')
+const canonicalDiscoveryFixture = JSON.parse(
+  readFileSync(resolve(process.cwd(), '../test/fixtures/system_discovery_sidecar_first.json'), 'utf8')
 );
 
 const systemInfoMock = vi.hoisted(() => ({
@@ -93,7 +93,7 @@ describe('controlplane store', () => {
     store.resetControlplaneStore();
   });
 
-  it('resolves browser relay discovery from system info', () => {
+  it('resolves browser relay discovery from Nostr discovery', () => {
     expect(store.resolveBrowserRelays({
       nostr: {
         browser_relays: ['wss://relay.example'],
@@ -110,8 +110,8 @@ describe('controlplane store', () => {
     })).toEqual([]);
   });
 
-  it('bootstraps from the canonical system-info fixture used by other discovery consumers', async () => {
-    systemInfoMock.loadSystemInfo.mockResolvedValueOnce(structuredClone(canonicalSystemInfoFixture));
+  it('bootstraps from the canonical Nostr discovery fixture used by other consumers', async () => {
+    systemInfoMock.loadSystemInfo.mockResolvedValueOnce(structuredClone(canonicalDiscoveryFixture));
 
     const result = await store.bootstrapControlplane();
 
@@ -170,7 +170,7 @@ describe('controlplane store', () => {
     expect(store.services).toEqual([]);
   });
 
-  it('bootstraps from system-info relays, waits for EOSE query, then subscribes live', async () => {
+  it('bootstraps from Nostr discovery relays, waits for EOSE query, then subscribes live', async () => {
     nostrMock.queryUntilEose.mockResolvedValue([
       event({
         id: 'svc-1-event',

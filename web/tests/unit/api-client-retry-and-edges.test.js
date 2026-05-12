@@ -195,19 +195,6 @@ describe('BahiaClient - Retry and Edge Coverage', () => {
     expect(result).toEqual([]);
   });
 
-  it('getSystemInfo requests the system info endpoint', async () => {
-    const payload = { version: '1.2.3', environment: 'dev' };
-    global.fetch.mockResolvedValueOnce({
-      ok: true,
-      headers: new Map([['content-type', 'application/json']]),
-      json: async () => ({ data: payload })
-    });
-
-    const result = await client.getSystemInfo();
-
-    expect(global.fetch).toHaveBeenCalledWith('/api/v1/system/info', expect.any(Object));
-    expect(result).toEqual(payload);
-  });
 
   it('listBlossomBlobs sends pubkey payload when provided', async () => {
     global.fetch.mockResolvedValueOnce({

@@ -25,7 +25,7 @@ Current implementation satisfies the approved acceptance criteria and the curren
 ## Acceptance Criteria Status
 | AC ID | Status | Basis |
 | --- | --- | --- |
-| LLMRD-AC-001 | Verified | `internal/api/handlers/system_test.go` covers the system-info contract for LLM capability and kind advertisement when enabled vs disabled. |
+| LLMRD-AC-001 | Verified | `internal/api/handlers/system_test.go` covers the Nostr discovery contract for LLM capability and kind advertisement when enabled vs disabled. |
 | LLMRD-AC-002 | Verified | `internal/controlplane/reactor_llm_requests_test.go`, `internal/controlplane/llm_command_publisher_test.go`, and `internal/mcp/server_llm_test.go` prove correlated signed `5971 -> 7971` handling and canonical requester publishing. |
 | LLMRD-AC-003 | Verified | `internal/controlplane/reactor_llm_requests_test.go`, `internal/controlplane/llm_command_publisher_test.go`, and `internal/mcp/server_llm_test.go` prove correlated signed `5972 -> 7972` handling and canonical requester publishing. |
 | LLMRD-AC-004 | Verified | `internal/controlplane/llm_command_publisher_test.go` proves canonical deploy tagging and zero-accept failure, `internal/controlplane/reactor_llm_requests_test.go` proves the first correlated deploy reply is `6973 accepted`, and browser helper coverage preserves the same signer-first contract. |

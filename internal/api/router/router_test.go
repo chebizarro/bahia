@@ -530,19 +530,6 @@ func TestRouter_NativeMCPRemovesLegacyAgentHTTP(t *testing.T) {
 	}
 }
 
-func TestRouter_SystemInfoIsPublicForAuthCapabilityDiscovery(t *testing.T) {
-	cfg := config.Defaults()
-	cfg.Auth.Enabled = true
-	handler := router.NewWithDeps(nil, zap.NewNop(), config.CORSConfig{AllowedOrigins: []string{"*"}}, nil, router.RouterDeps{Config: cfg})
-	srv := httptest.NewServer(handler)
-	defer srv.Close()
-
-	resp, body := doJSON(t, http.MethodGet, srv.URL+"/api/v1/system/info", nil)
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("expected public system info for auth bootstrap, status=%d body=%#v", resp.StatusCode, body)
-	}
-}
-
 func TestRouter_ConfiguredNIP98AuthRejectsBearerOnProtectedRoutes(t *testing.T) {
 	cfg := config.Defaults()
 	cfg.Auth.Enabled = true

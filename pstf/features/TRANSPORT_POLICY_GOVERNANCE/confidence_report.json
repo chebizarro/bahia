@@ -44,7 +44,7 @@
       "weighted_score": 0.06,
       "evidence": [
         "Covered edge paths include empty recent-spend state, partial worker failure, encrypted error handling, spoofed/unrelated/duplicate encrypted results, relay-close/decrypt-failure handling, and pre-acceptance vs post-acceptance fallback boundaries.",
-        "The dashboard payment patch also added a readiness-path regression for auth/system-info cold start in `web/tests/unit/encrypted-domain-stores.test.js` and REST-guarded e2e coverage in `dashboard-smoke.spec.js`.",
+        "The dashboard payment patch also added a readiness-path regression for auth/Nostr discovery cold start in `web/tests/unit/encrypted-domain-stores.test.js` and REST-guarded e2e coverage in `dashboard-smoke.spec.js`.",
         "Important edge categories are still missing: signer-without-browser-visible-NIP-44 support (TPG-T-005), EventSource exclusion contract proof (TPG-T-009), settings NIP-51 relay visibility (TPG-T-012), and mixed public+encrypted session separation (TPG-T-015)."
       ]
     },

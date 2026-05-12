@@ -1,9 +1,9 @@
 # Nostr-Native System Discovery — Design Doc
 
-> **Status**: Draft  
-> **Date**: 2026-05-11  
-> **Replaces**: `GET /api/v1/system/info` (HTTP discovery endpoint)  
-> **PSTF Feature**: `SYSTEM_DISCOVERY_RELAY_BOOTSTRAP`  
+> **Status**: Draft
+> **Date**: 2026-05-11
+> **Replaces**: `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` (HTTP discovery endpoint)
+> **PSTF Feature**: `SYSTEM_DISCOVERY_RELAY_BOOTSTRAP`
 > **Prerequisite HITL Decisions**: HITL-001 (remove `nostr.relays`), HITL-004 (NIP-51 kind 30002 for operator relay visibility)
 
 ---
@@ -12,11 +12,11 @@
 
 ### Problem
 
-The web app, CLI, and settings page all bootstrap from `GET /api/v1/system/info` — an HTTP request/response endpoint that contradicts Bahia's Nostr-native event-driven architecture. The AGENTS.md guardrails explicitly prohibit request/response patterns and polling APIs. This endpoint is the last major HTTP-bound bootstrap dependency.
+The web app, CLI, and settings page all bootstrap from `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` — an HTTP request/response endpoint that contradicts Bahia's Nostr-native event-driven architecture. The AGENTS.md guardrails explicitly prohibit request/response patterns and polling APIs. This endpoint is the last major HTTP-bound bootstrap dependency.
 
 ### Goal
 
-Replace `/api/v1/system/info` with signed Nostr replaceable events so that:
+Replace `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` with signed Nostr replaceable events so that:
 
 - Browser bootstrap requires no HTTP beyond the initial page serve
 - CLI/operator discovery requires no HTTP at all
@@ -24,7 +24,7 @@ Replace `/api/v1/system/info` with signed Nostr replaceable events so that:
 - The discovery contract is cryptographically authenticated (signed by service pubkey)
 - The migration is staged and reversible
 
-### What `/api/v1/system/info` serves today
+### What `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` serves today
 
 | Section | Fields | Primary consumers |
 |---|---|---|
@@ -130,7 +130,7 @@ The service pubkey is no longer an explicit field in the discovery payload — i
 
 ### The bootstrap problem
 
-Nostr subscriptions require a relay URL. Today, that URL comes from the HTTP endpoint. Removing it creates a chicken-and-egg problem.
+Nostr subscriptions require a relay URL. Today, that URL comes from the Nostr event contract. Removing it creates a chicken-and-egg problem.
 
 ### Solution: Runtime-injected bootstrap seed
 
@@ -190,7 +190,7 @@ Key rotation requires accepting events from either the old or new pubkey during 
 1. --relay flag                    (explicit, highest priority)
 2. BAHIA_NOSTR_RELAYS env          (explicit)
 3. Nostr discovery (new) — requires BOTH a relay seed from (1) or (2) AND a trusted pubkey from `--service-pubkey` / `BAHIA_SERVICE_PUBKEY`
-4. [Migration only] HTTP fallback via GetSystemInfo()
+4. [Migration only] explicit relay configuration via Nostr discovery
 ```
 
 ### Trust model: explicit trust, not TOFU
@@ -198,7 +198,7 @@ Key rotation requires accepting events from either the old or new pubkey during 
 Operator commands trigger deployments, restarts, stops, and adoption flows. Trust-on-first-use is too weak as a default.
 
 **Default behavior:** If `--relay` provides a relay but `--service-pubkey` / `BAHIA_SERVICE_PUBKEY` is not set:
-- During migration (phases 0-2): fall back to HTTP `GetSystemInfo()` if available
+- During migration (phases 0-2): fall back to HTTP `Nostr discovery` if available
 - After HTTP removal (phase 3): fail with a clear error
 
 **Optional future TOFU:** If product approves it, gate behind `--allow-insecure-discovery` with a persisted pin store per deployment. This is out of scope for the initial design.
@@ -269,7 +269,7 @@ If broader publication is desired, it must be an explicit operator decision, not
 - Extract shared discovery builder from `SystemHandler.GetInfo` into `internal/controlplane/system_discovery.go`
 - Add kind 31974 constant (`KindSystemDiscovery`) to controlplane
 - Publish kind 31974 + kind 30002 events on startup, relay reconnect, and config change
-- HTTP endpoint unchanged, now delegates to shared builder
+- Nostr event contract unchanged, now delegates to shared builder
 
 **Risk:** Low — purely additive, no consumer changes.
 
@@ -277,28 +277,28 @@ If broader publication is desired, it must be an explicit operator decision, not
 
 **What ships:**
 - Browser: new `discoveryStore` with Nostr-backed loader behind feature flag; normalizes into current `systemInfo.data` shape
-- CLI: add `--service-pubkey` / `BAHIA_SERVICE_PUBKEY` inputs; Nostr discovery path with HTTP fallback
+- CLI: add `--service-pubkey` / `BAHIA_SERVICE_PUBKEY` inputs; Nostr discovery path with explicit relay configuration
 - Settings page: subscribe to kind 30002 `bahia-service-v1` for operator relay visibility
 - Bootstrap seed injection in SvelteKit server hook
 
-**Risk:** Medium — dual-path complexity, but HTTP fallback limits blast radius.
+**Risk:** Medium — dual-path complexity, but explicit relay configuration limits blast radius.
 
 ### Phase 2 — Deprecation
 
 **What ships:**
 - Browser default switches to Nostr-first discovery
-- HTTP endpoint logs usage, emits deprecation header
+- Nostr event contract logs usage, emits deprecation header
 - CLI Nostr discovery becomes default when pubkey is configured
 - PSTF artifacts and docs updated to declare Nostr-native discovery as authoritative
 
-**Risk:** Medium — external consumers of `/api/v1/system/info` break if they haven't migrated. Deprecation period provides warning.
+**Risk:** Medium — external consumers of `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` break if they haven't migrated. Deprecation period provides warning.
 
 ### Phase 3 — Removal
 
 **What ships:**
-- Delete `SystemHandler.GetInfo`, HTTP route, `getSystemInfo()` API method
-- Delete `pkg/client.GetSystemInfo()` and `SystemInfo` types (or move them to internal normalization)
-- Remove HTTP fallback from CLI
+- Delete `SystemHandler.GetInfo`, HTTP route, `Nostr discovery` API method
+- Delete `pkg/client.Nostr discovery` and `SystemInfo` types (or move them to internal normalization)
+- Remove explicit relay configuration from CLI
 - Update all docs, PSTF, and AGENTS.md references
 
 **Risk:** High if external consumers exist. Must be gated by deprecation telemetry from phase 2.
@@ -355,17 +355,17 @@ The browser encrypted transport module (`encrypted-controlplane.js`) continues c
 | File | Change |
 |---|---|
 | `internal/controlplane/reactor.go` | Add `KindSystemDiscovery = 31974` constant |
-| `internal/api/handlers/system.go` | Delegate to shared builder; keep HTTP shape unchanged during phases 0-2 |
+| `internal/adapters/nostr/projector.go` | Delegate to shared builder; keep HTTP shape unchanged during phases 0-2 |
 | `internal/api/handlers/system_test.go` | Verify HTTP output uses shared builder |
 | `internal/adapters/nostr/` (publisher) | Extend existing Bahia event publication to emit kind 31974 + kind 30002 on startup/reconnect/change |
-| `cmd/cli/operator_nostr.go` | Add `--service-pubkey` / env resolution; Nostr discovery path with HTTP fallback |
+| `cmd/cli/operator_nostr.go` | Add `--service-pubkey` / env resolution; Nostr discovery path with explicit relay configuration |
 | `cmd/cli/operator_nostr_test.go` | Add precedence + failure tests for Nostr discovery |
 | `pkg/client/client.go` | Keep `SystemInfo` during migration; optionally add Nostr discovery method |
-| `web/src/lib/stores/system.svelte.js` | Dual-path: Nostr-first with HTTP fallback, normalize to current shape |
+| `web/src/lib/stores/system.svelte.js` | Dual-path: Nostr-first with explicit relay configuration, normalize to current shape |
 | `web/src/lib/stores/controlplane.svelte.js` | Remove any `nostr.relays` fallback; validate works with normalized Nostr discovery |
 | `web/src/routes/settings/+page.svelte` | Read server relays from kind 30002 subscription; read other metadata from normalized discovery |
 | `web/src/lib/nostr/client.js` | Add `BAHIA_KINDS.SYSTEM_DISCOVERY = 31974`; ensure kind 30002 support |
-| `web/src/lib/nostr/encrypted-controlplane.js` | Read encrypted relay URLs from kind 30002 `bahia-requests-v1` instead of system info |
+| `web/src/lib/nostr/encrypted-controlplane.js` | Read encrypted relay URLs from kind 30002 `bahia-requests-v1` instead of Nostr discovery |
 | `docs/control-planes.md` | Document discovery protocol, kind constant, relay-set d-tags, bootstrap seed, trust model |
 | `pstf/features/SYSTEM_DISCOVERY_RELAY_BOOTSTRAP/feature_spec.json` | Update feature boundary and intended behavior |
 | `pstf/features/SYSTEM_DISCOVERY_RELAY_BOOTSTRAP/hitl_decisions.md` | Add HITL decisions for seed mechanism, trust model, mirroring policy |
@@ -374,10 +374,10 @@ The browser encrypted transport module (`encrypted-controlplane.js`) continues c
 
 | File | Reason |
 |---|---|
-| `internal/api/handlers/system.go` (GetInfo method) | HTTP endpoint removed |
-| `internal/api/router/router.go` (system info route) | Route registration removed |
-| `web/src/lib/api/client.js` (getSystemInfo method) | HTTP client method removed |
-| `pkg/client/client.go` (GetSystemInfo + SystemInfo types) | Go HTTP client removed |
+| `internal/adapters/nostr/projector.go` (GetInfo method) | Nostr event contract removed |
+| `internal/api/router/router.go` (Nostr discovery route) | Route registration removed |
+| `web/src/lib/api/client.js` (Nostr discovery loader) | HTTP client method removed |
+| `pkg/client/client.go` (legacy HTTP discovery types) | Go HTTP client removed |
 
 ---
 
@@ -395,8 +395,8 @@ The browser encrypted transport module (`encrypted-controlplane.js`) continues c
 | `discovery-store.test.js` — validation | Rejects events from untrusted pubkey; rejects invalid signatures; applies latest-wins for replaceable events |
 | `discovery-store.test.js` — cache/dedupe | Preserves current cache semantics; deduplicates concurrent loads; supports force reload |
 | `discovery-store.test.js` — key rotation | Accepts events from any pubkey in trusted set |
-| `operator_nostr_test.go` — precedence | `--relay` > env > Nostr discovery > HTTP fallback; `--service-pubkey` required for Nostr path |
-| `operator_nostr_test.go` — no TOFU | Fails when relay available but no service pubkey and no HTTP fallback |
+| `operator_nostr_test.go` — precedence | `--relay` > env > Nostr discovery > explicit relay configuration; `--service-pubkey` required for Nostr path |
+| `operator_nostr_test.go` — no TOFU | Fails when relay available but no service pubkey and no explicit relay configuration |
 
 ### Integration tests
 
@@ -404,14 +404,14 @@ The browser encrypted transport module (`encrypted-controlplane.js`) continues c
 |---|---|
 | Publisher integration | Service publishes kind 31974 + 30002 to sidecar on startup; events are retrievable via subscription |
 | Multi-consumer contract | Single set of published events satisfies browser bootstrap, CLI relay resolution, and settings page consumption |
-| Migration dual-path | Browser Nostr-first with HTTP fallback works; CLI Nostr-first with HTTP fallback works |
+| Migration dual-path | Browser Nostr-first with explicit relay configuration works; CLI Nostr-first with explicit relay configuration works |
 
 ### E2E tests
 
 | Test | Validates |
 |---|---|
-| `controlplane-nostr-smoke.spec.js` (extended) | Page load → seed bootstrap → Nostr discovery → EOSE → controlplane live subscription — no `/api/v1/system/info` call |
-| Settings page | Settings page displays service relays from kind 30002 subscription, not from HTTP system info |
+| `controlplane-nostr-smoke.spec.js` (extended) | Page load → seed bootstrap → Nostr discovery → EOSE → controlplane live subscription — no `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` call |
+| Settings page | Settings page displays service relays from kind 30002 subscription, not from HTTP Nostr discovery |
 
 ### What NOT to test
 
@@ -442,7 +442,7 @@ Before implementation, the following decisions need human approval:
 
 3. **Config live reload:** If Bahia supports hot config reload in the future, should discovery events be republished on config change? The shared builder makes this trivial, but the trigger mechanism is out of scope.
 
-4. **External consumers:** Are there external tools or integrations that depend on `/api/v1/system/info`? Phase 2 deprecation telemetry should answer this before phase 3.
+4. **External consumers:** Are there external tools or integrations that depend on `Nostr discovery events (kind 31974 + NIP-51 kind 30002)`? Phase 2 deprecation telemetry should answer this before phase 3.
 
 ---
 
@@ -471,7 +471,7 @@ interface BahiaBootstrapSeed {
 
 | Consumer | Phase 0 | Phase 1 | Phase 2 | Phase 3 |
 |---|---|---|---|---|
-| Browser bootstrap | HTTP (unchanged) | Nostr-first, HTTP fallback | Nostr-first, HTTP deprecated | Nostr only |
+| Browser bootstrap | HTTP (unchanged) | Nostr-first, explicit relay configuration | Nostr-first, HTTP deprecated | Nostr only |
 | CLI relay resolution | HTTP (unchanged) | Nostr if pubkey set, else HTTP | Nostr default, HTTP deprecated | Nostr only |
 | Settings page | HTTP (unchanged) | Kind 30002 for relays, HTTP for rest | Nostr-first | Nostr only |
 | Encrypted transport | HTTP (unchanged) | Kind 30002 for relay URLs | Nostr-first | Nostr only |

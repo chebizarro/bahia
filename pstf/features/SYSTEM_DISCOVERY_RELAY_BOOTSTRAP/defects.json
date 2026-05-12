@@ -13,7 +13,7 @@
         "SDRB-T-012"
       ],
       "evidence": [
-        "internal/api/handlers/system.go no longer populates `nostr.relays` and omits the field from system discovery responses.",
+        "internal/adapters/nostr/projector.go no longer populates `nostr.relays` and omits the field from system discovery responses.",
         "web/src/lib/stores/controlplane.svelte.js resolves browser bootstrap only from `browser_relays` and `sidecar_url`.",
         "internal/api/handlers/system_test.go now asserts raw `nostr.relays` is absent in both sidecar-enabled and sidecar-disabled responses.",
         "web/tests/unit/controlplane-store.test.js now proves raw `nostr.relays` is ignored as browser bootstrap input.",
@@ -25,7 +25,7 @@
     },
     {
       "defect_id": "SDRB-D-002",
-      "title": "Sidecar-first public bootstrap contract is only partially covered in handler tests",
+      "title": "Sidecar-first public bootstrap contract is only partially covered in projector tests",
       "severity": "minor",
       "status": "verified",
       "related_ac_ids": [
@@ -36,7 +36,7 @@
       ],
       "evidence": [
         "internal/api/handlers/system_test.go now exercises a deterministic service-key-backed sidecar configuration.",
-        "The updated handler test asserts `browser_relays`, `sidecar_url`, `relay_read_models`, derived `service_pubkey`, and absence of raw `nostr.relays` in the approved sidecar-first success case.",
+        "The updated projector test asserts `browser_relays`, `sidecar_url`, `relay_read_models`, derived `service_pubkey`, and absence of raw `nostr.relays` in the approved sidecar-first success case.",
         "test_matrix.json now marks SDRB-T-001 as passing."
       ],
       "suspected_root_cause": "Resolved: the handler contract suite now covers the approved sidecar-first success path instead of the older partial assertion set.",
@@ -78,7 +78,7 @@
         "cmd/cli/operator_nostr_test.go now exercises the discovery-empty branch and asserts the deterministic `no operator relays discovered` failure.",
         "go test ./cmd/cli passed with the new negative branch."
       ],
-      "suspected_root_cause": "Resolved: the CLI precedence suite now covers discovery fallback failure when system info advertises no browser bootstrap URLs.",
+      "suspected_root_cause": "Resolved: the CLI precedence suite now covers discovery fallback failure when Nostr discovery advertises no browser bootstrap URLs.",
       "recommended_fix": null,
       "requires_human_decision": false
     },
@@ -99,7 +99,7 @@
       ],
       "evidence": [
         "web/tests/unit/encrypted-controlplane.test.js now proves encrypted capability requires explicit encrypted indicators and is not implied by public bootstrap fields alone.",
-        "test/fixtures/system_info_sidecar_first.json is shared by `web/tests/unit/controlplane-store.test.js`, `web/tests/unit/encrypted-controlplane.test.js`, and `cmd/cli/operator_nostr_test.go` to prove one canonical payload satisfies browser bootstrap, encrypted capability gating, and CLI discovery.",
+        "test/fixtures/system_discovery_sidecar_first.json is shared by `web/tests/unit/controlplane-store.test.js`, `web/tests/unit/encrypted-controlplane.test.js`, and `cmd/cli/operator_nostr_test.go` to prove one canonical payload satisfies browser bootstrap, encrypted capability gating, and CLI discovery.",
         "go and web verification suites passed using the shared canonical fixture and existing relay-backed smoke coverage."
       ],
       "suspected_root_cause": "Resolved: the shared discovery contract is now proven across the browser bootstrap helper, encrypted capability helper, and operator CLI discovery path using one canonical fixture.",

@@ -20,10 +20,6 @@ type cliOperatorClient interface {
 	ImportAdoptionNostr(context.Context, client.AdoptionImportRequest, func(client.OperatorStatusEvent)) ([]client.AdoptionImportResult, error)
 }
 
-type systemInfoClient interface {
-	GetSystemInfo(context.Context) (*client.SystemInfo, error)
-}
-
 var newCLIOperatorClient = func(cfg client.OperatorControlPlaneConfig) (cliOperatorClient, error) {
 	return client.NewOperatorControlPlaneClient(cfg)
 }
@@ -99,11 +95,7 @@ func buildCLIOperatorClient(cmd *cobra.Command) (cliOperatorClient, error) {
 	if strings.TrimSpace(key) == "" {
 		return nil, &client.ControlPlaneRequestError{Phase: "resolve operator signer", RequestAccepted: false, Cause: fmt.Errorf("provide --nsec, --privkey, BAHIA_NOSTR_NSEC, or BAHIA_NOSTR_PRIVATE_KEY for signer-first operator requests")}
 	}
-	var discovery systemInfoClient
-	if apiClient != nil {
-		discovery = apiClient
-	}
-	relays, err := resolveOperatorRelays(cmd.Context(), cmd, discovery)
+	relays, err := resolveOperatorRelays(cmd)
 	if err != nil {
 		return nil, &client.ControlPlaneRequestError{Phase: "resolve operator relays", RequestAccepted: false, Cause: err}
 	}
@@ -114,7 +106,7 @@ func buildCLIOperatorClient(cmd *cobra.Command) (cliOperatorClient, error) {
 	return op, nil
 }
 
-func resolveOperatorRelays(ctx context.Context, cmd *cobra.Command, systemInfo systemInfoClient) ([]string, error) {
+func resolveOperatorRelays(cmd *cobra.Command) ([]string, error) {
 	if cmd != nil && cmd.Root() != nil {
 		flags := cmd.Root().PersistentFlags()
 		if flags != nil && flags.Changed("relay") {
@@ -130,25 +122,7 @@ func resolveOperatorRelays(ctx context.Context, cmd *cobra.Command, systemInfo s
 		return envRelays, nil
 	}
 
-	if systemInfo == nil {
-		return nil, fmt.Errorf("no relay discovery client is configured; pass --relay or set BAHIA_NOSTR_RELAYS")
-	}
-	info, err := systemInfo.GetSystemInfo(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("discover relays from /api/v1/system/info: %w", err)
-	}
-	var discovered []string
-	if info != nil {
-		discovered = append(discovered, info.Nostr.BrowserRelays...)
-		if info.Nostr.SidecarURL != "" {
-			discovered = append(discovered, info.Nostr.SidecarURL)
-		}
-	}
-	relays := normalizeRelayList(discovered)
-	if len(relays) == 0 {
-		return nil, fmt.Errorf("no operator relays discovered; pass --relay, set BAHIA_NOSTR_RELAYS, or configure nostr.browser_relays/sidecar_url in /api/v1/system/info")
-	}
-	return relays, nil
+	return nil, fmt.Errorf("no operator relays configured; pass --relay or set BAHIA_NOSTR_RELAYS")
 }
 
 func normalizeRelayList(values []string) []string {

@@ -140,7 +140,7 @@ REMOVE_EVENTSOURCE_LOG_STREAMING_FROM_INTENDED_BROWSER_CONTRACT
 **Status:** active
 
 **Context Summary:**
-A draft AC set was prepared for the shared transport-policy slice covering public signer-first relay boundaries, encrypted browser relay boundaries, fail-closed encrypted capability gating, the approved absence of route-level REST compatibility gating, encrypted-only browser payment policy, EventSource log-stream deprecation, explicit pre-acceptance operator HTTP fallback, compatibility-only 311xx handling, operator relay visibility via NIP-51 kind `30002`, event-driven completion rules, and end-to-end mixed-transport relay separation.
+A draft AC set was prepared for the shared transport-policy slice covering public signer-first relay boundaries, encrypted browser relay boundaries, fail-closed encrypted capability gating, the approved absence of route-level REST compatibility gating, encrypted-only browser payment policy, EventSource log-stream deprecation, explicit pre-acceptance operator explicit relay configuration, compatibility-only 311xx handling, operator relay visibility via NIP-51 kind `30002`, event-driven completion rules, and end-to-end mixed-transport relay separation.
 
 **Question Asked:**
 Do you approve the acceptance-criteria direction for `TRANSPORT_POLICY_GOVERNANCE` so I can finalize `acceptance_criteria.json`?

@@ -55,6 +55,7 @@ const (
 	KindPackageRepositoryRegistry = 31971
 	KindPackageArtifactRegistry   = 31972
 	KindPackagePromotionRegistry  = 31973
+	KindSystemDiscovery           = 31974
 )
 
 // Nostr event kinds for Bahia inbound command events (311xx series).

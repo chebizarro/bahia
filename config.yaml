@@ -38,7 +38,7 @@ nostr:
   # Ordinary backend relay endpoints used for encrypted request/result Nostr
   # events. A separate relay set is optional; operators may reuse public relays.
   encrypted_request_relays: []
-  # Browser-safe relay endpoints advertised by /api/v1/system/info only when
+  # Browser-safe relay endpoints advertised by Nostr discovery events (kind 31974 + NIP-51 kind 30002) only when
   # nostr.sidecar.enabled=true. Use the nginx /relay proxy for the web app.
   browser_relays:
     - "ws://localhost:3000/relay"

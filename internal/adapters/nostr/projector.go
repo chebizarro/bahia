@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -68,6 +69,8 @@ type Projector struct {
 	enabled        bool
 	repairInterval time.Duration
 	logger         *zap.Logger
+	systemConfig   *config.Config
+	mcpTransport   bool
 }
 
 // ProjectorOption configures a projector.
@@ -85,6 +88,13 @@ func WithLLMProjectionSource(source LLMProjectionSource) ProjectorOption {
 
 func WithPolicyProjectionSource(source PolicyProjectionSource) ProjectorOption {
 	return func(p *Projector) { p.policySource = source }
+}
+
+func WithSystemDiscoveryConfig(cfg *config.Config, mcpTransportEnabled bool) ProjectorOption {
+	return func(p *Projector) {
+		p.systemConfig = cfg
+		p.mcpTransport = mcpTransportEnabled
+	}
 }
 
 // NewProjector creates a canonical Nostr read-model projector.
@@ -194,6 +204,10 @@ func (p *Projector) RepublishSnapshot(ctx context.Context) error {
 	if !p.Enabled() {
 		return nil
 	}
+	if err := p.publishSystemDiscovery(ctx); err != nil {
+		p.logger.Warn("publish system discovery projection failed", zap.Error(err))
+	}
+
 	services, err := p.source.ListServices(ctx)
 	if err != nil {
 		return fmt.Errorf("list services: %w", err)
@@ -613,6 +627,166 @@ func (p *Projector) publishReplaceableJSON(ctx context.Context, kind int, dTag s
 	baseTags := gonostr.Tags{{"d", dTag}, {"deleted", "false"}}
 	baseTags = append(baseTags, tags...)
 	return p.publishSigned(ctx, kind, baseTags, string(content), entityType, entityID)
+}
+
+func (p *Projector) publishSystemDiscovery(ctx context.Context) error {
+	cfg := p.systemConfig
+	if cfg == nil {
+		return nil
+	}
+	browserRelays := browserDiscoveryRelays(cfg.Nostr)
+	if len(browserRelays) == 0 {
+		return nil
+	}
+	requestRelays := append([]string(nil), cfg.Nostr.BrowserEncryptedRequestRelays...)
+	encryptedRequestsEnabled := len(requestRelays) > 0 && len(cfg.Nostr.EncryptedRequestRelays) > 0 && cfg.Nostr.PrivateKey != ""
+	payload := map[string]any{
+		"schema":        "bahia.system-discovery.v1",
+		"registries":    discoveryRegistries(cfg),
+		"control_plane": discoveryControlPlane(cfg.LLM.Enabled, p.mcpTransport),
+		"blossom": map[string]any{
+			"enabled":       cfg.Blossom.Enabled,
+			"url":           cfg.Blossom.URL,
+			"servers":       cfg.Blossom.Servers,
+			"storage_class": cfg.Blossom.StorageClass,
+		},
+		"runtime": map[string]any{
+			"type":         cfg.Runtime.Type,
+			"environments": runtimeEnvironmentNames(cfg),
+		},
+		"oci": map[string]any{
+			"enabled":     cfg.OCI.Enabled,
+			"public_host": cfg.OCI.PublicHost,
+		},
+		"features": map[string]bool{
+			"oci":                      cfg.OCI.Enabled,
+			"harbor":                   cfg.Harbor.Enabled,
+			"blossom":                  cfg.Blossom.Enabled,
+			"hiveci":                   cfg.HiveCI.Enabled,
+			"cashu":                    cfg.Cashu.Enabled,
+			"telemetry":                cfg.Telemetry.Enabled,
+			"notifications":            cfg.Notifications.Enabled,
+			"auth":                     cfg.Auth.Enabled,
+			"relay_sidecar":            cfg.Nostr.Sidecar.Enabled,
+			"relay_read_models":        cfg.Nostr.Sidecar.Enabled && cfg.Nostr.PublishEnabled,
+			"encrypted_nostr_requests": encryptedRequestsEnabled,
+			"llm_control_plane":        cfg.LLM.Enabled,
+			"direct_nostr_http_auth":   cfg.Auth.Enabled,
+			"mcp_transport":            p.mcpTransport,
+			"publish_enabled":          cfg.Nostr.PublishEnabled,
+		},
+	}
+	content, _ := json.Marshal(payload)
+	if err := p.publishSigned(ctx, KindSystemDiscovery, gonostr.Tags{{"d", "bahia-system-v1"}, {"schema", "bahia.system-discovery.v1"}}, string(content), "system.discovery", nil); err != nil {
+		return err
+	}
+	if err := p.publishRelaySet(ctx, "bahia-browser-v1", browserRelays); err != nil {
+		return err
+	}
+	if len(requestRelays) > 0 {
+		if err := p.publishRelaySet(ctx, "bahia-requests-v1", requestRelays); err != nil {
+			return err
+		}
+	}
+	return p.publishRelaySet(ctx, "bahia-service-v1", browserRelays)
+}
+
+func (p *Projector) publishRelaySet(ctx context.Context, dTag string, relays []string) error {
+	tags := gonostr.Tags{{"d", dTag}, {"title", dTag}}
+	for _, relay := range normalizeProjectionRelays(relays) {
+		tags = append(tags, gonostr.Tag{"relay", relay})
+	}
+	return p.publishSigned(ctx, 30002, tags, "", "system.discovery.relay_set", nil)
+}
+
+func discoveryRegistries(cfg *config.Config) []map[string]any {
+	registries := []map[string]any{}
+	if cfg.OCI.Enabled && cfg.OCI.PublicHost != "" {
+		registries = append(registries, map[string]any{"id": "bahia-oci", "name": "Bahia Registry", "base_url": cfg.OCI.PublicHost, "type": "native", "default": true, "enabled": true})
+	}
+	if cfg.Harbor.Enabled && cfg.Harbor.URL != "" {
+		registries = append(registries, map[string]any{"id": "harbor", "name": "Harbor", "base_url": cfg.Harbor.URL, "type": "harbor", "enabled": true})
+	}
+	if cfg.Registry.URL != "" {
+		registries = append(registries, map[string]any{"id": "configured", "name": "Configured Registry", "base_url": cfg.Registry.URL, "type": cfg.Registry.Type, "enabled": true})
+	}
+	registries = append(registries,
+		map[string]any{"id": "ghcr", "name": "GitHub Container Registry", "base_url": "ghcr.io", "type": "ghcr", "enabled": true},
+		map[string]any{"id": "dockerhub", "name": "Docker Hub", "base_url": "docker.io", "type": "dockerhub", "enabled": true},
+		map[string]any{"id": "quay", "name": "Quay.io", "base_url": "quay.io", "type": "quay", "enabled": true},
+	)
+	return registries
+}
+
+func discoveryControlPlane(llmEnabled, mcpTransportEnabled bool) map[string]any {
+	requestKinds := map[string]int{"deploy_request": 5961, "rollback_request": 5962, "service_action": 5963, "service_create": 5964, "environment_create": 5965, "deployment_approval": 5966, "observation_submit": 5967, "drift_remediate": 5968}
+	statusKinds := map[string]int{"deployment_status": 6961, "service_status": 6962}
+	resultKinds := map[string]int{"deployment_result": 7961, "action_result": 7962, "service_create_result": 7963, "environment_create_result": 7964, "observation_result": 7965, "remediation_result": 7966}
+	readModelKinds := map[string]int{"service_state": KindServiceState, "service_registry": KindServiceRegistry, "environment_registry": KindEnvironmentRegistry}
+	capabilities := []string{"service_deployments", "service_registry_read_models", "relay_read_models"}
+	correlationTags := []string{"service", "environment", "artifact", "intent", "run", "e", "p", "status", "step"}
+	mcpFields := []string{"request_event_id", "request_kind", "status_kind", "result_kind", "registry_kind", "state_kind", "service_id", "environment_id", "intent_id", "run_id"}
+	if llmEnabled {
+		capabilities = append(capabilities, "llm_routes", "llm_deployments", "llm_rollback")
+		requestKinds["llm_route_create"] = 5971
+		requestKinds["llm_release_register"] = 5972
+		requestKinds["llm_deploy_request"] = 5973
+		requestKinds["llm_deployment_approval"] = 5974
+		requestKinds["llm_rollback_request"] = 5975
+		statusKinds["llm_deployment_status"] = 6973
+		resultKinds["llm_route_create_result"] = 7971
+		resultKinds["llm_release_register_result"] = 7972
+		resultKinds["llm_deployment_result"] = 7973
+		readModelKinds["llm_route_registry"] = KindLLMRouteRegistry
+		readModelKinds["llm_route_state"] = KindLLMRouteState
+		correlationTags = append(correlationTags, "route", "release")
+		mcpFields = append(mcpFields, "route_id", "release_id")
+	}
+	if mcpTransportEnabled {
+		capabilities = append(capabilities, "mcp_async_correlation")
+	}
+	return map[string]any{"version": "bahia-controlplane-v1", "capabilities": capabilities, "request_kinds": requestKinds, "status_kinds": statusKinds, "result_kinds": resultKinds, "read_model_kinds": readModelKinds, "correlation_tags": correlationTags, "mcp": map[string]any{"async_correlation": mcpTransportEnabled, "fields": mcpFields}}
+}
+
+func browserDiscoveryRelays(cfg config.NostrConfig) []string {
+	if !cfg.Sidecar.Enabled {
+		return nil
+	}
+	if len(cfg.BrowserRelays) > 0 {
+		return append([]string(nil), cfg.BrowserRelays...)
+	}
+	if cfg.Sidecar.PublicURL != "" {
+		return []string{cfg.Sidecar.PublicURL}
+	}
+	return nil
+}
+
+func runtimeEnvironmentNames(cfg *config.Config) []string {
+	names := make([]string, 0, len(cfg.Runtime.Environments))
+	for name := range cfg.Runtime.Environments {
+		names = append(names, name)
+	}
+	return names
+}
+
+func normalizeProjectionRelays(values []string) []string {
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		for _, relay := range strings.Split(value, ",") {
+			relay = strings.TrimSpace(relay)
+			if relay == "" {
+				continue
+			}
+			key := strings.TrimRight(relay, "/")
+			if _, exists := seen[key]; exists {
+				continue
+			}
+			seen[key] = struct{}{}
+			out = append(out, relay)
+		}
+	}
+	return out
 }
 
 func (p *Projector) publishBuildRegistry(ctx context.Context, build *domain.Build, deleted bool) error {

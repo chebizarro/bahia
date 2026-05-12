@@ -42,7 +42,7 @@ Use this document **while executing** the rollout signoff. It is intentionally p
 | Additional approvers | `<fill>` |
 | Evidence bundle location | `<fill path / ticket / object store URL>` |
 | Compose takeover policy for this environment | `disabled` / `enabled for named services only` / `not applicable` |
-| `/api/v1/system/info` evidence captured | `<fill path + timestamp>` |
+| `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` evidence captured | `<fill path + timestamp>` |
 | Relay sidecar `/relay` check (if applicable) | `<fill pass/fail + evidence>` |
 | Encrypted request/result evidence (if encrypted web flows in scope) | `<fill browser_encrypted_request_relays + feature flag evidence or N/A>` |
 
@@ -59,9 +59,9 @@ Check each box before LN-01 starts.
 - [ ] At least two `runtime.endpoints.<ref>` aliases are configured.
 - [ ] At least one endpoint uses remote Docker TLS/mTLS.
 - [ ] Monitoring can reach `/metrics` with fresh per-request NIP-98 headers when API auth is enabled.
-- [ ] `/api/v1/system/info` confirms `features.direct_nostr_http_auth=true`.
+- [ ] `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` confirms `features.direct_nostr_http_auth=true`.
 - [ ] If sidecar/web verification is in scope, `/relay` is reachable and aligned with the configured sidecar URL/path.
-- [ ] If encrypted web flows are in scope, `/api/v1/system/info` exposes `nostr.browser_encrypted_request_relays` and `features.encrypted_nostr_requests=true`.
+- [ ] If encrypted web flows are in scope, `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` exposes `nostr.browser_encrypted_request_relays` and `features.encrypted_nostr_requests=true`.
 - [ ] A non-critical candidate workload is available for import.
 - [ ] Rollback owner/procedure for the candidate workload is confirmed.
 
@@ -73,7 +73,7 @@ Collect these artifacts as files or links under the evidence bundle location.
 - [ ] Redacted staging config excerpt
 - [ ] Command transcript or shell log
 - [ ] API request/response captures with secrets redacted
-- [ ] `/api/v1/system/info` capture showing auth/topology capability flags
+- [ ] `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` capture showing auth/topology capability flags
 - [ ] Relay `/relay` reachability capture when web/sidecar validation is in scope
 - [ ] Encrypted request/result discovery capture (`nostr.browser_encrypted_request_relays`, `features.encrypted_nostr_requests`) when encrypted web flows are in scope
 - [ ] Relevant log excerpts with request IDs
@@ -104,7 +104,7 @@ Use one section per LN row. Fill every field.
 
 ### LN-01 — Auth-enabled operator access
 
-**Goal**: prove privileged adoption/direct-runtime routes enforce production auth and operator authorization, with current signer-first capability advertising in `/api/v1/system/info`.
+**Goal**: prove privileged adoption/direct-runtime routes enforce production auth and operator authorization, with current signer-first capability advertising in `Nostr discovery events (kind 31974 + NIP-51 kind 30002)`.
 
 - Status: `PASS` / `FAIL` / `BLOCKED` / `N/A`
 - Start / end time (UTC): `<fill>`

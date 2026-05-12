@@ -269,7 +269,35 @@ func (s *fakeProjectionSource) GetLLMDeploymentRun(_ context.Context, id uuid.UU
 	return &run, nil
 }
 
-func TestProjectorRepublishSnapshotRepairsReadModels(t *testing.T) {
+func TestProjectorPublishesSystemDiscoverySnapshot(t *testing.T) {
+	ctx := context.Background()
+	cfg := config.Defaults()
+	cfg.Nostr.PrivateKey = projectorTestPrivateKey
+	cfg.Nostr.PublishEnabled = true
+	cfg.Nostr.Sidecar.Enabled = true
+	cfg.Nostr.Sidecar.PublicURL = "ws://localhost:3000/relay"
+	cfg.Nostr.BrowserRelays = []string{"ws://localhost:3000/relay"}
+	cfg.Nostr.BrowserEncryptedRequestRelays = []string{"wss://requests.example"}
+	cfg.Nostr.EncryptedRequestRelays = []string{"wss://requests-backend.example"}
+
+	sink := &captureProjectionPublisher{}
+	projector := NewProjector(cfg.Nostr, newFakeProjectionSource(), sink, nil, zap.NewNop(), WithSystemDiscoveryConfig(cfg, true))
+	if err := projector.RepublishSnapshot(ctx); err != nil {
+		t.Fatalf("republish snapshot: %v", err)
+	}
+
+	discovery := assertOneSignedKind(t, sink, KindSystemDiscovery)
+	assertTag(t, discovery, "d", "bahia-system-v1")
+	assertJSONField(t, discovery.Content, "schema", "bahia.system-discovery.v1")
+	browserSet := assertOneRelaySet(t, sink, "bahia-browser-v1")
+	assertTag(t, browserSet, "relay", "ws://localhost:3000/relay")
+	requestSet := assertOneRelaySet(t, sink, "bahia-requests-v1")
+	assertTag(t, requestSet, "relay", "wss://requests.example")
+	serviceSet := assertOneRelaySet(t, sink, "bahia-service-v1")
+	assertTag(t, serviceSet, "relay", "ws://localhost:3000/relay")
+}
+
+func TestProjectorRepublishesSnapshot(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now().UTC()
 	serviceID := uuid.New()
@@ -483,6 +511,26 @@ func assertOneSignedKind(t *testing.T, sink *captureProjectionPublisher, kind in
 		t.Fatalf("event kind %d has invalid signature: ok=%v err=%v", kind, ok, err)
 	}
 	return events[0]
+}
+
+func assertOneRelaySet(t *testing.T, sink *captureProjectionPublisher, dTag string) gonostr.Event {
+	t.Helper()
+	var matched []gonostr.Event
+	for _, ev := range sink.byKind(30002) {
+		for _, tag := range ev.Tags {
+			if len(tag) >= 2 && tag[0] == "d" && tag[1] == dTag {
+				matched = append(matched, ev)
+			}
+		}
+	}
+	if len(matched) != 1 {
+		t.Fatalf("expected one relay set %s, got %d", dTag, len(matched))
+	}
+	ok, err := matched[0].CheckSignature()
+	if err != nil || !ok {
+		t.Fatalf("relay set %s has invalid signature: ok=%v err=%v", dTag, ok, err)
+	}
+	return matched[0]
 }
 
 func assertTag(t *testing.T, ev gonostr.Event, key, value string) {

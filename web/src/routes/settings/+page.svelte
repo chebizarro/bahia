@@ -8,7 +8,7 @@
   import { authState, loginWithNostrConnect, canUseNostrConnectUri } from '$lib/stores/auth.js';
   import { systemInfo as sharedSystemInfo, loadSystemInfo as loadSharedSystemInfo } from '$lib/stores';
 
-  // Shared public system info from app bootstrap
+  // Shared public Nostr discovery from app bootstrap
   const systemInfo = $derived(sharedSystemInfo.data);
   const systemLoading = $derived(sharedSystemInfo.loading);
   const systemError = $derived(sharedSystemInfo.error);

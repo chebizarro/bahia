@@ -1,6 +1,6 @@
 # Bahia PSTF Feature Backlog
 
-Generated: 2026-05-04  
+Generated: 2026-05-04
 Agent: BacklogExpansionAgent
 
 ## Scope and method
@@ -27,7 +27,7 @@ Ranking dimensions:
 
 | Rank | Feature ID | Title | Coverage | Score | Why it matters now |
 |---|---|---|---|---:|---|
-| 1 | `SYSTEM_DISCOVERY_RELAY_BOOTSTRAP` | System discovery and relay bootstrap contract | partially mapped | 19 | Every relay-backed browser flow depends on `/api/v1/system/info`, relay discovery, EOSE bootstrap, and the live-subscription handoff. |
+| 1 | `SYSTEM_DISCOVERY_RELAY_BOOTSTRAP` | System discovery and relay bootstrap contract | partially mapped | 19 | Every relay-backed browser flow depends on `Nostr discovery events (kind 31974 + NIP-51 kind 30002)`, relay discovery, EOSE bootstrap, and the live-subscription handoff. |
 | 2 | `ENCRYPTED_SERVICE_SECRETS_CRUD_REVEAL` | Encrypted service secrets CRUD and reveal safety | unmapped | 18 | Sensitive secret flows exist now, with both encrypted transport logic and user-visible reveal-safety behavior. |
 | 3 | `LLM_ROUTE_RELEASE_DEPLOYMENT` | LLM route/release/deploy/approval/rollback control plane | unmapped | 18 | High-confidence product capability with its own kinds, reconcile loop, and rollback path, but no PSTF slice. |
 | 4 | `ORG_MEMBERSHIP_INVITES_ENCRYPTED_ADMIN` | Organization membership, invites, and role management over encrypted transport | unmapped | 18 | Security-sensitive admin flows exist over encrypted transport and are explicitly outside the current notifications slice. |
@@ -40,12 +40,12 @@ Ranking dimensions:
 
 ### 1) `SYSTEM_DISCOVERY_RELAY_BOOTSTRAP`
 **Why it is a gap**
-- Existing slices depend on `/api/v1/system/info`, but none verify it as a first-class product contract.
-- `pstf/spec_gap_report.md` separately flags both `/api/v1/system/info` and relay-read-model-first frontend behavior as under-specified.
+- Existing slices depend on `Nostr discovery events (kind 31974 + NIP-51 kind 30002)`, but none verify it as a first-class product contract.
+- `pstf/spec_gap_report.md` separately flags both `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` and relay-read-model-first frontend behavior as under-specified.
 
 **Small testable slice**
-- `/api/v1/system/info` payload contract
-- system-info caching and concurrent-load dedupe
+- `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` payload contract
+- Nostr discovery caching and concurrent-load dedupe
 - public relay discovery
 - EOSE-bounded bootstrap and live-subscription transition
 - fail-closed behavior when relay-read-model capability is absent
@@ -53,7 +53,7 @@ Ranking dimensions:
 **Source evidence**
 - `pstf/product_map.md` — known flow: system discovery and relay bootstrap
 - `pstf/spec_gap_report.md` — Missing specification #1 and #2
-- `internal/api/handlers/system.go:47-126,229-245,256-318`
+- `internal/adapters/nostr/projector.go:47-126,229-245,256-318`
 - `internal/api/handlers/system_test.go`
 - `web/src/lib/stores/system.svelte.js:13-45`
 - `web/src/lib/stores/controlplane.svelte.js:535-568`
@@ -83,7 +83,7 @@ Ranking dimensions:
 ### 3) `LLM_ROUTE_RELEASE_DEPLOYMENT`
 **Why it is a gap**
 - Product map marks LLM control plane as a high-confidence capability.
-- `/system/info` advertises dedicated LLM kinds and read models.
+- `Nostr discovery events` advertises dedicated LLM kinds and read models.
 - Existing PSTF slices do not cover route/release/deploy/rollback flows.
 
 **Small testable slice**
@@ -96,7 +96,7 @@ Ranking dimensions:
 **Source evidence**
 - `pstf/product_map.md`
 - `pstf/spec_gap_report.md` — Untested behavior #3
-- `internal/api/handlers/system.go:288-300`
+- `internal/adapters/nostr/projector.go:288-300`
 - `docs/control-planes.md:72,96-100,132-133`
 - `internal/domain/llm.go:1-140`
 - `internal/controlplane/reactor.go:352-361,944-1118`

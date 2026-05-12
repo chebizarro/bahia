@@ -175,54 +175,6 @@ func TestImportAdoption(t *testing.T) {
 	}
 }
 
-func TestGetSystemInfo(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			t.Errorf("method = %s, want GET", r.Method)
-		}
-		if r.URL.Path != "/api/v1/system/info" {
-			t.Errorf("path = %s, want /api/v1/system/info", r.URL.Path)
-		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{
-			"nostr": map[string]any{
-				"browser_relays":                   []string{"ws://localhost:3000/relay"},
-				"sidecar_url":                      "ws://localhost:3000/relay",
-				"browser_encrypted_request_relays": []string{"wss://request-browser.example"},
-				"service_pubkey":                   "service-pubkey",
-			},
-			"features": map[string]bool{
-				"encrypted_nostr_requests": true,
-			},
-		}})
-	}))
-	defer server.Close()
-
-	c := New(server.URL)
-	info, err := c.GetSystemInfo(context.Background())
-	if err != nil {
-		t.Fatalf("GetSystemInfo() error = %v", err)
-	}
-	if len(info.Nostr.BrowserRelays) != 1 || info.Nostr.BrowserRelays[0] != "ws://localhost:3000/relay" {
-		t.Fatalf("browser_relays = %#v", info.Nostr.BrowserRelays)
-	}
-	if info.Nostr.SidecarURL != "ws://localhost:3000/relay" {
-		t.Fatalf("sidecar_url = %q", info.Nostr.SidecarURL)
-	}
-	if len(info.Nostr.BrowserEncryptedRequestRelays) != 1 || info.Nostr.BrowserEncryptedRequestRelays[0] != "wss://request-browser.example" {
-		t.Fatalf("browser_encrypted_request_relays = %#v", info.Nostr.BrowserEncryptedRequestRelays)
-	}
-	if info.Nostr.ServicePubkey != "service-pubkey" {
-		t.Fatalf("service_pubkey = %q", info.Nostr.ServicePubkey)
-	}
-	if !info.Features["encrypted_nostr_requests"] {
-		t.Fatalf("encrypted_nostr_requests feature was not decoded: %#v", info.Features)
-	}
-	if _, ok := info.Features["private_nostr_transport"]; ok {
-		t.Fatalf("removed private_nostr_transport feature should not be present: %#v", info.Features)
-	}
-}
-
 func TestPrivilegedMethodsSendNIP98Authorization(t *testing.T) {
 	seen := map[string]string{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

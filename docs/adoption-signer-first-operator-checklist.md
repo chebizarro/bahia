@@ -1,7 +1,7 @@
 # Adoption / Import Signer-First Operator Checklist and Evidence Template
 
 Status: **Primary signer-first execution checklist**
-Epic: `bahia-sqfx`  
+Epic: `bahia-sqfx`
 Verification/signoff execution: `bahia-sqfx.5`
 
 This document is the operator run sheet and evidence template for staged/live signer-first rollout verification of adoption/import and direct-runtime actions.
@@ -63,10 +63,10 @@ Secondary / compatibility-only:
 | Local rehearsal artifact bundle | `<fill path + timestamp>` |
 | Managed endpoint refs under test | `<fill>` |
 | Compose takeover policy for this environment | `disabled` / `enabled for named services only` / `not applicable` |
-| `/api/v1/system/info` capability evidence | `<fill path + timestamp>` |
+| `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` capability evidence | `<fill path + timestamp>` |
 | Relay `/relay` reachability evidence | `<fill path + timestamp or N/A>` |
 | Signer capability evidence (`signEvent`, request/result correlation path) | `<fill>` |
-| Compatibility HTTP fallback approved? | `yes` / `no` |
+| Compatibility explicit relay configuration approved? | `yes` / `no` |
 
 ## Environment prerequisites
 
@@ -79,7 +79,7 @@ Check each box before SF-01 starts.
 - [ ] At least two `runtime.endpoints.<ref>` aliases are configured.
 - [ ] At least one endpoint uses remote Docker TLS/mTLS.
 - [ ] `adoption.allow_raw_docker_hosts=false` unless explicit break-glass testing is approved.
-- [ ] `/api/v1/system/info` and relay/topology evidence are captured for the release candidate.
+- [ ] `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` and relay/topology evidence are captured for the release candidate.
 - [ ] A stored local Docker+relay signer-first rehearsal artifact exists for this release commit.
 - [ ] A non-critical candidate workload is available for import.
 - [ ] Rollback owner/procedure for the candidate workload is confirmed.
@@ -95,7 +95,7 @@ Collect these artifacts as files or links under the evidence bundle location.
 - [ ] Local rehearsal artifact bundle (Docker+relay simulation)
 - [ ] CLI transcript showing signer-first request publication and terminal result handling
 - [ ] Request event IDs and correlated status/result event IDs
-- [ ] `/api/v1/system/info` capture
+- [ ] `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` capture
 - [ ] Relay `/relay` reachability capture when sidecar validation is in scope
 - [ ] Relevant logs with request IDs / event IDs / actor pubkey
 - [ ] Metrics snapshots
@@ -177,7 +177,7 @@ Use one section per SF row. Fill every field.
   ```
 - Checks:
   - signer-first path rejects raw-host usage
-  - compatibility HTTP fallback requires explicit `--http-fallback`
+  - compatibility explicit relay configuration requires explicit `--http-fallback`
   - no unmanaged runtime call occurs when raw-host mode is disabled
 - Evidence paths: `<fill>`
 - Notes: `<fill>`
