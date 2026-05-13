@@ -81,6 +81,9 @@ services:
     build:
       context: ./web
       dockerfile: Dockerfile
+      args:
+        PUBLIC_BAHIA_BOOTSTRAP_RELAYS: ${PUBLIC_BAHIA_BOOTSTRAP_RELAYS:-ws://localhost:3334/relay}
+        PUBLIC_BAHIA_SERVICE_PUBKEYS: ${PUBLIC_BAHIA_SERVICE_PUBKEYS:-}
     ports:
       - "3000:80"
     depends_on:

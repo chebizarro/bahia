@@ -6,6 +6,54 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Bahia Dashboard</title>
     %sveltekit.head%
+    <script>
+      (function () {
+        function showBootError(message) {
+          try {
+            var id = 'bahia-boot-error';
+            var node = document.getElementById(id);
+            if (!node) {
+              node = document.createElement('pre');
+              node.id = id;
+              node.style.position = 'fixed';
+              node.style.left = '12px';
+              node.style.right = '12px';
+              node.style.bottom = '12px';
+              node.style.zIndex = '2147483647';
+              node.style.margin = '0';
+              node.style.padding = '12px';
+              node.style.background = 'rgba(127, 29, 29, 0.96)';
+              node.style.color = '#fff';
+              node.style.border = '1px solid rgba(255,255,255,0.2)';
+              node.style.borderRadius = '8px';
+              node.style.font = '12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace';
+              node.style.whiteSpace = 'pre-wrap';
+              node.style.maxHeight = '40vh';
+              node.style.overflow = 'auto';
+              document.addEventListener('DOMContentLoaded', function () {
+                document.body.appendChild(node);
+              }, { once: true });
+              if (document.body) {
+                document.body.appendChild(node);
+              }
+            }
+            node.textContent = 'Bahia web bootstrap error\n\n' + String(message || 'unknown error');
+          } catch (_) {}
+        }
+        window.__BAHIA_BOOTSTRAP__ = {
+          schema: 'bahia.bootstrap.v1',
+          relay_urls: '__PUBLIC_BAHIA_BOOTSTRAP_RELAYS__'.split(',').map(function (s) { return s.trim(); }).filter(Boolean),
+          service_pubkeys: '__PUBLIC_BAHIA_SERVICE_PUBKEYS__'.split(',').map(function (s) { return s.trim(); }).filter(Boolean)
+        };
+        window.addEventListener('error', function (event) {
+          showBootError(event && (event.error && event.error.stack || event.message) || 'window error');
+        });
+        window.addEventListener('unhandledrejection', function (event) {
+          var reason = event && event.reason;
+          showBootError(reason && reason.stack || reason && reason.message || String(reason || 'unhandled rejection'));
+        });
+      })();
+    </script>
   </head>
   <body data-sveltekit-preload-data="hover">
     <div style="display: contents">%sveltekit.body%</div>

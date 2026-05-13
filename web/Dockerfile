@@ -1,6 +1,11 @@
 # Build stage
 FROM node:20-alpine AS builder
 
+ARG PUBLIC_BAHIA_BOOTSTRAP_RELAYS=""
+ARG PUBLIC_BAHIA_SERVICE_PUBKEYS=""
+ENV PUBLIC_BAHIA_BOOTSTRAP_RELAYS=${PUBLIC_BAHIA_BOOTSTRAP_RELAYS}
+ENV PUBLIC_BAHIA_SERVICE_PUBKEYS=${PUBLIC_BAHIA_SERVICE_PUBKEYS}
+
 WORKDIR /app
 
 # Copy package files
@@ -11,6 +16,10 @@ RUN npm install -g npm@11 && npm install
 
 # Copy source files
 COPY . .
+
+# Bake bootstrap seed directly into app shell so first-load discovery does not depend on env.js wiring
+RUN sed -i "s|__PUBLIC_BAHIA_BOOTSTRAP_RELAYS__|${PUBLIC_BAHIA_BOOTSTRAP_RELAYS}|g" src/app.html && \
+    sed -i "s|__PUBLIC_BAHIA_SERVICE_PUBKEYS__|${PUBLIC_BAHIA_SERVICE_PUBKEYS}|g" src/app.html
 
 # Build the SvelteKit app
 RUN npm run build

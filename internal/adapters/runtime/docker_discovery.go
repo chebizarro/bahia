@@ -387,6 +387,10 @@ func normalizeDiscoveredPorts(ports map[string][]dockerPortPublish) []string {
 				continue
 			}
 			mapped := binding.HostPort + ":" + portNumber
+			hostIP := strings.TrimSpace(binding.HostIP)
+			if hostIP != "" && hostIP != "0.0.0.0" && hostIP != "::" {
+				mapped = hostIP + ":" + mapped
+			}
 			if proto != "" && proto != "tcp" {
 				mapped += "/" + proto
 			}
@@ -583,12 +587,6 @@ func unsupportedPortWarnings(ports map[string][]dockerPortPublish) []string {
 		uniqueBindings := uniquePublishedBindings(published)
 		if hasUnsupportedMultipleBindings(uniqueBindings) {
 			warnings = append(warnings, "multiple host bindings for port "+containerPort+" are not supported")
-		}
-		for _, binding := range uniqueBindings {
-			hostIP := strings.TrimSpace(binding.HostIP)
-			if hostIP != "" && hostIP != "0.0.0.0" && hostIP != "::" {
-				warnings = append(warnings, "host-specific binding for port "+containerPort+" is not supported")
-			}
 		}
 	}
 	return warnings

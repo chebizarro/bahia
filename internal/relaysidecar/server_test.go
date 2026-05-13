@@ -131,6 +131,23 @@ func TestSidecarAllowsSignerFirstOperatorStatusAndResultKinds(t *testing.T) {
 	}
 }
 
+func TestSidecarAllowsDiscoveryKinds(t *testing.T) {
+	cfg := config.Defaults().Nostr
+	cfg.Sidecar.Enabled = true
+	cfg.Sidecar.PublicURL = "ws://localhost:3334"
+
+	server, err := New(cfg, zap.NewNop())
+	if err != nil {
+		t.Fatalf("New() error: %v", err)
+	}
+
+	filter := nostr.Filter{Kinds: []nostr.Kind{30002, 31974, 30078, 30079}}
+	reject, msg := server.Relay().OnRequest(context.Background(), filter)
+	if reject {
+		t.Fatalf("expected discovery/SBOM kinds to be readable, got rejection %q", msg)
+	}
+}
+
 func TestSidecarCountIsNotCappedByQueryLimit(t *testing.T) {
 	cfg := config.Defaults().Nostr
 	cfg.Sidecar.Enabled = true

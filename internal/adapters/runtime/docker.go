@@ -537,6 +537,7 @@ func (o *DockerObserver) StreamLogs(ctx context.Context, serviceName string, opt
 // --- internal helpers ---
 
 type dockerPortBinding struct {
+	HostIP   string `json:"HostIp,omitempty"`
 	HostPort string `json:"HostPort"`
 }
 
@@ -550,32 +551,47 @@ func buildDockerPortConfig(ports []string) (map[string]struct{}, map[string][]do
 			continue
 		}
 
-		parts := strings.Split(port, ":")
-		if len(parts) != 2 {
-			return nil, nil, fmt.Errorf("invalid port mapping %q: expected hostPort:containerPort", raw)
-		}
-
-		hostPort, containerPort, err := normalizeDockerPortMapping(strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1]), raw)
+		hostIP, hostPort, containerPort, err := splitDockerPortMapping(port)
 		if err != nil {
 			return nil, nil, err
 		}
+		normalizedHostIP, normalizedHostPort, normalizedContainerPort, err := normalizeDockerPortMapping(hostIP, hostPort, containerPort, raw)
+		if err != nil {
+			return nil, nil, err
+		}
+		hostIP, hostPort, containerPort = normalizedHostIP, normalizedHostPort, normalizedContainerPort
 		if _, exists := portBindings[containerPort]; exists {
 			return nil, nil, fmt.Errorf("invalid port mapping %q: duplicate container port %s", raw, containerPort)
 		}
 
 		exposedPorts[containerPort] = struct{}{}
-		portBindings[containerPort] = []dockerPortBinding{{HostPort: hostPort}}
+		portBindings[containerPort] = []dockerPortBinding{{HostIP: hostIP, HostPort: hostPort}}
 	}
 
 	return exposedPorts, portBindings, nil
 }
 
-func normalizeDockerPortMapping(hostPort, containerPort, raw string) (string, string, error) {
+func splitDockerPortMapping(raw string) (string, string, string, error) {
+	last := strings.LastIndex(raw, ":")
+	if last <= 0 || last >= len(raw)-1 {
+		return "", "", "", fmt.Errorf("invalid port mapping %q: expected hostPort:containerPort or hostIP:hostPort:containerPort", raw)
+	}
+	left := strings.TrimSpace(raw[:last])
+	containerPort := strings.TrimSpace(raw[last+1:])
+	second := strings.LastIndex(left, ":")
+	if second == -1 {
+		return "", left, containerPort, nil
+	}
+	return strings.TrimSpace(left[:second]), strings.TrimSpace(left[second+1:]), containerPort, nil
+}
+
+func normalizeDockerPortMapping(hostIP, hostPort, containerPort, raw string) (string, string, string, error) {
+	hostIP = strings.TrimSpace(strings.TrimPrefix(strings.TrimSuffix(hostIP, "]"), "["))
 	if hostPort == "" || containerPort == "" {
-		return "", "", fmt.Errorf("invalid port mapping %q: host and container ports are required", raw)
+		return "", "", "", fmt.Errorf("invalid port mapping %q: host and container ports are required", raw)
 	}
 	if err := validateDockerPortNumber(hostPort); err != nil {
-		return "", "", fmt.Errorf("invalid port mapping %q: invalid host port %q: %w", raw, hostPort, err)
+		return "", "", "", fmt.Errorf("invalid port mapping %q: invalid host port %q: %w", raw, hostPort, err)
 	}
 
 	containerNumber := containerPort
@@ -583,21 +599,21 @@ func normalizeDockerPortMapping(hostPort, containerPort, raw string) (string, st
 	if strings.Contains(containerPort, "/") {
 		parts := strings.Split(containerPort, "/")
 		if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" || strings.TrimSpace(parts[1]) == "" {
-			return "", "", fmt.Errorf("invalid port mapping %q: expected containerPort[/protocol]", raw)
+			return "", "", "", fmt.Errorf("invalid port mapping %q: expected containerPort[/protocol]", raw)
 		}
 		containerNumber = strings.TrimSpace(parts[0])
 		protocol = strings.ToLower(strings.TrimSpace(parts[1]))
 	}
 	if err := validateDockerPortNumber(containerNumber); err != nil {
-		return "", "", fmt.Errorf("invalid port mapping %q: invalid container port %q: %w", raw, containerNumber, err)
+		return "", "", "", fmt.Errorf("invalid port mapping %q: invalid container port %q: %w", raw, containerNumber, err)
 	}
 	switch protocol {
 	case "tcp", "udp", "sctp":
 	default:
-		return "", "", fmt.Errorf("invalid port mapping %q: unsupported protocol %q", raw, protocol)
+		return "", "", "", fmt.Errorf("invalid port mapping %q: unsupported protocol %q", raw, protocol)
 	}
 
-	return hostPort, containerNumber + "/" + protocol, nil
+	return hostIP, hostPort, containerNumber + "/" + protocol, nil
 }
 
 func validateDockerPortNumber(port string) error {

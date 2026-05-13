@@ -36,6 +36,13 @@
     };
   });
 
+  $effect(() => {
+    const advertisedRelays = systemInfo?.nostr?.browser_relays || [];
+    if (relays.length === 0 && advertisedRelays.length > 0) {
+      relays = [...advertisedRelays];
+    }
+  });
+
 
   async function addRelay() {
     const url = relayInput.trim();

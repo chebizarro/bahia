@@ -72,7 +72,7 @@ func TestDockerDeployAddsPortBindingsAndVolumes(t *testing.T) {
 	}
 
 	err := observer.Deploy(context.Background(), "api", "registry.example/api:latest", DeployOptions{
-		Ports:   []string{"8080:80", "5353:53/udp", " 8443:443 "},
+		Ports:   []string{"8080:80", "5353:53/udp", "192.168.40.104:8443:443", " 127.0.0.1:9000:9001 "},
 		Volumes: []string{"/var/lib/api:/data:ro", " ", "/tmp/api-cache:/cache"},
 	})
 	if err != nil {
@@ -107,9 +107,10 @@ func TestDockerDeployAddsPortBindingsAndVolumes(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected HostConfig.PortBindings object, got %#v", hostConfig["PortBindings"])
 	}
-	assertHostPort(t, portBindings, "80/tcp", "8080")
-	assertHostPort(t, portBindings, "53/udp", "5353")
-	assertHostPort(t, portBindings, "443/tcp", "8443")
+	assertHostPort(t, portBindings, "80/tcp", "", "8080")
+	assertHostPort(t, portBindings, "53/udp", "", "5353")
+	assertHostPort(t, portBindings, "443/tcp", "192.168.40.104", "8443")
+	assertHostPort(t, portBindings, "9001/tcp", "127.0.0.1", "9000")
 
 	binds, ok := hostConfig["Binds"].([]any)
 	if !ok {
@@ -427,7 +428,6 @@ func TestDockerDiscoveryWarnsUnsupportedRuntimeShape(t *testing.T) {
 	for _, want := range []string{
 		"network aliases cannot be represented",
 		"multiple host bindings for port 80/tcp are not supported",
-		"host-specific binding for port 80/tcp is not supported",
 		"unsupported mount type tmpfs",
 	} {
 		if !strings.Contains(joined, want) {
@@ -452,7 +452,7 @@ func assertStringSlice(t *testing.T, got any, want []string) {
 	}
 }
 
-func assertHostPort(t *testing.T, portBindings map[string]any, containerPort, hostPort string) {
+func assertHostPort(t *testing.T, portBindings map[string]any, containerPort, hostIP, hostPort string) {
 	t.Helper()
 
 	bindings, ok := portBindings[containerPort].([]any)
@@ -465,6 +465,15 @@ func assertHostPort(t *testing.T, portBindings map[string]any, containerPort, ho
 	}
 	if binding["HostPort"] != hostPort {
 		t.Fatalf("expected HostPort %q for %s, got %#v", hostPort, containerPort, binding["HostPort"])
+	}
+	if hostIP == "" {
+		if _, ok := binding["HostIp"]; ok && binding["HostIp"] != "" {
+			t.Fatalf("expected empty HostIp for %s, got %#v", containerPort, binding["HostIp"])
+		}
+		return
+	}
+	if binding["HostIp"] != hostIP {
+		t.Fatalf("expected HostIp %q for %s, got %#v", hostIP, containerPort, binding["HostIp"])
 	}
 }
 

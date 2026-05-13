@@ -66,6 +66,14 @@
     logout();
   }
 
+  function profileInitials(label) {
+    const text = String(label || '').trim();
+    if (!text) return 'N';
+    const parts = text.split(/\s+/).filter(Boolean).slice(0, 2);
+    const initials = parts.map((part) => part[0]?.toUpperCase() || '').join('');
+    return initials || text.slice(0, 1).toUpperCase();
+  }
+
   function toggleMenu() {
     menuOpen = !menuOpen;
   }
@@ -136,18 +144,18 @@
                   onerror={(e) => e.currentTarget.style.display='none'}
                 />
               {:else}
-                <span class="profile-icon">{authUi.backendAuthenticated ? '✅' : '🔑'}</span>
+                <span class="profile-avatar profile-avatar-fallback">{profileInitials(authUi.displayLabel)}</span>
               {/if}
-              <span class="profile-name">{authUi.displayLabel}</span>
-              {#if authUi.nip05}
-                <span class="profile-nip05">{authUi.nip05}</span>
-              {/if}
+              <span class="profile-copy">
+                <span class="profile-name">{authUi.displayLabel}</span>
+                <span class="profile-secondary">{authUi.nip05 || authUi.truncatedPubkey}</span>
+              </span>
             </div>
             {#if authUi.showWarning}
               <span class="auth-warning" title={authUi.warning}>⚠️</span>
             {/if}
             <button class="logout-btn" onclick={handleLogout}>
-              Logout
+              Log out
             </button>
           </div>
         {:else}
@@ -359,39 +367,52 @@
   .user-profile {
     display: flex;
     align-items: center;
-    gap: 0.4rem;
+    gap: 0.6rem;
     background: var(--card-bg);
-    padding: 0.25rem 0.625rem;
-    border-radius: 6px;
+    padding: 0.35rem 0.7rem;
+    border-radius: 999px;
     border: 1px solid var(--border-color);
     cursor: default;
-    max-width: min(260px, 40vw);
+    max-width: min(320px, 50vw);
   }
 
   .profile-avatar {
-    width: 22px;
-    height: 22px;
+    width: 30px;
+    height: 30px;
     border-radius: 50%;
     object-fit: cover;
     flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
   }
 
-  .profile-icon {
-    font-size: 0.95rem;
-    flex-shrink: 0;
+  .profile-avatar-fallback {
+    background: color-mix(in srgb, var(--primary) 18%, var(--card-bg));
+    color: var(--text-primary);
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+  }
+
+  .profile-copy {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.05rem;
   }
 
   .profile-name {
-    font-size: 0.8rem;
-    font-weight: 500;
+    font-size: 0.82rem;
+    font-weight: 600;
     color: var(--text-primary);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
 
-  .profile-nip05 {
-    font-size: 0.7rem;
+  .profile-secondary {
+    font-size: 0.72rem;
     color: var(--text-muted);
     overflow: hidden;
     text-overflow: ellipsis;
@@ -530,7 +551,7 @@
       height: 51px;
     }
 
-    .profile-nip05 {
+    .profile-secondary {
       display: none;
     }
   }

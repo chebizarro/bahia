@@ -174,7 +174,88 @@ function normalizeRelayUrls(relays = {}) {
     .map(([url]) => url);
 }
 
-async function fetchProfile(pubkey) {
+function collectProfileRelayCandidates(userRelays = {}) {
+  const candidates = [];
+  candidates.push(...normalizeRelayUrls(userRelays));
+
+  const systemInfo = currentSystemInfo();
+  if (Array.isArray(systemInfo?.nostr?.browser_relays)) {
+    candidates.push(...systemInfo.nostr.browser_relays);
+  }
+  if (Array.isArray(systemInfo?.nostr?.service_relays)) {
+    candidates.push(...systemInfo.nostr.service_relays);
+  }
+
+  candidates.push('wss://relay.sharegap.net', 'wss://relay.primal.net', 'wss://nos.lol');
+
+  return Array.from(new Set(candidates.filter((relay) => typeof relay === 'string' && /^wss?:\/\//i.test(relay)))).slice(0, 8);
+}
+
+async function queryKind0OverRelay(relayUrl, pubkey, timeoutMs = 5000) {
+  return new Promise((resolve) => {
+    let settled = false;
+    let latest = null;
+    let socket;
+
+    const finish = (event = null) => {
+      if (settled) return;
+      settled = true;
+      try {
+        if (socket && socket.readyState === WebSocket.OPEN) {
+          socket.send(JSON.stringify(['CLOSE', `profile-${pubkey}`]));
+        }
+      } catch {}
+      try {
+        socket?.close();
+      } catch {}
+      resolve(event);
+    };
+
+    const timer = setTimeout(() => finish(latest), timeoutMs);
+
+    try {
+      socket = new WebSocket(relayUrl);
+    } catch {
+      clearTimeout(timer);
+      finish(null);
+      return;
+    }
+
+    socket.onopen = () => {
+      socket.send(JSON.stringify(['REQ', `profile-${pubkey}`, { kinds: [0], authors: [pubkey], limit: 5 }]));
+    };
+
+    socket.onmessage = (message) => {
+      try {
+        const payload = JSON.parse(message.data);
+        if (payload[0] === 'EVENT' && payload[2]?.pubkey === pubkey && typeof payload[2]?.content === 'string') {
+          if (!latest || Number(payload[2].created_at || 0) > Number(latest.created_at || 0)) {
+            latest = payload[2];
+          }
+        }
+        if (payload[0] === 'EOSE' || payload[0] === 'CLOSED') {
+          clearTimeout(timer);
+          finish(latest);
+        }
+      } catch {
+        clearTimeout(timer);
+        finish(latest);
+      }
+    };
+
+    socket.onerror = () => {
+      clearTimeout(timer);
+      finish(latest);
+    };
+
+    socket.onclose = () => {
+      clearTimeout(timer);
+      finish(latest);
+    };
+  });
+}
+
+async function fetchProfile(pubkey, userRelays = {}) {
   if (!isValidHexPubkey(pubkey)) return null;
 
   try {
@@ -183,20 +264,28 @@ async function fetchProfile(pubkey) {
       import('svelte/store')
     ]);
 
-    // Reuse the app's existing relay singleton — never open new WebSocket connections.
-    // Wait up to 8 s for the singleton to become connected (it may still be bootstrapping).
-    for (let i = 0; i < 40 && !get(nostr.connected); i++) {
+    for (let i = 0; i < 15 && !get(nostr.connected); i++) {
       await new Promise((r) => setTimeout(r, 200));
     }
 
-    if (!get(nostr.connected)) {
-      console.warn('[auth] fetchProfile: relay singleton not connected, skipping kind-0 fetch');
-      return null;
+    if (get(nostr.connected)) {
+      const events = await nostr.queryUntilEose([{ kinds: [0], authors: [pubkey], limit: 10 }]);
+      const latest = [...events]
+        .filter((e) => e?.pubkey === pubkey && typeof e.content === 'string')
+        .sort((a, b) => Number(b?.created_at || 0) - Number(a?.created_at || 0))[0];
+
+      if (latest?.content) {
+        return normalizeProfileMetadata(JSON.parse(latest.content));
+      }
     }
 
-    const events = await nostr.queryUntilEose([{ kinds: [0], authors: [pubkey], limit: 10 }]);
-    const latest = [...events]
-      .filter((e) => e?.pubkey === pubkey && typeof e.content === 'string')
+    const relayCandidates = collectProfileRelayCandidates(userRelays);
+    if (relayCandidates.length === 0) return null;
+
+    const results = await Promise.allSettled(relayCandidates.map((relay) => queryKind0OverRelay(relay, pubkey)));
+    const latest = results
+      .filter((result) => result.status === 'fulfilled' && result.value?.content)
+      .map((result) => result.value)
       .sort((a, b) => Number(b?.created_at || 0) - Number(a?.created_at || 0))[0];
 
     if (!latest?.content) return null;
@@ -363,7 +452,7 @@ export async function initializeAuth() {
           } catch (backendError) {
             console.warn('Backend auth provider initialization failed:', backendError.message);
           }
-          const profile = await fetchProfile(persisted.pubkey);
+          const profile = await fetchProfile(persisted.pubkey, persisted.relays);
           if (profile) {
             updateAuthState({ profile });
             persistSession({
@@ -433,7 +522,7 @@ export async function login() {
       } catch (backendError) {
         console.warn('Backend authentication failed:', backendError.message);
       }
-      profile = await fetchProfile(pubkey);
+      profile = await fetchProfile(pubkey, relays);
       if (profile) {
         updateAuthState({ profile });
       }
@@ -494,7 +583,7 @@ export async function loginWithNostrConnect(uri) {
       } catch (backendError) {
         console.warn('Backend authentication failed:', backendError.message);
       }
-      profile = await fetchProfile(connected.pubkey);
+      profile = await fetchProfile(connected.pubkey, connected.relays);
       if (profile) {
         updateAuthState({ profile });
       }
