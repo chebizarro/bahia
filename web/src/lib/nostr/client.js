@@ -340,8 +340,11 @@ export class NostrClient {
     }
   }
 
-  // Connect to all relays
-  async connect(relays = this.relays) {
+  // Connect to all relays.
+  // force=true: full reset (user-initiated reconnect) — clears failed/mid-retry state.
+  // force=false (default): automatic/background call — skips relays already in a retry
+  //   sequence so we don't interrupt backoff or restart exhausted relays.
+  async connect(relays = this.relays, { force = false } = {}) {
     this.manuallyDisconnected = false;
     this.relays = Array.isArray(relays) ? [...relays] : [];
     console.log(`[nostr] Connecting to ${this.relays.length} relay(s):`, this.relays);
@@ -368,25 +371,31 @@ export class NostrClient {
       this.reconnectAttempts.delete(url);
     });
 
-    // Preserve 'failed' status so exhausted relays don't get hammered on every reconnect
+    // Update connection status, preserving in-progress retry state on automatic calls.
     this.connectionStatus.update((prevStatus) =>
       Object.fromEntries(
         this.relays.map((url) => {
-          if (prevStatus[url] === 'failed') return [url, 'failed'];
+          if (!force) {
+            // Keep 'failed' relays failed — they've exhausted all attempts.
+            if (prevStatus[url] === 'failed') return [url, 'failed'];
+            // Keep mid-retry relays as-is — don't interrupt the backoff sequence.
+            if ((this.reconnectAttempts.get(url) || 0) > 0) return [url, prevStatus[url] || 'connecting'];
+          }
           const currentState = relayConnectionStateForSocket(this.sockets.get(url));
           return [url, currentState === 'connected' ? 'connected' : 'connecting'];
         })
       )
     );
-    
-    // Reset reconnect attempts only for relays that haven't permanently failed
+
+    // Reset attempt counters: force=true resets everything; otherwise only fresh relays.
     const currentStatus = get(this.connectionStatus);
     this.relays.forEach(url => {
-      if (currentStatus[url] !== 'failed') {
+      const attempts = this.reconnectAttempts.get(url) || 0;
+      if (force || (attempts === 0 && currentStatus[url] !== 'failed')) {
         this.reconnectAttempts.set(url, 0);
       }
     });
-    const promises = this.relays.map(url => this.connectRelay(url));
+    const promises = this.relays.map(url => this.connectRelay(url, { force }));
     await Promise.allSettled(promises);
     
     const summary = summarizeRelayConnections(this.relays, get(this.connectionStatus));
@@ -396,13 +405,22 @@ export class NostrClient {
     return summary;
   }
 
-  // Connect to a single relay
-  connectRelay(url) {
+  // Connect to a single relay.
+  // force=true: bypass failed/mid-retry guards (used by user-initiated reconnects).
+  connectRelay(url, { force = false } = {}) {
     return new Promise((resolve) => {
-      // Skip relays that have permanently failed — don't hammer them
-      if (get(this.connectionStatus)[url] === 'failed') {
-        resolve();
-        return;
+      const status = get(this.connectionStatus)[url];
+      const attempts = this.reconnectAttempts.get(url) || 0;
+
+      if (!force) {
+        // Skip relays that have permanently failed.
+        if (status === 'failed') { resolve(); return; }
+        // Skip relays mid-retry — scheduleReconnect will call us when the backoff fires.
+        if (attempts > 0) { resolve(); return; }
+      } else if (status === 'failed') {
+        // Force reconnect on a previously-failed relay: clear its failed state.
+        this.reconnectAttempts.set(url, 0);
+        this.connectionStatus.update(s => ({ ...s, [url]: 'connecting' }));
       }
 
       // Clear any pending reconnect timer
@@ -495,14 +513,14 @@ export class NostrClient {
     this.reconnectTimers.set(url, timer);
   }
 
-  // Reset and retry connection to a specific relay
+  // Reset and retry connection to a specific relay (always a force reconnect).
   retryRelay(url) {
     this.reconnectAttempts.set(url, 0);
     if (this.reconnectTimers.has(url)) {
       clearTimeout(this.reconnectTimers.get(url));
       this.reconnectTimers.delete(url);
     }
-    return this.connectRelay(url);
+    return this.connectRelay(url, { force: true });
   }
 
   // Update connected store

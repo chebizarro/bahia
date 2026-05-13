@@ -78,7 +78,7 @@
     try {
       saveRelayConfig(relays);
       nostr.setRelays(relays, true);
-      const summary = await nostr.connect(relays);
+      const summary = await nostr.connect(relays, { force: true });
       if (summary.total === 0) {
         toast.warning('Relay configuration saved with no relays configured');
       } else if (summary.connected === summary.total) {
