@@ -125,8 +125,8 @@ export async function discoverSystemInfo({ force = false } = {}) {
   discoveryPromise = (async () => {
     try {
       const seed = getBootstrapSeed();
-      if (!seed?.relay_urls?.length) throw new Error('Missing Bahia bootstrap relay seed');
-      if (!seed?.service_pubkeys?.length) throw new Error('Missing Bahia trusted service pubkey seed');
+      if (!seed?.relay_urls?.length) throw new Error('No relay URLs configured. Set PUBLIC_BAHIA_BOOTSTRAP_RELAYS or inject window.__BAHIA_BOOTSTRAP__ before deploying.');
+      if (!seed?.service_pubkeys?.length) throw new Error('No trusted service pubkeys configured. Set PUBLIC_BAHIA_SERVICE_PUBKEYS before deploying.');
 
       discoveryState.seed = seed;
       const relays = Array.from(new Set(seed.relay_urls.map(normalizeRelayUrl).filter(Boolean)));

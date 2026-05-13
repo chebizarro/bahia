@@ -98,7 +98,7 @@ describe('Nostr system discovery store', () => {
   it('fails closed when the bootstrap seed is absent', async () => {
     delete window.__BAHIA_BOOTSTRAP__;
 
-    await expect(store.discoverSystemInfo({ force: true })).rejects.toThrow('Missing Bahia bootstrap relay seed');
+    await expect(store.discoverSystemInfo({ force: true })).rejects.toThrow('No relay URLs configured');
     expect(nostrMock.queryUntilEose).not.toHaveBeenCalled();
   });
 
