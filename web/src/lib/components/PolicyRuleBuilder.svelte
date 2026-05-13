@@ -231,6 +231,7 @@
             {/if}
           </div>
           <button 
+            type="button"
             class="remove-btn" 
             onclick={() => removeRule(index)}
             {disabled}
@@ -244,19 +245,19 @@
   </div>
 
   <!-- Add Rule Button -->
-  <button class="add-rule-btn" onclick={openAddModal} {disabled}>
+  <button type="button" class="add-rule-btn" onclick={openAddModal} {disabled}>
     + Add Rule
   </button>
 
   <!-- Add Rule Modal -->
   {#if showAddModal}
-    <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+    <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
     <div class="modal-backdrop" onclick={closeAddModal}>
-      <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+      <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
       <div class="modal" onclick={(e) => e.stopPropagation()}>
         <div class="modal-header">
           <h3>Add Policy Rule</h3>
-          <button class="close-btn" onclick={closeAddModal}>✕</button>
+          <button type="button" class="close-btn" onclick={closeAddModal}>✕</button>
         </div>
         
         <div class="modal-content">
@@ -266,6 +267,7 @@
             <div class="category-list">
               {#each ruleCategories as category}
                 <button 
+                  type="button"
                   class="category-btn"
                   onclick={() => selectCategory(category.name)}
                 >
@@ -276,13 +278,14 @@
             </div>
           {:else if !selectedRuleType}
             <!-- Rule Type Selection -->
-            <button class="back-btn" onclick={() => selectedCategory = null}>
+            <button type="button" class="back-btn" onclick={() => selectedCategory = null}>
               ← Back to categories
             </button>
             <p class="step-hint">Select a rule from {selectedCategory}:</p>
             <div class="rule-type-list">
               {#each currentCategoryRules as ruleType}
                 <button 
+                  type="button"
                   class="rule-type-btn"
                   onclick={() => selectRuleType(ruleType.type)}
                 >
@@ -293,7 +296,7 @@
             </div>
           {:else}
             <!-- Parameter Configuration -->
-            <button class="back-btn" onclick={() => selectedRuleType = null}>
+            <button type="button" class="back-btn" onclick={() => selectedRuleType = null}>
               ← Back to rules
             </button>
             <div class="param-config">
@@ -356,7 +359,7 @@
                 <p class="no-params">This rule has no configurable parameters.</p>
               {/if}
               
-              <button class="add-btn" onclick={addRule}>
+              <button type="button" class="add-btn" onclick={addRule}>
                 Add Rule
               </button>
             </div>

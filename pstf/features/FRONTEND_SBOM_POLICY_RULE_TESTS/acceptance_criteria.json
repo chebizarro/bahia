@@ -1,0 +1,31 @@
+{
+  "feature_id": "FRONTEND_SBOM_POLICY_RULE_TESTS",
+  "source_issue": "bahia-9v3y",
+  "acceptance_criteria": [
+    {
+      "id": "AC1",
+      "description": "SBOMDetails renders loading, empty, attestation, NTIA compliance, vulnerability, package-table, and sparse-data states without throwing.",
+      "status": "verified"
+    },
+    {
+      "id": "AC2",
+      "description": "PolicyRuleBuilder renders existing rules and disabled controls correctly.",
+      "status": "verified"
+    },
+    {
+      "id": "AC3",
+      "description": "PolicyRuleBuilder supports modal category/rule selection and creates rules with no params, multiselect params, numeric params, select params, and text-list params.",
+      "status": "verified"
+    },
+    {
+      "id": "AC4",
+      "description": "PolicyRuleBuilder supports removing configured rules and closing the add modal without creating a rule.",
+      "status": "verified"
+    },
+    {
+      "id": "AC5",
+      "description": "Vitest is configured to discover both existing JavaScript unit specs and the new TypeScript unit specs.",
+      "status": "verified"
+    }
+  ]
+}

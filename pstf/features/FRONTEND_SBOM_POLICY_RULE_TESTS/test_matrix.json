@@ -1,0 +1,7 @@
+{
+  "feature_id": "FRONTEND_SBOM_POLICY_RULE_TESTS",
+  "tests": [
+    { "test": "SBOMDetails.test.ts", "acceptance_criteria": ["AC1", "AC5"], "status": "passed" },
+    { "test": "PolicyRuleBuilder.test.ts", "acceptance_criteria": ["AC2", "AC3", "AC4", "AC5"], "status": "passed" }
+  ]
+}
