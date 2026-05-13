@@ -1,6 +1,6 @@
 import { authState, decryptWithAuth, encryptWithAuth, signWithAuth } from '$lib/stores/auth.js';
 import { currentSystemInfo } from '$lib/stores/system.svelte.js';
-import { NostrClient, getTagValues } from './client.js';
+import { NostrClient, getTagValues, nostr } from './client.js';
 
 export const ENCRYPTED_REQUEST_ROUTING_TAG = 'encrypted';
 export const ENCRYPTED_REQUEST_WIRE_VERSION = 'bahia-encrypted-v1';
@@ -63,7 +63,15 @@ function openRelayUrls(client) {
 }
 
 export function encryptedRelayUrlsFromSystemInfo(systemInfo = currentSystemInfo()) {
-  return normalizeRelays(systemInfo?.nostr?.browser_encrypted_request_relays || []);
+  // Prefer server-advertised relay list; fall back to the relays configured in Settings
+  const serverRelays = normalizeRelays(systemInfo?.nostr?.browser_encrypted_request_relays || []);
+  if (serverRelays.length > 0) return serverRelays;
+  try {
+    const configured = typeof nostr?.getRelays === 'function' ? nostr.getRelays() : [];
+    return normalizeRelays(Array.isArray(configured) ? configured : []);
+  } catch {
+    return [];
+  }
 }
 
 export function servicePubkeyFromSystemInfo(systemInfo = currentSystemInfo()) {
@@ -84,7 +92,7 @@ export class EncryptedControlplaneTransport {
 
   async connect() {
     if (this.relays.length === 0) {
-      throw new Error('No relay URLs are advertised for Bahia encrypted Nostr requests');
+      throw new Error('No relay URLs configured for encrypted Nostr events. Add relay URLs in Settings.');
     }
     if (!this.connected) {
       await this.client.connect(this.relays);
@@ -95,10 +103,10 @@ export class EncryptedControlplaneTransport {
 
   async buildEncryptedRequestEvent({ operation, payload = {}, tags = [], kind = ENCRYPTED_REQUEST_KIND, created_at = Math.floor(Date.now() / 1000) } = {}) {
     if (authState.status !== 'authenticated' || !authState.pubkey) {
-      throw new Error('Nostr authentication is required for encrypted Nostr requests');
+      throw new Error('Nostr authentication is required for encrypted Nostr events');
     }
     if (typeof operation !== 'string' || !operation.trim()) {
-      throw new Error('Encrypted Nostr request operation is required');
+      throw new Error('Encrypted Nostr event operation is required');
     }
     ensureHexPubkey(this.servicePubkey, 'servicePubkey');
 
@@ -147,7 +155,7 @@ export class EncryptedControlplaneTransport {
   awaitEncryptedResult({ requestEventId, resultKinds = [ENCRYPTED_RESULT_KIND], signal, servicePubkey = this.servicePubkey } = {}) {
     if (!requestEventId) return Promise.reject(new Error('requestEventId is required'));
     if (!Array.isArray(resultKinds) || resultKinds.length === 0) return Promise.reject(new Error('resultKinds are required'));
-    if (authState.status !== 'authenticated' || !authState.pubkey) return Promise.reject(new Error('Nostr authentication is required for encrypted Nostr requests'));
+    if (authState.status !== 'authenticated' || !authState.pubkey) return Promise.reject(new Error('Nostr authentication is required for encrypted Nostr events'));
     ensureHexPubkey(servicePubkey, 'servicePubkey');
 
     return new Promise((resolve, reject) => {

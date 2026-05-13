@@ -14,10 +14,13 @@
   import {
     environments,
     states as allStates,
+    services,
+    workers,
     deploymentIntents,
     loadEnvironments,
     loadStates,
-    loadDeploymentIntents
+    loadDeploymentIntents,
+    loadWorkers
   } from '$lib/stores';
   import { updateEnvironment, deleteEnvironment } from '$lib/stores/public-controlplane.svelte.js';
   import { environmentFormSchema, parseRuntimeConfig, validateForm } from '$lib/validation/forms.js';
@@ -27,6 +30,26 @@
   let deploymentHistory = $state([]);
   let loading = $state(true);
   let error = $state(null);
+
+  // Service detail dialog
+  let selectedService = $state(null);
+  let serviceDialogOpen = $state(false);
+
+  function openServiceDialog(service) {
+    selectedService = service;
+    serviceDialogOpen = true;
+  }
+  function closeServiceDialog() {
+    serviceDialogOpen = false;
+    selectedService = null;
+  }
+
+  // Lookup maps derived from stores
+  let serviceById = $derived(Object.fromEntries(services.map(s => [s.id, s])));
+  let workerOptions = $derived([
+    { value: '', label: 'Any worker' },
+    ...workers.map(w => ({ value: w.pubkey, label: w.name || w.pubkey?.slice(0, 16) + '...' }))
+  ]);
 
   let environmentId = $derived(page.params.id);
 
@@ -67,7 +90,7 @@
     deploymentHistory = [];
 
     try {
-      await Promise.all([loadEnvironments(), loadStates(), loadDeploymentIntents()]);
+      await Promise.all([loadEnvironments(), loadStates(), loadDeploymentIntents(), loadWorkers()]);
       environment = environments.find((candidate) => candidate.id === id) || null;
       if (!environment) {
         throw new Error('Environment not found');
@@ -106,7 +129,16 @@
   );
 
   let stateColumns = $derived([
-    { key: 'service_id', label: 'Service', render: (r) => `<code>${r.service_id?.slice(0, 12)}...</code>` },
+    {
+      key: 'service_name',
+      label: 'Name',
+      render: (r) => {
+        const svc = serviceById[r.service_id];
+        const name = svc?.name || svc?.display_name;
+        if (name) return `<span class="svc-name-link" data-id="${r.service_id}" title="${r.service_id}">${name}</span>`;
+        return `<code title="${r.service_id || ''}">${(r.service_id || '').slice(0, 12)}...</code>`;
+      }
+    },
     { key: 'artifact_id', label: 'Artifact', render: (r) => `<code>${r.artifact_id?.slice(0, 12)}...</code>` },
     { key: 'status', label: 'Status' },
     { key: 'drift_status', label: 'Drift' },
@@ -250,7 +282,14 @@
     <section>
       <h2>Deployed Services ({states.length})</h2>
       {#if states.length > 0}
-        <Table columns={stateColumns} data={states} />
+        <Table
+          columns={stateColumns}
+          data={states}
+          onRowClick={(row) => {
+            const svc = serviceById[row.service_id];
+            if (svc) openServiceDialog(svc);
+          }}
+        />
       {:else}
         <EmptyState
           icon="📦"
@@ -275,6 +314,22 @@
   {/if}
 </div>
 
+<!-- Service Detail Dialog -->
+<Modal bind:open={serviceDialogOpen} title="Service Detail" onClose={closeServiceDialog}>
+  {#if selectedService}
+    <div class="svc-detail">
+      <div class="svc-row"><span class="svc-label">Name</span><span>{selectedService.name || selectedService.display_name || '-'}</span></div>
+      <div class="svc-row"><span class="svc-label">ID</span><code class="svc-id">{selectedService.id}</code></div>
+      {#if selectedService.description}<div class="svc-row"><span class="svc-label">Description</span><span>{selectedService.description}</span></div>{/if}
+      {#if selectedService.status}<div class="svc-row"><span class="svc-label">Status</span><span>{selectedService.status}</span></div>{/if}
+      {#if selectedService.image}<div class="svc-row"><span class="svc-label">Image</span><code>{selectedService.image}</code></div>{/if}
+      <div class="svc-actions">
+        <a href="/services/{selectedService.id}" class="svc-link" onclick={closeServiceDialog}>Open Service Page →</a>
+      </div>
+    </div>
+  {/if}
+</Modal>
+
 <!-- Edit Modal -->
 <Modal bind:open={editOpen} title="Edit Environment" onClose={closeEditModal}>
   <form onsubmit={(event) => { event.preventDefault(); handleEdit(); }} class="edit-form">
@@ -290,13 +345,22 @@
     </div>
 
     <div class="form-field">
-      <label for="edit-worker-selector">Loom Worker Selector</label>
-      <Input
-        id="edit-worker-selector"
-        bind:value={editForm.loom_worker_selector}
-        placeholder="region=us-west"
-        disabled={editing}
-      />
+      <label for="edit-worker-selector">Loom Worker</label>
+      {#if workerOptions.length > 1}
+        <Select
+          id="edit-worker-selector"
+          bind:value={editForm.loom_worker_selector}
+          options={workerOptions}
+          disabled={editing}
+        />
+      {:else}
+        <Input
+          id="edit-worker-selector"
+          bind:value={editForm.loom_worker_selector}
+          placeholder="Worker pubkey or selector"
+          disabled={editing}
+        />
+      {/if}
     </div>
 
     <div class="form-field">
@@ -436,6 +500,44 @@
     text-align: center;
   }
   .error { color: var(--error); }
+
+  :global(.svc-name-link) {
+    color: var(--primary);
+    cursor: pointer;
+    text-decoration: underline;
+    text-decoration-style: dotted;
+  }
+  :global(.svc-name-link:hover) {
+    text-decoration-style: solid;
+  }
+
+  .svc-detail {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+  }
+  .svc-row {
+    display: flex;
+    gap: 1rem;
+    align-items: flex-start;
+    font-size: 0.875rem;
+  }
+  .svc-label {
+    min-width: 90px;
+    color: var(--text-muted);
+    font-weight: 500;
+  }
+  .svc-id {
+    font-size: 0.75rem;
+    word-break: break-all;
+  }
+  .svc-actions {
+    margin-top: 0.5rem;
+  }
+  .svc-link {
+    color: var(--primary);
+    font-size: 0.875rem;
+  }
 
   .edit-form {
     display: flex;

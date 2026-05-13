@@ -7,6 +7,8 @@
   import { toast } from '$lib/components/toast.js';
   import { authState, loginWithNostrConnect, canUseNostrConnectUri } from '$lib/stores/auth.js';
   import { systemInfo as sharedSystemInfo, loadSystemInfo as loadSharedSystemInfo } from '$lib/stores';
+  import QRCode from 'qrcode';
+  import jsQR from 'jsqr';
 
   // Shared public Nostr discovery from app bootstrap
   const systemInfo = $derived(sharedSystemInfo.data);
@@ -35,23 +37,25 @@
   });
 
 
-  function addRelay() {
+  async function addRelay() {
     const url = relayInput.trim();
     if (!url) return;
-    
+
     // Validate URL format
     if (!url.startsWith('wss://') && !url.startsWith('ws://')) {
       toast.error('Relay URL must start with wss:// or ws://');
       return;
     }
-    
+
     if (relays.includes(url)) {
       toast.warning('Relay already in list');
       return;
     }
-    
+
     relays = [...relays, url];
     relayInput = '';
+    // Auto-save and reconnect
+    await saveRelays();
   }
 
   function removeRelay(url) {
@@ -119,6 +123,64 @@
 
   let nostrConnectUri = $state('');
   let nostrConnectLoading = $state(false);
+  let nostrConnectQrDataUrl = $state('');
+  let scanning = $state(false);
+  let scanError = $state(null);
+  let videoEl = $state(null);
+  let canvasEl = $state(null);
+  let animFrameId = null;
+  let mediaStream = null;
+
+  $effect(() => {
+    const uri = nostrConnectUri.trim();
+    if (uri) {
+      QRCode.toDataURL(uri, { width: 200, margin: 1 })
+        .then(url => { nostrConnectQrDataUrl = url; })
+        .catch(() => { nostrConnectQrDataUrl = ''; });
+    } else {
+      nostrConnectQrDataUrl = '';
+    }
+  });
+
+  async function startQrScanner() {
+    scanning = true;
+    scanError = null;
+    try {
+      mediaStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+      videoEl.srcObject = mediaStream;
+      await videoEl.play();
+      scanFrame();
+    } catch (e) {
+      scanError = e.message || 'Camera access denied';
+      scanning = false;
+    }
+  }
+
+  function scanFrame() {
+    if (!scanning || !videoEl || !canvasEl) return;
+    if (videoEl.readyState < videoEl.HAVE_ENOUGH_DATA) {
+      animFrameId = requestAnimationFrame(scanFrame);
+      return;
+    }
+    const ctx = canvasEl.getContext('2d');
+    canvasEl.width = videoEl.videoWidth;
+    canvasEl.height = videoEl.videoHeight;
+    ctx.drawImage(videoEl, 0, 0);
+    const img = ctx.getImageData(0, 0, canvasEl.width, canvasEl.height);
+    const code = jsQR(img.data, img.width, img.height);
+    if (code?.data) {
+      nostrConnectUri = code.data;
+      stopQrScanner();
+      return;
+    }
+    animFrameId = requestAnimationFrame(scanFrame);
+  }
+
+  function stopQrScanner() {
+    scanning = false;
+    if (animFrameId) { cancelAnimationFrame(animFrameId); animFrameId = null; }
+    if (mediaStream) { mediaStream.getTracks().forEach(t => t.stop()); mediaStream = null; }
+  }
 
   async function connectNostrConnect() {
     const uri = nostrConnectUri.trim();
@@ -203,7 +265,8 @@
     <section class="settings-section">
       <h2>🔐 Nostr Connect (NIP-46)</h2>
       <p class="section-description">
-        Paste a <code>nostrconnect://</code> URI to use a remote signer session.
+        This connects a <strong>remote Nostr signer</strong> for use by the Bahia service itself — not your user account.
+        Generate a <code>nostrconnect://</code> URI on your signer and paste or scan it here.
       </p>
 
       <div class="relay-add">
@@ -214,8 +277,32 @@
         />
         <LoadingButton variant="primary" loading={nostrConnectLoading} onclick={connectNostrConnect}>Connect</LoadingButton>
       </div>
+
+      <!-- QR display: show when URI is entered -->
+      {#if nostrConnectQrDataUrl}
+        <div class="qr-section">
+          <p class="section-description">Scan this QR code with your signer app:</p>
+          <img class="qr-image" src={nostrConnectQrDataUrl} alt="Nostr Connect QR code" />
+        </div>
+      {/if}
+
+      <!-- QR scanner -->
+      <div class="qr-scanner-section">
+        {#if !scanning}
+          <button class="btn-scan" onclick={startQrScanner}>📷 Scan QR Code</button>
+        {:else}
+          <div class="scanner-wrap">
+            <!-- svelte-ignore a11y_media_has_caption -->
+            <video bind:this={videoEl} class="scanner-video" playsinline></video>
+            <canvas bind:this={canvasEl} class="scanner-canvas" aria-hidden="true"></canvas>
+            <button class="btn-scan-stop" onclick={stopQrScanner}>✕ Stop scanning</button>
+          </div>
+        {/if}
+        {#if scanError}<p class="scan-error">{scanError}</p>{/if}
+      </div>
+
       <p class="section-description">
-        Provider status: {authState.nip46Available ? 'available' : 'not detected'}
+        Signer status: {authState.nip46Available ? '✓ detected' : 'not detected'}
       </p>
     </section>
 
@@ -690,4 +777,76 @@
   .monospace {
     font-family: monospace;
   }
+
+  /* QR styles */
+  .qr-section {
+    margin: 0.75rem 0;
+  }
+
+  .qr-image {
+    display: block;
+    width: 180px;
+    height: 180px;
+    border-radius: 6px;
+    border: 1px solid var(--border-color);
+    background: #fff;
+    padding: 4px;
+  }
+
+  .qr-scanner-section {
+    margin: 0.75rem 0;
+  }
+
+  .btn-scan {
+    background: var(--card-bg);
+    border: 1px solid var(--border-color);
+    color: var(--text-primary);
+    padding: 0.5rem 1rem;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 0.875rem;
+    transition: background 0.15s;
+  }
+
+  .btn-scan:hover {
+    background: var(--hover-bg);
+  }
+
+  .btn-scan-stop {
+    background: var(--error);
+    color: #fff;
+    border: none;
+    padding: 0.375rem 0.75rem;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 0.875rem;
+    margin-top: 0.5rem;
+    display: block;
+  }
+
+  .scanner-wrap {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.5rem;
+  }
+
+  .scanner-video {
+    width: 100%;
+    max-width: 320px;
+    border-radius: 6px;
+    border: 1px solid var(--border-color);
+    background: #000;
+  }
+
+  .scanner-canvas {
+    display: none;
+  }
+
+  .scan-error {
+    color: var(--error);
+    font-size: 0.875rem;
+    margin-top: 0.25rem;
+  }
 </style>
+

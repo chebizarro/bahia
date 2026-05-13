@@ -68,13 +68,18 @@ export function authPresentation(authState = {}, authenticated = false) {
   }
 
   if (authenticated) {
+    const profile = authState.profile || null;
     return {
       mode: 'authenticated',
       pubkey: authState.pubkey || '',
       truncatedPubkey: truncatePubkey(authState.pubkey || ''),
       backendAuthenticated: Boolean(authState.backendAuthenticated),
       showWarning: Boolean(!authState.backendAuthenticated && authState.error),
-      warning: authState.error || ''
+      warning: authState.error || '',
+      profile,
+      displayLabel: profile?.displayName || profile?.name || truncatePubkey(authState.pubkey || ''),
+      nip05: profile?.nip05 || '',
+      avatarUrl: profile?.picture || ''
     };
   }
 

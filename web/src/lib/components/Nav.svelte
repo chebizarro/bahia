@@ -109,14 +109,22 @@
           </span>
         {:else if authUi.mode === 'authenticated'}
           <div class="user-info">
-            <span class="user-pubkey" title={authUi.pubkey}>
-              {#if authUi.backendAuthenticated}
-                ✅
+            <div class="user-profile" title="{authUi.pubkey}\n{authUi.nip05 ? authUi.nip05 : ''}">
+              {#if authUi.avatarUrl}
+                <img
+                  class="profile-avatar"
+                  src={authUi.avatarUrl}
+                  alt={authUi.displayLabel}
+                  onerror={(e) => e.currentTarget.style.display='none'}
+                />
               {:else}
-                🔑
+                <span class="profile-icon">{authUi.backendAuthenticated ? '✅' : '🔑'}</span>
               {/if}
-              {authUi.truncatedPubkey}
-            </span>
+              <span class="profile-name">{authUi.displayLabel}</span>
+              {#if authUi.nip05}
+                <span class="profile-nip05">{authUi.nip05}</span>
+              {/if}
+            </div>
             {#if authUi.showWarning}
               <span class="auth-warning" title={authUi.warning}>⚠️</span>
             {/if}
@@ -330,14 +338,46 @@
     justify-content: flex-end;
   }
 
-  .user-pubkey {
-    font-family: monospace;
-    font-size: 0.8rem;
-    color: var(--text-muted);
+  .user-profile {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
     background: var(--card-bg);
-    padding: 0.25rem 0.5rem;
-    border-radius: 4px;
+    padding: 0.25rem 0.625rem;
+    border-radius: 6px;
     border: 1px solid var(--border-color);
+    cursor: default;
+    max-width: min(260px, 40vw);
+  }
+
+  .profile-avatar {
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    object-fit: cover;
+    flex-shrink: 0;
+  }
+
+  .profile-icon {
+    font-size: 0.95rem;
+    flex-shrink: 0;
+  }
+
+  .profile-name {
+    font-size: 0.8rem;
+    font-weight: 500;
+    color: var(--text-primary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .profile-nip05 {
+    font-size: 0.7rem;
+    color: var(--text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .login-btn {
@@ -472,7 +512,7 @@
       height: 51px;
     }
 
-    .user-pubkey {
+    .profile-nip05 {
       display: none;
     }
   }

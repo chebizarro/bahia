@@ -57,13 +57,17 @@ describe('nav model helpers', () => {
       pubkey,
       backendAuthenticated: false,
       error: 'backend unavailable'
-    }, true)).toEqual({
+    }, true)).toMatchObject({
       mode: 'authenticated',
       pubkey,
       truncatedPubkey: 'ffffffff...ffff',
       backendAuthenticated: false,
       showWarning: true,
-      warning: 'backend unavailable'
+      warning: 'backend unavailable',
+      profile: null,
+      displayLabel: 'ffffffff...ffff',
+      nip05: '',
+      avatarUrl: ''
     });
   });
 

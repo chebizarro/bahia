@@ -7,6 +7,7 @@
   import LoadingButton from '$lib/components/LoadingButton.svelte';
   import EmptyState from '$lib/components/EmptyState.svelte';
   import { artifacts, services, loadArtifacts, loadServices } from '$lib/stores';
+  import { toast } from '$lib/components/toast.js';
   import { verifyArtifactSignatures } from '$lib/stores/artifact-signatures.svelte.js';
 
   let artifact = $state(null);
@@ -126,6 +127,35 @@
     }
     return digest.slice(0, 16) + '...';
   }
+
+  // Middle-truncate: sha256:abc123…xyz789
+  function formatDigestMiddle(digest) {
+    if (!digest) return '-';
+    const parts = digest.split(':');
+    if (parts.length === 2) {
+      const hash = parts[1];
+      if (hash.length > 20) return `${parts[0]}:${hash.slice(0, 8)}\u2026${hash.slice(-8)}`;
+      return digest;
+    }
+    if (digest.length > 20) return `${digest.slice(0, 10)}\u2026${digest.slice(-8)}`;
+    return digest;
+  }
+
+  async function copyDigest(digest) {
+    try {
+      await navigator.clipboard.writeText(digest);
+      toast.success('Digest copied to clipboard');
+    } catch {
+      toast.error('Failed to copy digest');
+    }
+  }
+
+  function artifactTypeLabel(artifact) {
+    const t = artifact?.artifact_type || artifact?.type || artifact?.kind;
+    if (!t) return 'Container Image';
+    // Prettify snake_case / kebab-case
+    return String(t).replace(/[_-]/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+  }
 </script>
 
 <div class="page">
@@ -182,9 +212,27 @@
         <!-- Overview Tab -->
         <div class="overview-grid">
           <Card title="Name" value={artifact.name || artifact.image_tag || '-'} />
+          <Card title="Type" value={artifactTypeLabel(artifact)} />
           <Card title="Version" value={artifact.version || artifact.image_tag || '-'} />
-          <Card title="Digest" value={formatDigest(artifact.digest || artifact.image_digest)} />
           <Card title="Size" value={formatBytes(artifact.size_bytes)} />
+          <!-- Digest card: small font, middle-truncated, tooltip + copy on click -->
+          {#if artifact.digest || artifact.image_digest}
+            {@const fullDigest = artifact.digest || artifact.image_digest}
+            <div class="card digest-card">
+              <div class="card-label">Digest</div>
+              <button
+                class="digest-value"
+                title={fullDigest}
+                onclick={() => copyDigest(fullDigest)}
+                aria-label="Copy digest to clipboard"
+              >
+                <code class="digest-text">{formatDigestMiddle(fullDigest)}</code>
+                <span class="digest-copy-hint" aria-hidden="true">📋</span>
+              </button>
+            </div>
+          {:else}
+            <Card title="Digest" value="-" />
+          {/if}
         </div>
 
         <section class="detail-section">
@@ -393,9 +441,56 @@
   /* Overview Tab */
   .overview-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
     gap: 1rem;
     margin-bottom: 2rem;
+  }
+
+  .digest-card {
+    background: var(--card-bg, #1a1a2e);
+    border-radius: 8px;
+    padding: 1.5rem;
+    border: 1px solid var(--border-color, #2a2a4a);
+  }
+
+  .card-label {
+    font-size: 0.875rem;
+    color: var(--text-muted, #888);
+    margin-bottom: 0.5rem;
+  }
+
+  .digest-value {
+    display: flex;
+    align-items: center;
+    gap: 0.375rem;
+    background: none;
+    border: none;
+    padding: 0;
+    cursor: pointer;
+    text-align: left;
+    width: 100%;
+  }
+
+  .digest-value:hover .digest-copy-hint {
+    opacity: 1;
+  }
+
+  .digest-text {
+    font-family: monospace;
+    font-size: 0.7rem;
+    color: var(--text-primary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    flex: 1;
+    min-width: 0;
+  }
+
+  .digest-copy-hint {
+    font-size: 0.75rem;
+    flex-shrink: 0;
+    opacity: 0.4;
+    transition: opacity 0.15s;
   }
 
   .detail-section {

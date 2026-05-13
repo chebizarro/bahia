@@ -30,7 +30,7 @@ async function ensureEncryptedPaymentHistoryRequests() {
     info = await loadSystemInfo();
   }
   if (!encryptedRequestsAvailable(info)) {
-    throw new Error('Encrypted Nostr requests are not available. Configure relay URLs for encrypted Nostr requests (`nostr.browser_encrypted_request_relays`) and a Bahia service pubkey before loading payment history.');
+    throw new Error('Encrypted Nostr events are not available. Ensure relay URLs are configured in Settings and a Bahia service pubkey is advertised before loading payment history.');
   }
   if (authState.status === 'unknown' || authState.status === 'checking') {
     await initializeAuth();
