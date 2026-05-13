@@ -174,38 +174,33 @@ function normalizeRelayUrls(relays = {}) {
     .map(([url]) => url);
 }
 
-// Well-known Nostr profile-cache relays to try when user relays don't have kind-0
-const PROFILE_FALLBACK_RELAYS = [
-  'wss://purplepag.es',
-  'wss://relay.nostr.band',
-  'wss://relay.damus.io'
-];
-
-async function fetchProfile(pubkey, relays = {}) {
+async function fetchProfile(pubkey) {
   if (!isValidHexPubkey(pubkey)) return null;
 
   try {
-    const { NostrClient, nostr } = await import('$lib/nostr/client.js');
+    const [{ nostr }, { get }] = await Promise.all([
+      import('$lib/nostr/client.js'),
+      import('svelte/store')
+    ]);
 
-    // Combine: user's NIP-07 relays + app-configured relays + well-known profile caches
-    const userRelayUrls = normalizeRelayUrls(relays);
-    const appRelayUrls = typeof nostr?.getRelays === 'function' ? nostr.getRelays() : [];
-    const allRelayUrls = [...new Set([...userRelayUrls, ...appRelayUrls, ...PROFILE_FALLBACK_RELAYS])];
-
-    const client = new NostrClient({ relays: allRelayUrls });
-
-    try {
-      await client.connect(allRelayUrls);
-      const events = await client.queryUntilEose([{ kinds: [0], authors: [pubkey], limit: 10 }]);
-      const latest = [...events]
-        .filter((event) => event?.pubkey === pubkey && typeof event.content === 'string')
-        .sort((left, right) => Number(right?.created_at || 0) - Number(left?.created_at || 0))[0];
-
-      if (!latest?.content) return null;
-      return normalizeProfileMetadata(JSON.parse(latest.content));
-    } finally {
-      client.disconnect();
+    // Reuse the app's existing relay singleton — never open new WebSocket connections.
+    // Wait up to 8 s for the singleton to become connected (it may still be bootstrapping).
+    for (let i = 0; i < 40 && !get(nostr.connected); i++) {
+      await new Promise((r) => setTimeout(r, 200));
     }
+
+    if (!get(nostr.connected)) {
+      console.warn('[auth] fetchProfile: relay singleton not connected, skipping kind-0 fetch');
+      return null;
+    }
+
+    const events = await nostr.queryUntilEose([{ kinds: [0], authors: [pubkey], limit: 10 }]);
+    const latest = [...events]
+      .filter((e) => e?.pubkey === pubkey && typeof e.content === 'string')
+      .sort((a, b) => Number(b?.created_at || 0) - Number(a?.created_at || 0))[0];
+
+    if (!latest?.content) return null;
+    return normalizeProfileMetadata(JSON.parse(latest.content));
   } catch (error) {
     console.warn('Failed to load Nostr kind-0 profile:', error);
     return null;
@@ -368,7 +363,7 @@ export async function initializeAuth() {
           } catch (backendError) {
             console.warn('Backend auth provider initialization failed:', backendError.message);
           }
-          const profile = await fetchProfile(persisted.pubkey, persisted.relays);
+          const profile = await fetchProfile(persisted.pubkey);
           if (profile) {
             updateAuthState({ profile });
             persistSession({
@@ -438,7 +433,7 @@ export async function login() {
       } catch (backendError) {
         console.warn('Backend authentication failed:', backendError.message);
       }
-      profile = await fetchProfile(pubkey, relays);
+      profile = await fetchProfile(pubkey);
       if (profile) {
         updateAuthState({ profile });
       }
@@ -499,7 +494,7 @@ export async function loginWithNostrConnect(uri) {
       } catch (backendError) {
         console.warn('Backend authentication failed:', backendError.message);
       }
-      profile = await fetchProfile(connected.pubkey, connected.relays);
+      profile = await fetchProfile(connected.pubkey);
       if (profile) {
         updateAuthState({ profile });
       }

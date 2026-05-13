@@ -77,6 +77,8 @@ let bootstrapPromise = null;
 let liveUnsubscribe = null;
 let connectedUnsubscribe = null;
 let lastConnected = false;
+let lastBootstrapFailedAt = null;
+const BOOTSTRAP_RETRY_INTERVAL_MS = 30_000; // 30 s minimum between failed retries
 
 function setAllLoading(value) {
   loading.services = value;
@@ -154,6 +156,7 @@ export function resetControlplaneStore() {
     connectedUnsubscribe = null;
   }
   bootstrapPromise = null;
+  lastBootstrapFailedAt = null;
   replaceableEvents.clear();
   seenEventIds.clear();
   serviceMap.clear();
@@ -536,6 +539,15 @@ export async function bootstrapControlplane({ force = false } = {}) {
   if (bootstrapPromise && !force) return bootstrapPromise;
   if (controlplaneConnection.ready && !force) return { ok: true };
 
+  // Rate-limit retries after failure — prevents hammering relays when config is broken
+  if (!force && lastBootstrapFailedAt !== null) {
+    const elapsed = Date.now() - lastBootstrapFailedAt;
+    if (elapsed < BOOTSTRAP_RETRY_INTERVAL_MS) {
+      return { ok: false, reason: controlplaneConnection.lastError || 'bootstrap failed recently, waiting before retry' };
+    }
+  }
+  if (force) lastBootstrapFailedAt = null;
+
   bootstrapPromise = (async () => {
     const bootstrapSince = Math.floor(Date.now() / 1000);
     controlplaneConnection.status = 'discovering';
@@ -579,6 +591,7 @@ export async function bootstrapControlplane({ force = false } = {}) {
       refreshCollections();
       return { ok: true };
     } catch (err) {
+      lastBootstrapFailedAt = Date.now(); // rate-limit subsequent retries
       controlplaneConnection.status = 'error';
       controlplaneConnection.ready = false;
       controlplaneConnection.bootstrapComplete = false;

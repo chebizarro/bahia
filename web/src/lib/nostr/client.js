@@ -368,17 +368,24 @@ export class NostrClient {
       this.reconnectAttempts.delete(url);
     });
 
-    this.connectionStatus.update(() =>
+    // Preserve 'failed' status so exhausted relays don't get hammered on every reconnect
+    this.connectionStatus.update((prevStatus) =>
       Object.fromEntries(
         this.relays.map((url) => {
+          if (prevStatus[url] === 'failed') return [url, 'failed'];
           const currentState = relayConnectionStateForSocket(this.sockets.get(url));
           return [url, currentState === 'connected' ? 'connected' : 'connecting'];
         })
       )
     );
     
-    // Reset reconnect attempts for fresh connection
-    this.relays.forEach(url => this.reconnectAttempts.set(url, 0));
+    // Reset reconnect attempts only for relays that haven't permanently failed
+    const currentStatus = get(this.connectionStatus);
+    this.relays.forEach(url => {
+      if (currentStatus[url] !== 'failed') {
+        this.reconnectAttempts.set(url, 0);
+      }
+    });
     const promises = this.relays.map(url => this.connectRelay(url));
     await Promise.allSettled(promises);
     
@@ -392,6 +399,12 @@ export class NostrClient {
   // Connect to a single relay
   connectRelay(url) {
     return new Promise((resolve) => {
+      // Skip relays that have permanently failed — don't hammer them
+      if (get(this.connectionStatus)[url] === 'failed') {
+        resolve();
+        return;
+      }
+
       // Clear any pending reconnect timer
       if (this.reconnectTimers.has(url)) {
         clearTimeout(this.reconnectTimers.get(url));
