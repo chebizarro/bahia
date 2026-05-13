@@ -34,6 +34,7 @@ const initialState = {
   relays: {},
   capabilities: {},
   error: null,
+  profile: null,
   lastAuthenticatedAt: null,
   compatibility: {
     restNip98Advertised: false,
@@ -58,7 +59,8 @@ export function currentUser() {
     relays: authState.relays,
     capabilities: authState.capabilities,
     authMethod: authState.authMethod,
-    lastAuthenticatedAt: authState.lastAuthenticatedAt
+    lastAuthenticatedAt: authState.lastAuthenticatedAt,
+    profile: authState.profile
   };
 }
 
@@ -101,7 +103,8 @@ function loadPersistedSession() {
       relays: session.relays || {},
       authMethod: session.authMethod || 'nip07',
       nip46: session.nip46 || null,
-      lastAuthenticatedAt: session.lastAuthenticatedAt
+      lastAuthenticatedAt: session.lastAuthenticatedAt,
+      profile: session.profile || null
     };
   } catch (error) {
     console.warn('Failed to load persisted auth session:', error);
@@ -109,12 +112,12 @@ function loadPersistedSession() {
   }
 }
 
-function persistSession({ pubkey, relays, authMethod = 'nip07', nip46 = null }) {
+function persistSession({ pubkey, relays, authMethod = 'nip07', nip46 = null, profile = null, lastAuthenticatedAt = new Date().toISOString() }) {
   if (!browser) return;
   try {
     localStorage.setItem(
       SESSION_KEY,
-      JSON.stringify({ pubkey, relays, authMethod, nip46, lastAuthenticatedAt: new Date().toISOString() })
+      JSON.stringify({ pubkey, relays, authMethod, nip46, profile, lastAuthenticatedAt })
     );
   } catch (error) {
     console.error('Failed to persist auth session:', error);
@@ -139,6 +142,74 @@ function absoluteHTTPURL(url) {
   if (/^https?:\/\//i.test(url)) return url;
   const origin = browser && window?.location?.origin ? window.location.origin : 'http://localhost';
   return new URL(url, origin).toString();
+}
+
+function normalizeProfileMetadata(metadata = {}) {
+  if (!metadata || typeof metadata !== 'object') return null;
+
+  const displayName = String(metadata.display_name || metadata.displayName || '').trim();
+  const name = String(metadata.name || '').trim();
+  const nip05 = String(metadata.nip05 || '').trim();
+  const picture = String(metadata.picture || '').trim();
+  const about = String(metadata.about || '').trim();
+
+  if (!displayName && !name && !nip05 && !picture && !about) return null;
+
+  return {
+    displayName,
+    name,
+    nip05,
+    picture,
+    about
+  };
+}
+
+function normalizeRelayUrls(relays = {}) {
+  if (Array.isArray(relays)) {
+    return relays.filter((relay) => typeof relay === 'string' && /^wss?:\/\//i.test(relay));
+  }
+
+  return Object.entries(relays || {})
+    .filter(([url, config]) => /^wss?:\/\//i.test(url) && config?.read !== false)
+    .map(([url]) => url);
+}
+
+// Well-known Nostr profile-cache relays to try when user relays don't have kind-0
+const PROFILE_FALLBACK_RELAYS = [
+  'wss://purplepag.es',
+  'wss://relay.nostr.band',
+  'wss://relay.damus.io'
+];
+
+async function fetchProfile(pubkey, relays = {}) {
+  if (!isValidHexPubkey(pubkey)) return null;
+
+  try {
+    const { NostrClient, nostr } = await import('$lib/nostr/client.js');
+
+    // Combine: user's NIP-07 relays + app-configured relays + well-known profile caches
+    const userRelayUrls = normalizeRelayUrls(relays);
+    const appRelayUrls = typeof nostr?.getRelays === 'function' ? nostr.getRelays() : [];
+    const allRelayUrls = [...new Set([...userRelayUrls, ...appRelayUrls, ...PROFILE_FALLBACK_RELAYS])];
+
+    const client = new NostrClient({ relays: allRelayUrls });
+
+    try {
+      await client.connect(allRelayUrls);
+      const events = await client.queryUntilEose([{ kinds: [0], authors: [pubkey], limit: 10 }]);
+      const latest = [...events]
+        .filter((event) => event?.pubkey === pubkey && typeof event.content === 'string')
+        .sort((left, right) => Number(right?.created_at || 0) - Number(left?.created_at || 0))[0];
+
+      if (!latest?.content) return null;
+      return normalizeProfileMetadata(JSON.parse(latest.content));
+    } finally {
+      client.disconnect();
+    }
+  } catch (error) {
+    console.warn('Failed to load Nostr kind-0 profile:', error);
+    return null;
+  }
 }
 
 function installDirectNip98Provider(api) {
@@ -288,6 +359,7 @@ export async function initializeAuth() {
             authMethod: persisted.authMethod,
             nip46: persisted.nip46,
             lastAuthenticatedAt: persisted.lastAuthenticatedAt,
+            profile: persisted.profile || null,
             ...compatibilityPatch(),
             error: null
           });
@@ -295,6 +367,18 @@ export async function initializeAuth() {
             await configureBackendAuth(persisted.pubkey);
           } catch (backendError) {
             console.warn('Backend auth provider initialization failed:', backendError.message);
+          }
+          const profile = await fetchProfile(persisted.pubkey, persisted.relays);
+          if (profile) {
+            updateAuthState({ profile });
+            persistSession({
+              pubkey: persisted.pubkey,
+              relays: persisted.relays,
+              authMethod: persisted.authMethod,
+              nip46: persisted.nip46,
+              profile,
+              lastAuthenticatedAt: persisted.lastAuthenticatedAt
+            });
           }
           return;
         }
@@ -344,15 +428,21 @@ export async function login() {
         capabilities,
         nip46: null,
         lastAuthenticatedAt: new Date().toISOString(),
+        profile: null,
         error: null
       });
       dismissMissingSignerToast();
-      persistSession({ pubkey, relays, authMethod: 'nip07', nip46: null });
+      let profile = null;
       try {
         await authenticateBackendInternal(pubkey);
       } catch (backendError) {
         console.warn('Backend authentication failed:', backendError.message);
       }
+      profile = await fetchProfile(pubkey, relays);
+      if (profile) {
+        updateAuthState({ profile });
+      }
+      persistSession({ pubkey, relays, authMethod: 'nip07', nip46: null, profile });
       toast.success('Signed in successfully');
     } catch (error) {
       console.error('Login failed:', error);
@@ -366,6 +456,7 @@ export async function login() {
           capabilities: persisted.authMethod === 'nip46' ? getNip46Capabilities() : getNip07Capabilities(),
           nip46: persisted.nip46 || null,
           lastAuthenticatedAt: persisted.lastAuthenticatedAt,
+          profile: persisted.profile || null,
           error: null
         });
       } else {
@@ -397,22 +488,29 @@ export async function loginWithNostrConnect(uri) {
         capabilities,
         nip46: connected,
         lastAuthenticatedAt: new Date().toISOString(),
+        profile: null,
         error: null
       });
       dismissMissingSignerToast();
 
-      persistSession({
-        pubkey: connected.pubkey,
-        relays: connected.relays,
-        authMethod: 'nip46',
-        nip46: connected
-      });
-
+      let profile = null;
       try {
         await authenticateBackendInternal(connected.pubkey);
       } catch (backendError) {
         console.warn('Backend authentication failed:', backendError.message);
       }
+      profile = await fetchProfile(connected.pubkey, connected.relays);
+      if (profile) {
+        updateAuthState({ profile });
+      }
+
+      persistSession({
+        pubkey: connected.pubkey,
+        relays: connected.relays,
+        authMethod: 'nip46',
+        nip46: connected,
+        profile
+      });
       toast.success('Connected signer successfully');
     } catch (error) {
       console.error('Nostr Connect login failed:', error);
@@ -426,6 +524,7 @@ export async function loginWithNostrConnect(uri) {
           capabilities: persisted.authMethod === 'nip46' ? getNip46Capabilities() : getNip07Capabilities(),
           nip46: persisted.nip46 || null,
           lastAuthenticatedAt: persisted.lastAuthenticatedAt,
+          profile: persisted.profile || null,
           error: null
         });
       } else {

@@ -61,14 +61,35 @@
     blossomError = null;
 
     try {
-      const [servers, health, blobs] = await Promise.all([
+      // Use allSettled so one failing endpoint doesn't abort the others
+      const [serversResult, healthResult, blobsResult] = await Promise.allSettled([
         api.getBlossomServers(),
         api.checkBlossomHealth(),
         api.listBlossomBlobs(pubkeyFilter.trim() || null)
       ]);
-      blossomServers = Array.isArray(servers) ? servers : [];
-      blossomHealth = health && typeof health === 'object' ? health : {};
-      blossomBlobs = Array.isArray(blobs) ? blobs : [];
+
+      blossomServers = serversResult.status === 'fulfilled' && Array.isArray(serversResult.value)
+        ? serversResult.value : [];
+      blossomHealth = healthResult.status === 'fulfilled' && healthResult.value && typeof healthResult.value === 'object'
+        ? healthResult.value : {};
+      blossomBlobs = blobsResult.status === 'fulfilled' && Array.isArray(blobsResult.value)
+        ? blobsResult.value : [];
+
+      // Surface a friendly error if all three failed (likely not configured)
+      const allFailed = [serversResult, healthResult, blobsResult].every(r => r.status === 'rejected');
+      if (allFailed) {
+        const firstErr = serversResult.reason?.message || '';
+        if (firstErr.includes('500') || firstErr.includes('Internal Server Error')) {
+          blossomError = 'Blossom storage is not configured on this server. Enable and configure Blossom in your Bahia server settings.';
+        } else {
+          blossomError = firstErr || 'Failed to contact Blossom storage endpoints';
+        }
+      } else if (blobsResult.status === 'rejected') {
+        const err = blobsResult.reason?.message || '';
+        blossomError = err.includes('500')
+          ? 'Blossom blob listing failed — storage may not be configured for this pubkey'
+          : err || 'Failed to list Blossom blobs';
+      }
     } catch (err) {
       console.error('Failed to load Blossom blobs:', err);
       blossomError = err.message || 'Failed to load Blossom blobs';
