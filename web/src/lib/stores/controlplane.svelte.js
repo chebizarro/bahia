@@ -7,6 +7,7 @@ import {
   BAHIA_READ_MODEL_KINDS,
   BAHIA_STATUS_KINDS,
   BAHIA_AUDIT_KINDS,
+  BAHIA_SBOM_KINDS,
   getDTag,
   getTagValue,
   isReplaceableTombstone,
@@ -19,6 +20,7 @@ const ACTIVITY_BACKFILL_LIMIT = 100;
 const READ_MODEL_LIMIT = 1000;
 const ACTIVITY_BACKFILL_SECONDS = 7 * 24 * 60 * 60;
 const CANONICAL_READ_MODEL_KINDS = BAHIA_READ_MODEL_KINDS.filter((kind) => kind !== KINDS.LOOM_WORKER_AD);
+const ACTIVITY_KINDS = [...BAHIA_AUDIT_KINDS, ...BAHIA_STATUS_KINDS, ...BAHIA_SBOM_KINDS];
 
 export const controlplaneConnection = $state({
   status: 'idle', // idle | discovering | connecting | bootstrapping | live | error | disconnected
@@ -219,7 +221,7 @@ function readModelFilters() {
     { kinds: CANONICAL_READ_MODEL_KINDS, limit: READ_MODEL_LIMIT, ...authorFilter },
     { kinds: [KINDS.LOOM_WORKER_AD], limit: READ_MODEL_LIMIT },
     {
-      kinds: [...BAHIA_AUDIT_KINDS, ...BAHIA_STATUS_KINDS],
+      kinds: ACTIVITY_KINDS,
       since: Math.floor(Date.now() / 1000) - ACTIVITY_BACKFILL_SECONDS,
       limit: ACTIVITY_BACKFILL_LIMIT,
       ...authorFilter
@@ -232,14 +234,13 @@ function liveFilters(since) {
   return [
     { kinds: CANONICAL_READ_MODEL_KINDS, since, ...authorFilter },
     { kinds: [KINDS.LOOM_WORKER_AD], since },
-    { kinds: [...BAHIA_AUDIT_KINDS, ...BAHIA_STATUS_KINDS], since, ...authorFilter }
+    { kinds: ACTIVITY_KINDS, since, ...authorFilter }
   ];
 }
 
 function isCanonicalBahiaKind(kind) {
   return CANONICAL_READ_MODEL_KINDS.includes(kind) ||
-    BAHIA_AUDIT_KINDS.includes(kind) ||
-    BAHIA_STATUS_KINDS.includes(kind);
+    ACTIVITY_KINDS.includes(kind);
 }
 
 function shouldAcceptControlplaneEvent(event) {

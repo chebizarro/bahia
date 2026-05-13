@@ -1,0 +1,25 @@
+{
+  "feature_id": "SBOM_WORKFLOW_E2E",
+  "tests": [
+    {
+      "test": "web/tests/e2e/sbom-workflow.spec.js :: artifact page displays SBOM attestation details",
+      "acceptance_criteria": ["AC1"]
+    },
+    {
+      "test": "web/tests/e2e/sbom-workflow.spec.js :: artifact SBOM tab shows an empty state when no attestation exists",
+      "acceptance_criteria": ["AC2"]
+    },
+    {
+      "test": "web/tests/e2e/sbom-workflow.spec.js :: policy rule builder adds SBOM-related rules and syncs them to JSON",
+      "acceptance_criteria": ["AC3"]
+    },
+    {
+      "test": "web/tests/e2e/sbom-workflow.spec.js :: policy visual builder reports an error when submitted without rules",
+      "acceptance_criteria": ["AC4"]
+    },
+    {
+      "test": "web/tests/e2e/sbom-workflow.spec.js :: events page filters canonical SBOM events",
+      "acceptance_criteria": ["AC5"]
+    }
+  ]
+}

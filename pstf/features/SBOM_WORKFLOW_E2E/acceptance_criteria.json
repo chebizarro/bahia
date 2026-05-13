@@ -1,0 +1,25 @@
+{
+  "feature_id": "SBOM_WORKFLOW_E2E",
+  "criteria": [
+    {
+      "id": "AC1",
+      "description": "Artifact details expose the SBOM tab and render attestation format, generator, storage, hashes, NTIA compliance, and packages when SBOM data exists."
+    },
+    {
+      "id": "AC2",
+      "description": "Artifact SBOM tab renders a clear empty state when no SBOM or attestation is available."
+    },
+    {
+      "id": "AC3",
+      "description": "Policy creation visual builder can add SBOM-related rules and preserve them when switching to JSON editor."
+    },
+    {
+      "id": "AC4",
+      "description": "Policy creation rejects visual-builder submission without at least one rule."
+    },
+    {
+      "id": "AC5",
+      "description": "Events page can display and filter canonical SBOM attestation/index events without showing non-SBOM events."
+    }
+  ]
+}

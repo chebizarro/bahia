@@ -1,0 +1,23 @@
+{
+  "feature_id": "SBOM_WORKFLOW_E2E",
+  "defects": [
+    {
+      "id": "D1",
+      "status": "fixed",
+      "description": "Artifact SBOM tab reloaded indefinitely when SBOM and attestation endpoints returned no data, preventing the empty state from rendering.",
+      "evidence": "Fixed with an sbomLoaded guard in web/src/routes/artifacts/[id]/+page.svelte and covered by the no-attestation E2E test."
+    },
+    {
+      "id": "D2",
+      "status": "fixed",
+      "description": "PolicyRuleBuilder action buttons inside the policy create form defaulted to submit buttons, causing rule-builder interactions to submit and disable the outer form.",
+      "evidence": "Fixed by adding type=\"button\" to non-submit buttons in web/src/lib/components/PolicyRuleBuilder.svelte and covered by SBOM rule-builder E2E tests."
+    },
+    {
+      "id": "D3",
+      "status": "out_of_scope_existing_suite_drift",
+      "description": "The full Playwright suite has 59 existing failures outside the SBOM workflow area, largely stale REST-mocked or selector assumptions against current relay-backed UI behavior.",
+      "evidence": "`npx playwright test` completed with 62 passed and 59 failed; SBOM workflow tests passed in that run."
+    }
+  ]
+}

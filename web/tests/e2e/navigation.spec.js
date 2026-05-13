@@ -30,6 +30,7 @@ test.beforeEach(async ({ page }) => {
         contentType: 'application/json',
         body: JSON.stringify({ data: [] })
       });
+    }
     
     // Default response for unknown endpoints
     return route.fulfill({

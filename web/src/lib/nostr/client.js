@@ -149,12 +149,18 @@ export const BAHIA_STATUS_KINDS = [
   KINDS.BAHIA_LLM_DEPLOYMENT_RESULT
 ];
 
+export const BAHIA_SBOM_KINDS = [
+  KINDS.SBOM_ATTESTATION,
+  KINDS.SBOM_INDEX
+];
+
 export const BAHIA_AUDIT_KINDS = Array.from({ length: 100 }, (_, i) => 31000 + i);
 
 export const BAHIA_CONTROLPLANE_KINDS = [
   ...BAHIA_READ_MODEL_KINDS,
   ...BAHIA_STATUS_KINDS,
-  ...BAHIA_AUDIT_KINDS
+  ...BAHIA_AUDIT_KINDS,
+  ...BAHIA_SBOM_KINDS
 ];
 
 // Default relays - can be overridden via localStorage or connect() parameter

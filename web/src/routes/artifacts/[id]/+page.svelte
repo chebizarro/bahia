@@ -18,6 +18,7 @@
   let sbomData = $state(null);
   let sbomAttestation = $state(null);
   let sbomLoading = $state(false);
+  let sbomLoaded = $state(false);
   let signatures = $state([]);
   let hasVerifiedSig = $state(false);
   let loading = $state(true);
@@ -85,6 +86,9 @@
       }
 
       service = artifact.service_id ? services.find((candidate) => candidate.id === artifact.service_id) || null : null;
+      sbomData = null;
+      sbomAttestation = null;
+      sbomLoaded = false;
       sbomPackages = Array.isArray(artifact.sbom_packages) ? artifact.sbom_packages : [];
       signatures = Array.isArray(artifact.signatures) ? artifact.signatures : [];
       hasVerifiedSig = signatures.some((signature) => signature?.verified === true) || Boolean(artifact.signature_ref || artifact.verified_signature);
@@ -121,13 +125,14 @@
     } catch (err) {
       console.error('Error loading SBOM details:', err);
     } finally {
+      sbomLoaded = true;
       sbomLoading = false;
     }
   }
 
   // Load SBOM details when switching to SBOM tab
   $effect(() => {
-    if (activeTab === 'sbom' && artifactId && !sbomData && !sbomLoading) {
+    if (activeTab === 'sbom' && artifactId && !sbomLoaded && !sbomLoading) {
       void loadSBOMDetails();
     }
   });

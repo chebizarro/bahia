@@ -1,0 +1,12 @@
+{
+  "feature_id": "SBOM_WORKFLOW_E2E",
+  "beads_issue": "bahia-wvxy",
+  "title": "E2E coverage for full SBOM workflow",
+  "observed_context": [
+    "Artifact detail page renders SBOMDetails only after switching to the SBOM tab.",
+    "Policy create flow defaults to the visual PolicyRuleBuilder and can sync visual rules to the JSON editor.",
+    "Events page provides an SBOM filter category for canonical SBOM attestation/index events."
+  ],
+  "intended_behavior": "Users can view SBOM attestations on artifact pages, build SBOM policy rules visually, and filter live events to SBOM-specific activity.",
+  "scope": "Playwright E2E tests plus canonical SBOM event subscription coverage for the events read model."
+}
