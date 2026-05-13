@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -153,6 +155,27 @@ func (m *mockSBOMRepoForPolicy) SearchPackagesByName(_ context.Context, _ string
 	return nil, nil
 }
 
+type mockSBOMAttestationProvider struct {
+	att      *domain.SBOMAttestation
+	sbomData []byte
+	attErr   error
+	dataErr  error
+}
+
+func (m *mockSBOMAttestationProvider) GetAttestationForArtifact(_ context.Context, _ uuid.UUID) (*domain.SBOMAttestation, error) {
+	if m.attErr != nil {
+		return nil, m.attErr
+	}
+	return m.att, nil
+}
+
+func (m *mockSBOMAttestationProvider) GetSBOMDataForArtifact(_ context.Context, _ uuid.UUID) ([]byte, error) {
+	if m.dataErr != nil {
+		return nil, m.dataErr
+	}
+	return m.sbomData, nil
+}
+
 // --- Tests ---
 
 func newTestPolicyService() (*PolicyService, *mockPolicyRepo, *mockSigRepo, *mockSBOMRepoForPolicy) {
@@ -161,6 +184,99 @@ func newTestPolicyService() (*PolicyService, *mockPolicyRepo, *mockSigRepo, *moc
 	sbomRepo := &mockSBOMRepoForPolicy{}
 	svc := NewPolicyService(policyRepo, sigRepo, sbomRepo, zap.NewNop())
 	return svc, policyRepo, sigRepo, sbomRepo
+}
+
+func newTestPolicyServiceWithOptions(opts ...PolicyServiceOption) (*PolicyService, *mockPolicyRepo, *mockSigRepo, *mockSBOMRepoForPolicy) {
+	policyRepo := newMockPolicyRepo()
+	sigRepo := &mockSigRepo{}
+	sbomRepo := &mockSBOMRepoForPolicy{}
+	svc := NewPolicyService(policyRepo, sigRepo, sbomRepo, zap.NewNop(), opts...)
+	return svc, policyRepo, sigRepo, sbomRepo
+}
+
+func evaluateBlockingRule(t *testing.T, svc *PolicyService, policyRepo *mockPolicyRepo, sbomRepo *mockSBOMRepoForPolicy, rule domain.PolicyRule) *domain.PolicyEvaluation {
+	t.Helper()
+	policyRepo.Create(context.Background(), &domain.DeploymentPolicy{
+		Name:        string(rule.Type),
+		Enforcement: domain.PolicyEnforcementBlock,
+		Enabled:     true,
+		Rules:       []domain.PolicyRule{rule},
+	})
+
+	eval, err := svc.Evaluate(context.Background(), uuid.New(), uuid.New())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(eval.Results) != 1 {
+		t.Fatalf("expected 1 policy result, got %d", len(eval.Results))
+	}
+	_ = sbomRepo
+	return eval
+}
+
+func requireAllowed(t *testing.T, eval *domain.PolicyEvaluation) {
+	t.Helper()
+	if !eval.Allowed {
+		t.Fatalf("expected policy to pass, got violations: %+v", eval.Results[0].Violations)
+	}
+	if eval.Blockers != 0 {
+		t.Fatalf("blockers = %d, want 0", eval.Blockers)
+	}
+	if !eval.Results[0].Passed {
+		t.Fatalf("policy result passed = false, violations: %+v", eval.Results[0].Violations)
+	}
+}
+
+func requireBlocked(t *testing.T, eval *domain.PolicyEvaluation, rule domain.PolicyRuleType, msgContains string) {
+	t.Helper()
+	if eval.Allowed {
+		t.Fatal("expected policy to block")
+	}
+	if eval.Blockers != 1 {
+		t.Fatalf("blockers = %d, want 1", eval.Blockers)
+	}
+	violations := eval.Results[0].Violations
+	if len(violations) != 1 {
+		t.Fatalf("violations = %d, want 1", len(violations))
+	}
+	if violations[0].Rule != rule {
+		t.Fatalf("violation rule = %q, want %q", violations[0].Rule, rule)
+	}
+	if msgContains != "" && !strings.Contains(violations[0].Message, msgContains) {
+		t.Fatalf("violation message = %q, want containing %q", violations[0].Message, msgContains)
+	}
+}
+
+func testSBOMAttestation(subjectHash, generatorID string, ntia *domain.NTIACompliance) *domain.SBOMAttestation {
+	att := &domain.SBOMAttestation{
+		Type:          "https://in-toto.io/Statement/v1",
+		PredicateType: domain.AttestationTypeSPDX,
+		Predicate: domain.SBOMPredicate{
+			Format:    domain.SBOMFormatSPDX,
+			Generator: domain.SBOMGenerator{ID: generatorID},
+			NTIA:      ntia,
+		},
+	}
+	if subjectHash != "" {
+		att.Subject = []domain.AttestationSubject{{
+			Name:   "artifact",
+			Digest: map[string]string{"sha256": subjectHash},
+		}}
+	}
+	return att
+}
+
+func compliantNTIA() *domain.NTIACompliance {
+	return &domain.NTIACompliance{
+		HasSupplierName:     true,
+		HasComponentName:    true,
+		HasComponentVersion: true,
+		HasUniqueID:         true,
+		HasRelationship:     true,
+		HasAuthor:           true,
+		HasTimestamp:        true,
+		IsCompliant:         true,
+	}
 }
 
 func TestPolicyService_Evaluate_NoPolicies(t *testing.T) {
@@ -425,6 +541,326 @@ func TestPolicyService_Evaluate_EnvSpecificPolicy(t *testing.T) {
 	if !eval.Allowed {
 		t.Error("expected allowed for env without policy")
 	}
+}
+
+func TestPolicyService_Evaluate_SBOMSubjectDigestMatch(t *testing.T) {
+	t.Run("passes when subject digest matches artifact digest", func(t *testing.T) {
+		provider := &mockSBOMAttestationProvider{att: testSBOMAttestation("abc123", "syft", compliantNTIA())}
+		svc, policyRepo, _, sbomRepo := newTestPolicyServiceWithOptions(WithAttestationProvider(provider))
+
+		eval := evaluateBlockingRule(t, svc, policyRepo, sbomRepo, domain.PolicyRule{
+			Type:   domain.RuleSBOMSubjectDigestMatch,
+			Params: map[string]any{"artifact_digest": "sha256:abc123"},
+		})
+
+		requireAllowed(t, eval)
+	})
+
+	t.Run("blocks when subject digest differs", func(t *testing.T) {
+		provider := &mockSBOMAttestationProvider{att: testSBOMAttestation("def456", "syft", compliantNTIA())}
+		svc, policyRepo, _, sbomRepo := newTestPolicyServiceWithOptions(WithAttestationProvider(provider))
+
+		eval := evaluateBlockingRule(t, svc, policyRepo, sbomRepo, domain.PolicyRule{
+			Type:   domain.RuleSBOMSubjectDigestMatch,
+			Params: map[string]any{"artifact_digest": "sha256:abc123"},
+		})
+
+		requireBlocked(t, eval, domain.RuleSBOMSubjectDigestMatch, "does not match")
+	})
+
+	t.Run("blocks when artifact digest parameter is missing", func(t *testing.T) {
+		provider := &mockSBOMAttestationProvider{att: testSBOMAttestation("abc123", "syft", compliantNTIA())}
+		svc, policyRepo, _, sbomRepo := newTestPolicyServiceWithOptions(WithAttestationProvider(provider))
+
+		eval := evaluateBlockingRule(t, svc, policyRepo, sbomRepo, domain.PolicyRule{Type: domain.RuleSBOMSubjectDigestMatch})
+
+		requireBlocked(t, eval, domain.RuleSBOMSubjectDigestMatch, "artifact_digest parameter required")
+	})
+
+	t.Run("blocks when expected digest format is invalid", func(t *testing.T) {
+		provider := &mockSBOMAttestationProvider{att: testSBOMAttestation("abc123", "syft", compliantNTIA())}
+		svc, policyRepo, _, sbomRepo := newTestPolicyServiceWithOptions(WithAttestationProvider(provider))
+
+		eval := evaluateBlockingRule(t, svc, policyRepo, sbomRepo, domain.PolicyRule{
+			Type:   domain.RuleSBOMSubjectDigestMatch,
+			Params: map[string]any{"artifact_digest": "not-a-digest"},
+		})
+
+		requireBlocked(t, eval, domain.RuleSBOMSubjectDigestMatch, "does not match")
+	})
+
+	t.Run("blocks when attestation provider is missing", func(t *testing.T) {
+		svc, policyRepo, _, sbomRepo := newTestPolicyService()
+
+		eval := evaluateBlockingRule(t, svc, policyRepo, sbomRepo, domain.PolicyRule{
+			Type:   domain.RuleSBOMSubjectDigestMatch,
+			Params: map[string]any{"artifact_digest": "sha256:abc123"},
+		})
+
+		requireBlocked(t, eval, domain.RuleSBOMSubjectDigestMatch, "attestation provider not configured")
+	})
+
+	t.Run("blocks when provider cannot load attestation", func(t *testing.T) {
+		provider := &mockSBOMAttestationProvider{attErr: errors.New("relay unavailable")}
+		svc, policyRepo, _, sbomRepo := newTestPolicyServiceWithOptions(WithAttestationProvider(provider))
+
+		eval := evaluateBlockingRule(t, svc, policyRepo, sbomRepo, domain.PolicyRule{
+			Type:   domain.RuleSBOMSubjectDigestMatch,
+			Params: map[string]any{"artifact_digest": "sha256:abc123"},
+		})
+
+		requireBlocked(t, eval, domain.RuleSBOMSubjectDigestMatch, "failed to get attestation")
+	})
+}
+
+func TestPolicyService_Evaluate_SBOMParseability(t *testing.T) {
+	cases := []struct {
+		name        string
+		sbomData    []byte
+		dataErr     error
+		wantAllowed bool
+		wantMessage string
+	}{
+		{
+			name:        "passes for valid SPDX JSON",
+			sbomData:    []byte(`{"spdxVersion":"SPDX-2.3","dataLicense":"CC0-1.0"}`),
+			wantAllowed: true,
+		},
+		{
+			name:        "passes for valid CycloneDX JSON",
+			sbomData:    []byte(`{"bomFormat":"CycloneDX","specVersion":"1.5"}`),
+			wantAllowed: true,
+		},
+		{
+			name:        "blocks empty SBOM data",
+			sbomData:    nil,
+			wantMessage: "empty SBOM data",
+		},
+		{
+			name:        "blocks invalid JSON",
+			sbomData:    []byte(`not json`),
+			wantMessage: "invalid JSON",
+		},
+		{
+			name:        "blocks unknown SBOM format",
+			sbomData:    []byte(`{"name":"unknown"}`),
+			wantMessage: "unknown SBOM format",
+		},
+		{
+			name:        "blocks provider errors",
+			dataErr:     errors.New("blob missing"),
+			wantMessage: "failed to get SBOM data",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			provider := &mockSBOMAttestationProvider{sbomData: tc.sbomData, dataErr: tc.dataErr}
+			svc, policyRepo, _, sbomRepo := newTestPolicyServiceWithOptions(WithAttestationProvider(provider))
+
+			eval := evaluateBlockingRule(t, svc, policyRepo, sbomRepo, domain.PolicyRule{Type: domain.RuleSBOMParseability})
+
+			if tc.wantAllowed {
+				requireAllowed(t, eval)
+			} else {
+				requireBlocked(t, eval, domain.RuleSBOMParseability, tc.wantMessage)
+			}
+		})
+	}
+
+	t.Run("blocks when attestation provider is missing", func(t *testing.T) {
+		svc, policyRepo, _, sbomRepo := newTestPolicyService()
+
+		eval := evaluateBlockingRule(t, svc, policyRepo, sbomRepo, domain.PolicyRule{Type: domain.RuleSBOMParseability})
+
+		requireBlocked(t, eval, domain.RuleSBOMParseability, "attestation provider not configured")
+	})
+}
+
+func TestPolicyService_Evaluate_SBOMNTIAMinFields(t *testing.T) {
+	t.Run("passes when NTIA compliance data is complete", func(t *testing.T) {
+		provider := &mockSBOMAttestationProvider{att: testSBOMAttestation("abc123", "syft", compliantNTIA())}
+		svc, policyRepo, _, sbomRepo := newTestPolicyServiceWithOptions(WithAttestationProvider(provider))
+
+		eval := evaluateBlockingRule(t, svc, policyRepo, sbomRepo, domain.PolicyRule{Type: domain.RuleSBOMNTIAMinFields})
+
+		requireAllowed(t, eval)
+	})
+
+	t.Run("blocks when NTIA data is missing", func(t *testing.T) {
+		provider := &mockSBOMAttestationProvider{att: testSBOMAttestation("abc123", "syft", nil)}
+		svc, policyRepo, _, sbomRepo := newTestPolicyServiceWithOptions(WithAttestationProvider(provider))
+
+		eval := evaluateBlockingRule(t, svc, policyRepo, sbomRepo, domain.PolicyRule{Type: domain.RuleSBOMNTIAMinFields})
+
+		requireBlocked(t, eval, domain.RuleSBOMNTIAMinFields, "missing NTIA compliance data")
+	})
+
+	t.Run("blocks and reports missing NTIA fields", func(t *testing.T) {
+		provider := &mockSBOMAttestationProvider{att: testSBOMAttestation("abc123", "syft", &domain.NTIACompliance{
+			HasComponentName: true,
+			HasUniqueID:      true,
+			IsCompliant:      false,
+		})}
+		svc, policyRepo, _, sbomRepo := newTestPolicyServiceWithOptions(WithAttestationProvider(provider))
+
+		eval := evaluateBlockingRule(t, svc, policyRepo, sbomRepo, domain.PolicyRule{Type: domain.RuleSBOMNTIAMinFields})
+
+		requireBlocked(t, eval, domain.RuleSBOMNTIAMinFields, "supplier_name")
+		if !strings.Contains(eval.Results[0].Violations[0].Message, "component_version") {
+			t.Fatalf("violation message = %q, want component_version", eval.Results[0].Violations[0].Message)
+		}
+	})
+
+	t.Run("blocks when attestation provider is missing", func(t *testing.T) {
+		svc, policyRepo, _, sbomRepo := newTestPolicyService()
+
+		eval := evaluateBlockingRule(t, svc, policyRepo, sbomRepo, domain.PolicyRule{Type: domain.RuleSBOMNTIAMinFields})
+
+		requireBlocked(t, eval, domain.RuleSBOMNTIAMinFields, "attestation provider not configured")
+	})
+
+	t.Run("blocks provider errors", func(t *testing.T) {
+		provider := &mockSBOMAttestationProvider{attErr: errors.New("attestation missing")}
+		svc, policyRepo, _, sbomRepo := newTestPolicyServiceWithOptions(WithAttestationProvider(provider))
+
+		eval := evaluateBlockingRule(t, svc, policyRepo, sbomRepo, domain.PolicyRule{Type: domain.RuleSBOMNTIAMinFields})
+
+		requireBlocked(t, eval, domain.RuleSBOMNTIAMinFields, "failed to get attestation")
+	})
+}
+
+func TestPolicyService_Evaluate_SBOMTrustedGenerator(t *testing.T) {
+	t.Run("passes when generator is trusted by rule params", func(t *testing.T) {
+		provider := &mockSBOMAttestationProvider{att: testSBOMAttestation("abc123", "syft", compliantNTIA())}
+		svc, policyRepo, _, sbomRepo := newTestPolicyServiceWithOptions(WithAttestationProvider(provider))
+
+		eval := evaluateBlockingRule(t, svc, policyRepo, sbomRepo, domain.PolicyRule{
+			Type:   domain.RuleSBOMTrustedGenerator,
+			Params: map[string]any{"trusted_generators": []string{"syft", "trivy"}},
+		})
+
+		requireAllowed(t, eval)
+	})
+
+	t.Run("passes when generator is trusted by service config", func(t *testing.T) {
+		provider := &mockSBOMAttestationProvider{att: testSBOMAttestation("abc123", "trivy", compliantNTIA())}
+		svc, policyRepo, _, sbomRepo := newTestPolicyServiceWithOptions(
+			WithAttestationProvider(provider),
+			WithTrustedGenerators([]string{"trivy"}),
+		)
+
+		eval := evaluateBlockingRule(t, svc, policyRepo, sbomRepo, domain.PolicyRule{Type: domain.RuleSBOMTrustedGenerator})
+
+		requireAllowed(t, eval)
+	})
+
+	t.Run("passes with JSON decoded trusted generator params", func(t *testing.T) {
+		provider := &mockSBOMAttestationProvider{att: testSBOMAttestation("abc123", "cdxgen", compliantNTIA())}
+		svc, policyRepo, _, sbomRepo := newTestPolicyServiceWithOptions(WithAttestationProvider(provider))
+
+		eval := evaluateBlockingRule(t, svc, policyRepo, sbomRepo, domain.PolicyRule{
+			Type:   domain.RuleSBOMTrustedGenerator,
+			Params: map[string]any{"trusted_generators": []interface{}{"cdxgen"}},
+		})
+
+		requireAllowed(t, eval)
+	})
+
+	t.Run("blocks unidentified generator", func(t *testing.T) {
+		provider := &mockSBOMAttestationProvider{att: testSBOMAttestation("abc123", "", compliantNTIA())}
+		svc, policyRepo, _, sbomRepo := newTestPolicyServiceWithOptions(WithAttestationProvider(provider))
+
+		eval := evaluateBlockingRule(t, svc, policyRepo, sbomRepo, domain.PolicyRule{Type: domain.RuleSBOMTrustedGenerator})
+
+		requireBlocked(t, eval, domain.RuleSBOMTrustedGenerator, "not identified")
+	})
+
+	t.Run("blocks untrusted generator", func(t *testing.T) {
+		provider := &mockSBOMAttestationProvider{att: testSBOMAttestation("abc123", "unknown", compliantNTIA())}
+		svc, policyRepo, _, sbomRepo := newTestPolicyServiceWithOptions(WithAttestationProvider(provider))
+
+		eval := evaluateBlockingRule(t, svc, policyRepo, sbomRepo, domain.PolicyRule{
+			Type:   domain.RuleSBOMTrustedGenerator,
+			Params: map[string]any{"trusted_generators": []string{"syft"}},
+		})
+
+		requireBlocked(t, eval, domain.RuleSBOMTrustedGenerator, "not in trusted list")
+	})
+
+	t.Run("blocks when attestation provider is missing", func(t *testing.T) {
+		svc, policyRepo, _, sbomRepo := newTestPolicyService()
+
+		eval := evaluateBlockingRule(t, svc, policyRepo, sbomRepo, domain.PolicyRule{Type: domain.RuleSBOMTrustedGenerator})
+
+		requireBlocked(t, eval, domain.RuleSBOMTrustedGenerator, "attestation provider not configured")
+	})
+
+	t.Run("blocks provider errors", func(t *testing.T) {
+		provider := &mockSBOMAttestationProvider{attErr: errors.New("attestation unavailable")}
+		svc, policyRepo, _, sbomRepo := newTestPolicyServiceWithOptions(WithAttestationProvider(provider))
+
+		eval := evaluateBlockingRule(t, svc, policyRepo, sbomRepo, domain.PolicyRule{Type: domain.RuleSBOMTrustedGenerator})
+
+		requireBlocked(t, eval, domain.RuleSBOMTrustedGenerator, "failed to get attestation")
+	})
+}
+
+func TestPolicyService_Evaluate_SBOMFormat(t *testing.T) {
+	t.Run("passes when no format restriction is configured", func(t *testing.T) {
+		svc, policyRepo, _, sbomRepo := newTestPolicyService()
+
+		eval := evaluateBlockingRule(t, svc, policyRepo, sbomRepo, domain.PolicyRule{Type: domain.RuleSBOMFormat})
+
+		requireAllowed(t, eval)
+	})
+
+	t.Run("passes when SBOM format is allowed", func(t *testing.T) {
+		svc, policyRepo, _, sbomRepo := newTestPolicyService()
+		sbomRepo.sbom = &domain.ArtifactSBOM{ID: uuid.New(), Format: domain.SBOMFormatSPDX}
+
+		eval := evaluateBlockingRule(t, svc, policyRepo, sbomRepo, domain.PolicyRule{
+			Type:   domain.RuleSBOMFormat,
+			Params: map[string]any{"formats": []string{"spdx", "cyclonedx"}},
+		})
+
+		requireAllowed(t, eval)
+	})
+
+	t.Run("passes with JSON decoded format params", func(t *testing.T) {
+		svc, policyRepo, _, sbomRepo := newTestPolicyService()
+		sbomRepo.sbom = &domain.ArtifactSBOM{ID: uuid.New(), Format: domain.SBOMFormatCycloneDX}
+
+		eval := evaluateBlockingRule(t, svc, policyRepo, sbomRepo, domain.PolicyRule{
+			Type:   domain.RuleSBOMFormat,
+			Params: map[string]any{"formats": []interface{}{"cyclonedx"}},
+		})
+
+		requireAllowed(t, eval)
+	})
+
+	t.Run("blocks when required SBOM is missing", func(t *testing.T) {
+		svc, policyRepo, _, sbomRepo := newTestPolicyService()
+
+		eval := evaluateBlockingRule(t, svc, policyRepo, sbomRepo, domain.PolicyRule{
+			Type:   domain.RuleSBOMFormat,
+			Params: map[string]any{"formats": []string{"spdx"}},
+		})
+
+		requireBlocked(t, eval, domain.RuleSBOMFormat, "failed to get SBOM")
+	})
+
+	t.Run("blocks when SBOM format is not allowed", func(t *testing.T) {
+		svc, policyRepo, _, sbomRepo := newTestPolicyService()
+		sbomRepo.sbom = &domain.ArtifactSBOM{ID: uuid.New(), Format: domain.SBOMFormatCycloneDX}
+
+		eval := evaluateBlockingRule(t, svc, policyRepo, sbomRepo, domain.PolicyRule{
+			Type:   domain.RuleSBOMFormat,
+			Params: map[string]any{"formats": []string{"spdx"}},
+		})
+
+		requireBlocked(t, eval, domain.RuleSBOMFormat, "not in allowed formats")
+	})
 }
 
 func TestPolicyService_CRUD(t *testing.T) {
