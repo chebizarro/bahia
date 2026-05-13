@@ -4,6 +4,8 @@
   import Badge from '$lib/components/Badge.svelte';
   import EmptyState from '$lib/components/EmptyState.svelte';
   import { artifacts as registryArtifacts, services, loadArtifacts, loadServices } from '$lib/stores';
+  import { api } from '$lib/api/client.js';
+  import { authState } from '$lib/stores/auth.js';
 
   // Tab state
   let activeTab = $state('registry');
@@ -22,6 +24,12 @@
   let blossomError = $state(null);
   let pubkeyFilter = $state('');
   let typeFilter = $state('');
+  // Default owner pubkey to the signed-in user's pubkey
+  $effect(() => {
+    if (authState.pubkey && !pubkeyFilter) {
+      pubkeyFilter = authState.pubkey;
+    }
+  });
 
   $effect(() => {
     void loadRegistryArtifacts();
@@ -45,19 +53,25 @@
   }
 
   async function loadBlossomBlobs() {
-    if (blossomBlobs.length > 0 && !pubkeyFilter) return; // Already loaded
-    
+    if (!api) {
+      blossomError = 'API client not available';
+      return;
+    }
     blossomLoading = true;
     blossomError = null;
-    
+
     try {
-      blossomServers = [];
-      blossomHealth = {};
-      blossomBlobs = [];
-      blossomError = 'Blossom browsing is not part of the public relay read model yet.';
+      const [servers, health, blobs] = await Promise.all([
+        api.getBlossomServers(),
+        api.checkBlossomHealth(),
+        api.listBlossomBlobs(pubkeyFilter.trim() || null)
+      ]);
+      blossomServers = Array.isArray(servers) ? servers : [];
+      blossomHealth = health && typeof health === 'object' ? health : {};
+      blossomBlobs = Array.isArray(blobs) ? blobs : [];
     } catch (err) {
       console.error('Failed to load Blossom blobs:', err);
-      blossomError = err.message;
+      blossomError = err.message || 'Failed to load Blossom blobs';
     } finally {
       blossomLoading = false;
     }

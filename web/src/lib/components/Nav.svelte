@@ -7,11 +7,29 @@
     NAV_SECTIONS,
     PRIMARY_NAV_LINKS,
     authPresentation,
+    truncatePubkey,
     isActiveNavLink,
     isActiveNavSection
   } from '$lib/components/nav-model.js';
 
-  let authUi = $derived(authPresentation(authState, isAuthenticated()));
+  // Derive auth UI state — read all relevant $state properties directly so
+  // Svelte 5 tracks each one and re-runs when profile loads asynchronously.
+  let authUi = $derived.by(() => {
+    const authenticated = isAuthenticated();
+    const base = authPresentation(authState, authenticated);
+    if (authenticated) {
+      // Re-read profile directly here to guarantee fine-grained tracking
+      const profile = authState.profile || null;
+      return {
+        ...base,
+        profile,
+        displayLabel: profile?.displayName || profile?.name || truncatePubkey(authState.pubkey || ''),
+        nip05: profile?.nip05 || '',
+        avatarUrl: profile?.picture || ''
+      };
+    }
+    return base;
+  });
   let menuOpen = $state(false);
   let menuButton = $state();
   let drawerCloseButton = $state();
