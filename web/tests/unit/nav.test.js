@@ -1,10 +1,35 @@
 import { describe, it, expect } from 'vitest';
-import { NAV_LINKS, authPresentation, isActiveNavLink, truncatePubkey } from '../../src/lib/components/nav-model.js';
+import {
+  NAV_LINKS,
+  NAV_SECTIONS,
+  PRIMARY_NAV_LINKS,
+  authPresentation,
+  isActiveNavLink,
+  isActiveNavSection,
+  truncatePubkey
+} from '../../src/lib/components/nav-model.js';
 
 describe('nav model helpers', () => {
-  it('includes the Souls and LLM links and computes active states correctly', () => {
+  it('groups navigation links into primary shortcuts and sections', () => {
+    expect(PRIMARY_NAV_LINKS.map((link) => link.href)).toEqual([
+      '/',
+      '/services',
+      '/deployments',
+      '/environments'
+    ]);
+
+    expect(NAV_SECTIONS.map((section) => section.title)).toEqual([
+      'Workspace',
+      'Delivery',
+      'Operations',
+      'Admin'
+    ]);
+
     expect(NAV_LINKS).toContainEqual({ href: '/souls', label: 'Souls' });
     expect(NAV_LINKS).toContainEqual({ href: '/llm', label: 'LLM' });
+  });
+
+  it('computes active links and sections correctly', () => {
     expect(isActiveNavLink('/souls', '/souls')).toBe(true);
     expect(isActiveNavLink('/souls/new', '/souls')).toBe(true);
     expect(isActiveNavLink('/llm', '/llm')).toBe(true);
@@ -13,6 +38,10 @@ describe('nav model helpers', () => {
     expect(isActiveNavLink('/deployments/pending', '/deployments')).toBe(false);
     expect(isActiveNavLink('/deployments/pending', '/deployments/pending')).toBe(true);
     expect(isActiveNavLink('/events/live', '/events')).toBe(false);
+
+    expect(isActiveNavSection('/deployments/pending', NAV_SECTIONS[1])).toBe(true);
+    expect(isActiveNavSection('/workers/abc', NAV_SECTIONS[2])).toBe(true);
+    expect(isActiveNavSection('/settings', NAV_SECTIONS[0])).toBe(false);
   });
 
   it('truncates pubkeys and derives authenticated auth presentation', () => {

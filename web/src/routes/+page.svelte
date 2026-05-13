@@ -278,6 +278,7 @@
   }
 
   $effect(() => {
+    deploymentIntents.map((intent) => `${intent.id}:${intent.approval_status}:${intent.created_at}`).join('|');
     queueMicrotask(() => loadPendingDeployments());
   });
 
@@ -338,14 +339,26 @@
   
   <div class="quick-actions">
     <a href="/services" class="action-link">+ Create Service</a>
-    <a href="/deployments" class="action-link">View Deployments</a>
+    <a href="/deployments" class="action-link">Deployment History</a>
   </div>
 
   <div class="stats">
-    <Card title="Services" value={services.length} subtitle="Total registered" />
-    <Card title="Environments" value={environments.length} subtitle="Configured" />
-    <Card title="Workers" value={workers.length} subtitle="Available" />
-    <a href="#environment-states" class="card-link drift-card-link" aria-label="Review drifted environment states">
+    <a href="/services" class="card-link">
+      <Card title="Services" value={services.length} subtitle="Total registered">
+        <span class="card-action">View services</span>
+      </Card>
+    </a>
+    <a href="/environments" class="card-link">
+      <Card title="Environments" value={environments.length} subtitle="Configured">
+        <span class="card-action">View environments</span>
+      </Card>
+    </a>
+    <a href="/workers" class="card-link">
+      <Card title="Workers" value={workers.length} subtitle="Available">
+        <span class="card-action">View workers</span>
+      </Card>
+    </a>
+    <a href="#environment-states" class="card-link">
       <Card 
         title="Drifted" 
         value={driftedStates().length} 
@@ -361,15 +374,19 @@
         value={pendingLoading ? '...' : pendingCount}
         subtitle={pendingSubtitle}
         status={pendingError ? 'error' : pendingCount > 0 ? 'warning' : 'success'}
-      />
+      >
+        <span class="card-action">Review approvals</span>
+      </Card>
     </a>
-    <a href="/payments" class="card-link" aria-label="Review payment history cost summary">
+    <a href="/payments" class="card-link">
       <Card
         title="Recent Spend"
         value={costSummaryValue}
         subtitle={costSummarySubtitle}
         status={costSummaryStatus}
-      />
+      >
+        <span class="card-action">Open payments</span>
+      </Card>
     </a>
   </div>
 
@@ -418,15 +435,16 @@
     margin-bottom: 2rem;
   }
   .card-link {
+    display: block;
     text-decoration: none;
     color: inherit;
   }
-  .drift-card-link :global(.card) {
+  .card-link :global(.card) {
     height: 100%;
     transition: border-color 0.2s, transform 0.2s;
   }
-  .drift-card-link:hover :global(.card),
-  .drift-card-link:focus-visible :global(.card) {
+  .card-link:hover :global(.card),
+  .card-link:focus-visible :global(.card) {
     border-color: var(--primary);
     transform: translateY(-1px);
   }

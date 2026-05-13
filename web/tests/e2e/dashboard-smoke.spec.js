@@ -203,7 +203,7 @@ function nostrEvent({ id, kind, pubkey = SERVICE_PUBKEY, created_at = now, tags 
   return { id, kind, pubkey, created_at, tags, content: JSON.stringify(content), sig: '0'.repeat(128) };
 }
 
-function dashboardNostrEvents({ services = mockServices, environments = mockEnvironments, states = mockStates, workers = mockWorkers, events = mockEvents } = {}) {
+function dashboardNostrEvents({ services = mockServices, environments = mockEnvironments, states = mockStates, workers = mockWorkers, intents = mockPendingIntents, events = mockEvents } = {}) {
   return [
     ...services.map((svc, index) => nostrEvent({
       id: `svc-${index}`,
@@ -222,6 +222,12 @@ function dashboardNostrEvents({ services = mockServices, environments = mockEnvi
       kind: 31961,
       tags: [['d', state.id || `${state.service_id}:${state.environment_id}`], ['service', state.service_id], ['environment', state.environment_id], ['deleted', 'false']],
       content: { ...state, deleted: false }
+    })),
+    ...intents.map((intent, index) => nostrEvent({
+      id: `intent-${index}`,
+      kind: 31967,
+      tags: [['d', intent.id], ['service', intent.service_id], ['environment', intent.environment_id], ['deleted', 'false']],
+      content: { ...intent, deleted: false }
     })),
     ...workers.map((worker, index) => nostrEvent({
       id: `worker-${index}`,
@@ -480,7 +486,7 @@ test.describe('Dashboard Smoke Test', () => {
     await page.waitForLoadState('networkidle');
     await page.waitForTimeout(800);
 
-    const driftCardLink = page.locator('main a[aria-label="Review drifted environment states"]');
+    const driftCardLink = page.locator('main a[href="#environment-states"]');
     await expect(driftCardLink).toBeVisible();
     await expect(driftCardLink).toHaveAttribute('href', '#environment-states');
     await expect(driftCardLink.locator('.card-action')).toHaveText('Review states');
@@ -568,23 +574,33 @@ test.describe('Dashboard Smoke Test', () => {
   test('should display quick actions section', async ({ page }) => {
     await page.goto('/');
     await page.waitForLoadState('networkidle');
-    
-    // Quick actions section
+
     await expect(page.locator('.quick-actions')).toBeVisible();
+    await expect(page.getByRole('link', { name: 'Deployment History' })).toHaveAttribute('href', '/deployments');
   });
-  
-  test('should have quick action links', async ({ page }) => {
+
+  test('should expose logo, menu, and linked dashboard cards', async ({ page }) => {
     await page.goto('/');
     await page.waitForLoadState('networkidle');
-    await page.waitForTimeout(500);
-    
-    // Common quick actions
-    const createServiceLink = page.locator('a[href*="service"], button:has-text("Create Service"), text=Create Service');
-    const createEnvLink = page.locator('a[href*="environment"], button:has-text("Create Environment"), text=Create Environment');
-    
-    // At least one quick action should exist
-    const quickActions = page.locator('.quick-actions a, .actions a, button');
-    await expect(quickActions.first()).toBeVisible();
+    await page.waitForTimeout(800);
+
+    const logo = page.locator('img[alt="Bahia"]');
+    await expect(logo).toBeVisible();
+    await expect(logo).toHaveAttribute('src', /\/branding\/logo_wide_(dm|lm)\.png$/);
+
+    const menuButton = page.getByRole('button', { name: 'Menu' });
+    await expect(menuButton).toBeVisible();
+    await menuButton.click();
+    await expect(page.getByRole('heading', { name: 'Workspace' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Delivery' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Operations' })).toBeVisible();
+    await expect(page.locator('#navigation-drawer a[href="/deployments/pending"]')).toContainText('Pending Approvals');
+
+    await expect(page.locator('.stats a[href="/services"] .card')).toContainText('Services');
+    await expect(page.locator('.stats a[href="/environments"] .card')).toContainText('Environments');
+    await expect(page.locator('.stats a[href="/workers"] .card')).toContainText('Workers');
+    await expect(page.locator('.stats a[href="/deployments/pending"]')).toHaveAttribute('href', '/deployments/pending');
+    await expect(page.locator('.stats a[href="/payments"]')).toHaveAttribute('href', '/payments');
   });
   
   test('should display recent activity section', async ({ page }) => {

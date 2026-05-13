@@ -1,0 +1,30 @@
+{
+  "feature_id": "WEB_NAV_DASHBOARD_POLISH",
+  "status": "verified",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "The top navigation uses the provided theme-specific wide Bahia logo assets.",
+      "status": "passed"
+    },
+    {
+      "id": "AC2",
+      "text": "The top navigation reduces top-level density and exposes grouped destinations in a more mobile-friendly, accessible menu.",
+      "status": "passed"
+    },
+    {
+      "id": "AC3",
+      "text": "All dashboard summary cards link to their relevant route or review target.",
+      "status": "passed"
+    },
+    {
+      "id": "AC4",
+      "text": "The dashboard deployment CTA label reads 'Deployment History'.",
+      "status": "passed"
+    }
+  ],
+  "coverage_notes": [
+    "Dashboard pending approvals needed a reactive update hook to satisfy existing smoke coverage when relay-backed deployment intents arrive after first render."
+  ],
+  "unresolved_questions": []
+}

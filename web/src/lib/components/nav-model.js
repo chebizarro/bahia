@@ -1,19 +1,44 @@
-export const NAV_LINKS = [
+const WORKSPACE_LINKS = [
   { href: '/', label: 'Dashboard' },
   { href: '/orgs', label: 'Orgs' },
-  { href: '/souls', label: 'Souls' },
+  { href: '/souls', label: 'Souls' }
+];
+
+const DELIVERY_LINKS = [
   { href: '/services', label: 'Services' },
   { href: '/artifacts', label: 'Artifacts' },
+  { href: '/deployments', label: 'Deployments' },
+  { href: '/deployments/pending', label: 'Pending Approvals', badge: '!' }
+];
+
+const OPERATIONS_LINKS = [
   { href: '/environments', label: 'Environments' },
   { href: '/workers', label: 'Workers' },
   { href: '/llm', label: 'LLM' },
   { href: '/payments', label: 'Payments' },
   { href: '/policies', label: 'Policies' },
-  { href: '/deployments', label: 'Deployments' },
-  { href: '/deployments/pending', label: 'Pending Approvals', badge: '!' },
-  { href: '/events', label: 'Events' },
-  { href: '/settings', label: '⚙️ Settings' }
+  { href: '/events', label: 'Events' }
 ];
+
+const ADMIN_LINKS = [
+  { href: '/settings', label: 'Settings' }
+];
+
+export const PRIMARY_NAV_LINKS = [
+  WORKSPACE_LINKS[0],
+  DELIVERY_LINKS[0],
+  DELIVERY_LINKS[2],
+  OPERATIONS_LINKS[0]
+];
+
+export const NAV_SECTIONS = [
+  { title: 'Workspace', links: WORKSPACE_LINKS },
+  { title: 'Delivery', links: DELIVERY_LINKS },
+  { title: 'Operations', links: OPERATIONS_LINKS },
+  { title: 'Admin', links: ADMIN_LINKS }
+];
+
+export const NAV_LINKS = NAV_SECTIONS.flatMap((section) => section.links);
 
 export function truncatePubkey(pubkey) {
   if (!pubkey || pubkey.length < 16) return pubkey;
@@ -27,7 +52,11 @@ export function isActiveNavLink(pathname = '/', href = '/') {
   }
   if (href === '/deployments/pending') return pathname.startsWith('/deployments/pending');
   if (href === '/events' || href === '/settings') return pathname === href;
-  return pathname.startsWith(href);
+  return pathname === href || pathname.startsWith(`${href}/`);
+}
+
+export function isActiveNavSection(pathname = '/', section = {}) {
+  return Array.isArray(section.links) && section.links.some((link) => isActiveNavLink(pathname, link.href));
 }
 
 export function authPresentation(authState = {}, authenticated = false) {

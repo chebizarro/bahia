@@ -1,10 +1,40 @@
 <script>
+  import { tick } from 'svelte';
   import { page } from '$app/stores';
   import { theme, toggleTheme } from '$lib/stores/theme.js';
   import { authState, isAuthenticated, login, logout } from '$lib/stores/auth.js';
-  import { NAV_LINKS, authPresentation, isActiveNavLink } from '$lib/components/nav-model.js';
+  import {
+    NAV_SECTIONS,
+    PRIMARY_NAV_LINKS,
+    authPresentation,
+    isActiveNavLink,
+    isActiveNavSection
+  } from '$lib/components/nav-model.js';
 
   let authUi = $derived(authPresentation(authState, isAuthenticated()));
+  let menuOpen = $state(false);
+  let menuButton = $state();
+  let drawerCloseButton = $state();
+  let previousMenuOpen = false;
+
+  $effect(() => {
+    $page.url.pathname;
+    menuOpen = false;
+  });
+
+  $effect(() => {
+    const currentlyOpen = menuOpen;
+
+    queueMicrotask(async () => {
+      if (currentlyOpen) {
+        await tick();
+        drawerCloseButton?.focus();
+      } else if (previousMenuOpen) {
+        menuButton?.focus();
+      }
+      previousMenuOpen = currentlyOpen;
+    });
+  });
 
   async function handleLogin() {
     try {
@@ -17,130 +47,258 @@
   function handleLogout() {
     logout();
   }
+
+  function toggleMenu() {
+    menuOpen = !menuOpen;
+  }
+
+  function closeMenu() {
+    menuOpen = false;
+  }
+
+  function handleWindowKeydown(event) {
+    if (event.key === 'Escape') {
+      closeMenu();
+    }
+  }
 </script>
 
-<nav>
-  <div class="logo">
-    <span class="logo-icon">⚡</span>
-    <span class="logo-text">Bahia</span>
-  </div>
-  
-  <ul class="nav-links">
-    {#each NAV_LINKS as link}
-      <li>
-        <a href={link.href} class:active={isActiveNavLink($page.url.pathname, link.href)} class:with-badge={link.badge}>
-          {link.label}
-          {#if link.badge}
-            <span class="badge">{link.badge}</span>
-          {/if}
-        </a>
-      </li>
-    {/each}
-  </ul>
-  
-  <div class="nav-actions">
-    <div class="auth-section">
-      {#if authUi.mode === 'loading'}
-        <span class="auth-loading">
-          <span class="spinner"></span>
-          {authUi.label}
-        </span>
-      {:else if authUi.mode === 'authenticated'}
-        <div class="user-info">
-          <span class="user-pubkey" title={authUi.pubkey}>
-            {#if authUi.backendAuthenticated}
-              ✅
-            {:else}
-              🔑
-            {/if}
-            {authUi.truncatedPubkey}
-          </span>
-          {#if authUi.showWarning}
-            <span class="auth-warning" title={authUi.warning}>⚠️</span>
-          {/if}
-          <button class="logout-btn" onclick={handleLogout}>
-            Logout
-          </button>
-        </div>
-      {:else}
-        <button
-          class="login-btn"
-          onclick={handleLogin}
-          disabled={!authUi.extensionAvailable}
-          title={authUi.buttonTitle}
-        >
-          {authUi.buttonLabel}
-        </button>
-        {#if authUi.showError}
-          <span class="auth-error" title={authUi.error}>⚠️</span>
-        {/if}
-      {/if}
-    </div>
+<svelte:window onkeydown={handleWindowKeydown} />
 
-    <button class="theme-toggle" onclick={toggleTheme} aria-label="Toggle theme">
-      {#if theme.value === 'dark'}
-        ☀️
-      {:else}
-        🌙
-      {/if}
-    </button>
-  </div>
-</nav>
+<div class="nav-shell">
+  <nav class="topbar" aria-label="Primary">
+    <a class="brand" href="/" aria-label="Bahia home">
+      <img
+        class="brand-logo"
+        src={theme.value === 'dark' ? '/branding/logo_wide_dm.png' : '/branding/logo_wide_lm.png'}
+        alt="Bahia"
+      />
+    </a>
+
+    <ul class="primary-links" aria-label="Primary shortcuts">
+      {#each PRIMARY_NAV_LINKS as link}
+        <li>
+          <a
+            href={link.href}
+            class:active={isActiveNavLink($page.url.pathname, link.href)}
+            aria-current={isActiveNavLink($page.url.pathname, link.href) ? 'page' : undefined}
+          >
+            {link.label}
+          </a>
+        </li>
+      {/each}
+    </ul>
+
+    <div class="nav-actions">
+      <button
+        type="button"
+        class="menu-toggle"
+        aria-controls="navigation-drawer"
+        aria-expanded={menuOpen}
+        bind:this={menuButton}
+        onclick={toggleMenu}
+      >
+        {menuOpen ? 'Close' : 'Menu'}
+      </button>
+
+      <div class="auth-section">
+        {#if authUi.mode === 'loading'}
+          <span class="auth-loading">
+            <span class="spinner"></span>
+            {authUi.label}
+          </span>
+        {:else if authUi.mode === 'authenticated'}
+          <div class="user-info">
+            <span class="user-pubkey" title={authUi.pubkey}>
+              {#if authUi.backendAuthenticated}
+                ✅
+              {:else}
+                🔑
+              {/if}
+              {authUi.truncatedPubkey}
+            </span>
+            {#if authUi.showWarning}
+              <span class="auth-warning" title={authUi.warning}>⚠️</span>
+            {/if}
+            <button class="logout-btn" onclick={handleLogout}>
+              Logout
+            </button>
+          </div>
+        {:else}
+          <button
+            class="login-btn"
+            onclick={handleLogin}
+            disabled={!authUi.extensionAvailable}
+            title={authUi.buttonTitle}
+          >
+            {authUi.buttonLabel}
+          </button>
+          {#if authUi.showError}
+            <span class="auth-error" title={authUi.error}>⚠️</span>
+          {/if}
+        {/if}
+      </div>
+
+      <button class="theme-toggle" onclick={toggleTheme} aria-label="Toggle theme">
+        {#if theme.value === 'dark'}
+          ☀️
+        {:else}
+          🌙
+        {/if}
+      </button>
+    </div>
+  </nav>
+
+  {#if menuOpen}
+    <nav id="navigation-drawer" class="navigation-drawer" aria-label="All navigation links">
+      <div class="drawer-header">
+        <div>
+          <p class="drawer-eyebrow">Browse</p>
+          <p class="drawer-title">All destinations</p>
+        </div>
+        <button type="button" class="drawer-close" bind:this={drawerCloseButton} onclick={closeMenu}>Close</button>
+      </div>
+
+      <div class="nav-sections">
+        {#each NAV_SECTIONS as section}
+          <section class:active-section={isActiveNavSection($page.url.pathname, section)} class="nav-section">
+            <h2>{section.title}</h2>
+            <ul>
+              {#each section.links as link}
+                <li>
+                  <a
+                    href={link.href}
+                    class:active={isActiveNavLink($page.url.pathname, link.href)}
+                    class:with-badge={link.badge}
+                    aria-current={isActiveNavLink($page.url.pathname, link.href) ? 'page' : undefined}
+                    onclick={closeMenu}
+                  >
+                    <span>{link.label}</span>
+                    {#if link.badge}
+                      <span class="badge">{link.badge}</span>
+                    {/if}
+                  </a>
+                </li>
+              {/each}
+            </ul>
+          </section>
+        {/each}
+      </div>
+    </nav>
+  {/if}
+</div>
 
 <style>
-  nav {
-    display: flex;
-    align-items: center;
-    gap: 2rem;
-    padding: 1rem 2rem;
+  .nav-shell {
     background: var(--nav-bg, #0f0f1a);
     border-bottom: 1px solid var(--border-color, #2a2a4a);
   }
-  .logo {
+
+  .topbar {
     display: flex;
     align-items: center;
-    gap: 0.5rem;
-    font-weight: bold;
-    font-size: 1.25rem;
+    gap: 1rem;
+    padding: 1rem 2rem;
   }
-  .logo-icon { font-size: 1.5rem; }
-  .nav-links {
+
+  .brand {
+    display: inline-flex;
+    align-items: center;
+    flex-shrink: 0;
+  }
+
+  .brand-logo {
+    display: block;
+    height: 42px;
+    width: auto;
+    max-width: min(240px, 100%);
+  }
+
+  .primary-links {
     display: flex;
+    align-items: center;
     gap: 0.5rem;
     list-style: none;
     margin: 0;
     padding: 0;
   }
-  .nav-links a {
-    padding: 0.5rem 1rem;
-    border-radius: 6px;
+
+  .primary-links a,
+  .nav-section a {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.375rem;
+    padding: 0.5rem 0.875rem;
+    border-radius: 8px;
     color: var(--text-muted, #888);
     text-decoration: none;
     font-size: 0.875rem;
     transition: all 0.15s;
   }
-  .nav-links a:hover {
+
+  .primary-links a:hover,
+  .primary-links a:focus-visible,
+  .nav-section a:hover,
+  .nav-section a:focus-visible {
     background: var(--hover-bg, #1a1a2e);
     color: var(--text-primary, #fff);
   }
-  .nav-links a.active {
-    background: var(--primary, #6366f1);
-    color: #fff;
+
+  .primary-links a.active,
+  .nav-section a.active {
+    background: color-mix(in srgb, var(--primary, #6366f1) 18%, transparent);
+    color: var(--text-primary, #fff);
   }
-  
+
   .nav-actions {
     display: flex;
     align-items: center;
-    gap: 1rem;
+    gap: 0.75rem;
     margin-left: auto;
+    flex-wrap: wrap;
+    justify-content: flex-end;
   }
-  
+
+  .menu-toggle,
+  .drawer-close,
+  .theme-toggle,
+  .logout-btn,
+  .login-btn {
+    border-radius: 8px;
+    transition: all 0.15s;
+  }
+
+  .menu-toggle,
+  .drawer-close,
+  .theme-toggle,
+  .logout-btn {
+    background: transparent;
+    color: var(--text-muted);
+    border: 1px solid var(--border-color);
+    padding: 0.5rem 0.875rem;
+    cursor: pointer;
+  }
+
+  .menu-toggle:hover,
+  .menu-toggle:focus-visible,
+  .drawer-close:hover,
+  .drawer-close:focus-visible,
+  .theme-toggle:hover,
+  .theme-toggle:focus-visible,
+  .logout-btn:hover,
+  .logout-btn:focus-visible {
+    background: var(--hover-bg);
+    color: var(--text-primary);
+  }
+
   .auth-section {
     display: flex;
     align-items: center;
     gap: 0.5rem;
+    flex-wrap: wrap;
+    justify-content: flex-end;
   }
-  
+
   .auth-loading {
     display: flex;
     align-items: center;
@@ -148,7 +306,7 @@
     color: var(--text-muted);
     font-size: 0.875rem;
   }
-  
+
   .spinner {
     width: 14px;
     height: 14px;
@@ -157,17 +315,21 @@
     border-radius: 50%;
     animation: spin 0.8s linear infinite;
   }
-  
+
   @keyframes spin {
-    to { transform: rotate(360deg); }
+    to {
+      transform: rotate(360deg);
+    }
   }
-  
+
   .user-info {
     display: flex;
     align-items: center;
     gap: 0.75rem;
+    flex-wrap: wrap;
+    justify-content: flex-end;
   }
-  
+
   .user-pubkey {
     font-family: monospace;
     font-size: 0.8rem;
@@ -177,77 +339,110 @@
     border-radius: 4px;
     border: 1px solid var(--border-color);
   }
-  
+
   .login-btn {
     background: var(--primary);
     color: #fff;
     border: none;
     padding: 0.5rem 1rem;
-    border-radius: 6px;
     font-size: 0.875rem;
     cursor: pointer;
-    transition: all 0.15s;
     display: flex;
     align-items: center;
     gap: 0.5rem;
   }
-  
-  .login-btn:hover:not(:disabled) {
-    filter: brightness(1.1);
+
+  .login-btn:hover:not(:disabled),
+  .login-btn:focus-visible:not(:disabled) {
+    filter: brightness(1.08);
     transform: translateY(-1px);
   }
-  
+
   .login-btn:disabled {
     background: var(--text-muted);
     cursor: not-allowed;
     opacity: 0.7;
   }
-  
-  .logout-btn {
-    background: transparent;
-    color: var(--text-muted);
-    border: 1px solid var(--border-color);
-    padding: 0.375rem 0.75rem;
-    border-radius: 6px;
-    font-size: 0.8rem;
-    cursor: pointer;
-    transition: all 0.15s;
-  }
-  
-  .logout-btn:hover {
-    background: var(--error);
-    color: #fff;
-    border-color: var(--error);
-  }
-  
-  .auth-error {
-    cursor: help;
-  }
-  
+
+  .auth-error,
   .auth-warning {
     cursor: help;
+  }
+
+  .auth-warning {
     color: var(--warning);
   }
-  
+
   .theme-toggle {
-    background: transparent;
-    border: 1px solid var(--border-color);
-    border-radius: 6px;
-    padding: 0.5rem 0.75rem;
-    font-size: 1.25rem;
-    cursor: pointer;
-    transition: all 0.15s;
+    padding-inline: 0.75rem;
+    font-size: 1.15rem;
     display: flex;
     align-items: center;
     justify-content: center;
   }
-  .theme-toggle:hover {
-    background: var(--hover-bg);
-    transform: scale(1.05);
+
+  .navigation-drawer {
+    border-top: 1px solid var(--border-color);
+    padding: 1rem 2rem 1.5rem;
+    background: var(--nav-bg, #0f0f1a);
   }
+
+  .drawer-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    margin-bottom: 1rem;
+  }
+
+  .drawer-eyebrow {
+    color: var(--text-muted);
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+  }
+
+  .drawer-title {
+    color: var(--text-primary);
+    font-size: 1rem;
+    font-weight: 600;
+  }
+
+  .nav-sections {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 1rem;
+  }
+
+  .nav-section {
+    background: var(--card-bg);
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    padding: 1rem;
+  }
+
+  .nav-section.active-section {
+    border-color: color-mix(in srgb, var(--primary, #6366f1) 50%, var(--border-color));
+  }
+
+  .nav-section h2 {
+    margin-bottom: 0.75rem;
+    color: var(--text-primary);
+    font-size: 0.95rem;
+  }
+
+  .nav-section ul {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    gap: 0.375rem;
+  }
+
   .with-badge {
-    position: relative;
+    justify-content: space-between;
   }
+
   .badge {
     display: inline-block;
     background: var(--warning, #f59e0b);
@@ -256,7 +451,51 @@
     font-weight: bold;
     padding: 0.125rem 0.375rem;
     border-radius: 10px;
-    margin-left: 0.25rem;
-    vertical-align: middle;
+  }
+
+  @media (max-width: 960px) {
+    .topbar {
+      padding: 1rem;
+    }
+
+    .primary-links {
+      display: none;
+    }
+
+    .navigation-drawer {
+      padding: 1rem;
+    }
+  }
+
+  @media (max-width: 720px) {
+    .brand-logo {
+      height: 34px;
+    }
+
+    .user-pubkey {
+      display: none;
+    }
+  }
+
+  @media (max-width: 560px) {
+    .topbar {
+      gap: 0.75rem;
+    }
+
+    .nav-actions {
+      gap: 0.5rem;
+    }
+
+    .menu-toggle,
+    .theme-toggle,
+    .logout-btn,
+    .login-btn,
+    .drawer-close {
+      padding: 0.5rem 0.75rem;
+    }
+
+    .nav-sections {
+      grid-template-columns: 1fr;
+    }
   }
 </style>

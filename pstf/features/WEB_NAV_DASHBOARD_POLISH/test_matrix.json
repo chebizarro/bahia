@@ -1,0 +1,36 @@
+{
+  "feature_id": "WEB_NAV_DASHBOARD_POLISH",
+  "status": "verified",
+  "tests": [
+    {
+      "id": "T1",
+      "criterion_ids": ["AC1", "AC2"],
+      "type": "unit",
+      "command": "npm run test:unit -- tests/unit/nav.test.js",
+      "status": "passed"
+    },
+    {
+      "id": "T2",
+      "criterion_ids": ["AC1", "AC2", "AC3", "AC4"],
+      "type": "e2e",
+      "command": "npx playwright test tests/e2e/dashboard-smoke.spec.js --reporter=line",
+      "status": "passed"
+    },
+    {
+      "id": "T3",
+      "criterion_ids": ["AC1", "AC2", "AC3", "AC4"],
+      "type": "build",
+      "command": "npm run build",
+      "status": "passed"
+    }
+  ],
+  "coverage_summary": {
+    "criteria_total": 4,
+    "criteria_with_tests": 4,
+    "known_gaps": []
+  },
+  "implementation_notes": [
+    "Recovered a corrupted local Playwright install by reinstalling web dependencies before rerunning the smoke suite.",
+    "Updated the dashboard smoke fixture to publish deployment intent read-model events instead of relying on legacy REST intent mocks."
+  ]
+}

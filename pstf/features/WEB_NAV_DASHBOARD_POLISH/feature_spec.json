@@ -1,0 +1,56 @@
+{
+  "feature_id": "WEB_NAV_DASHBOARD_POLISH",
+  "title": "Bahia web top navigation and dashboard card polish",
+  "status": "verified",
+  "source_evidence": [
+    "web/src/lib/components/Nav.svelte",
+    "web/src/lib/components/nav-model.js",
+    "web/src/routes/+page.svelte",
+    "web/tests/unit/nav.test.js",
+    "web/tests/e2e/dashboard-smoke.spec.js"
+  ],
+  "actors": [
+    "Bahia web operator"
+  ],
+  "description": "Refine the Bahia web shell by replacing the text logo with theme-aware brand assets, reducing top-level navigation density with a grouped menu, and making the dashboard summary cards navigable.",
+  "in_scope": [
+    "Theme-aware wide logo assets in the app shell",
+    "Grouped, more mobile-friendly top navigation",
+    "Dashboard stat card links and deployment CTA label",
+    "Dashboard pending-approvals reactivity fix needed for verification"
+  ],
+  "out_of_scope": [
+    "Backend/API changes",
+    "Adding brand-new dashboard destinations beyond existing routes/sections"
+  ],
+  "preconditions": [
+    "Bahia web app loads with the standard app shell",
+    "Relay-backed dashboard read models are available in the browser mocks for e2e verification"
+  ],
+  "postconditions": [
+    "Users can reach key dashboard destinations from the summary cards",
+    "Top navigation is grouped behind a menu while keeping a small shortcut set visible on larger screens"
+  ],
+  "happy_paths": [
+    "User sees the appropriate light/dark wide logo in the top bar",
+    "User opens the grouped menu and reaches dashboard destinations from sectioned navigation",
+    "User activates dashboard cards to open services, environments, workers, pending approvals, spend, or drift review"
+  ],
+  "failure_paths": [
+    "If deployment intents arrive after initial render, the pending approvals card must still update reactively"
+  ],
+  "edge_cases": [
+    "Keyboard users can close the menu with Escape and have focus restored to the toggle",
+    "Screen readers use visible card content instead of generic aria-label overrides"
+  ],
+  "non_functional_requirements": [
+    "Navigation remains accessible on smaller screens",
+    "Verification includes unit, e2e, and production build evidence"
+  ],
+  "dependencies": [
+    "SvelteKit app shell",
+    "Relay-backed controlplane browser mocks in web/tests/e2e/helpers.js"
+  ],
+  "ambiguities": [],
+  "human_decisions": []
+}
