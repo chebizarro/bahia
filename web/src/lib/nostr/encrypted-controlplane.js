@@ -86,7 +86,25 @@ export class EncryptedControlplaneTransport {
   constructor({ relays = encryptedRelayUrlsFromSystemInfo(), servicePubkey = servicePubkeyFromSystemInfo(), client = null } = {}) {
     this.relays = normalizeRelays(relays);
     this.servicePubkey = servicePubkey || '';
-    this.client = client || new NostrClient({ relays: this.relays });
+
+    if (client) {
+      // Caller-provided client: use as-is, caller owns lifecycle.
+      this.client = client;
+      this.ownClient = false;
+    } else {
+      // Reuse the singleton when it already covers these relay URLs — avoids
+      // opening duplicate connections and leaking reconnect timers.
+      const singletonRelays = new Set(nostr.getRelays());
+      const coveredBySingleton =
+        this.relays.length > 0 && this.relays.every((r) => singletonRelays.has(r));
+      if (coveredBySingleton) {
+        this.client = nostr;
+        this.ownClient = false;
+      } else {
+        this.client = new NostrClient({ relays: this.relays });
+        this.ownClient = true;
+      }
+    }
     this.connected = false;
   }
 
@@ -95,10 +113,23 @@ export class EncryptedControlplaneTransport {
       throw new Error('No relay URLs configured for encrypted Nostr events. Add relay URLs in Settings.');
     }
     if (!this.connected) {
-      await this.client.connect(this.relays);
+      if (this.ownClient) {
+        // Ephemeral client: establish its own connections.
+        await this.client.connect(this.relays);
+      }
+      // Singleton: already managed externally; just mark ready.
       this.connected = true;
     }
     return this;
+  }
+
+  // Tear down ephemeral connections. No-op when reusing the singleton.
+  disconnect() {
+    if (this.ownClient) {
+      this.client.disconnect();
+      this.ownClient = false;
+    }
+    this.connected = false;
   }
 
   async buildEncryptedRequestEvent({ operation, payload = {}, tags = [], kind = ENCRYPTED_REQUEST_KIND, created_at = Math.floor(Date.now() / 1000) } = {}) {
@@ -248,6 +279,8 @@ export class EncryptedControlplaneTransport {
       throw error;
     } finally {
       signal?.removeEventListener?.('abort', forwardAbort);
+      // Tear down ephemeral connections now that the request is settled.
+      this.disconnect();
     }
   }
 }
@@ -263,17 +296,31 @@ export async function buildEncryptedRequestEvent(options) {
 
 export async function publishEncryptedRequest(options) {
   const transport = createEncryptedControlplaneTransport(options?.transport);
-  const event = options?.event || await transport.buildEncryptedRequestEvent(options);
-  return transport.publishEncryptedRequest(event);
+  try {
+    const event = options?.event || await transport.buildEncryptedRequestEvent(options);
+    return await transport.publishEncryptedRequest(event);
+  } finally {
+    transport.disconnect();
+  }
 }
 
 export async function awaitEncryptedResult(options) {
   const transport = createEncryptedControlplaneTransport(options?.transport);
-  await transport.connect();
-  return transport.awaitEncryptedResult(options);
+  try {
+    await transport.connect();
+    return await transport.awaitEncryptedResult(options);
+  } finally {
+    transport.disconnect();
+  }
 }
 
 export async function requestEncryptedResult(options) {
   const transport = createEncryptedControlplaneTransport(options?.transport);
-  return transport.requestEncryptedResult(options);
+  // transport.requestEncryptedResult already calls this.disconnect() in its finally
+  // block, but we guard here too in case it throws before reaching that path.
+  try {
+    return await transport.requestEncryptedResult(options);
+  } finally {
+    transport.disconnect();
+  }
 }
