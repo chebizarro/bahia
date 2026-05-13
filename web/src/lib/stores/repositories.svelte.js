@@ -60,10 +60,9 @@ function sameAuthors(a, b) {
 }
 
 export async function ensureRepositoryConnection() {
-  const authRelays = toRelayList(authState?.relays);
-  const relays = authRelays.length > 0 ? authRelays : (nostr.relays || []);
-
-  await nostr.connect(relays);
+  // Do NOT call nostr.connect() here. Passing user NIP-07 relay URLs replaces the
+  // singleton's relay list and closes Bahia control-plane sockets as a side-effect.
+  // The singleton's connection lifecycle is managed globally by bootstrap / Settings.
 }
 
 export async function loadRepositories({ authors = null, force = false } = {}) {
