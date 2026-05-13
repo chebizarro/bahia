@@ -29,6 +29,7 @@ Thumbs.db
 # Build
 dist/
 tmp/
+build/
 
 # Local prompt/oracle exports
 prompt-exports/
@@ -41,3 +42,5 @@ prompt-exports/
 node_modules/
 .svelte-kit/
 dist/
+
+# Testing

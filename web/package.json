@@ -30,6 +30,8 @@
   "type": "module",
   "dependencies": {
     "@nostr-git/core": "1.0.0-alpha.1",
+    "jsqr": "^1.4.0",
+    "qrcode": "^1.5.4",
     "zod": "^4.4.2"
   }
 }
