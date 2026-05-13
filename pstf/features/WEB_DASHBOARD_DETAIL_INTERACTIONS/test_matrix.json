@@ -1,0 +1,38 @@
+{
+  "feature_id": "WEB_DASHBOARD_DETAIL_INTERACTIONS",
+  "status": "verified",
+  "tests": [
+    {
+      "id": "T1",
+      "criterion_ids": ["AC1", "AC5"],
+      "type": "unit",
+      "command": "npm run test:unit -- tests/unit/nav.test.js tests/unit/encrypted-route-stores.test.js",
+      "status": "passed"
+    },
+    {
+      "id": "T2",
+      "criterion_ids": ["AC1", "AC2", "AC3", "AC4"],
+      "type": "e2e",
+      "command": "npx playwright test tests/e2e/dashboard-smoke.spec.js --reporter=line",
+      "status": "passed"
+    },
+    {
+      "id": "T3",
+      "criterion_ids": ["AC1", "AC2", "AC3", "AC4", "AC5"],
+      "type": "build",
+      "command": "npm run build",
+      "status": "passed"
+    }
+  ],
+  "coverage_summary": {
+    "criteria_total": 5,
+    "criteria_with_tests": 5,
+    "known_gaps": [
+      "No page-level service-secret smoke assertion was retained because the existing legacy service-secrets smoke suite is stale against the encrypted flow and is tracked in beads issue bahia-1u2u."
+    ]
+  },
+  "implementation_notes": [
+    "Dashboard smoke coverage now asserts named entity buttons, ID tooltips, timezone labeling, event hover detail, and dashboard detail dialogs.",
+    "Service-secret wording is verified through the encrypted-route-stores unit coverage and a clean production build."
+  ]
+}

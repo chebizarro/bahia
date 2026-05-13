@@ -587,6 +587,7 @@ test.describe('Dashboard Smoke Test', () => {
     const logo = page.locator('img[alt="Bahia"]');
     await expect(logo).toBeVisible();
     await expect(logo).toHaveAttribute('src', /\/branding\/logo_wide_(dm|lm)\.png$/);
+    expect(await logo.evaluate((node) => Number.parseFloat(getComputedStyle(node).height))).toBeGreaterThanOrEqual(60);
 
     const menuButton = page.getByRole('button', { name: 'Menu' });
     await expect(menuButton).toBeVisible();
@@ -594,7 +595,9 @@ test.describe('Dashboard Smoke Test', () => {
     await expect(page.getByRole('heading', { name: 'Workspace' })).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Delivery' })).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Operations' })).toBeVisible();
-    await expect(page.locator('#navigation-drawer a[href="/deployments/pending"]')).toContainText('Pending Approvals');
+    const pendingApprovalsLink = page.locator('#navigation-drawer a[href="/deployments/pending"]');
+    await expect(pendingApprovalsLink).toContainText('Pending Approvals');
+    await expect(pendingApprovalsLink.locator('.badge')).toHaveCount(0);
 
     await expect(page.locator('.stats a[href="/services"] .card')).toContainText('Services');
     await expect(page.locator('.stats a[href="/environments"] .card')).toContainText('Environments');
@@ -610,6 +613,7 @@ test.describe('Dashboard Smoke Test', () => {
     
     // Recent activity heading
     await expect(page.getByRole('heading', { name: 'Recent Activity' })).toBeVisible();
+    await expect(page.locator('section:has-text("Recent Activity") thead th').first()).toContainText(/^Time \(.+\)$/);
   });
   
   test('should show recent events in activity feed', async ({ page }) => {
@@ -650,6 +654,56 @@ test.describe('Dashboard Smoke Test', () => {
     await expect(activitySection.locator('a[href="/deployments/deploy-2"]')).toBeVisible();
     await expect(activitySection.locator('a[href="/services/service-1"]').first()).toBeVisible();
     await expect(activitySection.locator('a[href="/environments/env-2"]').first()).toBeVisible();
+  });
+
+  test('should show named environment state entities with id tooltips and detail dialogs', async ({ page }) => {
+    await page.goto('/');
+
+    const environmentStates = page.locator('section#environment-states');
+    const firstRow = environmentStates.locator('tbody tr').first();
+    const serviceButton = firstRow.getByRole('button', { name: 'web-app' });
+    const environmentButton = firstRow.getByRole('button', { name: 'production' });
+
+    await expect(serviceButton).toBeVisible();
+    await expect(environmentButton).toBeVisible();
+    await expect(serviceButton).toHaveAttribute('title', /service-1/);
+    await expect(environmentButton).toHaveAttribute('title', /env-1/);
+
+    await serviceButton.click();
+    await expect(page.getByRole('dialog', { name: 'web-app · Service' })).toBeVisible();
+    await expect(page.getByRole('dialog', { name: 'web-app · Service' })).toContainText('ghcr.io/test/web-app');
+    await page.getByRole('dialog', { name: 'web-app · Service' }).getByRole('button', { name: 'Close' }).click();
+
+    await environmentButton.click();
+    await expect(page.getByRole('dialog', { name: 'production · Environment' })).toBeVisible();
+    await expect(page.getByRole('dialog', { name: 'production · Environment' })).toContainText('role=prod');
+  });
+
+  test('should show timezone-aware recent activity details and event dialog', async ({ page }) => {
+    await page.goto('/');
+
+    const activitySection = page.locator('section:has-text("Recent Activity")');
+    const firstRow = activitySection.locator('tbody tr').first();
+    const timeValue = firstRow.locator('.activity-time');
+    const eventButton = firstRow.locator('button[data-dashboard-action="event"]');
+
+    await expect(eventButton).toBeVisible();
+    await expect(activitySection.locator('thead th').first()).toContainText(/^Time \(.+\)$/);
+    await expect(timeValue).toBeVisible();
+    await expect(timeValue).toHaveAttribute('title', /UTC/);
+    await expect(eventButton).toHaveAttribute('title', /Service: web-app \(service-1\)/);
+    await expect(eventButton).toHaveAttribute('title', /Environment: production \(env-1\)/);
+
+    const entityLinks = firstRow.locator('.activity-entity-links');
+    await expect(entityLinks).toContainText('Service web-app');
+    await expect(entityLinks).toContainText('Environment production');
+
+    await eventButton.click();
+    const dialog = page.getByRole('dialog', { name: 'deployment.started · Event detail' });
+    await expect(dialog).toBeVisible();
+    await expect(dialog).toContainText('UTC Time');
+    await expect(dialog).toContainText('"service_name": "web-app"');
+    await expect(dialog).toContainText('"environment_name": "production"');
   });
   
   test('should show event timestamps in recent activity', async ({ page }) => {

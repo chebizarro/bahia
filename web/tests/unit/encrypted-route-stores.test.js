@@ -71,11 +71,13 @@ describe('encrypted route stores', () => {
     }));
   });
 
-  it('blocks encrypted route stores when encrypted Nostr requests are not configured', async () => {
+  it('blocks encrypted route stores when encrypted Nostr events are not configured for secrets', async () => {
     encryptedRequestsMock.encryptedRequestsAvailable.mockReturnValue(false);
     const store = await import('../../src/lib/stores/service-secrets.svelte.js');
 
-    await expect(store.listServiceSecrets('svc-1')).rejects.toThrow('Encrypted Nostr requests are not available');
+    await expect(store.listServiceSecrets('svc-1')).rejects.toThrow(
+      'Encrypted Nostr events are not available for service secret management'
+    );
     expect(encryptedRequestsMock.requestEncryptedResult).not.toHaveBeenCalled();
   });
 });

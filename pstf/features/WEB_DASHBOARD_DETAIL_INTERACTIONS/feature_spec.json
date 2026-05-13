@@ -1,0 +1,66 @@
+{
+  "feature_id": "WEB_DASHBOARD_DETAIL_INTERACTIONS",
+  "title": "Bahia dashboard detail interactions and service-secret copy cleanup",
+  "status": "verified",
+  "source_evidence": [
+    "web/src/lib/components/Nav.svelte",
+    "web/src/lib/components/nav-model.js",
+    "web/src/lib/components/Table.svelte",
+    "web/src/routes/+page.svelte",
+    "web/src/lib/stores/service-secrets.svelte.js",
+    "web/src/routes/services/[id]/+page.svelte",
+    "web/tests/unit/nav.test.js",
+    "web/tests/unit/encrypted-route-stores.test.js",
+    "web/tests/e2e/dashboard-smoke.spec.js"
+  ],
+  "actors": [
+    "Bahia web operator"
+  ],
+  "description": "Refine the Bahia dashboard and service detail UX by enlarging the top-bar logo, removing an obsolete nav badge, exposing human-readable dashboard entities with hover and dialog affordances, making recent-activity timestamps timezone-aware, and removing incorrect encrypted-request wording from service-secret unavailability messaging.",
+  "in_scope": [
+    "Top-bar logo sizing",
+    "Pending Approvals nav item badge removal",
+    "Environment States name rendering, ID tooltips, and entity detail dialogs",
+    "Recent Activity timezone labels, hover details, event detail dialog, and shortened entity names",
+    "Service-secret unavailability copy for encrypted Nostr events"
+  ],
+  "out_of_scope": [
+    "Backend/API behavior changes",
+    "Reworking the broader encrypted controlplane terminology used outside the requested service-secret path",
+    "Repairing the legacy service-secrets smoke suite beyond filing a tracked follow-up"
+  ],
+  "preconditions": [
+    "Dashboard relay-backed read models are available in browser mocks for e2e verification",
+    "The service-secret store remains the authority for encrypted-secret availability checks"
+  ],
+  "postconditions": [
+    "Operators can identify dashboard entities by name without losing access to IDs",
+    "Operators can inspect service, environment, and event detail without leaving the dashboard",
+    "Service-secret unavailability messaging no longer refers to fictional encrypted request relays"
+  ],
+  "happy_paths": [
+    "User opens the dashboard and sees named service/environment state entries with tooltip IDs and clickable detail dialogs",
+    "User inspects recent activity with local timezone labels, UTC hover detail, and full event detail dialogs",
+    "User encountering unavailable encrypted secret management sees copy that points to encrypted Nostr events and Settings"
+  ],
+  "failure_paths": [
+    "Dashboard activity rows must not manufacture incorrect deployment links from service entity IDs",
+    "The broader legacy service-secrets smoke suite currently fails before coverage due to stale assumptions and is tracked separately"
+  ],
+  "edge_cases": [
+    "Activity rows may have service/environment names in event payloads even when local stores are not yet hydrated",
+    "Interactive controls inside tables must remain clickable without forcing the whole row to look clickable"
+  ],
+  "non_functional_requirements": [
+    "Verification includes targeted unit coverage, browser smoke coverage, and a production build",
+    "Dialog behavior remains keyboard accessible via existing modal focus management"
+  ],
+  "dependencies": [
+    "SvelteKit app shell and modal component",
+    "Relay-backed controlplane browser mocks in web/tests/e2e/helpers.js"
+  ],
+  "ambiguities": [],
+  "human_decisions": [
+    "Environment-state service names open a service dialog; environment names open an environment dialog."
+  ]
+}

@@ -214,7 +214,7 @@
       if (sequence !== loadSequence || id !== serviceId) return;
       secrets = [];
       secretsError = secretErr?.message || 'Failed to load service secrets';
-      console.warn('Failed to load service secrets via encrypted Nostr requests:', secretErr);
+      console.warn('Failed to load service secrets via encrypted Nostr events:', secretErr);
     } finally {
       if (sequence === loadSequence && id === serviceId) {
         secretsLoading = false;

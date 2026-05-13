@@ -1,0 +1,13 @@
+{
+  "feature_id": "WEB_DASHBOARD_DETAIL_INTERACTIONS",
+  "status": "verified_with_followup",
+  "defects": [
+    {
+      "id": "bahia-1u2u",
+      "severity": "medium",
+      "status": "open",
+      "summary": "Legacy service-secrets smoke coverage is stale against the encrypted secret-management flow.",
+      "impact": "This does not block the requested UI change, but it leaves the service-secret route without aligned browser smoke coverage until the suite is refreshed."
+    }
+  ]
+}

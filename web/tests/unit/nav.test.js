@@ -27,6 +27,9 @@ describe('nav model helpers', () => {
 
     expect(NAV_LINKS).toContainEqual({ href: '/souls', label: 'Souls' });
     expect(NAV_LINKS).toContainEqual({ href: '/llm', label: 'LLM' });
+    const pendingApprovals = NAV_LINKS.find((link) => link.href === '/deployments/pending');
+    expect(pendingApprovals).toEqual({ href: '/deployments/pending', label: 'Pending Approvals' });
+    expect(pendingApprovals).not.toHaveProperty('badge');
   });
 
   it('computes active links and sections correctly', () => {

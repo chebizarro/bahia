@@ -1,5 +1,5 @@
 <script>
-  let { columns = [], data = [], onRowClick = null } = $props();
+  let { columns = [], data = [], onRowClick = null, rowClickable = Boolean(onRowClick) } = $props();
 
   function handleRowClick(row, event) {
     onRowClick?.(row, event);
@@ -17,7 +17,7 @@
     </thead>
     <tbody>
       {#each data as row}
-        <tr class:clickable={onRowClick} onclick={(event) => handleRowClick(row, event)}>
+        <tr class:clickable={rowClickable} onclick={(event) => handleRowClick(row, event)}>
           {#each columns as col}
             <td>
               {#if col.render}

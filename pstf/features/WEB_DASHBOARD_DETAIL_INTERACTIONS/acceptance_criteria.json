@@ -1,0 +1,36 @@
+{
+  "feature_id": "WEB_DASHBOARD_DETAIL_INTERACTIONS",
+  "status": "verified",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "The top bar uses the existing wide Bahia logo assets at a visibly larger size, and the Pending Approvals nav item no longer shows the demo alert badge.",
+      "status": "passed"
+    },
+    {
+      "id": "AC2",
+      "text": "Environment States shows service and environment names instead of ID hashes, exposes the underlying IDs on hover, and opens the requested service/environment dialogs when those names are clicked.",
+      "status": "passed"
+    },
+    {
+      "id": "AC3",
+      "text": "Recent Activity labels the time column with the local timezone, shows UTC time on hover, shows richer event information on hover, and opens a full event-detail dialog on click.",
+      "status": "passed"
+    },
+    {
+      "id": "AC4",
+      "text": "Recent Activity entity items show shortened service/environment names rather than raw IDs when that metadata is available.",
+      "status": "passed"
+    },
+    {
+      "id": "AC5",
+      "text": "Service-secret unavailability messaging refers to encrypted Nostr events and Settings rather than fictional encrypted requests or a nonexistent nostr.browser_encrypted_request_relays setting requirement for this flow.",
+      "status": "passed"
+    }
+  ],
+  "coverage_notes": [
+    "Recent-activity entity naming now prefers event-payload names before falling back to store lookups, which avoids showing IDs during hydration races.",
+    "The broader legacy service-secrets smoke suite is stale and tracked separately as beads issue bahia-1u2u."
+  ],
+  "unresolved_questions": []
+}

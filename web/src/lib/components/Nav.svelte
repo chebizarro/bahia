@@ -209,9 +209,9 @@
 
   .brand-logo {
     display: block;
-    height: 42px;
+    height: 63px;
     width: auto;
-    max-width: min(240px, 100%);
+    max-width: min(360px, 100%);
   }
 
   .primary-links {
@@ -469,7 +469,7 @@
 
   @media (max-width: 720px) {
     .brand-logo {
-      height: 34px;
+      height: 51px;
     }
 
     .user-pubkey {

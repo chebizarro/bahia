@@ -1,7 +1,7 @@
 <script>
   import Card from '$lib/components/Card.svelte';
   import Table from '$lib/components/Table.svelte';
-  import Badge from '$lib/components/Badge.svelte';
+  import Modal from '$lib/components/Modal.svelte';
   import { requestPaymentHistoryRecords } from '$lib/stores/payments.svelte.js';
   import { services, environments, states, workers, driftedStates, events, loading, deploymentIntents } from '$lib/stores';
   import { formatDashboardSats, normalizePaymentHistory, summarizeRecentSpend } from './dashboard-cost-summary.js';
@@ -20,6 +20,13 @@
   let costSummaryPartialFailures = $state(0);
   let costSummaryLoadSequence = 0;
   let lastCostSummaryWorkerKey = null;
+  let timeColumnLabel = $state('Time (local)');
+  let selectedService = $state(null);
+  let serviceDialogOpen = $state(false);
+  let selectedEnvironment = $state(null);
+  let environmentDialogOpen = $state(false);
+  let selectedActivityEvent = $state(null);
+  let activityEventDialogOpen = $state(false);
 
   // Cache configuration
   const PENDING_CACHE_KEY = 'bahia_dashboard_pending_deployments';
@@ -69,6 +76,69 @@
     return value === undefined ? '' : String(value);
   }
 
+  function getLocalTimeZoneLabel(date = new Date()) {
+    try {
+      return Intl.DateTimeFormat(undefined, { timeZoneName: 'short' })
+        .formatToParts(date)
+        .find((part) => part.type === 'timeZoneName')?.value || 'local';
+    } catch {
+      return 'local';
+    }
+  }
+
+  function formatLocalTime(timestamp) {
+    if (!timestamp) return '-';
+    const date = new Date(timestamp);
+    if (Number.isNaN(date.getTime())) return '-';
+    return date.toLocaleTimeString([], {
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit'
+    });
+  }
+
+  function formatLocalDateTime(timestamp) {
+    if (!timestamp) return '-';
+    const date = new Date(timestamp);
+    if (Number.isNaN(date.getTime())) return '-';
+    return date.toLocaleString(undefined, {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      timeZoneName: 'short'
+    });
+  }
+
+  function formatUtcDateTime(timestamp) {
+    if (!timestamp) return '-';
+    const date = new Date(timestamp);
+    if (Number.isNaN(date.getTime())) return '-';
+    return date.toLocaleString(undefined, {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      timeZone: 'UTC',
+      timeZoneName: 'short'
+    });
+  }
+
+  function truncateLabel(value, max = 24) {
+    const text = String(value || '');
+    if (!text) return '';
+    return text.length <= max ? text : `${text.slice(0, max - 1)}…`;
+  }
+
+  function fallbackIdLabel(id) {
+    const text = String(id || '');
+    return text ? `${text.slice(0, 8)}...` : '-';
+  }
+
   function dashboardWorkerPubkey(worker) {
     return firstPresentString(worker?.pubkey, worker?.worker_pubkey, worker?.id);
   }
@@ -85,26 +155,51 @@
     return row?.data && typeof row.data === 'object' && !Array.isArray(row.data) ? row.data : {};
   }
 
-  function addActivityEntityLink(links, seenHrefs, label, basePath, id) {
-    if (!id) return;
-
-    const entityId = String(id);
-    const href = `${basePath}/${encodeURIComponent(entityId)}`;
-    if (seenHrefs.has(href)) return;
-
-    seenHrefs.add(href);
-    links.push(
-      `<a class="activity-entity-link" href="${href}" title="${escapeHtml(`${label} ${entityId}`)}" aria-label="${escapeHtml(`${label} ${entityId}`)}">` +
-        `<span class="entity-kind">${escapeHtml(label)}</span> <code>${escapeHtml(entityId.slice(0, 8))}...</code>` +
-      `</a>`
-    );
+  function lookupService(serviceId) {
+    return services.find((candidate) => candidate.id === serviceId) || null;
   }
 
-  function dashboardActivityEntityLinks(row) {
+  function lookupEnvironment(environmentId) {
+    return environments.find((candidate) => candidate.id === environmentId) || null;
+  }
+
+  function serviceDisplayNameById(serviceId) {
+    const service = lookupService(serviceId);
+    return firstPresentString(service?.name, service?.artifact_repo, serviceId);
+  }
+
+  function environmentDisplayNameById(environmentId) {
+    const environment = lookupEnvironment(environmentId);
+    return firstPresentString(environment?.name, environment?.slug, environmentId);
+  }
+
+  function entityTooltip(label, name, id) {
+    const displayName = firstPresentString(name, id);
+    return id ? `${label}: ${displayName} (${id})` : `${label}: ${displayName}`;
+  }
+
+  function renderDashboardEntityTrigger(action, id, label, title) {
+    if (!id) return '-';
+
+    return `<button type="button" class="dashboard-entity-button" data-dashboard-action="${escapeHtml(action)}" data-entity-id="${escapeHtml(id)}" title="${escapeHtml(title)}">${escapeHtml(label)}</button>`;
+  }
+
+  function dashboardStateServiceCell(row) {
+    const serviceId = firstPresentString(row?.service_id);
+    const serviceName = serviceDisplayNameById(serviceId);
+    return renderDashboardEntityTrigger('service', serviceId, truncateLabel(serviceName), entityTooltip('Service', serviceName, serviceId));
+  }
+
+  function dashboardStateEnvironmentCell(row) {
+    const environmentId = firstPresentString(row?.environment_id);
+    const environmentName = environmentDisplayNameById(environmentId);
+    return renderDashboardEntityTrigger('environment', environmentId, truncateLabel(environmentName), entityTooltip('Environment', environmentName, environmentId));
+  }
+
+  function resolveActivityReferences(row) {
     const type = String(row?.type || '');
     const data = eventData(row);
     const entityId = firstPresentString(row?.entity_id);
-
     const serviceId = firstPresentString(
       data.service_id,
       data.serviceId,
@@ -115,27 +210,159 @@
       data.environmentId,
       type.startsWith('environment.') ? entityId : ''
     );
-    const deploymentId = firstPresentString(
-      data.deployment_id,
-      data.deploymentId,
-      data.intent_id,
-      data.intentId,
-      data.deployment_intent_id,
-      data.deploymentIntentId,
-      type.startsWith('deployment.') && !serviceId && !environmentId ? entityId : ''
-    );
 
+    return {
+      entityId,
+      serviceId,
+      serviceName: firstPresentString(
+        data.service_name,
+        data.serviceName,
+        serviceId ? serviceDisplayNameById(serviceId) : ''
+      ),
+      environmentId,
+      environmentName: firstPresentString(
+        data.environment_name,
+        data.environmentName,
+        environmentId ? environmentDisplayNameById(environmentId) : ''
+      ),
+      deploymentId: firstPresentString(
+        data.deployment_id,
+        data.deploymentId,
+        data.intent_id,
+        data.intentId,
+        data.deployment_intent_id,
+        data.deploymentIntentId,
+        type.startsWith('deployment.') && !serviceId && !environmentId ? entityId : ''
+      )
+    };
+  }
+
+  function describeActivityEvent(row) {
+    const refs = resolveActivityReferences(row);
+    const data = eventData(row);
+    const lines = [
+      row?.type ? `Type: ${row.type}` : '',
+      row?.time ? `Local: ${formatLocalDateTime(row.time)}` : '',
+      row?.time ? `UTC: ${formatUtcDateTime(row.time)}` : '',
+      refs.serviceId ? entityTooltip('Service', refs.serviceName || serviceDisplayNameById(refs.serviceId), refs.serviceId) : '',
+      refs.environmentId ? entityTooltip('Environment', refs.environmentName || environmentDisplayNameById(refs.environmentId), refs.environmentId) : '',
+      refs.deploymentId ? `Deployment: ${refs.deploymentId}` : '',
+      data.status ? `Status: ${data.status}` : '',
+      data.requested_by ? `Requested by: ${data.requested_by}` : ''
+    ].filter(Boolean);
+
+    const payloadSummary = JSON.stringify(data);
+    if (payloadSummary && payloadSummary !== '{}') {
+      lines.push(`Data: ${payloadSummary}`);
+    }
+
+    return lines.join('\n');
+  }
+
+  function renderActivityEventTrigger(row) {
+    const type = row?.type || 'unknown';
+    const variant = eventBadgeVariant(type);
+    return `<button type="button" class="activity-event-trigger" data-dashboard-action="event" title="${escapeHtml(describeActivityEvent(row))}" aria-label="${escapeHtml(`View details for ${type}`)}"><span class="badge ${variant}">${escapeHtml(type)}</span></button>`;
+  }
+
+  function addActivityEntityLink(links, seenHrefs, label, basePath, id, displayName = '') {
+    if (!id) return;
+
+    const entityId = String(id);
+    const href = `${basePath}/${encodeURIComponent(entityId)}`;
+    if (seenHrefs.has(href)) return;
+
+    seenHrefs.add(href);
+    const title = entityTooltip(label, displayName || entityId, entityId);
+    const valueMarkup = displayName
+      ? `<span class="entity-name">${escapeHtml(truncateLabel(displayName, 18))}</span>`
+      : `<code>${escapeHtml(fallbackIdLabel(entityId))}</code>`;
+
+    links.push(
+      `<a class="activity-entity-link" href="${href}" title="${escapeHtml(title)}" aria-label="${escapeHtml(title)}">` +
+        `<span class="entity-kind">${escapeHtml(label)}</span> ${valueMarkup}` +
+      `</a>`
+    );
+  }
+
+  function dashboardActivityEntityLinks(row) {
+    const refs = resolveActivityReferences(row);
     const links = [];
     const seenHrefs = new Set();
-    addActivityEntityLink(links, seenHrefs, 'Deployment', '/deployments', deploymentId);
-    addActivityEntityLink(links, seenHrefs, 'Service', '/services', serviceId);
-    addActivityEntityLink(links, seenHrefs, 'Environment', '/environments', environmentId);
+
+    addActivityEntityLink(links, seenHrefs, 'Deployment', '/deployments', refs.deploymentId);
+    addActivityEntityLink(links, seenHrefs, 'Service', '/services', refs.serviceId, refs.serviceName || serviceDisplayNameById(refs.serviceId));
+    addActivityEntityLink(links, seenHrefs, 'Environment', '/environments', refs.environmentId, refs.environmentName || environmentDisplayNameById(refs.environmentId));
 
     if (links.length > 0) {
       return `<div class="activity-entity-links">${links.join('')}</div>`;
     }
 
-    return entityId ? `<code>${escapeHtml(entityId.slice(0, 8))}...</code>` : '-';
+    return refs.entityId ? `<code>${escapeHtml(fallbackIdLabel(refs.entityId))}</code>` : '-';
+  }
+
+  function openServiceDialogById(serviceId) {
+    const id = firstPresentString(serviceId);
+    if (!id) return;
+    selectedService = lookupService(id) || { id, name: id };
+    serviceDialogOpen = true;
+  }
+
+  function openEnvironmentDialogById(environmentId) {
+    const id = firstPresentString(environmentId);
+    if (!id) return;
+    selectedEnvironment = lookupEnvironment(id) || { id, name: id };
+    environmentDialogOpen = true;
+  }
+
+  function openActivityEventDialog(row) {
+    if (!row) return;
+    selectedActivityEvent = row;
+    activityEventDialogOpen = true;
+  }
+
+  function handleEnvironmentStatesRowClick(row, event) {
+    const trigger = event.target?.closest?.('[data-dashboard-action]');
+    if (!trigger || event.target?.closest?.('a')) return;
+
+    const action = trigger.getAttribute('data-dashboard-action');
+    const entityId = trigger.getAttribute('data-entity-id') || '';
+
+    if (action === 'service') {
+      openServiceDialogById(entityId || row?.service_id);
+      return;
+    }
+
+    if (action === 'environment') {
+      openEnvironmentDialogById(entityId || row?.environment_id);
+    }
+  }
+
+  function handleRecentActivityRowClick(row, event) {
+    if (event.target?.closest?.('a')) return;
+    const trigger = event.target?.closest?.('[data-dashboard-action="event"]');
+    if (!trigger) return;
+    openActivityEventDialog(row);
+  }
+
+  function serializeActivityEvent(row) {
+    if (!row) return '';
+    const refs = resolveActivityReferences(row);
+
+    return JSON.stringify({
+      id: row.id,
+      type: row.type,
+      local_time: formatLocalDateTime(row.time),
+      utc_time: formatUtcDateTime(row.time),
+      entity_id: row.entity_id,
+      service_id: refs.serviceId || null,
+      service_name: refs.serviceName || null,
+      environment_id: refs.environmentId || null,
+      environment_name: refs.environmentName || null,
+      deployment_id: refs.deploymentId || null,
+      data: eventData(row),
+      nostr_event: row.nostr_event || null
+    }, null, 2);
   }
 
   // Helper: bounded concurrency for async operations
@@ -278,6 +505,10 @@
   }
 
   $effect(() => {
+    timeColumnLabel = `Time (${getLocalTimeZoneLabel()})`;
+  });
+
+  $effect(() => {
     deploymentIntents.map((intent) => `${intent.id}:${intent.approval_status}:${intent.created_at}`).join('|');
     queueMicrotask(() => loadPendingDeployments());
   });
@@ -294,8 +525,8 @@
   });
 
   let stateColumns = $derived([
-    { key: 'service_id', label: 'Service', render: (r) => `<code>${escapeHtml(r.service_id?.slice(0, 8) || '')}...</code>` },
-    { key: 'environment_id', label: 'Environment', render: (r) => `<code>${escapeHtml(r.environment_id?.slice(0, 8) || '')}...</code>` },
+    { key: 'service_id', label: 'Service', render: dashboardStateServiceCell },
+    { key: 'environment_id', label: 'Environment', render: dashboardStateEnvironmentCell },
     { key: 'drift_status', label: 'Drift', render: (r) => {
       const driftStatus = String(r.drift_status || 'unknown');
       const variant = driftStatus === 'in_sync' ? 'success' : driftStatus === 'drifted' ? 'error' : 'default';
@@ -304,13 +535,12 @@
     { key: 'actions', label: 'Actions', render: dashboardStateActions }
   ]);
   let eventColumns = $derived([
-    { key: 'time', label: 'Time', render: (r) => r.time?.slice(11, 19) || '-' },
-    { key: 'type', label: 'Event', render: (r) => {
-      const type = r.type || '';
-      const variant = eventBadgeVariant(type);
-      const escaped = escapeHtml(type);
-      return `<span class="badge ${variant}">${escaped}</span>`;
-    }},
+    {
+      key: 'time',
+      label: timeColumnLabel,
+      render: (r) => `<span class="activity-time" title="${escapeHtml(formatUtcDateTime(r.time))}">${escapeHtml(formatLocalTime(r.time))}</span>`
+    },
+    { key: 'type', label: 'Event', render: renderActivityEventTrigger },
     { key: 'entity_id', label: 'Entity', render: dashboardActivityEntityLinks }
   ]);
   let pendingCount = $derived(pendingDeployments.length);
@@ -393,18 +623,122 @@
   <div class="sections">
     <section id="environment-states">
       <h2>Environment States</h2>
-      <Table columns={stateColumns} data={states.slice(0, 10)} />
+      <Table columns={stateColumns} data={states.slice(0, 10)} onRowClick={handleEnvironmentStatesRowClick} rowClickable={false} />
     </section>
 
     <section>
       <h2>Recent Activity</h2>
-      <Table columns={eventColumns} data={events.slice(0, 10)} />
+      <Table columns={eventColumns} data={events.slice(0, 10)} onRowClick={handleRecentActivityRowClick} rowClickable={false} />
       {#if events.length === 0}
         <p class="hint">Events will appear here in real-time from the relay-backed control plane</p>
       {/if}
     </section>
   </div>
 </div>
+
+<Modal
+  bind:open={serviceDialogOpen}
+  title={selectedService ? `${firstPresentString(selectedService.name, selectedService.id)} · Service` : 'Service details'}
+  onClose={() => {
+    serviceDialogOpen = false;
+    selectedService = null;
+  }}
+>
+  {#if selectedService}
+    <div class="dashboard-detail-dialog">
+      <dl>
+        <div>
+          <dt>Name</dt>
+          <dd>{firstPresentString(selectedService.name, selectedService.id)}</dd>
+        </div>
+        <div>
+          <dt>ID</dt>
+          <dd><code>{selectedService.id}</code></dd>
+        </div>
+        <div>
+          <dt>Runtime</dt>
+          <dd>{firstPresentString(selectedService.runtime_type, '—')}</dd>
+        </div>
+        <div>
+          <dt>Artifact Repo</dt>
+          <dd>{firstPresentString(selectedService.artifact_repo, '—')}</dd>
+        </div>
+        <div>
+          <dt>Default Branch</dt>
+          <dd>{firstPresentString(selectedService.default_branch, '—')}</dd>
+        </div>
+      </dl>
+      <a class="dashboard-detail-link" href={selectedService.id ? `/services/${encodeURIComponent(selectedService.id)}` : '/services'}>
+        Open service page
+      </a>
+    </div>
+  {/if}
+</Modal>
+
+<Modal
+  bind:open={environmentDialogOpen}
+  title={selectedEnvironment ? `${firstPresentString(selectedEnvironment.name, selectedEnvironment.id)} · Environment` : 'Environment details'}
+  onClose={() => {
+    environmentDialogOpen = false;
+    selectedEnvironment = null;
+  }}
+>
+  {#if selectedEnvironment}
+    <div class="dashboard-detail-dialog">
+      <dl>
+        <div>
+          <dt>Name</dt>
+          <dd>{firstPresentString(selectedEnvironment.name, selectedEnvironment.id)}</dd>
+        </div>
+        <div>
+          <dt>ID</dt>
+          <dd><code>{selectedEnvironment.id}</code></dd>
+        </div>
+        <div>
+          <dt>Worker Selector</dt>
+          <dd>{firstPresentString(selectedEnvironment.loom_worker_selector, '—')}</dd>
+        </div>
+        <div>
+          <dt>Protected</dt>
+          <dd>{selectedEnvironment.protected ? 'Yes' : 'No'}</dd>
+        </div>
+      </dl>
+      <a class="dashboard-detail-link" href={selectedEnvironment.id ? `/environments/${encodeURIComponent(selectedEnvironment.id)}` : '/environments'}>
+        Open environment page
+      </a>
+    </div>
+  {/if}
+</Modal>
+
+<Modal
+  bind:open={activityEventDialogOpen}
+  title={selectedActivityEvent ? `${selectedActivityEvent.type} · Event detail` : 'Event detail'}
+  size="lg"
+  onClose={() => {
+    activityEventDialogOpen = false;
+    selectedActivityEvent = null;
+  }}
+>
+  {#if selectedActivityEvent}
+    <div class="dashboard-detail-dialog">
+      <dl>
+        <div>
+          <dt>Local Time</dt>
+          <dd>{formatLocalDateTime(selectedActivityEvent.time)}</dd>
+        </div>
+        <div>
+          <dt>UTC Time</dt>
+          <dd>{formatUtcDateTime(selectedActivityEvent.time)}</dd>
+        </div>
+        <div>
+          <dt>Entity ID</dt>
+          <dd><code>{firstPresentString(selectedActivityEvent.entity_id, '—')}</code></dd>
+        </div>
+      </dl>
+      <pre class="dashboard-event-json">{serializeActivityEvent(selectedActivityEvent)}</pre>
+    </div>
+  {/if}
+</Modal>
 
 <style>
   .dashboard h1 {
@@ -550,6 +884,86 @@
   :global(.entity-kind) {
     color: var(--text-muted);
     font-weight: 500;
+  }
+  :global(.entity-name) {
+    color: var(--primary);
+    font-weight: 600;
+  }
+  :global(.dashboard-entity-button) {
+    background: none;
+    border: none;
+    padding: 0;
+    color: var(--primary);
+    cursor: pointer;
+    font: inherit;
+    font-size: 0.85rem;
+    font-weight: 600;
+    text-align: left;
+  }
+  :global(.dashboard-entity-button:hover),
+  :global(.dashboard-entity-button:focus-visible) {
+    text-decoration: underline;
+  }
+  :global(.activity-time) {
+    border-bottom: 1px dotted var(--text-muted);
+    cursor: help;
+  }
+  :global(.activity-event-trigger) {
+    background: none;
+    border: none;
+    padding: 0;
+    cursor: pointer;
+    font: inherit;
+  }
+  :global(.activity-event-trigger:hover .badge),
+  :global(.activity-event-trigger:focus-visible .badge) {
+    filter: brightness(1.1);
+  }
+  .dashboard-detail-dialog {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+  }
+  .dashboard-detail-dialog dl {
+    display: grid;
+    gap: 0.75rem;
+    margin: 0;
+  }
+  .dashboard-detail-dialog dl > div {
+    display: grid;
+    grid-template-columns: 130px 1fr;
+    gap: 0.75rem;
+  }
+  .dashboard-detail-dialog dt {
+    color: var(--text-muted);
+    font-size: 0.8rem;
+  }
+  .dashboard-detail-dialog dd {
+    margin: 0;
+    color: var(--text-primary);
+    font-size: 0.9rem;
+    word-break: break-word;
+  }
+  .dashboard-detail-link {
+    color: var(--primary);
+    font-weight: 600;
+    text-decoration: none;
+  }
+  .dashboard-detail-link:hover,
+  .dashboard-detail-link:focus-visible {
+    text-decoration: underline;
+  }
+  .dashboard-event-json {
+    margin: 0;
+    padding: 1rem;
+    border-radius: 8px;
+    border: 1px solid var(--border-color);
+    background: var(--hover-bg);
+    color: var(--text-primary);
+    font-size: 0.8rem;
+    overflow-x: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
   }
   :global(.badge.info) {
     background: #1e3a5f;

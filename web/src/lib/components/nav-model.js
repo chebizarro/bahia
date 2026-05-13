@@ -8,7 +8,7 @@ const DELIVERY_LINKS = [
   { href: '/services', label: 'Services' },
   { href: '/artifacts', label: 'Artifacts' },
   { href: '/deployments', label: 'Deployments' },
-  { href: '/deployments/pending', label: 'Pending Approvals', badge: '!' }
+  { href: '/deployments/pending', label: 'Pending Approvals' }
 ];
 
 const OPERATIONS_LINKS = [
