@@ -61,7 +61,11 @@ export const KINDS = {
   BAHIA_POLICY_REGISTRY: 31970,
   BAHIA_SYSTEM_DISCOVERY: 31974,
   NIP51_RELAY_SET: 30002,
-  LOOM_WORKER_AD: 10100
+  LOOM_WORKER_AD: 10100,
+  
+  // SBOM Attestation/Index kinds (NIP-51 style parameterized lists)
+  SBOM_ATTESTATION: 30078,
+  SBOM_INDEX: 30079
 };
 
 export const BAHIA_KINDS = {

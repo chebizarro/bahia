@@ -8,6 +8,7 @@
   import Checkbox from '$lib/components/Checkbox.svelte';
   import LoadingButton from '$lib/components/LoadingButton.svelte';
   import EmptyState from '$lib/components/EmptyState.svelte';
+  import PolicyRuleBuilder from '$lib/components/PolicyRuleBuilder.svelte';
   import { policies, environments, loadPolicies, loadEnvironments } from '$lib/stores';
   import { createPolicy as createPolicyCommand } from '$lib/stores/public-controlplane.svelte.js';
   import { policyFormSchema, validateForm } from '$lib/validation/forms.js';
@@ -21,6 +22,8 @@
   let createOpen = $state(false);
   let creating = $state(false);
   let createError = $state(null);
+  let useVisualBuilder = $state(true); // Toggle between visual builder and JSON
+  let visualRules = $state([]); // Rules from visual builder
 
   let createForm = $state({
     name: '',
@@ -131,6 +134,8 @@
   function closeCreateModal() {
     createOpen = false;
     createError = null;
+    visualRules = [];
+    useVisualBuilder = true;
     // Reset form
     createForm = {
       name: '',
@@ -142,13 +147,27 @@
   }
 
   async function handleCreate() {
-    const validationResult = validateForm(policyFormSchema, createForm);
-    if (!validationResult.success) {
-      createError = validationResult.error;
-      return;
+    // Get rules from visual builder or JSON
+    let parsedRules;
+    if (useVisualBuilder) {
+      parsedRules = visualRules;
+      if (parsedRules.length === 0) {
+        createError = 'Please add at least one rule';
+        return;
+      }
+    } else {
+      const validationResult = validateForm(policyFormSchema, createForm);
+      if (!validationResult.success) {
+        createError = validationResult.error;
+        return;
+      }
+      try {
+        parsedRules = JSON.parse(createForm.rules);
+      } catch {
+        createError = 'Invalid JSON in rules';
+        return;
+      }
     }
-
-    const parsedRules = JSON.parse(createForm.rules);
 
     creating = true;
     createError = null;
@@ -261,16 +280,47 @@
     </div>
 
     <div class="form-field">
-      <label for="rules">Rules (JSON Array) *</label>
-      <Textarea
-        id="rules"
-        bind:value={createForm.rules}
-        placeholder={'[{"type": "require_sbom"}]'}
-        rows={8}
-        required
-        disabled={creating}
-      />
-      <span class="help-text">Enter policy rules as a JSON array</span>
+      <div class="rules-header">
+        <label>Rules *</label>
+        <div class="builder-toggle">
+          <button
+            type="button"
+            class="toggle-btn"
+            class:active={useVisualBuilder}
+            onclick={() => useVisualBuilder = true}
+            disabled={creating}
+          >
+            Visual Builder
+          </button>
+          <button
+            type="button"
+            class="toggle-btn"
+            class:active={!useVisualBuilder}
+            onclick={() => {
+              useVisualBuilder = false;
+              // Sync visual rules to JSON when switching
+              createForm.rules = JSON.stringify(visualRules, null, 2);
+            }}
+            disabled={creating}
+          >
+            JSON Editor
+          </button>
+        </div>
+      </div>
+      
+      {#if useVisualBuilder}
+        <PolicyRuleBuilder bind:rules={visualRules} disabled={creating} />
+      {:else}
+        <Textarea
+          id="rules"
+          bind:value={createForm.rules}
+          placeholder={'[{"type": "require_sbom"}]'}
+          rows={8}
+          required
+          disabled={creating}
+        />
+        <span class="help-text">Enter policy rules as a JSON array</span>
+      {/if}
     </div>
 
     <div class="form-field">
@@ -392,5 +442,46 @@
     padding: 0.5rem;
     background: rgba(239, 68, 68, 0.1);
     border-radius: 4px;
+  }
+
+  /* Rules builder toggle */
+  .rules-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 0.5rem;
+  }
+
+  .builder-toggle {
+    display: flex;
+    gap: 0.25rem;
+    background: var(--hover-bg, rgba(255,255,255,0.05));
+    border-radius: 6px;
+    padding: 0.125rem;
+  }
+
+  .toggle-btn {
+    padding: 0.375rem 0.75rem;
+    font-size: 0.75rem;
+    background: transparent;
+    border: none;
+    border-radius: 4px;
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+  }
+
+  .toggle-btn:hover:not(:disabled) {
+    color: var(--text-primary);
+  }
+
+  .toggle-btn.active {
+    background: var(--primary);
+    color: white;
+  }
+
+  .toggle-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
   }
 </style>

@@ -6,13 +6,18 @@
   import Badge from '$lib/components/Badge.svelte';
   import LoadingButton from '$lib/components/LoadingButton.svelte';
   import EmptyState from '$lib/components/EmptyState.svelte';
+  import SBOMDetails from '$lib/components/SBOMDetails.svelte';
   import { artifacts, services, loadArtifacts, loadServices } from '$lib/stores';
   import { toast } from '$lib/components/toast.js';
   import { verifyArtifactSignatures } from '$lib/stores/artifact-signatures.svelte.js';
+  import { api } from '$lib/api/client.js';
 
   let artifact = $state(null);
   let service = $state(null);
   let sbomPackages = $state([]);
+  let sbomData = $state(null);
+  let sbomAttestation = $state(null);
+  let sbomLoading = $state(false);
   let signatures = $state([]);
   let hasVerifiedSig = $state(false);
   let loading = $state(true);
@@ -90,6 +95,42 @@
       loading = false;
     }
   }
+
+  async function loadSBOMDetails() {
+    if (!artifactId || sbomLoading) return;
+    sbomLoading = true;
+    
+    try {
+      // Load SBOM data and attestation in parallel
+      const [sbomResult, attestationResult] = await Promise.allSettled([
+        api?.getSBOM(artifactId),
+        api?.getSBOMAttestation(artifactId)
+      ]);
+      
+      if (sbomResult.status === 'fulfilled' && sbomResult.value) {
+        sbomData = sbomResult.value;
+        // If packages weren't loaded from artifact, try from SBOM
+        if (sbomPackages.length === 0 && sbomResult.value.packages) {
+          sbomPackages = sbomResult.value.packages;
+        }
+      }
+      
+      if (attestationResult.status === 'fulfilled' && attestationResult.value) {
+        sbomAttestation = attestationResult.value;
+      }
+    } catch (err) {
+      console.error('Error loading SBOM details:', err);
+    } finally {
+      sbomLoading = false;
+    }
+  }
+
+  // Load SBOM details when switching to SBOM tab
+  $effect(() => {
+    if (activeTab === 'sbom' && artifactId && !sbomData && !sbomLoading) {
+      void loadSBOMDetails();
+    }
+  });
 
   async function handleVerifySignatures() {
     verifying = true;
@@ -287,21 +328,12 @@
 
       {:else if activeTab === 'sbom'}
         <!-- SBOM Tab -->
-        <section class="sbom-section">
-          <div class="section-header">
-            <h2>Software Bill of Materials</h2>
-          </div>
-          
-          {#if sbomPackages.length > 0}
-            <Table columns={sbomColumns} data={sbomPackages} />
-          {:else}
-            <EmptyState
-              icon="📦"
-              title="No SBOM available"
-              message="This artifact does not have an SBOM or it has not been ingested yet"
-            />
-          {/if}
-        </section>
+        <SBOMDetails
+          sbom={sbomData}
+          packages={sbomPackages}
+          attestation={sbomAttestation}
+          loading={sbomLoading}
+        />
 
       {:else if activeTab === 'signatures'}
         <!-- Signatures Tab -->

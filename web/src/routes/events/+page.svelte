@@ -1,24 +1,127 @@
 <script>
   import Table from '$lib/components/Table.svelte';
+  import Select from '$lib/components/Select.svelte';
+  import Badge from '$lib/components/Badge.svelte';
   import { events, controlplaneConnection } from '$lib/stores';
+  import { KINDS } from '$lib/nostr/client.js';
 
   const PAGE_SIZE = 50;
   let currentPage = $state(1);
+  let eventTypeFilter = $state('all');
 
-  let totalPages = $derived(Math.max(1, Math.ceil(events.length / PAGE_SIZE)));
-  let pagedEvents = $derived(events.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE));
+  // Event type categories for filtering
+  const eventCategories = [
+    { value: 'all', label: 'All Events' },
+    { value: 'deployment', label: 'Deployments' },
+    { value: 'service', label: 'Services' },
+    { value: 'llm', label: 'LLM Routes' },
+    { value: 'policy', label: 'Policies' },
+    { value: 'sbom', label: 'SBOM Attestations' },
+    { value: 'artifact', label: 'Artifacts' }
+  ];
 
-  // Reset to page 1 when events list grows
+  // Map event types to categories
+  function getEventCategory(event) {
+    const type = event.type?.toLowerCase() || '';
+    const kind = event.kind;
+    
+    // SBOM events
+    if (kind === KINDS.SBOM_ATTESTATION || kind === KINDS.SBOM_INDEX) {
+      return 'sbom';
+    }
+    if (type.includes('sbom')) {
+      return 'sbom';
+    }
+    
+    // Deployment events
+    if (type.includes('deployment') || type.includes('deploy')) {
+      return 'deployment';
+    }
+    
+    // Service events
+    if (type.includes('service')) {
+      return 'service';
+    }
+    
+    // LLM events
+    if (type.includes('llm') || type.includes('route')) {
+      return 'llm';
+    }
+    
+    // Policy events
+    if (type.includes('policy')) {
+      return 'policy';
+    }
+    
+    // Artifact events
+    if (type.includes('artifact')) {
+      return 'artifact';
+    }
+    
+    return 'other';
+  }
+
+  // Get human-readable event type label
+  function getEventTypeLabel(event) {
+    if (event.kind === KINDS.SBOM_ATTESTATION) {
+      return 'SBOM Attestation';
+    }
+    if (event.kind === KINDS.SBOM_INDEX) {
+      return 'SBOM Index';
+    }
+    return event.type || 'Unknown';
+  }
+
+  // Get badge variant for event category
+  function getEventBadge(event) {
+    const cat = getEventCategory(event);
+    const variants = {
+      sbom: 'info',
+      deployment: 'primary',
+      service: 'success',
+      llm: 'warning',
+      policy: 'default',
+      artifact: 'primary'
+    };
+    return variants[cat] || 'default';
+  }
+
+  let filteredEvents = $derived(
+    eventTypeFilter === 'all'
+      ? events
+      : events.filter(e => getEventCategory(e) === eventTypeFilter)
+  );
+
+  let totalPages = $derived(Math.max(1, Math.ceil(filteredEvents.length / PAGE_SIZE)));
+  let pagedEvents = $derived(filteredEvents.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE));
+
+  // Reset to page 1 when filter changes or events list grows
   $effect(() => {
-    void events.length;
+    void filteredEvents.length;
     if (currentPage > totalPages) currentPage = 1;
   });
 
   let columns = $derived([
     { key: 'time', label: 'Time', render: (r) => r.time || '-' },
-    { key: 'type', label: 'Event Type' },
+    {
+      key: 'type',
+      label: 'Event Type',
+      render: (r) => {
+        const label = getEventTypeLabel(r);
+        const variant = getEventBadge(r);
+        return `<span class="event-type-cell"><span class="badge-inline ${variant}">${label}</span></span>`;
+      }
+    },
     { key: 'entity_id', label: 'Entity ID', render: (r) => r.entity_id ? `<code>${r.entity_id}</code>` : '-' },
-    { key: 'data', label: 'Data', render: (r) => r.data ? `<code>${JSON.stringify(r.data).slice(0, 80)}...</code>` : '-' }
+    {
+      key: 'data',
+      label: 'Data',
+      render: (r) => {
+        if (!r.data) return '-';
+        const str = JSON.stringify(r.data);
+        return `<code>${str.slice(0, 80)}${str.length > 80 ? '...' : ''}</code>`;
+      }
+    }
   ]);
 
   let statusDisplay = $derived({
@@ -30,12 +133,30 @@
     disconnected: '⚪ Relay disconnected',
     error: '🔴 Relay error'
   }[controlplaneConnection.status] || '⚪ Unknown');
+
+  // Count SBOM events for badge
+  let sbomEventCount = $derived(
+    events.filter(e =>
+      e.kind === KINDS.SBOM_ATTESTATION ||
+      e.kind === KINDS.SBOM_INDEX ||
+      e.type?.toLowerCase().includes('sbom')
+    ).length
+  );
 </script>
 
 <div class="page">
   <div class="header">
-    <h1>Live Events</h1>
-    <span class="status">{statusDisplay}</span>
+    <div class="header-left">
+      <h1>Live Events</h1>
+      <span class="status">{statusDisplay}</span>
+    </div>
+    <div class="header-right">
+      {#if sbomEventCount > 0}
+        <Badge variant="info">
+          {sbomEventCount} SBOM event{sbomEventCount !== 1 ? 's' : ''}
+        </Badge>
+      {/if}
+    </div>
   </div>
 
   <p class="hint">
@@ -49,6 +170,21 @@
     <p class="error">{controlplaneConnection.lastError}</p>
   {/if}
 
+  <!-- Event Type Filter -->
+  <div class="filters">
+    <div class="filter-field">
+      <label for="event-type-filter">Event Type</label>
+      <Select
+        id="event-type-filter"
+        bind:value={eventTypeFilter}
+        options={eventCategories}
+      />
+    </div>
+    <div class="filter-stats">
+      Showing {filteredEvents.length} of {events.length} events
+    </div>
+  </div>
+
   <div class="table-wrap">
     <Table columns={columns} data={pagedEvents} />
   </div>
@@ -61,7 +197,7 @@
         onclick={() => currentPage--}
         aria-label="Previous page"
       >‹ Prev</button>
-      <span class="page-info">Page {currentPage} of {totalPages}  ·  {events.length} events</span>
+      <span class="page-info">Page {currentPage} of {totalPages}  ·  {filteredEvents.length} events</span>
       <button
         class="page-btn"
         disabled={currentPage === totalPages}
@@ -70,7 +206,7 @@
       >Next ›</button>
     </div>
   {:else}
-    <p class="event-count">{events.length} event{events.length === 1 ? '' : 's'}</p>
+    <p class="event-count">{filteredEvents.length} event{filteredEvents.length === 1 ? '' : 's'}</p>
   {/if}
 </div>
 
@@ -84,9 +220,22 @@
   .header {
     display: flex;
     align-items: center;
+    justify-content: space-between;
     gap: 1rem;
     margin-bottom: 1rem;
     flex-wrap: wrap;
+  }
+
+  .header-left {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+  }
+
+  .header-right {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
   }
 
   h1 { margin: 0; }
@@ -94,6 +243,32 @@
   .status { color: var(--success); font-size: 0.875rem; }
   .hint { color: var(--text-muted); font-size: 0.875rem; margin-bottom: 1rem; }
   .error { color: var(--error); font-size: 0.875rem; margin-bottom: 1rem; }
+
+  /* Filters */
+  .filters {
+    display: flex;
+    align-items: flex-end;
+    gap: 1rem;
+    margin-bottom: 1rem;
+    flex-wrap: wrap;
+  }
+
+  .filter-field {
+    min-width: 200px;
+  }
+
+  .filter-field label {
+    display: block;
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    margin-bottom: 0.25rem;
+  }
+
+  .filter-stats {
+    color: var(--text-muted);
+    font-size: 0.875rem;
+    padding-bottom: 0.5rem;
+  }
 
   .table-wrap {
     width: 100%;
@@ -140,4 +315,26 @@
     margin-top: 0.5rem;
     text-align: right;
   }
+
+  /* Inline badge styles for table cells */
+  :global(.event-type-cell) {
+    display: inline-flex;
+    align-items: center;
+  }
+
+  :global(.badge-inline) {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.125rem 0.375rem;
+    border-radius: 3px;
+    font-weight: 500;
+    font-size: 0.75rem;
+  }
+
+  :global(.badge-inline.default) { background: #374151; color: #d1d5db; }
+  :global(.badge-inline.primary) { background: #1e3a8a; color: #bfdbfe; }
+  :global(.badge-inline.success) { background: #065f46; color: #6ee7b7; }
+  :global(.badge-inline.warning) { background: #78350f; color: #fcd34d; }
+  :global(.badge-inline.error) { background: #7f1d1d; color: #fca5a5; }
+  :global(.badge-inline.info) { background: #1e3a5f; color: #93c5fd; }
 </style>

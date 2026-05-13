@@ -398,6 +398,12 @@ export class BahiaClient {
       body: JSON.stringify(payload)
     });
   }
+  getSBOMAttestation(artifactId) {
+    return this.fetch(`/artifacts/${encodeURIComponent(artifactId)}/sbom/attestation`);
+  }
+  getSBOMNTIACompliance(artifactId) {
+    return this.fetch(`/artifacts/${encodeURIComponent(artifactId)}/sbom/ntia`);
+  }
 
   // Signatures
   listSignatures(artifactId) {
