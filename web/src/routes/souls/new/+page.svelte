@@ -230,19 +230,9 @@
         await refreshExtensionStatus();
       }
       
-      // Connect to Nostr relays
-      const auth = authState;
-      const writeRelays = auth.relays
-        ? Object.entries(auth.relays)
-            .filter(([_, perms]) => perms.write !== false)
-            .map(([url]) => url)
-        : [];
-      
-      if (writeRelays.length > 0) {
-        await nostr.connect(writeRelays);
-      } else {
-        await nostr.connect();
-      }
+      // The singleton relay lifecycle is managed globally (by bootstrap / Settings).
+      // Do NOT call nostr.connect() here \u2014 passing user write-relay URLs would
+      // overwrite the singleton's relay list and close Bahia control-plane sockets.
     }
 
     void untrack(() => initializeNostr());

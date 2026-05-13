@@ -1,7 +1,6 @@
 <script>
   import SoulCard from '$lib/components/SoulCard.svelte';
   import Card from '$lib/components/Card.svelte';
-  import { nostr } from '$lib/nostr/client.js';
   import {
     emptyStateMessage,
     filterSouls,
@@ -26,8 +25,6 @@
     let cancelled = false;
 
     async function initializeSouls() {
-      await nostr.connect();
-      if (cancelled) return;
       await loadSouls();
       if (cancelled) return;
       subscribeToSoulUpdates();

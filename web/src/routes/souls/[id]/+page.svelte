@@ -118,8 +118,6 @@
     }
 
     async function initializeSoul() {
-      await nostr.connect();
-      if (cancelled) return;
       await loadSoul(id);
       if (cancelled) return;
       await loadHistory();

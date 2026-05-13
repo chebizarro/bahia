@@ -87,24 +87,11 @@ export class EncryptedControlplaneTransport {
     this.relays = normalizeRelays(relays);
     this.servicePubkey = servicePubkey || '';
 
-    if (client) {
-      // Caller-provided client: use as-is, caller owns lifecycle.
-      this.client = client;
-      this.ownClient = false;
-    } else {
-      // Reuse the singleton when it already covers these relay URLs — avoids
-      // opening duplicate connections and leaking reconnect timers.
-      const singletonRelays = new Set(nostr.getRelays());
-      const coveredBySingleton =
-        this.relays.length > 0 && this.relays.every((r) => singletonRelays.has(r));
-      if (coveredBySingleton) {
-        this.client = nostr;
-        this.ownClient = false;
-      } else {
-        this.client = new NostrClient({ relays: this.relays });
-        this.ownClient = true;
-      }
-    }
+    // Always use the singleton — it owns the WebSocket lifecycle for the whole app.
+    // Passing an explicit client is only for tests / edge-cases; the singleton is never
+    // "owned" by the transport and must never be disconnected by it.
+    this.client = client || nostr;
+    this.ownClient = false;
     this.connected = false;
   }
 
@@ -112,23 +99,13 @@ export class EncryptedControlplaneTransport {
     if (this.relays.length === 0) {
       throw new Error('No relay URLs configured for encrypted Nostr events. Add relay URLs in Settings.');
     }
-    if (!this.connected) {
-      if (this.ownClient) {
-        // Ephemeral client: establish its own connections.
-        await this.client.connect(this.relays);
-      }
-      // Singleton: already managed externally; just mark ready.
-      this.connected = true;
-    }
+    // Connection lifecycle is managed by the singleton externally — nothing to do here.
+    this.connected = true;
     return this;
   }
 
-  // Tear down ephemeral connections. No-op when reusing the singleton.
+  // No-op: the singleton's lifecycle is managed externally.
   disconnect() {
-    if (this.ownClient) {
-      this.client.disconnect();
-      this.ownClient = false;
-    }
     this.connected = false;
   }
 

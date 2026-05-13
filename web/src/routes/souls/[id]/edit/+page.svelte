@@ -64,8 +64,6 @@
     let cancelled = false;
 
     async function initialize() {
-      await nostr.connect();
-      if (cancelled) return;
       await loadSoulForEdit(id);
     }
 
