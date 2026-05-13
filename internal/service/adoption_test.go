@@ -570,13 +570,13 @@ func newAdoptionDockerServer(t *testing.T) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case r.Method == http.MethodGet && r.URL.Path == "/v1.43/containers/json":
+		case r.Method == http.MethodGet && r.URL.Path == "/v1.44/containers/json":
 			if r.URL.Query().Get("all") != "1" {
 				t.Errorf("containers query did not include all=1")
 			}
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`[{"Id":"container-123","Names":["/demo-web-1"],"Image":"registry.example/web:1.2.3","ImageID":"sha256:image123","State":"running"}]`))
-		case r.Method == http.MethodGet && r.URL.Path == "/v1.43/containers/container-123/json":
+		case r.Method == http.MethodGet && r.URL.Path == "/v1.44/containers/container-123/json":
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{
 				"Id":"container-123",
@@ -598,7 +598,7 @@ func newAdoptionDockerServer(t *testing.T) *httptest.Server {
 				"HostConfig":{"Binds":["/host/data:/data:ro"],"NetworkMode":"demo_default","RestartPolicy":{"Name":"unless-stopped"}},
 				"NetworkSettings":{"Ports":{"80/tcp":[{"HostPort":"8080"}]},"Networks":{"demo_default":{"Aliases":["web","demo-web-1"]}}}
 			}`))
-		case r.Method == http.MethodGet && r.URL.Path == "/v1.43/images/sha256:image123/json":
+		case r.Method == http.MethodGet && r.URL.Path == "/v1.44/images/sha256:image123/json":
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"Id":"sha256:image123","RepoDigests":["registry.example/web@sha256:repo123"]}`))
 		default:
@@ -611,10 +611,10 @@ func newSensitiveAdoptionDockerServer(t *testing.T) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case r.Method == http.MethodGet && r.URL.Path == "/v1.43/containers/json":
+		case r.Method == http.MethodGet && r.URL.Path == "/v1.44/containers/json":
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`[{"Id":"container-secret","Names":["/secret-app"],"Image":"registry.example/secret-app:2.0.0","ImageID":"sha256:secretimage","State":"running"}]`))
-		case r.Method == http.MethodGet && r.URL.Path == "/v1.43/containers/container-secret/json":
+		case r.Method == http.MethodGet && r.URL.Path == "/v1.44/containers/container-secret/json":
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{
 				"Id":"container-secret",
@@ -630,7 +630,7 @@ func newSensitiveAdoptionDockerServer(t *testing.T) *httptest.Server {
 				"HostConfig":{"NetworkMode":"bridge","RestartPolicy":{"Name":"always"}},
 				"NetworkSettings":{"Ports":{},"Networks":{"bridge":{"Aliases":["secret-app"]}}}
 			}`))
-		case r.Method == http.MethodGet && r.URL.Path == "/v1.43/images/sha256:secretimage/json":
+		case r.Method == http.MethodGet && r.URL.Path == "/v1.44/images/sha256:secretimage/json":
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"Id":"sha256:secretimage","RepoDigests":["registry.example/secret-app@sha256:secretrepo"]}`))
 		default:
@@ -643,10 +643,10 @@ func newUnsafeAdoptionDockerServer(t *testing.T) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case r.Method == http.MethodGet && r.URL.Path == "/v1.43/containers/json":
+		case r.Method == http.MethodGet && r.URL.Path == "/v1.44/containers/json":
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`[{"Id":"container-unsafe","Names":["/unsafe"],"Image":"registry.example/unsafe:latest","ImageID":"sha256:unsafe","State":"running"}]`))
-		case r.Method == http.MethodGet && r.URL.Path == "/v1.43/containers/container-unsafe/json":
+		case r.Method == http.MethodGet && r.URL.Path == "/v1.44/containers/container-unsafe/json":
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{
 				"Id":"container-unsafe",
@@ -658,7 +658,7 @@ func newUnsafeAdoptionDockerServer(t *testing.T) *httptest.Server {
 				"Mounts":[{"Type":"tmpfs","Destination":"/cache"}],
 				"NetworkSettings":{"Ports":{"80/tcp":[{"HostIP":"127.0.0.1","HostPort":"8080"},{"HostIP":"::","HostPort":"8080"}]},"Networks":{"custom":{"Aliases":["surprise"]}}}
 			}`))
-		case r.Method == http.MethodGet && r.URL.Path == "/v1.43/images/sha256:unsafe/json":
+		case r.Method == http.MethodGet && r.URL.Path == "/v1.44/images/sha256:unsafe/json":
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"Id":"sha256:unsafe","RepoDigests":["registry.example/unsafe@sha256:unsafe"]}`))
 		default:

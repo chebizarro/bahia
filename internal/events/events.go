@@ -109,9 +109,7 @@ func (p *InProcessPublisher) Publish(ctx context.Context, e Event) {
 	handlerCtx := context.Background()
 	if ctx != nil {
 		if deadline, ok := ctx.Deadline(); ok {
-			var cancel context.CancelFunc
-			handlerCtx, cancel = context.WithDeadline(handlerCtx, deadline)
-			defer cancel()
+			handlerCtx, _ = context.WithDeadline(handlerCtx, deadline)
 		}
 	}
 

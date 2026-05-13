@@ -103,7 +103,7 @@ func (b *DockerBuilder) BuildImage(ctx context.Context, req BuildRequest) (*Buil
 		tag = strings.TrimSuffix(reg, "/") + "/" + strings.TrimPrefix(tag, "/")
 	}
 
-	buildURL := fmt.Sprintf("%s/v1.43/build?dockerfile=Dockerfile&pull=1&rm=1", b.dockerHost)
+	buildURL := fmt.Sprintf("%s/v1.44/build?dockerfile=Dockerfile&pull=1&rm=1", b.dockerHost)
 	if tag != "" {
 		buildURL += "&t=" + url.QueryEscape(tag)
 	}
@@ -142,7 +142,7 @@ func (b *DockerBuilder) PushImage(ctx context.Context, imageID string, targetRef
 		return fmt.Errorf("invalid target ref: %q", targetRef)
 	}
 
-	tagURL := fmt.Sprintf("%s/v1.43/images/%s/tag?repo=%s", b.dockerHost, url.PathEscape(imageID), url.QueryEscape(repo))
+	tagURL := fmt.Sprintf("%s/v1.44/images/%s/tag?repo=%s", b.dockerHost, url.PathEscape(imageID), url.QueryEscape(repo))
 	if tag != "" {
 		tagURL += "&tag=" + url.QueryEscape(tag)
 	}
@@ -160,7 +160,7 @@ func (b *DockerBuilder) PushImage(ctx context.Context, imageID string, targetRef
 		return fmt.Errorf("docker tag returned %d: %s", tagResp.StatusCode, strings.TrimSpace(string(body)))
 	}
 
-	pushURL := fmt.Sprintf("%s/v1.43/images/%s/push", b.dockerHost, url.PathEscape(repo))
+	pushURL := fmt.Sprintf("%s/v1.44/images/%s/push", b.dockerHost, url.PathEscape(repo))
 	if tag != "" {
 		pushURL += "?tag=" + url.QueryEscape(tag)
 	}
@@ -195,7 +195,7 @@ func (b *DockerBuilder) CheckImageExists(ctx context.Context, toolsetHash string
 	query := url.Values{}
 	query.Set("filters", string(filters))
 	query.Set("all", "0")
-	checkURL := fmt.Sprintf("%s/v1.43/images/json?%s", b.dockerHost, query.Encode())
+	checkURL := fmt.Sprintf("%s/v1.44/images/json?%s", b.dockerHost, query.Encode())
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, checkURL, nil)
 	if err != nil {

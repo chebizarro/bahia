@@ -215,10 +215,10 @@ func newManagedEndpointDockerServer(t *testing.T, containerID, containerName, im
 	imageID := "sha256:" + containerID
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case r.Method == http.MethodGet && r.URL.Path == "/v1.43/containers/json":
+		case r.Method == http.MethodGet && r.URL.Path == "/v1.44/containers/json":
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = fmt.Fprintf(w, `[{"Id":%q,"Names":[%q],"Image":%q,"ImageID":%q,"State":"running"}]`, containerID, "/"+containerName, imageRepo+":1.0.0", imageID)
-		case r.Method == http.MethodGet && r.URL.Path == "/v1.43/containers/"+containerID+"/json":
+		case r.Method == http.MethodGet && r.URL.Path == "/v1.44/containers/"+containerID+"/json":
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = fmt.Fprintf(w, `{
 				"Id":%q,
@@ -229,7 +229,7 @@ func newManagedEndpointDockerServer(t *testing.T, containerID, containerName, im
 				"HostConfig":{"NetworkMode":"bridge","RestartPolicy":{"Name":"unless-stopped"}},
 				"NetworkSettings":{"Ports":{},"Networks":{"bridge":{"Aliases":[%q]}}}
 			}`, containerID, "/"+containerName, imageID, imageRepo+":1.0.0", containerName)
-		case r.Method == http.MethodGet && r.URL.Path == "/v1.43/images/"+imageID+"/json":
+		case r.Method == http.MethodGet && r.URL.Path == "/v1.44/images/"+imageID+"/json":
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = fmt.Fprintf(w, `{"Id":%q,"RepoDigests":[%q]}`, imageID, imageRepo+"@"+imageDigest)
 		default:

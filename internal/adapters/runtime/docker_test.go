@@ -42,10 +42,10 @@ func TestDockerDeployAddsPortBindingsAndVolumes(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case r.Method == http.MethodGet && r.URL.Path == "/v1.43/containers/json":
+		case r.Method == http.MethodGet && r.URL.Path == "/v1.44/containers/json":
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`[]`))
-		case r.Method == http.MethodPost && r.URL.Path == "/v1.43/containers/create":
+		case r.Method == http.MethodPost && r.URL.Path == "/v1.44/containers/create":
 			var body map[string]any
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 				handlerErrors.add(fmt.Sprintf("decode create body: %v", err))
@@ -56,7 +56,7 @@ func TestDockerDeployAddsPortBindingsAndVolumes(t *testing.T) {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusCreated)
 			_, _ = w.Write([]byte(`{"Id":"container-123"}`))
-		case r.Method == http.MethodPost && r.URL.Path == "/v1.43/containers/container-123/start":
+		case r.Method == http.MethodPost && r.URL.Path == "/v1.44/containers/container-123/start":
 			w.WriteHeader(http.StatusNoContent)
 		default:
 			handlerErrors.add(fmt.Sprintf("unexpected Docker API request: %s %s", r.Method, r.URL.String()))
@@ -127,21 +127,21 @@ func TestDockerObserveUsesAllContainersNameFallbackAndRepoDigest(t *testing.T) {
 	handlerErrors := newDockerHandlerErrors()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case r.Method == http.MethodGet && r.URL.Path == "/v1.43/containers/json" && strings.Contains(r.URL.RawQuery, "filters="):
+		case r.Method == http.MethodGet && r.URL.Path == "/v1.44/containers/json" && strings.Contains(r.URL.RawQuery, "filters="):
 			if r.URL.Query().Get("all") != "1" {
 				handlerErrors.add("label query did not include all=1")
 			}
 			sawLabelAll.Store(true)
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`[]`))
-		case r.Method == http.MethodGet && r.URL.Path == "/v1.43/containers/json":
+		case r.Method == http.MethodGet && r.URL.Path == "/v1.44/containers/json":
 			if r.URL.Query().Get("all") != "1" {
 				handlerErrors.add("fallback query did not include all=1")
 			}
 			sawFallbackAll.Store(true)
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`[{"Id":"container-123","Names":["/adopted-api"],"Image":"registry.example/api:latest","ImageID":"sha256:localdigest","State":"exited"}]`))
-		case r.Method == http.MethodGet && r.URL.Path == "/v1.43/images/sha256:localdigest/json":
+		case r.Method == http.MethodGet && r.URL.Path == "/v1.44/images/sha256:localdigest/json":
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"Id":"sha256:localdigest","RepoDigests":["registry.example/api@sha256:repodigest"]}`))
 		default:
@@ -180,10 +180,10 @@ func TestDockerDeployMapsAdoptedRuntimeOptions(t *testing.T) {
 	handlerErrors := newDockerHandlerErrors()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case r.Method == http.MethodGet && r.URL.Path == "/v1.43/containers/json":
+		case r.Method == http.MethodGet && r.URL.Path == "/v1.44/containers/json":
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`[]`))
-		case r.Method == http.MethodPost && r.URL.Path == "/v1.43/containers/create":
+		case r.Method == http.MethodPost && r.URL.Path == "/v1.44/containers/create":
 			var body map[string]any
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 				handlerErrors.add(fmt.Sprintf("decode create body: %v", err))
@@ -194,7 +194,7 @@ func TestDockerDeployMapsAdoptedRuntimeOptions(t *testing.T) {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusCreated)
 			_, _ = w.Write([]byte(`{"Id":"container-123"}`))
-		case r.Method == http.MethodPost && r.URL.Path == "/v1.43/containers/container-123/start":
+		case r.Method == http.MethodPost && r.URL.Path == "/v1.44/containers/container-123/start":
 			w.WriteHeader(http.StatusNoContent)
 		default:
 			handlerErrors.add(fmt.Sprintf("unexpected Docker API request: %s %s", r.Method, r.URL.String()))
@@ -241,16 +241,16 @@ func TestDockerRestartAndStopUseTargetNameFallback(t *testing.T) {
 	handlerErrors := newDockerHandlerErrors()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case r.Method == http.MethodGet && r.URL.Path == "/v1.43/containers/json" && strings.Contains(r.URL.RawQuery, "filters="):
+		case r.Method == http.MethodGet && r.URL.Path == "/v1.44/containers/json" && strings.Contains(r.URL.RawQuery, "filters="):
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`[]`))
-		case r.Method == http.MethodGet && r.URL.Path == "/v1.43/containers/json":
+		case r.Method == http.MethodGet && r.URL.Path == "/v1.44/containers/json":
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`[{"Id":"container-123","Names":["/adopted-api"],"Image":"api","ImageID":"sha256:1","State":"running"}]`))
-		case r.Method == http.MethodPost && r.URL.Path == "/v1.43/containers/container-123/restart":
+		case r.Method == http.MethodPost && r.URL.Path == "/v1.44/containers/container-123/restart":
 			restarted.Store(true)
 			w.WriteHeader(http.StatusNoContent)
-		case r.Method == http.MethodPost && r.URL.Path == "/v1.43/containers/container-123/stop":
+		case r.Method == http.MethodPost && r.URL.Path == "/v1.44/containers/container-123/stop":
 			stopped.Store(true)
 			w.WriteHeader(http.StatusNoContent)
 		default:
@@ -320,13 +320,13 @@ func TestDockerDiscoveryNormalizesContainerInspectData(t *testing.T) {
 	handlerErrors := newDockerHandlerErrors()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case r.Method == http.MethodGet && r.URL.Path == "/v1.43/containers/json":
+		case r.Method == http.MethodGet && r.URL.Path == "/v1.44/containers/json":
 			if r.URL.Query().Get("all") != "1" {
 				handlerErrors.add("discovery query did not include all=1")
 			}
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`[{"Id":"container-123","Names":["/web"],"Image":"registry.example/web:1.2.3","ImageID":"sha256:image123","State":"running"}]`))
-		case r.Method == http.MethodGet && r.URL.Path == "/v1.43/containers/container-123/json":
+		case r.Method == http.MethodGet && r.URL.Path == "/v1.44/containers/container-123/json":
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{
 				"Id":"container-123",
@@ -349,7 +349,7 @@ func TestDockerDiscoveryNormalizesContainerInspectData(t *testing.T) {
 				"HostConfig":{"Binds":["/host/data:/data:ro"],"NetworkMode":"demo_default","RestartPolicy":{"Name":"unless-stopped"}},
 				"NetworkSettings":{"Ports":{"80/tcp":[{"HostPort":"8080"}],"53/udp":[{"HostPort":"5353"}]},"Networks":{"demo_default":{"Aliases":["web","demo-web-1"]}}}
 			}`))
-		case r.Method == http.MethodGet && r.URL.Path == "/v1.43/images/sha256:image123/json":
+		case r.Method == http.MethodGet && r.URL.Path == "/v1.44/images/sha256:image123/json":
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"Id":"sha256:image123","RepoDigests":["registry.example/web@sha256:repo123"]}`))
 		default:

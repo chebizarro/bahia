@@ -358,7 +358,7 @@ func (o *DockerObserver) Deploy(ctx context.Context, serviceName, image string, 
 	}
 
 	// Create container.
-	createURL := fmt.Sprintf("%s/v1.43/containers/create?name=%s", o.host, serviceName)
+	createURL := fmt.Sprintf("%s/v1.44/containers/create?name=%s", o.host, serviceName)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, createURL,
 		strings.NewReader(string(bodyJSON)))
 	if err != nil {
@@ -384,7 +384,7 @@ func (o *DockerObserver) Deploy(ctx context.Context, serviceName, image string, 
 	}
 
 	// Start container.
-	startURL := fmt.Sprintf("%s/v1.43/containers/%s/start", o.host, createResp.ID)
+	startURL := fmt.Sprintf("%s/v1.44/containers/%s/start", o.host, createResp.ID)
 	startReq, err := http.NewRequestWithContext(ctx, http.MethodPost, startURL, nil)
 	if err != nil {
 		return fmt.Errorf("creating start request: %w", err)
@@ -419,7 +419,7 @@ func (o *DockerObserver) Restart(ctx context.Context, targetName string) error {
 	if err != nil {
 		return err
 	}
-	restartURL := fmt.Sprintf("%s/v1.43/containers/%s/restart?t=10", o.host, container.ID)
+	restartURL := fmt.Sprintf("%s/v1.44/containers/%s/restart?t=10", o.host, container.ID)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, restartURL, nil)
 	if err != nil {
 		return fmt.Errorf("creating docker restart request: %w", err)
@@ -441,7 +441,7 @@ func (o *DockerObserver) Stop(ctx context.Context, targetName string) error {
 	if err != nil {
 		return err
 	}
-	stopURL := fmt.Sprintf("%s/v1.43/containers/%s/stop?t=10", o.host, container.ID)
+	stopURL := fmt.Sprintf("%s/v1.44/containers/%s/stop?t=10", o.host, container.ID)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, stopURL, nil)
 	if err != nil {
 		return fmt.Errorf("creating docker stop request: %w", err)
@@ -478,7 +478,7 @@ func (o *DockerObserver) StreamLogs(ctx context.Context, serviceName string, opt
 		follow = "true"
 	}
 
-	url := fmt.Sprintf("%s/v1.43/containers/%s/logs?stdout=true&stderr=true&tail=%s&follow=%s&timestamps=true",
+	url := fmt.Sprintf("%s/v1.44/containers/%s/logs?stdout=true&stderr=true&tail=%s&follow=%s&timestamps=true",
 		o.host, containers[0].ID, tail, follow)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
@@ -662,7 +662,7 @@ func (o *DockerObserver) listAllContainers(ctx context.Context) ([]DockerContain
 }
 
 func (o *DockerObserver) listContainersRaw(ctx context.Context, query url.Values) ([]DockerContainer, error) {
-	requestURL := fmt.Sprintf("%s/v1.43/containers/json", o.host)
+	requestURL := fmt.Sprintf("%s/v1.44/containers/json", o.host)
 	if len(query) > 0 {
 		requestURL += "?" + query.Encode()
 	}
@@ -716,7 +716,7 @@ func (o *DockerObserver) stopAndRemove(ctx context.Context, serviceName string) 
 	}
 	for _, c := range containers {
 		// Stop.
-		stopURL := fmt.Sprintf("%s/v1.43/containers/%s/stop?t=10", o.host, c.ID)
+		stopURL := fmt.Sprintf("%s/v1.44/containers/%s/stop?t=10", o.host, c.ID)
 		req, _ := http.NewRequestWithContext(ctx, http.MethodPost, stopURL, nil)
 		resp, err := o.httpClient.Do(req)
 		if err == nil {
@@ -724,7 +724,7 @@ func (o *DockerObserver) stopAndRemove(ctx context.Context, serviceName string) 
 		}
 
 		// Remove.
-		rmURL := fmt.Sprintf("%s/v1.43/containers/%s?force=true", o.host, c.ID)
+		rmURL := fmt.Sprintf("%s/v1.44/containers/%s?force=true", o.host, c.ID)
 		req, _ = http.NewRequestWithContext(ctx, http.MethodDelete, rmURL, nil)
 		resp, err = o.httpClient.Do(req)
 		if err == nil {
@@ -735,7 +735,7 @@ func (o *DockerObserver) stopAndRemove(ctx context.Context, serviceName string) 
 }
 
 func (o *DockerObserver) pullImage(ctx context.Context, image string) error {
-	url := fmt.Sprintf("%s/v1.43/images/create?fromImage=%s", o.host, image)
+	url := fmt.Sprintf("%s/v1.44/images/create?fromImage=%s", o.host, image)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, nil)
 	if err != nil {
 		return err
@@ -771,7 +771,7 @@ func (o *DockerObserver) resolveImageRepoDigest(ctx context.Context, imageRef, i
 	if inspectRef == "" {
 		return "", "", nil
 	}
-	requestURL := fmt.Sprintf("%s/v1.43/images/%s/json", o.host, url.PathEscape(inspectRef))
+	requestURL := fmt.Sprintf("%s/v1.44/images/%s/json", o.host, url.PathEscape(inspectRef))
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, requestURL, nil)
 	if err != nil {
 		return "", "", err
