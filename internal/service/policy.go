@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
 	"github.com/google/uuid"
@@ -10,12 +11,40 @@ import (
 	"go.uber.org/zap"
 )
 
+// SBOMAttestationProvider provides SBOM attestation data for policy evaluation.
+type SBOMAttestationProvider interface {
+	// GetAttestationForArtifact returns the SBOM attestation for an artifact.
+	GetAttestationForArtifact(ctx context.Context, artifactID uuid.UUID) (*domain.SBOMAttestation, error)
+	// GetSBOMDataForArtifact returns the raw SBOM data for an artifact.
+	GetSBOMDataForArtifact(ctx context.Context, artifactID uuid.UUID) ([]byte, error)
+}
+
 // PolicyService evaluates deployment policies against artifacts.
 type PolicyService struct {
-	policies   repository.DeploymentPolicyRepository
-	signatures repository.ArtifactSignatureRepository
-	sboms      repository.SBOMRepository
-	logger     *zap.Logger
+	policies       repository.DeploymentPolicyRepository
+	signatures     repository.ArtifactSignatureRepository
+	sboms          repository.SBOMRepository
+	attestations   SBOMAttestationProvider
+	trustedGens    map[string]bool // map of trusted generator IDs
+	logger         *zap.Logger
+}
+
+// PolicyServiceOption configures the PolicyService.
+type PolicyServiceOption func(*PolicyService)
+
+// WithAttestationProvider sets the SBOM attestation provider.
+func WithAttestationProvider(provider SBOMAttestationProvider) PolicyServiceOption {
+	return func(s *PolicyService) { s.attestations = provider }
+}
+
+// WithTrustedGenerators sets the list of trusted SBOM generator IDs.
+func WithTrustedGenerators(generators []string) PolicyServiceOption {
+	return func(s *PolicyService) {
+		s.trustedGens = make(map[string]bool)
+		for _, g := range generators {
+			s.trustedGens[g] = true
+		}
+	}
 }
 
 // NewPolicyService creates a new policy evaluation service.
@@ -24,13 +53,19 @@ func NewPolicyService(
 	signatures repository.ArtifactSignatureRepository,
 	sboms repository.SBOMRepository,
 	logger *zap.Logger,
+	opts ...PolicyServiceOption,
 ) *PolicyService {
-	return &PolicyService{
-		policies:   policies,
-		signatures: signatures,
-		sboms:      sboms,
-		logger:     logger,
+	s := &PolicyService{
+		policies:    policies,
+		signatures:  signatures,
+		sboms:       sboms,
+		trustedGens: make(map[string]bool),
+		logger:      logger,
 	}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
 }
 
 // Evaluate runs all applicable policies against an artifact for the given environment.
@@ -115,6 +150,17 @@ func (s *PolicyService) evaluateRule(ctx context.Context, rule domain.PolicyRule
 		return s.checkRequireScanStatus(ctx, artifactID, rule.Params)
 	case domain.RuleBlockPackage:
 		return s.checkBlockPackage(ctx, artifactID, rule.Params)
+	// --- SBOM Attestation Rules ---
+	case domain.RuleSBOMSubjectDigestMatch:
+		return s.checkSBOMSubjectDigestMatch(ctx, artifactID, rule.Params)
+	case domain.RuleSBOMParseability:
+		return s.checkSBOMParseability(ctx, artifactID)
+	case domain.RuleSBOMNTIAMinFields:
+		return s.checkSBOMNTIAMinFields(ctx, artifactID)
+	case domain.RuleSBOMTrustedGenerator:
+		return s.checkSBOMTrustedGenerator(ctx, artifactID, rule.Params)
+	case domain.RuleSBOMFormat:
+		return s.checkSBOMFormat(ctx, artifactID, rule.Params)
 	default:
 		s.logger.Debug("unknown policy rule type", zap.String("type", string(rule.Type)))
 		return nil
@@ -233,6 +279,266 @@ func (s *PolicyService) checkBlockPackage(ctx context.Context, artifactID uuid.U
 	return nil
 }
 
+// --- SBOM Attestation Policy Rule Implementations ---
+
+// checkSBOMSubjectDigestMatch verifies the SBOM attestation subject matches the artifact digest.
+func (s *PolicyService) checkSBOMSubjectDigestMatch(ctx context.Context, artifactID uuid.UUID, params map[string]any) *domain.PolicyViolation {
+	if s.attestations == nil {
+		return &domain.PolicyViolation{
+			Rule:    domain.RuleSBOMSubjectDigestMatch,
+			Message: "attestation provider not configured",
+		}
+	}
+
+	expectedDigest := getStringParam(params, "artifact_digest", "")
+	if expectedDigest == "" {
+		// Try to get digest from artifact metadata (would need artifact repo)
+		return &domain.PolicyViolation{
+			Rule:    domain.RuleSBOMSubjectDigestMatch,
+			Message: "artifact_digest parameter required",
+		}
+	}
+
+	att, err := s.attestations.GetAttestationForArtifact(ctx, artifactID)
+	if err != nil {
+		return &domain.PolicyViolation{
+			Rule:    domain.RuleSBOMSubjectDigestMatch,
+			Message: fmt.Sprintf("failed to get attestation: %v", err),
+		}
+	}
+
+	// Verify subject digest matches.
+	if !verifySBOMSubjectDigest(att, expectedDigest) {
+		return &domain.PolicyViolation{
+			Rule:    domain.RuleSBOMSubjectDigestMatch,
+			Message: fmt.Sprintf("SBOM subject digest does not match artifact digest %s", expectedDigest),
+		}
+	}
+
+	return nil
+}
+
+// checkSBOMParseability verifies the SBOM can be parsed as valid SPDX or CycloneDX.
+func (s *PolicyService) checkSBOMParseability(ctx context.Context, artifactID uuid.UUID) *domain.PolicyViolation {
+	if s.attestations == nil {
+		return &domain.PolicyViolation{
+			Rule:    domain.RuleSBOMParseability,
+			Message: "attestation provider not configured",
+		}
+	}
+
+	sbomData, err := s.attestations.GetSBOMDataForArtifact(ctx, artifactID)
+	if err != nil {
+		return &domain.PolicyViolation{
+			Rule:    domain.RuleSBOMParseability,
+			Message: fmt.Sprintf("failed to get SBOM data: %v", err),
+		}
+	}
+
+	// Try to parse the SBOM - this validates format.
+	if _, err := parseSBOMForValidation(sbomData); err != nil {
+		return &domain.PolicyViolation{
+			Rule:    domain.RuleSBOMParseability,
+			Message: fmt.Sprintf("SBOM is not parseable: %v", err),
+		}
+	}
+
+	return nil
+}
+
+// checkSBOMNTIAMinFields verifies the SBOM has NTIA minimum elements.
+func (s *PolicyService) checkSBOMNTIAMinFields(ctx context.Context, artifactID uuid.UUID) *domain.PolicyViolation {
+	if s.attestations == nil {
+		return &domain.PolicyViolation{
+			Rule:    domain.RuleSBOMNTIAMinFields,
+			Message: "attestation provider not configured",
+		}
+	}
+
+	att, err := s.attestations.GetAttestationForArtifact(ctx, artifactID)
+	if err != nil {
+		return &domain.PolicyViolation{
+			Rule:    domain.RuleSBOMNTIAMinFields,
+			Message: fmt.Sprintf("failed to get attestation: %v", err),
+		}
+	}
+
+	if att.Predicate.NTIA == nil {
+		return &domain.PolicyViolation{
+			Rule:    domain.RuleSBOMNTIAMinFields,
+			Message: "SBOM attestation missing NTIA compliance data",
+		}
+	}
+
+	if !att.Predicate.NTIA.IsCompliant {
+		missing := collectMissingNTIAFields(att.Predicate.NTIA)
+		return &domain.PolicyViolation{
+			Rule:    domain.RuleSBOMNTIAMinFields,
+			Message: fmt.Sprintf("SBOM missing NTIA minimum elements: %s", missing),
+		}
+	}
+
+	return nil
+}
+
+// checkSBOMTrustedGenerator verifies the SBOM generator is in the trusted list.
+func (s *PolicyService) checkSBOMTrustedGenerator(ctx context.Context, artifactID uuid.UUID, params map[string]any) *domain.PolicyViolation {
+	if s.attestations == nil {
+		return &domain.PolicyViolation{
+			Rule:    domain.RuleSBOMTrustedGenerator,
+			Message: "attestation provider not configured",
+		}
+	}
+
+	att, err := s.attestations.GetAttestationForArtifact(ctx, artifactID)
+	if err != nil {
+		return &domain.PolicyViolation{
+			Rule:    domain.RuleSBOMTrustedGenerator,
+			Message: fmt.Sprintf("failed to get attestation: %v", err),
+		}
+	}
+
+	generatorID := att.Predicate.Generator.ID
+	if generatorID == "" {
+		return &domain.PolicyViolation{
+			Rule:    domain.RuleSBOMTrustedGenerator,
+			Message: "SBOM generator not identified",
+		}
+	}
+
+	// Check params for inline trusted list, or fall back to service config.
+	trustedList := getStringSliceParam(params, "trusted_generators")
+	if len(trustedList) > 0 {
+		for _, trusted := range trustedList {
+			if trusted == generatorID {
+				return nil // Trusted
+			}
+		}
+	} else if s.trustedGens[generatorID] {
+		return nil // Trusted via service config
+	}
+
+	return &domain.PolicyViolation{
+		Rule:    domain.RuleSBOMTrustedGenerator,
+		Message: fmt.Sprintf("SBOM generator %q is not in trusted list", generatorID),
+	}
+}
+
+// checkSBOMFormat verifies the SBOM is in an acceptable format.
+func (s *PolicyService) checkSBOMFormat(ctx context.Context, artifactID uuid.UUID, params map[string]any) *domain.PolicyViolation {
+	allowedFormats := getStringSliceParam(params, "formats")
+	if len(allowedFormats) == 0 {
+		// No format restriction
+		return nil
+	}
+
+	sbom, err := s.sboms.GetSBOMByArtifact(ctx, artifactID)
+	if err != nil {
+		return &domain.PolicyViolation{
+			Rule:    domain.RuleSBOMFormat,
+			Message: fmt.Sprintf("failed to get SBOM: %v", err),
+		}
+	}
+
+	for _, allowed := range allowedFormats {
+		if string(sbom.Format) == allowed {
+			return nil // Allowed format
+		}
+	}
+
+	return &domain.PolicyViolation{
+		Rule:    domain.RuleSBOMFormat,
+		Message: fmt.Sprintf("SBOM format %q not in allowed formats: %v", sbom.Format, allowedFormats),
+	}
+}
+
+// verifySBOMSubjectDigest checks if any attestation subject matches the expected digest.
+func verifySBOMSubjectDigest(att *domain.SBOMAttestation, expectedDigest string) bool {
+	if att == nil || len(att.Subject) == 0 {
+		return false
+	}
+
+	// Parse expected digest (format: "algo:hash")
+	parts := splitDigest(expectedDigest)
+	if len(parts) != 2 {
+		return false
+	}
+	algo, hash := parts[0], parts[1]
+
+	for _, subject := range att.Subject {
+		if subjectHash, ok := subject.Digest[algo]; ok {
+			if subjectHash == hash {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// splitDigest splits "algo:hash" into [algo, hash].
+func splitDigest(digest string) []string {
+	for i, c := range digest {
+		if c == ':' {
+			return []string{digest[:i], digest[i+1:]}
+		}
+	}
+	return nil
+}
+
+// collectMissingNTIAFields returns a comma-separated list of missing NTIA fields.
+func collectMissingNTIAFields(ntia *domain.NTIACompliance) string {
+	var missing []string
+	if !ntia.HasSupplierName {
+		missing = append(missing, "supplier_name")
+	}
+	if !ntia.HasComponentName {
+		missing = append(missing, "component_name")
+	}
+	if !ntia.HasComponentVersion {
+		missing = append(missing, "component_version")
+	}
+	if !ntia.HasUniqueID {
+		missing = append(missing, "unique_id")
+	}
+	if !ntia.HasRelationship {
+		missing = append(missing, "relationship")
+	}
+	if !ntia.HasAuthor {
+		missing = append(missing, "author")
+	}
+	if !ntia.HasTimestamp {
+		missing = append(missing, "timestamp")
+	}
+	if len(missing) == 0 {
+		return "none"
+	}
+	return fmt.Sprintf("%v", missing)
+}
+
+// parseSBOMForValidation is a lightweight SBOM format detection and validation.
+func parseSBOMForValidation(data []byte) (domain.SBOMFormat, error) {
+	if len(data) == 0 {
+		return "", fmt.Errorf("empty SBOM data")
+	}
+
+	// Detect format by checking for format-specific keys.
+	var probe struct {
+		SPDXVersion string `json:"spdxVersion"`
+		BOMFormat   string `json:"bomFormat"`
+	}
+	if err := json.Unmarshal(data, &probe); err != nil {
+		return "", fmt.Errorf("invalid JSON: %w", err)
+	}
+
+	if probe.SPDXVersion != "" {
+		return domain.SBOMFormatSPDX, nil
+	}
+	if probe.BOMFormat == "CycloneDX" {
+		return domain.SBOMFormatCycloneDX, nil
+	}
+	return "", fmt.Errorf("unknown SBOM format")
+}
+
 // --- CRUD ---
 
 // CreatePolicy creates a new deployment policy.
@@ -295,4 +601,32 @@ func getStringParam(params map[string]any, key, defaultVal string) string {
 		return defaultVal
 	}
 	return s
+}
+
+func getStringSliceParam(params map[string]any, key string) []string {
+	if params == nil {
+		return nil
+	}
+	v, ok := params[key]
+	if !ok {
+		return nil
+	}
+
+	// Handle []string directly.
+	if ss, ok := v.([]string); ok {
+		return ss
+	}
+
+	// Handle []interface{} (common from JSON unmarshaling).
+	if arr, ok := v.([]interface{}); ok {
+		result := make([]string, 0, len(arr))
+		for _, item := range arr {
+			if s, ok := item.(string); ok {
+				result = append(result, s)
+			}
+		}
+		return result
+	}
+
+	return nil
 }

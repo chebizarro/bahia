@@ -28,6 +28,19 @@ const (
 	RulePackageMinAge       PolicyRuleType = "package_min_age"
 	RulePackageMinDownloads PolicyRuleType = "package_min_downloads"
 	RuleTyposquatCheck      PolicyRuleType = "typosquat_check"
+
+	// --- SBOM Attestation Policy Rules ---
+
+	// RuleSBOMSubjectDigestMatch requires the SBOM attestation subject to match the artifact digest.
+	RuleSBOMSubjectDigestMatch PolicyRuleType = "sbom_subject_digest_match"
+	// RuleSBOMParseability requires the SBOM to be parseable (valid SPDX or CycloneDX).
+	RuleSBOMParseability PolicyRuleType = "sbom_parseability"
+	// RuleSBOMNTIAMinFields requires the SBOM to have NTIA minimum elements.
+	RuleSBOMNTIAMinFields PolicyRuleType = "sbom_ntia_min_fields"
+	// RuleSBOMTrustedGenerator requires the SBOM generator to be in a trusted list.
+	RuleSBOMTrustedGenerator PolicyRuleType = "sbom_trusted_generator"
+	// RuleSBOMFormat requires a specific SBOM format (spdx or cyclonedx).
+	RuleSBOMFormat PolicyRuleType = "sbom_format"
 )
 
 // PolicyRule is a single check within a deployment policy.
