@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -43,6 +44,13 @@ type Runtime interface {
 	// StreamLogs streams container logs for a service.
 	// The returned channel receives log lines until the context is cancelled.
 	StreamLogs(ctx context.Context, serviceName string, opts LogOptions) (<-chan LogEntry, error)
+}
+
+// RegistryAuthConfig contains credentials for private OCI/Docker registry pulls.
+type RegistryAuthConfig struct {
+	Server   string
+	Username string
+	Password string
 }
 
 // LifecycleRuntime is implemented by runtimes that support direct lifecycle actions.
@@ -95,6 +103,7 @@ type DockerObserver struct {
 	httpClient   *http.Client
 	host         string
 	observedHost string
+	registryAuth *RegistryAuthConfig
 	logger       *zap.Logger
 }
 
@@ -756,6 +765,9 @@ func (o *DockerObserver) pullImage(ctx context.Context, image string) error {
 	if err != nil {
 		return err
 	}
+	if authHeader, ok := o.registryAuthHeader(image); ok {
+		req.Header.Set("X-Registry-Auth", authHeader)
+	}
 	resp, err := o.httpClient.Do(req)
 	if err != nil {
 		return err
@@ -772,6 +784,63 @@ func (o *DockerObserver) pullImage(ctx context.Context, image string) error {
 		}
 	}
 	return nil
+}
+
+func (o *DockerObserver) registryAuthHeader(image string) (string, bool) {
+	if o == nil || o.registryAuth == nil {
+		return "", false
+	}
+	server := strings.TrimSpace(o.registryAuth.Server)
+	username := strings.TrimSpace(o.registryAuth.Username)
+	password := o.registryAuth.Password
+	if server == "" || username == "" || password == "" {
+		return "", false
+	}
+	imageHost := registryHostFromImageRef(image)
+	serverHost := normalizeRegistryHost(server)
+	if imageHost == "" || serverHost == "" || !strings.EqualFold(imageHost, serverHost) {
+		return "", false
+	}
+	payload := map[string]string{
+		"username":      username,
+		"password":      password,
+		"serveraddress": serverHost,
+	}
+	b, err := json.Marshal(payload)
+	if err != nil {
+		return "", false
+	}
+	return base64.StdEncoding.EncodeToString(b), true
+}
+
+func registryHostFromImageRef(image string) string {
+	image = strings.TrimSpace(image)
+	if image == "" {
+		return ""
+	}
+	first := image
+	if slash := strings.Index(first, "/"); slash >= 0 {
+		first = first[:slash]
+	}
+	if strings.Contains(first, ".") || strings.Contains(first, ":") || first == "localhost" {
+		return normalizeRegistryHost(first)
+	}
+	return ""
+}
+
+func normalizeRegistryHost(server string) string {
+	server = strings.TrimSpace(server)
+	if server == "" {
+		return ""
+	}
+	if strings.Contains(server, "://") {
+		if parsed, err := url.Parse(server); err == nil {
+			server = parsed.Host
+		}
+	}
+	server = strings.TrimSpace(strings.TrimPrefix(strings.TrimPrefix(server, "https://"), "http://"))
+	server = strings.TrimSuffix(server, "/")
+	return server
 }
 
 type dockerImageInspect struct {
