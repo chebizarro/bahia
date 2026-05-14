@@ -10,10 +10,10 @@
   import QRCode from 'qrcode';
   import jsQR from 'jsqr';
   import {
+    AppearanceIcon,
     ArtifactIcon,
     CameraIcon,
     ConfiguredIcon,
-    IdentityIcon,
     MoonIcon,
     ProtectedIcon,
     RelayIcon,
@@ -325,7 +325,7 @@
 
     <!-- Theme Section -->
     <section class="settings-section">
-      <h2><IdentityIcon size={18} stroke={1.75} aria-hidden="true" /> Appearance</h2>
+      <h2><AppearanceIcon size={18} stroke={1.75} aria-hidden="true" /> Appearance</h2>
       <p class="section-description">Customize the look and feel of the application.</p>
 
       <div class="theme-option">

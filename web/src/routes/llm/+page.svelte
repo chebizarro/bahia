@@ -15,9 +15,9 @@
     ArtifactIcon,
     DeploymentIcon,
     EnvironmentIcon,
+    LlmIcon,
     PendingIcon,
     ProgressIcon,
-    SoulIcon,
     WarningIcon
   } from '$lib/icons/domain-icons.js';
   import {
@@ -230,7 +230,7 @@
 <div class="page">
   <div class="page-header">
     <div>
-      <h1><SoulIcon size={24} stroke={1.75} aria-hidden="true" /> LLM Control Plane</h1>
+      <h1><LlmIcon size={24} stroke={1.75} aria-hidden="true" /> LLM Control Plane</h1>
       <p class="subtitle">Signer-first route creation, release registration, deployment, rollback, approval, and relay-backed route-state visibility.</p>
     </div>
     <div class="connection-card" data-testid="llm-connection-status">
@@ -250,7 +250,7 @@
   {:else}
     <div class="workflow-grid">
       <section class="panel">
-        <h2><SoulIcon size={18} stroke={1.75} aria-hidden="true" /> Create Route</h2>
+        <h2><LlmIcon size={18} stroke={1.75} aria-hidden="true" /> Create Route</h2>
         <form onsubmit={handleCreateRoute} data-testid="llm-create-route-form">
           <label>
             Route name
