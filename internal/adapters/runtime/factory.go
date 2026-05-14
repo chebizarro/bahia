@@ -17,6 +17,7 @@ type RuntimeConfig struct {
 	PodmanHost    string // Podman socket path (defaults to rootless user socket)
 	ComposeDir    string // Directory containing docker-compose.yml
 	Endpoint      config.RuntimeEndpointConfig
+	RegistryAuth  *RegistryAuthConfig
 	KubeContext   string // Kubernetes context name
 	KubeNamespace string // Kubernetes namespace
 	KubeConfig    string // Path to kubeconfig file
@@ -38,7 +39,12 @@ func NewRuntime(cfg RuntimeConfig, logger *zap.Logger) (Runtime, error) {
 		if strings.TrimSpace(endpoint.DockerHost) == "" {
 			endpoint.DockerHost = "unix:///var/run/docker.sock"
 		}
-		return NewDockerObserverWithEndpoint(endpoint, logger)
+		rt, err := NewDockerObserverWithEndpoint(endpoint, logger)
+		if err != nil {
+			return nil, err
+		}
+		rt.registryAuth = cfg.RegistryAuth
+		return rt, nil
 
 	case domain.RuntimeTypeCompose:
 		dir := cfg.ComposeDir
