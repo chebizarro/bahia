@@ -25,7 +25,7 @@ func TestConfigRuntimeResolver_Precedence(t *testing.T) {
 				ComposeDir: "/srv/prod-from-config",
 			},
 		},
-	}, zap.NewNop())
+	}, zap.NewNop(), nil)
 
 	svc := resolverTestService(domain.RuntimeTypeCompose)
 	env := resolverTestEnv("production", map[string]any{
@@ -51,7 +51,7 @@ func TestConfigRuntimeResolver_Precedence(t *testing.T) {
 func TestConfigRuntimeResolver_ServiceRuntimeTypeBeatsDefaultType(t *testing.T) {
 	resolver := NewConfigRuntimeResolver(config.RuntimeConfig{
 		Default: config.RuntimeTargetConfig{Type: "docker", ComposeDir: "/srv/default"},
-	}, zap.NewNop())
+	}, zap.NewNop(), nil)
 
 	rt, err := resolver.Resolve(
 		resolverTestService(domain.RuntimeTypeCompose),
@@ -69,7 +69,7 @@ func TestConfigRuntimeResolver_LegacyFlatConfigIsNotOverriddenByBuiltInDefaults(
 	resolver := NewConfigRuntimeResolver(config.RuntimeConfig{
 		Type:       "docker",
 		DockerHost: "remote-docker:2375",
-	}, zap.NewNop())
+	}, zap.NewNop(), nil)
 
 	rt, err := resolver.Resolve(
 		resolverTestService(domain.RuntimeTypeDocker),
@@ -88,7 +88,7 @@ func TestConfigRuntimeResolver_LegacyFlatConfigIsNotOverriddenByBuiltInDefaults(
 }
 
 func TestConfigRuntimeResolver_ComposeRequiresComposeDir(t *testing.T) {
-	resolver := NewConfigRuntimeResolver(config.RuntimeConfig{}, zap.NewNop())
+	resolver := NewConfigRuntimeResolver(config.RuntimeConfig{}, zap.NewNop(), nil)
 
 	_, err := resolver.Resolve(
 		resolverTestService(domain.RuntimeTypeCompose),
@@ -108,7 +108,7 @@ func TestConfigRuntimeResolver_EnvironmentTypeConflict(t *testing.T) {
 		Environments: map[string]config.RuntimeTargetConfig{
 			"production": {Type: "compose"},
 		},
-	}, zap.NewNop())
+	}, zap.NewNop(), nil)
 
 	_, err := resolver.Resolve(
 		resolverTestService(domain.RuntimeTypeDocker),
@@ -123,7 +123,7 @@ func TestConfigRuntimeResolver_EnvironmentTypeConflict(t *testing.T) {
 }
 
 func TestConfigRuntimeResolver_RuntimeConfigTypeConflict(t *testing.T) {
-	resolver := NewConfigRuntimeResolver(config.RuntimeConfig{}, zap.NewNop())
+	resolver := NewConfigRuntimeResolver(config.RuntimeConfig{}, zap.NewNop(), nil)
 
 	_, err := resolver.Resolve(
 		resolverTestService(domain.RuntimeTypeDocker),
@@ -137,7 +137,7 @@ func TestConfigRuntimeResolver_RuntimeConfigTypeConflict(t *testing.T) {
 func TestConfigRuntimeResolver_CachesByResolvedTarget(t *testing.T) {
 	resolver := NewConfigRuntimeResolver(config.RuntimeConfig{
 		Default: config.RuntimeTargetConfig{Type: "docker", DockerHost: "unix:///var/run/docker.sock"},
-	}, zap.NewNop())
+	}, zap.NewNop(), nil)
 
 	svc := resolverTestService(domain.RuntimeTypeDocker)
 	env := resolverTestEnv("production", nil)
@@ -164,7 +164,7 @@ func TestConfigRuntimeResolver_EndpointRef(t *testing.T) {
 				InsecureSkipVerify: true,
 			},
 		},
-	}, zap.NewNop())
+	}, zap.NewNop(), nil)
 
 	rt, err := resolver.Resolve(
 		resolverTestService(domain.RuntimeTypeDocker),
@@ -183,7 +183,7 @@ func TestConfigRuntimeResolver_EndpointRef(t *testing.T) {
 }
 
 func TestConfigRuntimeResolver_UnknownEndpointRef(t *testing.T) {
-	resolver := NewConfigRuntimeResolver(config.RuntimeConfig{}, zap.NewNop())
+	resolver := NewConfigRuntimeResolver(config.RuntimeConfig{}, zap.NewNop(), nil)
 	_, err := resolver.Resolve(
 		resolverTestService(domain.RuntimeTypeDocker),
 		resolverTestEnv("production", map[string]any{"endpoint_ref": "missing"}),

@@ -3,8 +3,10 @@ package pipeline
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"strings"
 
+	registryadapter "github.com/openagentsinc/bahia/internal/adapters/registry"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/repository"
 	"go.uber.org/zap"
@@ -14,14 +16,15 @@ const ciSystemHiveCI = "hive-ci"
 
 // Bridge orchestrates Hive-CI result -> Bahia build registration for CI-5/CI-6.
 type Bridge struct {
-	hiveRepo      repository.HiveCIRepository
-	buildRepo     repository.BuildRepository
-	artifactRepo  repository.ArtifactRepository
-	intentRepo    repository.DeploymentIntentRepository
-	envRepo       repository.EnvironmentRepository
-	ociRegistry   repository.OCIRegistryRepository
-	logger        *zap.Logger
-	trustedCI     map[string]struct{}
+	hiveRepo          repository.HiveCIRepository
+	buildRepo         repository.BuildRepository
+	artifactRepo      repository.ArtifactRepository
+	intentRepo        repository.DeploymentIntentRepository
+	envRepo           repository.EnvironmentRepository
+	ociRegistry       repository.OCIRegistryRepository
+	registryInspector registryadapter.ImageInspector
+	logger            *zap.Logger
+	trustedCI         map[string]struct{}
 }
 
 func NewBridge(
@@ -31,6 +34,7 @@ func NewBridge(
 	intentRepo repository.DeploymentIntentRepository,
 	envRepo repository.EnvironmentRepository,
 	ociRegistry repository.OCIRegistryRepository,
+	registryInspector registryadapter.ImageInspector,
 	trustedCIPubkeys []string,
 	logger *zap.Logger,
 ) *Bridge {
@@ -47,7 +51,8 @@ func NewBridge(
 	return &Bridge{
 		hiveRepo: hiveRepo, buildRepo: buildRepo, artifactRepo: artifactRepo,
 		intentRepo: intentRepo, envRepo: envRepo, ociRegistry: ociRegistry,
-		logger: logger.Named("pipeline-bridge"), trustedCI: trusted,
+		registryInspector: registryInspector,
+		logger:            logger.Named("pipeline-bridge"), trustedCI: trusted,
 	}
 }
 
@@ -142,16 +147,16 @@ func (b *Bridge) ProcessResult(ctx context.Context, resultEventID string) error 
 		return nil
 	}
 
-	if b.ociRegistry == nil || b.artifactRepo == nil {
+	if b.artifactRepo == nil || (b.ociRegistry == nil && b.registryInspector == nil) {
 		if err := b.hiveRepo.UpdateResultState(ctx, result.ResultEventID, domain.HiveCIProcessingStateArtifactPending); err != nil {
 			return fmt.Errorf("mark result artifact pending: %w", err)
 		}
 		return nil
 	}
 
-	manifest, err := b.ociRegistry.GetManifest(ctx, imageRepo, imageDigest)
+	manifest, err := b.resolveManifest(ctx, imageRepo, imageDigest)
 	if err != nil {
-		return fmt.Errorf("lookup oci manifest: %w", err)
+		return fmt.Errorf("lookup registry manifest: %w", err)
 	}
 	if manifest == nil {
 		if err := b.hiveRepo.UpdateResultState(ctx, result.ResultEventID, domain.HiveCIProcessingStateArtifactPending); err != nil {
@@ -198,6 +203,57 @@ func (b *Bridge) ProcessResult(ctx context.Context, resultEventID string) error 
 	return nil
 }
 
+func (b *Bridge) resolveManifest(ctx context.Context, imageRepo, imageDigest string) (*domain.OCIManifest, error) {
+	if b.ociRegistry != nil {
+		manifest, err := b.ociRegistry.GetManifest(ctx, imageRepo, imageDigest)
+		if err == nil && manifest != nil {
+			return manifest, nil
+		}
+		if err != nil && b.registryInspector == nil {
+			return nil, err
+		}
+	}
+	if b.registryInspector == nil {
+		return nil, nil
+	}
+	repoForInspector := stripRegistryHost(imageRepo)
+	inspection, err := b.registryInspector.InspectImage(ctx, repoForInspector, imageDigest)
+	if err != nil {
+		return nil, err
+	}
+	if inspection == nil || !inspection.Exists {
+		return nil, nil
+	}
+	manifest := &domain.OCIManifest{
+		Digest:    inspection.Digest,
+		MediaType: inspection.MediaType,
+		SizeBytes: inspection.Size,
+	}
+	if manifest.Digest == "" {
+		manifest.Digest = imageDigest
+	}
+	return manifest, nil
+}
+
+func stripRegistryHost(imageRepo string) string {
+	imageRepo = strings.TrimSpace(imageRepo)
+	if imageRepo == "" {
+		return imageRepo
+	}
+	parts := strings.Split(imageRepo, "/")
+	if len(parts) < 2 {
+		return imageRepo
+	}
+	first := parts[0]
+	if strings.Contains(first, ".") || strings.Contains(first, ":") || first == "localhost" {
+		return strings.Join(parts[1:], "/")
+	}
+	if u, err := url.Parse(imageRepo); err == nil && u.Host != "" {
+		return strings.TrimPrefix(u.Path, "/")
+	}
+	return imageRepo
+}
+
 func (b *Bridge) autoCreateStagingIntent(ctx context.Context, policy *domain.HiveCIPipelinePolicy, _ *domain.HiveCIWorkflowRun, result *domain.HiveCIWorkflowResult, artifact *domain.Artifact) error {
 	if policy == nil || policy.Metadata == nil || b.intentRepo == nil || b.envRepo == nil || artifact == nil {
 		return nil
@@ -234,18 +290,20 @@ func (b *Bridge) autoCreateStagingIntent(ctx context.Context, policy *domain.Hiv
 	}
 
 	approval := domain.ApprovalStatusNotRequired
+	status := domain.IntentStatusApproved
 	if env.Protected {
 		approval = domain.ApprovalStatusPending
+		status = domain.IntentStatusPending
 	}
 
 	intent := &domain.DeploymentIntent{
-		ServiceID:     policy.ServiceID,
-		EnvironmentID: env.ID,
-		ArtifactID:    artifact.ID,
-		RequestedBy:   "hive-ci-bridge",
-		SourceKind:    domain.SourceKindEventTriggered,
+		ServiceID:      policy.ServiceID,
+		EnvironmentID:  env.ID,
+		ArtifactID:     artifact.ID,
+		RequestedBy:    "hive-ci-bridge",
+		SourceKind:     domain.SourceKindEventTriggered,
 		ApprovalStatus: approval,
-		Status:         domain.IntentStatusPending,
+		Status:         status,
 		Metadata: map[string]any{
 			"hive_ci_result_event_id": result.ResultEventID,
 		},

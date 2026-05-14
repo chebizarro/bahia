@@ -103,8 +103,8 @@ func TestPublisherValidation5401Equals5402Pubkey(t *testing.T) {
 		EventCreatedAt:  time.Now(),
 	}
 	called := false
-	s := NewSubscriber(nil, repo, []string{"trusted"}, zap.NewNop(), func(_ context.Context, runEventID string) {
-		if runEventID == "run-1" {
+	s := NewSubscriber(nil, repo, []string{"trusted"}, zap.NewNop(), func(_ context.Context, resultEventID string) {
+		if resultEventID == "res-good" {
 			called = true
 		}
 	})
@@ -138,5 +138,40 @@ func TestPublisherValidation5401Equals5402Pubkey(t *testing.T) {
 	}
 	if !called {
 		t.Fatalf("expected bridge consumer callback")
+	}
+}
+
+func TestWorkflowResultContentMetadataAndCallbackUsesResultID(t *testing.T) {
+	repo := newTestHiveRepo()
+	repo.runs["run-2"] = domain.HiveCIWorkflowRun{
+		RunEventID:      "run-2",
+		PublisherPubkey: "expected-ephemeral",
+		EventCreatedAt:  time.Now(),
+	}
+	called := ""
+	s := NewSubscriber(nil, repo, []string{"trusted"}, zap.NewNop(), func(_ context.Context, resultEventID string) {
+		called = resultEventID
+	})
+
+	ev := &nostr.Event{
+		ID:        "res-meta",
+		Kind:      kindWorkflowResult,
+		PubKey:    "expected-ephemeral",
+		CreatedAt: nostr.Now(),
+		Content:   `{"image_repo":"harbor.sharegap.net/cascadia/ddgs","image_tag":"pilot-v1","image_digest":"sha256:abc"}`,
+		Tags: nostr.Tags{
+			{"e", "run-2"}, {"log_url", "https://b.test/log"}, {"status", "success"}, {"exit_code", "0"}, {"duration", "12"},
+		},
+	}
+	s.handleWorkflowResult(context.Background(), ev)
+	stored, ok := repo.results["res-meta"]
+	if !ok {
+		t.Fatalf("expected result to persist")
+	}
+	if stored.ImageRepo != "harbor.sharegap.net/cascadia/ddgs" || stored.ImageTag != "pilot-v1" || stored.ImageDigest != "sha256:abc" {
+		t.Fatalf("unexpected persisted image metadata: %+v", stored)
+	}
+	if called != "res-meta" {
+		t.Fatalf("expected callback with result id, got %q", called)
 	}
 }

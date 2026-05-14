@@ -360,17 +360,35 @@ func mapLoomStatus(s string) domain.DeploymentRunStatus {
 
 // SetupEventHandlers registers event-driven workflow triggers.
 func (c *Coordinator) SetupEventHandlers(pub events.Publisher) {
-	// Auto-execute approved deployment intents.
-	pub.Subscribe(events.EventDeploymentIntentApproved, func(ctx context.Context, e events.Event) {
+	autoExecute := func(ctx context.Context, e events.Event) {
 		id, err := uuid.Parse(e.EntityID)
 		if err != nil {
 			return
 		}
-		if err := c.ExecuteDeployment(ctx, id); err != nil {
-			c.logger.Error("auto-execute deployment failed",
+
+		intent, err := c.registry.GetDeploymentIntent(ctx, id)
+		if err != nil {
+			c.logger.Error("failed to load deployment intent for auto-execute",
 				zap.String("intent_id", e.EntityID),
 				zap.Error(err),
 			)
+			return
 		}
-	})
+		if intent == nil || intent.Status != domain.IntentStatusApproved {
+			return
+		}
+
+		if err := c.ExecuteDeployment(ctx, id); err != nil {
+			c.logger.Error("auto-execute deployment failed",
+				zap.String("intent_id", e.EntityID),
+				zap.String("event_type", string(e.Type)),
+				zap.Error(err),
+			)
+		}
+	}
+
+	// Auto-execute explicitly approved intents and intents that are born approved
+	// (for example, non-protected environments).
+	pub.Subscribe(events.EventDeploymentIntentCreated, autoExecute)
+	pub.Subscribe(events.EventDeploymentIntentApproved, autoExecute)
 }

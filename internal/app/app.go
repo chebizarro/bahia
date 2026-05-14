@@ -159,10 +159,21 @@ func New(cfg *config.Config) (*App, error) {
 	// Image verifier: use Harbor (legacy), or the new multi-registry adapter, or no-op.
 	var verifier service.ImageVerifier
 	var signVerifier mcp.SignatureVerifier
+	var pipelineRegistryInspector registryAdapter.ImageInspector
 	switch {
 	case cfg.Harbor.Enabled:
 		harborClient := harbor.NewClient(cfg.Harbor, logger)
 		verifier = harbor.NewVerifier(harborClient, logger)
+		inspector, err := registryAdapter.NewInspector(registryAdapter.RegistryConfig{
+			Type:     registryAdapter.RegistryHarbor,
+			URL:      cfg.Harbor.URL,
+			Username: cfg.Harbor.Username,
+			Password: cfg.Harbor.Password,
+		}, logger)
+		if err != nil {
+			return nil, fmt.Errorf("creating harbor pipeline inspector: %w", err)
+		}
+		pipelineRegistryInspector = inspector
 		logger.Info("harbor image verification enabled", zap.String("url", cfg.Harbor.URL))
 	case cfg.Registry.URL != "" || cfg.Registry.Type != "":
 		inspector, err := registryAdapter.NewInspector(registryAdapter.RegistryConfig{
@@ -175,6 +186,7 @@ func New(cfg *config.Config) (*App, error) {
 			return nil, fmt.Errorf("creating registry verifier: %w", err)
 		}
 		verifier = &registryAdapter.VerifierAdapter{Inspector: inspector}
+		pipelineRegistryInspector = inspector
 		signVerifier = signing.NewCosignVerifier(inspector, logger)
 		logger.Info("OCI registry verification enabled",
 			zap.String("type", string(cfg.Registry.Type)),
@@ -199,7 +211,8 @@ func New(cfg *config.Config) (*App, error) {
 	workerPolicySvc := service.NewWorkerPolicyService(workerRepo, logger)
 
 	// Runtime resolver — selects Docker, Compose, or Kubernetes per service/environment.
-	runtimeResolver := runtime.NewConfigRuntimeResolver(cfg.Runtime, logger)
+	runtimeRegistryAuth := runtimeRegistryAuth(cfg)
+	runtimeResolver := runtime.NewConfigRuntimeResolver(cfg.Runtime, logger, runtimeRegistryAuth)
 	logger.Info("runtime resolver initialized", zap.String("default_type", cfg.Runtime.Type))
 
 	// Workflow coordinator.
@@ -387,7 +400,7 @@ func New(cfg *config.Config) (*App, error) {
 	// Hive-CI wiring.
 	if cfg.HiveCI.Enabled {
 		hiveRepo := repository.NewPgHiveCIRepository(pool)
-		bridge := pipeline.NewBridge(hiveRepo, buildRepo, artifactRepo, intentRepo, envRepo, ociRepo, cfg.HiveCI.TrustedCIPubkeys, logger)
+		bridge := pipeline.NewBridge(hiveRepo, buildRepo, artifactRepo, intentRepo, envRepo, ociRepo, pipelineRegistryInspector, cfg.HiveCI.TrustedCIPubkeys, logger)
 		// Wrap bridge.ProcessResult to match the ResultConsumer signature (no error return).
 		onResult := func(ctx context.Context, resultEventID string) {
 			if err := bridge.ProcessResult(ctx, resultEventID); err != nil {
@@ -426,7 +439,7 @@ func New(cfg *config.Config) (*App, error) {
 	var toolCoordinator *service.ToolProvisioningCoordinator
 	toolBuilder := build.NewDockerBuilder(cfg.Runtime.DockerHost, logger)
 	toolSecurity := service.NewToolSecurityService(toolProvisionRepo, nil, logger, service.ToolSecurityConfig{})
-	defaultRuntime, rtErr := runtime.NewRuntime(runtime.RuntimeConfig{Type: cfg.Runtime.Type, DockerHost: cfg.Runtime.DockerHost, ComposeDir: cfg.Runtime.ComposeDir, KubeContext: cfg.Runtime.KubeContext, KubeNamespace: cfg.Runtime.KubeNamespace, KubeConfig: cfg.Runtime.KubeConfig}, logger)
+	defaultRuntime, rtErr := runtime.NewRuntime(runtime.RuntimeConfig{Type: cfg.Runtime.Type, DockerHost: cfg.Runtime.DockerHost, ComposeDir: cfg.Runtime.ComposeDir, RegistryAuth: runtimeRegistryAuth, KubeContext: cfg.Runtime.KubeContext, KubeNamespace: cfg.Runtime.KubeNamespace, KubeConfig: cfg.Runtime.KubeConfig}, logger)
 	if rtErr != nil {
 		logger.Warn("default runtime init for tool provisioning failed", zap.Error(rtErr))
 	}
@@ -744,6 +757,27 @@ func appendUniqueRelay(relays []string, relay string) []string {
 		}
 	}
 	return append(relays, relay)
+}
+
+func runtimeRegistryAuth(cfg *config.Config) *runtime.RegistryAuthConfig {
+	if cfg == nil {
+		return nil
+	}
+	if cfg.Registry.URL != "" && cfg.Registry.Username != "" && cfg.Registry.Password != "" {
+		return &runtime.RegistryAuthConfig{
+			Server:   cfg.Registry.URL,
+			Username: cfg.Registry.Username,
+			Password: cfg.Registry.Password,
+		}
+	}
+	if cfg.Harbor.Enabled && cfg.Harbor.URL != "" && cfg.Harbor.Username != "" && cfg.Harbor.Password != "" {
+		return &runtime.RegistryAuthConfig{
+			Server:   cfg.Harbor.URL,
+			Username: cfg.Harbor.Username,
+			Password: cfg.Harbor.Password,
+		}
+	}
+	return nil
 }
 
 // reconcilerRunner adapts the reconcile.Reconciler to the BackgroundRunner interface.
