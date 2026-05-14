@@ -2,6 +2,7 @@
   let {
     open = $bindable(),
     title = '',
+    titleIcon = null,
     closeOnBackdrop = true,
     closeOnEscape = true,
     size = 'md',
@@ -79,7 +80,15 @@
     >
       {#if title}
         <div class="modal-header">
-          <h2 id="modal-title" class="modal-title">{title}</h2>
+          <h2 id="modal-title" class="modal-title">
+            {#if titleIcon}
+              {@const TitleIcon = titleIcon}
+              <span class="title-icon" aria-hidden="true">
+                <TitleIcon size={20} stroke={1.75} />
+              </span>
+            {/if}
+            <span>{title}</span>
+          </h2>
           <button class="close-button" onclick={close} aria-label="Close" type="button">
             ×
           </button>
@@ -137,6 +146,13 @@
     font-weight: 600;
     color: var(--text-primary);
     margin: 0;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+  .title-icon {
+    color: var(--text-muted);
+    flex-shrink: 0;
   }
   .close-button,
   .close-button-only {

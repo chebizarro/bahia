@@ -5,6 +5,7 @@
   let {
     open = $bindable(),
     title = 'Confirm Action',
+    titleIcon = null,
     message = '',
     confirmLabel = 'Confirm',
     cancelLabel = 'Cancel',
@@ -34,6 +35,7 @@
 <Modal
   bind:open
   {title}
+  {titleIcon}
   size="sm"
   closeOnBackdrop={!loading}
   closeOnEscape={!loading}

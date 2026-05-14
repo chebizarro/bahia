@@ -1,8 +1,11 @@
 <script>
+  import { EmptyIcon } from '$lib/icons/domain-icons.js';
+
   let {
     title = 'No data',
     message = '',
-    icon = '📭',
+    icon = '',
+    iconComponent = null,
     actionLabel = '',
     showIcon = true,
     onAction,
@@ -13,7 +16,16 @@
 
 <div class="empty-state">
   {#if showIcon}
-    <div class="icon">{icon}</div>
+    <div class="icon" aria-hidden="true">
+      {#if iconComponent}
+        {@const IconComponent = iconComponent}
+        <IconComponent size={48} stroke={1.5} />
+      {:else if icon}
+        {icon}
+      {:else}
+        <EmptyIcon size={48} stroke={1.5} />
+      {/if}
+    </div>
   {/if}
   <h3 class="title">{title}</h3>
   {#if message}
@@ -46,6 +58,10 @@
     font-size: 3rem;
     margin-bottom: 0.5rem;
     opacity: 0.6;
+    color: var(--text-muted);
+    display: flex;
+    align-items: center;
+    justify-content: center;
   }
   .title {
     font-size: 1.25rem;

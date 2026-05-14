@@ -1,0 +1,40 @@
+{
+  "tests": [
+    {
+      "id": "T1",
+      "command": "pnpm add @tabler/icons-svelte --store-dir /Users/bizarro/Library/pnpm/store/v10",
+      "result": "pass",
+      "evidence": "Installed @tabler/icons-svelte 3.44.0 and updated web/pnpm-lock.yaml."
+    },
+    {
+      "id": "T2",
+      "command": "pnpm exec vitest run --config vitest.config.js tests/unit/icon-primitives.test.js tests/unit/state-components.test.js",
+      "result": "pass",
+      "evidence": "2 files passed, 16 tests passed. Covers EmptyState iconComponent/string fallback and Table icon/text columns."
+    },
+    {
+      "id": "T3",
+      "command": "pnpm exec vitest run --config vitest.config.js tests/unit/icon-primitives.test.js tests/unit/state-components.test.js",
+      "result": "pass",
+      "evidence": "Blossom MIME mapping cases cover image, video, audio, JSON, text, PDF, octet-stream, and missing content type."
+    },
+    {
+      "id": "T4",
+      "command": "pnpm run build",
+      "result": "pass_with_existing_warnings",
+      "evidence": "Build completed successfully. Existing warnings observed in src/routes/artifacts/[id]/+page.svelte unused .sbom-section selector, src/routes/policies/+page.svelte label association, qrcode unused default import, and existing dynamic/static import chunk warning."
+    },
+    {
+      "id": "T5",
+      "command": "Manual diff review",
+      "result": "pass",
+      "evidence": "No list/detail route page conversion was performed."
+    },
+    {
+      "id": "T6",
+      "command": "pnpm run test:unit",
+      "result": "fail_unrelated",
+      "evidence": "Full suite failed in existing Nostr/auth/discovery/repository/notification tests; icon-primitives and state-components passed. Failures include WebSocket/Event timeout issues and existing expectation drift around encrypted/discovery connect behavior."
+    }
+  ]
+}

@@ -4,6 +4,16 @@
   function handleRowClick(row, event) {
     onRowClick?.(row, event);
   }
+
+  function resolveColumnIcon(col, row) {
+    return typeof col.icon === 'function' ? col.icon(row) : col.icon;
+  }
+
+  function resolveColumnText(col, row) {
+    if (typeof col.text === 'function') return col.text(row);
+    if (col.text !== undefined) return col.text;
+    return row[col.key] ?? '-';
+  }
 </script>
 
 <div class="table-container">
@@ -20,7 +30,17 @@
         <tr class:clickable={rowClickable} onclick={(event) => handleRowClick(row, event)}>
           {#each columns as col}
             <td>
-              {#if col.render}
+              {#if col.icon}
+                {@const CellIcon = resolveColumnIcon(col, row)}
+                <span class="cell-with-icon">
+                  {#if CellIcon}
+                    <span class="cell-icon" aria-hidden="true">
+                      <CellIcon size={16} stroke={1.75} />
+                    </span>
+                  {/if}
+                  <span>{resolveColumnText(col, row)}</span>
+                </span>
+              {:else if col.render}
                 {@html col.render(row)}
               {:else}
                 {row[col.key] ?? '-'}
@@ -61,6 +81,15 @@
   }
   tr.clickable:hover {
     background: var(--hover-bg, #252540);
+  }
+  .cell-with-icon {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+  .cell-icon {
+    color: var(--text-muted, #888);
+    flex-shrink: 0;
   }
   .empty {
     text-align: center;

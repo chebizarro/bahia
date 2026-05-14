@@ -1,0 +1,12 @@
+{
+  "feature_id": "WEB_UI_ICONS_FOUNDATION",
+  "title": "Web UI icon foundation",
+  "bead": "bahia-nee9",
+  "scope": "Install Tabler Svelte icons, add a shared domain icon alias module, extend shared primitives with additive icon props, and cover icon primitives plus Blossom MIME mapping with focused unit tests.",
+  "non_goals": [
+    "Do not convert route pages",
+    "Do not change data loading or control-plane behavior",
+    "Do not add a second icon package"
+  ],
+  "source_plan": "docs/plans/web-ui-icons-2026-05-14.md"
+}

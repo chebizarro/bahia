@@ -26,7 +26,9 @@ describe('state components contract', () => {
   it('keeps EmptyState configurable for title/message/icon/actions', () => {
     expect(emptyStateSource).toContain("title = 'No data'");
     expect(emptyStateSource).toContain("message = ''");
-    expect(emptyStateSource).toContain("icon = '📭'");
+    expect(emptyStateSource).toContain("icon = ''");
+    expect(emptyStateSource).toContain('iconComponent = null');
+    expect(emptyStateSource).toContain('EmptyIcon');
     expect(emptyStateSource).toContain('actionLabel');
     expect(emptyStateSource).toContain('{@render action?.()}');
   });

@@ -1,6 +1,7 @@
 <script>
   let {
     title = '',
+    titleIcon = null,
     value = '',
     subtitle = '',
     status = 'default',
@@ -12,7 +13,15 @@
 
 <div class="card {status}">
   {#if title}
-    <div class="card-title">{title}</div>
+    <div class="card-title">
+      {#if titleIcon}
+        {@const TitleIcon = titleIcon}
+        <span class="title-icon" aria-hidden="true">
+          <TitleIcon size={16} stroke={1.75} />
+        </span>
+      {/if}
+      <span>{title}</span>
+    </div>
   {/if}
   {#if hasValue}
     <div class="card-value">{value}</div>
@@ -37,6 +46,12 @@
     font-size: 0.875rem;
     color: var(--text-muted, #888);
     margin-bottom: 0.5rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+  .title-icon {
+    flex-shrink: 0;
   }
   .card-value {
     font-size: 2rem;

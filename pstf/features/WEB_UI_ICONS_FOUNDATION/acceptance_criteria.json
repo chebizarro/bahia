@@ -1,0 +1,29 @@
+{
+  "criteria": [
+    {
+      "id": "AC1",
+      "statement": "@tabler/icons-svelte is installed and locked for the web app.",
+      "tests": ["T1", "T4"]
+    },
+    {
+      "id": "AC2",
+      "statement": "web/src/lib/icons/domain-icons.js exports semantic icon aliases and blossomContentTypeIcon.",
+      "tests": ["T2", "T3", "T4"]
+    },
+    {
+      "id": "AC3",
+      "statement": "EmptyState, Table, Card, Modal, and ConfirmDialog support additive icon contracts without breaking legacy callers.",
+      "tests": ["T2", "T4"]
+    },
+    {
+      "id": "AC4",
+      "statement": "Blossom MIME type mapping returns non-emoji icon components with a generic fallback.",
+      "tests": ["T3"]
+    },
+    {
+      "id": "AC5",
+      "statement": "Route page conversion remains out of scope for this foundation bucket.",
+      "tests": ["T5"]
+    }
+  ]
+}

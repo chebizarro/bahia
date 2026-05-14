@@ -1,0 +1,18 @@
+{
+  "defects": [
+    {
+      "id": "D1",
+      "scope": "unrelated_existing_tests",
+      "summary": "Full web unit suite has pre-existing failures outside the icon foundation scope.",
+      "evidence": [
+        "tests/unit/auth-store.test.js: multiple 5000ms timeouts with undici WebSocket Event errors",
+        "tests/unit/controlplane-store.test.js: expected nostr.connect args omit { force: true }",
+        "tests/unit/discovery-store.test.js: mock connect returns undefined while implementation reads summary.connected",
+        "tests/unit/encrypted-controlplane.test.js: encrypted relay expectation drift",
+        "tests/unit/notifications-store.test.js: error copy expectation drift",
+        "tests/unit/repositories-store.test.js: nostr.connect expectation drift"
+      ],
+      "action": "Documented only; not broadened because the requested task is the icon foundation bucket."
+    }
+  ]
+}
