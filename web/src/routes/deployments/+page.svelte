@@ -4,6 +4,15 @@
   import EmptyState from '$lib/components/EmptyState.svelte';
   import Select from '$lib/components/Select.svelte';
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
+  import {
+    ArtifactIcon,
+    DeploymentIcon,
+    EnvironmentIcon,
+    RollbackIcon,
+    ServiceIcon,
+    UnknownIcon,
+    WarningIcon
+  } from '$lib/icons/domain-icons.js';
   import { services, environments, deploymentIntents, artifacts as allArtifacts, loadServices, loadEnvironments, loadDeploymentIntents, loadArtifacts } from '$lib/stores';
   import { createDeploymentIntent, rollbackDeployment } from '$lib/stores/public-controlplane.svelte.js';
 
@@ -105,12 +114,13 @@
         return `<button type="button" class="rollback-btn" data-rollback-id="${r.id}">Rollback</button>`;
       }
     },
-    { key: 'service_name', label: 'Service' },
-    { key: 'environment_name', label: 'Environment' },
+    { key: 'service_name', label: 'Service', icon: ServiceIcon, text: (r) => r.service_name || '-' },
+    { key: 'environment_name', label: 'Environment', icon: EnvironmentIcon, text: (r) => r.environment_name || '-' },
     { 
       key: 'artifact_id', 
-      label: 'Artifact', 
-      render: (r) => (r.artifact_id ? `<code>${r.artifact_id.slice(0, 12)}...</code>` : '-')
+      label: 'Artifact',
+      icon: (r) => (r.artifact_id ? ArtifactIcon : null),
+      text: (r) => (r.artifact_id ? `${r.artifact_id.slice(0, 12)}...` : '-')
     },
     { 
       key: 'intent_status',
@@ -287,7 +297,10 @@
 <div class="page">
   <div class="header">
     <div class="title-row">
-      <h1>Deployment History</h1>
+      <h1>
+        <DeploymentIcon size={28} stroke={1.75} aria-hidden="true" />
+        Deployment History
+      </h1>
       <span class="count">{filteredIntents.length} of {intents.length} deployments</span>
     </div>
   </div>
@@ -327,18 +340,20 @@
   {#if loading}
     <p class="loading">Loading deployment history...</p>
   {:else if error}
-    <div class="error-state">
-      <p class="error">⚠️ {error}</p>
-    </div>
+    <EmptyState
+      iconComponent={WarningIcon}
+      title="Error loading deployment history"
+      message={error}
+    />
   {:else if intents.length === 0}
     <EmptyState
-      icon="🚀"
+      iconComponent={DeploymentIcon}
       title="No deployments yet"
       message="Deployment intents will appear here once services are deployed to environments"
     />
   {:else if filteredIntents.length === 0}
     <EmptyState
-      icon="🔍"
+      iconComponent={UnknownIcon}
       title="No deployments match current filters"
       message="Try adjusting your filter criteria"
     />
@@ -375,6 +390,12 @@
     display: flex;
     align-items: center;
     gap: 1rem;
+  }
+
+  h1 {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
   }
 
   .count {
@@ -416,16 +437,6 @@
     text-align: center;
   }
 
-  .error-state {
-    padding: 2rem;
-    text-align: center;
-  }
-
-  .error {
-    color: var(--error);
-    font-size: 0.875rem;
-    margin: 0;
-  }
 
   .pagination {
     display: flex;
@@ -489,6 +500,7 @@
 <ConfirmDialog
   bind:open={rollbackOpen}
   title="Confirm Rollback"
+  titleIcon={RollbackIcon}
   confirmLabel="Create Rollback Intent"
   loading={rollbackSubmitting}
   onConfirm={handleRollbackConfirm}

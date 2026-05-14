@@ -8,6 +8,7 @@
   import LoadingButton from '$lib/components/LoadingButton.svelte';
   import EmptyState from '$lib/components/EmptyState.svelte';
   import RepositoryPicker from '$lib/components/repositories/RepositoryPicker.svelte';
+  import { ArtifactIcon, ServiceIcon, UnknownIcon } from '$lib/icons/domain-icons.js';
   import { services, loading, loadServices, systemInfo, loadSystemInfo, upsertServiceProjection } from '$lib/stores';
   import { createManualRepositorySelection } from '$lib/stores/repositories.js';
   import { fetchRepoBranches, isNostrRepository } from '$lib/nostr/branches.js';
@@ -236,8 +237,8 @@
     label: b === detectedDefaultBranch ? `${b} (default)` : b
   })));
   let columns = $derived([
-    { key: 'name', label: 'Name' },
-    { key: 'artifact_repo', label: 'Artifact Repo' },
+    { key: 'name', label: 'Name', icon: ServiceIcon, text: (r) => r.name || '-' },
+    { key: 'artifact_repo', label: 'Artifact Repo', icon: ArtifactIcon, text: (r) => r.artifact_repo || '-' },
     { key: 'runtime_type', label: 'Runtime' },
     { key: 'default_branch', label: 'Branch' },
     { key: 'id', label: 'ID', render: (r) => `<code>${r.id?.slice(0, 8)}...</code>` }
@@ -247,7 +248,10 @@
 <div class="page">
   <div class="header">
     <div class="title-row">
-      <h1>Services</h1>
+      <h1>
+        <ServiceIcon size={28} stroke={1.75} aria-hidden="true" />
+        Services
+      </h1>
       <span class="count">{services.length} services</span>
     </div>
     <LoadingButton variant="primary" onclick={openCreateModal}>
@@ -276,7 +280,7 @@
     <p class="loading">Loading...</p>
   {:else if services.length === 0}
     <EmptyState
-      icon="📦"
+      iconComponent={ServiceIcon}
       title="No services yet"
       message="Create your first service to get started with deployments"
       actionLabel="Create Service"
@@ -284,7 +288,7 @@
     />
   {:else if filteredServices.length === 0}
     <EmptyState
-      icon="🔍"
+      iconComponent={UnknownIcon}
       title="No services match current filters"
       message="Try adjusting your search or runtime filter"
     />
@@ -430,6 +434,12 @@
     display: flex;
     align-items: center;
     gap: 1rem;
+  }
+
+  h1 {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
   }
   .count {
     color: var(--text-muted);

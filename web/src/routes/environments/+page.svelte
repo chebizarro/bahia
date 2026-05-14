@@ -8,6 +8,7 @@
   import Checkbox from '$lib/components/Checkbox.svelte';
   import LoadingButton from '$lib/components/LoadingButton.svelte';
   import EmptyState from '$lib/components/EmptyState.svelte';
+  import { EnvironmentIcon, ProtectedIcon } from '$lib/icons/domain-icons.js';
   import { environments, loading, loadEnvironments } from '$lib/stores';
   import { createEnvironment as createEnvironmentCommand } from '$lib/stores/public-controlplane.svelte.js';
   import { environmentFormSchema, parseRuntimeConfig, validateForm } from '$lib/validation/forms.js';
@@ -42,9 +43,14 @@
   };
 
   let columns = $derived([
-    { key: 'name', label: 'Name' },
+    { key: 'name', label: 'Name', icon: EnvironmentIcon, text: (r) => r.name || '-' },
     { key: 'deploy_strategy', label: 'Strategy' },
-    { key: 'protected', label: 'Protected', render: (r) => r.protected ? '🔒' : '-' },
+    {
+      key: 'protected',
+      label: 'Protected',
+      icon: (r) => (r.protected ? ProtectedIcon : null),
+      text: (r) => (r.protected ? 'Protected' : '-')
+    },
     { key: 'id', label: 'ID', render: (r) => `<code>${r.id?.slice(0, 8)}...</code>` }
   ]);
 
@@ -100,7 +106,10 @@
 <div class="page">
   <div class="header">
     <div class="title-row">
-      <h1>Environments</h1>
+      <h1>
+        <EnvironmentIcon size={28} stroke={1.75} aria-hidden="true" />
+        Environments
+      </h1>
       <span class="count">{environments.length} environments</span>
     </div>
     <LoadingButton variant="primary" onclick={openCreateModal}>
@@ -112,7 +121,7 @@
     <p class="loading">Loading...</p>
   {:else if environments.length === 0}
     <EmptyState
-      icon="🌍"
+      iconComponent={EnvironmentIcon}
       title="No environments yet"
       message="Create your first environment to define deployment targets"
       actionLabel="Create Environment"
@@ -212,6 +221,12 @@
     display: flex;
     align-items: center;
     gap: 1rem;
+  }
+
+  h1 {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
   }
   .count {
     color: var(--text-muted);

@@ -3,6 +3,13 @@
   import Table from '$lib/components/Table.svelte';
   import Badge from '$lib/components/Badge.svelte';
   import EmptyState from '$lib/components/EmptyState.svelte';
+  import {
+    ArtifactIcon,
+    BlossomIcon,
+    ServiceIcon,
+    WarningIcon,
+    blossomContentTypeIcon
+  } from '$lib/icons/domain-icons.js';
   import { artifacts as registryArtifacts, services, loadArtifacts, loadServices } from '$lib/stores';
   import { api } from '$lib/api/client.js';
   import { authState } from '$lib/stores/auth.js';
@@ -141,17 +148,6 @@
     return `${size.toFixed(1)} ${units[unitIndex]}`;
   }
 
-  function getContentTypeIcon(type) {
-    if (!type) return '📄';
-    if (type.startsWith('image/')) return '🖼️';
-    if (type.startsWith('video/')) return '🎬';
-    if (type.startsWith('audio/')) return '🎵';
-    if (type.includes('json')) return '📋';
-    if (type.includes('text')) return '📝';
-    if (type.includes('pdf')) return '📕';
-    return '📦';
-  }
-
   // Filter blobs by type
   let filteredBlobs = $derived(blossomBlobs.filter(blob => {
     if (!typeFilter) return true;
@@ -165,12 +161,14 @@
     { 
       key: 'image_tag', 
       label: 'Name',
-      render: (r) => r.image_tag || r.image_digest?.slice(0, 12) || '-'
+      icon: ArtifactIcon,
+      text: (r) => r.image_tag || r.image_digest?.slice(0, 12) || '-'
     },
     { 
       key: 'service_id', 
       label: 'Service',
-      render: (r) => serviceMap[r.service_id] || r.service_id?.slice(0, 8) || '-'
+      icon: ServiceIcon,
+      text: (r) => serviceMap[r.service_id] || r.service_id?.slice(0, 8) || '-'
     },
     { 
       key: 'image_digest', 
@@ -204,7 +202,8 @@
     {
       key: 'type',
       label: 'Type',
-      render: (r) => `<span class="type-icon">${getContentTypeIcon(r.type)}</span> <span class="type-label">${r.type || 'unknown'}</span>`
+      icon: (r) => blossomContentTypeIcon(r.type),
+      text: (r) => r.type || 'unknown'
     },
     {
       key: 'sha256',
@@ -232,7 +231,10 @@
 <div class="page">
   <div class="header">
     <div class="title-row">
-      <h1>Artifacts</h1>
+      <h1>
+        <ArtifactIcon size={28} stroke={1.75} aria-hidden="true" />
+        Artifacts
+      </h1>
       <span class="count">
         {#if activeTab === 'registry'}
           {artifacts.length} registry artifacts
@@ -250,14 +252,16 @@
       class:active={activeTab === 'registry'}
       onclick={() => handleTabChange('registry')}
     >
-      📦 Registry
+      <ArtifactIcon size={18} stroke={1.75} aria-hidden="true" />
+      Registry
     </button>
     <button
       class="tab"
       class:active={activeTab === 'blossom'}
       onclick={() => handleTabChange('blossom')}
     >
-      🌸 Blossom
+      <BlossomIcon size={18} stroke={1.75} aria-hidden="true" />
+      Blossom
     </button>
   </div>
 
@@ -267,7 +271,7 @@
       <p class="loading">Loading registry artifacts...</p>
     {:else if artifacts.length === 0}
       <EmptyState
-        icon="📦"
+        iconComponent={ArtifactIcon}
         title="No artifacts yet"
         message="Artifacts will appear here once services have builds"
       />
@@ -326,19 +330,19 @@
       <p class="loading">Loading Blossom blobs...</p>
     {:else if blossomError}
       <EmptyState
-        icon="⚠️"
+        iconComponent={WarningIcon}
         title="Error loading blobs"
         message={blossomError}
       />
     {:else if blossomServers.length === 0}
       <EmptyState
-        icon="🌸"
+        iconComponent={BlossomIcon}
         title="No Blossom servers configured"
         message="Configure Blossom servers in your deployment to browse artifacts"
       />
     {:else if filteredBlobs.length === 0}
       <EmptyState
-        icon="🌸"
+        iconComponent={BlossomIcon}
         title="No blobs found"
         message={pubkeyFilter ? "No blobs found for this pubkey" : "No blobs stored on Blossom servers yet"}
       />
@@ -360,6 +364,12 @@
     align-items: center;
     gap: 1rem;
   }
+
+  h1 {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
   .count {
     color: var(--text-muted);
     font-size: 0.875rem;
@@ -378,6 +388,9 @@
     margin-bottom: 1.5rem;
   }
   .tab {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
     padding: 0.75rem 1.5rem;
     background: none;
     border: none;
@@ -500,14 +513,6 @@
     color: #d1d5db;
   }
 
-  :global(.type-icon) {
-    font-size: 1.1rem;
-    margin-right: 0.25rem;
-  }
-  :global(.type-label) {
-    font-size: 0.85rem;
-    color: var(--text-muted);
-  }
   :global(.hash) {
     font-size: 0.8rem;
     background: var(--bg-secondary);
