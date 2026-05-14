@@ -5,6 +5,7 @@
   import LoadingButton from '$lib/components/LoadingButton.svelte';
   import Select from '$lib/components/Select.svelte';
   import { listNotificationChannels, listNotificationLogs } from '$lib/stores/notifications.svelte.js';
+  import { NotificationIcon } from '$lib/icons/domain-icons.js';
   import {
     channelLabel,
     filterNotificationLogs,
@@ -94,7 +95,7 @@
 <div class="page">
   <div class="header">
     <div>
-      <a class="back-link" href="/notifications">← Notifications</a>
+      <a class="back-link" href="/notifications">Notifications</a>
       <h1>Notification log</h1>
       <p class="subtitle">Review recent notification delivery attempts across channels and event types.</p>
     </div>
@@ -142,7 +143,7 @@
     <EmptyState
       title="No notification deliveries yet"
       message="Delivery attempts will appear here after events match an enabled notification channel."
-      icon="📬"
+      iconComponent={NotificationIcon}
     />
   {:else}
     <div class="table-container">
@@ -277,9 +278,9 @@
     margin-bottom: 1rem;
   }
 
-  .summary-row span:not(:last-child)::after {
-    content: '•';
-    margin-left: 0.75rem;
+  .summary-row span:not(:last-child) {
+    border-right: 1px solid var(--border-color);
+    padding-right: 0.75rem;
   }
 
   .loading {

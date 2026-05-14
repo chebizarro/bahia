@@ -7,6 +7,7 @@
   import LoadingButton from '$lib/components/LoadingButton.svelte';
   import Select from '$lib/components/Select.svelte';
   import { toast } from '$lib/components/toast.js';
+  import { NotificationIcon, WarningIcon } from '$lib/icons/domain-icons.js';
   import {
     deleteNotificationChannel,
     listNotificationChannels,
@@ -200,7 +201,7 @@
     <EmptyState
       title="No notification channels"
       message="Create a webhook or Nostr DM channel to start receiving platform event notifications."
-      icon="🔔"
+      iconComponent={NotificationIcon}
       actionLabel="Create channel"
       onAction={() => goto('/notifications/new')}
     />
@@ -289,6 +290,7 @@
 <ConfirmDialog
   bind:open={deleteDialogOpen}
   title="Delete notification channel"
+  titleIcon={WarningIcon}
   message={deleteTarget ? `Delete ${deleteTarget.name}? Delivery history remains, but this channel can no longer receive notifications.` : ''}
   confirmLabel="Delete channel"
   variant="danger"
@@ -371,9 +373,9 @@
     margin-bottom: 1rem;
   }
 
-  .summary-row span:not(:last-child)::after {
-    content: '•';
-    margin-left: 0.75rem;
+  .summary-row span:not(:last-child) {
+    border-right: 1px solid var(--border-color);
+    padding-right: 0.75rem;
   }
 
   .loading {

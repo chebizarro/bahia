@@ -17,6 +17,7 @@
   } from '$lib/stores';
   import { updatePolicy, deletePolicy, evaluatePolicy } from '$lib/stores/public-controlplane.svelte.js';
   import { policyFormSchema, validateForm } from '$lib/validation/forms.js';
+  import { CheckIcon, CloseIcon, EnvironmentIcon, InfoIcon, PolicyIcon, WarningIcon } from '$lib/icons/domain-icons.js';
 
   let policy = $state(null);
   let environments = $state([]);
@@ -283,7 +284,7 @@
 </script>
 
 <div class="page">
-  <a href="/policies" class="back">← Policies</a>
+  <a href="/policies" class="back">Policies</a>
 
   {#if loading}
     <p class="loading">Loading...</p>
@@ -306,14 +307,14 @@
     </div>
     
     <div class="info-grid">
-      <Card title="Scope" value={environmentName} />
-      <Card title="Enforcement" value={policy.enforcement || 'warn'} />
-      <Card title="Status" value={policy.enabled ? 'Enabled' : 'Disabled'} />
-      <Card title="Rules Count" value={Array.isArray(policy.rules) ? policy.rules.length.toString() : '0'} />
+      <Card title="Scope" titleIcon={EnvironmentIcon} value={environmentName} />
+      <Card title="Enforcement" titleIcon={PolicyIcon} value={policy.enforcement || 'warn'} />
+      <Card title="Status" titleIcon={policy.enabled ? CheckIcon : CloseIcon} value={policy.enabled ? 'Enabled' : 'Disabled'} />
+      <Card title="Rules Count" titleIcon={PolicyIcon} value={Array.isArray(policy.rules) ? policy.rules.length.toString() : '0'} />
     </div>
 
     <section>
-      <h2>Policy Details</h2>
+      <h2><InfoIcon size={18} stroke={1.75} aria-hidden="true" /> Policy Details</h2>
       <div class="detail-row">
         <span class="label">ID:</span>
         <code class="value">{policy.id}</code>
@@ -333,12 +334,12 @@
     </section>
 
     <section>
-      <h2>Rules</h2>
+      <h2><PolicyIcon size={18} stroke={1.75} aria-hidden="true" /> Rules</h2>
       <pre class="rules-json"><code>{formattedRules}</code></pre>
     </section>
 
     <section>
-      <h2>Policy Evaluation Test</h2>
+      <h2><CheckIcon size={18} stroke={1.75} aria-hidden="true" /> Policy Evaluation Test</h2>
       <div class="eval-grid">
         <div class="form-field">
           <label for="eval-environment">Environment</label>
@@ -374,7 +375,7 @@
 </div>
 
 <!-- Edit Modal -->
-<Modal bind:open={editOpen} title="Edit Policy" onClose={closeEditModal}>
+<Modal bind:open={editOpen} title="Edit Policy" titleIcon={PolicyIcon} onClose={closeEditModal}>
   <form onsubmit={(event) => { event.preventDefault(); handleEdit(); }} class="edit-form">
     <div class="form-field">
       <label for="edit-name">Name *</label>
@@ -513,6 +514,7 @@
 <ConfirmDialog
   bind:open={deleteOpen}
   title="Delete Policy"
+  titleIcon={WarningIcon}
   confirmLabel="Delete"
   variant="danger"
   loading={deleting}
@@ -573,6 +575,13 @@
     font-size: 1rem;
     color: var(--text-muted);
     margin: 0 0 1rem 0;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  section h2 :global(svg) {
+    flex-shrink: 0;
   }
 
   .detail-row {

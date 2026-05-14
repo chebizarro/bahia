@@ -9,6 +9,16 @@
   import { systemInfo as sharedSystemInfo, loadSystemInfo as loadSharedSystemInfo } from '$lib/stores';
   import QRCode from 'qrcode';
   import jsQR from 'jsqr';
+  import {
+    ArtifactIcon,
+    CameraIcon,
+    ConfiguredIcon,
+    IdentityIcon,
+    MoonIcon,
+    ProtectedIcon,
+    RelayIcon,
+    SunIcon
+  } from '$lib/icons/domain-icons.js';
 
   // Shared public Nostr discovery from app bootstrap
   const systemInfo = $derived(sharedSystemInfo.data);
@@ -227,7 +237,7 @@
   <div class="settings-grid">
     <!-- Nostr Relays Section -->
     <section class="settings-section">
-      <h2>🔗 Nostr Relays</h2>
+      <h2><RelayIcon size={18} stroke={1.75} aria-hidden="true" /> Nostr Relays</h2>
       <p class="section-description">
         Configure which Nostr relays this app connects to for fetching repositories and publishing events.
       </p>
@@ -263,14 +273,14 @@
         {:else if relaySummary.connecting > 0}
           Connecting to {relaySummary.connecting} relay{relaySummary.connecting === 1 ? '' : 's'}…
         {:else}
-          Connected {relaySummary.connected}/{relaySummary.total} relays{relaySummary.failed > 0 ? ` • ${relaySummary.failed} unavailable` : ''}.
+          Connected {relaySummary.connected}/{relaySummary.total} relays{relaySummary.failed > 0 ? `; ${relaySummary.failed} unavailable` : ''}.
         {/if}
       </p>
     </section>
 
     <!-- NIP-46 Nostr Connect -->
     <section class="settings-section">
-      <h2>🔐 Nostr Connect (NIP-46)</h2>
+      <h2><ProtectedIcon size={18} stroke={1.75} aria-hidden="true" /> Nostr Connect (NIP-46)</h2>
       <p class="section-description">
         This connects a <strong>remote Nostr signer</strong> for use by the Bahia service itself — not your user account.
         Generate a <code>nostrconnect://</code> URI on your signer and paste or scan it here.
@@ -296,26 +306,26 @@
       <!-- QR scanner -->
       <div class="qr-scanner-section">
         {#if !scanning}
-          <button class="btn-scan" onclick={startQrScanner}>📷 Scan QR Code</button>
+          <button class="btn-scan icon-button" onclick={startQrScanner}><CameraIcon size={16} stroke={1.75} aria-hidden="true" /> Scan QR Code</button>
         {:else}
           <div class="scanner-wrap">
             <!-- svelte-ignore a11y_media_has_caption -->
             <video bind:this={videoEl} class="scanner-video" playsinline></video>
             <canvas bind:this={canvasEl} class="scanner-canvas" aria-hidden="true"></canvas>
-            <button class="btn-scan-stop" onclick={stopQrScanner}>✕ Stop scanning</button>
+            <button class="btn-scan-stop" onclick={stopQrScanner}>Stop scanning</button>
           </div>
         {/if}
         {#if scanError}<p class="scan-error">{scanError}</p>{/if}
       </div>
 
       <p class="section-description">
-        Signer status: {authState.nip46Available ? '✓ detected' : 'not detected'}
+        Signer status: {authState.nip46Available ? 'detected' : 'not detected'}
       </p>
     </section>
 
     <!-- Theme Section -->
     <section class="settings-section">
-      <h2>🎨 Appearance</h2>
+      <h2><IdentityIcon size={18} stroke={1.75} aria-hidden="true" /> Appearance</h2>
       <p class="section-description">Customize the look and feel of the application.</p>
 
       <div class="theme-option">
@@ -326,14 +336,14 @@
             class:active={theme.value === 'light'}
             onclick={() => theme.value !== 'light' && toggleTheme()}
           >
-            ☀️ Light
+            <SunIcon size={16} stroke={1.75} aria-hidden="true" /> Light
           </button>
           <button
             class="theme-btn"
             class:active={theme.value === 'dark'}
             onclick={() => theme.value !== 'dark' && toggleTheme()}
           >
-            🌙 Dark
+            <MoonIcon size={16} stroke={1.75} aria-hidden="true" /> Dark
           </button>
         </div>
       </div>
@@ -341,7 +351,7 @@
 
     <!-- Server Configuration Section -->
     <section class="settings-section">
-      <h2>⚙️ Server Configuration</h2>
+      <h2><ConfiguredIcon size={18} stroke={1.75} aria-hidden="true" /> Server Configuration</h2>
       <p class="section-description">
         Server-side configuration (read-only). These settings are configured on the Bahia server.
       </p>
@@ -373,7 +383,7 @@
           <div class="config-row">
             <span class="config-label">Publishing</span>
             <span class="config-value">
-              {systemInfo.nostr?.publish_enabled ? '✓ Enabled' : '✗ Disabled'}
+              {systemInfo.nostr?.publish_enabled ? 'Enabled' : 'Disabled'}
             </span>
           </div>
         </div>
@@ -385,7 +395,7 @@
             <div class="config-row">
               <span class="config-label">Status</span>
               <span class="config-value">
-                {systemInfo.blossom.enabled ? '✓ Enabled' : '✗ Disabled'}
+                {systemInfo.blossom.enabled ? 'Enabled' : 'Disabled'}
               </span>
             </div>
             {#if systemInfo.blossom.enabled}
@@ -412,7 +422,7 @@
             <div class="config-row">
               <span class="config-label">Native Registry</span>
               <span class="config-value">
-                {systemInfo.oci.enabled ? '✓ Enabled' : '✗ Disabled'}
+                {systemInfo.oci.enabled ? 'Enabled' : 'Disabled'}
               </span>
             </div>
             {#if systemInfo.oci.enabled && systemInfo.oci.public_host}
@@ -448,7 +458,7 @@
             <div class="features-grid">
               {#each Object.entries(systemInfo.features) as [feature, enabled]}
                 <div class="feature-badge" class:enabled>
-                  {enabled ? '✓' : '✗'} {feature}
+                  {enabled ? 'Enabled' : 'Disabled'} · {feature}
                 </div>
               {/each}
             </div>
@@ -460,7 +470,7 @@
     <!-- Available Registries Section -->
     {#if systemInfo?.registries?.length > 0}
       <section class="settings-section">
-        <h2>📦 Available Registries</h2>
+        <h2><ArtifactIcon size={18} stroke={1.75} aria-hidden="true" /> Available Registries</h2>
         <p class="section-description">
           Container registries available for artifact storage.
         </p>
@@ -515,6 +525,14 @@
     font-size: 1.125rem;
     font-weight: 600;
     margin: 0 0 0.5rem 0;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .settings-section h2 :global(svg) {
+    color: var(--text-muted);
+    flex-shrink: 0;
   }
 
   .section-description {
@@ -614,6 +632,9 @@
 
   .theme-btn {
     padding: 0.5rem 1rem;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.375rem;
     border: 1px solid var(--border-color);
     border-radius: 6px;
     background: var(--bg);
@@ -817,6 +838,12 @@
 
   .btn-scan:hover {
     background: var(--hover-bg);
+  }
+
+  .icon-button {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.375rem;
   }
 
   .btn-scan-stop {

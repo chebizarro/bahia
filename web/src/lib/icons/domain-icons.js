@@ -1,12 +1,15 @@
 import {
   IconAlertTriangle,
+  IconBell,
   IconBolt,
   IconBrain,
+  IconBuildingCommunity,
   IconCheck,
   IconCircleCheck,
   IconCircleX,
   IconClipboardList,
   IconClockHour4,
+  IconCamera,
   IconCopy,
   IconDatabase,
   IconEdit,
@@ -29,14 +32,17 @@ import {
   IconPencil,
   IconPhoto,
   IconPlant,
+  IconPlugConnected,
   IconProgress,
   IconQuestionMark,
+  IconReceipt,
   IconRobot,
   IconRocket,
   IconRotateClockwise,
   IconSearch,
   IconServer,
   IconSettings,
+  IconShieldCheck,
   IconShieldLock,
   IconSignature,
   IconSparkles,
@@ -50,6 +56,10 @@ export const ServiceIcon = IconServer;
 export const ArtifactIcon = IconPackage;
 export const EnvironmentIcon = IconTarget;
 export const DeploymentIcon = IconRocket;
+export const NotificationIcon = IconBell;
+export const PaymentIcon = IconReceipt;
+export const PolicyIcon = IconShieldCheck;
+export const OrganizationIcon = IconBuildingCommunity;
 export const RollbackIcon = IconRotateClockwise;
 export const BlossomIcon = IconFlower;
 export const ProtectedIcon = IconShieldLock;
@@ -70,6 +80,8 @@ export const LoginIcon = IconLogin2;
 export const SearchIcon = IconSearch;
 export const EditIcon = IconEdit;
 export const PendingIcon = IconClockHour4;
+export const CameraIcon = IconCamera;
+export const RelayIcon = IconPlugConnected;
 export const ConfiguredIcon = IconSettings;
 export const RepositoryIcon = IconGitBranch;
 export const SoulIcon = IconBrain;

@@ -19,6 +19,7 @@
   import FormField from '$lib/components/FormField.svelte';
   import LoadingButton from '$lib/components/LoadingButton.svelte';
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
+  import { OrganizationIcon, PendingIcon, WarningIcon } from '$lib/icons/domain-icons.js';
 
   let org = $state(null);
   let members = $state([]);
@@ -166,14 +167,14 @@
 {:else if error}
   <div class="error-state">
     <p>Error: {error}</p>
-    <a href="/orgs">← Back to Organizations</a>
+    <a href="/orgs">Back to Organizations</a>
   </div>
 {:else if org}
-  <a href="/orgs" class="back-link">← Back to Organizations</a>
+  <a href="/orgs" class="back-link">Back to Organizations</a>
 
   <div class="org-header">
     <div>
-      <h1>{org.display_name || org.name}</h1>
+      <h1><OrganizationIcon size={24} stroke={1.75} aria-hidden="true" /> {org.display_name || org.name}</h1>
       <p class="org-name">@{org.name}</p>
     </div>
     <Badge variant={getRoleBadgeType(myRole)}>{myRole}</Badge>
@@ -181,10 +182,10 @@
 
   <section class="section">
     <div class="section-header">
-      <h2>Members ({members.length})</h2>
+      <h2><OrganizationIcon size={18} stroke={1.75} aria-hidden="true" /> Members ({members.length})</h2>
       {#if canManageMembers}
         <button class="btn-primary" onclick={() => showInviteModal = true}>
-          + Invite Member
+          Invite Member
         </button>
       {/if}
     </div>
@@ -246,7 +247,7 @@
 
   {#if canManageMembers && invites.length > 0}
     <section class="section">
-      <h2>Pending Invites ({invites.length})</h2>
+      <h2><PendingIcon size={18} stroke={1.75} aria-hidden="true" /> Pending Invites ({invites.length})</h2>
       <Card>
         <table class="members-table">
           <thead>
@@ -278,7 +279,7 @@
 
   {#if canDelete}
     <section class="section danger-zone">
-      <h2>Danger Zone</h2>
+      <h2><WarningIcon size={18} stroke={1.75} aria-hidden="true" /> Danger Zone</h2>
       <Card>
         <div class="danger-content">
           <div>
@@ -296,7 +297,7 @@
 
 <!-- Invite Modal -->
 {#if showInviteModal}
-  <Modal bind:open={showInviteModal} title="Invite Member" onClose={() => showInviteModal = false}>
+  <Modal bind:open={showInviteModal} title="Invite Member" titleIcon={OrganizationIcon} onClose={() => showInviteModal = false}>
     <form onsubmit={(event) => { event.preventDefault(); sendInvite(); }}>
       <FormField label="Pubkey (hex)">
         <Input bind:value={invitePubkey} placeholder="Enter nostr pubkey" />
@@ -321,6 +322,7 @@
   <ConfirmDialog
     bind:open={showDeleteConfirm}
     title="Delete Organization"
+    titleIcon={WarningIcon}
     message="Are you sure you want to delete this organization? This action cannot be undone."
     confirmLabel="Delete"
     variant="danger"
@@ -364,6 +366,14 @@
   h1 {
     font-size: 1.75rem;
     margin-bottom: 0.25rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  h1 :global(svg) {
+    color: var(--text-muted);
+    flex-shrink: 0;
   }
 
   .org-name {
@@ -385,6 +395,14 @@
   h2 {
     font-size: 1.125rem;
     font-weight: 500;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  h2 :global(svg) {
+    color: var(--text-muted);
+    flex-shrink: 0;
   }
 
   .btn-primary {

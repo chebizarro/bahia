@@ -12,6 +12,7 @@
   import { policies, environments, loadPolicies, loadEnvironments } from '$lib/stores';
   import { createPolicy as createPolicyCommand } from '$lib/stores/public-controlplane.svelte.js';
   import { policyFormSchema, validateForm } from '$lib/validation/forms.js';
+  import { CloseIcon, EnvironmentIcon, PolicyIcon, SuccessIcon } from '$lib/icons/domain-icons.js';
 
   let loading = $state(true);
   let error = $state(null);
@@ -95,18 +96,24 @@
   );
 
   let columns = $derived([
-    { key: 'name', label: 'Name' },
+    { key: 'name', label: 'Name', icon: PolicyIcon, text: (r) => r.name || '-' },
     {
       key: 'environment_id',
       label: 'Scope',
-      render: (r) => {
+      icon: EnvironmentIcon,
+      text: (r) => {
         if (!r.environment_id) return 'Global';
         const env = environments.find(e => e.id === r.environment_id);
         return env ? env.name : r.environment_id.slice(0, 8) + '...';
       }
     },
     { key: 'enforcement', label: 'Enforcement' },
-    { key: 'enabled', label: 'Status', render: (r) => r.enabled ? '✅ Enabled' : '⏸️ Disabled' },
+    {
+      key: 'enabled',
+      label: 'Status',
+      icon: (r) => r.enabled ? SuccessIcon : CloseIcon,
+      text: (r) => r.enabled ? 'Enabled' : 'Disabled'
+    },
     {
       key: 'rules',
       label: 'Rules',
@@ -214,7 +221,7 @@
     <p class="error">Error: {error}</p>
   {:else if policies.length === 0}
     <EmptyState
-      icon="🛡️"
+      iconComponent={PolicyIcon}
       title="No policies yet"
       message="Create your first deployment policy to enforce rules and controls"
       actionLabel="Create Policy"
@@ -244,7 +251,7 @@
   {/if}
 </div>
 
-<Modal bind:open={createOpen} title="Create Policy" onClose={closeCreateModal}>
+<Modal bind:open={createOpen} title="Create Policy" titleIcon={PolicyIcon} onClose={closeCreateModal}>
   <form onsubmit={(event) => { event.preventDefault(); handleCreate(); }} class="create-form">
     <div class="form-field">
       <label for="policy-name">Name *</label>

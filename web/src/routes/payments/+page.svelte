@@ -9,6 +9,7 @@
   import Select from '$lib/components/Select.svelte';
   import { workers, loading, loadWorkers } from '$lib/stores';
   import { loadPaymentHistory as loadPrivatePaymentHistory } from '$lib/stores/payments.svelte.js';
+  import { PaymentIcon } from '$lib/icons/domain-icons.js';
   import {
     buildPaymentsCsvFilename,
     escapeHtml,
@@ -97,7 +98,7 @@
 
   let columns = $derived([
     { key: 'created_at', label: 'Created', render: (r) => escapeHtml(formatDateTime(r.created_at)) },
-    { key: 'amount_sats', label: 'Amount', render: (r) => escapeHtml(formatSats(r.amount_sats)) },
+    { key: 'amount_sats', label: 'Amount', icon: PaymentIcon, text: (r) => formatSats(r.amount_sats) },
     {
       key: 'status',
       label: 'Status',
@@ -258,7 +259,7 @@
     <EmptyState
       title="Select a worker"
       message="Payment history is currently served by worker. Paste or select a worker pubkey, then load history."
-      icon="🧾"
+      iconComponent={PaymentIcon}
     />
   {:else}
     <Table columns={columns} data={filteredPayments} />
@@ -354,9 +355,9 @@
     margin-bottom: 1rem;
   }
 
-  .summary-row span:not(:last-child)::after {
-    content: '•';
-    margin-left: 0.75rem;
+  .summary-row span:not(:last-child) {
+    border-right: 1px solid var(--border-color);
+    padding-right: 0.75rem;
   }
 
   .loading {
