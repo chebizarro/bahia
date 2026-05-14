@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"time"
 
@@ -55,16 +56,20 @@ func (r *PgBuildRepository) Create(ctx context.Context, b *domain.Build) error {
 func (r *PgBuildRepository) GetByID(ctx context.Context, id uuid.UUID) (*domain.Build, error) {
 	b := &domain.Build{}
 	var metaJSON []byte
+	var loomJobID sql.NullString
+	var sourceEventID sql.NullString
 	err := r.pool.QueryRow(ctx, `
 		SELECT id, service_id, git_sha, git_ref, ci_system, ci_run_id, loom_job_id, status, source_event_id, started_at, finished_at, metadata, created_at
 		FROM builds WHERE id = $1
-	`, id).Scan(&b.ID, &b.ServiceID, &b.GitSHA, &b.GitRef, &b.CISystem, &b.CIRunID, &b.LoomJobID, &b.Status, &b.SourceEventID, &b.StartedAt, &b.FinishedAt, &metaJSON, &b.CreatedAt)
+	`, id).Scan(&b.ID, &b.ServiceID, &b.GitSHA, &b.GitRef, &b.CISystem, &b.CIRunID, &loomJobID, &b.Status, &sourceEventID, &b.StartedAt, &b.FinishedAt, &metaJSON, &b.CreatedAt)
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("querying build by id: %w", err)
 	}
+	b.LoomJobID = nullStringValue(loomJobID)
+	b.SourceEventID = nullStringValue(sourceEventID)
 	if err := unmarshalJSON(metaJSON, &b.Metadata, "build metadata"); err != nil {
 		return nil, fmt.Errorf("reading build %s: %w", id, err)
 	}
@@ -74,16 +79,20 @@ func (r *PgBuildRepository) GetByID(ctx context.Context, id uuid.UUID) (*domain.
 func (r *PgBuildRepository) GetByCISystemRunID(ctx context.Context, ciSystem, ciRunID string) (*domain.Build, error) {
 	b := &domain.Build{}
 	var metaJSON []byte
+	var loomJobID sql.NullString
+	var sourceEventID sql.NullString
 	err := r.pool.QueryRow(ctx, `
 		SELECT id, service_id, git_sha, git_ref, ci_system, ci_run_id, loom_job_id, status, source_event_id, started_at, finished_at, metadata, created_at
 		FROM builds WHERE ci_system = $1 AND ci_run_id = $2
-	`, ciSystem, ciRunID).Scan(&b.ID, &b.ServiceID, &b.GitSHA, &b.GitRef, &b.CISystem, &b.CIRunID, &b.LoomJobID, &b.Status, &b.SourceEventID, &b.StartedAt, &b.FinishedAt, &metaJSON, &b.CreatedAt)
+	`, ciSystem, ciRunID).Scan(&b.ID, &b.ServiceID, &b.GitSHA, &b.GitRef, &b.CISystem, &b.CIRunID, &loomJobID, &b.Status, &sourceEventID, &b.StartedAt, &b.FinishedAt, &metaJSON, &b.CreatedAt)
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("querying build by ci system/run id: %w", err)
 	}
+	b.LoomJobID = nullStringValue(loomJobID)
+	b.SourceEventID = nullStringValue(sourceEventID)
 	if err := unmarshalJSON(metaJSON, &b.Metadata, "build metadata"); err != nil {
 		return nil, fmt.Errorf("reading build for ci system/run id %s/%s: %w", ciSystem, ciRunID, err)
 	}
@@ -104,9 +113,13 @@ func (r *PgBuildRepository) ListByService(ctx context.Context, serviceID uuid.UU
 	for rows.Next() {
 		var b domain.Build
 		var metaJSON []byte
-		if err := rows.Scan(&b.ID, &b.ServiceID, &b.GitSHA, &b.GitRef, &b.CISystem, &b.CIRunID, &b.LoomJobID, &b.Status, &b.SourceEventID, &b.StartedAt, &b.FinishedAt, &metaJSON, &b.CreatedAt); err != nil {
+		var loomJobID sql.NullString
+		var sourceEventID sql.NullString
+		if err := rows.Scan(&b.ID, &b.ServiceID, &b.GitSHA, &b.GitRef, &b.CISystem, &b.CIRunID, &loomJobID, &b.Status, &sourceEventID, &b.StartedAt, &b.FinishedAt, &metaJSON, &b.CreatedAt); err != nil {
 			return nil, fmt.Errorf("scanning build: %w", err)
 		}
+		b.LoomJobID = nullStringValue(loomJobID)
+		b.SourceEventID = nullStringValue(sourceEventID)
 		if err := unmarshalJSON(metaJSON, &b.Metadata, "build metadata"); err != nil {
 			return nil, fmt.Errorf("reading build %s: %w", b.ID, err)
 		}

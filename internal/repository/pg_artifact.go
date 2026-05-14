@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"time"
 
@@ -55,10 +56,18 @@ func (r *PgArtifactRepository) Create(ctx context.Context, a *domain.Artifact) e
 func (r *PgArtifactRepository) scanArtifact(row pgx.Row) (*domain.Artifact, error) {
 	a := &domain.Artifact{}
 	var metaJSON []byte
-	err := row.Scan(&a.ID, &a.BuildID, &a.ServiceID, &a.ImageRepo, &a.ImageTag, &a.ImageDigest, &a.ManifestMediaType, &a.SizeBytes, &a.SBOMURL, &a.SignatureRef, &a.ScanStatus, &metaJSON, &a.CreatedAt)
+	var manifestMediaType sql.NullString
+	var sbomURL sql.NullString
+	var signatureRef sql.NullString
+	var scanStatus sql.NullString
+	err := row.Scan(&a.ID, &a.BuildID, &a.ServiceID, &a.ImageRepo, &a.ImageTag, &a.ImageDigest, &manifestMediaType, &a.SizeBytes, &sbomURL, &signatureRef, &scanStatus, &metaJSON, &a.CreatedAt)
 	if err != nil {
 		return nil, err
 	}
+	a.ManifestMediaType = nullStringValue(manifestMediaType)
+	a.SBOMURL = nullStringValue(sbomURL)
+	a.SignatureRef = nullStringValue(signatureRef)
+	a.ScanStatus = domain.ScanStatus(nullStringDefault(scanStatus, string(domain.ScanStatusUnknown)))
 	if err := unmarshalJSON(metaJSON, &a.Metadata, "artifact metadata"); err != nil {
 		return nil, err
 	}
@@ -106,9 +115,17 @@ func (r *PgArtifactRepository) ListByService(ctx context.Context, serviceID uuid
 	for rows.Next() {
 		var a domain.Artifact
 		var metaJSON []byte
-		if err := rows.Scan(&a.ID, &a.BuildID, &a.ServiceID, &a.ImageRepo, &a.ImageTag, &a.ImageDigest, &a.ManifestMediaType, &a.SizeBytes, &a.SBOMURL, &a.SignatureRef, &a.ScanStatus, &metaJSON, &a.CreatedAt); err != nil {
+		var manifestMediaType sql.NullString
+		var sbomURL sql.NullString
+		var signatureRef sql.NullString
+		var scanStatus sql.NullString
+		if err := rows.Scan(&a.ID, &a.BuildID, &a.ServiceID, &a.ImageRepo, &a.ImageTag, &a.ImageDigest, &manifestMediaType, &a.SizeBytes, &sbomURL, &signatureRef, &scanStatus, &metaJSON, &a.CreatedAt); err != nil {
 			return nil, fmt.Errorf("scanning artifact: %w", err)
 		}
+		a.ManifestMediaType = nullStringValue(manifestMediaType)
+		a.SBOMURL = nullStringValue(sbomURL)
+		a.SignatureRef = nullStringValue(signatureRef)
+		a.ScanStatus = domain.ScanStatus(nullStringDefault(scanStatus, string(domain.ScanStatusUnknown)))
 		if err := unmarshalJSON(metaJSON, &a.Metadata, "artifact metadata"); err != nil {
 			return nil, fmt.Errorf("reading artifact %s: %w", a.ID, err)
 		}
@@ -128,9 +145,17 @@ func (r *PgArtifactRepository) ListByBuild(ctx context.Context, buildID uuid.UUI
 	for rows.Next() {
 		var a domain.Artifact
 		var metaJSON []byte
-		if err := rows.Scan(&a.ID, &a.BuildID, &a.ServiceID, &a.ImageRepo, &a.ImageTag, &a.ImageDigest, &a.ManifestMediaType, &a.SizeBytes, &a.SBOMURL, &a.SignatureRef, &a.ScanStatus, &metaJSON, &a.CreatedAt); err != nil {
+		var manifestMediaType sql.NullString
+		var sbomURL sql.NullString
+		var signatureRef sql.NullString
+		var scanStatus sql.NullString
+		if err := rows.Scan(&a.ID, &a.BuildID, &a.ServiceID, &a.ImageRepo, &a.ImageTag, &a.ImageDigest, &manifestMediaType, &a.SizeBytes, &sbomURL, &signatureRef, &scanStatus, &metaJSON, &a.CreatedAt); err != nil {
 			return nil, fmt.Errorf("scanning artifact: %w", err)
 		}
+		a.ManifestMediaType = nullStringValue(manifestMediaType)
+		a.SBOMURL = nullStringValue(sbomURL)
+		a.SignatureRef = nullStringValue(signatureRef)
+		a.ScanStatus = domain.ScanStatus(nullStringDefault(scanStatus, string(domain.ScanStatusUnknown)))
 		if err := unmarshalJSON(metaJSON, &a.Metadata, "artifact metadata"); err != nil {
 			return nil, fmt.Errorf("reading artifact %s: %w", a.ID, err)
 		}
