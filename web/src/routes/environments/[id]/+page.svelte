@@ -24,6 +24,16 @@
   } from '$lib/stores';
   import { updateEnvironment, deleteEnvironment } from '$lib/stores/public-controlplane.svelte.js';
   import { environmentFormSchema, parseRuntimeConfig, validateForm } from '$lib/validation/forms.js';
+  import {
+    ArtifactIcon,
+    DeploymentIcon,
+    EnvironmentIcon,
+    ProtectedIcon,
+    ServiceIcon,
+    SuccessIcon,
+    UnknownIcon,
+    WarningIcon
+  } from '$lib/icons/domain-icons.js';
 
   let environment = $state(null);
   let states = $state([]);
@@ -127,27 +137,35 @@
   let environmentDriftStatus = $derived(
     states.length === 0 ? 'unknown' : driftedStates.length > 0 ? 'drifted' : 'in_sync'
   );
+  let driftStatusIcon = $derived(
+    environmentDriftStatus === 'drifted' ? WarningIcon : environmentDriftStatus === 'in_sync' ? SuccessIcon : UnknownIcon
+  );
+
+  function serviceDisplayName(serviceId) {
+    const svc = serviceById[serviceId];
+    return svc?.name || svc?.display_name || (serviceId ? `${String(serviceId).slice(0, 12)}...` : '-');
+  }
+
+  function truncateId(value) {
+    return value ? `${String(value).slice(0, 12)}...` : '-';
+  }
 
   let stateColumns = $derived([
     {
       key: 'service_name',
       label: 'Name',
-      render: (r) => {
-        const svc = serviceById[r.service_id];
-        const name = svc?.name || svc?.display_name;
-        if (name) return `<span class="svc-name-link" data-id="${r.service_id}" title="${r.service_id}">${name}</span>`;
-        return `<code title="${r.service_id || ''}">${(r.service_id || '').slice(0, 12)}...</code>`;
-      }
+      icon: ServiceIcon,
+      text: (r) => serviceDisplayName(r.service_id)
     },
-    { key: 'artifact_id', label: 'Artifact', render: (r) => `<code>${r.artifact_id?.slice(0, 12)}...</code>` },
+    { key: 'artifact_id', label: 'Artifact', icon: ArtifactIcon, text: (r) => truncateId(r.artifact_id) },
     { key: 'status', label: 'Status' },
     { key: 'drift_status', label: 'Drift' },
     { key: 'deployed_at', label: 'Deployed', render: (r) => r.deployed_at ? new Date(r.deployed_at).toLocaleString() : '-' }
   ]);
 
   let historyColumns = $derived([
-    { key: 'service_id', label: 'Service', render: (r) => `<code>${r.service_id?.slice(0, 12)}...</code>` },
-    { key: 'artifact_id', label: 'Artifact', render: (r) => `<code>${r.artifact_id?.slice(0, 12)}...</code>` },
+    { key: 'service_id', label: 'Service', icon: ServiceIcon, text: (r) => serviceDisplayName(r.service_id) },
+    { key: 'artifact_id', label: 'Artifact', icon: ArtifactIcon, text: (r) => truncateId(r.artifact_id) },
     { key: 'intent_status', label: 'Status', render: (r) => getIntentStatus(r) },
     { key: 'created_at', label: 'Requested', render: (r) => r.created_at ? new Date(r.created_at).toLocaleString() : '-' }
   ]);
@@ -251,7 +269,7 @@
     <p class="error">Error: {error}</p>
   {:else if environment}
     <div class="header">
-      <h1>{environment.name}</h1>
+      <h1 class="title-with-icon"><EnvironmentIcon size={28} stroke={1.75} aria-hidden="true" /> <span>{environment.name}</span></h1>
       <div class="actions">
         <LoadingButton variant="secondary" onclick={openEditModal}>
           Edit
@@ -263,24 +281,24 @@
     </div>
     
     <div class="info-grid">
-      <Card title="Deploy Strategy" value={environment.deploy_strategy || 'replace'} />
-      <Card title="Protected" value={environment.protected ? '🔒 Yes' : 'No'} />
-      <Card title="Worker Selector" value={environment.loom_worker_selector || '-'} />
-      <Card title="Current State" value={environmentDriftStatus === 'drifted' ? '⚠️ Drifted' : environmentDriftStatus === 'in_sync' ? '✅ In Sync' : 'Unknown'} />
-      <Card title="Drifted Services" value={String(driftedStates.length)} />
-      <Card title="In-Sync Services" value={String(inSyncStates.length)} />
-      <Card title="ID" value={environment.id?.slice(0, 16) + '...' || '-'} />
+      <Card title="Deploy Strategy" titleIcon={DeploymentIcon} value={environment.deploy_strategy || 'replace'} />
+      <Card title="Protected" titleIcon={environment.protected ? ProtectedIcon : UnknownIcon} value={environment.protected ? 'Yes' : 'No'} />
+      <Card title="Worker Selector" titleIcon={ServiceIcon} value={environment.loom_worker_selector || '-'} />
+      <Card title="Current State" titleIcon={driftStatusIcon} value={environmentDriftStatus === 'drifted' ? 'Drifted' : environmentDriftStatus === 'in_sync' ? 'In Sync' : 'Unknown'} />
+      <Card title="Drifted Services" titleIcon={WarningIcon} value={String(driftedStates.length)} />
+      <Card title="In-Sync Services" titleIcon={SuccessIcon} value={String(inSyncStates.length)} />
+      <Card title="ID" titleIcon={EnvironmentIcon} value={environment.id?.slice(0, 16) + '...' || '-'} />
     </div>
 
     {#if environment.runtime_config && Object.keys(environment.runtime_config).length > 0}
       <section>
-        <h2>Runtime Configuration</h2>
+        <h2 class="section-title"><EnvironmentIcon size={18} stroke={1.75} aria-hidden="true" /> <span>Runtime Configuration</span></h2>
         <pre class="config-json">{JSON.stringify(environment.runtime_config, null, 2)}</pre>
       </section>
     {/if}
 
     <section>
-      <h2>Deployed Services ({states.length})</h2>
+      <h2 class="section-title"><ServiceIcon size={18} stroke={1.75} aria-hidden="true" /> <span>Deployed Services ({states.length})</span></h2>
       {#if states.length > 0}
         <Table
           columns={stateColumns}
@@ -292,7 +310,7 @@
         />
       {:else}
         <EmptyState
-          icon="📦"
+          iconComponent={ServiceIcon}
           title="No services deployed"
           message="No services are currently deployed to this environment"
         />
@@ -300,12 +318,12 @@
     </section>
 
     <section>
-      <h2>Deployment History ({deploymentHistory.length})</h2>
+      <h2 class="section-title"><DeploymentIcon size={18} stroke={1.75} aria-hidden="true" /> <span>Deployment History ({deploymentHistory.length})</span></h2>
       {#if deploymentHistory.length > 0}
         <Table columns={historyColumns} data={deploymentHistory} />
       {:else}
         <EmptyState
-          icon="🕘"
+          iconComponent={DeploymentIcon}
           title="No deployment history"
           message="No deployment intents have been recorded for this environment yet"
         />
@@ -315,7 +333,7 @@
 </div>
 
 <!-- Service Detail Dialog -->
-<Modal bind:open={serviceDialogOpen} title="Service Detail" onClose={closeServiceDialog}>
+<Modal bind:open={serviceDialogOpen} title="Service Detail" titleIcon={ServiceIcon} onClose={closeServiceDialog}>
   {#if selectedService}
     <div class="svc-detail">
       <div class="svc-row"><span class="svc-label">Name</span><span>{selectedService.name || selectedService.display_name || '-'}</span></div>
@@ -331,7 +349,7 @@
 </Modal>
 
 <!-- Edit Modal -->
-<Modal bind:open={editOpen} title="Edit Environment" onClose={closeEditModal}>
+<Modal bind:open={editOpen} title="Edit Environment" titleIcon={EnvironmentIcon} onClose={closeEditModal}>
   <form onsubmit={(event) => { event.preventDefault(); handleEdit(); }} class="edit-form">
     <div class="form-field">
       <label for="edit-name">Name *</label>
@@ -422,6 +440,7 @@
 <ConfirmDialog
   bind:open={deleteOpen}
   title="Delete Environment"
+  titleIcon={WarningIcon}
   confirmLabel="Delete"
   variant="danger"
   loading={deleting}
@@ -458,6 +477,12 @@
   }
   .header h1 {
     margin: 0;
+  }
+  .title-with-icon,
+  .section-title {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
   }
   .actions {
     display: flex;

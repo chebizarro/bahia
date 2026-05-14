@@ -11,6 +11,17 @@
   import { toast } from '$lib/components/toast.js';
   import { verifyArtifactSignatures } from '$lib/stores/artifact-signatures.svelte.js';
   import { api } from '$lib/api/client.js';
+  import {
+    ArtifactIcon,
+    CopyIcon,
+    GenericFileIcon,
+    SbomIcon,
+    ServiceIcon,
+    SignatureIcon,
+    SuccessIcon,
+    UnknownIcon,
+    WarningIcon
+  } from '$lib/icons/domain-icons.js';
 
   let artifact = $state(null);
   let service = $state(null);
@@ -59,11 +70,11 @@
       render: (r) => {
         const verified = r.verified;
         if (verified === true) {
-          return '<span style="color: #10b981; font-weight: 500;">✓ Verified</span>';
+          return '<span style="color: #10b981; font-weight: 500;">Verified</span>';
         } else if (verified === false) {
-          return '<span style="color: #ef4444; font-weight: 500;">✗ Failed</span>';
+          return '<span style="color: #ef4444; font-weight: 500;">Failed</span>';
         }
-        return '<span style="color: #888;">○ Pending</span>';
+        return '<span style="color: #888;">Pending</span>';
       }
     }
   ]);
@@ -209,7 +220,7 @@
     <p class="loading">Loading artifact...</p>
   {:else if error}
     <div class="error-state">
-      <p class="error">⚠️ {error}</p>
+      <p class="error title-with-icon"><WarningIcon size={18} stroke={1.75} aria-hidden="true" /> <span>{error}</span></p>
       <LoadingButton variant="secondary" onclick={() => goto('/services')}>
         Back to Services
       </LoadingButton>
@@ -222,7 +233,7 @@
         {:else}
           <a href="/services" class="back-link">← Services</a>
         {/if}
-        <h1>Artifact Details</h1>
+        <h1 class="title-with-icon"><ArtifactIcon size={28} stroke={1.75} aria-hidden="true" /> <span>Artifact Details</span></h1>
         <p class="artifact-id"><code>{artifact.id}</code></p>
       </div>
     </div>
@@ -234,21 +245,21 @@
         class:active={activeTab === 'overview'}
         onclick={() => activeTab = 'overview'}
       >
-        Overview
+        <span class="tab-with-icon"><ArtifactIcon size={16} stroke={1.75} aria-hidden="true" /> Overview</span>
       </button>
       <button 
         class="tab" 
         class:active={activeTab === 'sbom'}
         onclick={() => activeTab = 'sbom'}
       >
-        SBOM {sbomPackages.length > 0 ? `(${sbomPackages.length})` : ''}
+        <span class="tab-with-icon"><SbomIcon size={16} stroke={1.75} aria-hidden="true" /> SBOM {sbomPackages.length > 0 ? `(${sbomPackages.length})` : ''}</span>
       </button>
       <button 
         class="tab" 
         class:active={activeTab === 'signatures'}
         onclick={() => activeTab = 'signatures'}
       >
-        Signatures {signatures.length > 0 ? `(${signatures.length})` : ''}
+        <span class="tab-with-icon"><SignatureIcon size={16} stroke={1.75} aria-hidden="true" /> Signatures {signatures.length > 0 ? `(${signatures.length})` : ''}</span>
       </button>
     </div>
 
@@ -257,15 +268,15 @@
       {#if activeTab === 'overview'}
         <!-- Overview Tab -->
         <div class="overview-grid">
-          <Card title="Name" value={artifact.name || artifact.image_tag || '-'} />
-          <Card title="Type" value={artifactTypeLabel(artifact)} />
-          <Card title="Version" value={artifact.version || artifact.image_tag || '-'} />
-          <Card title="Size" value={formatBytes(artifact.size_bytes)} />
+          <Card title="Name" titleIcon={ArtifactIcon} value={artifact.name || artifact.image_tag || '-'} />
+          <Card title="Type" titleIcon={GenericFileIcon} value={artifactTypeLabel(artifact)} />
+          <Card title="Version" titleIcon={UnknownIcon} value={artifact.version || artifact.image_tag || '-'} />
+          <Card title="Size" titleIcon={ArtifactIcon} value={formatBytes(artifact.size_bytes)} />
           <!-- Digest card: small font, middle-truncated, tooltip + copy on click -->
           {#if artifact.digest || artifact.image_digest}
             {@const fullDigest = artifact.digest || artifact.image_digest}
             <div class="card digest-card">
-              <div class="card-label">Digest</div>
+              <div class="card-label title-with-icon"><CopyIcon size={16} stroke={1.75} aria-hidden="true" /> <span>Digest</span></div>
               <button
                 class="digest-value"
                 title={fullDigest}
@@ -273,21 +284,22 @@
                 aria-label="Copy digest to clipboard"
               >
                 <code class="digest-text">{formatDigestMiddle(fullDigest)}</code>
-                <span class="digest-copy-hint" aria-hidden="true">📋</span>
+                <span class="digest-copy-hint" aria-hidden="true"><CopyIcon size={16} stroke={1.75} /></span>
               </button>
             </div>
           {:else}
-            <Card title="Digest" value="-" />
+            <Card title="Digest" titleIcon={CopyIcon} value="-" />
           {/if}
         </div>
 
         <section class="detail-section">
-          <h2>Details</h2>
+          <h2 class="section-title"><ArtifactIcon size={20} stroke={1.75} aria-hidden="true" /> <span>Details</span></h2>
           <div class="details-grid">
             {#if service}
               <div class="detail-item">
                 <span class="detail-label">Service</span>
-                <span class="detail-value">
+                <span class="detail-value service-ref">
+                  <ServiceIcon size={16} stroke={1.75} aria-hidden="true" />
                   <a href="/services/{service.id}" class="service-link">{service.name}</a>
                 </span>
               </div>
@@ -318,7 +330,7 @@
 
           {#if artifact.metadata && Object.keys(artifact.metadata).length > 0}
             <div class="metadata-section">
-              <h3>Metadata</h3>
+              <h3 class="section-title"><GenericFileIcon size={16} stroke={1.75} aria-hidden="true" /> <span>Metadata</span></h3>
               <div class="metadata-grid">
                 {#each Object.entries(artifact.metadata) as [key, value]}
                   <div class="detail-item">
@@ -344,12 +356,12 @@
         <!-- Signatures Tab -->
         <section class="signatures-section">
           <div class="section-header">
-            <h2>Signatures</h2>
+            <h2 class="section-title"><SignatureIcon size={20} stroke={1.75} aria-hidden="true" /> <span>Signatures</span></h2>
             <div class="header-actions">
               {#if hasVerifiedSig}
-                <Badge variant="success">✓ Verified</Badge>
+                <Badge variant="success"><span class="badge-with-icon"><SuccessIcon size={14} stroke={1.75} aria-hidden="true" /> Verified</span></Badge>
               {:else if signatures.length > 0}
-                <Badge variant="warning">⚠ Unverified</Badge>
+                <Badge variant="warning"><span class="badge-with-icon"><WarningIcon size={14} stroke={1.75} aria-hidden="true" /> Unverified</span></Badge>
               {:else}
                 <Badge variant="default">No Signatures</Badge>
               {/if}
@@ -371,7 +383,7 @@
             <Table columns={signatureColumns} data={signatures} />
           {:else}
             <EmptyState
-              icon="🔏"
+              iconComponent={SignatureIcon}
               title="No signatures found"
               message="This artifact has not been signed yet"
             />
@@ -381,7 +393,7 @@
     </div>
   {:else}
     <EmptyState
-      icon="❓"
+      iconComponent={UnknownIcon}
       title="Artifact not found"
       message="The requested artifact does not exist"
     >
@@ -403,6 +415,21 @@
     align-items: flex-start;
     justify-content: space-between;
     margin-bottom: 1.5rem;
+  }
+
+  .title-with-icon,
+  .section-title,
+  .tab-with-icon,
+  .badge-with-icon,
+  .service-ref {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .digest-copy-hint {
+    color: var(--text-muted);
+    flex-shrink: 0;
   }
 
   .back-link {
@@ -524,6 +551,8 @@
   }
 
   .digest-copy-hint {
+    display: inline-flex;
+    align-items: center;
     font-size: 0.75rem;
     flex-shrink: 0;
     opacity: 0.4;
@@ -591,7 +620,6 @@
   }
 
   /* SBOM and Signatures Sections */
-  .sbom-section,
   .signatures-section {
     background: var(--card-bg);
     border-radius: 8px;

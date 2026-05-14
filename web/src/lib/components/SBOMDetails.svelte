@@ -2,6 +2,18 @@
   import Badge from './Badge.svelte';
   import Table from './Table.svelte';
   import EmptyState from './EmptyState.svelte';
+  import {
+    ArtifactIcon,
+    BlossomIcon,
+    GenericFileIcon,
+    ProtectedIcon,
+    SbomIcon,
+    ServiceIcon,
+    SignatureIcon,
+    SuccessIcon,
+    UnknownIcon,
+    WarningIcon
+  } from '$lib/icons/domain-icons.js';
 
   let { 
     sbom = null,
@@ -12,13 +24,13 @@
 
   // NTIA compliance fields
   const ntiaFields = [
-    { key: 'hasSupplierName', label: 'Supplier Name', icon: '🏢' },
-    { key: 'hasComponentName', label: 'Component Name', icon: '📦' },
-    { key: 'hasComponentVersion', label: 'Component Version', icon: '🏷️' },
-    { key: 'hasUniqueID', label: 'Unique ID (PURL/CPE)', icon: '🔑' },
-    { key: 'hasRelationship', label: 'Dependency Relationships', icon: '🔗' },
-    { key: 'hasAuthor', label: 'Author', icon: '👤' },
-    { key: 'hasTimestamp', label: 'Timestamp', icon: '🕐' }
+    { key: 'hasSupplierName', label: 'Supplier Name', icon: ServiceIcon },
+    { key: 'hasComponentName', label: 'Component Name', icon: ArtifactIcon },
+    { key: 'hasComponentVersion', label: 'Component Version', icon: GenericFileIcon },
+    { key: 'hasUniqueID', label: 'Unique ID (PURL/CPE)', icon: ProtectedIcon },
+    { key: 'hasRelationship', label: 'Dependency Relationships', icon: SbomIcon },
+    { key: 'hasAuthor', label: 'Author', icon: SignatureIcon },
+    { key: 'hasTimestamp', label: 'Timestamp', icon: UnknownIcon }
   ];
 
   // Package table columns
@@ -34,13 +46,13 @@
     }
   ]);
 
-  function formatStorageType(type) {
+  function storageTypePresentation(type) {
     const labels = {
-      'blossom': '🌸 Blossom',
-      'oci-referrer': '📦 OCI Referrer',
-      'package-backend': '📁 Package Backend'
+      'blossom': { label: 'Blossom', icon: BlossomIcon },
+      'oci-referrer': { label: 'OCI Referrer', icon: ArtifactIcon },
+      'package-backend': { label: 'Package Backend', icon: GenericFileIcon }
     };
-    return labels[type] || type || 'Unknown';
+    return labels[type] || { label: type || 'Unknown', icon: UnknownIcon };
   }
 
   function formatFormat(format) {
@@ -80,7 +92,7 @@
     <p class="loading">Loading SBOM details...</p>
   {:else if !sbom && !attestation && packages.length === 0}
     <EmptyState
-      icon="📦"
+      iconComponent={SbomIcon}
       title="No SBOM available"
       message="This artifact does not have an SBOM or it has not been ingested yet"
     />
@@ -88,7 +100,7 @@
     <!-- Attestation Overview -->
     {#if attestation || sbom}
       <div class="section">
-        <h3>Attestation Details</h3>
+        <h3 class="section-title"><SignatureIcon size={18} stroke={1.75} aria-hidden="true" /> <span>Attestation Details</span></h3>
         <div class="attestation-grid">
           <div class="attestation-item">
             <span class="label">Format</span>
@@ -111,9 +123,11 @@
 
           {#if attestation?.predicate?.location || sbom?.source_url}
             {@const loc = attestation?.predicate?.location}
+            {@const storage = storageTypePresentation(loc?.type || 'blossom')}
+            {@const StorageIcon = storage.icon}
             <div class="attestation-item">
               <span class="label">Storage</span>
-              <span class="value">{formatStorageType(loc?.type || 'blossom')}</span>
+              <span class="value value-with-icon"><StorageIcon size={16} stroke={1.75} aria-hidden="true" /> {storage.label}</span>
             </div>
             <div class="attestation-item full-width">
               <span class="label">Location URI</span>
@@ -180,17 +194,30 @@
     {#if ntiaCompliance}
       <div class="section">
         <div class="section-header">
-          <h3>NTIA Minimum Elements</h3>
+          <h3 class="section-title"><SbomIcon size={18} stroke={1.75} aria-hidden="true" /> <span>NTIA Minimum Elements</span></h3>
           <Badge variant={ntiaCompliant ? 'success' : 'warning'}>
-            {ntiaCompliant ? '✓ Compliant' : `${passedCount}/7 Fields`}
+            <span class="badge-with-icon">
+              {#if ntiaCompliant}
+                <SuccessIcon size={14} stroke={1.75} aria-hidden="true" /> Compliant
+              {:else}
+                <WarningIcon size={14} stroke={1.75} aria-hidden="true" /> {passedCount}/7 Fields
+              {/if}
+            </span>
           </Badge>
         </div>
         <div class="ntia-grid">
           {#each ntiaFields as field}
             {@const passed = ntiaCompliance[field.key]}
+            {@const FieldIcon = field.icon}
             <div class="ntia-item" class:passed class:failed={!passed}>
-              <span class="ntia-icon">{passed ? '✓' : '✗'}</span>
-              <span class="ntia-label">{field.icon} {field.label}</span>
+              <span class="ntia-status-icon" aria-hidden="true">
+                {#if passed}
+                  <SuccessIcon size={16} stroke={1.75} />
+                {:else}
+                  <WarningIcon size={16} stroke={1.75} />
+                {/if}
+              </span>
+              <span class="ntia-label"><FieldIcon size={16} stroke={1.75} aria-hidden="true" /> {field.label}</span>
             </div>
           {/each}
         </div>
@@ -205,7 +232,7 @@
     <!-- Packages Table -->
     {#if packages.length > 0}
       <div class="section">
-        <h3>Packages ({packages.length})</h3>
+        <h3 class="section-title"><ArtifactIcon size={18} stroke={1.75} aria-hidden="true" /> <span>Packages ({packages.length})</span></h3>
         <Table columns={packageColumns} data={packages} />
       </div>
     {/if}
@@ -236,6 +263,14 @@
     font-size: 1rem;
     color: var(--text-primary);
     margin: 0 0 1rem;
+  }
+
+  .section-title,
+  .value-with-icon,
+  .badge-with-icon {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
   }
 
   .section-header {
@@ -328,14 +363,18 @@
     opacity: 0.7;
   }
 
-  .ntia-icon {
-    font-weight: bold;
+  .ntia-status-icon {
+    display: inline-flex;
+    align-items: center;
     width: 1rem;
-    text-align: center;
+    flex-shrink: 0;
   }
 
   .ntia-label {
     flex: 1;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
   }
 
   .ntia-info {

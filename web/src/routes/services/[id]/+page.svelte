@@ -55,6 +55,18 @@
     revealServiceSecret,
     updateServiceSecret
   } from '$lib/stores/service-secrets.svelte.js';
+  import {
+    ArtifactIcon,
+    CopyIcon,
+    DeploymentIcon,
+    ProtectedIcon,
+    RollbackIcon,
+    SbomIcon,
+    ServiceIcon,
+    SignatureIcon,
+    UnknownIcon,
+    WarningIcon
+  } from '$lib/icons/domain-icons.js';
 
   let service = $state(null);
   let builds = $state([]);
@@ -899,7 +911,7 @@
     <p class="error">Error: {error}</p>
   {:else if service}
     <div class="header">
-      <h1>{service.name}</h1>
+      <h1 class="title-with-icon"><ServiceIcon size={28} stroke={1.75} aria-hidden="true" /> <span>{service.name}</span></h1>
       <div class="actions">
         <LoadingButton variant="primary" onclick={openDeployModal}>
           Deploy
@@ -917,19 +929,19 @@
     </div>
     
     <div class="info-grid">
-      <Card title="Repository" value={service.artifact_repo || '-'} />
-      <Card title="Runtime" value={service.runtime_type || 'docker'} />
-      <Card title="Default Branch" value={service.default_branch || 'main'} />
+      <Card title="Repository" titleIcon={ArtifactIcon} value={service.artifact_repo || '-'} />
+      <Card title="Runtime" titleIcon={ServiceIcon} value={service.runtime_type || 'docker'} />
+      <Card title="Default Branch" titleIcon={UnknownIcon} value={service.default_branch || 'main'} />
     </div>
 
     <section>
-      <h2>Recent Builds ({builds.length})</h2>
+      <h2 class="section-title"><DeploymentIcon size={18} stroke={1.75} aria-hidden="true" /> <span>Recent Builds ({builds.length})</span></h2>
       <Table columns={buildColumns} data={builds.slice(0, 10)} />
     </section>
 
     <section>
       <div class="section-header">
-        <h2>Artifacts ({artifacts.length})</h2>
+        <h2 class="section-title"><ArtifactIcon size={18} stroke={1.75} aria-hidden="true" /> <span>Artifacts ({artifacts.length})</span></h2>
         <LoadingButton variant="primary" onclick={openArtifactRegisterModal}>
           Register Artifact
         </LoadingButton>
@@ -940,16 +952,17 @@
             <a href="/artifacts/{artifact.id}" class="artifact-row">
               <div class="artifact-info">
                 <div class="artifact-main">
+                  <ArtifactIcon size={16} stroke={1.75} aria-hidden="true" class="inline-entity-icon" />
                   <code class="artifact-name">{artifact.name}</code>
                   <span class="artifact-version">v{artifact.version}</span>
                 </div>
                 <div class="artifact-meta">
                   <span class="artifact-created">{formatDate(artifact.created_at)}</span>
                   {#if artifact.sbom_url}
-                    <span class="badge badge-sbom">SBOM</span>
+                    <span class="badge badge-sbom"><SbomIcon size={12} stroke={1.75} aria-hidden="true" /> SBOM</span>
                   {/if}
                   {#if artifact.signatures && artifact.signatures.length > 0}
-                    <span class="badge badge-signatures">{artifact.signatures.length} signature{artifact.signatures.length > 1 ? 's' : ''}</span>
+                    <span class="badge badge-signatures"><SignatureIcon size={12} stroke={1.75} aria-hidden="true" /> {artifact.signatures.length} signature{artifact.signatures.length > 1 ? 's' : ''}</span>
                   {/if}
                 </div>
               </div>
@@ -958,6 +971,7 @@
         </div>
       {:else}
         <div class="empty-state">
+          <ArtifactIcon size={32} stroke={1.5} aria-hidden="true" class="empty-icon" />
           <p class="empty">No artifacts registered</p>
           <LoadingButton variant="primary" onclick={openArtifactRegisterModal}>
             Register Your First Artifact
@@ -968,7 +982,7 @@
 
     <section>
       <div class="section-header">
-        <h2>Secrets ({secrets.length})</h2>
+        <h2 class="section-title"><ProtectedIcon size={18} stroke={1.75} aria-hidden="true" /> <span>Secrets ({secrets.length})</span></h2>
         <LoadingButton variant="primary" onclick={openSecretCreateModal}>
           Add Secret
         </LoadingButton>
@@ -977,6 +991,7 @@
         <p class="muted">Loading secrets…</p>
       {:else if secretsError}
         <div class="empty-state">
+          <WarningIcon size={32} stroke={1.5} aria-hidden="true" class="empty-icon" />
           <p class="empty">Failed to load secrets</p>
           <p class="empty-detail">{secretsError}</p>
         </div>
@@ -985,6 +1000,7 @@
           {#each secrets as secret}
             <div class="secret-row">
               <div class="secret-info">
+                <ProtectedIcon size={16} stroke={1.75} aria-hidden="true" class="inline-entity-icon" />
                 <code class="secret-name">{secret.name}</code>
                 <span class="secret-version">v{secret.version}</span>
                 {#if secret.environment_id}
@@ -1016,6 +1032,7 @@
         </div>
       {:else}
         <div class="empty-state">
+          <ProtectedIcon size={32} stroke={1.5} aria-hidden="true" class="empty-icon" />
           <p class="empty">No secrets configured</p>
           <LoadingButton variant="primary" onclick={openSecretCreateModal}>
             Add Your First Secret
@@ -1027,7 +1044,7 @@
 </div>
 
 <!-- Edit Modal -->
-<Modal bind:open={editOpen} title="Edit Service" onClose={closeEditModal}>
+<Modal bind:open={editOpen} title="Edit Service" titleIcon={ServiceIcon} onClose={closeEditModal}>
   <form onsubmit={(event) => { event.preventDefault(); handleEdit(); }} class="edit-form">
     <div class="form-field">
       <label for="edit-name">Name *</label>
@@ -1127,6 +1144,7 @@
 <ConfirmDialog
   bind:open={deleteOpen}
   title="Delete Service"
+  titleIcon={WarningIcon}
   confirmLabel="Delete"
   variant="danger"
   loading={deleting}
@@ -1155,7 +1173,7 @@
 </ConfirmDialog>
 
 <!-- Deployment Intent Modal -->
-<Modal bind:open={deployOpen} title="Create Deployment Intent" size="lg" onClose={closeDeployModal}>
+<Modal bind:open={deployOpen} title="Create Deployment Intent" titleIcon={DeploymentIcon} size="lg" onClose={closeDeployModal}>
   <form onsubmit={(event) => { event.preventDefault(); handleDeploy(); }} class="deploy-form">
     <p class="modal-intro">
       Choose where to deploy <strong>{service?.name}</strong> and which recent artifact should be promoted.
@@ -1202,7 +1220,7 @@
 
     {#if selectedDeployEnvironment || selectedDeployArtifact}
       <div class="deploy-summary">
-        <h3>Selection Summary</h3>
+        <h3 class="subsection-title"><DeploymentIcon size={16} stroke={1.75} aria-hidden="true" /> <span>Selection Summary</span></h3>
         <dl>
           <div>
             <dt>Environment</dt>
@@ -1228,7 +1246,7 @@
     <div class="preview-grid">
       <section class="preview-card">
         <div class="preview-card-header">
-          <h3>Policy Preview</h3>
+          <h3 class="subsection-title"><ProtectedIcon size={16} stroke={1.75} aria-hidden="true" /> <span>Policy Preview</span></h3>
           {#if deployPolicyPreview}
             <span class="status-pill {policyStatusClass(deployPolicyPreview)}">{policyStatusLabel(deployPolicyPreview)}</span>
           {/if}
@@ -1273,7 +1291,7 @@
 
       <section class="preview-card cost-estimate-card" aria-live="polite">
         <div class="preview-card-header">
-          <h3>Cost Estimate</h3>
+          <h3 class="subsection-title"><DeploymentIcon size={16} stroke={1.75} aria-hidden="true" /> <span>Cost Estimate</span></h3>
           <span class="status-pill muted">Pre-deploy</span>
         </div>
 
@@ -1368,6 +1386,7 @@
 <ConfirmDialog
   bind:open={rollbackOpen}
   title="Confirm Rollback"
+  titleIcon={RollbackIcon}
   confirmLabel="Create Rollback Intent"
   loading={rollingBack}
   onConfirm={handleRollback}
@@ -1415,7 +1434,7 @@
 
     {#if selectedRollbackEnvironment || selectedRollbackArtifact}
       <div class="deploy-summary">
-        <h3>Rollback Target</h3>
+        <h3 class="subsection-title"><RollbackIcon size={16} stroke={1.75} aria-hidden="true" /> <span>Rollback Target</span></h3>
         <dl>
           <div>
             <dt>Environment</dt>
@@ -1442,7 +1461,7 @@
 </ConfirmDialog>
 
 <!-- Secret Create Modal -->
-<Modal bind:open={secretCreateOpen} title="Add Secret" onClose={closeSecretCreateModal}>
+<Modal bind:open={secretCreateOpen} title="Add Secret" titleIcon={ProtectedIcon} onClose={closeSecretCreateModal}>
   <form onsubmit={(event) => { event.preventDefault(); handleSecretCreate(); }} class="secret-form">
     <div class="form-field">
       <label for="secret-name">Name *</label>
@@ -1494,7 +1513,7 @@
 </Modal>
 
 <!-- Secret Update Modal -->
-<Modal bind:open={secretUpdateOpen} title="Update Secret" onClose={closeSecretUpdateModal}>
+<Modal bind:open={secretUpdateOpen} title="Update Secret" titleIcon={ProtectedIcon} onClose={closeSecretUpdateModal}>
   <form onsubmit={(event) => { event.preventDefault(); handleSecretUpdate(); }} class="secret-form">
     <div class="form-field">
       <label for="secret-update-name">Name</label>
@@ -1530,7 +1549,7 @@
 </Modal>
 
 <!-- Secret Reveal Warning Modal -->
-<Modal bind:open={secretRevealOpen} title="Reveal Secret Value" onClose={closeSecretRevealModal}>
+<Modal bind:open={secretRevealOpen} title="Reveal Secret Value" titleIcon={ProtectedIcon} onClose={closeSecretRevealModal}>
   <div class="secret-reveal-flow">
     <p class="warning">Warning: this will display the plaintext value for <code>{secretRevealName}</code> on screen.</p>
 
@@ -1545,7 +1564,7 @@
       </div>
       <div class="form-actions">
         <LoadingButton type="button" variant="secondary" onclick={closeSecretRevealModal}>Close</LoadingButton>
-        <LoadingButton type="button" variant="primary" onclick={handleCopyRevealedSecret}>Copy to Clipboard</LoadingButton>
+        <LoadingButton type="button" variant="primary" onclick={handleCopyRevealedSecret}><span class="button-with-icon"><CopyIcon size={16} stroke={1.75} aria-hidden="true" /> Copy to Clipboard</span></LoadingButton>
       </div>
       {#if secretRevealCopyStatus}
         <p class="field-hint">{secretRevealCopyStatus}</p>
@@ -1558,6 +1577,7 @@
 <ConfirmDialog
   bind:open={secretDeleteOpen}
   title="Delete Secret"
+  titleIcon={WarningIcon}
   confirmLabel="Delete"
   variant="danger"
   loading={secretDeleting}
@@ -1576,7 +1596,7 @@
 </ConfirmDialog>
 
 <!-- Artifact Registration Modal -->
-<Modal bind:open={artifactRegisterOpen} title="Register Artifact" onClose={closeArtifactRegisterModal}>
+<Modal bind:open={artifactRegisterOpen} title="Register Artifact" titleIcon={ArtifactIcon} onClose={closeArtifactRegisterModal}>
   <form onsubmit={(event) => { event.preventDefault(); handleArtifactRegister(); }} class="artifact-form">
     <div class="form-field">
       <label for="artifact-name">Name *</label>
@@ -1669,6 +1689,22 @@
   }
   .header h1 {
     margin: 0;
+  }
+  .title-with-icon,
+  .section-title,
+  .subsection-title,
+  .button-with-icon {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+  .inline-entity-icon,
+  .empty-icon {
+    color: var(--text-muted);
+    flex-shrink: 0;
+  }
+  .button-with-icon {
+    justify-content: center;
   }
   .actions {
     display: flex;
@@ -2078,6 +2114,9 @@
     color: var(--text-muted);
   }
   .badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
     font-size: 0.625rem;
     font-weight: 600;
     text-transform: uppercase;

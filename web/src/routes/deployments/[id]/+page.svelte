@@ -17,6 +17,15 @@
     loadEnvironments
   } from '$lib/stores';
   import { approveDeploymentIntent, rejectDeploymentIntent } from '$lib/stores/public-controlplane.svelte.js';
+  import {
+    ArtifactIcon,
+    DeploymentIcon,
+    EnvironmentIcon,
+    ServiceIcon,
+    SuccessIcon,
+    UnknownIcon,
+    WarningIcon
+  } from '$lib/icons/domain-icons.js';
 
   let intent = $state(null);
   let runs = $state([]);
@@ -144,23 +153,35 @@
     }
   }
 
-  function getApprovalStatusColor(status) {
+  function approvalStatusCard(status) {
     const normalized = String(status || '').toLowerCase();
-    const colors = { pending: '#f59e0b', approved: '#10b981', rejected: '#ef4444' };
-    return colors[normalized] || '#888';
+    if (normalized === 'approved') return 'success';
+    if (normalized === 'rejected') return 'error';
+    if (normalized === 'pending') return 'warning';
+    return 'default';
   }
 
-  function getDeploymentStatusColor(status) {
+  function deploymentStatusCard(status) {
     const normalized = String(status || '').toLowerCase();
-    const colors = { 
-      pending: '#888',
-      queued: '#888', 
-      running: '#3b82f6', 
-      succeeded: '#10b981', 
-      failed: '#ef4444',
-      cancelled: '#6b7280'
-    };
-    return colors[normalized] || '#888';
+    if (normalized === 'succeeded') return 'success';
+    if (normalized === 'failed') return 'error';
+    if (normalized === 'cancelled') return 'warning';
+    return 'default';
+  }
+
+  function approvalStatusIcon(status) {
+    const normalized = String(status || '').toLowerCase();
+    if (normalized === 'approved') return SuccessIcon;
+    if (normalized === 'pending' || normalized === 'rejected') return WarningIcon;
+    return UnknownIcon;
+  }
+
+  function deploymentStatusIcon(status) {
+    const normalized = String(status || '').toLowerCase();
+    if (normalized === 'succeeded') return SuccessIcon;
+    if (normalized === 'failed' || normalized === 'cancelled') return WarningIcon;
+    if (normalized === 'running' || normalized === 'queued' || normalized === 'pending') return DeploymentIcon;
+    return UnknownIcon;
   }
 </script>
 
@@ -169,7 +190,7 @@
     <p class="loading">Loading deployment intent...</p>
   {:else if error}
     <div class="error-state">
-      <p class="error">⚠️ {error}</p>
+      <p class="error title-with-icon"><WarningIcon size={18} stroke={1.75} aria-hidden="true" /> <span>{error}</span></p>
       <LoadingButton variant="secondary" onclick={() => goto('/deployments')}>
         Back to Deployments
       </LoadingButton>
@@ -178,7 +199,7 @@
     <div class="header">
       <div>
         <a href="/deployments" class="back-link">← Back to Deployments</a>
-        <h1>Deployment Intent</h1>
+        <h1 class="title-with-icon"><DeploymentIcon size={28} stroke={1.75} aria-hidden="true" /> <span>Deployment Intent</span></h1>
         <p class="intent-id"><code>{intent.id}</code></p>
       </div>
       {#if isPending}
@@ -200,56 +221,35 @@
     </div>
 
     <div class="cards-grid">
-      <Card>
-        <div class="detail-section">
-          <h3>Service</h3>
-          <p class="detail-value">{service?.name || intent.service_id || 'Unknown'}</p>
-          {#if intent.service_id && !service}
-            <p class="detail-subtitle"><code>{intent.service_id}</code></p>
-          {/if}
-        </div>
+      <Card title="Service" titleIcon={ServiceIcon} value={service?.name || intent.service_id || 'Unknown'}>
+        {#if intent.service_id && !service}
+          <p class="detail-subtitle"><code>{intent.service_id}</code></p>
+        {/if}
       </Card>
 
-      <Card>
-        <div class="detail-section">
-          <h3>Environment</h3>
-          <p class="detail-value">{environment?.name || intent.environment_id || 'Unknown'}</p>
-          {#if intent.environment_id && !environment}
-            <p class="detail-subtitle"><code>{intent.environment_id}</code></p>
-          {/if}
-        </div>
+      <Card title="Environment" titleIcon={EnvironmentIcon} value={environment?.name || intent.environment_id || 'Unknown'}>
+        {#if intent.environment_id && !environment}
+          <p class="detail-subtitle"><code>{intent.environment_id}</code></p>
+        {/if}
       </Card>
 
-      <Card>
-        <div class="detail-section">
-          <h3>Approval Status</h3>
-          <p class="detail-value" style="color: {getApprovalStatusColor(intent.approval_status)}">
-            {intent.approval_status || 'Unknown'}
-          </p>
-        </div>
-      </Card>
+      <Card title="Approval Status" titleIcon={approvalStatusIcon(intent.approval_status)} status={approvalStatusCard(intent.approval_status)} value={intent.approval_status || 'Unknown'} />
 
-      <Card>
-        <div class="detail-section">
-          <h3>Deployment Status</h3>
-          <p class="detail-value" style="color: {getDeploymentStatusColor(intent.deployment_status)}">
-            {intent.deployment_status || 'Unknown'}
-          </p>
-        </div>
-      </Card>
+      <Card title="Deployment Status" titleIcon={deploymentStatusIcon(intent.deployment_status)} status={deploymentStatusCard(intent.deployment_status)} value={intent.deployment_status || 'Unknown'} />
     </div>
 
     <div class="details-card">
-      <Card>
-        <h2>Intent Details</h2>
+      <Card title="Intent Details" titleIcon={DeploymentIcon}>
+        <div class="details-card-body">
         <div class="details-grid">
           <div class="detail-item">
             <span class="detail-label">Artifact ID</span>
-            <span class="detail-value">
+            <span class="detail-value cross-ref-value">
+              <ArtifactIcon size={16} stroke={1.75} aria-hidden="true" />
               {#if intent.artifact_id}
                 <code>{intent.artifact_id}</code>
               {:else}
-                -
+                <span>-</span>
               {/if}
             </span>
           </div>
@@ -270,14 +270,15 @@
             </span>
           </div>
         </div>
+        </div>
       </Card>
     </div>
 
     <div class="runs-section">
-      <h2>Deployment Runs ({runs.length})</h2>
+      <h2 class="section-title"><DeploymentIcon size={20} stroke={1.75} aria-hidden="true" /> <span>Deployment Runs ({runs.length})</span></h2>
       {#if runs.length === 0}
         <EmptyState
-          icon="🏃"
+          iconComponent={DeploymentIcon}
           title="No runs yet"
           message="Deployment runs will appear here once the intent is approved and executed"
         />
@@ -287,7 +288,7 @@
     </div>
   {:else}
     <EmptyState
-      icon="❓"
+      iconComponent={UnknownIcon}
       title="Intent not found"
       message="The requested deployment intent does not exist"
     >
@@ -302,6 +303,7 @@
 <ConfirmDialog
   bind:open={approveOpen}
   title="Approve Deployment"
+  titleIcon={SuccessIcon}
   message={intent && service && environment 
     ? `Approve deployment of ${service.name} to ${environment.name}?` 
     : 'Approve this deployment intent?'}
@@ -321,6 +323,7 @@
 <ConfirmDialog
   bind:open={rejectOpen}
   title="Reject Deployment"
+  titleIcon={WarningIcon}
   message={intent && service && environment 
     ? `Reject deployment of ${service.name} to ${environment.name}?` 
     : 'Reject this deployment intent?'}
@@ -345,6 +348,13 @@
     align-items: flex-start;
     justify-content: space-between;
     margin-bottom: 1.5rem;
+  }
+  .title-with-icon,
+  .section-title,
+  .cross-ref-value {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
   }
   .back-link {
     display: inline-block;
@@ -385,31 +395,11 @@
     gap: 1rem;
     margin-bottom: 1.5rem;
   }
-  .detail-section h3 {
-    font-size: 0.75rem;
-    text-transform: uppercase;
-    color: var(--text-muted);
-    margin: 0 0 0.5rem;
-    font-weight: 600;
-  }
-  .detail-section .detail-value {
-    font-size: 1.25rem;
-    font-weight: 600;
-    color: var(--text-primary);
-    margin: 0;
-  }
-  .detail-section .detail-subtitle {
-    font-size: 0.75rem;
-    color: var(--text-muted);
-    margin: 0.25rem 0 0;
-  }
   .details-card {
     margin-bottom: 1.5rem;
   }
-  .details-card h2 {
-    margin: 0 0 1rem;
-    font-size: 1.125rem;
-    color: var(--text-primary);
+  .details-card-body {
+    margin-top: 1rem;
   }
   .details-grid {
     display: grid;

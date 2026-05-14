@@ -44,7 +44,7 @@ describe('SBOMDetails.svelte', () => {
     expect(text).toContain('Attestation Details');
     expect(text).toContain('SPDX');
     expect(text).toContain('syft@1.2.3');
-    expect(text).toContain('🌸 Blossom');
+    expect(text).toContain('Storage Blossom');
     expect(text).toContain('blossom://sboms/example.spdx.json');
     expect(text).toContain('0123456789abcdef...76543210');
     expect(text).toContain('Package Count 2');
@@ -74,7 +74,7 @@ describe('SBOMDetails.svelte', () => {
 
     const text = textOf(target);
     expect(text).toContain('NTIA Minimum Elements');
-    expect(text).toContain('✓ Compliant');
+    expect(text).toContain('Compliant');
     expect(text).toContain('Supplier Name');
     expect(text).toContain('Dependency Relationships');
     expect(target.querySelectorAll('.ntia-item.passed')).toHaveLength(7);
