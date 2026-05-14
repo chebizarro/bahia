@@ -358,7 +358,7 @@ func (o *DockerObserver) Deploy(ctx context.Context, serviceName, image string, 
 	}
 
 	// Create container.
-	createURL := fmt.Sprintf("%s/v1.43/containers/create?name=%s", o.host, serviceName)
+	createURL := fmt.Sprintf("%s/v1.44/containers/create?name=%s", o.host, serviceName)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, createURL,
 		strings.NewReader(string(bodyJSON)))
 	if err != nil {
@@ -384,7 +384,7 @@ func (o *DockerObserver) Deploy(ctx context.Context, serviceName, image string, 
 	}
 
 	// Start container.
-	startURL := fmt.Sprintf("%s/v1.43/containers/%s/start", o.host, createResp.ID)
+	startURL := fmt.Sprintf("%s/v1.44/containers/%s/start", o.host, createResp.ID)
 	startReq, err := http.NewRequestWithContext(ctx, http.MethodPost, startURL, nil)
 	if err != nil {
 		return fmt.Errorf("creating start request: %w", err)
@@ -419,7 +419,7 @@ func (o *DockerObserver) Restart(ctx context.Context, targetName string) error {
 	if err != nil {
 		return err
 	}
-	restartURL := fmt.Sprintf("%s/v1.43/containers/%s/restart?t=10", o.host, container.ID)
+	restartURL := fmt.Sprintf("%s/v1.44/containers/%s/restart?t=10", o.host, container.ID)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, restartURL, nil)
 	if err != nil {
 		return fmt.Errorf("creating docker restart request: %w", err)
@@ -441,7 +441,7 @@ func (o *DockerObserver) Stop(ctx context.Context, targetName string) error {
 	if err != nil {
 		return err
 	}
-	stopURL := fmt.Sprintf("%s/v1.43/containers/%s/stop?t=10", o.host, container.ID)
+	stopURL := fmt.Sprintf("%s/v1.44/containers/%s/stop?t=10", o.host, container.ID)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, stopURL, nil)
 	if err != nil {
 		return fmt.Errorf("creating docker stop request: %w", err)
@@ -478,7 +478,7 @@ func (o *DockerObserver) StreamLogs(ctx context.Context, serviceName string, opt
 		follow = "true"
 	}
 
-	url := fmt.Sprintf("%s/v1.43/containers/%s/logs?stdout=true&stderr=true&tail=%s&follow=%s&timestamps=true",
+	url := fmt.Sprintf("%s/v1.44/containers/%s/logs?stdout=true&stderr=true&tail=%s&follow=%s&timestamps=true",
 		o.host, containers[0].ID, tail, follow)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
@@ -537,6 +537,7 @@ func (o *DockerObserver) StreamLogs(ctx context.Context, serviceName string, opt
 // --- internal helpers ---
 
 type dockerPortBinding struct {
+	HostIP   string `json:"HostIp,omitempty"`
 	HostPort string `json:"HostPort"`
 }
 
@@ -550,32 +551,47 @@ func buildDockerPortConfig(ports []string) (map[string]struct{}, map[string][]do
 			continue
 		}
 
-		parts := strings.Split(port, ":")
-		if len(parts) != 2 {
-			return nil, nil, fmt.Errorf("invalid port mapping %q: expected hostPort:containerPort", raw)
-		}
-
-		hostPort, containerPort, err := normalizeDockerPortMapping(strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1]), raw)
+		hostIP, hostPort, containerPort, err := splitDockerPortMapping(port)
 		if err != nil {
 			return nil, nil, err
 		}
+		normalizedHostIP, normalizedHostPort, normalizedContainerPort, err := normalizeDockerPortMapping(hostIP, hostPort, containerPort, raw)
+		if err != nil {
+			return nil, nil, err
+		}
+		hostIP, hostPort, containerPort = normalizedHostIP, normalizedHostPort, normalizedContainerPort
 		if _, exists := portBindings[containerPort]; exists {
 			return nil, nil, fmt.Errorf("invalid port mapping %q: duplicate container port %s", raw, containerPort)
 		}
 
 		exposedPorts[containerPort] = struct{}{}
-		portBindings[containerPort] = []dockerPortBinding{{HostPort: hostPort}}
+		portBindings[containerPort] = []dockerPortBinding{{HostIP: hostIP, HostPort: hostPort}}
 	}
 
 	return exposedPorts, portBindings, nil
 }
 
-func normalizeDockerPortMapping(hostPort, containerPort, raw string) (string, string, error) {
+func splitDockerPortMapping(raw string) (string, string, string, error) {
+	last := strings.LastIndex(raw, ":")
+	if last <= 0 || last >= len(raw)-1 {
+		return "", "", "", fmt.Errorf("invalid port mapping %q: expected hostPort:containerPort or hostIP:hostPort:containerPort", raw)
+	}
+	left := strings.TrimSpace(raw[:last])
+	containerPort := strings.TrimSpace(raw[last+1:])
+	second := strings.LastIndex(left, ":")
+	if second == -1 {
+		return "", left, containerPort, nil
+	}
+	return strings.TrimSpace(left[:second]), strings.TrimSpace(left[second+1:]), containerPort, nil
+}
+
+func normalizeDockerPortMapping(hostIP, hostPort, containerPort, raw string) (string, string, string, error) {
+	hostIP = strings.TrimSpace(strings.TrimPrefix(strings.TrimSuffix(hostIP, "]"), "["))
 	if hostPort == "" || containerPort == "" {
-		return "", "", fmt.Errorf("invalid port mapping %q: host and container ports are required", raw)
+		return "", "", "", fmt.Errorf("invalid port mapping %q: host and container ports are required", raw)
 	}
 	if err := validateDockerPortNumber(hostPort); err != nil {
-		return "", "", fmt.Errorf("invalid port mapping %q: invalid host port %q: %w", raw, hostPort, err)
+		return "", "", "", fmt.Errorf("invalid port mapping %q: invalid host port %q: %w", raw, hostPort, err)
 	}
 
 	containerNumber := containerPort
@@ -583,21 +599,21 @@ func normalizeDockerPortMapping(hostPort, containerPort, raw string) (string, st
 	if strings.Contains(containerPort, "/") {
 		parts := strings.Split(containerPort, "/")
 		if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" || strings.TrimSpace(parts[1]) == "" {
-			return "", "", fmt.Errorf("invalid port mapping %q: expected containerPort[/protocol]", raw)
+			return "", "", "", fmt.Errorf("invalid port mapping %q: expected containerPort[/protocol]", raw)
 		}
 		containerNumber = strings.TrimSpace(parts[0])
 		protocol = strings.ToLower(strings.TrimSpace(parts[1]))
 	}
 	if err := validateDockerPortNumber(containerNumber); err != nil {
-		return "", "", fmt.Errorf("invalid port mapping %q: invalid container port %q: %w", raw, containerNumber, err)
+		return "", "", "", fmt.Errorf("invalid port mapping %q: invalid container port %q: %w", raw, containerNumber, err)
 	}
 	switch protocol {
 	case "tcp", "udp", "sctp":
 	default:
-		return "", "", fmt.Errorf("invalid port mapping %q: unsupported protocol %q", raw, protocol)
+		return "", "", "", fmt.Errorf("invalid port mapping %q: unsupported protocol %q", raw, protocol)
 	}
 
-	return hostPort, containerNumber + "/" + protocol, nil
+	return hostIP, hostPort, containerNumber + "/" + protocol, nil
 }
 
 func validateDockerPortNumber(port string) error {
@@ -662,7 +678,7 @@ func (o *DockerObserver) listAllContainers(ctx context.Context) ([]DockerContain
 }
 
 func (o *DockerObserver) listContainersRaw(ctx context.Context, query url.Values) ([]DockerContainer, error) {
-	requestURL := fmt.Sprintf("%s/v1.43/containers/json", o.host)
+	requestURL := fmt.Sprintf("%s/v1.44/containers/json", o.host)
 	if len(query) > 0 {
 		requestURL += "?" + query.Encode()
 	}
@@ -716,7 +732,7 @@ func (o *DockerObserver) stopAndRemove(ctx context.Context, serviceName string) 
 	}
 	for _, c := range containers {
 		// Stop.
-		stopURL := fmt.Sprintf("%s/v1.43/containers/%s/stop?t=10", o.host, c.ID)
+		stopURL := fmt.Sprintf("%s/v1.44/containers/%s/stop?t=10", o.host, c.ID)
 		req, _ := http.NewRequestWithContext(ctx, http.MethodPost, stopURL, nil)
 		resp, err := o.httpClient.Do(req)
 		if err == nil {
@@ -724,7 +740,7 @@ func (o *DockerObserver) stopAndRemove(ctx context.Context, serviceName string) 
 		}
 
 		// Remove.
-		rmURL := fmt.Sprintf("%s/v1.43/containers/%s?force=true", o.host, c.ID)
+		rmURL := fmt.Sprintf("%s/v1.44/containers/%s?force=true", o.host, c.ID)
 		req, _ = http.NewRequestWithContext(ctx, http.MethodDelete, rmURL, nil)
 		resp, err = o.httpClient.Do(req)
 		if err == nil {
@@ -735,7 +751,7 @@ func (o *DockerObserver) stopAndRemove(ctx context.Context, serviceName string) 
 }
 
 func (o *DockerObserver) pullImage(ctx context.Context, image string) error {
-	url := fmt.Sprintf("%s/v1.43/images/create?fromImage=%s", o.host, image)
+	url := fmt.Sprintf("%s/v1.44/images/create?fromImage=%s", o.host, image)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, nil)
 	if err != nil {
 		return err
@@ -771,7 +787,7 @@ func (o *DockerObserver) resolveImageRepoDigest(ctx context.Context, imageRef, i
 	if inspectRef == "" {
 		return "", "", nil
 	}
-	requestURL := fmt.Sprintf("%s/v1.43/images/%s/json", o.host, url.PathEscape(inspectRef))
+	requestURL := fmt.Sprintf("%s/v1.44/images/%s/json", o.host, url.PathEscape(inspectRef))
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, requestURL, nil)
 	if err != nil {
 		return "", "", err

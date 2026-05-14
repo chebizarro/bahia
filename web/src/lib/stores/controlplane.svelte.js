@@ -572,7 +572,7 @@ export async function bootstrapControlplane({ force = false } = {}) {
       controlplaneConnection.status = 'connecting';
       subscribeToConnectionState();
       nostr.setRelays(relays, false);
-      await nostr.connect(relays);
+      await nostr.connect(relays, { force: true });
 
       if (!get(nostr.connected)) {
         throw new Error('Unable to connect to any advertised browser relay');

@@ -131,7 +131,10 @@ export async function discoverSystemInfo({ force = false } = {}) {
       discoveryState.seed = seed;
       const relays = Array.from(new Set(seed.relay_urls.map(normalizeRelayUrl).filter(Boolean)));
       nostr.setRelays(relays, false);
-      await nostr.connect(relays);
+      const summary = await nostr.connect(relays, { force: true });
+      if (summary.connected === 0) {
+        throw new Error('Unable to connect to any bootstrap relay');
+      }
 
       const events = await nostr.queryUntilEose([
         { kinds: [KINDS.BAHIA_SYSTEM_DISCOVERY, KINDS.NIP51_RELAY_SET], authors: seed.service_pubkeys }

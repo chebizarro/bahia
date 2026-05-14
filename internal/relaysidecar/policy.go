@@ -129,7 +129,11 @@ func isRequestKind(kind nostr.Kind) bool {
 }
 
 func isBahiaProjectionKind(kind nostr.Kind) bool {
-	return (kind >= 6961 && kind <= 6991) ||
+	return kind == 30002 ||
+		kind == 30078 ||
+		kind == 30079 ||
+		kind == 31974 ||
+		(kind >= 6961 && kind <= 6991) ||
 		(kind >= 7961 && kind <= 7992) ||
 		(kind >= 31961 && kind <= 31973) ||
 		(kind >= 31000 && kind <= 31099)

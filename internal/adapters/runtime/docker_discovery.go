@@ -157,7 +157,7 @@ func (d *DockerDiscovery) Discover(ctx context.Context, target DockerDiscoveryTa
 }
 
 func (d *DockerDiscovery) inspectContainer(ctx context.Context, containerID string) (*dockerContainerInspect, error) {
-	requestURL := fmt.Sprintf("%s/v1.43/containers/%s/json", d.observer.host, url.PathEscape(containerID))
+	requestURL := fmt.Sprintf("%s/v1.44/containers/%s/json", d.observer.host, url.PathEscape(containerID))
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, requestURL, nil)
 	if err != nil {
 		return nil, err
@@ -181,7 +181,7 @@ func (d *DockerDiscovery) inspectImage(ctx context.Context, imageRef string) (*d
 	if imageRef == "" {
 		return nil, nil
 	}
-	requestURL := fmt.Sprintf("%s/v1.43/images/%s/json", d.observer.host, url.PathEscape(imageRef))
+	requestURL := fmt.Sprintf("%s/v1.44/images/%s/json", d.observer.host, url.PathEscape(imageRef))
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, requestURL, nil)
 	if err != nil {
 		return nil, err
@@ -381,14 +381,23 @@ func normalizeDiscoveredPorts(ports map[string][]dockerPortPublish) []string {
 			continue
 		}
 		portNumber, proto, _ := strings.Cut(containerPort, "/")
+		seen := map[string]struct{}{}
 		for _, binding := range published {
 			if binding.HostPort == "" {
 				continue
 			}
 			mapped := binding.HostPort + ":" + portNumber
+			hostIP := strings.TrimSpace(binding.HostIP)
+			if hostIP != "" && hostIP != "0.0.0.0" && hostIP != "::" {
+				mapped = hostIP + ":" + mapped
+			}
 			if proto != "" && proto != "tcp" {
 				mapped += "/" + proto
 			}
+			if _, ok := seen[mapped]; ok {
+				continue
+			}
+			seen[mapped] = struct{}{}
 			out = append(out, mapped)
 		}
 	}
@@ -507,10 +516,63 @@ func hasUnsupportedNetworkAliases(networks map[string]dockerContainerAttachment,
 			if _, ok := allowed[alias]; ok {
 				continue
 			}
+			if len(alias) == 12 && isHexAlias(alias) {
+				continue
+			}
 			return true
 		}
 	}
 	return false
+}
+
+func isHexAlias(alias string) bool {
+	for _, ch := range alias {
+		if !(ch >= '0' && ch <= '9' || ch >= 'a' && ch <= 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+func uniquePublishedBindings(published []dockerPortPublish) []dockerPortPublish {
+	if len(published) <= 1 {
+		return published
+	}
+	out := make([]dockerPortPublish, 0, len(published))
+	seen := map[string]struct{}{}
+	for _, binding := range published {
+		key := strings.TrimSpace(binding.HostIP) + "|" + strings.TrimSpace(binding.HostPort)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, binding)
+	}
+	return out
+}
+
+func hasUnsupportedMultipleBindings(published []dockerPortPublish) bool {
+	if len(published) <= 1 {
+		return false
+	}
+	if len(published) == 2 {
+		ports := map[string]struct{}{}
+		ipv4 := false
+		ipv6 := false
+		for _, binding := range published {
+			ports[strings.TrimSpace(binding.HostPort)] = struct{}{}
+			switch strings.TrimSpace(binding.HostIP) {
+			case "0.0.0.0", "":
+				ipv4 = true
+			case "::":
+				ipv6 = true
+			}
+		}
+		if len(ports) == 1 && ipv4 && ipv6 {
+			return false
+		}
+	}
+	return true
 }
 
 func unsupportedPortWarnings(ports map[string][]dockerPortPublish) []string {
@@ -522,14 +584,9 @@ func unsupportedPortWarnings(ports map[string][]dockerPortPublish) []string {
 	sort.Strings(keys)
 	for _, containerPort := range keys {
 		published := ports[containerPort]
-		if len(published) > 1 {
+		uniqueBindings := uniquePublishedBindings(published)
+		if hasUnsupportedMultipleBindings(uniqueBindings) {
 			warnings = append(warnings, "multiple host bindings for port "+containerPort+" are not supported")
-		}
-		for _, binding := range published {
-			hostIP := strings.TrimSpace(binding.HostIP)
-			if hostIP != "" && hostIP != "0.0.0.0" && hostIP != "::" {
-				warnings = append(warnings, "host-specific binding for port "+containerPort+" is not supported")
-			}
 		}
 	}
 	return warnings

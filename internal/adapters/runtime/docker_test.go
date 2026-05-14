@@ -42,10 +42,10 @@ func TestDockerDeployAddsPortBindingsAndVolumes(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case r.Method == http.MethodGet && r.URL.Path == "/v1.43/containers/json":
+		case r.Method == http.MethodGet && r.URL.Path == "/v1.44/containers/json":
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`[]`))
-		case r.Method == http.MethodPost && r.URL.Path == "/v1.43/containers/create":
+		case r.Method == http.MethodPost && r.URL.Path == "/v1.44/containers/create":
 			var body map[string]any
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 				handlerErrors.add(fmt.Sprintf("decode create body: %v", err))
@@ -56,7 +56,7 @@ func TestDockerDeployAddsPortBindingsAndVolumes(t *testing.T) {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusCreated)
 			_, _ = w.Write([]byte(`{"Id":"container-123"}`))
-		case r.Method == http.MethodPost && r.URL.Path == "/v1.43/containers/container-123/start":
+		case r.Method == http.MethodPost && r.URL.Path == "/v1.44/containers/container-123/start":
 			w.WriteHeader(http.StatusNoContent)
 		default:
 			handlerErrors.add(fmt.Sprintf("unexpected Docker API request: %s %s", r.Method, r.URL.String()))
@@ -72,7 +72,7 @@ func TestDockerDeployAddsPortBindingsAndVolumes(t *testing.T) {
 	}
 
 	err := observer.Deploy(context.Background(), "api", "registry.example/api:latest", DeployOptions{
-		Ports:   []string{"8080:80", "5353:53/udp", " 8443:443 "},
+		Ports:   []string{"8080:80", "5353:53/udp", "192.168.40.104:8443:443", " 127.0.0.1:9000:9001 "},
 		Volumes: []string{"/var/lib/api:/data:ro", " ", "/tmp/api-cache:/cache"},
 	})
 	if err != nil {
@@ -107,9 +107,10 @@ func TestDockerDeployAddsPortBindingsAndVolumes(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected HostConfig.PortBindings object, got %#v", hostConfig["PortBindings"])
 	}
-	assertHostPort(t, portBindings, "80/tcp", "8080")
-	assertHostPort(t, portBindings, "53/udp", "5353")
-	assertHostPort(t, portBindings, "443/tcp", "8443")
+	assertHostPort(t, portBindings, "80/tcp", "", "8080")
+	assertHostPort(t, portBindings, "53/udp", "", "5353")
+	assertHostPort(t, portBindings, "443/tcp", "192.168.40.104", "8443")
+	assertHostPort(t, portBindings, "9001/tcp", "127.0.0.1", "9000")
 
 	binds, ok := hostConfig["Binds"].([]any)
 	if !ok {
@@ -127,21 +128,21 @@ func TestDockerObserveUsesAllContainersNameFallbackAndRepoDigest(t *testing.T) {
 	handlerErrors := newDockerHandlerErrors()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case r.Method == http.MethodGet && r.URL.Path == "/v1.43/containers/json" && strings.Contains(r.URL.RawQuery, "filters="):
+		case r.Method == http.MethodGet && r.URL.Path == "/v1.44/containers/json" && strings.Contains(r.URL.RawQuery, "filters="):
 			if r.URL.Query().Get("all") != "1" {
 				handlerErrors.add("label query did not include all=1")
 			}
 			sawLabelAll.Store(true)
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`[]`))
-		case r.Method == http.MethodGet && r.URL.Path == "/v1.43/containers/json":
+		case r.Method == http.MethodGet && r.URL.Path == "/v1.44/containers/json":
 			if r.URL.Query().Get("all") != "1" {
 				handlerErrors.add("fallback query did not include all=1")
 			}
 			sawFallbackAll.Store(true)
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`[{"Id":"container-123","Names":["/adopted-api"],"Image":"registry.example/api:latest","ImageID":"sha256:localdigest","State":"exited"}]`))
-		case r.Method == http.MethodGet && r.URL.Path == "/v1.43/images/sha256:localdigest/json":
+		case r.Method == http.MethodGet && r.URL.Path == "/v1.44/images/sha256:localdigest/json":
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"Id":"sha256:localdigest","RepoDigests":["registry.example/api@sha256:repodigest"]}`))
 		default:
@@ -180,10 +181,10 @@ func TestDockerDeployMapsAdoptedRuntimeOptions(t *testing.T) {
 	handlerErrors := newDockerHandlerErrors()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case r.Method == http.MethodGet && r.URL.Path == "/v1.43/containers/json":
+		case r.Method == http.MethodGet && r.URL.Path == "/v1.44/containers/json":
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`[]`))
-		case r.Method == http.MethodPost && r.URL.Path == "/v1.43/containers/create":
+		case r.Method == http.MethodPost && r.URL.Path == "/v1.44/containers/create":
 			var body map[string]any
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 				handlerErrors.add(fmt.Sprintf("decode create body: %v", err))
@@ -194,7 +195,7 @@ func TestDockerDeployMapsAdoptedRuntimeOptions(t *testing.T) {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusCreated)
 			_, _ = w.Write([]byte(`{"Id":"container-123"}`))
-		case r.Method == http.MethodPost && r.URL.Path == "/v1.43/containers/container-123/start":
+		case r.Method == http.MethodPost && r.URL.Path == "/v1.44/containers/container-123/start":
 			w.WriteHeader(http.StatusNoContent)
 		default:
 			handlerErrors.add(fmt.Sprintf("unexpected Docker API request: %s %s", r.Method, r.URL.String()))
@@ -241,16 +242,16 @@ func TestDockerRestartAndStopUseTargetNameFallback(t *testing.T) {
 	handlerErrors := newDockerHandlerErrors()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case r.Method == http.MethodGet && r.URL.Path == "/v1.43/containers/json" && strings.Contains(r.URL.RawQuery, "filters="):
+		case r.Method == http.MethodGet && r.URL.Path == "/v1.44/containers/json" && strings.Contains(r.URL.RawQuery, "filters="):
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`[]`))
-		case r.Method == http.MethodGet && r.URL.Path == "/v1.43/containers/json":
+		case r.Method == http.MethodGet && r.URL.Path == "/v1.44/containers/json":
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`[{"Id":"container-123","Names":["/adopted-api"],"Image":"api","ImageID":"sha256:1","State":"running"}]`))
-		case r.Method == http.MethodPost && r.URL.Path == "/v1.43/containers/container-123/restart":
+		case r.Method == http.MethodPost && r.URL.Path == "/v1.44/containers/container-123/restart":
 			restarted.Store(true)
 			w.WriteHeader(http.StatusNoContent)
-		case r.Method == http.MethodPost && r.URL.Path == "/v1.43/containers/container-123/stop":
+		case r.Method == http.MethodPost && r.URL.Path == "/v1.44/containers/container-123/stop":
 			stopped.Store(true)
 			w.WriteHeader(http.StatusNoContent)
 		default:
@@ -320,13 +321,13 @@ func TestDockerDiscoveryNormalizesContainerInspectData(t *testing.T) {
 	handlerErrors := newDockerHandlerErrors()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case r.Method == http.MethodGet && r.URL.Path == "/v1.43/containers/json":
+		case r.Method == http.MethodGet && r.URL.Path == "/v1.44/containers/json":
 			if r.URL.Query().Get("all") != "1" {
 				handlerErrors.add("discovery query did not include all=1")
 			}
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`[{"Id":"container-123","Names":["/web"],"Image":"registry.example/web:1.2.3","ImageID":"sha256:image123","State":"running"}]`))
-		case r.Method == http.MethodGet && r.URL.Path == "/v1.43/containers/container-123/json":
+		case r.Method == http.MethodGet && r.URL.Path == "/v1.44/containers/container-123/json":
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{
 				"Id":"container-123",
@@ -349,7 +350,7 @@ func TestDockerDiscoveryNormalizesContainerInspectData(t *testing.T) {
 				"HostConfig":{"Binds":["/host/data:/data:ro"],"NetworkMode":"demo_default","RestartPolicy":{"Name":"unless-stopped"}},
 				"NetworkSettings":{"Ports":{"80/tcp":[{"HostPort":"8080"}],"53/udp":[{"HostPort":"5353"}]},"Networks":{"demo_default":{"Aliases":["web","demo-web-1"]}}}
 			}`))
-		case r.Method == http.MethodGet && r.URL.Path == "/v1.43/images/sha256:image123/json":
+		case r.Method == http.MethodGet && r.URL.Path == "/v1.44/images/sha256:image123/json":
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"Id":"sha256:image123","RepoDigests":["registry.example/web@sha256:repo123"]}`))
 		default:
@@ -427,7 +428,6 @@ func TestDockerDiscoveryWarnsUnsupportedRuntimeShape(t *testing.T) {
 	for _, want := range []string{
 		"network aliases cannot be represented",
 		"multiple host bindings for port 80/tcp are not supported",
-		"host-specific binding for port 80/tcp is not supported",
 		"unsupported mount type tmpfs",
 	} {
 		if !strings.Contains(joined, want) {
@@ -452,7 +452,7 @@ func assertStringSlice(t *testing.T, got any, want []string) {
 	}
 }
 
-func assertHostPort(t *testing.T, portBindings map[string]any, containerPort, hostPort string) {
+func assertHostPort(t *testing.T, portBindings map[string]any, containerPort, hostIP, hostPort string) {
 	t.Helper()
 
 	bindings, ok := portBindings[containerPort].([]any)
@@ -465,6 +465,15 @@ func assertHostPort(t *testing.T, portBindings map[string]any, containerPort, ho
 	}
 	if binding["HostPort"] != hostPort {
 		t.Fatalf("expected HostPort %q for %s, got %#v", hostPort, containerPort, binding["HostPort"])
+	}
+	if hostIP == "" {
+		if _, ok := binding["HostIp"]; ok && binding["HostIp"] != "" {
+			t.Fatalf("expected empty HostIp for %s, got %#v", containerPort, binding["HostIp"])
+		}
+		return
+	}
+	if binding["HostIp"] != hostIP {
+		t.Fatalf("expected HostIp %q for %s, got %#v", hostIP, containerPort, binding["HostIp"])
 	}
 }
 
