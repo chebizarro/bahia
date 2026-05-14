@@ -103,6 +103,7 @@ func (r *PgHiveCIRepository) GetRunByEventID(ctx context.Context, eventID string
 
 	var run domain.HiveCIWorkflowRun
 	var state string
+	var processingError sql.NullString
 	if err := row.Scan(
 		&run.RunEventID,
 		&run.RepoCoordinate,
@@ -113,7 +114,7 @@ func (r *PgHiveCIRepository) GetRunByEventID(ctx context.Context, eventID string
 		&run.TriggeredBy,
 		&run.PublisherPubkey,
 		&state,
-		&run.ProcessingError,
+		&processingError,
 		&run.EventCreatedAt,
 		&run.CreatedAt,
 		&run.UpdatedAt,
@@ -124,6 +125,7 @@ func (r *PgHiveCIRepository) GetRunByEventID(ctx context.Context, eventID string
 		return nil, fmt.Errorf("getting hiveci workflow run: %w", err)
 	}
 	run.ProcessingState = domain.HiveCIProcessingState(state)
+	run.ProcessingError = nullStringValue(processingError)
 	return &run, nil
 }
 
@@ -138,6 +140,7 @@ func (r *PgHiveCIRepository) GetResultByEventID(ctx context.Context, eventID str
 
 	var result domain.HiveCIWorkflowResult
 	var state string
+	var processingError sql.NullString
 	if err := row.Scan(
 		&result.ResultEventID,
 		&result.RunEventID,
@@ -151,7 +154,7 @@ func (r *PgHiveCIRepository) GetResultByEventID(ctx context.Context, eventID str
 		&result.ImageDigest,
 		&result.PublisherPubkey,
 		&state,
-		&result.ProcessingError,
+		&processingError,
 		&result.RetryCount,
 		&result.LastRetryAt,
 		&result.EventCreatedAt,
@@ -164,6 +167,7 @@ func (r *PgHiveCIRepository) GetResultByEventID(ctx context.Context, eventID str
 		return nil, fmt.Errorf("getting hiveci workflow result: %w", err)
 	}
 	result.ProcessingState = domain.HiveCIProcessingState(state)
+	result.ProcessingError = nullStringValue(processingError)
 	return &result, nil
 }
 
@@ -185,6 +189,7 @@ func (r *PgHiveCIRepository) ListPendingResults(ctx context.Context) ([]domain.H
 	for rows.Next() {
 		var res domain.HiveCIWorkflowResult
 		var state string
+		var processingError sql.NullString
 		if err := rows.Scan(
 			&res.ResultEventID,
 			&res.RunEventID,
@@ -198,7 +203,7 @@ func (r *PgHiveCIRepository) ListPendingResults(ctx context.Context) ([]domain.H
 			&res.ImageDigest,
 			&res.PublisherPubkey,
 			&state,
-			&res.ProcessingError,
+			&processingError,
 			&res.RetryCount,
 			&res.LastRetryAt,
 			&res.EventCreatedAt,
@@ -208,6 +213,7 @@ func (r *PgHiveCIRepository) ListPendingResults(ctx context.Context) ([]domain.H
 			return nil, fmt.Errorf("scanning hiveci result row: %w", err)
 		}
 		res.ProcessingState = domain.HiveCIProcessingState(state)
+		res.ProcessingError = nullStringValue(processingError)
 		results = append(results, res)
 	}
 
@@ -232,6 +238,7 @@ func (r *PgHiveCIRepository) ListOrphanedResultsByRun(ctx context.Context, runEv
 	for rows.Next() {
 		var res domain.HiveCIWorkflowResult
 		var state string
+		var processingError sql.NullString
 		if err := rows.Scan(
 			&res.ResultEventID,
 			&res.RunEventID,
@@ -245,7 +252,7 @@ func (r *PgHiveCIRepository) ListOrphanedResultsByRun(ctx context.Context, runEv
 			&res.ImageDigest,
 			&res.PublisherPubkey,
 			&state,
-			&res.ProcessingError,
+			&processingError,
 			&res.RetryCount,
 			&res.LastRetryAt,
 			&res.EventCreatedAt,
@@ -255,6 +262,7 @@ func (r *PgHiveCIRepository) ListOrphanedResultsByRun(ctx context.Context, runEv
 			return nil, fmt.Errorf("scanning orphaned hiveci result row: %w", err)
 		}
 		res.ProcessingState = domain.HiveCIProcessingState(state)
+		res.ProcessingError = nullStringValue(processingError)
 		results = append(results, res)
 	}
 	return results, rows.Err()
