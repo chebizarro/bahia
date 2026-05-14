@@ -199,7 +199,8 @@ func New(cfg *config.Config) (*App, error) {
 	workerPolicySvc := service.NewWorkerPolicyService(workerRepo, logger)
 
 	// Runtime resolver — selects Docker, Compose, or Kubernetes per service/environment.
-	runtimeResolver := runtime.NewConfigRuntimeResolver(cfg.Runtime, logger)
+	runtimeRegistryAuth := runtimeRegistryAuth(cfg)
+	runtimeResolver := runtime.NewConfigRuntimeResolver(cfg.Runtime, logger, runtimeRegistryAuth)
 	logger.Info("runtime resolver initialized", zap.String("default_type", cfg.Runtime.Type))
 
 	// Workflow coordinator.
@@ -426,7 +427,7 @@ func New(cfg *config.Config) (*App, error) {
 	var toolCoordinator *service.ToolProvisioningCoordinator
 	toolBuilder := build.NewDockerBuilder(cfg.Runtime.DockerHost, logger)
 	toolSecurity := service.NewToolSecurityService(toolProvisionRepo, nil, logger, service.ToolSecurityConfig{})
-	defaultRuntime, rtErr := runtime.NewRuntime(runtime.RuntimeConfig{Type: cfg.Runtime.Type, DockerHost: cfg.Runtime.DockerHost, ComposeDir: cfg.Runtime.ComposeDir, KubeContext: cfg.Runtime.KubeContext, KubeNamespace: cfg.Runtime.KubeNamespace, KubeConfig: cfg.Runtime.KubeConfig}, logger)
+	defaultRuntime, rtErr := runtime.NewRuntime(runtime.RuntimeConfig{Type: cfg.Runtime.Type, DockerHost: cfg.Runtime.DockerHost, ComposeDir: cfg.Runtime.ComposeDir, RegistryAuth: runtimeRegistryAuth, KubeContext: cfg.Runtime.KubeContext, KubeNamespace: cfg.Runtime.KubeNamespace, KubeConfig: cfg.Runtime.KubeConfig}, logger)
 	if rtErr != nil {
 		logger.Warn("default runtime init for tool provisioning failed", zap.Error(rtErr))
 	}
@@ -744,6 +745,27 @@ func appendUniqueRelay(relays []string, relay string) []string {
 		}
 	}
 	return append(relays, relay)
+}
+
+func runtimeRegistryAuth(cfg *config.Config) *runtime.RegistryAuthConfig {
+	if cfg == nil {
+		return nil
+	}
+	if cfg.Registry.URL != "" && cfg.Registry.Username != "" && cfg.Registry.Password != "" {
+		return &runtime.RegistryAuthConfig{
+			Server:   cfg.Registry.URL,
+			Username: cfg.Registry.Username,
+			Password: cfg.Registry.Password,
+		}
+	}
+	if cfg.Harbor.Enabled && cfg.Harbor.URL != "" && cfg.Harbor.Username != "" && cfg.Harbor.Password != "" {
+		return &runtime.RegistryAuthConfig{
+			Server:   cfg.Harbor.URL,
+			Username: cfg.Harbor.Username,
+			Password: cfg.Harbor.Password,
+		}
+	}
+	return nil
 }
 
 // reconcilerRunner adapts the reconcile.Reconciler to the BackgroundRunner interface.

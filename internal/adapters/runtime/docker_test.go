@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -118,6 +119,66 @@ func TestDockerDeployAddsPortBindingsAndVolumes(t *testing.T) {
 	}
 	if len(binds) != 2 || binds[0] != "/var/lib/api:/data:ro" || binds[1] != "/tmp/api-cache:/cache" {
 		t.Fatalf("unexpected binds: %#v", binds)
+	}
+}
+
+func TestDockerDeployPullAlwaysSendsRegistryAuthForMatchingHost(t *testing.T) {
+	t.Parallel()
+
+	var authHeader string
+	handlerErrors := newDockerHandlerErrors()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/v1.44/containers/json":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`[]`))
+		case r.Method == http.MethodPost && r.URL.Path == "/v1.44/images/create":
+			authHeader = r.Header.Get("X-Registry-Auth")
+			w.WriteHeader(http.StatusOK)
+		case r.Method == http.MethodPost && r.URL.Path == "/v1.44/containers/create":
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"Id":"container-123"}`))
+		case r.Method == http.MethodPost && r.URL.Path == "/v1.44/containers/container-123/start":
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			handlerErrors.add(fmt.Sprintf("unexpected Docker API request: %s %s", r.Method, r.URL.String()))
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	observer := &DockerObserver{
+		httpClient: server.Client(),
+		host:       server.URL,
+		registryAuth: &RegistryAuthConfig{
+			Server:   "https://harbor.sharegap.net",
+			Username: "robot$cascadia+edge01-runtime",
+			Password: "secret-token",
+		},
+		logger: zap.NewNop(),
+	}
+
+	err := observer.Deploy(context.Background(), "ddgs", "harbor.sharegap.net/cascadia/ddgs:pilot-v1", DeployOptions{PullAlways: true})
+	if err != nil {
+		t.Fatalf("Deploy returned error: %v; handler errors: %v", err, handlerErrors.all())
+	}
+	if errors := handlerErrors.all(); len(errors) > 0 {
+		t.Fatalf("handler errors: %v", errors)
+	}
+	if authHeader == "" {
+		t.Fatal("expected X-Registry-Auth header on image pull")
+	}
+	decoded, err := base64.StdEncoding.DecodeString(authHeader)
+	if err != nil {
+		t.Fatalf("decode auth header: %v", err)
+	}
+	var payload map[string]string
+	if err := json.Unmarshal(decoded, &payload); err != nil {
+		t.Fatalf("unmarshal auth header payload: %v", err)
+	}
+	if payload["username"] != "robot$cascadia+edge01-runtime" || payload["password"] != "secret-token" || payload["serveraddress"] != "harbor.sharegap.net" {
+		t.Fatalf("unexpected auth payload: %#v", payload)
 	}
 }
 
