@@ -1,4 +1,6 @@
 <script>
+  import { CloseIcon, ErrorIcon, InfoIcon, SuccessIcon, WarningIcon } from '$lib/icons/domain-icons.js';
+
   let {
     id,
     type = 'info',
@@ -8,11 +10,13 @@
   } = $props();
 
   const icons = {
-    success: '✓',
-    error: '✕',
-    warning: '⚠',
-    info: 'ℹ'
+    success: SuccessIcon,
+    error: ErrorIcon,
+    warning: WarningIcon,
+    info: InfoIcon
   };
+
+  const ToastIcon = $derived(icons[type] || InfoIcon);
 
   function close() {
     onClose?.(id);
@@ -20,7 +24,9 @@
 </script>
 
 <div class="toast {type}" role="alert">
-  <div class="toast-icon">{icons[type]}</div>
+  <div class="toast-icon" aria-hidden="true">
+    <ToastIcon size={20} stroke={1.75} />
+  </div>
   <div class="toast-content">
     {#if title}
       <div class="toast-title">{title}</div>
@@ -28,7 +34,7 @@
     <div class="toast-message">{message}</div>
   </div>
   <button class="toast-close" onclick={close} aria-label="Close">
-    ×
+    <CloseIcon size={18} stroke={1.75} aria-hidden="true" />
   </button>
 </div>
 
@@ -69,8 +75,9 @@
     border-left: 4px solid var(--primary);
   }
   .toast-icon {
-    font-size: 1.25rem;
-    font-weight: bold;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     flex-shrink: 0;
   }
   .toast.success .toast-icon { color: var(--success); }
@@ -96,7 +103,6 @@
   .toast-close {
     background: none;
     border: none;
-    font-size: 1.5rem;
     line-height: 1;
     color: var(--text-muted);
     cursor: pointer;

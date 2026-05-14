@@ -84,7 +84,7 @@ describe('nav model helpers', () => {
     }, false)).toEqual({
       mode: 'anonymous',
       extensionAvailable: false,
-      buttonLabel: '⚠️ No Extension',
+      buttonLabel: 'No Extension',
       buttonTitle: 'No Nostr extension detected (NIP-07)',
       showError: true,
       error: 'missing extension'

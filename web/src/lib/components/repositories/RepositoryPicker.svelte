@@ -1,5 +1,6 @@
 <script>
   import Badge from '$lib/components/Badge.svelte';
+  import { RepositoryIcon } from '$lib/icons/domain-icons.js';
   import RepositorySearchModal from './RepositorySearchModal.svelte';
 
   let {
@@ -54,7 +55,7 @@
   <div class="picker-display" class:disabled class:has-value={hasValue}>
     {#if hasValue}
       <div class="selection-summary">
-        <div class="selection-icon">📦</div>
+        <div class="selection-icon" aria-hidden="true"><RepositoryIcon size={22} stroke={1.75} /></div>
         <div class="selection-info">
           <div class="selection-header">
             <span class="selection-name">{value.displayName}</span>
@@ -137,7 +138,6 @@
   }
 
   .selection-icon {
-    font-size: 1.25rem;
     flex-shrink: 0;
     width: 36px;
     height: 36px;

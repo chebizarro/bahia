@@ -3,6 +3,7 @@
   import { page } from '$app/stores';
   import { theme, toggleTheme } from '$lib/stores/theme.js';
   import { authState, isAuthenticated, login, logout } from '$lib/stores/auth.js';
+  import { LoginIcon, MoonIcon, SunIcon, WarningIcon } from '$lib/icons/domain-icons.js';
   import {
     NAV_SECTIONS,
     PRIMARY_NAV_LINKS,
@@ -152,7 +153,9 @@
               </span>
             </div>
             {#if authUi.showWarning}
-              <span class="auth-warning" title={authUi.warning}>⚠️</span>
+              <span class="auth-warning" title={authUi.warning} aria-label={authUi.warning || 'Authentication warning'}>
+                <WarningIcon size={18} stroke={1.75} aria-hidden="true" />
+              </span>
             {/if}
             <button class="logout-btn" onclick={handleLogout}>
               Log out
@@ -165,19 +168,26 @@
             disabled={!authUi.extensionAvailable}
             title={authUi.buttonTitle}
           >
+            {#if authUi.extensionAvailable}
+              <LoginIcon size={16} stroke={1.75} aria-hidden="true" />
+            {:else}
+              <WarningIcon size={16} stroke={1.75} aria-hidden="true" />
+            {/if}
             {authUi.buttonLabel}
           </button>
           {#if authUi.showError}
-            <span class="auth-error" title={authUi.error}>⚠️</span>
+            <span class="auth-error" title={authUi.error} aria-label={authUi.error || 'Authentication error'}>
+              <WarningIcon size={18} stroke={1.75} aria-hidden="true" />
+            </span>
           {/if}
         {/if}
       </div>
 
       <button class="theme-toggle" onclick={toggleTheme} aria-label="Toggle theme">
         {#if theme.value === 'dark'}
-          ☀️
+          <SunIcon size={18} stroke={1.75} aria-hidden="true" />
         {:else}
-          🌙
+          <MoonIcon size={18} stroke={1.75} aria-hidden="true" />
         {/if}
       </button>
     </div>
@@ -446,15 +456,17 @@
   .auth-error,
   .auth-warning {
     cursor: help;
+    display: inline-flex;
+    align-items: center;
   }
 
-  .auth-warning {
+  .auth-warning,
+  .auth-error {
     color: var(--warning);
   }
 
   .theme-toggle {
     padding-inline: 0.75rem;
-    font-size: 1.15rem;
     display: flex;
     align-items: center;
     justify-content: center;

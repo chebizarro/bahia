@@ -1,5 +1,12 @@
 <script>
   import Badge from '$lib/components/Badge.svelte';
+  import {
+    ConfiguredIcon,
+    ErrorIcon,
+    PendingIcon,
+    RepositoryIcon,
+    SuccessIcon
+  } from '$lib/icons/domain-icons.js';
 
   let {
     repository,
@@ -36,7 +43,7 @@
   {disabled}
   title={disabled && disabledReason ? disabledReason : undefined}
 >
-  <div class="repo-icon">📦</div>
+  <div class="repo-icon" aria-hidden="true"><RepositoryIcon size={24} stroke={1.75} /></div>
   <div class="repo-info">
     <div class="repo-header">
       <h4>{name}</h4>
@@ -61,12 +68,17 @@
         {:else if ciState === 'ready'}
           {#if latestResult}
             <span class="ci-badge" class:success={latestResult.status === 'success'} class:failure={latestResult.status === 'failure'}>
-              {latestResult.status === 'success' ? '✓' : '✗'} {latestResult.status}
+              {#if latestResult.status === 'success'}
+                <SuccessIcon size={14} stroke={2} aria-hidden="true" />
+              {:else}
+                <ErrorIcon size={14} stroke={2} aria-hidden="true" />
+              {/if}
+              {latestResult.status}
             </span>
           {:else if latestRun}
-            <span class="ci-badge pending">⏳ Run observed</span>
+            <span class="ci-badge pending"><PendingIcon size={14} stroke={1.75} aria-hidden="true" /> Run observed</span>
           {:else}
-            <span class="ci-badge configured">⚙ Configured</span>
+            <span class="ci-badge configured"><ConfiguredIcon size={14} stroke={1.75} aria-hidden="true" /> Configured</span>
           {/if}
           {#if linkedServiceCount > 0}
             <span class="ci-linked">{linkedServiceCount} service{linkedServiceCount > 1 ? 's' : ''}</span>
@@ -76,7 +88,7 @@
     {/if}
   </div>
   {#if selected}
-    <span class="check">✓</span>
+    <span class="check" aria-hidden="true"><SuccessIcon size={14} stroke={2} /></span>
   {/if}
 </button>
 
@@ -111,7 +123,6 @@
   }
 
   .repo-icon {
-    font-size: 1.5rem;
     flex-shrink: 0;
     width: 40px;
     height: 40px;
@@ -180,6 +191,9 @@
   }
 
   .ci-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
     padding: 0.15rem 0.4rem;
     border-radius: 4px;
     font-weight: 500;

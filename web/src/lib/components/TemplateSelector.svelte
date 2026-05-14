@@ -1,5 +1,12 @@
 <script>
   import { templates, templatesByTier, loading, loadTemplates } from '$lib/stores/souls.js';
+  import {
+    HeavyIcon,
+    LightweightIcon,
+    StandardIcon,
+    SuccessIcon,
+    TemplateIcon
+  } from '$lib/icons/domain-icons.js';
 
   let {
     selected = null,
@@ -8,17 +15,17 @@
 
   const tierInfo = {
     lightweight: {
-      icon: '⚡',
+      icon: LightweightIcon,
       label: 'Lightweight',
       description: 'Fast, minimal resources. Good for simple tasks.'
     },
     standard: {
-      icon: '🤖',
+      icon: StandardIcon,
       label: 'Standard',
       description: 'Balanced capabilities for most use cases.'
     },
     heavy: {
-      icon: '🦾',
+      icon: HeavyIcon,
       label: 'Heavy',
       description: 'Maximum resources for complex workloads.'
     }
@@ -54,22 +61,23 @@
         class:selected={selected === null}
         onclick={() => selectTemplate(null)}
       >
-        <div class="template-icon">✨</div>
+        <div class="template-icon" aria-hidden="true"><TemplateIcon size={24} stroke={1.75} /></div>
         <div class="template-info">
           <h4>Custom Soul</h4>
           <p>Start from scratch with your own brief</p>
         </div>
         {#if selected === null}
-          <span class="check">✓</span>
+          <span class="check" aria-hidden="true"><SuccessIcon size={14} stroke={2} /></span>
         {/if}
       </button>
     </div>
     
     {#each Object.entries(tierInfo) as [tier, info]}
       {#if groupedTemplates[tier]?.length > 0}
+        {@const TierIcon = info.icon}
         <div class="template-section">
           <h4 class="tier-header">
-            <span class="tier-icon">{info.icon}</span>
+            <span class="tier-icon" aria-hidden="true"><TierIcon size={16} stroke={1.75} /></span>
             {info.label}
             <span class="tier-desc">{info.description}</span>
           </h4>
@@ -81,7 +89,7 @@
                 class:selected={selected?.identifier === template.identifier}
                 onclick={() => selectTemplate(template)}
               >
-                <div class="template-icon">{info.icon}</div>
+                <div class="template-icon" aria-hidden="true"><TierIcon size={24} stroke={1.75} /></div>
                 <div class="template-info">
                   <h4>{template.name}</h4>
                   <p>{template.description || 'No description'}</p>
@@ -94,7 +102,7 @@
                   {/if}
                 </div>
                 {#if selected?.identifier === template.identifier}
-                  <span class="check">✓</span>
+                  <span class="check" aria-hidden="true"><SuccessIcon size={14} stroke={2} /></span>
                 {/if}
               </button>
             {/each}
@@ -163,7 +171,8 @@
   }
   
   .tier-icon {
-    font-size: 1rem;
+    display: inline-flex;
+    align-items: center;
   }
   
   .tier-desc {
@@ -208,7 +217,6 @@
   }
   
   .template-icon {
-    font-size: 1.5rem;
     flex-shrink: 0;
     width: 40px;
     height: 40px;

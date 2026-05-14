@@ -5,6 +5,13 @@
   import EmptyState from '$lib/components/EmptyState.svelte';
   import RepositoryCard from './RepositoryCard.svelte';
   import {
+    EditIcon,
+    EmptyIcon,
+    RepositoryIcon,
+    SearchIcon,
+    WarningIcon
+  } from '$lib/icons/domain-icons.js';
+  import {
     repositories,
     loading,
     error,
@@ -90,7 +97,7 @@
   }
 </script>
 
-<Modal {open} title="Choose Repository" size="lg" onClose={handleClose}>
+<Modal {open} title="Choose Repository" titleIcon={RepositoryIcon} size="lg" onClose={handleClose}>
   <form onsubmit={(event) => event.preventDefault()} class="search-modal" novalidate>
     <div class="tabs">
       <button
@@ -98,7 +105,8 @@
         class:active={activeTab === 'nostr'}
         onclick={() => switchTab('nostr')}
       >
-        🔍 Nostr Repositories
+        <SearchIcon size={16} stroke={1.75} aria-hidden="true" />
+        Nostr Repositories
       </button>
       {#if allowManual}
         <button
@@ -106,7 +114,8 @@
           class:active={activeTab === 'manual'}
           onclick={() => switchTab('manual')}
         >
-          ✏️ Manual Entry
+          <EditIcon size={16} stroke={1.75} aria-hidden="true" />
+          Manual Entry
         </button>
       {/if}
     </div>
@@ -128,7 +137,7 @@
           </div>
         {:else if error.value}
           <EmptyState
-            icon="⚠️"
+            iconComponent={WarningIcon}
             title="Failed to load repositories"
             message={error.value}
             actionLabel="Retry"
@@ -136,7 +145,7 @@
           />
         {:else if filteredRepos.length === 0}
           <EmptyState
-            icon="📭"
+            iconComponent={EmptyIcon}
             title={searchQuery ? 'No matching repositories' : 'No repositories found'}
             message={searchQuery
               ? 'Try a different search term or add a repository manually.'
@@ -218,6 +227,9 @@
   }
 
   .tab {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.375rem;
     padding: 0.75rem 1rem;
     font-size: 0.875rem;
     font-weight: 500;

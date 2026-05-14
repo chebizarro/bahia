@@ -1,18 +1,32 @@
 <script>
+  import {
+    AvatarIcon,
+    DeploymentIcon,
+    ErrorIcon,
+    IdentityIcon,
+    MemoryIcon,
+    PendingIcon,
+    ProfileIcon,
+    SeedIcon,
+    SoulIcon,
+    SuccessIcon,
+    WorkspaceIcon
+  } from '$lib/icons/domain-icons.js';
+
   let {
     run = null,
     onComplete = null
   } = $props();
 
   const steps = [
-    { id: 'generate', label: 'Generate Soul', icon: '🧠' },
-    { id: 'signet', label: 'Create Identity', icon: '🔐' },
-    { id: 'avatar', label: 'Generate Avatar', icon: '🎨' },
-    { id: 'profile', label: 'Publish Profile', icon: '📝' },
-    { id: 'qdrant', label: 'Setup Memory', icon: '💾' },
-    { id: 'memory', label: 'Seed Context', icon: '🌱' },
-    { id: 'workspace', label: 'Init Workspace', icon: '📁' },
-    { id: 'deploy', label: 'Deploy Agent', icon: '🚀' }
+    { id: 'generate', label: 'Generate Soul', icon: SoulIcon },
+    { id: 'signet', label: 'Create Identity', icon: IdentityIcon },
+    { id: 'avatar', label: 'Generate Avatar', icon: AvatarIcon },
+    { id: 'profile', label: 'Publish Profile', icon: ProfileIcon },
+    { id: 'qdrant', label: 'Setup Memory', icon: MemoryIcon },
+    { id: 'memory', label: 'Seed Context', icon: SeedIcon },
+    { id: 'workspace', label: 'Init Workspace', icon: WorkspaceIcon },
+    { id: 'deploy', label: 'Deploy Agent', icon: DeploymentIcon }
   ];
 
   const currentStepIdx = $derived(steps.findIndex((s) => s.id === run?.step));
@@ -26,12 +40,12 @@
 <div class="provisioning-progress">
   {#if !run}
     <div class="empty">
-      <span class="icon">⏳</span>
+      <span class="icon" aria-hidden="true"><PendingIcon size={48} stroke={1.5} /></span>
       <p>Waiting for provisioning to start...</p>
     </div>
   {:else if run.status === 'completed'}
     <div class="completed">
-      <span class="icon">✅</span>
+      <span class="icon" aria-hidden="true"><SuccessIcon size={48} stroke={1.5} /></span>
       <h3>Provisioning Complete!</h3>
       <p>Your agent soul has been created successfully.</p>
       {#if run.result?.data?.npub}
@@ -48,7 +62,7 @@
     </div>
   {:else if run.status === 'failed'}
     <div class="failed">
-      <span class="icon">❌</span>
+      <span class="icon" aria-hidden="true"><ErrorIcon size={48} stroke={1.5} /></span>
       <h3>Provisioning Failed</h3>
       <p>{run.result?.error || run.message || 'An error occurred'}</p>
     </div>
@@ -75,11 +89,12 @@
           class:active={idx === currentStepIdx}
           class:pending={idx > currentStepIdx}
         >
-          <span class="step-icon">
+          <span class="step-icon" aria-hidden="true">
             {#if idx < currentStepIdx}
-              ✓
+              <SuccessIcon size={16} stroke={1.75} />
             {:else}
-              {step.icon}
+              {@const StepIcon = step.icon}
+              <StepIcon size={16} stroke={1.75} />
             {/if}
           </span>
           <span class="step-label">{step.label}</span>
@@ -103,8 +118,7 @@
   }
   
   .empty .icon, .completed .icon, .failed .icon {
-    font-size: 3rem;
-    display: block;
+    display: inline-flex;
     margin-bottom: 1rem;
   }
   
@@ -257,13 +271,10 @@
   }
   
   .step-icon {
-    font-size: 1rem;
     width: 24px;
-    text-align: center;
-  }
-  
-  .step.completed .step-icon {
-    font-size: 0.8rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
   }
   
   .step-label {

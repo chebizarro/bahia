@@ -1,25 +1,49 @@
 import {
   IconAlertTriangle,
+  IconBolt,
+  IconBrain,
+  IconCheck,
   IconCircleCheck,
+  IconCircleX,
   IconClipboardList,
+  IconClockHour4,
   IconCopy,
+  IconDatabase,
+  IconEdit,
   IconFile,
   IconFileText,
   IconFileTypePdf,
+  IconFingerprint,
   IconFlower,
+  IconFolder,
+  IconGauge,
+  IconGitBranch,
   IconInbox,
+  IconInfoCircle,
   IconJson,
+  IconLogin2,
+  IconMoon,
   IconMusic,
   IconPackage,
+  IconPalette,
+  IconPencil,
   IconPhoto,
+  IconPlant,
+  IconProgress,
   IconQuestionMark,
+  IconRobot,
   IconRocket,
   IconRotateClockwise,
+  IconSearch,
   IconServer,
+  IconSettings,
   IconShieldLock,
   IconSignature,
+  IconSparkles,
+  IconSun,
   IconTarget,
-  IconVideo
+  IconVideo,
+  IconX
 } from '@tabler/icons-svelte';
 
 export const ServiceIcon = IconServer;
@@ -31,11 +55,35 @@ export const BlossomIcon = IconFlower;
 export const ProtectedIcon = IconShieldLock;
 export const WarningIcon = IconAlertTriangle;
 export const SuccessIcon = IconCircleCheck;
+export const ErrorIcon = IconCircleX;
+export const InfoIcon = IconInfoCircle;
 export const UnknownIcon = IconQuestionMark;
 export const CopyIcon = IconCopy;
+export const CloseIcon = IconX;
+export const CheckIcon = IconCheck;
 export const SbomIcon = IconClipboardList;
 export const SignatureIcon = IconSignature;
 export const EmptyIcon = IconInbox;
+export const SunIcon = IconSun;
+export const MoonIcon = IconMoon;
+export const LoginIcon = IconLogin2;
+export const SearchIcon = IconSearch;
+export const EditIcon = IconEdit;
+export const PendingIcon = IconClockHour4;
+export const ConfiguredIcon = IconSettings;
+export const RepositoryIcon = IconGitBranch;
+export const SoulIcon = IconBrain;
+export const IdentityIcon = IconFingerprint;
+export const AvatarIcon = IconPalette;
+export const ProfileIcon = IconPencil;
+export const MemoryIcon = IconDatabase;
+export const SeedIcon = IconPlant;
+export const WorkspaceIcon = IconFolder;
+export const ProgressIcon = IconProgress;
+export const TemplateIcon = IconSparkles;
+export const LightweightIcon = IconBolt;
+export const StandardIcon = IconRobot;
+export const HeavyIcon = IconGauge;
 
 export const ImageFileIcon = IconPhoto;
 export const VideoFileIcon = IconVideo;

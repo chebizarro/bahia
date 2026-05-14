@@ -1,5 +1,6 @@
 <script>
   import LoadingButton from './LoadingButton.svelte';
+  import { WarningIcon } from '$lib/icons/domain-icons.js';
 
   let {
     title = 'Error',
@@ -14,7 +15,9 @@
 
 <div class="error-state">
   {#if showIcon}
-    <div class="icon">⚠️</div>
+    <div class="icon" aria-hidden="true">
+      <WarningIcon size={48} stroke={1.5} />
+    </div>
   {/if}
   <h2 class="title">{title}</h2>
   <p class="message">{message}</p>
@@ -45,7 +48,8 @@
     gap: 1rem;
   }
   .icon {
-    font-size: 3rem;
+    display: inline-flex;
+    color: var(--warning, #f59e0b);
     margin-bottom: 0.5rem;
   }
   .title {
