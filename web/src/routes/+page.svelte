@@ -2,6 +2,14 @@
   import Card from '$lib/components/Card.svelte';
   import Table from '$lib/components/Table.svelte';
   import Modal from '$lib/components/Modal.svelte';
+  import {
+    DeploymentIcon,
+    EnvironmentIcon,
+    InfoIcon,
+    ServiceIcon,
+    StandardIcon,
+    WarningIcon
+  } from '$lib/icons/domain-icons.js';
   import { requestPaymentHistoryRecords } from '$lib/stores/payments.svelte.js';
   import { services, environments, states, workers, driftedStates, events, loading, deploymentIntents } from '$lib/stores';
   import { formatDashboardSats, normalizePaymentHistory, summarizeRecentSpend } from './dashboard-cost-summary.js';
@@ -574,23 +582,24 @@
 
   <div class="stats">
     <a href="/services" class="card-link">
-      <Card title="Services" value={services.length} subtitle="Total registered">
+      <Card title="Services" titleIcon={ServiceIcon} value={services.length} subtitle="Total registered">
         <span class="card-action">View services</span>
       </Card>
     </a>
     <a href="/environments" class="card-link">
-      <Card title="Environments" value={environments.length} subtitle="Configured">
+      <Card title="Environments" titleIcon={EnvironmentIcon} value={environments.length} subtitle="Configured">
         <span class="card-action">View environments</span>
       </Card>
     </a>
     <a href="/workers" class="card-link">
-      <Card title="Workers" value={workers.length} subtitle="Available">
+      <Card title="Workers" titleIcon={StandardIcon} value={workers.length} subtitle="Available">
         <span class="card-action">View workers</span>
       </Card>
     </a>
     <a href="#environment-states" class="card-link">
       <Card 
         title="Drifted" 
+        titleIcon={WarningIcon}
         value={driftedStates().length} 
         subtitle={driftedStates().length > 0 ? 'Review drifted rows' : 'All clear'}
         status={driftedStates().length > 0 ? 'error' : 'success'}
@@ -601,6 +610,7 @@
     <a href="/deployments/pending" class="card-link">
       <Card
         title="Pending Approvals"
+        titleIcon={DeploymentIcon}
         value={pendingLoading ? '...' : pendingCount}
         subtitle={pendingSubtitle}
         status={pendingError ? 'error' : pendingCount > 0 ? 'warning' : 'success'}
@@ -639,6 +649,7 @@
 <Modal
   bind:open={serviceDialogOpen}
   title={selectedService ? `${firstPresentString(selectedService.name, selectedService.id)} · Service` : 'Service details'}
+  titleIcon={ServiceIcon}
   onClose={() => {
     serviceDialogOpen = false;
     selectedService = null;
@@ -678,6 +689,7 @@
 <Modal
   bind:open={environmentDialogOpen}
   title={selectedEnvironment ? `${firstPresentString(selectedEnvironment.name, selectedEnvironment.id)} · Environment` : 'Environment details'}
+  titleIcon={EnvironmentIcon}
   onClose={() => {
     environmentDialogOpen = false;
     selectedEnvironment = null;
@@ -713,6 +725,7 @@
 <Modal
   bind:open={activityEventDialogOpen}
   title={selectedActivityEvent ? `${selectedActivityEvent.type} · Event detail` : 'Event detail'}
+  titleIcon={InfoIcon}
   size="lg"
   onClose={() => {
     activityEventDialogOpen = false;

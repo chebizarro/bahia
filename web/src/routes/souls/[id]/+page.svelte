@@ -1,6 +1,19 @@
 <script>
   import { page } from '$app/state';
   import Badge from '$lib/components/Badge.svelte';
+  import {
+    CopyIcon,
+    HeavyIcon,
+    IdentityIcon,
+    LightweightIcon,
+    MemoryIcon,
+    ProtectedIcon,
+    SoulIcon,
+    SuccessIcon,
+    UnknownIcon,
+    WarningIcon,
+    WorkspaceIcon
+  } from '$lib/icons/domain-icons.js';
   import { nostr, fetchSoul, parseSoulEvent, KINDS } from '$lib/nostr/client.js';
   import { fetchSoulHistory, publishSoulAction } from '$lib/stores/souls.js';
   
@@ -34,6 +47,12 @@
     stopped: 'default',
     pending: 'default'
   };
+
+  function handleCopyKeydown(event, copyAction) {
+    if (event.key !== 'Enter' && event.key !== ' ') return;
+    event.preventDefault();
+    copyAction();
+  }
   
   async function loadSoul(id = agentId) {
     loading = true;
@@ -153,7 +172,7 @@
     </div>
   {:else if error}
     <div class="error-state">
-      <span class="icon">😵</span>
+      <span class="icon" aria-hidden="true"><UnknownIcon size={64} stroke={1.5} /></span>
       <h2>Soul Not Found</h2>
       <p>{error}</p>
       <a href="/souls" class="btn-secondary">Back to Gallery</a>
@@ -180,13 +199,19 @@
               <Badge variant={deployStatusColors[soul.deployStatus]}>{soul.deployStatus}</Badge>
             {/if}
             <span class="tier-badge">
-              {#if soul.tier === 'lightweight'}⚡{:else if soul.tier === 'heavy'}🦾{:else}🤖{/if}
+              {#if soul.tier === 'lightweight'}
+                <LightweightIcon size={16} stroke={1.75} aria-hidden="true" />
+              {:else if soul.tier === 'heavy'}
+                <HeavyIcon size={16} stroke={1.75} aria-hidden="true" />
+              {:else}
+                <SoulIcon size={16} stroke={1.75} aria-hidden="true" />
+              {/if}
               {soul.tier}
             </span>
           </div>
           
           {#if soul.nip05}
-            <span class="nip05">✓ {soul.nip05}</span>
+            <span class="nip05"><SuccessIcon size={16} stroke={1.75} aria-hidden="true" /> {soul.nip05}</span>
           {/if}
         </div>
         
@@ -207,31 +232,31 @@
       </div>
 
       {#if actionNotice}
-        <div class="notice-banner">{actionNotice}</div>
+        <div class="notice-banner"><SuccessIcon size={18} stroke={1.75} aria-hidden="true" /> <span>{actionNotice}</span></div>
       {/if}
 
       {#if actionError}
-        <div class="error-banner">{actionError}</div>
+        <div class="error-banner"><WarningIcon size={18} stroke={1.75} aria-hidden="true" /> <span>{actionError}</span></div>
       {/if}
       
       <!-- Info Grid -->
       <div class="info-grid">
         <!-- Identity Section -->
         <section class="info-section">
-          <h3>🔐 Identity</h3>
+          <h3><IdentityIcon size={18} stroke={1.75} aria-hidden="true" /> Identity</h3>
           <dl>
             <dt>npub</dt>
             <!-- svelte-ignore a11y_no_noninteractive_element_interactions, a11y_no_noninteractive_element_to_interactive_role -->
-            <dd class="copyable" onclick={copyNpub} onkeydown={copyNpub} role="button" tabindex="0" title="Click to copy">
+            <dd class="copyable" onclick={copyNpub} onkeydown={(event) => handleCopyKeydown(event, copyNpub)} role="button" tabindex="0" title="Click to copy" aria-label="Copy npub">
               <code>{soul.npub || 'N/A'}</code>
-              <span class="copy-icon">📋</span>
+              <span class="copy-icon" aria-hidden="true"><CopyIcon size={14} stroke={1.75} /></span>
             </dd>
             
             <dt>Public Key</dt>
             <!-- svelte-ignore a11y_no_noninteractive_element_interactions, a11y_no_noninteractive_element_to_interactive_role -->
-            <dd class="copyable" onclick={copyPubkey} onkeydown={copyPubkey} role="button" tabindex="0" title="Click to copy">
+            <dd class="copyable" onclick={copyPubkey} onkeydown={(event) => handleCopyKeydown(event, copyPubkey)} role="button" tabindex="0" title="Click to copy" aria-label="Copy public key">
               <code>{soul.agentPubkey?.slice(0, 16)}...{soul.agentPubkey?.slice(-8) || 'N/A'}</code>
-              <span class="copy-icon">📋</span>
+              <span class="copy-icon" aria-hidden="true"><CopyIcon size={14} stroke={1.75} /></span>
             </dd>
             
             {#if soul.bahiaServiceId}
@@ -243,7 +268,7 @@
         
         <!-- Infrastructure Section -->
         <section class="info-section">
-          <h3>🏗️ Infrastructure</h3>
+          <h3><WorkspaceIcon size={18} stroke={1.75} aria-hidden="true" /> Infrastructure</h3>
           <dl>
             {#if soul.workspace}
               <dt>Workspace</dt>
@@ -266,7 +291,7 @@
         
         <!-- Permissions Section -->
         <section class="info-section wide">
-          <h3>🛡️ Permissions</h3>
+          <h3><ProtectedIcon size={18} stroke={1.75} aria-hidden="true" /> Permissions</h3>
           
           <div class="permissions-grid">
             <div class="perm-group">
@@ -302,14 +327,14 @@
         
         <!-- Soul Content Section -->
         <section class="info-section wide">
-          <h3>📜 Soul Content</h3>
+          <h3><SoulIcon size={18} stroke={1.75} aria-hidden="true" /> Soul Content</h3>
           <div class="soul-content">
             <pre>{soul.content || 'No soul content available'}</pre>
           </div>
         </section>
 
         <section class="info-section wide">
-          <h3>🕰️ Activity & History</h3>
+          <h3><MemoryIcon size={18} stroke={1.75} aria-hidden="true" /> Activity & History</h3>
           {#if historyLoading}
             <p class="history-muted">Loading activity history...</p>
           {:else if historyError}
@@ -383,8 +408,9 @@
   }
   
   .error-state .icon {
-    font-size: 4rem;
-    display: block;
+    color: var(--text-muted);
+    display: flex;
+    justify-content: center;
     margin-bottom: 1rem;
   }
   
@@ -403,6 +429,9 @@
     padding: 0.75rem 1rem;
     margin-bottom: 1rem;
     font-size: 0.875rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
   }
 
   .notice-banner {
@@ -482,11 +511,17 @@
   .tier-badge {
     font-size: 0.8rem;
     color: var(--text-muted);
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
   }
   
   .nip05 {
     font-size: 0.85rem;
     color: var(--success);
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
   }
   
   .hero-actions {
@@ -552,6 +587,9 @@
     margin: 0 0 1rem 0;
     padding-bottom: 0.5rem;
     border-bottom: 1px solid var(--border-color);
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
   }
   
   .info-section dl {
@@ -601,8 +639,9 @@
   }
   
   .copy-icon {
-    font-size: 0.75rem;
     opacity: 0.5;
+    display: inline-flex;
+    align-items: center;
   }
   
   .copyable:hover .copy-icon {

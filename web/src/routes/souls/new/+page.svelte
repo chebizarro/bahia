@@ -4,6 +4,15 @@
   import TemplateSelector from '$lib/components/TemplateSelector.svelte';
   import RepositoryPicker from '$lib/components/repositories/RepositoryPicker.svelte';
   import ProvisioningProgress from '$lib/components/ProvisioningProgress.svelte';
+  import {
+    ConfiguredIcon,
+    LoginIcon,
+    PendingIcon,
+    SeedIcon,
+    SoulIcon,
+    SuccessIcon,
+    WarningIcon
+  } from '$lib/icons/domain-icons.js';
   import { nostr, KINDS } from '$lib/nostr/client.js';
   import { trackProvisioningRun, provisioningRuns } from '$lib/stores/souls.js';
   import { authState, initializeAuth, login, refreshExtensionStatus, signWithAuth } from '$lib/stores/auth.js';
@@ -255,7 +264,7 @@
 <div class="page">
   <header class="page-header">
     <a href="/souls" class="back-link">← Back to Gallery</a>
-    <h1>Create New Soul</h1>
+    <h1><SoulIcon size={28} stroke={1.75} aria-hidden="true" /> Create New Soul</h1>
     <p class="subtitle">Design and provision a new agent identity</p>
   </header>
   
@@ -286,31 +295,31 @@
   {#if step === 3}
     <div class="auth-status" class:authenticated={isAuthenticated} class:error={authError}>
       {#if authError}
-        <span class="icon">⚠️</span>
+        <span class="icon" aria-hidden="true"><WarningIcon size={24} stroke={1.75} /></span>
         <div class="status-content">
           <strong>Extension Error</strong>
           <p>{authError}</p>
         </div>
       {:else if !hasExtension}
-        <span class="icon">🔌</span>
+        <span class="icon" aria-hidden="true"><ConfiguredIcon size={24} stroke={1.75} /></span>
         <div class="status-content">
           <strong>NIP-07 Extension Required</strong>
           <p>Please install a Nostr browser extension (Alby, nos2x, etc.) to sign events</p>
         </div>
       {:else if isAuthenticated && userPubkey}
-        <span class="icon">✓</span>
+        <span class="icon" aria-hidden="true"><SuccessIcon size={24} stroke={1.75} /></span>
         <div class="status-content">
           <strong>Authenticated</strong>
           <p>Pubkey: {userPubkey.slice(0, 8)}...{userPubkey.slice(-8)}</p>
         </div>
       {:else if authState.status === 'authenticating'}
-        <span class="icon">⏳</span>
+        <span class="icon" aria-hidden="true"><PendingIcon size={24} stroke={1.75} /></span>
         <div class="status-content">
           <strong>Requesting Permission</strong>
           <p>Check your extension for approval prompt</p>
         </div>
       {:else}
-        <span class="icon">🔑</span>
+        <span class="icon" aria-hidden="true"><LoginIcon size={24} stroke={1.75} /></span>
         <div class="status-content">
           <strong>NIP-07 Login Required</strong>
           <p>You'll be prompted to authorize signing when you provision the soul</p>
@@ -327,7 +336,7 @@
   <!-- Error -->
   {#if error}
     <div class="error-banner">
-      <span class="icon">⚠️</span>
+      <WarningIcon size={18} stroke={1.75} aria-hidden="true" />
       {error}
     </div>
   {/if}
@@ -408,9 +417,9 @@
           <div class="form-group">
             <label for="tier">Resource Tier</label>
             <select id="tier" bind:value={tier}>
-              <option value="lightweight">⚡ Lightweight - Fast, minimal resources</option>
-              <option value="standard">🤖 Standard - Balanced capabilities</option>
-              <option value="heavy">🦾 Heavy - Maximum resources</option>
+              <option value="lightweight">Lightweight - Fast, minimal resources</option>
+              <option value="standard">Standard - Balanced capabilities</option>
+              <option value="heavy">Heavy - Maximum resources</option>
             </select>
           </div>
           
@@ -467,7 +476,8 @@
             <span class="spinner"></span>
             Submitting...
           {:else}
-            Provision Soul ✨
+            <SeedIcon size={18} stroke={1.75} aria-hidden="true" />
+            Provision Soul
           {/if}
         </button>
       </div>
@@ -478,7 +488,7 @@
   {#if step === 4}
     <div class="wizard-content">
       <div class="publish-success">
-        <span class="icon">✓</span>
+        <span class="icon" aria-hidden="true"><SuccessIcon size={28} stroke={2} /></span>
         <h3>Event Signed & Published</h3>
         <div class="event-details">
           <div class="detail-row">
@@ -525,6 +535,9 @@
   .page-header h1 {
     font-size: 1.75rem;
     margin: 0 0 0.25rem 0;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
   }
   
   .subtitle {
@@ -616,8 +629,10 @@
   }
   
   .auth-status .icon {
-    font-size: 1.5rem;
     flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
   }
   
   .auth-status .status-content {
@@ -842,7 +857,6 @@
     background: #22c55e;
     color: white;
     border-radius: 50%;
-    font-size: 1.5rem;
     margin-bottom: 1rem;
   }
   

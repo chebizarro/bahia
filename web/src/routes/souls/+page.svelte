@@ -2,6 +2,14 @@
   import SoulCard from '$lib/components/SoulCard.svelte';
   import Card from '$lib/components/Card.svelte';
   import {
+    SoulIcon,
+    SeedIcon,
+    SuccessIcon,
+    PendingIcon,
+    WarningIcon,
+    UnknownIcon
+  } from '$lib/icons/domain-icons.js';
+  import {
     emptyStateMessage,
     filterSouls,
     SOUL_STATUS_FILTERS
@@ -46,21 +54,21 @@
 <div class="page">
   <header class="page-header">
     <div class="header-content">
-      <h1>Soul Gallery</h1>
+      <h1><SoulIcon size={28} stroke={1.75} aria-hidden="true" /> Soul Gallery</h1>
       <p class="subtitle">Agent identities provisioned by Soul Factory</p>
     </div>
     <a href="/souls/new" class="btn-primary">
-      <span class="icon">✨</span>
+      <SeedIcon size={18} stroke={1.75} aria-hidden="true" />
       New Soul
     </a>
   </header>
   
   <!-- Stats Cards -->
   <div class="stats-grid">
-    <Card title="Total Souls" value={soulCounts().total} />
-    <Card title="Active" value={soulCounts().active} status="success" />
-    <Card title="Provisioning" value={soulCounts().provisioning} status="warning" />
-    <Card title="Suspended" value={soulCounts().suspended} />
+    <Card title="Total Souls" titleIcon={SoulIcon} value={soulCounts().total} />
+    <Card title="Active" titleIcon={SuccessIcon} value={soulCounts().active} status="success" />
+    <Card title="Provisioning" titleIcon={PendingIcon} value={soulCounts().provisioning} status="warning" />
+    <Card title="Suspended" titleIcon={UnknownIcon} value={soulCounts().suspended} />
   </div>
   
   <!-- Filters -->
@@ -89,7 +97,7 @@
   <!-- Error -->
   {#if error.value}
     <div class="error-banner">
-      <span class="icon">⚠️</span>
+      <WarningIcon size={18} stroke={1.75} aria-hidden="true" />
       {error.value}
     </div>
   {/if}
@@ -102,7 +110,7 @@
     </div>
   {:else if filteredSouls.length === 0}
     <div class="empty-state">
-      <div class="empty-icon">🤖</div>
+      <div class="empty-icon" aria-hidden="true"><SoulIcon size={64} stroke={1.5} /></div>
       <h3>No souls found</h3>
       <p>{emptyStateMessage(filter, search)}</p>
       {#if !search && filter === 'all'}
@@ -136,6 +144,9 @@
     font-size: 1.75rem;
     font-weight: 700;
     margin: 0 0 0.25rem 0;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
   }
   
   .subtitle {
@@ -267,8 +278,11 @@
   }
   
   .empty-icon {
-    font-size: 4rem;
+    color: var(--text-muted);
     margin-bottom: 1rem;
+    opacity: 0.65;
+    display: flex;
+    justify-content: center;
   }
   
   .empty-state h3 {
