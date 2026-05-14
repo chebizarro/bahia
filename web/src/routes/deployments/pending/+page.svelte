@@ -13,7 +13,7 @@
     loadEnvironments
   } from '$lib/stores';
   import { approveDeploymentIntent, rejectDeploymentIntent } from '$lib/stores/public-controlplane.svelte.js';
-  import { SuccessIcon, WarningIcon } from '$lib/icons/domain-icons.js';
+  import { DeploymentIcon, SuccessIcon, WarningIcon } from '$lib/icons/domain-icons.js';
 
   let loading = $state(true);
   let error = $state(null);
@@ -160,7 +160,10 @@
 <div class="page">
   <div class="header">
     <div class="title-row">
-      <h1>Pending Approvals</h1>
+      <h1>
+        <DeploymentIcon size={28} stroke={1.75} aria-hidden="true" />
+        Pending Approvals
+      </h1>
       <span class="count">{pendingIntents.length} pending</span>
     </div>
   </div>
@@ -236,6 +239,15 @@
     display: flex;
     align-items: center;
     gap: 1rem;
+  }
+  h1 {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+  h1 :global(svg) {
+    display: block;
+    flex-shrink: 0;
   }
   .count {
     color: var(--text-muted);

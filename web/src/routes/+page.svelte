@@ -6,6 +6,7 @@
     DeploymentIcon,
     EnvironmentIcon,
     InfoIcon,
+    PaymentIcon,
     ServiceIcon,
     StandardIcon,
     WarningIcon
@@ -621,6 +622,7 @@
     <a href="/payments" class="card-link">
       <Card
         title="Recent Spend"
+        titleIcon={PaymentIcon}
         value={costSummaryValue}
         subtitle={costSummarySubtitle}
         status={costSummaryStatus}
@@ -632,7 +634,10 @@
 
   <div class="sections">
     <section id="environment-states">
-      <h2>Environment States</h2>
+      <h2 class="section-title-with-icon">
+        <WarningIcon size={20} stroke={1.75} aria-hidden="true" />
+        Environment States
+      </h2>
       <Table columns={stateColumns} data={states.slice(0, 10)} onRowClick={handleEnvironmentStatesRowClick} rowClickable={false} />
     </section>
 
@@ -817,6 +822,16 @@
     font-size: 1rem;
     margin-bottom: 1rem;
     color: var(--text-muted);
+  }
+  .section-title-with-icon {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    line-height: 1.2;
+  }
+  .section-title-with-icon :global(svg) {
+    display: block;
+    flex-shrink: 0;
   }
   .hint {
     color: var(--text-muted);

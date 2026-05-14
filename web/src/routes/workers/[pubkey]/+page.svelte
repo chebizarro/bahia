@@ -4,6 +4,7 @@
   import Table from '$lib/components/Table.svelte';
   import ErrorState from '$lib/components/ErrorState.svelte';
   import EmptyState from '$lib/components/EmptyState.svelte';
+  import { PaymentIcon, PendingIcon, StandardIcon } from '$lib/icons/domain-icons.js';
   import { workers, loadWorkers } from '$lib/stores';
 
   let worker = $state(null);
@@ -117,14 +118,17 @@
     <ErrorState message={error} />
   {:else if worker}
     <div class="header">
-      <h1>{worker.name || `Worker ${worker.pubkey?.slice(0, 12)}...`}</h1>
+      <h1>
+        <StandardIcon size={28} stroke={1.75} aria-hidden="true" />
+        {worker.name || `Worker ${worker.pubkey?.slice(0, 12)}...`}
+      </h1>
     </div>
     
     <div class="info-grid">
-      <Card title="Price per Second" value={worker.price_per_sec ? `${worker.price_per_sec} sats/sec` : 'Not available'} />
-      <Card title="Last Seen" value={worker.last_seen?.slice(0, 19).replace('T', ' ') || 'Never'} />
-      <Card title="Capabilities" value={worker.capabilities?.length || 0} />
-      <Card title="Pricing Tiers" value={pricingLoading ? 'Loading...' : pricingData.length} />
+      <Card title="Price per Second" titleIcon={PaymentIcon} value={worker.price_per_sec ? `${worker.price_per_sec} sats/sec` : 'Not available'} />
+      <Card title="Last Seen" titleIcon={PendingIcon} value={worker.last_seen?.slice(0, 19).replace('T', ' ') || 'Never'} />
+      <Card title="Capabilities" titleIcon={StandardIcon} value={worker.capabilities?.length || 0} />
+      <Card title="Pricing Tiers" titleIcon={PaymentIcon} value={pricingLoading ? 'Loading...' : pricingData.length} />
     </div>
 
     <section>
@@ -190,6 +194,13 @@
   }
   .header h1 {
     margin: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+  .header h1 :global(svg) {
+    display: block;
+    flex-shrink: 0;
   }
 
   .info-grid {

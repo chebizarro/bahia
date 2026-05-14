@@ -44,6 +44,7 @@
   .card.error { border-left: 4px solid #ef4444; }
   .card-title {
     font-size: 0.875rem;
+    line-height: 1.2;
     color: var(--text-muted, #888);
     margin-bottom: 0.5rem;
     display: flex;
@@ -51,7 +52,14 @@
     gap: 0.5rem;
   }
   .title-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     flex-shrink: 0;
+    line-height: 0;
+  }
+  .title-icon :global(svg) {
+    display: block;
   }
   .card-value {
     font-size: 2rem;

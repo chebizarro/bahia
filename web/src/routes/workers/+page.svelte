@@ -2,6 +2,7 @@
   import Table from '$lib/components/Table.svelte';
   import { workers, loading, loadWorkers } from '$lib/stores';
   import { goto } from '$app/navigation';
+  import { StandardIcon } from '$lib/icons/domain-icons.js';
   import { inferWorkerStatus, getCapabilityOptions, filterWorkers } from './list-utils.js';
 
   let capabilityFilter = $state('');
@@ -33,7 +34,10 @@
 
 <div class="page">
   <div class="header">
-    <h1>Workers</h1>
+    <h1>
+      <StandardIcon size={28} stroke={1.75} aria-hidden="true" />
+      Workers
+    </h1>
     <span class="count">{filteredWorkers.length} of {workers.length} workers</span>
   </div>
 
@@ -63,6 +67,8 @@
 
 <style>
   .header { display: flex; align-items: center; gap: 1rem; margin-bottom: 1.5rem; }
+  h1 { display: inline-flex; align-items: center; gap: 0.5rem; }
+  h1 :global(svg) { display: block; flex-shrink: 0; }
   .count { color: var(--text-muted); font-size: 0.875rem; }
   .loading { color: var(--text-muted); padding: 2rem; text-align: center; }
 

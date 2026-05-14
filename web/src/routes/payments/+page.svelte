@@ -183,7 +183,10 @@
 <div class="page">
   <div class="header">
     <div>
-      <h1>Payments</h1>
+      <h1>
+        <PaymentIcon size={28} stroke={1.75} aria-hidden="true" />
+        Payments
+      </h1>
       <p class="subtitle">Review worker payment history and export filtered records as CSV.</p>
     </div>
     <LoadingButton variant="secondary" onclick={exportCsv} disabled={filteredPayments.length === 0}>
@@ -275,6 +278,17 @@
     gap: 1rem;
     align-items: flex-start;
     margin-bottom: 1.5rem;
+  }
+
+  h1 {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  h1 :global(svg) {
+    display: block;
+    flex-shrink: 0;
   }
 
   .subtitle {
