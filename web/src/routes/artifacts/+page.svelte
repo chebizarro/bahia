@@ -7,6 +7,8 @@
     ArtifactIcon,
     BlossomIcon,
     ServiceIcon,
+    SuccessIcon,
+    ErrorIcon,
     WarningIcon,
     blossomContentTypeIcon
   } from '$lib/icons/domain-icons.js';
@@ -287,12 +289,19 @@
       <div class="server-status">
         <span class="server-label">Servers:</span>
         {#each blossomServers as server}
-          <span class="server-badge" class:healthy={blossomHealth[server] === 'ok'} class:unhealthy={blossomHealth[server] && blossomHealth[server] !== 'ok'}>
-            {new URL(server).hostname}
-            {#if blossomHealth[server] === 'ok'}
-              ✓
-            {:else if blossomHealth[server]}
-              ✗
+          {@const serverHostname = new URL(server).hostname}
+          {@const serverHealth = blossomHealth[server]}
+          <span
+            class="server-badge"
+            class:healthy={serverHealth === 'ok'}
+            class:unhealthy={serverHealth && serverHealth !== 'ok'}
+            aria-label={serverHealth === 'ok' ? `${serverHostname} healthy` : serverHealth ? `${serverHostname} unhealthy` : serverHostname}
+          >
+            {serverHostname}
+            {#if serverHealth === 'ok'}
+              <SuccessIcon size={14} stroke={2} aria-hidden="true" />
+            {:else if serverHealth}
+              <ErrorIcon size={14} stroke={2} aria-hidden="true" />
             {/if}
           </span>
         {/each}
@@ -424,6 +433,9 @@
     color: var(--text-muted);
   }
   .server-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
     padding: 0.25rem 0.5rem;
     border-radius: 4px;
     background: var(--bg);
