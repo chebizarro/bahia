@@ -2,6 +2,7 @@ package hiveci
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -20,7 +21,7 @@ const (
 )
 
 // ResultConsumer is invoked after a valid workflow result has been persisted.
-type ResultConsumer func(ctx context.Context, runEventID string)
+type ResultConsumer func(ctx context.Context, resultEventID string)
 
 // Subscriber ingests Hive-CI 5401/5402 events from relays and persists parsed records.
 type Subscriber struct {
@@ -197,7 +198,7 @@ func (s *Subscriber) processOrphanedResults(ctx context.Context, runEventID, exp
 		s.logger.Info("orphaned result matched to run", zap.String("run_event_id", runEventID), zap.String("result_event_id", result.ResultEventID))
 		// Invoke callback to process the result
 		if s.onResult != nil {
-			s.onResult(ctx, runEventID)
+			s.onResult(ctx, result.ResultEventID)
 		}
 	}
 }
@@ -260,6 +261,28 @@ func (s *Subscriber) handleWorkflowResult(ctx context.Context, ev *nostr.Event) 
 		return
 	}
 
+	type workflowResultContent struct {
+		ImageRepo   string `json:"image_repo"`
+		ImageTag    string `json:"image_tag"`
+		ImageDigest string `json:"image_digest"`
+	}
+	var content workflowResultContent
+	if strings.TrimSpace(ev.Content) != "" {
+		_ = json.Unmarshal([]byte(ev.Content), &content)
+	}
+	imageRepo := optionalTag(ev, "image_repo")
+	if imageRepo == "" {
+		imageRepo = content.ImageRepo
+	}
+	imageTag := optionalTag(ev, "image_tag")
+	if imageTag == "" {
+		imageTag = content.ImageTag
+	}
+	imageDigest := optionalTag(ev, "image_digest")
+	if imageDigest == "" {
+		imageDigest = content.ImageDigest
+	}
+
 	result := domain.HiveCIWorkflowResult{
 		ResultEventID:   ev.ID,
 		RunEventID:      runEventID,
@@ -268,6 +291,9 @@ func (s *Subscriber) handleWorkflowResult(ctx context.Context, ev *nostr.Event) 
 		DurationSeconds: duration,
 		LogURL:          logURL,
 		Error:           optionalTag(ev, "error"),
+		ImageRepo:       imageRepo,
+		ImageTag:        imageTag,
+		ImageDigest:     imageDigest,
 		PublisherPubkey: ev.PubKey,
 		EventCreatedAt:  ev.CreatedAt.Time(),
 		ProcessingState: processingState,
@@ -279,7 +305,7 @@ func (s *Subscriber) handleWorkflowResult(ctx context.Context, ev *nostr.Event) 
 	}
 	// Only invoke callback if we have the run (otherwise wait for run to arrive)
 	if run != nil && s.onResult != nil {
-		s.onResult(ctx, runEventID)
+		s.onResult(ctx, result.ResultEventID)
 	}
 	s.logger.Info("hiveci workflow result ingested", zap.String("run_event_id", runEventID), zap.String("result_event_id", ev.ID), zap.String("status", status), zap.String("processing_state", string(processingState)))
 }

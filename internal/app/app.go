@@ -158,10 +158,21 @@ func New(cfg *config.Config) (*App, error) {
 	// Image verifier: use Harbor (legacy), or the new multi-registry adapter, or no-op.
 	var verifier service.ImageVerifier
 	var signVerifier mcp.SignatureVerifier
+	var pipelineRegistryInspector registryAdapter.ImageInspector
 	switch {
 	case cfg.Harbor.Enabled:
 		harborClient := harbor.NewClient(cfg.Harbor, logger)
 		verifier = harbor.NewVerifier(harborClient, logger)
+		inspector, err := registryAdapter.NewInspector(registryAdapter.RegistryConfig{
+			Type:     registryAdapter.RegistryHarbor,
+			URL:      cfg.Harbor.URL,
+			Username: cfg.Harbor.Username,
+			Password: cfg.Harbor.Password,
+		}, logger)
+		if err != nil {
+			return nil, fmt.Errorf("creating harbor pipeline inspector: %w", err)
+		}
+		pipelineRegistryInspector = inspector
 		logger.Info("harbor image verification enabled", zap.String("url", cfg.Harbor.URL))
 	case cfg.Registry.URL != "" || cfg.Registry.Type != "":
 		inspector, err := registryAdapter.NewInspector(registryAdapter.RegistryConfig{
@@ -174,6 +185,7 @@ func New(cfg *config.Config) (*App, error) {
 			return nil, fmt.Errorf("creating registry verifier: %w", err)
 		}
 		verifier = &registryAdapter.VerifierAdapter{Inspector: inspector}
+		pipelineRegistryInspector = inspector
 		signVerifier = signing.NewCosignVerifier(inspector, logger)
 		logger.Info("OCI registry verification enabled",
 			zap.String("type", string(cfg.Registry.Type)),
@@ -390,7 +402,7 @@ func New(cfg *config.Config) (*App, error) {
 	// Hive-CI wiring.
 	if cfg.HiveCI.Enabled {
 		hiveRepo := repository.NewPgHiveCIRepository(pool)
-		bridge := pipeline.NewBridge(hiveRepo, buildRepo, artifactRepo, intentRepo, envRepo, ociRepo, cfg.HiveCI.TrustedCIPubkeys, logger)
+		bridge := pipeline.NewBridge(hiveRepo, buildRepo, artifactRepo, intentRepo, envRepo, ociRepo, pipelineRegistryInspector, cfg.HiveCI.TrustedCIPubkeys, logger)
 		// Wrap bridge.ProcessResult to match the ResultConsumer signature (no error return).
 		onResult := func(ctx context.Context, resultEventID string) {
 			if err := bridge.ProcessResult(ctx, resultEventID); err != nil {

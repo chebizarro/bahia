@@ -140,6 +140,10 @@ func (r *PgHiveCIRepository) GetResultByEventID(ctx context.Context, eventID str
 
 	var result domain.HiveCIWorkflowResult
 	var state string
+	var errText sql.NullString
+	var imageRepo sql.NullString
+	var imageTag sql.NullString
+	var imageDigest sql.NullString
 	var processingError sql.NullString
 	if err := row.Scan(
 		&result.ResultEventID,
@@ -148,10 +152,10 @@ func (r *PgHiveCIRepository) GetResultByEventID(ctx context.Context, eventID str
 		&result.ExitCode,
 		&result.DurationSeconds,
 		&result.LogURL,
-		&result.Error,
-		&result.ImageRepo,
-		&result.ImageTag,
-		&result.ImageDigest,
+		&errText,
+		&imageRepo,
+		&imageTag,
+		&imageDigest,
 		&result.PublisherPubkey,
 		&state,
 		&processingError,
@@ -166,6 +170,10 @@ func (r *PgHiveCIRepository) GetResultByEventID(ctx context.Context, eventID str
 		}
 		return nil, fmt.Errorf("getting hiveci workflow result: %w", err)
 	}
+	result.Error = nullStringValue(errText)
+	result.ImageRepo = nullStringValue(imageRepo)
+	result.ImageTag = nullStringValue(imageTag)
+	result.ImageDigest = nullStringValue(imageDigest)
 	result.ProcessingState = domain.HiveCIProcessingState(state)
 	result.ProcessingError = nullStringValue(processingError)
 	return &result, nil
@@ -189,6 +197,10 @@ func (r *PgHiveCIRepository) ListPendingResults(ctx context.Context) ([]domain.H
 	for rows.Next() {
 		var res domain.HiveCIWorkflowResult
 		var state string
+		var errText sql.NullString
+		var imageRepo sql.NullString
+		var imageTag sql.NullString
+		var imageDigest sql.NullString
 		var processingError sql.NullString
 		if err := rows.Scan(
 			&res.ResultEventID,
@@ -197,10 +209,10 @@ func (r *PgHiveCIRepository) ListPendingResults(ctx context.Context) ([]domain.H
 			&res.ExitCode,
 			&res.DurationSeconds,
 			&res.LogURL,
-			&res.Error,
-			&res.ImageRepo,
-			&res.ImageTag,
-			&res.ImageDigest,
+			&errText,
+			&imageRepo,
+			&imageTag,
+			&imageDigest,
 			&res.PublisherPubkey,
 			&state,
 			&processingError,
@@ -212,6 +224,10 @@ func (r *PgHiveCIRepository) ListPendingResults(ctx context.Context) ([]domain.H
 		); err != nil {
 			return nil, fmt.Errorf("scanning hiveci result row: %w", err)
 		}
+		res.Error = nullStringValue(errText)
+		res.ImageRepo = nullStringValue(imageRepo)
+		res.ImageTag = nullStringValue(imageTag)
+		res.ImageDigest = nullStringValue(imageDigest)
 		res.ProcessingState = domain.HiveCIProcessingState(state)
 		res.ProcessingError = nullStringValue(processingError)
 		results = append(results, res)
@@ -238,6 +254,10 @@ func (r *PgHiveCIRepository) ListOrphanedResultsByRun(ctx context.Context, runEv
 	for rows.Next() {
 		var res domain.HiveCIWorkflowResult
 		var state string
+		var errText sql.NullString
+		var imageRepo sql.NullString
+		var imageTag sql.NullString
+		var imageDigest sql.NullString
 		var processingError sql.NullString
 		if err := rows.Scan(
 			&res.ResultEventID,
@@ -246,10 +266,10 @@ func (r *PgHiveCIRepository) ListOrphanedResultsByRun(ctx context.Context, runEv
 			&res.ExitCode,
 			&res.DurationSeconds,
 			&res.LogURL,
-			&res.Error,
-			&res.ImageRepo,
-			&res.ImageTag,
-			&res.ImageDigest,
+			&errText,
+			&imageRepo,
+			&imageTag,
+			&imageDigest,
 			&res.PublisherPubkey,
 			&state,
 			&processingError,
@@ -261,6 +281,10 @@ func (r *PgHiveCIRepository) ListOrphanedResultsByRun(ctx context.Context, runEv
 		); err != nil {
 			return nil, fmt.Errorf("scanning orphaned hiveci result row: %w", err)
 		}
+		res.Error = nullStringValue(errText)
+		res.ImageRepo = nullStringValue(imageRepo)
+		res.ImageTag = nullStringValue(imageTag)
+		res.ImageDigest = nullStringValue(imageDigest)
 		res.ProcessingState = domain.HiveCIProcessingState(state)
 		res.ProcessingError = nullStringValue(processingError)
 		results = append(results, res)
@@ -697,6 +721,7 @@ func isValidHiveCIResultTransition(ctx context.Context, pool hiveCIDB, eventID s
 			domain.HiveCIProcessingStateFailed:        true,
 		},
 		domain.HiveCIProcessingStatePendingResult: {
+			domain.HiveCIProcessingStateProcessed:       true,
 			domain.HiveCIProcessingStateVerified:        true,
 			domain.HiveCIProcessingStateArtifactPending: true,
 			domain.HiveCIProcessingStateRejected:        true,

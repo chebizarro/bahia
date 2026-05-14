@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	registryadapter "github.com/openagentsinc/bahia/internal/adapters/registry"
 	"github.com/openagentsinc/bahia/internal/domain"
 )
 
@@ -263,8 +264,25 @@ func (m *mockEnvRepo) ListByOrg(_ context.Context, _ uuid.UUID) ([]domain.Enviro
 func (m *mockEnvRepo) Update(_ context.Context, _ *domain.Environment) error { return nil }
 func (m *mockEnvRepo) Delete(_ context.Context, _ uuid.UUID) error           { return nil }
 
+type mockRegistryInspector struct {
+	inspections map[string]*registryadapter.ImageInspection
+}
+
+func (m *mockRegistryInspector) InspectImage(_ context.Context, repo, reference string) (*registryadapter.ImageInspection, error) {
+	if m == nil {
+		return nil, nil
+	}
+	return m.inspections[artifactKey(repo, reference)], nil
+}
+func (m *mockRegistryInspector) ListTags(_ context.Context, _ string) ([]string, error) {
+	return nil, nil
+}
+func (m *mockRegistryInspector) GetReferrers(_ context.Context, _, _ string) ([]registryadapter.Referrer, error) {
+	return nil, nil
+}
+
 func newBridgeForTest(h *mockHiveRepo, b *mockBuildRepo, a *mockArtifactRepo, i *mockIntentRepo, e *mockEnvRepo, o *mockOCIRepo) *Bridge {
-	return NewBridge(h, b, a, i, e, o, []string{"trusted-pub"}, nil)
+	return NewBridge(h, b, a, i, e, o, nil, []string{"trusted-pub"}, nil)
 }
 
 func TestBridge_SuccessWithImagePresentCreatesArtifact(t *testing.T) {
@@ -309,6 +327,36 @@ func TestBridge_SuccessWithImageMissingMarksArtifactPending(t *testing.T) {
 	}
 	if h.updated["res-1"] != domain.HiveCIProcessingStateArtifactPending {
 		t.Fatalf("expected artifact_pending state, got %q", h.updated["res-1"])
+	}
+}
+
+func TestBridge_SuccessWithHarborInspectorFallbackCreatesArtifact(t *testing.T) {
+	h := newMockHiveRepo()
+	seedRunResult(h, "success", "trusted-pub", "trusted-pub")
+	h.policy = &domain.HiveCIPipelinePolicy{ServiceID: uuid.New()}
+	b := newMockBuildRepo()
+	a := newMockArtifactRepo()
+	h.results["res-1"].ImageRepo = "harbor.sharegap.net/cascadia/ddgs"
+	h.results["res-1"].ImageTag = "pilot-v1"
+	h.results["res-1"].ImageDigest = "sha256:def"
+	inspector := &mockRegistryInspector{inspections: map[string]*registryadapter.ImageInspection{
+		artifactKey("cascadia/ddgs", "sha256:def"): {
+			Exists:    true,
+			Digest:    "sha256:def",
+			MediaType: "application/vnd.docker.distribution.manifest.v2+json",
+			Size:      456,
+		},
+	}}
+	bridge := NewBridge(h, b, a, newMockIntentRepo(), newMockEnvRepo(), nil, inspector, []string{"trusted-pub"}, nil)
+
+	if err := bridge.ProcessResult(context.Background(), "res-1"); err != nil {
+		t.Fatalf("ProcessResult error: %v", err)
+	}
+	if a.created != 1 {
+		t.Fatalf("expected one artifact created via harbor inspector fallback, got %d", a.created)
+	}
+	if h.updated["res-1"] != domain.HiveCIProcessingStateProcessed {
+		t.Fatalf("expected result state processed, got %q", h.updated["res-1"])
 	}
 }
 
@@ -396,6 +444,9 @@ func TestBridge_StagingAutoDeployCreatesIntent(t *testing.T) {
 	if intent.ApprovalStatus != domain.ApprovalStatusNotRequired {
 		t.Fatalf("expected not_required approval, got %q", intent.ApprovalStatus)
 	}
+	if intent.Status != domain.IntentStatusApproved {
+		t.Fatalf("expected approved intent status, got %q", intent.Status)
+	}
 	if intent.SourceKind != domain.SourceKindEventTriggered {
 		t.Fatalf("expected source kind event_triggered, got %q", intent.SourceKind)
 	}
@@ -435,6 +486,9 @@ func TestBridge_ProtectedEnvCreatesPendingIntent(t *testing.T) {
 	}
 	if intent.ApprovalStatus != domain.ApprovalStatusPending {
 		t.Fatalf("expected pending approval, got %q", intent.ApprovalStatus)
+	}
+	if intent.Status != domain.IntentStatusPending {
+		t.Fatalf("expected pending intent status, got %q", intent.Status)
 	}
 }
 
