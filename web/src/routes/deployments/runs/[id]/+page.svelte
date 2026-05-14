@@ -6,6 +6,7 @@
   import EmptyState from '$lib/components/EmptyState.svelte';
   import { deploymentRuns, loadDeploymentRuns } from '$lib/stores';
   import { loadDeploymentRunLogs } from '$lib/stores/deployment-run-logs.svelte.js';
+  import { DeploymentIcon, UnknownIcon, WarningIcon } from '$lib/icons/domain-icons.js';
 
   let run = $state(null);
   let stdoutLogs = $state('');
@@ -122,7 +123,7 @@
     <p class="loading">Loading deployment run...</p>
   {:else if error}
     <div class="error-state">
-      <p class="error">⚠️ {error}</p>
+      <p class="error inline-icon"><WarningIcon size={18} stroke={1.75} aria-hidden="true" /> <span>{error}</span></p>
       <LoadingButton variant="secondary" onclick={() => goto('/deployments')}>
         Back to Deployments
       </LoadingButton>
@@ -182,7 +183,7 @@
 
       {#if !isCompleted}
         <EmptyState
-          icon="⏳"
+          iconComponent={DeploymentIcon}
           title="Run still in progress"
           message="Stored run logs are available after completion. Live streaming currently uses the service/environment SSE endpoint."
         />
@@ -195,7 +196,7 @@
         {#if logsLoading}
           <p class="loading">Loading run logs...</p>
         {:else if logsError}
-          <p class="error">⚠️ {logsError}</p>
+          <p class="error inline-icon"><WarningIcon size={18} stroke={1.75} aria-hidden="true" /> <span>{logsError}</span></p>
         {:else}
           <pre class="logs">{activeTab === 'stdout' ? (stdoutLogs || '(no stdout logs)') : (stderrLogs || '(no stderr logs)')}</pre>
         {/if}
@@ -203,7 +204,7 @@
     </Card>
   {:else}
     <EmptyState
-      icon="❓"
+      iconComponent={UnknownIcon}
       title="Run not found"
       message="The requested deployment run does not exist"
     />
@@ -227,5 +228,6 @@
   .logs { margin: 0; background: #111827; color: #d1d5db; border: 1px solid var(--border-color); border-radius: 8px; padding: 0.75rem; max-height: 420px; overflow: auto; white-space: pre-wrap; font-size: 0.85rem; }
   .loading { color: var(--text-muted); }
   .error { color: var(--error); }
+  .inline-icon { display: inline-flex; align-items: center; justify-content: center; gap: 0.4rem; }
   .error-state { padding: 2rem; text-align: center; }
 </style>

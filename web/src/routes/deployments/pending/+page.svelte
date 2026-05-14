@@ -13,6 +13,7 @@
     loadEnvironments
   } from '$lib/stores';
   import { approveDeploymentIntent, rejectDeploymentIntent } from '$lib/stores/public-controlplane.svelte.js';
+  import { SuccessIcon, WarningIcon } from '$lib/icons/domain-icons.js';
 
   let loading = $state(true);
   let error = $state(null);
@@ -168,11 +169,11 @@
     <p class="loading">Loading pending approvals...</p>
   {:else if error}
     <div class="error-state">
-      <p class="error">⚠️ {error}</p>
+      <p class="error inline-icon"><WarningIcon size={18} stroke={1.75} aria-hidden="true" /> <span>{error}</span></p>
     </div>
   {:else if pendingIntents.length === 0}
     <EmptyState
-      icon="✅"
+      iconComponent={SuccessIcon}
       title="No pending approvals"
       message="All deployment intents have been reviewed"
     />
@@ -189,6 +190,7 @@
 <ConfirmDialog
   bind:open={approveOpen}
   title="Approve Deployment"
+  titleIcon={SuccessIcon}
   message={actionIntent ? `Approve deployment of ${actionIntent.service_name} to ${actionIntent.environment_name}?` : ''}
   confirmLabel="Approve"
   variant="default"
@@ -206,6 +208,7 @@
 <ConfirmDialog
   bind:open={rejectOpen}
   title="Reject Deployment"
+  titleIcon={WarningIcon}
   message={actionIntent ? `Reject deployment of ${actionIntent.service_name} to ${actionIntent.environment_name}?` : ''}
   confirmLabel="Reject"
   variant="danger"
@@ -251,6 +254,12 @@
     color: var(--error);
     font-size: 0.875rem;
     margin: 0;
+  }
+  .inline-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.4rem;
   }
   .dialog-error {
     color: var(--error);
