@@ -57,6 +57,43 @@ func TestPersonalityServiceMapsPersonaToOpenClawPromptSections(t *testing.T) {
 	}
 }
 
+func TestPersonalityServiceGenerateSystemPromptIncludesPersonaInstructions(t *testing.T) {
+	prompt, err := NewPersonalityService().GenerateSystemPrompt(domain.SoulPersonaSpec{
+		Traits:      []string{"analytical", "patient"},
+		Style:       "concise",
+		Tone:        "warm professional",
+		Constraints: []string{"Do not claim unsupported facts."},
+		SystemPromptSections: map[string]string{
+			"role":      "You are Scout, a research assistant.",
+			"expertise": "Nostr protocol analysis and source-backed research.",
+			"goals":     "Help operators make informed deployment decisions.",
+		},
+	})
+	if err != nil {
+		t.Fatalf("GenerateSystemPrompt error = %v", err)
+	}
+	for _, want := range []string{
+		"### Role\nYou are Scout, a research assistant.",
+		"- Style: concise",
+		"- Tone: warm professional",
+		"- Maintain these persona traits: analytical, patient.",
+		"Expertise:\nNostr protocol analysis and source-backed research.",
+		"Goals:\nHelp operators make informed deployment decisions.",
+		"### Red Lines\nConstraints:\n- Do not claim unsupported facts.",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("prompt missing %q:\n%s", want, prompt)
+		}
+	}
+}
+
+func TestGenerateSystemPromptFunctionReturnsValidationErrors(t *testing.T) {
+	_, err := GenerateSystemPrompt(domain.SoulPersonaSpec{Traits: []string{"curious", "Curious"}})
+	if err == nil || !strings.Contains(err.Error(), "duplicate persona trait") {
+		t.Fatalf("GenerateSystemPrompt error = %v, want duplicate persona trait", err)
+	}
+}
+
 func TestBuildPersonaRuntimeControlParamsDefines38384Contract(t *testing.T) {
 	params, err := BuildPersonaRuntimeControlParams(domain.SoulPersonaSpec{
 		Traits: []string{"patient"},

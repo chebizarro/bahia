@@ -24,6 +24,9 @@ const (
 	OpenClawPromptSectionGuidelines = "guidelines"
 	OpenClawPromptSectionRedLines   = "red_lines"
 
+	personaPromptSectionExpertise = "expertise"
+	personaPromptSectionGoals     = "goals"
+
 	maxPersonaTraits            = 24
 	maxPersonaTraitRunes        = 64
 	maxPersonaStyleToneRunes    = 128
@@ -136,6 +139,20 @@ func MapSoulPersonaToOpenClaw(spec domain.SoulPersonaSpec) (*PersonalityMapping,
 	return NewPersonalityService().Map(spec)
 }
 
+// GenerateSystemPrompt validates the persona spec and returns the assembled
+// system prompt used by runtime agent defaults.
+func (s PersonalityService) GenerateSystemPrompt(spec domain.SoulPersonaSpec) (string, error) {
+	mapping, err := s.Map(spec)
+	if err != nil {
+		return "", err
+	}
+	return mapping.SystemPrompt, nil
+}
+
+func GenerateSystemPrompt(spec domain.SoulPersonaSpec) (string, error) {
+	return NewPersonalityService().GenerateSystemPrompt(spec)
+}
+
 func BuildPersonaRuntimeControlParams(spec domain.SoulPersonaSpec) (map[string]interface{}, error) {
 	mapping, err := MapSoulPersonaToOpenClaw(spec)
 	if err != nil {
@@ -225,6 +242,11 @@ func normalizePersonaSpec(spec domain.SoulPersonaSpec) (domain.SoulPersonaSpec, 
 			normalized.SystemPromptSections[key] = value
 		}
 	}
+	for _, key := range []string{personaPromptSectionExpertise, personaPromptSectionGoals} {
+		if value := seenSections[key]; value != "" {
+			normalized.SystemPromptSections[key] = value
+		}
+	}
 	if len(normalized.SystemPromptSections) == 0 {
 		normalized.SystemPromptSections = nil
 	}
@@ -272,6 +294,10 @@ func canonicalPromptSection(key string) (string, bool) {
 		return OpenClawPromptSectionGuidelines, true
 	case "redlines", OpenClawPromptSectionRedLines:
 		return OpenClawPromptSectionRedLines, true
+	case personaPromptSectionExpertise:
+		return personaPromptSectionExpertise, true
+	case "goal", personaPromptSectionGoals:
+		return personaPromptSectionGoals, true
 	default:
 		return "", false
 	}
@@ -302,6 +328,14 @@ func buildPersonaGuidelines(spec domain.SoulPersonaSpec) []string {
 	}
 	if len(spec.Traits) > 0 {
 		lines = append(lines, "- Maintain these persona traits: "+strings.Join(spec.Traits, ", ")+".")
+	}
+	if spec.SystemPromptSections != nil {
+		if expertise := strings.TrimSpace(spec.SystemPromptSections[personaPromptSectionExpertise]); expertise != "" {
+			lines = append(lines, "Expertise:\n"+expertise)
+		}
+		if goals := strings.TrimSpace(spec.SystemPromptSections[personaPromptSectionGoals]); goals != "" {
+			lines = append(lines, "Goals:\n"+goals)
+		}
 	}
 	return lines
 }
