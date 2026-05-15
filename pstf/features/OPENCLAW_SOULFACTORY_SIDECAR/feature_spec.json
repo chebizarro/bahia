@@ -1,0 +1,20 @@
+{
+  "feature_id": "OPENCLAW_SOULFACTORY_SIDECAR",
+  "issue": "bahia-8ycd.4",
+  "summary": "Owned Bahia-maintained OpenClaw SoulFactory sidecar adapter for the shared Nostr runtime control contract.",
+  "observed_context": [
+    "docs/plans/soulfactory-nostr-agent-lifecycle-2026-05-14.md defines runtime capability/control/result kinds 30317/38384/38386 and forbids REST lifecycle control or polling completion semantics.",
+    "docs/soulfactory-runtime-control.md defines required tags, request/result envelopes, trust, idempotency, and method params.",
+    "The product decision for bahia-8ycd.4 requires an owned sidecar rather than direct upstream OpenClaw modifications."
+  ],
+  "intended_behavior": [
+    "The sidecar publishes compatible OpenClaw runtime capabilities.",
+    "The sidecar validates signed addressed SoulFactory control requests before invoking local OpenClaw control seams.",
+    "The sidecar publishes correlated runtime results and avoids REST/polling completion semantics."
+  ],
+  "out_of_scope": [
+    "Modifying /Users/bizarro/Documents/Dev/openclaw.",
+    "Adding SoulFactory lifecycle REST APIs.",
+    "Changing Metiq or Swarmstr behavior."
+  ]
+}

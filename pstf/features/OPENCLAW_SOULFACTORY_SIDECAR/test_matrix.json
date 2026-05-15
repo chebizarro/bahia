@@ -1,0 +1,35 @@
+{
+  "feature_id": "OPENCLAW_SOULFACTORY_SIDECAR",
+  "tests": [
+    {
+      "id": "OCSS-T-001",
+      "name": "Capability announcement",
+      "command": "go test ./internal/soulfactory -run TestOpenClawSidecarPublishesCompatibleCapability",
+      "criteria": ["OCSS-AC-001", "OCSS-AC-005"]
+    },
+    {
+      "id": "OCSS-T-002",
+      "name": "Validation gate",
+      "command": "go test ./internal/soulfactory -run TestOpenClawSidecarValidatesTrustAddressingAndRequiredParams",
+      "criteria": ["OCSS-AC-002"]
+    },
+    {
+      "id": "OCSS-T-003",
+      "name": "Provision execution and correlated result",
+      "command": "go test ./internal/soulfactory -run TestOpenClawSidecarExecutesProvisionAndPublishesCorrelatedResult",
+      "criteria": ["OCSS-AC-003", "OCSS-AC-004", "OCSS-AC-005"]
+    },
+    {
+      "id": "OCSS-T-004",
+      "name": "Idempotent replay",
+      "command": "go test ./internal/soulfactory -run 'TestOpenClawSidecar(IdempotentReplayDoesNotRepeatSideEffects|PersistsIdempotencyAcrossRestart)'",
+      "criteria": ["OCSS-AC-002"]
+    },
+    {
+      "id": "OCSS-T-005",
+      "name": "Lifecycle suspend execution",
+      "command": "go test ./internal/soulfactory -run TestOpenClawSidecarExecutesLifecycleSuspend",
+      "criteria": ["OCSS-AC-003", "OCSS-AC-004"]
+    }
+  ]
+}

@@ -1,0 +1,31 @@
+{
+  "feature_id": "OPENCLAW_SOULFACTORY_SIDECAR",
+  "issue": "bahia-8ycd.4",
+  "criteria": [
+    {
+      "id": "OCSS-AC-001",
+      "statement": "An owned Bahia sidecar publishes compatible kind 30317 runtime=openclaw capability announcements without requiring upstream OpenClaw modifications.",
+      "tests": ["OCSS-T-001"]
+    },
+    {
+      "id": "OCSS-AC-002",
+      "statement": "The sidecar accepts only signed, addressed kind 38384 soulfactory.* requests from trusted SoulFactory controller pubkeys and validates schema, tags, content, signature, addressing, idempotency, and correlation before side effects.",
+      "tests": ["OCSS-T-002", "OCSS-T-004"]
+    },
+    {
+      "id": "OCSS-AC-003",
+      "statement": "The sidecar drives OpenClaw through an owned local command-driver seam rather than a SoulFactory REST lifecycle API or upstream OpenClaw patch dependency.",
+      "tests": ["OCSS-T-003", "OCSS-T-005"]
+    },
+    {
+      "id": "OCSS-AC-004",
+      "statement": "The sidecar publishes signed, correlated kind 38386 results for provision and lifecycle requests.",
+      "tests": ["OCSS-T-003", "OCSS-T-005"]
+    },
+    {
+      "id": "OCSS-AC-005",
+      "statement": "The sidecar preserves event-native behavior with scoped subscriptions, EOSE backfill transition, OK-enforced publication, and no polling or sleep-based completion semantics.",
+      "tests": ["OCSS-T-001", "OCSS-T-003"]
+    }
+  ]
+}
