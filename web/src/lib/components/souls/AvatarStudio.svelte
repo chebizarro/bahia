@@ -1,41 +1,41 @@
 <script>
-  let { value = $bindable(), showAdvanced = false } = $props();
+  let {
+    value = $bindable(),
+    showAdvanced = false,
+    onGenerate = null,
+    disabled = false
+  } = $props();
 
+  const maxPromptLength = 1200;
+  const avatarProviders = [
+    { id: 'flux-comfyui', label: 'FLUX / ComfyUI' },
+    { id: 'fal', label: 'Fal.ai' },
+    { id: 'replicate', label: 'Replicate' }
+  ];
   const stylePresets = [
-    { id: 'pixel-art', label: 'Pixel art', description: 'Crisp icon-like agent portrait' },
-    { id: 'corporate', label: 'Corporate', description: 'Polished assistant headshot' },
-    { id: 'abstract', label: 'Abstract', description: 'Symbolic identity mark' },
-    { id: 'anime', label: 'Anime', description: 'Expressive illustrated character' }
+    { id: 'pixel-art', label: 'Pixel art', swatch: '▦', description: 'Crisp icon-like agent portrait' },
+    { id: 'corporate', label: 'Corporate', swatch: '◉', description: 'Polished assistant headshot' },
+    { id: 'abstract', label: 'Abstract', swatch: '✦', description: 'Symbolic identity mark' },
+    { id: 'anime', label: 'Anime', swatch: '◒', description: 'Expressive illustrated character' },
+    { id: 'realistic', label: 'Realistic', swatch: '◎', description: 'Detailed cinematic portrait' }
   ];
 
-  const currentMode = $derived(value?.current || 'generated');
-  const generation = $derived(value?.generation || {});
-  const previewRef = $derived(
-    currentMode === 'uploaded'
-      ? value?.uploaded_ref || ''
-      : value?.generated_ref || value?.uploaded_ref || ''
-  );
+  let generating = $state(false);
+  let generationMessage = $state('');
+  let generationError = $state('');
+  let zoomPreview = $state(false);
+  let uploadName = $state('');
+  let history = $state([]);
 
-  function patch(updates) {
-    value = {
-      generation: {
-        prompt: '',
-        style_preset: 'pixel-art',
-        seed: '',
-        width: 512,
-        height: 512,
-        provider: 'flux-comfyui'
-      },
-      uploaded_ref: '',
-      generated_ref: '',
-      current: 'generated',
-      ...(value || {}),
-      ...updates
-    };
-  }
+  const spec = $derived(value || defaultAvatarSpec());
+  const generation = $derived(spec.generation || defaultAvatarSpec().generation);
+  const currentMode = $derived(spec.current || 'generated');
+  const previewRef = $derived(resolveAvatarRef(spec));
+  const promptLength = $derived((generation.prompt || '').length);
+  const canGenerate = $derived(!disabled && !generating && (generation.prompt || '').trim().length > 0);
 
-  function patchGeneration(updates) {
-    patch({
+  function defaultAvatarSpec(overrides = {}) {
+    return {
       generation: {
         prompt: '',
         style_preset: 'pixel-art',
@@ -43,6 +43,44 @@
         width: 512,
         height: 512,
         provider: 'flux-comfyui',
+        ...(overrides.generation || {})
+      },
+      uploaded_ref: '',
+      generated_ref: '',
+      current: 'generated',
+      ...overrides
+    };
+  }
+
+  function resolveAvatarRef(avatar = {}) {
+    const current = avatar.current || 'generated';
+    if (current === 'uploaded') return avatar.uploaded_ref || avatar.generated_ref || '';
+    return avatar.generated_ref || avatar.uploaded_ref || '';
+  }
+
+  function normalizedSpec(overrides = {}) {
+    return defaultAvatarSpec({ ...(value || {}), ...overrides });
+  }
+
+  function rememberVariant(ref, source = currentMode) {
+    if (!ref || history.some((item) => item.ref === ref)) return;
+    history = [
+      { ref, source, style: generation.style_preset || 'pixel-art', provider: generation.provider || 'flux-comfyui' },
+      ...history
+    ].slice(0, 12);
+  }
+
+  function patch(updates) {
+    const next = normalizedSpec(updates);
+    value = next;
+    const ref = resolveAvatarRef(next);
+    if (ref) rememberVariant(ref, next.current || 'generated');
+  }
+
+  function patchGeneration(updates) {
+    patch({
+      generation: {
+        ...defaultAvatarSpec().generation,
         ...(value?.generation || {}),
         ...updates
       }
@@ -52,88 +90,198 @@
   function randomizeSeed() {
     patchGeneration({ seed: `avatar-${Math.random().toString(36).slice(2, 10)}` });
   }
+
+  async function generateAvatar() {
+    if (!canGenerate) return;
+    generating = true;
+    generationError = '';
+    generationMessage = 'Publishing avatar generation request via Nostr runtime control…';
+
+    try {
+      const request = normalizedSpec({ current: 'generated' });
+      let result = null;
+      if (onGenerate) {
+        result = await onGenerate(request);
+      }
+
+      const generatedRef = result?.ref || result?.avatar_ref || result?.avatarRef || result?.generated_ref || '';
+      if (generatedRef) {
+        patch({ generated_ref: generatedRef, current: 'generated' });
+        generationMessage = 'Generation result received.';
+      } else {
+        patch({ current: 'generated' });
+        generationMessage = onGenerate
+          ? 'Generation request sent. Waiting for runtime result events.'
+          : 'Avatar draft is ready. Save this draft to publish runtime control through SoulFactory.';
+      }
+    } catch (err) {
+      generationError = err.message || 'Avatar generation request failed';
+      generationMessage = '';
+    } finally {
+      generating = false;
+    }
+  }
+
+  function handleUpload(event) {
+    const file = event.currentTarget.files?.[0];
+    if (!file) return;
+    const ref = URL.createObjectURL(file);
+    uploadName = file.name;
+    patch({ uploaded_ref: ref, current: 'uploaded' });
+  }
+
+  function selectHistory(ref) {
+    if (!ref) return;
+    if (ref === spec.uploaded_ref) {
+      patch({ current: 'uploaded' });
+    } else {
+      patch({ generated_ref: ref, current: 'generated' });
+    }
+  }
+
+  function isImageRef(ref) {
+    return ref?.startsWith('http') || ref?.startsWith('blob:') || ref?.startsWith('data:image/');
+  }
 </script>
 
-<section class="studio-panel">
+<section class="studio-panel" aria-busy={generating}>
   <div class="panel-header">
     <div>
       <h3>Avatar Studio</h3>
-      <p>Draft an avatar prompt and reference. Generation hooks will attach to SoulFactory runtime control later.</p>
+      <p>Create or attach avatar refs through the draft. Runtime generation is submitted with Nostr control events by the parent flow.</p>
     </div>
     <span class="mode-pill">{currentMode}</span>
   </div>
 
   <div class="studio-grid">
     <div class="form-stack">
-      <label>Avatar prompt<textarea rows="4" value={generation.prompt || ''} oninput={(event) => patchGeneration({ prompt: event.currentTarget.value })} placeholder="Pixel art owl researcher with a magnifying glass"></textarea></label>
+      <label>
+        <span>Avatar prompt</span>
+        <textarea rows="5" maxlength={maxPromptLength} value={generation.prompt || ''} disabled={disabled || generating} oninput={(event) => patchGeneration({ prompt: event.currentTarget.value })} placeholder="Pixel art owl researcher with a magnifying glass, warm amber eyes, transparent background"></textarea>
+        <small class:warn={promptLength > maxPromptLength * 0.9}>{promptLength}/{maxPromptLength} characters</small>
+      </label>
+
+      <label>
+        <span>Provider</span>
+        <select value={generation.provider || 'flux-comfyui'} disabled={disabled || generating} onchange={(event) => patchGeneration({ provider: event.currentTarget.value })}>
+          {#each avatarProviders as provider}
+            <option value={provider.id}>{provider.label}</option>
+          {/each}
+        </select>
+      </label>
 
       <div class="preset-grid" aria-label="Avatar style presets">
         {#each stylePresets as preset}
-          <button type="button" class="preset-card" class:selected={generation.style_preset === preset.id} onclick={() => patchGeneration({ style_preset: preset.id })}>
+          <button type="button" class="preset-card" class:selected={generation.style_preset === preset.id} disabled={disabled || generating} onclick={() => patchGeneration({ style_preset: preset.id })}>
+            <span class="preset-swatch" aria-hidden="true">{preset.swatch}</span>
             <strong>{preset.label}</strong>
             <span>{preset.description}</span>
           </button>
         {/each}
       </div>
 
-      <div class="two-col">
-        <label>Use ref<select value={currentMode} onchange={(event) => patch({ current: event.currentTarget.value })}><option value="generated">Generated</option><option value="uploaded">Uploaded</option></select></label>
-        <label>Generated ref<input value={value?.generated_ref || ''} oninput={(event) => patch({ generated_ref: event.currentTarget.value })} placeholder="blossom:… or https://…" /></label>
+      <div class="action-row">
+        <button type="button" class="btn-primary" disabled={!canGenerate} onclick={generateAvatar}>{generating ? 'Generating…' : 'Generate avatar'}</button>
+        <label class="upload-button">
+          Upload image
+          <input type="file" accept="image/*" disabled={disabled || generating} onchange={handleUpload} />
+        </label>
       </div>
-      <label>Uploaded ref<input value={value?.uploaded_ref || ''} oninput={(event) => patch({ uploaded_ref: event.currentTarget.value })} placeholder="blob:, blossom:, https://…" /></label>
+
+      {#if generationMessage}
+        <div class="status-message">{generationMessage}</div>
+      {/if}
+      {#if generationError}
+        <div class="error-message">{generationError}</div>
+      {/if}
+
+      <div class="two-col">
+        <label>Use ref<select value={currentMode} disabled={disabled || generating} onchange={(event) => patch({ current: event.currentTarget.value })}><option value="generated">Generated</option><option value="uploaded">Uploaded</option></select></label>
+        <label>Generated ref<input value={spec.generated_ref || ''} disabled={disabled || generating} oninput={(event) => patch({ generated_ref: event.currentTarget.value })} placeholder="blossom:… or https://…" /></label>
+      </div>
+      <label>Uploaded/blob ref<input value={spec.uploaded_ref || ''} disabled={disabled || generating} oninput={(event) => patch({ uploaded_ref: event.currentTarget.value })} placeholder="blob:, blossom:, https://…" /></label>
+      {#if uploadName}<small>Selected upload: {uploadName}</small>{/if}
 
       {#if showAdvanced}
         <div class="advanced-box">
           <h4>Advanced generation</h4>
           <div class="two-col">
-            <label>Provider<input value={generation.provider || ''} oninput={(event) => patchGeneration({ provider: event.currentTarget.value })} placeholder="flux-comfyui" /></label>
-            <label>Seed<div class="inline-field"><input value={generation.seed || ''} oninput={(event) => patchGeneration({ seed: event.currentTarget.value })} placeholder="optional" /><button type="button" class="mini-button" onclick={randomizeSeed}>Random</button></div></label>
-          </div>
-          <div class="two-col">
-            <label>Width<input type="number" min="128" step="64" value={generation.width || 512} oninput={(event) => patchGeneration({ width: Number(event.currentTarget.value) || 512 })} /></label>
-            <label>Height<input type="number" min="128" step="64" value={generation.height || 512} oninput={(event) => patchGeneration({ height: Number(event.currentTarget.value) || 512 })} /></label>
+            <label>Seed<div class="inline-field"><input value={generation.seed || ''} disabled={disabled || generating} oninput={(event) => patchGeneration({ seed: event.currentTarget.value })} placeholder="optional" /><button type="button" class="mini-button" disabled={disabled || generating} onclick={randomizeSeed}>Random</button></div></label>
+            <label>Size<div class="inline-field"><input aria-label="Width" type="number" min="128" step="64" value={generation.width || 512} disabled={disabled || generating} oninput={(event) => patchGeneration({ width: Number(event.currentTarget.value) || 512 })} /><input aria-label="Height" type="number" min="128" step="64" value={generation.height || 512} disabled={disabled || generating} oninput={(event) => patchGeneration({ height: Number(event.currentTarget.value) || 512 })} /></div></label>
           </div>
         </div>
       {/if}
     </div>
 
     <aside class="preview-card">
-      <div class="preview-frame">
-        {#if previewRef && previewRef.startsWith('http')}
+      <div class="preview-header">
+        <strong>Preview</strong>
+        <button type="button" class="mini-button" disabled={!previewRef || !isImageRef(previewRef)} onclick={() => (zoomPreview = !zoomPreview)}>{zoomPreview ? 'Fit' : 'Zoom'}</button>
+      </div>
+      <div class="preview-frame" class:zoomed={zoomPreview}>
+        {#if previewRef && isImageRef(previewRef)}
           <img src={previewRef} alt="Avatar preview" />
         {:else}
           <span>{previewRef ? 'Avatar ref saved' : 'No avatar preview yet'}</span>
         {/if}
       </div>
-      <p>Preview uses direct HTTP refs today. Blossom/blob resolution will be handled by the generation service.</p>
-      <button type="button" class="btn-secondary" disabled>Regenerate placeholder</button>
+      {#if previewRef}<code class="ref-chip">{previewRef}</code>{/if}
+
+      <div class="history-panel">
+        <strong>Variant history</strong>
+        {#if history.length === 0}
+          <p>No generated or uploaded variants yet.</p>
+        {:else}
+          <div class="history-strip">
+            {#each history as item}
+              <button type="button" title={item.ref} class:selected={item.ref === previewRef} onclick={() => selectHistory(item.ref)}>
+                {#if isImageRef(item.ref)}<img src={item.ref} alt="Avatar variant" />{:else}<span>{item.source}</span>{/if}
+              </button>
+            {/each}
+          </div>
+        {/if}
+      </div>
     </aside>
   </div>
 </section>
 
 <style>
   .studio-panel { display: grid; gap: 1rem; }
-  .panel-header { display: flex; justify-content: space-between; gap: 1rem; align-items: flex-start; }
+  .panel-header, .preview-header, .action-row { display: flex; justify-content: space-between; gap: 1rem; align-items: flex-start; }
   h3, h4, p { margin: 0; }
-  p { color: var(--text-muted); font-size: 0.85rem; }
-  .mode-pill { border: 1px solid var(--border-color); border-radius: 999px; padding: 0.25rem 0.6rem; color: var(--text-muted); font-size: 0.75rem; text-transform: uppercase; }
-  .studio-grid { display: grid; grid-template-columns: minmax(0, 1fr) 260px; gap: 1rem; }
-  .form-stack, .advanced-box { display: grid; gap: 0.85rem; }
+  p, small { color: var(--text-muted); font-size: 0.85rem; }
+  small.warn { color: #f59e0b; }
+  .mode-pill, .ref-chip { border: 1px solid var(--border-color); border-radius: 999px; padding: 0.25rem 0.6rem; color: var(--text-muted); font-size: 0.75rem; }
+  .mode-pill { text-transform: uppercase; }
+  .ref-chip { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; border-radius: 8px; }
+  .studio-grid { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 1rem; }
+  .form-stack, .advanced-box, .preview-card, .history-panel { display: grid; gap: 0.85rem; }
   label { display: grid; gap: 0.35rem; font-size: 0.85rem; }
   input, select, textarea { width: 100%; background: var(--bg); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); padding: 0.65rem 0.75rem; font: inherit; box-sizing: border-box; }
   textarea { resize: vertical; }
   .preset-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.6rem; }
-  .preset-card { text-align: left; display: grid; gap: 0.2rem; background: var(--bg); color: var(--text-primary); border: 1px solid var(--border-color); border-radius: 10px; padding: 0.75rem; cursor: pointer; }
-  .preset-card span { color: var(--text-muted); font-size: 0.78rem; }
-  .preset-card.selected { border-color: var(--primary); box-shadow: 0 0 0 1px var(--primary); }
+  .preset-card { text-align: left; display: grid; grid-template-columns: auto 1fr; gap: 0.2rem 0.55rem; background: var(--bg); color: var(--text-primary); border: 1px solid var(--border-color); border-radius: 10px; padding: 0.75rem; cursor: pointer; }
+  .preset-card span:last-child { grid-column: 2; color: var(--text-muted); font-size: 0.78rem; }
+  .preset-swatch { color: var(--primary); font-size: 1.1rem; }
+  .preset-card.selected, .history-strip button.selected { border-color: var(--primary); box-shadow: 0 0 0 1px var(--primary); }
   .two-col { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.75rem; }
   .inline-field { display: flex; gap: 0.45rem; }
   .inline-field input { min-width: 0; }
-  .mini-button, .btn-secondary { border: 1px solid var(--border-color); border-radius: 8px; background: transparent; color: var(--text-muted); cursor: pointer; padding: 0.55rem 0.75rem; }
+  .mini-button, .btn-primary, .upload-button { border: 1px solid var(--border-color); border-radius: 8px; cursor: pointer; padding: 0.55rem 0.75rem; font: inherit; }
+  .btn-primary { background: var(--primary); color: white; border-color: var(--primary); }
+  .mini-button, .upload-button { background: transparent; color: var(--text-muted); }
+  .upload-button input { display: none; }
   .advanced-box, .preview-card { border: 1px dashed var(--border-color); border-radius: 12px; padding: 0.9rem; background: rgba(255,255,255,0.02); }
-  .preview-card { display: grid; gap: 0.75rem; align-content: start; }
+  .preview-card { align-content: start; min-width: 0; }
   .preview-frame { aspect-ratio: 1; border-radius: 12px; border: 1px solid var(--border-color); background: var(--bg); display: grid; place-items: center; overflow: hidden; color: var(--text-muted); text-align: center; padding: 0.75rem; }
-  .preview-frame img { width: 100%; height: 100%; object-fit: cover; }
-  button:disabled { opacity: 0.55; cursor: not-allowed; }
-  @media (max-width: 760px) { .studio-grid, .two-col, .preset-grid { grid-template-columns: 1fr; } }
+  .preview-frame img { width: 100%; height: 100%; object-fit: cover; transition: transform 0.2s ease; }
+  .preview-frame.zoomed img { transform: scale(1.45); }
+  .history-strip { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.4rem; }
+  .history-strip button { aspect-ratio: 1; border: 1px solid var(--border-color); border-radius: 8px; background: var(--bg); overflow: hidden; color: var(--text-muted); padding: 0; cursor: pointer; }
+  .history-strip img { width: 100%; height: 100%; object-fit: cover; }
+  .status-message, .error-message { border-radius: 8px; padding: 0.65rem 0.75rem; font-size: 0.85rem; }
+  .status-message { background: rgba(59,130,246,0.12); color: #60a5fa; }
+  .error-message { background: rgba(239,68,68,0.12); color: #ef4444; }
+  button:disabled, input:disabled, select:disabled, textarea:disabled, .upload-button:has(input:disabled) { opacity: 0.55; cursor: not-allowed; }
+  @media (max-width: 760px) { .studio-grid, .two-col, .preset-grid { grid-template-columns: 1fr; } .action-row { flex-direction: column; } }
 </style>
