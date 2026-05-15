@@ -33,6 +33,8 @@ const (
 	tagNIP05            = "nip05"
 	tagNpub             = "npub"
 	tagParameterizedD   = "d"
+	tagPreviousDraft      = "previous-draft"
+	tagPreviousDraftEvent = "previous-draft-event"
 	tagPreviousSpecHash = "previous-spec-hash"
 	tagProgress         = "progress"
 	tagPubkey           = "p"
@@ -272,6 +274,10 @@ func ParseAgentSoulEvent(event *nostr.Event) *domain.AgentSoul {
 			soul.DraftRef = value
 		case tagDraftEvent:
 			soul.DraftEventID = value
+		case tagPreviousDraft:
+			soul.PreviousDraftRef = value
+		case tagPreviousDraftEvent:
+			soul.PreviousDraftEventID = value
 		case tagSpecHash:
 			soul.SpecHash = value
 		case tagPreviousSpecHash:
@@ -965,6 +971,8 @@ func appendResultContextTags(tags *nostr.Tags, soul *domain.AgentSoul) {
 	appendTag(tags, tagDeployStatus, soul.DeployStatus)
 	appendTag(tags, tagDraft, soul.DraftRef)
 	appendTag(tags, tagDraftEvent, soul.DraftEventID)
+	appendTag(tags, tagPreviousDraft, soul.PreviousDraftRef)
+	appendTag(tags, tagPreviousDraftEvent, soul.PreviousDraftEventID)
 	appendTag(tags, tagSpecHash, soul.SpecHash)
 	appendTag(tags, tagPreviousSpecHash, soul.PreviousSpecHash)
 	appendTag(tags, tagRuntime, string(soul.Runtime.Target))

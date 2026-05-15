@@ -103,6 +103,7 @@ const (
 	SoulActionRedeploy   SoulActionType = "redeploy"
 	SoulActionUpdate     SoulActionType = "update"
 	SoulActionHotReload  SoulActionType = "hot-reload"
+	SoulActionRollback   SoulActionType = "rollback"
 )
 
 const (
@@ -297,17 +298,19 @@ type AgentSoul struct {
 	DeployStatus   string     `json:"deploy_status,omitempty"`
 
 	// Draft/runtime reconciliation
-	DraftRef         string              `json:"draft_ref,omitempty"`
-	DraftEventID     string              `json:"draft_event_id,omitempty"`
-	SpecHash         string              `json:"spec_hash,omitempty"`
-	PreviousSpecHash string              `json:"previous_spec_hash,omitempty"`
-	Runtime          SoulRuntimeSpec     `json:"runtime,omitempty"`
-	RelayPolicy      SoulRelayPolicySpec `json:"relay_policy,omitempty"`
-	PermissionSpec   SoulPermissionSpec  `json:"permissions,omitempty"`
-	Workspace        SoulWorkspaceSpec   `json:"workspace,omitempty"`
-	Assets           SoulAssetRefs       `json:"assets,omitempty"`
-	CapabilityRef    string              `json:"capability_ref,omitempty"`
-	LastResultRef    string              `json:"last_result_ref,omitempty"`
+	DraftRef             string              `json:"draft_ref,omitempty"`
+	DraftEventID         string              `json:"draft_event_id,omitempty"`
+	PreviousDraftRef     string              `json:"previous_draft_ref,omitempty"`
+	PreviousDraftEventID string              `json:"previous_draft_event_id,omitempty"`
+	SpecHash             string              `json:"spec_hash,omitempty"`
+	PreviousSpecHash     string              `json:"previous_spec_hash,omitempty"`
+	Runtime              SoulRuntimeSpec     `json:"runtime,omitempty"`
+	RelayPolicy          SoulRelayPolicySpec `json:"relay_policy,omitempty"`
+	PermissionSpec       SoulPermissionSpec  `json:"permissions,omitempty"`
+	Workspace            SoulWorkspaceSpec   `json:"workspace,omitempty"`
+	Assets               SoulAssetRefs       `json:"assets,omitempty"`
+	CapabilityRef        string              `json:"capability_ref,omitempty"`
+	LastResultRef        string              `json:"last_result_ref,omitempty"`
 
 	// Lifecycle
 	CreatedAt     time.Time  `json:"created_at"`

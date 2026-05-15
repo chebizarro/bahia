@@ -409,6 +409,165 @@ func TestLifecycleHandlerHotReloadDispatchesSelectiveRuntimeControlsAndPublishes
 	}
 }
 
+func TestLifecycleHandlerRollbackRestoresPreviousDraft(t *testing.T) {
+	signer := newFakeSigner(t)
+	previousDraft := &domain.SoulDraft{
+		EventID:   "draft-previous-event",
+		AgentID:   "scout",
+		CreatedBy: signer.pubkey,
+		Content: domain.SoulDraftContent{
+			Schema:   domain.SoulFactoryDraftSchemaV2,
+			Brief:    "old brief",
+			Identity: domain.SoulIdentitySpec{Name: "Scout", Purpose: "Research", Tier: domain.SoulTierStandard},
+			Voice:    domain.SoulVoiceSpec{Provider: "elevenlabs", PersonaID: "old-voice"},
+			Runtime:  domain.SoulRuntimeSpec{Target: domain.RuntimeTargetOpenClaw, RuntimePubkey: "runtime-pubkey"},
+			SpecHash: "sha256:old",
+		},
+	}
+	currentDraft := &domain.SoulDraft{
+		EventID:   "draft-current-event",
+		AgentID:   "scout",
+		CreatedBy: signer.pubkey,
+		Content: domain.SoulDraftContent{
+			Schema:           domain.SoulFactoryDraftSchemaV2,
+			Brief:            "new brief",
+			Identity:         domain.SoulIdentitySpec{Name: "Scout", Purpose: "Research deeply", Tier: domain.SoulTierStandard},
+			Voice:            domain.SoulVoiceSpec{Provider: "elevenlabs", PersonaID: "new-voice"},
+			Runtime:          domain.SoulRuntimeSpec{Target: domain.RuntimeTargetOpenClaw, RuntimePubkey: "runtime-pubkey"},
+			SpecHash:         "sha256:new",
+			PreviousSpecHash: "sha256:old",
+		},
+	}
+	soul := &domain.AgentSoul{
+		ID:                   uuid.New(),
+		AgentID:              "scout",
+		Name:                 "Scout",
+		Purpose:              "Research deeply",
+		Tier:                 domain.SoulTierStandard,
+		Status:               domain.SoulStatusActive,
+		DraftRef:             "31952:" + signer.pubkey + ":scout",
+		DraftEventID:         currentDraft.EventID,
+		PreviousDraftRef:     "31952:" + signer.pubkey + ":scout",
+		PreviousDraftEventID: previousDraft.EventID,
+		SpecHash:             "sha256:new",
+		PreviousSpecHash:     "sha256:old",
+		Runtime:              domain.SoulRuntimeSpec{Target: domain.RuntimeTargetOpenClaw, RuntimePubkey: "runtime-pubkey"},
+		Assets:               domain.SoulAssetRefs{VoiceRef: "new-voice"},
+		CreatedAt:            time.Now().UTC(),
+	}
+	reactor := NewReactor(Config{Relays: []string{"wss://public.example"}, AuthorizedPubkeys: []string{signer.pubkey}}, scriptedGenerator{}, signer, slog.Default())
+	capture := attachPublishCapture(reactor)
+	reactor.getSoulFn = func(context.Context, string) (*domain.AgentSoul, error) { return soul, nil }
+	reactor.getDraftFn = func(_ context.Context, _ string, draftEventID string) (*domain.SoulDraft, error) {
+		switch draftEventID {
+		case previousDraft.EventID:
+			return previousDraft, nil
+		case currentDraft.EventID:
+			return currentDraft, nil
+		default:
+			return nil, nil
+		}
+	}
+	runtime := &trackingRuntimeAdapter{}
+	handler := NewLifecycleHandler(reactor, nil, nil, slog.Default())
+	handler.SetRuntimeAdapters(map[domain.RuntimeTarget]RuntimeAdapter{domain.RuntimeTargetOpenClaw: runtime})
+
+	event := buildActionEvent(t, signer, "rollback-action", nostr.Tags{{"soul", buildSoulRefForTest(soul)}, {"action", string(domain.SoulActionRollback)}}, "")
+	if err := handler.HandleAction(t.Context(), event); err != nil {
+		t.Fatalf("HandleAction(rollback) error = %v", err)
+	}
+	if len(runtime.requests) != 2 {
+		t.Fatalf("runtime request count = %d, want voice + persona rollback", len(runtime.requests))
+	}
+	if soul.DraftEventID != previousDraft.EventID || soul.SpecHash != "sha256:old" || soul.PreviousDraftEventID != currentDraft.EventID || soul.PreviousSpecHash != "sha256:new" {
+		t.Fatalf("soul refs after rollback = draft %q spec %q previous draft %q previous spec %q", soul.DraftEventID, soul.SpecHash, soul.PreviousDraftEventID, soul.PreviousSpecHash)
+	}
+	if soul.Purpose != "Research" || soul.Assets.VoiceRef != "old-voice" {
+		t.Fatalf("soul after rollback purpose=%q voice=%q, want previous config", soul.Purpose, soul.Assets.VoiceRef)
+	}
+	results := capture.eventsByKind(domain.KindProvisioningResult)
+	if len(results) != 1 {
+		t.Fatalf("result count = %d, want 1", len(results))
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(results[0].Content), &payload); err != nil {
+		t.Fatalf("unmarshal rollback result: %v", err)
+	}
+	if payload["rollback"] != true {
+		t.Fatalf("rollback payload = %#v, want rollback marker", payload)
+	}
+}
+
+func TestLifecycleHandlerHotReloadRollsBackRuntimeOn38386Error(t *testing.T) {
+	signer := newFakeSigner(t)
+	currentDraft := &domain.SoulDraft{EventID: "draft-current-event", AgentID: "scout", CreatedBy: signer.pubkey, Content: domain.SoulDraftContent{Schema: domain.SoulFactoryDraftSchemaV2, Identity: domain.SoulIdentitySpec{Name: "Scout", Purpose: "Research", Tier: domain.SoulTierStandard}, Voice: domain.SoulVoiceSpec{Provider: "elevenlabs", PersonaID: "old-voice"}, Runtime: domain.SoulRuntimeSpec{Target: domain.RuntimeTargetOpenClaw, RuntimePubkey: "runtime-pubkey"}, SpecHash: "sha256:old"}}
+	proposedDraft := &domain.SoulDraft{EventID: "draft-proposed-event", AgentID: "scout", CreatedBy: signer.pubkey, Content: domain.SoulDraftContent{Schema: domain.SoulFactoryDraftSchemaV2, Identity: domain.SoulIdentitySpec{Name: "Scout", Purpose: "Research deeply", Tier: domain.SoulTierStandard}, Voice: domain.SoulVoiceSpec{Provider: "elevenlabs", PersonaID: "new-voice"}, Runtime: domain.SoulRuntimeSpec{Target: domain.RuntimeTargetOpenClaw, RuntimePubkey: "runtime-pubkey"}, SpecHash: "sha256:new", PreviousSpecHash: "sha256:old"}}
+	soul := &domain.AgentSoul{ID: uuid.New(), AgentID: "scout", Name: "Scout", Purpose: "Research", Tier: domain.SoulTierStandard, Status: domain.SoulStatusActive, DraftRef: "31952:" + signer.pubkey + ":scout", DraftEventID: currentDraft.EventID, SpecHash: "sha256:old", Runtime: domain.SoulRuntimeSpec{Target: domain.RuntimeTargetOpenClaw, RuntimePubkey: "runtime-pubkey"}, CreatedAt: time.Now().UTC()}
+	reactor := NewReactor(Config{Relays: []string{"wss://public.example"}, AuthorizedPubkeys: []string{signer.pubkey}}, scriptedGenerator{}, signer, slog.Default())
+	attachPublishCapture(reactor)
+	reactor.getSoulFn = func(context.Context, string) (*domain.AgentSoul, error) { return soul, nil }
+	reactor.getDraftFn = func(_ context.Context, _ string, draftEventID string) (*domain.SoulDraft, error) {
+		if draftEventID == proposedDraft.EventID {
+			return proposedDraft, nil
+		}
+		if draftEventID == currentDraft.EventID {
+			return currentDraft, nil
+		}
+		return nil, nil
+	}
+	runtime := &failingRuntimeAdapter{failOn: 2}
+	handler := NewLifecycleHandler(reactor, nil, nil, slog.Default())
+	handler.SetRuntimeAdapters(map[domain.RuntimeTarget]RuntimeAdapter{domain.RuntimeTargetOpenClaw: runtime})
+	event := buildActionEvent(t, signer, "hot-reload-fails", nostr.Tags{{"soul", buildSoulRefForTest(soul)}, {"action", string(domain.SoulActionHotReload)}, {"draft-event", proposedDraft.EventID}, {"spec-hash", "sha256:new"}, {"previous-spec-hash", "sha256:old"}}, "")
+	if err := handler.HandleAction(t.Context(), event); err == nil || !strings.Contains(err.Error(), "runtime error") {
+		t.Fatalf("HandleAction() error = %v, want runtime error", err)
+	}
+	if len(runtime.requests) != 4 {
+		t.Fatalf("runtime request count = %d, want 2 attempted + 2 rollback", len(runtime.requests))
+	}
+	if runtime.requests[2].Action != domain.SoulActionRollback || runtime.requests[3].Action != domain.SoulActionRollback {
+		t.Fatalf("rollback request actions = %s, %s", runtime.requests[2].Action, runtime.requests[3].Action)
+	}
+	if soul.DraftEventID != currentDraft.EventID || soul.SpecHash != "sha256:old" {
+		t.Fatalf("soul changed after failed hot-reload: draft %q spec %q", soul.DraftEventID, soul.SpecHash)
+	}
+}
+
+type failingRuntimeAdapter struct {
+	trackingRuntimeAdapter
+	failOn int
+}
+
+func (a *failingRuntimeAdapter) Execute(ctx context.Context, req RuntimeAdapterRequest) (*RuntimeControlResultEnvelope, error) {
+	a.requests = append(a.requests, req)
+	if a.failOn > 0 && len(a.requests) == a.failOn {
+		return &RuntimeControlResultEnvelope{
+			Schema:               domain.SoulFactoryRuntimeControlSchema,
+			Method:               req.Method,
+			IdempotencyKey:       "sha256:test",
+			OperatorRequestEvent: req.Operator.RequestEvent,
+			Status:               "error",
+			Error:                &RuntimeControlError{Code: "runtime_error", Message: "runtime error"},
+		}, fmt.Errorf("runtime error")
+	}
+	return &RuntimeControlResultEnvelope{
+		Schema:               domain.SoulFactoryRuntimeControlSchema,
+		Method:               req.Method,
+		IdempotencyKey:       "sha256:test",
+		OperatorRequestEvent: req.Operator.RequestEvent,
+		Status:               "success",
+		Result: map[string]interface{}{
+			"agent_id":        req.Target.AgentID,
+			"runtime":         req.Target.Runtime,
+			"runtime_binding": "openclaw://agents/" + req.Target.AgentID,
+			"state":           "running",
+			"spec_hash":       req.Soul.SpecHash,
+			"capability_ref":  "capability-event",
+		},
+		Event: &nostr.Event{PubKey: "runtime-pubkey"},
+	}, nil
+}
+
 func TestLifecycleHandlerReplayDoesNotDuplicateSideEffects(t *testing.T) {
 	signer := &trackingSigner{fakeSigner: newFakeSigner(t)}
 	soul := &domain.AgentSoul{

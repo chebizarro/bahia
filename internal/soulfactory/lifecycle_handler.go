@@ -140,6 +140,8 @@ func (h *LifecycleHandler) HandleAction(ctx context.Context, event *nostr.Event)
 	var result *LifecycleExecutionResult
 	if action.Action == domain.SoulActionHotReload {
 		result, err = h.handleHotReload(ctx, soul, action)
+	} else if action.Action == domain.SoulActionRollback {
+		result, err = h.handleRollback(ctx, soul, action)
 	} else {
 		result, err = h.engine.ExecuteLifecycleAction(ctx, soul, action)
 	}
@@ -375,6 +377,11 @@ func (h *LifecycleHandler) handleHotReload(ctx context.Context, soul *domain.Age
 				Action:      action.Action,
 			})
 			if err != nil {
+				rollbackSpecHash := firstNonEmpty(previousSpecHash, current.SpecHash, computeDraftContentHash(current))
+				rollbackErr := h.rollbackRuntimeHotReload(ctx, soul, action, adapter, target, runtimePubkey, proposedDraft, current, proposed, diff, rollbackSpecHash)
+				if rollbackErr != nil {
+					return nil, fmt.Errorf("hot-reload %s via %s: %w; rollback failed: %v", call.Section, call.Method, err, rollbackErr)
+				}
 				return nil, fmt.Errorf("hot-reload %s via %s: %w", call.Section, call.Method, err)
 			}
 			applied = append(applied, map[string]interface{}{
@@ -401,6 +408,57 @@ func (h *LifecycleHandler) handleHotReload(ctx context.Context, soul *domain.Age
 		"applied_change_count": len(applied),
 	}
 	return &LifecycleExecutionResult{PublishSoul: true, Data: data}, nil
+}
+
+func (h *LifecycleHandler) handleRollback(ctx context.Context, soul *domain.AgentSoul, action *domain.SoulAction) (*LifecycleExecutionResult, error) {
+	rollbackDraftRef := firstNonEmpty(action.DraftRef, soul.PreviousDraftRef)
+	rollbackDraftEventID := firstNonEmpty(action.DraftEventID, soul.PreviousDraftEventID)
+	if rollbackDraftRef == "" && rollbackDraftEventID == "" {
+		return nil, fmt.Errorf("rollback requires previous draft_ref or draft_event_id")
+	}
+	rollbackAction := *action
+	rollbackAction.Action = domain.SoulActionHotReload
+	rollbackAction.DraftRef = rollbackDraftRef
+	rollbackAction.DraftEventID = rollbackDraftEventID
+	rollbackAction.SpecHash = firstNonEmpty(action.SpecHash, soul.PreviousSpecHash)
+	rollbackAction.PreviousSpecHash = firstNonEmpty(action.PreviousSpecHash, soul.SpecHash)
+	result, err := h.handleHotReload(ctx, soul, &rollbackAction)
+	if err != nil {
+		return nil, err
+	}
+	if result.Data == nil {
+		result.Data = map[string]interface{}{}
+	}
+	result.Data["rollback"] = true
+	result.Data["rollback_draft_ref"] = rollbackDraftRef
+	result.Data["rollback_draft_event_id"] = rollbackDraftEventID
+	return result, nil
+}
+
+func (h *LifecycleHandler) rollbackRuntimeHotReload(ctx context.Context, soul *domain.AgentSoul, action *domain.SoulAction, adapter RuntimeAdapter, target domain.RuntimeTarget, runtimePubkey string, draft *domain.SoulDraft, previous, failed domain.SoulDraftContent, diff HotReloadDraftDiff, rollbackSpecHash string) error {
+	if adapter == nil {
+		return fmt.Errorf("rollback requires a runtime adapter")
+	}
+	calls := buildHotReloadRuntimeCalls(failed, previous, diff, draft, action, rollbackSpecHash, failed.SpecHash)
+	for _, call := range calls {
+		if err := h.publishActionProgress(ctx, action, "processing", fmt.Sprintf("rolling back %s hot-reload via %s", call.Section, call.Method), soul.AgentID); err != nil {
+			return err
+		}
+		_, err := adapter.Execute(ctx, RuntimeAdapterRequest{
+			Method:      call.Method,
+			Operator:    RuntimeOperatorRef{Pubkey: action.Initiator, RequestEvent: action.EventID},
+			Soul:        RuntimeSoulRef{ID: soul.AgentID, Draft: firstNonEmpty(soul.DraftEventID, soul.DraftRef), SpecHash: rollbackSpecHash},
+			Target:      RuntimeTargetRef{Runtime: target, RuntimePubkey: runtimePubkey, AgentID: soul.AgentID},
+			Params:      call.Params,
+			DraftPolicy: previous.RelayPolicy,
+			RequestKind: domain.KindSoulAction,
+			Action:      domain.SoulActionRollback,
+		})
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (h *LifecycleHandler) lookupHotReloadDraft(ctx context.Context, draftRef, draftEventID string) (*domain.SoulDraft, error) {
@@ -500,6 +558,8 @@ func buildHotReloadRuntimeCalls(current, proposed domain.SoulDraftContent, diff 
 }
 
 func applyHotReloadDraftToSoul(soul *domain.AgentSoul, draft *domain.SoulDraft, proposed domain.SoulDraftContent, action *domain.SoulAction, newSpecHash, previousSpecHash string, applied []map[string]interface{}) {
+	currentDraftRef := soul.DraftRef
+	currentDraftEventID := soul.DraftEventID
 	if action.DraftRef != "" {
 		soul.DraftRef = action.DraftRef
 	} else if draft != nil {
@@ -507,6 +567,12 @@ func applyHotReloadDraftToSoul(soul *domain.AgentSoul, draft *domain.SoulDraft, 
 	}
 	if draft != nil {
 		soul.DraftEventID = draft.EventID
+	}
+	if currentDraftRef != "" {
+		soul.PreviousDraftRef = currentDraftRef
+	}
+	if currentDraftEventID != "" {
+		soul.PreviousDraftEventID = currentDraftEventID
 	}
 	if previousSpecHash != "" {
 		soul.PreviousSpecHash = previousSpecHash
@@ -671,6 +737,8 @@ func (e *localLifecycleEngine) ExecuteLifecycleAction(ctx context.Context, soul 
 		return e.handleUpdate(ctx, soul, action)
 	case domain.SoulActionHotReload:
 		return nil, fmt.Errorf("hot-reload is orchestrated by lifecycle handler")
+	case domain.SoulActionRollback:
+		return nil, fmt.Errorf("rollback is orchestrated by lifecycle handler")
 	default:
 		return nil, fmt.Errorf("unknown action: %s", action.Action)
 	}
@@ -841,7 +909,8 @@ func isSupportedLifecycleAction(action domain.SoulActionType) bool {
 		domain.SoulActionRegenerate,
 		domain.SoulActionRedeploy,
 		domain.SoulActionUpdate,
-		domain.SoulActionHotReload:
+		domain.SoulActionHotReload,
+		domain.SoulActionRollback:
 		return true
 	default:
 		return false
