@@ -2,8 +2,13 @@ package soulfactory
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"log/slog"
+	"reflect"
+	"strings"
 	"sync"
 	"time"
 
@@ -38,6 +43,7 @@ type LifecycleHandler struct {
 	statusSync       *StatusSyncHandler
 	logger           *slog.Logger
 	engine           LifecycleEngine
+	runtimeAdapters  map[domain.RuntimeTarget]RuntimeAdapter
 
 	mu               sync.Mutex
 	processedActions map[string]struct{}
@@ -131,7 +137,12 @@ func (h *LifecycleHandler) HandleAction(ctx context.Context, event *nostr.Event)
 		return fmt.Errorf("publish action progress: %w", err)
 	}
 
-	result, err := h.engine.ExecuteLifecycleAction(ctx, soul, action)
+	var result *LifecycleExecutionResult
+	if action.Action == domain.SoulActionHotReload {
+		result, err = h.handleHotReload(ctx, soul, action)
+	} else {
+		result, err = h.engine.ExecuteLifecycleAction(ctx, soul, action)
+	}
 	if err != nil {
 		logger.Error("lifecycle action failed", "error", err)
 		_ = h.publishActionResult(ctx, action, "error", map[string]interface{}{"error": err.Error()}, soul.AgentID)
@@ -255,6 +266,382 @@ func (h *LifecycleHandler) lifecycleRelays() []string {
 	return normalizeSoulRelays(append(append([]string{}, h.reactor.config.AdditionalRelays...), h.reactor.config.Relays...))
 }
 
+// SetRuntimeAdapters installs runtime-control adapters used by hot-reload.
+func (h *LifecycleHandler) SetRuntimeAdapters(adapters map[domain.RuntimeTarget]RuntimeAdapter) {
+	h.runtimeAdapters = cloneRuntimeAdapters(adapters)
+}
+
+// HotReloadDraftDiff is the draft-section delta used to decide which runtime
+// control requests a hot-reload action must emit.
+type HotReloadDraftDiff struct {
+	Avatar          bool     `json:"avatar"`
+	Voice           bool     `json:"voice"`
+	Memory          bool     `json:"memory"`
+	Persona         bool     `json:"persona"`
+	ChangedSections []string `json:"changed_sections"`
+}
+
+// DiffHotReloadDrafts compares current and proposed draft content at the live
+// customization section boundary. Identity and generated prompt markdown are
+// treated as persona-affecting because they shape runtime prompt/identity state.
+func DiffHotReloadDrafts(current, proposed domain.SoulDraftContent) HotReloadDraftDiff {
+	current = current.MigrateToLatest()
+	proposed = proposed.MigrateToLatest()
+
+	diff := HotReloadDraftDiff{}
+	if draftSectionChanged(hotReloadAvatarSection(current), hotReloadAvatarSection(proposed)) {
+		diff.Avatar = true
+		diff.ChangedSections = append(diff.ChangedSections, "avatar")
+	}
+	if draftSectionChanged(hotReloadVoiceSection(current), hotReloadVoiceSection(proposed)) {
+		diff.Voice = true
+		diff.ChangedSections = append(diff.ChangedSections, "voice")
+	}
+	if draftSectionChanged(current.Memory, proposed.Memory) {
+		diff.Memory = true
+		diff.ChangedSections = append(diff.ChangedSections, "memory")
+	}
+	if draftSectionChanged(hotReloadPersonaSection(current), hotReloadPersonaSection(proposed)) {
+		diff.Persona = true
+		diff.ChangedSections = append(diff.ChangedSections, "persona")
+	}
+	return diff
+}
+
+type hotReloadRuntimeCall struct {
+	Section string
+	Method  string
+	Params  map[string]interface{}
+}
+
+func (h *LifecycleHandler) handleHotReload(ctx context.Context, soul *domain.AgentSoul, action *domain.SoulAction) (*LifecycleExecutionResult, error) {
+	if action.DraftRef == "" && action.DraftEventID == "" {
+		return nil, fmt.Errorf("hot-reload requires draft_ref or draft_event_id")
+	}
+	if soul.Status == domain.SoulStatusRevoked {
+		return nil, fmt.Errorf("cannot hot-reload revoked soul")
+	}
+
+	proposedDraft, err := h.lookupHotReloadDraft(ctx, action.DraftRef, action.DraftEventID)
+	if err != nil {
+		return nil, fmt.Errorf("lookup proposed draft: %w", err)
+	}
+	if proposedDraft == nil {
+		return nil, fmt.Errorf("proposed draft not found")
+	}
+	proposed := proposedDraft.Content.MigrateToLatest()
+	current, err := h.currentHotReloadContent(ctx, soul)
+	if err != nil {
+		return nil, err
+	}
+	diff := DiffHotReloadDrafts(current, proposed)
+	if err := h.publishActionProgress(ctx, action, "processing", fmt.Sprintf("hot-reload diff computed: %s", hotReloadSectionsText(diff.ChangedSections)), soul.AgentID); err != nil {
+		return nil, fmt.Errorf("publish hot-reload diff progress: %w", err)
+	}
+
+	newSpecHash := firstNonEmpty(action.SpecHash, proposed.SpecHash, computeDraftContentHash(proposed))
+	previousSpecHash := firstNonEmpty(action.PreviousSpecHash, proposed.PreviousSpecHash, soul.SpecHash)
+	calls := buildHotReloadRuntimeCalls(current, proposed, diff, proposedDraft, action, newSpecHash, previousSpecHash)
+	applied := make([]map[string]interface{}, 0, len(calls))
+
+	if len(calls) > 0 {
+		adapter, target, runtimePubkey, err := h.selectHotReloadRuntime(soul, proposed)
+		if err != nil {
+			return nil, err
+		}
+		for _, call := range calls {
+			if err := h.publishActionProgress(ctx, action, "processing", fmt.Sprintf("applying %s hot-reload via %s", call.Section, call.Method), soul.AgentID); err != nil {
+				return nil, fmt.Errorf("publish %s hot-reload progress: %w", call.Section, err)
+			}
+			result, err := adapter.Execute(ctx, RuntimeAdapterRequest{
+				Method: call.Method,
+				Operator: RuntimeOperatorRef{
+					Pubkey:       action.Initiator,
+					RequestEvent: action.EventID,
+				},
+				Soul: RuntimeSoulRef{
+					ID:       soul.AgentID,
+					Draft:    firstNonEmpty(proposedDraft.EventID, action.DraftEventID, action.DraftRef),
+					SpecHash: newSpecHash,
+				},
+				Target: RuntimeTargetRef{
+					Runtime:       target,
+					RuntimePubkey: runtimePubkey,
+					AgentID:       soul.AgentID,
+				},
+				Params:      call.Params,
+				DraftPolicy: proposed.RelayPolicy,
+				RequestKind: domain.KindSoulAction,
+				Action:      action.Action,
+			})
+			if err != nil {
+				return nil, fmt.Errorf("hot-reload %s via %s: %w", call.Section, call.Method, err)
+			}
+			applied = append(applied, map[string]interface{}{
+				"section": call.Section,
+				"method":  call.Method,
+				"status":  result.Status,
+				"result":  result.Result,
+			})
+			if err := h.publishActionProgress(ctx, action, "processing", fmt.Sprintf("applied %s hot-reload", call.Section), soul.AgentID); err != nil {
+				return nil, fmt.Errorf("publish %s hot-reload applied progress: %w", call.Section, err)
+			}
+		}
+	}
+
+	applyHotReloadDraftToSoul(soul, proposedDraft, proposed, action, newSpecHash, previousSpecHash, applied)
+	data := map[string]interface{}{
+		"hot_reload":           true,
+		"draft_ref":            firstNonEmpty(action.DraftRef, parameterizedCoordinate(domain.KindSoulDraft, proposedDraft.CreatedBy, proposedDraft.AgentID)),
+		"draft_event_id":       proposedDraft.EventID,
+		"spec_hash":            newSpecHash,
+		"previous_spec_hash":   previousSpecHash,
+		"changed_sections":     diff.ChangedSections,
+		"applied_changes":      applied,
+		"applied_change_count": len(applied),
+	}
+	return &LifecycleExecutionResult{PublishSoul: true, Data: data}, nil
+}
+
+func (h *LifecycleHandler) lookupHotReloadDraft(ctx context.Context, draftRef, draftEventID string) (*domain.SoulDraft, error) {
+	return h.reactor.getProvisioningDraft(ctx, draftRef, draftEventID)
+}
+
+func (h *LifecycleHandler) currentHotReloadContent(ctx context.Context, soul *domain.AgentSoul) (domain.SoulDraftContent, error) {
+	if soul.DraftRef != "" || soul.DraftEventID != "" {
+		draft, err := h.lookupHotReloadDraft(ctx, soul.DraftRef, soul.DraftEventID)
+		if err != nil {
+			return domain.SoulDraftContent{}, fmt.Errorf("lookup current draft: %w", err)
+		}
+		if draft != nil {
+			return draft.Content.MigrateToLatest(), nil
+		}
+	}
+	return synthesizeDraftContentFromSoul(soul), nil
+}
+
+func (h *LifecycleHandler) selectHotReloadRuntime(soul *domain.AgentSoul, proposed domain.SoulDraftContent) (RuntimeAdapter, domain.RuntimeTarget, string, error) {
+	adapters := h.runtimeAdapters
+	if len(adapters) == 0 && h.reactor != nil {
+		if full, ok := h.reactor.provisioner.(*FullProvisioner); ok && full != nil {
+			adapters = full.runtimeAdapters
+		}
+	}
+	if len(adapters) == 0 {
+		return nil, "", "", fmt.Errorf("hot-reload requires a runtime adapter")
+	}
+	target := proposed.Runtime.Target
+	if target == "" {
+		target = soul.Runtime.Target
+	}
+	if target == "" && len(adapters) == 1 {
+		for candidate := range adapters {
+			target = candidate
+		}
+	}
+	if target == "" {
+		return nil, "", "", fmt.Errorf("hot-reload requires a runtime target")
+	}
+	adapter := adapters[target]
+	if adapter == nil {
+		return nil, "", "", fmt.Errorf("no runtime adapter configured for %s", target)
+	}
+	runtimePubkey := firstNonEmpty(proposed.Runtime.RuntimePubkey, soul.Runtime.RuntimePubkey)
+	return adapter, target, runtimePubkey, nil
+}
+
+func buildHotReloadRuntimeCalls(current, proposed domain.SoulDraftContent, diff HotReloadDraftDiff, draft *domain.SoulDraft, action *domain.SoulAction, newSpecHash, previousSpecHash string) []hotReloadRuntimeCall {
+	calls := make([]hotReloadRuntimeCall, 0, len(diff.ChangedSections))
+	base := func(section string) map[string]interface{} {
+		return map[string]interface{}{
+			"schema":             domain.SoulFactoryDraftSchemaLatest,
+			"section":            section,
+			"draft_ref":          firstNonEmpty(action.DraftRef, parameterizedCoordinate(domain.KindSoulDraft, draft.CreatedBy, draft.AgentID)),
+			"draft_event_id":     draft.EventID,
+			"previous_spec_hash": previousSpecHash,
+			"new_spec_hash":      newSpecHash,
+		}
+	}
+	if diff.Avatar {
+		params := base("avatar")
+		params["previous"] = hotReloadAvatarSection(current)
+		params["proposed"] = hotReloadAvatarSection(proposed)
+		method := RuntimeMethodAvatarSet
+		if proposed.Avatar.Generation != nil && draftSectionChanged(current.Avatar.Generation, proposed.Avatar.Generation) {
+			method = RuntimeMethodAvatarGenerate
+		}
+		calls = append(calls, hotReloadRuntimeCall{Section: "avatar", Method: method, Params: params})
+	}
+	if diff.Voice {
+		params := base("voice")
+		params["previous"] = hotReloadVoiceSection(current)
+		params["proposed"] = hotReloadVoiceSection(proposed)
+		calls = append(calls, hotReloadRuntimeCall{Section: "voice", Method: RuntimeMethodVoiceConfigure, Params: params})
+	}
+	if diff.Memory {
+		params := base("memory")
+		params["previous"] = current.Memory
+		params["proposed"] = proposed.Memory
+		calls = append(calls, hotReloadRuntimeCall{Section: "memory", Method: RuntimeMethodMemoryConfigure, Params: params})
+	}
+	if diff.Persona {
+		params := base("persona")
+		params["previous"] = hotReloadPersonaSection(current)
+		params["proposed"] = hotReloadPersonaSection(proposed)
+		calls = append(calls, hotReloadRuntimeCall{Section: "persona", Method: RuntimeMethodPersonaUpdate, Params: params})
+	}
+	return calls
+}
+
+func applyHotReloadDraftToSoul(soul *domain.AgentSoul, draft *domain.SoulDraft, proposed domain.SoulDraftContent, action *domain.SoulAction, newSpecHash, previousSpecHash string, applied []map[string]interface{}) {
+	if action.DraftRef != "" {
+		soul.DraftRef = action.DraftRef
+	} else if draft != nil {
+		soul.DraftRef = parameterizedCoordinate(domain.KindSoulDraft, draft.CreatedBy, draft.AgentID)
+	}
+	if draft != nil {
+		soul.DraftEventID = draft.EventID
+	}
+	if previousSpecHash != "" {
+		soul.PreviousSpecHash = previousSpecHash
+	}
+	if newSpecHash != "" {
+		soul.SpecHash = newSpecHash
+	}
+	soul.Name = firstNonEmpty(proposed.Identity.Name, soul.Name)
+	soul.Purpose = firstNonEmpty(proposed.Identity.Purpose, proposed.Brief, soul.Purpose)
+	if proposed.Identity.Tier != "" {
+		soul.Tier = proposed.Identity.Tier
+	}
+	soul.NIP05 = firstNonEmpty(proposed.Identity.NIP05, soul.NIP05)
+	soul.SoulMD = firstNonEmpty(proposed.SoulMD, soul.SoulMD)
+	soul.IdentityMD = firstNonEmpty(proposed.IdentityMD, soul.IdentityMD)
+	if len(proposed.Permissions.AllowedKinds) > 0 {
+		soul.AllowedKinds = append([]int{}, proposed.Permissions.AllowedKinds...)
+	}
+	if len(proposed.Permissions.ToolGrants) > 0 {
+		soul.ToolGrants = append([]domain.ToolGrant{}, proposed.Permissions.ToolGrants...)
+	}
+	soul.PermissionSpec = proposed.Permissions
+	soul.RelayPolicy = proposed.RelayPolicy
+	soul.Workspace = proposed.Workspace
+	if proposed.Runtime.Target != "" {
+		soul.Runtime.Target = proposed.Runtime.Target
+	}
+	soul.Runtime.RuntimePubkey = firstNonEmpty(proposed.Runtime.RuntimePubkey, soul.Runtime.RuntimePubkey)
+	soul.Runtime.CapabilityRef = firstNonEmpty(proposed.Runtime.CapabilityRef, soul.Runtime.CapabilityRef)
+	soul.Runtime.RuntimeBinding = firstNonEmpty(proposed.Runtime.RuntimeBinding, soul.Runtime.RuntimeBinding)
+	soul.Runtime.State = firstNonEmpty(proposed.Runtime.State, soul.Runtime.State)
+	if avatarRef := selectedAvatarRef(proposed); avatarRef != "" {
+		soul.Assets.AvatarRef = avatarRef
+	}
+	if voiceRef := firstNonEmpty(proposed.Assets.VoiceRef, proposed.Voice.PersonaID); voiceRef != "" {
+		soul.Assets.VoiceRef = voiceRef
+	}
+	for _, change := range applied {
+		result, _ := change["result"].(map[string]interface{})
+		if result == nil {
+			continue
+		}
+		soul.Runtime.RuntimePubkey = firstNonEmpty(stringResult(result, "runtime_pubkey"), soul.Runtime.RuntimePubkey)
+		soul.Runtime.RuntimeBinding = firstNonEmpty(stringResult(result, "runtime_binding"), soul.Runtime.RuntimeBinding)
+		soul.Runtime.State = firstNonEmpty(stringResult(result, "state"), soul.Runtime.State)
+		soul.Runtime.CapabilityRef = firstNonEmpty(stringResult(result, "capability_ref"), soul.Runtime.CapabilityRef)
+		soul.CapabilityRef = firstNonEmpty(soul.Runtime.CapabilityRef, soul.CapabilityRef)
+	}
+}
+
+func hotReloadAvatarSection(content domain.SoulDraftContent) map[string]interface{} {
+	return map[string]interface{}{
+		"avatar":        content.Avatar,
+		"avatar_prompt": content.AvatarPrompt,
+		"asset_ref":     content.Assets.AvatarRef,
+	}
+}
+
+func hotReloadVoiceSection(content domain.SoulDraftContent) map[string]interface{} {
+	return map[string]interface{}{
+		"voice":     content.Voice,
+		"asset_ref": content.Assets.VoiceRef,
+	}
+}
+
+func hotReloadPersonaSection(content domain.SoulDraftContent) map[string]interface{} {
+	return map[string]interface{}{
+		"identity":    content.Identity,
+		"persona":     content.Persona,
+		"soul_md":     content.SoulMD,
+		"identity_md": content.IdentityMD,
+	}
+}
+
+func draftSectionChanged(current, proposed interface{}) bool {
+	if reflect.DeepEqual(current, proposed) {
+		return false
+	}
+	currentJSON, currentErr := json.Marshal(current)
+	proposedJSON, proposedErr := json.Marshal(proposed)
+	if currentErr != nil || proposedErr != nil {
+		return true
+	}
+	return string(currentJSON) != string(proposedJSON)
+}
+
+func selectedAvatarRef(content domain.SoulDraftContent) string {
+	switch content.Avatar.Current {
+	case "uploaded":
+		return firstNonEmpty(content.Avatar.UploadedRef, content.Assets.AvatarRef)
+	case "generated":
+		return firstNonEmpty(content.Avatar.GeneratedRef, content.Assets.AvatarRef)
+	default:
+		return firstNonEmpty(content.Assets.AvatarRef, content.Avatar.UploadedRef, content.Avatar.GeneratedRef)
+	}
+}
+
+func synthesizeDraftContentFromSoul(soul *domain.AgentSoul) domain.SoulDraftContent {
+	if soul == nil {
+		return domain.SoulDraftContent{Schema: domain.SoulFactoryDraftSchemaLatest}
+	}
+	return domain.SoulDraftContent{
+		Schema:     domain.SoulFactoryDraftSchemaLatest,
+		Brief:      soul.OriginalBrief,
+		SoulMD:     soul.SoulMD,
+		IdentityMD: soul.IdentityMD,
+		Identity: domain.SoulIdentitySpec{
+			Name:    soul.Name,
+			Purpose: soul.Purpose,
+			Tier:    soul.Tier,
+			NIP05:   soul.NIP05,
+		},
+		Runtime:          soul.Runtime,
+		Permissions:      soul.PermissionSpec,
+		RelayPolicy:      soul.RelayPolicy,
+		Workspace:        soul.Workspace,
+		Assets:           soul.Assets,
+		SpecHash:         soul.SpecHash,
+		PreviousSpecHash: soul.PreviousSpecHash,
+	}
+}
+
+func computeDraftContentHash(content domain.SoulDraftContent) string {
+	content = content.MigrateToLatest()
+	content.SpecHash = ""
+	content.PreviousSpecHash = ""
+	data, err := json.Marshal(content)
+	if err != nil {
+		return ""
+	}
+	digest := sha256.Sum256(data)
+	return "sha256:" + hex.EncodeToString(digest[:])
+}
+
+func hotReloadSectionsText(sections []string) string {
+	if len(sections) == 0 {
+		return "none"
+	}
+	return strings.Join(sections, ",")
+}
+
 type localLifecycleEngine struct {
 	reactor          *Reactor
 	bahiaIntegration *BahiaIntegration
@@ -276,6 +663,8 @@ func (e *localLifecycleEngine) ExecuteLifecycleAction(ctx context.Context, soul 
 		return e.handleRedeploy(ctx, soul, action)
 	case domain.SoulActionUpdate:
 		return e.handleUpdate(ctx, soul, action)
+	case domain.SoulActionHotReload:
+		return nil, fmt.Errorf("hot-reload is orchestrated by lifecycle handler")
 	default:
 		return nil, fmt.Errorf("unknown action: %s", action.Action)
 	}
@@ -445,7 +834,8 @@ func isSupportedLifecycleAction(action domain.SoulActionType) bool {
 		domain.SoulActionRevoke,
 		domain.SoulActionRegenerate,
 		domain.SoulActionRedeploy,
-		domain.SoulActionUpdate:
+		domain.SoulActionUpdate,
+		domain.SoulActionHotReload:
 		return true
 	default:
 		return false

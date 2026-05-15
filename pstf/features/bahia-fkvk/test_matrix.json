@@ -1,0 +1,15 @@
+{
+  "feature_id": "bahia-fkvk",
+  "test_runs": [
+    {
+      "command": "go test ./internal/soulfactory/...",
+      "result": "pass",
+      "evidence": "ok github.com/openagentsinc/bahia/internal/soulfactory 0.341s"
+    },
+    {
+      "command": "go test ./internal/...",
+      "result": "pass",
+      "evidence": "all internal packages passed on 2026-05-15"
+    }
+  ]
+}

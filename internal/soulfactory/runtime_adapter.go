@@ -24,7 +24,12 @@ const (
 	RuntimeMethodResume          = "soulfactory.resume"
 	RuntimeMethodRedeploy        = "soulfactory.redeploy"
 	RuntimeMethodRevoke          = "soulfactory.revoke"
+	RuntimeMethodAvatarGenerate  = "soulfactory.avatar.generate"
+	RuntimeMethodAvatarSet       = "soulfactory.avatar.set"
+	RuntimeMethodVoiceConfigure  = "soulfactory.voice.configure"
 	RuntimeMethodMemoryConfigure = "soulfactory.memory.configure"
+	RuntimeMethodMemoryReindex   = "soulfactory.memory.reindex"
+	RuntimeMethodConfigReload    = "soulfactory.config.reload"
 
 	kindNIP65RelayListMetadata = 10002
 )

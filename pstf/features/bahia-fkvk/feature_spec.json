@@ -1,0 +1,19 @@
+{
+  "feature_id": "bahia-fkvk",
+  "title": "SoulFactory hot-reload lifecycle action handler",
+  "issue": "bahia-fkvk",
+  "status": "verified",
+  "intended_behavior": "SoulFactory recognizes kind:1950 hot-reload actions, resolves current and proposed kind:31952 drafts, computes customization-section diffs, dispatches only the runtime-control methods needed for changed avatar, voice, memory, and persona sections, publishes kind:6950 progress, and returns a canonical kind:7950 result summarizing applied changes.",
+  "scope": [
+    "internal/domain/soul.go action type and action draft-event field",
+    "internal/soulfactory/lifecycle_handler.go hot-reload orchestration",
+    "internal/soulfactory/runtime_adapter.go customization method constants",
+    "internal/soulfactory/event_codec.go action draft-event parsing"
+  ],
+  "out_of_scope": [
+    "OpenClaw/Metiq runtime-side method implementations",
+    "web Live Update UX",
+    "rollback support",
+    "config reload runtime method implementation"
+  ]
+}

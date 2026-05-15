@@ -231,6 +231,165 @@ func TestLifecycleHandlerRegenerateRequiresBriefAndRepublishesUpdatedIdentity(t 
 	}
 }
 
+func TestDiffHotReloadDraftsIdentifiesCustomizationSections(t *testing.T) {
+	current := domain.SoulDraftContent{
+		Schema:   domain.SoulFactoryDraftSchemaV2,
+		Identity: domain.SoulIdentitySpec{Name: "Scout", Purpose: "Research", Tier: domain.SoulTierStandard},
+		Persona:  domain.SoulPersonaSpec{Traits: []string{"careful"}},
+		Avatar:   domain.SoulAvatarSpec{Generation: &domain.SoulAvatarGenerationSpec{Prompt: "old owl"}},
+		Voice:    domain.SoulVoiceSpec{Provider: "elevenlabs", PersonaID: "old-voice"},
+		Memory:   domain.SoulMemorySpec{EmbeddingProvider: "openai", EmbeddingModel: "text-embedding-3-small"},
+	}
+	proposed := current
+	proposed.Identity.Theme = "warm"
+	proposed.Persona.Traits = []string{"careful", "curious"}
+	proposed.Avatar.Generation = &domain.SoulAvatarGenerationSpec{Prompt: "new owl"}
+	proposed.Voice.PersonaID = "new-voice"
+	proposed.Memory.Search = &domain.SoulMemorySearchSpec{TopK: 12, ScoreThreshold: 0.72}
+
+	diff := DiffHotReloadDrafts(current, proposed)
+	if !diff.Avatar || !diff.Voice || !diff.Memory || !diff.Persona {
+		t.Fatalf("diff = %+v, want all hot-reload sections changed", diff)
+	}
+	want := []string{"avatar", "voice", "memory", "persona"}
+	if fmt.Sprint(diff.ChangedSections) != fmt.Sprint(want) {
+		t.Fatalf("changed sections = %#v, want %#v", diff.ChangedSections, want)
+	}
+
+	unchanged := DiffHotReloadDrafts(current, current)
+	if len(unchanged.ChangedSections) != 0 || unchanged.Avatar || unchanged.Voice || unchanged.Memory || unchanged.Persona {
+		t.Fatalf("unchanged diff = %+v, want no changes", unchanged)
+	}
+}
+
+func TestLifecycleHandlerHotReloadDispatchesSelectiveRuntimeControlsAndPublishesProgress(t *testing.T) {
+	signer := newFakeSigner(t)
+	currentDraft := &domain.SoulDraft{
+		EventID:   "draft-current-event",
+		AgentID:   "scout",
+		CreatedBy: signer.pubkey,
+		Content: domain.SoulDraftContent{
+			Schema:   domain.SoulFactoryDraftSchemaV2,
+			Brief:    "old brief",
+			Identity: domain.SoulIdentitySpec{Name: "Scout", Purpose: "Research", Tier: domain.SoulTierStandard},
+			Persona:  domain.SoulPersonaSpec{Traits: []string{"careful"}},
+			Avatar:   domain.SoulAvatarSpec{Generation: &domain.SoulAvatarGenerationSpec{Prompt: "old owl", Provider: "flux-comfyui"}},
+			Voice:    domain.SoulVoiceSpec{Provider: "elevenlabs", PersonaID: "old-voice"},
+			Memory:   domain.SoulMemorySpec{EmbeddingProvider: "openai", EmbeddingModel: "text-embedding-3-small"},
+			Runtime:  domain.SoulRuntimeSpec{Target: domain.RuntimeTargetOpenClaw, RuntimePubkey: "runtime-pubkey"},
+			SpecHash: "sha256:old",
+		},
+	}
+	proposedDraft := &domain.SoulDraft{
+		EventID:   "draft-proposed-event",
+		AgentID:   "scout",
+		CreatedBy: signer.pubkey,
+		Content: domain.SoulDraftContent{
+			Schema:           domain.SoulFactoryDraftSchemaV2,
+			Brief:            "old brief",
+			Identity:         domain.SoulIdentitySpec{Name: "Scout", Purpose: "Research deeply", Tier: domain.SoulTierStandard, Theme: "warm"},
+			Persona:          domain.SoulPersonaSpec{Traits: []string{"careful", "curious"}, Tone: "friendly"},
+			Avatar:           domain.SoulAvatarSpec{Generation: &domain.SoulAvatarGenerationSpec{Prompt: "new owl", Provider: "flux-comfyui"}, GeneratedRef: "blossom:new-avatar", Current: "generated"},
+			Voice:            domain.SoulVoiceSpec{Provider: "elevenlabs", PersonaID: "new-voice"},
+			Memory:           domain.SoulMemorySpec{EmbeddingProvider: "voyage", EmbeddingModel: "voyage-3", Search: &domain.SoulMemorySearchSpec{TopK: 10}},
+			Runtime:          domain.SoulRuntimeSpec{Target: domain.RuntimeTargetOpenClaw, RuntimePubkey: "runtime-pubkey"},
+			SpecHash:         "sha256:new",
+			PreviousSpecHash: "sha256:old",
+		},
+	}
+	soul := &domain.AgentSoul{
+		ID:           uuid.New(),
+		AgentID:      "scout",
+		Name:         "Scout",
+		Tier:         domain.SoulTierStandard,
+		Status:       domain.SoulStatusActive,
+		DraftRef:     "31952:" + signer.pubkey + ":scout",
+		DraftEventID: currentDraft.EventID,
+		SpecHash:     "sha256:old",
+		Runtime:      domain.SoulRuntimeSpec{Target: domain.RuntimeTargetOpenClaw, RuntimePubkey: "runtime-pubkey"},
+		CreatedAt:    time.Now().UTC(),
+	}
+
+	reactor := NewReactor(
+		Config{Relays: []string{"wss://public.example"}, AuthorizedPubkeys: []string{signer.pubkey}},
+		scriptedGenerator{},
+		signer,
+		slog.Default(),
+	)
+	capture := attachPublishCapture(reactor)
+	reactor.getSoulFn = func(context.Context, string) (*domain.AgentSoul, error) { return soul, nil }
+	reactor.getDraftFn = func(_ context.Context, draftRef, draftEventID string) (*domain.SoulDraft, error) {
+		switch draftEventID {
+		case currentDraft.EventID:
+			return currentDraft, nil
+		case proposedDraft.EventID:
+			return proposedDraft, nil
+		default:
+			if draftRef == "31952:"+signer.pubkey+":scout" {
+				return proposedDraft, nil
+			}
+			return nil, nil
+		}
+	}
+	runtime := &trackingRuntimeAdapter{}
+	handler := NewLifecycleHandler(reactor, nil, nil, slog.Default())
+	handler.SetRuntimeAdapters(map[domain.RuntimeTarget]RuntimeAdapter{domain.RuntimeTargetOpenClaw: runtime})
+
+	event := buildActionEvent(t, signer, "hot-reload-action", nostr.Tags{
+		{"soul", buildSoulRefForTest(soul)},
+		{"action", string(domain.SoulActionHotReload)},
+		{"draft-event", proposedDraft.EventID},
+		{"spec-hash", "sha256:new"},
+		{"previous-spec-hash", "sha256:old"},
+	}, "")
+	if err := handler.HandleAction(t.Context(), event); err != nil {
+		t.Fatalf("HandleAction(hot-reload) error = %v", err)
+	}
+
+	methods := make([]string, 0, len(runtime.requests))
+	for _, req := range runtime.requests {
+		methods = append(methods, req.Method)
+		if req.RequestKind != domain.KindSoulAction || req.Action != domain.SoulActionHotReload {
+			t.Fatalf("runtime request context = kind %d action %s, want 1950 hot-reload", req.RequestKind, req.Action)
+		}
+		if req.Soul.SpecHash != "sha256:new" || req.Soul.Draft != proposedDraft.EventID {
+			t.Fatalf("runtime soul ref = %+v, want proposed draft and new spec hash", req.Soul)
+		}
+	}
+	wantMethods := []string{RuntimeMethodAvatarGenerate, RuntimeMethodVoiceConfigure, RuntimeMethodMemoryConfigure, RuntimeMethodPersonaUpdate}
+	if fmt.Sprint(methods) != fmt.Sprint(wantMethods) {
+		t.Fatalf("runtime methods = %#v, want %#v", methods, wantMethods)
+	}
+
+	statusEvents := capture.eventsByKind(domain.KindProvisioningStatus)
+	if len(statusEvents) < 10 {
+		t.Fatalf("status event count = %d, want initial + diff + per-section progress", len(statusEvents))
+	}
+	if !strings.Contains(statusEvents[1].Content, "avatar,voice,memory,persona") {
+		t.Fatalf("diff progress content = %q, want changed sections", statusEvents[1].Content)
+	}
+	results := capture.eventsByKind(domain.KindProvisioningResult)
+	if len(results) != 1 {
+		t.Fatalf("result count = %d, want 1", len(results))
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(results[0].Content), &payload); err != nil {
+		t.Fatalf("unmarshal hot-reload result: %v", err)
+	}
+	if payload["hot_reload"] != true || payload["applied_change_count"] != float64(4) {
+		t.Fatalf("hot-reload result payload = %#v, want applied count 4", payload)
+	}
+	if soul.DraftEventID != proposedDraft.EventID || soul.SpecHash != "sha256:new" || soul.PreviousSpecHash != "sha256:old" {
+		t.Fatalf("soul refs after hot-reload = draft %q spec %q previous %q", soul.DraftEventID, soul.SpecHash, soul.PreviousSpecHash)
+	}
+	if soul.Purpose != "Research deeply" {
+		t.Fatalf("soul purpose after hot-reload = %q, want proposed identity purpose", soul.Purpose)
+	}
+	if soul.Assets.AvatarRef != "blossom:new-avatar" || soul.Assets.VoiceRef != "new-voice" {
+		t.Fatalf("soul assets after hot-reload = %+v", soul.Assets)
+	}
+}
+
 func TestLifecycleHandlerReplayDoesNotDuplicateSideEffects(t *testing.T) {
 	signer := &trackingSigner{fakeSigner: newFakeSigner(t)}
 	soul := &domain.AgentSoul{

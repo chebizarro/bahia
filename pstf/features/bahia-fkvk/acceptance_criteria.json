@@ -1,0 +1,31 @@
+{
+  "feature_id": "bahia-fkvk",
+  "title": "Hot-reload action handler",
+  "criteria": [
+    {
+      "id": "AC1",
+      "statement": "The SoulFactory lifecycle handler recognizes hot-reload as a supported kind:1950 action.",
+      "tests": ["TestLifecycleHandlerHotReloadDispatchesSelectiveRuntimeControlsAndPublishesProgress"]
+    },
+    {
+      "id": "AC2",
+      "statement": "Draft diff logic identifies changed avatar, voice, memory, and persona sections from current versus proposed drafts.",
+      "tests": ["TestDiffHotReloadDraftsIdentifiesCustomizationSections"]
+    },
+    {
+      "id": "AC3",
+      "statement": "Hot-reload dispatches selective soulfactory.* runtime control requests for changed sections only.",
+      "tests": ["TestLifecycleHandlerHotReloadDispatchesSelectiveRuntimeControlsAndPublishesProgress"]
+    },
+    {
+      "id": "AC4",
+      "statement": "Hot-reload progress is observable through kind:6950 lifecycle status events.",
+      "tests": ["TestLifecycleHandlerHotReloadDispatchesSelectiveRuntimeControlsAndPublishesProgress"]
+    },
+    {
+      "id": "AC5",
+      "statement": "The terminal kind:7950 lifecycle result includes an applied changes summary and updated draft/spec references.",
+      "tests": ["TestLifecycleHandlerHotReloadDispatchesSelectiveRuntimeControlsAndPublishesProgress"]
+    }
+  ]
+}

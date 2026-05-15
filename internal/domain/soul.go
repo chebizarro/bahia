@@ -102,6 +102,7 @@ const (
 	SoulActionRegenerate SoulActionType = "regenerate"
 	SoulActionRedeploy   SoulActionType = "redeploy"
 	SoulActionUpdate     SoulActionType = "update"
+	SoulActionHotReload  SoulActionType = "hot-reload"
 )
 
 const (
@@ -413,7 +414,8 @@ type SoulAction struct {
 	Reason           string                 `json:"reason,omitempty"`
 	Initiator        string                 `json:"initiator"`           // pubkey
 	NewBrief         string                 `json:"new_brief,omitempty"` // for regenerate
-	DraftRef         string                 `json:"draft_ref,omitempty"` // for update
+	DraftRef         string                 `json:"draft_ref,omitempty"` // for update/hot-reload
+	DraftEventID     string                 `json:"draft_event_id,omitempty"`
 	SpecHash         string                 `json:"spec_hash,omitempty"`
 	PreviousSpecHash string                 `json:"previous_spec_hash,omitempty"`
 	Patch            map[string]interface{} `json:"patch,omitempty"`
