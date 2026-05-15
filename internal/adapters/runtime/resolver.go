@@ -21,20 +21,22 @@ type RuntimeResolver interface {
 type ConfigRuntimeResolver struct {
 	cfg    config.RuntimeConfig
 	logger *zap.Logger
+	registryAuth *RegistryAuthConfig
 
 	mu    sync.Mutex
 	cache map[string]Runtime
 }
 
 // NewConfigRuntimeResolver creates a runtime resolver backed by Bahia config.
-func NewConfigRuntimeResolver(cfg config.RuntimeConfig, logger *zap.Logger) *ConfigRuntimeResolver {
+func NewConfigRuntimeResolver(cfg config.RuntimeConfig, logger *zap.Logger, registryAuth *RegistryAuthConfig) *ConfigRuntimeResolver {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
 	return &ConfigRuntimeResolver{
-		cfg:    cfg,
-		logger: logger,
-		cache:  make(map[string]Runtime),
+		cfg:          cfg,
+		logger:       logger,
+		registryAuth: registryAuth,
+		cache:        make(map[string]Runtime),
 	}
 }
 
@@ -73,6 +75,7 @@ func (r *ConfigRuntimeResolver) Resolve(service *domain.Service, env *domain.Env
 		DockerHost:    target.DockerHost,
 		ComposeDir:    target.ComposeDir,
 		Endpoint:      target.ResolvedEndpoint,
+		RegistryAuth:  r.registryAuth,
 		KubeContext:   target.KubeContext,
 		KubeNamespace: target.KubeNamespace,
 		KubeConfig:    target.KubeConfig,
