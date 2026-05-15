@@ -30,6 +30,7 @@ const (
 	RuntimeMethodAvatarStatus    = "soulfactory.avatar.status"
 	RuntimeMethodVoiceConfigure  = "soulfactory.voice.configure"
 	RuntimeMethodMemoryConfigure = "soulfactory.memory.configure"
+	RuntimeMethodMemoryStatus    = "soulfactory.memory.status"
 	RuntimeMethodMemoryReindex   = "soulfactory.memory.reindex"
 	RuntimeMethodConfigReload    = "soulfactory.config.reload"
 

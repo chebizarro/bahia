@@ -77,6 +77,42 @@ func TestOpenClawSidecarDispatchesMemoryReindexAndPublishes38386Result(t *testin
 	}
 }
 
+func TestOpenClawSidecarDispatchesMemoryConfigureAndStatusAndPublishes38386Results(t *testing.T) {
+	runtime := newFakeSigner(t)
+	controller := newFakeSigner(t)
+	transport := &fakeOpenClawSidecarTransport{}
+	driver := &fakeOpenClawDriver{methods: []string{RuntimeMethodMemoryConfigure, RuntimeMethodMemoryStatus}, outcome: &OpenClawControlOutcome{Status: "success", Result: map[string]interface{}{"memory_config_status": "applied", "stats": map[string]interface{}{"items": 12}}}}
+	sidecar := newTestOpenClawSidecar(t, runtime, controller, transport, driver)
+	params, err := BuildMemoryConfigureRuntimeParams(domain.SoulMemorySpec{EmbeddingProvider: "openai", EmbeddingModel: "text-embedding-3-small", Strategy: "long-term"})
+	if err != nil {
+		t.Fatalf("BuildMemoryConfigureRuntimeParams error = %v", err)
+	}
+
+	configureReq := signedOpenClawControlRequest(t, controller, runtime.pubkey, RuntimeMethodMemoryConfigure, params, nil)
+	configureResult, err := sidecar.HandleControlEvent(t.Context(), configureReq)
+	if err != nil {
+		t.Fatalf("HandleControlEvent memory configure error = %v", err)
+	}
+	if configureResult.Status != "success" || configureResult.Method != RuntimeMethodMemoryConfigure || configureResult.Result["memory_config_status"] != "applied" {
+		t.Fatalf("unexpected configure result = %+v", configureResult)
+	}
+
+	statusReq := signedOpenClawControlRequest(t, controller, runtime.pubkey, RuntimeMethodMemoryStatus, BuildMemoryStatusRuntimeParams(), nil)
+	statusResult, err := sidecar.HandleControlEvent(t.Context(), statusReq)
+	if err != nil {
+		t.Fatalf("HandleControlEvent memory status error = %v", err)
+	}
+	if statusResult.Status != "success" || statusResult.Method != RuntimeMethodMemoryStatus || statusResult.Result["stats"] == nil {
+		t.Fatalf("unexpected status result = %+v", statusResult)
+	}
+	if len(driver.calls) != 2 || driver.calls[0].Method != RuntimeMethodMemoryConfigure || driver.calls[1].Method != RuntimeMethodMemoryStatus {
+		t.Fatalf("driver calls = %+v", driver.calls)
+	}
+	if len(transport.published) != 2 || transport.published[0].Kind != domain.KindRuntimeControlResult || transport.published[1].Kind != domain.KindRuntimeControlResult {
+		t.Fatalf("published events = %+v, want two 38386 results", transport.published)
+	}
+}
+
 func TestOpenClawSidecarDispatchesConfigReloadAndPublishes38386Result(t *testing.T) {
 	runtime := newFakeSigner(t)
 	controller := newFakeSigner(t)

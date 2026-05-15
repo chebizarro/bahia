@@ -12,6 +12,7 @@ const (
 	// SoulFactoryMemoryConfigSchema versions the portable memory config payload
 	// embedded in kind:38384 soulfactory.memory.configure params.
 	SoulFactoryMemoryConfigSchema  = "soulfactory-memory-config/v1"
+	SoulFactoryMemoryStatusSchema  = "soulfactory-memory-status/v1"
 	SoulFactoryMemoryReindexSchema = "soulfactory-memory-reindex/v1"
 
 	MemoryEmbeddingProviderAuto   = "auto"
@@ -75,6 +76,13 @@ func (e *MemorySpecValidationError) Error() string {
 	}
 	return "invalid memory spec: " + strings.Join(e.Violations, "; ")
 }
+
+// MemoryConfigService maps Bahia memory specs into runtime-control params.
+// It is pure and deterministic; runtimes report applied config and memory stats
+// through kind:38386 result events.
+type MemoryConfigService struct{}
+
+func NewMemoryConfigService() MemoryConfigService { return MemoryConfigService{} }
 
 // MemoryConfigMapping is the normalized service result produced from a
 // domain.SoulMemorySpec before it is serialized into runtime control params.
@@ -217,11 +225,12 @@ func MapSoulMemorySpec(spec domain.SoulMemorySpec) (MemoryConfigMapping, error) 
 	}, nil
 }
 
-// BuildMemoryConfigureRuntimeParams serializes the memory configuration contract
-// to the params object embedded in a kind:38384 soulfactory.memory.configure
-// RuntimeControlEnvelope.
-func BuildMemoryConfigureRuntimeParams(spec domain.SoulMemorySpec) (map[string]interface{}, error) {
-	mapping, err := MapSoulMemorySpec(spec)
+func (s MemoryConfigService) Map(spec domain.SoulMemorySpec) (MemoryConfigMapping, error) {
+	return MapSoulMemorySpec(spec)
+}
+
+func (s MemoryConfigService) BuildConfigureRuntimeParams(spec domain.SoulMemorySpec) (map[string]interface{}, error) {
+	mapping, err := s.Map(spec)
 	if err != nil {
 		return nil, err
 	}
@@ -238,6 +247,24 @@ func BuildMemoryConfigureRuntimeParams(spec domain.SoulMemorySpec) (map[string]i
 			},
 		},
 	}, nil
+}
+
+func (s MemoryConfigService) BuildStatusRuntimeParams() map[string]interface{} {
+	return map[string]interface{}{
+		"schema":  SoulFactoryMemoryStatusSchema,
+		"include": []string{"config", "stats"},
+	}
+}
+
+// BuildMemoryConfigureRuntimeParams serializes the memory configuration contract
+// to the params object embedded in a kind:38384 soulfactory.memory.configure
+// RuntimeControlEnvelope.
+func BuildMemoryConfigureRuntimeParams(spec domain.SoulMemorySpec) (map[string]interface{}, error) {
+	return NewMemoryConfigService().BuildConfigureRuntimeParams(spec)
+}
+
+func BuildMemoryStatusRuntimeParams() map[string]interface{} {
+	return NewMemoryConfigService().BuildStatusRuntimeParams()
 }
 
 // MarshalMemoryConfigureRuntimeParams returns stable JSON for callers that need

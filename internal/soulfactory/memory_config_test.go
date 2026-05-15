@@ -133,6 +133,17 @@ func TestBuildMemoryReindexRuntimeParamsIncludesProgressAndRetention(t *testing.
 	}
 }
 
+func TestMemoryConfigServiceBuildsStatusRuntimeParams(t *testing.T) {
+	params := NewMemoryConfigService().BuildStatusRuntimeParams()
+	if params["schema"] != SoulFactoryMemoryStatusSchema {
+		t.Fatalf("status schema = %#v", params["schema"])
+	}
+	include, ok := params["include"].([]string)
+	if !ok || len(include) != 2 || include[0] != "config" || include[1] != "stats" {
+		t.Fatalf("status include = %#v", params["include"])
+	}
+}
+
 func TestBuildMemoryConfigureRuntimeParamsSerializesInto38384Envelope(t *testing.T) {
 	params, err := BuildMemoryConfigureRuntimeParams(domain.SoulMemorySpec{
 		EmbeddingProvider: "openai",

@@ -32,7 +32,10 @@ var openClawSoulFactoryMethods = []string{
 	RuntimeMethodAvatarStatus,
 	RuntimeMethodVoiceConfigure,
 	RuntimeMethodMemoryConfigure,
+	RuntimeMethodMemoryStatus,
 	RuntimeMethodMemoryReindex,
+	RuntimeMethodPersonaConfigure,
+	RuntimeMethodPersonaPreview,
 	RuntimeMethodPersonaUpdate,
 	RuntimeMethodConfigReload,
 }
@@ -631,6 +634,8 @@ func validateOpenClawMethodParams(method string, params map[string]interface{}) 
 		if _, ok := params["memory_config"].(map[string]interface{}); !ok {
 			return controlError("missing_required_param", "memory.configure requires memory_config object", false)
 		}
+	case RuntimeMethodMemoryStatus:
+		// Optional params only.
 	case RuntimeMethodMemoryReindex:
 		if schema, ok := params["schema"].(string); !ok || schema != SoulFactoryMemoryReindexSchema {
 			return controlError("invalid_reindex_request", "memory.reindex requires soulfactory-memory-reindex/v1 schema", false)
@@ -640,6 +645,10 @@ func validateOpenClawMethodParams(method string, params map[string]interface{}) 
 		}
 		if _, ok := params["memory_config"].(map[string]interface{}); !ok {
 			return controlError("missing_required_param", "memory.reindex requires memory_config object", false)
+		}
+	case RuntimeMethodPersonaConfigure, RuntimeMethodPersonaPreview, RuntimeMethodPersonaUpdate:
+		if _, err := ParsePersonaRuntimeParams(params); err != nil {
+			return controlError("invalid_persona_request", err.Error(), false)
 		}
 	case RuntimeMethodConfigReload:
 		if _, err := ParseConfigReloadRequest(params); err != nil {
