@@ -1,0 +1,19 @@
+{
+  "feature_id": "bahia-hi9w",
+  "title": "Blossom blob storage integration for avatars",
+  "observed_context": [
+    "internal/adapters/llm/avatar.go returns generated avatar image data and content type",
+    "internal/adapters/blossom/ provides lower-level Upload and DownloadByHash helpers",
+    "internal/soulfactory/provisioner_full.go generates avatars during StepAvatar"
+  ],
+  "intended_behavior": "Generated avatar image data is stored in Blossom when configured, the persisted avatar asset reference is blossom:<sha256>, and direct provider URLs remain usable as fallback preview refs when Blossom upload is unavailable.",
+  "scope": [
+    "Blossom avatar upload/ref helper",
+    "Avatar ref preview resolution helper",
+    "Provisioning wiring for assets.avatar_ref"
+  ],
+  "out_of_scope": [
+    "Avatar runtime control methods",
+    "Web Avatar Studio UX"
+  ]
+}

@@ -1,0 +1,10 @@
+{
+  "feature_id": "bahia-hi9w",
+  "criteria": [
+    {"id":"AC1","statement":"Generated avatar image bytes can be uploaded to Blossom.","status":"implemented"},
+    {"id":"AC2","statement":"Successful Blossom upload returns an avatar ref in blossom:<sha256> format.","status":"implemented"},
+    {"id":"AC3","statement":"When Blossom is unavailable or upload fails, a direct HTTP(S) avatar URL can be returned as the ref fallback.","status":"implemented"},
+    {"id":"AC4","statement":"Avatar refs can be resolved for preview from either blossom:<sha256> or direct URL refs.","status":"implemented"},
+    {"id":"AC5","statement":"Provisioning stores the portable ref in assets.avatar_ref and keeps avatar_url as the preview/profile URL.","status":"implemented"}
+  ]
+}

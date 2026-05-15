@@ -61,7 +61,7 @@ func NewFullProvisioner(reactor *Reactor, config FullProvisionerConfig, bahiaInt
 	if len(config.Blossom.Servers) > 0 {
 		p.blossomClient = blossom.NewClient(config.Blossom, logger)
 	}
-	if config.Avatar.LemmyURL != "" && p.blossomClient != nil {
+	if config.Avatar.LemmyURL != "" {
 		p.avatarGenerator = llm.NewAvatarGenerator(config.Avatar, logger)
 	}
 	if config.Workspace.GiteaURL != "" {
@@ -177,9 +177,9 @@ func (p *FullProvisioner) ProvisionFull(ctx context.Context, req *domain.Provisi
 	p.publishProgress(ctx, requestEvent, domain.StepAvatar, 3, totalSteps, "Generating avatar via FLUX...")
 
 	stepStart = time.Now()
-	if p.avatarGenerator == nil || p.blossomClient == nil {
+	if p.avatarGenerator == nil {
 		p.recordStep(run, domain.StepAvatar, domain.StepStatusSkipped, map[string]interface{}{
-			"reason": "avatar generator or blossom storage not configured",
+			"reason": "avatar generator not configured",
 		}, nil, 0)
 	} else {
 		avatarResult, err := p.avatarGenerator.Generate(ctx, output.AvatarPrompt, resolved.AgentID)
@@ -188,15 +188,17 @@ func (p *FullProvisioner) ProvisionFull(ctx context.Context, req *domain.Provisi
 			p.recordStep(run, domain.StepAvatar, domain.StepStatusFailed, nil, err, time.Since(stepStart))
 			// Continue without avatar - not fatal
 		} else {
-			// Upload avatar to Blossom
-			bd, err := p.blossomClient.Upload(ctx, avatarResult.ImageData, avatarResult.ContentType)
+			stored, err := p.blossomClient.StoreAvatar(ctx, avatarResult.ImageData, avatarResult.ContentType, avatarResult.SourceURL)
 			if err != nil {
-				logger.Warn("avatar upload failed", "error", err)
+				logger.Warn("avatar storage failed", "error", err)
 			} else {
-				soul.AvatarBlobHash = bd.SHA256
-				soul.AvatarURL = bd.URL
+				soul.AvatarBlobHash = stored.Hash
+				soul.AvatarURL = stored.URL
+				soul.Assets.AvatarRef = stored.Ref
 				p.recordStep(run, domain.StepAvatar, domain.StepStatusComplete, map[string]interface{}{
-					"avatar_url": bd.URL,
+					"avatar_ref": stored.Ref,
+					"avatar_url": stored.URL,
+					"fallback":   stored.Fallback,
 				}, nil, time.Since(stepStart))
 			}
 		}

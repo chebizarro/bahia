@@ -132,6 +132,28 @@ describe('Nostr Client - Parsing Functions', () => {
         nip05: 'scout@example.com'
       });
     });
+
+    it('preserves v2 customization specs and derives legacy asset refs', () => {
+      const normalized = normalizeSoulDraftContent({
+        schema: 'soulfactory-draft/v2',
+        identity: { name: 'Scout', theme: 'warm', emoji: '🔍' },
+        avatar: {
+          current: 'generated',
+          generated_ref: 'blossom:avatar',
+          generation: { prompt: 'owl researcher', style_preset: 'pixel-art' }
+        },
+        voice: { provider: 'openai', persona_id: 'scout-voice' },
+        memory: { embedding_provider: 'voyage', search: { top_k: 10 } },
+        persona: { traits: ['curious'], tone: 'friendly professional' }
+      });
+
+      expect(normalized.identity).toMatchObject({ name: 'Scout', theme: 'warm', emoji: '🔍' });
+      expect(normalized.avatar.generated_ref).toBe('blossom:avatar');
+      expect(normalized.voice.provider).toBe('openai');
+      expect(normalized.memory.search.top_k).toBe(10);
+      expect(normalized.persona.traits).toEqual(['curious']);
+      expect(normalized.assets.avatar_ref).toBe('blossom:avatar');
+    });
   });
 
   describe('runtime capability parsing', () => {

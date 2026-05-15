@@ -77,6 +77,7 @@ type AvatarResult struct {
 	ContentType string // MIME type (image/png)
 	Seed        string // Generation seed for reproducibility
 	Provider    string // Provider that produced the image
+	SourceURL   string // Optional provider URL suitable for direct-reference fallback
 }
 
 // AvatarProgressEvent reports asynchronous avatar generation progress.
@@ -524,7 +525,7 @@ func (p *FluxComfyUIAvatarProvider) GenerateAvatar(ctx context.Context, req Avat
 		if apiResp.Seed == "" {
 			apiResp.Seed = req.Seed
 		}
-		return &AvatarResult{ImageData: imageData, ContentType: imageContentType, Seed: apiResp.Seed, Provider: p.Name()}, nil
+		return &AvatarResult{ImageData: imageData, ContentType: imageContentType, Seed: apiResp.Seed, Provider: p.Name(), SourceURL: imageURL}, nil
 	}
 
 	imageData, err := io.ReadAll(resp.Body)

@@ -299,16 +299,31 @@ export function normalizeSoulDraftContent(content = {}) {
   const relayPolicy = content.relay_policy || content.relayPolicy || {};
   const workspace = content.workspace || {};
   const assets = content.assets || {};
+  const avatar = content.avatar || content.avatar_spec || content.avatarSpec || null;
+  const voice = content.voice || content.voice_spec || content.voiceSpec || null;
+  const memory = content.memory || content.memory_spec || content.memorySpec || null;
+  const persona = content.persona || content.persona_spec || content.personaSpec || null;
+  const avatarRef = assets.avatar_ref || assets.avatarRef || content.avatar_ref || (
+    avatar?.current === 'uploaded'
+      ? avatar?.uploaded_ref || avatar?.uploadedRef || avatar?.generated_ref || avatar?.generatedRef
+      : avatar?.generated_ref || avatar?.generatedRef || avatar?.uploaded_ref || avatar?.uploadedRef
+  ) || '';
 
   return {
     ...content,
+    ...(avatar ? { avatar } : {}),
+    ...(voice ? { voice } : {}),
+    ...(memory ? { memory } : {}),
+    ...(persona ? { persona } : {}),
     identity: {
+      ...identity,
       name: identity.name || content.name || '',
       purpose: identity.purpose || content.purpose || content.brief || '',
       tier: identity.tier || content.tier || 'standard',
       nip05: identity.nip05 || content.nip05 || ''
     },
     runtime: {
+      ...runtime,
       target: runtime.target || runtime.runtime || '',
       runtime_pubkey: runtime.runtime_pubkey || runtime.runtimePubkey || '',
       capability_ref: runtime.capability_ref || runtime.capabilityRef || '',
@@ -316,6 +331,7 @@ export function normalizeSoulDraftContent(content = {}) {
       state: runtime.state || ''
     },
     permissions: {
+      ...permissions,
       allowed_kinds: permissions.allowed_kinds || permissions.allowedKinds || content.allowed_kinds || [],
       tool_grants: permissions.tool_grants || permissions.toolGrants || content.tool_grants || [],
       approval_policy: permissions.approval_policy || permissions.approvalPolicy || ''
@@ -324,15 +340,17 @@ export function normalizeSoulDraftContent(content = {}) {
       read: relayPolicy.read || [],
       write: relayPolicy.write || [],
       control: relayPolicy.control || [],
-      nip65_discovery: relayPolicy.nip65_discovery || relayPolicy.nip65Discovery || false
+      nip65_discovery: relayPolicy.nip65_discovery ?? relayPolicy.nip65Discovery ?? false
     },
     workspace: {
+      ...workspace,
       repo: workspace.repo || workspace.repository || '',
       branch: workspace.branch || '',
       environment: workspace.environment || ''
     },
     assets: {
-      avatar_ref: assets.avatar_ref || assets.avatarRef || content.avatar_ref || '',
+      ...assets,
+      avatar_ref: avatarRef,
       voice_ref: assets.voice_ref || assets.voiceRef || content.voice_ref || ''
     },
     spec_hash: content.spec_hash || content.specHash || '',

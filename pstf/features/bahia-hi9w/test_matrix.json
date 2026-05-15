@@ -1,0 +1,13 @@
+{
+  "feature_id": "bahia-hi9w",
+  "tests": [
+    {"criterion":"AC1,AC2","test":"TestClientStoreAvatarReturnsBlossomRef","type":"unit","status":"passed"},
+    {"criterion":"AC3","test":"TestClientStoreAvatarFallsBackToDirectURL","type":"unit","status":"passed"},
+    {"criterion":"AC3","test":"TestClientStoreAvatarFallsBackWhenUploadFails","type":"unit","status":"passed"},
+    {"criterion":"AC3","test":"TestClientStoreAvatarFallsBackOnMalformedBlossomDescriptor","type":"unit","status":"passed"},
+    {"criterion":"AC4","test":"TestClientResolveAvatarRefDirectURL","type":"unit","status":"passed"},
+    {"criterion":"AC4","test":"TestClientResolveAvatarRefDirectURLSizeLimit","type":"unit","status":"passed"},
+    {"criterion":"AC4","test":"TestHashFromRefValidation","type":"unit","status":"passed"},
+    {"criterion":"AC5","test":"go test ./internal/soulfactory/...","type":"integration compile/regression","status":"passed"}
+  ]
+}
