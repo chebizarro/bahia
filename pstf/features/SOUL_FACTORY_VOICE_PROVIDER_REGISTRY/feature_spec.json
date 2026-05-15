@@ -1,0 +1,46 @@
+{
+  "feature_id": "SOUL_FACTORY_VOICE_PROVIDER_REGISTRY",
+  "title": "SoulFactory voice provider registry service",
+  "priority": "P1",
+  "status": "verified",
+  "beads_issue": "bahia-1tej",
+  "plan_ref": "docs/plans/soulfactory-agent-customization-2026-05-15.md",
+  "description": "Provide a Bahia-local voice provider registry for SoulFactory customization drafts. The registry defines a provider interface, enumerates built-in TTS providers, caches provider capability snapshots, exposes voice metadata for UI/runtime selection, and resolves domain.SoulVoiceSpec plus domain.SoulVoicePersonaSpec into provider and voice selections.",
+  "source_evidence": [
+    "docs/plans/soulfactory-agent-customization-2026-05-15.md",
+    "internal/domain/soul.go",
+    "internal/soulfactory/voice_registry.go",
+    "internal/soulfactory/voice_registry_test.go"
+  ],
+  "actors": [
+    {
+      "name": "souls_ui",
+      "role": "Queries provider and voice capabilities for Voice Studio selection."
+    },
+    {
+      "name": "soulfactory_controller",
+      "role": "Validates and resolves draft voice specs before runtime configuration work."
+    },
+    {
+      "name": "tts_provider_adapter",
+      "role": "Implements the registry interface for static or future credential-backed provider catalogs."
+    }
+  ],
+  "in_scope": [
+    "Provider registry interface and implementation in internal/soulfactory.",
+    "Built-in capability catalogs for ElevenLabs, Azure Speech, OpenAI TTS, and local CLI.",
+    "Voice metadata including language, gender, style tags, models, and provider feature flags.",
+    "Capability cache with immutable caller-facing snapshots.",
+    "SoulVoiceSpec/SoulVoicePersonaSpec resolution helper for provider-specific voice bindings."
+  ],
+  "out_of_scope": [
+    "Voice sample audio generation.",
+    "Live runtime hot-reload methods.",
+    "Credential-backed API voice synchronization.",
+    "Avatar, memory, or personality service implementation."
+  ],
+  "non_goals": [
+    "Introduce REST control APIs or RPC-over-Nostr abstractions.",
+    "Poll providers or relays for completion. The current registry is deterministic and local."
+  ]
+}

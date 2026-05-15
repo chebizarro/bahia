@@ -1,0 +1,51 @@
+{
+  "feature_id": "SOUL_FACTORY_VOICE_PROVIDER_REGISTRY",
+  "status": "verified",
+  "tests": [
+    {
+      "test_id": "SVPR-T-001",
+      "ac_ids": ["SVPR-AC-001", "SVPR-AC-002"],
+      "title": "Default provider registry population",
+      "type": "unit",
+      "target_path": "internal/soulfactory/voice_registry_test.go",
+      "test_name": "TestDefaultVoiceProviderRegistryPopulatesBuiltInProviders",
+      "status": "passed_2026-05-15_go_test_internal_soulfactory"
+    },
+    {
+      "test_id": "SVPR-T-002",
+      "ac_ids": ["SVPR-AC-003"],
+      "title": "Capability caching and defensive copy behavior",
+      "type": "unit",
+      "target_path": "internal/soulfactory/voice_registry_test.go",
+      "test_name": "TestVoiceProviderRegistryCachesCapabilities",
+      "status": "passed_2026-05-15_go_test_internal_soulfactory"
+    },
+    {
+      "test_id": "SVPR-T-003",
+      "ac_ids": ["SVPR-AC-004"],
+      "title": "SoulVoiceSpec resolution",
+      "type": "unit",
+      "target_path": "internal/soulfactory/voice_registry_test.go",
+      "test_name": "TestVoiceProviderRegistryResolveSoulVoiceSpec",
+      "status": "passed_2026-05-15_go_test_internal_soulfactory"
+    },
+    {
+      "test_id": "SVPR-T-004",
+      "ac_ids": ["SVPR-AC-004"],
+      "title": "Explicit missing voice rejection",
+      "type": "unit",
+      "target_path": "internal/soulfactory/voice_registry_test.go",
+      "test_name": "TestVoiceProviderRegistryResolveSpecRejectsUnknownExplicitVoice",
+      "status": "passed_2026-05-15_go_test_internal_soulfactory"
+    },
+    {
+      "test_id": "SVPR-T-005",
+      "ac_ids": ["SVPR-AC-003", "SVPR-AC-004"],
+      "title": "Resolution uses one cached capability snapshot",
+      "type": "unit",
+      "target_path": "internal/soulfactory/voice_registry_test.go",
+      "test_name": "TestVoiceProviderRegistryResolveUsesSingleCapabilitySnapshot",
+      "status": "passed_2026-05-15_go_test_internal_soulfactory"
+    }
+  ]
+}

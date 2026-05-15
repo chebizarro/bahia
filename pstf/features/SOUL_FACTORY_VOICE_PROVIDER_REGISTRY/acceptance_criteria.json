@@ -1,0 +1,46 @@
+{
+  "feature_id": "SOUL_FACTORY_VOICE_PROVIDER_REGISTRY",
+  "status": "verified",
+  "criteria": [
+    {
+      "ac_id": "SVPR-AC-001",
+      "title": "Provider registry interface and built-in catalogs exist",
+      "type": "functional",
+      "priority": "must",
+      "assertion": "Bahia exposes a voice provider registry interface and registers ElevenLabs, Azure Speech, OpenAI TTS, and local CLI providers.",
+      "testable_by": ["unit"],
+      "expected_result": "Default registry returns stable provider IDs and capability payloads for all four providers.",
+      "source_evidence": ["internal/soulfactory/voice_registry.go", "internal/soulfactory/voice_registry_test.go"]
+    },
+    {
+      "ac_id": "SVPR-AC-002",
+      "title": "Voice metadata supports customization UX",
+      "type": "data_contract",
+      "priority": "must",
+      "assertion": "Provider voices include metadata needed by Voice Studio: language, gender, style tags, provider, supported models, and display names.",
+      "testable_by": ["unit"],
+      "expected_result": "ElevenLabs and other built-in voices enumerate non-empty metadata suitable for filtering and display.",
+      "source_evidence": ["internal/soulfactory/voice_registry.go", "internal/soulfactory/voice_registry_test.go"]
+    },
+    {
+      "ac_id": "SVPR-AC-003",
+      "title": "Provider capabilities are cached safely",
+      "type": "performance",
+      "priority": "must",
+      "assertion": "Registry capability queries cache provider snapshots and do not leak caller mutations back into the cache.",
+      "testable_by": ["unit"],
+      "expected_result": "Repeated capability calls hit the provider once while cache is fresh, and returned snapshots are defensive copies.",
+      "source_evidence": ["internal/soulfactory/voice_registry_test.go"]
+    },
+    {
+      "ac_id": "SVPR-AC-004",
+      "title": "SoulVoiceSpec resolution uses domain voice specs",
+      "type": "functional",
+      "priority": "must",
+      "assertion": "Registry resolution accepts domain.SoulVoiceSpec and domain.SoulVoicePersonaSpec, resolves provider-specific voice IDs, preserves persona metadata, and rejects explicit missing voices.",
+      "testable_by": ["unit"],
+      "expected_result": "An ElevenLabs SoulVoiceSpec resolves to the Adam voice and persona metadata; an unknown explicit provider voice returns ErrVoiceNotFound.",
+      "source_evidence": ["internal/domain/soul.go", "internal/soulfactory/voice_registry.go", "internal/soulfactory/voice_registry_test.go"]
+    }
+  ]
+}
