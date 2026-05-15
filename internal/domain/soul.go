@@ -226,6 +226,7 @@ type AgentSoul struct {
 
 	// Draft/runtime reconciliation
 	DraftRef         string              `json:"draft_ref,omitempty"`
+	DraftEventID     string              `json:"draft_event_id,omitempty"`
 	SpecHash         string              `json:"spec_hash,omitempty"`
 	PreviousSpecHash string              `json:"previous_spec_hash,omitempty"`
 	Runtime          SoulRuntimeSpec     `json:"runtime,omitempty"`

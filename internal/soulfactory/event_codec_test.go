@@ -138,6 +138,7 @@ func TestEventCodecBuildsAndParsesAgentSoulReadModelWithRuntimeFields(t *testing
 		AllowedKinds:     []int{1, domain.KindSoulAction},
 		ToolGrants:       []domain.ToolGrant{{MCPServer: "memory", Scopes: []string{"read"}}},
 		DraftRef:         "31952:operator:scout",
+		DraftEventID:     "draft-event-id",
 		SpecHash:         "sha256:new",
 		PreviousSpecHash: "sha256:old",
 		Runtime: domain.SoulRuntimeSpec{
@@ -167,7 +168,7 @@ func TestEventCodecBuildsAndParsesAgentSoulReadModelWithRuntimeFields(t *testing
 	if parsed.AgentID != soul.AgentID || parsed.Runtime.RuntimePubkey != soul.Runtime.RuntimePubkey || parsed.Runtime.RuntimeBinding != soul.Runtime.RuntimeBinding {
 		t.Fatalf("parsed runtime soul = %+v", parsed)
 	}
-	if parsed.SpecHash != "sha256:new" || parsed.PreviousSpecHash != "sha256:old" || parsed.Assets.VoiceRef != "blob:voice" {
+	if parsed.DraftEventID != "draft-event-id" || parsed.SpecHash != "sha256:new" || parsed.PreviousSpecHash != "sha256:old" || parsed.Assets.VoiceRef != "blob:voice" {
 		t.Fatalf("parsed new soul fields = %+v", parsed)
 	}
 	if len(parsed.AllowedKinds) != 2 || len(parsed.ToolGrants) != 1 || parsed.ToolGrants[0].Scopes[0] != "read" {

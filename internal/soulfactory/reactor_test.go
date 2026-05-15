@@ -332,6 +332,270 @@ func TestOptionalIntegrationFailureIsRecordedWithoutFabricatedSuccess(t *testing
 	}
 }
 
+type capturingGenerator struct {
+	inputs []domain.SoulGeneratorInput
+}
+
+func (g *capturingGenerator) Generate(_ context.Context, input domain.SoulGeneratorInput) (*domain.SoulGeneratorOutput, error) {
+	g.inputs = append(g.inputs, input)
+	return &domain.SoulGeneratorOutput{
+		SoulMD:       "# Soul\n" + input.Brief,
+		IdentityMD:   "# Identity\n" + input.Brief,
+		AllowedKinds: []int{999},
+		ToolGrants:   []domain.ToolGrant{{MCPServer: "generator", Scopes: []string{"fallback"}}},
+	}, nil
+}
+
+type fakeProvisioningEngine struct {
+	called bool
+}
+
+func (e *fakeProvisioningEngine) Provision(context.Context, *domain.ProvisioningRequest, *domain.ProvisioningRun) (*domain.AgentSoul, error) {
+	e.called = true
+	return &domain.AgentSoul{AgentID: "should-not-run"}, nil
+}
+
+type trackingRuntimeAdapter struct {
+	requests []RuntimeAdapterRequest
+}
+
+func (a *trackingRuntimeAdapter) Runtime() domain.RuntimeTarget { return domain.RuntimeTargetOpenClaw }
+func (a *trackingRuntimeAdapter) DiscoverCapabilities(context.Context, domain.SoulRelayPolicySpec) ([]RuntimeCapability, error) {
+	return nil, nil
+}
+func (a *trackingRuntimeAdapter) Execute(_ context.Context, req RuntimeAdapterRequest) (*RuntimeControlResultEnvelope, error) {
+	a.requests = append(a.requests, req)
+	return &RuntimeControlResultEnvelope{
+		Schema:               domain.SoulFactoryRuntimeControlSchema,
+		Method:               req.Method,
+		IdempotencyKey:       "sha256:test",
+		OperatorRequestEvent: req.Operator.RequestEvent,
+		Status:               "success",
+		Result: map[string]interface{}{
+			"agent_id":        req.Target.AgentID,
+			"runtime":         req.Target.Runtime,
+			"runtime_binding": "openclaw://agents/" + req.Target.AgentID,
+			"state":           "running",
+			"spec_hash":       req.Soul.SpecHash,
+			"capability_ref":  "capability-event",
+		},
+		Event: &nostr.Event{PubKey: "runtime-pubkey"},
+	}, nil
+}
+
+func TestProvisioningReplaySkipsExternalSideEffectsWhenTerminalResultExists(t *testing.T) {
+	signer := newFakeSigner(t)
+	engine := &fakeProvisioningEngine{}
+	reactor := NewReactor(
+		Config{AuthorizedPubkeys: []string{signer.pubkey}, SoulFactoryPubkey: signer.pubkey},
+		fakeGenerator{},
+		signer,
+		slog.Default(),
+		WithProvisioningEngine(engine),
+	)
+	capture := attachPublishCapture(reactor)
+	reactor.findProvisioningResultFn = func(context.Context, string) (*nostr.Event, error) {
+		return &nostr.Event{
+			ID:     "terminal-7950",
+			Kind:   domain.KindProvisioningResult,
+			PubKey: signer.pubkey,
+			Tags:   nostr.Tags{{"e", "already-terminal"}, {"p", signer.pubkey}, {"request-kind", fmt.Sprint(domain.KindProvisioningRequest)}, {"status", "success"}},
+		}, nil
+	}
+
+	request := buildProvisioningEvent(t, signer.pubkey, "already-terminal", nostr.Tags{{"agent-id", "scout"}}, `{"brief":"Monitor deployments"}`)
+	reactor.handleProvisioningRequest(t.Context(), request)
+
+	if engine.called {
+		t.Fatal("provisioning engine was called despite existing terminal 7950")
+	}
+	if len(capture.events) != 0 {
+		t.Fatalf("published events = %d, want none for terminal replay", len(capture.events))
+	}
+	if run := reactor.GetRun(request.ID); run != nil {
+		t.Fatalf("run tracked for terminal replay: %+v", run)
+	}
+}
+
+func TestDraftBackedRuntimeProvisioningPublishesFinalSoulWithResolvedFields(t *testing.T) {
+	signer := newFakeSigner(t)
+	oldPubkey := SoulFactoryPubkey
+	SoulFactoryPubkey = signer.pubkey
+	defer func() { SoulFactoryPubkey = oldPubkey }()
+
+	generator := &capturingGenerator{}
+	reactor := NewReactor(
+		Config{
+			Relays:            []string{"wss://public.example"},
+			AdditionalRelays:  []string{"wss://private.example"},
+			AuthorizedPubkeys: []string{signer.pubkey},
+			SoulFactoryPubkey: signer.pubkey,
+		},
+		generator,
+		signer,
+		slog.Default(),
+	)
+	capture := attachPublishCapture(reactor)
+	draft := &domain.SoulDraft{
+		EventID:     "exact-draft-event",
+		AgentID:     "scout",
+		Name:        "Draft Scout",
+		Tier:        domain.SoulTierStandard,
+		TemplateRef: "31950:template-author:agent-template",
+		CreatedBy:   signer.pubkey,
+		Content: domain.SoulDraftContent{
+			Brief:    "Draft purpose",
+			SpecHash: "sha256:draft",
+			Identity: domain.SoulIdentitySpec{Name: "Draft Scout", Purpose: "Draft purpose", Tier: domain.SoulTierStandard},
+			Runtime:  domain.SoulRuntimeSpec{Target: domain.RuntimeTargetOpenClaw, RuntimePubkey: "runtime-pubkey", CapabilityRef: "draft-capability"},
+			Permissions: domain.SoulPermissionSpec{
+				AllowedKinds:   []int{domain.KindSoulAction},
+				ToolGrants:     []domain.ToolGrant{{MCPServer: "draft-tool", Scopes: []string{"use"}}},
+				ApprovalPolicy: "operator",
+			},
+			RelayPolicy: domain.SoulRelayPolicySpec{Control: []string{"wss://control.example"}},
+			Workspace:   domain.SoulWorkspaceSpec{Repo: "https://git.example/scout.git", Branch: "main", Environment: "prod"},
+			Assets:      domain.SoulAssetRefs{AvatarRef: "blob:avatar", VoiceRef: "blob:voice"},
+		},
+	}
+	reactor.getDraftFn = func(_ context.Context, draftRef, draftEventID string) (*domain.SoulDraft, error) {
+		if draftEventID != draft.EventID || draftRef != "31952:"+signer.pubkey+":scout" {
+			t.Fatalf("draft lookup = (%q, %q), want exact event and coordinate", draftRef, draftEventID)
+		}
+		return draft, nil
+	}
+	reactor.getTemplateFn = func(_ context.Context, templateRef string) (*domain.SoulTemplate, error) {
+		if templateRef != draft.TemplateRef {
+			t.Fatalf("template ref = %q, want %q", templateRef, draft.TemplateRef)
+		}
+		return &domain.SoulTemplate{
+			EventID:      "template-event",
+			Identifier:   "agent-template",
+			Name:         "Template Agent",
+			Tier:         domain.SoulTierLightweight,
+			BasePrompt:   "Template prompt",
+			DefaultKinds: []int{1},
+			DefaultTools: []domain.ToolGrant{{MCPServer: "template-tool", Scopes: []string{"read"}}},
+		}, nil
+	}
+	runtime := &trackingRuntimeAdapter{}
+	full := NewFullProvisioner(reactor, FullProvisionerConfig{RuntimeAdapters: map[domain.RuntimeTarget]RuntimeAdapter{domain.RuntimeTargetOpenClaw: runtime}}, nil)
+	reactor.provisioner = full
+
+	request := buildProvisioningEvent(
+		t,
+		signer.pubkey,
+		"draft-runtime-provision",
+		nostr.Tags{{"agent-id", "scout"}, {"name", "Inline Scout"}, {"tier", string(domain.SoulTierHeavy)}, {"draft", "31952:" + signer.pubkey + ":scout"}, {"draft-event", draft.EventID}, {"spec-hash", "sha256:draft"}},
+		`{"brief":"Inline purpose"}`,
+	)
+	reactor.handleProvisioningRequest(t.Context(), request)
+
+	if len(generator.inputs) != 1 {
+		t.Fatalf("generator inputs = %d, want 1", len(generator.inputs))
+	}
+	input := generator.inputs[0]
+	if input.Template == nil || input.Template.Identifier != "agent-template" || input.Name != "Inline Scout" || input.Brief != "Inline purpose" || input.Tier != domain.SoulTierHeavy {
+		t.Fatalf("generator input not resolved from template+draft+inline: %+v", input)
+	}
+	if len(runtime.requests) != 1 {
+		t.Fatalf("runtime requests = %d, want 1", len(runtime.requests))
+	}
+	runtimeReq := runtime.requests[0]
+	if runtimeReq.Method != RuntimeMethodProvision || runtimeReq.Operator.RequestEvent != request.ID || runtimeReq.Soul.Draft != draft.EventID || runtimeReq.Soul.SpecHash != "sha256:draft" {
+		t.Fatalf("runtime request missing correlated draft/spec context: %+v", runtimeReq)
+	}
+	if got := runtimeReq.Params["relay_policy"]; got == nil {
+		t.Fatalf("runtime request missing relay policy params: %+v", runtimeReq.Params)
+	}
+
+	soulEvents := capture.eventsByKind(domain.KindAgentSoul)
+	if len(soulEvents) != 1 {
+		t.Fatalf("soul event count = %d, want exactly one final 31951", len(soulEvents))
+	}
+	soulEvent := soulEvents[0]
+	for tagName, want := range map[string]string{
+		"name":            "Inline Scout",
+		"tier":            string(domain.SoulTierHeavy),
+		"draft":           "31952:" + signer.pubkey + ":scout",
+		"draft-event":     draft.EventID,
+		"spec-hash":       "sha256:draft",
+		"runtime":         string(domain.RuntimeTargetOpenClaw),
+		"runtime-pubkey":  "runtime-pubkey",
+		"runtime-binding": "openclaw://agents/scout",
+		"runtime-state":   "running",
+		"capability":      "capability-event",
+		"approval-policy": "operator",
+		"avatar-ref":      "blob:avatar",
+		"voice-ref":       "blob:voice",
+	} {
+		if got := findTag(soulEvent, tagName); got != want {
+			t.Fatalf("soul tag %s = %q, want %q; tags=%#v", tagName, got, want, soulEvent.Tags)
+		}
+	}
+	if got := findTag(soulEvent, "allowed-kind"); got != fmt.Sprint(domain.KindSoulAction) {
+		t.Fatalf("allowed-kind = %q, want draft permission", got)
+	}
+
+	results := capture.eventsByKind(domain.KindProvisioningResult)
+	if len(results) != 1 {
+		t.Fatalf("result event count = %d, want 1", len(results))
+	}
+	if findTag(results[0], "runtime-binding") != "openclaw://agents/scout" || findTag(results[0], "draft-event") != draft.EventID {
+		t.Fatalf("terminal result missing final runtime/draft context: %#v", results[0].Tags)
+	}
+	if !eventKindBefore(capture.events, domain.KindAgentSoul, domain.KindProvisioningResult) {
+		t.Fatalf("final 31951 was not published before terminal 7950: %#v", capture.events)
+	}
+}
+
+func TestDraftSpecHashMismatchFailsBeforeRuntimeProvisioning(t *testing.T) {
+	signer := newFakeSigner(t)
+	reactor := NewReactor(Config{AuthorizedPubkeys: []string{signer.pubkey}}, &capturingGenerator{}, signer, slog.Default())
+	capture := attachPublishCapture(reactor)
+	draft := &domain.SoulDraft{
+		EventID:   "mismatched-draft-event",
+		AgentID:   "scout",
+		CreatedBy: signer.pubkey,
+		Content: domain.SoulDraftContent{
+			Brief:    "Draft purpose",
+			SpecHash: "sha256:draft",
+			Runtime:  domain.SoulRuntimeSpec{Target: domain.RuntimeTargetOpenClaw, RuntimePubkey: "runtime-pubkey"},
+		},
+	}
+	reactor.getDraftFn = func(context.Context, string, string) (*domain.SoulDraft, error) { return draft, nil }
+	runtime := &trackingRuntimeAdapter{}
+	full := NewFullProvisioner(reactor, FullProvisionerConfig{RuntimeAdapters: map[domain.RuntimeTarget]RuntimeAdapter{domain.RuntimeTargetOpenClaw: runtime}}, nil)
+	reactor.provisioner = full
+
+	request := buildProvisioningEvent(t, signer.pubkey, "hash-mismatch", nostr.Tags{{"agent-id", "scout"}, {"draft-event", draft.EventID}, {"spec-hash", "sha256:request"}}, `{}`)
+	reactor.handleProvisioningRequest(t.Context(), request)
+
+	if len(runtime.requests) != 0 {
+		t.Fatalf("runtime called despite spec hash mismatch: %+v", runtime.requests)
+	}
+	if len(capture.eventsByKind(domain.KindProvisioningStatus)) != 0 || len(capture.eventsByKind(domain.KindAgentSoul)) != 0 {
+		t.Fatalf("published progress/soul before resolving spec mismatch: %#v", capture.events)
+	}
+	results := capture.eventsByKind(domain.KindProvisioningResult)
+	if len(results) != 1 || !strings.Contains(results[0].Content, "does not match") {
+		t.Fatalf("mismatch result = %#v", results)
+	}
+}
+
+func eventKindBefore(events []*nostr.Event, firstKind, secondKind int) bool {
+	firstIndex, secondIndex := -1, -1
+	for i, event := range events {
+		if event.Kind == firstKind && firstIndex == -1 {
+			firstIndex = i
+		}
+		if event.Kind == secondKind && secondIndex == -1 {
+			secondIndex = i
+		}
+	}
+	return firstIndex >= 0 && secondIndex >= 0 && firstIndex < secondIndex
+}
+
 func TestSuccessfulProvisioningPublishesAuthoritativeSoulAndSuccessPayload(t *testing.T) {
 	signer := newFakeSigner(t)
 	oldPubkey := SoulFactoryPubkey

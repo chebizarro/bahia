@@ -30,18 +30,20 @@ type FullProvisioner struct {
 	workspaceManager workspaceInitializer
 	nip05Manager     *NIP05Manager
 	bahiaIntegration *BahiaIntegration
+	runtimeAdapters  map[domain.RuntimeTarget]RuntimeAdapter
 	lookupSoul       func(context.Context, string) (*domain.AgentSoul, error)
 }
 
 // FullProvisionerConfig holds all adapter configurations.
 type FullProvisionerConfig struct {
-	Blossom     blossom.Config
-	Qdrant      qdrant.Config
-	AgentMemory agentmemory.Config
-	Avatar      llm.AvatarConfig
-	Workspace   WorkspaceConfig
-	NIP05       NIP05Config
-	Bahia       BahiaIntegrationConfig
+	Blossom         blossom.Config
+	Qdrant          qdrant.Config
+	AgentMemory     agentmemory.Config
+	Avatar          llm.AvatarConfig
+	Workspace       WorkspaceConfig
+	NIP05           NIP05Config
+	Bahia           BahiaIntegrationConfig
+	RuntimeAdapters map[domain.RuntimeTarget]RuntimeAdapter
 }
 
 // NewFullProvisioner creates a provisioner with all adapters.
@@ -53,6 +55,7 @@ func NewFullProvisioner(reactor *Reactor, config FullProvisionerConfig, bahiaInt
 		qdrantClient:     qdrant.NewClient(config.Qdrant, logger),
 		agentMemory:      agentmemory.NewClient(config.AgentMemory, logger),
 		bahiaIntegration: bahiaIntegration,
+		runtimeAdapters:  cloneRuntimeAdapters(config.RuntimeAdapters),
 		lookupSoul:       reactor.GetSoul,
 	}
 	if len(config.Blossom.Servers) > 0 {
@@ -81,18 +84,25 @@ func (p *FullProvisioner) Provision(ctx context.Context, req *domain.Provisionin
 
 // ProvisionFull executes the complete provisioning workflow.
 func (p *FullProvisioner) ProvisionFull(ctx context.Context, req *domain.ProvisioningRequest, run *domain.ProvisioningRun) (*domain.AgentSoul, error) {
-	logger := p.reactor.logger.With("agent_id", req.AgentID, "run_id", run.ID)
+	resolved, err := p.resolveProvisioningSpec(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	logger := p.reactor.logger.With("agent_id", resolved.AgentID, "run_id", run.ID)
+	run.AgentID = resolved.AgentID
+	run.DraftRef = resolved.DraftRef
+	run.DraftEventID = resolved.DraftEventID
+	run.SpecHash = resolved.SpecHash
 
 	soul := &domain.AgentSoul{
-		ID:            domain.NewUUID(),
-		AgentID:       req.AgentID,
-		Name:          req.Name,
-		Tier:          req.Tier,
-		Status:        domain.SoulStatusProvisioning,
-		TemplateRef:   req.TemplateRef,
-		OriginalBrief: req.Brief,
-		CreatedAt:     time.Now(),
+		ID:        domain.NewUUID(),
+		AgentID:   resolved.AgentID,
+		Name:      resolved.Name,
+		Tier:      resolved.Tier,
+		Status:    domain.SoulStatusProvisioning,
+		CreatedAt: time.Now(),
 	}
+	resolved.applyToSoul(soul)
 
 	requestEvent := &nostr.Event{
 		ID:     run.RequestID,
@@ -108,10 +118,11 @@ func (p *FullProvisioner) ProvisionFull(ctx context.Context, req *domain.Provisi
 
 	stepStart := time.Now()
 	output, err := p.reactor.generator.Generate(ctx, domain.SoulGeneratorInput{
-		AgentID: req.AgentID,
-		Name:    req.Name,
-		Brief:   req.Brief,
-		Tier:    req.Tier,
+		Template: resolved.Template,
+		AgentID:  resolved.AgentID,
+		Name:     resolved.Name,
+		Brief:    resolved.Brief,
+		Tier:     resolved.Tier,
 	})
 	if err != nil {
 		p.recordStep(run, domain.StepGenerate, domain.StepStatusFailed, nil, err, time.Since(stepStart))
@@ -120,12 +131,20 @@ func (p *FullProvisioner) ProvisionFull(ctx context.Context, req *domain.Provisi
 
 	soul.SoulMD = output.SoulMD
 	soul.IdentityMD = output.IdentityMD
-	soul.AllowedKinds = output.AllowedKinds
-	soul.ToolGrants = output.ToolGrants
-	if soul.Name == "" {
-		soul.Name = req.AgentID
+	if resolved.Draft != nil || len(resolved.Permissions.AllowedKinds) > 0 {
+		soul.AllowedKinds = append([]int{}, resolved.Permissions.AllowedKinds...)
+	} else {
+		soul.AllowedKinds = output.AllowedKinds
 	}
-	soul.Purpose = req.Brief
+	if resolved.Draft != nil || len(resolved.Permissions.ToolGrants) > 0 {
+		soul.ToolGrants = append([]domain.ToolGrant{}, resolved.Permissions.ToolGrants...)
+	} else {
+		soul.ToolGrants = output.ToolGrants
+	}
+	if soul.Name == "" {
+		soul.Name = resolved.AgentID
+	}
+	soul.Purpose = resolved.Brief
 
 	p.recordStep(run, domain.StepGenerate, domain.StepStatusComplete, map[string]interface{}{
 		"allowed_kinds": len(output.AllowedKinds),
@@ -138,7 +157,7 @@ func (p *FullProvisioner) ProvisionFull(ctx context.Context, req *domain.Provisi
 	p.publishProgress(ctx, requestEvent, domain.StepSignet, 2, totalSteps, "Registering keypair with Signet...")
 
 	stepStart = time.Now()
-	pubkey, npub, bunkerURI, err := p.reactor.signer.ProvisionAgent(ctx, req.AgentID, soul.AllowedKinds)
+	pubkey, npub, bunkerURI, err := p.reactor.signer.ProvisionAgent(ctx, resolved.AgentID, soul.AllowedKinds)
 	if err != nil {
 		p.recordStep(run, domain.StepSignet, domain.StepStatusFailed, nil, err, time.Since(stepStart))
 		return nil, fmt.Errorf("signet provision: %w", err)
@@ -163,7 +182,7 @@ func (p *FullProvisioner) ProvisionFull(ctx context.Context, req *domain.Provisi
 			"reason": "avatar generator or blossom storage not configured",
 		}, nil, 0)
 	} else {
-		avatarResult, err := p.avatarGenerator.Generate(ctx, output.AvatarPrompt, req.AgentID)
+		avatarResult, err := p.avatarGenerator.Generate(ctx, output.AvatarPrompt, resolved.AgentID)
 		if err != nil {
 			logger.Warn("avatar generation failed; continuing without avatar", "error", err)
 			p.recordStep(run, domain.StepAvatar, domain.StepStatusFailed, nil, err, time.Since(stepStart))
@@ -212,7 +231,7 @@ func (p *FullProvisioner) ProvisionFull(ctx context.Context, req *domain.Provisi
 			"reason": "qdrant url not configured",
 		}, nil, 0)
 	} else {
-		soul.QdrantCollection = req.AgentID
+		soul.QdrantCollection = resolved.AgentID
 		if err := p.qdrantClient.CreateCollection(ctx, soul.QdrantCollection, qdrant.DefaultCollectionConfig()); err != nil {
 			logger.Warn("Qdrant collection creation failed", "error", err)
 			p.recordStep(run, domain.StepQdrant, domain.StepStatusFailed, nil, err, time.Since(stepStart))
@@ -324,10 +343,12 @@ func (p *FullProvisioner) ProvisionFull(ctx context.Context, req *domain.Provisi
 	now := time.Now()
 	soul.ProvisionedAt = &now
 
-	// Publish the soul event
-	logger.Info("publishing soul event (kind:31951)")
-	if err := p.reactor.PublishSoul(ctx, soul); err != nil {
-		return nil, fmt.Errorf("publish soul: %w", err)
+	if resolved.Runtime.Target != "" {
+		logger.Info("binding runtime through SoulFactory runtime adapter", "runtime", resolved.Runtime.Target)
+		if err := p.executeRuntimeProvision(ctx, soul, resolved, run); err != nil {
+			p.recordStep(run, domain.StepDeploy, domain.StepStatusFailed, nil, err, time.Since(stepStart))
+			return nil, err
+		}
 	}
 
 	// Register with bahia if integration is configured
@@ -354,11 +375,21 @@ func (p *FullProvisioner) ProvisionFull(ctx context.Context, req *domain.Provisi
 		}
 	}
 
+	// Publish the final authoritative read model only after immediately-known
+	// runtime and Bahia fields have been populated.
+	logger.Info("publishing final soul event (kind:31951)")
+	if err := p.reactor.PublishSoul(ctx, soul); err != nil {
+		return nil, fmt.Errorf("publish soul: %w", err)
+	}
+
 	p.recordStep(run, domain.StepDeploy, domain.StepStatusComplete, map[string]interface{}{
-		"nip05":         soul.NIP05,
-		"soul_blob":     soul.SoulBlobHash,
-		"bahia_service": soul.BahiaServiceID,
-		"deploy_status": soul.DeployStatus,
+		"nip05":           soul.NIP05,
+		"soul_blob":       soul.SoulBlobHash,
+		"bahia_service":   soul.BahiaServiceID,
+		"deploy_status":   soul.DeployStatus,
+		"runtime":         soul.Runtime.Target,
+		"runtime_binding": soul.Runtime.RuntimeBinding,
+		"runtime_state":   soul.Runtime.State,
 	}, nil, time.Since(stepStart))
 
 	run.SoulID = &soul.ID
@@ -520,6 +551,83 @@ func (p *FullProvisioner) publishProgress(ctx context.Context, requestEvent *nos
 	if err := p.reactor.PublishStatus(ctx, requestEvent, step, current, total, message); err != nil {
 		p.reactor.logger.Warn("failed to publish progress", "step", step, "error", err)
 	}
+}
+
+func cloneRuntimeAdapters(adapters map[domain.RuntimeTarget]RuntimeAdapter) map[domain.RuntimeTarget]RuntimeAdapter {
+	if len(adapters) == 0 {
+		return nil
+	}
+	out := make(map[domain.RuntimeTarget]RuntimeAdapter, len(adapters))
+	for target, adapter := range adapters {
+		if adapter != nil {
+			out[target] = adapter
+		}
+	}
+	return out
+}
+
+func (p *FullProvisioner) executeRuntimeProvision(ctx context.Context, soul *domain.AgentSoul, resolved *resolvedProvisioningSpec, run *domain.ProvisioningRun) error {
+	adapter := p.runtimeAdapters[resolved.Runtime.Target]
+	if adapter == nil {
+		return fmt.Errorf("no runtime adapter configured for %s", resolved.Runtime.Target)
+	}
+	result, err := adapter.Execute(ctx, RuntimeAdapterRequest{
+		Method: RuntimeMethodProvision,
+		Operator: RuntimeOperatorRef{
+			Pubkey:       run.RequesterPubkey,
+			RequestEvent: run.RequestID,
+		},
+		Soul: RuntimeSoulRef{
+			ID:       soul.AgentID,
+			Draft:    firstNonEmpty(resolved.DraftEventID, resolved.DraftRef),
+			SpecHash: resolved.SpecHash,
+		},
+		Target: RuntimeTargetRef{
+			Runtime:       resolved.Runtime.Target,
+			RuntimePubkey: resolved.Runtime.RuntimePubkey,
+			AgentID:       soul.AgentID,
+		},
+		Params:      resolved.provisionRuntimeParams(soul),
+		DraftPolicy: resolved.RelayPolicy,
+		RequestKind: domain.KindProvisioningRequest,
+	})
+	if err != nil {
+		return fmt.Errorf("runtime provision %s: %w", resolved.Runtime.Target, err)
+	}
+	applyRuntimeProvisionResult(soul, resolved, result)
+	return nil
+}
+
+func applyRuntimeProvisionResult(soul *domain.AgentSoul, resolved *resolvedProvisioningSpec, result *RuntimeControlResultEnvelope) {
+	if soul == nil || resolved == nil || result == nil {
+		return
+	}
+	soul.Runtime.Target = resolved.Runtime.Target
+	soul.Runtime.RuntimePubkey = firstNonEmpty(stringResult(result.Result, "runtime_pubkey"), resolved.Runtime.RuntimePubkey)
+	if soul.Runtime.RuntimePubkey == "" && result.Event != nil {
+		soul.Runtime.RuntimePubkey = result.Event.PubKey
+	}
+	soul.Runtime.RuntimeBinding = firstNonEmpty(stringResult(result.Result, "runtime_binding"), soul.Runtime.RuntimeBinding)
+	soul.Runtime.State = firstNonEmpty(stringResult(result.Result, "state"), soul.Runtime.State, "running")
+	soul.Runtime.CapabilityRef = firstNonEmpty(stringResult(result.Result, "capability_ref"), soul.Runtime.CapabilityRef, resolved.Runtime.CapabilityRef)
+	soul.CapabilityRef = firstNonEmpty(soul.Runtime.CapabilityRef, soul.CapabilityRef)
+	if specHash := stringResult(result.Result, "spec_hash"); specHash != "" {
+		soul.SpecHash = specHash
+	}
+}
+
+func stringResult(result map[string]interface{}, key string) string {
+	if result == nil {
+		return ""
+	}
+	value, ok := result[key]
+	if !ok || value == nil {
+		return ""
+	}
+	if text, ok := value.(string); ok {
+		return text
+	}
+	return fmt.Sprint(value)
 }
 
 func (p *FullProvisioner) recordStep(run *domain.ProvisioningRun, step domain.ProvisioningStep, status domain.StepStatus, output map[string]interface{}, err error, duration time.Duration) {

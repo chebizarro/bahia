@@ -47,17 +47,20 @@ type Config struct {
 
 // Reactor subscribes to Nostr events and dispatches handlers.
 type Reactor struct {
-	config                Config
-	pool                  *nostr.SimplePool
-	generator             SoulGenerator
-	signer                Signer
-	provisioner           ProvisioningEngine
-	lifecycleHandler      *LifecycleHandler
-	logger                *slog.Logger
-	relayBus              *SoulFactoryRelayBus
-	publishFn             func(context.Context, *nostr.Event, []string) error
-	getSoulFn             func(context.Context, string) (*domain.AgentSoul, error)
-	findLifecycleResultFn func(context.Context, string) (*nostr.Event, error)
+	config                   Config
+	pool                     *nostr.SimplePool
+	generator                SoulGenerator
+	signer                   Signer
+	provisioner              ProvisioningEngine
+	lifecycleHandler         *LifecycleHandler
+	logger                   *slog.Logger
+	relayBus                 *SoulFactoryRelayBus
+	publishFn                func(context.Context, *nostr.Event, []string) error
+	getSoulFn                func(context.Context, string) (*domain.AgentSoul, error)
+	getDraftFn               func(context.Context, string, string) (*domain.SoulDraft, error)
+	getTemplateFn            func(context.Context, string) (*domain.SoulTemplate, error)
+	findLifecycleResultFn    func(context.Context, string) (*nostr.Event, error)
+	findProvisioningResultFn func(context.Context, string) (*nostr.Event, error)
 
 	mu   sync.Mutex
 	runs map[string]*domain.ProvisioningRun // requestID -> run
@@ -243,9 +246,18 @@ func (r *Reactor) handleProvisioningRequest(ctx context.Context, event *nostr.Ev
 	}
 
 	logger = logger.With("agent_id", req.AgentID)
+
+	if existing, err := r.findExistingProvisioningResult(ctx, event); err != nil {
+		logger.Warn("failed to check existing provisioning terminal result", "error", err)
+	} else if existing != nil {
+		logger.Info("ignoring provisioning request with existing terminal result", "result_event", existing.ID)
+		return
+	}
+
 	logger.Info("starting provisioning workflow")
 
-	// Create run tracker
+	// Create and reserve run tracker before external side effects so duplicate
+	// live delivery of the same request cannot race into provisioning.
 	run := &domain.ProvisioningRun{
 		ID:              domain.NewUUID(),
 		RequestID:       event.ID,
@@ -255,10 +267,17 @@ func (r *Reactor) handleProvisioningRequest(ctx context.Context, event *nostr.Ev
 		Steps:           make([]domain.ProvisioningStepResult, 0, len(domain.ProvisioningSteps)),
 		RequesterPubkey: event.PubKey,
 		DraftRef:        req.DraftRef,
+		DraftEventID:    req.DraftEventID,
+		SpecHash:        req.SpecHash,
 		StartedAt:       time.Now(),
 	}
 
 	r.mu.Lock()
+	if existingRun := r.runs[event.ID]; existingRun != nil && existingRun.Status == domain.ProvisioningStatusRunning {
+		r.mu.Unlock()
+		logger.Info("ignoring duplicate in-flight provisioning request")
+		return
+	}
 	r.runs[event.ID] = run
 	r.mu.Unlock()
 

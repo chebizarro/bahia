@@ -407,6 +407,8 @@ func ParseSoulEvent(event *nostr.Event) *domain.AgentSoul {
 			soul.WorkspaceRepoURL = tag[1]
 		case "template":
 			soul.TemplateRef = tag[1]
+		case "draft-event":
+			soul.DraftEventID = tag[1]
 		case "deploy-status":
 			soul.DeployStatus = tag[1]
 		case "service", "bahia-service":

@@ -261,6 +261,8 @@ func ParseAgentSoulEvent(event *nostr.Event) *domain.AgentSoul {
 			soul.ToolGrants = append(soul.ToolGrants, grant)
 		case tagDraft:
 			soul.DraftRef = value
+		case tagDraftEvent:
+			soul.DraftEventID = value
 		case tagSpecHash:
 			soul.SpecHash = value
 		case tagPreviousSpecHash:
@@ -622,6 +624,7 @@ func appendResultContextTags(tags *nostr.Tags, soul *domain.AgentSoul) {
 	appendTag(tags, tagTemplate, soul.TemplateRef)
 	appendTag(tags, tagDeployStatus, soul.DeployStatus)
 	appendTag(tags, tagDraft, soul.DraftRef)
+	appendTag(tags, tagDraftEvent, soul.DraftEventID)
 	appendTag(tags, tagSpecHash, soul.SpecHash)
 	appendTag(tags, tagPreviousSpecHash, soul.PreviousSpecHash)
 	appendTag(tags, tagRuntime, string(soul.Runtime.Target))
