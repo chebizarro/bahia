@@ -12,7 +12,9 @@ vi.mock('../../src/lib/nostr/client.js', () => {
     PROVISIONING_REQUEST: 5950,
     PROVISIONING_STATUS: 6950,
     PROVISIONING_RESULT: 7950,
-    SOUL_ACTION: 1950
+    SOUL_ACTION: 1950,
+    SOUL_ACTION_LEGACY_RESULT: 1951,
+    RUNTIME_CAPABILITY: 30317
   };
 
   const mockNostr = {
@@ -23,6 +25,8 @@ vi.mock('../../src/lib/nostr/client.js', () => {
 
   const fetchSouls = vi.fn();
   const fetchTemplates = vi.fn();
+  const fetchSoulDrafts = vi.fn();
+  const fetchRuntimeCapabilities = vi.fn();
   
   const parseSoulEvent = vi.fn((event) => ({
     id: event.id,
@@ -42,12 +46,50 @@ vi.mock('../../src/lib/nostr/client.js', () => {
     tier: event.tags.find(t => t[0] === 'tier')?.[1] || 'standard'
   }));
 
+  const parseSoulDraftEvent = vi.fn((event) => ({
+    id: event.id,
+    pubkey: event.pubkey,
+    createdAt: event.created_at,
+    agentId: event.tags.find(t => t[0] === 'd')?.[1] || '',
+    content: event.content ? JSON.parse(event.content) : {}
+  }));
+
+  const parseRuntimeCapabilityEvent = vi.fn((event) => ({
+    id: event.id,
+    pubkey: event.pubkey,
+    createdAt: event.created_at,
+    runtime: event.tags.find(t => t[0] === 'runtime')?.[1] || 'openclaw',
+    methods: ['soulfactory.provision'],
+    compatible: true,
+    event
+  }));
+
+  const getD = (event) => event.tags.find(t => t[0] === 'd')?.[1] || '';
+  const keyFor = (event) => `${event.kind}:${event.pubkey}:${getD(event)}`;
+  const upsertReplaceableEvent = vi.fn((map, event) => {
+    const key = keyFor(event);
+    const existing = map.get(key);
+    if (existing && existing.id === event.id) return { accepted: false, key, deleted: false };
+    if (existing && Number(existing.created_at || 0) > Number(event.created_at || 0)) return { accepted: false, key, deleted: false };
+    map.set(key, event);
+    return { accepted: true, key, deleted: false };
+  });
+
   return {
     nostr: mockNostr,
     fetchSouls,
     fetchTemplates,
+    fetchSoulDrafts,
+    fetchRuntimeCapabilities,
     parseSoulEvent,
     parseTemplateEvent,
+    parseSoulDraftEvent,
+    parseRuntimeCapabilityEvent,
+    normalizeSoulDraftContent: vi.fn((content) => ({ ...content, identity: content.identity || {} })),
+    upsertReplaceableEvent,
+    isReplaceableTombstone: vi.fn((event) => event.content && JSON.parse(event.content).deleted === true),
+    SOUL_LIFECYCLE_ACTIONS: { UPDATE: 'update' },
+    SOUL_RUNTIME_METHODS: { PROVISION: 'soulfactory.provision', UPDATE: 'soulfactory.update' },
     KINDS
   };
 });
@@ -63,6 +105,8 @@ describe('Souls Store', () => {
   let mockNostr;
   let fetchSouls;
   let fetchTemplates;
+  let fetchSoulDrafts;
+  let fetchRuntimeCapabilities;
   let parseSoulEvent;
   let parseTemplateEvent;
   let authModule;
@@ -77,6 +121,8 @@ describe('Souls Store', () => {
     mockNostr = nostrModule.nostr;
     fetchSouls = nostrModule.fetchSouls;
     fetchTemplates = nostrModule.fetchTemplates;
+    fetchSoulDrafts = nostrModule.fetchSoulDrafts;
+    fetchRuntimeCapabilities = nostrModule.fetchRuntimeCapabilities;
     parseSoulEvent = nostrModule.parseSoulEvent;
     parseTemplateEvent = nostrModule.parseTemplateEvent;
     authModule = await import('../../src/lib/stores/auth.js');
@@ -117,6 +163,9 @@ describe('Souls Store', () => {
         ]
       }
     ]);
+
+    fetchSoulDrafts.mockResolvedValue([]);
+    fetchRuntimeCapabilities.mockResolvedValue([]);
 
     mockNostr.subscribe.mockReturnValue(() => {});
 
@@ -317,6 +366,8 @@ describe('Souls Store', () => {
 
       expect(fetchSouls).toHaveBeenCalledWith(null);
       expect(fetchTemplates).toHaveBeenCalledWith(null);
+      expect(fetchSoulDrafts).toHaveBeenCalledWith(null);
+      expect(fetchRuntimeCapabilities).toHaveBeenCalledWith({});
 
       const souls = soulsModule.souls;
       const templates = soulsModule.templates;
@@ -332,6 +383,7 @@ describe('Souls Store', () => {
 
       expect(fetchSouls).toHaveBeenCalledWith(authorPubkey);
       expect(fetchTemplates).toHaveBeenCalledWith(authorPubkey);
+      expect(fetchSoulDrafts).toHaveBeenCalledWith(authorPubkey);
     });
 
     it('should complete even if one loader fails', async () => {
@@ -344,6 +396,8 @@ describe('Souls Store', () => {
         created_at: 1714390000,
         tags: [['d', 'template-1'], ['name', 'Template']]
       }]);
+      fetchSoulDrafts.mockResolvedValue([]);
+      fetchRuntimeCapabilities.mockResolvedValue([]);
 
       await soulsModule.loadAll();
 
@@ -514,7 +568,7 @@ describe('Souls Store', () => {
       expect(mockNostr.subscribe).toHaveBeenCalledWith(
         [
           { kinds: [KINDS.PROVISIONING_STATUS], '#e': [requestEventId] },
-          { kinds: [KINDS.PROVISIONING_RESULT], '#e': [requestEventId] }
+          { kinds: [KINDS.PROVISIONING_RESULT, KINDS.SOUL_ACTION_LEGACY_RESULT], '#e': [requestEventId] }
         ],
         expect.objectContaining({
           onEvent: expect.any(Function),
@@ -711,6 +765,96 @@ describe('Souls Store', () => {
     });
   });
 
+  describe('drafts and capabilities', () => {
+    it('loadSouls dedupes replaceable souls and keeps the newest event', async () => {
+      fetchSouls.mockResolvedValue([
+        {
+          id: 'old-soul',
+          kind: 31951,
+          pubkey: 'factory',
+          created_at: 100,
+          tags: [['d', 'scout'], ['name', 'Old Scout']]
+        },
+        {
+          id: 'new-soul',
+          kind: 31951,
+          pubkey: 'factory',
+          created_at: 200,
+          tags: [['d', 'scout'], ['name', 'New Scout']]
+        }
+      ]);
+
+      await soulsModule.loadSouls();
+
+      expect(soulsModule.souls).toHaveLength(1);
+      expect(soulsModule.souls[0]).toMatchObject({ id: 'new-soul', name: 'New Scout' });
+    });
+
+    it('loadDrafts loads deduped editable 31952 drafts', async () => {
+      fetchSoulDrafts.mockResolvedValue([
+        {
+          id: 'draft-1',
+          kind: 31952,
+          pubkey: 'author-pubkey',
+          created_at: 100,
+          tags: [['d', 'scout']],
+          content: JSON.stringify({ identity: { name: 'Scout' } })
+        }
+      ]);
+
+      await soulsModule.loadDrafts('author-pubkey');
+
+      expect(fetchSoulDrafts).toHaveBeenCalledWith('author-pubkey');
+      expect(soulsModule.drafts).toHaveLength(1);
+      expect(soulsModule.drafts[0]).toMatchObject({ agentId: 'scout' });
+    });
+
+    it('loadRuntimeCapabilities exposes compatible runtime targets', async () => {
+      fetchRuntimeCapabilities.mockResolvedValue([
+        {
+          id: 'cap-1',
+          runtime: 'openclaw',
+          methods: ['soulfactory.provision'],
+          controllerPubkeys: [],
+          compatible: true
+        }
+      ]);
+
+      await soulsModule.loadRuntimeCapabilities({ method: 'soulfactory.provision' });
+
+      expect(fetchRuntimeCapabilities).toHaveBeenCalledWith({ method: 'soulfactory.provision' });
+      expect(soulsModule.runtimeCapabilities).toHaveLength(1);
+      expect(soulsModule.supportedRuntimeTargets()).toEqual(['openclaw']);
+    });
+
+    it('publishSoulDraft signs, publishes, and stores a 31952 draft', async () => {
+      mockNostr.publish.mockResolvedValue([{ relay: 'wss://relay', accepted: true, message: '' }]);
+
+      const result = await soulsModule.publishSoulDraft({
+        agentId: 'scout',
+        content: {
+          identity: { name: 'Scout', tier: 'standard' },
+          runtime: { target: 'openclaw', capability_ref: 'cap-1' }
+        },
+        templateRef: '31950:factory:default',
+        specHash: 'sha256:spec'
+      });
+
+      const signedCall = authModule.signWithAuth.mock.calls.at(-1)?.[0];
+      expect(signedCall).toMatchObject({ kind: 31952, pubkey: 'author-pubkey' });
+      expect(signedCall.tags).toEqual(expect.arrayContaining([
+        ['d', 'scout'],
+        ['name', 'Scout'],
+        ['tier', 'standard'],
+        ['template', '31950:factory:default'],
+        ['runtime', 'openclaw'],
+        ['capability', 'cap-1'],
+        ['spec-hash', 'sha256:spec']
+      ]));
+      expect(result.publishResults[0].accepted).toBe(true);
+    });
+  });
+
   describe('soul management actions', () => {
     it('buildSoulRef returns a NIP-33 coordinate', () => {
       const ref = soulsModule.buildSoulRef({ agentId: 'scout', pubkey: 'factory-pubkey' });
@@ -735,25 +879,39 @@ describe('Souls Store', () => {
       expect(result.publishResults[0].accepted).toBe(true);
     });
 
-    it('updateSoulDetails publishes a regenerate action with JSON payload', async () => {
+    it('updateSoulDetails publishes a structured update action with JSON payload', async () => {
       mockNostr.publish.mockResolvedValue([{ relay: 'wss://relay', accepted: true, message: '' }]);
 
       await soulsModule.updateSoulDetails(
-        { agentId: 'scout', pubkey: 'factory-pubkey', tier: 'standard', name: 'Scout', purpose: 'Observe' },
-        { name: 'Scout v2', purpose: 'Observe and report', tier: 'heavy', brief: 'Updated brief', reason: 'ops update' }
+        { agentId: 'scout', pubkey: 'factory-pubkey', tier: 'standard', name: 'Scout', purpose: 'Observe', specHash: 'sha256:old', previousSpecHash: 'sha256:older' },
+        { name: 'Scout v2', purpose: 'Observe and report', tier: 'heavy', brief: 'Updated brief', reason: 'ops update', newSpecHash: 'sha256:new' }
       );
 
       const signedCall = authModule.signWithAuth.mock.calls.at(-1)?.[0];
       expect(signedCall.tags).toEqual(expect.arrayContaining([
         ['soul', '31951:factory-pubkey:scout'],
-        ['action', 'regenerate'],
-        ['reason', 'ops update']
+        ['action', 'update'],
+        ['reason', 'ops update'],
+        ['method', 'soulfactory.update'],
+        ['previous-spec-hash', 'sha256:old'],
+        ['spec-hash', 'sha256:new']
       ]));
       expect(JSON.parse(signedCall.content)).toMatchObject({
-        name: 'Scout v2',
-        purpose: 'Observe and report',
-        tier: 'heavy',
-        brief: 'Updated brief'
+        schema: 'soulfactory-action/v1',
+        action: 'update',
+        method: 'soulfactory.update',
+        params: {
+          update_mode: 'merge',
+          previous_spec_hash: 'sha256:old',
+          new_spec_hash: 'sha256:new',
+          patch: {
+            identity: {
+              name: 'Scout v2',
+              purpose: 'Observe and report',
+              tier: 'heavy'
+            }
+          }
+        }
       });
     });
 
@@ -779,7 +937,8 @@ describe('Souls Store', () => {
 
       expect(mockNostr.query).toHaveBeenCalledWith([
         { kinds: [31951], '#d': ['scout'], limit: 10 },
-        { kinds: [1950], '#soul': ['31951:factory:scout'], limit: 10 }
+        { kinds: [1950], '#soul': ['31951:factory:scout'], limit: 10 },
+        { kinds: [6950, 7950, 1951], '#soul': ['31951:factory:scout'], limit: 10 }
       ]);
       expect(history.map((item) => item.id)).toEqual(['evt-action', 'evt-soul']);
       expect(history[0].summary).toBe('suspend: maintenance');

@@ -12,6 +12,10 @@ export const KINDS = {
   PROVISIONING_STATUS: 6950,
   PROVISIONING_RESULT: 7950,
   SOUL_ACTION: 1950,
+  SOUL_ACTION_LEGACY_RESULT: 1951,
+  RUNTIME_CAPABILITY: 30317,
+  RUNTIME_CONTROL_REQUEST: 38384,
+  RUNTIME_CONTROL_RESULT: 38386,
   REPOSITORY: 30617,
 
   // Bahia canonical control-plane/read-model kinds
@@ -67,6 +71,40 @@ export const KINDS = {
   SBOM_ATTESTATION: 30078,
   SBOM_INDEX: 30079
 };
+
+export const SOUL_FACTORY_RUNTIME_CONTROL_SCHEMA = 'soulfactory-runtime-control/v1';
+export const SOUL_FACTORY_RUNTIME_CAPABILITY_SCHEMA = 'soulfactory-runtime-capability/v1';
+
+export const SOUL_RUNTIME_TARGETS = {
+  OPENCLAW: 'openclaw',
+  METIQ: 'metiq'
+};
+
+export const SOUL_LIFECYCLE_ACTIONS = {
+  SUSPEND: 'suspend',
+  RESUME: 'resume',
+  REVOKE: 'revoke',
+  REGENERATE: 'regenerate',
+  REDEPLOY: 'redeploy',
+  UPDATE: 'update'
+};
+
+export const SOUL_RUNTIME_METHODS = {
+  PROVISION: 'soulfactory.provision',
+  UPDATE: 'soulfactory.update',
+  SUSPEND: 'soulfactory.suspend',
+  RESUME: 'soulfactory.resume',
+  REDEPLOY: 'soulfactory.redeploy',
+  REVOKE: 'soulfactory.revoke'
+};
+
+export function isLifecycleResultKind(kind) {
+  return kind === KINDS.PROVISIONING_RESULT || kind === KINDS.SOUL_ACTION_LEGACY_RESULT;
+}
+
+export function canonicalLifecycleResultKind(kind) {
+  return kind === KINDS.SOUL_ACTION_LEGACY_RESULT ? KINDS.PROVISIONING_RESULT : kind;
+}
 
 export const BAHIA_KINDS = {
   DEPLOY_REQUEST: KINDS.BAHIA_REQUEST_DEPLOY,
@@ -254,6 +292,54 @@ export function parseJsonContent(event, fallback = {}) {
   }
 }
 
+export function normalizeSoulDraftContent(content = {}) {
+  const identity = content.identity || {};
+  const permissions = content.permissions || {};
+  const runtime = content.runtime || {};
+  const relayPolicy = content.relay_policy || content.relayPolicy || {};
+  const workspace = content.workspace || {};
+  const assets = content.assets || {};
+
+  return {
+    ...content,
+    identity: {
+      name: identity.name || content.name || '',
+      purpose: identity.purpose || content.purpose || content.brief || '',
+      tier: identity.tier || content.tier || 'standard',
+      nip05: identity.nip05 || content.nip05 || ''
+    },
+    runtime: {
+      target: runtime.target || runtime.runtime || '',
+      runtime_pubkey: runtime.runtime_pubkey || runtime.runtimePubkey || '',
+      capability_ref: runtime.capability_ref || runtime.capabilityRef || '',
+      runtime_binding: runtime.runtime_binding || runtime.runtimeBinding || '',
+      state: runtime.state || ''
+    },
+    permissions: {
+      allowed_kinds: permissions.allowed_kinds || permissions.allowedKinds || content.allowed_kinds || [],
+      tool_grants: permissions.tool_grants || permissions.toolGrants || content.tool_grants || [],
+      approval_policy: permissions.approval_policy || permissions.approvalPolicy || ''
+    },
+    relay_policy: {
+      read: relayPolicy.read || [],
+      write: relayPolicy.write || [],
+      control: relayPolicy.control || [],
+      nip65_discovery: relayPolicy.nip65_discovery || relayPolicy.nip65Discovery || false
+    },
+    workspace: {
+      repo: workspace.repo || workspace.repository || '',
+      branch: workspace.branch || '',
+      environment: workspace.environment || ''
+    },
+    assets: {
+      avatar_ref: assets.avatar_ref || assets.avatarRef || content.avatar_ref || '',
+      voice_ref: assets.voice_ref || assets.voiceRef || content.voice_ref || ''
+    },
+    spec_hash: content.spec_hash || content.specHash || '',
+    previous_spec_hash: content.previous_spec_hash || content.previousSpecHash || ''
+  };
+}
+
 export function isReplaceableTombstone(event) {
   const content = parseJsonContent(event, {});
   if (content?.deleted === true) return true;
@@ -284,6 +370,111 @@ export function upsertReplaceableEvent(map, event) {
   }
   map.set(key, event);
   return { accepted: true, key, deleted: false };
+}
+
+export function dedupeReplaceableEvents(events = []) {
+  const map = new Map();
+  for (const event of events || []) {
+    upsertReplaceableEvent(map, event);
+  }
+  return Array.from(map.values())
+    .filter((event) => !isReplaceableTombstone(event))
+    .sort((a, b) => Number(b.created_at || 0) - Number(a.created_at || 0));
+}
+
+export function eventCoordinate(event) {
+  const d = getDTag(event);
+  if (!event?.kind || !event?.pubkey || !d) return '';
+  return `${event.kind}:${event.pubkey}:${d}`;
+}
+
+function arrayFrom(value) {
+  if (!value) return [];
+  return Array.isArray(value) ? value.filter((item) => item !== undefined && item !== null && item !== '') : [value];
+}
+
+function unique(values = []) {
+  return Array.from(new Set(values.filter(Boolean)));
+}
+
+function normalizeRelayHints(input = {}) {
+  return {
+    read: arrayFrom(input.read),
+    write: arrayFrom(input.write),
+    control: arrayFrom(input.control)
+  };
+}
+
+export function parseRuntimeCapabilityEvent(event) {
+  if (!event) return null;
+
+  const content = parseJsonContent(event, {});
+  const methods = [...arrayFrom(content.methods)];
+  const controllerPubkeys = [
+    ...arrayFrom(content.controller_pubkeys || content.controllerPubkeys),
+    ...getTagValues(event, 'controller')
+  ];
+  const relayHints = normalizeRelayHints(content.relay_hints || content.relayHints || {});
+
+  for (const tag of event.tags || []) {
+    if (!Array.isArray(tag) || tag.length < 2) continue;
+    switch (tag[0]) {
+      case 'method':
+        methods.push(tag[1]);
+        break;
+      case 'relay': {
+        const scope = tag[2] || 'control';
+        if (relayHints[scope]) relayHints[scope].push(tag[1]);
+        break;
+      }
+      case 'read-relay':
+        relayHints.read.push(tag[1]);
+        break;
+      case 'write-relay':
+        relayHints.write.push(tag[1]);
+        break;
+      case 'control-relay':
+        relayHints.control.push(tag[1]);
+        break;
+    }
+  }
+
+  const runtime = getTagValue(event, 'runtime', content.runtime || getDTag(event));
+  const schema = getTagValue(event, 'schema', content.schema || '');
+  const controlSchema = getTagValue(event, 'control-schema', content.control_schema || content.controlSchema || '');
+
+  return {
+    id: event.id,
+    pubkey: event.pubkey,
+    createdAt: event.created_at,
+    identifier: getDTag(event),
+    coordinate: eventCoordinate(event),
+    runtime,
+    schema,
+    controlSchema,
+    methods: unique(methods),
+    controllerPubkeys: unique(controllerPubkeys),
+    relayHints: {
+      read: unique(relayHints.read),
+      write: unique(relayHints.write),
+      control: unique(relayHints.control)
+    },
+    content,
+    event,
+    compatible:
+      schema === SOUL_FACTORY_RUNTIME_CAPABILITY_SCHEMA &&
+      controlSchema === SOUL_FACTORY_RUNTIME_CONTROL_SCHEMA
+  };
+}
+
+export function runtimeCapabilitySupports(capability, { runtime = '', method = '', controllerPubkey = '' } = {}) {
+  if (!capability?.compatible) return false;
+  if (runtime && capability.runtime !== runtime) return false;
+  if (method && !capability.methods.includes(method)) return false;
+  if (controllerPubkey && capability.controllerPubkeys.length > 0 && !capability.controllerPubkeys.includes(controllerPubkey)) {
+    return false;
+  }
+  return true;
 }
 
 function relayConnectionStateForSocket(socket) {
@@ -826,7 +1017,7 @@ export async function fetchTemplates(authorPubkey = null) {
   if (authorPubkey) {
     filter.authors = [authorPubkey];
   }
-  return nostr.query([filter]);
+  return dedupeReplaceableEvents(await nostr.queryUntilEose([filter]));
 }
 
 export async function fetchSouls(authorPubkey = null) {
@@ -834,27 +1025,52 @@ export async function fetchSouls(authorPubkey = null) {
   if (authorPubkey) {
     filter.authors = [authorPubkey];
   }
-  return nostr.query([filter]);
+  return dedupeReplaceableEvents(await nostr.queryUntilEose([filter]));
+}
+
+export async function fetchSoulDrafts(authorPubkey = null) {
+  const filter = { kinds: [KINDS.SOUL_DRAFT] };
+  if (authorPubkey) {
+    filter.authors = [authorPubkey];
+  }
+  return dedupeReplaceableEvents(await nostr.queryUntilEose([filter]));
+}
+
+export async function fetchSoulDraft(agentId, authorPubkey) {
+  const events = await nostr.queryUntilEose([{
+    kinds: [KINDS.SOUL_DRAFT],
+    '#d': [agentId],
+    authors: authorPubkey ? [authorPubkey] : undefined
+  }]);
+  return dedupeReplaceableEvents(events)[0] || null;
+}
+
+export async function fetchRuntimeCapabilities({ runtime = null, controllerPubkey = null, method = null, limit = 200 } = {}) {
+  const events = dedupeReplaceableEvents(await nostr.queryUntilEose([{ kinds: [KINDS.RUNTIME_CAPABILITY], limit }]));
+  return events
+    .map(parseRuntimeCapabilityEvent)
+    .filter(Boolean)
+    .filter((capability) => runtimeCapabilitySupports(capability, { runtime, controllerPubkey, method }));
 }
 
 export async function fetchSoul(agentId, authorPubkey) {
-  const events = await nostr.query([{
+  const events = await nostr.queryUntilEose([{
     kinds: [KINDS.AGENT_SOUL],
     '#d': [agentId],
     authors: authorPubkey ? [authorPubkey] : undefined
   }]);
-  return events[0] || null;
+  return dedupeReplaceableEvents(events)[0] || null;
 }
 
 export function subscribeToProvisioningProgress(requestEventId, onStatus, onResult) {
   return nostr.subscribe([
     { kinds: [KINDS.PROVISIONING_STATUS], '#e': [requestEventId] },
-    { kinds: [KINDS.PROVISIONING_RESULT], '#e': [requestEventId] }
+    { kinds: [KINDS.PROVISIONING_RESULT, KINDS.SOUL_ACTION_LEGACY_RESULT], '#e': [requestEventId] }
   ], {
     onEvent: (event) => {
       if (event.kind === KINDS.PROVISIONING_STATUS) {
         onStatus(parseProvisioningStatus(event));
-      } else if (event.kind === KINDS.PROVISIONING_RESULT) {
+      } else if (isLifecycleResultKind(event.kind)) {
         onResult(parseProvisioningResult(event));
       }
     }
@@ -881,7 +1097,17 @@ export function parseSoulEvent(event) {
     qdrant: '',
     bahiaServiceId: '',
     allowedKinds: [],
-    tools: []
+    tools: [],
+    draftRef: '',
+    specHash: '',
+    previousSpecHash: '',
+    runtime: {},
+    relayPolicy: {},
+    permissions: {},
+    workspaceSpec: {},
+    assets: {},
+    capabilityRef: '',
+    lastResultRef: ''
   };
 
   for (const tag of event.tags) {
@@ -901,10 +1127,50 @@ export function parseSoulEvent(event) {
       case 'service': soul.bahiaServiceId = tag[1]; break;
       case 'allowed-kind': soul.allowedKinds.push(parseInt(tag[1])); break;
       case 'tool': soul.tools.push({ server: tag[1], scopes: tag.slice(2) }); break;
+      case 'draft': soul.draftRef = tag[1]; break;
+      case 'spec-hash': soul.specHash = tag[1]; break;
+      case 'previous-spec-hash': soul.previousSpecHash = tag[1]; break;
+      case 'runtime': soul.runtime.target = tag[1]; break;
+      case 'runtime-pubkey': soul.runtime.runtime_pubkey = tag[1]; break;
+      case 'runtime-binding': soul.runtime.runtime_binding = tag[1]; break;
+      case 'runtime-state': soul.runtime.state = tag[1]; break;
+      case 'capability': soul.capabilityRef = tag[1]; soul.runtime.capability_ref = tag[1]; break;
+      case 'last-result': soul.lastResultRef = tag[1]; break;
     }
   }
 
+  const content = parseJsonContent(event, null);
+  if (content && typeof content === 'object') {
+    soul.runtime = { ...soul.runtime, ...(content.runtime || {}) };
+    soul.relayPolicy = content.relay_policy || content.relayPolicy || soul.relayPolicy;
+    soul.permissions = content.permissions || soul.permissions;
+    soul.workspaceSpec = content.workspace || soul.workspaceSpec;
+    soul.assets = content.assets || soul.assets;
+    soul.specHash = soul.specHash || content.spec_hash || content.specHash || '';
+    soul.previousSpecHash = soul.previousSpecHash || content.previous_spec_hash || content.previousSpecHash || '';
+    soul.draftRef = soul.draftRef || content.draft_ref || content.draftRef || '';
+    soul.capabilityRef = soul.capabilityRef || content.capability_ref || content.capabilityRef || soul.runtime.capability_ref || '';
+    soul.lastResultRef = soul.lastResultRef || content.last_result_ref || content.lastResultRef || '';
+  }
+
   return soul;
+}
+
+export function parseSoulDraftEvent(event) {
+  if (!event) return null;
+  const content = normalizeSoulDraftContent(parseJsonContent(event, {}));
+  return {
+    id: event.id,
+    pubkey: event.pubkey,
+    createdAt: event.created_at,
+    agentId: getDTag(event),
+    name: getTagValue(event, 'name', content.identity?.name || ''),
+    tier: getTagValue(event, 'tier', content.identity?.tier || 'standard'),
+    templateRef: getTagValue(event, 'template', ''),
+    specHash: getTagValue(event, 'spec-hash', content.spec_hash || ''),
+    previousSpecHash: getTagValue(event, 'previous-spec-hash', content.previous_spec_hash || ''),
+    content
+  };
 }
 
 export function parseTemplateEvent(event) {
@@ -1064,7 +1330,11 @@ function parseProvisioningResult(event) {
     success: false,
     error: '',
     soulRef: '',
-    data: {}
+    action: '',
+    requestKind: '',
+    specHash: '',
+    data: {},
+    legacyKind: event.kind === KINDS.SOUL_ACTION_LEGACY_RESULT
   };
 
   for (const tag of event.tags) {
@@ -1074,10 +1344,13 @@ function parseProvisioningResult(event) {
         if (tag[1] === 'error') result.error = event.content;
         break;
       case 'soul': result.soulRef = tag[1]; break;
+      case 'action': result.action = tag[1]; break;
+      case 'request-kind': result.requestKind = tag[1]; break;
+      case 'spec-hash': result.specHash = tag[1]; break;
     }
   }
 
-  if (result.success && event.content) {
+  if (event.content) {
     try {
       result.data = JSON.parse(event.content);
     } catch (e) {

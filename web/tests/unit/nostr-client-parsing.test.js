@@ -14,6 +14,11 @@ describe('Nostr Client - Parsing Functions', () => {
   let replaceableKey;
   let shouldAcceptReplaceableEvent;
   let isReplaceableTombstone;
+  let dedupeReplaceableEvents;
+  let parseRuntimeCapabilityEvent;
+  let runtimeCapabilitySupports;
+  let fetchRuntimeCapabilities;
+  let normalizeSoulDraftContent;
   let NostrClient;
 
   beforeEach(async () => {
@@ -30,6 +35,11 @@ describe('Nostr Client - Parsing Functions', () => {
     replaceableKey = module.replaceableKey;
     shouldAcceptReplaceableEvent = module.shouldAcceptReplaceableEvent;
     isReplaceableTombstone = module.isReplaceableTombstone;
+    dedupeReplaceableEvents = module.dedupeReplaceableEvents;
+    parseRuntimeCapabilityEvent = module.parseRuntimeCapabilityEvent;
+    runtimeCapabilitySupports = module.runtimeCapabilitySupports;
+    fetchRuntimeCapabilities = module.fetchRuntimeCapabilities;
+    normalizeSoulDraftContent = module.normalizeSoulDraftContent;
     NostrClient = module.NostrClient;
     global.WebSocket.OPEN = 1;
     global.WebSocket.CONNECTING = 0;
@@ -44,6 +54,10 @@ describe('Nostr Client - Parsing Functions', () => {
       expect(KINDS.PROVISIONING_STATUS).toBe(6950);
       expect(KINDS.PROVISIONING_RESULT).toBe(7950);
       expect(KINDS.SOUL_ACTION).toBe(1950);
+      expect(KINDS.SOUL_ACTION_LEGACY_RESULT).toBe(1951);
+      expect(KINDS.RUNTIME_CAPABILITY).toBe(30317);
+      expect(KINDS.RUNTIME_CONTROL_REQUEST).toBe(38384);
+      expect(KINDS.RUNTIME_CONTROL_RESULT).toBe(38386);
     });
 
     it('should export Bahia controlplane event kinds', () => {
@@ -90,6 +104,101 @@ describe('Nostr Client - Parsing Functions', () => {
       expect(isReplaceableTombstone({ content: JSON.stringify({ deleted: true }), tags: [] })).toBe(true);
       expect(isReplaceableTombstone({ content: '{}', tags: [['deleted', 'true']] })).toBe(true);
       expect(isReplaceableTombstone({ content: '{}', tags: [['deleted', 'false']] })).toBe(false);
+    });
+
+    it('should dedupe replaceable events by latest created_at and omit tombstones', () => {
+      const pubkey = 'a'.repeat(64);
+      const events = [
+        { id: 'old', kind: 31951, pubkey, created_at: 100, tags: [['d', 'agent-1']], content: '{}' },
+        { id: 'new', kind: 31951, pubkey, created_at: 200, tags: [['d', 'agent-1']], content: '{}' },
+        { id: 'deleted', kind: 31952, pubkey, created_at: 300, tags: [['d', 'draft-1']], content: JSON.stringify({ deleted: true }) }
+      ];
+
+      expect(dedupeReplaceableEvents(events).map((event) => event.id)).toEqual(['new']);
+    });
+  });
+
+  describe('soul draft parsing', () => {
+    it('normalizes partial identity objects with legacy top-level fields', () => {
+      expect(normalizeSoulDraftContent({
+        identity: { name: 'Scout' },
+        purpose: 'Observe',
+        tier: 'heavy',
+        nip05: 'scout@example.com'
+      }).identity).toEqual({
+        name: 'Scout',
+        purpose: 'Observe',
+        tier: 'heavy',
+        nip05: 'scout@example.com'
+      });
+    });
+  });
+
+  describe('runtime capability parsing', () => {
+    it('parses compatible 30317 runtime capability announcements', () => {
+      const event = {
+        id: 'cap-openclaw',
+        kind: 30317,
+        pubkey: 'runtime-pubkey',
+        created_at: 1715700000,
+        tags: [
+          ['d', 'openclaw-main'],
+          ['runtime', 'openclaw'],
+          ['schema', 'soulfactory-runtime-capability/v1'],
+          ['control-schema', 'soulfactory-runtime-control/v1'],
+          ['method', 'soulfactory.provision'],
+          ['method', 'soulfactory.update'],
+          ['controller', 'controller-pubkey'],
+          ['relay', 'wss://control.example', 'control']
+        ],
+        content: JSON.stringify({
+          schema: 'soulfactory-runtime-capability/v1',
+          runtime: 'openclaw',
+          methods: ['soulfactory.provision'],
+          control_schema: 'soulfactory-runtime-control/v1',
+          relay_hints: { read: ['wss://read.example'] }
+        })
+      };
+
+      const capability = parseRuntimeCapabilityEvent(event);
+
+      expect(capability).toMatchObject({
+        id: 'cap-openclaw',
+        runtime: 'openclaw',
+        coordinate: '30317:runtime-pubkey:openclaw-main',
+        compatible: true
+      });
+      expect(capability.methods).toEqual(['soulfactory.provision', 'soulfactory.update']);
+      expect(capability.controllerPubkeys).toEqual(['controller-pubkey']);
+      expect(capability.relayHints.control).toEqual(['wss://control.example']);
+      expect(capability.relayHints.read).toEqual(['wss://read.example']);
+      expect(runtimeCapabilitySupports(capability, { runtime: 'openclaw', method: 'soulfactory.update', controllerPubkey: 'controller-pubkey' })).toBe(true);
+      expect(runtimeCapabilitySupports(capability, { runtime: 'metiq' })).toBe(false);
+    });
+
+    it('fetchRuntimeCapabilities queries until EOSE and filters compatible methods', async () => {
+      const old = {
+        id: 'old-cap',
+        kind: 30317,
+        pubkey: 'runtime-pubkey',
+        created_at: 100,
+        tags: [['d', 'openclaw'], ['runtime', 'openclaw']],
+        content: JSON.stringify({ schema: 'soulfactory-runtime-capability/v1', runtime: 'openclaw', control_schema: 'soulfactory-runtime-control/v1', methods: ['soulfactory.provision'] })
+      };
+      const latest = {
+        ...old,
+        id: 'new-cap',
+        created_at: 200,
+        content: JSON.stringify({ schema: 'soulfactory-runtime-capability/v1', runtime: 'openclaw', control_schema: 'soulfactory-runtime-control/v1', methods: ['soulfactory.update'] })
+      };
+
+      const module = await import('../../src/lib/nostr/client.js');
+      vi.spyOn(module.nostr, 'queryUntilEose').mockResolvedValue([old, latest]);
+
+      const capabilities = await fetchRuntimeCapabilities({ method: 'soulfactory.update' });
+
+      expect(module.nostr.queryUntilEose).toHaveBeenCalledWith([{ kinds: [30317], limit: 200 }]);
+      expect(capabilities.map((capability) => capability.id)).toEqual(['new-cap']);
     });
   });
 
