@@ -1,0 +1,42 @@
+{
+  "feature_id": "SOUL_FACTORY_PERSONALITY_SERVICE",
+  "status": "verified",
+  "criteria": [
+    {
+      "ac_id": "SFPS-AC-001",
+      "title": "Personality spec maps to OpenClaw prompt sections",
+      "type": "mapping",
+      "priority": "must",
+      "assertion": "SoulPersonaSpec traits, style, tone, constraints, and system_prompt_sections are normalized and mapped into canonical OpenClaw role, guidelines, and red_lines sections.",
+      "testable_by": ["unit"],
+      "expected_result": "Explicit role/guidelines/red_lines content is preserved, traits/style/tone are appended to guidelines, and constraints are appended to red_lines."
+    },
+    {
+      "ac_id": "SFPS-AC-002",
+      "title": "Composite system prompt assembly is deterministic",
+      "type": "behavior",
+      "priority": "must",
+      "assertion": "The personality service assembles a composite system prompt from canonical sections in role, guidelines, red_lines order and omits empty sections.",
+      "testable_by": ["unit"],
+      "expected_result": "The assembled prompt uses stable section headers and ordering for reproducible runtime updates."
+    },
+    {
+      "ac_id": "SFPS-AC-003",
+      "title": "Persona fields are validated before runtime dispatch",
+      "type": "validation",
+      "priority": "must",
+      "assertion": "Invalid persona traits, constraints, section names, duplicates, and disallowed control characters are rejected before building runtime params.",
+      "testable_by": ["unit"],
+      "expected_result": "Malformed persona specs return validation errors and do not produce runtime control params."
+    },
+    {
+      "ac_id": "SFPS-AC-004",
+      "title": "Persona update runtime params contract is defined",
+      "type": "runtime_contract",
+      "priority": "must",
+      "assertion": "Bahia defines the soulfactory.persona.update method and the soulfactory-persona/v1 params payload for kind 38384 runtime control requests.",
+      "testable_by": ["unit", "contract"],
+      "expected_result": "Runtime params include normalized persona data plus OpenClaw system_prompt_sections and system_prompt_override fields using snake_case wire names; agent_defaults_patch carries OpenClaw-native config keys such as systemPromptOverride."
+    }
+  ]
+}

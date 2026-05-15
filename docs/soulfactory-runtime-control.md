@@ -74,6 +74,16 @@ Applies a new desired spec to an existing managed agent.
 
 Required params: `patch` or `resolved_spec`, `previous_spec_hash`, `new_spec_hash`, and `update_mode` (`merge` or `replace`).
 
+### `soulfactory.persona.update`
+
+Hot-reloads persona and system-prompt configuration for an existing managed agent without reprovisioning.
+
+Required params:
+
+- `schema`: `soulfactory-persona/v1`.
+- `persona`: normalized `SoulPersonaSpec` with `traits`, `style`, `tone`, `constraints`, and canonical `system_prompt_sections` keys (`role`, `guidelines`, `red_lines`).
+- `openclaw`: `{ "system_prompt_sections", "system_prompt_override", "agent_defaults_patch" }`, where `system_prompt_override` is the deterministic composite prompt assembled from `role`, `guidelines`, and `red_lines` sections. `agent_defaults_patch` uses OpenClaw-native config keys such as `systemPromptOverride`.
+
 ### `soulfactory.suspend`
 
 Stops active runtime execution without deleting identity, state, or workspace bindings.
@@ -183,7 +193,7 @@ Runtime capabilities SHOULD include JSON content with:
 {
   "schema": "soulfactory-runtime-capability/v1",
   "runtime": "openclaw",
-  "methods": ["soulfactory.provision", "soulfactory.update", "soulfactory.suspend", "soulfactory.resume", "soulfactory.redeploy", "soulfactory.revoke"],
+  "methods": ["soulfactory.provision", "soulfactory.update", "soulfactory.persona.update", "soulfactory.suspend", "soulfactory.resume", "soulfactory.redeploy", "soulfactory.revoke"],
   "control_schema": "soulfactory-runtime-control/v1",
   "controller_pubkeys": ["<trusted-controller-pubkey>"],
   "relay_hints": { "read": [], "write": [], "control": [] }

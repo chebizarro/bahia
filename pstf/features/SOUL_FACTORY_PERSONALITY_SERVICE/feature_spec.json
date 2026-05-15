@@ -1,0 +1,18 @@
+{
+  "feature_id": "SOUL_FACTORY_PERSONALITY_SERVICE",
+  "status": "verified",
+  "beads_issue": "bahia-48jp",
+  "title": "SoulFactory personality spec service",
+  "date": "2026-05-15",
+  "scope": "Epic 5 Task 5.1: Bahia-side mapping of SoulPersonaSpec to OpenClaw prompt sections and kind:38384 persona update params.",
+  "intended_behavior": [
+    "SoulPersonaSpec can be validated and normalized into role, guidelines, and red_lines prompt sections.",
+    "Bahia assembles a deterministic composite system prompt for OpenClaw systemPromptOverride updates.",
+    "Bahia can serialize soulfactory.persona.update params for kind:38384 runtime control requests without adding REST control APIs."
+  ],
+  "out_of_scope": [
+    "LLM-assisted prompt refinement and persona consistency scoring.",
+    "Runtime bridge handlers that apply soulfactory.persona.update.",
+    "Web Personality Builder UX controls."
+  ]
+}

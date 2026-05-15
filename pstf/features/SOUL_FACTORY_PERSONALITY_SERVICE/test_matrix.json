@@ -1,0 +1,42 @@
+{
+  "feature_id": "SOUL_FACTORY_PERSONALITY_SERVICE",
+  "status": "verified",
+  "tests": [
+    {
+      "test_id": "SFPS-T-001",
+      "ac_ids": ["SFPS-AC-001", "SFPS-AC-002"],
+      "title": "Personality service maps specs to prompt sections",
+      "type": "unit",
+      "target_path": "internal/soulfactory/personality_service_test.go",
+      "description": "Map a SoulPersonaSpec with traits, style, tone, constraints, and explicit sections, then assert normalized section content and deterministic composite prompt ordering.",
+      "status": "passed_2026-05-15_go_test_internal_soulfactory"
+    },
+    {
+      "test_id": "SFPS-T-002",
+      "ac_ids": ["SFPS-AC-004"],
+      "title": "Persona update 38384 params contract",
+      "type": "contract",
+      "target_path": "internal/soulfactory/personality_service_test.go",
+      "description": "Build soulfactory.persona.update params and embed them in a RuntimeControlEnvelope, asserting method, schema, OpenClaw prompt fields, OpenClaw-native agent defaults patch keys, and 38384 tags/content survive parsing.",
+      "status": "passed_2026-05-15_go_test_internal_soulfactory"
+    },
+    {
+      "test_id": "SFPS-T-003",
+      "ac_ids": ["SFPS-AC-003"],
+      "title": "Persona validation rejects malformed fields",
+      "type": "unit",
+      "target_path": "internal/soulfactory/personality_service_test.go",
+      "description": "Assert duplicate traits, unknown sections, excessive constraints, and disallowed control characters are rejected before runtime params are built.",
+      "status": "passed_2026-05-15_go_test_internal_soulfactory"
+    },
+    {
+      "test_id": "SFPS-T-004",
+      "ac_ids": ["SFPS-AC-002"],
+      "title": "Prompt assembly omits empty sections",
+      "type": "unit",
+      "target_path": "internal/soulfactory/personality_service_test.go",
+      "description": "Assemble a prompt from a partial section set and assert empty role/red_lines sections are omitted.",
+      "status": "passed_2026-05-15_go_test_internal_soulfactory"
+    }
+  ]
+}
