@@ -26,6 +26,15 @@ var openClawSoulFactoryMethods = []string{
 	RuntimeMethodResume,
 	RuntimeMethodRedeploy,
 	RuntimeMethodRevoke,
+	RuntimeMethodAvatarGenerate,
+	RuntimeMethodAvatarSet,
+	RuntimeMethodAvatarList,
+	RuntimeMethodAvatarStatus,
+	RuntimeMethodVoiceConfigure,
+	RuntimeMethodMemoryConfigure,
+	RuntimeMethodMemoryReindex,
+	RuntimeMethodPersonaUpdate,
+	RuntimeMethodConfigReload,
 }
 
 // OpenClawControlDriver is the owned sidecar seam into local OpenClaw control
@@ -607,6 +616,20 @@ func validateOpenClawMethodParams(method string, params map[string]interface{}) 
 		}
 		if _, ok := params["revoke_runtime_credentials"].(bool); !ok {
 			return controlError("missing_required_param", "revoke requires revoke_runtime_credentials boolean", false)
+		}
+	case RuntimeMethodAvatarGenerate:
+		if _, ok := params["generation"].(map[string]interface{}); !ok {
+			if err := requireString("prompt"); err != nil {
+				return controlError("missing_required_param", "avatar.generate requires generation object or prompt string", false)
+			}
+		}
+	case RuntimeMethodAvatarSet:
+		return requireString("avatar_ref")
+	case RuntimeMethodAvatarList, RuntimeMethodAvatarStatus:
+		// Optional params only.
+	case RuntimeMethodConfigReload:
+		if _, err := ParseConfigReloadRequest(params); err != nil {
+			return controlError("invalid_reload_request", err.Error(), false)
 		}
 	default:
 		return controlError("unsupported_method", "unsupported SoulFactory method", false)

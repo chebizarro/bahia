@@ -26,6 +26,8 @@ const (
 	RuntimeMethodRevoke          = "soulfactory.revoke"
 	RuntimeMethodAvatarGenerate  = "soulfactory.avatar.generate"
 	RuntimeMethodAvatarSet       = "soulfactory.avatar.set"
+	RuntimeMethodAvatarList      = "soulfactory.avatar.list"
+	RuntimeMethodAvatarStatus    = "soulfactory.avatar.status"
 	RuntimeMethodVoiceConfigure  = "soulfactory.voice.configure"
 	RuntimeMethodMemoryConfigure = "soulfactory.memory.configure"
 	RuntimeMethodMemoryReindex   = "soulfactory.memory.reindex"

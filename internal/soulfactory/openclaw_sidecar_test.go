@@ -10,6 +10,8 @@ import (
 
 	"github.com/nbd-wtf/go-nostr"
 
+	"github.com/openagentsinc/bahia/internal/adapters/blossom"
+	"github.com/openagentsinc/bahia/internal/adapters/llm"
 	"github.com/openagentsinc/bahia/internal/domain"
 )
 
@@ -37,6 +39,27 @@ type fakeOpenClawDriver struct {
 	calls   []OpenClawControlInvocation
 	outcome *OpenClawControlOutcome
 	err     error
+}
+
+type fakeAvatarRuntimeGenerator struct {
+	spec domain.SoulAvatarGenerationSpec
+}
+
+func (f *fakeAvatarRuntimeGenerator) GenerateWithSpec(_ context.Context, spec domain.SoulAvatarGenerationSpec, progress llm.AvatarProgressFunc) (*llm.AvatarResult, error) {
+	f.spec = spec
+	progress(llm.AvatarProgressEvent{Provider: spec.Provider, Stage: llm.AvatarProgressQueued, Percent: 0, Message: "queued"})
+	progress(llm.AvatarProgressEvent{Provider: spec.Provider, Stage: llm.AvatarProgressCompleted, Percent: 100, Message: "done"})
+	return &llm.AvatarResult{ImageData: []byte("png"), ContentType: "image/png", Seed: spec.Seed, Provider: spec.Provider}, nil
+}
+
+func (f *fakeAvatarRuntimeGenerator) ProviderInfos() []llm.AvatarProviderInfo {
+	return []llm.AvatarProviderInfo{{Name: "test-provider", Available: true}}
+}
+
+type fakeAvatarRuntimeStore struct{}
+
+func (f fakeAvatarRuntimeStore) StoreAvatar(context.Context, []byte, string, string) (*blossom.AvatarStoreResult, error) {
+	return &blossom.AvatarStoreResult{Ref: "blossom:avatar", Hash: "avatar", ContentType: "image/png", Size: 3}, nil
 }
 
 func (f *fakeOpenClawDriver) Methods() []string {
@@ -272,6 +295,75 @@ func TestOpenClawSidecarExecutesLifecycleSuspend(t *testing.T) {
 	}
 	if len(driver.calls) != 1 || driver.calls[0].Method != RuntimeMethodSuspend {
 		t.Fatalf("driver calls = %+v", driver.calls)
+	}
+}
+
+func TestOpenClawSidecarAvatarRuntimeMethodsPublish38386Results(t *testing.T) {
+	runtime := newFakeSigner(t)
+	controller := newFakeSigner(t)
+	transport := &fakeOpenClawSidecarTransport{}
+	generator := &fakeAvatarRuntimeGenerator{}
+	driver := &AvatarRuntimeControlDriver{Generator: generator, Store: fakeAvatarRuntimeStore{}, Now: func() time.Time { return time.Unix(10, 0) }}
+	sidecar := newTestOpenClawSidecar(t, runtime, controller, transport, &fakeOpenClawDriver{methods: driver.Methods()})
+	sidecar.driver = driver
+
+	request := signedOpenClawControlRequest(t, controller, runtime.pubkey, RuntimeMethodAvatarGenerate, map[string]interface{}{
+		"generation": map[string]interface{}{"prompt": "pixel owl", "style_preset": "pixel-art", "seed": "owl-1", "provider": "test-provider"},
+	}, nil)
+	result, err := sidecar.HandleControlEvent(t.Context(), request)
+	if err != nil {
+		t.Fatalf("HandleControlEvent avatar.generate error = %v", err)
+	}
+	if result.Status != "success" || result.Method != RuntimeMethodAvatarGenerate || result.Result["avatar_ref"] != "blossom:avatar" {
+		t.Fatalf("unexpected avatar generate result: %+v", result)
+	}
+	if generator.spec.Prompt != "pixel owl" || generator.spec.StylePreset != "pixel-art" || generator.spec.Seed != "owl-1" {
+		t.Fatalf("generation spec = %+v", generator.spec)
+	}
+	if patch, ok := result.Result["read_model_patch"].(map[string]interface{}); !ok || patch["assets"] == nil {
+		t.Fatalf("missing read model patch: %+v", result.Result)
+	}
+	if progress, ok := result.Result["progress_events"].([]map[string]interface{}); !ok || len(progress) != 2 {
+		t.Fatalf("progress events = %#v", result.Result["progress_events"])
+	}
+	if len(transport.published) != 1 || transport.published[0].Kind != domain.KindRuntimeControlResult {
+		t.Fatalf("published avatar result events = %#v", transport.published)
+	}
+
+	statusReq := signedOpenClawControlRequest(t, controller, runtime.pubkey, RuntimeMethodAvatarStatus, map[string]interface{}{}, nil)
+	status, err := sidecar.HandleControlEvent(t.Context(), statusReq)
+	if err != nil {
+		t.Fatalf("HandleControlEvent avatar.status error = %v", err)
+	}
+	if status.Result["avatar_ref"] != "blossom:avatar" || status.Result["state"] != "completed" {
+		t.Fatalf("unexpected avatar status: %+v", status.Result)
+	}
+}
+
+func TestOpenClawSidecarAvatarListAndSet(t *testing.T) {
+	runtime := newFakeSigner(t)
+	controller := newFakeSigner(t)
+	transport := &fakeOpenClawSidecarTransport{}
+	driver := &AvatarRuntimeControlDriver{Generator: &fakeAvatarRuntimeGenerator{}}
+	sidecar := newTestOpenClawSidecar(t, runtime, controller, transport, &fakeOpenClawDriver{methods: driver.Methods()})
+	sidecar.driver = driver
+
+	listReq := signedOpenClawControlRequest(t, controller, runtime.pubkey, RuntimeMethodAvatarList, map[string]interface{}{}, nil)
+	listResult, err := sidecar.HandleControlEvent(t.Context(), listReq)
+	if err != nil {
+		t.Fatalf("HandleControlEvent avatar.list error = %v", err)
+	}
+	if listResult.Result["providers"] == nil || listResult.Result["style_presets"] == nil {
+		t.Fatalf("unexpected avatar list result: %+v", listResult.Result)
+	}
+
+	setReq := signedOpenClawControlRequest(t, controller, runtime.pubkey, RuntimeMethodAvatarSet, map[string]interface{}{"avatar_ref": "blossom:existing"}, nil)
+	setResult, err := sidecar.HandleControlEvent(t.Context(), setReq)
+	if err != nil {
+		t.Fatalf("HandleControlEvent avatar.set error = %v", err)
+	}
+	if setResult.Result["avatar_ref"] != "blossom:existing" || setResult.Result["read_model_patch"] == nil {
+		t.Fatalf("unexpected avatar set result: %+v", setResult.Result)
 	}
 }
 
