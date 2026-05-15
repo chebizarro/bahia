@@ -1,0 +1,42 @@
+{
+  "feature_id": "SOUL_FACTORY_AGENT_CUSTOMIZATION",
+  "status": "in_progress_task_1_1_verified",
+  "criteria": [
+    {
+      "ac_id": "SFAC-AC-001",
+      "title": "Draft v2 schema marker is represented in the domain model",
+      "type": "contract",
+      "priority": "must",
+      "assertion": "SoulDraftContent exposes schema versioning constants and a schema field capable of distinguishing legacy/no-schema v1 drafts from soulfactory-draft/v2 drafts.",
+      "testable_by": ["unit"],
+      "expected_result": "v2 draft content reports soulfactory-draft/v2 while omitted schema reports soulfactory-draft/v1 for migration detection."
+    },
+    {
+      "ac_id": "SFAC-AC-002",
+      "title": "Customization nested specs round-trip",
+      "type": "data_contract",
+      "priority": "must",
+      "assertion": "SoulDraftContent carries Persona, Avatar, Voice, and Memory fields using strongly typed nested specs with JSON tags matching the plan.",
+      "testable_by": ["unit"],
+      "expected_result": "Persona traits/system prompt sections, avatar generation/current refs, voice persona/provider settings, and memory search settings survive JSON serialization and parsing."
+    },
+    {
+      "ac_id": "SFAC-AC-003",
+      "title": "Legacy v1 fields remain migration-valid",
+      "type": "compatibility",
+      "priority": "must",
+      "assertion": "Existing v1 fields such as avatar_prompt, assets.avatar_ref, assets.voice_ref, allowed_kinds, and tool_grants remain valid and are not dropped by migration helpers.",
+      "testable_by": ["unit"],
+      "expected_result": "MigrateToLatest returns a v2 copy that preserves legacy fields and additively seeds equivalent nested avatar/voice fields where possible."
+    },
+    {
+      "ac_id": "SFAC-AC-004",
+      "title": "Spec hash observes customization fields",
+      "type": "data_integrity",
+      "priority": "must",
+      "assertion": "Draft spec hash computation includes the new nested customization fields through canonical draft JSON serialization.",
+      "testable_by": ["unit"],
+      "expected_result": "Hashing the same v2 draft is stable, and changing a nested customization field changes the computed hash."
+    }
+  ]
+}

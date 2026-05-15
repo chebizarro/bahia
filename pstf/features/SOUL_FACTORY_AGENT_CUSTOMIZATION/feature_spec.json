@@ -1,0 +1,19 @@
+{
+  "feature_id": "SOUL_FACTORY_AGENT_CUSTOMIZATION",
+  "status": "in_progress_task_1_1_verified",
+  "beads_issue": "bahia-pnlu",
+  "title": "SoulFactory agent customization draft schema foundation",
+  "date": "2026-05-15",
+  "scope": "Epic 1 Task 1.1: additive domain model support for v2 SoulFactory draft customization specs.",
+  "intended_behavior": [
+    "Soul draft content can explicitly declare schema soulfactory-draft/v2.",
+    "Soul draft content can carry portable persona, avatar, voice, and memory nested specs.",
+    "Legacy v1 draft fields remain parseable and can be migrated additively into v2 without dropping the legacy fields.",
+    "Spec hash computation observes the new customization fields through draft JSON serialization."
+  ],
+  "out_of_scope": [
+    "Event codec merge semantics and provider/model validation.",
+    "Web client v2 builders and editors.",
+    "Avatar/voice/memory/persona runtime control methods."
+  ]
+}

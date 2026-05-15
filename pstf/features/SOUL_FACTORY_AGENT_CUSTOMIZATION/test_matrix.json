@@ -1,0 +1,51 @@
+{
+  "feature_id": "SOUL_FACTORY_AGENT_CUSTOMIZATION",
+  "status": "in_progress_task_1_1_verified",
+  "tests": [
+    {
+      "test_id": "SFAC-T-001",
+      "ac_ids": ["SFAC-AC-001", "SFAC-AC-002"],
+      "title": "V2 customization specs round-trip",
+      "type": "unit",
+      "target_path": "internal/domain/soul_test.go",
+      "description": "Construct a v2 SoulDraftContent with identity theme/emoji plus persona, avatar, voice, and memory specs, serialize, parse, and assert nested fields survive.",
+      "status": "passed_2026-05-15_go_test_internal_domain"
+    },
+    {
+      "test_id": "SFAC-T-002",
+      "ac_ids": ["SFAC-AC-001"],
+      "title": "Customization content auto-marks v2 schema",
+      "type": "unit",
+      "target_path": "internal/domain/soul_test.go",
+      "description": "Serialize schema-less draft content with v2-only customization fields and assert the emitted JSON carries soulfactory-draft/v2 without mutating the original struct.",
+      "status": "passed_2026-05-15_go_test_internal_domain"
+    },
+    {
+      "test_id": "SFAC-T-003",
+      "ac_ids": ["SFAC-AC-001", "SFAC-AC-003"],
+      "title": "V1 migration compatibility",
+      "type": "unit",
+      "target_path": "internal/domain/soul_test.go",
+      "description": "Parse no-schema legacy draft content and assert migration to latest preserves legacy fields while seeding nested avatar and voice specs.",
+      "status": "passed_2026-05-15_go_test_internal_domain"
+    },
+    {
+      "test_id": "SFAC-T-004",
+      "ac_ids": ["SFAC-AC-004"],
+      "title": "Customization fields affect spec hash",
+      "type": "unit",
+      "target_path": "internal/soulfactory/provisioning_resolution_test.go",
+      "description": "Hash a v2 draft with customization fields twice for stability, then mutate memory search config and assert the hash changes.",
+      "status": "passed_2026-05-15_go_test_internal_soulfactory"
+    },
+    {
+      "test_id": "SFAC-T-005",
+      "ac_ids": ["SFAC-AC-003"],
+      "title": "Runtime params migrate v1 draft fields",
+      "type": "unit",
+      "target_path": "internal/soulfactory/provisioning_resolution_test.go",
+      "description": "Build runtime provisioning params from a pure v1 draft and assert avatar_prompt, assets.avatar_ref, and assets.voice_ref are present in migrated nested v2 fields.",
+      "status": "passed_2026-05-15_go_test_internal_soulfactory"
+    }
+  ]
+}

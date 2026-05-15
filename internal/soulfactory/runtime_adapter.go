@@ -529,13 +529,21 @@ func (c RuntimeCapability) Supports(runtime domain.RuntimeTarget, method, contro
 }
 
 func BuildProvisionRuntimeParamsFromDraft(draft domain.SoulDraftContent) map[string]interface{} {
+	draft = draft.MigrateToLatest()
 	return map[string]interface{}{
+		"schema": draft.SchemaVersion(),
 		"identity": map[string]interface{}{
 			"name":    draft.Identity.Name,
 			"purpose": draft.Identity.Purpose,
 			"tier":    draft.Identity.Tier,
 			"nip05":   draft.Identity.NIP05,
+			"theme":   draft.Identity.Theme,
+			"emoji":   draft.Identity.Emoji,
 		},
+		"persona": draft.Persona,
+		"avatar":  draft.Avatar,
+		"voice":   draft.Voice,
+		"memory":  draft.Memory,
 		"runtime": map[string]interface{}{
 			"target":         draft.Runtime.Target,
 			"capability_ref": draft.Runtime.CapabilityRef,

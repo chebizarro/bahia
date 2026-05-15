@@ -27,6 +27,10 @@ type resolvedProvisioningSpec struct {
 	SpecHash     string
 
 	Identity    domain.SoulIdentitySpec
+	Persona     domain.SoulPersonaSpec
+	Avatar      domain.SoulAvatarSpec
+	Voice       domain.SoulVoiceSpec
+	Memory      domain.SoulMemorySpec
 	Runtime     domain.SoulRuntimeSpec
 	Permissions domain.SoulPermissionSpec
 	RelayPolicy domain.SoulRelayPolicySpec
@@ -98,7 +102,7 @@ func (s *resolvedProvisioningSpec) applyDraftSnapshot() {
 	if s.Draft == nil {
 		return
 	}
-	content := s.Draft.Content
+	content := s.Draft.Content.MigrateToLatest()
 	s.AgentID = firstNonEmpty(s.AgentID, s.Draft.AgentID)
 	s.Name = firstNonEmpty(content.Identity.Name, s.Draft.Name, s.Name)
 	s.Brief = firstNonEmpty(content.Brief, content.Identity.Purpose, s.Brief)
@@ -109,6 +113,10 @@ func (s *resolvedProvisioningSpec) applyDraftSnapshot() {
 	}
 	s.TemplateRef = firstNonEmpty(s.Draft.TemplateRef, s.TemplateRef)
 	s.Identity = content.Identity
+	s.Persona = content.Persona
+	s.Avatar = content.Avatar
+	s.Voice = content.Voice
+	s.Memory = content.Memory
 	s.Runtime = content.Runtime
 	s.RelayPolicy = content.RelayPolicy
 	s.Workspace = content.Workspace
@@ -197,8 +205,13 @@ func (s *resolvedProvisioningSpec) applyToSoul(soul *domain.AgentSoul) {
 
 func (s *resolvedProvisioningSpec) provisionRuntimeParams(soul *domain.AgentSoul) map[string]interface{} {
 	content := domain.SoulDraftContent{
+		Schema:      domain.SoulFactoryDraftSchemaLatest,
 		Brief:       s.Brief,
 		Identity:    s.Identity,
+		Persona:     s.Persona,
+		Avatar:      s.Avatar,
+		Voice:       s.Voice,
+		Memory:      s.Memory,
 		Runtime:     s.Runtime,
 		Permissions: s.Permissions,
 		RelayPolicy: s.RelayPolicy,

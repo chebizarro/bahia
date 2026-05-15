@@ -2,6 +2,7 @@ package domain
 
 import (
 	"encoding/json"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -106,6 +107,10 @@ const (
 const (
 	SoulFactoryRuntimeControlSchema    = "soulfactory-runtime-control/v1"
 	SoulFactoryRuntimeCapabilitySchema = "soulfactory-runtime-capability/v1"
+
+	SoulFactoryDraftSchemaV1     = "soulfactory-draft/v1"
+	SoulFactoryDraftSchemaV2     = "soulfactory-draft/v2"
+	SoulFactoryDraftSchemaLatest = SoulFactoryDraftSchemaV2
 )
 
 // RuntimeTarget identifies a SoulFactory-managed runtime implementation.
@@ -128,6 +133,8 @@ type SoulIdentitySpec struct {
 	Purpose string   `json:"purpose,omitempty"`
 	Tier    SoulTier `json:"tier,omitempty"`
 	NIP05   string   `json:"nip05,omitempty"`
+	Theme   string   `json:"theme,omitempty"`
+	Emoji   string   `json:"emoji,omitempty"`
 }
 
 // SoulRuntimeSpec captures runtime targeting and observed binding metadata.
@@ -165,6 +172,70 @@ type SoulWorkspaceSpec struct {
 type SoulAssetRefs struct {
 	AvatarRef string `json:"avatar_ref,omitempty"`
 	VoiceRef  string `json:"voice_ref,omitempty"`
+}
+
+// SoulPersonaSpec captures personality and prompt-shaping configuration for a soul draft.
+type SoulPersonaSpec struct {
+	Traits               []string          `json:"traits,omitempty"`
+	Style                string            `json:"style,omitempty"`
+	Tone                 string            `json:"tone,omitempty"`
+	Constraints          []string          `json:"constraints,omitempty"`
+	SystemPromptSections map[string]string `json:"system_prompt_sections,omitempty"`
+}
+
+// SoulAvatarSpec captures generated/uploaded avatar choices for a soul draft.
+type SoulAvatarSpec struct {
+	Generation   *SoulAvatarGenerationSpec `json:"generation,omitempty"`
+	UploadedRef  string                    `json:"uploaded_ref,omitempty"`
+	GeneratedRef string                    `json:"generated_ref,omitempty"`
+	Current      string                    `json:"current,omitempty"`
+}
+
+// SoulAvatarGenerationSpec captures provider-specific avatar generation inputs.
+type SoulAvatarGenerationSpec struct {
+	Prompt      string `json:"prompt,omitempty"`
+	StylePreset string `json:"style_preset,omitempty"`
+	Seed        string `json:"seed,omitempty"`
+	Width       int    `json:"width,omitempty"`
+	Height      int    `json:"height,omitempty"`
+	Provider    string `json:"provider,omitempty"`
+}
+
+// SoulVoiceSpec captures TTS provider and persona configuration for a soul draft.
+type SoulVoiceSpec struct {
+	Provider   string                    `json:"provider,omitempty"`
+	PersonaID  string                    `json:"persona_id,omitempty"`
+	Persona    *SoulVoicePersonaSpec     `json:"persona,omitempty"`
+	AutoMode   string                    `json:"auto_mode,omitempty"`
+	SampleText string                    `json:"sample_text,omitempty"`
+	Providers  map[string]map[string]any `json:"providers,omitempty"`
+}
+
+// SoulVoicePersonaSpec captures portable voice persona characteristics.
+type SoulVoicePersonaSpec struct {
+	Label   string `json:"label,omitempty"`
+	Profile string `json:"profile,omitempty"`
+	Style   string `json:"style,omitempty"`
+	Accent  string `json:"accent,omitempty"`
+	Pacing  string `json:"pacing,omitempty"`
+}
+
+// SoulMemorySpec captures embedding, search, and retention policy for a soul draft.
+type SoulMemorySpec struct {
+	EmbeddingProvider string                `json:"embedding_provider,omitempty"`
+	EmbeddingModel    string                `json:"embedding_model,omitempty"`
+	Search            *SoulMemorySearchSpec `json:"search,omitempty"`
+	Strategy          string                `json:"strategy,omitempty"`
+	AutoIndex         bool                  `json:"auto_index,omitempty"`
+	RetentionDays     int                   `json:"retention_days,omitempty"`
+}
+
+// SoulMemorySearchSpec captures vector search tuning for memory lookups.
+type SoulMemorySearchSpec struct {
+	TopK           int     `json:"top_k,omitempty"`
+	ScoreThreshold float64 `json:"score_threshold,omitempty"`
+	Rerank         bool    `json:"rerank,omitempty"`
+	RerankModel    string  `json:"rerank_model,omitempty"`
 }
 
 // SoulTemplate represents a prepared prompt template for generating agent souls.
@@ -246,6 +317,7 @@ type AgentSoul struct {
 
 // SoulDraftContent represents the JSON content of a kind:31952 draft event.
 type SoulDraftContent struct {
+	Schema       string      `json:"schema,omitempty"`
 	Brief        string      `json:"brief"`
 	SoulMD       string      `json:"soul_md,omitempty"`
 	IdentityMD   string      `json:"identity_md,omitempty"`
@@ -254,8 +326,12 @@ type SoulDraftContent struct {
 	AvatarPrompt string      `json:"avatar_prompt,omitempty"`
 	GeneratedAt  *int64      `json:"generated_at,omitempty"`
 
-	// Structured desired spec fields. Legacy fields above remain valid.
+	// Structured desired spec fields. Legacy fields above remain valid for v1 drafts and migration.
 	Identity         SoulIdentitySpec    `json:"identity,omitempty"`
+	Persona          SoulPersonaSpec     `json:"persona,omitempty"`
+	Avatar           SoulAvatarSpec      `json:"avatar,omitempty"`
+	Voice            SoulVoiceSpec       `json:"voice,omitempty"`
+	Memory           SoulMemorySpec      `json:"memory,omitempty"`
 	Runtime          SoulRuntimeSpec     `json:"runtime,omitempty"`
 	Permissions      SoulPermissionSpec  `json:"permissions,omitempty"`
 	RelayPolicy      SoulRelayPolicySpec `json:"relay_policy,omitempty"`
@@ -385,9 +461,72 @@ func ParseDraftContent(content string) (*SoulDraftContent, error) {
 	return &c, nil
 }
 
+// SchemaVersion returns the explicit draft schema, defaulting legacy/no-schema drafts to v1.
+func (c SoulDraftContent) SchemaVersion() string {
+	if strings.TrimSpace(c.Schema) == "" {
+		return SoulFactoryDraftSchemaV1
+	}
+	return strings.TrimSpace(c.Schema)
+}
+
+// IsV2 reports whether the draft content declares the v2 schema.
+func (c SoulDraftContent) IsV2() bool {
+	return c.SchemaVersion() == SoulFactoryDraftSchemaV2
+}
+
+// HasV2CustomizationSpecs reports whether v2-only customization sections are populated.
+func (c SoulDraftContent) HasV2CustomizationSpecs() bool {
+	return len(c.Persona.Traits) > 0 ||
+		c.Persona.Style != "" ||
+		c.Persona.Tone != "" ||
+		len(c.Persona.Constraints) > 0 ||
+		len(c.Persona.SystemPromptSections) > 0 ||
+		c.Avatar.Generation != nil ||
+		c.Avatar.UploadedRef != "" ||
+		c.Avatar.GeneratedRef != "" ||
+		c.Avatar.Current != "" ||
+		c.Voice.Provider != "" ||
+		c.Voice.PersonaID != "" ||
+		c.Voice.Persona != nil ||
+		c.Voice.AutoMode != "" ||
+		c.Voice.SampleText != "" ||
+		len(c.Voice.Providers) > 0 ||
+		c.Memory.EmbeddingProvider != "" ||
+		c.Memory.EmbeddingModel != "" ||
+		c.Memory.Search != nil ||
+		c.Memory.Strategy != "" ||
+		c.Memory.AutoIndex ||
+		c.Memory.RetentionDays != 0
+}
+
+// MigrateToLatest returns an additive v2 copy while preserving legacy v1 fields.
+func (c SoulDraftContent) MigrateToLatest() SoulDraftContent {
+	migrated := c
+	migrated.Schema = SoulFactoryDraftSchemaLatest
+
+	if migrated.Avatar.Generation == nil && strings.TrimSpace(migrated.AvatarPrompt) != "" {
+		migrated.Avatar.Generation = &SoulAvatarGenerationSpec{Prompt: migrated.AvatarPrompt}
+	}
+	if strings.TrimSpace(migrated.Assets.AvatarRef) != "" && migrated.Avatar.UploadedRef == "" && migrated.Avatar.GeneratedRef == "" {
+		migrated.Avatar.UploadedRef = migrated.Assets.AvatarRef
+		if migrated.Avatar.Current == "" {
+			migrated.Avatar.Current = "uploaded"
+		}
+	}
+	if strings.TrimSpace(migrated.Assets.VoiceRef) != "" && migrated.Voice.PersonaID == "" {
+		migrated.Voice.PersonaID = migrated.Assets.VoiceRef
+	}
+
+	return migrated
+}
+
 // ToJSON serializes draft content to JSON.
 func (c *SoulDraftContent) ToJSON() (string, error) {
-	data, err := json.Marshal(c)
+	content := *c
+	if strings.TrimSpace(content.Schema) == "" && content.HasV2CustomizationSpecs() {
+		content.Schema = SoulFactoryDraftSchemaV2
+	}
+	data, err := json.Marshal(content)
 	if err != nil {
 		return "", err
 	}
