@@ -19,6 +19,15 @@ import {
 } from '$lib/nostr/client.js';
 import { authState, login, signWithAuth } from '$lib/stores/auth.js';
 
+/** @typedef {import('$lib/types/customization').SoulAvatarSpec} SoulAvatarSpec */
+/** @typedef {import('$lib/types/customization').SoulDraftContentV2} SoulDraftContentV2 */
+/** @typedef {import('$lib/types/customization').SoulDraftDiffEntry} SoulDraftDiffEntry */
+/** @typedef {import('$lib/types/customization').SoulMemorySpec} SoulMemorySpec */
+/** @typedef {import('$lib/types/customization').SoulPersonaSpec} SoulPersonaSpec */
+/** @typedef {import('$lib/types/customization').SoulVoiceSpec} SoulVoiceSpec */
+
+export const SOUL_DRAFT_SCHEMA_V2 = 'soulfactory-draft/v2';
+
 // --- State ---
 
 // All agent souls
@@ -32,6 +41,33 @@ export const drafts = $state([]);
 
 // Runtime capability announcements (kind 30317)
 export const runtimeCapabilities = $state([]);
+
+export const voiceProviders = $state([
+  { id: 'openai', label: 'OpenAI TTS', description: 'OpenAI text-to-speech voices' },
+  { id: 'elevenlabs', label: 'ElevenLabs', description: 'ElevenLabs hosted voice personas' },
+  { id: 'azure', label: 'Azure Speech', description: 'Azure Speech voices' },
+  { id: 'local', label: 'Local CLI', description: 'Local command-line TTS provider' }
+]);
+
+export const avatarProviders = $state([
+  { id: 'flux-comfyui', label: 'FLUX / ComfyUI', description: 'Default SoulFactory avatar generator', presets: ['pixel-art', 'corporate', 'abstract', 'anime'] },
+  { id: 'fal', label: 'Fal.ai', description: 'Fal.ai image generation provider', presets: ['realistic', 'anime', 'abstract'] },
+  { id: 'replicate', label: 'Replicate', description: 'Replicate-hosted image generation models', presets: ['pixel-art', 'realistic', 'corporate'] }
+]);
+
+export const memoryProviders = $state([
+  { id: 'openai', label: 'OpenAI Embeddings', description: 'OpenAI embedding models', models: ['text-embedding-3-small', 'text-embedding-3-large'] },
+  { id: 'voyage', label: 'Voyage AI', description: 'Voyage embedding models', models: ['voyage-3', 'voyage-3-lite'] },
+  { id: 'cohere', label: 'Cohere', description: 'Cohere embedding models', models: ['embed-english-v3.0', 'embed-multilingual-v3.0'] },
+  { id: 'local', label: 'Local', description: 'Local embedding runtime', models: [] }
+]);
+
+export const customizationDraft = $state({
+  persona: null,
+  avatar: null,
+  voice: null,
+  memory: null
+});
 
 // Currently selected soul for detail view
 export const selectedSoul = $state({ value: null });
@@ -163,6 +199,177 @@ function applyReplaceableUpdate(eventMap, event, target, parser, sorter) {
 const newestFirst = (a, b) => Number(b.createdAt || 0) - Number(a.createdAt || 0);
 const templateSort = (a, b) => (a.name || a.identifier || '').localeCompare(b.name || b.identifier || '');
 const capabilitySort = (a, b) => (a.runtime || '').localeCompare(b.runtime || '') || newestFirst(a, b);
+
+/** @returns {SoulAvatarSpec} */
+export function createDefaultAvatarSpec(overrides = {}) {
+  return {
+    generation: {
+      prompt: '',
+      style_preset: 'pixel-art',
+      seed: '',
+      width: 512,
+      height: 512,
+      provider: 'flux-comfyui',
+      ...(overrides.generation || {})
+    },
+    uploaded_ref: '',
+    generated_ref: '',
+    current: 'generated',
+    ...overrides
+  };
+}
+
+/** @returns {SoulVoiceSpec} */
+export function createDefaultVoiceSpec(overrides = {}) {
+  return {
+    provider: 'openai',
+    persona_id: '',
+    persona: {
+      label: '',
+      profile: '',
+      style: 'articulate',
+      accent: 'neutral american',
+      pacing: 'measured',
+      ...(overrides.persona || {})
+    },
+    auto_mode: 'tagged',
+    sample_text: '',
+    providers: {},
+    ...overrides
+  };
+}
+
+/** @returns {SoulMemorySpec} */
+export function createDefaultMemorySpec(overrides = {}) {
+  return {
+    embedding_provider: 'openai',
+    embedding_model: 'text-embedding-3-small',
+    search: {
+      top_k: 10,
+      score_threshold: 0.7,
+      rerank: false,
+      rerank_model: '',
+      ...(overrides.search || {})
+    },
+    strategy: 'session-aware',
+    auto_index: true,
+    retention_days: 90,
+    ...overrides
+  };
+}
+
+/** @returns {SoulPersonaSpec} */
+export function createDefaultPersonaSpec(overrides = {}) {
+  return {
+    traits: [],
+    style: 'conversational',
+    tone: 'friendly professional',
+    constraints: [],
+    system_prompt_sections: {
+      role: '',
+      guidelines: '',
+      red_lines: '',
+      ...(overrides.system_prompt_sections || {})
+    },
+    ...overrides
+  };
+}
+
+export function resetCustomizationDraft(specs = {}) {
+  customizationDraft.persona = createDefaultPersonaSpec(specs.persona || {});
+  customizationDraft.avatar = createDefaultAvatarSpec(specs.avatar || {});
+  customizationDraft.voice = createDefaultVoiceSpec(specs.voice || {});
+  customizationDraft.memory = createDefaultMemorySpec(specs.memory || {});
+  return customizationDraft;
+}
+
+export function patchCustomizationSection(section, updates = {}) {
+  if (!['persona', 'avatar', 'voice', 'memory'].includes(section)) {
+    throw new Error(`Unknown customization section: ${section}`);
+  }
+  customizationDraft[section] = {
+    ...(customizationDraft[section] || {}),
+    ...updates
+  };
+  return customizationDraft[section];
+}
+
+export function patchNestedCustomizationSection(section, nestedKey, updates = {}) {
+  const current = customizationDraft[section] || {};
+  customizationDraft[section] = {
+    ...current,
+    [nestedKey]: {
+      ...(current[nestedKey] || {}),
+      ...updates
+    }
+  };
+  return customizationDraft[section];
+}
+
+export function resolveAvatarRef(avatar = {}) {
+  const current = avatar.current || 'generated';
+  if (current === 'uploaded') return avatar.uploaded_ref || avatar.uploadedRef || avatar.generated_ref || avatar.generatedRef || '';
+  return avatar.generated_ref || avatar.generatedRef || avatar.uploaded_ref || avatar.uploadedRef || '';
+}
+
+export function buildDraftCustomizationContent({
+  identity = {},
+  persona = customizationDraft.persona,
+  avatar = customizationDraft.avatar,
+  voice = customizationDraft.voice,
+  memory = customizationDraft.memory,
+  assets = {},
+  ...rest
+} = {}) {
+  const normalizedAvatar = avatar || createDefaultAvatarSpec();
+  const normalizedVoice = voice || createDefaultVoiceSpec();
+  return normalizeSoulDraftContent({
+    schema: SOUL_DRAFT_SCHEMA_V2,
+    ...rest,
+    identity,
+    persona: persona || createDefaultPersonaSpec(),
+    avatar: normalizedAvatar,
+    voice: normalizedVoice,
+    memory: memory || createDefaultMemorySpec(),
+    assets: {
+      ...assets,
+      avatar_ref: assets.avatar_ref || assets.avatarRef || resolveAvatarRef(normalizedAvatar),
+      voice_ref: assets.voice_ref || assets.voiceRef || ''
+    }
+  });
+}
+
+function isPlainObject(value) {
+  return value && typeof value === 'object' && !Array.isArray(value);
+}
+
+/** @returns {SoulDraftDiffEntry[]} */
+export function diffDraftContent(before = {}, after = {}, prefix = '') {
+  const changes = [];
+  const keys = new Set([...Object.keys(before || {}), ...Object.keys(after || {})]);
+
+  for (const key of keys) {
+    const path = prefix ? `${prefix}.${key}` : key;
+    const beforeValue = before?.[key];
+    const afterValue = after?.[key];
+
+    if (stableStringify(beforeValue) === stableStringify(afterValue)) continue;
+
+    if (isPlainObject(beforeValue) && isPlainObject(afterValue)) {
+      changes.push(...diffDraftContent(beforeValue, afterValue, path));
+      continue;
+    }
+
+    changes.push({
+      path,
+      before: beforeValue,
+      after: afterValue,
+      type: beforeValue === undefined ? 'added' : afterValue === undefined ? 'removed' : 'changed'
+    });
+  }
+
+  return changes;
+}
 
 // --- Actions ---
 
@@ -554,7 +761,7 @@ async function ensureAuthenticated(message = 'Authentication required to manage 
 export async function publishSoulDraft({ agentId, content = {}, templateRef = '', specHash = '', previousSpecHash = '' } = {}) {
   await ensureAuthenticated('Authentication required to save soul drafts');
 
-  const draftContent = normalizeSoulDraftContent(content);
+  const draftContent = normalizeSoulDraftContent({ schema: SOUL_DRAFT_SCHEMA_V2, ...content });
   const id = agentId || draftContent.agent_id || draftContent.agentId || draftContent.identity?.name?.toLowerCase().replace(/[^a-z0-9-]+/g, '-');
   if (!id) throw new Error('Draft requires an agent id');
 

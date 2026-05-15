@@ -340,6 +340,113 @@ func TestOpenClawSidecarAvatarRuntimeMethodsPublish38386Results(t *testing.T) {
 	}
 }
 
+func TestOpenClawSidecarVoiceRuntimeMethodsPublish38386Results(t *testing.T) {
+	runtime := newFakeSigner(t)
+	controller := newFakeSigner(t)
+	transport := &fakeOpenClawSidecarTransport{}
+	driver := &VoiceRuntimeControlDriver{Now: func() time.Time { return time.Unix(20, 0) }}
+	sidecar := newTestOpenClawSidecar(t, runtime, controller, transport, &fakeOpenClawDriver{methods: driver.Methods()})
+	sidecar.driver = driver
+
+	voice := map[string]interface{}{
+		"provider":    "openai-tts",
+		"persona_id":  "nova",
+		"auto_mode":   "tagged",
+		"sample_text": "Hello from Scout.",
+		"persona": map[string]interface{}{
+			"label":   "Scout Voice",
+			"profile": "Helpful researcher",
+			"style":   "clear",
+			"accent":  "neutral american",
+			"pacing":  "measured",
+		},
+	}
+	configureReq := signedOpenClawControlRequest(t, controller, runtime.pubkey, RuntimeMethodVoiceConfigure, map[string]interface{}{"voice": voice}, nil)
+	configure, err := sidecar.HandleControlEvent(t.Context(), configureReq)
+	if err != nil {
+		t.Fatalf("HandleControlEvent voice.configure error = %v", err)
+	}
+	if configure.Status != "success" || configure.Method != RuntimeMethodVoiceConfigure || configure.Result["provider"] != VoiceProviderOpenAITTS || configure.Result["persona_id"] != "nova" {
+		t.Fatalf("unexpected voice configure result: %+v", configure)
+	}
+	if configure.Result["read_model_patch"] == nil || configure.Result["voice_config"] == nil || configure.Result["hot_reload"] != true {
+		t.Fatalf("missing voice config result fields: %+v", configure.Result)
+	}
+
+	previewReq := signedOpenClawControlRequest(t, controller, runtime.pubkey, RuntimeMethodVoicePreview, map[string]interface{}{"voice": voice}, nil)
+	preview, err := sidecar.HandleControlEvent(t.Context(), previewReq)
+	if err != nil {
+		t.Fatalf("HandleControlEvent voice.preview error = %v", err)
+	}
+	if preview.Result["sample_audio_ref"] == "" || preview.Result["sample_text"] != "Hello from Scout." || preview.Result["provider"] != VoiceProviderOpenAITTS {
+		t.Fatalf("unexpected voice preview result: %+v", preview.Result)
+	}
+
+	sampleReq := signedOpenClawControlRequest(t, controller, runtime.pubkey, RuntimeMethodVoiceSample, map[string]interface{}{"voice": voice}, nil)
+	sample, err := sidecar.HandleControlEvent(t.Context(), sampleReq)
+	if err != nil {
+		t.Fatalf("HandleControlEvent voice.sample error = %v", err)
+	}
+	if sample.Result["sample_audio_ref"] == "" || sample.Result["preview_ref"] != sample.Result["sample_audio_ref"] {
+		t.Fatalf("unexpected voice sample result: %+v", sample.Result)
+	}
+
+	listReq := signedOpenClawControlRequest(t, controller, runtime.pubkey, RuntimeMethodVoiceList, map[string]interface{}{}, nil)
+	list, err := sidecar.HandleControlEvent(t.Context(), listReq)
+	if err != nil {
+		t.Fatalf("HandleControlEvent voice.list error = %v", err)
+	}
+	if list.Result["providers"] == nil || list.Result["voices"] == nil {
+		t.Fatalf("unexpected voice list result: %+v", list.Result)
+	}
+	if len(transport.published) != 4 {
+		t.Fatalf("published voice result events = %d, want 4", len(transport.published))
+	}
+}
+
+func TestOpenClawSidecarPersonaConfigureAndPreview(t *testing.T) {
+	runtime := newFakeSigner(t)
+	controller := newFakeSigner(t)
+	transport := &fakeOpenClawSidecarTransport{}
+	driver := &PersonaRuntimeControlDriver{}
+	sidecar := newTestOpenClawSidecar(t, runtime, controller, transport, &fakeOpenClawDriver{methods: driver.Methods()})
+	sidecar.driver = driver
+
+	persona := map[string]interface{}{
+		"traits":      []interface{}{"curious", "thorough"},
+		"style":       "conversational",
+		"tone":        "friendly professional",
+		"constraints": []interface{}{"Never fabricate citations"},
+		"system_prompt_sections": map[string]interface{}{
+			"role":       "You are Scout, a research assistant.",
+			"guidelines": "Answer with concise findings.",
+		},
+	}
+	configureReq := signedOpenClawControlRequest(t, controller, runtime.pubkey, RuntimeMethodPersonaConfigure, map[string]interface{}{"persona": persona}, nil)
+	configure, err := sidecar.HandleControlEvent(t.Context(), configureReq)
+	if err != nil {
+		t.Fatalf("HandleControlEvent persona.configure error = %v", err)
+	}
+	if configure.Status != "success" || configure.Method != RuntimeMethodPersonaConfigure || configure.Result["hot_reload"] != true || configure.Result["applied"] != true {
+		t.Fatalf("unexpected persona configure result: %+v", configure)
+	}
+	if configure.Result["system_prompt"] == "" || configure.Result["system_prompt_sections"] == nil || configure.Result["openclaw"] == nil {
+		t.Fatalf("missing generated prompt fields: %+v", configure.Result)
+	}
+
+	previewReq := signedOpenClawControlRequest(t, controller, runtime.pubkey, RuntimeMethodPersonaPreview, map[string]interface{}{"persona": persona}, nil)
+	preview, err := sidecar.HandleControlEvent(t.Context(), previewReq)
+	if err != nil {
+		t.Fatalf("HandleControlEvent persona.preview error = %v", err)
+	}
+	if preview.Status != "success" || preview.Method != RuntimeMethodPersonaPreview || preview.Result["applied"] != false || preview.Result["hot_reload"] != false {
+		t.Fatalf("unexpected persona preview result: %+v", preview)
+	}
+	if len(transport.published) != 2 || transport.published[0].Kind != domain.KindRuntimeControlResult || transport.published[1].Kind != domain.KindRuntimeControlResult {
+		t.Fatalf("published persona result events = %+v, want two 38386 results", transport.published)
+	}
+}
+
 func TestOpenClawSidecarAvatarListAndSet(t *testing.T) {
 	runtime := newFakeSigner(t)
 	controller := newFakeSigner(t)

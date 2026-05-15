@@ -31,6 +31,9 @@ var openClawSoulFactoryMethods = []string{
 	RuntimeMethodAvatarList,
 	RuntimeMethodAvatarStatus,
 	RuntimeMethodVoiceConfigure,
+	RuntimeMethodVoicePreview,
+	RuntimeMethodVoiceSample,
+	RuntimeMethodVoiceList,
 	RuntimeMethodMemoryConfigure,
 	RuntimeMethodMemoryStatus,
 	RuntimeMethodMemoryReindex,
@@ -630,6 +633,18 @@ func validateOpenClawMethodParams(method string, params map[string]interface{}) 
 		return requireString("avatar_ref")
 	case RuntimeMethodAvatarList, RuntimeMethodAvatarStatus:
 		// Optional params only.
+	case RuntimeMethodVoiceConfigure:
+		if hasVoiceRuntimeConfig(params) {
+			return nil
+		}
+		return controlError("missing_required_param", "voice.configure requires voice config, proposed voice, or openclaw config", false)
+	case RuntimeMethodVoicePreview, RuntimeMethodVoiceSample:
+		if hasVoiceRuntimeConfig(params) {
+			return nil
+		}
+		return controlError("missing_required_param", "voice preview requires voice config, proposed voice, or openclaw config", false)
+	case RuntimeMethodVoiceList:
+		// Optional params only.
 	case RuntimeMethodMemoryConfigure:
 		if _, ok := params["memory_config"].(map[string]interface{}); !ok {
 			return controlError("missing_required_param", "memory.configure requires memory_config object", false)
@@ -658,6 +673,27 @@ func validateOpenClawMethodParams(method string, params map[string]interface{}) 
 		return controlError("unsupported_method", "unsupported SoulFactory method", false)
 	}
 	return nil
+}
+
+func hasVoiceRuntimeConfig(params map[string]interface{}) bool {
+	if params == nil {
+		return false
+	}
+	if _, ok := params["openclaw"].(map[string]interface{}); ok {
+		return true
+	}
+	if _, ok := params["voice_config"].(map[string]interface{}); ok {
+		return true
+	}
+	if _, ok := params["voice"].(map[string]interface{}); ok {
+		return true
+	}
+	if proposed, ok := params["proposed"].(map[string]interface{}); ok {
+		if _, ok := proposed["voice"]; ok {
+			return true
+		}
+	}
+	return false
 }
 
 func normalizeOpenClawOutcome(invocation OpenClawControlInvocation, outcome *OpenClawControlOutcome) *OpenClawControlOutcome {
