@@ -1,6 +1,6 @@
 {
   "feature_id": "SOUL_FACTORY_RUNTIME_LIFECYCLE",
-  "status": "final_verification_blocked_by_openclaw_ownership_decision",
+  "status": "final_verified",
   "criteria": [
     {
       "ac_id": "SFRL-AC-001",

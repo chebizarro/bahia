@@ -1,16 +1,17 @@
 {
   "feature_id": "SOUL_FACTORY_RUNTIME_LIFECYCLE",
+  "status": "final_verified_no_open_blockers",
   "defects": [
     {
       "defect_id": "SFRL-D-001",
       "title": "Relay-bus reliability was a blocking dependency for runtime lifecycle adapters",
       "severity": "blocker",
-      "status": "verified_bahia_unit_evidence",
+      "status": "verified_resolved",
       "related_ac_ids": ["SFRL-AC-002", "SFRL-AC-006", "SFRL-AC-008"],
       "related_test_ids": ["SFRL-T-002", "SFRL-T-003"],
       "evidence": [
         "docs/plans/soulfactory-nostr-agent-lifecycle-2026-05-14.md Work Item 4 requires scoped filters, EOSE, reconnect/backoff, AUTH, CLOSED, OK enforcement, and dedupe before runtime/lifecycle work depends on the bus.",
-        "2026-05-15 final verification: go test ./internal/soulfactory/... passed and relay_bus_test.go covers accepted OK, OK false/all-relay reject, EOSE realtime transition, CLOSED auth-required reissue, duplicate EVENT dedupe, and reconnect/reissue."
+        "2026-05-15 final verification: go test ./internal/soulfactory/... ./cmd/openclaw-soulfactory-sidecar passed; go test ./... passed; relay_bus_test.go covers accepted OK, OK false/all-relay reject, EOSE realtime transition, CLOSED auth-required reissue, duplicate EVENT dedupe, and reconnect/reissue."
       ],
       "recommended_fix": "No Bahia relay-bus blocker remains from final verification; keep regression coverage in relay_bus_test.go.",
       "requires_human_decision": false
@@ -19,39 +20,46 @@
       "defect_id": "SFRL-D-002",
       "title": "Runtime bridges may drift without shared fixtures",
       "severity": "major",
-      "status": "risk_seeded",
+      "status": "accepted_residual_risk_with_contract_evidence",
       "related_ac_ids": ["SFRL-AC-004", "SFRL-AC-006"],
       "related_test_ids": ["SFRL-T-006"],
-      "evidence": ["The plan identifies bridge payload drift as a risk and requires docs/soulfactory-runtime-control.md before bridge implementation.", "2026-05-15 final verification found Bahia and Metiq tests exercise the documented envelope shape, but a reusable cross-language fixture suite is still not complete."],
-      "recommended_fix": "Promote the documented shared example into reusable Go and TypeScript contract fixtures after the OpenClaw ownership path is decided.",
+      "evidence": [
+        "The plan identifies bridge payload drift as a risk and requires docs/soulfactory-runtime-control.md before bridge implementation.",
+        "2026-05-15 final verification found Bahia runtime adapter tests, owned OpenClaw sidecar tests, and Metiq bridge tests all exercise the documented 38384/38386 envelope shape and soulfactory.* method/error/idempotency contract."
+      ],
+      "recommended_fix": "Optional hardening: promote the documented examples into reusable fixtures shared by Bahia sidecar/adapter and Metiq tests. This is no longer blocking final vertical-slice verification.",
       "requires_human_decision": false
     },
     {
       "defect_id": "SFRL-D-003",
       "title": "External REST-only deployment paths would violate the lifecycle contract",
       "severity": "major",
-      "status": "risk_seeded",
+      "status": "verified_no_blocking_rest_control_path_found",
       "related_ac_ids": ["SFRL-AC-001"],
       "related_test_ids": ["SFRL-T-001"],
-      "evidence": ["The plan requires no REST external agent control plane and says REST-only deploy paths must be replaced or deferred behind event-native Bahia control-plane events.", "2026-05-15 final verification did not find a completed cross-repo static no-REST audit for the final runtime ownership shape."],
-      "recommended_fix": "During implementation of the chosen OpenClaw ownership path, audit deployment/control paths and file a follow-up issue if any required external path remains REST-only.",
-      "requires_human_decision": true
+      "evidence": [
+        "The plan requires no REST external agent control plane and says REST-only deploy paths must be replaced or deferred behind event-native Bahia control-plane events.",
+        "2026-05-15 static audit of internal/soulfactory/openclaw_sidecar.go, cmd/openclaw-soulfactory-sidecar, Bahia runtime adapter/lifecycle paths, and Metiq SoulFactory bridge paths found no net/http/http client or REST lifecycle-control dependency; the OpenClaw sidecar drives a local command-driver seam and explicitly prohibits REST lifecycle control."
+      ],
+      "recommended_fix": "Keep the static no-REST audit in future runtime-control changes.",
+      "requires_human_decision": false
     },
     {
       "defect_id": "SFRL-D-004",
-      "title": "OpenClaw runtime execution requires product ownership decision",
+      "title": "OpenClaw runtime execution required product ownership decision",
       "severity": "blocker",
-      "status": "open_product_decision",
+      "status": "resolved_by_bahia_owned_sidecar",
       "related_issue_id": "bahia-nrjg",
+      "resolution_issue_id": "bahia-8ycd.4",
       "related_ac_ids": ["SFRL-AC-005", "SFRL-AC-006", "SFRL-AC-008"],
       "related_test_ids": ["SFRL-T-007", "SFRL-T-009", "SFRL-T-010", "SFRL-T-012"],
       "evidence": [
-        "2026-05-15 user direction: OpenClaw is not maintained by this project and will most likely not accept this kind of PR; direct upstream OpenClaw modifications are non-viable product completion evidence unless a maintained fork is explicitly adopted.",
-        "Correct OpenClaw root /Users/bizarro/Documents/Dev/openclaw contains SoulFactory bridge/runtime commits and tests, but those commits alone cannot complete bahia-i0rk.3 without a product ownership decision.",
-        "Previous wrong-root blocker bahia-5558 was closed invalid and replaced by bahia-nrjg."
+        "2026-05-15 product decision: direct upstream OpenClaw patches are not product-valid completion evidence; use a separately maintained Bahia-owned OpenClaw SoulFactory sidecar.",
+        "bahia-nrjg is closed with that decision and bahia-8ycd.4 is closed with cmd/openclaw-soulfactory-sidecar, internal/soulfactory/openclaw_sidecar.go, docs/openclaw-soulfactory-sidecar.md, tests, and PSTF evidence.",
+        "2026-05-15 final verification: go test ./internal/soulfactory/... ./cmd/openclaw-soulfactory-sidecar passed, including OpenClaw sidecar capability, validation, idempotency replay/persistence, provisioning result, and lifecycle suspend tests."
       ],
-      "recommended_fix": "Decide whether Bahia will maintain/adopt an OpenClaw fork, build a separately maintained adapter/sidecar, or drop OpenClaw from the first vertical slice. Do not mark the full cross-runtime slice verified until this is resolved.",
-      "requires_human_decision": true
+      "recommended_fix": "No OpenClaw ownership blocker remains for bahia-i0rk.3. Future upstream/fork work must not replace the owned sidecar evidence unless a new product decision says so.",
+      "requires_human_decision": false
     }
   ]
 }

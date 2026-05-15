@@ -2,7 +2,7 @@
 
 > Source plan: [`docs/plans/soulfactory-nostr-agent-lifecycle-2026-05-14.md`](plans/soulfactory-nostr-agent-lifecycle-2026-05-14.md)
 
-This document defines the shared `soulfactory.*` runtime control contract for OpenClaw TypeScript and Metiq Go implementations. It is the schema source for bridge work and tests; implementation must not fork field names or error shapes by runtime.
+This document defines the shared `soulfactory.*` runtime control contract for the Bahia-owned OpenClaw sidecar/control-driver path and Metiq Go implementations. It is the schema source for bridge work and tests; implementation must not fork field names or error shapes by runtime.
 
 ## Event kinds
 

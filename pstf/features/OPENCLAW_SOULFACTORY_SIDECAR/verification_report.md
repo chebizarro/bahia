@@ -14,6 +14,14 @@ ok  	github.com/openagentsinc/bahia/internal/soulfactory	0.212s
 ?   	github.com/openagentsinc/bahia/cmd/openclaw-soulfactory-sidecar	[no test files]
 ```
 
+Reconfirmed during `bahia-i0rk.3` final verification on 2026-05-15:
+
+```text
+go test ./internal/soulfactory/... ./cmd/openclaw-soulfactory-sidecar
+ok  	github.com/openagentsinc/bahia/internal/soulfactory	(cached)
+?   	github.com/openagentsinc/bahia/cmd/openclaw-soulfactory-sidecar	[no test files]
+```
+
 ## Acceptance mapping
 
 - OCSS-AC-001: covered by `TestOpenClawSidecarPublishesCompatibleCapability`.

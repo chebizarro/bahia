@@ -2,7 +2,7 @@
   "feature_id": "SOUL_FACTORY_RUNTIME_LIFECYCLE",
   "title": "SoulFactory Nostr-native runtime lifecycle control",
   "priority": "P1",
-  "status": "final_verification_blocked_by_openclaw_ownership_decision",
+  "status": "final_verified",
   "plan_ref": "docs/plans/soulfactory-nostr-agent-lifecycle-2026-05-14.md",
   "description": "Define and verify the product/protocol contract for draft-backed SoulFactory provisioning and lifecycle control across Bahia, OpenClaw, and Metiq using signed Nostr events only. The slice keeps Bahia-facing SoulFactory kinds stable, introduces documented runtime-facing control methods, and preserves event-driven relay semantics with no polling or timeout-based terminal states.",
   "source_evidence": [
@@ -15,8 +15,10 @@
     "web/src/lib/nostr/client.js",
     "swarmstr/internal/nostr/runtime/control_bus.go",
     "swarmstr/internal/nostr/runtime/capability.go",
-    "openclaw/src/agents/harness/types.ts",
-    "openclaw/src/config/types.agents.ts"
+    "cmd/openclaw-soulfactory-sidecar",
+    "internal/soulfactory/openclaw_sidecar.go",
+    "docs/openclaw-soulfactory-sidecar.md",
+    "pstf/features/OPENCLAW_SOULFACTORY_SIDECAR/verification_report.md"
   ],
   "actors": [
     {
@@ -29,7 +31,7 @@
     },
     {
       "name": "runtime_bridge",
-      "role": "OpenClaw TypeScript or Metiq Go bridge that advertises capability, validates controller trust, executes idempotent lifecycle methods, and publishes correlated results."
+      "role": "Owned OpenClaw sidecar or Metiq Go bridge that advertises capability, validates controller trust, executes idempotent lifecycle methods, and publishes correlated results."
     },
     {
       "name": "souls_ui",
@@ -44,8 +46,8 @@
     "Trust, validation, idempotency, compatibility, and no-polling/no-timeout protocol requirements."
   ],
   "out_of_scope": [
-    "Go, JavaScript, or TypeScript runtime implementation changes.",
-    "Relay bus/backend modifications, including internal/soulfactory/relay_bus.go.",
+    "Direct upstream OpenClaw patches as product-completion evidence.",
+    "New runtime implementation scope beyond the verified Bahia relay bus, runtime adapter, owned OpenClaw sidecar, and Metiq bridge vertical slice.",
     "Full avatar generation, voice provider selection, and memory tuning UX."
   ],
   "dependencies": [
@@ -53,7 +55,7 @@
     "Runtime bridges must publish 30317 capabilities before Bahia enables runtime target selection.",
     "Runtime-control fixtures must be reusable by Go and TypeScript tests to prevent schema drift.",
     "31952 draft schema and 31951 read model extensions must remain additive and backward-compatible.",
-    "OpenClaw runtime ownership decision tracked by bahia-nrjg."
+    "OpenClaw runtime ownership decision resolved by bahia-nrjg: use the owned Bahia sidecar from bahia-8ycd.4 as product-valid OpenClaw evidence."
   ],
   "non_goals": [
     "Introduce REST control APIs for OpenClaw or Metiq management.",

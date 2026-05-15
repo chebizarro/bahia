@@ -2,88 +2,126 @@
 
 ## Summary
 
-Final verification for Beads issue `bahia-i0rk.3` is **not complete**. Bahia and Metiq/Swarmstr evidence verified on 2026-05-15, but the OpenClaw portion and the full cross-runtime vertical slice are blocked by a product ownership decision.
+Final verification for Beads issue `bahia-i0rk.3` is **complete** on 2026-05-15.
 
-Important correction: previous blocker `bahia-5558` was filed from the wrong OpenClaw root (`/Users/bizarro/Documents/Projects/openclaw-nostr`). The loaded workspace OpenClaw root is `/Users/bizarro/Documents/Dev/openclaw`, and it contains the expected local commits and files. However, per user direction on 2026-05-15, direct upstream OpenClaw modifications are not viable product-completion evidence because OpenClaw is not maintained by this project and is unlikely to accept this bridge/runtime PR shape. The real blocker is now tracked as `bahia-nrjg`: decide maintained fork vs separate adapter/sidecar vs dropping OpenClaw from the first vertical slice.
+The prior OpenClaw blocker is resolved: product-valid OpenClaw evidence now uses the Bahia-owned sidecar from `bahia-8ycd.4`, not direct upstream OpenClaw patches. Bahia, the owned OpenClaw sidecar, and Swarmstr/Metiq all have deterministic event-driven integration/contract evidence for capability announcement, draft-backed provisioning, runtime `38384/38386` execution, final `31951/7950` publication, and one lifecycle `1950 -> 7950` action.
+
+This verification is an evidence bundle from deterministic repository tests and static audit, not a new live multi-relay end-to-end run.
 
 ## Artifact status
 
-- `feature_spec.json` — updated to `final_verification_blocked_by_openclaw_ownership_decision`
-- `acceptance_criteria.json` — updated to `final_verification_blocked_by_openclaw_ownership_decision`
-- `test_matrix.json` — updated with Bahia/Metiq passing evidence and OpenClaw blocked statuses
-- `defects.json` — updated with `SFRL-D-004` / `bahia-nrjg` ownership blocker
-- `hitl_decisions.md` — updated with OpenClaw ownership HITL decision
+- `feature_spec.json` — `final_verified`
+- `acceptance_criteria.json` — `final_verified`
+- `test_matrix.json` — updated with final passing Bahia, OpenClaw sidecar, and Metiq evidence
+- `defects.json` — updated; no open blockers remain
+- `hitl_decisions.md` — updated to record the resolved OpenClaw sidecar decision
 - `docs/soulfactory-runtime-control.md` — remains the shared runtime-control contract
+- `docs/openclaw-soulfactory-sidecar.md` — records the owned OpenClaw product evidence path
 
 ## Acceptance Criteria Status
 
 | AC ID | Status | Basis |
 | --- | --- | --- |
-| SFRL-AC-001 | Partially verified; final audit still planned | Bahia and Metiq inspected paths use signed Nostr events for runtime control. A final static no-REST audit must be rerun against the chosen OpenClaw ownership shape. |
-| SFRL-AC-002 | Verified for Bahia relay bus | `go test ./internal/soulfactory/...` passed. `relay_bus_test.go` covers OK accepted/false/all-relay reject, EOSE realtime transition, CLOSED auth-required reissue, duplicate EVENT dedupe, and reconnect/reissue. |
-| SFRL-AC-003 | Verified for Bahia provisioning/read-model orchestration | `go test ./internal/soulfactory/...` and `go test ./...` passed. Bahia tests cover exact `31952` draft capture, spec-hash propagation/mismatch rejection, replay short-circuiting, runtime binding/capability/deploy fields, and final `31951` ordering. |
-| SFRL-AC-004 | Artifact-ready; shared fixture suite still partial | Contract document exists and Bahia/Metiq tests exercise the envelope shape. Dedicated reusable Go/TypeScript fixtures remain planned after OpenClaw ownership is decided. |
-| SFRL-AC-005 | Verified for Bahia + Metiq; OpenClaw blocked | Bahia adapter/web tests and Metiq capability tests passed. Local OpenClaw root contains bridge capability code, but it cannot count as product-completion evidence until `bahia-nrjg` is resolved. |
-| SFRL-AC-006 | Verified for Bahia request construction/result acceptance and Metiq runtime-side validation/idempotency; OpenClaw blocked | Bahia runtime adapter tests passed; Metiq bridge tests passed. OpenClaw runtime-side validation/execution is blocked by ownership decision. |
-| SFRL-AC-007 | Verified for Bahia lifecycle semantics | Bahia tests passed for canonical `6950/7950` lifecycle results, migration alias behavior, replay idempotency, and no timeout/CLOSED terminal inference in web store tests. |
-| SFRL-AC-008 | Blocked | Metiq bridge unit/integration evidence passed and Bahia is prepared, but the full OpenClaw + Metiq vertical slice cannot be closed while OpenClaw ownership is unresolved (`bahia-nrjg`). |
+| SFRL-AC-001 | Verified | Static audit found no external REST lifecycle-control path in Bahia runtime lifecycle paths, the owned OpenClaw sidecar, or Metiq SoulFactory bridge evidence. The OpenClaw sidecar uses a local command-driver seam and Nostr `30317/38384/38386`, not an upstream patch or REST control API. |
+| SFRL-AC-002 | Verified | Bahia relay-bus tests passed. Evidence covers accepted/false `OK`, all-relay reject, EOSE backfill transition, CLOSED/auth-required handling, duplicate EVENT dedupe, reconnect/reissue, and no timeout/relay-close terminal inference. |
+| SFRL-AC-003 | Verified | Bahia tests passed for exact `31952` draft capture, spec-hash propagation/mismatch rejection, replay short-circuiting, runtime binding/capability/deploy fields, and final `31951` ordering before terminal `7950`. |
+| SFRL-AC-004 | Verified | `docs/soulfactory-runtime-control.md` defines the shared `soulfactory.*` contract. Bahia runtime adapter tests, OpenClaw sidecar tests, and Metiq bridge tests exercise compatible `38384/38386` envelopes, methods, errors, validation, and idempotency. |
+| SFRL-AC-005 | Verified | Bahia parses/gates compatible `30317` capabilities; the owned OpenClaw sidecar publishes `runtime=openclaw` capabilities; Metiq publishes/round-trips SoulFactory capability content. |
+| SFRL-AC-006 | Verified | Bahia signs/selects runtime requests and requires correlated `38386`; OpenClaw sidecar and Metiq bridge validate trust, addressing, schema/tags/content, idempotency, and replay before side effects. |
+| SFRL-AC-007 | Verified | Bahia lifecycle tests passed for canonical `6950/7950` lifecycle progress/results with request/action/soul/agent tags, migration alias behavior, replay idempotency, and no timeout/CLOSED terminal inference in web store tests. |
+| SFRL-AC-008 | Verified | The first vertical slice is covered by Bahia + owned OpenClaw sidecar + Metiq deterministic evidence: Bahia proves draft-backed `5950` handling, runtime request construction, final `31951/7950` ordering, and `1950 -> 7950`; the owned OpenClaw sidecar proves `30317`, `38384 -> 38386`, idempotency, provision, and lifecycle execution; Metiq proves compatible `30317`, `38384 -> 38386`, idempotency, provision, and lifecycle execution. |
 
 ## Verification evidence from this final pass
 
 ### Bahia
 
-- `go test ./internal/soulfactory/...` — passed on 2026-05-15.
-- `go test ./...` — passed on 2026-05-15.
-- `npm run test:unit -- --run tests/unit/souls-page.test.js tests/unit/souls-store.test.js tests/unit/nostr-client-parsing.test.js` from `web/` — passed on 2026-05-15 (`3` files, `81` tests).
-- `npm run build` from `web/` — passed on 2026-05-15. Existing unrelated warnings remained in `src/routes/policies/+page.svelte` and `src/routes/settings/+page.svelte`.
+Commands run from `/Users/bizarro/Documents/Projects/bahia`:
+
+```text
+go test ./internal/soulfactory/... ./cmd/openclaw-soulfactory-sidecar
+ok  	github.com/openagentsinc/bahia/internal/soulfactory	(cached)
+?   	github.com/openagentsinc/bahia/cmd/openclaw-soulfactory-sidecar	[no test files]
+
+go test ./...
+ok  	github.com/openagentsinc/bahia/internal/adapters/runtime	2.805s
+ok  	github.com/openagentsinc/bahia/internal/soulfactory	(cached)
+ok  	github.com/openagentsinc/bahia/test/integration	(cached)
+... all Bahia packages passed or had no test files
+```
+
+Commands run from `/Users/bizarro/Documents/Projects/bahia/web`:
+
+```text
+npm run test:unit -- --run tests/unit/souls-page.test.js tests/unit/souls-store.test.js tests/unit/nostr-client-parsing.test.js
+Test Files  3 passed (3)
+Tests       81 passed (81)
+
+npm run build
+✓ built in 9.11s
+```
+
+Existing unrelated build warnings remained in `src/routes/policies/+page.svelte`, `src/routes/settings/+page.svelte`, and Vite dynamic-import chunking; the build exited successfully.
 
 Observed Bahia evidence includes:
 
 - Relay bus protocol handling in `internal/soulfactory/relay_bus_test.go`.
 - Runtime capability discovery and `38384`/`38386` correlation in `internal/soulfactory/runtime_adapter_test.go`.
-- Draft-backed provisioning/read-model ordering in `internal/soulfactory/reactor_test.go`.
-- Lifecycle `1950 -> 6950/7950` compatibility in `internal/soulfactory/lifecycle_handler_test.go`.
+- Draft-backed provisioning/read-model ordering in `internal/soulfactory/reactor_test.go`, especially `TestDraftBackedRuntimeProvisioningPublishesFinalSoulWithResolvedFields`, which drives a signed `5950` through exact `31952` draft/spec-hash resolution into a runtime request and verifies final `31951` before terminal `7950`.
+- Lifecycle `1950 -> 6950/7950` compatibility in `internal/soulfactory/lifecycle_handler_test.go` and `internal/soulfactory/provisioner_full_lifecycle_test.go`.
 - Souls UI capability-gated draft/provision/lifecycle tracking in `web/tests/unit/souls-page.test.js`, `web/tests/unit/souls-store.test.js`, and `web/tests/unit/nostr-client-parsing.test.js`.
+
+### Owned OpenClaw sidecar
+
+Product-valid OpenClaw evidence uses:
+
+- `docs/openclaw-soulfactory-sidecar.md`
+- `cmd/openclaw-soulfactory-sidecar`
+- `internal/soulfactory/openclaw_sidecar.go`
+- `internal/soulfactory/openclaw_sidecar_test.go`
+- `pstf/features/OPENCLAW_SOULFACTORY_SIDECAR/`
+
+Observed sidecar evidence includes:
+
+- `TestOpenClawSidecarPublishesCompatibleCapability` — signs/publishes compatible kind `30317` `runtime=openclaw` capability content.
+- `TestOpenClawSidecarValidatesTrustAddressingAndRequiredParams` — rejects untrusted/misaddressed/malformed `38384` control requests before side effects.
+- `TestOpenClawSidecarExecutesProvisionAndPublishesCorrelatedResult` — executes the local command-driver seam from a signed addressed `38384` and publishes signed correlated `38386` for provisioning.
+- `TestOpenClawSidecarIdempotentReplayDoesNotRepeatSideEffects` and `TestOpenClawSidecarPersistsIdempotencyAcrossRestart` — exact replay republishes cached result without duplicate side effects.
+- `TestOpenClawSidecarExecutesLifecycleSuspend` — verifies one lifecycle method path producing a correlated runtime result.
+- Static audit found no `net/http`, `http.Client`, or sleep/polling completion path in the owned sidecar paths. The only REST mention is the explicit prohibition in the command-driver seam comment.
 
 ### Metiq / Swarmstr
 
-- `go test ./internal/nostr/runtime` from `/Users/bizarro/Documents/Projects/swarmstr` — passed on 2026-05-15.
-- `go test ./cmd/metiqd -run 'SoulFactory|CapabilityAnnouncement'` from `/Users/bizarro/Documents/Projects/swarmstr` — passed on 2026-05-15.
+Commands run from `/Users/bizarro/Documents/Projects/swarmstr`:
+
+```text
+go test ./internal/nostr/runtime
+ok  	metiq/internal/nostr/runtime	(cached)
+
+go test ./cmd/metiqd -run 'SoulFactory|CapabilityAnnouncement'
+ok  	metiq/cmd/metiqd	(cached)
+```
 
 Observed Metiq evidence includes:
 
 - `internal/nostr/runtime/capability.go` and `capability_test.go` build/parse SoulFactory `30317` capability content with `soulfactory-runtime-capability/v1`, `soulfactory-runtime-control/v1`, methods, controller pubkeys, and relay hints.
 - `cmd/metiqd/soulfactory_bridge.go` validates `soulfactory.*` `38384` envelopes, required tags, controller trust, schema/method/idempotency consistency, target runtime, spec hash, and method params before side effects.
-- `cmd/metiqd/soulfactory_bridge.go` executes `soulfactory.provision`, `update`, `suspend`, `resume`, `redeploy`, and `revoke`, and returns documented result envelopes.
+- `cmd/metiqd/soulfactory_bridge.go` executes `soulfactory.provision`, `update`, `suspend`, `resume`, `redeploy`, and `revoke`, and returns documented `38386`-compatible result envelopes.
 - `cmd/metiqd/soulfactory_bridge_test.go` covers provision contract envelope, all lifecycle methods, spec hash mismatch, exact replay without side effects, idempotency conflict, missing params, and capability controller advertisement.
 
-### OpenClaw
+## Static protocol audit notes
 
-Observed but **not accepted as completion evidence**:
-
-- Correct root: `/Users/bizarro/Documents/Dev/openclaw`.
-- Commits exist:
-  - `b2865dd279` — `feat(nostr): add SoulFactory capability bridge`
-  - `5988fb4f7e` — `Implement OpenClaw SoulFactory runtime execution`
-- Files exist:
-  - `extensions/nostr/src/soulfactory-bridge.ts`
-  - `extensions/nostr/src/soulfactory-execution.ts`
-  - `extensions/nostr/src/soulfactory-bridge.test.ts`
-  - `extensions/nostr/src/soulfactory-execution.test.ts`
-
-These local OpenClaw files show a plausible `30317` capability bridge, `38384` validation, `38386` results, and runtime execution dispatch. They are blocked from product acceptance because direct upstream OpenClaw maintenance is non-viable without a decision to maintain a fork, maintain a separate adapter/sidecar, or remove OpenClaw from the first vertical slice.
-
-A local OpenClaw focused test attempt failed before execution due sandboxed Vite temp-file permissions under `node_modules/.vite-temp`; it was not rerun with escalation because OpenClaw is no longer valid completion evidence for this verification pass.
+- No evidence was found that Bahia, the owned OpenClaw sidecar, or Metiq infer terminal lifecycle success/failure from elapsed time, relay closure, or polling.
+- OpenClaw sidecar `Run` uses scoped filters, EOSE for backfill transition, and returns subscription closure as an error rather than a terminal lifecycle result.
+- Publish paths require relay acceptance (`OK`) through the relay-bus/transport surfaces used by the runtime adapter and sidecar.
 
 ## Beads updates
 
-- Created `bahia-nrjg` — OpenClaw SoulFactory runtime ownership decision blocker.
-- Closed `bahia-5558` as invalid/wrong-root; superseded by `bahia-nrjg`.
-- Added dependency: `bahia-i0rk.3` depends on `bahia-nrjg`.
-- Left `bahia-i0rk.3` open/in progress; do not close until OpenClaw ownership is resolved or acceptance criteria are changed.
+- `bahia-nrjg` is closed: product decision resolved in favor of the owned Bahia sidecar.
+- `bahia-8ycd.4` is closed and pushed: owned OpenClaw sidecar implemented and verified.
+- `bahia-i0rk.3` can be closed once this PSTF update is committed and pushed.
 
 ## Open dependencies / risks
 
-- `SFRL-D-004` / `bahia-nrjg` is the blocking product decision for final vertical-slice completion.
-- `SFRL-D-002` remains a schema drift risk until shared cross-language fixtures are formalized for the chosen runtime shape.
-- `SFRL-D-003` remains a no-REST audit risk for the final ownership/deployment shape.
+No blockers remain for `bahia-i0rk.3`.
+
+Residual non-blocking hardening: promote runtime-control examples into reusable cross-runtime fixture files to reduce future schema drift.
