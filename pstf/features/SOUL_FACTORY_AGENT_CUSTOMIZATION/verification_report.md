@@ -2,9 +2,9 @@
 
 ## Scope
 
-Verification for Beads issues `bahia-pnlu` (Epic 1 Task 1.1), `bahia-2lpj` (Epic 4 Task 4.1), and `bahia-48jp` (Epic 5 Task 5.1), on 2026-05-15.
+Verification for Beads issues `bahia-pnlu` (Epic 1 Task 1.1), `bahia-z4gu` (Epic 1 Task 1.2), `bahia-2lpj` (Epic 4 Task 4.1), and `bahia-48jp` (Epic 5 Task 5.1), on 2026-05-15.
 
-This report currently covers the Go domain foundation for v2 SoulFactory draft customization specs, Bahia memory configuration mapping, and Bahia personality mapping. The Task 5.1 slice maps `SoulPersonaSpec` to OpenClaw prompt sections, assembles a composite system prompt, validates persona fields, and defines the `soulfactory.persona.update` kind:38384 params contract. It does not claim completion of LLM prompt refinement, UI builders, reindex orchestration, or runtime bridge execution handlers.
+This report currently covers the Go domain foundation for v2 SoulFactory draft customization specs, event codec parsing/building/validation/merge behavior, Bahia memory configuration mapping, and Bahia personality mapping. The Task 5.1 slice maps `SoulPersonaSpec` to OpenClaw prompt sections, assembles a composite system prompt, validates persona fields, and defines the `soulfactory.persona.update` kind:38384 params contract. It does not claim completion of LLM prompt refinement, UI builders, reindex orchestration, or runtime bridge execution handlers.
 
 ## Evidence
 
@@ -27,6 +27,14 @@ PSTF JSON validation:
 python3 -m json.tool pstf/features/SOUL_FACTORY_AGENT_CUSTOMIZATION/acceptance_criteria.json >/tmp/sfac_ac.json
 python3 -m json.tool pstf/features/SOUL_FACTORY_AGENT_CUSTOMIZATION/test_matrix.json >/tmp/sfac_tm.json
 # both passed
+```
+
+Task 1.2 focused evidence:
+
+```text
+go test ./internal/soulfactory ./internal/domain
+ok  	github.com/openagentsinc/bahia/internal/soulfactory	0.224s
+ok  	github.com/openagentsinc/bahia/internal/domain	(cached)
 ```
 
 Earlier Task 1.1 evidence retained:
@@ -52,3 +60,25 @@ ok  	github.com/openagentsinc/bahia/internal/soulfactory	0.219s
 | SFAC-AC-009 | Verified | `TestPersonalityServiceMapsPersonaToOpenClawPromptSections` and `TestAssembleOpenClawSystemPromptOmitsEmptySections` cover deterministic composite prompt assembly and empty-section omission. |
 | SFAC-AC-010 | Verified | `TestPersonalityValidationRejectsInvalidFields` covers duplicate traits, unsupported section names, excessive constraint counts, and control-character rejection. |
 | SFAC-AC-011 | Verified | `TestBuildPersonaRuntimeControlParamsDefines38384Contract` covers `soulfactory.persona.update`, `soulfactory-persona/v1`, OpenClaw prompt payload fields, OpenClaw-native `systemPromptOverride` patching, and embedding params in a parsed kind:38384 request. `docs/soulfactory-runtime-control.md` documents the same params contract. |
+| SFAC-AC-012 | Verified | `openclaw/extensions/nostr/src/soulfactory-execution.test.ts` covers `soulfactory.config.reload` applying `tts`, `memorySearch`, `systemPromptOverride`, and `identity` changes with `session_restarted=false`, clearing stale optional config on resolved-spec sync, and asserts no `deleteSession` or additional `spawnSessionDirect` call after initial provisioning. |
+| SFAC-AC-013 | Verified | `TestEventCodecDraftV2CustomizationSpecsRoundTrip` covers building/parsing kind:31952 v2 draft content with persona, avatar, voice, and memory specs. |
+| SFAC-AC-014 | Verified | `TestEventCodecRejectsInvalidDraftSpecReferences` covers invalid avatar provider, voice model, memory embedding model, and memory rerank model validation failures. |
+| SFAC-AC-015 | Verified | `TestMergeSoulDraftContentPartialUpdateDeepMerges` covers recursive object merge, scalar replacement, null deletion, and false boolean patching for hot-reload draft updates. |
+| SFAC-AC-016 | Verified | `TestEventCodecMaintainsV1DraftBackwardCompatibility` covers no-schema v1 draft parsing and legacy field preservation through the event codec. |
+
+## Epic 8.2 evidence — 2026-05-15
+
+OpenClaw command run from `/Users/bizarro/Documents/Dev/openclaw`:
+
+```text
+pnpm test extensions/nostr/src/soulfactory-execution.test.ts
+[test] passed 1 Vitest shard in 3.07s
+Test Files  1 passed (1)
+Tests       8 passed (8)
+```
+
+Notes:
+
+- The OpenClaw bridge now implements `soulfactory.config.reload` for supported managed-agent patches and resolved-spec syncs.
+- Runtime patching writes `agents.list` with `afterWrite: { mode: "auto" }`; OpenClaw's reload planner treats `agents.list` as a hot path rather than a gateway/session restart path.
+- Verification is unit-level for the OpenClaw bridge behavior; a full gateway reload integration test remains outside this slice.

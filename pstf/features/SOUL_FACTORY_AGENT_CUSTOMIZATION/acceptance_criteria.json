@@ -1,6 +1,6 @@
 {
   "feature_id": "SOUL_FACTORY_AGENT_CUSTOMIZATION",
-  "status": "in_progress_task_5_1_verified",
+  "status": "in_progress_task_1_2_verified",
   "criteria": [
     {
       "ac_id": "SFAC-AC-001",
@@ -123,6 +123,61 @@
         "contract"
       ],
       "expected_result": "Runtime params include normalized persona data plus OpenClaw system_prompt_sections and system_prompt_override fields using snake_case wire names; agent_defaults_patch carries OpenClaw-native config keys such as systemPromptOverride."
+    },
+    {
+      "ac_id": "SFAC-AC-012",
+      "title": "OpenClaw customization config hot-reloads without session restart",
+      "type": "runtime_behavior",
+      "priority": "must",
+      "assertion": "OpenClaw applies SoulFactory TTS, memorySearch, systemPromptOverride, and identity customization patches to the managed agent entry using the config hot-reload path without deleting or respawning the active managed session.",
+      "testable_by": [
+        "unit"
+      ],
+      "expected_result": "soulfactory.config.reload and individual customization methods update agents.list with afterWrite:auto, report session_restarted=false for config reload, clear stale optional config when syncing a resolved_spec, and leave spawn/delete session APIs untouched after initial provisioning."
+    },
+    {
+      "ac_id": "SFAC-AC-013",
+      "title": "Event codec round-trips v2 customization drafts",
+      "type": "protocol_contract",
+      "priority": "must",
+      "assertion": "SoulFactory kind:31952 draft events built and parsed by the event codec preserve persona, avatar, voice, and memory specs using the soulfactory-draft/v2 content schema.",
+      "testable_by": [
+        "unit"
+      ],
+      "expected_result": "BuildSoulDraftEvent emits v2 JSON content and ParseSoulDraftEvent returns the same nested customization fields."
+    },
+    {
+      "ac_id": "SFAC-AC-014",
+      "title": "Event codec validates customization provider/model references",
+      "type": "validation",
+      "priority": "must",
+      "assertion": "Draft event parsing/building rejects unsupported avatar providers/style presets, unsupported voice provider models, and incompatible memory embedding/rerank model references.",
+      "testable_by": [
+        "unit"
+      ],
+      "expected_result": "Invalid provider/model fields return deterministic validation errors before the draft event is accepted or emitted."
+    },
+    {
+      "ac_id": "SFAC-AC-015",
+      "title": "Partial draft updates merge for hot reload",
+      "type": "behavior",
+      "priority": "must",
+      "assertion": "SoulFactory can merge partial draft content patches for hot-reload flows without dropping existing nested spec fields.",
+      "testable_by": [
+        "unit"
+      ],
+      "expected_result": "Object fields merge recursively, scalar/array fields replace, null fields delete, and the merged draft remains valid v2 content."
+    },
+    {
+      "ac_id": "SFAC-AC-016",
+      "title": "Event codec preserves v1 draft compatibility",
+      "type": "compatibility",
+      "priority": "must",
+      "assertion": "Legacy no-schema/v1 kind:31952 draft content remains parseable by the event codec without forcing v2 schema semantics.",
+      "testable_by": [
+        "unit"
+      ],
+      "expected_result": "Legacy fields such as avatar_prompt, allowed_kinds, and assets refs survive ParseSoulDraftEvent with SchemaVersion reporting v1."
     }
   ]
 }

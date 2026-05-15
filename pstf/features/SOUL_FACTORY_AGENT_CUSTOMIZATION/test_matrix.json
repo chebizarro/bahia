@@ -1,6 +1,6 @@
 {
   "feature_id": "SOUL_FACTORY_AGENT_CUSTOMIZATION",
-  "status": "in_progress_task_5_1_verified",
+  "status": "in_progress_task_1_2_verified",
   "tests": [
     {
       "test_id": "SFAC-T-001",
@@ -147,6 +147,61 @@
       "target_path": "internal/soulfactory/personality_service_test.go",
       "description": "Assemble a prompt from a partial section set and assert empty role/red_lines sections are omitted.",
       "status": "passed_2026-05-15_go_test_internal_soulfactory"
+    },
+    {
+      "test_id": "SFAC-T-014",
+      "ac_ids": [
+        "SFAC-AC-012"
+      ],
+      "title": "OpenClaw managed-agent customization hot-reload",
+      "type": "unit",
+      "target_path": "openclaw/extensions/nostr/src/soulfactory-execution.test.ts",
+      "description": "Provision a managed OpenClaw agent, apply SoulFactory TTS, memorySearch, identity, and systemPromptOverride updates through customization methods and soulfactory.config.reload, assert resolved_spec sync clears stale optional customization config, and assert the active managed session is not deleted or respawned.",
+      "status": "passed_2026-05-15_pnpm_test_openclaw_nostr_soulfactory_execution"
+    },
+    {
+      "test_id": "SFAC-T-015",
+      "ac_ids": [
+        "SFAC-AC-013"
+      ],
+      "title": "Event codec v2 customization draft round-trip",
+      "type": "unit",
+      "target_path": "internal/soulfactory/event_codec_test.go",
+      "description": "Build and parse a kind:31952 draft containing persona, avatar, voice, and memory specs and assert the v2 schema and nested fields survive.",
+      "status": "passed_2026-05-15_go_test_internal_soulfactory_domain"
+    },
+    {
+      "test_id": "SFAC-T-016",
+      "ac_ids": [
+        "SFAC-AC-014"
+      ],
+      "title": "Event codec rejects invalid customization references",
+      "type": "unit",
+      "target_path": "internal/soulfactory/event_codec_test.go",
+      "description": "Assert invalid avatar provider, voice model, memory embedding model, and memory rerank model references are rejected when building draft events.",
+      "status": "passed_2026-05-15_go_test_internal_soulfactory_domain"
+    },
+    {
+      "test_id": "SFAC-T-017",
+      "ac_ids": [
+        "SFAC-AC-015"
+      ],
+      "title": "Partial draft content merge semantics",
+      "type": "unit",
+      "target_path": "internal/soulfactory/event_codec_test.go",
+      "description": "Merge a partial patch into existing v2 draft content and assert nested maps are preserved/updated, null deletes fields, and false boolean updates are honored.",
+      "status": "passed_2026-05-15_go_test_internal_soulfactory_domain"
+    },
+    {
+      "test_id": "SFAC-T-018",
+      "ac_ids": [
+        "SFAC-AC-016"
+      ],
+      "title": "Event codec parses legacy v1 drafts",
+      "type": "unit",
+      "target_path": "internal/soulfactory/event_codec_test.go",
+      "description": "Parse a no-schema legacy kind:31952 draft and assert legacy fields and v1 schema detection remain intact.",
+      "status": "passed_2026-05-15_go_test_internal_soulfactory_domain"
     }
   ]
 }

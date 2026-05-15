@@ -1,6 +1,7 @@
 package soulfactory
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strconv"
@@ -160,6 +161,12 @@ func ParseSoulActionEvent(event *nostr.Event) (*domain.SoulAction, error) {
 			action.Reason = strings.TrimSpace(tag[1])
 		case tagDraft:
 			action.DraftRef = strings.TrimSpace(tag[1])
+		case tagDraftEvent:
+			action.DraftEventID = strings.TrimSpace(tag[1])
+		case tagEvent:
+			if isDraftEventTag(tag) && action.DraftEventID == "" {
+				action.DraftEventID = strings.TrimSpace(tag[1])
+			}
 		case tagSpecHash:
 			action.SpecHash = strings.TrimSpace(tag[1])
 		case tagPreviousSpecHash:
@@ -173,6 +180,7 @@ func ParseSoulActionEvent(event *nostr.Event) (*domain.SoulAction, error) {
 			NewBrief         string                 `json:"new_brief"`
 			Reason           string                 `json:"reason"`
 			DraftRef         string                 `json:"draft_ref"`
+			DraftEventID     string                 `json:"draft_event_id"`
 			SpecHash         string                 `json:"spec_hash"`
 			PreviousSpecHash string                 `json:"previous_spec_hash"`
 			Patch            map[string]interface{} `json:"patch"`
@@ -183,6 +191,7 @@ func ParseSoulActionEvent(event *nostr.Event) (*domain.SoulAction, error) {
 		action.NewBrief = firstNonEmpty(content.NewBrief, content.Brief, action.NewBrief)
 		action.Reason = firstNonEmpty(action.Reason, content.Reason)
 		action.DraftRef = firstNonEmpty(action.DraftRef, content.DraftRef)
+		action.DraftEventID = firstNonEmpty(action.DraftEventID, content.DraftEventID)
 		action.SpecHash = firstNonEmpty(action.SpecHash, content.SpecHash)
 		action.PreviousSpecHash = firstNonEmpty(action.PreviousSpecHash, content.PreviousSpecHash)
 		if len(content.Patch) > 0 {
@@ -321,6 +330,12 @@ func ParseSoulDraftEvent(event *nostr.Event) (*domain.SoulDraft, error) {
 		if err != nil {
 			return nil, fmt.Errorf("parse draft content: %w", err)
 		}
+		if strings.TrimSpace(content.Schema) == "" && content.HasV2CustomizationSpecs() {
+			content.Schema = domain.SoulFactoryDraftSchemaV2
+		}
+		if err := ValidateSoulDraftContent(*content); err != nil {
+			return nil, fmt.Errorf("validate draft content: %w", err)
+		}
 		draft.Content = *content
 	}
 	if draft.Tier == "" {
@@ -338,6 +353,9 @@ func BuildSoulDraftEvent(draft *domain.SoulDraft) (*nostr.Event, error) {
 	if draft == nil {
 		return nil, fmt.Errorf("nil soul draft")
 	}
+	if err := ValidateSoulDraftContent(draft.Content); err != nil {
+		return nil, fmt.Errorf("validate draft content: %w", err)
+	}
 	content, err := draft.Content.ToJSON()
 	if err != nil {
 		return nil, fmt.Errorf("marshal draft content: %w", err)
@@ -348,6 +366,328 @@ func BuildSoulDraftEvent(draft *domain.SoulDraft) (*nostr.Event, error) {
 	appendTag(&tags, tagTemplate, draft.TemplateRef)
 	appendTag(&tags, tagSpecHash, draft.Content.SpecHash)
 	return &nostr.Event{Kind: domain.KindSoulDraft, CreatedAt: nostr.Now(), Tags: tags, Content: content}, nil
+}
+
+// DraftContentValidationError reports all invalid v2 draft customization fields at once.
+type DraftContentValidationError struct {
+	Violations []string
+}
+
+func (e *DraftContentValidationError) Error() string {
+	if e == nil || len(e.Violations) == 0 {
+		return "invalid draft content"
+	}
+	return "invalid draft content: " + strings.Join(e.Violations, "; ")
+}
+
+const (
+	avatarDimensionMin  = 64
+	avatarDimensionMax  = 2048
+	avatarDimensionStep = 8
+)
+
+var supportedAvatarProviders = map[string]struct{}{
+	"flux-comfyui": {},
+	"fal":          {},
+	"replicate":    {},
+}
+
+var supportedMemoryEmbeddingModels = map[string]map[string]struct{}{
+	MemoryEmbeddingProviderVoyage: {
+		"voyage-3":       {},
+		"voyage-3-lite":  {},
+		"voyage-3-large": {},
+		"voyage-code-3":  {},
+	},
+	MemoryEmbeddingProviderOpenAI: {
+		"text-embedding-3-small": {},
+		"text-embedding-3-large": {},
+		"text-embedding-ada-002": {},
+	},
+	MemoryEmbeddingProviderCohere: {
+		"embed-v4.0":              {},
+		"embed-english-v3.0":      {},
+		"embed-multilingual-v3.0": {},
+	},
+}
+
+var supportedMemoryRerankModels = map[string]struct{}{
+	"cohere-rerank-v3":         {},
+	"rerank-v3.5":              {},
+	"rerank-english-v3.0":      {},
+	"rerank-multilingual-v3.0": {},
+}
+
+// ValidateSoulDraftContent validates v2 customization sections that the event
+// codec accepts on kind:31952 drafts. Legacy/no-schema v1 drafts without v2
+// customization sections pass unchanged for backward compatibility.
+func ValidateSoulDraftContent(content domain.SoulDraftContent) error {
+	var violations []string
+	schema := content.SchemaVersion()
+	explicitSchema := strings.TrimSpace(content.Schema)
+	if explicitSchema != "" && schema != domain.SoulFactoryDraftSchemaV1 && schema != domain.SoulFactoryDraftSchemaV2 {
+		violations = append(violations, fmt.Sprintf("schema %q is unsupported", explicitSchema))
+	}
+	if explicitSchema == domain.SoulFactoryDraftSchemaV1 && content.HasV2CustomizationSpecs() {
+		violations = append(violations, "v2 customization specs require schema soulfactory-draft/v2")
+	}
+	if !content.HasV2CustomizationSpecs() {
+		return draftValidationErr(violations)
+	}
+	validateDraftAvatarSpec(content.Avatar, &violations)
+	validateDraftVoiceSpec(content.Voice, &violations)
+	validateDraftMemorySpec(content.Memory, &violations)
+	if err := ValidateSoulPersonaSpec(content.Persona); err != nil {
+		violations = append(violations, err.Error())
+	}
+	return draftValidationErr(violations)
+}
+
+// MergeSoulDraftContent applies a hot-reload style partial update to a draft.
+// Object fields merge recursively; arrays and scalar values replace; null values
+// delete fields. A patch may be either the content object itself or {"content":{...}}.
+func MergeSoulDraftContent(base domain.SoulDraftContent, patch map[string]interface{}) (domain.SoulDraftContent, error) {
+	if len(patch) == 0 {
+		if err := ValidateSoulDraftContent(base); err != nil {
+			return domain.SoulDraftContent{}, err
+		}
+		return base, nil
+	}
+	patch = draftContentPatchMap(patch)
+	baseMap, err := draftContentToMap(base)
+	if err != nil {
+		return domain.SoulDraftContent{}, err
+	}
+	mergedMap := mergeDraftJSONMaps(baseMap, patch)
+	data, err := json.Marshal(mergedMap)
+	if err != nil {
+		return domain.SoulDraftContent{}, fmt.Errorf("marshal merged draft content: %w", err)
+	}
+	var merged domain.SoulDraftContent
+	if err := json.Unmarshal(data, &merged); err != nil {
+		return domain.SoulDraftContent{}, fmt.Errorf("parse merged draft content: %w", err)
+	}
+	if strings.TrimSpace(merged.Schema) == "" && (base.IsV2() || merged.HasV2CustomizationSpecs()) {
+		merged.Schema = domain.SoulFactoryDraftSchemaV2
+	}
+	if err := ValidateSoulDraftContent(merged); err != nil {
+		return domain.SoulDraftContent{}, err
+	}
+	return merged, nil
+}
+
+func validateDraftAvatarSpec(spec domain.SoulAvatarSpec, violations *[]string) {
+	current := strings.ToLower(strings.TrimSpace(spec.Current))
+	if current != "" && current != "generated" && current != "uploaded" {
+		*violations = append(*violations, fmt.Sprintf("avatar.current %q is unsupported; use generated or uploaded", spec.Current))
+	}
+	if spec.Generation == nil {
+		return
+	}
+	generation := spec.Generation
+	provider := strings.ToLower(strings.TrimSpace(generation.Provider))
+	if provider != "" {
+		if _, ok := supportedAvatarProviders[provider]; !ok {
+			*violations = append(*violations, fmt.Sprintf("avatar.generation.provider %q is unsupported; supported providers are flux-comfyui, fal, replicate", generation.Provider))
+		}
+	}
+	if strings.TrimSpace(generation.Prompt) == "" {
+		*violations = append(*violations, "avatar.generation.prompt is required")
+	}
+	stylePreset := strings.ToLower(strings.TrimSpace(generation.StylePreset))
+	if stylePreset != "" && !isSupportedAvatarStylePreset(stylePreset) {
+		*violations = append(*violations, fmt.Sprintf("avatar.generation.style_preset %q is unsupported", generation.StylePreset))
+	}
+	validateAvatarDimension("avatar.generation.width", generation.Width, violations)
+	validateAvatarDimension("avatar.generation.height", generation.Height, violations)
+}
+
+func validateDraftVoiceSpec(spec domain.SoulVoiceSpec, violations *[]string) {
+	if !hasVoiceSpec(spec) {
+		return
+	}
+	providerID := NormalizeVoiceProviderID(spec.Provider)
+	registry := NewDefaultVoiceProviderRegistry()
+	ctx := context.Background()
+	if providerID != "" {
+		capabilities, err := registry.Capabilities(ctx, providerID)
+		if err != nil {
+			*violations = append(*violations, fmt.Sprintf("voice.provider %q is unsupported", spec.Provider))
+		} else {
+			validateVoiceProviderConfigModel(providerID, providerConfigFor(spec, providerID), capabilities, violations)
+		}
+	} else if only := onlyProviderFromSpec(spec); only != "" {
+		providerID = only
+	}
+	for rawProvider, config := range spec.Providers {
+		id := NormalizeVoiceProviderID(rawProvider)
+		capabilities, err := registry.Capabilities(ctx, id)
+		if err != nil {
+			*violations = append(*violations, fmt.Sprintf("voice.providers.%s is unsupported", rawProvider))
+			continue
+		}
+		validateVoiceProviderConfigModel(id, config, capabilities, violations)
+	}
+	if providerID != "" {
+		if _, err := registry.ResolveVoiceSpec(ctx, spec); err != nil {
+			*violations = append(*violations, err.Error())
+		}
+	}
+	switch strings.ToLower(strings.TrimSpace(spec.AutoMode)) {
+	case "", "off", "always", "tagged":
+	default:
+		*violations = append(*violations, fmt.Sprintf("voice.auto_mode %q is unsupported; use off, always, or tagged", spec.AutoMode))
+	}
+}
+
+func validateDraftMemorySpec(spec domain.SoulMemorySpec, violations *[]string) {
+	if !hasMemorySpec(spec) {
+		return
+	}
+	if err := ValidateSoulMemorySpec(spec); err != nil {
+		*violations = append(*violations, err.Error())
+	}
+	provider, ok := normalizeMemoryProvider(spec.EmbeddingProvider)
+	model := strings.TrimSpace(spec.EmbeddingModel)
+	if model != "" {
+		if !ok || provider == MemoryEmbeddingProviderAuto {
+			*violations = append(*violations, "memory.embedding_model requires an explicit supported embedding_provider")
+		} else if supportedModels, constrained := supportedMemoryEmbeddingModels[provider]; constrained {
+			if _, modelOK := supportedModels[model]; !modelOK {
+				*violations = append(*violations, fmt.Sprintf("memory.embedding_model %q is unsupported for provider %s", model, provider))
+			}
+		}
+	}
+	if spec.Search != nil && strings.TrimSpace(spec.Search.RerankModel) != "" {
+		rerankModel := strings.TrimSpace(spec.Search.RerankModel)
+		if _, ok := supportedMemoryRerankModels[rerankModel]; !ok {
+			*violations = append(*violations, fmt.Sprintf("memory.search.rerank_model %q is unsupported", rerankModel))
+		}
+	}
+}
+
+func draftValidationErr(violations []string) error {
+	if len(violations) == 0 {
+		return nil
+	}
+	return &DraftContentValidationError{Violations: violations}
+}
+
+func hasVoiceSpec(spec domain.SoulVoiceSpec) bool {
+	return strings.TrimSpace(spec.Provider) != "" || strings.TrimSpace(spec.PersonaID) != "" || spec.Persona != nil || strings.TrimSpace(spec.AutoMode) != "" || strings.TrimSpace(spec.SampleText) != "" || len(spec.Providers) > 0
+}
+
+func hasMemorySpec(spec domain.SoulMemorySpec) bool {
+	return strings.TrimSpace(spec.EmbeddingProvider) != "" || strings.TrimSpace(spec.EmbeddingModel) != "" || spec.Search != nil || strings.TrimSpace(spec.Strategy) != "" || spec.AutoIndex || spec.RetentionDays != 0
+}
+
+func validateAvatarDimension(field string, value int, violations *[]string) {
+	if value == 0 {
+		return
+	}
+	if value < avatarDimensionMin || value > avatarDimensionMax {
+		*violations = append(*violations, fmt.Sprintf("%s must be between %d and %d", field, avatarDimensionMin, avatarDimensionMax))
+	}
+	if value%avatarDimensionStep != 0 {
+		*violations = append(*violations, fmt.Sprintf("%s must be a multiple of %d", field, avatarDimensionStep))
+	}
+}
+
+func isSupportedAvatarStylePreset(preset string) bool {
+	switch preset {
+	case "pixel-art", "anime", "realistic", "abstract", "corporate":
+		return true
+	default:
+		return false
+	}
+}
+
+func validateVoiceProviderConfigModel(providerID string, config map[string]any, capabilities VoiceProviderCapabilities, violations *[]string) {
+	model := stringConfigValue(config, "model", "model_id", "modelId")
+	if model == "" {
+		return
+	}
+	for _, supported := range capabilities.Models {
+		if strings.EqualFold(model, supported) {
+			return
+		}
+	}
+	*violations = append(*violations, fmt.Sprintf("voice.providers.%s.model %q is unsupported", providerID, model))
+}
+
+func stringConfigValue(config map[string]any, keys ...string) string {
+	for _, key := range keys {
+		if value, ok := config[key]; ok {
+			if str, ok := value.(string); ok {
+				return strings.TrimSpace(str)
+			}
+		}
+	}
+	return ""
+}
+
+func draftContentPatchMap(patch map[string]interface{}) map[string]interface{} {
+	contentPatch, ok := patch["content"].(map[string]interface{})
+	if !ok {
+		return patch
+	}
+	if len(contentPatch) == 0 {
+		return patch
+	}
+	return contentPatch
+}
+
+func draftContentToMap(content domain.SoulDraftContent) (map[string]interface{}, error) {
+	data, err := json.Marshal(content)
+	if err != nil {
+		return nil, fmt.Errorf("marshal base draft content: %w", err)
+	}
+	var out map[string]interface{}
+	if err := json.Unmarshal(data, &out); err != nil {
+		return nil, fmt.Errorf("parse base draft content: %w", err)
+	}
+	return out, nil
+}
+
+func mergeDraftJSONMaps(base, patch map[string]interface{}) map[string]interface{} {
+	merged := cloneDraftJSONMap(base)
+	for key, patchValue := range patch {
+		if patchValue == nil {
+			delete(merged, key)
+			continue
+		}
+		baseObject, baseOK := merged[key].(map[string]interface{})
+		patchObject, patchOK := patchValue.(map[string]interface{})
+		if baseOK && patchOK {
+			merged[key] = mergeDraftJSONMaps(baseObject, patchObject)
+			continue
+		}
+		merged[key] = patchValue
+	}
+	return merged
+}
+
+func cloneDraftJSONMap(in map[string]interface{}) map[string]interface{} {
+	out := make(map[string]interface{}, len(in))
+	for key, value := range in {
+		out[key] = cloneDraftJSONValue(value)
+	}
+	return out
+}
+
+func cloneDraftJSONValue(value interface{}) interface{} {
+	switch typed := value.(type) {
+	case map[string]interface{}:
+		return cloneDraftJSONMap(typed)
+	case []interface{}:
+		clone := make([]interface{}, len(typed))
+		for i, item := range typed {
+			clone[i] = cloneDraftJSONValue(item)
+		}
+		return clone
+	default:
+		return value
+	}
 }
 
 // BuildProvisioningStatusEvent builds a kind:6950 progress event.

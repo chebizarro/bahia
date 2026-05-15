@@ -2,6 +2,7 @@ package soulfactory
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/nbd-wtf/go-nostr"
@@ -123,6 +124,26 @@ func TestEventCodecParsesSoulActionsLegacyAndStructured(t *testing.T) {
 	if action.Reason != "adjust permissions" || action.Patch == nil {
 		t.Fatalf("structured action content = %+v", action)
 	}
+
+	draftEventOnly := &nostr.Event{
+		ID:        "draft-event-only-1950",
+		Kind:      domain.KindSoulAction,
+		CreatedAt: nostr.Now(),
+		PubKey:    "operator",
+		Tags: nostr.Tags{
+			{"soul", "31951:factory:scout"},
+			{"action", string(domain.SoulActionHotReload)},
+			{"draft-event", "exact-draft-event"},
+		},
+		Content: `{"spec_hash":"sha256:hot"}`,
+	}
+	action, err = ParseSoulActionEvent(draftEventOnly)
+	if err != nil {
+		t.Fatalf("ParseSoulActionEvent draft-event-only error = %v", err)
+	}
+	if action.Action != domain.SoulActionHotReload || action.DraftEventID != "exact-draft-event" || action.DraftRef != "" || action.SpecHash != "sha256:hot" {
+		t.Fatalf("draft-event-only action = %+v", action)
+	}
 }
 
 func TestEventCodecBuildsAndParsesAgentSoulReadModelWithRuntimeFields(t *testing.T) {
@@ -203,6 +224,219 @@ func TestEventCodecBuildsLegacyAndCanonicalActionResults(t *testing.T) {
 	var payload map[string]bool
 	if err := json.Unmarshal([]byte(canonical.Content), &payload); err != nil || !payload["ok"] {
 		t.Fatalf("canonical payload = %#v err=%v", payload, err)
+	}
+}
+
+func TestEventCodecDraftV2CustomizationSpecsRoundTrip(t *testing.T) {
+	draft := &domain.SoulDraft{
+		AgentID: "scout",
+		Name:    "Scout",
+		Tier:    domain.SoulTierStandard,
+		Content: domain.SoulDraftContent{
+			Brief: "Monitor deployments",
+			Identity: domain.SoulIdentitySpec{
+				Name:    "Scout",
+				Purpose: "Watch deploys",
+				Tier:    domain.SoulTierStandard,
+				Theme:   "warm",
+				Emoji:   "🔍",
+			},
+			Persona: domain.SoulPersonaSpec{
+				Traits:      []string{"curious", "thorough"},
+				Style:       "conversational",
+				Tone:        "friendly professional",
+				Constraints: []string{"Always cite sources"},
+				SystemPromptSections: map[string]string{
+					"role":       "You are Scout.",
+					"guidelines": "Be precise.",
+				},
+			},
+			Avatar: domain.SoulAvatarSpec{
+				Generation:   &domain.SoulAvatarGenerationSpec{Prompt: "Pixel art owl", StylePreset: "pixel-art", Seed: "scout-v1", Width: 512, Height: 512, Provider: "flux-comfyui"},
+				GeneratedRef: "blossom:generated",
+				Current:      "generated",
+			},
+			Voice: domain.SoulVoiceSpec{
+				Provider:   "elevenlabs",
+				PersonaID:  "scout-voice",
+				Persona:    &domain.SoulVoicePersonaSpec{Label: "Scout Voice", Profile: "Researcher", Style: "articulate", Accent: "neutral american", Pacing: "measured"},
+				AutoMode:   "tagged",
+				SampleText: "Hello, I'm Scout.",
+				Providers: map[string]map[string]any{
+					"elevenlabs": {"voice_id": "pNInz6obpgDQGcFmaJgB", "model": "eleven_turbo_v2_5", "stability": 0.7},
+				},
+			},
+			Memory: domain.SoulMemorySpec{
+				EmbeddingProvider: "voyage",
+				EmbeddingModel:    "voyage-3",
+				Search:            &domain.SoulMemorySearchSpec{TopK: 10, ScoreThreshold: 0.7, Rerank: true, RerankModel: "cohere-rerank-v3"},
+				Strategy:          "session-aware",
+				AutoIndex:         true,
+				RetentionDays:     90,
+			},
+		},
+	}
+
+	event, err := BuildSoulDraftEvent(draft)
+	if err != nil {
+		t.Fatalf("BuildSoulDraftEvent v2 error = %v", err)
+	}
+	if event.Kind != domain.KindSoulDraft {
+		t.Fatalf("draft kind = %d", event.Kind)
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal([]byte(event.Content), &raw); err != nil {
+		t.Fatalf("draft content JSON error = %v", err)
+	}
+	if raw["schema"] != domain.SoulFactoryDraftSchemaV2 {
+		t.Fatalf("draft schema = %#v", raw["schema"])
+	}
+
+	event.ID = "draft-v2-event"
+	parsed, err := ParseSoulDraftEvent(event)
+	if err != nil {
+		t.Fatalf("ParseSoulDraftEvent v2 error = %v", err)
+	}
+	if !parsed.Content.IsV2() || parsed.Content.Persona.SystemPromptSections["role"] != "You are Scout." {
+		t.Fatalf("parsed persona/schema = %+v", parsed.Content)
+	}
+	if parsed.Content.Avatar.Generation == nil || parsed.Content.Avatar.Generation.Provider != "flux-comfyui" || parsed.Content.Avatar.Current != "generated" {
+		t.Fatalf("parsed avatar = %+v", parsed.Content.Avatar)
+	}
+	if parsed.Content.Voice.Persona == nil || parsed.Content.Voice.Providers["elevenlabs"]["voice_id"] != "pNInz6obpgDQGcFmaJgB" {
+		t.Fatalf("parsed voice = %+v", parsed.Content.Voice)
+	}
+	if parsed.Content.Memory.Search == nil || parsed.Content.Memory.Search.TopK != 10 || !parsed.Content.Memory.Search.Rerank {
+		t.Fatalf("parsed memory = %+v", parsed.Content.Memory)
+	}
+}
+
+func TestEventCodecRejectsInvalidDraftSpecReferences(t *testing.T) {
+	cases := []struct {
+		name    string
+		content domain.SoulDraftContent
+		want    string
+	}{
+		{
+			name:    "avatar provider",
+			content: domain.SoulDraftContent{Schema: domain.SoulFactoryDraftSchemaV2, Brief: "bad avatar", Avatar: domain.SoulAvatarSpec{Generation: &domain.SoulAvatarGenerationSpec{Prompt: "owl", Provider: "unknown-image"}}},
+			want:    "avatar.generation.provider",
+		},
+		{
+			name:    "voice model",
+			content: domain.SoulDraftContent{Schema: domain.SoulFactoryDraftSchemaV2, Brief: "bad voice", Voice: domain.SoulVoiceSpec{Provider: "openai-tts", Providers: map[string]map[string]any{"openai-tts": {"voice_id": "alloy", "model": "not-a-tts-model"}}}},
+			want:    "voice.providers.openai-tts.model",
+		},
+		{
+			name:    "memory embedding model",
+			content: domain.SoulDraftContent{Schema: domain.SoulFactoryDraftSchemaV2, Brief: "bad memory", Memory: domain.SoulMemorySpec{EmbeddingProvider: "voyage", EmbeddingModel: "text-embedding-3-small"}},
+			want:    "memory.embedding_model",
+		},
+		{
+			name:    "memory rerank model",
+			content: domain.SoulDraftContent{Schema: domain.SoulFactoryDraftSchemaV2, Brief: "bad rerank", Memory: domain.SoulMemorySpec{EmbeddingProvider: "openai", EmbeddingModel: "text-embedding-3-small", Search: &domain.SoulMemorySearchSpec{Rerank: true, RerankModel: "not-a-reranker"}}},
+			want:    "memory.search.rerank_model",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := BuildSoulDraftEvent(&domain.SoulDraft{AgentID: "bad", Content: tc.content})
+			if err == nil {
+				t.Fatal("BuildSoulDraftEvent error = nil")
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("BuildSoulDraftEvent error = %v, want %q", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestMergeSoulDraftContentPartialUpdateDeepMerges(t *testing.T) {
+	base := domain.SoulDraftContent{
+		Schema: domain.SoulFactoryDraftSchemaV2,
+		Brief:  "Monitor deployments",
+		Persona: domain.SoulPersonaSpec{
+			Traits: []string{"curious"},
+			Tone:   "friendly",
+			SystemPromptSections: map[string]string{
+				"role":       "You are Scout.",
+				"guidelines": "Be precise.",
+			},
+		},
+		Avatar: domain.SoulAvatarSpec{Generation: &domain.SoulAvatarGenerationSpec{Prompt: "Pixel art owl", StylePreset: "pixel-art", Width: 512, Height: 512, Provider: "flux-comfyui"}},
+		Voice: domain.SoulVoiceSpec{
+			Provider:   "elevenlabs",
+			SampleText: "Hello.",
+			Providers:  map[string]map[string]any{"elevenlabs": {"voice_id": "pNInz6obpgDQGcFmaJgB", "model": "eleven_turbo_v2_5", "stability": 0.7}},
+		},
+		Memory: domain.SoulMemorySpec{EmbeddingProvider: "openai", EmbeddingModel: "text-embedding-3-small", Search: &domain.SoulMemorySearchSpec{TopK: 5, ScoreThreshold: 0.5}, AutoIndex: true},
+	}
+	patch := map[string]interface{}{
+		"persona": map[string]interface{}{
+			"tone": nil,
+			"system_prompt_sections": map[string]interface{}{
+				"guidelines": "Be precise and cite sources.",
+			},
+		},
+		"avatar": map[string]interface{}{
+			"generated_ref": "blossom:new",
+			"current":       "generated",
+		},
+		"voice": map[string]interface{}{
+			"sample_text": nil,
+			"providers": map[string]interface{}{
+				"elevenlabs": map[string]interface{}{"stability": 0.85},
+			},
+		},
+		"memory": map[string]interface{}{
+			"auto_index": false,
+			"search": map[string]interface{}{
+				"top_k": 12,
+			},
+		},
+	}
+
+	merged, err := MergeSoulDraftContent(base, patch)
+	if err != nil {
+		t.Fatalf("MergeSoulDraftContent error = %v", err)
+	}
+	if merged.Schema != domain.SoulFactoryDraftSchemaV2 || merged.Brief != base.Brief {
+		t.Fatalf("merged schema/brief = %q/%q", merged.Schema, merged.Brief)
+	}
+	if merged.Persona.Tone != "" || merged.Persona.SystemPromptSections["role"] != "You are Scout." || merged.Persona.SystemPromptSections["guidelines"] != "Be precise and cite sources." {
+		t.Fatalf("merged persona = %+v", merged.Persona)
+	}
+	if merged.Avatar.GeneratedRef != "blossom:new" || merged.Avatar.Generation == nil || merged.Avatar.Generation.Prompt != "Pixel art owl" {
+		t.Fatalf("merged avatar = %+v", merged.Avatar)
+	}
+	if merged.Voice.SampleText != "" || merged.Voice.Providers["elevenlabs"]["voice_id"] != "pNInz6obpgDQGcFmaJgB" || merged.Voice.Providers["elevenlabs"]["stability"] != 0.85 {
+		t.Fatalf("merged voice = %+v", merged.Voice)
+	}
+	if merged.Memory.AutoIndex || merged.Memory.Search == nil || merged.Memory.Search.TopK != 12 || merged.Memory.Search.ScoreThreshold != 0.5 {
+		t.Fatalf("merged memory = %+v", merged.Memory)
+	}
+}
+
+func TestEventCodecMaintainsV1DraftBackwardCompatibility(t *testing.T) {
+	event := &nostr.Event{
+		ID:        "legacy-draft-event",
+		Kind:      domain.KindSoulDraft,
+		CreatedAt: nostr.Now(),
+		PubKey:    "operator",
+		Tags:      nostr.Tags{{"d", "legacy"}, {"name", "Legacy"}, {"tier", "lightweight"}},
+		Content:   `{"brief":"Legacy brief","avatar_prompt":"Pixel art owl","allowed_kinds":[1,30023],"assets":{"avatar_ref":"blossom:avatar","voice_ref":"voice:legacy"}}`,
+	}
+
+	parsed, err := ParseSoulDraftEvent(event)
+	if err != nil {
+		t.Fatalf("ParseSoulDraftEvent legacy error = %v", err)
+	}
+	if parsed.Content.Schema != "" || parsed.Content.SchemaVersion() != domain.SoulFactoryDraftSchemaV1 || parsed.Content.IsV2() {
+		t.Fatalf("legacy schema = %q version=%q", parsed.Content.Schema, parsed.Content.SchemaVersion())
+	}
+	if parsed.Name != "Legacy" || parsed.Tier != domain.SoulTierLightweight || parsed.Content.AvatarPrompt != "Pixel art owl" || parsed.Content.Assets.VoiceRef != "voice:legacy" {
+		t.Fatalf("legacy draft = %+v", parsed)
 	}
 }
 
