@@ -1,0 +1,15 @@
+{
+  "feature_id": "bahia-cxj1",
+  "test_runs": [
+    {
+      "command": "go test ./internal/adapters/llm",
+      "result": "pass",
+      "evidence": "ok github.com/openagentsinc/bahia/internal/adapters/llm 0.176s"
+    },
+    {
+      "command": "go test ./internal/...",
+      "result": "pass",
+      "evidence": "all internal packages passed"
+    }
+  ]
+}

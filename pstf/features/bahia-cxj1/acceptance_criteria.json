@@ -1,0 +1,31 @@
+{
+  "feature_id": "bahia-cxj1",
+  "title": "Multi-provider avatar generation service",
+  "criteria": [
+    {
+      "id": "AC1",
+      "statement": "A provider interface is defined for avatar generation backends.",
+      "tests": ["TestAvatarProviderRegistryDispatchesBySpecProvider"]
+    },
+    {
+      "id": "AC2",
+      "statement": "The existing FLUX/ComfyUI avatar generation code is refactored behind the flux-comfyui provider while preserving legacy entrypoints.",
+      "tests": ["TestFluxComfyUIProviderExpandsPresetAndReportsProgress", "TestAvatarGeneratorLegacyEntrypoints"]
+    },
+    {
+      "id": "AC3",
+      "statement": "A style preset library is available for pixel-art, anime, realistic, abstract, and corporate avatars.",
+      "tests": ["TestAvatarStylePresetLibrary", "TestFluxComfyUIProviderExpandsPresetAndReportsProgress"]
+    },
+    {
+      "id": "AC4",
+      "statement": "Avatar generation supports asynchronous progress events with exactly one terminal event.",
+      "tests": ["TestAvatarGeneratorAsyncProgressEvents"]
+    },
+    {
+      "id": "AC5",
+      "statement": "Unsafe dimensions are rejected before provider dispatch.",
+      "tests": ["TestAvatarGeneratorValidatesDimensions"]
+    }
+  ]
+}
