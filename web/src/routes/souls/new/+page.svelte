@@ -2,7 +2,7 @@
   import { goto } from '$app/navigation';
   import { untrack } from 'svelte';
   import AvatarStudio from '$lib/components/souls/AvatarStudio.svelte';
-  import MemoryConfig from '$lib/components/souls/MemoryConfig.svelte';
+  import MemoryConfig from '$lib/components/MemoryConfig.svelte';
   import PersonalityBuilder from '$lib/components/souls/PersonalityBuilder.svelte';
   import VoiceStudio from '$lib/components/souls/VoiceStudio.svelte';
   import TemplateSelector from '$lib/components/TemplateSelector.svelte';

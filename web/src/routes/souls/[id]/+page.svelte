@@ -2,7 +2,7 @@
   import { page } from '$app/state';
   import Badge from '$lib/components/Badge.svelte';
   import AvatarStudio from '$lib/components/souls/AvatarStudio.svelte';
-  import MemoryConfig from '$lib/components/souls/MemoryConfig.svelte';
+  import MemoryConfig from '$lib/components/MemoryConfig.svelte';
   import PersonalityBuilder from '$lib/components/souls/PersonalityBuilder.svelte';
   import VoiceStudio from '$lib/components/souls/VoiceStudio.svelte';
   import {
@@ -529,7 +529,7 @@
             {:else if editingSection === 'voice'}
               <VoiceStudio bind:value={customizationDraft} assetRef={soul.assets?.voice_ref || ''} showAdvanced={true} />
             {:else if editingSection === 'memory'}
-              <MemoryConfig bind:value={customizationDraft} showAdvanced={true} />
+              <MemoryConfig bind:value={customizationDraft} showAdvanced={true} {soul} />
             {:else if editingSection === 'persona'}
               <PersonalityBuilder bind:value={customizationDraft} showAdvanced={true} />
             {/if}
