@@ -1,19 +1,33 @@
 {
   "feature_id": "SOUL_FACTORY_AGENT_CUSTOMIZATION",
-  "status": "in_progress_task_1_1_verified",
-  "beads_issue": "bahia-pnlu",
-  "title": "SoulFactory agent customization draft schema foundation",
+  "status": "in_progress_task_5_1_verified",
+  "beads_issues": [
+    "bahia-pnlu",
+    "bahia-2lpj",
+    "bahia-48jp"
+  ],
+  "title": "SoulFactory agent customization foundation, memory, and personality mapping",
   "date": "2026-05-15",
-  "scope": "Epic 1 Task 1.1: additive domain model support for v2 SoulFactory draft customization specs.",
+  "scope": "Epic 1 Task 1.1, Epic 4 Task 4.1, and Epic 5 Task 5.1: additive draft customization domain types, Bahia memory configuration mapping, and personality prompt mapping to runtime control payloads.",
   "intended_behavior": [
     "Soul draft content can explicitly declare schema soulfactory-draft/v2.",
     "Soul draft content can carry portable persona, avatar, voice, and memory nested specs.",
     "Legacy v1 draft fields remain parseable and can be migrated additively into v2 without dropping the legacy fields.",
-    "Spec hash computation observes the new customization fields through draft JSON serialization."
+    "Spec hash computation observes the new customization fields through draft JSON serialization.",
+    "SoulMemorySpec can be validated and normalized for provider choices auto, voyage, openai, cohere, and local.",
+    "SoulMemorySpec search settings map top_k and score_threshold to OpenClaw memorySearch.query fields while preserving reranking intent in the portable contract.",
+    "Bahia can serialize soulfactory.memory.configure params for kind:38384 runtime control requests without adding REST control APIs.",
+    "SoulPersonaSpec can be validated and normalized into role, guidelines, and red_lines prompt sections.",
+    "Bahia assembles a deterministic composite system prompt for OpenClaw systemPromptOverride updates.",
+    "Bahia can serialize soulfactory.persona.update params for kind:38384 runtime control requests without adding REST control APIs."
   ],
   "out_of_scope": [
-    "Event codec merge semantics and provider/model validation.",
-    "Web client v2 builders and editors.",
-    "Avatar/voice/memory/persona runtime control methods."
+    "Web Memory Configuration UX controls.",
+    "Runtime bridge handlers that apply soulfactory.memory.configure or trigger reindexing.",
+    "Memory reindex orchestration and progress events.",
+    "Provider capability discovery beyond static Bahia-side validation.",
+    "LLM-assisted prompt refinement and persona consistency scoring.",
+    "Runtime bridge handlers that apply soulfactory.persona.update.",
+    "Web Personality Builder UX controls."
   ]
 }

@@ -1,6 +1,6 @@
 {
   "feature_id": "SOUL_FACTORY_AGENT_CUSTOMIZATION",
-  "status": "in_progress_task_1_1_verified",
+  "status": "in_progress_task_5_1_verified",
   "criteria": [
     {
       "ac_id": "SFAC-AC-001",
@@ -8,7 +8,9 @@
       "type": "contract",
       "priority": "must",
       "assertion": "SoulDraftContent exposes schema versioning constants and a schema field capable of distinguishing legacy/no-schema v1 drafts from soulfactory-draft/v2 drafts.",
-      "testable_by": ["unit"],
+      "testable_by": [
+        "unit"
+      ],
       "expected_result": "v2 draft content reports soulfactory-draft/v2 while omitted schema reports soulfactory-draft/v1 for migration detection."
     },
     {
@@ -17,7 +19,9 @@
       "type": "data_contract",
       "priority": "must",
       "assertion": "SoulDraftContent carries Persona, Avatar, Voice, and Memory fields using strongly typed nested specs with JSON tags matching the plan.",
-      "testable_by": ["unit"],
+      "testable_by": [
+        "unit"
+      ],
       "expected_result": "Persona traits/system prompt sections, avatar generation/current refs, voice persona/provider settings, and memory search settings survive JSON serialization and parsing."
     },
     {
@@ -26,7 +30,9 @@
       "type": "compatibility",
       "priority": "must",
       "assertion": "Existing v1 fields such as avatar_prompt, assets.avatar_ref, assets.voice_ref, allowed_kinds, and tool_grants remain valid and are not dropped by migration helpers.",
-      "testable_by": ["unit"],
+      "testable_by": [
+        "unit"
+      ],
       "expected_result": "MigrateToLatest returns a v2 copy that preserves legacy fields and additively seeds equivalent nested avatar/voice fields where possible."
     },
     {
@@ -35,8 +41,88 @@
       "type": "data_integrity",
       "priority": "must",
       "assertion": "Draft spec hash computation includes the new nested customization fields through canonical draft JSON serialization.",
-      "testable_by": ["unit"],
+      "testable_by": [
+        "unit"
+      ],
       "expected_result": "Hashing the same v2 draft is stable, and changing a nested customization field changes the computed hash."
+    },
+    {
+      "ac_id": "SFAC-AC-005",
+      "title": "Memory specs map to OpenClaw memorySearch config",
+      "type": "runtime_contract",
+      "priority": "must",
+      "assertion": "SoulMemorySpec is normalized into a portable soulfactory-memory-config/v1 contract and an OpenClaw agents.defaults.memorySearch-compatible config.",
+      "testable_by": [
+        "unit"
+      ],
+      "expected_result": "Embedding provider/model, strategy, auto-index, retention metadata, top_k, score threshold, and reranking intent are preserved; OpenClaw receives provider/model/query/sync/session-memory fields."
+    },
+    {
+      "ac_id": "SFAC-AC-006",
+      "title": "Memory configuration validates provider and search fields",
+      "type": "validation",
+      "priority": "must",
+      "assertion": "Bahia rejects unsupported memory providers/strategies, invalid top_k ranges, invalid score thresholds, negative retention, and rerank_model without rerank.",
+      "testable_by": [
+        "unit"
+      ],
+      "expected_result": "Validation reports all invalid memory spec fields in a deterministic error message."
+    },
+    {
+      "ac_id": "SFAC-AC-007",
+      "title": "Memory configure params serialize into 38384 runtime control envelopes",
+      "type": "protocol_contract",
+      "priority": "must",
+      "assertion": "Bahia can build params for RuntimeMethodMemoryConfigure without introducing REST or polling semantics.",
+      "testable_by": [
+        "unit"
+      ],
+      "expected_result": "BuildRuntimeControlRequestEvent serializes soulfactory.memory.configure params containing the portable memory_config and OpenClaw memorySearch patch."
+    },
+    {
+      "ac_id": "SFAC-AC-008",
+      "title": "Personality spec maps to OpenClaw prompt sections",
+      "type": "mapping",
+      "priority": "must",
+      "assertion": "SoulPersonaSpec traits, style, tone, constraints, and system_prompt_sections are normalized and mapped into canonical OpenClaw role, guidelines, and red_lines sections.",
+      "testable_by": [
+        "unit"
+      ],
+      "expected_result": "Explicit role/guidelines/red_lines content is preserved, traits/style/tone are appended to guidelines, and constraints are appended to red_lines."
+    },
+    {
+      "ac_id": "SFAC-AC-009",
+      "title": "Composite system prompt assembly is deterministic",
+      "type": "behavior",
+      "priority": "must",
+      "assertion": "The personality service assembles a composite system prompt from canonical sections in role, guidelines, red_lines order and omits empty sections.",
+      "testable_by": [
+        "unit"
+      ],
+      "expected_result": "The assembled prompt uses stable section headers and ordering for reproducible runtime updates."
+    },
+    {
+      "ac_id": "SFAC-AC-010",
+      "title": "Persona fields are validated before runtime dispatch",
+      "type": "validation",
+      "priority": "must",
+      "assertion": "Invalid persona traits, constraints, section names, duplicates, and disallowed control characters are rejected before building runtime params.",
+      "testable_by": [
+        "unit"
+      ],
+      "expected_result": "Malformed persona specs return validation errors and do not produce runtime control params."
+    },
+    {
+      "ac_id": "SFAC-AC-011",
+      "title": "Persona update runtime params contract is defined",
+      "type": "runtime_contract",
+      "priority": "must",
+      "assertion": "Bahia defines the soulfactory.persona.update method and the soulfactory-persona/v1 params payload for kind 38384 runtime control requests.",
+      "testable_by": [
+        "unit",
+        "contract"
+      ],
+      "expected_result": "Runtime params include normalized persona data plus OpenClaw system_prompt_sections and system_prompt_override fields using snake_case wire names; agent_defaults_patch carries OpenClaw-native config keys such as systemPromptOverride."
     }
   ]
 }

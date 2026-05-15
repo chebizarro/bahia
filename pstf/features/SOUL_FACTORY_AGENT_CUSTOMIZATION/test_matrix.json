@@ -1,10 +1,13 @@
 {
   "feature_id": "SOUL_FACTORY_AGENT_CUSTOMIZATION",
-  "status": "in_progress_task_1_1_verified",
+  "status": "in_progress_task_5_1_verified",
   "tests": [
     {
       "test_id": "SFAC-T-001",
-      "ac_ids": ["SFAC-AC-001", "SFAC-AC-002"],
+      "ac_ids": [
+        "SFAC-AC-001",
+        "SFAC-AC-002"
+      ],
       "title": "V2 customization specs round-trip",
       "type": "unit",
       "target_path": "internal/domain/soul_test.go",
@@ -13,7 +16,9 @@
     },
     {
       "test_id": "SFAC-T-002",
-      "ac_ids": ["SFAC-AC-001"],
+      "ac_ids": [
+        "SFAC-AC-001"
+      ],
       "title": "Customization content auto-marks v2 schema",
       "type": "unit",
       "target_path": "internal/domain/soul_test.go",
@@ -22,7 +27,10 @@
     },
     {
       "test_id": "SFAC-T-003",
-      "ac_ids": ["SFAC-AC-001", "SFAC-AC-003"],
+      "ac_ids": [
+        "SFAC-AC-001",
+        "SFAC-AC-003"
+      ],
       "title": "V1 migration compatibility",
       "type": "unit",
       "target_path": "internal/domain/soul_test.go",
@@ -31,7 +39,9 @@
     },
     {
       "test_id": "SFAC-T-004",
-      "ac_ids": ["SFAC-AC-004"],
+      "ac_ids": [
+        "SFAC-AC-004"
+      ],
       "title": "Customization fields affect spec hash",
       "type": "unit",
       "target_path": "internal/soulfactory/provisioning_resolution_test.go",
@@ -40,11 +50,102 @@
     },
     {
       "test_id": "SFAC-T-005",
-      "ac_ids": ["SFAC-AC-003"],
+      "ac_ids": [
+        "SFAC-AC-003"
+      ],
       "title": "Runtime params migrate v1 draft fields",
       "type": "unit",
       "target_path": "internal/soulfactory/provisioning_resolution_test.go",
       "description": "Build runtime provisioning params from a pure v1 draft and assert avatar_prompt, assets.avatar_ref, and assets.voice_ref are present in migrated nested v2 fields.",
+      "status": "passed_2026-05-15_go_test_internal_soulfactory"
+    },
+    {
+      "test_id": "SFAC-T-006",
+      "ac_ids": [
+        "SFAC-AC-005"
+      ],
+      "title": "Memory spec maps to OpenClaw memorySearch",
+      "type": "unit",
+      "target_path": "internal/soulfactory/memory_config_test.go",
+      "description": "Map a Voyage session-aware memory spec with top_k, score threshold, reranking, auto-index, and retention metadata into portable and OpenClaw-native config shapes.",
+      "status": "passed_2026-05-15_go_test_internal_soulfactory"
+    },
+    {
+      "test_id": "SFAC-T-007",
+      "ac_ids": [
+        "SFAC-AC-005"
+      ],
+      "title": "Memory spec supports local ephemeral strategy",
+      "type": "unit",
+      "target_path": "internal/soulfactory/memory_config_test.go",
+      "description": "Normalize llama-cpp/local provider aliases and off/ephemeral strategy into an OpenClaw memorySearch config with enabled=false.",
+      "status": "passed_2026-05-15_go_test_internal_soulfactory"
+    },
+    {
+      "test_id": "SFAC-T-008",
+      "ac_ids": [
+        "SFAC-AC-006"
+      ],
+      "title": "Memory spec validation rejects invalid fields",
+      "type": "unit",
+      "target_path": "internal/soulfactory/memory_config_test.go",
+      "description": "Assert unsupported provider/strategy, out-of-range top_k, invalid score threshold, negative retention, and rerank_model without rerank are reported.",
+      "status": "passed_2026-05-15_go_test_internal_soulfactory"
+    },
+    {
+      "test_id": "SFAC-T-009",
+      "ac_ids": [
+        "SFAC-AC-007"
+      ],
+      "title": "Memory configure params serialize into runtime control envelope",
+      "type": "unit",
+      "target_path": "internal/soulfactory/memory_config_test.go",
+      "description": "Build soulfactory.memory.configure params, embed them in a RuntimeControlEnvelope, and verify the kind:38384 JSON content preserves memory_config and OpenClaw memorySearch patch fields.",
+      "status": "passed_2026-05-15_go_test_internal_soulfactory"
+    },
+    {
+      "test_id": "SFAC-T-010",
+      "ac_ids": [
+        "SFAC-AC-008",
+        "SFAC-AC-009"
+      ],
+      "title": "Personality service maps specs to prompt sections",
+      "type": "unit",
+      "target_path": "internal/soulfactory/personality_service_test.go",
+      "description": "Map a SoulPersonaSpec with traits, style, tone, constraints, and explicit sections, then assert normalized section content and deterministic composite prompt ordering.",
+      "status": "passed_2026-05-15_go_test_internal_soulfactory"
+    },
+    {
+      "test_id": "SFAC-T-011",
+      "ac_ids": [
+        "SFAC-AC-011"
+      ],
+      "title": "Persona update 38384 params contract",
+      "type": "contract",
+      "target_path": "internal/soulfactory/personality_service_test.go",
+      "description": "Build soulfactory.persona.update params and embed them in a RuntimeControlEnvelope, asserting method, schema, OpenClaw prompt fields, OpenClaw-native agent defaults patch keys, and 38384 tags/content survive parsing.",
+      "status": "passed_2026-05-15_go_test_internal_soulfactory"
+    },
+    {
+      "test_id": "SFAC-T-012",
+      "ac_ids": [
+        "SFAC-AC-010"
+      ],
+      "title": "Persona validation rejects malformed fields",
+      "type": "unit",
+      "target_path": "internal/soulfactory/personality_service_test.go",
+      "description": "Assert duplicate traits, unknown sections, excessive constraints, and disallowed control characters are rejected before runtime params are built.",
+      "status": "passed_2026-05-15_go_test_internal_soulfactory"
+    },
+    {
+      "test_id": "SFAC-T-013",
+      "ac_ids": [
+        "SFAC-AC-009"
+      ],
+      "title": "Prompt assembly omits empty sections",
+      "type": "unit",
+      "target_path": "internal/soulfactory/personality_service_test.go",
+      "description": "Assemble a prompt from a partial section set and assert empty role/red_lines sections are omitted.",
       "status": "passed_2026-05-15_go_test_internal_soulfactory"
     }
   ]

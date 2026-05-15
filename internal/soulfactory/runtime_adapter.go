@@ -18,12 +18,13 @@ import (
 )
 
 const (
-	RuntimeMethodProvision = "soulfactory.provision"
-	RuntimeMethodUpdate    = "soulfactory.update"
-	RuntimeMethodSuspend   = "soulfactory.suspend"
-	RuntimeMethodResume    = "soulfactory.resume"
-	RuntimeMethodRedeploy  = "soulfactory.redeploy"
-	RuntimeMethodRevoke    = "soulfactory.revoke"
+	RuntimeMethodProvision       = "soulfactory.provision"
+	RuntimeMethodUpdate          = "soulfactory.update"
+	RuntimeMethodSuspend         = "soulfactory.suspend"
+	RuntimeMethodResume          = "soulfactory.resume"
+	RuntimeMethodRedeploy        = "soulfactory.redeploy"
+	RuntimeMethodRevoke          = "soulfactory.revoke"
+	RuntimeMethodMemoryConfigure = "soulfactory.memory.configure"
 
 	kindNIP65RelayListMetadata = 10002
 )
