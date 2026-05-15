@@ -1146,6 +1146,19 @@ export function parseSoulEvent(event) {
     soul.permissions = content.permissions || soul.permissions;
     soul.workspaceSpec = content.workspace || soul.workspaceSpec;
     soul.assets = content.assets || soul.assets;
+    if (soul.allowedKinds.length === 0 && Array.isArray(soul.permissions?.allowed_kinds)) {
+      soul.allowedKinds = soul.permissions.allowed_kinds;
+    }
+    if (soul.tools.length === 0 && Array.isArray(soul.permissions?.tool_grants)) {
+      soul.tools = soul.permissions.tool_grants.map((grant) => {
+        if (typeof grant === 'string') return { server: grant, scopes: [] };
+        return {
+          server: grant?.mcp_server || grant?.server || grant?.name || '',
+          scopes: Array.isArray(grant?.scopes) ? grant.scopes : []
+        };
+      }).filter((grant) => grant.server);
+    }
+    soul.avatarUrl = soul.avatarUrl || content.avatar_url || content.avatarUrl || (String(soul.assets?.avatar_ref || '').startsWith('http') ? soul.assets.avatar_ref : '');
     soul.specHash = soul.specHash || content.spec_hash || content.specHash || '';
     soul.previousSpecHash = soul.previousSpecHash || content.previous_spec_hash || content.previousSpecHash || '';
     soul.draftRef = soul.draftRef || content.draft_ref || content.draftRef || '';

@@ -19,8 +19,9 @@
     soulCounts,
     loading,
     error,
-    loadSouls,
-    subscribeToSoulUpdates,
+    loadAll,
+    runtimeCapabilities,
+    subscribeToSoulFactoryUpdates,
     unsubscribeFromSoulUpdates
   } from '$lib/stores/souls.js';
 
@@ -33,9 +34,9 @@
     let cancelled = false;
 
     async function initializeSouls() {
-      await loadSouls();
+      await loadAll();
       if (cancelled) return;
-      subscribeToSoulUpdates();
+      subscribeToSoulFactoryUpdates();
     }
 
     void initializeSouls();
@@ -69,6 +70,7 @@
     <Card title="Active" titleIcon={SuccessIcon} value={soulCounts().active} status="success" />
     <Card title="Provisioning" titleIcon={PendingIcon} value={soulCounts().provisioning} status="warning" />
     <Card title="Suspended" titleIcon={UnknownIcon} value={soulCounts().suspended} />
+    <Card title="Runtime Targets" titleIcon={SuccessIcon} value={runtimeCapabilities.filter((capability) => capability.compatible).length} />
   </div>
   
   <!-- Filters -->
@@ -88,7 +90,7 @@
     <div class="search-box">
       <input 
         type="text" 
-        placeholder="Search souls..." 
+        placeholder="Search souls, runtimes, deploy states..." 
         bind:value={search}
       />
     </div>

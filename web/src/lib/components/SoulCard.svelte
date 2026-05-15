@@ -27,6 +27,8 @@
 
   const statusColor = $derived(statusColors[soul.status] || 'default');
   const deployColor = $derived(deployStatusColors[soul.deployStatus] || 'muted');
+  const runtimeTarget = $derived(soul.runtime?.target || '');
+  const runtimeState = $derived(soul.runtime?.state || '');
 </script>
 
 <a href="/souls/{soul.agentId}" class="soul-card {statusColor}">
@@ -54,6 +56,12 @@
       <span class="badge {statusColor}">{soul.status}</span>
       {#if soul.deployStatus}
         <span class="badge {deployColor}">{soul.deployStatus}</span>
+      {/if}
+      {#if runtimeTarget}
+        <span class="badge runtime">{runtimeTarget}</span>
+      {/if}
+      {#if runtimeState}
+        <span class="badge muted">{runtimeState}</span>
       {/if}
     </div>
     <div class="soul-meta">
@@ -182,6 +190,7 @@
   .badge.warning { background: rgba(245, 158, 11, 0.15); color: #f59e0b; }
   .badge.error { background: rgba(239, 68, 68, 0.15); color: #ef4444; }
   .badge.muted { background: rgba(136, 136, 136, 0.15); color: #888; }
+  .badge.runtime { background: rgba(99, 102, 241, 0.15); color: var(--primary, #6366f1); }
   
   .soul-meta {
     font-size: 0.75rem;

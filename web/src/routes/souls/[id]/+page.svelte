@@ -15,7 +15,7 @@
     WorkspaceIcon
   } from '$lib/icons/domain-icons.js';
   import { nostr, fetchSoul, parseSoulEvent, KINDS } from '$lib/nostr/client.js';
-  import { fetchSoulHistory, publishSoulAction } from '$lib/stores/souls.js';
+  import { buildSoulRef, fetchSoulHistory, publishSoulAction, provisioningRuns, trackLifecycleRun } from '$lib/stores/souls.js';
   
   let soul = $state(null);
   let loading = $state(true);
@@ -27,8 +27,11 @@
   let historyLoading = $state(false);
   let historyError = $state('');
   let activityHistory = $state([]);
+  let actionRunId = $state('');
+  let actionCleanup = null;
   
   let agentId = $derived(page.params.id);
+  let currentActionRun = $derived(actionRunId ? provisioningRuns.get(actionRunId) : null);
   
   const statusColors = {
     active: 'success',
@@ -72,14 +75,39 @@
     }
   }
   
+  function tagValue(event, name) {
+    return (event?.tags || []).find((tag) => tag[0] === name)?.[1] || '';
+  }
+
+  function eventBelongsToSoul(event) {
+    if (!soul || event.kind === KINDS.AGENT_SOUL) return true;
+    return tagValue(event, 'soul') === buildSoulRef(soul);
+  }
+
   function subscribeToUpdates(id = agentId) {
-    unsub = nostr.subscribe([{
+    const filters = [{
       kinds: [KINDS.AGENT_SOUL],
       '#d': [id]
-    }], {
+    }];
+
+    if (soul) {
+      filters.push({
+        kinds: [KINDS.PROVISIONING_STATUS, KINDS.PROVISIONING_RESULT, KINDS.SOUL_ACTION_LEGACY_RESULT],
+        since: Math.floor(Date.now() / 1000),
+        limit: 100
+      });
+    }
+
+    unsub = nostr.subscribe(filters, {
       onEvent: (event) => {
-        soul = parseSoulEvent(event);
+        if (!eventBelongsToSoul(event)) return;
+        if (event.kind === KINDS.AGENT_SOUL) {
+          soul = parseSoulEvent(event);
+        }
         void loadHistory();
+      },
+      onClosed: () => {
+        // Relay CLOSED is informational here; terminal lifecycle state comes only from 7950/1951 result events.
       }
     });
   }
@@ -108,10 +136,27 @@
     try {
       const displayAction = action === 'resume' ? 'reactivate' : action;
       const reason = `Requested from Soul Gallery (${displayAction})`;
-      await publishSoulAction({ soul, action, reason });
-      actionNotice = `Action "${displayAction}" submitted to relays.`;
+      if (actionCleanup) {
+        actionCleanup();
+        actionCleanup = null;
+      }
+      await publishSoulAction({
+        soul,
+        action,
+        reason,
+        beforePublish: (event) => {
+          actionRunId = event.id;
+          actionCleanup = trackLifecycleRun(event.id, { type: 'lifecycle', action });
+        }
+      });
+      actionNotice = `Action "${displayAction}" submitted to relays. Waiting for explicit 7950 result.`;
       await loadHistory();
     } catch (err) {
+      if (actionCleanup) {
+        actionCleanup();
+        actionCleanup = null;
+      }
+      actionRunId = '';
       actionError = err.message || `Failed to submit ${action}`;
     } finally {
       actionSubmitting = false;
@@ -151,6 +196,10 @@
       if (unsub) {
         unsub();
         unsub = null;
+      }
+      if (actionCleanup) {
+        actionCleanup();
+        actionCleanup = null;
       }
     };
   });
@@ -238,6 +287,14 @@
       {#if actionError}
         <div class="error-banner"><WarningIcon size={18} stroke={1.75} aria-hidden="true" /> <span>{actionError}</span></div>
       {/if}
+
+      {#if currentActionRun}
+        <div class="run-banner" class:failed={currentActionRun.status === 'failed'} class:completed={currentActionRun.status === 'completed'}>
+          <strong>Lifecycle run: {currentActionRun.action || 'action'}</strong>
+          <span>{currentActionRun.message}</span>
+          {#if currentActionRun.result?.id}<code>{currentActionRun.result.id}</code>{/if}
+        </div>
+      {/if}
       
       <!-- Info Grid -->
       <div class="info-grid">
@@ -263,6 +320,28 @@
               <dt>Bahia Service</dt>
               <dd><code>{soul.bahiaServiceId.slice(0, 8)}...</code></dd>
             {/if}
+            {#if soul.draftRef || soul.specHash}
+              <dt>Draft ref</dt>
+              <dd><code>{soul.draftRef || 'N/A'}</code></dd>
+              <dt>Spec hash</dt>
+              <dd><code>{soul.specHash || 'N/A'}</code></dd>
+            {/if}
+          </dl>
+        </section>
+
+        <section class="info-section">
+          <h3><WorkspaceIcon size={18} stroke={1.75} aria-hidden="true" /> Runtime</h3>
+          <dl>
+            <dt>Target</dt>
+            <dd>{soul.runtime?.target || 'N/A'}</dd>
+            <dt>Runtime state</dt>
+            <dd>{soul.runtime?.state || 'N/A'}</dd>
+            <dt>Runtime pubkey</dt>
+            <dd><code>{soul.runtime?.runtime_pubkey || 'N/A'}</code></dd>
+            <dt>Capability</dt>
+            <dd><code>{soul.capabilityRef || soul.runtime?.capability_ref || 'N/A'}</code></dd>
+            <dt>Binding</dt>
+            <dd><code>{soul.runtime?.runtime_binding || 'N/A'}</code></dd>
           </dl>
         </section>
         
@@ -424,7 +503,8 @@
   }
 
   .notice-banner,
-  .error-banner {
+  .error-banner,
+  .run-banner {
     border-radius: 8px;
     padding: 0.75rem 1rem;
     margin-bottom: 1rem;
@@ -444,6 +524,24 @@
     background: rgba(239, 68, 68, 0.12);
     border: 1px solid rgba(239, 68, 68, 0.35);
     color: var(--error);
+  }
+
+  .run-banner {
+    background: rgba(99, 102, 241, 0.1);
+    border: 1px solid rgba(99, 102, 241, 0.3);
+    color: var(--text-primary);
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .run-banner.completed {
+    background: rgba(34, 197, 94, 0.1);
+    border-color: rgba(34, 197, 94, 0.35);
+  }
+
+  .run-banner.failed {
+    background: rgba(239, 68, 68, 0.1);
+    border-color: rgba(239, 68, 68, 0.35);
   }
   
   /* Hero */

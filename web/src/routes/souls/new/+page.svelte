@@ -4,6 +4,25 @@
   import TemplateSelector from '$lib/components/TemplateSelector.svelte';
   import RepositoryPicker from '$lib/components/repositories/RepositoryPicker.svelte';
   import ProvisioningProgress from '$lib/components/ProvisioningProgress.svelte';
+  import { KINDS, SOUL_RUNTIME_METHODS } from '$lib/nostr/client.js';
+  import {
+    loadRuntimeCapabilities,
+    publishProvisioningRequest,
+    publishSoulDraft,
+    provisioningRuns,
+    runtimeCapabilities,
+    trackProvisioningRun
+  } from '$lib/stores/souls.js';
+  import { authState, initializeAuth, login, refreshExtensionStatus } from '$lib/stores/auth.js';
+  import {
+    capabilityLabel,
+    capabilityRef,
+    compatibleCapabilities,
+    parseKindList,
+    parseToolGrantList,
+    slugifyAgentId,
+    splitList
+  } from '../page-model.js';
   import {
     ConfiguredIcon,
     LoginIcon,
@@ -13,84 +32,77 @@
     SuccessIcon,
     WarningIcon
   } from '$lib/icons/domain-icons.js';
-  import { nostr, KINDS } from '$lib/nostr/client.js';
-  import { trackProvisioningRun, provisioningRuns } from '$lib/stores/souls.js';
-  import { authState, initializeAuth, login, refreshExtensionStatus, signWithAuth } from '$lib/stores/auth.js';
-  
-  // Form state
-  let step = $state(1); // 1: template, 2: repository, 3: configure, 4: provisioning
+
+  let step = $state(1);
   let selectedTemplate = $state(null);
   let selectedRepository = $state(null);
+  let selectedCapabilityRef = $state('');
+
   let agentId = $state('');
   let agentName = $state('');
-  let brief = $state('');
+  let purpose = $state('');
   let tier = $state('standard');
-  
-  // Provisioning state
+  let nip05 = $state('');
+  let allowedKinds = $state('1, 3, 31951, 31952, 5950, 6950, 7950, 1950');
+  let toolGrants = $state('');
+  let approvalPolicy = $state('operator');
+  let readRelays = $state('');
+  let writeRelays = $state('');
+  let controlRelays = $state('');
+  let nip65Discovery = $state(true);
+  let branch = $state('main');
+  let environment = $state('production');
+  let avatarRef = $state('');
+  let voiceRef = $state('');
+
   let requestEventId = $state(null);
   let currentRun = $state(null);
   let provisioningCleanup = null;
   let nostrInitialized = false;
-  
-  // Publishing state
-  let publishing = $state(false);
-  let publishError = null;
-  let publishResults = $state([]);
-  
-  // Error state
-  let error = $state(null);
   let submitting = $state(false);
-  
-  // Subscribe to run updates
+  let publishing = $state(false);
+  let error = $state(null);
+  let publishResults = $state([]);
+  let draftEventId = $state('');
+  let draftSpecHash = $state('');
+
+  let isAuthenticated = $derived(authState.status === 'authenticated');
+  let hasExtension = $derived(authState.extensionAvailable);
+  let authError = $derived(authState.error);
+  let userPubkey = $derived(authState.pubkey);
+  let runtimeChoices = $derived(compatibleCapabilities(runtimeCapabilities, SOUL_RUNTIME_METHODS.PROVISION));
+  let selectedCapability = $derived(runtimeChoices.find((capability) => capabilityRef(capability) === selectedCapabilityRef) || null);
+
+  $effect(() => {
+    if (runtimeChoices.length > 0 && (!selectedCapabilityRef || !selectedCapability)) {
+      selectedCapabilityRef = capabilityRef(runtimeChoices[0]);
+    }
+  });
+
   $effect(() => {
     if (requestEventId && provisioningRuns.has(requestEventId)) {
       currentRun = provisioningRuns.get(requestEventId);
     }
   });
-  
-  // Derived auth status for UI
-  let isAuthenticated = $derived(authState.status === 'authenticated');
-  let hasExtension = $derived(authState.extensionAvailable);
-  let authError = $derived(authState.error);
-  let userPubkey = $derived(authState.pubkey);
-  
+
   function handleTemplateSelect(template) {
     selectedTemplate = template;
-    if (selectedTemplate) {
-      // Pre-fill tier from template
-      tier = selectedTemplate.tier || 'standard';
-    }
+    if (template?.tier) tier = template.tier;
   }
-  
-  function nextStep() {
-    if (step === 1) {
-      step = 2;
-    } else if (step === 2) {
-      step = 3;
-    }
-  }
-  
-  function prevStep() {
-    if (step === 3) {
-      step = 2;
-    } else if (step === 2) {
-      step = 1;
-    }
-  }
-  
+
   function generateAgentId() {
-    // Generate a slug from name or random
-    if (agentName) {
-      agentId = agentName
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, '-')
-        .replace(/^-|-$/g, '')
-        .slice(0, 32);
-    } else {
-      agentId = 'agent-' + Math.random().toString(36).slice(2, 10);
-    }
+    agentId = slugifyAgentId(agentName) || `agent-${Math.random().toString(36).slice(2, 10)}`;
   }
-  
+
+  function nextStep() {
+    if (step === 1 && !agentId) generateAgentId();
+    step = Math.min(step + 1, 4);
+  }
+
+  function prevStep() {
+    step = Math.max(step - 1, 1);
+  }
+
   async function handleLogin() {
     try {
       error = null;
@@ -99,118 +111,104 @@
       error = `Login failed: ${err.message}`;
     }
   }
-  
+
+  function templateRef() {
+    return selectedTemplate ? `${KINDS.SOUL_TEMPLATE}:${selectedTemplate.pubkey}:${selectedTemplate.identifier}` : '';
+  }
+
+  function repositoryRef() {
+    if (!selectedRepository) return '';
+    return selectedRepository.repoCoordinate || selectedRepository.primaryUrl || selectedRepository.cloneUrl || selectedRepository.repoUrl || selectedRepository.webUrl || '';
+  }
+
+  function buildDraftContent() {
+    const baseBrief = purpose || selectedTemplate?.basePrompt || '';
+    return {
+      schema: 'soulfactory-draft/v1',
+      brief: baseBrief,
+      template_ref: templateRef(),
+      identity: {
+        name: agentName || agentId,
+        purpose: baseBrief,
+        tier,
+        nip05
+      },
+      runtime: {
+        target: selectedCapability?.runtime || '',
+        runtime_pubkey: selectedCapability?.pubkey || '',
+        capability_ref: selectedCapability ? capabilityRef(selectedCapability) : ''
+      },
+      permissions: {
+        allowed_kinds: parseKindList(allowedKinds),
+        tool_grants: parseToolGrantList(toolGrants),
+        approval_policy: approvalPolicy
+      },
+      relay_policy: {
+        read: splitList(readRelays),
+        write: splitList(writeRelays),
+        control: splitList(controlRelays),
+        nip65_discovery: nip65Discovery
+      },
+      workspace: {
+        repo: repositoryRef(),
+        branch,
+        environment
+      },
+      assets: {
+        avatar_ref: avatarRef,
+        voice_ref: voiceRef
+      }
+    };
+  }
+
   async function submitProvisioning() {
     error = null;
-    publishError = null;
     submitting = true;
     publishing = true;
-    
+
     try {
-      // Validate
-      if (!agentId) {
-        generateAgentId();
-      }
-      if (!brief && !selectedTemplate) {
-        throw new Error('Please provide a brief or select a template');
-      }
-      
-      // Ensure authenticated
-      const auth = authState;
+      if (!agentId) generateAgentId();
+      if (!agentName && !agentId) throw new Error('Name or agent id is required');
+      if (!purpose && !selectedTemplate) throw new Error('Purpose or template is required');
+      if (!selectedCapability) throw new Error('Select a discovered compatible runtime capability before provisioning');
+
       if (!isAuthenticated) {
-        // Try to login
         await login();
-        
-        // Re-check auth state
-        const authAfterLogin = authState;
-        if (authAfterLogin.status !== 'authenticated') {
-          throw new Error('Authentication required to provision a soul');
-        }
+        if (authState.status !== 'authenticated') throw new Error('Authentication required to provision a soul');
       }
-      
-      // Get current auth state
-      const currentAuth = authState;
-      
-      // Build the provisioning request event
-      const tags = [
-        ['agent-id', agentId],
-        ['name', agentName || agentId],
-        ['tier', tier],
-        ['output', 'application/json']
-      ];
-      
-      if (selectedTemplate) {
-        // Reference: "31950:<pubkey>:<identifier>"
-        tags.push(['template', `31950:${selectedTemplate.pubkey}:${selectedTemplate.identifier}`]);
-      }
-      
-      const baseBrief = brief || selectedTemplate?.basePrompt || '';
-      const repoContext = selectedRepository
-        ? `Repository context:\n- name: ${selectedRepository.displayName}\n- coordinate: ${selectedRepository.repoCoordinate || 'N/A'}\n- clone: ${selectedRepository.cloneUrl || selectedRepository.repoUrl}\n- web: ${selectedRepository.webUrl || 'N/A'}\n\n`
-        : '';
-      
-      const content = JSON.stringify({
-        brief: repoContext ? `${repoContext}${baseBrief}` : baseBrief
+
+      const draftContent = buildDraftContent();
+      const draft = await publishSoulDraft({
+        agentId,
+        content: draftContent,
+        templateRef: templateRef()
       });
-      
-      // Create unsigned event
-      const unsignedEvent = {
-        kind: KINDS.PROVISIONING_REQUEST,
-        created_at: Math.floor(Date.now() / 1000),
-        pubkey: currentAuth.pubkey,
-        tags,
-        content
-      };
-      
-      // Sign the event with NIP-07
-      const signedEvent = await signWithAuth(unsignedEvent);
-      
-      // Set request ID from signed event
-      requestEventId = signedEvent.id;
-      
-      // Start tracking before publish
-      provisioningCleanup = trackProvisioningRun(requestEventId, {
-        onProgress: (p) => console.log('[provisioning] Progress:', p),
-        onComplete: (data) => console.log('[provisioning] Complete:', data),
-        onError: (err) => console.error('[provisioning] Error:', err)
+      draftEventId = draft.event.id;
+      draftSpecHash = draft.specHash;
+
+      const draftCoordinate = `${KINDS.SOUL_DRAFT}:${draft.event.pubkey}:${agentId}`;
+      const request = await publishProvisioningRequest({
+        agentId,
+        name: agentName || agentId,
+        tier,
+        brief: draftContent.brief,
+        draftRef: draftCoordinate,
+        draftEvent: draft.event,
+        draftContent,
+        templateRef: templateRef(),
+        specHash: draft.specHash,
+        beforePublish: (event) => {
+          requestEventId = event.id;
+          provisioningCleanup = trackProvisioningRun(event.id, {
+            onError: (message) => console.error('[souls/new] provisioning failed:', message)
+          });
+        }
       });
-      
-      // Publish to relays
-      publishResults = await nostr.publish(signedEvent);
-      
-      // Check if any relay accepted the event via OK
-      const successfulPublish = publishResults.some(result => result.accepted === true);
-      
-      if (!successfulPublish) {
-        // Clean up tracking if publish failed
-        if (provisioningCleanup) {
-          provisioningCleanup();
-          provisioningCleanup = null;
-        }
 
-        if (publishResults.length === 0) {
-          throw new Error('No connected relays available for publishing');
-        }
-
-        const relayErrors = publishResults
-          .map((result) => {
-            const relayName = result.relay || 'relay';
-            const details = result.message || (result.sent ? 'event rejected' : 'send failed');
-            return `${relayName}: ${details}`;
-          })
-          .join('; ');
-
-        throw new Error(`Provisioning request was not accepted by any relay. ${relayErrors}`);
-      }
-      
-      // Move to step 4
+      publishResults = request.publishResults;
       step = 4;
-      
     } catch (err) {
-      publishError = err.message;
-      error = err.message;
-      
-      // Clean up tracking on error
+      error = err.message || 'Failed to publish provisioning request';
       if (provisioningCleanup) {
         provisioningCleanup();
         provisioningCleanup = null;
@@ -220,39 +218,31 @@
       publishing = false;
     }
   }
-  
+
   function viewSoul() {
     goto(`/souls/${agentId}`);
   }
-  
+
   $effect(() => {
     if (nostrInitialized) return;
     nostrInitialized = true;
 
     async function initializeNostr() {
-      // The layout/AuthGuard initializes auth before this protected route mounts.
-      // Avoid resetting auth back to "checking", which would make AuthGuard unmount
-      // and remount the wizard in a loop.
       if (authState.status === 'unknown') {
         await initializeAuth();
       } else if (!authState.extensionAvailable) {
         await refreshExtensionStatus();
       }
-      
-      // The singleton relay lifecycle is managed globally (by bootstrap / Settings).
-      // Do NOT call nostr.connect() here \u2014 passing user write-relay URLs would
-      // overwrite the singleton's relay list and close Bahia control-plane sockets.
+      await loadRuntimeCapabilities({ method: SOUL_RUNTIME_METHODS.PROVISION });
     }
 
     void untrack(() => initializeNostr());
 
     return () => {
-      // Clean up provisioning tracking
       if (provisioningCleanup) {
         provisioningCleanup();
         provisioningCleanup = null;
       }
-      // Note: Do not disconnect nostr client as it's shared globally
     };
   });
 </script>
@@ -264,652 +254,167 @@
 <div class="page">
   <header class="page-header">
     <a href="/souls" class="back-link">← Back to Gallery</a>
-    <h1><SoulIcon size={28} stroke={1.75} aria-hidden="true" /> Create New Soul</h1>
-    <p class="subtitle">Design and provision a new agent identity</p>
+    <h1><SoulIcon size={28} stroke={1.75} aria-hidden="true" /> Create Runtime-Aware Soul</h1>
+    <p class="subtitle">Save a signed 31952 draft, then publish a 5950 provisioning request that references it.</p>
   </header>
-  
-  <!-- Progress indicator -->
+
   <div class="wizard-progress">
-    <div class="progress-step" class:active={step >= 1} class:complete={step > 1}>
-      <span class="step-num">1</span>
-      <span class="step-label">Template</span>
-    </div>
-    <div class="progress-line" class:active={step > 1}></div>
-    <div class="progress-step" class:active={step >= 2} class:complete={step > 2}>
-      <span class="step-num">2</span>
-      <span class="step-label">Repository</span>
-    </div>
-    <div class="progress-line" class:active={step > 2}></div>
-    <div class="progress-step" class:active={step >= 3} class:complete={step > 3}>
-      <span class="step-num">3</span>
-      <span class="step-label">Configure</span>
-    </div>
-    <div class="progress-line" class:active={step > 3}></div>
-    <div class="progress-step" class:active={step >= 4}>
-      <span class="step-num">4</span>
-      <span class="step-label">Provision</span>
-    </div>
+    {#each ['Identity', 'Runtime', 'Scope', 'Provision'] as label, index}
+      <div class="progress-step" class:active={step >= index + 1} class:complete={step > index + 1}>
+        <span class="step-num">{index + 1}</span>
+        <span class="step-label">{label}</span>
+      </div>
+      {#if index < 3}<div class="progress-line" class:active={step > index + 1}></div>{/if}
+    {/each}
   </div>
-  
-  <!-- Auth Status Banner (Step 2) -->
-  {#if step === 3}
+
+  {#if step < 4}
     <div class="auth-status" class:authenticated={isAuthenticated} class:error={authError}>
       {#if authError}
-        <span class="icon" aria-hidden="true"><WarningIcon size={24} stroke={1.75} /></span>
-        <div class="status-content">
-          <strong>Extension Error</strong>
-          <p>{authError}</p>
-        </div>
+        <WarningIcon size={22} stroke={1.75} aria-hidden="true" />
+        <div><strong>Signer error</strong><p>{authError}</p></div>
       {:else if !hasExtension}
-        <span class="icon" aria-hidden="true"><ConfiguredIcon size={24} stroke={1.75} /></span>
-        <div class="status-content">
-          <strong>NIP-07 Extension Required</strong>
-          <p>Please install a Nostr browser extension (Alby, nos2x, etc.) to sign events</p>
-        </div>
+        <ConfiguredIcon size={22} stroke={1.75} aria-hidden="true" />
+        <div><strong>Nostr signer required</strong><p>Use NIP-07 or Nostr Connect to sign the draft and provisioning events.</p></div>
       {:else if isAuthenticated && userPubkey}
-        <span class="icon" aria-hidden="true"><SuccessIcon size={24} stroke={1.75} /></span>
-        <div class="status-content">
-          <strong>Authenticated</strong>
-          <p>Pubkey: {userPubkey.slice(0, 8)}...{userPubkey.slice(-8)}</p>
-        </div>
+        <SuccessIcon size={22} stroke={1.75} aria-hidden="true" />
+        <div><strong>Authenticated</strong><p>{userPubkey.slice(0, 8)}…{userPubkey.slice(-8)}</p></div>
       {:else if authState.status === 'authenticating'}
-        <span class="icon" aria-hidden="true"><PendingIcon size={24} stroke={1.75} /></span>
-        <div class="status-content">
-          <strong>Requesting Permission</strong>
-          <p>Check your extension for approval prompt</p>
-        </div>
+        <PendingIcon size={22} stroke={1.75} aria-hidden="true" />
+        <div><strong>Requesting permission</strong><p>Approve the signer prompt.</p></div>
       {:else}
-        <span class="icon" aria-hidden="true"><LoginIcon size={24} stroke={1.75} /></span>
-        <div class="status-content">
-          <strong>NIP-07 Login Required</strong>
-          <p>You'll be prompted to authorize signing when you provision the soul</p>
-        </div>
-        {#if hasExtension && !isAuthenticated}
-          <button class="btn-login" onclick={handleLogin}>
-            Login Now
-          </button>
-        {/if}
+        <LoginIcon size={22} stroke={1.75} aria-hidden="true" />
+        <div><strong>Login required</strong><p>You will sign a draft and request before provisioning.</p></div>
+        <button class="btn-secondary" onclick={handleLogin}>Login</button>
       {/if}
     </div>
   {/if}
-  
-  <!-- Error -->
+
   {#if error}
-    <div class="error-banner">
-      <WarningIcon size={18} stroke={1.75} aria-hidden="true" />
-      {error}
-    </div>
+    <div class="error-banner"><WarningIcon size={18} stroke={1.75} aria-hidden="true" /> {error}</div>
   {/if}
-  
-  <!-- Step 1: Template Selection -->
+
   {#if step === 1}
-    <div class="wizard-content">
-      <TemplateSelector 
-        selected={selectedTemplate} 
-        onSelect={handleTemplateSelect}
-      />
-      
-      <div class="wizard-actions">
-        <div></div>
-        <button class="btn-primary" onclick={nextStep}>
-          Continue →
-        </button>
-      </div>
-    </div>
-  {/if}
-  
-  <!-- Step 2: Repository (Optional) -->
-  {#if step === 2}
-    <div class="wizard-content">
-      <div class="config-form">
-        <div class="form-section">
-          <h3>Repository</h3>
-          <p class="hint">Repository is optional</p>
-          <RepositoryPicker bind:value={selectedRepository} context="soul" requirePrimaryUrl={false} />
+    <section class="wizard-content">
+      <div class="form-section">
+        <h3>Identity draft</h3>
+        <label>Name<input bind:value={agentName} onblur={generateAgentId} placeholder="Scout" /></label>
+        <label>Agent ID<input bind:value={agentId} placeholder="scout" /></label>
+        <label>Purpose<textarea rows="5" bind:value={purpose} placeholder="What should this soul do?"></textarea></label>
+        <div class="two-col">
+          <label>Tier<select bind:value={tier}><option value="lightweight">Lightweight</option><option value="standard">Standard</option><option value="heavy">Heavy</option></select></label>
+          <label>NIP-05 target<input bind:value={nip05} placeholder="optional" /></label>
         </div>
       </div>
-      
-      <div class="wizard-actions">
-        <button class="btn-secondary" onclick={prevStep}>
-          ← Back
-        </button>
-        <button class="btn-primary" onclick={nextStep}>
-          Continue →
-        </button>
-      </div>
-    </div>
-  {/if}
-  
-  <!-- Step 3: Configure -->
-  {#if step === 3}
-    <div class="wizard-content">
-      <div class="config-form">
-        <div class="form-section">
-          <h3>Agent Identity</h3>
-          
-          <div class="form-group">
-            <label for="agentName">Name</label>
-            <input 
-              id="agentName"
-              type="text" 
-              bind:value={agentName}
-              placeholder="e.g., Scout, CodeBot, ResearchHelper"
-              onblur={generateAgentId}
-            />
-            <span class="hint">A friendly name for your agent</span>
-          </div>
-          
-          <div class="form-group">
-            <label for="agentId">Agent ID</label>
-            <input 
-              id="agentId"
-              type="text" 
-              bind:value={agentId}
-              placeholder="auto-generated from name"
-            />
-            <span class="hint">Unique identifier (lowercase, no spaces)</span>
-          </div>
-        </div>
-        
-        <div class="form-section">
-          <h3>Configuration</h3>
-          
-          <div class="form-group">
-            <label for="tier">Resource Tier</label>
-            <select id="tier" bind:value={tier}>
-              <option value="lightweight">Lightweight - Fast, minimal resources</option>
-              <option value="standard">Standard - Balanced capabilities</option>
-              <option value="heavy">Heavy - Maximum resources</option>
-            </select>
-          </div>
-          
-          <div class="form-group">
-            <label for="brief">
-              Brief
-              {#if selectedTemplate}
-                <span class="badge">Extends template</span>
-              {/if}
-            </label>
-            <textarea 
-              id="brief"
-              bind:value={brief}
-              rows="6"
-              placeholder={selectedTemplate 
-                ? 'Add specific instructions or customizations...'
-                : 'Describe what this agent should do, its personality, capabilities...'}
-            ></textarea>
-            <span class="hint">
-              {#if selectedTemplate}
-                Optional additions to the template's base prompt
-              {:else}
-                Required for custom souls - describe the agent's purpose and behavior
-              {/if}
-            </span>
-          </div>
-        </div>
-        
-        {#if selectedTemplate}
-          <div class="template-preview">
-            <h4>Selected Template: {selectedTemplate.name}</h4>
-            <p class="template-desc">{selectedTemplate.description}</p>
-            <details>
-              <summary>View base prompt</summary>
-              <pre>{selectedTemplate.basePrompt}</pre>
-            </details>
+      <TemplateSelector selected={selectedTemplate} onSelect={handleTemplateSelect} />
+      <div class="wizard-actions"><span></span><button class="btn-primary" onclick={nextStep}>Continue →</button></div>
+    </section>
+  {:else if step === 2}
+    <section class="wizard-content">
+      <div class="form-section">
+        <h3>Runtime capability</h3>
+        {#if runtimeChoices.length === 0}
+          <div class="warning-box">No compatible 30317 runtime capability has been discovered for {SOUL_RUNTIME_METHODS.PROVISION}. Provisioning is disabled until OpenClaw or Metiq advertises support.</div>
+        {:else}
+          <label>Runtime target<select bind:value={selectedCapabilityRef}>{#each runtimeChoices as capability}<option value={capabilityRef(capability)}>{capabilityLabel(capability)}</option>{/each}</select></label>
+          <div class="runtime-summary">
+            <strong>{selectedCapability?.runtime}</strong>
+            <span>runtime pubkey: {selectedCapability?.pubkey?.slice(0, 12)}…</span>
+            <span>capability: {capabilityRef(selectedCapability)}</span>
           </div>
         {/if}
       </div>
-      
-      <div class="wizard-actions">
-        <button class="btn-secondary" onclick={prevStep}>
-          ← Back
-        </button>
-        <button 
-          class="btn-primary" 
-          onclick={submitProvisioning}
-          disabled={submitting || (!hasExtension && !isAuthenticated)}
-        >
-          {#if publishing}
-            <span class="spinner"></span>
-            Signing & Publishing...
-          {:else if submitting}
-            <span class="spinner"></span>
-            Submitting...
-          {:else}
-            <SeedIcon size={18} stroke={1.75} aria-hidden="true" />
-            Provision Soul
-          {/if}
-        </button>
+      <div class="wizard-actions"><button class="btn-secondary" onclick={prevStep}>← Back</button><button class="btn-primary" onclick={nextStep} disabled={runtimeChoices.length === 0}>Continue →</button></div>
+    </section>
+  {:else if step === 3}
+    <section class="wizard-content">
+      <div class="form-section">
+        <h3>Permissions</h3>
+        <label>Allowed Nostr kinds<input bind:value={allowedKinds} placeholder="1, 3, 31951" /></label>
+        <label>Tool grants<textarea rows="3" bind:value={toolGrants} placeholder="mcp-server: read, write"></textarea></label>
+        <label>Approval policy<select bind:value={approvalPolicy}><option value="operator">Operator approval</option><option value="auto-safe">Auto-approve safe tools</option><option value="manual">Manual only</option></select></label>
       </div>
-    </div>
-  {/if}
-  
-  <!-- Step 4: Provisioning -->
-  {#if step === 4}
-    <div class="wizard-content">
-      <div class="publish-success">
-        <span class="icon" aria-hidden="true"><SuccessIcon size={28} stroke={2} /></span>
-        <h3>Event Signed & Published</h3>
-        <div class="event-details">
-          <div class="detail-row">
-            <span class="label">Request ID:</span>
-            <code>{requestEventId}</code>
-          </div>
-          <div class="detail-row">
-            <span class="label">Published to:</span>
-            <span>{publishResults.filter(r => r.accepted).length} relay(s)</span>
-          </div>
+      <div class="form-section">
+        <h3>Relays</h3>
+        <label><input type="checkbox" bind:checked={nip65Discovery} /> Use NIP-65 relay discovery when available</label>
+        <label>Read relays<textarea rows="2" bind:value={readRelays} placeholder="wss://relay.example"></textarea></label>
+        <label>Write relays<textarea rows="2" bind:value={writeRelays}></textarea></label>
+        <label>Control relays<textarea rows="2" bind:value={controlRelays}></textarea></label>
+      </div>
+      <div class="form-section">
+        <h3>Repository and assets</h3>
+        <RepositoryPicker bind:value={selectedRepository} context="soul" requirePrimaryUrl={false} />
+        <div class="two-col">
+          <label>Branch<input bind:value={branch} /></label>
+          <label>Environment<input bind:value={environment} /></label>
         </div>
+        <label>Avatar ref<input bind:value={avatarRef} placeholder="blob:, blossom:, https://…" /></label>
+        <label>Voice ref<input bind:value={voiceRef} placeholder="optional existing voice asset ref" /></label>
       </div>
-      
-      <ProvisioningProgress 
-        run={currentRun} 
-        onComplete={viewSoul}
-      />
-    </div>
+      <div class="wizard-actions">
+        <button class="btn-secondary" onclick={prevStep}>← Back</button>
+        <button class="btn-primary" onclick={submitProvisioning} disabled={submitting || runtimeChoices.length === 0 || (!hasExtension && !isAuthenticated)}>
+          {#if publishing}<span class="spinner"></span>Signing & publishing…{:else}<SeedIcon size={18} stroke={1.75} aria-hidden="true" />Save draft & provision{/if}
+        </button>
+      </div>
+    </section>
+  {:else if step === 4}
+    <section class="wizard-content">
+      <div class="publish-success">
+        <SuccessIcon size={28} stroke={2} aria-hidden="true" />
+        <h3>Draft and request published</h3>
+        <p>Terminal status will come only from explicit 7950 result events.</p>
+        <dl>
+          <dt>31952 draft</dt><dd><code>{draftEventId}</code></dd>
+          <dt>spec hash</dt><dd><code>{draftSpecHash}</code></dd>
+          <dt>5950 request</dt><dd><code>{requestEventId}</code></dd>
+          <dt>accepted relays</dt><dd>{publishResults.filter((result) => result.accepted).length}</dd>
+        </dl>
+      </div>
+      <ProvisioningProgress run={currentRun} onComplete={viewSoul} />
+    </section>
   {/if}
 </div>
 
 <style>
-  .page {
-    max-width: 800px;
-    margin: 0 auto;
-  }
-  
-  .page-header {
-    margin-bottom: 2rem;
-  }
-  
-  .back-link {
-    font-size: 0.875rem;
-    color: var(--text-muted);
-    text-decoration: none;
-    display: inline-block;
-    margin-bottom: 0.5rem;
-  }
-  
-  .back-link:hover {
-    color: var(--primary);
-  }
-  
-  .page-header h1 {
-    font-size: 1.75rem;
-    margin: 0 0 0.25rem 0;
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-  }
-  
-  .subtitle {
-    color: var(--text-muted);
-    margin: 0;
-  }
-  
-  .wizard-progress {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 0.5rem;
-    margin-bottom: 2rem;
-    padding: 1.5rem;
-    background: var(--card-bg);
-    border-radius: 12px;
-    border: 1px solid var(--border-color);
-  }
-  
-  .progress-step {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    color: var(--text-muted);
-  }
-  
-  .progress-step.active {
-    color: var(--primary);
-  }
-  
-  .progress-step.complete {
-    color: var(--success);
-  }
-  
-  .step-num {
-    width: 28px;
-    height: 28px;
-    border-radius: 50%;
-    border: 2px solid currentColor;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 0.8rem;
-    font-weight: 600;
-  }
-  
-  .progress-step.active .step-num,
-  .progress-step.complete .step-num {
-    background: currentColor;
-    color: white;
-  }
-  
-  .step-label {
-    font-size: 0.875rem;
-    font-weight: 500;
-  }
-  
-  .progress-line {
-    width: 60px;
-    height: 2px;
-    background: var(--border-color);
-  }
-  
-  .progress-line.active {
-    background: var(--primary);
-  }
-  
-  .auth-status {
-    display: flex;
-    align-items: center;
-    gap: 1rem;
-    padding: 1rem 1.25rem;
-    background: rgba(99, 102, 241, 0.1);
-    border: 1px solid rgba(99, 102, 241, 0.3);
-    border-radius: 8px;
-    margin-bottom: 1.5rem;
-  }
-  
-  .auth-status.authenticated {
-    background: rgba(34, 197, 94, 0.1);
-    border-color: rgba(34, 197, 94, 0.3);
-    color: #22c55e;
-  }
-  
-  .auth-status.error {
-    background: rgba(239, 68, 68, 0.1);
-    border-color: rgba(239, 68, 68, 0.3);
-    color: #ef4444;
-  }
-  
-  .auth-status .icon {
-    flex-shrink: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-  }
-  
-  .auth-status .status-content {
-    flex: 1;
-  }
-  
-  .auth-status .status-content strong {
-    display: block;
-    font-size: 0.9rem;
-    margin-bottom: 0.25rem;
-  }
-  
-  .auth-status .status-content p {
-    margin: 0;
-    font-size: 0.8rem;
-    opacity: 0.9;
-  }
-  
-  .auth-status .btn-login {
-    background: var(--primary);
-    color: white;
-    border: none;
-    padding: 0.5rem 1rem;
-    border-radius: 6px;
-    font-size: 0.85rem;
-    font-weight: 500;
-    cursor: pointer;
-    transition: all 0.15s;
-  }
-  
-  .auth-status .btn-login:hover {
-    background: #5558e3;
-  }
-  
-  .error-banner {
-    background: rgba(239, 68, 68, 0.1);
-    border: 1px solid rgba(239, 68, 68, 0.3);
-    color: #ef4444;
-    padding: 1rem;
-    border-radius: 8px;
-    margin-bottom: 1.5rem;
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-  }
-  
-  .wizard-content {
-    background: var(--card-bg);
-    border-radius: 12px;
-    padding: 1.5rem;
-    border: 1px solid var(--border-color);
-  }
-  
-  .wizard-actions {
-    display: flex;
-    justify-content: space-between;
-    margin-top: 2rem;
-    padding-top: 1.5rem;
-    border-top: 1px solid var(--border-color);
-  }
-  
-  .btn-primary, .btn-secondary {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.5rem;
-    padding: 0.75rem 1.5rem;
-    border-radius: 8px;
-    font-weight: 500;
-    cursor: pointer;
-    transition: all 0.15s;
-    border: none;
-  }
-  
-  .btn-primary {
-    background: var(--primary);
-    color: white;
-  }
-  
-  .btn-primary:hover:not(:disabled) {
-    background: #5558e3;
-  }
-  
-  .btn-primary:disabled {
-    opacity: 0.6;
-    cursor: not-allowed;
-  }
-  
-  .btn-secondary {
-    background: transparent;
-    color: var(--text-muted);
-    border: 1px solid var(--border-color);
-  }
-  
-  .btn-secondary:hover {
-    color: var(--text-primary);
-    border-color: var(--text-muted);
-  }
-  
-  .config-form {
-    display: flex;
-    flex-direction: column;
-    gap: 2rem;
-  }
-  
-  .form-section h3 {
-    font-size: 1rem;
-    margin: 0 0 1rem 0;
-    padding-bottom: 0.5rem;
-    border-bottom: 1px solid var(--border-color);
-  }
-  
-  .form-group {
-    margin-bottom: 1.25rem;
-  }
-  
-  .form-group label {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    font-size: 0.875rem;
-    font-weight: 500;
-    margin-bottom: 0.5rem;
-    color: var(--text-primary);
-  }
-  
-  .form-group .badge {
-    font-size: 0.65rem;
-    padding: 0.15rem 0.4rem;
-    background: rgba(99, 102, 241, 0.15);
-    color: var(--primary);
-    border-radius: 4px;
-    font-weight: normal;
-  }
-  
-  .form-group input,
-  .form-group select,
-  .form-group textarea {
-    width: 100%;
-    background: var(--bg);
-    border: 1px solid var(--border-color);
-    border-radius: 8px;
-    padding: 0.75rem 1rem;
-    color: var(--text-primary);
-    font-size: 0.9rem;
-  }
-  
-  .form-group textarea {
-    resize: vertical;
-    min-height: 120px;
-    font-family: inherit;
-  }
-  
-  .form-group input:focus,
-  .form-group select:focus,
-  .form-group textarea:focus {
-    outline: none;
-    border-color: var(--primary);
-  }
-  
-  .form-group .hint {
-    display: block;
-    font-size: 0.75rem;
-    color: var(--text-muted);
-    margin-top: 0.35rem;
-  }
-  
-  .template-preview {
-    background: rgba(99, 102, 241, 0.05);
-    border: 1px solid rgba(99, 102, 241, 0.2);
-    border-radius: 8px;
-    padding: 1rem;
-  }
-  
-  .template-preview h4 {
-    margin: 0 0 0.25rem 0;
-    font-size: 0.9rem;
-    color: var(--primary);
-  }
-  
-  .template-preview .template-desc {
-    margin: 0 0 0.75rem 0;
-    font-size: 0.85rem;
-    color: var(--text-muted);
-  }
-  
-  .template-preview details {
-    font-size: 0.8rem;
-  }
-  
-  .template-preview summary {
-    cursor: pointer;
-    color: var(--text-muted);
-  }
-  
-  .template-preview pre {
-    background: var(--bg);
-    padding: 0.75rem;
-    border-radius: 6px;
-    margin-top: 0.5rem;
-    font-size: 0.75rem;
-    overflow-x: auto;
-    white-space: pre-wrap;
-    max-height: 200px;
-    overflow-y: auto;
-  }
-  
-  .publish-success {
-    text-align: center;
-    padding: 2rem;
-    background: rgba(34, 197, 94, 0.05);
-    border: 1px solid rgba(34, 197, 94, 0.2);
-    border-radius: 8px;
-    margin-bottom: 2rem;
-  }
-  
-  .publish-success .icon {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 48px;
-    height: 48px;
-    background: #22c55e;
-    color: white;
-    border-radius: 50%;
-    margin-bottom: 1rem;
-  }
-  
-  .publish-success h3 {
-    font-size: 1.25rem;
-    margin: 0 0 1rem 0;
-    color: var(--text-primary);
-  }
-  
-  .event-details {
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
-    max-width: 500px;
-    margin: 0 auto;
-  }
-  
-  .detail-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 0.5rem 1rem;
-    background: var(--card-bg);
-    border-radius: 6px;
-    font-size: 0.85rem;
-  }
-  
-  .detail-row .label {
-    color: var(--text-muted);
-    font-weight: 500;
-  }
-  
-  .detail-row code {
-    background: var(--bg);
-    padding: 0.25rem 0.5rem;
-    border-radius: 4px;
-    font-size: 0.75rem;
-    font-family: monospace;
-    max-width: 300px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-  
-  .spinner {
-    width: 16px;
-    height: 16px;
-    border: 2px solid rgba(255,255,255,0.3);
-    border-top-color: white;
-    border-radius: 50%;
-    animation: spin 1s linear infinite;
-  }
-  
-  @keyframes spin {
-    to { transform: rotate(360deg); }
-  }
+  .page { max-width: 920px; margin: 0 auto; }
+  .page-header { margin-bottom: 1.5rem; }
+  .back-link { color: var(--text-muted); text-decoration: none; font-size: 0.875rem; }
+  h1 { display: flex; align-items: center; gap: 0.5rem; margin: 0 0 0.25rem; }
+  .subtitle, p { color: var(--text-muted); }
+  .wizard-progress, .auth-status, .wizard-content, .publish-success { background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 12px; }
+  .wizard-progress { display: flex; align-items: center; justify-content: center; gap: 0.5rem; padding: 1rem; margin-bottom: 1rem; }
+  .progress-step { display: flex; align-items: center; gap: 0.4rem; color: var(--text-muted); }
+  .progress-step.active { color: var(--primary); }
+  .progress-step.complete { color: var(--success); }
+  .step-num { width: 26px; height: 26px; border: 2px solid currentColor; border-radius: 999px; display: grid; place-items: center; font-size: 0.8rem; font-weight: 700; }
+  .progress-step.active .step-num, .progress-step.complete .step-num { background: currentColor; color: white; }
+  .progress-line { width: 48px; height: 2px; background: var(--border-color); }
+  .progress-line.active { background: var(--primary); }
+  .auth-status { display: flex; align-items: center; gap: 0.75rem; padding: 0.85rem 1rem; margin-bottom: 1rem; }
+  .auth-status.authenticated { border-color: rgba(34, 197, 94, 0.4); }
+  .auth-status.error, .error-banner { border-color: rgba(239, 68, 68, 0.4); color: var(--error); }
+  .auth-status p { margin: 0.15rem 0 0; font-size: 0.8rem; }
+  .wizard-content { padding: 1.25rem; }
+  .form-section { display: grid; gap: 0.9rem; margin-bottom: 1.25rem; }
+  .form-section h3 { margin: 0; padding-bottom: 0.5rem; border-bottom: 1px solid var(--border-color); }
+  label { display: grid; gap: 0.35rem; font-size: 0.85rem; color: var(--text-primary); }
+  input, select, textarea { width: 100%; background: var(--bg); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); padding: 0.65rem 0.75rem; font: inherit; box-sizing: border-box; }
+  textarea { resize: vertical; }
+  .two-col { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.85rem; }
+  .wizard-actions { display: flex; justify-content: space-between; gap: 0.75rem; padding-top: 1rem; border-top: 1px solid var(--border-color); }
+  .btn-primary, .btn-secondary { display: inline-flex; align-items: center; gap: 0.45rem; border-radius: 8px; padding: 0.65rem 1rem; border: 1px solid transparent; cursor: pointer; font-weight: 600; text-decoration: none; }
+  .btn-primary { background: var(--primary); color: white; }
+  .btn-secondary { background: transparent; color: var(--text-muted); border-color: var(--border-color); }
+  button:disabled { opacity: 0.55; cursor: not-allowed; }
+  .error-banner, .warning-box { padding: 0.85rem 1rem; border-radius: 8px; margin-bottom: 1rem; background: rgba(239, 68, 68, 0.08); border: 1px solid rgba(239, 68, 68, 0.25); }
+  .warning-box { color: var(--warning); background: rgba(245, 158, 11, 0.08); border-color: rgba(245, 158, 11, 0.3); }
+  .runtime-summary { display: grid; gap: 0.35rem; background: var(--bg); border: 1px solid var(--border-color); border-radius: 8px; padding: 0.75rem; font-size: 0.82rem; color: var(--text-muted); }
+  .publish-success { text-align: center; padding: 1.25rem; margin-bottom: 1rem; }
+  .publish-success dl { display: grid; grid-template-columns: 120px 1fr; gap: 0.4rem 0.75rem; text-align: left; }
+  .publish-success dt { color: var(--text-muted); }
+  code { background: var(--bg); border-radius: 4px; padding: 0.15rem 0.35rem; overflow-wrap: anywhere; }
+  .spinner { width: 16px; height: 16px; border: 2px solid rgba(255,255,255,0.35); border-top-color: white; border-radius: 50%; animation: spin 1s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @media (max-width: 720px) { .wizard-progress { align-items: flex-start; flex-direction: column; } .progress-line { display: none; } .two-col { grid-template-columns: 1fr; } }
 </style>

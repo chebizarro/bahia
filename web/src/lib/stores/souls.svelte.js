@@ -588,7 +588,7 @@ export async function publishSoulDraft({ agentId, content = {}, templateRef = ''
   return { event: signedEvent, publishResults, specHash: resolvedSpecHash };
 }
 
-export async function publishSoulAction({ soul, action, reason = '', content = '', extraTags = [] }) {
+export async function publishSoulAction({ soul, action, reason = '', content = '', extraTags = [], beforePublish = null }) {
   if (!soul) throw new Error('Soul is required');
   if (!action) throw new Error('Action is required');
 
@@ -619,6 +619,7 @@ export async function publishSoulAction({ soul, action, reason = '', content = '
   };
 
   const signedEvent = await signWithAuth(unsignedEvent);
+  if (beforePublish) beforePublish(signedEvent);
   const publishResults = await nostr.publish(signedEvent);
 
   ensureRelayAcceptance(publishResults, `Soul action "${action}" was not accepted by any relay`);
@@ -629,6 +630,7 @@ export async function publishSoulAction({ soul, action, reason = '', content = '
 export async function publishSoulUpdateAction({
   soul,
   draft = null,
+  draftRef = '',
   draftEventId = '',
   patch = null,
   resolvedSpec = null,
@@ -641,12 +643,17 @@ export async function publishSoulUpdateAction({
 
   const previousHash = previousSpecHash || soul.specHash || soul.previousSpecHash || '';
   const nextHash = newSpecHash || draft?.specHash || draft?.content?.spec_hash || '';
-  const draftRef = draftEventId || draft?.id || soul.draftRef || '';
+  const resolvedDraftRef = draftRef || draft?.coordinate || draft?.draftRef || soul.draftRef || '';
+  const resolvedDraftEventId = draftEventId || draft?.event?.id || draft?.id || '';
   const payload = {
     schema: 'soulfactory-action/v1',
     action: SOUL_LIFECYCLE_ACTIONS.UPDATE,
     method: SOUL_RUNTIME_METHODS.UPDATE,
-    draft: draftRef,
+    draft: resolvedDraftRef,
+    draft_ref: resolvedDraftRef,
+    draft_event_id: resolvedDraftEventId,
+    spec_hash: nextHash,
+    previous_spec_hash: previousHash,
     requested_at: Math.floor(Date.now() / 1000),
     params: {
       update_mode: updateMode,
@@ -662,7 +669,9 @@ export async function publishSoulUpdateAction({
     ['method', SOUL_RUNTIME_METHODS.UPDATE],
     ['request-kind', String(KINDS.SOUL_ACTION)]
   ];
-  maybePushTag(extraTags, 'draft', draftRef);
+  maybePushTag(extraTags, 'draft', resolvedDraftRef);
+  maybePushTag(extraTags, 'draft-event', resolvedDraftEventId);
+  maybePushTag(extraTags, 'e', resolvedDraftEventId, '', 'draft');
   maybePushTag(extraTags, 'previous-spec-hash', previousHash);
   maybePushTag(extraTags, 'spec-hash', nextHash);
 
@@ -673,6 +682,81 @@ export async function publishSoulUpdateAction({
     content: payload,
     extraTags
   });
+}
+
+export async function publishProvisioningRequest({
+  agentId,
+  name = '',
+  tier = 'standard',
+  brief = '',
+  draftRef = '',
+  draftEvent = null,
+  draftEventId = '',
+  draftContent = {},
+  templateRef = '',
+  specHash = '',
+  beforePublish = null
+} = {}) {
+  await ensureAuthenticated('Authentication required to provision a soul');
+
+  const id = agentId || draftContent?.agent_id || draftContent?.agentId;
+  if (!id) throw new Error('Provisioning request requires an agent id');
+
+  const resolvedName = name || draftContent?.identity?.name || id;
+  const resolvedTier = tier || draftContent?.identity?.tier || 'standard';
+  const resolvedDraftEventId = draftEventId || draftEvent?.id || '';
+  const resolvedDraftRef = draftRef || (draftEvent?.pubkey ? `${KINDS.SOUL_DRAFT}:${draftEvent.pubkey}:${id}` : '');
+  const resolvedSpecHash = specHash || draftContent?.spec_hash || '';
+  const resolvedTemplateRef = templateRef || draftContent?.template_ref || draftContent?.templateRef || '';
+  const runtime = draftContent?.runtime || {};
+
+  const tags = [
+    ['agent-id', id],
+    ['name', resolvedName],
+    ['tier', resolvedTier],
+    ['output', 'application/json'],
+    ['method', SOUL_RUNTIME_METHODS.PROVISION],
+    ['request-kind', String(KINDS.PROVISIONING_REQUEST)]
+  ];
+
+  maybePushTag(tags, 'template', resolvedTemplateRef);
+  maybePushTag(tags, 'draft', resolvedDraftRef);
+  maybePushTag(tags, 'draft-event', resolvedDraftEventId);
+  maybePushTag(tags, 'e', resolvedDraftEventId, '', 'draft');
+  maybePushTag(tags, 'spec-hash', resolvedSpecHash);
+  maybePushTag(tags, 'runtime', runtime.target);
+  maybePushTag(tags, 'runtime-pubkey', runtime.runtime_pubkey);
+  maybePushTag(tags, 'capability', runtime.capability_ref);
+
+  const content = {
+    schema: 'soulfactory-provisioning/v1',
+    method: SOUL_RUNTIME_METHODS.PROVISION,
+    agent_id: id,
+    name: resolvedName,
+    tier: resolvedTier,
+    template_ref: resolvedTemplateRef,
+    draft_ref: resolvedDraftRef,
+    draft_event_id: resolvedDraftEventId,
+    spec_hash: resolvedSpecHash,
+    brief: brief || draftContent?.brief || draftContent?.identity?.purpose || '',
+    requested_at: Math.floor(Date.now() / 1000)
+  };
+
+  const unsignedEvent = {
+    kind: KINDS.PROVISIONING_REQUEST,
+    created_at: Math.floor(Date.now() / 1000),
+    pubkey: authState.pubkey,
+    tags,
+    content: JSON.stringify(content)
+  };
+
+  const signedEvent = await signWithAuth(unsignedEvent);
+  if (beforePublish) beforePublish(signedEvent);
+  const publishResults = await nostr.publish(signedEvent);
+
+  ensureRelayAcceptance(publishResults, 'Provisioning request was not accepted by any relay');
+
+  return { event: signedEvent, publishResults };
 }
 
 export async function updateSoulDetails(soul, updates = {}) {
@@ -758,16 +842,21 @@ export async function fetchSoulHistory(soul, { limit = 50 } = {}) {
   if (!soul?.agentId) return [];
 
   const soulRef = buildSoulRef(soul);
+  const lifecycleKinds = [KINDS.PROVISIONING_STATUS, KINDS.PROVISIONING_RESULT, KINDS.SOUL_ACTION_LEGACY_RESULT].filter(Boolean);
   const filters = [
     { kinds: [KINDS.AGENT_SOUL], '#d': [soul.agentId], limit },
-    { kinds: [KINDS.SOUL_ACTION], '#soul': [soulRef], limit },
-    { kinds: [KINDS.PROVISIONING_STATUS, KINDS.PROVISIONING_RESULT, KINDS.SOUL_ACTION_LEGACY_RESULT].filter(Boolean), '#soul': [soulRef], limit }
+    // NIP-01 relay filters only support single-letter tag indexes. The SoulFactory
+    // compatibility tags use `soul`, so query bounded recent kind sets and apply
+    // the multi-letter tag match locally instead of sending an invalid `#soul` filter.
+    { kinds: [KINDS.SOUL_ACTION], limit },
+    { kinds: lifecycleKinds, limit }
   ];
 
   const events = await nostr.query(filters);
   const deduped = new Map();
   for (const event of events) {
     if (deduped.has(event.id)) continue;
+    if (event.kind !== KINDS.AGENT_SOUL && getTag(event, 'soul') !== soulRef) continue;
     deduped.set(event.id, summarizeHistoryEvent(event, soulRef));
   }
 

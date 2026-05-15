@@ -461,6 +461,32 @@ describe('Nostr Client - Parsing Functions', () => {
       });
     });
 
+    it('should parse runtime-aware read model fields from content', () => {
+      const event = {
+        id: 'event-runtime-content',
+        pubkey: 'f'.repeat(64),
+        created_at: 1714392450,
+        tags: [['d', 'agent-runtime'], ['draft', '31952:operator:agent-runtime'], ['spec-hash', 'sha256:spec']],
+        content: JSON.stringify({
+          runtime: { target: 'openclaw', runtime_pubkey: 'runtime-pubkey', capability_ref: '30317:runtime:openclaw', state: 'running' },
+          permissions: { allowed_kinds: [1, 31952], tool_grants: [{ mcp_server: 'github', scopes: ['read'] }] },
+          relay_policy: { control: ['wss://control.example'] },
+          workspace: { repo: '30617:repo:bahia', branch: 'main' },
+          assets: { avatar_ref: 'https://assets.example/avatar.png', voice_ref: 'blob:voice' }
+        })
+      };
+
+      const soul = parseSoulEvent(event);
+
+      expect(soul.runtime).toMatchObject({ target: 'openclaw', state: 'running' });
+      expect(soul.capabilityRef).toBe('30317:runtime:openclaw');
+      expect(soul.allowedKinds).toEqual([1, 31952]);
+      expect(soul.tools).toEqual([{ server: 'github', scopes: ['read'] }]);
+      expect(soul.relayPolicy.control).toEqual(['wss://control.example']);
+      expect(soul.workspaceSpec.repo).toBe('30617:repo:bahia');
+      expect(soul.avatarUrl).toBe('https://assets.example/avatar.png');
+    });
+
     it('should handle soul with all possible statuses', () => {
       const statuses = ['active', 'provisioning', 'suspended', 'revoked', 'draft'];
 

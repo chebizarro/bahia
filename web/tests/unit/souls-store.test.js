@@ -853,6 +853,48 @@ describe('Souls Store', () => {
       ]));
       expect(result.publishResults[0].accepted).toBe(true);
     });
+
+    it('publishProvisioningRequest signs 5950 with exact draft and capability refs', async () => {
+      mockNostr.publish.mockResolvedValue([{ relay: 'wss://relay', accepted: true, message: '' }]);
+      const beforePublish = vi.fn();
+
+      await soulsModule.publishProvisioningRequest({
+        agentId: 'scout',
+        name: 'Scout',
+        tier: 'standard',
+        draftRef: '31952:author-pubkey:scout',
+        draftEvent: { id: 'draft-event-id', pubkey: 'author-pubkey' },
+        draftContent: {
+          brief: 'Observe deploys',
+          runtime: { target: 'openclaw', runtime_pubkey: 'runtime-pubkey', capability_ref: '30317:runtime:openclaw' }
+        },
+        templateRef: '31950:factory:default',
+        specHash: 'sha256:spec',
+        beforePublish
+      });
+
+      const signedCall = authModule.signWithAuth.mock.calls.at(-1)?.[0];
+      expect(signedCall).toMatchObject({ kind: 5950, pubkey: 'author-pubkey' });
+      expect(signedCall.tags).toEqual(expect.arrayContaining([
+        ['agent-id', 'scout'],
+        ['draft', '31952:author-pubkey:scout'],
+        ['draft-event', 'draft-event-id'],
+        ['e', 'draft-event-id', 'draft'],
+        ['spec-hash', 'sha256:spec'],
+        ['runtime', 'openclaw'],
+        ['runtime-pubkey', 'runtime-pubkey'],
+        ['capability', '30317:runtime:openclaw'],
+        ['method', 'soulfactory.provision']
+      ]));
+      expect(JSON.parse(signedCall.content)).toMatchObject({
+        agent_id: 'scout',
+        draft_ref: '31952:author-pubkey:scout',
+        draft_event_id: 'draft-event-id',
+        spec_hash: 'sha256:spec',
+        brief: 'Observe deploys'
+      });
+      expect(beforePublish).toHaveBeenCalledWith(expect.objectContaining({ id: 'signed-action-id' }));
+    });
   });
 
   describe('soul management actions', () => {
@@ -922,7 +964,7 @@ describe('Souls Store', () => {
           kind: 1950,
           created_at: 200,
           pubkey: 'author2',
-          tags: [['action', 'suspend'], ['reason', 'maintenance']]
+          tags: [['soul', '31951:factory:scout'], ['action', 'suspend'], ['reason', 'maintenance']]
         },
         {
           id: 'evt-soul',
@@ -937,8 +979,8 @@ describe('Souls Store', () => {
 
       expect(mockNostr.query).toHaveBeenCalledWith([
         { kinds: [31951], '#d': ['scout'], limit: 10 },
-        { kinds: [1950], '#soul': ['31951:factory:scout'], limit: 10 },
-        { kinds: [6950, 7950, 1951], '#soul': ['31951:factory:scout'], limit: 10 }
+        { kinds: [1950], limit: 10 },
+        { kinds: [6950, 7950, 1951], limit: 10 }
       ]);
       expect(history.map((item) => item.id)).toEqual(['evt-action', 'evt-soul']);
       expect(history[0].summary).toBe('suspend: maintenance');
