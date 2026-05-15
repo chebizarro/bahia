@@ -11,7 +11,8 @@ import (
 const (
 	// SoulFactoryMemoryConfigSchema versions the portable memory config payload
 	// embedded in kind:38384 soulfactory.memory.configure params.
-	SoulFactoryMemoryConfigSchema = "soulfactory-memory-config/v1"
+	SoulFactoryMemoryConfigSchema  = "soulfactory-memory-config/v1"
+	SoulFactoryMemoryReindexSchema = "soulfactory-memory-reindex/v1"
 
 	MemoryEmbeddingProviderAuto   = "auto"
 	MemoryEmbeddingProviderVoyage = "voyage"
@@ -25,6 +26,9 @@ const (
 
 	MemorySearchTopKMin = 1
 	MemorySearchTopKMax = 100
+
+	MemoryReindexModeIncremental = "incremental"
+	MemoryReindexModeFull        = "full"
 )
 
 var supportedMemoryEmbeddingProviders = map[string]string{
@@ -132,6 +136,26 @@ type OpenClawMemoryMMRConfig struct {
 	Enabled bool `json:"enabled"`
 }
 
+// MemoryReindexRequest is the portable params contract for kind:38384
+// soulfactory.memory.reindex requests. The runtime reports progress and terminal
+// stats through its kind:38386 result event; lifecycle hot-reload also emits
+// kind:6950 progress around the control request.
+type MemoryReindexRequest struct {
+	Schema            string              `json:"schema"`
+	Mode              string              `json:"mode"`
+	Reason            string              `json:"reason,omitempty"`
+	MemoryConfig      MemoryConfigMapping `json:"memory_config"`
+	RetentionDays     int                 `json:"retention_days,omitempty"`
+	EnforceRetention  bool                `json:"enforce_retention"`
+	PreviousSpecHash  string              `json:"previous_spec_hash,omitempty"`
+	NewSpecHash       string              `json:"new_spec_hash,omitempty"`
+	DraftRef          string              `json:"draft_ref,omitempty"`
+	DraftEventID      string              `json:"draft_event_id,omitempty"`
+	ProgressEventKind int                 `json:"progress_event_kind"`
+	ResultEventKind   int                 `json:"result_event_kind"`
+	OpenClaw          map[string]any      `json:"openclaw,omitempty"`
+}
+
 // ValidateSoulMemorySpec validates Bahia's portable SoulMemorySpec before it is
 // mapped to runtime-native config. Empty provider/strategy are accepted and
 // normalized by MapSoulMemorySpec.
@@ -224,6 +248,61 @@ func MarshalMemoryConfigureRuntimeParams(spec domain.SoulMemorySpec) ([]byte, er
 		return nil, err
 	}
 	return json.Marshal(params)
+}
+
+// BuildMemoryReindexRuntimeParams builds the params object embedded in a
+// kind:38384 soulfactory.memory.reindex RuntimeControlEnvelope.
+func BuildMemoryReindexRuntimeParams(spec domain.SoulMemorySpec, mode, reason, previousSpecHash, newSpecHash, draftRef, draftEventID string) (map[string]interface{}, error) {
+	mapping, err := MapSoulMemorySpec(spec)
+	if err != nil {
+		return nil, err
+	}
+	mode = normalizeMemoryReindexMode(mode)
+	if mode == "" {
+		return nil, fmt.Errorf("memory reindex mode must be incremental or full")
+	}
+	req := MemoryReindexRequest{
+		Schema:            SoulFactoryMemoryReindexSchema,
+		Mode:              mode,
+		Reason:            strings.TrimSpace(reason),
+		MemoryConfig:      mapping,
+		RetentionDays:     mapping.RetentionDays,
+		EnforceRetention:  mapping.RetentionDays > 0,
+		PreviousSpecHash:  strings.TrimSpace(previousSpecHash),
+		NewSpecHash:       strings.TrimSpace(newSpecHash),
+		DraftRef:          strings.TrimSpace(draftRef),
+		DraftEventID:      strings.TrimSpace(draftEventID),
+		ProgressEventKind: domain.KindProvisioningStatus,
+		ResultEventKind:   domain.KindRuntimeControlResult,
+		OpenClaw: map[string]any{
+			"operation":      "memory.reindex",
+			"mode":           mode,
+			"memorySearch":   mapping.OpenClaw,
+			"retention_days": mapping.RetentionDays,
+			"progress_kind":  domain.KindProvisioningStatus,
+			"result_kind":    domain.KindRuntimeControlResult,
+		},
+	}
+	encoded, err := json.Marshal(req)
+	if err != nil {
+		return nil, err
+	}
+	var params map[string]interface{}
+	if err := json.Unmarshal(encoded, &params); err != nil {
+		return nil, err
+	}
+	return params, nil
+}
+
+func normalizeMemoryReindexMode(mode string) string {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "", MemoryReindexModeIncremental, "increment", "partial":
+		return MemoryReindexModeIncremental
+	case MemoryReindexModeFull, "complete", "rebuild":
+		return MemoryReindexModeFull
+	default:
+		return ""
+	}
 }
 
 func buildOpenClawMemorySearchConfig(provider, model, strategy string, autoIndex bool, search MemorySearchRuntimeConfig) OpenClawMemorySearchConfig {

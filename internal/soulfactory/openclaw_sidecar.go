@@ -627,6 +627,20 @@ func validateOpenClawMethodParams(method string, params map[string]interface{}) 
 		return requireString("avatar_ref")
 	case RuntimeMethodAvatarList, RuntimeMethodAvatarStatus:
 		// Optional params only.
+	case RuntimeMethodMemoryConfigure:
+		if _, ok := params["memory_config"].(map[string]interface{}); !ok {
+			return controlError("missing_required_param", "memory.configure requires memory_config object", false)
+		}
+	case RuntimeMethodMemoryReindex:
+		if schema, ok := params["schema"].(string); !ok || schema != SoulFactoryMemoryReindexSchema {
+			return controlError("invalid_reindex_request", "memory.reindex requires soulfactory-memory-reindex/v1 schema", false)
+		}
+		if mode, ok := params["mode"].(string); !ok || normalizeMemoryReindexMode(mode) == "" {
+			return controlError("invalid_reindex_request", "memory.reindex mode must be incremental or full", false)
+		}
+		if _, ok := params["memory_config"].(map[string]interface{}); !ok {
+			return controlError("missing_required_param", "memory.reindex requires memory_config object", false)
+		}
 	case RuntimeMethodConfigReload:
 		if _, err := ParseConfigReloadRequest(params); err != nil {
 			return controlError("invalid_reload_request", err.Error(), false)

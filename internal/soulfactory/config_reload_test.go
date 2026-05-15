@@ -50,6 +50,33 @@ func TestParseConfigReloadRequestInfersTargetsAndRejectsEmptyPayload(t *testing.
 	}
 }
 
+func TestOpenClawSidecarDispatchesMemoryReindexAndPublishes38386Result(t *testing.T) {
+	runtime := newFakeSigner(t)
+	controller := newFakeSigner(t)
+	transport := &fakeOpenClawSidecarTransport{}
+	driver := &fakeOpenClawDriver{methods: []string{RuntimeMethodMemoryReindex}, outcome: &OpenClawControlOutcome{Status: "success", Result: map[string]interface{}{"indexed": 42, "progress_events": []map[string]interface{}{{"stage": "done", "percent": 100}}}}}
+	sidecar := newTestOpenClawSidecar(t, runtime, controller, transport, driver)
+	params, err := BuildMemoryReindexRuntimeParams(domain.SoulMemorySpec{EmbeddingProvider: "openai", EmbeddingModel: "text-embedding-3-small", Strategy: "long-term"}, "incremental", "hot-reload", "sha256:old", "sha256:new", "31952:author:scout", "draft-event")
+	if err != nil {
+		t.Fatalf("BuildMemoryReindexRuntimeParams error = %v", err)
+	}
+	request := signedOpenClawControlRequest(t, controller, runtime.pubkey, RuntimeMethodMemoryReindex, params, nil)
+
+	result, err := sidecar.HandleControlEvent(t.Context(), request)
+	if err != nil {
+		t.Fatalf("HandleControlEvent memory reindex error = %v", err)
+	}
+	if len(driver.calls) != 1 || driver.calls[0].Method != RuntimeMethodMemoryReindex {
+		t.Fatalf("driver calls = %+v", driver.calls)
+	}
+	if result.Status != "success" || result.Method != RuntimeMethodMemoryReindex || result.Result["indexed"] != 42 {
+		t.Fatalf("unexpected reindex result = %+v", result)
+	}
+	if len(transport.published) != 1 || transport.published[0].Kind != domain.KindRuntimeControlResult {
+		t.Fatalf("published events = %+v, want one 38386 result", transport.published)
+	}
+}
+
 func TestOpenClawSidecarDispatchesConfigReloadAndPublishes38386Result(t *testing.T) {
 	runtime := newFakeSigner(t)
 	controller := newFakeSigner(t)

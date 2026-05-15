@@ -102,6 +102,37 @@ func TestValidateSoulMemorySpecRejectsInvalidSearchConfig(t *testing.T) {
 	}
 }
 
+func TestBuildMemoryReindexRuntimeParamsIncludesProgressAndRetention(t *testing.T) {
+	params, err := BuildMemoryReindexRuntimeParams(domain.SoulMemorySpec{
+		EmbeddingProvider: "voyage",
+		EmbeddingModel:    "voyage-3",
+		Strategy:          "session-aware",
+		AutoIndex:         true,
+		RetentionDays:     30,
+		Search:            &domain.SoulMemorySearchSpec{TopK: 8, ScoreThreshold: 0.5},
+	}, "full", "operator requested", "sha256:old", "sha256:new", "31952:author:scout", "draft-event")
+	if err != nil {
+		t.Fatalf("BuildMemoryReindexRuntimeParams error = %v", err)
+	}
+	if params["schema"] != SoulFactoryMemoryReindexSchema || params["mode"] != MemoryReindexModeFull || params["reason"] != "operator requested" {
+		t.Fatalf("reindex metadata = %#v", params)
+	}
+	if params["progress_event_kind"] != float64(domain.KindProvisioningStatus) || params["result_event_kind"] != float64(domain.KindRuntimeControlResult) {
+		t.Fatalf("progress/result kinds = %#v/%#v", params["progress_event_kind"], params["result_event_kind"])
+	}
+	if params["enforce_retention"] != true || params["retention_days"] != float64(30) {
+		t.Fatalf("retention params = %#v", params)
+	}
+	memoryConfig := params["memory_config"].(map[string]interface{})
+	if memoryConfig["embedding_provider"] != "voyage" || memoryConfig["auto_index"] != true {
+		t.Fatalf("memory_config = %#v", memoryConfig)
+	}
+	openclaw := params["openclaw"].(map[string]interface{})
+	if openclaw["operation"] != "memory.reindex" || openclaw["mode"] != MemoryReindexModeFull {
+		t.Fatalf("openclaw reindex hints = %#v", openclaw)
+	}
+}
+
 func TestBuildMemoryConfigureRuntimeParamsSerializesInto38384Envelope(t *testing.T) {
 	params, err := BuildMemoryConfigureRuntimeParams(domain.SoulMemorySpec{
 		EmbeddingProvider: "openai",

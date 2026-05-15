@@ -262,6 +262,25 @@ func TestDiffHotReloadDraftsIdentifiesCustomizationSections(t *testing.T) {
 	}
 }
 
+func TestBuildHotReloadRuntimeCallsAddsMemoryReindexWhenAutoIndexEnabled(t *testing.T) {
+	current := domain.SoulDraftContent{Memory: domain.SoulMemorySpec{EmbeddingProvider: "openai", EmbeddingModel: "text-embedding-3-small"}}
+	proposed := current
+	proposed.Memory = domain.SoulMemorySpec{EmbeddingProvider: "voyage", EmbeddingModel: "voyage-3", Strategy: "session-aware", AutoIndex: true, RetentionDays: 45}
+	draft := &domain.SoulDraft{EventID: "draft-proposed-event", AgentID: "scout", CreatedBy: "author"}
+	action := &domain.SoulAction{DraftRef: "31952:author:scout"}
+
+	calls := buildHotReloadRuntimeCalls(current, proposed, DiffHotReloadDrafts(current, proposed), draft, action, "sha256:new", "sha256:old")
+	if len(calls) != 2 || calls[0].Method != RuntimeMethodMemoryConfigure || calls[1].Method != RuntimeMethodMemoryReindex {
+		t.Fatalf("memory hot-reload calls = %+v, want configure then reindex", calls)
+	}
+	if calls[1].Params["schema"] != SoulFactoryMemoryReindexSchema || calls[1].Params["mode"] != MemoryReindexModeIncremental {
+		t.Fatalf("reindex params = %#v", calls[1].Params)
+	}
+	if calls[1].Params["progress_event_kind"] != float64(domain.KindProvisioningStatus) || calls[1].Params["result_event_kind"] != float64(domain.KindRuntimeControlResult) {
+		t.Fatalf("reindex event kinds = %#v", calls[1].Params)
+	}
+}
+
 func TestLifecycleHandlerHotReloadDispatchesSelectiveRuntimeControlsAndPublishesProgress(t *testing.T) {
 	signer := newFakeSigner(t)
 	currentDraft := &domain.SoulDraft{

@@ -483,6 +483,12 @@ func buildHotReloadRuntimeCalls(current, proposed domain.SoulDraftContent, diff 
 		params["previous"] = current.Memory
 		params["proposed"] = proposed.Memory
 		calls = append(calls, hotReloadRuntimeCall{Section: "memory", Method: RuntimeMethodMemoryConfigure, Params: params})
+		if proposed.Memory.AutoIndex {
+			reindexParams, err := BuildMemoryReindexRuntimeParams(proposed.Memory, MemoryReindexModeIncremental, "hot-reload memory config changed", previousSpecHash, newSpecHash, params["draft_ref"].(string), draft.EventID)
+			if err == nil {
+				calls = append(calls, hotReloadRuntimeCall{Section: "memory", Method: RuntimeMethodMemoryReindex, Params: reindexParams})
+			}
+		}
 	}
 	if diff.Persona {
 		params := base("persona")
