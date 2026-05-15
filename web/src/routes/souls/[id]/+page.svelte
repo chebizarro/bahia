@@ -1,6 +1,10 @@
 <script>
   import { page } from '$app/state';
   import Badge from '$lib/components/Badge.svelte';
+  import AvatarStudio from '$lib/components/souls/AvatarStudio.svelte';
+  import MemoryConfig from '$lib/components/souls/MemoryConfig.svelte';
+  import PersonalityBuilder from '$lib/components/souls/PersonalityBuilder.svelte';
+  import VoiceStudio from '$lib/components/souls/VoiceStudio.svelte';
   import {
     CopyIcon,
     HeavyIcon,
@@ -14,8 +18,8 @@
     WarningIcon,
     WorkspaceIcon
   } from '$lib/icons/domain-icons.js';
-  import { nostr, fetchSoul, parseSoulEvent, KINDS } from '$lib/nostr/client.js';
-  import { buildSoulRef, fetchSoulHistory, publishSoulAction, provisioningRuns, trackLifecycleRun } from '$lib/stores/souls.js';
+  import { nostr, fetchSoul, parseSoulEvent, KINDS, normalizeSoulDraftContent } from '$lib/nostr/client.js';
+  import { buildSoulRef, fetchSoulHistory, publishSoulAction, publishSoulDraft, publishSoulUpdateAction, provisioningRuns, trackLifecycleRun } from '$lib/stores/souls.js';
   
   let soul = $state(null);
   let loading = $state(true);
@@ -29,9 +33,21 @@
   let activityHistory = $state([]);
   let actionRunId = $state('');
   let actionCleanup = null;
+  let editingSection = $state('');
+  let savingCustomization = $state(false);
+  let customizationDraft = $state(null);
+  let customizationNotice = $state('');
+  let customizationError = $state('');
   
   let agentId = $derived(page.params.id);
   let currentActionRun = $derived(actionRunId ? provisioningRuns.get(actionRunId) : null);
+  let soulDraftContent = $derived(extractDraftContent(soul));
+  let customization = $derived({
+    avatar: soulDraftContent.avatar || defaultAvatarSpec(),
+    voice: soulDraftContent.voice || defaultVoiceSpec(),
+    memory: soulDraftContent.memory || defaultMemorySpec(),
+    persona: soulDraftContent.persona || defaultPersonaSpec()
+  });
   
   const statusColors = {
     active: 'success',
@@ -50,6 +66,128 @@
     stopped: 'default',
     pending: 'default'
   };
+
+  function defaultAvatarSpec() {
+    return {
+      generation: { prompt: '', style_preset: 'pixel-art', seed: '', width: 512, height: 512, provider: 'flux-comfyui' },
+      uploaded_ref: '',
+      generated_ref: '',
+      current: 'generated'
+    };
+  }
+
+  function defaultVoiceSpec() {
+    return {
+      provider: 'openai',
+      persona_id: '',
+      persona: { label: '', profile: '', style: 'articulate', accent: 'neutral american', pacing: 'measured' },
+      auto_mode: 'tagged',
+      sample_text: ''
+    };
+  }
+
+  function defaultMemorySpec() {
+    return {
+      embedding_provider: 'openai',
+      embedding_model: 'text-embedding-3-small',
+      search: { top_k: 10, score_threshold: 0.7, rerank: false, rerank_model: '' },
+      strategy: 'session-aware',
+      auto_index: true,
+      retention_days: 90
+    };
+  }
+
+  function defaultPersonaSpec() {
+    return {
+      traits: [],
+      style: 'conversational',
+      tone: 'friendly professional',
+      constraints: [],
+      system_prompt_sections: { role: '', guidelines: '', red_lines: '' }
+    };
+  }
+
+  function clone(value) {
+    return JSON.parse(JSON.stringify(value || {}));
+  }
+
+  function extractDraftContent(currentSoul) {
+    if (!currentSoul) return normalizeSoulDraftContent({ schema: 'soulfactory-draft/v2' });
+    let parsed = {};
+    try {
+      parsed = currentSoul.content ? JSON.parse(currentSoul.content) : {};
+    } catch {
+      parsed = {};
+    }
+
+    return normalizeSoulDraftContent({
+      schema: parsed.schema || 'soulfactory-draft/v2',
+      ...parsed,
+      identity: {
+        ...(parsed.identity || {}),
+        name: parsed.identity?.name || currentSoul.name || currentSoul.agentId,
+        purpose: parsed.identity?.purpose || currentSoul.purpose || '',
+        tier: parsed.identity?.tier || currentSoul.tier || 'standard',
+        nip05: parsed.identity?.nip05 || currentSoul.nip05 || ''
+      },
+      runtime: { ...(parsed.runtime || {}), ...(currentSoul.runtime || {}) },
+      permissions: parsed.permissions || currentSoul.permissions || {},
+      relay_policy: parsed.relay_policy || currentSoul.relayPolicy || {},
+      workspace: parsed.workspace || currentSoul.workspaceSpec || {},
+      assets: parsed.assets || currentSoul.assets || {}
+    });
+  }
+
+  function startEdit(section) {
+    editingSection = section;
+    customizationDraft = clone(customization[section]);
+    customizationNotice = '';
+    customizationError = '';
+  }
+
+  function cancelEdit() {
+    editingSection = '';
+    customizationDraft = null;
+  }
+
+  async function saveCustomization(section) {
+    if (!soul || !customizationDraft || savingCustomization) return;
+    savingCustomization = true;
+    customizationNotice = '';
+    customizationError = '';
+
+    try {
+      const nextContent = normalizeSoulDraftContent({
+        ...soulDraftContent,
+        schema: 'soulfactory-draft/v2',
+        [section]: clone(customizationDraft)
+      });
+      const draftResult = await publishSoulDraft({
+        agentId: soul.agentId,
+        content: nextContent,
+        previousSpecHash: soul.specHash || soul.previousSpecHash || ''
+      });
+      const draftRef = `${KINDS.SOUL_DRAFT}:${draftResult.event.pubkey}:${soul.agentId}`;
+      await publishSoulUpdateAction({
+        soul,
+        draft: { id: draftResult.event.id, content: nextContent, specHash: draftResult.specHash, coordinate: draftRef },
+        draftRef,
+        draftEventId: draftResult.event.id,
+        resolvedSpec: nextContent,
+        newSpecHash: draftResult.specHash,
+        updateMode: 'merge',
+        reason: `Updated ${section} customization from Soul detail`
+      });
+      customizationNotice = `${section} draft saved and update action submitted.`;
+      editingSection = '';
+      customizationDraft = null;
+      await loadHistory();
+    } catch (err) {
+      customizationError = err.message || `Failed to save ${section}`;
+    } finally {
+      savingCustomization = false;
+    }
+  }
 
   function handleCopyKeydown(event, copyAction) {
     if (event.key !== 'Enter' && event.key !== ' ') return;
@@ -295,6 +433,109 @@
           {#if currentActionRun.result?.id}<code>{currentActionRun.result.id}</code>{/if}
         </div>
       {/if}
+
+      <section class="customization-shell">
+        <div class="customization-header">
+          <div>
+            <h2>Customization</h2>
+            <p>Draft v2 avatar, voice, memory, and personality settings for this soul.</p>
+          </div>
+          <div class="runtime-controls" aria-label="Runtime controls">
+            <button class="btn-secondary" onclick={() => handleAction('hot-reload')} disabled={actionSubmitting}>Hot-reload</button>
+            <button class="btn-secondary" onclick={() => handleAction('restart')} disabled={actionSubmitting}>Restart</button>
+            <button class="btn-warning" onclick={() => handleAction('pause')} disabled={actionSubmitting}>Pause</button>
+          </div>
+        </div>
+
+        {#if customizationNotice}
+          <div class="notice-banner"><SuccessIcon size={18} stroke={1.75} aria-hidden="true" /> <span>{customizationNotice}</span></div>
+        {/if}
+        {#if customizationError}
+          <div class="error-banner"><WarningIcon size={18} stroke={1.75} aria-hidden="true" /> <span>{customizationError}</span></div>
+        {/if}
+
+        <div class="customization-grid">
+          <article class="custom-card">
+            <header>
+              <h3>Avatar</h3>
+              <button class="btn-secondary" onclick={() => startEdit('avatar')} disabled={savingCustomization}>Edit</button>
+            </header>
+            <dl>
+              <dt>Current</dt><dd>{customization.avatar.current || 'generated'}</dd>
+              <dt>Style</dt><dd>{customization.avatar.generation?.style_preset || 'N/A'}</dd>
+              <dt>Provider</dt><dd>{customization.avatar.generation?.provider || 'N/A'}</dd>
+              <dt>Size</dt><dd>{customization.avatar.generation?.width || 512}×{customization.avatar.generation?.height || 512}</dd>
+              <dt>Prompt</dt><dd>{customization.avatar.generation?.prompt || 'No prompt configured'}</dd>
+              <dt>Ref</dt><dd><code>{customization.avatar.generated_ref || customization.avatar.uploaded_ref || soul.assets?.avatar_ref || 'N/A'}</code></dd>
+            </dl>
+          </article>
+
+          <article class="custom-card">
+            <header>
+              <h3>Voice</h3>
+              <button class="btn-secondary" onclick={() => startEdit('voice')} disabled={savingCustomization}>Edit</button>
+            </header>
+            <dl>
+              <dt>Provider</dt><dd>{customization.voice.provider || 'N/A'}</dd>
+              <dt>Persona</dt><dd>{customization.voice.persona?.label || customization.voice.persona_id || 'N/A'}</dd>
+              <dt>Profile</dt><dd>{customization.voice.persona?.profile || 'No profile configured'}</dd>
+              <dt>Style</dt><dd>{customization.voice.persona?.style || 'N/A'} · {customization.voice.persona?.accent || 'N/A'} · {customization.voice.persona?.pacing || 'N/A'}</dd>
+              <dt>Auto mode</dt><dd>{customization.voice.auto_mode || 'tagged'}</dd>
+              <dt>Sample</dt><dd>{customization.voice.sample_text || 'No sample text configured'}</dd>
+            </dl>
+          </article>
+
+          <article class="custom-card">
+            <header>
+              <h3>Memory</h3>
+              <button class="btn-secondary" onclick={() => startEdit('memory')} disabled={savingCustomization}>Edit</button>
+            </header>
+            <dl>
+              <dt>Embedding</dt><dd>{customization.memory.embedding_provider || 'N/A'} / {customization.memory.embedding_model || 'N/A'}</dd>
+              <dt>Strategy</dt><dd>{customization.memory.strategy || 'session-aware'}</dd>
+              <dt>Search</dt><dd>top {customization.memory.search?.top_k || 10}, threshold {customization.memory.search?.score_threshold ?? 0.7}</dd>
+              <dt>Rerank</dt><dd>{customization.memory.search?.rerank ? customization.memory.search?.rerank_model || 'enabled' : 'disabled'}</dd>
+              <dt>Auto-index</dt><dd>{(customization.memory.auto_index ?? true) ? 'enabled' : 'disabled'}</dd>
+              <dt>Retention</dt><dd>{customization.memory.retention_days || 90} days</dd>
+            </dl>
+          </article>
+
+          <article class="custom-card">
+            <header>
+              <h3>Personality</h3>
+              <button class="btn-secondary" onclick={() => startEdit('persona')} disabled={savingCustomization}>Edit</button>
+            </header>
+            <dl>
+              <dt>Traits</dt><dd>{customization.persona.traits?.join(', ') || 'No traits configured'}</dd>
+              <dt>Style</dt><dd>{customization.persona.style || 'conversational'}</dd>
+              <dt>Tone</dt><dd>{customization.persona.tone || 'friendly professional'}</dd>
+              <dt>Constraints</dt><dd>{customization.persona.constraints?.join('; ') || 'No constraints configured'}</dd>
+              <dt>Role</dt><dd>{customization.persona.system_prompt_sections?.role || 'No role section configured'}</dd>
+            </dl>
+          </article>
+        </div>
+
+        {#if editingSection}
+          <div class="edit-panel">
+            <div class="edit-header">
+              <h3>Edit {editingSection}</h3>
+              <div class="edit-actions">
+                <button class="btn-secondary" onclick={cancelEdit} disabled={savingCustomization}>Cancel</button>
+                <button class="btn-primary" onclick={() => saveCustomization(editingSection)} disabled={savingCustomization}>{savingCustomization ? 'Saving...' : 'Save draft + update'}</button>
+              </div>
+            </div>
+            {#if editingSection === 'avatar'}
+              <AvatarStudio bind:value={customizationDraft} showAdvanced={true} />
+            {:else if editingSection === 'voice'}
+              <VoiceStudio bind:value={customizationDraft} assetRef={soul.assets?.voice_ref || ''} showAdvanced={true} />
+            {:else if editingSection === 'memory'}
+              <MemoryConfig bind:value={customizationDraft} showAdvanced={true} />
+            {:else if editingSection === 'persona'}
+              <PersonalityBuilder bind:value={customizationDraft} showAdvanced={true} />
+            {/if}
+          </div>
+        {/if}
+      </section>
       
       <!-- Info Grid -->
       <div class="info-grid">
@@ -662,6 +903,92 @@
     cursor: not-allowed;
   }
   
+  /* Customization */
+  .customization-shell {
+    background: var(--card-bg);
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    padding: 1.25rem;
+    margin-bottom: 1.5rem;
+    display: grid;
+    gap: 1rem;
+  }
+
+  .customization-header,
+  .edit-header,
+  .custom-card header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 1rem;
+  }
+
+  .customization-header h2,
+  .customization-header p,
+  .custom-card h3,
+  .edit-header h3 {
+    margin: 0;
+  }
+
+  .customization-header p {
+    color: var(--text-muted);
+    font-size: 0.875rem;
+    margin-top: 0.25rem;
+  }
+
+  .runtime-controls,
+  .edit-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+  }
+
+  .customization-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 1rem;
+  }
+
+  .custom-card,
+  .edit-panel {
+    background: var(--bg);
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    padding: 1rem;
+  }
+
+  .custom-card dl {
+    margin: 1rem 0 0 0;
+  }
+
+  .custom-card dt {
+    color: var(--text-muted);
+    font-size: 0.72rem;
+    margin-bottom: 0.2rem;
+  }
+
+  .custom-card dd {
+    margin: 0 0 0.75rem 0;
+    font-size: 0.85rem;
+    overflow-wrap: anywhere;
+  }
+
+  .custom-card dd:last-child {
+    margin-bottom: 0;
+  }
+
+  .custom-card code {
+    background: var(--card-bg);
+    padding: 0.2rem 0.4rem;
+    border-radius: 4px;
+    font-size: 0.78rem;
+  }
+
+  .edit-panel {
+    display: grid;
+    gap: 1rem;
+  }
+
   /* Info Grid */
   .info-grid {
     display: grid;
@@ -875,6 +1202,12 @@
       margin-top: 1rem;
     }
     
+    .customization-header,
+    .edit-header {
+      flex-direction: column;
+    }
+
+    .customization-grid,
     .info-grid {
       grid-template-columns: 1fr;
     }
