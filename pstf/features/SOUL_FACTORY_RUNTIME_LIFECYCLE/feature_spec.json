@@ -2,7 +2,7 @@
   "feature_id": "SOUL_FACTORY_RUNTIME_LIFECYCLE",
   "title": "SoulFactory Nostr-native runtime lifecycle control",
   "priority": "P1",
-  "status": "draft_ready_for_implementation",
+  "status": "final_verification_blocked_by_openclaw_ownership_decision",
   "plan_ref": "docs/plans/soulfactory-nostr-agent-lifecycle-2026-05-14.md",
   "description": "Define and verify the product/protocol contract for draft-backed SoulFactory provisioning and lifecycle control across Bahia, OpenClaw, and Metiq using signed Nostr events only. The slice keeps Bahia-facing SoulFactory kinds stable, introduces documented runtime-facing control methods, and preserves event-driven relay semantics with no polling or timeout-based terminal states.",
   "source_evidence": [
@@ -19,10 +19,22 @@
     "openclaw/src/config/types.agents.ts"
   ],
   "actors": [
-    {"name": "operator", "role": "Signs Bahia-facing draft, provisioning, and lifecycle action events."},
-    {"name": "soulfactory_controller", "role": "Validates operator intent, publishes progress/read-model events, and signs runtime-facing control requests."},
-    {"name": "runtime_bridge", "role": "OpenClaw TypeScript or Metiq Go bridge that advertises capability, validates controller trust, executes idempotent lifecycle methods, and publishes correlated results."},
-    {"name": "souls_ui", "role": "Discovers capabilities, saves drafts, publishes signed requests/actions, and tracks explicit relay events."}
+    {
+      "name": "operator",
+      "role": "Signs Bahia-facing draft, provisioning, and lifecycle action events."
+    },
+    {
+      "name": "soulfactory_controller",
+      "role": "Validates operator intent, publishes progress/read-model events, and signs runtime-facing control requests."
+    },
+    {
+      "name": "runtime_bridge",
+      "role": "OpenClaw TypeScript or Metiq Go bridge that advertises capability, validates controller trust, executes idempotent lifecycle methods, and publishes correlated results."
+    },
+    {
+      "name": "souls_ui",
+      "role": "Discovers capabilities, saves drafts, publishes signed requests/actions, and tracks explicit relay events."
+    }
   ],
   "in_scope": [
     "PSTF artifacts for SOUL_FACTORY_RUNTIME_LIFECYCLE with acceptance criteria mapped to tests.",
@@ -40,7 +52,8 @@
     "SoulFactory relay bus work must provide scoped subscriptions, EOSE handling, reconnect/backoff, AUTH, CLOSED, OK enforcement, validation, and dedupe before runtime adapters rely on it.",
     "Runtime bridges must publish 30317 capabilities before Bahia enables runtime target selection.",
     "Runtime-control fixtures must be reusable by Go and TypeScript tests to prevent schema drift.",
-    "31952 draft schema and 31951 read model extensions must remain additive and backward-compatible."
+    "31952 draft schema and 31951 read model extensions must remain additive and backward-compatible.",
+    "OpenClaw runtime ownership decision tracked by bahia-nrjg."
   ],
   "non_goals": [
     "Introduce REST control APIs for OpenClaw or Metiq management.",
