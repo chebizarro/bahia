@@ -6,14 +6,11 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-	"sync"
 
 	"github.com/google/uuid"
 	"github.com/nbd-wtf/go-nostr"
-	nostrpool "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"github.com/openagentsinc/bahia/internal/domain"
 	pkgclient "github.com/openagentsinc/bahia/pkg/client"
-	"go.uber.org/zap"
 )
 
 type SoulFactoryStatusEvent struct {
@@ -37,45 +34,8 @@ type SoulFactoryRequestReceipt struct {
 
 type SoulFactoryTransport interface {
 	Publish(context.Context, nostr.Event) (int, error)
-	SubscribeAllWithEOSE(context.Context, []nostr.Filter) (*nostrpool.MergedSubscription, error)
+	SubscribeAllWithEOSE(context.Context, []nostr.Filter) (*RelayBusSubscription, error)
 	Close()
-}
-
-type soulFactoryRelayTransport struct {
-	pool      *nostrpool.RelayPool
-	mu        sync.Mutex
-	connected bool
-}
-
-func (t *soulFactoryRelayTransport) ensureConnected(ctx context.Context) {
-	if t == nil || t.pool == nil {
-		return
-	}
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	if t.connected {
-		return
-	}
-	t.pool.Connect(ctx)
-	if ctx.Err() == nil {
-		t.connected = true
-	}
-}
-
-func (t *soulFactoryRelayTransport) Publish(ctx context.Context, ev nostr.Event) (int, error) {
-	t.ensureConnected(ctx)
-	return t.pool.Publish(ctx, ev)
-}
-
-func (t *soulFactoryRelayTransport) SubscribeAllWithEOSE(ctx context.Context, filters []nostr.Filter) (*nostrpool.MergedSubscription, error) {
-	t.ensureConnected(ctx)
-	return t.pool.SubscribeAllWithEOSE(ctx, filters)
-}
-
-func (t *soulFactoryRelayTransport) Close() {
-	if t != nil && t.pool != nil {
-		t.pool.Close()
-	}
 }
 
 type staticSoulSigner struct {
@@ -104,11 +64,14 @@ func NewNostrClient(relays []string, signer soulClientSigner) (*NostrClient, err
 	if signer == nil {
 		return nil, fmt.Errorf("soul factory signer is required")
 	}
-	pool := nostrpool.NewRelayPool(relays, zap.NewNop())
+	bus, err := NewSoulFactoryRelayBus(relays, WithRelayBusSigner(signer))
+	if err != nil {
+		return nil, err
+	}
 	return &NostrClient{
 		relays:    relays,
 		signer:    signer,
-		transport: &soulFactoryRelayTransport{pool: pool},
+		transport: bus,
 	}, nil
 }
 
@@ -121,11 +84,15 @@ func NewNostrClientFromPrivateKey(relays []string, privateKey string) (*NostrCli
 	if len(relays) == 0 {
 		return nil, fmt.Errorf("at least one Soul Factory relay is required")
 	}
-	pool := nostrpool.NewRelayPool(relays, zap.NewNop(), nostrpool.WithPrivateKey(normalized))
+	signer := staticSoulSigner{privateKey: normalized}
+	bus, err := NewSoulFactoryRelayBus(relays, WithRelayBusSigner(signer))
+	if err != nil {
+		return nil, err
+	}
 	return &NostrClient{
 		relays:    relays,
-		signer:    staticSoulSigner{privateKey: normalized},
-		transport: &soulFactoryRelayTransport{pool: pool},
+		signer:    signer,
+		transport: bus,
 	}, nil
 }
 
@@ -286,11 +253,12 @@ func (c *NostrClient) ExecuteSoulAction(ctx context.Context, soulRef string, act
 	if err := signGoNostrEvent(ctx, c.signer, event); err != nil {
 		return nil, fmt.Errorf("sign soul action: %w", err)
 	}
-	filters := []nostr.Filter{{Kinds: []int{domain.KindSoulAction + 1}, Tags: nostr.TagMap{"e": []string{event.ID}}}}
+	filters := []nostr.Filter{{Kinds: []int{domain.KindProvisioningStatus, domain.KindProvisioningResult, domain.KindSoulActionLegacyResult}, Tags: nostr.TagMap{"e": []string{event.ID}}}}
 	sub, err := c.transport.SubscribeAllWithEOSE(ctx, filters)
 	if err != nil {
 		return nil, fmt.Errorf("subscribe for soul action result: %w", err)
 	}
+	defer sub.Close()
 	published, err := c.transport.Publish(ctx, *event)
 	if published == 0 {
 		if err == nil {
@@ -317,7 +285,12 @@ func (c *NostrClient) ExecuteSoulAction(ctx context.Context, soulRef string, act
 				continue
 			}
 			seen[reply.ID] = struct{}{}
-			return reply, nil
+			if reply.Kind == domain.KindProvisioningStatus {
+				continue
+			}
+			if domain.IsLifecycleResultKind(reply.Kind) {
+				return reply, nil
+			}
 		}
 	}
 }
@@ -330,6 +303,7 @@ func (c *NostrClient) collectEvents(ctx context.Context, filters []nostr.Filter)
 	if err != nil {
 		return nil, err
 	}
+	defer sub.Close()
 	var result []*nostr.Event
 	seen := map[string]struct{}{}
 	eose := sub.EndOfStoredEvents
@@ -360,6 +334,7 @@ func (c *NostrClient) awaitTerminal(ctx context.Context, filters []nostr.Filter,
 	if err != nil {
 		return nil, err
 	}
+	defer sub.Close()
 	seen := map[string]struct{}{}
 	eose := sub.EndOfStoredEvents
 	for {

@@ -67,6 +67,10 @@ func NewFullProvisioner(reactor *Reactor, config FullProvisionerConfig, bahiaInt
 	if config.NIP05.Domain != "" && config.NIP05.WellKnownDir != "" {
 		p.nip05Manager = NewNIP05Manager(config.NIP05, logger)
 	}
+	// Lifecycle requests are orchestrated by lifecycle_handler.go, not the
+	// provisioning engine. Installing the handler here preserves the Bahia
+	// integration side effects previously wired through FullProvisioner.
+	reactor.lifecycleHandler = NewLifecycleHandler(reactor, bahiaIntegration, nil, logger)
 	return p
 }
 

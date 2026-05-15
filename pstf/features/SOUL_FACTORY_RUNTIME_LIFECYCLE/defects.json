@@ -1,0 +1,38 @@
+{
+  "feature_id": "SOUL_FACTORY_RUNTIME_LIFECYCLE",
+  "defects": [
+    {
+      "defect_id": "SFRL-D-001",
+      "title": "Relay-bus reliability is a blocking dependency for runtime lifecycle adapters",
+      "severity": "blocker",
+      "status": "known_dependency",
+      "related_ac_ids": ["SFRL-AC-002", "SFRL-AC-006", "SFRL-AC-008"],
+      "related_test_ids": ["SFRL-T-002", "SFRL-T-003"],
+      "evidence": ["docs/plans/soulfactory-nostr-agent-lifecycle-2026-05-14.md Work Item 4 requires scoped filters, EOSE, reconnect/backoff, AUTH, CLOSED, OK enforcement, and dedupe before runtime/lifecycle work depends on the bus."],
+      "recommended_fix": "Complete relay_bus.go and its isolated tests before wiring runtime adapters or bridge execution paths.",
+      "requires_human_decision": false
+    },
+    {
+      "defect_id": "SFRL-D-002",
+      "title": "Runtime bridges may drift without shared fixtures",
+      "severity": "major",
+      "status": "risk_seeded",
+      "related_ac_ids": ["SFRL-AC-004", "SFRL-AC-006"],
+      "related_test_ids": ["SFRL-T-006"],
+      "evidence": ["The plan identifies bridge payload drift as a risk and requires docs/soulfactory-runtime-control.md before bridge implementation."],
+      "recommended_fix": "Promote the documented shared example into reusable Go and TypeScript contract fixtures when implementation begins.",
+      "requires_human_decision": false
+    },
+    {
+      "defect_id": "SFRL-D-003",
+      "title": "External REST-only deployment paths would violate the lifecycle contract",
+      "severity": "major",
+      "status": "risk_seeded",
+      "related_ac_ids": ["SFRL-AC-001"],
+      "related_test_ids": ["SFRL-T-001"],
+      "evidence": ["The plan requires no REST external agent control plane and says REST-only deploy paths must be replaced or deferred behind event-native Bahia control-plane events."],
+      "recommended_fix": "During implementation, audit deployment/control paths and file a follow-up issue if any required external path remains REST-only.",
+      "requires_human_decision": true
+    }
+  ]
+}

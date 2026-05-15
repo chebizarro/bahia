@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/nbd-wtf/go-nostr"
 	"github.com/openagentsinc/bahia/internal/domain"
 )
 
@@ -34,7 +35,7 @@ func (s *trackingSigner) RevokeAgent(ctx context.Context, pubkey string) error {
 	return nil
 }
 
-func TestFullProvisionerLifecycleActionsPropagateBahiaAndSignerSideEffects(t *testing.T) {
+func TestLifecycleHandlerActionsPropagateBahiaAndSignerSideEffects(t *testing.T) {
 	registry, _, _, intents, observations, _ := newSoulFactoryRegistryHarness()
 	envID := uuid.New()
 	if err := registry.CreateEnvironment(t.Context(), &domain.Environment{ID: envID, Name: "agents", Protected: false, DeployStrategy: domain.DeployStrategyReplace, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}); err != nil {
@@ -46,9 +47,8 @@ func TestFullProvisionerLifecycleActionsPropagateBahiaAndSignerSideEffects(t *te
 	}
 
 	signer := &trackingSigner{fakeSigner: newFakeSigner(t)}
-	reactor := NewReactor(Config{}, fakeGenerator{}, signer, slog.Default())
-	provisioner := NewFullProvisioner(reactor, FullProvisionerConfig{}, integration)
-	reactor.provisioner = provisioner
+	reactor := NewReactor(Config{AuthorizedPubkeys: []string{signer.pubkey}}, fakeGenerator{}, signer, slog.Default())
+	_ = NewFullProvisioner(reactor, FullProvisionerConfig{}, integration)
 
 	soul := &domain.AgentSoul{ID: uuid.New(), AgentID: "scout", Name: "Scout", Tier: domain.SoulTierStandard, Status: domain.SoulStatusActive, NostrPubkey: signer.pubkey, CreatedAt: time.Now().UTC()}
 	serviceID, err := integration.RegisterSoulAsService(t.Context(), soul)
@@ -59,10 +59,11 @@ func TestFullProvisionerLifecycleActionsPropagateBahiaAndSignerSideEffects(t *te
 	if _, err := integration.CreateInitialDeployment(t.Context(), soul, serviceID); err != nil {
 		t.Fatalf("CreateInitialDeployment() error = %v", err)
 	}
-	provisioner.lookupSoul = func(context.Context, string) (*domain.AgentSoul, error) { return soul, nil }
+	reactor.getSoulFn = func(context.Context, string) (*domain.AgentSoul, error) { return soul, nil }
+	handler := reactor.lifecycle()
 
-	if err := provisioner.SuspendSoul(t.Context(), "31951:factory:scout", "maintenance"); err != nil {
-		t.Fatalf("SuspendSoul() error = %v", err)
+	if err := handler.HandleAction(t.Context(), buildActionEvent(t, signer.fakeSigner, "suspend-side-effects", nostr.Tags{{"soul", "31951:factory:scout"}, {"action", string(domain.SoulActionSuspend)}, {"reason", "maintenance"}}, "")); err != nil {
+		t.Fatalf("HandleAction(suspend) error = %v", err)
 	}
 	if soul.Status != domain.SoulStatusSuspended || soul.DeployStatus != "stopped" {
 		t.Fatalf("soul after suspend = %+v", soul)
@@ -75,8 +76,8 @@ func TestFullProvisionerLifecycleActionsPropagateBahiaAndSignerSideEffects(t *te
 	}
 
 	soul.Status = domain.SoulStatusSuspended
-	if err := provisioner.ResumeSoul(t.Context(), "scout"); err != nil {
-		t.Fatalf("ResumeSoul() error = %v", err)
+	if err := handler.HandleAction(t.Context(), buildActionEvent(t, signer.fakeSigner, "resume-side-effects", nostr.Tags{{"soul", "scout"}, {"action", string(domain.SoulActionResume)}}, "")); err != nil {
+		t.Fatalf("HandleAction(resume) error = %v", err)
 	}
 	if soul.Status != domain.SoulStatusActive || soul.DeployStatus != "deploying" {
 		t.Fatalf("soul after resume = %+v", soul)
@@ -88,8 +89,8 @@ func TestFullProvisionerLifecycleActionsPropagateBahiaAndSignerSideEffects(t *te
 		t.Fatalf("intent count after resume = %d, want 2", len(intents.intents))
 	}
 
-	if err := provisioner.RedeploySoul(t.Context(), "scout"); err != nil {
-		t.Fatalf("RedeploySoul() error = %v", err)
+	if err := handler.HandleAction(t.Context(), buildActionEvent(t, signer.fakeSigner, "redeploy-side-effects", nostr.Tags{{"soul", "scout"}, {"action", string(domain.SoulActionRedeploy)}}, "")); err != nil {
+		t.Fatalf("HandleAction(redeploy) error = %v", err)
 	}
 	if soul.DeployStatus != "deploying" {
 		t.Fatalf("soul deploy status after redeploy = %q, want deploying", soul.DeployStatus)
@@ -98,8 +99,8 @@ func TestFullProvisionerLifecycleActionsPropagateBahiaAndSignerSideEffects(t *te
 		t.Fatalf("intent count after redeploy = %d, want 3", len(intents.intents))
 	}
 
-	if err := provisioner.RevokeSoul(t.Context(), "scout", "retired"); err != nil {
-		t.Fatalf("RevokeSoul() error = %v", err)
+	if err := handler.HandleAction(t.Context(), buildActionEvent(t, signer.fakeSigner, "revoke-side-effects", nostr.Tags{{"soul", "scout"}, {"action", string(domain.SoulActionRevoke)}, {"reason", "retired"}}, "")); err != nil {
+		t.Fatalf("HandleAction(revoke) error = %v", err)
 	}
 	if soul.Status != domain.SoulStatusRevoked || soul.DeployStatus != "stopped" {
 		t.Fatalf("soul after revoke = %+v", soul)
@@ -109,27 +110,25 @@ func TestFullProvisionerLifecycleActionsPropagateBahiaAndSignerSideEffects(t *te
 	}
 }
 
-func TestFullProvisionerResumeRequiresSuspendedSoul(t *testing.T) {
+func TestLifecycleHandlerResumeRequiresSuspendedSoul(t *testing.T) {
 	signer := &trackingSigner{fakeSigner: newFakeSigner(t)}
-	reactor := NewReactor(Config{}, fakeGenerator{}, signer, slog.Default())
-	provisioner := NewFullProvisioner(reactor, FullProvisionerConfig{}, nil)
-	provisioner.lookupSoul = func(context.Context, string) (*domain.AgentSoul, error) {
+	reactor := NewReactor(Config{AuthorizedPubkeys: []string{signer.pubkey}}, fakeGenerator{}, signer, slog.Default())
+	reactor.getSoulFn = func(context.Context, string) (*domain.AgentSoul, error) {
 		return &domain.AgentSoul{AgentID: "scout", Status: domain.SoulStatusActive}, nil
 	}
 
-	err := provisioner.ResumeSoul(t.Context(), "scout")
+	err := reactor.lifecycle().HandleAction(t.Context(), buildActionEvent(t, signer.fakeSigner, "resume-active", nostr.Tags{{"soul", "scout"}, {"action", string(domain.SoulActionResume)}}, ""))
 	if err == nil || !strings.Contains(err.Error(), "cannot resume") {
-		t.Fatalf("ResumeSoul() error = %v, want cannot resume", err)
+		t.Fatalf("HandleAction(resume) error = %v, want cannot resume", err)
 	}
 }
 
-func TestFullProvisionerReturnsLookupErrors(t *testing.T) {
+func TestLifecycleHandlerReturnsLookupErrors(t *testing.T) {
 	signer := &trackingSigner{fakeSigner: newFakeSigner(t)}
-	reactor := NewReactor(Config{}, fakeGenerator{}, signer, slog.Default())
-	provisioner := NewFullProvisioner(reactor, FullProvisionerConfig{}, nil)
-	provisioner.lookupSoul = func(context.Context, string) (*domain.AgentSoul, error) { return nil, errors.New("boom") }
+	reactor := NewReactor(Config{AuthorizedPubkeys: []string{signer.pubkey}}, fakeGenerator{}, signer, slog.Default())
+	reactor.getSoulFn = func(context.Context, string) (*domain.AgentSoul, error) { return nil, errors.New("boom") }
 
-	if err := provisioner.SuspendSoul(t.Context(), "scout", "maintenance"); err == nil || !strings.Contains(err.Error(), "load soul") {
-		t.Fatalf("SuspendSoul() error = %v, want load soul failure", err)
+	if err := reactor.lifecycle().HandleAction(t.Context(), buildActionEvent(t, signer.fakeSigner, "lookup-error", nostr.Tags{{"soul", "scout"}, {"action", string(domain.SoulActionSuspend)}}, "")); err == nil || !strings.Contains(err.Error(), "lookup soul") {
+		t.Fatalf("HandleAction(suspend) error = %v, want lookup soul failure", err)
 	}
 }

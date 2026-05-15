@@ -1,0 +1,86 @@
+{
+  "feature_id": "SOUL_FACTORY_RUNTIME_LIFECYCLE",
+  "status": "draft_ready_for_implementation",
+  "criteria": [
+    {
+      "ac_id": "SFRL-AC-001",
+      "title": "Control plane remains signed Nostr-only",
+      "type": "contract",
+      "priority": "must",
+      "assertion": "Bahia provisioning and lifecycle control for OpenClaw and Metiq must use signed Nostr events only and must not introduce a REST control path.",
+      "testable_by": ["static", "integration", "e2e"],
+      "expected_result": "Operator intent is expressed with signed 31952/5950/1950 events, runtime control uses signed 38384 events, and no external REST agent-management path is added.",
+      "source_evidence": ["docs/plans/soulfactory-nostr-agent-lifecycle-2026-05-14.md", "docs/soulfactory-runtime-control.md"]
+    },
+    {
+      "ac_id": "SFRL-AC-002",
+      "title": "Relay handling is event-driven and response-aware",
+      "type": "protocol",
+      "priority": "must",
+      "assertion": "SoulFactory must explicitly handle EVENT, EOSE, OK, CLOSED, and AUTH, with scoped subscriptions, dedupe, validation, reconnect/backoff, and no timeout or relay-close terminal inference.",
+      "testable_by": ["unit", "integration"],
+      "expected_result": "Backfill completion is driven by EOSE, publish success requires accepted OK, CLOSED/AUTH are handled explicitly, duplicates are ignored, and timers are limited to valid backoff/health/rate-limit purposes.",
+      "source_evidence": ["docs/plans/soulfactory-nostr-agent-lifecycle-2026-05-14.md", "AGENTS.md Nostr Protocol Guardrails"]
+    },
+    {
+      "ac_id": "SFRL-AC-003",
+      "title": "Drafts and read models are reconciled deterministically",
+      "type": "data_integrity",
+      "priority": "must",
+      "assertion": "31952 is the canonical editable desired spec and 31951 is the authoritative observed/read model, with exact draft event id and spec hash captured for every run.",
+      "testable_by": ["unit", "integration", "e2e"],
+      "expected_result": "In-flight draft edits do not mutate active runs; 31951 includes draft, spec-hash, runtime binding, capability ref, deploy status, and last terminal result ref after immediately-known fields are present.",
+      "source_evidence": ["docs/plans/soulfactory-nostr-agent-lifecycle-2026-05-14.md"]
+    },
+    {
+      "ac_id": "SFRL-AC-004",
+      "title": "Runtime control contract is shared and complete",
+      "type": "contract",
+      "priority": "must",
+      "assertion": "The shared document defines soulfactory.provision, update, suspend, resume, redeploy, and revoke with methods, tags, params, results, errors, idempotency, trust, validation, and Go/TypeScript compatibility rules.",
+      "testable_by": ["contract", "unit"],
+      "expected_result": "OpenClaw and Metiq bridge tests can use the same method contract and fixtures without schema forks.",
+      "source_evidence": ["docs/soulfactory-runtime-control.md"]
+    },
+    {
+      "ac_id": "SFRL-AC-005",
+      "title": "Runtime capability discovery gates target selection",
+      "type": "functional",
+      "priority": "must",
+      "assertion": "OpenClaw and Metiq advertise 30317 capabilities and Bahia selects/provisions only discovered, trusted, compatible runtime targets.",
+      "testable_by": ["unit", "integration", "e2e"],
+      "expected_result": "Unsupported or unavailable runtime targets are hidden/rejected; selected targets include capability refs and compatible method/schema versions.",
+      "source_evidence": ["docs/plans/soulfactory-nostr-agent-lifecycle-2026-05-14.md", "docs/soulfactory-runtime-control.md"]
+    },
+    {
+      "ac_id": "SFRL-AC-006",
+      "title": "Runtime requests are trusted, validated, idempotent, and correlated",
+      "type": "security",
+      "priority": "must",
+      "assertion": "38384 requests must be signed by trusted SoulFactory controller keys, addressed to the target runtime, validated before side effects, idempotent by key, and correlated to 38386 results plus Bahia-facing 6950/7950 events.",
+      "testable_by": ["unit", "integration", "contract"],
+      "expected_result": "Unsigned, stale, duplicate, unauthorized, self-authored, malformed, or misaddressed requests are rejected safely; replay returns the previous result rather than repeating external side effects.",
+      "source_evidence": ["docs/plans/soulfactory-nostr-agent-lifecycle-2026-05-14.md", "docs/soulfactory-runtime-control.md"]
+    },
+    {
+      "ac_id": "SFRL-AC-007",
+      "title": "Bahia-facing lifecycle status/result semantics stay backward-compatible",
+      "type": "compatibility",
+      "priority": "must",
+      "assertion": "Lifecycle actions publish correlated 6950/7950 progress/results with lifecycle tags while preserving legacy event kinds and supporting any legacy KindSoulAction+1 result only as a migration alias.",
+      "testable_by": ["unit", "integration", "e2e"],
+      "expected_result": "Existing consumers of 31951/5950/6950/7950/1950 remain valid, new lifecycle consumers use 6950/7950, and migration aliases never become the primary contract.",
+      "source_evidence": ["docs/plans/soulfactory-nostr-agent-lifecycle-2026-05-14.md"]
+    },
+    {
+      "ac_id": "SFRL-AC-008",
+      "title": "First vertical slice verifies one OpenClaw and one Metiq lifecycle path",
+      "type": "end_to_end",
+      "priority": "must",
+      "assertion": "The first implementation slice must prove one OpenClaw target and one Metiq target can advertise capability, receive provisioning via 5950 to 38384, publish 38386, produce final 31951/7950, and handle one 1950 to 7950 lifecycle action.",
+      "testable_by": ["integration", "e2e"],
+      "expected_result": "Both runtime families pass the same documented control contract with deterministic event-driven tests and no sleep-based completion assumptions.",
+      "source_evidence": ["docs/plans/soulfactory-nostr-agent-lifecycle-2026-05-14.md"]
+    }
+  ]
+}

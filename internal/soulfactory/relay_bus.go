@@ -1,0 +1,599 @@
+package soulfactory
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/nbd-wtf/go-nostr"
+)
+
+// RelayPublishResult records one relay's OK outcome for a published event.
+// Accepted must correspond to the NIP-01 OK accepted flag; OK=false is not a
+// successful publish even when the relay supplied a reason.
+type RelayPublishResult struct {
+	RelayURL string
+	Accepted bool
+	Reason   string
+	Error    error
+}
+
+// RelayBusSubscription is the merged event stream exposed by the SoulFactory
+// relay bus. EndOfStoredEvents closes after every active relay has sent EOSE for
+// the initial subscription generation; Events remains open for realtime events
+// until the caller's context is cancelled.
+type RelayBusSubscription struct {
+	Events            <-chan *nostr.Event
+	EndOfStoredEvents <-chan struct{}
+	cancel            context.CancelFunc
+}
+
+func (s *RelayBusSubscription) Close() {
+	if s != nil && s.cancel != nil {
+		s.cancel()
+	}
+}
+
+type relayAuthSigner interface {
+	Sign(context.Context, *nostr.Event) error
+}
+
+type relayBusEndpoint interface {
+	URL() string
+	Publish(context.Context, nostr.Event) RelayPublishResult
+	Subscribe(context.Context, []nostr.Filter) (relayBusRelaySubscription, error)
+	Auth(context.Context, relayAuthSigner) error
+	Close()
+}
+
+type relayBusRelaySubscription interface {
+	Events() <-chan *nostr.Event
+	EndOfStoredEvents() <-chan struct{}
+	ClosedReason() <-chan string
+	Close()
+}
+
+type relayBusBackoff func(context.Context, int) error
+
+type RelayBusOption func(*SoulFactoryRelayBus)
+
+func WithRelayBusSigner(signer relayAuthSigner) RelayBusOption {
+	return func(b *SoulFactoryRelayBus) { b.signer = signer }
+}
+
+func WithRelayBusLogger(logger *slog.Logger) RelayBusOption {
+	return func(b *SoulFactoryRelayBus) {
+		if logger != nil {
+			b.logger = logger
+		}
+	}
+}
+
+func WithRelayBusBackoff(backoff relayBusBackoff) RelayBusOption {
+	return func(b *SoulFactoryRelayBus) {
+		if backoff != nil {
+			b.backoff = backoff
+		}
+	}
+}
+
+func WithRelayBusEventValidator(validator func(*nostr.Event) bool) RelayBusOption {
+	return func(b *SoulFactoryRelayBus) {
+		if validator != nil {
+			b.validateEvent = validator
+		}
+	}
+}
+
+// SoulFactoryRelayBus owns resilient publish/query/subscribe transport for
+// SoulFactory relay interactions. It keeps protocol completion event-driven:
+// EOSE marks backfill completion, OK decides publish acceptance, CLOSED/AUTH
+// drive subscription handling, and reconnect timers are used only for backoff.
+type SoulFactoryRelayBus struct {
+	endpoints     []relayBusEndpoint
+	signer        relayAuthSigner
+	logger        *slog.Logger
+	backoff       relayBusBackoff
+	validateEvent func(*nostr.Event) bool
+}
+
+func NewSoulFactoryRelayBus(relays []string, opts ...RelayBusOption) (*SoulFactoryRelayBus, error) {
+	relays = normalizeSoulRelays(relays)
+	if len(relays) == 0 {
+		return nil, fmt.Errorf("at least one SoulFactory relay is required")
+	}
+	endpoints := make([]relayBusEndpoint, 0, len(relays))
+	for _, relay := range relays {
+		endpoints = append(endpoints, newGoNostrRelayEndpoint(relay))
+	}
+	return newSoulFactoryRelayBusFromEndpoints(endpoints, opts...)
+}
+
+func newSoulFactoryRelayBusFromEndpoints(endpoints []relayBusEndpoint, opts ...RelayBusOption) (*SoulFactoryRelayBus, error) {
+	if len(endpoints) == 0 {
+		return nil, fmt.Errorf("at least one SoulFactory relay endpoint is required")
+	}
+	b := &SoulFactoryRelayBus{
+		endpoints:     endpoints,
+		logger:        slog.Default().With("component", "soulfactory-relay-bus"),
+		backoff:       defaultRelayBusBackoff,
+		validateEvent: validSignedEvent,
+	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(b)
+		}
+	}
+	return b, nil
+}
+
+func (b *SoulFactoryRelayBus) Publish(ctx context.Context, ev nostr.Event) (int, error) {
+	if b == nil || len(b.endpoints) == 0 {
+		return 0, fmt.Errorf("soul factory relay bus is not configured")
+	}
+	accepted := 0
+	var failures []string
+	for _, endpoint := range b.endpoints {
+		result := endpoint.Publish(ctx, ev)
+		if result.RelayURL == "" {
+			result.RelayURL = endpoint.URL()
+		}
+		if result.Accepted {
+			accepted++
+			continue
+		}
+		if result.Error != nil {
+			failures = append(failures, fmt.Sprintf("%s: %v", result.RelayURL, result.Error))
+			continue
+		}
+		reason := strings.TrimSpace(result.Reason)
+		if reason == "" {
+			reason = "OK false"
+		}
+		failures = append(failures, fmt.Sprintf("%s: %s", result.RelayURL, reason))
+	}
+	if accepted == 0 {
+		if len(failures) == 0 {
+			return 0, fmt.Errorf("event was not accepted by any relay")
+		}
+		return 0, fmt.Errorf("event was not accepted by any relay: %s", strings.Join(failures, "; "))
+	}
+	return accepted, nil
+}
+
+func (b *SoulFactoryRelayBus) SubscribeAllWithEOSE(ctx context.Context, filters []nostr.Filter) (*RelayBusSubscription, error) {
+	if b == nil || len(b.endpoints) == 0 {
+		return nil, fmt.Errorf("soul factory relay bus is not configured")
+	}
+	if len(filters) == 0 {
+		return nil, fmt.Errorf("at least one Nostr filter is required")
+	}
+
+	subCtx, cancel := context.WithCancel(ctx)
+	events := make(chan *nostr.Event, 64)
+	eose := make(chan struct{})
+	seen := map[string]struct{}{}
+	seenOrder := make([]string, 0, relayBusSeenLimit)
+	var seenMu sync.Mutex
+	var wg sync.WaitGroup
+	var eoseMu sync.Mutex
+	eosed := make(map[string]struct{}, len(b.endpoints))
+	var closeEOSE sync.Once
+
+	markEOSE := func(relay string) {
+		eoseMu.Lock()
+		defer eoseMu.Unlock()
+		if _, exists := eosed[relay]; exists {
+			return
+		}
+		eosed[relay] = struct{}{}
+		if len(eosed) == len(b.endpoints) {
+			closeEOSE.Do(func() { close(eose) })
+		}
+	}
+
+	dispatch := func(ev *nostr.Event) {
+		if ev == nil || !b.validateEvent(ev) {
+			return
+		}
+		seenMu.Lock()
+		if _, duplicate := seen[ev.ID]; duplicate {
+			seenMu.Unlock()
+			return
+		}
+		seen[ev.ID] = struct{}{}
+		seenOrder = append(seenOrder, ev.ID)
+		if len(seenOrder) > relayBusSeenLimit {
+			oldest := seenOrder[0]
+			seenOrder = seenOrder[1:]
+			delete(seen, oldest)
+		}
+		seenMu.Unlock()
+
+		select {
+		case events <- ev:
+		case <-subCtx.Done():
+		}
+	}
+
+	wg.Add(len(b.endpoints))
+	for _, endpoint := range b.endpoints {
+		endpoint := endpoint
+		go func() {
+			defer wg.Done()
+			b.runRelaySubscription(subCtx, endpoint, cloneRelayBusFilters(filters), dispatch, markEOSE)
+		}()
+	}
+
+	go func() {
+		wg.Wait()
+		close(events)
+		closeEOSE.Do(func() { close(eose) })
+	}()
+
+	return &RelayBusSubscription{Events: events, EndOfStoredEvents: eose, cancel: cancel}, nil
+}
+
+func (b *SoulFactoryRelayBus) Query(ctx context.Context, filters []nostr.Filter) ([]*nostr.Event, error) {
+	sub, err := b.SubscribeAllWithEOSE(ctx, filters)
+	if err != nil {
+		return nil, err
+	}
+	defer sub.Close()
+	var out []*nostr.Event
+	for {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-sub.EndOfStoredEvents:
+			return out, nil
+		case ev, ok := <-sub.Events:
+			if !ok {
+				return out, nil
+			}
+			out = append(out, ev)
+		}
+	}
+}
+
+func (b *SoulFactoryRelayBus) Close() {
+	if b == nil {
+		return
+	}
+	for _, endpoint := range b.endpoints {
+		endpoint.Close()
+	}
+}
+
+func (b *SoulFactoryRelayBus) runRelaySubscription(ctx context.Context, endpoint relayBusEndpoint, filters []nostr.Filter, dispatch func(*nostr.Event), markEOSE func(string)) {
+	relayURL := endpoint.URL()
+	attempt := 0
+	initialEOSEMarked := false
+	markInitialEOSE := func() {
+		if initialEOSEMarked {
+			return
+		}
+		initialEOSEMarked = true
+		markEOSE(relayURL)
+	}
+	for ctx.Err() == nil {
+		sub, err := endpoint.Subscribe(ctx, filters)
+		if err != nil {
+			markInitialEOSE()
+			attempt++
+			b.logger.Warn("relay subscription failed", "relay", relayURL, "attempt", attempt, "error", err)
+			if waitErr := b.backoff(ctx, attempt); waitErr != nil {
+				return
+			}
+			continue
+		}
+
+		attempt = 0
+		reissue, authReissue, eosed := b.consumeRelaySubscription(ctx, endpoint, sub, dispatch, markInitialEOSE)
+		if eosed {
+			initialEOSEMarked = true
+		}
+		sub.Close()
+		if !reissue || ctx.Err() != nil {
+			return
+		}
+		if authReissue {
+			continue
+		}
+		attempt++
+		if waitErr := b.backoff(ctx, attempt); waitErr != nil {
+			return
+		}
+	}
+}
+
+func (b *SoulFactoryRelayBus) consumeRelaySubscription(ctx context.Context, endpoint relayBusEndpoint, sub relayBusRelaySubscription, dispatch func(*nostr.Event), markEOSE func()) (reissue bool, authReissue bool, eosed bool) {
+	events := sub.Events()
+	eose := sub.EndOfStoredEvents()
+	closed := sub.ClosedReason()
+	for events != nil || eose != nil || closed != nil {
+		select {
+		case <-ctx.Done():
+			return false, false, eosed
+		default:
+		}
+		select {
+		case reason, ok := <-closed:
+			if !ok {
+				closed = nil
+				continue
+			}
+			return b.handleRelayClosed(ctx, endpoint, reason, eosed)
+		default:
+		}
+		select {
+		case _, ok := <-eose:
+			if ok || eose != nil {
+				markEOSE()
+				eosed = true
+			}
+			eose = nil
+			continue
+		default:
+		}
+
+		select {
+		case <-ctx.Done():
+			return false, false, eosed
+		case reason, ok := <-closed:
+			if !ok {
+				closed = nil
+				continue
+			}
+			return b.handleRelayClosed(ctx, endpoint, reason, eosed)
+		case _, ok := <-eose:
+			if ok || eose != nil {
+				markEOSE()
+				eosed = true
+			}
+			eose = nil
+		case ev, ok := <-events:
+			if !ok {
+				if reason, ok := drainRelayClosed(closed); ok {
+					return b.handleRelayClosed(ctx, endpoint, reason, eosed)
+				}
+				if !eosed && drainRelayEOSE(eose) {
+					markEOSE()
+					eosed = true
+				}
+				return true, false, eosed
+			}
+			dispatch(ev)
+		}
+	}
+	return true, false, eosed
+}
+
+func (b *SoulFactoryRelayBus) handleRelayClosed(ctx context.Context, endpoint relayBusEndpoint, reason string, eosed bool) (reissue bool, authReissue bool, eoseSeen bool) {
+	reason = strings.TrimSpace(reason)
+	if isRelayAuthRequired(reason) {
+		if b.signer == nil {
+			b.logger.Warn("relay requested auth but no signer is configured", "relay", endpoint.URL(), "reason", reason)
+			return true, false, eosed
+		}
+		if err := endpoint.Auth(ctx, b.signer); err != nil {
+			b.logger.Warn("relay auth failed", "relay", endpoint.URL(), "reason", reason, "error", err)
+			return true, false, eosed
+		}
+		return true, true, eosed
+	}
+	b.logger.Warn("relay closed subscription", "relay", endpoint.URL(), "reason", reason)
+	return true, false, eosed
+}
+
+func drainRelayClosed(ch <-chan string) (string, bool) {
+	if ch == nil {
+		return "", false
+	}
+	select {
+	case reason, ok := <-ch:
+		return reason, ok
+	default:
+		return "", false
+	}
+}
+
+func drainRelayEOSE(ch <-chan struct{}) bool {
+	if ch == nil {
+		return false
+	}
+	select {
+	case _, ok := <-ch:
+		return ok || ch != nil
+	default:
+		return false
+	}
+}
+
+const relayBusSeenLimit = 4096
+
+func defaultRelayBusBackoff(ctx context.Context, attempt int) error {
+	if attempt < 1 {
+		attempt = 1
+	}
+	delay := time.Second << min(attempt-1, 5)
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+func isRelayAuthRequired(reason string) bool {
+	return strings.HasPrefix(strings.TrimSpace(reason), "auth-required:")
+}
+
+func cloneRelayBusFilters(filters []nostr.Filter) []nostr.Filter {
+	cloned := make([]nostr.Filter, len(filters))
+	copy(cloned, filters)
+	return cloned
+}
+
+type goNostrRelayEndpoint struct {
+	url   string
+	mu    sync.Mutex
+	relay *nostr.Relay
+}
+
+func newGoNostrRelayEndpoint(url string) *goNostrRelayEndpoint {
+	return &goNostrRelayEndpoint{url: strings.TrimSpace(url)}
+}
+
+func (e *goNostrRelayEndpoint) URL() string { return e.url }
+
+func (e *goNostrRelayEndpoint) Publish(ctx context.Context, ev nostr.Event) RelayPublishResult {
+	if err := e.ensureConnected(ctx); err != nil {
+		return RelayPublishResult{RelayURL: e.url, Error: err}
+	}
+	e.mu.Lock()
+	relay := e.relay
+	e.mu.Unlock()
+	if relay == nil {
+		return RelayPublishResult{RelayURL: e.url, Error: fmt.Errorf("relay is not connected")}
+	}
+	if err := relay.Publish(ctx, ev); err != nil {
+		if reason, ok := relayOKFalseReason(err); ok {
+			return RelayPublishResult{RelayURL: e.url, Accepted: false, Reason: reason}
+		}
+		e.resetRelay()
+		return RelayPublishResult{RelayURL: e.url, Error: err}
+	}
+	return RelayPublishResult{RelayURL: e.url, Accepted: true}
+}
+
+func (e *goNostrRelayEndpoint) Subscribe(ctx context.Context, filters []nostr.Filter) (relayBusRelaySubscription, error) {
+	if err := e.ensureConnected(ctx); err != nil {
+		return nil, err
+	}
+	e.mu.Lock()
+	relay := e.relay
+	e.mu.Unlock()
+	if relay == nil {
+		return nil, fmt.Errorf("relay is not connected")
+	}
+	sub, err := relay.Subscribe(ctx, filters)
+	if err != nil {
+		e.resetRelay()
+		return nil, err
+	}
+	return goNostrRelaySubscription{sub: sub}, nil
+}
+
+func (e *goNostrRelayEndpoint) Auth(ctx context.Context, signer relayAuthSigner) error {
+	if signer == nil {
+		return fmt.Errorf("relay auth signer is required")
+	}
+	e.mu.Lock()
+	relay := e.relay
+	e.mu.Unlock()
+	if relay == nil {
+		return fmt.Errorf("relay is not connected")
+	}
+	return relay.Auth(ctx, func(event *nostr.Event) error { return signer.Sign(ctx, event) })
+}
+
+func (e *goNostrRelayEndpoint) Close() {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.relay != nil {
+		e.relay.Close()
+		e.relay = nil
+	}
+}
+
+func (e *goNostrRelayEndpoint) ensureConnected(ctx context.Context) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.relay != nil && e.relay.IsConnected() {
+		return nil
+	}
+	connectCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	relay, err := nostr.RelayConnect(connectCtx, e.url)
+	if err != nil {
+		e.relay = nil
+		return err
+	}
+	e.relay = relay
+	return nil
+}
+
+func (e *goNostrRelayEndpoint) resetRelay() {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.relay != nil {
+		e.relay.Close()
+		e.relay = nil
+	}
+}
+
+type goNostrRelaySubscription struct {
+	sub *nostr.Subscription
+}
+
+func (s goNostrRelaySubscription) Events() <-chan *nostr.Event {
+	if s.sub == nil {
+		return closedEventChannel()
+	}
+	return s.sub.Events
+}
+
+func (s goNostrRelaySubscription) EndOfStoredEvents() <-chan struct{} {
+	if s.sub == nil {
+		return closedStructChannel()
+	}
+	return s.sub.EndOfStoredEvents
+}
+
+func (s goNostrRelaySubscription) ClosedReason() <-chan string {
+	if s.sub == nil {
+		return closedStringChannel()
+	}
+	return s.sub.ClosedReason
+}
+
+func (s goNostrRelaySubscription) Close() {
+	if s.sub != nil {
+		s.sub.Unsub()
+	}
+}
+
+func relayOKFalseReason(err error) (string, bool) {
+	if err == nil {
+		return "", false
+	}
+	message := err.Error()
+	if strings.HasPrefix(message, "msg:") {
+		return strings.TrimSpace(strings.TrimPrefix(message, "msg:")), true
+	}
+	return "", false
+}
+
+func closedEventChannel() <-chan *nostr.Event {
+	ch := make(chan *nostr.Event)
+	close(ch)
+	return ch
+}
+
+func closedStructChannel() <-chan struct{} {
+	ch := make(chan struct{})
+	close(ch)
+	return ch
+}
+
+func closedStringChannel() <-chan string {
+	ch := make(chan string)
+	close(ch)
+	return ch
+}
