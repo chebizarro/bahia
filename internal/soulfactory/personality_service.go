@@ -11,13 +11,18 @@ import (
 )
 
 const (
-	// RuntimeMethodPersonaUpdate is the kind:38384 method used to hot-reload a
-	// persona/system prompt into a running runtime. The method is defined here so
-	// Bahia's mapper and runtime bridge work share one exact dispatch string.
+	// RuntimeMethodPersonaConfigure is the kind:38384 method used to hot-reload a
+	// persona/system prompt into a running runtime.
+	RuntimeMethodPersonaConfigure = "soulfactory.persona.configure"
+	// RuntimeMethodPersonaPreview renders the generated prompt sections without
+	// applying them to a running runtime.
+	RuntimeMethodPersonaPreview = "soulfactory.persona.preview"
+	// RuntimeMethodPersonaUpdate is retained as a compatibility alias for older
+	// clients that already emitted soulfactory.persona.update.
 	RuntimeMethodPersonaUpdate = "soulfactory.persona.update"
 
 	// PersonalityRuntimeParamsSchema versions the persona-specific params payload
-	// nested under RuntimeControlEnvelope.params for RuntimeMethodPersonaUpdate.
+	// nested under RuntimeControlEnvelope.params for persona runtime methods.
 	PersonalityRuntimeParamsSchema = "soulfactory-persona/v1"
 
 	OpenClawPromptSectionRole       = "role"
@@ -154,11 +159,48 @@ func GenerateSystemPrompt(spec domain.SoulPersonaSpec) (string, error) {
 }
 
 func BuildPersonaRuntimeControlParams(spec domain.SoulPersonaSpec) (map[string]interface{}, error) {
+	return BuildPersonaConfigureRuntimeParams(spec)
+}
+
+func BuildPersonaConfigureRuntimeParams(spec domain.SoulPersonaSpec) (map[string]interface{}, error) {
 	mapping, err := MapSoulPersonaToOpenClaw(spec)
 	if err != nil {
 		return nil, err
 	}
-	data, err := json.Marshal(mapping.RuntimeParams)
+	return personalityRuntimeParamsToMap(mapping.RuntimeParams)
+}
+
+func BuildPersonaPreviewRuntimeParams(spec domain.SoulPersonaSpec) (map[string]interface{}, error) {
+	return BuildPersonaConfigureRuntimeParams(spec)
+}
+
+func ParsePersonaRuntimeParams(params map[string]interface{}) (*PersonalityMapping, error) {
+	if params == nil {
+		return nil, fmt.Errorf("persona params are required")
+	}
+	var spec domain.SoulPersonaSpec
+	if rawPersona, ok := params["persona"]; ok {
+		data, err := json.Marshal(rawPersona)
+		if err != nil {
+			return nil, fmt.Errorf("marshal persona param: %w", err)
+		}
+		if err := json.Unmarshal(data, &spec); err != nil {
+			return nil, fmt.Errorf("decode persona param: %w", err)
+		}
+	} else {
+		data, err := json.Marshal(params)
+		if err != nil {
+			return nil, fmt.Errorf("marshal persona params: %w", err)
+		}
+		if err := json.Unmarshal(data, &spec); err != nil {
+			return nil, fmt.Errorf("decode persona params: %w", err)
+		}
+	}
+	return MapSoulPersonaToOpenClaw(spec)
+}
+
+func personalityRuntimeParamsToMap(runtimeParams PersonalityRuntimeParams) (map[string]interface{}, error) {
+	data, err := json.Marshal(runtimeParams)
 	if err != nil {
 		return nil, fmt.Errorf("marshal persona runtime params: %w", err)
 	}

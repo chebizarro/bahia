@@ -104,8 +104,8 @@ func TestBuildPersonaRuntimeControlParamsDefines38384Contract(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildPersonaRuntimeControlParams error = %v", err)
 	}
-	if RuntimeMethodPersonaUpdate != "soulfactory.persona.update" {
-		t.Fatalf("persona update method drifted: %q", RuntimeMethodPersonaUpdate)
+	if RuntimeMethodPersonaConfigure != "soulfactory.persona.configure" || RuntimeMethodPersonaPreview != "soulfactory.persona.preview" || RuntimeMethodPersonaUpdate != "soulfactory.persona.update" {
+		t.Fatalf("persona method drifted: configure=%q preview=%q update=%q", RuntimeMethodPersonaConfigure, RuntimeMethodPersonaPreview, RuntimeMethodPersonaUpdate)
 	}
 	if params["schema"] != PersonalityRuntimeParamsSchema {
 		t.Fatalf("params schema = %#v", params["schema"])
@@ -152,6 +152,29 @@ func TestBuildPersonaRuntimeControlParamsDefines38384Contract(t *testing.T) {
 	if parsed.Method != RuntimeMethodPersonaUpdate || parsed.Params["schema"] != PersonalityRuntimeParamsSchema {
 		body, _ := json.MarshalIndent(parsed, "", "  ")
 		t.Fatalf("parsed runtime contract drifted:\n%s", body)
+	}
+}
+
+func TestParsePersonaRuntimeParamsAcceptsRawPersonaSpec(t *testing.T) {
+	mapping, err := ParsePersonaRuntimeParams(map[string]interface{}{
+		"traits": []interface{}{"steady"},
+		"system_prompt_sections": map[string]interface{}{
+			"role": "You are SteadyBot.",
+		},
+	})
+	if err != nil {
+		t.Fatalf("ParsePersonaRuntimeParams error = %v", err)
+	}
+	if mapping.Persona.Traits[0] != "steady" || !strings.Contains(mapping.SystemPrompt, "You are SteadyBot.") {
+		t.Fatalf("unexpected mapping = %+v", mapping)
+	}
+
+	preview, err := BuildPersonaPreviewRuntimeParams(mapping.Persona)
+	if err != nil {
+		t.Fatalf("BuildPersonaPreviewRuntimeParams error = %v", err)
+	}
+	if preview["schema"] != PersonalityRuntimeParamsSchema || preview["openclaw"] == nil {
+		t.Fatalf("preview params = %#v", preview)
 	}
 }
 
