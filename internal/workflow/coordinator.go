@@ -139,18 +139,14 @@ func (c *Coordinator) ExecuteDeployment(ctx context.Context, intentID uuid.UUID)
 	if c.workerPolicy != nil {
 		selected, err := c.workerPolicy.SelectWorker(ctx, env)
 		if err != nil {
-			c.logger.Warn("worker policy selection failed, falling back to Loom auto-select",
-				zap.String("environment", env.Name),
-				zap.Error(err),
-			)
-		} else {
-			workerPubkey = selected.Worker.PubKey
-			c.logger.Info("worker selected by policy",
-				zap.String("pubkey", workerPubkey),
-				zap.String("strategy", selected.Reason),
-				zap.Float64("score", selected.Score),
-			)
+			return fmt.Errorf("selecting worker for environment %q: %w", env.Name, err)
 		}
+		workerPubkey = selected.Worker.PubKey
+		c.logger.Info("worker selected by policy",
+			zap.String("pubkey", workerPubkey),
+			zap.String("strategy", selected.Reason),
+			zap.Float64("score", selected.Score),
+		)
 	}
 
 	// Submit the deploy job to Loom.
