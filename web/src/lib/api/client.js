@@ -258,6 +258,21 @@ export class BahiaClient {
   // Workers
   listWorkers() { return this.fetch('/workers').then(r => r ?? []); }
   getWorker(pubkey) { return this.fetch(`/workers/${encodeURIComponent(pubkey)}`); }
+
+  // ML Fabric
+  listMLModels(params = {}) { return this.fetch(`/ml/models${this.query(params)}`).then(r => r ?? []); }
+  getMLModel(id) { return this.fetch(`/ml/models/${encodeURIComponent(id)}`); }
+  listMLModelVersions(modelId, params = {}) { return this.fetch(`/ml/models/${encodeURIComponent(modelId)}/versions${this.query(params)}`).then(r => r ?? []); }
+  getMLModelVersion(id) { return this.fetch(`/ml/model-versions/${encodeURIComponent(id)}`); }
+  listMLEndpoints(params = {}) { return this.fetch(`/ml/endpoints${this.query(params)}`).then(r => r ?? []); }
+  getMLEndpoint(id) { return this.fetch(`/ml/endpoints/${encodeURIComponent(id)}`); }
+  listMLState() { return this.fetch('/ml/state').then(r => r ?? []); }
+  getMLState(endpointId, envId) { return this.fetch(`/ml/endpoints/${encodeURIComponent(endpointId)}/environments/${encodeURIComponent(envId)}/state`); }
+  getMLArtifactProvenance(artifactId) { return this.fetch(`/ml/artifacts/${encodeURIComponent(artifactId)}/provenance`); }
+  importMLModel(payload) { return this.fetch('/ml/imports', { method: 'POST', body: JSON.stringify(payload) }); }
+  deployMLEndpoint(payload) { return this.fetch('/ml/deployments', { method: 'POST', body: JSON.stringify(payload) }); }
+  runMLRecipe(payload) { return this.fetch('/ml/recipes/runs', { method: 'POST', body: JSON.stringify(payload) }); }
+  rollbackMLEndpoint(payload) { return this.fetch('/ml/rollback', { method: 'POST', body: JSON.stringify(payload) }); }
   getWorkerPricing(pubkey) {
     return this.fetch(`/workers/${encodeURIComponent(pubkey)}/pricing`);
   }

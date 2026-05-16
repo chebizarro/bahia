@@ -48,6 +48,12 @@ export const policies = $state([]);
 export const workers = $state([]);
 export const events = $state([]);
 
+// AI/ML Fabric state
+export const mlModels = $state([]);
+export const mlModelVersions = $state([]);
+export const mlEndpoints = $state([]);
+export const mlEndpointStates = $state([]);
+
 export const loading = $state({
   services: false,
   environments: false,
@@ -73,6 +79,10 @@ const deploymentIntentMap = new Map();
 const deploymentRunMap = new Map();
 const policyMap = new Map();
 const workerMap = new Map();
+const mlModelMap = new Map();
+const mlModelVersionMap = new Map();
+const mlEndpointMap = new Map();
+const mlEndpointStateMap = new Map();
 const activityMap = new Map();
 
 let bootstrapPromise = null;
@@ -102,6 +112,10 @@ function resetArrays() {
   policies.length = 0;
   workers.length = 0;
   events.length = 0;
+  mlModels.length = 0;
+  mlModelVersions.length = 0;
+  mlEndpoints.length = 0;
+  mlEndpointStates.length = 0;
 }
 
 function replaceArray(target, values) {
@@ -127,6 +141,10 @@ function refreshCollections() {
   replaceArray(deploymentRuns, Array.from(deploymentRunMap.values()).sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || ''))));
   replaceArray(policies, Array.from(policyMap.values()).sort(sortByNameOrId));
   replaceArray(workers, Array.from(workerMap.values()).sort(sortByNameOrId));
+  replaceArray(mlModels, Array.from(mlModelMap.values()).sort(sortByNameOrId));
+  replaceArray(mlModelVersions, Array.from(mlModelVersionMap.values()).sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || ''))));
+  replaceArray(mlEndpoints, Array.from(mlEndpointMap.values()).sort(sortByNameOrId));
+  replaceArray(mlEndpointStates, Array.from(mlEndpointStateMap.values()).sort(sortByNameOrId));
   replaceArray(
     events,
     Array.from(activityMap.values())
@@ -172,6 +190,10 @@ export function resetControlplaneStore() {
   deploymentRunMap.clear();
   policyMap.clear();
   workerMap.clear();
+  mlModelMap.clear();
+  mlModelVersionMap.clear();
+  mlEndpointMap.clear();
+  mlEndpointStateMap.clear();
   activityMap.clear();
   resetArrays();
   setAllLoading(false);
@@ -490,6 +512,18 @@ export function applyControlplaneEvent(event) {
       break;
     case KINDS.LOOM_WORKER_AD:
       changed = applyWorkerEvent(event);
+      break;
+    case KINDS.BAHIA_ML_MODEL_REGISTRY:
+      changed = applyProjectedEntity(event, mlModelMap, ['id', 'slug']);
+      break;
+    case KINDS.BAHIA_ML_MODEL_VERSION_REGISTRY:
+      changed = applyProjectedEntity(event, mlModelVersionMap, ['id', 'version_id']);
+      break;
+    case KINDS.BAHIA_ML_ENDPOINT_REGISTRY:
+      changed = applyProjectedEntity(event, mlEndpointMap, ['id', 'endpoint_id']);
+      break;
+    case KINDS.BAHIA_ML_ENDPOINT_STATE:
+      changed = applyProjectedEntity(event, mlEndpointStateMap, ['id', 'endpoint_id']);
       break;
     default:
       changed = applyActivityEvent(event);

@@ -11,6 +11,7 @@ import {
   IconClockHour4,
   IconCamera,
   IconCopy,
+  IconCpu,
   IconDatabase,
   IconEdit,
   IconFile,
@@ -27,6 +28,7 @@ import {
   IconLogin2,
   IconMoon,
   IconMusic,
+  IconNetwork,
   IconPackage,
   IconPalette,
   IconPencil,
@@ -98,6 +100,8 @@ export const TemplateIcon = IconSparkles;
 export const LightweightIcon = IconBolt;
 export const StandardIcon = IconRobot;
 export const HeavyIcon = IconGauge;
+export const MLFabricIcon = IconNetwork;
+export const AcceleratorIcon = IconCpu;
 
 export const ImageFileIcon = IconPhoto;
 export const VideoFileIcon = IconVideo;
