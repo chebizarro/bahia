@@ -1,0 +1,135 @@
+package domain
+
+import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"strings"
+)
+
+// Operator assistant Nostr event kinds. These values are the canonical protocol
+// constants for the LLM-enabled operator assistant namespace.
+const (
+	KindAssistantSession       = 31990
+	KindAssistantPromptRequest = 38420
+	KindAssistantApproval      = 38421
+	KindAssistantStatus        = 38422
+	KindAssistantResult        = 38423
+)
+
+// AssistantSessionState describes the canonical per-session lifecycle state.
+type AssistantSessionState string
+
+const (
+	AssistantSessionStateIdle             AssistantSessionState = "idle"
+	AssistantSessionStatePlanning         AssistantSessionState = "planning"
+	AssistantSessionStateAwaitingApproval AssistantSessionState = "awaiting_approval"
+	AssistantSessionStateExecuting        AssistantSessionState = "executing"
+	AssistantSessionStateBlocked          AssistantSessionState = "blocked"
+	AssistantSessionStateCompleted        AssistantSessionState = "completed"
+	AssistantSessionStateFailed           AssistantSessionState = "failed"
+)
+
+// Terminal reports whether the state is terminal for a session turn.
+func (s AssistantSessionState) Terminal() bool {
+	switch s {
+	case AssistantSessionStateCompleted, AssistantSessionStateBlocked, AssistantSessionStateFailed:
+		return true
+	default:
+		return false
+	}
+}
+
+// AssistantSession is the content contract for the 31990 replaceable session
+// read model. The event must also carry d=<session_id>, session=<session_id>,
+// p=<operator pubkey>, agent=<assistant id>, and status=<state> tags.
+type AssistantSession struct {
+	SessionID         string                `json:"session_id"`
+	State             AssistantSessionState `json:"state"`
+	OperatorPubkey    string                `json:"operator_pubkey"`
+	AssistantID       string                `json:"assistant_id"`
+	AssistantPubkey   string                `json:"assistant_pubkey,omitempty"`
+	CurrentTurnID     string                `json:"current_turn_id,omitempty"`
+	CurrentRequestID  string                `json:"current_request_id,omitempty"`
+	LastPlanHash      string                `json:"last_plan_hash,omitempty"`
+	CurrentPlan       *AssistantPlan        `json:"current_plan,omitempty"`
+	PendingSteps      []AssistantPlanStep   `json:"pending_steps,omitempty"`
+	TranscriptSummary string                `json:"transcript_summary,omitempty"`
+	LastResultID      string                `json:"last_result_id,omitempty"`
+	Metadata          map[string]any        `json:"metadata,omitempty"`
+}
+
+// AssistantPlan is the JSON-schema-constrained plan contract shared by the LLM,
+// backend, and frontend.
+type AssistantPlan struct {
+	Summary            string              `json:"summary"`
+	NeedsClarification bool                `json:"needs_clarification"`
+	ClarifyingQuestion string              `json:"clarifying_question,omitempty"`
+	RiskLevel          string              `json:"risk_level"`
+	ContextRefs        []string            `json:"context_refs,omitempty"`
+	Steps              []AssistantPlanStep `json:"steps"`
+}
+
+// AssistantPlanStep is one ordered executable step in an assistant plan.
+type AssistantPlanStep struct {
+	StepID         string         `json:"step_id"`
+	Title          string         `json:"title"`
+	Description    string         `json:"description"`
+	ToolName       string         `json:"tool_name"`
+	ToolArgs       map[string]any `json:"tool_args"`
+	ArgsPreview    map[string]any `json:"args_preview,omitempty"`
+	IdempotencyKey string         `json:"idempotency_key,omitempty"`
+}
+
+// AssistantPromptRequest is the content contract for 38420 prompt request
+// events authored by the operator browser key.
+type AssistantPromptRequest struct {
+	SessionID    string         `json:"session_id"`
+	TurnID       string         `json:"turn_id"`
+	Prompt       string         `json:"prompt"`
+	RouteContext map[string]any `json:"route_context,omitempty"`
+	SelectedRefs []string       `json:"selected_refs,omitempty"`
+	Metadata     map[string]any `json:"metadata,omitempty"`
+}
+
+// AsyncToolReceipt normalizes event-native downstream tool dispatch metadata for
+// assistant-safe tools.
+type AsyncToolReceipt struct {
+	ToolName        string            `json:"tool_name"`
+	RequestEventID  string            `json:"request_event_id"`
+	RequestKind     int               `json:"request_kind"`
+	StatusKinds     []int             `json:"status_kinds"`
+	ResultKinds     []int             `json:"result_kinds"`
+	ReadModelKinds  []int             `json:"read_model_kinds,omitempty"`
+	DTag            string            `json:"d_tag,omitempty"`
+	ResourceTags    map[string]string `json:"resource_tags,omitempty"`
+	IdempotencyKey  string            `json:"idempotency_key"`
+	PublishedRelays []string          `json:"published_relays,omitempty"`
+}
+
+type assistantPlanHashEnvelope struct {
+	SessionID string        `json:"session_id"`
+	Plan      AssistantPlan `json:"plan"`
+}
+
+// ComputePlanHash returns sha256(canonical_json({session_id, plan})) as a
+// lowercase hex string. encoding/json emits deterministic struct field order and
+// sorted map keys for JSON object maps, with HTML escaping disabled, which is
+// sufficient for the Phase 1 plan hash contract. If the plan contains
+// non-JSON-marshalable values, an empty string is returned so callers can reject
+// the invalid plan.
+func ComputePlanHash(plan AssistantPlan, sessionID string) string {
+	var buf bytes.Buffer
+	encoder := json.NewEncoder(&buf)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(assistantPlanHashEnvelope{
+		SessionID: sessionID,
+		Plan:      plan,
+	}); err != nil {
+		return ""
+	}
+	payload := strings.TrimSuffix(buf.String(), "\n")
+	sum := sha256.Sum256([]byte(payload))
+	return hex.EncodeToString(sum[:])
+}

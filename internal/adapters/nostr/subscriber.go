@@ -40,6 +40,9 @@ var DefaultInboundKinds = []int{
 	5991, 5992, 5993, 5994, 5995, 5996,
 	5976, // Tool provisioning request
 	7977, // Tool approval response
+
+	// Operator assistant prompt/approval requests.
+	38420, 38421,
 }
 
 // EventHandler is called for each inbound event after persistence.
@@ -423,11 +426,11 @@ func (s *Subscriber) recordLastSeen(kind int, createdAt time.Time) {
 }
 
 func isCanonicalControlPlaneRequest(kind int) bool {
-	return (kind >= 5961 && kind <= 5968) || kind == 5976 || (kind >= 5991 && kind <= 5996) || (kind >= 38390 && kind <= 38394) || kind == 7977
+	return (kind >= 5961 && kind <= 5968) || kind == 5976 || (kind >= 5991 && kind <= 5996) || (kind >= 38390 && kind <= 38394) || kind == 7977 || kind == KindAssistantPromptRequest || kind == KindAssistantApproval
 }
 
 func isAuthorScopedInboundKind(kind int) bool {
-	return (kind >= 5961 && kind <= 5968) || kind == 5976 || (kind >= 5991 && kind <= 5996) || (kind >= 38390 && kind <= 38394) || kind == 7977 || (kind >= 31100 && kind <= 31105)
+	return (kind >= 5961 && kind <= 5968) || kind == 5976 || (kind >= 5991 && kind <= 5996) || (kind >= 38390 && kind <= 38394) || kind == 7977 || kind == KindAssistantPromptRequest || kind == KindAssistantApproval || (kind >= 31100 && kind <= 31105)
 }
 
 func timestampFromTime(t time.Time) *nostr.Timestamp {

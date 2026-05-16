@@ -151,16 +151,17 @@ type Reactor struct {
 	backoff     *nostrpool.Backoff
 	caughtUp    atomic.Bool
 
-	toolProvisioning  repository.ToolProvisioningRepository
-	toolResponder     *ToolResponder
-	toolCoordinator   *service.ToolProvisioningCoordinator
-	policyService     *service.PolicyService
-	adoption          AdoptionOperatorService
-	runtimeLifecycle  RuntimeLifecycleOperatorService
-	packageService    *service.PackageRegistryService
-	packageProjection repository.PackageControlPlaneRepository
-	mlExecutor        MLInferenceControlPlaneExecutor
-	nostrEvents       repository.NostrEventRepository
+	toolProvisioning      repository.ToolProvisioningRepository
+	toolResponder         *ToolResponder
+	toolCoordinator       *service.ToolProvisioningCoordinator
+	policyService         *service.PolicyService
+	adoption              AdoptionOperatorService
+	runtimeLifecycle      RuntimeLifecycleOperatorService
+	packageService        *service.PackageRegistryService
+	packageProjection     repository.PackageControlPlaneRepository
+	mlExecutor            MLInferenceControlPlaneExecutor
+	nostrEvents           repository.NostrEventRepository
+	assistantOrchestrator *service.AssistantOrchestrator
 
 	mu   sync.Mutex
 	runs map[string]*DeploymentRun // requestEventID -> run
@@ -247,6 +248,11 @@ func WithControlPlanePublisher(publisher NostrEventPublisher) ReactorOption {
 			r.publisher = publisher
 		}
 	}
+}
+
+// WithAssistantOrchestrator enables operator-assistant prompt and approval handling.
+func WithAssistantOrchestrator(orchestrator *service.AssistantOrchestrator) ReactorOption {
+	return func(r *Reactor) { r.assistantOrchestrator = orchestrator }
 }
 
 // NewReactor creates a new Bahia control plane reactor.
@@ -345,6 +351,8 @@ func (r *Reactor) Run(ctx context.Context) error {
 				KindPackagePromotionRequest,
 				KindPackageYankRequest,
 				KindPackageDriftDetect,
+				domain.KindAssistantPromptRequest,
+				domain.KindAssistantApproval,
 			},
 			Authors: r.requestSubscriptionAuthors(),
 			Since:   &now,
@@ -536,6 +544,10 @@ func (r *Reactor) handleEvent(ctx context.Context, event *nostr.Event) {
 		go r.handlePackageYankRequest(ctx, event)
 	case KindPackageDriftDetect:
 		go r.handlePackageDriftDetect(ctx, event)
+	case domain.KindAssistantPromptRequest:
+		r.handleAssistantPromptRequest(ctx, event)
+	case domain.KindAssistantApproval:
+		r.handleAssistantApprovalRequest(ctx, event)
 	default:
 		r.logger.Warn("unexpected event kind", "kind", event.Kind)
 	}

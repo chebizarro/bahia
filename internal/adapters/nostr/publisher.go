@@ -69,6 +69,16 @@ const (
 	KindMLRuntimeCapabilityProfile  = 31989
 )
 
+// Operator assistant event kinds. Keep these values aligned with
+// internal/domain/assistant.go without importing that package.
+const (
+	KindAssistantSession       = 31990
+	KindAssistantPromptRequest = 38420
+	KindAssistantApproval      = 38421
+	KindAssistantStatus        = 38422
+	KindAssistantResult        = 38423
+)
+
 // Nostr event kinds for Bahia inbound command events (311xx series).
 // DEPRECATED: These kinds are superseded by the control plane reactor's 596x series
 // (see internal/controlplane/reactor.go). The 311xx series remains for backward

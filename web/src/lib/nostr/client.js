@@ -176,6 +176,13 @@ export const KINDS = {
   BAHIA_ML_EVALUATION_STATE: 31987,
   BAHIA_ML_ARTIFACT_PROVENANCE: 31988,
   BAHIA_ML_RUNTIME_CAPABILITY: 31989,
+
+  // Operator assistant event kinds
+  ASSISTANT_SESSION: 31990,
+  ASSISTANT_PROMPT_REQUEST: 38420,
+  ASSISTANT_APPROVAL: 38421,
+  ASSISTANT_STATUS: 38422,
+  ASSISTANT_RESULT: 38423,
   
   // SBOM Attestation/Index kinds (NIP-51 style parameterized lists)
   SBOM_ATTESTATION: 30078,
@@ -317,6 +324,37 @@ export const BAHIA_CONTROLPLANE_KINDS = [
   ...BAHIA_SBOM_KINDS
 ];
 
+// Operator assistant kinds are intentionally kept separate from the canonical
+// Bahia control-plane arrays. Assistant subscriptions compose these explicitly.
+export const ASSISTANT_KINDS = {
+  SESSION: KINDS.ASSISTANT_SESSION,
+  PROMPT_REQUEST: KINDS.ASSISTANT_PROMPT_REQUEST,
+  APPROVAL: KINDS.ASSISTANT_APPROVAL,
+  STATUS: KINDS.ASSISTANT_STATUS,
+  RESULT: KINDS.ASSISTANT_RESULT
+};
+
+export const ASSISTANT_EVENT_KINDS = Object.values(ASSISTANT_KINDS);
+
+export const ASSISTANT_SESSION_STATES = {
+  IDLE: 'idle',
+  PLANNING: 'planning',
+  AWAITING_APPROVAL: 'awaiting_approval',
+  EXECUTING: 'executing',
+  BLOCKED: 'blocked',
+  COMPLETED: 'completed',
+  FAILED: 'failed'
+};
+
+export const ASSISTANT_RESULT_STATUSES = {
+  COMPLETED: 'completed',
+  BLOCKED: 'blocked',
+  FAILED: 'failed',
+  REJECTED: 'rejected',
+  CANCELLED: 'cancelled',
+  NEEDS_CLARIFICATION: 'needs_clarification'
+};
+
 // Default relays - can be overridden via localStorage or connect() parameter
 const DEFAULT_RELAYS = [
   'wss://relay.sharegap.net',
@@ -406,6 +444,104 @@ export function parseJsonContent(event, fallback = {}) {
   } catch {
     return fallback;
   }
+}
+
+function getTaggedEventRef(event, marker = 'reply') {
+  const tag = (event?.tags || []).find((candidate) =>
+    Array.isArray(candidate) && candidate[0] === 'e' && candidate[1] && (!marker || candidate[3] === marker)
+  );
+  return tag?.[1] || '';
+}
+
+function getTaggedPubkeyRef(event, role = '') {
+  const tag = (event?.tags || []).find((candidate) =>
+    Array.isArray(candidate) && candidate[0] === 'p' && candidate[1] && (!role || candidate[3] === role)
+  );
+  return tag?.[1] || '';
+}
+
+export function parseAssistantSessionEvent(event) {
+  if (!event || event.kind !== KINDS.ASSISTANT_SESSION) return null;
+  const content = parseJsonContent(event, {});
+  const sessionId = getTagValue(event, 'session', content.session_id || getDTag(event));
+  const state = getTagValue(event, 'status', content.state || ASSISTANT_SESSION_STATES.IDLE);
+
+  return {
+    id: event.id,
+    kind: event.kind,
+    pubkey: event.pubkey,
+    createdAt: event.created_at,
+    sessionId,
+    state,
+    operatorPubkey: getTaggedPubkeyRef(event, 'operator') || content.operator_pubkey || '',
+    assistantId: getTagValue(event, 'agent', content.assistant_id || ''),
+    assistantPubkey: content.assistant_pubkey || '',
+    currentTurnId: content.current_turn_id || '',
+    currentRequestId: content.current_request_id || '',
+    lastPlanHash: content.last_plan_hash || '',
+    currentPlan: content.current_plan || null,
+    pendingSteps: Array.isArray(content.pending_steps) ? content.pending_steps : [],
+    transcriptSummary: content.transcript_summary || '',
+    lastResultId: content.last_result_id || '',
+    content,
+    event
+  };
+}
+
+export function parseAssistantStatusEvent(event) {
+  if (!event || event.kind !== KINDS.ASSISTANT_STATUS) return null;
+  const content = parseJsonContent(event, {});
+  const status = getTagValue(event, 'status', content.status || '');
+
+  return {
+    id: event.id,
+    kind: event.kind,
+    pubkey: event.pubkey,
+    createdAt: event.created_at,
+    sessionId: getTagValue(event, 'session', content.session_id || ''),
+    assistantId: getTagValue(event, 'agent', content.assistant_id || ''),
+    status,
+    requestEventId: getTaggedEventRef(event, 'reply') || content.request_event_id || '',
+    planHash: getTagValue(event, 'plan-hash', content.plan_hash || ''),
+    stepId: getTagValue(event, 'step', content.step_id || ''),
+    downstreamRequestId: getTagValue(event, 'downstream-request', content.downstream_request_id || ''),
+    message: content.message || event.content || '',
+    plan: content.plan || null,
+    receipt: content.receipt || null,
+    content,
+    event
+  };
+}
+
+export function parseAssistantResultEvent(event) {
+  if (!event || event.kind !== KINDS.ASSISTANT_RESULT) return null;
+  const content = parseJsonContent(event, {});
+  const status = getTagValue(event, 'status', content.status || '');
+
+  return {
+    id: event.id,
+    kind: event.kind,
+    pubkey: event.pubkey,
+    createdAt: event.created_at,
+    sessionId: getTagValue(event, 'session', content.session_id || ''),
+    assistantId: getTagValue(event, 'agent', content.assistant_id || ''),
+    status,
+    requestEventId: getTaggedEventRef(event, 'reply') || content.request_event_id || '',
+    planHash: getTagValue(event, 'plan-hash', content.plan_hash || ''),
+    downstreamRequestId: getTagValue(event, 'downstream-request', content.downstream_request_id || ''),
+    success: status === ASSISTANT_RESULT_STATUSES.COMPLETED || content.success === true,
+    blocked: status === ASSISTANT_RESULT_STATUSES.BLOCKED,
+    failed: status === ASSISTANT_RESULT_STATUSES.FAILED || content.success === false,
+    rejected: status === ASSISTANT_RESULT_STATUSES.REJECTED,
+    cancelled: status === ASSISTANT_RESULT_STATUSES.CANCELLED,
+    needsClarification: status === ASSISTANT_RESULT_STATUSES.NEEDS_CLARIFICATION,
+    summary: content.summary || content.message || event.content || '',
+    error: content.error || '',
+    downstreamResults: Array.isArray(content.downstream_results) ? content.downstream_results : [],
+    usage: content.usage || null,
+    content,
+    event
+  };
 }
 
 export function normalizeSoulDraftContent(content = {}) {

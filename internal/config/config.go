@@ -38,6 +38,17 @@ type Config struct {
 	Registry      RegistryAdapterConfig     `koanf:"registry"`
 	LLM           LLMControlplaneConfig     `koanf:"llm"`
 	Packages      PackageControlplaneConfig `koanf:"packages"`
+	Assistant     AssistantConfig           `koanf:"assistant"`
+}
+
+// AssistantConfig controls the operator assistant backend orchestration path.
+type AssistantConfig struct {
+	Enabled         bool   `koanf:"enabled"`
+	LLMBaseURL      string `koanf:"llm_base_url"`
+	LLMModel        string `koanf:"llm_model"`
+	LLMAPIKey       string `koanf:"llm_api_key"`
+	SignetBunkerURI string `koanf:"signet_bunker_uri"`
+	SignetAllowMock bool   `koanf:"signet_allow_mock"`
 }
 
 // PackageControlplaneConfig registers package repository backends and source-fetch guardrails.
@@ -428,6 +439,10 @@ func Defaults() *Config {
 			ReconcileInterval:       60 * time.Second,
 			Gateways:                map[string]LLMGatewayEndpointConfig{},
 		},
+		Assistant: AssistantConfig{
+			Enabled:    false,
+			LLMBaseURL: "https://api.openai.com",
+		},
 		Packages: PackageControlplaneConfig{
 			Enabled:            false,
 			AllowedSourceHosts: []string{},
@@ -518,6 +533,10 @@ func Load(configPath string) (*Config, error) {
 		key := strings.ToLower(strings.TrimPrefix(s, "BAHIA_"))
 		// First, honour explicit double-underscore separators.
 		key = strings.ReplaceAll(key, "__", ".")
+		switch key {
+		case "assistant_enabled", "assistant_llm_base_url", "assistant_llm_model", "assistant_llm_api_key":
+			return key
+		}
 		// If no explicit separator was found, split on the first underscore.
 		if !strings.Contains(key, ".") {
 			if i := strings.Index(key, "_"); i >= 0 {
@@ -538,11 +557,27 @@ func Load(configPath string) (*Config, error) {
 	if err := k.Unmarshal("", cfg); err != nil {
 		return nil, fmt.Errorf("unmarshaling config: %w", err)
 	}
+	applyAssistantFlatCompat(k, cfg)
 	if err := cfg.validate(); err != nil {
 		return nil, err
 	}
 
 	return cfg, nil
+}
+
+func applyAssistantFlatCompat(k *koanf.Koanf, cfg *Config) {
+	if k.Exists("assistant_enabled") {
+		cfg.Assistant.Enabled = k.Bool("assistant_enabled")
+	}
+	if k.Exists("assistant_llm_base_url") {
+		cfg.Assistant.LLMBaseURL = k.String("assistant_llm_base_url")
+	}
+	if k.Exists("assistant_llm_model") {
+		cfg.Assistant.LLMModel = k.String("assistant_llm_model")
+	}
+	if k.Exists("assistant_llm_api_key") {
+		cfg.Assistant.LLMAPIKey = k.String("assistant_llm_api_key")
+	}
 }
 
 func rejectRemovedAuthKeys(k *koanf.Koanf) error {
@@ -635,6 +670,9 @@ func (c *Config) validate() error {
 		return err
 	}
 	if err := c.validateLLM(); err != nil {
+		return err
+	}
+	if err := c.validateAssistant(); err != nil {
 		return err
 	}
 	if err := c.validatePackages(); err != nil {
@@ -797,6 +835,30 @@ func (c *Config) validateLLM() error {
 		if _, ok := c.LLM.Gateways[ref]; !ok {
 			return fmt.Errorf("config validation failed: llm.default_gateway_ref %q is not configured", ref)
 		}
+	}
+	return nil
+}
+
+func (c *Config) validateAssistant() error {
+	c.Assistant.LLMBaseURL = strings.TrimRight(strings.TrimSpace(c.Assistant.LLMBaseURL), "/")
+	c.Assistant.LLMModel = strings.TrimSpace(c.Assistant.LLMModel)
+	c.Assistant.LLMAPIKey = strings.TrimSpace(c.Assistant.LLMAPIKey)
+	c.Assistant.SignetBunkerURI = strings.TrimSpace(c.Assistant.SignetBunkerURI)
+	if c.Assistant.LLMBaseURL == "" {
+		c.Assistant.LLMBaseURL = "https://api.openai.com"
+	}
+	if !c.Assistant.Enabled {
+		return nil
+	}
+	if c.Assistant.LLMModel == "" {
+		return fmt.Errorf("config validation failed: assistant.llm_model is required when assistant.enabled=true")
+	}
+	parsed, err := url.Parse(c.Assistant.LLMBaseURL)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return fmt.Errorf("config validation failed: assistant.llm_base_url must be a valid URL")
+	}
+	if strings.TrimSpace(c.Nostr.PrivateKey) == "" {
+		return fmt.Errorf("config validation failed: nostr.private_key is required when assistant.enabled=true")
 	}
 	return nil
 }

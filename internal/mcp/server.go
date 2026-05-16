@@ -32,6 +32,7 @@ type Server struct {
 	llmRegistry       *service.LLMRegistryService
 	mlCommands        MLCommandPublisher
 	llmCommands       LLMCommandPublisher
+	serviceCommands   ServiceCommandPublisher
 	packageCommands   PackageCommandPublisher
 	packageProjection repository.PackageControlPlaneRepository
 	logger            *zap.Logger
@@ -74,6 +75,7 @@ type ServerDeps struct {
 	MLCommandPublisher      MLCommandPublisher
 	LLMRegistry             *service.LLMRegistryService
 	LLMCommandPublisher     LLMCommandPublisher
+	ServiceCommandPublisher ServiceCommandPublisher
 	PackageCommandPublisher PackageCommandPublisher
 	PackageProjection       repository.PackageControlPlaneRepository
 }
@@ -89,6 +91,12 @@ type MLCommandPublisher interface {
 	PublishMLRecipeRunRequest(ctx context.Context, cmd controlplane.MLCommandPayload) (*controlplane.MLCommandReceipt, error)
 	PublishMLInferenceDeployRequest(ctx context.Context, cmd controlplane.MLCommandPayload) (*controlplane.MLCommandReceipt, error)
 	PublishMLInferenceRollbackRequest(ctx context.Context, cmd controlplane.MLCommandPayload) (*controlplane.MLCommandReceipt, error)
+}
+
+// ServiceCommandPublisher emits canonical Nostr request events for assistant-safe service tools.
+type ServiceCommandPublisher interface {
+	PublishDeployRequest(ctx context.Context, cmd controlplane.ServiceDeployCommand) (*controlplane.ServiceCommandReceipt, error)
+	PublishRollbackRequest(ctx context.Context, cmd controlplane.ServiceRollbackCommand) (*controlplane.ServiceCommandReceipt, error)
 }
 
 // LLMCommandPublisher emits canonical Nostr request events for signer-first LLM MCP tools.
@@ -133,6 +141,7 @@ func NewServerWithOptions(registry *service.RegistryService, logger *zap.Logger,
 		llmRegistry:       deps.LLMRegistry,
 		mlCommands:        deps.MLCommandPublisher,
 		llmCommands:       deps.LLMCommandPublisher,
+		serviceCommands:   deps.ServiceCommandPublisher,
 		packageCommands:   deps.PackageCommandPublisher,
 		packageProjection: deps.PackageProjection,
 		logger:            logger,
@@ -1673,10 +1682,16 @@ func (s *Server) GetTools() []Tool {
 		},
 	}
 	tools = append(tools, mlToolDefinitions()...)
+	tools = append(tools, assistantAsyncToolDefinitions()...)
 	return append(tools, packageToolDefinitions()...)
 }
 
 // CallTool handles an MCP tool call.
+// InvokeTool exposes the in-process tool path used by the assistant orchestrator.
+func (s *Server) InvokeTool(ctx context.Context, name string, arguments map[string]interface{}) (*ToolResult, error) {
+	return s.CallTool(ctx, name, arguments)
+}
+
 func (s *Server) CallTool(ctx context.Context, name string, arguments map[string]interface{}) (*ToolResult, error) {
 	s.logger.Info("tool call", zap.String("tool", name))
 
@@ -1719,6 +1734,8 @@ func (s *Server) CallTool(ctx context.Context, name string, arguments map[string
 		return s.handleMLDeploy(ctx, arguments)
 	case "bahia_ml_rollback":
 		return s.handleMLRollback(ctx, arguments)
+	case "bahia_assistant_service_deploy", "bahia_assistant_service_rollback", "bahia_assistant_llm_deploy", "bahia_assistant_llm_approve_deployment", "bahia_assistant_llm_rollback", "bahia_assistant_ml_deploy", "bahia_assistant_ml_approve_deployment", "bahia_assistant_ml_rollback":
+		return s.handleAssistantAsyncTool(ctx, name, arguments)
 	case "bahia_ml_list_state":
 		return s.handleMLListState(ctx, arguments)
 	case "bahia_ml_get_state":

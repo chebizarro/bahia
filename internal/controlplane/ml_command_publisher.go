@@ -90,6 +90,13 @@ func (p *MLCommandPublisher) PublishMLInferenceDeployRequest(ctx context.Context
 	return p.publish(ctx, KindMLInferenceDeployRequest, KindMLInferenceDeployResult, mlEndpointReadModels(), "ml-inference-deploy", cmd)
 }
 
+func (p *MLCommandPublisher) PublishMLInferenceApprovalRequest(ctx context.Context, cmd MLCommandPayload) (*MLCommandReceipt, error) {
+	if !hasAnyMLField(cmd.Content, "intent_id") {
+		return nil, fmt.Errorf("intent_id is required")
+	}
+	return p.publish(ctx, KindMLInferenceDeploymentApproval, KindMLInferenceApprovalResult, mlEndpointReadModels(), "ml-inference-approval", cmd)
+}
+
 func (p *MLCommandPublisher) PublishMLInferenceRollbackRequest(ctx context.Context, cmd MLCommandPayload) (*MLCommandReceipt, error) {
 	if !hasAnyMLField(cmd.Content, "endpoint", "endpoint_id") {
 		return nil, fmt.Errorf("endpoint or endpoint_id is required")

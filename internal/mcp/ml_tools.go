@@ -193,6 +193,13 @@ func mlPayloadFromArgs(args map[string]interface{}) controlplane.MLCommandPayloa
 	return payload
 }
 
+func mlReceiptResourceTags(receipt *controlplane.MLCommandReceipt) map[string]string {
+	if receipt == nil {
+		return nil
+	}
+	return map[string]string{"endpoint": receipt.Endpoint, "endpoint_id": receipt.EndpointID, "environment": receipt.Environment, "environment_id": receipt.EnvironmentID, "model_version": receipt.ModelVersion, "model_version_id": receipt.ModelVersionID, "model": receipt.Model, "recipe": receipt.Recipe, "run": receipt.Run, "artifact": receipt.Artifact, "runtime": receipt.Runtime}
+}
+
 func mlCommandReceiptToMap(status string, receipt *controlplane.MLCommandReceipt) map[string]interface{} {
 	result := map[string]interface{}{"status": status}
 	if receipt == nil {
@@ -202,7 +209,10 @@ func mlCommandReceiptToMap(status string, receipt *controlplane.MLCommandReceipt
 	result["request_pubkey"] = receipt.RequestPubkey
 	result["request_kind"] = receipt.RequestKind
 	result["result_kind"] = receipt.ResultKind
+	result["status_kinds"] = []int{}
+	result["result_kinds"] = []int{receipt.ResultKind}
 	result["read_model_kinds"] = receipt.ReadModelKinds
+	result["resource_tags"] = mlReceiptResourceTags(receipt)
 	result["d_tag"] = receipt.DTag
 	result["published_relays"] = receipt.PublishedRelays
 	if receipt.Endpoint != "" {

@@ -3,14 +3,18 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/nbd-wtf/go-nostr"
 	"github.com/openagentsinc/bahia/internal/adapters/blossom"
 	"github.com/openagentsinc/bahia/internal/adapters/build"
 	"github.com/openagentsinc/bahia/internal/adapters/harbor"
@@ -21,6 +25,7 @@ import (
 	registryAdapter "github.com/openagentsinc/bahia/internal/adapters/registry"
 	"github.com/openagentsinc/bahia/internal/adapters/runtime"
 	secretsAdapter "github.com/openagentsinc/bahia/internal/adapters/secrets"
+	signetAdapter "github.com/openagentsinc/bahia/internal/adapters/signet"
 	"github.com/openagentsinc/bahia/internal/adapters/signing"
 	"github.com/openagentsinc/bahia/internal/adapters/telemetry"
 	"github.com/openagentsinc/bahia/internal/api/handlers"
@@ -38,6 +43,7 @@ import (
 	"github.com/openagentsinc/bahia/internal/reconcile"
 	"github.com/openagentsinc/bahia/internal/repository"
 	"github.com/openagentsinc/bahia/internal/service"
+	"github.com/openagentsinc/bahia/internal/soulfactory"
 	"github.com/openagentsinc/bahia/internal/workflow"
 	"go.uber.org/zap"
 )
@@ -363,7 +369,7 @@ func New(cfg *config.Config) (*App, error) {
 	// Nostr inbound subscriber: listens for Hive-CI, Loom, and Bahia events.
 	nostrSub := nostrAdapter.NewSubscriber(relayPool, nostrEventRepo, logger,
 		nostrAdapter.WithHandler(nostrProcessor.Handle),
-		nostrAdapter.WithAuthorizedAuthors(cfg.Nostr.AuthorizedPubkeys),
+		nostrAdapter.WithAuthorizedAuthors(controlPlaneAuthorizedPubkeys(cfg, service.AssistantIdentity{})),
 	)
 	bgManager.Register(nostrSub)
 
@@ -474,6 +480,10 @@ func New(cfg *config.Config) (*App, error) {
 	if llmRegistry != nil && controlPlaneSigner != nil && controlPlanePool != nil && len(controlPlaneRelays) > 0 {
 		llmCommandPublisher = controlplane.NewLLMCommandPublisher(controlPlanePool, controlPlaneSigner)
 	}
+	var serviceCommandPublisher mcp.ServiceCommandPublisher
+	if controlPlaneSigner != nil && controlPlanePool != nil && len(controlPlaneRelays) > 0 {
+		serviceCommandPublisher = controlplane.NewServiceCommandPublisher(controlPlanePool, controlPlaneSigner)
+	}
 	var packageCommandPublisher mcp.PackageCommandPublisher
 	if packageRegistrySvc != nil && controlPlaneSigner != nil && controlPlanePool != nil && len(controlPlaneRelays) > 0 {
 		packageCommandPublisher = controlplane.NewPackageCommandPublisher(controlPlanePool, controlPlaneSigner)
@@ -488,11 +498,38 @@ func New(cfg *config.Config) (*App, error) {
 		MLCommandPublisher:      mlCommandPublisher,
 		LLMRegistry:             llmRegistry,
 		LLMCommandPublisher:     llmCommandPublisher,
+		ServiceCommandPublisher: serviceCommandPublisher,
 		PackageCommandPublisher: packageCommandPublisher,
 		PackageProjection:       packageProjection,
 	})
 	mcpHandler := handlers.NewMCPHandler(mcpServer, logger)
 	logger.Info("mcp server initialized")
+
+	var assistantOrchestrator *service.AssistantOrchestrator
+	var assistantIdentity service.AssistantIdentity
+	if cfg.Assistant.Enabled {
+		identity := bootstrapOperatorAssistant(ctx, cfg, controlPlaneRelays, logger)
+		assistantIdentity = identity
+		contextBuilder := service.NewAssistantContextBuilder(registry, llmRegistry, mlRegistry, nil, service.AssistantContextBuilderConfig{})
+		chatClient := llmadapter.NewChatClient(llmadapter.ChatClientConfig{
+			BaseURL: cfg.Assistant.LLMBaseURL,
+			Model:   cfg.Assistant.LLMModel,
+			APIKey:  cfg.Assistant.LLMAPIKey,
+		}, slog.Default())
+		assistantOrchestrator = service.NewAssistantOrchestrator(service.AssistantOrchestratorConfig{
+			ChatClient:       chatClient,
+			ContextBuilder:   contextBuilder,
+			ToolInvoker:      mcpServer,
+			Publisher:        &auditedNostrPublisher{delegate: controlPlanePool, repo: nostrEventRepo, logger: logger},
+			Subscriber:       assistantRelaySubscriber{pool: controlPlanePool},
+			Signer:           controlPlaneSigner,
+			Identity:         identity,
+			AllowedToolNames: assistantToolNames(mcpServer),
+			InitialSessions:  loadAssistantSessions(ctx, nostrEventRepo, logger),
+			Logger:           slog.Default(),
+		})
+		logger.Info("operator assistant orchestrator initialized", zap.String("agent_id", identity.AgentID), zap.String("assistant_pubkey", identity.Pubkey))
+	}
 
 	// Encrypted request/result event runtime for sensitive browser route migrations.
 	if len(encryptedRequestRelays) > 0 && encryptedRequestPool != nil && controlPlaneSigner != nil && cfg.Nostr.PrivateKey != "" {
@@ -530,7 +567,7 @@ func New(cfg *config.Config) (*App, error) {
 		reactorConfig := controlplane.Config{
 			Relays:                         controlPlaneRelays,
 			PrivateKey:                     cfg.Nostr.PrivateKey,
-			AuthorizedPubkeys:              cfg.Nostr.AuthorizedPubkeys,
+			AuthorizedPubkeys:              controlPlaneAuthorizedPubkeys(cfg, assistantIdentity),
 			AdoptionAuthorizedPubkeys:      cfg.Adoption.AllowedPubkeys,
 			DirectRuntimeAuthorizedPubkeys: cfg.DirectRuntime.AllowedPubkeys,
 		}
@@ -563,6 +600,9 @@ func New(cfg *config.Config) (*App, error) {
 		}
 		if llmRegistry != nil {
 			reactorOpts = append(reactorOpts, controlplane.WithLLMRegistry(llmRegistry))
+		}
+		if assistantOrchestrator != nil {
+			reactorOpts = append(reactorOpts, controlplane.WithAssistantOrchestrator(assistantOrchestrator))
 		}
 		if packageRegistrySvc != nil {
 			reactorOpts = append(reactorOpts,
@@ -807,6 +847,178 @@ func (r *reconcilerRunner) Name() string { return "reconciler" }
 func (r *reconcilerRunner) Run(ctx context.Context) error {
 	r.rec.Run(ctx)
 	return nil
+}
+
+type assistantRelaySubscriber struct {
+	pool *nostrAdapter.RelayPool
+}
+
+func (s assistantRelaySubscriber) SubscribeAllWithEOSE(ctx context.Context, filters []nostr.Filter) (service.AssistantMergedSubscription, error) {
+	if s.pool == nil {
+		return nil, fmt.Errorf("assistant relay pool is not configured")
+	}
+	merged, err := s.pool.SubscribeAllWithEOSE(ctx, filters)
+	if err != nil {
+		return nil, err
+	}
+	return assistantMergedSubscription{merged: merged}, nil
+}
+
+type assistantMergedSubscription struct {
+	merged *nostrAdapter.MergedSubscription
+}
+
+func (s assistantMergedSubscription) EventChan() <-chan *nostr.Event {
+	if s.merged == nil {
+		ch := make(chan *nostr.Event)
+		close(ch)
+		return ch
+	}
+	return s.merged.Events
+}
+
+func (s assistantMergedSubscription) ClosedChan() <-chan service.AssistantRelayClosed {
+	out := make(chan service.AssistantRelayClosed, 16)
+	if s.merged == nil {
+		close(out)
+		return out
+	}
+	go func() {
+		defer close(out)
+		for closed := range s.merged.Closed {
+			out <- service.AssistantRelayClosed{RelayURL: closed.RelayURL, Reason: closed.Reason}
+		}
+	}()
+	return out
+}
+
+func (s assistantMergedSubscription) Close() {
+	if s.merged != nil {
+		s.merged.Close()
+	}
+}
+
+type auditedNostrPublisher struct {
+	delegate controlplane.NostrEventPublisher
+	repo     repository.NostrEventRepository
+	logger   *zap.Logger
+}
+
+func (p *auditedNostrPublisher) Publish(ctx context.Context, ev nostr.Event) (int, error) {
+	if p == nil || p.delegate == nil {
+		return 0, fmt.Errorf("audited nostr publisher delegate is not configured")
+	}
+	published, err := p.delegate.Publish(ctx, ev)
+	if err == nil && published > 0 && p.repo != nil {
+		tagsJSON, marshalErr := json.Marshal(ev.Tags)
+		if marshalErr != nil {
+			if p.logger != nil {
+				p.logger.Warn("failed to marshal audited assistant event tags", zap.String("event_id", ev.ID), zap.Error(marshalErr))
+			}
+		} else if _, recordErr := p.repo.Record(ctx, &repository.NostrEventRecord{ID: ev.ID, Kind: ev.Kind, PubKey: ev.PubKey, Content: ev.Content, Tags: tagsJSON, Sig: ev.Sig, CreatedAt: ev.CreatedAt.Time(), ReceivedAt: time.Now().UTC()}); recordErr != nil && p.logger != nil {
+			p.logger.Warn("failed to audit assistant event", zap.String("event_id", ev.ID), zap.Error(recordErr))
+		}
+	}
+	return published, err
+}
+
+func controlPlaneAuthorizedPubkeys(cfg *config.Config, assistant service.AssistantIdentity) []string {
+	seen := map[string]struct{}{}
+	out := []string{}
+	add := func(pubkey string) {
+		pubkey = strings.ToLower(strings.TrimSpace(pubkey))
+		if pubkey == "" {
+			return
+		}
+		if _, ok := seen[pubkey]; ok {
+			return
+		}
+		seen[pubkey] = struct{}{}
+		out = append(out, pubkey)
+	}
+	if cfg != nil {
+		for _, pubkey := range cfg.Nostr.AuthorizedPubkeys {
+			add(pubkey)
+		}
+		if cfg.Assistant.Enabled && strings.TrimSpace(cfg.Nostr.PrivateKey) != "" {
+			if pubkey, err := nostr.GetPublicKey(cfg.Nostr.PrivateKey); err == nil {
+				add(pubkey)
+			}
+		}
+	}
+	add(assistant.Pubkey)
+	return out
+}
+
+func assistantToolNames(server *mcp.Server) []string {
+	if server == nil {
+		return nil
+	}
+	names := []string{}
+	for _, tool := range server.GetTools() {
+		if strings.HasPrefix(tool.Name, "bahia_assistant_") {
+			names = append(names, tool.Name)
+		}
+	}
+	return names
+}
+
+func bootstrapOperatorAssistant(ctx context.Context, cfg *config.Config, relays []string, logger *zap.Logger) service.AssistantIdentity {
+	identity := service.AssistantIdentity{AgentID: soulfactory.OperatorAssistantAgentID}
+	if cfg != nil && strings.TrimSpace(cfg.Nostr.PrivateKey) != "" {
+		if pubkey, err := nostr.GetPublicKey(cfg.Nostr.PrivateKey); err == nil {
+			identity.Pubkey = pubkey
+		}
+	}
+	if cfg == nil || (!cfg.Assistant.SignetAllowMock && strings.TrimSpace(cfg.Assistant.SignetBunkerURI) == "") {
+		return identity
+	}
+	slogLogger := slog.Default()
+	signetClient, err := signetAdapter.NewClient(signetAdapter.Config{BunkerURI: cfg.Assistant.SignetBunkerURI, Relays: relays, AllowMock: cfg.Assistant.SignetAllowMock}, slogLogger)
+	if err != nil {
+		logger.Warn("operator assistant signet client initialization failed; using service-key attribution fallback", zap.Error(err))
+		return identity
+	}
+	if err := signetClient.Connect(ctx); err != nil {
+		logger.Warn("operator assistant signet connection failed; using service-key attribution fallback", zap.Error(err))
+		return identity
+	}
+	soulReactor := soulfactory.NewReactor(soulfactory.Config{Relays: relays, AuthorizedPubkeys: cfg.Nostr.AuthorizedPubkeys}, nil, signetClient, slogLogger)
+	bootstrapped, err := soulfactory.EnsureOperatorAssistantSoul(ctx, soulReactor)
+	if err != nil {
+		logger.Warn("operator assistant soul bootstrap failed; using service-key attribution fallback", zap.Error(err))
+		return identity
+	}
+	return service.AssistantIdentity{AgentID: bootstrapped.AgentID, Pubkey: bootstrapped.Pubkey, Npub: bootstrapped.Npub}
+}
+
+func loadAssistantSessions(ctx context.Context, repo repository.NostrEventRepository, logger *zap.Logger) []domain.AssistantSession {
+	if repo == nil {
+		return nil
+	}
+	records, err := repo.ListByKind(ctx, domain.KindAssistantSession, 500)
+	if err != nil {
+		logger.Warn("failed to load assistant session read models", zap.Error(err))
+		return nil
+	}
+	seen := map[string]struct{}{}
+	sessions := []domain.AssistantSession{}
+	for _, record := range records {
+		var session domain.AssistantSession
+		if err := json.Unmarshal([]byte(record.Content), &session); err != nil {
+			logger.Warn("failed to parse assistant session read model", zap.String("event_id", record.ID), zap.Error(err))
+			continue
+		}
+		if session.SessionID == "" {
+			continue
+		}
+		if _, ok := seen[session.SessionID]; ok {
+			continue
+		}
+		seen[session.SessionID] = struct{}{}
+		sessions = append(sessions, session)
+	}
+	return sessions
 }
 
 // controlplaneRunner adapts the controlplane.Reactor to the BackgroundRunner interface.

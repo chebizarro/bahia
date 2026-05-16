@@ -55,24 +55,30 @@ type LLMReleaseRegisterCommand struct {
 
 // LLMDeployCommand describes a canonical LLM deploy request.
 type LLMDeployCommand struct {
-	RouteID       uuid.UUID
-	EnvironmentID uuid.UUID
-	ReleaseID     uuid.UUID
-	RequestedBy   string
-	Metadata      map[string]any
+	RouteID        uuid.UUID
+	EnvironmentID  uuid.UUID
+	ReleaseID      uuid.UUID
+	RequestedBy    string
+	Metadata       map[string]any
+	IdempotencyKey string
+	AgentID        string
 }
 
 // LLMApprovalCommand describes a canonical LLM deployment approval/rejection request.
 type LLMApprovalCommand struct {
-	IntentID uuid.UUID
-	Decision string
+	IntentID       uuid.UUID
+	Decision       string
+	IdempotencyKey string
+	AgentID        string
 }
 
 // LLMRollbackCommand describes a canonical LLM rollback request.
 type LLMRollbackCommand struct {
-	RouteID       uuid.UUID
-	EnvironmentID uuid.UUID
-	RequestedBy   string
+	RouteID        uuid.UUID
+	EnvironmentID  uuid.UUID
+	RequestedBy    string
+	IdempotencyKey string
+	AgentID        string
 }
 
 // LLMCommandReceipt is the correlation handle returned to synchronous callers.
@@ -173,6 +179,7 @@ func (p *LLMCommandPublisher) PublishLLMDeployRequest(ctx context.Context, cmd L
 		{"environment", cmd.EnvironmentID.String()},
 		{"release", cmd.ReleaseID.String()},
 	}
+	appendLLMCommandTags(&tags, cmd.IdempotencyKey, cmd.AgentID)
 	receipt, err := p.publish(ctx, KindLLMDeployRequest, KindLLMDeploymentStatus, KindLLMDeploymentResult, tags, content)
 	if receipt != nil {
 		receipt.RouteID = cmd.RouteID.String()
@@ -192,6 +199,7 @@ func (p *LLMCommandPublisher) PublishLLMApprovalRequest(ctx context.Context, cmd
 		{"intent", cmd.IntentID.String()},
 		{"decision", cmd.Decision},
 	}
+	appendLLMCommandTags(&tags, cmd.IdempotencyKey, cmd.AgentID)
 	receipt, err := p.publish(ctx, KindLLMDeploymentApproval, KindLLMDeploymentStatus, KindLLMDeploymentResult, tags, content)
 	if receipt != nil {
 		receipt.IntentID = cmd.IntentID.String()
@@ -213,12 +221,22 @@ func (p *LLMCommandPublisher) PublishLLMRollbackRequest(ctx context.Context, cmd
 		{"route", cmd.RouteID.String()},
 		{"environment", cmd.EnvironmentID.String()},
 	}
+	appendLLMCommandTags(&tags, cmd.IdempotencyKey, cmd.AgentID)
 	receipt, err := p.publish(ctx, KindLLMRollbackRequest, KindLLMDeploymentStatus, KindLLMDeploymentResult, tags, content)
 	if receipt != nil {
 		receipt.RouteID = cmd.RouteID.String()
 		receipt.EnvironmentID = cmd.EnvironmentID.String()
 	}
 	return receipt, err
+}
+
+func appendLLMCommandTags(tags *nostr.Tags, dTag, agentID string) {
+	if dTag != "" {
+		*tags = append(nostr.Tags{{"d", dTag}}, (*tags)...)
+	}
+	if agentID != "" {
+		*tags = append(*tags, nostr.Tag{"agent", agentID})
+	}
 }
 
 func (p *LLMCommandPublisher) publish(ctx context.Context, kind, statusKind, resultKind int, tags nostr.Tags, content map[string]any) (*LLMCommandReceipt, error) {
