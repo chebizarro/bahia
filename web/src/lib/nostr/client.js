@@ -1205,15 +1205,27 @@ export function parseSoulDraftEvent(event) {
 }
 
 export function parseTemplateEvent(event) {
+  const content = parseJsonContent(event, null);
+  const customization = content && typeof content === 'object'
+    ? normalizeSoulDraftContent({
+      schema: 'soulfactory-draft/v2',
+      ...(content.customization || {}),
+      persona: content.persona || content.customization?.persona,
+      avatar: content.avatar || content.customization?.avatar,
+      voice: content.voice || content.customization?.voice,
+      memory: content.memory || content.customization?.memory
+    })
+    : null;
   const template = {
     id: event.id,
     pubkey: event.pubkey,
     createdAt: event.created_at,
     identifier: '',
-    name: '',
-    description: '',
-    tier: 'standard',
-    basePrompt: event.content,
+    name: content?.name || '',
+    description: content?.description || '',
+    tier: content?.tier || 'standard',
+    basePrompt: content?.brief || content?.basePrompt || content?.prompt || event.content,
+    defaultCustomization: customization,
     defaultKinds: [],
     defaultTools: [],
     tags: []

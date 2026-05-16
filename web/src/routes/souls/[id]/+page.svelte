@@ -19,7 +19,7 @@
     WorkspaceIcon
   } from '$lib/icons/domain-icons.js';
   import { nostr, fetchSoul, parseSoulEvent, KINDS, normalizeSoulDraftContent } from '$lib/nostr/client.js';
-  import { buildSoulRef, fetchSoulHistory, publishSoulAction, publishSoulDraft, publishSoulUpdateAction, provisioningRuns, trackLifecycleRun } from '$lib/stores/souls.js';
+  import { buildSoulRef, fetchSoulHistory, loadSouls, publishSoulAction, publishSoulDraft, publishSoulUpdateAction, provisioningRuns, souls, trackLifecycleRun } from '$lib/stores/souls.js';
   
   let soul = $state(null);
   let loading = $state(true);
@@ -38,6 +38,7 @@
   let customizationDraft = $state(null);
   let customizationNotice = $state('');
   let customizationError = $state('');
+  let cloneCustomizationSoulId = $state('');
   
   let agentId = $derived(page.params.id);
   let currentActionRun = $derived(actionRunId ? provisioningRuns.get(actionRunId) : null);
@@ -148,6 +149,15 @@
   function cancelEdit() {
     editingSection = '';
     customizationDraft = null;
+    cloneCustomizationSoulId = '';
+  }
+
+  function cloneCustomizationFromSoul(sourceAgentId) {
+    cloneCustomizationSoulId = sourceAgentId;
+    const sourceSoul = souls.find((item) => item.agentId === sourceAgentId);
+    if (!sourceSoul || !editingSection) return;
+    const sourceContent = extractDraftContent(sourceSoul);
+    customizationDraft = clone(sourceContent[editingSection] || customization[editingSection]);
   }
 
   async function saveCustomization(section) {
@@ -320,7 +330,7 @@
     }
 
     async function initializeSoul() {
-      await loadSoul(id);
+      await Promise.all([loadSoul(id), loadSouls()]);
       if (cancelled) return;
       await loadHistory();
       if (cancelled) return;
@@ -523,6 +533,16 @@
                 <button class="btn-secondary" onclick={cancelEdit} disabled={savingCustomization}>Cancel</button>
                 <button class="btn-primary" onclick={() => saveCustomization(editingSection)} disabled={savingCustomization}>{savingCustomization ? 'Saving...' : 'Save draft + update'}</button>
               </div>
+            </div>
+            <div class="clone-row">
+              <label>Clone this section from another soul
+                <select value={cloneCustomizationSoulId} onchange={(event) => cloneCustomizationFromSoul(event.currentTarget.value)} disabled={savingCustomization}>
+                  <option value="">Choose a soul…</option>
+                  {#each souls.filter((item) => item.agentId !== soul.agentId) as existingSoul}
+                    <option value={existingSoul.agentId}>{existingSoul.name || existingSoul.agentId}</option>
+                  {/each}
+                </select>
+              </label>
             </div>
             {#if editingSection === 'avatar'}
               <AvatarStudio bind:value={customizationDraft} showAdvanced={true} />
@@ -987,6 +1007,29 @@
   .edit-panel {
     display: grid;
     gap: 1rem;
+  }
+
+  .clone-row {
+    border: 1px dashed var(--border-color);
+    border-radius: 10px;
+    padding: 0.85rem;
+    background: rgba(255, 255, 255, 0.02);
+  }
+
+  .clone-row label {
+    display: grid;
+    gap: 0.4rem;
+    font-size: 0.85rem;
+  }
+
+  .clone-row select {
+    width: 100%;
+    background: var(--bg);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    color: var(--text-primary);
+    padding: 0.6rem 0.75rem;
+    font: inherit;
   }
 
   /* Info Grid */

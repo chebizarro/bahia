@@ -10,13 +10,20 @@
   import ProvisioningProgress from '$lib/components/ProvisioningProgress.svelte';
   import { KINDS, SOUL_RUNTIME_METHODS } from '$lib/nostr/client.js';
   import {
+    createDefaultAvatarSpec,
+    createDefaultMemorySpec,
+    createDefaultPersonaSpec,
+    createDefaultVoiceSpec,
     loadRuntimeCapabilities,
+    loadSouls,
     publishProvisioningRequest,
     publishSoulDraft,
     provisioningRuns,
     runtimeCapabilities,
+    souls,
     trackProvisioningRun
   } from '$lib/stores/souls.js';
+  import { customizationPresets } from '$lib/data/customization-presets';
   import { authState, initializeAuth, login, refreshExtensionStatus } from '$lib/stores/auth.js';
   import {
     capabilityLabel,
@@ -46,67 +53,6 @@
     { id: 'runtime', label: 'Runtime', description: 'Capability, scope, relays' }
   ];
 
-  function defaultAvatarSpec() {
-    return {
-      generation: {
-        prompt: '',
-        style_preset: 'pixel-art',
-        seed: '',
-        width: 512,
-        height: 512,
-        provider: 'flux-comfyui'
-      },
-      uploaded_ref: '',
-      generated_ref: '',
-      current: 'generated'
-    };
-  }
-
-  function defaultVoiceSpec() {
-    return {
-      provider: 'openai',
-      persona_id: '',
-      persona: {
-        label: '',
-        profile: '',
-        style: 'articulate',
-        accent: 'neutral american',
-        pacing: 'measured'
-      },
-      auto_mode: 'tagged',
-      sample_text: ''
-    };
-  }
-
-  function defaultMemorySpec() {
-    return {
-      embedding_provider: 'openai',
-      embedding_model: 'text-embedding-3-small',
-      search: {
-        top_k: 10,
-        score_threshold: 0.7,
-        rerank: false,
-        rerank_model: ''
-      },
-      strategy: 'session-aware',
-      auto_index: true,
-      retention_days: 90
-    };
-  }
-
-  function defaultPersonaSpec() {
-    return {
-      traits: [],
-      style: 'conversational',
-      tone: 'friendly professional',
-      constraints: [],
-      system_prompt_sections: {
-        role: '',
-        guidelines: '',
-        red_lines: ''
-      }
-    };
-  }
 
   let step = $state(1);
   let activeTab = $state('identity');
@@ -114,6 +60,8 @@
   let selectedTemplate = $state(null);
   let selectedRepository = $state(null);
   let selectedCapabilityRef = $state('');
+  let selectedPresetId = $state('');
+  let cloneSoulId = $state('');
 
   let agentId = $state('');
   let agentName = $state('');
@@ -132,10 +80,10 @@
   let branch = $state('main');
   let environment = $state('production');
   let voiceRef = $state('');
-  let avatarSpec = $state(defaultAvatarSpec());
-  let voiceSpec = $state(defaultVoiceSpec());
-  let memorySpec = $state(defaultMemorySpec());
-  let personaSpec = $state(defaultPersonaSpec());
+  let avatarSpec = $state(createDefaultAvatarSpec());
+  let voiceSpec = $state(createDefaultVoiceSpec());
+  let memorySpec = $state(createDefaultMemorySpec());
+  let personaSpec = $state(createDefaultPersonaSpec());
 
   let requestEventId = $state(null);
   let currentRun = $state(null);
@@ -174,10 +122,60 @@
     }
   });
 
+  function clone(value) {
+    return JSON.parse(JSON.stringify(value || {}));
+  }
+
+  function mergeSpec(base, updates) {
+    if (!updates) return clone(base);
+    const next = clone(base);
+    for (const [key, value] of Object.entries(updates)) {
+      next[key] = value && typeof value === 'object' && !Array.isArray(value)
+        ? mergeSpec(next[key] || {}, value)
+        : value;
+    }
+    return next;
+  }
+
+  function applyCustomizationContent(content = {}) {
+    if (content.identity) {
+      if (content.identity.tier) tier = content.identity.tier;
+      if (content.identity.theme) identityTheme = content.identity.theme;
+      if (content.identity.emoji) identityEmoji = content.identity.emoji;
+    }
+    if (content.brief && !purpose) purpose = content.brief;
+    if (content.persona) personaSpec = createDefaultPersonaSpec(mergeSpec(personaSpec, content.persona));
+    if (content.avatar) avatarSpec = createDefaultAvatarSpec(mergeSpec(avatarSpec, content.avatar));
+    if (content.voice) voiceSpec = createDefaultVoiceSpec(mergeSpec(voiceSpec, content.voice));
+    if (content.memory) memorySpec = createDefaultMemorySpec(mergeSpec(memorySpec, content.memory));
+  }
+
   function handleTemplateSelect(template) {
     selectedTemplate = template;
     if (template?.tier) tier = template.tier;
     if (template?.basePrompt && !purpose) purpose = template.basePrompt;
+    if (template?.defaultCustomization) applyCustomizationContent(template.defaultCustomization);
+  }
+
+  function applyPreset(presetId) {
+    selectedPresetId = presetId;
+    const preset = customizationPresets.find((item) => item.id === presetId);
+    if (preset) applyCustomizationContent(preset.content);
+  }
+
+  function parseSoulContent(sourceSoul) {
+    try {
+      return sourceSoul?.content ? JSON.parse(sourceSoul.content) : {};
+    } catch {
+      return {};
+    }
+  }
+
+  function cloneFromSoul(sourceAgentId) {
+    cloneSoulId = sourceAgentId;
+    const sourceSoul = souls.find((item) => item.agentId === sourceAgentId);
+    if (!sourceSoul) return;
+    applyCustomizationContent(parseSoulContent(sourceSoul));
   }
 
   function generateAgentId() {
@@ -404,7 +402,10 @@
       } else if (!authState.extensionAvailable) {
         await refreshExtensionStatus();
       }
-      await loadRuntimeCapabilities({ method: SOUL_RUNTIME_METHODS.PROVISION });
+      await Promise.all([
+        loadRuntimeCapabilities({ method: SOUL_RUNTIME_METHODS.PROVISION }),
+        loadSouls()
+      ]);
     }
 
     void untrack(() => initializeNostr());
@@ -515,6 +516,32 @@
                 </div>
               {/if}
             </div>
+
+            <div class="form-section preset-panel">
+              <h3>Customization starting point</h3>
+              <label>Preset library
+                <select value={selectedPresetId} onchange={(event) => applyPreset(event.currentTarget.value)}>
+                  <option value="">Choose a preset…</option>
+                  {#each customizationPresets as preset}
+                    <option value={preset.id}>{preset.label}</option>
+                  {/each}
+                </select>
+              </label>
+              {#if selectedPresetId}
+                {@const preset = customizationPresets.find((item) => item.id === selectedPresetId)}
+                <p class="hint-inline">{preset?.description}</p>
+              {/if}
+              <label>Clone customization from existing soul
+                <select value={cloneSoulId} onchange={(event) => cloneFromSoul(event.currentTarget.value)}>
+                  <option value="">Choose a soul…</option>
+                  {#each souls as existingSoul}
+                    <option value={existingSoul.agentId}>{existingSoul.name || existingSoul.agentId}</option>
+                  {/each}
+                </select>
+              </label>
+              <p class="hint-inline">Presets and clones fill persona, voice, memory, avatar, and identity defaults. You can still edit every panel before provisioning.</p>
+            </div>
+
             <TemplateSelector selected={selectedTemplate} onSelect={handleTemplateSelect} />
           {:else if activeTab === 'avatar'}
             <AvatarStudio bind:value={avatarSpec} {showAdvanced} />
@@ -670,7 +697,8 @@
   .two-col { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.85rem; }
   .checkbox-row { display: flex; align-items: center; gap: 0.5rem; }
   .checkbox-row input { width: auto; }
-  .advanced-inline { border: 1px dashed var(--border-color); border-radius: 12px; padding: 0.9rem; background: rgba(255,255,255,0.02); }
+  .advanced-inline, .preset-panel { border: 1px dashed var(--border-color); border-radius: 12px; padding: 0.9rem; background: rgba(255,255,255,0.02); }
+  .hint-inline { margin: -0.35rem 0 0; font-size: 0.82rem; color: var(--text-muted); }
   .wizard-actions { display: flex; justify-content: space-between; gap: 0.75rem; padding-top: 1rem; border-top: 1px solid var(--border-color); margin-top: 1rem; }
   .btn-primary, .btn-secondary { display: inline-flex; align-items: center; justify-content: center; gap: 0.45rem; border-radius: 8px; padding: 0.65rem 1rem; border: 1px solid transparent; cursor: pointer; font-weight: 600; text-decoration: none; }
   .btn-primary { background: var(--primary); color: white; }
