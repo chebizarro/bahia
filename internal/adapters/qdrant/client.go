@@ -10,6 +10,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -17,17 +18,26 @@ import (
 // ErrNotConfigured is returned when a Qdrant operation is attempted without an explicit URL.
 var ErrNotConfigured = errors.New("qdrant client not configured")
 
+// ErrMissingAuth is returned when a Qdrant endpoint is configured without required auth.
+var ErrMissingAuth = errors.New("qdrant auth not configured")
+
 // Client communicates with Qdrant REST API.
 type Client struct {
-	baseURL    string
-	httpClient *http.Client
-	logger     *slog.Logger
+	baseURL     string
+	apiKey      string
+	authHeader  string
+	allowNoAuth bool
+	httpClient  *http.Client
+	logger      *slog.Logger
 }
 
 // Config holds Qdrant client configuration.
 type Config struct {
-	URL     string        // Qdrant REST API URL (e.g., http://localhost:6333)
-	Timeout time.Duration // Request timeout
+	URL                       string        // Qdrant REST API URL (e.g., http://localhost:6333)
+	Timeout                   time.Duration // Request timeout
+	APIKey                    string        // API key for secured Qdrant deployments
+	AuthHeaderName            string        // Header used for API key auth; defaults to "api-key"
+	AllowUnauthenticatedLocal bool          // Explicit local/dev escape hatch for unsecured Qdrant
 }
 
 // CollectionConfig holds collection creation parameters.
@@ -49,6 +59,11 @@ func DefaultCollectionConfig() CollectionConfig {
 // NewClient creates a new Qdrant client.
 func NewClient(config Config, logger *slog.Logger) *Client {
 	config.URL = strings.TrimRight(strings.TrimSpace(config.URL), "/")
+	config.APIKey = strings.TrimSpace(config.APIKey)
+	config.AuthHeaderName = strings.TrimSpace(config.AuthHeaderName)
+	if config.AuthHeaderName == "" {
+		config.AuthHeaderName = "api-key"
+	}
 	if config.Timeout == 0 {
 		config.Timeout = 30 * time.Second
 	}
@@ -57,7 +72,10 @@ func NewClient(config Config, logger *slog.Logger) *Client {
 	}
 
 	return &Client{
-		baseURL: config.URL,
+		baseURL:     config.URL,
+		apiKey:      config.APIKey,
+		authHeader:  config.AuthHeaderName,
+		allowNoAuth: config.AllowUnauthenticatedLocal,
 		httpClient: &http.Client{
 			Timeout: config.Timeout,
 		},
@@ -74,7 +92,39 @@ func (c *Client) requireConfigured() error {
 	if !c.Configured() {
 		return ErrNotConfigured
 	}
+	if strings.TrimSpace(c.apiKey) == "" && !c.allowNoAuth {
+		return ErrMissingAuth
+	}
+	if strings.TrimSpace(c.apiKey) == "" && c.allowNoAuth && !isLocalQdrantEndpoint(c.baseURL) {
+		return fmt.Errorf("%w: unauthenticated mode is only allowed for localhost or loopback endpoints", ErrMissingAuth)
+	}
 	return nil
+}
+
+func isLocalQdrantEndpoint(rawURL string) bool {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return false
+	}
+	host := strings.ToLower(parsed.Hostname())
+	return host == "localhost" || host == "127.0.0.1" || host == "::1"
+}
+
+func (c *Client) newRequest(ctx context.Context, method, path string, body io.Reader) (*http.Request, error) {
+	if err := c.requireConfigured(); err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, body)
+	if err != nil {
+		return nil, fmt.Errorf("create request: %w", err)
+	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	if c.apiKey != "" {
+		req.Header.Set(c.authHeader, c.apiKey)
+	}
+	return req, nil
 }
 
 // CreateCollection creates a new vector collection.
@@ -101,13 +151,10 @@ func (c *Client) CreateCollection(ctx context.Context, name string, config Colle
 		return fmt.Errorf("marshal request: %w", err)
 	}
 
-	url := fmt.Sprintf("%s/collections/%s", c.baseURL, name)
-	req, err := http.NewRequestWithContext(ctx, "PUT", url, bytes.NewReader(jsonBody))
+	req, err := c.newRequest(ctx, "PUT", fmt.Sprintf("/collections/%s", name), bytes.NewReader(jsonBody))
 	if err != nil {
-		return fmt.Errorf("create request: %w", err)
+		return err
 	}
-
-	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -128,13 +175,9 @@ func (c *Client) CreateCollection(ctx context.Context, name string, config Colle
 
 // CollectionExists checks if a collection exists.
 func (c *Client) CollectionExists(ctx context.Context, name string) (bool, error) {
-	if err := c.requireConfigured(); err != nil {
-		return false, err
-	}
-	url := fmt.Sprintf("%s/collections/%s", c.baseURL, name)
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	req, err := c.newRequest(ctx, "GET", fmt.Sprintf("/collections/%s", name), nil)
 	if err != nil {
-		return false, fmt.Errorf("create request: %w", err)
+		return false, err
 	}
 
 	resp, err := c.httpClient.Do(req)
@@ -161,10 +204,9 @@ func (c *Client) DeleteCollection(ctx context.Context, name string) error {
 	}
 	c.logger.Info("deleting Qdrant collection", "name", name)
 
-	url := fmt.Sprintf("%s/collections/%s", c.baseURL, name)
-	req, err := http.NewRequestWithContext(ctx, "DELETE", url, nil)
+	req, err := c.newRequest(ctx, "DELETE", fmt.Sprintf("/collections/%s", name), nil)
 	if err != nil {
-		return fmt.Errorf("create request: %w", err)
+		return err
 	}
 
 	resp, err := c.httpClient.Do(req)
@@ -195,13 +237,10 @@ func (c *Client) UpsertPoints(ctx context.Context, collection string, points []P
 		return fmt.Errorf("marshal request: %w", err)
 	}
 
-	url := fmt.Sprintf("%s/collections/%s/points", c.baseURL, collection)
-	req, err := http.NewRequestWithContext(ctx, "PUT", url, bytes.NewReader(jsonBody))
+	req, err := c.newRequest(ctx, "PUT", fmt.Sprintf("/collections/%s/points", collection), bytes.NewReader(jsonBody))
 	if err != nil {
-		return fmt.Errorf("create request: %w", err)
+		return err
 	}
-
-	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -233,13 +272,10 @@ func (c *Client) Search(ctx context.Context, collection string, vector []float32
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
 
-	url := fmt.Sprintf("%s/collections/%s/points/search", c.baseURL, collection)
-	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(jsonBody))
+	req, err := c.newRequest(ctx, "POST", fmt.Sprintf("/collections/%s/points/search", collection), bytes.NewReader(jsonBody))
 	if err != nil {
-		return nil, fmt.Errorf("create request: %w", err)
+		return nil, err
 	}
-
-	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -279,13 +315,9 @@ type SearchResult struct {
 
 // Health checks Qdrant connectivity.
 func (c *Client) Health(ctx context.Context) error {
-	if err := c.requireConfigured(); err != nil {
-		return err
-	}
-	url := fmt.Sprintf("%s/", c.baseURL)
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	req, err := c.newRequest(ctx, "GET", "/", nil)
 	if err != nil {
-		return fmt.Errorf("create request: %w", err)
+		return err
 	}
 
 	resp, err := c.httpClient.Do(req)

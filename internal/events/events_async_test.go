@@ -38,10 +38,13 @@ func TestPublishAsyncHandlerSurvivesCanceledRequestContext(t *testing.T) {
 
 func TestPublishAsyncHandlerKeepsDeadlineContextAliveAfterPublishReturns(t *testing.T) {
 	pub := NewInProcessPublisher(zap.NewNop())
+	entered := make(chan struct{})
+	release := make(chan struct{})
 	received := make(chan error, 1)
 
 	pub.Subscribe(EventDeploymentIntentApproved, func(ctx context.Context, _ Event) {
-		time.Sleep(50 * time.Millisecond)
+		close(entered)
+		<-release
 		select {
 		case <-ctx.Done():
 			received <- ctx.Err()
@@ -54,6 +57,13 @@ func TestPublishAsyncHandlerKeepsDeadlineContextAliveAfterPublishReturns(t *test
 	defer cancel()
 
 	pub.Publish(ctx, Event{Type: EventDeploymentIntentApproved, EntityID: "test"})
+
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for async handler to start")
+	}
+	close(release)
 
 	select {
 	case err := <-received:

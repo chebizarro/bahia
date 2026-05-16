@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	canonicalnostr "fiatjaf.com/nostr"
@@ -134,6 +135,7 @@ type Reactor struct {
 	zapLog      *zap.Logger
 	dedup       *nostrpool.EventDeduplicator
 	backoff     *nostrpool.Backoff
+	caughtUp    atomic.Bool
 
 	toolProvisioning  repository.ToolProvisioningRepository
 	toolResponder     *ToolResponder
@@ -317,6 +319,7 @@ func (r *Reactor) Run(ctx context.Context) error {
 		},
 	}
 
+	r.caughtUp.Store(false)
 	merged, err := r.pool.SubscribeAllWithEOSE(ctx, filters)
 	if err != nil {
 		return fmt.Errorf("subscribe: %w", err)
@@ -324,6 +327,7 @@ func (r *Reactor) Run(ctx context.Context) error {
 
 	r.logger.Info("subscribed to control plane events")
 	go r.recoverPackageIntents(ctx)
+	authAttempted := make(map[string]struct{})
 
 	for {
 		select {
@@ -332,11 +336,38 @@ func (r *Reactor) Run(ctx context.Context) error {
 			r.pool.Close()
 			return ctx.Err()
 
+		case eose, ok := <-merged.RelayEOSE:
+			if ok {
+				r.handleRelayEOSE(eose)
+			} else {
+				merged.RelayEOSE = nil
+			}
+		case closed, ok := <-merged.Closed:
+			if ok {
+				if r.handleRelayClosed(ctx, closed, authAttempted) {
+					merged.Close()
+					r.caughtUp.Store(false)
+					authAttempted = make(map[string]struct{})
+					merged, err = r.pool.SubscribeAllWithEOSE(ctx, filters)
+					if err != nil {
+						r.logger.Error("resubscribe after relay auth failed", "error", err)
+						continue
+					}
+					r.backoff.Reset()
+				}
+			} else {
+				merged.Closed = nil
+			}
+		case <-merged.EndOfStoredEvents:
+			r.handleEOSE()
+			merged.EndOfStoredEvents = nil
 		case ev, ok := <-merged.Events:
 			if !ok {
 				delay := r.backoff.Next()
 				r.logger.Warn("subscription closed, reconnecting...", "delay", delay)
 				time.Sleep(delay)
+				r.caughtUp.Store(false)
+				authAttempted = make(map[string]struct{})
 				merged, err = r.pool.SubscribeAllWithEOSE(ctx, filters)
 				if err != nil {
 					r.logger.Error("reconnect failed", "error", err)
@@ -351,12 +382,44 @@ func (r *Reactor) Run(ctx context.Context) error {
 	}
 }
 
+func (r *Reactor) handleRelayEOSE(eose nostrpool.RelayEOSE) {
+	r.logger.Debug("relay sent control-plane EOSE", "relay", eose.RelayURL, "subscription_id", eose.SubscriptionID)
+}
+
+func (r *Reactor) handleEOSE() {
+	if r.caughtUp.CompareAndSwap(false, true) {
+		r.logger.Info("control-plane EOSE received: caught up with stored events")
+	}
+}
+
+func (r *Reactor) handleRelayClosed(ctx context.Context, closed nostrpool.RelayClosed, authAttempted map[string]struct{}) bool {
+	r.logger.Warn("relay closed control-plane subscription",
+		"relay", closed.RelayURL,
+		"subscription_id", closed.SubscriptionID,
+		"reason", closed.Reason,
+	)
+	if !nostrpool.IsAuthRequiredReason(closed.Reason) || closed.RelayURL == "" || r.pool == nil {
+		return false
+	}
+	if _, ok := authAttempted[closed.RelayURL]; ok {
+		return false
+	}
+	authAttempted[closed.RelayURL] = struct{}{}
+	if err := r.pool.AuthenticateRelay(ctx, closed.RelayURL); err != nil {
+		r.logger.Warn("relay control-plane subscription auth failed", "relay", closed.RelayURL, "reason", closed.Reason, "error", err)
+		return false
+	}
+	return true
+}
+
 // handleEvent dispatches events to the appropriate handler.
 func (r *Reactor) handleEvent(ctx context.Context, event *nostr.Event) {
-	// Verify event signature to prevent spoofing
-	ok, err := event.CheckSignature()
-	if err != nil || !ok {
-		r.logger.Warn("invalid event signature", "event_id", event.ID, "error", err)
+	if err := nostrpool.ValidateInboundEvent(event, time.Now().UTC(), nostrpool.InboundEventMaxFutureSkew); err != nil {
+		eventID := ""
+		if event != nil {
+			eventID = event.ID
+		}
+		r.logger.Warn("dropping invalid control-plane event", "event_id", eventID, "error", err)
 		return
 	}
 

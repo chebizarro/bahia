@@ -118,7 +118,7 @@ func (c *Client) doList(ctx context.Context, url string) ([]BlobDescriptor, erro
 	if c.privateKey != "" {
 		authHeader, err := c.createListAuthHeader(ctx, url)
 		if err != nil {
-			return nil, fmt.Errorf("creating auth header: %w", err)
+			return nil, fmt.Errorf("%w: %v", ErrAuthHeader, err)
 		}
 		if authHeader != "" {
 			req.Header.Set("Authorization", authHeader)

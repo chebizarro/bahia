@@ -8,8 +8,17 @@ import (
 
 const testPrivateKey = "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2"
 
+func mustNewEncryptor(t *testing.T, key string) *Encryptor {
+	t.Helper()
+	enc, err := NewEncryptor(key)
+	if err != nil {
+		t.Fatalf("NewEncryptor() error = %v", err)
+	}
+	return enc
+}
+
 func TestAES256_EncryptDecrypt(t *testing.T) {
-	enc := NewEncryptor(testPrivateKey)
+	enc := mustNewEncryptor(t, testPrivateKey)
 	original := "postgresql://user:pass@localhost/mydb"
 
 	ciphertext, err := enc.Encrypt(original, domain.EncryptionAES256)
@@ -37,7 +46,7 @@ func TestAES256_EncryptDecrypt(t *testing.T) {
 }
 
 func TestAES256_DifferentCiphertexts(t *testing.T) {
-	enc := NewEncryptor(testPrivateKey)
+	enc := mustNewEncryptor(t, testPrivateKey)
 	original := "same-secret-value"
 
 	ct1, _ := enc.Encrypt(original, domain.EncryptionAES256)
@@ -57,8 +66,8 @@ func TestAES256_DifferentCiphertexts(t *testing.T) {
 }
 
 func TestAES256_WrongKeyFails(t *testing.T) {
-	enc1 := NewEncryptor("key1key1key1key1key1key1key1key1key1key1key1key1key1key1key1key1")
-	enc2 := NewEncryptor("key2key2key2key2key2key2key2key2key2key2key2key2key2key2key2key2")
+	enc1 := mustNewEncryptor(t, "key1key1key1key1key1key1key1key1key1key1key1key1key1key1key1key1")
+	enc2 := mustNewEncryptor(t, "key2key2key2key2key2key2key2key2key2key2key2key2key2key2key2key2")
 
 	ct, err := enc1.Encrypt("secret", domain.EncryptionAES256)
 	if err != nil {
@@ -72,7 +81,7 @@ func TestAES256_WrongKeyFails(t *testing.T) {
 }
 
 func TestAES256_ShortCiphertext(t *testing.T) {
-	enc := NewEncryptor(testPrivateKey)
+	enc := mustNewEncryptor(t, testPrivateKey)
 	_, err := enc.Decrypt([]byte("short"), domain.EncryptionAES256)
 	if err == nil {
 		t.Fatal("expected error for short ciphertext")
@@ -80,7 +89,7 @@ func TestAES256_ShortCiphertext(t *testing.T) {
 }
 
 func TestAES256_EmptyPlaintext(t *testing.T) {
-	enc := NewEncryptor(testPrivateKey)
+	enc := mustNewEncryptor(t, testPrivateKey)
 	ct, err := enc.Encrypt("", domain.EncryptionAES256)
 	if err != nil {
 		t.Fatalf("encrypt empty: %v", err)
@@ -95,7 +104,7 @@ func TestAES256_EmptyPlaintext(t *testing.T) {
 }
 
 func TestUnsupportedMethod(t *testing.T) {
-	enc := NewEncryptor(testPrivateKey)
+	enc := mustNewEncryptor(t, testPrivateKey)
 	_, err := enc.Encrypt("test", "rot13")
 	if err == nil {
 		t.Fatal("expected error for unsupported method")
@@ -107,7 +116,7 @@ func TestUnsupportedMethod(t *testing.T) {
 }
 
 func TestNewEncryptor(t *testing.T) {
-	enc := NewEncryptor(testPrivateKey)
+	enc := mustNewEncryptor(t, testPrivateKey)
 	if enc == nil {
 		t.Fatal("expected non-nil encryptor")
 	}
@@ -116,8 +125,14 @@ func TestNewEncryptor(t *testing.T) {
 	}
 }
 
+func TestNewEncryptorRejectsBlankKey(t *testing.T) {
+	if enc, err := NewEncryptor("   "); err == nil || enc != nil {
+		t.Fatalf("NewEncryptor blank key = (%v, %v), want nil encryptor and error", enc, err)
+	}
+}
+
 func TestAES256_LargePayload(t *testing.T) {
-	enc := NewEncryptor(testPrivateKey)
+	enc := mustNewEncryptor(t, testPrivateKey)
 	// Simulate a large secret (e.g., a PEM certificate).
 	original := make([]byte, 4096)
 	for i := range original {

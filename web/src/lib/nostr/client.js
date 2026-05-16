@@ -3,6 +3,104 @@
 
 import { writable, derived, get } from 'svelte/store';
 
+const HEX_64 = /^[0-9a-f]{64}$/;
+const HEX_128 = /^[0-9a-f]{128}$/;
+const MAX_FUTURE_SKEW_SECONDS = 10 * 60;
+const MAX_PAST_SKEW_SECONDS = 365 * 24 * 60 * 60;
+
+function currentUnixTime() {
+  return Math.floor(Date.now() / 1000);
+}
+
+function openReadyState() {
+  return typeof WebSocket !== 'undefined' ? WebSocket.OPEN : 1;
+}
+
+function isStringTagValue(value) {
+  return typeof value === 'string';
+}
+
+function relaySummaryFromStates(relayStates) {
+  return Array.from(relayStates.entries()).map(([relay, state]) => ({ relay, ...state }));
+}
+
+export class NostrIncompleteEOSEError extends Error {
+  constructor(reason, { partialEvents = [], relaySummary = [], message = '' } = {}) {
+    super(message || `Nostr query did not receive complete EOSE history: ${reason}`);
+    this.name = 'NostrIncompleteEOSEError';
+    this.reason = reason;
+    this.partialEvents = partialEvents;
+    this.relaySummary = relaySummary;
+  }
+}
+
+async function sha256Hex(input) {
+  const subtle = globalThis.crypto?.subtle;
+  if (!subtle || typeof subtle.digest !== 'function') {
+    throw new Error('crypto.subtle is unavailable for Nostr event hash validation');
+  }
+  const digest = await subtle.digest('SHA-256', new TextEncoder().encode(input));
+  return Array.from(new Uint8Array(digest))
+    .map((byte) => byte.toString(16).padStart(2, '0'))
+    .join('');
+}
+
+export async function validateInboundNostrEvent(event, { now = currentUnixTime() } = {}) {
+  if (!event || typeof event !== 'object' || Array.isArray(event)) {
+    throw new Error('event must be an object');
+  }
+  if (typeof event.id !== 'string' || !HEX_64.test(event.id)) {
+    throw new Error('event id must be 64 lowercase hex characters');
+  }
+  if (typeof event.pubkey !== 'string' || !HEX_64.test(event.pubkey)) {
+    throw new Error('event pubkey must be 64 lowercase hex characters');
+  }
+  if (typeof event.sig !== 'string' || !HEX_128.test(event.sig)) {
+    throw new Error('event signature must be 128 lowercase hex characters');
+  }
+  if (!Number.isInteger(event.kind) || event.kind < 0) {
+    throw new Error('event kind must be an integer');
+  }
+  if (!Number.isInteger(event.created_at)) {
+    throw new Error('event created_at must be an integer');
+  }
+  if (event.created_at > now + MAX_FUTURE_SKEW_SECONDS) {
+    throw new Error('event created_at is too far in the future');
+  }
+  if (event.created_at < now - MAX_PAST_SKEW_SECONDS) {
+    throw new Error('event created_at is too far in the past');
+  }
+  if (typeof event.content !== 'string') {
+    throw new Error('event content must be a string');
+  }
+  if (!Array.isArray(event.tags)) {
+    throw new Error('event tags must be an array');
+  }
+  for (const tag of event.tags) {
+    if (!Array.isArray(tag) || tag.some((value) => !isStringTagValue(value))) {
+      throw new Error('event tags must be arrays of strings');
+    }
+  }
+
+  const serialized = JSON.stringify([
+    0,
+    event.pubkey,
+    event.created_at,
+    event.kind,
+    event.tags,
+    event.content
+  ]);
+  const computedId = await sha256Hex(serialized);
+  if (computedId !== event.id) {
+    throw new Error('event id does not match NIP-01 hash');
+  }
+
+  // Browser WebCrypto does not expose Schnorr verification. The browser trust boundary
+  // therefore fails closed on malformed signatures and verifies deterministic event IDs;
+  // backend validation performs full signature checks before persistence/dispatch.
+  return true;
+}
+
 // Soul Factory event kinds
 export const KINDS = {
   SOUL_TEMPLATE: 31950,
@@ -497,7 +595,7 @@ export function runtimeCapabilitySupports(capability, { runtime = '', method = '
 
 function relayConnectionStateForSocket(socket) {
   if (!socket) return 'disconnected';
-  if (socket.readyState === WebSocket.OPEN) return 'connected';
+  if (socket.readyState === openReadyState()) return 'connected';
   if (socket.readyState === WebSocket.CONNECTING) return 'connecting';
   return 'disconnected';
 }
@@ -533,6 +631,7 @@ export class NostrClient {
     this.reconnectTimers = new Map();
     this.manuallyDisconnected = false;
     this.pendingPublishes = new Map();
+    this.messageQueues = new Map();
   }
 
   // Calculate exponential backoff delay
@@ -644,7 +743,7 @@ export class NostrClient {
         this.reconnectTimers.delete(url);
       }
 
-      if (this.sockets.has(url) && this.sockets.get(url).readyState === WebSocket.OPEN) {
+      if (this.sockets.has(url) && this.sockets.get(url).readyState === openReadyState()) {
         this.connectionStatus.update(s => ({ ...s, [url]: 'connected' }));
         resolve();
         return;
@@ -741,12 +840,25 @@ export class NostrClient {
   // Update connected store
   updateConnectedStatus() {
     const anyConnected = Array.from(this.sockets.values())
-      .some(ws => ws.readyState === WebSocket.OPEN);
+      .some(ws => ws.readyState === openReadyState());
     this.connected.set(anyConnected);
   }
 
-  // Handle incoming messages
+  // Handle incoming messages in relay order. EVENT validation is async, so EOSE/CLOSED
+  // for the same relay must wait behind earlier EVENT frames to preserve stream order.
   handleMessage(relay, data) {
+    const previous = this.messageQueues.get(relay) || Promise.resolve();
+    const next = previous.catch(() => {}).then(() => this.processRelayMessage(relay, data));
+    this.messageQueues.set(relay, next);
+    next.finally(() => {
+      if (this.messageQueues.get(relay) === next) {
+        this.messageQueues.delete(relay);
+      }
+    });
+    return next;
+  }
+
+  async processRelayMessage(relay, data) {
     try {
       const msg = JSON.parse(data);
       const [type] = msg;
@@ -756,6 +868,12 @@ export class NostrClient {
           const [, subId, event] = msg;
           const sub = this.subscriptions.get(subId);
           if (sub && sub.onEvent) {
+            try {
+              await validateInboundNostrEvent(event);
+            } catch (validationError) {
+              console.warn(`[nostr] Dropping invalid EVENT from ${relay}:`, validationError?.message || validationError);
+              break;
+            }
             sub.onEvent(event, relay);
           }
           break;
@@ -826,7 +944,7 @@ export class NostrClient {
       this.subscriptions.delete(subId);
       const close = JSON.stringify(['CLOSE', subId]);
       this.sockets.forEach((ws) => {
-        if (ws.readyState === WebSocket.OPEN) {
+        if (ws.readyState === openReadyState()) {
           ws.send(close);
         }
       });
@@ -840,7 +958,7 @@ export class NostrClient {
     const req = JSON.stringify(['REQ', subId, ...sub.filters]);
     if (relayUrl) {
       const ws = this.sockets.get(relayUrl);
-      if (ws && ws.readyState === WebSocket.OPEN) {
+      if (ws && ws.readyState === openReadyState()) {
         ws.send(req);
       }
       return;
@@ -854,7 +972,7 @@ export class NostrClient {
   }
 
   reissueSubscriptions(relayUrl, ws) {
-    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    if (!ws || ws.readyState !== openReadyState()) return;
     this.subscriptions.forEach((_sub, subId) => {
       this.sendSubscription(subId, relayUrl);
     });
@@ -869,76 +987,105 @@ export class NostrClient {
   }
 
   // One-shot query that resolves only when all currently connected relays send EOSE.
-  async queryUntilEose(filters) {
-    return new Promise((resolve) => {
-      const events = [];
-      const pendingRelays = new Set(
-        Array.from(this.sockets.entries())
-          .filter(([, ws]) => ws.readyState === WebSocket.OPEN)
-          .map(([url]) => url)
-      );
+  async queryUntilEose(filters, options = {}) {
+    const queryOptions = typeof options === 'number' ? { timeoutMs: options } : (options || {});
+    const { timeoutMs = null, signal = null } = queryOptions;
 
-      if (pendingRelays.size === 0) {
-        resolve([]);
+    return new Promise((resolve, reject) => {
+      const events = [];
+      const relayStates = new Map(
+        Array.from(this.sockets.entries())
+          .filter(([, ws]) => ws.readyState === openReadyState())
+          .map(([url]) => [url, { status: 'pending', reason: '' }])
+      );
+      let unsub = null;
+      let timer = null;
+      let settled = false;
+
+      const cleanup = () => {
+        if (timer) clearTimeout(timer);
+        timer = null;
+        if (unsub) unsub();
+        unsub = null;
+        signal?.removeEventListener?.('abort', onAbort);
+      };
+
+      const incomplete = (reason, message = '') => new NostrIncompleteEOSEError(reason, {
+        partialEvents: [...events],
+        relaySummary: relaySummaryFromStates(relayStates),
+        message
+      });
+
+      const settle = (fn, value) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        fn(value);
+      };
+
+      const onAbort = () => {
+        settle(reject, incomplete('aborted', signal?.reason?.message || 'Nostr query aborted before EOSE completion'));
+      };
+
+      const evaluateCompletion = () => {
+        if (settled) return;
+        const states = Array.from(relayStates.values());
+        if (states.length === 0) return;
+        if (states.every((state) => state.status === 'eose')) {
+          settle(resolve, events);
+          return;
+        }
+        if (states.every((state) => state.status !== 'pending')) {
+          settle(reject, incomplete('all_relays_closed', 'Nostr query relays closed before all EOSE messages were received'));
+        }
+      };
+
+      if (relayStates.size === 0) {
+        settle(reject, incomplete('all_relays_closed', 'No connected Nostr relays available for EOSE query'));
         return;
       }
 
-      const unsub = this.subscribe(filters, {
+      if (signal?.aborted) {
+        onAbort();
+        return;
+      }
+      signal?.addEventListener?.('abort', onAbort, { once: true });
+
+      if (Number.isFinite(timeoutMs) && timeoutMs > 0) {
+        timer = setTimeout(() => {
+          settle(reject, incomplete('timeout', `Timed out waiting for Nostr EOSE after ${timeoutMs}ms`));
+        }, timeoutMs);
+      }
+
+      unsub = this.subscribe(filters, {
         onEvent: (event) => {
           if (!events.find(e => e.id === event.id)) {
             events.push(event);
           }
         },
         onEose: (relay) => {
-          pendingRelays.delete(relay);
-          if (pendingRelays.size === 0) {
-            unsub();
-            resolve(events);
+          if (relayStates.has(relay)) {
+            relayStates.set(relay, { status: 'eose', reason: '' });
           }
+          evaluateCompletion();
         },
-        onClosed: (_reason, relay) => {
-          pendingRelays.delete(relay);
-          if (pendingRelays.size === 0) {
-            unsub();
-            resolve(events);
+        onClosed: (reason = '', relay) => {
+          if (relayStates.has(relay)) {
+            const current = relayStates.get(relay);
+            if (current?.status !== 'eose') {
+              relayStates.set(relay, { status: 'closed', reason: String(reason || '') });
+            }
           }
+          evaluateCompletion();
         }
       });
     });
   }
 
-  // One-shot query
+  // One-shot query. Completion is EOSE-authoritative; timeout is an incomplete error.
   async query(filters, timeout = 5000) {
-    return new Promise((resolve) => {
-      const events = [];
-      let eoseCount = 0;
-      const relayCount = this.sockets.size;
-
-      if (relayCount === 0) {
-        resolve([]);
-        return;
-      }
-
-      const unsub = this.subscribe(filters, {
-        onEvent: (event) => {
-          if (!events.find(e => e.id === event.id)) {
-            events.push(event);
-          }
-        },
-        onEose: () => {
-          eoseCount++;
-          if (eoseCount >= relayCount) {
-            unsub();
-            resolve(events);
-          }
-        }
-      });
-
-      setTimeout(() => {
-        unsub();
-        resolve(events);
-      }, timeout);
-    });
+    const options = typeof timeout === 'number' ? { timeoutMs: timeout } : (timeout || {});
+    return this.queryUntilEose(filters, options);
   }
 
   rejectPendingPublishesForRelay(relay, message) {
@@ -975,7 +1122,7 @@ export class NostrClient {
     const promises = [];
 
     this.sockets.forEach((ws, url) => {
-      if (ws.readyState !== WebSocket.OPEN) return;
+      if (ws.readyState !== openReadyState()) return;
 
       let resolvePending;
       const relayPromise = new Promise((resolve) => {
@@ -1010,6 +1157,7 @@ export class NostrClient {
   disconnect() {
     this.manuallyDisconnected = true;
     this.subscriptions.clear();
+    this.messageQueues.clear();
     this.rejectPendingPublishesForRelay('', 'client disconnected');
     
     this.reconnectTimers.forEach(timer => clearTimeout(timer));

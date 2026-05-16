@@ -98,7 +98,7 @@ function parseRepoCoordinate(repoCoordinate) {
  * Fetch branches for a NIP-34 repository
  * @param {string} repoCoordinate - Repository coordinate (30617:pubkey:identifier)
  * @param {Object} options
- * @param {number} options.timeout - Query timeout in ms (default: 5000)
+ * @param {number} options.timeout - Incomplete-query timeout in ms (default: 5000)
  * @returns {Promise<{ branches: string[], defaultBranch: string | null, error: string | null }>}
  */
 export async function fetchRepoBranches(repoCoordinate, { timeout = 5000 } = {}) {
@@ -115,11 +115,11 @@ export async function fetchRepoBranches(repoCoordinate, { timeout = 5000 } = {})
 
   try {
     // Query for repo state events (kind 30618) with matching author and d-tag
-    const events = await nostr.query([{
+    const events = await nostr.queryUntilEose([{
       kinds: [REPO_STATE_KIND],
       authors: [pubkey],
       '#d': [identifier]
-    }], timeout);
+    }], { timeoutMs: timeout });
 
     if (!events || events.length === 0) {
       // No state event found - repo may not have state published yet

@@ -134,12 +134,8 @@ func (c *Client) doDownload(ctx context.Context, url string) ([]byte, error) {
 		return nil, fmt.Errorf("creating request: %w", err)
 	}
 
-	// Add auth header if private key is configured
-	if c.privateKey != "" {
-		authHeader, err := c.createAuthHeader(ctx, url, "GET", "")
-		if err == nil && authHeader != "" {
-			req.Header.Set("Authorization", authHeader)
-		}
+	if err := c.applyAuthHeader(ctx, req, http.MethodGet, ""); err != nil {
+		return nil, err
 	}
 
 	resp, err := c.httpClient.Do(req)

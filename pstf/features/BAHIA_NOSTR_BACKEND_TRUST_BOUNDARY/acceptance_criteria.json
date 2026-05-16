@@ -1,0 +1,27 @@
+{
+  "feature_id": "BAHIA_NOSTR_BACKEND_TRUST_BOUNDARY",
+  "source_beads": ["bahia-o93z", "bahia-tiyh"],
+  "scope": "Bucket 1 backend Go Nostr trust boundary and relay subscription semantics only",
+  "criteria": [
+    {
+      "id": "AC1",
+      "statement": "Backend inbound relay events are validated before persistence, deduplication, or handler dispatch.",
+      "tests": ["TestSubscriberHandleEventDropsInvalidBeforePersistenceAndDispatch", "TestReactorHandleEventDropsInvalidBeforeDedupAndDispatch", "TestValidateInboundEventRejectsInvalidEvents"]
+    },
+    {
+      "id": "AC2",
+      "statement": "Valid signed backend events continue through Subscriber persistence and handler dispatch.",
+      "tests": ["TestValidateInboundEventAcceptsValidSignedEvent", "TestSubscriberHandleEventInvokesHandlersOnlyForNewlyPersistedEvents"]
+    },
+    {
+      "id": "AC3",
+      "statement": "Merged relay subscriptions expose per-relay EOSE and CLOSED metadata while preserving aggregate EOSE behavior.",
+      "tests": ["TestMergeSubscriptionsClosesEOSEAfterAllRelaysEOSE", "TestMergeRelaySubscriptionsEmitsPerRelayEOSE", "TestMergeRelaySubscriptionsEmitsClosedReason", "TestMergeRelaySubscriptionsPreservesRelayClosedReasonAfterEventsClose"]
+    },
+    {
+      "id": "AC4",
+      "statement": "Backend Subscriber and Reactor observe EOSE/CLOSED metadata and attempt AUTH/resubscribe on auth-required CLOSED where configured.",
+      "tests": ["TestReactorHandleEventRecordsEOSEState", "go test -timeout 60s ./internal/adapters/nostr ./internal/controlplane ./internal/adapters/hiveci ./internal/adapters/loom"]
+    }
+  ]
+}

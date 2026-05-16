@@ -50,6 +50,12 @@ function openRelayUrls() {
     .map(([url]) => url);
 }
 
+function formatClosedRelays(closedRelays) {
+  return Array.from(closedRelays.entries())
+    .map(([relay, reason]) => `${relay}${reason ? ` (${reason})` : ''}`)
+    .join('; ');
+}
+
 function requestCorrelationValues(event) {
   const values = new Set(getTagValues(event, 'e'));
   const content = parseJsonContent(event, null);
@@ -124,6 +130,7 @@ export function awaitResult({ requestEventId, resultKinds, signal, timeoutMs = n
     let settled = false;
     const seen = new Set();
     const pendingRelays = openRelayUrls();
+    const closedRelays = new Map();
 
     const cleanup = () => {
       if (timer) clearTimeout(timer);
@@ -168,17 +175,23 @@ export function awaitResult({ requestEventId, resultKinds, signal, timeoutMs = n
         seen.add(event.id);
         settle(resolve, event);
       },
-      onClosed: (reason, relay) => {
+      onClosed: (reason = '', relay) => {
+        const reasonText = String(reason || '');
+        if (relay) {
+          closedRelays.set(relay, reasonText);
+        }
+        if (reasonText.toLowerCase().includes('auth')) {
+          const relayLabel = relay ? `${relay}: ` : '';
+          settle(reject, new Error(`Nostr result subscription auth closure: ${relayLabel}${reasonText}`));
+          return;
+        }
         if (pendingRelays && relay) {
           const index = pendingRelays.indexOf(relay);
           if (index >= 0) pendingRelays.splice(index, 1);
           if (pendingRelays.length === 0) {
-            settle(reject, new Error(`Nostr result subscription closed before result: ${reason || 'all relays closed'}`));
-            return;
+            const summary = formatClosedRelays(closedRelays) || reasonText || 'all relays closed';
+            settle(reject, new Error(`Nostr result subscription closed before result from all relays: ${summary}`));
           }
-        }
-        if (reason && String(reason).toLowerCase().includes('auth')) {
-          settle(reject, new Error(`Nostr result subscription closed: ${reason}`));
         }
       }
     });

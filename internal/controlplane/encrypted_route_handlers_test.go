@@ -269,7 +269,11 @@ func TestEncryptedRouteHandlers_ServiceSecretsCreateListRevealEncrypted(t *testi
 	repo := newFakeEncryptedSecretRepo()
 	serviceID := uuid.New()
 	services, rbac := encryptedAuthDeps(t, serviceID, uuid.New(), domain.RoleAdmin)
-	h := NewEncryptedRouteHandlers(EncryptedRouteHandlersConfig{Secrets: repo, Encryptor: secrets.NewEncryptor(testServiceKey), Services: services, RBAC: rbac, Logger: zap.NewNop()})
+	encryptor, err := secrets.NewEncryptor(testServiceKey)
+	if err != nil {
+		t.Fatalf("NewEncryptor: %v", err)
+	}
+	h := NewEncryptedRouteHandlers(EncryptedRouteHandlersConfig{Secrets: repo, Encryptor: encryptor, Services: services, RBAC: rbac, Logger: zap.NewNop()})
 	transport, publisher := encryptedRouteTransport(t, h)
 
 	transport.HandleEvent(context.Background(), makeRouteRequest(t, EncryptedOperationServiceSecretsCreate, map[string]any{
@@ -313,7 +317,11 @@ func TestEncryptedRouteHandlers_ServiceSecretsDenyUnauthorizedRole(t *testing.T)
 	repo := newFakeEncryptedSecretRepo()
 	serviceID := uuid.New()
 	services, rbac := encryptedAuthDeps(t, serviceID, uuid.New(), domain.RoleDeployer)
-	h := NewEncryptedRouteHandlers(EncryptedRouteHandlersConfig{Secrets: repo, Encryptor: secrets.NewEncryptor(testServiceKey), Services: services, RBAC: rbac, Logger: zap.NewNop()})
+	encryptor, err := secrets.NewEncryptor(testServiceKey)
+	if err != nil {
+		t.Fatalf("NewEncryptor: %v", err)
+	}
+	h := NewEncryptedRouteHandlers(EncryptedRouteHandlersConfig{Secrets: repo, Encryptor: encryptor, Services: services, RBAC: rbac, Logger: zap.NewNop()})
 	transport, publisher := encryptedRouteTransport(t, h)
 
 	transport.HandleEvent(context.Background(), makeRouteRequest(t, EncryptedOperationServiceSecretsList, map[string]any{"service_id": serviceID.String()}))

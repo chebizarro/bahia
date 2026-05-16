@@ -9,12 +9,39 @@ import (
 	"time"
 )
 
+type fakeClock struct {
+	mu  sync.Mutex
+	now time.Time
+}
+
+func newFakeClock() *fakeClock {
+	return &fakeClock{now: time.Unix(1000, 0)}
+}
+
+func (c *fakeClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.now
+}
+
+func (c *fakeClock) Advance(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.now = c.now.Add(d)
+}
+
 func newTestLimiter(rate int, interval time.Duration) *IPRateLimiter {
 	rl := NewIPRateLimiter(RateLimiterConfig{
 		Rate:            rate,
 		Interval:        interval,
 		CleanupInterval: interval * 2,
 	})
+	return rl
+}
+
+func newTestLimiterWithClock(rate int, interval time.Duration, clock *fakeClock) *IPRateLimiter {
+	rl := newTestLimiter(rate, interval)
+	rl.now = clock.Now
 	return rl
 }
 
@@ -59,8 +86,8 @@ func TestIPRateLimiter_SeparateIPs(t *testing.T) {
 }
 
 func TestIPRateLimiter_TokenReplenish(t *testing.T) {
-	// Create limiter that allows 10 req / 100ms = refills very fast
-	rl := newTestLimiter(10, 100*time.Millisecond)
+	clock := newFakeClock()
+	rl := newTestLimiterWithClock(10, 100*time.Millisecond, clock)
 	defer rl.Stop()
 
 	// Exhaust all tokens
@@ -73,8 +100,7 @@ func TestIPRateLimiter_TokenReplenish(t *testing.T) {
 		t.Error("should be rate limited after exhausting tokens")
 	}
 
-	// Wait for tokens to refill
-	time.Sleep(120 * time.Millisecond)
+	clock.Advance(120 * time.Millisecond)
 
 	allowed, _ = rl.Allow("10.0.0.1")
 	if !allowed {
@@ -259,24 +285,20 @@ func TestRateLimitMiddleware_WriteLimiter(t *testing.T) {
 }
 
 func TestIPRateLimiter_Cleanup(t *testing.T) {
-	rl := NewIPRateLimiter(RateLimiterConfig{
-		Rate:            5,
-		Interval:        50 * time.Millisecond,
-		CleanupInterval: 60 * time.Millisecond,
-	})
+	clock := newFakeClock()
+	rl := newTestLimiterWithClock(5, 50*time.Millisecond, clock)
 	defer rl.Stop()
 
 	rl.Allow("10.0.0.1")
 
-	// Verify visitor exists
 	rl.mu.Lock()
 	if len(rl.visitors) != 1 {
 		t.Errorf("expected 1 visitor, got %d", len(rl.visitors))
 	}
 	rl.mu.Unlock()
 
-	// Wait for cleanup to run
-	time.Sleep(150 * time.Millisecond)
+	clock.Advance(61 * time.Millisecond)
+	rl.cleanupStale(60 * time.Millisecond)
 
 	rl.mu.Lock()
 	count := len(rl.visitors)

@@ -1,8 +1,9 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 const nostrMock = vi.hoisted(() => ({
   publish: vi.fn(),
-  subscribe: vi.fn()
+  subscribe: vi.fn(),
+  sockets: null
 }));
 
 const authMock = vi.hoisted(() => ({
@@ -27,10 +28,13 @@ vi.mock('../../src/lib/nostr/client.js', async () => {
 
 describe('controlplane request helpers', () => {
   let helper;
+  let originalWebSocket;
 
   beforeEach(async () => {
     vi.resetModules();
     vi.clearAllMocks();
+    originalWebSocket = global.WebSocket;
+    global.WebSocket = { OPEN: 1 };
     authMock.authState.status = 'authenticated';
     authMock.authState.pubkey = 'a'.repeat(64);
     authMock.signWithAuth.mockImplementation(async (event) => ({
@@ -44,8 +48,13 @@ describe('controlplane request helpers', () => {
       { relay: 'ws://relay-2.test', sent: true, accepted: false, message: 'blocked: duplicate' }
     ]);
     nostrMock.subscribe.mockReturnValue(vi.fn());
+    nostrMock.sockets = null;
     systemMock.currentSystemInfo.mockReturnValue({ nostr: { service_pubkey: 'b'.repeat(64) } });
     helper = await import('../../src/lib/nostr/controlplane-requests.js');
+  });
+
+  afterEach(() => {
+    global.WebSocket = originalWebSocket;
   });
 
   it('signs and publishes a request, requiring at least one OK accepted relay', async () => {
@@ -94,6 +103,42 @@ describe('controlplane request helpers', () => {
       [{ kinds: [7963], '#e': ['req-1'], authors: ['b'.repeat(64)] }],
       expect.objectContaining({ onEvent: expect.any(Function), onClosed: expect.any(Function) })
     );
+  });
+
+  it('awaitResult reports auth-related subscription closures distinctly', async () => {
+    let handlers;
+    const unsubscribe = vi.fn();
+    nostrMock.sockets = new Map([
+      ['ws://relay-auth.test', { readyState: WebSocket.OPEN }]
+    ]);
+    nostrMock.subscribe.mockImplementation((_filters, nextHandlers) => {
+      handlers = nextHandlers;
+      return unsubscribe;
+    });
+
+    const promise = helper.awaitResult({ requestEventId: 'req-1', resultKinds: [7963] });
+    handlers.onClosed('auth-required: sign in', 'ws://relay-auth.test');
+
+    await expect(promise).rejects.toThrow('Nostr result subscription auth closure: ws://relay-auth.test: auth-required: sign in');
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
+  });
+
+  it('awaitResult aggregates relay close reasons when all result subscriptions close incomplete', async () => {
+    let handlers;
+    nostrMock.sockets = new Map([
+      ['ws://relay-1.test', { readyState: WebSocket.OPEN }],
+      ['ws://relay-2.test', { readyState: WebSocket.OPEN }]
+    ]);
+    nostrMock.subscribe.mockImplementation((_filters, nextHandlers) => {
+      handlers = nextHandlers;
+      return vi.fn();
+    });
+
+    const promise = helper.awaitResult({ requestEventId: 'req-1', resultKinds: [7963] });
+    handlers.onClosed('closed: shard restarting', 'ws://relay-1.test');
+    handlers.onClosed('closed: subscription limit', 'ws://relay-2.test');
+
+    await expect(promise).rejects.toThrow('ws://relay-1.test (closed: shard restarting); ws://relay-2.test (closed: subscription limit)');
   });
 
   it('subscribeStatus streams only matching status events and dedupes duplicates', () => {

@@ -225,7 +225,7 @@ describe('Nostr Client - Parsing Functions', () => {
   });
 
   describe('queryUntilEose', () => {
-    it('resolves pending bootstrap queries when a relay transport closes', async () => {
+    it('rejects pending bootstrap queries when a relay transport closes before EOSE', async () => {
       const client = new NostrClient({ relays: [] });
       const socket = { readyState: WebSocket.OPEN, send: vi.fn() };
       client.sockets.set('ws://relay.example', socket);
@@ -235,7 +235,11 @@ describe('Nostr Client - Parsing Functions', () => {
 
       client.notifyRelayClosed('ws://relay.example', 'relay connection closed');
 
-      await expect(query).resolves.toEqual([]);
+      await expect(query).rejects.toMatchObject({
+        name: 'NostrIncompleteEOSEError',
+        reason: 'all_relays_closed',
+        relaySummary: [{ relay: 'ws://relay.example', status: 'closed', reason: 'relay connection closed' }]
+      });
     });
   });
 

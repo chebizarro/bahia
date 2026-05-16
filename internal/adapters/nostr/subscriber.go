@@ -15,10 +15,10 @@ import (
 // Inbound event kinds the subscriber listens for.
 //
 // Protocol boundary:
-// - 5401/5402 are the Hive CI workflow events Bahia consumes.
-// - 5100 is the Loom job request Bahia publishes later when dispatching work.
-// - Legacy NIP-90 kind 5900 belongs to the old upstream dvm-cicd-runner path and is
-//   not part of this subscriber contract.
+//   - 5401/5402 are the Hive CI workflow events Bahia consumes.
+//   - 5100 is the Loom job request Bahia publishes later when dispatching work.
+//   - Legacy NIP-90 kind 5900 belongs to the old upstream dvm-cicd-runner path and is
+//     not part of this subscriber contract.
 var DefaultInboundKinds = []int{
 	// Hive-CI protocol kinds.
 	5401, // Hive-CI workflow run
@@ -187,10 +187,26 @@ func (s *Subscriber) subscribe(ctx context.Context) error {
 	// The caller (Run) doesn't have visibility into this, but the subscription
 	// will run until error, at which point backoff continues from where it was.
 
+	authAttempted := make(map[string]struct{})
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
+		case eose, ok := <-merged.RelayEOSE:
+			if ok {
+				s.handleRelayEOSE(eose)
+			} else {
+				merged.RelayEOSE = nil
+			}
+		case closed, ok := <-merged.Closed:
+			if ok {
+				if s.handleRelayClosed(ctx, closed, authAttempted) {
+					merged.Close()
+					return nil
+				}
+			} else {
+				merged.Closed = nil
+			}
 		case <-merged.EndOfStoredEvents:
 			s.handleEOSE()
 			merged.EndOfStoredEvents = nil
@@ -203,6 +219,14 @@ func (s *Subscriber) subscribe(ctx context.Context) error {
 	}
 }
 
+func (s *Subscriber) handleRelayEOSE(eose RelayEOSE) {
+	s.logger.Debug("relay sent EOSE",
+		zap.String("relay", eose.RelayURL),
+		zap.String("subscription_id", eose.SubscriptionID),
+		zap.Ints("kinds", s.kinds),
+	)
+}
+
 func (s *Subscriber) handleEOSE() {
 	if !s.caughtUp.Load() {
 		s.caughtUp.Store(true)
@@ -212,11 +236,43 @@ func (s *Subscriber) handleEOSE() {
 	}
 }
 
+func (s *Subscriber) handleRelayClosed(ctx context.Context, closed RelayClosed, authAttempted map[string]struct{}) bool {
+	s.logger.Warn("relay closed subscription",
+		zap.String("relay", closed.RelayURL),
+		zap.String("subscription_id", closed.SubscriptionID),
+		zap.String("reason", closed.Reason),
+	)
+	if !IsAuthRequiredReason(closed.Reason) || closed.RelayURL == "" || s.pool == nil {
+		return false
+	}
+	if _, ok := authAttempted[closed.RelayURL]; ok {
+		return false
+	}
+	authAttempted[closed.RelayURL] = struct{}{}
+	if err := s.pool.AuthenticateRelay(ctx, closed.RelayURL); err != nil {
+		s.logger.Warn("relay subscription auth failed",
+			zap.String("relay", closed.RelayURL),
+			zap.String("reason", closed.Reason),
+			zap.Error(err),
+		)
+		return false
+	}
+	return true
+}
+
 // handleEvent persists the event and invokes registered handlers.
 // Repository insert state gates handlers so overlap backfill and multi-relay
 // duplicates cannot re-run side effects across process restarts.
 func (s *Subscriber) handleEvent(ctx context.Context, ev *nostr.Event) {
-	if ev == nil {
+	if err := ValidateInboundEvent(ev, s.now(), InboundEventMaxFutureSkew); err != nil {
+		eventID := ""
+		if ev != nil {
+			eventID = ev.ID
+		}
+		s.logger.Warn("dropping invalid inbound event before persistence",
+			zap.String("event_id", eventID),
+			zap.Error(err),
+		)
 		return
 	}
 

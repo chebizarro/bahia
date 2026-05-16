@@ -1,0 +1,6 @@
+{
+  "feature_id": "WEB_NOSTR_VALIDATION_EOSE",
+  "command": "pnpm --dir web exec vitest run --config vitest.config.js tests/unit/sanity.test.js tests/unit/test-utils-and-fixtures.test.js tests/unit/nostr-client-parsing.test.js tests/unit/controlplane-requests.test.js",
+  "result": "passed",
+  "tests": 57
+}

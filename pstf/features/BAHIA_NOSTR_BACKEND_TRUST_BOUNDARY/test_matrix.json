@@ -1,0 +1,13 @@
+{
+  "feature_id": "BAHIA_NOSTR_BACKEND_TRUST_BOUNDARY",
+  "test_runs": [
+    {
+      "command": "go test -timeout 60s ./internal/adapters/nostr ./internal/controlplane",
+      "result": "passed"
+    },
+    {
+      "command": "go test -timeout 60s ./internal/adapters/nostr ./internal/controlplane ./internal/adapters/hiveci ./internal/adapters/loom",
+      "result": "passed"
+    }
+  ]
+}

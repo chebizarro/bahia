@@ -6,8 +6,10 @@ import (
 	"crypto/cipher"
 	"crypto/rand"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/nbd-wtf/go-nostr/nip44"
 	"github.com/openagentsinc/bahia/internal/domain"
@@ -21,13 +23,18 @@ type Encryptor struct {
 
 // NewEncryptor creates a new Encryptor with the given Nostr private key.
 // The AES key is derived from the private key via SHA-256.
-func NewEncryptor(nostrPrivateKey string) *Encryptor {
+func NewEncryptor(nostrPrivateKey string) (*Encryptor, error) {
+	nostrPrivateKey = strings.TrimSpace(nostrPrivateKey)
+	if nostrPrivateKey == "" {
+		return nil, errors.New("nostr private key is required for secret encryption")
+	}
+
 	// Derive AES-256 key from the Nostr private key via SHA-256.
 	hash := sha256.Sum256([]byte(nostrPrivateKey))
 	return &Encryptor{
 		privateKey: nostrPrivateKey,
 		aesKey:     hash[:],
-	}
+	}, nil
 }
 
 // Encrypt encrypts a plaintext value using the specified method.

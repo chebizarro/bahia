@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -560,6 +561,50 @@ func TestClient_UploadFile(t *testing.T) {
 	}
 	if uploadedLen != int64(len(data)) {
 		t.Fatalf("uploaded length %d want %d", uploadedLen, len(data))
+	}
+}
+
+func TestClient_DownloadAuthHeaderFailureDoesNotFallbackUnauthenticated(t *testing.T) {
+	data := []byte("private content")
+	h := sha256.Sum256(data)
+	hash := hex.EncodeToString(h[:])
+	called := false
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		t.Fatalf("server should not receive unauthenticated fallback request")
+	}))
+	defer server.Close()
+
+	client := NewClient(Config{Servers: []string{server.URL}, PrivateKeyHex: "not-a-private-key", MaxRetries: 1}, testLogger())
+	_, err := client.Download(context.Background(), server.URL+"/"+hash)
+	if !errors.Is(err, ErrAuthHeader) {
+		t.Fatalf("Download() error = %v, want ErrAuthHeader", err)
+	}
+	if called {
+		t.Fatal("download attempted HTTP request after auth preparation failed")
+	}
+}
+
+func TestClient_ProxyAuthHeaderFailureDoesNotFallbackUnauthenticated(t *testing.T) {
+	called := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		t.Fatalf("server should not receive unauthenticated fallback request")
+	}))
+	defer server.Close()
+
+	client := NewClient(Config{Servers: []string{server.URL}, PrivateKeyHex: "not-a-private-key", MaxRetries: 1}, testLogger())
+	url := server.URL + "/" + strings.Repeat("a", 64)
+
+	if _, err := client.HeadByURL(context.Background(), url); !errors.Is(err, ErrAuthHeader) {
+		t.Fatalf("HeadByURL() error = %v, want ErrAuthHeader", err)
+	}
+	if _, err := client.OpenStreamByURL(context.Background(), url); !errors.Is(err, ErrAuthHeader) {
+		t.Fatalf("OpenStreamByURL() error = %v, want ErrAuthHeader", err)
+	}
+	if called {
+		t.Fatal("proxy attempted HTTP request after auth preparation failed")
 	}
 }
 

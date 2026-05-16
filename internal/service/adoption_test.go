@@ -298,7 +298,10 @@ func TestAdoptionServiceImportStoresSensitiveEnvironmentAsSecrets(t *testing.T) 
 
 	registry, svcRepo, envRepo, buildRepo, artifactRepo, _, _ := newTestRegistry()
 	secretRepo := newMockSecretRepo()
-	encryptor := secretsAdapter.NewEncryptor("test-import-key")
+	encryptor, err := secretsAdapter.NewEncryptor("test-import-key")
+	if err != nil {
+		t.Fatalf("NewEncryptor: %v", err)
+	}
 	adoption := NewAdoptionService(
 		registry, svcRepo, envRepo, buildRepo, artifactRepo, registry.state, registry.observations, &events.NoopPublisher{}, zap.NewNop(),
 		WithAdoptionSecrets(secretRepo, encryptor),

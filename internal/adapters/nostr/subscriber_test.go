@@ -218,46 +218,79 @@ func TestSubscriberBuildSubscriptionFiltersScopesCommandKindsToAuthorizedAuthors
 func TestSubscriberHandleEventRetriesPersistenceAfterTransientRecordError(t *testing.T) {
 	ctx := context.Background()
 	repo := newMemoryNostrEventRepo()
-	repo.failRecordID = "retry-event"
+	now := time.Unix(200, 0).UTC()
+	ev := signedTestEvent(t, 5101, time.Unix(105, 0).UTC())
+	repo.failRecordID = ev.ID
 
 	var handled []string
-	sub := NewSubscriber(nil, repo, zap.NewNop(), WithHandler(func(_ context.Context, ev *gonostr.Event) {
-		handled = append(handled, ev.ID)
-	}))
-	ev := &gonostr.Event{ID: "retry-event", Kind: 5101, PubKey: "worker", Content: "{}", Tags: gonostr.Tags{}, Sig: "sig", CreatedAt: gonostr.Timestamp(105)}
+	sub := NewSubscriber(nil, repo, zap.NewNop(),
+		WithHandler(func(_ context.Context, ev *gonostr.Event) {
+			handled = append(handled, ev.ID)
+		}),
+		withClock(func() time.Time { return now }),
+	)
 
 	sub.handleEvent(ctx, ev)
 	require.Empty(t, handled)
 	require.Nil(t, repo.latest)
 
 	sub.handleEvent(ctx, ev)
-	require.Equal(t, []string{"retry-event"}, handled)
+	require.Equal(t, []string{ev.ID}, handled)
 	require.Equal(t, int64(105), sub.latestSeenForKinds([]int{5101}))
 }
 
 func TestSubscriberHandleEventInvokesHandlersOnlyForNewlyPersistedEvents(t *testing.T) {
 	ctx := context.Background()
 	repo := newMemoryNostrEventRepo()
+	now := time.Unix(200, 0).UTC()
+	persistedEvent := signedTestEvent(t, 5101, time.Unix(100, 0).UTC())
 	_, err := repo.Record(ctx, &repository.NostrEventRecord{
-		ID:        "already-persisted",
-		Kind:      5101,
-		PubKey:    "worker",
-		Content:   "{}",
+		ID:        persistedEvent.ID,
+		Kind:      persistedEvent.Kind,
+		PubKey:    persistedEvent.PubKey,
+		Content:   persistedEvent.Content,
 		Tags:      json.RawMessage("[]"),
-		Sig:       "sig",
-		CreatedAt: time.Unix(100, 0).UTC(),
+		Sig:       persistedEvent.Sig,
+		CreatedAt: persistedEvent.CreatedAt.Time(),
 	})
 	require.NoError(t, err)
 
 	var handled []string
-	sub := NewSubscriber(nil, repo, zap.NewNop(), WithHandler(func(_ context.Context, ev *gonostr.Event) {
-		handled = append(handled, ev.ID)
-	}))
+	sub := NewSubscriber(nil, repo, zap.NewNop(),
+		WithHandler(func(_ context.Context, ev *gonostr.Event) {
+			handled = append(handled, ev.ID)
+		}),
+		withClock(func() time.Time { return now }),
+	)
 
-	sub.handleEvent(ctx, &gonostr.Event{ID: "already-persisted", Kind: 5101, PubKey: "worker", Content: "{}", Tags: gonostr.Tags{}, Sig: "sig", CreatedAt: gonostr.Timestamp(100)})
+	sub.handleEvent(ctx, persistedEvent)
 	require.Empty(t, handled, "persisted overlap duplicate must not re-run handlers")
 
-	sub.handleEvent(ctx, &gonostr.Event{ID: "new-event", Kind: 5101, PubKey: "worker", Content: "{}", Tags: gonostr.Tags{}, Sig: "sig", CreatedAt: gonostr.Timestamp(105)})
-	require.Equal(t, []string{"new-event"}, handled)
+	newEvent := signedTestEvent(t, 5101, time.Unix(105, 0).UTC())
+	sub.handleEvent(ctx, newEvent)
+	require.Equal(t, []string{newEvent.ID}, handled)
 	require.Equal(t, int64(105), sub.latestSeenForKinds([]int{5101}))
+}
+
+func TestSubscriberHandleEventDropsInvalidBeforePersistenceAndDispatch(t *testing.T) {
+	ctx := context.Background()
+	repo := newMemoryNostrEventRepo()
+	now := time.Unix(200, 0).UTC()
+	valid := signedTestEvent(t, 5101, time.Unix(105, 0).UTC())
+	invalid := *valid
+	invalid.ID = "not-a-valid-id"
+
+	var handled []string
+	sub := NewSubscriber(nil, repo, zap.NewNop(),
+		WithHandler(func(_ context.Context, ev *gonostr.Event) {
+			handled = append(handled, ev.ID)
+		}),
+		withClock(func() time.Time { return now }),
+	)
+
+	sub.handleEvent(ctx, &invalid)
+	require.Empty(t, handled)
+	require.Equal(t, 0, repo.inserted)
+	require.Equal(t, int64(0), sub.latestSeenForKinds([]int{5101}))
+	require.False(t, sub.dedup.IsDuplicate(valid.ID))
 }

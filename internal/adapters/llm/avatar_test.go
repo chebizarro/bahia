@@ -86,7 +86,7 @@ func TestFluxComfyUIProviderExpandsPresetAndReportsProgress(t *testing.T) {
 }
 
 func TestAvatarProviderRegistryDispatchesBySpecProvider(t *testing.T) {
-	generator := NewAvatarGenerator(AvatarConfig{Provider: AvatarProviderFluxComfyUI}, nil)
+	generator := NewAvatarGenerator(AvatarConfig{}, nil)
 	fake := &fakeAvatarProvider{name: "test-provider"}
 	if err := generator.RegisterProvider(fake); err != nil {
 		t.Fatalf("register provider: %v", err)
@@ -112,19 +112,18 @@ func TestAvatarProviderRegistryDispatchesBySpecProvider(t *testing.T) {
 	}
 
 	names := generator.ProviderNames()
-	for _, want := range []string{AvatarProviderFluxComfyUI, "test-provider"} {
-		if !slices.Contains(names, want) {
-			t.Fatalf("available provider %q missing from names %v", want, names)
+	if !slices.Contains(names, "test-provider") {
+		t.Fatalf("available provider missing from names %v", names)
+	}
+	if slices.Contains(names, AvatarProviderFal) || slices.Contains(names, AvatarProviderReplicate) || slices.Contains(names, AvatarProviderFluxComfyUI) {
+		t.Fatalf("unconfigured providers should not be in available names %v", names)
+	}
+	for _, info := range generator.ProviderInfos() {
+		switch info.Name {
+		case AvatarProviderFal, AvatarProviderReplicate, AvatarProviderFluxComfyUI:
+			t.Fatalf("unconfigured provider %q should not be advertised in infos %#v", info.Name, generator.ProviderInfos())
 		}
 	}
-	for _, unavailable := range []string{AvatarProviderFal, AvatarProviderReplicate} {
-		if slices.Contains(names, unavailable) {
-			t.Fatalf("unavailable provider %q should not be in available names %v", unavailable, names)
-		}
-	}
-	infos := generator.ProviderInfos()
-	assertProviderAvailability(t, infos, AvatarProviderFal, false)
-	assertProviderAvailability(t, infos, AvatarProviderReplicate, false)
 }
 
 func TestAvatarGeneratorAsyncProgressEvents(t *testing.T) {
@@ -147,6 +146,22 @@ func TestAvatarGeneratorAsyncProgressEvents(t *testing.T) {
 	last := events[len(events)-1]
 	if last.Result == nil || last.Result.Provider != "async-provider" || last.Result.Seed != "seed-async" {
 		t.Fatalf("completion event missing result: %#v", last)
+	}
+}
+
+func TestAvatarGeneratorUsesFirstRegisteredProviderAsDefault(t *testing.T) {
+	generator := NewAvatarGenerator(AvatarConfig{}, nil)
+	fake := &fakeAvatarProvider{name: "registered-default"}
+	if err := generator.RegisterProvider(fake); err != nil {
+		t.Fatalf("register provider: %v", err)
+	}
+
+	result, err := generator.Generate(t.Context(), "plain prompt", "seed-default")
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	if result.Provider != "registered-default" || fake.got.Provider != "registered-default" {
+		t.Fatalf("registered provider was not used as default: result=%#v request=%#v", result, fake.got)
 	}
 }
 
@@ -192,22 +207,55 @@ func TestAvatarGeneratorLegacyEntrypoints(t *testing.T) {
 
 func TestAvatarGeneratorValidatesDimensions(t *testing.T) {
 	generator := NewAvatarGenerator(AvatarConfig{}, nil)
+	fake := &fakeAvatarProvider{name: "dimension-provider"}
+	if err := generator.RegisterProvider(fake); err != nil {
+		t.Fatalf("register provider: %v", err)
+	}
 	_, err := generator.GenerateWithSpec(t.Context(), domain.SoulAvatarGenerationSpec{
-		Prompt: "oversized avatar",
-		Width:  4096,
-		Height: 512,
+		Prompt:   "oversized avatar",
+		Provider: "dimension-provider",
+		Width:    4096,
+		Height:   512,
 	}, nil)
 	if err == nil || !strings.Contains(err.Error(), "dimensions") {
 		t.Fatalf("expected dimension validation error, got %v", err)
 	}
 
 	_, err = generator.GenerateWithSpec(t.Context(), domain.SoulAvatarGenerationSpec{
-		Prompt: "bad step avatar",
-		Width:  513,
-		Height: 512,
+		Prompt:   "bad step avatar",
+		Provider: "dimension-provider",
+		Width:    513,
+		Height:   512,
 	}, nil)
 	if err == nil || !strings.Contains(err.Error(), "multiples") {
 		t.Fatalf("expected dimension step validation error, got %v", err)
+	}
+}
+
+func TestAvatarGeneratorNoProvidersConfiguredFailsClosed(t *testing.T) {
+	generator := NewAvatarGenerator(AvatarConfig{}, nil)
+	if names := generator.ProviderNames(); len(names) != 0 {
+		t.Fatalf("ProviderNames() = %v, want no advertised providers", names)
+	}
+	if infos := generator.ProviderInfos(); len(infos) != 0 {
+		t.Fatalf("ProviderInfos() = %#v, want no placeholder providers", infos)
+	}
+
+	_, err := generator.GenerateWithSpec(t.Context(), domain.SoulAvatarGenerationSpec{
+		Prompt: "owl analyst",
+	}, nil)
+	if err == nil || !strings.Contains(err.Error(), "no avatar providers configured") {
+		t.Fatalf("GenerateWithSpec() error = %v, want no providers configured", err)
+	}
+}
+
+func TestAvatarGeneratorUnconfiguredProviderFailsBeforeRequest(t *testing.T) {
+	generator := NewAvatarGenerator(AvatarConfig{Provider: AvatarProviderFal}, nil)
+	_, err := generator.GenerateWithSpec(t.Context(), domain.SoulAvatarGenerationSpec{
+		Prompt: "owl analyst",
+	}, nil)
+	if err == nil || !strings.Contains(err.Error(), `avatar provider "fal" is not registered`) {
+		t.Fatalf("GenerateWithSpec() error = %v, want unregistered provider", err)
 	}
 }
 
@@ -228,19 +276,6 @@ func assertProgressStages(t *testing.T, events []AvatarProgressEvent, want ...Av
 	if terminalCount != 1 {
 		t.Fatalf("expected exactly one terminal progress event, got %d in %#v", terminalCount, events)
 	}
-}
-
-func assertProviderAvailability(t *testing.T, infos []AvatarProviderInfo, name string, available bool) {
-	t.Helper()
-	for _, info := range infos {
-		if info.Name == name {
-			if info.Available != available {
-				t.Fatalf("provider %q availability = %t, want %t; infos=%#v", name, info.Available, available, infos)
-			}
-			return
-		}
-	}
-	t.Fatalf("provider %q not found in infos %#v", name, infos)
 }
 
 func serverURL(r *http.Request) string {

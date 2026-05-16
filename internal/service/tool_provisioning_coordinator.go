@@ -3,7 +3,10 @@ package service
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/nbd-wtf/go-nostr"
@@ -13,7 +16,10 @@ import (
 	"github.com/openagentsinc/bahia/internal/events"
 	"github.com/openagentsinc/bahia/internal/repository"
 	"go.uber.org/zap"
+	"golang.org/x/sync/singleflight"
 )
+
+const defaultToolProvisioningRecoveryPollInterval = 30 * time.Second
 
 type ToolProvisioningCoordinator struct {
 	repo            repository.ToolProvisioningRepository
@@ -26,13 +32,18 @@ type ToolProvisioningCoordinator struct {
 	dispatcher      ToolProvisioningDispatcher
 	logger          *zap.Logger
 	config          ToolProvisioningConfig
+
+	intentGroup singleflight.Group
+	locksMu     sync.Mutex
+	targetLocks map[string]*sync.Mutex
 }
 
 type ToolProvisioningConfig struct {
-	BaseImageRef     string
-	TargetRegistry   string
-	TargetRepo       string
-	InstallerVersion string
+	BaseImageRef         string
+	TargetRegistry       string
+	TargetRepo           string
+	InstallerVersion     string
+	RecoveryPollInterval time.Duration
 }
 
 type ToolProvisioningResponder interface {
@@ -51,22 +62,84 @@ func NewToolProvisioningCoordinator(repo repository.ToolProvisioningRepository, 
 	if strings.TrimSpace(cfg.InstallerVersion) == "" {
 		cfg.InstallerVersion = "v1"
 	}
-	return &ToolProvisioningCoordinator{repo: repo, serviceRepo: serviceRepo, envRepo: envRepo, securityService: securityService, builder: builder, runtime: rt, responder: responder, dispatcher: dispatcher, logger: logger.Named("tool-provisioning-coordinator"), config: cfg}
+	if cfg.RecoveryPollInterval <= 0 {
+		cfg.RecoveryPollInterval = defaultToolProvisioningRecoveryPollInterval
+	}
+	return &ToolProvisioningCoordinator{repo: repo, serviceRepo: serviceRepo, envRepo: envRepo, securityService: securityService, builder: builder, runtime: rt, responder: responder, dispatcher: dispatcher, logger: logger.Named("tool-provisioning-coordinator"), config: cfg, targetLocks: make(map[string]*sync.Mutex)}
+}
+
+func (c *ToolProvisioningCoordinator) Name() string { return "tool-provisioning-recovery" }
+
+// Run performs explicit durable recovery for stored tool provisioning work.
+// Newly-arrived kind 5976 requests remain event-triggered through the reactor;
+// this runner only resumes intents already persisted in non-terminal states.
+func (c *ToolProvisioningCoordinator) Run(ctx context.Context) error {
+	if c == nil || c.repo == nil {
+		return nil
+	}
+	c.runRecoveryOnce(ctx)
+
+	ticker := time.NewTicker(c.config.RecoveryPollInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-ticker.C:
+			c.runRecoveryOnce(ctx)
+		}
+	}
+}
+
+func (c *ToolProvisioningCoordinator) runRecoveryOnce(ctx context.Context) {
+	if err := c.ProcessPendingIntents(ctx); err != nil {
+		c.logger.Warn("tool provisioning recovery scan failed", zap.Error(err))
+	}
 }
 
 func (c *ToolProvisioningCoordinator) ProcessIntent(ctx context.Context, intentID uuid.UUID) error {
-	intent, err := c.repo.GetIntent(ctx, intentID)
-	if err != nil {
-		return err
+	return c.processIntent(ctx, intentID, false)
+}
+
+func (c *ToolProvisioningCoordinator) ProcessApprovedIntent(ctx context.Context, intentID uuid.UUID) error {
+	return c.processIntent(ctx, intentID, true)
+}
+
+func (c *ToolProvisioningCoordinator) processIntent(ctx context.Context, intentID uuid.UUID, approvedOnly bool) error {
+	if c == nil || c.repo == nil {
+		return fmt.Errorf("tool provisioning repository is not configured")
 	}
-	if intent == nil {
-		return fmt.Errorf("intent %s not found", intentID)
-	}
-	if intent.Status == domain.ToolProvisionStatusApproved {
-		return c.processBuildAndDeploy(ctx, intent)
-	}
-	if intent.Status != domain.ToolProvisionStatusPending {
-		return nil
+	_, err, _ := c.intentGroup.Do(intentID.String(), func() (any, error) {
+		intent, err := c.repo.GetIntent(ctx, intentID)
+		if err != nil {
+			return nil, err
+		}
+		if intent == nil {
+			return nil, fmt.Errorf("intent %s not found", intentID)
+		}
+		return nil, c.withTargetLock(intent, func() error {
+			if approvedOnly {
+				if !isToolProvisionBuildRecoverable(intent.Status) {
+					return nil
+				}
+				return c.processBuildAndDeploy(ctx, intent)
+			}
+			switch {
+			case isToolProvisionValidationRecoverable(intent.Status):
+				return c.processValidation(ctx, intent)
+			case isToolProvisionBuildRecoverable(intent.Status):
+				return c.processBuildAndDeploy(ctx, intent)
+			default:
+				return nil
+			}
+		})
+	})
+	return err
+}
+
+func (c *ToolProvisioningCoordinator) processValidation(ctx context.Context, intent *domain.ToolProvisionIntent) error {
+	if c.securityService == nil {
+		return c.fail(ctx, intent, "validation failed", fmt.Errorf("tool security service is not configured"))
 	}
 	if err := c.transition(ctx, intent, domain.ToolProvisionStatusValidating, "validating", "validating tool request"); err != nil {
 		return err
@@ -94,28 +167,38 @@ func (c *ToolProvisioningCoordinator) ProcessIntent(ctx context.Context, intentI
 	return c.processBuildAndDeploy(ctx, intent)
 }
 
-func (c *ToolProvisioningCoordinator) ProcessApprovedIntent(ctx context.Context, intentID uuid.UUID) error {
-	intent, err := c.repo.GetIntent(ctx, intentID)
-	if err != nil {
-		return err
-	}
-	if intent == nil {
-		return fmt.Errorf("intent %s not found", intentID)
-	}
-	if intent.Status != domain.ToolProvisionStatusApproved {
+func (c *ToolProvisioningCoordinator) ProcessPendingIntents(ctx context.Context) error {
+	if c == nil || c.repo == nil {
 		return nil
 	}
-	return c.processBuildAndDeploy(ctx, intent)
-}
-
-func (c *ToolProvisioningCoordinator) ProcessPendingIntents(ctx context.Context) error {
-	intents, err := c.repo.ListIntentsByStatus(ctx, domain.ToolProvisionStatusPending, domain.ToolProvisionStatusApproved)
+	intents, err := c.repo.ListIntentsByStatus(ctx, recoverableToolProvisionStatuses()...)
 	if err != nil {
 		return err
 	}
+	// Durable recovery must be deterministic for multiple stranded intents on
+	// the same target. Oldest-first processing ensures newer stored requests are
+	// the final profile state even if the repository returns rows unordered.
+	sort.SliceStable(intents, func(i, j int) bool {
+		leftTarget := toolProvisionTargetKey(intents[i].ServiceID, intents[i].EnvironmentID)
+		rightTarget := toolProvisionTargetKey(intents[j].ServiceID, intents[j].EnvironmentID)
+		if leftTarget != rightTarget {
+			return leftTarget < rightTarget
+		}
+		if !intents[i].CreatedAt.Equal(intents[j].CreatedAt) {
+			return intents[i].CreatedAt.Before(intents[j].CreatedAt)
+		}
+		return intents[i].ID.String() < intents[j].ID.String()
+	})
 	for i := range intents {
-		if err := c.ProcessIntent(ctx, intents[i].ID); err != nil {
-			c.logger.Warn("tool intent processing failed", zap.String("intent_id", intents[i].ID.String()), zap.Error(err))
+		intent := intents[i]
+		var err error
+		if isToolProvisionValidationRecoverable(intent.Status) {
+			err = c.ProcessIntent(ctx, intent.ID)
+		} else if isToolProvisionBuildRecoverable(intent.Status) {
+			err = c.ProcessApprovedIntent(ctx, intent.ID)
+		}
+		if err != nil {
+			c.logger.Warn("tool intent recovery failed", zap.String("intent_id", intent.ID.String()), zap.String("status", string(intent.Status)), zap.Error(err))
 		}
 	}
 	return nil
@@ -203,6 +286,52 @@ func (c *ToolProvisioningCoordinator) processBuildAndDeploy(ctx context.Context,
 	}
 	c.publishResult(ctx, intent, true, "")
 	return nil
+}
+
+func (c *ToolProvisioningCoordinator) withTargetLock(intent *domain.ToolProvisionIntent, fn func() error) error {
+	if intent == nil {
+		return fn()
+	}
+	key := toolProvisionTargetKey(intent.ServiceID, intent.EnvironmentID)
+	c.locksMu.Lock()
+	lock := c.targetLocks[key]
+	if lock == nil {
+		lock = &sync.Mutex{}
+		c.targetLocks[key] = lock
+	}
+	c.locksMu.Unlock()
+
+	lock.Lock()
+	defer lock.Unlock()
+	return fn()
+}
+
+func toolProvisionTargetKey(serviceID, envID uuid.UUID) string {
+	return serviceID.String() + ":" + envID.String()
+}
+
+func recoverableToolProvisionStatuses() []domain.ToolProvisionStatus {
+	return []domain.ToolProvisionStatus{
+		domain.ToolProvisionStatusPending,
+		domain.ToolProvisionStatusValidating,
+		domain.ToolProvisionStatusApproved,
+		domain.ToolProvisionStatusBuilding,
+		domain.ToolProvisionStatusDeploying,
+		domain.ToolProvisionStatusObserving,
+	}
+}
+
+func isToolProvisionValidationRecoverable(status domain.ToolProvisionStatus) bool {
+	return status == domain.ToolProvisionStatusPending || status == domain.ToolProvisionStatusValidating
+}
+
+func isToolProvisionBuildRecoverable(status domain.ToolProvisionStatus) bool {
+	switch status {
+	case domain.ToolProvisionStatusApproved, domain.ToolProvisionStatusBuilding, domain.ToolProvisionStatusDeploying, domain.ToolProvisionStatusObserving:
+		return true
+	default:
+		return false
+	}
 }
 
 func (c *ToolProvisioningCoordinator) transition(ctx context.Context, intent *domain.ToolProvisionIntent, status domain.ToolProvisionStatus, step, message string) error {

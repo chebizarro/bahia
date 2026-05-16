@@ -121,15 +121,8 @@ func (c *Client) doUpload(ctx context.Context, url string, data []byte, contentT
 	req.Header.Set("X-SHA-256", hash)
 	req.ContentLength = int64(len(data))
 
-	// Add Nostr auth if private key is configured
-	if c.privateKey != "" {
-		authHeader, err := c.createAuthHeader(ctx, url, "PUT", hash)
-		if err != nil {
-			return nil, fmt.Errorf("creating auth header: %w", err)
-		}
-		if authHeader != "" {
-			req.Header.Set("Authorization", authHeader)
-		}
+	if err := c.applyAuthHeader(ctx, req, http.MethodPut, hash); err != nil {
+		return nil, err
 	}
 
 	resp, err := c.httpClient.Do(req)

@@ -32,6 +32,7 @@ type Config struct {
 	OCI           OCIServerConfig           `koanf:"oci"`
 	HiveCI        HiveCIConfig              `koanf:"hiveci"`
 	Cashu         CashuConfig               `koanf:"cashu"`
+	Qdrant        QdrantConfig              `koanf:"qdrant"`
 	Telemetry     TelemetryConfig           `koanf:"telemetry"`
 	Notifications NotificationsConfig       `koanf:"notifications"`
 	Registry      RegistryAdapterConfig     `koanf:"registry"`
@@ -341,6 +342,15 @@ type CashuConfig struct {
 	WalletDB string `koanf:"wallet_db"` // path to wallet database
 }
 
+// QdrantConfig holds vector database settings.
+type QdrantConfig struct {
+	URL                       string        `koanf:"url"`
+	Timeout                   time.Duration `koanf:"timeout"`
+	APIKey                    string        `koanf:"api_key"`
+	AuthHeaderName            string        `koanf:"auth_header_name"`
+	AllowUnauthenticatedLocal bool          `koanf:"allow_unauthenticated_local"`
+}
+
 // TelemetryConfig holds observability / metrics settings.
 type TelemetryConfig struct {
 	Enabled      bool   `koanf:"enabled"`
@@ -468,6 +478,9 @@ func Defaults() *Config {
 		Cashu: CashuConfig{
 			Enabled: false,
 		},
+		Qdrant: QdrantConfig{
+			Timeout: 30 * time.Second,
+		},
 		Telemetry: TelemetryConfig{
 			Enabled:     false,
 			ServiceName: "bahia",
@@ -566,6 +579,9 @@ func (c *Config) validate() error {
 		if c.Adoption.OperatorAccessConfig.Empty() {
 			return fmt.Errorf("config validation failed: adoption operator allowlist is required when adoption.enabled=true")
 		}
+		if strings.TrimSpace(c.Nostr.PrivateKey) == "" {
+			return fmt.Errorf("config validation failed: nostr.private_key is required when adoption.enabled=true because adopted workload secret import requires encryption")
+		}
 	}
 	for name, endpoint := range c.Runtime.Endpoints {
 		if strings.TrimSpace(name) == "" {
@@ -588,6 +604,9 @@ func (c *Config) validate() error {
 		if c.DirectRuntime.OperatorAccessConfig.Empty() {
 			return fmt.Errorf("config validation failed: direct_runtime_actions operator allowlist is required when direct_runtime_actions.enabled=true")
 		}
+		if strings.TrimSpace(c.Nostr.PrivateKey) == "" {
+			return fmt.Errorf("config validation failed: nostr.private_key is required when direct_runtime_actions.enabled=true because runtime secret handling requires encryption")
+		}
 	}
 	if c.OCI.Enabled {
 		if strings.TrimSpace(c.OCI.PublicHost) == "" {
@@ -609,8 +628,11 @@ func (c *Config) validate() error {
 	if c.HiveCI.MaxRetries <= 0 {
 		return fmt.Errorf("config validation failed: hiveci.max_retries must be > 0")
 	}
-	if c.Cashu.Enabled && strings.TrimSpace(c.Cashu.MintURL) == "" {
-		return fmt.Errorf("config validation failed: cashu.mint_url is required when cashu.enabled=true")
+	if c.Cashu.Enabled {
+		return fmt.Errorf("config validation failed: cashu.enabled=true is unsupported because mint-backed token flows are not implemented; disable cashu.enabled")
+	}
+	if err := c.validateQdrant(); err != nil {
+		return err
 	}
 	if err := c.validateLLM(); err != nil {
 		return err
@@ -636,6 +658,34 @@ func (c *Config) validate() error {
 	c.Auth.BootstrapOwnerPubkeys = bootstrapOwners
 
 	return nil
+}
+
+func (c *Config) validateQdrant() error {
+	c.Qdrant.URL = strings.TrimRight(strings.TrimSpace(c.Qdrant.URL), "/")
+	c.Qdrant.APIKey = strings.TrimSpace(c.Qdrant.APIKey)
+	c.Qdrant.AuthHeaderName = strings.TrimSpace(c.Qdrant.AuthHeaderName)
+	if c.Qdrant.URL == "" {
+		return nil
+	}
+	parsed, err := url.Parse(c.Qdrant.URL)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return fmt.Errorf("config validation failed: qdrant.url must be a valid URL")
+	}
+	if c.Qdrant.Timeout < 0 {
+		return fmt.Errorf("config validation failed: qdrant.timeout must not be negative")
+	}
+	if c.Qdrant.APIKey == "" && !c.Qdrant.AllowUnauthenticatedLocal {
+		return fmt.Errorf("config validation failed: qdrant.api_key is required when qdrant.url is configured unless qdrant.allow_unauthenticated_local=true")
+	}
+	if c.Qdrant.APIKey == "" && c.Qdrant.AllowUnauthenticatedLocal && !isLocalQdrantURL(parsed) {
+		return fmt.Errorf("config validation failed: qdrant.allow_unauthenticated_local=true is only allowed for localhost or loopback qdrant.url")
+	}
+	return nil
+}
+
+func isLocalQdrantURL(parsed *url.URL) bool {
+	host := strings.ToLower(parsed.Hostname())
+	return host == "localhost" || host == "127.0.0.1" || host == "::1"
 }
 
 func (c *Config) normalizeEncryptedRequestRelays() {

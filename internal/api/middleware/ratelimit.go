@@ -33,6 +33,7 @@ type IPRateLimiter struct {
 	burst    float64       // max tokens (= rate * interval in seconds)
 	interval time.Duration // for staleness cleanup
 	done     chan struct{}
+	now      func() time.Time
 }
 
 // NewIPRateLimiter creates a rate limiter that allows cfg.Rate requests per
@@ -59,6 +60,7 @@ func NewIPRateLimiter(cfg RateLimiterConfig) *IPRateLimiter {
 		burst:    burst,
 		interval: cfg.Interval,
 		done:     make(chan struct{}),
+		now:      time.Now,
 	}
 
 	go rl.cleanup(cleanupInterval)
@@ -77,7 +79,7 @@ func (rl *IPRateLimiter) Allow(ip string) (bool, int) {
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
 
-	now := time.Now()
+	now := rl.now()
 	v, exists := rl.visitors[ip]
 	if !exists {
 		v = &visitor{tokens: rl.burst, lastSeen: now}
@@ -109,14 +111,19 @@ func (rl *IPRateLimiter) cleanup(interval time.Duration) {
 		case <-rl.done:
 			return
 		case <-ticker.C:
-			rl.mu.Lock()
-			cutoff := time.Now().Add(-interval)
-			for ip, v := range rl.visitors {
-				if v.lastSeen.Before(cutoff) {
-					delete(rl.visitors, ip)
-				}
-			}
-			rl.mu.Unlock()
+			rl.cleanupStale(interval)
+		}
+	}
+}
+
+func (rl *IPRateLimiter) cleanupStale(interval time.Duration) {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+
+	cutoff := rl.now().Add(-interval)
+	for ip, v := range rl.visitors {
+		if v.lastSeen.Before(cutoff) {
+			delete(rl.visitors, ip)
 		}
 	}
 }

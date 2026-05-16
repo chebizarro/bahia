@@ -153,14 +153,8 @@ func (c *Client) doUploadFile(ctx context.Context, url, path string, size int64,
 	req.Header.Set("X-SHA-256", hash)
 	req.ContentLength = size
 
-	if c.privateKey != "" {
-		authHeader, err := c.createAuthHeader(ctx, url, http.MethodPut, hash)
-		if err != nil {
-			return nil, fmt.Errorf("creating auth header: %w", err)
-		}
-		if authHeader != "" {
-			req.Header.Set("Authorization", authHeader)
-		}
+	if err := c.applyAuthHeader(ctx, req, http.MethodPut, hash); err != nil {
+		return nil, err
 	}
 
 	resp, err := c.httpClient.Do(req)
@@ -207,11 +201,8 @@ func (c *Client) HeadByURL(ctx context.Context, url string) (*BlobHead, error) {
 	if err != nil {
 		return nil, fmt.Errorf("creating request: %w", err)
 	}
-	if c.privateKey != "" {
-		authHeader, err := c.createAuthHeader(ctx, url, http.MethodHead, "")
-		if err == nil && authHeader != "" {
-			req.Header.Set("Authorization", authHeader)
-		}
+	if err := c.applyAuthHeader(ctx, req, http.MethodHead, ""); err != nil {
+		return nil, err
 	}
 
 	resp, err := c.httpClient.Do(req)
@@ -243,11 +234,8 @@ func (c *Client) OpenStreamByURL(ctx context.Context, url string) (*BlobStream, 
 	if err != nil {
 		return nil, fmt.Errorf("creating request: %w", err)
 	}
-	if c.privateKey != "" {
-		authHeader, err := c.createAuthHeader(ctx, url, http.MethodGet, "")
-		if err == nil && authHeader != "" {
-			req.Header.Set("Authorization", authHeader)
-		}
+	if err := c.applyAuthHeader(ctx, req, http.MethodGet, ""); err != nil {
+		return nil, err
 	}
 
 	resp, err := c.httpClient.Do(req)

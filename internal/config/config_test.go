@@ -580,6 +580,7 @@ func TestPrivilegedRouteConfigValidation(t *testing.T) {
 
 	t.Run("enabled with auth and allowlists is valid", func(t *testing.T) {
 		cfg := Defaults()
+		cfg.Nostr.PrivateKey = "test-secret-key"
 		cfg.Auth.Enabled = true
 		cfg.Adoption.Enabled = true
 		cfg.Adoption.AllowedSubjects = []string{"ops"}
@@ -622,6 +623,7 @@ func TestPrivilegedRouteConfigValidation(t *testing.T) {
 
 	t.Run("auth enabled satisfies privileged auth method", func(t *testing.T) {
 		cfg := Defaults()
+		cfg.Nostr.PrivateKey = "test-secret-key"
 		cfg.Auth.Enabled = true
 		cfg.Adoption.Enabled = true
 		cfg.Adoption.AllowedPubkeys = []string{"abcdef"}
@@ -634,20 +636,93 @@ func TestPrivilegedRouteConfigValidation(t *testing.T) {
 func TestCashuConfigValidation(t *testing.T) {
 	cfg := Defaults()
 	cfg.Cashu.Enabled = true
-	if err := cfg.validate(); err == nil || !strings.Contains(err.Error(), "cashu.mint_url") {
-		t.Fatalf("validate error = %v, want cashu.mint_url requirement", err)
+	if err := cfg.validate(); err == nil || !strings.Contains(err.Error(), "cashu.enabled=true is unsupported") {
+		t.Fatalf("validate error = %v, want unsupported cashu live-mode requirement", err)
 	}
 
 	cfg.Cashu.MintURL = "https://mint.example.com"
-	if err := cfg.validate(); err != nil {
-		t.Fatalf("validate with mint URL should pass: %v", err)
+	if err := cfg.validate(); err == nil || !strings.Contains(err.Error(), "cashu.enabled=true is unsupported") {
+		t.Fatalf("validate with mint URL error = %v, want unsupported cashu live-mode requirement", err)
 	}
+}
+
+func TestQdrantConfigValidation(t *testing.T) {
+	t.Run("url requires api key by default", func(t *testing.T) {
+		cfg := Defaults()
+		cfg.Qdrant.URL = "https://qdrant.example.com/"
+		if err := cfg.validate(); err == nil || !strings.Contains(err.Error(), "qdrant.api_key") {
+			t.Fatalf("validate error = %v, want qdrant.api_key requirement", err)
+		}
+	})
+
+	t.Run("url with api key is valid and normalized", func(t *testing.T) {
+		cfg := Defaults()
+		cfg.Qdrant.URL = " https://qdrant.example.com/ "
+		cfg.Qdrant.APIKey = " secret "
+		if err := cfg.validate(); err != nil {
+			t.Fatalf("validate error = %v", err)
+		}
+		if cfg.Qdrant.URL != "https://qdrant.example.com" || cfg.Qdrant.APIKey != "secret" {
+			t.Fatalf("qdrant config not normalized: %+v", cfg.Qdrant)
+		}
+	})
+
+	t.Run("explicit unauthenticated local mode is valid", func(t *testing.T) {
+		cfg := Defaults()
+		cfg.Qdrant.URL = "http://localhost:6333"
+		cfg.Qdrant.AllowUnauthenticatedLocal = true
+		if err := cfg.validate(); err != nil {
+			t.Fatalf("validate error = %v", err)
+		}
+	})
+
+	t.Run("unauthenticated remote mode is rejected", func(t *testing.T) {
+		cfg := Defaults()
+		cfg.Qdrant.URL = "https://qdrant.example.com"
+		cfg.Qdrant.AllowUnauthenticatedLocal = true
+		if err := cfg.validate(); err == nil || !strings.Contains(err.Error(), "allow_unauthenticated_local") {
+			t.Fatalf("validate error = %v, want unauthenticated local-only requirement", err)
+		}
+	})
+
+	t.Run("invalid url fails", func(t *testing.T) {
+		cfg := Defaults()
+		cfg.Qdrant.URL = "://bad-url"
+		cfg.Qdrant.APIKey = "secret"
+		if err := cfg.validate(); err == nil || !strings.Contains(err.Error(), "qdrant.url") {
+			t.Fatalf("validate error = %v, want qdrant.url requirement", err)
+		}
+	})
+}
+
+func TestSecretDependentFeatureValidationRequiresNostrPrivateKey(t *testing.T) {
+	t.Run("adoption", func(t *testing.T) {
+		cfg := Defaults()
+		cfg.Auth.Enabled = true
+		cfg.Adoption.Enabled = true
+		cfg.Adoption.AllowedSubjects = []string{"ops"}
+		if err := cfg.validate(); err == nil || !strings.Contains(err.Error(), "nostr.private_key is required when adoption.enabled=true") {
+			t.Fatalf("validate error = %v, want nostr private key requirement", err)
+		}
+	})
+
+	t.Run("direct runtime", func(t *testing.T) {
+		cfg := Defaults()
+		cfg.Auth.Enabled = true
+		cfg.DirectRuntime.Enabled = true
+		cfg.DirectRuntime.AllowedSubjects = []string{"ops"}
+		if err := cfg.validate(); err == nil || !strings.Contains(err.Error(), "nostr.private_key is required when direct_runtime_actions.enabled=true") {
+			t.Fatalf("validate error = %v, want nostr private key requirement", err)
+		}
+	})
 }
 
 func TestLoadPrivilegedRouteConfigFromYAML(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	content := []byte(`auth:
   enabled: true
+nostr:
+  private_key: test-secret-key
 adoption:
   enabled: true
   allow_compose_takeover: true
@@ -811,6 +886,7 @@ func TestPrivilegedFeatureValidationRequiresAuthAndOperatorAllowlists(t *testing
 	}
 
 	adoptionAllowed := Defaults()
+	adoptionAllowed.Nostr.PrivateKey = "test-secret-key"
 	adoptionAllowed.Auth.Enabled = true
 	adoptionAllowed.Adoption.Enabled = true
 	adoptionAllowed.Adoption.AllowedSubjects = []string{"ops"}
@@ -832,6 +908,7 @@ func TestPrivilegedFeatureValidationRequiresAuthAndOperatorAllowlists(t *testing
 	}
 
 	directAllowed := Defaults()
+	directAllowed.Nostr.PrivateKey = "test-secret-key"
 	directAllowed.Auth.Enabled = true
 	directAllowed.DirectRuntime.Enabled = true
 	directAllowed.DirectRuntime.AllowedPubkeys = []string{"0123456789abcdef"}

@@ -59,7 +59,10 @@ func TestRuntimeLifecycleDeployMergesEffectiveSecretsOverAdoptedEnvironment(t *t
 	stateRepo := registry.state.(*mockStateRepo)
 	rt := &lifecycleMockRuntime{}
 	secretRepo := newMockSecretRepo()
-	encryptor := secretsAdapter.NewEncryptor("test-runtime-key")
+	encryptor, err := secretsAdapter.NewEncryptor("test-runtime-key")
+	if err != nil {
+		t.Fatalf("NewEncryptor: %v", err)
+	}
 	lifecycle := NewRuntimeLifecycleService(
 		registry, svcRepo, envRepo, artifactRepo, stateRepo, &mockRuntimeResolver{rt: rt}, &events.NoopPublisher{}, zap.NewNop(),
 		WithRuntimeLifecycleSecrets(secretRepo, encryptor),
@@ -171,7 +174,10 @@ func TestRuntimeLifecycleDeploySecretDecryptFailureDoesNotMutateDesiredState(t *
 	stateRepo := registry.state.(*mockStateRepo)
 	rt := &lifecycleMockRuntime{}
 	secretRepo := newMockSecretRepo()
-	encryptor := secretsAdapter.NewEncryptor("test-runtime-key")
+	encryptor, err := secretsAdapter.NewEncryptor("test-runtime-key")
+	if err != nil {
+		t.Fatalf("NewEncryptor: %v", err)
+	}
 	lifecycle := NewRuntimeLifecycleService(
 		registry, svcRepo, envRepo, artifactRepo, stateRepo, &mockRuntimeResolver{rt: rt}, &events.NoopPublisher{}, zap.NewNop(),
 		WithRuntimeLifecycleSecrets(secretRepo, encryptor),
@@ -183,7 +189,7 @@ func TestRuntimeLifecycleDeploySecretDecryptFailureDoesNotMutateDesiredState(t *
 	}
 
 	before := *stateRepo.states[stateKey(svc.ID, env.ID)]
-	_, err := lifecycle.Deploy(ctx, svc.ID, env.ID, &artifact.ID)
+	_, err = lifecycle.Deploy(ctx, svc.ID, env.ID, &artifact.ID)
 	if err == nil || !strings.Contains(err.Error(), "decrypting effective secret") {
 		t.Fatalf("expected decrypt error, got %v", err)
 	}

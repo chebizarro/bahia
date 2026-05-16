@@ -19,12 +19,23 @@ func NewPaymentHandler(payments *service.PaymentService) *PaymentHandler {
 	return &PaymentHandler{payments: payments}
 }
 
+func (h *PaymentHandler) requirePayments(w http.ResponseWriter) bool {
+	if h.payments != nil {
+		return true
+	}
+	writeError(w, http.StatusServiceUnavailable, "payment service is not configured")
+	return false
+}
+
 // EstimateCost returns a cost estimate for a deployment run.
 // POST /payments/estimate
 func (h *PaymentHandler) EstimateCost(w http.ResponseWriter, r *http.Request) {
+	if !h.requirePayments(w) {
+		return
+	}
 	var req struct {
-		RunID              string `json:"run_id"`
-		EstimatedDuration  int    `json:"estimated_duration_secs"`
+		RunID             string `json:"run_id"`
+		EstimatedDuration int    `json:"estimated_duration_secs"`
 	}
 	if err := decodeJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -49,6 +60,9 @@ func (h *PaymentHandler) EstimateCost(w http.ResponseWriter, r *http.Request) {
 // GetRunCost returns payment records and cost summary for a deployment run.
 // GET /deployments/runs/{id}/cost
 func (h *PaymentHandler) GetRunCost(w http.ResponseWriter, r *http.Request) {
+	if !h.requirePayments(w) {
+		return
+	}
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid run ID")
@@ -76,6 +90,9 @@ func (h *PaymentHandler) GetRunCost(w http.ResponseWriter, r *http.Request) {
 // GetPaymentHistory returns payment history, optionally filtered by worker.
 // GET /payments/history?worker=<pubkey>&limit=50
 func (h *PaymentHandler) GetPaymentHistory(w http.ResponseWriter, r *http.Request) {
+	if !h.requirePayments(w) {
+		return
+	}
 	workerPubkey := r.URL.Query().Get("worker")
 	if workerPubkey == "" {
 		writeError(w, http.StatusBadRequest, "worker query parameter is required")

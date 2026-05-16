@@ -92,9 +92,13 @@ func (r *testSecretRepo) DeleteByName(_ context.Context, serviceID uuid.UUID, en
 	return nil
 }
 
-func newTestMCPSecretServer() (*Server, *testSecretRepo, *secrets.Encryptor) {
+func newTestMCPSecretServer(t *testing.T) (*Server, *testSecretRepo, *secrets.Encryptor) {
+	t.Helper()
 	repo := newTestSecretRepo()
-	encryptor := secrets.NewEncryptor("mcp-secret-test-key")
+	encryptor, err := secrets.NewEncryptor("mcp-secret-test-key")
+	if err != nil {
+		t.Fatalf("NewEncryptor: %v", err)
+	}
 	server := NewServerWithOptions(nil, zap.NewNop(), ServerDeps{
 		SecretsRepo: repo,
 		Encryptor:   encryptor,
@@ -103,7 +107,7 @@ func newTestMCPSecretServer() (*Server, *testSecretRepo, *secrets.Encryptor) {
 }
 
 func TestGetTools_IncludesSecretCRUD(t *testing.T) {
-	server, _, _ := newTestMCPSecretServer()
+	server, _, _ := newTestMCPSecretServer(t)
 	required := map[string]bool{
 		"bahia_list_secrets":  false,
 		"bahia_create_secret": false,
@@ -128,7 +132,7 @@ func TestGetTools_IncludesSecretCRUD(t *testing.T) {
 
 func TestCallTool_SecretCRUD(t *testing.T) {
 	ctx := context.Background()
-	server, repo, encryptor := newTestMCPSecretServer()
+	server, repo, encryptor := newTestMCPSecretServer(t)
 	serviceID := uuid.New()
 	envID := uuid.New()
 
@@ -218,7 +222,7 @@ func TestCallTool_SecretCRUD(t *testing.T) {
 
 func TestCallTool_SecretValidationAndConfiguration(t *testing.T) {
 	ctx := context.Background()
-	configured, _, _ := newTestMCPSecretServer()
+	configured, _, _ := newTestMCPSecretServer(t)
 
 	result, err := configured.CallTool(ctx, "bahia_create_secret", map[string]interface{}{
 		"service_id": uuid.New().String(),

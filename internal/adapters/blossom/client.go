@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -42,6 +43,9 @@ type serverStats struct {
 	failures  int64
 	lastUsed  time.Time
 }
+
+// ErrAuthHeader identifies failures preparing Blossom NIP-98 authorization headers.
+var ErrAuthHeader = errors.New("blossom auth header preparation failed")
 
 // BlobDescriptor describes an uploaded blob.
 type BlobDescriptor struct {
@@ -130,6 +134,20 @@ func (c *Client) GetStats() map[string]map[string]int64 {
 		}
 	}
 	return result
+}
+
+func (c *Client) applyAuthHeader(ctx context.Context, req *http.Request, method, payloadHash string) error {
+	if c.privateKey == "" {
+		return nil
+	}
+	authHeader, err := c.createAuthHeader(ctx, req.URL.String(), method, payloadHash)
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrAuthHeader, err)
+	}
+	if authHeader != "" {
+		req.Header.Set("Authorization", authHeader)
+	}
+	return nil
 }
 
 func (c *Client) recordUpload(server string, success bool) {

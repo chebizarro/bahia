@@ -2,6 +2,7 @@ package nostr
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	gonostr "github.com/nbd-wtf/go-nostr"
@@ -12,6 +13,7 @@ func newTestSubscription() *gonostr.Subscription {
 	return &gonostr.Subscription{
 		Events:            make(chan *gonostr.Event, 4),
 		EndOfStoredEvents: make(chan struct{}),
+		ClosedReason:      make(chan string, 1),
 	}
 }
 
@@ -74,4 +76,65 @@ func TestMergeSubscriptionsForwardsEventsWithoutWaitingForEOSE(t *testing.T) {
 	close(sub.EndOfStoredEvents)
 	<-merged.EndOfStoredEvents
 	close(sub.Events)
+}
+
+func TestMergeRelaySubscriptionsEmitsPerRelayEOSE(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	sub1 := newTestSubscription()
+	sub2 := newTestSubscription()
+	merged := mergeRelaySubscriptions(ctx, []relaySubscription{
+		{relayURL: "wss://relay-one.example", sub: sub1},
+		{relayURL: "wss://relay-two.example", sub: sub2},
+	}, 4)
+
+	close(sub1.EndOfStoredEvents)
+	require.Equal(t, RelayEOSE{RelayURL: "wss://relay-one.example"}, <-merged.RelayEOSE)
+	select {
+	case <-merged.EndOfStoredEvents:
+		t.Fatal("aggregate EOSE must wait for every relay")
+	default:
+	}
+
+	close(sub2.EndOfStoredEvents)
+	require.Equal(t, RelayEOSE{RelayURL: "wss://relay-two.example"}, <-merged.RelayEOSE)
+	<-merged.EndOfStoredEvents
+
+	close(sub1.Events)
+	close(sub2.Events)
+}
+
+func TestMergeRelaySubscriptionsEmitsClosedReason(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	sub := newTestSubscription()
+	merged := mergeRelaySubscriptions(ctx, []relaySubscription{{relayURL: "wss://relay.example", sub: sub}}, 4)
+
+	sub.ClosedReason <- "auth-required: sign in first"
+	closed := <-merged.Closed
+	require.Equal(t, "wss://relay.example", closed.RelayURL)
+	require.Equal(t, "auth-required: sign in first", closed.Reason)
+	require.True(t, IsAuthRequiredReason(closed.Reason))
+
+	close(sub.Events)
+}
+
+func TestMergeRelaySubscriptionsPreservesRelayClosedReasonAfterEventsClose(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	sub := newTestSubscription()
+	subCtx, subCancel := context.WithCancelCause(context.Background())
+	sub.Context = subCtx
+	merged := mergeRelaySubscriptions(ctx, []relaySubscription{{relayURL: "wss://relay.example", sub: sub}}, 4)
+
+	subCancel(errors.New("CLOSED received: auth-required: sign in first"))
+	close(sub.Events)
+	sub.ClosedReason <- "auth-required: sign in first"
+
+	closed := <-merged.Closed
+	require.Equal(t, "wss://relay.example", closed.RelayURL)
+	require.Equal(t, "auth-required: sign in first", closed.Reason)
 }

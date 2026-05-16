@@ -1,0 +1,26 @@
+{
+  "feature_id": "WEB_NOSTR_VALIDATION_EOSE",
+  "beads": ["bahia-0zzk", "bahia-o93z:web", "bahia-il2j:web"],
+  "criteria": [
+    {
+      "id": "AC1",
+      "statement": "Browser relay EVENT frames are validated before subscription callbacks receive them.",
+      "tests": ["web/tests/unit/sanity.test.js: validates NIP-01 event hashes before browser consumers receive relay EVENT frames", "web/tests/unit/sanity.test.js: rejects malformed signatures, timestamps, and non-string tags at the inbound validator"]
+    },
+    {
+      "id": "AC2",
+      "statement": "Browser historical queries resolve only after all connected relays in the subscription snapshot emit EOSE.",
+      "tests": ["web/tests/unit/sanity.test.js: preserves relay frame order when EVENT validation is followed immediately by EOSE", "web/tests/unit/sanity.test.js: resolves historical queries only after every connected relay sends EOSE"]
+    },
+    {
+      "id": "AC3",
+      "statement": "Timeout, abort, and relay-closed-incomplete paths reject with a distinct incomplete-history error and preserve partial events/relay state.",
+      "tests": ["web/tests/unit/sanity.test.js: treats query timeouts as incomplete history instead of successful partial results", "web/tests/unit/sanity.test.js: treats aborts as incomplete history with typed reason metadata", "web/tests/unit/sanity.test.js: rejects closed-incomplete queries and preserves partial events for callers", "web/tests/unit/nostr-client-parsing.test.js: rejects pending bootstrap queries when a relay transport closes before EOSE"]
+    },
+    {
+      "id": "AC4",
+      "statement": "Branch and control-plane callers surface incomplete history/relay closure explicitly instead of treating it as empty success.",
+      "tests": ["web/tests/unit/test-utils-and-fixtures.test.js: returns an explicit degraded error when branch history is incomplete before EOSE", "web/tests/unit/controlplane-requests.test.js: awaitResult reports auth-related subscription closures distinctly", "web/tests/unit/controlplane-requests.test.js: awaitResult aggregates relay close reasons when all result subscriptions close incomplete"]
+    }
+  ]
+}

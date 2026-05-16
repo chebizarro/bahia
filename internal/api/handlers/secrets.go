@@ -21,6 +21,14 @@ func NewSecretHandler(repo repository.SecretRepository, encryptor *secrets.Encry
 	return &SecretHandler{repo: repo, encryptor: encryptor}
 }
 
+func (h *SecretHandler) requireEncryptor(w http.ResponseWriter) bool {
+	if h.encryptor != nil {
+		return true
+	}
+	writeError(w, http.StatusServiceUnavailable, "secret encryption is not configured")
+	return false
+}
+
 // createSecretRequest is the request body for creating a secret.
 type createSecretRequest struct {
 	Name             string `json:"name"`
@@ -63,6 +71,9 @@ func toSecretRefResponse(ref domain.SecretRef) secretRefResponse {
 // Create handles POST /services/{id}/secrets.
 func (h *SecretHandler) Create(w http.ResponseWriter, r *http.Request) {
 	if !requirePermission(w, r, domain.PermWriteSecrets) {
+		return
+	}
+	if !h.requireEncryptor(w) {
 		return
 	}
 	serviceID, err := uuid.Parse(chi.URLParam(r, "id"))
@@ -196,6 +207,9 @@ func (h *SecretHandler) Delete(w http.ResponseWriter, r *http.Request) {
 // Update handles PUT /services/{id}/secrets/{secretId}.
 func (h *SecretHandler) Update(w http.ResponseWriter, r *http.Request) {
 	if !requirePermission(w, r, domain.PermWriteSecrets) {
+		return
+	}
+	if !h.requireEncryptor(w) {
 		return
 	}
 	serviceID, err := uuid.Parse(chi.URLParam(r, "id"))

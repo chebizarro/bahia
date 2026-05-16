@@ -25,12 +25,11 @@ const (
 	// AvatarProviderReplicate is the hosted Replicate image generation backend.
 	AvatarProviderReplicate = "replicate"
 
-	defaultAvatarProvider = AvatarProviderFluxComfyUI
-	defaultAvatarWidth    = 512
-	defaultAvatarHeight   = 512
-	minAvatarDimension    = 64
-	maxAvatarDimension    = 2048
-	avatarDimensionStep   = 8
+	defaultAvatarWidth  = 512
+	defaultAvatarHeight = 512
+	minAvatarDimension  = 64
+	maxAvatarDimension  = 2048
+	avatarDimensionStep = 8
 )
 
 // AvatarProgressStage identifies a generation lifecycle step.
@@ -56,7 +55,7 @@ type AvatarGenerator struct {
 type AvatarConfig struct {
 	LemmyURL string        // Lemmy ComfyUI API endpoint
 	Timeout  time.Duration // Request timeout
-	Provider string        // Default provider name; defaults to flux-comfyui
+	Provider string        // Default provider name; must match a configured provider
 }
 
 // AvatarGenerationRequest is the provider-ready avatar generation input.
@@ -258,37 +257,48 @@ func ExpandAvatarStylePreset(prompt, presetID string) (expandedPrompt string, ne
 
 // NewAvatarGenerator creates a new provider-based avatar generator.
 func NewAvatarGenerator(config AvatarConfig, logger *slog.Logger) *AvatarGenerator {
-	if config.LemmyURL == "" {
-		config.LemmyURL = "http://192.168.30.10:8188"
-	}
+	config.LemmyURL = strings.TrimRight(strings.TrimSpace(config.LemmyURL), "/")
 	if config.Timeout == 0 {
 		config.Timeout = 60 * time.Second
 	}
 	if logger == nil {
 		logger = slog.Default()
 	}
-	if strings.TrimSpace(config.Provider) == "" {
-		config.Provider = defaultAvatarProvider
-	}
 
 	componentLogger := logger.With("component", "avatar")
 	client := &http.Client{Timeout: config.Timeout}
-	registry := NewAvatarProviderRegistry(
-		NewFluxComfyUIAvatarProvider(config.LemmyURL, client, componentLogger),
-		UnavailableAvatarProvider{NameValue: AvatarProviderFal, Reason: "fal avatar provider is not configured"},
-		UnavailableAvatarProvider{NameValue: AvatarProviderReplicate, Reason: "replicate avatar provider is not configured"},
-	)
+	registry := NewAvatarProviderRegistry()
+	if config.LemmyURL != "" {
+		_ = registry.Register(NewFluxComfyUIAvatarProvider(config.LemmyURL, client, componentLogger))
+	}
+
+	defaultProvider := normalizeAvatarProvider(config.Provider)
+	if defaultProvider == "" {
+		names := registry.Names()
+		if len(names) == 1 {
+			defaultProvider = names[0]
+		}
+	}
 
 	return &AvatarGenerator{
 		registry:        registry,
-		defaultProvider: normalizeAvatarProvider(config.Provider),
+		defaultProvider: defaultProvider,
 		logger:          componentLogger,
 	}
 }
 
 // RegisterProvider adds or replaces a provider in this generator's registry.
 func (g *AvatarGenerator) RegisterProvider(provider AvatarProvider) error {
-	return g.registry.Register(provider)
+	if err := g.registry.Register(provider); err != nil {
+		return err
+	}
+	if g.defaultProvider == "" {
+		names := g.registry.Names()
+		if len(names) == 1 {
+			g.defaultProvider = names[0]
+		}
+	}
+	return nil
 }
 
 // ProviderNames returns currently available provider names.
@@ -389,7 +399,13 @@ func (g *AvatarGenerator) requestFromSpec(spec domain.SoulAvatarGenerationSpec) 
 		provider = g.defaultProvider
 	}
 	if provider == "" {
-		provider = defaultAvatarProvider
+		names := g.registry.Names()
+		if len(names) == 1 {
+			provider = names[0]
+		}
+	}
+	if provider == "" {
+		return AvatarGenerationRequest{}, errors.New("no avatar providers configured")
 	}
 
 	width := spec.Width
