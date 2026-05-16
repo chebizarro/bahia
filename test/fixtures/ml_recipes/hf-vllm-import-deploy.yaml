@@ -1,0 +1,52 @@
+name: hf-vllm-import-deploy
+version: 1
+inputs:
+  model:
+    source: huggingface
+    repo: Qwen/Qwen2.5-Coder-32B-Instruct
+    revision: 0123456789abcdef0123456789abcdef01234567
+steps:
+  - action: fetch_source
+    outputs:
+      source: artifact_ref
+    artifacts:
+      - uri: hf://Qwen/Qwen2.5-Coder-32B-Instruct@0123456789abcdef0123456789abcdef01234567
+        kind: model
+        format: huggingface_snapshot
+  - action: validate_provenance
+    inputs:
+      artifact: artifact_ref
+    outputs:
+      provenance: object
+  - action: publish_artifact
+    inputs:
+      artifact: artifact_ref
+    outputs:
+      artifact: artifact_ref
+    targets: [oci, blossom, seaweedfs]
+    retry_policy:
+      max_attempts: 2
+      backoff: exponential
+      initial_delay_ms: 500
+      max_delay_ms: 5000
+  - action: deploy_endpoint
+    inputs:
+      artifact: artifact_ref
+    outputs:
+      endpoint: endpoint
+    runtime: vllm
+    requires:
+      runtimes: [vllm]
+      artifact_formats: [huggingface_snapshot, safetensors]
+      accelerators: [gpu_nvidia_cuda]
+      min_vram_gb: 48
+    target:
+      accelerator: gpu_nvidia_cuda
+  - action: run_smoke_eval
+    inputs:
+      endpoint: endpoint
+    outputs:
+      report: object
+outputs:
+  endpoint:
+    protocol: openai-compatible

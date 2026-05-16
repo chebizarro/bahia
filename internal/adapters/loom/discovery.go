@@ -281,6 +281,7 @@ type workerAdContent struct {
 	Resources         *domain.WorkerResources     `json:"resources,omitempty"`
 	Accelerators      []domain.WorkerAccelerator  `json:"accelerators,omitempty"`
 	RuntimeTarget     *domain.WorkerRuntimeTarget `json:"runtime_target,omitempty"`
+	MLCapabilities    domain.WorkerMLCapabilities `json:"ml_capabilities,omitempty"`
 }
 
 // parseWorkerAdvertisement parses a Kind 10100 event into a Worker.
@@ -299,6 +300,7 @@ func parseWorkerAdvertisement(ev *nostr.Event) (*domain.Worker, error) {
 		Resources:           content.Resources,
 		Accelerators:        content.Accelerators,
 		RuntimeTarget:       content.RuntimeTarget,
+		MLCapabilities:      content.MLCapabilities,
 		LastAdvertisementAt: time.Unix(int64(ev.CreatedAt), 0),
 		CreatedAt:           time.Now(),
 		UpdatedAt:           time.Now(),
@@ -338,12 +340,26 @@ func parseWorkerAdvertisement(ev *nostr.Event) (*domain.Worker, error) {
 			worker.Geohash = tag[1]
 		case "relay":
 			worker.PreferredRelays = append(worker.PreferredRelays, tag[1])
+		case "runtime":
+			worker.MLCapabilities.Runtimes = append(worker.MLCapabilities.Runtimes, domain.MLRuntimeKind(tag[1]))
+		case "artifact_format", "format":
+			worker.MLCapabilities.ArtifactFormats = append(worker.MLCapabilities.ArtifactFormats, domain.MLArtifactFormat(tag[1]))
+		case "task":
+			worker.MLCapabilities.Tasks = append(worker.MLCapabilities.Tasks, domain.MLTaskKind(tag[1]))
+		case "accelerator":
+			worker.MLCapabilities.Accelerators = append(worker.MLCapabilities.Accelerators, tag[1])
+		case "toolchain":
+			worker.MLCapabilities.Toolchains = append(worker.MLCapabilities.Toolchains, tag[1])
+		case "cached_artifact", "artifact":
+			worker.MLCapabilities.CachedArtifacts = append(worker.MLCapabilities.CachedArtifacts, tag[1])
 		case "min_duration":
 			worker.MinDurationSecs, _ = strconv.Atoi(tag[1])
 		case "max_duration":
 			worker.MaxDurationSecs, _ = strconv.Atoi(tag[1])
 		}
 	}
+
+	worker.MLCapabilities = domain.NormalizeWorkerMLCapabilities(*worker)
 
 	// Compute initial status
 	worker.Status = worker.ComputeStatus(time.Now())

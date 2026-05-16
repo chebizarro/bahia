@@ -22,6 +22,7 @@ const (
 	EventMLRunChanged        events.EventType = "ml_deployment_run.changed"
 	EventMLObservation       events.EventType = "ml_inference.observation"
 	EventMLStateChanged      events.EventType = "ml_inference_state.changed"
+	EventMLRecipeChanged     events.EventType = "ml_recipe.changed"
 	EventMLBackfillCompleted events.EventType = "ml_llm_backfill.completed"
 	EventMLParityChecked     events.EventType = "ml_llm_parity.checked"
 )
@@ -108,6 +109,17 @@ func (s *MLRegistryService) CreateOrUpdateArtifactRef(ctx context.Context, artif
 		return err
 	}
 	return s.repo.UpsertArtifactRef(ctx, artifact)
+}
+
+func (s *MLRegistryService) CreateOrUpdateRecipe(ctx context.Context, recipe *domain.MLRecipe) error {
+	if err := ApplyValidatedRecipeYAML(recipe); err != nil {
+		return err
+	}
+	if err := s.repo.UpsertRecipe(ctx, recipe); err != nil {
+		return err
+	}
+	s.publish(ctx, EventMLRecipeChanged, recipe.ID.String(), map[string]any{"recipe_id": recipe.ID.String(), "name": recipe.Name, "version": recipe.Version})
+	return nil
 }
 
 func (s *MLRegistryService) CreateOrUpdateInferenceEndpoint(ctx context.Context, endpoint *domain.MLInferenceEndpoint) error {

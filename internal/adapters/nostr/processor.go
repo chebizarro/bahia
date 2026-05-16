@@ -284,6 +284,7 @@ func (p *Processor) handleWorkerAdvertisement(ctx context.Context, ev *gonostr.E
 		Resources         *domain.WorkerResources     `json:"resources,omitempty"`
 		Accelerators      []domain.WorkerAccelerator  `json:"accelerators,omitempty"`
 		RuntimeTarget     *domain.WorkerRuntimeTarget `json:"runtime_target,omitempty"`
+		MLCapabilities    domain.WorkerMLCapabilities `json:"ml_capabilities,omitempty"`
 	}
 	if ev.Content != "" {
 		_ = json.Unmarshal([]byte(ev.Content), &content)
@@ -298,6 +299,7 @@ func (p *Processor) handleWorkerAdvertisement(ctx context.Context, ev *gonostr.E
 		Resources:           content.Resources,
 		Accelerators:        content.Accelerators,
 		RuntimeTarget:       content.RuntimeTarget,
+		MLCapabilities:      content.MLCapabilities,
 		LastAdvertisementAt: ev.CreatedAt.Time(),
 		Status:              domain.WorkerStatusOnline,
 	}
@@ -336,8 +338,22 @@ func (p *Processor) handleWorkerAdvertisement(ctx context.Context, ev *gonostr.E
 			w.Geohash = tag[1]
 		case "relay":
 			w.PreferredRelays = append(w.PreferredRelays, tag[1])
+		case "runtime":
+			w.MLCapabilities.Runtimes = append(w.MLCapabilities.Runtimes, domain.MLRuntimeKind(tag[1]))
+		case "artifact_format", "format":
+			w.MLCapabilities.ArtifactFormats = append(w.MLCapabilities.ArtifactFormats, domain.MLArtifactFormat(tag[1]))
+		case "task":
+			w.MLCapabilities.Tasks = append(w.MLCapabilities.Tasks, domain.MLTaskKind(tag[1]))
+		case "accelerator":
+			w.MLCapabilities.Accelerators = append(w.MLCapabilities.Accelerators, tag[1])
+		case "toolchain":
+			w.MLCapabilities.Toolchains = append(w.MLCapabilities.Toolchains, tag[1])
+		case "cached_artifact", "artifact":
+			w.MLCapabilities.CachedArtifacts = append(w.MLCapabilities.CachedArtifacts, tag[1])
 		}
 	}
+
+	w.MLCapabilities = domain.NormalizeWorkerMLCapabilities(*w)
 
 	if err := p.workerRepo.Upsert(ctx, w); err != nil {
 		return fmt.Errorf("upserting worker %s: %w", ev.PubKey, err)

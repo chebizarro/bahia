@@ -20,8 +20,8 @@ func TestPgWorkerRepository_GetByPubKeyScansRuntimeCapabilities(t *testing.T) {
 	now := time.Now().UTC()
 	mock.ExpectQuery("FROM workers WHERE pubkey = \\$1").
 		WithArgs("worker-pubkey").
-		WillReturnRows(pgxmock.NewRows([]string{"pubkey", "name", "description", "architecture", "max_concurrent_jobs", "current_queue_depth", "software", "pricing", "resources", "accelerators", "runtime_target", "min_duration_secs", "max_duration_secs", "geohash", "preferred_relays", "last_advertisement_at", "status", "created_at", "updated_at"}).
-			AddRow("worker-pubkey", "gpu-worker", "", "linux/amd64", 2, 1, []byte(`[]`), []byte(`[{"mint_url":"mint","price_per_second":1,"unit":"sat"}]`), []byte(`{"cpu_cores":32,"memory_gb":256,"disk_gb":1000}`), []byte(`[{"vendor":"nvidia","model":"L40S","count":1,"memory_gb":48,"driver":"cuda"}]`), []byte(`{"type":"compose","endpoint_ref":"gpu-a","compose_dir":"/srv/llm","public_base_url":"http://gpu-a"}`), 0, 0, "", []byte(`["wss://relay.example"]`), now, "online", now, now))
+		WillReturnRows(pgxmock.NewRows([]string{"pubkey", "name", "description", "architecture", "max_concurrent_jobs", "current_queue_depth", "software", "pricing", "resources", "accelerators", "ml_capabilities", "runtime_target", "min_duration_secs", "max_duration_secs", "geohash", "preferred_relays", "last_advertisement_at", "status", "created_at", "updated_at"}).
+			AddRow("worker-pubkey", "gpu-worker", "", "linux/amd64", 2, 1, []byte(`[]`), []byte(`[{"mint_url":"mint","price_per_second":1,"unit":"sat"}]`), []byte(`{"cpu_cores":32,"memory_gb":256,"disk_gb":1000}`), []byte(`[{"vendor":"nvidia","model":"L40S","count":1,"memory_gb":48,"driver":"cuda"}]`), []byte(`{"runtimes":["vllm"],"artifact_formats":["safetensors"],"tasks":["chat_completions"],"accelerators":["gpu_nvidia_cuda"]}`), []byte(`{"type":"compose","endpoint_ref":"gpu-a","compose_dir":"/srv/llm","public_base_url":"http://gpu-a"}`), 0, 0, "", []byte(`["wss://relay.example"]`), now, "online", now, now))
 
 	worker, err := repo.GetByPubKey(ctx, "worker-pubkey")
 	require.NoError(t, err)
@@ -29,6 +29,8 @@ func TestPgWorkerRepository_GetByPubKeyScansRuntimeCapabilities(t *testing.T) {
 	require.Equal(t, 256, worker.Resources.MemoryGB)
 	require.Len(t, worker.Accelerators, 1)
 	require.Equal(t, "L40S", worker.Accelerators[0].Model)
+	require.Equal(t, []domain.MLRuntimeKind{domain.MLRuntimeKindVLLM}, worker.MLCapabilities.Runtimes)
+	require.Equal(t, []domain.MLArtifactFormat{domain.MLArtifactFormatSafeTensors}, worker.MLCapabilities.ArtifactFormats)
 	require.Equal(t, domain.RuntimeTypeCompose, worker.RuntimeTarget.Type)
 	require.Equal(t, "gpu-a", worker.RuntimeTarget.EndpointRef)
 	require.NoError(t, mock.ExpectationsWereMet())
@@ -44,8 +46,8 @@ func TestPgWorkerRepository_GetByPubKeyNormalizesEmptyCapabilityDefaults(t *test
 	now := time.Now().UTC()
 	mock.ExpectQuery("FROM workers WHERE pubkey = \\$1").
 		WithArgs("legacy-worker").
-		WillReturnRows(pgxmock.NewRows([]string{"pubkey", "name", "description", "architecture", "max_concurrent_jobs", "current_queue_depth", "software", "pricing", "resources", "accelerators", "runtime_target", "min_duration_secs", "max_duration_secs", "geohash", "preferred_relays", "last_advertisement_at", "status", "created_at", "updated_at"}).
-			AddRow("legacy-worker", "legacy", "", "linux/amd64", 1, 0, []byte(`[]`), []byte(`[]`), []byte(`{}`), []byte(`[]`), []byte(`{}`), 0, 0, "", []byte(`[]`), now, "online", now, now))
+		WillReturnRows(pgxmock.NewRows([]string{"pubkey", "name", "description", "architecture", "max_concurrent_jobs", "current_queue_depth", "software", "pricing", "resources", "accelerators", "ml_capabilities", "runtime_target", "min_duration_secs", "max_duration_secs", "geohash", "preferred_relays", "last_advertisement_at", "status", "created_at", "updated_at"}).
+			AddRow("legacy-worker", "legacy", "", "linux/amd64", 1, 0, []byte(`[]`), []byte(`[]`), []byte(`{}`), []byte(`[]`), []byte(`{}`), []byte(`{}`), 0, 0, "", []byte(`[]`), now, "online", now, now))
 
 	worker, err := repo.GetByPubKey(ctx, "legacy-worker")
 	require.NoError(t, err)

@@ -92,10 +92,12 @@ type fakeMLRegistryRepo struct {
 	runs         map[uuid.UUID]*domain.MLDeploymentRun
 	observations map[uuid.UUID]*domain.MLInferenceObservation
 	states       map[string]*domain.MLInferenceState
+	artifacts    []domain.MLArtifactRef
+	edges        []domain.MLProvenanceEdge
 }
 
 func newFakeMLRegistryRepo() *fakeMLRegistryRepo {
-	return &fakeMLRegistryRepo{models: map[uuid.UUID]*domain.MLModel{}, modelBySlug: map[string]*domain.MLModel{}, versions: map[uuid.UUID]*domain.MLModelVersion{}, endpoints: map[uuid.UUID]*domain.MLInferenceEndpoint{}, intents: map[uuid.UUID]*domain.MLDeploymentIntent{}, runs: map[uuid.UUID]*domain.MLDeploymentRun{}, observations: map[uuid.UUID]*domain.MLInferenceObservation{}, states: map[string]*domain.MLInferenceState{}}
+	return &fakeMLRegistryRepo{models: map[uuid.UUID]*domain.MLModel{}, modelBySlug: map[string]*domain.MLModel{}, versions: map[uuid.UUID]*domain.MLModelVersion{}, endpoints: map[uuid.UUID]*domain.MLInferenceEndpoint{}, intents: map[uuid.UUID]*domain.MLDeploymentIntent{}, runs: map[uuid.UUID]*domain.MLDeploymentRun{}, observations: map[uuid.UUID]*domain.MLInferenceObservation{}, states: map[string]*domain.MLInferenceState{}, artifacts: []domain.MLArtifactRef{}, edges: []domain.MLProvenanceEdge{}}
 }
 
 func (r *fakeMLRegistryRepo) UpsertModel(_ context.Context, m *domain.MLModel) error {
@@ -142,17 +144,36 @@ func (r *fakeMLRegistryRepo) ListModelVersions(_ context.Context, modelID uuid.U
 	}
 	return out, nil
 }
-func (r *fakeMLRegistryRepo) UpsertArtifactRef(context.Context, *domain.MLArtifactRef) error {
+func (r *fakeMLRegistryRepo) UpsertArtifactRef(_ context.Context, artifact *domain.MLArtifactRef) error {
+	cp := *artifact
+	r.artifacts = append(r.artifacts, cp)
 	return nil
 }
-func (r *fakeMLRegistryRepo) ListArtifactRefsByModelVersion(context.Context, uuid.UUID) ([]domain.MLArtifactRef, error) {
-	return nil, nil
+func (r *fakeMLRegistryRepo) ListArtifactRefsByModelVersion(_ context.Context, modelVersionID uuid.UUID) ([]domain.MLArtifactRef, error) {
+	out := []domain.MLArtifactRef{}
+	for _, artifact := range r.artifacts {
+		if artifact.ModelVersionID != nil && *artifact.ModelVersionID == modelVersionID {
+			out = append(out, artifact)
+		}
+	}
+	return out, nil
 }
-func (r *fakeMLRegistryRepo) UpsertProvenanceEdge(context.Context, *domain.MLProvenanceEdge) error {
+func (r *fakeMLRegistryRepo) UpsertProvenanceEdge(_ context.Context, edge *domain.MLProvenanceEdge) error {
+	cp := *edge
+	if cp.ID == uuid.Nil {
+		cp.ID = uuid.New()
+	}
+	r.edges = append(r.edges, cp)
 	return nil
 }
-func (r *fakeMLRegistryRepo) ListProvenanceEdgesByArtifact(context.Context, uuid.UUID) ([]domain.MLProvenanceEdge, error) {
-	return nil, nil
+func (r *fakeMLRegistryRepo) ListProvenanceEdgesByArtifact(_ context.Context, artifactID uuid.UUID) ([]domain.MLProvenanceEdge, error) {
+	out := []domain.MLProvenanceEdge{}
+	for _, edge := range r.edges {
+		if (edge.FromArtifactID != nil && *edge.FromArtifactID == artifactID) || (edge.ToArtifactID != nil && *edge.ToArtifactID == artifactID) {
+			out = append(out, edge)
+		}
+	}
+	return out, nil
 }
 func (r *fakeMLRegistryRepo) UpsertRecipe(context.Context, *domain.MLRecipe) error { return nil }
 func (r *fakeMLRegistryRepo) GetRecipe(context.Context, uuid.UUID) (*domain.MLRecipe, error) {

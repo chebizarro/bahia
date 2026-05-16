@@ -1,0 +1,64 @@
+name: onnx-rknn-edge-deploy
+version: 1
+inputs:
+  model:
+    source: github
+    repo: example/vision-model
+    revision: 0123456789abcdef0123456789abcdef01234567
+steps:
+  - action: fetch_source
+    outputs:
+      source: artifact_ref
+    artifacts:
+      - uri: github://example/vision-model/releases/model.onnx@0123456789abcdef0123456789abcdef01234567
+        kind: model
+        format: onnx
+  - action: validate_provenance
+    inputs:
+      artifact: artifact_ref
+    outputs:
+      provenance: object
+  - action: convert_model
+    inputs:
+      model: artifact_ref
+    outputs:
+      model: artifact_ref
+    requires:
+      runtimes: [onnxruntime]
+      artifact_formats: [onnx, rknn]
+      accelerators: [cpu_generic]
+      toolchains: [rknn_toolkit2]
+  - action: package_artifact
+    inputs:
+      artifact: artifact_ref
+    outputs:
+      artifact: artifact_ref
+  - action: publish_artifact
+    inputs:
+      artifact: artifact_ref
+    outputs:
+      artifact: artifact_ref
+    targets: [oci, blossom]
+  - action: deploy_endpoint
+    inputs:
+      artifact: artifact_ref
+    outputs:
+      endpoint: endpoint
+    runtime: rknn_server
+    requires:
+      runtimes: [rknn_server]
+      artifact_formats: [rknn]
+      accelerators: [npu_rk3588]
+      toolchains: [rknn_toolkit2]
+      min_ram_gb: 8
+    target:
+      accelerator: npu_rk3588
+  - action: run_smoke_eval
+    inputs:
+      endpoint: endpoint
+      sample_image: image
+    outputs:
+      report: object
+outputs:
+  endpoint:
+    protocol: raw-http

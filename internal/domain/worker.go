@@ -50,6 +50,16 @@ type WorkerRuntimeTarget struct {
 	PublicBaseURL string      `json:"public_base_url,omitempty"`
 }
 
+// WorkerMLCapabilities is Bahia's normalized AI/ML placement capability view.
+type WorkerMLCapabilities struct {
+	Tasks           []MLTaskKind       `json:"tasks,omitempty"`
+	Runtimes        []MLRuntimeKind    `json:"runtimes,omitempty"`
+	ArtifactFormats []MLArtifactFormat `json:"artifact_formats,omitempty"`
+	Accelerators    []string           `json:"accelerators,omitempty"`
+	Toolchains      []string           `json:"toolchains,omitempty"`
+	CachedArtifacts []string           `json:"cached_artifacts,omitempty"`
+}
+
 // Worker represents a Loom compute worker discovered via Kind 10100 events.
 type Worker struct {
 	PubKey              string               `json:"pubkey"`
@@ -62,6 +72,7 @@ type Worker struct {
 	Pricing             []WorkerPricing      `json:"pricing,omitempty"`
 	Resources           *WorkerResources     `json:"resources,omitempty"`
 	Accelerators        []WorkerAccelerator  `json:"accelerators,omitempty"`
+	MLCapabilities      WorkerMLCapabilities `json:"ml_capabilities,omitempty"`
 	RuntimeTarget       *WorkerRuntimeTarget `json:"runtime_target,omitempty"`
 	MinDurationSecs     int                  `json:"min_duration_secs,omitempty"`
 	MaxDurationSecs     int                  `json:"max_duration_secs,omitempty"`
