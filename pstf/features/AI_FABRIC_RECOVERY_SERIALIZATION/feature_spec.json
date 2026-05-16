@@ -1,0 +1,50 @@
+{
+  "feature_id": "AI_FABRIC_RECOVERY_SERIALIZATION",
+  "title": "AI fabric recovery and deployment serialization",
+  "status": "draft",
+  "source_evidence": [
+    {
+      "path": "docs/plans/bahia-ai-ml-inference-fabric-2026-05-16.md",
+      "sections": [
+        "Phase 0 \u2014 Contract and PSTF gate",
+        "Default Vertical Slices",
+        "Acceptance Criteria"
+      ]
+    }
+  ],
+  "actors": [
+    "operator",
+    "Bahia coordinator",
+    "Bahia worker",
+    "Nostr relay"
+  ],
+  "description": "Phase 0 PSTF gate for recoverable recipe/deployment runs and same-target deployment serialization.",
+  "in_scope": [
+    "Recipe checkpoint contract",
+    "Deployment serialization by endpoint/environment",
+    "Oldest-first stranded work recovery",
+    "Idempotency keys and duplicate collapse",
+    "No polling-based completion"
+  ],
+  "out_of_scope": [
+    "Coordinator code implementation"
+  ],
+  "preconditions": [
+    "Phase 0 protocol contract is under review.",
+    "No code implementation is included in this artifact task."
+  ],
+  "postconditions": [
+    "Acceptance criteria are mapped to placeholder tests for future implementation verification."
+  ],
+  "happy_paths": [],
+  "failure_paths": [],
+  "edge_cases": [],
+  "non_functional_requirements": [
+    "Nostr-native event-driven semantics; no HTTP polling as completion truth."
+  ],
+  "dependencies": [
+    "docs/plans/bahia-ai-ml-inference-fabric-2026-05-16.md"
+  ],
+  "ambiguities": [],
+  "human_decisions": []
+}

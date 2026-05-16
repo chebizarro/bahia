@@ -82,6 +82,8 @@ The Nostr reactor subscribes to signed request events and publishes status, term
 | Adoption results | 7978–7979 | Adoption scan/import terminal results |
 | Encrypted results | 7980 | Bahia → Browser encrypted request-domain result |
 | Registry/read models | 31961–31970 | Replaceable browser/agent read models |
+| AI/ML command/results | 38390–38399 | Phase-1 addressable AI/ML command and terminal result events |
+| AI/ML read models | 31980–31989 | Phase-1 replaceable AI/ML registry, state, provenance, and capability read models |
 
 ### Request Events (596x)
 
@@ -152,6 +154,135 @@ The Nostr reactor subscribes to signed request events and publishes status, term
 | 31968 | `DeploymentRunRegistry` | `run_id` | Deployment run registry entry |
 | 31969 | `BuildRegistry` | `build_id` | Build registry entry |
 | 31970 | `PolicyRegistry` | `policy_id` | Policy registry entry |
+
+### Phase-1 AI/ML Event Namespace
+
+The generic AI/ML fabric uses a new event family instead of extending the existing LLM `597x/697x/797x/3196x` compatibility namespace. The existing LLM kinds remain stable for `/llm` compatibility flows. New generic AI/ML command and result events **must not** use NIP-90's `5000-7000` Data Vending Machine range; NIP-90 reserves `5000-5999` for job requests, `6000-6999` for job results, and `7000` for feedback. Bahia phase-1 AI/ML events therefore use `38390-38399` command/result kinds plus `31980-31989` replaceable read models.
+
+Rollout note: this namespace is the phase-1 Bahia policy and public spec candidate track. Implementations should preserve field names and compatibility notes carefully, but standardization work must not block the initial Hugging Face → vLLM and follow-on recipe slices.
+
+#### AI/ML command/result events (`38390-38399`)
+
+Command/result events are addressable and use `d=<idempotency-key-or-request-id>` so reconnects, relay replay, and client retries can collapse duplicate work without polling. Commands describe intent; terminal result kinds close the correlated workflow. Intermediate progress should be projected through read models and any future status events rather than HTTP completion checks.
+
+| Kind | Name | Purpose |
+|------|------|---------|
+| 38390 | `MLRecipeRunRequest` | Request a recipe run |
+| 38391 | `MLInferenceDeployRequest` | Request inference endpoint deployment |
+| 38392 | `MLInferenceDeploymentApproval` | Approve or reject an inference deployment |
+| 38393 | `MLInferenceRollbackRequest` | Request endpoint rollback |
+| 38394 | `MLModelImportRequest` | Request model/model-version import |
+| 38395 | `MLRecipeRunResult` | Recipe run terminal result |
+| 38396 | `MLInferenceDeployResult` | Inference deployment terminal result |
+| 38397 | `MLInferenceDeploymentApprovalResult` | Approval/rejection terminal result |
+| 38398 | `MLInferenceRollbackResult` | Rollback terminal result |
+| 38399 | `MLModelImportResult` | Model/model-version import terminal result |
+
+Defer dataset import, evaluation, benchmark, fine-tune, and experiment command kinds until after the first implementation slice proves the namespace. Evaluation and benchmark state may still be projected later through `31987`.
+
+Required command/result tag rules:
+
+- Every command event uses `d=<idempotency-key-or-request-id>` and enough scoped tags for relay filtering, such as `model`, `model_version`, `recipe`, `run`, `endpoint`, `environment`, `deployment`, `artifact`, `worker`, `runtime`, `task`, or `accelerator`.
+- Every result event includes `e=<request_event_id>` with reply semantics, `p=<requester_pubkey>`, `status=<queued|running|succeeded|failed|rejected>`, and the same relevant scoped resource tags.
+- Result content must carry terminal payload or error details. Clients must check both the result `status` tag and content error fields; HTTP/MCP acknowledgement is not terminal truth.
+- Consumers deduplicate by event id and by `(kind, pubkey, d-tag)` for addressable command replays. When two valid commands share the same idempotency `d` coordinate, processors must treat the latest accepted command as a replay of the same logical request, not a second independent workflow.
+
+Example `38390` recipe request:
+
+```json
+{
+  "kind": 38390,
+  "content": {
+    "recipe": "recipe:hf-vllm-import-deploy:1",
+    "inputs": {
+      "model_source": "hf://Qwen/Qwen2.5-Coder-32B-Instruct@<commit-sha>"
+    },
+    "parameters": {
+      "target_environment": "prod",
+      "auto_deploy": true
+    }
+  },
+  "tags": [
+    ["d", "recipe-run:qwen-coder-prod-20260516"],
+    ["recipe", "recipe:hf-vllm-import-deploy:1"],
+    ["source", "huggingface"],
+    ["task", "chat_completions"],
+    ["runtime", "vllm"]
+  ]
+}
+```
+
+Example `38396` deployment result:
+
+```json
+{
+  "kind": 38396,
+  "content": {
+    "request_event_id": "<38391-event-id>",
+    "endpoint": "endpoint:qwen-coder:prod",
+    "run": "deployment-run:<uuid>",
+    "message": "deployed"
+  },
+  "tags": [
+    ["d", "result:<38391-event-id>"],
+    ["e", "<38391-event-id>", "", "reply"],
+    ["p", "<requester-pubkey>"],
+    ["status", "succeeded"],
+    ["endpoint", "endpoint:qwen-coder:prod"],
+    ["environment", "prod"],
+    ["deployment", "deployment-run:<uuid>"],
+    ["runtime", "vllm"]
+  ]
+}
+```
+
+#### AI/ML replaceable read models (`31980-31989`)
+
+Read models are replaceable/addressable projections for browser, agent, REST, and MCP compatibility views. Latest valid event wins for `(kind, pubkey, d-tag)`; clients should bootstrap with scoped filters, wait for EOSE, then keep subscriptions open for realtime changes.
+
+| Kind | Name | d-tag coordinate examples | Purpose |
+|------|------|---------------------------|---------|
+| 31980 | `MLModelRegistry` | `model:<slug>` | Model registry/read model |
+| 31981 | `MLModelVersionRegistry` | `model-version:<model-slug>:<version>` | Model version registry/read model |
+| 31982 | `MLDatasetRegistry` | `dataset:<slug>:<version>` | Dataset registry/read model |
+| 31983 | `MLRecipeRegistry` | `recipe:<name>:<version>` | Recipe registry/read model |
+| 31984 | `MLRecipeRunState` | `recipe-run:<run-id>` | Recipe run state |
+| 31985 | `MLInferenceEndpointRegistry` | `endpoint:<name>:<environment>` | Inference endpoint registry |
+| 31986 | `MLInferenceEndpointState` | `endpoint-state:<name>:<environment>` | Inference endpoint desired/observed state |
+| 31987 | `MLEvaluationExperimentState` | `evaluation:<id>` or `experiment:<id>` | Evaluation/experiment state |
+| 31988 | `MLArtifactProvenanceGraph` | `artifact:<sha256>` | Artifact provenance graph |
+| 31989 | `MLRuntimeCapabilityProfile` | `worker:<pubkey>:ai-capability` | Runtime/capability profile |
+
+Example `31981` model version projection:
+
+```json
+{
+  "kind": 31981,
+  "content": {
+    "source": {
+      "kind": "huggingface",
+      "uri": "hf://Qwen/Qwen2.5-Coder-32B-Instruct",
+      "revision": "<commit-sha>"
+    },
+    "runtime_requirements": {
+      "preferred_runtimes": ["vllm"],
+      "min_vram_gb": 48
+    }
+  },
+  "tags": [
+    ["d", "model-version:qwen2.5-coder-32b:v1"],
+    ["model", "model:qwen2.5-coder-32b"],
+    ["version", "v1"],
+    ["format", "safetensors"],
+    ["runtime", "vllm"],
+    ["sha256", "..."]
+  ]
+}
+```
+
+#### AI/ML REST/MCP correlation contract
+
+REST and MCP may initiate compatible AI/ML tooling flows, but they must return correlation metadata instead of claiming completion for long-running work. A successful synchronous response includes the Nostr request event id, request kind, expected terminal result kind, relevant read-model kinds, the requester pubkey, and scoped tags such as `endpoint`, `environment`, `model_version`, `recipe`, or `run`. Clients subscribe with those tags, wait for EOSE for historical catch-up, process realtime result/read-model events, and never poll REST/MCP for completion.
 
 ### Signer-First Operator Actions
 

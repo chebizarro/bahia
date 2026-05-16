@@ -1,0 +1,50 @@
+{
+  "feature_id": "AI_FABRIC_HF_VLLM_DEPLOYMENT",
+  "title": "AI fabric Hugging Face to vLLM deployment",
+  "status": "draft",
+  "source_evidence": [
+    {
+      "path": "docs/plans/bahia-ai-ml-inference-fabric-2026-05-16.md",
+      "sections": [
+        "Phase 0 \u2014 Contract and PSTF gate",
+        "Default Vertical Slices",
+        "Acceptance Criteria"
+      ]
+    }
+  ],
+  "actors": [
+    "operator",
+    "Bahia coordinator",
+    "Bahia worker",
+    "Nostr relay"
+  ],
+  "description": "Phase 0 PSTF gate for the Slice 1 Hugging Face model import and GPU/vLLM deployment flow.",
+  "in_scope": [
+    "Hugging Face model card import",
+    "Pinned revision model/version registration",
+    "Artifact hash/provenance resolution",
+    "GPU/vLLM placement requirements",
+    "Endpoint state and smoke evaluation publication"
+  ],
+  "out_of_scope": [
+    "HF resolver, vLLM adapter, UI, or gateway implementation"
+  ],
+  "preconditions": [
+    "Phase 0 protocol contract is under review.",
+    "No code implementation is included in this artifact task."
+  ],
+  "postconditions": [
+    "Acceptance criteria are mapped to placeholder tests for future implementation verification."
+  ],
+  "happy_paths": [],
+  "failure_paths": [],
+  "edge_cases": [],
+  "non_functional_requirements": [
+    "Nostr-native event-driven semantics; no HTTP polling as completion truth."
+  ],
+  "dependencies": [
+    "docs/plans/bahia-ai-ml-inference-fabric-2026-05-16.md"
+  ],
+  "ambiguities": [],
+  "human_decisions": []
+}

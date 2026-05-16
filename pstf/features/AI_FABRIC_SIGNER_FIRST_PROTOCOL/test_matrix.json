@@ -1,0 +1,71 @@
+{
+  "feature_id": "AI_FABRIC_SIGNER_FIRST_PROTOCOL",
+  "status": "draft",
+  "tests": [
+    {
+      "id": "T-SFP-001-001",
+      "criteria_ids": [
+        "AC-SFP-001"
+      ],
+      "type": "placeholder",
+      "level": "contract",
+      "description": "Verify plan-mapped criterion: AI/ML command/result events use the phase-1 38390-38399 namespace and avoid NIP-90 reserved 5000-7000 ranges.",
+      "status": "not_implemented",
+      "evidence": []
+    },
+    {
+      "id": "T-SFP-002-001",
+      "criteria_ids": [
+        "AC-SFP-002"
+      ],
+      "type": "placeholder",
+      "level": "contract",
+      "description": "Verify plan-mapped criterion: AI/ML read models use 31980-31989 addressable/replaceable events with stable d-tag coordinates.",
+      "status": "not_implemented",
+      "evidence": []
+    },
+    {
+      "id": "T-SFP-003-001",
+      "criteria_ids": [
+        "AC-SFP-003"
+      ],
+      "type": "placeholder",
+      "level": "contract",
+      "description": "Verify plan-mapped criterion: Every long-running import, recipe, deployment, rollback, and evaluation flow returns Nostr correlation metadata and completes through status/result events rather than HTTP polling.",
+      "status": "not_implemented",
+      "evidence": []
+    },
+    {
+      "id": "T-SFP-004-001",
+      "criteria_ids": [
+        "AC-SFP-004"
+      ],
+      "type": "placeholder",
+      "level": "contract",
+      "description": "Verify plan-mapped criterion: Command/result events include e, p, status, and relevant scoped tags such as model, version, recipe, run, endpoint, environment, deployment, artifact, worker, and runtime.",
+      "status": "not_implemented",
+      "evidence": []
+    },
+    {
+      "id": "T-SFP-005-001",
+      "criteria_ids": [
+        "AC-SFP-005"
+      ],
+      "type": "placeholder",
+      "level": "contract",
+      "description": "Verify plan-mapped criterion: Existing LLM 597x/697x/797x/3196x compatibility semantics remain stable and are not mutated into generic AI semantics.",
+      "status": "not_implemented",
+      "evidence": []
+    }
+  ],
+  "coverage_summary": {
+    "criteria_total": 5,
+    "criteria_with_tests": 5,
+    "known_gaps": [
+      "Tests are placeholders only; implementation and executable verification are future work."
+    ]
+  },
+  "implementation_notes": [
+    "Do not implement code as part of bahia-66ax.1.3."
+  ]
+}

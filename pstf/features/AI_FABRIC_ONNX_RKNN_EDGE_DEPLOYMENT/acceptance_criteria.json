@@ -1,0 +1,75 @@
+{
+  "feature_id": "AI_FABRIC_ONNX_RKNN_EDGE_DEPLOYMENT",
+  "status": "draft",
+  "criteria": [
+    {
+      "id": "AC-ORE-001",
+      "description": "A GitHub repo or release asset containing an ONNX vision model is registered at a pinned revision.",
+      "source": "docs/plans/bahia-ai-ml-inference-fabric-2026-05-16.md",
+      "plan_sections": [
+        "Phase 0 \u2014 Contract and PSTF gate",
+        "Acceptance Criteria"
+      ],
+      "status": "draft",
+      "test_ids": [
+        "T-ORE-001-001"
+      ]
+    },
+    {
+      "id": "AC-ORE-002",
+      "description": "ONNX metadata, opset, declared inputs/outputs, and license are validated before conversion.",
+      "source": "docs/plans/bahia-ai-ml-inference-fabric-2026-05-16.md",
+      "plan_sections": [
+        "Phase 0 \u2014 Contract and PSTF gate",
+        "Acceptance Criteria"
+      ],
+      "status": "draft",
+      "test_ids": [
+        "T-ORE-002-001"
+      ]
+    },
+    {
+      "id": "AC-ORE-003",
+      "description": "A recipe runs on an x64 worker advertising rknn_toolkit2 to convert ONNX to RKNN.",
+      "source": "docs/plans/bahia-ai-ml-inference-fabric-2026-05-16.md",
+      "plan_sections": [
+        "Phase 0 \u2014 Contract and PSTF gate",
+        "Acceptance Criteria"
+      ],
+      "status": "draft",
+      "test_ids": [
+        "T-ORE-003-001"
+      ]
+    },
+    {
+      "id": "AC-ORE-004",
+      "description": "The RKNN artifact, pre/postprocess metadata, calibration details, hashes, and provenance edges are published.",
+      "source": "docs/plans/bahia-ai-ml-inference-fabric-2026-05-16.md",
+      "plan_sections": [
+        "Phase 0 \u2014 Contract and PSTF gate",
+        "Acceptance Criteria"
+      ],
+      "status": "draft",
+      "test_ids": [
+        "T-ORE-004-001"
+      ]
+    },
+    {
+      "id": "AC-ORE-005",
+      "description": "The RKNN artifact deploys to a worker advertising rknn_server, npu_rk3588, and rknn artifact support; exposes raw HTTP first; runs a sample-image smoke test; and publishes endpoint state.",
+      "source": "docs/plans/bahia-ai-ml-inference-fabric-2026-05-16.md",
+      "plan_sections": [
+        "Phase 0 \u2014 Contract and PSTF gate",
+        "Acceptance Criteria"
+      ],
+      "status": "draft",
+      "test_ids": [
+        "T-ORE-005-001"
+      ]
+    }
+  ],
+  "coverage_notes": [
+    "Criteria are mapped from the AI/ML inference fabric plan and are placeholders pending implementation tests."
+  ],
+  "unresolved_questions": []
+}

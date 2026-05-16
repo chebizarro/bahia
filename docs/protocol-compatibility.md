@@ -38,6 +38,7 @@ For the canonical control-plane contract, prefer:
 | Cashu | worker payment surface | ✅ implemented |
 | REST API | narrowed CRUD/query/log compatibility surface | ✅ implemented |
 | MCP JSON-RPC | tooling surface with async correlation metadata | ✅ implemented |
+| AI/ML Nostr namespace | phase-1 model/recipe/deployment commands, results, and read models | 🧭 planned policy / spec candidate |
 
 ### Hive CI Protocol Events
 
@@ -187,6 +188,8 @@ Main families:
 - **LLM results**: `7971-7973`
 - **adoption results**: `7978-7979`
 - **replaceable read models**: `31961-31970`
+- **AI/ML command/results**: `38390-38399`
+- **AI/ML read models**: `31980-31989`
 - **audit/activity events**: `31000-31099`
 
 ### 2. Encrypted Nostr request/result plane
@@ -200,6 +203,7 @@ These flows are intentionally separate from the public relay sidecar and use enc
 - **MCP** (`/mcp`, `/api/v1/mcp`) is a first-class tooling surface.
 - **REST** remains for narrowed CRUD/query/log/registry compatibility.
 - For async Nostr-native workflows, HTTP should not be treated as the sole source of completion truth.
+- For AI/ML model import, recipe, deployment, approval, rollback, evaluation, and future fine-tune workflows, REST/MCP responses must return Nostr correlation metadata and must not implement polling/request-response completion semantics.
 
 ---
 
@@ -250,6 +254,52 @@ These flows are intentionally separate from the public relay sidecar and use enc
 | `31961-31963` | service state + service/environment registries |
 | `31964-31965` | LLM route registry + route state |
 | `31966-31970` | artifact, deployment intent/run, build, and policy registries |
+| `31980-31989` | AI/ML model, version, dataset, recipe, run, endpoint, evaluation, provenance, and capability read models |
+
+### Phase-1 AI/ML namespace
+
+Bahia's generic AI/ML fabric keeps existing LLM kinds stable and uses a separate phase-1 namespace:
+
+| Range / Kind | Purpose |
+|---|---|
+| `38390` | recipe run request |
+| `38391` | inference deploy request |
+| `38392` | inference deployment approval/rejection |
+| `38393` | inference rollback request |
+| `38394` | model/model-version import request |
+| `38395` | recipe run terminal result |
+| `38396` | inference deploy terminal result |
+| `38397` | approval/rejection terminal result |
+| `38398` | rollback terminal result |
+| `38399` | model/model-version import terminal result |
+| `31980` | model registry/read model |
+| `31981` | model version registry/read model |
+| `31982` | dataset registry/read model |
+| `31983` | recipe registry/read model |
+| `31984` | recipe run state |
+| `31985` | inference endpoint registry |
+| `31986` | inference endpoint state |
+| `31987` | evaluation/experiment state |
+| `31988` | artifact provenance graph |
+| `31989` | runtime/capability profile |
+
+NIP-90 avoidance is intentional: new Bahia AI/ML command/result events do not use `5000-7000`, because that range is reserved for Data Vending Machine job requests/results/feedback. Bahia may interoperate with DVM-style systems separately, but phase-1 fabric commands are not DVM jobs.
+
+Coordinates and replay rules:
+- command/result events use `d=<idempotency-key-or-request-id>` for addressable replay collapse;
+- read models use stable coordinates such as `model:<slug>`, `model-version:<model-slug>:<version>`, `recipe:<name>:<version>`, `recipe-run:<run-id>`, `endpoint:<name>:<environment>`, `artifact:<sha256>`, and `worker:<pubkey>:ai-capability`;
+- clients dedupe by event id and treat latest valid replaceable/addressable events as authoritative for `(kind, pubkey, d-tag)`;
+- subscriptions should use scoped filters and EOSE for catch-up, then stay open for live result/read-model updates.
+
+Command/result tag rules:
+- commands include scoped tags for the target resources, such as `model`, `model_version`, `recipe`, `run`, `endpoint`, `environment`, `deployment`, `artifact`, `worker`, `runtime`, `task`, and `accelerator`;
+- results include `e=<request_event_id>`, `p=<requester_pubkey>`, terminal `status=<succeeded|failed|rejected>` or lifecycle `status=<queued|running>` where applicable, plus the same scoped resource tags;
+- terminal result content carries the success payload or structured error.
+
+REST/MCP correlation contract:
+- REST and MCP are compatibility/tooling surfaces for AI/ML workflows, not completion authorities;
+- every accepted long-running action returns the Nostr `request_event_id`, `request_kind`, expected result kind, relevant read-model kinds, requester pubkey, and subscription tags;
+- clients must subscribe to the correlated Nostr events and read models instead of polling HTTP/MCP for completion.
 
 ### Audit / activity events
 

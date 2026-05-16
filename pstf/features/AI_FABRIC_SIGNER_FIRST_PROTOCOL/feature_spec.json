@@ -1,0 +1,51 @@
+{
+  "feature_id": "AI_FABRIC_SIGNER_FIRST_PROTOCOL",
+  "title": "AI fabric signer-first protocol",
+  "status": "draft",
+  "source_evidence": [
+    {
+      "path": "docs/plans/bahia-ai-ml-inference-fabric-2026-05-16.md",
+      "sections": [
+        "Phase 0 \u2014 Contract and PSTF gate",
+        "Default Vertical Slices",
+        "Acceptance Criteria"
+      ]
+    }
+  ],
+  "actors": [
+    "operator",
+    "Bahia coordinator",
+    "Bahia worker",
+    "Nostr relay"
+  ],
+  "description": "Phase 0 PSTF gate for Nostr-canonical AI/ML command, status, result, and read-model protocol behavior.",
+  "in_scope": [
+    "38390-38399 command/result event contract",
+    "31980-31989 read-model event contract",
+    "Signer-first asynchronous completion semantics",
+    "Scoped tags and correlation metadata",
+    "NIP-90 range avoidance rationale"
+  ],
+  "out_of_scope": [
+    "Code implementation",
+    "Control-plane/protocol docs edits performed by another agent"
+  ],
+  "preconditions": [
+    "Phase 0 protocol contract is under review.",
+    "No code implementation is included in this artifact task."
+  ],
+  "postconditions": [
+    "Acceptance criteria are mapped to placeholder tests for future implementation verification."
+  ],
+  "happy_paths": [],
+  "failure_paths": [],
+  "edge_cases": [],
+  "non_functional_requirements": [
+    "Nostr-native event-driven semantics; no HTTP polling as completion truth."
+  ],
+  "dependencies": [
+    "docs/plans/bahia-ai-ml-inference-fabric-2026-05-16.md"
+  ],
+  "ambiguities": [],
+  "human_decisions": []
+}

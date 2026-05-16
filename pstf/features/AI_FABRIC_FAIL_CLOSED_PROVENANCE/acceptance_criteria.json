@@ -1,0 +1,75 @@
+{
+  "feature_id": "AI_FABRIC_FAIL_CLOSED_PROVENANCE",
+  "status": "draft",
+  "criteria": [
+    {
+      "id": "AC-FCP-001",
+      "description": "Artifact resolvers compute or verify digests at fetch/import time.",
+      "source": "docs/plans/bahia-ai-ml-inference-fabric-2026-05-16.md",
+      "plan_sections": [
+        "Phase 0 \u2014 Contract and PSTF gate",
+        "Acceptance Criteria"
+      ],
+      "status": "draft",
+      "test_ids": [
+        "T-FCP-001-001"
+      ]
+    },
+    {
+      "id": "AC-FCP-002",
+      "description": "Workers verify digest before consuming pulled artifacts and include verified digests in status/result payloads.",
+      "source": "docs/plans/bahia-ai-ml-inference-fabric-2026-05-16.md",
+      "plan_sections": [
+        "Phase 0 \u2014 Contract and PSTF gate",
+        "Acceptance Criteria"
+      ],
+      "status": "draft",
+      "test_ids": [
+        "T-FCP-002-001"
+      ]
+    },
+    {
+      "id": "AC-FCP-003",
+      "description": "Coordinator compares worker-reported digests against MLArtifactRef before advancing a run.",
+      "source": "docs/plans/bahia-ai-ml-inference-fabric-2026-05-16.md",
+      "plan_sections": [
+        "Phase 0 \u2014 Contract and PSTF gate",
+        "Acceptance Criteria"
+      ],
+      "status": "draft",
+      "test_ids": [
+        "T-FCP-003-001"
+      ]
+    },
+    {
+      "id": "AC-FCP-004",
+      "description": "Runs fail closed and record a provenance defect when OCI, Blossom, SeaweedFS/S3, Hugging Face, GitHub, or local mirrors disagree.",
+      "source": "docs/plans/bahia-ai-ml-inference-fabric-2026-05-16.md",
+      "plan_sections": [
+        "Phase 0 \u2014 Contract and PSTF gate",
+        "Acceptance Criteria"
+      ],
+      "status": "draft",
+      "test_ids": [
+        "T-FCP-004-001"
+      ]
+    },
+    {
+      "id": "AC-FCP-005",
+      "description": "Deployments fail closed when provenance, digest, runtime, toolchain, or hardware compatibility is incomplete.",
+      "source": "docs/plans/bahia-ai-ml-inference-fabric-2026-05-16.md",
+      "plan_sections": [
+        "Phase 0 \u2014 Contract and PSTF gate",
+        "Acceptance Criteria"
+      ],
+      "status": "draft",
+      "test_ids": [
+        "T-FCP-005-001"
+      ]
+    }
+  ],
+  "coverage_notes": [
+    "Criteria are mapped from the AI/ML inference fabric plan and are placeholders pending implementation tests."
+  ],
+  "unresolved_questions": []
+}

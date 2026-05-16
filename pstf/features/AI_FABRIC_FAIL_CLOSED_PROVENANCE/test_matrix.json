@@ -1,0 +1,71 @@
+{
+  "feature_id": "AI_FABRIC_FAIL_CLOSED_PROVENANCE",
+  "status": "draft",
+  "tests": [
+    {
+      "id": "T-FCP-001-001",
+      "criteria_ids": [
+        "AC-FCP-001"
+      ],
+      "type": "placeholder",
+      "level": "contract",
+      "description": "Verify plan-mapped criterion: Artifact resolvers compute or verify digests at fetch/import time.",
+      "status": "not_implemented",
+      "evidence": []
+    },
+    {
+      "id": "T-FCP-002-001",
+      "criteria_ids": [
+        "AC-FCP-002"
+      ],
+      "type": "placeholder",
+      "level": "contract",
+      "description": "Verify plan-mapped criterion: Workers verify digest before consuming pulled artifacts and include verified digests in status/result payloads.",
+      "status": "not_implemented",
+      "evidence": []
+    },
+    {
+      "id": "T-FCP-003-001",
+      "criteria_ids": [
+        "AC-FCP-003"
+      ],
+      "type": "placeholder",
+      "level": "contract",
+      "description": "Verify plan-mapped criterion: Coordinator compares worker-reported digests against MLArtifactRef before advancing a run.",
+      "status": "not_implemented",
+      "evidence": []
+    },
+    {
+      "id": "T-FCP-004-001",
+      "criteria_ids": [
+        "AC-FCP-004"
+      ],
+      "type": "placeholder",
+      "level": "contract",
+      "description": "Verify plan-mapped criterion: Runs fail closed and record a provenance defect when OCI, Blossom, SeaweedFS/S3, Hugging Face, GitHub, or local mirrors disagree.",
+      "status": "not_implemented",
+      "evidence": []
+    },
+    {
+      "id": "T-FCP-005-001",
+      "criteria_ids": [
+        "AC-FCP-005"
+      ],
+      "type": "placeholder",
+      "level": "contract",
+      "description": "Verify plan-mapped criterion: Deployments fail closed when provenance, digest, runtime, toolchain, or hardware compatibility is incomplete.",
+      "status": "not_implemented",
+      "evidence": []
+    }
+  ],
+  "coverage_summary": {
+    "criteria_total": 5,
+    "criteria_with_tests": 5,
+    "known_gaps": [
+      "Tests are placeholders only; implementation and executable verification are future work."
+    ]
+  },
+  "implementation_notes": [
+    "Do not implement code as part of bahia-66ax.1.3."
+  ]
+}

@@ -1,0 +1,13 @@
+DROP TABLE IF EXISTS ml_evaluation_runs;
+DROP TABLE IF EXISTS ml_evaluation_specs;
+DROP TABLE IF EXISTS ml_inference_state;
+DROP TABLE IF EXISTS ml_inference_observations;
+DROP TABLE IF EXISTS ml_deployment_runs;
+DROP TABLE IF EXISTS ml_deployment_intents;
+DROP TABLE IF EXISTS ml_inference_endpoints;
+DROP TABLE IF EXISTS ml_recipe_runs;
+DROP TABLE IF EXISTS ml_recipes;
+DROP TABLE IF EXISTS ml_provenance_edges;
+DROP TABLE IF EXISTS ml_artifact_refs;
+DROP TABLE IF EXISTS ml_model_versions;
+DROP TABLE IF EXISTS ml_models;

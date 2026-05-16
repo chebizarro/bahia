@@ -225,6 +225,47 @@ type LLMRouteStateRepository interface {
 	ListAll(ctx context.Context) ([]domain.LLMRouteState, error)
 }
 
+// MLRegistryRepository manages canonical generic AI/ML registry and state records.
+type MLRegistryRepository interface {
+	UpsertModel(ctx context.Context, model *domain.MLModel) error
+	GetModel(ctx context.Context, id uuid.UUID) (*domain.MLModel, error)
+	GetModelBySlug(ctx context.Context, slug string) (*domain.MLModel, error)
+	ListModels(ctx context.Context, taskKind domain.MLTaskKind, limit, offset int) ([]domain.MLModel, error)
+
+	UpsertModelVersion(ctx context.Context, version *domain.MLModelVersion) error
+	GetModelVersion(ctx context.Context, id uuid.UUID) (*domain.MLModelVersion, error)
+	GetModelVersionByModelVersion(ctx context.Context, modelID uuid.UUID, version string) (*domain.MLModelVersion, error)
+	ListModelVersions(ctx context.Context, modelID uuid.UUID, limit, offset int) ([]domain.MLModelVersion, error)
+
+	UpsertArtifactRef(ctx context.Context, artifact *domain.MLArtifactRef) error
+	ListArtifactRefsByModelVersion(ctx context.Context, modelVersionID uuid.UUID) ([]domain.MLArtifactRef, error)
+	UpsertProvenanceEdge(ctx context.Context, edge *domain.MLProvenanceEdge) error
+	ListProvenanceEdgesByArtifact(ctx context.Context, artifactID uuid.UUID) ([]domain.MLProvenanceEdge, error)
+
+	UpsertRecipe(ctx context.Context, recipe *domain.MLRecipe) error
+	GetRecipe(ctx context.Context, id uuid.UUID) (*domain.MLRecipe, error)
+	UpsertRecipeRun(ctx context.Context, run *domain.MLRecipeRun) error
+	GetRecipeRun(ctx context.Context, id uuid.UUID) (*domain.MLRecipeRun, error)
+
+	UpsertInferenceEndpoint(ctx context.Context, endpoint *domain.MLInferenceEndpoint) error
+	GetInferenceEndpoint(ctx context.Context, id uuid.UUID) (*domain.MLInferenceEndpoint, error)
+	GetInferenceEndpointByNameEnv(ctx context.Context, name string, envID uuid.UUID) (*domain.MLInferenceEndpoint, error)
+	ListInferenceEndpoints(ctx context.Context, envID uuid.UUID, limit, offset int) ([]domain.MLInferenceEndpoint, error)
+
+	UpsertDeploymentIntent(ctx context.Context, intent *domain.MLDeploymentIntent) error
+	GetDeploymentIntent(ctx context.Context, id uuid.UUID) (*domain.MLDeploymentIntent, error)
+	ListDeploymentIntents(ctx context.Context, endpointID, envID uuid.UUID, limit, offset int) ([]domain.MLDeploymentIntent, error)
+	UpsertDeploymentRun(ctx context.Context, run *domain.MLDeploymentRun) error
+	GetDeploymentRun(ctx context.Context, id uuid.UUID) (*domain.MLDeploymentRun, error)
+	ListDeploymentRuns(ctx context.Context, intentID uuid.UUID) ([]domain.MLDeploymentRun, error)
+
+	UpsertInferenceObservation(ctx context.Context, obs *domain.MLInferenceObservation) error
+	GetLatestInferenceObservation(ctx context.Context, endpointID, envID uuid.UUID) (*domain.MLInferenceObservation, error)
+	UpsertInferenceState(ctx context.Context, state *domain.MLInferenceState) error
+	GetInferenceState(ctx context.Context, endpointID, envID uuid.UUID) (*domain.MLInferenceState, error)
+	ListInferenceStates(ctx context.Context) ([]domain.MLInferenceState, error)
+}
+
 // PackageControlPlaneRepository manages Nostr-derived package repository projections and request idempotency caches.
 type PackageControlPlaneRepository interface {
 	UpsertRepository(ctx context.Context, repo *domain.PackageRepository) error

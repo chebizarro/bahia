@@ -1,0 +1,71 @@
+{
+  "feature_id": "AI_FABRIC_HF_VLLM_DEPLOYMENT",
+  "status": "draft",
+  "tests": [
+    {
+      "id": "T-HFV-001-001",
+      "criteria_ids": [
+        "AC-HFV-001"
+      ],
+      "type": "placeholder",
+      "level": "contract",
+      "description": "Verify plan-mapped criterion: A user can choose a Hugging Face model card and pin a commit revision.",
+      "status": "not_implemented",
+      "evidence": []
+    },
+    {
+      "id": "T-HFV-002-001",
+      "criteria_ids": [
+        "AC-HFV-002"
+      ],
+      "type": "placeholder",
+      "level": "contract",
+      "description": "Verify plan-mapped criterion: The selected model is registered as MLModel and MLModelVersion with source, license, task, format, and runtime requirements.",
+      "status": "not_implemented",
+      "evidence": []
+    },
+    {
+      "id": "T-HFV-003-001",
+      "criteria_ids": [
+        "AC-HFV-003"
+      ],
+      "type": "placeholder",
+      "level": "contract",
+      "description": "Verify plan-mapped criterion: Artifacts and hashes are resolved and optionally mirrored to Blossom and/or OCI with provenance edges.",
+      "status": "not_implemented",
+      "evidence": []
+    },
+    {
+      "id": "T-HFV-004-001",
+      "criteria_ids": [
+        "AC-HFV-004"
+      ],
+      "type": "placeholder",
+      "level": "contract",
+      "description": "Verify plan-mapped criterion: Placement selects a worker advertising vLLM, safetensors or Hugging Face snapshot support, NVIDIA CUDA, and enough VRAM.",
+      "status": "not_implemented",
+      "evidence": []
+    },
+    {
+      "id": "T-HFV-005-001",
+      "criteria_ids": [
+        "AC-HFV-005"
+      ],
+      "type": "placeholder",
+      "level": "contract",
+      "description": "Verify plan-mapped criterion: The model deploys to vLLM, exposes an OpenAI-compatible endpoint through the existing gateway path, publishes deployment status/result and 31986 endpoint state, and records smoke evaluation/provenance edges.",
+      "status": "not_implemented",
+      "evidence": []
+    }
+  ],
+  "coverage_summary": {
+    "criteria_total": 5,
+    "criteria_with_tests": 5,
+    "known_gaps": [
+      "Tests are placeholders only; implementation and executable verification are future work."
+    ]
+  },
+  "implementation_notes": [
+    "Do not implement code as part of bahia-66ax.1.3."
+  ]
+}

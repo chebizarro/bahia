@@ -23,6 +23,7 @@ type LLMRegistryService struct {
 	runs         repository.LLMDeploymentRunRepository
 	observations repository.LLMRouteObservationRepository
 	state        repository.LLMRouteStateRepository
+	ml           *MLRegistryService
 	publisher    events.Publisher
 	logger       *zap.Logger
 }
@@ -47,7 +48,41 @@ func NewLLMRegistryService(
 	return &LLMRegistryService{routes: routes, releases: releases, environments: environments, intents: intents, runs: runs, observations: observations, state: state, publisher: publisher, logger: logger}
 }
 
+// NewMLBackedLLMRegistryService creates an LLM compatibility facade over the generic ML registry.
+// The legacy constructor remains unchanged so existing LLM behavior can continue during cutover.
+func NewMLBackedLLMRegistryService(ml *MLRegistryService, environments repository.EnvironmentRepository, publisher events.Publisher, logger *zap.Logger) *LLMRegistryService {
+	svc := NewLLMRegistryService(nil, nil, environments, nil, nil, nil, nil, publisher, logger)
+	svc.ml = ml
+	return svc
+}
+
+// WithMLRegistry enables the optional ML-backed compatibility facade path.
+func (s *LLMRegistryService) WithMLRegistry(ml *MLRegistryService) *LLMRegistryService {
+	s.ml = ml
+	return s
+}
+
+func (s *LLMRegistryService) mlBacked() bool {
+	return s != nil && s.ml != nil
+}
+
 func (s *LLMRegistryService) CreateRoute(ctx context.Context, route *domain.LLMRoute) error {
+	if s.mlBacked() {
+		if route == nil {
+			return fmt.Errorf("LLM route is required")
+		}
+		route.Name = strings.TrimSpace(route.Name)
+		if err := domain.ValidateLLMRouteName(route.Name); err != nil {
+			return err
+		}
+		defaultRouteGatewayConfig(route)
+		model := LLMRouteToMLModel(route)
+		if err := s.ml.CreateOrUpdateModel(ctx, model); err != nil {
+			return err
+		}
+		route.ID = model.ID
+		return nil
+	}
 	if route == nil {
 		return fmt.Errorf("LLM route is required")
 	}
@@ -67,10 +102,24 @@ func (s *LLMRegistryService) CreateRoute(ctx context.Context, route *domain.LLMR
 }
 
 func (s *LLMRegistryService) GetRoute(ctx context.Context, id uuid.UUID) (*domain.LLMRoute, error) {
+	if s.mlBacked() {
+		model, err := s.ml.GetModel(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		return MLModelToLLMRoute(model), nil
+	}
 	return s.routes.GetByID(ctx, id)
 }
 
 func (s *LLMRegistryService) GetRouteByName(ctx context.Context, name string) (*domain.LLMRoute, error) {
+	if s.mlBacked() {
+		model, err := s.ml.GetModelBySlug(ctx, name)
+		if err != nil {
+			return nil, err
+		}
+		return MLModelToLLMRoute(model), nil
+	}
 	return s.routes.GetByName(ctx, name)
 }
 
@@ -78,10 +127,28 @@ func (s *LLMRegistryService) ListRoutes(ctx context.Context, limit, offset int) 
 	if limit <= 0 {
 		limit = 100
 	}
+	if s.mlBacked() {
+		models, err := s.ml.ListModels(ctx, domain.MLTaskKindChatCompletions, limit, offset)
+		if err != nil {
+			return nil, err
+		}
+		routes := make([]domain.LLMRoute, 0, len(models))
+		for i := range models {
+			routes = append(routes, *MLModelToLLMRoute(&models[i]))
+		}
+		return routes, nil
+	}
 	return s.routes.List(ctx, limit, offset)
 }
 
 func (s *LLMRegistryService) UpdateRoute(ctx context.Context, route *domain.LLMRoute) error {
+	if s.mlBacked() {
+		if route == nil {
+			return fmt.Errorf("LLM route is required")
+		}
+		defaultRouteGatewayConfig(route)
+		return s.ml.CreateOrUpdateModel(ctx, LLMRouteToMLModel(route))
+	}
 	if route == nil {
 		return fmt.Errorf("LLM route is required")
 	}
@@ -105,6 +172,20 @@ func (s *LLMRegistryService) UpdateRoute(ctx context.Context, route *domain.LLMR
 }
 
 func (s *LLMRegistryService) CreateRelease(ctx context.Context, release *domain.LLMRelease) error {
+	if s.mlBacked() {
+		if release == nil {
+			return fmt.Errorf("LLM release is required")
+		}
+		if err := domain.ValidateLLMReleaseConfig(release); err != nil {
+			return err
+		}
+		version := LLMReleaseToMLModelVersion(release)
+		if err := s.ml.CreateOrUpdateModelVersion(ctx, version); err != nil {
+			return err
+		}
+		release.ID = version.ID
+		return nil
+	}
 	if release == nil {
 		return fmt.Errorf("LLM release is required")
 	}
@@ -126,6 +207,13 @@ func (s *LLMRegistryService) CreateRelease(ctx context.Context, release *domain.
 }
 
 func (s *LLMRegistryService) GetRelease(ctx context.Context, id uuid.UUID) (*domain.LLMRelease, error) {
+	if s.mlBacked() {
+		version, err := s.ml.GetModelVersion(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		return MLModelVersionToLLMRelease(version), nil
+	}
 	return s.releases.GetByID(ctx, id)
 }
 
@@ -133,10 +221,60 @@ func (s *LLMRegistryService) ListReleases(ctx context.Context, routeID uuid.UUID
 	if limit <= 0 {
 		limit = 100
 	}
+	if s.mlBacked() {
+		versions, err := s.ml.ListModelVersions(ctx, routeID, limit, offset)
+		if err != nil {
+			return nil, err
+		}
+		releases := make([]domain.LLMRelease, 0, len(versions))
+		for i := range versions {
+			releases = append(releases, *MLModelVersionToLLMRelease(&versions[i]))
+		}
+		return releases, nil
+	}
 	return s.releases.ListByRoute(ctx, routeID, limit, offset)
 }
 
 func (s *LLMRegistryService) CreateDeploymentIntent(ctx context.Context, intent *domain.LLMDeploymentIntent) error {
+	if s.mlBacked() {
+		if intent == nil {
+			return fmt.Errorf("LLM deployment intent is required")
+		}
+		_, release, env, err := s.loadRouteReleaseEnvironment(ctx, intent.RouteID, intent.ReleaseID, intent.EnvironmentID)
+		if err != nil {
+			return err
+		}
+		if strings.TrimSpace(intent.RequestedBy) == "" {
+			return fmt.Errorf("requested_by must not be empty")
+		}
+		if intent.SourceKind == "" {
+			intent.SourceKind = domain.SourceKindManual
+		}
+		if !env.Protected {
+			intent.ApprovalStatus = domain.ApprovalStatusNotRequired
+			intent.Status = domain.IntentStatusApproved
+		} else if intent.ApprovalStatus == domain.ApprovalStatusApproved {
+			intent.Status = domain.IntentStatusApproved
+		} else {
+			intent.ApprovalStatus = domain.ApprovalStatusPending
+			intent.Status = domain.IntentStatusPending
+		}
+		endpoint := &domain.MLInferenceEndpoint{ID: intent.RouteID, Name: intent.RouteID.String(), EnvironmentID: intent.EnvironmentID, TaskKinds: []domain.MLTaskKind{domain.MLTaskKindChatCompletions}, Protocol: "openai-compatible", Metadata: map[string]any{"llm_compat": true}}
+		if err := s.ml.CreateOrUpdateInferenceEndpoint(ctx, endpoint); err != nil {
+			return err
+		}
+		mlIntent := LLMIntentToMLDeploymentIntent(intent)
+		if len(release.BackendPreferences) > 0 {
+			mlIntent.RuntimePreference = domain.MLRuntimeKind(release.BackendPreferences[0])
+		}
+		if err := s.ml.CreateDeploymentIntent(ctx, mlIntent); err != nil {
+			return err
+		}
+		intent.ID = mlIntent.ID
+		intent.CreatedAt = mlIntent.CreatedAt
+		intent.UpdatedAt = mlIntent.UpdatedAt
+		return nil
+	}
 	if intent == nil {
 		return fmt.Errorf("LLM deployment intent is required")
 	}
@@ -186,6 +324,28 @@ func (s *LLMRegistryService) CreateDeploymentIntent(ctx context.Context, intent 
 }
 
 func (s *LLMRegistryService) ApproveDeploymentIntent(ctx context.Context, id uuid.UUID) error {
+	if s.mlBacked() {
+		mlIntent, err := s.ml.GetDeploymentIntent(ctx, id)
+		if err != nil {
+			return err
+		}
+		if mlIntent == nil {
+			return fmt.Errorf("LLM deployment intent %s not found: %w", id, repository.ErrNotFound)
+		}
+		intent := MLIntentToLLMDeploymentIntent(mlIntent)
+		if intent.ApprovalStatus != domain.ApprovalStatusPending || intent.Status != domain.IntentStatusPending {
+			return fmt.Errorf("cannot approve LLM intent %s: approval=%s status=%s", id, intent.ApprovalStatus, intent.Status)
+		}
+		now := time.Now().UTC()
+		mlIntent.ApprovalStatus = domain.ApprovalStatusApproved
+		mlIntent.Status = domain.IntentStatusApproved
+		mlIntent.ApprovedAt = &now
+		if err := s.ml.repo.UpsertDeploymentIntent(ctx, mlIntent); err != nil {
+			return err
+		}
+		s.publish(ctx, events.EventLLMDeploymentIntentApproved, id.String(), events.ResourceData{RouteID: intent.RouteID.String(), ReleaseID: intent.ReleaseID.String(), EnvironmentID: intent.EnvironmentID.String(), IntentID: id.String()})
+		return nil
+	}
 	intent, err := s.intents.GetByID(ctx, id)
 	if err != nil {
 		return err
@@ -207,6 +367,29 @@ func (s *LLMRegistryService) ApproveDeploymentIntent(ctx context.Context, id uui
 }
 
 func (s *LLMRegistryService) RejectDeploymentIntent(ctx context.Context, id uuid.UUID) error {
+	if s.mlBacked() {
+		mlIntent, err := s.ml.GetDeploymentIntent(ctx, id)
+		if err != nil {
+			return err
+		}
+		if mlIntent == nil {
+			return fmt.Errorf("LLM deployment intent %s not found: %w", id, repository.ErrNotFound)
+		}
+		intent := MLIntentToLLMDeploymentIntent(mlIntent)
+		if intent.ApprovalStatus != domain.ApprovalStatusPending || intent.Status != domain.IntentStatusPending {
+			return fmt.Errorf("cannot reject LLM intent %s: approval=%s status=%s", id, intent.ApprovalStatus, intent.Status)
+		}
+		mlIntent.ApprovalStatus = domain.ApprovalStatusRejected
+		mlIntent.Status = domain.IntentStatusRejected
+		if err := s.ml.repo.UpsertDeploymentIntent(ctx, mlIntent); err != nil {
+			return err
+		}
+		if err := s.repairStateAfterRejectedIntent(ctx, intent); err != nil {
+			return err
+		}
+		s.publish(ctx, events.EventLLMDeploymentIntentRejected, id.String(), events.ResourceData{RouteID: intent.RouteID.String(), ReleaseID: intent.ReleaseID.String(), EnvironmentID: intent.EnvironmentID.String(), IntentID: id.String()})
+		return nil
+	}
 	intent, err := s.intents.GetByID(ctx, id)
 	if err != nil {
 		return err
@@ -231,6 +414,13 @@ func (s *LLMRegistryService) RejectDeploymentIntent(ctx context.Context, id uuid
 }
 
 func (s *LLMRegistryService) GetDeploymentIntent(ctx context.Context, id uuid.UUID) (*domain.LLMDeploymentIntent, error) {
+	if s.mlBacked() {
+		intent, err := s.ml.GetDeploymentIntent(ctx, id)
+		if err != nil || intent == nil {
+			return nil, err
+		}
+		return MLIntentToLLMDeploymentIntent(intent), nil
+	}
 	return s.intents.GetByID(ctx, id)
 }
 
@@ -238,18 +428,60 @@ func (s *LLMRegistryService) ListDeploymentIntents(ctx context.Context, routeID,
 	if limit <= 0 {
 		limit = 50
 	}
+	if s.mlBacked() {
+		intents, err := s.ml.ListDeploymentIntents(ctx, routeID, envID, limit, offset)
+		if err != nil {
+			return nil, err
+		}
+		out := make([]domain.LLMDeploymentIntent, 0, len(intents))
+		for i := range intents {
+			out = append(out, *MLIntentToLLMDeploymentIntent(&intents[i]))
+		}
+		return out, nil
+	}
 	return s.intents.ListByRouteEnv(ctx, routeID, envID, limit, offset)
 }
 
 func (s *LLMRegistryService) GetDeploymentRun(ctx context.Context, id uuid.UUID) (*domain.LLMDeploymentRun, error) {
+	if s.mlBacked() {
+		run, err := s.ml.repo.GetDeploymentRun(ctx, id)
+		if err != nil || run == nil {
+			return nil, err
+		}
+		return MLRunToLLMDeploymentRun(run), nil
+	}
 	return s.runs.GetByID(ctx, id)
 }
 
 func (s *LLMRegistryService) ListDeploymentRuns(ctx context.Context, intentID uuid.UUID) ([]domain.LLMDeploymentRun, error) {
+	if s.mlBacked() {
+		runs, err := s.ml.repo.ListDeploymentRuns(ctx, intentID)
+		if err != nil {
+			return nil, err
+		}
+		out := make([]domain.LLMDeploymentRun, 0, len(runs))
+		for i := range runs {
+			out = append(out, *MLRunToLLMDeploymentRun(&runs[i]))
+		}
+		return out, nil
+	}
 	return s.runs.ListByIntent(ctx, intentID)
 }
 
 func (s *LLMRegistryService) MarkDeploymentRunCreated(ctx context.Context, run *domain.LLMDeploymentRun) error {
+	if s.mlBacked() {
+		if run == nil {
+			return nil
+		}
+		mlRun := LLMRunToMLDeploymentRun(run)
+		if err := s.ml.CreateOrUpdateDeploymentRun(ctx, mlRun); err != nil {
+			return err
+		}
+		run.ID = mlRun.ID
+		run.CreatedAt = mlRun.CreatedAt
+		run.UpdatedAt = mlRun.UpdatedAt
+		return nil
+	}
 	if run == nil {
 		return nil
 	}
@@ -268,6 +500,9 @@ func (s *LLMRegistryService) MarkDeploymentRunCreated(ctx context.Context, run *
 }
 
 func (s *LLMRegistryService) CompleteDeploymentRun(ctx context.Context, id uuid.UUID, status domain.DeploymentRunStatus, exitCode *int) error {
+	if s.mlBacked() {
+		return s.ml.CompleteDeploymentRun(ctx, id, status, exitCode)
+	}
 	if !isTerminalRunStatus(status) {
 		return fmt.Errorf("cannot complete LLM run with non-terminal status: %s", status)
 	}
@@ -331,14 +566,14 @@ func (s *LLMRegistryService) Rollback(ctx context.Context, routeID, envID uuid.U
 }
 
 func (s *LLMRegistryService) RollbackWithMetadata(ctx context.Context, routeID, envID uuid.UUID, requestedBy string, metadata map[string]any) (*domain.LLMDeploymentIntent, error) {
-	state, err := s.state.Get(ctx, routeID, envID)
+	state, err := s.GetRouteState(ctx, routeID, envID)
 	if err != nil {
 		return nil, err
 	}
 	if state == nil || state.DesiredReleaseID == nil {
 		return nil, fmt.Errorf("no LLM route state exists for this route/environment")
 	}
-	intents, err := s.intents.ListByRouteEnv(ctx, routeID, envID, 50, 0)
+	intents, err := s.ListDeploymentIntents(ctx, routeID, envID, 50, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -394,6 +629,12 @@ func selectPreviousDeployedDifferentRelease(currentDesiredReleaseID uuid.UUID, d
 }
 
 func (s *LLMRegistryService) RecordObservation(ctx context.Context, obs *domain.LLMRouteObservation) error {
+	if s.mlBacked() {
+		if obs == nil {
+			return fmt.Errorf("LLM route observation is required")
+		}
+		return s.ml.RecordObservation(ctx, LLMObservationToMLInferenceObservation(obs))
+	}
 	if obs == nil {
 		return fmt.Errorf("LLM route observation is required")
 	}
@@ -452,26 +693,90 @@ func (s *LLMRegistryService) RecordObservation(ctx context.Context, obs *domain.
 }
 
 func (s *LLMRegistryService) GetLatestObservation(ctx context.Context, routeID, envID uuid.UUID) (*domain.LLMRouteObservation, error) {
+	if s.mlBacked() {
+		obs, err := s.ml.repo.GetLatestInferenceObservation(ctx, routeID, envID)
+		if err != nil || obs == nil {
+			return nil, err
+		}
+		return MLObservationToLLMRouteObservation(obs), nil
+	}
 	return s.observations.GetLatest(ctx, routeID, envID)
 }
 
 func (s *LLMRegistryService) GetRouteState(ctx context.Context, routeID, envID uuid.UUID) (*domain.LLMRouteState, error) {
+	if s.mlBacked() {
+		state, err := s.ml.GetInferenceState(ctx, routeID, envID)
+		if err != nil || state == nil {
+			return nil, err
+		}
+		return MLStateToLLMRouteState(state), nil
+	}
 	return s.state.Get(ctx, routeID, envID)
 }
 
 func (s *LLMRegistryService) ListEnvironmentRouteStates(ctx context.Context, envID uuid.UUID) ([]domain.LLMRouteState, error) {
+	if s.mlBacked() {
+		states, err := s.ListAllRouteStates(ctx)
+		if err != nil {
+			return nil, err
+		}
+		out := make([]domain.LLMRouteState, 0, len(states))
+		for i := range states {
+			if states[i].EnvironmentID == envID {
+				out = append(out, states[i])
+			}
+		}
+		return out, nil
+	}
 	return s.state.ListByEnvironment(ctx, envID)
 }
 
 func (s *LLMRegistryService) ListRouteStates(ctx context.Context, routeID uuid.UUID) ([]domain.LLMRouteState, error) {
+	if s.mlBacked() {
+		states, err := s.ListAllRouteStates(ctx)
+		if err != nil {
+			return nil, err
+		}
+		out := make([]domain.LLMRouteState, 0, len(states))
+		for i := range states {
+			if states[i].RouteID == routeID {
+				out = append(out, states[i])
+			}
+		}
+		return out, nil
+	}
 	return s.state.ListByRoute(ctx, routeID)
 }
 
 func (s *LLMRegistryService) ListAllRouteStates(ctx context.Context) ([]domain.LLMRouteState, error) {
+	if s.mlBacked() {
+		states, err := s.ml.ListInferenceStates(ctx)
+		if err != nil {
+			return nil, err
+		}
+		out := make([]domain.LLMRouteState, 0, len(states))
+		for i := range states {
+			out = append(out, *MLStateToLLMRouteState(&states[i]))
+		}
+		return out, nil
+	}
 	return s.state.ListAll(ctx)
 }
 
 func (s *LLMRegistryService) ListDriftedRouteStates(ctx context.Context) ([]domain.LLMRouteState, error) {
+	if s.mlBacked() {
+		states, err := s.ListAllRouteStates(ctx)
+		if err != nil {
+			return nil, err
+		}
+		out := make([]domain.LLMRouteState, 0, len(states))
+		for i := range states {
+			if states[i].DriftStatus == domain.DriftStatusDrifted {
+				out = append(out, states[i])
+			}
+		}
+		return out, nil
+	}
 	return s.state.ListDrifted(ctx)
 }
 
@@ -501,14 +806,14 @@ func (s *LLMRegistryService) GetLLMDeploymentRun(ctx context.Context, id uuid.UU
 }
 
 func (s *LLMRegistryService) loadRouteReleaseEnvironment(ctx context.Context, routeID, releaseID, envID uuid.UUID) (*domain.LLMRoute, *domain.LLMRelease, *domain.Environment, error) {
-	route, err := s.routes.GetByID(ctx, routeID)
+	route, err := s.GetRoute(ctx, routeID)
 	if err != nil {
 		return nil, nil, nil, err
 	}
 	if route == nil {
 		return nil, nil, nil, fmt.Errorf("LLM route %s not found", routeID)
 	}
-	release, err := s.releases.GetByID(ctx, releaseID)
+	release, err := s.GetRelease(ctx, releaseID)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -526,11 +831,11 @@ func (s *LLMRegistryService) loadRouteReleaseEnvironment(ctx context.Context, ro
 }
 
 func (s *LLMRegistryService) repairStateAfterRejectedIntent(ctx context.Context, rejected *domain.LLMDeploymentIntent) error {
-	state, err := s.state.Get(ctx, rejected.RouteID, rejected.EnvironmentID)
+	state, err := s.GetRouteState(ctx, rejected.RouteID, rejected.EnvironmentID)
 	if err != nil || state == nil || state.DesiredIntentID == nil || *state.DesiredIntentID != rejected.ID {
 		return err
 	}
-	intents, err := s.intents.ListByRouteEnv(ctx, rejected.RouteID, rejected.EnvironmentID, 50, 0)
+	intents, err := s.ListDeploymentIntents(ctx, rejected.RouteID, rejected.EnvironmentID, 50, 0)
 	if err != nil {
 		return err
 	}
@@ -552,7 +857,11 @@ func (s *LLMRegistryService) repairStateAfterRejectedIntent(ctx context.Context,
 			break
 		}
 	}
-	if err := s.state.Upsert(ctx, state); err != nil {
+	if s.mlBacked() {
+		if err := s.ml.repo.UpsertInferenceState(ctx, LLMStateToMLInferenceState(state)); err != nil {
+			return err
+		}
+	} else if err := s.state.Upsert(ctx, state); err != nil {
 		return err
 	}
 	s.publishStateChanged(ctx, state)

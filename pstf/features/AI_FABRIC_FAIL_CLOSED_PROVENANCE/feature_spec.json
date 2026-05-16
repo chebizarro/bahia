@@ -1,0 +1,50 @@
+{
+  "feature_id": "AI_FABRIC_FAIL_CLOSED_PROVENANCE",
+  "title": "AI fabric fail-closed provenance",
+  "status": "draft",
+  "source_evidence": [
+    {
+      "path": "docs/plans/bahia-ai-ml-inference-fabric-2026-05-16.md",
+      "sections": [
+        "Phase 0 \u2014 Contract and PSTF gate",
+        "Default Vertical Slices",
+        "Acceptance Criteria"
+      ]
+    }
+  ],
+  "actors": [
+    "operator",
+    "Bahia coordinator",
+    "Bahia worker",
+    "Nostr relay"
+  ],
+  "description": "Phase 0 PSTF gate for artifact provenance, digest verification ownership, and fail-closed deployment behavior.",
+  "in_scope": [
+    "Artifact resolver digest verification",
+    "Worker digest verification",
+    "Coordinator digest comparison",
+    "Provenance defect recording",
+    "Fail-closed runtime/toolchain/hardware compatibility"
+  ],
+  "out_of_scope": [
+    "Resolver, worker, or coordinator implementation"
+  ],
+  "preconditions": [
+    "Phase 0 protocol contract is under review.",
+    "No code implementation is included in this artifact task."
+  ],
+  "postconditions": [
+    "Acceptance criteria are mapped to placeholder tests for future implementation verification."
+  ],
+  "happy_paths": [],
+  "failure_paths": [],
+  "edge_cases": [],
+  "non_functional_requirements": [
+    "Nostr-native event-driven semantics; no HTTP polling as completion truth."
+  ],
+  "dependencies": [
+    "docs/plans/bahia-ai-ml-inference-fabric-2026-05-16.md"
+  ],
+  "ambiguities": [],
+  "human_decisions": []
+}

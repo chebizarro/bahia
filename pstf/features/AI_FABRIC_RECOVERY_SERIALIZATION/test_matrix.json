@@ -1,0 +1,71 @@
+{
+  "feature_id": "AI_FABRIC_RECOVERY_SERIALIZATION",
+  "status": "draft",
+  "tests": [
+    {
+      "id": "T-RS-001-001",
+      "criteria_ids": [
+        "AC-RS-001"
+      ],
+      "type": "placeholder",
+      "level": "contract",
+      "description": "Verify plan-mapped criterion: Recipe runs checkpoint each step as queued, running, succeeded, or failed with input/output artifact refs before the next step starts.",
+      "status": "not_implemented",
+      "evidence": []
+    },
+    {
+      "id": "T-RS-002-001",
+      "criteria_ids": [
+        "AC-RS-002"
+      ],
+      "type": "placeholder",
+      "level": "contract",
+      "description": "Verify plan-mapped criterion: Recipe steps are idempotent by recipe_run_id, step_index, and input_digest_set.",
+      "status": "not_implemented",
+      "evidence": []
+    },
+    {
+      "id": "T-RS-003-001",
+      "criteria_ids": [
+        "AC-RS-003"
+      ],
+      "type": "placeholder",
+      "level": "contract",
+      "description": "Verify plan-mapped criterion: Recovery processes same-target stranded deployment work oldest-first.",
+      "status": "not_implemented",
+      "evidence": []
+    },
+    {
+      "id": "T-RS-004-001",
+      "criteria_ids": [
+        "AC-RS-004"
+      ],
+      "type": "placeholder",
+      "level": "contract",
+      "description": "Verify plan-mapped criterion: Deployments serialize by endpoint_id and environment_id while allowing different endpoint/environment targets to run concurrently.",
+      "status": "not_implemented",
+      "evidence": []
+    },
+    {
+      "id": "T-RS-005-001",
+      "criteria_ids": [
+        "AC-RS-005"
+      ],
+      "type": "placeholder",
+      "level": "contract",
+      "description": "Verify plan-mapped criterion: Terminal failure publishes a result event and updates 31984 recipe-run state without polling for completion.",
+      "status": "not_implemented",
+      "evidence": []
+    }
+  ],
+  "coverage_summary": {
+    "criteria_total": 5,
+    "criteria_with_tests": 5,
+    "known_gaps": [
+      "Tests are placeholders only; implementation and executable verification are future work."
+    ]
+  },
+  "implementation_notes": [
+    "Do not implement code as part of bahia-66ax.1.3."
+  ]
+}

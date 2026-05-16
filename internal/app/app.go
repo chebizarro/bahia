@@ -48,6 +48,7 @@ type App struct {
 	Logger          *zap.Logger
 	DB              *pgxpool.Pool
 	Registry        *service.RegistryService
+	MLRegistry      *service.MLRegistryService
 	LLMRegistry     *service.LLMRegistryService
 	HTTPServer      *http.Server
 	Publisher       events.Publisher
@@ -269,6 +270,11 @@ func New(cfg *config.Config) (*App, error) {
 
 	// Background runner manager.
 	bgManager := NewBackgroundManager(logger)
+
+	// Generic AI/ML registry foundation. Bucket-B keeps this additive and does not
+	// move long-running orchestration off the existing LLM path until later buckets.
+	mlRegistryRepo := repository.NewPgMLRegistryRepository(pool)
+	mlRegistry := service.NewMLRegistryService(mlRegistryRepo, publisher, logger)
 
 	// LLM provisioning control plane.
 	var llmRegistry *service.LLMRegistryService
@@ -621,6 +627,7 @@ func New(cfg *config.Config) (*App, error) {
 		Logger:          logger,
 		DB:              pool,
 		Registry:        registry,
+		MLRegistry:      mlRegistry,
 		LLMRegistry:     llmRegistry,
 		HTTPServer:      httpServer,
 		Publisher:       publisher,
