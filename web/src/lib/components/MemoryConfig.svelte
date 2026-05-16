@@ -37,7 +37,14 @@
   const providerModels = $derived(selectedProvider?.models || []);
   const selectedStrategy = $derived(strategies.find((strategy) => strategy.id === spec.strategy) || strategies[0]);
   const progressPercent = $derived(reindexProgress.total > 0 ? Math.min(100, Math.round((reindexProgress.current / reindexProgress.total) * 100)) : reindexing ? 15 : 0);
-  const canReindex = $derived(Boolean(soul) && !disabled && !reindexing);
+  const validationErrors = $derived({
+    embedding_model: !(spec.embedding_model || '').trim() ? 'Embedding model is required.' : '',
+    top_k: Number(search.top_k || 10) < 1 ? 'Top K must be at least 1.' : '',
+    score_threshold: Number(search.score_threshold ?? 0.7) < 0 || Number(search.score_threshold ?? 0.7) > 1 ? 'Score threshold must be between 0 and 1.' : '',
+    retention_days: Number(spec.retention_days || 90) < 0 ? 'Retention days cannot be negative.' : ''
+  });
+  const hasValidationErrors = $derived(Object.values(validationErrors).some(Boolean));
+  const canReindex = $derived(Boolean(soul) && !disabled && !reindexing && !hasValidationErrors);
 
   function patch(updates) {
     value = createDefaultMemorySpec({
@@ -180,6 +187,7 @@
         {:else}
           <input value={spec.embedding_model || ''} disabled={disabled || reindexing} oninput={(event) => patch({ embedding_model: event.currentTarget.value })} placeholder="local model id" />
         {/if}
+        {#if validationErrors.embedding_model}<small class="validation-error">{validationErrors.embedding_model}</small>{/if}
       </label>
     </div>
 
@@ -202,6 +210,7 @@
           <input type="range" min="1" max="50" step="1" value={search.top_k || 10} disabled={disabled || reindexing} oninput={(event) => patchSearch({ top_k: Number(event.currentTarget.value) || 10 })} />
           <input class="number-input" type="number" min="1" max="50" value={search.top_k || 10} disabled={disabled || reindexing} oninput={(event) => patchSearch({ top_k: Number(event.currentTarget.value) || 10 })} />
         </div>
+        {#if validationErrors.top_k}<small class="validation-error">{validationErrors.top_k}</small>{/if}
       </label>
 
       <label>
@@ -210,6 +219,7 @@
           <input type="range" min="0" max="1" step="0.05" value={search.score_threshold ?? 0.7} disabled={disabled || reindexing} oninput={(event) => patchSearch({ score_threshold: Number(event.currentTarget.value) })} />
           <input class="number-input" type="number" min="0" max="1" step="0.05" value={search.score_threshold ?? 0.7} disabled={disabled || reindexing} oninput={(event) => patchSearch({ score_threshold: Number(event.currentTarget.value) })} />
         </div>
+        {#if validationErrors.score_threshold}<small class="validation-error">{validationErrors.score_threshold}</small>{/if}
       </label>
     </div>
 
@@ -240,6 +250,7 @@
           <label>
             <span>Retention days</span>
             <input type="number" min="0" value={spec.retention_days || 90} disabled={disabled || reindexing} oninput={(event) => patch({ retention_days: Number(event.currentTarget.value) || 0 })} />
+            {#if validationErrors.retention_days}<small class="validation-error">{validationErrors.retention_days}</small>{/if}
           </label>
         </div>
       {/if}
@@ -251,13 +262,13 @@
           <h4>Reindex memory</h4>
           <p>Publishes a SoulFactory runtime control event and tracks progress from explicit result events.</p>
         </div>
-        <button type="button" class="btn-primary" disabled={!canReindex} onclick={triggerReindex}>{reindexing ? 'Reindexing…' : 'Trigger reindex'}</button>
+        <button type="button" class="btn-primary" disabled={!canReindex} onclick={triggerReindex}>{#if reindexing}<span class="spinner" aria-hidden="true"></span>{/if}{reindexing ? 'Reindexing…' : 'Trigger reindex'}</button>
       </div>
       <div class="progress-track" aria-label="Reindex progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow={progressPercent} role="progressbar">
         <span style={`width: ${progressPercent}%`}></span>
       </div>
       {#if reindexMessage}<div class="status-message">{reindexMessage}</div>{/if}
-      {#if reindexError}<div class="error-message">{reindexError}</div>{/if}
+      {#if reindexError}<div class="error-message"><span>{reindexError}</span><button type="button" disabled={!canReindex} onclick={triggerReindex}>Retry</button></div>{/if}
       {#if !soul}<small>Save or open a deployed soul to trigger runtime reindexing.</small>{/if}
     </div>
   </div>
@@ -283,10 +294,15 @@
   .checkbox-row input, .toggle-row input { width: auto; }
   .advanced-box, .reindex-card { border: 1px dashed var(--border-color); border-radius: 12px; padding: 0.9rem; background: rgba(255,255,255,0.02); }
   .mode-pill { border: 1px solid var(--border-color); border-radius: 999px; color: var(--text-muted); font-size: 0.78rem; padding: 0.25rem 0.55rem; white-space: nowrap; }
-  .btn-primary { border: 1px solid var(--primary); border-radius: 8px; background: var(--primary); color: white; padding: 0.55rem 0.85rem; }
+  .btn-primary { border: 1px solid var(--primary); border-radius: 8px; background: var(--primary); color: white; padding: 0.55rem 0.85rem; display: inline-flex; align-items: center; justify-content: center; gap: 0.45rem; }
   .progress-track { height: 0.55rem; border-radius: 999px; overflow: hidden; background: var(--bg); border: 1px solid var(--border-color); }
   .progress-track span { display: block; height: 100%; background: var(--primary); transition: width 160ms ease; }
   .status-message { color: var(--success, #42d392); font-size: 0.85rem; }
-  .error-message { color: var(--error, #ff6b6b); font-size: 0.85rem; }
-  @media (max-width: 760px) { .two-col, .range-grid, .strategy-grid { grid-template-columns: 1fr; } .panel-header, .split-header { display: grid; } }
+  .error-message { color: var(--error, #ff6b6b); font-size: 0.85rem; display: flex; justify-content: space-between; gap: 0.75rem; align-items: center; }
+  .error-message button { border: 1px solid currentColor; border-radius: 8px; background: transparent; color: inherit; padding: 0.35rem 0.55rem; }
+  .validation-error { color: #ef4444; }
+  .spinner { width: 0.9rem; height: 0.9rem; border: 2px solid rgba(255,255,255,0.45); border-top-color: currentColor; border-radius: 50%; animation: spin 0.8s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @media (max-width: 1024px) { .strategy-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  @media (max-width: 760px) { .two-col, .range-grid, .strategy-grid { grid-template-columns: 1fr; } .panel-header, .split-header, .error-message { display: grid; } }
 </style>

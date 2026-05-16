@@ -32,7 +32,17 @@
   const currentMode = $derived(spec.current || 'generated');
   const previewRef = $derived(resolveAvatarRef(spec));
   const promptLength = $derived((generation.prompt || '').length);
-  const canGenerate = $derived(!disabled && !generating && (generation.prompt || '').trim().length > 0);
+  const validationErrors = $derived({
+    prompt: !(generation.prompt || '').trim()
+      ? 'Avatar prompt is required.'
+      : promptLength > maxPromptLength
+        ? `Avatar prompt must be ${maxPromptLength} characters or fewer.`
+        : '',
+    width: Number(generation.width || 512) < 128 ? 'Width must be at least 128px.' : '',
+    height: Number(generation.height || 512) < 128 ? 'Height must be at least 128px.' : ''
+  });
+  const hasValidationErrors = $derived(Object.values(validationErrors).some(Boolean));
+  const canGenerate = $derived(!disabled && !generating && !hasValidationErrors);
 
   function defaultAvatarSpec(overrides = {}) {
     return {
@@ -142,7 +152,15 @@
   function isImageRef(ref) {
     return ref?.startsWith('http') || ref?.startsWith('blob:') || ref?.startsWith('data:image/');
   }
+
+  function handlePanelKeydown(event) {
+    if (event.key === 'Escape' && zoomPreview) {
+      zoomPreview = false;
+    }
+  }
 </script>
+
+<svelte:window onkeydown={handlePanelKeydown} />
 
 <section class="studio-panel" aria-busy={generating}>
   <div class="panel-header">
@@ -159,6 +177,7 @@
         <span>Avatar prompt</span>
         <textarea rows="5" maxlength={maxPromptLength} value={generation.prompt || ''} disabled={disabled || generating} oninput={(event) => patchGeneration({ prompt: event.currentTarget.value })} placeholder="Pixel art owl researcher with a magnifying glass, warm amber eyes, transparent background"></textarea>
         <small class:warn={promptLength > maxPromptLength * 0.9}>{promptLength}/{maxPromptLength} characters</small>
+        {#if validationErrors.prompt}<small class="validation-error">{validationErrors.prompt}</small>{/if}
       </label>
 
       <label>
@@ -181,7 +200,7 @@
       </div>
 
       <div class="action-row">
-        <button type="button" class="btn-primary" disabled={!canGenerate} onclick={generateAvatar}>{generating ? 'Generating…' : 'Generate avatar'}</button>
+        <button type="button" class="btn-primary" disabled={!canGenerate} onclick={generateAvatar}>{#if generating}<span class="spinner" aria-hidden="true"></span>{/if}{generating ? 'Generating…' : 'Generate avatar'}</button>
         <label class="upload-button">
           Upload image
           <input type="file" accept="image/*" disabled={disabled || generating} onchange={handleUpload} />
@@ -192,7 +211,7 @@
         <div class="status-message">{generationMessage}</div>
       {/if}
       {#if generationError}
-        <div class="error-message">{generationError}</div>
+        <div class="error-message"><span>{generationError}</span><button type="button" disabled={!canGenerate} onclick={generateAvatar}>Retry</button></div>
       {/if}
 
       <div class="two-col">
@@ -207,7 +226,7 @@
           <h4>Advanced generation</h4>
           <div class="two-col">
             <label>Seed<div class="inline-field"><input value={generation.seed || ''} disabled={disabled || generating} oninput={(event) => patchGeneration({ seed: event.currentTarget.value })} placeholder="optional" /><button type="button" class="mini-button" disabled={disabled || generating} onclick={randomizeSeed}>Random</button></div></label>
-            <label>Size<div class="inline-field"><input aria-label="Width" type="number" min="128" step="64" value={generation.width || 512} disabled={disabled || generating} oninput={(event) => patchGeneration({ width: Number(event.currentTarget.value) || 512 })} /><input aria-label="Height" type="number" min="128" step="64" value={generation.height || 512} disabled={disabled || generating} oninput={(event) => patchGeneration({ height: Number(event.currentTarget.value) || 512 })} /></div></label>
+            <label>Size<div class="inline-field"><input aria-label="Width" type="number" min="128" step="64" value={generation.width || 512} disabled={disabled || generating} oninput={(event) => patchGeneration({ width: Number(event.currentTarget.value) || 512 })} /><input aria-label="Height" type="number" min="128" step="64" value={generation.height || 512} disabled={disabled || generating} oninput={(event) => patchGeneration({ height: Number(event.currentTarget.value) || 512 })} /></div>{#if validationErrors.width}<small class="validation-error">{validationErrors.width}</small>{/if}{#if validationErrors.height}<small class="validation-error">{validationErrors.height}</small>{/if}</label>
           </div>
         </div>
       {/if}
@@ -267,7 +286,7 @@
   .two-col { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.75rem; }
   .inline-field { display: flex; gap: 0.45rem; }
   .inline-field input { min-width: 0; }
-  .mini-button, .btn-primary, .upload-button { border: 1px solid var(--border-color); border-radius: 8px; cursor: pointer; padding: 0.55rem 0.75rem; font: inherit; }
+  .mini-button, .btn-primary, .upload-button { border: 1px solid var(--border-color); border-radius: 8px; cursor: pointer; padding: 0.55rem 0.75rem; font: inherit; display: inline-flex; align-items: center; justify-content: center; gap: 0.45rem; }
   .btn-primary { background: var(--primary); color: white; border-color: var(--primary); }
   .mini-button, .upload-button { background: transparent; color: var(--text-muted); }
   .upload-button input { display: none; }
@@ -279,9 +298,14 @@
   .history-strip { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.4rem; }
   .history-strip button { aspect-ratio: 1; border: 1px solid var(--border-color); border-radius: 8px; background: var(--bg); overflow: hidden; color: var(--text-muted); padding: 0; cursor: pointer; }
   .history-strip img { width: 100%; height: 100%; object-fit: cover; }
-  .status-message, .error-message { border-radius: 8px; padding: 0.65rem 0.75rem; font-size: 0.85rem; }
+  .status-message, .error-message { border-radius: 8px; padding: 0.65rem 0.75rem; font-size: 0.85rem; display: flex; justify-content: space-between; gap: 0.75rem; align-items: center; }
   .status-message { background: rgba(59,130,246,0.12); color: #60a5fa; }
   .error-message { background: rgba(239,68,68,0.12); color: #ef4444; }
+  .error-message button { border: 1px solid currentColor; border-radius: 8px; background: transparent; color: inherit; padding: 0.35rem 0.55rem; }
+  .validation-error { color: #ef4444; }
+  .spinner { width: 0.9rem; height: 0.9rem; border: 2px solid rgba(255,255,255,0.45); border-top-color: currentColor; border-radius: 50%; animation: spin 0.8s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
   button:disabled, input:disabled, select:disabled, textarea:disabled, .upload-button:has(input:disabled) { opacity: 0.55; cursor: not-allowed; }
-  @media (max-width: 760px) { .studio-grid, .two-col, .preset-grid { grid-template-columns: 1fr; } .action-row { flex-direction: column; } }
+  @media (max-width: 1024px) { .studio-grid { grid-template-columns: minmax(0, 1fr) 240px; } }
+  @media (max-width: 760px) { .studio-grid, .two-col, .preset-grid { grid-template-columns: 1fr; } .panel-header, .preview-header, .action-row, .error-message { flex-direction: column; align-items: stretch; } }
 </style>

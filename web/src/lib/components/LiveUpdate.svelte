@@ -35,7 +35,8 @@
   const visibleChanges = $derived(changes.filter((change) => selectedSections.has(sectionFromPath(change.path))));
   const selectedList = $derived(sectionOptions.filter((section) => selectedSections.has(section.id)));
   const hasPendingChanges = $derived(visibleChanges.length > 0);
-  const canSubmit = $derived(Boolean(soul) && !disabled && !running && selectedList.length > 0 && (hasPendingChanges || updateMode !== 'hot-reload'));
+  const validationError = $derived(!soul ? 'A deployed soul is required for live updates.' : selectedList.length === 0 ? 'Select at least one section.' : '');
+  const canSubmit = $derived(Boolean(soul) && !disabled && !running && !validationError && (hasPendingChanges || updateMode !== 'hot-reload'));
   const progressPercent = $derived(progress.total > 0 ? Math.min(100, Math.round((progress.current / progress.total) * 100)) : running ? 25 : 0);
 
   function normalizeContent(value = {}) {
@@ -171,6 +172,10 @@
     const version = selectedVersion || versions[0]?.id || versions[0]?.ref || '';
     return publishUpdate('rollback', 'soulfactory.config.reload', { rollback_ref: version, update_mode: 'rollback' });
   }
+
+  function retryUpdate() {
+    return applySelectedUpdate();
+  }
 </script>
 
 <section class="live-update-panel" aria-busy={running}>
@@ -205,6 +210,10 @@
     </fieldset>
   </div>
 
+  {#if validationError}
+    <div class="validation-card">{validationError}</div>
+  {/if}
+
   <div class="diff-card">
     <div class="diff-header">
       <strong>Draft diff</strong>
@@ -230,7 +239,7 @@
   {#if running || statusMessage}
     <div class="progress-card">
       <div class="progress-bar"><span style={`width: ${progressPercent}%`}></span></div>
-      <p>{statusMessage || 'Waiting for runtime control events…'}</p>
+      <p>{#if running}<span class="spinner" aria-hidden="true"></span>{/if}{statusMessage || 'Waiting for runtime control events…'}</p>
     </div>
   {/if}
 
@@ -238,12 +247,12 @@
     <div class="error-card">
       <strong>Update failed</strong>
       <p>{errorMessage}</p>
-      <button type="button" disabled={disabled || running || (!rollbackAvailable && versions.length === 0)} onclick={rollback}>Rollback</button>
+      <div class="error-actions"><button type="button" disabled={disabled || running || !canSubmit} onclick={retryUpdate}>Retry</button><button type="button" disabled={disabled || running || (!rollbackAvailable && versions.length === 0)} onclick={rollback}>Rollback</button></div>
     </div>
   {/if}
 
   <div class="action-row">
-    <button type="button" class="btn-primary" disabled={!canSubmit} onclick={applySelectedUpdate}>{updateMode === 'restart' ? 'Full redeploy' : 'Hot-reload changes'}</button>
+    <button type="button" class="btn-primary" disabled={!canSubmit} onclick={applySelectedUpdate}>{#if running}<span class="spinner" aria-hidden="true"></span>{/if}{updateMode === 'restart' ? 'Full redeploy' : 'Hot-reload changes'}</button>
 
     <label class="version-picker">Rollback version
       <select bind:value={selectedVersion} disabled={disabled || running || versions.length === 0}>
@@ -265,7 +274,7 @@
   .status-pill { border: 1px solid var(--border-color); border-radius: 999px; padding: 0.25rem 0.65rem; color: var(--text-muted); font-size: 0.8rem; white-space: nowrap; }
   .status-pill.running { color: var(--primary, #6366f1); border-color: currentColor; }
   .status-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.75rem; }
-  .status-grid > div, .diff-card, .progress-card, .error-card { border: 1px solid var(--border-color); border-radius: 12px; padding: 0.9rem; background: rgba(255,255,255,0.02); }
+  .status-grid > div, .diff-card, .progress-card, .error-card, .validation-card { border: 1px solid var(--border-color); border-radius: 12px; padding: 0.9rem; background: rgba(255,255,255,0.02); }
   .status-grid span { display: block; color: var(--text-muted); font-size: 0.75rem; margin-bottom: 0.25rem; }
   .status-grid strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.85rem; }
   .controls { display: grid; grid-template-columns: 1.2fr 1fr; gap: 0.75rem; }
@@ -281,11 +290,16 @@
   pre { white-space: pre-wrap; max-height: 12rem; }
   .progress-bar { height: 0.5rem; border-radius: 999px; background: rgba(255,255,255,0.08); overflow: hidden; }
   .progress-bar span { display: block; height: 100%; background: var(--primary, #6366f1); transition: width 160ms ease; }
-  .error-card { border-color: rgba(239, 68, 68, 0.45); }
-  .error-card strong { color: #ef4444; }
+  .progress-card p, .error-actions { display: flex; align-items: center; gap: 0.5rem; }
+  .error-card, .validation-card { border-color: rgba(239, 68, 68, 0.45); }
+  .error-card strong, .validation-card { color: #ef4444; }
   button, select { border: 1px solid var(--border-color); border-radius: 8px; background: transparent; color: var(--text-primary); padding: 0.55rem 0.8rem; font: inherit; }
+  button { display: inline-flex; align-items: center; justify-content: center; gap: 0.45rem; }
   .btn-primary { background: var(--primary, #6366f1); color: white; border-color: var(--primary, #6366f1); }
   button:disabled, select:disabled, fieldset:disabled { opacity: 0.55; cursor: not-allowed; }
+  .spinner { width: 0.9rem; height: 0.9rem; border: 2px solid rgba(255,255,255,0.45); border-top-color: currentColor; border-radius: 50%; animation: spin 0.8s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
   .version-picker { display: inline-flex; gap: 0.5rem; align-items: center; margin-left: auto; }
-  @media (max-width: 820px) { .status-grid, .controls, .diff-row { grid-template-columns: 1fr; } .panel-header, .action-row { flex-direction: column; align-items: stretch; } .version-picker { margin-left: 0; align-items: stretch; flex-direction: column; } }
+  @media (max-width: 1024px) { .diff-row { grid-template-columns: 0.7fr 1fr 1fr; } }
+  @media (max-width: 820px) { .status-grid, .controls, .diff-row { grid-template-columns: 1fr; } .panel-header, .action-row, .error-actions { flex-direction: column; align-items: stretch; } .version-picker { margin-left: 0; align-items: stretch; flex-direction: column; } }
 </style>

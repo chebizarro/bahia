@@ -51,6 +51,7 @@
   let traitInput = $state('');
   let newConstraint = $state('');
   let importError = $state('');
+  let importing = $state(false);
   let collapsedSections = $state(new Set(['red_lines', 'notes']));
 
   const spec = $derived(createDefaultPersonaSpec(value || {}));
@@ -62,6 +63,15 @@
         ).slice(0, 6)
       : []
   );
+  const roleLength = $derived((sections.role || '').length);
+  const validationErrors = $derived({
+    role: !(sections.role || '').trim()
+      ? 'Role is required.'
+      : roleLength > 1200
+        ? 'Role must be 1200 characters or fewer.'
+        : '',
+    traits: (spec.traits || []).length > 12 ? 'Use 12 traits or fewer.' : ''
+  });
 
   function commit(next) {
     value = createDefaultPersonaSpec(next);
@@ -137,18 +147,20 @@
     const file = event.currentTarget.files?.[0];
     if (!file) return;
     importError = '';
+    importing = true;
     try {
       const imported = JSON.parse(await file.text());
       commit(imported);
     } catch (err) {
       importError = err?.message || 'Could not import persona JSON';
     } finally {
+      importing = false;
       event.currentTarget.value = '';
     }
   }
 </script>
 
-<section class="studio-panel">
+<section class="studio-panel" aria-busy={importing}>
   <div class="panel-header">
     <div>
       <h3>Personality Builder</h3>
@@ -156,15 +168,16 @@
     </div>
     <div class="action-row">
       <label class="btn-secondary">
-        Import
-        <input type="file" accept="application/json,.json" disabled={disabled} onchange={importPersona} />
+        {#if importing}<span class="spinner" aria-hidden="true"></span>{/if}
+        {importing ? 'Loading preset…' : 'Import'}
+        <input type="file" accept="application/json,.json" disabled={disabled || importing} onchange={importPersona} />
       </label>
       <button type="button" class="btn-secondary" disabled={disabled} onclick={exportPersona}>Export</button>
     </div>
   </div>
 
   {#if importError}
-    <div class="error-message">{importError}</div>
+    <div class="error-message"><span>{importError}</span><label class="retry-link">Retry<input type="file" accept="application/json,.json" disabled={disabled || importing} onchange={importPersona} /></label></div>
   {/if}
 
   <div class="studio-grid">
@@ -178,6 +191,7 @@
           <input value={traitInput} disabled={disabled} oninput={(event) => (traitInput = event.currentTarget.value)} onkeydown={handleTraitKeydown} placeholder="Add trait…" />
         </div>
       </label>
+      {#if validationErrors.traits}<small class="validation-error">{validationErrors.traits}</small>{/if}
       {#if matchingTraits.length > 0}
         <div class="autocomplete" aria-label="Trait suggestions">
           {#each matchingTraits as trait}
@@ -226,7 +240,9 @@
               <span>{collapsedSections.has(section.id) ? 'Expand' : 'Collapse'}</span>
             </button>
             {#if !collapsedSections.has(section.id)}
-              <textarea rows="5" value={sections[section.id] || ''} disabled={disabled} oninput={(event) => patchSection(section.id, event.currentTarget.value)} placeholder={section.placeholder}></textarea>
+              <textarea rows="5" maxlength={section.id === 'role' ? 1200 : undefined} value={sections[section.id] || ''} disabled={disabled} oninput={(event) => patchSection(section.id, event.currentTarget.value)} placeholder={section.placeholder}></textarea>
+              {#if section.id === 'role'}<small class:warn={roleLength > 1080}>{roleLength}/1200 characters</small>{/if}
+              {#if section.id === 'role' && validationErrors.role}<small class="validation-error">{validationErrors.role}</small>{/if}
             {/if}
           </article>
         {/each}
@@ -263,7 +279,9 @@
   .studio-panel { display: grid; gap: 1rem; }
   .panel-header, .action-row, .section-toggle { display: flex; justify-content: space-between; gap: 1rem; align-items: flex-start; }
   h3, h4, p { margin: 0; }
-  p, .section-toggle span { color: var(--text-muted); font-size: 0.85rem; }
+  p, small, .section-toggle span { color: var(--text-muted); font-size: 0.85rem; }
+  small.warn { color: #f59e0b; }
+  .validation-error { color: #ef4444; }
   .studio-grid { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 1rem; }
   .form-stack, .section-editors, .preview-card, .list-editor { display: grid; gap: 0.85rem; }
   label, .field-label { display: grid; gap: 0.35rem; font-size: 0.85rem; font-weight: 400; }
@@ -275,8 +293,8 @@
   .tag, .preview-tags span { border: 1px solid var(--border-color); border-radius: 999px; padding: 0.3rem 0.55rem; background: rgba(255,255,255,0.04); color: var(--text-primary); }
   .tag span { margin-left: 0.35rem; color: var(--text-muted); }
   .autocomplete { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-top: -0.5rem; }
-  .autocomplete button, .list-row button, .btn-secondary { border: 1px solid var(--border-color); border-radius: 8px; background: transparent; color: var(--text-muted); padding: 0.5rem 0.7rem; font: inherit; cursor: pointer; }
-  .btn-secondary input { display: none; }
+  .autocomplete button, .list-row button, .btn-secondary, .retry-link { border: 1px solid var(--border-color); border-radius: 8px; background: transparent; color: var(--text-muted); padding: 0.5rem 0.7rem; font: inherit; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: 0.45rem; }
+  .btn-secondary input, .retry-link input { display: none; }
   .list-row { display: grid; grid-template-columns: 1fr auto; gap: 0.5rem; }
   .prompt-section, .preview-card, .error-message { border: 1px dashed var(--border-color); border-radius: 12px; padding: 0.9rem; background: rgba(255,255,255,0.02); }
   .section-toggle { width: 100%; border: 0; background: transparent; color: var(--text-primary); padding: 0; font: inherit; cursor: pointer; }
@@ -285,7 +303,10 @@
   .avatar-dot { display: grid; place-items: center; width: 2.5rem; height: 2.5rem; border-radius: 50%; background: var(--primary, #6366f1); color: white; }
   .preview-tags { display: flex; flex-wrap: wrap; gap: 0.4rem; }
   ul { margin: 0.4rem 0 0; padding-left: 1.1rem; color: var(--text-muted); font-size: 0.85rem; }
-  .error-message { border-color: rgba(239,68,68,0.45); color: #ef4444; }
+  .error-message { border-color: rgba(239,68,68,0.45); color: #ef4444; display: flex; justify-content: space-between; gap: 0.75rem; align-items: center; }
+  .spinner { width: 0.9rem; height: 0.9rem; border: 2px solid rgba(255,255,255,0.25); border-top-color: currentColor; border-radius: 50%; animation: spin 0.8s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
   button:disabled, input:disabled, select:disabled, textarea:disabled, .btn-secondary:has(input:disabled) { opacity: 0.55; cursor: not-allowed; }
-  @media (max-width: 820px) { .studio-grid, .two-col, .list-row { grid-template-columns: 1fr; } .panel-header, .action-row { flex-direction: column; } }
+  @media (max-width: 1024px) { .studio-grid { grid-template-columns: minmax(0, 1fr) 260px; } }
+  @media (max-width: 820px) { .studio-grid, .two-col, .list-row { grid-template-columns: 1fr; } .panel-header, .action-row, .error-message { flex-direction: column; align-items: stretch; } }
 </style>
