@@ -235,6 +235,33 @@ func TestDockerObserveUsesAllContainersNameFallbackAndRepoDigest(t *testing.T) {
 	}
 }
 
+func TestDockerObservePrefersConfiguredRepoDigestWhenImageIDHasMultipleRepos(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/v1.44/containers/json" && strings.Contains(r.URL.RawQuery, "filters="):
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`[{"Id":"container-123","Names":["/api"],"Image":"registry.example/api:latest","ImageID":"sha256:sharedimage","State":"running"}]`))
+		case r.Method == http.MethodGet && r.URL.Path == "/v1.44/images/sha256:sharedimage/json":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"Id":"sha256:sharedimage","RepoDigests":["registry.example/old-api@sha256:oldrepo","registry.example/api@sha256:wantedrepo"]}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	observer := &DockerObserver{httpClient: server.Client(), host: server.URL, logger: zap.NewNop()}
+	obs, err := observer.Observe(context.Background(), uuid.New(), uuid.New(), "api")
+	if err != nil {
+		t.Fatalf("Observe returned error: %v", err)
+	}
+	if obs.ObservedImageRepo != "registry.example/api" || obs.ObservedImageDigest != "sha256:wantedrepo" {
+		t.Fatalf("expected preferred repo digest, got repo=%q digest=%q", obs.ObservedImageRepo, obs.ObservedImageDigest)
+	}
+}
+
 func TestDockerDeployMapsAdoptedRuntimeOptions(t *testing.T) {
 	t.Parallel()
 

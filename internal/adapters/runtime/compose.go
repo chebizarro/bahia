@@ -313,6 +313,10 @@ func (r *ComposeRuntime) inspectComposeContainerImage(ctx context.Context, logge
 func (r *ComposeRuntime) inspectDockerImage(ctx context.Context, logger *zap.Logger, inspectRef, fallbackRepo string) (string, string) {
 	inspectRef = strings.TrimSpace(inspectRef)
 	fallbackRepo = strings.TrimSpace(fallbackRepo)
+	preferredRepo, _, _ := parseDockerImageReference(fallbackRepo)
+	if preferredRepo == "" {
+		preferredRepo = fallbackRepo
+	}
 	if inspectRef == "" {
 		return fallbackRepo, digestFromReference(fallbackRepo)
 	}
@@ -331,10 +335,8 @@ func (r *ComposeRuntime) inspectDockerImage(ctx context.Context, logger *zap.Log
 		inspected = []dockerImageInspect{single}
 	}
 	for _, candidate := range inspected {
-		for _, repoDigest := range candidate.RepoDigests {
-			if repo, digest := splitRepoDigest(repoDigest); digest != "" {
-				return repo, digest
-			}
+		if repo, digest := bestRepoDigest(preferredRepo, candidate.RepoDigests); digest != "" {
+			return repo, digest
 		}
 		if digest := digestFromReference(candidate.ID); digest != "" {
 			return fallbackRepo, digest

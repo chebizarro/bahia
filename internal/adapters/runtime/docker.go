@@ -849,6 +849,10 @@ type dockerImageInspect struct {
 }
 
 func (o *DockerObserver) resolveImageRepoDigest(ctx context.Context, imageRef, imageID string) (string, string, error) {
+	preferredRepo, _, _ := parseDockerImageReference(imageRef)
+	if preferredRepo == "" {
+		preferredRepo = strings.TrimSpace(imageRef)
+	}
 	inspectRef := imageID
 	if inspectRef == "" {
 		inspectRef = imageRef
@@ -873,10 +877,8 @@ func (o *DockerObserver) resolveImageRepoDigest(ctx context.Context, imageRef, i
 	if err := json.NewDecoder(resp.Body).Decode(&inspected); err != nil {
 		return "", "", err
 	}
-	for _, repoDigest := range inspected.RepoDigests {
-		if repo, digest := splitRepoDigest(repoDigest); digest != "" {
-			return repo, digest, nil
-		}
+	if repo, digest := bestRepoDigest(preferredRepo, inspected.RepoDigests); digest != "" {
+		return repo, digest, nil
 	}
 	return "", extractDigest(inspected.ID), nil
 }

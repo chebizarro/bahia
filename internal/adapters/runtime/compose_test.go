@@ -176,6 +176,36 @@ esac
 	}
 }
 
+func TestComposeRuntimeObservePrefersConfiguredRepoDigestWhenImageIDHasMultipleRepos(t *testing.T) {
+	composeBin := writeFakeComposeBinary(t, `#!/bin/sh
+printf '%s' '{"ID":"running-id","Image":"registry.example/app:v2","State":"running","Status":"Up"}'
+`)
+	dockerBin := writeFakeNamedBinary(t, "docker", `#!/bin/sh
+case "$*" in
+	"container inspect running-id")
+	printf '%s' '[{"Id":"running-id","Image":"sha256:runningimage","Config":{"Image":"registry.example/app:v2"}}]'
+	;;
+	"image inspect sha256:runningimage")
+	printf '%s' '[{"Id":"sha256:runningimage","RepoDigests":["registry.example/old-app@sha256:oldrunningdigest","registry.example/app@sha256:runningdigest"]}]'
+	;;
+	*)
+  echo "unexpected docker args: $*" >&2
+  exit 1
+	;;
+esac
+`)
+	t.Setenv("PATH", filepath.Dir(dockerBin)+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	r := &ComposeRuntime{binary: composeBin, dockerHost: "tcp://docker:2375", logger: zap.NewNop()}
+	obs, err := r.Observe(context.Background(), uuid.New(), uuid.New(), "app")
+	if err != nil {
+		t.Fatalf("Observe() error = %v", err)
+	}
+	if obs.ObservedImageRepo != "registry.example/app" || obs.ObservedImageDigest != "sha256:runningdigest" {
+		t.Fatalf("preferred digest-aware observe mismatch: repo=%q digest=%q", obs.ObservedImageRepo, obs.ObservedImageDigest)
+	}
+}
+
 func TestComposeRuntimeObserveParsesJSONArrayAndPrefersRunningEntry(t *testing.T) {
 	bin := writeFakeComposeBinary(t, `#!/bin/sh
 printf '%s' '[{"ID":"stopped-id","Image":"registry.example/app:v1","State":"exited","Status":"Exited"},{"ID":"running-id","Image":"registry.example/app:v2","State":"running","Status":"Up"}]'
