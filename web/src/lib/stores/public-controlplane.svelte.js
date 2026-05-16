@@ -3,7 +3,7 @@ import { KINDS, getTagValue, parseJsonContent } from '$lib/nostr/client.js';
 import { publishRequest, awaitResult } from '$lib/nostr/controlplane-requests.js';
 import { bootstrapControlplane } from './controlplane.svelte.js';
 
-const ACTION_RESULTS = [KINDS.BAHIA_ACTION_RESULT, KINDS.BAHIA_DEPLOYMENT_RESULT, KINDS.BAHIA_SERVICE_CREATE_RESULT, KINDS.BAHIA_ENVIRONMENT_CREATE_RESULT];
+const ACTION_RESULTS = [KINDS.BAHIA_ACTION_RESULT, KINDS.BAHIA_DEPLOYMENT_RESULT, KINDS.BAHIA_SERVICE_CREATE_RESULT, KINDS.BAHIA_ENVIRONMENT_CREATE_RESULT, KINDS.BAHIA_PACKAGE_RESULT];
 
 export function resultContent(event) {
   return parseJsonContent(event, {});
@@ -152,6 +152,42 @@ export function rejectLLMDeploymentIntent(id) {
 
 export function registerArtifact(payload) {
   return publishCommand({ kind: KINDS.BAHIA_REQUEST_ARTIFACT_REGISTER, tags: [['service', payload.service_id], ['build', payload.build_id]].filter((tag) => tag[1]), content: payload });
+}
+
+export function promotePackage(payload) {
+  return publishCommand({
+    kind: KINDS.BAHIA_REQUEST_PACKAGE_PROMOTE,
+    tags: [
+      ['operation', 'promote'],
+      ['repository', payload.source_repository_id],
+      ['repository_name', payload.source_repository_name],
+      ['target_repository', payload.target_repository_id],
+      ['target_repository_name', payload.target_repository_name],
+      ['namespace', payload.namespace],
+      ['package', payload.package_name],
+      ['version', payload.version],
+      ['filename', payload.filename]
+    ].filter((tag) => tag[1]),
+    content: payload,
+    resultKinds: [KINDS.BAHIA_PACKAGE_RESULT]
+  });
+}
+
+export function yankPackage(payload) {
+  return publishCommand({
+    kind: KINDS.BAHIA_REQUEST_PACKAGE_YANK,
+    tags: [
+      ['operation', payload.deprecated ? 'deprecate' : 'yank'],
+      ['repository', payload.repository_id],
+      ['repository_name', payload.repository_name],
+      ['namespace', payload.namespace],
+      ['package', payload.package_name],
+      ['version', payload.version],
+      ['filename', payload.filename]
+    ].filter((tag) => tag[1]),
+    content: payload,
+    resultKinds: [KINDS.BAHIA_PACKAGE_RESULT]
+  });
 }
 
 export function createPolicy(payload) {

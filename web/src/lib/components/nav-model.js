@@ -7,6 +7,7 @@ const WORKSPACE_LINKS = [
 const DELIVERY_LINKS = [
   { href: '/services', label: 'Services' },
   { href: '/artifacts', label: 'Artifacts' },
+  { href: '/packages', label: 'Packages' },
   { href: '/deployments', label: 'Deployments' },
   { href: '/deployments/pending', label: 'Pending Approvals' }
 ];

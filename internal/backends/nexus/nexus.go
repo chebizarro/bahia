@@ -22,6 +22,8 @@ type Config struct {
 	BaseURL       string
 	PublicBaseURL string
 	HTTPClient    *http.Client
+	Auth          packagebackend.AuthConfig
+	Secrets       map[string]string
 }
 
 // Backend implements packagebackend.Backend for Nexus raw repositories.
@@ -29,6 +31,8 @@ type Backend struct {
 	baseURL       string
 	publicBaseURL string
 	httpClient    *http.Client
+	auth          packagebackend.AuthConfig
+	secrets       map[string]string
 }
 
 func New(cfg Config) (*Backend, error) {
@@ -47,7 +51,7 @@ func New(cfg Config) (*Backend, error) {
 	if publicBase == "" {
 		publicBase = base
 	}
-	return &Backend{baseURL: base, publicBaseURL: publicBase, httpClient: client}, nil
+	return &Backend{baseURL: base, publicBaseURL: publicBase, httpClient: client, auth: cfg.Auth, secrets: cfg.Secrets}, nil
 }
 
 func (b *Backend) Type() domain.PackageBackendType { return domain.PackageBackendNexus }
@@ -269,7 +273,26 @@ func (b *Backend) do(ctx context.Context, method, path string, body io.Reader, c
 	if contentType != "" {
 		req.Header.Set("Content-Type", contentType)
 	}
+	b.applyAuth(req)
 	return b.httpClient.Do(req)
+}
+
+func (b *Backend) applyAuth(req *http.Request) {
+	if strings.TrimSpace(b.auth.BearerToken) != "" {
+		req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(b.auth.BearerToken))
+		return
+	}
+	if b.auth.Username != "" || b.auth.Password != "" {
+		req.SetBasicAuth(b.auth.Username, b.auth.Password)
+	}
+}
+
+func (b *Backend) Secret(name string) (string, bool) {
+	if b.secrets == nil {
+		return "", false
+	}
+	value, ok := b.secrets[name]
+	return value, ok
 }
 
 func responseError(resp *http.Response, action string) error {

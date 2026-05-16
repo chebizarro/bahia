@@ -68,6 +68,7 @@ func newRootCommand() *cobra.Command {
 		policiesCommands(),
 		secretsCommands(),
 		orgsCommands(),
+		packageCommands(),
 		soulFactoryCommands(),
 	)
 

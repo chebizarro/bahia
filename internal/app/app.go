@@ -328,7 +328,7 @@ func New(cfg *config.Config) (*App, error) {
 	var packageRegistrySvc *service.PackageRegistryService
 	if cfg.Packages.Enabled {
 		packageProjection = repository.NewPgPackageControlPlaneRepository(pool)
-		packageBackends, err := packagefactory.BuildRegistry(cfg.Packages)
+		packageBackends, err := packagefactory.BuildRegistryWithSecrets(ctx, cfg.Packages, secretsAdapter.NewResolver(secretRepo, secretEncryptor))
 		if err != nil {
 			return nil, fmt.Errorf("building package backends: %w", err)
 		}

@@ -1,14 +1,18 @@
 package filesystem_mock
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"html"
 	"io"
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -198,7 +202,7 @@ func (b *Backend) ListArtifacts(_ context.Context, repo domain.PackageRepository
 			return err
 		}
 		rel = filepath.ToSlash(rel)
-		if strings.HasPrefix(filepath.Base(pathOnDisk), ".bahia-upload-") || strings.HasSuffix(rel, ".yanked") {
+		if strings.HasPrefix(filepath.Base(pathOnDisk), ".bahia-upload-") || strings.HasPrefix(rel, ".index/") || strings.HasSuffix(rel, ".yanked") {
 			return nil
 		}
 		obs, err := b.observeArtifactPath(repo, rel)
@@ -259,6 +263,39 @@ func (b *Backend) ObserveArtifact(_ context.Context, repo domain.PackageReposito
 		return packagebackend.ArtifactObservation{}, fmt.Errorf("stat artifact: %w", err)
 	}
 	return b.observeArtifactPath(repo, relPath)
+}
+
+func (b *Backend) GenerateIndex(ctx context.Context, repoID, format string) error {
+	repo := domain.PackageRepository{ExternalRepositoryName: repoID, Name: repoID}
+	artifacts, err := b.ListArtifacts(ctx, repo)
+	if err != nil {
+		return err
+	}
+	switch domain.PackageRepositoryFormat(format) {
+	case domain.PackageRepositoryFormatNPM:
+		return b.generateNPMIndex(repo, artifacts)
+	case domain.PackageRepositoryFormatPyPI:
+		return b.generatePyPIIndex(repo, artifacts)
+	default:
+		return nil
+	}
+}
+
+func (b *Backend) ServeIndex(_ context.Context, repoID, requestPath string) (io.Reader, string, error) {
+	repo := domain.PackageRepository{ExternalRepositoryName: repoID, Name: repoID}
+	repoDir, err := b.repositoryDir(repo)
+	if err != nil {
+		return nil, "", err
+	}
+	indexPath, contentType, err := indexFileForRequest(repoDir, requestPath)
+	if err != nil {
+		return nil, "", err
+	}
+	data, err := os.ReadFile(indexPath)
+	if err != nil {
+		return nil, "", fmt.Errorf("read package index: %w", err)
+	}
+	return bytes.NewReader(data), contentType, nil
 }
 
 func (b *Backend) repositoryDir(repo domain.PackageRepository) (string, error) {
@@ -341,6 +378,177 @@ func (b *Backend) artifactURL(repo domain.PackageRepository, relPath string) str
 		return ""
 	}
 	return "file://" + filepath.ToSlash(filePath)
+}
+
+type indexArtifact struct {
+	PackageName string
+	Version     string
+	Filename    string
+	BackendPath string
+	DownloadURL string
+	SHA256      string
+}
+
+func (b *Backend) generateNPMIndex(repo domain.PackageRepository, artifacts []packagebackend.ArtifactObservation) error {
+	if err := b.clearIndexDir(repo, "npm"); err != nil {
+		return err
+	}
+	byPackage := map[string][]indexArtifact{}
+	for _, obs := range artifacts {
+		item, ok := indexArtifactFromObservation(obs)
+		if ok {
+			byPackage[item.PackageName] = append(byPackage[item.PackageName], item)
+		}
+	}
+	for _, pkg := range b.yankedPackageNames(repo) {
+		if _, ok := byPackage[pkg]; !ok {
+			byPackage[pkg] = nil
+		}
+	}
+	for pkg, items := range byPackage {
+		versions := map[string]any{}
+		for _, item := range items {
+			versions[item.Version] = map[string]any{"dist": map[string]any{"tarball": item.DownloadURL, "shasum": item.SHA256}}
+		}
+		body, err := json.MarshalIndent(map[string]any{"name": pkg, "versions": versions}, "", "  ")
+		if err != nil {
+			return err
+		}
+		if err := b.writeIndexFile(repo, filepath.Join("npm", pkg+".json"), body); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (b *Backend) generatePyPIIndex(repo domain.PackageRepository, artifacts []packagebackend.ArtifactObservation) error {
+	if err := b.clearIndexDir(repo, "pypi"); err != nil {
+		return err
+	}
+	byPackage := map[string][]indexArtifact{}
+	for _, obs := range artifacts {
+		item, ok := indexArtifactFromObservation(obs)
+		if ok {
+			byPackage[normalizePyPIName(item.PackageName)] = append(byPackage[normalizePyPIName(item.PackageName)], item)
+		}
+	}
+	packages := make([]string, 0, len(byPackage))
+	for pkg := range byPackage {
+		packages = append(packages, pkg)
+	}
+	sort.Strings(packages)
+	var root strings.Builder
+	root.WriteString("<!DOCTYPE html>\n<html><body>\n")
+	for _, pkg := range packages {
+		root.WriteString(fmt.Sprintf("<a href=\"%s/\">%s</a>\n", html.EscapeString(pkg), html.EscapeString(pkg)))
+	}
+	root.WriteString("</body></html>\n")
+	if err := b.writeIndexFile(repo, filepath.Join("pypi", "simple", "index.html"), []byte(root.String())); err != nil {
+		return err
+	}
+	for _, pkg := range packages {
+		items := byPackage[pkg]
+		sort.Slice(items, func(i, j int) bool { return items[i].Version < items[j].Version })
+		var page strings.Builder
+		page.WriteString("<!DOCTYPE html>\n<html><body>\n")
+		for _, item := range items {
+			page.WriteString(fmt.Sprintf("<a href=\"%s#sha256=%s\">%s</a>\n", html.EscapeString(item.DownloadURL), html.EscapeString(item.SHA256), html.EscapeString(item.Filename)))
+		}
+		page.WriteString("</body></html>\n")
+		if err := b.writeIndexFile(repo, filepath.Join("pypi", "simple", pkg, "index.html"), []byte(page.String())); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (b *Backend) yankedPackageNames(repo domain.PackageRepository) []string {
+	repoDir, err := b.repositoryDir(repo)
+	if err != nil {
+		return nil
+	}
+	seen := map[string]struct{}{}
+	_ = filepath.WalkDir(repoDir, func(pathOnDisk string, entry os.DirEntry, err error) error {
+		if err != nil || entry.IsDir() || !strings.HasSuffix(pathOnDisk, ".yanked") {
+			return nil
+		}
+		rel, err := filepath.Rel(repoDir, strings.TrimSuffix(pathOnDisk, ".yanked"))
+		if err != nil {
+			return nil
+		}
+		item, ok := indexArtifactFromObservation(packagebackend.ArtifactObservation{BackendPath: filepath.ToSlash(rel)})
+		if ok {
+			seen[item.PackageName] = struct{}{}
+		}
+		return nil
+	})
+	out := make([]string, 0, len(seen))
+	for pkg := range seen {
+		out = append(out, pkg)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func (b *Backend) clearIndexDir(repo domain.PackageRepository, formatDir string) error {
+	repoDir, err := b.repositoryDir(repo)
+	if err != nil {
+		return err
+	}
+	target, err := packagebackend.SafeJoin(repoDir, ".index", formatDir)
+	if err != nil {
+		return err
+	}
+	if err := os.RemoveAll(target); err != nil {
+		return fmt.Errorf("clear index directory: %w", err)
+	}
+	return nil
+}
+
+func (b *Backend) writeIndexFile(repo domain.PackageRepository, relPath string, data []byte) error {
+	repoDir, err := b.repositoryDir(repo)
+	if err != nil {
+		return err
+	}
+	target, err := packagebackend.SafeJoin(repoDir, ".index", relPath)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		return fmt.Errorf("create index directory: %w", err)
+	}
+	return os.WriteFile(target, data, 0o644)
+}
+
+func indexArtifactFromObservation(obs packagebackend.ArtifactObservation) (indexArtifact, bool) {
+	parts := strings.Split(strings.Trim(obs.BackendPath, "/"), "/")
+	if len(parts) < 3 {
+		return indexArtifact{}, false
+	}
+	return indexArtifact{PackageName: parts[len(parts)-3], Version: parts[len(parts)-2], Filename: parts[len(parts)-1], BackendPath: obs.BackendPath, DownloadURL: obs.DownloadURL, SHA256: obs.SHA256}, true
+}
+
+func indexFileForRequest(repoDir, requestPath string) (string, string, error) {
+	requestPath = strings.Trim(requestPath, "/")
+	if requestPath == "simple" || requestPath == "simple/" {
+		p, err := packagebackend.SafeJoin(repoDir, ".index", "pypi", "simple", "index.html")
+		return p, "text/html; charset=utf-8", err
+	}
+	if strings.HasPrefix(requestPath, "simple/") {
+		pkg := strings.Trim(strings.TrimPrefix(requestPath, "simple/"), "/")
+		p, err := packagebackend.SafeJoin(repoDir, ".index", "pypi", "simple", normalizePyPIName(pkg), "index.html")
+		return p, "text/html; charset=utf-8", err
+	}
+	if requestPath != "" {
+		p, err := packagebackend.SafeJoin(repoDir, ".index", "npm", requestPath+".json")
+		return p, "application/json", err
+	}
+	return "", "", fmt.Errorf("index path is required")
+}
+
+func normalizePyPIName(name string) string {
+	name = strings.ToLower(strings.TrimSpace(name))
+	return strings.NewReplacer("_", "-", ".", "-").Replace(name)
 }
 
 func escapePath(p string) string {

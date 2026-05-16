@@ -27,6 +27,21 @@ type Capabilities struct {
 // package control-plane service. Implementations must be idempotent where
 // possible: create existing repositories, yanking missing artifacts, and deleting
 // missing repositories should not corrupt control-plane projections.
+type IndexGenerator interface {
+	GenerateIndex(ctx context.Context, repoID, format string) error
+	ServeIndex(ctx context.Context, repoID, path string) (io.Reader, string, error)
+}
+
+type AuthConfig struct {
+	Username    string
+	Password    string
+	BearerToken string
+}
+
+func (a AuthConfig) Configured() bool {
+	return a.BearerToken != "" || a.Username != "" || a.Password != ""
+}
+
 type Backend interface {
 	Type() domain.PackageBackendType
 	Capabilities() Capabilities

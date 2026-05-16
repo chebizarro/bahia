@@ -4,6 +4,8 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
+	"io"
 	"net/url"
 	"os"
 	"strings"
@@ -77,6 +79,66 @@ func TestPackageRegistryServicePublishEnforcesPolicyAndVerifiesSource(t *testing
 	}
 }
 
+func TestPackageRegistryServiceGeneratesNPMIndexAndRemovesYankedVersion(t *testing.T) {
+	svc := newTestPackageService(t)
+	repo := testServiceRepo("npm-dev")
+	created, err := svc.EnsureRepository(context.Background(), &repo, nil)
+	if err != nil {
+		t.Fatalf("EnsureRepository: %v", err)
+	}
+	sourceURL, digest, size := writeSource(t, []byte("npm package"))
+	artifact, err := svc.PublishPackage(context.Background(), created, nil, PackagePublishRequest{PackageName: "pkg", Version: "1.0.0", Filename: "pkg-1.0.0.tgz", SourceURL: sourceURL, SHA256: digest, SizeBytes: size})
+	if err != nil {
+		t.Fatalf("PublishPackage: %v", err)
+	}
+	idx := readIndex(t, svc, created, "pkg")
+	var payload struct {
+		Name     string `json:"name"`
+		Versions map[string]struct {
+			Dist struct {
+				Tarball string `json:"tarball"`
+				Shasum  string `json:"shasum"`
+			} `json:"dist"`
+		} `json:"versions"`
+	}
+	if err := json.Unmarshal([]byte(idx), &payload); err != nil {
+		t.Fatalf("decode npm index: %v\n%s", err, idx)
+	}
+	version, ok := payload.Versions["1.0.0"]
+	if payload.Name != "pkg" || !ok || !strings.Contains(version.Dist.Tarball, "/pkg/1.0.0/pkg-1.0.0.tgz") || version.Dist.Shasum != digest {
+		t.Fatalf("unexpected npm index: %#v", payload)
+	}
+	if _, err := svc.YankPackage(context.Background(), created, artifact, PackageYankRequest{PackageName: "pkg", Version: "1.0.0", Filename: "pkg-1.0.0.tgz", Reason: "bad"}); err != nil {
+		t.Fatalf("YankPackage: %v", err)
+	}
+	idx = readIndex(t, svc, created, "pkg")
+	if strings.Contains(idx, "1.0.0") {
+		t.Fatalf("expected yanked version removed from npm index: %s", idx)
+	}
+}
+
+func TestPackageRegistryServiceGeneratesPyPISimpleIndex(t *testing.T) {
+	svc := newTestPackageService(t)
+	repo := testServiceRepo("pypi-dev")
+	repo.Format = domain.PackageRepositoryFormatPyPI
+	created, err := svc.EnsureRepository(context.Background(), &repo, nil)
+	if err != nil {
+		t.Fatalf("EnsureRepository: %v", err)
+	}
+	sourceURL, digest, size := writeSource(t, []byte("pypi package"))
+	if _, err := svc.PublishPackage(context.Background(), created, nil, PackagePublishRequest{PackageName: "Demo_Pkg", Version: "1.0.0", Filename: "demo_pkg-1.0.0.tar.gz", SourceURL: sourceURL, SHA256: digest, SizeBytes: size}); err != nil {
+		t.Fatalf("PublishPackage: %v", err)
+	}
+	root := readIndex(t, svc, created, "/simple/")
+	if !strings.Contains(root, `<a href="demo-pkg/">demo-pkg</a>`) {
+		t.Fatalf("unexpected pypi root index: %s", root)
+	}
+	pkg := readIndex(t, svc, created, "/simple/demo-pkg/")
+	if !strings.Contains(pkg, "demo_pkg-1.0.0.tar.gz") || !strings.Contains(pkg, "#sha256="+digest) {
+		t.Fatalf("unexpected pypi package index: %s", pkg)
+	}
+}
+
 func TestPackageRegistryServicePromotionYankAndDrift(t *testing.T) {
 	svc := newTestPackageService(t)
 	dev := testServiceRepo("dev")
@@ -119,6 +181,27 @@ func TestPackageRegistryServicePromotionYankAndDrift(t *testing.T) {
 	if !yanked.Deleted || yanked.Status != domain.PackageArtifactStatusDeleted {
 		t.Fatalf("unexpected yanked artifact: %#v", yanked)
 	}
+}
+
+func readIndex(t *testing.T, svc *PackageRegistryService, repo *domain.PackageRepository, path string) string {
+	t.Helper()
+	backend, err := svc.backend(repo.BackendRef)
+	if err != nil {
+		t.Fatalf("backend: %v", err)
+	}
+	generator, ok := backend.(packagebackend.IndexGenerator)
+	if !ok {
+		t.Fatalf("backend does not implement IndexGenerator")
+	}
+	reader, _, err := generator.ServeIndex(context.Background(), repo.ExternalRepositoryName, path)
+	if err != nil {
+		t.Fatalf("ServeIndex(%q): %v", path, err)
+	}
+	data, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatalf("read index: %v", err)
+	}
+	return string(data)
 }
 
 func newTestPackageService(t *testing.T) *PackageRegistryService {

@@ -45,6 +45,9 @@ export const builds = $state([]);
 export const deploymentIntents = $state([]);
 export const deploymentRuns = $state([]);
 export const policies = $state([]);
+export const packageRepositories = $state([]);
+export const packageArtifacts = $state([]);
+export const packagePromotions = $state([]);
 export const workers = $state([]);
 export const events = $state([]);
 
@@ -78,6 +81,9 @@ const buildMap = new Map();
 const deploymentIntentMap = new Map();
 const deploymentRunMap = new Map();
 const policyMap = new Map();
+const packageRepositoryMap = new Map();
+const packageArtifactMap = new Map();
+const packagePromotionMap = new Map();
 const workerMap = new Map();
 const mlModelMap = new Map();
 const mlModelVersionMap = new Map();
@@ -110,6 +116,9 @@ function resetArrays() {
   deploymentIntents.length = 0;
   deploymentRuns.length = 0;
   policies.length = 0;
+  packageRepositories.length = 0;
+  packageArtifacts.length = 0;
+  packagePromotions.length = 0;
   workers.length = 0;
   events.length = 0;
   mlModels.length = 0;
@@ -140,6 +149,9 @@ function refreshCollections() {
   replaceArray(deploymentIntents, Array.from(deploymentIntentMap.values()).sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || ''))));
   replaceArray(deploymentRuns, Array.from(deploymentRunMap.values()).sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || ''))));
   replaceArray(policies, Array.from(policyMap.values()).sort(sortByNameOrId));
+  replaceArray(packageRepositories, Array.from(packageRepositoryMap.values()).sort(sortByNameOrId));
+  replaceArray(packageArtifacts, Array.from(packageArtifactMap.values()).sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || ''))));
+  replaceArray(packagePromotions, Array.from(packagePromotionMap.values()).sort((a, b) => String(b.promoted_at || b.published_at || b.created_at || '').localeCompare(String(a.promoted_at || a.published_at || a.created_at || ''))));
   replaceArray(workers, Array.from(workerMap.values()).sort(sortByNameOrId));
   replaceArray(mlModels, Array.from(mlModelMap.values()).sort(sortByNameOrId));
   replaceArray(mlModelVersions, Array.from(mlModelVersionMap.values()).sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || ''))));
@@ -189,6 +201,9 @@ export function resetControlplaneStore() {
   deploymentIntentMap.clear();
   deploymentRunMap.clear();
   policyMap.clear();
+  packageRepositoryMap.clear();
+  packageArtifactMap.clear();
+  packagePromotionMap.clear();
   workerMap.clear();
   mlModelMap.clear();
   mlModelVersionMap.clear();
@@ -509,6 +524,15 @@ export function applyControlplaneEvent(event) {
       break;
     case KINDS.BAHIA_POLICY_REGISTRY:
       changed = applyProjectedEntity(event, policyMap, ['id', 'policy_id']);
+      break;
+    case KINDS.BAHIA_PACKAGE_REPOSITORY_REGISTRY:
+      changed = applyProjectedEntity(event, packageRepositoryMap, ['id', 'repository_id']);
+      break;
+    case KINDS.BAHIA_PACKAGE_ARTIFACT_REGISTRY:
+      changed = applyProjectedEntity(event, packageArtifactMap, ['id', 'artifact_id']);
+      break;
+    case KINDS.BAHIA_PACKAGE_PROMOTION_REGISTRY:
+      changed = applyProjectedEntity(event, packagePromotionMap, ['id', 'promotion_id']);
       break;
     case KINDS.LOOM_WORKER_AD:
       changed = applyWorkerEvent(event);

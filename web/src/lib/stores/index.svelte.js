@@ -12,6 +12,9 @@ import {
   deploymentIntents,
   deploymentRuns,
   policies,
+  packageRepositories,
+  packageArtifacts,
+  packagePromotions,
   workers,
   events,
   mlModels,
@@ -35,7 +38,7 @@ export { isAuthenticated, currentUser };
 export { systemInfo, loadSystemInfo, currentSystemInfo };
 
 // Nostr-backed dashboard/read-model state
-export { services, environments, states, llmRoutes, llmRouteStates, artifacts, builds, deploymentIntents, deploymentRuns, policies, workers, events, mlModels, mlModelVersions, mlEndpoints, mlEndpointStates, loading, controlplaneConnection, bootstrapControlplane, upsertServiceProjection };
+export { services, environments, states, llmRoutes, llmRouteStates, artifacts, builds, deploymentIntents, deploymentRuns, policies, packageRepositories, packageArtifacts, packagePromotions, workers, events, mlModels, mlModelVersions, mlEndpoints, mlEndpointStates, loading, controlplaneConnection, bootstrapControlplane, upsertServiceProjection };
 
 // Derived state helpers
 export function driftedStates() {
@@ -73,6 +76,9 @@ export async function loadBuilds() { return bootstrapControlplane(); }
 export async function loadDeploymentIntents() { return bootstrapControlplane(); }
 export async function loadDeploymentRuns() { return bootstrapControlplane(); }
 export async function loadPolicies() { return bootstrapControlplane(); }
+export async function loadPackageRepositories() { return bootstrapControlplane(); }
+export async function loadPackageArtifacts() { return bootstrapControlplane(); }
+export async function loadPackagePromotions() { return bootstrapControlplane(); }
 
 export async function loadAll() {
   if (inFlight.all) return inFlight.all;

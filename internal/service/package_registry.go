@@ -282,6 +282,7 @@ func (s *PackageRegistryService) PublishPackage(ctx context.Context, repo *domai
 	artifact.LastError = ""
 	artifact.Deleted = false
 	artifact.UpdatedAt = now
+	s.regenerateIndex(ctx, repo, backend)
 	return artifact, nil
 }
 
@@ -350,6 +351,7 @@ func (s *PackageRegistryService) PromotePackage(ctx context.Context, sourceRepo 
 	target.Deleted = false
 	target.LastError = ""
 	target.UpdatedAt = now
+	s.regenerateIndex(ctx, targetRepo, targetBackend)
 	publication := newPublication(targetRepo.ID, artifact.ID, target.ID, req, domain.PackagePublicationStatusPromoted, domain.PackagePolicyDecisionAllowed)
 	return target, publication, nil
 }
@@ -386,6 +388,7 @@ func (s *PackageRegistryService) YankPackage(ctx context.Context, repo *domain.P
 	artifact.Deleted = true
 	artifact.LastError = ""
 	artifact.UpdatedAt = now
+	s.regenerateIndex(ctx, repo, backend)
 	return &artifact, nil
 }
 
@@ -436,6 +439,20 @@ func (s *PackageRegistryService) ObserveArtifactDrift(ctx context.Context, repo 
 		}
 	}
 	return &PackageDriftObservation{ResourceKind: "artifact", ResourceID: artifact.ID.String(), Expected: expected, Observed: obs.Exists, Drifted: drifted, Reason: reason}, nil
+}
+
+func (s *PackageRegistryService) regenerateIndex(ctx context.Context, repo *domain.PackageRepository, backend packagebackend.Backend) {
+	generator, ok := backend.(packagebackend.IndexGenerator)
+	if !ok || repo == nil {
+		return
+	}
+	repoID := strings.TrimSpace(repo.ExternalRepositoryName)
+	if repoID == "" {
+		repoID = strings.TrimSpace(repo.Name)
+	}
+	if err := generator.GenerateIndex(ctx, repoID, string(repo.Format)); err != nil {
+		s.logger.Warn("package index generation failed", zap.String("repository", repo.Name), zap.String("format", string(repo.Format)), zap.Error(err))
+	}
 }
 
 func (s *PackageRegistryService) validateRepositoryReady(repo *domain.PackageRepository) error {
