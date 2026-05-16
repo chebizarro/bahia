@@ -8,6 +8,7 @@
   const downstreamIds = $derived(downstreamRequestsForTurn(item));
   const title = $derived(titleFor(item));
   const text = $derived(textFor(item));
+  const streamingContent = $derived(item?.streamingContent || '');
   const plan = $derived(item?.plan || ((item?.status === 'planned' || session?.state === 'awaiting_approval') ? session?.currentPlan : null));
   const planHash = $derived(item?.planHash || session?.lastPlanHash || '');
 
@@ -51,7 +52,9 @@
     <span>{formatTime(item?.createdAt)}</span>
   </div>
 
-  {#if text}
+  {#if streamingContent}
+    <p class="streaming-text">{streamingContent}<span class="cursor" aria-hidden="true">▌</span></p>
+  {:else if text}
     <p>{text}</p>
   {/if}
 
@@ -76,6 +79,9 @@
   .role { color: var(--text-primary); font-weight: 700; }
   .kind { text-transform: capitalize; }
   p { margin: 0; color: var(--text-primary); white-space: pre-wrap; word-break: break-word; }
+  .streaming-text { font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace); }
+  .cursor { display: inline-block; margin-left: 0.1rem; animation: blink 1s steps(2, start) infinite; color: var(--accent-color, currentColor); }
+  @keyframes blink { 50% { opacity: 0; } }
   .downstream { display: flex; flex-wrap: wrap; gap: 0.35rem; align-items: center; }
   code { font-size: 0.72rem; color: var(--text-muted); word-break: break-all; }
   .badge { border-radius: 999px; padding: 0.15rem 0.45rem; font-size: 0.7rem; border: 1px solid var(--border-color); color: var(--text-muted); }

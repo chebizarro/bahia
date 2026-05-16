@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -100,20 +101,30 @@ func (c *ChatClient) PlanFromPrompt(ctx context.Context, systemPrompt string, us
 	return plan, nil
 }
 
-func (c *ChatClient) callChatCompletions(ctx context.Context, systemPrompt, userPrompt string) (string, error) {
-	if strings.TrimSpace(c.model) == "" {
-		return "", fmt.Errorf("llm model is required")
+// PlanFromPromptStreaming streams planning tokens and parses the accumulated response into an AssistantPlan.
+func (c *ChatClient) PlanFromPromptStreaming(ctx context.Context, systemPrompt, userPrompt string, onChunk func(chunk string)) (*domain.AssistantPlan, error) {
+	content, err := c.callChatCompletionsStreaming(ctx, systemPrompt, userPrompt, onChunk)
+	if err != nil {
+		return nil, err
 	}
-	reqBody := map[string]any{
-		"model":       c.model,
-		"max_tokens":  c.maxTokens,
-		"temperature": c.temperature,
-		"stream":      false,
-		"messages": []map[string]string{
-			{"role": "system", "content": systemPrompt + "\n\nReturn only JSON matching the AssistantPlan schema."},
-			{"role": "user", "content": userPrompt},
-		},
-		"response_format": assistantPlanResponseFormat(),
+	plan, err := parseAssistantPlan(content)
+	if err != nil {
+		c.logger.Warn("invalid streamed assistant plan JSON", "error", err)
+		return &domain.AssistantPlan{
+			Summary:            "The planning model returned invalid JSON.",
+			NeedsClarification: true,
+			ClarifyingQuestion: "I could not parse the generated plan. Please restate the request with explicit target resources and desired action.",
+			RiskLevel:          "low",
+			Steps:              []domain.AssistantPlanStep{},
+		}, nil
+	}
+	return plan, nil
+}
+
+func (c *ChatClient) callChatCompletions(ctx context.Context, systemPrompt, userPrompt string) (string, error) {
+	reqBody, err := c.chatCompletionRequestBody(systemPrompt, userPrompt, false)
+	if err != nil {
+		return "", err
 	}
 	body, err := json.Marshal(reqBody)
 	if err != nil {
@@ -172,6 +183,119 @@ func (c *ChatClient) callChatCompletions(ctx context.Context, systemPrompt, user
 		return "", fmt.Errorf("empty response from chat completion API")
 	}
 	return apiResp.Choices[0].Message.Content, nil
+}
+
+func (c *ChatClient) callChatCompletionsStreaming(ctx context.Context, systemPrompt, userPrompt string, onChunk func(chunk string)) (string, error) {
+	reqBody, err := c.chatCompletionRequestBody(systemPrompt, userPrompt, true)
+	if err != nil {
+		return "", err
+	}
+	body, err := json.Marshal(reqBody)
+	if err != nil {
+		return "", fmt.Errorf("marshal streaming chat completion request: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/v1/chat/completions", bytes.NewReader(body))
+	if err != nil {
+		return "", fmt.Errorf("create streaming chat completion request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
+	if c.apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("send streaming chat completion request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		respBody, readErr := io.ReadAll(resp.Body)
+		if readErr != nil {
+			return "", fmt.Errorf("read streaming chat completion error response: %w", readErr)
+		}
+		if isContextLimitResponse(resp.StatusCode, respBody) {
+			return "", &ContextTooLargeError{StatusCode: resp.StatusCode, Message: string(respBody)}
+		}
+		return "", fmt.Errorf("streaming chat completion API error %d: %s", resp.StatusCode, string(respBody))
+	}
+
+	var accumulated strings.Builder
+	scanner := bufio.NewScanner(resp.Body)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, ":") {
+			continue
+		}
+		if !strings.HasPrefix(line, "data:") {
+			continue
+		}
+		data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		if data == "[DONE]" {
+			break
+		}
+		chunk, err := parseStreamingDelta(data)
+		if err != nil {
+			return "", err
+		}
+		if chunk == "" {
+			continue
+		}
+		accumulated.WriteString(chunk)
+		if onChunk != nil {
+			onChunk(chunk)
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return "", fmt.Errorf("read streaming chat completion response: %w", err)
+	}
+	if strings.TrimSpace(accumulated.String()) == "" {
+		return "", fmt.Errorf("empty response from streaming chat completion API")
+	}
+	return accumulated.String(), nil
+}
+
+func (c *ChatClient) chatCompletionRequestBody(systemPrompt, userPrompt string, stream bool) (map[string]any, error) {
+	if strings.TrimSpace(c.model) == "" {
+		return nil, fmt.Errorf("llm model is required")
+	}
+	return map[string]any{
+		"model":       c.model,
+		"max_tokens":  c.maxTokens,
+		"temperature": c.temperature,
+		"stream":      stream,
+		"messages": []map[string]string{
+			{"role": "system", "content": systemPrompt + "\n\nReturn only JSON matching the AssistantPlan schema."},
+			{"role": "user", "content": userPrompt},
+		},
+		"response_format": assistantPlanResponseFormat(),
+	}, nil
+}
+
+func parseStreamingDelta(data string) (string, error) {
+	var apiResp struct {
+		Choices []struct {
+			Delta struct {
+				Content string `json:"content"`
+			} `json:"delta"`
+		} `json:"choices"`
+		Error *struct {
+			Message string `json:"message"`
+		} `json:"error,omitempty"`
+	}
+	if err := json.Unmarshal([]byte(data), &apiResp); err != nil {
+		return "", fmt.Errorf("unmarshal streaming chat completion chunk: %w", err)
+	}
+	if apiResp.Error != nil {
+		return "", fmt.Errorf("streaming chat completion API error: %s", apiResp.Error.Message)
+	}
+	if len(apiResp.Choices) == 0 {
+		return "", nil
+	}
+	return apiResp.Choices[0].Delta.Content, nil
 }
 
 func parseAssistantPlan(content string) (*domain.AssistantPlan, error) {
@@ -251,4 +375,5 @@ func assistantPlanResponseFormat() map[string]any {
 
 var _ interface {
 	PlanFromPrompt(ctx context.Context, systemPrompt string, userPrompt string) (*domain.AssistantPlan, error)
+	PlanFromPromptStreaming(ctx context.Context, systemPrompt, userPrompt string, onChunk func(chunk string)) (*domain.AssistantPlan, error)
 } = (*ChatClient)(nil)

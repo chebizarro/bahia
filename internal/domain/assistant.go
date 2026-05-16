@@ -48,6 +48,7 @@ type AssistantSession struct {
 	SessionID         string                `json:"session_id"`
 	State             AssistantSessionState `json:"state"`
 	OperatorPubkey    string                `json:"operator_pubkey"`
+	Participants      []string              `json:"participants,omitempty"`
 	AssistantID       string                `json:"assistant_id"`
 	AssistantPubkey   string                `json:"assistant_pubkey,omitempty"`
 	CurrentTurnID     string                `json:"current_turn_id,omitempty"`

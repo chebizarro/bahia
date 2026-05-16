@@ -1,0 +1,285 @@
+package service
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"log/slog"
+	"strings"
+
+	"github.com/nbd-wtf/go-nostr"
+
+	"github.com/openagentsinc/bahia/internal/domain"
+)
+
+// AssistantSessionRecoveryConfig configures startup recovery of assistant sessions.
+type AssistantSessionRecoveryConfig struct {
+	RecentLimit   int
+	ServicePubkey string
+	Logger        *slog.Logger
+}
+
+// AssistantSessionRecoveryRunner resumes observation of pending assistant steps after restart.
+type AssistantSessionRecoveryRunner struct {
+	orchestrator  *AssistantOrchestrator
+	limit         int
+	servicePubkey string
+	logger        *slog.Logger
+}
+
+type recoveredSessionEvent struct {
+	session domain.AssistantSession
+	created nostr.Timestamp
+}
+
+func NewAssistantSessionRecoveryRunner(orchestrator *AssistantOrchestrator, cfg AssistantSessionRecoveryConfig) *AssistantSessionRecoveryRunner {
+	logger := cfg.Logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+	limit := cfg.RecentLimit
+	if limit <= 0 {
+		limit = 500
+	}
+	return &AssistantSessionRecoveryRunner{orchestrator: orchestrator, limit: limit, servicePubkey: strings.TrimSpace(cfg.ServicePubkey), logger: logger.With("component", "assistant_session_recovery")}
+}
+
+func (r *AssistantSessionRecoveryRunner) Name() string { return "assistant-session-recovery" }
+
+// Run performs one EOSE-aware startup pass. It does not periodically poll.
+func (r *AssistantSessionRecoveryRunner) Run(ctx context.Context) error {
+	if r == nil || r.orchestrator == nil {
+		return nil
+	}
+	o := r.orchestrator
+	if o.subscriber == nil {
+		r.logger.Warn("assistant session recovery skipped: relay subscriber not configured")
+		return nil
+	}
+	servicePubkey := r.servicePubkey
+	if servicePubkey == "" {
+		servicePubkey = strings.TrimSpace(o.identity.Pubkey)
+	}
+	if servicePubkey == "" {
+		r.logger.Warn("assistant session recovery skipped: service pubkey not configured")
+		return nil
+	}
+
+	r.logger.Info("assistant session recovery started", "limit", r.limit, "service_pubkey", servicePubkey)
+	sessions, err := r.queryRecentSessions(ctx, servicePubkey)
+	if err != nil {
+		r.logger.Warn("assistant session recovery query failed", "error", err)
+		return nil
+	}
+	for i := range sessions {
+		if ctx.Err() != nil {
+			return nil
+		}
+		r.recoverSession(ctx, &sessions[i])
+	}
+	r.logger.Info("assistant session recovery completed", "sessions_checked", len(sessions))
+	return nil
+}
+
+func (r *AssistantSessionRecoveryRunner) queryRecentSessions(ctx context.Context, servicePubkey string) ([]domain.AssistantSession, error) {
+	merged, err := r.orchestrator.subscriber.SubscribeAllWithEOSE(ctx, []nostr.Filter{{Kinds: []int{domain.KindAssistantSession}, Authors: []string{servicePubkey}, Limit: r.limit}})
+	if err != nil {
+		return nil, err
+	}
+	defer merged.Close()
+
+	latest := map[string]recoveredSessionEvent{}
+	seenEvents := map[string]struct{}{}
+	eventsCh := merged.EventChan()
+	closedCh := merged.ClosedChan()
+	eoseCh := merged.EOSEChan()
+	for {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case closed, ok := <-closedCh:
+			if !ok {
+				closedCh = nil
+				continue
+			}
+			r.logger.Warn("assistant session recovery relay subscription closed", "relay", closed.RelayURL, "reason", closed.Reason)
+		case ev, ok := <-eventsCh:
+			if !ok {
+				return sessionEventsToSlice(latest), nil
+			}
+			if ev == nil {
+				continue
+			}
+			if _, dup := seenEvents[ev.ID]; dup {
+				continue
+			}
+			seenEvents[ev.ID] = struct{}{}
+			var session domain.AssistantSession
+			if err := json.Unmarshal([]byte(ev.Content), &session); err != nil {
+				r.logger.Warn("failed to parse recovered assistant session", "event_id", ev.ID, "error", err)
+				continue
+			}
+			if session.SessionID == "" {
+				continue
+			}
+			if current, ok := latest[session.SessionID]; !ok || ev.CreatedAt > current.created {
+				latest[session.SessionID] = recoveredSessionEvent{session: session, created: ev.CreatedAt}
+			}
+		case <-eoseCh:
+			return sessionEventsToSlice(latest), nil
+		}
+	}
+}
+
+func sessionEventsToSlice(latest map[string]recoveredSessionEvent) []domain.AssistantSession {
+	sessions := make([]domain.AssistantSession, 0, len(latest))
+	for _, item := range latest {
+		sessions = append(sessions, item.session)
+	}
+	return sessions
+}
+
+func (r *AssistantSessionRecoveryRunner) recoverSession(ctx context.Context, recovered *domain.AssistantSession) {
+	if recovered == nil || len(recovered.PendingSteps) == 0 {
+		return
+	}
+	if recovered.State != domain.AssistantSessionStateExecuting && recovered.State != domain.AssistantSessionStateBlocked {
+		return
+	}
+	lock := r.orchestrator.lockForSession(recovered.SessionID)
+	lock.Lock()
+	session := r.orchestrator.loadOrCreateSession(recovered.SessionID, recovered.OperatorPubkey)
+	*session = *recovered
+	lock.Unlock()
+
+	r.logger.Info("recovering assistant session", "session_id", recovered.SessionID, "state", recovered.State, "pending_steps", len(recovered.PendingSteps))
+	for {
+		lock.Lock()
+		if session.State != domain.AssistantSessionStateExecuting && session.State != domain.AssistantSessionStateBlocked {
+			lock.Unlock()
+			return
+		}
+		if len(session.PendingSteps) == 0 {
+			session.State = domain.AssistantSessionStateCompleted
+			_ = r.orchestrator.publishSession(ctx, session)
+			lock.Unlock()
+			_, _ = r.orchestrator.publishResult(ctx, nil, recovered.SessionID, "completed", "completed", map[string]any{"summary": "assistant plan completed during startup recovery", "plan_hash": session.LastPlanHash})
+			return
+		}
+		step := session.PendingSteps[0]
+		receipt := r.receiptForStep(session, step)
+		if receipt == nil {
+			r.logger.Warn("pending assistant step has no async receipt; leaving session blocked", "session_id", session.SessionID, "step_id", step.StepID)
+			session.State = domain.AssistantSessionStateBlocked
+			_ = r.orchestrator.publishSession(ctx, session)
+			lock.Unlock()
+			return
+		}
+		session.State = domain.AssistantSessionStateExecuting
+		_ = r.orchestrator.publishSession(ctx, session)
+		lock.Unlock()
+
+		r.logger.Info("recovering pending assistant step", "session_id", recovered.SessionID, "step_id", step.StepID, "downstream_request", receipt.RequestEventID)
+		outcome, err := r.findTerminalResult(ctx, receipt)
+		if err == nil && outcome.Status == "" {
+			outcome, err = r.orchestrator.observeDownstreamResult(ctx, recovered.SessionID, step, receipt)
+		}
+
+		lock.Lock()
+		if err != nil || outcome.Status == "blocked" {
+			session.State = domain.AssistantSessionStateBlocked
+			_ = r.orchestrator.publishSession(ctx, session)
+			lock.Unlock()
+			r.logger.Warn("assistant session recovery blocked", "session_id", recovered.SessionID, "step_id", step.StepID, "error", err)
+			_, _ = r.orchestrator.publishResult(ctx, nil, recovered.SessionID, "blocked", "blocked", map[string]any{"summary": "downstream observation blocked during startup recovery", "plan_hash": session.LastPlanHash, "step_id": step.StepID, "tool_name": step.ToolName})
+			return
+		}
+		if outcome.Status == "failed" {
+			session.State = domain.AssistantSessionStateFailed
+			_ = r.orchestrator.publishSession(ctx, session)
+			lock.Unlock()
+			r.logger.Info("assistant step recovered as failed", "session_id", recovered.SessionID, "step_id", step.StepID)
+			_, _ = r.orchestrator.publishResult(ctx, nil, recovered.SessionID, "failed", "downstream_failed", map[string]any{"summary": "downstream step failed before/during startup recovery", "plan_hash": session.LastPlanHash, "step_id": step.StepID, "tool_name": step.ToolName, "downstream_result": outcome.Event})
+			return
+		}
+		r.orchestrator.clearPendingReceipt(session, receipt.IdempotencyKey)
+		removePendingStep(session, step.StepID)
+		_ = r.orchestrator.publishSession(ctx, session)
+		lock.Unlock()
+		r.logger.Info("assistant step recovered as completed", "session_id", recovered.SessionID, "step_id", step.StepID)
+	}
+}
+
+func (r *AssistantSessionRecoveryRunner) receiptForStep(session *domain.AssistantSession, step domain.AssistantPlanStep) *domain.AsyncToolReceipt {
+	if step.IdempotencyKey != "" {
+		return r.orchestrator.pendingReceipt(session, step.IdempotencyKey)
+	}
+	if session == nil || session.Metadata == nil {
+		return nil
+	}
+	receipts, _ := session.Metadata["pending_receipts"].(map[string]any)
+	for key := range receipts {
+		receipt := r.orchestrator.pendingReceipt(session, key)
+		if receipt != nil && (receipt.ToolName == step.ToolName || step.ToolName == "") {
+			return receipt
+		}
+	}
+	return nil
+}
+
+func (r *AssistantSessionRecoveryRunner) findTerminalResult(ctx context.Context, receipt *domain.AsyncToolReceipt) (downstreamOutcome, error) {
+	if receipt == nil || receipt.RequestEventID == "" || len(receipt.ResultKinds) == 0 {
+		return downstreamOutcome{Status: "blocked"}, fmt.Errorf("downstream receipt is missing observable result metadata")
+	}
+	merged, err := r.orchestrator.subscriber.SubscribeAllWithEOSE(ctx, []nostr.Filter{{Kinds: append([]int(nil), receipt.ResultKinds...), Tags: nostr.TagMap{"e": []string{receipt.RequestEventID}}}})
+	if err != nil {
+		return downstreamOutcome{Status: "blocked"}, err
+	}
+	defer merged.Close()
+	seen := map[string]struct{}{}
+	eventsCh := merged.EventChan()
+	closedCh := merged.ClosedChan()
+	eoseCh := merged.EOSEChan()
+	for {
+		select {
+		case <-ctx.Done():
+			return downstreamOutcome{Status: "blocked"}, ctx.Err()
+		case closed, ok := <-closedCh:
+			if !ok {
+				closedCh = nil
+				continue
+			}
+			return downstreamOutcome{Status: "blocked"}, fmt.Errorf("relay subscription closed during recovery backfill: relay=%s reason=%s", closed.RelayURL, closed.Reason)
+		case ev, ok := <-eventsCh:
+			if !ok {
+				return downstreamOutcome{}, nil
+			}
+			if ev == nil {
+				continue
+			}
+			if _, dup := seen[ev.ID]; dup {
+				continue
+			}
+			seen[ev.ID] = struct{}{}
+			status := terminalStatus(ev)
+			if status == "completed" || status == "failed" {
+				return downstreamOutcome{Status: status, Event: ev}, nil
+			}
+		case <-eoseCh:
+			return downstreamOutcome{}, nil
+		}
+	}
+}
+
+func removePendingStep(session *domain.AssistantSession, stepID string) {
+	if session == nil || len(session.PendingSteps) == 0 {
+		return
+	}
+	for i := range session.PendingSteps {
+		if session.PendingSteps[i].StepID == stepID {
+			session.PendingSteps = append(session.PendingSteps[:i], session.PendingSteps[i+1:]...)
+			return
+		}
+	}
+	session.PendingSteps = session.PendingSteps[1:]
+}

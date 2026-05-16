@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	canonicalnostr "fiatjaf.com/nostr"
 	"github.com/nbd-wtf/go-nostr"
@@ -20,6 +21,10 @@ const defaultAssistantAgentID = "bahia-operator-assistant"
 // AssistantChatClient is the LLM planner surface used by the orchestrator.
 type AssistantChatClient interface {
 	PlanFromPrompt(ctx context.Context, systemPrompt string, userPrompt string) (*domain.AssistantPlan, error)
+}
+
+type AssistantStreamingChatClient interface {
+	PlanFromPromptStreaming(ctx context.Context, systemPrompt, userPrompt string, onChunk func(chunk string)) (*domain.AssistantPlan, error)
 }
 
 // AssistantContextProvider assembles bounded operational context for planning.
@@ -44,6 +49,7 @@ type AssistantRelaySubscriber interface {
 type AssistantMergedSubscription interface {
 	EventChan() <-chan *nostr.Event
 	ClosedChan() <-chan AssistantRelayClosed
+	EOSEChan() <-chan struct{}
 	Close()
 }
 
@@ -129,6 +135,7 @@ func NewAssistantOrchestrator(config AssistantOrchestratorConfig) *AssistantOrch
 	}
 	for _, session := range config.InitialSessions {
 		copySession := session
+		normalizeSessionParticipants(&copySession)
 		if copySession.SessionID != "" {
 			o.sessions[copySession.SessionID] = &copySession
 		}
@@ -167,8 +174,8 @@ func (o *AssistantOrchestrator) HandlePrompt(ctx context.Context, event *nostr.E
 	}
 
 	session := o.loadOrCreateSession(req.SessionID, event.PubKey)
+	addSessionParticipant(session, event.PubKey)
 	session.State = domain.AssistantSessionStatePlanning
-	session.OperatorPubkey = event.PubKey
 	session.CurrentTurnID = req.TurnID
 	session.CurrentRequestID = event.ID
 	if err := o.publishSession(ctx, session); err != nil {
@@ -184,7 +191,7 @@ func (o *AssistantOrchestrator) HandlePrompt(ctx context.Context, event *nostr.E
 		_ = o.publishSession(ctx, session)
 		return o.publishPromptResult(ctx, dTag, event, req.SessionID, "failed", "context_error", map[string]any{"summary": "failed to build assistant context", "error": err.Error()})
 	}
-	plan, err := o.chatClient.PlanFromPrompt(ctx, o.systemPrompt(), o.userPrompt(req, contextBlock))
+	plan, err := o.planFromPrompt(ctx, event, req.SessionID, o.systemPrompt(), o.userPrompt(req, contextBlock))
 	if err != nil {
 		session.State = domain.AssistantSessionStateIdle
 		_ = o.publishSession(ctx, session)
@@ -242,7 +249,8 @@ func (o *AssistantOrchestrator) HandleApproval(ctx context.Context, event *nostr
 	planHash := tagValue(event.Tags, "plan-hash")
 	decision := strings.ToLower(strings.TrimSpace(tagValue(event.Tags, "decision")))
 	var content struct {
-		Reason string `json:"reason,omitempty"`
+		Reason       string                `json:"reason,omitempty"`
+		ModifiedPlan *domain.AssistantPlan `json:"modified_plan,omitempty"`
 	}
 	if strings.TrimSpace(event.Content) != "" {
 		if err := json.Unmarshal([]byte(event.Content), &content); err != nil {
@@ -275,6 +283,10 @@ func (o *AssistantOrchestrator) HandleApproval(ctx context.Context, event *nostr
 		lock.Unlock()
 		return o.publishApprovalResult(ctx, dTag, event, sessionID, "failed", "unknown_session", map[string]any{"summary": "assistant session is not known"})
 	}
+	if !sessionHasParticipant(session, event.PubKey) {
+		lock.Unlock()
+		return o.publishApprovalResult(ctx, dTag, event, sessionID, "failed", "unauthorized_participant", map[string]any{"summary": "operator is not a participant in this assistant session"})
+	}
 	if decision == "cancel" {
 		if session.State != domain.AssistantSessionStateExecuting && session.State != domain.AssistantSessionStateBlocked && session.State != domain.AssistantSessionStateAwaitingApproval {
 			lock.Unlock()
@@ -287,7 +299,33 @@ func (o *AssistantOrchestrator) HandleApproval(ctx context.Context, event *nostr
 		lock.Unlock()
 		return o.publishApprovalResult(ctx, dTag, event, sessionID, "failed", "cancelled", map[string]any{"summary": "assistant session cancelled by operator", "message": "operator cancel; no downstream rollback attempted", "reason": content.Reason, "plan_hash": planHash})
 	}
-	if session.LastPlanHash != planHash || session.CurrentPlan == nil {
+	if content.ModifiedPlan != nil && decision != "approve" {
+		lock.Unlock()
+		return o.publishApprovalResult(ctx, dTag, event, sessionID, "failed", "validation_error", map[string]any{"summary": "modified_plan is only valid for approve decisions", "plan_hash": planHash})
+	}
+	if content.ModifiedPlan != nil {
+		if session.CurrentPlan == nil || session.LastPlanHash == "" {
+			lock.Unlock()
+			return o.publishApprovalResult(ctx, dTag, event, sessionID, "failed", "stale_approval", map[string]any{"summary": "approval does not match the latest assistant plan", "plan_hash": planHash, "latest_plan_hash": session.LastPlanHash})
+		}
+		if err := o.validatePlan(*content.ModifiedPlan); err != nil {
+			lock.Unlock()
+			return o.publishApprovalResult(ctx, dTag, event, sessionID, "failed", "plan_validation_error", map[string]any{"summary": "modified assistant plan failed validation", "plan_hash": planHash, "error": err.Error()})
+		}
+		modifiedHash := domain.ComputePlanHash(*content.ModifiedPlan, sessionID)
+		if modifiedHash == "" {
+			lock.Unlock()
+			return o.publishApprovalResult(ctx, dTag, event, sessionID, "failed", "plan_hash_error", map[string]any{"summary": "modified assistant plan could not be hashed"})
+		}
+		if modifiedHash != planHash {
+			lock.Unlock()
+			return o.publishApprovalResult(ctx, dTag, event, sessionID, "failed", "plan_hash_mismatch", map[string]any{"summary": "modified plan hash does not match approval tag", "plan_hash": planHash, "computed_plan_hash": modifiedHash})
+		}
+		session.CurrentPlan = content.ModifiedPlan
+		session.LastPlanHash = modifiedHash
+		session.PendingSteps = append([]domain.AssistantPlanStep(nil), content.ModifiedPlan.Steps...)
+		_ = o.publishSession(ctx, session)
+	} else if session.LastPlanHash != planHash || session.CurrentPlan == nil {
 		lock.Unlock()
 		return o.publishApprovalResult(ctx, dTag, event, sessionID, "failed", "stale_approval", map[string]any{"summary": "approval does not match the latest assistant plan", "plan_hash": planHash, "latest_plan_hash": session.LastPlanHash})
 	}
@@ -547,7 +585,7 @@ func (o *AssistantOrchestrator) loadOrCreateSession(sessionID, operator string) 
 	if s := o.sessions[sessionID]; s != nil {
 		return s
 	}
-	s := &domain.AssistantSession{SessionID: sessionID, State: domain.AssistantSessionStateIdle, OperatorPubkey: operator, AssistantID: o.identity.AgentID, AssistantPubkey: o.identity.Pubkey, Metadata: map[string]any{"assistant_npub": o.identity.Npub}}
+	s := &domain.AssistantSession{SessionID: sessionID, State: domain.AssistantSessionStateIdle, OperatorPubkey: operator, Participants: []string{operator}, AssistantID: o.identity.AgentID, AssistantPubkey: o.identity.Pubkey, Metadata: map[string]any{"assistant_npub": o.identity.Npub}}
 	o.sessions[sessionID] = s
 	return s
 }
@@ -556,6 +594,116 @@ func (o *AssistantOrchestrator) session(sessionID string) *domain.AssistantSessi
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	return o.sessions[sessionID]
+}
+
+// IsSessionParticipant reports whether operator may interact with an existing session.
+// Unknown sessions return true so callers can allow new-session creation.
+func (o *AssistantOrchestrator) IsSessionParticipant(sessionID, operator string) bool {
+	sessionID = strings.TrimSpace(sessionID)
+	operator = strings.ToLower(strings.TrimSpace(operator))
+	if sessionID == "" || operator == "" {
+		return false
+	}
+	o.mu.Lock()
+	session := o.sessions[sessionID]
+	o.mu.Unlock()
+	if session == nil {
+		return true
+	}
+	return sessionHasParticipant(session, operator)
+}
+
+func normalizeSessionParticipants(session *domain.AssistantSession) {
+	if session == nil {
+		return
+	}
+	if strings.TrimSpace(session.OperatorPubkey) == "" && len(session.Participants) > 0 {
+		session.OperatorPubkey = session.Participants[0]
+	}
+	addSessionParticipant(session, session.OperatorPubkey)
+	participants := make([]string, 0, len(session.Participants))
+	seen := map[string]struct{}{}
+	for _, participant := range session.Participants {
+		clean := strings.ToLower(strings.TrimSpace(participant))
+		if clean == "" {
+			continue
+		}
+		if _, ok := seen[clean]; ok {
+			continue
+		}
+		seen[clean] = struct{}{}
+		participants = append(participants, clean)
+	}
+	session.Participants = participants
+}
+
+func addSessionParticipant(session *domain.AssistantSession, operator string) {
+	if session == nil {
+		return
+	}
+	operator = strings.ToLower(strings.TrimSpace(operator))
+	if operator == "" {
+		return
+	}
+	if strings.TrimSpace(session.OperatorPubkey) == "" {
+		session.OperatorPubkey = operator
+	}
+	for _, participant := range session.Participants {
+		if strings.ToLower(strings.TrimSpace(participant)) == operator {
+			return
+		}
+	}
+	session.Participants = append(session.Participants, operator)
+}
+
+func sessionHasParticipant(session *domain.AssistantSession, operator string) bool {
+	if session == nil {
+		return false
+	}
+	operator = strings.ToLower(strings.TrimSpace(operator))
+	if operator == "" {
+		return false
+	}
+	if strings.ToLower(strings.TrimSpace(session.OperatorPubkey)) == operator {
+		return true
+	}
+	for _, participant := range session.Participants {
+		if strings.ToLower(strings.TrimSpace(participant)) == operator {
+			return true
+		}
+	}
+	return false
+}
+
+func (o *AssistantOrchestrator) planFromPrompt(ctx context.Context, requestEvent *nostr.Event, sessionID, systemPrompt, userPrompt string) (*domain.AssistantPlan, error) {
+	streamingClient, ok := o.chatClient.(AssistantStreamingChatClient)
+	if !ok {
+		return o.chatClient.PlanFromPrompt(ctx, systemPrompt, userPrompt)
+	}
+
+	var pending strings.Builder
+	lastPublished := time.Now()
+	flush := func(force bool) {
+		chunk := pending.String()
+		if chunk == "" {
+			return
+		}
+		if !force && time.Since(lastPublished) < 200*time.Millisecond && len(chunk) < 50 {
+			return
+		}
+		pending.Reset()
+		lastPublished = time.Now()
+		if err := o.publishStatus(ctx, requestEvent, sessionID, "planning", map[string]any{"phase": "planning", "streaming": true, "chunk": chunk}); err != nil {
+			o.logger.Warn("failed to publish assistant planning stream chunk", "error", err)
+		}
+	}
+
+	plan, err := streamingClient.PlanFromPromptStreaming(ctx, systemPrompt, userPrompt, func(chunk string) {
+		pending.WriteString(chunk)
+		flush(false)
+	})
+	flush(true)
+	return plan, err
 }
 
 func (o *AssistantOrchestrator) validatePlan(plan domain.AssistantPlan) error {
@@ -582,6 +730,7 @@ func (o *AssistantOrchestrator) validatePlan(plan domain.AssistantPlan) error {
 }
 
 func (o *AssistantOrchestrator) publishSession(ctx context.Context, session *domain.AssistantSession) error {
+	normalizeSessionParticipants(session)
 	content, err := json.Marshal(session)
 	if err != nil {
 		return fmt.Errorf("marshal assistant session: %w", err)
@@ -589,10 +738,14 @@ func (o *AssistantOrchestrator) publishSession(ctx context.Context, session *dom
 	tags := nostr.Tags{
 		{"d", session.SessionID},
 		{"session", session.SessionID},
-		{"p", session.OperatorPubkey, "", "operator"},
-		{"agent", o.identity.AgentID},
-		{"status", string(session.State)},
 	}
+	for _, participant := range session.Participants {
+		tags = append(tags, nostr.Tag{"p", participant, "", "operator"})
+	}
+	tags = append(tags,
+		nostr.Tag{"agent", o.identity.AgentID},
+		nostr.Tag{"status", string(session.State)},
+	)
 	ev := &nostr.Event{Kind: domain.KindAssistantSession, CreatedAt: nostr.Now(), Tags: tags, Content: string(content)}
 	return o.signAndPublish(ctx, ev)
 }
@@ -615,6 +768,9 @@ func (o *AssistantOrchestrator) publishStatus(ctx context.Context, requestEvent 
 	}
 	if downstream := stringFromMap(content, "downstream_request"); downstream != "" {
 		tags = append(tags, nostr.Tag{"downstream-request", downstream})
+	}
+	if streaming, _ := content["streaming"].(bool); streaming {
+		tags = append(tags, nostr.Tag{"streaming", "true"})
 	}
 	ev := &nostr.Event{Kind: domain.KindAssistantStatus, CreatedAt: nostr.Now(), Tags: tags, Content: string(contentJSON)}
 	return o.signAndPublish(ctx, ev)

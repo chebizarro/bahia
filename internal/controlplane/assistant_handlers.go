@@ -70,6 +70,10 @@ func (r *Reactor) handleAssistantApprovalRequest(ctx context.Context, event *nos
 			return
 		}
 	}
+	if !r.assistantOrchestrator.IsSessionParticipant(assistantSessionFromEvent(event), event.PubKey) {
+		_ = r.assistantOrchestrator.PublishFailure(ctx, event, assistantSessionFromEvent(event), "unauthorized_participant", "requester is not a participant in this assistant session")
+		return
+	}
 
 	go func() {
 		if err := r.assistantOrchestrator.HandleApproval(ctx, event); err != nil {

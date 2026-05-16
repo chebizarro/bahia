@@ -45,6 +45,55 @@ async function sha256Hex(input) {
     .join('');
 }
 
+function stableJsonValue(value) {
+  if (Array.isArray(value)) return value.map(stableJsonValue);
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.keys(value)
+        .sort()
+        .map((key) => [key, stableJsonValue(value[key])])
+    );
+  }
+  return value;
+}
+
+function normalizeAssistantPlanForHash(plan = {}) {
+  const steps = Array.isArray(plan.steps) ? plan.steps : [];
+  const normalized = {
+    summary: plan.summary || '',
+    needs_clarification: Boolean(plan.needs_clarification ?? plan.needsClarification)
+  };
+  const clarifyingQuestion = plan.clarifying_question || plan.clarifyingQuestion;
+  if (clarifyingQuestion) normalized.clarifying_question = clarifyingQuestion;
+  normalized.risk_level = plan.risk_level || plan.riskLevel || '';
+  const contextRefs = plan.context_refs || plan.contextRefs;
+  if (Array.isArray(contextRefs) && contextRefs.length > 0) normalized.context_refs = contextRefs;
+  normalized.steps = steps.map((step = {}) => {
+    const out = {
+      step_id: step.step_id || step.stepId || '',
+      title: step.title || '',
+      description: step.description || '',
+      tool_name: step.tool_name || step.toolName || '',
+      tool_args: stableJsonValue(step.tool_args || step.toolArgs || {})
+    };
+    const argsPreview = step.args_preview || step.argsPreview;
+    if (argsPreview && Object.keys(argsPreview).length > 0) out.args_preview = stableJsonValue(argsPreview);
+    const idempotencyKey = step.idempotency_key || step.idempotencyKey;
+    if (idempotencyKey) out.idempotency_key = idempotencyKey;
+    return out;
+  });
+  return normalized;
+}
+
+export async function computeAssistantPlanHash(plan, sessionId) {
+  if (!sessionId) throw new Error('sessionId is required to compute assistant plan hash');
+  const payload = JSON.stringify({
+    session_id: sessionId,
+    plan: normalizeAssistantPlanForHash(plan)
+  });
+  return sha256Hex(payload);
+}
+
 export async function validateInboundNostrEvent(event, { now = currentUnixTime() } = {}) {
   if (!event || typeof event !== 'object' || Array.isArray(event)) {
     throw new Error('event must be an object');
@@ -460,11 +509,24 @@ function getTaggedPubkeyRef(event, role = '') {
   return tag?.[1] || '';
 }
 
+function getTaggedPubkeyRefs(event, role = '') {
+  return (event?.tags || [])
+    .filter((candidate) => Array.isArray(candidate) && candidate[0] === 'p' && candidate[1] && (!role || candidate[3] === role))
+    .map((candidate) => candidate[1]);
+}
+
 export function parseAssistantSessionEvent(event) {
   if (!event || event.kind !== KINDS.ASSISTANT_SESSION) return null;
   const content = parseJsonContent(event, {});
   const sessionId = getTagValue(event, 'session', content.session_id || getDTag(event));
   const state = getTagValue(event, 'status', content.state || ASSISTANT_SESSION_STATES.IDLE);
+  const participants = Array.from(
+    new Set([
+      ...getTaggedPubkeyRefs(event, 'operator'),
+      ...(Array.isArray(content.participants) ? content.participants : []),
+      content.operator_pubkey || ''
+    ].filter(Boolean))
+  );
 
   return {
     id: event.id,
@@ -473,7 +535,8 @@ export function parseAssistantSessionEvent(event) {
     createdAt: event.created_at,
     sessionId,
     state,
-    operatorPubkey: getTaggedPubkeyRef(event, 'operator') || content.operator_pubkey || '',
+    operatorPubkey: getTaggedPubkeyRef(event, 'operator') || content.operator_pubkey || participants[0] || '',
+    participants,
     assistantId: getTagValue(event, 'agent', content.assistant_id || ''),
     assistantPubkey: content.assistant_pubkey || '',
     currentTurnId: content.current_turn_id || '',

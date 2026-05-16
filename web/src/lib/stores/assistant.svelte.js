@@ -12,7 +12,8 @@ import {
   parseJsonContent,
   parseAssistantSessionEvent,
   parseAssistantStatusEvent,
-  parseAssistantResultEvent
+  parseAssistantResultEvent,
+  computeAssistantPlanHash
 } from '../nostr/client.js';
 
 const SIDEBAR_STORAGE_KEY = 'bahia_assistant_sidebar';
@@ -96,6 +97,7 @@ function emptySession(sessionId) {
     sessionId,
     state: 'idle',
     operatorPubkey: assistantConnection.operatorPubkey,
+    participants: assistantConnection.operatorPubkey ? [assistantConnection.operatorPubkey] : [],
     assistantId: '',
     assistantPubkey: '',
     currentTurnId: '',
@@ -145,13 +147,18 @@ function applySessionEvent(event) {
   const parsed = parseAssistantSessionEvent(event);
   if (!parsed?.sessionId) return false;
   if (assistantConnection.servicePubkey && event.pubkey !== assistantConnection.servicePubkey) return false;
-  if (assistantConnection.operatorPubkey && parsed.operatorPubkey && parsed.operatorPubkey !== assistantConnection.operatorPubkey) return false;
+  if (assistantConnection.operatorPubkey) {
+    const participants = Array.isArray(parsed.participants) ? parsed.participants : [];
+    if (participants.length > 0 && !participants.includes(assistantConnection.operatorPubkey)) return false;
+    if (participants.length === 0 && parsed.operatorPubkey && parsed.operatorPubkey !== assistantConnection.operatorPubkey) return false;
+  }
 
   const session = ensureSession(parsed.sessionId);
   Object.assign(session, {
     ...session,
     state: parsed.state,
     operatorPubkey: parsed.operatorPubkey,
+    participants: Array.isArray(parsed.participants) ? parsed.participants : [],
     assistantId: parsed.assistantId,
     assistantPubkey: parsed.assistantPubkey,
     currentTurnId: parsed.currentTurnId,
@@ -209,7 +216,14 @@ function normalizeAssistantItem(event) {
   if (event.kind === KINDS.ASSISTANT_APPROVAL) return parseApprovalEvent(event);
   if (event.kind === KINDS.ASSISTANT_STATUS) {
     const parsed = parseAssistantStatusEvent(event);
-    return parsed ? { ...parsed, type: 'status' } : null;
+    return parsed
+      ? {
+          ...parsed,
+          type: 'status',
+          streaming: getTagValue(event, 'streaming', '') === 'true' || parsed.content?.streaming === true,
+          chunk: parsed.content?.chunk || ''
+        }
+      : null;
   }
   if (event.kind === KINDS.ASSISTANT_RESULT) {
     const parsed = parseAssistantResultEvent(event);
@@ -220,7 +234,10 @@ function normalizeAssistantItem(event) {
 
 function authorAllowed(event) {
   if (event.kind === KINDS.ASSISTANT_PROMPT_REQUEST || event.kind === KINDS.ASSISTANT_APPROVAL) {
-    return !assistantConnection.operatorPubkey || event.pubkey === assistantConnection.operatorPubkey;
+    if (!assistantConnection.operatorPubkey || event.pubkey === assistantConnection.operatorPubkey) return true;
+    const sessionId = eventSessionId(event, parseJsonContent(event, {}));
+    const session = sessionMap.get(sessionId);
+    return Array.isArray(session?.participants) && session.participants.includes(event.pubkey);
   }
   if (event.kind === KINDS.ASSISTANT_STATUS || event.kind === KINDS.ASSISTANT_RESULT || event.kind === KINDS.ASSISTANT_SESSION) {
     return !assistantConnection.servicePubkey || event.pubkey === assistantConnection.servicePubkey;
@@ -234,7 +251,25 @@ function applyTranscriptEvent(event) {
   if (!item?.sessionId) return false;
 
   ensureSession(item.sessionId);
-  eventMap.set(event.id, item);
+
+  if (item.type === 'status' && item.streaming) {
+    const streamKey = `stream:${item.requestEventId || item.id}`;
+    const existing = eventMap.get(streamKey);
+    eventMap.set(streamKey, {
+      ...(existing || item),
+      id: streamKey,
+      type: 'status',
+      status: 'planning',
+      message: existing?.message || 'Planning…',
+      streaming: true,
+      streamingContent: `${existing?.streamingContent || ''}${item.chunk || ''}`,
+      createdAt: existing?.createdAt || item.createdAt,
+      event: item.event
+    });
+  } else {
+    if (item.type === 'result' && item.requestEventId) eventMap.delete(`stream:${item.requestEventId}`);
+    eventMap.set(event.id, item);
+  }
 
   const session = sessionMap.get(item.sessionId);
   session.updatedAt = Math.max(session.updatedAt || 0, item.createdAt || 0);
@@ -432,22 +467,25 @@ export async function publishAssistantPrompt({ prompt, sessionId, routeContext =
   return result;
 }
 
-export async function publishAssistantApproval({ sessionId, planHash, decision, message = '' } = {}) {
+export async function publishAssistantApproval({ sessionId, planHash, decision, message = '', modifiedPlan = null } = {}) {
   if (!sessionId) throw new Error('sessionId is required');
   if (!planHash) throw new Error('planHash is required');
   if (!['approve', 'reject', 'cancel'].includes(decision)) throw new Error('decision must be approve, reject, or cancel');
-  const d = `assistant-approval:${sessionId}:${planHash}`;
+  const effectivePlanHash = modifiedPlan ? await computeAssistantPlanHash(modifiedPlan, sessionId) : planHash;
+  const d = `assistant-approval:${sessionId}:${effectivePlanHash}`;
+  const content = { session_id: sessionId, plan_hash: effectivePlanHash, decision, message };
+  if (modifiedPlan) content.modified_plan = modifiedPlan;
   const result = await publishRequest({
     kind: KINDS.ASSISTANT_APPROVAL,
-    tags: [['d', d], ['session', sessionId], ['plan-hash', planHash], ['decision', decision]],
-    content: { session_id: sessionId, plan_hash: planHash, decision, message }
+    tags: [['d', d], ['session', sessionId], ['plan-hash', effectivePlanHash], ['decision', decision]],
+    content
   });
 
   pendingMap.set(result.requestEventId, {
     type: 'approval',
     requestEventId: result.requestEventId,
     sessionId,
-    planHash,
+    planHash: effectivePlanHash,
     decision,
     createdAt: nowSeconds(),
     status: 'still_waiting'

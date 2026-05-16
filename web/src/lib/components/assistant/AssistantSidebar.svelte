@@ -22,6 +22,12 @@
   const session = $derived(activeAssistantSession());
   const pendingCount = $derived(Object.keys(pendingAssistantRequests).length);
   const sidebarClass = $derived(assistantUi.collapsed ? 'collapsed' : 'expanded');
+  const otherParticipants = $derived((session?.participants || []).filter((pubkey) => pubkey && pubkey !== assistantConnection.operatorPubkey));
+
+  function shortPubkey(pubkey) {
+    if (!pubkey) return '';
+    return pubkey.length > 12 ? `${pubkey.slice(0, 6)}…${pubkey.slice(-4)}` : pubkey;
+  }
 
   async function submitPrompt(event) {
     event.preventDefault();
@@ -84,6 +90,15 @@
         {/if}
       </nav>
 
+      {#if otherParticipants.length}
+        <div class="participants" aria-label="Other session participants">
+          <span>{otherParticipants.length + 1} operators</span>
+          {#each otherParticipants as pubkey}
+            <span class="participant" title={pubkey}>{shortPubkey(pubkey)}</span>
+          {/each}
+        </div>
+      {/if}
+
       <section class="transcript" aria-label="Assistant transcript">
         {#if session?.transcript?.length}
           {#each session.transcript as item (item.id)}
@@ -128,6 +143,8 @@
   .sessions button.active { border-color: var(--primary); }
   .sessions span { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .sessions small { color: var(--text-muted); }
+  .participants { display: flex; align-items: center; gap: 0.35rem; color: var(--text-muted); font-size: 0.75rem; flex-wrap: wrap; }
+  .participant { background: var(--hover-bg); color: var(--text-primary); border: 1px solid var(--border-color); border-radius: 999px; padding: 0.15rem 0.4rem; }
   .transcript { min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 0.75rem; padding-right: 0.2rem; }
   .empty { color: var(--text-muted); font-size: 0.875rem; }
   .transcript-empty { border: 1px dashed var(--border-color); border-radius: 10px; padding: 1rem; }

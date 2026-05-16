@@ -349,7 +349,7 @@ type assistantTestSubscriber struct {
 func newBlockingAssistantTestSubscriber() *assistantTestSubscriber { return &assistantTestSubscriber{} }
 
 func (s *assistantTestSubscriber) SubscribeAllWithEOSE(context.Context, []nostr.Filter) (AssistantMergedSubscription, error) {
-	sub := &assistantTestMergedSubscription{events: make(chan *nostr.Event, 1), closed: make(chan AssistantRelayClosed, 1)}
+	sub := &assistantTestMergedSubscription{events: make(chan *nostr.Event, 1), closed: make(chan AssistantRelayClosed, 1), eose: make(chan struct{}, 1)}
 	s.mu.Lock()
 	s.sub = sub
 	s.mu.Unlock()
@@ -368,11 +368,13 @@ func (s *assistantTestSubscriber) publishResult(ev *nostr.Event) {
 type assistantTestMergedSubscription struct {
 	events chan *nostr.Event
 	closed chan AssistantRelayClosed
+	eose   chan struct{}
 }
 
 func (s *assistantTestMergedSubscription) EventChan() <-chan *nostr.Event          { return s.events }
 func (s *assistantTestMergedSubscription) ClosedChan() <-chan AssistantRelayClosed { return s.closed }
-func (s *assistantTestMergedSubscription) Close()                                  { close(s.events); close(s.closed) }
+func (s *assistantTestMergedSubscription) EOSEChan() <-chan struct{}               { return s.eose }
+func (s *assistantTestMergedSubscription) Close()                                  { close(s.events); close(s.closed); close(s.eose) }
 
 func lastAssistantEvent(t *testing.T, events []nostr.Event) *nostr.Event {
 	t.Helper()

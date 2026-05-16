@@ -528,6 +528,11 @@ func New(cfg *config.Config) (*App, error) {
 			InitialSessions:  loadAssistantSessions(ctx, nostrEventRepo, logger),
 			Logger:           slog.Default(),
 		})
+		servicePubkey := ""
+		if strings.TrimSpace(cfg.Nostr.PrivateKey) != "" {
+			servicePubkey, _ = nostr.GetPublicKey(cfg.Nostr.PrivateKey)
+		}
+		bgManager.Register(service.NewAssistantSessionRecoveryRunner(assistantOrchestrator, service.AssistantSessionRecoveryConfig{RecentLimit: 500, ServicePubkey: servicePubkey, Logger: slog.Default()}))
 		logger.Info("operator assistant orchestrator initialized", zap.String("agent_id", identity.AgentID), zap.String("assistant_pubkey", identity.Pubkey))
 	}
 
@@ -890,6 +895,15 @@ func (s assistantMergedSubscription) ClosedChan() <-chan service.AssistantRelayC
 		}
 	}()
 	return out
+}
+
+func (s assistantMergedSubscription) EOSEChan() <-chan struct{} {
+	if s.merged == nil {
+		ch := make(chan struct{})
+		close(ch)
+		return ch
+	}
+	return s.merged.EndOfStoredEvents
 }
 
 func (s assistantMergedSubscription) Close() {
