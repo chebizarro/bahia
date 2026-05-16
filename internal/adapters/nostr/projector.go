@@ -13,6 +13,7 @@ import (
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/events"
 	"github.com/openagentsinc/bahia/internal/repository"
+	"github.com/openagentsinc/bahia/internal/service"
 	"go.uber.org/zap"
 )
 
@@ -51,6 +52,27 @@ type LLMProjectionSource interface {
 	GetLLMDeploymentRun(ctx context.Context, id uuid.UUID) (*domain.LLMDeploymentRun, error)
 }
 
+type MLProjectionSource interface {
+	ListModels(ctx context.Context, task domain.MLTaskKind, limit, offset int) ([]domain.MLModel, error)
+	GetModel(ctx context.Context, id uuid.UUID) (*domain.MLModel, error)
+	GetModelBySlug(ctx context.Context, slug string) (*domain.MLModel, error)
+	ListModelVersions(ctx context.Context, modelID uuid.UUID, limit, offset int) ([]domain.MLModelVersion, error)
+	GetModelVersion(ctx context.Context, id uuid.UUID) (*domain.MLModelVersion, error)
+	GetArtifactRef(ctx context.Context, id uuid.UUID) (*domain.MLArtifactRef, error)
+	ListArtifactRefsByModelVersion(ctx context.Context, modelVersionID uuid.UUID) ([]domain.MLArtifactRef, error)
+	ListProvenanceEdgesByArtifact(ctx context.Context, artifactID uuid.UUID) ([]domain.MLProvenanceEdge, error)
+	GetInferenceEndpoint(ctx context.Context, id uuid.UUID) (*domain.MLInferenceEndpoint, error)
+	ListInferenceEndpoints(ctx context.Context, envID uuid.UUID, limit, offset int) ([]domain.MLInferenceEndpoint, error)
+	GetMLDeploymentIntent(ctx context.Context, id uuid.UUID) (*domain.MLDeploymentIntent, error)
+	GetMLDeploymentRun(ctx context.Context, id uuid.UUID) (*domain.MLDeploymentRun, error)
+	GetInferenceState(ctx context.Context, endpointID, envID uuid.UUID) (*domain.MLInferenceState, error)
+	ListInferenceStates(ctx context.Context) ([]domain.MLInferenceState, error)
+}
+
+type WorkerProjectionSource interface {
+	List(ctx context.Context, status string, limit int) ([]domain.Worker, error)
+}
+
 // ProjectionPublisher publishes signed Nostr events to relay-visible storage.
 type ProjectionPublisher interface {
 	Publish(ctx context.Context, ev gonostr.Event) (int, error)
@@ -62,6 +84,8 @@ type ProjectionPublisher interface {
 type Projector struct {
 	source         ProjectionSource
 	llmSource      LLMProjectionSource
+	mlSource       MLProjectionSource
+	workerSource   WorkerProjectionSource
 	policySource   PolicyProjectionSource
 	publisher      ProjectionPublisher
 	eventRepo      repository.NostrEventRepository
@@ -84,6 +108,14 @@ func WithProjectorRepairInterval(interval time.Duration) ProjectorOption {
 
 func WithLLMProjectionSource(source LLMProjectionSource) ProjectorOption {
 	return func(p *Projector) { p.llmSource = source }
+}
+
+func WithMLProjectionSource(source MLProjectionSource) ProjectorOption {
+	return func(p *Projector) { p.mlSource = source }
+}
+
+func WithWorkerProjectionSource(source WorkerProjectionSource) ProjectorOption {
+	return func(p *Projector) { p.workerSource = source }
 }
 
 func WithPolicyProjectionSource(source PolicyProjectionSource) ProjectorOption {
@@ -163,6 +195,16 @@ func (p *Projector) SetupSubscriptions(pub events.Publisher) {
 		events.EventLLMRouteStateChanged,
 		events.EventLLMRouteDriftDetected,
 		events.EventLLMGatewayRouteSynced,
+		service.EventMLModelChanged,
+		service.EventMLVersionChanged,
+		service.EventMLEndpointChanged,
+		service.EventMLIntentChanged,
+		service.EventMLRunChanged,
+		service.EventMLObservation,
+		service.EventMLStateChanged,
+		service.EventMLArtifactChanged,
+		service.EventMLProvenanceChanged,
+		service.EventMLProvenanceDefected,
 	} {
 		et := eventType
 		pub.Subscribe(et, func(ctx context.Context, e events.Event) {
@@ -273,7 +315,8 @@ func (p *Projector) RepublishSnapshot(ctx context.Context) error {
 			}
 		}
 	}
-	p.logger.Info("Nostr projection snapshot republished", zap.Int("services", len(services)), zap.Int("environments", len(envs)), zap.Int("states", len(states)), zap.Int("builds", buildsPublished), zap.Int("artifacts", artifactsPublished), zap.Int("deployment_intents", intentsPublished), zap.Int("deployment_runs", runsPublished), zap.Int("policies", policiesPublished), zap.Int("llm_routes", llmRoutes), zap.Int("llm_route_states", llmStates))
+	mlModels, mlVersions, mlEndpoints, mlStates, mlProvenance, mlCapabilities := p.publishMLSnapshots(ctx)
+	p.logger.Info("Nostr projection snapshot republished", zap.Int("services", len(services)), zap.Int("environments", len(envs)), zap.Int("states", len(states)), zap.Int("builds", buildsPublished), zap.Int("artifacts", artifactsPublished), zap.Int("deployment_intents", intentsPublished), zap.Int("deployment_runs", runsPublished), zap.Int("policies", policiesPublished), zap.Int("llm_routes", llmRoutes), zap.Int("llm_route_states", llmStates), zap.Int("ml_models", mlModels), zap.Int("ml_model_versions", mlVersions), zap.Int("ml_endpoints", mlEndpoints), zap.Int("ml_endpoint_states", mlStates), zap.Int("ml_provenance_graphs", mlProvenance), zap.Int("ml_capabilities", mlCapabilities))
 	return nil
 }
 
@@ -367,6 +410,32 @@ func (p *Projector) handleEvent(ctx context.Context, e events.Event) {
 		} else {
 			p.publishLLMStateForResource(ctx, res)
 		}
+	case service.EventMLModelChanged:
+		p.publishMLModelByID(ctx, firstString(stringifyMapValue(e.Data, "model_id"), e.EntityID))
+	case service.EventMLVersionChanged:
+		p.publishMLModelVersionByID(ctx, firstString(stringifyMapValue(e.Data, "model_version_id"), e.EntityID))
+	case service.EventMLEndpointChanged:
+		p.publishMLEndpointByID(ctx, firstString(stringifyMapValue(e.Data, "endpoint_id"), e.EntityID))
+	case service.EventMLIntentChanged:
+		if id, ok := parseUUID(firstString(stringifyMapValue(e.Data, "intent_id"), e.EntityID)); ok {
+			p.publishMLStateForIntent(ctx, id)
+		}
+	case service.EventMLRunChanged:
+		if id, ok := parseUUID(firstString(stringifyMapValue(e.Data, "run_id"), e.EntityID)); ok {
+			p.publishMLStateForRun(ctx, id)
+		} else if id, ok := parseUUID(stringifyMapValue(e.Data, "intent_id")); ok {
+			p.publishMLStateForIntent(ctx, id)
+		}
+	case service.EventMLObservation, service.EventMLStateChanged:
+		if endpointID, ok := parseUUID(stringifyMapValue(e.Data, "endpoint_id")); ok {
+			if envID, ok := parseUUID(stringifyMapValue(e.Data, "environment_id")); ok {
+				p.publishMLStateForIDs(ctx, endpointID, envID)
+			}
+		}
+	case service.EventMLArtifactChanged:
+		p.publishMLProvenanceByArtifactID(ctx, firstString(stringifyMapValue(e.Data, "artifact_id"), e.EntityID))
+	case service.EventMLProvenanceChanged, service.EventMLProvenanceDefected:
+		p.publishMLProvenanceFromEvent(ctx, e)
 	}
 }
 
@@ -622,6 +691,246 @@ func (p *Projector) publishPolicySnapshots(ctx context.Context) int {
 	return published
 }
 
+func (p *Projector) publishMLSnapshots(ctx context.Context) (modelsPublished, versionsPublished, endpointsPublished, statesPublished, provenancePublished, capabilitiesPublished int) {
+	if p.mlSource != nil {
+		const pageSize = 500
+		for offset := 0; ; offset += pageSize {
+			models, err := p.mlSource.ListModels(ctx, "", pageSize, offset)
+			if err != nil {
+				p.logger.Warn("list ML models for projection failed", zap.Error(err))
+				break
+			}
+			for i := range models {
+				if err := p.publishMLModelRegistry(ctx, &models[i]); err != nil {
+					p.logger.Warn("publish ML model projection failed", zap.String("model_id", models[i].ID.String()), zap.Error(err))
+				} else {
+					modelsPublished++
+				}
+				versions, err := p.mlSource.ListModelVersions(ctx, models[i].ID, pageSize, 0)
+				if err != nil {
+					p.logger.Warn("list ML model versions for projection failed", zap.String("model_id", models[i].ID.String()), zap.Error(err))
+					continue
+				}
+				for j := range versions {
+					if err := p.publishMLModelVersionRegistry(ctx, &versions[j]); err != nil {
+						p.logger.Warn("publish ML model version projection failed", zap.String("model_version_id", versions[j].ID.String()), zap.Error(err))
+					} else {
+						versionsPublished++
+					}
+					artifacts, err := p.mlSource.ListArtifactRefsByModelVersion(ctx, versions[j].ID)
+					if err != nil {
+						p.logger.Warn("list ML artifacts for projection failed", zap.String("model_version_id", versions[j].ID.String()), zap.Error(err))
+						continue
+					}
+					for k := range artifacts {
+						if err := p.publishMLArtifactProvenanceGraph(ctx, &artifacts[k]); err != nil {
+							p.logger.Warn("publish ML provenance graph failed", zap.String("artifact_id", artifacts[k].ID.String()), zap.Error(err))
+						} else {
+							provenancePublished++
+						}
+					}
+				}
+			}
+			if len(models) < pageSize {
+				break
+			}
+		}
+		for offset := 0; ; offset += pageSize {
+			endpoints, err := p.mlSource.ListInferenceEndpoints(ctx, uuid.Nil, pageSize, offset)
+			if err != nil {
+				p.logger.Warn("list ML endpoints for projection failed", zap.Error(err))
+				break
+			}
+			for i := range endpoints {
+				if err := p.publishMLInferenceEndpointRegistry(ctx, &endpoints[i]); err != nil {
+					p.logger.Warn("publish ML endpoint projection failed", zap.String("endpoint_id", endpoints[i].ID.String()), zap.Error(err))
+				} else {
+					endpointsPublished++
+				}
+			}
+			if len(endpoints) < pageSize {
+				break
+			}
+		}
+		states, err := p.mlSource.ListInferenceStates(ctx)
+		if err != nil {
+			p.logger.Warn("list ML endpoint states for projection failed", zap.Error(err))
+		} else {
+			for i := range states {
+				if err := p.publishMLInferenceEndpointState(ctx, &states[i]); err != nil {
+					p.logger.Warn("publish ML endpoint state projection failed", zap.String("endpoint_id", states[i].EndpointID.String()), zap.String("environment_id", states[i].EnvironmentID.String()), zap.Error(err))
+				} else {
+					statesPublished++
+				}
+			}
+		}
+	}
+	if p.workerSource != nil {
+		workers, err := p.workerSource.List(ctx, "", 1000)
+		if err != nil {
+			p.logger.Warn("list workers for ML capability projection failed", zap.Error(err))
+		} else {
+			for i := range workers {
+				if err := p.publishMLRuntimeCapabilityProfile(ctx, &workers[i]); err != nil {
+					p.logger.Warn("publish ML runtime capability profile failed", zap.String("worker", workers[i].PubKey), zap.Error(err))
+				} else {
+					capabilitiesPublished++
+				}
+			}
+		}
+	}
+	return
+}
+
+func (p *Projector) publishMLModelByID(ctx context.Context, raw string) {
+	if p.mlSource == nil {
+		return
+	}
+	id, ok := parseUUID(raw)
+	if !ok {
+		return
+	}
+	model, err := p.mlSource.GetModel(ctx, id)
+	if err != nil || model == nil {
+		if err != nil {
+			p.logger.Warn("read ML model for projection failed", zap.String("model_id", raw), zap.Error(err))
+		}
+		return
+	}
+	if err := p.publishMLModelRegistry(ctx, model); err != nil {
+		p.logger.Warn("publish ML model projection failed", zap.String("model_id", raw), zap.Error(err))
+	}
+}
+
+func (p *Projector) publishMLModelVersionByID(ctx context.Context, raw string) {
+	if p.mlSource == nil {
+		return
+	}
+	id, ok := parseUUID(raw)
+	if !ok {
+		return
+	}
+	version, err := p.mlSource.GetModelVersion(ctx, id)
+	if err != nil || version == nil {
+		if err != nil {
+			p.logger.Warn("read ML model version for projection failed", zap.String("model_version_id", raw), zap.Error(err))
+		}
+		return
+	}
+	if err := p.publishMLModelVersionRegistry(ctx, version); err != nil {
+		p.logger.Warn("publish ML model version projection failed", zap.String("model_version_id", raw), zap.Error(err))
+	}
+}
+
+func (p *Projector) publishMLEndpointByID(ctx context.Context, raw string) {
+	if p.mlSource == nil {
+		return
+	}
+	id, ok := parseUUID(raw)
+	if !ok {
+		return
+	}
+	endpoint, err := p.mlSource.GetInferenceEndpoint(ctx, id)
+	if err != nil || endpoint == nil {
+		if err != nil {
+			p.logger.Warn("read ML endpoint for projection failed", zap.String("endpoint_id", raw), zap.Error(err))
+		}
+		return
+	}
+	if err := p.publishMLInferenceEndpointRegistry(ctx, endpoint); err != nil {
+		p.logger.Warn("publish ML endpoint projection failed", zap.String("endpoint_id", raw), zap.Error(err))
+	}
+}
+
+func (p *Projector) publishMLStateForIntent(ctx context.Context, intentID uuid.UUID) {
+	if p.mlSource == nil {
+		return
+	}
+	intent, err := p.mlSource.GetMLDeploymentIntent(ctx, intentID)
+	if err != nil || intent == nil {
+		if err != nil {
+			p.logger.Warn("read ML deployment intent for projection failed", zap.String("intent_id", intentID.String()), zap.Error(err))
+		}
+		return
+	}
+	p.publishMLStateForIDs(ctx, intent.EndpointID, intent.EnvironmentID)
+}
+
+func (p *Projector) publishMLStateForRun(ctx context.Context, runID uuid.UUID) {
+	if p.mlSource == nil {
+		return
+	}
+	run, err := p.mlSource.GetMLDeploymentRun(ctx, runID)
+	if err != nil || run == nil {
+		if err != nil {
+			p.logger.Warn("read ML deployment run for projection failed", zap.String("run_id", runID.String()), zap.Error(err))
+		}
+		return
+	}
+	p.publishMLStateForIntent(ctx, run.DeploymentIntentID)
+}
+
+func (p *Projector) publishMLStateForIDs(ctx context.Context, endpointID, envID uuid.UUID) {
+	if p.mlSource == nil {
+		return
+	}
+	state, err := p.mlSource.GetInferenceState(ctx, endpointID, envID)
+	if err != nil || state == nil {
+		if err != nil {
+			p.logger.Warn("read ML endpoint state for projection failed", zap.String("endpoint_id", endpointID.String()), zap.String("environment_id", envID.String()), zap.Error(err))
+		}
+		return
+	}
+	if err := p.publishMLInferenceEndpointState(ctx, state); err != nil {
+		p.logger.Warn("publish ML endpoint state projection failed", zap.String("endpoint_id", endpointID.String()), zap.String("environment_id", envID.String()), zap.Error(err))
+	}
+}
+
+func (p *Projector) publishMLProvenanceByArtifactID(ctx context.Context, raw string) {
+	if p.mlSource == nil {
+		return
+	}
+	id, ok := parseUUID(raw)
+	if !ok {
+		return
+	}
+	artifact, err := p.mlSource.GetArtifactRef(ctx, id)
+	if err != nil || artifact == nil {
+		if err != nil {
+			p.logger.Warn("read ML artifact for projection failed", zap.String("artifact_id", raw), zap.Error(err))
+		}
+		return
+	}
+	if err := p.publishMLArtifactProvenanceGraph(ctx, artifact); err != nil {
+		p.logger.Warn("publish ML provenance graph failed", zap.String("artifact_id", raw), zap.Error(err))
+	}
+}
+
+func (p *Projector) publishMLProvenanceFromEvent(ctx context.Context, e events.Event) {
+	switch edge := e.Data.(type) {
+	case *domain.MLProvenanceEdge:
+		p.publishMLProvenanceForEdge(ctx, edge)
+	case domain.MLProvenanceEdge:
+		p.publishMLProvenanceForEdge(ctx, &edge)
+	default:
+		if artifactID := stringifyMapValue(e.Data, "artifact_id"); artifactID != "" {
+			p.publishMLProvenanceByArtifactID(ctx, artifactID)
+		}
+	}
+}
+
+func (p *Projector) publishMLProvenanceForEdge(ctx context.Context, edge *domain.MLProvenanceEdge) {
+	if edge == nil {
+		return
+	}
+	if edge.FromArtifactID != nil {
+		p.publishMLProvenanceByArtifactID(ctx, edge.FromArtifactID.String())
+	}
+	if edge.ToArtifactID != nil {
+		p.publishMLProvenanceByArtifactID(ctx, edge.ToArtifactID.String())
+	}
+}
+
 func (p *Projector) publishReplaceableJSON(ctx context.Context, kind int, dTag string, tags gonostr.Tags, value any, entityType string, entityID *uuid.UUID) error {
 	content, _ := json.Marshal(value)
 	baseTags := gonostr.Tags{{"d", dTag}, {"deleted", "false"}}
@@ -745,7 +1054,39 @@ func discoveryControlPlane(llmEnabled, mcpTransportEnabled bool) map[string]any 
 	if mcpTransportEnabled {
 		capabilities = append(capabilities, "mcp_async_correlation")
 	}
-	return map[string]any{"version": "bahia-controlplane-v1", "capabilities": capabilities, "request_kinds": requestKinds, "status_kinds": statusKinds, "result_kinds": resultKinds, "read_model_kinds": readModelKinds, "correlation_tags": correlationTags, "mcp": map[string]any{"async_correlation": mcpTransportEnabled, "fields": mcpFields}}
+	aiML := map[string]any{
+		"enabled": true,
+		"command_kinds": map[string]int{
+			"ml_recipe_run_request":            38390,
+			"ml_inference_deploy_request":      38391,
+			"ml_inference_deployment_approval": 38392,
+			"ml_inference_rollback_request":    38393,
+			"ml_model_import_request":          38394,
+			"ml_recipe_run_result":             38395,
+			"ml_inference_deploy_result":       38396,
+			"ml_inference_approval_result":     38397,
+			"ml_inference_rollback_result":     38398,
+			"ml_model_import_result":           38399,
+		},
+		"read_model_kinds": map[string]int{
+			"ml_model_registry":              KindMLModelRegistry,
+			"ml_model_version_registry":      KindMLModelVersionRegistry,
+			"ml_dataset_registry":            KindMLDatasetRegistry,
+			"ml_recipe_registry":             KindMLRecipeRegistry,
+			"ml_recipe_run_state":            KindMLRecipeRunState,
+			"ml_inference_endpoint_registry": KindMLInferenceEndpointRegistry,
+			"ml_inference_endpoint_state":    KindMLInferenceEndpointState,
+			"ml_evaluation_experiment_state": KindMLEvaluationExperimentState,
+			"ml_artifact_provenance_graph":   KindMLArtifactProvenanceGraph,
+			"ml_runtime_capability_profile":  KindMLRuntimeCapabilityProfile,
+		},
+		"capabilities":            []string{"ml_model_registry_read_models", "ml_model_version_read_models", "ml_inference_endpoint_read_models", "ml_provenance_read_models", "ml_runtime_capability_read_models", "ml_inference_deploy_requests", "ml_inference_approval_requests", "ml_inference_rollback_requests"},
+		"correlation_tags":        []string{"model", "model_version", "recipe", "run", "endpoint", "environment", "deployment", "artifact", "worker", "runtime", "e", "p", "status"},
+		"addressable_commands":    true,
+		"replaceable_read_models": true,
+		"unsupported_in_d1":       []string{"recipe_execution", "model_import_orchestration", "dataset_import", "evaluation", "benchmark", "fine_tune"},
+	}
+	return map[string]any{"version": "bahia-controlplane-v1", "capabilities": capabilities, "request_kinds": requestKinds, "status_kinds": statusKinds, "result_kinds": resultKinds, "read_model_kinds": readModelKinds, "ai_ml": aiML, "correlation_tags": correlationTags, "mcp": map[string]any{"async_correlation": mcpTransportEnabled, "fields": mcpFields}}
 }
 
 func browserDiscoveryRelays(cfg config.NostrConfig) []string {
@@ -893,6 +1234,176 @@ func (p *Projector) publishEnvironmentRegistry(ctx context.Context, env *domain.
 		)
 	}
 	return p.publishSigned(ctx, KindEnvironmentRegistry, tags, string(contentJSON), "environment.projection", &env.ID)
+}
+
+func (p *Projector) publishMLModelRegistry(ctx context.Context, model *domain.MLModel) error {
+	if model == nil || model.Slug == "" {
+		return nil
+	}
+	dTag := "model:" + model.Slug
+	tags := gonostr.Tags{{"d", dTag}, {"model", dTag}, {"name", model.Name}, {"deleted", "false"}}
+	if model.Family != "" {
+		tags = append(tags, gonostr.Tag{"family", model.Family})
+	}
+	for _, modality := range model.Modalities {
+		tags = append(tags, gonostr.Tag{"modality", modality})
+	}
+	for _, task := range model.TaskKinds {
+		tags = append(tags, gonostr.Tag{"task", string(task)})
+	}
+	for _, capability := range model.Capabilities {
+		tags = append(tags, gonostr.Tag{"capability", capability})
+	}
+	if model.License != "" {
+		tags = append(tags, gonostr.Tag{"license", model.License})
+	}
+	return p.publishReplaceableJSON(ctx, KindMLModelRegistry, dTag, tags[1:], model, "ml_model.projection", &model.ID)
+}
+
+func (p *Projector) publishMLModelVersionRegistry(ctx context.Context, version *domain.MLModelVersion) error {
+	if p.mlSource == nil || version == nil {
+		return nil
+	}
+	model, err := p.mlSource.GetModel(ctx, version.ModelID)
+	if err != nil || model == nil || model.Slug == "" {
+		if err != nil {
+			return err
+		}
+		return nil
+	}
+	dTag := fmt.Sprintf("model-version:%s:%s", model.Slug, version.Version)
+	tags := gonostr.Tags{{"model", "model:" + model.Slug}, {"model_id", version.ModelID.String()}, {"model_version", dTag}, {"version", version.Version}}
+	for _, format := range version.RuntimeRequirements.RequiredFormats {
+		tags = append(tags, gonostr.Tag{"format", string(format)})
+	}
+	for _, runtime := range version.RuntimeRequirements.PreferredRuntimes {
+		tags = append(tags, gonostr.Tag{"runtime", string(runtime)})
+	}
+	return p.publishReplaceableJSON(ctx, KindMLModelVersionRegistry, dTag, tags, version, "ml_model_version.projection", &version.ID)
+}
+
+func (p *Projector) publishMLInferenceEndpointRegistry(ctx context.Context, endpoint *domain.MLInferenceEndpoint) error {
+	if endpoint == nil {
+		return nil
+	}
+	envName, ok, err := p.environmentNameForMLProjection(ctx, endpoint.EnvironmentID)
+	if err != nil || !ok {
+		return err
+	}
+	dTag := fmt.Sprintf("endpoint:%s:%s", endpoint.Name, envName)
+	tags := gonostr.Tags{{"endpoint", dTag}, {"endpoint_id", endpoint.ID.String()}, {"environment", envName}, {"environment_id", endpoint.EnvironmentID.String()}, {"name", endpoint.Name}}
+	for _, task := range endpoint.TaskKinds {
+		tags = append(tags, gonostr.Tag{"task", string(task)})
+	}
+	if endpoint.Protocol != "" {
+		tags = append(tags, gonostr.Tag{"protocol", endpoint.Protocol})
+	}
+	return p.publishReplaceableJSON(ctx, KindMLInferenceEndpointRegistry, dTag, tags, endpoint, "ml_endpoint.projection", &endpoint.ID)
+}
+
+func (p *Projector) publishMLInferenceEndpointState(ctx context.Context, state *domain.MLInferenceState) error {
+	if p.mlSource == nil || state == nil {
+		return nil
+	}
+	endpoint, err := p.mlSource.GetInferenceEndpoint(ctx, state.EndpointID)
+	if err != nil || endpoint == nil {
+		return err
+	}
+	envName, ok, err := p.environmentNameForMLProjection(ctx, state.EnvironmentID)
+	if err != nil || !ok {
+		return err
+	}
+	dTag := fmt.Sprintf("endpoint-state:%s:%s", endpoint.Name, envName)
+	tags := gonostr.Tags{{"endpoint", fmt.Sprintf("endpoint:%s:%s", endpoint.Name, envName)}, {"endpoint_id", state.EndpointID.String()}, {"environment", envName}, {"environment_id", state.EnvironmentID.String()}, {"drift_status", string(state.DriftStatus)}, {"gateway_status", string(state.GatewayStatus)}}
+	if state.DesiredModelVersionID != nil {
+		tags = append(tags, gonostr.Tag{"model_version", state.DesiredModelVersionID.String()})
+	}
+	if state.DesiredIntentID != nil {
+		tags = append(tags, gonostr.Tag{"deployment", state.DesiredIntentID.String()}, gonostr.Tag{"intent", state.DesiredIntentID.String()})
+	}
+	if state.ActiveRunID != nil {
+		tags = append(tags, gonostr.Tag{"run", state.ActiveRunID.String()})
+	}
+	if state.RuntimeKind != "" {
+		tags = append(tags, gonostr.Tag{"runtime", string(state.RuntimeKind)})
+	}
+	return p.publishReplaceableJSON(ctx, KindMLInferenceEndpointState, dTag, tags, state, "ml_endpoint_state.projection", &state.EndpointID)
+}
+
+func (p *Projector) environmentNameForMLProjection(ctx context.Context, envID uuid.UUID) (string, bool, error) {
+	if p.source == nil || envID == uuid.Nil {
+		return "", false, nil
+	}
+	env, err := p.source.GetEnvironment(ctx, envID)
+	if err != nil || env == nil || env.Name == "" {
+		return "", false, err
+	}
+	return env.Name, true, nil
+}
+
+func (p *Projector) publishMLArtifactProvenanceGraph(ctx context.Context, artifact *domain.MLArtifactRef) error {
+	if p.mlSource == nil || artifact == nil {
+		return nil
+	}
+	edges, err := p.mlSource.ListProvenanceEdgesByArtifact(ctx, artifact.ID)
+	if err != nil {
+		return err
+	}
+	digest := artifact.SHA256
+	if digest == "" {
+		digest = artifact.ID.String()
+	}
+	dTag := "artifact:" + digest
+	content := map[string]any{"artifact": artifact, "edges": edges}
+	tags := gonostr.Tags{{"artifact", artifact.ID.String()}}
+	if artifact.SHA256 != "" {
+		tags = append(tags, gonostr.Tag{"sha256", artifact.SHA256})
+	}
+	if artifact.ModelVersionID != nil {
+		tags = append(tags, gonostr.Tag{"model_version", artifact.ModelVersionID.String()})
+	}
+	if artifact.Format != "" {
+		tags = append(tags, gonostr.Tag{"format", string(artifact.Format)})
+	}
+	return p.publishReplaceableJSON(ctx, KindMLArtifactProvenanceGraph, dTag, tags, content, "ml_artifact_provenance.projection", &artifact.ID)
+}
+
+func (p *Projector) publishMLRuntimeCapabilityProfile(ctx context.Context, worker *domain.Worker) error {
+	if worker == nil || worker.PubKey == "" {
+		return nil
+	}
+	dTag := fmt.Sprintf("worker:%s:ai-capability", worker.PubKey)
+	tags := gonostr.Tags{{"worker", worker.PubKey}, {"role", "worker"}, {"status", string(worker.Status)}}
+	for _, runtime := range worker.MLCapabilities.Runtimes {
+		tags = append(tags, gonostr.Tag{"runtime", string(runtime)})
+	}
+	for _, format := range worker.MLCapabilities.ArtifactFormats {
+		tags = append(tags, gonostr.Tag{"artifact_format", string(format)})
+	}
+	for _, task := range worker.MLCapabilities.Tasks {
+		tags = append(tags, gonostr.Tag{"task", string(task)})
+	}
+	for _, accelerator := range worker.MLCapabilities.Accelerators {
+		tags = append(tags, gonostr.Tag{"accelerator", accelerator})
+	}
+	for _, toolchain := range worker.MLCapabilities.Toolchains {
+		tags = append(tags, gonostr.Tag{"toolchain", toolchain})
+	}
+	if worker.Resources != nil && worker.Resources.MemoryGB > 0 {
+		tags = append(tags, gonostr.Tag{"ram_gb", fmt.Sprintf("%d", worker.Resources.MemoryGB)})
+	}
+	for _, accelerator := range worker.Accelerators {
+		if accelerator.Model != "" {
+			tags = append(tags, gonostr.Tag{"gpu", accelerator.Model})
+		}
+		if accelerator.MemoryGB > 0 {
+			tags = append(tags, gonostr.Tag{"vram_gb", fmt.Sprintf("%d", accelerator.MemoryGB)})
+		}
+		if accelerator.Driver != "" {
+			tags = append(tags, gonostr.Tag{"driver", accelerator.Driver})
+		}
+	}
+	return p.publishReplaceableJSON(ctx, KindMLRuntimeCapabilityProfile, dTag, tags, worker, "ml_runtime_capability.projection", nil)
 }
 
 func (p *Projector) publishLLMRouteRegistry(ctx context.Context, route *domain.LLMRoute, deleted bool) error {
@@ -1380,6 +1891,16 @@ func stringify(v any) string {
 		}
 	case fmt.Stringer:
 		return val.String()
+	}
+	return ""
+}
+
+func stringifyMapValue(data any, key string) string {
+	switch m := data.(type) {
+	case map[string]any:
+		return stringify(m[key])
+	case map[string]string:
+		return m[key]
 	}
 	return ""
 }

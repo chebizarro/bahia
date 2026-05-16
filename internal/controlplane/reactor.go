@@ -62,6 +62,19 @@ const (
 	KindPackageYankRequest      = 5995 // Yank/deprecate a package artifact
 	KindPackageDriftDetect      = 5996 // Observe package backend drift
 
+	// Generic AI/ML command/result kinds (38390-38399). These intentionally
+	// avoid NIP-90's 5000-7000 DVM range.
+	KindMLRecipeRunRequest            = 38390 // Request a generic ML recipe run
+	KindMLInferenceDeployRequest      = 38391 // Request inference endpoint deployment
+	KindMLInferenceDeploymentApproval = 38392 // Approve or reject an inference deployment
+	KindMLInferenceRollbackRequest    = 38393 // Request inference endpoint rollback
+	KindMLModelImportRequest          = 38394 // Request model/model-version import
+	KindMLRecipeRunResult             = 38395 // Recipe run terminal result
+	KindMLInferenceDeployResult       = 38396 // Inference deployment terminal result
+	KindMLInferenceApprovalResult     = 38397 // Approval/rejection terminal result
+	KindMLInferenceRollbackResult     = 38398 // Rollback terminal result
+	KindMLModelImportResult           = 38399 // Model/model-version import terminal result
+
 	// Status kinds (6961-6978)
 	KindDeploymentStatus    = 6961 // Deployment progress updates
 	KindServiceStatus       = 6962 // Service health/state updates
@@ -130,6 +143,7 @@ type Reactor struct {
 	publisher   NostrEventPublisher
 	registry    *service.RegistryService
 	llmRegistry *service.LLMRegistryService
+	mlRegistry  *service.MLRegistryService
 	signer      canonicalnostr.Signer
 	logger      *slog.Logger
 	zapLog      *zap.Logger
@@ -145,6 +159,7 @@ type Reactor struct {
 	runtimeLifecycle  RuntimeLifecycleOperatorService
 	packageService    *service.PackageRegistryService
 	packageProjection repository.PackageControlPlaneRepository
+	mlExecutor        MLInferenceControlPlaneExecutor
 	nostrEvents       repository.NostrEventRepository
 
 	mu   sync.Mutex
@@ -173,6 +188,18 @@ type ReactorOption func(*Reactor)
 // WithLLMRegistry enables LLM Nostr lifecycle request handling.
 func WithLLMRegistry(registry *service.LLMRegistryService) ReactorOption {
 	return func(r *Reactor) { r.llmRegistry = registry }
+}
+
+func WithMLRegistry(registry *service.MLRegistryService) ReactorOption {
+	return func(r *Reactor) { r.mlRegistry = registry }
+}
+
+type MLInferenceControlPlaneExecutor interface {
+	ProcessDeploymentIntent(ctx context.Context, intentID uuid.UUID) error
+}
+
+func WithMLInferenceExecutor(executor MLInferenceControlPlaneExecutor) ReactorOption {
+	return func(r *Reactor) { r.mlExecutor = executor }
 }
 
 func WithToolProvisioningRepository(repo repository.ToolProvisioningRepository) ReactorOption {
@@ -307,6 +334,11 @@ func (r *Reactor) Run(ctx context.Context) error {
 				KindPolicyUpdate,
 				KindPolicyDelete,
 				KindPolicyEvaluate,
+				KindMLRecipeRunRequest,
+				KindMLInferenceDeployRequest,
+				KindMLInferenceDeploymentApproval,
+				KindMLInferenceRollbackRequest,
+				KindMLModelImportRequest,
 				KindPackageRepositoryApply,
 				KindPackageRepositoryDelete,
 				KindPackagePublishIntent,
@@ -482,6 +514,16 @@ func (r *Reactor) handleEvent(ctx context.Context, event *nostr.Event) {
 		go r.handlePolicyDelete(ctx, event)
 	case KindPolicyEvaluate:
 		go r.handlePolicyEvaluate(ctx, event)
+	case KindMLRecipeRunRequest:
+		go r.handleMLRecipeRunRequest(ctx, event)
+	case KindMLInferenceDeployRequest:
+		go r.handleMLInferenceDeployRequest(ctx, event)
+	case KindMLInferenceDeploymentApproval:
+		go r.handleMLInferenceDeploymentApproval(ctx, event)
+	case KindMLInferenceRollbackRequest:
+		go r.handleMLInferenceRollbackRequest(ctx, event)
+	case KindMLModelImportRequest:
+		go r.handleMLModelImportRequest(ctx, event)
 	case KindPackageRepositoryApply:
 		go r.handlePackageRepositoryApply(ctx, event)
 	case KindPackageRepositoryDelete:

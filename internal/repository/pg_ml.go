@@ -306,6 +306,17 @@ func (r *PgMLRegistryRepository) scanArtifact(row pgx.Row) (*domain.MLArtifactRe
 	return artifact, nil
 }
 
+func (r *PgMLRegistryRepository) GetArtifactRef(ctx context.Context, id uuid.UUID) (*domain.MLArtifactRef, error) {
+	artifact, err := r.scanArtifact(r.pool.QueryRow(ctx, `SELECT `+mlArtifactColumns+` FROM ml_artifact_refs WHERE id = $1`, id))
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("getting ML artifact ref: %w", err)
+	}
+	return artifact, nil
+}
+
 func (r *PgMLRegistryRepository) ListArtifactRefsByModelVersion(ctx context.Context, modelVersionID uuid.UUID) ([]domain.MLArtifactRef, error) {
 	rows, err := r.pool.Query(ctx, `SELECT `+mlArtifactColumns+` FROM ml_artifact_refs WHERE model_version_id = $1 ORDER BY created_at ASC`, modelVersionID)
 	if err != nil {
@@ -677,7 +688,7 @@ func (r *PgMLRegistryRepository) ListDeploymentIntents(ctx context.Context, endp
 	if limit <= 0 {
 		limit = 100
 	}
-	rows, err := r.pool.Query(ctx, `SELECT `+mlIntentColumns+` FROM ml_deployment_intents WHERE endpoint_id = $1 AND environment_id = $2 ORDER BY created_at DESC LIMIT $3 OFFSET $4`, endpointID, envID, limit, offset)
+	rows, err := r.pool.Query(ctx, `SELECT `+mlIntentColumns+` FROM ml_deployment_intents WHERE endpoint_id = $1 AND environment_id = $2 ORDER BY created_at DESC, id DESC LIMIT $3 OFFSET $4`, endpointID, envID, limit, offset)
 	if err != nil {
 		return nil, fmt.Errorf("listing ML deployment intents: %w", err)
 	}

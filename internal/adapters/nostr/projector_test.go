@@ -42,34 +42,48 @@ func (p *captureProjectionPublisher) byKind(kind int) []gonostr.Event {
 }
 
 type fakeProjectionSource struct {
-	services   map[uuid.UUID]domain.Service
-	envs       map[uuid.UUID]domain.Environment
-	states     map[string]domain.EnvironmentServiceState
-	builds     map[uuid.UUID]domain.Build
-	artifacts  map[uuid.UUID]domain.Artifact
-	intents    map[uuid.UUID]domain.DeploymentIntent
-	runs       map[uuid.UUID]domain.DeploymentRun
-	policies   map[uuid.UUID]domain.DeploymentPolicy
-	llmRoutes  map[uuid.UUID]domain.LLMRoute
-	llmStates  map[string]domain.LLMRouteState
-	llmIntents map[uuid.UUID]domain.LLMDeploymentIntent
-	llmRuns    map[uuid.UUID]domain.LLMDeploymentRun
+	services    map[uuid.UUID]domain.Service
+	envs        map[uuid.UUID]domain.Environment
+	states      map[string]domain.EnvironmentServiceState
+	builds      map[uuid.UUID]domain.Build
+	artifacts   map[uuid.UUID]domain.Artifact
+	intents     map[uuid.UUID]domain.DeploymentIntent
+	runs        map[uuid.UUID]domain.DeploymentRun
+	policies    map[uuid.UUID]domain.DeploymentPolicy
+	llmRoutes   map[uuid.UUID]domain.LLMRoute
+	llmStates   map[string]domain.LLMRouteState
+	llmIntents  map[uuid.UUID]domain.LLMDeploymentIntent
+	llmRuns     map[uuid.UUID]domain.LLMDeploymentRun
+	mlModels    map[uuid.UUID]domain.MLModel
+	mlVersions  map[uuid.UUID]domain.MLModelVersion
+	mlEndpoints map[uuid.UUID]domain.MLInferenceEndpoint
+	mlStates    map[string]domain.MLInferenceState
+	mlArtifacts map[uuid.UUID]domain.MLArtifactRef
+	mlEdges     map[uuid.UUID]domain.MLProvenanceEdge
+	workers     map[string]domain.Worker
 }
 
 func newFakeProjectionSource() *fakeProjectionSource {
 	return &fakeProjectionSource{
-		services:   map[uuid.UUID]domain.Service{},
-		envs:       map[uuid.UUID]domain.Environment{},
-		states:     map[string]domain.EnvironmentServiceState{},
-		builds:     map[uuid.UUID]domain.Build{},
-		artifacts:  map[uuid.UUID]domain.Artifact{},
-		intents:    map[uuid.UUID]domain.DeploymentIntent{},
-		runs:       map[uuid.UUID]domain.DeploymentRun{},
-		policies:   map[uuid.UUID]domain.DeploymentPolicy{},
-		llmRoutes:  map[uuid.UUID]domain.LLMRoute{},
-		llmStates:  map[string]domain.LLMRouteState{},
-		llmIntents: map[uuid.UUID]domain.LLMDeploymentIntent{},
-		llmRuns:    map[uuid.UUID]domain.LLMDeploymentRun{},
+		services:    map[uuid.UUID]domain.Service{},
+		envs:        map[uuid.UUID]domain.Environment{},
+		states:      map[string]domain.EnvironmentServiceState{},
+		builds:      map[uuid.UUID]domain.Build{},
+		artifacts:   map[uuid.UUID]domain.Artifact{},
+		intents:     map[uuid.UUID]domain.DeploymentIntent{},
+		runs:        map[uuid.UUID]domain.DeploymentRun{},
+		policies:    map[uuid.UUID]domain.DeploymentPolicy{},
+		llmRoutes:   map[uuid.UUID]domain.LLMRoute{},
+		llmStates:   map[string]domain.LLMRouteState{},
+		llmIntents:  map[uuid.UUID]domain.LLMDeploymentIntent{},
+		llmRuns:     map[uuid.UUID]domain.LLMDeploymentRun{},
+		mlModels:    map[uuid.UUID]domain.MLModel{},
+		mlVersions:  map[uuid.UUID]domain.MLModelVersion{},
+		mlEndpoints: map[uuid.UUID]domain.MLInferenceEndpoint{},
+		mlStates:    map[string]domain.MLInferenceState{},
+		mlArtifacts: map[uuid.UUID]domain.MLArtifactRef{},
+		mlEdges:     map[uuid.UUID]domain.MLProvenanceEdge{},
+		workers:     map[string]domain.Worker{},
 	}
 }
 
@@ -269,6 +283,139 @@ func (s *fakeProjectionSource) GetLLMDeploymentRun(_ context.Context, id uuid.UU
 	return &run, nil
 }
 
+func (s *fakeProjectionSource) ListModels(_ context.Context, _ domain.MLTaskKind, limit, offset int) ([]domain.MLModel, error) {
+	out := make([]domain.MLModel, 0, len(s.mlModels))
+	for _, model := range s.mlModels {
+		out = append(out, model)
+	}
+	if limit <= 0 || offset >= len(out) {
+		if offset >= len(out) {
+			return nil, nil
+		}
+		return out, nil
+	}
+	end := offset + limit
+	if end > len(out) {
+		end = len(out)
+	}
+	return out[offset:end], nil
+}
+
+func (s *fakeProjectionSource) GetModel(_ context.Context, id uuid.UUID) (*domain.MLModel, error) {
+	model, ok := s.mlModels[id]
+	if !ok {
+		return nil, nil
+	}
+	return &model, nil
+}
+
+func (s *fakeProjectionSource) GetModelBySlug(_ context.Context, slug string) (*domain.MLModel, error) {
+	for _, model := range s.mlModels {
+		if model.Slug == slug {
+			return &model, nil
+		}
+	}
+	return nil, nil
+}
+
+func (s *fakeProjectionSource) ListModelVersions(_ context.Context, modelID uuid.UUID, limit, offset int) ([]domain.MLModelVersion, error) {
+	out := []domain.MLModelVersion{}
+	for _, version := range s.mlVersions {
+		if version.ModelID == modelID {
+			out = append(out, version)
+		}
+	}
+	return out, nil
+}
+
+func (s *fakeProjectionSource) GetModelVersion(_ context.Context, id uuid.UUID) (*domain.MLModelVersion, error) {
+	version, ok := s.mlVersions[id]
+	if !ok {
+		return nil, nil
+	}
+	return &version, nil
+}
+
+func (s *fakeProjectionSource) GetArtifactRef(_ context.Context, id uuid.UUID) (*domain.MLArtifactRef, error) {
+	artifact, ok := s.mlArtifacts[id]
+	if !ok {
+		return nil, nil
+	}
+	return &artifact, nil
+}
+
+func (s *fakeProjectionSource) ListArtifactRefsByModelVersion(_ context.Context, modelVersionID uuid.UUID) ([]domain.MLArtifactRef, error) {
+	out := []domain.MLArtifactRef{}
+	for _, artifact := range s.mlArtifacts {
+		if artifact.ModelVersionID != nil && *artifact.ModelVersionID == modelVersionID {
+			out = append(out, artifact)
+		}
+	}
+	return out, nil
+}
+
+func (s *fakeProjectionSource) ListProvenanceEdgesByArtifact(_ context.Context, artifactID uuid.UUID) ([]domain.MLProvenanceEdge, error) {
+	out := []domain.MLProvenanceEdge{}
+	for _, edge := range s.mlEdges {
+		if (edge.FromArtifactID != nil && *edge.FromArtifactID == artifactID) || (edge.ToArtifactID != nil && *edge.ToArtifactID == artifactID) {
+			out = append(out, edge)
+		}
+	}
+	return out, nil
+}
+
+func (s *fakeProjectionSource) GetInferenceEndpoint(_ context.Context, id uuid.UUID) (*domain.MLInferenceEndpoint, error) {
+	endpoint, ok := s.mlEndpoints[id]
+	if !ok {
+		return nil, nil
+	}
+	return &endpoint, nil
+}
+
+func (s *fakeProjectionSource) ListInferenceEndpoints(_ context.Context, envID uuid.UUID, limit, offset int) ([]domain.MLInferenceEndpoint, error) {
+	out := []domain.MLInferenceEndpoint{}
+	for _, endpoint := range s.mlEndpoints {
+		if envID == uuid.Nil || endpoint.EnvironmentID == envID {
+			out = append(out, endpoint)
+		}
+	}
+	return out, nil
+}
+
+func (s *fakeProjectionSource) GetMLDeploymentIntent(_ context.Context, id uuid.UUID) (*domain.MLDeploymentIntent, error) {
+	return nil, nil
+}
+
+func (s *fakeProjectionSource) GetMLDeploymentRun(_ context.Context, id uuid.UUID) (*domain.MLDeploymentRun, error) {
+	return nil, nil
+}
+
+func (s *fakeProjectionSource) GetInferenceState(_ context.Context, endpointID, envID uuid.UUID) (*domain.MLInferenceState, error) {
+	state, ok := s.mlStates[stateKeyForTest(endpointID, envID)]
+	if !ok {
+		return nil, nil
+	}
+	return &state, nil
+}
+
+func (s *fakeProjectionSource) ListInferenceStates(context.Context) ([]domain.MLInferenceState, error) {
+	out := make([]domain.MLInferenceState, 0, len(s.mlStates))
+	for _, state := range s.mlStates {
+		out = append(out, state)
+	}
+	return out, nil
+}
+
+func (s *fakeProjectionSource) List(_ context.Context, status string, limit int) ([]domain.Worker, error) {
+	out := make([]domain.Worker, 0, len(s.workers))
+	for _, worker := range s.workers {
+		if status == "" || string(worker.Status) == status {
+			out = append(out, worker)
+		}
+	}
+	return out, nil
+}
+
 func TestProjectorPublishesSystemDiscoverySnapshot(t *testing.T) {
 	ctx := context.Background()
 	cfg := config.Defaults()
@@ -350,6 +497,45 @@ func TestProjectorRepublishesSnapshot(t *testing.T) {
 	assertTag(t, stateEvent, "intent", intentID.String())
 	assertTag(t, stateEvent, "run", runID.String())
 	assertJSONField(t, stateEvent.Content, "deleted", false)
+}
+
+func TestProjectorPublishesMLReadModelSnapshot(t *testing.T) {
+	ctx := context.Background()
+	modelID := uuid.New()
+	versionID := uuid.New()
+	envID := uuid.New()
+	endpointID := uuid.New()
+	artifactID := uuid.New()
+	source := newFakeProjectionSource()
+	source.envs[envID] = domain.Environment{ID: envID, Name: "prod"}
+	source.mlModels[modelID] = domain.MLModel{ID: modelID, Slug: "qwen", Name: "Qwen", Modalities: []string{"text"}, TaskKinds: []domain.MLTaskKind{domain.MLTaskKindChatCompletions}}
+	source.mlVersions[versionID] = domain.MLModelVersion{ID: versionID, ModelID: modelID, Version: "v1", RuntimeRequirements: domain.MLRuntimeRequirements{PreferredRuntimes: []domain.MLRuntimeKind{domain.MLRuntimeKindVLLM}, RequiredFormats: []domain.MLArtifactFormat{domain.MLArtifactFormatSafeTensors}}}
+	source.mlEndpoints[endpointID] = domain.MLInferenceEndpoint{ID: endpointID, Name: "chat", EnvironmentID: envID, TaskKinds: []domain.MLTaskKind{domain.MLTaskKindChatCompletions}, Protocol: "openai-compatible"}
+	source.mlStates[stateKeyForTest(endpointID, envID)] = domain.MLInferenceState{EndpointID: endpointID, EnvironmentID: envID, DesiredModelVersionID: &versionID, DriftStatus: domain.DriftStatusInSync, GatewayStatus: domain.GatewayRouteStatusSynced, RuntimeKind: domain.MLRuntimeKindVLLM}
+	source.mlArtifacts[artifactID] = domain.MLArtifactRef{ID: artifactID, ModelVersionID: &versionID, Kind: domain.MLArtifactKindModel, Format: domain.MLArtifactFormatSafeTensors, URI: "hf://qwen", SHA256: "abc123"}
+	source.workers["worker-pk"] = domain.Worker{PubKey: "worker-pk", Status: domain.WorkerStatusOnline, MLCapabilities: domain.WorkerMLCapabilities{Runtimes: []domain.MLRuntimeKind{domain.MLRuntimeKindVLLM}, ArtifactFormats: []domain.MLArtifactFormat{domain.MLArtifactFormatSafeTensors}, Tasks: []domain.MLTaskKind{domain.MLTaskKindChatCompletions}, Accelerators: []string{"gpu_nvidia_cuda"}}}
+
+	sink := &captureProjectionPublisher{}
+	projector := NewProjector(projectorTestConfig(), source, sink, nil, zap.NewNop(), WithMLProjectionSource(source), WithWorkerProjectionSource(source))
+	if err := projector.RepublishSnapshot(ctx); err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+
+	model := assertOneSignedKind(t, sink, KindMLModelRegistry)
+	assertTag(t, model, "d", "model:qwen")
+	assertTag(t, model, "task", "chat_completions")
+	version := assertOneSignedKind(t, sink, KindMLModelVersionRegistry)
+	assertTag(t, version, "d", "model-version:qwen:v1")
+	assertTag(t, version, "runtime", "vllm")
+	endpoint := assertOneSignedKind(t, sink, KindMLInferenceEndpointRegistry)
+	assertTag(t, endpoint, "d", "endpoint:chat:prod")
+	state := assertOneSignedKind(t, sink, KindMLInferenceEndpointState)
+	assertTag(t, state, "d", "endpoint-state:chat:prod")
+	provenance := assertOneSignedKind(t, sink, KindMLArtifactProvenanceGraph)
+	assertTag(t, provenance, "d", "artifact:abc123")
+	capability := assertOneSignedKind(t, sink, KindMLRuntimeCapabilityProfile)
+	assertTag(t, capability, "d", "worker:worker-pk:ai-capability")
+	assertTag(t, capability, "runtime", "vllm")
 }
 
 func TestProjectorPublishesAuditAndReadModelsForRepresentativeMutations(t *testing.T) {

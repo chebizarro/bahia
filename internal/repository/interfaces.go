@@ -238,6 +238,7 @@ type MLRegistryRepository interface {
 	ListModelVersions(ctx context.Context, modelID uuid.UUID, limit, offset int) ([]domain.MLModelVersion, error)
 
 	UpsertArtifactRef(ctx context.Context, artifact *domain.MLArtifactRef) error
+	GetArtifactRef(ctx context.Context, id uuid.UUID) (*domain.MLArtifactRef, error)
 	ListArtifactRefsByModelVersion(ctx context.Context, modelVersionID uuid.UUID) ([]domain.MLArtifactRef, error)
 	UpsertProvenanceEdge(ctx context.Context, edge *domain.MLProvenanceEdge) error
 	ListProvenanceEdgesByArtifact(ctx context.Context, artifactID uuid.UUID) ([]domain.MLProvenanceEdge, error)

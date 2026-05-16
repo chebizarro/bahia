@@ -56,6 +56,17 @@ const (
 	KindPackageArtifactRegistry   = 31972
 	KindPackagePromotionRegistry  = 31973
 	KindSystemDiscovery           = 31974
+
+	KindMLModelRegistry             = 31980
+	KindMLModelVersionRegistry      = 31981
+	KindMLDatasetRegistry           = 31982
+	KindMLRecipeRegistry            = 31983
+	KindMLRecipeRunState            = 31984
+	KindMLInferenceEndpointRegistry = 31985
+	KindMLInferenceEndpointState    = 31986
+	KindMLEvaluationExperimentState = 31987
+	KindMLArtifactProvenanceGraph   = 31988
+	KindMLRuntimeCapabilityProfile  = 31989
 )
 
 // Nostr event kinds for Bahia inbound command events (311xx series).

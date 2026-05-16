@@ -29,19 +29,30 @@ const (
 
 // MLRegistryService owns canonical generic ML registry and lifecycle state.
 type MLRegistryService struct {
-	repo      repository.MLRegistryRepository
-	publisher events.Publisher
-	logger    *zap.Logger
+	repo         repository.MLRegistryRepository
+	environments repository.EnvironmentRepository
+	publisher    events.Publisher
+	logger       *zap.Logger
 }
 
-func NewMLRegistryService(repo repository.MLRegistryRepository, publisher events.Publisher, logger *zap.Logger) *MLRegistryService {
+type MLRegistryServiceOption func(*MLRegistryService)
+
+func WithMLEnvironmentRepository(repo repository.EnvironmentRepository) MLRegistryServiceOption {
+	return func(s *MLRegistryService) { s.environments = repo }
+}
+
+func NewMLRegistryService(repo repository.MLRegistryRepository, publisher events.Publisher, logger *zap.Logger, opts ...MLRegistryServiceOption) *MLRegistryService {
 	if publisher == nil {
 		publisher = &events.NoopPublisher{}
 	}
 	if logger == nil {
 		logger = zap.NewNop()
 	}
-	return &MLRegistryService{repo: repo, publisher: publisher, logger: logger}
+	s := &MLRegistryService{repo: repo, publisher: publisher, logger: logger}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
 }
 
 func (s *MLRegistryService) CreateOrUpdateModel(ctx context.Context, model *domain.MLModel) error {
@@ -97,11 +108,27 @@ func (s *MLRegistryService) GetModelVersion(ctx context.Context, id uuid.UUID) (
 	return s.repo.GetModelVersion(ctx, id)
 }
 
+func (s *MLRegistryService) GetModelVersionByModelVersion(ctx context.Context, modelID uuid.UUID, version string) (*domain.MLModelVersion, error) {
+	return s.repo.GetModelVersionByModelVersion(ctx, modelID, version)
+}
+
 func (s *MLRegistryService) ListModelVersions(ctx context.Context, modelID uuid.UUID, limit, offset int) ([]domain.MLModelVersion, error) {
 	if limit <= 0 {
 		limit = 100
 	}
 	return s.repo.ListModelVersions(ctx, modelID, limit, offset)
+}
+
+func (s *MLRegistryService) GetArtifactRef(ctx context.Context, id uuid.UUID) (*domain.MLArtifactRef, error) {
+	return s.repo.GetArtifactRef(ctx, id)
+}
+
+func (s *MLRegistryService) ListArtifactRefsByModelVersion(ctx context.Context, modelVersionID uuid.UUID) ([]domain.MLArtifactRef, error) {
+	return s.repo.ListArtifactRefsByModelVersion(ctx, modelVersionID)
+}
+
+func (s *MLRegistryService) ListProvenanceEdgesByArtifact(ctx context.Context, artifactID uuid.UUID) ([]domain.MLProvenanceEdge, error) {
+	return s.repo.ListProvenanceEdgesByArtifact(ctx, artifactID)
 }
 
 func (s *MLRegistryService) CreateOrUpdateArtifactRef(ctx context.Context, artifact *domain.MLArtifactRef) error {
@@ -149,6 +176,17 @@ func (s *MLRegistryService) GetInferenceEndpoint(ctx context.Context, id uuid.UU
 	return s.repo.GetInferenceEndpoint(ctx, id)
 }
 
+func (s *MLRegistryService) GetInferenceEndpointByNameEnv(ctx context.Context, name string, envID uuid.UUID) (*domain.MLInferenceEndpoint, error) {
+	return s.repo.GetInferenceEndpointByNameEnv(ctx, name, envID)
+}
+
+func (s *MLRegistryService) ListInferenceEndpoints(ctx context.Context, envID uuid.UUID, limit, offset int) ([]domain.MLInferenceEndpoint, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	return s.repo.ListInferenceEndpoints(ctx, envID, limit, offset)
+}
+
 func (s *MLRegistryService) CreateDeploymentIntent(ctx context.Context, intent *domain.MLDeploymentIntent) error {
 	if intent == nil {
 		return fmt.Errorf("ML deployment intent is required")
@@ -179,11 +217,29 @@ func (s *MLRegistryService) CreateDeploymentIntent(ctx context.Context, intent *
 	if err := domain.ValidateSourceKind(intent.SourceKind); err != nil {
 		return err
 	}
+	protected := false
+	if s.environments != nil {
+		env, err := s.environments.GetByID(ctx, intent.EnvironmentID)
+		if err != nil {
+			return err
+		}
+		if env != nil {
+			protected = env.Protected
+		}
+	}
 	if intent.ApprovalStatus == "" {
-		intent.ApprovalStatus = domain.ApprovalStatusNotRequired
+		if protected {
+			intent.ApprovalStatus = domain.ApprovalStatusPending
+		} else {
+			intent.ApprovalStatus = domain.ApprovalStatusNotRequired
+		}
 	}
 	if intent.Status == "" {
-		intent.Status = domain.IntentStatusApproved
+		if intent.ApprovalStatus == domain.ApprovalStatusPending {
+			intent.Status = domain.IntentStatusPending
+		} else {
+			intent.Status = domain.IntentStatusApproved
+		}
 	}
 	if err := s.repo.UpsertDeploymentIntent(ctx, intent); err != nil {
 		return err
@@ -201,11 +257,156 @@ func (s *MLRegistryService) GetDeploymentIntent(ctx context.Context, id uuid.UUI
 	return s.repo.GetDeploymentIntent(ctx, id)
 }
 
+func (s *MLRegistryService) GetMLDeploymentIntent(ctx context.Context, id uuid.UUID) (*domain.MLDeploymentIntent, error) {
+	return s.GetDeploymentIntent(ctx, id)
+}
+
 func (s *MLRegistryService) ListDeploymentIntents(ctx context.Context, endpointID, envID uuid.UUID, limit, offset int) ([]domain.MLDeploymentIntent, error) {
 	if limit <= 0 {
 		limit = 100
 	}
 	return s.repo.ListDeploymentIntents(ctx, endpointID, envID, limit, offset)
+}
+
+func (s *MLRegistryService) ApproveDeploymentIntent(ctx context.Context, id uuid.UUID) error {
+	intent, err := s.repo.GetDeploymentIntent(ctx, id)
+	if err != nil {
+		return err
+	}
+	if intent == nil {
+		return fmt.Errorf("ML deployment intent %s not found: %w", id, repository.ErrNotFound)
+	}
+	now := time.Now().UTC()
+	intent.ApprovalStatus = domain.ApprovalStatusApproved
+	intent.Status = domain.IntentStatusApproved
+	intent.ApprovedAt = &now
+	intent.UpdatedAt = now
+	if err := s.repo.UpsertDeploymentIntent(ctx, intent); err != nil {
+		return err
+	}
+	state, err := s.repo.GetInferenceState(ctx, intent.EndpointID, intent.EnvironmentID)
+	if err != nil {
+		return err
+	}
+	if state == nil {
+		state = &domain.MLInferenceState{EndpointID: intent.EndpointID, EnvironmentID: intent.EnvironmentID}
+	}
+	state.DesiredModelVersionID = &intent.ModelVersionID
+	state.DesiredIntentID = &intent.ID
+	state.DriftStatus = domain.DriftStatusDeploying
+	state.GatewayStatus = domain.GatewayRouteStatusPending
+	if err := s.repo.UpsertInferenceState(ctx, state); err != nil {
+		return err
+	}
+	s.publish(ctx, EventMLIntentChanged, intent.ID.String(), map[string]any{"endpoint_id": intent.EndpointID.String(), "environment_id": intent.EnvironmentID.String(), "model_version_id": intent.ModelVersionID.String(), "intent_id": intent.ID.String()})
+	s.publishStateChanged(ctx, state)
+	return nil
+}
+
+func (s *MLRegistryService) RejectDeploymentIntent(ctx context.Context, id uuid.UUID) error {
+	intent, err := s.repo.GetDeploymentIntent(ctx, id)
+	if err != nil {
+		return err
+	}
+	if intent == nil {
+		return fmt.Errorf("ML deployment intent %s not found: %w", id, repository.ErrNotFound)
+	}
+	intent.ApprovalStatus = domain.ApprovalStatusRejected
+	intent.Status = domain.IntentStatusRejected
+	intent.UpdatedAt = time.Now().UTC()
+	if err := s.repo.UpsertDeploymentIntent(ctx, intent); err != nil {
+		return err
+	}
+	if err := s.repairRejectedDesiredState(ctx, intent); err != nil {
+		return err
+	}
+	s.publish(ctx, EventMLIntentChanged, intent.ID.String(), map[string]any{"endpoint_id": intent.EndpointID.String(), "environment_id": intent.EnvironmentID.String(), "model_version_id": intent.ModelVersionID.String(), "intent_id": intent.ID.String()})
+	return nil
+}
+
+func (s *MLRegistryService) RollbackWithMetadata(ctx context.Context, endpointID, envID uuid.UUID, requestedBy string, metadata map[string]any) (*domain.MLDeploymentIntent, error) {
+	if strings.TrimSpace(requestedBy) == "" {
+		return nil, fmt.Errorf("requested_by must not be empty")
+	}
+	state, err := s.repo.GetInferenceState(ctx, endpointID, envID)
+	if err != nil {
+		return nil, err
+	}
+	var currentVersion *uuid.UUID
+	if state != nil {
+		currentVersion = state.DesiredModelVersionID
+	}
+	intents, err := s.repo.ListDeploymentIntents(ctx, endpointID, envID, 1000, 0)
+	if err != nil {
+		return nil, err
+	}
+	var prior *domain.MLDeploymentIntent
+	for i := range intents {
+		candidate := &intents[i]
+		if candidate.Status != domain.IntentStatusDeployed {
+			continue
+		}
+		if currentVersion != nil && candidate.ModelVersionID == *currentVersion {
+			continue
+		}
+		prior = candidate
+		break
+	}
+	if prior == nil {
+		return nil, fmt.Errorf("no previous deployed ML model version found for endpoint %s environment %s", endpointID, envID)
+	}
+	intent := &domain.MLDeploymentIntent{
+		EndpointID:         endpointID,
+		EnvironmentID:      envID,
+		ModelVersionID:     prior.ModelVersionID,
+		RequestedBy:        requestedBy,
+		SourceKind:         domain.SourceKindEventTriggered,
+		RuntimePreference:  prior.RuntimePreference,
+		SupersedesIntentID: &prior.ID,
+		Metadata:           metadata,
+	}
+	if err := s.CreateDeploymentIntent(ctx, intent); err != nil {
+		return nil, err
+	}
+	return intent, nil
+}
+
+func (s *MLRegistryService) repairRejectedDesiredState(ctx context.Context, rejected *domain.MLDeploymentIntent) error {
+	state, err := s.repo.GetInferenceState(ctx, rejected.EndpointID, rejected.EnvironmentID)
+	if err != nil {
+		return err
+	}
+	if state == nil || state.DesiredIntentID == nil || *state.DesiredIntentID != rejected.ID {
+		return nil
+	}
+	intents, err := s.repo.ListDeploymentIntents(ctx, rejected.EndpointID, rejected.EnvironmentID, 1000, 0)
+	if err != nil {
+		return err
+	}
+	var previous *domain.MLDeploymentIntent
+	for i := range intents {
+		candidate := &intents[i]
+		if candidate.ID == rejected.ID || candidate.Status != domain.IntentStatusDeployed {
+			continue
+		}
+		previous = candidate
+		break
+	}
+	if previous != nil {
+		state.DesiredModelVersionID = &previous.ModelVersionID
+		state.DesiredIntentID = &previous.ID
+		state.DriftStatus = domain.DriftStatusInSync
+	} else {
+		state.DesiredModelVersionID = nil
+		state.DesiredIntentID = nil
+		state.DriftStatus = domain.DriftStatusDrifted
+		state.GatewayStatus = domain.GatewayRouteStatusError
+	}
+	if err := s.repo.UpsertInferenceState(ctx, state); err != nil {
+		return err
+	}
+	s.publishStateChanged(ctx, state)
+	return nil
 }
 
 func (s *MLRegistryService) CreateOrUpdateDeploymentRun(ctx context.Context, run *domain.MLDeploymentRun) error {
@@ -223,6 +424,10 @@ func (s *MLRegistryService) CreateOrUpdateDeploymentRun(ctx context.Context, run
 	}
 	s.publish(ctx, EventMLRunChanged, run.ID.String(), map[string]any{"intent_id": run.DeploymentIntentID.String(), "run_id": run.ID.String(), "status": string(run.Status)})
 	return nil
+}
+
+func (s *MLRegistryService) GetMLDeploymentRun(ctx context.Context, id uuid.UUID) (*domain.MLDeploymentRun, error) {
+	return s.repo.GetDeploymentRun(ctx, id)
 }
 
 func (s *MLRegistryService) CompleteDeploymentRun(ctx context.Context, id uuid.UUID, status domain.DeploymentRunStatus, exitCode *int) error {

@@ -25,6 +25,25 @@ func TestLLMCompatibilityRoundTripsRouteAndReleaseConfig(t *testing.T) {
 	require.Equal(t, release.Metadata, convertedRelease.Metadata)
 }
 
+func TestMLRollbackInProtectedEnvironmentRequiresApproval(t *testing.T) {
+	ctx := context.Background()
+	endpointID, envID, priorVersionID, currentVersionID, priorIntentID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	repo := newFakeMLRegistryRepo()
+	repo.endpoints[endpointID] = &domain.MLInferenceEndpoint{ID: endpointID, Name: "chat", EnvironmentID: envID}
+	repo.versions[priorVersionID] = &domain.MLModelVersion{ID: priorVersionID, ModelID: uuid.New(), Version: "v1"}
+	repo.states[key(endpointID, envID)] = &domain.MLInferenceState{EndpointID: endpointID, EnvironmentID: envID, DesiredModelVersionID: &currentVersionID}
+	repo.intents[priorIntentID] = &domain.MLDeploymentIntent{ID: priorIntentID, EndpointID: endpointID, EnvironmentID: envID, ModelVersionID: priorVersionID, RequestedBy: "operator", Status: domain.IntentStatusDeployed}
+	envs := &fakeEnvRepo{byID: map[uuid.UUID]*domain.Environment{envID: &domain.Environment{ID: envID, Name: "prod", Protected: true}}}
+	svc := NewMLRegistryService(repo, nil, nil, WithMLEnvironmentRepository(envs))
+
+	intent, err := svc.RollbackWithMetadata(ctx, endpointID, envID, "operator", map[string]any{"reason": "test"})
+
+	require.NoError(t, err)
+	require.Equal(t, priorVersionID, intent.ModelVersionID)
+	require.Equal(t, domain.ApprovalStatusPending, intent.ApprovalStatus)
+	require.Equal(t, domain.IntentStatusPending, intent.Status)
+}
+
 func TestMLRegistryBackfillsLLMAndParityDetectsMismatch(t *testing.T) {
 	ctx := context.Background()
 	routeID, releaseID, envID, intentID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
@@ -146,8 +165,19 @@ func (r *fakeMLRegistryRepo) ListModelVersions(_ context.Context, modelID uuid.U
 }
 func (r *fakeMLRegistryRepo) UpsertArtifactRef(_ context.Context, artifact *domain.MLArtifactRef) error {
 	cp := *artifact
+	if cp.ID == uuid.Nil {
+		cp.ID = uuid.New()
+	}
 	r.artifacts = append(r.artifacts, cp)
 	return nil
+}
+func (r *fakeMLRegistryRepo) GetArtifactRef(_ context.Context, id uuid.UUID) (*domain.MLArtifactRef, error) {
+	for i := range r.artifacts {
+		if r.artifacts[i].ID == id {
+			return &r.artifacts[i], nil
+		}
+	}
+	return nil, nil
 }
 func (r *fakeMLRegistryRepo) ListArtifactRefsByModelVersion(_ context.Context, modelVersionID uuid.UUID) ([]domain.MLArtifactRef, error) {
 	out := []domain.MLArtifactRef{}

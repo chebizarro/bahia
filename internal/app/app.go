@@ -274,7 +274,7 @@ func New(cfg *config.Config) (*App, error) {
 	// Generic AI/ML registry foundation. Bucket-B keeps this additive and does not
 	// move long-running orchestration off the existing LLM path until later buckets.
 	mlRegistryRepo := repository.NewPgMLRegistryRepository(pool)
-	mlRegistry := service.NewMLRegistryService(mlRegistryRepo, publisher, logger)
+	mlRegistry := service.NewMLRegistryService(mlRegistryRepo, publisher, logger, service.WithMLEnvironmentRepository(envRepo))
 
 	// LLM provisioning control plane.
 	var llmRegistry *service.LLMRegistryService
@@ -338,6 +338,8 @@ func New(cfg *config.Config) (*App, error) {
 	// retained for relay pool lifecycle compatibility.
 	projectorOpts := []nostrAdapter.ProjectorOption{
 		nostrAdapter.WithPolicyProjectionSource(policySvc),
+		nostrAdapter.WithMLProjectionSource(mlRegistry),
+		nostrAdapter.WithWorkerProjectionSource(workerRepo),
 		nostrAdapter.WithSystemDiscoveryConfig(cfg, true),
 	}
 	if llmRegistry != nil {
@@ -551,6 +553,7 @@ func New(cfg *config.Config) (*App, error) {
 			controlplane.WithToolResponder(controlplane.NewToolResponder(controlPlanePool, controlPlaneSigner, logger, nostrEventRepo)),
 			controlplane.WithToolProvisioningCoordinator(toolCoordinator),
 			controlplane.WithPolicyService(policySvc),
+			controlplane.WithMLRegistry(mlRegistry),
 		}
 		if llmRegistry != nil {
 			reactorOpts = append(reactorOpts, controlplane.WithLLMRegistry(llmRegistry))

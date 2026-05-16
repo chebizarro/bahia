@@ -192,7 +192,7 @@ func TestSubscriberBuildSubscriptionFiltersFallsBackToClockWhenNoCursor(t *testi
 func TestSubscriberBuildSubscriptionFiltersScopesCommandKindsToAuthorizedAuthors(t *testing.T) {
 	repo := newMemoryNostrEventRepo()
 	sub := NewSubscriber(nil, repo, zap.NewNop(),
-		WithKinds([]int{5961, 31100, 5101}),
+		WithKinds([]int{5961, 38390, 38394, 31100, 5101}),
 		WithAuthorizedAuthors([]string{"operator-a", "operator-b"}),
 		WithBackfillLimit(10),
 		withClock(func() time.Time { return time.Unix(500, 0).UTC() }),
@@ -209,7 +209,7 @@ func TestSubscriberBuildSubscriptionFiltersScopesCommandKindsToAuthorizedAuthors
 	require.Equal(t, 10, open.Limit)
 
 	scoped := filters[1]
-	require.Equal(t, []int{5961, 31100}, scoped.Kinds)
+	require.Equal(t, []int{5961, 38390, 38394, 31100}, scoped.Kinds)
 	require.Equal(t, []string{"operator-a", "operator-b"}, scoped.Authors)
 	require.Equal(t, int64(500), int64(*scoped.Since))
 	require.Equal(t, 10, scoped.Limit)

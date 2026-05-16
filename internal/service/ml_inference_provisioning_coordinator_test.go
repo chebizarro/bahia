@@ -115,6 +115,15 @@ func (r *coordinatorMLRepoFake) UpsertArtifactRef(_ context.Context, artifact *d
 	r.artifacts[cp.ID] = &cp
 	return nil
 }
+func (r *coordinatorMLRepoFake) GetArtifactRef(_ context.Context, id uuid.UUID) (*domain.MLArtifactRef, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if artifact := r.artifacts[id]; artifact != nil {
+		cp := *artifact
+		return &cp, nil
+	}
+	return nil, nil
+}
 func (r *coordinatorMLRepoFake) ListArtifactRefsByModelVersion(_ context.Context, modelVersionID uuid.UUID) ([]domain.MLArtifactRef, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
