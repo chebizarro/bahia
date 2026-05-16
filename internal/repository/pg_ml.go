@@ -762,6 +762,100 @@ func (r *PgMLRegistryRepository) ListDeploymentRuns(ctx context.Context, intentI
 	return runs, rows.Err()
 }
 
+func (r *PgMLRegistryRepository) EnsureQueuedMLDeploymentRunForNextReadyIntent(ctx context.Context) (*domain.MLDeploymentRun, error) {
+	now := time.Now().UTC()
+	created, err := r.scanRun(r.pool.QueryRow(ctx, `
+		WITH next_intent AS (
+			SELECT i.id, i.endpoint_id, i.environment_id, i.model_version_id,
+			i.metadata->>'nostr_event_id' AS nostr_event_id,
+			i.metadata->>'nostr_request_pubkey' AS nostr_request_pubkey
+			FROM ml_deployment_intents i
+			JOIN ml_inference_state s
+			ON s.endpoint_id = i.endpoint_id
+			AND s.environment_id = i.environment_id
+			AND s.desired_intent_id = i.id
+			WHERE i.status = 'approved'
+			AND i.approval_status IN ('not_required', 'approved')
+			AND NOT EXISTS (
+				SELECT 1 FROM ml_deployment_runs r
+				WHERE r.deployment_intent_id = i.id
+				AND r.status IN ('queued', 'running')
+			)
+			ORDER BY i.created_at ASC, i.id ASC
+			FOR UPDATE SKIP LOCKED
+			LIMIT 1
+		)
+		INSERT INTO ml_deployment_runs (`+mlRunColumns+`)
+		SELECT $1, id, '', '', '', '', '', $2, NULL, '', '', '{}'::jsonb, jsonb_build_object(
+			'endpoint_id', endpoint_id,
+			'environment_id', environment_id,
+			'model_version_id', model_version_id,
+			'nostr_event_id', nostr_event_id,
+			'nostr_request_pubkey', nostr_request_pubkey
+		), NULL, NULL, $3, $4
+		FROM next_intent
+		RETURNING `+mlRunColumns+`
+	`, uuid.New(), domain.RunStatusQueued, now, now))
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("ensuring queued ML deployment run: %w", err)
+	}
+	return created, nil
+}
+
+func (r *PgMLRegistryRepository) ClaimNextQueuedMLDeploymentRun(ctx context.Context) (*domain.MLDeploymentRun, error) {
+	now := time.Now().UTC()
+	run, err := r.scanRun(r.pool.QueryRow(ctx, `
+		WITH next_run AS (
+			SELECT r.id
+			FROM ml_deployment_runs r
+			JOIN ml_deployment_intents i ON i.id = r.deployment_intent_id
+			JOIN ml_inference_state s
+				ON s.endpoint_id = i.endpoint_id
+				AND s.environment_id = i.environment_id
+				AND s.desired_intent_id = i.id
+			WHERE r.status = 'queued'
+				AND NOT EXISTS (
+				SELECT 1
+				FROM ml_deployment_runs active
+				JOIN ml_deployment_intents ai ON ai.id = active.deployment_intent_id
+				WHERE active.status = 'running'
+				AND ai.endpoint_id = i.endpoint_id
+				AND ai.environment_id = i.environment_id
+			)
+			ORDER BY r.created_at ASC, r.id ASC
+			FOR UPDATE SKIP LOCKED
+			LIMIT 1
+		)
+		UPDATE ml_deployment_runs
+		SET status = 'running', started_at = COALESCE(started_at, $1), updated_at = $1
+		WHERE id = (SELECT id FROM next_run)
+		RETURNING `+mlRunColumns+`
+	`, now))
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("claiming queued ML deployment run: %w", err)
+	}
+	return run, nil
+}
+
+func (r *PgMLRegistryRepository) RequeueStaleMLDeploymentRuns(ctx context.Context, olderThan time.Duration) (int, error) {
+	cutoff := time.Now().UTC().Add(-olderThan)
+	cmd, err := r.pool.Exec(ctx, `
+		UPDATE ml_deployment_runs
+		SET status = 'queued', started_at = NULL, updated_at = now()
+		WHERE status = 'running' AND updated_at < $1
+	`, cutoff)
+	if err != nil {
+		return 0, fmt.Errorf("requeueing stale ML deployment runs: %w", err)
+	}
+	return int(cmd.RowsAffected()), nil
+}
+
 const mlObservationColumns = `id, endpoint_id, environment_id, observed_model_version_id, observed_run_id, runtime_kind, backend_endpoint, backend_health, gateway_status, gateway_target, gateway_config_hash, source, metadata, observed_at`
 
 func (r *PgMLRegistryRepository) UpsertInferenceObservation(ctx context.Context, obs *domain.MLInferenceObservation) error {
