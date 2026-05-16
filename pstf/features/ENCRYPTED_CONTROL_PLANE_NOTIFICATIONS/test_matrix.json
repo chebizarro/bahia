@@ -476,6 +476,41 @@
       ],
       "status": "pass",
       "failure_reason": null
+    },
+    {
+      "test_id": "ECPN-T-015",
+      "ac_ids": [
+        "ECPN-AC-009"
+      ],
+      "title": "Backend propagates handler failures as correlated encrypted terminal errors",
+      "type": "integration",
+      "existing_or_new": "new",
+      "target_path": "internal/controlplane/encrypted_transport_test.go",
+      "description": "Adds backend transport coverage proving an authorized notification handler error publishes a correlated kind 7980 encrypted terminal error with handler_failed instead of silently dropping or dispatching a public fallback.",
+      "preconditions": [
+        "Encrypted request transport has an authorized requester and a registered notification operation handler that returns an error."
+      ],
+      "steps": [
+        "Deliver a decryptable kind 5980 notification request.",
+        "Have the registered handler return a deterministic error.",
+        "Decrypt and inspect the published kind 7980 result envelope."
+      ],
+      "expected_result": "One encrypted result is published with #e/#p correlation, status error, error.code handler_failed, and the terminal handler message.",
+      "fixtures": [
+        "Deterministic service and requester private keys",
+        "Mock encrypted publisher"
+      ],
+      "mocks": [
+        "Notification operation handler returning an error"
+      ],
+      "data_requirements": [
+        "Stable notifications.channels.create request envelope and handler error text."
+      ],
+      "determinism_notes": [
+        "No relay or network dependency; event delivery is direct to HandleEvent."
+      ],
+      "status": "pass",
+      "failure_reason": null
     }
   ],
   "coverage_summary": {
@@ -487,6 +522,7 @@
     "Implemented missing coverage in `web/tests/unit/notifications-store.test.js` for encrypted log failure state clearing stale logs and populating `logsError`.",
     "Implemented browser coverage in `web/tests/e2e/notifications-form-error.spec.js` for encrypted create/update failure persistence and notifications accessibility assertions.",
     "Verification run 2026-05-03 confirmed ECPN-T-001 through ECPN-T-014 passing with deterministic unit, backend, and Playwright evidence.",
-    "Acceptance criteria JSON is approved and synchronized with the recorded HITL decision; matrix readiness means every approved criterion is covered by passing tests."
+    "Acceptance criteria JSON is approved and synchronized with the recorded HITL decision; matrix readiness means every approved criterion is covered by passing tests.",
+    "Added ECPN-T-015 coverage for handler_failed terminal encrypted errors and strengthened browser trace assertions for 5980 requests, accepted OKs, correlated 7980 results, and encrypted/public relay separation."
   ]
 }

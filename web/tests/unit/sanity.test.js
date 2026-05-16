@@ -1,5 +1,8 @@
 import { createHash } from 'node:crypto';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { finalizeEvent } from 'nostr-tools';
+
+const TEST_SECRET_KEY = Uint8Array.from(Array.from({ length: 32 }, (_, index) => index + 1));
 
 function eventId(event) {
   return createHash('sha256')
@@ -8,16 +11,19 @@ function eventId(event) {
 }
 
 function validEvent(overrides = {}) {
-  const event = {
-    pubkey: 'a'.repeat(64),
+  const unsigned = {
     created_at: Math.floor(Date.now() / 1000),
     kind: 31962,
     tags: [['d', 'svc-1']],
-    content: '{}',
-    sig: 'b'.repeat(128),
-    ...overrides
+    content: '{}'
   };
-  return { ...event, id: overrides.id || eventId(event) };
+  const signed = finalizeEvent({ ...unsigned, ...Object.fromEntries(Object.entries(overrides).filter(([key]) => !['id', 'sig', 'tags'].includes(key))) }, TEST_SECRET_KEY);
+  return {
+    ...signed,
+    ...(Object.hasOwn(overrides, 'tags') ? { tags: overrides.tags } : {}),
+    ...(Object.hasOwn(overrides, 'sig') ? { sig: overrides.sig } : {}),
+    ...(Object.hasOwn(overrides, 'id') ? { id: overrides.id } : {})
+  };
 }
 
 function openSocket() {

@@ -98,11 +98,17 @@ export async function installPublicServiceDeploymentHarness(
       localStorage.setItem('__BAHIA_E2E_PUBLIC_PUBLISHES', JSON.stringify(window.__BAHIA_E2E_PUBLIC_PUBLISHES));
       localStorage.setItem('__BAHIA_E2E_PUBLIC_REQUEST_KINDS', JSON.stringify(window.__BAHIA_E2E_PUBLIC_REQUEST_KINDS));
       localStorage.setItem('__BAHIA_E2E_PUBLIC_REQUESTS', JSON.stringify(window.__BAHIA_E2E_PUBLIC_REQUESTS));
+      localStorage.setItem('__BAHIA_E2E_PUBLIC_OKS', JSON.stringify(window.__BAHIA_E2E_PUBLIC_OKS));
+      localStorage.setItem('__BAHIA_E2E_PUBLIC_RESULTS', JSON.stringify(window.__BAHIA_E2E_PUBLIC_RESULTS));
+      localStorage.setItem('__BAHIA_E2E_PUBLIC_PROJECTIONS', JSON.stringify(window.__BAHIA_E2E_PUBLIC_PROJECTIONS));
     }
 
     window.__BAHIA_E2E_PUBLIC_PUBLISHES = loadPersistedJson('__BAHIA_E2E_PUBLIC_PUBLISHES', []);
     window.__BAHIA_E2E_PUBLIC_REQUEST_KINDS = loadPersistedJson('__BAHIA_E2E_PUBLIC_REQUEST_KINDS', []);
     window.__BAHIA_E2E_PUBLIC_REQUESTS = loadPersistedJson('__BAHIA_E2E_PUBLIC_REQUESTS', []);
+    window.__BAHIA_E2E_PUBLIC_OKS = loadPersistedJson('__BAHIA_E2E_PUBLIC_OKS', []);
+    window.__BAHIA_E2E_PUBLIC_RESULTS = loadPersistedJson('__BAHIA_E2E_PUBLIC_RESULTS', []);
+    window.__BAHIA_E2E_PUBLIC_PROJECTIONS = loadPersistedJson('__BAHIA_E2E_PUBLIC_PROJECTIONS', []);
     window.__BAHIA_E2E_PUBLIC_SEEN_REQUEST_IDS = new Set();
     window.__BAHIA_E2E_PUBLIC_PENDING_EVENTS = [];
     window.__BAHIA_E2E_PUBLIC_PENDING_POLICY_PREVIEWS = new Map();
@@ -148,6 +154,31 @@ export async function installPublicServiceDeploymentHarness(
         content: typeof content === 'string' ? content : JSON.stringify(content),
         sig: '0'.repeat(128)
       };
+    }
+
+    async function sha256Hex(input) {
+      const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(input));
+      return Array.from(new Uint8Array(digest)).map((byte) => byte.toString(16).padStart(2, '0')).join('');
+    }
+
+    async function normalizeRelayEventForDelivery(event) {
+      const normalized = {
+        ...event,
+        pubkey: typeof event?.pubkey === 'string' && /^[0-9a-f]{64}$/.test(event.pubkey) ? event.pubkey : servicePubkey,
+        created_at: Number.isInteger(event?.created_at) ? event.created_at : nowSeconds,
+        tags: Array.isArray(event?.tags) ? event.tags.map((tag) => Array.isArray(tag) ? tag.map((value) => String(value)) : []).filter((tag) => tag.length > 0) : [],
+        content: typeof event?.content === 'string' ? event.content : JSON.stringify(event?.content ?? {}),
+        sig: typeof event?.sig === 'string' && /^[0-9a-f]{128}$/.test(event.sig) ? event.sig : '0'.repeat(128)
+      };
+      normalized.id = await sha256Hex(JSON.stringify([0, normalized.pubkey, normalized.created_at, normalized.kind, normalized.tags, normalized.content]));
+      return normalized;
+    }
+
+    function deliverRelayEvent(socket, subId, event) {
+      void normalizeRelayEventForDelivery(event).then((normalized) => {
+        if (socket.readyState !== TrackingWebSocket.OPEN) return;
+        socket.onmessage?.({ data: JSON.stringify(['EVENT', subId, normalized]) });
+      });
     }
 
     function matchesFilter(event, filter) {
@@ -210,7 +241,12 @@ export async function installPublicServiceDeploymentHarness(
 
     function persistReadModelEvents() {
       persistPublicState();
-      localStorage.setItem('__bahia_e2e_nostr_events', JSON.stringify(currentReadModelEvents()));
+      let discoveryEvents = [];
+      try {
+        discoveryEvents = JSON.parse(localStorage.getItem('__bahia_e2e_nostr_events') || '[]')
+          .filter((event) => [31974, 30002].includes(event?.kind));
+      } catch {}
+      localStorage.setItem('__bahia_e2e_nostr_events', JSON.stringify([...discoveryEvents, ...currentReadModelEvents()]));
     }
 
     function emitToMatchingSubscriptions(socket, event, requireCorrelationId = null) {
@@ -226,7 +262,7 @@ export async function installPublicServiceDeploymentHarness(
           correlated = true;
         }
         socket.__bahiaDeliveredCount = (socket.__bahiaDeliveredCount || 0) + 1;
-        socket.onmessage?.({ data: JSON.stringify(['EVENT', subId, event]) });
+        deliverRelayEvent(socket, subId, event);
       }
       return { delivered, correlated };
     }
@@ -242,7 +278,23 @@ export async function installPublicServiceDeploymentHarness(
       return { delivered, correlated };
     }
 
-    function queueRelayEvent(event, { requireCorrelationId = null } = {}) {
+    function queueRelayEvent(event, { requireCorrelationId = null, traceAs = null } = {}) {
+      if (traceAs === 'result') {
+        window.__BAHIA_E2E_PUBLIC_RESULTS.push({
+          eventId: event.id,
+          kind: event.kind,
+          requestEventId: requireCorrelationId,
+          tags: event.tags || []
+        });
+      } else if (traceAs === 'projection') {
+        window.__BAHIA_E2E_PUBLIC_PROJECTIONS.push({
+          eventId: event.id,
+          kind: event.kind,
+          requestEventId: requireCorrelationId,
+          tags: event.tags || []
+        });
+      }
+      persistPublicTrace();
       window.__BAHIA_E2E_PUBLIC_PENDING_EVENTS.push({ event, requireCorrelationId });
       deliverPendingRelayEvents();
     }
@@ -638,12 +690,13 @@ export async function installPublicServiceDeploymentHarness(
         window.__BAHIA_E2E_PUBLIC_PUBLISHES.push({ relay: this.url, eventId: requestEvent.id, kind: requestEvent.kind });
         window.__BAHIA_E2E_PUBLIC_REQUEST_KINDS.push(requestEvent.kind);
         window.__BAHIA_E2E_PUBLIC_REQUESTS.push({ relay: this.url, kind: requestEvent.kind, eventId: requestEvent.id, tags: requestEvent.tags || [], content: requestEvent.content || '' });
+        window.__BAHIA_E2E_PUBLIC_OKS.push({ relay: this.url, eventId: requestEvent.id, kind: requestEvent.kind, sent: true, accepted: true, message: '' });
         persistPublicTrace();
         originalSend.call(this, data);
         if (window.__BAHIA_E2E_PUBLIC_SEEN_REQUEST_IDS.has(requestEvent.id)) return;
         window.__BAHIA_E2E_PUBLIC_SEEN_REQUEST_IDS.add(requestEvent.id);
         const { projections, resultEvent, delayedResultEvent } = handlePublicRequest(requestEvent);
-        for (const projection of projections) queueRelayEvent(projection);
+        for (const projection of projections) queueRelayEvent(projection, { requireCorrelationId: requestEvent.id, traceAs: 'projection' });
         if (delayedResultEvent) {
           window.__BAHIA_E2E_PUBLIC_PENDING_POLICY_PREVIEWS.set(requestEvent.id, {
             requestEvent,
@@ -661,7 +714,8 @@ export async function installPublicServiceDeploymentHarness(
               return false;
             }
             queueRelayEvent(buildPolicyEvaluateResultEvent(pending.requestEvent, pending.payload, mode), {
-              requireCorrelationId: pending.requestEvent.id
+              requireCorrelationId: pending.requestEvent.id,
+              traceAs: 'result'
             });
             window.__BAHIA_E2E_PUBLIC_PENDING_POLICY_PREVIEWS.delete(requestEventId);
             if (window.__BAHIA_E2E_PUBLIC_PENDING_POLICY_PREVIEWS.size === 0) {
@@ -671,7 +725,7 @@ export async function installPublicServiceDeploymentHarness(
           };
           return;
         }
-        queueRelayEvent(resultEvent(requestEvent), { requireCorrelationId: requestEvent.id });
+        queueRelayEvent(resultEvent(requestEvent), { requireCorrelationId: requestEvent.id, traceAs: 'result' });
         return;
       }
       return originalSend.call(this, data);

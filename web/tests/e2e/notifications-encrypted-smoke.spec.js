@@ -55,6 +55,9 @@ test.describe('Notifications encrypted transport smoke', () => {
 
     const transportTrace = await page.evaluate(() => ({
       relays: window.__BAHIA_E2E_ENCRYPTED_PUBLISHES.map((entry) => entry.relay),
+      requests: window.__BAHIA_E2E_ENCRYPTED_REQUESTS,
+      oks: window.__BAHIA_E2E_ENCRYPTED_OKS,
+      results: window.__BAHIA_E2E_ENCRYPTED_RESULTS,
       operations: [...window.__BAHIA_E2E_ENCRYPTED_OPERATIONS]
     }));
 
@@ -66,5 +69,17 @@ test.describe('Notifications encrypted transport smoke', () => {
       'notifications.channels.create',
       'notifications.channels.test'
     ]));
+
+    for (const request of transportTrace.requests) {
+      expect(request.kind).toBe(5980);
+      expect(request.relay).toBe(ENCRYPTED_RELAY);
+      expect(request.relay).not.toBe(PUBLIC_RELAY);
+      expect(transportTrace.oks).toEqual(expect.arrayContaining([
+        expect.objectContaining({ eventId: request.eventId, kind: 5980, accepted: true })
+      ]));
+      expect(transportTrace.results).toEqual(expect.arrayContaining([
+        expect.objectContaining({ requestEventId: request.eventId, kind: 7980, pubkey: 'b'.repeat(64), status: 'ok' })
+      ]));
+    }
   });
 });

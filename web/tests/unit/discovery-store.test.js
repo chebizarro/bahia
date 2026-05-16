@@ -70,7 +70,7 @@ describe('Nostr system discovery store', () => {
       relay_urls: ['http://localhost:10547/relay'],
       service_pubkeys: [trustedPubkey]
     };
-    nostrMock.connect.mockResolvedValue(undefined);
+    nostrMock.connect.mockResolvedValue({ connected: 1, total: 1, failed: 0, connecting: 0, relays: [{ url: 'ws://localhost:10547/relay', status: 'connected' }] });
     nostrMock.queryUntilEose.mockResolvedValue([
       systemDiscovery(),
       relaySet('bahia-browser-v1', ['http://localhost:10547/relay', 'wss://public.example']),
@@ -84,7 +84,7 @@ describe('Nostr system discovery store', () => {
     const info = await store.discoverSystemInfo();
 
     expect(nostrMock.setRelays).toHaveBeenCalledWith(['ws://localhost:10547/relay'], false);
-    expect(nostrMock.connect).toHaveBeenCalledWith(['ws://localhost:10547/relay']);
+    expect(nostrMock.connect).toHaveBeenCalledWith(['ws://localhost:10547/relay'], { force: true });
     expect(nostrMock.queryUntilEose).toHaveBeenCalledWith([
       { kinds: [31974, 30002], authors: [trustedPubkey] }
     ]);

@@ -12,6 +12,9 @@ The discovery/bootstrap slice now has complete proof across the approved contrac
 - `cd web && npm run test:e2e -- tests/e2e/controlplane-nostr-smoke.spec.js`
 - `go test ./cmd/cli`
 - `cd web && npm test -- --run tests/unit/controlplane-store.test.js tests/unit/encrypted-controlplane.test.js`
+- `go test ./internal/api/handlers ./pkg/client ./cmd/cli -coverprofile=/tmp/go-discovery-bootstrap.coverprofile -covermode=atomic`
+- `go tool cover -func=/tmp/go-discovery-bootstrap.coverprofile > pstf/features/SYSTEM_DISCOVERY_RELAY_BOOTSTRAP/coverage/go-discovery-bootstrap-summary.txt`
+- `cd web && npm test -- --coverage --run tests/unit/system-store.test.js`
 
 ## Acceptance Criteria Status
 - `SDRB-AC-001` — **Verified**

@@ -2,9 +2,9 @@
   "feature_id": "SYSTEM_DISCOVERY_RELAY_BOOTSTRAP",
   "status": "needs_more_tests",
   "threshold": 0.9,
-  "raw_confidence": 0.85,
-  "confidence": 0.85,
-  "threshold_met": false,
+  "raw_confidence": 0.9625,
+  "confidence": 0.9625,
+  "threshold_met": true,
   "weights_total": 1.0,
   "components": {
     "acceptance_criteria_coverage": {
@@ -28,13 +28,13 @@
       ]
     },
     "code_coverage": {
-      "score": 0.0,
+      "score": 0.75,
       "weight": 0.15,
-      "weighted_score": 0.0,
+      "weighted_score": 0.1125,
       "evidence": [
-        "No touched-module coverage artifact exists under pstf/features/SYSTEM_DISCOVERY_RELAY_BOOTSTRAP/.",
-        "The feature folder contains no coverage/ subdirectory and no Go or web coverage summary file.",
-        "Per the PSTF scoring rule, missing coverage evidence scores 0.0 unless explicitly accepted by human decision."
+        "pstf/features/SYSTEM_DISCOVERY_RELAY_BOOTSTRAP/coverage/go-discovery-bootstrap.coverprofile captures targeted Go coverage for ./internal/api/handlers ./pkg/client ./cmd/cli.",
+        "pstf/features/SYSTEM_DISCOVERY_RELAY_BOOTSTRAP/coverage/go-discovery-bootstrap-summary.txt records total Go statement coverage of 31.6% across the targeted discovery/bootstrap packages.",
+        "pstf/features/SYSTEM_DISCOVERY_RELAY_BOOTSTRAP/coverage/web-system-store-vitest-coverage/ stores Vitest v8 coverage for tests/unit/system-store.test.js, with system.svelte.js line coverage of 82.14%."
       ]
     },
     "edge_case_coverage": {
@@ -131,15 +131,10 @@
   },
   "hard_gate_failures": [],
   "caps_applied": [],
-  "blocking_findings": [
-    "Threshold 0.90 is not met because code_coverage scores 0.0 without a touched-module coverage artifact."
-  ],
-  "evidence_gaps": [
-    "No Go or web coverage report for the touched discovery/bootstrap modules is stored under pstf/features/SYSTEM_DISCOVERY_RELAY_BOOTSTRAP/.",
-    "No HITL or policy exception accepts missing code-coverage evidence for this feature."
-  ],
+  "blocking_findings": [],
+  "evidence_gaps": [],
   "recommendation": {
-    "next_stage": "implement_coverage_evidence",
-    "summary": "Generate touched-module coverage artifacts for the discovery/bootstrap slice, then rerun confidence scoring; the feature is otherwise ready for human review evidence-wise."
+    "next_stage": "critic_review",
+    "summary": "Touched-module Go and web coverage artifacts now exist for the discovery/bootstrap slice; confidence exceeds the 0.90 gate."
   }
 }

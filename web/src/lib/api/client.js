@@ -439,8 +439,10 @@ export class BahiaClient {
     });
   }
 
-  // Live Logs SSE
+  // Deprecated: browser-side EventSource/SSE log streaming is legacy and sits outside
+  // Bahia's Nostr transport contract. Prefer Nostr-backed log/status subscriptions.
   streamLogs(serviceId, envId, tail = 100, onLog, onError) {
+    console.warn('BahiaClient.streamLogs() is deprecated; use Nostr-backed log/status subscriptions instead.');
     const url = `${BASE_URL}/services/${serviceId}/environments/${envId}/logs?follow=true&tail=${tail}`;
     const eventSource = new EventSource(url);
 

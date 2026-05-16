@@ -24,6 +24,7 @@
   const systemInfo = $derived(sharedSystemInfo.data);
   const systemLoading = $derived(sharedSystemInfo.loading);
   const systemError = $derived(sharedSystemInfo.error);
+  const serviceRelayList = $derived(systemInfo?.nostr?.service_relays || []);
 
   // Relay configuration (client-side)
   let relayInput = $state('');
@@ -75,8 +76,9 @@
     await saveRelays();
   }
 
-  function removeRelay(url) {
+  async function removeRelay(url) {
     relays = relays.filter(r => r !== url);
+    await saveRelays();
   }
 
   function relayConnectionSummary(relayList, statusMap) {
@@ -112,8 +114,9 @@
     }
   }
 
-  function resetToDefaults() {
+  async function resetToDefaults() {
     relays = getDefaultRelays();
+    await saveRelays();
   }
 
   function getStatusColor(status) {
@@ -239,7 +242,7 @@
     <section class="settings-section">
       <h2><RelayIcon size={18} stroke={1.75} aria-hidden="true" /> Nostr Relays</h2>
       <p class="section-description">
-        Configure which Nostr relays this app connects to for fetching repositories and publishing events.
+        Configure browser relays for Nostr reads and publishes. Changes autosave and reconnect immediately.
       </p>
 
       <div class="relay-list">
@@ -248,7 +251,7 @@
             <span class="relay-status" style="background: {getStatusColor(connectionStatus[relay])}"></span>
             <span class="relay-url">{relay}</span>
             <span class="relay-status-text">{getStatusLabel(connectionStatus[relay])}</span>
-            <button class="relay-remove" onclick={() => removeRelay(relay)} title="Remove relay">×</button>
+            <button class="relay-remove" onclick={() => removeRelay(relay)} title="Remove and reconnect" disabled={relaysSaving}>×</button>
           </div>
         {/each}
       </div>
@@ -259,12 +262,12 @@
           bind:value={relayInput}
           onkeydown={(e) => e.key === 'Enter' && addRelay()}
         />
-        <LoadingButton variant="secondary" onclick={addRelay}>Add</LoadingButton>
+        <LoadingButton variant="secondary" loading={relaysSaving} onclick={addRelay}>Add & Reconnect</LoadingButton>
       </div>
 
       <div class="relay-actions">
-        <LoadingButton variant="secondary" onclick={resetToDefaults}>Reset to Defaults</LoadingButton>
-        <LoadingButton variant="primary" loading={relaysSaving} onclick={saveRelays}>Save & Reconnect</LoadingButton>
+        <LoadingButton variant="secondary" loading={relaysSaving} onclick={resetToDefaults}>Reset Defaults & Reconnect</LoadingButton>
+        <LoadingButton variant="primary" loading={relaysSaving} onclick={saveRelays}>Reconnect Now</LoadingButton>
       </div>
 
       <p class="section-description relay-summary">
@@ -282,8 +285,7 @@
     <section class="settings-section">
       <h2><ProtectedIcon size={18} stroke={1.75} aria-hidden="true" /> Nostr Connect (NIP-46)</h2>
       <p class="section-description">
-        This connects a <strong>remote Nostr signer</strong> for use by the Bahia service itself — not your user account.
-        Generate a <code>nostrconnect://</code> URI on your signer and paste or scan it here.
+        Connect this browser session to a remote signer using Nostr Connect. Paste or scan a <code>nostrconnect://</code> URI from your signer app.
       </p>
 
       <div class="relay-add">
@@ -298,7 +300,7 @@
       <!-- QR display: show when URI is entered -->
       {#if nostrConnectQrDataUrl}
         <div class="qr-section">
-          <p class="section-description">Scan this QR code with your signer app:</p>
+          <p class="section-description">Preview of the entered URI as a QR code:</p>
           <img class="qr-image" src={nostrConnectQrDataUrl} alt="Nostr Connect QR code" />
         </div>
       {/if}
@@ -319,7 +321,7 @@
       </div>
 
       <p class="section-description">
-        Signer status: {authState.nip46Available ? 'detected' : 'not detected'}
+        Nostr Connect signer: {authState.authMethod === 'nip46' ? 'connected for this browser session' : authState.nip46Available ? 'available' : 'not connected'}
       </p>
     </section>
 
@@ -372,12 +374,17 @@
               </button>
             </div>
           {/if}
-          {#if systemInfo.nostr?.relays?.length > 0}
+          {#if serviceRelayList.length > 0}
             <div class="config-row">
-              <span class="config-label">Server Relays</span>
+              <span class="config-label">Service Relay List (NIP-51)</span>
               <span class="config-value">
-                {systemInfo.nostr.relays.join(', ')}
+                {serviceRelayList.join(', ')}
               </span>
+            </div>
+          {:else}
+            <div class="config-row">
+              <span class="config-label">Service Relay List (NIP-51)</span>
+              <span class="config-value">Not advertised</span>
             </div>
           {/if}
           <div class="config-row">

@@ -37,6 +37,16 @@ vi.mock('../../src/lib/nostr/nip46.js', () => ({
   getCapabilities: vi.fn()
 }));
 
+const nostrClientMock = vi.hoisted(() => ({
+  nostr: {
+    connected: { subscribe: vi.fn((run) => { run(true); return vi.fn(); }) },
+    queryUntilEose: vi.fn(async () => [])
+  }
+}));
+
+vi.mock('$lib/nostr/client.js', () => nostrClientMock);
+vi.mock('../../src/lib/nostr/client.js', () => nostrClientMock);
+
 describe('Auth Store', () => {
   let authModule;
   let nip07Module;
@@ -108,6 +118,19 @@ describe('Auth Store', () => {
       ok: true,
       json: async () => ({ data: { token: 'test-token', expires_at: new Date(Date.now() + 3600000).toISOString() } })
     });
+    global.WebSocket = class MockWebSocket {
+      static OPEN = 1;
+      static CONNECTING = 0;
+      readyState = MockWebSocket.OPEN;
+      constructor() {
+        queueMicrotask(() => this.onopen?.({}));
+        queueMicrotask(() => this.onmessage?.({ data: JSON.stringify(['EOSE', 'profile']) }));
+      }
+      send = vi.fn();
+      close = vi.fn(() => { this.readyState = 3; this.onclose?.({}); });
+      addEventListener = vi.fn();
+      removeEventListener = vi.fn();
+    };
     
     // Dynamically import auth module to get fresh state
     authModule = await import('../../src/lib/stores/auth.js');

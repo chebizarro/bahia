@@ -815,8 +815,7 @@ func TestRollback_FindsPreviousSuccessfulArtifact(t *testing.T) {
 	}
 	intentRepo.intents[di1.ID].Status = domain.IntentStatusDeployed
 
-	// Small delay to ensure ordering.
-	time.Sleep(2 * time.Millisecond)
+	intentRepo.intents[di1.ID].CreatedAt = time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 
 	// Create second deployment (v2) - mark as deployed.
 	di2 := &domain.DeploymentIntent{
@@ -832,6 +831,7 @@ func TestRollback_FindsPreviousSuccessfulArtifact(t *testing.T) {
 		t.Fatalf("failed to create intent 2: %v", err)
 	}
 	intentRepo.intents[di2.ID].Status = domain.IntentStatusDeployed
+	intentRepo.intents[di2.ID].CreatedAt = time.Date(2026, 1, 1, 12, 1, 0, 0, time.UTC)
 
 	// Rollback should target v1's artifact, not v2's.
 	rollback, err := registry.Rollback(ctx, svc.ID, env.ID, "operator")
@@ -866,7 +866,7 @@ func TestRollback_SkipsFailedIntents(t *testing.T) {
 		t.Fatal(err)
 	}
 	intentRepo.intents[di1.ID].Status = domain.IntentStatusDeployed
-	time.Sleep(2 * time.Millisecond)
+	intentRepo.intents[di1.ID].CreatedAt = time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 
 	// v2: deployed successfully
 	di2 := &domain.DeploymentIntent{
@@ -878,7 +878,7 @@ func TestRollback_SkipsFailedIntents(t *testing.T) {
 		t.Fatal(err)
 	}
 	intentRepo.intents[di2.ID].Status = domain.IntentStatusDeployed
-	time.Sleep(2 * time.Millisecond)
+	intentRepo.intents[di2.ID].CreatedAt = time.Date(2026, 1, 1, 12, 1, 0, 0, time.UTC)
 
 	// v3: FAILED - should be skipped by rollback
 	di3 := &domain.DeploymentIntent{
@@ -890,6 +890,7 @@ func TestRollback_SkipsFailedIntents(t *testing.T) {
 		t.Fatal(err)
 	}
 	intentRepo.intents[di3.ID].Status = domain.IntentStatusFailed
+	intentRepo.intents[di3.ID].CreatedAt = time.Date(2026, 1, 1, 12, 2, 0, 0, time.UTC)
 
 	// Rollback from current state (desired = v3's artifact).
 	// Should skip v3 (failed) and current desired, and target v2's artifact.
@@ -947,10 +948,10 @@ func TestRegisterBuild_PublishesEvent(t *testing.T) {
 	logger := zap.NewNop()
 	_ = runRepo // used below
 
-	published := make([]events.Event, 0)
+	published := make(chan events.Event, 1)
 	pub := events.NewInProcessPublisher(logger)
 	pub.Subscribe(events.EventBuildRegistered, func(ctx context.Context, e events.Event) {
-		published = append(published, e)
+		published <- e
 	})
 
 	registry := NewRegistryService(
@@ -968,10 +969,10 @@ func TestRegisterBuild_PublishesEvent(t *testing.T) {
 		t.Fatalf("register build: %v", err)
 	}
 
-	time.Sleep(50 * time.Millisecond)
-
-	if len(published) == 0 {
-		t.Error("expected build.registered event to be published")
+	select {
+	case <-published:
+	case <-time.After(time.Second):
+		t.Fatal("expected build.registered event to be published")
 	}
 }
 

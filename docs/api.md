@@ -256,7 +256,7 @@ MCP tool responses may include Nostr correlation metadata so clients can subscri
 | GET | `/api/v1/llm/environments/{envId}/state` | List LLM state by environment |
 | GET | `/api/v1/llm/routes/{routeId}/environments/{envId}/state` | Get LLM route state |
 
-Operational REST endpoints may also be mounted for LLM deploy/approve/reject/rollback/host registration when `llm.allow_operational_rest=true`.
+Deprecated LLM operational REST mutation endpoints (`POST /api/v1/llm/intents`, approve/reject, rollback, hosts, and observations) are not mounted. Use the signer-first Nostr LLM control-plane request kinds `5971`-`5975` instead.
 
 ## Adoption / import (operator only)
 

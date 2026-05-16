@@ -5,7 +5,8 @@
   import { events, controlplaneConnection } from '$lib/stores';
   import { KINDS } from '$lib/nostr/client.js';
 
-  const PAGE_SIZE = 50;
+  const PAGE_SIZE_OPTIONS = [25, 50, 100];
+  let pageSize = $state(50);
   let currentPage = $state(1);
   let eventTypeFilter = $state('all');
 
@@ -92,13 +93,16 @@
       : events.filter(e => getEventCategory(e) === eventTypeFilter)
   );
 
-  let totalPages = $derived(Math.max(1, Math.ceil(filteredEvents.length / PAGE_SIZE)));
-  let pagedEvents = $derived(filteredEvents.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE));
+  let totalPages = $derived(Math.max(1, Math.ceil(filteredEvents.length / pageSize)));
+  let pagedEvents = $derived(filteredEvents.slice((currentPage - 1) * pageSize, currentPage * pageSize));
+  let pageStart = $derived(filteredEvents.length === 0 ? 0 : (currentPage - 1) * pageSize + 1);
+  let pageEnd = $derived(Math.min(filteredEvents.length, currentPage * pageSize));
 
   // Reset to page 1 when filter changes or events list grows
   $effect(() => {
     void filteredEvents.length;
-    if (currentPage > totalPages) currentPage = 1;
+    void pageSize;
+    if (currentPage > totalPages) currentPage = totalPages;
   });
 
   let columns = $derived([
@@ -185,8 +189,21 @@
     </div>
   </div>
 
-  <div class="table-wrap">
-    <Table columns={columns} data={pagedEvents} />
+  <div class="table-card">
+    <div class="table-toolbar">
+      <span>{pageStart}-{pageEnd} of {filteredEvents.length}</span>
+      <label>
+        Rows
+        <select bind:value={pageSize} onchange={() => currentPage = 1}>
+          {#each PAGE_SIZE_OPTIONS as size}
+            <option value={size}>{size}</option>
+          {/each}
+        </select>
+      </label>
+    </div>
+    <div class="table-wrap">
+      <Table columns={columns} data={pagedEvents} />
+    </div>
   </div>
 
   {#if totalPages > 1}
@@ -197,7 +214,7 @@
         onclick={() => currentPage--}
         aria-label="Previous page"
       >‹ Prev</button>
-      <span class="page-info">Page {currentPage} of {totalPages}  ·  {filteredEvents.length} events</span>
+      <span class="page-info">Page {currentPage} of {totalPages} · showing {pageStart}-{pageEnd}</span>
       <button
         class="page-btn"
         disabled={currentPage === totalPages}
@@ -268,6 +285,38 @@
     color: var(--text-muted);
     font-size: 0.875rem;
     padding-bottom: 0.5rem;
+  }
+
+  .table-card {
+    background: var(--card-bg);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+
+  .table-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 0.75rem 1rem;
+    border-bottom: 1px solid var(--border-color);
+    color: var(--text-muted);
+    font-size: 0.875rem;
+  }
+
+  .table-toolbar label {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .table-toolbar select {
+    background: var(--bg);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    color: var(--text-primary);
+    padding: 0.25rem 0.5rem;
   }
 
   .table-wrap {

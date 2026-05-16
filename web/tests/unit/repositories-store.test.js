@@ -52,7 +52,7 @@ describe('repositories store', () => {
     nostrModule.fetchRepositories.mockResolvedValue(repos);
     const result = await store.loadRepositories({ authors: ['bob', 'alice', 'bob'] });
 
-    expect(nostrModule.nostr.connect).toHaveBeenCalledWith(['wss://auth-read.example']);
+    expect(nostrModule.nostr.connect).not.toHaveBeenCalled();
     expect(nostrModule.fetchRepositories).toHaveBeenCalledWith({ authors: ['alice', 'bob'] });
     expect(result).toHaveLength(2);
 

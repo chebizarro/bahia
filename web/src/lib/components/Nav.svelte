@@ -151,6 +151,7 @@
                 <span class="profile-name">{authUi.displayLabel}</span>
                 <span class="profile-secondary">{authUi.nip05 || authUi.truncatedPubkey}</span>
               </span>
+              <span class="auth-method">{authState.authMethod === 'nip46' ? 'NIP-46' : 'NIP-07'}</span>
             </div>
             {#if authUi.showWarning}
               <span class="auth-warning" title={authUi.warning} aria-label={authUi.warning || 'Authentication warning'}>
@@ -412,6 +413,17 @@
     gap: 0.05rem;
   }
 
+  .auth-method {
+    flex-shrink: 0;
+    border: 1px solid var(--border-color);
+    border-radius: 999px;
+    padding: 0.1rem 0.35rem;
+    color: var(--text-muted);
+    font-size: 0.62rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+  }
+
   .profile-name {
     font-size: 0.82rem;
     font-weight: 600;
@@ -563,7 +575,8 @@
       height: 51px;
     }
 
-    .profile-secondary {
+    .profile-secondary,
+    .auth-method {
       display: none;
     }
   }

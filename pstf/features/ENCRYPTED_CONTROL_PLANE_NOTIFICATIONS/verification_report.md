@@ -2,7 +2,7 @@
 
 ## Summary
 
-The encrypted notifications slice is **fully verified against the current acceptance criteria and test matrix**.
+The encrypted notifications slice is **fully verified against the current acceptance criteria and test matrix**. On 2026-05-16, coverage was strengthened with deterministic browser traces for encrypted kind 5980 requests, accepted OKs, correlated kind 7980 results, terminal encrypted errors, and backend handler_failed propagation.
 
 Current automated evidence covers:
 - encrypted discovery availability and relay selection
@@ -23,6 +23,16 @@ No open product defects or open test defects remain for this slice.
 npm --prefix web run test:unit -- tests/unit/notifications-store.test.js tests/unit/encrypted-controlplane.test.js
 go test ./internal/controlplane -run 'TestEncrypted'
 npm --prefix web run test:e2e -- tests/e2e/notifications-encrypted-smoke.spec.js tests/e2e/notifications-form-error.spec.js
+
+# 2026-05-16 targeted strengthening runs:
+npm --prefix web run test:unit -- tests/unit/encrypted-controlplane.test.js
+# 1 file, 9 tests passed
+
+go test ./internal/controlplane -run 'TestEncrypted'
+# pass
+
+npm --prefix web run test:e2e -- tests/e2e/notifications-encrypted-smoke.spec.js tests/e2e/settings-relay-visibility.spec.js
+# 2 passed
 ```
 
 ## Acceptance Criteria Status
@@ -60,6 +70,7 @@ npm --prefix web run test:e2e -- tests/e2e/notifications-encrypted-smoke.spec.js
 | ECPN-T-012 | pass | Same Go test run as above. |
 | ECPN-T-013 | pass | `web/tests/e2e/notifications-form-error.spec.js` now covers encrypted create and update failure retention. |
 | ECPN-T-014 | pass | `web/tests/e2e/notifications-form-error.spec.js` now covers notifications accessibility-critical labels, headings, and alert behavior. |
+| ECPN-T-015 | pass | `internal/controlplane/encrypted_transport_test.go` now covers `handler_failed` terminal encrypted error propagation with #e/#p correlation. |
 
 Overall matrix status: **ready**.
 

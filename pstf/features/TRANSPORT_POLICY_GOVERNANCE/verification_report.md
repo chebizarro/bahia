@@ -1,7 +1,7 @@
 # Verification Report — TRANSPORT_POLICY_GOVERNANCE
 
 ## Summary
-Current verification still does **not** establish full compliance with the approved acceptance criteria or the full test matrix, but the browser payment-transport defect cluster is now fixed and verified.
+Current verification still does **not** establish full compliance with the approved acceptance criteria or the full test matrix. On 2026-05-16, additional deterministic transport-policy coverage was implemented for accepted public OK traces, signer-without-NIP-44 fail-closed behavior, settings NIP-51 relay visibility, and mixed public-plus-encrypted session proof. The encrypted/settings/browser tests verified, but the public and mixed service-page Playwright proofs are currently blocked by an unrelated Bahia web bootstrap TypeError from concurrent UI/icon changes.
 
 What is verified now:
 - Implemented deterministic unit coverage for discovery separation, encrypted request/result transport, route-access policy, encrypted `/payments` store behavior, relay-backed bootstrap semantics, and the dashboard Recent Spend encrypted-payment helper/readiness path is passing.
@@ -16,6 +16,23 @@ What still blocks a full verification result:
 - Four required verification proofs are still missing or incomplete: accepted-OK public proof (`TPG-T-002`), signer-without-NIP-44 fail-closed proof (`TPG-T-005`), EventSource-exclusion contract proof (`TPG-T-009`), and mixed public+encrypted single-session proof (`TPG-T-015`).
 
 ## Commands Run
+
+2026-05-16 targeted verification:
+```bash
+npm --prefix web run test:unit -- tests/unit/encrypted-controlplane.test.js
+# 1 file, 9 tests passed
+
+go test ./internal/controlplane -run 'TestEncrypted'
+# pass
+
+npm --prefix web run test:e2e -- tests/e2e/notifications-encrypted-smoke.spec.js tests/e2e/settings-relay-visibility.spec.js
+# 2 passed
+
+npm --prefix web run test:e2e -- tests/e2e/service-deployment-public-smoke.spec.js tests/e2e/notifications-encrypted-smoke.spec.js tests/e2e/settings-relay-visibility.spec.js tests/e2e/mixed-transport-session.spec.js tests/e2e/notifications-form-error.spec.js
+# 5 passed; service-deployment-public-smoke and mixed-transport-session blocked by unrelated Bahia web bootstrap TypeError from concurrent UI/icon changes
+```
+
+Earlier verification commands:
 ```bash
 cd web && npx vitest run --config vitest.config.js \
   tests/unit/controlplane-store.test.js \

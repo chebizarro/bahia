@@ -283,11 +283,11 @@
     <div class="info-grid">
       <Card title="Deploy Strategy" titleIcon={DeploymentIcon} value={environment.deploy_strategy || 'replace'} />
       <Card title="Protected" titleIcon={environment.protected ? ProtectedIcon : UnknownIcon} value={environment.protected ? 'Yes' : 'No'} />
-      <Card title="Worker Selector" titleIcon={ServiceIcon} value={environment.loom_worker_selector || '-'} />
+      <Card title="Worker Selector" titleIcon={ServiceIcon} value={environment.loom_worker_selector || 'Any worker'} />
       <Card title="Current State" titleIcon={driftStatusIcon} value={environmentDriftStatus === 'drifted' ? 'Drifted' : environmentDriftStatus === 'in_sync' ? 'In Sync' : 'Unknown'} />
       <Card title="Drifted Services" titleIcon={WarningIcon} value={String(driftedStates.length)} />
       <Card title="In-Sync Services" titleIcon={SuccessIcon} value={String(inSyncStates.length)} />
-      <Card title="ID" titleIcon={EnvironmentIcon} value={environment.id?.slice(0, 16) + '...' || '-'} />
+      <Card title="ID" titleIcon={EnvironmentIcon} value={environment.id ? `${environment.id.slice(0, 16)}...` : '-'} />
     </div>
 
     {#if environment.runtime_config && Object.keys(environment.runtime_config).length > 0}
@@ -338,6 +338,7 @@
     <div class="svc-detail">
       <div class="svc-row"><span class="svc-label">Name</span><span>{selectedService.name || selectedService.display_name || '-'}</span></div>
       <div class="svc-row"><span class="svc-label">ID</span><code class="svc-id">{selectedService.id}</code></div>
+      {#if selectedService.owner_org_id}<div class="svc-row"><span class="svc-label">Org</span><code>{selectedService.owner_org_id}</code></div>{/if}
       {#if selectedService.description}<div class="svc-row"><span class="svc-label">Description</span><span>{selectedService.description}</span></div>{/if}
       {#if selectedService.status}<div class="svc-row"><span class="svc-label">Status</span><span>{selectedService.status}</span></div>{/if}
       {#if selectedService.image}<div class="svc-row"><span class="svc-label">Image</span><code>{selectedService.image}</code></div>{/if}
@@ -363,7 +364,7 @@
     </div>
 
     <div class="form-field">
-      <label for="edit-worker-selector">Loom Worker</label>
+      <label for="edit-worker-selector">Worker Selector</label>
       {#if workerOptions.length > 1}
         <Select
           id="edit-worker-selector"
@@ -382,12 +383,12 @@
     </div>
 
     <div class="form-field">
-      <label for="edit-runtime-config">Runtime Config (JSON)</label>
+      <label for="edit-runtime-config">Runtime Config (JSON object)</label>
       <Textarea
         id="edit-runtime-config"
         bind:value={editForm.runtime_config}
         placeholder={'{}'}
-        rows={8}
+        rows={10}
         disabled={editing}
       />
     </div>
@@ -430,7 +431,7 @@
         variant="primary"
         loading={editing}
       >
-        Save
+        Save Environment
       </LoadingButton>
     </div>
   </form>

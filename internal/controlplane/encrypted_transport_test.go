@@ -3,6 +3,7 @@ package controlplane
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 
 	"github.com/nbd-wtf/go-nostr"
@@ -222,6 +223,34 @@ func TestEncryptedRequestTransport_HandleEventRejectsUnauthorizedRequester(t *te
 	envelope := decryptResultEnvelope(t, publisher.events[0], testRequesterKey)
 	if envelope.Status != "error" || envelope.Error == nil || envelope.Error.Code != "unauthorized" {
 		t.Fatalf("unexpected unauthorized envelope: %+v", envelope)
+	}
+}
+
+func TestEncryptedRequestTransport_HandleEventPublishesHandlerFailure(t *testing.T) {
+	publisher := &mockEncryptedPublisher{}
+	responder := newResponder(t, publisher)
+	requesterPubkey, err := nostr.GetPublicKey(testRequesterKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	event := makeEncryptedRequestEvent(t, testRequesterKey, EncryptedRequestEnvelope{Version: EncryptedRequestWireVersion, Operation: EncryptedOperationNotificationChannelsCreate, RequesterPubkey: requesterPubkey, Payload: json.RawMessage(`{"name":"Ops Webhook"}`)})
+	transport := NewEncryptedRequestTransport(nil, responder, []string{requesterPubkey}, zap.NewNop())
+	transport.RegisterHandler(EncryptedOperationNotificationChannelsCreate, func(context.Context, EncryptedRequest) (any, error) {
+		return nil, fmt.Errorf("failed to create notification channel")
+	})
+
+	transport.HandleEvent(context.Background(), event)
+
+	if len(publisher.events) != 1 {
+		t.Fatalf("expected encrypted handler error result, got %d events", len(publisher.events))
+	}
+	result := publisher.events[0]
+	if result.Kind != KindEncryptedResult || !hasTag(result.Tags, "e", event.ID) || !hasTag(result.Tags, "p", event.PubKey) {
+		t.Fatalf("unexpected result event: kind=%d tags=%#v", result.Kind, result.Tags)
+	}
+	envelope := decryptResultEnvelope(t, result, testRequesterKey)
+	if envelope.Status != "error" || envelope.Error == nil || envelope.Error.Code != "handler_failed" || envelope.Error.Message != "failed to create notification channel" {
+		t.Fatalf("unexpected handler failure envelope: %+v", envelope)
 	}
 }
 

@@ -194,7 +194,7 @@
       <table class="members-table">
         <thead>
           <tr>
-            <th>User</th>
+            <th>Member identity</th>
             <th>Role</th>
             {#if canManageMembers}
               <th>Actions</th>
@@ -206,7 +206,7 @@
             <tr>
               <td>
                 <div class="member-info">
-                  <span class="pubkey" title={member.pubkey}>
+                  <span class="pubkey" title={member.nip05 ? `${member.nip05}\n${member.pubkey}` : member.pubkey}>
                     {member.nip05 || truncatePubkey(member.pubkey)}
                   </span>
                   {#if member.pubkey === authState.pubkey}
@@ -252,7 +252,7 @@
         <table class="members-table">
           <thead>
             <tr>
-              <th>Pubkey</th>
+              <th>Invitee pubkey</th>
               <th>Role</th>
               <th>Expires</th>
               <th>Actions</th>
@@ -299,8 +299,8 @@
 {#if showInviteModal}
   <Modal bind:open={showInviteModal} title="Invite Member" titleIcon={OrganizationIcon} onClose={() => showInviteModal = false}>
     <form onsubmit={(event) => { event.preventDefault(); sendInvite(); }}>
-      <FormField label="Pubkey (hex)">
-        <Input bind:value={invitePubkey} placeholder="Enter nostr pubkey" />
+      <FormField label="Nostr pubkey (hex)">
+        <Input bind:value={invitePubkey} placeholder="64-character hex pubkey" />
       </FormField>
       <FormField label="Role">
         <Select bind:value={inviteRole} options={roleOptions} />

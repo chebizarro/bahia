@@ -38,6 +38,10 @@ export async function installEncryptedNotificationHarness(
   await page.addInitScript(({ servicePubkey, encryptedRelay, publicRelay, initialChannels, initialLogs, operationErrors }) => {
     window.__BAHIA_E2E_ENCRYPTED_PUBLISHES = [];
     window.__BAHIA_E2E_ENCRYPTED_OPERATIONS = [];
+    window.__BAHIA_E2E_ENCRYPTED_REQUESTS = [];
+    window.__BAHIA_E2E_ENCRYPTED_OKS = [];
+    window.__BAHIA_E2E_ENCRYPTED_RESULTS = [];
+    window.__BAHIA_E2E_ENCRYPTED_PENDING_RESULTS = [];
     window.__BAHIA_E2E_NOTIFICATION_STATE = {
       nextId: 2,
       channels: (initialChannels || []).map((channel) => ({ ...channel })),
@@ -70,6 +74,54 @@ export async function installEncryptedNotificationHarness(
         }
       }
       return true;
+    }
+
+    async function sha256Hex(input) {
+      const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(input));
+      return Array.from(new Uint8Array(digest)).map((byte) => byte.toString(16).padStart(2, '0')).join('');
+    }
+
+    async function normalizeEncryptedEventForDelivery(event) {
+      const normalized = {
+        ...event,
+        pubkey: typeof event?.pubkey === 'string' && /^[0-9a-f]{64}$/.test(event.pubkey) ? event.pubkey : servicePubkey,
+        created_at: Number.isInteger(event?.created_at) ? event.created_at : Math.floor(Date.now() / 1000),
+        tags: Array.isArray(event?.tags) ? event.tags.map((tag) => Array.isArray(tag) ? tag.map((value) => String(value)) : []).filter((tag) => tag.length > 0) : [],
+        content: typeof event?.content === 'string' ? event.content : JSON.stringify(event?.content ?? {}),
+        sig: typeof event?.sig === 'string' && /^[0-9a-f]{128}$/.test(event.sig) ? event.sig : '0'.repeat(128)
+      };
+      normalized.id = await sha256Hex(JSON.stringify([0, normalized.pubkey, normalized.created_at, normalized.kind, normalized.tags, normalized.content]));
+      return normalized;
+    }
+
+    function deliverEncryptedResult(candidate, subId, event) {
+      void normalizeEncryptedEventForDelivery(event).then((normalized) => {
+        if (candidate.readyState !== OriginalWebSocket.OPEN) return;
+        candidate.onmessage?.({ data: JSON.stringify(['EVENT', subId, normalized]) });
+      });
+    }
+
+    function deliverPendingEncryptedResults(socket = null) {
+      const sockets = socket ? [socket] : Array.from(window.__BAHIA_E2E_ENCRYPTED_SOCKETS || []);
+      window.__BAHIA_E2E_ENCRYPTED_PENDING_RESULTS = window.__BAHIA_E2E_ENCRYPTED_PENDING_RESULTS.filter((event) => {
+        let delivered = false;
+        for (const candidate of sockets) {
+          if (!candidate || candidate.readyState !== OriginalWebSocket.OPEN) continue;
+          const subs = candidate.__bahiaSubs || new Map();
+          for (const [subId, filters] of subs.entries()) {
+            if (Array.isArray(filters) && filters.some((filter) => matchesFilter(event, filter))) {
+              deliverEncryptedResult(candidate, subId, event);
+              delivered = true;
+            }
+          }
+        }
+        return !delivered;
+      });
+    }
+
+    function queueEncryptedResult(event) {
+      window.__BAHIA_E2E_ENCRYPTED_PENDING_RESULTS.push(event);
+      deliverPendingEncryptedResults();
     }
 
     function notificationResult(operation, payload = {}) {
@@ -133,8 +185,10 @@ export async function installEncryptedNotificationHarness(
 
     const OriginalWebSocket = window.WebSocket;
     const originalSend = OriginalWebSocket.prototype.send;
+    window.__BAHIA_E2E_ENCRYPTED_SOCKETS = window.__BAHIA_E2E_ENCRYPTED_SOCKETS || new Set();
 
     OriginalWebSocket.prototype.send = function patchedSend(data) {
+      window.__BAHIA_E2E_ENCRYPTED_SOCKETS.add(this);
       let message;
       try {
         message = JSON.parse(data);
@@ -145,7 +199,9 @@ export async function installEncryptedNotificationHarness(
       if (Array.isArray(message) && message[0] === 'REQ') {
         this.__bahiaSubs ??= new Map();
         this.__bahiaSubs.set(message[1], message.slice(2));
-        return originalSend.call(this, data);
+        const sent = originalSend.call(this, data);
+        deliverPendingEncryptedResults(this);
+        return sent;
       }
 
       if (Array.isArray(message) && message[0] === 'CLOSE') {
@@ -159,7 +215,9 @@ export async function installEncryptedNotificationHarness(
         const plaintext = String(event.content || '').replace(/^enc44:/, '');
         const envelope = JSON.parse(plaintext);
         const result = notificationResult(envelope.operation, envelope.payload || {});
-        window.__BAHIA_E2E_ENCRYPTED_PUBLISHES.push({ relay, eventId: event.id });
+        window.__BAHIA_E2E_ENCRYPTED_PUBLISHES.push({ relay, eventId: event.id, kind: event.kind });
+        window.__BAHIA_E2E_ENCRYPTED_REQUESTS.push({ relay, eventId: event.id, kind: event.kind, tags: event.tags || [], operation: envelope.operation, requesterPubkey: event.pubkey });
+        window.__BAHIA_E2E_ENCRYPTED_OKS.push({ relay, eventId: event.id, kind: event.kind, sent: true, accepted: true, message: '' });
         window.__BAHIA_E2E_ENCRYPTED_OPERATIONS.push(envelope.operation);
 
         originalSend.call(this, data);
@@ -182,15 +240,19 @@ export async function installEncryptedNotificationHarness(
           sig: '0'.repeat(128)
         };
 
-        setTimeout(() => {
-          if (this.readyState !== OriginalWebSocket.OPEN) return;
-          const subs = this.__bahiaSubs || new Map();
-          for (const [subId, filters] of subs.entries()) {
-            if (Array.isArray(filters) && filters.some((filter) => matchesFilter(resultEvent, filter))) {
-              this.onmessage?.({ data: JSON.stringify(['EVENT', subId, resultEvent]) });
-            }
-          }
-        }, 0);
+        window.__BAHIA_E2E_ENCRYPTED_RESULTS.push({
+          relay,
+          eventId: resultEvent.id,
+          kind: resultEvent.kind,
+          requestEventId: event.id,
+          requesterPubkey: event.pubkey,
+          pubkey: resultEvent.pubkey,
+          status: result.status,
+          error: result.error || null,
+          operation: envelope.operation,
+          tags: resultEvent.tags || []
+        });
+        queueEncryptedResult(resultEvent);
 
         return;
       }

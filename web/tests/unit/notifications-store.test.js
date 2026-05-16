@@ -109,10 +109,10 @@ describe('notifications encrypted store', () => {
   it('fails before publishing when encrypted Nostr requests are not advertised', async () => {
     encryptedRequestsMock.encryptedRequestsAvailable.mockReturnValue(false);
 
-    await expect(store.listNotificationChannels()).rejects.toThrow('Encrypted Nostr requests are not available');
+    await expect(store.listNotificationChannels()).rejects.toThrow('Encrypted Nostr events are not available');
 
     expect(encryptedRequestsMock.requestEncryptedResult).not.toHaveBeenCalled();
-    expect(store.notificationState.channelsError).toContain('Encrypted Nostr requests are not available');
+    expect(store.notificationState.channelsError).toContain('Encrypted Nostr events are not available');
   });
 
   it('surfaces encrypted terminal errors from result events', async () => {

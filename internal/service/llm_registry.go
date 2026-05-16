@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -615,6 +616,9 @@ func deployedIntentsNewestFirst(intents []domain.LLMDeploymentIntent) []domain.L
 			deployed = append(deployed, intents[i])
 		}
 	}
+	sort.SliceStable(deployed, func(i, j int) bool {
+		return deployed[i].CreatedAt.After(deployed[j].CreatedAt)
+	})
 	return deployed
 }
 

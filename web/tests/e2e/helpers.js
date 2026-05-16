@@ -41,6 +41,7 @@ export async function installE2EMocks(
       relay_urls: browserRelays,
       service_pubkeys: [servicePubkey]
     };
+    window.__BAHIA_E2E_TRUST_MOCK_RELAY_EVENTS = true;
     const discoveryEvents = [
       {
         id: 'e2e-system-discovery',
@@ -109,17 +110,23 @@ export async function installE2EMocks(
     }
 
     if (extension) {
+      const encodeMockCiphertext = (plaintext) => `mock-nip44:${btoa(unescape(encodeURIComponent(plaintext)))}`;
+      const decodeMockCiphertext = (ciphertext) => decodeURIComponent(escape(atob(String(ciphertext).replace(/^mock-nip44:/, ''))));
       window.nostr = {
         getPublicKey: async () => pubkey,
         signEvent: async (event) => ({
           ...event,
           pubkey,
-          id: `mock-event-id-${Date.now()}`,
+          id: `mock-event-id-${Date.now()}-${Math.random().toString(36).slice(2)}`,
           sig: `mock-signature-${Math.random().toString(36).slice(2)}`
         }),
         getRelays: async () => ({
           'wss://relay.example.com': { read: true, write: true }
-        })
+        }),
+        nip44: {
+          encrypt: async (_recipient, plaintext) => encodeMockCiphertext(plaintext),
+          decrypt: async (_sender, ciphertext) => decodeMockCiphertext(ciphertext)
+        }
       };
     } else {
       delete window.nostr;
@@ -151,9 +158,34 @@ export async function installE2EMocks(
 
     window.__BAHIA_E2E_WS_CONNECTIONS = [];
 
+    async function sha256Hex(input) {
+      const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(input));
+      return Array.from(new Uint8Array(digest)).map((byte) => byte.toString(16).padStart(2, '0')).join('');
+    }
+
+    async function normalizeMockEventForDelivery(event) {
+      const now = Math.floor(Date.now() / 1000);
+      const createdAt = Number.isInteger(event?.created_at) && event.created_at > now - 365 * 24 * 60 * 60 && event.created_at <= now + 600
+        ? event.created_at
+        : now;
+      const normalized = {
+        ...event,
+        pubkey: typeof event?.pubkey === 'string' && /^[0-9a-f]{64}$/.test(event.pubkey) ? event.pubkey : servicePubkey,
+        created_at: createdAt,
+        tags: Array.isArray(event?.tags) ? event.tags.map((tag) => Array.isArray(tag) ? tag.map((value) => String(value)) : []).filter((tag) => tag.length > 0) : [],
+        content: typeof event?.content === 'string' ? event.content : JSON.stringify(event?.content ?? {}),
+        sig: typeof event?.sig === 'string' && /^[0-9a-f]{128}$/.test(event.sig) ? event.sig : '0'.repeat(128)
+      };
+      normalized.id = await sha256Hex(JSON.stringify([0, normalized.pubkey, normalized.created_at, normalized.kind, normalized.tags, normalized.content]));
+      return normalized;
+    }
+
     function deliverMockEvent(socket, subId, event) {
       if (socket.readyState !== MockWebSocket.OPEN) return;
-      socket.onmessage?.({ data: JSON.stringify(['EVENT', subId, event]) });
+      void normalizeMockEventForDelivery(event).then((normalized) => {
+        if (socket.readyState !== MockWebSocket.OPEN) return;
+        socket.onmessage?.({ data: JSON.stringify(['EVENT', subId, normalized]) });
+      });
     }
 
     function persistMockNostrEvent(event) {
@@ -163,6 +195,76 @@ export async function installE2EMocks(
       }
       events.push(event);
       localStorage.setItem('__bahia_e2e_nostr_events', JSON.stringify(events));
+    }
+
+    function readMockServiceSecrets() {
+      try { return JSON.parse(localStorage.getItem('__bahia_e2e_service_secrets') || '{}'); } catch { return {}; }
+    }
+
+    function writeMockServiceSecrets(state) {
+      localStorage.setItem('__bahia_e2e_service_secrets', JSON.stringify(state || {}));
+    }
+
+    function handleEncryptedServiceSecretRequest(event) {
+      if (event?.kind !== 5980 || !String(event.content || '').startsWith('mock-nip44:')) return null;
+      let envelope;
+      try {
+        envelope = JSON.parse(decodeURIComponent(escape(atob(String(event.content).replace(/^mock-nip44:/, '')))));
+      } catch {
+        return null;
+      }
+      if (!String(envelope.operation || '').startsWith('services.secrets.')) return null;
+
+      const state = readMockServiceSecrets();
+      const serviceId = envelope.payload?.service_id || 'service-1';
+      const secrets = Array.isArray(state[serviceId]) ? state[serviceId] : [];
+      let payload = {};
+      if (envelope.operation === 'services.secrets.list') {
+        payload = { secrets: secrets.map(({ value, ...secret }) => secret) };
+      } else if (envelope.operation === 'services.secrets.create') {
+        const secret = {
+          id: `secret-${Date.now()}`,
+          service_id: serviceId,
+          name: envelope.payload.name,
+          value: envelope.payload.value,
+          version: 1,
+          created_at: new Date().toISOString()
+        };
+        state[serviceId] = [secret, ...secrets];
+        writeMockServiceSecrets(state);
+        const { value, ...safeSecret } = secret;
+        payload = { secret: safeSecret };
+      } else if (envelope.operation === 'services.secrets.update') {
+        const updated = secrets.map((secret) => secret.id === envelope.payload.secret_id
+          ? { ...secret, value: envelope.payload.value, version: Number(secret.version || 1) + 1, updated_at: new Date().toISOString() }
+          : secret);
+        state[serviceId] = updated;
+        writeMockServiceSecrets(state);
+        const match = updated.find((secret) => secret.id === envelope.payload.secret_id) || {};
+        const { value, ...safeSecret } = match;
+        payload = { secret: safeSecret };
+      } else if (envelope.operation === 'services.secrets.delete') {
+        state[serviceId] = secrets.filter((secret) => secret.id !== envelope.payload.secret_id);
+        writeMockServiceSecrets(state);
+        payload = { deleted: true };
+      } else if (envelope.operation === 'services.secrets.reveal') {
+        payload = { value: secrets.find((secret) => secret.id === envelope.payload.secret_id)?.value || '' };
+      }
+
+      const response = {
+        request_event_id: event.id,
+        status: 'success',
+        payload
+      };
+      return {
+        id: `mock-result-${event.id}`,
+        kind: 7980,
+        pubkey: servicePubkey,
+        created_at: Math.floor(Date.now() / 1000),
+        tags: [['e', event.id], ['p', envelope.requester_pubkey]],
+        content: `mock-nip44:${btoa(unescape(encodeURIComponent(JSON.stringify(response))))}`,
+        sig: 'mock-service-signature'
+      };
     }
 
     class MockWebSocket {
@@ -204,19 +306,23 @@ export async function installE2EMocks(
           const filters = message.slice(2);
           this.subscriptions.set(subId, filters);
           const events = readMockNostrEvents().filter((event) => filters.some((filter) => matchesFilter(event, filter)));
-          events.forEach((event, index) => {
-            setTimeout(() => deliverMockEvent(this, subId, event), index * 5);
-          });
-          setTimeout(() => {
-            if (this.readyState === MockWebSocket.OPEN) {
-              this.onmessage?.({ data: JSON.stringify(['EOSE', subId]) });
+          void Promise.all(events.map((event) => normalizeMockEventForDelivery(event))).then(async (normalizedEvents) => {
+            if (this.readyState !== MockWebSocket.OPEN) return;
+            for (const event of normalizedEvents) {
+              await this.onmessage?.({ data: JSON.stringify(['EVENT', subId, event]) });
             }
-          }, events.length * 5);
+            await this.onmessage?.({ data: JSON.stringify(['EOSE', subId]) });
+          });
         } else if (Array.isArray(message) && message[0] === 'CLOSE') {
           this.subscriptions.delete(message[1]);
         } else if (Array.isArray(message) && message[0] === 'EVENT') {
           const event = message[1];
           persistMockNostrEvent(event);
+          const encryptedResult = handleEncryptedServiceSecretRequest(event);
+          if (encryptedResult) {
+            persistMockNostrEvent(encryptedResult);
+            setTimeout(() => this.emitEvent(encryptedResult), 0);
+          }
           setTimeout(() => {
             this.onmessage?.({ data: JSON.stringify(['OK', event?.id, true, '']) });
           }, 0);

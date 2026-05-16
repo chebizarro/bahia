@@ -63,15 +63,9 @@ function openRelayUrls(client) {
 }
 
 export function encryptedRelayUrlsFromSystemInfo(systemInfo = currentSystemInfo()) {
-  // Prefer server-advertised relay list; fall back to the relays configured in Settings
-  const serverRelays = normalizeRelays(systemInfo?.nostr?.browser_encrypted_request_relays || []);
-  if (serverRelays.length > 0) return serverRelays;
-  try {
-    const configured = typeof nostr?.getRelays === 'function' ? nostr.getRelays() : [];
-    return normalizeRelays(Array.isArray(configured) ? configured : []);
-  } catch {
-    return [];
-  }
+  // Encrypted browser requests are a distinct transport plane. Public/browser
+  // relay configuration must never be treated as an encrypted request fallback.
+  return normalizeRelays(systemInfo?.nostr?.browser_encrypted_request_relays || []);
 }
 
 export function servicePubkeyFromSystemInfo(systemInfo = currentSystemInfo()) {
@@ -87,11 +81,11 @@ export class EncryptedControlplaneTransport {
     this.relays = normalizeRelays(relays);
     this.servicePubkey = servicePubkey || '';
 
-    // Always use the singleton — it owns the WebSocket lifecycle for the whole app.
-    // Passing an explicit client is only for tests / edge-cases; the singleton is never
-    // "owned" by the transport and must never be disconnected by it.
-    this.client = client || nostr;
-    this.ownClient = false;
+    // Encrypted requests are a separate relay plane. Use an isolated client by
+    // default so sensitive requests cannot publish on already-open public sockets.
+    // Passing an explicit client is reserved for tests / edge-cases.
+    this.client = client || new NostrClient({ relays: this.relays });
+    this.ownClient = !client;
     this.connected = false;
   }
 
@@ -99,13 +93,17 @@ export class EncryptedControlplaneTransport {
     if (this.relays.length === 0) {
       throw new Error('No relay URLs configured for encrypted Nostr events. Add relay URLs in Settings.');
     }
-    // Connection lifecycle is managed by the singleton externally — nothing to do here.
+    if (this.ownClient) {
+      await this.client.connect(this.relays, { force: true });
+    }
     this.connected = true;
     return this;
   }
 
-  // No-op: the singleton's lifecycle is managed externally.
   disconnect() {
+    if (this.ownClient) {
+      this.client.disconnect();
+    }
     this.connected = false;
   }
 

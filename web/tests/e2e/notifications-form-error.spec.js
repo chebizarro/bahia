@@ -57,6 +57,16 @@ test.describe('Notifications encrypted form failures and accessibility', () => {
     await expect(page.getByRole('alert')).toHaveText(createError.message);
     await expect(nameInput).toHaveValue('PagerDuty Webhook');
     await expect(webhookUrlInput).toHaveValue('https://hooks.example.com/pagerduty');
+
+    const encryptedErrors = await page.evaluate(() => window.__BAHIA_E2E_ENCRYPTED_RESULTS);
+    expect(encryptedErrors).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 7980,
+        operation: 'notifications.channels.create',
+        status: 'error',
+        error: expect.objectContaining(createError)
+      })
+    ]));
   });
 
   test('preserves valid form values and surfaces an alert after encrypted update failure', async ({ page }) => {

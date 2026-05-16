@@ -5,9 +5,10 @@
 
   let submitting = $state(false);
   let error = $state('');
-  let editedPlan = $state(null);
-  let originalPlanJSON = $state('');
-  let argsTextByStep = $state({});
+  let editedPlan = $state(clone(plan));
+  let originalPlanJSON = $state(JSON.stringify(editedPlan || null));
+  let lastPlanJSON = originalPlanJSON;
+  let argsTextByStep = $state(initialArgsText(editedPlan));
   const riskLevel = $derived(String(editedPlan?.risk_level || editedPlan?.riskLevel || 'low').toLowerCase());
   const steps = $derived(Array.isArray(editedPlan?.steps) ? editedPlan.steps : []);
   const isModified = $derived(plan && editedPlan && JSON.stringify(editedPlan) !== originalPlanJSON);
@@ -21,7 +22,7 @@
   }
 
   function formatArgs(step) {
-    const value = step?.tool_args || step?.toolArgs || {};
+    const value = step?.tool_args || step?.toolArgs || step?.args_preview || step?.argsPreview || {};
     try {
       return JSON.stringify(value, null, 2);
     } catch {
@@ -29,20 +30,27 @@
     }
   }
 
+  function initialArgsText(value) {
+    const nextArgs = {};
+    for (const [index, step] of (value?.steps || []).entries()) {
+      nextArgs[stepKey(step, index)] = formatArgs(step);
+    }
+    return nextArgs;
+  }
+
   function resetEditedPlan() {
     editedPlan = clone(plan);
     originalPlanJSON = JSON.stringify(editedPlan || null);
-    const nextArgs = {};
-    for (const [index, step] of (editedPlan?.steps || []).entries()) {
-      nextArgs[stepKey(step, index)] = formatArgs(step);
-    }
-    argsTextByStep = nextArgs;
+    argsTextByStep = initialArgsText(editedPlan);
     error = '';
   }
 
   $effect(() => {
-    plan;
-    resetEditedPlan();
+    const nextPlanJSON = JSON.stringify(plan || null);
+    if (nextPlanJSON !== lastPlanJSON) {
+      lastPlanJSON = nextPlanJSON;
+      resetEditedPlan();
+    }
   });
 
   function removeStep(index) {
@@ -119,6 +127,7 @@
               <p>{step.description}</p>
             {/if}
             <div class="tool">{step.tool_name || step.toolName || 'tool'}</div>
+            <pre class="args-preview">{argsTextByStep[stepKey(step, index)] || '{}'}</pre>
             <label>
               <span>Tool args JSON</span>
               <textarea disabled={disabled || submitting} value={argsTextByStep[stepKey(step, index)] || '{}'} oninput={(event) => updateStepArgs(index, event.currentTarget.value)}></textarea>

@@ -74,8 +74,8 @@
         "All relay traffic is injected by the local Playwright harness; no external relays are contacted.",
         "The harness should assert correlation by request id instead of using arbitrary wait thresholds."
       ],
-      "status": "not_implemented",
-      "failure_reason": "Existing public smoke passes, but it does not record accepted relay OK responses or assert that accepted OK is required for canonical completion."
+      "status": "blocked",
+      "failure_reason": "Implemented accepted-OK/result/projection trace assertions in the public harness/spec, but targeted Playwright verification is currently blocked by an unrelated Bahia web bootstrap TypeError from concurrent UI/icon changes."
     },
     {
       "test_id": "TPG-T-003",
@@ -156,7 +156,7 @@
       "type": "unit",
       "existing_or_new": "modify_existing",
       "target_path": "web/tests/unit/encrypted-controlplane.test.js; web/tests/unit/encrypted-route-stores.test.js",
-      "description": "Extend the current fail-closed unit coverage so it proves both halves of the AC: missing encrypted discovery inputs and signer/browser modes that do not expose usable NIP-44 encrypt/decrypt helpers.",
+      "description": "Extend the current fail-closed unit coverage so it proves both halves of the AC: missing encrypted discovery inputs and signer/browser modes that do not expose usable NIP-44 encrypt/decrypt helpers. Added explicit signer-without-browser-visible-NIP-44 coverage that rejects before publish/subscribe and proves no public-relay fallback.",
       "preconditions": [
         "One test scenario omits encrypted discovery inputs.",
         "One test scenario reports encrypted requests unavailable to route stores."
@@ -180,8 +180,8 @@
       "determinism_notes": [
         "Coverage is local and synchronous apart from resolved mock promises."
       ],
-      "status": "not_implemented",
-      "failure_reason": "Current unit coverage proves missing encrypted discovery and generic unavailable capability paths, but it does not yet exercise a signer/browser mode without usable NIP-44 encrypt/decrypt support."
+      "status": "pass",
+      "failure_reason": null
     },
     {
       "test_id": "TPG-T-006",
@@ -392,7 +392,7 @@
       "type": "e2e",
       "existing_or_new": "new",
       "target_path": "web/tests/e2e/settings-relay-visibility.spec.js; web/src/routes/settings/+page.svelte",
-      "description": "Add a settings-page regression that seeds a service-authored NIP-51 kind 30002 relay-list event and verifies the operator-facing UI renders that data without relying on raw `systemInfo.nostr.relays` discovery fields.",
+      "description": "Add a settings-page regression that seeds a service-authored NIP-51 kind 30002 relay-list event and verifies the operator-facing UI renders that data without relying on raw `systemInfo.nostr.relays` discovery fields. The settings regression now verifies service-authored NIP-51 service relay-list display with raw discovery relays omitted.",
       "preconditions": [
         "A service-authored kind 30002 relay-list event is available to the browser in the harness.",
         "The settings page can be loaded without `systemInfo.nostr.relays` populated."
@@ -416,8 +416,8 @@
       "determinism_notes": [
         "This test should be implemented only with deterministic injected relay events; do not query live relays for kind 30002 in CI."
       ],
-      "status": "not_implemented",
-      "failure_reason": "Target e2e test file `web/tests/e2e/settings-relay-visibility.spec.js` does not exist, and the current settings page still reads `systemInfo.nostr.relays` directly."
+      "status": "pass",
+      "failure_reason": null
     },
     {
       "test_id": "TPG-T-013",
@@ -523,19 +523,17 @@
       "determinism_notes": [
         "Use the existing local public and encrypted harness patterns; do not rely on `waitForTimeout` or live relay timing to prove separation."
       ],
-      "status": "not_implemented",
-      "failure_reason": "Target e2e test file `web/tests/e2e/mixed-transport-session.spec.js` does not exist yet."
+      "status": "blocked",
+      "failure_reason": "Implemented mixed public-plus-encrypted single-session proof, but targeted Playwright verification is currently blocked by an unrelated Bahia web bootstrap TypeError from concurrent UI/icon changes on the services page."
     }
   ],
   "coverage_summary": {
     "criteria_total": 12,
     "criteria_with_tests": 12,
     "known_gaps": [
-      "TPG-T-002: the current public service/deployment smoke proves public request kinds and read-model progression, but it does not yet record accepted OK responses explicitly.",
-      "TPG-T-005: current unit coverage still needs an explicit signer-without-browser-visible-NIP-44 scenario to fully satisfy the fail-closed half of AC4.",
-      "TPG-T-009: EventSource exclusion has no dedicated contract test yet; current SSE unit coverage is legacy evidence only.",
-      "TPG-T-012: settings relay visibility still expects raw `systemInfo.nostr.relays`; approved NIP-51 kind 30002 sourcing is not yet covered or implemented.",
-      "TPG-T-015: there is no single-session mixed public-plus-encrypted browser proof yet."
+      "TPG-T-002: accepted-OK public proof is implemented but Playwright verification is blocked by unrelated concurrent UI bootstrap failure.",
+      "TPG-T-009: EventSource exclusion has no dedicated contract test yet.",
+      "TPG-T-015: mixed single-session relay-separation proof is implemented but Playwright verification is blocked by unrelated concurrent UI bootstrap failure."
     ]
   },
   "implementation_notes": [

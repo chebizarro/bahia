@@ -17,7 +17,7 @@ test.describe('Core service-to-deployment public controlplane smoke', () => {
   test('creates a service and drives deployment approval/history over signer-first public Nostr flows', async ({ page }) => {
     await page.goto('/services');
 
-    await expect(page.getByRole('heading', { name: 'Services' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Services', exact: true })).toBeVisible();
     await expect(page.getByRole('cell', { name: 'existing-service', exact: true })).toBeVisible();
 
     await page.getByRole('button', { name: 'Create Service' }).first().click();
@@ -82,11 +82,30 @@ test.describe('Core service-to-deployment public controlplane smoke', () => {
 
     const transportTrace = await page.evaluate(() => ({
       relays: window.__BAHIA_E2E_PUBLIC_PUBLISHES.map((entry) => entry.relay),
+      requests: window.__BAHIA_E2E_PUBLIC_REQUESTS,
+      oks: window.__BAHIA_E2E_PUBLIC_OKS,
+      results: window.__BAHIA_E2E_PUBLIC_RESULTS,
+      projections: window.__BAHIA_E2E_PUBLIC_PROJECTIONS,
       kinds: [...window.__BAHIA_E2E_PUBLIC_REQUEST_KINDS]
     }));
 
+    const canonicalRequests = transportTrace.requests.filter((request) => [5964, 5989, 5961, 5966].includes(request.kind));
     expect(transportTrace.relays.length).toBeGreaterThanOrEqual(4);
     expect(transportTrace.kinds).toEqual(expect.arrayContaining([5964, 5989, 5961, 5966]));
     expect(transportTrace.kinds).not.toContain(5980);
+    expect(canonicalRequests.length).toBeGreaterThanOrEqual(4);
+
+    for (const request of canonicalRequests) {
+      expect(transportTrace.oks).toEqual(expect.arrayContaining([
+        expect.objectContaining({ eventId: request.eventId, kind: request.kind, accepted: true })
+      ]));
+      expect(transportTrace.results).toEqual(expect.arrayContaining([
+        expect.objectContaining({ requestEventId: request.eventId })
+      ]));
+    }
+    expect(transportTrace.projections).toEqual(expect.arrayContaining([
+      expect.objectContaining({ requestEventId: expect.any(String), kind: 31967 }),
+      expect.objectContaining({ requestEventId: expect.any(String), kind: 31968 })
+    ]));
   });
 });

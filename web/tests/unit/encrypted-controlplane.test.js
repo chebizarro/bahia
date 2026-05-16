@@ -110,12 +110,29 @@ describe('encrypted controlplane transport', () => {
     expect(event.id).toBe('request-id');
   });
 
+  it('fails locally before publish when the signer lacks browser-visible NIP-44 support', async () => {
+    authMock.encryptWithAuth.mockRejectedValueOnce(new Error('Event encryption failed: Active signer does not expose NIP-44 encryption'));
+    const transport = new module.EncryptedControlplaneTransport({ client, relays: ['wss://requests.example'], servicePubkey: 'b'.repeat(64) });
+
+    await expect(transport.requestEncryptedResult({ operation: 'notifications.channels.list', payload: {} }))
+      .rejects.toThrow('Active signer does not expose NIP-44 encryption');
+
+    expect(client.publish).not.toHaveBeenCalled();
+    expect(client.subscribe).not.toHaveBeenCalled();
+    expect(module.encryptedRelayUrlsFromSystemInfo({
+      nostr: {
+        service_pubkey: 'b'.repeat(64),
+        browser_relays: ['wss://public.example']
+      }
+    })).toEqual([]);
+  });
+
   it('publishes through the encrypted-request client and requires an accepted OK', async () => {
     const transport = new module.EncryptedControlplaneTransport({ client, relays: ['wss://requests.example'], servicePubkey: 'b'.repeat(64) });
     const event = { id: 'request-id', kind: module.ENCRYPTED_REQUEST_KIND, tags: [], content: 'cipher' };
 
     await expect(transport.publishEncryptedRequest(event)).resolves.toMatchObject({ requestEventId: 'request-id' });
-    expect(client.connect).toHaveBeenCalledWith(['wss://requests.example']);
+    expect(client.connect).not.toHaveBeenCalled();
     expect(client.publish).toHaveBeenCalledWith(event);
 
     client.publish.mockResolvedValueOnce([{ relay: 'wss://requests.example', sent: true, accepted: false, message: 'blocked: no' }]);

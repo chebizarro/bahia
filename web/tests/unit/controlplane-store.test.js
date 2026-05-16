@@ -206,7 +206,7 @@ describe('controlplane store', () => {
     expect(result.ok).toBe(true);
     expect(systemInfoMock.loadSystemInfo).toHaveBeenCalledTimes(1);
     expect(nostrMock.setRelays).toHaveBeenCalledWith(['ws://localhost:10547/relay'], false);
-    expect(nostrMock.connect).toHaveBeenCalledWith(['ws://localhost:10547/relay']);
+    expect(nostrMock.connect).toHaveBeenCalledWith(['ws://localhost:10547/relay'], { force: true });
     expect(nostrMock.queryUntilEose).toHaveBeenCalledWith(expect.arrayContaining([
       expect.objectContaining({ kinds: expect.arrayContaining([31961, 31962, 31963, 31964, 31965]), authors: ['b'.repeat(64)] }),
       expect.objectContaining({ kinds: [10100] }),

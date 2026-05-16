@@ -92,7 +92,7 @@
     {#if orgs.length === 0}
       <EmptyState
         title="No organizations yet"
-        message="Create your first organization to start managing deployments."
+        message="Create your first organization to manage members, roles, and deployment access."
       />
     {:else}
       <div class="orgs-grid">
@@ -101,7 +101,7 @@
             <Card>
               <div class="org-content">
                 <h3>{org.display_name || org.name}</h3>
-                <p class="org-name">@{org.name}</p>
+                <p class="org-name">@{org.name}{org.nip05_domain ? ` · ${org.nip05_domain}` : ''}</p>
                 <Badge variant={getRoleBadgeType(org.role)}>{org.role}</Badge>
               </div>
             </Card>

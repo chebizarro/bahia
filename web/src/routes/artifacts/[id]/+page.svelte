@@ -233,7 +233,7 @@
         {:else}
           <a href="/services" class="back-link">← Services</a>
         {/if}
-        <h1 class="title-with-icon"><ArtifactIcon size={28} stroke={1.75} aria-hidden="true" /> <span>Artifact Details</span></h1>
+        <h1 class="title-with-icon"><ArtifactIcon size={28} stroke={1.75} aria-hidden="true" /> <span>{artifact.name || artifact.image_tag || 'Artifact Details'}</span></h1>
         <p class="artifact-id"><code>{artifact.id}</code></p>
       </div>
     </div>
@@ -272,6 +272,7 @@
           <Card title="Type" titleIcon={GenericFileIcon} value={artifactTypeLabel(artifact)} />
           <Card title="Version" titleIcon={UnknownIcon} value={artifact.version || artifact.image_tag || '-'} />
           <Card title="Size" titleIcon={ArtifactIcon} value={formatBytes(artifact.size_bytes)} />
+          <Card title="Signature" titleIcon={hasVerifiedSig ? SuccessIcon : WarningIcon} value={hasVerifiedSig ? 'Verified' : signatures.length > 0 ? 'Needs verification' : 'Not signed'} />
           <!-- Digest card: small font, middle-truncated, tooltip + copy on click -->
           {#if artifact.digest || artifact.image_digest}
             {@const fullDigest = artifact.digest || artifact.image_digest}
@@ -508,6 +509,7 @@
     grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
     gap: 1rem;
     margin-bottom: 2rem;
+    align-items: stretch;
   }
 
   .digest-card {
@@ -515,6 +517,7 @@
     border-radius: 8px;
     padding: 1.5rem;
     border: 1px solid var(--border-color, #2a2a4a);
+    min-width: 0;
   }
 
   .card-label {
