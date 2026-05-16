@@ -1,71 +1,84 @@
 {
   "feature_id": "AI_FABRIC_ONNX_RKNN_EDGE_DEPLOYMENT",
-  "status": "draft",
+  "status": "verified_fake_driven",
   "tests": [
     {
       "id": "T-ORE-001-001",
-      "criteria_ids": [
-        "AC-ORE-001"
-      ],
-      "type": "placeholder",
-      "level": "contract",
-      "description": "Verify plan-mapped criterion: A GitHub repo or release asset containing an ONNX vision model is registered at a pinned revision.",
-      "status": "not_implemented",
-      "evidence": []
+      "criteria_ids": ["AC-ORE-001"],
+      "type": "executable",
+      "level": "unit",
+      "description": "Verify a GitHub ONNX artifact resolves from an immutable commit-pinned URI and mutable GitHub refs fail closed.",
+      "status": "passed",
+      "evidence": [
+        "go test ./internal/service -run 'TestONNXRKNN|TestRKNNServer' => ok github.com/openagentsinc/bahia/internal/service 0.223s",
+        "internal/service/ml_onnx_rknn_test.go: TestONNXRKNNValidationPackagingAndProvenanceUsesPinnedGitHubResolver",
+        "internal/service/ml_artifact_resolver.go: GitHubMLArtifactResolver and githubArtifactMetadata"
+      ]
     },
     {
       "id": "T-ORE-002-001",
-      "criteria_ids": [
-        "AC-ORE-002"
-      ],
-      "type": "placeholder",
-      "level": "contract",
-      "description": "Verify plan-mapped criterion: ONNX metadata, opset, declared inputs/outputs, and license are validated before conversion.",
-      "status": "not_implemented",
-      "evidence": []
+      "criteria_ids": ["AC-ORE-002"],
+      "type": "executable",
+      "level": "unit",
+      "description": "Verify ONNX metadata validation requires digest, opset, declared inputs/outputs, allowed license, and pinned source when requested.",
+      "status": "passed",
+      "evidence": [
+        "go test ./internal/service -run 'TestONNXRKNN|TestRKNNServer' => ok github.com/openagentsinc/bahia/internal/service 0.223s",
+        "internal/service/ml_onnx_rknn.go: ValidateONNXArtifact",
+        "internal/service/ml_onnx_rknn_test.go: missing outputs and mutable refs fail closed"
+      ]
     },
     {
       "id": "T-ORE-003-001",
-      "criteria_ids": [
-        "AC-ORE-003"
-      ],
-      "type": "placeholder",
-      "level": "contract",
-      "description": "Verify plan-mapped criterion: A recipe runs on an x64 worker advertising rknn_toolkit2 to convert ONNX to RKNN.",
-      "status": "not_implemented",
-      "evidence": []
+      "criteria_ids": ["AC-ORE-003"],
+      "type": "executable_fake_driven",
+      "level": "unit",
+      "description": "Verify ONNX to RKNN conversion output contract is represented with RKNN Toolkit2 metadata and RK3588-capable worker requirements; actual conversion remains behind job-dispatch/fake boundary.",
+      "status": "passed_with_fake_boundary",
+      "evidence": [
+        "go test ./internal/service -run 'TestONNXRKNN|TestRKNNServer' => ok github.com/openagentsinc/bahia/internal/service 0.223s",
+        "internal/service/ml_onnx_rknn.go: PackageRKNNArtifact records toolchain rknn_toolkit2, toolkit version, target rk3588",
+        "internal/service/ml_onnx_rknn_test.go: TestRKNNServerProvisioningDeploysRawHTTPSmokeWithFakes sets worker capabilities rknn_toolkit2/rknn_server/npu_rk3588"
+      ]
     },
     {
       "id": "T-ORE-004-001",
-      "criteria_ids": [
-        "AC-ORE-004"
-      ],
-      "type": "placeholder",
-      "level": "contract",
-      "description": "Verify plan-mapped criterion: The RKNN artifact, pre/postprocess metadata, calibration details, hashes, and provenance edges are published.",
-      "status": "not_implemented",
-      "evidence": []
+      "criteria_ids": ["AC-ORE-004"],
+      "type": "executable",
+      "level": "unit",
+      "description": "Verify RKNN artifact metadata includes digest, preprocess/postprocess/calibration details, and verified conversion provenance edge.",
+      "status": "passed",
+      "evidence": [
+        "go test ./internal/service -run 'TestONNXRKNN|TestRKNNServer' => ok github.com/openagentsinc/bahia/internal/service 0.223s",
+        "internal/service/ml_onnx_rknn.go: PackageRKNNArtifact and RecordRKNNConversionProvenance",
+        "internal/service/ml_onnx_rknn_test.go: verifies converted_to_rknn provenance edge is recorded and verified"
+      ]
     },
     {
       "id": "T-ORE-005-001",
-      "criteria_ids": [
-        "AC-ORE-005"
-      ],
-      "type": "placeholder",
-      "level": "contract",
-      "description": "Verify plan-mapped criterion: The RKNN artifact deploys to a worker advertising rknn_server, npu_rk3588, and rknn artifact support; exposes raw HTTP first; runs a sample-image smoke test; and publishes endpoint state.",
-      "status": "not_implemented",
-      "evidence": []
+      "criteria_ids": ["AC-ORE-005"],
+      "type": "executable_fake_driven",
+      "level": "unit",
+      "description": "Verify RKNN artifact deploys to a fake RK3588/rknn_server worker, exposes raw HTTP, runs sample-image smoke, records healthy endpoint state, and publishes succeeded lifecycle result.",
+      "status": "passed_with_fake_boundary",
+      "evidence": [
+        "go test ./internal/service -run 'TestONNXRKNN|TestRKNNServer' => ok github.com/openagentsinc/bahia/internal/service 0.223s",
+        "internal/service/ml_onnx_rknn.go: RKNNServerProvisioner Provision/Observe and raw HTTP smoke",
+        "internal/service/ml_inference_provisioning_coordinator.go: deploymentArtifactsForRuntime and defaultMLInferenceGatewayObservation",
+        "internal/service/ml_onnx_rknn_test.go: TestRKNNServerProvisioningDeploysRawHTTPSmokeWithFakes"
+      ]
     }
   ],
   "coverage_summary": {
     "criteria_total": 5,
     "criteria_with_tests": 5,
+    "criteria_passed": 5,
     "known_gaps": [
-      "Tests are placeholders only; implementation and executable verification are future work."
+      "Verification is fake-driven: RKNN Toolkit2 conversion, real artifact publication backends, and physical RK3588 NPU inference were not executed in this task."
     ]
   },
   "implementation_notes": [
-    "Do not implement code as part of bahia-66ax.1.3."
+    "Final verification only for bahia-66ax.5.4; no new feature scope added.",
+    "Evidence comes from targeted service tests and current uncommitted ONNX/RKNN implementation changes."
   ]
 }

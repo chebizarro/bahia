@@ -105,7 +105,24 @@ func (OCIMLArtifactResolver) ResolveArtifact(ctx context.Context, input MLArtifa
 }
 
 func (GitHubMLArtifactResolver) ResolveArtifact(ctx context.Context, input MLArtifactResolveInput) (*domain.MLArtifactRef, error) {
-	return remoteMetadataRef(input, "github", "")
+	metadata := map[string]any{}
+	for k, v := range input.Metadata {
+		metadata[k] = v
+	}
+	for k, v := range githubArtifactMetadata(input.URI) {
+		metadata[k] = v
+	}
+	input.Metadata = metadata
+	ref, err := remoteMetadataRef(input, "github", "")
+	if err != nil {
+		return nil, err
+	}
+	if ref.Source != nil {
+		if revision, _ := stringValue(metadata["revision"]); revision != "" {
+			ref.Source.Revision = revision
+		}
+	}
+	return ref, nil
 }
 
 func (r *HTTPMLArtifactResolver) ResolveArtifact(ctx context.Context, input MLArtifactResolveInput) (*domain.MLArtifactRef, error) {
@@ -307,6 +324,47 @@ func uriPathForExt(raw string) string {
 		}
 	}
 	return strings.TrimSuffix(raw, "/")
+}
+
+func githubArtifactMetadata(raw string) map[string]any {
+	metadata := map[string]any{}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return metadata
+	}
+	if strings.ToLower(u.Scheme) != "github" {
+		return metadata
+	}
+	owner := strings.TrimSpace(u.Host)
+	parts := strings.Split(strings.Trim(u.Path, "/"), "/")
+	if owner != "" {
+		metadata["owner"] = owner
+	}
+	if len(parts) > 0 && parts[0] != "" {
+		repo := parts[0]
+		if idx := strings.Index(repo, "@"); idx >= 0 {
+			metadata["repo"] = repo[:idx]
+			metadata["revision"] = repo[idx+1:]
+		} else {
+			metadata["repo"] = repo
+		}
+	}
+	q := u.Query()
+	for _, key := range []string{"revision", "commit", "ref"} {
+		if v := strings.TrimSpace(q.Get(key)); v != "" {
+			metadata["revision"] = v
+			break
+		}
+	}
+	if len(parts) >= 5 && parts[1] == "releases" && parts[2] == "download" {
+		metadata["release_tag"] = parts[3]
+		metadata["asset_path"] = strings.Join(parts[4:], "/")
+	} else if len(parts) > 1 {
+		metadata["asset_path"] = strings.Join(parts[1:], "/")
+	}
+	revision, _ := stringValue(metadata["revision"])
+	metadata["pinned_revision"] = isImmutableGitHubRevision(revision)
+	return metadata
 }
 
 func mediaTypeFromExt(raw string) string {

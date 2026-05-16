@@ -287,7 +287,11 @@ func (c *MLInferenceProvisioningCoordinator) processRunLocked(ctx context.Contex
 	if c.placement == nil {
 		return c.failRun(ctx, run, intent, fmt.Errorf("ML placement service is not configured"), nil, MLInferenceProvisionRequest{})
 	}
-	placementReq := buildMLPlacementRequest(endpoint, intent, version, artifacts, runtimeKind)
+	deployArtifacts, err := deploymentArtifactsForRuntime(runtimeKind, MLInferenceProvisionRequest{Endpoint: endpoint, Intent: intent, ModelVersion: version, Artifacts: artifacts})
+	if err != nil {
+		return c.failRun(ctx, run, intent, err, nil, MLInferenceProvisionRequest{})
+	}
+	placementReq := buildMLPlacementRequest(endpoint, intent, version, deployArtifacts, runtimeKind)
 	candidate, err := c.placement.SelectCandidate(ctx, placementReq)
 	if err != nil {
 		return c.failRun(ctx, run, intent, err, nil, MLInferenceProvisionRequest{})
@@ -300,7 +304,7 @@ func (c *MLInferenceProvisioningCoordinator) processRunLocked(ctx context.Contex
 		return c.failRun(ctx, run, intent, err, nil, MLInferenceProvisionRequest{})
 	}
 	targetName := mlTargetName(endpoint, run)
-	req := MLInferenceProvisionRequest{Endpoint: endpoint, Intent: intent, ModelVersion: version, Artifacts: artifacts, Run: run, RuntimeKind: candidate.RuntimeKind, Worker: candidate.Worker, TargetName: targetName}
+	req := MLInferenceProvisionRequest{Endpoint: endpoint, Intent: intent, ModelVersion: version, Artifacts: deployArtifacts, Run: run, RuntimeKind: candidate.RuntimeKind, Worker: candidate.Worker, TargetName: targetName}
 
 	mergeMLRunMetadata(run, map[string]any{"placement_reason": candidate.Reason, "placement_score": candidate.Score, "target_name": targetName})
 	run.RuntimeKind = candidate.RuntimeKind
@@ -353,7 +357,7 @@ func (c *MLInferenceProvisioningCoordinator) processRunLocked(ctx context.Contex
 	}
 
 	c.publishStatus(ctx, intent, run, "evaluating_gate", "evaluating ML inference promotion gate")
-	gateResult, err := c.evaluateGate(ctx, run, artifacts)
+	gateResult, err := c.evaluateGate(ctx, run, deployArtifacts)
 	mergeMLRunMetadata(run, map[string]any{"promotion_gate": gateResult})
 	_ = c.registry.CreateOrUpdateDeploymentRun(ctx, run)
 	if err != nil || gateResult == nil || !gateResult.Passed {
@@ -386,7 +390,7 @@ func (c *MLInferenceProvisioningCoordinator) processRunLocked(ctx context.Contex
 		return c.failRun(ctx, run, intent, fmt.Errorf("ML inference endpoint unhealthy after provisioning"), provisioner, req)
 	}
 
-	gatewayObs := &MLInferenceGatewayObservation{Status: domain.GatewayRouteStatusUnknown, TargetURL: result.BackendEndpoint}
+	gatewayObs := defaultMLInferenceGatewayObservation(endpoint, result.BackendEndpoint)
 	if gatewayRef := c.gatewayRef(endpoint); gatewayRef != "" && c.gateway != nil {
 		c.publishStatus(ctx, intent, run, "syncing_gateway", "syncing ML inference gateway endpoint")
 		err = c.withRunHeartbeat(ctx, run.ID, func() error {
@@ -417,6 +421,17 @@ type mlInferenceGateResult struct {
 	Passed            bool   `json:"passed"`
 	ProvenanceChecked bool   `json:"provenance_checked"`
 	Message           string `json:"message,omitempty"`
+}
+
+func deploymentArtifactsForRuntime(runtimeKind domain.MLRuntimeKind, req MLInferenceProvisionRequest) ([]domain.MLArtifactRef, error) {
+	if runtimeKind != domain.MLRuntimeKindRKNNServer {
+		return req.Artifacts, nil
+	}
+	artifact, err := selectRKNNArtifact(req)
+	if err != nil {
+		return nil, err
+	}
+	return []domain.MLArtifactRef{artifact}, nil
 }
 
 func (c *MLInferenceProvisioningCoordinator) evaluateGate(ctx context.Context, run *domain.MLDeploymentRun, artifacts []domain.MLArtifactRef) (*mlInferenceGateResult, error) {
@@ -639,6 +654,15 @@ func applyMLPlacementPolicy(req *MLPlacementRequest, values map[string]any) {
 	if tools, ok := stringSliceValue(values["toolchains"]); ok {
 		req.Toolchains = tools
 	}
+}
+
+func defaultMLInferenceGatewayObservation(endpoint *domain.MLInferenceEndpoint, backendEndpoint string) *MLInferenceGatewayObservation {
+	obs := &MLInferenceGatewayObservation{Status: domain.GatewayRouteStatusUnknown, TargetURL: backendEndpoint}
+	if endpoint != nil && strings.EqualFold(strings.TrimSpace(endpoint.Protocol), "raw_http") {
+		obs.Status = domain.GatewayRouteStatusSynced
+		obs.Metadata = map[string]any{"raw_http": true, "gateway_bypassed": true}
+	}
+	return obs
 }
 
 func (c *MLInferenceProvisioningCoordinator) gatewayRef(endpoint *domain.MLInferenceEndpoint) string {

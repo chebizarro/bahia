@@ -2,4 +2,4 @@
 
 ## Decision Log
 
-- No human decisions recorded yet. Criteria are mapped from `docs/plans/bahia-ai-ml-inference-fabric-2026-05-16.md` and remain draft pending Phase 0 approval.
+- 2026-05-16 — No new human decisions required for `bahia-66ax.5.4` final verification. Verification scope is explicitly fake-driven; real RKNN Toolkit2 conversion and physical RK3588 hardware certification remain outside this task.
