@@ -1,0 +1,51 @@
+{
+  "feature_id": "SOUL_FACTORY_AGENT_CUSTOMIZATION",
+  "feature_name": "SOUL_FACTORY_AGENT_CUSTOMIZATION",
+  "description": "Full agent customization via Nostr events",
+  "dependency_features": ["SOUL_FACTORY_PROVISIONING_TRACKING"],
+  "protocol_boundary": {
+    "customization_event_kinds": [31952, 1950, 38384],
+    "rest_mutations_allowed": false,
+    "assertion": "Avatar, voice, memory, persona, and live-update customization mutations are performed through Nostr draft/action/runtime-control events only. REST may read/render state but must not mutate customization."
+  },
+  "acceptance_coverage": {
+    "avatar": {
+      "criteria": ["draft schema carries avatar generation/upload/provider selection fields", "event codec round-trips avatar customization", "provider/style validation rejects unsupported references", "runtime application uses Nostr 38384 control/config reload"],
+      "mapped_tests": ["SFAC-T-001", "SFAC-T-015", "SFAC-T-016", "SFAC-T-014"]
+    },
+    "voice": {
+      "criteria": ["draft schema carries voice provider config and persona settings", "event codec round-trips voice customization", "provider/model validation rejects unsupported references", "voice hot reload/sample flows are runtime-control scoped"],
+      "mapped_tests": ["SFAC-T-001", "SFAC-T-015", "SFAC-T-016", "SFAC-T-014"]
+    },
+    "memory": {
+      "criteria": ["embedding config maps to portable and OpenClaw memorySearch contracts", "search params preserve top_k, score threshold, reranking, and session-memory behavior", "memory configure params serialize into kind 38384 runtime control envelopes", "reindex is required to use runtime control rather than REST mutation"],
+      "mapped_tests": ["SFAC-T-006", "SFAC-T-007", "SFAC-T-008", "SFAC-T-009", "SFAC-T-014"]
+    },
+    "persona": {
+      "criteria": ["traits, style, tone, and constraints normalize into prompt sections", "system prompt sections assemble deterministically", "persona update params use the soulfactory-persona/v1 38384 contract", "persona validation rejects malformed fields before dispatch"],
+      "mapped_tests": ["SFAC-T-010", "SFAC-T-011", "SFAC-T-012", "SFAC-T-013", "SFAC-T-014"]
+    },
+    "live_update": {
+      "criteria": ["customization hot-reloads without reprovisioning", "active managed session is not deleted or respawned", "partial draft updates merge safely", "resolved spec sync clears stale optional customization config"],
+      "mapped_tests": ["SFAC-T-014", "SFAC-T-017"]
+    },
+    "no_rest_boundary": {
+      "criteria": ["customization mutations are constrained to event kinds 31952, 1950, and 38384", "runtime control tests verify Nostr envelope serialization for memory/persona/config reload", "PSTF spec marks REST customization mutations as forbidden"],
+      "mapped_tests": ["SFAC-T-009", "SFAC-T-011", "SFAC-T-014", "SFAC-T-015"]
+    }
+  },
+  "artifact_links": {
+    "spec": "pstf/features/SOUL_FACTORY_AGENT_CUSTOMIZATION/spec.md",
+    "feature_spec": "pstf/features/SOUL_FACTORY_AGENT_CUSTOMIZATION/feature_spec.json",
+    "acceptance_criteria": "pstf/features/SOUL_FACTORY_AGENT_CUSTOMIZATION/acceptance_criteria.json",
+    "test_matrix": "pstf/features/SOUL_FACTORY_AGENT_CUSTOMIZATION/test_matrix.json",
+    "verification_report": "pstf/features/SOUL_FACTORY_AGENT_CUSTOMIZATION/verification_report.md"
+  },
+  "integration_tests": [
+    {"name": "OpenClaw managed-agent customization hot-reload", "path": "openclaw/extensions/nostr/src/soulfactory-execution.test.ts", "mapped_test_id": "SFAC-T-014", "evidence": "PSTF verification report records pnpm test extensions/nostr/src/soulfactory-execution.test.ts with 8 passing tests."},
+    {"name": "Bahia runtime control envelope serialization", "path": "internal/soulfactory/memory_config_test.go", "mapped_test_id": "SFAC-T-009", "evidence": "Kind 38384 runtime control envelope preserves memory_config and OpenClaw memorySearch patch fields."},
+    {"name": "Bahia persona runtime control contract", "path": "internal/soulfactory/personality_service_test.go", "mapped_test_id": "SFAC-T-011", "evidence": "Kind 38384 runtime control envelope preserves soulfactory.persona.update params and OpenClaw prompt patch fields."},
+    {"name": "Bahia event codec customization draft flow", "path": "internal/soulfactory/event_codec_test.go", "mapped_test_id": "SFAC-T-015", "evidence": "Kind 31952 draft events preserve persona, avatar, voice, and memory specs."}
+  ],
+  "status": "covered_by_existing_pstf_tests_and_runtime_hot_reload_evidence"
+}
