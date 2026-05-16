@@ -1,71 +1,20 @@
 {
   "feature_id": "AI_FABRIC_HF_VLLM_DEPLOYMENT",
-  "status": "draft",
+  "status": "implemented_d4_harness",
   "tests": [
-    {
-      "id": "T-HFV-001-001",
-      "criteria_ids": [
-        "AC-HFV-001"
-      ],
-      "type": "placeholder",
-      "level": "contract",
-      "description": "Verify plan-mapped criterion: A user can choose a Hugging Face model card and pin a commit revision.",
-      "status": "not_implemented",
-      "evidence": []
-    },
-    {
-      "id": "T-HFV-002-001",
-      "criteria_ids": [
-        "AC-HFV-002"
-      ],
-      "type": "placeholder",
-      "level": "contract",
-      "description": "Verify plan-mapped criterion: The selected model is registered as MLModel and MLModelVersion with source, license, task, format, and runtime requirements.",
-      "status": "not_implemented",
-      "evidence": []
-    },
-    {
-      "id": "T-HFV-003-001",
-      "criteria_ids": [
-        "AC-HFV-003"
-      ],
-      "type": "placeholder",
-      "level": "contract",
-      "description": "Verify plan-mapped criterion: Artifacts and hashes are resolved and optionally mirrored to Blossom and/or OCI with provenance edges.",
-      "status": "not_implemented",
-      "evidence": []
-    },
-    {
-      "id": "T-HFV-004-001",
-      "criteria_ids": [
-        "AC-HFV-004"
-      ],
-      "type": "placeholder",
-      "level": "contract",
-      "description": "Verify plan-mapped criterion: Placement selects a worker advertising vLLM, safetensors or Hugging Face snapshot support, NVIDIA CUDA, and enough VRAM.",
-      "status": "not_implemented",
-      "evidence": []
-    },
-    {
-      "id": "T-HFV-005-001",
-      "criteria_ids": [
-        "AC-HFV-005"
-      ],
-      "type": "placeholder",
-      "level": "contract",
-      "description": "Verify plan-mapped criterion: The model deploys to vLLM, exposes an OpenAI-compatible endpoint through the existing gateway path, publishes deployment status/result and 31986 endpoint state, and records smoke evaluation/provenance edges.",
-      "status": "not_implemented",
-      "evidence": []
-    }
+    {"id":"T-HFV-001-001","criteria_ids":["AC-HFV-001"],"type":"integration_harness","level":"service","description":"Fake Hugging Face import path pins hf://Qwen/Qwen2.5-Coder-32B-Instruct@abc123 and resolves a digest-addressed artifact without external network access.","status":"implemented","evidence":["internal/service/ml_inference_provisioning_coordinator_test.go::TestHFVLLMInferenceFabricHarnessUsesFakesForProvenancePlacementDeployAndObservation"]},
+    {"id":"T-HFV-002-001","criteria_ids":["AC-HFV-002"],"type":"integration_harness","level":"service","description":"Registers MLModel and MLModelVersion with Hugging Face source, apache-2.0 license, chat_completions task, safetensors format, vLLM runtime, and GPU requirements.","status":"implemented","evidence":["internal/service/ml_inference_provisioning_coordinator_test.go::TestHFVLLMInferenceFabricHarnessUsesFakesForProvenancePlacementDeployAndObservation"]},
+    {"id":"T-HFV-003-001","criteria_ids":["AC-HFV-003"],"type":"integration_harness","level":"service","description":"Resolves fake HF artifact hashes, records an OCI mirror, validates matching provenance, and records worker-verified digest evidence.","status":"implemented","evidence":["internal/service/ml_inference_provisioning_coordinator_test.go::TestHFVLLMInferenceFabricHarnessUsesFakesForProvenancePlacementDeployAndObservation"]},
+    {"id":"T-HFV-004-001","criteria_ids":["AC-HFV-004"],"type":"integration_harness","level":"service","description":"Placement selects the fake worker advertising vLLM, safetensors, chat_completions, gpu_nvidia_cuda, and 48GB VRAM.","status":"implemented","evidence":["internal/service/ml_inference_provisioning_coordinator_test.go::TestHFVLLMInferenceFabricHarnessUsesFakesForProvenancePlacementDeployAndObservation"]},
+    {"id":"T-HFV-005-001","criteria_ids":["AC-HFV-005"],"type":"integration_harness_and_ui_smoke","level":"service+ui","description":"Fake vLLM provisioning succeeds, gateway syncs OpenAI-compatible endpoint, Nostr lifecycle status/result hooks fire, 31986-ready state is observed, and /ml renders the read-model path.","status":"implemented","evidence":["internal/service/ml_inference_provisioning_coordinator_test.go::TestHFVLLMInferenceFabricHarnessUsesFakesForProvenancePlacementDeployAndObservation","web/tests/e2e/ml-hf-vllm-fabric-smoke.spec.js"]}
   ],
   "coverage_summary": {
     "criteria_total": 5,
     "criteria_with_tests": 5,
     "known_gaps": [
-      "Tests are placeholders only; implementation and executable verification are future work."
+      "D4 verifies the acceptance path with fakes and local Nostr read-model mocks only; it intentionally does not contact real Hugging Face, vLLM, GPU, OCI, or relay services.",
+      "RKNN recipe work is explicitly out of scope for bahia-66ax.4.4."
     ]
   },
-  "implementation_notes": [
-    "Do not implement code as part of bahia-66ax.1.3."
-  ]
+  "implementation_notes": ["D4 added a no-network Go integration harness and a Playwright /ml read-model smoke test for the HF → artifact provenance → GPU/vLLM placement/deploy → Nostr observation → UI acceptance path."]
 }

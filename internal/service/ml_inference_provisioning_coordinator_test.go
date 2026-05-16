@@ -517,6 +517,111 @@ func (g *coordinatorMLGatewayFake) UpsertEndpoint(_ context.Context, _ string, s
 	return &MLInferenceGatewayObservation{Status: domain.GatewayRouteStatusSynced, TargetURL: spec.TargetURL, GatewayConfigHash: "cfg-hash", Metadata: map[string]any{"gateway": "test"}}, nil
 }
 
+func TestHFVLLMInferenceFabricHarnessUsesFakesForProvenancePlacementDeployAndObservation(t *testing.T) {
+	ctx := context.Background()
+	createdAt := time.Now().UTC()
+	repo := newCoordinatorMLRepoFake()
+	registry := NewMLRegistryService(repo, nil, zap.NewNop())
+	provenance := NewMLProvenanceService(repo, nil, zap.NewNop())
+
+	modelID := uuid.New()
+	versionID := uuid.New()
+	model := &domain.MLModel{
+		ID:         modelID,
+		Slug:       "qwen2.5-coder-32b",
+		Name:       "Qwen2.5-Coder-32B-Instruct",
+		Family:     "qwen",
+		Modalities: []string{"text"},
+		TaskKinds:  []domain.MLTaskKind{domain.MLTaskKindChatCompletions},
+		License:    "apache-2.0",
+		Source:     &domain.MLSourceRef{Kind: "huggingface", URI: "hf://Qwen/Qwen2.5-Coder-32B-Instruct", Revision: "abc123"},
+		CreatedAt:  createdAt,
+		UpdatedAt:  createdAt,
+	}
+	if err := registry.CreateOrUpdateModel(ctx, model); err != nil {
+		t.Fatalf("register model: %v", err)
+	}
+	version := &domain.MLModelVersion{
+		ID:      versionID,
+		ModelID: modelID,
+		Version: "v1",
+		Source:  domain.MLSourceRef{Kind: "huggingface", URI: "hf://Qwen/Qwen2.5-Coder-32B-Instruct", Revision: "abc123"},
+		RuntimeRequirements: domain.MLRuntimeRequirements{
+			PreferredRuntimes: []domain.MLRuntimeKind{domain.MLRuntimeKindVLLM},
+			RequiredFormats:   []domain.MLArtifactFormat{domain.MLArtifactFormatSafeTensors},
+			Accelerators:      []string{"gpu_nvidia_cuda"},
+			MinVRAMGB:         48,
+		},
+		CreatedAt: createdAt,
+	}
+	if err := registry.CreateOrUpdateModelVersion(ctx, version); err != nil {
+		t.Fatalf("register version: %v", err)
+	}
+
+	resolver := NewDefaultMLArtifactResolverSet(nil, SeaweedFSResolverConfig{})
+	resolved, err := resolver.ResolveArtifact(ctx, MLArtifactResolveInput{URI: "hf://Qwen/Qwen2.5-Coder-32B-Instruct@abc123/model.safetensors?sha256=" + resolverTestSHA + "&size=42"})
+	if err != nil {
+		t.Fatalf("resolve fake Hugging Face artifact: %v", err)
+	}
+	resolved.ID = uuid.New()
+	resolved.ModelVersionID = &versionID
+	resolved.Kind = domain.MLArtifactKindModel
+	resolved.Format = domain.MLArtifactFormatSafeTensors
+	resolved.CreatedAt = createdAt
+	if err := provenance.RegisterArtifactRef(ctx, resolved); err != nil {
+		t.Fatalf("register artifact provenance: %v", err)
+	}
+	mirror := *resolved
+	mirror.ID = uuid.New()
+	mirror.URI = "oci://registry.test/qwen@sha256:" + resolverTestSHA[:12]
+	mirror.Format = domain.MLArtifactFormatSafeTensors
+	mirror.Source = &domain.MLSourceRef{Kind: "oci", URI: mirror.URI}
+	if err := provenance.RegisterArtifactRef(ctx, &mirror); err != nil {
+		t.Fatalf("register mirror provenance: %v", err)
+	}
+	if err := provenance.ValidateModelVersionArtifactMirrors(ctx, versionID); err != nil {
+		t.Fatalf("validate mirror provenance: %v", err)
+	}
+
+	endpoint := &domain.MLInferenceEndpoint{ID: uuid.New(), Name: "qwen-coder", EnvironmentID: uuid.New(), TaskKinds: []domain.MLTaskKind{domain.MLTaskKindChatCompletions}, Protocol: "openai-compatible", Gateway: map[string]any{"gateway_ref": "gateway-prod"}, PlacementPolicy: map[string]any{"accelerator": "gpu_nvidia_cuda", "min_vram_gb": 48}}
+	if err := registry.CreateOrUpdateInferenceEndpoint(ctx, endpoint); err != nil {
+		t.Fatalf("create endpoint: %v", err)
+	}
+	intent := &domain.MLDeploymentIntent{ID: uuid.New(), EndpointID: endpoint.ID, EnvironmentID: endpoint.EnvironmentID, ModelVersionID: versionID, RequestedBy: "tester", SourceKind: domain.SourceKindManual, ApprovalStatus: domain.ApprovalStatusNotRequired, Status: domain.IntentStatusApproved, RuntimePreference: domain.MLRuntimeKindVLLM, CreatedAt: createdAt, UpdatedAt: createdAt}
+	if err := registry.CreateDeploymentIntent(ctx, intent); err != nil {
+		t.Fatalf("create deployment intent: %v", err)
+	}
+
+	worker := mlCoordinatorWorker()
+	placement := NewMLPlacementService(&mockWorkerRepo{workers: []domain.Worker{worker}}, zap.NewNop())
+	provisioner := newCoordinatorMLProvisionerFake(false, map[string]string{resolved.URI: resolved.SHA256, mirror.ID.String(): mirror.SHA256})
+	responder := &captureMLProvisioningResponder{}
+	gateway := &coordinatorMLGatewayFake{}
+	coordinator := NewMLInferenceProvisioningCoordinator(registry, placement, provenance, StaticMLInferenceProvisionerResolver{domain.MLRuntimeKindVLLM: provisioner}, zap.NewNop(), WithMLInferenceProvisioningResponder(responder), WithMLInferenceProvisioningGateway(gateway), WithMLInferenceProvisioningConfig(MLInferenceProvisioningConfig{DefaultGatewayRef: "gateway-prod"}))
+
+	if err := coordinator.ProcessOnce(ctx); err != nil {
+		t.Fatalf("process HF vLLM deployment harness: %v", err)
+	}
+	run := onlyRun(t, repo)
+	if run.Status != domain.RunStatusSucceeded || run.RuntimeKind != domain.MLRuntimeKindVLLM || run.WorkerPubkey != worker.PubKey {
+		t.Fatalf("unexpected deployment run: %#v", run)
+	}
+	state, _ := registry.GetInferenceState(ctx, endpoint.ID, endpoint.EnvironmentID)
+	if state == nil || state.RuntimeKind != domain.MLRuntimeKindVLLM || state.BackendHealth != domain.HealthStatusHealthy || state.GatewayStatus != domain.GatewayRouteStatusSynced {
+		t.Fatalf("expected healthy observed 31986-ready state, got %#v", state)
+	}
+	if len(responder.statuses) == 0 || len(responder.results) != 1 || responder.results[0] != "succeeded" {
+		t.Fatalf("expected Nostr lifecycle status/result evidence, statuses=%v results=%v", responder.statuses, responder.results)
+	}
+	if len(gateway.calls) != 1 || gateway.calls[0].RuntimeKind != domain.MLRuntimeKindVLLM || gateway.calls[0].TargetURL == "" {
+		t.Fatalf("expected OpenAI-compatible gateway sync to vLLM backend, calls=%#v", gateway.calls)
+	}
+	edges, err := repo.ListProvenanceEdgesByArtifact(ctx, resolved.ID)
+	if err != nil || len(edges) < 2 {
+		t.Fatalf("expected mirror and worker provenance edges, edges=%#v err=%v", edges, err)
+	}
+}
+
 func TestMLInferenceProvisioningCoordinatorProcessOnceSuccessPublishesAndObserves(t *testing.T) {
 	ctx := context.Background()
 	fixture := newMLCoordinatorFixture(t, "endpoint-a", time.Now().UTC())
