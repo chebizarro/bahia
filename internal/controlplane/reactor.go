@@ -1309,6 +1309,11 @@ func (r *Reactor) handleToolProvisionRequest(ctx context.Context, event *nostr.E
 		_ = r.toolResponder.PublishStatus(ctx, event, intent, "queued", "Tool provisioning intent accepted and queued")
 	}
 	logger.Info("tool provisioning request accepted", zap.String("intent_id", intent.ID.String()), zap.String("operation", req.Operation), zap.String("reason", req.Reason), zap.Int("tool_count", len(req.Tools)))
+	if r.toolCoordinator != nil {
+		if err := r.toolCoordinator.ProcessIntent(ctx, intent.ID); err != nil {
+			logger.Error("processing tool provisioning intent failed", zap.String("intent_id", intent.ID.String()), zap.Error(err))
+		}
+	}
 	return nil
 }
 

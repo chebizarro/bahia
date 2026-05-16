@@ -629,7 +629,6 @@ func (a *App) Run() error {
 
 	// Start all registered background runners.
 	a.Background.Start(ctx)
-	go a.runToolProvisioningWorker(ctx)
 
 	errCh := make(chan error, 1)
 	go func() {
