@@ -28,7 +28,9 @@ import (
 // It exposes deployment registry functionality as MCP tools.
 type Server struct {
 	registry          *service.RegistryService
+	mlRegistry        *service.MLRegistryService
 	llmRegistry       *service.LLMRegistryService
+	mlCommands        MLCommandPublisher
 	llmCommands       LLMCommandPublisher
 	packageCommands   PackageCommandPublisher
 	packageProjection repository.PackageControlPlaneRepository
@@ -68,6 +70,8 @@ type ServerDeps struct {
 	Signatures              repository.ArtifactSignatureRepository
 	SignVerifier            SignatureVerifier
 	ToolProvisioning        repository.ToolProvisioningRepository
+	MLRegistry              *service.MLRegistryService
+	MLCommandPublisher      MLCommandPublisher
 	LLMRegistry             *service.LLMRegistryService
 	LLMCommandPublisher     LLMCommandPublisher
 	PackageCommandPublisher PackageCommandPublisher
@@ -77,6 +81,14 @@ type ServerDeps struct {
 // SignatureVerifier verifies signatures for an artifact.
 type SignatureVerifier interface {
 	VerifySignatures(ctx context.Context, artifact *domain.Artifact) ([]domain.ArtifactSignature, error)
+}
+
+// MLCommandPublisher emits canonical Nostr request events for signer-first ML MCP tools.
+type MLCommandPublisher interface {
+	PublishMLModelImportRequest(ctx context.Context, cmd controlplane.MLCommandPayload) (*controlplane.MLCommandReceipt, error)
+	PublishMLRecipeRunRequest(ctx context.Context, cmd controlplane.MLCommandPayload) (*controlplane.MLCommandReceipt, error)
+	PublishMLInferenceDeployRequest(ctx context.Context, cmd controlplane.MLCommandPayload) (*controlplane.MLCommandReceipt, error)
+	PublishMLInferenceRollbackRequest(ctx context.Context, cmd controlplane.MLCommandPayload) (*controlplane.MLCommandReceipt, error)
 }
 
 // LLMCommandPublisher emits canonical Nostr request events for signer-first LLM MCP tools.
@@ -117,7 +129,9 @@ func NewServerWithDeps(registry *service.RegistryService, logger *zap.Logger, se
 func NewServerWithOptions(registry *service.RegistryService, logger *zap.Logger, deps ServerDeps) *Server {
 	return &Server{
 		registry:          registry,
+		mlRegistry:        deps.MLRegistry,
 		llmRegistry:       deps.LLMRegistry,
+		mlCommands:        deps.MLCommandPublisher,
 		llmCommands:       deps.LLMCommandPublisher,
 		packageCommands:   deps.PackageCommandPublisher,
 		packageProjection: deps.PackageProjection,
@@ -1658,6 +1672,7 @@ func (s *Server) GetTools() []Tool {
 			},
 		},
 	}
+	tools = append(tools, mlToolDefinitions()...)
 	return append(tools, packageToolDefinitions()...)
 }
 
@@ -1695,6 +1710,21 @@ func (s *Server) CallTool(ctx context.Context, name string, arguments map[string
 		return s.handleApproveDeployment(ctx, arguments)
 	case "bahia_reject_deployment":
 		return s.handleRejectDeployment(ctx, arguments)
+	// ML compatibility operations
+	case "bahia_ml_import_model":
+		return s.handleMLModelImport(ctx, arguments)
+	case "bahia_ml_run_recipe":
+		return s.handleMLRecipeRun(ctx, arguments)
+	case "bahia_ml_deploy":
+		return s.handleMLDeploy(ctx, arguments)
+	case "bahia_ml_rollback":
+		return s.handleMLRollback(ctx, arguments)
+	case "bahia_ml_list_state":
+		return s.handleMLListState(ctx, arguments)
+	case "bahia_ml_get_state":
+		return s.handleMLGetState(ctx, arguments)
+	case "bahia_ml_get_provenance":
+		return s.handleMLGetProvenance(ctx, arguments)
 	// LLM registry operations
 	case "bahia_llm_create_route":
 		return s.handleLLMCreateRoute(ctx, arguments)

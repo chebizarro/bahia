@@ -63,6 +63,8 @@ type RouterDeps struct {
 	OrgInvites       repository.OrgInviteRepository
 	RBAC             *auth.RBAC
 	LLMRegistry      *service.LLMRegistryService
+	MLRegistry       *service.MLRegistryService
+	MLCommands       handlers.MLCommandPublisher
 }
 
 // SignatureVerifier is the interface for signature verification.
@@ -144,6 +146,10 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 	var llmH *handlers.LLMHandler
 	if deps.LLMRegistry != nil {
 		llmH = handlers.NewLLMHandler(deps.LLMRegistry)
+	}
+	var mlH *handlers.MLHandler
+	if deps.MLRegistry != nil || deps.MLCommands != nil {
+		mlH = handlers.NewMLHandler(deps.MLRegistry, deps.MLCommands)
 	}
 
 	var logsH *handlers.LogHandler
@@ -230,6 +236,19 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 
 			// Repository CI lookup (read)
 			r.Post("/repositories/ci/lookup", repoCIHandler.Lookup)
+
+			// ML control plane (read)
+			if mlH != nil {
+				r.Get("/ml/models", mlH.ListModels)
+				r.Get("/ml/models/{id}", mlH.GetModel)
+				r.Get("/ml/models/{modelId}/versions", mlH.ListModelVersions)
+				r.Get("/ml/model-versions/{id}", mlH.GetModelVersion)
+				r.Get("/ml/endpoints", mlH.ListEndpoints)
+				r.Get("/ml/endpoints/{id}", mlH.GetEndpoint)
+				r.Get("/ml/state", mlH.ListState)
+				r.Get("/ml/endpoints/{endpointId}/environments/{envId}/state", mlH.GetState)
+				r.Get("/ml/artifacts/{artifactId}/provenance", mlH.GetArtifactProvenance)
+			}
 
 			// LLM control plane (read)
 			if llmH != nil {
@@ -356,6 +375,14 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 			r.With(coreRBAC(deps, authMiddleware, nil, true)).Post("/deployments/intents", deployH.CreateIntent)
 			r.With(coreRBAC(deps, authMiddleware, intentOrgResolver(registry, deps.Services, "id"), true)).Post("/deployments/intents/{id}/approve", deployH.ApproveIntent)
 			r.With(coreRBAC(deps, authMiddleware, intentOrgResolver(registry, deps.Services, "id"), true)).Post("/deployments/intents/{id}/reject", deployH.RejectIntent)
+
+			// ML control plane (write compatibility actions publish Nostr commands)
+			if mlH != nil {
+				r.Post("/ml/imports", mlH.ImportModel)
+				r.Post("/ml/recipes/runs", mlH.RunRecipe)
+				r.Post("/ml/deployments", mlH.Deploy)
+				r.Post("/ml/rollback", mlH.Rollback)
+			}
 
 			// LLM control plane (write)
 			if llmH != nil {

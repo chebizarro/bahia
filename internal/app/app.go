@@ -466,6 +466,10 @@ func New(cfg *config.Config) (*App, error) {
 	bgManager.Register(toolCoordinator)
 
 	// MCP (Model Context Protocol) server for AI agent integration.
+	var mlCommandPublisher mcp.MLCommandPublisher
+	if mlRegistry != nil && controlPlaneSigner != nil && controlPlanePool != nil && len(controlPlaneRelays) > 0 {
+		mlCommandPublisher = controlplane.NewMLCommandPublisher(controlPlanePool, controlPlaneSigner)
+	}
 	var llmCommandPublisher mcp.LLMCommandPublisher
 	if llmRegistry != nil && controlPlaneSigner != nil && controlPlanePool != nil && len(controlPlaneRelays) > 0 {
 		llmCommandPublisher = controlplane.NewLLMCommandPublisher(controlPlanePool, controlPlaneSigner)
@@ -480,6 +484,8 @@ func New(cfg *config.Config) (*App, error) {
 		SBOMs:                   sbomRepo,
 		Signatures:              sigRepo,
 		SignVerifier:            signVerifier,
+		MLRegistry:              mlRegistry,
+		MLCommandPublisher:      mlCommandPublisher,
 		LLMRegistry:             llmRegistry,
 		LLMCommandPublisher:     llmCommandPublisher,
 		PackageCommandPublisher: packageCommandPublisher,
@@ -615,6 +621,8 @@ func New(cfg *config.Config) (*App, error) {
 			OrgMembers:       orgMemberRepo,
 			OrgInvites:       orgInviteRepo,
 			RBAC:             rbac,
+			MLRegistry:       mlRegistry,
+			MLCommands:       mlCommandPublisher,
 			LLMRegistry:      llmRegistry,
 		}, cfg.Auth)
 
