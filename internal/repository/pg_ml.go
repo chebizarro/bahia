@@ -463,6 +463,17 @@ func (r *PgMLRegistryRepository) GetRecipe(ctx context.Context, id uuid.UUID) (*
 	return recipe, nil
 }
 
+func (r *PgMLRegistryRepository) GetRecipeByNameVersion(ctx context.Context, name, version string) (*domain.MLRecipe, error) {
+	recipe, err := r.scanRecipe(r.pool.QueryRow(ctx, `SELECT `+mlRecipeColumns+` FROM ml_recipes WHERE name = $1 AND version = $2`, name, version))
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("querying ML recipe by name/version: %w", err)
+	}
+	return recipe, nil
+}
+
 const mlRecipeRunColumns = `id, recipe_id, requested_by, status, inputs, parameters, step_states, result, error, metadata, started_at, finished_at, created_at, updated_at`
 
 func (r *PgMLRegistryRepository) UpsertRecipeRun(ctx context.Context, run *domain.MLRecipeRun) error {
@@ -501,15 +512,11 @@ func (r *PgMLRegistryRepository) UpsertRecipeRun(ctx context.Context, run *domai
 	return nil
 }
 
-func (r *PgMLRegistryRepository) GetRecipeRun(ctx context.Context, id uuid.UUID) (*domain.MLRecipeRun, error) {
+func (r *PgMLRegistryRepository) scanRecipeRun(row pgx.Row) (*domain.MLRecipeRun, error) {
 	run := &domain.MLRecipeRun{}
 	var inputsJSON, paramsJSON, stepsJSON, resultJSON, metadataJSON []byte
-	err := r.pool.QueryRow(ctx, `SELECT `+mlRecipeRunColumns+` FROM ml_recipe_runs WHERE id = $1`, id).Scan(&run.ID, &run.RecipeID, &run.RequestedBy, &run.Status, &inputsJSON, &paramsJSON, &stepsJSON, &resultJSON, &run.Error, &metadataJSON, &run.StartedAt, &run.FinishedAt, &run.CreatedAt, &run.UpdatedAt)
-	if err != nil {
-		if err == pgx.ErrNoRows {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("querying ML recipe run: %w", err)
+	if err := row.Scan(&run.ID, &run.RecipeID, &run.RequestedBy, &run.Status, &inputsJSON, &paramsJSON, &stepsJSON, &resultJSON, &run.Error, &metadataJSON, &run.StartedAt, &run.FinishedAt, &run.CreatedAt, &run.UpdatedAt); err != nil {
+		return nil, err
 	}
 	if err := unmarshalJSON(inputsJSON, &run.Inputs, "ML recipe run inputs"); err != nil {
 		return nil, err
@@ -527,6 +534,54 @@ func (r *PgMLRegistryRepository) GetRecipeRun(ctx context.Context, id uuid.UUID)
 		return nil, err
 	}
 	return run, nil
+}
+
+func (r *PgMLRegistryRepository) GetRecipeRun(ctx context.Context, id uuid.UUID) (*domain.MLRecipeRun, error) {
+	run, err := r.scanRecipeRun(r.pool.QueryRow(ctx, `SELECT `+mlRecipeRunColumns+` FROM ml_recipe_runs WHERE id = $1`, id))
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("querying ML recipe run: %w", err)
+	}
+	return run, nil
+}
+
+func (r *PgMLRegistryRepository) ClaimNextQueuedMLRecipeRun(ctx context.Context) (*domain.MLRecipeRun, error) {
+	now := time.Now().UTC()
+	run, err := r.scanRecipeRun(r.pool.QueryRow(ctx, `
+		UPDATE ml_recipe_runs
+		SET status = 'running', started_at = COALESCE(started_at, $1), updated_at = $1
+		WHERE id = (
+			SELECT id FROM ml_recipe_runs
+			WHERE status = 'queued'
+			ORDER BY created_at ASC, id ASC
+			FOR UPDATE SKIP LOCKED
+			LIMIT 1
+		)
+		RETURNING `+mlRecipeRunColumns, now))
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("claiming next queued ML recipe run: %w", err)
+	}
+	return run, nil
+}
+
+func (r *PgMLRegistryRepository) RequeueStaleMLRecipeRuns(ctx context.Context, olderThan time.Duration) (int, error) {
+	cutoff := time.Now().UTC().Add(-olderThan)
+	cmd, err := r.pool.Exec(ctx, `
+		UPDATE ml_recipe_runs
+		SET status = 'queued', started_at = NULL,
+			metadata = jsonb_set(COALESCE(metadata, '{}'::jsonb), '{lease_recovered}', 'true'::jsonb, true),
+			updated_at = NOW()
+		WHERE status = 'running' AND updated_at < $1
+	`, cutoff)
+	if err != nil {
+		return 0, fmt.Errorf("requeueing stale ML recipe runs: %w", err)
+	}
+	return int(cmd.RowsAffected()), nil
 }
 
 const mlEndpointColumns = `id, name, environment_id, task_kinds, protocol, gateway, placement_policy, metadata, created_at, updated_at`

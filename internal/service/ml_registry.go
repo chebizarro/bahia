@@ -23,6 +23,7 @@ const (
 	EventMLObservation       events.EventType = "ml_inference.observation"
 	EventMLStateChanged      events.EventType = "ml_inference_state.changed"
 	EventMLRecipeChanged     events.EventType = "ml_recipe.changed"
+	EventMLRecipeRunChanged  events.EventType = "ml_recipe_run.changed"
 	EventMLBackfillCompleted events.EventType = "ml_llm_backfill.completed"
 	EventMLParityChecked     events.EventType = "ml_llm_parity.checked"
 )
@@ -146,6 +147,66 @@ func (s *MLRegistryService) CreateOrUpdateRecipe(ctx context.Context, recipe *do
 		return err
 	}
 	s.publish(ctx, EventMLRecipeChanged, recipe.ID.String(), map[string]any{"recipe_id": recipe.ID.String(), "name": recipe.Name, "version": recipe.Version})
+	return nil
+}
+
+func (s *MLRegistryService) GetRecipe(ctx context.Context, id uuid.UUID) (*domain.MLRecipe, error) {
+	return s.repo.GetRecipe(ctx, id)
+}
+
+func (s *MLRegistryService) GetRecipeByNameVersion(ctx context.Context, name, version string) (*domain.MLRecipe, error) {
+	return s.repo.GetRecipeByNameVersion(ctx, strings.TrimSpace(name), strings.TrimSpace(version))
+}
+
+func (s *MLRegistryService) CreateOrUpdateRecipeRun(ctx context.Context, run *domain.MLRecipeRun) error {
+	if run == nil {
+		return fmt.Errorf("ML recipe run is required")
+	}
+	if run.RecipeID == uuid.Nil {
+		return fmt.Errorf("%w: recipe_id must not be empty", domain.ErrNilUUID)
+	}
+	if strings.TrimSpace(run.RequestedBy) == "" {
+		return fmt.Errorf("requested_by must not be empty")
+	}
+	if run.Status == "" {
+		run.Status = domain.RunStatusQueued
+	}
+	if err := domain.ValidateDeploymentRunStatus(run.Status); err != nil {
+		return err
+	}
+	if err := s.repo.UpsertRecipeRun(ctx, run); err != nil {
+		return err
+	}
+	s.publish(ctx, EventMLRecipeRunChanged, run.ID.String(), map[string]any{"recipe_id": run.RecipeID.String(), "run_id": run.ID.String(), "status": string(run.Status)})
+	return nil
+}
+
+func (s *MLRegistryService) GetRecipeRun(ctx context.Context, id uuid.UUID) (*domain.MLRecipeRun, error) {
+	return s.repo.GetRecipeRun(ctx, id)
+}
+
+func (s *MLRegistryService) CompleteRecipeRun(ctx context.Context, id uuid.UUID, status domain.DeploymentRunStatus, result map[string]any, cause error) error {
+	if !isTerminalRunStatus(status) {
+		return fmt.Errorf("cannot complete ML recipe run with non-terminal status: %s", status)
+	}
+	run, err := s.repo.GetRecipeRun(ctx, id)
+	if err != nil {
+		return err
+	}
+	if run == nil {
+		return fmt.Errorf("ML recipe run %s not found: %w", id, repository.ErrNotFound)
+	}
+	now := time.Now().UTC()
+	run.Status = status
+	run.Result = result
+	if cause != nil {
+		run.Error = cause.Error()
+	}
+	run.FinishedAt = &now
+	if err := s.repo.UpsertRecipeRun(ctx, run); err != nil {
+		return err
+	}
+	s.publish(ctx, EventMLRecipeRunChanged, run.ID.String(), map[string]any{"recipe_id": run.RecipeID.String(), "run_id": run.ID.String(), "status": string(run.Status)})
 	return nil
 }
 

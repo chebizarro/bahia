@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { test, expect } from '@playwright/test';
 import { installE2EMocks } from './helpers.js';
 
@@ -5,16 +6,20 @@ const SERVICE_PUBKEY = 'b'.repeat(64);
 const WORKER_PUBKEY = 'c'.repeat(64);
 const now = Math.floor(Date.now() / 1000);
 
-function nostrEvent({ id, kind, pubkey = SERVICE_PUBKEY, tags = [], content = {} }) {
-  return {
-    id,
+function nostrEvent({ kind, pubkey = SERVICE_PUBKEY, tags = [], content = {} }) {
+  const body = typeof content === 'string' ? content : JSON.stringify(content);
+  const event = {
     kind,
     pubkey,
     created_at: now,
     tags,
-    content: JSON.stringify(content),
+    content: body,
     sig: '0'.repeat(128)
   };
+  event.id = createHash('sha256')
+    .update(JSON.stringify([0, event.pubkey, event.created_at, event.kind, event.tags, event.content]))
+    .digest('hex');
+  return event;
 }
 
 const modelId = '11111111-1111-4111-8111-111111111111';
@@ -37,25 +42,21 @@ const relaySystemInfo = {
 
 const nostrEvents = [
   nostrEvent({
-    id: 'ml-system-discovery',
     kind: 31974,
     tags: [['d', 'bahia-system-v1']],
     content: { ...relaySystemInfo, schema: 'bahia.system-discovery.v1' }
   }),
   nostrEvent({
-    id: 'ml-browser-relays',
     kind: 30002,
     tags: [['d', 'bahia-browser-v1'], ['relay', 'ws://relay.test.local']],
     content: ''
   }),
   nostrEvent({
-    id: 'ml-service-relays',
     kind: 30002,
     tags: [['d', 'bahia-service-v1'], ['relay', 'ws://relay.test.local']],
     content: ''
   }),
   nostrEvent({
-    id: 'ml-model-qwen',
     kind: 31980,
     tags: [['d', 'model:qwen2.5-coder-32b'], ['task', 'chat_completions'], ['license', 'apache-2.0'], ['name', 'Qwen2.5-Coder-32B-Instruct']],
     content: {
@@ -70,7 +71,6 @@ const nostrEvents = [
     }
   }),
   nostrEvent({
-    id: 'ml-version-qwen-v1',
     kind: 31981,
     tags: [['d', 'model-version:qwen2.5-coder-32b:v1'], ['model', 'model:qwen2.5-coder-32b'], ['version', 'v1'], ['runtime', 'vllm'], ['format', 'safetensors']],
     content: {
@@ -82,7 +82,6 @@ const nostrEvents = [
     }
   }),
   nostrEvent({
-    id: 'ml-endpoint-qwen-prod',
     kind: 31985,
     tags: [['d', 'endpoint:qwen-coder:prod'], ['runtime', 'vllm'], ['environment', envId]],
     content: {
@@ -96,7 +95,6 @@ const nostrEvents = [
     }
   }),
   nostrEvent({
-    id: 'ml-state-qwen-prod',
     kind: 31986,
     tags: [['d', 'endpoint-state:qwen-coder:prod'], ['endpoint', endpointId], ['environment', envId], ['runtime', 'vllm'], ['status', 'healthy']],
     content: {
@@ -114,7 +112,6 @@ const nostrEvents = [
     }
   }),
   nostrEvent({
-    id: 'ml-artifact-provenance',
     kind: 31988,
     tags: [['d', 'artifact:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'], ['sha256', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'], ['source', 'huggingface']],
     content: {
@@ -123,7 +120,6 @@ const nostrEvents = [
     }
   }),
   nostrEvent({
-    id: 'ml-worker-gpu-capability',
     kind: 31989,
     pubkey: WORKER_PUBKEY,
     tags: [['d', `worker:${WORKER_PUBKEY}:ai-capability`], ['runtime', 'vllm'], ['artifact_format', 'safetensors'], ['task', 'chat_completions'], ['accelerator', 'gpu_nvidia_cuda'], ['vram_gb', '48'], ['status', 'ready']],

@@ -160,6 +160,7 @@ type Reactor struct {
 	packageService        *service.PackageRegistryService
 	packageProjection     repository.PackageControlPlaneRepository
 	mlExecutor            MLInferenceControlPlaneExecutor
+	mlRecipeExecutor      MLRecipeControlPlaneExecutor
 	nostrEvents           repository.NostrEventRepository
 	assistantOrchestrator *service.AssistantOrchestrator
 
@@ -201,6 +202,14 @@ type MLInferenceControlPlaneExecutor interface {
 
 func WithMLInferenceExecutor(executor MLInferenceControlPlaneExecutor) ReactorOption {
 	return func(r *Reactor) { r.mlExecutor = executor }
+}
+
+type MLRecipeControlPlaneExecutor interface {
+	ProcessRecipeRun(ctx context.Context, runID uuid.UUID) error
+}
+
+func WithMLRecipeExecutor(executor MLRecipeControlPlaneExecutor) ReactorOption {
+	return func(r *Reactor) { r.mlRecipeExecutor = executor }
 }
 
 func WithToolProvisioningRepository(repo repository.ToolProvisioningRepository) ReactorOption {

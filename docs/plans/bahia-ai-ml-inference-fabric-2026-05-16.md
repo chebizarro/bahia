@@ -451,7 +451,7 @@ Gate: a GitHub/ONNX model can be converted on an x64 worker, published with prov
 
 - Add evaluation, benchmark, fine-tuning, dataset, experiment, and promotion flows only after the first two slices validate the namespace and coordinator model.
 - Expand UI with inference playground, richer recipe editor, experiment tracking, and comparison views.
-- Prepare the public NIP/BUD candidate proposal only after implementation proves stable field names, replay/idempotency behavior, and compatibility guidance.
+- Prepare the public NIP/BUD candidate proposal only after implementation proves stable field names, replay/idempotency behavior, and compatibility guidance. Public-spec candidate notes live in `docs/specs/ai-ml-public-spec-candidate-notes.md` and are non-blocking for implementation phases.
 
 ## Acceptance Criteria
 

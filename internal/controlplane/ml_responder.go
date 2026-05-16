@@ -39,6 +39,22 @@ func (r *MLResponder) PublishStatus(context.Context, *domain.MLDeploymentIntent,
 	return nil
 }
 
+func (r *MLResponder) PublishRecipeRunStatus(context.Context, *domain.MLRecipe, *domain.MLRecipeRun, string, string) error {
+	return nil
+}
+
+func (r *MLResponder) PublishRecipeRunResult(ctx context.Context, recipe *domain.MLRecipe, run *domain.MLRecipeRun, status, message string) error {
+	return r.publishRecipe(ctx, recipe, run, normalizeMLTerminalStatus(status), message, nil)
+}
+
+func (r *MLResponder) PublishRecipeRunError(ctx context.Context, recipe *domain.MLRecipe, run *domain.MLRecipeRun, step string, cause error) error {
+	msg := ""
+	if cause != nil {
+		msg = cause.Error()
+	}
+	return r.publishRecipe(ctx, recipe, run, "failed", firstNonEmpty(msg, step), cause)
+}
+
 func (r *MLResponder) PublishResult(ctx context.Context, intent *domain.MLDeploymentIntent, run *domain.MLDeploymentRun, status, message string) error {
 	return r.publish(ctx, intent, run, normalizeMLTerminalStatus(status), message, nil)
 }
@@ -49,6 +65,55 @@ func (r *MLResponder) PublishError(ctx context.Context, intent *domain.MLDeploym
 		msg = cause.Error()
 	}
 	return r.publish(ctx, intent, run, "failed", firstNonEmpty(msg, step), cause)
+}
+
+func (r *MLResponder) publishRecipe(ctx context.Context, recipe *domain.MLRecipe, run *domain.MLRecipeRun, status, message string, cause error) error {
+	if r == nil || r.pool == nil || run == nil {
+		return nil
+	}
+	requestEventID, requestPubkey, requestKind := mlRecipeNostrCorrelation(run)
+	if requestEventID == "" || requestPubkey == "" {
+		return nil
+	}
+	kind, err := mlResultKindForRequest(requestKind)
+	if err != nil {
+		return err
+	}
+	recipeCoord := metadataString(run.Metadata, "nostr_recipe_coord")
+	if recipeCoord == "" && recipe != nil {
+		recipeCoord = fmt.Sprintf("recipe:%s:%s", recipe.Name, recipe.Version)
+	}
+	content := map[string]any{
+		"request_event_id": requestEventID,
+		"status":           status,
+		"message":          message,
+		"run":              run.ID.String(),
+		"recipe_id":        run.RecipeID.String(),
+		"created_at":       time.Now().UTC().Format(time.RFC3339),
+	}
+	if recipeCoord != "" {
+		content["recipe"] = recipeCoord
+	}
+	if run.Result != nil {
+		content["result"] = run.Result
+	}
+	if cause != nil {
+		content["error"] = map[string]any{"code": "recipe_error", "message": cause.Error()}
+	}
+	body, _ := json.Marshal(content)
+	tags := nostr.Tags{{"d", "result:" + requestEventID}, {"e", requestEventID, "", "reply"}, {"p", requestPubkey}, {"status", status}, {"run", run.ID.String()}, {"recipe_id", run.RecipeID.String()}}
+	if recipeCoord != "" {
+		tags = append(tags, nostr.Tag{"recipe", recipeCoord})
+	}
+	event := &nostr.Event{Kind: kind, CreatedAt: nostr.Now(), Tags: dedupeTags(tags), Content: string(body)}
+	if err := SignGoNostrEvent(ctx, r.signer, event); err != nil {
+		return err
+	}
+	if _, err := r.pool.Publish(ctx, *event); err != nil {
+		return err
+	}
+	r.recordRecipe(ctx, event, run)
+	return nil
 }
 
 func (r *MLResponder) publish(ctx context.Context, intent *domain.MLDeploymentIntent, run *domain.MLDeploymentRun, status, message string, cause error) error {
@@ -149,6 +214,8 @@ func metadataString(metadata map[string]any, key string) string {
 
 func mlResultKindForRequest(requestKind int) (int, error) {
 	switch requestKind {
+	case KindMLRecipeRunRequest:
+		return KindMLRecipeRunResult, nil
 	case KindMLInferenceDeployRequest:
 		return KindMLInferenceDeployResult, nil
 	case KindMLInferenceRollbackRequest:
@@ -174,6 +241,30 @@ func normalizeMLTerminalStatus(status string) string {
 	}
 }
 
+func mlRecipeNostrCorrelation(run *domain.MLRecipeRun) (eventID, pubkey string, kind int) {
+	if run == nil || run.Metadata == nil {
+		return "", "", 0
+	}
+	if v, ok := run.Metadata["nostr_event_id"].(string); ok {
+		eventID = v
+	}
+	if v, ok := run.Metadata["nostr_request_pubkey"].(string); ok {
+		pubkey = v
+	}
+	switch v := run.Metadata["nostr_request_kind"].(type) {
+	case int:
+		kind = v
+	case int64:
+		kind = int(v)
+	case float64:
+		kind = int(v)
+	case json.Number:
+		n, _ := v.Int64()
+		kind = int(n)
+	}
+	return eventID, pubkey, kind
+}
+
 func mlNostrCorrelation(intent *domain.MLDeploymentIntent) (eventID, pubkey string, kind int) {
 	if intent == nil || intent.Metadata == nil {
 		return "", "", 0
@@ -196,6 +287,17 @@ func mlNostrCorrelation(intent *domain.MLDeploymentIntent) (eventID, pubkey stri
 		kind = int(n)
 	}
 	return eventID, pubkey, kind
+}
+
+func (r *MLResponder) recordRecipe(ctx context.Context, ev *nostr.Event, run *domain.MLRecipeRun) {
+	if r.eventRepo == nil || ev == nil || run == nil {
+		return
+	}
+	tagsJSON, _ := json.Marshal(ev.Tags)
+	entityID := run.ID
+	if _, err := r.eventRepo.Record(ctx, &repository.NostrEventRecord{ID: ev.ID, Kind: ev.Kind, PubKey: ev.PubKey, Content: ev.Content, Tags: tagsJSON, Sig: ev.Sig, CreatedAt: ev.CreatedAt.Time(), ReceivedAt: time.Now().UTC(), EntityType: "ml.recipe.reply", EntityID: &entityID}); err != nil {
+		r.logger.Warn("failed to record ML recipe reply", zap.String("event_id", ev.ID), zap.Error(err))
+	}
 }
 
 func (r *MLResponder) record(ctx context.Context, ev *nostr.Event, intent *domain.MLDeploymentIntent) {

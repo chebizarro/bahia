@@ -40,11 +40,13 @@
             node.textContent = 'Bahia web bootstrap error\n\n' + String(message || 'unknown error');
           } catch (_) {}
         }
-        window.__BAHIA_BOOTSTRAP__ = {
-          schema: 'bahia.bootstrap.v1',
-          relay_urls: '__PUBLIC_BAHIA_BOOTSTRAP_RELAYS__'.split(',').map(function (s) { return s.trim(); }).filter(Boolean),
-          service_pubkeys: '__PUBLIC_BAHIA_SERVICE_PUBKEYS__'.split(',').map(function (s) { return s.trim(); }).filter(Boolean)
-        };
+        if (!window.__BAHIA_BOOTSTRAP__) {
+          window.__BAHIA_BOOTSTRAP__ = {
+            schema: 'bahia.bootstrap.v1',
+            relay_urls: '__PUBLIC_BAHIA_BOOTSTRAP_RELAYS__'.split(',').map(function (s) { return s.trim(); }).filter(Boolean),
+            service_pubkeys: '__PUBLIC_BAHIA_SERVICE_PUBKEYS__'.split(',').map(function (s) { return s.trim(); }).filter(Boolean)
+          };
+        }
         window.addEventListener('error', function (event) {
           showBootError(event && (event.error && event.error.stack || event.message) || 'window error');
         });

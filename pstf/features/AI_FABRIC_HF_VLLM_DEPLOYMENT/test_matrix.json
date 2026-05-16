@@ -1,6 +1,6 @@
 {
   "feature_id": "AI_FABRIC_HF_VLLM_DEPLOYMENT",
-  "status": "implemented_d4_harness",
+  "status": "verified_d4_harness",
   "tests": [
     {"id":"T-HFV-001-001","criteria_ids":["AC-HFV-001"],"type":"integration_harness","level":"service","description":"Fake Hugging Face import path pins hf://Qwen/Qwen2.5-Coder-32B-Instruct@abc123 and resolves a digest-addressed artifact without external network access.","status":"implemented","evidence":["internal/service/ml_inference_provisioning_coordinator_test.go::TestHFVLLMInferenceFabricHarnessUsesFakesForProvenancePlacementDeployAndObservation"]},
     {"id":"T-HFV-002-001","criteria_ids":["AC-HFV-002"],"type":"integration_harness","level":"service","description":"Registers MLModel and MLModelVersion with Hugging Face source, apache-2.0 license, chat_completions task, safetensors format, vLLM runtime, and GPU requirements.","status":"implemented","evidence":["internal/service/ml_inference_provisioning_coordinator_test.go::TestHFVLLMInferenceFabricHarnessUsesFakesForProvenancePlacementDeployAndObservation"]},

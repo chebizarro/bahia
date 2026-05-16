@@ -173,10 +173,32 @@ func (r *coordinatorMLRepoFake) GetRecipe(_ context.Context, id uuid.UUID) (*dom
 	}
 	return nil, nil
 }
+func (r *coordinatorMLRepoFake) GetRecipeByNameVersion(_ context.Context, name, version string) (*domain.MLRecipe, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, recipe := range r.recipes {
+		if recipe.Name == name && recipe.Version == version {
+			cp := *recipe
+			return &cp, nil
+		}
+	}
+	return nil, nil
+}
 func (r *coordinatorMLRepoFake) UpsertRecipeRun(_ context.Context, run *domain.MLRecipeRun) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	cp := *run
+	if cp.ID == uuid.Nil {
+		cp.ID = uuid.New()
+		run.ID = cp.ID
+	}
+	if cp.CreatedAt.IsZero() {
+		cp.CreatedAt = time.Now().UTC()
+	}
+	cp.UpdatedAt = time.Now().UTC()
+	if cp.Metadata != nil {
+		cp.Metadata = copyAnyMap(cp.Metadata)
+	}
 	r.recipeRuns[cp.ID] = &cp
 	return nil
 }
@@ -395,6 +417,53 @@ func (r *coordinatorMLRepoFake) RequeueStaleMLDeploymentRuns(_ context.Context, 
 		if run.Status == domain.RunStatusRunning && run.UpdatedAt.Before(cutoff) {
 			run.Status = domain.RunStatusQueued
 			run.StartedAt = nil
+			run.UpdatedAt = time.Now().UTC()
+			count++
+		}
+	}
+	r.requeued += count
+	return count, nil
+}
+func (r *coordinatorMLRepoFake) ClaimNextQueuedMLRecipeRun(_ context.Context) (*domain.MLRecipeRun, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	runs := make([]*domain.MLRecipeRun, 0)
+	for _, run := range r.recipeRuns {
+		if run.Status == domain.RunStatusQueued {
+			runs = append(runs, run)
+		}
+	}
+	sort.Slice(runs, func(i, j int) bool {
+		if !runs[i].CreatedAt.Equal(runs[j].CreatedAt) {
+			return runs[i].CreatedAt.Before(runs[j].CreatedAt)
+		}
+		return runs[i].ID.String() < runs[j].ID.String()
+	})
+	if len(runs) == 0 {
+		return nil, nil
+	}
+	now := time.Now().UTC()
+	runs[0].Status = domain.RunStatusRunning
+	if runs[0].StartedAt == nil {
+		runs[0].StartedAt = &now
+	}
+	runs[0].UpdatedAt = now
+	cp := *runs[0]
+	return &cp, nil
+}
+func (r *coordinatorMLRepoFake) RequeueStaleMLRecipeRuns(_ context.Context, olderThan time.Duration) (int, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	cutoff := time.Now().UTC().Add(-olderThan)
+	count := 0
+	for _, run := range r.recipeRuns {
+		if run.Status == domain.RunStatusRunning && run.UpdatedAt.Before(cutoff) {
+			run.Status = domain.RunStatusQueued
+			run.StartedAt = nil
+			if run.Metadata == nil {
+				run.Metadata = map[string]any{}
+			}
+			run.Metadata["lease_recovered"] = true
 			run.UpdatedAt = time.Now().UTC()
 			count++
 		}

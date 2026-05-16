@@ -209,6 +209,9 @@ func (r *fakeMLRegistryRepo) UpsertRecipe(context.Context, *domain.MLRecipe) err
 func (r *fakeMLRegistryRepo) GetRecipe(context.Context, uuid.UUID) (*domain.MLRecipe, error) {
 	return nil, nil
 }
+func (r *fakeMLRegistryRepo) GetRecipeByNameVersion(context.Context, string, string) (*domain.MLRecipe, error) {
+	return nil, nil
+}
 func (r *fakeMLRegistryRepo) UpsertRecipeRun(context.Context, *domain.MLRecipeRun) error { return nil }
 func (r *fakeMLRegistryRepo) GetRecipeRun(context.Context, uuid.UUID) (*domain.MLRecipeRun, error) {
 	return nil, nil

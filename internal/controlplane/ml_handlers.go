@@ -29,11 +29,42 @@ func (r *Reactor) authorizeMLRequest(ctx context.Context, event *nostr.Event, re
 }
 
 func (r *Reactor) handleMLRecipeRunRequest(ctx context.Context, event *nostr.Event) {
-	if !r.isAuthorized(event.PubKey) {
-		_ = r.publishMLResult(ctx, event, KindMLRecipeRunResult, "rejected", "unauthorized", "requester not in authorized list", nil, nil)
+	if !r.authorizeMLRequest(ctx, event, KindMLRecipeRunResult, "ml_recipe") {
 		return
 	}
-	_ = r.publishMLResult(ctx, event, KindMLRecipeRunResult, "failed", "recipe_runs_not_enabled", "ML recipe execution is not enabled in D1", nil, nil)
+	if r.mlRecipeExecutor == nil {
+		_ = r.publishMLResult(ctx, event, KindMLRecipeRunResult, "failed", "ml_recipe_coordinator_unavailable", "ML recipe coordinator is not configured", nil, nil)
+		return
+	}
+	req, err := parseMLRecipeRunRequest(event)
+	if err != nil {
+		_ = r.publishMLResult(ctx, event, KindMLRecipeRunResult, "failed", "parse_error", err.Error(), nil, nil)
+		return
+	}
+	recipe, err := r.resolveMLRecipe(ctx, req.RecipeID, req.Recipe)
+	if err != nil {
+		_ = r.publishMLResult(ctx, event, KindMLRecipeRunResult, "failed", "recipe_resolution_error", err.Error(), nil, nil)
+		return
+	}
+	run := &domain.MLRecipeRun{
+		RecipeID:    recipe.ID,
+		RequestedBy: event.PubKey,
+		Status:      domain.RunStatusQueued,
+		Inputs:      req.Inputs,
+		Parameters:  req.Parameters,
+		Metadata: mlNostrMetadata(event, map[string]any{
+			"nostr_request_command": "ml_recipe_run",
+			"nostr_recipe_coord":    firstNonEmpty(req.Recipe, tagValueNostr(event.Tags, "recipe")),
+		}),
+	}
+	if err := r.mlRegistry.CreateOrUpdateRecipeRun(ctx, run); err != nil {
+		_ = r.publishMLResult(ctx, event, KindMLRecipeRunResult, "failed", "recipe_run_error", err.Error(), nil, nil, nostr.Tag{"recipe", firstNonEmpty(req.Recipe, recipe.Name)})
+		return
+	}
+	go func() {
+		// Once the durable run exists, the coordinator/responder owns terminal result publication.
+		_ = r.mlRecipeExecutor.ProcessRecipeRun(ctx, run.ID)
+	}()
 }
 
 func (r *Reactor) handleMLModelImportRequest(ctx context.Context, event *nostr.Event) {
@@ -178,6 +209,64 @@ func (r *Reactor) handleMLInferenceRollbackRequest(ctx context.Context, event *n
 			_ = r.publishMLResult(ctx, event, KindMLInferenceRollbackResult, "failed", "executor_error", err.Error(), endpoint, nil, nostr.Tag{"intent", intent.ID.String()})
 		}
 	}()
+}
+
+type mlRecipeRunRequest struct {
+	RecipeID   string         `json:"recipe_id,omitempty"`
+	Recipe     string         `json:"recipe,omitempty"`
+	Inputs     map[string]any `json:"inputs,omitempty"`
+	Parameters map[string]any `json:"parameters,omitempty"`
+}
+
+func parseMLRecipeRunRequest(event *nostr.Event) (*mlRecipeRunRequest, error) {
+	var req mlRecipeRunRequest
+	if strings.TrimSpace(event.Content) != "" {
+		if err := json.Unmarshal([]byte(event.Content), &req); err != nil {
+			return nil, err
+		}
+	}
+	if req.Recipe == "" {
+		req.Recipe = tagValueNostr(event.Tags, "recipe")
+	}
+	if req.RecipeID == "" {
+		req.RecipeID = tagValueNostr(event.Tags, "recipe_id")
+	}
+	if req.RecipeID == "" && req.Recipe == "" {
+		return nil, fmt.Errorf("recipe or recipe_id is required")
+	}
+	return &req, nil
+}
+
+func (r *Reactor) resolveMLRecipe(ctx context.Context, recipeID, coord string) (*domain.MLRecipe, error) {
+	if recipeID != "" {
+		id, err := uuid.Parse(recipeID)
+		if err != nil {
+			return nil, fmt.Errorf("invalid recipe_id: %w", err)
+		}
+		recipe, err := r.mlRegistry.GetRecipe(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		if recipe == nil {
+			return nil, fmt.Errorf("ML recipe %s not found", id)
+		}
+		return recipe, nil
+	}
+	if coord == "" {
+		return nil, fmt.Errorf("recipe coordinate is required")
+	}
+	parts := strings.SplitN(strings.TrimPrefix(coord, "recipe:"), ":", 2)
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return nil, fmt.Errorf("recipe coordinate must be recipe:<name>:<version>")
+	}
+	recipe, err := r.mlRegistry.GetRecipeByNameVersion(ctx, parts[0], parts[1])
+	if err != nil {
+		return nil, err
+	}
+	if recipe == nil {
+		return nil, fmt.Errorf("ML recipe %q version %q not found", parts[0], parts[1])
+	}
+	return recipe, nil
 }
 
 type mlDeployRequest struct {

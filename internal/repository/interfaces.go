@@ -245,6 +245,7 @@ type MLRegistryRepository interface {
 
 	UpsertRecipe(ctx context.Context, recipe *domain.MLRecipe) error
 	GetRecipe(ctx context.Context, id uuid.UUID) (*domain.MLRecipe, error)
+	GetRecipeByNameVersion(ctx context.Context, name, version string) (*domain.MLRecipe, error)
 	UpsertRecipeRun(ctx context.Context, run *domain.MLRecipeRun) error
 	GetRecipeRun(ctx context.Context, id uuid.UUID) (*domain.MLRecipeRun, error)
 

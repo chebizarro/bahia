@@ -21,17 +21,21 @@ D4 verification harness implemented for the Hugging Face → artifact provenance
 - `gofmt -w internal/service/ml_inference_provisioning_coordinator_test.go`
 - `go test ./internal/service -run 'TestHFVLLMInferenceFabricHarnessUsesFakesForProvenancePlacementDeployAndObservation|TestMLInferenceProvisioningCoordinatorProcessOnceSuccessPublishesAndObserves|TestMLPlacementSelectsGPUVLLMWorker|TestMLArtifactResolverSet_HuggingFace|TestMLProvenanceService'`
   - Result: PASS (`ok github.com/openagentsinc/bahia/internal/service 0.223s`).
-- `npm run test:e2e -- ml-hf-vllm-fabric-smoke.spec.js`
+- `npm run test:e2e -- ml-hf-vllm-fabric-smoke.spec.js` (from `web/`, 2026-05-16)
   - Initial sandboxed run: BLOCKED by macOS Chromium sandbox permission (`MachPortRendezvousServer ... Permission denied`).
-  - Unsandboxed rerun request: rejected by user. UI smoke test file remains added but not executed successfully in this session.
+  - Unsandboxed rerun exposed the remaining D4 gap: mocked Nostr read-model events used non-NIP-01 event IDs and the app shell overwrote injected E2E bootstrap relay metadata.
+  - Repaired `web/tests/e2e/ml-hf-vllm-fabric-smoke.spec.js` to hash mocked events using the NIP-01 serialization and `web/src/app.html` to preserve a pre-injected `window.__BAHIA_BOOTSTRAP__` for E2E bootstrapping.
+  - Result after repair: PASS (`1 passed (10.8s)`).
+- `npm run build` (from `web/`, 2026-05-16)
+  - Result: PASS. Existing warnings observed: `src/routes/policies/+page.svelte` a11y label warning, unused `qrcode` default import warning, and Vite dynamic/static import chunking warning for `src/lib/nostr/client.js`.
 
 ## Acceptance Criteria Status
 
-All `AC-HFV-001` through `AC-HFV-005` now have executable D4 harness evidence mapped in `test_matrix.json`. Service-level acceptance evidence passed. UI smoke acceptance is implemented but execution was blocked by local Playwright launch permissions.
+All `AC-HFV-001` through `AC-HFV-005` now have executable D4 harness evidence mapped in `test_matrix.json`. Service-level acceptance evidence passed. UI smoke acceptance is implemented and passed in this environment when Playwright was allowed to launch Chromium outside the sandbox.
 
 ## Defects
 
-None recorded for service D4. UI execution environment is a verification blocker, not a product defect.
+None recorded for D4 after repairing the UI smoke test fixture/bootstrap gap.
 
 ## Ambiguities / Human Decisions Needed
 
@@ -39,7 +43,7 @@ None for D4. Real Hugging Face/vLLM/GPU validation remains outside this fake-onl
 
 ## Confidence Assessment
 
-Medium-high for the service D4 path because targeted tests pass with deterministic fakes. Medium for UI smoke until Playwright can be run in an environment that permits Chromium launch.
+High for the fake/no-network D4 acceptance path because targeted service evidence exists, the repaired Playwright UI smoke passes, and the web production build succeeds.
 
 ## Recommendation
 
