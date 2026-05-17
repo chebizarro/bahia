@@ -1,759 +1,407 @@
-# Agent Instructions
-
-## 🧭 Nostr Protocol Guardrails for Agents
-
-### Purpose
-
-This repository is Nostr-native. All inter-service communication must follow event-driven pub/sub semantics, not polling or request/response patterns.
-
-Agents MUST follow these rules when implementing, modifying, or reviewing code.
-
-Violations are protocol bugs that break event-driven semantics.
+## Agent Prime Directive
+This repository is **Nostr-native** and uses **PSTF** plus **Beads** to turn product intent into verified, production-ready behavior.
+Do not merely make code compile. Establish what should be true, implement it using Nostr-native event semantics, prove it with tests, track all remaining work in Beads, and leave the repo pushed and handoff-ready.
+Production-ready means:
+- no fake implementations, stubs, placeholder logic, hidden mocks, hardcoded production-path values, or TODO-shaped traps
+- verified Nostr protocol behavior
+- deterministic tests mapped to acceptance criteria
+- remaining work captured in `bd`, not memory, comments, or markdown lists
 
 ---
 
-### Core Mental Model
-
-* Nostr is an event stream, not a request/response API.
-* You subscribe (REQ) and react to events.
-* Do not use timers to wait for events - use subscriptions.
-* The relay tells you what's happening via:
-    * EVENT
-    * OK
-    * EOSE
-    * CLOSED
-    * AUTH (if required)
-
-👉 If your code is "waiting and checking" instead of "subscribing and reacting", it is wrong.
-
----
-
-### 🌳 Quick Decision Tree
-
-**I need to know when something happens:**
-→ Open subscription with filter + on_event callback
-
-**I need to process historical data:**
-→ Filter with since/until, wait for EOSE, then continue with realtime
-
-**I need to confirm my event was accepted:**
-→ Publish, check OK response (both accepted flag AND message), handle rejection
-
-**I need to retry after failure:**
-→ Use exponential backoff on reconnect, NOT polling loops
-
-**I need to route work between agents:**
-→ Use kinds + tags (#agent, #t, #p), subscribe with scoped filters
+## Non-Negotiable Architecture
+Nostr is an event stream, not a request/response API.
+Use:
+- `REQ` subscriptions
+- `EVENT` handlers
+- `EOSE` for historical catch-up completion
+- `OK` for publish verification
+- `CLOSED` handling
+- `AUTH` handling when required
+Do not build:
+- polling loops
+- inbox polling
+- Redis-style queues
+- RPC-over-Nostr
+- timeout-based completion
+- fake request/response wrappers over relays
+If code is “waiting and checking” instead of “subscribing and reacting,” it is wrong.
 
 ---
 
-### 🚫 Forbidden Patterns (Code Smells)
-
-#### 1. Polling for Events
-
-Do NOT:
-
-* use sleep, setTimeout, setInterval, retry loops to check for messages
-* repeatedly open short-lived subscriptions to "peek"
-* simulate inbox polling
-
-Bad (Python):
-
-```python
-while not message_received:
-    await asyncio.sleep(1)
-```
-
-Bad (JavaScript):
-
-```javascript
-setInterval(() => {
-  checkForNewMessages();
-}, 1000);
-```
-
-Correct:
-
-* open a subscription
-* handle events via callback
-
+## Required Nostr Patterns
+### Subscriptions
+Use scoped subscriptions with callbacks:
 ```python
 await subscribe_filter(
-    filters=[{"kinds": [1234], "#p": [agent_pubkey]}],
-    on_event=handle_message,
-)
-```
-
----
-
-#### 2. Timeout-Based Completion
-
-Do NOT:
-
-* assume "no events after X ms = done"
-* close subscriptions after arbitrary delays
-* wait N seconds "for relay response"
-
-Bad (JavaScript):
-
-```javascript
-await new Promise(resolve => setTimeout(resolve, 5000));
-// assume we got everything
-```
-
-Correct:
-
-* use EOSE to mark completion of historical/stored events (relay has sent all matching events it had at subscription time)
-* use application-level completion signals (e.g., kind 7001 "task complete" event)
-* keep subscriptions open for realtime flows
-
-```python
-def on_eose(sub_id):
-    print(f"Historical events complete for {sub_id}")
-    # Now in realtime mode
-```
-
----
-
-#### 3. Ignoring Relay Responses
-
-Do NOT ignore:
-
-* OK (especially OK false)
-* CLOSED (with reason)
-* AUTH challenges
-
-Bad (Python):
-
-```python
-await relay.send(event)  # assumes success
-```
-
-Correct:
-
-* verify OK response structure: `["OK", <event_id>, <accepted:bool>, <message>]`
-* check BOTH the accepted flag AND the message
-* handle rejection reasons (rate limit, auth required, invalid event)
-* respond to AUTH challenges (NIP-42)
-
-```python
-ok_msg = await relay.publish_and_wait_ok(event)
-if not ok_msg[2]:  # accepted = false
-    print(f"Rejected: {ok_msg[3]}")
-    # Handle rejection (backoff, fix event, request auth, etc.)
-```
-
-Reference: [NIP-01 OK message](https://github.com/nostr-protocol/nips/blob/master/01.md), [NIP-42 AUTH](https://github.com/nostr-protocol/nips/blob/master/42.md)
-
----
-
-#### 4. Sleep-Based Backfill
-
-Do NOT:
-
-* "wait for history" using delays
-* assume first batch = complete
-
-Bad (Python):
-
-```python
-# Subscribe
-await asyncio.sleep(2)  # "wait for history"
-# Process events
-```
-
-Correct:
-
-* use since, until, limit in filters
-* wait for EOSE to mark catch-up complete
-* transition to realtime mode after EOSE
-
-```python
-backfill_complete = False
-
-def on_eose(sub_id):
-    global backfill_complete
-    backfill_complete = True
-    print("Backfill complete, now processing realtime")
-```
-
----
-
-#### 5. Weak or Missing Filters
-
-Do NOT:
-
-* subscribe broadly and filter locally
-* omit domain tags
-* download entire relay history
-
-Bad (all events of a kind):
-
-```python
-{"kinds": [1234]}  # downloads everything
-```
-
-Correct:
-
-* scope filters using:
-    * kinds
-    * #p (pubkey tags - target agent/user)
-    * #agent (custom agent routing tag)
-    * #t (task/topic id)
-    * #d (for parameterized replaceable events, NIP-33)
-    * since (don't fetch ancient history unless needed)
-
-Good (scoped filter):
-
-```python
-{
-    "kinds": [1234],
-    "#p": ["<agent-pubkey>"],
-    "#t": ["<task-id>"],
-    "since": int(time.time()) - 3600  # last hour
-}
-```
-
-Reference: [NIP-01 filters](https://github.com/nostr-protocol/nips/blob/master/01.md)
-
----
-
-#### 6. No Deduplication / Idempotency
-
-Do NOT:
-
-* process the same event multiple times
-* assume single delivery
-* ignore replaceable event semantics
-
-Correct:
-
-* dedupe by event.id (maintain seen set)
-* use correlation keys like #t for task tracking
-* design handlers to be idempotent
-* for replaceable events (kind 0, 3, 10000-19999): keep only latest by pubkey
-* for parameterized replaceable (kind 30000-39999): keep only latest by pubkey + d-tag
-
-```python
-seen_events = set()
-
-def on_event(event):
-    if event['id'] in seen_events:
-        return
-    seen_events.add(event['id'])
-    process_event(event)
-```
-
-Reference: [NIP-01 replaceable events](https://github.com/nostr-protocol/nips/blob/master/01.md), [NIP-33 parameterized replaceable](https://github.com/nostr-protocol/nips/blob/master/33.md)
-
----
-
-#### 7. Recreating Queues or RPC
-
-Do NOT:
-
-* build Redis-style queues or inbox systems
-* wrap Nostr in request/response abstractions
-* treat relays like HTTP endpoints
-* create "RPC-over-Nostr" layers
-
-Bad (queue abstraction):
-
-```python
-class NostrQueue:
-    def push(self, message): ...
-    def pop(self): ...  # polls!
-```
-
-Correct:
-
-* model workflows using:
-    * event kinds (kind 1234 = task request, kind 1235 = task result)
-    * tags (#t for correlation, #p for routing)
-    * subscriptions (subscribers react to kind 1234, publish kind 1235)
-
-```python
-# Agent subscribes to requests
-await subscribe_filter(
-    filters=[{"kinds": [1234], "#agent": [my_agent_id]}],
-    on_event=handle_task_request,
-)
-
-# Agent publishes results
-result_event = {
-    "kind": 1235,
-    "tags": [["t", original_task_id], ["p", requestor_pubkey]],
-    "content": json.dumps(result),
-}
-```
-
----
-
-#### 8. Blind Relay Assumptions
-
-Do NOT:
-
-* assume all relays behave the same
-* ignore relay capabilities
-* assume all relays support all NIPs
-* skip relay metadata checks
-
-Correct:
-
-* query NIP-11 relay information document (GET https://relay.url/ with Accept: application/nostr+json)
-* support NIP-42 AUTH if required
-* implement reconnect + exponential backoff
-* handle relay-specific errors gracefully
-* track per-relay connection health
-
-```python
-# Check relay capabilities
-async def get_relay_info(relay_url):
-    response = await http_get(relay_url, headers={"Accept": "application/nostr+json"})
-    info = json.loads(response)
-    return info.get("supported_nips", [])
-
-# Reconnect with backoff
-backoff_seconds = 1
-while not connected:
-    try:
-        await relay.connect()
-    except:
-        await asyncio.sleep(backoff_seconds)
-        backoff_seconds = min(backoff_seconds * 2, 60)
-```
-
-Reference: [NIP-11 relay info](https://github.com/nostr-protocol/nips/blob/master/11.md), [NIP-42 AUTH](https://github.com/nostr-protocol/nips/blob/master/42.md)
-
----
-
-#### 9. Misusing Timers
-
-Timers are ONLY valid for:
-
-* reconnect backoff
-* health checks / heartbeats
-* autoscaling logic
-* rate limiting outbound publishes (if needed)
-
-Timers are NOT valid for:
-
-* message delivery
-* event completion detection
-* waiting for relay responses
-
----
-
-#### 10. Sleep-Based Tests
-
-Do NOT:
-
-* use sleeps to "wait for events" in tests
-
-Bad (test):
-
-```python
-await relay.subscribe(filters)
-await asyncio.sleep(0.5)  # "wait for events"
-assert len(received_events) > 0
-```
-
-Correct:
-
-* mock EVENT, EOSE, OK, CLOSED messages
-* trigger deterministic callbacks
-* verify handlers called correctly
-* no sleeps waiting for async behavior
-
-```python
-# Mock relay sends EVENT
-mock_relay.inject_event(test_event)
-# Verify handler called
-assert handler.call_count == 1
-```
-
----
-
-## ✅ Required Patterns
-
-### Event-Driven Subscription
-
-```python
-close = await subscribe_filter(
-    sub_id="example",
-    filters=[{"kinds": [1234], "#p": [pubkey]}],
+    filters=[{"kinds": [1234], "#p": [agent_pubkey], "#t": [task_id]}],
     on_event=handle_event,
     on_eose=handle_eose,
     on_closed=handle_closed,
 )
-```
 
----
+Filters must be narrow:
 
-### EOSE-Aware Flow
+* kinds
+* #p
+* #agent
+* #t
+* #d for parameterized replaceable events
+* since / until / limit where appropriate
 
-```python
-# Phase 1: backfill historical events
-# Relay sends stored events...
-# Relay sends EOSE
+Do not subscribe broadly and filter locally unless explicitly justified.
 
-def on_eose(sub_id):
-    print("Backfill complete")
-    # Phase 2: realtime mode
-    # Continue processing new events as they arrive
-```
+Backfill + Realtime
 
----
+For historical data:
 
-### Publish with Verification
+1. Subscribe with since / until / limit
+2. Process stored EVENTs
+3. Treat EOSE as historical catch-up complete
+4. Keep subscription open for realtime events when needed
 
-```python
-event_id = await publish_event(event)
-ok_response = await wait_for_ok(event_id, timeout=5)
+Never use sleeps to wait for history.
 
-# Check OK: ["OK", <event_id>, <accepted>, <message>]
-if not ok_response[2]:
-    handle_rejection(ok_response[3])
-```
+Publishing
 
----
+Every publish must verify OK:
 
-### Reconnect Strategy
+["OK", <event_id>, <accepted:bool>, <message>]
 
-* reconnect on disconnect
-* re-issue REQ subscriptions
-* use exponential backoff
-* dedupe events by ID (may receive duplicates after reconnect)
+Check both:
 
-```python
-async def maintain_connection():
-    backoff = 1
-    while True:
-        try:
-            await relay.connect()
-            await reissue_subscriptions()
-            backoff = 1  # reset on success
-        except ConnectionError:
-            await asyncio.sleep(backoff)
-            backoff = min(backoff * 2, 60)
-```
+* accepted flag
+* message
 
----
+Handle rejection reasons such as auth required, rate limits, invalid events, and relay errors.
 
-### Subscription Management
+Batch publishes must collect all OKs and handle partial failure. Do not assume batch atomicity.
 
-* Close subscriptions when no longer needed (use CLOSE message)
-* Many relays limit concurrent subscriptions per connection
-* On shutdown, cleanly close all subscriptions before disconnecting
-* Track active subscription IDs to avoid duplicates
-
-```python
-active_subs = {}
-
-async def subscribe(sub_id, filters):
-    if sub_id in active_subs:
-        await close_subscription(sub_id)
-    active_subs[sub_id] = await relay.subscribe(sub_id, filters)
-
-async def cleanup():
-    for sub_id in list(active_subs.keys()):
-        await relay.close(sub_id)
-```
-
----
-
-### Batch Publishing
-
-When publishing multiple events:
-
-* Publish in parallel when possible
-* Collect ALL OK responses
-* Handle partial failures (some accepted, some rejected)
-* Do NOT assume batch atomicity
-
-```python
-events = [event1, event2, event3]
-results = await asyncio.gather(
-    *[publish_and_wait_ok(e) for e in events],
-    return_exceptions=True
-)
-
-for i, result in enumerate(results):
-    if isinstance(result, Exception) or not result[2]:
-        handle_failed_publish(events[i], result)
-```
-
----
-
-## 🔐 Event Validation
-
-Agents MUST verify inbound events:
-
-* Event ID matches SHA256 hash of serialized event (NIP-01 format)
-* Signature is cryptographically valid (schnorr signature over event ID)
-* Pubkey in signature matches event.pubkey
-* Timestamp is reasonable (not wildly future/past - reject if >10min future or >1yr past, adjust as needed)
-* Required tags are present for the kind
-* Content is well-formed (valid JSON if expected)
-
-Never trust relay-provided events without validation.
-
-```python
-def validate_event(event):
-    # 1. Verify ID
-    serialized = serialize_event_for_id(event)
-    computed_id = hashlib.sha256(serialized.encode()).hexdigest()
-    if computed_id != event['id']:
-        raise InvalidEvent("ID mismatch")
-    
-    # 2. Verify signature
-    if not verify_schnorr(event['pubkey'], event['id'], event['sig']):
-        raise InvalidEvent("Invalid signature")
-    
-    # 3. Check timestamp
-    now = int(time.time())
-    if event['created_at'] > now + 600:  # 10min future
-        raise InvalidEvent("Timestamp too far in future")
-    
-    # 4. Validate kind-specific requirements
-    validate_kind_requirements(event)
-```
-
-Reference: [NIP-01 event validation](https://github.com/nostr-protocol/nips/blob/master/01.md)
-
----
-
-## 🔌 Relay Selection & Management
-
-* Use NIP-65 (relay list metadata, kind 10002) when available for discovering user's preferred relays
-* Support multiple relays for redundancy (publish to N, subscribe from M)
-* Handle relay-specific AUTH requirements (NIP-42)
-* Implement per-relay connection health tracking
-* Don't assume all relays support all NIPs (check NIP-11 support list)
-* When routing work, include relay hints in tags where appropriate
-
-```python
-# Read user's relay list (NIP-65)
-user_relays = await fetch_kind_10002(user_pubkey)
-
-# Connect to multiple relays
-for relay_url in user_relays['read']:
-    await connect_relay(relay_url)
-
-# Publish to write relays
-for relay_url in user_relays['write']:
-    await publish_to_relay(relay_url, event)
-```
-
-Reference: [NIP-65 relay list](https://github.com/nostr-protocol/nips/blob/master/65.md)
-
----
-
-## 🔑 AUTH Flow (NIP-42)
-
-When a relay requires authentication:
-
-1. Relay sends: `["AUTH", <challenge>]`
-2. Agent creates kind 22242 event with challenge in `challenge` tag
-3. Agent signs and publishes auth event
-4. Relay verifies and grants access
-
-Do NOT:
-
-* Ignore AUTH challenges
-* Assume all relays require AUTH
-* Cache AUTH events across relays (challenge is relay-specific)
-
-```python
-def on_auth_challenge(challenge):
-    auth_event = {
-        "kind": 22242,
-        "tags": [
-            ["relay", relay_url],
-            ["challenge", challenge]
-        ],
-        "content": "",
-        "created_at": int(time.time()),
-    }
-    signed_event = sign_event(auth_event)
-    await relay.send(["AUTH", signed_event])
-```
-
-Reference: [NIP-42 authentication](https://github.com/nostr-protocol/nips/blob/master/42.md)
-
----
-
-## 🔍 PR / Code Review Checklist
-
-Agents MUST verify:
-
-* ✅ No polling loops for message delivery
-* ✅ No timeout-based completion logic
-* ✅ EOSE is used correctly for backfill/realtime transition
-* ✅ OK responses are handled (both accepted flag AND message)
-* ✅ CLOSED reasons are logged and handled
-* ✅ AUTH flow supported if relay requires it (NIP-42)
-* ✅ Filters are properly scoped (kinds, tags, since/until)
-* ✅ Deduplication is implemented (event ID tracking)
-* ✅ Replaceable event semantics respected (NIP-01, NIP-33)
-* ✅ Event validation performed (ID, signature, timestamp)
-* ✅ No queue/RPC abstractions replacing Nostr semantics
-* ✅ Tests are event-driven (mock EVENT/EOSE/OK, no sleeps)
-* ✅ Subscription cleanup on shutdown
-* ✅ Reconnect logic uses exponential backoff
-* ✅ Relay capabilities checked (NIP-11) before assuming features
-
----
-
-## 🧠 Heuristic Rule
-
-If you wrote:
-
-* a sleep
-* a timeout
-* a retry loop waiting for data
-
-Ask yourself:
-
-**"Could this be replaced with a subscription + event handler?"**
-
-If yes → you are violating the architecture.
-
-The answer is almost always yes.
-
----
-
-## 🧩 Architecture Reminder
-
-* **Communication** = Nostr events over relays
-* **Routing** = kinds + tags (#p, #agent, #t, #d)
-* **State** = derived from event streams
-* **Reliability** = EOSE + idempotency + backoff + event validation
-
-There are:
-
-* ❌ no queues
-* ❌ no polling APIs
-* ❌ no request/response workflows
-* ❌ no "wait and check" patterns
-
-Only:
-
-* ✅ subscriptions (REQ)
-* ✅ event handlers (on_event, on_eose, on_closed)
-* ✅ publishing (EVENT)
-* ✅ verification (OK)
-
----
-
-## ⚠️ Enforcement
+Relay Management
 
 Agents must:
 
-* Flag violations during implementation
-* Correct violations during refactoring
-* Block PRs that introduce protocol smells
-* Treat these rules as architectural constraints, not suggestions
+* query NIP-11 relay metadata before assuming capabilities
+* support NIP-42 AUTH when required
+* use NIP-65 relay lists when available
+* reconnect with exponential backoff
+* re-issue subscriptions after reconnect
+* track per-relay health
+* close unused subscriptions with CLOSE
+* cleanly close subscriptions on shutdown
 
-These rules are non-optional.
+Timers are allowed only for:
 
-Violating them breaks the event-driven contract and creates systems that will fail under load, reconnect scenarios, and multi-relay deployments.
+* reconnect backoff
+* health checks / heartbeats
+* autoscaling
+* outbound rate limiting
 
-<!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:ca08a54f -->
-## Beads Issue Tracker
+Timers are not allowed for:
 
-This project uses **bd (beads)** for issue tracking. Run `bd prime` to see full workflow context and commands.
+* event delivery
+* relay response waiting
+* completion detection
 
-### Quick Reference
+⸻
 
-```bash
-bd ready              # Find available work
-bd show <id>          # View issue details
-bd update <id> --claim  # Claim work
-bd close <id>         # Complete work
-```
+Event Correctness
 
-### Rules
+Inbound events must be validated before trust:
 
-- Use `bd` for ALL task tracking — do NOT use TodoWrite, TaskCreate, or markdown TODO lists
-- Run `bd prime` for detailed command reference and session close protocol
-- Use `bd remember` for persistent knowledge — do NOT use MEMORY.md files
+* event ID matches NIP-01 serialized hash
+* Schnorr signature is valid
+* signature pubkey matches event.pubkey
+* timestamp is reasonable
+* required kind-specific tags exist
+* content is well-formed, including JSON where expected
 
-## Session Completion
+Handlers must be idempotent:
 
-**When ending a work session**, you MUST complete ALL steps below. Work is NOT complete until `git push` succeeds.
+* dedupe by event.id
+* use #t or other correlation tags for workflow tracking
+* respect replaceable event semantics:
+    * replaceable kinds: latest by pubkey
+    * parameterized replaceable kinds: latest by pubkey + d tag
 
-**MANDATORY WORKFLOW:**
+⸻
 
-1. **File issues for remaining work** - Create issues for anything that needs follow-up
-2. **Run quality gates** (if code changed) - Tests, linters, builds
-3. **Update issue status** - Close finished work, update in-progress items
-4. **PUSH TO REMOTE** - This is MANDATORY:
-   ```bash
-   git pull --rebase
-   git push
-   git status  # MUST show "up to date with origin"
-   ```
-5. **Clean up** - Clear stashes, prune remote branches
-6. **Verify** - All changes committed AND pushed
-7. **Hand off** - Provide context for next session
+Forbidden Code Smells
 
-**CRITICAL RULES:**
-- Work is NOT complete until `git push` succeeds
-- NEVER stop before pushing - that leaves work stranded locally
-- NEVER say "ready to push when you are" - YOU must push
-- If push fails, resolve and retry until it succeeds
-<!-- END BEADS INTEGRATION -->
+Flag and fix these during implementation and review:
 
-## PSTF RepoPrompt System Principles
+Nostr protocol smells
 
-You are operating under the Product Specification Testing Framework (PSTF).
+* sleep, setTimeout, setInterval, or retry loops used to wait for events
+* repeated short-lived subscriptions used to “peek”
+* timeout-based “done” logic
+* ignored OK, CLOSED, or AUTH
+* weak filters that download excessive relay history
+* queue, inbox, or RPC abstractions over Nostr
+* missing dedupe or non-idempotent event handlers
+* assuming all relays support the same NIPs
 
-Your objective is to help convert repository context into verified product behavior.
+Production-readiness smells
 
-### Prime directive
+* TODO, FIXME, XXX, HACK, TEMP, WIP
+* “for now”, “later”, “future work”, “MVP”, “simplified”, “minimal”
+* stubs, mocks, fakes, dummy data, placeholder adapters
+* hardcoded IDs, URLs, ports, tenants, keys, paths, relay lists, or magic constants in production paths
+* test-only logic leaking into production
+* silent fallbacks that hide missing behavior
+* swallowed exceptions
+* no-op handlers
+* dead compatibility branches
+* incomplete migrations
+* partial integrations that stop one layer short
+* tests that validate fake behavior instead of intended behavior
 
-Do not merely implement requested changes. Establish what should be true, prove whether it is true, and iterate until the implementation satisfies approved acceptance criteria.
+Do not leave these behind unless they are outside scope, unreachable from production paths, and tracked in Beads.
 
-### Non-negotiable rules
+⸻
 
-1. Ground claims in selected repository context.
-2. Separate observed behavior from intended behavior.
-3. Do not silently resolve ambiguity. Record it for human decision.
-4. Every feature must have testable acceptance criteria.
-5. Every acceptance criterion must map to one or more tests.
-6. Every failing test must map to a defect or a flawed test assumption.
-7. Prefer narrow vertical slices over broad rewrites.
-8. Produce structured artifacts in `/pstf/`.
-9. Keep patches minimal and explain tradeoffs.
-10. Never mark a feature complete without verification evidence.
+PSTF Workflow
 
-### Standard artifact directory
+Use PSTF to convert intent into verified behavior.
 
-For each feature, write outputs to:
+For each meaningful feature or fix, maintain artifacts under:
 
-```text
 /pstf/features/<FEATURE_ID>/
-```
 
-Required files may include:
+Relevant files may include:
 
-```text
 feature_spec.json
 acceptance_criteria.json
 test_matrix.json
 defects.json
 verification_report.md
 hitl_decisions.md
-```
 
-### Human-in-the-loop triggers
+Rules:
 
-Escalate to the human when:
+1. Ground claims in repository evidence.
+2. Separate observed behavior from intended behavior.
+3. Do not silently resolve product ambiguity.
+4. Every feature needs testable acceptance criteria.
+5. Every acceptance criterion maps to tests.
+6. Every failing test maps to a defect or flawed test assumption.
+7. Prefer narrow vertical slices over broad rewrites.
+8. Keep patches minimal and explain tradeoffs.
+9. Never mark complete without verification evidence.
 
-- Documents contradict code.
-- Existing behavior appears accidental.
-- Acceptance criteria require product judgment.
-- UX expectations are subjective.
-- Security, privacy, billing, or destructive data behavior is involved.
-- A patch would require broad architectural change.
+Escalate for human decision when:
+
+* docs contradict code
+* behavior appears accidental
+* acceptance criteria require product judgment
+* UX expectations are subjective
+* security, privacy, billing, permissions, destructive data, or broad architecture changes are involved
+
+Record these in hitl_decisions.md and Beads.
+
+⸻
+
+Beads Issue Tracking
+
+This project uses bd for all task tracking.
+
+Run:
+
+bd prime
+
+Use Beads instead of:
+
+* TodoWrite
+* TaskCreate
+* markdown TODO lists
+* MEMORY.md
+
+Quick commands:
+
+bd ready
+bd show <id>
+bd update <id> --claim
+bd close <id>
+bd remember
+
+Create or update Beads issues for:
+
+* defects
+* incomplete implementation
+* production-readiness gaps
+* protocol violations
+* weak or fake tests
+* PSTF ambiguities
+* follow-up work
+
+A good Beads issue includes:
+
+* concrete title
+* affected files/subsystems
+* observed behavior
+* intended behavior
+* acceptance criteria or verification notes
+* priority/severity
+* dependencies
+* whether it is blocked or ready
+
+Do not hide remaining work in prose. Track it in bd.
+
+⸻
+
+Implementation Standard
+
+Before changing code:
+
+1. Run bd prime
+2. Inspect relevant code and tests
+3. Identify intended behavior via PSTF
+4. Claim or create the relevant Beads issue
+
+While changing code:
+
+1. Preserve Nostr event-driven semantics
+2. Remove fake or placeholder behavior in touched paths
+3. Implement vertical slices end-to-end
+4. Validate inbound events
+5. Verify publish outcomes
+6. Handle relay failures explicitly
+7. Add deterministic tests without sleep-based waiting
+
+After changing code:
+
+1. Run relevant tests, linters, builds
+2. Update PSTF verification artifacts
+3. Update or close Beads issues
+4. Create Beads issues for any remaining real work
+
+Passing tests is not enough. Tests must prove the intended behavior, not merely ratify current fakery.
+
+⸻
+
+Testing Rules
+
+Tests must be deterministic and event-driven.
+
+Do:
+
+* inject mock EVENT, EOSE, OK, CLOSED, and AUTH messages
+* verify handlers and state transitions directly
+* test rejection paths
+* test reconnect and dedupe behavior
+* map tests to acceptance criteria
+
+Do not:
+
+* sleep to wait for async behavior
+* assert only that a mock was called while real behavior is absent
+* skip hard cases without a Beads issue
+* preserve tests that encode placeholder behavior as truth
+
+Bad:
+
+await asyncio.sleep(0.5)
+assert len(received_events) > 0
+
+Good:
+
+mock_relay.inject_event(test_event)
+assert handler.call_count == 1
+
+⸻
+
+Review Checklist
+
+Before calling work complete, verify:
+
+Nostr
+
+* no polling for message delivery
+* no timeout-based completion
+* scoped filters
+* correct EOSE handling
+* OK checked for accepted flag and message
+* CLOSED logged and handled
+* AUTH supported where required
+* event validation performed
+* dedupe and idempotency implemented
+* replaceable event semantics respected
+* reconnect uses exponential backoff
+* subscriptions are cleaned up
+* relay capabilities checked with NIP-11
+* no queue/RPC abstraction replaces Nostr semantics
+
+PSTF
+
+* intended behavior is documented
+* acceptance criteria exist
+* tests map to acceptance criteria
+* defects map to failing tests or observed gaps
+* verification evidence exists
+
+Production Readiness
+
+* no stubs, mocks, fakes, placeholders, TODOs, or hardcoded production values in touched paths
+* no silent fallbacks hiding missing behavior
+* no test-only logic in production
+* error handling is explicit
+* configuration is externalized where appropriate
+* integrations are real or clearly tracked as blocked
+* remaining work is in Beads
+
+⸻
+
+Session Completion
+
+Work is not complete until changes are committed and pushed.
+
+Mandatory closeout:
+
+1. Create Beads issues for remaining work
+2. Run quality gates if code changed
+3. Update PSTF artifacts
+4. Update Beads issue status
+5. Commit changes
+6. Push to remote
+
+git pull --rebase
+git push
+git status
+
+git status must show the branch is up to date with origin.
+
+Never say:
+
+* “ready to push when you are”
+* “left as future work”
+* “good enough for now”
+* “in a real system…”
+
+If push fails, resolve and retry.
+
+Final handoff must include:
+
+* Beads issues worked
+* code changed
+* tests run
+* PSTF artifacts updated
+* remaining Beads issues
+* blockers, if any
+* confirmation that no fake, stubbed, hardcoded, or placeholder production-path behavior remains in the touched scope
+
+⸻
+
+Enforcement
+
+These instructions are architectural constraints, not preferences.
+
+Violations are bugs.
+
+When you find a violation:
+
+1. Fix it if in scope
+2. Otherwise create or update a Beads issue
+3. Record PSTF ambiguity when product intent is unclear
+4. Do not bury the problem in comments or handoff prose
+
+Build real Nostr systems: subscribe, react, validate, verify, track, test, push.
