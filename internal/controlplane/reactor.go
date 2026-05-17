@@ -318,55 +318,11 @@ func (r *Reactor) Run(ctx context.Context) error {
 	// Start periodic cleanup of completed runs
 	go r.cleanupRuns(ctx)
 
-	// Subscribe to control plane request events
+	// Subscribe to control plane request events. Compute since once and reuse
+	// the same filters for auth retries/reconnects so disconnect-gap events are
+	// not skipped by recomputing the cursor during resubscription.
 	now := nostr.Now()
-	filters := []nostr.Filter{
-		{
-			Kinds: []int{
-				KindDeployRequest,
-				KindRollbackRequest,
-				KindServiceAction,
-				KindServiceCreate,
-				KindEnvironmentCreate,
-				KindDeploymentApproval,
-				KindObservationSubmit,
-				KindDriftRemediate,
-				KindLLMRouteCreate,
-				KindLLMReleaseRegister,
-				KindLLMDeployRequest,
-				KindLLMDeploymentApproval,
-				KindLLMRollbackRequest,
-				KindToolProvisionRequest,
-				KindToolApprovalResponse,
-				KindAdoptionScanRequest,
-				KindAdoptionImportRequest,
-				KindServiceUpdate,
-				KindServiceDelete,
-				KindEnvironmentUpdate,
-				KindEnvironmentDelete,
-				KindArtifactRegister,
-				KindPolicyCreate,
-				KindPolicyUpdate,
-				KindPolicyDelete,
-				KindPolicyEvaluate,
-				KindMLRecipeRunRequest,
-				KindMLInferenceDeployRequest,
-				KindMLInferenceDeploymentApproval,
-				KindMLInferenceRollbackRequest,
-				KindMLModelImportRequest,
-				KindPackageRepositoryApply,
-				KindPackageRepositoryDelete,
-				KindPackagePublishIntent,
-				KindPackagePromotionRequest,
-				KindPackageYankRequest,
-				KindPackageDriftDetect,
-				domain.KindAssistantPromptRequest,
-				domain.KindAssistantApproval,
-			},
-			Authors: r.requestSubscriptionAuthors(),
-			Since:   &now,
-		},
-	}
+	filters := r.buildRequestSubscriptionFilters(now)
 
 	r.caughtUp.Store(false)
 	merged, err := r.pool.SubscribeAllWithEOSE(ctx, filters)
@@ -1712,18 +1668,101 @@ const (
 	operatorScopeDirectRuntime operatorScope = "direct_runtime"
 )
 
+func (r *Reactor) buildRequestSubscriptionFilters(since nostr.Timestamp) []nostr.Filter {
+	return []nostr.Filter{
+		{
+			Kinds:   defaultRequestSubscriptionKinds(),
+			Authors: r.subscriptionAuthors(operatorScopeDefault),
+			Since:   &since,
+		},
+		{
+			Kinds:   []int{KindServiceAction},
+			Authors: r.subscriptionAuthors(operatorScopeDefault, operatorScopeDirectRuntime),
+			Since:   &since,
+		},
+		{
+			Kinds: []int{
+				KindAdoptionScanRequest,
+				KindAdoptionImportRequest,
+			},
+			Authors: r.subscriptionAuthors(operatorScopeDefault, operatorScopeAdoption),
+			Since:   &since,
+		},
+	}
+}
+
+func defaultRequestSubscriptionKinds() []int {
+	return []int{
+		KindDeployRequest,
+		KindRollbackRequest,
+		KindServiceCreate,
+		KindEnvironmentCreate,
+		KindDeploymentApproval,
+		KindObservationSubmit,
+		KindDriftRemediate,
+		KindLLMRouteCreate,
+		KindLLMReleaseRegister,
+		KindLLMDeployRequest,
+		KindLLMDeploymentApproval,
+		KindLLMRollbackRequest,
+		KindToolProvisionRequest,
+		KindToolApprovalResponse,
+		KindServiceUpdate,
+		KindServiceDelete,
+		KindEnvironmentUpdate,
+		KindEnvironmentDelete,
+		KindArtifactRegister,
+		KindPolicyCreate,
+		KindPolicyUpdate,
+		KindPolicyDelete,
+		KindPolicyEvaluate,
+		KindMLRecipeRunRequest,
+		KindMLInferenceDeployRequest,
+		KindMLInferenceDeploymentApproval,
+		KindMLInferenceRollbackRequest,
+		KindMLModelImportRequest,
+		KindPackageRepositoryApply,
+		KindPackageRepositoryDelete,
+		KindPackagePublishIntent,
+		KindPackagePromotionRequest,
+		KindPackageYankRequest,
+		KindPackageDriftDetect,
+		domain.KindAssistantPromptRequest,
+		domain.KindAssistantApproval,
+	}
+}
+
 func (r *Reactor) requestSubscriptionAuthors() []string {
-	seen := make(map[string]struct{}, len(r.config.AuthorizedPubkeys))
-	authors := make([]string, 0, len(r.config.AuthorizedPubkeys))
-	for _, pubkey := range r.config.AuthorizedPubkeys {
-		if pubkey == "" {
-			continue
+	return r.subscriptionAuthors(operatorScopeDefault)
+}
+
+func (r *Reactor) subscriptionAuthors(scopes ...operatorScope) []string {
+	seen := make(map[string]struct{})
+	authors := make([]string, 0, len(r.config.AuthorizedPubkeys)+len(r.config.AdoptionAuthorizedPubkeys)+len(r.config.DirectRuntimeAuthorizedPubkeys))
+	add := func(pubkeys []string) {
+		for _, pubkey := range pubkeys {
+			if pubkey == "" {
+				continue
+			}
+			if _, ok := seen[pubkey]; ok {
+				continue
+			}
+			seen[pubkey] = struct{}{}
+			authors = append(authors, pubkey)
 		}
-		if _, ok := seen[pubkey]; ok {
-			continue
+	}
+	for _, scope := range scopes {
+		switch scope {
+		case operatorScopeDefault:
+			add(r.config.AuthorizedPubkeys)
+		case operatorScopeAdoption:
+			add(r.config.AdoptionAuthorizedPubkeys)
+		case operatorScopeDirectRuntime:
+			add(r.config.DirectRuntimeAuthorizedPubkeys)
 		}
-		seen[pubkey] = struct{}{}
-		authors = append(authors, pubkey)
+	}
+	if len(authors) == 0 {
+		return nil
 	}
 	return authors
 }

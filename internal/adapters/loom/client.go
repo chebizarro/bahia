@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/nbd-wtf/go-nostr"
@@ -49,7 +50,7 @@ const (
 // JobRequest represents a deploy job request sent to Loom workers.
 type JobRequest struct {
 	ID           string            `json:"id"`
-	Type         string            `json:"type"`                    // "deploy", "build"
+	Type         string            `json:"type"` // "deploy", "build"
 	Image        string            `json:"image"`
 	Digest       string            `json:"digest"`
 	Environment  string            `json:"environment"`
@@ -70,7 +71,7 @@ type JobStatus struct {
 	Status       string `json:"status"` // queued, running, completed, failed, cancelled, timeout
 	Success      *bool  `json:"success,omitempty"`
 	ExitCode     *int   `json:"exit_code,omitempty"`
-	Duration     *int   `json:"duration,omitempty"`   // seconds
+	Duration     *int   `json:"duration,omitempty"` // seconds
 	WorkerPubkey string `json:"worker_pubkey,omitempty"`
 	StdoutURL    string `json:"stdout_url,omitempty"` // Blossom URL
 	StderrURL    string `json:"stderr_url,omitempty"` // Blossom URL
@@ -84,10 +85,21 @@ type JobStatus struct {
 type StatusCallback func(status *JobStatus)
 
 // Client interacts with Loom workers via the Loom Nostr protocol.
+type loomRelayPool interface {
+	Publish(context.Context, nostr.Event) (int, error)
+	SubscribeAllWithEOSE(context.Context, []nostr.Filter) (*nostrAdapter.MergedSubscription, error)
+	AuthenticateRelay(context.Context, string) error
+}
+
 type Client struct {
-	pool         *nostrAdapter.RelayPool
+	pool         loomRelayPool
 	workerRepo   repository.WorkerRepository
 	privateKey   string
+	clientPubkey string
+
+	jobsMu           sync.RWMutex
+	submittedWorkers map[string]string
+
 	jobTimeout   time.Duration
 	pollInterval time.Duration
 	logger       *zap.Logger
@@ -102,12 +114,24 @@ func NewClient(cfg config.LoomConfig, nostrPrivateKey string, pool *nostrAdapter
 		pool.Connect(context.Background())
 	}
 
+	clientPubkey := ""
+	if nostrPrivateKey != "" {
+		pubkey, err := nostr.GetPublicKey(nostrPrivateKey)
+		if err == nil {
+			clientPubkey = pubkey
+		} else {
+			logger.Warn("failed to derive Loom client pubkey for result validation", zap.Error(err))
+		}
+	}
+
 	c := &Client{
-		pool:         pool,
-		privateKey:   nostrPrivateKey,
-		jobTimeout:   cfg.JobTimeout,
-		pollInterval: cfg.PollInterval,
-		logger:       logger,
+		pool:             pool,
+		privateKey:       nostrPrivateKey,
+		clientPubkey:     clientPubkey,
+		submittedWorkers: make(map[string]string),
+		jobTimeout:       cfg.JobTimeout,
+		pollInterval:     cfg.PollInterval,
+		logger:           logger,
 	}
 	for _, opt := range opts {
 		opt(c)
@@ -217,6 +241,7 @@ func (c *Client) SubmitJob(ctx context.Context, job JobRequest) (string, error) 
 	if err != nil {
 		return "", fmt.Errorf("publishing job request: %w", err)
 	}
+	c.rememberSubmittedWorker(ev.ID, workerPubkey)
 
 	c.logger.Info("loom job submitted",
 		zap.String("event_id", ev.ID),
@@ -235,38 +260,99 @@ func (c *Client) SubmitJob(ctx context.Context, job JobRequest) (string, error) 
 // received or the context expires. An optional StatusCallback is invoked for
 // each intermediate status update.
 func (c *Client) PollJobStatus(ctx context.Context, jobEventID string, callbacks ...StatusCallback) (*JobStatus, error) {
+	return c.PollJobStatusFromWorker(ctx, jobEventID, "", callbacks...)
+}
+
+// PollJobStatusFromWorker is PollJobStatus scoped to an expected worker pubkey.
+// Relay-provided status/result events must pass shared Nostr validation plus
+// Loom-specific kind, tag, job-correlation, client, worker, and duplicate checks
+// before they can drive callbacks or terminal completion.
+func (c *Client) PollJobStatusFromWorker(ctx context.Context, jobEventID string, expectedWorkerPubkey string, callbacks ...StatusCallback) (*JobStatus, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.jobTimeout)
 	defer cancel()
 
-	filters := []nostr.Filter{{
-		Kinds: []int{KindJobStatus, KindJobResult},
-		Tags:  nostr.TagMap{"e": {jobEventID}},
-	}}
+	if expectedWorkerPubkey == "" {
+		expectedWorkerPubkey = c.submittedWorker(jobEventID)
+	}
+	filters := c.jobStatusFilters(jobEventID, expectedWorkerPubkey)
 
-	sub, err := c.pool.Subscribe(ctx, filters)
+	// Track the latest status while waiting for a result.
+	latest := &JobStatus{JobID: jobEventID, Status: StatusQueued}
+	seen := nostrAdapter.NewEventDeduplicator(256)
+	authAttempted := make(map[string]struct{})
+
+resubscribe:
+	sub, err := c.pool.SubscribeAllWithEOSE(ctx, filters)
 	if err != nil {
 		return nil, fmt.Errorf("subscribing for job status: %w", err)
 	}
 
-	// Track the latest status while waiting for a result.
-	latest := &JobStatus{JobID: jobEventID, Status: StatusQueued}
-
 	for {
 		select {
 		case <-ctx.Done():
+			sub.Close()
 			return nil, ctx.Err()
+		case eose, ok := <-sub.RelayEOSE:
+			if ok {
+				c.logger.Debug("loom relay sent EOSE",
+					zap.String("relay", eose.RelayURL),
+					zap.String("subscription_id", eose.SubscriptionID),
+					zap.String("job_id", jobEventID),
+				)
+			} else {
+				sub.RelayEOSE = nil
+			}
+		case closed, ok := <-sub.Closed:
+			if !ok {
+				sub.Closed = nil
+				continue
+			}
+			retry, err := c.handleJobSubscriptionClosed(ctx, closed, authAttempted, jobEventID)
+			if err != nil {
+				sub.Close()
+				return nil, err
+			}
+			if retry {
+				sub.Close()
+				goto resubscribe
+			}
+		case <-sub.EndOfStoredEvents:
+			c.logger.Debug("loom job status subscription caught up",
+				zap.String("job_id", jobEventID),
+			)
+			sub.EndOfStoredEvents = nil
 		case ev, ok := <-sub.Events:
 			if !ok {
-				return nil, fmt.Errorf("subscription closed unexpectedly")
+				sub.Close()
+				return nil, fmt.Errorf("subscription closed before terminal job result")
+			}
+			if ev == nil {
+				c.logger.Warn("dropping nil Loom job event", zap.String("job_id", jobEventID))
+				continue
+			}
+			if err := c.validateJobEvent(ev, jobEventID, expectedWorkerPubkey); err != nil {
+				c.logger.Warn("dropping invalid Loom job event",
+					zap.String("job_id", jobEventID),
+					zap.String("event_id", ev.ID),
+					zap.Int("kind", ev.Kind),
+					zap.Error(err),
+				)
+				continue
+			}
+			if seen.IsDuplicate(ev.ID) {
+				c.logger.Debug("skipping duplicate Loom job event",
+					zap.String("job_id", jobEventID),
+					zap.String("event_id", ev.ID),
+					zap.Int("kind", ev.Kind),
+				)
+				continue
 			}
 
 			switch ev.Kind {
 			case KindJobStatus:
 				// Intermediate status update — record it.
 				status := getTagValue(ev.Tags, "status")
-				if status != "" {
-					latest.Status = status
-				}
+				latest.Status = status
 				latest.WorkerPubkey = ev.PubKey
 				if ev.Content != "" {
 					latest.LogOutput = ev.Content
@@ -274,18 +360,171 @@ func (c *Client) PollJobStatus(ctx context.Context, jobEventID string, callbacks
 				c.logger.Debug("loom job status update",
 					zap.String("job_id", jobEventID),
 					zap.String("status", latest.Status),
+					zap.String("worker", latest.WorkerPubkey),
 				)
-				// Notify callbacks.
+				// Notify callbacks after validation and deduplication.
 				for _, cb := range callbacks {
 					cb(latest)
 				}
 
 			case KindJobResult:
-				// Terminal result — parse tags and return.
+				// Terminal result — parse tags and return only after validation/deduplication.
+				sub.Close()
 				return parseJobResult(ev, jobEventID), nil
 			}
 		}
 	}
+}
+
+func (c *Client) jobStatusFilters(jobEventID string, expectedWorkerPubkey string) []nostr.Filter {
+	statusFilter := nostr.Filter{
+		Kinds: []int{KindJobStatus},
+		Tags: nostr.TagMap{
+			"d": {jobEventID},
+			"e": {jobEventID},
+		},
+	}
+	resultFilter := nostr.Filter{
+		Kinds: []int{KindJobResult},
+		Tags:  nostr.TagMap{"e": {jobEventID}},
+	}
+	if c.clientPubkey != "" {
+		statusFilter.Tags["p"] = []string{c.clientPubkey}
+		resultFilter.Tags["p"] = []string{c.clientPubkey}
+	}
+	if expectedWorkerPubkey != "" {
+		statusFilter.Authors = []string{expectedWorkerPubkey}
+		resultFilter.Authors = []string{expectedWorkerPubkey}
+	}
+	return []nostr.Filter{statusFilter, resultFilter}
+}
+
+func (c *Client) handleJobSubscriptionClosed(ctx context.Context, closed nostrAdapter.RelayClosed, authAttempted map[string]struct{}, jobEventID string) (bool, error) {
+	c.logger.Warn("loom job status subscription closed by relay",
+		zap.String("relay", closed.RelayURL),
+		zap.String("subscription_id", closed.SubscriptionID),
+		zap.String("reason", closed.Reason),
+		zap.String("job_id", jobEventID),
+	)
+	if nostrAdapter.IsAuthRequiredReason(closed.Reason) && closed.RelayURL != "" && c.pool != nil {
+		if _, ok := authAttempted[closed.RelayURL]; ok {
+			return false, nil
+		}
+		authAttempted[closed.RelayURL] = struct{}{}
+		if err := c.pool.AuthenticateRelay(ctx, closed.RelayURL); err != nil {
+			c.logger.Warn("loom job status subscription auth failed",
+				zap.String("relay", closed.RelayURL),
+				zap.String("reason", closed.Reason),
+				zap.String("job_id", jobEventID),
+				zap.Error(err),
+			)
+			return false, fmt.Errorf("loom job status subscription auth failed: %w", err)
+		}
+		return true, nil
+	}
+	return false, nil
+}
+
+func (c *Client) rememberSubmittedWorker(jobEventID string, workerPubkey string) {
+	if jobEventID == "" || workerPubkey == "" {
+		return
+	}
+	c.jobsMu.Lock()
+	defer c.jobsMu.Unlock()
+	if c.submittedWorkers == nil {
+		c.submittedWorkers = make(map[string]string)
+	}
+	c.submittedWorkers[jobEventID] = workerPubkey
+}
+
+func (c *Client) submittedWorker(jobEventID string) string {
+	if jobEventID == "" {
+		return ""
+	}
+	c.jobsMu.RLock()
+	defer c.jobsMu.RUnlock()
+	return c.submittedWorkers[jobEventID]
+}
+
+func (c *Client) validateJobEvent(ev *nostr.Event, jobEventID string, expectedWorkerPubkey string) error {
+	if err := nostrAdapter.ValidateInboundEvent(ev, time.Now().UTC(), nostrAdapter.InboundEventMaxFutureSkew); err != nil {
+		return err
+	}
+	if ev.Kind != KindJobStatus && ev.Kind != KindJobResult {
+		return fmt.Errorf("unexpected Loom job event kind %d", ev.Kind)
+	}
+	if expectedWorkerPubkey != "" && ev.PubKey != expectedWorkerPubkey {
+		return fmt.Errorf("worker pubkey mismatch")
+	}
+	if c.clientPubkey != "" && getTagValue(ev.Tags, "p") != c.clientPubkey {
+		return fmt.Errorf("client pubkey tag mismatch")
+	}
+
+	switch ev.Kind {
+	case KindJobStatus:
+		if err := requireTagValue(ev.Tags, "d", jobEventID); err != nil {
+			return err
+		}
+		if err := requireTagValue(ev.Tags, "e", jobEventID); err != nil {
+			return err
+		}
+		if err := requireTagPresent(ev.Tags, "p"); err != nil {
+			return err
+		}
+		status := getTagValue(ev.Tags, "status")
+		if !isValidJobStatus(status) {
+			return fmt.Errorf("invalid status tag %q", status)
+		}
+	case KindJobResult:
+		if err := requireTagValue(ev.Tags, "e", jobEventID); err != nil {
+			return err
+		}
+		for _, key := range []string{"p", "success", "exit_code", "duration"} {
+			if err := requireTagPresent(ev.Tags, key); err != nil {
+				return err
+			}
+		}
+		success := getTagValue(ev.Tags, "success")
+		if success != "true" && success != "false" {
+			return fmt.Errorf("invalid success tag %q", success)
+		}
+		if _, err := strconv.Atoi(getTagValue(ev.Tags, "exit_code")); err != nil {
+			return fmt.Errorf("invalid exit_code tag: %w", err)
+		}
+		if _, err := strconv.Atoi(getTagValue(ev.Tags, "duration")); err != nil {
+			return fmt.Errorf("invalid duration tag: %w", err)
+		}
+	}
+	return nil
+}
+
+func isValidJobStatus(status string) bool {
+	switch status {
+	case StatusQueued, StatusRunning, StatusCompleted, StatusFailed, StatusCancelled, StatusTimeout:
+		return true
+	default:
+		return false
+	}
+}
+
+func requireTagValue(tags nostr.Tags, key string, want string) error {
+	got := getTagValue(tags, key)
+	if got == "" {
+		return fmt.Errorf("missing %q tag", key)
+	}
+	if got != want {
+		return fmt.Errorf("%q tag mismatch", key)
+	}
+	return nil
+}
+
+func requireTagPresent(tags nostr.Tags, key string) error {
+	for _, tag := range tags {
+		if len(tag) >= 2 && tag[0] == key {
+			return nil
+		}
+	}
+	return fmt.Errorf("missing %q tag", key)
 }
 
 // CancelJob publishes a Kind 5102 cancellation request for the given job.

@@ -3,6 +3,7 @@ package workflow
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -18,14 +19,19 @@ import (
 )
 
 // Coordinator manages the lifecycle of deployment workflows.
+type deploymentLoomClient interface {
+	SubmitJob(context.Context, loom.JobRequest) (string, error)
+	PollJobStatusFromWorker(context.Context, string, string, ...loom.StatusCallback) (*loom.JobStatus, error)
+}
+
 type Coordinator struct {
-	registry      *service.RegistryService
-	loom          *loom.Client
-	workerPolicy  *service.WorkerPolicyService
-	workerCatalog *service.WorkerCatalogService
+	registry        *service.RegistryService
+	loom            deploymentLoomClient
+	workerPolicy    *service.WorkerPolicyService
+	workerCatalog   *service.WorkerCatalogService
 	runtimeResolver runtimeadapter.RuntimeResolver
-	publisher     events.Publisher
-	logger        *zap.Logger
+	publisher       events.Publisher
+	logger          *zap.Logger
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -41,9 +47,13 @@ func NewCoordinator(
 	opts ...CoordinatorOption,
 ) *Coordinator {
 	ctx, cancel := context.WithCancel(context.Background())
+	var loomAdapter deploymentLoomClient
+	if loomClient != nil {
+		loomAdapter = loomClient
+	}
 	c := &Coordinator{
 		registry:  registry,
-		loom:      loomClient,
+		loom:      loomAdapter,
 		publisher: publisher,
 		logger:    logger,
 		ctx:       ctx,
@@ -278,34 +288,46 @@ func isLocalImageRef(image string) bool {
 }
 
 func (c *Coordinator) pollForCompletion(ctx context.Context, runID uuid.UUID, jobEventID string, workerPubkey string, startTime time.Time) {
-	status, err := c.loom.PollJobStatus(ctx, jobEventID)
+	status, err := c.loom.PollJobStatusFromWorker(ctx, jobEventID, workerPubkey)
 	if err != nil {
-		// Distinguish between cancellation (shutdown) and actual polling errors.
-		if ctx.Err() != nil {
-			c.logger.Info("poll cancelled during shutdown, marking run as timeout",
+		// Only context cancellation/deadline represents a timeout lifecycle outcome.
+		// Relay CLOSED/AUTH/subscription errors are infrastructure failures; do not
+		// mutate run state or worker stats from incomplete data.
+		if ctx.Err() != nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			if ctx.Err() != nil {
+				c.logger.Info("poll cancelled during shutdown, marking run as timeout",
+					zap.String("run_id", runID.String()),
+				)
+			} else {
+				c.logger.Warn("loom job poll timed out",
+					zap.String("run_id", runID.String()),
+					zap.String("loom_job_id", jobEventID),
+					zap.Error(err),
+				)
+			}
+
+			// Record job failure in stats only for an actual timeout/cancellation lifecycle outcome.
+			c.recordJobStats(workerPubkey, startTime, false)
+
+			// Use a detached context for the completion call since the poll context may be cancelled.
+			// The run record must be updated even during shutdown to avoid leaving it in queued/running state.
+			completeCtx, completeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer completeCancel()
+
+			if completeErr := c.registry.CompleteDeploymentRun(completeCtx, runID, domain.RunStatusTimeout, nil); completeErr != nil {
+				c.logger.Error("failed to mark timed-out run as complete",
+					zap.String("run_id", runID.String()),
+					zap.Error(completeErr),
+				)
+			}
+			return
+		}
+
+		c.logger.Error("failed to poll job status without trusted terminal result",
 			zap.String("run_id", runID.String()),
-			)
-		} else {
-			c.logger.Error("failed to poll job status",
-				zap.String("run_id", runID.String()),
-				zap.Error(err),
-			)
-		}
-
-		// Record job failure in stats
-		c.recordJobStats(workerPubkey, startTime, false)
-
-		// Use a detached context for the completion call since the poll context may be cancelled.
-		// The run record must be updated even during shutdown to avoid leaving it in queued/running state.
-		completeCtx, completeCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer completeCancel()
-
-		if completeErr := c.registry.CompleteDeploymentRun(completeCtx, runID, domain.RunStatusTimeout, nil); completeErr != nil {
-			c.logger.Error("failed to mark timed-out run as complete",
-				zap.String("run_id", runID.String()),
-				zap.Error(completeErr),
-			)
-		}
+			zap.String("loom_job_id", jobEventID),
+			zap.Error(err),
+		)
 		return
 	}
 

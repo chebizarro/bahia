@@ -2,6 +2,8 @@ package controlplane
 
 import (
 	"context"
+	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -46,4 +48,113 @@ func TestReactorHandleEventRecordsEOSEState(t *testing.T) {
 	if !r.caughtUp.Load() {
 		t.Fatal("duplicate EOSE should be harmless")
 	}
+}
+
+func TestReactorBuildRequestSubscriptionFiltersScopesAuthorsByKind(t *testing.T) {
+	since := gonostr.Timestamp(12345)
+	r := NewReactor(Config{
+		AuthorizedPubkeys:              []string{"global", "global", ""},
+		AdoptionAuthorizedPubkeys:      []string{"adoption", "global", "adoption", ""},
+		DirectRuntimeAuthorizedPubkeys: []string{"runtime", "global", "runtime", ""},
+	}, nil, nostr.NewRelayPool(nil, zap.NewNop()), nil, zap.NewNop())
+
+	filters := r.buildRequestSubscriptionFilters(since)
+	if len(filters) != 3 {
+		t.Fatalf("expected default, service-action, and adoption filters, got %d", len(filters))
+	}
+
+	defaultFilter := filterWithoutKinds(t, filters, KindServiceAction, KindAdoptionScanRequest, KindAdoptionImportRequest)
+	assertAuthors(t, defaultFilter.Authors, []string{"global"})
+	assertFilterHasKinds(t, defaultFilter, KindDeployRequest, KindRollbackRequest, KindPackageDriftDetect)
+	assertFilterMissingKinds(t, defaultFilter, KindServiceAction, KindAdoptionScanRequest, KindAdoptionImportRequest)
+
+	serviceActionFilter := filterWithKinds(t, filters, KindServiceAction)
+	assertAuthors(t, serviceActionFilter.Authors, []string{"global", "runtime"})
+	assertFilterHasKinds(t, serviceActionFilter, KindServiceAction)
+	assertFilterMissingKinds(t, serviceActionFilter, KindAdoptionScanRequest, KindAdoptionImportRequest, KindDeployRequest)
+
+	adoptionFilter := filterWithKinds(t, filters, KindAdoptionScanRequest, KindAdoptionImportRequest)
+	assertAuthors(t, adoptionFilter.Authors, []string{"global", "adoption"})
+	assertFilterHasKinds(t, adoptionFilter, KindAdoptionScanRequest, KindAdoptionImportRequest)
+	assertFilterMissingKinds(t, adoptionFilter, KindServiceAction, KindDeployRequest)
+
+	for i, filter := range filters {
+		if filter.Since == nil || *filter.Since != since {
+			t.Fatalf("filter %d should preserve shared since cursor %v, got %v", i, since, filter.Since)
+		}
+	}
+}
+
+func TestReactorBuildRequestSubscriptionFiltersPreservesGlobalOnlyBehavior(t *testing.T) {
+	r := NewReactor(Config{AuthorizedPubkeys: []string{"global"}}, nil, nostr.NewRelayPool(nil, zap.NewNop()), nil, zap.NewNop())
+
+	filters := r.buildRequestSubscriptionFilters(gonostr.Timestamp(67890))
+	if len(filters) != 3 {
+		t.Fatalf("expected split subscription filters, got %d", len(filters))
+	}
+	for _, filter := range filters {
+		assertAuthors(t, filter.Authors, []string{"global"})
+	}
+	assertFilterMissingKinds(t, filterWithoutKinds(t, filters, KindServiceAction, KindAdoptionScanRequest, KindAdoptionImportRequest), KindServiceAction, KindAdoptionScanRequest, KindAdoptionImportRequest)
+}
+
+func assertAuthors(t *testing.T, got, want []string) {
+	t.Helper()
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("authors mismatch: got %v want %v", got, want)
+	}
+}
+
+func assertFilterHasKinds(t *testing.T, filter gonostr.Filter, kinds ...int) {
+	t.Helper()
+	for _, kind := range kinds {
+		if !slices.Contains(filter.Kinds, kind) {
+			t.Fatalf("expected filter kinds %v to include %d", filter.Kinds, kind)
+		}
+	}
+}
+
+func assertFilterMissingKinds(t *testing.T, filter gonostr.Filter, kinds ...int) {
+	t.Helper()
+	for _, kind := range kinds {
+		if slices.Contains(filter.Kinds, kind) {
+			t.Fatalf("expected filter kinds %v not to include %d", filter.Kinds, kind)
+		}
+	}
+}
+
+func filterWithKinds(t *testing.T, filters []gonostr.Filter, kinds ...int) gonostr.Filter {
+	t.Helper()
+	for _, filter := range filters {
+		matched := true
+		for _, kind := range kinds {
+			if !slices.Contains(filter.Kinds, kind) {
+				matched = false
+				break
+			}
+		}
+		if matched {
+			return filter
+		}
+	}
+	t.Fatalf("no filter contained all kinds %v", kinds)
+	return gonostr.Filter{}
+}
+
+func filterWithoutKinds(t *testing.T, filters []gonostr.Filter, kinds ...int) gonostr.Filter {
+	t.Helper()
+	for _, filter := range filters {
+		matched := true
+		for _, kind := range kinds {
+			if slices.Contains(filter.Kinds, kind) {
+				matched = false
+				break
+			}
+		}
+		if matched {
+			return filter
+		}
+	}
+	t.Fatalf("no filter excluded all kinds %v", kinds)
+	return gonostr.Filter{}
 }
