@@ -535,7 +535,7 @@ func TestPollForCompletion_DoesNotMutateRunOnUntrustedPollError(t *testing.T) {
 	coord := NewCoordinator(registry, nil, &events.NoopPublisher{}, zap.NewNop())
 	coord.loom = stubLoom
 
-	coord.pollForCompletion(context.Background(), run.ID, "job-id", "worker-pubkey", time.Now().UTC())
+	coord.pollForCompletion(context.Background(), run.ID, "job-id", "worker-pubkey")
 
 	updated, err := registry.GetDeploymentRun(context.Background(), run.ID)
 	if err != nil {
@@ -574,7 +574,7 @@ func TestPollForCompletion_MarksTimeoutOnlyForContextDeadline(t *testing.T) {
 	coord := NewCoordinator(registry, nil, &events.NoopPublisher{}, zap.NewNop())
 	coord.loom = &stubLoomClient{err: context.DeadlineExceeded}
 
-	coord.pollForCompletion(context.Background(), run.ID, "job-id", "worker-pubkey", time.Now().UTC())
+	coord.pollForCompletion(context.Background(), run.ID, "job-id", "worker-pubkey")
 
 	updated, err := registry.GetDeploymentRun(context.Background(), run.ID)
 	if err != nil {

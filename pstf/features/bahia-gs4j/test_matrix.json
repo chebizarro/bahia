@@ -1,0 +1,25 @@
+{
+  "feature_id": "bahia-gs4j",
+  "tests": [
+    {
+      "name": "TestSecretHandlerCreateAttributesAuthenticatedPrincipal",
+      "acceptance_criteria": ["AC1"],
+      "evidence": "Authenticated NIP-98 principal subject is persisted to ServiceSecret.CreatedBy and returned as created_by."
+    },
+    {
+      "name": "TestSecretHandlerCreateFailsClosedWithoutAuthenticatedPrincipal",
+      "acceptance_criteria": ["AC2"],
+      "evidence": "Missing principal returns 401 and the repository Create method is not called."
+    },
+    {
+      "name": "TestSecretHandlerCreateFailsClosedWithoutEncryptor",
+      "acceptance_criteria": ["AC3"],
+      "evidence": "Create still fails closed when secret encryption is not configured."
+    },
+    {
+      "name": "TestSecretHandlerUpdateFailsClosedWithoutEncryptor",
+      "acceptance_criteria": ["AC3"],
+      "evidence": "Update still fails closed when secret encryption is not configured."
+    }
+  ]
+}

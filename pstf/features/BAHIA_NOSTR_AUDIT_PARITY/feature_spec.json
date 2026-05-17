@@ -1,0 +1,11 @@
+{
+  "feature_id": "BAHIA_NOSTR_AUDIT_PARITY",
+  "source_beads": ["bahia-s6qp", "bahia-5dlr"],
+  "intent": "Generic Nostr inbound audit coverage matches the canonical control-plane request namespace with scoped author filters, and reactor outbound auditing is wired independently of package feature enablement.",
+  "scope": [
+    "internal/adapters/nostr/subscriber.go",
+    "internal/adapters/nostr/subscriber_test.go",
+    "internal/app/app.go",
+    "internal/app/controlplane_wiring_test.go"
+  ]
+}

@@ -366,13 +366,6 @@ func New(cfg *config.Config) (*App, error) {
 	// Nostr event processor: maps inbound events to domain commands.
 	nostrProcessor := nostrAdapter.NewProcessor(registry, workerRepo, logger)
 
-	// Nostr inbound subscriber: listens for Hive-CI, Loom, and Bahia events.
-	nostrSub := nostrAdapter.NewSubscriber(relayPool, nostrEventRepo, logger,
-		nostrAdapter.WithHandler(nostrProcessor.Handle),
-		nostrAdapter.WithAuthorizedAuthors(controlPlaneAuthorizedPubkeys(cfg, service.AssistantIdentity{})),
-	)
-	bgManager.Register(nostrSub)
-
 	// Blossom client wiring (used for artifact storage and browsing).
 	var blossomClient *blossom.Client
 	blossomCfg := blossom.Config{
@@ -536,6 +529,13 @@ func New(cfg *config.Config) (*App, error) {
 		logger.Info("operator assistant orchestrator initialized", zap.String("agent_id", identity.AgentID), zap.String("assistant_pubkey", identity.Pubkey))
 	}
 
+	// Nostr inbound subscriber: listens for Hive-CI, Loom, and Bahia events.
+	nostrSub := nostrAdapter.NewSubscriber(relayPool, nostrEventRepo, logger,
+		nostrAdapter.WithHandler(nostrProcessor.Handle),
+		nostrAdapter.WithAuthorizedAuthorScopes(controlPlaneSubscriberAuthorScopes(cfg, assistantIdentity)),
+	)
+	bgManager.Register(nostrSub)
+
 	// Encrypted request/result event runtime for sensitive browser route migrations.
 	if len(encryptedRequestRelays) > 0 && encryptedRequestPool != nil && controlPlaneSigner != nil && cfg.Nostr.PrivateKey != "" {
 		responder := controlplane.NewEncryptedResponder(encryptedRequestPool, controlPlaneSigner, cfg.Nostr.PrivateKey, logger)
@@ -594,7 +594,7 @@ func New(cfg *config.Config) (*App, error) {
 				logger.Warn("signer-first direct-runtime control plane ignores non-pubkey operator allowlist entries", zap.Strings("allowed_subjects", cfg.DirectRuntime.AllowedSubjects), zap.Strings("allowed_emails", cfg.DirectRuntime.AllowedEmails))
 			}
 		}
-		reactorOpts := []controlplane.ReactorOption{
+		reactorOpts := appendControlPlaneAuditOption([]controlplane.ReactorOption{
 			controlplane.WithAdoptionService(adoptionSvc),
 			controlplane.WithRuntimeLifecycleService(runtimeLifecycleSvc),
 			controlplane.WithToolProvisioningRepository(toolProvisionRepo),
@@ -602,20 +602,14 @@ func New(cfg *config.Config) (*App, error) {
 			controlplane.WithToolProvisioningCoordinator(toolCoordinator),
 			controlplane.WithPolicyService(policySvc),
 			controlplane.WithMLRegistry(mlRegistry),
-		}
+		}, nostrEventRepo)
 		if llmRegistry != nil {
 			reactorOpts = append(reactorOpts, controlplane.WithLLMRegistry(llmRegistry))
 		}
 		if assistantOrchestrator != nil {
 			reactorOpts = append(reactorOpts, controlplane.WithAssistantOrchestrator(assistantOrchestrator))
 		}
-		if packageRegistrySvc != nil {
-			reactorOpts = append(reactorOpts,
-				controlplane.WithPackageRegistryService(packageRegistrySvc),
-				controlplane.WithPackageProjectionRepository(packageProjection),
-				controlplane.WithNostrEventRepository(nostrEventRepo),
-			)
-		}
+		reactorOpts = appendPackageControlPlaneOptions(reactorOpts, packageRegistrySvc, packageProjection)
 		reactor := controlplane.NewReactor(reactorConfig, registry, controlPlanePool, controlPlaneSigner, logger, reactorOpts...)
 		bgManager.Register(&controlplaneRunner{reactor: reactor})
 		logger.Info("nostr control plane reactor registered", zap.Strings("relays", controlPlaneRelays))
@@ -934,6 +928,37 @@ func (p *auditedNostrPublisher) Publish(ctx context.Context, ev nostr.Event) (in
 		}
 	}
 	return published, err
+}
+
+func appendControlPlaneAuditOption(opts []controlplane.ReactorOption, repo repository.NostrEventRepository) []controlplane.ReactorOption {
+	if repo == nil {
+		return opts
+	}
+	return append(opts, controlplane.WithNostrEventRepository(repo))
+}
+
+func appendPackageControlPlaneOptions(opts []controlplane.ReactorOption, packageRegistrySvc *service.PackageRegistryService, packageProjection repository.PackageControlPlaneRepository) []controlplane.ReactorOption {
+	if packageRegistrySvc == nil {
+		return opts
+	}
+	return append(opts,
+		controlplane.WithPackageRegistryService(packageRegistrySvc),
+		controlplane.WithPackageProjectionRepository(packageProjection),
+	)
+}
+
+func controlPlaneSubscriberAuthorScopes(cfg *config.Config, assistant service.AssistantIdentity) nostrAdapter.AuthorizedAuthorScopes {
+	var adoption []string
+	var directRuntime []string
+	if cfg != nil {
+		adoption = cfg.Adoption.AllowedPubkeys
+		directRuntime = cfg.DirectRuntime.AllowedPubkeys
+	}
+	return nostrAdapter.AuthorizedAuthorScopes{
+		Default:       controlPlaneAuthorizedPubkeys(cfg, assistant),
+		Adoption:      adoption,
+		DirectRuntime: directRuntime,
+	}
 }
 
 func controlPlaneAuthorizedPubkeys(cfg *config.Config, assistant service.AssistantIdentity) []string {

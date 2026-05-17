@@ -36,10 +36,13 @@ var DefaultInboundKinds = []int{
 	// Canonical Bahia control-plane request kinds. These are audited here only;
 	// the controlplane.Reactor remains the handler of record.
 	5961, 5962, 5963, 5964, 5965, 5966, 5967, 5968,
+	5971, 5972, 5973, 5974, 5975,
+	5976,       // Tool provisioning request
+	7977,       // Tool approval response
+	5978, 5979, // Adoption scan/import requests
+	5981, 5982, 5983, 5984, 5985, 5986, 5987, 5988, 5989,
 	38390, 38391, 38392, 38393, 38394,
 	5991, 5992, 5993, 5994, 5995, 5996,
-	5976, // Tool provisioning request
-	7977, // Tool approval response
 
 	// Operator assistant prompt/approval requests.
 	38420, 38421,
@@ -53,15 +56,15 @@ type EventHandler func(ctx context.Context, ev *nostr.Event)
 // Subscriber connects to Nostr relays and persists inbound events
 // to the nostr_events audit table. It implements app.BackgroundRunner.
 type Subscriber struct {
-	pool              *RelayPool
-	eventRepo         repository.NostrEventRepository
-	kinds             []int
-	handlers          []EventHandler
-	logger            *zap.Logger
-	dedup             *EventDeduplicator
-	backfillLimit     int // max events to fetch on catch-up (0 = no limit)
-	authorizedAuthors []string
-	now               func() time.Time
+	pool                   *RelayPool
+	eventRepo              repository.NostrEventRepository
+	kinds                  []int
+	handlers               []EventHandler
+	logger                 *zap.Logger
+	dedup                  *EventDeduplicator
+	backfillLimit          int // max events to fetch on catch-up (0 = no limit)
+	authorizedAuthorScopes AuthorizedAuthorScopes
+	now                    func() time.Time
 
 	// lastSeenByKind tracks newest created_at values processed in this process.
 	lastSeenMu     sync.Mutex
@@ -69,6 +72,13 @@ type Subscriber struct {
 
 	// caughtUp indicates whether EOSE has been received (caught up with stored events).
 	caughtUp atomic.Bool
+}
+
+// AuthorizedAuthorScopes configures operator pubkeys by control-plane scope.
+type AuthorizedAuthorScopes struct {
+	Default       []string
+	Adoption      []string
+	DirectRuntime []string
 }
 
 // SubscriberOption configures a Subscriber.
@@ -96,10 +106,19 @@ func WithBackfillLimit(limit int) SubscriberOption {
 	return func(s *Subscriber) { s.backfillLimit = limit }
 }
 
-// WithAuthorizedAuthors scopes Bahia command subscriptions to known operator pubkeys.
+// WithAuthorizedAuthors scopes default Bahia command subscriptions to known operator pubkeys.
 func WithAuthorizedAuthors(pubkeys []string) SubscriberOption {
+	return WithAuthorizedAuthorScopes(AuthorizedAuthorScopes{Default: pubkeys})
+}
+
+// WithAuthorizedAuthorScopes scopes Bahia command subscriptions by operator capability.
+func WithAuthorizedAuthorScopes(scopes AuthorizedAuthorScopes) SubscriberOption {
 	return func(s *Subscriber) {
-		s.authorizedAuthors = append([]string(nil), pubkeys...)
+		s.authorizedAuthorScopes = AuthorizedAuthorScopes{
+			Default:       cloneStrings(scopes.Default),
+			Adoption:      cloneStrings(scopes.Adoption),
+			DirectRuntime: cloneStrings(scopes.DirectRuntime),
+		}
 	}
 }
 
@@ -337,30 +356,48 @@ func (s *Subscriber) handleEvent(ctx context.Context, ev *nostr.Event) {
 }
 
 func (s *Subscriber) buildSubscriptionFilters(ctx context.Context) ([]nostr.Filter, error) {
-	openKinds := make([]int, 0, len(s.kinds))
-	authorScopedKinds := make([]int, 0, len(s.kinds))
+	var openKinds []int
+	var defaultKinds []int
+	var directRuntimeKinds []int
+	var adoptionKinds []int
+
 	for _, kind := range s.kinds {
-		if len(s.authorizedAuthors) > 0 && isAuthorScopedInboundKind(kind) {
-			authorScopedKinds = append(authorScopedKinds, kind)
-			continue
+		switch {
+		case isDirectRuntimeScopedInboundKind(kind):
+			directRuntimeKinds = append(directRuntimeKinds, kind)
+		case isAdoptionScopedInboundKind(kind):
+			adoptionKinds = append(adoptionKinds, kind)
+		case isDefaultAuthorScopedInboundKind(kind):
+			defaultKinds = append(defaultKinds, kind)
+		default:
+			openKinds = append(openKinds, kind)
 		}
-		openKinds = append(openKinds, kind)
 	}
 
-	filters := make([]nostr.Filter, 0, 2)
-	if len(openKinds) > 0 {
-		since, err := s.subscriptionSince(ctx, openKinds, nil)
-		if err != nil {
-			return nil, err
+	filters := make([]nostr.Filter, 0, 4)
+	addFilter := func(kinds []int, authors []string) error {
+		if len(kinds) == 0 {
+			return nil
 		}
-		filters = append(filters, s.filterForKinds(openKinds, since, nil))
+		since, err := s.subscriptionSince(ctx, kinds, authors)
+		if err != nil {
+			return err
+		}
+		filters = append(filters, s.filterForKinds(kinds, since, authors))
+		return nil
 	}
-	if len(authorScopedKinds) > 0 {
-		since, err := s.subscriptionSince(ctx, authorScopedKinds, s.authorizedAuthors)
-		if err != nil {
-			return nil, err
-		}
-		filters = append(filters, s.filterForKinds(authorScopedKinds, since, s.authorizedAuthors))
+
+	if err := addFilter(openKinds, nil); err != nil {
+		return nil, err
+	}
+	if err := addFilter(defaultKinds, s.authorizedAuthorScopes.Default); err != nil {
+		return nil, err
+	}
+	if err := addFilter(directRuntimeKinds, combineAuthors(s.authorizedAuthorScopes.Default, s.authorizedAuthorScopes.DirectRuntime)); err != nil {
+		return nil, err
+	}
+	if err := addFilter(adoptionKinds, combineAuthors(s.authorizedAuthorScopes.Default, s.authorizedAuthorScopes.Adoption)); err != nil {
+		return nil, err
 	}
 	return filters, nil
 }
@@ -426,11 +463,54 @@ func (s *Subscriber) recordLastSeen(kind int, createdAt time.Time) {
 }
 
 func isCanonicalControlPlaneRequest(kind int) bool {
-	return (kind >= 5961 && kind <= 5968) || kind == 5976 || (kind >= 5991 && kind <= 5996) || (kind >= 38390 && kind <= 38394) || kind == 7977 || kind == KindAssistantPromptRequest || kind == KindAssistantApproval
+	return isControlPlaneRequestKind(kind) || kind == KindAssistantPromptRequest || kind == KindAssistantApproval
 }
 
-func isAuthorScopedInboundKind(kind int) bool {
-	return (kind >= 5961 && kind <= 5968) || kind == 5976 || (kind >= 5991 && kind <= 5996) || (kind >= 38390 && kind <= 38394) || kind == 7977 || kind == KindAssistantPromptRequest || kind == KindAssistantApproval || (kind >= 31100 && kind <= 31105)
+func isDefaultAuthorScopedInboundKind(kind int) bool {
+	return isControlPlaneRequestKind(kind) || kind == KindAssistantPromptRequest || kind == KindAssistantApproval || (kind >= 31100 && kind <= 31105)
+}
+
+func isDirectRuntimeScopedInboundKind(kind int) bool {
+	return kind == 5963
+}
+
+func isAdoptionScopedInboundKind(kind int) bool {
+	return kind == 5978 || kind == 5979
+}
+
+func isControlPlaneRequestKind(kind int) bool {
+	return (kind >= 5961 && kind <= 5968) ||
+		(kind >= 5971 && kind <= 5976) ||
+		(kind >= 5978 && kind <= 5979) ||
+		(kind >= 5981 && kind <= 5989) ||
+		(kind >= 5991 && kind <= 5996) ||
+		(kind >= 38390 && kind <= 38394) ||
+		kind == 7977
+}
+
+func combineAuthors(groups ...[]string) []string {
+	seen := make(map[string]struct{})
+	var authors []string
+	for _, group := range groups {
+		for _, author := range group {
+			if author == "" {
+				continue
+			}
+			if _, ok := seen[author]; ok {
+				continue
+			}
+			seen[author] = struct{}{}
+			authors = append(authors, author)
+		}
+	}
+	return authors
+}
+
+func cloneStrings(in []string) []string {
+	if len(in) == 0 {
+		return nil
+	}
+	return append([]string(nil), in...)
 }
 
 func timestampFromTime(t time.Time) *nostr.Timestamp {

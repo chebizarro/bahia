@@ -1,0 +1,10 @@
+{
+  "feature_id": "BAHIA_NOSTR_AUDIT_PARITY",
+  "test_runs": [
+    {
+      "command": "go test ./internal/adapters/nostr ./internal/app",
+      "result": "passed",
+      "evidence": "Focused package tests passed for scoped subscriber filters, canonical inbound kind coverage, unchanged validation-before-persist behavior, and app control-plane audit wiring."
+    }
+  ]
+}

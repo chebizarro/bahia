@@ -28,7 +28,6 @@ type Coordinator struct {
 	registry        *service.RegistryService
 	loom            deploymentLoomClient
 	workerPolicy    *service.WorkerPolicyService
-	workerCatalog   *service.WorkerCatalogService
 	runtimeResolver runtimeadapter.RuntimeResolver
 	publisher       events.Publisher
 	logger          *zap.Logger
@@ -71,11 +70,6 @@ type CoordinatorOption func(*Coordinator)
 // WithWorkerPolicy enables environment-specific worker selection.
 func WithWorkerPolicy(wp *service.WorkerPolicyService) CoordinatorOption {
 	return func(c *Coordinator) { c.workerPolicy = wp }
-}
-
-// WithWorkerCatalog enables job stats tracking.
-func WithWorkerCatalog(wc *service.WorkerCatalogService) CoordinatorOption {
-	return func(c *Coordinator) { c.workerCatalog = wc }
 }
 
 // WithRuntimeResolver enables direct runtime deployments for resolvable targets.
@@ -202,7 +196,7 @@ func (c *Coordinator) ExecuteDeployment(ctx context.Context, intentID uuid.UUID)
 	c.wg.Add(1)
 	go func() {
 		defer c.wg.Done()
-		c.pollForCompletion(c.ctx, run.ID, jobEventID, workerPubkey, now)
+		c.pollForCompletion(c.ctx, run.ID, jobEventID, workerPubkey)
 	}()
 
 	return nil
@@ -287,7 +281,7 @@ func isLocalImageRef(image string) bool {
 	return strings.HasPrefix(strings.TrimSpace(image), "local/")
 }
 
-func (c *Coordinator) pollForCompletion(ctx context.Context, runID uuid.UUID, jobEventID string, workerPubkey string, startTime time.Time) {
+func (c *Coordinator) pollForCompletion(ctx context.Context, runID uuid.UUID, jobEventID string, workerPubkey string) {
 	status, err := c.loom.PollJobStatusFromWorker(ctx, jobEventID, workerPubkey)
 	if err != nil {
 		// Only context cancellation/deadline represents a timeout lifecycle outcome.
@@ -305,9 +299,6 @@ func (c *Coordinator) pollForCompletion(ctx context.Context, runID uuid.UUID, jo
 					zap.Error(err),
 				)
 			}
-
-			// Record job failure in stats only for an actual timeout/cancellation lifecycle outcome.
-			c.recordJobStats(workerPubkey, startTime, false)
 
 			// Use a detached context for the completion call since the poll context may be cancelled.
 			// The run record must be updated even during shutdown to avoid leaving it in queued/running state.
@@ -333,32 +324,12 @@ func (c *Coordinator) pollForCompletion(ctx context.Context, runID uuid.UUID, jo
 
 	runStatus := mapLoomStatus(status.Status)
 
-	// Record job completion in stats
-	success := runStatus == domain.RunStatusSucceeded
-	c.recordJobStats(workerPubkey, startTime, success)
-
 	if err := c.registry.CompleteDeploymentRun(ctx, runID, runStatus, status.ExitCode); err != nil {
 		c.logger.Error("failed to complete deployment run",
 			zap.String("run_id", runID.String()),
 			zap.Error(err),
 		)
 	}
-}
-
-// recordJobStats records job completion statistics if a worker catalog is configured.
-func (c *Coordinator) recordJobStats(workerPubkey string, startTime time.Time, success bool) {
-	if c.workerCatalog == nil || workerPubkey == "" {
-		return
-	}
-
-	durationMs := time.Since(startTime).Milliseconds()
-	c.workerCatalog.RecordJobCompletion(workerPubkey, durationMs, success)
-
-	c.logger.Debug("recorded job stats",
-		zap.String("worker", workerPubkey),
-		zap.Int64("duration_ms", durationMs),
-		zap.Bool("success", success),
-	)
 }
 
 func mapLoomStatus(s string) domain.DeploymentRunStatus {

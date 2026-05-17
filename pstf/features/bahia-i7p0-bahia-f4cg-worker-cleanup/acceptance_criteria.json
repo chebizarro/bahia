@@ -1,0 +1,25 @@
+{
+  "feature_id": "bahia-i7p0-bahia-f4cg-worker-cleanup",
+  "criteria": [
+    {
+      "id": "AC1",
+      "statement": "Current WorkerDiscovery and WorkerCatalogService runtime reachability is documented with repository-search evidence.",
+      "tests": ["T1"]
+    },
+    {
+      "id": "AC2",
+      "statement": "Dormant Loom WorkerDiscovery and WorkerCatalogService code paths are absent from internal production code when no active caller exists.",
+      "tests": ["T2", "T3"]
+    },
+    {
+      "id": "AC3",
+      "statement": "Coordinator no longer exposes WithWorkerCatalog or records deployment completion into the removed catalog service.",
+      "tests": ["T2", "T4"]
+    },
+    {
+      "id": "AC4",
+      "statement": "No unsupported Cashu live-token payment-preparation path is wired by this work.",
+      "tests": ["T2", "T3"]
+    }
+  ]
+}

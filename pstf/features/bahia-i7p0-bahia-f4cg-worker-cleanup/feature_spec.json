@@ -1,0 +1,16 @@
+{
+  "feature_id": "bahia-i7p0-bahia-f4cg-worker-cleanup",
+  "title": "Remove dormant WorkerCatalogService and Loom worker discovery paths",
+  "issues": ["bahia-i7p0", "bahia-f4cg"],
+  "intent": "Keep the canonical worker and payment architecture on repository-backed worker reads, WorkerPolicyService selection, PaymentService payment query/history, and generic Nostr subscriber ingestion. Remove dormant production-looking WorkerCatalogService, Loom WorkerDiscovery, and coordinator WithWorkerCatalog hooks instead of wiring unsupported Cashu live-token flows.",
+  "observed_behavior": [
+    "Repo-wide non-test search found no active internal production caller for NewWorkerDiscovery, WorkerDiscovery, NewWorkerCatalogService, WithWorkerCatalog, PreparePayment, or GetWorkerStats outside their own dormant definitions before deletion.",
+    "Coordinator exposed WithWorkerCatalog and recordJobStats hooks, but app composition constructs the coordinator with WithWorkerPolicy and WithRuntimeResolver only.",
+    "WorkerCatalogService contained payment-preparation methods that would call Cashu token creation even though live mint-backed token flows remain unsupported elsewhere."
+  ],
+  "intended_behavior": [
+    "No dormant WorkerCatalogService or Loom WorkerDiscovery path remains in production code.",
+    "Coordinator deployment completion no longer references the removed catalog service.",
+    "Cashu live-token support remains outside this issue and is not newly wired."
+  ]
+}

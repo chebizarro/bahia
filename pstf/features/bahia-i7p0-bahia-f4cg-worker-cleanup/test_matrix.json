@@ -1,0 +1,29 @@
+{
+  "feature_id": "bahia-i7p0-bahia-f4cg-worker-cleanup",
+  "tests": [
+    {
+      "id": "T1",
+      "command": "Repo-wide search for NewWorkerDiscovery|WorkerDiscovery|NewWorkerCatalogService|WithWorkerCatalog|PreparePayment|GetWorkerStats|RecordJobCompletion excluding tests, prompt exports, and Beads files",
+      "criteria": ["AC1"],
+      "result": "After deletion, no internal production references remain to WorkerDiscovery, WorkerCatalogService, NewWorkerCatalogService, NewWorkerDiscovery, WithWorkerCatalog, PreparePayment, or GetWorkerStats. Remaining RecordJobCompletion reference is service.JobStatsTracker, which is preserved for WorkerPolicyService reputation scoring and is not the deleted catalog service."
+    },
+    {
+      "id": "T2",
+      "command": "go test ./internal/workflow",
+      "criteria": ["AC2", "AC3", "AC4"],
+      "result": "pass"
+    },
+    {
+      "id": "T3",
+      "command": "go test ./internal/service",
+      "criteria": ["AC2", "AC4"],
+      "result": "pass"
+    },
+    {
+      "id": "T4",
+      "command": "go test ./internal/adapters/loom && go test ./internal/app",
+      "criteria": ["AC2", "AC3"],
+      "result": "pass"
+    }
+  ]
+}

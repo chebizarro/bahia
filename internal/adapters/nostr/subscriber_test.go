@@ -118,6 +118,57 @@ func (r *memoryNostrEventRepo) latestCreatedAt(kinds []int, authors []string) *t
 	return latest
 }
 
+func TestDefaultInboundKindsIncludesCanonicalControlPlaneNamespace(t *testing.T) {
+	expected := []int{
+		5961, 5962, 5963, 5964, 5965, 5966, 5967, 5968,
+		5971, 5972, 5973, 5974, 5975, 5976, 5978, 5979,
+		5981, 5982, 5983, 5984, 5985, 5986, 5987, 5988, 5989,
+		38390, 38391, 38392, 38393, 38394,
+		5991, 5992, 5993, 5994, 5995, 5996,
+		7977,
+		KindAssistantPromptRequest, KindAssistantApproval,
+	}
+	for _, kind := range expected {
+		require.Contains(t, DefaultInboundKinds, kind, "canonical control-plane request kind %d must be audited by the generic subscriber", kind)
+		require.True(t, isCanonicalControlPlaneRequest(kind), "kind %d must be treated as canonical control-plane traffic", kind)
+	}
+}
+
+func TestSubscriberBuildSubscriptionFiltersUsesScopedAuthorGroups(t *testing.T) {
+	repo := newMemoryNostrEventRepo()
+	sub := NewSubscriber(nil, repo, zap.NewNop(),
+		WithKinds([]int{5101, 5961, 5963, 5978, 5979, 5981, 5991, 31100}),
+		WithAuthorizedAuthorScopes(AuthorizedAuthorScopes{
+			Default:       []string{"default-a", "shared"},
+			Adoption:      []string{"adoption-a", "shared"},
+			DirectRuntime: []string{"runtime-a", "shared"},
+		}),
+		WithBackfillLimit(10),
+		withClock(func() time.Time { return time.Unix(500, 0).UTC() }),
+	)
+
+	filters, err := sub.buildSubscriptionFilters(context.Background())
+	require.NoError(t, err)
+	require.Len(t, filters, 4)
+
+	require.Equal(t, []int{5101}, filters[0].Kinds)
+	require.Empty(t, filters[0].Authors)
+
+	require.Equal(t, []int{5961, 5981, 5991, 31100}, filters[1].Kinds)
+	require.Equal(t, []string{"default-a", "shared"}, filters[1].Authors)
+
+	require.Equal(t, []int{5963}, filters[2].Kinds)
+	require.Equal(t, []string{"default-a", "shared", "runtime-a"}, filters[2].Authors)
+
+	require.Equal(t, []int{5978, 5979}, filters[3].Kinds)
+	require.Equal(t, []string{"default-a", "shared", "adoption-a"}, filters[3].Authors)
+
+	for _, filter := range filters {
+		require.Equal(t, int64(500), int64(*filter.Since))
+		require.Equal(t, 10, filter.Limit)
+	}
+}
+
 func TestSubscriberBuildSubscriptionFiltersUsesPersistedAndLastSeenCursor(t *testing.T) {
 	ctx := context.Background()
 	repo := newMemoryNostrEventRepo()

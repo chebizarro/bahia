@@ -4,11 +4,13 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/api/dto"
 	"github.com/openagentsinc/bahia/internal/api/middleware"
+	"github.com/openagentsinc/bahia/internal/auth"
 	"github.com/openagentsinc/bahia/internal/domain"
 )
 
@@ -80,6 +82,18 @@ func serviceInAuthzOrg(w http.ResponseWriter, r *http.Request, svcOrgID uuid.UUI
 		return false
 	}
 	return true
+}
+
+func authenticatedSubject(r *http.Request) (string, bool) {
+	p := auth.GetPrincipal(r.Context())
+	if p == nil || !p.IsAuthenticated() {
+		return "", false
+	}
+	subject := strings.TrimSpace(p.Subject)
+	if subject == "" {
+		return "", false
+	}
+	return subject, true
 }
 
 func requirePermission(w http.ResponseWriter, r *http.Request, perm domain.Permission) bool {

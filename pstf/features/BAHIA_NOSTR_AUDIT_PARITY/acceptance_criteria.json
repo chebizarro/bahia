@@ -1,0 +1,25 @@
+{
+  "feature_id": "BAHIA_NOSTR_AUDIT_PARITY",
+  "criteria": [
+    {
+      "id": "AC1",
+      "statement": "The generic Nostr subscriber audits the canonical control-plane request namespace handled by the reactor.",
+      "tests": ["TestDefaultInboundKindsIncludesCanonicalControlPlaneNamespace"]
+    },
+    {
+      "id": "AC2",
+      "statement": "Control-plane request audit filters are scoped by default, direct-runtime, and adoption operator author groups without widening unrelated filters.",
+      "tests": ["TestSubscriberBuildSubscriptionFiltersUsesScopedAuthorGroups", "TestControlPlaneSubscriberAuthorScopesDoNotWidenDefaultScope"]
+    },
+    {
+      "id": "AC3",
+      "statement": "Existing validation-before-persistence and deterministic EOSE/CLOSED subscriber behavior remain unchanged.",
+      "tests": ["TestSubscriberHandleEventDropsInvalidBeforePersistenceAndDispatch", "go test ./internal/adapters/nostr"]
+    },
+    {
+      "id": "AC4",
+      "statement": "Reactor outbound event auditing receives the Nostr event repository whether packages are enabled or disabled.",
+      "tests": ["TestControlPlaneReactorAuditOptionIndependentOfPackageFeature"]
+    }
+  ]
+}

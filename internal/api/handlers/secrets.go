@@ -97,6 +97,12 @@ func (h *SecretHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	createdBy, ok := authenticatedSubject(r)
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "authenticated principal is required")
+		return
+	}
+
 	method := domain.EncryptionNIP44
 	if req.EncryptionMethod != "" {
 		method = domain.EncryptionMethod(req.EncryptionMethod)
@@ -120,7 +126,7 @@ func (h *SecretHandler) Create(w http.ResponseWriter, r *http.Request) {
 		EncryptedValue:   encrypted,
 		EncryptionMethod: method,
 		Version:          1,
-		CreatedBy:        "api", // TODO: extract from auth context
+		CreatedBy:        createdBy,
 	}
 
 	if req.EnvironmentID != "" {

@@ -23,13 +23,19 @@ const (
 // ResultConsumer is invoked after a valid workflow result has been persisted.
 type ResultConsumer func(ctx context.Context, resultEventID string)
 
+type relaySubscriber interface {
+	SubscribeAllWithEOSE(context.Context, []nostr.Filter) (*nostrAdapter.MergedSubscription, error)
+	AuthenticateRelay(context.Context, string) error
+}
+
 // Subscriber ingests Hive-CI 5401/5402 events from relays and persists parsed records.
 type Subscriber struct {
-	pool     *nostrAdapter.RelayPool
+	pool     relaySubscriber
 	repo     repository.HiveCIRepository
 	logger   *zap.Logger
 	trusted  map[string]struct{}
 	onResult ResultConsumer
+	now      func() time.Time
 }
 
 func NewSubscriber(pool *nostrAdapter.RelayPool, repo repository.HiveCIRepository, trustedCIPubkeys []string, logger *zap.Logger, onResult ResultConsumer) *Subscriber {
@@ -40,12 +46,16 @@ func NewSubscriber(pool *nostrAdapter.RelayPool, repo repository.HiveCIRepositor
 			trusted[pk] = struct{}{}
 		}
 	}
+	if logger == nil {
+		logger = zap.NewNop()
+	}
 	return &Subscriber{
 		pool:     pool,
 		repo:     repo,
 		logger:   logger.Named("hiveci-subscriber"),
 		trusted:  trusted,
 		onResult: onResult,
+		now:      func() time.Time { return time.Now().UTC() },
 	}
 }
 
@@ -75,34 +85,109 @@ func (s *Subscriber) Run(ctx context.Context) error {
 
 func (s *Subscriber) subscribe(ctx context.Context) error {
 	filters := []nostr.Filter{{Kinds: []int{kindWorkflowRun, kindWorkflowResult}}}
-	merged, err := s.pool.SubscribeAllWithEOSE(ctx, filters)
-	if err != nil {
-		return err
-	}
+	authAttempted := make(map[string]struct{})
 	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case _, ok := <-merged.EndOfStoredEvents:
-			if !ok {
-				merged.EndOfStoredEvents = nil
-			}
-		case ev, ok := <-merged.Events:
-			if !ok {
-				return nil
-			}
-			s.handleEvent(ctx, ev)
+		if s.pool == nil {
+			return fmt.Errorf("hiveci relay pool is not configured")
+		}
+		merged, err := s.pool.SubscribeAllWithEOSE(ctx, filters)
+		if err != nil {
+			return err
+		}
+		retry, err := s.consumeSubscription(ctx, merged, authAttempted)
+		if err != nil {
+			return err
+		}
+		if !retry {
+			return nil
 		}
 	}
 }
 
-func (s *Subscriber) handleEvent(ctx context.Context, ev *nostr.Event) {
-	if ev == nil {
-		return
+func (s *Subscriber) consumeSubscription(ctx context.Context, merged *nostrAdapter.MergedSubscription, authAttempted map[string]struct{}) (bool, error) {
+	if merged == nil {
+		return false, nil
 	}
-	ok, err := ev.CheckSignature()
-	if err != nil || !ok {
-		s.logger.Warn("dropping hiveci event with invalid signature", zap.String("event_id", ev.ID), zap.Int("kind", ev.Kind), zap.Error(err))
+	for merged.Events != nil || merged.EndOfStoredEvents != nil || merged.RelayEOSE != nil || merged.Closed != nil {
+		select {
+		case <-ctx.Done():
+			return false, ctx.Err()
+		case eose, ok := <-merged.RelayEOSE:
+			if ok {
+				s.handleRelayEOSE(eose)
+			} else {
+				merged.RelayEOSE = nil
+			}
+		case closed, ok := <-merged.Closed:
+			if ok {
+				if s.handleRelayClosed(ctx, closed, authAttempted) {
+					merged.Close()
+					return true, nil
+				}
+			} else {
+				merged.Closed = nil
+			}
+		case <-merged.EndOfStoredEvents:
+			s.handleEOSE()
+			merged.EndOfStoredEvents = nil
+		case ev, ok := <-merged.Events:
+			if !ok {
+				return false, nil
+			}
+			s.handleEvent(ctx, ev)
+		}
+	}
+	return false, nil
+}
+
+func (s *Subscriber) handleRelayEOSE(eose nostrAdapter.RelayEOSE) {
+	s.logger.Debug("hiveci relay sent EOSE",
+		zap.String("relay", eose.RelayURL),
+		zap.String("subscription_id", eose.SubscriptionID),
+	)
+}
+
+func (s *Subscriber) handleEOSE() {
+	s.logger.Info("hiveci EOSE received: caught up with stored workflow events")
+}
+
+func (s *Subscriber) handleRelayClosed(ctx context.Context, closed nostrAdapter.RelayClosed, authAttempted map[string]struct{}) bool {
+	s.logger.Warn("hiveci relay closed subscription",
+		zap.String("relay", closed.RelayURL),
+		zap.String("subscription_id", closed.SubscriptionID),
+		zap.String("reason", closed.Reason),
+	)
+	if !nostrAdapter.IsAuthRequiredReason(closed.Reason) || closed.RelayURL == "" || s.pool == nil {
+		return false
+	}
+	if _, ok := authAttempted[closed.RelayURL]; ok {
+		return false
+	}
+	authAttempted[closed.RelayURL] = struct{}{}
+	if err := s.pool.AuthenticateRelay(ctx, closed.RelayURL); err != nil {
+		s.logger.Warn("hiveci relay subscription auth failed",
+			zap.String("relay", closed.RelayURL),
+			zap.String("reason", closed.Reason),
+			zap.Error(err),
+		)
+		return false
+	}
+	return true
+}
+
+func (s *Subscriber) handleEvent(ctx context.Context, ev *nostr.Event) {
+	if err := nostrAdapter.ValidateInboundEvent(ev, s.now(), nostrAdapter.InboundEventMaxFutureSkew); err != nil {
+		eventID := ""
+		kind := 0
+		if ev != nil {
+			eventID = ev.ID
+			kind = ev.Kind
+		}
+		s.logger.Warn("dropping invalid hiveci event before persistence",
+			zap.String("event_id", eventID),
+			zap.Int("kind", kind),
+			zap.Error(err),
+		)
 		return
 	}
 

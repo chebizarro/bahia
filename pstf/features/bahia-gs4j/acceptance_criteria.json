@@ -1,0 +1,20 @@
+{
+  "feature_id": "bahia-gs4j",
+  "criteria": [
+    {
+      "id": "AC1",
+      "description": "Creating a secret as an authenticated principal stores CreatedBy as that principal subject and returns created_by with the same value.",
+      "tests": ["TestSecretHandlerCreateAttributesAuthenticatedPrincipal"]
+    },
+    {
+      "id": "AC2",
+      "description": "A write-secret request without a resolvable authenticated principal fails closed and does not persist a secret.",
+      "tests": ["TestSecretHandlerCreateFailsClosedWithoutAuthenticatedPrincipal"]
+    },
+    {
+      "id": "AC3",
+      "description": "Existing secret encryption fail-closed behavior remains intact.",
+      "tests": ["TestSecretHandlerCreateFailsClosedWithoutEncryptor", "TestSecretHandlerUpdateFailsClosedWithoutEncryptor"]
+    }
+  ]
+}
