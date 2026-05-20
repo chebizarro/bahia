@@ -225,7 +225,7 @@ describe('Nostr Client - Parsing Functions', () => {
   });
 
   describe('queryUntilEose', () => {
-    it('rejects pending bootstrap queries when a relay transport closes before EOSE', async () => {
+    it('keeps pending bootstrap queries subscribed when relay transport closes before EOSE', async () => {
       const client = new NostrClient({ relays: [] });
       const socket = { readyState: WebSocket.OPEN, send: vi.fn() };
       client.sockets.set('ws://relay.example', socket);
@@ -233,12 +233,30 @@ describe('Nostr Client - Parsing Functions', () => {
       const query = client.queryUntilEose([{ kinds: [31962] }]);
       expect(socket.send).toHaveBeenCalledWith(expect.stringContaining('"REQ"'));
 
-      client.notifyRelayClosed('ws://relay.example', 'relay connection closed');
+      client.notifyRelayConnectionClosed('ws://relay.example', 'relay connection closed');
+
+      let settled = false;
+      query.then(() => { settled = true; }, () => { settled = true; });
+      await Promise.resolve();
+      expect(settled).toBe(false);
+      expect(client.subscriptions.has('sub_1')).toBe(true);
+
+      await client.handleMessage('ws://relay.example', JSON.stringify(['EOSE', 'sub_1']));
+      await expect(query).resolves.toEqual([]);
+    });
+
+    it('rejects pending bootstrap queries when reconnect attempts are exhausted before EOSE', async () => {
+      const client = new NostrClient({ relays: [] });
+      const socket = { readyState: WebSocket.OPEN, send: vi.fn() };
+      client.sockets.set('ws://relay.example', socket);
+
+      const query = client.queryUntilEose([{ kinds: [31962] }]);
+      client.notifyRelayClosed('ws://relay.example', 'relay reconnect attempts exhausted before EOSE', { terminal: true });
 
       await expect(query).rejects.toMatchObject({
         name: 'NostrIncompleteEOSEError',
         reason: 'all_relays_closed',
-        relaySummary: [{ relay: 'ws://relay.example', status: 'closed', reason: 'relay connection closed' }]
+        relaySummary: [{ relay: 'ws://relay.example', status: 'closed', reason: 'relay reconnect attempts exhausted before EOSE' }]
       });
     });
   });

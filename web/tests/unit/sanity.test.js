@@ -143,14 +143,40 @@ describe('browser Nostr trust boundary and query completion', () => {
     await assertion;
   });
 
-  it('rejects closed-incomplete queries and preserves partial events for callers', async () => {
+  it('keeps EOSE queries active across transport reconnect and resolves after reissued REQ EOSE', async () => {
+    const client = new NostrClient({ relays: [] });
+    const firstSocket = openSocket();
+    client.sockets.set('wss://relay.example', firstSocket);
+    const event = validEvent();
+
+    const query = client.queryUntilEose([{ kinds: [31962] }]);
+    expect(firstSocket.send).toHaveBeenCalledWith(expect.stringContaining('"REQ"'));
+
+    await client.handleMessage('wss://relay.example', JSON.stringify(['EVENT', 'sub_1', event]));
+    client.notifyRelayConnectionClosed('wss://relay.example', 'relay connection closed');
+
+    let settled = false;
+    query.then(() => { settled = true; }, () => { settled = true; });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    const reconnectedSocket = openSocket();
+    client.sockets.set('wss://relay.example', reconnectedSocket);
+    client.reissueSubscriptions('wss://relay.example', reconnectedSocket);
+    expect(reconnectedSocket.send).toHaveBeenCalledWith(expect.stringContaining('"REQ"'));
+
+    await client.handleMessage('wss://relay.example', JSON.stringify(['EOSE', 'sub_1']));
+    await expect(query).resolves.toEqual([event]);
+  });
+
+  it('rejects relay CLOSED-incomplete queries and preserves partial events for callers', async () => {
     const client = new NostrClient({ relays: [] });
     client.sockets.set('wss://relay.example', openSocket());
     const event = validEvent();
 
     const query = client.queryUntilEose([{ kinds: [31962] }]);
     await client.handleMessage('wss://relay.example', JSON.stringify(['EVENT', 'sub_1', event]));
-    client.notifyRelayClosed('wss://relay.example', 'closed: relay shutdown');
+    await client.handleMessage('wss://relay.example', JSON.stringify(['CLOSED', 'sub_1', 'closed: relay shutdown']));
 
     await expect(query).rejects.toMatchObject({
       name: 'NostrIncompleteEOSEError',

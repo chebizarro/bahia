@@ -1,6 +1,19 @@
 {
   "feature_id": "WEB_NOSTR_VALIDATION_EOSE",
-  "command": "pnpm --dir web exec vitest run --config vitest.config.js tests/unit/sanity.test.js tests/unit/test-utils-and-fixtures.test.js tests/unit/nostr-client-parsing.test.js tests/unit/controlplane-requests.test.js",
-  "result": "passed",
-  "tests": 57
+  "commands": [
+    {
+      "command": "pnpm --dir web exec vitest run --config vitest.config.js tests/unit/sanity.test.js tests/unit/nostr-client-parsing.test.js",
+      "result": "passed",
+      "tests": 49,
+      "verification_date": "2026-05-20",
+      "notes": "Regression gate for bahia-f1mu: transport close before EOSE keeps query subscribed through reconnect; relay CLOSED and reconnect exhaustion remain incomplete-history failures."
+    },
+    {
+      "command": "pnpm --dir web exec vitest run --config vitest.config.js tests/unit/sanity.test.js tests/unit/test-utils-and-fixtures.test.js tests/unit/nostr-client-parsing.test.js tests/unit/controlplane-requests.test.js",
+      "result": "passed",
+      "tests": 59,
+      "verification_date": "2026-05-20",
+      "notes": "Broader WEB_NOSTR_VALIDATION_EOSE gate passed after regression patch."
+    }
+  ]
 }

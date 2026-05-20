@@ -1022,9 +1022,11 @@ export class NostrClient {
         this.connectionStatus.update(s => ({ ...s, [url]: 'disconnected' }));
         this.updateConnectedStatus();
         this.rejectPendingPublishesForRelay(url, 'relay connection closed');
-        this.notifyRelayClosed(url, 'relay connection closed');
+        this.notifyRelayConnectionClosed(url, 'relay connection closed');
         if (!this.manuallyDisconnected) {
           this.scheduleReconnect(url);
+        } else {
+          this.notifyRelayClosed(url, 'relay connection closed', { terminal: true });
         }
       };
 
@@ -1054,6 +1056,7 @@ export class NostrClient {
     if (attempts >= MAX_RECONNECT_ATTEMPTS) {
       console.log(`[nostr] Giving up on ${url} after ${MAX_RECONNECT_ATTEMPTS} attempts`);
       this.connectionStatus.update(s => ({ ...s, [url]: 'failed' }));
+      this.notifyRelayClosed(url, 'relay reconnect attempts exhausted before EOSE', { terminal: true });
       return;
     }
 
@@ -1141,7 +1144,7 @@ export class NostrClient {
           const [, subId, reason = ''] = msg;
           const subClosed = this.subscriptions.get(subId);
           if (subClosed && subClosed.onClosed) {
-            subClosed.onClosed(reason, relay);
+            subClosed.onClosed(reason, relay, { terminal: true, source: 'closed' });
           }
           break;
         }
@@ -1221,10 +1224,20 @@ export class NostrClient {
     });
   }
 
-  notifyRelayClosed(relayUrl, reason) {
+  notifyRelayConnectionClosed(relayUrl, reason) {
     this.subscriptions.forEach((sub) => {
       if (sub.onClosed) {
-        sub.onClosed(reason, relayUrl);
+        sub.onClosed(reason, relayUrl, { terminal: false, source: 'connection' });
+      }
+    });
+  }
+
+  notifyRelayClosed(relayUrl, reason, meta = {}) {
+    const terminal = meta.terminal !== false;
+    const source = meta.source || (terminal ? 'closed' : 'connection');
+    this.subscriptions.forEach((sub) => {
+      if (sub.onClosed) {
+        sub.onClosed(reason, relayUrl, { terminal, source });
       }
     });
   }
@@ -1312,14 +1325,20 @@ export class NostrClient {
           }
           evaluateCompletion();
         },
-        onClosed: (reason = '', relay) => {
+        onClosed: (reason = '', relay, meta = {}) => {
           if (relayStates.has(relay)) {
             const current = relayStates.get(relay);
             if (current?.status !== 'eose') {
-              relayStates.set(relay, { status: 'closed', reason: String(reason || '') });
+              if (meta?.terminal === false) {
+                relayStates.set(relay, { status: 'pending', reason: String(reason || '') });
+              } else {
+                relayStates.set(relay, { status: 'closed', reason: String(reason || '') });
+              }
             }
           }
-          evaluateCompletion();
+          if (meta?.terminal !== false) {
+            evaluateCompletion();
+          }
         }
       });
     });
