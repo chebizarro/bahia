@@ -1,0 +1,29 @@
+{
+  "feature_id": "dns-phase0-nostr-app-docs",
+  "criteria": [
+    {
+      "id": "AC1",
+      "description": "When no DNSProjectionSource is configured, existing Nostr projector behavior and system discovery DNS capabilities remain unchanged."
+    },
+    {
+      "id": "AC2",
+      "description": "When DNSProjectionSource is configured, RepublishSnapshot publishes kind 31976 DNSEndpointState events with d, family, environment, health, runtime, dns, addr, proto, port, t:dns-endpoint, and t:bahia tags where applicable."
+    },
+    {
+      "id": "AC3",
+      "description": "Previously published DNS endpoint coordinates that disappear from the source are replaced with kind 31976 tombstone events using deleted=true."
+    },
+    {
+      "id": "AC4",
+      "description": "System discovery advertises dns_endpoint_catalog and dns_endpoint_state kind 31976 only when DNS projection is configured."
+    },
+    {
+      "id": "AC5",
+      "description": "When dns.enabled=true, app wiring constructs DNS zones, filesystem backends, resolver bridge, DNSProjector, DNSReconciler, registers the reconciler, and injects WithDNSProjectionSource into the Nostr projector."
+    },
+    {
+      "id": "AC6",
+      "description": "Documentation identifies kind 31976 as active Phase 0 behavior and DNS operator kinds 5941-5945/6941/7941-7945 as reserved, not reactor-accepted."
+    }
+  ]
+}

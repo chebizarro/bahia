@@ -1,0 +1,30 @@
+{
+  "feature_id": "dns-phase0-nostr-app-docs",
+  "tests": [
+    {
+      "criteria": ["AC1", "AC2", "AC3", "AC4"],
+      "command": "go test ./internal/adapters/nostr/...",
+      "evidence": "passed on 2026-05-21"
+    },
+    {
+      "criteria": ["AC5"],
+      "command": "go test ./internal/app/...",
+      "evidence": "passed on 2026-05-21"
+    },
+    {
+      "criteria": ["AC1", "AC2", "AC3", "AC4", "AC5"],
+      "command": "go test ./...",
+      "evidence": "passed on 2026-05-21"
+    },
+    {
+      "criteria": ["AC1", "AC2", "AC3", "AC4", "AC5"],
+      "command": "go build ./...",
+      "evidence": "passed on 2026-05-21"
+    },
+    {
+      "criteria": ["AC6"],
+      "command": "documentation review",
+      "evidence": "docs/control-planes.md and docs/event-spec.md updated on 2026-05-21"
+    }
+  ]
+}

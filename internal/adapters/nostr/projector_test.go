@@ -679,6 +679,113 @@ func TestProjectorPublishesStateTombstoneForDeletedState(t *testing.T) {
 	assertJSONField(t, stateEvent.Content, "deleted", true)
 }
 
+type fakeDNSProjectionSource struct {
+	endpoints []domain.DNSEndpoint
+}
+
+func (s *fakeDNSProjectionSource) ListDNSEndpoints(context.Context) ([]domain.DNSEndpoint, error) {
+	return append([]domain.DNSEndpoint(nil), s.endpoints...), nil
+}
+
+func TestProjectorPublishesDNSEndpointSnapshotAndTombstone(t *testing.T) {
+	ctx := context.Background()
+	port := 8443
+	dnsSource := &fakeDNSProjectionSource{endpoints: []domain.DNSEndpoint{{
+		Family:      domain.DNSEndpointFamilyService,
+		Name:        "api",
+		Environment: "prod",
+		Zone:        "prod.cascadia",
+		FQDN:        "api.prod.cascadia",
+		Protocol:    "https",
+		Address:     "10.0.1.44",
+		Port:        &port,
+		Runtime:     string(domain.RuntimeTypeDocker),
+		Health:      domain.HealthStatusHealthy,
+		DriftStatus: domain.DriftStatusInSync,
+		Source:      "test",
+	}}}
+	sink := &captureProjectionPublisher{}
+	projector := NewProjector(projectorTestConfig(), newFakeProjectionSource(), sink, nil, zap.NewNop(), WithDNSProjectionSource(dnsSource))
+
+	if err := projector.RepublishSnapshot(ctx); err != nil {
+		t.Fatalf("republish snapshot: %v", err)
+	}
+	endpointEvent := assertOneSignedKind(t, sink, KindDNSEndpointState)
+	assertTag(t, endpointEvent, "d", "endpoint:service:api:prod")
+	assertTag(t, endpointEvent, "family", "service")
+	assertTag(t, endpointEvent, "environment", "prod")
+	assertTag(t, endpointEvent, "health", "healthy")
+	assertTag(t, endpointEvent, "runtime", "docker")
+	assertTag(t, endpointEvent, "dns", "api.prod.cascadia")
+	assertTag(t, endpointEvent, "addr", "10.0.1.44")
+	assertTag(t, endpointEvent, "proto", "https")
+	assertTag(t, endpointEvent, "port", "8443")
+	assertTag(t, endpointEvent, "t", "dns-endpoint")
+	assertTag(t, endpointEvent, "t", "bahia")
+	assertJSONField(t, endpointEvent.Content, "coordinate", "endpoint:service:api:prod")
+
+	dnsSource.endpoints = nil
+	if err := projector.RepublishSnapshot(ctx); err != nil {
+		t.Fatalf("republish snapshot after removal: %v", err)
+	}
+	dnsEvents := sink.byKind(KindDNSEndpointState)
+	if len(dnsEvents) != 2 {
+		t.Fatalf("expected endpoint event and tombstone, got %d", len(dnsEvents))
+	}
+	tombstone := dnsEvents[1]
+	assertTag(t, tombstone, "d", "endpoint:service:api:prod")
+	assertTag(t, tombstone, "deleted", "true")
+	assertTag(t, tombstone, "dns", "api.prod.cascadia")
+	assertJSONField(t, tombstone.Content, "deleted", true)
+	assertJSONField(t, tombstone.Content, "coordinate", "endpoint:service:api:prod")
+}
+
+func TestProjectorSystemDiscoveryAdvertisesDNSOnlyWhenSourceConfigured(t *testing.T) {
+	ctx := context.Background()
+	cfg := config.Defaults()
+	cfg.Nostr.PrivateKey = projectorTestPrivateKey
+	cfg.Nostr.PublishEnabled = true
+	cfg.Nostr.Sidecar.Enabled = true
+	cfg.Nostr.Sidecar.PublicURL = "ws://localhost:3000/relay"
+	cfg.Nostr.BrowserRelays = []string{"ws://localhost:3000/relay"}
+
+	sink := &captureProjectionPublisher{}
+	projector := NewProjector(cfg.Nostr, newFakeProjectionSource(), sink, nil, zap.NewNop(), WithSystemDiscoveryConfig(cfg, true), WithDNSProjectionSource(&fakeDNSProjectionSource{}))
+	if err := projector.RepublishSnapshot(ctx); err != nil {
+		t.Fatalf("republish snapshot: %v", err)
+	}
+
+	discovery := assertOneSignedKind(t, sink, KindSystemDiscovery)
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(discovery.Content), &payload); err != nil {
+		t.Fatalf("unmarshal discovery: %v", err)
+	}
+	controlPlane, ok := payload["control_plane"].(map[string]any)
+	if !ok {
+		t.Fatalf("control_plane missing from discovery: %#v", payload["control_plane"])
+	}
+	capabilities, ok := controlPlane["capabilities"].([]any)
+	if !ok {
+		t.Fatalf("control_plane.capabilities missing: %#v", controlPlane["capabilities"])
+	}
+	foundCapability := false
+	for _, capability := range capabilities {
+		if capability == "dns_endpoint_catalog" {
+			foundCapability = true
+		}
+	}
+	if !foundCapability {
+		t.Fatalf("dns_endpoint_catalog capability missing: %#v", capabilities)
+	}
+	readModels, ok := controlPlane["read_model_kinds"].(map[string]any)
+	if !ok {
+		t.Fatalf("control_plane.read_model_kinds missing: %#v", controlPlane["read_model_kinds"])
+	}
+	if got := readModels["dns_endpoint_state"]; got != float64(KindDNSEndpointState) {
+		t.Fatalf("dns_endpoint_state kind = %#v, want %d", got, KindDNSEndpointState)
+	}
+}
+
 func projectorTestConfig() config.NostrConfig {
 	return config.NostrConfig{
 		PrivateKey:     projectorTestPrivateKey,

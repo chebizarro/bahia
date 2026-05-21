@@ -1,0 +1,19 @@
+{
+  "feature_id": "dns-phase0-nostr-app-docs",
+  "title": "DNS Phase 0 Nostr projection, app wiring, and docs",
+  "status": "in_progress",
+  "intent": "Publish derived DNS endpoint catalog state as Bahia-signed Nostr read models and wire DNS projection/reconciliation behind dns.enabled without changing reactor command handling.",
+  "scope": [
+    "Nostr projector DNSProjectionSource option and kind 31976 endpoint publication",
+    "Tombstone publication for disappeared DNS endpoint coordinates",
+    "System discovery dns_endpoint_catalog capability when DNS projection is configured",
+    "Application wiring for DNS zones, filesystem backends, resolver bridge, projector, and reconciler only when dns.enabled=true",
+    "Control-plane and event-spec documentation for active 31976 support and reserved DNS operator kinds"
+  ],
+  "out_of_scope": [
+    "DNS reactor request/status/result handlers",
+    "Database migrations or DNS repositories",
+    "CoreDNS/etcd or non-filesystem DNS backends",
+    "DNS audit event emission"
+  ]
+}

@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -82,9 +84,16 @@ type BackupProjectionSource interface {
 	GetRepository(ctx context.Context, id uuid.UUID) (*domain.BackupRepository, error)
 	ListBackupRuns(ctx context.Context, status domain.DeploymentRunStatus, limit, offset int) ([]domain.BackupRun, error)
 	GetBackupRun(ctx context.Context, id uuid.UUID) (*domain.BackupRun, error)
-	ListBackupRestores(ctx context.Context, status domain.DeploymentRunStatus, limit, offset int) ([]domain.BackupRestoreRun, error)
-	GetBackupRestore(ctx context.Context, id uuid.UUID) (*domain.BackupRestoreRun, error)
 	GetBackupVerificationByRunID(ctx context.Context, runID uuid.UUID) (*domain.BackupVerificationRecord, error)
+}
+
+// DNSProjectionSource is the authoritative DNS endpoint read model source used by the projector.
+type DNSProjectionSource interface {
+	ListDNSEndpoints(ctx context.Context) ([]domain.DNSEndpoint, error)
+}
+
+type dnsPublishedEndpoint struct {
+	FQDN string
 }
 
 // ProjectionPublisher publishes signed Nostr events to relay-visible storage.
@@ -96,20 +105,24 @@ type ProjectionPublisher interface {
 // read models and append-only audit events. It is rebuildable: a startup and
 // periodic snapshot can repair a cold or wiped sidecar store.
 type Projector struct {
-	source         ProjectionSource
-	llmSource      LLMProjectionSource
-	mlSource       MLProjectionSource
-	workerSource   WorkerProjectionSource
-	policySource   PolicyProjectionSource
-	backupSource   BackupProjectionSource
-	publisher      ProjectionPublisher
-	eventRepo      repository.NostrEventRepository
-	privateKey     string
-	enabled        bool
-	repairInterval time.Duration
-	logger         *zap.Logger
-	systemConfig   *config.Config
-	mcpTransport   bool
+	source           ProjectionSource
+	llmSource        LLMProjectionSource
+	mlSource         MLProjectionSource
+	workerSource     WorkerProjectionSource
+	policySource     PolicyProjectionSource
+	backupSource     BackupProjectionSource
+	dnsSource        DNSProjectionSource
+	publisher        ProjectionPublisher
+	eventRepo        repository.NostrEventRepository
+	privateKey       string
+	enabled          bool
+	repairInterval   time.Duration
+	logger           *zap.Logger
+	systemConfig     *config.Config
+	mcpTransport     bool
+	dnsPublishMu     sync.Mutex
+	dnsPublished     map[string]dnsPublishedEndpoint
+	dnsCacheHydrated bool
 }
 
 // ProjectorOption configures a projector.
@@ -139,6 +152,10 @@ func WithPolicyProjectionSource(source PolicyProjectionSource) ProjectorOption {
 
 func WithBackupProjectionSource(source BackupProjectionSource) ProjectorOption {
 	return func(p *Projector) { p.backupSource = source }
+}
+
+func WithDNSProjectionSource(source DNSProjectionSource) ProjectorOption {
+	return func(p *Projector) { p.dnsSource = source }
 }
 
 func WithSystemDiscoveryConfig(cfg *config.Config, mcpTransportEnabled bool) ProjectorOption {
@@ -228,7 +245,6 @@ func (p *Projector) SetupSubscriptions(pub events.Publisher) {
 		service.EventBackupPolicyChanged,
 		service.EventBackupRepositoryChanged,
 		service.EventBackupRunChanged,
-		service.EventBackupRestoreChanged,
 		service.EventBackupVerificationChanged,
 	} {
 		et := eventType
@@ -341,8 +357,18 @@ func (p *Projector) RepublishSnapshot(ctx context.Context) error {
 		}
 	}
 	mlModels, mlVersions, mlEndpoints, mlStates, mlProvenance, mlCapabilities := p.publishMLSnapshots(ctx)
-	backupRecipes, backupPolicies, backupRepositories, backupRuns, backupRestores, backupVerifications := p.publishBackupSnapshots(ctx)
-	p.logger.Info("Nostr projection snapshot republished", zap.Int("services", len(services)), zap.Int("environments", len(envs)), zap.Int("states", len(states)), zap.Int("builds", buildsPublished), zap.Int("artifacts", artifactsPublished), zap.Int("deployment_intents", intentsPublished), zap.Int("deployment_runs", runsPublished), zap.Int("policies", policiesPublished), zap.Int("llm_routes", llmRoutes), zap.Int("llm_route_states", llmStates), zap.Int("ml_models", mlModels), zap.Int("ml_model_versions", mlVersions), zap.Int("ml_endpoints", mlEndpoints), zap.Int("ml_endpoint_states", mlStates), zap.Int("ml_provenance_graphs", mlProvenance), zap.Int("ml_capabilities", mlCapabilities), zap.Int("backup_recipes", backupRecipes), zap.Int("backup_policies", backupPolicies), zap.Int("backup_repositories", backupRepositories), zap.Int("backup_runs", backupRuns), zap.Int("backup_restores", backupRestores), zap.Int("backup_verifications", backupVerifications))
+	backupRecipes, backupPolicies, backupRepositories, backupRuns, backupVerifications := p.publishBackupSnapshots(ctx)
+	dnsEndpoints, dnsTombstones := 0, 0
+	if p.dnsSource != nil {
+		published, tombstones, err := p.publishDNSEndpointSnapshot(ctx)
+		if err != nil {
+			p.logger.Warn("publish DNS endpoint projection failed", zap.Error(err))
+		} else {
+			dnsEndpoints = published
+			dnsTombstones = tombstones
+		}
+	}
+	p.logger.Info("Nostr projection snapshot republished", zap.Int("services", len(services)), zap.Int("environments", len(envs)), zap.Int("states", len(states)), zap.Int("builds", buildsPublished), zap.Int("artifacts", artifactsPublished), zap.Int("deployment_intents", intentsPublished), zap.Int("deployment_runs", runsPublished), zap.Int("policies", policiesPublished), zap.Int("llm_routes", llmRoutes), zap.Int("llm_route_states", llmStates), zap.Int("ml_models", mlModels), zap.Int("ml_model_versions", mlVersions), zap.Int("ml_endpoints", mlEndpoints), zap.Int("ml_endpoint_states", mlStates), zap.Int("ml_provenance_graphs", mlProvenance), zap.Int("ml_capabilities", mlCapabilities), zap.Int("backup_recipes", backupRecipes), zap.Int("backup_policies", backupPolicies), zap.Int("backup_repositories", backupRepositories), zap.Int("backup_runs", backupRuns), zap.Int("backup_verifications", backupVerifications), zap.Int("dns_endpoints", dnsEndpoints), zap.Int("dns_endpoint_tombstones", dnsTombstones))
 	return nil
 }
 
@@ -470,10 +496,13 @@ func (p *Projector) handleEvent(ctx context.Context, e events.Event) {
 		p.publishBackupRepositoryByID(ctx, firstString(stringifyMapValue(e.Data, "repository_id"), e.EntityID))
 	case service.EventBackupRunChanged:
 		p.publishBackupRunByID(ctx, firstString(stringifyMapValue(e.Data, "run_id"), e.EntityID))
-	case service.EventBackupRestoreChanged:
-		p.publishBackupRestoreByID(ctx, firstString(stringifyMapValue(e.Data, "restore_id"), e.EntityID))
 	case service.EventBackupVerificationChanged:
 		p.publishBackupVerificationByRunID(ctx, firstString(stringifyMapValue(e.Data, "run_id"), e.EntityID))
+	}
+	if shouldRefreshDNSProjection(e.Type) {
+		if _, _, err := p.publishDNSEndpointSnapshot(ctx); err != nil {
+			p.logger.Warn("publish DNS endpoint projection after event failed", zap.String("event_type", string(e.Type)), zap.Error(err))
+		}
 	}
 }
 
@@ -820,7 +849,7 @@ func (p *Projector) publishMLSnapshots(ctx context.Context) (modelsPublished, ve
 	return
 }
 
-func (p *Projector) publishBackupSnapshots(ctx context.Context) (recipesPublished, policiesPublished, repositoriesPublished, runsPublished, restoresPublished, verificationsPublished int) {
+func (p *Projector) publishBackupSnapshots(ctx context.Context) (recipesPublished, policiesPublished, repositoriesPublished, runsPublished, verificationsPublished int) {
 	if p.backupSource == nil {
 		return
 	}
@@ -900,23 +929,6 @@ func (p *Projector) publishBackupSnapshots(ctx context.Context) (recipesPublishe
 			}
 		}
 		if len(runs) < pageSize {
-			break
-		}
-	}
-	for offset := 0; ; offset += pageSize {
-		restores, err := p.backupSource.ListBackupRestores(ctx, "", pageSize, offset)
-		if err != nil {
-			p.logger.Warn("list backup restores for projection failed", zap.Error(err))
-			break
-		}
-		for i := range restores {
-			if err := p.publishBackupRestoreState(ctx, &restores[i]); err != nil {
-				p.logger.Warn("publish backup restore state projection failed", zap.String("restore_id", restores[i].ID.String()), zap.Error(err))
-			} else {
-				restoresPublished++
-			}
-		}
-		if len(restores) < pageSize {
 			break
 		}
 	}
@@ -1000,26 +1012,6 @@ func (p *Projector) publishBackupRunByID(ctx context.Context, raw string) {
 	}
 	if err := p.publishBackupRunState(ctx, run); err != nil {
 		p.logger.Warn("publish backup run state projection failed", zap.String("run_id", raw), zap.Error(err))
-	}
-}
-
-func (p *Projector) publishBackupRestoreByID(ctx context.Context, raw string) {
-	if p.backupSource == nil {
-		return
-	}
-	id, ok := parseUUID(raw)
-	if !ok {
-		return
-	}
-	restore, err := p.backupSource.GetBackupRestore(ctx, id)
-	if err != nil || restore == nil {
-		if err != nil {
-			p.logger.Warn("read backup restore for projection failed", zap.String("restore_id", raw), zap.Error(err))
-		}
-		return
-	}
-	if err := p.publishBackupRestoreState(ctx, restore); err != nil {
-		p.logger.Warn("publish backup restore state projection failed", zap.String("restore_id", raw), zap.Error(err))
 	}
 }
 
@@ -1200,6 +1192,225 @@ func (p *Projector) publishReplaceableJSON(ctx context.Context, kind int, dTag s
 	return p.publishSigned(ctx, kind, baseTags, string(content), entityType, entityID)
 }
 
+func (p *Projector) publishDNSEndpointSnapshot(ctx context.Context) (int, int, error) {
+	if !p.Enabled() || p.dnsSource == nil {
+		return 0, 0, nil
+	}
+	p.dnsPublishMu.Lock()
+	defer p.dnsPublishMu.Unlock()
+	if err := p.hydrateDNSPublishedCache(ctx); err != nil {
+		return 0, 0, err
+	}
+	endpoints, err := p.dnsSource.ListDNSEndpoints(ctx)
+	if err != nil {
+		return 0, 0, fmt.Errorf("list DNS endpoints: %w", err)
+	}
+	current := make(map[string]dnsPublishedEndpoint, len(endpoints))
+	desired := make(map[string]struct{}, len(endpoints))
+	failures := []string{}
+	published := 0
+	for i := range endpoints {
+		endpoint := endpoints[i]
+		if err := domain.ValidateDNSEndpoint(&endpoint); err != nil {
+			failures = append(failures, fmt.Sprintf("validate endpoint[%d]: %v", i, err))
+			p.logger.Warn("skip invalid DNS endpoint projection", zap.Int("index", i), zap.Error(err))
+			continue
+		}
+		if _, exists := desired[endpoint.Coordinate]; exists {
+			failure := fmt.Sprintf("duplicate coordinate %q", endpoint.Coordinate)
+			failures = append(failures, failure)
+			p.logger.Warn("skip duplicate DNS endpoint projection", zap.String("coordinate", endpoint.Coordinate))
+			continue
+		}
+		desired[endpoint.Coordinate] = struct{}{}
+		if err := p.publishDNSEndpoint(ctx, endpoint); err != nil {
+			failures = append(failures, fmt.Sprintf("publish %s: %v", endpoint.Coordinate, err))
+			p.logger.Warn("publish DNS endpoint projection failed", zap.String("coordinate", endpoint.Coordinate), zap.Error(err))
+			continue
+		}
+		current[endpoint.Coordinate] = dnsPublishedEndpoint{FQDN: endpoint.FQDN}
+		published++
+	}
+	nextPublished := make(map[string]dnsPublishedEndpoint, len(current))
+	for coordinate, endpoint := range current {
+		nextPublished[coordinate] = endpoint
+	}
+	tombstones := 0
+	for coordinate, previous := range p.dnsPublished {
+		if _, stillCurrent := current[coordinate]; stillCurrent {
+			continue
+		}
+		if _, stillDesired := desired[coordinate]; stillDesired {
+			nextPublished[coordinate] = previous
+			continue
+		}
+		if err := p.publishDNSEndpointTombstone(ctx, coordinate, previous.FQDN); err != nil {
+			failures = append(failures, fmt.Sprintf("tombstone %s: %v", coordinate, err))
+			p.logger.Warn("publish DNS endpoint tombstone failed", zap.String("coordinate", coordinate), zap.Error(err))
+			nextPublished[coordinate] = previous
+			continue
+		}
+		tombstones++
+	}
+	p.dnsPublished = nextPublished
+	if len(failures) > 0 {
+		return published, tombstones, fmt.Errorf("DNS endpoint projection completed with %d failure(s): %s", len(failures), strings.Join(failures, "; "))
+	}
+	return published, tombstones, nil
+}
+
+func (p *Projector) publishDNSEndpoint(ctx context.Context, endpoint domain.DNSEndpoint) error {
+	tags := dnsEndpointTags(endpoint)
+	return p.publishReplaceableJSON(ctx, KindDNSEndpointState, endpoint.Coordinate, tags, endpoint, "dns_endpoint.projection", &endpoint.ID)
+}
+
+func (p *Projector) publishDNSEndpointTombstone(ctx context.Context, coordinate, fqdn string) error {
+	now := time.Now().UTC()
+	content, _ := json.Marshal(map[string]any{"deleted": true, "coordinate": coordinate, "fqdn": fqdn, "updated_at": formatTime(now)})
+	tags := gonostr.Tags{{"d", coordinate}, {"deleted", "true"}, {"t", "dns-endpoint"}, {"t", "bahia"}}
+	if strings.TrimSpace(fqdn) != "" {
+		tags = append(tags, gonostr.Tag{"dns", strings.TrimSpace(fqdn)})
+	}
+	return p.publishSigned(ctx, KindDNSEndpointState, tags, string(content), "dns_endpoint.projection", nil)
+}
+
+func (p *Projector) hydrateDNSPublishedCache(ctx context.Context) error {
+	if p.dnsCacheHydrated {
+		return nil
+	}
+	p.dnsPublished = map[string]dnsPublishedEndpoint{}
+	if p.eventRepo == nil {
+		p.dnsCacheHydrated = true
+		return nil
+	}
+	records, err := p.eventRepo.ListByKind(ctx, KindDNSEndpointState, 10000)
+	if err != nil {
+		return fmt.Errorf("hydrate DNS endpoint projection cache: %w", err)
+	}
+	sort.Slice(records, func(i, j int) bool {
+		return records[i].CreatedAt.After(records[j].CreatedAt)
+	})
+	p.dnsCacheHydrated = true
+	servicePubkey := ""
+	if p.privateKey != "" {
+		servicePubkey, _ = gonostr.GetPublicKey(p.privateKey)
+	}
+	seen := map[string]struct{}{}
+	for _, record := range records {
+		if servicePubkey != "" && record.PubKey != servicePubkey {
+			continue
+		}
+		coordinate, fqdn, deleted := dnsProjectionRecordState(record)
+		if coordinate == "" {
+			continue
+		}
+		if _, ok := seen[coordinate]; ok {
+			continue
+		}
+		seen[coordinate] = struct{}{}
+		if deleted {
+			continue
+		}
+		p.dnsPublished[coordinate] = dnsPublishedEndpoint{FQDN: fqdn}
+	}
+	return nil
+}
+
+func dnsEndpointTags(endpoint domain.DNSEndpoint) gonostr.Tags {
+	tags := gonostr.Tags{{"family", string(endpoint.Family)}, {"health", string(endpoint.Health)}, {"dns", endpoint.FQDN}, {"addr", endpoint.Address}, {"t", "dns-endpoint"}, {"t", "bahia"}}
+	if endpoint.Environment != "" {
+		tags = append(tags, gonostr.Tag{"environment", endpoint.Environment})
+	}
+	if endpoint.Runtime != "" {
+		tags = append(tags, gonostr.Tag{"runtime", endpoint.Runtime})
+	}
+	if endpoint.Protocol != "" {
+		tags = append(tags, gonostr.Tag{"proto", endpoint.Protocol})
+	}
+	if endpoint.Port != nil {
+		tags = append(tags, gonostr.Tag{"port", fmt.Sprintf("%d", *endpoint.Port)})
+	}
+	switch endpoint.Family {
+	case domain.DNSEndpointFamilyService:
+		tags = append(tags, gonostr.Tag{"service", endpoint.Name})
+		if endpoint.ServiceID != nil {
+			tags = append(tags, gonostr.Tag{"service_id", endpoint.ServiceID.String()})
+		}
+	case domain.DNSEndpointFamilyLLM:
+		tags = append(tags, gonostr.Tag{"route", endpoint.Name})
+		if endpoint.LLMRouteID != nil {
+			tags = append(tags, gonostr.Tag{"route_id", endpoint.LLMRouteID.String()})
+		}
+	case domain.DNSEndpointFamilyML:
+		tags = append(tags, gonostr.Tag{"endpoint", endpoint.Name})
+		if endpoint.MLEndpointID != nil {
+			tags = append(tags, gonostr.Tag{"endpoint_id", endpoint.MLEndpointID.String()})
+		}
+	case domain.DNSEndpointFamilyWorker:
+		if endpoint.WorkerPubkey != "" {
+			tags = append(tags, gonostr.Tag{"worker", endpoint.WorkerPubkey})
+		}
+	}
+	for _, capability := range endpoint.Capabilities {
+		if capability != "" {
+			tags = append(tags, gonostr.Tag{"capability", capability})
+		}
+	}
+	return tags
+}
+
+func dnsProjectionRecordState(record repository.NostrEventRecord) (coordinate, fqdn string, deleted bool) {
+	var tags gonostr.Tags
+	_ = json.Unmarshal(record.Tags, &tags)
+	for _, tag := range tags {
+		if len(tag) < 2 {
+			continue
+		}
+		switch tag[0] {
+		case "d":
+			coordinate = tag[1]
+		case "dns":
+			fqdn = tag[1]
+		case "deleted":
+			deleted = tag[1] == "true"
+		}
+	}
+	var content map[string]any
+	if err := json.Unmarshal([]byte(record.Content), &content); err == nil {
+		if coordinate == "" {
+			coordinate, _ = content["coordinate"].(string)
+		}
+		if fqdn == "" {
+			fqdn, _ = content["fqdn"].(string)
+		}
+		if value, ok := content["deleted"].(bool); ok {
+			deleted = value
+		}
+	}
+	return coordinate, fqdn, deleted
+}
+
+func shouldRefreshDNSProjection(eventType events.EventType) bool {
+	switch eventType {
+	case events.EventServiceCreated, events.EventServiceUpdated, events.EventServiceDeleted,
+		events.EventEnvironmentCreated, events.EventEnvironmentUpdated, events.EventEnvironmentDeleted,
+		events.EventRuntimeObservation, events.EventEnvironmentServiceStateChanged, events.EventDriftDetected,
+		events.EventReconcileCompleted, events.EventAdoptionImported, events.EventRuntimeDeploy,
+		events.EventRuntimeRestart, events.EventRuntimeStop,
+		events.EventLLMRouteCreated, events.EventLLMRouteUpdated, events.EventLLMReleaseRegistered,
+		events.EventLLMDeploymentIntentCreated, events.EventLLMDeploymentIntentApproved, events.EventLLMDeploymentIntentRejected,
+		events.EventLLMDeploymentRunCreated, events.EventLLMDeploymentRunStatusChanged, events.EventLLMDeploymentRunCompleted,
+		events.EventLLMRouteObservation, events.EventLLMRouteStateChanged, events.EventLLMRouteDriftDetected, events.EventLLMGatewayRouteSynced,
+		service.EventMLModelChanged, service.EventMLVersionChanged, service.EventMLEndpointChanged,
+		service.EventMLIntentChanged, service.EventMLRunChanged, service.EventMLObservation,
+		service.EventMLStateChanged, service.EventMLArtifactChanged, service.EventMLProvenanceChanged,
+		service.EventMLProvenanceDefected:
+		return true
+	default:
+		return false
+	}
+}
+
 func (p *Projector) publishSystemDiscovery(ctx context.Context) error {
 	cfg := p.systemConfig
 	if cfg == nil {
@@ -1214,7 +1425,7 @@ func (p *Projector) publishSystemDiscovery(ctx context.Context) error {
 	payload := map[string]any{
 		"schema":        "bahia.system-discovery.v1",
 		"registries":    discoveryRegistries(cfg),
-		"control_plane": discoveryControlPlane(cfg.LLM.Enabled, p.mcpTransport),
+		"control_plane": discoveryControlPlane(cfg.LLM.Enabled, p.mcpTransport, p.dnsSource != nil),
 		"blossom": map[string]any{
 			"enabled":       cfg.Blossom.Enabled,
 			"url":           cfg.Blossom.URL,
@@ -1289,7 +1500,7 @@ func discoveryRegistries(cfg *config.Config) []map[string]any {
 	return registries
 }
 
-func discoveryControlPlane(llmEnabled, mcpTransportEnabled bool) map[string]any {
+func discoveryControlPlane(llmEnabled, mcpTransportEnabled, dnsEnabled bool) map[string]any {
 	requestKinds := map[string]int{"deploy_request": 5961, "rollback_request": 5962, "service_action": 5963, "service_create": 5964, "environment_create": 5965, "deployment_approval": 5966, "observation_submit": 5967, "drift_remediate": 5968}
 	statusKinds := map[string]int{"deployment_status": 6961, "service_status": 6962}
 	resultKinds := map[string]int{"deployment_result": 7961, "action_result": 7962, "service_create_result": 7963, "environment_create_result": 7964, "observation_result": 7965, "remediation_result": 7966}
@@ -1315,6 +1526,10 @@ func discoveryControlPlane(llmEnabled, mcpTransportEnabled bool) map[string]any 
 	}
 	if mcpTransportEnabled {
 		capabilities = append(capabilities, "mcp_async_correlation")
+	}
+	if dnsEnabled {
+		capabilities = append(capabilities, "dns_endpoint_catalog")
+		readModelKinds["dns_endpoint_state"] = KindDNSEndpointState
 	}
 	aiML := map[string]any{
 		"enabled": true,
@@ -1548,19 +1763,6 @@ func (p *Projector) publishBackupRunState(ctx context.Context, run *domain.Backu
 		tags = append(tags, gonostr.Tag{"policy", run.PolicyID.String()}, gonostr.Tag{"policy_id", run.PolicyID.String()})
 	}
 	return p.publishReplaceableJSON(ctx, KindBackupRunState, dTag, tags, content, "backup.run_state.projection", &run.ID)
-}
-
-func (p *Projector) publishBackupRestoreState(ctx context.Context, restore *domain.BackupRestoreRun) error {
-	if restore == nil {
-		return nil
-	}
-	dTag := "backup-restore:" + restore.ID.String()
-	content := map[string]any{"deleted": false, "id": restore.ID.String(), "backup_run_id": restore.BackupRunID.String(), "recipe_id": restore.RecipeID.String(), "repository_id": restore.RepositoryID.String(), "policy_id": uuidStringPtr(restore.PolicyID), "snapshot_id": restore.SnapshotID, "restore_target_ref": restore.RestoreTargetRef, "requested_by": restore.RequestedBy, "request_event_id": restore.RequestEventID, "request_kind": restore.RequestKind, "request_d_tag": restore.RequestDTag, "approval_status": string(restore.ApprovalStatus), "approval_event_id": restore.ApprovalEventID, "approved_by": restore.ApprovedBy, "approved_at": restore.ApprovedAt, "approval_message": restore.ApprovalMessage, "status": string(restore.Status), "backend": string(restore.Backend), "verification_status": string(restore.VerificationStatus), "evidence": restore.Evidence, "publish_summary": restore.PublishSummary, "error": restore.Error, "metadata": restore.Metadata, "started_at": restore.StartedAt, "finished_at": restore.FinishedAt, "created_at": formatTime(restore.CreatedAt), "updated_at": formatTime(restore.UpdatedAt)}
-	tags := gonostr.Tags{{"restore", restore.ID.String()}, {"restore_id", restore.ID.String()}, {"run", restore.BackupRunID.String()}, {"backup_run_id", restore.BackupRunID.String()}, {"recipe_id", restore.RecipeID.String()}, {"repository_id", restore.RepositoryID.String()}, {"status", string(restore.Status)}, {"approval", string(restore.ApprovalStatus)}, {"verification", string(restore.VerificationStatus)}, {"backend", string(restore.Backend)}}
-	if restore.PolicyID != nil {
-		tags = append(tags, gonostr.Tag{"policy", restore.PolicyID.String()}, gonostr.Tag{"policy_id", restore.PolicyID.String()})
-	}
-	return p.publishReplaceableJSON(ctx, KindBackupRestoreState, dTag, tags, content, "backup.restore_state.projection", &restore.ID)
 }
 
 func (p *Projector) publishBackupVerificationState(ctx context.Context, record *domain.BackupVerificationRecord) error {

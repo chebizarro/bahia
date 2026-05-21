@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -18,6 +19,7 @@ import (
 	backupAdapter "github.com/openagentsinc/bahia/internal/adapters/backup"
 	"github.com/openagentsinc/bahia/internal/adapters/blossom"
 	"github.com/openagentsinc/bahia/internal/adapters/build"
+	dnsAdapter "github.com/openagentsinc/bahia/internal/adapters/dns"
 	"github.com/openagentsinc/bahia/internal/adapters/harbor"
 	hiveciAdapter "github.com/openagentsinc/bahia/internal/adapters/hiveci"
 	llmadapter "github.com/openagentsinc/bahia/internal/adapters/llm"
@@ -281,18 +283,12 @@ func New(cfg *config.Config) (*App, error) {
 	backupRegistryRepo := repository.NewPgBackupControlPlaneRepository(pool)
 	backupRegistry := service.NewBackupRegistryService(backupRegistryRepo, publisher, logger)
 	backupResponder := controlplane.NewBackupRunResponder(controlPlanePool, controlPlaneSigner, backupRegistry, nostrEventRepo, logger)
-	backupRestoreResponder := controlplane.NewBackupRestoreResponder(controlPlanePool, controlPlaneSigner, backupRegistry, nostrEventRepo, logger)
-	backupRetentionResponder := controlplane.NewBackupRetentionResponder(controlPlanePool, controlPlaneSigner, backupRegistry, nostrEventRepo, logger)
-	backupResolver, err := service.NewStaticBackupBackendResolver(backupAdapter.NewKopiaBackend(), backupAdapter.NewVeleroBackend())
+	backupResolver, err := service.NewStaticBackupBackendResolver(backupAdapter.NewKopiaBackend())
 	if err != nil {
 		return nil, fmt.Errorf("configuring backup backend resolver: %w", err)
 	}
 	backupCoordinator := service.NewBackupRunCoordinator(backupRegistry, backupResolver, logger, service.WithBackupRunResponder(backupResponder))
-	backupRestoreCoordinator := service.NewBackupRestoreCoordinator(backupRegistry, backupResolver, logger, service.WithBackupRestoreResponder(backupRestoreResponder))
-	backupRetentionCoordinator := service.NewBackupRetentionCoordinator(backupRegistry, backupResolver, logger, service.WithBackupRetentionResponder(backupRetentionResponder))
 	bgManager.Register(backupCoordinator)
-	bgManager.Register(backupRestoreCoordinator)
-	bgManager.Register(backupRetentionCoordinator)
 	logger.Info("backup control plane registered", zap.String("backend", string(domain.BackupBackendKopia)))
 
 	// Generic AI/ML registry foundation. Bucket-B keeps this additive and keeps
@@ -341,6 +337,18 @@ func New(cfg *config.Config) (*App, error) {
 	// Policy service.
 	policySvc := service.NewPolicyService(policyRepo, sigRepo, sbomRepo, logger)
 
+	var dnsProjector *reconcile.DNSProjector
+	if cfg.DNS.Enabled {
+		dnsZones, dnsResolver, err := buildDNSRuntime(ctx, cfg.DNS, logger)
+		if err != nil {
+			return nil, err
+		}
+		dnsProjector = reconcile.NewDNSProjector(serviceRepo, envRepo, stateRepo, obsRepo, llmRegistry, mlRegistry, workerRepo, cfg.DNS, logger)
+		dnsReconciler := reconcile.NewDNSReconciler(dnsProjector, dnsZones, dnsResolverBridge{resolver: dnsResolver}, cfg.DNS.ReconcileInterval, logger)
+		bgManager.Register(dnsReconciler)
+		logger.Info("DNS orchestration enabled", zap.Int("zones", len(dnsZones)), zap.Strings("backends", dnsResolver.Refs()))
+	}
+
 	// Package repository control plane.
 	var packageProjection repository.PackageControlPlaneRepository
 	var packageRegistrySvc *service.PackageRegistryService
@@ -369,6 +377,9 @@ func New(cfg *config.Config) (*App, error) {
 	}
 	if llmRegistry != nil {
 		projectorOpts = append(projectorOpts, nostrAdapter.WithLLMProjectionSource(llmRegistry))
+	}
+	if dnsProjector != nil {
+		projectorOpts = append(projectorOpts, nostrAdapter.WithDNSProjectionSource(dnsProjector))
 	}
 	nostrProjector := nostrAdapter.NewProjector(cfg.Nostr, registry, controlPlanePool, nostrEventRepo, logger, projectorOpts...)
 	nostrProjector.SetupSubscriptions(publisher)
@@ -617,10 +628,6 @@ func New(cfg *config.Config) (*App, error) {
 			controlplane.WithBackupRegistry(backupRegistry),
 			controlplane.WithBackupRunExecutor(backupCoordinator),
 			controlplane.WithBackupRunResponder(backupResponder),
-			controlplane.WithBackupRestoreExecutor(backupRestoreCoordinator),
-			controlplane.WithBackupRestoreResponder(backupRestoreResponder),
-			controlplane.WithBackupRetentionExecutor(backupRetentionCoordinator),
-			controlplane.WithBackupRetentionResponder(backupRetentionResponder),
 			controlplane.WithAdoptionService(adoptionSvc),
 			controlplane.WithRuntimeLifecycleService(runtimeLifecycleSvc),
 			controlplane.WithToolProvisioningRepository(toolProvisionRepo),
@@ -767,6 +774,78 @@ func (a *App) Run() error {
 	_ = a.Logger.Sync()
 	a.Logger.Info("server stopped gracefully")
 	return nil
+}
+
+type dnsResolverBridge struct {
+	resolver dnsAdapter.Resolver
+}
+
+func (r dnsResolverBridge) Resolve(ref string) (reconcile.DNSBackend, bool) {
+	if r.resolver == nil {
+		return nil, false
+	}
+	backend, ok := r.resolver.Resolve(ref)
+	if !ok {
+		return nil, false
+	}
+	return backend, true
+}
+
+func buildDNSRuntime(ctx context.Context, cfg config.DNSConfig, logger *zap.Logger) ([]domain.DNSZone, *dnsAdapter.StaticResolver, error) {
+	zones := make([]domain.DNSZone, 0, len(cfg.Zones))
+	for _, zoneConfig := range cfg.Zones {
+		ttl := zoneConfig.TTL
+		if ttl <= 0 {
+			ttl = cfg.DefaultTTL
+		}
+		zone := domain.DNSZone{
+			Name:       strings.TrimSpace(zoneConfig.Name),
+			Visibility: domain.ZoneVisibility(strings.TrimSpace(zoneConfig.Visibility)),
+			BackendRef: strings.TrimSpace(zoneConfig.Backend),
+			TTL:        ttl,
+		}
+		if err := domain.ValidateDNSZone(&zone); err != nil {
+			return nil, nil, fmt.Errorf("configuring DNS zone %q: %w", zoneConfig.Name, err)
+		}
+		zones = append(zones, zone)
+	}
+
+	backendRefs := make([]string, 0, len(cfg.Backends))
+	for ref := range cfg.Backends {
+		backendRefs = append(backendRefs, ref)
+	}
+	sort.Strings(backendRefs)
+	registrations := make([]dnsAdapter.BackendRegistration, 0, len(backendRefs))
+	for _, ref := range backendRefs {
+		backendConfig := cfg.Backends[ref]
+		switch strings.TrimSpace(backendConfig.Type) {
+		case string(domain.DNSBackendTypeFilesystem):
+			rootDir := strings.TrimSpace(backendConfig.RootDir)
+			if err := os.MkdirAll(rootDir, 0o755); err != nil {
+				return nil, nil, fmt.Errorf("preparing DNS filesystem backend %q root %q: %w", ref, rootDir, err)
+			}
+			backend := dnsAdapter.NewFilesystemBackend(rootDir)
+			if err := backend.Health(ctx); err != nil {
+				return nil, nil, fmt.Errorf("checking DNS filesystem backend %q: %w", ref, err)
+			}
+			registrations = append(registrations, dnsAdapter.BackendRegistration{Ref: ref, Backend: backend})
+		default:
+			return nil, nil, fmt.Errorf("configuring DNS backend %q: unsupported type %q", ref, backendConfig.Type)
+		}
+	}
+	resolver, err := dnsAdapter.NewStaticResolver(registrations...)
+	if err != nil {
+		return nil, nil, fmt.Errorf("configuring DNS backend resolver: %w", err)
+	}
+	for _, zone := range zones {
+		if _, ok := resolver.Resolve(zone.BackendRef); !ok {
+			return nil, nil, fmt.Errorf("configuring DNS zone %q: backend %q is not registered", zone.Name, zone.BackendRef)
+		}
+	}
+	if logger != nil {
+		logger.Info("DNS runtime configured", zap.Int("zones", len(zones)), zap.Strings("backends", resolver.Refs()))
+	}
+	return zones, resolver, nil
 }
 
 func controlPlaneRelayURLs(cfg config.NostrConfig) []string {

@@ -20,6 +20,8 @@ Bahia publishes signed Nostr events to relay networks for traceability, automati
 | 31017 | `llm_deployment_run.*` | LLM deployment run lifecycle emitted |
 | 31018 | `llm_route_state.*` | LLM route state/observation/drift emitted |
 | 31019 | `llm_gateway_route.synced` | LLM gateway route synchronization emitted |
+| 31020–31024 | DNS audit events | Reserved for future DNS zone sync, record change, drift, and endpoint lifecycle audit events; not emitted in Phase 0 |
+| 31976 | `DNSEndpointState` | DNS endpoint catalog read model projection |
 
 ## Internal Operational Event Types
 
@@ -201,6 +203,39 @@ LLM route registry and route-state projections are Bahia-signed replaceable even
 3. Publishes status/result replies with `route`, `release`, `environment`, `intent`, and `run` tags.
 4. Projects `31964`/`31965` read models and `31014–31019` audit/activity events.
 
+## DNS Endpoint Read Model
+
+When `dns.enabled=true`, Bahia derives healthy DNS endpoints from materialized service, LLM route, ML inference, and worker state, then publishes each endpoint as a kind `31976` replaceable read model. The `d` tag is `DNSEndpoint.Coordinate`, such as `endpoint:service:api:prod`, `endpoint:llm:chat:prod`, `endpoint:ml:embeddings:prod`, or `endpoint:worker:t7920-l40s`.
+
+Example `31976` endpoint projection:
+
+```json
+{
+  "kind": 31976,
+  "content": "{\"id\":\"...\",\"family\":\"service\",\"name\":\"api\",\"environment\":\"prod\",\"zone\":\"prod.cascadia\",\"fqdn\":\"api.prod.cascadia\",\"coordinate\":\"endpoint:service:api:prod\",\"protocol\":\"https\",\"address\":\"10.0.1.44\",\"port\":8443,\"runtime\":\"docker\",\"health\":\"healthy\",\"drift_status\":\"in_sync\",\"source\":\"service_state\",\"materialized_at\":\"2026-05-21T12:00:00Z\"}",
+  "tags": [
+    ["d", "endpoint:service:api:prod"],
+    ["deleted", "false"],
+    ["family", "service"],
+    ["environment", "prod"],
+    ["health", "healthy"],
+    ["runtime", "docker"],
+    ["dns", "api.prod.cascadia"],
+    ["addr", "10.0.1.44"],
+    ["proto", "https"],
+    ["port", "8443"],
+    ["t", "dns-endpoint"],
+    ["t", "bahia"]
+  ]
+}
+```
+
+If a previously published coordinate disappears from the projected snapshot, Bahia publishes a replacement tombstone with the same `d` tag, `deleted=true`, `t=dns-endpoint`, and `t=bahia`. Clients should query kind `31976`, wait for EOSE for historical catch-up, then keep the subscription open for realtime changes.
+
+### Reserved DNS Kinds
+
+The following DNS allocations are reserved for future phases and are not accepted by the Phase 0 reactor: request kinds `5941`–`5945`, status kind `6941`, result kinds `7941`–`7945`, read-model kinds `31975`, `31977`, `31978`, and audit kinds `31020`–`31024`. Phase 0 actively publishes only `31976`.
+
 ## Hive-CI Integration Events
 
 Bahia subscribes to [Hive-CI](../hive-ci-protocol/SPECIFICATION.md) events to auto-ingest CI workflow results.
@@ -265,8 +300,11 @@ Received from the ephemeral key declared in the 5401 event:
 | 5401 | Workflow Run | Subscribe | Receive CI workflow start (Hive-CI) |
 | 5402 | Workflow Result | Subscribe | Receive CI workflow result (Hive-CI) |
 | 31000–31019 | Bahia Audit Events | **Publish** | Emit build, deploy, drift, and LLM lifecycle events |
+| 31020–31024 | DNS Audit Events | Reserved | Allocated for future DNS audit publication; not emitted in Phase 0 |
 | 31964 | LLM Route Registry | **Publish** | Replaceable LLM route registry read model |
 | 31965 | LLM Route State | **Publish** | Replaceable LLM route/environment state read model |
+| 31976 | DNS Endpoint State | **Publish** | Replaceable DNS endpoint catalog when DNS is enabled |
+| 5941–5945 / 6941 / 7941–7945 | DNS Operator Commands | Reserved | Allocated but not subscribed to or emitted by the Phase 0 reactor |
 | 5971–5975 | LLM Requests | Subscribe | Consume authorized LLM control-plane commands |
 | 6973 | LLM Deployment Status | **Publish** | Emit LLM deployment/rollback progress |
 | 7971–7973 | LLM Results | **Publish** | Emit LLM route/release/deployment terminal results |
