@@ -1,7 +1,7 @@
 {
   "feature_id": "BACKUP_CONTROL_PLANE_ORCHESTRATION",
   "title": "Backup control-plane orchestration and provenance",
-  "status": "first_kopia_backup_run_slice_verified",
+  "status": "restore_retention_integration_verified",
   "source_evidence": [
     {
       "type": "operator_intent",
@@ -9,7 +9,7 @@
     },
     {
       "type": "repository_observation",
-      "summary": "Existing Bahia control-plane patterns use Nostr command/result events and replaceable read models. The first Kopia-backed backup-run slice now uses those patterns for kind 38400 intake, durable runs, status/result/attestation publication, and verification-aware read models."
+      "summary": "Bahia backup control-plane patterns now include kind 38400 backup-run intake plus restore request/approval kinds 38402/38403 and retention enforcement kind 38404 through the existing Nostr reactor validation, dedupe, authorization, EOSE, CLOSED, and AUTH path. Responders publish signed status/result events with per-relay summaries, and the projector emits BackupRestoreState 31998."
     },
     {
       "type": "repository_observation",
@@ -113,7 +113,7 @@
     "Implementing delta algorithms.",
     "Replacing Kopia, Restic, Velero, Borg, ZFS, Btrfs, LVM, Ceph, CSI, Longhorn, or Proxmox backup/snapshot capabilities.",
     "Polling relays or using timeout-based completion to detect backup or restore completion.",
-    "Restore workflow implementation in the first Kopia backup-run slice."
+    "Inventing a retention execution read-model kind; retention execution is surfaced via BackupObservation 6984 and BackupRetentionResult 38414."
   ],
   "preconditions": [
     "Operators configure relay, signer, and backend adapter credentials outside production code paths.",
@@ -124,7 +124,7 @@
   "postconditions": [
     "Every backup run has signed provenance describing initiator, target, backend, repository, artifact hashes or backend snapshot identifiers, verification status, and restore-test status when applicable.",
     "Every publish path verifies relay OK accepted flag and rejection message.",
-    "Every implemented backup run workflow is traceable from request through adapter execution, verification where required, and final result/attestation events. Restore workflow traceability remains future work outside the first Kopia backup-run slice.",
+    "Implemented backup, restore, and retention workflows are traceable from request through durable state, adapter execution, verification where required, signed status/result publication, and per-relay publish summaries.",
     "Remaining implementation gaps are tracked in Beads rather than TODOs or markdown-only lists."
   ],
   "happy_paths": [
@@ -158,10 +158,7 @@
     "Backend-specific CLIs or APIs for Kopia, Velero, and native snapshot systems",
     "Configuration/secrets management for repository credentials"
   ],
-  "ambiguities": [
-    "Restore approval UX and policy requirements remain unresolved for future restore workflow slices.",
-    "Retention execution, UI workflows, Velero, and native snapshot adapters remain outside the first Kopia backup-run slice."
-  ],
+  "ambiguities": [],
   "resolved_ambiguities": [
     {
       "question": "Which event namespace should backup command/result and replaceable read-model events use?",
@@ -177,10 +174,17 @@
       "question": "When is a first-slice backup run restore-eligible?",
       "decision": "Only a succeeded run with verification_status=succeeded is projected as restore_eligible=true. Snapshot creation with skipped, failed, unsupported, or pending verification remains restore_eligible=false.",
       "evidence": "domain.BackupRunRestoreEligible, backup registry/coordinator tests, and projector_backup_test.go verify the derived field."
+    },
+    {
+      "question": "How should the first restore workflow be sourced and approved?",
+      "decision": "Restore requests reference an authoritative backup_run_id, not a raw backend snapshot id. Approval is required unless policy metadata explicitly disables it; adapter execution is gated on approved/not_required durable state.",
+      "evidence": "internal/controlplane/backup_restore_handlers.go, internal/service/backup_registry_restore.go, internal/service/backup_restore_coordinator.go, and reactor_backup_requests_test.go verify pending approval prevents executor handoff and approval triggers execution."
+    },
+    {
+      "question": "How should retention execution state be exposed without a dedicated read-model allocation?",
+      "decision": "Retention progress uses BackupObservation kind 6984 and terminal BackupRetentionResult kind 38414. No retention execution read-model kind is invented; 31994 remains a retention registry/definition projection.",
+      "evidence": "internal/controlplane/backup_retention_handlers.go, internal/controlplane/backup_retention_responder.go, docs/control-planes.md, and targeted controlplane tests verify retention request handling and observation/result publication semantics."
     }
   ],
-  "human_decisions": [
-    "Approve restore workflow approval UX and policy requirements before implementing restore execution.",
-    "Approve retention execution, Velero, and native snapshot adapter scope in separate implementation slices."
-  ]
+  "human_decisions": []
 }

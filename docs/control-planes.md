@@ -88,6 +88,8 @@ The Nostr reactor subscribes to signed request events and publishes status, term
 | Backup attestations | 31310–31311 | Signed backup run and verification attestations |
 | Backup read models | 31991–31999 | Replaceable backup definition, policy, repository, run, verification, restore, and runtime observation read models |
 | Backup command/results | 38400–38419 | Addressable backup command and terminal result events |
+| DNS read models | 31976 | DNS endpoint catalog projection when `dns.enabled=true` |
+| DNS requests (reserved) | 5941–5945, 6941, 7941–7945 | Reserved DNS operator command/status/result kinds; not accepted by the reactor in Phase 0 |
 
 ### Request Events (596x)
 
@@ -119,6 +121,8 @@ The Nostr reactor subscribes to signed request events and publishes status, term
 | 5987 | `PolicyUpdate` | Update a deployment policy |
 | 5988 | `PolicyDelete` | Delete a deployment policy |
 | 5989 | `PolicyEvaluate` | Evaluate deployment policies |
+
+Reserved DNS operator request kinds `5941`–`5945` (`DNSZoneCreate`, `DNSPolicyApply`, `DNSRecordOverride`, `DNSDriftRemediate`, `DNSBackendRegister`) are allocated for future DNS orchestration phases. Phase 0 does not subscribe to or accept them in `internal/controlplane/reactor.go`; operators must not treat them as active commands until a later implementation wires request validation and status/result replies.
 
 ### Status and Result Events
 
@@ -158,6 +162,9 @@ The Nostr reactor subscribes to signed request events and publishes status, term
 | 31968 | `DeploymentRunRegistry` | `run_id` | Deployment run registry entry |
 | 31969 | `BuildRegistry` | `build_id` | Build registry entry |
 | 31970 | `PolicyRegistry` | `policy_id` | Policy registry entry |
+| 31976 | `DNSEndpointState` | `endpoint:<family>:<name>:<environment>` or `endpoint:worker:<name>` | DNS endpoint catalog projection derived from healthy service, LLM, ML, and worker state when `dns.enabled=true` |
+
+DNS endpoint read models are Bahia-signed replaceable events with `t=dns-endpoint` and `t=bahia`. Deletions are published as tombstone replacements with `deleted=true`; clients should bootstrap with kind `31976`, wait for EOSE, and keep the subscription open for realtime endpoint changes.
 
 ### Phase-1 AI/ML Event Namespace
 

@@ -1,6 +1,6 @@
 {
   "feature_id": "BACKUP_CONTROL_PLANE_ORCHESTRATION",
-  "status": "first_kopia_backup_run_slice_verified",
+  "status": "restore_retention_integration_verified",
   "criteria": [
     {
       "id": "AC-BACKUP-001",
@@ -60,12 +60,10 @@
     }
   ],
   "coverage_notes": [
-    "The U4-1 docs/protocol slice resolves the namespace ambiguity, and the JW-4/JW-5/JW-6 slice wires the first Kopia backup-run path into the Nostr reactor, responder, projector, and app composition.",
-    "The allocated namespace avoids the known collisions: 31200 remains artifact signature attestation, and 38395/38396 remain AI/ML terminal result kinds.",
-    "Command and result tag contracts require narrow filter tags including d, p where applicable, t/task, target, backend, repository, policy, recipe, run, worker, site, environment, and verification."
+    "The U4-1 docs/protocol slice resolves the namespace ambiguity; backup-run, restore, and retention slices now wire the relevant Nostr command/status/result/read-model contracts into reactor, responder, projector, and app composition.",
+    "Restore request and approval events 38402/38403 use the existing reactor validation/dedup/authorization/EOSE/CLOSED/AUTH path; required approval gates adapter execution and BackupRestoreState 31998 is projected.",
+    "Retention enforcement event 38404 uses backend-native adapters, publishes progress as BackupObservation 6984 and terminal BackupRetentionResult 38414, and intentionally does not add a retention execution read model.",
+    "The allocated namespace avoids the known collisions: 31200 remains artifact signature attestation, and 38395/38396 remain AI/ML terminal result kinds."
   ],
-  "unresolved_questions": [
-    "What restore approval UX and policy requirements should govern future restore workflow execution?",
-    "Which retention execution, Velero, and native snapshot adapter slices should follow the first Kopia backup-run slice?"
-  ]
+  "unresolved_questions": []
 }

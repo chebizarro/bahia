@@ -1,10 +1,14 @@
 {
   "feature_id": "BACKUP_CONTROL_PLANE_ORCHESTRATION",
-  "status": "first_kopia_backup_run_slice_verified",
+  "status": "restore_retention_integration_verified",
   "tests": [
     {
       "id": "T-BACKUP-001",
-      "criteria": ["AC-BACKUP-001", "AC-BACKUP-003", "AC-BACKUP-006"],
+      "criteria": [
+        "AC-BACKUP-001",
+        "AC-BACKUP-003",
+        "AC-BACKUP-006"
+      ],
       "type": "unit",
       "target": "internal/domain, internal/service, internal/adapters/backup",
       "description": "Validate that backup orchestration delegates snapshot and verification execution to the bounded BackupBackend/Kopia adapter contract and rejects unsupported or unconfigured backend operations without embedding storage-engine behavior in Bahia.",
@@ -18,21 +22,27 @@
     },
     {
       "id": "T-BACKUP-002",
-      "criteria": ["AC-BACKUP-002", "AC-BACKUP-004"],
+      "criteria": [
+        "AC-BACKUP-002",
+        "AC-BACKUP-004"
+      ],
       "type": "unit",
       "target": "internal/controlplane and internal/adapters/nostr",
       "description": "Inject signed Nostr backup run requests and publish outcomes to verify event-driven backup run processing, publish acceptance checks, rejection summary persistence, dedupe/idempotency, and no sleep-based completion logic.",
       "status": "passed",
       "evidence": [
-        "internal/controlplane/reactor_backup_requests_test.go validates backup run kind subscription under the default authorized author scope, idempotent durable run creation by requester/kind/d tag, and executor handoff without creating a second run for duplicate coordinates.",
+        "internal/controlplane/reactor_backup_requests_test.go validates backup run, restore request, restore approval, and retention request kinds are included in scoped default-author filters and dispatch through the existing reactor path.",
         "internal/controlplane/reactor_backup_requests_test.go validates BackupRunResponder result/status/attestation publication tags, signatures, restore_eligible=false payload, and persisted per-relay publish outcome summaries.",
         "internal/adapters/nostr/protocol_frames_test.go validates PublishResult classification for auth-required, rate-limited, blocked, duplicate, mixed accepted/rejected, duplicate-as-success, and zero-accepted aggregate failure.",
-        "Existing reactor Run path continues to use RelayPool.SubscribeAllWithEOSE, ValidateInboundEvent, EventDeduplicator, CLOSED handling, and AUTH retry; backup wiring only adds the 38400 dispatch case and kind to the scoped default filter."
+        "Existing reactor Run path continues to use RelayPool.SubscribeAllWithEOSE, ValidateInboundEvent, EventDeduplicator, CLOSED handling, and AUTH retry; backup wiring only adds the 38400 dispatch case and kind to the scoped default filter.",
+        "internal/controlplane/reactor_backup_requests_test.go validates restore request creation remains pending approval with no executor handoff until a signed approval event is processed, and validates retention request creation plus executor handoff."
       ]
     },
     {
       "id": "T-BACKUP-003",
-      "criteria": ["AC-BACKUP-005"],
+      "criteria": [
+        "AC-BACKUP-005"
+      ],
       "type": "unit",
       "target": "internal/service and internal/adapters/nostr",
       "description": "Assert that failed, skipped, unsupported, or missing verification is projected as unverified and is not eligible as a verified restore candidate.",
@@ -45,18 +55,26 @@
     },
     {
       "id": "T-BACKUP-004",
-      "criteria": ["AC-BACKUP-007"],
+      "criteria": [
+        "AC-BACKUP-007"
+      ],
       "type": "unit/integration",
-      "target": "future restore workflow tests",
+      "target": "internal/controlplane, internal/service, internal/adapters/backup",
       "description": "Inject restore request and approval/rejection events and verify adapter execution only occurs after required approval, with signed terminal restore result provenance.",
-      "status": "not_in_first_kopia_run_slice",
+      "status": "passed",
       "evidence": [
-        "Restore workflows are explicitly outside bahia-dgnt/JW-4/JW-5/JW-6 scope and are tracked separately in Beads before feature-wide completion."
+        "internal/controlplane/reactor_backup_requests_test.go injects signed BackupRestoreRequest and BackupRestoreApproval events and verifies adapter execution is not invoked while approval is pending and is invoked after approval.",
+        "internal/service/backup_registry_restore_test.go validates idempotent restore creation, restore-eligible source enforcement, approval/rejection state transitions, and fail-closed restore completion.",
+        "internal/service/backup_restore_coordinator_test.go validates approved restore execution, unsupported restore capability failure, cancellation/recovery, and verification-required failure paths.",
+        "internal/adapters/backup/kopia_backend_test.go and velero adapter tests validate real restore adapter command/API boundaries or explicit unsupported/configuration errors."
       ]
     },
     {
       "id": "T-BACKUP-005",
-      "criteria": ["AC-BACKUP-002", "AC-BACKUP-004"],
+      "criteria": [
+        "AC-BACKUP-002",
+        "AC-BACKUP-004"
+      ],
       "type": "integration",
       "target": "relay-sidecar/control-plane integration tests",
       "description": "Verify scoped subscriptions, EOSE historical catch-up, replay dedupe, CLOSED handling, AUTH-required failure/reauthentication, and partial relay OK outcomes across backup workflow events.",
@@ -64,12 +82,15 @@
       "evidence": [
         "internal/adapters/nostr/relay_pool_test.go validates merged subscription EOSE, CLOSED reason, and event forwarding behavior.",
         "internal/adapters/nostr/protocol_frames_test.go validates CLOSED/AUTH reason helpers and per-relay publish outcomes used by backup result/attestation publication.",
-        "internal/controlplane/reactor_backup_requests_test.go validates the backup run kind is included in scoped default-author filters and backup dispatch remains inside the existing reactor validation/dedup/auth/EOSE path."
+        "internal/controlplane/reactor_backup_requests_test.go validates the backup run kind is included in scoped default-author filters and backup dispatch remains inside the existing reactor validation/dedup/auth/EOSE path.",
+        "internal/controlplane/reactor_backup_requests_test.go validates 38402/38403/38404 are included in the scoped reactor filter, keeping restore/retention inside the existing EOSE/CLOSED/AUTH subscription machinery."
       ]
     },
     {
       "id": "T-BACKUP-006",
-      "criteria": ["AC-BACKUP-008"],
+      "criteria": [
+        "AC-BACKUP-008"
+      ],
       "type": "documentation/protocol validation",
       "target": "docs/control-planes.md and BACKUP_CONTROL_PLANE_ORCHESTRATION PSTF artifacts",
       "description": "Validate that the documented backup namespace is internally consistent, avoids known collisions with 31200 and 38395/38396, and includes command/result/read-model/status/attestation tag contracts.",
@@ -77,12 +98,20 @@
       "evidence": [
         "docs/control-planes.md documents backup commands 38400-38409, terminal results 38410-38419, status/observation kinds 6981-6984, read models 31991-31999, and attestations 31310-31311.",
         "internal/controlplane/backup_kinds.go and internal/adapters/nostr/backup_kinds.go consume the allocated namespace without reusing 31200 or 38395/38396.",
-        "Read-model d-tags for implemented mutable backup registries use immutable IDs to avoid stale live coordinates after renames."
+        "Read-model d-tags for implemented mutable backup registries use immutable IDs to avoid stale live coordinates after renames.",
+        "docs/control-planes.md documents that retention execution uses 6984/38414 and does not introduce a retention execution read-model kind; restore state uses 31998."
       ]
     },
     {
       "id": "T-BACKUP-007",
-      "criteria": ["AC-BACKUP-001", "AC-BACKUP-002", "AC-BACKUP-004", "AC-BACKUP-005", "AC-BACKUP-006", "AC-BACKUP-008"],
+      "criteria": [
+        "AC-BACKUP-001",
+        "AC-BACKUP-002",
+        "AC-BACKUP-004",
+        "AC-BACKUP-005",
+        "AC-BACKUP-006",
+        "AC-BACKUP-008"
+      ],
       "type": "package/full-suite",
       "target": "go test ./...",
       "description": "Run the full Go test suite after wiring reactor, responder, projector, app composition, and PSTF evidence.",
@@ -90,21 +119,47 @@
       "evidence": [
         "2026-05-21: go test ./... passed across cmd, internal, pkg, and test/integration packages."
       ]
+    },
+    {
+      "id": "T-BACKUP-008",
+      "criteria": [
+        "AC-BACKUP-001",
+        "AC-BACKUP-002",
+        "AC-BACKUP-006",
+        "AC-BACKUP-008"
+      ],
+      "type": "unit/integration",
+      "target": "internal/controlplane, internal/service, internal/adapters/backup, internal/app",
+      "description": "Verify retention is backend-native, Nostr-native, emits BackupObservation progress plus BackupRetentionResult terminal outcome, and does not introduce a retention execution read model.",
+      "status": "passed",
+      "evidence": [
+        "internal/controlplane/reactor_backup_requests_test.go injects a signed BackupRetentionEnforceRequest and verifies durable run creation, dry_run preservation, and executor handoff.",
+        "internal/controlplane/backup_retention_responder.go publishes progress as BackupObservation 6984 and terminal outcomes as BackupRetentionResult 38414 with per-relay PublishWithResults summaries persisted to durable state.",
+        "internal/service/backup_registry_retention_test.go and backup_retention_coordinator_test.go validate backend-native policy metadata requirements, unsupported capability/configuration failures, dry-run propagation, cancellation/recovery, and terminal evidence persistence.",
+        "internal/app/app.go wires retention coordinator/responder/background runner; docs/control-planes.md records no retention execution read-model kind."
+      ]
     }
   ],
   "coverage_summary": {
     "criteria_total": 8,
     "criteria_with_tests": 8,
-    "first_kopia_run_slice_criteria_verified": ["AC-BACKUP-001", "AC-BACKUP-002", "AC-BACKUP-003", "AC-BACKUP-004", "AC-BACKUP-005", "AC-BACKUP-006", "AC-BACKUP-008"],
-    "known_gaps": [
-      "AC-BACKUP-007 restore request/approval/result workflows are outside the first Kopia backup-run slice and are tracked in Beads.",
-      "Retention execution, UI flows, Velero, and native snapshot adapters remain outside this slice and require separate Beads issues before feature-wide completion."
-    ]
+    "verified_criteria": [
+      "AC-BACKUP-001",
+      "AC-BACKUP-002",
+      "AC-BACKUP-003",
+      "AC-BACKUP-004",
+      "AC-BACKUP-005",
+      "AC-BACKUP-006",
+      "AC-BACKUP-007",
+      "AC-BACKUP-008"
+    ],
+    "known_gaps": []
   },
   "implementation_notes": [
-    "Implemented first-slice request handling consumes BackupRunRequest kind 38400 and publishes BackupRunStatus 6981, BackupRunResult 38410, BackupRunAttestation 31310, and BackupVerificationAttestation 31311 when verification runs.",
-    "Kopia is the first production backend slice; Bahia delegates snapshot and verification execution to the real Kopia CLI adapter or explicit configuration/unsupported errors.",
-    "No filesystem_mock or fake backup backend is used in production backup paths; deterministic test doubles remain in _test.go files.",
-    "BackupRunState restore_eligible is true only when the run succeeded and verification_status is succeeded."
+    "BackupRunRequest 38400, BackupRestoreRequest 38402, BackupRestoreApproval 38403, and BackupRetentionEnforceRequest 38404 are handled through the existing reactor subscription/validation/dedup/authorization/EOSE/CLOSED/AUTH path.",
+    "Restore responders publish BackupRestoreStatus 6982, BackupRestoreApprovalResult 38413, and BackupRestoreResult 38412 with per-relay publish summaries persisted to restore records.",
+    "Retention responders publish BackupObservation 6984 for progress and BackupRetentionResult 38414 for terminal outcome with per-relay publish summaries persisted to retention records; no retention execution read model is introduced.",
+    "Projector publishes BackupRestoreState 31998 and does not project a retention execution state.",
+    "No filesystem_mock or fake backup backend is used in production backup paths; deterministic test doubles remain in _test.go files."
   ]
 }

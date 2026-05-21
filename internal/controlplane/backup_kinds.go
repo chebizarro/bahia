@@ -34,5 +34,5 @@ const (
 )
 
 func backupRequestKinds() []int {
-	return []int{KindBackupRunRequest}
+	return []int{KindBackupRunRequest, KindBackupRestoreRequest, KindBackupRestoreApproval, KindBackupRetentionEnforce}
 }

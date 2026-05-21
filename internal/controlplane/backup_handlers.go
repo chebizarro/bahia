@@ -119,16 +119,20 @@ func (r *Reactor) handleBackupRunRequest(ctx context.Context, event *nostr.Event
 }
 
 func (r *Reactor) authorizeBackupRequest(ctx context.Context, event *nostr.Event, step string) bool {
+	return r.authorizeBackupCommandRequest(ctx, event, step, KindBackupRunResult)
+}
+
+func (r *Reactor) authorizeBackupCommandRequest(ctx context.Context, event *nostr.Event, step string, resultKind int) bool {
 	if !r.isAuthorized(event.PubKey) {
-		_ = r.publishBackupRequestFailure(ctx, event, "rejected", "unauthorized", "requester not in authorized list")
+		_ = r.publishBackupCommandFailure(ctx, event, resultKind, "rejected", "unauthorized", "requester not in authorized list")
 		return false
 	}
 	if tagValueNostr(event.Tags, "d") == "" {
-		_ = r.publishBackupRequestFailure(ctx, event, "failed", "validation_error", "d tag is required for addressable backup command events")
+		_ = r.publishBackupCommandFailure(ctx, event, resultKind, "failed", "validation_error", "d tag is required for addressable backup command events")
 		return false
 	}
 	if r.backupRegistry == nil {
-		_ = r.publishBackupRequestFailure(ctx, event, "failed", step+"_unavailable", "backup registry is not configured")
+		_ = r.publishBackupCommandFailure(ctx, event, resultKind, "failed", step+"_unavailable", "backup registry is not configured")
 		return false
 	}
 	return true
@@ -244,6 +248,10 @@ func backupRunTerminal(run *domain.BackupRun) bool {
 }
 
 func (r *Reactor) publishBackupRequestFailure(ctx context.Context, requestEvent *nostr.Event, status, code, message string) error {
+	return r.publishBackupCommandFailure(ctx, requestEvent, KindBackupRunResult, status, code, message)
+}
+
+func (r *Reactor) publishBackupCommandFailure(ctx context.Context, requestEvent *nostr.Event, resultKind int, status, code, message string) error {
 	content := map[string]any{"request_event_id": requestEvent.ID, "status": status, "message": message}
 	if status == "failed" || status == "rejected" {
 		content["error"] = map[string]any{"code": code, "message": message}
@@ -251,7 +259,7 @@ func (r *Reactor) publishBackupRequestFailure(ctx context.Context, requestEvent 
 	body, _ := json.Marshal(content)
 	tags := nostr.Tags{{"d", "result:" + requestEvent.ID}, {"e", requestEvent.ID, "", "reply"}, {"p", requestEvent.PubKey}, {"status", status}, {"result", code}}
 	tags = appendBackupRequestTags(tags, requestEvent)
-	event := &nostr.Event{Kind: KindBackupRunResult, CreatedAt: nostr.Now(), Tags: dedupeTags(tags), Content: string(body)}
+	event := &nostr.Event{Kind: resultKind, CreatedAt: nostr.Now(), Tags: dedupeTags(tags), Content: string(body)}
 	if err := r.signEvent(ctx, event); err != nil {
 		return fmt.Errorf("sign backup result: %w", err)
 	}
@@ -260,7 +268,7 @@ func (r *Reactor) publishBackupRequestFailure(ctx context.Context, requestEvent 
 }
 
 func appendBackupRequestTags(tags nostr.Tags, requestEvent *nostr.Event) nostr.Tags {
-	allowed := map[string]struct{}{"recipe": {}, "recipe_id": {}, "run": {}, "policy": {}, "repository": {}, "repository_id": {}, "target": {}, "backend": {}, "site": {}, "environment": {}, "worker": {}, "verification": {}}
+	allowed := map[string]struct{}{"recipe": {}, "recipe_id": {}, "run": {}, "backup_run_id": {}, "restore": {}, "restore_id": {}, "policy": {}, "policy_id": {}, "repository": {}, "repository_id": {}, "target": {}, "backend": {}, "site": {}, "environment": {}, "worker": {}, "verification": {}, "decision": {}}
 	for _, tag := range requestEvent.Tags {
 		if len(tag) < 2 {
 			continue

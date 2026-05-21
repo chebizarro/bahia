@@ -151,21 +151,25 @@ type Reactor struct {
 	backoff     *nostrpool.Backoff
 	caughtUp    atomic.Bool
 
-	toolProvisioning      repository.ToolProvisioningRepository
-	toolResponder         *ToolResponder
-	toolCoordinator       *service.ToolProvisioningCoordinator
-	policyService         *service.PolicyService
-	adoption              AdoptionOperatorService
-	runtimeLifecycle      RuntimeLifecycleOperatorService
-	packageService        *service.PackageRegistryService
-	packageProjection     repository.PackageControlPlaneRepository
-	mlExecutor            MLInferenceControlPlaneExecutor
-	mlRecipeExecutor      MLRecipeControlPlaneExecutor
-	nostrEvents           repository.NostrEventRepository
-	assistantOrchestrator *service.AssistantOrchestrator
-	backupRegistry        backupRunRegistry
-	backupExecutor        BackupRunControlPlaneExecutor
-	backupResponder       service.BackupRunResponder
+	toolProvisioning         repository.ToolProvisioningRepository
+	toolResponder            *ToolResponder
+	toolCoordinator          *service.ToolProvisioningCoordinator
+	policyService            *service.PolicyService
+	adoption                 AdoptionOperatorService
+	runtimeLifecycle         RuntimeLifecycleOperatorService
+	packageService           *service.PackageRegistryService
+	packageProjection        repository.PackageControlPlaneRepository
+	mlExecutor               MLInferenceControlPlaneExecutor
+	mlRecipeExecutor         MLRecipeControlPlaneExecutor
+	nostrEvents              repository.NostrEventRepository
+	assistantOrchestrator    *service.AssistantOrchestrator
+	backupRegistry           backupRunRegistry
+	backupExecutor           BackupRunControlPlaneExecutor
+	backupResponder          service.BackupRunResponder
+	backupRestoreExecutor    BackupRestoreControlPlaneExecutor
+	backupRestoreResponder   service.BackupRestoreResponder
+	backupRetentionExecutor  BackupRetentionControlPlaneExecutor
+	backupRetentionResponder service.BackupRetentionResponder
 
 	mu   sync.Mutex
 	runs map[string]*DeploymentRun // requestEventID -> run
@@ -229,6 +233,22 @@ func WithBackupRunExecutor(executor BackupRunControlPlaneExecutor) ReactorOption
 
 func WithBackupRunResponder(responder service.BackupRunResponder) ReactorOption {
 	return func(r *Reactor) { r.backupResponder = responder }
+}
+
+func WithBackupRestoreExecutor(executor BackupRestoreControlPlaneExecutor) ReactorOption {
+	return func(r *Reactor) { r.backupRestoreExecutor = executor }
+}
+
+func WithBackupRestoreResponder(responder service.BackupRestoreResponder) ReactorOption {
+	return func(r *Reactor) { r.backupRestoreResponder = responder }
+}
+
+func WithBackupRetentionExecutor(executor BackupRetentionControlPlaneExecutor) ReactorOption {
+	return func(r *Reactor) { r.backupRetentionExecutor = executor }
+}
+
+func WithBackupRetentionResponder(responder service.BackupRetentionResponder) ReactorOption {
+	return func(r *Reactor) { r.backupRetentionResponder = responder }
 }
 
 func WithToolProvisioningRepository(repo repository.ToolProvisioningRepository) ReactorOption {
@@ -518,6 +538,12 @@ func (r *Reactor) handleEvent(ctx context.Context, event *nostr.Event) {
 		go r.handleMLModelImportRequest(ctx, event)
 	case KindBackupRunRequest:
 		go r.handleBackupRunRequest(ctx, event)
+	case KindBackupRestoreRequest:
+		go r.handleBackupRestoreRequest(ctx, event)
+	case KindBackupRestoreApproval:
+		go r.handleBackupRestoreApproval(ctx, event)
+	case KindBackupRetentionEnforce:
+		go r.handleBackupRetentionRequest(ctx, event)
 	case KindPackageRepositoryApply:
 		go r.handlePackageRepositoryApply(ctx, event)
 	case KindPackageRepositoryDelete:
@@ -1743,6 +1769,9 @@ func defaultRequestSubscriptionKinds() []int {
 		KindMLInferenceRollbackRequest,
 		KindMLModelImportRequest,
 		KindBackupRunRequest,
+		KindBackupRestoreRequest,
+		KindBackupRestoreApproval,
+		KindBackupRetentionEnforce,
 		KindPackageRepositoryApply,
 		KindPackageRepositoryDelete,
 		KindPackagePublishIntent,
