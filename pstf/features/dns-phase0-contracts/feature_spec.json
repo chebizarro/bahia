@@ -1,0 +1,17 @@
+{
+  "feature_id": "dns-phase0-contracts",
+  "title": "DNS Phase 0 contracts, kinds, and config",
+  "status": "in_progress",
+  "intent": "Freeze the foundational DNS domain contracts, kind allocations, and disabled-by-default configuration schema used by subsequent DNS work items.",
+  "scope": [
+    "DNS domain enums, types, deterministic endpoint coordinates, and validators",
+    "Reserved DNS control-plane kind constants without reactor wiring",
+    "Nostr DNS read-model and reserved audit kind constants",
+    "DNS config defaults and validation gated by dns.enabled"
+  ],
+  "out_of_scope": [
+    "reactor.go subscription or handler changes",
+    "repository interfaces or database migrations",
+    "DNS backends, projectors, reconcilers, or app wiring"
+  ]
+}

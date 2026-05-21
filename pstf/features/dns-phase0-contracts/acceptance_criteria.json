@@ -1,0 +1,25 @@
+{
+  "feature_id": "dns-phase0-contracts",
+  "criteria": [
+    {
+      "id": "AC1",
+      "description": "DNS domain enums expose IsValid methods and validators reject invalid endpoints and zones."
+    },
+    {
+      "id": "AC2",
+      "description": "DNSEndpoint DTag coordinates and deterministic UUID v5 IDs are stable for all endpoint families."
+    },
+    {
+      "id": "AC3",
+      "description": "DNS control-plane request/status/result kinds and Nostr read-model/audit constants are reserved without reactor wiring."
+    },
+    {
+      "id": "AC4",
+      "description": "DNS config defaults to disabled and enabled validation rejects invalid TTL, intervals, zones, backends, and projection zone mappings."
+    },
+    {
+      "id": "AC5",
+      "description": "With DNS disabled, DNS-specific config validation does not reject otherwise invalid DNS blocks."
+    }
+  ]
+}

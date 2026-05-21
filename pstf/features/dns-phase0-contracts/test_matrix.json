@@ -1,0 +1,25 @@
+{
+  "feature_id": "dns-phase0-contracts",
+  "tests": [
+    {
+      "criteria": ["AC1", "AC2"],
+      "command": "go test ./internal/domain/...",
+      "evidence": "passed on 2026-05-21"
+    },
+    {
+      "criteria": ["AC3"],
+      "command": "go test ./internal/controlplane/... ./internal/adapters/nostr/...",
+      "evidence": "passed on 2026-05-21"
+    },
+    {
+      "criteria": ["AC4", "AC5"],
+      "command": "go test ./internal/config/...",
+      "evidence": "passed on 2026-05-21"
+    },
+    {
+      "criteria": ["AC1", "AC2", "AC3", "AC4", "AC5"],
+      "command": "go build ./...",
+      "evidence": "passed on 2026-05-21"
+    }
+  ]
+}

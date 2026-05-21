@@ -36,6 +36,13 @@ const (
 	KindLLMRunAudit               = 31017
 	KindLLMRouteStateAudit        = 31018
 	KindLLMGatewayAudit           = 31019
+
+	// DNS audit event kinds are reserved for future DNS audit events.
+	KindDNSZoneSyncedAudit           = 31020
+	KindDNSRecordChangedAudit        = 31021
+	KindDNSDriftDetectedAudit        = 31022
+	KindDNSEndpointRegisteredAudit   = 31023
+	KindDNSEndpointDeregisteredAudit = 31024
 )
 
 // Canonical replaceable read-model kinds (3196x). Keep these values aligned
@@ -56,6 +63,11 @@ const (
 	KindPackageArtifactRegistry   = 31972
 	KindPackagePromotionRegistry  = 31973
 	KindSystemDiscovery           = 31974
+
+	KindDNSZoneState     = 31975
+	KindDNSEndpointState = 31976
+	KindDNSPolicyState   = 31977
+	KindDNSBackendState  = 31978
 
 	KindMLModelRegistry             = 31980
 	KindMLModelVersionRegistry      = 31981

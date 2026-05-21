@@ -987,3 +987,133 @@ func TestRuntimeEndpointValidationRequiresKnownRefsAndCompleteTLS(t *testing.T) 
 		t.Fatalf("valid endpoint refs and TLS pair should validate: %v", err)
 	}
 }
+
+func TestDNSDefaults(t *testing.T) {
+	cfg := Defaults()
+	if cfg.DNS.Enabled {
+		t.Fatal("expected DNS disabled by default")
+	}
+	if cfg.DNS.DefaultTTL != 300 {
+		t.Fatalf("DNS DefaultTTL = %d, want 300", cfg.DNS.DefaultTTL)
+	}
+	if cfg.DNS.ReconcileInterval != 30*time.Second {
+		t.Fatalf("DNS ReconcileInterval = %s, want 30s", cfg.DNS.ReconcileInterval)
+	}
+	if !cfg.DNS.Projection.Services || !cfg.DNS.Projection.LLMRoutes || !cfg.DNS.Projection.MLEndpoints || !cfg.DNS.Projection.Workers {
+		t.Fatal("expected all DNS projection sources enabled by default")
+	}
+}
+
+func TestDNSValidationDisabledSkipsDNSRules(t *testing.T) {
+	cfg := Defaults()
+	cfg.DNS.Enabled = false
+	cfg.DNS.DefaultTTL = 0
+	cfg.DNS.ReconcileInterval = 0
+	cfg.DNS.Zones = []DNSZoneConfig{{Name: "prod.cascadia", Visibility: "invalid", Backend: "missing"}}
+	if err := cfg.validate(); err != nil {
+		t.Fatalf("DNS disabled should skip DNS validation, got %v", err)
+	}
+}
+
+func TestDNSValidationEnabled(t *testing.T) {
+	validDNSConfig := func() *Config {
+		cfg := Defaults()
+		cfg.DNS.Enabled = true
+		cfg.DNS.Backends = map[string]DNSBackendConfig{
+			"fs": {Type: "filesystem", RootDir: t.TempDir()},
+		}
+		cfg.DNS.Zones = []DNSZoneConfig{
+			{Name: "prod.cascadia", Visibility: "internal", Backend: "fs", TTL: 300},
+			{Name: "edge.cascadia", Visibility: "edge", Backend: "fs", TTL: 60},
+		}
+		cfg.DNS.Projection.EnvironmentZones = map[string]string{"prod": "prod.cascadia"}
+		cfg.DNS.Projection.WorkerZone = "edge.cascadia"
+		return cfg
+	}
+
+	t.Run("valid", func(t *testing.T) {
+		if err := validDNSConfig().validate(); err != nil {
+			t.Fatalf("valid DNS config rejected: %v", err)
+		}
+	})
+
+	t.Run("default ttl required", func(t *testing.T) {
+		cfg := validDNSConfig()
+		cfg.DNS.DefaultTTL = 0
+		if err := cfg.validate(); err == nil || !strings.Contains(err.Error(), "dns.default_ttl") {
+			t.Fatalf("expected dns.default_ttl error, got %v", err)
+		}
+	})
+
+	t.Run("reconcile interval required", func(t *testing.T) {
+		cfg := validDNSConfig()
+		cfg.DNS.ReconcileInterval = 0
+		if err := cfg.validate(); err == nil || !strings.Contains(err.Error(), "dns.reconcile_interval") {
+			t.Fatalf("expected dns.reconcile_interval error, got %v", err)
+		}
+	})
+
+	t.Run("duplicate zone names", func(t *testing.T) {
+		cfg := validDNSConfig()
+		cfg.DNS.Zones[1].Name = "prod.cascadia"
+		if err := cfg.validate(); err == nil || !strings.Contains(err.Error(), "duplicated") {
+			t.Fatalf("expected duplicated zone error, got %v", err)
+		}
+	})
+
+	t.Run("invalid visibility", func(t *testing.T) {
+		cfg := validDNSConfig()
+		cfg.DNS.Zones[0].Visibility = "private"
+		if err := cfg.validate(); err == nil || !strings.Contains(err.Error(), "visibility") {
+			t.Fatalf("expected visibility error, got %v", err)
+		}
+	})
+
+	t.Run("zone backend must exist", func(t *testing.T) {
+		cfg := validDNSConfig()
+		cfg.DNS.Zones[0].Backend = "missing"
+		if err := cfg.validate(); err == nil || !strings.Contains(err.Error(), "not configured") {
+			t.Fatalf("expected missing backend error, got %v", err)
+		}
+	})
+
+	t.Run("filesystem requires root dir", func(t *testing.T) {
+		cfg := validDNSConfig()
+		cfg.DNS.Backends["fs"] = DNSBackendConfig{Type: "filesystem"}
+		if err := cfg.validate(); err == nil || !strings.Contains(err.Error(), "root_dir") {
+			t.Fatalf("expected root_dir error, got %v", err)
+		}
+	})
+
+	t.Run("unsupported backend type", func(t *testing.T) {
+		cfg := validDNSConfig()
+		cfg.DNS.Backends["fs"] = DNSBackendConfig{Type: "coredns", RootDir: t.TempDir()}
+		if err := cfg.validate(); err == nil || !strings.Contains(err.Error(), "unsupported") {
+			t.Fatalf("expected unsupported backend error, got %v", err)
+		}
+	})
+
+	t.Run("environment zones required", func(t *testing.T) {
+		cfg := validDNSConfig()
+		cfg.DNS.Projection.EnvironmentZones = map[string]string{}
+		if err := cfg.validate(); err == nil || !strings.Contains(err.Error(), "environment_zones") {
+			t.Fatalf("expected environment_zones error, got %v", err)
+		}
+	})
+
+	t.Run("environment zones reference configured zones", func(t *testing.T) {
+		cfg := validDNSConfig()
+		cfg.DNS.Projection.EnvironmentZones = map[string]string{"prod": "missing.cascadia"}
+		if err := cfg.validate(); err == nil || !strings.Contains(err.Error(), "unknown zone") {
+			t.Fatalf("expected unknown zone error, got %v", err)
+		}
+	})
+
+	t.Run("worker zone required", func(t *testing.T) {
+		cfg := validDNSConfig()
+		cfg.DNS.Projection.WorkerZone = ""
+		if err := cfg.validate(); err == nil || !strings.Contains(err.Error(), "worker_zone") {
+			t.Fatalf("expected worker_zone error, got %v", err)
+		}
+	})
+}

@@ -39,6 +39,41 @@ type Config struct {
 	LLM           LLMControlplaneConfig     `koanf:"llm"`
 	Packages      PackageControlplaneConfig `koanf:"packages"`
 	Assistant     AssistantConfig           `koanf:"assistant"`
+	DNS           DNSConfig                 `koanf:"dns"`
+}
+
+// DNSConfig controls DNS orchestration projection and backend settings.
+type DNSConfig struct {
+	Enabled           bool                        `koanf:"enabled"`
+	DefaultTTL        int                         `koanf:"default_ttl"`
+	ReconcileInterval time.Duration               `koanf:"reconcile_interval"`
+	Zones             []DNSZoneConfig             `koanf:"zones"`
+	Backends          map[string]DNSBackendConfig `koanf:"backends"`
+	Projection        DNSProjectionConfig         `koanf:"projection"`
+}
+
+// DNSZoneConfig binds a managed DNS zone to a configured backend.
+type DNSZoneConfig struct {
+	Name       string `koanf:"name"`
+	Visibility string `koanf:"visibility"`
+	Backend    string `koanf:"backend"`
+	TTL        int    `koanf:"ttl"`
+}
+
+// DNSBackendConfig describes one DNS backend connector.
+type DNSBackendConfig struct {
+	Type    string `koanf:"type"`
+	RootDir string `koanf:"root_dir"`
+}
+
+// DNSProjectionConfig selects source state for DNS endpoint projection.
+type DNSProjectionConfig struct {
+	Services         bool              `koanf:"services"`
+	LLMRoutes        bool              `koanf:"llm_routes"`
+	MLEndpoints      bool              `koanf:"ml_endpoints"`
+	Workers          bool              `koanf:"workers"`
+	EnvironmentZones map[string]string `koanf:"environment_zones"`
+	WorkerZone       string            `koanf:"worker_zone"`
 }
 
 // AssistantConfig controls the operator assistant backend orchestration path.
@@ -443,6 +478,20 @@ func Defaults() *Config {
 			Enabled:    false,
 			LLMBaseURL: "https://api.openai.com",
 		},
+		DNS: DNSConfig{
+			Enabled:           false,
+			DefaultTTL:        300,
+			ReconcileInterval: 30 * time.Second,
+			Zones:             []DNSZoneConfig{},
+			Backends:          map[string]DNSBackendConfig{},
+			Projection: DNSProjectionConfig{
+				Services:         true,
+				LLMRoutes:        true,
+				MLEndpoints:      true,
+				Workers:          true,
+				EnvironmentZones: map[string]string{},
+			},
+		},
 		Packages: PackageControlplaneConfig{
 			Enabled:            false,
 			AllowedSourceHosts: []string{},
@@ -676,6 +725,9 @@ func (c *Config) validate() error {
 		return err
 	}
 	if err := c.validatePackages(); err != nil {
+		return err
+	}
+	if err := c.validateDNS(); err != nil {
 		return err
 	}
 	if err := c.validateRelaySidecar(); err != nil {
@@ -934,6 +986,91 @@ func (c *Config) validatePackages() error {
 			}
 		}
 		c.Packages.Backends[ref] = backend
+	}
+	return nil
+}
+
+func (c *Config) validateDNS() error {
+	if c.DNS.Backends == nil {
+		c.DNS.Backends = map[string]DNSBackendConfig{}
+	}
+	if c.DNS.Projection.EnvironmentZones == nil {
+		c.DNS.Projection.EnvironmentZones = map[string]string{}
+	}
+	if !c.DNS.Enabled {
+		return nil
+	}
+	if c.DNS.DefaultTTL <= 0 {
+		return fmt.Errorf("config validation failed: dns.default_ttl must be > 0 when dns.enabled=true")
+	}
+	if c.DNS.ReconcileInterval <= 0 {
+		return fmt.Errorf("config validation failed: dns.reconcile_interval must be > 0 when dns.enabled=true")
+	}
+	zoneNames := make(map[string]struct{}, len(c.DNS.Zones))
+	for i, zone := range c.DNS.Zones {
+		name := strings.TrimSpace(zone.Name)
+		if name == "" {
+			return fmt.Errorf("config validation failed: dns.zones[%d].name is required when dns.enabled=true", i)
+		}
+		if _, exists := zoneNames[name]; exists {
+			return fmt.Errorf("config validation failed: dns.zones[%d].name %q is duplicated", i, name)
+		}
+		zoneNames[name] = struct{}{}
+		visibility := strings.TrimSpace(zone.Visibility)
+		switch visibility {
+		case "internal", "external", "edge":
+		default:
+			return fmt.Errorf("config validation failed: dns.zones[%d].visibility %q is unsupported", i, zone.Visibility)
+		}
+		backend := strings.TrimSpace(zone.Backend)
+		if backend == "" {
+			return fmt.Errorf("config validation failed: dns.zones[%d].backend is required when dns.enabled=true", i)
+		}
+		if _, ok := c.DNS.Backends[backend]; !ok {
+			return fmt.Errorf("config validation failed: dns.zones[%d].backend %q is not configured", i, backend)
+		}
+		if zone.TTL < 0 {
+			return fmt.Errorf("config validation failed: dns.zones[%d].ttl must not be negative", i)
+		}
+	}
+	for ref, backend := range c.DNS.Backends {
+		name := strings.TrimSpace(ref)
+		if name == "" {
+			return fmt.Errorf("config validation failed: dns backend names must not be empty")
+		}
+		backendType := strings.TrimSpace(backend.Type)
+		switch backendType {
+		case "filesystem":
+			if strings.TrimSpace(backend.RootDir) == "" {
+				return fmt.Errorf("config validation failed: dns.backends.%s.root_dir is required for filesystem", name)
+			}
+		default:
+			return fmt.Errorf("config validation failed: dns.backends.%s.type %q is unsupported", name, backend.Type)
+		}
+	}
+	if c.DNS.Projection.Services || c.DNS.Projection.LLMRoutes || c.DNS.Projection.MLEndpoints {
+		if len(c.DNS.Projection.EnvironmentZones) == 0 {
+			return fmt.Errorf("config validation failed: dns.projection.environment_zones is required when environment projection sources are enabled")
+		}
+	}
+	for env, zone := range c.DNS.Projection.EnvironmentZones {
+		envName := strings.TrimSpace(env)
+		zoneName := strings.TrimSpace(zone)
+		if envName == "" || zoneName == "" {
+			return fmt.Errorf("config validation failed: dns.projection.environment_zones must have non-empty environment and zone names")
+		}
+		if _, ok := zoneNames[zoneName]; !ok {
+			return fmt.Errorf("config validation failed: dns.projection.environment_zones.%s references unknown zone %q", envName, zoneName)
+		}
+	}
+	if c.DNS.Projection.Workers {
+		workerZone := strings.TrimSpace(c.DNS.Projection.WorkerZone)
+		if workerZone == "" {
+			return fmt.Errorf("config validation failed: dns.projection.worker_zone is required when dns.projection.workers=true")
+		}
+		if _, ok := zoneNames[workerZone]; !ok {
+			return fmt.Errorf("config validation failed: dns.projection.worker_zone %q references unknown zone", workerZone)
+		}
 	}
 	return nil
 }
