@@ -1,0 +1,12 @@
+{
+  "criteria": [
+    {"id": "AC1", "statement": "Healthy and in-sync service deployments with observed hosts are included as DNS endpoints and records."},
+    {"id": "AC2", "statement": "Drifted, unhealthy, offline, unsynced, or malformed inputs are excluded from projection."},
+    {"id": "AC3", "statement": "LLM routes project only when gateway status is synced and backend health is healthy."},
+    {"id": "AC4", "statement": "ML endpoints project only when backend health is healthy."},
+    {"id": "AC5", "statement": "Workers project only when online and RuntimeTarget.PublicBaseURL is present."},
+    {"id": "AC6", "statement": "Record type derivation maps IPv4 to A, IPv6 to AAAA, and hostnames to CNAME."},
+    {"id": "AC7", "statement": "Endpoint ordering and IDs are deterministic, and duplicate coordinates fail the snapshot."},
+    {"id": "AC8", "statement": "DNS reconciler no-ops when actual and projected snapshots match and syncs when they differ."}
+  ]
+}

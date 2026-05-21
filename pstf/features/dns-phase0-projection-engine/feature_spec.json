@@ -1,0 +1,21 @@
+{
+  "feature_id": "dns-phase0-projection-engine",
+  "title": "DNS Phase 0 projection engine and observation-mode reconciler",
+  "beads_issue": "bahia-io9w",
+  "intended_behavior": [
+    "Derive DNS endpoints statelessly from healthy/in-sync service state, LLM route state, ML inference state, and online workers.",
+    "Project one A, AAAA, or CNAME record per endpoint using configured environment and worker zone mappings.",
+    "Detect duplicate endpoint coordinates and fail the projection snapshot.",
+    "Reconcile projected zone snapshots to configured DNS backends without publishing DNS events in Phase 0."
+  ],
+  "observed_repository_context": [
+    "DNS domain and config contracts are present from WI-1.",
+    "LLMRouteReconciler provides the periodic Run/ReconcileOnce pattern followed by DNSReconciler.",
+    "Existing ServiceRepository, EnvironmentRepository, EnvironmentServiceStateRepository, and RuntimeObservationRepository provide service projection inputs."
+  ],
+  "out_of_scope": [
+    "DNS backend adapter implementations from WI-2.",
+    "Application wiring and Nostr endpoint publication from WI-4.",
+    "SRV, TXT, weighted, capability alias, and DNS policy projection."
+  ]
+}

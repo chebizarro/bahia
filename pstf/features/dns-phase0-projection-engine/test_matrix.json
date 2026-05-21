@@ -1,0 +1,8 @@
+{
+  "tests": [
+    {"name": "TestDNSProjectorProjectionRulesAndRecordTypes", "file": "internal/reconcile/dns_projector_test.go", "acceptance_criteria": ["AC1", "AC2", "AC3", "AC4", "AC5", "AC6", "AC7"]},
+    {"name": "TestDNSProjectorDuplicateCoordinateDetection", "file": "internal/reconcile/dns_projector_test.go", "acceptance_criteria": ["AC7"]},
+    {"name": "TestDNSReconcilerNoOpWhenSnapshotsMatch", "file": "internal/reconcile/dns_reconciler_test.go", "acceptance_criteria": ["AC8"]},
+    {"name": "TestDNSReconcilerOverwritesWhenSnapshotsDiffer", "file": "internal/reconcile/dns_reconciler_test.go", "acceptance_criteria": ["AC8"]}
+  ]
+}
