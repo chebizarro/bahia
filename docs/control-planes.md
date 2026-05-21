@@ -84,6 +84,10 @@ The Nostr reactor subscribes to signed request events and publishes status, term
 | Registry/read models | 31961–31970 | Replaceable browser/agent read models |
 | AI/ML command/results | 38390–38399 | Phase-1 addressable AI/ML command and terminal result events |
 | AI/ML read models | 31980–31989 | Phase-1 replaceable AI/ML registry, state, provenance, and capability read models |
+| Backup status/observations | 6981–6984 | Backup run/restore/verification progress and runtime observations |
+| Backup attestations | 31310–31311 | Signed backup run and verification attestations |
+| Backup read models | 31991–31999 | Replaceable backup definition, policy, repository, run, verification, restore, and runtime observation read models |
+| Backup command/results | 38400–38419 | Addressable backup command and terminal result events |
 
 ### Request Events (596x)
 
@@ -283,6 +287,91 @@ Example `31981` model version projection:
 #### AI/ML REST/MCP correlation contract
 
 REST and MCP may initiate compatible AI/ML tooling flows, but they must return correlation metadata instead of claiming completion for long-running work. A successful synchronous response includes the Nostr request event id, request kind, expected terminal result kind, relevant read-model kinds, the requester pubkey, and scoped tags such as `endpoint`, `environment`, `model_version`, `recipe`, or `run`. Clients subscribe with those tags, wait for EOSE for historical catch-up, process realtime result/read-model events, and never poll REST/MCP for completion.
+
+### Backup Event Namespace
+
+Backup control-plane events use a dedicated namespace so backup definitions, policies, repositories, runs, verification, restores, retention, observations, and attestations do not collide with existing Bahia kinds. This allocation intentionally avoids `31200`, which is already used for artifact signature attestations, and avoids `38395`/`38396`, which are AI/ML terminal result kinds.
+
+Backup commands and results are addressable and use `d=<idempotency-key-or-request-id>` for command correlation. Processors must deduplicate by event id and by `(kind, pubkey, d-tag)` so reconnects, relay replay, and client retries do not create duplicate logical workflows.
+
+#### Backup command events (`38400-38409`)
+
+| Kind | Name | Purpose |
+|------|------|---------|
+| 38400 | `BackupRunRequest` | Request a backup run |
+| 38401 | `BackupVerificationRequest` | Request verification for an existing backup run or snapshot |
+| 38402 | `BackupRestoreRequest` | Request restore orchestration |
+| 38403 | `BackupRestoreApproval` | Approve or reject a restore request |
+| 38404 | `BackupRetentionEnforceRequest` | Request retention enforcement |
+| 38405 | `BackupRepositoryRegisterRequest` | Register or update a backup repository record |
+| 38406 | `BackupPolicyApplyRequest` | Apply a backup policy record |
+| 38407 | `BackupRecipeApplyRequest` | Apply a backup recipe record |
+| 38408 | `BackupDefinitionApplyRequest` | Apply a backup definition record |
+| 38409 | `BackupRepositoryProbeRequest` | Probe backend repository health/capabilities |
+
+#### Backup terminal result events (`38410-38419`)
+
+| Kind | Name | Purpose |
+|------|------|---------|
+| 38410 | `BackupRunResult` | Backup run terminal result |
+| 38411 | `BackupVerificationResult` | Verification terminal result |
+| 38412 | `BackupRestoreResult` | Restore terminal result |
+| 38413 | `BackupRestoreApprovalResult` | Restore approval/rejection terminal result |
+| 38414 | `BackupRetentionResult` | Retention enforcement terminal result |
+| 38415 | `BackupRepositoryRegisterResult` | Repository registration terminal result |
+| 38416 | `BackupPolicyApplyResult` | Policy apply terminal result |
+| 38417 | `BackupRecipeApplyResult` | Recipe apply terminal result |
+| 38418 | `BackupDefinitionApplyResult` | Definition apply terminal result |
+| 38419 | `BackupRepositoryProbeResult` | Repository probe terminal result |
+
+#### Backup status and observation events (`6981-6984`)
+
+| Kind | Name | Purpose |
+|------|------|---------|
+| 6981 | `BackupRunStatus` | Backup run progress |
+| 6982 | `BackupRestoreStatus` | Restore progress |
+| 6983 | `BackupVerificationStatus` | Verification progress |
+| 6984 | `BackupObservation` | Runtime/backend observation |
+
+#### Backup replaceable read models (`31991-31999`)
+
+Read models are latest-wins projections for `(kind, pubkey, d-tag)`. Clients bootstrap with scoped filters, wait for EOSE, then keep subscriptions open for realtime updates.
+
+| Kind | Name | d-tag coordinate examples | Purpose |
+|------|------|---------------------------|---------|
+| 31991 | `BackupDefinitionRegistry` | `backup-definition:<name>` | Backup definition registry/read model |
+| 31992 | `BackupPolicyRegistry` | `backup-policy:<name>` | Backup policy registry/read model |
+| 31993 | `BackupRepositoryRegistry` | `backup-repository:<name>` | Backup repository registry/read model |
+| 31994 | `BackupRetentionRegistry` | `backup-retention:<name>` | Retention registry/read model |
+| 31995 | `BackupRecipeRegistry` | `backup-recipe:<name>:<version>` | Backup recipe registry/read model |
+| 31996 | `BackupRunState` | `backup-run:<run-id>` | Backup run state |
+| 31997 | `BackupVerificationState` | `backup-verification:<run-id>` | Backup verification state |
+| 31998 | `BackupRestoreState` | `backup-restore:<restore-id>` | Backup restore state |
+| 31999 | `BackupRuntimeObservationState` | `backup-observation:<worker-or-site>` | Backup runtime observation state |
+
+#### Backup attestation events (`31310-31311`)
+
+| Kind | Name | Purpose |
+|------|------|---------|
+| 31310 | `BackupRunAttestation` | Signed run provenance attestation |
+| 31311 | `BackupVerificationAttestation` | Signed verification provenance attestation |
+
+Required backup command tags:
+
+- `d=<idempotency-key-or-request-id>` is required on every command.
+- Include `p=<target-agent-or-service-pubkey>` when routing to a specific agent/service.
+- Include narrow scoped tags as applicable: `t` or `task`, `target`, `backend`, `repository`, `policy`, `recipe`, `run`, `worker`, `site`, `environment`, and `verification`.
+- Command content describes intent; it must not contain backend credentials or public production secret material.
+
+Required backup result tags:
+
+- `d=result:<request_event_id>` is required.
+- `e=<request_event_id>` with reply semantics and `p=<requester_pubkey>` are required.
+- `status=<queued|running|succeeded|failed|rejected>` is required.
+- Results echo the relevant scoped command tags and include `run=<backup-run-id>` when durable run state exists.
+- Result content carries terminal payload, verification evidence summary, relay publish outcome summary, or explicit error details. Clients must treat result status and content error fields as terminal truth, not REST/MCP acknowledgement.
+
+Restore and verification consumers must not infer restore eligibility from snapshot existence alone. Read models that expose restore eligibility must derive it from terminal run success plus successful verification according to the active backup policy.
 
 ### Signer-First Operator Actions
 

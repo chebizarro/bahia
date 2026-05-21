@@ -1,6 +1,6 @@
 {
   "feature_id": "BACKUP_CONTROL_PLANE_ORCHESTRATION",
-  "status": "draft",
+  "status": "namespace_allocated",
   "tests": [
     {
       "id": "T-BACKUP-001",
@@ -36,18 +36,30 @@
       "type": "integration",
       "target": "future relay-sidecar/control-plane integration tests",
       "description": "Verify scoped subscriptions, EOSE historical catch-up, replay dedupe, CLOSED handling, AUTH-required failure/reauthentication, and partial relay OK outcomes across backup workflow events."
+    },
+    {
+      "id": "T-BACKUP-006",
+      "criteria": ["AC-BACKUP-008"],
+      "type": "documentation/protocol validation",
+      "target": "docs/control-planes.md and BACKUP_CONTROL_PLANE_ORCHESTRATION PSTF artifacts",
+      "description": "Validate that the documented backup namespace is internally consistent, avoids known collisions with 31200 and 38395/38396, and includes command/result/read-model/status/attestation tag contracts.",
+      "status": "passed_for_u4_1",
+      "evidence": [
+        "Repository search for allocated backup kinds found no production-path collisions; matches were limited to this planning/export material, logs, or unrelated checksum text before docs were updated.",
+        "JSON validation passed for feature_spec.json, acceptance_criteria.json, and test_matrix.json after namespace allocation updates."
+      ]
     }
   ],
   "coverage_summary": {
-    "criteria_total": 7,
-    "criteria_with_tests": 7,
+    "criteria_total": 8,
+    "criteria_with_tests": 8,
     "known_gaps": [
-      "No backup code exists yet; tests are planned acceptance mappings for future implementation slices.",
-      "Event namespace cannot be tested until kind allocation is approved.",
+      "No backup implementation code exists in this docs/protocol slice; implementation tests remain planned for later Beads issues.",
       "Backend-specific test harnesses must be selected after the first adapter slice is chosen."
     ]
   },
   "implementation_notes": [
+    "Implementation slices must consume backup commands 38400-38409 and results 38410-38419 rather than 31200 or 38395/38396.",
     "Prefer Kopia for the first generic filesystem backup adapter unless human decision chooses Velero or a native snapshot adapter first.",
     "Velero must be treated as a Kubernetes orchestration adapter, not something Bahia reimplements.",
     "Do not introduce filesystem_mock into production backup paths; test doubles must remain test-only and deterministic."

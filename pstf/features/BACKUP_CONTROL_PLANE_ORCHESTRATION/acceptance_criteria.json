@@ -1,6 +1,6 @@
 {
   "feature_id": "BACKUP_CONTROL_PLANE_ORCHESTRATION",
-  "status": "draft",
+  "status": "namespace_allocated",
   "criteria": [
     {
       "id": "AC-BACKUP-001",
@@ -50,14 +50,21 @@
       "given": "a restore request targets infrastructure, data, deployments, models, or stateful services",
       "when": "approval is required by policy",
       "then": "Bahia records approval or rejection as signed Nostr events before adapter execution and publishes restore result provenance after verification"
+    },
+    {
+      "id": "AC-BACKUP-008",
+      "title": "Backup Nostr namespace is non-conflicting and documented",
+      "given": "backup implementation slices consume backup Nostr events",
+      "when": "they allocate command, result, status, observation, read-model, or attestation kinds",
+      "then": "they use the documented backup namespace: commands 38400-38409, terminal results 38410-38419, status/observations 6981-6984, replaceable read models 31991-31999, and attestations 31310-31311"
     }
   ],
   "coverage_notes": [
-    "Current slice documents intended behavior only; no implementation or tests exist yet.",
-    "Event kind examples supplied by product intent require namespace review because 31200 and 38395/38396 already appear in existing Bahia protocol documentation/code."
+    "The U4-1 docs/protocol slice resolves the namespace ambiguity without implementing backup code.",
+    "The allocated namespace avoids the known collisions: 31200 remains artifact signature attestation, and 38395/38396 remain AI/ML terminal result kinds.",
+    "Command and result tag contracts require narrow filter tags including d, p where applicable, t/task, target, backend, repository, policy, recipe, run, worker, site, environment, and verification."
   ],
   "unresolved_questions": [
-    "Which event namespace should backup command/result and replaceable read-model events use?",
     "What is the first production backend slice: Kopia filesystem backup, Velero Kubernetes restore, or native snapshot adapter?",
     "What verification tests are mandatory for a backup to be considered restorable in Cascadia?"
   ]

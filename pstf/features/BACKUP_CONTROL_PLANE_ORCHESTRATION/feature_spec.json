@@ -1,7 +1,7 @@
 {
   "feature_id": "BACKUP_CONTROL_PLANE_ORCHESTRATION",
   "title": "Backup control-plane orchestration and provenance",
-  "status": "draft",
+  "status": "namespace_allocated",
   "source_evidence": [
     {
       "type": "operator_intent",
@@ -9,7 +9,11 @@
     },
     {
       "type": "repository_observation",
-      "summary": "No dedicated backup orchestration domain or PSTF feature exists yet; existing Bahia control-plane patterns use Nostr command/result events and replaceable read models."
+      "summary": "Existing Bahia control-plane patterns use Nostr command/result events and replaceable read models. Backup has no implementation in this namespace allocation slice."
+    },
+    {
+      "type": "repository_observation",
+      "summary": "docs/control-planes.md now allocates backup-specific kinds 38400-38419, 6981-6984, 31991-31999, and 31310-31311. The allocation avoids existing artifact attestation kind 31200 and AI/ML result kinds 38395/38396."
     }
   ],
   "actors": [
@@ -22,6 +26,79 @@
     "backup backend"
   ],
   "description": "Bahia orchestrates backup policies, recipes, snapshot coordination, retention, provenance, restore workflows, verification/testing, cross-site replication, airgap export/import, and Nostr-signed backup attestations. Existing backup and snapshot tools own repository formats, deduplication, data transfer, compression, encryption primitives, and native snapshot implementation.",
+  "namespace_contract": {
+    "status": "allocated_for_implementation",
+    "collision_review": "No collisions were found in the searched repository for the allocated backup kinds outside this planning/export material. The allocation intentionally avoids 31200, 38395, and 38396.",
+    "command_kinds": {
+      "38400": "BackupRunRequest",
+      "38401": "BackupVerificationRequest",
+      "38402": "BackupRestoreRequest",
+      "38403": "BackupRestoreApproval",
+      "38404": "BackupRetentionEnforceRequest",
+      "38405": "BackupRepositoryRegisterRequest",
+      "38406": "BackupPolicyApplyRequest",
+      "38407": "BackupRecipeApplyRequest",
+      "38408": "BackupDefinitionApplyRequest",
+      "38409": "BackupRepositoryProbeRequest"
+    },
+    "result_kinds": {
+      "38410": "BackupRunResult",
+      "38411": "BackupVerificationResult",
+      "38412": "BackupRestoreResult",
+      "38413": "BackupRestoreApprovalResult",
+      "38414": "BackupRetentionResult",
+      "38415": "BackupRepositoryRegisterResult",
+      "38416": "BackupPolicyApplyResult",
+      "38417": "BackupRecipeApplyResult",
+      "38418": "BackupDefinitionApplyResult",
+      "38419": "BackupRepositoryProbeResult"
+    },
+    "status_observation_kinds": {
+      "6981": "BackupRunStatus",
+      "6982": "BackupRestoreStatus",
+      "6983": "BackupVerificationStatus",
+      "6984": "BackupObservation"
+    },
+    "read_model_kinds": {
+      "31991": "BackupDefinitionRegistry",
+      "31992": "BackupPolicyRegistry",
+      "31993": "BackupRepositoryRegistry",
+      "31994": "BackupRetentionRegistry",
+      "31995": "BackupRecipeRegistry",
+      "31996": "BackupRunState",
+      "31997": "BackupVerificationState",
+      "31998": "BackupRestoreState",
+      "31999": "BackupRuntimeObservationState"
+    },
+    "attestation_kinds": {
+      "31310": "BackupRunAttestation",
+      "31311": "BackupVerificationAttestation"
+    },
+    "required_command_tags": [
+      "d",
+      "p when routing to a specific agent or service",
+      "t or task where workflow correlation is needed",
+      "target where a protected resource is addressed",
+      "backend",
+      "repository",
+      "policy",
+      "recipe",
+      "run where durable state already exists",
+      "worker",
+      "site",
+      "environment",
+      "verification"
+    ],
+    "required_result_tags": [
+      "d=result:<request_event_id>",
+      "e=<request_event_id>",
+      "p=<requester_pubkey>",
+      "status",
+      "same relevant scoped tags as the command",
+      "run=<backup-run-id> when durable run state exists"
+    ],
+    "idempotency": "Command processors deduplicate by event id and by the addressable coordinate (kind, pubkey, d-tag). Results use d=result:<request_event_id> and reply tags for correlation."
+  },
   "in_scope": [
     "Backup definitions, policies, recipes, runs, restore requests, restore results, verification records, retention policies, repository records, runtime statuses, observations, and signed attestations represented as Nostr events/read models.",
     "Recipe-driven orchestration over runtime adapters such as Kopia, Velero, ZFS, Btrfs, LVM, Ceph, CSI, Longhorn, Proxmox, Restic, and Borg.",
@@ -35,12 +112,14 @@
     "Implementing backup repository formats.",
     "Implementing delta algorithms.",
     "Replacing Kopia, Restic, Velero, Borg, ZFS, Btrfs, LVM, Ceph, CSI, Longhorn, or Proxmox backup/snapshot capabilities.",
-    "Polling relays or using timeout-based completion to detect backup or restore completion."
+    "Polling relays or using timeout-based completion to detect backup or restore completion.",
+    "Implementing backup code in the namespace allocation slice."
   ],
   "preconditions": [
     "Operators configure relay, signer, and backend adapter credentials outside production code paths.",
     "Runtime adapters expose backend capabilities and health without hardcoded production endpoints.",
-    "Backup recipes use narrow resource identifiers and correlation tags for relay filtering."
+    "Backup recipes use narrow resource identifiers and correlation tags for relay filtering.",
+    "Implementation slices consume the allocated backup namespace from docs/control-planes.md rather than reusing 31200, 38395, or 38396."
   ],
   "postconditions": [
     "Every backup run has signed provenance describing initiator, target, backend, repository, artifact hashes or backend snapshot identifiers, verification status, and restore-test status when applicable.",
@@ -80,12 +159,17 @@
     "Configuration/secrets management for repository credentials"
   ],
   "ambiguities": [
-    "Final event kind assignments must avoid collisions with existing Bahia namespaces; proposed backup kinds 31200-31207 conflict with the current signing attestation kind 31200 and must be reviewed before implementation.",
-    "Product decision needed on whether backup request/restore request command kinds should reuse 38395/38396 or allocate a backup-specific command namespace because 38395/38396 are already documented as ML result kinds.",
-    "Adapter priority and first vertical slice target must be selected: Kopia filesystem backup, Velero Kubernetes restore, or native snapshot orchestration."
+    "Adapter priority and first vertical slice target must be selected: Kopia filesystem backup, Velero Kubernetes restore, or native snapshot orchestration.",
+    "Minimum verification evidence required before Bahia marks a backup restore-eligible remains a product decision for implementation slices."
+  ],
+  "resolved_ambiguities": [
+    {
+      "question": "Which event namespace should backup command/result and replaceable read-model events use?",
+      "decision": "Use backup-specific command/result kinds 38400-38419, status/observation kinds 6981-6984, read models 31991-31999, and attestations 31310-31311.",
+      "evidence": "docs/control-planes.md documents the allocation and collision rationale. Repository search found no current production collision for these allocated backup kinds."
+    }
   ],
   "human_decisions": [
-    "Approve final backup event namespace and kind allocation.",
     "Approve first implementation slice and required production backend.",
     "Approve minimum verification policy required before a backup is considered usable for restore."
   ]
