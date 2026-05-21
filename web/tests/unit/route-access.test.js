@@ -7,9 +7,10 @@ describe('route access', () => {
     delete window.__BAHIA_E2E_ROUTE_COMPAT_REQUIREMENTS;
   });
 
-  it('marks /souls and /llm as protected routes', () => {
+  it('marks /souls and /llm as protected routes while leaving /settings public for auth setup', () => {
     expect(routeAccessConfig.protectedPrefixes).toContain('/souls');
     expect(routeAccessConfig.protectedPrefixes).toContain('/llm');
+    expect(routeAccessConfig.protectedPrefixes).not.toContain('/settings');
     expect(getRouteAccess('/souls')).toMatchObject({
       pathname: '/souls',
       protectedRoute: true,
@@ -19,6 +20,12 @@ describe('route access', () => {
     expect(getRouteAccess('/llm')).toMatchObject({
       pathname: '/llm',
       protectedRoute: true,
+      requiredRoles: [],
+      requiresRestCompatibility: false
+    });
+    expect(getRouteAccess('/settings')).toMatchObject({
+      pathname: '/settings',
+      protectedRoute: false,
       requiredRoles: [],
       requiresRestCompatibility: false
     });
@@ -37,6 +44,14 @@ describe('route access', () => {
       authorized: false,
       roleAuthorized: false,
       compatibilityAuthorized: false
+    });
+
+    expect(canAccessRoute({ pathname: '/settings', authState: {}, isAuthenticated: false })).toMatchObject({
+      pathname: '/settings',
+      protectedRoute: false,
+      authorized: true,
+      roleAuthorized: true,
+      compatibilityAuthorized: true
     });
 
     expect(canAccessRoute({ pathname: 'plain-path', authState: {}, isAuthenticated: false })).toMatchObject({

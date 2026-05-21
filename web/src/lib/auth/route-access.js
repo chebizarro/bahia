@@ -9,15 +9,12 @@ const PROTECTED_PREFIXES = [
   '/artifacts',
   '/payments',
   '/notifications',
-  '/settings',
   '/events',
   '/orgs'
 ];
 
 // Route-level RBAC hooks. Empty arrays mean "any authenticated user".
-const ROUTE_ROLE_REQUIREMENTS = {
-  '/settings': []
-};
+const ROUTE_ROLE_REQUIREMENTS = {};
 
 // Routes that still require REST compatibility in the signer-first migration.
 const ROUTE_COMPATIBILITY_REQUIREMENTS = {};
