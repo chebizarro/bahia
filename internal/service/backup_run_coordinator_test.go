@@ -460,11 +460,47 @@ func (r *memoryBackupControlPlaneRepository) ClaimNextQueuedBackupRestore(_ cont
 	cp := *restore
 	return &cp, nil
 }
-func (r *memoryBackupControlPlaneRepository) RequeueStaleBackupRestores(context.Context, time.Duration) (int, error) {
-	return 0, nil
+func (r *memoryBackupControlPlaneRepository) RequeueStaleBackupRestores(_ context.Context, olderThan time.Duration) (int, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	cutoff := time.Now().UTC().Add(-olderThan)
+	count := 0
+	for _, restore := range r.restores {
+		if restore.Status == domain.RunStatusRunning && restore.UpdatedAt.Before(cutoff) {
+			restore.Status = domain.RunStatusQueued
+			restore.StartedAt = nil
+			if restore.Metadata == nil {
+				restore.Metadata = map[string]any{}
+			}
+			restore.Metadata["lease_recovered"] = true
+			restore.UpdatedAt = time.Now().UTC()
+			count++
+		}
+	}
+	return count, nil
 }
-func (r *memoryBackupControlPlaneRepository) ListBackupRestores(context.Context, domain.DeploymentRunStatus, int, int) ([]domain.BackupRestoreRun, error) {
-	return nil, nil
+func (r *memoryBackupControlPlaneRepository) ListBackupRestores(_ context.Context, status domain.DeploymentRunStatus, _ int, _ int) ([]domain.BackupRestoreRun, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := []domain.BackupRestoreRun{}
+	for _, restore := range r.restores {
+		if status == "" || restore.Status == status {
+			out = append(out, *restore)
+		}
+	}
+	return out, nil
+}
+
+func (r *memoryBackupControlPlaneRepository) forceRestoreUpdatedAt(id uuid.UUID, updatedAt time.Time) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if restore := r.restores[id]; restore != nil {
+		restore.UpdatedAt = updatedAt
+	}
+}
+
+func staleBackupTestTime() time.Time {
+	return time.Now().UTC().Add(-time.Hour)
 }
 
 func (r *memoryBackupControlPlaneRepository) UpsertBackupRetentionRun(_ context.Context, run *domain.BackupRetentionRun) error {
@@ -534,8 +570,24 @@ func (r *memoryBackupControlPlaneRepository) ClaimNextQueuedBackupRetentionRun(_
 	cp := *run
 	return &cp, nil
 }
-func (r *memoryBackupControlPlaneRepository) RequeueStaleBackupRetentionRuns(context.Context, time.Duration) (int, error) {
-	return 0, nil
+func (r *memoryBackupControlPlaneRepository) RequeueStaleBackupRetentionRuns(_ context.Context, olderThan time.Duration) (int, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	cutoff := time.Now().UTC().Add(-olderThan)
+	count := 0
+	for _, run := range r.retentions {
+		if run.Status == domain.RunStatusRunning && run.UpdatedAt.Before(cutoff) {
+			run.Status = domain.RunStatusQueued
+			run.StartedAt = nil
+			if run.Metadata == nil {
+				run.Metadata = map[string]any{}
+			}
+			run.Metadata["lease_recovered"] = true
+			run.UpdatedAt = time.Now().UTC()
+			count++
+		}
+	}
+	return count, nil
 }
 func (r *memoryBackupControlPlaneRepository) ListBackupRetentionRuns(context.Context, domain.DeploymentRunStatus, int, int) ([]domain.BackupRetentionRun, error) {
 	return nil, nil
@@ -586,3 +638,4 @@ func setBackupTestTimes(createdAt, updatedAt *time.Time) {
 
 var _ repository.BackupControlPlaneRepository = (*memoryBackupControlPlaneRepository)(nil)
 var _ BackupRunQueueRepository = (*memoryBackupControlPlaneRepository)(nil)
+var _ BackupRetentionQueueRepository = (*memoryBackupControlPlaneRepository)(nil)
