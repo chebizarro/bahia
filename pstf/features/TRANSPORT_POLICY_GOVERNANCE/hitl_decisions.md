@@ -20,7 +20,7 @@
 **Status:** active
 
 **Context Summary:**
-`docs/investigations/signer-first-auth-audit-2026-05-03.md` says route-level REST compatibility gating had been updated for several protected route groups. Current code disagrees: `web/src/lib/auth/route-access.js` has an empty `ROUTE_COMPATIBILITY_REQUIREMENTS` map, and current route files sampled for `/payments`, `/orgs`, and `/notifications` are signer/encrypted-store driven rather than direct REST pages. The spec could not safely infer whether the empty map was a regression or whether the audit note had simply gone stale.
+At reconstruction time, `docs/investigations/signer-first-auth-audit-2026-05-03.md` said route-level REST compatibility gating had been updated for several protected route groups. Current code disagreed: `web/src/lib/auth/route-access.js` had an empty `ROUTE_COMPATIBILITY_REQUIREMENTS` map, and current route files sampled for `/payments`, `/orgs`, and `/notifications` were signer/encrypted-store driven rather than direct REST pages. The spec could not safely infer whether the empty map was a regression or whether the audit note had simply gone stale. The audit has since been refreshed to mark that route-level gating conclusion as superseded historical evidence.
 
 **Question Asked:**
 How should the current empty route-level REST-compatibility map be classified in TRANSPORT_POLICY_GOVERNANCE?
@@ -47,7 +47,7 @@ KEEP_EMPTY_ROUTE_COMPATIBILITY_MAP_AS_INTENDED_NOW
 - Confidence / Release: narrows ambiguity by removing one false transport-policy dependency from the intended contract.
 
 **Required Follow-Up Actions:**
-- [ ] Refresh stale audit or planning references that still describe route-level REST compatibility gating as current browser policy.
+- [x] Refresh stale audit or planning references that still describe route-level REST compatibility gating as current browser policy.
 - [ ] Keep future compatibility exceptions explicit per feature or per surface instead of reviving a blanket route-prefix gate silently.
 
 ---

@@ -58,12 +58,16 @@ Conclusion:
 
 ## 2) Remaining REST compatibility route audit
 
-### What was checked
-- Route gating config: `web/src/lib/auth/route-access.js`
-- Route usage search for direct REST client calls (`api.*`) under `web/src/routes/**`
+### Superseded status
+This section is retained as historical investigation evidence only. The route-level REST compatibility conclusion from this 2026-05-03 audit was superseded by `TRANSPORT_POLICY_GOVERNANCE` decision `HITL-TRANSPORT_POLICY_GOVERNANCE-001`.
 
-### Findings
-- Protected route prefixes with direct REST client usage (`$lib/api/client.js`) are:
+Current approved browser policy:
+- `web/src/lib/auth/route-access.js` intentionally keeps `ROUTE_COMPATIBILITY_REQUIREMENTS` empty by default.
+- Protected browser routes may still require authentication or role checks, but they do not require blanket route-prefix REST compatibility gating.
+- Any future route-level REST compatibility exception must be an explicit product decision, not an inferred consequence of protected-route prefix or direct REST usage discovered in this historical audit.
+
+### Historical findings from 2026-05-03
+- Protected route prefixes with direct REST client usage (`$lib/api/client.js`) observed during the audit were:
   - `/artifacts`
   - `/deployments`
   - `/environments`
@@ -74,12 +78,11 @@ Conclusion:
   - `/services`
   - `/settings`
   - `/workers`
-- Protected prefixes currently **without** direct REST client usage in route pages:
+- Protected prefixes observed **without** direct REST client usage in route pages were:
   - `/events`
   - `/souls`
-- Route gating has now been updated so the direct-REST prefixes above are marked `requiresRestCompatibility` in `web/src/lib/auth/route-access.js`.
 
-### Conclusion
-- Compatibility gating now matches the currently known direct-REST protected surface.
-- `/events` and `/souls` remain signer-only gated for now.
-- Follow-up migration issues are required to move the REST-dependent route groups to Nostr/store-first flows so compatibility gating can be reduced over time.
+### Current conclusion
+- The historical recommendation to classify direct-REST protected prefixes through route-level compatibility gating is no longer the intended policy.
+- The approved `TRANSPORT_POLICY_GOVERNANCE` policy treats the empty route-level REST compatibility map as intentional browser behavior.
+- Remaining browser REST transport drift should be tracked as feature-specific migration or compatibility work, not by reviving blanket route-prefix gating.

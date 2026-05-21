@@ -119,7 +119,7 @@
     "code": [
       "`internal/adapters/nostr/projector.go` advertises the public-vs-encrypted discovery inputs that every browser flow relies on: `browser_relays`, `browser_encrypted_request_relays`, `service_pubkey`, and feature gates such as `relay_read_models` and `encrypted_nostr_requests`.",
       "`web/src/lib/nostr/encrypted-controlplane.js` enforces the browser encrypted transport boundary in code by deriving relay URLs only from `browser_encrypted_request_relays`, requiring the service pubkey, filtering correlated results by service author and requester pubkey, and rejecting publishes with no accepted OK.",
-      "`web/src/lib/auth/route-access.js` currently has an empty `ROUTE_COMPATIBILITY_REQUIREMENTS` map, which directly contradicts an older auth audit but matches the user-approved intended browser policy captured in this session.",
+      "`web/src/lib/auth/route-access.js` currently has an empty `ROUTE_COMPATIBILITY_REQUIREMENTS` map, matching the approved intended browser policy; the older auth audit has been refreshed to mark its route-level compatibility-gating conclusion as superseded historical evidence.",
       "`web/src/routes/payments/+page.svelte`, `/orgs`, and `/notifications` are currently browser-store driven for sensitive domains, while `web/src/routes/+page.svelte` still uses REST payment history for dashboard cost summary and `web/src/lib/api/client.js` still exposes EventSource log streaming and numerous REST compatibility methods."
     ],
     "tests": [
@@ -150,7 +150,7 @@
     ],
     "questionable_or_legacy_behavior": [
       {
-        "behavior": "An older auth audit says protected route prefixes were marked `requiresRestCompatibility`, but current route-access code leaves the compatibility map empty.",
+        "behavior": "An older auth audit previously said protected route prefixes were marked `requiresRestCompatibility`; that audit text is now superseded, and current route-access code intentionally leaves the compatibility map empty.",
         "evidence": [
           "docs/investigations/signer-first-auth-audit-2026-05-03.md:50-85",
           "web/src/lib/auth/route-access.js:1-120"
