@@ -1,0 +1,20 @@
+{
+  "feature_id": "dns-phase0-backend",
+  "tests": [
+    {
+      "criteria": ["AC1", "AC2"],
+      "command": "go test ./internal/adapters/dns/...",
+      "evidence": "passed on 2026-05-21; TestStaticResolverRejectsDuplicateRefs and TestStaticResolverResolveAndRefs cover resolver behavior."
+    },
+    {
+      "criteria": ["AC3", "AC4", "AC5"],
+      "command": "go test ./internal/adapters/dns/...",
+      "evidence": "passed on 2026-05-21; filesystem tests cover health, missing files, round-trip, overwrite, deterministic/idempotent sync."
+    },
+    {
+      "criteria": ["AC1", "AC2", "AC3", "AC4", "AC5"],
+      "command": "go build ./...",
+      "evidence": "passed on 2026-05-21."
+    }
+  ]
+}

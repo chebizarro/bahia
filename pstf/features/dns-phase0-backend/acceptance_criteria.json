@@ -1,0 +1,25 @@
+{
+  "feature_id": "dns-phase0-backend",
+  "criteria": [
+    {
+      "id": "AC1",
+      "description": "DNS backend and resolver interfaces expose BackendType, Health, ListRecords, SyncZone, Resolve, and Refs without per-record mutation methods."
+    },
+    {
+      "id": "AC2",
+      "description": "Static resolver rejects duplicate backend refs and returns deterministic sorted refs."
+    },
+    {
+      "id": "AC3",
+      "description": "Filesystem backend health verifies the configured root directory exists and is writable."
+    },
+    {
+      "id": "AC4",
+      "description": "Filesystem backend returns an empty record set for missing zone files and round-trips full zone snapshots."
+    },
+    {
+      "id": "AC5",
+      "description": "Filesystem SyncZone writes deterministic, idempotent JSON snapshots sorted by FQDN, record type, and value using atomic file replacement."
+    }
+  ]
+}
