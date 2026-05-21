@@ -68,8 +68,13 @@ submits deployment jobs to Loom workers.
 
 #### Kind 10100 — Worker Advertisement (Inbound)
 
-Workers publish replaceable events advertising their capabilities. Bahia's
-\`WorkerDiscovery\` service subscribes to these events and maintains a catalog.
+Workers publish replaceable events advertising their capabilities. Bahia ingests
+these through the generic Nostr subscriber, which includes kind `10100` in its
+inbound Loom event set. The generic event processor handles each valid worker
+advertisement, parses the content and capability/pricing/runtime tags, and
+upserts the normalized worker record through `WorkerRepository`. Runtime worker
+reads are repository-backed; there is no separate worker-discovery service or
+runtime-maintained catalog component.
 
 \`\`\`json
 {
