@@ -22,14 +22,6 @@ var (
 	ErrBackupBackendExecution     = errors.New("backup backend execution error")
 )
 
-// BackupBackend is the bounded runtime boundary for backup execution.
-type BackupBackend interface {
-	BackendKind() domain.BackupBackendKind
-	Health(ctx context.Context, repo *domain.BackupRepository) error
-	CreateSnapshot(ctx context.Context, req BackupSnapshotRequest) (*BackupSnapshotResult, error)
-	VerifySnapshot(ctx context.Context, req BackupVerifyRequest) (*BackupVerifyResult, error)
-}
-
 // BackupSnapshotRequest is the coordinator-to-backend contract for creating one snapshot.
 type BackupSnapshotRequest struct {
 	Run        *domain.BackupRun        `json:"-"`
@@ -79,12 +71,12 @@ type BackupRunCoordinatorConfig struct {
 
 // BackupRunCoordinator executes fixed-step backup runs from durable queued state.
 type BackupRunCoordinator struct {
-	registry  *BackupRegistryService
-	queue     BackupRunQueueRepository
-	backend   BackupBackend
-	responder BackupRunResponder
-	logger    *zap.Logger
-	config    BackupRunCoordinatorConfig
+	registry        *BackupRegistryService
+	queue           BackupRunQueueRepository
+	backendResolver BackupBackendResolver
+	responder       BackupRunResponder
+	logger          *zap.Logger
+	config          BackupRunCoordinatorConfig
 
 	runGroup singleflight.Group
 	locksMu  sync.Mutex
@@ -124,14 +116,14 @@ func WithBackupRunHealthCheck(enabled bool) BackupRunCoordinatorOption {
 	return func(c *BackupRunCoordinator) { c.config.HealthCheckBeforeRun = enabled }
 }
 
-func NewBackupRunCoordinator(registry *BackupRegistryService, backend BackupBackend, logger *zap.Logger, opts ...BackupRunCoordinatorOption) *BackupRunCoordinator {
+func NewBackupRunCoordinator(registry *BackupRegistryService, backendResolver BackupBackendResolver, logger *zap.Logger, opts ...BackupRunCoordinatorOption) *BackupRunCoordinator {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
 	c := &BackupRunCoordinator{
-		registry: registry,
-		backend:  backend,
-		logger:   logger.Named("backup-run-coordinator"),
+		registry:        registry,
+		backendResolver: backendResolver,
+		logger:          logger.Named("backup-run-coordinator"),
 		config: BackupRunCoordinatorConfig{
 			RecoveryPollInterval: defaultBackupRunRecoveryPollInterval,
 			StaleRunTimeout:      15 * time.Minute,
@@ -227,17 +219,15 @@ func (c *BackupRunCoordinator) processBackupRunLocked(ctx context.Context, runID
 	if err != nil {
 		return c.completeFailed(ctx, run, nil, "load_inputs", err)
 	}
-	if c.backend == nil {
-		return c.completeFailed(ctx, run, nil, "backend_unavailable", fmt.Errorf("%w: backup backend is not configured", ErrBackupBackendConfiguration))
-	}
-	if c.backend.BackendKind() != run.Backend {
-		return c.completeFailed(ctx, run, nil, "backend_mismatch", fmt.Errorf("%w: configured backend %q cannot execute run backend %q", ErrBackupBackendUnsupported, c.backend.BackendKind(), run.Backend))
+	backend, snapshotBackend, err := c.resolveSnapshotBackend(run.Backend)
+	if err != nil {
+		return c.completeFailed(ctx, run, nil, "backend_resolve", err)
 	}
 	if err := c.markRunning(ctx, run); err != nil {
 		return err
 	}
 	if c.config.HealthCheckBeforeRun {
-		if err := c.withRunHeartbeat(ctx, run.ID, func() error { return c.backend.Health(ctx, repo) }); err != nil {
+		if err := c.withRunHeartbeat(ctx, run.ID, func() error { return backend.Health(ctx, repo) }); err != nil {
 			if contextCancellationErr(ctx, err) {
 				return err
 			}
@@ -249,7 +239,7 @@ func (c *BackupRunCoordinator) processBackupRunLocked(ctx context.Context, runID
 		var snapshot *BackupSnapshotResult
 		if err := c.withRunHeartbeat(ctx, run.ID, func() error {
 			var snapshotErr error
-			snapshot, snapshotErr = c.backend.CreateSnapshot(ctx, BackupSnapshotRequest{Run: run, Recipe: recipe, Repository: repo, Policy: policy})
+			snapshot, snapshotErr = snapshotBackend.CreateSnapshot(ctx, BackupSnapshotRequest{Run: run, Recipe: recipe, Repository: repo, Policy: policy})
 			return snapshotErr
 		}); err != nil {
 			if contextCancellationErr(ctx, err) {
@@ -276,7 +266,7 @@ func (c *BackupRunCoordinator) processBackupRunLocked(ctx context.Context, runID
 		c.publishResult(ctx, completed, nil, "backup run completed without required verification")
 		return nil
 	}
-	verification, err := c.runVerification(ctx, run, recipe, repo, policy, mode)
+	verification, err := c.runVerification(ctx, snapshotBackend, run, recipe, repo, policy, mode)
 	if err != nil {
 		if contextCancellationErr(ctx, err) {
 			return err
@@ -350,7 +340,22 @@ func (c *BackupRunCoordinator) verificationPlan(recipe *domain.BackupRecipe, pol
 	return mode, mode != domain.BackupVerificationNone
 }
 
-func (c *BackupRunCoordinator) runVerification(ctx context.Context, run *domain.BackupRun, recipe *domain.BackupRecipe, repo *domain.BackupRepository, policy *domain.BackupPolicy, mode domain.BackupVerificationMode) (*domain.BackupVerificationRecord, error) {
+func (c *BackupRunCoordinator) resolveSnapshotBackend(kind domain.BackupBackendKind) (BackupBackend, BackupSnapshotBackend, error) {
+	if c.backendResolver == nil {
+		return nil, nil, fmt.Errorf("%w: backup backend resolver is not configured", ErrBackupBackendConfiguration)
+	}
+	backend, ok := c.backendResolver.Resolve(kind)
+	if !ok || backend == nil {
+		return nil, nil, fmt.Errorf("%w: backup backend %q is not registered", ErrBackupBackendUnsupported, kind)
+	}
+	snapshotBackend, ok := backend.(BackupSnapshotBackend)
+	if !ok {
+		return nil, nil, fmt.Errorf("%w: backup backend %q does not support snapshot execution", ErrBackupBackendUnsupported, kind)
+	}
+	return backend, snapshotBackend, nil
+}
+
+func (c *BackupRunCoordinator) runVerification(ctx context.Context, backend BackupSnapshotBackend, run *domain.BackupRun, recipe *domain.BackupRecipe, repo *domain.BackupRepository, policy *domain.BackupPolicy, mode domain.BackupVerificationMode) (*domain.BackupVerificationRecord, error) {
 	c.publishStatus(ctx, run, "verifying", "verifying backup snapshot")
 	backupSetRunMetadata(run, map[string]any{"current_step": "verifying"})
 	if err := c.registry.CreateOrUpdateBackupRun(ctx, run); err != nil {
@@ -359,7 +364,7 @@ func (c *BackupRunCoordinator) runVerification(ctx context.Context, run *domain.
 	var result *BackupVerifyResult
 	err := c.withRunHeartbeat(ctx, run.ID, func() error {
 		var verifyErr error
-		result, verifyErr = c.backend.VerifySnapshot(ctx, BackupVerifyRequest{
+		result, verifyErr = backend.VerifySnapshot(ctx, BackupVerifyRequest{
 			Run:                run,
 			Recipe:             recipe,
 			Repository:         repo,

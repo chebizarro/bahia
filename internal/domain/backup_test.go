@@ -49,6 +49,86 @@ func TestValidateBackupVerificationRecordRequiresVerifiedSucceededStatus(t *test
 	require.ErrorIs(t, err, ErrInvalidValue)
 }
 
+func TestValidateBackupRestoreRunDefaultsPendingApprovalQueuedAndPendingVerification(t *testing.T) {
+	restore := &BackupRestoreRun{
+		BackupRunID:      uuid.New(),
+		RecipeID:         uuid.New(),
+		RepositoryID:     uuid.New(),
+		SnapshotID:       " snap-1 ",
+		RestoreTargetRef: " fs:/restore/path ",
+		RequestedBy:      " requester ",
+		RequestEventID:   "event-restore",
+		RequestKind:      38402,
+		RequestDTag:      " restore:daily ",
+		Backend:          BackupBackendKopia,
+	}
+
+	require.NoError(t, ValidateBackupRestoreRun(restore))
+	require.Equal(t, "snap-1", restore.SnapshotID)
+	require.Equal(t, "fs:/restore/path", restore.RestoreTargetRef)
+	require.Equal(t, "requester", restore.RequestedBy)
+	require.Equal(t, "restore:daily", restore.RequestDTag)
+	require.Equal(t, BackupApprovalPending, restore.ApprovalStatus)
+	require.Equal(t, RunStatusQueued, restore.Status)
+	require.Equal(t, BackupVerificationPending, restore.VerificationStatus)
+}
+
+func TestValidateBackupRestoreRunRequiresSourceSnapshotAndTarget(t *testing.T) {
+	restore := &BackupRestoreRun{
+		BackupRunID:    uuid.New(),
+		RecipeID:       uuid.New(),
+		RepositoryID:   uuid.New(),
+		RequestedBy:    "requester",
+		RequestEventID: "event-restore",
+		RequestKind:    38402,
+		RequestDTag:    "restore:daily",
+		Backend:        BackupBackendKopia,
+	}
+
+	err := ValidateBackupRestoreRun(restore)
+
+	require.Error(t, err)
+}
+
+func TestValidateBackupRestoreRunRequiresApprovalProvenanceWhenApproved(t *testing.T) {
+	restore := &BackupRestoreRun{
+		BackupRunID:      uuid.New(),
+		RecipeID:         uuid.New(),
+		RepositoryID:     uuid.New(),
+		SnapshotID:       "snap-1",
+		RestoreTargetRef: "fs:/restore/path",
+		RequestedBy:      "requester",
+		RequestEventID:   "event-restore",
+		RequestKind:      38402,
+		RequestDTag:      "restore:daily",
+		Backend:          BackupBackendKopia,
+		ApprovalStatus:   BackupApprovalApproved,
+	}
+
+	err := ValidateBackupRestoreRun(restore)
+
+	require.Error(t, err)
+	require.ErrorIs(t, err, ErrEmptyField)
+}
+
+func TestValidateBackupRetentionRunDefaultsQueued(t *testing.T) {
+	retention := &BackupRetentionRun{
+		RepositoryID:   uuid.New(),
+		RequestedBy:    " requester ",
+		RequestEventID: "event-retention",
+		RequestKind:    38404,
+		RequestDTag:    " retention:weekly ",
+		Backend:        BackupBackendKopia,
+		DryRun:         true,
+	}
+
+	require.NoError(t, ValidateBackupRetentionRun(retention))
+	require.Equal(t, "requester", retention.RequestedBy)
+	require.Equal(t, "retention:weekly", retention.RequestDTag)
+	require.Equal(t, RunStatusQueued, retention.Status)
+	require.True(t, retention.DryRun)
+}
+
 func TestBackupRunRestoreEligibleRequiresSuccessfulRunAndVerification(t *testing.T) {
 	run := &BackupRun{Status: RunStatusSucceeded, VerificationStatus: BackupVerificationSkipped}
 	require.False(t, BackupRunRestoreEligible(run))

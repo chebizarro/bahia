@@ -33,6 +33,22 @@ type BackupControlPlaneRepository interface {
 	RequeueStaleBackupRuns(ctx context.Context, olderThan time.Duration) (int, error)
 	ListBackupRuns(ctx context.Context, status domain.DeploymentRunStatus, limit, offset int) ([]domain.BackupRun, error)
 
+	UpsertBackupRestore(ctx context.Context, restore *domain.BackupRestoreRun) error
+	GetBackupRestore(ctx context.Context, id uuid.UUID) (*domain.BackupRestoreRun, error)
+	GetBackupRestoreByRequestCoordinate(ctx context.Context, pubkey string, kind int, dTag string) (*domain.BackupRestoreRun, error)
+	CreateBackupRestoreIfAbsent(ctx context.Context, restore *domain.BackupRestoreRun) (*domain.BackupRestoreRun, bool, error)
+	ClaimNextQueuedBackupRestore(ctx context.Context) (*domain.BackupRestoreRun, error)
+	RequeueStaleBackupRestores(ctx context.Context, olderThan time.Duration) (int, error)
+	ListBackupRestores(ctx context.Context, status domain.DeploymentRunStatus, limit, offset int) ([]domain.BackupRestoreRun, error)
+
+	UpsertBackupRetentionRun(ctx context.Context, run *domain.BackupRetentionRun) error
+	GetBackupRetentionRun(ctx context.Context, id uuid.UUID) (*domain.BackupRetentionRun, error)
+	GetBackupRetentionRunByRequestCoordinate(ctx context.Context, pubkey string, kind int, dTag string) (*domain.BackupRetentionRun, error)
+	CreateBackupRetentionRunIfAbsent(ctx context.Context, run *domain.BackupRetentionRun) (*domain.BackupRetentionRun, bool, error)
+	ClaimNextQueuedBackupRetentionRun(ctx context.Context) (*domain.BackupRetentionRun, error)
+	RequeueStaleBackupRetentionRuns(ctx context.Context, olderThan time.Duration) (int, error)
+	ListBackupRetentionRuns(ctx context.Context, status domain.DeploymentRunStatus, limit, offset int) ([]domain.BackupRetentionRun, error)
+
 	UpsertBackupVerification(ctx context.Context, record *domain.BackupVerificationRecord) error
 	GetBackupVerification(ctx context.Context, id uuid.UUID) (*domain.BackupVerificationRecord, error)
 	GetBackupVerificationByRunID(ctx context.Context, runID uuid.UUID) (*domain.BackupVerificationRecord, error)

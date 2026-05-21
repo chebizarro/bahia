@@ -34,6 +34,16 @@ const (
 	BackupVerificationUnsupported BackupVerificationStatus = "unsupported"
 )
 
+// BackupApprovalStatus records restore approval state before execution.
+type BackupApprovalStatus string
+
+const (
+	BackupApprovalPending     BackupApprovalStatus = "pending"
+	BackupApprovalApproved    BackupApprovalStatus = "approved"
+	BackupApprovalRejected    BackupApprovalStatus = "rejected"
+	BackupApprovalNotRequired BackupApprovalStatus = "not_required"
+)
+
 // BackupRecipe is an authoritative backup recipe definition.
 type BackupRecipe struct {
 	ID               uuid.UUID              `json:"id"`
@@ -114,6 +124,59 @@ type BackupVerificationRecord struct {
 	UpdatedAt      time.Time                `json:"updated_at"`
 }
 
+// BackupRestoreRun is the durable control-plane record for a restore request.
+type BackupRestoreRun struct {
+	ID                 uuid.UUID                `json:"id"`
+	BackupRunID        uuid.UUID                `json:"backup_run_id"`
+	RecipeID           uuid.UUID                `json:"recipe_id"`
+	RepositoryID       uuid.UUID                `json:"repository_id"`
+	PolicyID           *uuid.UUID               `json:"policy_id,omitempty"`
+	SnapshotID         string                   `json:"snapshot_id"`
+	RestoreTargetRef   string                   `json:"restore_target_ref"`
+	RequestedBy        string                   `json:"requested_by"`
+	RequestEventID     string                   `json:"request_event_id"`
+	RequestKind        int                      `json:"request_kind"`
+	RequestDTag        string                   `json:"request_d_tag"`
+	ApprovalStatus     BackupApprovalStatus     `json:"approval_status"`
+	ApprovalEventID    string                   `json:"approval_event_id,omitempty"`
+	ApprovedBy         string                   `json:"approved_by,omitempty"`
+	ApprovedAt         *time.Time               `json:"approved_at,omitempty"`
+	ApprovalMessage    string                   `json:"approval_message,omitempty"`
+	Status             DeploymentRunStatus      `json:"status"`
+	Backend            BackupBackendKind        `json:"backend"`
+	VerificationStatus BackupVerificationStatus `json:"verification_status"`
+	Evidence           map[string]any           `json:"evidence,omitempty"`
+	PublishSummary     map[string]any           `json:"publish_summary,omitempty"`
+	Error              string                   `json:"error,omitempty"`
+	Metadata           map[string]any           `json:"metadata,omitempty"`
+	StartedAt          *time.Time               `json:"started_at,omitempty"`
+	FinishedAt         *time.Time               `json:"finished_at,omitempty"`
+	CreatedAt          time.Time                `json:"created_at"`
+	UpdatedAt          time.Time                `json:"updated_at"`
+}
+
+// BackupRetentionRun is the durable control-plane record for backend-native retention enforcement.
+type BackupRetentionRun struct {
+	ID             uuid.UUID           `json:"id"`
+	RepositoryID   uuid.UUID           `json:"repository_id"`
+	PolicyID       *uuid.UUID          `json:"policy_id,omitempty"`
+	RequestedBy    string              `json:"requested_by"`
+	RequestEventID string              `json:"request_event_id"`
+	RequestKind    int                 `json:"request_kind"`
+	RequestDTag    string              `json:"request_d_tag"`
+	Status         DeploymentRunStatus `json:"status"`
+	Backend        BackupBackendKind   `json:"backend"`
+	DryRun         bool                `json:"dry_run"`
+	Evidence       map[string]any      `json:"evidence,omitempty"`
+	PublishSummary map[string]any      `json:"publish_summary,omitempty"`
+	Error          string              `json:"error,omitempty"`
+	Metadata       map[string]any      `json:"metadata,omitempty"`
+	StartedAt      *time.Time          `json:"started_at,omitempty"`
+	FinishedAt     *time.Time          `json:"finished_at,omitempty"`
+	CreatedAt      time.Time           `json:"created_at"`
+	UpdatedAt      time.Time           `json:"updated_at"`
+}
+
 func (k BackupBackendKind) IsValid() bool {
 	switch k {
 	case BackupBackendKopia:
@@ -135,6 +198,15 @@ func (m BackupVerificationMode) IsValid() bool {
 func (s BackupVerificationStatus) IsValid() bool {
 	switch s {
 	case BackupVerificationPending, BackupVerificationSucceeded, BackupVerificationFailed, BackupVerificationSkipped, BackupVerificationUnsupported:
+		return true
+	default:
+		return false
+	}
+}
+
+func (s BackupApprovalStatus) IsValid() bool {
+	switch s {
+	case BackupApprovalPending, BackupApprovalApproved, BackupApprovalRejected, BackupApprovalNotRequired:
 		return true
 	default:
 		return false
@@ -293,6 +365,129 @@ func ValidateBackupVerificationRecord(record *BackupVerificationRecord) error {
 	}
 	if record.Status == BackupVerificationSucceeded && !record.Verified {
 		return fmt.Errorf("%w: succeeded backup verification records must be verified", ErrInvalidValue)
+	}
+	return nil
+}
+
+func ValidateBackupRestoreRun(run *BackupRestoreRun) error {
+	if run == nil {
+		return fmt.Errorf("%w: backup restore run must not be nil", ErrInvalidValue)
+	}
+	run.SnapshotID = strings.TrimSpace(run.SnapshotID)
+	run.RestoreTargetRef = strings.TrimSpace(run.RestoreTargetRef)
+	run.RequestedBy = strings.TrimSpace(run.RequestedBy)
+	run.RequestEventID = strings.TrimSpace(run.RequestEventID)
+	run.RequestDTag = strings.TrimSpace(run.RequestDTag)
+	run.ApprovalEventID = strings.TrimSpace(run.ApprovalEventID)
+	run.ApprovedBy = strings.TrimSpace(run.ApprovedBy)
+	run.ApprovalMessage = strings.TrimSpace(run.ApprovalMessage)
+	if err := ValidateRequiredUUID(run.BackupRunID, "backup_run_id"); err != nil {
+		return err
+	}
+	if err := ValidateRequiredUUID(run.RecipeID, "recipe_id"); err != nil {
+		return err
+	}
+	if err := ValidateRequiredUUID(run.RepositoryID, "repository_id"); err != nil {
+		return err
+	}
+	if run.PolicyID != nil {
+		if err := ValidateRequiredUUID(*run.PolicyID, "policy_id"); err != nil {
+			return err
+		}
+	}
+	if err := ValidateRequiredString(run.SnapshotID, "snapshot_id"); err != nil {
+		return err
+	}
+	if err := ValidateRequiredString(run.RestoreTargetRef, "restore_target_ref"); err != nil {
+		return err
+	}
+	if err := ValidateRequiredString(run.RequestedBy, "requested_by"); err != nil {
+		return err
+	}
+	if err := ValidateRequiredString(run.RequestEventID, "request_event_id"); err != nil {
+		return err
+	}
+	if run.RequestKind == 0 {
+		return fmt.Errorf("%w: request_kind must not be zero", ErrInvalidValue)
+	}
+	if err := ValidateRequiredString(run.RequestDTag, "request_d_tag"); err != nil {
+		return err
+	}
+	if run.ApprovalStatus == "" {
+		run.ApprovalStatus = BackupApprovalPending
+	}
+	if !run.ApprovalStatus.IsValid() {
+		return fmt.Errorf("%w: backup approval status %q is not valid", ErrInvalidValue, run.ApprovalStatus)
+	}
+	switch run.ApprovalStatus {
+	case BackupApprovalApproved:
+		if err := ValidateRequiredString(run.ApprovalEventID, "approval_event_id"); err != nil {
+			return err
+		}
+		if err := ValidateRequiredString(run.ApprovedBy, "approved_by"); err != nil {
+			return err
+		}
+		if run.ApprovedAt == nil {
+			return fmt.Errorf("%w: approved_at must not be nil for approved restore runs", ErrEmptyField)
+		}
+	case BackupApprovalRejected:
+		if err := ValidateRequiredString(run.ApprovalEventID, "approval_event_id"); err != nil {
+			return err
+		}
+	}
+	if run.Status == "" {
+		run.Status = RunStatusQueued
+	}
+	if err := ValidateDeploymentRunStatus(run.Status); err != nil {
+		return err
+	}
+	if !run.Backend.IsValid() {
+		return fmt.Errorf("%w: backup backend %q is not valid", ErrInvalidValue, run.Backend)
+	}
+	if run.VerificationStatus == "" {
+		run.VerificationStatus = BackupVerificationPending
+	}
+	if !run.VerificationStatus.IsValid() {
+		return fmt.Errorf("%w: backup verification status %q is not valid", ErrInvalidValue, run.VerificationStatus)
+	}
+	return nil
+}
+
+func ValidateBackupRetentionRun(run *BackupRetentionRun) error {
+	if run == nil {
+		return fmt.Errorf("%w: backup retention run must not be nil", ErrInvalidValue)
+	}
+	run.RequestedBy = strings.TrimSpace(run.RequestedBy)
+	run.RequestEventID = strings.TrimSpace(run.RequestEventID)
+	run.RequestDTag = strings.TrimSpace(run.RequestDTag)
+	if err := ValidateRequiredUUID(run.RepositoryID, "repository_id"); err != nil {
+		return err
+	}
+	if run.PolicyID != nil {
+		if err := ValidateRequiredUUID(*run.PolicyID, "policy_id"); err != nil {
+			return err
+		}
+	}
+	if err := ValidateRequiredString(run.RequestedBy, "requested_by"); err != nil {
+		return err
+	}
+	if err := ValidateRequiredString(run.RequestEventID, "request_event_id"); err != nil {
+		return err
+	}
+	if run.RequestKind == 0 {
+		return fmt.Errorf("%w: request_kind must not be zero", ErrInvalidValue)
+	}
+	if err := ValidateRequiredString(run.RequestDTag, "request_d_tag"); err != nil {
+		return err
+	}
+	if run.Status == "" {
+		run.Status = RunStatusQueued
+	}
+	if err := ValidateDeploymentRunStatus(run.Status); err != nil {
+		return err
+	}
+	if !run.Backend.IsValid() {
+		return fmt.Errorf("%w: backup backend %q is not valid", ErrInvalidValue, run.Backend)
 	}
 	return nil
 }

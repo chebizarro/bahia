@@ -281,12 +281,16 @@ func New(cfg *config.Config) (*App, error) {
 	backupRegistryRepo := repository.NewPgBackupControlPlaneRepository(pool)
 	backupRegistry := service.NewBackupRegistryService(backupRegistryRepo, publisher, logger)
 	backupResponder := controlplane.NewBackupRunResponder(controlPlanePool, controlPlaneSigner, backupRegistry, nostrEventRepo, logger)
-	backupCoordinator := service.NewBackupRunCoordinator(backupRegistry, backupAdapter.NewKopiaBackend(), logger, service.WithBackupRunResponder(backupResponder))
+	backupResolver, err := service.NewStaticBackupBackendResolver(backupAdapter.NewKopiaBackend())
+	if err != nil {
+		return nil, fmt.Errorf("configuring backup backend resolver: %w", err)
+	}
+	backupCoordinator := service.NewBackupRunCoordinator(backupRegistry, backupResolver, logger, service.WithBackupRunResponder(backupResponder))
 	bgManager.Register(backupCoordinator)
 	logger.Info("backup control plane registered", zap.String("backend", string(domain.BackupBackendKopia)))
 
-	// Generic AI/ML registry foundation. Bucket-B keeps this additive and does not
-	// move long-running orchestration off the existing LLM path until later buckets.
+	// Generic AI/ML registry foundation. Bucket-B keeps this additive and keeps
+	// long-running orchestration on the existing LLM path until dedicated buckets.
 	mlRegistryRepo := repository.NewPgMLRegistryRepository(pool)
 	mlRegistry := service.NewMLRegistryService(mlRegistryRepo, publisher, logger, service.WithMLEnvironmentRepository(envRepo))
 

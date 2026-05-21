@@ -331,6 +331,48 @@ func (r *fakeBackupRepo) ListBackupRuns(_ context.Context, status domain.Deploym
 	}
 	return out, nil
 }
+func (r *fakeBackupRepo) UpsertBackupRestore(context.Context, *domain.BackupRestoreRun) error {
+	return nil
+}
+func (r *fakeBackupRepo) GetBackupRestore(context.Context, uuid.UUID) (*domain.BackupRestoreRun, error) {
+	return nil, nil
+}
+func (r *fakeBackupRepo) GetBackupRestoreByRequestCoordinate(context.Context, string, int, string) (*domain.BackupRestoreRun, error) {
+	return nil, nil
+}
+func (r *fakeBackupRepo) CreateBackupRestoreIfAbsent(_ context.Context, restore *domain.BackupRestoreRun) (*domain.BackupRestoreRun, bool, error) {
+	return restore, true, nil
+}
+func (r *fakeBackupRepo) ClaimNextQueuedBackupRestore(context.Context) (*domain.BackupRestoreRun, error) {
+	return nil, nil
+}
+func (r *fakeBackupRepo) RequeueStaleBackupRestores(context.Context, time.Duration) (int, error) {
+	return 0, nil
+}
+func (r *fakeBackupRepo) ListBackupRestores(context.Context, domain.DeploymentRunStatus, int, int) ([]domain.BackupRestoreRun, error) {
+	return nil, nil
+}
+func (r *fakeBackupRepo) UpsertBackupRetentionRun(context.Context, *domain.BackupRetentionRun) error {
+	return nil
+}
+func (r *fakeBackupRepo) GetBackupRetentionRun(context.Context, uuid.UUID) (*domain.BackupRetentionRun, error) {
+	return nil, nil
+}
+func (r *fakeBackupRepo) GetBackupRetentionRunByRequestCoordinate(context.Context, string, int, string) (*domain.BackupRetentionRun, error) {
+	return nil, nil
+}
+func (r *fakeBackupRepo) CreateBackupRetentionRunIfAbsent(_ context.Context, run *domain.BackupRetentionRun) (*domain.BackupRetentionRun, bool, error) {
+	return run, true, nil
+}
+func (r *fakeBackupRepo) ClaimNextQueuedBackupRetentionRun(context.Context) (*domain.BackupRetentionRun, error) {
+	return nil, nil
+}
+func (r *fakeBackupRepo) RequeueStaleBackupRetentionRuns(context.Context, time.Duration) (int, error) {
+	return 0, nil
+}
+func (r *fakeBackupRepo) ListBackupRetentionRuns(context.Context, domain.DeploymentRunStatus, int, int) ([]domain.BackupRetentionRun, error) {
+	return nil, nil
+}
 func (r *fakeBackupRepo) UpsertBackupVerification(_ context.Context, record *domain.BackupVerificationRecord) error {
 	cp := *record
 	if cp.ID == uuid.Nil {

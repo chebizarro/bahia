@@ -19,7 +19,7 @@ func TestBackupRunCoordinatorProcessOnceCompletesSnapshotWithoutVerification(t *
 	registry, repo, run := backupCoordinatorFixture(t, false)
 	backend := &recordingBackupBackend{snapshot: &BackupSnapshotResult{SnapshotID: "snap-1", Evidence: map[string]any{"bytes": float64(42)}}}
 	responder := &recordingBackupResponder{}
-	coordinator := NewBackupRunCoordinator(registry, backend, nil, WithBackupRunResponder(responder), WithBackupRunHealthCheck(true))
+	coordinator := NewBackupRunCoordinator(registry, MustBackupBackendResolver(backend), nil, WithBackupRunResponder(responder), WithBackupRunHealthCheck(true))
 
 	require.NoError(t, coordinator.ProcessOnce(ctx))
 
@@ -44,7 +44,7 @@ func TestBackupRunCoordinatorVerificationRequiredSucceedsRestoreEligible(t *test
 		verify:   &BackupVerifyResult{Verified: true, Status: domain.BackupVerificationSucceeded, Evidence: map[string]any{"checked": true}},
 	}
 	responder := &recordingBackupResponder{}
-	coordinator := NewBackupRunCoordinator(registry, backend, nil, WithBackupRunResponder(responder), WithBackupRunHealthCheck(false), WithBackupRunCoordinatorConfig(BackupRunCoordinatorConfig{VerifyFilesPercent: 100}))
+	coordinator := NewBackupRunCoordinator(registry, MustBackupBackendResolver(backend), nil, WithBackupRunResponder(responder), WithBackupRunHealthCheck(false), WithBackupRunCoordinatorConfig(BackupRunCoordinatorConfig{VerifyFilesPercent: 100}))
 
 	require.NoError(t, coordinator.ProcessBackupRun(ctx, run.ID))
 
@@ -70,7 +70,7 @@ func TestBackupRunCoordinatorVerificationRequiredFailsClosed(t *testing.T) {
 		snapshot: &BackupSnapshotResult{SnapshotID: "snap-failed"},
 		verify:   &BackupVerifyResult{Verified: false, Status: domain.BackupVerificationFailed, Evidence: map[string]any{"checked": false}, Error: "corrupt snapshot"},
 	}
-	coordinator := NewBackupRunCoordinator(registry, backend, nil, WithBackupRunHealthCheck(false))
+	coordinator := NewBackupRunCoordinator(registry, MustBackupBackendResolver(backend), nil, WithBackupRunHealthCheck(false))
 
 	err := coordinator.ProcessBackupRun(ctx, run.ID)
 
@@ -94,7 +94,7 @@ func TestBackupRunCoordinatorUnsupportedVerificationFailsClosed(t *testing.T) {
 		verifyErr: errors.New("unsupported verification backend"),
 	}
 	backend.verifyErr = errors.Join(ErrBackupBackendUnsupported, backend.verifyErr)
-	coordinator := NewBackupRunCoordinator(registry, backend, nil, WithBackupRunHealthCheck(false))
+	coordinator := NewBackupRunCoordinator(registry, MustBackupBackendResolver(backend), nil, WithBackupRunHealthCheck(false))
 
 	err := coordinator.ProcessBackupRun(ctx, run.ID)
 
@@ -113,7 +113,7 @@ func TestBackupRunCoordinatorCancellationLeavesRunRecoverable(t *testing.T) {
 	ctx := context.Background()
 	registry, repo, run := backupCoordinatorFixture(t, false)
 	backend := &recordingBackupBackend{snapshotErr: context.Canceled}
-	coordinator := NewBackupRunCoordinator(registry, backend, nil, WithBackupRunHealthCheck(false))
+	coordinator := NewBackupRunCoordinator(registry, MustBackupBackendResolver(backend), nil, WithBackupRunHealthCheck(false))
 
 	err := coordinator.ProcessBackupRun(ctx, run.ID)
 
@@ -196,11 +196,13 @@ type memoryBackupControlPlaneRepository struct {
 	policies      map[uuid.UUID]*domain.BackupPolicy
 	repositories  map[uuid.UUID]*domain.BackupRepository
 	runs          map[uuid.UUID]*domain.BackupRun
+	restores      map[uuid.UUID]*domain.BackupRestoreRun
+	retentions    map[uuid.UUID]*domain.BackupRetentionRun
 	verifications map[uuid.UUID]*domain.BackupVerificationRecord
 }
 
 func newMemoryBackupControlPlaneRepository() *memoryBackupControlPlaneRepository {
-	return &memoryBackupControlPlaneRepository{recipes: map[uuid.UUID]*domain.BackupRecipe{}, policies: map[uuid.UUID]*domain.BackupPolicy{}, repositories: map[uuid.UUID]*domain.BackupRepository{}, runs: map[uuid.UUID]*domain.BackupRun{}, verifications: map[uuid.UUID]*domain.BackupVerificationRecord{}}
+	return &memoryBackupControlPlaneRepository{recipes: map[uuid.UUID]*domain.BackupRecipe{}, policies: map[uuid.UUID]*domain.BackupPolicy{}, repositories: map[uuid.UUID]*domain.BackupRepository{}, runs: map[uuid.UUID]*domain.BackupRun{}, restores: map[uuid.UUID]*domain.BackupRestoreRun{}, retentions: map[uuid.UUID]*domain.BackupRetentionRun{}, verifications: map[uuid.UUID]*domain.BackupVerificationRecord{}}
 }
 
 func (r *memoryBackupControlPlaneRepository) UpsertBackupRecipe(_ context.Context, recipe *domain.BackupRecipe) error {
@@ -388,6 +390,154 @@ func (r *memoryBackupControlPlaneRepository) RequeueStaleBackupRuns(context.Cont
 	return 0, nil
 }
 func (r *memoryBackupControlPlaneRepository) ListBackupRuns(context.Context, domain.DeploymentRunStatus, int, int) ([]domain.BackupRun, error) {
+	return nil, nil
+}
+
+func (r *memoryBackupControlPlaneRepository) UpsertBackupRestore(_ context.Context, restore *domain.BackupRestoreRun) error {
+	if err := domain.ValidateBackupRestoreRun(restore); err != nil {
+		return err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if restore.ID == uuid.Nil {
+		restore.ID = uuid.New()
+	}
+	setBackupTestTimes(&restore.CreatedAt, &restore.UpdatedAt)
+	cp := *restore
+	r.restores[cp.ID] = &cp
+	return nil
+}
+func (r *memoryBackupControlPlaneRepository) GetBackupRestore(_ context.Context, id uuid.UUID) (*domain.BackupRestoreRun, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if restore := r.restores[id]; restore != nil {
+		cp := *restore
+		return &cp, nil
+	}
+	return nil, nil
+}
+func (r *memoryBackupControlPlaneRepository) GetBackupRestoreByRequestCoordinate(_ context.Context, pubkey string, kind int, dTag string) (*domain.BackupRestoreRun, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, restore := range r.restores {
+		if restore.RequestedBy == pubkey && restore.RequestKind == kind && restore.RequestDTag == dTag {
+			cp := *restore
+			return &cp, nil
+		}
+	}
+	return nil, nil
+}
+func (r *memoryBackupControlPlaneRepository) CreateBackupRestoreIfAbsent(ctx context.Context, restore *domain.BackupRestoreRun) (*domain.BackupRestoreRun, bool, error) {
+	if existing, _ := r.GetBackupRestoreByRequestCoordinate(ctx, restore.RequestedBy, restore.RequestKind, restore.RequestDTag); existing != nil {
+		return existing, false, nil
+	}
+	if err := r.UpsertBackupRestore(ctx, restore); err != nil {
+		return nil, false, err
+	}
+	created, err := r.GetBackupRestore(ctx, restore.ID)
+	return created, true, err
+}
+func (r *memoryBackupControlPlaneRepository) ClaimNextQueuedBackupRestore(_ context.Context) (*domain.BackupRestoreRun, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var ids []uuid.UUID
+	for id, restore := range r.restores {
+		if restore.Status == domain.RunStatusQueued && (restore.ApprovalStatus == domain.BackupApprovalApproved || restore.ApprovalStatus == domain.BackupApprovalNotRequired) {
+			ids = append(ids, id)
+		}
+	}
+	sort.Slice(ids, func(i, j int) bool { return r.restores[ids[i]].CreatedAt.Before(r.restores[ids[j]].CreatedAt) })
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	restore := r.restores[ids[0]]
+	now := time.Now().UTC()
+	restore.Status = domain.RunStatusRunning
+	if restore.StartedAt == nil {
+		restore.StartedAt = &now
+	}
+	restore.UpdatedAt = now
+	cp := *restore
+	return &cp, nil
+}
+func (r *memoryBackupControlPlaneRepository) RequeueStaleBackupRestores(context.Context, time.Duration) (int, error) {
+	return 0, nil
+}
+func (r *memoryBackupControlPlaneRepository) ListBackupRestores(context.Context, domain.DeploymentRunStatus, int, int) ([]domain.BackupRestoreRun, error) {
+	return nil, nil
+}
+
+func (r *memoryBackupControlPlaneRepository) UpsertBackupRetentionRun(_ context.Context, run *domain.BackupRetentionRun) error {
+	if err := domain.ValidateBackupRetentionRun(run); err != nil {
+		return err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if run.ID == uuid.Nil {
+		run.ID = uuid.New()
+	}
+	setBackupTestTimes(&run.CreatedAt, &run.UpdatedAt)
+	cp := *run
+	r.retentions[cp.ID] = &cp
+	return nil
+}
+func (r *memoryBackupControlPlaneRepository) GetBackupRetentionRun(_ context.Context, id uuid.UUID) (*domain.BackupRetentionRun, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if run := r.retentions[id]; run != nil {
+		cp := *run
+		return &cp, nil
+	}
+	return nil, nil
+}
+func (r *memoryBackupControlPlaneRepository) GetBackupRetentionRunByRequestCoordinate(_ context.Context, pubkey string, kind int, dTag string) (*domain.BackupRetentionRun, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, run := range r.retentions {
+		if run.RequestedBy == pubkey && run.RequestKind == kind && run.RequestDTag == dTag {
+			cp := *run
+			return &cp, nil
+		}
+	}
+	return nil, nil
+}
+func (r *memoryBackupControlPlaneRepository) CreateBackupRetentionRunIfAbsent(ctx context.Context, run *domain.BackupRetentionRun) (*domain.BackupRetentionRun, bool, error) {
+	if existing, _ := r.GetBackupRetentionRunByRequestCoordinate(ctx, run.RequestedBy, run.RequestKind, run.RequestDTag); existing != nil {
+		return existing, false, nil
+	}
+	if err := r.UpsertBackupRetentionRun(ctx, run); err != nil {
+		return nil, false, err
+	}
+	created, err := r.GetBackupRetentionRun(ctx, run.ID)
+	return created, true, err
+}
+func (r *memoryBackupControlPlaneRepository) ClaimNextQueuedBackupRetentionRun(_ context.Context) (*domain.BackupRetentionRun, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var ids []uuid.UUID
+	for id, run := range r.retentions {
+		if run.Status == domain.RunStatusQueued {
+			ids = append(ids, id)
+		}
+	}
+	sort.Slice(ids, func(i, j int) bool { return r.retentions[ids[i]].CreatedAt.Before(r.retentions[ids[j]].CreatedAt) })
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	run := r.retentions[ids[0]]
+	now := time.Now().UTC()
+	run.Status = domain.RunStatusRunning
+	if run.StartedAt == nil {
+		run.StartedAt = &now
+	}
+	run.UpdatedAt = now
+	cp := *run
+	return &cp, nil
+}
+func (r *memoryBackupControlPlaneRepository) RequeueStaleBackupRetentionRuns(context.Context, time.Duration) (int, error) {
+	return 0, nil
+}
+func (r *memoryBackupControlPlaneRepository) ListBackupRetentionRuns(context.Context, domain.DeploymentRunStatus, int, int) ([]domain.BackupRetentionRun, error) {
 	return nil, nil
 }
 
