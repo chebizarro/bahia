@@ -1,0 +1,92 @@
+{
+  "feature_id": "BACKUP_CONTROL_PLANE_ORCHESTRATION",
+  "title": "Backup control-plane orchestration and provenance",
+  "status": "draft",
+  "source_evidence": [
+    {
+      "type": "operator_intent",
+      "summary": "Bahia should manage backup orchestration and provenance as a backup control plane, not implement deduplicated storage, block snapshotting, repository formats, or delta algorithms."
+    },
+    {
+      "type": "repository_observation",
+      "summary": "No dedicated backup orchestration domain or PSTF feature exists yet; existing Bahia control-plane patterns use Nostr command/result events and replaceable read models."
+    }
+  ],
+  "actors": [
+    "operator",
+    "backup scheduler",
+    "backup runtime adapter",
+    "restore approver",
+    "worker or site agent",
+    "Nostr relay",
+    "backup backend"
+  ],
+  "description": "Bahia orchestrates backup policies, recipes, snapshot coordination, retention, provenance, restore workflows, verification/testing, cross-site replication, airgap export/import, and Nostr-signed backup attestations. Existing backup and snapshot tools own repository formats, deduplication, data transfer, compression, encryption primitives, and native snapshot implementation.",
+  "in_scope": [
+    "Backup definitions, policies, recipes, runs, restore requests, restore results, verification records, retention policies, repository records, runtime statuses, observations, and signed attestations represented as Nostr events/read models.",
+    "Recipe-driven orchestration over runtime adapters such as Kopia, Velero, ZFS, Btrfs, LVM, Ceph, CSI, Longhorn, Proxmox, Restic, and Borg.",
+    "Verification-first backup workflows including hash verification, restore tests, service startup checks, health checks, boot checks, container checks, and model inference checks where applicable.",
+    "Scoped Nostr subscriptions, EOSE-driven historical catch-up, realtime event handling, publish OK verification, CLOSED handling, AUTH handling when required, event validation, dedupe, and idempotent handlers.",
+    "Portable backup recipes and signed operational provenance that connect deployments, artifacts, models, recipes, packages, SBOMs, backups, verification results, and restore outcomes."
+  ],
+  "out_of_scope": [
+    "Implementing deduplicated backup storage.",
+    "Implementing block snapshotting.",
+    "Implementing backup repository formats.",
+    "Implementing delta algorithms.",
+    "Replacing Kopia, Restic, Velero, Borg, ZFS, Btrfs, LVM, Ceph, CSI, Longhorn, or Proxmox backup/snapshot capabilities.",
+    "Polling relays or using timeout-based completion to detect backup or restore completion."
+  ],
+  "preconditions": [
+    "Operators configure relay, signer, and backend adapter credentials outside production code paths.",
+    "Runtime adapters expose backend capabilities and health without hardcoded production endpoints.",
+    "Backup recipes use narrow resource identifiers and correlation tags for relay filtering."
+  ],
+  "postconditions": [
+    "Every backup run has signed provenance describing initiator, target, backend, repository, artifact hashes or backend snapshot identifiers, verification status, and restore-test status when applicable.",
+    "Every publish path verifies relay OK accepted flag and rejection message.",
+    "Every restore workflow is traceable from request through approval, adapter execution, verification, and final result event.",
+    "Remaining implementation gaps are tracked in Beads rather than TODOs or markdown-only lists."
+  ],
+  "happy_paths": [
+    "Operator defines a Kopia-backed filesystem backup recipe with retention and verification requirements; Bahia schedules or accepts a run request, orchestrates adapter execution, verifies results, and publishes signed run and verification events.",
+    "Operator requests a Kubernetes restore through a Velero adapter; Bahia validates request scope, records approval, orchestrates Velero, verifies restore health, and publishes signed restore result provenance.",
+    "A worker reconnects after relay interruption; Bahia re-issues scoped subscriptions and deduplicates replayed backup command/read-model events by event id and addressable d-tag coordinates."
+  ],
+  "failure_paths": [
+    "Relay rejects a backup event publish; Bahia records failure with rejection reason and does not treat the workflow as complete.",
+    "Relay requires AUTH; Bahia completes NIP-42 authentication where configured or fails closed with an explicit result.",
+    "Backend adapter reports partial failure; Bahia records which backend operations succeeded, which failed, and what verification did or did not run.",
+    "Verification fails after snapshot creation; Bahia marks backup unverified and prevents policy consumers from treating it as a verified backup."
+  ],
+  "edge_cases": [
+    "Batch publish partially succeeds across relays.",
+    "Duplicate run requests share the same idempotency d tag.",
+    "Historical catch-up returns older replaceable repository or policy events before the latest event.",
+    "Restore request targets an airgapped repository import that must be verified before use.",
+    "Backend supports snapshots but not application-aware quiesce/resume steps."
+  ],
+  "non_functional_requirements": [
+    "Nostr-native event stream semantics only: subscribe, react, validate, verify, and close subscriptions cleanly.",
+    "No fake, stubbed, placeholder, filesystem_mock, or hardcoded production-path backup implementations in shipped backup orchestration paths.",
+    "Adapters must keep orchestration, storage, snapshot format, and artifact provenance decoupled.",
+    "Tests must be deterministic and inject EVENT, EOSE, OK, CLOSED, and AUTH messages directly rather than sleeping."
+  ],
+  "dependencies": [
+    "Nostr event validation and publishing utilities",
+    "Relay metadata/NIP-11 and AUTH/NIP-42 support",
+    "Signer-first provenance model",
+    "Backend-specific CLIs or APIs for Kopia, Velero, and native snapshot systems",
+    "Configuration/secrets management for repository credentials"
+  ],
+  "ambiguities": [
+    "Final event kind assignments must avoid collisions with existing Bahia namespaces; proposed backup kinds 31200-31207 conflict with the current signing attestation kind 31200 and must be reviewed before implementation.",
+    "Product decision needed on whether backup request/restore request command kinds should reuse 38395/38396 or allocate a backup-specific command namespace because 38395/38396 are already documented as ML result kinds.",
+    "Adapter priority and first vertical slice target must be selected: Kopia filesystem backup, Velero Kubernetes restore, or native snapshot orchestration."
+  ],
+  "human_decisions": [
+    "Approve final backup event namespace and kind allocation.",
+    "Approve first implementation slice and required production backend.",
+    "Approve minimum verification policy required before a backup is considered usable for restore."
+  ]
+}

@@ -1,0 +1,55 @@
+{
+  "feature_id": "BACKUP_CONTROL_PLANE_ORCHESTRATION",
+  "status": "draft",
+  "tests": [
+    {
+      "id": "T-BACKUP-001",
+      "criteria": ["AC-BACKUP-001", "AC-BACKUP-003", "AC-BACKUP-006"],
+      "type": "unit",
+      "target": "future backup domain and adapter contract tests",
+      "description": "Validate that recipe execution delegates to configured real adapters and rejects unsupported or unconfigured backend operations without embedding storage-engine behavior in Bahia."
+    },
+    {
+      "id": "T-BACKUP-002",
+      "criteria": ["AC-BACKUP-002", "AC-BACKUP-004"],
+      "type": "unit",
+      "target": "future Nostr backup reactor tests",
+      "description": "Inject EVENT, EOSE, OK, CLOSED, and AUTH messages to verify event-driven backup run processing, publish acceptance checks, rejection handling, dedupe, and no sleep-based completion."
+    },
+    {
+      "id": "T-BACKUP-003",
+      "criteria": ["AC-BACKUP-005"],
+      "type": "unit",
+      "target": "future verification policy tests",
+      "description": "Assert that a snapshot with failed or missing verification is projected as unverified and is not eligible as a verified restore candidate."
+    },
+    {
+      "id": "T-BACKUP-004",
+      "criteria": ["AC-BACKUP-007"],
+      "type": "unit/integration",
+      "target": "future restore workflow tests",
+      "description": "Inject restore request and approval/rejection events and verify adapter execution only occurs after required approval, with signed terminal restore result provenance."
+    },
+    {
+      "id": "T-BACKUP-005",
+      "criteria": ["AC-BACKUP-002", "AC-BACKUP-004"],
+      "type": "integration",
+      "target": "future relay-sidecar/control-plane integration tests",
+      "description": "Verify scoped subscriptions, EOSE historical catch-up, replay dedupe, CLOSED handling, AUTH-required failure/reauthentication, and partial relay OK outcomes across backup workflow events."
+    }
+  ],
+  "coverage_summary": {
+    "criteria_total": 7,
+    "criteria_with_tests": 7,
+    "known_gaps": [
+      "No backup code exists yet; tests are planned acceptance mappings for future implementation slices.",
+      "Event namespace cannot be tested until kind allocation is approved.",
+      "Backend-specific test harnesses must be selected after the first adapter slice is chosen."
+    ]
+  },
+  "implementation_notes": [
+    "Prefer Kopia for the first generic filesystem backup adapter unless human decision chooses Velero or a native snapshot adapter first.",
+    "Velero must be treated as a Kubernetes orchestration adapter, not something Bahia reimplements.",
+    "Do not introduce filesystem_mock into production backup paths; test doubles must remain test-only and deterministic."
+  ]
+}

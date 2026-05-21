@@ -1,0 +1,64 @@
+{
+  "feature_id": "BACKUP_CONTROL_PLANE_ORCHESTRATION",
+  "status": "draft",
+  "criteria": [
+    {
+      "id": "AC-BACKUP-001",
+      "title": "Bahia remains a backup control plane",
+      "given": "backup functionality is added to Bahia",
+      "when": "operators define policies, recipes, repositories, runs, restores, retention, replication, or verification",
+      "then": "Bahia orchestrates workflows and provenance while external backends own snapshotting, repository formats, deduplication, transfer, compression, and encryption primitives"
+    },
+    {
+      "id": "AC-BACKUP-002",
+      "title": "Backup workflows are Nostr-native",
+      "given": "a backup or restore workflow is requested",
+      "when": "Bahia processes historical and realtime workflow events",
+      "then": "it uses scoped REQ subscriptions, EVENT handlers, EOSE for catch-up, OK verification for publishes, CLOSED handling, AUTH handling when required, event validation, dedupe, and idempotent correlation tags instead of polling or timeout-based completion"
+    },
+    {
+      "id": "AC-BACKUP-003",
+      "title": "Backup recipes are portable orchestration artifacts",
+      "given": "an operator defines a backup recipe",
+      "when": "the recipe contains quiesce, snapshot, export, verify, resume, restore, or replication steps",
+      "then": "the recipe references backend adapters and resource tags without embedding backend-specific repository formats or hardcoded production credentials"
+    },
+    {
+      "id": "AC-BACKUP-004",
+      "title": "Signed provenance is produced for every backup run",
+      "given": "a backup run reaches a terminal state",
+      "when": "Bahia publishes the terminal run and verification events",
+      "then": "the signed provenance identifies what was backed up, who initiated it, backend and repository identifiers, hashes or backend snapshot identifiers, verification status, restore-test status when available, relay publish outcomes, and rejection reasons for failures"
+    },
+    {
+      "id": "AC-BACKUP-005",
+      "title": "Verification-first policy is enforceable",
+      "given": "a backup policy requires verification",
+      "when": "snapshot creation succeeds but verification or restore testing fails or is skipped",
+      "then": "Bahia marks the backup unverified and policy consumers cannot treat it as a verified restore candidate"
+    },
+    {
+      "id": "AC-BACKUP-006",
+      "title": "Backend adapters are real and explicitly bounded",
+      "given": "a backup runtime adapter is configured",
+      "when": "Bahia invokes CreateSnapshot, VerifySnapshot, Restore, ListSnapshots, DeleteSnapshot, or Health",
+      "then": "the adapter calls the real backend API/CLI or returns an explicit unsupported/configuration error; production paths do not use fake, stub, placeholder, or filesystem_mock behavior"
+    },
+    {
+      "id": "AC-BACKUP-007",
+      "title": "Restore workflows are approval-aware and auditable",
+      "given": "a restore request targets infrastructure, data, deployments, models, or stateful services",
+      "when": "approval is required by policy",
+      "then": "Bahia records approval or rejection as signed Nostr events before adapter execution and publishes restore result provenance after verification"
+    }
+  ],
+  "coverage_notes": [
+    "Current slice documents intended behavior only; no implementation or tests exist yet.",
+    "Event kind examples supplied by product intent require namespace review because 31200 and 38395/38396 already appear in existing Bahia protocol documentation/code."
+  ],
+  "unresolved_questions": [
+    "Which event namespace should backup command/result and replaceable read-model events use?",
+    "What is the first production backend slice: Kopia filesystem backup, Velero Kubernetes restore, or native snapshot adapter?",
+    "What verification tests are mandatory for a backup to be considered restorable in Cascadia?"
+  ]
+}
