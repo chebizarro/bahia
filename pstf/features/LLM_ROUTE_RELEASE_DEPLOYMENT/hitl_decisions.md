@@ -498,13 +498,13 @@ APPROVE_N_MINUS_1_AUTOMATIC_LLM_ROLLBACK_SELECTION
 - Feature Spec: updated — rollback target selection is now explicitly intended as automatic rollback to the previous deployed different release (n-1 style).
 - Acceptance Criteria: rollback-specific criteria may now be authored/refreshed from an approved semantic rule instead of staying fully deferred for lack of product intent.
 - Tests: rollback tests can now be designed against explicit target-selection semantics once the AC artifact is refreshed.
-- Defects: implementation review remains needed because the current code still encodes rollback through an implicit deployed-intent scan rather than an explicit named n-1 rule.
+- Defects: resolved by bahia-3nsy — implementation review found and verified explicit rollback target-selection helpers for the approved n-1 rule.
 - Confidence / Release: unchanged for the approved non-rollback slice; rollback remains outside verified release claims until rollback ACs/tests/browser coverage are added.
 
 **Required Follow-Up Actions:**
 - [ ] Refresh `acceptance_criteria.json` with rollback-specific criteria based on the approved n-1 rule.
 - [ ] Refresh `test_matrix.json` with rollback-specific tests.
-- [ ] Re-verify `RollbackWithMetadata` against explicit n-1 ordering and supersedence expectations.
+- [x] Re-verify `RollbackWithMetadata` against explicit n-1 ordering and supersedence expectations.
 
 ---
 

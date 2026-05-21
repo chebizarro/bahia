@@ -124,8 +124,7 @@
   "blocking_findings": [],
   "evidence_gaps": [
     "Backend code coverage evidence is package-scoped rather than a pure touched-file aggregate, so the code-coverage component remains conservative even though the rollback-aware paths themselves are covered.",
-    "The browser coverage artifact line-instruments the current `/llm` workflow logic modules rather than the outer Svelte entry wrappers; wrapper behavior is covered separately by build and deterministic Playwright evidence.",
-    "`feature_spec.json` still contains stale wording from before bahia-3nsy that describes rollback target selection as implicitly encoded; `verification_report.md` and the current code now reflect the explicit selector."
+    "The browser coverage artifact line-instruments the current `/llm` workflow logic modules rather than the outer Svelte entry wrappers; wrapper behavior is covered separately by build and deterministic Playwright evidence."
   ],
   "recommendation": {
     "next_stage": "final_human_review",

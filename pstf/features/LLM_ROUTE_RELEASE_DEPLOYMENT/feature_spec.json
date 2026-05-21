@@ -3,7 +3,7 @@
   "title": "LLM route/release/deploy/approval/rollback control plane",
   "priority": "P2",
   "status": "approved_verified",
-  "description": "Structured PSTF reconstruction for Bahia's LLM control plane. Current repository evidence verifies the full dedicated signer-first browser and backend flow for route creation, release registration, deployment request, approval/rejection, rollback, and relay-backed route-state visibility. Rollback target selection is now verified against the HITL-approved previous deployed different release (n-1) rule, while the implementation still encodes that rule through deployed-intent ordering rather than an explicit named policy.",
+  "description": "Structured PSTF reconstruction for Bahia's LLM control plane. Current repository evidence verifies the full dedicated signer-first browser and backend flow for route creation, release registration, deployment request, approval/rejection, rollback, explicit rollback target selection, and relay-backed route-state visibility. Rollback target selection is verified against the HITL-approved previous deployed different release (n-1) rule via the explicit rollback selector implementation.",
   "source_evidence": [
     "pstf/product_map.md",
     "pstf/planning_docs_index.md",
@@ -101,7 +101,7 @@
       "asynchronous deployment lifecycle from accepted intent through progress and terminal result",
       "authoritative `31964` LLM route registry and `31965` LLM route-state projections",
       "the dedicated `/llm` browser workflow for route creation, release registration, deployment request, approval visibility, and route-state/activity visibility",
-      "rollback as a first-class feature behavior, including approved target-selection semantics and intended browser visibility, even though rollback-specific verification remains behind the spec artifacts"
+      "rollback as a first-class feature behavior, including approved target-selection semantics, verified explicit selector behavior, and browser visibility"
     ],
     "out_of_scope": [
       "encrypted domains such as notifications, orgs, payments, secrets, signatures, or run-log retrieval",
@@ -120,7 +120,7 @@
     "code": [
       "`internal/adapters/nostr/projector.go` advertises LLM capabilities and kind families only when the LLM feature is enabled.",
       "`internal/controlplane/llm_command_publisher.go`, `reactor_llm_requests_test.go`, and `llm_provisioning_coordinator_test.go` prove signer-first request shaping, correlated reply handling, and async lifecycle execution.",
-      "`internal/service/llm_registry.go` holds the current rollback implementation, which still infers the target release by scanning prior deployed intents.",
+      "`internal/service/llm_registry.go` holds the current rollback implementation, including explicit rollback target-selection helpers that choose the previous deployed different release and fail closed when no eligible prior release exists.",
       "`web/src/routes/llm/+page.svelte` now exposes rollback as a user-visible action in the dedicated browser workflow."
     ],
     "tests": [
@@ -130,7 +130,7 @@
     ],
     "existing_behavior": [
       "The current repo state has moved beyond the older draft spec: the dedicated `/llm` route exists, the browser workflow is real, and the non-rollback slice is already verified and human-approved.",
-      "Rollback is now covered across backend request handling, registry target selection/failure behavior, browser request helpers, and the dedicated `/llm` workflow; remaining implementation drift is limited to the rollback selection rule being encoded implicitly through deployed-intent scan ordering."
+      "Rollback is now covered across backend request handling, explicit registry target selection/failure behavior, browser request helpers, and the dedicated `/llm` workflow."
     ]
   },
   "observed_behavior": {
@@ -140,7 +140,7 @@
       "The dedicated `/llm` browser workflow now supports route creation, release registration, deployment request, rollback, approval/rejection, and live route-state/activity visibility.",
       "Deploy requests produce an initial correlated `6973` processing/accepted status, while background provisioning later emits staged `6973` progress and a terminal `7973` result.",
       "REST read routes and primary route/release CRUD routes are mounted in the normal router, while operational REST endpoints for intent approval/reject/rollback/host/observation remain available only behind `AllowOperationalREST` plus operator access.",
-      "Current rollback code scans previously deployed intents and chooses a prior deployed release that differs from the current desired release, but that behavior is encoded implicitly through repository ordering and scan logic rather than an explicit named policy."
+      "Current rollback code uses explicit target-selection helpers to sort successfully deployed intents newest-first, choose the previous deployed release that differs from the current desired release, supersede the current deployment lineage, and fail closed when no eligible prior release exists."
     ],
     "evidence": [
       "internal/adapters/nostr/projector.go:256-318",
@@ -160,8 +160,8 @@
       "This feature family is intended to have a dedicated end-user browser workflow, not just MCP/operator-only support.",
       "Canonical behavior is signer-first and event-driven: publish signed LLM request events, require accepted relay publishes, subscribe for correlated `6973`/`797x` replies, and derive browser-visible state from Bahia-signed `31964`/`31965` read models rather than polling or deprecated REST mutations.",
       "Operational REST mutation endpoints for LLM intents, approve/reject, rollback, hosts, and observations are outside the approved long-term product contract even though compatibility code still mounts them behind a flag.",
-      "Rollback target selection is now approved as automatic rollback to the previous deployed different release (n-1 style), rather than preserving the current implicit scan algorithm as normative behavior.",
-      "The dedicated `/llm` workflow is intended to expose rollback as a user-visible action; its current absence is a product gap to fix rather than an allowed boundary."
+      "Rollback target selection is approved and verified as automatic rollback to the previous deployed different release (n-1 style) through the explicit rollback selector implementation.",
+      "The dedicated `/llm` workflow exposes rollback as a user-visible action rather than leaving rollback behind hidden operator-only paths."
     ],
     "decision_refs": [
       "HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-001",
@@ -274,20 +274,12 @@
       ]
     },
     {
-      "behavior": "Implicit rollback target-selection and supersedence scan in `RollbackWithMetadata`",
-      "classification": "FIX",
-      "decision_ref": "HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-003",
+      "behavior": "Explicit rollback target-selection and supersedence helpers in `RollbackWithMetadata`",
+      "classification": "KEEP",
+      "decision_ref": "HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-012",
       "observed_evidence": [
-        "internal/service/llm_registry.go:333-369"
-      ]
-    },
-    {
-      "behavior": "Missing rollback action in the dedicated `/llm` browser workflow",
-      "classification": "FIX",
-      "decision_ref": "HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-013",
-      "observed_evidence": [
-        "web/src/routes/llm/+page.svelte",
-        "web/tests/e2e/llm-route-release-deployment.spec.js"
+        "internal/service/llm_registry.go:579-630",
+        "internal/service/llm_registry_test.go"
       ]
     }
   ],
@@ -302,30 +294,8 @@
         "internal/api/router/llm_routes_test.go",
         "docs/api.md:257-259"
       ]
-    },
-    {
-      "id": "LLMRD-CON-002",
-      "type": "observed_vs_intended",
-      "note": "The dedicated `/llm` workflow exists, but it currently omits rollback even though rollback is intended to be browser-visible and user-actionable.",
-      "decision_ref": "HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-013",
-      "evidence": [
-        "web/src/routes/llm/+page.svelte",
-        "web/tests/e2e/llm-route-release-deployment.spec.js"
-      ]
-    },
-    {
-      "id": "LLMRD-CON-003",
-      "type": "observed_vs_intended",
-      "note": "Current rollback implementation still encodes target selection through an implicit deployed-intent scan, while the approved intended rule is explicit automatic rollback to the previous deployed different release (n-1 style).",
-      "decision_ref": "HITL-LLM_ROUTE_RELEASE_DEPLOYMENT-012",
-      "evidence": [
-        "internal/service/llm_registry.go:333-369",
-        "pstf/features/LLM_ROUTE_RELEASE_DEPLOYMENT/hitl_decisions.md"
-      ]
     }
   ],
   "open_questions": [],
-  "evidence_gaps": [
-    "The rollback target-selection rule is now behaviorally verified, but the implementation still expresses the approved n-1 policy indirectly through deployed-intent scan ordering rather than a named explicit selector."
-  ]
+  "evidence_gaps": []
 }
