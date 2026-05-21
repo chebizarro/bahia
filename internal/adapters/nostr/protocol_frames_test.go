@@ -1,6 +1,8 @@
 package nostr
 
 import (
+	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -94,6 +96,62 @@ func TestPublishResult_IsDuplicate(t *testing.T) {
 			assert.Equal(t, tt.expected, result.IsDuplicate())
 		})
 	}
+}
+
+func TestPublishResult_AggregatesMixedAcceptedRejected(t *testing.T) {
+	results := []PublishResult{
+		{RelayURL: "wss://relay.accepted.example", Accepted: true},
+		{RelayURL: "wss://relay.blocked.example", Reason: "blocked: policy denied event"},
+	}
+
+	require.NoError(t, aggregatePublishResultsError(results))
+	require.Equal(t, 1, countSuccessfulPublishResults(results))
+	assert.True(t, results[0].Accepted)
+	assert.Equal(t, "blocked: policy denied event", results[1].Reason)
+	assert.Nil(t, results[1].Error)
+}
+
+func TestPublishResult_AggregatesDuplicateAsSuccess(t *testing.T) {
+	results := []PublishResult{
+		{RelayURL: "wss://relay.duplicate.example", Reason: "duplicate: already have this event"},
+		{RelayURL: "wss://relay.rate.example", Reason: "rate-limited: slow down"},
+	}
+
+	require.NoError(t, aggregatePublishResultsError(results))
+	require.Equal(t, 1, countSuccessfulPublishResults(results))
+	assert.True(t, results[0].IsDuplicate())
+	assert.False(t, results[0].Accepted)
+}
+
+func TestPublishResult_AggregatesZeroAcceptedAsFailure(t *testing.T) {
+	transportErr := errors.New("websocket closed")
+	wrappedTransportErr := fmt.Errorf("publishing to relay: %w", transportErr)
+	results := []PublishResult{
+		{RelayURL: "wss://relay.blocked.example", Reason: "blocked: policy denied event"},
+		{RelayURL: "wss://relay.down.example", Error: wrappedTransportErr},
+	}
+
+	err := aggregatePublishResultsError(results)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to publish to any relay")
+	assert.Contains(t, err.Error(), "wss://relay.blocked.example rejected event: blocked: policy denied event")
+	assert.Contains(t, err.Error(), "wss://relay.down.example transport error")
+	assert.True(t, errors.Is(err, wrappedTransportErr), "aggregate error should unwrap the preserved relay error")
+	assert.True(t, errors.Is(err, transportErr), "aggregate error should retain nested transport causes")
+	require.Equal(t, 0, countSuccessfulPublishResults(results))
+}
+
+func TestRelayPool_OrderedRelaysDeduplicatesConfiguredURLs(t *testing.T) {
+	pool := NewRelayPool([]string{"wss://relay.example", "wss://relay.example"}, zap.NewNop())
+	mr := &managedRelay{url: "wss://relay.example"}
+	pool.relays["wss://relay.example"] = mr
+
+	pool.mu.RLock()
+	relays := pool.orderedRelaysLocked()
+	pool.mu.RUnlock()
+
+	require.Len(t, relays, 1)
+	require.Same(t, mr, relays[0])
 }
 
 func TestPublishResult_AcceptedVsRejected(t *testing.T) {

@@ -107,24 +107,25 @@ func (p *RelayPool) connectOne(ctx context.Context, mr *managedRelay) {
 // Publish publishes an event to all connected relays.
 // Returns the number of successful publications and any errors.
 func (p *RelayPool) Publish(ctx context.Context, ev nostr.Event) (int, error) {
+	results, err := p.PublishWithResults(ctx, ev)
+	return countSuccessfulPublishResults(results), err
+}
+
+// PublishWithResults publishes an event to all connected relays and returns
+// one result for each attempted relay publication. Protocol OK=false rejections
+// preserve the relay-provided reason with Error unset; transport and connection
+// failures preserve Error with Reason unset. A duplicate rejection is treated as
+// aggregate success because the relay already has the event.
+func (p *RelayPool) PublishWithResults(ctx context.Context, ev nostr.Event) ([]PublishResult, error) {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 
-	published := 0
-	var lastErr error
-
-	for _, mr := range p.relays {
-		if err := p.publishToRelay(ctx, mr, ev); err != nil {
-			lastErr = err
-			continue
-		}
-		published++
+	results := make([]PublishResult, 0, len(p.relays))
+	for _, mr := range p.orderedRelaysLocked() {
+		results = append(results, p.publishToRelayWithResult(ctx, mr, ev))
 	}
 
-	if published == 0 && lastErr != nil {
-		return 0, fmt.Errorf("failed to publish to any relay: %w", lastErr)
-	}
-	return published, nil
+	return results, aggregatePublishResultsError(results)
 }
 
 // PublishResult contains the outcome of a publish attempt.
@@ -175,9 +176,11 @@ func (r PublishResult) IsDuplicate() bool {
 	return IsDuplicateReason(r.Reason)
 }
 
-func (p *RelayPool) publishToRelay(ctx context.Context, mr *managedRelay, ev nostr.Event) error {
+func (p *RelayPool) publishToRelayWithResult(ctx context.Context, mr *managedRelay, ev nostr.Event) PublishResult {
 	mr.mu.Lock()
 	defer mr.mu.Unlock()
+
+	result := PublishResult{RelayURL: mr.url}
 
 	// Reconnect if needed.
 	if !mr.connected || mr.relay == nil {
@@ -188,7 +191,8 @@ func (p *RelayPool) publishToRelay(ctx context.Context, mr *managedRelay, ev nos
 		if err != nil {
 			mr.connected = false
 			mr.lastErr = err
-			return fmt.Errorf("reconnecting to %s: %w", mr.url, err)
+			result.Error = fmt.Errorf("reconnecting to %s: %w", mr.url, err)
+			return result
 		}
 		mr.relay = relay
 		mr.connected = true
@@ -197,54 +201,10 @@ func (p *RelayPool) publishToRelay(ctx context.Context, mr *managedRelay, ev nos
 
 	err := mr.relay.Publish(ctx, ev)
 	if err != nil {
-		errStr := err.Error()
-
-		// Check if this is an OK=false response (rejection) vs transport error.
-		// go-nostr returns errors starting with "msg:" for OK=false.
-		if strings.HasPrefix(errStr, "msg:") {
-			reason := strings.TrimPrefix(errStr, "msg: ")
-
-			// Log different rejection types at appropriate levels.
-			if strings.HasPrefix(reason, "auth-required:") {
-				p.logger.Warn("relay requires authentication",
-					zap.String("relay", mr.url),
-					zap.String("event_id", ev.ID),
-					zap.String("reason", reason),
-				)
-				// Don't mark as disconnected - auth issues are expected.
-				return fmt.Errorf("relay %s rejected event (auth-required): %s", mr.url, reason)
-			} else if strings.HasPrefix(reason, "rate-limited:") {
-				p.logger.Warn("relay rate-limited publish",
-					zap.String("relay", mr.url),
-					zap.String("event_id", ev.ID),
-					zap.String("reason", reason),
-				)
-				// Don't mark as disconnected - rate limiting is temporary.
-				return fmt.Errorf("relay %s rejected event (rate-limited): %s", mr.url, reason)
-			} else if strings.HasPrefix(reason, "blocked:") {
-				p.logger.Warn("relay blocked event",
-					zap.String("relay", mr.url),
-					zap.String("event_id", ev.ID),
-					zap.String("reason", reason),
-				)
-				// Don't mark as disconnected - policy blocks are expected.
-				return fmt.Errorf("relay %s rejected event (blocked): %s", mr.url, reason)
-			} else if strings.HasPrefix(reason, "duplicate:") {
-				// Duplicate is not an error - relay already has the event.
-				p.logger.Debug("relay already has event",
-					zap.String("relay", mr.url),
-					zap.String("event_id", ev.ID),
-				)
-				return nil // Consider duplicate as success.
-			} else {
-				// Unknown rejection reason.
-				p.logger.Warn("relay rejected event",
-					zap.String("relay", mr.url),
-					zap.String("event_id", ev.ID),
-					zap.String("reason", reason),
-				)
-				return fmt.Errorf("relay %s rejected event: %s", mr.url, reason)
-			}
+		if reason, ok := publishRejectionReason(err); ok {
+			result.Reason = reason
+			p.logPublishRejection(mr.url, ev.ID, reason)
+			return result
 		}
 
 		// Transport/connection error - mark as disconnected.
@@ -255,7 +215,8 @@ func (p *RelayPool) publishToRelay(ctx context.Context, mr *managedRelay, ev nos
 			zap.String("event_id", ev.ID),
 			zap.Error(err),
 		)
-		return fmt.Errorf("publishing to %s: %w", mr.url, err)
+		result.Error = fmt.Errorf("publishing to %s: %w", mr.url, err)
+		return result
 	}
 
 	// Success - relay accepted the event.
@@ -263,7 +224,132 @@ func (p *RelayPool) publishToRelay(ctx context.Context, mr *managedRelay, ev nos
 		zap.String("relay", mr.url),
 		zap.String("event_id", ev.ID),
 	)
-	return nil
+	result.Accepted = true
+	return result
+}
+
+func publishRejectionReason(err error) (string, bool) {
+	if err == nil {
+		return "", false
+	}
+	message := err.Error()
+	if !strings.HasPrefix(message, "msg:") {
+		return "", false
+	}
+	return strings.TrimSpace(strings.TrimPrefix(message, "msg:")), true
+}
+
+func (p *RelayPool) logPublishRejection(relayURL, eventID, reason string) {
+	if IsAuthRequiredReason(reason) {
+		p.logger.Warn("relay requires authentication",
+			zap.String("relay", relayURL),
+			zap.String("event_id", eventID),
+			zap.String("reason", reason),
+		)
+		return
+	}
+	if IsRateLimitedReason(reason) {
+		p.logger.Warn("relay rate-limited publish",
+			zap.String("relay", relayURL),
+			zap.String("event_id", eventID),
+			zap.String("reason", reason),
+		)
+		return
+	}
+	if IsBlockedReason(reason) {
+		p.logger.Warn("relay blocked event",
+			zap.String("relay", relayURL),
+			zap.String("event_id", eventID),
+			zap.String("reason", reason),
+		)
+		return
+	}
+	if IsDuplicateReason(reason) {
+		p.logger.Debug("relay already has event",
+			zap.String("relay", relayURL),
+			zap.String("event_id", eventID),
+		)
+		return
+	}
+
+	p.logger.Warn("relay rejected event",
+		zap.String("relay", relayURL),
+		zap.String("event_id", eventID),
+		zap.String("reason", reason),
+	)
+}
+
+func (p *RelayPool) orderedRelaysLocked() []*managedRelay {
+	relays := make([]*managedRelay, 0, len(p.relays))
+	seen := make(map[string]struct{}, len(p.relays))
+	for _, url := range p.urls {
+		if _, alreadySeen := seen[url]; alreadySeen {
+			continue
+		}
+		mr, ok := p.relays[url]
+		if !ok {
+			continue
+		}
+		relays = append(relays, mr)
+		seen[url] = struct{}{}
+	}
+	for url, mr := range p.relays {
+		if _, ok := seen[url]; ok {
+			continue
+		}
+		relays = append(relays, mr)
+	}
+	return relays
+}
+
+func countSuccessfulPublishResults(results []PublishResult) int {
+	published := 0
+	for _, result := range results {
+		if result.Accepted || result.IsDuplicate() {
+			published++
+		}
+	}
+	return published
+}
+
+func aggregatePublishResultsError(results []PublishResult) error {
+	if len(results) == 0 || countSuccessfulPublishResults(results) > 0 {
+		return nil
+	}
+
+	failures := make([]string, 0, len(results))
+	causes := make([]error, 0, len(results))
+	for _, result := range results {
+		switch {
+		case result.Error != nil:
+			failures = append(failures, fmt.Sprintf("%s transport error: %v", result.RelayURL, result.Error))
+			causes = append(causes, result.Error)
+		case result.Reason != "":
+			failures = append(failures, fmt.Sprintf("%s rejected event: %s", result.RelayURL, result.Reason))
+		case !result.Accepted:
+			failures = append(failures, fmt.Sprintf("%s did not accept event", result.RelayURL))
+		}
+	}
+	if len(failures) == 0 {
+		return nil
+	}
+	return publishAggregateError{
+		message: "failed to publish to any relay: " + strings.Join(failures, "; "),
+		causes:  causes,
+	}
+}
+
+type publishAggregateError struct {
+	message string
+	causes  []error
+}
+
+func (e publishAggregateError) Error() string {
+	return e.message
+}
+
+func (e publishAggregateError) Unwrap() []error {
+	return e.causes
 }
 
 // Subscribe creates a subscription on the first available relay.

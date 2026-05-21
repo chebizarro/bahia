@@ -261,19 +261,33 @@ func (p *Publisher) Subscribe(ctx context.Context, kinds []int, handler func(ev 
 	return nil
 }
 
+// PublishWithResults publishes an already-signed event through the underlying relay pool.
+func (p *Publisher) PublishWithResults(ctx context.Context, ev nostr.Event) ([]PublishResult, error) {
+	if p == nil || p.pool == nil {
+		return nil, fmt.Errorf("nostr publisher relay pool not configured")
+	}
+	return p.pool.PublishWithResults(ctx, ev)
+}
+
 // PublishSignedEvent signs and publishes an arbitrary Nostr event.
 func (p *Publisher) PublishSignedEvent(ctx context.Context, ev *nostr.Event) error {
+	_, err := p.PublishSignedEventWithResults(ctx, ev)
+	return err
+}
+
+// PublishSignedEventWithResults signs and publishes an arbitrary Nostr event,
+// returning per-relay publish outcomes from the underlying relay pool.
+func (p *Publisher) PublishSignedEventWithResults(ctx context.Context, ev *nostr.Event) ([]PublishResult, error) {
 	if p == nil || p.pool == nil || ev == nil {
-		return nil
+		return nil, nil
 	}
 	if p.privateKey == "" {
-		return fmt.Errorf("nostr publisher private key not configured")
+		return nil, fmt.Errorf("nostr publisher private key not configured")
 	}
 	if err := ev.Sign(p.privateKey); err != nil {
-		return fmt.Errorf("signing nostr event: %w", err)
+		return nil, fmt.Errorf("signing nostr event: %w", err)
 	}
-	_, err := p.pool.Publish(ctx, *ev)
-	return err
+	return p.pool.PublishWithResults(ctx, *ev)
 }
 
 // Close shuts down the relay pool.
