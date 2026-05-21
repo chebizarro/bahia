@@ -84,6 +84,8 @@ type BackupProjectionSource interface {
 	GetRepository(ctx context.Context, id uuid.UUID) (*domain.BackupRepository, error)
 	ListBackupRuns(ctx context.Context, status domain.DeploymentRunStatus, limit, offset int) ([]domain.BackupRun, error)
 	GetBackupRun(ctx context.Context, id uuid.UUID) (*domain.BackupRun, error)
+	ListBackupRestores(ctx context.Context, status domain.DeploymentRunStatus, limit, offset int) ([]domain.BackupRestoreRun, error)
+	GetBackupRestore(ctx context.Context, id uuid.UUID) (*domain.BackupRestoreRun, error)
 	GetBackupVerificationByRunID(ctx context.Context, runID uuid.UUID) (*domain.BackupVerificationRecord, error)
 }
 
@@ -245,6 +247,7 @@ func (p *Projector) SetupSubscriptions(pub events.Publisher) {
 		service.EventBackupPolicyChanged,
 		service.EventBackupRepositoryChanged,
 		service.EventBackupRunChanged,
+		service.EventBackupRestoreChanged,
 		service.EventBackupVerificationChanged,
 	} {
 		et := eventType
@@ -357,7 +360,7 @@ func (p *Projector) RepublishSnapshot(ctx context.Context) error {
 		}
 	}
 	mlModels, mlVersions, mlEndpoints, mlStates, mlProvenance, mlCapabilities := p.publishMLSnapshots(ctx)
-	backupRecipes, backupPolicies, backupRepositories, backupRuns, backupVerifications := p.publishBackupSnapshots(ctx)
+	backupRecipes, backupPolicies, backupRepositories, backupRuns, backupRestores, backupVerifications := p.publishBackupSnapshots(ctx)
 	dnsEndpoints, dnsTombstones := 0, 0
 	if p.dnsSource != nil {
 		published, tombstones, err := p.publishDNSEndpointSnapshot(ctx)
@@ -368,7 +371,7 @@ func (p *Projector) RepublishSnapshot(ctx context.Context) error {
 			dnsTombstones = tombstones
 		}
 	}
-	p.logger.Info("Nostr projection snapshot republished", zap.Int("services", len(services)), zap.Int("environments", len(envs)), zap.Int("states", len(states)), zap.Int("builds", buildsPublished), zap.Int("artifacts", artifactsPublished), zap.Int("deployment_intents", intentsPublished), zap.Int("deployment_runs", runsPublished), zap.Int("policies", policiesPublished), zap.Int("llm_routes", llmRoutes), zap.Int("llm_route_states", llmStates), zap.Int("ml_models", mlModels), zap.Int("ml_model_versions", mlVersions), zap.Int("ml_endpoints", mlEndpoints), zap.Int("ml_endpoint_states", mlStates), zap.Int("ml_provenance_graphs", mlProvenance), zap.Int("ml_capabilities", mlCapabilities), zap.Int("backup_recipes", backupRecipes), zap.Int("backup_policies", backupPolicies), zap.Int("backup_repositories", backupRepositories), zap.Int("backup_runs", backupRuns), zap.Int("backup_verifications", backupVerifications), zap.Int("dns_endpoints", dnsEndpoints), zap.Int("dns_endpoint_tombstones", dnsTombstones))
+	p.logger.Info("Nostr projection snapshot republished", zap.Int("services", len(services)), zap.Int("environments", len(envs)), zap.Int("states", len(states)), zap.Int("builds", buildsPublished), zap.Int("artifacts", artifactsPublished), zap.Int("deployment_intents", intentsPublished), zap.Int("deployment_runs", runsPublished), zap.Int("policies", policiesPublished), zap.Int("llm_routes", llmRoutes), zap.Int("llm_route_states", llmStates), zap.Int("ml_models", mlModels), zap.Int("ml_model_versions", mlVersions), zap.Int("ml_endpoints", mlEndpoints), zap.Int("ml_endpoint_states", mlStates), zap.Int("ml_provenance_graphs", mlProvenance), zap.Int("ml_capabilities", mlCapabilities), zap.Int("backup_recipes", backupRecipes), zap.Int("backup_policies", backupPolicies), zap.Int("backup_repositories", backupRepositories), zap.Int("backup_runs", backupRuns), zap.Int("backup_restores", backupRestores), zap.Int("backup_verifications", backupVerifications), zap.Int("dns_endpoints", dnsEndpoints), zap.Int("dns_endpoint_tombstones", dnsTombstones))
 	return nil
 }
 
@@ -496,6 +499,8 @@ func (p *Projector) handleEvent(ctx context.Context, e events.Event) {
 		p.publishBackupRepositoryByID(ctx, firstString(stringifyMapValue(e.Data, "repository_id"), e.EntityID))
 	case service.EventBackupRunChanged:
 		p.publishBackupRunByID(ctx, firstString(stringifyMapValue(e.Data, "run_id"), e.EntityID))
+	case service.EventBackupRestoreChanged:
+		p.publishBackupRestoreByID(ctx, firstString(stringifyMapValue(e.Data, "restore_id"), e.EntityID))
 	case service.EventBackupVerificationChanged:
 		p.publishBackupVerificationByRunID(ctx, firstString(stringifyMapValue(e.Data, "run_id"), e.EntityID))
 	}
@@ -849,7 +854,7 @@ func (p *Projector) publishMLSnapshots(ctx context.Context) (modelsPublished, ve
 	return
 }
 
-func (p *Projector) publishBackupSnapshots(ctx context.Context) (recipesPublished, policiesPublished, repositoriesPublished, runsPublished, verificationsPublished int) {
+func (p *Projector) publishBackupSnapshots(ctx context.Context) (recipesPublished, policiesPublished, repositoriesPublished, runsPublished, restoresPublished, verificationsPublished int) {
 	if p.backupSource == nil {
 		return
 	}
@@ -929,6 +934,23 @@ func (p *Projector) publishBackupSnapshots(ctx context.Context) (recipesPublishe
 			}
 		}
 		if len(runs) < pageSize {
+			break
+		}
+	}
+	for offset := 0; ; offset += pageSize {
+		restores, err := p.backupSource.ListBackupRestores(ctx, "", pageSize, offset)
+		if err != nil {
+			p.logger.Warn("list backup restores for projection failed", zap.Error(err))
+			break
+		}
+		for i := range restores {
+			if err := p.publishBackupRestoreState(ctx, &restores[i]); err != nil {
+				p.logger.Warn("publish backup restore state projection failed", zap.String("restore_id", restores[i].ID.String()), zap.Error(err))
+			} else {
+				restoresPublished++
+			}
+		}
+		if len(restores) < pageSize {
 			break
 		}
 	}
@@ -1012,6 +1034,26 @@ func (p *Projector) publishBackupRunByID(ctx context.Context, raw string) {
 	}
 	if err := p.publishBackupRunState(ctx, run); err != nil {
 		p.logger.Warn("publish backup run state projection failed", zap.String("run_id", raw), zap.Error(err))
+	}
+}
+
+func (p *Projector) publishBackupRestoreByID(ctx context.Context, raw string) {
+	if p.backupSource == nil {
+		return
+	}
+	id, ok := parseUUID(raw)
+	if !ok {
+		return
+	}
+	restore, err := p.backupSource.GetBackupRestore(ctx, id)
+	if err != nil || restore == nil {
+		if err != nil {
+			p.logger.Warn("read backup restore for projection failed", zap.String("restore_id", raw), zap.Error(err))
+		}
+		return
+	}
+	if err := p.publishBackupRestoreState(ctx, restore); err != nil {
+		p.logger.Warn("publish backup restore state projection failed", zap.String("restore_id", raw), zap.Error(err))
 	}
 }
 
@@ -1763,6 +1805,19 @@ func (p *Projector) publishBackupRunState(ctx context.Context, run *domain.Backu
 		tags = append(tags, gonostr.Tag{"policy", run.PolicyID.String()}, gonostr.Tag{"policy_id", run.PolicyID.String()})
 	}
 	return p.publishReplaceableJSON(ctx, KindBackupRunState, dTag, tags, content, "backup.run_state.projection", &run.ID)
+}
+
+func (p *Projector) publishBackupRestoreState(ctx context.Context, restore *domain.BackupRestoreRun) error {
+	if restore == nil {
+		return nil
+	}
+	dTag := "backup-restore:" + restore.ID.String()
+	content := map[string]any{"deleted": false, "id": restore.ID.String(), "backup_run_id": restore.BackupRunID.String(), "recipe_id": restore.RecipeID.String(), "repository_id": restore.RepositoryID.String(), "policy_id": uuidStringPtr(restore.PolicyID), "snapshot_id": restore.SnapshotID, "restore_target_ref": restore.RestoreTargetRef, "requested_by": restore.RequestedBy, "request_event_id": restore.RequestEventID, "request_kind": restore.RequestKind, "request_d_tag": restore.RequestDTag, "approval_status": string(restore.ApprovalStatus), "approval_event_id": restore.ApprovalEventID, "approved_by": restore.ApprovedBy, "approved_at": restore.ApprovedAt, "approval_message": restore.ApprovalMessage, "status": string(restore.Status), "backend": string(restore.Backend), "verification_status": string(restore.VerificationStatus), "evidence": restore.Evidence, "publish_summary": restore.PublishSummary, "error": restore.Error, "metadata": restore.Metadata, "started_at": restore.StartedAt, "finished_at": restore.FinishedAt, "created_at": formatTime(restore.CreatedAt), "updated_at": formatTime(restore.UpdatedAt)}
+	tags := gonostr.Tags{{"restore", restore.ID.String()}, {"restore_id", restore.ID.String()}, {"run", restore.BackupRunID.String()}, {"backup_run_id", restore.BackupRunID.String()}, {"recipe_id", restore.RecipeID.String()}, {"repository_id", restore.RepositoryID.String()}, {"status", string(restore.Status)}, {"approval", string(restore.ApprovalStatus)}, {"verification", string(restore.VerificationStatus)}, {"backend", string(restore.Backend)}}
+	if restore.PolicyID != nil {
+		tags = append(tags, gonostr.Tag{"policy", restore.PolicyID.String()}, gonostr.Tag{"policy_id", restore.PolicyID.String()})
+	}
+	return p.publishReplaceableJSON(ctx, KindBackupRestoreState, dTag, tags, content, "backup.restore_state.projection", &restore.ID)
 }
 
 func (p *Projector) publishBackupVerificationState(ctx context.Context, record *domain.BackupVerificationRecord) error {

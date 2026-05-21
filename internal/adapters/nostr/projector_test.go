@@ -679,6 +679,13 @@ func TestProjectorPublishesStateTombstoneForDeletedState(t *testing.T) {
 	assertJSONField(t, stateEvent.Content, "deleted", true)
 }
 
+func projectorTestConfig() config.NostrConfig {
+	return config.NostrConfig{
+		PrivateKey:     projectorTestPrivateKey,
+		PublishEnabled: true,
+	}
+}
+
 type fakeDNSProjectionSource struct {
 	endpoints []domain.DNSEndpoint
 }
@@ -785,14 +792,6 @@ func TestProjectorSystemDiscoveryAdvertisesDNSOnlyWhenSourceConfigured(t *testin
 		t.Fatalf("dns_endpoint_state kind = %#v, want %d", got, KindDNSEndpointState)
 	}
 }
-
-func projectorTestConfig() config.NostrConfig {
-	return config.NostrConfig{
-		PrivateKey:     projectorTestPrivateKey,
-		PublishEnabled: true,
-	}
-}
-
 func assertOneSignedKind(t *testing.T, sink *captureProjectionPublisher, kind int) gonostr.Event {
 	t.Helper()
 	events := sink.byKind(kind)

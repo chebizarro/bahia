@@ -283,12 +283,18 @@ func New(cfg *config.Config) (*App, error) {
 	backupRegistryRepo := repository.NewPgBackupControlPlaneRepository(pool)
 	backupRegistry := service.NewBackupRegistryService(backupRegistryRepo, publisher, logger)
 	backupResponder := controlplane.NewBackupRunResponder(controlPlanePool, controlPlaneSigner, backupRegistry, nostrEventRepo, logger)
-	backupResolver, err := service.NewStaticBackupBackendResolver(backupAdapter.NewKopiaBackend())
+	backupRestoreResponder := controlplane.NewBackupRestoreResponder(controlPlanePool, controlPlaneSigner, backupRegistry, nostrEventRepo, logger)
+	backupRetentionResponder := controlplane.NewBackupRetentionResponder(controlPlanePool, controlPlaneSigner, backupRegistry, nostrEventRepo, logger)
+	backupResolver, err := service.NewStaticBackupBackendResolver(backupAdapter.NewKopiaBackend(), backupAdapter.NewVeleroBackend())
 	if err != nil {
 		return nil, fmt.Errorf("configuring backup backend resolver: %w", err)
 	}
 	backupCoordinator := service.NewBackupRunCoordinator(backupRegistry, backupResolver, logger, service.WithBackupRunResponder(backupResponder))
+	backupRestoreCoordinator := service.NewBackupRestoreCoordinator(backupRegistry, backupResolver, logger, service.WithBackupRestoreResponder(backupRestoreResponder))
+	backupRetentionCoordinator := service.NewBackupRetentionCoordinator(backupRegistry, backupResolver, logger, service.WithBackupRetentionResponder(backupRetentionResponder))
 	bgManager.Register(backupCoordinator)
+	bgManager.Register(backupRestoreCoordinator)
+	bgManager.Register(backupRetentionCoordinator)
 	logger.Info("backup control plane registered", zap.String("backend", string(domain.BackupBackendKopia)))
 
 	// Generic AI/ML registry foundation. Bucket-B keeps this additive and keeps
@@ -628,6 +634,10 @@ func New(cfg *config.Config) (*App, error) {
 			controlplane.WithBackupRegistry(backupRegistry),
 			controlplane.WithBackupRunExecutor(backupCoordinator),
 			controlplane.WithBackupRunResponder(backupResponder),
+			controlplane.WithBackupRestoreExecutor(backupRestoreCoordinator),
+			controlplane.WithBackupRestoreResponder(backupRestoreResponder),
+			controlplane.WithBackupRetentionExecutor(backupRetentionCoordinator),
+			controlplane.WithBackupRetentionResponder(backupRetentionResponder),
 			controlplane.WithAdoptionService(adoptionSvc),
 			controlplane.WithRuntimeLifecycleService(runtimeLifecycleSvc),
 			controlplane.WithToolProvisioningRepository(toolProvisionRepo),
