@@ -185,6 +185,114 @@ func (b *KopiaBackend) VerifySnapshot(ctx context.Context, req service.BackupVer
 	return &service.BackupVerifyResult{Verified: true, Status: domain.BackupVerificationSucceeded, Evidence: evidence}, nil
 }
 
+func (b *KopiaBackend) Restore(ctx context.Context, req service.BackupRestoreRequest) (*service.BackupRestoreResult, error) {
+	if req.Run == nil || req.SourceRun == nil || req.Repository == nil {
+		return nil, fmt.Errorf("%w: backup restore request requires restore run, source run, and repository", service.ErrBackupBackendConfiguration)
+	}
+	if req.Run.Backend != domain.BackupBackendKopia || req.SourceRun.Backend != domain.BackupBackendKopia {
+		return nil, fmt.Errorf("%w: restore run and source run must use Kopia backend", service.ErrBackupBackendUnsupported)
+	}
+	if req.Run.BackupRunID != req.SourceRun.ID {
+		return nil, fmt.Errorf("%w: Kopia restore run source mismatch: restore references backup_run_id %s but source run is %s", service.ErrBackupBackendConfiguration, req.Run.BackupRunID, req.SourceRun.ID)
+	}
+	if strings.TrimSpace(req.Run.SnapshotID) != "" && strings.TrimSpace(req.SourceRun.SnapshotID) != "" && strings.TrimSpace(req.Run.SnapshotID) != strings.TrimSpace(req.SourceRun.SnapshotID) {
+		return nil, fmt.Errorf("%w: Kopia restore snapshot_id %q does not match source backup snapshot_id %q", service.ErrBackupBackendConfiguration, req.Run.SnapshotID, req.SourceRun.SnapshotID)
+	}
+	if !domain.BackupRunRestoreEligible(req.SourceRun) {
+		return nil, fmt.Errorf("%w: Kopia restore requires a succeeded and verified source backup run", service.ErrBackupBackendConfiguration)
+	}
+	cfg, err := b.commandConfig(req.Repository)
+	if err != nil {
+		return nil, err
+	}
+	source, err := kopiaRestoreSource(req)
+	if err != nil {
+		return nil, err
+	}
+	target, err := kopiaRestoreTargetPath(req.Run.RestoreTargetRef)
+	if err != nil {
+		return nil, err
+	}
+	args := append(cfg.baseArgs(), "snapshot", "restore")
+	if b.config.Parallelism > 0 {
+		args = append(args, "--parallel="+strconv.Itoa(b.config.Parallelism))
+	}
+	args = append(args, source, target)
+	stdout, stderr, err := b.run(ctx, cfg, args...)
+	evidence := map[string]any{
+		"kopia_snapshot_restore": map[string]any{
+			"source":      source,
+			"target":      target,
+			"snapshot_id": req.Run.SnapshotID,
+		},
+	}
+	if strings.TrimSpace(stdout) != "" {
+		evidence["stdout"] = strings.TrimSpace(stdout)
+	}
+	if strings.TrimSpace(stderr) != "" {
+		evidence["stderr"] = strings.TrimSpace(stderr)
+	}
+	result := &service.BackupRestoreResult{Verified: false, VerificationStatus: domain.BackupVerificationSkipped, Evidence: evidence}
+	if err != nil {
+		result.Error = err.Error()
+		return result, err
+	}
+	return result, nil
+}
+
+func (b *KopiaBackend) EnforceRetention(ctx context.Context, req service.BackupRetentionRequest) (*service.BackupRetentionResult, error) {
+	if req.Run == nil || req.Repository == nil || req.Policy == nil {
+		return nil, fmt.Errorf("%w: backup retention request requires retention run, repository, and policy", service.ErrBackupBackendConfiguration)
+	}
+	if req.Run.Backend != domain.BackupBackendKopia {
+		return nil, fmt.Errorf("%w: retention run backend %q is not Kopia", service.ErrBackupBackendUnsupported, req.Run.Backend)
+	}
+	cfg, err := b.commandConfig(req.Repository)
+	if err != nil {
+		return nil, err
+	}
+	contract, err := service.ParseBackupPolicyRuntimeContract(req.Policy)
+	if err != nil {
+		return nil, err
+	}
+	if contract.RetentionMode != service.BackupRetentionModeBackendNative {
+		return nil, fmt.Errorf("%w: Kopia retention requires policy metadata.%s=backend_native", service.ErrBackupBackendConfiguration, service.BackupPolicyMetadataRetentionMode)
+	}
+	selector, err := kopiaRetentionSelector(contract.RetentionSelector)
+	if err != nil {
+		return nil, err
+	}
+	args := append(cfg.baseArgs(), "snapshot", "expire")
+	if selector.all {
+		args = append(args, "--all")
+	} else {
+		args = append(args, selector.path)
+	}
+	if !req.Run.DryRun {
+		args = append(args, "--delete")
+	}
+	stdout, stderr, err := b.run(ctx, cfg, args...)
+	evidence := map[string]any{
+		"kopia_snapshot_expire": map[string]any{
+			"retention_selector": contract.RetentionSelector,
+			"dry_run":            req.Run.DryRun,
+			"delete":             !req.Run.DryRun,
+		},
+	}
+	if strings.TrimSpace(stdout) != "" {
+		evidence["stdout"] = strings.TrimSpace(stdout)
+	}
+	if strings.TrimSpace(stderr) != "" {
+		evidence["stderr"] = strings.TrimSpace(stderr)
+	}
+	result := &service.BackupRetentionResult{Evidence: evidence}
+	if err != nil {
+		result.Error = err.Error()
+		return result, err
+	}
+	return result, nil
+}
+
 func (b *KopiaBackend) commandConfig(repo *domain.BackupRepository) (*kopiaCommandConfig, error) {
 	if b == nil {
 		return nil, fmt.Errorf("%w: Kopia backend is not configured", service.ErrBackupBackendConfiguration)
@@ -299,6 +407,95 @@ func kopiaSourcePath(targetRef string) (string, error) {
 	return "", fmt.Errorf("%w: Kopia first-slice snapshot targets must use fs:, file:, or filesystem: target_ref", service.ErrBackupBackendUnsupported)
 }
 
+func kopiaRestoreTargetPath(targetRef string) (string, error) {
+	targetRef = strings.TrimSpace(targetRef)
+	for _, prefix := range []string{"fs:", "file:", "filesystem:"} {
+		if strings.HasPrefix(targetRef, prefix) {
+			path := strings.TrimSpace(strings.TrimPrefix(targetRef, prefix))
+			if path == "" {
+				return "", fmt.Errorf("%w: filesystem restore target path is empty", service.ErrBackupBackendConfiguration)
+			}
+			if !filepath.IsAbs(path) {
+				return "", fmt.Errorf("%w: filesystem restore target path must be absolute", service.ErrBackupBackendConfiguration)
+			}
+			return path, nil
+		}
+	}
+	return "", fmt.Errorf("%w: Kopia restore targets must use fs:, file:, or filesystem: restore_target_ref", service.ErrBackupBackendUnsupported)
+}
+
+func kopiaRestoreSource(req service.BackupRestoreRequest) (string, error) {
+	for _, metadata := range []map[string]any{req.Run.Metadata, req.SourceRun.Metadata} {
+		for _, key := range []string{"kopia_restore_source", "kopia_restore_object_id", "restore_source"} {
+			if source := stringMetadata(metadata, key); source != "" {
+				return source, nil
+			}
+		}
+	}
+	if source := nestedKopiaRootEntryObject(req.SourceRun.Metadata); source != "" {
+		if subpath := stringMetadata(req.Run.Metadata, "kopia_restore_subpath"); subpath != "" {
+			return source + "/" + strings.TrimPrefix(filepath.ToSlash(subpath), "/"), nil
+		}
+		return source, nil
+	}
+	return "", fmt.Errorf("%w: Kopia restore requires metadata.kopia_restore_source or source run snapshot_evidence.kopia_snapshot_create.rootEntry.obj; stored snapshot_id alone cannot be safely used as a Kopia restore source", service.ErrBackupBackendConfiguration)
+}
+
+func nestedKopiaRootEntryObject(metadata map[string]any) string {
+	snapshotEvidence, ok := mapMetadata(metadata, "snapshot_evidence")
+	if !ok {
+		return ""
+	}
+	createEvidence, ok := mapMetadata(snapshotEvidence, "kopia_snapshot_create")
+	if !ok {
+		return ""
+	}
+	rootEntry, ok := mapMetadata(createEvidence, "rootEntry")
+	if !ok {
+		rootEntry, ok = mapMetadata(createEvidence, "root_entry")
+	}
+	if !ok {
+		return ""
+	}
+	if obj, ok := rootEntry["obj"].(string); ok {
+		return strings.TrimSpace(obj)
+	}
+	if obj, ok := rootEntry["object_id"].(string); ok {
+		return strings.TrimSpace(obj)
+	}
+	return ""
+}
+
+type kopiaExpireSelector struct {
+	all  bool
+	path string
+}
+
+func kopiaRetentionSelector(raw string) (kopiaExpireSelector, error) {
+	selector := strings.TrimSpace(raw)
+	if selector == "" {
+		return kopiaExpireSelector{}, fmt.Errorf("%w: Kopia retention selector is required", service.ErrBackupBackendConfiguration)
+	}
+	switch strings.ToLower(selector) {
+	case "all", "kopia:all":
+		return kopiaExpireSelector{all: true}, nil
+	}
+	if strings.HasPrefix(selector, "path:") {
+		selector = strings.TrimSpace(strings.TrimPrefix(selector, "path:"))
+	}
+	if strings.HasPrefix(selector, "fs:") || strings.HasPrefix(selector, "file:") || strings.HasPrefix(selector, "filesystem:") {
+		path, err := kopiaSourcePath(selector)
+		if err != nil {
+			return kopiaExpireSelector{}, err
+		}
+		return kopiaExpireSelector{path: path}, nil
+	}
+	if filepath.IsAbs(selector) {
+		return kopiaExpireSelector{path: selector}, nil
+	}
+	return kopiaExpireSelector{}, fmt.Errorf("%w: Kopia retention selector must be all or an absolute filesystem path target", service.ErrBackupBackendConfiguration)
+}
+
 func validateRecipePathScope(recipe *domain.BackupRecipe) error {
 	if recipe == nil {
 		return fmt.Errorf("%w: backup recipe is required", service.ErrBackupBackendConfiguration)
@@ -402,6 +599,18 @@ func stringMetadata(metadata map[string]any, key string) string {
 		return strings.TrimSpace(v)
 	default:
 		return ""
+	}
+}
+
+func mapMetadata(metadata map[string]any, key string) (map[string]any, bool) {
+	if metadata == nil {
+		return nil, false
+	}
+	switch v := metadata[key].(type) {
+	case map[string]any:
+		return v, true
+	default:
+		return nil, false
 	}
 }
 

@@ -12,7 +12,8 @@ import (
 type BackupBackendKind string
 
 const (
-	BackupBackendKopia BackupBackendKind = "kopia"
+	BackupBackendKopia  BackupBackendKind = "kopia"
+	BackupBackendVelero BackupBackendKind = "velero"
 )
 
 // BackupVerificationMode identifies the verification procedure required after a snapshot.
@@ -179,7 +180,7 @@ type BackupRetentionRun struct {
 
 func (k BackupBackendKind) IsValid() bool {
 	switch k {
-	case BackupBackendKopia:
+	case BackupBackendKopia, BackupBackendVelero:
 		return true
 	default:
 		return false
@@ -228,6 +229,9 @@ func ValidateBackupRecipe(recipe *BackupRecipe) error {
 	}
 	if !recipe.Backend.IsValid() {
 		return fmt.Errorf("%w: backup backend %q is not valid", ErrInvalidValue, recipe.Backend)
+	}
+	if recipe.Backend != BackupBackendKopia {
+		return fmt.Errorf("%w: backup recipes currently support backend %q only; backend %q is valid for non-snapshot capabilities but cannot create backup runs", ErrInvalidValue, BackupBackendKopia, recipe.Backend)
 	}
 	if err := ValidateRequiredUUID(recipe.RepositoryID, "repository_id"); err != nil {
 		return err
@@ -328,6 +332,9 @@ func ValidateBackupRun(run *BackupRun) error {
 	}
 	if !run.Backend.IsValid() {
 		return fmt.Errorf("%w: backup backend %q is not valid", ErrInvalidValue, run.Backend)
+	}
+	if run.Backend != BackupBackendKopia {
+		return fmt.Errorf("%w: backup runs currently support backend %q only; backend %q is valid for non-snapshot capabilities but cannot create backup runs", ErrInvalidValue, BackupBackendKopia, run.Backend)
 	}
 	if err := ValidateRequiredString(run.TargetRef, "target_ref"); err != nil {
 		return err

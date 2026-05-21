@@ -137,6 +137,71 @@ func TestKopiaBackendVerifySnapshotMissingExplicitStatusFailsClosed(t *testing.T
 	require.Equal(t, domain.BackupVerificationUnsupported, result.Status)
 }
 
+func TestKopiaBackendRestoreUsesStoredRootEntryEvidence(t *testing.T) {
+	runner := &recordingKopiaRunner{stdout: "restore completed\n"}
+	backend := NewKopiaBackend(withKopiaCommandRunner(runner), WithKopiaParallelism(3))
+	repo := kopiaRepositoryFixture()
+	recipe := kopiaRecipeFixture(repo.ID)
+	sourceRun := kopiaSucceededSourceRunFixture(recipe)
+	restoreRun := kopiaRestoreRunFixture(sourceRun)
+
+	result, err := backend.Restore(context.Background(), service.BackupRestoreRequest{Run: restoreRun, SourceRun: sourceRun, Recipe: recipe, Repository: repo})
+
+	require.NoError(t, err)
+	require.Equal(t, domain.BackupVerificationSkipped, result.VerificationStatus)
+	require.Len(t, runner.calls, 1)
+	require.Equal(t, []string{"--config-file", "/secure/kopia/repository.config", "snapshot", "restore", "--parallel=3", "kabcdef", "/restore/path"}, runner.calls[0].args)
+}
+
+func TestKopiaBackendRestoreFailsClosedWhenSnapshotEvidenceCannotMapToRestoreSource(t *testing.T) {
+	runner := &recordingKopiaRunner{}
+	backend := NewKopiaBackend(withKopiaCommandRunner(runner))
+	repo := kopiaRepositoryFixture()
+	recipe := kopiaRecipeFixture(repo.ID)
+	sourceRun := kopiaSucceededSourceRunFixture(recipe)
+	sourceRun.Metadata = nil
+	restoreRun := kopiaRestoreRunFixture(sourceRun)
+
+	_, err := backend.Restore(context.Background(), service.BackupRestoreRequest{Run: restoreRun, SourceRun: sourceRun, Recipe: recipe, Repository: repo})
+
+	require.ErrorIs(t, err, service.ErrBackupBackendConfiguration)
+	require.Contains(t, err.Error(), "snapshot_id alone cannot be safely used")
+	require.Empty(t, runner.calls)
+}
+
+func TestKopiaBackendEnforceRetentionRunsExpireDryRunAndDelete(t *testing.T) {
+	runner := &recordingKopiaRunner{stdout: "would expire 2 snapshots"}
+	backend := NewKopiaBackend(withKopiaCommandRunner(runner))
+	repo := kopiaRepositoryFixture()
+	policy := kopiaRetentionPolicyFixture("fs:/srv/data")
+	run := kopiaRetentionRunFixture(repo.ID, policy.ID, true)
+
+	result, err := backend.EnforceRetention(context.Background(), service.BackupRetentionRequest{Run: run, Repository: repo, Policy: policy})
+
+	require.NoError(t, err)
+	require.Contains(t, result.Evidence["stdout"], "would expire")
+	require.Equal(t, []string{"--config-file", "/secure/kopia/repository.config", "snapshot", "expire", "/srv/data"}, runner.calls[0].args)
+
+	run.DryRun = false
+	_, err = backend.EnforceRetention(context.Background(), service.BackupRetentionRequest{Run: run, Repository: repo, Policy: policy})
+
+	require.NoError(t, err)
+	require.Equal(t, []string{"--config-file", "/secure/kopia/repository.config", "snapshot", "expire", "/srv/data", "--delete"}, runner.calls[1].args)
+}
+
+func TestKopiaBackendEnforceRetentionRequiresBackendNativeSelector(t *testing.T) {
+	runner := &recordingKopiaRunner{}
+	backend := NewKopiaBackend(withKopiaCommandRunner(runner))
+	repo := kopiaRepositoryFixture()
+	policy := kopiaRetentionPolicyFixture("relative/path")
+	run := kopiaRetentionRunFixture(repo.ID, policy.ID, true)
+
+	_, err := backend.EnforceRetention(context.Background(), service.BackupRetentionRequest{Run: run, Repository: repo, Policy: policy})
+
+	require.ErrorIs(t, err, service.ErrBackupBackendConfiguration)
+	require.Empty(t, runner.calls)
+}
+
 type recordingKopiaRunner struct {
 	stdout string
 	stderr string
@@ -165,4 +230,33 @@ func kopiaRecipeFixture(repoID uuid.UUID) *domain.BackupRecipe {
 
 func kopiaRunFixture(recipe *domain.BackupRecipe) *domain.BackupRun {
 	return &domain.BackupRun{ID: uuid.New(), RecipeID: recipe.ID, RepositoryID: recipe.RepositoryID, RequestedBy: "pubkey", RequestEventID: "event", RequestKind: 38400, RequestDTag: "daily", Status: domain.RunStatusQueued, Backend: domain.BackupBackendKopia, TargetRef: recipe.TargetRef, VerificationStatus: domain.BackupVerificationPending}
+}
+
+func kopiaSucceededSourceRunFixture(recipe *domain.BackupRecipe) *domain.BackupRun {
+	run := kopiaRunFixture(recipe)
+	run.Status = domain.RunStatusSucceeded
+	run.SnapshotCreated = true
+	run.SnapshotID = "manifest-id"
+	run.VerificationStatus = domain.BackupVerificationSucceeded
+	run.Metadata = map[string]any{
+		"snapshot_evidence": map[string]any{
+			"kopia_snapshot_create": map[string]any{
+				"id":        "manifest-id",
+				"rootEntry": map[string]any{"obj": "kabcdef"},
+			},
+		},
+	}
+	return run
+}
+
+func kopiaRestoreRunFixture(source *domain.BackupRun) *domain.BackupRestoreRun {
+	return &domain.BackupRestoreRun{ID: uuid.New(), BackupRunID: source.ID, RecipeID: source.RecipeID, RepositoryID: source.RepositoryID, SnapshotID: source.SnapshotID, RestoreTargetRef: "fs:/restore/path", RequestedBy: "pubkey", RequestEventID: "restore-event", RequestKind: 38402, RequestDTag: "restore:daily", ApprovalStatus: domain.BackupApprovalNotRequired, Status: domain.RunStatusQueued, Backend: domain.BackupBackendKopia, VerificationStatus: domain.BackupVerificationPending}
+}
+
+func kopiaRetentionPolicyFixture(selector string) *domain.BackupPolicy {
+	return &domain.BackupPolicy{ID: uuid.New(), Name: "retention", VerificationMode: domain.BackupVerificationNone, Metadata: map[string]any{service.BackupPolicyMetadataRetentionMode: string(service.BackupRetentionModeBackendNative), service.BackupPolicyMetadataRetentionSelector: selector}}
+}
+
+func kopiaRetentionRunFixture(repoID, policyID uuid.UUID, dryRun bool) *domain.BackupRetentionRun {
+	return &domain.BackupRetentionRun{ID: uuid.New(), RepositoryID: repoID, PolicyID: &policyID, RequestedBy: "pubkey", RequestEventID: "retention-event", RequestKind: 38404, RequestDTag: "retention:weekly", Status: domain.RunStatusQueued, Backend: domain.BackupBackendKopia, DryRun: dryRun}
 }

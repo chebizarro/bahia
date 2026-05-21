@@ -35,6 +35,32 @@ func TestValidateBackupRunDefaultsQueuedAndPending(t *testing.T) {
 	require.Equal(t, BackupVerificationPending, run.VerificationStatus)
 }
 
+func TestValidateBackupRepositoryAcceptsVeleroBackendKind(t *testing.T) {
+	repo := &BackupRepository{
+		ID:            uuid.New(),
+		Name:          "cluster-a",
+		Backend:       BackupBackendVelero,
+		RepositoryURI: "velero://cluster-a",
+		Metadata:      map[string]any{"velero_namespace": "velero-system"},
+	}
+
+	require.NoError(t, ValidateBackupRepository(repo))
+	require.True(t, BackupBackendVelero.IsValid())
+}
+
+func TestValidateBackupRecipeAndRunRejectVeleroUntilSnapshotCapabilityExists(t *testing.T) {
+	repoID := uuid.New()
+	recipe := &BackupRecipe{Name: "velero", Version: "v1", Backend: BackupBackendVelero, RepositoryID: repoID, TargetRef: "velero:cluster-a"}
+	err := ValidateBackupRecipe(recipe)
+	require.ErrorIs(t, err, ErrInvalidValue)
+	require.Contains(t, err.Error(), "cannot create backup runs")
+
+	run := &BackupRun{RecipeID: uuid.New(), RepositoryID: repoID, RequestedBy: "pubkey", RequestEventID: "event", RequestKind: 38400, RequestDTag: "run", Backend: BackupBackendVelero, TargetRef: "velero:cluster-a"}
+	err = ValidateBackupRun(run)
+	require.ErrorIs(t, err, ErrInvalidValue)
+	require.Contains(t, err.Error(), "cannot create backup runs")
+}
+
 func TestValidateBackupVerificationRecordRequiresVerifiedSucceededStatus(t *testing.T) {
 	record := &BackupVerificationRecord{
 		BackupRunID: uuid.New(),
