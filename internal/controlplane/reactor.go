@@ -163,6 +163,9 @@ type Reactor struct {
 	mlRecipeExecutor      MLRecipeControlPlaneExecutor
 	nostrEvents           repository.NostrEventRepository
 	assistantOrchestrator *service.AssistantOrchestrator
+	backupRegistry        backupRunRegistry
+	backupExecutor        BackupRunControlPlaneExecutor
+	backupResponder       service.BackupRunResponder
 
 	mu   sync.Mutex
 	runs map[string]*DeploymentRun // requestEventID -> run
@@ -210,6 +213,22 @@ type MLRecipeControlPlaneExecutor interface {
 
 func WithMLRecipeExecutor(executor MLRecipeControlPlaneExecutor) ReactorOption {
 	return func(r *Reactor) { r.mlRecipeExecutor = executor }
+}
+
+type BackupRunControlPlaneExecutor interface {
+	ProcessBackupRun(ctx context.Context, runID uuid.UUID) error
+}
+
+func WithBackupRegistry(registry *service.BackupRegistryService) ReactorOption {
+	return func(r *Reactor) { r.backupRegistry = registry }
+}
+
+func WithBackupRunExecutor(executor BackupRunControlPlaneExecutor) ReactorOption {
+	return func(r *Reactor) { r.backupExecutor = executor }
+}
+
+func WithBackupRunResponder(responder service.BackupRunResponder) ReactorOption {
+	return func(r *Reactor) { r.backupResponder = responder }
 }
 
 func WithToolProvisioningRepository(repo repository.ToolProvisioningRepository) ReactorOption {
@@ -497,6 +516,8 @@ func (r *Reactor) handleEvent(ctx context.Context, event *nostr.Event) {
 		go r.handleMLInferenceRollbackRequest(ctx, event)
 	case KindMLModelImportRequest:
 		go r.handleMLModelImportRequest(ctx, event)
+	case KindBackupRunRequest:
+		go r.handleBackupRunRequest(ctx, event)
 	case KindPackageRepositoryApply:
 		go r.handlePackageRepositoryApply(ctx, event)
 	case KindPackageRepositoryDelete:
@@ -1721,6 +1742,7 @@ func defaultRequestSubscriptionKinds() []int {
 		KindMLInferenceDeploymentApproval,
 		KindMLInferenceRollbackRequest,
 		KindMLModelImportRequest,
+		KindBackupRunRequest,
 		KindPackageRepositoryApply,
 		KindPackageRepositoryDelete,
 		KindPackagePublishIntent,

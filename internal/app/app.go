@@ -15,6 +15,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/nbd-wtf/go-nostr"
+	backupAdapter "github.com/openagentsinc/bahia/internal/adapters/backup"
 	"github.com/openagentsinc/bahia/internal/adapters/blossom"
 	"github.com/openagentsinc/bahia/internal/adapters/build"
 	"github.com/openagentsinc/bahia/internal/adapters/harbor"
@@ -277,6 +278,13 @@ func New(cfg *config.Config) (*App, error) {
 	// Background runner manager.
 	bgManager := NewBackgroundManager(logger)
 
+	backupRegistryRepo := repository.NewPgBackupControlPlaneRepository(pool)
+	backupRegistry := service.NewBackupRegistryService(backupRegistryRepo, publisher, logger)
+	backupResponder := controlplane.NewBackupRunResponder(controlPlanePool, controlPlaneSigner, backupRegistry, nostrEventRepo, logger)
+	backupCoordinator := service.NewBackupRunCoordinator(backupRegistry, backupAdapter.NewKopiaBackend(), logger, service.WithBackupRunResponder(backupResponder))
+	bgManager.Register(backupCoordinator)
+	logger.Info("backup control plane registered", zap.String("backend", string(domain.BackupBackendKopia)))
+
 	// Generic AI/ML registry foundation. Bucket-B keeps this additive and does not
 	// move long-running orchestration off the existing LLM path until later buckets.
 	mlRegistryRepo := repository.NewPgMLRegistryRepository(pool)
@@ -344,6 +352,7 @@ func New(cfg *config.Config) (*App, error) {
 	// retained for relay pool lifecycle compatibility.
 	projectorOpts := []nostrAdapter.ProjectorOption{
 		nostrAdapter.WithPolicyProjectionSource(policySvc),
+		nostrAdapter.WithBackupProjectionSource(backupRegistry),
 		nostrAdapter.WithMLProjectionSource(mlRegistry),
 		nostrAdapter.WithWorkerProjectionSource(workerRepo),
 		nostrAdapter.WithSystemDiscoveryConfig(cfg, true),
@@ -595,6 +604,9 @@ func New(cfg *config.Config) (*App, error) {
 			}
 		}
 		reactorOpts := appendControlPlaneAuditOption([]controlplane.ReactorOption{
+			controlplane.WithBackupRegistry(backupRegistry),
+			controlplane.WithBackupRunExecutor(backupCoordinator),
+			controlplane.WithBackupRunResponder(backupResponder),
 			controlplane.WithAdoptionService(adoptionSvc),
 			controlplane.WithRuntimeLifecycleService(runtimeLifecycleSvc),
 			controlplane.WithToolProvisioningRepository(toolProvisionRepo),

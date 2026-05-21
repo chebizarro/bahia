@@ -1,41 +1,71 @@
 {
   "feature_id": "BACKUP_CONTROL_PLANE_ORCHESTRATION",
-  "status": "namespace_allocated",
+  "status": "first_kopia_backup_run_slice_verified",
   "tests": [
     {
       "id": "T-BACKUP-001",
       "criteria": ["AC-BACKUP-001", "AC-BACKUP-003", "AC-BACKUP-006"],
       "type": "unit",
-      "target": "future backup domain and adapter contract tests",
-      "description": "Validate that recipe execution delegates to configured real adapters and rejects unsupported or unconfigured backend operations without embedding storage-engine behavior in Bahia."
+      "target": "internal/domain, internal/service, internal/adapters/backup",
+      "description": "Validate that backup orchestration delegates snapshot and verification execution to the bounded BackupBackend/Kopia adapter contract and rejects unsupported or unconfigured backend operations without embedding storage-engine behavior in Bahia.",
+      "status": "passed",
+      "evidence": [
+        "internal/domain/backup_test.go validates backup run defaults and restore eligibility rules.",
+        "internal/service/backup_registry_test.go validates idempotent run creation, reference validation, and verification-first fail-closed completion.",
+        "internal/service/backup_run_coordinator_test.go validates fixed-step snapshot/verify orchestration, cancellation recovery state, unsupported verification fail-closed handling, and responder calls without relay polling.",
+        "internal/adapters/backup/kopia_backend_test.go validates real Kopia CLI command construction, configuration errors, output parsing, and unsupported first-slice behavior."
+      ]
     },
     {
       "id": "T-BACKUP-002",
       "criteria": ["AC-BACKUP-002", "AC-BACKUP-004"],
       "type": "unit",
-      "target": "future Nostr backup reactor tests",
-      "description": "Inject EVENT, EOSE, OK, CLOSED, and AUTH messages to verify event-driven backup run processing, publish acceptance checks, rejection handling, dedupe, and no sleep-based completion."
+      "target": "internal/controlplane and internal/adapters/nostr",
+      "description": "Inject signed Nostr backup run requests and publish outcomes to verify event-driven backup run processing, publish acceptance checks, rejection summary persistence, dedupe/idempotency, and no sleep-based completion logic.",
+      "status": "passed",
+      "evidence": [
+        "internal/controlplane/reactor_backup_requests_test.go validates backup run kind subscription under the default authorized author scope, idempotent durable run creation by requester/kind/d tag, and executor handoff without creating a second run for duplicate coordinates.",
+        "internal/controlplane/reactor_backup_requests_test.go validates BackupRunResponder result/status/attestation publication tags, signatures, restore_eligible=false payload, and persisted per-relay publish outcome summaries.",
+        "internal/adapters/nostr/protocol_frames_test.go validates PublishResult classification for auth-required, rate-limited, blocked, duplicate, mixed accepted/rejected, duplicate-as-success, and zero-accepted aggregate failure.",
+        "Existing reactor Run path continues to use RelayPool.SubscribeAllWithEOSE, ValidateInboundEvent, EventDeduplicator, CLOSED handling, and AUTH retry; backup wiring only adds the 38400 dispatch case and kind to the scoped default filter."
+      ]
     },
     {
       "id": "T-BACKUP-003",
       "criteria": ["AC-BACKUP-005"],
       "type": "unit",
-      "target": "future verification policy tests",
-      "description": "Assert that a snapshot with failed or missing verification is projected as unverified and is not eligible as a verified restore candidate."
+      "target": "internal/service and internal/adapters/nostr",
+      "description": "Assert that failed, skipped, unsupported, or missing verification is projected as unverified and is not eligible as a verified restore candidate.",
+      "status": "passed",
+      "evidence": [
+        "internal/service/backup_registry_test.go validates required verification failure leaves the run failed and BackupRunRestoreEligible false, while non-required verification is skipped and still restore_eligible=false.",
+        "internal/service/backup_run_coordinator_test.go validates successful required Kopia verification is the only path that makes BackupRunRestoreEligible true.",
+        "internal/adapters/nostr/projector_backup_test.go validates BackupRunState restore_eligible=false for skipped verification and restore_eligible=true only for succeeded verification."
+      ]
     },
     {
       "id": "T-BACKUP-004",
       "criteria": ["AC-BACKUP-007"],
       "type": "unit/integration",
       "target": "future restore workflow tests",
-      "description": "Inject restore request and approval/rejection events and verify adapter execution only occurs after required approval, with signed terminal restore result provenance."
+      "description": "Inject restore request and approval/rejection events and verify adapter execution only occurs after required approval, with signed terminal restore result provenance.",
+      "status": "not_in_first_kopia_run_slice",
+      "evidence": [
+        "Restore workflows are explicitly outside bahia-dgnt/JW-4/JW-5/JW-6 scope and are tracked separately in Beads before feature-wide completion."
+      ]
     },
     {
       "id": "T-BACKUP-005",
       "criteria": ["AC-BACKUP-002", "AC-BACKUP-004"],
       "type": "integration",
-      "target": "future relay-sidecar/control-plane integration tests",
-      "description": "Verify scoped subscriptions, EOSE historical catch-up, replay dedupe, CLOSED handling, AUTH-required failure/reauthentication, and partial relay OK outcomes across backup workflow events."
+      "target": "relay-sidecar/control-plane integration tests",
+      "description": "Verify scoped subscriptions, EOSE historical catch-up, replay dedupe, CLOSED handling, AUTH-required failure/reauthentication, and partial relay OK outcomes across backup workflow events.",
+      "status": "partially_covered_by_existing_protocol_tests_and_backup_unit_tests",
+      "evidence": [
+        "internal/adapters/nostr/relay_pool_test.go validates merged subscription EOSE, CLOSED reason, and event forwarding behavior.",
+        "internal/adapters/nostr/protocol_frames_test.go validates CLOSED/AUTH reason helpers and per-relay publish outcomes used by backup result/attestation publication.",
+        "internal/controlplane/reactor_backup_requests_test.go validates the backup run kind is included in scoped default-author filters and backup dispatch remains inside the existing reactor validation/dedup/auth/EOSE path."
+      ]
     },
     {
       "id": "T-BACKUP-006",
@@ -43,25 +73,38 @@
       "type": "documentation/protocol validation",
       "target": "docs/control-planes.md and BACKUP_CONTROL_PLANE_ORCHESTRATION PSTF artifacts",
       "description": "Validate that the documented backup namespace is internally consistent, avoids known collisions with 31200 and 38395/38396, and includes command/result/read-model/status/attestation tag contracts.",
-      "status": "passed_for_u4_1",
+      "status": "passed",
       "evidence": [
-        "Repository search for allocated backup kinds found no production-path collisions; matches were limited to this planning/export material, logs, or unrelated checksum text before docs were updated.",
-        "JSON validation passed for feature_spec.json, acceptance_criteria.json, and test_matrix.json after namespace allocation updates."
+        "docs/control-planes.md documents backup commands 38400-38409, terminal results 38410-38419, status/observation kinds 6981-6984, read models 31991-31999, and attestations 31310-31311.",
+        "internal/controlplane/backup_kinds.go and internal/adapters/nostr/backup_kinds.go consume the allocated namespace without reusing 31200 or 38395/38396.",
+        "Read-model d-tags for implemented mutable backup registries use immutable IDs to avoid stale live coordinates after renames."
+      ]
+    },
+    {
+      "id": "T-BACKUP-007",
+      "criteria": ["AC-BACKUP-001", "AC-BACKUP-002", "AC-BACKUP-004", "AC-BACKUP-005", "AC-BACKUP-006", "AC-BACKUP-008"],
+      "type": "package/full-suite",
+      "target": "go test ./...",
+      "description": "Run the full Go test suite after wiring reactor, responder, projector, app composition, and PSTF evidence.",
+      "status": "passed",
+      "evidence": [
+        "2026-05-21: go test ./... passed across cmd, internal, pkg, and test/integration packages."
       ]
     }
   ],
   "coverage_summary": {
     "criteria_total": 8,
     "criteria_with_tests": 8,
+    "first_kopia_run_slice_criteria_verified": ["AC-BACKUP-001", "AC-BACKUP-002", "AC-BACKUP-003", "AC-BACKUP-004", "AC-BACKUP-005", "AC-BACKUP-006", "AC-BACKUP-008"],
     "known_gaps": [
-      "No backup implementation code exists in this docs/protocol slice; implementation tests remain planned for later Beads issues.",
-      "Backend-specific test harnesses must be selected after the first adapter slice is chosen."
+      "AC-BACKUP-007 restore request/approval/result workflows are outside the first Kopia backup-run slice and are tracked in Beads.",
+      "Retention execution, UI flows, Velero, and native snapshot adapters remain outside this slice and require separate Beads issues before feature-wide completion."
     ]
   },
   "implementation_notes": [
-    "Implementation slices must consume backup commands 38400-38409 and results 38410-38419 rather than 31200 or 38395/38396.",
-    "Prefer Kopia for the first generic filesystem backup adapter unless human decision chooses Velero or a native snapshot adapter first.",
-    "Velero must be treated as a Kubernetes orchestration adapter, not something Bahia reimplements.",
-    "Do not introduce filesystem_mock into production backup paths; test doubles must remain test-only and deterministic."
+    "Implemented first-slice request handling consumes BackupRunRequest kind 38400 and publishes BackupRunStatus 6981, BackupRunResult 38410, BackupRunAttestation 31310, and BackupVerificationAttestation 31311 when verification runs.",
+    "Kopia is the first production backend slice; Bahia delegates snapshot and verification execution to the real Kopia CLI adapter or explicit configuration/unsupported errors.",
+    "No filesystem_mock or fake backup backend is used in production backup paths; deterministic test doubles remain in _test.go files.",
+    "BackupRunState restore_eligible is true only when the run succeeded and verification_status is succeeded."
   ]
 }

@@ -1,7 +1,7 @@
 {
   "feature_id": "BACKUP_CONTROL_PLANE_ORCHESTRATION",
   "title": "Backup control-plane orchestration and provenance",
-  "status": "namespace_allocated",
+  "status": "first_kopia_backup_run_slice_verified",
   "source_evidence": [
     {
       "type": "operator_intent",
@@ -9,7 +9,7 @@
     },
     {
       "type": "repository_observation",
-      "summary": "Existing Bahia control-plane patterns use Nostr command/result events and replaceable read models. Backup has no implementation in this namespace allocation slice."
+      "summary": "Existing Bahia control-plane patterns use Nostr command/result events and replaceable read models. The first Kopia-backed backup-run slice now uses those patterns for kind 38400 intake, durable runs, status/result/attestation publication, and verification-aware read models."
     },
     {
       "type": "repository_observation",
@@ -113,7 +113,7 @@
     "Implementing delta algorithms.",
     "Replacing Kopia, Restic, Velero, Borg, ZFS, Btrfs, LVM, Ceph, CSI, Longhorn, or Proxmox backup/snapshot capabilities.",
     "Polling relays or using timeout-based completion to detect backup or restore completion.",
-    "Implementing backup code in the namespace allocation slice."
+    "Restore workflow implementation in the first Kopia backup-run slice."
   ],
   "preconditions": [
     "Operators configure relay, signer, and backend adapter credentials outside production code paths.",
@@ -124,7 +124,7 @@
   "postconditions": [
     "Every backup run has signed provenance describing initiator, target, backend, repository, artifact hashes or backend snapshot identifiers, verification status, and restore-test status when applicable.",
     "Every publish path verifies relay OK accepted flag and rejection message.",
-    "Every restore workflow is traceable from request through approval, adapter execution, verification, and final result event.",
+    "Every implemented backup run workflow is traceable from request through adapter execution, verification where required, and final result/attestation events. Restore workflow traceability remains future work outside the first Kopia backup-run slice.",
     "Remaining implementation gaps are tracked in Beads rather than TODOs or markdown-only lists."
   ],
   "happy_paths": [
@@ -159,18 +159,28 @@
     "Configuration/secrets management for repository credentials"
   ],
   "ambiguities": [
-    "Adapter priority and first vertical slice target must be selected: Kopia filesystem backup, Velero Kubernetes restore, or native snapshot orchestration.",
-    "Minimum verification evidence required before Bahia marks a backup restore-eligible remains a product decision for implementation slices."
+    "Restore approval UX and policy requirements remain unresolved for future restore workflow slices.",
+    "Retention execution, UI workflows, Velero, and native snapshot adapters remain outside the first Kopia backup-run slice."
   ],
   "resolved_ambiguities": [
     {
       "question": "Which event namespace should backup command/result and replaceable read-model events use?",
       "decision": "Use backup-specific command/result kinds 38400-38419, status/observation kinds 6981-6984, read models 31991-31999, and attestations 31310-31311.",
       "evidence": "docs/control-planes.md documents the allocation and collision rationale. Repository search found no current production collision for these allocated backup kinds."
+    },
+    {
+      "question": "Which production backend should the first vertical slice use?",
+      "decision": "Use Kopia for the first filesystem backup-run slice. Bahia remains the control plane and delegates snapshot/verification execution to the real Kopia CLI adapter or explicit configuration/unsupported errors.",
+      "evidence": "internal/adapters/backup/kopia_backend.go, internal/service/backup_run_coordinator.go, and related tests implement and verify the first Kopia-backed backup-run path."
+    },
+    {
+      "question": "When is a first-slice backup run restore-eligible?",
+      "decision": "Only a succeeded run with verification_status=succeeded is projected as restore_eligible=true. Snapshot creation with skipped, failed, unsupported, or pending verification remains restore_eligible=false.",
+      "evidence": "domain.BackupRunRestoreEligible, backup registry/coordinator tests, and projector_backup_test.go verify the derived field."
     }
   ],
   "human_decisions": [
-    "Approve first implementation slice and required production backend.",
-    "Approve minimum verification policy required before a backup is considered usable for restore."
+    "Approve restore workflow approval UX and policy requirements before implementing restore execution.",
+    "Approve retention execution, Velero, and native snapshot adapter scope in separate implementation slices."
   ]
 }

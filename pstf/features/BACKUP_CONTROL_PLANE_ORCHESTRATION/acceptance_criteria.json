@@ -1,6 +1,6 @@
 {
   "feature_id": "BACKUP_CONTROL_PLANE_ORCHESTRATION",
-  "status": "namespace_allocated",
+  "status": "first_kopia_backup_run_slice_verified",
   "criteria": [
     {
       "id": "AC-BACKUP-001",
@@ -60,12 +60,12 @@
     }
   ],
   "coverage_notes": [
-    "The U4-1 docs/protocol slice resolves the namespace ambiguity without implementing backup code.",
+    "The U4-1 docs/protocol slice resolves the namespace ambiguity, and the JW-4/JW-5/JW-6 slice wires the first Kopia backup-run path into the Nostr reactor, responder, projector, and app composition.",
     "The allocated namespace avoids the known collisions: 31200 remains artifact signature attestation, and 38395/38396 remain AI/ML terminal result kinds.",
     "Command and result tag contracts require narrow filter tags including d, p where applicable, t/task, target, backend, repository, policy, recipe, run, worker, site, environment, and verification."
   ],
   "unresolved_questions": [
-    "What is the first production backend slice: Kopia filesystem backup, Velero Kubernetes restore, or native snapshot adapter?",
-    "What verification tests are mandatory for a backup to be considered restorable in Cascadia?"
+    "What restore approval UX and policy requirements should govern future restore workflow execution?",
+    "Which retention execution, Velero, and native snapshot adapter slices should follow the first Kopia backup-run slice?"
   ]
 }

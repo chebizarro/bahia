@@ -335,15 +335,15 @@ Backup commands and results are addressable and use `d=<idempotency-key-or-reque
 
 #### Backup replaceable read models (`31991-31999`)
 
-Read models are latest-wins projections for `(kind, pubkey, d-tag)`. Clients bootstrap with scoped filters, wait for EOSE, then keep subscriptions open for realtime updates.
+Read models are latest-wins projections for `(kind, pubkey, d-tag)`. Implemented mutable registry records use immutable UUID-backed d-tags so renames do not leave stale live coordinates. Clients bootstrap with scoped filters, wait for EOSE, then keep subscriptions open for realtime updates.
 
 | Kind | Name | d-tag coordinate examples | Purpose |
 |------|------|---------------------------|---------|
 | 31991 | `BackupDefinitionRegistry` | `backup-definition:<name>` | Backup definition registry/read model |
-| 31992 | `BackupPolicyRegistry` | `backup-policy:<name>` | Backup policy registry/read model |
-| 31993 | `BackupRepositoryRegistry` | `backup-repository:<name>` | Backup repository registry/read model |
+| 31992 | `BackupPolicyRegistry` | `backup-policy:<policy-id>` | Backup policy registry/read model |
+| 31993 | `BackupRepositoryRegistry` | `backup-repository:<repository-id>` | Backup repository registry/read model |
 | 31994 | `BackupRetentionRegistry` | `backup-retention:<name>` | Retention registry/read model |
-| 31995 | `BackupRecipeRegistry` | `backup-recipe:<name>:<version>` | Backup recipe registry/read model |
+| 31995 | `BackupRecipeRegistry` | `backup-recipe:<recipe-id>` | Backup recipe registry/read model |
 | 31996 | `BackupRunState` | `backup-run:<run-id>` | Backup run state |
 | 31997 | `BackupVerificationState` | `backup-verification:<run-id>` | Backup verification state |
 | 31998 | `BackupRestoreState` | `backup-restore:<restore-id>` | Backup restore state |

@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/controlplane"
+	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/repository"
 	"github.com/openagentsinc/bahia/internal/service"
 	"github.com/stretchr/testify/require"
@@ -52,6 +53,37 @@ func TestControlPlaneSubscriberAuthorScopesDoNotWidenDefaultScope(t *testing.T) 
 	require.Equal(t, []string{"default-operator", "assistant-operator"}, scopes.Default)
 	require.Equal(t, []string{"adoption-operator"}, scopes.Adoption)
 	require.Equal(t, []string{"runtime-operator"}, scopes.DirectRuntime)
+}
+
+type appWiringBackupExecutor struct{}
+
+func (appWiringBackupExecutor) ProcessBackupRun(context.Context, uuid.UUID) error { return nil }
+
+type appWiringBackupResponder struct{}
+
+func (appWiringBackupResponder) PublishBackupRunStatus(context.Context, *domain.BackupRun, string, string) error {
+	return nil
+}
+func (appWiringBackupResponder) PublishBackupRunResult(context.Context, *domain.BackupRun, *domain.BackupVerificationRecord, string) error {
+	return nil
+}
+
+func TestControlPlaneReactorBackupOptionsInjectFinalSliceDependencies(t *testing.T) {
+	backupRegistry := &service.BackupRegistryService{}
+	executor := appWiringBackupExecutor{}
+	responder := appWiringBackupResponder{}
+	reactor := controlplane.NewReactor(controlplane.Config{}, nil, nil, nil, zap.NewNop(),
+		controlplane.WithBackupRegistry(backupRegistry),
+		controlplane.WithBackupRunExecutor(executor),
+		controlplane.WithBackupRunResponder(responder),
+	)
+
+	value := reflect.ValueOf(reactor).Elem()
+	for _, fieldName := range []string{"backupRegistry", "backupExecutor", "backupResponder"} {
+		field := value.FieldByName(fieldName)
+		require.True(t, field.IsValid(), "reactor %s field must exist", fieldName)
+		require.False(t, field.IsNil(), "reactor %s field must be injected", fieldName)
+	}
 }
 
 func TestControlPlaneReactorAuditOptionIndependentOfPackageFeature(t *testing.T) {
