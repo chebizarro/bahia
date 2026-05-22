@@ -61,13 +61,13 @@
         class:selected={selected === null}
         onclick={() => selectTemplate(null)}
       >
-        <div class="template-icon" aria-hidden="true"><TemplateIcon size={24} stroke={1.75} /></div>
+        <div class="template-icon" aria-hidden="true"><TemplateIcon size={24} strokeWidth={1.75} /></div>
         <div class="template-info">
           <h4>Custom Soul</h4>
           <p>Start from scratch with your own brief</p>
         </div>
         {#if selected === null}
-          <span class="check" aria-hidden="true"><SuccessIcon size={14} stroke={2} /></span>
+          <span class="check" aria-hidden="true"><SuccessIcon size={14} strokeWidth={2} /></span>
         {/if}
       </button>
     </div>
@@ -77,7 +77,7 @@
         {@const TierIcon = info.icon}
         <div class="template-section">
           <h4 class="tier-header">
-            <span class="tier-icon" aria-hidden="true"><TierIcon size={16} stroke={1.75} /></span>
+            <span class="tier-icon" aria-hidden="true"><TierIcon size={16} strokeWidth={1.75} /></span>
             {info.label}
             <span class="tier-desc">{info.description}</span>
           </h4>
@@ -89,7 +89,7 @@
                 class:selected={selected?.identifier === template.identifier}
                 onclick={() => selectTemplate(template)}
               >
-                <div class="template-icon" aria-hidden="true"><TierIcon size={24} stroke={1.75} /></div>
+                <div class="template-icon" aria-hidden="true"><TierIcon size={24} strokeWidth={1.75} /></div>
                 <div class="template-info">
                   <h4>{template.name}</h4>
                   <p>{template.description || 'No description'}</p>
@@ -102,7 +102,7 @@
                   {/if}
                 </div>
                 {#if selected?.identifier === template.identifier}
-                  <span class="check" aria-hidden="true"><SuccessIcon size={14} stroke={2} /></span>
+                  <span class="check" aria-hidden="true"><SuccessIcon size={14} strokeWidth={2} /></span>
                 {/if}
               </button>
             {/each}

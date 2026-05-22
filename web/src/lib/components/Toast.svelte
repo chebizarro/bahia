@@ -25,7 +25,7 @@
 
 <div class="toast {type}" role="alert">
   <div class="toast-icon" aria-hidden="true">
-    <ToastIcon size={20} stroke={1.75} />
+    <ToastIcon size={20} strokeWidth={1.75} />
   </div>
   <div class="toast-content">
     {#if title}
@@ -34,7 +34,7 @@
     <div class="toast-message">{message}</div>
   </div>
   <button class="toast-close" onclick={close} aria-label="Close">
-    <CloseIcon size={18} stroke={1.75} aria-hidden="true" />
+    <CloseIcon size={18} strokeWidth={1.75} aria-hidden="true" />
   </button>
 </div>
 

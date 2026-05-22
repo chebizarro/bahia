@@ -298,7 +298,7 @@
   <div class="header">
     <div class="title-row">
       <h1>
-        <DeploymentIcon size={28} stroke={1.75} aria-hidden="true" />
+        <DeploymentIcon size={28} strokeWidth={1.75} aria-hidden="true" />
         Deployment History
       </h1>
       <span class="count">{filteredIntents.length} of {intents.length} deployments</span>

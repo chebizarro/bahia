@@ -84,7 +84,7 @@
             {#if titleIcon}
               {@const TitleIcon = titleIcon}
               <span class="title-icon" aria-hidden="true">
-                <TitleIcon size={20} stroke={1.75} />
+                <TitleIcon size={20} strokeWidth={1.75} />
               </span>
             {/if}
             <span>{title}</span>

@@ -105,7 +105,7 @@
         class:active={activeTab === 'nostr'}
         onclick={() => switchTab('nostr')}
       >
-        <SearchIcon size={16} stroke={1.75} aria-hidden="true" />
+        <SearchIcon size={16} strokeWidth={1.75} aria-hidden="true" />
         Nostr Repositories
       </button>
       {#if allowManual}
@@ -114,7 +114,7 @@
           class:active={activeTab === 'manual'}
           onclick={() => switchTab('manual')}
         >
-          <EditIcon size={16} stroke={1.75} aria-hidden="true" />
+          <EditIcon size={16} strokeWidth={1.75} aria-hidden="true" />
           Manual Entry
         </button>
       {/if}

@@ -269,7 +269,7 @@
     <p class="error">Error: {error}</p>
   {:else if environment}
     <div class="header">
-      <h1 class="title-with-icon"><EnvironmentIcon size={28} stroke={1.75} aria-hidden="true" /> <span>{environment.name}</span></h1>
+      <h1 class="title-with-icon"><EnvironmentIcon size={28} strokeWidth={1.75} aria-hidden="true" /> <span>{environment.name}</span></h1>
       <div class="actions">
         <LoadingButton variant="secondary" onclick={openEditModal}>
           Edit
@@ -292,13 +292,13 @@
 
     {#if environment.runtime_config && Object.keys(environment.runtime_config).length > 0}
       <section>
-        <h2 class="section-title"><EnvironmentIcon size={18} stroke={1.75} aria-hidden="true" /> <span>Runtime Configuration</span></h2>
+        <h2 class="section-title"><EnvironmentIcon size={18} strokeWidth={1.75} aria-hidden="true" /> <span>Runtime Configuration</span></h2>
         <pre class="config-json">{JSON.stringify(environment.runtime_config, null, 2)}</pre>
       </section>
     {/if}
 
     <section>
-      <h2 class="section-title"><ServiceIcon size={18} stroke={1.75} aria-hidden="true" /> <span>Deployed Services ({states.length})</span></h2>
+      <h2 class="section-title"><ServiceIcon size={18} strokeWidth={1.75} aria-hidden="true" /> <span>Deployed Services ({states.length})</span></h2>
       {#if states.length > 0}
         <Table
           columns={stateColumns}
@@ -318,7 +318,7 @@
     </section>
 
     <section>
-      <h2 class="section-title"><DeploymentIcon size={18} stroke={1.75} aria-hidden="true" /> <span>Deployment History ({deploymentHistory.length})</span></h2>
+      <h2 class="section-title"><DeploymentIcon size={18} strokeWidth={1.75} aria-hidden="true" /> <span>Deployment History ({deploymentHistory.length})</span></h2>
       {#if deploymentHistory.length > 0}
         <Table columns={historyColumns} data={deploymentHistory} />
       {:else}

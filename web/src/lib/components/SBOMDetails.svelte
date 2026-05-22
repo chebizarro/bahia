@@ -100,7 +100,7 @@
     <!-- Attestation Overview -->
     {#if attestation || sbom}
       <div class="section">
-        <h3 class="section-title"><SignatureIcon size={18} stroke={1.75} aria-hidden="true" /> <span>Attestation Details</span></h3>
+        <h3 class="section-title"><SignatureIcon size={18} strokeWidth={1.75} aria-hidden="true" /> <span>Attestation Details</span></h3>
         <div class="attestation-grid">
           <div class="attestation-item">
             <span class="label">Format</span>
@@ -127,7 +127,7 @@
             {@const StorageIcon = storage.icon}
             <div class="attestation-item">
               <span class="label">Storage</span>
-              <span class="value value-with-icon"><StorageIcon size={16} stroke={1.75} aria-hidden="true" /> {storage.label}</span>
+              <span class="value value-with-icon"><StorageIcon size={16} strokeWidth={1.75} aria-hidden="true" /> {storage.label}</span>
             </div>
             <div class="attestation-item full-width">
               <span class="label">Location URI</span>
@@ -194,13 +194,13 @@
     {#if ntiaCompliance}
       <div class="section">
         <div class="section-header">
-          <h3 class="section-title"><SbomIcon size={18} stroke={1.75} aria-hidden="true" /> <span>NTIA Minimum Elements</span></h3>
+          <h3 class="section-title"><SbomIcon size={18} strokeWidth={1.75} aria-hidden="true" /> <span>NTIA Minimum Elements</span></h3>
           <Badge variant={ntiaCompliant ? 'success' : 'warning'}>
             <span class="badge-with-icon">
               {#if ntiaCompliant}
-                <SuccessIcon size={14} stroke={1.75} aria-hidden="true" /> Compliant
+                <SuccessIcon size={14} strokeWidth={1.75} aria-hidden="true" /> Compliant
               {:else}
-                <WarningIcon size={14} stroke={1.75} aria-hidden="true" /> {passedCount}/7 Fields
+                <WarningIcon size={14} strokeWidth={1.75} aria-hidden="true" /> {passedCount}/7 Fields
               {/if}
             </span>
           </Badge>
@@ -212,12 +212,12 @@
             <div class="ntia-item" class:passed class:failed={!passed}>
               <span class="ntia-status-icon" aria-hidden="true">
                 {#if passed}
-                  <SuccessIcon size={16} stroke={1.75} />
+                  <SuccessIcon size={16} strokeWidth={1.75} />
                 {:else}
-                  <WarningIcon size={16} stroke={1.75} />
+                  <WarningIcon size={16} strokeWidth={1.75} />
                 {/if}
               </span>
-              <span class="ntia-label"><FieldIcon size={16} stroke={1.75} aria-hidden="true" /> {field.label}</span>
+              <span class="ntia-label"><FieldIcon size={16} strokeWidth={1.75} aria-hidden="true" /> {field.label}</span>
             </div>
           {/each}
         </div>
@@ -232,7 +232,7 @@
     <!-- Packages Table -->
     {#if packages.length > 0}
       <div class="section">
-        <h3 class="section-title"><ArtifactIcon size={18} stroke={1.75} aria-hidden="true" /> <span>Packages ({packages.length})</span></h3>
+        <h3 class="section-title"><ArtifactIcon size={18} strokeWidth={1.75} aria-hidden="true" /> <span>Packages ({packages.length})</span></h3>
         <Table columns={packageColumns} data={packages} />
       </div>
     {/if}

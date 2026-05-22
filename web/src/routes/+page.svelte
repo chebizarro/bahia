@@ -635,7 +635,7 @@
   <div class="sections">
     <section id="environment-states">
       <h2 class="section-title-with-icon">
-        <WarningIcon size={20} stroke={1.75} aria-hidden="true" />
+        <WarningIcon size={20} strokeWidth={1.75} aria-hidden="true" />
         Environment States
       </h2>
       <Table columns={stateColumns} data={states.slice(0, 10)} onRowClick={handleEnvironmentStatesRowClick} rowClickable={false} />

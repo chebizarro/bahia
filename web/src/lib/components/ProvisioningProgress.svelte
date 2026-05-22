@@ -40,12 +40,12 @@
 <div class="provisioning-progress">
   {#if !run}
     <div class="empty">
-      <span class="icon" aria-hidden="true"><PendingIcon size={48} stroke={1.5} /></span>
+      <span class="icon" aria-hidden="true"><PendingIcon size={48} strokeWidth={1.5} /></span>
       <p>Waiting for provisioning to start...</p>
     </div>
   {:else if run.status === 'completed'}
     <div class="completed">
-      <span class="icon" aria-hidden="true"><SuccessIcon size={48} stroke={1.5} /></span>
+      <span class="icon" aria-hidden="true"><SuccessIcon size={48} strokeWidth={1.5} /></span>
       <h3>Provisioning Complete!</h3>
       <p>Your agent soul has been created successfully.</p>
       {#if run.result?.data?.npub}
@@ -62,7 +62,7 @@
     </div>
   {:else if run.status === 'failed'}
     <div class="failed">
-      <span class="icon" aria-hidden="true"><ErrorIcon size={48} stroke={1.5} /></span>
+      <span class="icon" aria-hidden="true"><ErrorIcon size={48} strokeWidth={1.5} /></span>
       <h3>Provisioning Failed</h3>
       <p>{run.result?.error || run.message || 'An error occurred'}</p>
     </div>
@@ -91,10 +91,10 @@
         >
           <span class="step-icon" aria-hidden="true">
             {#if idx < currentStepIdx}
-              <SuccessIcon size={16} stroke={1.75} />
+              <SuccessIcon size={16} strokeWidth={1.75} />
             {:else}
               {@const StepIcon = step.icon}
-              <StepIcon size={16} stroke={1.75} />
+              <StepIcon size={16} strokeWidth={1.75} />
             {/if}
           </span>
           <span class="step-label">{step.label}</span>

@@ -426,7 +426,7 @@
 <div class="page">
   <header class="page-header">
     <a href="/souls" class="back-link">← Back to Gallery</a>
-    <h1><SoulIcon size={28} stroke={1.75} aria-hidden="true" /> Create Runtime-Aware Soul</h1>
+    <h1><SoulIcon size={28} strokeWidth={1.75} aria-hidden="true" /> Create Runtime-Aware Soul</h1>
     <p class="subtitle">Customize a v2 31952 draft, preview the full spec, then publish a 5950 provisioning request that references it.</p>
   </header>
 
@@ -443,19 +443,19 @@
   {#if step < 3}
     <div class="auth-status" class:authenticated={isAuthenticated} class:error={authError}>
       {#if authError}
-        <WarningIcon size={22} stroke={1.75} aria-hidden="true" />
+        <WarningIcon size={22} strokeWidth={1.75} aria-hidden="true" />
         <div><strong>Signer error</strong><p>{authError}</p></div>
       {:else if !hasExtension}
-        <ConfiguredIcon size={22} stroke={1.75} aria-hidden="true" />
+        <ConfiguredIcon size={22} strokeWidth={1.75} aria-hidden="true" />
         <div><strong>Nostr signer required</strong><p>Use NIP-07 or Nostr Connect to sign each draft checkpoint and provisioning event.</p></div>
       {:else if isAuthenticated && userPubkey}
-        <SuccessIcon size={22} stroke={1.75} aria-hidden="true" />
+        <SuccessIcon size={22} strokeWidth={1.75} aria-hidden="true" />
         <div><strong>Authenticated</strong><p>{userPubkey.slice(0, 8)}…{userPubkey.slice(-8)}</p></div>
       {:else if authState.status === 'authenticating'}
-        <PendingIcon size={22} stroke={1.75} aria-hidden="true" />
+        <PendingIcon size={22} strokeWidth={1.75} aria-hidden="true" />
         <div><strong>Requesting permission</strong><p>Approve the signer prompt.</p></div>
       {:else}
-        <LoginIcon size={22} stroke={1.75} aria-hidden="true" />
+        <LoginIcon size={22} strokeWidth={1.75} aria-hidden="true" />
         <div><strong>Login required</strong><p>You will sign draft checkpoints and the provisioning request.</p></div>
         <button class="btn-secondary" onclick={handleLogin}>Login</button>
       {/if}
@@ -463,12 +463,12 @@
   {/if}
 
   {#if error}
-    <div class="error-banner"><WarningIcon size={18} stroke={1.75} aria-hidden="true" /> {error}</div>
+    <div class="error-banner"><WarningIcon size={18} strokeWidth={1.75} aria-hidden="true" /> {error}</div>
   {/if}
 
   {#if draftSaveStatus && step < 3}
     <div class="draft-status">
-      <SuccessIcon size={18} stroke={1.75} aria-hidden="true" />
+      <SuccessIcon size={18} strokeWidth={1.75} aria-hidden="true" />
       <span>{draftSaveStatus}{#if lastDraftSavedAt} at {lastDraftSavedAt}{/if}</span>
       {#if draftEventId}<code>{draftEventId.slice(0, 12)}…</code>{/if}
       {#if draftPublishResults.length}<span>{draftPublishResults.filter((result) => result.accepted).length} relay accepts</span>{/if}
@@ -634,14 +634,14 @@
       <div class="wizard-actions">
         <button class="btn-secondary" onclick={prevPanel} disabled={submitting || savingDraft}>← Back</button>
         <button class="btn-primary" onclick={submitProvisioning} disabled={submitting || savingDraft || runtimeChoices.length === 0 || (!hasExtension && !isAuthenticated)}>
-          {#if publishing}<span class="spinner"></span>Signing & publishing…{:else}<SeedIcon size={18} stroke={1.75} aria-hidden="true" />Provision from preview{/if}
+          {#if publishing}<span class="spinner"></span>Signing & publishing…{:else}<SeedIcon size={18} strokeWidth={1.75} aria-hidden="true" />Provision from preview{/if}
         </button>
       </div>
     </section>
   {:else if step === 3}
     <section class="wizard-content">
       <div class="publish-success">
-        <SuccessIcon size={28} stroke={2} aria-hidden="true" />
+        <SuccessIcon size={28} strokeWidth={2} aria-hidden="true" />
         <h3>Draft and request published</h3>
         <p>Terminal status will come only from explicit 7950 result events.</p>
         <dl>

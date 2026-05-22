@@ -66,7 +66,7 @@
 <div class="page">
   <div class="header">
     <h1>
-      <StandardIcon size={28} stroke={1.75} aria-hidden="true" />
+      <StandardIcon size={28} strokeWidth={1.75} aria-hidden="true" />
       Workers
     </h1>
     <span class="count">{filteredWorkers.length} of {workers.length} workers</span>

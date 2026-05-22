@@ -16,7 +16,7 @@
 <div class="error-state">
   {#if showIcon}
     <div class="icon" aria-hidden="true">
-      <WarningIcon size={48} stroke={1.5} />
+      <WarningIcon size={48} strokeWidth={1.5} />
     </div>
   {/if}
   <h2 class="title">{title}</h2>

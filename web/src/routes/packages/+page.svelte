@@ -53,7 +53,7 @@
   <div class="header">
     <div class="title-row">
       <h1>
-        <ArtifactIcon size={28} stroke={1.75} aria-hidden="true" />
+        <ArtifactIcon size={28} strokeWidth={1.75} aria-hidden="true" />
         Packages
       </h1>
       <span class="count">{rows.length} repositories</span>

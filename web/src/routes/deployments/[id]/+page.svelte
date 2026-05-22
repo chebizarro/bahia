@@ -190,7 +190,7 @@
     <p class="loading">Loading deployment intent...</p>
   {:else if error}
     <div class="error-state">
-      <p class="error title-with-icon"><WarningIcon size={18} stroke={1.75} aria-hidden="true" /> <span>{error}</span></p>
+      <p class="error title-with-icon"><WarningIcon size={18} strokeWidth={1.75} aria-hidden="true" /> <span>{error}</span></p>
       <LoadingButton variant="secondary" onclick={() => goto('/deployments')}>
         Back to Deployments
       </LoadingButton>
@@ -199,7 +199,7 @@
     <div class="header">
       <div>
         <a href="/deployments" class="back-link">← Back to Deployments</a>
-        <h1 class="title-with-icon"><DeploymentIcon size={28} stroke={1.75} aria-hidden="true" /> <span>Deployment Intent</span></h1>
+        <h1 class="title-with-icon"><DeploymentIcon size={28} strokeWidth={1.75} aria-hidden="true" /> <span>Deployment Intent</span></h1>
         <p class="intent-id"><code>{intent.id}</code></p>
       </div>
       {#if isPending}
@@ -245,7 +245,7 @@
           <div class="detail-item">
             <span class="detail-label">Artifact ID</span>
             <span class="detail-value cross-ref-value">
-              <ArtifactIcon size={16} stroke={1.75} aria-hidden="true" />
+              <ArtifactIcon size={16} strokeWidth={1.75} aria-hidden="true" />
               {#if intent.artifact_id}
                 <code>{intent.artifact_id}</code>
               {:else}
@@ -275,7 +275,7 @@
     </div>
 
     <div class="runs-section">
-      <h2 class="section-title"><DeploymentIcon size={20} stroke={1.75} aria-hidden="true" /> <span>Deployment Runs ({runs.length})</span></h2>
+      <h2 class="section-title"><DeploymentIcon size={20} strokeWidth={1.75} aria-hidden="true" /> <span>Deployment Runs ({runs.length})</span></h2>
       {#if runs.length === 0}
         <EmptyState
           iconComponent={DeploymentIcon}

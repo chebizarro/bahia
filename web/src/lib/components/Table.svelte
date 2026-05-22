@@ -35,7 +35,7 @@
                 <span class="cell-with-icon">
                   {#if CellIcon}
                     <span class="cell-icon" aria-hidden="true">
-                      <CellIcon size={16} stroke={1.75} />
+                      <CellIcon size={16} strokeWidth={1.75} />
                     </span>
                   {/if}
                   <span>{resolveColumnText(col, row)}</span>

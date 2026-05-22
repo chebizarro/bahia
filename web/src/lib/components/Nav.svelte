@@ -155,7 +155,7 @@
             </div>
             {#if authUi.showWarning}
               <span class="auth-warning" title={authUi.warning} aria-label={authUi.warning || 'Authentication warning'}>
-                <WarningIcon size={18} stroke={1.75} aria-hidden="true" />
+                <WarningIcon size={18} strokeWidth={1.75} aria-hidden="true" />
               </span>
             {/if}
             <button class="logout-btn" onclick={handleLogout}>
@@ -170,15 +170,15 @@
             title={authUi.buttonTitle}
           >
             {#if authUi.extensionAvailable}
-              <LoginIcon size={16} stroke={1.75} aria-hidden="true" />
+              <LoginIcon size={16} strokeWidth={1.75} aria-hidden="true" />
             {:else}
-              <WarningIcon size={16} stroke={1.75} aria-hidden="true" />
+              <WarningIcon size={16} strokeWidth={1.75} aria-hidden="true" />
             {/if}
             {authUi.buttonLabel}
           </button>
           {#if authUi.showError}
             <span class="auth-error" title={authUi.error} aria-label={authUi.error || 'Authentication error'}>
-              <WarningIcon size={18} stroke={1.75} aria-hidden="true" />
+              <WarningIcon size={18} strokeWidth={1.75} aria-hidden="true" />
             </span>
           {/if}
         {/if}
@@ -186,9 +186,9 @@
 
       <button class="theme-toggle" onclick={toggleTheme} aria-label="Toggle theme">
         {#if theme.value === 'dark'}
-          <SunIcon size={18} stroke={1.75} aria-hidden="true" />
+          <SunIcon size={18} strokeWidth={1.75} aria-hidden="true" />
         {:else}
-          <MoonIcon size={18} stroke={1.75} aria-hidden="true" />
+          <MoonIcon size={18} strokeWidth={1.75} aria-hidden="true" />
         {/if}
       </button>
     </div>

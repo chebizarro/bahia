@@ -240,7 +240,7 @@
   <div class="settings-grid">
     <!-- Nostr Relays Section -->
     <section class="settings-section">
-      <h2><RelayIcon size={18} stroke={1.75} aria-hidden="true" /> Nostr Relays</h2>
+      <h2><RelayIcon size={18} strokeWidth={1.75} aria-hidden="true" /> Nostr Relays</h2>
       <p class="section-description">
         Configure browser relays for Nostr reads and publishes. Changes autosave and reconnect immediately.
       </p>
@@ -283,7 +283,7 @@
 
     <!-- NIP-46 Nostr Connect -->
     <section class="settings-section">
-      <h2><ProtectedIcon size={18} stroke={1.75} aria-hidden="true" /> Nostr Connect (NIP-46)</h2>
+      <h2><ProtectedIcon size={18} strokeWidth={1.75} aria-hidden="true" /> Nostr Connect (NIP-46)</h2>
       <p class="section-description">
         Connect this browser session to a remote signer using Nostr Connect. Paste or scan a <code>nostrconnect://</code> URI from your signer app.
       </p>
@@ -308,7 +308,7 @@
       <!-- QR scanner -->
       <div class="qr-scanner-section">
         {#if !scanning}
-          <button class="btn-scan icon-button" onclick={startQrScanner}><CameraIcon size={16} stroke={1.75} aria-hidden="true" /> Scan QR Code</button>
+          <button class="btn-scan icon-button" onclick={startQrScanner}><CameraIcon size={16} strokeWidth={1.75} aria-hidden="true" /> Scan QR Code</button>
         {:else}
           <div class="scanner-wrap">
             <!-- svelte-ignore a11y_media_has_caption -->
@@ -327,7 +327,7 @@
 
     <!-- Theme Section -->
     <section class="settings-section">
-      <h2><AppearanceIcon size={18} stroke={1.75} aria-hidden="true" /> Appearance</h2>
+      <h2><AppearanceIcon size={18} strokeWidth={1.75} aria-hidden="true" /> Appearance</h2>
       <p class="section-description">Customize the look and feel of the application.</p>
 
       <div class="theme-option">
@@ -338,14 +338,14 @@
             class:active={theme.value === 'light'}
             onclick={() => theme.value !== 'light' && toggleTheme()}
           >
-            <SunIcon size={16} stroke={1.75} aria-hidden="true" /> Light
+            <SunIcon size={16} strokeWidth={1.75} aria-hidden="true" /> Light
           </button>
           <button
             class="theme-btn"
             class:active={theme.value === 'dark'}
             onclick={() => theme.value !== 'dark' && toggleTheme()}
           >
-            <MoonIcon size={16} stroke={1.75} aria-hidden="true" /> Dark
+            <MoonIcon size={16} strokeWidth={1.75} aria-hidden="true" /> Dark
           </button>
         </div>
       </div>
@@ -353,7 +353,7 @@
 
     <!-- Server Configuration Section -->
     <section class="settings-section">
-      <h2><ConfiguredIcon size={18} stroke={1.75} aria-hidden="true" /> Server Configuration</h2>
+      <h2><ConfiguredIcon size={18} strokeWidth={1.75} aria-hidden="true" /> Server Configuration</h2>
       <p class="section-description">
         Server-side configuration (read-only). These settings are configured on the Bahia server.
       </p>
@@ -477,7 +477,7 @@
     <!-- Available Registries Section -->
     {#if systemInfo?.registries?.length > 0}
       <section class="settings-section">
-        <h2><ArtifactIcon size={18} stroke={1.75} aria-hidden="true" /> Available Registries</h2>
+        <h2><ArtifactIcon size={18} strokeWidth={1.75} aria-hidden="true" /> Available Registries</h2>
         <p class="section-description">
           Container registries available for artifact storage.
         </p>

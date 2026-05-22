@@ -111,7 +111,7 @@
 <div class="page">
   <div class="page-header">
     <div>
-      <h1><MLFabricIcon size={24} stroke={1.75} aria-hidden="true" /> ML Fabric</h1>
+      <h1><MLFabricIcon size={24} strokeWidth={1.75} aria-hidden="true" /> ML Fabric</h1>
       <p class="subtitle">AI/ML inference fabric — model catalog, deployments, endpoints, and placement-aware worker scheduling.</p>
     </div>
     <div class="connection-card" data-testid="ml-connection-status">
@@ -127,7 +127,7 @@
   {#if loading}
     <p class="loading">Bootstrapping ML fabric control plane…</p>
   {:else if error}
-    <div class="error-state"><WarningIcon size={18} stroke={1.75} aria-hidden="true" /> <span>{error}</span></div>
+    <div class="error-state"><WarningIcon size={18} strokeWidth={1.75} aria-hidden="true" /> <span>{error}</span></div>
   {:else}
     <!-- Summary Cards -->
     <div class="summary-grid">
@@ -152,7 +152,7 @@
     <!-- Model Catalog -->
     <section class="panel" data-testid="ml-model-catalog">
       <div class="section-header">
-        <h2><ArtifactIcon size={18} stroke={1.75} aria-hidden="true" /> Model Catalog</h2>
+        <h2><ArtifactIcon size={18} strokeWidth={1.75} aria-hidden="true" /> Model Catalog</h2>
         <span>{filteredModels.length} of {mlModels.length}</span>
       </div>
 
@@ -226,7 +226,7 @@
     {#if selectedModelId}
       <section class="panel" data-testid="ml-model-versions">
         <div class="section-header">
-          <h2><ProgressIcon size={18} stroke={1.75} aria-hidden="true" /> Versions for: {selectedModelId}</h2>
+          <h2><ProgressIcon size={18} strokeWidth={1.75} aria-hidden="true" /> Versions for: {selectedModelId}</h2>
           <button type="button" class="text-btn" onclick={() => { selectedModelId = ''; }}>Clear</button>
         </div>
         {#if selectedVersions.length === 0}
@@ -263,7 +263,7 @@
     <!-- Inference Endpoints & State -->
     <section class="panel" data-testid="ml-endpoints">
       <div class="section-header">
-        <h2><DeploymentIcon size={18} stroke={1.75} aria-hidden="true" /> Inference Endpoints</h2>
+        <h2><DeploymentIcon size={18} strokeWidth={1.75} aria-hidden="true" /> Inference Endpoints</h2>
         <span>{mlEndpoints.length}</span>
       </div>
       {#if mlEndpoints.length === 0}
@@ -298,7 +298,7 @@
     <!-- Action Forms -->
     <div class="workflow-grid">
       <section class="panel">
-        <h2><ArtifactIcon size={18} stroke={1.75} aria-hidden="true" /> Import Model</h2>
+        <h2><ArtifactIcon size={18} strokeWidth={1.75} aria-hidden="true" /> Import Model</h2>
         <form onsubmit={handleImport} data-testid="ml-import-form">
           <label>
             Model slug
@@ -339,7 +339,7 @@
       </section>
 
       <section class="panel">
-        <h2><DeploymentIcon size={18} stroke={1.75} aria-hidden="true" /> Deploy Endpoint</h2>
+        <h2><DeploymentIcon size={18} strokeWidth={1.75} aria-hidden="true" /> Deploy Endpoint</h2>
         <form onsubmit={handleDeploy} data-testid="ml-deploy-form">
           <label>
             Endpoint coordinate

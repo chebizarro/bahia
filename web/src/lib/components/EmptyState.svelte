@@ -19,11 +19,11 @@
     <div class="icon" aria-hidden="true">
       {#if iconComponent}
         {@const IconComponent = iconComponent}
-        <IconComponent size={48} stroke={1.5} />
+        <IconComponent size={48} strokeWidth={1.5} />
       {:else if icon}
         {icon}
       {:else}
-        <EmptyIcon size={48} stroke={1.5} />
+        <EmptyIcon size={48} strokeWidth={1.5} />
       {/if}
     </div>
   {/if}

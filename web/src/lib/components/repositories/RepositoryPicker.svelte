@@ -55,7 +55,7 @@
   <div class="picker-display" class:disabled class:has-value={hasValue}>
     {#if hasValue}
       <div class="selection-summary">
-        <div class="selection-icon" aria-hidden="true"><RepositoryIcon size={22} stroke={1.75} /></div>
+        <div class="selection-icon" aria-hidden="true"><RepositoryIcon size={22} strokeWidth={1.75} /></div>
         <div class="selection-info">
           <div class="selection-header">
             <span class="selection-name">{value.displayName}</span>

@@ -234,7 +234,7 @@
   <div class="header">
     <div class="title-row">
       <h1>
-        <ArtifactIcon size={28} stroke={1.75} aria-hidden="true" />
+        <ArtifactIcon size={28} strokeWidth={1.75} aria-hidden="true" />
         Artifacts
       </h1>
       <span class="count">
@@ -254,7 +254,7 @@
       class:active={activeTab === 'registry'}
       onclick={() => handleTabChange('registry')}
     >
-      <ArtifactIcon size={18} stroke={1.75} aria-hidden="true" />
+      <ArtifactIcon size={18} strokeWidth={1.75} aria-hidden="true" />
       Registry
     </button>
     <button
@@ -262,7 +262,7 @@
       class:active={activeTab === 'blossom'}
       onclick={() => handleTabChange('blossom')}
     >
-      <BlossomIcon size={18} stroke={1.75} aria-hidden="true" />
+      <BlossomIcon size={18} strokeWidth={1.75} aria-hidden="true" />
       Blossom
     </button>
   </div>
@@ -299,9 +299,9 @@
           >
             {serverHostname}
             {#if serverHealth === 'ok'}
-              <SuccessIcon size={14} stroke={2} aria-hidden="true" />
+              <SuccessIcon size={14} strokeWidth={2} aria-hidden="true" />
             {:else if serverHealth}
-              <ErrorIcon size={14} stroke={2} aria-hidden="true" />
+              <ErrorIcon size={14} strokeWidth={2} aria-hidden="true" />
             {/if}
           </span>
         {/each}

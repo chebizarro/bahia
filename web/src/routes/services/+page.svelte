@@ -249,7 +249,7 @@
   <div class="header">
     <div class="title-row">
       <h1>
-        <ServiceIcon size={28} stroke={1.75} aria-hidden="true" />
+        <ServiceIcon size={28} strokeWidth={1.75} aria-hidden="true" />
         Services
       </h1>
       <span class="count">{services.length} services</span>
