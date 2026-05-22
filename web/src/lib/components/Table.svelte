@@ -6,7 +6,15 @@
   }
 
   function resolveColumnIcon(col, row) {
-    return typeof col.icon === 'function' ? col.icon(row) : col.icon;
+    if (!col?.icon) return null;
+    if (typeof col.icon !== 'function') return col.icon;
+
+    // Svelte 5 components are functions too. Distinguish actual icon components
+    // from row-resolver callbacks so we don't accidentally invoke the component
+    // with a row object as its props bag.
+    if (col.icon.length >= 2) return col.icon;
+
+    return col.icon(row);
   }
 
   function resolveColumnText(col, row) {
