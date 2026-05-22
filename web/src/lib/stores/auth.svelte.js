@@ -178,14 +178,9 @@ function collectProfileRelayCandidates(userRelays = {}) {
   const candidates = [];
   candidates.push(...normalizeRelayUrls(userRelays));
 
-  const systemInfo = currentSystemInfo();
-  if (Array.isArray(systemInfo?.nostr?.browser_relays)) {
-    candidates.push(...systemInfo.nostr.browser_relays);
-  }
-  if (Array.isArray(systemInfo?.nostr?.service_relays)) {
-    candidates.push(...systemInfo.nostr.service_relays);
-  }
-
+  // Do not use the Bahia control-plane/browser relay set for kind-0 profile lookups.
+  // The sidecar intentionally exposes control-plane/read-model kinds and can close
+  // profile queries as blocked, which should not poison app bootstrap.
   candidates.push('wss://relay.sharegap.net', 'wss://relay.primal.net', 'wss://nos.lol');
 
   return Array.from(new Set(candidates.filter((relay) => typeof relay === 'string' && /^wss?:\/\//i.test(relay)))).slice(0, 8);
@@ -259,26 +254,9 @@ async function fetchProfile(pubkey, userRelays = {}) {
   if (!isValidHexPubkey(pubkey)) return null;
 
   try {
-    const [{ nostr }, { get }] = await Promise.all([
-      import('$lib/nostr/client.js'),
-      import('svelte/store')
-    ]);
-
-    for (let i = 0; i < 15 && !get(nostr.connected); i++) {
-      await new Promise((r) => setTimeout(r, 200));
-    }
-
-    if (get(nostr.connected)) {
-      const events = await nostr.queryUntilEose([{ kinds: [0], authors: [pubkey], limit: 10 }]);
-      const latest = [...events]
-        .filter((e) => e?.pubkey === pubkey && typeof e.content === 'string')
-        .sort((a, b) => Number(b?.created_at || 0) - Number(a?.created_at || 0))[0];
-
-      if (latest?.content) {
-        return normalizeProfileMetadata(JSON.parse(latest.content));
-      }
-    }
-
+    // Avoid querying the shared Bahia control-plane relay for kind-0 metadata.
+    // That relay is scoped for Bahia control-plane/read-model traffic and may
+    // close profile queries as blocked. Use user/public relays instead.
     const relayCandidates = collectProfileRelayCandidates(userRelays);
     if (relayCandidates.length === 0) return null;
 

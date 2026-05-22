@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "vite dev",
-    "build": "vite build",
+    "build": "vite build && node scripts/patch-svelte-props-guard.mjs",
     "preview": "vite preview",
     "test": "vitest run",
     "test:unit": "vitest run --config vitest.config.js",
