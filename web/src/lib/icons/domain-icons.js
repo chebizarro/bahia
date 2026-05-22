@@ -1,58 +1,56 @@
-import {
-  IconAlertTriangle,
-  IconBell,
-  IconBolt,
-  IconBrain,
-  IconBuildingCommunity,
-  IconCheck,
-  IconCircleCheck,
-  IconCircleX,
-  IconClipboardList,
-  IconClockHour4,
-  IconCamera,
-  IconCopy,
-  IconCpu,
-  IconDatabase,
-  IconEdit,
-  IconFile,
-  IconFileText,
-  IconFileTypePdf,
-  IconFingerprint,
-  IconFlower,
-  IconFolder,
-  IconGauge,
-  IconGitBranch,
-  IconInbox,
-  IconInfoCircle,
-  IconJson,
-  IconLogin2,
-  IconMoon,
-  IconMusic,
-  IconNetwork,
-  IconPackage,
-  IconPalette,
-  IconPencil,
-  IconPhoto,
-  IconPlant,
-  IconPlugConnected,
-  IconProgress,
-  IconQuestionMark,
-  IconReceipt,
-  IconRobot,
-  IconRocket,
-  IconRotateClockwise,
-  IconSearch,
-  IconServer,
-  IconSettings,
-  IconShieldCheck,
-  IconShieldLock,
-  IconSignature,
-  IconSparkles,
-  IconSun,
-  IconTarget,
-  IconVideo,
-  IconX
-} from '@tabler/icons-svelte';
+import IconAlertTriangle from './tabler/IconAlertTriangle.svelte';
+import IconBell from './tabler/IconBell.svelte';
+import IconBolt from './tabler/IconBolt.svelte';
+import IconBrain from './tabler/IconBrain.svelte';
+import IconBuildingCommunity from './tabler/IconBuildingCommunity.svelte';
+import IconCheck from './tabler/IconCheck.svelte';
+import IconCircleCheck from './tabler/IconCircleCheck.svelte';
+import IconCircleX from './tabler/IconCircleX.svelte';
+import IconClipboardList from './tabler/IconClipboardList.svelte';
+import IconClockHour4 from './tabler/IconClockHour4.svelte';
+import IconCamera from './tabler/IconCamera.svelte';
+import IconCopy from './tabler/IconCopy.svelte';
+import IconCpu from './tabler/IconCpu.svelte';
+import IconDatabase from './tabler/IconDatabase.svelte';
+import IconEdit from './tabler/IconEdit.svelte';
+import IconFile from './tabler/IconFile.svelte';
+import IconFileText from './tabler/IconFileText.svelte';
+import IconFileTypePdf from './tabler/IconFileTypePdf.svelte';
+import IconFingerprint from './tabler/IconFingerprint.svelte';
+import IconFlower from './tabler/IconFlower.svelte';
+import IconFolder from './tabler/IconFolder.svelte';
+import IconGauge from './tabler/IconGauge.svelte';
+import IconGitBranch from './tabler/IconGitBranch.svelte';
+import IconInbox from './tabler/IconInbox.svelte';
+import IconInfoCircle from './tabler/IconInfoCircle.svelte';
+import IconJson from './tabler/IconJson.svelte';
+import IconLogin2 from './tabler/IconLogin2.svelte';
+import IconMoon from './tabler/IconMoon.svelte';
+import IconMusic from './tabler/IconMusic.svelte';
+import IconNetwork from './tabler/IconNetwork.svelte';
+import IconPackage from './tabler/IconPackage.svelte';
+import IconPalette from './tabler/IconPalette.svelte';
+import IconPencil from './tabler/IconPencil.svelte';
+import IconPhoto from './tabler/IconPhoto.svelte';
+import IconPlant from './tabler/IconPlant.svelte';
+import IconPlugConnected from './tabler/IconPlugConnected.svelte';
+import IconProgress from './tabler/IconProgress.svelte';
+import IconQuestionMark from './tabler/IconQuestionMark.svelte';
+import IconReceipt from './tabler/IconReceipt.svelte';
+import IconRobot from './tabler/IconRobot.svelte';
+import IconRocket from './tabler/IconRocket.svelte';
+import IconRotateClockwise from './tabler/IconRotateClockwise.svelte';
+import IconSearch from './tabler/IconSearch.svelte';
+import IconServer from './tabler/IconServer.svelte';
+import IconSettings from './tabler/IconSettings.svelte';
+import IconShieldCheck from './tabler/IconShieldCheck.svelte';
+import IconShieldLock from './tabler/IconShieldLock.svelte';
+import IconSignature from './tabler/IconSignature.svelte';
+import IconSparkles from './tabler/IconSparkles.svelte';
+import IconSun from './tabler/IconSun.svelte';
+import IconTarget from './tabler/IconTarget.svelte';
+import IconVideo from './tabler/IconVideo.svelte';
+import IconX from './tabler/IconX.svelte';
 
 export const ServiceIcon = IconServer;
 export const ArtifactIcon = IconPackage;
