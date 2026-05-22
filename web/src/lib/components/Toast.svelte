@@ -1,13 +1,12 @@
+<svelte:options runes={false} />
 <script>
   import { CloseIcon, ErrorIcon, InfoIcon, SuccessIcon, WarningIcon } from '$lib/icons/domain-icons.js';
 
-  let {
-    id,
-    type = 'info',
-    title = '',
-    message = '',
-    onClose
-  } = $props();
+  export let id;
+  export let type = 'info';
+  export let title = '';
+  export let message = '';
+  export let onClose = null;
 
   const icons = {
     success: SuccessIcon,
@@ -16,7 +15,7 @@
     info: InfoIcon
   };
 
-  const ToastIcon = $derived(icons[type] || InfoIcon);
+  $: ToastIcon = icons[type] || InfoIcon;
 
   function close() {
     onClose?.(id);
@@ -25,7 +24,7 @@
 
 <div class="toast {type}" role="alert">
   <div class="toast-icon" aria-hidden="true">
-    <ToastIcon size={20} strokeWidth={1.75} />
+    <svelte:component this={ToastIcon} size={20} strokeWidth={1.75} />
   </div>
   <div class="toast-content">
     {#if title}
@@ -53,27 +52,13 @@
     animation: slideIn 0.3s ease-out;
   }
   @keyframes slideIn {
-    from {
-      transform: translateX(100%);
-      opacity: 0;
-    }
-    to {
-      transform: translateX(0);
-      opacity: 1;
-    }
+    from { transform: translateX(100%); opacity: 0; }
+    to { transform: translateX(0); opacity: 1; }
   }
-  .toast.success {
-    border-left: 4px solid var(--success);
-  }
-  .toast.error {
-    border-left: 4px solid var(--error);
-  }
-  .toast.warning {
-    border-left: 4px solid var(--warning);
-  }
-  .toast.info {
-    border-left: 4px solid var(--primary);
-  }
+  .toast.success { border-left: 4px solid var(--success); }
+  .toast.error { border-left: 4px solid var(--error); }
+  .toast.warning { border-left: 4px solid var(--warning); }
+  .toast.info { border-left: 4px solid var(--primary); }
   .toast-icon {
     display: inline-flex;
     align-items: center;
@@ -84,22 +69,9 @@
   .toast.error .toast-icon { color: var(--error); }
   .toast.warning .toast-icon { color: var(--warning); }
   .toast.info .toast-icon { color: var(--primary); }
-
-  .toast-content {
-    flex: 1;
-    min-width: 0;
-  }
-  .toast-title {
-    font-weight: 600;
-    font-size: 0.875rem;
-    color: var(--text-primary);
-    margin-bottom: 0.25rem;
-  }
-  .toast-message {
-    font-size: 0.875rem;
-    color: var(--text-primary);
-    word-wrap: break-word;
-  }
+  .toast-content { flex: 1; min-width: 0; }
+  .toast-title { font-weight: 600; font-size: 0.875rem; color: var(--text-primary); margin-bottom: 0.25rem; }
+  .toast-message { font-size: 0.875rem; color: var(--text-primary); word-wrap: break-word; }
   .toast-close {
     background: none;
     border: none;
@@ -114,7 +86,5 @@
     justify-content: center;
     flex-shrink: 0;
   }
-  .toast-close:hover {
-    color: var(--text-primary);
-  }
+  .toast-close:hover { color: var(--text-primary); }
 </style>

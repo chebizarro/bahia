@@ -1,16 +1,14 @@
+<svelte:options runes={false} />
 <script>
   import LoadingButton from './LoadingButton.svelte';
   import { WarningIcon } from '$lib/icons/domain-icons.js';
 
-  let {
-    title = 'Error',
-    message = 'An error occurred.',
-    details = '',
-    resetLabel = '',
-    showIcon = true,
-    onReset,
-    children
-  } = $props();
+  export let title = 'Error';
+  export let message = 'An error occurred.';
+  export let details = '';
+  export let resetLabel = '';
+  export let showIcon = true;
+  export let onReset = null;
 </script>
 
 <div class="error-state">
@@ -34,7 +32,7 @@
       </LoadingButton>
     </div>
   {/if}
-  {@render children?.()}
+  <slot />
 </div>
 
 <style>

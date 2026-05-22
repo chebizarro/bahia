@@ -1,21 +1,19 @@
+<svelte:options runes={false} />
 <script>
   import Modal from './Modal.svelte';
   import LoadingButton from './LoadingButton.svelte';
 
-  let {
-    open = $bindable(),
-    title = 'Confirm Action',
-    titleIcon = null,
-    message = '',
-    confirmLabel = 'Confirm',
-    cancelLabel = 'Cancel',
-    variant = 'default',
-    loading = false,
-    children,
-    onConfirm,
-    onCancel,
-    onClose
-  } = $props();
+  export let open = false;
+  export let title = 'Confirm Action';
+  export let titleIcon = null;
+  export let message = '';
+  export let confirmLabel = 'Confirm';
+  export let cancelLabel = 'Cancel';
+  export let variant = 'default';
+  export let loading = false;
+  export let onConfirm = null;
+  export let onCancel = null;
+  export let onClose = null;
 
   function handleConfirm() {
     onConfirm?.();
@@ -43,7 +41,7 @@
 >
   <div class="confirm-dialog">
     <p class="message">{message}</p>
-    {@render children?.()}
+    <slot />
     <div class="actions">
       <LoadingButton
         variant="secondary"

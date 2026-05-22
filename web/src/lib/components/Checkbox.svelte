@@ -1,17 +1,15 @@
+<svelte:options runes={false} />
 <script>
-  let {
-    id = '',
-    name = '',
-    checked = $bindable(),
-    disabled = false,
-    label = '',
-    children,
-    onchange: onChange
-  } = $props();
+  export let id = '';
+  export let name = '';
+  export let checked = false;
+  export let disabled = false;
+  export let label = '';
+  export let onchange = null;
 
   function handleChange(event) {
     checked = event.currentTarget.checked;
-    onChange?.(event);
+    onchange?.(event);
   }
 </script>
 
@@ -28,7 +26,7 @@
   {#if label}
     <span class="label">{label}</span>
   {:else}
-    {@render children?.()}
+    <slot />
   {/if}
 </label>
 

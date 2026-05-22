@@ -1,9 +1,11 @@
+<svelte:options runes={false} />
 <script>
-  let { variant = 'default', size = 'md', children } = $props();
+  export let variant = 'default';
+  export let size = 'md';
 </script>
 
 <span class="badge {variant} {size}">
-  {@render children?.()}
+  <slot />
 </span>
 
 <style>

@@ -1,23 +1,20 @@
+<svelte:options runes={false} />
 <script>
-  let {
-    title = '',
-    titleIcon = null,
-    value = '',
-    subtitle = '',
-    status = 'default',
-    children
-  } = $props();
+  export let title = '';
+  export let titleIcon = null;
+  export let value = '';
+  export let subtitle = '';
+  export let status = 'default';
 
-  const hasValue = $derived(value !== '' && value !== null && value !== undefined);
+  $: hasValue = value !== '' && value !== null && value !== undefined;
 </script>
 
 <div class="card {status}">
   {#if title}
     <div class="card-title">
       {#if titleIcon}
-        {@const TitleIcon = titleIcon}
         <span class="title-icon" aria-hidden="true">
-          <TitleIcon size={16} strokeWidth={1.75} />
+          <svelte:component this={titleIcon} size={16} strokeWidth={1.75} />
         </span>
       {/if}
       <span>{title}</span>
@@ -29,7 +26,7 @@
   {#if subtitle}
     <div class="card-subtitle">{subtitle}</div>
   {/if}
-  {@render children?.()}
+  <slot />
 </div>
 
 <style>

@@ -1,24 +1,23 @@
+<svelte:options runes={false} />
 <script>
-  let {
-    id = '',
-    name = '',
-    value = $bindable(),
-    options = [],
-    disabled = false,
-    required = false,
-    error = '',
-    placeholder = 'Select an option',
-    onchange: onChange,
-    onblur: onBlur
-  } = $props();
+  export let id = '';
+  export let name = '';
+  export let value = '';
+  export let options = [];
+  export let disabled = false;
+  export let required = false;
+  export let error = '';
+  export let placeholder = 'Select an option';
+  export let onchange = null;
+  export let onblur = null;
 
   function handleChange(event) {
     value = event.currentTarget.value;
-    onChange?.(event);
+    onchange?.(event);
   }
 
   function handleBlur(event) {
-    onBlur?.(event);
+    onblur?.(event);
   }
 </script>
 

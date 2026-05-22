@@ -1,10 +1,8 @@
+<svelte:options runes={false} />
 <script>
-  let {
-    title = 'Loading',
-    message = 'Please wait while we load data.',
-    showSpinner = true,
-    children
-  } = $props();
+  export let title = 'Loading';
+  export let message = 'Please wait while we load data.';
+  export let showSpinner = true;
 </script>
 
 <div class="loading-state" aria-live="polite" aria-busy="true">
@@ -15,7 +13,7 @@
   {#if message}
     <p class="message">{message}</p>
   {/if}
-  {@render children?.()}
+  <slot />
 </div>
 
 <style>

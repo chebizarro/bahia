@@ -1,17 +1,15 @@
+<svelte:options runes={false} />
 <script>
   import ErrorState from './ErrorState.svelte';
 
-  let {
-    fallbackTitle = 'Something went wrong',
-    fallbackMessage = 'An unexpected error occurred. Please try again.',
-    resetLabel = 'Try Again',
-    onReset,
-    onError,
-    children
-  } = $props();
+  export let fallbackTitle = 'Something went wrong';
+  export let fallbackMessage = 'An unexpected error occurred. Please try again.';
+  export let resetLabel = 'Try Again';
+  export let onReset = null;
+  export let onError = null;
 
-  let error = $state(null);
-  let errorInfo = $state(null);
+  let error = null;
+  let errorInfo = null;
 
   function handleReset() {
     error = null;
@@ -35,5 +33,5 @@
     onReset={handleReset}
   />
 {:else}
-  {@render children?.()}
+  <slot />
 {/if}

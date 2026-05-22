@@ -1,29 +1,28 @@
+<svelte:options runes={false} />
 <script>
-  let {
-    id = '',
-    name = '',
-    value = $bindable(),
-    placeholder = '',
-    disabled = false,
-    required = false,
-    error = '',
-    rows = 4,
-    oninput: onInput,
-    onchange: onChange,
-    onblur: onBlur
-  } = $props();
+  export let id = '';
+  export let name = '';
+  export let value = '';
+  export let placeholder = '';
+  export let disabled = false;
+  export let required = false;
+  export let error = '';
+  export let rows = 4;
+  export let oninput = null;
+  export let onchange = null;
+  export let onblur = null;
 
   function handleInput(event) {
     value = event.currentTarget.value;
-    onInput?.(event);
+    oninput?.(event);
   }
 
   function handleChange(event) {
-    onChange?.(event);
+    onchange?.(event);
   }
 
   function handleBlur(event) {
-    onBlur?.(event);
+    onblur?.(event);
   }
 </script>
 

@@ -1,38 +1,34 @@
+<svelte:options runes={false} />
 <script>
-  let {
-    open = $bindable(),
-    title = '',
-    titleIcon = null,
-    closeOnBackdrop = true,
-    closeOnEscape = true,
-    size = 'md',
-    onClose,
-    onOpened,
-    onClosed,
-    children
-  } = $props();
+  import { onDestroy, tick } from 'svelte';
+
+  export let open = false;
+  export let title = '';
+  export let titleIcon = null;
+  export let closeOnBackdrop = true;
+  export let closeOnEscape = true;
+  export let size = 'md';
+  export let onClose = null;
+  export let onOpened = null;
+  export let onClosed = null;
 
   let previouslyFocused = null;
-  let modalElement = $state(null);
-  let wasOpen = $state(false);
+  let modalElement = null;
+  let wasOpen = false;
 
-  $effect(() => {
-    if (open && !wasOpen) {
-      previouslyFocused = document.activeElement;
-      onOpened?.();
-      modalElement?.focus();
-    } else if (!open && wasOpen) {
-      onClosed?.();
-      previouslyFocused?.focus();
-    }
+  $: if (open && !wasOpen) {
+    previouslyFocused = document.activeElement;
+    onOpened?.();
+    tick().then(() => modalElement?.focus());
+    wasOpen = true;
+  } else if (!open && wasOpen) {
+    onClosed?.();
+    previouslyFocused?.focus();
+    wasOpen = false;
+  }
 
-    wasOpen = open;
-  });
-
-  $effect(() => {
-    return () => {
-      previouslyFocused?.focus();
-    };
+  onDestroy(() => {
+    previouslyFocused?.focus();
   });
 
   function close() {
@@ -60,14 +56,14 @@
   }
 </script>
 
-<svelte:window onkeydown={handleKeydown} />
+<svelte:window on:keydown={handleKeydown} />
 
 {#if open}
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div 
     class="modal-backdrop" 
-    onclick={handleBackdropClick}
-    onkeydown={handleBackdropKeydown}
+    on:click={handleBackdropClick}
+    on:keydown={handleBackdropKeydown}
     role="presentation"
   >
     <div
@@ -82,24 +78,23 @@
         <div class="modal-header">
           <h2 id="modal-title" class="modal-title">
             {#if titleIcon}
-              {@const TitleIcon = titleIcon}
               <span class="title-icon" aria-hidden="true">
-                <TitleIcon size={20} strokeWidth={1.75} />
+                <svelte:component this={titleIcon} size={20} strokeWidth={1.75} />
               </span>
             {/if}
             <span>{title}</span>
           </h2>
-          <button class="close-button" onclick={close} aria-label="Close" type="button">
+          <button class="close-button" on:click={close} aria-label="Close" type="button">
             ×
           </button>
         </div>
       {:else}
-        <button class="close-button-only" onclick={close} aria-label="Close" type="button">
+        <button class="close-button-only" on:click={close} aria-label="Close" type="button">
           ×
         </button>
       {/if}
       <div class="modal-body">
-        {@render children?.()}
+        <slot />
       </div>
     </div>
   </div>

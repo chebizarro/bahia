@@ -1,12 +1,10 @@
+<svelte:options runes={false} />
 <script>
-  let {
-    label = '',
-    id = '',
-    error = '',
-    hint = '',
-    required = false,
-    children
-  } = $props();
+  export let label = '';
+  export let id = '';
+  export let error = '';
+  export let hint = '';
+  export let required = false;
 </script>
 
 <div class="form-field">
@@ -18,7 +16,7 @@
       {/if}
     </label>
   {/if}
-  {@render children?.()}
+  <slot />
   {#if error}
     <div class="error">{error}</div>
   {/if}

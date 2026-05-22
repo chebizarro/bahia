@@ -1,13 +1,11 @@
+<svelte:options runes={false} />
 <script>
-  let {
-    type = 'button',
-    variant = 'primary',
-    loading = false,
-    disabled = false,
-    fullWidth = false,
-    children,
-    onclick
-  } = $props();
+  export let type = 'button';
+  export let variant = 'primary';
+  export let loading = false;
+  export let disabled = false;
+  export let fullWidth = false;
+  export let onclick = null;
 </script>
 
 <button
@@ -21,7 +19,7 @@
   {#if loading}
     <span class="spinner"></span>
   {/if}
-  {@render children?.()}
+  <slot />
 </button>
 
 <style>
