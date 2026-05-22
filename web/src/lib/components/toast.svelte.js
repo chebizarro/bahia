@@ -1,6 +1,8 @@
+import { writable } from 'svelte/store';
+
 let nextId = 1;
 
-export const toasts = $state([]);
+export const toasts = writable([]);
 
 export function addToast(toast) {
   const id = nextId++;
@@ -13,9 +15,8 @@ export function addToast(toast) {
     createdAt: Date.now()
   };
 
-  toasts.unshift(newToast);
+  toasts.update((items) => [newToast, ...items]);
 
-  // Auto-remove after timeout if timeout > 0
   if (newToast.timeout > 0) {
     setTimeout(() => {
       removeToast(id);
@@ -26,17 +27,13 @@ export function addToast(toast) {
 }
 
 export function removeToast(id) {
-  const idx = toasts.findIndex((toast) => toast.id === id);
-  if (idx >= 0) {
-    toasts.splice(idx, 1);
-  }
+  toasts.update((items) => items.filter((toast) => toast.id !== id));
 }
 
 export function clearToasts() {
-  toasts.length = 0;
+  toasts.set([]);
 }
 
-// Convenience methods
 export const toast = {
   success: (message, options = {}) => {
     return addToast({ ...options, type: 'success', message });

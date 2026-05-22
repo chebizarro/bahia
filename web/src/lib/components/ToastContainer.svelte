@@ -8,7 +8,7 @@
 </script>
 
 <div class="toast-container">
-  {#each toasts as toast (toast.id)}
+  {#each $toasts as toast (toast.id)}
     <Toast
       id={toast.id}
       type={toast.type}
