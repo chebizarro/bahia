@@ -17,10 +17,6 @@ RUN npm install -g npm@11 && npm install
 # Copy source files
 COPY . .
 
-# Bake bootstrap seed directly into app shell so first-load discovery does not depend on env.js wiring
-RUN sed -i "s|__PUBLIC_BAHIA_BOOTSTRAP_RELAYS__|${PUBLIC_BAHIA_BOOTSTRAP_RELAYS}|g" src/app.html && \
-    sed -i "s|__PUBLIC_BAHIA_SERVICE_PUBKEYS__|${PUBLIC_BAHIA_SERVICE_PUBKEYS}|g" src/app.html
-
 # Build the SvelteKit app
 RUN npm run build
 
@@ -32,6 +28,7 @@ COPY --from=builder /app/build /usr/share/nginx/html
 
 # Copy nginx configuration
 COPY nginx.conf /etc/nginx/conf.d/default.conf
+COPY docker-entrypoint.d/40-bahia-bootstrap-env.sh /docker-entrypoint.d/40-bahia-bootstrap-env.sh
 
 # Expose port 80
 EXPOSE 80
