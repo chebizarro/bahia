@@ -13,6 +13,7 @@
     "test:unit:coverage:llm": "vitest run --config vitest.coverage.llm.config.js --run tests/unit/route-access.test.js tests/unit/nav.test.js tests/unit/llm-page.test.js",
     "test:unit:coverage:soulfactory": "vitest run --config vitest.coverage.soulfactory.config.js --run tests/unit/route-access.test.js tests/unit/nav.test.js tests/unit/souls-page.test.js tests/unit/souls-store.test.js",
     "test:e2e": "playwright test",
+    "test:e2e:prod": "playwright test --config playwright.prod.config.js",
     "test:e2e:headed": "playwright test --headed",
     "test:e2e:ui": "playwright test --ui"
   },
