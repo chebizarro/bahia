@@ -69,16 +69,16 @@
           {#if latestResult}
             <span class="ci-badge" class:success={latestResult.status === 'success'} class:failure={latestResult.status === 'failure'}>
               {#if latestResult.status === 'success'}
-                <SuccessIcon size={14} strokeWidth={2} aria-hidden="true" />
+                <SuccessIcon size={14} strokeWidth={2} ariaHidden="true" />
               {:else}
-                <ErrorIcon size={14} strokeWidth={2} aria-hidden="true" />
+                <ErrorIcon size={14} strokeWidth={2} ariaHidden="true" />
               {/if}
               {latestResult.status}
             </span>
           {:else if latestRun}
-            <span class="ci-badge pending"><PendingIcon size={14} strokeWidth={1.75} aria-hidden="true" /> Run observed</span>
+            <span class="ci-badge pending"><PendingIcon size={14} strokeWidth={1.75} ariaHidden="true" /> Run observed</span>
           {:else}
-            <span class="ci-badge configured"><ConfiguredIcon size={14} strokeWidth={1.75} aria-hidden="true" /> Configured</span>
+            <span class="ci-badge configured"><ConfiguredIcon size={14} strokeWidth={1.75} ariaHidden="true" /> Configured</span>
           {/if}
           {#if linkedServiceCount > 0}
             <span class="ci-linked">{linkedServiceCount} service{linkedServiceCount > 1 ? 's' : ''}</span>

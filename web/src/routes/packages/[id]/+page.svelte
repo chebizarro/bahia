@@ -212,7 +212,7 @@
     <EmptyState iconComponent={WarningIcon} title="Unable to load package repository" message={error} />
   {:else if repository}
     <div class="header">
-      <h1><ArtifactIcon size={28} strokeWidth={1.75} aria-hidden="true" /> {repository.name}</h1>
+      <h1><ArtifactIcon size={28} strokeWidth={1.75} ariaHidden="true" /> {repository.name}</h1>
       <span class="drift {driftStatus(repository)}">Drift: {driftStatus(repository)}</span>
     </div>
 

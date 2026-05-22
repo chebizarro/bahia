@@ -397,18 +397,18 @@
             {/if}
             <span class="tier-badge">
               {#if soul.tier === 'lightweight'}
-                <LightweightIcon size={16} strokeWidth={1.75} aria-hidden="true" />
+                <LightweightIcon size={16} strokeWidth={1.75} ariaHidden="true" />
               {:else if soul.tier === 'heavy'}
-                <HeavyIcon size={16} strokeWidth={1.75} aria-hidden="true" />
+                <HeavyIcon size={16} strokeWidth={1.75} ariaHidden="true" />
               {:else}
-                <SoulIcon size={16} strokeWidth={1.75} aria-hidden="true" />
+                <SoulIcon size={16} strokeWidth={1.75} ariaHidden="true" />
               {/if}
               {soul.tier}
             </span>
           </div>
           
           {#if soul.nip05}
-            <span class="nip05"><SuccessIcon size={16} strokeWidth={1.75} aria-hidden="true" /> {soul.nip05}</span>
+            <span class="nip05"><SuccessIcon size={16} strokeWidth={1.75} ariaHidden="true" /> {soul.nip05}</span>
           {/if}
         </div>
         
@@ -429,11 +429,11 @@
       </div>
 
       {#if actionNotice}
-        <div class="notice-banner"><SuccessIcon size={18} strokeWidth={1.75} aria-hidden="true" /> <span>{actionNotice}</span></div>
+        <div class="notice-banner"><SuccessIcon size={18} strokeWidth={1.75} ariaHidden="true" /> <span>{actionNotice}</span></div>
       {/if}
 
       {#if actionError}
-        <div class="error-banner"><WarningIcon size={18} strokeWidth={1.75} aria-hidden="true" /> <span>{actionError}</span></div>
+        <div class="error-banner"><WarningIcon size={18} strokeWidth={1.75} ariaHidden="true" /> <span>{actionError}</span></div>
       {/if}
 
       {#if currentActionRun}
@@ -458,10 +458,10 @@
         </div>
 
         {#if customizationNotice}
-          <div class="notice-banner"><SuccessIcon size={18} strokeWidth={1.75} aria-hidden="true" /> <span>{customizationNotice}</span></div>
+          <div class="notice-banner"><SuccessIcon size={18} strokeWidth={1.75} ariaHidden="true" /> <span>{customizationNotice}</span></div>
         {/if}
         {#if customizationError}
-          <div class="error-banner"><WarningIcon size={18} strokeWidth={1.75} aria-hidden="true" /> <span>{customizationError}</span></div>
+          <div class="error-banner"><WarningIcon size={18} strokeWidth={1.75} ariaHidden="true" /> <span>{customizationError}</span></div>
         {/if}
 
         <div class="customization-grid">
@@ -561,7 +561,7 @@
       <div class="info-grid">
         <!-- Identity Section -->
         <section class="info-section">
-          <h3><IdentityIcon size={18} strokeWidth={1.75} aria-hidden="true" /> Identity</h3>
+          <h3><IdentityIcon size={18} strokeWidth={1.75} ariaHidden="true" /> Identity</h3>
           <dl>
             <dt>npub</dt>
             <!-- svelte-ignore a11y_no_noninteractive_element_interactions, a11y_no_noninteractive_element_to_interactive_role -->
@@ -591,7 +591,7 @@
         </section>
 
         <section class="info-section">
-          <h3><WorkspaceIcon size={18} strokeWidth={1.75} aria-hidden="true" /> Runtime</h3>
+          <h3><WorkspaceIcon size={18} strokeWidth={1.75} ariaHidden="true" /> Runtime</h3>
           <dl>
             <dt>Target</dt>
             <dd>{soul.runtime?.target || 'N/A'}</dd>
@@ -608,7 +608,7 @@
         
         <!-- Infrastructure Section -->
         <section class="info-section">
-          <h3><WorkspaceIcon size={18} strokeWidth={1.75} aria-hidden="true" /> Infrastructure</h3>
+          <h3><WorkspaceIcon size={18} strokeWidth={1.75} ariaHidden="true" /> Infrastructure</h3>
           <dl>
             {#if soul.workspace}
               <dt>Workspace</dt>
@@ -631,7 +631,7 @@
         
         <!-- Permissions Section -->
         <section class="info-section wide">
-          <h3><ProtectedIcon size={18} strokeWidth={1.75} aria-hidden="true" /> Permissions</h3>
+          <h3><ProtectedIcon size={18} strokeWidth={1.75} ariaHidden="true" /> Permissions</h3>
           
           <div class="permissions-grid">
             <div class="perm-group">
@@ -667,14 +667,14 @@
         
         <!-- Soul Content Section -->
         <section class="info-section wide">
-          <h3><SoulIcon size={18} strokeWidth={1.75} aria-hidden="true" /> Soul Content</h3>
+          <h3><SoulIcon size={18} strokeWidth={1.75} ariaHidden="true" /> Soul Content</h3>
           <div class="soul-content">
             <pre>{soul.content || 'No soul content available'}</pre>
           </div>
         </section>
 
         <section class="info-section wide">
-          <h3><MemoryIcon size={18} strokeWidth={1.75} aria-hidden="true" /> Activity & History</h3>
+          <h3><MemoryIcon size={18} strokeWidth={1.75} ariaHidden="true" /> Activity & History</h3>
           {#if historyLoading}
             <p class="history-muted">Loading activity history...</p>
           {:else if historyError}

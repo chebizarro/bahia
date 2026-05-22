@@ -184,7 +184,7 @@
   <div class="header">
     <div>
       <h1>
-        <PaymentIcon size={28} strokeWidth={1.75} aria-hidden="true" />
+        <PaymentIcon size={28} strokeWidth={1.75} ariaHidden="true" />
         Payments
       </h1>
       <p class="subtitle">Review worker payment history and export filtered records as CSV.</p>

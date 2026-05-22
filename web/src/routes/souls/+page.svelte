@@ -55,11 +55,11 @@
 <div class="page">
   <header class="page-header">
     <div class="header-content">
-      <h1><SoulIcon size={28} strokeWidth={1.75} aria-hidden="true" /> Soul Gallery</h1>
+      <h1><SoulIcon size={28} strokeWidth={1.75} ariaHidden="true" /> Soul Gallery</h1>
       <p class="subtitle">Agent identities provisioned by Soul Factory</p>
     </div>
     <a href="/souls/new" class="btn-primary">
-      <SeedIcon size={18} strokeWidth={1.75} aria-hidden="true" />
+      <SeedIcon size={18} strokeWidth={1.75} ariaHidden="true" />
       New Soul
     </a>
   </header>
@@ -99,7 +99,7 @@
   <!-- Error -->
   {#if error.value}
     <div class="error-banner">
-      <WarningIcon size={18} strokeWidth={1.75} aria-hidden="true" />
+      <WarningIcon size={18} strokeWidth={1.75} ariaHidden="true" />
       {error.value}
     </div>
   {/if}

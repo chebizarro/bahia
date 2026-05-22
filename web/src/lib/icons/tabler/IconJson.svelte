@@ -1,7 +1,11 @@
+<svelte:options runes={false} />
 <script>
-let { size = 24, strokeWidth = 2, class: className = "" } = $props();
+export let size = 24;
+export let strokeWidth = 2;
+export let className = '';
+export let ariaHidden = 'true';
 </script>
-<svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width={strokeWidth} stroke-linecap="round" stroke-linejoin="round" class={className} aria-hidden="true">
+<svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width={strokeWidth} stroke-linecap="round" stroke-linejoin="round" class={className} aria-hidden={ariaHidden}>
   <path d="M20 16v-8l3 8v-8" />
   <path d="M15 8a2 2 0 0 1 2 2v4a2 2 0 1 1 -4 0v-4a2 2 0 0 1 2 -2" />
   <path d="M1 8h3v6.5a1.5 1.5 0 0 1 -3 0v-.5" />

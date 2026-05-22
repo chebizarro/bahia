@@ -174,7 +174,7 @@
 
   <div class="org-header">
     <div>
-      <h1><OrganizationIcon size={24} strokeWidth={1.75} aria-hidden="true" /> {org.display_name || org.name}</h1>
+      <h1><OrganizationIcon size={24} strokeWidth={1.75} ariaHidden="true" /> {org.display_name || org.name}</h1>
       <p class="org-name">@{org.name}</p>
     </div>
     <Badge variant={getRoleBadgeType(myRole)}>{myRole}</Badge>
@@ -182,7 +182,7 @@
 
   <section class="section">
     <div class="section-header">
-      <h2><OrganizationIcon size={18} strokeWidth={1.75} aria-hidden="true" /> Members ({members.length})</h2>
+      <h2><OrganizationIcon size={18} strokeWidth={1.75} ariaHidden="true" /> Members ({members.length})</h2>
       {#if canManageMembers}
         <button class="btn-primary" onclick={() => showInviteModal = true}>
           Invite Member
@@ -247,7 +247,7 @@
 
   {#if canManageMembers && invites.length > 0}
     <section class="section">
-      <h2><PendingIcon size={18} strokeWidth={1.75} aria-hidden="true" /> Pending Invites ({invites.length})</h2>
+      <h2><PendingIcon size={18} strokeWidth={1.75} ariaHidden="true" /> Pending Invites ({invites.length})</h2>
       <Card>
         <table class="members-table">
           <thead>
@@ -279,7 +279,7 @@
 
   {#if canDelete}
     <section class="section danger-zone">
-      <h2><WarningIcon size={18} strokeWidth={1.75} aria-hidden="true" /> Danger Zone</h2>
+      <h2><WarningIcon size={18} strokeWidth={1.75} ariaHidden="true" /> Danger Zone</h2>
       <Card>
         <div class="danger-content">
           <div>

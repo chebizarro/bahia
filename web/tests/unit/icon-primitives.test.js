@@ -16,6 +16,26 @@ import {
 import { renderComponent, textOf } from './utils/svelte-component-test';
 
 describe('shared icon primitives', () => {
+  it('renders icon components without props-helper runtime crashes', () => {
+    const target = renderComponent(ServiceIcon, {});
+    const svg = target.querySelector('svg');
+
+    expect(svg).not.toBeNull();
+    expect(svg?.getAttribute('width')).toBe('24');
+    expect(svg?.getAttribute('height')).toBe('24');
+    expect(svg?.getAttribute('aria-hidden')).toBe('true');
+  });
+
+  it('accepts explicit icon props without relying on spread/rest props', () => {
+    const target = renderComponent(ServiceIcon, { size: 18, strokeWidth: 1.75, className: 'custom-icon', ariaHidden: 'true' });
+    const svg = target.querySelector('svg');
+
+    expect(svg?.getAttribute('width')).toBe('18');
+    expect(svg?.getAttribute('height')).toBe('18');
+    expect(svg?.getAttribute('stroke-width')).toBe('1.75');
+    expect(svg?.getAttribute('class')).toContain('custom-icon');
+  });
+
   it('renders EmptyState iconComponent as a decorative SVG', () => {
     const target = renderComponent(EmptyState, {
       title: 'No services yet',

@@ -119,7 +119,7 @@
   {:else if worker}
     <div class="header">
       <h1>
-        <StandardIcon size={28} strokeWidth={1.75} aria-hidden="true" />
+        <StandardIcon size={28} strokeWidth={1.75} ariaHidden="true" />
         {worker.name || `Worker ${worker.pubkey?.slice(0, 12)}...`}
       </h1>
     </div>

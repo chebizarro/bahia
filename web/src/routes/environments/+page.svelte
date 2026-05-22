@@ -107,7 +107,7 @@
   <div class="header">
     <div class="title-row">
       <h1>
-        <EnvironmentIcon size={28} strokeWidth={1.75} aria-hidden="true" />
+        <EnvironmentIcon size={28} strokeWidth={1.75} ariaHidden="true" />
         Environments
       </h1>
       <span class="count">{environments.length} environments</span>

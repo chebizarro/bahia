@@ -220,7 +220,7 @@
     <p class="loading">Loading artifact...</p>
   {:else if error}
     <div class="error-state">
-      <p class="error title-with-icon"><WarningIcon size={18} strokeWidth={1.75} aria-hidden="true" /> <span>{error}</span></p>
+      <p class="error title-with-icon"><WarningIcon size={18} strokeWidth={1.75} ariaHidden="true" /> <span>{error}</span></p>
       <LoadingButton variant="secondary" onclick={() => goto('/services')}>
         Back to Services
       </LoadingButton>
@@ -233,7 +233,7 @@
         {:else}
           <a href="/services" class="back-link">← Services</a>
         {/if}
-        <h1 class="title-with-icon"><ArtifactIcon size={28} strokeWidth={1.75} aria-hidden="true" /> <span>{artifact.name || artifact.image_tag || 'Artifact Details'}</span></h1>
+        <h1 class="title-with-icon"><ArtifactIcon size={28} strokeWidth={1.75} ariaHidden="true" /> <span>{artifact.name || artifact.image_tag || 'Artifact Details'}</span></h1>
         <p class="artifact-id"><code>{artifact.id}</code></p>
       </div>
     </div>
@@ -245,21 +245,21 @@
         class:active={activeTab === 'overview'}
         onclick={() => activeTab = 'overview'}
       >
-        <span class="tab-with-icon"><ArtifactIcon size={16} strokeWidth={1.75} aria-hidden="true" /> Overview</span>
+        <span class="tab-with-icon"><ArtifactIcon size={16} strokeWidth={1.75} ariaHidden="true" /> Overview</span>
       </button>
       <button 
         class="tab" 
         class:active={activeTab === 'sbom'}
         onclick={() => activeTab = 'sbom'}
       >
-        <span class="tab-with-icon"><SbomIcon size={16} strokeWidth={1.75} aria-hidden="true" /> SBOM {sbomPackages.length > 0 ? `(${sbomPackages.length})` : ''}</span>
+        <span class="tab-with-icon"><SbomIcon size={16} strokeWidth={1.75} ariaHidden="true" /> SBOM {sbomPackages.length > 0 ? `(${sbomPackages.length})` : ''}</span>
       </button>
       <button 
         class="tab" 
         class:active={activeTab === 'signatures'}
         onclick={() => activeTab = 'signatures'}
       >
-        <span class="tab-with-icon"><SignatureIcon size={16} strokeWidth={1.75} aria-hidden="true" /> Signatures {signatures.length > 0 ? `(${signatures.length})` : ''}</span>
+        <span class="tab-with-icon"><SignatureIcon size={16} strokeWidth={1.75} ariaHidden="true" /> Signatures {signatures.length > 0 ? `(${signatures.length})` : ''}</span>
       </button>
     </div>
 
@@ -277,7 +277,7 @@
           {#if artifact.digest || artifact.image_digest}
             {@const fullDigest = artifact.digest || artifact.image_digest}
             <div class="card digest-card">
-              <div class="card-label title-with-icon"><CopyIcon size={16} strokeWidth={1.75} aria-hidden="true" /> <span>Digest</span></div>
+              <div class="card-label title-with-icon"><CopyIcon size={16} strokeWidth={1.75} ariaHidden="true" /> <span>Digest</span></div>
               <button
                 class="digest-value"
                 title={fullDigest}
@@ -294,13 +294,13 @@
         </div>
 
         <section class="detail-section">
-          <h2 class="section-title"><ArtifactIcon size={20} strokeWidth={1.75} aria-hidden="true" /> <span>Details</span></h2>
+          <h2 class="section-title"><ArtifactIcon size={20} strokeWidth={1.75} ariaHidden="true" /> <span>Details</span></h2>
           <div class="details-grid">
             {#if service}
               <div class="detail-item">
                 <span class="detail-label">Service</span>
                 <span class="detail-value service-ref">
-                  <ServiceIcon size={16} strokeWidth={1.75} aria-hidden="true" />
+                  <ServiceIcon size={16} strokeWidth={1.75} ariaHidden="true" />
                   <a href="/services/{service.id}" class="service-link">{service.name}</a>
                 </span>
               </div>
@@ -331,7 +331,7 @@
 
           {#if artifact.metadata && Object.keys(artifact.metadata).length > 0}
             <div class="metadata-section">
-              <h3 class="section-title"><GenericFileIcon size={16} strokeWidth={1.75} aria-hidden="true" /> <span>Metadata</span></h3>
+              <h3 class="section-title"><GenericFileIcon size={16} strokeWidth={1.75} ariaHidden="true" /> <span>Metadata</span></h3>
               <div class="metadata-grid">
                 {#each Object.entries(artifact.metadata) as [key, value]}
                   <div class="detail-item">
@@ -357,12 +357,12 @@
         <!-- Signatures Tab -->
         <section class="signatures-section">
           <div class="section-header">
-            <h2 class="section-title"><SignatureIcon size={20} strokeWidth={1.75} aria-hidden="true" /> <span>Signatures</span></h2>
+            <h2 class="section-title"><SignatureIcon size={20} strokeWidth={1.75} ariaHidden="true" /> <span>Signatures</span></h2>
             <div class="header-actions">
               {#if hasVerifiedSig}
-                <Badge variant="success"><span class="badge-with-icon"><SuccessIcon size={14} strokeWidth={1.75} aria-hidden="true" /> Verified</span></Badge>
+                <Badge variant="success"><span class="badge-with-icon"><SuccessIcon size={14} strokeWidth={1.75} ariaHidden="true" /> Verified</span></Badge>
               {:else if signatures.length > 0}
-                <Badge variant="warning"><span class="badge-with-icon"><WarningIcon size={14} strokeWidth={1.75} aria-hidden="true" /> Unverified</span></Badge>
+                <Badge variant="warning"><span class="badge-with-icon"><WarningIcon size={14} strokeWidth={1.75} ariaHidden="true" /> Unverified</span></Badge>
               {:else}
                 <Badge variant="default">No Signatures</Badge>
               {/if}

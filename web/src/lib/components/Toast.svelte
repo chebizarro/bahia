@@ -34,7 +34,7 @@
     <div class="toast-message">{message}</div>
   </div>
   <button class="toast-close" onclick={close} aria-label="Close">
-    <CloseIcon size={18} strokeWidth={1.75} aria-hidden="true" />
+    <CloseIcon size={18} strokeWidth={1.75} ariaHidden="true" />
   </button>
 </div>
 

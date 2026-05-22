@@ -314,7 +314,7 @@
     </div>
 
     <section>
-      <h2><InfoIcon size={18} strokeWidth={1.75} aria-hidden="true" /> Policy Details</h2>
+      <h2><InfoIcon size={18} strokeWidth={1.75} ariaHidden="true" /> Policy Details</h2>
       <div class="detail-row">
         <span class="label">ID:</span>
         <code class="value">{policy.id}</code>
@@ -334,12 +334,12 @@
     </section>
 
     <section>
-      <h2><PolicyIcon size={18} strokeWidth={1.75} aria-hidden="true" /> Rules</h2>
+      <h2><PolicyIcon size={18} strokeWidth={1.75} ariaHidden="true" /> Rules</h2>
       <pre class="rules-json"><code>{formattedRules}</code></pre>
     </section>
 
     <section>
-      <h2><CheckIcon size={18} strokeWidth={1.75} aria-hidden="true" /> Policy Evaluation Test</h2>
+      <h2><CheckIcon size={18} strokeWidth={1.75} ariaHidden="true" /> Policy Evaluation Test</h2>
       <div class="eval-grid">
         <div class="form-field">
           <label for="eval-environment">Environment</label>

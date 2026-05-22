@@ -230,7 +230,7 @@
 <div class="page">
   <div class="page-header">
     <div>
-      <h1><LlmIcon size={24} strokeWidth={1.75} aria-hidden="true" /> LLM Control Plane</h1>
+      <h1><LlmIcon size={24} strokeWidth={1.75} ariaHidden="true" /> LLM Control Plane</h1>
       <p class="subtitle">Signer-first route creation, release registration, deployment, rollback, approval, and relay-backed route-state visibility.</p>
     </div>
     <div class="connection-card" data-testid="llm-connection-status">
@@ -246,11 +246,11 @@
   {#if loading}
     <p class="loading">Bootstrapping relay-backed LLM control plane…</p>
   {:else if error}
-    <div class="error-state"><WarningIcon size={18} strokeWidth={1.75} aria-hidden="true" /> <span>{error}</span></div>
+    <div class="error-state"><WarningIcon size={18} strokeWidth={1.75} ariaHidden="true" /> <span>{error}</span></div>
   {:else}
     <div class="workflow-grid">
       <section class="panel">
-        <h2><LlmIcon size={18} strokeWidth={1.75} aria-hidden="true" /> Create Route</h2>
+        <h2><LlmIcon size={18} strokeWidth={1.75} ariaHidden="true" /> Create Route</h2>
         <form onsubmit={handleCreateRoute} data-testid="llm-create-route-form">
           <label>
             Route name
@@ -273,7 +273,7 @@
       </section>
 
       <section class="panel">
-        <h2><ArtifactIcon size={18} strokeWidth={1.75} aria-hidden="true" /> Register Release</h2>
+        <h2><ArtifactIcon size={18} strokeWidth={1.75} ariaHidden="true" /> Register Release</h2>
         <form onsubmit={handleRegisterRelease} data-testid="llm-register-release-form">
           <label>
             Route
@@ -337,7 +337,7 @@
       </section>
 
       <section class="panel">
-        <h2><DeploymentIcon size={18} strokeWidth={1.75} aria-hidden="true" /> Request Deployment</h2>
+        <h2><DeploymentIcon size={18} strokeWidth={1.75} ariaHidden="true" /> Request Deployment</h2>
         <form onsubmit={handleDeploy} data-testid="llm-request-deploy-form">
           <label>
             Route
@@ -377,7 +377,7 @@
 
     <section class="panel" data-testid="llm-pending-approvals">
       <div class="section-header">
-        <h2><PendingIcon size={18} strokeWidth={1.75} aria-hidden="true" /> Pending Approvals</h2>
+        <h2><PendingIcon size={18} strokeWidth={1.75} ariaHidden="true" /> Pending Approvals</h2>
         <span>{pendingApprovals.length}</span>
       </div>
       {#if pendingApprovals.length === 0}
@@ -418,7 +418,7 @@
     <div class="observability-grid">
       <section class="panel" data-testid="llm-route-state-table">
         <div class="section-header">
-          <h2><EnvironmentIcon size={18} strokeWidth={1.75} aria-hidden="true" /> Route State</h2>
+          <h2><EnvironmentIcon size={18} strokeWidth={1.75} ariaHidden="true" /> Route State</h2>
           <span>{routeStateRows.length}</span>
         </div>
         {#if routeStateRows.length === 0}
@@ -470,7 +470,7 @@
 
       <section class="panel" data-testid="llm-activity-table">
         <div class="section-header">
-          <h2><ProgressIcon size={18} strokeWidth={1.75} aria-hidden="true" /> Recent Activity</h2>
+          <h2><ProgressIcon size={18} strokeWidth={1.75} ariaHidden="true" /> Recent Activity</h2>
           <span>{llmActivity.length}</span>
         </div>
         {#if llmActivity.length === 0}

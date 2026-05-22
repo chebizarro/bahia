@@ -123,7 +123,7 @@
     <p class="loading">Loading deployment run...</p>
   {:else if error}
     <div class="error-state">
-      <p class="error inline-icon"><WarningIcon size={18} strokeWidth={1.75} aria-hidden="true" /> <span>{error}</span></p>
+      <p class="error inline-icon"><WarningIcon size={18} strokeWidth={1.75} ariaHidden="true" /> <span>{error}</span></p>
       <LoadingButton variant="secondary" onclick={() => goto('/deployments')}>
         Back to Deployments
       </LoadingButton>
@@ -196,7 +196,7 @@
         {#if logsLoading}
           <p class="loading">Loading run logs...</p>
         {:else if logsError}
-          <p class="error inline-icon"><WarningIcon size={18} strokeWidth={1.75} aria-hidden="true" /> <span>{logsError}</span></p>
+          <p class="error inline-icon"><WarningIcon size={18} strokeWidth={1.75} ariaHidden="true" /> <span>{logsError}</span></p>
         {:else}
           <pre class="logs">{activeTab === 'stdout' ? (stdoutLogs || '(no stdout logs)') : (stderrLogs || '(no stderr logs)')}</pre>
         {/if}

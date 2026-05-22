@@ -161,7 +161,7 @@
   <div class="header">
     <div class="title-row">
       <h1>
-        <DeploymentIcon size={28} strokeWidth={1.75} aria-hidden="true" />
+        <DeploymentIcon size={28} strokeWidth={1.75} ariaHidden="true" />
         Pending Approvals
       </h1>
       <span class="count">{pendingIntents.length} pending</span>
@@ -172,7 +172,7 @@
     <p class="loading">Loading pending approvals...</p>
   {:else if error}
     <div class="error-state">
-      <p class="error inline-icon"><WarningIcon size={18} strokeWidth={1.75} aria-hidden="true" /> <span>{error}</span></p>
+      <p class="error inline-icon"><WarningIcon size={18} strokeWidth={1.75} ariaHidden="true" /> <span>{error}</span></p>
     </div>
   {:else if pendingIntents.length === 0}
     <EmptyState
