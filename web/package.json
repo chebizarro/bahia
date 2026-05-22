@@ -29,7 +29,6 @@
   },
   "type": "module",
   "dependencies": {
-    "@lucide/svelte": "^1.16.0",
     "@nostr-git/core": "1.0.0-alpha.1",
     "@tabler/icons-svelte": "^3.44.0",
     "jsqr": "^1.4.0",

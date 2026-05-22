@@ -1,19 +1,5 @@
 import { beforeEach, afterEach, vi } from 'vitest';
 
-// Stub Svelte's getContext/setContext to return undefined (not throw) when called
-// outside component init — needed for Lucide icons in jsdom test environment.
-vi.mock('svelte', async (importOriginal) => {
-  const actual = await importOriginal();
-  return {
-    ...actual,
-    getContext: (...args) => {
-      try { return actual.getContext(...args); } catch { return undefined; }
-    },
-    setContext: (...args) => {
-      try { return actual.setContext(...args); } catch { /* noop */ }
-    }
-  };
-});
 
 vi.mock('$app/environment', () => ({
   browser: true,
