@@ -1,0 +1,10 @@
+{
+  "feature_id": "bahia-mau2",
+  "criteria": [
+    {"id": "AC1", "description": "The executor validates the complete failover recipe and action parameters before starting step 1.", "tests": ["TestContinuityRecipeExecutorValidatesWholeRecipeBeforeExecutingFirstStep"]},
+    {"id": "AC2", "description": "Failover steps execute sequentially and emit run started, step started, step progress, and run completed events.", "tests": ["TestContinuityRecipeExecutorExecutesFailoverSequentiallyAndEmitsProgress"]},
+    {"id": "AC3", "description": "A failed failover step stops the run, emits step and run failure events, and does not start later steps or rollback automatically.", "tests": ["TestContinuityRecipeExecutorStopsOnStepFailureAndDoesNotStartLaterSteps"]},
+    {"id": "AC4", "description": "Context cancellation cancels the active step and prevents later failover steps from starting.", "tests": ["TestContinuityRecipeExecutorContextCancellationStopsCurrentStepAndNoLaterSteps"]},
+    {"id": "AC5", "description": "Only one continuity recipe run per service key is active in-process at a time.", "tests": ["TestContinuityRecipeExecutorSerializesRunsByServiceKey"]}
+  ]
+}

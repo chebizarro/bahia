@@ -1,0 +1,10 @@
+{
+  "feature_id": "bahia-mau2",
+  "tests": [
+    {"name": "TestContinuityRecipeExecutorValidatesWholeRecipeBeforeExecutingFirstStep", "criteria": ["AC1"]},
+    {"name": "TestContinuityRecipeExecutorExecutesFailoverSequentiallyAndEmitsProgress", "criteria": ["AC2"]},
+    {"name": "TestContinuityRecipeExecutorStopsOnStepFailureAndDoesNotStartLaterSteps", "criteria": ["AC3"]},
+    {"name": "TestContinuityRecipeExecutorContextCancellationStopsCurrentStepAndNoLaterSteps", "criteria": ["AC4"]},
+    {"name": "TestContinuityRecipeExecutorSerializesRunsByServiceKey", "criteria": ["AC5"]}
+  ]
+}

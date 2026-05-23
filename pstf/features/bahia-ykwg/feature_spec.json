@@ -1,0 +1,8 @@
+{
+  "feature_id": "bahia-ykwg",
+  "title": "Recovery continuity recipe execution",
+  "observed_behavior": "The repository has recovery recipe domain types but no shared service executor path for recovery workflows.",
+  "intended_behavior": "Recovery recipes use the same validated, per-service serialized, event-emitting executor as failover recipes, with recovery-specific request data and supported recovery actions.",
+  "scope": ["internal/service/continuity_recipe_executor.go", "internal/service/continuity_recipe_executor_test.go"],
+  "out_of_scope": ["Nostr command handlers", "DNS reconciler changes", "backup restore coordinator changes", "web/API changes"]
+}

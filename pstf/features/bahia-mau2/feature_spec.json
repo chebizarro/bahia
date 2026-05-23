@@ -1,0 +1,8 @@
+{
+  "feature_id": "bahia-mau2",
+  "title": "Failover continuity recipe execution engine",
+  "observed_behavior": "The repository has continuity recipe domain types but no service executor for failover recipes.",
+  "intended_behavior": "Failover recipes are validated before execution, serialized per service, executed step-by-step through a registered action dispatcher, and emit internal progress/completion/failure events through events.Publisher.",
+  "scope": ["internal/service/continuity_recipe_executor.go", "internal/service/continuity_recipe_executor_test.go"],
+  "out_of_scope": ["Nostr publisher/reactor wiring", "DNS cutover implementation", "backup/restore adapter changes", "web/API changes"]
+}

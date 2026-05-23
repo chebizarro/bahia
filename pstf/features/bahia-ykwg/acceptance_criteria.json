@@ -1,0 +1,8 @@
+{
+  "feature_id": "bahia-ykwg",
+  "criteria": [
+    {"id": "AC1", "description": "The executor exposes ExecuteRecovery with ServiceKey, RecipeName, TargetProfile, PrimaryWorkerPubKey, SelectedStandbyPubKey, RequestedBy, RunID, and Recipe request data.", "tests": ["TestContinuityRecipeExecutorExecutesRecoveryRecipe"]},
+    {"id": "AC2", "description": "Recovery recipes execute through the shared sequential action registry and emit progress/completion events.", "tests": ["TestContinuityRecipeExecutorExecutesRecoveryRecipe", "TestContinuityRecipeExecutorExecutesFailoverSequentiallyAndEmitsProgress"]},
+    {"id": "AC3", "description": "Shared failure, cancellation, validation, and per-service serialization semantics apply to recovery and failover runs.", "tests": ["TestContinuityRecipeExecutorValidatesWholeRecipeBeforeExecutingFirstStep", "TestContinuityRecipeExecutorStopsOnStepFailureAndDoesNotStartLaterSteps", "TestContinuityRecipeExecutorContextCancellationStopsCurrentStepAndNoLaterSteps", "TestContinuityRecipeExecutorSerializesRunsByServiceKey"]}
+  ]
+}

@@ -1,0 +1,10 @@
+{
+  "feature_id": "bahia-ykwg",
+  "tests": [
+    {"name": "TestContinuityRecipeExecutorExecutesRecoveryRecipe", "criteria": ["AC1", "AC2"]},
+    {"name": "TestContinuityRecipeExecutorValidatesWholeRecipeBeforeExecutingFirstStep", "criteria": ["AC3"]},
+    {"name": "TestContinuityRecipeExecutorStopsOnStepFailureAndDoesNotStartLaterSteps", "criteria": ["AC3"]},
+    {"name": "TestContinuityRecipeExecutorContextCancellationStopsCurrentStepAndNoLaterSteps", "criteria": ["AC3"]},
+    {"name": "TestContinuityRecipeExecutorSerializesRunsByServiceKey", "criteria": ["AC3"]}
+  ]
+}
