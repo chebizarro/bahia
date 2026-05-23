@@ -52,6 +52,7 @@ type Server struct {
 	signatures        repository.ArtifactSignatureRepository
 	signVerifier      SignatureVerifier
 	toolProvisioning  repository.ToolProvisioningRepository
+	dnsEndpoints      DNSEndpointLister
 }
 
 // Config holds MCP server configuration.
@@ -86,6 +87,7 @@ type ServerDeps struct {
 	PackageProjection       repository.PackageControlPlaneRepository
 	WorkerReadModels        *service.WorkerReadModelService
 	BackupReadModels        BackupReadModelRepository
+	DNSEndpoints            DNSEndpointLister
 }
 
 // SignatureVerifier verifies signatures for an artifact.
@@ -169,6 +171,7 @@ func NewServerWithOptions(registry *service.RegistryService, logger *zap.Logger,
 		signatures:        deps.Signatures,
 		signVerifier:      deps.SignVerifier,
 		toolProvisioning:  deps.ToolProvisioning,
+		dnsEndpoints:      deps.DNSEndpoints,
 	}
 }
 
