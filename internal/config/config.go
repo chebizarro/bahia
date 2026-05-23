@@ -77,12 +77,13 @@ type DNSBackendConfig struct {
 
 // DNSProjectionConfig selects source state for DNS endpoint projection.
 type DNSProjectionConfig struct {
-	Services         bool              `koanf:"services"`
-	LLMRoutes        bool              `koanf:"llm_routes"`
-	MLEndpoints      bool              `koanf:"ml_endpoints"`
-	Workers          bool              `koanf:"workers"`
-	EnvironmentZones map[string]string `koanf:"environment_zones"`
-	WorkerZone       string            `koanf:"worker_zone"`
+	Services          bool              `koanf:"services"`
+	LLMRoutes         bool              `koanf:"llm_routes"`
+	MLEndpoints       bool              `koanf:"ml_endpoints"`
+	Workers           bool              `koanf:"workers"`
+	CapabilityAliases bool              `koanf:"capability_aliases"`
+	EnvironmentZones  map[string]string `koanf:"environment_zones"`
+	WorkerZone        string            `koanf:"worker_zone"`
 }
 
 // AssistantConfig controls the operator assistant backend orchestration path.

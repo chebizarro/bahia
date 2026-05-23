@@ -139,8 +139,14 @@ func (p *DNSProjector) ProjectZoneRecords(ctx context.Context) (map[string][]dom
 		return nil, err
 	}
 	ttls := p.zoneTTLs()
+	zoneVisibilities := p.zoneVisibilities()
 	recordsByZone := make(map[string][]domain.DNSRecord)
+	aliasCandidatesByZone := make(map[string]map[string]capabilityAliasCandidate)
 	for _, endpoint := range endpoints {
+		zoneVisibility, hasZoneVisibility := zoneVisibilities[endpoint.Zone]
+		if hasZoneVisibility && !dnsEndpointVisibleInZone(endpoint, zoneVisibility, zoneVisibilities) {
+			continue
+		}
 		ttl := dnsEndpointTTLOverride(endpoint)
 		if ttl <= 0 {
 			ttl = ttls[endpoint.Zone]
@@ -182,6 +188,28 @@ func (p *DNSProjector) ProjectZoneRecords(ctx context.Context) (map[string][]dom
 		}
 		if endpoint.Family == domain.DNSEndpointFamilyWorker {
 			recordsByZone[endpoint.Zone] = append(recordsByZone[endpoint.Zone], hardwareAliasRecords(endpoint, ttl)...)
+		}
+		if p.cfg.Projection.CapabilityAliases {
+			collectCapabilityAliasCandidates(aliasCandidatesByZone, endpoint, ttl)
+		}
+	}
+	if p.cfg.Projection.CapabilityAliases {
+		for zone, candidates := range aliasCandidatesByZone {
+			for capability, candidate := range candidates {
+				name := dnsLabel(capability)
+				if name == "" || name == candidate.endpoint.Name {
+					continue
+				}
+				recordsByZone[zone] = append(recordsByZone[zone], domain.DNSRecord{
+					Zone:             zone,
+					Name:             name,
+					FQDN:             fqdn(name, zone),
+					Type:             domain.DNSRecordTypeCNAME,
+					Value:            candidate.endpoint.FQDN,
+					TTL:              candidate.ttl,
+					SourceCoordinate: candidate.endpoint.Coordinate,
+				})
+			}
 		}
 	}
 	for zone := range recordsByZone {
@@ -535,6 +563,18 @@ func (p *DNSProjector) zoneTTLs() map[string]int {
 	return out
 }
 
+func (p *DNSProjector) zoneVisibilities() map[string]domain.ZoneVisibility {
+	out := make(map[string]domain.ZoneVisibility, len(p.cfg.Zones))
+	for _, zone := range p.cfg.Zones {
+		name := strings.TrimSpace(zone.Name)
+		if name == "" {
+			continue
+		}
+		out[name] = domain.ZoneVisibility(strings.TrimSpace(zone.Visibility))
+	}
+	return out
+}
+
 func (p *DNSProjector) applyPolicies(ctx context.Context, endpoints []domain.DNSEndpoint) ([]domain.DNSEndpoint, error) {
 	if p.policySource == nil || len(endpoints) == 0 {
 		return endpoints, nil
@@ -607,6 +647,7 @@ func (p *DNSProjector) applyPolicy(endpoint domain.DNSEndpoint, policy domain.DN
 
 func (p *DNSProjector) applyDNSPolicyAction(endpoint domain.DNSEndpoint, action domain.DNSPolicyAction) domain.DNSEndpoint {
 	if action.Visibility != "" {
+		endpoint.Metadata = dnsEndpointMetadataWithString(endpoint.Metadata, "policy_visibility", string(action.Visibility))
 		if zone, ok := p.zoneForVisibility(action.Visibility); ok {
 			endpoint.Zone = zone
 			endpoint.FQDN = fqdn(endpoint.Name, zone)
@@ -724,6 +765,15 @@ func dnsEndpointMetadataWithInt(metadata map[string]any, key string, value int) 
 	return out
 }
 
+func dnsEndpointMetadataWithString(metadata map[string]any, key string, value string) map[string]any {
+	out := make(map[string]any, len(metadata)+1)
+	for k, v := range metadata {
+		out[k] = v
+	}
+	out[key] = value
+	return out
+}
+
 func dnsEndpointTTLOverride(endpoint domain.DNSEndpoint) int {
 	return intMetadata(endpoint.Metadata, "policy_ttl_override")
 }
@@ -747,6 +797,102 @@ func intMetadata(metadata map[string]any, key string) int {
 		return int(value)
 	case float32:
 		return int(value)
+	default:
+		return 0
+	}
+}
+
+func dnsEndpointVisibleInZone(endpoint domain.DNSEndpoint, zoneVisibility domain.ZoneVisibility, zoneVisibilities map[string]domain.ZoneVisibility) bool {
+	endpointVisibility := dnsEndpointEffectiveVisibility(endpoint, zoneVisibilities)
+	switch zoneVisibility {
+	case domain.ZoneVisibilityExternal:
+		return endpointVisibility == domain.ZoneVisibilityExternal
+	case domain.ZoneVisibilityInternal:
+		return endpointVisibility == domain.ZoneVisibilityInternal || endpointVisibility == domain.ZoneVisibilityExternal
+	case domain.ZoneVisibilityEdge:
+		return endpointVisibility == domain.ZoneVisibilityEdge
+	default:
+		return endpointVisibility == zoneVisibility
+	}
+}
+
+func dnsEndpointEffectiveVisibility(endpoint domain.DNSEndpoint, zoneVisibilities map[string]domain.ZoneVisibility) domain.ZoneVisibility {
+	if visibility, ok := stringMetadata(endpoint.Metadata, "policy_visibility"); ok {
+		return domain.ZoneVisibility(visibility)
+	}
+	if visibility, ok := zoneVisibilities[endpoint.Zone]; ok {
+		return visibility
+	}
+	return domain.ZoneVisibilityInternal
+}
+
+func stringMetadata(metadata map[string]any, key string) (string, bool) {
+	if len(metadata) == 0 {
+		return "", false
+	}
+	value, ok := metadata[key]
+	if !ok {
+		return "", false
+	}
+	stringValue, ok := value.(string)
+	if !ok {
+		return "", false
+	}
+	stringValue = strings.TrimSpace(stringValue)
+	return stringValue, stringValue != ""
+}
+
+type capabilityAliasCandidate struct {
+	endpoint domain.DNSEndpoint
+	ttl      int
+}
+
+func collectCapabilityAliasCandidates(candidatesByZone map[string]map[string]capabilityAliasCandidate, endpoint domain.DNSEndpoint, ttl int) {
+	if endpoint.Health != domain.HealthStatusHealthy || len(endpoint.Capabilities) == 0 {
+		return
+	}
+	zone := strings.TrimSpace(endpoint.Zone)
+	if zone == "" {
+		return
+	}
+	if candidatesByZone[zone] == nil {
+		candidatesByZone[zone] = map[string]capabilityAliasCandidate{}
+	}
+	for _, rawCapability := range endpoint.Capabilities {
+		capability := dnsLabel(rawCapability)
+		if capability == "" {
+			continue
+		}
+		candidate := capabilityAliasCandidate{endpoint: endpoint, ttl: ttl}
+		current, exists := candidatesByZone[zone][capability]
+		if !exists || betterCapabilityAliasCandidate(candidate, current) {
+			candidatesByZone[zone][capability] = candidate
+		}
+	}
+}
+
+func betterCapabilityAliasCandidate(candidate, current capabilityAliasCandidate) bool {
+	candidateScore := dnsHealthScore(candidate.endpoint.Health)
+	currentScore := dnsHealthScore(current.endpoint.Health)
+	if candidateScore != currentScore {
+		return candidateScore > currentScore
+	}
+	if candidate.endpoint.FQDN != current.endpoint.FQDN {
+		return candidate.endpoint.FQDN < current.endpoint.FQDN
+	}
+	return candidate.endpoint.Coordinate < current.endpoint.Coordinate
+}
+
+func dnsHealthScore(health domain.HealthStatus) int {
+	switch health {
+	case domain.HealthStatusHealthy:
+		return 4
+	case domain.HealthStatusStarting:
+		return 3
+	case domain.HealthStatusUnknown:
+		return 2
+	case domain.HealthStatusUnhealthy:
+		return 1
 	default:
 		return 0
 	}

@@ -128,6 +128,51 @@ func TestDNSProjectorHardwareAliasesRoundRobinSharedAcceleratorModels(t *testing
 	assertNoRecord(t, records, "l40s.edge.cascadia", domain.DNSRecordTypeA, "10.0.1.46")
 }
 
+func TestDNSProjectorCapabilityAliasesCreateDeterministicCNAMEs(t *testing.T) {
+	projector := NewDNSProjector(
+		&fakeServiceRepo{},
+		&fakeEnvironmentRepo{},
+		&fakeStateRepo{},
+		&fakeObservationRepo{},
+		nil,
+		nil,
+		&fakeWorkerSource{workers: []domain.Worker{
+			{PubKey: "b", Name: "worker-b", Status: domain.WorkerStatusOnline, RuntimeTarget: &domain.WorkerRuntimeTarget{PublicBaseURL: "http://10.0.1.45:9000"}, MLCapabilities: domain.WorkerMLCapabilities{Tasks: []domain.MLTaskKind{domain.MLTaskKindSpeechToText}, Accelerators: []string{"gpu"}}},
+			{PubKey: "a", Name: "worker-a", Status: domain.WorkerStatusOnline, RuntimeTarget: &domain.WorkerRuntimeTarget{PublicBaseURL: "http://10.0.1.44:9000"}, MLCapabilities: domain.WorkerMLCapabilities{Tasks: []domain.MLTaskKind{domain.MLTaskKindSpeechToText}, Accelerators: []string{"gpu"}}},
+			{PubKey: "c", Name: "worker-c", Status: domain.WorkerStatusOffline, RuntimeTarget: &domain.WorkerRuntimeTarget{PublicBaseURL: "http://10.0.1.46:9000"}, MLCapabilities: domain.WorkerMLCapabilities{Tasks: []domain.MLTaskKind{domain.MLTaskKindSpeechToText}}},
+		}},
+		config.DNSConfig{DefaultTTL: 300, Projection: config.DNSProjectionConfig{Workers: true, CapabilityAliases: true, WorkerZone: "edge.cascadia"}},
+		nil,
+	)
+	recordsByZone, err := projector.ProjectZoneRecords(context.Background())
+	if err != nil {
+		t.Fatalf("ProjectZoneRecords returned error: %v", err)
+	}
+	records := recordsByZone["edge.cascadia"]
+	assertRecord(t, records, "speech-to-text.edge.cascadia", domain.DNSRecordTypeCNAME, "worker-a.edge.cascadia")
+	assertRecord(t, records, "gpu.edge.cascadia", domain.DNSRecordTypeCNAME, "worker-a.edge.cascadia")
+	assertNoRecord(t, records, "speech-to-text.edge.cascadia", domain.DNSRecordTypeCNAME, "worker-c.edge.cascadia")
+}
+
+func TestDNSProjectorCapabilityAliasesRequireConfigFlag(t *testing.T) {
+	projector := NewDNSProjector(
+		&fakeServiceRepo{},
+		&fakeEnvironmentRepo{},
+		&fakeStateRepo{},
+		&fakeObservationRepo{},
+		nil,
+		nil,
+		&fakeWorkerSource{workers: []domain.Worker{{PubKey: "a", Name: "worker-a", Status: domain.WorkerStatusOnline, RuntimeTarget: &domain.WorkerRuntimeTarget{PublicBaseURL: "http://10.0.1.44:9000"}, MLCapabilities: domain.WorkerMLCapabilities{Accelerators: []string{"gpu"}}}}},
+		config.DNSConfig{DefaultTTL: 300, Projection: config.DNSProjectionConfig{Workers: true, WorkerZone: "edge.cascadia"}},
+		nil,
+	)
+	recordsByZone, err := projector.ProjectZoneRecords(context.Background())
+	if err != nil {
+		t.Fatalf("ProjectZoneRecords returned error: %v", err)
+	}
+	assertNoRecord(t, recordsByZone["edge.cascadia"], "gpu.edge.cascadia", domain.DNSRecordTypeCNAME, "worker-a.edge.cascadia")
+}
+
 func TestDNSProjectorHardwareAliasesRequireWorkerProjection(t *testing.T) {
 	projector := NewDNSProjector(
 		&fakeServiceRepo{},
@@ -313,6 +358,59 @@ func TestDNSProjectorPolicyVisibilityOverrideReroutesEndpoint(t *testing.T) {
 	}
 	assertNoRecord(t, recordsByZone["prod.example"], "api.prod.example", domain.DNSRecordTypeA, "10.0.0.10")
 	assertRecord(t, recordsByZone["edge.example"], "api.edge.example", domain.DNSRecordTypeA, "10.0.0.10")
+}
+
+func TestDNSProjectorSplitHorizonFiltersEndpointVisibilityAfterPolicy(t *testing.T) {
+	t.Run("internal visibility does not leak into external zone", func(t *testing.T) {
+		projector := newDNSPolicyServiceProjector(t, "prod", "api", "10.0.0.10")
+		projector.cfg.Zones = []config.DNSZoneConfig{{Name: "prod.example", Visibility: string(domain.ZoneVisibilityExternal), Backend: "test", TTL: 120}}
+		projector.SetPolicySource(fakeDNSPolicySource{policies: []domain.DNSPolicy{{
+			ID:      uuid.New(),
+			Name:    "internal-api",
+			Enabled: true,
+			Rules:   []domain.DNSPolicyRule{{Match: domain.DNSPolicyMatch{Environment: "prod"}, Action: domain.DNSPolicyAction{Visibility: domain.ZoneVisibilityInternal}}},
+		}}})
+
+		recordsByZone, err := projector.ProjectZoneRecords(context.Background())
+		if err != nil {
+			t.Fatalf("ProjectZoneRecords returned error: %v", err)
+		}
+		assertNoRecord(t, recordsByZone["prod.example"], "api.prod.example", domain.DNSRecordTypeA, "10.0.0.10")
+	})
+
+	t.Run("edge visibility stays out of internal zone", func(t *testing.T) {
+		projector := newDNSPolicyServiceProjector(t, "prod", "api", "10.0.0.10")
+		projector.cfg.Zones = []config.DNSZoneConfig{{Name: "prod.example", Visibility: string(domain.ZoneVisibilityInternal), Backend: "test", TTL: 120}}
+		projector.SetPolicySource(fakeDNSPolicySource{policies: []domain.DNSPolicy{{
+			ID:      uuid.New(),
+			Name:    "edge-api",
+			Enabled: true,
+			Rules:   []domain.DNSPolicyRule{{Match: domain.DNSPolicyMatch{Environment: "prod"}, Action: domain.DNSPolicyAction{Visibility: domain.ZoneVisibilityEdge}}},
+		}}})
+
+		recordsByZone, err := projector.ProjectZoneRecords(context.Background())
+		if err != nil {
+			t.Fatalf("ProjectZoneRecords returned error: %v", err)
+		}
+		assertNoRecord(t, recordsByZone["prod.example"], "api.prod.example", domain.DNSRecordTypeA, "10.0.0.10")
+	})
+
+	t.Run("external visibility remains visible in internal zone", func(t *testing.T) {
+		projector := newDNSPolicyServiceProjector(t, "prod", "api", "10.0.0.10")
+		projector.cfg.Zones = []config.DNSZoneConfig{{Name: "prod.example", Visibility: string(domain.ZoneVisibilityInternal), Backend: "test", TTL: 120}}
+		projector.SetPolicySource(fakeDNSPolicySource{policies: []domain.DNSPolicy{{
+			ID:      uuid.New(),
+			Name:    "external-api",
+			Enabled: true,
+			Rules:   []domain.DNSPolicyRule{{Match: domain.DNSPolicyMatch{Environment: "prod"}, Action: domain.DNSPolicyAction{Visibility: domain.ZoneVisibilityExternal}}},
+		}}})
+
+		recordsByZone, err := projector.ProjectZoneRecords(context.Background())
+		if err != nil {
+			t.Fatalf("ProjectZoneRecords returned error: %v", err)
+		}
+		assertRecord(t, recordsByZone["prod.example"], "api.prod.example", domain.DNSRecordTypeA, "10.0.0.10")
+	})
 }
 
 func TestDNSProjectorPolicyTTLOverrideChangesRecordTTL(t *testing.T) {
