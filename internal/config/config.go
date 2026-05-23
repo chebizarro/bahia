@@ -62,14 +62,17 @@ type DNSZoneConfig struct {
 
 // DNSBackendConfig describes one DNS backend connector.
 type DNSBackendConfig struct {
-	Type             string        `koanf:"type"`
-	RootDir          string        `koanf:"root_dir"`
-	EtcdEndpoints    []string      `koanf:"etcd_endpoints"`
-	EtcdPrefix       string        `koanf:"etcd_prefix"`
-	EtcdDialTimeout  time.Duration `koanf:"etcd_dial_timeout"`
-	PowerDNSAPIURL   string        `koanf:"powerdns_api_url" yaml:"powerdns_api_url"`
-	PowerDNSAPIKey   string        `koanf:"powerdns_api_key" yaml:"powerdns_api_key"`
-	PowerDNSServerID string        `koanf:"powerdns_server_id" yaml:"powerdns_server_id"`
+	Type                 string        `koanf:"type"`
+	RootDir              string        `koanf:"root_dir"`
+	EtcdEndpoints        []string      `koanf:"etcd_endpoints"`
+	EtcdPrefix           string        `koanf:"etcd_prefix"`
+	EtcdDialTimeout      time.Duration `koanf:"etcd_dial_timeout"`
+	PowerDNSAPIURL       string        `koanf:"powerdns_api_url" yaml:"powerdns_api_url"`
+	PowerDNSAPIKey       string        `koanf:"powerdns_api_key" yaml:"powerdns_api_key"`
+	PowerDNSServerID     string        `koanf:"powerdns_server_id" yaml:"powerdns_server_id"`
+	DnsmasqConfigDir     string        `koanf:"dnsmasq_config_dir" yaml:"dnsmasq_config_dir"`
+	DnsmasqReloadCommand string        `koanf:"dnsmasq_reload_command" yaml:"dnsmasq_reload_command"`
+	DnsmasqFilePrefix    string        `koanf:"dnsmasq_file_prefix" yaml:"dnsmasq_file_prefix"`
 }
 
 // DNSProjectionConfig selects source state for DNS endpoint projection.
@@ -1073,6 +1076,9 @@ func (c *Config) validateDNS() error {
 		backend.PowerDNSAPIURL = strings.TrimRight(strings.TrimSpace(backend.PowerDNSAPIURL), "/")
 		backend.PowerDNSAPIKey = strings.TrimSpace(backend.PowerDNSAPIKey)
 		backend.PowerDNSServerID = strings.TrimSpace(backend.PowerDNSServerID)
+		backend.DnsmasqConfigDir = strings.TrimSpace(backend.DnsmasqConfigDir)
+		backend.DnsmasqReloadCommand = strings.TrimSpace(backend.DnsmasqReloadCommand)
+		backend.DnsmasqFilePrefix = strings.TrimSpace(backend.DnsmasqFilePrefix)
 		switch backend.Type {
 		case "filesystem":
 			if backend.RootDir == "" {
@@ -1106,6 +1112,16 @@ func (c *Config) validateDNS() error {
 			}
 			if backend.PowerDNSServerID == "" {
 				backend.PowerDNSServerID = "localhost"
+			}
+		case "dnsmasq":
+			if backend.DnsmasqConfigDir == "" {
+				return fmt.Errorf("config validation failed: dns.backends.%s.dnsmasq_config_dir is required for dnsmasq", name)
+			}
+			if backend.DnsmasqReloadCommand == "" {
+				return fmt.Errorf("config validation failed: dns.backends.%s.dnsmasq_reload_command is required for dnsmasq", name)
+			}
+			if backend.DnsmasqFilePrefix == "" {
+				backend.DnsmasqFilePrefix = "bahia-"
 			}
 		default:
 			return fmt.Errorf("config validation failed: dns.backends.%s.type %q is unsupported", name, backend.Type)
