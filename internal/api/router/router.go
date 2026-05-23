@@ -65,6 +65,7 @@ type RouterDeps struct {
 	LLMRegistry        *service.LLMRegistryService
 	MLRegistry         *service.MLRegistryService
 	MLCommands         handlers.MLCommandPublisher
+	DNSCatalog         *handlers.DNSCatalogHandler
 	ContinuityStatuses service.ContinuityStatusReader
 	ContinuityGraph    handlers.ContinuityGraphReader
 }
@@ -248,6 +249,14 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 
 			// Repository CI lookup (read)
 			r.Post("/repositories/ci/lookup", repoCIHandler.Lookup)
+
+			// DNS service catalog (read)
+			if deps.DNSCatalog != nil {
+				r.Get("/dns/catalog", deps.DNSCatalog.ListCatalog)
+				r.Get("/dns/catalog/{fqdn}", deps.DNSCatalog.GetCatalogEndpoint)
+				r.Get("/dns/zones", deps.DNSCatalog.ListZones)
+				r.Get("/dns/drift", deps.DNSCatalog.ListDrift)
+			}
 
 			// ML control plane (read)
 			if mlH != nil {
