@@ -1,0 +1,15 @@
+{
+  "feature_id": "bahia-i9v3",
+  "test_matrix": [
+    {
+      "test": "go test ./internal/mcp ./internal/api/handlers",
+      "criteria": ["AC1", "AC2", "AC3", "AC4", "AC5"],
+      "status": "passed"
+    },
+    {
+      "test": "go vet ./internal/mcp ./internal/api/handlers",
+      "criteria": ["AC1", "AC2", "AC3", "AC4", "AC5"],
+      "status": "passed"
+    }
+  ]
+}

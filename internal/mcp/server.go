@@ -1703,6 +1703,7 @@ func (s *Server) GetTools() []Tool {
 	tools = append(tools, assistantAsyncToolDefinitions()...)
 	tools = append(tools, dnsToolDefinitions()...)
 	tools = append(tools, dnsAssistantToolDefinitions()...)
+	tools = append(tools, fipsToolDefinitions()...)
 	tools = append(tools, workerToolDefinitions()...)
 	tools = append(tools, packageToolDefinitions()...)
 	return append(tools, backupToolDefinitions()...)
@@ -1766,6 +1767,10 @@ func (s *Server) CallTool(ctx context.Context, name string, arguments map[string
 		return s.handleDNSListEndpoints(ctx, arguments)
 	case "bahia_dns_list_drift", "bahia_assistant_dns_list_drift":
 		return s.handleDNSListDrift(ctx, arguments)
+	case "bahia_fips_list_mesh_nodes":
+		return s.handleFIPSListMeshNodes(ctx, arguments)
+	case "bahia_fips_mesh_status":
+		return s.handleFIPSMeshStatus(ctx, arguments)
 	case "bahia_assistant_dns_zone_create", "bahia_assistant_dns_policy_apply", "bahia_assistant_dns_record_override", "bahia_assistant_dns_drift_remediate":
 		return s.handleDNSAssistantAsyncTool(ctx, name, arguments)
 	case "bahia_ml_list_state":

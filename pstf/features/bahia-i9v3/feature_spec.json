@@ -1,0 +1,21 @@
+{
+  "feature_id": "bahia-i9v3",
+  "title": "MCP FIPS mesh tools and resources",
+  "intent": "Expose FIPS mesh node state to agent operators through MCP tools and resources without adding REST endpoints.",
+  "observed_sources": [
+    "internal/mcp/dns_tools.go exposes DNS projection read-model tools.",
+    "internal/mcp/dns_resources.go exposes healthy DNS endpoints as MCP resources.",
+    "domain.DNSEndpoint includes family=mesh, worker_pubkey, FQDN, health, drift_status and materialization metadata.",
+    "domain.Worker includes fips_overlay_addr, fips_endpoints and mesh_health for persisted worker state when the worker repository is configured."
+  ],
+  "implemented_behavior": [
+    "bahia_fips_list_mesh_nodes returns only FIPS/mesh nodes from DNS mesh endpoint projection and worker FIPS state.",
+    "bahia_fips_mesh_status summarizes mesh node health and projection counts without synthetic nodes.",
+    "resources/list includes bahia://fips/mesh/node/<hostname> resources for mesh endpoints while retaining existing DNS resources."
+  ],
+  "constraints": [
+    "No REST endpoints were added.",
+    "Empty state returns empty lists/status maps instead of demo data.",
+    "Read surfaces are backed by configured Bahia DNS projection and worker repository dependencies."
+  ]
+}

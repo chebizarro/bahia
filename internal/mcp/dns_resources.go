@@ -25,7 +25,22 @@ type Resource struct {
 
 // GetResources returns discoverable MCP resources exposed by Bahia.
 func (s *Server) GetResources(ctx context.Context) ([]Resource, error) {
-	return s.listDNSResources(ctx)
+	resources, err := s.listDNSResources(ctx)
+	if err != nil {
+		return nil, err
+	}
+	fipsResources, err := s.listFIPSMeshResources(ctx)
+	if err != nil {
+		return nil, err
+	}
+	resources = append(resources, fipsResources...)
+	sort.SliceStable(resources, func(i, j int) bool {
+		if resources[i].URI != resources[j].URI {
+			return resources[i].URI < resources[j].URI
+		}
+		return resources[i].Name < resources[j].Name
+	})
+	return resources, nil
 }
 
 func (s *Server) listDNSResources(ctx context.Context) ([]Resource, error) {
@@ -112,4 +127,40 @@ func endpointPort(endpoint domain.DNSEndpoint) any {
 		return nil
 	}
 	return *endpoint.Port
+}
+
+func (s *Server) listFIPSMeshResources(ctx context.Context) ([]Resource, error) {
+	nodes, err := s.listFIPSMeshNodes(ctx)
+	if err != nil {
+		return nil, err
+	}
+	resources := make([]Resource, 0, len(nodes))
+	for _, node := range nodes {
+		if strings.TrimSpace(node.DNSHostname) == "" {
+			continue
+		}
+		resources = append(resources, fipsMeshNodeResource(node))
+	}
+	return resources, nil
+}
+
+func fipsMeshNodeResource(node fipsMeshNode) Resource {
+	metadata := map[string]any{
+		"worker_pubkey":       node.WorkerPubkey,
+		"worker_npub":         node.WorkerNpub,
+		"overlay_address":     node.OverlayAddress,
+		"transport_endpoints": node.TransportEndpoints,
+		"mesh_health":         node.MeshHealth,
+		"dns_hostname":        node.DNSHostname,
+		"health":              node.Health,
+		"projection_status":   node.ProjectionStatus,
+		"source":              node.Source,
+	}
+	return Resource{
+		URI:         "bahia://fips/mesh/node/" + node.DNSHostname,
+		Name:        firstNonEmpty(node.WorkerName, node.EndpointName, node.DNSHostname),
+		Description: "FIPS mesh node projected from Bahia worker and DNS state",
+		MIMEType:    "application/json",
+		Metadata:    metadata,
+	}
 }

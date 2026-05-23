@@ -1,0 +1,30 @@
+{
+  "feature_id": "bahia-i9v3",
+  "criteria": [
+    {
+      "id": "AC1",
+      "description": "Agent operators can discover FIPS mesh nodes via MCP tools/list and tools/call.",
+      "tests": ["TestFIPSToolsAreRegistered", "TestFIPSListMeshNodesFiltersMeshRecordsAndEnrichesWorkers"]
+    },
+    {
+      "id": "AC2",
+      "description": "FIPS mesh results include worker pubkey/npub, overlay address, transport endpoints, mesh health, DNS hostname, health, and projection status when available from persisted/projected state.",
+      "tests": ["TestFIPSListMeshNodesFiltersMeshRecordsAndEnrichesWorkers"]
+    },
+    {
+      "id": "AC3",
+      "description": "resources/list includes FIPS mesh resources while preserving DNS resources behavior.",
+      "tests": ["TestFIPSResourcesListIncludesOnlyMeshResources", "TestMCPHandler_HandleJSONRPCResourcesListIncludesFIPSMeshResources", "TestDNSResourcesListHealthyEndpoints"]
+    },
+    {
+      "id": "AC4",
+      "description": "Empty state returns empty lists/status rather than fake or demo data.",
+      "tests": ["TestFIPSMeshStatusEmptyStateReturnsEmptyStatus"]
+    },
+    {
+      "id": "AC5",
+      "description": "FIPS surfaces filter to FIPS/mesh records only.",
+      "tests": ["TestFIPSListMeshNodesFiltersMeshRecordsAndEnrichesWorkers", "TestFIPSResourcesListIncludesOnlyMeshResources"]
+    }
+  ]
+}
