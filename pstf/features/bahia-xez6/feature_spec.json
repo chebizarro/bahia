@@ -1,0 +1,10 @@
+{
+  "feature_id": "bahia-xez6",
+  "title": "Worker standby continuity model",
+  "intended_behavior": "The Worker domain model carries additive continuity standby assignments and active heartbeat projection fields without changing existing advertisement-derived liveness or scheduling semantics.",
+  "observed_prior_behavior": "Worker carried advertisement freshness status and scheduling state, but no standby assignment overlay or active heartbeat projection fields.",
+  "scope": [
+    "internal/domain/worker.go",
+    "internal/domain/worker_test.go"
+  ]
+}

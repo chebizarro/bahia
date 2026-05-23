@@ -1,0 +1,12 @@
+{
+  "feature_id": "bahia-q67r",
+  "title": "Active heartbeat domain and monitor",
+  "intended_behavior": "The domain records active heartbeat observations and an in-memory monitor deduplicates observations, computes freshness from observation age and expiry, and lists expired workers deterministically.",
+  "observed_prior_behavior": "Worker liveness was derived from advertisement freshness only; there was no active heartbeat observation type or monitor.",
+  "scope": [
+    "internal/domain/heartbeat.go",
+    "internal/service/heartbeat_monitor.go",
+    "internal/domain/heartbeat_test.go",
+    "internal/service/heartbeat_monitor_test.go"
+  ]
+}

@@ -25,6 +25,34 @@ const (
 	WorkerSchedulingDisabled    WorkerSchedulingState = "disabled"
 )
 
+// StandbyTier describes how ready a worker is to assume service responsibility.
+type StandbyTier string
+
+const (
+	StandbyTierCold StandbyTier = "cold"
+	StandbyTierWarm StandbyTier = "warm"
+	StandbyTierHot  StandbyTier = "hot"
+)
+
+// HeartbeatStatus represents active heartbeat freshness independent of worker advertisement freshness.
+type HeartbeatStatus string
+
+const (
+	HeartbeatStatusUnknown HeartbeatStatus = "unknown"
+	HeartbeatStatusFresh   HeartbeatStatus = "fresh"
+	HeartbeatStatusStale   HeartbeatStatus = "stale"
+	HeartbeatStatusExpired HeartbeatStatus = "expired"
+)
+
+// WorkerStandbyAssignment records continuity standby responsibility for a service.
+type WorkerStandbyAssignment struct {
+	ServiceKey        string           `json:"service_key"`
+	Tier              StandbyTier      `json:"tier"`
+	SupportedProfiles []ContinuityMode `json:"supported_profiles,omitempty"`
+	UpdatedAt         time.Time        `json:"updated_at"`
+	SourceEventID     string           `json:"source_event_id,omitempty"`
+}
+
 // WorkerSoftware describes an installed software entry from the S tag.
 type WorkerSoftware struct {
 	Name    string `json:"name"`
@@ -86,30 +114,33 @@ type WorkerCapabilities struct {
 
 // Worker represents a Loom compute worker discovered via Kind 10100 events.
 type Worker struct {
-	PubKey              string                `json:"pubkey"`
-	Name                string                `json:"name"`
-	Description         string                `json:"description,omitempty"`
-	Architecture        string                `json:"architecture,omitempty"` // e.g. "linux/amd64"
-	MaxConcurrentJobs   int                   `json:"max_concurrent_jobs"`
-	CurrentQueueDepth   int                   `json:"current_queue_depth"`
-	Software            []WorkerSoftware      `json:"software,omitempty"`
-	Pricing             []WorkerPricing       `json:"pricing,omitempty"`
-	Resources           *WorkerResources      `json:"resources,omitempty"`
-	Accelerators        []WorkerAccelerator   `json:"accelerators,omitempty"`
-	MLCapabilities      WorkerMLCapabilities  `json:"ml_capabilities,omitempty"`
-	Capabilities        WorkerCapabilities    `json:"capabilities,omitempty"`
-	RuntimeTarget       *WorkerRuntimeTarget  `json:"runtime_target,omitempty"`
-	MinDurationSecs     int                   `json:"min_duration_secs,omitempty"`
-	MaxDurationSecs     int                   `json:"max_duration_secs,omitempty"`
-	Geohash             string                `json:"geohash,omitempty"`
-	PreferredRelays     []string              `json:"preferred_relays,omitempty"`
-	LastAdvertisementAt time.Time             `json:"last_advertisement_at"`
-	Status              WorkerStatus          `json:"status"`
-	SchedulingState     WorkerSchedulingState `json:"scheduling_state"`
-	SchedulingNote      string                `json:"scheduling_note,omitempty"`
-	Labels              map[string]string     `json:"labels,omitempty"`
-	CreatedAt           time.Time             `json:"created_at"`
-	UpdatedAt           time.Time             `json:"updated_at"`
+	PubKey              string                    `json:"pubkey"`
+	Name                string                    `json:"name"`
+	Description         string                    `json:"description,omitempty"`
+	Architecture        string                    `json:"architecture,omitempty"` // e.g. "linux/amd64"
+	MaxConcurrentJobs   int                       `json:"max_concurrent_jobs"`
+	CurrentQueueDepth   int                       `json:"current_queue_depth"`
+	Software            []WorkerSoftware          `json:"software,omitempty"`
+	Pricing             []WorkerPricing           `json:"pricing,omitempty"`
+	Resources           *WorkerResources          `json:"resources,omitempty"`
+	Accelerators        []WorkerAccelerator       `json:"accelerators,omitempty"`
+	MLCapabilities      WorkerMLCapabilities      `json:"ml_capabilities,omitempty"`
+	Capabilities        WorkerCapabilities        `json:"capabilities,omitempty"`
+	RuntimeTarget       *WorkerRuntimeTarget      `json:"runtime_target,omitempty"`
+	MinDurationSecs     int                       `json:"min_duration_secs,omitempty"`
+	MaxDurationSecs     int                       `json:"max_duration_secs,omitempty"`
+	Geohash             string                    `json:"geohash,omitempty"`
+	PreferredRelays     []string                  `json:"preferred_relays,omitempty"`
+	LastAdvertisementAt time.Time                 `json:"last_advertisement_at"`
+	Status              WorkerStatus              `json:"status"`
+	SchedulingState     WorkerSchedulingState     `json:"scheduling_state"`
+	SchedulingNote      string                    `json:"scheduling_note,omitempty"`
+	StandbyAssignments  []WorkerStandbyAssignment `json:"standby_assignments,omitempty"`
+	LastHeartbeatAt     *time.Time                `json:"last_heartbeat_at,omitempty"`
+	HeartbeatStatus     HeartbeatStatus           `json:"heartbeat_status,omitempty"`
+	Labels              map[string]string         `json:"labels,omitempty"`
+	CreatedAt           time.Time                 `json:"created_at"`
+	UpdatedAt           time.Time                 `json:"updated_at"`
 }
 
 // MarshalJSON emits an active scheduling state when older in-memory callers have not set one.

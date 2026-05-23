@@ -1,0 +1,10 @@
+{
+  "feature_id": "bahia-xez6",
+  "test_runs": [
+    {
+      "command": "GOCACHE=/tmp/bahia-go-cache go test -count=1 ./internal/domain ./internal/service",
+      "result": "pass",
+      "evidence": "ok github.com/openagentsinc/bahia/internal/domain 0.144s; ok github.com/openagentsinc/bahia/internal/service 0.344s"
+    }
+  ]
+}

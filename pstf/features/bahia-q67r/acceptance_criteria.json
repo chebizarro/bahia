@@ -1,0 +1,30 @@
+{
+  "feature_id": "bahia-q67r",
+  "criteria": [
+    {
+      "id": "AC1",
+      "statement": "HeartbeatObservation records worker pubkey, observed time, sequence, interval, and expiry duration.",
+      "tests": ["TestHeartbeatObservationFields"]
+    },
+    {
+      "id": "AC2",
+      "statement": "HeartbeatMonitor stores observations in memory with RWMutex protection and reports snapshots by worker pubkey.",
+      "tests": ["TestInMemoryHeartbeatMonitorObserveDefaultsExpiryAndReportsFreshness", "TestInMemoryHeartbeatMonitorUnknownSnapshot"]
+    },
+    {
+      "id": "AC3",
+      "statement": "Observations are deduplicated by sequence, with lower sequences ignored and equal sequences keeping the later observation time.",
+      "tests": ["TestInMemoryHeartbeatMonitorDeduplicatesBySequence"]
+    },
+    {
+      "id": "AC4",
+      "statement": "Sequence zero observations use observed-at monotonic comparison.",
+      "tests": ["TestInMemoryHeartbeatMonitorSequenceZeroUsesObservedAt"]
+    },
+    {
+      "id": "AC5",
+      "statement": "Freshness status is derived from observation age and expiry, defaulting expiry to three times the interval, and expired workers can be listed deterministically.",
+      "tests": ["TestInMemoryHeartbeatMonitorObserveDefaultsExpiryAndReportsFreshness", "TestInMemoryHeartbeatMonitorStatusTransitionsAndListExpired"]
+    }
+  ]
+}

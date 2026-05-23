@@ -1,0 +1,20 @@
+{
+  "feature_id": "bahia-xez6",
+  "criteria": [
+    {
+      "id": "AC1",
+      "statement": "StandbyTier exposes cold, warm, and hot constants for continuity standby readiness.",
+      "tests": ["TestWorkerStandbyAndHeartbeatConstants"]
+    },
+    {
+      "id": "AC2",
+      "statement": "WorkerStandbyAssignment records service key, tier, supported continuity profiles, update time, and source event ID.",
+      "tests": ["TestWorkerContinuityFieldsMarshalJSON"]
+    },
+    {
+      "id": "AC3",
+      "statement": "Worker exposes additive standby assignment, last heartbeat, and heartbeat status fields without changing existing liveness and scheduling behavior.",
+      "tests": ["TestWorkerContinuityFieldsMarshalJSON", "TestWorkerSchedulingStateConstantsRemainDistinctFromLiveness", "TestWorker_MarshalJSONDefaultsSchedulingStateToActive", "TestWorker_ComputeStatus"]
+    }
+  ]
+}
