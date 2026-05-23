@@ -135,7 +135,10 @@ func New(cfg *config.Config) (*App, error) {
 
 	// Event publisher.
 	publisher := events.NewInProcessPublisher(logger)
+	continuityDefinitionStore := service.NewInMemoryContinuityDefinitionStore()
+	continuityHeartbeatMonitor := service.NewInMemoryHeartbeatMonitor()
 	continuityStatusStore := service.NewInMemoryContinuityStatusStore()
+	continuityRecipeExecutor := service.NewContinuityRecipeExecutor(publisher, service.WithContinuityRecipeLogger(logger))
 
 	// Adapters.
 	// Sidecar-first topology uses a dedicated relay pool for Bahia's own
@@ -299,6 +302,35 @@ func New(cfg *config.Config) (*App, error) {
 
 	// Background runner manager.
 	bgManager := NewBackgroundManager(logger)
+
+	continuityGraph, err := service.NewContinuityGraph(
+		continuityDefinitionStore,
+		continuityHeartbeatMonitor,
+		continuityStatusStore,
+		continuityWorkerReader{repo: workerRepo, logger: logger},
+	)
+	if err != nil {
+		return nil, fmt.Errorf("creating continuity graph: %w", err)
+	}
+	continuityFailoverTrigger, err := service.NewFailoverTriggerEngine(
+		continuityHeartbeatMonitor,
+		continuityDefinitionStore,
+		publisher,
+		time.Minute,
+		logger,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("creating continuity failover trigger engine: %w", err)
+	}
+	setupContinuityRuntimeSubscriptions(
+		publisher,
+		continuityDefinitionStore,
+		continuityHeartbeatMonitor,
+		continuityRecipeExecutor,
+		continuityFailoverTrigger,
+		logger,
+	)
+	bgManager.Register(&failoverTriggerRunner{engine: continuityFailoverTrigger})
 
 	var fipsRelayPool *nostrAdapter.RelayPool
 	if cfg.FIPS.Enabled {
@@ -790,6 +822,7 @@ func New(cfg *config.Config) (*App, error) {
 			MLCommands:         mlCommandPublisher,
 			LLMRegistry:        llmRegistry,
 			ContinuityStatuses: continuityStatusStore,
+			ContinuityGraph:    continuityGraph,
 		}, cfg.Auth)
 
 	httpServer := &http.Server{
@@ -819,6 +852,228 @@ func New(cfg *config.Config) (*App, error) {
 }
 
 // Run starts the HTTP server and blocks until shutdown.
+type failoverTriggerRunner struct {
+	engine *service.FailoverTriggerEngine
+}
+
+func (r *failoverTriggerRunner) Name() string { return "continuity-failover-trigger" }
+func (r *failoverTriggerRunner) Run(ctx context.Context) error {
+	if r.engine == nil {
+		return fmt.Errorf("continuity failover trigger engine is not configured")
+	}
+	r.engine.Run(ctx)
+	return nil
+}
+
+func setupContinuityRuntimeSubscriptions(
+	publisher events.Publisher,
+	definitions service.ContinuityDefinitionStore,
+	heartbeats service.HeartbeatMonitor,
+	executor service.ContinuityRecipeExecutor,
+	trigger *service.FailoverTriggerEngine,
+	logger *zap.Logger,
+) {
+	if publisher == nil {
+		return
+	}
+	if logger == nil {
+		logger = zap.NewNop()
+	}
+	publisher.Subscribe(events.EventContinuityProfileObserved, func(_ context.Context, e events.Event) {
+		observed, ok := e.Data.(events.ContinuityProfileObserved)
+		if !ok {
+			logger.Warn("continuity profile event carried unsupported payload", zap.String("event_type", string(e.Type)))
+			return
+		}
+		if _, err := definitions.StoreProfile(observed.Profile); err != nil {
+			logger.Warn("store continuity profile failed", zap.String("service_key", observed.Profile.ServiceKey), zap.Error(err))
+		}
+	})
+	publisher.Subscribe(events.EventFailoverPolicyObserved, func(_ context.Context, e events.Event) {
+		observed, ok := e.Data.(events.ContinuityRecipeObserved)
+		if !ok {
+			logger.Warn("continuity failover policy event carried unsupported payload", zap.String("event_type", string(e.Type)))
+			return
+		}
+		if _, err := definitions.StoreRecipe(observed.Recipe); err != nil {
+			logger.Warn("store continuity failover recipe failed", zap.String("service_key", observed.Recipe.ServiceKey), zap.String("recipe", observed.Recipe.Name), zap.Error(err))
+		}
+	})
+	publisher.Subscribe(events.EventReplicationPolicyObserved, func(_ context.Context, e events.Event) {
+		observed, ok := e.Data.(events.ReplicationPolicyObserved)
+		if !ok {
+			logger.Warn("continuity replication policy event carried unsupported payload", zap.String("event_type", string(e.Type)))
+			return
+		}
+		if _, err := definitions.StoreReplicationPolicy(observed.Policy); err != nil {
+			logger.Warn("store continuity replication policy failed", zap.String("service_key", observed.Policy.ServiceKey), zap.Error(err))
+		}
+	})
+	publisher.Subscribe(events.EventRecoveryWorkflowObserved, func(_ context.Context, e events.Event) {
+		observed, ok := e.Data.(events.ContinuityRecipeObserved)
+		if !ok {
+			logger.Warn("continuity recovery workflow event carried unsupported payload", zap.String("event_type", string(e.Type)))
+			return
+		}
+		if _, err := definitions.StoreRecipe(observed.Recipe); err != nil {
+			logger.Warn("store continuity recovery recipe failed", zap.String("service_key", observed.Recipe.ServiceKey), zap.String("recipe", observed.Recipe.Name), zap.Error(err))
+		}
+	})
+	publisher.Subscribe(events.EventHeartbeatObserved, func(_ context.Context, e events.Event) {
+		observed, ok := e.Data.(events.HeartbeatObserved)
+		if !ok {
+			logger.Warn("heartbeat event carried unsupported payload", zap.String("event_type", string(e.Type)))
+			return
+		}
+		heartbeats.Observe(observed.Observation)
+	})
+	publisher.Subscribe(events.EventFailoverRequested, func(ctx context.Context, e events.Event) {
+		command, ok := e.Data.(events.ContinuityCommandRequested)
+		if !ok {
+			logger.Warn("failover command event carried unsupported payload", zap.String("event_type", string(e.Type)))
+			return
+		}
+		executeContinuityFailoverCommand(ctx, definitions, executor, command, logger)
+	})
+	publisher.Subscribe(events.EventRecoveryRequested, func(ctx context.Context, e events.Event) {
+		command, ok := e.Data.(events.ContinuityCommandRequested)
+		if !ok {
+			logger.Warn("recovery command event carried unsupported payload", zap.String("event_type", string(e.Type)))
+			return
+		}
+		executeContinuityRecoveryCommand(ctx, definitions, executor, command, logger)
+	})
+	publisher.Subscribe(service.EventFailoverRequested, func(ctx context.Context, e events.Event) {
+		request, ok := e.Data.(service.FailoverRequested)
+		if !ok {
+			logger.Warn("automatic failover request event carried unsupported payload", zap.String("event_type", string(e.Type)))
+			return
+		}
+		executeAutomaticContinuityFailover(ctx, definitions, executor, request, logger)
+	})
+	publisher.Subscribe(service.EventContinuityRecipeRunStarted, func(_ context.Context, e events.Event) {
+		progress, ok := e.Data.(service.ContinuityRecipeProgressEvent)
+		if !ok || progress.RecipeKind != domain.ContinuityRecipeKindFailover || trigger == nil {
+			return
+		}
+		trigger.MarkActive(progress.ServiceKey, progress.RunID, progress.StartedAt)
+	})
+}
+
+func executeContinuityFailoverCommand(ctx context.Context, definitions service.ContinuityDefinitionStore, executor service.ContinuityRecipeExecutor, command events.ContinuityCommandRequested, logger *zap.Logger) {
+	if executor == nil || definitions == nil {
+		logger.Warn("continuity failover command ignored because runtime is not configured", zap.String("service_key", command.ServiceKey))
+		return
+	}
+	recipe, ok := continuityRecipeForCommand(definitions, command.ServiceKey, command.RecipeName, domain.ContinuityRecipeKindFailover)
+	if !ok {
+		logger.Warn("continuity failover recipe not found", zap.String("service_key", command.ServiceKey), zap.String("recipe", command.RecipeName))
+		return
+	}
+	profile, _ := definitions.GetProfile(command.ServiceKey)
+	if err := executor.ExecuteFailover(ctx, service.FailoverExecutionRequest{
+		ServiceKey:            command.ServiceKey,
+		RecipeName:            recipe.Name,
+		TargetProfile:         command.TargetProfile,
+		PrimaryWorkerPubKey:   profile.PrimaryWorkerPubKey,
+		SelectedStandbyPubKey: command.TargetWorkerPubKey,
+		RequestedBy:           command.Source.PubKey,
+		RunID:                 continuityCommandRunID(command),
+		Recipe:                recipe,
+	}); err != nil {
+		logger.Warn("execute continuity failover command failed", zap.String("service_key", command.ServiceKey), zap.String("run_id", continuityCommandRunID(command)), zap.Error(err))
+	}
+}
+
+func executeContinuityRecoveryCommand(ctx context.Context, definitions service.ContinuityDefinitionStore, executor service.ContinuityRecipeExecutor, command events.ContinuityCommandRequested, logger *zap.Logger) {
+	if executor == nil || definitions == nil {
+		logger.Warn("continuity recovery command ignored because runtime is not configured", zap.String("service_key", command.ServiceKey))
+		return
+	}
+	recipe, ok := continuityRecipeForCommand(definitions, command.ServiceKey, command.RecipeName, domain.ContinuityRecipeKindRecovery)
+	if !ok {
+		logger.Warn("continuity recovery recipe not found", zap.String("service_key", command.ServiceKey), zap.String("recipe", command.RecipeName))
+		return
+	}
+	profile, _ := definitions.GetProfile(command.ServiceKey)
+	if err := executor.ExecuteRecovery(ctx, service.RecoveryExecutionRequest{
+		ServiceKey:            command.ServiceKey,
+		RecipeName:            recipe.Name,
+		TargetProfile:         command.TargetProfile,
+		PrimaryWorkerPubKey:   profile.PrimaryWorkerPubKey,
+		SelectedStandbyPubKey: command.TargetWorkerPubKey,
+		RequestedBy:           command.Source.PubKey,
+		RunID:                 continuityCommandRunID(command),
+		Recipe:                recipe,
+	}); err != nil {
+		logger.Warn("execute continuity recovery command failed", zap.String("service_key", command.ServiceKey), zap.String("run_id", continuityCommandRunID(command)), zap.Error(err))
+	}
+}
+
+func executeAutomaticContinuityFailover(ctx context.Context, definitions service.ContinuityDefinitionStore, executor service.ContinuityRecipeExecutor, request service.FailoverRequested, logger *zap.Logger) {
+	if executor == nil || definitions == nil {
+		logger.Warn("automatic continuity failover ignored because runtime is not configured", zap.String("service_key", request.ServiceKey), zap.String("run_id", request.RunID))
+		return
+	}
+	recipe, ok := continuityRecipeForCommand(definitions, request.ServiceKey, request.RecipeName, domain.ContinuityRecipeKindFailover)
+	if !ok {
+		logger.Warn("automatic continuity failover recipe not found", zap.String("service_key", request.ServiceKey), zap.String("recipe", request.RecipeName), zap.String("run_id", request.RunID))
+		return
+	}
+	if err := executor.ExecuteFailover(ctx, service.FailoverExecutionRequest{
+		ServiceKey:            request.ServiceKey,
+		RecipeName:            recipe.Name,
+		TargetProfile:         domain.ContinuityModeDegraded,
+		PrimaryWorkerPubKey:   request.PrimaryWorkerPubKey,
+		SelectedStandbyPubKey: request.StandbyWorkerPubKey,
+		RequestedBy:           "continuity-failover-trigger",
+		RunID:                 request.RunID,
+		Recipe:                recipe,
+	}); err != nil {
+		logger.Warn("execute automatic continuity failover failed", zap.String("service_key", request.ServiceKey), zap.String("run_id", request.RunID), zap.Error(err))
+	}
+}
+
+func continuityRecipeForCommand(definitions service.ContinuityDefinitionStore, serviceKey string, recipeName string, kind domain.ContinuityRecipeKind) (domain.ContinuityRecipe, bool) {
+	if strings.TrimSpace(recipeName) != "" {
+		recipe, ok := definitions.GetRecipe(serviceKey, kind)
+		if !ok || recipe.Name != strings.TrimSpace(recipeName) {
+			return domain.ContinuityRecipe{}, false
+		}
+		return recipe, true
+	}
+	return definitions.GetRecipe(serviceKey, kind)
+}
+
+func continuityCommandRunID(command events.ContinuityCommandRequested) string {
+	if strings.TrimSpace(command.IdempotencyKey) != "" {
+		return strings.TrimSpace(command.IdempotencyKey)
+	}
+	if strings.TrimSpace(command.Source.EventID) != "" {
+		return strings.TrimSpace(command.Source.EventID)
+	}
+	return fmt.Sprintf("continuity:%s:%d", strings.TrimSpace(command.ServiceKey), command.Source.CreatedAt.UnixNano())
+}
+
+type continuityWorkerReader struct {
+	repo   repository.WorkerRepository
+	logger *zap.Logger
+}
+
+func (r continuityWorkerReader) ListWorkers() []domain.Worker {
+	if r.repo == nil {
+		return nil
+	}
+	workers, err := r.repo.List(context.Background(), "", 0)
+	if err != nil {
+		if r.logger != nil {
+			r.logger.Warn("list workers for continuity graph failed", zap.Error(err))
+		}
+		return nil
+	}
+	return workers
+}
+
 func (a *App) Run() error {
 	// Graceful shutdown.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

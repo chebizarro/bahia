@@ -16,6 +16,7 @@ import (
 
 // Config is the top-level configuration for Bahia.
 type Config struct {
+	Mode          string                    `koanf:"mode" yaml:"mode"`
 	Server        ServerConfig              `koanf:"server"`
 	DB            DBConfig                  `koanf:"db"`
 	Harbor        HarborConfig              `koanf:"harbor"`
@@ -438,6 +439,7 @@ type NotificationsConfig struct {
 // Defaults returns a Config with sensible default values.
 func Defaults() *Config {
 	return &Config{
+		Mode: "full",
 		Server: ServerConfig{
 			Host:            "0.0.0.0",
 			Port:            8080,
@@ -687,6 +689,14 @@ func rejectRemovedEncryptedRequestKeys(k *koanf.Koanf) error {
 }
 
 func (c *Config) validate() error {
+	mode := strings.ToLower(strings.TrimSpace(c.Mode))
+	switch mode {
+	case "full", "degraded", "emergency":
+		c.Mode = mode
+	default:
+		return fmt.Errorf("config validation failed: mode must be one of full, degraded, emergency")
+	}
+
 	if c.Adoption.Enabled {
 		if !c.Auth.Enabled {
 			return fmt.Errorf("config validation failed: auth.enabled=true is required when adoption.enabled=true")
