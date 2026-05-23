@@ -177,6 +177,10 @@ type Reactor struct {
 	backoff     *nostrpool.Backoff
 	caughtUp    atomic.Bool
 
+	replayCursorPlanner *nostrpool.ReplayCursorPlanner
+	kindCatalog         *nostrpool.KindCatalog
+	lastSeenByGroup     map[string]nostr.Timestamp
+
 	toolProvisioning              repository.ToolProvisioningRepository
 	toolResponder                 *ToolResponder
 	toolCoordinator               *service.ToolProvisioningCoordinator
@@ -337,6 +341,16 @@ func WithNostrEventRepository(repo repository.NostrEventRepository) ReactorOptio
 	return func(r *Reactor) { r.nostrEvents = repo }
 }
 
+// WithReplayCursorPlanner enables persisted cursor replay for control-plane subscriptions.
+func WithReplayCursorPlanner(planner *nostrpool.ReplayCursorPlanner) ReactorOption {
+	return func(r *Reactor) { r.replayCursorPlanner = planner }
+}
+
+// WithKindCatalog configures the replay group catalog used for cursor tracking.
+func WithKindCatalog(catalog *nostrpool.KindCatalog) ReactorOption {
+	return func(r *Reactor) { r.kindCatalog = catalog }
+}
+
 // WithEventPublisher enables reactor handlers to emit in-process domain events.
 func WithEventPublisher(publisher events.Publisher) ReactorOption {
 	return func(r *Reactor) {
@@ -389,17 +403,18 @@ func NewReactor(config Config, registry *service.RegistryService, pool *nostrpoo
 	}
 
 	r := &Reactor{
-		config:    config,
-		pool:      pool,
-		publisher: pool,
-		registry:  registry,
-		signer:    signer,
-		logger:    slog.Default().With("component", "controlplane"),
-		zapLog:    zapLog,
-		dedup:     nostrpool.NewEventDeduplicator(10000),
-		backoff:   nostrpool.DefaultBackoff(),
-		eventBus:  &events.NoopPublisher{},
-		runs:      make(map[string]*DeploymentRun),
+		config:          config,
+		pool:            pool,
+		publisher:       pool,
+		registry:        registry,
+		signer:          signer,
+		logger:          slog.Default().With("component", "controlplane"),
+		zapLog:          zapLog,
+		dedup:           nostrpool.NewEventDeduplicator(10000),
+		backoff:         nostrpool.DefaultBackoff(),
+		eventBus:        &events.NoopPublisher{},
+		lastSeenByGroup: make(map[string]nostr.Timestamp),
+		runs:            make(map[string]*DeploymentRun),
 	}
 	for _, opt := range opts {
 		opt(r)
@@ -420,11 +435,9 @@ func (r *Reactor) Run(ctx context.Context) error {
 	// Start periodic cleanup of completed runs
 	go r.cleanupRuns(ctx)
 
-	// Subscribe to control plane request events. Compute since once and reuse
-	// the same filters for auth retries/reconnects so disconnect-gap events are
-	// not skipped by recomputing the cursor during resubscription.
-	now := nostr.Now()
-	filters := r.buildRequestSubscriptionFilters(now)
+	// Subscribe to control plane request events from the newest persisted or
+	// in-process replay cursor, with nostr.Now as the no-history fallback.
+	filters := r.buildRequestSubscriptionFiltersForCurrentCursor(ctx)
 
 	r.caughtUp.Store(false)
 	merged, err := r.pool.SubscribeAllWithEOSE(ctx, filters)
@@ -455,6 +468,7 @@ func (r *Reactor) Run(ctx context.Context) error {
 					merged.Close()
 					r.caughtUp.Store(false)
 					authAttempted = make(map[string]struct{})
+					filters = r.buildRequestSubscriptionFiltersForCurrentCursor(ctx)
 					merged, err = r.pool.SubscribeAllWithEOSE(ctx, filters)
 					if err != nil {
 						r.logger.Error("resubscribe after relay auth failed", "error", err)
@@ -475,6 +489,7 @@ func (r *Reactor) Run(ctx context.Context) error {
 				time.Sleep(delay)
 				r.caughtUp.Store(false)
 				authAttempted = make(map[string]struct{})
+				filters = r.buildRequestSubscriptionFiltersForCurrentCursor(ctx)
 				merged, err = r.pool.SubscribeAllWithEOSE(ctx, filters)
 				if err != nil {
 					r.logger.Error("reconnect failed", "error", err)
@@ -535,6 +550,7 @@ func (r *Reactor) handleEvent(ctx context.Context, event *nostr.Event) {
 		return
 	}
 	r.dedup.MarkSeen(event.ID)
+	r.trackLastSeen(event)
 
 	switch event.Kind {
 	case KindDeployRequest:
@@ -1852,6 +1868,119 @@ func isAcceptedWorkerReadModelKind(kind int) bool {
 	return false
 }
 
+func (r *Reactor) buildRequestSubscriptionFiltersForCurrentCursor(ctx context.Context) []nostr.Filter {
+	return r.buildRequestSubscriptionFilters(r.requestSubscriptionSince(ctx))
+}
+
+func (r *Reactor) requestSubscriptionSince(ctx context.Context) nostr.Timestamp {
+	kinds := requestSubscriptionKinds()
+	var since *nostr.Timestamp
+	if r.replayCursorPlanner != nil {
+		since = r.replayCursorPlanner.ComputeSince(ctx, kinds)
+	}
+	if lastSeen := r.latestLastSeen(kinds); lastSeen != nil {
+		adjusted := replayCursorWithOverlap(*lastSeen)
+		if since == nil || adjusted > *since {
+			since = &adjusted
+		}
+	}
+	if since != nil {
+		return *since
+	}
+	return nostr.Now()
+}
+
+func (r *Reactor) latestLastSeen(kinds []int) *nostr.Timestamp {
+	groups := r.replayGroupsForKinds(kinds)
+	if len(groups) == 0 {
+		return nil
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var latest nostr.Timestamp
+	for _, group := range groups {
+		seen, ok := r.lastSeenByGroup[group]
+		if !ok {
+			continue
+		}
+		if latest == 0 || seen > latest {
+			latest = seen
+		}
+	}
+	if latest == 0 {
+		return nil
+	}
+	return &latest
+}
+
+func (r *Reactor) trackLastSeen(event *nostr.Event) {
+	if event == nil || event.CreatedAt == 0 {
+		return
+	}
+	groups := r.replayGroupsForKind(event.Kind)
+	if len(groups) == 0 {
+		return
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, group := range groups {
+		if event.CreatedAt > r.lastSeenByGroup[group] {
+			r.lastSeenByGroup[group] = event.CreatedAt
+		}
+	}
+}
+
+func (r *Reactor) replayGroupsForKind(kind int) []string {
+	catalog := r.kindCatalog
+	if catalog == nil {
+		return []string{"control_plane_live"}
+	}
+
+	groups := make([]string, 0, 1)
+	for _, group := range catalog.Groups {
+		if slices.Contains(group.Kinds, kind) {
+			groups = append(groups, group.Name)
+		}
+	}
+	return groups
+}
+
+func (r *Reactor) replayGroupsForKinds(kinds []int) []string {
+	seenKinds := make(map[int]struct{}, len(kinds))
+	for _, kind := range kinds {
+		seenKinds[kind] = struct{}{}
+	}
+
+	seenGroups := make(map[string]struct{})
+	groups := make([]string, 0)
+	catalog := r.kindCatalog
+	if catalog == nil {
+		return []string{"control_plane_live"}
+	}
+	for _, group := range catalog.Groups {
+		for _, kind := range group.Kinds {
+			if _, ok := seenKinds[kind]; !ok {
+				continue
+			}
+			if _, exists := seenGroups[group.Name]; !exists {
+				seenGroups[group.Name] = struct{}{}
+				groups = append(groups, group.Name)
+			}
+			break
+		}
+	}
+	return groups
+}
+
+func replayCursorWithOverlap(timestamp nostr.Timestamp) nostr.Timestamp {
+	if timestamp <= 1 {
+		return 0
+	}
+	return timestamp - 1
+}
+
 func (r *Reactor) buildRequestSubscriptionFilters(since nostr.Timestamp) []nostr.Filter {
 	return []nostr.Filter{
 		{
@@ -1877,6 +2006,26 @@ func (r *Reactor) buildRequestSubscriptionFilters(since nostr.Timestamp) []nostr
 			Since: &since,
 		},
 	}
+}
+
+func requestSubscriptionKinds() []int {
+	seen := make(map[int]struct{})
+	kinds := make([]int, 0, len(defaultRequestSubscriptionKinds())+4)
+	add := func(kind int) {
+		if _, ok := seen[kind]; ok {
+			return
+		}
+		seen[kind] = struct{}{}
+		kinds = append(kinds, kind)
+	}
+	for _, kind := range defaultRequestSubscriptionKinds() {
+		add(kind)
+	}
+	add(KindServiceAction)
+	add(KindAdoptionScanRequest)
+	add(KindAdoptionImportRequest)
+	add(nostrpool.KindHeartbeatObservation)
+	return kinds
 }
 
 func defaultRequestSubscriptionKinds() []int {

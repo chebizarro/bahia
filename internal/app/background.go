@@ -19,6 +19,16 @@ type BackgroundRunner interface {
 	Run(ctx context.Context) error
 }
 
+type RunnerStatus struct {
+	Name      string
+	Running   bool
+	Required  bool
+	Tier      int
+	StartedAt time.Time
+	StoppedAt time.Time
+	LastError error
+}
+
 // BackgroundManager tracks and coordinates background runners.
 type OCIUploadCleaner interface {
 	CleanupExpiredUploads(ctx context.Context, now time.Time) (int, error)
@@ -160,24 +170,63 @@ func (r *OCIUploadCleanupRunner) Run(ctx context.Context) error {
 	}
 }
 
+type backgroundRunnerRegistration struct {
+	runner   BackgroundRunner
+	required bool
+	tier     int
+}
+
+// RunnerOption configures background runner health metadata.
+type RunnerOption func(*RunnerStatus)
+
+// RunnerRequired configures whether a runner is required for readiness.
+func RunnerRequired(required bool) RunnerOption {
+	return func(status *RunnerStatus) {
+		status.Required = required
+	}
+}
+
+// RunnerTier configures the subsystem tier a runner belongs to.
+func RunnerTier(t Tier) RunnerOption {
+	return func(status *RunnerStatus) {
+		status.Tier = int(t)
+	}
+}
+
 // BackgroundManager tracks and coordinates background runners.
 type BackgroundManager struct {
-	mu      sync.Mutex
-	runners []BackgroundRunner
-	wg      sync.WaitGroup
-	logger  *zap.Logger
+	mu       sync.Mutex
+	runners  []backgroundRunnerRegistration
+	statuses map[string]RunnerStatus
+	wg       sync.WaitGroup
+	logger   *zap.Logger
 }
 
 // NewBackgroundManager creates a new manager.
 func NewBackgroundManager(logger *zap.Logger) *BackgroundManager {
-	return &BackgroundManager{logger: logger}
+	if logger == nil {
+		logger = zap.NewNop()
+	}
+	return &BackgroundManager{logger: logger, statuses: make(map[string]RunnerStatus)}
 }
 
 // Register adds a runner. Must be called before Start.
 func (m *BackgroundManager) Register(r BackgroundRunner) {
+	m.RegisterWithOptions(r)
+}
+
+// RegisterWithOptions adds a runner with health metadata. Must be called before Start.
+func (m *BackgroundManager) RegisterWithOptions(r BackgroundRunner, opts ...RunnerOption) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.runners = append(m.runners, r)
+
+	status := RunnerStatus{Name: r.Name(), Required: true, Tier: int(Tier0)}
+	for _, opt := range opts {
+		opt(&status)
+	}
+
+	m.runners = append(m.runners, backgroundRunnerRegistration{runner: r, required: status.Required, tier: status.Tier})
+	m.statuses[status.Name] = status
 	m.logger.Info("background runner registered", zap.String("name", r.Name()))
 }
 
@@ -190,11 +239,15 @@ func (m *BackgroundManager) Start(ctx context.Context) {
 
 	for _, r := range m.runners {
 		m.wg.Add(1)
-		go func(runner BackgroundRunner) {
+		go func(reg backgroundRunnerRegistration) {
+			runner := reg.runner
 			defer m.wg.Done()
 			m.logger.Info("background runner starting", zap.String("name", runner.Name()))
+			m.markRunnerStarted(runner.Name())
 
-			if err := runner.Run(ctx); err != nil && ctx.Err() == nil {
+			err := runner.Run(ctx)
+			m.markRunnerStopped(runner.Name(), err, ctx.Err() != nil)
+			if err != nil && ctx.Err() == nil {
 				// Only log as error if the context wasn't cancelled.
 				m.logger.Error("background runner exited with error",
 					zap.String("name", runner.Name()),
@@ -205,6 +258,41 @@ func (m *BackgroundManager) Start(ctx context.Context) {
 			}
 		}(r)
 	}
+}
+
+func (m *BackgroundManager) markRunnerStarted(name string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	status := m.statuses[name]
+	status.Running = true
+	status.StartedAt = time.Now()
+	status.StoppedAt = time.Time{}
+	status.LastError = nil
+	m.statuses[name] = status
+}
+
+func (m *BackgroundManager) markRunnerStopped(name string, err error, contextCancelled bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	status := m.statuses[name]
+	status.Running = false
+	status.StoppedAt = time.Now()
+	if err != nil && !contextCancelled {
+		status.LastError = err
+	}
+	m.statuses[name] = status
+}
+
+// RunnerStatuses returns a snapshot of registered runner statuses.
+func (m *BackgroundManager) RunnerStatuses() []RunnerStatus {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	statuses := make([]RunnerStatus, 0, len(m.runners))
+	for _, reg := range m.runners {
+		statuses = append(statuses, m.statuses[reg.runner.Name()])
+	}
+	return statuses
 }
 
 // Wait blocks until all runners have finished.
