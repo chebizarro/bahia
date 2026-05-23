@@ -1,0 +1,39 @@
+{
+  "feature_id": "bahia-8jzf",
+  "tests": [
+    {
+      "id": "TM-8JZF-001",
+      "acceptance_criteria": ["AC-8JZF-001"],
+      "command": "go test ./internal/controlplane",
+      "test_names": ["TestBackupRequestSubscriptionIncludesBackupRunKind"]
+    },
+    {
+      "id": "TM-8JZF-002",
+      "acceptance_criteria": ["AC-8JZF-002"],
+      "command": "go test ./internal/controlplane",
+      "test_names": [
+        "TestHandleBackupRepositoryRegisterRequestAppliesRegistryRecordAndPublishesResult",
+        "TestHandleBackupPolicyApplyRequestAppliesRegistryRecordAndPublishesResult",
+        "TestHandleBackupRecipeApplyRequestAppliesRegistryRecordAndPublishesResult",
+        "TestHandleBackupDefinitionApplyRequestAppliesRegistryRecordAndPublishesResult",
+        "TestHandleBackupDefinitionApplyRequestReusesExistingDefinitionIDAndCanonicalReferenceNames"
+      ]
+    },
+    {
+      "id": "TM-8JZF-003",
+      "acceptance_criteria": ["AC-8JZF-003"],
+      "command": "go test ./internal/controlplane",
+      "test_names": [
+        "TestHandleBackupRepositoryProbeRequestPublishesQueuedResultAndInvokesExecutor",
+        "TestHandleBackupVerificationRequestRecordsPendingVerificationAndInvokesExecutor",
+        "TestHandleBackupVerificationRequestDoesNotReinvokeExecutorForExistingVerification"
+      ]
+    },
+    {
+      "id": "TM-8JZF-004",
+      "acceptance_criteria": ["AC-8JZF-004"],
+      "command": "go test ./internal/controlplane",
+      "test_names": ["existing backup authorization and parse failure coverage via shared authorizeBackupCommandRequest paths"]
+    }
+  ]
+}

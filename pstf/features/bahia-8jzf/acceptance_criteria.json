@@ -1,0 +1,33 @@
+{
+  "feature_id": "bahia-8jzf",
+  "criteria": [
+    {
+      "id": "AC-8JZF-001",
+      "title": "All reserved backup Phase 1 request kinds are subscribed and dispatched",
+      "given": "the control-plane reactor builds request subscriptions or handles inbound events",
+      "when": "backup request kinds 38400 through 38409 are considered",
+      "then": "backupRequestKinds and the reactor switch include run, verification, restore, restore approval, retention, repository register, policy apply, recipe apply, definition apply, and repository probe requests"
+    },
+    {
+      "id": "AC-8JZF-002",
+      "title": "Backup registry apply requests are validated and persisted",
+      "given": "an authorized operator submits repository, policy, recipe, or definition apply events with d tags",
+      "when": "the handler processes the event",
+      "then": "the handler validates required fields and references, applies the registry mutation, and publishes a signed success result"
+    },
+    {
+      "id": "AC-8JZF-003",
+      "title": "Probe and verification requests are event-driven triggers",
+      "given": "an authorized operator submits repository probe or backup verification request events with d tags",
+      "when": "the handler resolves and validates the target",
+      "then": "it publishes a signed queued or duplicate result and invokes the configured executor without polling or sleep-based completion"
+    },
+    {
+      "id": "AC-8JZF-004",
+      "title": "Invalid requests fail closed",
+      "given": "a request is unauthorized, lacks a d tag, contains invalid JSON, or references missing backup objects",
+      "when": "the handler processes the event",
+      "then": "it publishes a signed failure/rejection result and does not mutate state or invoke executors"
+    }
+  ]
+}

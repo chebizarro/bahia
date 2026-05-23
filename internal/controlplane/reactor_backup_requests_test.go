@@ -139,6 +139,224 @@ func TestHandleBackupRestoreRequiresApprovalBeforeExecutor(t *testing.T) {
 	}
 }
 
+func TestHandleBackupRepositoryRegisterRequestAppliesRegistryRecordAndPublishesResult(t *testing.T) {
+	ctx := context.Background()
+	requestKey := nostr.GeneratePrivateKey()
+	requestPubkey, _ := nostr.GetPublicKey(requestKey)
+	registry, _ := newBackupRequestRegistryFixture()
+	capture := &captureNostrPublisher{published: 1}
+	signer, _ := NewPrivateKeySigner(nostr.GeneratePrivateKey())
+	reactor := NewReactor(Config{AuthorizedPubkeys: []string{requestPubkey}}, nil, nil, signer, zap.NewNop(), WithControlPlanePublisher(capture))
+	reactor.backupRegistry = registry
+	request := signedLLMRequest(t, requestKey, KindBackupRepositoryRegister, `{"name":"archive","backend":"kopia","repository_uri":"kopia://archive","metadata":{"site":"west"}}`, nostr.Tags{{"d", "repository:archive"}, {"repository", "archive"}, {"backend", "kopia"}})
+
+	reactor.handleBackupRepositoryRegisterRequest(ctx, request)
+
+	repo := registry.repositoryByName("archive")
+	if repo == nil || repo.RepositoryURI != "kopia://archive" || repo.Metadata["nostr_request_pubkey"] != requestPubkey {
+		t.Fatalf("repository was not applied with Nostr metadata: %#v", repo)
+	}
+	if len(capture.events) != 1 || capture.events[0].Kind != KindBackupRepositoryRegisterResult {
+		t.Fatalf("result events = %#v", capture.events)
+	}
+	assertReactorTag(t, capture.events[0].Tags, "status", "success")
+	assertReactorTag(t, capture.events[0].Tags, "repository_id", repo.ID.String())
+	assertSignedEvent(t, capture.events[0])
+}
+
+func TestHandleBackupPolicyApplyRequestAppliesRegistryRecordAndPublishesResult(t *testing.T) {
+	ctx := context.Background()
+	requestKey := nostr.GeneratePrivateKey()
+	requestPubkey, _ := nostr.GetPublicKey(requestKey)
+	registry, _ := newBackupRequestRegistryFixture()
+	capture := &captureNostrPublisher{published: 1}
+	signer, _ := NewPrivateKeySigner(nostr.GeneratePrivateKey())
+	reactor := NewReactor(Config{AuthorizedPubkeys: []string{requestPubkey}}, nil, nil, signer, zap.NewNop(), WithControlPlanePublisher(capture))
+	reactor.backupRegistry = registry
+	request := signedLLMRequest(t, requestKey, KindBackupPolicyApply, `{"name":"monthly-verified","require_verification":true,"verification_mode":"kopia_snapshot_verify"}`, nostr.Tags{{"d", "policy:monthly-verified"}, {"policy", "monthly-verified"}, {"verification", "kopia_snapshot_verify"}})
+
+	reactor.handleBackupPolicyApplyRequest(ctx, request)
+
+	policy := registry.policyByName("monthly-verified")
+	if policy == nil || !policy.RequireVerification || policy.VerificationMode != domain.BackupVerificationKopiaSnapshotVerify {
+		t.Fatalf("policy was not applied: %#v", policy)
+	}
+	if len(capture.events) != 1 || capture.events[0].Kind != KindBackupPolicyApplyResult {
+		t.Fatalf("result events = %#v", capture.events)
+	}
+	assertReactorTag(t, capture.events[0].Tags, "policy_id", policy.ID.String())
+	assertSignedEvent(t, capture.events[0])
+}
+
+func TestHandleBackupRecipeApplyRequestAppliesRegistryRecordAndPublishesResult(t *testing.T) {
+	ctx := context.Background()
+	requestKey := nostr.GeneratePrivateKey()
+	requestPubkey, _ := nostr.GetPublicKey(requestKey)
+	registry, _ := newBackupRequestRegistryFixture()
+	capture := &captureNostrPublisher{published: 1}
+	signer, _ := NewPrivateKeySigner(nostr.GeneratePrivateKey())
+	reactor := NewReactor(Config{AuthorizedPubkeys: []string{requestPubkey}}, nil, nil, signer, zap.NewNop(), WithControlPlanePublisher(capture))
+	reactor.backupRegistry = registry
+	repoID := registry.firstRepositoryID()
+	policyID := registry.firstPolicyID()
+	request := signedLLMRequest(t, requestKey, KindBackupRecipeApply, fmt.Sprintf(`{"name":"weekly","version":"v2","backend":"kopia","repository_id":"%s","policy_id":"%s","target_ref":"fs:/srv/weekly","verification_mode":"kopia_snapshot_verify"}`, repoID, policyID), nostr.Tags{{"d", "recipe:weekly:v2"}, {"repository_id", repoID.String()}, {"policy_id", policyID.String()}})
+
+	reactor.handleBackupRecipeApplyRequest(ctx, request)
+
+	recipe, err := registry.GetRecipeByNameVersion(ctx, "weekly", "v2")
+	if err != nil || recipe == nil || recipe.RepositoryID != repoID || recipe.PolicyID == nil || *recipe.PolicyID != policyID {
+		t.Fatalf("recipe was not applied: recipe=%#v err=%v", recipe, err)
+	}
+	if len(capture.events) != 1 || capture.events[0].Kind != KindBackupRecipeApplyResult {
+		t.Fatalf("result events = %#v", capture.events)
+	}
+	assertReactorTag(t, capture.events[0].Tags, "recipe_id", recipe.ID.String())
+	assertSignedEvent(t, capture.events[0])
+}
+
+func TestHandleBackupDefinitionApplyRequestAppliesRegistryRecordAndPublishesResult(t *testing.T) {
+	ctx := context.Background()
+	requestKey := nostr.GeneratePrivateKey()
+	requestPubkey, _ := nostr.GetPublicKey(requestKey)
+	registry, recipe := newBackupRequestRegistryFixture()
+	capture := &captureNostrPublisher{published: 1}
+	signer, _ := NewPrivateKeySigner(nostr.GeneratePrivateKey())
+	reactor := NewReactor(Config{AuthorizedPubkeys: []string{requestPubkey}}, nil, nil, signer, zap.NewNop(), WithControlPlanePublisher(capture), WithBackupDefinitionRegistry(registry))
+	reactor.backupRegistry = registry
+	policyID := *recipe.PolicyID
+	request := signedLLMRequest(t, requestKey, KindBackupDefinitionApply, fmt.Sprintf(`{"name":"daily-prod","repository_id":"%s","policy_id":"%s","recipe_id":"%s","schedule_enabled":true,"schedule_expression":"0 2 * * *","requires_approval":true,"approval_policy":"operator"}`, recipe.RepositoryID, policyID, recipe.ID), nostr.Tags{{"d", "definition:daily-prod"}, {"definition", "daily-prod"}, {"repository_id", recipe.RepositoryID.String()}, {"policy_id", policyID.String()}, {"recipe_id", recipe.ID.String()}})
+
+	reactor.handleBackupDefinitionApplyRequest(ctx, request)
+
+	definition := registry.definitionByName("daily-prod")
+	if definition == nil || definition.RepositoryName != "primary" || definition.PolicyName != "verified" || definition.RecipeName != recipe.Name || definition.CreatedBy != requestPubkey {
+		t.Fatalf("definition was not applied with resolved references: %#v", definition)
+	}
+	if len(capture.events) != 1 || capture.events[0].Kind != KindBackupDefinitionApplyResult {
+		t.Fatalf("result events = %#v", capture.events)
+	}
+	assertReactorTag(t, capture.events[0].Tags, "definition_id", definition.ID.String())
+	assertSignedEvent(t, capture.events[0])
+}
+
+func TestHandleBackupDefinitionApplyRequestReusesExistingDefinitionIDAndCanonicalReferenceNames(t *testing.T) {
+	ctx := context.Background()
+	requestKey := nostr.GeneratePrivateKey()
+	requestPubkey, _ := nostr.GetPublicKey(requestKey)
+	registry, recipe := newBackupRequestRegistryFixture()
+	policyID := *recipe.PolicyID
+	existingID := uuid.New()
+	registry.definitions[existingID] = &domain.BackupDefinition{ID: existingID, Name: "daily-prod", RepositoryID: recipe.RepositoryID, RepositoryName: "primary", PolicyID: policyID, PolicyName: "verified", RecipeID: recipe.ID, RecipeName: recipe.Name, RecipeVersion: recipe.Version, CreatedBy: requestPubkey}
+	capture := &captureNostrPublisher{published: 1}
+	signer, _ := NewPrivateKeySigner(nostr.GeneratePrivateKey())
+	reactor := NewReactor(Config{AuthorizedPubkeys: []string{requestPubkey}}, nil, nil, signer, zap.NewNop(), WithControlPlanePublisher(capture), WithBackupDefinitionRegistry(registry))
+	reactor.backupRegistry = registry
+	request := signedLLMRequest(t, requestKey, KindBackupDefinitionApply, fmt.Sprintf(`{"name":"daily-prod","repository_id":"%s","repository_name":"wrong","policy_id":"%s","policy_name":"wrong","recipe_id":"%s","recipe_name":"wrong","recipe_version":"wrong"}`, recipe.RepositoryID, policyID, recipe.ID), nostr.Tags{{"d", "definition:daily-prod"}})
+
+	reactor.handleBackupDefinitionApplyRequest(ctx, request)
+
+	definition := registry.definitions[existingID]
+	if definition == nil || definition.ID != existingID || definition.RepositoryName != "primary" || definition.PolicyName != "verified" || definition.RecipeName != recipe.Name || definition.RecipeVersion != recipe.Version {
+		t.Fatalf("definition was not idempotently canonicalized: %#v", definition)
+	}
+	if len(registry.definitions) != 1 {
+		t.Fatalf("definitions = %d, want 1", len(registry.definitions))
+	}
+}
+
+func TestHandleBackupVerificationRequestDoesNotReinvokeExecutorForExistingVerification(t *testing.T) {
+	ctx := context.Background()
+	requestKey := nostr.GeneratePrivateKey()
+	requestPubkey, _ := nostr.GetPublicKey(requestKey)
+	registry, _ := newBackupRequestRegistryFixture()
+	run := registry.addRestoreEligibleRun()
+	run.VerificationMode = domain.BackupVerificationKopiaSnapshotVerify
+	existing := &domain.BackupVerificationRecord{ID: uuid.New(), BackupRunID: run.ID, Mode: domain.BackupVerificationKopiaSnapshotVerify, Status: domain.BackupVerificationSucceeded, Verified: true}
+	registry.verifications[run.ID] = existing
+	capture := &captureNostrPublisher{published: 1}
+	executor := &recordingBackupVerificationExecutor{calls: make(chan uuid.UUID, 1)}
+	signer, _ := NewPrivateKeySigner(nostr.GeneratePrivateKey())
+	reactor := NewReactor(Config{AuthorizedPubkeys: []string{requestPubkey}}, nil, nil, signer, zap.NewNop(), WithControlPlanePublisher(capture), WithBackupVerificationExecutor(executor))
+	reactor.backupRegistry = registry
+	request := signedLLMRequest(t, requestKey, KindBackupVerificationRequest, fmt.Sprintf(`{"backup_run_id":"%s","mode":"kopia_snapshot_verify"}`, run.ID), nostr.Tags{{"d", "verify:daily"}, {"backup_run_id", run.ID.String()}})
+
+	reactor.handleBackupVerificationRequest(ctx, request)
+
+	select {
+	case got := <-executor.calls:
+		t.Fatalf("duplicate verification invoked executor for %s", got)
+	default:
+	}
+	if len(capture.events) != 1 || capture.events[0].Kind != KindBackupVerificationResult {
+		t.Fatalf("result events = %#v", capture.events)
+	}
+	assertReactorTag(t, capture.events[0].Tags, "status", "duplicate")
+	assertReactorTag(t, capture.events[0].Tags, "verification_id", existing.ID.String())
+}
+
+func TestHandleBackupRepositoryProbeRequestPublishesQueuedResultAndInvokesExecutor(t *testing.T) {
+	ctx := context.Background()
+	requestKey := nostr.GeneratePrivateKey()
+	requestPubkey, _ := nostr.GetPublicKey(requestKey)
+	registry, _ := newBackupRequestRegistryFixture()
+	capture := &captureNostrPublisher{published: 1}
+	executor := &recordingBackupRepositoryProbeExecutor{calls: make(chan uuid.UUID, 1)}
+	signer, _ := NewPrivateKeySigner(nostr.GeneratePrivateKey())
+	reactor := NewReactor(Config{AuthorizedPubkeys: []string{requestPubkey}}, nil, nil, signer, zap.NewNop(), WithControlPlanePublisher(capture), WithBackupRepositoryProbeExecutor(executor))
+	reactor.backupRegistry = registry
+	repoID := registry.firstRepositoryID()
+	request := signedLLMRequest(t, requestKey, KindBackupRepositoryProbe, fmt.Sprintf(`{"repository_id":"%s"}`, repoID), nostr.Tags{{"d", "probe:primary"}, {"repository_id", repoID.String()}})
+
+	reactor.handleBackupRepositoryProbeRequest(ctx, request)
+
+	select {
+	case got := <-executor.calls:
+		if got != repoID {
+			t.Fatalf("probe executor repository = %s, want %s", got, repoID)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("repository probe executor was not invoked")
+	}
+	if len(capture.events) != 1 || capture.events[0].Kind != KindBackupRepositoryProbeResult {
+		t.Fatalf("result events = %#v", capture.events)
+	}
+	assertReactorTag(t, capture.events[0].Tags, "status", "queued")
+	assertSignedEvent(t, capture.events[0])
+}
+
+func TestHandleBackupVerificationRequestRecordsPendingVerificationAndInvokesExecutor(t *testing.T) {
+	ctx := context.Background()
+	requestKey := nostr.GeneratePrivateKey()
+	requestPubkey, _ := nostr.GetPublicKey(requestKey)
+	registry, _ := newBackupRequestRegistryFixture()
+	run := registry.addRestoreEligibleRun()
+	run.VerificationMode = domain.BackupVerificationKopiaSnapshotVerify
+	capture := &captureNostrPublisher{published: 1}
+	executor := &recordingBackupVerificationExecutor{calls: make(chan uuid.UUID, 1)}
+	signer, _ := NewPrivateKeySigner(nostr.GeneratePrivateKey())
+	reactor := NewReactor(Config{AuthorizedPubkeys: []string{requestPubkey}}, nil, nil, signer, zap.NewNop(), WithControlPlanePublisher(capture), WithBackupVerificationExecutor(executor))
+	reactor.backupRegistry = registry
+	request := signedLLMRequest(t, requestKey, KindBackupVerificationRequest, fmt.Sprintf(`{"backup_run_id":"%s","mode":"kopia_snapshot_verify"}`, run.ID), nostr.Tags{{"d", "verify:daily"}, {"backup_run_id", run.ID.String()}, {"verification_mode", "kopia_snapshot_verify"}})
+
+	reactor.handleBackupVerificationRequest(ctx, request)
+
+	var verificationID uuid.UUID
+	select {
+	case verificationID = <-executor.calls:
+	case <-time.After(time.Second):
+		t.Fatal("backup verification executor was not invoked")
+	}
+	verification := registry.verificationByID(verificationID)
+	if verification == nil || verification.BackupRunID != run.ID || verification.Status != domain.BackupVerificationPending || verification.Evidence["nostr_request_pubkey"] != requestPubkey {
+		t.Fatalf("verification was not recorded from request: %#v", verification)
+	}
+	if len(capture.events) != 1 || capture.events[0].Kind != KindBackupVerificationResult {
+		t.Fatalf("result events = %#v", capture.events)
+	}
+	assertReactorTag(t, capture.events[0].Tags, "verification_id", verificationID.String())
+	assertSignedEvent(t, capture.events[0])
+}
+
 func TestHandleBackupRetentionRequestCreatesDurableRunAndInvokesExecutor(t *testing.T) {
 	ctx := context.Background()
 	requestKey := nostr.GeneratePrivateKey()
@@ -178,7 +396,7 @@ func TestBackupRequestSubscriptionIncludesBackupRunKind(t *testing.T) {
 	if len(filters) == 0 {
 		t.Fatal("expected subscription filters")
 	}
-	for _, want := range []int{KindBackupRunRequest, KindBackupRestoreRequest, KindBackupRestoreApproval, KindBackupRetentionEnforce} {
+	for _, want := range backupRequestKinds() {
 		found := false
 		for _, kind := range filters[0].Kinds {
 			if kind == want {
@@ -262,6 +480,20 @@ func (e *recordingBackupRetentionExecutor) ProcessBackupRetentionRun(_ context.C
 	return nil
 }
 
+type recordingBackupVerificationExecutor struct{ calls chan uuid.UUID }
+
+func (e *recordingBackupVerificationExecutor) ProcessBackupVerification(_ context.Context, verificationID uuid.UUID) error {
+	e.calls <- verificationID
+	return nil
+}
+
+type recordingBackupRepositoryProbeExecutor struct{ calls chan uuid.UUID }
+
+func (e *recordingBackupRepositoryProbeExecutor) ProcessBackupRepositoryProbe(_ context.Context, repositoryID uuid.UUID, _ string) error {
+	e.calls <- repositoryID
+	return nil
+}
+
 type recordingBackupRunResponder struct{ statusSteps []string }
 
 func (r *recordingBackupRunResponder) PublishBackupRunStatus(_ context.Context, _ *domain.BackupRun, step, _ string) error {
@@ -306,6 +538,7 @@ type backupRequestRegistry struct {
 	runs            map[uuid.UUID]*domain.BackupRun
 	coordinates     map[string]uuid.UUID
 	verifications   map[uuid.UUID]*domain.BackupVerificationRecord
+	definitions     map[uuid.UUID]*domain.BackupDefinition
 	restores        map[uuid.UUID]*domain.BackupRestoreRun
 	restoreCoords   map[string]uuid.UUID
 	retentionRuns   map[uuid.UUID]*domain.BackupRetentionRun
@@ -316,7 +549,7 @@ func newBackupRequestRegistryFixture() (*backupRequestRegistry, *domain.BackupRe
 	repoID := uuid.New()
 	policyID := uuid.New()
 	recipeID := uuid.New()
-	registry := &backupRequestRegistry{recipes: map[uuid.UUID]*domain.BackupRecipe{}, repositories: map[uuid.UUID]*domain.BackupRepository{}, policies: map[uuid.UUID]*domain.BackupPolicy{}, runs: map[uuid.UUID]*domain.BackupRun{}, coordinates: map[string]uuid.UUID{}, verifications: map[uuid.UUID]*domain.BackupVerificationRecord{}, restores: map[uuid.UUID]*domain.BackupRestoreRun{}, restoreCoords: map[string]uuid.UUID{}, retentionRuns: map[uuid.UUID]*domain.BackupRetentionRun{}, retentionCoords: map[string]uuid.UUID{}}
+	registry := &backupRequestRegistry{recipes: map[uuid.UUID]*domain.BackupRecipe{}, repositories: map[uuid.UUID]*domain.BackupRepository{}, policies: map[uuid.UUID]*domain.BackupPolicy{}, runs: map[uuid.UUID]*domain.BackupRun{}, coordinates: map[string]uuid.UUID{}, verifications: map[uuid.UUID]*domain.BackupVerificationRecord{}, definitions: map[uuid.UUID]*domain.BackupDefinition{}, restores: map[uuid.UUID]*domain.BackupRestoreRun{}, restoreCoords: map[string]uuid.UUID{}, retentionRuns: map[uuid.UUID]*domain.BackupRetentionRun{}, retentionCoords: map[string]uuid.UUID{}}
 	registry.repositories[repoID] = &domain.BackupRepository{ID: repoID, Name: "primary", Backend: domain.BackupBackendKopia, RepositoryURI: "kopia://primary"}
 	registry.policies[policyID] = &domain.BackupPolicy{ID: policyID, Name: "verified", RequireVerification: true, VerificationMode: domain.BackupVerificationKopiaSnapshotVerify}
 	registry.recipes[recipeID] = &domain.BackupRecipe{ID: recipeID, Name: "daily", Version: "v1", Backend: domain.BackupBackendKopia, RepositoryID: repoID, PolicyID: &policyID, TargetRef: "fs:/srv/data", VerificationMode: domain.BackupVerificationNone}
@@ -337,8 +570,70 @@ func (r *backupRequestRegistry) GetRecipeByNameVersion(_ context.Context, name, 
 func (r *backupRequestRegistry) GetRepository(_ context.Context, id uuid.UUID) (*domain.BackupRepository, error) {
 	return r.repositories[id], nil
 }
+func (r *backupRequestRegistry) GetRepositoryByName(_ context.Context, name string) (*domain.BackupRepository, error) {
+	return r.repositoryByName(name), nil
+}
+func (r *backupRequestRegistry) CreateOrUpdateRepository(_ context.Context, repo *domain.BackupRepository) error {
+	if err := domain.ValidateBackupRepository(repo); err != nil {
+		return err
+	}
+	if repo.ID == uuid.Nil {
+		repo.ID = uuid.New()
+	}
+	cp := *repo
+	r.repositories[cp.ID] = &cp
+	return nil
+}
 func (r *backupRequestRegistry) GetPolicy(_ context.Context, id uuid.UUID) (*domain.BackupPolicy, error) {
 	return r.policies[id], nil
+}
+func (r *backupRequestRegistry) GetPolicyByName(_ context.Context, name string) (*domain.BackupPolicy, error) {
+	return r.policyByName(name), nil
+}
+func (r *backupRequestRegistry) CreateOrUpdatePolicy(_ context.Context, policy *domain.BackupPolicy) error {
+	if err := domain.ValidateBackupPolicy(policy); err != nil {
+		return err
+	}
+	if policy.ID == uuid.Nil {
+		policy.ID = uuid.New()
+	}
+	cp := *policy
+	r.policies[cp.ID] = &cp
+	return nil
+}
+func (r *backupRequestRegistry) CreateOrUpdateRecipe(_ context.Context, recipe *domain.BackupRecipe) error {
+	if err := domain.ValidateBackupRecipe(recipe); err != nil {
+		return err
+	}
+	if r.repositories[recipe.RepositoryID] == nil {
+		return fmt.Errorf("repository missing")
+	}
+	if recipe.PolicyID != nil && r.policies[*recipe.PolicyID] == nil {
+		return fmt.Errorf("policy missing")
+	}
+	if recipe.ID == uuid.Nil {
+		recipe.ID = uuid.New()
+	}
+	cp := *recipe
+	r.recipes[cp.ID] = &cp
+	return nil
+}
+func (r *backupRequestRegistry) UpsertBackupDefinition(_ context.Context, definition *domain.BackupDefinition) error {
+	if err := domain.ValidateBackupDefinition(definition); err != nil {
+		return err
+	}
+	if definition.ID == uuid.Nil {
+		definition.ID = uuid.New()
+	}
+	cp := *definition
+	r.definitions[cp.ID] = &cp
+	return nil
+}
+func (r *backupRequestRegistry) GetBackupDefinitionByName(_ context.Context, name string) (*domain.BackupDefinition, error) {
+	return r.definitionByName(name), nil
+}
+func (r *backupRequestRegistry) GetBackupRun(_ context.Context, id uuid.UUID) (*domain.BackupRun, error) {
+	return r.runs[id], nil
 }
 func (r *backupRequestRegistry) CreateBackupRunIfAbsent(_ context.Context, run *domain.BackupRun) (*domain.BackupRun, bool, error) {
 	key := backupCoordinate(run.RequestedBy, run.RequestKind, run.RequestDTag)
@@ -352,6 +647,17 @@ func (r *backupRequestRegistry) CreateBackupRunIfAbsent(_ context.Context, run *
 }
 func (r *backupRequestRegistry) GetBackupVerificationByRunID(_ context.Context, runID uuid.UUID) (*domain.BackupVerificationRecord, error) {
 	return r.verifications[runID], nil
+}
+func (r *backupRequestRegistry) RecordBackupVerification(_ context.Context, record *domain.BackupVerificationRecord) error {
+	if err := domain.ValidateBackupVerificationRecord(record); err != nil {
+		return err
+	}
+	cp := *record
+	r.verifications[cp.BackupRunID] = &cp
+	if run := r.runs[cp.BackupRunID]; run != nil {
+		run.VerificationStatus = cp.Status
+	}
+	return nil
 }
 
 func (r *backupRequestRegistry) CreateBackupRestoreIfAbsent(_ context.Context, restore *domain.BackupRestoreRun) (*domain.BackupRestoreRun, bool, error) {
@@ -421,6 +727,42 @@ func (r *backupRequestRegistry) addRestoreEligibleRun() *domain.BackupRun {
 func (r *backupRequestRegistry) firstRecipe() *domain.BackupRecipe {
 	for _, recipe := range r.recipes {
 		return recipe
+	}
+	return nil
+}
+
+func (r *backupRequestRegistry) repositoryByName(name string) *domain.BackupRepository {
+	for _, repo := range r.repositories {
+		if repo.Name == name {
+			return repo
+		}
+	}
+	return nil
+}
+
+func (r *backupRequestRegistry) policyByName(name string) *domain.BackupPolicy {
+	for _, policy := range r.policies {
+		if policy.Name == name {
+			return policy
+		}
+	}
+	return nil
+}
+
+func (r *backupRequestRegistry) definitionByName(name string) *domain.BackupDefinition {
+	for _, definition := range r.definitions {
+		if definition.Name == name {
+			return definition
+		}
+	}
+	return nil
+}
+
+func (r *backupRequestRegistry) verificationByID(id uuid.UUID) *domain.BackupVerificationRecord {
+	for _, verification := range r.verifications {
+		if verification.ID == id {
+			return verification
+		}
 	}
 	return nil
 }

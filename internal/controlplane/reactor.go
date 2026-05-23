@@ -177,28 +177,31 @@ type Reactor struct {
 	backoff     *nostrpool.Backoff
 	caughtUp    atomic.Bool
 
-	toolProvisioning         repository.ToolProvisioningRepository
-	toolResponder            *ToolResponder
-	toolCoordinator          *service.ToolProvisioningCoordinator
-	policyService            *service.PolicyService
-	adoption                 AdoptionOperatorService
-	runtimeLifecycle         RuntimeLifecycleOperatorService
-	packageService           *service.PackageRegistryService
-	packageProjection        repository.PackageControlPlaneRepository
-	workerRepo               repository.WorkerRepository
-	mlExecutor               MLInferenceControlPlaneExecutor
-	mlRecipeExecutor         MLRecipeControlPlaneExecutor
-	nostrEvents              repository.NostrEventRepository
-	assistantOrchestrator    *service.AssistantOrchestrator
-	dnsOperator              DNSControlPlaneOperator
-	backupRegistry           backupRunRegistry
-	backupExecutor           BackupRunControlPlaneExecutor
-	backupResponder          service.BackupRunResponder
-	backupRestoreExecutor    BackupRestoreControlPlaneExecutor
-	backupRestoreResponder   service.BackupRestoreResponder
-	backupRetentionExecutor  BackupRetentionControlPlaneExecutor
-	backupRetentionResponder service.BackupRetentionResponder
-	eventBus                 events.Publisher
+	toolProvisioning              repository.ToolProvisioningRepository
+	toolResponder                 *ToolResponder
+	toolCoordinator               *service.ToolProvisioningCoordinator
+	policyService                 *service.PolicyService
+	adoption                      AdoptionOperatorService
+	runtimeLifecycle              RuntimeLifecycleOperatorService
+	packageService                *service.PackageRegistryService
+	packageProjection             repository.PackageControlPlaneRepository
+	workerRepo                    repository.WorkerRepository
+	mlExecutor                    MLInferenceControlPlaneExecutor
+	mlRecipeExecutor              MLRecipeControlPlaneExecutor
+	nostrEvents                   repository.NostrEventRepository
+	assistantOrchestrator         *service.AssistantOrchestrator
+	dnsOperator                   DNSControlPlaneOperator
+	backupRegistry                backupRunRegistry
+	backupExecutor                BackupRunControlPlaneExecutor
+	backupResponder               service.BackupRunResponder
+	backupRestoreExecutor         BackupRestoreControlPlaneExecutor
+	backupRestoreResponder        service.BackupRestoreResponder
+	backupRetentionExecutor       BackupRetentionControlPlaneExecutor
+	backupRetentionResponder      service.BackupRetentionResponder
+	backupDefinitionRegistry      BackupDefinitionApplyRegistry
+	backupVerificationExecutor    BackupVerificationControlPlaneExecutor
+	backupRepositoryProbeExecutor BackupRepositoryProbeControlPlaneExecutor
+	eventBus                      events.Publisher
 
 	mu   sync.Mutex
 	runs map[string]*DeploymentRun // requestEventID -> run
@@ -278,6 +281,18 @@ func WithBackupRetentionExecutor(executor BackupRetentionControlPlaneExecutor) R
 
 func WithBackupRetentionResponder(responder service.BackupRetentionResponder) ReactorOption {
 	return func(r *Reactor) { r.backupRetentionResponder = responder }
+}
+
+func WithBackupDefinitionRegistry(registry BackupDefinitionApplyRegistry) ReactorOption {
+	return func(r *Reactor) { r.backupDefinitionRegistry = registry }
+}
+
+func WithBackupVerificationExecutor(executor BackupVerificationControlPlaneExecutor) ReactorOption {
+	return func(r *Reactor) { r.backupVerificationExecutor = executor }
+}
+
+func WithBackupRepositoryProbeExecutor(executor BackupRepositoryProbeControlPlaneExecutor) ReactorOption {
+	return func(r *Reactor) { r.backupRepositoryProbeExecutor = executor }
 }
 
 func WithToolProvisioningRepository(repo repository.ToolProvisioningRepository) ReactorOption {
@@ -586,12 +601,24 @@ func (r *Reactor) handleEvent(ctx context.Context, event *nostr.Event) {
 		go r.handleMLModelImportRequest(ctx, event)
 	case KindBackupRunRequest:
 		go r.handleBackupRunRequest(ctx, event)
+	case KindBackupVerificationRequest:
+		go r.handleBackupVerificationRequest(ctx, event)
 	case KindBackupRestoreRequest:
 		go r.handleBackupRestoreRequest(ctx, event)
 	case KindBackupRestoreApproval:
 		go r.handleBackupRestoreApproval(ctx, event)
 	case KindBackupRetentionEnforce:
 		go r.handleBackupRetentionRequest(ctx, event)
+	case KindBackupRepositoryRegister:
+		go r.handleBackupRepositoryRegisterRequest(ctx, event)
+	case KindBackupPolicyApply:
+		go r.handleBackupPolicyApplyRequest(ctx, event)
+	case KindBackupRecipeApply:
+		go r.handleBackupRecipeApplyRequest(ctx, event)
+	case KindBackupDefinitionApply:
+		go r.handleBackupDefinitionApplyRequest(ctx, event)
+	case KindBackupRepositoryProbe:
+		go r.handleBackupRepositoryProbeRequest(ctx, event)
 	case nostrpool.KindContinuityProfile:
 		go r.handleContinuityProfileDefinition(ctx, event)
 	case nostrpool.KindFailoverPolicy:
@@ -1883,9 +1910,15 @@ func defaultRequestSubscriptionKinds() []int {
 		KindMLInferenceRollbackRequest,
 		KindMLModelImportRequest,
 		KindBackupRunRequest,
+		KindBackupVerificationRequest,
 		KindBackupRestoreRequest,
 		KindBackupRestoreApproval,
 		KindBackupRetentionEnforce,
+		KindBackupRepositoryRegister,
+		KindBackupPolicyApply,
+		KindBackupRecipeApply,
+		KindBackupDefinitionApply,
+		KindBackupRepositoryProbe,
 		nostrpool.KindContinuityProfile,
 		nostrpool.KindFailoverPolicy,
 		nostrpool.KindStandbyNodeDefinition,

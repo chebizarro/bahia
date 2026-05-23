@@ -1,0 +1,22 @@
+{
+  "feature_id": "bahia-8jzf",
+  "title": "Backup registry mutation handlers",
+  "status": "implemented",
+  "source_plan": "docs/plans/bahia-backup-control-plane-implementation-2026-05-23.md#phase-1--complete-the-missing-control-plane-command-surface",
+  "observed_behavior": [
+    "Before this slice, the reactor handled backup run, restore, restore approval, and retention request kinds only.",
+    "backupRequestKinds() omitted the reserved repository register, policy apply, recipe apply, definition apply, repository probe, and verification request kinds."
+  ],
+  "intended_behavior": [
+    "Authorized addressable backup command events for the six missing reserved request kinds are parsed, validated, handled, and answered with signed Nostr result events.",
+    "Backup repository, policy, recipe, and definition apply requests mutate the backup registry through control-plane handlers.",
+    "Backup repository probe and verification requests validate targets, publish queued results, and invoke configured control-plane executors without polling or timeout-based completion logic."
+  ],
+  "scope": [
+    "internal/controlplane/backup_registry_handlers.go",
+    "internal/controlplane/backup_kinds.go",
+    "internal/controlplane/reactor.go",
+    "internal/controlplane/backup_handlers.go",
+    "internal/controlplane/reactor_backup_requests_test.go"
+  ]
+}

@@ -268,7 +268,7 @@ func (r *Reactor) publishBackupCommandFailure(ctx context.Context, requestEvent 
 }
 
 func appendBackupRequestTags(tags nostr.Tags, requestEvent *nostr.Event) nostr.Tags {
-	allowed := map[string]struct{}{"recipe": {}, "recipe_id": {}, "run": {}, "backup_run_id": {}, "restore": {}, "restore_id": {}, "policy": {}, "policy_id": {}, "repository": {}, "repository_id": {}, "target": {}, "backend": {}, "site": {}, "environment": {}, "worker": {}, "verification": {}, "decision": {}}
+	allowed := map[string]struct{}{"recipe": {}, "recipe_id": {}, "recipe_name": {}, "recipe_version": {}, "run": {}, "backup_run_id": {}, "restore": {}, "restore_id": {}, "retention": {}, "retention_run_id": {}, "verification": {}, "verification_id": {}, "verification_mode": {}, "verification_status": {}, "definition": {}, "definition_id": {}, "policy": {}, "policy_id": {}, "repository": {}, "repository_id": {}, "repository_uri": {}, "target": {}, "backend": {}, "site": {}, "environment": {}, "worker": {}, "decision": {}}
 	for _, tag := range requestEvent.Tags {
 		if len(tag) < 2 {
 			continue
