@@ -163,8 +163,8 @@ func TestSelectWorker_FastestStrategy(t *testing.T) {
 func TestSelectWorker_NearestStrategy(t *testing.T) {
 	repo := &mockWorkerRepo{
 		workers: []domain.Worker{
-			makeWorker("pk-far", "far", 0, 10, "u0000", "linux/amd64"),    // different region
-			makeWorker("pk-near", "near", 0, 10, "9q8yy", "linux/amd64"), // same region as reference
+			makeWorker("pk-far", "far", 0, 10, "u0000", "linux/amd64"),        // different region
+			makeWorker("pk-near", "near", 0, 10, "9q8yy", "linux/amd64"),      // same region as reference
 			makeWorker("pk-closer", "closer", 0, 10, "9q8yyk", "linux/amd64"), // closer prefix match
 		},
 	}
@@ -534,7 +534,7 @@ func TestSelectWorker_ReputationStrategy_FasterWorkerBonus(t *testing.T) {
 	tracker := NewJobStatsTracker(100)
 	// Both have 100% success rate but different speeds
 	for i := 0; i < 10; i++ {
-		tracker.RecordJobCompletion("pk-fast", 20000, true) // 20s avg
+		tracker.RecordJobCompletion("pk-fast", 20000, true)  // 20s avg
 		tracker.RecordJobCompletion("pk-slow", 120000, true) // 120s avg
 	}
 	svc.SetJobStatsTracker(tracker)
@@ -614,6 +614,64 @@ func TestRankWorkers(t *testing.T) {
 			t.Errorf("rank[%d].Score (%.2f) > rank[%d].Score (%.2f) — not sorted descending",
 				i, ranked[i].Score, i-1, ranked[i-1].Score)
 		}
+	}
+}
+
+func TestSelectWorker_ExcludesNonActiveSchedulingStates(t *testing.T) {
+	cordoned := makeWorker("pk-cordoned", "cordoned", 0, 1, "", "linux/amd64")
+	cordoned.SchedulingState = domain.WorkerSchedulingCordoned
+	draining := makeWorker("pk-draining", "draining", 0, 1, "", "linux/amd64")
+	draining.SchedulingState = domain.WorkerSchedulingDraining
+	maintenance := makeWorker("pk-maintenance", "maintenance", 0, 1, "", "linux/amd64")
+	maintenance.SchedulingState = domain.WorkerSchedulingMaintenance
+	disabled := makeWorker("pk-disabled", "disabled", 0, 1, "", "linux/amd64")
+	disabled.SchedulingState = domain.WorkerSchedulingDisabled
+	active := makeWorker("pk-active", "active", 0, 100, "", "linux/amd64")
+	active.SchedulingState = domain.WorkerSchedulingActive
+
+	repo := &mockWorkerRepo{workers: []domain.Worker{cordoned, draining, maintenance, disabled, active}}
+	svc := NewWorkerPolicyService(repo, zap.NewNop())
+
+	result, err := svc.SelectWorker(context.Background(), makeEnv(map[string]any{"strategy": "cheapest"}))
+	if err != nil {
+		t.Fatalf("select worker: %v", err)
+	}
+	if result.Worker.PubKey != "pk-active" {
+		t.Fatalf("expected only active worker to be selected, got %s", result.Worker.PubKey)
+	}
+}
+
+func TestRankWorkers_IncludesSchedulingRejectionReasons(t *testing.T) {
+	active := makeWorker("pk-active", "active", 0, 10, "", "linux/amd64")
+	active.SchedulingState = domain.WorkerSchedulingActive
+	cordoned := makeWorker("pk-cordoned", "cordoned", 0, 1, "", "linux/amd64")
+	cordoned.SchedulingState = domain.WorkerSchedulingCordoned
+	draining := makeWorker("pk-draining", "draining", 0, 1, "", "linux/amd64")
+	draining.SchedulingState = domain.WorkerSchedulingDraining
+
+	repo := &mockWorkerRepo{workers: []domain.Worker{cordoned, draining, active}}
+	svc := NewWorkerPolicyService(repo, zap.NewNop())
+
+	ranked, err := svc.RankWorkers(context.Background(), makeEnv(map[string]any{"strategy": "cheapest"}))
+	if err != nil {
+		t.Fatalf("rank workers: %v", err)
+	}
+	if len(ranked) != 3 {
+		t.Fatalf("expected active and rejected workers in rank output, got %d", len(ranked))
+	}
+	if !ranked[0].Eligible || ranked[0].Worker.PubKey != "pk-active" {
+		t.Fatalf("expected active worker ranked first, got %#v", ranked[0])
+	}
+
+	reasonsByPubKey := map[string]string{}
+	for _, scored := range ranked {
+		reasonsByPubKey[scored.Worker.PubKey] = scored.Reason
+	}
+	if reasonsByPubKey["pk-cordoned"] != "worker is cordoned" {
+		t.Fatalf("expected cordoned rejection reason, got %q", reasonsByPubKey["pk-cordoned"])
+	}
+	if reasonsByPubKey["pk-draining"] != "worker is draining" {
+		t.Fatalf("expected draining rejection reason, got %q", reasonsByPubKey["pk-draining"])
 	}
 }
 

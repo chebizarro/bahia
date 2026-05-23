@@ -25,12 +25,13 @@ type MLPlacementRequest struct {
 	MaxPrice          int
 }
 
-// MLPlacementCandidate is the selected worker/runtime target.
+// MLPlacementCandidate describes a worker/runtime target and its placement eligibility.
 type MLPlacementCandidate struct {
 	RuntimeKind domain.MLRuntimeKind `json:"runtime_kind"`
 	Worker      *domain.Worker       `json:"worker"`
 	Score       float64              `json:"score"`
 	Reason      string               `json:"reason"`
+	Eligible    bool                 `json:"eligible"`
 }
 
 // MLPlacementService filters and scores normalized worker AI/ML capabilities.
@@ -47,37 +48,52 @@ func NewMLPlacementService(workerRepo repository.WorkerRepository, logger *zap.L
 }
 
 func (s *MLPlacementService) SelectCandidate(ctx context.Context, req MLPlacementRequest) (*MLPlacementCandidate, error) {
-	if req.RuntimeKind == "" || !req.RuntimeKind.IsValid() {
-		return nil, fmt.Errorf("unsupported or missing ML runtime %q", req.RuntimeKind)
+	candidates, err := s.PreviewCandidates(ctx, req)
+	if err != nil {
+		return nil, err
 	}
-	if req.TaskKind != "" && !req.TaskKind.IsValid() {
-		return nil, fmt.Errorf("unsupported ML task %q", req.TaskKind)
-	}
-	for _, format := range req.ArtifactFormats {
-		if !format.IsValid() {
-			return nil, fmt.Errorf("unsupported ML artifact format %q", format)
+
+	var rejected []string
+	for i := range candidates {
+		if candidates[i].Eligible {
+			best := candidates[i]
+			s.logger.Info("ML placement selected", zap.String("runtime", string(best.RuntimeKind)), zap.String("worker", best.Worker.PubKey), zap.String("reason", best.Reason))
+			return &best, nil
 		}
+		rejected = append(rejected, candidates[i].Reason)
+	}
+
+	return nil, fmt.Errorf("no compatible ML placement target found (%s)", strings.Join(compactReasons(rejected), "; "))
+}
+
+// PreviewCandidates returns eligible and rejected ML placement candidates with
+// operator-visible reasons. New placements must only use candidates marked
+// Eligible; rejected entries are retained for preview/read-model projection.
+func (s *MLPlacementService) PreviewCandidates(ctx context.Context, req MLPlacementRequest) ([]MLPlacementCandidate, error) {
+	if err := validateMLPlacementRequest(req); err != nil {
+		return nil, err
 	}
 
 	workers, err := s.workerRepo.List(ctx, string(domain.WorkerStatusOnline), 500)
 	if err != nil {
 		return nil, fmt.Errorf("listing online workers: %w", err)
 	}
-	var candidates []MLPlacementCandidate
-	var rejected []string
+
+	candidates := make([]MLPlacementCandidate, 0, len(workers))
 	for i := range workers {
 		w := &workers[i]
 		candidate, reason, ok := scoreMLWorker(w, req)
 		if !ok {
-			rejected = append(rejected, reason)
+			candidates = append(candidates, MLPlacementCandidate{RuntimeKind: req.RuntimeKind, Worker: w, Score: 0, Reason: reason, Eligible: false})
 			continue
 		}
 		candidates = append(candidates, candidate)
 	}
-	if len(candidates) == 0 {
-		return nil, fmt.Errorf("no compatible ML placement target found (%s)", strings.Join(compactReasons(rejected), "; "))
-	}
+
 	sort.SliceStable(candidates, func(i, j int) bool {
+		if candidates[i].Eligible != candidates[j].Eligible {
+			return candidates[i].Eligible
+		}
 		if candidates[i].Score != candidates[j].Score {
 			return candidates[i].Score > candidates[j].Score
 		}
@@ -89,12 +105,29 @@ func (s *MLPlacementService) SelectCandidate(ctx context.Context, req MLPlacemen
 		}
 		return candidates[i].Worker.PubKey < candidates[j].Worker.PubKey
 	})
-	best := candidates[0]
-	s.logger.Info("ML placement selected", zap.String("runtime", string(best.RuntimeKind)), zap.String("worker", best.Worker.PubKey), zap.String("reason", best.Reason))
-	return &best, nil
+
+	return candidates, nil
+}
+
+func validateMLPlacementRequest(req MLPlacementRequest) error {
+	if req.RuntimeKind == "" || !req.RuntimeKind.IsValid() {
+		return fmt.Errorf("unsupported or missing ML runtime %q", req.RuntimeKind)
+	}
+	if req.TaskKind != "" && !req.TaskKind.IsValid() {
+		return fmt.Errorf("unsupported ML task %q", req.TaskKind)
+	}
+	for _, format := range req.ArtifactFormats {
+		if !format.IsValid() {
+			return fmt.Errorf("unsupported ML artifact format %q", format)
+		}
+	}
+	return nil
 }
 
 func scoreMLWorker(w *domain.Worker, req MLPlacementRequest) (MLPlacementCandidate, string, bool) {
+	if !workerSchedulingStateAllowsNewPlacement(w.SchedulingState) {
+		return MLPlacementCandidate{}, fmt.Sprintf("%s rejected: %s", w.Name, workerSchedulingStateRejectionReason(w.SchedulingState)), false
+	}
 	if w.RuntimeTarget == nil || strings.TrimSpace(w.RuntimeTarget.PublicBaseURL) == "" {
 		return MLPlacementCandidate{}, fmt.Sprintf("%s rejected: runtime target missing", w.Name), false
 	}
@@ -140,7 +173,7 @@ func scoreMLWorker(w *domain.Worker, req MLPlacementRequest) (MLPlacementCandida
 	if req.CachedArtifact != "" && containsNormalizedString(caps.CachedArtifacts, req.CachedArtifact) {
 		score += 1000
 	}
-	return MLPlacementCandidate{RuntimeKind: req.RuntimeKind, Worker: w, Score: score, Reason: fmt.Sprintf("worker %s satisfies ML placement requirements", w.Name)}, "", true
+	return MLPlacementCandidate{RuntimeKind: req.RuntimeKind, Worker: w, Score: score, Reason: fmt.Sprintf("worker %s satisfies ML placement requirements", w.Name), Eligible: true}, "", true
 }
 
 func containsRuntime(values []domain.MLRuntimeKind, want domain.MLRuntimeKind) bool {

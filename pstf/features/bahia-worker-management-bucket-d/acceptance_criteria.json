@@ -1,0 +1,38 @@
+{
+  "feature_id": "bahia-worker-management-bucket-d",
+  "criteria": [
+    {
+      "id": "AC-9DB7-001",
+      "bead": "bahia-9db7",
+      "statement": "WorkerPolicyService.SelectWorker excludes workers whose SchedulingState is cordoned, draining, maintenance, disabled, or otherwise not active from new placements.",
+      "tests": [
+        "TestSelectWorker_ExcludesNonActiveSchedulingStates"
+      ]
+    },
+    {
+      "id": "AC-9DB7-002",
+      "bead": "bahia-9db7",
+      "statement": "WorkerPolicyService.RankWorkers retains rejected workers with operator-visible reasons such as 'worker is cordoned' and 'worker is draining'.",
+      "tests": [
+        "TestRankWorkers_IncludesSchedulingRejectionReasons"
+      ]
+    },
+    {
+      "id": "AC-7OMD-001",
+      "bead": "bahia-7omd",
+      "statement": "MLPlacementService.SelectCandidate excludes workers whose SchedulingState is not active from new inference placements.",
+      "tests": [
+        "TestMLPlacementRejectsNonActiveSchedulingStates",
+        "TestMLPlacementRejectsEveryNonActiveSchedulingStateWithReason"
+      ]
+    },
+    {
+      "id": "AC-7OMD-002",
+      "bead": "bahia-7omd",
+      "statement": "MLPlacementService preview candidate data includes rejected non-active workers and exposes scheduling rejection reasons for read-model/operator visibility.",
+      "tests": [
+        "TestMLPlacementPreviewIncludesSchedulingRejectionReason"
+      ]
+    }
+  ]
+}

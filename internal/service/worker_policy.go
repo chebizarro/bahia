@@ -46,9 +46,10 @@ type WorkerPolicy struct {
 
 // ScoredWorker pairs a worker with a selection score.
 type ScoredWorker struct {
-	Worker domain.Worker
-	Score  float64
-	Reason string
+	Worker   domain.Worker `json:"worker"`
+	Score    float64       `json:"score"`
+	Reason   string        `json:"reason"`
+	Eligible bool          `json:"eligible"`
 }
 
 // WorkerPolicyService selects workers based on environment-specific policies.
@@ -84,7 +85,7 @@ func (s *WorkerPolicyService) SelectWorker(ctx context.Context, env *domain.Envi
 		return nil, fmt.Errorf("no online workers available")
 	}
 
-	// Apply filters.
+	// Apply hard scheduling and policy filters.
 	filtered := s.filterWorkers(workers, policy, env)
 	if len(filtered) == 0 {
 		return nil, fmt.Errorf("no workers match the selection policy (strategy=%s, %d online workers filtered out)",
@@ -112,8 +113,10 @@ func (s *WorkerPolicyService) SelectWorker(ctx context.Context, env *domain.Envi
 	return &best, nil
 }
 
-// RankWorkers returns all scored workers for a given environment, sorted best-first.
-// Useful for debugging and UI display.
+// RankWorkers returns all online workers for a given environment, sorted best-first.
+// Eligible workers are scored normally. Ineligible workers are retained with
+// exclusion reasons so preview/read-model callers can explain why a worker will
+// not receive new placements.
 func (s *WorkerPolicyService) RankWorkers(ctx context.Context, env *domain.Environment) ([]ScoredWorker, error) {
 	policy := s.extractPolicy(env)
 
@@ -122,14 +125,29 @@ func (s *WorkerPolicyService) RankWorkers(ctx context.Context, env *domain.Envir
 		return nil, fmt.Errorf("listing online workers: %w", err)
 	}
 
-	filtered := s.filterWorkers(workers, policy, env)
-	scored := s.scoreWorkers(filtered, policy)
+	var eligibleWorkers []domain.Worker
+	ranked := make([]ScoredWorker, 0, len(workers))
+	for _, w := range workers {
+		if reason, ok := s.workerEligibilityRejectionReason(w, policy, env); !ok {
+			ranked = append(ranked, ScoredWorker{Worker: w, Score: 0, Reason: reason, Eligible: false})
+			continue
+		}
+		eligibleWorkers = append(eligibleWorkers, w)
+	}
 
-	sort.Slice(scored, func(i, j int) bool {
-		return scored[i].Score > scored[j].Score
+	ranked = append(ranked, s.scoreWorkers(eligibleWorkers, policy)...)
+
+	sort.Slice(ranked, func(i, j int) bool {
+		if ranked[i].Eligible != ranked[j].Eligible {
+			return ranked[i].Eligible
+		}
+		if ranked[i].Score != ranked[j].Score {
+			return ranked[i].Score > ranked[j].Score
+		}
+		return ranked[i].Worker.PubKey < ranked[j].Worker.PubKey
 	})
 
-	return scored, nil
+	return ranked, nil
 }
 
 // extractPolicy reads the WorkerPolicy from environment.RuntimeConfig["worker_policy"].
@@ -191,43 +209,46 @@ func (s *WorkerPolicyService) extractPolicy(env *domain.Environment) WorkerPolic
 
 // filterWorkers removes workers that don't meet hard constraints.
 func (s *WorkerPolicyService) filterWorkers(workers []domain.Worker, policy WorkerPolicy, env *domain.Environment) []domain.Worker {
-	excludeSet := make(map[string]bool)
-	for _, pk := range policy.ExcludeWorkers {
-		excludeSet[pk] = true
-	}
-
 	var result []domain.Worker
 	for _, w := range workers {
-		// Skip excluded workers.
-		if excludeSet[w.PubKey] {
+		if _, ok := s.workerEligibilityRejectionReason(w, policy, env); !ok {
 			continue
 		}
-
-		// Skip workers above max queue depth.
-		if policy.MaxQueueDepth > 0 && w.CurrentQueueDepth > policy.MaxQueueDepth {
-			continue
-		}
-
-		// Skip workers above max price.
-		if policy.MaxPrice > 0 && !s.workerUnderPrice(w, policy.MaxPrice) {
-			continue
-		}
-
-		// Skip workers missing required software.
-		if !s.hasRequiredSoftware(w, policy.RequireSoftware) {
-			continue
-		}
-
-		// For preferred strategy, apply loom_worker_selector match.
-		if policy.Strategy == StrategyPreferred && env != nil {
-			if !matchesSelector(w, env.LoomWorkerSelector) {
-				continue
-			}
-		}
-
 		result = append(result, w)
 	}
 	return result
+}
+
+func (s *WorkerPolicyService) workerEligibilityRejectionReason(w domain.Worker, policy WorkerPolicy, env *domain.Environment) (string, bool) {
+	if !workerSchedulingStateAllowsNewPlacement(w.SchedulingState) {
+		return workerSchedulingStateRejectionReason(w.SchedulingState), false
+	}
+
+	for _, pk := range policy.ExcludeWorkers {
+		if pk == w.PubKey {
+			return "worker excluded by policy", false
+		}
+	}
+
+	if policy.MaxQueueDepth > 0 && w.CurrentQueueDepth > policy.MaxQueueDepth {
+		return fmt.Sprintf("worker queue depth %d exceeds max %d", w.CurrentQueueDepth, policy.MaxQueueDepth), false
+	}
+
+	if policy.MaxPrice > 0 && !s.workerUnderPrice(w, policy.MaxPrice) {
+		return fmt.Sprintf("worker price %d exceeds max %d", lowestPrice(w), policy.MaxPrice), false
+	}
+
+	for _, req := range policy.RequireSoftware {
+		if !w.HasSoftware(req) {
+			return fmt.Sprintf("worker missing required software %s", req), false
+		}
+	}
+
+	if policy.Strategy == StrategyPreferred && env != nil && !matchesSelector(w, env.LoomWorkerSelector) {
+		return "worker does not match selector", false
+	}
+
+	return "", true
 }
 
 // scoreWorkers assigns a score to each worker based on the strategy.
@@ -254,9 +275,10 @@ func (s *WorkerPolicyService) scoreWorkers(workers []domain.Worker, policy Worke
 		}
 
 		scored[i] = ScoredWorker{
-			Worker: w,
-			Score:  score,
-			Reason: reason,
+			Worker:   w,
+			Score:    score,
+			Reason:   reason,
+			Eligible: true,
 		}
 	}
 
@@ -321,7 +343,7 @@ func scorePreferred(w domain.Worker) (float64, string) {
 // scoreReputation scores workers based on their job history and performance.
 // Score components:
 //   - Success rate (0-100): 50% weight
-//   - Response time (relative to peers): 25% weight  
+//   - Response time (relative to peers): 25% weight
 //   - Worker experience (job count): 15% weight
 //   - Availability (low queue depth): 10% weight
 func (s *WorkerPolicyService) scoreReputation(w domain.Worker, policy WorkerPolicy) (float64, string) {
@@ -459,13 +481,30 @@ func (s *WorkerPolicyService) workerUnderPrice(w domain.Worker, maxPrice int) bo
 	return price == 0 || price <= maxPrice // free workers always pass
 }
 
-func (s *WorkerPolicyService) hasRequiredSoftware(w domain.Worker, required []string) bool {
-	for _, req := range required {
-		if !w.HasSoftware(req) {
-			return false
-		}
+func workerSchedulingStateAllowsNewPlacement(state domain.WorkerSchedulingState) bool {
+	return normalizedWorkerSchedulingState(state) == domain.WorkerSchedulingActive
+}
+
+func workerSchedulingStateRejectionReason(state domain.WorkerSchedulingState) string {
+	switch normalizedWorkerSchedulingState(state) {
+	case domain.WorkerSchedulingCordoned:
+		return "worker is cordoned"
+	case domain.WorkerSchedulingDraining:
+		return "worker is draining"
+	case domain.WorkerSchedulingMaintenance:
+		return "worker is in maintenance"
+	case domain.WorkerSchedulingDisabled:
+		return "worker is disabled"
+	default:
+		return fmt.Sprintf("worker scheduling state %q is not active", state)
 	}
-	return true
+}
+
+func normalizedWorkerSchedulingState(state domain.WorkerSchedulingState) domain.WorkerSchedulingState {
+	if state == "" {
+		return domain.WorkerSchedulingActive
+	}
+	return state
 }
 
 func geohashCommonPrefix(a, b string) int {

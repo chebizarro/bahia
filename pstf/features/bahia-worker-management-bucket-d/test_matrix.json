@@ -1,0 +1,46 @@
+{
+  "feature_id": "bahia-worker-management-bucket-d",
+  "test_matrix": [
+    {
+      "test": "TestSelectWorker_ExcludesNonActiveSchedulingStates",
+      "acceptance_criteria": [
+        "AC-9DB7-001"
+      ],
+      "type": "service unit",
+      "determinism": "in-memory worker repository; direct selection assertion; no sleeps, network, or relay timing"
+    },
+    {
+      "test": "TestRankWorkers_IncludesSchedulingRejectionReasons",
+      "acceptance_criteria": [
+        "AC-9DB7-002"
+      ],
+      "type": "service unit",
+      "determinism": "in-memory worker repository; direct rank output assertions for eligible flags and reasons"
+    },
+    {
+      "test": "TestMLPlacementRejectsNonActiveSchedulingStates",
+      "acceptance_criteria": [
+        "AC-7OMD-001"
+      ],
+      "type": "service unit",
+      "determinism": "in-memory worker repository; direct candidate selection assertion; no sleeps, network, or relay timing"
+    },
+    {
+      "test": "TestMLPlacementPreviewIncludesSchedulingRejectionReason",
+      "acceptance_criteria": [
+        "AC-7OMD-002"
+      ],
+      "type": "service unit",
+      "determinism": "in-memory worker repository; direct preview candidate assertions for eligible flags and reasons"
+    },
+    {
+      "test": "TestMLPlacementRejectsEveryNonActiveSchedulingStateWithReason",
+      "acceptance_criteria": [
+        "AC-7OMD-001",
+        "AC-7OMD-002"
+      ],
+      "type": "service unit",
+      "determinism": "table-driven in-memory worker repository assertions for cordoned, draining, maintenance, disabled, and unknown states"
+    }
+  ]
+}

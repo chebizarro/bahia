@@ -1,0 +1,24 @@
+{
+  "feature_id": "bahia-worker-management-bucket-d",
+  "title": "Worker scheduling enforcement in placement services",
+  "plan": "docs/plans/bahia-worker-management-nostr-native-2026-05-22.md",
+  "beads": [
+    "bahia-9db7",
+    "bahia-7omd"
+  ],
+  "observed_behavior_before": [
+    "Generic WorkerPolicyService filtered only liveness-online workers and policy constraints; operator SchedulingState did not prevent new placements.",
+    "MLPlacementService filtered only liveness-online workers and ML compatibility constraints; operator SchedulingState did not prevent new inference placements."
+  ],
+  "intended_behavior": [
+    "Only workers with active scheduling state are eligible for new generic worker placements.",
+    "Only workers with active scheduling state are eligible for new ML inference placements.",
+    "Cordoned, draining, maintenance, disabled, and unknown scheduling states are rejected with operator-visible reasons.",
+    "Ranking/preview outputs retain rejected workers with reasons so UI/read-model projections can explain placement decisions."
+  ],
+  "out_of_scope": [
+    "Frontend/Svelte changes",
+    "Controlplane command kinds, publishers, reactor handlers, or projections",
+    "Pinned-worker or rollout policy support"
+  ]
+}
