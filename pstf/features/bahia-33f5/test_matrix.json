@@ -1,0 +1,12 @@
+{
+  "feature_id": "bahia-33f5",
+  "tests": [
+    {"name": "TestValidateContinuityRecipeAcceptsFailoverRecipeWithTrigger", "criteria": ["AC1"]},
+    {"name": "TestValidateContinuityRecipeAcceptsRecoveryRecipeWithoutTrigger", "criteria": ["AC1"]},
+    {"name": "TestValidateContinuityRecipeRequiresNameAndServiceKey", "criteria": ["AC2"]},
+    {"name": "TestValidateContinuityRecipeRequiresFailoverTrigger", "criteria": ["AC2"]},
+    {"name": "TestValidateContinuityRecipeRequiresSteps", "criteria": ["AC2"]},
+    {"name": "TestValidateContinuityRecipeRejectsInvalidStepAction", "criteria": ["AC3"]},
+    {"name": "TestContinuityRecipeKindAndActionsValidateSupportedValues", "criteria": ["AC3"]}
+  ]
+}

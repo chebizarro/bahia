@@ -1,0 +1,20 @@
+{
+  "feature_id": "bahia-33f5",
+  "criteria": [
+    {
+      "id": "AC1",
+      "description": "ContinuityRecipe supports failover and recovery kinds with recipe identity, service key, optional trigger, ordered steps, update timestamp, and source event ID.",
+      "tests": ["TestValidateContinuityRecipeAcceptsFailoverRecipeWithTrigger", "TestValidateContinuityRecipeAcceptsRecoveryRecipeWithoutTrigger"]
+    },
+    {
+      "id": "AC2",
+      "description": "Validation rejects recipes without name, service key, or steps, and rejects failover recipes without a trigger.",
+      "tests": ["TestValidateContinuityRecipeRequiresNameAndServiceKey", "TestValidateContinuityRecipeRequiresFailoverTrigger", "TestValidateContinuityRecipeRequiresSteps"]
+    },
+    {
+      "id": "AC3",
+      "description": "Validation accepts only the supported continuity recipe step actions.",
+      "tests": ["TestValidateContinuityRecipeRejectsInvalidStepAction", "TestContinuityRecipeKindAndActionsValidateSupportedValues"]
+    }
+  ]
+}

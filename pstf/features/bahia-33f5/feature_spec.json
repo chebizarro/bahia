@@ -1,0 +1,11 @@
+{
+  "feature_id": "bahia-33f5",
+  "title": "Continuity failover and recovery recipe domain types",
+  "intent": "Define a unified domain contract for failover and recovery recipes so later continuity engines can validate and execute event-sourced recipe definitions.",
+  "observed_behavior": "No continuity recipe domain model existed before this change.",
+  "intended_behavior": "The domain package exposes one ContinuityRecipe type with failover/recovery kinds, optional recovery/manual trigger semantics, ordered recipe steps, source event metadata, and validation for required recipe identity and supported step actions.",
+  "scope": [
+    "internal/domain/failover.go",
+    "internal/domain/failover_test.go"
+  ]
+}
