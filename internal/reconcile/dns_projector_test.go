@@ -282,6 +282,145 @@ func TestDNSProjectorContinuityOfflineOmitsServiceEndpoint(t *testing.T) {
 	}
 }
 
+func TestDNSProjectorPolicyExcludeRemovesMatchedEndpoint(t *testing.T) {
+	projector := newDNSPolicyServiceProjector(t, "prod", "api", "10.0.0.10")
+	projector.SetPolicySource(fakeDNSPolicySource{policies: []domain.DNSPolicy{{
+		ID:      uuid.New(),
+		Name:    "exclude-prod",
+		Enabled: true,
+		Rules:   []domain.DNSPolicyRule{{Match: domain.DNSPolicyMatch{Environment: "prod"}, Action: domain.DNSPolicyAction{Exclude: true}}},
+	}}})
+
+	recordsByZone, err := projector.ProjectZoneRecords(context.Background())
+	if err != nil {
+		t.Fatalf("ProjectZoneRecords returned error: %v", err)
+	}
+	assertNoRecord(t, recordsByZone["prod.example"], "api.prod.example", domain.DNSRecordTypeA, "10.0.0.10")
+}
+
+func TestDNSProjectorPolicyVisibilityOverrideReroutesEndpoint(t *testing.T) {
+	projector := newDNSPolicyServiceProjector(t, "prod", "api", "10.0.0.10")
+	projector.SetPolicySource(fakeDNSPolicySource{policies: []domain.DNSPolicy{{
+		ID:      uuid.New(),
+		Name:    "edge-api",
+		Enabled: true,
+		Rules:   []domain.DNSPolicyRule{{Match: domain.DNSPolicyMatch{Environment: "prod"}, Action: domain.DNSPolicyAction{Visibility: domain.ZoneVisibilityEdge}}},
+	}}})
+
+	recordsByZone, err := projector.ProjectZoneRecords(context.Background())
+	if err != nil {
+		t.Fatalf("ProjectZoneRecords returned error: %v", err)
+	}
+	assertNoRecord(t, recordsByZone["prod.example"], "api.prod.example", domain.DNSRecordTypeA, "10.0.0.10")
+	assertRecord(t, recordsByZone["edge.example"], "api.edge.example", domain.DNSRecordTypeA, "10.0.0.10")
+}
+
+func TestDNSProjectorPolicyTTLOverrideChangesRecordTTL(t *testing.T) {
+	projector := newDNSPolicyServiceProjector(t, "prod", "api", "10.0.0.10")
+	ttl := 42
+	projector.SetPolicySource(fakeDNSPolicySource{policies: []domain.DNSPolicy{{
+		ID:      uuid.New(),
+		Name:    "short-api-ttl",
+		Enabled: true,
+		Rules:   []domain.DNSPolicyRule{{Match: domain.DNSPolicyMatch{Environment: "prod"}, Action: domain.DNSPolicyAction{TTLOverride: &ttl}}},
+	}}})
+
+	recordsByZone, err := projector.ProjectZoneRecords(context.Background())
+	if err != nil {
+		t.Fatalf("ProjectZoneRecords returned error: %v", err)
+	}
+	record := findRecord(t, recordsByZone["prod.example"], "api.prod.example", domain.DNSRecordTypeA, "10.0.0.10")
+	if record.TTL != ttl {
+		t.Fatalf("record TTL = %d, want %d", record.TTL, ttl)
+	}
+}
+
+func TestDNSProjectorPolicyMatchingCriteria(t *testing.T) {
+	t.Run("capability", func(t *testing.T) {
+		projector := newDNSPolicyWorkerProjector(domain.Worker{
+			PubKey: "worker-capability", Name: "gpu-node", Status: domain.WorkerStatusOnline,
+			RuntimeTarget:  &domain.WorkerRuntimeTarget{Type: domain.RuntimeTypeCompose, PublicBaseURL: "http://10.0.1.10:9000"},
+			MLCapabilities: domain.WorkerMLCapabilities{Tasks: []domain.MLTaskKind{domain.MLTaskKindChatCompletions}},
+		})
+		projector.SetPolicySource(fakeDNSPolicySource{policies: []domain.DNSPolicy{{ID: uuid.New(), Name: "exclude-chat", Enabled: true, Rules: []domain.DNSPolicyRule{{Match: domain.DNSPolicyMatch{Capabilities: []string{string(domain.MLTaskKindChatCompletions)}}, Action: domain.DNSPolicyAction{Exclude: true}}}}}})
+		recordsByZone, err := projector.ProjectZoneRecords(context.Background())
+		if err != nil {
+			t.Fatalf("ProjectZoneRecords returned error: %v", err)
+		}
+		assertNoRecord(t, recordsByZone["edge.example"], "gpu-node.edge.example", domain.DNSRecordTypeA, "10.0.1.10")
+	})
+	t.Run("hardware", func(t *testing.T) {
+		projector := newDNSPolicyWorkerProjector(domain.Worker{
+			PubKey: "worker-hardware", Name: "gpu-node", Status: domain.WorkerStatusOnline,
+			RuntimeTarget: &domain.WorkerRuntimeTarget{Type: domain.RuntimeTypeCompose, PublicBaseURL: "http://10.0.1.11:9000"},
+			Accelerators:  []domain.WorkerAccelerator{{Vendor: "NVIDIA", Model: "L40S", Driver: "cuda"}},
+		})
+		projector.SetPolicySource(fakeDNSPolicySource{policies: []domain.DNSPolicy{{ID: uuid.New(), Name: "exclude-l40s", Enabled: true, Rules: []domain.DNSPolicyRule{{Match: domain.DNSPolicyMatch{Hardware: []string{"l40s"}}, Action: domain.DNSPolicyAction{Exclude: true}}}}}})
+		recordsByZone, err := projector.ProjectZoneRecords(context.Background())
+		if err != nil {
+			t.Fatalf("ProjectZoneRecords returned error: %v", err)
+		}
+		assertNoRecord(t, recordsByZone["edge.example"], "gpu-node.edge.example", domain.DNSRecordTypeA, "10.0.1.11")
+	})
+	t.Run("environment", func(t *testing.T) {
+		projector := newDNSPolicyServiceProjector(t, "prod", "api", "10.0.0.10")
+		projector.SetPolicySource(fakeDNSPolicySource{policies: []domain.DNSPolicy{{ID: uuid.New(), Name: "exclude-prod", Enabled: true, Rules: []domain.DNSPolicyRule{{Match: domain.DNSPolicyMatch{Environment: "prod"}, Action: domain.DNSPolicyAction{Exclude: true}}}}}})
+		recordsByZone, err := projector.ProjectZoneRecords(context.Background())
+		if err != nil {
+			t.Fatalf("ProjectZoneRecords returned error: %v", err)
+		}
+		assertNoRecord(t, recordsByZone["prod.example"], "api.prod.example", domain.DNSRecordTypeA, "10.0.0.10")
+	})
+}
+
+func TestDNSProjectorPolicyANDLogicRequiresAllCriteria(t *testing.T) {
+	projector := newDNSPolicyServiceProjector(t, "prod", "api", "10.0.0.10")
+	projector.SetPolicySource(fakeDNSPolicySource{policies: []domain.DNSPolicy{{
+		ID:      uuid.New(),
+		Name:    "prod-kubernetes-only",
+		Enabled: true,
+		Rules:   []domain.DNSPolicyRule{{Match: domain.DNSPolicyMatch{Environment: "prod", Runtime: string(domain.RuntimeTypeK8s)}, Action: domain.DNSPolicyAction{Exclude: true}}},
+	}}})
+
+	recordsByZone, err := projector.ProjectZoneRecords(context.Background())
+	if err != nil {
+		t.Fatalf("ProjectZoneRecords returned error: %v", err)
+	}
+	assertRecord(t, recordsByZone["prod.example"], "api.prod.example", domain.DNSRecordTypeA, "10.0.0.10")
+}
+
+func TestDNSProjectorZoneScopedPolicyOnlyAppliesToEndpointInThatZone(t *testing.T) {
+	projector := newDNSPolicyServiceProjector(t, "prod", "api", "10.0.0.10")
+	stagingZoneID := dnsPolicyZoneID("staging.example")
+	projector.SetPolicySource(fakeDNSPolicySource{policies: []domain.DNSPolicy{{
+		ID:      uuid.New(),
+		Name:    "exclude-staging",
+		ZoneID:  &stagingZoneID,
+		Enabled: true,
+		Rules:   []domain.DNSPolicyRule{{Match: domain.DNSPolicyMatch{Environment: "prod"}, Action: domain.DNSPolicyAction{Exclude: true}}},
+	}}})
+
+	recordsByZone, err := projector.ProjectZoneRecords(context.Background())
+	if err != nil {
+		t.Fatalf("ProjectZoneRecords returned error: %v", err)
+	}
+	assertRecord(t, recordsByZone["prod.example"], "api.prod.example", domain.DNSRecordTypeA, "10.0.0.10")
+}
+
+func TestDNSProjectorNoPoliciesDoesNotChangeEndpoints(t *testing.T) {
+	projector := newDNSPolicyServiceProjector(t, "prod", "api", "10.0.0.10")
+	projector.SetPolicySource(fakeDNSPolicySource{})
+
+	recordsByZone, err := projector.ProjectZoneRecords(context.Background())
+	if err != nil {
+		t.Fatalf("ProjectZoneRecords returned error: %v", err)
+	}
+	record := findRecord(t, recordsByZone["prod.example"], "api.prod.example", domain.DNSRecordTypeA, "10.0.0.10")
+	if record.TTL != 120 {
+		t.Fatalf("record TTL = %d, want zone TTL 120", record.TTL)
+	}
+}
+
 func assertEndpoint(t *testing.T, endpoints []domain.DNSEndpoint, family domain.DNSEndpointFamily, name, address string) {
 	t.Helper()
 	for _, endpoint := range endpoints {
@@ -294,12 +433,18 @@ func assertEndpoint(t *testing.T, endpoints []domain.DNSEndpoint, family domain.
 
 func assertRecord(t *testing.T, records []domain.DNSRecord, fqdn string, recordType domain.DNSRecordType, value string) {
 	t.Helper()
+	_ = findRecord(t, records, fqdn, recordType, value)
+}
+
+func findRecord(t *testing.T, records []domain.DNSRecord, fqdn string, recordType domain.DNSRecordType, value string) domain.DNSRecord {
+	t.Helper()
 	for _, record := range records {
 		if record.FQDN == fqdn && record.Type == recordType && record.Value == value {
-			return
+			return record
 		}
 	}
 	t.Fatalf("missing record fqdn=%s type=%s value=%s in %#v", fqdn, recordType, value, records)
+	return domain.DNSRecord{}
 }
 
 func assertNoRecord(t *testing.T, records []domain.DNSRecord, fqdn string, recordType domain.DNSRecordType, value string) {
@@ -334,6 +479,41 @@ func testDNSConfig() config.DNSConfig {
 		},
 		Projection: config.DNSProjectionConfig{Services: true, LLMRoutes: true, MLEndpoints: true, Workers: true, EnvironmentZones: map[string]string{"prod": "prod.example"}, WorkerZone: "edge.example"},
 	}
+}
+
+func newDNSPolicyServiceProjector(t *testing.T, environmentName, serviceName, address string) *DNSProjector {
+	t.Helper()
+	envID := uuid.New()
+	serviceID := uuid.New()
+	cfg := testDNSConfig()
+	cfg.Projection = config.DNSProjectionConfig{Services: true, EnvironmentZones: map[string]string{environmentName: "prod.example"}, WorkerZone: "edge.example"}
+	return NewDNSProjector(
+		&fakeServiceRepo{services: []domain.Service{{ID: serviceID, Name: serviceName, RuntimeType: domain.RuntimeTypeDocker}}},
+		&fakeEnvironmentRepo{environments: []domain.Environment{{ID: envID, Name: environmentName}}},
+		&fakeStateRepo{states: []domain.EnvironmentServiceState{{ServiceID: serviceID, EnvironmentID: envID, DriftStatus: domain.DriftStatusInSync}}},
+		&fakeObservationRepo{latest: map[string]*domain.RuntimeObservation{dnsTestStateKey(serviceID, envID): {ServiceID: serviceID, EnvironmentID: envID, ObservedHost: address, HealthStatus: domain.HealthStatusHealthy}}},
+		nil,
+		nil,
+		nil,
+		cfg,
+		nil,
+	)
+}
+
+func newDNSPolicyWorkerProjector(worker domain.Worker) *DNSProjector {
+	cfg := testDNSConfig()
+	cfg.Projection = config.DNSProjectionConfig{Workers: true, WorkerZone: "edge.example"}
+	return NewDNSProjector(
+		&fakeServiceRepo{},
+		&fakeEnvironmentRepo{},
+		&fakeStateRepo{},
+		&fakeObservationRepo{},
+		nil,
+		nil,
+		&fakeWorkerSource{workers: []domain.Worker{worker}},
+		cfg,
+		nil,
+	)
 }
 
 type fakeServiceRepo struct{ services []domain.Service }
@@ -479,6 +659,24 @@ type fakeWorkerSource struct {
 
 func (s *fakeWorkerSource) List(context.Context, string, int) ([]domain.Worker, error) {
 	return s.workers, s.err
+}
+
+type fakeDNSPolicySource struct {
+	policies []domain.DNSPolicy
+	err      error
+}
+
+func (s fakeDNSPolicySource) ListEnabledPolicies(context.Context) ([]domain.DNSPolicy, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	out := make([]domain.DNSPolicy, 0, len(s.policies))
+	for _, policy := range s.policies {
+		if policy.Enabled {
+			out = append(out, policy)
+		}
+	}
+	return out, nil
 }
 
 type fakeContinuityStatusReader map[string]ContinuityStatus

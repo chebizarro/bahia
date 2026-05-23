@@ -34,6 +34,11 @@ type WorkerDNSProjectionSource interface {
 	List(ctx context.Context, status string, limit int) ([]domain.Worker, error)
 }
 
+// DNSPolicySource exposes enabled DNS policies to the DNS projector.
+type DNSPolicySource interface {
+	ListEnabledPolicies(ctx context.Context) ([]domain.DNSPolicy, error)
+}
+
 // ContinuityStatus describes the active continuity projection for a service.
 type ContinuityStatus struct {
 	ServiceKey         string
@@ -56,20 +61,29 @@ type DNSProjector struct {
 	llmSource        LLMDNSProjectionSource
 	mlSource         MLDNSProjectionSource
 	workers          WorkerDNSProjectionSource
+	policySource     DNSPolicySource
 	continuityStatus ContinuityStatusReader
 	cfg              config.DNSConfig
 	logger           *zap.Logger
 }
 
-func NewDNSProjector(services repository.ServiceRepository, environments repository.EnvironmentRepository, states repository.EnvironmentServiceStateRepository, observations repository.RuntimeObservationRepository, llmSource LLMDNSProjectionSource, mlSource MLDNSProjectionSource, workers WorkerDNSProjectionSource, cfg config.DNSConfig, logger *zap.Logger) *DNSProjector {
+func NewDNSProjector(services repository.ServiceRepository, environments repository.EnvironmentRepository, states repository.EnvironmentServiceStateRepository, observations repository.RuntimeObservationRepository, llmSource LLMDNSProjectionSource, mlSource MLDNSProjectionSource, workers WorkerDNSProjectionSource, cfg config.DNSConfig, logger *zap.Logger, policySources ...DNSPolicySource) *DNSProjector {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
-	return &DNSProjector{services: services, environments: environments, states: states, observations: observations, llmSource: llmSource, mlSource: mlSource, workers: workers, cfg: cfg, logger: logger}
+	var policySource DNSPolicySource
+	if len(policySources) > 0 {
+		policySource = policySources[0]
+	}
+	return &DNSProjector{services: services, environments: environments, states: states, observations: observations, llmSource: llmSource, mlSource: mlSource, workers: workers, policySource: policySource, cfg: cfg, logger: logger}
 }
 
 func (p *DNSProjector) SetContinuityStatusReader(reader ContinuityStatusReader) {
 	p.continuityStatus = reader
+}
+
+func (p *DNSProjector) SetPolicySource(source DNSPolicySource) {
+	p.policySource = source
 }
 
 func (p *DNSProjector) ListDNSEndpoints(ctx context.Context) ([]domain.DNSEndpoint, error) {
@@ -120,10 +134,17 @@ func (p *DNSProjector) ProjectZoneRecords(ctx context.Context) (map[string][]dom
 	if err != nil {
 		return nil, err
 	}
+	endpoints, err = p.applyPolicies(ctx, endpoints)
+	if err != nil {
+		return nil, err
+	}
 	ttls := p.zoneTTLs()
 	recordsByZone := make(map[string][]domain.DNSRecord)
 	for _, endpoint := range endpoints {
-		ttl := ttls[endpoint.Zone]
+		ttl := dnsEndpointTTLOverride(endpoint)
+		if ttl <= 0 {
+			ttl = ttls[endpoint.Zone]
+		}
 		if ttl <= 0 {
 			ttl = p.cfg.DefaultTTL
 		}
@@ -142,7 +163,10 @@ func (p *DNSProjector) ProjectZoneRecords(ctx context.Context) (map[string][]dom
 		if endpoint.Family == domain.DNSEndpointFamilyML && endpoint.Port != nil {
 			srvName := srvRecordName(endpoint.Protocol, endpoint.Name)
 			priority := 10
-			weight := 100
+			weight := 100 + dnsEndpointWeightBias(endpoint)
+			if weight < 0 {
+				weight = 0
+			}
 			recordsByZone[endpoint.Zone] = append(recordsByZone[endpoint.Zone], domain.DNSRecord{
 				Zone:             endpoint.Zone,
 				Name:             srvName,
@@ -509,6 +533,223 @@ func (p *DNSProjector) zoneTTLs() map[string]int {
 		out[strings.TrimSpace(zone.Name)] = zone.TTL
 	}
 	return out
+}
+
+func (p *DNSProjector) applyPolicies(ctx context.Context, endpoints []domain.DNSEndpoint) ([]domain.DNSEndpoint, error) {
+	if p.policySource == nil || len(endpoints) == 0 {
+		return endpoints, nil
+	}
+	policies, err := p.policySource.ListEnabledPolicies(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list enabled DNS policies: %w", err)
+	}
+	if len(policies) == 0 {
+		return endpoints, nil
+	}
+	zonePolicies := make([]domain.DNSPolicy, 0, len(policies))
+	globalPolicies := make([]domain.DNSPolicy, 0, len(policies))
+	for _, policy := range policies {
+		if !policy.Enabled {
+			continue
+		}
+		if policy.ZoneID != nil {
+			zonePolicies = append(zonePolicies, policy)
+			continue
+		}
+		globalPolicies = append(globalPolicies, policy)
+	}
+
+	out := make([]domain.DNSEndpoint, 0, len(endpoints))
+	for _, endpoint := range endpoints {
+		current := endpoint
+		excluded := false
+		for _, policy := range zonePolicies {
+			if !dnsPolicyAppliesToEndpointZone(policy, current) {
+				continue
+			}
+			var ok bool
+			current, ok = p.applyPolicy(current, policy)
+			if !ok {
+				excluded = true
+				break
+			}
+		}
+		if excluded {
+			continue
+		}
+		for _, policy := range globalPolicies {
+			var ok bool
+			current, ok = p.applyPolicy(current, policy)
+			if !ok {
+				excluded = true
+				break
+			}
+		}
+		if !excluded {
+			out = append(out, current)
+		}
+	}
+	return out, nil
+}
+
+func (p *DNSProjector) applyPolicy(endpoint domain.DNSEndpoint, policy domain.DNSPolicy) (domain.DNSEndpoint, bool) {
+	for _, rule := range policy.Rules {
+		if !dnsPolicyRuleMatches(endpoint, rule.Match) {
+			continue
+		}
+		if rule.Action.Exclude {
+			return endpoint, false
+		}
+		return p.applyDNSPolicyAction(endpoint, rule.Action), true
+	}
+	return endpoint, true
+}
+
+func (p *DNSProjector) applyDNSPolicyAction(endpoint domain.DNSEndpoint, action domain.DNSPolicyAction) domain.DNSEndpoint {
+	if action.Visibility != "" {
+		if zone, ok := p.zoneForVisibility(action.Visibility); ok {
+			endpoint.Zone = zone
+			endpoint.FQDN = fqdn(endpoint.Name, zone)
+		} else {
+			p.logger.Warn("DNS policy visibility action skipped because no zone has matching visibility", zap.String("visibility", string(action.Visibility)), zap.String("endpoint", endpoint.Coordinate))
+		}
+	}
+	if action.TTLOverride != nil {
+		endpoint.Metadata = dnsEndpointMetadataWithInt(endpoint.Metadata, "policy_ttl_override", *action.TTLOverride)
+	}
+	if action.WeightBias != nil {
+		endpoint.Metadata = dnsEndpointMetadataWithInt(endpoint.Metadata, "policy_weight_bias", *action.WeightBias)
+	}
+	return endpoint
+}
+
+func (p *DNSProjector) zoneForVisibility(visibility domain.ZoneVisibility) (string, bool) {
+	for _, zone := range p.cfg.Zones {
+		if domain.ZoneVisibility(strings.TrimSpace(zone.Visibility)) == visibility {
+			name := strings.TrimSpace(zone.Name)
+			return name, name != ""
+		}
+	}
+	return "", false
+}
+
+func dnsPolicyRuleMatches(endpoint domain.DNSEndpoint, match domain.DNSPolicyMatch) bool {
+	for _, capability := range match.Capabilities {
+		if !dnsEndpointHasCapability(endpoint, capability) {
+			return false
+		}
+	}
+	if len(match.Hardware) > 0 && !dnsEndpointHasHardware(endpoint, match.Hardware) {
+		return false
+	}
+	if match.Environment != "" && strings.TrimSpace(endpoint.Environment) != strings.TrimSpace(match.Environment) {
+		return false
+	}
+	if match.Runtime != "" && strings.TrimSpace(endpoint.Runtime) != strings.TrimSpace(match.Runtime) {
+		return false
+	}
+	return true
+}
+
+func dnsEndpointHasCapability(endpoint domain.DNSEndpoint, capability string) bool {
+	capability = strings.ToLower(strings.TrimSpace(capability))
+	if capability == "" {
+		return true
+	}
+	for _, endpointCapability := range endpoint.Capabilities {
+		if strings.ToLower(strings.TrimSpace(endpointCapability)) == capability {
+			return true
+		}
+	}
+	return false
+}
+
+func dnsEndpointHasHardware(endpoint domain.DNSEndpoint, hardware []string) bool {
+	endpointHardware := strings.ToLower(strings.TrimSpace(endpoint.Hardware))
+	if endpointHardware == "" {
+		return false
+	}
+	for _, candidate := range hardware {
+		candidate = strings.ToLower(strings.TrimSpace(candidate))
+		if candidate != "" && strings.Contains(endpointHardware, candidate) {
+			return true
+		}
+	}
+	return false
+}
+
+func dnsPolicyAppliesToEndpointZone(policy domain.DNSPolicy, endpoint domain.DNSEndpoint) bool {
+	if policy.ZoneID == nil {
+		return true
+	}
+	if zoneID, ok := dnsPolicyMetadataString(policy.Metadata, "zone_id"); ok {
+		return zoneID == policy.ZoneID.String() && zoneID == dnsPolicyZoneID(endpoint.Zone).String()
+	}
+	for _, key := range []string{"zone", "zone_name"} {
+		if zone, ok := dnsPolicyMetadataString(policy.Metadata, key); ok && strings.TrimSpace(zone) == strings.TrimSpace(endpoint.Zone) {
+			return true
+		}
+	}
+	return *policy.ZoneID == dnsPolicyZoneID(endpoint.Zone)
+}
+
+func dnsPolicyMetadataString(metadata map[string]any, key string) (string, bool) {
+	if len(metadata) == 0 {
+		return "", false
+	}
+	value, ok := metadata[key]
+	if !ok {
+		return "", false
+	}
+	switch typed := value.(type) {
+	case string:
+		return strings.TrimSpace(typed), strings.TrimSpace(typed) != ""
+	case fmt.Stringer:
+		return strings.TrimSpace(typed.String()), strings.TrimSpace(typed.String()) != ""
+	default:
+		return "", false
+	}
+}
+
+func dnsPolicyZoneID(zone string) uuid.UUID {
+	return uuid.NewSHA1(uuid.NameSpaceOID, []byte("dns-zone:"+strings.TrimSpace(zone)))
+}
+
+func dnsEndpointMetadataWithInt(metadata map[string]any, key string, value int) map[string]any {
+	out := make(map[string]any, len(metadata)+1)
+	for k, v := range metadata {
+		out[k] = v
+	}
+	out[key] = value
+	return out
+}
+
+func dnsEndpointTTLOverride(endpoint domain.DNSEndpoint) int {
+	return intMetadata(endpoint.Metadata, "policy_ttl_override")
+}
+
+func dnsEndpointWeightBias(endpoint domain.DNSEndpoint) int {
+	return intMetadata(endpoint.Metadata, "policy_weight_bias")
+}
+
+func intMetadata(metadata map[string]any, key string) int {
+	if len(metadata) == 0 {
+		return 0
+	}
+	switch value := metadata[key].(type) {
+	case int:
+		return value
+	case int32:
+		return int(value)
+	case int64:
+		return int(value)
+	case float64:
+		return int(value)
+	case float32:
+		return int(value)
+	default:
+		return 0
+	}
 }
 
 func finalizeDNSEndpoints(endpoints []domain.DNSEndpoint) ([]domain.DNSEndpoint, error) {
