@@ -1,0 +1,11 @@
+{
+  "feature_id": "bahia-hlj6",
+  "title": "Worker state kind wire compatibility",
+  "observed_behavior": "KindWorkerState was changed from its original Nostr event kind 31974 to 32020 in worker read-model constants.",
+  "intended_behavior": "KindWorkerState remains on kind 31974 so existing consumers and relays continue receiving worker state events. Newly added worker read-model kinds use separate assigned values after existing occupied replaceable read-model kinds.",
+  "scope": [
+    "internal/controlplane/reactor.go",
+    "internal/adapters/nostr/publisher.go",
+    "worker read-model kind constants"
+  ]
+}

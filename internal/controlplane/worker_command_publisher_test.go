@@ -8,6 +8,15 @@ import (
 	"github.com/nbd-wtf/go-nostr"
 )
 
+func TestWorkerKindConstantsPreserveWireCompatibility(t *testing.T) {
+	if KindWorkerState != 31974 {
+		t.Fatalf("KindWorkerState must remain wire-compatible at kind 31974, got %d", KindWorkerState)
+	}
+	if KindWorkerAssignmentState != 31991 || KindWorkerDrainStatus != 31992 || KindWorkerEligibilityPreview != 31993 {
+		t.Fatalf("unexpected worker read model kinds: assignment=%d drain=%d eligibility=%d", KindWorkerAssignmentState, KindWorkerDrainStatus, KindWorkerEligibilityPreview)
+	}
+}
+
 func TestWorkerCommandPublisherPublishesLifecycleCommandsWithCorrelation(t *testing.T) {
 	ctx := context.Background()
 	capture := &captureNostrPublisher{published: 2}

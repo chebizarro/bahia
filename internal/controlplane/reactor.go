@@ -126,10 +126,10 @@ const (
 	KindPackageRepositoryRegistry = 31971 // Replaceable package repository state (d=repository_id)
 	KindPackageArtifactRegistry   = 31972 // Replaceable package artifact state (d=artifact_id)
 	KindPackagePromotionRegistry  = 31973 // Replaceable package promotion/publication state (d=publication_id)
-	KindWorkerState               = 32020 // Replaceable worker state (d=worker pubkey)
-	KindWorkerAssignmentState     = 32021 // Replaceable worker assignment state (d=worker pubkey)
-	KindWorkerDrainStatus         = 32022 // Replaceable worker drain status (d=worker pubkey)
-	KindWorkerEligibilityPreview  = 32023 // Replaceable worker eligibility preview (d=preview id)
+	KindWorkerState               = 31974 // Replaceable worker state (d=worker pubkey)
+	KindWorkerAssignmentState     = 31991 // Replaceable worker assignment state (d=worker pubkey)
+	KindWorkerDrainStatus         = 31992 // Replaceable worker drain status (d=worker pubkey)
+	KindWorkerEligibilityPreview  = 31993 // Replaceable worker eligibility preview (d=preview id)
 )
 
 // Config holds reactor configuration.

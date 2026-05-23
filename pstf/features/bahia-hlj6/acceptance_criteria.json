@@ -1,0 +1,15 @@
+{
+  "feature_id": "bahia-hlj6",
+  "criteria": [
+    {
+      "id": "AC-001",
+      "description": "KindWorkerState is restored to Nostr kind 31974 for wire compatibility.",
+      "tests": ["TestWorkerKindConstantsPreserveWireCompatibility", "TestWorkerPublisherKindConstantsPreserveWireCompatibility"]
+    },
+    {
+      "id": "AC-002",
+      "description": "New worker read-model kinds do not reuse the temporary 32020-32023 allocation and use sequential values after the existing occupied 319xx read-model range.",
+      "tests": ["TestWorkerKindConstantsPreserveWireCompatibility", "TestWorkerPublisherKindConstantsPreserveWireCompatibility"]
+    }
+  ]
+}

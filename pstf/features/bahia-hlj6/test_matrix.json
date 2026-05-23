@@ -1,0 +1,23 @@
+{
+  "feature_id": "bahia-hlj6",
+  "tests": [
+    {
+      "name": "TestWorkerKindConstantsPreserveWireCompatibility",
+      "package": "./internal/controlplane",
+      "acceptance_criteria": ["AC-001", "AC-002"]
+    },
+    {
+      "name": "TestWorkerPublisherKindConstantsPreserveWireCompatibility",
+      "package": "./internal/adapters/nostr",
+      "acceptance_criteria": ["AC-001", "AC-002"]
+    },
+    {
+      "name": "go test ./internal/controlplane/... ./internal/adapters/nostr/... ./internal/mcp/...",
+      "acceptance_criteria": ["AC-001", "AC-002"]
+    },
+    {
+      "name": "go build ./...",
+      "acceptance_criteria": ["AC-001", "AC-002"]
+    }
+  ]
+}

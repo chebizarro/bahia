@@ -2,6 +2,32 @@ package nostr
 
 import "testing"
 
+func TestWorkerPublisherKindConstantsPreserveWireCompatibility(t *testing.T) {
+	if KindWorkerState != 31974 {
+		t.Fatalf("KindWorkerState must remain wire-compatible at kind 31974, got %d", KindWorkerState)
+	}
+	workerReadModels := map[string]int{
+		"KindWorkerAssignmentState":    KindWorkerAssignmentState,
+		"KindWorkerDrainStatus":        KindWorkerDrainStatus,
+		"KindWorkerEligibilityPreview": KindWorkerEligibilityPreview,
+	}
+	expected := map[string]int{
+		"KindWorkerAssignmentState":    31991,
+		"KindWorkerDrainStatus":        31992,
+		"KindWorkerEligibilityPreview": 31993,
+	}
+	seen := map[int]string{KindWorkerState: "KindWorkerState"}
+	for name, kind := range workerReadModels {
+		if kind != expected[name] {
+			t.Fatalf("%s expected kind %d, got %d", name, expected[name], kind)
+		}
+		if previous, ok := seen[kind]; ok {
+			t.Fatalf("%s collides with %s at kind %d", name, previous, kind)
+		}
+		seen[kind] = name
+	}
+}
+
 func TestDNSPublisherKindConstantsUnique(t *testing.T) {
 	dnsKinds := map[string]int{
 		"KindDNSZoneSyncedAudit":           KindDNSZoneSyncedAudit,
