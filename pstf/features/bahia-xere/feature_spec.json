@@ -1,18 +1,18 @@
 {
   "feature_id": "bahia-xere",
-  "title": "DNS dashboard Nostr relay subscription substrate",
-  "observed_behavior": "The DNS dashboard previously loaded DNS data through Svelte page/store REST reads and treated user refresh as a delivery mechanism.",
-  "intended_behavior": "The DNS dashboard bootstraps DNS read models and DNS audit/drift events from Nostr relays with EOSE-authoritative catch-up, then remains live through scoped subscriptions. REST DNS data fetches and manual refresh delivery are not used.",
+  "title": "DNS dashboard consumes DNS Nostr read models directly",
+  "observed_behavior": "web/src/routes/dns/+page.ts fetched /api/v1/dns/* REST endpoints and web/src/lib/stores/dns.svelte.js exposed REST fetch helpers plus page refresh behavior.",
+  "intended_behavior": "The DNS dashboard opens a long-lived Nostr relay subscription to Bahia DNS read-model kinds 31975, 31976, 31977, and 31978 scoped to the Bahia service pubkey. EVENT frames update UI state, EOSE marks historical catch-up complete, and CLOSED/AUTH conditions are surfaced without REST refreshes.",
   "scope": [
-    "web/src/routes/dns/+page.ts",
-    "web/src/routes/dns/+page.svelte",
     "web/src/lib/stores/dns.svelte.js",
+    "web/src/routes/dns/+page.svelte",
+    "web/src/routes/dns/+page.ts",
     "web/src/lib/nostr/client.js",
-    "web/tests/unit/dns-store-subscriptions.test.js",
-    "web/tests/unit/dns-store-commands.test.js"
+    "web/tests/unit/dns-store-commands.test.js",
+    "web/tests/unit/dns-store-subscriptions.test.js"
   ],
-  "nostr_kinds": {
-    "read_models": [31975, 31976, 31977, 31978],
-    "audit_drift": [31020, 31021, 31022, 31023, 31024]
-  }
+  "out_of_scope": [
+    "Go REST catalog removal",
+    "pkg/discovery resolver fixes"
+  ]
 }

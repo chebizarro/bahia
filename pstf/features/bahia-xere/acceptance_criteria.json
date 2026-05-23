@@ -1,10 +1,42 @@
 {
   "feature_id": "bahia-xere",
   "criteria": [
-    { "id": "AC1", "statement": "DNS dashboard bootstraps zones, endpoints, policies, backends, and drift/audit state with nostr.queryUntilEose before live mode." },
-    { "id": "AC2", "statement": "DNS dashboard keeps live REQ subscriptions open and updates collections from EVENT callbacks without REST DNS data fetches or manual refresh delivery." },
-    { "id": "AC3", "statement": "DNS subscriptions use narrow filters containing DNS kinds and relevant tags such as #t, #family, and #event_type, scoped by Bahia service pubkey when known." },
-    { "id": "AC4", "statement": "Parameterized replaceable DNS read models are deduped by author and d tag; tombstone replacements remove dashboard rows and stale replays do not restore them." },
-    { "id": "AC5", "statement": "CLOSED and AUTH subscription failures are surfaced in visible connection error state." }
+    {
+      "id": "AC1",
+      "statement": "DNS dashboard store has no DNS REST fetch helpers or /api/v1/dns request path.",
+      "tests": [
+        "search: web/src/lib/stores/dns.svelte.js and web/src/routes/dns for /api/v1, fetchZones, fetchEndpoints, fetchDrift, fetchPolicies"
+      ]
+    },
+    {
+      "id": "AC2",
+      "statement": "Dashboard opens a scoped Nostr REQ for kinds 31975, 31976, 31977, and 31978 filtered by Bahia service pubkey and bahia tag.",
+      "tests": [
+        "web/tests/unit/dns-store-commands.test.js",
+        "web/tests/unit/dns-store-subscriptions.test.js"
+      ]
+    },
+    {
+      "id": "AC3",
+      "statement": "Validated EVENT callbacks upsert DNS zones, endpoints, policies, and backends using parameterized replaceable d-tag semantics and tombstones.",
+      "tests": [
+        "web/tests/unit/dns-store-commands.test.js",
+        "web/tests/unit/dns-store-subscriptions.test.js"
+      ]
+    },
+    {
+      "id": "AC4",
+      "statement": "EOSE marks historical catch-up complete and CLOSED/AUTH conditions are represented in visible dashboard state.",
+      "tests": [
+        "web/tests/unit/dns-store-subscriptions.test.js"
+      ]
+    },
+    {
+      "id": "AC5",
+      "statement": "The DNS page removes the manual refresh flow and filters locally over live Nostr state.",
+      "tests": [
+        "npm run build"
+      ]
+    }
   ]
 }

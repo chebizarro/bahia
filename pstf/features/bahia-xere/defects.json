@@ -1,4 +1,19 @@
 {
   "feature_id": "bahia-xere",
-  "defects": []
+  "defects": [
+    {
+      "id": "CRIT-3",
+      "source": "docs/reviews/dns-fips-architectural-audit.md",
+      "status": "fixed",
+      "summary": "Svelte DNS page loaded DNS data from REST endpoints.",
+      "resolution": "Page load now returns relay/pubkey configuration only and the Svelte component starts a Nostr subscription on mount."
+    },
+    {
+      "id": "CRIT-4",
+      "source": "docs/reviews/dns-fips-architectural-audit.md",
+      "status": "fixed",
+      "summary": "DNS store used REST request helpers and manual refresh semantics.",
+      "resolution": "Store now connects to relay metadata and relay WebSocket subscriptions, validates JSON/tag shape, applies replaceable semantics, handles EOSE/CLOSED/AUTH state, and has no DNS REST fetch helpers."
+    }
+  ]
 }
