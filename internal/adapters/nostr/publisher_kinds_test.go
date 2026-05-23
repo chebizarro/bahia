@@ -61,6 +61,53 @@ func TestWorkerPublisherLegacyKindConstantsRemainReadable(t *testing.T) {
 	}
 }
 
+func TestContinuityPublisherKindConstantsUnique(t *testing.T) {
+	continuityKinds := map[string]int{
+		"KindContinuityProfile":      KindContinuityProfile,
+		"KindFailoverPolicy":         KindFailoverPolicy,
+		"KindStandbyNodeDefinition":  KindStandbyNodeDefinition,
+		"KindReplicationPolicy":      KindReplicationPolicy,
+		"KindRecoveryWorkflow":       KindRecoveryWorkflow,
+		"KindHeartbeatObservation":   KindHeartbeatObservation,
+		"KindContinuityStatus":       KindContinuityStatus,
+		"KindDegradedModeActivation": KindDegradedModeActivation,
+		"KindRecoveryProgress":       KindRecoveryProgress,
+		"KindFailoverRequest":        KindFailoverRequest,
+		"KindRecoveryRequest":        KindRecoveryRequest,
+	}
+	expected := map[string]int{
+		"KindContinuityProfile":      31400,
+		"KindFailoverPolicy":         31401,
+		"KindStandbyNodeDefinition":  31402,
+		"KindReplicationPolicy":      31403,
+		"KindRecoveryWorkflow":       31404,
+		"KindHeartbeatObservation":   30350,
+		"KindContinuityStatus":       30351,
+		"KindDegradedModeActivation": 30352,
+		"KindRecoveryProgress":       30353,
+		"KindFailoverRequest":        38430,
+		"KindRecoveryRequest":        38431,
+	}
+	seen := map[int]string{
+		KindWorkerState:              "KindWorkerState",
+		KindWorkerAssignmentState:    "KindWorkerAssignmentState",
+		KindWorkerDrainStatus:        "KindWorkerDrainStatus",
+		KindWorkerEligibilityPreview: "KindWorkerEligibilityPreview",
+		KindBackupDefinitionRegistry: "KindBackupDefinitionRegistry",
+		KindBackupPolicyRegistry:     "KindBackupPolicyRegistry",
+		KindBackupRepositoryRegistry: "KindBackupRepositoryRegistry",
+	}
+	for name, kind := range continuityKinds {
+		if kind != expected[name] {
+			t.Fatalf("%s expected kind %d, got %d", name, expected[name], kind)
+		}
+		if previous, ok := seen[kind]; ok {
+			t.Fatalf("%s collides with %s at kind %d", name, previous, kind)
+		}
+		seen[kind] = name
+	}
+}
+
 func TestDNSPublisherKindConstantsUnique(t *testing.T) {
 	dnsKinds := map[string]int{
 		"KindDNSZoneSyncedAudit":           KindDNSZoneSyncedAudit,

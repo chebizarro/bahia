@@ -86,6 +86,23 @@ const (
 	KindWorkerEligibilityPreview = 32003
 )
 
+// Continuity fabric event kinds. Definition and runtime observation kinds are
+// parameterized replaceable Nostr kinds; command kinds are idempotency-keyed
+// request events consumed by the control-plane reactor.
+const (
+	KindContinuityProfile      = 31400
+	KindFailoverPolicy         = 31401
+	KindStandbyNodeDefinition  = 31402
+	KindReplicationPolicy      = 31403
+	KindRecoveryWorkflow       = 31404
+	KindHeartbeatObservation   = 30350
+	KindContinuityStatus       = 30351
+	KindDegradedModeActivation = 30352
+	KindRecoveryProgress       = 30353
+	KindFailoverRequest        = 38430
+	KindRecoveryRequest        = 38431
+)
+
 // Legacy worker read-model kinds accepted during the mixed-version release
 // window. New publisher/projector paths must use the canonical KindWorker*
 // constants above.

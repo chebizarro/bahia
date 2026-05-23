@@ -20,6 +20,7 @@ import (
 
 	nostrpool "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/events"
 	"github.com/openagentsinc/bahia/internal/repository"
 	"github.com/openagentsinc/bahia/internal/service"
 )
@@ -196,6 +197,7 @@ type Reactor struct {
 	backupRestoreResponder   service.BackupRestoreResponder
 	backupRetentionExecutor  BackupRetentionControlPlaneExecutor
 	backupRetentionResponder service.BackupRetentionResponder
+	eventBus                 events.Publisher
 
 	mu   sync.Mutex
 	runs map[string]*DeploymentRun // requestEventID -> run
@@ -319,6 +321,15 @@ func WithNostrEventRepository(repo repository.NostrEventRepository) ReactorOptio
 	return func(r *Reactor) { r.nostrEvents = repo }
 }
 
+// WithEventPublisher enables reactor handlers to emit in-process domain events.
+func WithEventPublisher(publisher events.Publisher) ReactorOption {
+	return func(r *Reactor) {
+		if publisher != nil {
+			r.eventBus = publisher
+		}
+	}
+}
+
 // WithControlPlanePublisher overrides the result/status publisher, primarily for tests.
 func WithControlPlanePublisher(publisher NostrEventPublisher) ReactorOption {
 	return func(r *Reactor) {
@@ -366,6 +377,7 @@ func NewReactor(config Config, registry *service.RegistryService, pool *nostrpoo
 		zapLog:    zapLog,
 		dedup:     nostrpool.NewEventDeduplicator(10000),
 		backoff:   nostrpool.DefaultBackoff(),
+		eventBus:  &events.NoopPublisher{},
 		runs:      make(map[string]*DeploymentRun),
 	}
 	for _, opt := range opts {
@@ -574,6 +586,22 @@ func (r *Reactor) handleEvent(ctx context.Context, event *nostr.Event) {
 		go r.handleBackupRestoreApproval(ctx, event)
 	case KindBackupRetentionEnforce:
 		go r.handleBackupRetentionRequest(ctx, event)
+	case nostrpool.KindContinuityProfile:
+		go r.handleContinuityProfileDefinition(ctx, event)
+	case nostrpool.KindFailoverPolicy:
+		go r.handleFailoverPolicyDefinition(ctx, event)
+	case nostrpool.KindStandbyNodeDefinition:
+		go r.handleStandbyNodeDefinition(ctx, event)
+	case nostrpool.KindReplicationPolicy:
+		go r.handleReplicationPolicyDefinition(ctx, event)
+	case nostrpool.KindRecoveryWorkflow:
+		go r.handleRecoveryWorkflowDefinition(ctx, event)
+	case nostrpool.KindHeartbeatObservation:
+		go r.handleHeartbeatObservation(ctx, event)
+	case nostrpool.KindFailoverRequest:
+		go r.handleFailoverRequest(ctx, event)
+	case nostrpool.KindRecoveryRequest:
+		go r.handleRecoveryRequest(ctx, event)
 	case KindPackageRepositoryApply:
 		go r.handlePackageRepositoryApply(ctx, event)
 	case KindPackageRepositoryDelete:
@@ -1805,6 +1833,10 @@ func (r *Reactor) buildRequestSubscriptionFilters(since nostr.Timestamp) []nostr
 			Authors: r.subscriptionAuthors(operatorScopeDefault, operatorScopeAdoption),
 			Since:   &since,
 		},
+		{
+			Kinds: []int{nostrpool.KindHeartbeatObservation},
+			Since: &since,
+		},
 	}
 }
 
@@ -1842,6 +1874,13 @@ func defaultRequestSubscriptionKinds() []int {
 		KindBackupRestoreRequest,
 		KindBackupRestoreApproval,
 		KindBackupRetentionEnforce,
+		nostrpool.KindContinuityProfile,
+		nostrpool.KindFailoverPolicy,
+		nostrpool.KindStandbyNodeDefinition,
+		nostrpool.KindReplicationPolicy,
+		nostrpool.KindRecoveryWorkflow,
+		nostrpool.KindFailoverRequest,
+		nostrpool.KindRecoveryRequest,
 		KindPackageRepositoryApply,
 		KindPackageRepositoryDelete,
 		KindPackagePublishIntent,

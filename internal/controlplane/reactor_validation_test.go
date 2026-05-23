@@ -59,13 +59,13 @@ func TestReactorBuildRequestSubscriptionFiltersScopesAuthorsByKind(t *testing.T)
 	}, nil, nostr.NewRelayPool(nil, zap.NewNop()), nil, zap.NewNop())
 
 	filters := r.buildRequestSubscriptionFilters(since)
-	if len(filters) != 3 {
-		t.Fatalf("expected default, service-action, and adoption filters, got %d", len(filters))
+	if len(filters) != 4 {
+		t.Fatalf("expected default, service-action, adoption, and heartbeat filters, got %d", len(filters))
 	}
 
 	defaultFilter := filterWithoutKinds(t, filters, KindServiceAction, KindAdoptionScanRequest, KindAdoptionImportRequest)
 	assertAuthors(t, defaultFilter.Authors, []string{"global"})
-	assertFilterHasKinds(t, defaultFilter, KindDeployRequest, KindRollbackRequest, KindPackageDriftDetect)
+	assertFilterHasKinds(t, defaultFilter, KindDeployRequest, KindRollbackRequest, KindPackageDriftDetect, nostr.KindContinuityProfile, nostr.KindFailoverRequest)
 	assertFilterMissingKinds(t, defaultFilter, KindServiceAction, KindAdoptionScanRequest, KindAdoptionImportRequest)
 
 	serviceActionFilter := filterWithKinds(t, filters, KindServiceAction)
@@ -78,6 +78,13 @@ func TestReactorBuildRequestSubscriptionFiltersScopesAuthorsByKind(t *testing.T)
 	assertFilterHasKinds(t, adoptionFilter, KindAdoptionScanRequest, KindAdoptionImportRequest)
 	assertFilterMissingKinds(t, adoptionFilter, KindServiceAction, KindDeployRequest)
 
+	heartbeatFilter := filterWithKinds(t, filters, nostr.KindHeartbeatObservation)
+	if len(heartbeatFilter.Authors) != 0 {
+		t.Fatalf("heartbeat filter should not be author-scoped, got %v", heartbeatFilter.Authors)
+	}
+	assertFilterHasKinds(t, heartbeatFilter, nostr.KindHeartbeatObservation)
+	assertFilterMissingKinds(t, heartbeatFilter, KindDeployRequest, KindServiceAction)
+
 	for i, filter := range filters {
 		if filter.Since == nil || *filter.Since != since {
 			t.Fatalf("filter %d should preserve shared since cursor %v, got %v", i, since, filter.Since)
@@ -89,13 +96,17 @@ func TestReactorBuildRequestSubscriptionFiltersPreservesGlobalOnlyBehavior(t *te
 	r := NewReactor(Config{AuthorizedPubkeys: []string{"global"}}, nil, nostr.NewRelayPool(nil, zap.NewNop()), nil, zap.NewNop())
 
 	filters := r.buildRequestSubscriptionFilters(gonostr.Timestamp(67890))
-	if len(filters) != 3 {
+	if len(filters) != 4 {
 		t.Fatalf("expected split subscription filters, got %d", len(filters))
 	}
 	for _, filter := range filters {
+		if slices.Contains(filter.Kinds, nostr.KindHeartbeatObservation) {
+			assertAuthors(t, filter.Authors, nil)
+			continue
+		}
 		assertAuthors(t, filter.Authors, []string{"global"})
 	}
-	assertFilterMissingKinds(t, filterWithoutKinds(t, filters, KindServiceAction, KindAdoptionScanRequest, KindAdoptionImportRequest), KindServiceAction, KindAdoptionScanRequest, KindAdoptionImportRequest)
+	assertFilterMissingKinds(t, filterWithoutKinds(t, filters, KindServiceAction, KindAdoptionScanRequest, KindAdoptionImportRequest, nostr.KindHeartbeatObservation), KindServiceAction, KindAdoptionScanRequest, KindAdoptionImportRequest, nostr.KindHeartbeatObservation)
 }
 
 func assertAuthors(t *testing.T, got, want []string) {

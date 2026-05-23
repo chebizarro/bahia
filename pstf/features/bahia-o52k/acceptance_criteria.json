@@ -1,0 +1,25 @@
+{
+  "feature_id": "bahia-o52k",
+  "criteria": [
+    {
+      "id": "AC-001",
+      "description": "Continuity kind constants are present at the assigned values and do not collide with existing hot-file kind families.",
+      "tests": ["TestContinuityPublisherKindConstantsUnique"]
+    },
+    {
+      "id": "AC-002",
+      "description": "Continuity definition and command events serialize required indexed tags and decode into validated domain or wire payloads.",
+      "tests": ["TestContinuityProfileSerializationUsesProfileTagBlocks", "TestFailoverPolicySerializationUsesIndexedTagsAndJSONContent", "TestRecoveryWorkflowSerializationUsesRecoveryRecipeKind", "TestStandbyNodeDefinitionSerializationUsesHostRoleSupportAndProfileTags", "TestReplicationPolicySerializationUsesIndexedTagsAndJSONContent", "TestContinuityCommandSerializationRequiresServiceTargetAndDTag", "TestRecoveryRequestSerializationUsesRecoveryKind"]
+    },
+    {
+      "id": "AC-003",
+      "description": "Heartbeat observations carry worker, sequence, interval, and expiration tags and decode deterministically without sleep-based waiting.",
+      "tests": ["TestHeartbeatObservationSerializationUsesWorkerSequenceAndIntervalTags"]
+    },
+    {
+      "id": "AC-004",
+      "description": "The control-plane reactor subscribes to continuity definition and command kinds using the existing author-scoped control-plane filter while heartbeat observations use a kind-scoped, non-author-scoped filter for worker-originated events.",
+      "tests": ["TestReactorBuildRequestSubscriptionFiltersScopesAuthorsByKind", "TestReactorBuildRequestSubscriptionFiltersPreservesGlobalOnlyBehavior"]
+    }
+  ]
+}

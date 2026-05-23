@@ -1,0 +1,17 @@
+{
+  "feature_id": "bahia-o52k",
+  "tests": [
+    {"name": "TestContinuityPublisherKindConstantsUnique", "acceptance": ["AC-001"], "type": "unit"},
+    {"name": "TestContinuityProfileSerializationUsesProfileTagBlocks", "acceptance": ["AC-002"], "type": "unit"},
+    {"name": "TestContinuityProfileDecodeRejectsBlockTagsBeforeProfile", "acceptance": ["AC-002"], "type": "unit"},
+    {"name": "TestFailoverPolicySerializationUsesIndexedTagsAndJSONContent", "acceptance": ["AC-002"], "type": "unit"},
+    {"name": "TestRecoveryWorkflowSerializationUsesRecoveryRecipeKind", "acceptance": ["AC-002"], "type": "unit"},
+    {"name": "TestStandbyNodeDefinitionSerializationUsesHostRoleSupportAndProfileTags", "acceptance": ["AC-002"], "type": "unit"},
+    {"name": "TestReplicationPolicySerializationUsesIndexedTagsAndJSONContent", "acceptance": ["AC-002"], "type": "unit"},
+    {"name": "TestHeartbeatObservationSerializationUsesWorkerSequenceAndIntervalTags", "acceptance": ["AC-003"], "type": "unit"},
+    {"name": "TestContinuityCommandSerializationRequiresServiceTargetAndDTag", "acceptance": ["AC-002"], "type": "unit"},
+    {"name": "TestRecoveryRequestSerializationUsesRecoveryKind", "acceptance": ["AC-002"], "type": "unit"},
+    {"name": "TestReactorBuildRequestSubscriptionFiltersScopesAuthorsByKind", "acceptance": ["AC-004"], "type": "unit"},
+    {"name": "TestReactorBuildRequestSubscriptionFiltersPreservesGlobalOnlyBehavior", "acceptance": ["AC-004"], "type": "unit"}
+  ]
+}
