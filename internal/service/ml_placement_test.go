@@ -169,6 +169,67 @@ func TestMLPlacementRejectsEveryNonActiveSchedulingStateWithReason(t *testing.T)
 	}
 }
 
+func TestMLPlacementHonorsPinnedWorkerAndShowsPinConflict(t *testing.T) {
+	pinned := mlWorker("pk-pinned", "pinned", 0, mlVLLMCaps())
+	pinned.Accelerators = []domain.WorkerAccelerator{{Vendor: "nvidia", Count: 1, MemoryGB: 16}}
+	other := mlWorker("pk-other", "other", 0, mlVLLMCaps())
+	other.Accelerators = []domain.WorkerAccelerator{{Vendor: "nvidia", Count: 1, MemoryGB: 48}}
+	repo := &mockWorkerRepo{workers: []domain.Worker{pinned, other}}
+	req := MLPlacementRequest{
+		TaskKind:        domain.MLTaskKindChatCompletions,
+		RuntimeKind:     domain.MLRuntimeKindVLLM,
+		ArtifactFormats: []domain.MLArtifactFormat{domain.MLArtifactFormatSafeTensors},
+		Accelerator:     "gpu_nvidia_cuda",
+		MinVRAMGB:       48,
+		PinnedWorker:    "pk-pinned",
+	}
+
+	_, err := NewMLPlacementService(repo, zap.NewNop()).SelectCandidate(t.Context(), req)
+	if err == nil || !strings.Contains(err.Error(), "VRAM below minimum") {
+		t.Fatalf("expected pinned worker compatibility error, got %v", err)
+	}
+	preview, err := NewMLPlacementService(repo, zap.NewNop()).PreviewCandidates(t.Context(), req)
+	if err != nil {
+		t.Fatalf("preview candidates: %v", err)
+	}
+	reasons := map[string]string{}
+	for _, candidate := range preview {
+		reasons[candidate.Worker.PubKey] = candidate.Reason
+	}
+	if !strings.Contains(reasons["pk-pinned"], "VRAM below minimum") {
+		t.Fatalf("expected pinned worker incompatibility reason, got %q", reasons["pk-pinned"])
+	}
+	if !strings.Contains(reasons["pk-other"], "does not match pinned_worker pk-pinned") {
+		t.Fatalf("expected non-pinned rejection reason, got %q", reasons["pk-other"])
+	}
+}
+
+func TestMLPlacementUsesRolloutTargetLabels(t *testing.T) {
+	canary := mlWorker("pk-canary", "canary", 0, mlVLLMCaps())
+	canary.Labels = map[string]string{"track": "canary", "role": "inference"}
+	canary.Accelerators = []domain.WorkerAccelerator{{Vendor: "nvidia", Count: 1, MemoryGB: 48}}
+	stable := mlWorker("pk-stable", "stable", 0, mlVLLMCaps())
+	stable.Labels = map[string]string{"track": "stable", "role": "inference"}
+	stable.Accelerators = []domain.WorkerAccelerator{{Vendor: "nvidia", Count: 1, MemoryGB: 48}}
+	repo := &mockWorkerRepo{workers: []domain.Worker{canary, stable}}
+
+	candidate, err := NewMLPlacementService(repo, zap.NewNop()).SelectCandidate(t.Context(), MLPlacementRequest{
+		TaskKind:        domain.MLTaskKindChatCompletions,
+		RuntimeKind:     domain.MLRuntimeKindVLLM,
+		ArtifactFormats: []domain.MLArtifactFormat{domain.MLArtifactFormatSafeTensors},
+		Accelerator:     "gpu_nvidia_cuda",
+		MinVRAMGB:       48,
+		LabelSelector:   map[string]string{"role": "inference"},
+		Rollout:         &WorkerPolicyRollout{FromLabels: map[string]string{"track": "canary"}, ToLabels: map[string]string{"track": "stable"}},
+	})
+	if err != nil {
+		t.Fatalf("select candidate: %v", err)
+	}
+	if candidate.Worker.PubKey != "pk-stable" {
+		t.Fatalf("expected stable rollout target, got %s", candidate.Worker.PubKey)
+	}
+}
+
 func TestMLPlacementTieBreaksByWorkerPubkey(t *testing.T) {
 	repo := &mockWorkerRepo{workers: []domain.Worker{
 		mlWorker("pk-z", "z", 0, mlVLLMCaps()),

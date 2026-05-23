@@ -1,0 +1,11 @@
+{
+  "feature_id": "bahia-8zqa",
+  "criteria": [
+    {"id": "AC1", "statement": "Generic worker placement honors pinned_worker by making only the pinned pubkey eligible."},
+    {"id": "AC2", "statement": "Generic preview/ranking shows requirement incompatibility reasons for the pinned worker and pin mismatch reasons for other workers."},
+    {"id": "AC3", "statement": "Generic and ML placement support label_selector and rollout.to_labels as hard constraints for new placements."},
+    {"id": "AC4", "statement": "ML placement honors pinned_worker and preview includes incompatibility reasons when the pinned worker fails runtime or resource requirements."},
+    {"id": "AC5", "statement": "worker-policy.apply.request is accepted through the controlplane, validates idempotency/correlation, updates environment runtime_config.worker_policy, and publishes status/result/read-model events."},
+    {"id": "AC6", "statement": "workload.pin.request is accepted through the controlplane, validates idempotency/correlation and worker existence, and updates the target environment or ML inference endpoint placement policy."}
+  ]
+}

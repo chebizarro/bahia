@@ -1,0 +1,27 @@
+{
+  "feature_id": "bahia-8zqa",
+  "title": "Pinned worker and rollout placement policy support",
+  "observed_baseline": [
+    "Worker scheduling-state filtering existed in generic and ML placement paths.",
+    "Worker labels existed on domain workers and lifecycle/labels commands existed in the controlplane.",
+    "Placement policy did not yet constrain by pinned worker or rollout target labels."
+  ],
+  "intended_behavior": [
+    "A placement policy may set pinned_worker; when set, only that worker is eligible for new placement.",
+    "Generic and ML placement previews retain rejected candidates with operator-visible reasons, including conflicts between the pinned worker and workload requirements.",
+    "A placement policy may set label_selector and rollout.from_labels/to_labels; rollout.to_labels is the active target pool for new placements.",
+    "Controlplane supports signed worker-policy.apply.request and workload.pin.request events, validates correlation tags and idempotency, persists policy updates, and publishes status/result events."
+  ],
+  "scope": [
+    "internal/service/worker_policy.go",
+    "internal/service/ml_placement.go",
+    "internal/service/ml_inference_provisioning_coordinator.go",
+    "internal/controlplane/worker_command_publisher.go",
+    "internal/controlplane/worker_handlers.go",
+    "internal/controlplane/reactor.go"
+  ],
+  "out_of_scope": [
+    "Frontend/Svelte changes",
+    "MCP tools and read-model adapters outside existing environment registry publication"
+  ]
+}

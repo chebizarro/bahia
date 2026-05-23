@@ -29,45 +29,47 @@ import (
 // The 311xx series in internal/adapters/nostr/publisher.go is deprecated.
 const (
 	// Request kinds (5961-5975)
-	KindDeployRequest           = 5961 // Request to deploy a service
-	KindRollbackRequest         = 5962 // Request to rollback a service
-	KindServiceAction           = 5963 // Lifecycle action (scale, restart, stop)
-	KindServiceCreate           = 5964 // Create a new service
-	KindEnvironmentCreate       = 5965 // Create a new environment
-	KindDeploymentApproval      = 5966 // Approve or reject a deployment
-	KindObservationSubmit       = 5967 // Submit runtime observation
-	KindDriftRemediate          = 5968 // Request drift remediation
-	KindLLMRouteCreate          = 5971 // Create an LLM route
-	KindLLMReleaseRegister      = 5972 // Register an LLM release
-	KindLLMDeployRequest        = 5973 // Request LLM route deployment
-	KindLLMDeploymentApproval   = 5974 // Approve or reject an LLM deployment
-	KindLLMRollbackRequest      = 5975 // Request LLM route rollback
-	KindToolProvisionRequest    = 5976 // Agent → Bahia
-	KindToolApprovalRequest     = 5977 // Bahia → Operator
-	KindAdoptionScanRequest     = 5978 // Request adoption scan previews
-	KindAdoptionImportRequest   = 5979 // Request adoption import
-	KindServiceUpdate           = 5981 // Update a service registry entry
-	KindServiceDelete           = 5982 // Delete a service registry entry
-	KindEnvironmentUpdate       = 5983 // Update an environment registry entry
-	KindEnvironmentDelete       = 5984 // Delete an environment registry entry
-	KindArtifactRegister        = 5985 // Register an artifact
-	KindPolicyCreate            = 5986 // Create a deployment policy
-	KindPolicyUpdate            = 5987 // Update a deployment policy
-	KindPolicyDelete            = 5988 // Delete a deployment policy
-	KindPolicyEvaluate          = 5989 // Evaluate deployment policies
-	KindPackageRepositoryApply  = 5991 // Create/update a package repository
-	KindPackageRepositoryDelete = 5992 // Delete a package repository
-	KindPackagePublishIntent    = 5993 // Request package artifact publication/upload from source_url
-	KindPackagePromotionRequest = 5994 // Request package promotion to a target repository/channel
-	KindPackageYankRequest      = 5995 // Yank/deprecate a package artifact
-	KindPackageDriftDetect      = 5996 // Observe package backend drift
-	KindWorkerCordonRequest     = 5997 // Request worker cordon
-	KindWorkerUncordonRequest   = 5998 // Request worker uncordon
-	KindWorkerDrainRequest      = 5999 // Request worker drain
-	KindWorkerUndrainRequest    = 6000 // Request worker undrain
-	KindWorkerMaintenanceEnter  = 6001 // Request worker maintenance entry
-	KindWorkerMaintenanceExit   = 6002 // Request worker maintenance exit
-	KindWorkerLabelsUpdate      = 6003 // Request worker label update
+	KindDeployRequest            = 5961 // Request to deploy a service
+	KindRollbackRequest          = 5962 // Request to rollback a service
+	KindServiceAction            = 5963 // Lifecycle action (scale, restart, stop)
+	KindServiceCreate            = 5964 // Create a new service
+	KindEnvironmentCreate        = 5965 // Create a new environment
+	KindDeploymentApproval       = 5966 // Approve or reject a deployment
+	KindObservationSubmit        = 5967 // Submit runtime observation
+	KindDriftRemediate           = 5968 // Request drift remediation
+	KindLLMRouteCreate           = 5971 // Create an LLM route
+	KindLLMReleaseRegister       = 5972 // Register an LLM release
+	KindLLMDeployRequest         = 5973 // Request LLM route deployment
+	KindLLMDeploymentApproval    = 5974 // Approve or reject an LLM deployment
+	KindLLMRollbackRequest       = 5975 // Request LLM route rollback
+	KindToolProvisionRequest     = 5976 // Agent → Bahia
+	KindToolApprovalRequest      = 5977 // Bahia → Operator
+	KindAdoptionScanRequest      = 5978 // Request adoption scan previews
+	KindAdoptionImportRequest    = 5979 // Request adoption import
+	KindServiceUpdate            = 5981 // Update a service registry entry
+	KindServiceDelete            = 5982 // Delete a service registry entry
+	KindEnvironmentUpdate        = 5983 // Update an environment registry entry
+	KindEnvironmentDelete        = 5984 // Delete an environment registry entry
+	KindArtifactRegister         = 5985 // Register an artifact
+	KindPolicyCreate             = 5986 // Create a deployment policy
+	KindPolicyUpdate             = 5987 // Update a deployment policy
+	KindPolicyDelete             = 5988 // Delete a deployment policy
+	KindPolicyEvaluate           = 5989 // Evaluate deployment policies
+	KindPackageRepositoryApply   = 5991 // Create/update a package repository
+	KindPackageRepositoryDelete  = 5992 // Delete a package repository
+	KindPackagePublishIntent     = 5993 // Request package artifact publication/upload from source_url
+	KindPackagePromotionRequest  = 5994 // Request package promotion to a target repository/channel
+	KindPackageYankRequest       = 5995 // Yank/deprecate a package artifact
+	KindPackageDriftDetect       = 5996 // Observe package backend drift
+	KindWorkerCordonRequest      = 5997 // Request worker cordon
+	KindWorkerUncordonRequest    = 5998 // Request worker uncordon
+	KindWorkerDrainRequest       = 5999 // Request worker drain
+	KindWorkerUndrainRequest     = 6000 // Request worker undrain
+	KindWorkerMaintenanceEnter   = 6001 // Request worker maintenance entry
+	KindWorkerMaintenanceExit    = 6002 // Request worker maintenance exit
+	KindWorkerLabelsUpdate       = 6003 // Request worker label update
+	KindWorkerPolicyApplyRequest = 6004 // Apply environment worker placement policy
+	KindWorkloadPinRequest       = 6005 // Pin workload placement to a worker
 
 	// Generic AI/ML command/result kinds (38390-38399). These intentionally
 	// avoid NIP-90's 5000-7000 DVM range.
@@ -585,6 +587,10 @@ func (r *Reactor) handleEvent(ctx context.Context, event *nostr.Event) {
 		go r.handleWorkerMaintenanceExitRequest(ctx, event)
 	case KindWorkerLabelsUpdate:
 		go r.handleWorkerLabelsUpdateRequest(ctx, event)
+	case KindWorkerPolicyApplyRequest:
+		go r.handleWorkerPolicyApplyRequest(ctx, event)
+	case KindWorkloadPinRequest:
+		go r.handleWorkloadPinRequest(ctx, event)
 	case domain.KindAssistantPromptRequest:
 		r.handleAssistantPromptRequest(ctx, event)
 	case domain.KindAssistantApproval:
@@ -1814,6 +1820,8 @@ func defaultRequestSubscriptionKinds() []int {
 		KindWorkerMaintenanceEnter,
 		KindWorkerMaintenanceExit,
 		KindWorkerLabelsUpdate,
+		KindWorkerPolicyApplyRequest,
+		KindWorkloadPinRequest,
 		domain.KindAssistantPromptRequest,
 		domain.KindAssistantApproval,
 	}
@@ -2783,13 +2791,15 @@ func (r *Reactor) PublishServiceRegistry(ctx context.Context, svc *domain.Servic
 // PublishEnvironmentRegistry publishes a replaceable kind:31963 environment registry event.
 func (r *Reactor) PublishEnvironmentRegistry(ctx context.Context, env *domain.Environment) error {
 	content, _ := json.Marshal(map[string]interface{}{
-		"deleted":         false,
-		"id":              env.ID.String(),
-		"name":            env.Name,
-		"protected":       env.Protected,
-		"deploy_strategy": string(env.DeployStrategy),
-		"created_at":      env.CreatedAt.Format(time.RFC3339),
-		"updated_at":      env.UpdatedAt.Format(time.RFC3339),
+		"deleted":              false,
+		"id":                   env.ID.String(),
+		"name":                 env.Name,
+		"protected":            env.Protected,
+		"deploy_strategy":      string(env.DeployStrategy),
+		"loom_worker_selector": env.LoomWorkerSelector,
+		"runtime_config":       env.RuntimeConfig,
+		"created_at":           env.CreatedAt.Format(time.RFC3339),
+		"updated_at":           env.UpdatedAt.Format(time.RFC3339),
 	})
 
 	event := &nostr.Event{

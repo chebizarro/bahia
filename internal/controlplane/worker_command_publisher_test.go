@@ -93,6 +93,51 @@ func TestWorkerCommandPublisherPublishesLabelsUpdateAndGeneratesIdempotencyKey(t
 	}
 }
 
+func TestWorkerCommandPublisherPublishesPolicyApplyAndWorkloadPin(t *testing.T) {
+	ctx := context.Background()
+	capture := &captureNostrPublisher{published: 1}
+	signer, err := NewPrivateKeySigner(nostr.GeneratePrivateKey())
+	if err != nil {
+		t.Fatalf("create signer: %v", err)
+	}
+	workerKey, _ := nostr.GetPublicKey(nostr.GeneratePrivateKey())
+	publisher := NewWorkerCommandPublisher(capture, signer)
+
+	policyReceipt, err := publisher.PublishWorkerPolicyApplyRequest(ctx, WorkerPolicyApplyCommand{
+		EnvironmentID:  "env-1",
+		IdempotencyKey: "policy-1",
+		Policy: map[string]any{
+			"label_selector": map[string]any{"role": "inference"},
+			"rollout": map[string]any{
+				"from_labels": map[string]any{"track": "canary"},
+				"to_labels":   map[string]any{"track": "stable"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("publish policy apply: %v", err)
+	}
+	if policyReceipt.RequestKind != KindWorkerPolicyApplyRequest || policyReceipt.Command != WorkerPolicyApplyRequest || policyReceipt.EnvironmentID != "env-1" {
+		t.Fatalf("unexpected policy receipt: %#v", policyReceipt)
+	}
+	policyEvent := capture.events[0]
+	if tagValueNostr(policyEvent.Tags, "command") != WorkerPolicyApplyRequest || tagValueNostr(policyEvent.Tags, "environment") != "env-1" {
+		t.Fatalf("unexpected policy tags: %#v", policyEvent.Tags)
+	}
+
+	pinReceipt, err := publisher.PublishWorkloadPinRequest(ctx, WorkloadPinCommand{EnvironmentID: "env-1", WorkloadID: "endpoint-1", WorkloadKind: "ml_inference", WorkerPubKey: workerKey, IdempotencyKey: "pin-1"})
+	if err != nil {
+		t.Fatalf("publish workload pin: %v", err)
+	}
+	if pinReceipt.RequestKind != KindWorkloadPinRequest || pinReceipt.Command != WorkloadPinRequest || pinReceipt.WorkerPubKey != workerKey || pinReceipt.WorkloadKind != "ml_inference" {
+		t.Fatalf("unexpected pin receipt: %#v", pinReceipt)
+	}
+	pinEvent := capture.events[1]
+	if tagValueNostr(pinEvent.Tags, "command") != WorkloadPinRequest || tagValueNostr(pinEvent.Tags, "worker") != workerKey || tagValueNostr(pinEvent.Tags, "workload") != "endpoint-1" {
+		t.Fatalf("unexpected pin tags: %#v", pinEvent.Tags)
+	}
+}
+
 func TestWorkerCommandPublisherFailsWhenNoRelayAccepts(t *testing.T) {
 	ctx := context.Background()
 	capture := &captureNostrPublisher{published: 0}

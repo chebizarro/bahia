@@ -1,0 +1,11 @@
+{
+  "feature_id": "bahia-8zqa",
+  "mappings": [
+    {"acceptance_id": "AC1", "tests": ["TestSelectWorker_HonorsPinnedWorker", "TestSelectWorker_LoadsPinnedWorkerOutsideFirstPage"]},
+    {"acceptance_id": "AC2", "tests": ["TestRankWorkers_PinnedWorkerShowsRequirementConflict"]},
+    {"acceptance_id": "AC3", "tests": ["TestSelectWorker_UsesLabelSelectorAndRolloutTargetLabels", "TestMLPlacementUsesRolloutTargetLabels"]},
+    {"acceptance_id": "AC4", "tests": ["TestMLPlacementHonorsPinnedWorkerAndShowsPinConflict"]},
+    {"acceptance_id": "AC5", "tests": ["TestWorkerCommandPublisherPublishesPolicyApplyAndWorkloadPin", "TestWorkerPolicyApplyHandlerUpdatesEnvironmentPolicy", "TestWorkerPolicyApplyRejectsMismatchedWorkerTagAndPolicyPin", "TestWorkerCommandKindsAreInDefaultSubscriptionFilter"]},
+    {"acceptance_id": "AC6", "tests": ["TestWorkerCommandPublisherPublishesPolicyApplyAndWorkloadPin", "TestWorkloadPinHandlerUpdatesEnvironmentPolicy", "TestWorkerCommandKindsAreInDefaultSubscriptionFilter"]}
+  ]
+}

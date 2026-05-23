@@ -23,6 +23,9 @@ type MLPlacementRequest struct {
 	CachedArtifact    string
 	WorkerSelector    map[string]any
 	MaxPrice          int
+	PinnedWorker      string
+	LabelSelector     map[string]string
+	Rollout           *WorkerPolicyRollout
 }
 
 // MLPlacementCandidate describes a worker/runtime target and its placement eligibility.
@@ -74,9 +77,9 @@ func (s *MLPlacementService) PreviewCandidates(ctx context.Context, req MLPlacem
 		return nil, err
 	}
 
-	workers, err := s.workerRepo.List(ctx, string(domain.WorkerStatusOnline), 500)
+	workers, err := s.listMLWorkersForRequest(ctx, req)
 	if err != nil {
-		return nil, fmt.Errorf("listing online workers: %w", err)
+		return nil, err
 	}
 
 	candidates := make([]MLPlacementCandidate, 0, len(workers))
@@ -109,6 +112,29 @@ func (s *MLPlacementService) PreviewCandidates(ctx context.Context, req MLPlacem
 	return candidates, nil
 }
 
+func (s *MLPlacementService) listMLWorkersForRequest(ctx context.Context, req MLPlacementRequest) ([]domain.Worker, error) {
+	workers, err := s.workerRepo.List(ctx, string(domain.WorkerStatusOnline), 500)
+	if err != nil {
+		return nil, fmt.Errorf("listing online workers: %w", err)
+	}
+	if req.PinnedWorker == "" {
+		return workers, nil
+	}
+	for _, worker := range workers {
+		if worker.PubKey == req.PinnedWorker {
+			return workers, nil
+		}
+	}
+	worker, err := s.workerRepo.GetByPubKey(ctx, req.PinnedWorker)
+	if err != nil {
+		return nil, fmt.Errorf("looking up pinned worker: %w", err)
+	}
+	if worker != nil {
+		workers = append(workers, *worker)
+	}
+	return workers, nil
+}
+
 func validateMLPlacementRequest(req MLPlacementRequest) error {
 	if req.RuntimeKind == "" || !req.RuntimeKind.IsValid() {
 		return fmt.Errorf("unsupported or missing ML runtime %q", req.RuntimeKind)
@@ -125,6 +151,12 @@ func validateMLPlacementRequest(req MLPlacementRequest) error {
 }
 
 func scoreMLWorker(w *domain.Worker, req MLPlacementRequest) (MLPlacementCandidate, string, bool) {
+	if w.Status != domain.WorkerStatusOnline {
+		return MLPlacementCandidate{}, fmt.Sprintf("%s rejected: worker status %s is not online", w.Name, w.Status), false
+	}
+	if req.PinnedWorker != "" && w.PubKey != req.PinnedWorker {
+		return MLPlacementCandidate{}, fmt.Sprintf("%s rejected: worker does not match pinned_worker %s", w.Name, req.PinnedWorker), false
+	}
 	if !workerSchedulingStateAllowsNewPlacement(w.SchedulingState) {
 		return MLPlacementCandidate{}, fmt.Sprintf("%s rejected: %s", w.Name, workerSchedulingStateRejectionReason(w.SchedulingState)), false
 	}
@@ -133,6 +165,9 @@ func scoreMLWorker(w *domain.Worker, req MLPlacementRequest) (MLPlacementCandida
 	}
 	if !matchesSelector(*w, req.WorkerSelector) {
 		return MLPlacementCandidate{}, fmt.Sprintf("%s rejected: selector mismatch", w.Name), false
+	}
+	if reason, ok := workerLabelsMatchReason(*w, requiredMLPlacementLabels(req)); !ok {
+		return MLPlacementCandidate{}, fmt.Sprintf("%s rejected: %s", w.Name, reason), false
 	}
 	if req.MaxPrice > 0 {
 		if price := lowestPrice(*w); price > 0 && price > req.MaxPrice {
@@ -174,6 +209,11 @@ func scoreMLWorker(w *domain.Worker, req MLPlacementRequest) (MLPlacementCandida
 		score += 1000
 	}
 	return MLPlacementCandidate{RuntimeKind: req.RuntimeKind, Worker: w, Score: score, Reason: fmt.Sprintf("worker %s satisfies ML placement requirements", w.Name), Eligible: true}, "", true
+}
+
+func requiredMLPlacementLabels(req MLPlacementRequest) map[string]string {
+	policy := WorkerPolicy{LabelSelector: req.LabelSelector, Rollout: req.Rollout}
+	return requiredWorkerPolicyLabels(policy)
 }
 
 func containsRuntime(values []domain.MLRuntimeKind, want domain.MLRuntimeKind) bool {

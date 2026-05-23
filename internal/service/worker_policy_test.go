@@ -641,6 +641,106 @@ func TestSelectWorker_ExcludesNonActiveSchedulingStates(t *testing.T) {
 	}
 }
 
+func TestSelectWorker_HonorsPinnedWorker(t *testing.T) {
+	repo := &mockWorkerRepo{workers: []domain.Worker{
+		makeWorker("pk-cheap", "cheap", 0, 1, "", "linux/amd64"),
+		makeWorker("pk-pinned", "pinned", 0, 100, "", "linux/amd64"),
+	}}
+	svc := NewWorkerPolicyService(repo, zap.NewNop())
+	env := makeEnv(map[string]any{"strategy": "cheapest", "pinned_worker": "pk-pinned"})
+
+	selected, err := svc.SelectWorker(context.Background(), env)
+	if err != nil {
+		t.Fatalf("select worker: %v", err)
+	}
+	if selected.Worker.PubKey != "pk-pinned" {
+		t.Fatalf("expected pinned worker, got %s", selected.Worker.PubKey)
+	}
+
+	ranked, err := svc.RankWorkers(context.Background(), env)
+	if err != nil {
+		t.Fatalf("rank workers: %v", err)
+	}
+	if !ranked[0].Eligible || ranked[0].Worker.PubKey != "pk-pinned" {
+		t.Fatalf("expected pinned worker eligible first, got %#v", ranked[0])
+	}
+	if ranked[1].Eligible || ranked[1].Reason != "worker does not match pinned_worker pk-pinned" {
+		t.Fatalf("expected non-pinned worker rejection, got %#v", ranked[1])
+	}
+}
+
+func TestSelectWorker_LoadsPinnedWorkerOutsideFirstPage(t *testing.T) {
+	workers := make([]domain.Worker, 0, 101)
+	for i := 0; i < 100; i++ {
+		workers = append(workers, makeWorker("pk-page-"+string(rune('a'+i%26)), "page", 0, 1, "", "linux/amd64"))
+	}
+	workers = append(workers, makeWorker("pk-pinned-outside-page", "pinned", 0, 100, "", "linux/amd64"))
+	repo := &mockWorkerRepo{workers: workers}
+	svc := NewWorkerPolicyService(repo, zap.NewNop())
+
+	selected, err := svc.SelectWorker(context.Background(), makeEnv(map[string]any{"pinned_worker": "pk-pinned-outside-page"}))
+	if err != nil {
+		t.Fatalf("select worker: %v", err)
+	}
+	if selected.Worker.PubKey != "pk-pinned-outside-page" {
+		t.Fatalf("expected pinned worker outside first page, got %s", selected.Worker.PubKey)
+	}
+}
+
+func TestRankWorkers_PinnedWorkerShowsRequirementConflict(t *testing.T) {
+	pinned := makeWorker("pk-pinned", "pinned", 0, 10, "", "linux/amd64")
+	repo := &mockWorkerRepo{workers: []domain.Worker{pinned, makeWorker("pk-other", "other", 0, 10, "", "linux/amd64", "docker")}}
+	svc := NewWorkerPolicyService(repo, zap.NewNop())
+	env := makeEnv(map[string]any{"pinned_worker": "pk-pinned", "require_software": []any{"docker"}})
+
+	ranked, err := svc.RankWorkers(context.Background(), env)
+	if err != nil {
+		t.Fatalf("rank workers: %v", err)
+	}
+	reasons := map[string]string{}
+	for _, candidate := range ranked {
+		reasons[candidate.Worker.PubKey] = candidate.Reason
+	}
+	if reasons["pk-pinned"] != "worker missing required software docker" {
+		t.Fatalf("expected pinned worker compatibility reason, got %q", reasons["pk-pinned"])
+	}
+	if reasons["pk-other"] != "worker does not match pinned_worker pk-pinned" {
+		t.Fatalf("expected non-pinned rejection, got %q", reasons["pk-other"])
+	}
+}
+
+func TestSelectWorker_UsesLabelSelectorAndRolloutTargetLabels(t *testing.T) {
+	canary := makeWorker("pk-canary", "canary", 0, 1, "", "linux/amd64")
+	canary.Labels = map[string]string{"role": "inference", "track": "canary"}
+	stable := makeWorker("pk-stable", "stable", 0, 100, "", "linux/amd64")
+	stable.Labels = map[string]string{"role": "inference", "track": "stable"}
+	repo := &mockWorkerRepo{workers: []domain.Worker{canary, stable}}
+	svc := NewWorkerPolicyService(repo, zap.NewNop())
+	env := makeEnv(map[string]any{
+		"strategy":       "cheapest",
+		"label_selector": map[string]any{"role": "inference"},
+		"rollout": map[string]any{
+			"from_labels": map[string]any{"track": "canary"},
+			"to_labels":   map[string]any{"track": "stable"},
+		},
+	})
+
+	selected, err := svc.SelectWorker(context.Background(), env)
+	if err != nil {
+		t.Fatalf("select worker: %v", err)
+	}
+	if selected.Worker.PubKey != "pk-stable" {
+		t.Fatalf("expected stable rollout target worker, got %s", selected.Worker.PubKey)
+	}
+	ranked, err := svc.RankWorkers(context.Background(), env)
+	if err != nil {
+		t.Fatalf("rank workers: %v", err)
+	}
+	if ranked[1].Eligible || ranked[1].Reason != "worker label track=canary does not match required stable" {
+		t.Fatalf("expected canary rollout rejection reason, got %#v", ranked[1])
+	}
+}
+
 func TestRankWorkers_IncludesSchedulingRejectionReasons(t *testing.T) {
 	active := makeWorker("pk-active", "active", 0, 10, "", "linux/amd64")
 	active.SchedulingState = domain.WorkerSchedulingActive

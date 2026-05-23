@@ -6,8 +6,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/nbd-wtf/go-nostr"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/events"
+	"github.com/openagentsinc/bahia/internal/service"
 	"go.uber.org/zap"
 )
 
@@ -126,6 +129,116 @@ func TestWorkerHandlerRejectsDisabledWorkerTransition(t *testing.T) {
 	}
 }
 
+func TestWorkerPolicyApplyHandlerUpdatesEnvironmentPolicy(t *testing.T) {
+	ctx := context.Background()
+	operatorKey := nostr.GeneratePrivateKey()
+	operatorPubkey, _ := nostr.GetPublicKey(operatorKey)
+	workerPubkey, _ := nostr.GetPublicKey(nostr.GeneratePrivateKey())
+	envID := uuid.New()
+	capture := &captureNostrPublisher{published: 1}
+	workers := newMemoryWorkerRepo(domain.Worker{PubKey: workerPubkey, Name: "worker-a", Status: domain.WorkerStatusOnline, SchedulingState: domain.WorkerSchedulingActive})
+	environments := newMemoryEnvironmentRepo(domain.Environment{ID: envID, Name: "prod", RuntimeConfig: map[string]any{"worker_policy": map[string]any{"strategy": "cheapest"}}})
+	registry := service.NewRegistryService(nil, environments, nil, nil, nil, nil, nil, nil, nil, &events.NoopPublisher{}, zap.NewNop())
+	reactor := newWorkerHandlerTestReactorWithRegistry(t, operatorPubkey, capture, workers, registry)
+	event := &nostr.Event{ID: "policy-apply", PubKey: operatorPubkey, Kind: KindWorkerPolicyApplyRequest, Tags: nostr.Tags{{"d", "policy-1"}, {"environment", envID.String()}}, Content: mustJSON(WorkerPolicyApplyCommand{
+		EnvironmentID:  envID.String(),
+		IdempotencyKey: "policy-1",
+		Policy: map[string]any{
+			"pinned_worker":  workerPubkey,
+			"label_selector": map[string]any{"role": "inference"},
+			"rollout": map[string]any{
+				"from_labels": map[string]any{"track": "canary"},
+				"to_labels":   map[string]any{"track": "stable"},
+			},
+		},
+	})}
+
+	reactor.handleWorkerPolicyApplyRequest(ctx, event)
+
+	updated, err := environments.GetByID(ctx, envID)
+	if err != nil {
+		t.Fatalf("get environment: %v", err)
+	}
+	policy, ok := updated.RuntimeConfig["worker_policy"].(map[string]any)
+	if !ok {
+		t.Fatalf("worker policy not persisted: %#v", updated.RuntimeConfig)
+	}
+	if policy["strategy"] != "cheapest" || policy["pinned_worker"] != workerPubkey {
+		t.Fatalf("unexpected merged policy: %#v", policy)
+	}
+	labels := policy["label_selector"].(map[string]any)
+	if labels["role"] != "inference" {
+		t.Fatalf("label selector not persisted: %#v", policy)
+	}
+	assertPublishedKind(t, capture.events, KindEnvironmentRegistry)
+	result := lastPublishedKind(t, capture.events, KindWorkerResult)
+	if tagValueNostr(result.Tags, "environment") != envID.String() || tagValueNostr(result.Tags, "command") != WorkerPolicyApplyRequest {
+		t.Fatalf("unexpected policy result tags: %#v", result.Tags)
+	}
+}
+
+func TestWorkerPolicyApplyRejectsMismatchedWorkerTagAndPolicyPin(t *testing.T) {
+	ctx := context.Background()
+	operatorKey := nostr.GeneratePrivateKey()
+	operatorPubkey, _ := nostr.GetPublicKey(operatorKey)
+	tagWorkerPubkey, _ := nostr.GetPublicKey(nostr.GeneratePrivateKey())
+	policyWorkerPubkey, _ := nostr.GetPublicKey(nostr.GeneratePrivateKey())
+	envID := uuid.New()
+	capture := &captureNostrPublisher{published: 1}
+	workers := newMemoryWorkerRepo(domain.Worker{PubKey: tagWorkerPubkey, Name: "worker-a", Status: domain.WorkerStatusOnline, SchedulingState: domain.WorkerSchedulingActive}, domain.Worker{PubKey: policyWorkerPubkey, Name: "worker-b", Status: domain.WorkerStatusOnline, SchedulingState: domain.WorkerSchedulingActive})
+	environments := newMemoryEnvironmentRepo(domain.Environment{ID: envID, Name: "prod", RuntimeConfig: map[string]any{}})
+	registry := service.NewRegistryService(nil, environments, nil, nil, nil, nil, nil, nil, nil, &events.NoopPublisher{}, zap.NewNop())
+	reactor := newWorkerHandlerTestReactorWithRegistry(t, operatorPubkey, capture, workers, registry)
+	event := &nostr.Event{ID: "policy-mismatch", PubKey: operatorPubkey, Kind: KindWorkerPolicyApplyRequest, Tags: nostr.Tags{{"d", "policy-1"}, {"environment", envID.String()}, {"worker", tagWorkerPubkey}}, Content: mustJSON(WorkerPolicyApplyCommand{EnvironmentID: envID.String(), IdempotencyKey: "policy-1", Policy: map[string]any{"pinned_worker": policyWorkerPubkey}})}
+
+	reactor.handleWorkerPolicyApplyRequest(ctx, event)
+
+	updated, err := environments.GetByID(ctx, envID)
+	if err != nil {
+		t.Fatalf("get environment: %v", err)
+	}
+	if updated.RuntimeConfig["worker_policy"] != nil {
+		t.Fatalf("mismatched policy pin should not persist: %#v", updated.RuntimeConfig)
+	}
+	result := lastPublishedKind(t, capture.events, KindWorkerResult)
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(result.Content), &payload); err != nil {
+		t.Fatalf("result content: %v", err)
+	}
+	if payload["status"] != "failed" || payload["code"] != "validation_error" {
+		t.Fatalf("unexpected mismatch result: %#v", payload)
+	}
+}
+
+func TestWorkloadPinHandlerUpdatesEnvironmentPolicy(t *testing.T) {
+	ctx := context.Background()
+	operatorKey := nostr.GeneratePrivateKey()
+	operatorPubkey, _ := nostr.GetPublicKey(operatorKey)
+	workerPubkey, _ := nostr.GetPublicKey(nostr.GeneratePrivateKey())
+	envID := uuid.New()
+	capture := &captureNostrPublisher{published: 1}
+	workers := newMemoryWorkerRepo(domain.Worker{PubKey: workerPubkey, Name: "worker-a", Status: domain.WorkerStatusOnline, SchedulingState: domain.WorkerSchedulingActive})
+	environments := newMemoryEnvironmentRepo(domain.Environment{ID: envID, Name: "prod", RuntimeConfig: map[string]any{}})
+	registry := service.NewRegistryService(nil, environments, nil, nil, nil, nil, nil, nil, nil, &events.NoopPublisher{}, zap.NewNop())
+	reactor := newWorkerHandlerTestReactorWithRegistry(t, operatorPubkey, capture, workers, registry)
+	event := &nostr.Event{ID: "pin-request", PubKey: operatorPubkey, Kind: KindWorkloadPinRequest, Tags: nostr.Tags{{"d", "pin-1"}, {"environment", envID.String()}, {"worker", workerPubkey}}, Content: mustJSON(WorkloadPinCommand{EnvironmentID: envID.String(), WorkerPubKey: workerPubkey, IdempotencyKey: "pin-1"})}
+
+	reactor.handleWorkloadPinRequest(ctx, event)
+
+	updated, err := environments.GetByID(ctx, envID)
+	if err != nil {
+		t.Fatalf("get environment: %v", err)
+	}
+	policy, ok := updated.RuntimeConfig["worker_policy"].(map[string]any)
+	if !ok || policy["pinned_worker"] != workerPubkey {
+		t.Fatalf("pin not persisted: %#v", updated.RuntimeConfig)
+	}
+	result := lastPublishedKind(t, capture.events, KindWorkerResult)
+	if tagValueNostr(result.Tags, "worker") != workerPubkey || tagValueNostr(result.Tags, "environment") != envID.String() || tagValueNostr(result.Tags, "command") != WorkloadPinRequest {
+		t.Fatalf("unexpected pin result tags: %#v", result.Tags)
+	}
+}
+
 func TestWorkerHandlerRejectsMissingIdempotencyKey(t *testing.T) {
 	ctx := context.Background()
 	operatorKey := nostr.GeneratePrivateKey()
@@ -162,16 +275,23 @@ func TestWorkerCommandKindsAreInDefaultSubscriptionFilter(t *testing.T) {
 		KindWorkerMaintenanceEnter,
 		KindWorkerMaintenanceExit,
 		KindWorkerLabelsUpdate,
+		KindWorkerPolicyApplyRequest,
+		KindWorkloadPinRequest,
 	)
 }
 
 func newWorkerHandlerTestReactor(t *testing.T, authorizedPubkey string, capture *captureNostrPublisher, repo *memoryWorkerRepo) *Reactor {
 	t.Helper()
+	return newWorkerHandlerTestReactorWithRegistry(t, authorizedPubkey, capture, repo, nil)
+}
+
+func newWorkerHandlerTestReactorWithRegistry(t *testing.T, authorizedPubkey string, capture *captureNostrPublisher, repo *memoryWorkerRepo, registry *service.RegistryService) *Reactor {
+	t.Helper()
 	signer, err := NewPrivateKeySigner(nostr.GeneratePrivateKey())
 	if err != nil {
 		t.Fatalf("create signer: %v", err)
 	}
-	return NewReactor(Config{AuthorizedPubkeys: []string{authorizedPubkey}}, nil, nil, signer, zap.NewNop(), WithControlPlanePublisher(capture), WithWorkerRepository(repo))
+	return NewReactor(Config{AuthorizedPubkeys: []string{authorizedPubkey}}, registry, nil, signer, zap.NewNop(), WithControlPlanePublisher(capture), WithWorkerRepository(repo))
 }
 
 type memoryWorkerRepo struct {
@@ -255,6 +375,97 @@ func (m *memoryWorkerRepo) UpdateLabels(_ context.Context, pubkey string, labels
 		}
 	}
 	return nil
+}
+
+type memoryEnvironmentRepo struct {
+	envs map[uuid.UUID]*domain.Environment
+}
+
+func newMemoryEnvironmentRepo(environments ...domain.Environment) *memoryEnvironmentRepo {
+	repo := &memoryEnvironmentRepo{envs: map[uuid.UUID]*domain.Environment{}}
+	for i := range environments {
+		_ = repo.Create(context.Background(), &environments[i])
+	}
+	return repo
+}
+
+func (m *memoryEnvironmentRepo) Create(_ context.Context, env *domain.Environment) error {
+	cp := copyEnvironment(env)
+	if cp.ID == uuid.Nil {
+		cp.ID = uuid.New()
+	}
+	m.envs[cp.ID] = cp
+	return nil
+}
+
+func (m *memoryEnvironmentRepo) GetByID(_ context.Context, id uuid.UUID) (*domain.Environment, error) {
+	return copyEnvironment(m.envs[id]), nil
+}
+
+func (m *memoryEnvironmentRepo) GetByName(_ context.Context, name string) (*domain.Environment, error) {
+	for _, env := range m.envs {
+		if env.Name == name {
+			return copyEnvironment(env), nil
+		}
+	}
+	return nil, nil
+}
+
+func (m *memoryEnvironmentRepo) List(_ context.Context) ([]domain.Environment, error) {
+	out := make([]domain.Environment, 0, len(m.envs))
+	for _, env := range m.envs {
+		out = append(out, *copyEnvironment(env))
+	}
+	return out, nil
+}
+
+func (m *memoryEnvironmentRepo) ListByOrg(_ context.Context, orgID uuid.UUID) ([]domain.Environment, error) {
+	out := []domain.Environment{}
+	for _, env := range m.envs {
+		if env.OrgID == orgID {
+			out = append(out, *copyEnvironment(env))
+		}
+	}
+	return out, nil
+}
+
+func (m *memoryEnvironmentRepo) Update(_ context.Context, env *domain.Environment) error {
+	m.envs[env.ID] = copyEnvironment(env)
+	return nil
+}
+
+func (m *memoryEnvironmentRepo) Delete(_ context.Context, id uuid.UUID) error {
+	delete(m.envs, id)
+	return nil
+}
+
+func copyEnvironment(env *domain.Environment) *domain.Environment {
+	if env == nil {
+		return nil
+	}
+	cp := *env
+	if env.LoomWorkerSelector != nil {
+		cp.LoomWorkerSelector = map[string]any{}
+		for key, value := range env.LoomWorkerSelector {
+			cp.LoomWorkerSelector[key] = value
+		}
+	}
+	if env.RuntimeConfig != nil {
+		cp.RuntimeConfig = copyMapAny(env.RuntimeConfig)
+	}
+	return &cp
+}
+
+func copyMapAny(in map[string]any) map[string]any {
+	out := map[string]any{}
+	for key, value := range in {
+		if nested, ok := value.(map[string]any); ok {
+			out[key] = copyMapAny(nested)
+			continue
+		}
+		out[key] = value
+	}
+	return out
 }
 
 func lastPublishedKind(t *testing.T, events []nostr.Event, kind int) nostr.Event {

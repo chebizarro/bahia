@@ -651,6 +651,15 @@ func applyMLPlacementPolicy(req *MLPlacementRequest, values map[string]any) {
 	if selector, ok := values["worker_selector"].(map[string]any); ok {
 		req.WorkerSelector = selector
 	}
+	if pinned, ok := stringValue(values["pinned_worker"]); ok {
+		req.PinnedWorker = strings.TrimSpace(pinned)
+	}
+	if labels := stringMapFromAny(values["label_selector"]); len(labels) > 0 {
+		req.LabelSelector = labels
+	}
+	if rollout := rolloutFromAny(values["rollout"]); rollout != nil {
+		req.Rollout = rollout
+	}
 	if tools, ok := stringSliceValue(values["toolchains"]); ok {
 		req.Toolchains = tools
 	}

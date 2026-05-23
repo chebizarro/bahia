@@ -38,10 +38,21 @@ type WorkerPolicy struct {
 	RequireSoftware []string                `json:"require_software,omitempty"` // required software names
 	ExcludeWorkers  []string                `json:"exclude_workers,omitempty"`  // pubkeys to never select
 	MaxQueueDepth   int                     `json:"max_queue_depth,omitempty"`  // skip workers above this queue depth
+	PinnedWorker    string                  `json:"pinned_worker,omitempty"`    // pubkey that must receive the workload
+	LabelSelector   map[string]string       `json:"label_selector,omitempty"`   // required worker labels
+	Rollout         *WorkerPolicyRollout    `json:"rollout,omitempty"`          // label-driven rollout target pools
 
 	// Reputation settings
 	MinSuccessRate  float64 `json:"min_success_rate,omitempty"`  // minimum success rate (0-1), default 0
 	MinJobsRequired int     `json:"min_jobs_required,omitempty"` // minimum jobs before reputation counts, default 5
+}
+
+// WorkerPolicyRollout describes a label-driven movement between worker pools.
+// ToLabels is the active target selector used for new placements; FromLabels is
+// retained in policy so previews/read models can explain the rollout transition.
+type WorkerPolicyRollout struct {
+	FromLabels map[string]string `json:"from_labels,omitempty"`
+	ToLabels   map[string]string `json:"to_labels,omitempty"`
 }
 
 // ScoredWorker pairs a worker with a selection score.
@@ -77,9 +88,9 @@ func (s *WorkerPolicyService) SetJobStatsTracker(tracker *JobStatsTracker) {
 func (s *WorkerPolicyService) SelectWorker(ctx context.Context, env *domain.Environment) (*ScoredWorker, error) {
 	policy := s.extractPolicy(env)
 
-	workers, err := s.workerRepo.List(ctx, string(domain.WorkerStatusOnline), 100)
+	workers, err := s.listWorkersForPolicy(ctx, policy, 100)
 	if err != nil {
-		return nil, fmt.Errorf("listing online workers: %w", err)
+		return nil, err
 	}
 	if len(workers) == 0 {
 		return nil, fmt.Errorf("no online workers available")
@@ -120,9 +131,9 @@ func (s *WorkerPolicyService) SelectWorker(ctx context.Context, env *domain.Envi
 func (s *WorkerPolicyService) RankWorkers(ctx context.Context, env *domain.Environment) ([]ScoredWorker, error) {
 	policy := s.extractPolicy(env)
 
-	workers, err := s.workerRepo.List(ctx, string(domain.WorkerStatusOnline), 100)
+	workers, err := s.listWorkersForPolicy(ctx, policy, 100)
 	if err != nil {
-		return nil, fmt.Errorf("listing online workers: %w", err)
+		return nil, err
 	}
 
 	var eligibleWorkers []domain.Worker
@@ -148,6 +159,29 @@ func (s *WorkerPolicyService) RankWorkers(ctx context.Context, env *domain.Envir
 	})
 
 	return ranked, nil
+}
+
+func (s *WorkerPolicyService) listWorkersForPolicy(ctx context.Context, policy WorkerPolicy, limit int) ([]domain.Worker, error) {
+	workers, err := s.workerRepo.List(ctx, string(domain.WorkerStatusOnline), limit)
+	if err != nil {
+		return nil, fmt.Errorf("listing online workers: %w", err)
+	}
+	if policy.PinnedWorker == "" {
+		return workers, nil
+	}
+	for _, worker := range workers {
+		if worker.PubKey == policy.PinnedWorker {
+			return workers, nil
+		}
+	}
+	worker, err := s.workerRepo.GetByPubKey(ctx, policy.PinnedWorker)
+	if err != nil {
+		return nil, fmt.Errorf("looking up pinned worker: %w", err)
+	}
+	if worker != nil {
+		workers = append(workers, *worker)
+	}
+	return workers, nil
 }
 
 // extractPolicy reads the WorkerPolicy from environment.RuntimeConfig["worker_policy"].
@@ -180,6 +214,15 @@ func (s *WorkerPolicyService) extractPolicy(env *domain.Environment) WorkerPolic
 	}
 	if mqd, ok := wpMap["max_queue_depth"].(float64); ok {
 		policy.MaxQueueDepth = int(mqd)
+	}
+	if pinned, ok := wpMap["pinned_worker"].(string); ok {
+		policy.PinnedWorker = strings.TrimSpace(pinned)
+	}
+	if labels := stringMapFromAny(wpMap["label_selector"]); len(labels) > 0 {
+		policy.LabelSelector = labels
+	}
+	if rollout := rolloutFromAny(wpMap["rollout"]); rollout != nil {
+		policy.Rollout = rollout
 	}
 	if rs, ok := wpMap["require_software"].([]any); ok {
 		for _, item := range rs {
@@ -220,6 +263,13 @@ func (s *WorkerPolicyService) filterWorkers(workers []domain.Worker, policy Work
 }
 
 func (s *WorkerPolicyService) workerEligibilityRejectionReason(w domain.Worker, policy WorkerPolicy, env *domain.Environment) (string, bool) {
+	if w.Status != domain.WorkerStatusOnline {
+		return fmt.Sprintf("worker status %s is not online", w.Status), false
+	}
+	if policy.PinnedWorker != "" && w.PubKey != policy.PinnedWorker {
+		return fmt.Sprintf("worker does not match pinned_worker %s", policy.PinnedWorker), false
+	}
+
 	if !workerSchedulingStateAllowsNewPlacement(w.SchedulingState) {
 		return workerSchedulingStateRejectionReason(w.SchedulingState), false
 	}
@@ -236,6 +286,10 @@ func (s *WorkerPolicyService) workerEligibilityRejectionReason(w domain.Worker, 
 
 	if policy.MaxPrice > 0 && !s.workerUnderPrice(w, policy.MaxPrice) {
 		return fmt.Sprintf("worker price %d exceeds max %d", lowestPrice(w), policy.MaxPrice), false
+	}
+
+	if reason, ok := workerLabelsMatchReason(w, requiredWorkerPolicyLabels(policy)); !ok {
+		return reason, false
 	}
 
 	for _, req := range policy.RequireSoftware {
@@ -456,12 +510,96 @@ func matchesSelector(w domain.Worker, selector map[string]any) bool {
 			if w.Geohash == "" || !strings.HasPrefix(w.Geohash, strVal) {
 				return false
 			}
+		case "labels", "label_selector":
+			if labels := stringMapFromAny(val); len(labels) > 0 {
+				if _, ok := workerLabelsMatchReason(w, labels); !ok {
+					return false
+				}
+			}
 		}
 	}
 	return true
 }
 
 // --- helpers ---
+
+func requiredWorkerPolicyLabels(policy WorkerPolicy) map[string]string {
+	labels := map[string]string{}
+	for key, value := range policy.LabelSelector {
+		key = strings.TrimSpace(key)
+		value = strings.TrimSpace(value)
+		if key != "" {
+			labels[key] = value
+		}
+	}
+	if policy.Rollout != nil {
+		for key, value := range policy.Rollout.ToLabels {
+			key = strings.TrimSpace(key)
+			value = strings.TrimSpace(value)
+			if key != "" {
+				labels[key] = value
+			}
+		}
+	}
+	return labels
+}
+
+func workerLabelsMatchReason(w domain.Worker, required map[string]string) (string, bool) {
+	if len(required) == 0 {
+		return "", true
+	}
+	for key, want := range required {
+		got, ok := w.Labels[key]
+		if !ok {
+			return fmt.Sprintf("worker missing required label %s=%s", key, want), false
+		}
+		if got != want {
+			return fmt.Sprintf("worker label %s=%s does not match required %s", key, got, want), false
+		}
+	}
+	return "", true
+}
+
+func stringMapFromAny(raw any) map[string]string {
+	switch v := raw.(type) {
+	case map[string]string:
+		out := map[string]string{}
+		for key, value := range v {
+			key = strings.TrimSpace(key)
+			value = strings.TrimSpace(value)
+			if key != "" {
+				out[key] = value
+			}
+		}
+		return out
+	case map[string]any:
+		out := map[string]string{}
+		for key, value := range v {
+			key = strings.TrimSpace(key)
+			if key != "" {
+				out[key] = strings.TrimSpace(fmt.Sprintf("%v", value))
+			}
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
+func rolloutFromAny(raw any) *WorkerPolicyRollout {
+	m, ok := raw.(map[string]any)
+	if !ok {
+		return nil
+	}
+	rollout := &WorkerPolicyRollout{
+		FromLabels: stringMapFromAny(m["from_labels"]),
+		ToLabels:   stringMapFromAny(m["to_labels"]),
+	}
+	if len(rollout.FromLabels) == 0 && len(rollout.ToLabels) == 0 {
+		return nil
+	}
+	return rollout
+}
 
 func lowestPrice(w domain.Worker) int {
 	if len(w.Pricing) == 0 {
