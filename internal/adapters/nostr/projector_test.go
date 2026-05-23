@@ -710,6 +710,20 @@ func (s *fakeDNSBackendProjectionSource) ListDNSBackendStates(context.Context) [
 	return append([]domain.DNSBackendState(nil), s.backends...)
 }
 
+type fakeDNSPolicyProjectionSource struct {
+	policies []domain.DNSPolicy
+}
+
+func (s *fakeDNSPolicyProjectionSource) ListEnabledDNSPolicies(context.Context) ([]domain.DNSPolicy, error) {
+	out := make([]domain.DNSPolicy, 0, len(s.policies))
+	for _, policy := range s.policies {
+		if policy.Enabled {
+			out = append(out, policy)
+		}
+	}
+	return out, nil
+}
+
 func TestProjectorPublishesDNSZoneStateSnapshot(t *testing.T) {
 	ctx := context.Background()
 	zoneSource := &fakeDNSZoneProjectionSource{zones: []domain.DNSZone{{
@@ -770,6 +784,56 @@ func TestProjectorPublishesDNSBackendStateSnapshot(t *testing.T) {
 	assertJSONField(t, backendEvent.Content, "type", "filesystem")
 	assertJSONField(t, backendEvent.Content, "health", "healthy")
 	assertJSONField(t, backendEvent.Content, "deleted", false)
+}
+
+func TestProjectorPublishesDNSPolicyStateSnapshotAndTombstone(t *testing.T) {
+	ctx := context.Background()
+	now := time.Now().UTC()
+	policyID := uuid.New()
+	zoneID := uuid.New()
+	ttl := 120
+	policySource := &fakeDNSPolicyProjectionSource{policies: []domain.DNSPolicy{{
+		ID:        policyID,
+		Name:      "latency-aware",
+		ZoneID:    &zoneID,
+		Rules:     []domain.DNSPolicyRule{{Match: domain.DNSPolicyMatch{Environment: "prod"}, Action: domain.DNSPolicyAction{Visibility: domain.ZoneVisibilityInternal, TTLOverride: &ttl}}},
+		Enabled:   true,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}}}
+	sink := &captureProjectionPublisher{}
+	projector := NewProjector(projectorTestConfig(), newFakeProjectionSource(), sink, nil, zap.NewNop(), WithDNSPolicyProjectionSource(policySource))
+
+	if err := projector.RepublishSnapshot(ctx); err != nil {
+		t.Fatalf("republish snapshot: %v", err)
+	}
+	policyEvent := assertOneSignedKind(t, sink, KindDNSPolicyState)
+	assertTag(t, policyEvent, "d", "dnspolicy:"+policyID.String())
+	assertTag(t, policyEvent, "policy", policyID.String())
+	assertTag(t, policyEvent, "zone", zoneID.String())
+	assertTag(t, policyEvent, "enabled", "true")
+	assertTag(t, policyEvent, "t", "dns-policy")
+	assertTag(t, policyEvent, "t", "bahia")
+	assertJSONField(t, policyEvent.Content, "id", policyID.String())
+	assertJSONField(t, policyEvent.Content, "name", "latency-aware")
+	assertJSONField(t, policyEvent.Content, "zone_id", zoneID.String())
+	assertJSONField(t, policyEvent.Content, "enabled", true)
+	assertJSONField(t, policyEvent.Content, "deleted", false)
+
+	policySource.policies = nil
+	if err := projector.RepublishSnapshot(ctx); err != nil {
+		t.Fatalf("republish snapshot after removal: %v", err)
+	}
+	policyEvents := sink.byKind(KindDNSPolicyState)
+	if len(policyEvents) != 2 {
+		t.Fatalf("expected policy event and tombstone, got %d", len(policyEvents))
+	}
+	tombstone := policyEvents[1]
+	assertTag(t, tombstone, "d", "dnspolicy:"+policyID.String())
+	assertTag(t, tombstone, "deleted", "true")
+	assertTag(t, tombstone, "policy", policyID.String())
+	assertJSONField(t, tombstone.Content, "deleted", true)
+	assertJSONField(t, tombstone.Content, "id", policyID.String())
 }
 
 func TestProjectorPublishesDNSZoneAndBackendTombstones(t *testing.T) {
@@ -892,7 +956,7 @@ func TestProjectorSystemDiscoveryAdvertisesDNSOnlyWhenSourceConfigured(t *testin
 	cfg.Nostr.BrowserRelays = []string{"ws://localhost:3000/relay"}
 
 	sink := &captureProjectionPublisher{}
-	projector := NewProjector(cfg.Nostr, newFakeProjectionSource(), sink, nil, zap.NewNop(), WithSystemDiscoveryConfig(cfg, true), WithDNSProjectionSource(&fakeDNSProjectionSource{}))
+	projector := NewProjector(cfg.Nostr, newFakeProjectionSource(), sink, nil, zap.NewNop(), WithSystemDiscoveryConfig(cfg, true), WithDNSProjectionSource(&fakeDNSProjectionSource{}), WithDNSPolicyProjectionSource(&fakeDNSPolicyProjectionSource{}))
 	if err := projector.RepublishSnapshot(ctx); err != nil {
 		t.Fatalf("republish snapshot: %v", err)
 	}
@@ -928,6 +992,9 @@ func TestProjectorSystemDiscoveryAdvertisesDNSOnlyWhenSourceConfigured(t *testin
 	}
 	if got := readModels["dns_endpoint_state"]; got != float64(KindDNSEndpointState) {
 		t.Fatalf("dns_endpoint_state kind = %#v, want %d", got, KindDNSEndpointState)
+	}
+	if got := readModels["dns_policy_state"]; got != float64(KindDNSPolicyState) {
+		t.Fatalf("dns_policy_state kind = %#v, want %d", got, KindDNSPolicyState)
 	}
 	if got := readModels["dns_backend_state"]; got != float64(KindDNSBackendState) {
 		t.Fatalf("dns_backend_state kind = %#v, want %d", got, KindDNSBackendState)

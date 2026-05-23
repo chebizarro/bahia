@@ -113,6 +113,11 @@ type DNSBackendProjectionSource interface {
 	ListDNSBackendStates(ctx context.Context) []domain.DNSBackendState
 }
 
+// DNSPolicyProjectionSource is the authoritative DNS policy read model source used by the projector.
+type DNSPolicyProjectionSource interface {
+	ListEnabledDNSPolicies(ctx context.Context) ([]domain.DNSPolicy, error)
+}
+
 type dnsPublishedEndpoint struct {
 	FQDN string
 }
@@ -127,6 +132,13 @@ type dnsPublishedBackend struct {
 	Ref    string
 	Type   string
 	Health string
+}
+
+type dnsPublishedPolicy struct {
+	ID      string
+	Name    string
+	ZoneID  string
+	Enabled bool
 }
 
 const (
@@ -156,6 +168,7 @@ type Projector struct {
 	dnsSource             DNSProjectionSource
 	dnsZoneSource         DNSZoneProjectionSource
 	dnsBackendSource      DNSBackendProjectionSource
+	dnsPolicySource       DNSPolicyProjectionSource
 	publisher             ProjectionPublisher
 	eventRepo             repository.NostrEventRepository
 	privateKey            string
@@ -169,6 +182,7 @@ type Projector struct {
 	dnsPublished          map[string]dnsPublishedEndpoint
 	dnsPublishedZones     map[string]dnsPublishedZone
 	dnsPublishedBackends  map[string]dnsPublishedBackend
+	dnsPublishedPolicies  map[string]dnsPublishedPolicy
 	dnsCacheHydrated      bool
 }
 
@@ -224,6 +238,10 @@ func WithDNSZoneProjectionSource(source DNSZoneProjectionSource) ProjectorOption
 
 func WithDNSBackendProjectionSource(source DNSBackendProjectionSource) ProjectorOption {
 	return func(p *Projector) { p.dnsBackendSource = source }
+}
+
+func WithDNSPolicyProjectionSource(source DNSPolicyProjectionSource) ProjectorOption {
+	return func(p *Projector) { p.dnsPolicySource = source }
 }
 
 func WithSystemDiscoveryConfig(cfg *config.Config, mcpTransportEnabled bool) ProjectorOption {
@@ -465,7 +483,17 @@ func (p *Projector) RepublishSnapshot(ctx context.Context) error {
 			dnsBackendTombstones = tombstones
 		}
 	}
-	p.logger.Info("Nostr projection snapshot republished", zap.Int("services", len(services)), zap.Int("environments", len(envs)), zap.Int("states", len(states)), zap.Int("builds", buildsPublished), zap.Int("artifacts", artifactsPublished), zap.Int("deployment_intents", intentsPublished), zap.Int("deployment_runs", runsPublished), zap.Int("policies", policiesPublished), zap.Int("llm_routes", llmRoutes), zap.Int("llm_route_states", llmStates), zap.Int("ml_models", mlModels), zap.Int("ml_model_versions", mlVersions), zap.Int("ml_endpoints", mlEndpoints), zap.Int("ml_endpoint_states", mlStates), zap.Int("ml_provenance_graphs", mlProvenance), zap.Int("ml_capabilities", mlCapabilities), zap.Int("worker_assignments", workerAssignments), zap.Int("worker_drains", workerDrains), zap.Int("backup_recipes", backupRecipes), zap.Int("backup_policies", backupPolicies), zap.Int("backup_repositories", backupRepositories), zap.Int("backup_runs", backupRuns), zap.Int("backup_restores", backupRestores), zap.Int("backup_verifications", backupVerifications), zap.Int("backup_retentions", backupRetentions), zap.Int("backup_postures", backupPostures), zap.Int("dns_zones", dnsZones), zap.Int("dns_zone_tombstones", dnsZoneTombstones), zap.Int("dns_endpoints", dnsEndpoints), zap.Int("dns_endpoint_tombstones", dnsTombstones), zap.Int("dns_backends", dnsBackends), zap.Int("dns_backend_tombstones", dnsBackendTombstones))
+	dnsPolicies, dnsPolicyTombstones := 0, 0
+	if p.dnsPolicySource != nil {
+		published, tombstones, err := p.publishDNSPolicySnapshot(ctx)
+		if err != nil {
+			p.logger.Warn("publish DNS policy projection failed", zap.Error(err))
+		} else {
+			dnsPolicies = published
+			dnsPolicyTombstones = tombstones
+		}
+	}
+	p.logger.Info("Nostr projection snapshot republished", zap.Int("services", len(services)), zap.Int("environments", len(envs)), zap.Int("states", len(states)), zap.Int("builds", buildsPublished), zap.Int("artifacts", artifactsPublished), zap.Int("deployment_intents", intentsPublished), zap.Int("deployment_runs", runsPublished), zap.Int("policies", policiesPublished), zap.Int("llm_routes", llmRoutes), zap.Int("llm_route_states", llmStates), zap.Int("ml_models", mlModels), zap.Int("ml_model_versions", mlVersions), zap.Int("ml_endpoints", mlEndpoints), zap.Int("ml_endpoint_states", mlStates), zap.Int("ml_provenance_graphs", mlProvenance), zap.Int("ml_capabilities", mlCapabilities), zap.Int("worker_assignments", workerAssignments), zap.Int("worker_drains", workerDrains), zap.Int("backup_recipes", backupRecipes), zap.Int("backup_policies", backupPolicies), zap.Int("backup_repositories", backupRepositories), zap.Int("backup_runs", backupRuns), zap.Int("backup_restores", backupRestores), zap.Int("backup_verifications", backupVerifications), zap.Int("backup_retentions", backupRetentions), zap.Int("backup_postures", backupPostures), zap.Int("dns_zones", dnsZones), zap.Int("dns_zone_tombstones", dnsZoneTombstones), zap.Int("dns_endpoints", dnsEndpoints), zap.Int("dns_endpoint_tombstones", dnsTombstones), zap.Int("dns_backends", dnsBackends), zap.Int("dns_backend_tombstones", dnsBackendTombstones), zap.Int("dns_policies", dnsPolicies), zap.Int("dns_policy_tombstones", dnsPolicyTombstones))
 	return nil
 }
 
@@ -1621,12 +1649,103 @@ func (p *Projector) publishDNSBackendTombstone(ctx context.Context, previous dns
 	return p.publishSigned(ctx, KindDNSBackendState, tags, string(content), "dns_backend.projection", nil)
 }
 
+func (p *Projector) publishDNSPolicySnapshot(ctx context.Context) (int, int, error) {
+	if !p.Enabled() || p.dnsPolicySource == nil {
+		return 0, 0, nil
+	}
+	p.dnsPublishMu.Lock()
+	defer p.dnsPublishMu.Unlock()
+	if p.dnsPublishedPolicies == nil {
+		p.dnsPublishedPolicies = map[string]dnsPublishedPolicy{}
+	}
+	policies, err := p.dnsPolicySource.ListEnabledDNSPolicies(ctx)
+	if err != nil {
+		return 0, 0, fmt.Errorf("list DNS policies: %w", err)
+	}
+	current := make(map[string]dnsPublishedPolicy, len(policies))
+	failures := []string{}
+	published := 0
+	for i := range policies {
+		policy := policies[i]
+		if policy.ID == uuid.Nil {
+			failure := fmt.Sprintf("policy[%d] id is required", i)
+			failures = append(failures, failure)
+			p.logger.Warn("skip invalid DNS policy projection", zap.Int("index", i), zap.String("reason", "missing id"))
+			continue
+		}
+		if err := domain.ValidateDNSPolicy(&policy); err != nil {
+			failures = append(failures, fmt.Sprintf("validate policy[%d]: %v", i, err))
+			p.logger.Warn("skip invalid DNS policy projection", zap.Int("index", i), zap.Error(err))
+			continue
+		}
+		dTag := dnsPolicyDTag(policy.ID)
+		if _, exists := current[dTag]; exists {
+			failure := fmt.Sprintf("duplicate policy %q", policy.ID.String())
+			failures = append(failures, failure)
+			p.logger.Warn("skip duplicate DNS policy projection", zap.String("policy_id", policy.ID.String()))
+			continue
+		}
+		if err := p.publishDNSPolicy(ctx, policy, false); err != nil {
+			failures = append(failures, fmt.Sprintf("publish %s: %v", policy.ID.String(), err))
+			p.logger.Warn("publish DNS policy projection failed", zap.String("policy_id", policy.ID.String()), zap.Error(err))
+			continue
+		}
+		current[dTag] = dnsPublishedPolicy{ID: policy.ID.String(), Name: policy.Name, ZoneID: uuidStringPtr(policy.ZoneID), Enabled: policy.Enabled}
+		published++
+	}
+	tombstones := 0
+	for dTag, previous := range p.dnsPublishedPolicies {
+		if _, stillCurrent := current[dTag]; stillCurrent {
+			continue
+		}
+		if err := p.publishDNSPolicyTombstone(ctx, previous); err != nil {
+			failures = append(failures, fmt.Sprintf("tombstone %s: %v", dTag, err))
+			p.logger.Warn("publish DNS policy tombstone failed", zap.String("d_tag", dTag), zap.Error(err))
+			current[dTag] = previous
+			continue
+		}
+		tombstones++
+	}
+	p.dnsPublishedPolicies = current
+	if len(failures) > 0 {
+		return published, tombstones, fmt.Errorf("DNS policy projection completed with %d failure(s): %s", len(failures), strings.Join(failures, "; "))
+	}
+	return published, tombstones, nil
+}
+
+func (p *Projector) publishDNSPolicy(ctx context.Context, policy domain.DNSPolicy, deleted bool) error {
+	updatedAt := policy.UpdatedAt
+	if updatedAt.IsZero() {
+		updatedAt = time.Now().UTC()
+	}
+	content := map[string]any{"id": policy.ID.String(), "name": policy.Name, "zone_id": uuidStringPtr(policy.ZoneID), "environment_id": uuidStringPtr(policy.EnvironmentID), "rules": policy.Rules, "enabled": policy.Enabled, "deleted": deleted, "created_at": formatTime(policy.CreatedAt), "updated_at": formatTime(updatedAt)}
+	tags := gonostr.Tags{{"policy", policy.ID.String()}, {"enabled", fmt.Sprintf("%t", policy.Enabled)}, {"t", "dns-policy"}, {"t", "bahia"}}
+	if policy.ZoneID != nil {
+		tags = append(tags, gonostr.Tag{"zone", policy.ZoneID.String()})
+	}
+	return p.publishReplaceableJSON(ctx, KindDNSPolicyState, dnsPolicyDTag(policy.ID), tags, content, "dns_policy.projection", &policy.ID)
+}
+
+func (p *Projector) publishDNSPolicyTombstone(ctx context.Context, previous dnsPublishedPolicy) error {
+	now := time.Now().UTC()
+	content, _ := json.Marshal(map[string]any{"id": previous.ID, "name": previous.Name, "zone_id": previous.ZoneID, "enabled": previous.Enabled, "deleted": true, "updated_at": formatTime(now)})
+	tags := gonostr.Tags{{"d", "dnspolicy:" + previous.ID}, {"deleted", "true"}, {"policy", previous.ID}, {"enabled", fmt.Sprintf("%t", previous.Enabled)}, {"t", "dns-policy"}, {"t", "bahia"}}
+	if previous.ZoneID != "" {
+		tags = append(tags, gonostr.Tag{"zone", previous.ZoneID})
+	}
+	return p.publishSigned(ctx, KindDNSPolicyState, tags, string(content), "dns_policy.projection", nil)
+}
+
 func dnsZoneDTag(name string) string {
 	return "zone:" + strings.TrimSpace(name)
 }
 
 func dnsBackendDTag(ref string) string {
 	return "dnsbackend:" + strings.TrimSpace(ref)
+}
+
+func dnsPolicyDTag(id uuid.UUID) string {
+	return "dnspolicy:" + id.String()
 }
 
 func (p *Projector) hydrateDNSPublishedCache(ctx context.Context) error {
@@ -1780,7 +1899,7 @@ func (p *Projector) publishSystemDiscovery(ctx context.Context) error {
 	payload := map[string]any{
 		"schema":        "bahia.system-discovery.v1",
 		"registries":    discoveryRegistries(cfg),
-		"control_plane": discoveryControlPlane(cfg.LLM.Enabled, p.mcpTransport, p.dnsSource != nil || p.dnsZoneSource != nil || p.dnsBackendSource != nil),
+		"control_plane": discoveryControlPlane(cfg.LLM.Enabled, p.mcpTransport, p.dnsSource != nil || p.dnsZoneSource != nil || p.dnsBackendSource != nil || p.dnsPolicySource != nil),
 		"blossom": map[string]any{
 			"enabled":       cfg.Blossom.Enabled,
 			"url":           cfg.Blossom.URL,
@@ -1901,6 +2020,7 @@ func discoveryControlPlane(llmEnabled, mcpTransportEnabled, dnsEnabled bool) map
 		capabilities = append(capabilities, "dns_endpoint_catalog")
 		readModelKinds["dns_zone_state"] = KindDNSZoneState
 		readModelKinds["dns_endpoint_state"] = KindDNSEndpointState
+		readModelKinds["dns_policy_state"] = KindDNSPolicyState
 		readModelKinds["dns_backend_state"] = KindDNSBackendState
 	}
 	aiML := map[string]any{

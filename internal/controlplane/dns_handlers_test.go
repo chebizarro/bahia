@@ -5,7 +5,10 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/nbd-wtf/go-nostr"
+	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/repository"
 	"go.uber.org/zap"
 )
 
@@ -13,6 +16,7 @@ type recordingDNSOperator struct {
 	zones        map[string]bool
 	reconcileAll int
 	reconciled   []string
+	policyRepo   *recordingDNSPolicyRepository
 }
 
 func (o *recordingDNSOperator) ReconcileAll(context.Context) error {
@@ -28,6 +32,28 @@ func (o *recordingDNSOperator) ReconcileZone(_ context.Context, zoneName string)
 func (o *recordingDNSOperator) HasZone(zoneName string) bool {
 	return o.zones[zoneName]
 }
+
+func (o *recordingDNSOperator) DNSPolicyRepository() repository.DNSPolicyRepository {
+	if o.policyRepo == nil {
+		return nil
+	}
+	return o.policyRepo
+}
+
+type recordingDNSPolicyRepository struct{}
+
+func (r *recordingDNSPolicyRepository) Create(context.Context, *domain.DNSPolicy) error { return nil }
+func (r *recordingDNSPolicyRepository) Get(context.Context, uuid.UUID) (*domain.DNSPolicy, error) {
+	return nil, nil
+}
+func (r *recordingDNSPolicyRepository) List(context.Context) ([]domain.DNSPolicy, error) {
+	return nil, nil
+}
+func (r *recordingDNSPolicyRepository) ListEnabled(context.Context) ([]domain.DNSPolicy, error) {
+	return nil, nil
+}
+func (r *recordingDNSPolicyRepository) Update(context.Context, *domain.DNSPolicy) error { return nil }
+func (r *recordingDNSPolicyRepository) Delete(context.Context, uuid.UUID) error         { return nil }
 
 func TestDNSDriftRemediateHandlerTriggersReconcile(t *testing.T) {
 	reactor, capture, pubkey, operator := newDNSHandlerTestReactor(t)
@@ -69,6 +95,45 @@ func TestDNSZoneCreateUnknownZoneReturnsUnsupported(t *testing.T) {
 	result := assertDNSPublishedKind(t, capture.events, KindDNSZoneCreateResult)
 	assertDNSResultStatus(t, result, "failed")
 	assertDNSResultStep(t, result, "unsupported")
+}
+
+func TestDNSPolicyApplyValidPayloadTriggersReconcile(t *testing.T) {
+	reactor, capture, pubkey, operator := newDNSHandlerTestReactor(t)
+	operator.policyRepo = &recordingDNSPolicyRepository{}
+	ttl := 120
+	policy := domain.DNSPolicy{
+		Name:    "latency-aware",
+		Rules:   []domain.DNSPolicyRule{{Match: domain.DNSPolicyMatch{Environment: "prod"}, Action: domain.DNSPolicyAction{TTLOverride: &ttl}}},
+		Enabled: true,
+	}
+	content, _ := json.Marshal(policy)
+	event := &nostr.Event{ID: "dns-policy-apply", PubKey: pubkey, Kind: KindDNSPolicyApplyRequest, Content: string(content)}
+
+	reactor.handleDNSPolicyApply(context.Background(), event)
+
+	if operator.reconcileAll != 1 {
+		t.Fatalf("expected ReconcileAll once, got %d", operator.reconcileAll)
+	}
+	result := assertDNSPublishedKind(t, capture.events, KindDNSPolicyApplyResult)
+	assertDNSResultStatus(t, result, "success")
+	assertDNSResultStep(t, result, "completed")
+	assertDNSResultField(t, result, "policy", "latency-aware")
+	assertDNSResultField(t, result, "rule_count", float64(1))
+}
+
+func TestDNSPolicyApplyInvalidPayloadReturnsValidationError(t *testing.T) {
+	reactor, capture, pubkey, operator := newDNSHandlerTestReactor(t)
+	operator.policyRepo = &recordingDNSPolicyRepository{}
+	event := &nostr.Event{ID: "dns-policy-apply-invalid", PubKey: pubkey, Kind: KindDNSPolicyApplyRequest, Content: `{"name":"invalid","rules":[]}`}
+
+	reactor.handleDNSPolicyApply(context.Background(), event)
+
+	if operator.reconcileAll != 0 {
+		t.Fatalf("expected no reconcile for invalid policy, got %d", operator.reconcileAll)
+	}
+	result := assertDNSPublishedKind(t, capture.events, KindDNSPolicyApplyResult)
+	assertDNSResultStatus(t, result, "error")
+	assertDNSResultStep(t, result, "validation_error")
 }
 
 func TestDNSUnsupportedHandlersPublishDeterministicResults(t *testing.T) {
@@ -140,5 +205,16 @@ func assertDNSResultStep(t *testing.T, event nostr.Event, want string) {
 	}
 	if got := content["step"]; got != want {
 		t.Fatalf("step = %v, want %s; content=%s", got, want, event.Content)
+	}
+}
+
+func assertDNSResultField(t *testing.T, event nostr.Event, key string, want any) {
+	t.Helper()
+	var content map[string]any
+	if err := json.Unmarshal([]byte(event.Content), &content); err != nil {
+		t.Fatalf("decode DNS result content: %v", err)
+	}
+	if got := content[key]; got != want {
+		t.Fatalf("%s = %#v, want %#v; content=%s", key, got, want, event.Content)
 	}
 }

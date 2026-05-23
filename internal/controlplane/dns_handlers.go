@@ -7,7 +7,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/nbd-wtf/go-nostr"
+	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/repository"
 )
 
 const (
@@ -30,6 +33,10 @@ type DNSControlPlaneOperator interface {
 	HasZone(zoneName string) bool
 }
 
+type DNSPolicyRepositoryProvider interface {
+	DNSPolicyRepository() repository.DNSPolicyRepository
+}
+
 func (r *Reactor) handleDNSRequest(ctx context.Context, event *nostr.Event) {
 	switch event.Kind {
 	case KindDNSDriftRemediateRequest:
@@ -39,7 +46,7 @@ func (r *Reactor) handleDNSRequest(ctx context.Context, event *nostr.Event) {
 	case KindDNSRecordOverrideRequest:
 		r.publishDNSUnsupported(ctx, event, KindDNSRecordOverrideResult, dnsActionRecordOverride, dnsUnsupportedRecordOverride)
 	case KindDNSPolicyApplyRequest:
-		r.publishDNSUnsupported(ctx, event, KindDNSPolicyApplyResult, dnsActionPolicyApply, dnsUnsupportedPolicyApply)
+		r.handleDNSPolicyApply(ctx, event)
 	case KindDNSBackendRegisterRequest:
 		r.publishDNSUnsupported(ctx, event, KindDNSBackendRegisterResult, dnsActionBackendRegister, dnsUnsupportedBackendRegister)
 	default:
@@ -110,6 +117,55 @@ func (r *Reactor) handleDNSZoneCreate(ctx context.Context, event *nostr.Event) {
 	_ = r.publishDNSOperationResult(ctx, event, KindDNSZoneCreateResult, dnsActionZoneCreate, "success", "completed", "Configured DNS zone exists; reconcile completed", map[string]any{"zone": zoneName})
 }
 
+func (r *Reactor) handleDNSPolicyApply(ctx context.Context, event *nostr.Event) {
+	logger := r.logger.With("event_id", event.ID, "requester", event.PubKey)
+	if !r.isAuthorized(event.PubKey) {
+		logger.Warn("unauthorized DNS policy apply request")
+		_ = r.publishDNSOperationResult(ctx, event, KindDNSPolicyApplyResult, dnsActionPolicyApply, "error", "unauthorized", "requester not in authorized list", nil)
+		return
+	}
+	policyRepo := r.dnsPolicyRepository()
+	if r.dnsOperator == nil || policyRepo == nil {
+		zoneName, _ := parseDNSZoneSelector(event)
+		_ = r.publishDNSOperationResult(ctx, event, KindDNSPolicyApplyResult, dnsActionPolicyApply, "failed", "unsupported", dnsUnsupportedPolicyApply, map[string]any{"zone": zoneName})
+		return
+	}
+	var policy domain.DNSPolicy
+	if err := json.Unmarshal([]byte(event.Content), &policy); err != nil {
+		_ = r.publishDNSOperationResult(ctx, event, KindDNSPolicyApplyResult, dnsActionPolicyApply, "error", "parse_error", fmt.Sprintf("invalid DNS policy JSON content: %v", err), nil)
+		return
+	}
+	if policy.ID == uuid.Nil {
+		policy.ID = uuid.New()
+	}
+	now := time.Now().UTC()
+	if policy.CreatedAt.IsZero() {
+		policy.CreatedAt = now
+	}
+	if policy.UpdatedAt.IsZero() {
+		policy.UpdatedAt = now
+	}
+	if err := domain.ValidateDNSPolicy(&policy); err != nil {
+		_ = r.publishDNSOperationResult(ctx, event, KindDNSPolicyApplyResult, dnsActionPolicyApply, "error", "validation_error", err.Error(), map[string]any{"policy": policy.Name, "policy_id": policy.ID.String()})
+		return
+	}
+	logger.Info("accepted DNS policy apply request", "policy_id", policy.ID.String(), "policy", policy.Name, "rules", len(policy.Rules))
+	if err := r.dnsOperator.ReconcileAll(ctx); err != nil {
+		logger.Warn("DNS policy apply reconcile failed", "policy_id", policy.ID.String(), "error", err)
+		_ = r.publishDNSOperationResult(ctx, event, KindDNSPolicyApplyResult, dnsActionPolicyApply, "error", "reconcile_failed", err.Error(), map[string]any{"policy": policy.Name, "policy_id": policy.ID.String(), "rule_count": len(policy.Rules)})
+		return
+	}
+	_ = r.publishDNSOperationResult(ctx, event, KindDNSPolicyApplyResult, dnsActionPolicyApply, "success", "completed", fmt.Sprintf("DNS policy %s accepted with %d rule(s); reconcile completed", policy.Name, len(policy.Rules)), map[string]any{"policy": policy.Name, "policy_id": policy.ID.String(), "rule_count": len(policy.Rules)})
+}
+
+func (r *Reactor) dnsPolicyRepository() repository.DNSPolicyRepository {
+	provider, ok := r.dnsOperator.(DNSPolicyRepositoryProvider)
+	if !ok || provider == nil {
+		return nil
+	}
+	return provider.DNSPolicyRepository()
+}
+
 func (r *Reactor) publishDNSUnsupported(ctx context.Context, event *nostr.Event, resultKind int, action, reason string) {
 	if !r.isAuthorized(event.PubKey) {
 		_ = r.publishDNSOperationResult(ctx, event, resultKind, action, "error", "unauthorized", "requester not in authorized list", nil)
@@ -121,7 +177,11 @@ func (r *Reactor) publishDNSUnsupported(ctx context.Context, event *nostr.Event,
 
 func parseDNSZoneSelector(event *nostr.Event) (string, error) {
 	zoneName := tagValueNostr(event.Tags, "zone")
-	if strings.TrimSpace(event.Content) == "" {
+	trimmedContent := strings.TrimSpace(event.Content)
+	if trimmedContent == "" {
+		return strings.TrimSpace(zoneName), nil
+	}
+	if event.Kind == KindDNSPolicyApplyRequest {
 		return strings.TrimSpace(zoneName), nil
 	}
 	var content struct {
