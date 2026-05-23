@@ -480,6 +480,8 @@ func ValidateBackupRun(run *BackupRun) error {
 	run.RequestDTag = strings.TrimSpace(run.RequestDTag)
 	run.TargetRef = strings.TrimSpace(run.TargetRef)
 	run.SnapshotID = strings.TrimSpace(run.SnapshotID)
+	run.RestoreEligibilityReason = strings.TrimSpace(run.RestoreEligibilityReason)
+	run.VerificationPolicyFailure = strings.TrimSpace(run.VerificationPolicyFailure)
 	if err := ValidateRequiredUUID(run.RecipeID, "recipe_id"); err != nil {
 		return err
 	}
@@ -518,11 +520,26 @@ func ValidateBackupRun(run *BackupRun) error {
 	if err := ValidateRequiredString(run.TargetRef, "target_ref"); err != nil {
 		return err
 	}
+	if run.VerificationMode == "" {
+		run.VerificationMode = BackupVerificationNone
+	}
+	if !run.VerificationMode.IsValid() {
+		return fmt.Errorf("%w: backup verification mode %q is not valid", ErrInvalidValue, run.VerificationMode)
+	}
 	if run.VerificationStatus == "" {
 		run.VerificationStatus = BackupVerificationPending
 	}
 	if !run.VerificationStatus.IsValid() {
 		return fmt.Errorf("%w: backup verification status %q is not valid", ErrInvalidValue, run.VerificationStatus)
+	}
+	if run.RestoreEligibility == "" {
+		run.RestoreEligibility, run.RestoreEligibilityReason = BackupRunRestoreEligibility(run)
+	}
+	if !run.RestoreEligibility.IsValid() {
+		return fmt.Errorf("%w: backup restore eligibility %q is not valid", ErrInvalidValue, run.RestoreEligibility)
+	}
+	if !run.FailureCategory.IsValid() {
+		return fmt.Errorf("%w: backup failure category %q is not valid", ErrInvalidValue, run.FailureCategory)
 	}
 	return nil
 }
@@ -546,6 +563,9 @@ func ValidateBackupVerificationRecord(record *BackupVerificationRecord) error {
 	if !record.Status.IsValid() {
 		return fmt.Errorf("%w: backup verification status %q is not valid", ErrInvalidValue, record.Status)
 	}
+	if len(record.EvidenceDetails) == 0 && len(record.Evidence) > 0 {
+		record.EvidenceDetails = record.Evidence
+	}
 	if record.Verified && record.Status != BackupVerificationSucceeded {
 		return fmt.Errorf("%w: verified backup records must have succeeded status", ErrInvalidValue)
 	}
@@ -567,6 +587,8 @@ func ValidateBackupRestoreRun(run *BackupRestoreRun) error {
 	run.ApprovalEventID = strings.TrimSpace(run.ApprovalEventID)
 	run.ApprovedBy = strings.TrimSpace(run.ApprovedBy)
 	run.ApprovalMessage = strings.TrimSpace(run.ApprovalMessage)
+	run.ApprovalReasonCode = strings.TrimSpace(run.ApprovalReasonCode)
+	run.VerificationPolicyFailure = strings.TrimSpace(run.VerificationPolicyFailure)
 	if err := ValidateRequiredUUID(run.BackupRunID, "backup_run_id"); err != nil {
 		return err
 	}
@@ -605,6 +627,21 @@ func ValidateBackupRestoreRun(run *BackupRestoreRun) error {
 	if !run.ApprovalStatus.IsValid() {
 		return fmt.Errorf("%w: backup approval status %q is not valid", ErrInvalidValue, run.ApprovalStatus)
 	}
+	if run.ApprovalRequirement == "" {
+		if run.ApprovalStatus == BackupApprovalNotRequired {
+			run.ApprovalRequirement = BackupApprovalRequirementNone
+		} else {
+			run.ApprovalRequirement = BackupApprovalRequirementPolicy
+		}
+	}
+	if !run.ApprovalRequirement.IsValid() {
+		return fmt.Errorf("%w: backup approval requirement %q is not valid", ErrInvalidValue, run.ApprovalRequirement)
+	}
+	if run.ApprovalRequirement == BackupApprovalRequirementNone {
+		run.ApprovalRequired = false
+	} else if run.ApprovalStatus == BackupApprovalPending || run.ApprovalStatus == BackupApprovalApproved || run.ApprovalStatus == BackupApprovalRejected {
+		run.ApprovalRequired = true
+	}
 	switch run.ApprovalStatus {
 	case BackupApprovalApproved:
 		if err := ValidateRequiredString(run.ApprovalEventID, "approval_event_id"); err != nil {
@@ -635,6 +672,9 @@ func ValidateBackupRestoreRun(run *BackupRestoreRun) error {
 	}
 	if !run.VerificationStatus.IsValid() {
 		return fmt.Errorf("%w: backup verification status %q is not valid", ErrInvalidValue, run.VerificationStatus)
+	}
+	if !run.FailureCategory.IsValid() {
+		return fmt.Errorf("%w: backup failure category %q is not valid", ErrInvalidValue, run.FailureCategory)
 	}
 	return nil
 }
@@ -675,9 +715,44 @@ func ValidateBackupRetentionRun(run *BackupRetentionRun) error {
 	if !run.Backend.IsValid() {
 		return fmt.Errorf("%w: backup backend %q is not valid", ErrInvalidValue, run.Backend)
 	}
+	if !run.FailureCategory.IsValid() {
+		return fmt.Errorf("%w: backup failure category %q is not valid", ErrInvalidValue, run.FailureCategory)
+	}
 	return nil
 }
 
 func BackupRunRestoreEligible(run *BackupRun) bool {
-	return run != nil && run.Status == RunStatusSucceeded && run.VerificationStatus == BackupVerificationSucceeded
+	if run == nil {
+		return false
+	}
+	if run.RestoreEligibility != "" && run.RestoreEligibility.IsValid() {
+		return run.RestoreEligibility == RestoreEligibilityEligible
+	}
+	return run.Status == RunStatusSucceeded && run.VerificationStatus == BackupVerificationSucceeded
+}
+
+func BackupRunRestoreEligibility(run *BackupRun) (RestoreEligibility, string) {
+	if run == nil {
+		return RestoreEligibilityUnknown, "backup run is missing"
+	}
+	if run.Status != RunStatusSucceeded {
+		return RestoreEligibilityRunNotSucceeded, "backup run has not succeeded"
+	}
+	if !run.SnapshotCreated || strings.TrimSpace(run.SnapshotID) == "" {
+		return RestoreEligibilitySnapshotMissing, "backup snapshot is missing"
+	}
+	switch run.VerificationStatus {
+	case BackupVerificationSucceeded:
+		return RestoreEligibilityEligible, "backup snapshot verified successfully"
+	case BackupVerificationPending:
+		return RestoreEligibilityVerificationPending, "backup snapshot verification is pending"
+	case BackupVerificationFailed:
+		return RestoreEligibilityVerificationFailed, "backup snapshot verification failed"
+	case BackupVerificationSkipped:
+		return RestoreEligibilityVerificationSkipped, "backup snapshot verification was skipped"
+	case BackupVerificationUnsupported:
+		return RestoreEligibilityVerificationUnsupported, "backup snapshot verification is unsupported"
+	default:
+		return RestoreEligibilityUnknown, "backup snapshot verification state is unknown"
+	}
 }
