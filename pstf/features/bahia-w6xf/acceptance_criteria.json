@@ -1,0 +1,33 @@
+{
+  "feature_id": "bahia-w6xf",
+  "criteria": [
+    {
+      "id": "AC-W6XF-001",
+      "title": "Backup registry and operational commands are exposed as MCP tools",
+      "given": "an MCP client asks the Bahia MCP server for tools",
+      "when": "backup tool definitions are registered",
+      "then": "apply repository, policy, recipe, definition, probe, run, verification, restore, approval/rejection, and retention tools are present"
+    },
+    {
+      "id": "AC-W6XF-002",
+      "title": "Mutating backup MCP tools preserve Nostr-native command semantics",
+      "given": "a configured backup command publisher",
+      "when": "a backup mutating MCP tool is invoked",
+      "then": "the tool requires an idempotency key for the addressable d tag, calls the backup command publisher, and returns request/result/status correlation metadata instead of directly executing backup completion logic"
+    },
+    {
+      "id": "AC-W6XF-003",
+      "title": "Backup read-model MCP tools expose durable backup state",
+      "given": "a configured backup read-model repository",
+      "when": "list or inspect backup tools are invoked",
+      "then": "the tools return repositories, policies, recipes, definitions, runs, restores, retention runs, and single-record details including run verification evidence where available"
+    },
+    {
+      "id": "AC-W6XF-004",
+      "title": "Missing MCP dependencies fail closed",
+      "given": "backup command or read-model dependencies are not configured",
+      "when": "a backup MCP tool requiring that dependency is invoked",
+      "then": "the tool returns an MCP error result and does not create fake backup state"
+    }
+  ]
+}

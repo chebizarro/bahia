@@ -1,0 +1,35 @@
+{
+  "feature_id": "bahia-w6xf",
+  "tests": [
+    {
+      "id": "TM-W6XF-001",
+      "acceptance_criteria": ["AC-W6XF-001"],
+      "command": "go test ./internal/mcp",
+      "test_names": ["TestGetToolsIncludesBackupTools"]
+    },
+    {
+      "id": "TM-W6XF-002",
+      "acceptance_criteria": ["AC-W6XF-002"],
+      "command": "go test ./internal/mcp",
+      "test_names": [
+        "TestBackupMutatingToolsPublishNostrRequestsAndReturnCorrelation",
+        "TestBackupMutatingToolsRequireIdempotencyKeyWhenPublisherConfigured"
+      ]
+    },
+    {
+      "id": "TM-W6XF-003",
+      "acceptance_criteria": ["AC-W6XF-003"],
+      "command": "go test ./internal/mcp",
+      "test_names": ["TestBackupReadModelToolsListAndInspectDurableBackupState"]
+    },
+    {
+      "id": "TM-W6XF-004",
+      "acceptance_criteria": ["AC-W6XF-004"],
+      "command": "go test ./internal/mcp",
+      "test_names": [
+        "TestBackupMutatingToolsRequirePublisher",
+        "TestBackupReadModelToolsRequireRepository"
+      ]
+    }
+  ]
+}

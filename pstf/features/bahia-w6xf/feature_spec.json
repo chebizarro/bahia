@@ -1,0 +1,20 @@
+{
+  "feature_id": "bahia-w6xf",
+  "title": "Backup MCP tools",
+  "status": "implemented",
+  "source_plan": "docs/plans/bahia-backup-control-plane-implementation-2026-05-23.md#phase-2--add-mcp-parity",
+  "observed_behavior": [
+    "Before this slice, internal/mcp/server.go exposed services, deployments, ML, LLM, packages, workers, payments, policies, notifications, SBOMs, and tool provisioning, but no backup-specific MCP tools.",
+    "Backup domain, repository, registry handlers, operational handlers, and scheduler/placement services already existed outside internal/mcp."
+  ],
+  "intended_behavior": [
+    "Agents can submit backup registry and operational intents through MCP as signer-first Nostr command requests rather than direct handler invocation or local polling.",
+    "Agents can list and inspect durable backup control-plane read models for repositories, policies, recipes, definitions, runs, restores, and retention runs.",
+    "MCP backup tools return correlation metadata for request event, result/status kinds, d tag, published relay count, and relevant resource identifiers."
+  ],
+  "scope": [
+    "internal/mcp/backup_tools.go",
+    "internal/mcp/backup_tools_test.go",
+    "internal/mcp/server.go"
+  ]
+}

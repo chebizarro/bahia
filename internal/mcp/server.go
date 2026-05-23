@@ -35,8 +35,10 @@ type Server struct {
 	serviceCommands   ServiceCommandPublisher
 	packageCommands   PackageCommandPublisher
 	workerCommands    WorkerCommandPublisher
+	backupCommands    BackupCommandPublisher
 	packageProjection repository.PackageControlPlaneRepository
 	workerReadModels  *service.WorkerReadModelService
+	backupReadModels  BackupReadModelRepository
 	logger            *zap.Logger
 	secretsRepo       repository.SecretRepository       // optional: for secret management tools
 	encryptor         *secrets.Encryptor                // optional: for secret encryption/decryption
@@ -80,8 +82,10 @@ type ServerDeps struct {
 	ServiceCommandPublisher ServiceCommandPublisher
 	PackageCommandPublisher PackageCommandPublisher
 	WorkerCommandPublisher  WorkerCommandPublisher
+	BackupCommandPublisher  BackupCommandPublisher
 	PackageProjection       repository.PackageControlPlaneRepository
 	WorkerReadModels        *service.WorkerReadModelService
+	BackupReadModels        BackupReadModelRepository
 }
 
 // SignatureVerifier verifies signatures for an artifact.
@@ -148,8 +152,10 @@ func NewServerWithOptions(registry *service.RegistryService, logger *zap.Logger,
 		serviceCommands:   deps.ServiceCommandPublisher,
 		packageCommands:   deps.PackageCommandPublisher,
 		workerCommands:    deps.WorkerCommandPublisher,
+		backupCommands:    deps.BackupCommandPublisher,
 		packageProjection: deps.PackageProjection,
 		workerReadModels:  deps.WorkerReadModels,
+		backupReadModels:  deps.BackupReadModels,
 		logger:            logger,
 		secretsRepo:       deps.SecretsRepo,
 		encryptor:         deps.Encryptor,
@@ -1690,7 +1696,8 @@ func (s *Server) GetTools() []Tool {
 	tools = append(tools, mlToolDefinitions()...)
 	tools = append(tools, assistantAsyncToolDefinitions()...)
 	tools = append(tools, workerToolDefinitions()...)
-	return append(tools, packageToolDefinitions()...)
+	tools = append(tools, packageToolDefinitions()...)
+	return append(tools, backupToolDefinitions()...)
 }
 
 // CallTool handles an MCP tool call.
@@ -1701,6 +1708,10 @@ func (s *Server) InvokeTool(ctx context.Context, name string, arguments map[stri
 
 func (s *Server) CallTool(ctx context.Context, name string, arguments map[string]interface{}) (*ToolResult, error) {
 	s.logger.Info("tool call", zap.String("tool", name))
+
+	if isBackupToolName(name) {
+		return s.handleBackupTool(ctx, name, arguments)
+	}
 
 	switch name {
 	// Service operations
