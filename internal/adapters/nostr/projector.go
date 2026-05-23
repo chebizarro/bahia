@@ -159,6 +159,7 @@ type ProjectionPublisher interface {
 // periodic snapshot can repair a cold or wiped sidecar store.
 type Projector struct {
 	source                ProjectionSource
+	projectorSource       ProjectorSource
 	llmSource             LLMProjectionSource
 	mlSource              MLProjectionSource
 	workerSource          WorkerProjectionSource
@@ -202,6 +203,10 @@ func WithBackupProjectionStaleTimeout(timeout time.Duration) ProjectorOption {
 			p.backupStaleTimeout = timeout
 		}
 	}
+}
+
+func WithProjectorSource(source ProjectorSource) ProjectorOption {
+	return func(p *Projector) { p.projectorSource = source }
 }
 
 func WithLLMProjectionSource(source LLMProjectionSource) ProjectorOption {
@@ -269,6 +274,7 @@ func NewProjector(cfg config.NostrConfig, source ProjectionSource, publisher Pro
 	for _, opt := range opts {
 		opt(p)
 	}
+	p.enabled = cfg.PublishEnabled && cfg.PrivateKey != "" && publisher != nil && (source != nil || p.projectorSource != nil)
 	return p
 }
 
@@ -375,7 +381,7 @@ func (p *Projector) Run(ctx context.Context) error {
 	}
 }
 
-// RepublishSnapshot republishes all replaceable read models from authoritative
+// RepublishSnapshot republishes all replaceable read models from canonical
 // state. It is safe to run repeatedly; latest replaceable events win by d-tag.
 func (p *Projector) RepublishSnapshot(ctx context.Context) error {
 	if !p.Enabled() {
@@ -385,7 +391,8 @@ func (p *Projector) RepublishSnapshot(ctx context.Context) error {
 		p.logger.Warn("publish system discovery projection failed", zap.Error(err))
 	}
 
-	services, err := p.source.ListServices(ctx)
+	snapshotSource := p.snapshotSource()
+	services, err := snapshotSource.ListServices(ctx)
 	if err != nil {
 		return fmt.Errorf("list services: %w", err)
 	}
@@ -395,7 +402,7 @@ func (p *Projector) RepublishSnapshot(ctx context.Context) error {
 		}
 	}
 
-	envs, err := p.source.ListEnvironments(ctx)
+	envs, err := snapshotSource.ListEnvironments(ctx)
 	if err != nil {
 		return fmt.Errorf("list environments: %w", err)
 	}
@@ -405,7 +412,7 @@ func (p *Projector) RepublishSnapshot(ctx context.Context) error {
 		}
 	}
 
-	states, err := p.source.ListAllStates(ctx)
+	states, err := snapshotSource.ListStates(ctx)
 	if err != nil {
 		return fmt.Errorf("list states: %w", err)
 	}
@@ -418,7 +425,7 @@ func (p *Projector) RepublishSnapshot(ctx context.Context) error {
 			)
 		}
 	}
-	buildsPublished, artifactsPublished, intentsPublished, runsPublished := p.publishPublicRouteSnapshots(ctx, services, envs)
+	buildsPublished, artifactsPublished, intentsPublished, runsPublished := p.publishPublicRouteSnapshotsFromSource(ctx, snapshotSource, services, envs)
 	policiesPublished := p.publishPolicySnapshots(ctx)
 	llmRoutes := 0
 	llmStates := 0
@@ -805,11 +812,15 @@ func (p *Projector) publishLLMStateForIDs(ctx context.Context, routeID, envID uu
 }
 
 func (p *Projector) publishPublicRouteSnapshots(ctx context.Context, services []domain.Service, envs []domain.Environment) (int, int, int, int) {
+	return p.publishPublicRouteSnapshotsFromSource(ctx, legacyProjectorSource{source: p.source}, services, envs)
+}
+
+func (p *Projector) publishPublicRouteSnapshotsFromSource(ctx context.Context, snapshotSource ProjectorSource, services []domain.Service, envs []domain.Environment) (int, int, int, int) {
 	const pageSize = 1000
 	buildsPublished, artifactsPublished, intentsPublished, runsPublished := 0, 0, 0, 0
 	for i := range services {
 		for offset := 0; ; offset += pageSize {
-			builds, err := p.source.ListBuilds(ctx, services[i].ID, pageSize, offset)
+			builds, err := snapshotSource.ListBuilds(ctx, services[i].ID, pageSize, offset)
 			if err != nil {
 				p.logger.Warn("list builds for projection failed", zap.String("service_id", services[i].ID.String()), zap.Error(err))
 				break
@@ -826,7 +837,7 @@ func (p *Projector) publishPublicRouteSnapshots(ctx context.Context, services []
 			}
 		}
 		for offset := 0; ; offset += pageSize {
-			artifacts, err := p.source.ListArtifacts(ctx, services[i].ID, pageSize, offset)
+			artifacts, err := snapshotSource.ListArtifacts(ctx, services[i].ID, pageSize, offset)
 			if err != nil {
 				p.logger.Warn("list artifacts for projection failed", zap.String("service_id", services[i].ID.String()), zap.Error(err))
 				break
@@ -844,7 +855,7 @@ func (p *Projector) publishPublicRouteSnapshots(ctx context.Context, services []
 		}
 		for j := range envs {
 			for offset := 0; ; offset += pageSize {
-				intents, err := p.source.ListDeploymentIntents(ctx, services[i].ID, envs[j].ID, pageSize, offset)
+				intents, err := snapshotSource.ListDeploymentIntents(ctx, services[i].ID, envs[j].ID, pageSize, offset)
 				if err != nil {
 					p.logger.Warn("list deployment intents for projection failed", zap.String("service_id", services[i].ID.String()), zap.String("environment_id", envs[j].ID.String()), zap.Error(err))
 					break
@@ -855,7 +866,7 @@ func (p *Projector) publishPublicRouteSnapshots(ctx context.Context, services []
 					} else {
 						intentsPublished++
 					}
-					runs, err := p.source.ListDeploymentRuns(ctx, intents[k].ID)
+					runs, err := snapshotSource.ListDeploymentRuns(ctx, intents[k].ID)
 					if err != nil {
 						p.logger.Warn("list deployment runs for projection failed", zap.String("intent_id", intents[k].ID.String()), zap.Error(err))
 						continue
@@ -971,8 +982,8 @@ func (p *Projector) publishMLSnapshots(ctx context.Context) (modelsPublished, ve
 			}
 		}
 	}
-	if p.workerSource != nil {
-		workers, err := p.workerSource.List(ctx, "", 1000)
+	if workerSnapshotSource := p.workerSnapshotSource(); workerSnapshotSource != nil {
+		workers, err := workerSnapshotSource.ListWorkers(ctx, "", 1000)
 		if err != nil {
 			p.logger.Warn("list workers for ML capability projection failed", zap.Error(err))
 		} else {

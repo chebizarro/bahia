@@ -69,6 +69,7 @@ type RouterDeps struct {
 	ContinuityStatuses service.ContinuityStatusReader
 	ContinuityGraph    handlers.ContinuityGraphReader
 	HealthProvider     any
+	ModePolicy         any
 }
 
 // SignatureVerifier is the interface for signature verification.
@@ -117,6 +118,9 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 
 	// Auth middleware (applied to API routes, not health checks).
 	authMiddleware := routeAuthConfig(deps, authCfg...)
+	tier1Gate := routeTierGate(deps.ModePolicy, 1)
+	tier2Gate := routeTierGate(deps.ModePolicy, 2)
+	tier3Gate := routeTierGate(deps.ModePolicy, 3)
 	// Health, readiness, and metrics (unauthenticated).
 	r.Get("/health", func(w http.ResponseWriter, r *http.Request) {
 		if deps.HealthProvider == nil {
@@ -198,16 +202,17 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 	}
 
 	if deps.OCI != nil {
-		r.Mount("/v2", deps.OCI)
+		r.With(tier3Gate).Mount("/v2", deps.OCI)
 	}
 
 	if deps.MCP != nil {
-		r.With(middleware.ContentType, auth.MiddlewareFromConfig(authMiddleware), middleware.RateLimit(writeLimiter)).Post("/mcp", deps.MCP.HandleJSONRPC)
+		r.With(tier3Gate, middleware.ContentType, auth.MiddlewareFromConfig(authMiddleware), middleware.RateLimit(writeLimiter)).Post("/mcp", deps.MCP.HandleJSONRPC)
 	}
 
 	// Continuity read-model routes (authenticated when auth is enabled).
 	r.Route("/api", func(r chi.Router) {
 		r.Use(middleware.ContentType)
+		r.Use(tier1Gate)
 		r.Use(auth.MiddlewareFromConfig(authMiddleware))
 		r.With(middleware.RateLimit(readLimiter)).Get("/continuity/status", continuityH.Status)
 		r.With(middleware.RateLimit(readLimiter)).Get("/continuity/topology", continuityH.Topology)
@@ -225,153 +230,153 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 
 			// Tenant orgs (read)
 			if tenantH != nil {
-				r.Get("/orgs", tenantH.ListOrgs)
-				r.Get("/orgs/{id}", tenantH.GetOrg)
-				r.Get("/orgs/{id}/members", tenantH.ListMembers)
-				r.Get("/orgs/{id}/invites", tenantH.ListInvites)
-				r.Get("/me/invites", tenantH.MyInvites)
+				r.With(tier2Gate).Get("/orgs", tenantH.ListOrgs)
+				r.With(tier2Gate).Get("/orgs/{id}", tenantH.GetOrg)
+				r.With(tier2Gate).Get("/orgs/{id}/members", tenantH.ListMembers)
+				r.With(tier2Gate).Get("/orgs/{id}/invites", tenantH.ListInvites)
+				r.With(tier2Gate).Get("/me/invites", tenantH.MyInvites)
 			}
 
 			// Services (read)
-			r.With(coreRBAC(deps, authMiddleware, nil, true)).Get("/services", svcH.List)
-			r.With(coreRBAC(deps, authMiddleware, serviceOrgResolver(deps.Services, "id"), true)).Get("/services/{id}", svcH.Get)
+			r.With(tier2Gate, coreRBAC(deps, authMiddleware, nil, true)).Get("/services", svcH.List)
+			r.With(tier2Gate, coreRBAC(deps, authMiddleware, serviceOrgResolver(deps.Services, "id"), true)).Get("/services/{id}", svcH.Get)
 
 			// Environments (read)
-			r.With(coreRBAC(deps, authMiddleware, nil, true)).Get("/environments", envH.List)
-			r.With(coreRBAC(deps, authMiddleware, environmentOrgResolver(deps.Environments, "id"), true)).Get("/environments/{id}", envH.Get)
+			r.With(tier2Gate, coreRBAC(deps, authMiddleware, nil, true)).Get("/environments", envH.List)
+			r.With(tier2Gate, coreRBAC(deps, authMiddleware, environmentOrgResolver(deps.Environments, "id"), true)).Get("/environments/{id}", envH.Get)
 
 			// Builds (read)
-			r.With(coreRBAC(deps, authMiddleware, buildOrgResolver(deps.Builds, deps.Services, "id"), true)).Get("/builds/{id}", buildH.Get)
-			r.With(coreRBAC(deps, authMiddleware, serviceOrgResolver(deps.Services, "serviceId"), true)).Get("/services/{serviceId}/builds", buildH.ListByService)
+			r.With(tier2Gate, coreRBAC(deps, authMiddleware, buildOrgResolver(deps.Builds, deps.Services, "id"), true)).Get("/builds/{id}", buildH.Get)
+			r.With(tier2Gate, coreRBAC(deps, authMiddleware, serviceOrgResolver(deps.Services, "serviceId"), true)).Get("/services/{serviceId}/builds", buildH.ListByService)
 
 			// Artifacts (read)
-			r.With(coreRBAC(deps, authMiddleware, artifactOrgResolver(deps.Artifacts, deps.Services, "id"), true)).Get("/artifacts/{id}", artifactH.Get)
-			r.With(coreRBAC(deps, authMiddleware, serviceOrgResolver(deps.Services, "serviceId"), true)).Get("/services/{serviceId}/artifacts", artifactH.ListByService)
+			r.With(tier2Gate, coreRBAC(deps, authMiddleware, artifactOrgResolver(deps.Artifacts, deps.Services, "id"), true)).Get("/artifacts/{id}", artifactH.Get)
+			r.With(tier2Gate, coreRBAC(deps, authMiddleware, serviceOrgResolver(deps.Services, "serviceId"), true)).Get("/services/{serviceId}/artifacts", artifactH.ListByService)
 
 			// Deployment Intents (read)
-			r.With(coreRBAC(deps, authMiddleware, intentOrgResolver(registry, deps.Services, "id"), true)).Get("/deployments/intents/{id}", deployH.GetIntent)
-			r.With(coreRBAC(deps, authMiddleware, serviceEnvOrgResolver(deps.Services, deps.Environments, "serviceId", "envId"), true)).Get("/services/{serviceId}/environments/{envId}/intents", deployH.ListIntents)
+			r.With(tier2Gate, coreRBAC(deps, authMiddleware, intentOrgResolver(registry, deps.Services, "id"), true)).Get("/deployments/intents/{id}", deployH.GetIntent)
+			r.With(tier2Gate, coreRBAC(deps, authMiddleware, serviceEnvOrgResolver(deps.Services, deps.Environments, "serviceId", "envId"), true)).Get("/services/{serviceId}/environments/{envId}/intents", deployH.ListIntents)
 
 			// Deployment Runs (read)
-			r.With(coreRBAC(deps, authMiddleware, runOrgResolver(registry, deps.Services, "id"), true)).Get("/deployments/runs/{id}", deployH.GetRun)
-			r.With(coreRBAC(deps, authMiddleware, intentOrgResolver(registry, deps.Services, "intentId"), true)).Get("/deployments/intents/{intentId}/runs", deployH.ListRuns)
+			r.With(tier2Gate, coreRBAC(deps, authMiddleware, runOrgResolver(registry, deps.Services, "id"), true)).Get("/deployments/runs/{id}", deployH.GetRun)
+			r.With(tier2Gate, coreRBAC(deps, authMiddleware, intentOrgResolver(registry, deps.Services, "intentId"), true)).Get("/deployments/intents/{intentId}/runs", deployH.ListRuns)
 			if logsH != nil && deps.Blossom != nil {
-				r.Get("/deployments/runs/{id}/logs", logsH.GetRunLogs)
+				r.With(tier2Gate).Get("/deployments/runs/{id}/logs", logsH.GetRunLogs)
 			}
 
 			// Live logs (read, SSE)
 			if logsH != nil && deps.RuntimeResolver != nil {
-				r.Get("/services/{id}/environments/{envId}/logs", logsH.StreamLiveLogs)
+				r.With(tier2Gate).Get("/services/{id}/environments/{envId}/logs", logsH.StreamLiveLogs)
 			}
 
 			// State (read)
-			r.Get("/state", stateH.ListAll)
-			r.Get("/state/drifted", stateH.ListDrifted)
-			r.Get("/environments/{envId}/state", stateH.ListByEnvironment)
-			r.Get("/services/{serviceId}/environments/{envId}/state", stateH.GetState)
+			r.With(tier2Gate).Get("/state", stateH.ListAll)
+			r.With(tier2Gate).Get("/state/drifted", stateH.ListDrifted)
+			r.With(tier2Gate).Get("/environments/{envId}/state", stateH.ListByEnvironment)
+			r.With(tier2Gate).Get("/services/{serviceId}/environments/{envId}/state", stateH.GetState)
 
 			// Repository CI lookup (read)
-			r.Post("/repositories/ci/lookup", repoCIHandler.Lookup)
+			r.With(tier3Gate).Post("/repositories/ci/lookup", repoCIHandler.Lookup)
 
 			// ML control plane (read)
 			if mlH != nil {
-				r.Get("/ml/models", mlH.ListModels)
-				r.Get("/ml/models/{id}", mlH.GetModel)
-				r.Get("/ml/models/{modelId}/versions", mlH.ListModelVersions)
-				r.Get("/ml/model-versions/{id}", mlH.GetModelVersion)
-				r.Get("/ml/endpoints", mlH.ListEndpoints)
-				r.Get("/ml/endpoints/{id}", mlH.GetEndpoint)
-				r.Get("/ml/state", mlH.ListState)
-				r.Get("/ml/endpoints/{endpointId}/environments/{envId}/state", mlH.GetState)
-				r.Get("/ml/artifacts/{artifactId}/provenance", mlH.GetArtifactProvenance)
+				r.With(tier3Gate).Get("/ml/models", mlH.ListModels)
+				r.With(tier3Gate).Get("/ml/models/{id}", mlH.GetModel)
+				r.With(tier3Gate).Get("/ml/models/{modelId}/versions", mlH.ListModelVersions)
+				r.With(tier3Gate).Get("/ml/model-versions/{id}", mlH.GetModelVersion)
+				r.With(tier3Gate).Get("/ml/endpoints", mlH.ListEndpoints)
+				r.With(tier3Gate).Get("/ml/endpoints/{id}", mlH.GetEndpoint)
+				r.With(tier3Gate).Get("/ml/state", mlH.ListState)
+				r.With(tier3Gate).Get("/ml/endpoints/{endpointId}/environments/{envId}/state", mlH.GetState)
+				r.With(tier3Gate).Get("/ml/artifacts/{artifactId}/provenance", mlH.GetArtifactProvenance)
 			}
 
 			// LLM control plane (read)
 			if llmH != nil {
-				r.Get("/llm/routes", llmH.ListRoutes)
-				r.Get("/llm/routes/{id}", llmH.GetRoute)
-				r.Get("/llm/routes/{routeId}/releases", llmH.ListReleases)
-				r.Get("/llm/releases/{id}", llmH.GetRelease)
-				r.Get("/llm/intents/{id}", llmH.GetIntent)
-				r.Get("/llm/routes/{routeId}/environments/{envId}/intents", llmH.ListIntents)
-				r.Get("/llm/runs/{id}", llmH.GetRun)
-				r.Get("/llm/intents/{intentId}/runs", llmH.ListRuns)
-				r.Get("/llm/state", llmH.ListAllState)
-				r.Get("/llm/state/drifted", llmH.ListDriftedState)
-				r.Get("/llm/environments/{envId}/state", llmH.ListEnvironmentState)
-				r.Get("/llm/routes/{routeId}/environments/{envId}/state", llmH.GetState)
+				r.With(tier3Gate).Get("/llm/routes", llmH.ListRoutes)
+				r.With(tier3Gate).Get("/llm/routes/{id}", llmH.GetRoute)
+				r.With(tier3Gate).Get("/llm/routes/{routeId}/releases", llmH.ListReleases)
+				r.With(tier3Gate).Get("/llm/releases/{id}", llmH.GetRelease)
+				r.With(tier3Gate).Get("/llm/intents/{id}", llmH.GetIntent)
+				r.With(tier3Gate).Get("/llm/routes/{routeId}/environments/{envId}/intents", llmH.ListIntents)
+				r.With(tier3Gate).Get("/llm/runs/{id}", llmH.GetRun)
+				r.With(tier3Gate).Get("/llm/intents/{intentId}/runs", llmH.ListRuns)
+				r.With(tier3Gate).Get("/llm/state", llmH.ListAllState)
+				r.With(tier3Gate).Get("/llm/state/drifted", llmH.ListDriftedState)
+				r.With(tier3Gate).Get("/llm/environments/{envId}/state", llmH.ListEnvironmentState)
+				r.With(tier3Gate).Get("/llm/routes/{routeId}/environments/{envId}/state", llmH.GetState)
 			}
 
 			// Workers (read)
 			if deps.Workers != nil {
 				workerH := handlers.NewWorkerHandler(deps.Workers)
-				r.Get("/workers", workerH.List)
-				r.Get("/workers/{pubkey}", workerH.Get)
-				r.Get("/workers/{pubkey}/pricing", workerH.Pricing)
+				r.With(tier1Gate).Get("/workers", workerH.List)
+				r.With(tier1Gate).Get("/workers/{pubkey}", workerH.Get)
+				r.With(tier1Gate).Get("/workers/{pubkey}/pricing", workerH.Pricing)
 			}
 
 			// Payments (read)
 			if deps.Payments != nil {
 				payH := handlers.NewPaymentHandler(deps.Payments)
-				r.Get("/deployments/runs/{id}/cost", payH.GetRunCost)
-				r.Get("/payments/history", payH.GetPaymentHistory)
+				r.With(tier2Gate).Get("/deployments/runs/{id}/cost", payH.GetRunCost)
+				r.With(tier2Gate).Get("/payments/history", payH.GetPaymentHistory)
 			}
 
 			// Policies (read)
 			if deps.Policies != nil {
 				polH := handlers.NewPolicyHandler(deps.Policies)
-				r.Get("/policies", polH.List)
-				r.Get("/policies/{id}", polH.Get)
+				r.With(tier2Gate).Get("/policies", polH.List)
+				r.With(tier2Gate).Get("/policies/{id}", polH.Get)
 			}
 
 			// SBOM (read)
 			if deps.SBOMs != nil && deps.Artifacts != nil {
 				sbomH := handlers.NewSBOMHandler(deps.SBOMs, deps.Artifacts)
-				r.Get("/artifacts/{id}/sbom", sbomH.GetSBOM)
-				r.Get("/artifacts/{id}/sbom/packages", sbomH.GetSBOMPackages)
-				r.Get("/sbom/search", sbomH.SearchPackages)
+				r.With(tier3Gate).Get("/artifacts/{id}/sbom", sbomH.GetSBOM)
+				r.With(tier3Gate).Get("/artifacts/{id}/sbom/packages", sbomH.GetSBOMPackages)
+				r.With(tier3Gate).Get("/sbom/search", sbomH.SearchPackages)
 			}
 
 			// Signatures (read)
 			if deps.Signatures != nil && deps.Artifacts != nil && deps.SignVerifier != nil {
 				sigH := handlers.NewSignatureHandler(deps.Signatures, deps.Artifacts, deps.SignVerifier)
 				artifactRBAC := coreRBAC(deps, authMiddleware, artifactOrgResolver(deps.Artifacts, deps.Services, "id"), true)
-				r.With(artifactRBAC).Get("/artifacts/{id}/signatures", sigH.List)
-				r.With(artifactRBAC).Get("/artifacts/{id}/signatures/verified", sigH.ListVerified)
-				r.With(artifactRBAC).Get("/artifacts/{id}/signatures/check", sigH.HasVerified)
-				r.With(coreRBAC(deps, authMiddleware, signatureOrgResolver(deps.Signatures, deps.Artifacts, deps.Services, "id"), true)).Get("/signatures/{id}", sigH.Get)
+				r.With(tier2Gate, artifactRBAC).Get("/artifacts/{id}/signatures", sigH.List)
+				r.With(tier2Gate, artifactRBAC).Get("/artifacts/{id}/signatures/verified", sigH.ListVerified)
+				r.With(tier2Gate, artifactRBAC).Get("/artifacts/{id}/signatures/check", sigH.HasVerified)
+				r.With(tier2Gate, coreRBAC(deps, authMiddleware, signatureOrgResolver(deps.Signatures, deps.Artifacts, deps.Services, "id"), true)).Get("/signatures/{id}", sigH.Get)
 			}
 
 			// Secrets (read)
 			if deps.Secrets != nil && deps.Encryptor != nil {
 				secretH := handlers.NewSecretHandler(deps.Secrets, deps.Encryptor)
-				r.With(coreRBAC(deps, authMiddleware, serviceOrgResolver(deps.Services, "id"), true)).Get("/services/{id}/secrets", secretH.List)
+				r.With(tier2Gate, coreRBAC(deps, authMiddleware, serviceOrgResolver(deps.Services, "id"), true)).Get("/services/{id}/secrets", secretH.List)
 			}
 
 			// Notifications (read)
 			if deps.Notifications != nil && deps.Dispatcher != nil {
 				notifH := handlers.NewNotificationHandler(deps.Notifications, deps.Dispatcher)
-				r.Get("/notifications/channels", notifH.ListChannels)
-				r.Get("/notifications/channels/{id}", notifH.GetChannel)
-				r.Get("/notifications/log", notifH.ListLogs)
+				r.With(tier2Gate).Get("/notifications/channels", notifH.ListChannels)
+				r.With(tier2Gate).Get("/notifications/channels/{id}", notifH.GetChannel)
+				r.With(tier2Gate).Get("/notifications/log", notifH.ListLogs)
 			}
 
 			// Tool provisioning (read)
 			if deps.ToolProvisioning != nil {
 				toolH := handlers.NewToolHandler(deps.ToolProvisioning, registry)
-				r.With(coreRBAC(deps, authMiddleware, nil, true)).Get("/tools/pending", toolH.ListPending)
-				r.With(coreRBAC(deps, authMiddleware, toolIntentOrgResolver(deps.ToolProvisioning, deps.Services, "id"), true)).Get("/tools/{id}", toolH.GetIntent)
-				r.With(coreRBAC(deps, authMiddleware, nil, true)).Get("/tools/denylist", toolH.ListDenylist)
-				r.With(coreRBAC(deps, authMiddleware, serviceOrgResolver(deps.Services, "id"), true)).Get("/services/{id}/tools", toolH.GetProfile)
+				r.With(tier3Gate, coreRBAC(deps, authMiddleware, nil, true)).Get("/tools/pending", toolH.ListPending)
+				r.With(tier3Gate, coreRBAC(deps, authMiddleware, toolIntentOrgResolver(deps.ToolProvisioning, deps.Services, "id"), true)).Get("/tools/{id}", toolH.GetIntent)
+				r.With(tier3Gate, coreRBAC(deps, authMiddleware, nil, true)).Get("/tools/denylist", toolH.ListDenylist)
+				r.With(tier3Gate, coreRBAC(deps, authMiddleware, serviceOrgResolver(deps.Services, "id"), true)).Get("/services/{id}/tools", toolH.GetProfile)
 			}
 
 			// Blossom (read)
 			if deps.Blossom != nil {
 				blossomH := handlers.NewBlossomHandler(deps.Blossom)
-				r.Post("/blossom/list", blossomH.ListBlobs)
-				r.Get("/blossom/servers", blossomH.GetServers)
-				r.Get("/blossom/health", blossomH.HealthCheck)
-				r.Get("/blossom/stats", blossomH.GetStats)
+				r.With(tier3Gate).Post("/blossom/list", blossomH.ListBlobs)
+				r.With(tier3Gate).Get("/blossom/servers", blossomH.GetServers)
+				r.With(tier3Gate).Get("/blossom/health", blossomH.HealthCheck)
+				r.With(tier3Gate).Get("/blossom/stats", blossomH.GetStats)
 			}
 		})
 
@@ -392,76 +397,76 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 			}
 
 			// Services (write)
-			r.With(coreRBAC(deps, authMiddleware, nil, true)).Post("/services", svcH.Create)
-			r.With(coreRBAC(deps, authMiddleware, serviceOrgResolver(deps.Services, "id"), true)).Put("/services/{id}", svcH.Update)
-			r.With(coreRBAC(deps, authMiddleware, serviceOrgResolver(deps.Services, "id"), true)).Delete("/services/{id}", svcH.Delete)
+			r.With(tier2Gate, coreRBAC(deps, authMiddleware, nil, true)).Post("/services", svcH.Create)
+			r.With(tier2Gate, coreRBAC(deps, authMiddleware, serviceOrgResolver(deps.Services, "id"), true)).Put("/services/{id}", svcH.Update)
+			r.With(tier2Gate, coreRBAC(deps, authMiddleware, serviceOrgResolver(deps.Services, "id"), true)).Delete("/services/{id}", svcH.Delete)
 			// Environments (write)
-			r.With(coreRBAC(deps, authMiddleware, nil, true)).Post("/environments", envH.Create)
-			r.With(coreRBAC(deps, authMiddleware, environmentOrgResolver(deps.Environments, "id"), true)).Put("/environments/{id}", envH.Update)
-			r.With(coreRBAC(deps, authMiddleware, environmentOrgResolver(deps.Environments, "id"), true)).Delete("/environments/{id}", envH.Delete)
+			r.With(tier2Gate, coreRBAC(deps, authMiddleware, nil, true)).Post("/environments", envH.Create)
+			r.With(tier2Gate, coreRBAC(deps, authMiddleware, environmentOrgResolver(deps.Environments, "id"), true)).Put("/environments/{id}", envH.Update)
+			r.With(tier2Gate, coreRBAC(deps, authMiddleware, environmentOrgResolver(deps.Environments, "id"), true)).Delete("/environments/{id}", envH.Delete)
 
 			// Builds (write)
-			r.With(coreRBAC(deps, authMiddleware, nil, true)).Post("/builds", buildH.Register)
-			r.With(coreRBAC(deps, authMiddleware, buildOrgResolver(deps.Builds, deps.Services, "id"), true)).Patch("/builds/{id}/status", buildH.UpdateStatus)
+			r.With(tier2Gate, coreRBAC(deps, authMiddleware, nil, true)).Post("/builds", buildH.Register)
+			r.With(tier2Gate, coreRBAC(deps, authMiddleware, buildOrgResolver(deps.Builds, deps.Services, "id"), true)).Patch("/builds/{id}/status", buildH.UpdateStatus)
 
 			// Artifacts (write)
-			r.With(coreRBAC(deps, authMiddleware, nil, true)).Post("/artifacts", artifactH.Register)
+			r.With(tier2Gate, coreRBAC(deps, authMiddleware, nil, true)).Post("/artifacts", artifactH.Register)
 
 			// Deployment Intents (write)
-			r.With(coreRBAC(deps, authMiddleware, nil, true)).Post("/deployments/intents", deployH.CreateIntent)
-			r.With(coreRBAC(deps, authMiddleware, intentOrgResolver(registry, deps.Services, "id"), true)).Post("/deployments/intents/{id}/approve", deployH.ApproveIntent)
-			r.With(coreRBAC(deps, authMiddleware, intentOrgResolver(registry, deps.Services, "id"), true)).Post("/deployments/intents/{id}/reject", deployH.RejectIntent)
+			r.With(tier2Gate, coreRBAC(deps, authMiddleware, nil, true)).Post("/deployments/intents", deployH.CreateIntent)
+			r.With(tier2Gate, coreRBAC(deps, authMiddleware, intentOrgResolver(registry, deps.Services, "id"), true)).Post("/deployments/intents/{id}/approve", deployH.ApproveIntent)
+			r.With(tier2Gate, coreRBAC(deps, authMiddleware, intentOrgResolver(registry, deps.Services, "id"), true)).Post("/deployments/intents/{id}/reject", deployH.RejectIntent)
 
 			// ML control plane (write compatibility actions publish Nostr commands)
 			if mlH != nil {
-				r.Post("/ml/imports", mlH.ImportModel)
-				r.Post("/ml/recipes/runs", mlH.RunRecipe)
-				r.Post("/ml/deployments", mlH.Deploy)
-				r.Post("/ml/rollback", mlH.Rollback)
+				r.With(tier3Gate).Post("/ml/imports", mlH.ImportModel)
+				r.With(tier3Gate).Post("/ml/recipes/runs", mlH.RunRecipe)
+				r.With(tier3Gate).Post("/ml/deployments", mlH.Deploy)
+				r.With(tier3Gate).Post("/ml/rollback", mlH.Rollback)
 			}
 
 			// LLM control plane (write)
 			if llmH != nil {
-				r.Post("/llm/routes", llmH.CreateRoute)
-				r.Put("/llm/routes/{id}", llmH.UpdateRoute)
-				r.Post("/llm/routes/{routeId}/releases", llmH.CreateRelease)
+				r.With(tier3Gate).Post("/llm/routes", llmH.CreateRoute)
+				r.With(tier3Gate).Put("/llm/routes/{id}", llmH.UpdateRoute)
+				r.With(tier3Gate).Post("/llm/routes/{routeId}/releases", llmH.CreateRelease)
 			}
 
 			// Deployment Runs (write)
-			r.With(coreRBAC(deps, authMiddleware, nil, true)).Post("/deployments/runs", deployH.CreateRun)
-			r.With(coreRBAC(deps, authMiddleware, runOrgResolver(registry, deps.Services, "id"), true)).Post("/deployments/runs/{id}/complete", deployH.CompleteRun)
+			r.With(tier2Gate, coreRBAC(deps, authMiddleware, nil, true)).Post("/deployments/runs", deployH.CreateRun)
+			r.With(tier2Gate, coreRBAC(deps, authMiddleware, runOrgResolver(registry, deps.Services, "id"), true)).Post("/deployments/runs/{id}/complete", deployH.CompleteRun)
 
 			// Rollback
-			r.With(coreRBAC(deps, authMiddleware, nil, true)).Post("/rollback", deployH.Rollback)
+			r.With(tier2Gate, coreRBAC(deps, authMiddleware, nil, true)).Post("/rollback", deployH.Rollback)
 
 			// Runtime Observations (write)
-			r.Post("/observations", stateH.RecordObservation)
+			r.With(tier2Gate).Post("/observations", stateH.RecordObservation)
 
 			// Payments (write)
 			if deps.Payments != nil {
 				payH := handlers.NewPaymentHandler(deps.Payments)
-				r.Post("/payments/estimate", payH.EstimateCost)
+				r.With(tier2Gate).Post("/payments/estimate", payH.EstimateCost)
 			}
 
 			// SBOM (write)
 			if deps.SBOMs != nil && deps.Artifacts != nil {
 				sbomH := handlers.NewSBOMHandler(deps.SBOMs, deps.Artifacts)
-				r.Post("/artifacts/{id}/sbom", sbomH.IngestSBOM)
+				r.With(tier3Gate).Post("/artifacts/{id}/sbom", sbomH.IngestSBOM)
 			}
 
 			// Signatures (write)
 			if deps.Signatures != nil && deps.Artifacts != nil && deps.SignVerifier != nil {
 				sigH := handlers.NewSignatureHandler(deps.Signatures, deps.Artifacts, deps.SignVerifier)
-				r.With(coreRBAC(deps, authMiddleware, artifactOrgResolver(deps.Artifacts, deps.Services, "id"), true)).Post("/artifacts/{id}/signatures/verify", sigH.Verify)
+				r.With(tier2Gate, coreRBAC(deps, authMiddleware, artifactOrgResolver(deps.Artifacts, deps.Services, "id"), true)).Post("/artifacts/{id}/signatures/verify", sigH.Verify)
 			}
 
 			// Policies (write)
 			if deps.Policies != nil {
 				polH := handlers.NewPolicyHandler(deps.Policies)
-				r.Post("/policies", polH.Create)
-				r.Put("/policies/{id}", polH.Update)
-				r.Delete("/policies/{id}", polH.Delete)
-				r.Post("/policies/evaluate", polH.Evaluate)
+				r.With(tier2Gate).Post("/policies", polH.Create)
+				r.With(tier2Gate).Put("/policies/{id}", polH.Update)
+				r.With(tier2Gate).Delete("/policies/{id}", polH.Delete)
+				r.With(tier2Gate).Post("/policies/evaluate", polH.Evaluate)
 			}
 
 			// Secrets (write)
@@ -476,23 +481,23 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 			// Notifications (write)
 			if deps.Notifications != nil && deps.Dispatcher != nil {
 				notifH := handlers.NewNotificationHandler(deps.Notifications, deps.Dispatcher)
-				r.Post("/notifications/channels", notifH.CreateChannel)
-				r.Put("/notifications/channels/{id}", notifH.UpdateChannel)
-				r.Delete("/notifications/channels/{id}", notifH.DeleteChannel)
-				r.Post("/notifications/channels/{id}/test", notifH.TestChannel)
+				r.With(tier2Gate).Post("/notifications/channels", notifH.CreateChannel)
+				r.With(tier2Gate).Put("/notifications/channels/{id}", notifH.UpdateChannel)
+				r.With(tier2Gate).Delete("/notifications/channels/{id}", notifH.DeleteChannel)
+				r.With(tier2Gate).Post("/notifications/channels/{id}/test", notifH.TestChannel)
 			}
 
 			// Tool provisioning (write)
 			if deps.ToolProvisioning != nil {
 				toolH := handlers.NewToolHandler(deps.ToolProvisioning, registry)
-				r.With(coreRBAC(deps, authMiddleware, toolIntentOrgResolver(deps.ToolProvisioning, deps.Services, "id"), true)).Post("/tools/{id}/approve", toolH.ApproveIntent)
-				r.With(coreRBAC(deps, authMiddleware, toolIntentOrgResolver(deps.ToolProvisioning, deps.Services, "id"), true)).Post("/tools/{id}/reject", toolH.RejectIntent)
-				r.With(coreRBAC(deps, authMiddleware, nil, true)).Post("/tools/denylist", toolH.AddDenylist)
-				r.With(coreRBAC(deps, authMiddleware, nil, true)).Delete("/tools/denylist/{package}/{manager}", toolH.RemoveDenylist)
+				r.With(tier3Gate, coreRBAC(deps, authMiddleware, toolIntentOrgResolver(deps.ToolProvisioning, deps.Services, "id"), true)).Post("/tools/{id}/approve", toolH.ApproveIntent)
+				r.With(tier3Gate, coreRBAC(deps, authMiddleware, toolIntentOrgResolver(deps.ToolProvisioning, deps.Services, "id"), true)).Post("/tools/{id}/reject", toolH.RejectIntent)
+				r.With(tier3Gate, coreRBAC(deps, authMiddleware, nil, true)).Post("/tools/denylist", toolH.AddDenylist)
+				r.With(tier3Gate, coreRBAC(deps, authMiddleware, nil, true)).Delete("/tools/denylist/{package}/{manager}", toolH.RemoveDenylist)
 			}
 
 			if deps.MCP != nil {
-				r.Post("/mcp", deps.MCP.HandleJSONRPC)
+				r.With(tier3Gate).Post("/mcp", deps.MCP.HandleJSONRPC)
 			}
 		})
 
@@ -501,6 +506,7 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 		// are operationally expensive and privileged.
 		if directRuntimeEnabled(deps.Config) {
 			r.Group(func(r chi.Router) {
+				r.Use(tier3Gate)
 				r.Use(middleware.RateLimit(directRuntimeActionLimiter))
 				r.Use(middleware.RequireOperator(operatorAccessMiddlewareConfig(deps.Config.DirectRuntime.OperatorAccessConfig, authMiddleware.NIP05Resolver)))
 				r.Post("/services/{serviceId}/environments/{envId}/deploy", serviceActionH.Deploy)
@@ -515,6 +521,7 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 
 		if adoptionEnabled(deps.Config) {
 			r.Group(func(r chi.Router) {
+				r.Use(tier3Gate)
 				r.Use(middleware.RequireOperator(operatorAccessMiddlewareConfig(deps.Config.Adoption.OperatorAccessConfig, authMiddleware.NIP05Resolver)))
 				r.Group(func(r chi.Router) {
 					r.Use(middleware.RateLimit(adoptionScanLimiter))
@@ -529,6 +536,13 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 	})
 
 	return r
+}
+
+func routeTierGate(policy any, tier int) func(http.Handler) http.Handler {
+	if policy == nil {
+		return func(next http.Handler) http.Handler { return next }
+	}
+	return middleware.TierGate(policy, tier)
 }
 
 func healthResponseFromProvider(provider any, methodName string) (dto.HealthResponse, bool) {

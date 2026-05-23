@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -650,6 +651,79 @@ func TestReadyReturnsServiceUnavailableWhenReadinessCheckFails(t *testing.T) {
 	}
 	if body["status"] != "unhealthy" {
 		t.Errorf("expected status unhealthy, got %v", body["status"])
+	}
+}
+
+func TestTier0RoutesAlwaysAccessibleWithModePolicy(t *testing.T) {
+	policy := app.NewModePolicy(app.ModeFull)
+	policy.SetActiveTier(app.Tier1)
+	h := router.NewWithDeps(newTestRegistryService(), zap.NewNop(), config.CORSConfig{}, nil, router.RouterDeps{ModePolicy: policy})
+
+	for _, path := range []string{"/health", "/ready"} {
+		t.Run(path, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, path, nil)
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, req)
+			if w.Code != http.StatusOK {
+				t.Fatalf("status=%d, want 200, body=%s", w.Code, w.Body.String())
+			}
+		})
+	}
+}
+
+func TestTier2RoutesReturnServiceUnavailableWhenActiveTier1(t *testing.T) {
+	policy := app.NewModePolicy(app.ModeFull)
+	policy.SetActiveTier(app.Tier1)
+	h := router.NewWithDeps(newTestRegistryService(), zap.NewNop(), config.CORSConfig{}, nil, router.RouterDeps{ModePolicy: policy})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/services", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status=%d, want 503, body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestTier3RoutesReturnServiceUnavailableWithTierBodyWhenActiveTier2(t *testing.T) {
+	policy := app.NewModePolicy(app.ModeFull)
+	policy.SetActiveTier(app.Tier2)
+	h := router.NewWithDeps(nil, zap.NewNop(), config.CORSConfig{}, nil, router.RouterDeps{ModePolicy: policy, MLCommands: &captureMLRESTPublisher{}})
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/ml/imports", strings.NewReader(`{"idempotency_key":"import:1","model":"model:qwen","source":"huggingface"}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status=%d, want 503, body=%s", w.Code, w.Body.String())
+	}
+	var body map[string]any
+	if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if body["error"] != "route unavailable in current mode" || body["mode"] != "full" || body["active_tier"] != float64(2) || body["required_tier"] != float64(3) {
+		t.Fatalf("unexpected body: %#v", body)
+	}
+}
+
+func TestTieredRoutesAccessibleWhenActiveTier3(t *testing.T) {
+	policy := app.NewModePolicy(app.ModeFull)
+	h := router.NewWithDeps(newTestRegistryService(), zap.NewNop(), config.CORSConfig{}, nil, router.RouterDeps{ModePolicy: policy, MLCommands: &captureMLRESTPublisher{}})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/services", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("tier2 status=%d, want 200, body=%s", w.Code, w.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/ml/imports", strings.NewReader(`{"idempotency_key":"import:1","model":"model:qwen","source":"huggingface"}`))
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("tier3 status=%d, want 202, body=%s", w.Code, w.Body.String())
 	}
 }
 
