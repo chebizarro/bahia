@@ -1,6 +1,7 @@
 import { isAuthenticated, currentUser } from './auth.js';
 import { systemInfo, loadSystemInfo, currentSystemInfo } from './system.svelte.js';
 export { discoveryState, discoverSystemInfo, resetDiscoveryStore } from './discovery.svelte.js';
+export { fipsMeshState, meshNodes, meshEndpoints, bootstrapFipsMesh, disconnectFipsMesh, resetFipsMeshStore, classifyHealth } from './fips-mesh.svelte.js';
 import {
   services,
   environments,

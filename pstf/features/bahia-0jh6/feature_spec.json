@@ -1,0 +1,21 @@
+{
+  "feature_id": "bahia-0jh6",
+  "title": "Browser-side FIPS mesh read-model store",
+  "intent": "Expose FIPS mesh nodes and DNS/FIPS endpoints to the web UI from Nostr read-model events only.",
+  "observed_repository_evidence": [
+    "internal/adapters/nostr/projector.go publishes DNSEndpointState as kind 31976 with family, dns, addr, health, npub, worker, and mesh=fips tags for worker-backed endpoints.",
+    "internal/domain/dns.go defines DNSEndpoint fields consumed by the browser store, including family, source, metadata, health, drift status, FQDN, address, and worker pubkey.",
+    "internal/domain/worker.go defines FIPSOverlayAddr, FIPSEndpoints, and MeshHealth on Worker.",
+    "web/src/lib/nostr/client.js provides EOSE-authoritative queryUntilEose and live subscribe callbacks."
+  ],
+  "implemented_behavior": [
+    "web/src/lib/stores/fips-mesh.svelte.js bootstraps mesh endpoint and worker state read models via nostr.queryUntilEose, then keeps a live nostr.subscribe open.",
+    "Filters scope DNSEndpointState reads by kind 31976, #family mesh/worker, and #mesh fips; worker state reads use kind 32000 with service author scoping when available.",
+    "The store dedupes replaceable read-model events by kind, author, and d tag through the Nostr client replaceable helper, removes tombstoned records, and ignores non-mesh DNS endpoint state.",
+    "The exported state includes mesh nodes, mesh endpoints, health classification, overlay address, pubkey/npub, transport endpoints, DNS hostname, projection status, and gating reason fields."
+  ],
+  "out_of_scope": [
+    "DNS/operator page wiring is reserved for bahia-wprt.",
+    "No REST endpoint was added for FIPS mesh state."
+  ]
+}

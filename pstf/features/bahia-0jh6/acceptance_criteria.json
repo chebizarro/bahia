@@ -1,0 +1,30 @@
+{
+  "feature_id": "bahia-0jh6",
+  "criteria": [
+    {
+      "id": "AC1",
+      "statement": "FIPS mesh endpoints are bootstrapped from Nostr read models using EOSE and no REST FIPS mesh endpoint is introduced.",
+      "tests": ["web/tests/unit/fips-mesh-store.test.js: bootstraps via EOSE query and keeps a live subscription open"]
+    },
+    {
+      "id": "AC2",
+      "statement": "A live subscription remains open and handles EVENT, EOSE, and CLOSED paths explicitly.",
+      "tests": ["web/tests/unit/fips-mesh-store.test.js: applies live EVENT, EOSE, and CLOSED callbacks without polling"]
+    },
+    {
+      "id": "AC3",
+      "statement": "Parameterized replaceable endpoint and worker state events are deduped by author and d tag, and tombstones remove active state.",
+      "tests": ["web/tests/unit/fips-mesh-store.test.js: dedupes parameterized replaceable endpoint events by author and d tag", "web/tests/unit/fips-mesh-store.test.js: ignores tombstones and removes older live state"]
+    },
+    {
+      "id": "AC4",
+      "statement": "Only mesh/FIPS DNS endpoint read models are exposed by the store.",
+      "tests": ["web/tests/unit/fips-mesh-store.test.js: filters non-mesh DNS endpoint read models locally after relay delivery"]
+    },
+    {
+      "id": "AC5",
+      "statement": "The store exposes UI-ready nodes and endpoints with health, overlay address, pubkey/npub, transport endpoints, DNS hostname, projection status, and gating reason fields.",
+      "tests": ["web/tests/unit/fips-mesh-store.test.js: merges worker state overlay fields with DNS/FIPS endpoint state", "web/tests/unit/fips-mesh-store.test.js: classifies FIPS mesh health deterministically"]
+    }
+  ]
+}

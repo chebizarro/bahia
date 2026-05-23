@@ -1,0 +1,33 @@
+{
+  "feature_id": "bahia-0jh6",
+  "test_matrix": [
+    {
+      "test": "pnpm vitest run --config vitest.config.js tests/unit/fips-mesh-store.test.js",
+      "criteria": [
+        "AC1",
+        "AC2",
+        "AC3",
+        "AC4",
+        "AC5"
+      ],
+      "status": "passing"
+    },
+    {
+      "test": "pnpm vitest run --config vitest.config.js tests/unit/fips-mesh-store.test.js tests/unit/nostr-client-parsing.test.js tests/unit/stores-index.test.js",
+      "criteria": [
+        "AC1",
+        "AC5"
+      ],
+      "status": "passing"
+    },
+    {
+      "test": "pnpm build",
+      "criteria": [
+        "AC1",
+        "AC5"
+      ],
+      "status": "passing",
+      "notes": "Build emitted unrelated pre-existing Svelte warnings outside the FIPS mesh store scope."
+    }
+  ]
+}
