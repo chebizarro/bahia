@@ -300,6 +300,32 @@ func New(cfg *config.Config) (*App, error) {
 	// Background runner manager.
 	bgManager := NewBackgroundManager(logger)
 
+	var fipsRelayPool *nostrAdapter.RelayPool
+	if cfg.FIPS.Enabled {
+		fipsRelayPool = nostrAdapter.NewRelayPool(cfg.FIPS.RelayURLs, logger, nostrAdapter.WithPrivateKey(cfg.Nostr.PrivateKey))
+		fipsRelayPool.Connect(ctx)
+		fipsSubscriber := nostrAdapter.NewFIPSSubscriber(fipsRelayPool, workerRepo, logger,
+			nostrAdapter.WithFIPSAppNamespace(cfg.FIPS.AppNamespace),
+			nostrAdapter.WithFIPSAutoRegisterWorkers(cfg.FIPS.AutoRegisterWorkers),
+			nostrAdapter.WithFIPSAllowedNpubs(cfg.FIPS.AllowedNpubs),
+			nostrAdapter.WithFIPSWorkerUpdateHandler(func(_ context.Context, worker *domain.Worker, advert nostrAdapter.OverlayAdvert) {
+				if worker == nil {
+					return
+				}
+				logger.Info("FIPS overlay advert received",
+					zap.String("worker_pubkey", worker.PubKey),
+					zap.String("worker_name", worker.Name),
+					zap.String("overlay_addr", worker.FIPSOverlayAddr),
+					zap.Int("advert_version", advert.Version),
+					zap.Int("transport_endpoints", len(advert.Endpoints)),
+					zap.Strings("signal_relays", advert.SignalRelays),
+				)
+			}),
+		)
+		bgManager.Register(&fipsSubscriberRunner{subscriber: fipsSubscriber})
+		logger.Info("FIPS overlay advert subscriber registered", zap.Strings("relay_urls", cfg.FIPS.RelayURLs), zap.String("app_namespace", cfg.FIPS.AppNamespace))
+	}
+
 	backupRegistryRepo := repository.NewPgBackupControlPlaneRepository(pool)
 	backupRegistry := service.NewBackupRegistryService(backupRegistryRepo, publisher, logger)
 	backupResponder := controlplane.NewBackupRunResponder(controlPlanePool, controlPlaneSigner, backupRegistry, nostrEventRepo, logger)
@@ -795,7 +821,7 @@ func New(cfg *config.Config) (*App, error) {
 		Telemetry:       telemetryProvider,
 		Background:      bgManager,
 		toolCoordinator: toolCoordinator,
-		relayPools:      []*nostrAdapter.RelayPool{controlPlanePool, relayPool, encryptedRequestPool},
+		relayPools:      []*nostrAdapter.RelayPool{controlPlanePool, relayPool, encryptedRequestPool, fipsRelayPool},
 	}, nil
 }
 
@@ -1149,6 +1175,35 @@ func llmGatewayHTTPConfig(cfg config.LLMControlplaneConfig) llmadapter.GatewayHT
 		endpoints[ref] = llmadapter.GatewayHTTPEndpointConfig{Type: ep.Type, BaseURL: ep.BaseURL, AuthToken: ep.AuthToken, Timeout: ep.Timeout}
 	}
 	return llmadapter.GatewayHTTPConfig{Endpoints: endpoints}
+}
+
+type fipsSubscriberLifecycle interface {
+	Start(context.Context) error
+	Stop()
+	Name() string
+}
+
+type fipsSubscriberRunner struct {
+	subscriber fipsSubscriberLifecycle
+}
+
+func (r *fipsSubscriberRunner) Name() string {
+	if r.subscriber == nil {
+		return "fips-subscriber"
+	}
+	return r.subscriber.Name()
+}
+
+func (r *fipsSubscriberRunner) Run(ctx context.Context) error {
+	if r.subscriber == nil {
+		return fmt.Errorf("fips subscriber is not configured")
+	}
+	if err := r.subscriber.Start(ctx); err != nil {
+		return err
+	}
+	<-ctx.Done()
+	r.subscriber.Stop()
+	return nil
 }
 
 func closeRelayPools(pools ...*nostrAdapter.RelayPool) {
