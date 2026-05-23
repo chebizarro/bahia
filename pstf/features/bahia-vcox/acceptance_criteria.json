@@ -1,0 +1,21 @@
+{
+  "feature_id": "bahia-vcox",
+  "title": "Continuity profile domain types",
+  "criteria": [
+    {
+      "id": "AC1",
+      "statement": "The domain package exposes full, degraded, emergency, and offline continuity mode constants.",
+      "tests": ["TestContinuityModeIsValid"]
+    },
+    {
+      "id": "AC2",
+      "statement": "A ServiceContinuityProfile carries service identity, primary worker pubkey, per-mode profile specs, update time, and source event ID.",
+      "tests": ["TestServiceContinuityProfileValidateTrimsIdentityFields"]
+    },
+    {
+      "id": "AC3",
+      "statement": "Continuity profile validation rejects missing service keys, empty profile sets, and unknown continuity modes.",
+      "tests": ["TestServiceContinuityProfileValidateRequiresServiceKey", "TestServiceContinuityProfileValidateRequiresAtLeastOneProfile", "TestServiceContinuityProfileValidateRejectsUnknownMode"]
+    }
+  ]
+}

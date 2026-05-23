@@ -1,0 +1,10 @@
+{
+  "feature_id": "bahia-vcox",
+  "title": "Continuity profile domain types",
+  "intended_behavior": "The domain package exposes continuity operating modes and service continuity profile contracts for Nostr kind 31400 definitions without adding runtime behavior.",
+  "scope": [
+    "internal/domain/continuity.go",
+    "internal/domain/continuity_test.go"
+  ],
+  "observed_baseline": "No dedicated service continuity profile domain contract existed before this change. A concurrent worker-domain change already introduced the ContinuityMode type in worker.go, so this feature adds the requested mode constants and profile types without redeclaring that type."
+}

@@ -1,0 +1,10 @@
+{
+  "feature_id": "bahia-vcox",
+  "test_runs": [
+    {
+      "command": "go test ./internal/domain",
+      "result": "pass",
+      "evidence": "ok github.com/openagentsinc/bahia/internal/domain 0.147s"
+    }
+  ]
+}

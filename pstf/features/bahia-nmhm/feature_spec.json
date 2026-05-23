@@ -1,0 +1,10 @@
+{
+  "feature_id": "bahia-nmhm",
+  "title": "Replication policy domain model",
+  "intended_behavior": "The domain package exposes replication policy contracts keyed by service with per-worker target strategies and continuity-mode requirements for Nostr kind 31403 definitions.",
+  "scope": [
+    "internal/domain/replication.go",
+    "internal/domain/replication_test.go"
+  ],
+  "observed_baseline": "No dedicated replication policy domain contract existed before this change."
+}

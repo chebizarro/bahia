@@ -1,0 +1,21 @@
+{
+  "feature_id": "bahia-nmhm",
+  "title": "Replication policy domain model",
+  "criteria": [
+    {
+      "id": "AC1",
+      "statement": "A ReplicationPolicy carries service identity, replication targets, update time, and source event ID.",
+      "tests": ["TestReplicationPolicyCarriesContinuityTargets"]
+    },
+    {
+      "id": "AC2",
+      "statement": "Replication targets carry worker pubkey, strategy, max staleness, and required continuity modes.",
+      "tests": ["TestReplicationPolicyCarriesContinuityTargets"]
+    },
+    {
+      "id": "AC3",
+      "statement": "The planned replication strategies are represented as string values without constraining later serialization work.",
+      "tests": ["TestReplicationTargetSupportsPlannedStrategiesAsStrings"]
+    }
+  ]
+}
