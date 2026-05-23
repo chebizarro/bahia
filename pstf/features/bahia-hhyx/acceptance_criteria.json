@@ -1,0 +1,35 @@
+{
+  "feature_id": "bahia-hhyx",
+  "criteria": [
+    {
+      "id": "AC-1",
+      "description": "CoreDNS backend maps FQDNs to reverse-label etcd keys under /skydns by default.",
+      "tests": ["TestCoreDNSReverseDomainKeyGeneration"]
+    },
+    {
+      "id": "AC-2",
+      "description": "SyncZone replaces the target zone snapshot and removes prior keys in that zone.",
+      "tests": ["TestCoreDNSSyncZoneReplacesPriorSnapshot"]
+    },
+    {
+      "id": "AC-3",
+      "description": "ListRecords decodes CoreDNS service JSON for A, AAAA, and CNAME records.",
+      "tests": ["TestCoreDNSListRecordsRoundTripsRecordTypes"]
+    },
+    {
+      "id": "AC-4",
+      "description": "Zone replacement is prefix-scoped and does not delete sibling zone records.",
+      "tests": ["TestCoreDNSPrefixIsolationBetweenZones"]
+    },
+    {
+      "id": "AC-5",
+      "description": "Health reports KV/client connectivity errors.",
+      "tests": ["TestCoreDNSHealthFailureOnClientError"]
+    },
+    {
+      "id": "AC-6",
+      "description": "DNS config validation accepts coredns backends with non-empty etcd_endpoints and defaults empty etcd_prefix to /skydns.",
+      "tests": ["go build ./..."]
+    }
+  ]
+}

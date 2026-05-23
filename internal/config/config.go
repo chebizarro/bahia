@@ -62,8 +62,11 @@ type DNSZoneConfig struct {
 
 // DNSBackendConfig describes one DNS backend connector.
 type DNSBackendConfig struct {
-	Type    string `koanf:"type"`
-	RootDir string `koanf:"root_dir"`
+	Type            string        `koanf:"type"`
+	RootDir         string        `koanf:"root_dir"`
+	EtcdEndpoints   []string      `koanf:"etcd_endpoints"`
+	EtcdPrefix      string        `koanf:"etcd_prefix"`
+	EtcdDialTimeout time.Duration `koanf:"etcd_dial_timeout"`
 }
 
 // DNSProjectionConfig selects source state for DNS endpoint projection.
@@ -815,6 +818,29 @@ func cloneStrings(values []string) []string {
 	return append([]string(nil), values...)
 }
 
+func normalizeStringList(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(values))
+	normalized := make([]string, 0, len(values))
+	for _, raw := range values {
+		value := strings.TrimSpace(raw)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		normalized = append(normalized, value)
+	}
+	if len(normalized) == 0 {
+		return nil
+	}
+	return normalized
+}
+
 func normalizePubkeyList(values []string) ([]string, error) {
 	if len(values) == 0 {
 		return nil, nil
@@ -1038,15 +1064,33 @@ func (c *Config) validateDNS() error {
 		if name == "" {
 			return fmt.Errorf("config validation failed: dns backend names must not be empty")
 		}
-		backendType := strings.TrimSpace(backend.Type)
-		switch backendType {
+		backend.Type = strings.TrimSpace(backend.Type)
+		backend.RootDir = strings.TrimSpace(backend.RootDir)
+		backend.EtcdPrefix = strings.TrimSpace(backend.EtcdPrefix)
+		switch backend.Type {
 		case "filesystem":
-			if strings.TrimSpace(backend.RootDir) == "" {
+			if backend.RootDir == "" {
 				return fmt.Errorf("config validation failed: dns.backends.%s.root_dir is required for filesystem", name)
+			}
+		case "coredns":
+			normalizedEndpoints := normalizeStringList(backend.EtcdEndpoints)
+			if len(normalizedEndpoints) == 0 {
+				return fmt.Errorf("config validation failed: dns.backends.%s.etcd_endpoints is required for coredns", name)
+			}
+			backend.EtcdEndpoints = normalizedEndpoints
+			if backend.EtcdPrefix == "" {
+				backend.EtcdPrefix = "/skydns"
+			}
+			if backend.EtcdDialTimeout < 0 {
+				return fmt.Errorf("config validation failed: dns.backends.%s.etcd_dial_timeout must not be negative", name)
+			}
+			if backend.EtcdDialTimeout == 0 {
+				backend.EtcdDialTimeout = 5 * time.Second
 			}
 		default:
 			return fmt.Errorf("config validation failed: dns.backends.%s.type %q is unsupported", name, backend.Type)
 		}
+		c.DNS.Backends[ref] = backend
 	}
 	if c.DNS.Projection.Services || c.DNS.Projection.LLMRoutes || c.DNS.Projection.MLEndpoints {
 		if len(c.DNS.Projection.EnvironmentZones) == 0 {

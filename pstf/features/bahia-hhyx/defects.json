@@ -1,0 +1,11 @@
+{
+  "feature_id": "bahia-hhyx",
+  "defects": [
+    {
+      "id": "bahia-nahg",
+      "scope": "outside_wi_1",
+      "description": "Repository-wide go vet fails on pre-existing non-CoreDNS files.",
+      "status": "open"
+    }
+  ]
+}

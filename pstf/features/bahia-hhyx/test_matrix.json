@@ -1,0 +1,21 @@
+{
+  "feature_id": "bahia-hhyx",
+  "test_matrix": [
+    {
+      "test": "go test ./internal/adapters/dns/... -v",
+      "status": "passed",
+      "covers": ["AC-1", "AC-2", "AC-3", "AC-4", "AC-5"]
+    },
+    {
+      "test": "go build ./...",
+      "status": "passed",
+      "covers": ["AC-6"]
+    },
+    {
+      "test": "go vet ./...",
+      "status": "failed_outside_scope",
+      "covers": [],
+      "beads_issue": "bahia-nahg"
+    }
+  ]
+}

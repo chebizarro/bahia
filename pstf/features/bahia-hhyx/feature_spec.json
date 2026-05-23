@@ -1,0 +1,26 @@
+{
+  "feature_id": "bahia-hhyx",
+  "title": "WI-1 CoreDNS/etcd backend adapter",
+  "intended_behavior": [
+    "Provide a CoreDNS backend adapter implementing the existing DNS Backend interface without app wiring changes.",
+    "Map FQDNs to CoreDNS etcd keys by reversing labels under the configured prefix.",
+    "Health verifies etcd connectivity through a narrow KV boundary.",
+    "ListRecords decodes CoreDNS JSON service payloads into domain DNS records.",
+    "SyncZone replaces only the target zone subtree through a single KV transaction boundary.",
+    "DNS backend config supports coredns etcd endpoints, prefix, and dial timeout validation."
+  ],
+  "observed_baseline": [
+    "Only filesystem DNS backend adapter existed before WI-1.",
+    "DNSBackendConfig only supported type and root_dir before WI-1."
+  ],
+  "scope": {
+    "code": [
+      "internal/adapters/dns/coredns.go",
+      "internal/adapters/dns/coredns_test.go",
+      "internal/config/config.go"
+    ],
+    "dependency": [
+      "go.etcd.io/etcd/client/v3"
+    ]
+  }
+}
