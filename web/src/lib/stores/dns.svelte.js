@@ -1,3 +1,10 @@
+import { bootstrapControlplane } from './controlplane.svelte.js';
+import {
+  DNS_COMMANDS,
+  dnsResultIsFailure,
+  startDNSCommand
+} from '$lib/nostr/dns-controlplane.js';
+
 const API_PREFIX = '/api/v1';
 
 export const dnsState = $state({
@@ -28,7 +35,8 @@ export const dnsState = $state({
     endpoints: 0,
     drift: 0,
     policies: 0
-  }
+  },
+  commandRuns: []
 });
 
 function query(params) {
@@ -121,9 +129,107 @@ export async function fetchPolicies(fetcher = fetch) {
   return loadCollection('policies', '/dns/policies', 'policies', fetcher);
 }
 
+let commandRunSeq = 0;
+
+function nextCommandRunId(command) {
+  commandRunSeq += 1;
+  return `dns-${command}-${commandRunSeq}`;
+}
+
+function pushCommandRun(run) {
+  dnsState.commandRuns = [run, ...dnsState.commandRuns].slice(0, 50);
+  return run;
+}
+
+function commandErrorMessage(error) {
+  return error?.message || String(error || 'DNS command failed');
+}
+
+export async function startDNSCommandRun(command, payload = {}, { tags = [], signal } = {}) {
+  const run = pushCommandRun({
+    id: nextCommandRunId(command),
+    command,
+    phase: 'publishing',
+    requestEventId: '',
+    publishOk: [],
+    acceptedRelays: [],
+    rejectedRelays: [],
+    statusEvents: [],
+    result: null,
+    error: null,
+    payload,
+    startedAt: Date.now(),
+    completedAt: null
+  });
+
+  try {
+    await bootstrapControlplane();
+    const tracker = await startDNSCommand({
+      command,
+      payload,
+      tags,
+      signal,
+      onStatus: (status) => {
+        run.statusEvents = [...run.statusEvents, status];
+        run.phase = 'processing';
+      },
+      onClosed: (error) => {
+        run.error = commandErrorMessage(error);
+      }
+    });
+
+    run.phase = 'published';
+    run.requestEventId = tracker.requestEventId;
+    run.publishOk = tracker.ok;
+    run.acceptedRelays = tracker.acceptedRelays;
+    run.rejectedRelays = tracker.rejectedRelays;
+
+    run.result = tracker.result.then((result) => {
+      run.result = result;
+      run.phase = dnsResultIsFailure(result) ? 'failed' : 'completed';
+      if (dnsResultIsFailure(result)) run.error = result.error || result.message || 'DNS command failed';
+      run.completedAt = Date.now();
+      return result;
+    }).catch((error) => {
+      run.phase = 'error';
+      run.error = commandErrorMessage(error);
+      run.completedAt = Date.now();
+      throw error;
+    });
+
+    return run;
+  } catch (error) {
+    run.phase = String(commandErrorMessage(error)).includes('publish rejected') ? 'rejected' : 'error';
+    run.error = commandErrorMessage(error);
+    run.completedAt = Date.now();
+    throw error;
+  }
+}
+
+export function createDNSZone(payload, options = {}) {
+  return startDNSCommandRun(DNS_COMMANDS.ZONE_CREATE, payload, options);
+}
+
+export function applyDNSPolicy(payload, options = {}) {
+  return startDNSCommandRun(DNS_COMMANDS.POLICY_APPLY, payload, options);
+}
+
+export function overrideDNSRecord(payload, options = {}) {
+  return startDNSCommandRun(DNS_COMMANDS.RECORD_OVERRIDE, payload, options);
+}
+
+export function remediateDNSDrift(payload = {}, options = {}) {
+  return startDNSCommandRun(DNS_COMMANDS.DRIFT_REMEDIATE, payload, options);
+}
+
 export function seedDnsState({ zones = [], endpoints = [], driftEvents = [], policies = [] } = {}) {
   dnsState.zones = Array.isArray(zones) ? zones : [];
   dnsState.endpoints = Array.isArray(endpoints) ? endpoints : [];
   dnsState.driftEvents = Array.isArray(driftEvents) ? driftEvents : [];
   dnsState.policies = Array.isArray(policies) ? policies : [];
+}
+
+export function resetDnsCommandRuns() {
+  dnsState.commandRuns = [];
+  commandRunSeq = 0;
 }

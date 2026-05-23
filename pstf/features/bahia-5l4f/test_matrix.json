@@ -1,0 +1,15 @@
+{
+  "feature_id": "bahia-5l4f",
+  "test_runs": [
+    {
+      "command": "npm run test:unit -- --run tests/unit/dns-controlplane.test.js tests/unit/dns-store-commands.test.js tests/unit/controlplane-requests.test.js",
+      "result": "pass",
+      "evidence": "Test Files 3 passed; Tests 15 passed"
+    },
+    {
+      "command": "npm run build",
+      "result": "pass",
+      "evidence": "Vite/SvelteKit production build completed successfully; warnings were in pre-existing unrelated Svelte files."
+    }
+  ]
+}

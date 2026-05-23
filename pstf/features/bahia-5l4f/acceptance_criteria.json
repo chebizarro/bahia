@@ -1,0 +1,21 @@
+{
+  "feature_id": "bahia-5l4f",
+  "title": "Web Nostr DNS control-plane client and run tracker",
+  "criteria": [
+    {
+      "id": "AC1",
+      "statement": "Web code exposes DNS request/status/result constants and can publish zone create, policy apply, record override, and drift remediate as signed Nostr events.",
+      "tests": ["tests/unit/dns-controlplane.test.js"]
+    },
+    {
+      "id": "AC2",
+      "statement": "DNS command runs track publish OK, request event id, status events, result payloads, rejected publish, and CLOSED/AUTH subscription errors.",
+      "tests": ["tests/unit/dns-controlplane.test.js", "tests/unit/dns-store-commands.test.js"]
+    },
+    {
+      "id": "AC3",
+      "statement": "Completion comes from explicit DNS result events and no REST write API is introduced in the DNS command path.",
+      "tests": ["tests/unit/dns-controlplane.test.js", "npm run build"]
+    }
+  ]
+}

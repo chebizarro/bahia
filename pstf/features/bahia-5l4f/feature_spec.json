@@ -1,0 +1,21 @@
+{
+  "feature_id": "bahia-5l4f",
+  "title": "Web Nostr DNS control-plane client and run tracker",
+  "observed_behavior": [
+    "The web DNS store had read-only REST collection loaders for DNS zones, endpoints, drift, and policies.",
+    "Web Nostr helpers already supported signed publishRequest, status subscriptions, and explicit result-event awaiting.",
+    "Browser code did not expose DNS command constants or a DNS run tracker for kinds 5941-5944, 6941, and 7941-7944."
+  ],
+  "intended_behavior": [
+    "Browser callers can publish DNS zone create, policy apply, record override, and drift remediate commands as signed Nostr request events.",
+    "DNS command runs expose publish OK outcomes, accepted/rejected relay lists, request event id, status events, terminal result payloads, and CLOSED/AUTH errors.",
+    "Terminal completion is driven only by explicit DNS result events; no REST write path or timeout-as-completion behavior is introduced."
+  ],
+  "scope": [
+    "web/src/lib/nostr/client.js",
+    "web/src/lib/nostr/dns-controlplane.js",
+    "web/src/lib/stores/dns.svelte.js",
+    "web/tests/unit/dns-controlplane.test.js",
+    "web/tests/unit/dns-store-commands.test.js"
+  ]
+}
