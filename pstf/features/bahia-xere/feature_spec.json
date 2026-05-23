@@ -1,0 +1,18 @@
+{
+  "feature_id": "bahia-xere",
+  "title": "DNS dashboard Nostr relay subscription substrate",
+  "observed_behavior": "The DNS dashboard previously loaded DNS data through Svelte page/store REST reads and treated user refresh as a delivery mechanism.",
+  "intended_behavior": "The DNS dashboard bootstraps DNS read models and DNS audit/drift events from Nostr relays with EOSE-authoritative catch-up, then remains live through scoped subscriptions. REST DNS data fetches and manual refresh delivery are not used.",
+  "scope": [
+    "web/src/routes/dns/+page.ts",
+    "web/src/routes/dns/+page.svelte",
+    "web/src/lib/stores/dns.svelte.js",
+    "web/src/lib/nostr/client.js",
+    "web/tests/unit/dns-store-subscriptions.test.js",
+    "web/tests/unit/dns-store-commands.test.js"
+  ],
+  "nostr_kinds": {
+    "read_models": [31975, 31976, 31977, 31978],
+    "audit_drift": [31020, 31021, 31022, 31023, 31024]
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "feature_id": "bahia-xere",
+  "criteria": [
+    { "id": "AC1", "statement": "DNS dashboard bootstraps zones, endpoints, policies, backends, and drift/audit state with nostr.queryUntilEose before live mode." },
+    { "id": "AC2", "statement": "DNS dashboard keeps live REQ subscriptions open and updates collections from EVENT callbacks without REST DNS data fetches or manual refresh delivery." },
+    { "id": "AC3", "statement": "DNS subscriptions use narrow filters containing DNS kinds and relevant tags such as #t, #family, and #event_type, scoped by Bahia service pubkey when known." },
+    { "id": "AC4", "statement": "Parameterized replaceable DNS read models are deduped by author and d tag; tombstone replacements remove dashboard rows and stale replays do not restore them." },
+    { "id": "AC5", "statement": "CLOSED and AUTH subscription failures are surfaced in visible connection error state." }
+  ]
+}

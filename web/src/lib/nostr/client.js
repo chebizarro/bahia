@@ -245,7 +245,10 @@ export const KINDS = {
   BAHIA_PACKAGE_ARTIFACT_REGISTRY: 31972,
   BAHIA_PACKAGE_PROMOTION_REGISTRY: 31973,
   BAHIA_SYSTEM_DISCOVERY: 31974,
+  BAHIA_DNS_ZONE_STATE: 31975,
   BAHIA_DNS_ENDPOINT_STATE: 31976,
+  BAHIA_DNS_POLICY_STATE: 31977,
+  BAHIA_DNS_BACKEND_STATE: 31978,
   BAHIA_WORKER_STATE: 32000,
   BAHIA_WORKER_ASSIGNMENT_STATE: 32001,
   BAHIA_WORKER_DRAIN_STATUS: 32002,
@@ -417,6 +420,10 @@ export const BAHIA_KINDS = {
   PACKAGE_ARTIFACT_REGISTRY: KINDS.BAHIA_PACKAGE_ARTIFACT_REGISTRY,
   PACKAGE_PROMOTION_REGISTRY: KINDS.BAHIA_PACKAGE_PROMOTION_REGISTRY,
   SYSTEM_DISCOVERY: KINDS.BAHIA_SYSTEM_DISCOVERY,
+  DNS_ZONE_STATE: KINDS.BAHIA_DNS_ZONE_STATE,
+  DNS_ENDPOINT_STATE: KINDS.BAHIA_DNS_ENDPOINT_STATE,
+  DNS_POLICY_STATE: KINDS.BAHIA_DNS_POLICY_STATE,
+  DNS_BACKEND_STATE: KINDS.BAHIA_DNS_BACKEND_STATE,
   WORKER_STATE: KINDS.BAHIA_WORKER_STATE,
   WORKER_ASSIGNMENT_STATE: KINDS.BAHIA_WORKER_ASSIGNMENT_STATE,
   WORKER_DRAIN_STATUS: KINDS.BAHIA_WORKER_DRAIN_STATUS,
@@ -470,6 +477,10 @@ export const BAHIA_READ_MODEL_KINDS = [
   KINDS.BAHIA_PACKAGE_REPOSITORY_REGISTRY,
   KINDS.BAHIA_PACKAGE_ARTIFACT_REGISTRY,
   KINDS.BAHIA_PACKAGE_PROMOTION_REGISTRY,
+  KINDS.BAHIA_DNS_ZONE_STATE,
+  KINDS.BAHIA_DNS_ENDPOINT_STATE,
+  KINDS.BAHIA_DNS_POLICY_STATE,
+  KINDS.BAHIA_DNS_BACKEND_STATE,
   KINDS.BAHIA_WORKER_STATE,
   KINDS.BAHIA_WORKER_ASSIGNMENT_STATE,
   KINDS.BAHIA_WORKER_DRAIN_STATUS,
@@ -1296,6 +1307,14 @@ export class NostrClient {
           break;
         }
 
+        case 'AUTH': {
+          const [, challenge = ''] = msg;
+          this.subscriptions.forEach((sub) => {
+            if (sub.onAuth) sub.onAuth(challenge, relay);
+          });
+          break;
+        }
+
         case 'NOTICE':
           console.log(`[nostr] Notice from ${relay}:`, msg[1]);
           break;
@@ -1326,10 +1345,10 @@ export class NostrClient {
   }
 
   // Subscribe to events
-  subscribe(filters, { onEvent, onEose, onClosed } = {}) {
+  subscribe(filters, { onEvent, onEose, onClosed, onAuth } = {}) {
     const subId = `sub_${++this.subIdCounter}`;
     
-    this.subscriptions.set(subId, { filters, onEvent, onEose, onClosed, events: [] });
+    this.subscriptions.set(subId, { filters, onEvent, onEose, onClosed, onAuth, events: [] });
 
     this.sendSubscription(subId);
 

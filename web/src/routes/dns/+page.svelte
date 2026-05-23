@@ -1,5 +1,6 @@
 <script>
-  import { dnsState, seedDnsState, fetchEndpoints, fetchZones, fetchDrift, fetchPolicies } from '$lib/stores/dns.svelte.js';
+  import { onMount } from 'svelte';
+  import { connect, disconnect, dnsState } from '$lib/stores/dns.svelte.js';
 
   let { data } = $props();
   let activeTab = $state('zones');
@@ -7,22 +8,24 @@
   let filters = $state({ zone: '', environment: '', capability: '', runtime: '', health: '' });
   let filterError = $state(null);
 
-  $effect(() => {
-    seedDnsState(data);
+  onMount(() => {
+    connect(data?.relayUrls || data?.relayUrl || [], data?.servicePubkey);
+    return () => disconnect();
   });
 
   const zones = $derived(dnsState.zones || []);
-  const endpoints = $derived(dnsState.endpoints || []);
+  const allEndpoints = $derived(dnsState.endpoints || []);
+  const endpoints = $derived(allEndpoints.filter((endpoint) => matchesEndpointFilters(endpoint)));
   const driftEvents = $derived(dnsState.driftEvents || []);
   const policies = $derived(dnsState.policies || []);
   const endpointCount = $derived(endpoints.length);
   const unhealthyCount = $derived(endpoints.filter((endpoint) => healthTone(valueOf(endpoint, ['health', 'status', 'health_status'])) !== 'healthy').length);
 
   const zoneOptions = $derived(uniqueValues(zones, ['name', 'zone', 'zone_name']));
-  const environmentOptions = $derived(uniqueValues(endpoints, ['environment', 'env']));
-  const capabilityOptions = $derived(uniqueNestedValues(endpoints, ['capabilities', 'capability']));
-  const runtimeOptions = $derived(uniqueValues(endpoints, ['runtime', 'runtime_name']));
-  const healthOptions = $derived(uniqueValues(endpoints, ['health', 'status', 'health_status']));
+  const environmentOptions = $derived(uniqueValues(allEndpoints, ['environment', 'env']));
+  const capabilityOptions = $derived(uniqueNestedValues(allEndpoints, ['capabilities', 'capability']));
+  const runtimeOptions = $derived(uniqueValues(allEndpoints, ['runtime', 'runtime_name']));
+  const healthOptions = $derived(uniqueValues(allEndpoints, ['health', 'status', 'health_status']));
 
   function valueOf(record, keys, fallback = '—') {
     for (const key of keys) {
@@ -71,31 +74,28 @@
     return date.toLocaleString();
   }
 
+  function matchesEndpointFilters(endpoint) {
+    if (filters.zone && valueOf(endpoint, ['zone', 'zone_name'], '') !== filters.zone) return false;
+    if (filters.environment && valueOf(endpoint, ['environment', 'env'], '') !== filters.environment) return false;
+    if (filters.runtime && valueOf(endpoint, ['runtime', 'runtime_name'], '') !== filters.runtime) return false;
+    if (filters.health && valueOf(endpoint, ['health', 'status', 'health_status'], '') !== filters.health) return false;
+    if (filters.capability) {
+      const capabilities = valueOf(endpoint, ['capabilities', 'capability'], []);
+      const values = Array.isArray(capabilities) ? capabilities.map(String) : [String(capabilities || '')];
+      if (!values.includes(filters.capability)) return false;
+    }
+    return true;
+  }
+
   function resetFilters() {
     filters = { zone: '', environment: '', capability: '', runtime: '', health: '' };
     selectedEndpoint = null;
-    applyFilters();
+    filterError = null;
   }
 
-  async function applyFilters() {
+  function applyFilters() {
+    selectedEndpoint = null;
     filterError = null;
-    try {
-      await fetchEndpoints(filters);
-    } catch (error) {
-      filterError = error?.message || 'Failed to load DNS endpoints';
-    }
-  }
-
-  async function refreshTab() {
-    filterError = null;
-    try {
-      if (activeTab === 'zones') await fetchZones();
-      if (activeTab === 'endpoints') await fetchEndpoints(filters);
-      if (activeTab === 'drift') await fetchDrift();
-      if (activeTab === 'policies') await fetchPolicies();
-    } catch (error) {
-      filterError = error?.message || 'Failed to refresh DNS data';
-    }
   }
 </script>
 
@@ -104,7 +104,7 @@
     <div>
       <p class="eyebrow">DNS fabric</p>
       <h1>DNS management</h1>
-      <p class="subtitle">Zones, service endpoints, drift observations, and active DNS policies from Bahia read models.</p>
+      <p class="subtitle">Zones, service endpoints, drift observations, and active DNS policies from Bahia Nostr read models.</p>
     </div>
     <div class="summary-card" aria-label="DNS summary">
       <span class="summary-number">{zones.length}</span>
@@ -113,19 +113,23 @@
     </div>
   </div>
 
-  {#if data?.error || filterError}
+  {#if dnsState.error.subscription || filterError}
     <div class="alert" role="status">
-      <strong>DNS data unavailable.</strong>
-      <span>{filterError || data.error}</span>
+      <strong>DNS relay subscription unavailable.</strong>
+      <span>{filterError || dnsState.error.subscription}</span>
     </div>
   {/if}
+
+  <div class="connection-status" aria-label="DNS Nostr subscription status">
+    <span class={`badge ${dnsState.connection.status === 'live' ? 'healthy' : dnsState.connection.status === 'error' || dnsState.connection.status === 'auth-required' ? 'critical' : 'unknown'}`}>{dnsState.connection.status}</span>
+    <span>{dnsState.connection.relays.length} relay{dnsState.connection.relays.length === 1 ? '' : 's'} · {dnsState.connection.eoseRelays.length} EOSE</span>
+  </div>
 
   <nav class="tabs" aria-label="DNS views">
     <button type="button" class:active={activeTab === 'zones'} onclick={() => (activeTab = 'zones')}>Zones</button>
     <button type="button" class:active={activeTab === 'endpoints'} onclick={() => (activeTab = 'endpoints')}>Endpoints</button>
     <button type="button" class:active={activeTab === 'drift'} onclick={() => (activeTab = 'drift')}>Drift</button>
     <button type="button" class:active={activeTab === 'policies'} onclick={() => (activeTab = 'policies')}>Policies</button>
-    <button type="button" class="refresh" onclick={refreshTab}>Refresh</button>
   </nav>
 
   {#if activeTab === 'zones'}
@@ -134,24 +138,12 @@
         <h2>Zones</h2>
         <span>{zones.length} total</span>
       </div>
-      {#if zones.length === 0 && !data?.error}
-        <div class="empty-card">
-          <h3>No DNS zones projected yet</h3>
-          <p>Zones will appear after the DNS read model records zone state.</p>
-        </div>
+      {#if zones.length === 0 && !dnsState.error.subscription}
+        <div class="empty-card"><h3>No DNS zones projected yet</h3><p>Zones will appear after Kind 31975 DNS zone events are projected.</p></div>
       {:else}
         <div class="table-wrap">
           <table>
-            <thead>
-              <tr>
-                <th>Name</th>
-                <th>Visibility</th>
-                <th>Backend</th>
-                <th>Health</th>
-                <th>Records</th>
-                <th>Last sync</th>
-              </tr>
-            </thead>
+            <thead><tr><th>Name</th><th>Visibility</th><th>Backend</th><th>Health</th><th>Records</th><th>Last sync</th></tr></thead>
             <tbody>
               {#each zones as zone (valueOf(zone, ['id', 'name', 'zone'], JSON.stringify(zone)))}
                 {@const health = valueOf(zone, ['health', 'status', 'health_status'])}
@@ -161,7 +153,7 @@
                   <td>{valueOf(zone, ['backend', 'provider'])}</td>
                   <td><span class={`badge ${healthTone(health)}`}>{health}</span></td>
                   <td>{valueOf(zone, ['record_count', 'records_count', 'records'])}</td>
-                  <td>{formatDate(valueOf(zone, ['last_sync_time', 'last_sync_at', 'synced_at'], ''))}</td>
+                  <td>{formatDate(valueOf(zone, ['last_sync_time', 'last_sync_at', 'synced_at', 'updated_at'], ''))}</td>
                 </tr>
               {/each}
             </tbody>
@@ -171,43 +163,23 @@
     </section>
   {:else if activeTab === 'endpoints'}
     <section class="panel" aria-label="DNS endpoints">
-      <div class="panel-header">
-        <h2>Endpoints</h2>
-        <span>{endpoints.length} shown</span>
-      </div>
-
+      <div class="panel-header"><h2>Endpoints</h2><span>{endpoints.length} shown</span></div>
       <form class="filters" onsubmit={(event) => { event.preventDefault(); applyFilters(); }}>
         <label>Zone<select bind:value={filters.zone}><option value="">All zones</option>{#each zoneOptions as option}<option value={option}>{option}</option>{/each}</select></label>
         <label>Environment<select bind:value={filters.environment}><option value="">All environments</option>{#each environmentOptions as option}<option value={option}>{option}</option>{/each}</select></label>
         <label>Capability<select bind:value={filters.capability}><option value="">All capabilities</option>{#each capabilityOptions as option}<option value={option}>{option}</option>{/each}</select></label>
         <label>Runtime<select bind:value={filters.runtime}><option value="">All runtimes</option>{#each runtimeOptions as option}<option value={option}>{option}</option>{/each}</select></label>
         <label>Health<select bind:value={filters.health}><option value="">All health</option>{#each healthOptions as option}<option value={option}>{option}</option>{/each}</select></label>
-        <div class="filter-actions">
-          <button type="submit">Apply</button>
-          <button type="button" class="secondary" onclick={resetFilters}>Reset</button>
-        </div>
+        <div class="filter-actions"><button type="submit">Apply</button><button type="button" class="secondary" onclick={resetFilters}>Reset</button></div>
       </form>
 
-      {#if endpoints.length === 0 && !data?.error}
-        <div class="empty-card">
-          <h3>No DNS endpoints projected yet</h3>
-          <p>Catalog endpoints will appear after DNS endpoint events are projected.</p>
-        </div>
+      {#if endpoints.length === 0 && !dnsState.error.subscription}
+        <div class="empty-card"><h3>No DNS endpoints projected yet</h3><p>Catalog endpoints will appear after Kind 31976 DNS endpoint events are projected.</p></div>
       {:else}
         <div class="endpoint-layout">
           <div class="table-wrap">
             <table>
-              <thead>
-                <tr>
-                  <th>FQDN</th>
-                  <th>Address</th>
-                  <th>Health</th>
-                  <th>Environment</th>
-                  <th>Capabilities</th>
-                  <th>Runtime</th>
-                  <th>Hardware</th>
-                </tr>
-              </thead>
+              <thead><tr><th>FQDN</th><th>Address</th><th>Health</th><th>Environment</th><th>Capabilities</th><th>Runtime</th><th>Hardware</th></tr></thead>
               <tbody>
                 {#each endpoints as endpoint (valueOf(endpoint, ['id', 'fqdn', 'name'], JSON.stringify(endpoint)))}
                   {@const health = valueOf(endpoint, ['health', 'status', 'health_status'])}
@@ -224,13 +196,9 @@
               </tbody>
             </table>
           </div>
-
           {#if selectedEndpoint}
             <aside class="detail-card" aria-label="Endpoint detail">
-              <div class="detail-title">
-                <h3>{valueOf(selectedEndpoint, ['fqdn', 'name', 'hostname'])}</h3>
-                <button type="button" onclick={() => (selectedEndpoint = null)}>×</button>
-              </div>
+              <div class="detail-title"><h3>{valueOf(selectedEndpoint, ['fqdn', 'name', 'hostname'])}</h3><button type="button" onclick={() => (selectedEndpoint = null)}>×</button></div>
               <dl>
                 <div><dt>Address</dt><dd>{valueOf(selectedEndpoint, ['address', 'ip', 'target'])}</dd></div>
                 <div><dt>Zone</dt><dd>{valueOf(selectedEndpoint, ['zone', 'zone_name'])}</dd></div>
@@ -246,48 +214,28 @@
     </section>
   {:else if activeTab === 'drift'}
     <section class="panel" aria-label="DNS drift history">
-      <div class="panel-header">
-        <h2>Drift history</h2>
-        <span>{driftEvents.length} events</span>
-      </div>
-      {#if driftEvents.length === 0 && !data?.error}
-        <div class="empty-card"><h3>No DNS drift events</h3><p>Recent drift observations will appear here after projection.</p></div>
+      <div class="panel-header"><h2>Drift history</h2><span>{driftEvents.length} events</span></div>
+      {#if driftEvents.length === 0 && !dnsState.error.subscription}
+        <div class="empty-card"><h3>No DNS drift events</h3><p>Drift derived from DNS endpoint state will appear here after projection.</p></div>
       {:else}
         <ol class="timeline">
           {#each driftEvents as event (valueOf(event, ['id', 'event_id', 'timestamp'], JSON.stringify(event)))}
-            <li>
-              <span class="timeline-dot"></span>
-              <article>
-                <header><strong>{valueOf(event, ['record', 'record_name', 'fqdn'])}</strong><time>{formatDate(valueOf(event, ['timestamp', 'created_at', 'observed_at'], ''))}</time></header>
-                <p>{valueOf(event, ['zone', 'zone_name'])}</p>
-                <div class="diff"><span>Expected <code>{listValue(valueOf(event, ['expected'], ''))}</code></span><span>Actual <code>{listValue(valueOf(event, ['actual'], ''))}</code></span></div>
-                <footer>{valueOf(event, ['resolution', 'status'])}</footer>
-              </article>
-            </li>
+            <li><span class="timeline-dot"></span><article><header><strong>{valueOf(event, ['record', 'record_name', 'fqdn'])}</strong><time>{formatDate(valueOf(event, ['timestamp', 'created_at', 'observed_at'], ''))}</time></header><p>{valueOf(event, ['zone', 'zone_name'])}</p><div class="diff"><span>Expected <code>{listValue(valueOf(event, ['expected'], ''))}</code></span><span>Actual <code>{listValue(valueOf(event, ['actual'], ''))}</code></span></div><footer>{valueOf(event, ['resolution', 'status'])}</footer></article></li>
           {/each}
         </ol>
       {/if}
     </section>
   {:else}
     <section class="panel" aria-label="DNS policies">
-      <div class="panel-header">
-        <h2>Policies</h2>
-        <span>{policies.length} active</span>
-      </div>
-      {#if policies.length === 0 && !data?.error}
-        <div class="empty-card"><h3>No DNS policies projected yet</h3><p>Kind 31977 DNS policies or REST policy read models will appear here when available.</p></div>
+      <div class="panel-header"><h2>Policies</h2><span>{policies.length} active</span></div>
+      {#if policies.length === 0 && !dnsState.error.subscription}
+        <div class="empty-card"><h3>No DNS policies projected yet</h3><p>Kind 31977 DNS policies will appear here after relay projection.</p></div>
       {:else}
         <div class="policy-grid">
           {#each policies as policy (valueOf(policy, ['id', 'name', 'd'], JSON.stringify(policy)))}
             <article class="policy-card">
-              <header>
-                <h3>{valueOf(policy, ['name', 'title', 'd'])}</h3>
-                <span class={`badge ${enabledLabel(valueOf(policy, ['enabled'], true)) === 'Enabled' ? 'healthy' : 'unknown'}`}>{enabledLabel(valueOf(policy, ['enabled'], true))}</span>
-              </header>
-              <dl>
-                <div><dt>Scope</dt><dd>{valueOf(policy, ['scope', 'zone'], 'global')}</dd></div>
-                <div><dt>Rules</dt><dd>{valueOf(policy, ['rule_count', 'rules_count'], Array.isArray(policy?.rules) ? policy.rules.length : 0)}</dd></div>
-              </dl>
+              <header><h3>{valueOf(policy, ['name', 'title', 'd'])}</h3><span class={`badge ${enabledLabel(valueOf(policy, ['enabled'], true)) === 'Enabled' ? 'healthy' : 'unknown'}`}>{enabledLabel(valueOf(policy, ['enabled'], true))}</span></header>
+              <dl><div><dt>Scope</dt><dd>{valueOf(policy, ['scope', 'zone'], 'global')}</dd></div><div><dt>Rules</dt><dd>{valueOf(policy, ['rule_count', 'rules_count'], Array.isArray(policy?.rules) ? policy.rules.length : 0)}</dd></div></dl>
             </article>
           {/each}
         </div>
@@ -305,14 +253,14 @@
   .summary-card, .panel, .empty-card, .alert, .detail-card, .policy-card { background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 16px; }
   .summary-card { min-width: 210px; padding: 1rem; display: grid; gap: 0.15rem; }
   .summary-number { font-size: 2rem; font-weight: 800; }
-  .summary-label, .summary-note, .panel-header span, .empty-card p, dt, time, .timeline p, .timeline footer { color: var(--text-muted); }
+  .summary-label, .summary-note, .panel-header span, .empty-card p, dt, time, .timeline p, .timeline footer, .connection-status { color: var(--text-muted); }
   .summary-note.attention { color: var(--warning); font-weight: 700; }
   .alert { padding: 1rem; display: grid; gap: 0.25rem; border-color: color-mix(in srgb, var(--error) 55%, var(--border-color)); }
   .alert strong { color: var(--error); }
+  .connection-status { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
   .tabs { display: flex; flex-wrap: wrap; gap: 0.5rem; border-bottom: 1px solid var(--border-color); padding-bottom: 0.75rem; }
   .tabs button, .filters button { border: 1px solid var(--border-color); border-radius: 999px; padding: 0.55rem 0.9rem; background: var(--card-bg); color: var(--text-primary); cursor: pointer; font-weight: 700; }
   .tabs button.active, .filters button { border-color: var(--primary); background: color-mix(in srgb, var(--primary) 15%, transparent); color: var(--primary); }
-  .tabs button.refresh { margin-left: auto; }
   .panel { padding: 1rem; display: grid; gap: 1rem; }
   .panel-header { display: flex; justify-content: space-between; gap: 1rem; align-items: center; }
   .panel-header h2 { font-size: 1.25rem; }
@@ -353,5 +301,5 @@
   .policy-card { padding: 1rem; display: grid; gap: 1rem; }
   .policy-card header { display: flex; justify-content: space-between; gap: 1rem; align-items: flex-start; }
   @media (max-width: 920px) { .endpoint-layout { grid-template-columns: 1fr; } .detail-card { position: static; } }
-  @media (max-width: 720px) { .header, .panel-header, .timeline header { flex-direction: column; align-items: stretch; } .summary-card { width: 100%; } .tabs button.refresh { margin-left: 0; } }
+  @media (max-width: 720px) { .header, .panel-header, .timeline header { flex-direction: column; align-items: stretch; } .summary-card { width: 100%; } }
 </style>

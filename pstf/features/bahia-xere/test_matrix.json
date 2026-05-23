@@ -1,0 +1,11 @@
+{
+  "feature_id": "bahia-xere",
+  "tests": [
+    { "criterion": "AC1", "test": "web/tests/unit/dns-store-subscriptions.test.js: bootstraps zones, endpoints, policies, backends, and drift via EOSE and keeps a live subscription open without REST fetches" },
+    { "criterion": "AC2", "test": "web/tests/unit/dns-store-subscriptions.test.js: applies live EVENT updates after bootstrap" },
+    { "criterion": "AC3", "test": "web/tests/unit/dns-store-subscriptions.test.js: builds narrow DNS read-model filters scoped by kind, tags, and service author" },
+    { "criterion": "AC3", "test": "web/tests/unit/dns-store-commands.test.js: builds narrow DNS read-model relay filters scoped to the Bahia service pubkey" },
+    { "criterion": "AC4", "test": "web/tests/unit/dns-store-subscriptions.test.js: dedupes replaceable events by author and d tag and removes tombstoned read models" },
+    { "criterion": "AC5", "test": "web/tests/unit/dns-store-subscriptions.test.js: surfaces CLOSED and AUTH subscription errors visibly" }
+  ]
+}
