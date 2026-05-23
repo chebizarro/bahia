@@ -1,0 +1,10 @@
+{
+  "feature_id": "bahia-9woy",
+  "test_runs": [
+    {
+      "command": "go test ./internal/reconcile",
+      "result": "pass",
+      "evidence": "ok github.com/openagentsinc/bahia/internal/reconcile 0.271s"
+    }
+  ]
+}

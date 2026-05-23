@@ -1,0 +1,10 @@
+{
+  "feature_id": "bahia-9woy",
+  "title": "Continuity-aware DNS service projection",
+  "intended_behavior": "The DNS projection engine consumes optional continuity status for services. Services without status or with full continuity continue to project from their primary runtime observation, degraded and emergency services project to the active worker public endpoint, and offline services produce no service DNS record.",
+  "scope": [
+    "internal/reconcile/dns_projector.go",
+    "internal/reconcile/dns_projector_test.go"
+  ],
+  "observed_baseline": "Before this change, service DNS endpoints were projected only from in-sync EnvironmentServiceState plus the latest healthy RuntimeObservation. Continuity state and worker RuntimeTarget.PublicBaseURL were not consulted for service DNS cutover."
+}

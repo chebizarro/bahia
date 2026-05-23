@@ -118,6 +118,118 @@ func TestDNSProjectorDuplicateCoordinateDetection(t *testing.T) {
 	}
 }
 
+func TestDNSProjectorContinuityDegradedAndEmergencyUseActiveWorkerEndpoint(t *testing.T) {
+	for _, mode := range []domain.ContinuityMode{domain.ContinuityModeDegraded, domain.ContinuityModeEmergency} {
+		t.Run(string(mode), func(t *testing.T) {
+			ctx := context.Background()
+			envID := uuid.New()
+			serviceID := uuid.New()
+			projector := NewDNSProjector(
+				&fakeServiceRepo{services: []domain.Service{{ID: serviceID, Name: "api", RuntimeType: domain.RuntimeTypeDocker}}},
+				&fakeEnvironmentRepo{environments: []domain.Environment{{ID: envID, Name: "prod"}}},
+				&fakeStateRepo{states: []domain.EnvironmentServiceState{{ServiceID: serviceID, EnvironmentID: envID, DriftStatus: domain.DriftStatusInSync}}},
+				&fakeObservationRepo{latest: map[string]*domain.RuntimeObservation{}},
+				nil,
+				nil,
+				&fakeWorkerSource{workers: []domain.Worker{
+					{PubKey: "standby-worker", Name: "standby", Status: domain.WorkerStatusOnline, RuntimeTarget: &domain.WorkerRuntimeTarget{Type: domain.RuntimeTypeCompose, PublicBaseURL: "https://standby.internal:9443"}},
+				}},
+				config.DNSConfig{DefaultTTL: 300, Projection: config.DNSProjectionConfig{Services: true, EnvironmentZones: map[string]string{"prod": "prod.example"}}},
+				nil,
+			)
+			projector.SetContinuityStatusReader(fakeContinuityStatusReader{
+				"api": {ServiceKey: "api", ActiveProfile: mode, OperationState: "failover_in_progress", ActiveWorkerPubKey: "standby-worker"},
+			})
+
+			endpoints, err := projector.ListDNSEndpoints(ctx)
+			if err != nil {
+				t.Fatalf("ListDNSEndpoints returned error: %v", err)
+			}
+			if got, want := len(endpoints), 1; got != want {
+				t.Fatalf("endpoint count = %d, want %d: %#v", got, want, endpoints)
+			}
+			endpoint := endpoints[0]
+			if endpoint.Name != "api" || endpoint.Address != "standby.internal" || endpoint.WorkerPubkey != "standby-worker" {
+				t.Fatalf("continuity endpoint = %#v", endpoint)
+			}
+			if endpoint.Protocol != "https" {
+				t.Fatalf("endpoint protocol = %q, want https", endpoint.Protocol)
+			}
+			if endpoint.Port == nil || *endpoint.Port != 9443 {
+				t.Fatalf("endpoint port = %v, want 9443", endpoint.Port)
+			}
+			if endpoint.Source != "continuity_status" {
+				t.Fatalf("endpoint source = %q, want continuity_status", endpoint.Source)
+			}
+		})
+	}
+}
+
+func TestDNSProjectorContinuityFullPreservesPrimaryEndpoint(t *testing.T) {
+	ctx := context.Background()
+	envID := uuid.New()
+	serviceID := uuid.New()
+	projector := NewDNSProjector(
+		&fakeServiceRepo{services: []domain.Service{{ID: serviceID, Name: "api", RuntimeType: domain.RuntimeTypeDocker}}},
+		&fakeEnvironmentRepo{environments: []domain.Environment{{ID: envID, Name: "prod"}}},
+		&fakeStateRepo{states: []domain.EnvironmentServiceState{{ServiceID: serviceID, EnvironmentID: envID, DriftStatus: domain.DriftStatusInSync}}},
+		&fakeObservationRepo{latest: map[string]*domain.RuntimeObservation{
+			dnsTestStateKey(serviceID, envID): {ServiceID: serviceID, EnvironmentID: envID, ObservedHost: "10.0.0.10", HealthStatus: domain.HealthStatusHealthy},
+		}},
+		nil,
+		nil,
+		&fakeWorkerSource{workers: []domain.Worker{
+			{PubKey: "standby-worker", RuntimeTarget: &domain.WorkerRuntimeTarget{Type: domain.RuntimeTypeCompose, PublicBaseURL: "https://standby.internal:9443"}},
+		}},
+		config.DNSConfig{DefaultTTL: 300, Projection: config.DNSProjectionConfig{Services: true, EnvironmentZones: map[string]string{"prod": "prod.example"}}},
+		nil,
+	)
+	projector.SetContinuityStatusReader(fakeContinuityStatusReader{
+		"api": {ServiceKey: "api", ActiveProfile: domain.ContinuityModeFull, OperationState: "steady", ActiveWorkerPubKey: "standby-worker"},
+	})
+
+	endpoints, err := projector.ListDNSEndpoints(ctx)
+	if err != nil {
+		t.Fatalf("ListDNSEndpoints returned error: %v", err)
+	}
+	if got, want := len(endpoints), 1; got != want {
+		t.Fatalf("endpoint count = %d, want %d: %#v", got, want, endpoints)
+	}
+	if endpoints[0].Address != "10.0.0.10" || endpoints[0].Source != "service_state" || endpoints[0].WorkerPubkey != "" {
+		t.Fatalf("full continuity endpoint should preserve primary projection: %#v", endpoints[0])
+	}
+}
+
+func TestDNSProjectorContinuityOfflineOmitsServiceEndpoint(t *testing.T) {
+	ctx := context.Background()
+	envID := uuid.New()
+	serviceID := uuid.New()
+	projector := NewDNSProjector(
+		&fakeServiceRepo{services: []domain.Service{{ID: serviceID, Name: "api", RuntimeType: domain.RuntimeTypeDocker}}},
+		&fakeEnvironmentRepo{environments: []domain.Environment{{ID: envID, Name: "prod"}}},
+		&fakeStateRepo{states: []domain.EnvironmentServiceState{{ServiceID: serviceID, EnvironmentID: envID, DriftStatus: domain.DriftStatusInSync}}},
+		&fakeObservationRepo{latest: map[string]*domain.RuntimeObservation{
+			dnsTestStateKey(serviceID, envID): {ServiceID: serviceID, EnvironmentID: envID, ObservedHost: "10.0.0.10", HealthStatus: domain.HealthStatusHealthy},
+		}},
+		nil,
+		nil,
+		nil,
+		config.DNSConfig{DefaultTTL: 300, Projection: config.DNSProjectionConfig{Services: true, EnvironmentZones: map[string]string{"prod": "prod.example"}}},
+		nil,
+	)
+	projector.SetContinuityStatusReader(fakeContinuityStatusReader{
+		"api": {ServiceKey: "api", ActiveProfile: domain.ContinuityModeOffline, OperationState: "steady"},
+	})
+
+	endpoints, err := projector.ListDNSEndpoints(ctx)
+	if err != nil {
+		t.Fatalf("ListDNSEndpoints returned error: %v", err)
+	}
+	if len(endpoints) != 0 {
+		t.Fatalf("offline continuity status should omit service endpoint: %#v", endpoints)
+	}
+}
+
 func assertEndpoint(t *testing.T, endpoints []domain.DNSEndpoint, family domain.DNSEndpointFamily, name, address string) {
 	t.Helper()
 	for _, endpoint := range endpoints {
@@ -292,6 +404,16 @@ type fakeWorkerSource struct {
 
 func (s *fakeWorkerSource) List(context.Context, string, int) ([]domain.Worker, error) {
 	return s.workers, s.err
+}
+
+type fakeContinuityStatusReader map[string]ContinuityStatus
+
+func (r fakeContinuityStatusReader) GetServiceContinuityStatus(serviceKey string) (*ContinuityStatus, bool) {
+	status, ok := r[serviceKey]
+	if !ok {
+		return nil, false
+	}
+	return &status, true
 }
 
 var errFake = errors.New("fake error")

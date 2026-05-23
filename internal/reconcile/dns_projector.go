@@ -34,17 +34,31 @@ type WorkerDNSProjectionSource interface {
 	List(ctx context.Context, status string, limit int) ([]domain.Worker, error)
 }
 
+// ContinuityStatus describes the active continuity projection for a service.
+type ContinuityStatus struct {
+	ServiceKey         string
+	ActiveProfile      domain.ContinuityMode
+	OperationState     string
+	ActiveWorkerPubKey string
+}
+
+// ContinuityStatusReader exposes service continuity status to the DNS projector.
+type ContinuityStatusReader interface {
+	GetServiceContinuityStatus(serviceKey string) (*ContinuityStatus, bool)
+}
+
 // DNSProjector derives DNS endpoints and records from authoritative infrastructure state.
 type DNSProjector struct {
-	services     repository.ServiceRepository
-	environments repository.EnvironmentRepository
-	states       repository.EnvironmentServiceStateRepository
-	observations repository.RuntimeObservationRepository
-	llmSource    LLMDNSProjectionSource
-	mlSource     MLDNSProjectionSource
-	workers      WorkerDNSProjectionSource
-	cfg          config.DNSConfig
-	logger       *zap.Logger
+	services         repository.ServiceRepository
+	environments     repository.EnvironmentRepository
+	states           repository.EnvironmentServiceStateRepository
+	observations     repository.RuntimeObservationRepository
+	llmSource        LLMDNSProjectionSource
+	mlSource         MLDNSProjectionSource
+	workers          WorkerDNSProjectionSource
+	continuityStatus ContinuityStatusReader
+	cfg              config.DNSConfig
+	logger           *zap.Logger
 }
 
 func NewDNSProjector(services repository.ServiceRepository, environments repository.EnvironmentRepository, states repository.EnvironmentServiceStateRepository, observations repository.RuntimeObservationRepository, llmSource LLMDNSProjectionSource, mlSource MLDNSProjectionSource, workers WorkerDNSProjectionSource, cfg config.DNSConfig, logger *zap.Logger) *DNSProjector {
@@ -52,6 +66,10 @@ func NewDNSProjector(services repository.ServiceRepository, environments reposit
 		logger = zap.NewNop()
 	}
 	return &DNSProjector{services: services, environments: environments, states: states, observations: observations, llmSource: llmSource, mlSource: mlSource, workers: workers, cfg: cfg, logger: logger}
+}
+
+func (p *DNSProjector) SetContinuityStatusReader(reader ContinuityStatusReader) {
+	p.continuityStatus = reader
 }
 
 func (p *DNSProjector) ListDNSEndpoints(ctx context.Context) ([]domain.DNSEndpoint, error) {
@@ -164,6 +182,7 @@ func (p *DNSProjector) projectServiceEndpoints(ctx context.Context, servicesByID
 		return nil, fmt.Errorf("list service states for DNS projection: %w", err)
 	}
 	endpoints := make([]domain.DNSEndpoint, 0, len(states))
+	var workersByPubKey map[string]domain.Worker
 	for _, state := range states {
 		if state.DriftStatus != domain.DriftStatusInSync {
 			continue
@@ -180,6 +199,25 @@ func (p *DNSProjector) projectServiceEndpoints(ctx context.Context, servicesByID
 		if !ok {
 			p.logger.Warn("DNS service projection skipped because environment has no zone mapping", zap.String("environment", environment.Name), zap.String("service", service.Name))
 			continue
+		}
+		status, hasContinuityStatus := p.serviceContinuityStatus(service)
+		if hasContinuityStatus {
+			switch status.ActiveProfile {
+			case domain.ContinuityModeOffline:
+				continue
+			case domain.ContinuityModeDegraded, domain.ContinuityModeEmergency:
+				if workersByPubKey == nil {
+					workersByPubKey, err = p.workersByPubKey(ctx)
+					if err != nil {
+						return nil, err
+					}
+				}
+				endpoint, ok := p.continuityServiceEndpoint(service, environment, state, zone, *status, workersByPubKey, projectedAt)
+				if ok {
+					endpoints = append(endpoints, endpoint)
+				}
+				continue
+			}
 		}
 		observation, err := p.observations.GetLatest(ctx, state.ServiceID, state.EnvironmentID)
 		if err != nil {
@@ -205,6 +243,80 @@ func (p *DNSProjector) projectServiceEndpoints(ctx context.Context, servicesByID
 		})
 	}
 	return endpoints, nil
+}
+
+func (p *DNSProjector) serviceContinuityStatus(service domain.Service) (*ContinuityStatus, bool) {
+	if p.continuityStatus == nil {
+		return nil, false
+	}
+	serviceKey := strings.TrimSpace(service.Name)
+	if serviceKey == "" {
+		return nil, false
+	}
+	status, ok := p.continuityStatus.GetServiceContinuityStatus(serviceKey)
+	if !ok || status == nil {
+		return nil, false
+	}
+	return status, true
+}
+
+func (p *DNSProjector) workersByPubKey(ctx context.Context) (map[string]domain.Worker, error) {
+	out := map[string]domain.Worker{}
+	if p.workers == nil {
+		return out, nil
+	}
+	workers, err := p.workers.List(ctx, "", 0)
+	if err != nil {
+		return nil, fmt.Errorf("list workers for continuity DNS projection: %w", err)
+	}
+	for _, worker := range workers {
+		pubkey := strings.TrimSpace(worker.PubKey)
+		if pubkey == "" {
+			continue
+		}
+		out[pubkey] = worker
+	}
+	return out, nil
+}
+
+func (p *DNSProjector) continuityServiceEndpoint(service domain.Service, environment domain.Environment, state domain.EnvironmentServiceState, zone string, status ContinuityStatus, workersByPubKey map[string]domain.Worker, projectedAt time.Time) (domain.DNSEndpoint, bool) {
+	activeWorkerPubKey := strings.TrimSpace(status.ActiveWorkerPubKey)
+	if activeWorkerPubKey == "" {
+		p.logger.Warn("DNS continuity projection skipped because active worker pubkey is empty", zap.String("service", service.Name), zap.String("continuity_profile", string(status.ActiveProfile)))
+		return domain.DNSEndpoint{}, false
+	}
+	worker, ok := workersByPubKey[activeWorkerPubKey]
+	if !ok {
+		p.logger.Warn("DNS continuity projection skipped because active worker was not found", zap.String("service", service.Name), zap.String("worker_pubkey", activeWorkerPubKey), zap.String("continuity_profile", string(status.ActiveProfile)))
+		return domain.DNSEndpoint{}, false
+	}
+	if worker.RuntimeTarget == nil || strings.TrimSpace(worker.RuntimeTarget.PublicBaseURL) == "" {
+		p.logger.Warn("DNS continuity projection skipped because active worker has no public base URL", zap.String("service", service.Name), zap.String("worker_pubkey", activeWorkerPubKey), zap.String("continuity_profile", string(status.ActiveProfile)))
+		return domain.DNSEndpoint{}, false
+	}
+	protocol, address, port, ok := parseEndpointTarget(worker.RuntimeTarget.PublicBaseURL)
+	if !ok {
+		p.logger.Warn("DNS continuity projection skipped because active worker public base URL is invalid", zap.String("service", service.Name), zap.String("worker_pubkey", activeWorkerPubKey), zap.String("public_base_url", worker.RuntimeTarget.PublicBaseURL), zap.String("continuity_profile", string(status.ActiveProfile)))
+		return domain.DNSEndpoint{}, false
+	}
+	name := dnsLabel(service.Name)
+	return domain.DNSEndpoint{
+		ServiceID:      uuidPtr(service.ID),
+		WorkerPubkey:   activeWorkerPubKey,
+		Family:         domain.DNSEndpointFamilyService,
+		Name:           name,
+		Environment:    strings.TrimSpace(environment.Name),
+		Zone:           zone,
+		FQDN:           fqdn(name, zone),
+		Protocol:       protocol,
+		Address:        address,
+		Port:           port,
+		Runtime:        string(worker.RuntimeTarget.Type),
+		Health:         domain.HealthStatusHealthy,
+		DriftStatus:    state.DriftStatus,
+		Source:         "continuity_status",
+		MaterializedAt: projectedAt,
+	}, true
 }
 
 func (p *DNSProjector) projectLLMEndpoints(ctx context.Context, envsByID map[uuid.UUID]domain.Environment, projectedAt time.Time) ([]domain.DNSEndpoint, error) {

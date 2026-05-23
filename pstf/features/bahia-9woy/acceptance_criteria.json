@@ -1,0 +1,26 @@
+{
+  "feature_id": "bahia-9woy",
+  "title": "Continuity-aware DNS service projection",
+  "criteria": [
+    {
+      "id": "AC1",
+      "statement": "DNSProjector accepts an optional ContinuityStatusReader dependency without changing existing constructor callers or requiring the dependency for normal projection.",
+      "tests": ["TestDNSProjectorProjectionRulesAndRecordTypes", "TestDNSReconcilerNoOpWhenSnapshotsMatch"]
+    },
+    {
+      "id": "AC2",
+      "statement": "When continuity status is absent or the active profile is full, service DNS projection preserves the existing primary endpoint derived from healthy RuntimeObservation state.",
+      "tests": ["TestDNSProjectorProjectionRulesAndRecordTypes", "TestDNSProjectorContinuityFullPreservesPrimaryEndpoint"]
+    },
+    {
+      "id": "AC3",
+      "statement": "When continuity status is degraded or emergency, service DNS projection emits the service record using the ActiveWorkerPubKey worker RuntimeTarget.PublicBaseURL.",
+      "tests": ["TestDNSProjectorContinuityDegradedAndEmergencyUseActiveWorkerEndpoint"]
+    },
+    {
+      "id": "AC4",
+      "statement": "When continuity status is offline, service DNS projection omits the service record.",
+      "tests": ["TestDNSProjectorContinuityOfflineOmitsServiceEndpoint"]
+    }
+  ]
+}
