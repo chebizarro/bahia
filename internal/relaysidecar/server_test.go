@@ -101,7 +101,7 @@ func TestSidecarAllowsAuthorScopedRequestKindReadsForAuthorizedOperators(t *test
 		t.Fatalf("New() error: %v", err)
 	}
 
-	filter := nostr.Filter{Kinds: []nostr.Kind{5963, 5978, 5979, 38390, 38400, 38430}, Authors: []nostr.PubKey{pubkey}}
+	filter := nostr.Filter{Kinds: []nostr.Kind{5963, 5978, 5979, 5997, 6005, 38390, 38400, 38430}, Authors: []nostr.PubKey{pubkey}}
 	reject, msg := server.Relay().OnRequest(context.Background(), filter)
 	if reject {
 		t.Fatalf("expected author-scoped request kind read filter to be accepted, got rejection %q", msg)

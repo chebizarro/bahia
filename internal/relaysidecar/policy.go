@@ -126,7 +126,7 @@ func deriveFiatjafPubkey(raw string) (nostr.PubKey, bool, error) {
 
 func isRequestKind(kind nostr.Kind) bool {
 	return (kind >= 5961 && kind <= 5989) ||
-		(kind >= 5991 && kind <= 5996) ||
+		(kind >= 5991 && kind <= 6005) ||
 		(kind >= 38390 && kind <= 38394) ||
 		(kind >= 38400 && kind <= 38409) ||
 		(kind >= 38430 && kind <= 38431)
