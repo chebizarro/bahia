@@ -125,19 +125,27 @@ func deriveFiatjafPubkey(raw string) (nostr.PubKey, bool, error) {
 }
 
 func isRequestKind(kind nostr.Kind) bool {
-	return (kind >= 5961 && kind <= 5989) || (kind >= 5991 && kind <= 5996)
+	return (kind >= 5961 && kind <= 5989) ||
+		(kind >= 5991 && kind <= 5996) ||
+		(kind >= 38390 && kind <= 38394) ||
+		(kind >= 38400 && kind <= 38409)
 }
 
 func isBahiaProjectionKind(kind nostr.Kind) bool {
 	return kind == 30002 ||
 		kind == 30078 ||
 		kind == 30079 ||
+		kind == 31310 ||
+		kind == 31311 ||
 		kind == 31974 ||
+		kind == 31976 ||
 		(kind >= 6961 && kind <= 6991) ||
 		(kind >= 7961 && kind <= 7992) ||
 		(kind >= 31961 && kind <= 31973) ||
-		(kind >= 31980 && kind <= 31989) ||
-		(kind >= 31000 && kind <= 31099)
+		(kind >= 31980 && kind <= 31999) ||
+		(kind >= 31000 && kind <= 31099) ||
+		(kind >= 38395 && kind <= 38399) ||
+		(kind >= 38410 && kind <= 38419)
 }
 
 func isOpenInteropKind(kind nostr.Kind) bool {

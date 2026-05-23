@@ -101,7 +101,7 @@ func TestSidecarAllowsAuthorScopedRequestKindReadsForAuthorizedOperators(t *test
 		t.Fatalf("New() error: %v", err)
 	}
 
-	filter := nostr.Filter{Kinds: []nostr.Kind{5963, 5978, 5979}, Authors: []nostr.PubKey{pubkey}}
+	filter := nostr.Filter{Kinds: []nostr.Kind{5963, 5978, 5979, 38390, 38400}, Authors: []nostr.PubKey{pubkey}}
 	reject, msg := server.Relay().OnRequest(context.Background(), filter)
 	if reject {
 		t.Fatalf("expected author-scoped request kind read filter to be accepted, got rejection %q", msg)
@@ -124,7 +124,7 @@ func TestSidecarAllowsSignerFirstOperatorStatusAndResultKinds(t *testing.T) {
 		t.Fatalf("New() error: %v", err)
 	}
 
-	filter := nostr.Filter{Kinds: []nostr.Kind{6963, 6978, 7962, 7978, 7979}}
+	filter := nostr.Filter{Kinds: []nostr.Kind{6963, 6978, 6981, 6984, 7962, 7978, 7979, 31310, 31311, 38395, 38410}}
 	reject, msg := server.Relay().OnRequest(context.Background(), filter)
 	if reject {
 		t.Fatalf("expected signer-first operator status/result kinds to be readable, got rejection %q", msg)
@@ -141,7 +141,7 @@ func TestSidecarAllowsDiscoveryKinds(t *testing.T) {
 		t.Fatalf("New() error: %v", err)
 	}
 
-	filter := nostr.Filter{Kinds: []nostr.Kind{30002, 31974, 30078, 30079}}
+	filter := nostr.Filter{Kinds: []nostr.Kind{30002, 31974, 31976, 31991, 31999, 30078, 30079}}
 	reject, msg := server.Relay().OnRequest(context.Background(), filter)
 	if reject {
 		t.Fatalf("expected discovery/SBOM kinds to be readable, got rejection %q", msg)
