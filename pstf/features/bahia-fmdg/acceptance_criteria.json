@@ -1,0 +1,30 @@
+{
+  "feature_id": "bahia-fmdg",
+  "criteria": [
+    {
+      "id": "AC1",
+      "description": "An online worker with FIPSOverlayAddr and dns.projection.mesh_endpoints enabled projects a mesh endpoint and AAAA record in dns.projection.mesh_zone.",
+      "tests": ["TestDNSProjectorMeshEndpointsProjectFIPSOverlayAAAARecords"]
+    },
+    {
+      "id": "AC2",
+      "description": "An online worker without FIPSOverlayAddr does not project a mesh DNS record.",
+      "tests": ["TestDNSProjectorMeshEndpointsSkipWorkersWithoutFIPSOverlayAddr"]
+    },
+    {
+      "id": "AC3",
+      "description": "A worker with FIPSOverlayAddr does not project a mesh DNS record when dns.projection.mesh_endpoints is false.",
+      "tests": ["TestDNSProjectorMeshEndpointsRequireConfigFlag"]
+    },
+    {
+      "id": "AC4",
+      "description": "An unhealthy/offline worker with FIPSOverlayAddr does not project a mesh DNS record.",
+      "tests": ["TestDNSProjectorMeshEndpointsSkipUnhealthyWorkers"]
+    },
+    {
+      "id": "AC5",
+      "description": "DNS config exposes dns.projection.mesh_endpoints and dns.projection.mesh_zone with safe defaults and validates mesh_zone when mesh endpoint projection is enabled.",
+      "tests": ["go test ./internal/config"]
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "feature_id": "bahia-fmdg",
+  "title": "FIPS mesh DNS projection (Phase B)",
+  "source_design": "docs/designs/fips-bahia-integration.md §8 Phase B.1-B.3",
+  "intended_behavior": [
+    "When dns.projection.mesh_endpoints is enabled and dns.projection.mesh_zone is configured, online workers with FIPSOverlayAddr produce mesh DNS endpoints in the configured mesh zone.",
+    "Mesh endpoints use the worker DNS label and project to <worker-name>.<mesh-zone>.",
+    "Projected DNS records for mesh endpoints are AAAA records whose value is the worker FIPSOverlayAddr.",
+    "Workers without FIPSOverlayAddr, unhealthy/offline workers, or disabled mesh endpoint projection do not produce mesh records."
+  ],
+  "scope": [
+    "internal/reconcile/dns_projector.go",
+    "internal/reconcile/dns_projector_test.go",
+    "internal/config/config.go"
+  ]
+}

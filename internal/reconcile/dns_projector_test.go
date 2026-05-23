@@ -100,6 +100,100 @@ func TestDNSProjectorProjectionRulesAndRecordTypes(t *testing.T) {
 	assertRecord(t, recordsByZone["edge.example"], "l40s.gpu.edge.example", domain.DNSRecordTypeAAAA, "2001:db8::5")
 }
 
+func TestDNSProjectorMeshEndpointsProjectFIPSOverlayAAAARecords(t *testing.T) {
+	projector := NewDNSProjector(
+		&fakeServiceRepo{},
+		&fakeEnvironmentRepo{},
+		&fakeStateRepo{},
+		&fakeObservationRepo{},
+		nil,
+		nil,
+		&fakeWorkerSource{workers: []domain.Worker{
+			{PubKey: "mesh-worker", Name: "fips-node", Status: domain.WorkerStatusOnline, FIPSOverlayAddr: "fd00:ab:cd::1"},
+		}},
+		config.DNSConfig{DefaultTTL: 300, Projection: config.DNSProjectionConfig{MeshEndpoints: true, MeshZone: "mesh.cascadia"}},
+		nil,
+	)
+
+	endpoints, err := projector.ListDNSEndpoints(context.Background())
+	if err != nil {
+		t.Fatalf("ListDNSEndpoints returned error: %v", err)
+	}
+	assertEndpoint(t, endpoints, domain.DNSEndpointFamilyMesh, "fips-node", "fd00:ab:cd::1")
+
+	recordsByZone, err := projector.ProjectZoneRecords(context.Background())
+	if err != nil {
+		t.Fatalf("ProjectZoneRecords returned error: %v", err)
+	}
+	assertRecord(t, recordsByZone["mesh.cascadia"], "fips-node.mesh.cascadia", domain.DNSRecordTypeAAAA, "fd00:ab:cd::1")
+}
+
+func TestDNSProjectorMeshEndpointsSkipWorkersWithoutFIPSOverlayAddr(t *testing.T) {
+	projector := NewDNSProjector(
+		&fakeServiceRepo{},
+		&fakeEnvironmentRepo{},
+		&fakeStateRepo{},
+		&fakeObservationRepo{},
+		nil,
+		nil,
+		&fakeWorkerSource{workers: []domain.Worker{
+			{PubKey: "no-mesh-worker", Name: "plain-node", Status: domain.WorkerStatusOnline},
+		}},
+		config.DNSConfig{DefaultTTL: 300, Projection: config.DNSProjectionConfig{MeshEndpoints: true, MeshZone: "mesh.cascadia"}},
+		nil,
+	)
+
+	recordsByZone, err := projector.ProjectZoneRecords(context.Background())
+	if err != nil {
+		t.Fatalf("ProjectZoneRecords returned error: %v", err)
+	}
+	assertNoRecord(t, recordsByZone["mesh.cascadia"], "plain-node.mesh.cascadia", domain.DNSRecordTypeAAAA, "fd00:ab:cd::1")
+}
+
+func TestDNSProjectorMeshEndpointsRequireConfigFlag(t *testing.T) {
+	projector := NewDNSProjector(
+		&fakeServiceRepo{},
+		&fakeEnvironmentRepo{},
+		&fakeStateRepo{},
+		&fakeObservationRepo{},
+		nil,
+		nil,
+		&fakeWorkerSource{workers: []domain.Worker{
+			{PubKey: "disabled-mesh-worker", Name: "disabled-node", Status: domain.WorkerStatusOnline, FIPSOverlayAddr: "fd00:ab:cd::2"},
+		}},
+		config.DNSConfig{DefaultTTL: 300, Projection: config.DNSProjectionConfig{MeshEndpoints: false, MeshZone: "mesh.cascadia"}},
+		nil,
+	)
+
+	recordsByZone, err := projector.ProjectZoneRecords(context.Background())
+	if err != nil {
+		t.Fatalf("ProjectZoneRecords returned error: %v", err)
+	}
+	assertNoRecord(t, recordsByZone["mesh.cascadia"], "disabled-node.mesh.cascadia", domain.DNSRecordTypeAAAA, "fd00:ab:cd::2")
+}
+
+func TestDNSProjectorMeshEndpointsSkipUnhealthyWorkers(t *testing.T) {
+	projector := NewDNSProjector(
+		&fakeServiceRepo{},
+		&fakeEnvironmentRepo{},
+		&fakeStateRepo{},
+		&fakeObservationRepo{},
+		nil,
+		nil,
+		&fakeWorkerSource{workers: []domain.Worker{
+			{PubKey: "offline-mesh-worker", Name: "offline-mesh", Status: domain.WorkerStatusOffline, FIPSOverlayAddr: "fd00:ab:cd::3"},
+		}},
+		config.DNSConfig{DefaultTTL: 300, Projection: config.DNSProjectionConfig{MeshEndpoints: true, MeshZone: "mesh.cascadia"}},
+		nil,
+	)
+
+	recordsByZone, err := projector.ProjectZoneRecords(context.Background())
+	if err != nil {
+		t.Fatalf("ProjectZoneRecords returned error: %v", err)
+	}
+	assertNoRecord(t, recordsByZone["mesh.cascadia"], "offline-mesh.mesh.cascadia", domain.DNSRecordTypeAAAA, "fd00:ab:cd::3")
+}
+
 func TestDNSProjectorHardwareAliasesRoundRobinSharedAcceleratorModels(t *testing.T) {
 	projector := NewDNSProjector(
 		&fakeServiceRepo{},

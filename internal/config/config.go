@@ -92,9 +92,11 @@ type DNSProjectionConfig struct {
 	LLMRoutes         bool              `koanf:"llm_routes"`
 	MLEndpoints       bool              `koanf:"ml_endpoints"`
 	Workers           bool              `koanf:"workers"`
+	MeshEndpoints     bool              `koanf:"mesh_endpoints"`
 	CapabilityAliases bool              `koanf:"capability_aliases"`
 	EnvironmentZones  map[string]string `koanf:"environment_zones"`
 	WorkerZone        string            `koanf:"worker_zone"`
+	MeshZone          string            `koanf:"mesh_zone"`
 }
 
 // AssistantConfig controls the operator assistant backend orchestration path.
@@ -1173,6 +1175,15 @@ func (c *Config) validateDNS() error {
 		}
 		if _, ok := zoneNames[workerZone]; !ok {
 			return fmt.Errorf("config validation failed: dns.projection.worker_zone %q references unknown zone", workerZone)
+		}
+	}
+	if c.DNS.Projection.MeshEndpoints {
+		meshZone := strings.TrimSpace(c.DNS.Projection.MeshZone)
+		if meshZone == "" {
+			return fmt.Errorf("config validation failed: dns.projection.mesh_zone is required when dns.projection.mesh_endpoints=true")
+		}
+		if _, ok := zoneNames[meshZone]; !ok {
+			return fmt.Errorf("config validation failed: dns.projection.mesh_zone %q references unknown zone", meshZone)
 		}
 	}
 	return nil

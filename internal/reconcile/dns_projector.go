@@ -126,6 +126,13 @@ func (p *DNSProjector) ListDNSEndpoints(ctx context.Context) ([]domain.DNSEndpoi
 		}
 		endpoints = append(endpoints, workerEndpoints...)
 	}
+	if p.cfg.Projection.MeshEndpoints && p.workers != nil {
+		meshEndpoints, err := p.projectMeshEndpoints(ctx, projectedAt)
+		if err != nil {
+			return nil, err
+		}
+		endpoints = append(endpoints, meshEndpoints...)
+	}
 	return finalizeDNSEndpoints(endpoints)
 }
 
@@ -543,6 +550,49 @@ func (p *DNSProjector) projectWorkerEndpoints(ctx context.Context, projectedAt t
 			Health:         domain.HealthStatusHealthy,
 			DriftStatus:    domain.DriftStatusInSync,
 			Source:         "worker_state",
+			Metadata:       workerDNSMetadata(worker),
+			MaterializedAt: projectedAt,
+		})
+	}
+	return endpoints, nil
+}
+
+func (p *DNSProjector) projectMeshEndpoints(ctx context.Context, projectedAt time.Time) ([]domain.DNSEndpoint, error) {
+	workers, err := p.workers.List(ctx, "", 0)
+	if err != nil {
+		return nil, fmt.Errorf("list workers for mesh DNS projection: %w", err)
+	}
+	zone := strings.TrimSpace(p.cfg.Projection.MeshZone)
+	if zone == "" {
+		return nil, nil
+	}
+	endpoints := make([]domain.DNSEndpoint, 0, len(workers))
+	for _, worker := range workers {
+		address := strings.TrimSpace(worker.FIPSOverlayAddr)
+		if worker.Status != domain.WorkerStatusOnline || address == "" {
+			continue
+		}
+		if ip := net.ParseIP(address); ip == nil || ip.To4() != nil {
+			p.logger.Warn("DNS mesh projection skipped because FIPS overlay address is invalid", zap.String("worker_pubkey", worker.PubKey), zap.String("fips_overlay_addr", worker.FIPSOverlayAddr))
+			continue
+		}
+		name := dnsLabel(worker.Name)
+		if name == "" {
+			name = dnsLabel(pubkeyPrefix(worker.PubKey))
+		}
+		endpoints = append(endpoints, domain.DNSEndpoint{
+			WorkerPubkey:   strings.TrimSpace(worker.PubKey),
+			Family:         domain.DNSEndpointFamilyMesh,
+			Name:           name,
+			Environment:    "mesh",
+			Zone:           zone,
+			FQDN:           fqdn(name, zone),
+			Address:        address,
+			Hardware:       workerHardware(worker),
+			Capabilities:   workerCapabilities(worker),
+			Health:         domain.HealthStatusHealthy,
+			DriftStatus:    domain.DriftStatusInSync,
+			Source:         "worker_fips_overlay",
 			Metadata:       workerDNSMetadata(worker),
 			MaterializedAt: projectedAt,
 		})
