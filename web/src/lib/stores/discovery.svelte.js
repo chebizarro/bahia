@@ -27,13 +27,28 @@ function splitList(value) {
 export function getBootstrapSeed() {
   if (!browser || typeof window === 'undefined') return null;
   const injected = window.__BAHIA_BOOTSTRAP__;
-  if (injected?.schema === BOOTSTRAP_SCHEMA) return injected;
 
   const env = import.meta.env || {};
-  const relayUrls = splitList(env.PUBLIC_BAHIA_BOOTSTRAP_RELAYS || env.VITE_BAHIA_BOOTSTRAP_RELAYS);
-  const servicePubkeys = splitList(env.PUBLIC_BAHIA_SERVICE_PUBKEYS || env.VITE_BAHIA_SERVICE_PUBKEYS || env.PUBLIC_BAHIA_SERVICE_PUBKEY || env.VITE_BAHIA_SERVICE_PUBKEY);
-  if (relayUrls.length === 0 && servicePubkeys.length === 0) return null;
-  return { schema: BOOTSTRAP_SCHEMA, relay_urls: relayUrls, service_pubkeys: servicePubkeys };
+  const envRelayUrls = splitList(env.PUBLIC_BAHIA_BOOTSTRAP_RELAYS || env.VITE_BAHIA_BOOTSTRAP_RELAYS);
+  const envServicePubkeys = splitList(env.PUBLIC_BAHIA_SERVICE_PUBKEYS || env.VITE_BAHIA_SERVICE_PUBKEYS || env.PUBLIC_BAHIA_SERVICE_PUBKEY || env.VITE_BAHIA_SERVICE_PUBKEY);
+
+  const relay_urls = Array.from(new Set([
+    ...(Array.isArray(injected?.relay_urls) ? injected.relay_urls : []),
+    ...envRelayUrls
+  ].filter(Boolean)));
+
+  const service_pubkeys = Array.from(new Set([
+    ...(Array.isArray(injected?.service_pubkeys) ? injected.service_pubkeys : []),
+    ...envServicePubkeys
+  ].filter(Boolean)));
+
+  if (relay_urls.length === 0 && service_pubkeys.length === 0) return null;
+
+  return {
+    schema: BOOTSTRAP_SCHEMA,
+    relay_urls,
+    service_pubkeys
+  };
 }
 
 function normalizeRelayUrl(url) {

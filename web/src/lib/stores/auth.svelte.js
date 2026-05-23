@@ -178,10 +178,10 @@ function collectProfileRelayCandidates(userRelays = {}) {
   const candidates = [];
   candidates.push(...normalizeRelayUrls(userRelays));
 
-  // Do not use the Bahia control-plane/browser relay set for kind-0 profile lookups.
-  // The sidecar intentionally exposes control-plane/read-model kinds and can close
-  // profile queries as blocked, which should not poison app bootstrap.
-  candidates.push('wss://relay.sharegap.net', 'wss://relay.primal.net', 'wss://nos.lol');
+  // Do not use the legacy Sharegap relay fallback here. Profile lookup should stay on
+  // user relays plus generic public relays so a deprecated relay endpoint cannot poison
+  // bootstrap or emit distracting console failures.
+  candidates.push('wss://relay.primal.net', 'wss://nos.lol');
 
   return Array.from(new Set(candidates.filter((relay) => typeof relay === 'string' && /^wss?:\/\//i.test(relay)))).slice(0, 8);
 }

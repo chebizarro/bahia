@@ -469,9 +469,7 @@ export const ASSISTANT_RESULT_STATUSES = {
 
 // Default relays - can be overridden via localStorage or connect() parameter
 const DEFAULT_RELAYS = [
-  'wss://relay.sharegap.net',
-  'wss://relay.primal.net',
-  'wss://nos.lol'
+  'wss://bahia.sharegap.net/relay'
 ];
 
 // Storage key for user-configured relays
