@@ -1,16 +1,51 @@
 package domain
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 )
 
+func TestWorkerSchedulingStateConstantsRemainDistinctFromLiveness(t *testing.T) {
+	states := []WorkerSchedulingState{
+		WorkerSchedulingActive,
+		WorkerSchedulingCordoned,
+		WorkerSchedulingDraining,
+		WorkerSchedulingMaintenance,
+		WorkerSchedulingDisabled,
+	}
+	want := []string{"active", "cordoned", "draining", "maintenance", "disabled"}
+	for i, state := range states {
+		if string(state) != want[i] {
+			t.Fatalf("state[%d] = %q, want %q", i, state, want[i])
+		}
+	}
+
+	if string(WorkerStatusOnline) == string(WorkerSchedulingActive) {
+		t.Fatal("liveness status must remain distinct from scheduling state")
+	}
+}
+
+func TestWorker_MarshalJSONDefaultsSchedulingStateToActive(t *testing.T) {
+	b, err := json.Marshal(Worker{PubKey: "pk", Status: WorkerStatusOnline})
+	if err != nil {
+		t.Fatalf("MarshalJSON returned error: %v", err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(b, &got); err != nil {
+		t.Fatalf("Unmarshal returned error: %v", err)
+	}
+	if got["scheduling_state"] != string(WorkerSchedulingActive) {
+		t.Fatalf("scheduling_state = %v, want %q", got["scheduling_state"], WorkerSchedulingActive)
+	}
+}
+
 func TestWorker_ComputeStatus(t *testing.T) {
 	now := time.Now()
 	tests := []struct {
-		name    string
-		lastAd  time.Time
-		want    WorkerStatus
+		name   string
+		lastAd time.Time
+		want   WorkerStatus
 	}{
 		{"just now", now, WorkerStatusOnline},
 		{"1 min ago", now.Add(-time.Minute), WorkerStatusOnline},

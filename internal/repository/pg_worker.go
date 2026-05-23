@@ -11,9 +11,9 @@ import (
 )
 
 const workerColumns = `pubkey, name, description, architecture,
-	max_concurrent_jobs, current_queue_depth, software, pricing, resources, accelerators, ml_capabilities, runtime_target,
+	max_concurrent_jobs, current_queue_depth, software, pricing, resources, accelerators, ml_capabilities, capabilities, runtime_target,
 	min_duration_secs, max_duration_secs, geohash, preferred_relays,
-	last_advertisement_at, status, created_at, updated_at`
+	last_advertisement_at, status, scheduling_state, scheduling_note, labels, created_at, updated_at`
 
 // WorkerRepository manages Loom worker records.
 type WorkerRepository interface {
@@ -21,6 +21,11 @@ type WorkerRepository interface {
 	GetByPubKey(ctx context.Context, pubkey string) (*domain.Worker, error)
 	List(ctx context.Context, status string, limit int) ([]domain.Worker, error)
 	UpdateStatus(ctx context.Context, pubkey string, status domain.WorkerStatus) error
+}
+
+// WorkerLabelLister lists workers through label containment queries.
+type WorkerLabelLister interface {
+	ListByLabels(ctx context.Context, labels map[string]string, limit int) ([]domain.Worker, error)
 }
 
 // PgWorkerRepository is a PostgreSQL implementation of WorkerRepository.
@@ -55,6 +60,10 @@ func (r *PgWorkerRepository) Upsert(ctx context.Context, w *domain.Worker) error
 	if err != nil {
 		return err
 	}
+	capabilitiesJSON, err := marshalJSON(w.Capabilities, "worker capabilities")
+	if err != nil {
+		return err
+	}
 	runtimeTargetJSON, err := marshalJSON(w.RuntimeTarget, "worker runtime target")
 	if err != nil {
 		return err
@@ -63,14 +72,28 @@ func (r *PgWorkerRepository) Upsert(ctx context.Context, w *domain.Worker) error
 	if err != nil {
 		return err
 	}
+	labelsUpdate := w.Labels != nil
+	labels := w.Labels
+	if labels == nil {
+		labels = map[string]string{}
+	}
+	labelsJSON, err := marshalJSON(labels, "worker labels")
+	if err != nil {
+		return err
+	}
+	schedulingStateProvided := w.SchedulingState != ""
+	schedulingState := w.SchedulingState
+	if !schedulingStateProvided {
+		schedulingState = domain.WorkerSchedulingActive
+	}
 
 	_, err = r.pool.Exec(ctx, `
 		INSERT INTO workers (pubkey, name, description, architecture,
 		max_concurrent_jobs, current_queue_depth, software, pricing,
-			resources, accelerators, ml_capabilities, runtime_target,
+			resources, accelerators, ml_capabilities, capabilities, runtime_target,
 			min_duration_secs, max_duration_secs, geohash, preferred_relays,
-			last_advertisement_at, status, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, now(), now())
+			last_advertisement_at, status, scheduling_state, scheduling_note, labels, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, now(), now())
 		ON CONFLICT (pubkey) DO UPDATE SET
 			name = EXCLUDED.name,
 			description = EXCLUDED.description,
@@ -82,6 +105,7 @@ func (r *PgWorkerRepository) Upsert(ctx context.Context, w *domain.Worker) error
 			resources = EXCLUDED.resources,
 			accelerators = EXCLUDED.accelerators,
 			ml_capabilities = EXCLUDED.ml_capabilities,
+			capabilities = EXCLUDED.capabilities,
 			runtime_target = EXCLUDED.runtime_target,
 			min_duration_secs = EXCLUDED.min_duration_secs,
 			max_duration_secs = EXCLUDED.max_duration_secs,
@@ -89,11 +113,14 @@ func (r *PgWorkerRepository) Upsert(ctx context.Context, w *domain.Worker) error
 			preferred_relays = EXCLUDED.preferred_relays,
 			last_advertisement_at = EXCLUDED.last_advertisement_at,
 			status = EXCLUDED.status,
+			scheduling_state = CASE WHEN $23 THEN EXCLUDED.scheduling_state ELSE workers.scheduling_state END,
+			scheduling_note = CASE WHEN $23 THEN EXCLUDED.scheduling_note ELSE workers.scheduling_note END,
+			labels = CASE WHEN $24 THEN EXCLUDED.labels ELSE workers.labels END,
 			updated_at = now()
 	`, w.PubKey, w.Name, w.Description, w.Architecture,
-		w.MaxConcurrentJobs, w.CurrentQueueDepth, softwareJSON, pricingJSON, resourcesJSON, acceleratorsJSON, mlCapabilitiesJSON, runtimeTargetJSON,
+		w.MaxConcurrentJobs, w.CurrentQueueDepth, softwareJSON, pricingJSON, resourcesJSON, acceleratorsJSON, mlCapabilitiesJSON, capabilitiesJSON, runtimeTargetJSON,
 		w.MinDurationSecs, w.MaxDurationSecs, w.Geohash, relaysJSON,
-		w.LastAdvertisementAt, string(w.Status))
+		w.LastAdvertisementAt, string(w.Status), string(schedulingState), w.SchedulingNote, labelsJSON, schedulingStateProvided, labelsUpdate)
 	if err != nil {
 		return fmt.Errorf("upserting worker: %w", err)
 	}
@@ -142,6 +169,36 @@ func (r *PgWorkerRepository) List(ctx context.Context, status string, limit int)
 	}
 	defer rows.Close()
 
+	return scanWorkers(rows)
+}
+
+// ListByLabels returns workers whose labels contain all requested key/value pairs.
+func (r *PgWorkerRepository) ListByLabels(ctx context.Context, labels map[string]string, limit int) ([]domain.Worker, error) {
+	if len(labels) == 0 {
+		return r.List(ctx, "", limit)
+	}
+	if limit <= 0 {
+		limit = 100
+	}
+	labelsJSON, err := marshalJSON(labels, "worker label selector")
+	if err != nil {
+		return nil, err
+	}
+	rows, err := r.pool.Query(ctx, `
+		SELECT `+workerColumns+`
+		FROM workers
+		WHERE labels @> $1::jsonb
+		ORDER BY last_advertisement_at DESC LIMIT $2
+	`, labelsJSON, limit)
+	if err != nil {
+		return nil, fmt.Errorf("listing workers by labels: %w", err)
+	}
+	defer rows.Close()
+
+	return scanWorkers(rows)
+}
+
+func scanWorkers(rows pgx.Rows) ([]domain.Worker, error) {
 	var workers []domain.Worker
 	for rows.Next() {
 		w, err := scanWorker(rows)
@@ -155,12 +212,12 @@ func (r *PgWorkerRepository) List(ctx context.Context, status string, limit int)
 
 func scanWorker(row pgx.Row) (*domain.Worker, error) {
 	w := &domain.Worker{}
-	var softwareJSON, pricingJSON, resourcesJSON, acceleratorsJSON, mlCapabilitiesJSON, runtimeTargetJSON, relaysJSON []byte
+	var softwareJSON, pricingJSON, resourcesJSON, acceleratorsJSON, mlCapabilitiesJSON, capabilitiesJSON, runtimeTargetJSON, relaysJSON, labelsJSON []byte
 	if err := row.Scan(
 		&w.PubKey, &w.Name, &w.Description, &w.Architecture,
-		&w.MaxConcurrentJobs, &w.CurrentQueueDepth, &softwareJSON, &pricingJSON, &resourcesJSON, &acceleratorsJSON, &mlCapabilitiesJSON, &runtimeTargetJSON,
+		&w.MaxConcurrentJobs, &w.CurrentQueueDepth, &softwareJSON, &pricingJSON, &resourcesJSON, &acceleratorsJSON, &mlCapabilitiesJSON, &capabilitiesJSON, &runtimeTargetJSON,
 		&w.MinDurationSecs, &w.MaxDurationSecs, &w.Geohash, &relaysJSON,
-		&w.LastAdvertisementAt, &w.Status, &w.CreatedAt, &w.UpdatedAt,
+		&w.LastAdvertisementAt, &w.Status, &w.SchedulingState, &w.SchedulingNote, &labelsJSON, &w.CreatedAt, &w.UpdatedAt,
 	); err != nil {
 		return nil, err
 	}
@@ -182,6 +239,9 @@ func scanWorker(row pgx.Row) (*domain.Worker, error) {
 	if err := unmarshalJSON(mlCapabilitiesJSON, &w.MLCapabilities, "worker ML capabilities"); err != nil {
 		return nil, err
 	}
+	if err := unmarshalJSON(capabilitiesJSON, &w.Capabilities, "worker capabilities"); err != nil {
+		return nil, err
+	}
 	if err := unmarshalJSON(runtimeTargetJSON, &w.RuntimeTarget, "worker runtime target"); err != nil {
 		return nil, err
 	}
@@ -191,10 +251,16 @@ func scanWorker(row pgx.Row) (*domain.Worker, error) {
 	if err := unmarshalJSON(relaysJSON, &w.PreferredRelays, "worker preferred relays"); err != nil {
 		return nil, err
 	}
+	if err := unmarshalJSON(labelsJSON, &w.Labels, "worker labels"); err != nil {
+		return nil, err
+	}
+	if w.SchedulingState == "" {
+		w.SchedulingState = domain.WorkerSchedulingActive
+	}
 	return w, nil
 }
 
-// UpdateStatus updates a worker's status.
+// UpdateStatus updates a worker's liveness status.
 func (r *PgWorkerRepository) UpdateStatus(ctx context.Context, pubkey string, status domain.WorkerStatus) error {
 	_, err := r.pool.Exec(ctx, `UPDATE workers SET status = $1, updated_at = now() WHERE pubkey = $2`, string(status), pubkey)
 	if err != nil {

@@ -1,0 +1,56 @@
+{
+  "feature_id": "bahia-worker-management-bucket-b",
+  "criteria": [
+    {
+      "id": "AC-BYFN-001",
+      "bead": "bahia-byfn",
+      "statement": "domain.Worker exposes WorkerSchedulingState values active, cordoned, draining, maintenance, and disabled separately from WorkerStatus liveness values.",
+      "tests": [
+        "TestWorkerSchedulingStateConstantsRemainDistinctFromLiveness",
+        "TestWorker_MarshalJSONDefaultsSchedulingStateToActive"
+      ]
+    },
+    {
+      "id": "AC-BYFN-002",
+      "bead": "bahia-byfn",
+      "statement": "domain.Worker includes SchedulingState, SchedulingNote, and Labels fields.",
+      "tests": [
+        "TestPgWorkerRepository_GetByPubKeyScansRuntimeCapabilities"
+      ]
+    },
+    {
+      "id": "AC-Z6Z6-001",
+      "bead": "bahia-z6z6",
+      "statement": "domain.Worker exposes generic WorkerCapabilities without removing MLCapabilities.",
+      "tests": [
+        "TestPgWorkerRepository_GetByPubKeyScansRuntimeCapabilities",
+        "TestPgWorkerRepository_GetByPubKeyNormalizesEmptyCapabilityDefaults"
+      ]
+    },
+    {
+      "id": "AC-05ES-001",
+      "bead": "bahia-05es",
+      "statement": "Database migration adds scheduling_state, scheduling_note, labels, and capabilities columns to workers with JSONB support for labels/capabilities.",
+      "tests": [
+        "migration file review: internal/db/migrations/000029_worker_scheduling_labels_capabilities.up.sql"
+      ]
+    },
+    {
+      "id": "AC-4GTW-001",
+      "bead": "bahia-4gtw",
+      "statement": "PgWorkerRepository persists and hydrates scheduling state, scheduling note, labels, and generic capabilities in insert, update, list, and get paths.",
+      "tests": [
+        "TestPgWorkerRepository_UpsertWritesSchedulingLabelsAndCapabilities",
+        "TestPgWorkerRepository_GetByPubKeyScansRuntimeCapabilities"
+      ]
+    },
+    {
+      "id": "AC-4GTW-002",
+      "bead": "bahia-4gtw",
+      "statement": "Worker label selection is backed by PostgreSQL JSONB containment rather than local filtering.",
+      "tests": [
+        "TestPgWorkerRepository_ListByLabelsUsesJSONBContainment"
+      ]
+    }
+  ]
+}

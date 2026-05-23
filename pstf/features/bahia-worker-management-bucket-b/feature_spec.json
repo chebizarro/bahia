@@ -1,0 +1,22 @@
+{
+  "feature_id": "bahia-worker-management-bucket-b",
+  "title": "Bahia Worker Management Bucket B backend domain model enrichment",
+  "plan_source": "docs/plans/bahia-worker-management-nostr-native-2026-05-22.md",
+  "beads": ["bahia-byfn", "bahia-z6z6", "bahia-05es", "bahia-4gtw"],
+  "observed_behavior": {
+    "worker_liveness": "domain.Worker had WorkerStatus values online/stale/offline derived from advertisement freshness.",
+    "worker_capabilities": "domain.Worker persisted ML-specific capabilities via ml_capabilities JSONB, but did not expose generic capability, scheduling intent, note, or label fields.",
+    "worker_repository": "PgWorkerRepository read and wrote the existing worker advertisement fields through insert, conflict update, get, and list queries."
+  },
+  "intended_behavior": {
+    "scheduling_state": "Workers expose operator scheduling intent separately from liveness using active, cordoned, draining, maintenance, and disabled states.",
+    "labels": "Workers carry JSONB-backed key/value labels suitable for selector-style querying.",
+    "generic_capabilities": "Workers carry a generic capability envelope while preserving existing MLCapabilities for backward compatibility.",
+    "persistence": "PostgreSQL worker rows persist and hydrate scheduling state, scheduling note, labels, and generic capabilities."
+  },
+  "out_of_scope": [
+    "frontend/Svelte worker management UI",
+    "worker controlplane commands or handlers",
+    "placement enforcement in worker_policy.go or ml_placement.go"
+  ]
+}

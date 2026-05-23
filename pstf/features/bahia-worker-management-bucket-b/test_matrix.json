@@ -1,0 +1,63 @@
+{
+  "feature_id": "bahia-worker-management-bucket-b",
+  "test_matrix": [
+    {
+      "test": "TestWorkerSchedulingStateConstantsRemainDistinctFromLiveness",
+      "acceptance_criteria": [
+        "AC-BYFN-001"
+      ],
+      "type": "unit",
+      "determinism": "pure domain constant assertions"
+    },
+    {
+      "test": "TestWorker_MarshalJSONDefaultsSchedulingStateToActive",
+      "acceptance_criteria": [
+        "AC-BYFN-001"
+      ],
+      "type": "unit",
+      "determinism": "pure JSON serialization assertion with no external dependencies"
+    },
+    {
+      "test": "TestPgWorkerRepository_GetByPubKeyScansRuntimeCapabilities",
+      "acceptance_criteria": [
+        "AC-BYFN-002",
+        "AC-Z6Z6-001",
+        "AC-4GTW-001"
+      ],
+      "type": "repository unit with pgxmock",
+      "determinism": "mocked row scan, no sleeps or network"
+    },
+    {
+      "test": "TestPgWorkerRepository_GetByPubKeyNormalizesEmptyCapabilityDefaults",
+      "acceptance_criteria": [
+        "AC-Z6Z6-001"
+      ],
+      "type": "repository unit with pgxmock",
+      "determinism": "mocked row scan, no sleeps or network"
+    },
+    {
+      "test": "TestPgWorkerRepository_ListByLabelsUsesJSONBContainment",
+      "acceptance_criteria": [
+        "AC-4GTW-002"
+      ],
+      "type": "repository unit with pgxmock",
+      "determinism": "asserts SQL uses labels @> $1::jsonb"
+    },
+    {
+      "test": "TestPgWorkerRepository_UpsertWritesSchedulingLabelsAndCapabilities",
+      "acceptance_criteria": [
+        "AC-4GTW-001"
+      ],
+      "type": "repository unit with pgxmock",
+      "determinism": "asserts insert/upsert args for new fields"
+    },
+    {
+      "test": "TestPgWorkerRepository_UpsertPreservesSchedulingAndLabelsWhenOmitted",
+      "acceptance_criteria": [
+        "AC-4GTW-001"
+      ],
+      "type": "repository unit with pgxmock",
+      "determinism": "asserts omitted scheduling/labels use preserve guards while insert values still default scheduling state to active"
+    }
+  ]
+}
