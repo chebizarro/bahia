@@ -694,6 +694,141 @@ func (s *fakeDNSProjectionSource) ListDNSEndpoints(context.Context) ([]domain.DN
 	return append([]domain.DNSEndpoint(nil), s.endpoints...), nil
 }
 
+type fakeDNSZoneProjectionSource struct {
+	zones []domain.DNSZone
+}
+
+func (s *fakeDNSZoneProjectionSource) ListDNSZones() []domain.DNSZone {
+	return append([]domain.DNSZone(nil), s.zones...)
+}
+
+type fakeDNSBackendProjectionSource struct {
+	backends []domain.DNSBackendState
+}
+
+func (s *fakeDNSBackendProjectionSource) ListDNSBackendStates(context.Context) []domain.DNSBackendState {
+	return append([]domain.DNSBackendState(nil), s.backends...)
+}
+
+func TestProjectorPublishesDNSZoneStateSnapshot(t *testing.T) {
+	ctx := context.Background()
+	zoneSource := &fakeDNSZoneProjectionSource{zones: []domain.DNSZone{{
+		Name:       "prod.cascadia",
+		Visibility: domain.ZoneVisibilityInternal,
+		BackendRef: "fs-primary",
+		TTL:        60,
+	}}}
+	sink := &captureProjectionPublisher{}
+	projector := NewProjector(projectorTestConfig(), newFakeProjectionSource(), sink, nil, zap.NewNop(), WithDNSZoneProjectionSource(zoneSource))
+
+	if err := projector.RepublishSnapshot(ctx); err != nil {
+		t.Fatalf("republish snapshot: %v", err)
+	}
+
+	zoneEvent := assertOneSignedKind(t, sink, KindDNSZoneState)
+	assertTag(t, zoneEvent, "d", "zone:prod.cascadia")
+	assertTag(t, zoneEvent, "zone", "prod.cascadia")
+	assertTag(t, zoneEvent, "backend", "fs-primary")
+	assertTag(t, zoneEvent, "visibility", "internal")
+	assertTag(t, zoneEvent, "t", "dns-zone")
+	assertTag(t, zoneEvent, "t", "bahia")
+	assertJSONField(t, zoneEvent.Content, "name", "prod.cascadia")
+	assertJSONField(t, zoneEvent.Content, "visibility", "internal")
+	assertJSONField(t, zoneEvent.Content, "backend_ref", "fs-primary")
+	assertJSONField(t, zoneEvent.Content, "ttl", float64(60))
+	assertJSONField(t, zoneEvent.Content, "deleted", false)
+}
+
+func TestProjectorPublishesDNSBackendStateSnapshot(t *testing.T) {
+	ctx := context.Background()
+	now := time.Now().UTC()
+	lastSync := now.Add(-time.Minute)
+	backendSource := &fakeDNSBackendProjectionSource{backends: []domain.DNSBackendState{{
+		Ref:        "fs-primary",
+		Type:       domain.DNSBackendTypeFilesystem,
+		Health:     domain.HealthStatusHealthy,
+		ZoneRefs:   []string{"prod.cascadia"},
+		LastSyncAt: &lastSync,
+		UpdatedAt:  now,
+	}}}
+	sink := &captureProjectionPublisher{}
+	projector := NewProjector(projectorTestConfig(), newFakeProjectionSource(), sink, nil, zap.NewNop(), WithDNSBackendProjectionSource(backendSource))
+
+	if err := projector.RepublishSnapshot(ctx); err != nil {
+		t.Fatalf("republish snapshot: %v", err)
+	}
+
+	backendEvent := assertOneSignedKind(t, sink, KindDNSBackendState)
+	assertTag(t, backendEvent, "d", "dnsbackend:fs-primary")
+	assertTag(t, backendEvent, "backend", "fs-primary")
+	assertTag(t, backendEvent, "type", "filesystem")
+	assertTag(t, backendEvent, "health", "healthy")
+	assertTag(t, backendEvent, "zone", "prod.cascadia")
+	assertTag(t, backendEvent, "t", "dns-backend")
+	assertTag(t, backendEvent, "t", "bahia")
+	assertJSONField(t, backendEvent.Content, "ref", "fs-primary")
+	assertJSONField(t, backendEvent.Content, "type", "filesystem")
+	assertJSONField(t, backendEvent.Content, "health", "healthy")
+	assertJSONField(t, backendEvent.Content, "deleted", false)
+}
+
+func TestProjectorPublishesDNSZoneAndBackendTombstones(t *testing.T) {
+	ctx := context.Background()
+	zoneSource := &fakeDNSZoneProjectionSource{zones: []domain.DNSZone{{Name: "prod.cascadia", Visibility: domain.ZoneVisibilityInternal, BackendRef: "fs-primary", TTL: 60}}}
+	backendSource := &fakeDNSBackendProjectionSource{backends: []domain.DNSBackendState{{Ref: "fs-primary", Type: domain.DNSBackendTypeFilesystem, Health: domain.HealthStatusHealthy, ZoneRefs: []string{"prod.cascadia"}, UpdatedAt: time.Now().UTC()}}}
+	sink := &captureProjectionPublisher{}
+	projector := NewProjector(projectorTestConfig(), newFakeProjectionSource(), sink, nil, zap.NewNop(), WithDNSZoneProjectionSource(zoneSource), WithDNSBackendProjectionSource(backendSource))
+
+	if err := projector.RepublishSnapshot(ctx); err != nil {
+		t.Fatalf("republish snapshot: %v", err)
+	}
+	zoneSource.zones = nil
+	backendSource.backends = nil
+	if err := projector.RepublishSnapshot(ctx); err != nil {
+		t.Fatalf("republish snapshot after removal: %v", err)
+	}
+
+	zoneEvents := sink.byKind(KindDNSZoneState)
+	if len(zoneEvents) != 2 {
+		t.Fatalf("expected zone event and tombstone, got %d", len(zoneEvents))
+	}
+	assertTag(t, zoneEvents[1], "d", "zone:prod.cascadia")
+	assertTag(t, zoneEvents[1], "deleted", "true")
+	assertJSONField(t, zoneEvents[1].Content, "deleted", true)
+
+	backendEvents := sink.byKind(KindDNSBackendState)
+	if len(backendEvents) != 2 {
+		t.Fatalf("expected backend event and tombstone, got %d", len(backendEvents))
+	}
+	assertTag(t, backendEvents[1], "d", "dnsbackend:fs-primary")
+	assertTag(t, backendEvents[1], "deleted", "true")
+	assertJSONField(t, backendEvents[1].Content, "deleted", true)
+}
+
+func TestProjectorPublishesDNSAuditEvents(t *testing.T) {
+	ctx := context.Background()
+	sink := &captureProjectionPublisher{}
+	projector := NewProjector(projectorTestConfig(), newFakeProjectionSource(), sink, nil, zap.NewNop())
+
+	projector.handleEvent(ctx, events.Event{Type: eventDNSZoneSynced, EntityID: "prod.cascadia", Data: map[string]any{"zone": "prod.cascadia", "backend_ref": "fs-primary"}})
+	projector.handleEvent(ctx, events.Event{Type: eventDNSRecordChanged, EntityID: "api.prod.cascadia", Data: map[string]any{"zone": "prod.cascadia", "fqdn": "api.prod.cascadia", "record_type": "A", "operation": "add"}})
+	projector.handleEvent(ctx, events.Event{Type: eventDNSDriftDetected, EntityID: "prod.cascadia", Data: map[string]any{"zone": "prod.cascadia", "backend_ref": "fs-primary"}})
+	projector.handleEvent(ctx, events.Event{Type: eventDNSEndpointRegistered, EntityID: "endpoint:service:api:prod", Data: map[string]any{"source_coordinate": "endpoint:service:api:prod", "fqdn": "api.prod.cascadia"}})
+	projector.handleEvent(ctx, events.Event{Type: eventDNSEndpointDeregistered, EntityID: "endpoint:service:api:prod", Data: map[string]any{"source_coordinate": "endpoint:service:api:prod", "fqdn": "api.prod.cascadia"}})
+
+	zoneSynced := assertOneSignedKind(t, sink, KindDNSZoneSyncedAudit)
+	assertTag(t, zoneSynced, "event_type", "dns.zone_synced")
+	assertTag(t, zoneSynced, "zone", "prod.cascadia")
+	assertTag(t, zoneSynced, "backend", "fs-primary")
+	recordChanged := assertOneSignedKind(t, sink, KindDNSRecordChangedAudit)
+	assertTag(t, recordChanged, "fqdn", "api.prod.cascadia")
+	assertTag(t, recordChanged, "record_type", "A")
+	assertTag(t, recordChanged, "operation", "add")
+	assertOneSignedKind(t, sink, KindDNSDriftDetectedAudit)
+	assertOneSignedKind(t, sink, KindDNSEndpointRegisteredAudit)
+	assertOneSignedKind(t, sink, KindDNSEndpointDeregisteredAudit)
+}
+
 func TestProjectorPublishesDNSEndpointSnapshotAndTombstone(t *testing.T) {
 	ctx := context.Background()
 	port := 8443
@@ -788,8 +923,14 @@ func TestProjectorSystemDiscoveryAdvertisesDNSOnlyWhenSourceConfigured(t *testin
 	if !ok {
 		t.Fatalf("control_plane.read_model_kinds missing: %#v", controlPlane["read_model_kinds"])
 	}
+	if got := readModels["dns_zone_state"]; got != float64(KindDNSZoneState) {
+		t.Fatalf("dns_zone_state kind = %#v, want %d", got, KindDNSZoneState)
+	}
 	if got := readModels["dns_endpoint_state"]; got != float64(KindDNSEndpointState) {
 		t.Fatalf("dns_endpoint_state kind = %#v, want %d", got, KindDNSEndpointState)
+	}
+	if got := readModels["dns_backend_state"]; got != float64(KindDNSBackendState) {
+		t.Fatalf("dns_backend_state kind = %#v, want %d", got, KindDNSBackendState)
 	}
 	if got := readModels["worker_state"]; got != float64(KindWorkerState) {
 		t.Fatalf("worker_state kind = %#v, want %d", got, KindWorkerState)

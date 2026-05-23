@@ -83,6 +83,17 @@ type DNSZone struct {
 	TTL        int            `json:"ttl"`
 }
 
+// DNSBackendState is a materialized DNS backend read model for Nostr projection.
+type DNSBackendState struct {
+	Ref        string         `json:"ref"`
+	Type       DNSBackendType `json:"type"`
+	Health     HealthStatus   `json:"health"`
+	ZoneRefs   []string       `json:"zone_refs,omitempty"`
+	LastSyncAt *time.Time     `json:"last_sync_at,omitempty"`
+	UpdatedAt  time.Time      `json:"updated_at"`
+	Metadata   map[string]any `json:"metadata,omitempty"`
+}
+
 // DNSRecord is a single projected DNS record derived from a DNSEndpoint.
 type DNSRecord struct {
 	Zone             string        `json:"zone"`
