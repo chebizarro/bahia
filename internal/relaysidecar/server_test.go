@@ -101,7 +101,7 @@ func TestSidecarAllowsAuthorScopedRequestKindReadsForAuthorizedOperators(t *test
 		t.Fatalf("New() error: %v", err)
 	}
 
-	filter := nostr.Filter{Kinds: []nostr.Kind{5963, 5978, 5979, 5997, 6005, 38390, 38400, 38430}, Authors: []nostr.PubKey{pubkey}}
+	filter := nostr.Filter{Kinds: []nostr.Kind{5963, 5978, 5979, 5997, 6005, 38390, 38400, 38420, 38421, 38430}, Authors: []nostr.PubKey{pubkey}}
 	reject, msg := server.Relay().OnRequest(context.Background(), filter)
 	if reject {
 		t.Fatalf("expected author-scoped request kind read filter to be accepted, got rejection %q", msg)
@@ -124,7 +124,7 @@ func TestSidecarAllowsSignerFirstOperatorStatusAndResultKinds(t *testing.T) {
 		t.Fatalf("New() error: %v", err)
 	}
 
-	filter := nostr.Filter{Kinds: []nostr.Kind{6963, 6978, 6981, 6984, 7962, 7978, 7979, 30350, 30353, 31310, 31311, 38395, 38410, 32000, 32003}}
+	filter := nostr.Filter{Kinds: []nostr.Kind{6963, 6978, 6981, 6984, 7962, 7978, 7979, 30350, 30353, 31310, 31311, 38395, 38410, 38422, 38423, 32000, 32003}}
 	reject, msg := server.Relay().OnRequest(context.Background(), filter)
 	if reject {
 		t.Fatalf("expected signer-first operator status/result kinds to be readable, got rejection %q", msg)

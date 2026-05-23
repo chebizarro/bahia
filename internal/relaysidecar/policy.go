@@ -129,6 +129,7 @@ func isRequestKind(kind nostr.Kind) bool {
 		(kind >= 5991 && kind <= 6005) ||
 		(kind >= 38390 && kind <= 38394) ||
 		(kind >= 38400 && kind <= 38409) ||
+		(kind >= 38420 && kind <= 38421) ||
 		(kind >= 38430 && kind <= 38431)
 }
 
@@ -149,7 +150,8 @@ func isBahiaProjectionKind(kind nostr.Kind) bool {
 		(kind >= 32000 && kind <= 32003) ||
 		(kind >= 31000 && kind <= 31099) ||
 		(kind >= 38395 && kind <= 38399) ||
-		(kind >= 38410 && kind <= 38419)
+		(kind >= 38410 && kind <= 38419) ||
+		(kind >= 38422 && kind <= 38423)
 }
 
 func isOpenInteropKind(kind nostr.Kind) bool {
