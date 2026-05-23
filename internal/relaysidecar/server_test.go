@@ -124,7 +124,7 @@ func TestSidecarAllowsSignerFirstOperatorStatusAndResultKinds(t *testing.T) {
 		t.Fatalf("New() error: %v", err)
 	}
 
-	filter := nostr.Filter{Kinds: []nostr.Kind{6963, 6978, 6981, 6984, 7962, 7978, 7979, 30350, 30353, 31310, 31311, 38395, 38410, 38422, 38423, 32000, 32003}}
+	filter := nostr.Filter{Kinds: []nostr.Kind{6963, 6978, 6981, 6984, 6997, 7962, 7978, 7979, 7997, 30350, 30353, 31310, 31311, 38395, 38410, 38422, 38423, 32000, 32003}}
 	reject, msg := server.Relay().OnRequest(context.Background(), filter)
 	if reject {
 		t.Fatalf("expected signer-first operator status/result kinds to be readable, got rejection %q", msg)
