@@ -1,0 +1,21 @@
+{
+  "feature_id": "bahia-xpl6",
+  "criteria": [
+    {
+      "id": "AC1",
+      "description": "AssessService returns survivability, available profiles, selected standby, replication freshness, standby health, and missing dependencies for one service."
+    },
+    {
+      "id": "AC2",
+      "description": "AssessAll evaluates all managed services from profile and status read models in deterministic service-key order."
+    },
+    {
+      "id": "AC3",
+      "description": "SimulateFailure excludes the failed worker from standby selection and recomputes survivability without mutating stores."
+    },
+    {
+      "id": "AC4",
+      "description": "A profile is achievable only when standby assignment, worker capabilities, fresh replication policy, and healthy heartbeat are all satisfied."
+    }
+  ]
+}

@@ -1,0 +1,25 @@
+{
+  "feature_id": "bahia-xpl6",
+  "tests": [
+    {
+      "name": "TestContinuityGraphAssessServiceSelectsHealthyStandbyAndReportsDegradedOnly",
+      "criteria": ["AC1", "AC4"]
+    },
+    {
+      "name": "TestContinuityGraphAssessServiceReportsStaleHeartbeatAsUnsatisfied",
+      "criteria": ["AC1", "AC4"]
+    },
+    {
+      "name": "TestContinuityGraphAssessServiceReportsStaleReplicationAsUnsatisfied",
+      "criteria": ["AC1", "AC4"]
+    },
+    {
+      "name": "TestContinuityGraphAssessAllIncludesStatusOnlyServicesInDeterministicOrder",
+      "criteria": ["AC2"]
+    },
+    {
+      "name": "TestContinuityGraphSimulateFailureExcludesFailedStandby",
+      "criteria": ["AC3", "AC4"]
+    }
+  ]
+}

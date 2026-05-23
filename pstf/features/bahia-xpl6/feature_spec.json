@@ -1,0 +1,21 @@
+{
+  "feature_id": "bahia-xpl6",
+  "title": "Continuity graph and survivability analysis",
+  "intended_behavior": [
+    "Provide a pure evaluation service with no side effects for continuity survivability assessment.",
+    "Assess a single service, all managed services, and simulated worker failure scenarios from injected read models.",
+    "Select the best standby worker deterministically using standby assignments, heartbeat health, replication freshness, and achievable continuity profiles.",
+    "Report survivability, available profiles, missing dependencies, selected standby, replication freshness, and standby health."
+  ],
+  "observed_pre_change_behavior": [
+    "Domain, heartbeat, definition, failover, and status store phases existed.",
+    "No internal/service/continuity_graph.go evaluator existed for bahia-xpl6."
+  ],
+  "scope": {
+    "owned_code_files": [
+      "internal/service/continuity_graph.go",
+      "internal/service/continuity_graph_test.go"
+    ],
+    "side_effects": "None; evaluator only reads injected interfaces."
+  }
+}
