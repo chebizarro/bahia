@@ -1,0 +1,12 @@
+{
+  "feature_id": "bahia-efze",
+  "title": "Power-aware advisory orchestration model",
+  "intended_behavior": "Bahia records latest worker power observations and derives advisory-first continuity degradation recommendations without automatically executing mode changes.",
+  "scope": [
+    "internal/domain/power.go",
+    "internal/domain/power_test.go",
+    "internal/service/power_aware_orchestrator.go",
+    "internal/service/power_aware_orchestrator_test.go"
+  ],
+  "observed_baseline": "No dedicated power observation domain type or advisory power-aware orchestrator existed before this change. The implementation is additive and does not touch worker, dashboard, continuity graph, Nostr, or API files owned by concurrent agents."
+}

@@ -1,0 +1,31 @@
+{
+  "feature_id": "bahia-efze",
+  "title": "Power-aware advisory orchestration model",
+  "criteria": [
+    {
+      "id": "AC1",
+      "statement": "The domain package exposes power observation telemetry and advisory power recommendation contracts using continuity modes.",
+      "tests": ["TestPowerObservationCarriesTelemetry", "TestPowerRecommendationCarriesAdvisoryContinuityMode"]
+    },
+    {
+      "id": "AC2",
+      "statement": "The orchestrator stores the latest power observation per worker and returns defensive copies to callers.",
+      "tests": ["TestInMemoryPowerAwareOrchestratorObservePowerStoresLatestByWorker"]
+    },
+    {
+      "id": "AC3",
+      "statement": "Low UPS runtime recommends emergency mode for non-critical services while preserving critical services unless another signal recommends degraded mode.",
+      "tests": ["TestInMemoryPowerAwareOrchestratorRecommendDegradationAdvisoryFirst"]
+    },
+    {
+      "id": "AC4",
+      "statement": "Low battery recommends degraded mode and critical thermal state recommends degraded mode only for compute-heavy services.",
+      "tests": ["TestInMemoryPowerAwareOrchestratorRecommendDegradationAdvisoryFirst", "TestPowerRecommendationForServiceCombinesReasonsWithoutAutoExecute"]
+    },
+    {
+      "id": "AC5",
+      "statement": "All power-aware recommendations remain advisory with AutoExecute false and deterministic service ordering.",
+      "tests": ["TestInMemoryPowerAwareOrchestratorRecommendDegradationAdvisoryFirst", "TestInMemoryPowerAwareOrchestratorRecommendationOrderIsDeterministic"]
+    }
+  ]
+}
