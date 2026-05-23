@@ -36,6 +36,7 @@ type Server struct {
 	packageCommands   PackageCommandPublisher
 	workerCommands    WorkerCommandPublisher
 	backupCommands    BackupCommandPublisher
+	dnsCommands       DNSCommandPublisher
 	packageProjection repository.PackageControlPlaneRepository
 	workerReadModels  *service.WorkerReadModelService
 	backupReadModels  BackupReadModelRepository
@@ -84,6 +85,7 @@ type ServerDeps struct {
 	PackageCommandPublisher PackageCommandPublisher
 	WorkerCommandPublisher  WorkerCommandPublisher
 	BackupCommandPublisher  BackupCommandPublisher
+	DNSCommandPublisher     DNSCommandPublisher
 	PackageProjection       repository.PackageControlPlaneRepository
 	WorkerReadModels        *service.WorkerReadModelService
 	BackupReadModels        BackupReadModelRepository
@@ -155,6 +157,7 @@ func NewServerWithOptions(registry *service.RegistryService, logger *zap.Logger,
 		packageCommands:   deps.PackageCommandPublisher,
 		workerCommands:    deps.WorkerCommandPublisher,
 		backupCommands:    deps.BackupCommandPublisher,
+		dnsCommands:       deps.DNSCommandPublisher,
 		packageProjection: deps.PackageProjection,
 		workerReadModels:  deps.WorkerReadModels,
 		backupReadModels:  deps.BackupReadModels,
@@ -1698,6 +1701,8 @@ func (s *Server) GetTools() []Tool {
 	}
 	tools = append(tools, mlToolDefinitions()...)
 	tools = append(tools, assistantAsyncToolDefinitions()...)
+	tools = append(tools, dnsToolDefinitions()...)
+	tools = append(tools, dnsAssistantToolDefinitions()...)
 	tools = append(tools, workerToolDefinitions()...)
 	tools = append(tools, packageToolDefinitions()...)
 	return append(tools, backupToolDefinitions()...)
@@ -1757,6 +1762,12 @@ func (s *Server) CallTool(ctx context.Context, name string, arguments map[string
 		return s.handleMLRollback(ctx, arguments)
 	case "bahia_assistant_service_deploy", "bahia_assistant_service_rollback", "bahia_assistant_llm_deploy", "bahia_assistant_llm_approve_deployment", "bahia_assistant_llm_rollback", "bahia_assistant_ml_deploy", "bahia_assistant_ml_approve_deployment", "bahia_assistant_ml_rollback":
 		return s.handleAssistantAsyncTool(ctx, name, arguments)
+	case "bahia_dns_list_endpoints", "bahia_assistant_dns_list_endpoints":
+		return s.handleDNSListEndpoints(ctx, arguments)
+	case "bahia_dns_list_drift", "bahia_assistant_dns_list_drift":
+		return s.handleDNSListDrift(ctx, arguments)
+	case "bahia_assistant_dns_zone_create", "bahia_assistant_dns_policy_apply", "bahia_assistant_dns_record_override", "bahia_assistant_dns_drift_remediate":
+		return s.handleDNSAssistantAsyncTool(ctx, name, arguments)
 	case "bahia_ml_list_state":
 		return s.handleMLListState(ctx, arguments)
 	case "bahia_ml_get_state":
