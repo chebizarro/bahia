@@ -40,6 +40,36 @@ func (o *recordingDNSOperator) DNSPolicyRepository() repository.DNSPolicyReposit
 	return o.policyRepo
 }
 
+type recordingDNSPersistentOperator struct {
+	*recordingDNSOperator
+	zonesCreated     []domain.DNSZone
+	overridesCreated []domain.DNSRecordOverride
+}
+
+func (o *recordingDNSPersistentOperator) CreateZone(_ context.Context, zone domain.DNSZone) error {
+	o.zonesCreated = append(o.zonesCreated, zone)
+	if o.zones == nil {
+		o.zones = map[string]bool{}
+	}
+	o.zones[zone.Name] = true
+	return nil
+}
+
+func (o *recordingDNSPersistentOperator) CreateOverride(_ context.Context, override domain.DNSRecordOverride) error {
+	o.overridesCreated = append(o.overridesCreated, override)
+	return nil
+}
+
+func (o *recordingDNSPersistentOperator) ListOverridesByZone(_ context.Context, zoneName string) ([]domain.DNSRecordOverride, error) {
+	var overrides []domain.DNSRecordOverride
+	for _, override := range o.overridesCreated {
+		if override.ZoneName == zoneName {
+			overrides = append(overrides, override)
+		}
+	}
+	return overrides, nil
+}
+
 type recordingDNSPolicyRepository struct{}
 
 func (r *recordingDNSPolicyRepository) Create(context.Context, *domain.DNSPolicy) error { return nil }
@@ -95,6 +125,83 @@ func TestDNSZoneCreateUnknownZoneReturnsUnsupported(t *testing.T) {
 	result := assertDNSPublishedKind(t, capture.events, KindDNSZoneCreateResult)
 	assertDNSResultStatus(t, result, "failed")
 	assertDNSResultStep(t, result, "unsupported")
+}
+
+func TestDNSZoneCreatePersistsZoneWhenRepositoryAvailable(t *testing.T) {
+	operator := &recordingDNSPersistentOperator{recordingDNSOperator: &recordingDNSOperator{zones: map[string]bool{}}}
+	reactor, capture, pubkey := newDNSHandlerTestReactorWithOperator(t, operator)
+	zone := domain.DNSZone{Name: "edge.example", Visibility: domain.ZoneVisibilityEdge, BackendRef: "edge-dns", TTL: 300}
+	content, _ := json.Marshal(zone)
+	event := &nostr.Event{ID: "dns-zone-create-durable", PubKey: pubkey, Kind: KindDNSZoneCreateRequest, Content: string(content)}
+
+	reactor.handleDNSZoneCreate(context.Background(), event)
+
+	if len(operator.zonesCreated) != 1 || operator.zonesCreated[0].Name != "edge.example" {
+		t.Fatalf("expected persisted zone edge.example, got %#v", operator.zonesCreated)
+	}
+	if len(operator.reconciled) != 1 || operator.reconciled[0] != "edge.example" {
+		t.Fatalf("expected reconcile for edge.example, got %#v", operator.reconciled)
+	}
+	result := assertDNSPublishedKind(t, capture.events, KindDNSZoneCreateResult)
+	assertDNSResultStatus(t, result, "success")
+	assertDNSResultField(t, result, "zone", "edge.example")
+}
+
+func TestDNSRecordOverridePersistsWithOperatorPubkey(t *testing.T) {
+	operator := &recordingDNSPersistentOperator{recordingDNSOperator: &recordingDNSOperator{zones: map[string]bool{"prod.example": true}}}
+	reactor, capture, pubkey := newDNSHandlerTestReactorWithOperator(t, operator)
+	override := domain.DNSRecordOverride{ZoneName: "prod.example", RecordName: "api", RecordType: domain.DNSRecordTypeA, Value: "192.0.2.10", TTL: 60, Reason: "maintenance drain"}
+	content, _ := json.Marshal(override)
+	event := &nostr.Event{ID: "dns-record-override", PubKey: pubkey, Kind: KindDNSRecordOverrideRequest, Content: string(content)}
+
+	reactor.handleDNSRecordOverride(context.Background(), event)
+
+	if len(operator.overridesCreated) != 1 {
+		t.Fatalf("expected one override persisted, got %#v", operator.overridesCreated)
+	}
+	created := operator.overridesCreated[0]
+	if created.OperatorPubkey != pubkey {
+		t.Fatalf("operator pubkey = %q, want %q", created.OperatorPubkey, pubkey)
+	}
+	if created.ID == uuid.Nil {
+		t.Fatalf("expected generated override ID")
+	}
+	if len(operator.reconciled) != 1 || operator.reconciled[0] != "prod.example" {
+		t.Fatalf("expected reconcile for prod.example, got %#v", operator.reconciled)
+	}
+	result := assertDNSPublishedKind(t, capture.events, KindDNSRecordOverrideResult)
+	assertDNSResultStatus(t, result, "success")
+	assertDNSResultField(t, result, "zone", "prod.example")
+	assertDNSResultField(t, result, "override_id", created.ID.String())
+}
+
+func TestDNSDurableHandlersInvalidPayloadsReturnErrors(t *testing.T) {
+	cases := []struct {
+		name       string
+		kind       int
+		handle     func(*Reactor, context.Context, *nostr.Event)
+		resultKind int
+		content    string
+	}{
+		{name: "zone", kind: KindDNSZoneCreateRequest, handle: func(r *Reactor, ctx context.Context, ev *nostr.Event) { r.handleDNSZoneCreate(ctx, ev) }, resultKind: KindDNSZoneCreateResult, content: `{"name":"bad.example","visibility":"private","backend_ref":"edge-dns","ttl":300}`},
+		{name: "override", kind: KindDNSRecordOverrideRequest, handle: func(r *Reactor, ctx context.Context, ev *nostr.Event) { r.handleDNSRecordOverride(ctx, ev) }, resultKind: KindDNSRecordOverrideResult, content: `{"zone_name":"prod.example","record_name":"api","record_type":"TXT","value":"bad","ttl":60,"reason":"test"}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			operator := &recordingDNSPersistentOperator{recordingDNSOperator: &recordingDNSOperator{zones: map[string]bool{"prod.example": true}}}
+			reactor, capture, pubkey := newDNSHandlerTestReactorWithOperator(t, operator)
+			event := &nostr.Event{ID: "dns-invalid-" + tc.name, PubKey: pubkey, Kind: tc.kind, Content: tc.content}
+
+			tc.handle(reactor, context.Background(), event)
+
+			if len(operator.zonesCreated) != 0 || len(operator.overridesCreated) != 0 || len(operator.reconciled) != 0 {
+				t.Fatalf("expected no persistence or reconcile; zones=%#v overrides=%#v reconciled=%#v", operator.zonesCreated, operator.overridesCreated, operator.reconciled)
+			}
+			result := assertDNSPublishedKind(t, capture.events, tc.resultKind)
+			assertDNSResultStatus(t, result, "error")
+			assertDNSResultStep(t, result, "validation_error")
+		})
+	}
 }
 
 func TestDNSPolicyApplyValidPayloadTriggersReconcile(t *testing.T) {
@@ -157,6 +264,13 @@ func TestDNSUnsupportedHandlersPublishDeterministicResults(t *testing.T) {
 
 func newDNSHandlerTestReactor(t *testing.T) (*Reactor, *captureNostrPublisher, string, *recordingDNSOperator) {
 	t.Helper()
+	operator := &recordingDNSOperator{zones: map[string]bool{"prod.example": true}}
+	reactor, capture, pubkey := newDNSHandlerTestReactorWithOperator(t, operator)
+	return reactor, capture, pubkey, operator
+}
+
+func newDNSHandlerTestReactorWithOperator(t *testing.T, operator DNSControlPlaneOperator) (*Reactor, *captureNostrPublisher, string) {
+	t.Helper()
 	privateKey := nostr.GeneratePrivateKey()
 	signer, err := NewPrivateKeySigner(privateKey)
 	if err != nil {
@@ -167,9 +281,8 @@ func newDNSHandlerTestReactor(t *testing.T) (*Reactor, *captureNostrPublisher, s
 		t.Fatalf("public key: %v", err)
 	}
 	capture := &captureNostrPublisher{published: 1}
-	operator := &recordingDNSOperator{zones: map[string]bool{"prod.example": true}}
 	reactor := NewReactor(Config{AuthorizedPubkeys: []string{pubkey}}, nil, nil, signer, zap.NewNop(), WithControlPlanePublisher(capture), WithDNSOperator(operator))
-	return reactor, capture, pubkey, operator
+	return reactor, capture, pubkey
 }
 
 func assertDNSPublishedKind(t *testing.T, events []nostr.Event, kind int) nostr.Event {

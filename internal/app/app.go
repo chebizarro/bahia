@@ -364,6 +364,10 @@ func New(cfg *config.Config) (*App, error) {
 	// Policy service.
 	policySvc := service.NewPolicyService(policyRepo, sigRepo, sbomRepo, logger)
 
+	// DNS persistence repositories are optional until concrete PostgreSQL adapters are available.
+	var dnsZoneRepo repository.DNSZoneRepository
+	var dnsRecordOverrideRepo repository.DNSRecordOverrideRepository
+
 	var dnsProjector *reconcile.DNSProjector
 	var dnsZones []domain.DNSZone
 	var dnsResolver *dnsAdapter.StaticResolver
@@ -380,7 +384,11 @@ func New(cfg *config.Config) (*App, error) {
 		if subscriber, ok := any(dnsReconciler).(interface{ SetupSubscriptions(events.Publisher) }); ok {
 			subscriber.SetupSubscriptions(publisher)
 		}
-		dnsOperator = newDNSControlPlaneOperator(dnsReconciler, dnsZones)
+		var dnsPersistence controlplane.DNSPersistenceOperator
+		if dnsZoneRepo != nil && dnsRecordOverrideRepo != nil {
+			dnsPersistence = dnsRepositoryPersistenceAdapter{zones: dnsZoneRepo, overrides: dnsRecordOverrideRepo}
+		}
+		dnsOperator = newDNSControlPlaneOperator(dnsReconciler, dnsZones, dnsPersistence)
 		bgManager.Register(dnsReconciler)
 		logger.Info("DNS orchestration enabled", zap.Int("zones", len(dnsZones)), zap.Strings("backends", dnsResolver.Refs()))
 	}
@@ -922,22 +930,26 @@ type dnsControlPlaneOperator struct {
 	zones      map[string]struct{}
 }
 
-func newDNSControlPlaneOperator(reconciler *reconcile.DNSReconciler, zones []domain.DNSZone) controlplane.DNSControlPlaneOperator {
+func newDNSControlPlaneOperator(reconciler *reconcile.DNSReconciler, zones []domain.DNSZone, persistence controlplane.DNSPersistenceOperator) controlplane.DNSControlPlaneOperator {
 	zoneSet := make(map[string]struct{}, len(zones))
 	for _, zone := range zones {
 		zoneSet[strings.TrimSpace(zone.Name)] = struct{}{}
 	}
-	return dnsControlPlaneOperator{reconciler: reconciler, zones: zoneSet}
+	operator := &dnsControlPlaneOperator{reconciler: reconciler, zones: zoneSet}
+	if persistence != nil {
+		return &dnsPersistentControlPlaneOperator{dnsControlPlaneOperator: operator, persistence: persistence}
+	}
+	return operator
 }
 
-func (o dnsControlPlaneOperator) ReconcileAll(ctx context.Context) error {
+func (o *dnsControlPlaneOperator) ReconcileAll(ctx context.Context) error {
 	if o.reconciler == nil {
 		return fmt.Errorf("DNS reconciler is not configured")
 	}
 	return o.reconciler.ReconcileOnce(ctx)
 }
 
-func (o dnsControlPlaneOperator) ReconcileZone(ctx context.Context, zoneName string) error {
+func (o *dnsControlPlaneOperator) ReconcileZone(ctx context.Context, zoneName string) error {
 	zoneName = strings.TrimSpace(zoneName)
 	if zoneName == "" {
 		return fmt.Errorf("DNS zone is required")
@@ -948,9 +960,59 @@ func (o dnsControlPlaneOperator) ReconcileZone(ctx context.Context, zoneName str
 	return o.ReconcileAll(ctx)
 }
 
-func (o dnsControlPlaneOperator) HasZone(zoneName string) bool {
+func (o *dnsControlPlaneOperator) HasZone(zoneName string) bool {
 	_, ok := o.zones[strings.TrimSpace(zoneName)]
 	return ok
+}
+
+type dnsPersistentControlPlaneOperator struct {
+	*dnsControlPlaneOperator
+	persistence controlplane.DNSPersistenceOperator
+}
+
+func (o *dnsPersistentControlPlaneOperator) CreateZone(ctx context.Context, zone domain.DNSZone) error {
+	if err := o.persistence.CreateZone(ctx, zone); err != nil {
+		return err
+	}
+	if o.zones == nil {
+		o.zones = map[string]struct{}{}
+	}
+	o.zones[strings.TrimSpace(zone.Name)] = struct{}{}
+	return nil
+}
+
+func (o *dnsPersistentControlPlaneOperator) CreateOverride(ctx context.Context, override domain.DNSRecordOverride) error {
+	return o.persistence.CreateOverride(ctx, override)
+}
+
+func (o *dnsPersistentControlPlaneOperator) ListOverridesByZone(ctx context.Context, zoneName string) ([]domain.DNSRecordOverride, error) {
+	return o.persistence.ListOverridesByZone(ctx, zoneName)
+}
+
+type dnsRepositoryPersistenceAdapter struct {
+	zones     repository.DNSZoneRepository
+	overrides repository.DNSRecordOverrideRepository
+}
+
+func (a dnsRepositoryPersistenceAdapter) CreateZone(ctx context.Context, zone domain.DNSZone) error {
+	if a.zones == nil {
+		return fmt.Errorf("DNS zone repository is not configured")
+	}
+	return a.zones.Create(ctx, &zone)
+}
+
+func (a dnsRepositoryPersistenceAdapter) CreateOverride(ctx context.Context, override domain.DNSRecordOverride) error {
+	if a.overrides == nil {
+		return fmt.Errorf("DNS record override repository is not configured")
+	}
+	return a.overrides.Create(ctx, &override)
+}
+
+func (a dnsRepositoryPersistenceAdapter) ListOverridesByZone(ctx context.Context, zoneName string) ([]domain.DNSRecordOverride, error) {
+	if a.overrides == nil {
+		return nil, fmt.Errorf("DNS record override repository is not configured")
+	}
+	return a.overrides.ListByZone(ctx, zoneName)
 }
 
 func buildDNSRuntime(ctx context.Context, cfg config.DNSConfig, logger *zap.Logger) ([]domain.DNSZone, *dnsAdapter.StaticResolver, error) {

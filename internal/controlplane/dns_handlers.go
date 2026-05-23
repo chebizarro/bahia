@@ -33,6 +33,13 @@ type DNSControlPlaneOperator interface {
 	HasZone(zoneName string) bool
 }
 
+// DNSPersistenceOperator is the app-owned durable DNS command boundary.
+type DNSPersistenceOperator interface {
+	CreateZone(ctx context.Context, zone domain.DNSZone) error
+	CreateOverride(ctx context.Context, override domain.DNSRecordOverride) error
+	ListOverridesByZone(ctx context.Context, zoneName string) ([]domain.DNSRecordOverride, error)
+}
+
 type DNSPolicyRepositoryProvider interface {
 	DNSPolicyRepository() repository.DNSPolicyRepository
 }
@@ -44,7 +51,7 @@ func (r *Reactor) handleDNSRequest(ctx context.Context, event *nostr.Event) {
 	case KindDNSZoneCreateRequest:
 		r.handleDNSZoneCreate(ctx, event)
 	case KindDNSRecordOverrideRequest:
-		r.publishDNSUnsupported(ctx, event, KindDNSRecordOverrideResult, dnsActionRecordOverride, dnsUnsupportedRecordOverride)
+		r.handleDNSRecordOverride(ctx, event)
 	case KindDNSPolicyApplyRequest:
 		r.handleDNSPolicyApply(ctx, event)
 	case KindDNSBackendRegisterRequest:
@@ -93,6 +100,33 @@ func (r *Reactor) handleDNSZoneCreate(ctx context.Context, event *nostr.Event) {
 		_ = r.publishDNSOperationResult(ctx, event, KindDNSZoneCreateResult, dnsActionZoneCreate, "error", "unauthorized", "requester not in authorized list", nil)
 		return
 	}
+	persistence := r.dnsPersistenceOperator()
+	if persistence != nil {
+		var zone domain.DNSZone
+		if err := json.Unmarshal([]byte(event.Content), &zone); err != nil {
+			_ = r.publishDNSOperationResult(ctx, event, KindDNSZoneCreateResult, dnsActionZoneCreate, "error", "parse_error", fmt.Sprintf("invalid DNS zone JSON content: %v", err), nil)
+			return
+		}
+		if err := domain.ValidateDNSZone(&zone); err != nil {
+			_ = r.publishDNSOperationResult(ctx, event, KindDNSZoneCreateResult, dnsActionZoneCreate, "error", "validation_error", err.Error(), map[string]any{"zone": zone.Name})
+			return
+		}
+		if err := persistence.CreateZone(ctx, zone); err != nil {
+			logger.Warn("DNS zone persistence failed", "zone", zone.Name, "error", err)
+			_ = r.publishDNSOperationResult(ctx, event, KindDNSZoneCreateResult, dnsActionZoneCreate, "error", "persist_failed", err.Error(), map[string]any{"zone": zone.Name})
+			return
+		}
+		if err := r.publishDNSOperationStatus(ctx, event, dnsActionZoneCreate, "reconciling", "DNS zone persisted; reconcile requested", zone.Name); err != nil {
+			logger.Warn("publish DNS zone create status failed", "error", err)
+		}
+		if err := r.dnsOperator.ReconcileZone(ctx, zone.Name); err != nil {
+			logger.Warn("DNS zone reconcile failed", "zone", zone.Name, "error", err)
+			_ = r.publishDNSOperationResult(ctx, event, KindDNSZoneCreateResult, dnsActionZoneCreate, "error", "reconcile_failed", err.Error(), map[string]any{"zone": zone.Name})
+			return
+		}
+		_ = r.publishDNSOperationResult(ctx, event, KindDNSZoneCreateResult, dnsActionZoneCreate, "success", "completed", "DNS zone persisted; reconcile completed", map[string]any{"zone": zone.Name})
+		return
+	}
 	zoneName, err := parseDNSZoneSelector(event)
 	if err != nil {
 		_ = r.publishDNSOperationResult(ctx, event, KindDNSZoneCreateResult, dnsActionZoneCreate, "error", "parse_error", err.Error(), nil)
@@ -115,6 +149,50 @@ func (r *Reactor) handleDNSZoneCreate(ctx context.Context, event *nostr.Event) {
 		return
 	}
 	_ = r.publishDNSOperationResult(ctx, event, KindDNSZoneCreateResult, dnsActionZoneCreate, "success", "completed", "Configured DNS zone exists; reconcile completed", map[string]any{"zone": zoneName})
+}
+
+func (r *Reactor) handleDNSRecordOverride(ctx context.Context, event *nostr.Event) {
+	logger := r.logger.With("event_id", event.ID, "requester", event.PubKey)
+	if !r.isAuthorized(event.PubKey) {
+		logger.Warn("unauthorized DNS record override request")
+		_ = r.publishDNSOperationResult(ctx, event, KindDNSRecordOverrideResult, dnsActionRecordOverride, "error", "unauthorized", "requester not in authorized list", nil)
+		return
+	}
+	persistence := r.dnsPersistenceOperator()
+	if persistence == nil {
+		r.publishDNSUnsupported(ctx, event, KindDNSRecordOverrideResult, dnsActionRecordOverride, dnsUnsupportedRecordOverride)
+		return
+	}
+	var override domain.DNSRecordOverride
+	if err := json.Unmarshal([]byte(event.Content), &override); err != nil {
+		_ = r.publishDNSOperationResult(ctx, event, KindDNSRecordOverrideResult, dnsActionRecordOverride, "error", "parse_error", fmt.Sprintf("invalid DNS record override JSON content: %v", err), nil)
+		return
+	}
+	if override.ID == uuid.Nil {
+		override.ID = uuid.New()
+	}
+	if override.CreatedAt.IsZero() {
+		override.CreatedAt = time.Now().UTC()
+	}
+	override.OperatorPubkey = event.PubKey
+	if err := domain.ValidateDNSRecordOverride(&override); err != nil {
+		_ = r.publishDNSOperationResult(ctx, event, KindDNSRecordOverrideResult, dnsActionRecordOverride, "error", "validation_error", err.Error(), map[string]any{"zone": override.ZoneName, "override_id": override.ID.String()})
+		return
+	}
+	if err := persistence.CreateOverride(ctx, override); err != nil {
+		logger.Warn("DNS record override persistence failed", "zone", override.ZoneName, "override_id", override.ID.String(), "error", err)
+		_ = r.publishDNSOperationResult(ctx, event, KindDNSRecordOverrideResult, dnsActionRecordOverride, "error", "persist_failed", err.Error(), map[string]any{"zone": override.ZoneName, "override_id": override.ID.String()})
+		return
+	}
+	if err := r.publishDNSOperationStatus(ctx, event, dnsActionRecordOverride, "reconciling", "DNS record override persisted; reconcile requested", override.ZoneName); err != nil {
+		logger.Warn("publish DNS record override status failed", "error", err)
+	}
+	if err := r.dnsOperator.ReconcileZone(ctx, override.ZoneName); err != nil {
+		logger.Warn("DNS record override reconcile failed", "zone", override.ZoneName, "override_id", override.ID.String(), "error", err)
+		_ = r.publishDNSOperationResult(ctx, event, KindDNSRecordOverrideResult, dnsActionRecordOverride, "error", "reconcile_failed", err.Error(), map[string]any{"zone": override.ZoneName, "override_id": override.ID.String()})
+		return
+	}
+	_ = r.publishDNSOperationResult(ctx, event, KindDNSRecordOverrideResult, dnsActionRecordOverride, "success", "completed", "DNS record override persisted; reconcile completed", map[string]any{"zone": override.ZoneName, "override_id": override.ID.String()})
 }
 
 func (r *Reactor) handleDNSPolicyApply(ctx context.Context, event *nostr.Event) {
@@ -164,6 +242,14 @@ func (r *Reactor) dnsPolicyRepository() repository.DNSPolicyRepository {
 		return nil
 	}
 	return provider.DNSPolicyRepository()
+}
+
+func (r *Reactor) dnsPersistenceOperator() DNSPersistenceOperator {
+	persistence, ok := r.dnsOperator.(DNSPersistenceOperator)
+	if !ok || persistence == nil {
+		return nil
+	}
+	return persistence
 }
 
 func (r *Reactor) publishDNSUnsupported(ctx context.Context, event *nostr.Event, resultKind int, action, reason string) {
