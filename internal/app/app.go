@@ -69,7 +69,14 @@ type App struct {
 	Background      *BackgroundManager
 	toolCoordinator *service.ToolProvisioningCoordinator
 	relayPools      []*nostrAdapter.RelayPool
+	ModePolicy      *ModePolicy
+	Health          *HealthProvider
 }
+
+var (
+	dbConnect = db.Connect
+	dbMigrate = db.Migrate
+)
 
 // New creates and wires together all application components.
 func New(cfg *config.Config) (*App, error) {
@@ -86,64 +93,17 @@ func New(cfg *config.Config) (*App, error) {
 	}
 
 	ctx := context.Background()
+	policy := NewModePolicy(configuredMode(cfg.Mode))
 
-	// Database.
-	pool, err := db.Connect(ctx, cfg.DB, logger)
-	if err != nil {
-		return nil, fmt.Errorf("connecting to database: %w", err)
-	}
-
-	// Run migrations.
-	if err := db.Migrate(ctx, pool, logger); err != nil {
-		return nil, fmt.Errorf("running migrations: %w", err)
-	}
-
-	// Repositories.
-	serviceRepo := repository.NewPgServiceRepository(pool)
-	envRepo := repository.NewPgEnvironmentRepository(pool)
-	buildRepo := repository.NewPgBuildRepository(pool)
-	artifactRepo := repository.NewPgArtifactRepository(pool)
-	intentRepo := repository.NewPgDeploymentIntentRepository(pool)
-	runRepo := repository.NewPgDeploymentRunRepository(pool)
-	obsRepo := repository.NewPgRuntimeObservationRepository(pool)
-	stateRepo := repository.NewPgEnvironmentServiceStateRepository(pool)
-	toolProvisionRepo := repository.NewPgToolProvisioningRepository(pool)
-
-	// Nostr event audit repository.
-	nostrEventRepo := repository.NewPgNostrEventRepository(pool)
-
-	// Worker catalog repository.
-	workerRepo := repository.NewPgWorkerRepository(pool)
-
-	// Payment repository.
-	paymentRepo := repository.NewPgPaymentRecordRepository(pool)
-
-	// SBOM repository.
-	sbomRepo := repository.NewPgSBOMRepository(pool)
-
-	// Signature and policy repositories.
-	sigRepo := repository.NewPgArtifactSignatureRepository(pool)
-	policyRepo := repository.NewPgDeploymentPolicyRepository(pool)
-
-	// Secret repository.
-	secretRepo := repository.NewPgSecretRepository(pool)
-
-	// Tenant repositories.
-	orgRepo := repository.NewPgOrganizationRepository(pool)
-	orgMemberRepo := repository.NewPgOrgMemberRepository(pool)
-	orgInviteRepo := repository.NewPgOrgInviteRepository(pool)
-
-	// Event publisher.
+	// Event publisher and tier0/tier1 continuity stores are available before the
+	// disposable PostgreSQL projection cache is attempted.
 	publisher := events.NewInProcessPublisher(logger)
 	continuityDefinitionStore := service.NewInMemoryContinuityDefinitionStore()
 	continuityHeartbeatMonitor := service.NewInMemoryHeartbeatMonitor()
 	continuityStatusStore := service.NewInMemoryContinuityStatusStore()
 	continuityRecipeExecutor := service.NewContinuityRecipeExecutor(publisher, service.WithContinuityRecipeLogger(logger))
 
-	// Adapters.
-	// Sidecar-first topology uses a dedicated relay pool for Bahia's own
-	// control-plane/projector publishes. Interop relays use a separate pool so
-	// optional sidecar upstream mirroring cannot create duplicate publish loops.
+	// Relay pools are initialized before the optional database cache.
 	controlPlaneRelays := controlPlaneRelayURLs(cfg.Nostr)
 	controlPlanePool := nostrAdapter.NewRelayPool(controlPlaneRelays, logger, nostrAdapter.WithPrivateKey(cfg.Nostr.PrivateKey))
 	controlPlanePool.Connect(ctx)
@@ -165,6 +125,50 @@ func New(cfg *config.Config) (*App, error) {
 		zap.Bool("sidecar_enabled", cfg.Nostr.Sidecar.Enabled),
 		zap.Bool("mirror_external", cfg.Nostr.Sidecar.MirrorExternal),
 	)
+
+	// Database cache is optional. When unavailable, keep tier0/tier1 relay-first
+	// startup alive and use in-memory event audit/cursor storage.
+	pool, dbAvailable := connectOptionalDatabase(ctx, cfg, logger, policy)
+
+	// Repositories.
+	serviceRepo := repository.NewPgServiceRepository(pool)
+	envRepo := repository.NewPgEnvironmentRepository(pool)
+	buildRepo := repository.NewPgBuildRepository(pool)
+	artifactRepo := repository.NewPgArtifactRepository(pool)
+	intentRepo := repository.NewPgDeploymentIntentRepository(pool)
+	runRepo := repository.NewPgDeploymentRunRepository(pool)
+	obsRepo := repository.NewPgRuntimeObservationRepository(pool)
+	stateRepo := repository.NewPgEnvironmentServiceStateRepository(pool)
+	toolProvisionRepo := repository.NewPgToolProvisioningRepository(pool)
+
+	// Nostr event audit repository.
+	var nostrEventRepo repository.NostrEventRepository
+	if dbAvailable {
+		nostrEventRepo = repository.NewPgNostrEventRepository(pool)
+	} else {
+		nostrEventRepo = repository.NewInMemoryNostrEventRepository()
+	}
+
+	// Worker catalog repository.
+	workerRepo := repository.NewPgWorkerRepository(pool)
+
+	// Payment repository.
+	paymentRepo := repository.NewPgPaymentRecordRepository(pool)
+
+	// SBOM repository.
+	sbomRepo := repository.NewPgSBOMRepository(pool)
+
+	// Signature and policy repositories.
+	sigRepo := repository.NewPgArtifactSignatureRepository(pool)
+	policyRepo := repository.NewPgDeploymentPolicyRepository(pool)
+
+	// Secret repository.
+	secretRepo := repository.NewPgSecretRepository(pool)
+
+	// Tenant repositories.
+	orgRepo := repository.NewPgOrganizationRepository(pool)
+	orgMemberRepo := repository.NewPgOrgMemberRepository(pool)
+	orgInviteRepo := repository.NewPgOrgInviteRepository(pool)
 
 	loomClient := loom.NewClient(cfg.Loom, cfg.Nostr.PrivateKey, relayPool, logger,
 		loom.WithWorkerRepo(workerRepo),
@@ -300,8 +304,21 @@ func New(cfg *config.Config) (*App, error) {
 		OTLPEndpoint: cfg.Telemetry.OTLPEndpoint,
 	}, logger)
 
-	// Background runner manager.
+	// Background runner manager and startup health provider.
 	bgManager := NewBackgroundManager(logger)
+	healthProvider := NewHealthProvider(policy, bgManager)
+	healthProvider.SetRelayHealthFunc(func() (connected, healthy int) {
+		return aggregateRelayHealth(controlPlanePool, relayPool, encryptedRequestPool)
+	})
+
+	catalog := nostrAdapter.NewKindCatalog()
+	cursorPlanner := nostrAdapter.NewReplayCursorPlanner(time.Second, nostrAdapter.NewNostrEventRepositoryCursorSource(nostrEventRepo))
+	bootstrapper := nostrAdapter.NewBootstrapper(relayPool, catalog, cursorPlanner, nil, logger, nostrAdapter.BootstrapConfig{RequestedTier: int(policy.RequestedTier)})
+	healthProvider.SetBootstrapFunc(func() (phase string, ready bool) {
+		progress := bootstrapper.Progress()
+		return string(progress.Phase), bootstrapper.Ready()
+	})
+	bgManager.RegisterWithOptions(&bootstrapperRunner{bootstrapper: bootstrapper, policy: policy}, RunnerTier(Tier0))
 
 	continuityGraph, err := service.NewContinuityGraph(
 		continuityDefinitionStore,
@@ -330,7 +347,7 @@ func New(cfg *config.Config) (*App, error) {
 		continuityFailoverTrigger,
 		logger,
 	)
-	bgManager.Register(&failoverTriggerRunner{engine: continuityFailoverTrigger})
+	bgManager.RegisterWithOptions(&failoverTriggerRunner{engine: continuityFailoverTrigger}, RunnerTier(Tier1))
 
 	var fipsRelayPool *nostrAdapter.RelayPool
 	if cfg.FIPS.Enabled {
@@ -354,7 +371,7 @@ func New(cfg *config.Config) (*App, error) {
 				)
 			}),
 		)
-		bgManager.Register(&fipsSubscriberRunner{subscriber: fipsSubscriber})
+		bgManager.RegisterWithOptions(&fipsSubscriberRunner{subscriber: fipsSubscriber}, RunnerTier(Tier3))
 		logger.Info("FIPS overlay advert subscriber registered", zap.Strings("relay_urls", cfg.FIPS.RelayURLs), zap.String("app_namespace", cfg.FIPS.AppNamespace))
 	}
 
@@ -370,9 +387,9 @@ func New(cfg *config.Config) (*App, error) {
 	backupCoordinator := service.NewBackupRunCoordinator(backupRegistry, backupResolver, logger, service.WithBackupRunResponder(backupResponder))
 	backupRestoreCoordinator := service.NewBackupRestoreCoordinator(backupRegistry, backupResolver, logger, service.WithBackupRestoreResponder(backupRestoreResponder))
 	backupRetentionCoordinator := service.NewBackupRetentionCoordinator(backupRegistry, backupResolver, logger, service.WithBackupRetentionResponder(backupRetentionResponder))
-	bgManager.Register(backupCoordinator)
-	bgManager.Register(backupRestoreCoordinator)
-	bgManager.Register(backupRetentionCoordinator)
+	bgManager.RegisterWithOptions(backupCoordinator, RunnerTier(Tier3))
+	bgManager.RegisterWithOptions(backupRestoreCoordinator, RunnerTier(Tier3))
+	bgManager.RegisterWithOptions(backupRetentionCoordinator, RunnerTier(Tier3))
 	logger.Info("backup control plane registered", zap.String("backend", string(domain.BackupBackendKopia)))
 
 	// Generic AI/ML registry foundation. Bucket-B keeps this additive and keeps
@@ -414,8 +431,8 @@ func New(cfg *config.Config) (*App, error) {
 		}
 		llmCoordinator := service.NewLLMProvisioningCoordinator(llmRegistry, envRepo, llmRunRepo, placementSvc, provisioners, gatewayManager, cfg.LLM.DefaultGatewayRef, logger, coordOpts...)
 		llmReconciler := reconcile.NewLLMRouteReconciler(llmRegistry, envRepo, provisioners, gatewayManager, cfg.LLM.DefaultGatewayRef, cfg.LLM.ReconcileInterval, logger)
-		bgManager.Register(llmCoordinator)
-		bgManager.Register(llmReconciler)
+		bgManager.RegisterWithOptions(llmCoordinator, RunnerTier(Tier3))
+		bgManager.RegisterWithOptions(llmReconciler, RunnerTier(Tier3))
 		logger.Info("LLM control plane enabled", zap.String("default_gateway_ref", cfg.LLM.DefaultGatewayRef))
 	}
 
@@ -447,7 +464,7 @@ func New(cfg *config.Config) (*App, error) {
 			dnsPersistence = dnsRepositoryPersistenceAdapter{zones: dnsZoneRepo, overrides: dnsRecordOverrideRepo}
 		}
 		dnsOperator = newDNSControlPlaneOperator(dnsReconciler, dnsZones, dnsPersistence)
-		bgManager.Register(dnsReconciler)
+		bgManager.RegisterWithOptions(dnsReconciler, RunnerTier(Tier3))
 		logger.Info("DNS orchestration enabled", zap.Int("zones", len(dnsZones)), zap.Strings("backends", dnsResolver.Refs()))
 	}
 
@@ -491,13 +508,13 @@ func New(cfg *config.Config) (*App, error) {
 	nostrProjector := nostrAdapter.NewProjector(cfg.Nostr, registry, controlPlanePool, nostrEventRepo, logger, projectorOpts...)
 	nostrProjector.SetupSubscriptions(publisher)
 	if nostrProjector.Enabled() {
-		bgManager.Register(nostrProjector)
+		bgManager.RegisterWithOptions(nostrProjector, RunnerTier(Tier2))
 		logger.Info("nostr read-model projector registered")
 	}
 
 	// Register the reconciler as a background runner (if enabled).
 	if rec != nil {
-		bgManager.Register(&reconcilerRunner{rec: rec})
+		bgManager.RegisterWithOptions(&reconcilerRunner{rec: rec}, RunnerTier(Tier2))
 	}
 
 	// Nostr event processor: maps inbound events to domain commands.
@@ -539,7 +556,7 @@ func New(cfg *config.Config) (*App, error) {
 		}
 		nip98Validator := auth.NewNIP98Validator(auth.DefaultNIP98Config())
 		ociHandler = handlers.NewOCIRegistryHandler(ociSvc, nip98Validator, cfg.OCI)
-		bgManager.Register(NewOCIUploadCleanupRunner(ociSvc, cfg.OCI.UploadExpiry, logger))
+		bgManager.RegisterWithOptions(NewOCIUploadCleanupRunner(ociSvc, cfg.OCI.UploadExpiry, logger), RunnerTier(Tier3))
 		logger.Info("oci registry enabled", zap.String("host", cfg.OCI.PublicHost))
 	}
 
@@ -554,8 +571,8 @@ func New(cfg *config.Config) (*App, error) {
 			}
 		}
 		hiveSub := hiveciAdapter.NewSubscriber(relayPool, hiveRepo, cfg.HiveCI.TrustedCIPubkeys, logger, onResult)
-		bgManager.Register(hiveSub)
-		bgManager.Register(NewHiveCIRetryRunner(hiveRepo, bridge, cfg.HiveCI.RetryInterval, cfg.HiveCI.MaxRetries, logger))
+		bgManager.RegisterWithOptions(hiveSub, RunnerTier(Tier3))
+		bgManager.RegisterWithOptions(NewHiveCIRetryRunner(hiveRepo, bridge, cfg.HiveCI.RetryInterval, cfg.HiveCI.MaxRetries, logger), RunnerTier(Tier3))
 		logger.Info("hive-ci bridge enabled")
 	}
 
@@ -599,7 +616,7 @@ func New(cfg *config.Config) (*App, error) {
 	)
 	// Explicit recovery for stranded stored intents; newly-arrived kind 5976
 	// requests are still processed directly by the event-driven reactor path.
-	bgManager.Register(toolCoordinator)
+	bgManager.RegisterWithOptions(toolCoordinator, RunnerTier(Tier3))
 
 	// MCP (Model Context Protocol) server for AI agent integration.
 	var mlCommandPublisher mcp.MLCommandPublisher
@@ -672,7 +689,7 @@ func New(cfg *config.Config) (*App, error) {
 		if strings.TrimSpace(cfg.Nostr.PrivateKey) != "" {
 			servicePubkey, _ = nostr.GetPublicKey(cfg.Nostr.PrivateKey)
 		}
-		bgManager.Register(service.NewAssistantSessionRecoveryRunner(assistantOrchestrator, service.AssistantSessionRecoveryConfig{RecentLimit: 500, ServicePubkey: servicePubkey, Logger: slog.Default()}))
+		bgManager.RegisterWithOptions(service.NewAssistantSessionRecoveryRunner(assistantOrchestrator, service.AssistantSessionRecoveryConfig{RecentLimit: 500, ServicePubkey: servicePubkey, Logger: slog.Default()}), RunnerTier(Tier3))
 		logger.Info("operator assistant orchestrator initialized", zap.String("agent_id", identity.AgentID), zap.String("assistant_pubkey", identity.Pubkey))
 	}
 
@@ -681,7 +698,7 @@ func New(cfg *config.Config) (*App, error) {
 		nostrAdapter.WithHandler(nostrProcessor.Handle),
 		nostrAdapter.WithAuthorizedAuthorScopes(controlPlaneSubscriberAuthorScopes(cfg, assistantIdentity)),
 	)
-	bgManager.Register(nostrSub)
+	bgManager.RegisterWithOptions(nostrSub, RunnerTier(Tier1))
 
 	// Encrypted request/result event runtime for sensitive browser route migrations.
 	if len(encryptedRequestRelays) > 0 && encryptedRequestPool != nil && controlPlaneSigner != nil && cfg.Nostr.PrivateKey != "" {
@@ -710,7 +727,7 @@ func New(cfg *config.Config) (*App, error) {
 			Logger:       logger,
 		}).Register(encryptedRequestTransport)
 		controlplane.RegisterNotificationEncryptedHandlers(encryptedRequestTransport, notifRepo, notifDispatcher)
-		bgManager.Register(&encryptedRequestTransportRunner{transport: encryptedRequestTransport})
+		bgManager.RegisterWithOptions(&encryptedRequestTransportRunner{transport: encryptedRequestTransport}, RunnerTier(Tier2))
 		logger.Info("encrypted request/result event runtime registered", zap.Strings("relay_urls_for_encrypted_nostr_requests", encryptedRequestRelays))
 	}
 
@@ -769,7 +786,7 @@ func New(cfg *config.Config) (*App, error) {
 		reactorOpts = append(reactorOpts, controlplane.WithWorkerRepository(workerRepo))
 		reactorOpts = appendPackageControlPlaneOptions(reactorOpts, packageRegistrySvc, packageProjection)
 		reactor := controlplane.NewReactor(reactorConfig, registry, controlPlanePool, controlPlaneSigner, logger, reactorOpts...)
-		bgManager.Register(&controlplaneRunner{reactor: reactor})
+		bgManager.RegisterWithOptions(&controlplaneRunner{reactor: reactor}, RunnerTier(Tier2))
 		logger.Info("nostr control plane reactor registered", zap.Strings("relays", controlPlaneRelays))
 	}
 
@@ -823,6 +840,7 @@ func New(cfg *config.Config) (*App, error) {
 			LLMRegistry:        llmRegistry,
 			ContinuityStatuses: continuityStatusStore,
 			ContinuityGraph:    continuityGraph,
+			HealthProvider:     healthProvider,
 		}, cfg.Auth)
 
 	httpServer := &http.Server{
@@ -848,10 +866,76 @@ func New(cfg *config.Config) (*App, error) {
 		Background:      bgManager,
 		toolCoordinator: toolCoordinator,
 		relayPools:      []*nostrAdapter.RelayPool{controlPlanePool, relayPool, encryptedRequestPool, fipsRelayPool},
+		ModePolicy:      policy,
+		Health:          healthProvider,
 	}, nil
 }
 
+func configuredMode(mode string) Mode {
+	switch Mode(strings.ToLower(strings.TrimSpace(mode))) {
+	case ModeDegraded:
+		return ModeDegraded
+	case ModeEmergency:
+		return ModeEmergency
+	default:
+		return ModeFull
+	}
+}
+
+func connectOptionalDatabase(ctx context.Context, cfg *config.Config, logger *zap.Logger, policy *ModePolicy) (*pgxpool.Pool, bool) {
+	pool, err := dbConnect(ctx, cfg.DB, logger)
+	if err != nil {
+		logger.Warn("postgres cache unavailable; continuing with relay-first reduced tier", zap.Error(err))
+		if policy != nil && policy.ActiveTier > Tier1 {
+			policy.SetActiveTier(Tier1)
+		}
+		return nil, false
+	}
+	if err := dbMigrate(ctx, pool, logger); err != nil {
+		pool.Close()
+		logger.Warn("postgres cache migration failed; continuing with relay-first reduced tier", zap.Error(err))
+		if policy != nil && policy.ActiveTier > Tier1 {
+			policy.SetActiveTier(Tier1)
+		}
+		return nil, false
+	}
+	return pool, true
+}
+
+func aggregateRelayHealth(pools ...*nostrAdapter.RelayPool) (connected, healthy int) {
+	seen := make(map[*nostrAdapter.RelayPool]struct{}, len(pools))
+	for _, pool := range pools {
+		if pool == nil {
+			continue
+		}
+		if _, ok := seen[pool]; ok {
+			continue
+		}
+		seen[pool] = struct{}{}
+		connected += pool.ConnectedCount()
+		healthy += pool.HealthyCount()
+	}
+	return connected, healthy
+}
+
 // Run starts the HTTP server and blocks until shutdown.
+type bootstrapperRunner struct {
+	bootstrapper *nostrAdapter.Bootstrapper
+	policy       *ModePolicy
+}
+
+func (r *bootstrapperRunner) Name() string { return "relay-bootstrapper" }
+func (r *bootstrapperRunner) Run(ctx context.Context) error {
+	if r.bootstrapper == nil {
+		return fmt.Errorf("relay bootstrapper is not configured")
+	}
+	err := r.bootstrapper.Run(ctx)
+	if r.policy != nil && r.bootstrapper.ReadyTier() >= 0 {
+		r.policy.SetActiveTier(Tier(r.bootstrapper.ReadyTier()))
+	}
+	return err
+}
+
 type failoverTriggerRunner struct {
 	engine *service.FailoverTriggerEngine
 }
@@ -1060,6 +1144,40 @@ type continuityWorkerReader struct {
 	logger *zap.Logger
 }
 
+func startBackgroundRunners(ctx context.Context, manager *BackgroundManager, policy *ModePolicy) {
+	if manager == nil {
+		return
+	}
+	if policy == nil {
+		policy = NewModePolicy(ModeFull)
+	}
+
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+
+	for _, reg := range manager.runners {
+		if !policy.RunnerEnabled(Tier(reg.tier)) {
+			manager.logger.Info("background runner gated by active tier", zap.String("name", reg.runner.Name()), zap.Int("runner_tier", reg.tier), zap.Int("active_tier", int(policy.ActiveTier)))
+			continue
+		}
+		manager.wg.Add(1)
+		go func(reg backgroundRunnerRegistration) {
+			runner := reg.runner
+			defer manager.wg.Done()
+			manager.logger.Info("background runner starting", zap.String("name", runner.Name()))
+			manager.markRunnerStarted(runner.Name())
+
+			err := runner.Run(ctx)
+			manager.markRunnerStopped(runner.Name(), err, ctx.Err() != nil)
+			if err != nil && ctx.Err() == nil {
+				manager.logger.Error("background runner exited with error", zap.String("name", runner.Name()), zap.Error(err))
+			} else {
+				manager.logger.Info("background runner stopped", zap.String("name", runner.Name()))
+			}
+		}(reg)
+	}
+}
+
 func (r continuityWorkerReader) ListWorkers() []domain.Worker {
 	if r.repo == nil {
 		return nil
@@ -1079,9 +1197,6 @@ func (a *App) Run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	// Start all registered background runners.
-	a.Background.Start(ctx)
-
 	errCh := make(chan error, 1)
 	go func() {
 		a.Logger.Info("HTTP server starting", zap.String("addr", a.HTTPServer.Addr))
@@ -1089,6 +1204,9 @@ func (a *App) Run() error {
 			errCh <- err
 		}
 	}()
+
+	// Start allowed background runners after HTTP is accepting connections.
+	startBackgroundRunners(ctx, a.Background, a.ModePolicy)
 
 	select {
 	case err := <-errCh:
@@ -1119,7 +1237,9 @@ func (a *App) Run() error {
 	// Close Nostr relay connections.
 	closeRelayPools(a.relayPools...)
 
-	a.DB.Close()
+	if a.DB != nil {
+		a.DB.Close()
+	}
 	_ = a.Logger.Sync()
 	a.Logger.Info("server stopped gracefully")
 	return nil
