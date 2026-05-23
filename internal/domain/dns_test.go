@@ -14,7 +14,7 @@ func TestDNSEnumsIsValid(t *testing.T) {
 	if !ZoneVisibilityInternal.IsValid() || ZoneVisibility("public").IsValid() {
 		t.Fatalf("ZoneVisibility IsValid mismatch")
 	}
-	if !DNSRecordTypeA.IsValid() || DNSRecordType("TXT").IsValid() {
+	if !DNSRecordTypeA.IsValid() || !DNSRecordTypeSRV.IsValid() || DNSRecordType("TXT").IsValid() {
 		t.Fatalf("DNSRecordType IsValid mismatch")
 	}
 	if !DNSEndpointFamilyService.IsValid() || DNSEndpointFamily("database").IsValid() {
@@ -108,5 +108,80 @@ func TestValidateDNSZone(t *testing.T) {
 	invalidTTL.TTL = 0
 	if err := ValidateDNSZone(&invalidTTL); err == nil || !errors.Is(err, ErrInvalidValue) {
 		t.Fatalf("expected invalid TTL error, got %v", err)
+	}
+}
+
+func TestValidateDNSPolicy(t *testing.T) {
+	ttl := 120
+	policy := &DNSPolicy{
+		Name: "latency-aware",
+		Rules: []DNSPolicyRule{{
+			Match: DNSPolicyMatch{Environment: "prod"},
+			Action: DNSPolicyAction{
+				Visibility:  ZoneVisibilityInternal,
+				TTLOverride: &ttl,
+			},
+		}},
+		Enabled: true,
+	}
+	if err := ValidateDNSPolicy(policy); err != nil {
+		t.Fatalf("ValidateDNSPolicy() error = %v", err)
+	}
+
+	emptyName := *policy
+	emptyName.Name = " "
+	if err := ValidateDNSPolicy(&emptyName); err == nil || !errors.Is(err, ErrEmptyField) {
+		t.Fatalf("expected empty name error, got %v", err)
+	}
+
+	emptyRules := *policy
+	emptyRules.Rules = nil
+	if err := ValidateDNSPolicy(&emptyRules); err == nil || !errors.Is(err, ErrInvalidValue) {
+		t.Fatalf("expected empty rules error, got %v", err)
+	}
+
+	invalidVisibility := *policy
+	invalidVisibility.Rules = []DNSPolicyRule{{Action: DNSPolicyAction{Visibility: ZoneVisibility("private")}}}
+	if err := ValidateDNSPolicy(&invalidVisibility); err == nil || !errors.Is(err, ErrInvalidValue) {
+		t.Fatalf("expected invalid visibility error, got %v", err)
+	}
+
+	noEffect := *policy
+	noEffect.Rules = []DNSPolicyRule{{Action: DNSPolicyAction{}}}
+	if err := ValidateDNSPolicy(&noEffect); err == nil || !errors.Is(err, ErrInvalidValue) {
+		t.Fatalf("expected action effect error, got %v", err)
+	}
+}
+
+func TestValidateDNSRecordOverride(t *testing.T) {
+	override := &DNSRecordOverride{
+		ZoneName:       "prod.cascadia",
+		RecordName:     "api",
+		RecordType:     DNSRecordTypeSRV,
+		Value:          "api.prod.cascadia",
+		TTL:            60,
+		Reason:         "pin during incident",
+		OperatorPubkey: "npub1operator",
+	}
+	if err := ValidateDNSRecordOverride(override); err != nil {
+		t.Fatalf("ValidateDNSRecordOverride() error = %v", err)
+	}
+
+	invalidType := *override
+	invalidType.RecordType = DNSRecordType("TXT")
+	if err := ValidateDNSRecordOverride(&invalidType); err == nil || !errors.Is(err, ErrInvalidValue) {
+		t.Fatalf("expected invalid record type error, got %v", err)
+	}
+
+	invalidTTL := *override
+	invalidTTL.TTL = 0
+	if err := ValidateDNSRecordOverride(&invalidTTL); err == nil || !errors.Is(err, ErrInvalidValue) {
+		t.Fatalf("expected invalid TTL error, got %v", err)
+	}
+
+	emptyReason := *override
+	emptyReason.Reason = " "
+	if err := ValidateDNSRecordOverride(&emptyReason); err == nil || !errors.Is(err, ErrEmptyField) {
+		t.Fatalf("expected empty reason error, got %v", err)
 	}
 }

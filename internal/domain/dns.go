@@ -37,6 +37,7 @@ const (
 	DNSRecordTypeA     DNSRecordType = "A"
 	DNSRecordTypeAAAA  DNSRecordType = "AAAA"
 	DNSRecordTypeCNAME DNSRecordType = "CNAME"
+	DNSRecordTypeSRV   DNSRecordType = "SRV"
 )
 
 // DNSEndpointFamily identifies the infrastructure graph source for a DNS endpoint.
@@ -102,7 +103,60 @@ type DNSRecord struct {
 	Type             DNSRecordType `json:"type"`
 	Value            string        `json:"value"`
 	TTL              int           `json:"ttl"`
+	Priority         *int          `json:"priority,omitempty"`
+	Weight           *int          `json:"weight,omitempty"`
+	Port             *int          `json:"port,omitempty"`
 	SourceCoordinate string        `json:"source_coordinate"`
+}
+
+// DNSPolicy defines rule-based DNS record behavior for zones and environments.
+type DNSPolicy struct {
+	ID            uuid.UUID       `json:"id"`
+	Name          string          `json:"name"`
+	ZoneID        *uuid.UUID      `json:"zone_id,omitempty"`
+	EnvironmentID *uuid.UUID      `json:"environment_id,omitempty"`
+	Rules         []DNSPolicyRule `json:"rules"`
+	Enabled       bool            `json:"enabled"`
+	Metadata      map[string]any  `json:"metadata,omitempty"`
+	CreatedAt     time.Time       `json:"created_at"`
+	UpdatedAt     time.Time       `json:"updated_at"`
+}
+
+// DNSPolicyRule combines endpoint match criteria with DNS policy effects.
+type DNSPolicyRule struct {
+	Match  DNSPolicyMatch  `json:"match"`
+	Action DNSPolicyAction `json:"action"`
+}
+
+// DNSPolicyMatch scopes a DNS policy rule to endpoint attributes.
+type DNSPolicyMatch struct {
+	Capabilities []string `json:"capabilities,omitempty"`
+	Hardware     []string `json:"hardware,omitempty"`
+	Geohash      string   `json:"geohash,omitempty"`
+	Environment  string   `json:"environment,omitempty"`
+	Runtime      string   `json:"runtime,omitempty"`
+}
+
+// DNSPolicyAction describes the DNS behavior applied by a matching rule.
+type DNSPolicyAction struct {
+	Visibility  ZoneVisibility `json:"visibility,omitempty"`
+	TTLOverride *int           `json:"ttl_override,omitempty"`
+	WeightBias  *int           `json:"weight_bias,omitempty"`
+	Exclude     bool           `json:"exclude,omitempty"`
+}
+
+// DNSRecordOverride is a manually pinned DNS record override.
+type DNSRecordOverride struct {
+	ID             uuid.UUID     `json:"id"`
+	ZoneName       string        `json:"zone_name"`
+	RecordName     string        `json:"record_name"`
+	RecordType     DNSRecordType `json:"record_type"`
+	Value          string        `json:"value"`
+	TTL            int           `json:"ttl"`
+	Reason         string        `json:"reason"`
+	OperatorPubkey string        `json:"operator_pubkey"`
+	CreatedAt      time.Time     `json:"created_at"`
+	ExpiresAt      *time.Time    `json:"expires_at,omitempty"`
 }
 
 func (t DNSBackendType) IsValid() bool {
@@ -125,7 +179,7 @@ func (v ZoneVisibility) IsValid() bool {
 
 func (t DNSRecordType) IsValid() bool {
 	switch t {
-	case DNSRecordTypeA, DNSRecordTypeAAAA, DNSRecordTypeCNAME:
+	case DNSRecordTypeA, DNSRecordTypeAAAA, DNSRecordTypeCNAME, DNSRecordTypeSRV:
 		return true
 	default:
 		return false
@@ -221,6 +275,68 @@ func ValidateDNSZone(zone *DNSZone) error {
 	}
 	if zone.TTL <= 0 {
 		return fmt.Errorf("%w: DNS zone ttl must be > 0", ErrInvalidValue)
+	}
+	return nil
+}
+
+func ValidateDNSPolicy(policy *DNSPolicy) error {
+	if policy == nil {
+		return fmt.Errorf("%w: DNS policy must not be nil", ErrInvalidValue)
+	}
+	policy.Name = strings.TrimSpace(policy.Name)
+	if err := ValidateRequiredString(policy.Name, "name"); err != nil {
+		return err
+	}
+	if len(policy.Rules) == 0 {
+		return fmt.Errorf("%w: DNS policy rules must not be empty", ErrInvalidValue)
+	}
+	for i, rule := range policy.Rules {
+		if err := validateDNSPolicyAction(rule.Action); err != nil {
+			return fmt.Errorf("DNS policy rule %d: %w", i, err)
+		}
+	}
+	return nil
+}
+
+func validateDNSPolicyAction(action DNSPolicyAction) error {
+	if action.Visibility != "" && !action.Visibility.IsValid() {
+		return fmt.Errorf("%w: DNS policy action visibility %q is not valid", ErrInvalidValue, action.Visibility)
+	}
+	if action.Visibility == "" && action.TTLOverride == nil && action.WeightBias == nil && !action.Exclude {
+		return fmt.Errorf("%w: DNS policy action must have at least one effect", ErrInvalidValue)
+	}
+	return nil
+}
+
+func ValidateDNSRecordOverride(override *DNSRecordOverride) error {
+	if override == nil {
+		return fmt.Errorf("%w: DNS record override must not be nil", ErrInvalidValue)
+	}
+	override.ZoneName = strings.TrimSpace(override.ZoneName)
+	override.RecordName = strings.TrimSpace(override.RecordName)
+	override.Value = strings.TrimSpace(override.Value)
+	override.Reason = strings.TrimSpace(override.Reason)
+	override.OperatorPubkey = strings.TrimSpace(override.OperatorPubkey)
+	if err := ValidateRequiredString(override.ZoneName, "zone_name"); err != nil {
+		return err
+	}
+	if err := ValidateRequiredString(override.RecordName, "record_name"); err != nil {
+		return err
+	}
+	if !override.RecordType.IsValid() {
+		return fmt.Errorf("%w: DNS record override type %q is not valid", ErrInvalidValue, override.RecordType)
+	}
+	if err := ValidateRequiredString(override.Value, "value"); err != nil {
+		return err
+	}
+	if override.TTL <= 0 {
+		return fmt.Errorf("%w: DNS record override ttl must be > 0", ErrInvalidValue)
+	}
+	if err := ValidateRequiredString(override.Reason, "reason"); err != nil {
+		return err
+	}
+	if err := ValidateRequiredString(override.OperatorPubkey, "operator_pubkey"); err != nil {
+		return err
 	}
 	return nil
 }
