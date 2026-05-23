@@ -1,0 +1,18 @@
+{
+  "feature_id": "bahia-kw3a",
+  "title": "Continuity dashboard API and status page",
+  "intended_behavior": [
+    "Expose an authenticated HTTP continuity status read endpoint backed by an injected ContinuityStatusReader rather than fake or placeholder data.",
+    "Return continuity status DTOs with service key, active profile, operation state, worker pubkeys, reason, changed timestamp, and current run step details.",
+    "Render a /continuity dashboard page that displays per-service status cards with NORMAL, DEGRADED, EMERGENCY, and RECOVERING visual states, primary versus active worker data, run progress, and failure reason text.",
+    "Add an operator navigation link to the continuity dashboard."
+  ],
+  "observed_behavior": [
+    "internal/service/continuity_status_store.go exposes ContinuityStatusReader and ListAllStatuses for status read-model consumers.",
+    "No production app composition wiring for RouterDeps.ContinuityStatuses was present in this checkout; the handler therefore fails closed with HTTP 503 when no store is injected. The follow-up is tracked in Beads issue bahia-mrra."
+  ],
+  "scope_constraints": [
+    "Only new API/web files plus router registration and navigation component edits were allowed for existing files.",
+    "No domain, service, adapter, controlplane, or DNS files were changed."
+  ]
+}

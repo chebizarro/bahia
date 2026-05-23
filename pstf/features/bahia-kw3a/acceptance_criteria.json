@@ -1,0 +1,25 @@
+{
+  "feature_id": "bahia-kw3a",
+  "acceptance_criteria": [
+    {
+      "id": "AC1",
+      "statement": "The API exposes continuity status DTOs from an injected ContinuityStatusReader without synthesizing placeholder status data.",
+      "tests": ["TestContinuityHandlerStatusReturnsMappedStatuses", "TestContinuityHandlerStatusReturnsEmptyList"]
+    },
+    {
+      "id": "AC2",
+      "statement": "The API fails closed when the continuity status store is not injected instead of returning fake empty production data.",
+      "tests": ["TestContinuityHandlerStatusFailsClosedWithoutStore"]
+    },
+    {
+      "id": "AC3",
+      "statement": "The frontend continuity page loads the API response and renders service cards with mode badges, worker roles, run progress, failure reason, and empty/error states.",
+      "tests": ["npm run build"]
+    },
+    {
+      "id": "AC4",
+      "statement": "Navigation exposes the continuity page to operators.",
+      "tests": ["npm run build"]
+    }
+  ]
+}

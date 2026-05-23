@@ -1,0 +1,35 @@
+{
+  "feature_id": "bahia-kw3a",
+  "tests": [
+    {
+      "name": "TestContinuityHandlerStatusReturnsMappedStatuses",
+      "type": "go-unit",
+      "acceptance_criteria": ["AC1"],
+      "evidence": "Maps an in-memory continuity status, including current run fields, into the HTTP DTO envelope."
+    },
+    {
+      "name": "TestContinuityHandlerStatusReturnsEmptyList",
+      "type": "go-unit",
+      "acceptance_criteria": ["AC1"],
+      "evidence": "Returns an empty list when the injected store has no projected statuses."
+    },
+    {
+      "name": "TestContinuityHandlerStatusFailsClosedWithoutStore",
+      "type": "go-unit",
+      "acceptance_criteria": ["AC2"],
+      "evidence": "Returns HTTP 503 when no ContinuityStatusReader dependency is present."
+    },
+    {
+      "name": "go test ./...",
+      "type": "go-suite",
+      "acceptance_criteria": ["AC1", "AC2"],
+      "evidence": "Validates all Go packages after adding DTO, handler, tests, and router dependency."
+    },
+    {
+      "name": "npm run build",
+      "type": "frontend-build",
+      "acceptance_criteria": ["AC3", "AC4"],
+      "evidence": "Builds the SvelteKit app with the new /continuity route and navigation link."
+    }
+  ]
+}
