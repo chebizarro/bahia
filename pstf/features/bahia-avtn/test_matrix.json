@@ -1,0 +1,10 @@
+{
+  "feature_id": "bahia-avtn",
+  "test_runs": [
+    {
+      "command": "go test ./internal/service",
+      "result": "pass",
+      "evidence": "ok github.com/openagentsinc/bahia/internal/service 0.431s"
+    }
+  ]
+}

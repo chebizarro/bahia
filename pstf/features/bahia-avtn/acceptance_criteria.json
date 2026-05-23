@@ -1,0 +1,31 @@
+{
+  "feature_id": "bahia-avtn",
+  "title": "Continuity status store and Nostr read-model projector",
+  "criteria": [
+    {
+      "id": "AC1",
+      "statement": "The service package exposes an in-memory, RWMutex-protected continuity status store keyed by ServiceKey with update, single-service, DNS-facing, and list-all query methods.",
+      "tests": ["TestInMemoryContinuityStatusStoreUpdatesAndQueriesByService", "TestInMemoryContinuityStatusStoreReturnsCopiesAndSortedLists", "TestInMemoryContinuityStatusStoreMissingService"]
+    },
+    {
+      "id": "AC2",
+      "statement": "Continuity runtime status events update the store and publish kind 30351 continuity-status read models with d=continuity-status:<service> tags and JSON content.",
+      "tests": ["TestContinuityStatusProjectorUpdatesStoreAndPublishesStatusAndActivation"]
+    },
+    {
+      "id": "AC3",
+      "statement": "The projector publishes kind 30352 append-only degraded/emergency/offline activation events when the active profile changes away from full.",
+      "tests": ["TestContinuityStatusProjectorUpdatesStoreAndPublishesStatusAndActivation", "TestContinuityStatusProjectorStatusIdempotencyUsesConfiguredFields"]
+    },
+    {
+      "id": "AC4",
+      "statement": "The projector publishes kind 30353 recovery progress read models by run with d=recovery-progress:<service>:<runID> and deterministic step tags.",
+      "tests": ["TestContinuityStatusProjectorPublishesRecoveryProgressByRun"]
+    },
+    {
+      "id": "AC5",
+      "statement": "Kind 30351 is republished only when active profile, operation state, active worker, run ID, or the current step tuple changes; failed publishes are not cached as successful publication state.",
+      "tests": ["TestContinuityStatusProjectorStatusIdempotencyUsesConfiguredFields", "TestContinuityStatusProjectorDoesNotMarkFailedStatusPublishAsPublished"]
+    }
+  ]
+}

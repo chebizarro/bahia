@@ -1,0 +1,15 @@
+{
+  "feature_id": "bahia-avtn",
+  "title": "Continuity status store and Nostr read-model projector",
+  "intent": "Expose current service continuity status to local readers and relay-visible Nostr read models without adding polling, request/response wrappers, or DNS/projector hot-file changes.",
+  "scope": [
+    "Add an in-memory ContinuityStatus store keyed by service key.",
+    "Project continuity status runtime events to Nostr kinds 30351, 30352, and 30353 through an injected publish function.",
+    "Apply the requested 30351 idempotency rule for active profile, operation state, active worker, run ID, and current step tuple."
+  ],
+  "out_of_scope": [
+    "Adapter-level kind constants and signing implementation.",
+    "DNS projector wiring and endpoint cutover behavior.",
+    "Continuity recipe execution and trigger evaluation."
+  ]
+}
