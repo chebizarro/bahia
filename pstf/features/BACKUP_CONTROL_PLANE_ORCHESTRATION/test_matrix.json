@@ -138,11 +138,27 @@
         "internal/service/backup_registry_retention_test.go and backup_retention_coordinator_test.go validate backend-native policy metadata requirements, unsupported capability/configuration failures, dry-run propagation, cancellation/recovery, and terminal evidence persistence.",
         "internal/app/app.go wires retention coordinator/responder/background runner; docs/control-planes.md records no retention execution read-model kind."
       ]
+    },
+    {
+      "id": "T-BACKUP-009",
+      "criteria": [
+        "AC-BACKUP-001",
+        "AC-BACKUP-009"
+      ],
+      "type": "unit/repository/migration-review",
+      "target": "internal/domain, internal/repository, internal/db/migrations",
+      "description": "Verify BackupDefinition validation, PostgreSQL repository CRUD/scanning, and migration schema for the canonical operator-facing backup definition registry object.",
+      "status": "passed",
+      "evidence": [
+        "internal/domain/backup_test.go validates BackupDefinition required composed references, audit created_by, conditional schedule/approval policy intent, and trimming behavior.",
+        "internal/repository/pg_backup_controlplane_test.go validates BackupDefinition upsert arguments, scan of tenant/environment IDs and JSON fields, missing delete ErrNotFound behavior, and nil executor slice serialization as JSON arrays.",
+        "internal/db/migrations/000030_backup_definitions.up.sql creates backup_definitions with repository/policy/recipe/environment/tenant foreign keys and query indexes."
+      ]
     }
   ],
   "coverage_summary": {
-    "criteria_total": 8,
-    "criteria_with_tests": 8,
+    "criteria_total": 9,
+    "criteria_with_tests": 9,
     "verified_criteria": [
       "AC-BACKUP-001",
       "AC-BACKUP-002",
@@ -151,7 +167,8 @@
       "AC-BACKUP-005",
       "AC-BACKUP-006",
       "AC-BACKUP-007",
-      "AC-BACKUP-008"
+      "AC-BACKUP-008",
+      "AC-BACKUP-009"
     ],
     "known_gaps": []
   },
@@ -160,6 +177,7 @@
     "Restore responders publish BackupRestoreStatus 6982, BackupRestoreApprovalResult 38413, and BackupRestoreResult 38412 with per-relay publish summaries persisted to restore records.",
     "Retention responders publish BackupObservation 6984 for progress and BackupRetentionResult 38414 for terminal outcome with per-relay publish summaries persisted to retention records; no retention execution read model is introduced.",
     "Projector publishes BackupRestoreState 31998 and does not project a retention execution state.",
-    "No filesystem_mock or fake backup backend is used in production backup paths; deterministic test doubles remain in _test.go files."
+    "No filesystem_mock or fake backup backend is used in production backup paths; deterministic test doubles remain in _test.go files.",
+    "BackupDefinition CRUD is covered at the domain and repository layer; Nostr handlers, MCP, UI, scheduler dispatch, and executor placement are intentionally out of scope for bahia-gbo2."
   ]
 }

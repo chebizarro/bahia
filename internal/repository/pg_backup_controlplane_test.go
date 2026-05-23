@@ -72,6 +72,67 @@ func TestPgBackupControlPlaneRepositoryCreateBackupRunIfAbsentReturnsExistingCoo
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestPgBackupControlPlaneRepositoryUpsertAndGetBackupDefinition(t *testing.T) {
+	ctx := context.Background()
+	mock, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	defer mock.Close()
+	repo := newPgBackupControlPlaneRepositoryWithDB(mock)
+	definition := backupDefinitionFixture()
+	tenantID := uuid.New()
+	environmentID := uuid.New()
+	definition.TenantID = &tenantID
+	definition.EnvironmentID = &environmentID
+	now := time.Now().UTC().Truncate(time.Second)
+
+	mock.ExpectExec("INSERT INTO backup_definitions").
+		WithArgs(definition.ID, definition.Name, definition.RepositoryID, definition.RepositoryName, definition.PolicyID, definition.PolicyName, definition.RecipeID, definition.RecipeName,
+			definition.RecipeVersion, definition.ScheduleExpression, definition.ScheduleEnabled, definition.ScheduleJitterWindow, tenantID, definition.TenantName,
+			environmentID, definition.EnvironmentName, definition.OwnerPubkey, definition.RequiresApproval, definition.ApprovalPolicy, pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
+			pgxmock.AnyArg(), definition.Group, pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), definition.CreatedBy).
+		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+
+	require.NoError(t, repo.UpsertBackupDefinition(ctx, definition))
+
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT " + backupDefinitionColumns + " FROM backup_definitions WHERE id = $1")).
+		WithArgs(definition.ID).
+		WillReturnRows(pgxmock.NewRows(splitColumns(backupDefinitionColumns)).
+			AddRow(definition.ID, definition.Name, definition.RepositoryID, definition.RepositoryName, definition.PolicyID, definition.PolicyName, definition.RecipeID, definition.RecipeName,
+				definition.RecipeVersion, definition.ScheduleExpression, definition.ScheduleEnabled, definition.ScheduleJitterWindow, tenantID.String(), definition.TenantName,
+				environmentID.String(), definition.EnvironmentName, definition.OwnerPubkey, definition.RequiresApproval, definition.ApprovalPolicy, []byte(`{"allowed_prefixes":["fs:/restore"]}`),
+				[]byte(`["site:west"]`), []byte(`["backup.snapshot_create"]`), []byte(`{"service":"api"}`), definition.Group, []byte(`{"source":"test"}`), now, now, definition.CreatedBy))
+
+	stored, err := repo.GetBackupDefinition(ctx, definition.ID)
+
+	require.NoError(t, err)
+	require.Equal(t, definition.ID, stored.ID)
+	require.Equal(t, tenantID, *stored.TenantID)
+	require.Equal(t, environmentID, *stored.EnvironmentID)
+	require.Equal(t, []string{"site:west"}, stored.ExecutorLabels)
+	require.Equal(t, []string{"backup.snapshot_create"}, stored.CapabilityRequirements)
+	require.Equal(t, "api", stored.Labels["service"])
+	require.Equal(t, "test", stored.Metadata["source"])
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestPgBackupControlPlaneRepositoryDeleteBackupDefinitionReportsMissing(t *testing.T) {
+	ctx := context.Background()
+	mock, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	defer mock.Close()
+	repo := newPgBackupControlPlaneRepositoryWithDB(mock)
+	id := uuid.New()
+
+	mock.ExpectExec("DELETE FROM backup_definitions").
+		WithArgs(id).
+		WillReturnResult(pgxmock.NewResult("DELETE", 0))
+
+	err = repo.DeleteBackupDefinition(ctx, id)
+
+	require.ErrorIs(t, err, ErrNotFound)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestPgBackupControlPlaneRepositoryUpsertVerificationReturnsPersistedID(t *testing.T) {
 	ctx := context.Background()
 	mock, err := pgxmock.NewPool()
@@ -218,6 +279,42 @@ func TestMarshalJSONObjectStoresNilMapsAsEmptyObjects(t *testing.T) {
 
 	require.NoError(t, err)
 	require.JSONEq(t, `{}`, string(encoded))
+}
+
+func TestMarshalJSONArrayStoresNilSlicesAsEmptyArrays(t *testing.T) {
+	encoded, err := marshalJSONArray(nil, "backup executor labels")
+
+	require.NoError(t, err)
+	require.JSONEq(t, `[]`, string(encoded))
+}
+
+func backupDefinitionFixture() *domain.BackupDefinition {
+	return &domain.BackupDefinition{
+		ID:                     uuid.New(),
+		Name:                   "daily-service",
+		RepositoryID:           uuid.New(),
+		RepositoryName:         "primary",
+		PolicyID:               uuid.New(),
+		PolicyName:             "verified",
+		RecipeID:               uuid.New(),
+		RecipeName:             "service-data",
+		RecipeVersion:          "v1",
+		ScheduleExpression:     "0 2 * * *",
+		ScheduleEnabled:        true,
+		ScheduleJitterWindow:   "15m",
+		TenantName:             "fleet",
+		EnvironmentName:        "prod",
+		OwnerPubkey:            "owner-pubkey",
+		RequiresApproval:       true,
+		ApprovalPolicy:         "restore-admin",
+		RestoreTargetRules:     map[string]any{"allowed_prefixes": []string{"fs:/restore"}},
+		ExecutorLabels:         []string{"site:west"},
+		CapabilityRequirements: []string{"backup.snapshot_create"},
+		Labels:                 map[string]any{"service": "api"},
+		Group:                  "production",
+		Metadata:               map[string]any{"source": "test"},
+		CreatedBy:              "creator-pubkey",
+	}
 }
 
 func backupRunFixture(policyID *uuid.UUID) *domain.BackupRun {

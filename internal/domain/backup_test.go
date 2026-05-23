@@ -48,6 +48,81 @@ func TestValidateBackupRepositoryAcceptsVeleroBackendKind(t *testing.T) {
 	require.True(t, BackupBackendVelero.IsValid())
 }
 
+func TestValidateBackupDefinitionTrimsAndRequiresComposedReferences(t *testing.T) {
+	definition := &BackupDefinition{
+		Name:                   " daily-service ",
+		RepositoryID:           uuid.New(),
+		RepositoryName:         " primary ",
+		PolicyID:               uuid.New(),
+		PolicyName:             " verified ",
+		RecipeID:               uuid.New(),
+		RecipeName:             " service-data ",
+		RecipeVersion:          " v1 ",
+		ScheduleExpression:     " 0 2 * * * ",
+		ScheduleEnabled:        true,
+		ScheduleJitterWindow:   " 15m ",
+		OwnerPubkey:            " owner-pubkey ",
+		RequiresApproval:       true,
+		ApprovalPolicy:         " restore-admin ",
+		ExecutorLabels:         []string{"site:west"},
+		CapabilityRequirements: []string{"backup.snapshot_create"},
+		Labels:                 map[string]any{"service": "api"},
+		Group:                  " production ",
+		CreatedBy:              " creator-pubkey ",
+	}
+
+	require.NoError(t, ValidateBackupDefinition(definition))
+	require.Equal(t, "daily-service", definition.Name)
+	require.Equal(t, "primary", definition.RepositoryName)
+	require.Equal(t, "verified", definition.PolicyName)
+	require.Equal(t, "service-data", definition.RecipeName)
+	require.Equal(t, "v1", definition.RecipeVersion)
+	require.Equal(t, "production", definition.Group)
+}
+
+func TestValidateBackupDefinitionRequiresCreatedBy(t *testing.T) {
+	definition := &BackupDefinition{
+		Name:           "daily-service",
+		RepositoryID:   uuid.New(),
+		RepositoryName: "primary",
+		PolicyID:       uuid.New(),
+		PolicyName:     "verified",
+		RecipeID:       uuid.New(),
+		RecipeName:     "service-data",
+		RecipeVersion:  "v1",
+	}
+
+	err := ValidateBackupDefinition(definition)
+
+	require.Error(t, err)
+	require.ErrorIs(t, err, ErrEmptyField)
+}
+
+func TestValidateBackupDefinitionRejectsIncompleteScheduleAndApprovalIntent(t *testing.T) {
+	definition := &BackupDefinition{
+		Name:            "daily-service",
+		RepositoryID:    uuid.New(),
+		RepositoryName:  "primary",
+		PolicyID:        uuid.New(),
+		PolicyName:      "verified",
+		RecipeID:        uuid.New(),
+		RecipeName:      "service-data",
+		RecipeVersion:   "v1",
+		ScheduleEnabled: true,
+		CreatedBy:       "creator-pubkey",
+	}
+
+	err := ValidateBackupDefinition(definition)
+	require.ErrorIs(t, err, ErrEmptyField)
+	require.Contains(t, err.Error(), "schedule_expression")
+
+	definition.ScheduleExpression = "0 2 * * *"
+	definition.RequiresApproval = true
+	err = ValidateBackupDefinition(definition)
+	require.ErrorIs(t, err, ErrEmptyField)
+	require.Contains(t, err.Error(), "approval_policy")
+}
+
 func TestValidateBackupRecipeAndRunRejectVeleroUntilSnapshotCapabilityExists(t *testing.T) {
 	repoID := uuid.New()
 	recipe := &BackupRecipe{Name: "velero", Version: "v1", Backend: BackupBackendVelero, RepositoryID: repoID, TargetRef: "velero:cluster-a"}

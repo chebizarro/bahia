@@ -14,6 +14,10 @@
     {
       "type": "repository_observation",
       "summary": "docs/control-planes.md now allocates backup-specific kinds 38400-38419, 6981-6984, 31991-31999, and 31310-31311. The allocation avoids existing artifact attestation kind 31200 and AI/ML result kinds 38395/38396."
+    },
+    {
+      "type": "repository_observation",
+      "summary": "Bahia now has a first-class BackupDefinition domain model and durable backup_definitions registry table/repository CRUD layer composing repository, policy, recipe, scheduling metadata, tenant/environment/owner scope, approval policy, restore target rules, executor targeting fields, labels/grouping, and audit fields."
     }
   ],
   "actors": [
@@ -125,7 +129,8 @@
     "Every backup run has signed provenance describing initiator, target, backend, repository, artifact hashes or backend snapshot identifiers, verification status, and restore-test status when applicable.",
     "Every publish path verifies relay OK accepted flag and rejection message.",
     "Implemented backup, restore, and retention workflows are traceable from request through durable state, adapter execution, verification where required, signed status/result publication, and per-relay publish summaries.",
-    "Remaining implementation gaps are tracked in Beads rather than TODOs or markdown-only lists."
+    "Remaining implementation gaps are tracked in Beads rather than TODOs or markdown-only lists.",
+    "Authoritative backup definitions persist composed operator intent before command handlers, MCP, UI, scheduling dispatch, or executor placement are implemented."
   ],
   "happy_paths": [
     "Operator defines a Kopia-backed filesystem backup recipe with retention and verification requirements; Bahia schedules or accepts a run request, orchestrates adapter execution, verifies results, and publishes signed run and verification events.",
@@ -184,6 +189,11 @@
       "question": "How should retention execution state be exposed without a dedicated read-model allocation?",
       "decision": "Retention progress uses BackupObservation kind 6984 and terminal BackupRetentionResult kind 38414. No retention execution read-model kind is invented; 31994 remains a retention registry/definition projection.",
       "evidence": "internal/controlplane/backup_retention_handlers.go, internal/controlplane/backup_retention_responder.go, docs/control-planes.md, and targeted controlplane tests verify retention request handling and observation/result publication semantics."
+    },
+    {
+      "question": "What is a BackupDefinition in the first domain/repository slice?",
+      "decision": "BackupDefinition is the canonical operator-facing registry object that composes repository, policy, recipe, schedule metadata, tenant/environment/owner scope, approval policy, restore target rules, executor targeting fields, labels/grouping, metadata, and audit fields. This slice persists and retrieves the model only; execution semantics are handled by dependent Beads.",
+      "evidence": "internal/domain/backup.go, internal/repository/pg_backup_controlplane.go, and internal/db/migrations/000030_backup_definitions.up.sql implement the persisted domain/repository contract."
     }
   ],
   "human_decisions": []

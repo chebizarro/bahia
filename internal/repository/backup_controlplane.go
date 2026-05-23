@@ -25,6 +25,12 @@ type BackupControlPlaneRepository interface {
 	GetBackupRepositoryByName(ctx context.Context, name string) (*domain.BackupRepository, error)
 	ListBackupRepositories(ctx context.Context, limit, offset int) ([]domain.BackupRepository, error)
 
+	UpsertBackupDefinition(ctx context.Context, definition *domain.BackupDefinition) error
+	GetBackupDefinition(ctx context.Context, id uuid.UUID) (*domain.BackupDefinition, error)
+	GetBackupDefinitionByName(ctx context.Context, name string) (*domain.BackupDefinition, error)
+	ListBackupDefinitions(ctx context.Context, limit, offset int) ([]domain.BackupDefinition, error)
+	DeleteBackupDefinition(ctx context.Context, id uuid.UUID) error
+
 	UpsertBackupRun(ctx context.Context, run *domain.BackupRun) error
 	GetBackupRun(ctx context.Context, id uuid.UUID) (*domain.BackupRun, error)
 	GetBackupRunByRequestCoordinate(ctx context.Context, pubkey string, kind int, dTag string) (*domain.BackupRun, error)

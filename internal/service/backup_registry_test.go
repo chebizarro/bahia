@@ -186,6 +186,7 @@ type fakeBackupRepo struct {
 	recipes       map[uuid.UUID]*domain.BackupRecipe
 	policies      map[uuid.UUID]*domain.BackupPolicy
 	repositories  map[uuid.UUID]*domain.BackupRepository
+	definitions   map[uuid.UUID]*domain.BackupDefinition
 	runs          map[uuid.UUID]*domain.BackupRun
 	coordinates   map[string]uuid.UUID
 	verifications map[uuid.UUID]*domain.BackupVerificationRecord
@@ -197,6 +198,7 @@ func newFakeBackupRepo() *fakeBackupRepo {
 		recipes:       map[uuid.UUID]*domain.BackupRecipe{},
 		policies:      map[uuid.UUID]*domain.BackupPolicy{},
 		repositories:  map[uuid.UUID]*domain.BackupRepository{},
+		definitions:   map[uuid.UUID]*domain.BackupDefinition{},
 		runs:          map[uuid.UUID]*domain.BackupRun{},
 		coordinates:   map[string]uuid.UUID{},
 		verifications: map[uuid.UUID]*domain.BackupVerificationRecord{},
@@ -281,6 +283,36 @@ func (r *fakeBackupRepo) ListBackupRepositories(context.Context, int, int) ([]do
 		out = append(out, *repo)
 	}
 	return out, nil
+}
+func (r *fakeBackupRepo) UpsertBackupDefinition(_ context.Context, definition *domain.BackupDefinition) error {
+	cp := *definition
+	if cp.ID == uuid.Nil {
+		cp.ID = uuid.New()
+	}
+	r.definitions[cp.ID] = &cp
+	return nil
+}
+func (r *fakeBackupRepo) GetBackupDefinition(_ context.Context, id uuid.UUID) (*domain.BackupDefinition, error) {
+	return r.definitions[id], nil
+}
+func (r *fakeBackupRepo) GetBackupDefinitionByName(_ context.Context, name string) (*domain.BackupDefinition, error) {
+	for _, definition := range r.definitions {
+		if definition.Name == name {
+			return definition, nil
+		}
+	}
+	return nil, nil
+}
+func (r *fakeBackupRepo) ListBackupDefinitions(context.Context, int, int) ([]domain.BackupDefinition, error) {
+	out := []domain.BackupDefinition{}
+	for _, definition := range r.definitions {
+		out = append(out, *definition)
+	}
+	return out, nil
+}
+func (r *fakeBackupRepo) DeleteBackupDefinition(_ context.Context, id uuid.UUID) error {
+	delete(r.definitions, id)
+	return nil
 }
 func (r *fakeBackupRepo) UpsertBackupRun(_ context.Context, run *domain.BackupRun) error {
 	cp := *run

@@ -57,13 +57,22 @@
       "given": "backup implementation slices consume backup Nostr events",
       "when": "they allocate command, result, status, observation, read-model, or attestation kinds",
       "then": "they use the documented backup namespace: commands 38400-38409, terminal results 38410-38419, status/observations 6981-6984, replaceable read models 31991-31999, and attestations 31310-31311"
+    },
+    {
+      "id": "AC-BACKUP-009",
+      "title": "Backup definitions are the operator-facing registry abstraction",
+      "given": "an operator defines fleet backup intent",
+      "when": "the intent is persisted in Bahia registry state",
+      "then": "a BackupDefinition composes repository, policy, recipe, schedule metadata, tenant/environment/owner scope, approval policy, restore target rules, executor targeting fields, labels/grouping, and audit fields without implementing execution handlers in this slice"
     }
   ],
   "coverage_notes": [
     "The U4-1 docs/protocol slice resolves the namespace ambiguity; backup-run, restore, and retention slices now wire the relevant Nostr command/status/result/read-model contracts into reactor, responder, projector, and app composition.",
     "Restore request and approval events 38402/38403 use the existing reactor validation/dedup/authorization/EOSE/CLOSED/AUTH path; required approval gates adapter execution and BackupRestoreState 31998 is projected.",
     "Retention enforcement event 38404 uses backend-native adapters, publishes progress as BackupObservation 6984 and terminal BackupRetentionResult 38414, and intentionally does not add a retention execution read model.",
-    "The allocated namespace avoids the known collisions: 31200 remains artifact signature attestation, and 38395/38396 remain AI/ML terminal result kinds."
+    "The allocated namespace avoids the known collisions: 31200 remains artifact signature attestation, and 38395/38396 remain AI/ML terminal result kinds.",
+    "BackupDefinition domain model and backup_definitions migration added for bahia-gbo2; handlers, MCP, UI, scheduling execution, and executor placement remain tracked in dependent Beads."
   ],
-  "unresolved_questions": []
+  "unresolved_questions": [],
+  "coverage_summary": {}
 }

@@ -29,6 +29,7 @@ func newPgBackupControlPlaneRepositoryWithDB(db pgQueryer) *PgBackupControlPlane
 const backupRecipeColumns = `id, name, version, backend, repository_id, policy_id, target_ref, include_paths, exclude_paths, verification_mode, metadata, created_at, updated_at`
 const backupPolicyColumns = `id, name, require_verification, verification_mode, metadata, created_at, updated_at`
 const backupRepositoryColumns = `id, name, backend, repository_uri, credential_profile, metadata, created_at, updated_at`
+const backupDefinitionColumns = `id, name, repository_id, repository_name, policy_id, policy_name, recipe_id, recipe_name, recipe_version, schedule_expression, schedule_enabled, schedule_jitter_window, tenant_id, tenant_name, environment_id, environment_name, owner_pubkey, requires_approval, approval_policy, restore_target_rules, executor_labels, capability_requirements, labels, group_name, metadata, created_at, updated_at, created_by`
 const backupRunColumns = `id, recipe_id, repository_id, policy_id, requested_by, request_event_id, request_kind, request_d_tag, status, backend, target_ref, snapshot_created, snapshot_id, verification_status, publish_summary, error, metadata, started_at, finished_at, created_at, updated_at`
 const backupRestoreColumns = `id, backup_run_id, recipe_id, repository_id, policy_id, snapshot_id, restore_target_ref, requested_by, request_event_id, request_kind, request_d_tag, approval_status, approval_event_id, approved_by, approved_at, approval_message, status, backend, verification_status, evidence, publish_summary, error, metadata, started_at, finished_at, created_at, updated_at`
 const backupRetentionRunColumns = `id, repository_id, policy_id, requested_by, request_event_id, request_kind, request_d_tag, status, backend, dry_run, evidence, publish_summary, error, metadata, started_at, finished_at, created_at, updated_at`
@@ -185,6 +186,86 @@ func (r *PgBackupControlPlaneRepository) ListBackupRepositories(ctx context.Cont
 	}
 	defer rows.Close()
 	return scanBackupRepositoryRows(rows)
+}
+
+func (r *PgBackupControlPlaneRepository) UpsertBackupDefinition(ctx context.Context, definition *domain.BackupDefinition) error {
+	if err := domain.ValidateBackupDefinition(definition); err != nil {
+		return err
+	}
+	if definition.ID == uuid.Nil {
+		definition.ID = uuid.New()
+	}
+	setBackupTimes(&definition.CreatedAt, &definition.UpdatedAt)
+	restoreTargetRulesJSON, executorLabelsJSON, capabilityRequirementsJSON, labelsJSON, metadataJSON, err := marshalBackupDefinitionJSON(definition)
+	if err != nil {
+		return err
+	}
+	_, err = r.pool.Exec(ctx, `
+		INSERT INTO backup_definitions (`+backupDefinitionColumns+`)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,COALESCE($20, '{}'::jsonb),COALESCE($21, '[]'::jsonb),COALESCE($22, '[]'::jsonb),COALESCE($23, '{}'::jsonb),$24,COALESCE($25, '{}'::jsonb),$26,$27,$28)
+		ON CONFLICT (id) DO UPDATE SET
+			name = EXCLUDED.name,
+			repository_id = EXCLUDED.repository_id,
+			repository_name = EXCLUDED.repository_name,
+			policy_id = EXCLUDED.policy_id,
+			policy_name = EXCLUDED.policy_name,
+			recipe_id = EXCLUDED.recipe_id,
+			recipe_name = EXCLUDED.recipe_name,
+			recipe_version = EXCLUDED.recipe_version,
+			schedule_expression = EXCLUDED.schedule_expression,
+			schedule_enabled = EXCLUDED.schedule_enabled,
+			schedule_jitter_window = EXCLUDED.schedule_jitter_window,
+			tenant_id = EXCLUDED.tenant_id,
+			tenant_name = EXCLUDED.tenant_name,
+			environment_id = EXCLUDED.environment_id,
+			environment_name = EXCLUDED.environment_name,
+			owner_pubkey = EXCLUDED.owner_pubkey,
+			requires_approval = EXCLUDED.requires_approval,
+			approval_policy = EXCLUDED.approval_policy,
+			restore_target_rules = EXCLUDED.restore_target_rules,
+			executor_labels = EXCLUDED.executor_labels,
+			capability_requirements = EXCLUDED.capability_requirements,
+			labels = EXCLUDED.labels,
+			group_name = EXCLUDED.group_name,
+			metadata = EXCLUDED.metadata,
+			updated_at = EXCLUDED.updated_at
+	`, definition.ID, definition.Name, definition.RepositoryID, definition.RepositoryName, definition.PolicyID, definition.PolicyName, definition.RecipeID, definition.RecipeName,
+		definition.RecipeVersion, definition.ScheduleExpression, definition.ScheduleEnabled, definition.ScheduleJitterWindow, uuidPtrArg(definition.TenantID), definition.TenantName,
+		uuidPtrArg(definition.EnvironmentID), definition.EnvironmentName, definition.OwnerPubkey, definition.RequiresApproval, definition.ApprovalPolicy, restoreTargetRulesJSON,
+		executorLabelsJSON, capabilityRequirementsJSON, labelsJSON, definition.Group, metadataJSON, definition.CreatedAt, definition.UpdatedAt, definition.CreatedBy)
+	if err != nil {
+		return fmt.Errorf("upserting backup definition: %w", err)
+	}
+	return nil
+}
+
+func (r *PgBackupControlPlaneRepository) GetBackupDefinition(ctx context.Context, id uuid.UUID) (*domain.BackupDefinition, error) {
+	return r.scanBackupDefinition(r.pool.QueryRow(ctx, `SELECT `+backupDefinitionColumns+` FROM backup_definitions WHERE id = $1`, id))
+}
+
+func (r *PgBackupControlPlaneRepository) GetBackupDefinitionByName(ctx context.Context, name string) (*domain.BackupDefinition, error) {
+	return r.scanBackupDefinition(r.pool.QueryRow(ctx, `SELECT `+backupDefinitionColumns+` FROM backup_definitions WHERE name = $1`, strings.TrimSpace(name)))
+}
+
+func (r *PgBackupControlPlaneRepository) ListBackupDefinitions(ctx context.Context, limit, offset int) ([]domain.BackupDefinition, error) {
+	limit, offset = backupLimitOffset(limit, offset)
+	rows, err := r.pool.Query(ctx, `SELECT `+backupDefinitionColumns+` FROM backup_definitions ORDER BY name ASC LIMIT $1 OFFSET $2`, limit, offset)
+	if err != nil {
+		return nil, fmt.Errorf("listing backup definitions: %w", err)
+	}
+	defer rows.Close()
+	return scanBackupDefinitionRows(rows)
+}
+
+func (r *PgBackupControlPlaneRepository) DeleteBackupDefinition(ctx context.Context, id uuid.UUID) error {
+	cmd, err := r.pool.Exec(ctx, `DELETE FROM backup_definitions WHERE id = $1`, id)
+	if err != nil {
+		return fmt.Errorf("deleting backup definition: %w", err)
+	}
+	if cmd.RowsAffected() == 0 {
+		return fmt.Errorf("deleting backup definition %s: %w", id, ErrNotFound)
+	}
+	return nil
 }
 
 func (r *PgBackupControlPlaneRepository) UpsertBackupRun(ctx context.Context, run *domain.BackupRun) error {
@@ -702,6 +783,17 @@ func (r *PgBackupControlPlaneRepository) scanBackupRepository(row pgx.Row) (*dom
 	return repo, nil
 }
 
+func (r *PgBackupControlPlaneRepository) scanBackupDefinition(row pgx.Row) (*domain.BackupDefinition, error) {
+	definition, err := scanBackupDefinition(row)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("scanning backup definition: %w", err)
+	}
+	return definition, nil
+}
+
 func (r *PgBackupControlPlaneRepository) scanBackupRun(row pgx.Row) (*domain.BackupRun, error) {
 	run, err := scanBackupRun(row)
 	if err != nil {
@@ -826,6 +918,49 @@ func scanBackupRepositoryRows(rows pgx.Rows) ([]domain.BackupRepository, error) 
 	return out, rows.Err()
 }
 
+func scanBackupDefinition(row pgx.Row) (*domain.BackupDefinition, error) {
+	definition := &domain.BackupDefinition{}
+	var tenantID, environmentID pgtype.UUID
+	var restoreTargetRulesJSON, executorLabelsJSON, capabilityRequirementsJSON, labelsJSON, metadataJSON []byte
+	if err := row.Scan(&definition.ID, &definition.Name, &definition.RepositoryID, &definition.RepositoryName, &definition.PolicyID, &definition.PolicyName,
+		&definition.RecipeID, &definition.RecipeName, &definition.RecipeVersion, &definition.ScheduleExpression, &definition.ScheduleEnabled,
+		&definition.ScheduleJitterWindow, &tenantID, &definition.TenantName, &environmentID, &definition.EnvironmentName, &definition.OwnerPubkey,
+		&definition.RequiresApproval, &definition.ApprovalPolicy, &restoreTargetRulesJSON, &executorLabelsJSON, &capabilityRequirementsJSON,
+		&labelsJSON, &definition.Group, &metadataJSON, &definition.CreatedAt, &definition.UpdatedAt, &definition.CreatedBy); err != nil {
+		return nil, err
+	}
+	definition.TenantID = uuidPtrFromPG(tenantID)
+	definition.EnvironmentID = uuidPtrFromPG(environmentID)
+	if err := unmarshalJSON(restoreTargetRulesJSON, &definition.RestoreTargetRules, "backup definition restore target rules"); err != nil {
+		return nil, err
+	}
+	if err := unmarshalJSON(executorLabelsJSON, &definition.ExecutorLabels, "backup definition executor labels"); err != nil {
+		return nil, err
+	}
+	if err := unmarshalJSON(capabilityRequirementsJSON, &definition.CapabilityRequirements, "backup definition capability requirements"); err != nil {
+		return nil, err
+	}
+	if err := unmarshalJSON(labelsJSON, &definition.Labels, "backup definition labels"); err != nil {
+		return nil, err
+	}
+	if err := unmarshalJSON(metadataJSON, &definition.Metadata, "backup definition metadata"); err != nil {
+		return nil, err
+	}
+	return definition, nil
+}
+
+func scanBackupDefinitionRows(rows pgx.Rows) ([]domain.BackupDefinition, error) {
+	out := make([]domain.BackupDefinition, 0)
+	for rows.Next() {
+		definition, err := scanBackupDefinition(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scanning backup definition row: %w", err)
+		}
+		out = append(out, *definition)
+	}
+	return out, rows.Err()
+}
+
 func scanBackupRun(row pgx.Row) (*domain.BackupRun, error) {
 	run := &domain.BackupRun{}
 	var policyID pgtype.UUID
@@ -941,6 +1076,30 @@ func scanBackupVerification(row pgx.Row) (*domain.BackupVerificationRecord, erro
 	return record, nil
 }
 
+func marshalBackupDefinitionJSON(definition *domain.BackupDefinition) ([]byte, []byte, []byte, []byte, []byte, error) {
+	restoreTargetRulesJSON, err := marshalJSONObject(definition.RestoreTargetRules, "backup definition restore target rules")
+	if err != nil {
+		return nil, nil, nil, nil, nil, err
+	}
+	executorLabelsJSON, err := marshalJSONArray(definition.ExecutorLabels, "backup definition executor labels")
+	if err != nil {
+		return nil, nil, nil, nil, nil, err
+	}
+	capabilityRequirementsJSON, err := marshalJSONArray(definition.CapabilityRequirements, "backup definition capability requirements")
+	if err != nil {
+		return nil, nil, nil, nil, nil, err
+	}
+	labelsJSON, err := marshalJSONObject(definition.Labels, "backup definition labels")
+	if err != nil {
+		return nil, nil, nil, nil, nil, err
+	}
+	metadataJSON, err := marshalJSONObject(definition.Metadata, "backup definition metadata")
+	if err != nil {
+		return nil, nil, nil, nil, nil, err
+	}
+	return restoreTargetRulesJSON, executorLabelsJSON, capabilityRequirementsJSON, labelsJSON, metadataJSON, nil
+}
+
 func marshalBackupRunJSON(run *domain.BackupRun) ([]byte, []byte, error) {
 	publishJSON, err := marshalJSONObject(run.PublishSummary, "backup run publish summary")
 	if err != nil {
@@ -988,6 +1147,13 @@ func marshalBackupRetentionRunJSON(run *domain.BackupRetentionRun) ([]byte, []by
 func marshalJSONObject(value map[string]any, fieldName string) ([]byte, error) {
 	if value == nil {
 		return []byte(`{}`), nil
+	}
+	return marshalJSON(value, fieldName)
+}
+
+func marshalJSONArray(value []string, fieldName string) ([]byte, error) {
+	if value == nil {
+		return []byte(`[]`), nil
 	}
 	return marshalJSON(value, fieldName)
 }

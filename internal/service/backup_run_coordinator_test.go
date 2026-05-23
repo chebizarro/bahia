@@ -198,6 +198,7 @@ type memoryBackupControlPlaneRepository struct {
 	recipes       map[uuid.UUID]*domain.BackupRecipe
 	policies      map[uuid.UUID]*domain.BackupPolicy
 	repositories  map[uuid.UUID]*domain.BackupRepository
+	definitions   map[uuid.UUID]*domain.BackupDefinition
 	runs          map[uuid.UUID]*domain.BackupRun
 	restores      map[uuid.UUID]*domain.BackupRestoreRun
 	retentions    map[uuid.UUID]*domain.BackupRetentionRun
@@ -205,7 +206,7 @@ type memoryBackupControlPlaneRepository struct {
 }
 
 func newMemoryBackupControlPlaneRepository() *memoryBackupControlPlaneRepository {
-	return &memoryBackupControlPlaneRepository{recipes: map[uuid.UUID]*domain.BackupRecipe{}, policies: map[uuid.UUID]*domain.BackupPolicy{}, repositories: map[uuid.UUID]*domain.BackupRepository{}, runs: map[uuid.UUID]*domain.BackupRun{}, restores: map[uuid.UUID]*domain.BackupRestoreRun{}, retentions: map[uuid.UUID]*domain.BackupRetentionRun{}, verifications: map[uuid.UUID]*domain.BackupVerificationRecord{}}
+	return &memoryBackupControlPlaneRepository{recipes: map[uuid.UUID]*domain.BackupRecipe{}, policies: map[uuid.UUID]*domain.BackupPolicy{}, repositories: map[uuid.UUID]*domain.BackupRepository{}, definitions: map[uuid.UUID]*domain.BackupDefinition{}, runs: map[uuid.UUID]*domain.BackupRun{}, restores: map[uuid.UUID]*domain.BackupRestoreRun{}, retentions: map[uuid.UUID]*domain.BackupRetentionRun{}, verifications: map[uuid.UUID]*domain.BackupVerificationRecord{}}
 }
 
 func (r *memoryBackupControlPlaneRepository) UpsertBackupRecipe(_ context.Context, recipe *domain.BackupRecipe) error {
@@ -320,6 +321,50 @@ func (r *memoryBackupControlPlaneRepository) GetBackupRepositoryByName(_ context
 }
 func (r *memoryBackupControlPlaneRepository) ListBackupRepositories(context.Context, int, int) ([]domain.BackupRepository, error) {
 	return nil, nil
+}
+
+func (r *memoryBackupControlPlaneRepository) UpsertBackupDefinition(_ context.Context, definition *domain.BackupDefinition) error {
+	if err := domain.ValidateBackupDefinition(definition); err != nil {
+		return err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if definition.ID == uuid.Nil {
+		definition.ID = uuid.New()
+	}
+	setBackupTestTimes(&definition.CreatedAt, &definition.UpdatedAt)
+	cp := *definition
+	r.definitions[cp.ID] = &cp
+	return nil
+}
+func (r *memoryBackupControlPlaneRepository) GetBackupDefinition(_ context.Context, id uuid.UUID) (*domain.BackupDefinition, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if definition := r.definitions[id]; definition != nil {
+		cp := *definition
+		return &cp, nil
+	}
+	return nil, nil
+}
+func (r *memoryBackupControlPlaneRepository) GetBackupDefinitionByName(_ context.Context, name string) (*domain.BackupDefinition, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, definition := range r.definitions {
+		if definition.Name == name {
+			cp := *definition
+			return &cp, nil
+		}
+	}
+	return nil, nil
+}
+func (r *memoryBackupControlPlaneRepository) ListBackupDefinitions(context.Context, int, int) ([]domain.BackupDefinition, error) {
+	return nil, nil
+}
+func (r *memoryBackupControlPlaneRepository) DeleteBackupDefinition(_ context.Context, id uuid.UUID) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.definitions, id)
+	return nil
 }
 
 func (r *memoryBackupControlPlaneRepository) UpsertBackupRun(_ context.Context, run *domain.BackupRun) error {

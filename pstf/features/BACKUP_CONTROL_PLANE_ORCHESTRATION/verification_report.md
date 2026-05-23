@@ -49,3 +49,45 @@ The restore/retention integration slice is verified: Bahia accepts authorized No
 ## Remaining work tracked outside this slice
 
 No remaining restore/retention integration gaps are tracked for `bahia-s0ef`. Parent issue closure depends on the full suite and Beads parent verification.
+
+---
+
+## 2026-05-23 — BackupDefinition domain/repository slice (`bahia-gbo2`)
+
+### Evidence gathered
+
+- `internal/domain/backup.go` defines `BackupDefinition` as the operator-facing registry object composing repository, policy, recipe, schedule metadata, tenant/environment/owner scope, approval policy, restore target rules, executor targeting fields, labels/grouping, metadata, and audit fields.
+- `internal/db/migrations/000030_backup_definitions.up.sql` creates the `backup_definitions` table with foreign keys to backup repositories, policies, recipes, organizations, and environments plus lookup indexes for registry, scope, scheduling, labels, and executor targeting queries.
+- `internal/repository/pg_backup_controlplane.go` adds BackupDefinition CRUD methods and JSON/nullable UUID scanning without introducing handlers, MCP tools, UI, scheduler dispatch, or executor placement logic.
+
+### Verification performed
+
+- `go test ./internal/domain ./internal/repository ./internal/service`
+
+### Test evidence
+
+- `internal/domain/backup_test.go`
+  - validates required composed references and `created_by` audit provenance
+  - validates string trimming for operator-facing fields
+- `internal/repository/pg_backup_controlplane_test.go`
+  - validates BackupDefinition upsert arguments
+  - validates scan of tenant/environment UUIDs and JSON fields for restore rules, executor labels, capability requirements, labels, and metadata
+  - validates missing delete returns `repository.ErrNotFound`
+
+### Current result
+
+`bahia-gbo2` is verified for the requested domain model, migration, repository interface, and PostgreSQL repository CRUD scope. Command handlers, MCP tools, UI, scheduler execution, and executor placement behavior remain outside this bead and are tracked by dependent Beads.
+
+### Review follow-up
+
+Oracle review findings were addressed before closeout:
+
+- nil executor label/capability slices now marshal as JSON arrays (`[]`) instead of JSON `null`
+- `created_by` is immutable across `ON CONFLICT` updates
+- validation rejects enabled schedules without a schedule expression and approval-required definitions without an approval policy
+
+### Full-suite note
+
+- `go test ./...` was run on 2026-05-23 after the targeted verification. The BackupDefinition-touched packages passed, but the full suite failed in unrelated packages:
+  - `internal/api/handlers`: `continuity_test.go` still calls `NewContinuityHandler` with the old one-argument constructor; tracked as `bahia-b6h3`.
+  - `internal/config`: `TestDNSValidationEnabled/unsupported_backend_type` expects an unsupported backend error, but current validation returns a missing coredns `etcd_endpoints` error first; tracked as `bahia-za2w`.
