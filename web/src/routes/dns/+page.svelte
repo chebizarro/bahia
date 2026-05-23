@@ -1,16 +1,43 @@
 <script>
   import { onMount } from 'svelte';
-  import { connect, disconnect, dnsState } from '$lib/stores/dns.svelte.js';
+  import { authState } from '$lib/stores/auth.js';
+  import { controlplaneConnection } from '$lib/stores/controlplane.svelte.js';
+  import {
+    applyDNSPolicy,
+    connect,
+    createDNSZone,
+    disconnect,
+    dnsState,
+    overrideDNSRecord,
+    remediateDNSDrift
+  } from '$lib/stores/dns.svelte.js';
+  import { DNS_COMMANDS } from '$lib/nostr/dns-controlplane.js';
+  import {
+    DNS_CONTROL_FORMS,
+    buildDNSCommandPayload,
+    commandRunView,
+    initialDNSCommandForms,
+    validateDNSCommandForm
+  } from './page-model.js';
+  import { bootstrapFipsMesh, disconnectFipsMesh, fipsMeshState, meshNodes } from '$lib/stores/fips-mesh.svelte.js';
+  import FipsMeshPanel from './FipsMeshPanel.svelte';
 
   let { data } = $props();
   let activeTab = $state('zones');
   let selectedEndpoint = $state(null);
   let filters = $state({ zone: '', environment: '', capability: '', runtime: '', health: '' });
   let filterError = $state(null);
+  let commandForms = $state(initialDNSCommandForms());
+  let commandFormErrors = $state({});
+  let submittingCommand = $state(null);
 
   onMount(() => {
     connect(data?.relayUrls || data?.relayUrl || [], data?.servicePubkey);
-    return () => disconnect();
+    bootstrapFipsMesh({ relays: data?.relayUrls || data?.relayUrl || [], servicePubkey: data?.servicePubkey });
+    return () => {
+      disconnect();
+      disconnectFipsMesh();
+    };
   });
 
   const zones = $derived(dnsState.zones || []);
@@ -18,8 +45,12 @@
   const endpoints = $derived(allEndpoints.filter((endpoint) => matchesEndpointFilters(endpoint)));
   const driftEvents = $derived(dnsState.driftEvents || []);
   const policies = $derived(dnsState.policies || []);
+  const meshNodeCount = $derived((meshNodes || []).length);
   const endpointCount = $derived(endpoints.length);
   const unhealthyCount = $derived(endpoints.filter((endpoint) => healthTone(valueOf(endpoint, ['health', 'status', 'health_status'])) !== 'healthy').length);
+  const operatorReady = $derived(authState.status === 'authenticated' && Boolean(authState.pubkey));
+  const commandDisabledReason = $derived(operatorReady ? '' : 'Authenticate with NIP-07 or NIP-46 before signing DNS commands.');
+  const recentCommandRuns = $derived(dnsState.commandRuns || []);
 
   const zoneOptions = $derived(uniqueValues(zones, ['name', 'zone', 'zone_name']));
   const environmentOptions = $derived(uniqueValues(allEndpoints, ['environment', 'env']));
@@ -97,6 +128,36 @@
     selectedEndpoint = null;
     filterError = null;
   }
+
+  const commandStarters = {
+    [DNS_COMMANDS.ZONE_CREATE]: createDNSZone,
+    [DNS_COMMANDS.POLICY_APPLY]: applyDNSPolicy,
+    [DNS_COMMANDS.RECORD_OVERRIDE]: overrideDNSRecord,
+    [DNS_COMMANDS.DRIFT_REMEDIATE]: remediateDNSDrift
+  };
+
+  async function submitDNSCommand(command) {
+    commandFormErrors = { ...commandFormErrors, [command]: [] };
+    const validation = validateDNSCommandForm(command, commandForms[command]);
+    if (!validation.valid) {
+      commandFormErrors = { ...commandFormErrors, [command]: validation.errors };
+      return;
+    }
+    if (!operatorReady) {
+      commandFormErrors = { ...commandFormErrors, [command]: [commandDisabledReason] };
+      return;
+    }
+
+    submittingCommand = command;
+    try {
+      const payload = buildDNSCommandPayload(command, commandForms[command]);
+      await commandStarters[command](payload);
+    } catch (error) {
+      commandFormErrors = { ...commandFormErrors, [command]: [error?.message || String(error)] };
+    } finally {
+      submittingCommand = null;
+    }
+  }
 </script>
 
 <div class="page">
@@ -109,7 +170,7 @@
     <div class="summary-card" aria-label="DNS summary">
       <span class="summary-number">{zones.length}</span>
       <span class="summary-label">Zones tracked</span>
-      <span class:attention={unhealthyCount > 0} class="summary-note">{endpointCount} endpoint{endpointCount === 1 ? '' : 's'} · {unhealthyCount} attention</span>
+      <span class:attention={unhealthyCount > 0} class="summary-note">{endpointCount} endpoint{endpointCount === 1 ? '' : 's'} · {unhealthyCount} attention · {meshNodeCount} mesh node{meshNodeCount === 1 ? '' : 's'}</span>
     </div>
   </div>
 
@@ -125,11 +186,107 @@
     <span>{dnsState.connection.relays.length} relay{dnsState.connection.relays.length === 1 ? '' : 's'} · {dnsState.connection.eoseRelays.length} EOSE</span>
   </div>
 
+  <section class="panel command-panel" aria-label="DNS Nostr command controls">
+    <div class="panel-header">
+      <div>
+        <h2>Signed DNS control-plane commands</h2>
+        <p>Operator actions are signed Nostr events and complete only after explicit Bahia result events.</p>
+      </div>
+      <span class={`badge ${operatorReady ? 'healthy' : 'critical'}`}>{operatorReady ? 'operator ready' : 'auth required'}</span>
+    </div>
+
+    <div class="operator-grid" aria-label="DNS operator readiness">
+      <div><strong>Operator</strong><span>{authState.pubkey || 'Not authenticated'}</span></div>
+      <div><strong>Signer</strong><span>{authState.authMethod || authState.status}</span></div>
+      <div><strong>Command relays</strong><span>{controlplaneConnection.relays.length || dnsState.connection.relays.length} configured</span></div>
+      <div><strong>Control plane</strong><span>{controlplaneConnection.status}</span></div>
+    </div>
+    {#if commandDisabledReason}
+      <div class="alert compact" role="status"><strong>Signing unavailable.</strong><span>{commandDisabledReason}</span></div>
+    {/if}
+
+    <div class="command-grid">
+      <form class="command-card" onsubmit={(event) => { event.preventDefault(); submitDNSCommand(DNS_COMMANDS.ZONE_CREATE); }}>
+        <h3>{DNS_CONTROL_FORMS[DNS_COMMANDS.ZONE_CREATE].title}</h3>
+        <p>{DNS_CONTROL_FORMS[DNS_COMMANDS.ZONE_CREATE].description}</p>
+        <label>Zone<input bind:value={commandForms[DNS_COMMANDS.ZONE_CREATE].zone} autocomplete="off" /></label>
+        <label>Backend<input bind:value={commandForms[DNS_COMMANDS.ZONE_CREATE].backend} autocomplete="off" /></label>
+        <label>Visibility<select bind:value={commandForms[DNS_COMMANDS.ZONE_CREATE].visibility}><option value="public">Public</option><option value="private">Private</option><option value="internal">Internal</option></select></label>
+        <label class="inline"><input type="checkbox" bind:checked={commandForms[DNS_COMMANDS.ZONE_CREATE].reconcile} /> Reconcile existing zone state</label>
+        <label>Idempotency key<input bind:value={commandForms[DNS_COMMANDS.ZONE_CREATE].idempotencyKey} autocomplete="off" /></label>
+        {#if commandFormErrors[DNS_COMMANDS.ZONE_CREATE]?.length}<ul class="form-errors">{#each commandFormErrors[DNS_COMMANDS.ZONE_CREATE] as error}<li>{error}</li>{/each}</ul>{/if}
+        <button type="submit" disabled={!operatorReady || submittingCommand === DNS_COMMANDS.ZONE_CREATE}>{submittingCommand === DNS_COMMANDS.ZONE_CREATE ? 'Signing…' : DNS_CONTROL_FORMS[DNS_COMMANDS.ZONE_CREATE].submitLabel}</button>
+      </form>
+
+      <form class="command-card" onsubmit={(event) => { event.preventDefault(); submitDNSCommand(DNS_COMMANDS.POLICY_APPLY); }}>
+        <h3>{DNS_CONTROL_FORMS[DNS_COMMANDS.POLICY_APPLY].title}</h3>
+        <p>{DNS_CONTROL_FORMS[DNS_COMMANDS.POLICY_APPLY].description}</p>
+        <label>Policy id<input bind:value={commandForms[DNS_COMMANDS.POLICY_APPLY].policyId} autocomplete="off" /></label>
+        <label>Zone scope<input bind:value={commandForms[DNS_COMMANDS.POLICY_APPLY].zone} autocomplete="off" /></label>
+        <label>Environment<input bind:value={commandForms[DNS_COMMANDS.POLICY_APPLY].environment} autocomplete="off" /></label>
+        <label>Idempotency key<input bind:value={commandForms[DNS_COMMANDS.POLICY_APPLY].idempotencyKey} autocomplete="off" /></label>
+        {#if commandFormErrors[DNS_COMMANDS.POLICY_APPLY]?.length}<ul class="form-errors">{#each commandFormErrors[DNS_COMMANDS.POLICY_APPLY] as error}<li>{error}</li>{/each}</ul>{/if}
+        <button type="submit" disabled={!operatorReady || submittingCommand === DNS_COMMANDS.POLICY_APPLY}>{submittingCommand === DNS_COMMANDS.POLICY_APPLY ? 'Signing…' : DNS_CONTROL_FORMS[DNS_COMMANDS.POLICY_APPLY].submitLabel}</button>
+      </form>
+
+      <form class="command-card" onsubmit={(event) => { event.preventDefault(); submitDNSCommand(DNS_COMMANDS.RECORD_OVERRIDE); }}>
+        <h3>{DNS_CONTROL_FORMS[DNS_COMMANDS.RECORD_OVERRIDE].title}</h3>
+        <p>{DNS_CONTROL_FORMS[DNS_COMMANDS.RECORD_OVERRIDE].description}</p>
+        <label>Zone<input bind:value={commandForms[DNS_COMMANDS.RECORD_OVERRIDE].zone} autocomplete="off" /></label>
+        <label>Record name<input bind:value={commandForms[DNS_COMMANDS.RECORD_OVERRIDE].recordName} autocomplete="off" /></label>
+        <label>Record type<input bind:value={commandForms[DNS_COMMANDS.RECORD_OVERRIDE].recordType} autocomplete="off" /></label>
+        <label>Value<input bind:value={commandForms[DNS_COMMANDS.RECORD_OVERRIDE].value} autocomplete="off" /></label>
+        <label>TTL<input inputmode="numeric" bind:value={commandForms[DNS_COMMANDS.RECORD_OVERRIDE].ttl} autocomplete="off" /></label>
+        <label>Reason<textarea bind:value={commandForms[DNS_COMMANDS.RECORD_OVERRIDE].reason}></textarea></label>
+        <label>Idempotency key<input bind:value={commandForms[DNS_COMMANDS.RECORD_OVERRIDE].idempotencyKey} autocomplete="off" /></label>
+        {#if commandFormErrors[DNS_COMMANDS.RECORD_OVERRIDE]?.length}<ul class="form-errors">{#each commandFormErrors[DNS_COMMANDS.RECORD_OVERRIDE] as error}<li>{error}</li>{/each}</ul>{/if}
+        <button type="submit" disabled={!operatorReady || submittingCommand === DNS_COMMANDS.RECORD_OVERRIDE}>{submittingCommand === DNS_COMMANDS.RECORD_OVERRIDE ? 'Signing…' : DNS_CONTROL_FORMS[DNS_COMMANDS.RECORD_OVERRIDE].submitLabel}</button>
+      </form>
+
+      <form class="command-card" onsubmit={(event) => { event.preventDefault(); submitDNSCommand(DNS_COMMANDS.DRIFT_REMEDIATE); }}>
+        <h3>{DNS_CONTROL_FORMS[DNS_COMMANDS.DRIFT_REMEDIATE].title}</h3>
+        <p>{DNS_CONTROL_FORMS[DNS_COMMANDS.DRIFT_REMEDIATE].description}</p>
+        <label>Zone<input bind:value={commandForms[DNS_COMMANDS.DRIFT_REMEDIATE].zone} autocomplete="off" /></label>
+        <label>FQDN<input bind:value={commandForms[DNS_COMMANDS.DRIFT_REMEDIATE].fqdn} autocomplete="off" /></label>
+        <label>Reason<textarea bind:value={commandForms[DNS_COMMANDS.DRIFT_REMEDIATE].reason}></textarea></label>
+        <label>Idempotency key<input bind:value={commandForms[DNS_COMMANDS.DRIFT_REMEDIATE].idempotencyKey} autocomplete="off" /></label>
+        {#if commandFormErrors[DNS_COMMANDS.DRIFT_REMEDIATE]?.length}<ul class="form-errors">{#each commandFormErrors[DNS_COMMANDS.DRIFT_REMEDIATE] as error}<li>{error}</li>{/each}</ul>{/if}
+        <button type="submit" disabled={!operatorReady || submittingCommand === DNS_COMMANDS.DRIFT_REMEDIATE}>{submittingCommand === DNS_COMMANDS.DRIFT_REMEDIATE ? 'Signing…' : DNS_CONTROL_FORMS[DNS_COMMANDS.DRIFT_REMEDIATE].submitLabel}</button>
+      </form>
+    </div>
+
+    <div class="runs" aria-label="DNS command run tracker">
+      <h3>Recent command runs</h3>
+      {#if recentCommandRuns.length === 0}
+        <p class="muted">No DNS command events signed in this browser session.</p>
+      {:else}
+        <ol>
+          {#each recentCommandRuns as run (run.id)}
+            {@const view = commandRunView(run)}
+            <li class="run-card">
+              <header><strong>{view.command}</strong><span class={`badge ${view.error ? 'critical' : view.phase === 'completed' ? 'healthy' : view.phase === 'failed' || view.phase === 'rejected' || view.phase === 'error' ? 'critical' : 'unknown'}`}>{view.phase}</span></header>
+              <dl>
+                <div><dt>Request event id</dt><dd><code>{view.requestEventId || 'Pending signed event'}</code></dd></div>
+                <div><dt>Relay OK</dt><dd>{view.okSummary}</dd></div>
+              </dl>
+              {#if view.statusLines.length}
+                <div class="run-section"><strong>Status progress</strong><ul>{#each view.statusLines as line}<li>{line}</li>{/each}</ul></div>
+              {/if}
+              {#if view.resultLine}<p class="result-line"><strong>Result:</strong> {view.resultLine}</p>{/if}
+              {#if view.error}<p class="error-line"><strong>Error:</strong> {view.error}</p>{/if}
+            </li>
+          {/each}
+        </ol>
+      {/if}
+    </div>
+  </section>
+
   <nav class="tabs" aria-label="DNS views">
     <button type="button" class:active={activeTab === 'zones'} onclick={() => (activeTab = 'zones')}>Zones</button>
     <button type="button" class:active={activeTab === 'endpoints'} onclick={() => (activeTab = 'endpoints')}>Endpoints</button>
     <button type="button" class:active={activeTab === 'drift'} onclick={() => (activeTab = 'drift')}>Drift</button>
     <button type="button" class:active={activeTab === 'policies'} onclick={() => (activeTab = 'policies')}>Policies</button>
+    <button type="button" class:active={activeTab === 'mesh'} onclick={() => (activeTab = 'mesh')}>FIPS/Mesh</button>
   </nav>
 
   {#if activeTab === 'zones'}
@@ -225,7 +382,7 @@
         </ol>
       {/if}
     </section>
-  {:else}
+  {:else if activeTab === 'policies'}
     <section class="panel" aria-label="DNS policies">
       <div class="panel-header"><h2>Policies</h2><span>{policies.length} active</span></div>
       {#if policies.length === 0 && !dnsState.error.subscription}
@@ -241,6 +398,8 @@
         </div>
       {/if}
     </section>
+  {:else}
+    <FipsMeshPanel state={fipsMeshState} nodes={meshNodes} />
   {/if}
 </div>
 
@@ -262,6 +421,27 @@
   .tabs button, .filters button { border: 1px solid var(--border-color); border-radius: 999px; padding: 0.55rem 0.9rem; background: var(--card-bg); color: var(--text-primary); cursor: pointer; font-weight: 700; }
   .tabs button.active, .filters button { border-color: var(--primary); background: color-mix(in srgb, var(--primary) 15%, transparent); color: var(--primary); }
   .panel { padding: 1rem; display: grid; gap: 1rem; }
+  .command-panel { gap: 1.25rem; }
+  .operator-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 0.75rem; }
+  .operator-grid div, .command-card, .run-card { border: 1px solid var(--border-color); border-radius: 14px; padding: 1rem; background: color-mix(in srgb, var(--card-bg) 90%, transparent); }
+  .operator-grid div { display: grid; gap: 0.25rem; }
+  .operator-grid span, .command-card p, .muted { color: var(--text-muted); word-break: break-word; }
+  .alert.compact { padding: 0.75rem; }
+  .command-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 1rem; align-items: start; }
+  .command-card { display: grid; gap: 0.75rem; }
+  .command-card label { color: var(--text-muted); display: grid; gap: 0.35rem; font-size: 0.85rem; font-weight: 700; }
+  .command-card label.inline { display: flex; align-items: center; color: var(--text-primary); }
+  .command-card label.inline input { width: auto; }
+  .command-card button { border: 1px solid var(--primary); border-radius: 999px; padding: 0.65rem 1rem; background: color-mix(in srgb, var(--primary) 15%, transparent); color: var(--primary); cursor: pointer; font-weight: 800; }
+  .command-card button:disabled { border-color: var(--border-color); color: var(--text-muted); cursor: not-allowed; background: transparent; }
+  .form-errors { margin: 0; padding-left: 1.2rem; color: var(--error); }
+  .runs { display: grid; gap: 0.75rem; }
+  .runs ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.75rem; }
+  .run-card { display: grid; gap: 0.75rem; }
+  .run-card header { display: flex; justify-content: space-between; gap: 1rem; align-items: center; }
+  .run-section ul { margin: 0.35rem 0 0; padding-left: 1.2rem; }
+  .result-line { color: var(--success); }
+  .error-line { color: var(--error); }
   .panel-header { display: flex; justify-content: space-between; gap: 1rem; align-items: center; }
   .panel-header h2 { font-size: 1.25rem; }
   .empty-card { padding: 2rem; }
@@ -280,7 +460,8 @@
   .badge.unknown { color: var(--text-muted); background: color-mix(in srgb, var(--hover-bg) 45%, transparent); }
   .filters { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 0.75rem; align-items: end; }
   .filters label { color: var(--text-muted); display: grid; gap: 0.35rem; font-size: 0.85rem; font-weight: 700; }
-  select { width: 100%; border: 1px solid var(--border-color); border-radius: 10px; padding: 0.55rem; color: var(--text-primary); background: var(--card-bg); }
+  input, select, textarea { width: 100%; border: 1px solid var(--border-color); border-radius: 10px; padding: 0.55rem; color: var(--text-primary); background: var(--card-bg); }
+  textarea { min-height: 4.5rem; resize: vertical; }
   .filter-actions { display: flex; gap: 0.5rem; }
   .filters button.secondary { border-color: var(--border-color); background: transparent; color: var(--text-primary); }
   .endpoint-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(280px, 360px); gap: 1rem; align-items: start; }
