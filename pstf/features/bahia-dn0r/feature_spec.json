@@ -1,0 +1,43 @@
+{
+  "feature_id": "bahia-dn0r",
+  "title": "Backup web UI operator console",
+  "date": "2026-05-23",
+  "observed_behavior": {
+    "before": "web/src had no backup route, no backup read-model store collections, and no backup operator navigation.",
+    "evidence": [
+      "docs/plans/bahia-backup-control-plane-implementation-2026-05-23.md section 3 states there is no backup web UI.",
+      "internal/adapters/nostr/backup_kinds.go defines backup read-model kinds 31991-31999.",
+      "internal/adapters/nostr/projector.go publishes repository, policy, recipe, run, verification, restore, retention, and runtime observation payloads."
+    ]
+  },
+  "intended_behavior": {
+    "summary": "Operators can inspect fleet backup posture, registry objects, execution history, verification evidence, restore approvals, and retention evidence from Nostr read models without backend log or database access.",
+    "routes": [
+      "/backup",
+      "/backup/repositories",
+      "/backup/policies",
+      "/backup/recipes",
+      "/backup/definitions",
+      "/backup/runs",
+      "/backup/verifications",
+      "/backup/restores",
+      "/backup/retention",
+      "/backup/<section>/<id>"
+    ],
+    "event_semantics": "The UI consumes existing control-plane store backfill plus live Nostr subscriptions and publishes restore approval and repository probe commands through existing signer-first command helpers."
+  },
+  "scope": {
+    "included": [
+      "web/src Nostr kind constants",
+      "web/src controlplane store backup read-model collections",
+      "web/src backup dashboard and list/detail routes",
+      "web/src restore approval and repository probe command helpers",
+      "navigation link to Backup"
+    ],
+    "excluded": [
+      "Go backend changes",
+      "domain model changes",
+      "database migrations"
+    ]
+  }
+}

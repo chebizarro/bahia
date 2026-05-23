@@ -53,6 +53,15 @@ export const workerAssignments = $state([]);
 export const workerDrainStatuses = $state([]);
 export const workerEligibilityPreviews = $state([]);
 export const events = $state([]);
+export const backupRepositories = $state([]);
+export const backupPolicies = $state([]);
+export const backupRecipes = $state([]);
+export const backupDefinitions = $state([]);
+export const backupRuns = $state([]);
+export const backupVerifications = $state([]);
+export const backupRestores = $state([]);
+export const backupRetentionRuns = $state([]);
+export const backupRuntimeObservations = $state([]);
 
 // Inference state
 export const mlModels = $state([]);
@@ -91,6 +100,15 @@ const workerMap = new Map();
 const workerAssignmentMap = new Map();
 const workerDrainStatusMap = new Map();
 const workerEligibilityPreviewMap = new Map();
+const backupRepositoryMap = new Map();
+const backupPolicyMap = new Map();
+const backupRecipeMap = new Map();
+const backupDefinitionMap = new Map();
+const backupRunMap = new Map();
+const backupVerificationMap = new Map();
+const backupRestoreMap = new Map();
+const backupRetentionMap = new Map();
+const backupRuntimeObservationMap = new Map();
 const mlModelMap = new Map();
 const mlModelVersionMap = new Map();
 const mlEndpointMap = new Map();
@@ -130,6 +148,15 @@ function resetArrays() {
   workerDrainStatuses.length = 0;
   workerEligibilityPreviews.length = 0;
   events.length = 0;
+  backupRepositories.length = 0;
+  backupPolicies.length = 0;
+  backupRecipes.length = 0;
+  backupDefinitions.length = 0;
+  backupRuns.length = 0;
+  backupVerifications.length = 0;
+  backupRestores.length = 0;
+  backupRetentionRuns.length = 0;
+  backupRuntimeObservations.length = 0;
   mlModels.length = 0;
   mlModelVersions.length = 0;
   mlEndpoints.length = 0;
@@ -165,6 +192,15 @@ function refreshCollections() {
   replaceArray(workerAssignments, Array.from(workerAssignmentMap.values()).sort(sortByNameOrId));
   replaceArray(workerDrainStatuses, Array.from(workerDrainStatusMap.values()).sort(sortByNameOrId));
   replaceArray(workerEligibilityPreviews, Array.from(workerEligibilityPreviewMap.values()).sort((a, b) => String(b.updated_at || b.nostr_created_at || '').localeCompare(String(a.updated_at || a.nostr_created_at || ''))));
+  replaceArray(backupRepositories, Array.from(backupRepositoryMap.values()).sort(sortByNameOrId));
+  replaceArray(backupPolicies, Array.from(backupPolicyMap.values()).sort(sortByNameOrId));
+  replaceArray(backupRecipes, Array.from(backupRecipeMap.values()).sort(sortByNameOrId));
+  replaceArray(backupDefinitions, Array.from(backupDefinitionMap.values()).sort(sortByNameOrId));
+  replaceArray(backupRuns, Array.from(backupRunMap.values()).sort((a, b) => String(b.created_at || b.started_at || '').localeCompare(String(a.created_at || a.started_at || ''))));
+  replaceArray(backupVerifications, Array.from(backupVerificationMap.values()).sort((a, b) => String(b.created_at || b.verified_at || '').localeCompare(String(a.created_at || a.verified_at || ''))));
+  replaceArray(backupRestores, Array.from(backupRestoreMap.values()).sort((a, b) => String(b.created_at || b.started_at || '').localeCompare(String(a.created_at || a.started_at || ''))));
+  replaceArray(backupRetentionRuns, Array.from(backupRetentionMap.values()).sort((a, b) => String(b.created_at || b.started_at || '').localeCompare(String(a.created_at || a.started_at || ''))));
+  replaceArray(backupRuntimeObservations, Array.from(backupRuntimeObservationMap.values()).sort((a, b) => String(b.generated_at || b.updated_at || '').localeCompare(String(a.generated_at || a.updated_at || ''))));
   replaceArray(mlModels, Array.from(mlModelMap.values()).sort(sortByNameOrId));
   replaceArray(mlModelVersions, Array.from(mlModelVersionMap.values()).sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || ''))));
   replaceArray(mlEndpoints, Array.from(mlEndpointMap.values()).sort(sortByNameOrId));
@@ -220,6 +256,15 @@ export function resetControlplaneStore() {
   workerAssignmentMap.clear();
   workerDrainStatusMap.clear();
   workerEligibilityPreviewMap.clear();
+  backupRepositoryMap.clear();
+  backupPolicyMap.clear();
+  backupRecipeMap.clear();
+  backupDefinitionMap.clear();
+  backupRunMap.clear();
+  backupVerificationMap.clear();
+  backupRestoreMap.clear();
+  backupRetentionMap.clear();
+  backupRuntimeObservationMap.clear();
   mlModelMap.clear();
   mlModelVersionMap.clear();
   mlEndpointMap.clear();
@@ -460,6 +505,43 @@ function hasWorkerEligibilityPreviewShape(event) {
   return Boolean(content.preview_id || getTagValue(event, 'preview'));
 }
 
+function hasBackupDefinitionShape(event) {
+  if (String(getDTag(event) || '').startsWith('backup-definition:')) return true;
+  const content = parseJsonContent(event.content, {});
+  return Boolean(
+    content.repository_id ||
+    content.recipe_id ||
+    content.policy_id ||
+    content.schedule_enabled !== undefined ||
+    getTagValue(event, 'repository_id') ||
+    getTagValue(event, 'recipe_id') ||
+    getTagValue(event, 'policy_id')
+  );
+}
+
+function hasBackupPolicyShape(event) {
+  if (String(getDTag(event) || '').startsWith('backup-policy:')) return true;
+  const content = parseJsonContent(event.content, {});
+  return Boolean(
+    content.require_verification !== undefined ||
+    content.verification_mode ||
+    getTagValue(event, 'require_verification') ||
+    getTagValue(event, 'verification')
+  );
+}
+
+function hasBackupRepositoryShape(event) {
+  if (String(getDTag(event) || '').startsWith('backup-repository:')) return true;
+  const content = parseJsonContent(event.content, {});
+  return Boolean(
+    content.repository_uri ||
+    content.credential_profile ||
+    content.backend ||
+    getTagValue(event, 'repository_id') ||
+    getTagValue(event, 'backend')
+  );
+}
+
 function applyWorkerStateEvent(event) {
   const { accepted } = upsertReplaceableEvent(replaceableEvents, event);
   if (!accepted) return false;
@@ -593,19 +675,43 @@ export function applyControlplaneEvent(event) {
       changed = applyProjectedEntity(event, workerAssignmentMap, ['worker_pubkey']);
       break;
     case KINDS.BAHIA_LEGACY_WORKER_ASSIGNMENT_STATE:
-      changed = hasWorkerReadModelTag(event) ? applyProjectedEntity(event, workerAssignmentMap, ['worker_pubkey']) : false;
+      changed = hasBackupDefinitionShape(event)
+        ? applyProjectedEntity(event, backupDefinitionMap, ['id', 'definition_id'])
+        : (hasWorkerReadModelTag(event) ? applyProjectedEntity(event, workerAssignmentMap, ['worker_pubkey']) : false);
       break;
     case KINDS.BAHIA_WORKER_DRAIN_STATUS:
       changed = applyProjectedEntity(event, workerDrainStatusMap, ['worker_pubkey']);
       break;
     case KINDS.BAHIA_LEGACY_WORKER_DRAIN_STATUS:
-      changed = hasWorkerReadModelTag(event) ? applyProjectedEntity(event, workerDrainStatusMap, ['worker_pubkey']) : false;
+      changed = hasBackupPolicyShape(event)
+        ? applyProjectedEntity(event, backupPolicyMap, ['id', 'policy_id'])
+        : (hasWorkerReadModelTag(event) ? applyProjectedEntity(event, workerDrainStatusMap, ['worker_pubkey']) : false);
       break;
     case KINDS.BAHIA_WORKER_ELIGIBILITY_PREVIEW:
       changed = applyProjectedEntity(event, workerEligibilityPreviewMap, ['preview_id']);
       break;
     case KINDS.BAHIA_LEGACY_WORKER_ELIGIBILITY_PREVIEW:
-      changed = hasWorkerEligibilityPreviewShape(event) ? applyProjectedEntity(event, workerEligibilityPreviewMap, ['preview_id']) : false;
+      changed = hasBackupRepositoryShape(event)
+        ? applyProjectedEntity(event, backupRepositoryMap, ['id', 'repository_id'])
+        : (hasWorkerEligibilityPreviewShape(event) ? applyProjectedEntity(event, workerEligibilityPreviewMap, ['preview_id']) : false);
+      break;
+    case KINDS.BAHIA_BACKUP_RETENTION_REGISTRY:
+      changed = applyProjectedEntity(event, backupRetentionMap, ['id', 'retention_run_id']);
+      break;
+    case KINDS.BAHIA_BACKUP_RECIPE_REGISTRY:
+      changed = applyProjectedEntity(event, backupRecipeMap, ['id', 'recipe_id']);
+      break;
+    case KINDS.BAHIA_BACKUP_RUN_STATE:
+      changed = applyProjectedEntity(event, backupRunMap, ['id', 'run_id']);
+      break;
+    case KINDS.BAHIA_BACKUP_VERIFICATION_STATE:
+      changed = applyProjectedEntity(event, backupVerificationMap, ['id', 'verification_id', 'backup_run_id']);
+      break;
+    case KINDS.BAHIA_BACKUP_RESTORE_STATE:
+      changed = applyProjectedEntity(event, backupRestoreMap, ['id', 'restore_id']);
+      break;
+    case KINDS.BAHIA_BACKUP_RUNTIME_OBSERVATION_STATE:
+      changed = applyProjectedEntity(event, backupRuntimeObservationMap, ['id', 'scope']);
       break;
     case KINDS.BAHIA_ML_MODEL_REGISTRY:
       changed = applyProjectedEntity(event, mlModelMap, ['id', 'slug']);

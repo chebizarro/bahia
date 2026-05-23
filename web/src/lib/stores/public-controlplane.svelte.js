@@ -3,7 +3,12 @@ import { KINDS, getTagValue, parseJsonContent } from '$lib/nostr/client.js';
 import { publishRequest, awaitResult } from '$lib/nostr/controlplane-requests.js';
 import { bootstrapControlplane } from './controlplane.svelte.js';
 
-const ACTION_RESULTS = [KINDS.BAHIA_ACTION_RESULT, KINDS.BAHIA_DEPLOYMENT_RESULT, KINDS.BAHIA_SERVICE_CREATE_RESULT, KINDS.BAHIA_ENVIRONMENT_CREATE_RESULT, KINDS.BAHIA_PACKAGE_RESULT];
+const ACTION_RESULTS = [
+  KINDS.BAHIA_ACTION_RESULT,
+  KINDS.BAHIA_DEPLOYMENT_RESULT,
+  KINDS.BAHIA_SERVICE_CREATE_RESULT,
+  KINDS.BAHIA_ENVIRONMENT_CREATE_RESULT
+];
 
 export function resultContent(event) {
   return parseJsonContent(event, {});
@@ -205,6 +210,76 @@ export function deletePolicy(id) {
 export async function evaluatePolicy(payload) {
   const event = await publishCommand({ kind: KINDS.BAHIA_REQUEST_POLICY_EVALUATE, tags: [['artifact', payload.artifact_id], ['environment', payload.environment_id]], content: payload, resultKinds: [KINDS.BAHIA_ACTION_RESULT, KINDS.BAHIA_DEPLOYMENT_RESULT] });
   return resultContent(event);
+}
+
+function randomId() {
+  const cryptoApi = globalThis.crypto;
+  if (cryptoApi?.randomUUID) return cryptoApi.randomUUID();
+  if (cryptoApi?.getRandomValues) {
+    const bytes = new Uint8Array(16);
+    cryptoApi.getRandomValues(bytes);
+    return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
+  }
+  throw new Error('Browser cryptographic random ID generation is unavailable');
+}
+
+function backupIdempotencyKey(prefix, id) {
+  return `web.backup.${prefix}:${id || 'fleet'}:${randomId()}`;
+}
+
+export function probeBackupRepository(repository) {
+  const repositoryId = repository?.id || repository?.repository_id || '';
+  if (!repositoryId) throw new Error('repository id is required');
+  const idempotencyKey = backupIdempotencyKey('repository_probe', repositoryId);
+  return publishCommand({
+    kind: KINDS.BAHIA_REQUEST_BACKUP_REPOSITORY_PROBE,
+    tags: [
+      ['d', idempotencyKey],
+      ['repository_id', repositoryId],
+      ['repository', repository?.name || repositoryId]
+    ].filter((tag) => tag[1]),
+    content: {
+      repository_id: repositoryId,
+      repository: repository?.name || '',
+      idempotency_key: idempotencyKey,
+      metadata: { source: 'web.backup.repositories' }
+    },
+    resultKinds: [KINDS.BAHIA_BACKUP_REPOSITORY_PROBE_RESULT]
+  });
+}
+
+export function decideBackupRestore(restore, approved, message = '') {
+  const restoreId = restore?.id || restore?.restore_id || '';
+  if (!restoreId) throw new Error('restore id is required');
+  const decision = approved ? 'approve' : 'reject';
+  const idempotencyKey = backupIdempotencyKey(`restore_${decision}`, restoreId);
+  return publishCommand({
+    kind: KINDS.BAHIA_REQUEST_BACKUP_RESTORE_APPROVAL,
+    tags: [
+      ['d', idempotencyKey],
+      ['restore_id', restoreId],
+      ['restore', restoreId],
+      ['decision', decision]
+    ],
+    content: {
+      restore_id: restoreId,
+      approved,
+      decision,
+      message,
+      reason_code: approved ? 'operator_approved' : 'operator_rejected',
+      reason: { source: 'web.backup.restores' },
+      idempotency_key: idempotencyKey
+    },
+    resultKinds: [KINDS.BAHIA_BACKUP_RESTORE_APPROVAL_RESULT]
+  });
+}
+
+export function approveBackupRestore(restore, message = '') {
+  return decideBackupRestore(restore, true, message);
+}
+
+export function rejectBackupRestore(restore, message = '') {
+  return decideBackupRestore(restore, false, message);
 }
 
 export function navigateAfterCommand(path) {

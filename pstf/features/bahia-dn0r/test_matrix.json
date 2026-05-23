@@ -1,0 +1,33 @@
+{
+  "feature_id": "bahia-dn0r",
+  "tests": [
+    {
+      "id": "VT1",
+      "type": "code_inspection",
+      "command": "review web/src/routes/backup and web/src/lib/backup/model.js",
+      "asserts": ["AC1", "AC2", "AC3"],
+      "result": "passed"
+    },
+    {
+      "id": "VT2",
+      "type": "focused_unit",
+      "command": "pnpm vitest run --config vitest.config.js tests/unit/nav.test.js tests/unit/controlplane-store.test.js tests/unit/public-controlplane.test.js",
+      "asserts": ["AC1", "AC2", "AC3", "AC4"],
+      "result": "passed"
+    },
+    {
+      "id": "VT3",
+      "type": "command_contract",
+      "command": "review web/src/lib/stores/public-controlplane.svelte.js",
+      "asserts": ["AC4"],
+      "result": "passed"
+    },
+    {
+      "id": "VT4",
+      "type": "build",
+      "command": "pnpm build",
+      "asserts": ["AC5"],
+      "result": "passed"
+    }
+  ]
+}

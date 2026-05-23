@@ -1,0 +1,30 @@
+{
+  "feature_id": "bahia-dn0r",
+  "criteria": [
+    {
+      "id": "AC1",
+      "description": "A backup dashboard summarizes fleet posture with counts, health, pending restore approvals, recent runs, and runtime observation data.",
+      "mapped_tests": ["VT1", "VT2"]
+    },
+    {
+      "id": "AC2",
+      "description": "Operators can list and inspect backup repositories, policies, recipes, definitions, runs, verifications, restores, and retention runs.",
+      "mapped_tests": ["VT1", "VT2"]
+    },
+    {
+      "id": "AC3",
+      "description": "The UI exposes required operator fields: repository backend kind and health, recipe target, policy verification/retention governance, restore eligibility, pending approvals, evidence, and terminal reasons.",
+      "mapped_tests": ["VT1", "VT2"]
+    },
+    {
+      "id": "AC4",
+      "description": "Restore approvals and repository probes are issued as Nostr control-plane commands with d-tag idempotency keys and backup-specific result kinds.",
+      "mapped_tests": ["VT2", "VT3"]
+    },
+    {
+      "id": "AC5",
+      "description": "The production web build succeeds with the backup section included in routing and navigation.",
+      "mapped_tests": ["VT4"]
+    }
+  ]
+}
