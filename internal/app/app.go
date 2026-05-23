@@ -134,6 +134,7 @@ func New(cfg *config.Config) (*App, error) {
 
 	// Event publisher.
 	publisher := events.NewInProcessPublisher(logger)
+	continuityStatusStore := service.NewInMemoryContinuityStatusStore()
 
 	// Adapters.
 	// Sidecar-first topology uses a dedicated relay pool for Bahia's own
@@ -215,6 +216,24 @@ func New(cfg *config.Config) (*App, error) {
 	if err != nil {
 		return nil, fmt.Errorf("configuring control-plane signer: %w", err)
 	}
+	var continuityProjectionPublisher service.ContinuityNostrPublishFunc
+	if controlPlanePool != nil && controlPlaneSigner != nil {
+		continuityProjectionPublisher = func(ctx context.Context, kind int, tags nostr.Tags, content string) error {
+			ev := &nostr.Event{Kind: kind, CreatedAt: nostr.Now(), Tags: tags, Content: content}
+			if err := controlplane.SignGoNostrEvent(ctx, controlPlaneSigner, ev); err != nil {
+				return fmt.Errorf("sign continuity projection event: %w", err)
+			}
+			published, err := controlPlanePool.Publish(ctx, *ev)
+			if err != nil {
+				return fmt.Errorf("publish continuity projection event: %w", err)
+			}
+			if published == 0 {
+				return fmt.Errorf("publish continuity projection event: no relay accepted the request")
+			}
+			return nil
+		}
+	}
+	service.NewContinuityStatusProjector(publisher, continuityStatusStore, continuityProjectionPublisher, logger)
 
 	// Worker policy service for environment-specific worker selection.
 	workerPolicySvc := service.NewWorkerPolicyService(workerRepo, logger)
@@ -351,6 +370,7 @@ func New(cfg *config.Config) (*App, error) {
 			return nil, err
 		}
 		dnsProjector = reconcile.NewDNSProjector(serviceRepo, envRepo, stateRepo, obsRepo, llmRegistry, mlRegistry, workerRepo, cfg.DNS, logger)
+		dnsProjector.SetContinuityStatusReader(continuityDNSStatusReader{reader: continuityStatusStore})
 		dnsReconciler := reconcile.NewDNSReconciler(dnsProjector, dnsZones, dnsResolverBridge{resolver: dnsResolver}, cfg.DNS.ReconcileInterval, logger)
 		bgManager.Register(dnsReconciler)
 		logger.Info("DNS orchestration enabled", zap.Int("zones", len(dnsZones)), zap.Strings("backends", dnsResolver.Refs()))
@@ -687,35 +707,36 @@ func New(cfg *config.Config) (*App, error) {
 	// HTTP router.
 	handler := router.NewWithDeps(registry, logger, cfg.CORS, telemetryProvider,
 		router.RouterDeps{
-			Config:           cfg,
-			AuthMiddleware:   authMiddleware,
-			Workers:          workerRepo,
-			Builds:           buildRepo,
-			Runs:             runRepo,
-			Services:         serviceRepo,
-			Environments:     envRepo,
-			EnvStates:        stateRepo,
-			RuntimeResolver:  runtimeResolver,
-			Payments:         paymentSvc,
-			SBOMs:            sbomRepo,
-			Artifacts:        artifactRepo,
-			Policies:         policySvc,
-			Adoption:         adoptionSvc,
-			RuntimeLifecycle: runtimeLifecycleSvc,
-			Secrets:          secretRepo,
-			Encryptor:        secretEncryptor,
-			Notifications:    notifRepo,
-			Dispatcher:       notifDispatcher,
-			MCP:              mcpHandler,
-			Blossom:          blossomClient,
-			OCI:              ociHandler,
-			Orgs:             orgRepo,
-			OrgMembers:       orgMemberRepo,
-			OrgInvites:       orgInviteRepo,
-			RBAC:             rbac,
-			MLRegistry:       mlRegistry,
-			MLCommands:       mlCommandPublisher,
-			LLMRegistry:      llmRegistry,
+			Config:             cfg,
+			AuthMiddleware:     authMiddleware,
+			Workers:            workerRepo,
+			Builds:             buildRepo,
+			Runs:               runRepo,
+			Services:           serviceRepo,
+			Environments:       envRepo,
+			EnvStates:          stateRepo,
+			RuntimeResolver:    runtimeResolver,
+			Payments:           paymentSvc,
+			SBOMs:              sbomRepo,
+			Artifacts:          artifactRepo,
+			Policies:           policySvc,
+			Adoption:           adoptionSvc,
+			RuntimeLifecycle:   runtimeLifecycleSvc,
+			Secrets:            secretRepo,
+			Encryptor:          secretEncryptor,
+			Notifications:      notifRepo,
+			Dispatcher:         notifDispatcher,
+			MCP:                mcpHandler,
+			Blossom:            blossomClient,
+			OCI:                ociHandler,
+			Orgs:               orgRepo,
+			OrgMembers:         orgMemberRepo,
+			OrgInvites:         orgInviteRepo,
+			RBAC:               rbac,
+			MLRegistry:         mlRegistry,
+			MLCommands:         mlCommandPublisher,
+			LLMRegistry:        llmRegistry,
+			ContinuityStatuses: continuityStatusStore,
 		}, cfg.Auth)
 
 	httpServer := &http.Server{
@@ -794,6 +815,26 @@ func (a *App) Run() error {
 	_ = a.Logger.Sync()
 	a.Logger.Info("server stopped gracefully")
 	return nil
+}
+
+type continuityDNSStatusReader struct {
+	reader service.ContinuityStatusReader
+}
+
+func (r continuityDNSStatusReader) GetServiceContinuityStatus(serviceKey string) (*reconcile.ContinuityStatus, bool) {
+	if r.reader == nil {
+		return nil, false
+	}
+	status, ok := r.reader.GetServiceContinuityStatus(serviceKey)
+	if !ok || status == nil {
+		return nil, false
+	}
+	return &reconcile.ContinuityStatus{
+		ServiceKey:         status.ServiceKey,
+		ActiveProfile:      status.ActiveProfile,
+		OperationState:     status.OperationState,
+		ActiveWorkerPubKey: status.ActiveWorkerPubKey,
+	}, true
 }
 
 type dnsResolverBridge struct {
