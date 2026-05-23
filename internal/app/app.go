@@ -364,14 +364,22 @@ func New(cfg *config.Config) (*App, error) {
 	policySvc := service.NewPolicyService(policyRepo, sigRepo, sbomRepo, logger)
 
 	var dnsProjector *reconcile.DNSProjector
+	var dnsZones []domain.DNSZone
+	var dnsResolver *dnsAdapter.StaticResolver
+	var dnsOperator controlplane.DNSControlPlaneOperator
 	if cfg.DNS.Enabled {
-		dnsZones, dnsResolver, err := buildDNSRuntime(ctx, cfg.DNS, logger)
+		dnsZones, dnsResolver, err = buildDNSRuntime(ctx, cfg.DNS, logger)
 		if err != nil {
 			return nil, err
 		}
 		dnsProjector = reconcile.NewDNSProjector(serviceRepo, envRepo, stateRepo, obsRepo, llmRegistry, mlRegistry, workerRepo, cfg.DNS, logger)
 		dnsProjector.SetContinuityStatusReader(continuityDNSStatusReader{reader: continuityStatusStore})
 		dnsReconciler := reconcile.NewDNSReconciler(dnsProjector, dnsZones, dnsResolverBridge{resolver: dnsResolver}, cfg.DNS.ReconcileInterval, logger)
+		dnsReconciler.SetPublisher(publisher)
+		if subscriber, ok := any(dnsReconciler).(interface{ SetupSubscriptions(events.Publisher) }); ok {
+			subscriber.SetupSubscriptions(publisher)
+		}
+		dnsOperator = newDNSControlPlaneOperator(dnsReconciler, dnsZones)
 		bgManager.Register(dnsReconciler)
 		logger.Info("DNS orchestration enabled", zap.Int("zones", len(dnsZones)), zap.Strings("backends", dnsResolver.Refs()))
 	}
@@ -407,7 +415,11 @@ func New(cfg *config.Config) (*App, error) {
 		projectorOpts = append(projectorOpts, nostrAdapter.WithLLMProjectionSource(llmRegistry))
 	}
 	if dnsProjector != nil {
-		projectorOpts = append(projectorOpts, nostrAdapter.WithDNSProjectionSource(dnsProjector))
+		projectorOpts = append(projectorOpts,
+			nostrAdapter.WithDNSProjectionSource(dnsProjector),
+			nostrAdapter.WithDNSZoneProjectionSource(staticDNSZoneProjectionSource{zones: dnsZones}),
+			nostrAdapter.WithDNSBackendProjectionSource(configDNSBackendProjectionSource{backends: cfg.DNS.Backends, zones: dnsZones, resolver: dnsResolver}),
+		)
 	}
 	nostrProjector := nostrAdapter.NewProjector(cfg.Nostr, registry, controlPlanePool, nostrEventRepo, logger, projectorOpts...)
 	nostrProjector.SetupSubscriptions(publisher)
@@ -681,6 +693,9 @@ func New(cfg *config.Config) (*App, error) {
 		if assistantOrchestrator != nil {
 			reactorOpts = append(reactorOpts, controlplane.WithAssistantOrchestrator(assistantOrchestrator))
 		}
+		if dnsOperator != nil {
+			reactorOpts = append(reactorOpts, controlplane.WithDNSOperator(dnsOperator))
+		}
 		reactorOpts = append(reactorOpts, controlplane.WithWorkerRepository(workerRepo))
 		reactorOpts = appendPackageControlPlaneOptions(reactorOpts, packageRegistrySvc, packageProjection)
 		reactor := controlplane.NewReactor(reactorConfig, registry, controlPlanePool, controlPlaneSigner, logger, reactorOpts...)
@@ -852,6 +867,89 @@ func (r dnsResolverBridge) Resolve(ref string) (reconcile.DNSBackend, bool) {
 	return backend, true
 }
 
+type staticDNSZoneProjectionSource struct {
+	zones []domain.DNSZone
+}
+
+func (s staticDNSZoneProjectionSource) ListDNSZones() []domain.DNSZone {
+	return append([]domain.DNSZone(nil), s.zones...)
+}
+
+type configDNSBackendProjectionSource struct {
+	backends map[string]config.DNSBackendConfig
+	zones    []domain.DNSZone
+	resolver dnsAdapter.Resolver
+}
+
+func (s configDNSBackendProjectionSource) ListDNSBackendStates(ctx context.Context) []domain.DNSBackendState {
+	refs := make([]string, 0, len(s.backends))
+	for ref := range s.backends {
+		refs = append(refs, ref)
+	}
+	sort.Strings(refs)
+	zoneRefsByBackend := make(map[string][]string, len(refs))
+	for _, zone := range s.zones {
+		zoneRefsByBackend[zone.BackendRef] = append(zoneRefsByBackend[zone.BackendRef], zone.Name)
+	}
+	states := make([]domain.DNSBackendState, 0, len(refs))
+	now := time.Now().UTC()
+	for _, ref := range refs {
+		backendConfig := s.backends[ref]
+		backendType := domain.DNSBackendType(strings.TrimSpace(backendConfig.Type))
+		health := domain.HealthStatusUnknown
+		if s.resolver != nil {
+			if backend, ok := s.resolver.Resolve(ref); ok {
+				backendType = backend.BackendType()
+				if err := backend.Health(ctx); err != nil {
+					health = domain.HealthStatusUnhealthy
+				} else {
+					health = domain.HealthStatusHealthy
+				}
+			}
+		}
+		zoneRefs := append([]string(nil), zoneRefsByBackend[ref]...)
+		sort.Strings(zoneRefs)
+		states = append(states, domain.DNSBackendState{Ref: ref, Type: backendType, Health: health, ZoneRefs: zoneRefs, UpdatedAt: now})
+	}
+	return states
+}
+
+type dnsControlPlaneOperator struct {
+	reconciler *reconcile.DNSReconciler
+	zones      map[string]struct{}
+}
+
+func newDNSControlPlaneOperator(reconciler *reconcile.DNSReconciler, zones []domain.DNSZone) controlplane.DNSControlPlaneOperator {
+	zoneSet := make(map[string]struct{}, len(zones))
+	for _, zone := range zones {
+		zoneSet[strings.TrimSpace(zone.Name)] = struct{}{}
+	}
+	return dnsControlPlaneOperator{reconciler: reconciler, zones: zoneSet}
+}
+
+func (o dnsControlPlaneOperator) ReconcileAll(ctx context.Context) error {
+	if o.reconciler == nil {
+		return fmt.Errorf("DNS reconciler is not configured")
+	}
+	return o.reconciler.ReconcileOnce(ctx)
+}
+
+func (o dnsControlPlaneOperator) ReconcileZone(ctx context.Context, zoneName string) error {
+	zoneName = strings.TrimSpace(zoneName)
+	if zoneName == "" {
+		return fmt.Errorf("DNS zone is required")
+	}
+	if !o.HasZone(zoneName) {
+		return fmt.Errorf("DNS zone %q is not configured", zoneName)
+	}
+	return o.ReconcileAll(ctx)
+}
+
+func (o dnsControlPlaneOperator) HasZone(zoneName string) bool {
+	_, ok := o.zones[strings.TrimSpace(zoneName)]
+	return ok
+}
+
 func buildDNSRuntime(ctx context.Context, cfg config.DNSConfig, logger *zap.Logger) ([]domain.DNSZone, *dnsAdapter.StaticResolver, error) {
 	zones := make([]domain.DNSZone, 0, len(cfg.Zones))
 	for _, zoneConfig := range cfg.Zones {
@@ -888,6 +986,15 @@ func buildDNSRuntime(ctx context.Context, cfg config.DNSConfig, logger *zap.Logg
 			backend := dnsAdapter.NewFilesystemBackend(rootDir)
 			if err := backend.Health(ctx); err != nil {
 				return nil, nil, fmt.Errorf("checking DNS filesystem backend %q: %w", ref, err)
+			}
+			registrations = append(registrations, dnsAdapter.BackendRegistration{Ref: ref, Backend: backend})
+		case string(domain.DNSBackendTypeCoreDNS):
+			backend, err := dnsAdapter.NewCoreDNSBackend(dnsAdapter.CoreDNSConfig{EtcdEndpoints: backendConfig.EtcdEndpoints, EtcdPrefix: backendConfig.EtcdPrefix, DialTimeout: backendConfig.EtcdDialTimeout})
+			if err != nil {
+				return nil, nil, fmt.Errorf("configuring DNS CoreDNS backend %q: %w", ref, err)
+			}
+			if err := backend.Health(ctx); err != nil {
+				return nil, nil, fmt.Errorf("checking DNS CoreDNS backend %q: %w", ref, err)
 			}
 			registrations = append(registrations, dnsAdapter.BackendRegistration{Ref: ref, Backend: backend})
 		default:

@@ -190,6 +190,7 @@ type Reactor struct {
 	mlRecipeExecutor         MLRecipeControlPlaneExecutor
 	nostrEvents              repository.NostrEventRepository
 	assistantOrchestrator    *service.AssistantOrchestrator
+	dnsOperator              DNSControlPlaneOperator
 	backupRegistry           backupRunRegistry
 	backupExecutor           BackupRunControlPlaneExecutor
 	backupResponder          service.BackupRunResponder
@@ -342,6 +343,11 @@ func WithControlPlanePublisher(publisher NostrEventPublisher) ReactorOption {
 // WithAssistantOrchestrator enables operator-assistant prompt and approval handling.
 func WithAssistantOrchestrator(orchestrator *service.AssistantOrchestrator) ReactorOption {
 	return func(r *Reactor) { r.assistantOrchestrator = orchestrator }
+}
+
+// WithDNSOperator enables DNS control-plane request handling.
+func WithDNSOperator(op DNSControlPlaneOperator) ReactorOption {
+	return func(r *Reactor) { r.dnsOperator = op }
 }
 
 // NewReactor creates a new Bahia control plane reactor.
@@ -632,6 +638,12 @@ func (r *Reactor) handleEvent(ctx context.Context, event *nostr.Event) {
 		go r.handleWorkerPolicyApplyRequest(ctx, event)
 	case KindWorkloadPinRequest:
 		go r.handleWorkloadPinRequest(ctx, event)
+	case KindDNSZoneCreateRequest, KindDNSPolicyApplyRequest, KindDNSRecordOverrideRequest, KindDNSDriftRemediateRequest, KindDNSBackendRegisterRequest:
+		if r.dnsOperator == nil {
+			r.logger.Warn("DNS control-plane event skipped because DNS operator is not configured", "kind", event.Kind, "event_id", event.ID)
+			return
+		}
+		go r.handleDNSRequest(ctx, event)
 	case domain.KindAssistantPromptRequest:
 		r.handleAssistantPromptRequest(ctx, event)
 	case domain.KindAssistantApproval:
@@ -1896,6 +1908,11 @@ func defaultRequestSubscriptionKinds() []int {
 		KindWorkerLabelsUpdate,
 		KindWorkerPolicyApplyRequest,
 		KindWorkloadPinRequest,
+		KindDNSZoneCreateRequest,
+		KindDNSPolicyApplyRequest,
+		KindDNSRecordOverrideRequest,
+		KindDNSDriftRemediateRequest,
+		KindDNSBackendRegisterRequest,
 		domain.KindAssistantPromptRequest,
 		domain.KindAssistantApproval,
 	}

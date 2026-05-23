@@ -1,0 +1,197 @@
+package controlplane
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/nbd-wtf/go-nostr"
+)
+
+const (
+	dnsActionZoneCreate      = "dns_zone_create"
+	dnsActionPolicyApply     = "dns_policy_apply"
+	dnsActionRecordOverride  = "dns_record_override"
+	dnsActionDriftRemediate  = "dns_drift_remediate"
+	dnsActionBackendRegister = "dns_backend_register"
+
+	dnsUnsupportedDynamicZoneCreation = "Phase-1 DNS runtime is config-backed; dynamic durable zone creation is unavailable"
+	dnsUnsupportedRecordOverride      = "current DNS backend interface has no record-level mutation primitive and no override persistence exists"
+	dnsUnsupportedPolicyApply         = "DNS policy persistence and application are unavailable in Phase-1 DNS runtime"
+	dnsUnsupportedBackendRegister     = "Phase-1 DNS runtime is config-backed; dynamic durable backend registration is unavailable"
+)
+
+// DNSControlPlaneOperator is the app-owned DNS reconciliation boundary used by Nostr DNS commands.
+type DNSControlPlaneOperator interface {
+	ReconcileAll(ctx context.Context) error
+	ReconcileZone(ctx context.Context, zoneName string) error
+	HasZone(zoneName string) bool
+}
+
+func (r *Reactor) handleDNSRequest(ctx context.Context, event *nostr.Event) {
+	switch event.Kind {
+	case KindDNSDriftRemediateRequest:
+		r.handleDNSDriftRemediate(ctx, event)
+	case KindDNSZoneCreateRequest:
+		r.handleDNSZoneCreate(ctx, event)
+	case KindDNSRecordOverrideRequest:
+		r.publishDNSUnsupported(ctx, event, KindDNSRecordOverrideResult, dnsActionRecordOverride, dnsUnsupportedRecordOverride)
+	case KindDNSPolicyApplyRequest:
+		r.publishDNSUnsupported(ctx, event, KindDNSPolicyApplyResult, dnsActionPolicyApply, dnsUnsupportedPolicyApply)
+	case KindDNSBackendRegisterRequest:
+		r.publishDNSUnsupported(ctx, event, KindDNSBackendRegisterResult, dnsActionBackendRegister, dnsUnsupportedBackendRegister)
+	default:
+		r.logger.Warn("unexpected DNS control-plane kind", "kind", event.Kind, "event_id", event.ID)
+	}
+}
+
+func (r *Reactor) handleDNSDriftRemediate(ctx context.Context, event *nostr.Event) {
+	logger := r.logger.With("event_id", event.ID, "requester", event.PubKey)
+	if !r.isAuthorized(event.PubKey) {
+		logger.Warn("unauthorized DNS drift remediation request")
+		_ = r.publishDNSOperationResult(ctx, event, KindDNSDriftRemediateResult, dnsActionDriftRemediate, "error", "unauthorized", "requester not in authorized list", nil)
+		return
+	}
+	zoneName, err := parseDNSZoneSelector(event)
+	if err != nil {
+		_ = r.publishDNSOperationResult(ctx, event, KindDNSDriftRemediateResult, dnsActionDriftRemediate, "error", "parse_error", err.Error(), nil)
+		return
+	}
+	if err := r.publishDNSOperationStatus(ctx, event, dnsActionDriftRemediate, "reconciling", "DNS drift remediation reconcile requested", zoneName); err != nil {
+		logger.Warn("publish DNS remediation status failed", "error", err)
+	}
+	if zoneName != "" {
+		err = r.dnsOperator.ReconcileZone(ctx, zoneName)
+	} else {
+		err = r.dnsOperator.ReconcileAll(ctx)
+	}
+	if err != nil {
+		logger.Warn("DNS drift remediation failed", "zone", zoneName, "error", err)
+		_ = r.publishDNSOperationResult(ctx, event, KindDNSDriftRemediateResult, dnsActionDriftRemediate, "error", "reconcile_failed", err.Error(), map[string]any{"zone": zoneName})
+		return
+	}
+	message := "DNS reconcile completed"
+	if zoneName != "" {
+		message = fmt.Sprintf("DNS reconcile completed for zone %s", zoneName)
+	}
+	_ = r.publishDNSOperationResult(ctx, event, KindDNSDriftRemediateResult, dnsActionDriftRemediate, "success", "completed", message, map[string]any{"zone": zoneName})
+}
+
+func (r *Reactor) handleDNSZoneCreate(ctx context.Context, event *nostr.Event) {
+	logger := r.logger.With("event_id", event.ID, "requester", event.PubKey)
+	if !r.isAuthorized(event.PubKey) {
+		logger.Warn("unauthorized DNS zone create request")
+		_ = r.publishDNSOperationResult(ctx, event, KindDNSZoneCreateResult, dnsActionZoneCreate, "error", "unauthorized", "requester not in authorized list", nil)
+		return
+	}
+	zoneName, err := parseDNSZoneSelector(event)
+	if err != nil {
+		_ = r.publishDNSOperationResult(ctx, event, KindDNSZoneCreateResult, dnsActionZoneCreate, "error", "parse_error", err.Error(), nil)
+		return
+	}
+	if zoneName == "" {
+		_ = r.publishDNSOperationResult(ctx, event, KindDNSZoneCreateResult, dnsActionZoneCreate, "error", "validation_error", "zone selector is required", nil)
+		return
+	}
+	if !r.dnsOperator.HasZone(zoneName) {
+		_ = r.publishDNSOperationResult(ctx, event, KindDNSZoneCreateResult, dnsActionZoneCreate, "failed", "unsupported", dnsUnsupportedDynamicZoneCreation, map[string]any{"zone": zoneName})
+		return
+	}
+	if err := r.publishDNSOperationStatus(ctx, event, dnsActionZoneCreate, "reconciling", "Configured DNS zone exists; reconcile requested", zoneName); err != nil {
+		logger.Warn("publish DNS zone create status failed", "error", err)
+	}
+	if err := r.dnsOperator.ReconcileZone(ctx, zoneName); err != nil {
+		logger.Warn("DNS zone reconcile failed", "zone", zoneName, "error", err)
+		_ = r.publishDNSOperationResult(ctx, event, KindDNSZoneCreateResult, dnsActionZoneCreate, "error", "reconcile_failed", err.Error(), map[string]any{"zone": zoneName})
+		return
+	}
+	_ = r.publishDNSOperationResult(ctx, event, KindDNSZoneCreateResult, dnsActionZoneCreate, "success", "completed", "Configured DNS zone exists; reconcile completed", map[string]any{"zone": zoneName})
+}
+
+func (r *Reactor) publishDNSUnsupported(ctx context.Context, event *nostr.Event, resultKind int, action, reason string) {
+	if !r.isAuthorized(event.PubKey) {
+		_ = r.publishDNSOperationResult(ctx, event, resultKind, action, "error", "unauthorized", "requester not in authorized list", nil)
+		return
+	}
+	zoneName, _ := parseDNSZoneSelector(event)
+	_ = r.publishDNSOperationResult(ctx, event, resultKind, action, "failed", "unsupported", reason, map[string]any{"zone": zoneName})
+}
+
+func parseDNSZoneSelector(event *nostr.Event) (string, error) {
+	zoneName := tagValueNostr(event.Tags, "zone")
+	if strings.TrimSpace(event.Content) == "" {
+		return strings.TrimSpace(zoneName), nil
+	}
+	var content struct {
+		Zone     string `json:"zone"`
+		ZoneName string `json:"zone_name"`
+		Name     string `json:"name"`
+	}
+	if err := json.Unmarshal([]byte(event.Content), &content); err != nil {
+		return "", fmt.Errorf("invalid JSON content: %w", err)
+	}
+	for _, candidate := range []string{content.Zone, content.ZoneName, content.Name, zoneName} {
+		if value := strings.TrimSpace(candidate); value != "" {
+			return value, nil
+		}
+	}
+	return "", nil
+}
+
+func (r *Reactor) publishDNSOperationStatus(ctx context.Context, requestEvent *nostr.Event, action, step, message, zoneName string) error {
+	content := map[string]any{
+		"action":      action,
+		"status":      "processing",
+		"step":        step,
+		"message":     message,
+		"recorded_at": time.Now().UTC().Format(time.RFC3339),
+	}
+	if zoneName != "" {
+		content["zone"] = zoneName
+	}
+	body, _ := json.Marshal(content)
+	tags := nostr.Tags{{"e", requestEvent.ID, "", "reply"}, {"p", requestEvent.PubKey}, {"status", "processing"}, {"action", action}, {"step", step}}
+	if zoneName != "" {
+		tags = append(tags, nostr.Tag{"zone", zoneName})
+	}
+	event := &nostr.Event{Kind: KindDNSOperationStatus, CreatedAt: nostr.Now(), Tags: tags, Content: string(body)}
+	if err := r.signEvent(ctx, event); err != nil {
+		return fmt.Errorf("sign DNS status: %w", err)
+	}
+	_, err := r.publishEvent(ctx, event)
+	return err
+}
+
+func (r *Reactor) publishDNSOperationResult(ctx context.Context, requestEvent *nostr.Event, resultKind int, action, status, step, message string, details map[string]any) error {
+	content := map[string]any{
+		"action":      action,
+		"status":      status,
+		"step":        step,
+		"message":     message,
+		"recorded_at": time.Now().UTC().Format(time.RFC3339),
+	}
+	for key, value := range details {
+		if text, ok := value.(string); ok && text == "" {
+			continue
+		}
+		if value != nil {
+			content[key] = value
+		}
+	}
+	body, _ := json.Marshal(content)
+	tags := nostr.Tags{{"e", requestEvent.ID, "", "reply"}, {"p", requestEvent.PubKey}, {"status", status}, {"action", action}, {"step", step}}
+	if zoneName, ok := content["zone"].(string); ok && zoneName != "" {
+		tags = append(tags, nostr.Tag{"zone", zoneName})
+	}
+	if step == "unsupported" || step == "parse_error" || step == "validation_error" || step == "reconcile_failed" || step == "unauthorized" {
+		tags = append(tags, nostr.Tag{"error", message})
+	}
+	event := &nostr.Event{Kind: resultKind, CreatedAt: nostr.Now(), Tags: tags, Content: string(body)}
+	if err := r.signEvent(ctx, event); err != nil {
+		return fmt.Errorf("sign DNS result: %w", err)
+	}
+	_, err := r.publishEvent(ctx, event)
+	return err
+}
