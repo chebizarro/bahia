@@ -34,7 +34,7 @@ func TestContinuityHandlerStatusReturnsMappedStatuses(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/continuity/status", nil)
 	w := httptest.NewRecorder()
 
-	NewContinuityHandler(store).Status(w, req)
+	NewContinuityHandler(store, nil).Status(w, req)
 
 	require.Equal(t, http.StatusOK, w.Code)
 	var resp dto.APIResponse
@@ -64,7 +64,7 @@ func TestContinuityHandlerStatusReturnsEmptyList(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/continuity/status", nil)
 	w := httptest.NewRecorder()
 
-	NewContinuityHandler(service.NewInMemoryContinuityStatusStore()).Status(w, req)
+	NewContinuityHandler(service.NewInMemoryContinuityStatusStore(), nil).Status(w, req)
 
 	require.Equal(t, http.StatusOK, w.Code)
 	var resp dto.APIResponse
@@ -78,7 +78,7 @@ func TestContinuityHandlerStatusFailsClosedWithoutStore(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/continuity/status", nil)
 	w := httptest.NewRecorder()
 
-	NewContinuityHandler(nil).Status(w, req)
+	NewContinuityHandler(nil, nil).Status(w, req)
 
 	require.Equal(t, http.StatusServiceUnavailable, w.Code)
 	var resp dto.APIResponse

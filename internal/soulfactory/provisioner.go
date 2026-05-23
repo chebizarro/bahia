@@ -11,6 +11,10 @@ import (
 	"github.com/openagentsinc/bahia/internal/domain"
 )
 
+// soulFactoryReady gates the provisioning pipeline. Set to true once the soul
+// generator and supporting services are fully wired.
+var soulFactoryReady = false
+
 // Provisioner orchestrates the agent provisioning workflow.
 type Provisioner struct {
 	reactor *Reactor
@@ -26,11 +30,13 @@ type ProgressCallback func(step domain.ProvisioningStep, current, total int, mes
 
 // Provision executes the full provisioning workflow.
 func (p *Provisioner) Provision(ctx context.Context, req *domain.ProvisioningRequest, run *domain.ProvisioningRun) (*domain.AgentSoul, error) {
-	if run != nil {
-		run.CurrentStep = domain.StepGenerate
-		p.recordStep(run, domain.StepGenerate, domain.StepStatusFailed, nil, ErrSoulFactoryUnavailable, 0)
+	if !soulFactoryReady {
+		if run != nil {
+			run.CurrentStep = domain.StepGenerate
+			p.recordStep(run, domain.StepGenerate, domain.StepStatusFailed, nil, ErrSoulFactoryUnavailable, 0)
+		}
+		return nil, ErrSoulFactoryUnavailable
 	}
-	return nil, ErrSoulFactoryUnavailable
 
 	logger := p.reactor.logger.With("agent_id", req.AgentID, "run_id", run.ID)
 
@@ -254,7 +260,9 @@ func (p *Provisioner) recordStep(run *domain.ProvisioningRun, step domain.Provis
 
 // SuspendSoul temporarily disables an agent.
 func (p *Provisioner) SuspendSoul(ctx context.Context, soulRef, reason string) error {
-	return ErrLifecycleUnsupported
+	if !soulFactoryReady {
+		return ErrLifecycleUnsupported
+	}
 
 	logger := p.reactor.logger.With("soul", soulRef, "action", "suspend")
 	logger.Info("suspending soul", "reason", reason)
@@ -292,7 +300,9 @@ func (p *Provisioner) SuspendSoul(ctx context.Context, soulRef, reason string) e
 
 // ResumeSoul re-enables a suspended agent.
 func (p *Provisioner) ResumeSoul(ctx context.Context, soulRef string) error {
-	return ErrLifecycleUnsupported
+	if !soulFactoryReady {
+		return ErrLifecycleUnsupported
+	}
 
 	logger := p.reactor.logger.With("soul", soulRef, "action", "resume")
 	logger.Info("resuming soul")
@@ -333,7 +343,9 @@ func (p *Provisioner) ResumeSoul(ctx context.Context, soulRef string) error {
 
 // RevokeSoul permanently disables an agent.
 func (p *Provisioner) RevokeSoul(ctx context.Context, soulRef, reason string) error {
-	return ErrLifecycleUnsupported
+	if !soulFactoryReady {
+		return ErrLifecycleUnsupported
+	}
 
 	logger := p.reactor.logger.With("soul", soulRef, "action", "revoke")
 	logger.Info("revoking soul", "reason", reason)
@@ -371,7 +383,9 @@ func (p *Provisioner) RevokeSoul(ctx context.Context, soulRef, reason string) er
 
 // RegenerateSoul re-runs LLM generation with a new brief.
 func (p *Provisioner) RegenerateSoul(ctx context.Context, soulRef, newBrief string) error {
-	return ErrLifecycleUnsupported
+	if !soulFactoryReady {
+		return ErrLifecycleUnsupported
+	}
 
 	logger := p.reactor.logger.With("soul", soulRef, "action", "regenerate")
 	logger.Info("regenerating soul")
@@ -421,7 +435,9 @@ func (p *Provisioner) RegenerateSoul(ctx context.Context, soulRef, newBrief stri
 
 // RedeploySoul triggers a bahia redeployment.
 func (p *Provisioner) RedeploySoul(ctx context.Context, soulRef string) error {
-	return ErrLifecycleUnsupported
+	if !soulFactoryReady {
+		return ErrLifecycleUnsupported
+	}
 
 	logger := p.reactor.logger.With("soul", soulRef, "action", "redeploy")
 	logger.Info("redeploying soul")

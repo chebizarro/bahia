@@ -1087,7 +1087,7 @@ func TestDNSValidationEnabled(t *testing.T) {
 
 	t.Run("unsupported backend type", func(t *testing.T) {
 		cfg := validDNSConfig()
-		cfg.DNS.Backends["fs"] = DNSBackendConfig{Type: "coredns", RootDir: t.TempDir()}
+		cfg.DNS.Backends["fs"] = DNSBackendConfig{Type: "magical"}
 		if err := cfg.validate(); err == nil || !strings.Contains(err.Error(), "unsupported") {
 			t.Fatalf("expected unsupported backend error, got %v", err)
 		}
