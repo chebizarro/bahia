@@ -135,6 +135,10 @@ func (b *recordingRetentionBackend) BackendKind() domain.BackupBackendKind {
 	return domain.BackupBackendKopia
 }
 
+func (b *recordingRetentionBackend) Capabilities() BackendCapabilities {
+	return BackendCapabilities{Retention: true, Probe: true}
+}
+
 func (b *recordingRetentionBackend) Health(context.Context, *domain.BackupRepository) error {
 	b.calls = append(b.calls, "health")
 	return b.healthErr

@@ -85,6 +85,16 @@ func NewKopiaBackend(opts ...KopiaBackendOption) *KopiaBackend {
 
 func (b *KopiaBackend) BackendKind() domain.BackupBackendKind { return domain.BackupBackendKopia }
 
+func (b *KopiaBackend) Capabilities() service.BackendCapabilities {
+	return service.BackendCapabilities{
+		SnapshotCreate: true,
+		SnapshotVerify: true,
+		Restore:        true,
+		Retention:      true,
+		Probe:          true,
+	}
+}
+
 func (b *KopiaBackend) Health(ctx context.Context, repo *domain.BackupRepository) error {
 	cfg, err := b.commandConfig(repo)
 	if err != nil {

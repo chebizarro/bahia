@@ -26,6 +26,40 @@ func TestStaticBackupBackendResolverRejectsDuplicateKind(t *testing.T) {
 	require.ErrorIs(t, err, ErrBackupBackendConfiguration)
 }
 
+func TestStaticBackupBackendResolverRejectsUntruthfulCapabilityDeclarations(t *testing.T) {
+	_, err := NewStaticBackupBackendResolver(declaredOnlySnapshotBackend{})
+	require.ErrorIs(t, err, ErrBackupBackendConfiguration)
+	require.Contains(t, err.Error(), "snapshot_create declared=true implemented=false")
+
+	_, err = NewStaticBackupBackendResolver(undeclaredSnapshotBackend{})
+	require.ErrorIs(t, err, ErrBackupBackendConfiguration)
+	require.Contains(t, err.Error(), "snapshot_create declared=false implemented=true")
+}
+
+func TestStaticBackupBackendResolverReportsAndRequiresCapabilities(t *testing.T) {
+	backend := &recordingBackupBackend{}
+	resolver := MustBackupBackendResolver(backend)
+
+	capabilities, ok := resolver.Capabilities(domain.BackupBackendKopia)
+	require.True(t, ok)
+	require.True(t, capabilities.SnapshotCreate)
+	require.True(t, capabilities.SnapshotVerify)
+	require.True(t, capabilities.Probe)
+	require.False(t, capabilities.Retention)
+	require.True(t, resolver.Supports(domain.BackupBackendKopia, BackupCapabilitySnapshotCreate))
+	require.False(t, resolver.Supports(domain.BackupBackendKopia, BackupCapabilityRetention))
+
+	_, err := resolver.RequireCapabilities(domain.BackupBackendKopia, BackupCapabilitySnapshotCreate, BackupCapabilitySnapshotVerify)
+	require.NoError(t, err)
+
+	_, err = resolver.RequireCapabilities(domain.BackupBackendKopia, BackupCapabilityRetention)
+	require.ErrorIs(t, err, ErrBackupBackendUnsupported)
+	require.Contains(t, err.Error(), "retention")
+
+	_, ok = resolver.Capabilities(domain.BackupBackendVelero)
+	require.False(t, ok)
+}
+
 func TestBackupRunCoordinatorFailsClosedWhenBackendLacksSnapshotCapability(t *testing.T) {
 	ctx := context.Background()
 	registry, repo, run := backupCoordinatorFixture(t, false)
@@ -43,5 +77,33 @@ func TestBackupRunCoordinatorFailsClosedWhenBackendLacksSnapshotCapability(t *te
 
 type baseOnlyBackupBackend struct{}
 
-func (baseOnlyBackupBackend) BackendKind() domain.BackupBackendKind                  { return domain.BackupBackendKopia }
+func (baseOnlyBackupBackend) BackendKind() domain.BackupBackendKind { return domain.BackupBackendKopia }
+func (baseOnlyBackupBackend) Capabilities() BackendCapabilities {
+	return BackendCapabilities{Probe: true}
+}
 func (baseOnlyBackupBackend) Health(context.Context, *domain.BackupRepository) error { return nil }
+
+type declaredOnlySnapshotBackend struct{}
+
+func (declaredOnlySnapshotBackend) BackendKind() domain.BackupBackendKind {
+	return domain.BackupBackendKopia
+}
+func (declaredOnlySnapshotBackend) Capabilities() BackendCapabilities {
+	return BackendCapabilities{SnapshotCreate: true, Probe: true}
+}
+func (declaredOnlySnapshotBackend) Health(context.Context, *domain.BackupRepository) error {
+	return nil
+}
+
+type undeclaredSnapshotBackend struct{}
+
+func (undeclaredSnapshotBackend) BackendKind() domain.BackupBackendKind {
+	return domain.BackupBackendKopia
+}
+func (undeclaredSnapshotBackend) Capabilities() BackendCapabilities {
+	return BackendCapabilities{Probe: true}
+}
+func (undeclaredSnapshotBackend) Health(context.Context, *domain.BackupRepository) error { return nil }
+func (undeclaredSnapshotBackend) CreateSnapshot(context.Context, BackupSnapshotRequest) (*BackupSnapshotResult, error) {
+	return nil, nil
+}

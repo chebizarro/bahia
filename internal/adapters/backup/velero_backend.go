@@ -56,6 +56,16 @@ func NewVeleroBackend(opts ...VeleroBackendOption) *VeleroBackend {
 
 func (b *VeleroBackend) BackendKind() domain.BackupBackendKind { return domain.BackupBackendVelero }
 
+func (b *VeleroBackend) Capabilities() service.BackendCapabilities {
+	return service.BackendCapabilities{
+		SnapshotCreate: false,
+		SnapshotVerify: false,
+		Restore:        true,
+		Retention:      true,
+		Probe:          true,
+	}
+}
+
 func (b *VeleroBackend) Health(ctx context.Context, repo *domain.BackupRepository) error {
 	cfg, err := b.commandConfig(repo)
 	if err != nil {

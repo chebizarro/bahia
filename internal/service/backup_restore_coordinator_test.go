@@ -194,6 +194,9 @@ type recordingRestoreBackend struct {
 func (b *recordingRestoreBackend) BackendKind() domain.BackupBackendKind {
 	return domain.BackupBackendKopia
 }
+func (b *recordingRestoreBackend) Capabilities() BackendCapabilities {
+	return BackendCapabilities{Restore: true, Probe: true}
+}
 func (b *recordingRestoreBackend) Health(context.Context, *domain.BackupRepository) error {
 	b.calls = append(b.calls, "health")
 	return b.healthErr
@@ -207,6 +210,9 @@ type healthOnlyBackupBackend struct{}
 
 func (b *healthOnlyBackupBackend) BackendKind() domain.BackupBackendKind {
 	return domain.BackupBackendKopia
+}
+func (b *healthOnlyBackupBackend) Capabilities() BackendCapabilities {
+	return BackendCapabilities{Probe: true}
 }
 func (b *healthOnlyBackupBackend) Health(context.Context, *domain.BackupRepository) error {
 	return nil

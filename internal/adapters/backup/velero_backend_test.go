@@ -11,6 +11,18 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestVeleroBackendReportsLifecycleCapabilities(t *testing.T) {
+	capabilities := NewVeleroBackend().Capabilities()
+
+	require.Equal(t, service.BackendCapabilities{
+		SnapshotCreate: false,
+		SnapshotVerify: false,
+		Restore:        true,
+		Retention:      true,
+		Probe:          true,
+	}, capabilities)
+}
+
 func TestVeleroBackendRestoreCreatesAndReadsRealCLIResources(t *testing.T) {
 	runner := &recordingVeleroRunner{results: []veleroRunnerResult{
 		{stdout: `{"metadata":{"name":"restore-a"},"status":{"phase":"Completed"}}`},

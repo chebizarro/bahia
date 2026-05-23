@@ -11,6 +11,18 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestKopiaBackendReportsLifecycleCapabilities(t *testing.T) {
+	capabilities := NewKopiaBackend().Capabilities()
+
+	require.Equal(t, service.BackendCapabilities{
+		SnapshotCreate: true,
+		SnapshotVerify: true,
+		Restore:        true,
+		Retention:      true,
+		Probe:          true,
+	}, capabilities)
+}
+
 func TestKopiaBackendCreateSnapshotRunsRealCLICommandBoundary(t *testing.T) {
 	runner := &recordingKopiaRunner{stdout: `{"id":"kopia-snapshot-1","rootEntry":{"obj":"kabcdef"}}`}
 	backend := NewKopiaBackend(withKopiaCommandRunner(runner))
