@@ -1,0 +1,45 @@
+{
+  "feature_id": "bahia-dggn",
+  "test_matrix": [
+    {
+      "test": "TestBackupPlacementSelectsLeastQueuedEligibleWorker",
+      "acceptance_criteria": ["AC1", "AC3"],
+      "verification": "Selects the eligible west-site backup worker with the lowest queue depth."
+    },
+    {
+      "test": "TestBackupPlacementFailsClosedWhenBackendLacksRequiredLifecycleCapability",
+      "acceptance_criteria": ["AC2", "AC4"],
+      "verification": "Worker targeting may pass while backend capability rejection keeps the definition unplaceable with a structured backend reason."
+    },
+    {
+      "test": "TestBackupPlacementExplainsWorkerRejections",
+      "acceptance_criteria": ["AC1", "AC4"],
+      "verification": "Cordoned, label-mismatched, and capability-mismatched workers each receive structured candidate rejection reasons."
+    },
+    {
+      "test": "TestBackupPlacementAllEligiblePolicySelectsEveryMatchingWorkerDeterministically",
+      "acceptance_criteria": ["AC3"],
+      "verification": "Metadata-defined all_eligible policy returns all eligible worker pubkeys in stable order."
+    },
+    {
+      "test": "TestBackupPlacementFirstEligiblePolicyUsesStablePubkeyOrder",
+      "acceptance_criteria": ["AC3"],
+      "verification": "Metadata-defined first_eligible policy selects the lowest worker pubkey deterministically."
+    },
+    {
+      "test": "TestBackupPlacementLifecycleRequirementsNeedBackendResolver",
+      "acceptance_criteria": ["AC2", "AC4"],
+      "verification": "Lifecycle capability requirements block placement when no backend resolver is available."
+    },
+    {
+      "test": "TestBackupPlacementRejectsInvalidSelectionPolicy",
+      "acceptance_criteria": ["AC3"],
+      "verification": "Invalid selection policy metadata is rejected instead of being silently ignored."
+    },
+    {
+      "test": "TestBackupPlacementDefaultsToGenericBackupCapabilityWhenDefinitionHasNoExplicitRequirements",
+      "acceptance_criteria": ["AC5"],
+      "verification": "A definition with no explicit capability requirements selects only workers advertising the backup workload kind."
+    }
+  ]
+}

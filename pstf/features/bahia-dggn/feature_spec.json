@@ -1,0 +1,25 @@
+{
+  "feature_id": "bahia-dggn",
+  "title": "Backup executor targeting placement",
+  "date": "2026-05-23",
+  "observed_behavior": [
+    "BackupDefinition carries executor_labels and capability_requirements fields.",
+    "Worker records carry scheduling_state, labels, and generic capabilities.",
+    "Backup backend capability declarations are available through BackupBackendResolver."
+  ],
+  "intended_behavior": [
+    "Bahia validates whether a backup definition can be placed on registered workers without polling or timeout-based completion.",
+    "Bahia selects executor worker pubkeys according to a deterministic executor selection policy.",
+    "Bahia returns structured placement reasons for backend incompatibility and per-worker rejection causes."
+  ],
+  "scope": [
+    "internal/domain placement decision and reason types",
+    "internal/service backup placement resolution",
+    "unit tests for placement validation and executor selection"
+  ],
+  "out_of_scope": [
+    "internal/controlplane handler integration",
+    "backup backend adapter changes",
+    "database schema changes beyond existing BackupDefinition targeting fields"
+  ]
+}

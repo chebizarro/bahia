@@ -1,0 +1,30 @@
+{
+  "feature_id": "bahia-dggn",
+  "criteria": [
+    {
+      "id": "AC1",
+      "statement": "Placement validation checks BackupDefinition executor labels and capability requirements against registered worker labels, capabilities, liveness, and scheduling state.",
+      "tests": ["TestBackupPlacementSelectsLeastQueuedEligibleWorker", "TestBackupPlacementExplainsWorkerRejections"]
+    },
+    {
+      "id": "AC2",
+      "statement": "Backend lifecycle capability requirements are checked through BackupBackendResolver before a definition is considered placeable.",
+      "tests": ["TestBackupPlacementFailsClosedWhenBackendLacksRequiredLifecycleCapability"]
+    },
+    {
+      "id": "AC3",
+      "statement": "Executor selection policy supports deterministic least-queued and all-eligible resolution from definition targeting constraints.",
+      "tests": ["TestBackupPlacementSelectsLeastQueuedEligibleWorker", "TestBackupPlacementAllEligiblePolicySelectsEveryMatchingWorkerDeterministically", "TestBackupPlacementFirstEligiblePolicyUsesStablePubkeyOrder"]
+    },
+    {
+      "id": "AC4",
+      "statement": "Placement decisions expose structured reasons for global unplaceability and candidate-specific rejection causes.",
+      "tests": ["TestBackupPlacementFailsClosedWhenBackendLacksRequiredLifecycleCapability", "TestBackupPlacementLifecycleRequirementsNeedBackendResolver", "TestBackupPlacementExplainsWorkerRejections"]
+    },
+    {
+      "id": "AC5",
+      "statement": "Definitions without explicit capability requirements fail closed to workers advertising the generic backup workload capability.",
+      "tests": ["TestBackupPlacementDefaultsToGenericBackupCapabilityWhenDefinitionHasNoExplicitRequirements"]
+    }
+  ]
+}
