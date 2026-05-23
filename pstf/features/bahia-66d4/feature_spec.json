@@ -1,0 +1,19 @@
+{
+  "feature_id": "bahia-66d4",
+  "title": "Discovery resolver Nostr-native subscription hardening",
+  "status": "implemented",
+  "observed_behavior": [
+    "pkg/discovery/resolver.go exposed WithRefreshInterval and used a ticker to periodically tear down and recreate subscriptions for event delivery.",
+    "The resolver subscribed without first using the shared relay metadata/NIP-11 path.",
+    "The resolver performed inline NIP-01 checks instead of the shared inbound validation boundary."
+  ],
+  "intended_behavior": [
+    "The resolver opens an EOSE-aware live subscription and relies on relay EOSE plus the open event stream instead of refresh timers for historical catch-up and realtime delivery.",
+    "The resolver fetches relay NIP-11 metadata before connecting/subscribing when it owns relay setup and handles unavailable metadata explicitly by logging it.",
+    "Inbound endpoint events are validated through the shared ValidateInboundEvent helper before resolver-specific kind, author, d-tag, and JSON content validation."
+  ],
+  "scope": [
+    "pkg/discovery/resolver.go",
+    "pkg/discovery/resolver_test.go"
+  ]
+}

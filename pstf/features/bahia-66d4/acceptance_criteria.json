@@ -1,0 +1,25 @@
+{
+  "feature_id": "bahia-66d4",
+  "criteria": [
+    {
+      "ac_id": "bahia-66d4-AC1",
+      "assertion": "Resolver event delivery must not use refresh tickers or periodic subscription teardown; historical catch-up is represented by EOSE while the live subscription stays open.",
+      "tests": ["TestResolverConsumesEOSEAndLiveEventsWithoutRefreshTicker"]
+    },
+    {
+      "ac_id": "bahia-66d4-AC2",
+      "assertion": "Resolver-owned relay setup queries NIP-11 metadata before connecting/subscribing and explicitly records unavailable metadata.",
+      "tests": ["TestResolverPreparesRelayMetadataBeforeConnecting"]
+    },
+    {
+      "ac_id": "bahia-66d4-AC3",
+      "assertion": "Endpoint events pass the shared inbound NIP-01 trust boundary before resolver-specific kind, author, d-tag, and content validation.",
+      "tests": ["TestResolverParsesAndResolvesEndpointEvent", "TestResolverRejectsInvalidEvent"]
+    },
+    {
+      "ac_id": "bahia-66d4-AC4",
+      "assertion": "Resolver keeps replaceable latest-wins/tombstone semantics and handles auth-required CLOSED messages through NIP-42 retry when credentials are configured.",
+      "tests": ["TestResolverAppliesNewestReplaceableEvent", "TestResolverHandlesTombstones", "TestResolverRetriesAfterAuthRequiredClosed"]
+    }
+  ]
+}

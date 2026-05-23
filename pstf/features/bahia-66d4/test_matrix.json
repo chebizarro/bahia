@@ -1,0 +1,19 @@
+{
+  "feature_id": "bahia-66d4",
+  "tests": [
+    {
+      "test_id": "bahia-66d4-T1",
+      "target_path": "pkg/discovery/resolver_test.go",
+      "test_names": ["TestResolverPreparesRelayMetadataBeforeConnecting", "TestResolverConsumesEOSEAndLiveEventsWithoutRefreshTicker", "TestResolverRetriesAfterAuthRequiredClosed"],
+      "determinism_notes": "Tests inject fake relay metadata, EVENT, EOSE, and CLOSED frames through in-memory channels; no sleeps or live relays are used.",
+      "status": "pass"
+    },
+    {
+      "test_id": "bahia-66d4-T2",
+      "target_path": "pkg/discovery/resolver_test.go",
+      "test_names": ["TestResolverParsesAndResolvesEndpointEvent", "TestResolverRejectsInvalidEvent", "TestResolverAppliesNewestReplaceableEvent", "TestResolverHandlesTombstones"],
+      "determinism_notes": "Tests sign deterministic Nostr events and apply them directly to resolver handlers.",
+      "status": "pass"
+    }
+  ]
+}

@@ -1,17 +1,16 @@
 package discovery
 
 import (
+	"context"
 	"encoding/json"
-	"net/http"
-	"net/http/httptest"
-	"strings"
+	"fmt"
 	"testing"
 	"time"
 
 	"github.com/nbd-wtf/go-nostr"
+	"github.com/nbd-wtf/go-nostr/nip11"
+	nostradapter "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"github.com/stretchr/testify/require"
-	"go.uber.org/zap"
-	"go.uber.org/zap/zaptest/observer"
 )
 
 func TestResolverParsesAndResolvesEndpointEvent(t *testing.T) {
@@ -116,6 +115,66 @@ func TestResolverHandlesTombstones(t *testing.T) {
 	require.Empty(t, resolver.Endpoints())
 }
 
+func TestResolverPreparesRelayMetadataBeforeConnecting(t *testing.T) {
+	pool := &fakeRelayPool{
+		infos: map[string]*nip11.RelayInformationDocument{
+			"wss://relay.example.test": {Name: "test", SupportedNIPs: []any{float64(1), float64(11)}},
+			"wss://down.example.test":  nil,
+		},
+	}
+	resolver := New([]string{"wss://relay.example.test", "wss://down.example.test"}, "author")
+
+	resolver.prepareRelays(context.Background(), pool)
+
+	require.Equal(t, []string{"fetch_info", "connect"}, pool.calls)
+}
+
+func TestResolverConsumesEOSEAndLiveEventsWithoutRefreshTicker(t *testing.T) {
+	secretKey := nostr.GeneratePrivateKey()
+	pubkey, err := nostr.GetPublicKey(secretKey)
+	require.NoError(t, err)
+	resolver := New([]string{"wss://relay.example.test"}, pubkey)
+
+	events := make(chan *nostr.Event, 1)
+	events <- signedEndpointEvent(t, secretKey, "api.prod.example.com", nostr.Now(), map[string]any{
+		"address": "10.0.0.30", "port": 443, "protocol": "https",
+	}, endpointTags("api.prod.example.com", "prod", "example.com", "healthy", "llm"))
+	close(events)
+	eose := make(chan struct{})
+	close(eose)
+	relayEOSE := make(chan nostradapter.RelayEOSE, 1)
+	relayEOSE <- nostradapter.RelayEOSE{RelayURL: "wss://relay.example.test", SubscriptionID: "sub-1"}
+	close(relayEOSE)
+	closed := make(chan nostradapter.RelayClosed)
+	close(closed)
+
+	_, err = resolver.consume(context.Background(), &fakeRelayPool{}, &nostradapter.MergedSubscription{
+		Events:            events,
+		EndOfStoredEvents: eose,
+		RelayEOSE:         relayEOSE,
+		Closed:            closed,
+	}, map[string]struct{}{})
+
+	require.ErrorContains(t, err, "subscription event stream closed")
+	endpoint, ok := resolver.ResolveByFQDN("api.prod.example.com")
+	require.True(t, ok)
+	require.Equal(t, "10.0.0.30", endpoint.Address)
+}
+
+func TestResolverRetriesAfterAuthRequiredClosed(t *testing.T) {
+	resolver := New([]string{"wss://relay.example.test"}, "author")
+	pool := &fakeRelayPool{}
+	closed := make(chan nostradapter.RelayClosed, 1)
+	closed <- nostradapter.RelayClosed{RelayURL: "wss://relay.example.test", SubscriptionID: "sub-1", Reason: "auth-required: restricted"}
+	close(closed)
+
+	retry, err := resolver.consume(context.Background(), pool, &nostradapter.MergedSubscription{Closed: closed}, map[string]struct{}{})
+
+	require.NoError(t, err)
+	require.True(t, retry)
+	require.Equal(t, []string{"auth:wss://relay.example.test"}, pool.calls)
+}
+
 func TestResolverFindsByCapability(t *testing.T) {
 	secretKey := nostr.GeneratePrivateKey()
 	pubkey, err := nostr.GetPublicKey(secretKey)
@@ -136,47 +195,6 @@ func TestResolverFindsByCapability(t *testing.T) {
 
 	allEndpoints := resolver.Endpoints()
 	require.Len(t, allEndpoints, 2)
-}
-
-func TestResolverFetchesNIP11MetadataAndWarnsWhenKindIsNotAdvertised(t *testing.T) {
-	tests := []struct {
-		name      string
-		body      string
-		wantWarns int
-		wantInfos int
-	}{
-		{
-			name:      "required kind advertised",
-			body:      `{"name":"test relay","retention":[{"kinds":[[31976]]}]}`,
-			wantWarns: 0,
-			wantInfos: 1,
-		},
-		{
-			name:      "required kind not advertised",
-			body:      `{"name":"test relay","retention":[{"kinds":[[1]]}]}`,
-			wantWarns: 1,
-			wantInfos: 0,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				require.Equal(t, "application/nostr+json", r.Header.Get("Accept"))
-				w.Header().Set("Content-Type", "application/nostr+json")
-				_, err := w.Write([]byte(tt.body))
-				require.NoError(t, err)
-			}))
-			defer server.Close()
-
-			core, logs := observer.New(zap.InfoLevel)
-			resolver := New([]string{strings.Replace(server.URL, "http://", "ws://", 1)}, "pubkey", WithLogger(zap.New(core)))
-			resolver.fetchRelayMetadata(t.Context())
-
-			require.Len(t, logs.FilterMessage("relay NIP-11 metadata does not advertise required kind").All(), tt.wantWarns)
-			require.Len(t, logs.FilterMessage("relay NIP-11 metadata loaded").All(), tt.wantInfos)
-		})
-	}
 }
 
 func TestResolverRejectsInvalidEvent(t *testing.T) {
@@ -213,6 +231,34 @@ func signedEndpointEvent(t *testing.T, secretKey string, fqdn string, createdAt 
 	}
 	require.NoError(t, event.Sign(secretKey))
 	return event
+}
+
+type fakeRelayPool struct {
+	calls []string
+	infos map[string]*nip11.RelayInformationDocument
+}
+
+func (p *fakeRelayPool) Connect(context.Context) {
+	p.calls = append(p.calls, "connect")
+}
+
+func (p *fakeRelayPool) SubscribeAllWithEOSE(context.Context, []nostr.Filter) (*nostradapter.MergedSubscription, error) {
+	p.calls = append(p.calls, "subscribe")
+	return nil, fmt.Errorf("no fake subscription configured")
+}
+
+func (p *fakeRelayPool) FetchAllRelayInfo(context.Context) map[string]*nip11.RelayInformationDocument {
+	p.calls = append(p.calls, "fetch_info")
+	return p.infos
+}
+
+func (p *fakeRelayPool) AuthenticateRelay(_ context.Context, relayURL string) error {
+	p.calls = append(p.calls, "auth:"+relayURL)
+	return nil
+}
+
+func (p *fakeRelayPool) Close() {
+	p.calls = append(p.calls, "close")
 }
 
 func endpointTags(fqdn, environment, zone, health string, capabilities ...string) nostr.Tags {

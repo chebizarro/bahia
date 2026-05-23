@@ -19,7 +19,8 @@ const (
 	// KindDNSEndpointState is the Nostr kind for DNS endpoint state events.
 	KindDNSEndpointState = 31976
 
-	maxFutureSkew = 15 * time.Minute
+	resolverReconnectInitialBackoff = time.Second
+	resolverReconnectMaxBackoff     = 30 * time.Second
 )
 
 // Endpoint represents a resolved DNS endpoint from a kind 31976 event.
@@ -80,7 +81,7 @@ type Resolver struct {
 	records map[string]endpointRecord
 
 	lifecycleMu sync.Mutex
-	pool        *nostr.SimplePool
+	pool        relayPool
 	cancel      context.CancelFunc
 	wg          sync.WaitGroup
 	started     bool
@@ -134,7 +135,7 @@ func (r *Resolver) Start(ctx context.Context) error {
 	}
 
 	runCtx, cancel := context.WithCancel(ctx)
-	pool := nostr.NewSimplePool(runCtx)
+	pool := r.poolFactory(r.relayURLs, r.logger, r.privateKey)
 	r.pool = pool
 	r.cancel = cancel
 	r.started = true
@@ -161,7 +162,7 @@ func (r *Resolver) Stop() error {
 		cancel()
 	}
 	if pool != nil {
-		pool.Close("discovery resolver stopped")
+		pool.Close()
 	}
 	r.wg.Wait()
 	return nil
@@ -226,38 +227,133 @@ func (r *Resolver) Endpoints() []Endpoint {
 	return endpoints
 }
 
-func (r *Resolver) run(ctx context.Context, pool *nostr.SimplePool) {
+func newRelayPool(relayURLs []string, logger *zap.Logger, privateKey string) relayPool {
+	opts := []nostradapter.RelayPoolOption(nil)
+	if privateKey != "" {
+		opts = append(opts, nostradapter.WithPrivateKey(privateKey))
+	}
+	return nostradapter.NewRelayPool(relayURLs, logger, opts...)
+}
+
+func (r *Resolver) run(ctx context.Context, pool relayPool) {
 	defer r.wg.Done()
+	r.prepareRelays(ctx, pool)
+
+	backoff := resolverReconnectInitialBackoff
 	for {
+		if ctx.Err() != nil {
+			return
+		}
+		err := r.subscribeUntilClosed(ctx, pool)
+		if ctx.Err() != nil {
+			return
+		}
+		if err != nil {
+			r.logger.Warn("discovery resolver subscription ended; reconnecting", zap.Error(err), zap.Duration("delay", backoff))
+		}
 		select {
 		case <-ctx.Done():
 			return
-		default:
+		case <-time.After(backoff):
 		}
-
-		r.fetchRelayMetadata(ctx)
-		subCtx, cancel := context.WithCancel(ctx)
-		events := pool.SubMany(subCtx, r.relayURLs, nostr.Filters{r.subscriptionFilter()})
-
-		resubscribe := false
-		for !resubscribe {
-			select {
-			case relayEvent, ok := <-events:
-				if !ok {
-					resubscribe = true
-					continue
-				}
-				if err := r.applyEvent(relayEvent.Event); err != nil {
-					r.logger.Warn("ignored invalid discovery endpoint event", zap.String("relay", relayEvent.Relay.URL), zap.Error(err))
-				}
-			case <-ctx.Done():
-				cancel()
-				return
+		if backoff < resolverReconnectMaxBackoff {
+			backoff *= 2
+			if backoff > resolverReconnectMaxBackoff {
+				backoff = resolverReconnectMaxBackoff
 			}
 		}
-
-		cancel()
 	}
+}
+
+func (r *Resolver) prepareRelays(ctx context.Context, pool relayPool) {
+	infos := pool.FetchAllRelayInfo(ctx)
+	for relayURL, info := range infos {
+		if info == nil {
+			r.logger.Warn("relay NIP-11 metadata unavailable", zap.String("relay", relayURL))
+			continue
+		}
+		r.logger.Info("relay NIP-11 metadata loaded", zap.String("relay", relayURL), zap.String("name", info.Name), zap.Any("supported_nips", info.SupportedNIPs))
+		if info.Limitation != nil && info.Limitation.AuthRequired && r.privateKey == "" {
+			r.logger.Warn("relay metadata requires NIP-42 AUTH but resolver has no private key", zap.String("relay", relayURL))
+		}
+	}
+	pool.Connect(ctx)
+}
+
+func (r *Resolver) subscribeUntilClosed(ctx context.Context, pool relayPool) error {
+	filters := []nostr.Filter{r.subscriptionFilter()}
+	authAttempted := make(map[string]struct{})
+	for {
+		merged, err := pool.SubscribeAllWithEOSE(ctx, filters)
+		if err != nil {
+			return err
+		}
+		retry, err := r.consume(ctx, pool, merged, authAttempted)
+		if err != nil {
+			return err
+		}
+		if !retry {
+			return nil
+		}
+	}
+}
+
+func (r *Resolver) consume(ctx context.Context, pool relayPool, merged *nostradapter.MergedSubscription, authAttempted map[string]struct{}) (bool, error) {
+	if merged == nil {
+		return false, nil
+	}
+	defer merged.Close()
+	for merged.Events != nil || merged.EndOfStoredEvents != nil || merged.RelayEOSE != nil || merged.Closed != nil {
+		select {
+		case <-ctx.Done():
+			return false, ctx.Err()
+		case eose, ok := <-merged.RelayEOSE:
+			if ok {
+				r.logger.Info("relay sent EOSE", zap.String("relay", eose.RelayURL), zap.String("subscription_id", eose.SubscriptionID))
+			} else {
+				merged.RelayEOSE = nil
+			}
+		case <-merged.EndOfStoredEvents:
+			r.logger.Info("all relays sent EOSE; historical endpoint catch-up complete")
+			merged.EndOfStoredEvents = nil
+		case closed, ok := <-merged.Closed:
+			if ok {
+				if r.handleClosed(ctx, pool, closed, authAttempted) {
+					return true, nil
+				}
+			} else {
+				merged.Closed = nil
+			}
+		case ev, ok := <-merged.Events:
+			if !ok {
+				merged.Events = nil
+				if ctx.Err() != nil {
+					return false, ctx.Err()
+				}
+				continue
+			}
+			if err := r.applyEvent(ev); err != nil {
+				r.logger.Warn("ignored invalid discovery endpoint event", zap.String("event_id", eventID(ev)), zap.Error(err))
+			}
+		}
+	}
+	return false, errors.New("subscription event stream closed")
+}
+
+func (r *Resolver) handleClosed(ctx context.Context, pool relayPool, closed nostradapter.RelayClosed, authAttempted map[string]struct{}) bool {
+	r.logger.Warn("relay closed subscription", zap.String("relay", closed.RelayURL), zap.String("subscription_id", closed.SubscriptionID), zap.String("reason", closed.Reason))
+	if !nostradapter.IsAuthRequiredReason(closed.Reason) || closed.RelayURL == "" || pool == nil {
+		return false
+	}
+	if _, ok := authAttempted[closed.RelayURL]; ok {
+		return false
+	}
+	authAttempted[closed.RelayURL] = struct{}{}
+	if err := pool.AuthenticateRelay(ctx, closed.RelayURL); err != nil {
+		r.logger.Warn("relay authentication failed", zap.String("relay", closed.RelayURL), zap.Error(err))
+		return false
+	}
+	return true
 }
 
 func (r *Resolver) subscriptionFilter() nostr.Filter {
@@ -265,43 +361,6 @@ func (r *Resolver) subscriptionFilter() nostr.Filter {
 		Kinds:   []int{KindDNSEndpointState},
 		Authors: []string{r.authorPubkey},
 	}
-}
-
-func (r *Resolver) fetchRelayMetadata(ctx context.Context) {
-	for _, relayURL := range r.relayURLs {
-		info, err := nip11.Fetch(ctx, relayURL)
-		if err != nil {
-			r.logger.Warn("relay NIP-11 metadata unavailable", zap.String("relay", relayURL), zap.Error(err))
-			continue
-		}
-		if !relayAdvertisesKind(&info, KindDNSEndpointState) {
-			r.logger.Warn("relay NIP-11 metadata does not advertise required kind", zap.String("relay", relayURL), zap.Int("kind", KindDNSEndpointState), zap.Any("retention", info.Retention))
-			continue
-		}
-		r.logger.Info("relay NIP-11 metadata loaded", zap.String("relay", relayURL), zap.String("name", info.Name), zap.Any("supported_nips", info.SupportedNIPs))
-	}
-}
-
-func relayAdvertisesKind(info *nip11.RelayInformationDocument, kind int) bool {
-	if info == nil {
-		return false
-	}
-	for _, retention := range info.Retention {
-		if retention == nil {
-			continue
-		}
-		for _, kinds := range retention.Kinds {
-			if len(kinds) == 2 && kinds[0] <= kind && kind <= kinds[1] {
-				return true
-			}
-			for _, advertisedKind := range kinds {
-				if advertisedKind == kind {
-					return true
-				}
-			}
-		}
-	}
-	return false
 }
 
 func (r *Resolver) applyEvent(event *nostr.Event) error {
@@ -325,23 +384,11 @@ func (r *Resolver) applyEvent(event *nostr.Event) error {
 }
 
 func (r *Resolver) endpointFromEvent(event *nostr.Event) (Endpoint, bool, error) {
-	// pkg/discovery is a public package, so it intentionally keeps validation
-	// local rather than importing the canonical internal/adapters/nostr helper.
 	if event == nil {
 		return Endpoint{}, false, errors.New("nil event")
 	}
-	if len(event.ID) != 64 || !event.CheckID() {
-		return Endpoint{}, false, errors.New("event id does not match NIP-01 hash")
-	}
-	validSignature, err := event.CheckSignature()
-	if err != nil {
-		return Endpoint{}, false, fmt.Errorf("check event signature: %w", err)
-	}
-	if !validSignature {
-		return Endpoint{}, false, errors.New("invalid event signature")
-	}
-	if event.CreatedAt > nostr.Timestamp(time.Now().Add(maxFutureSkew).Unix()) {
-		return Endpoint{}, false, errors.New("event timestamp is too far in the future")
+	if err := nostradapter.ValidateInboundEvent(event, time.Now().UTC(), nostradapter.InboundEventMaxFutureSkew); err != nil {
+		return Endpoint{}, false, err
 	}
 	if event.Kind != KindDNSEndpointState {
 		return Endpoint{}, false, fmt.Errorf("unexpected kind %d", event.Kind)
@@ -358,6 +405,17 @@ func (r *Resolver) endpointFromEvent(event *nostr.Event) (Endpoint, bool, error)
 	var content endpointContent
 	if err := json.Unmarshal([]byte(event.Content), &content); err != nil {
 		return Endpoint{}, false, fmt.Errorf("parse endpoint content JSON: %w", err)
+	}
+	if !content.Deleted {
+		if strings.TrimSpace(content.Address) == "" {
+			return Endpoint{}, false, errors.New("endpoint content address is required")
+		}
+		if content.Port <= 0 || content.Port > 65535 {
+			return Endpoint{}, false, fmt.Errorf("endpoint content port %d is invalid", content.Port)
+		}
+		if strings.TrimSpace(content.Protocol) == "" {
+			return Endpoint{}, false, errors.New("endpoint content protocol is required")
+		}
 	}
 
 	environment := firstTagValue(event.Tags, "env")
@@ -415,6 +473,13 @@ func endpointName(fqdn, environment, zone string) string {
 		}
 	}
 	return name
+}
+
+func eventID(event *nostr.Event) string {
+	if event == nil {
+		return ""
+	}
+	return event.ID
 }
 
 func cloneEndpoint(endpoint Endpoint) Endpoint {
