@@ -42,6 +42,39 @@ func TestMCPHandler_HandleJSONRPCInitializeAndListTools(t *testing.T) {
 	}
 }
 
+func TestMCPHandler_HandleJSONRPCResourcesList(t *testing.T) {
+	h := NewMCPHandler(mcpserver.NewServer(nil, zap.NewNop()), zap.NewNop())
+
+	body := []byte(`{"jsonrpc":"2.0","id":2,"method":"resources/list"}`)
+	req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+
+	h.HandleJSONRPC(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	var resp map[string]any
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp["jsonrpc"] != "2.0" || resp["error"] != nil || resp["result"] == nil {
+		t.Fatalf("unexpected response: %#v", resp)
+	}
+	result, ok := resp["result"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected result map, got %T", resp["result"])
+	}
+	resources, ok := result["resources"].([]any)
+	if !ok {
+		t.Fatalf("expected resources array, got %T", result["resources"])
+	}
+	// No DNS lister configured, so resources should be empty
+	if len(resources) != 0 {
+		t.Fatalf("expected empty resources, got %d", len(resources))
+	}
+}
+
 func TestMCPHandler_NostrCorrelationMetadataExtractsIDs(t *testing.T) {
 	h := NewMCPHandler(mcpserver.NewServer(nil, zap.NewNop()), zap.NewNop())
 	result := &mcpserver.ToolResult{Content: []mcpserver.Content{{Type: "text", Text: `{"status":"submitted","intent_id":"intent-1","service_id":"svc-1"}`}}}

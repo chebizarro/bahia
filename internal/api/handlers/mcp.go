@@ -111,15 +111,30 @@ func (h *MCPHandler) HandleJSONRPC(w http.ResponseWriter, r *http.Request) {
 		writeJSONRPC(w, jsonRPCResponse{JSONRPC: "2.0", ID: req.ID, Result: map[string]any{
 			"protocolVersion": "2024-11-05",
 			"serverInfo":      map[string]any{"name": "bahia-mcp", "version": "1.0.0"},
-			"capabilities":    map[string]any{"tools": map[string]any{}},
+			"capabilities":    map[string]any{"tools": map[string]any{}, "resources": map[string]any{}},
 		}})
 	case "tools/list":
 		writeJSONRPC(w, jsonRPCResponse{JSONRPC: "2.0", ID: req.ID, Result: ListToolsResponse{Tools: h.server.GetTools()}})
 	case "tools/call":
 		h.handleJSONRPCToolCall(w, r, req)
+	case "resources/list":
+		h.handleJSONRPCResourcesList(w, r, req)
 	default:
 		writeJSONRPC(w, jsonRPCResponse{JSONRPC: "2.0", ID: req.ID, Error: &jsonRPCError{Code: -32601, Message: "method not found"}})
 	}
+}
+
+func (h *MCPHandler) handleJSONRPCResourcesList(w http.ResponseWriter, r *http.Request, req jsonRPCRequest) {
+	resources, err := h.server.GetResources(r.Context())
+	if err != nil {
+		h.logger.Error("mcp json-rpc resources/list failed", zap.Error(err))
+		writeJSONRPC(w, jsonRPCResponse{JSONRPC: "2.0", ID: req.ID, Error: &jsonRPCError{Code: -32000, Message: err.Error()}})
+		return
+	}
+	if resources == nil {
+		resources = []mcp.Resource{}
+	}
+	writeJSONRPC(w, jsonRPCResponse{JSONRPC: "2.0", ID: req.ID, Result: map[string]any{"resources": resources}})
 }
 
 func (h *MCPHandler) handleJSONRPCToolCall(w http.ResponseWriter, r *http.Request, req jsonRPCRequest) {
@@ -224,6 +239,20 @@ func writeJSONRPC(w http.ResponseWriter, resp jsonRPCResponse) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(resp)
+}
+
+// ListResources returns all available MCP resources.
+func (h *MCPHandler) ListResources(w http.ResponseWriter, r *http.Request) {
+	resources, err := h.server.GetResources(r.Context())
+	if err != nil {
+		h.logger.Error("list resources failed", zap.Error(err))
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if resources == nil {
+		resources = []mcp.Resource{}
+	}
+	writeData(w, http.StatusOK, map[string]any{"resources": resources})
 }
 
 // GetServerInfo returns MCP server information.
