@@ -2,11 +2,16 @@ package discovery
 
 import (
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/nbd-wtf/go-nostr"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 func TestResolverParsesAndResolvesEndpointEvent(t *testing.T) {
@@ -131,6 +136,47 @@ func TestResolverFindsByCapability(t *testing.T) {
 
 	allEndpoints := resolver.Endpoints()
 	require.Len(t, allEndpoints, 2)
+}
+
+func TestResolverFetchesNIP11MetadataAndWarnsWhenKindIsNotAdvertised(t *testing.T) {
+	tests := []struct {
+		name      string
+		body      string
+		wantWarns int
+		wantInfos int
+	}{
+		{
+			name:      "required kind advertised",
+			body:      `{"name":"test relay","retention":[{"kinds":[[31976]]}]}`,
+			wantWarns: 0,
+			wantInfos: 1,
+		},
+		{
+			name:      "required kind not advertised",
+			body:      `{"name":"test relay","retention":[{"kinds":[[1]]}]}`,
+			wantWarns: 1,
+			wantInfos: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				require.Equal(t, "application/nostr+json", r.Header.Get("Accept"))
+				w.Header().Set("Content-Type", "application/nostr+json")
+				_, err := w.Write([]byte(tt.body))
+				require.NoError(t, err)
+			}))
+			defer server.Close()
+
+			core, logs := observer.New(zap.InfoLevel)
+			resolver := New([]string{strings.Replace(server.URL, "http://", "ws://", 1)}, "pubkey", WithLogger(zap.New(core)))
+			resolver.fetchRelayMetadata(t.Context())
+
+			require.Len(t, logs.FilterMessage("relay NIP-11 metadata does not advertise required kind").All(), tt.wantWarns)
+			require.Len(t, logs.FilterMessage("relay NIP-11 metadata loaded").All(), tt.wantInfos)
+		})
+	}
 }
 
 func TestResolverRejectsInvalidEvent(t *testing.T) {

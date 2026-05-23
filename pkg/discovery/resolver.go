@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/nbd-wtf/go-nostr"
+	"github.com/nbd-wtf/go-nostr/nip11"
+	nostradapter "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"go.uber.org/zap"
 )
 
@@ -48,20 +50,31 @@ func WithLogger(logger *zap.Logger) Option {
 	}
 }
 
-// WithRefreshInterval configures how often the resolver reissues its live subscription.
-func WithRefreshInterval(d time.Duration) Option {
+// WithPrivateKey configures the resolver to answer NIP-42 AUTH challenges from relays.
+func WithPrivateKey(privateKeyHex string) Option {
 	return func(r *Resolver) {
-		r.refreshInterval = d
+		r.privateKey = strings.TrimSpace(privateKeyHex)
 	}
 }
+
+type relayPool interface {
+	Connect(context.Context)
+	SubscribeAllWithEOSE(context.Context, []nostr.Filter) (*nostradapter.MergedSubscription, error)
+	FetchAllRelayInfo(context.Context) map[string]*nip11.RelayInformationDocument
+	AuthenticateRelay(context.Context, string) error
+	Close()
+}
+
+type relayPoolFactory func([]string, *zap.Logger, string) relayPool
 
 // Resolver maintains a live cache of DNS endpoints from Nostr kind 31976 events.
 type Resolver struct {
 	relayURLs    []string
 	authorPubkey string
 
-	logger          *zap.Logger
-	refreshInterval time.Duration
+	logger      *zap.Logger
+	privateKey  string
+	poolFactory relayPoolFactory
 
 	mu      sync.RWMutex
 	records map[string]endpointRecord
@@ -90,11 +103,11 @@ type endpointContent struct {
 // New creates a Resolver connected to the given relay URLs.
 func New(relayURLs []string, authorPubkey string, opts ...Option) *Resolver {
 	r := &Resolver{
-		relayURLs:       append([]string(nil), relayURLs...),
-		authorPubkey:    authorPubkey,
-		logger:          zap.NewNop(),
-		refreshInterval: 0,
-		records:         make(map[string]endpointRecord),
+		relayURLs:    append([]string(nil), relayURLs...),
+		authorPubkey: authorPubkey,
+		logger:       zap.NewNop(),
+		poolFactory:  newRelayPool,
+		records:      make(map[string]endpointRecord),
 	}
 	for _, opt := range opts {
 		opt(r)
@@ -222,14 +235,9 @@ func (r *Resolver) run(ctx context.Context, pool *nostr.SimplePool) {
 		default:
 		}
 
+		r.fetchRelayMetadata(ctx)
 		subCtx, cancel := context.WithCancel(ctx)
 		events := pool.SubMany(subCtx, r.relayURLs, nostr.Filters{r.subscriptionFilter()})
-		var refresh <-chan time.Time
-		var ticker *time.Ticker
-		if r.refreshInterval > 0 {
-			ticker = time.NewTicker(r.refreshInterval)
-			refresh = ticker.C
-		}
 
 		resubscribe := false
 		for !resubscribe {
@@ -242,21 +250,13 @@ func (r *Resolver) run(ctx context.Context, pool *nostr.SimplePool) {
 				if err := r.applyEvent(relayEvent.Event); err != nil {
 					r.logger.Warn("ignored invalid discovery endpoint event", zap.String("relay", relayEvent.Relay.URL), zap.Error(err))
 				}
-			case <-refresh:
-				resubscribe = true
 			case <-ctx.Done():
 				cancel()
-				if ticker != nil {
-					ticker.Stop()
-				}
 				return
 			}
 		}
 
 		cancel()
-		if ticker != nil {
-			ticker.Stop()
-		}
 	}
 }
 
@@ -265,6 +265,43 @@ func (r *Resolver) subscriptionFilter() nostr.Filter {
 		Kinds:   []int{KindDNSEndpointState},
 		Authors: []string{r.authorPubkey},
 	}
+}
+
+func (r *Resolver) fetchRelayMetadata(ctx context.Context) {
+	for _, relayURL := range r.relayURLs {
+		info, err := nip11.Fetch(ctx, relayURL)
+		if err != nil {
+			r.logger.Warn("relay NIP-11 metadata unavailable", zap.String("relay", relayURL), zap.Error(err))
+			continue
+		}
+		if !relayAdvertisesKind(&info, KindDNSEndpointState) {
+			r.logger.Warn("relay NIP-11 metadata does not advertise required kind", zap.String("relay", relayURL), zap.Int("kind", KindDNSEndpointState), zap.Any("retention", info.Retention))
+			continue
+		}
+		r.logger.Info("relay NIP-11 metadata loaded", zap.String("relay", relayURL), zap.String("name", info.Name), zap.Any("supported_nips", info.SupportedNIPs))
+	}
+}
+
+func relayAdvertisesKind(info *nip11.RelayInformationDocument, kind int) bool {
+	if info == nil {
+		return false
+	}
+	for _, retention := range info.Retention {
+		if retention == nil {
+			continue
+		}
+		for _, kinds := range retention.Kinds {
+			if len(kinds) == 2 && kinds[0] <= kind && kind <= kinds[1] {
+				return true
+			}
+			for _, advertisedKind := range kinds {
+				if advertisedKind == kind {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 func (r *Resolver) applyEvent(event *nostr.Event) error {
@@ -288,14 +325,10 @@ func (r *Resolver) applyEvent(event *nostr.Event) error {
 }
 
 func (r *Resolver) endpointFromEvent(event *nostr.Event) (Endpoint, bool, error) {
+	// pkg/discovery is a public package, so it intentionally keeps validation
+	// local rather than importing the canonical internal/adapters/nostr helper.
 	if event == nil {
 		return Endpoint{}, false, errors.New("nil event")
-	}
-	if event.Kind != KindDNSEndpointState {
-		return Endpoint{}, false, fmt.Errorf("unexpected kind %d", event.Kind)
-	}
-	if r.authorPubkey != "" && event.PubKey != r.authorPubkey {
-		return Endpoint{}, false, fmt.Errorf("unexpected author %s", event.PubKey)
 	}
 	if len(event.ID) != 64 || !event.CheckID() {
 		return Endpoint{}, false, errors.New("event id does not match NIP-01 hash")
@@ -309,6 +342,12 @@ func (r *Resolver) endpointFromEvent(event *nostr.Event) (Endpoint, bool, error)
 	}
 	if event.CreatedAt > nostr.Timestamp(time.Now().Add(maxFutureSkew).Unix()) {
 		return Endpoint{}, false, errors.New("event timestamp is too far in the future")
+	}
+	if event.Kind != KindDNSEndpointState {
+		return Endpoint{}, false, fmt.Errorf("unexpected kind %d", event.Kind)
+	}
+	if r.authorPubkey != "" && event.PubKey != r.authorPubkey {
+		return Endpoint{}, false, fmt.Errorf("unexpected author %s", event.PubKey)
 	}
 
 	fqdn := event.Tags.GetD()
