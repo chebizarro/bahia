@@ -52,6 +52,11 @@ type ContinuityStatusReader interface {
 	GetServiceContinuityStatus(serviceKey string) (*ContinuityStatus, bool)
 }
 
+const (
+	maxMeshHealthLoss = 0.5
+	maxMeshHealthRTT  = 5 * time.Second
+)
+
 // DNSProjector derives DNS endpoints and records from authoritative infrastructure state.
 type DNSProjector struct {
 	services         repository.ServiceRepository
@@ -576,6 +581,9 @@ func (p *DNSProjector) projectMeshEndpoints(ctx context.Context, projectedAt tim
 			p.logger.Warn("DNS mesh projection skipped because FIPS overlay address is invalid", zap.String("worker_pubkey", worker.PubKey), zap.String("fips_overlay_addr", worker.FIPSOverlayAddr))
 			continue
 		}
+		if !meshHealthAllowsProjection(worker.MeshHealth) {
+			continue
+		}
 		name := dnsLabel(worker.Name)
 		if name == "" {
 			name = dnsLabel(pubkeyPrefix(worker.PubKey))
@@ -598,6 +606,16 @@ func (p *DNSProjector) projectMeshEndpoints(ctx context.Context, projectedAt tim
 		})
 	}
 	return endpoints, nil
+}
+
+func meshHealthAllowsProjection(health *domain.MeshHealth) bool {
+	if health == nil {
+		return true
+	}
+	if health.Loss > maxMeshHealthLoss {
+		return false
+	}
+	return health.RTT <= maxMeshHealthRTT
 }
 
 func (p *DNSProjector) zoneForEnvironment(environment string) (string, bool) {

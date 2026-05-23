@@ -1,0 +1,11 @@
+{
+  "feature_id": "bahia-ntgz",
+  "test_runs": [
+    {
+      "command": "GOCACHE=/tmp/bahia-go-cache go test ./internal/reconcile ./internal/domain",
+      "status": "passed",
+      "evidence_date": "2026-05-23",
+      "covers": ["AC1", "AC2", "AC3", "AC4", "AC5"]
+    }
+  ]
+}

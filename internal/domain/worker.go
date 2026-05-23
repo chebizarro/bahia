@@ -73,6 +73,15 @@ type FIPSTransportEndpoint struct {
 	Address   string `json:"address"`
 }
 
+// MeshHealth records FIPS mesh health metrics from MMP reports.
+type MeshHealth struct {
+	RTT        time.Duration `json:"rtt"`
+	Loss       float64       `json:"loss"`
+	Jitter     time.Duration `json:"jitter"`
+	Goodput    uint64        `json:"goodput"`
+	LastReport time.Time     `json:"last_report"`
+}
+
 // WorkerResources describes host-level resources advertised by a worker.
 type WorkerResources struct {
 	CPUCores int `json:"cpu_cores,omitempty"`
@@ -139,6 +148,7 @@ type Worker struct {
 	PreferredRelays     []string                  `json:"preferred_relays,omitempty"`
 	FIPSOverlayAddr     string                    `json:"fips_overlay_addr,omitempty"`
 	FIPSEndpoints       []FIPSTransportEndpoint   `json:"fips_endpoints,omitempty"`
+	MeshHealth          *MeshHealth               `json:"mesh_health,omitempty"`
 	LastAdvertisementAt time.Time                 `json:"last_advertisement_at"`
 	Status              WorkerStatus              `json:"status"`
 	SchedulingState     WorkerSchedulingState     `json:"scheduling_state"`

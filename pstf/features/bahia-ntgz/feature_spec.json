@@ -1,0 +1,15 @@
+{
+  "feature_id": "bahia-ntgz",
+  "title": "FIPS mesh health model (Phase C.1)",
+  "source_design": "docs/designs/fips-bahia-integration.md §8 Phase C.1",
+  "intended_behavior": [
+    "Workers may carry optional FIPS mesh health metrics from MMP reports as MeshHealth.",
+    "Mesh DNS projection excludes workers whose reported mesh loss is greater than 0.5.",
+    "Mesh DNS projection excludes workers whose reported mesh RTT is greater than 5 seconds.",
+    "Workers without MeshHealth data remain eligible for mesh projection when otherwise healthy."
+  ],
+  "observed_prior_behavior": [
+    "Worker carried FIPS overlay address and endpoints but no mesh health metrics.",
+    "projectMeshEndpoints projected online workers with valid FIPS overlay IPv6 addresses without mesh metric gating."
+  ]
+}

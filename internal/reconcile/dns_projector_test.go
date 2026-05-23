@@ -128,6 +128,46 @@ func TestDNSProjectorMeshEndpointsProjectFIPSOverlayAAAARecords(t *testing.T) {
 	assertRecord(t, recordsByZone["mesh.cascadia"], "fips-node.mesh.cascadia", domain.DNSRecordTypeAAAA, "fd00:ab:cd::1")
 }
 
+func TestDNSProjectorMeshEndpointsGateByMeshHealth(t *testing.T) {
+	testCases := []struct {
+		name        string
+		meshHealth  *domain.MeshHealth
+		wantProject bool
+	}{
+		{name: "good mesh health projects", meshHealth: &domain.MeshHealth{Loss: 0.1, RTT: 100 * time.Millisecond}, wantProject: true},
+		{name: "high loss excludes", meshHealth: &domain.MeshHealth{Loss: 0.51, RTT: 100 * time.Millisecond}, wantProject: false},
+		{name: "high RTT excludes", meshHealth: &domain.MeshHealth{Loss: 0.1, RTT: 6 * time.Second}, wantProject: false},
+		{name: "nil mesh health projects", meshHealth: nil, wantProject: true},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			projector := NewDNSProjector(
+				&fakeServiceRepo{},
+				&fakeEnvironmentRepo{},
+				&fakeStateRepo{},
+				&fakeObservationRepo{},
+				nil,
+				nil,
+				&fakeWorkerSource{workers: []domain.Worker{
+					{PubKey: "mesh-worker", Name: "fips-node", Status: domain.WorkerStatusOnline, FIPSOverlayAddr: "fd00:ab:cd::1", MeshHealth: tc.meshHealth},
+				}},
+				config.DNSConfig{DefaultTTL: 300, Projection: config.DNSProjectionConfig{MeshEndpoints: true, MeshZone: "mesh.cascadia"}},
+				nil,
+			)
+
+			recordsByZone, err := projector.ProjectZoneRecords(context.Background())
+			if err != nil {
+				t.Fatalf("ProjectZoneRecords returned error: %v", err)
+			}
+			if tc.wantProject {
+				assertRecord(t, recordsByZone["mesh.cascadia"], "fips-node.mesh.cascadia", domain.DNSRecordTypeAAAA, "fd00:ab:cd::1")
+				return
+			}
+			assertNoRecord(t, recordsByZone["mesh.cascadia"], "fips-node.mesh.cascadia", domain.DNSRecordTypeAAAA, "fd00:ab:cd::1")
+		})
+	}
+}
+
 func TestDNSProjectorMeshEndpointsSkipWorkersWithoutFIPSOverlayAddr(t *testing.T) {
 	projector := NewDNSProjector(
 		&fakeServiceRepo{},

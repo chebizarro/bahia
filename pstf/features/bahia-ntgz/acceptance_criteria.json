@@ -1,0 +1,30 @@
+{
+  "feature_id": "bahia-ntgz",
+  "criteria": [
+    {
+      "id": "AC1",
+      "description": "Worker includes optional MeshHealth with RTT, loss, jitter, goodput, and last_report fields.",
+      "tests": ["go test ./internal/domain"]
+    },
+    {
+      "id": "AC2",
+      "description": "A worker with good mesh health remains projected into the mesh zone.",
+      "tests": ["TestDNSProjectorMeshEndpointsGateByMeshHealth/good_mesh_health_projects"]
+    },
+    {
+      "id": "AC3",
+      "description": "A worker with mesh loss greater than 0.5 is excluded from mesh projection.",
+      "tests": ["TestDNSProjectorMeshEndpointsGateByMeshHealth/high_loss_excludes"]
+    },
+    {
+      "id": "AC4",
+      "description": "A worker with mesh RTT greater than 5 seconds is excluded from mesh projection.",
+      "tests": ["TestDNSProjectorMeshEndpointsGateByMeshHealth/high_RTT_excludes"]
+    },
+    {
+      "id": "AC5",
+      "description": "A worker with nil MeshHealth remains projected when otherwise eligible.",
+      "tests": ["TestDNSProjectorMeshEndpointsGateByMeshHealth/nil_mesh_health_projects"]
+    }
+  ]
+}
