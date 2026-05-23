@@ -1,0 +1,17 @@
+{
+  "feature_id": "bahia-wprt",
+  "title": "FIPS mesh dashboard tab in DNS/operator UI",
+  "observed_behavior": "The DNS dashboard exposed zones, endpoints, drift, and policies from Nostr read models, while FIPS mesh worker and endpoint read-model data was available only in web/src/lib/stores/fips-mesh.svelte.js without a human operator surface.",
+  "intended_behavior": "The DNS/operator dashboard exposes a FIPS/Mesh tab backed by the existing FIPS mesh Nostr read-model store. The tab displays mesh-connected workers/endpoints, overlay addresses, Nostr identifiers, transport endpoints, DNS/FIPS hostnames, mesh health metrics, projection status, and gating reasons. Operators can filter by health, worker, capability, and projection state. Empty/error states distinguish relay/FIPS unavailability from no projected mesh nodes. Lifecycle remains event-driven through the EOSE-aware FIPS mesh store with no new REST endpoints or polling.",
+  "scope": [
+    "web/src/routes/dns/+page.svelte",
+    "web/src/routes/dns/FipsMeshPanel.svelte",
+    "web/tests/unit/fips-mesh-panel.test.js",
+    "web/tests/unit/fips-mesh-store.test.js"
+  ],
+  "out_of_scope": [
+    "DNS command-control changes coordinated under bahia-mou1",
+    "New backend FIPS mesh projection semantics",
+    "New REST endpoints"
+  ]
+}

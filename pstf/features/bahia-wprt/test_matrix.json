@@ -1,0 +1,17 @@
+{
+  "feature_id": "bahia-wprt",
+  "test_matrix": [
+    {
+      "test": "npm run test:unit -- tests/unit/fips-mesh-panel.test.js tests/unit/fips-mesh-store.test.js",
+      "criteria": ["AC2", "AC3", "AC4", "AC5"],
+      "result": "passed",
+      "notes": "12 tests passed. Covers FIPS mesh EOSE-aware store behavior plus panel rendering for healthy/degraded/unhealthy nodes, tombstone/removal reflected by empty store data, filters, and disabled/unavailable states."
+    },
+    {
+      "test": "npm run build",
+      "criteria": ["AC1"],
+      "result": "passed",
+      "notes": "SvelteKit build passed. Unrelated existing warnings remain in src/routes/policies/+page.svelte and src/lib/components/assistant/AssistantPlanApproval.svelte; qrcode default import warning in settings/+page.svelte also pre-existing/unrelated."
+    }
+  ]
+}

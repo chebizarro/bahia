@@ -1,0 +1,30 @@
+{
+  "feature_id": "bahia-wprt",
+  "criteria": [
+    {
+      "id": "AC1",
+      "statement": "DNS/operator UI exposes a FIPS/Mesh tab alongside zones, endpoints, drift, and policies.",
+      "tests": ["npm run build"]
+    },
+    {
+      "id": "AC2",
+      "statement": "The FIPS/Mesh tab is backed by fips-mesh.svelte.js Nostr read-model state and does not introduce FIPS REST fetch endpoints or polling loops.",
+      "tests": ["code review: web/src/routes/dns/+page.svelte", "npm run test:unit -- tests/unit/fips-mesh-store.test.js"]
+    },
+    {
+      "id": "AC3",
+      "statement": "Operators can see mesh worker identity, overlay address, transport endpoints, health metrics, DNS/FIPS hostnames, projection status, and gating reason when available.",
+      "tests": ["npm run test:unit -- tests/unit/fips-mesh-panel.test.js"]
+    },
+    {
+      "id": "AC4",
+      "statement": "Operators can filter mesh nodes by health, worker, capability, and projection state.",
+      "tests": ["npm run test:unit -- tests/unit/fips-mesh-panel.test.js"]
+    },
+    {
+      "id": "AC5",
+      "statement": "The panel has useful unavailable, disabled, empty, and tombstone/removal reflected states.",
+      "tests": ["npm run test:unit -- tests/unit/fips-mesh-panel.test.js", "npm run test:unit -- tests/unit/fips-mesh-store.test.js"]
+    }
+  ]
+}
