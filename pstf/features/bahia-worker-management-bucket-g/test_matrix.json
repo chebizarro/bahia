@@ -1,0 +1,19 @@
+{
+  "feature_id": "bahia-worker-management-bucket-g",
+  "test_runs": [
+    {
+      "command": "npm run build",
+      "working_directory": "web",
+      "result": "passed",
+      "criteria": ["AC1", "AC2", "AC3", "AC4"],
+      "notes": "Svelte/Vite production build completed successfully. Warnings reported by the build are pre-existing and outside the workers page: policies label association, AssistantPlanApproval state_referenced_locally, and settings qrcode unused import."
+    },
+    {
+      "command": "Oracle review",
+      "working_directory": ".",
+      "result": "passed_after_fixes",
+      "criteria": ["AC2", "AC3", "AC4"],
+      "notes": "Review identified non-array worker field guards, single pending command state, detail navigation, and label parser mismatch. Fixes were applied and npm run build was rerun successfully."
+    }
+  ]
+}

@@ -1,0 +1,25 @@
+{
+  "feature_id": "bahia-worker-management-bucket-g",
+  "criteria": [
+    {
+      "id": "AC1",
+      "description": "Each worker row displays distinct liveness and scheduling badges.",
+      "evidence": ["web/src/routes/workers/+page.svelte renders liveness-* and scheduling-* badges in separate spans."]
+    },
+    {
+      "id": "AC2",
+      "description": "Workers can be filtered by scheduling state, workload/task kind, label key/value, accelerator, runtime, and online-only liveness.",
+      "evidence": ["filterWorkerRows applies schedulingFilter, taskFilter, labelKeyFilter, labelValueFilter, acceleratorFilter, runtimeFilter, and onlineOnly."]
+    },
+    {
+      "id": "AC3",
+      "description": "Worker row actions publish Nostr command events instead of mutating worker state directly.",
+      "evidence": ["publishWorkerAction calls publishCommand with worker command request kinds, d/worker/command tags, command content, and resultKinds [7997]."]
+    },
+    {
+      "id": "AC4",
+      "description": "Command publishing is guarded against duplicate/conflicting in-flight publishes per worker.",
+      "evidence": ["pendingCommands plus isWorkerPublishPending disable worker actions while a command is in flight."]
+    }
+  ]
+}

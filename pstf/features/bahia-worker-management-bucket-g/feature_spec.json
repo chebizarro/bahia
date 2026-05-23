@@ -1,0 +1,22 @@
+{
+  "feature_id": "bahia-worker-management-bucket-g",
+  "title": "Workers list operator controls for scheduling state and labels",
+  "date": "2026-05-23",
+  "source_plan": "docs/plans/bahia-worker-management-nostr-native-2026-05-22.md",
+  "beads": ["bahia-513v"],
+  "intended_behavior": [
+    "Workers list rows present liveness and scheduling state as separate operator-visible indicators.",
+    "Operators can filter workers by scheduling state, workload/task kind, label key/value, accelerator, runtime, and online-only liveness.",
+    "Per-row actions publish signed Nostr worker command requests for cordon, uncordon, drain, undrain, maintenance enter, maintenance exit, and label updates through the existing frontend publishCommand request/result flow.",
+    "The page does not directly mutate worker state; successful UI feedback comes after the correlated worker result event is received."
+  ],
+  "observed_baseline": [
+    "Before this slice, the workers list showed only one liveness-style status badge per row.",
+    "Before this slice, filters did not include scheduling state, labels, online-only, or generic workload-kind handling.",
+    "Before this slice, no row-level worker scheduling or label command publication controls existed on the workers list."
+  ],
+  "out_of_scope": [
+    "Backend Go command handlers, repositories, scheduling enforcement, MCP worker tools, and worker assignment/drain read models.",
+    "Worker detail page changes."
+  ]
+}
