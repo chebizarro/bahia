@@ -1,0 +1,16 @@
+{
+  "feature_id": "BAHIA_WORKER_MANAGEMENT_BUCKET_A",
+  "title": "Bucket A frontend semantic cleanup for worker management",
+  "intent": "Reframe the frontend around workers as a shared execution pool and inference as one workload type without changing backend worker-management semantics.",
+  "scope": [
+    "Rename ML Fabric UI labels to Inference.",
+    "Reword inference deployment copy to target the shared worker pool.",
+    "Reframe the Workers list as a shared execution pool for CI/CD, inference, and scheduled compute workloads.",
+    "Refit the Worker detail page to the current domain.Worker JSON fields."
+  ],
+  "out_of_scope": [
+    "Backend Go domain, repository, and migration changes.",
+    "Scheduling state badges.",
+    "Operator action menus."
+  ]
+}

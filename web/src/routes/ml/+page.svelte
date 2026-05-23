@@ -111,8 +111,8 @@
 <div class="page">
   <div class="page-header">
     <div>
-      <h1><MLFabricIcon size={24} strokeWidth={1.75} ariaHidden="true" /> ML Fabric</h1>
-      <p class="subtitle">AI/ML inference fabric — model catalog, deployments, endpoints, and placement-aware worker scheduling.</p>
+      <h1><MLFabricIcon size={24} strokeWidth={1.75} ariaHidden="true" /> Inference</h1>
+      <p class="subtitle">Deploy inference endpoints onto Bahia’s shared worker pool for CI/CD, inference, and scheduled compute workloads.</p>
     </div>
     <div class="connection-card" data-testid="ml-connection-status">
       <strong>{controlplaneConnection.status}</strong>
@@ -125,7 +125,7 @@
   {/if}
 
   {#if loading}
-    <p class="loading">Bootstrapping ML fabric control plane…</p>
+    <p class="loading">Bootstrapping inference control plane…</p>
   {:else if error}
     <div class="error-state"><WarningIcon size={18} strokeWidth={1.75} ariaHidden="true" /> <span>{error}</span></div>
   {:else}
@@ -267,7 +267,7 @@
         <span>{mlEndpoints.length}</span>
       </div>
       {#if mlEndpoints.length === 0}
-        <p class="empty">No ML inference endpoints deployed yet.</p>
+        <p class="empty">No inference endpoints deployed to the shared worker pool yet.</p>
       {:else}
         <div class="table-scroll">
           <table>
@@ -339,7 +339,7 @@
       </section>
 
       <section class="panel">
-        <h2><DeploymentIcon size={18} strokeWidth={1.75} ariaHidden="true" /> Deploy Endpoint</h2>
+        <h2><DeploymentIcon size={18} strokeWidth={1.75} ariaHidden="true" /> Deploy Inference Endpoint</h2>
         <form onsubmit={handleDeploy} data-testid="ml-deploy-form">
           <label>
             Endpoint coordinate
@@ -350,7 +350,7 @@
             <input bind:value={deployForm.model_version} name="model-version" placeholder="model-version:qwen2.5-coder-32b:v1" required />
           </label>
           <label>
-            Runtime preference
+            Runtime preference for worker placement
             <select bind:value={deployForm.runtime_preference} name="runtime-preference">
               <option value="vllm">vLLM</option>
               <option value="ollama">Ollama</option>
@@ -364,7 +364,7 @@
             </select>
           </label>
           <label>
-            Accelerator
+            Accelerator requirement
             <select bind:value={deployForm.accelerator} name="accelerator">
               <option value="gpu_nvidia_cuda">GPU (NVIDIA CUDA)</option>
               <option value="npu_rk3588">NPU (RK3588)</option>
@@ -372,9 +372,10 @@
             </select>
           </label>
           <label>
-            Min VRAM (GB, optional)
+            Min worker VRAM (GB, optional)
             <input bind:value={deployForm.min_vram_gb} name="min-vram" type="number" min="0" placeholder="48" />
           </label>
+          <p class="form-hint">Deployment requests are matched against the shared worker pool by runtime and accelerator requirements.</p>
           <button type="submit" disabled={deploySubmitting}>{deploySubmitting ? 'Submitting…' : 'Request deployment'}</button>
         </form>
       </section>
@@ -565,6 +566,11 @@
     background: var(--bg);
     color: var(--text-primary);
     font: inherit;
+  }
+  .form-hint {
+    margin: 0;
+    color: var(--text-muted);
+    font-size: 0.85rem;
   }
   button {
     padding: 0.75rem 1rem;

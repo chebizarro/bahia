@@ -1,5 +1,5 @@
 /**
- * ML Fabric page model — helpers for model catalog, endpoint state, and deployment views.
+ * Inference page model — helpers for model catalog, endpoint state, and deployment views.
  */
 
 // ──── Filters & Helpers ────

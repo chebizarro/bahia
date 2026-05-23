@@ -259,7 +259,7 @@ export class BahiaClient {
   listWorkers() { return this.fetch('/workers').then(r => r ?? []); }
   getWorker(pubkey) { return this.fetch(`/workers/${encodeURIComponent(pubkey)}`); }
 
-  // ML Fabric
+  // Inference read-model adapters
   listMLModels(params = {}) { return this.fetch(`/ml/models${this.query(params)}`).then(r => r ?? []); }
   getMLModel(id) { return this.fetch(`/ml/models/${encodeURIComponent(id)}`); }
   listMLModelVersions(modelId, params = {}) { return this.fetch(`/ml/models/${encodeURIComponent(modelId)}/versions${this.query(params)}`).then(r => r ?? []); }

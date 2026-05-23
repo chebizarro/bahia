@@ -127,7 +127,7 @@ const nostrEvents = [
   })
 ];
 
-test('ML fabric page renders HF to GPU/vLLM deployed state from Nostr read models', async ({ page }) => {
+test('Inference page renders HF to GPU/vLLM deployed state from Nostr read models', async ({ page }) => {
   await installE2EMocks(page, { systemInfo: relaySystemInfo, nostrEvents });
   await page.route('**/api/v1/ml/**', (route) => route.fulfill({
     status: 202,
@@ -138,7 +138,7 @@ test('ML fabric page renders HF to GPU/vLLM deployed state from Nostr read model
   await page.goto('/ml');
   await page.waitForLoadState('networkidle');
 
-  await expect(page.getByRole('heading', { name: /ML Fabric/ })).toBeVisible();
+  await expect(page.getByRole('heading', { name: /Inference/ })).toBeVisible();
   await expect(page.locator('[data-testid="ml-model-catalog"]')).toContainText('Qwen2.5-Coder-32B-Instruct');
   await expect(page.locator('[data-testid="ml-model-catalog"]')).toContainText('huggingface');
   await expect(page.locator('[data-testid="ml-endpoints"]')).toContainText('qwen-coder');

@@ -51,7 +51,7 @@ export const packagePromotions = $state([]);
 export const workers = $state([]);
 export const events = $state([]);
 
-// AI/ML Fabric state
+// Inference state
 export const mlModels = $state([]);
 export const mlModelVersions = $state([]);
 export const mlEndpoints = $state([]);

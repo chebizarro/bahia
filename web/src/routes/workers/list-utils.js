@@ -1,25 +1,42 @@
 export function inferWorkerStatus(worker) {
   if (typeof worker?.status === 'string' && worker.status.trim().length > 0) {
-    return worker.status.toLowerCase() === 'online' ? 'online' : 'offline';
+    const normalized = worker.status.trim().toLowerCase();
+    if (['online', 'stale', 'offline'].includes(normalized)) return normalized;
   }
 
-  if (!worker?.last_seen) return 'offline';
+  const advertisedAt = worker?.last_advertisement_at;
+  if (!advertisedAt) return 'offline';
 
-  const lastSeen = new Date(worker.last_seen).getTime();
-  if (Number.isNaN(lastSeen)) return 'offline';
+  const lastAdvertisement = new Date(advertisedAt).getTime();
+  if (Number.isNaN(lastAdvertisement)) return 'offline';
 
-  return Date.now() - lastSeen <= 5 * 60 * 1000 ? 'online' : 'offline';
+  const ageMs = Date.now() - lastAdvertisement;
+  if (ageMs > 30 * 60 * 1000) return 'offline';
+  if (ageMs > 5 * 60 * 1000) return 'stale';
+  return 'online';
 }
 
 export function getCapabilityOptions(workers) {
   const set = new Set();
   for (const worker of workers || []) {
-    for (const capability of worker?.capabilities || []) {
+    for (const capability of workerCapabilityValues(worker)) {
       const value = String(capability || '').trim();
       if (value) set.add(value);
     }
   }
   return Array.from(set).sort((a, b) => a.localeCompare(b));
+}
+
+function workerCapabilityValues(worker) {
+  const mlCap = worker?.ml_capabilities || {};
+  return [
+    ...(worker?.software || []).map((entry) => entry?.name).filter(Boolean),
+    ...(mlCap.tasks || []),
+    ...(mlCap.runtimes || []),
+    ...(mlCap.artifact_formats || []),
+    ...(mlCap.accelerators || []),
+    ...(mlCap.toolchains || [])
+  ];
 }
 
 // ──── ML Capability Extractors ────
@@ -69,7 +86,7 @@ export function getToolchainOptions(workers) {
   return Array.from(set).sort();
 }
 
-export function getMLTaskOptions(workers) {
+export function getSupportedWorkloadOptions(workers) {
   const set = new Set();
   for (const worker of workers || []) {
     for (const task of worker?.ml_capabilities?.tasks || []) {
@@ -87,7 +104,7 @@ export function filterWorkers(workers, capabilityFilter, searchQuery, mlFilters 
   const { runtimeFilter, formatFilter, acceleratorFilter, toolchainFilter, taskFilter } = mlFilters;
 
   return (workers || []).filter((worker) => {
-    const capabilities = (worker.capabilities || []).map((capability) => String(capability).toLowerCase());
+    const capabilities = workerCapabilityValues(worker).map((capability) => String(capability).toLowerCase());
 
     const capabilityMatches = !selectedCapability || capabilities.includes(selectedCapability);
     if (!capabilityMatches) return false;
@@ -115,6 +132,8 @@ export function filterWorkers(workers, capabilityFilter, searchQuery, mlFilters 
       ...(mlCap.toolchains || []),
       ...(mlCap.tasks || []),
       worker.name || '',
+      worker.description || '',
+      worker.architecture || '',
       worker.pubkey || ''
     ].join(' ').toLowerCase();
 
@@ -152,4 +171,17 @@ export function workerVRAMLabel(worker) {
   if (accelerators.length === 0) return '-';
   const totalVRAM = accelerators.reduce((sum, a) => sum + (a.memory_gb || 0) * (a.count || 1), 0);
   return totalVRAM > 0 ? `${totalVRAM} GB` : '-';
+}
+
+export function workerPriceLabel(worker) {
+  const firstTier = (worker?.pricing || [])[0];
+  if (!firstTier) return '-';
+  const price = firstTier.price_per_second;
+  if (price === null || price === undefined || price === '') return '-';
+  return `${price} ${firstTier.unit || 'sat'}/sec`;
+}
+
+export function workerLastAdvertisementLabel(worker) {
+  const value = worker?.last_advertisement_at;
+  return value ? value.slice(0, 19).replace('T', ' ') : '-';
 }

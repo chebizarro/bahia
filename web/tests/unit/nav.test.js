@@ -14,7 +14,7 @@ describe('nav model helpers', () => {
     expect(PRIMARY_NAV_LINKS.map((link) => link.href)).toEqual([
       '/',
       '/services',
-      '/deployments',
+      '/packages',
       '/environments'
     ]);
 
@@ -26,6 +26,7 @@ describe('nav model helpers', () => {
     ]);
 
     expect(NAV_LINKS).toContainEqual({ href: '/souls', label: 'Souls' });
+    expect(NAV_LINKS).toContainEqual({ href: '/ml', label: 'Inference' });
     expect(NAV_LINKS).toContainEqual({ href: '/llm', label: 'LLM' });
     const pendingApprovals = NAV_LINKS.find((link) => link.href === '/deployments/pending');
     expect(pendingApprovals).toEqual({ href: '/deployments/pending', label: 'Pending Approvals' });

@@ -10,13 +10,16 @@
     getArtifactFormatOptions,
     getAcceleratorOptions,
     getToolchainOptions,
-    getMLTaskOptions,
+    getSupportedWorkloadOptions,
     filterWorkers,
     workerRuntimesLabel,
     workerAcceleratorsLabel,
     workerFormatsLabel,
     workerToolchainsLabel,
-    workerVRAMLabel
+    workerTasksLabel,
+    workerVRAMLabel,
+    workerPriceLabel,
+    workerLastAdvertisementLabel
   } from './list-utils.js';
 
   let capabilityFilter = $state('');
@@ -36,7 +39,7 @@
   const formatOptions = $derived(getArtifactFormatOptions(workers));
   const acceleratorOptions = $derived(getAcceleratorOptions(workers));
   const toolchainOptions = $derived(getToolchainOptions(workers));
-  const taskOptions = $derived(getMLTaskOptions(workers));
+  const taskOptions = $derived(getSupportedWorkloadOptions(workers));
 
   const mlFilters = $derived({ runtimeFilter, formatFilter, acceleratorFilter, toolchainFilter, taskFilter });
   const filteredWorkers = $derived(filterWorkers(workers, capabilityFilter, capabilitySearch, mlFilters));
@@ -52,14 +55,14 @@
         return `<span class="worker-status status-${status}"><span class="status-dot" aria-hidden="true"></span>${status}</span>`;
       }
     },
-    { key: 'capabilities', label: 'Capabilities', render: (r) => (r.capabilities || []).join(', ') || '-' },
+    { key: 'workloads', label: 'Supported Workloads', render: (r) => workerTasksLabel(r) },
     { key: 'runtimes', label: 'Runtimes', render: (r) => workerRuntimesLabel(r) },
     { key: 'accelerators', label: 'Accelerators', render: (r) => workerAcceleratorsLabel(r) },
     { key: 'formats', label: 'Formats', render: (r) => workerFormatsLabel(r) },
     { key: 'toolchains', label: 'Toolchains', render: (r) => workerToolchainsLabel(r) },
     { key: 'vram', label: 'VRAM', render: (r) => workerVRAMLabel(r) },
-    { key: 'price_per_sec', label: 'Price', render: (r) => `${r.price_per_sec || 0} sats/sec` },
-    { key: 'last_seen', label: 'Last Seen', render: (r) => r.last_seen?.slice(0, 19) || '-' }
+    { key: 'pricing', label: 'Pricing', render: (r) => workerPriceLabel(r) },
+    { key: 'last_advertisement_at', label: 'Last Advertisement', render: (r) => workerLastAdvertisementLabel(r) }
   ]);
 </script>
 
@@ -71,6 +74,7 @@
     </h1>
     <span class="count">{filteredWorkers.length} of {workers.length} workers</span>
   </div>
+  <p class="subtitle">Shared execution pool for CI/CD, inference, and scheduled compute workloads.</p>
 
   <div class="filters">
     <label>
@@ -129,9 +133,9 @@
     </label>
 
     <label>
-      <span>ML Task</span>
+      <span>Task Type</span>
       <select bind:value={taskFilter}>
-        <option value="">All tasks</option>
+        <option value="">All task types</option>
         {#each taskOptions as task}
           <option value={task}>{task}</option>
         {/each}
@@ -151,6 +155,7 @@
   h1 { display: inline-flex; align-items: center; gap: 0.5rem; }
   h1 :global(svg) { display: block; flex-shrink: 0; }
   .count { color: var(--text-muted); font-size: 0.875rem; }
+  .subtitle { color: var(--text-muted); margin: -0.75rem 0 1.25rem; }
   .loading { color: var(--text-muted); padding: 2rem; text-align: center; }
 
   .filters {
@@ -192,5 +197,6 @@
   }
 
   :global(.status-online .status-dot) { background: #22c55e; }
+  :global(.status-stale .status-dot) { background: #f59e0b; }
   :global(.status-offline .status-dot) { background: #ef4444; }
 </style>

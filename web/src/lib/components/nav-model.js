@@ -15,7 +15,7 @@ const DELIVERY_LINKS = [
 const OPERATIONS_LINKS = [
   { href: '/environments', label: 'Environments' },
   { href: '/workers', label: 'Workers' },
-  { href: '/ml', label: 'ML Fabric' },
+  { href: '/ml', label: 'Inference' },
   { href: '/llm', label: 'LLM' },
   { href: '/payments', label: 'Payments' },
   { href: '/policies', label: 'Policies' },

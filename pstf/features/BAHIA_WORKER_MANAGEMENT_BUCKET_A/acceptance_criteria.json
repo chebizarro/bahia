@@ -1,0 +1,25 @@
+{
+  "feature_id": "BAHIA_WORKER_MANAGEMENT_BUCKET_A",
+  "criteria": [
+    {
+      "id": "AC1",
+      "statement": "The /ml route presents itself as Inference, including the navigation label and primary heading.",
+      "tests": ["tests/e2e/ml-hf-vllm-fabric-smoke.spec.js", "tests/unit/nav.test.js"]
+    },
+    {
+      "id": "AC2",
+      "statement": "Inference deployment copy explains that endpoint deployments target the shared worker pool using runtime and accelerator requirements.",
+      "tests": ["npm run build"]
+    },
+    {
+      "id": "AC3",
+      "statement": "The Workers list describes workers as the shared execution pool for CI/CD, inference, and scheduled compute workloads and replaces the ML Task filter label with Task Type.",
+      "tests": ["npm run build"]
+    },
+    {
+      "id": "AC4",
+      "statement": "The Worker detail page renders current domain.Worker fields and does not depend on stale pseudo-fields such as price_per_sec, last_seen, worker.capabilities, or metadata.",
+      "tests": ["tests/unit/workers-list-utils.test.js", "npm run build"]
+    }
+  ]
+}

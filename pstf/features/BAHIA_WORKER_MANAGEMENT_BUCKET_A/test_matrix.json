@@ -1,0 +1,15 @@
+{
+  "feature_id": "BAHIA_WORKER_MANAGEMENT_BUCKET_A",
+  "test_runs": [
+    {
+      "command": "npm run test:unit -- --run tests/unit/workers-list-utils.test.js tests/unit/nav.test.js",
+      "result": "pass",
+      "evidence": "2 test files passed; 9 tests passed."
+    },
+    {
+      "command": "npm run build",
+      "result": "pass",
+      "evidence": "Vite/SvelteKit production build completed successfully; only pre-existing warnings outside the touched worker/inference pages were reported."
+    }
+  ]
+}
