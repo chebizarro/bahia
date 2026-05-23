@@ -376,7 +376,7 @@ func (r *backupRequestRegistry) CreateBackupRestoreIfAbsent(_ context.Context, r
 	return &cp, true, nil
 }
 
-func (r *backupRequestRegistry) ApplyBackupRestoreApproval(_ context.Context, restoreID uuid.UUID, approved bool, approvalEventID, approvedBy, message string) (*domain.BackupRestoreRun, bool, error) {
+func (r *backupRequestRegistry) ApplyBackupRestoreApproval(_ context.Context, restoreID uuid.UUID, approved bool, approvalEventID, approvedBy, message string, reasonParts ...any) (*domain.BackupRestoreRun, bool, error) {
 	restore := r.restores[restoreID]
 	if restore == nil {
 		return nil, false, fmt.Errorf("restore missing")

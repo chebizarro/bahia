@@ -99,6 +99,7 @@ type fakeBackupProjectionSource struct {
 	run          domain.BackupRun
 	verification domain.BackupVerificationRecord
 	restore      domain.BackupRestoreRun
+	retention    domain.BackupRetentionRun
 }
 
 func backupProjectionFixture(status domain.DeploymentRunStatus, verificationStatus domain.BackupVerificationStatus, verified bool) (*fakeBackupProjectionSource, uuid.UUID) {
@@ -109,13 +110,15 @@ func backupProjectionFixture(status domain.DeploymentRunStatus, verificationStat
 	runID := uuid.New()
 	verificationID := uuid.New()
 	restoreID := uuid.New()
+	retentionID := uuid.New()
 	return &fakeBackupProjectionSource{
 		repository:   domain.BackupRepository{ID: repoID, Name: "primary", Backend: domain.BackupBackendKopia, RepositoryURI: "kopia://primary", CreatedAt: now, UpdatedAt: now},
 		policy:       domain.BackupPolicy{ID: policyID, Name: "verified", RequireVerification: true, VerificationMode: domain.BackupVerificationKopiaSnapshotVerify, CreatedAt: now, UpdatedAt: now},
 		recipe:       domain.BackupRecipe{ID: recipeID, Name: "daily", Version: "v1", Backend: domain.BackupBackendKopia, RepositoryID: repoID, PolicyID: &policyID, TargetRef: "fs:/srv/data", CreatedAt: now, UpdatedAt: now},
 		run:          domain.BackupRun{ID: runID, RecipeID: recipeID, RepositoryID: repoID, PolicyID: &policyID, RequestedBy: "requester", RequestEventID: "event", RequestKind: 38400, RequestDTag: "backup:daily", Status: status, Backend: domain.BackupBackendKopia, TargetRef: "fs:/srv/data", SnapshotCreated: true, SnapshotID: "snap-1", VerificationStatus: verificationStatus, CreatedAt: now, UpdatedAt: now},
 		verification: domain.BackupVerificationRecord{ID: verificationID, BackupRunID: runID, Mode: domain.BackupVerificationKopiaSnapshotVerify, Status: verificationStatus, Verified: verified, CreatedAt: now, UpdatedAt: now},
-		restore:      domain.BackupRestoreRun{ID: restoreID, BackupRunID: runID, RecipeID: recipeID, RepositoryID: repoID, PolicyID: &policyID, SnapshotID: "snap-1", RestoreTargetRef: "fs:/restore", RequestedBy: "requester", RequestEventID: "restore-event", RequestKind: 38402, RequestDTag: "restore:daily", ApprovalStatus: domain.BackupApprovalApproved, ApprovalEventID: "approval-event", ApprovedBy: "operator", Status: domain.RunStatusSucceeded, Backend: domain.BackupBackendKopia, VerificationStatus: domain.BackupVerificationSkipped, CreatedAt: now, UpdatedAt: now},
+		restore:      domain.BackupRestoreRun{ID: restoreID, BackupRunID: runID, RecipeID: recipeID, RepositoryID: repoID, PolicyID: &policyID, SnapshotID: "snap-1", RestoreTargetRef: "fs:/restore", RequestedBy: "requester", RequestEventID: "restore-event", RequestKind: 38402, RequestDTag: "restore:daily", ApprovalStatus: domain.BackupApprovalApproved, ApprovalRequired: true, ApprovalRequirement: domain.BackupApprovalRequirementPolicy, ApprovalEventID: "approval-event", ApprovedBy: "operator", Status: domain.RunStatusSucceeded, Backend: domain.BackupBackendKopia, VerificationStatus: domain.BackupVerificationSkipped, CreatedAt: now, UpdatedAt: now},
+		retention:    domain.BackupRetentionRun{ID: retentionID, RepositoryID: repoID, PolicyID: &policyID, RequestedBy: "requester", RequestEventID: "retention-event", RequestKind: 38404, RequestDTag: "retention:daily", Status: domain.RunStatusSucceeded, Backend: domain.BackupBackendKopia, CreatedAt: now, UpdatedAt: now},
 	}, runID
 }
 
@@ -161,6 +164,15 @@ func (s *fakeBackupProjectionSource) ListBackupRestores(context.Context, domain.
 func (s *fakeBackupProjectionSource) GetBackupRestore(_ context.Context, id uuid.UUID) (*domain.BackupRestoreRun, error) {
 	if id == s.restore.ID {
 		return &s.restore, nil
+	}
+	return nil, nil
+}
+func (s *fakeBackupProjectionSource) ListBackupRetentionRuns(context.Context, domain.DeploymentRunStatus, int, int) ([]domain.BackupRetentionRun, error) {
+	return []domain.BackupRetentionRun{s.retention}, nil
+}
+func (s *fakeBackupProjectionSource) GetBackupRetentionRun(_ context.Context, id uuid.UUID) (*domain.BackupRetentionRun, error) {
+	if id == s.retention.ID {
+		return &s.retention, nil
 	}
 	return nil, nil
 }

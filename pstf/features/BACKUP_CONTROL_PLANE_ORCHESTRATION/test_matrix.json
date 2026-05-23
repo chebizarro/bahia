@@ -1,6 +1,6 @@
 {
   "feature_id": "BACKUP_CONTROL_PLANE_ORCHESTRATION",
-  "status": "restore_retention_integration_verified",
+  "status": "operational_posture_verified",
   "tests": [
     {
       "id": "T-BACKUP-001",
@@ -154,11 +154,62 @@
         "internal/repository/pg_backup_controlplane_test.go validates BackupDefinition upsert arguments, scan of tenant/environment IDs and JSON fields, missing delete ErrNotFound behavior, and nil executor slice serialization as JSON arrays.",
         "internal/db/migrations/000030_backup_definitions.up.sql creates backup_definitions with repository/policy/recipe/environment/tenant foreign keys and query indexes."
       ]
+    },
+    {
+      "id": "T-BACKUP-010",
+      "criteria": [
+        "AC-BACKUP-005",
+        "AC-BACKUP-010"
+      ],
+      "type": "unit/repository/projection",
+      "target": "internal/domain, internal/service, internal/repository, internal/adapters/nostr",
+      "description": "Verify verification mode/evidence details, explicit restore eligibility state/reason, and verification policy failures persist and project as first-class operational state.",
+      "status": "passed",
+      "evidence": [
+        "internal/domain/backup.go validates RestoreEligibility and BackupFailureCategory values and recomputes restore eligibility from run/verification state unless explicitly policy-blocked.",
+        "internal/repository/pg_backup_controlplane_test.go validates PostgreSQL column mapping for verification_mode, restore_eligibility, restore_eligibility_reason, verification_policy_failure, failure_category, and evidence_details.",
+        "internal/service/backup_registry.go and backup_run_coordinator.go persist verification records before terminal run completion and publish run updates after verification state changes.",
+        "internal/adapters/nostr/projector_backup_test.go and projector.go project verification mode/evidence details and restore eligibility state into BackupRunState/BackupVerificationState."
+      ]
+    },
+    {
+      "id": "T-BACKUP-011",
+      "criteria": [
+        "AC-BACKUP-007",
+        "AC-BACKUP-011"
+      ],
+      "type": "unit/controlplane/service/projection",
+      "target": "internal/controlplane, internal/service, internal/repository, internal/adapters/nostr",
+      "description": "Verify restore approvals capture policy requirements, pending queue state, operator audit provenance, and structured reasons.",
+      "status": "passed",
+      "evidence": [
+        "internal/controlplane/backup_restore_handlers.go parses message/reason and reason_code/reason_kind tags from signed approval events.",
+        "internal/service/backup_registry_restore.go snapshots approval requirements from policy, preserves verification mode for restore execution, and stores approved_by/approved_at/approval_reason_code/approval_reason.",
+        "internal/repository/pg_backup_controlplane_test.go validates approval_required, approval_requirement, approval reason JSON, verification policy failure, and failure category persistence.",
+        "internal/adapters/nostr/projector.go exposes pending_approval, approval requirement, reason, and audit fields in BackupRestoreState."
+      ]
+    },
+    {
+      "id": "T-BACKUP-012",
+      "criteria": [
+        "AC-BACKUP-004",
+        "AC-BACKUP-012"
+      ],
+      "type": "unit/projection",
+      "target": "internal/service, internal/adapters/nostr",
+      "description": "Verify structured backup observability and provenance are surfaced through retention projections and fleet posture summaries.",
+      "status": "passed",
+      "evidence": [
+        "internal/service backup run/restore/retention coordinators categorize load_inputs, backend_resolve, backend_health, snapshot, verification, restore, retention, policy, cancellation, and timeout failures.",
+        "internal/service/backup_registry_retention.go carries failure category and failed step into terminal retention state even when early validation prevents metadata pre-persist.",
+        "internal/adapters/nostr/projector.go publishes retention run state and BackupRuntimeObservationState with last successful run, verification, restore, retention outcomes, backend health failures, queued/running/stale counts, pending approvals, and failure category counts.",
+        "Focused verification command passed: go test ./internal/domain ./internal/service ./internal/controlplane ./internal/adapters/nostr ./internal/repository."
+      ]
     }
   ],
   "coverage_summary": {
-    "criteria_total": 9,
-    "criteria_with_tests": 9,
+    "criteria_total": 12,
+    "criteria_with_tests": 12,
     "verified_criteria": [
       "AC-BACKUP-001",
       "AC-BACKUP-002",
@@ -168,16 +219,20 @@
       "AC-BACKUP-006",
       "AC-BACKUP-007",
       "AC-BACKUP-008",
-      "AC-BACKUP-009"
+      "AC-BACKUP-009",
+      "AC-BACKUP-010",
+      "AC-BACKUP-011",
+      "AC-BACKUP-012"
     ],
     "known_gaps": []
   },
   "implementation_notes": [
     "BackupRunRequest 38400, BackupRestoreRequest 38402, BackupRestoreApproval 38403, and BackupRetentionEnforceRequest 38404 are handled through the existing reactor subscription/validation/dedup/authorization/EOSE/CLOSED/AUTH path.",
     "Restore responders publish BackupRestoreStatus 6982, BackupRestoreApprovalResult 38413, and BackupRestoreResult 38412 with per-relay publish summaries persisted to restore records.",
-    "Retention responders publish BackupObservation 6984 for progress and BackupRetentionResult 38414 for terminal outcome with per-relay publish summaries persisted to retention records; no retention execution read model is introduced.",
-    "Projector publishes BackupRestoreState 31998 and does not project a retention execution state.",
+    "Retention responders publish BackupObservation 6984 for progress and BackupRetentionResult 38414 for terminal outcome with per-relay publish summaries persisted to retention records; projector also emits retention outcomes via existing BackupRetentionRegistry 31994.",
+    "Projector publishes BackupRunState 31996, BackupVerificationState 31997, BackupRestoreState 31998, retention outcome state 31994, and fleet BackupRuntimeObservationState 31999.",
     "No filesystem_mock or fake backup backend is used in production backup paths; deterministic test doubles remain in _test.go files.",
-    "BackupDefinition CRUD is covered at the domain and repository layer; Nostr handlers, MCP, UI, scheduler dispatch, and executor placement are intentionally out of scope for bahia-gbo2."
+    "BackupDefinition CRUD is covered at the domain and repository layer; Nostr handlers, MCP, UI, scheduler dispatch, and executor placement are intentionally out of scope for bahia-gbo2.",
+    "Operational posture projection is recomputed from durable repository pages on backup run, restore, verification, and retention mutations; it does not poll relays or use timeout-based workflow completion."
   ]
 }

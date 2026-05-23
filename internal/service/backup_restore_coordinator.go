@@ -290,6 +290,10 @@ func (c *BackupRestoreCoordinator) completeFailed(ctx context.Context, restore *
 		cause = fmt.Errorf("backup restore failed")
 	}
 	restoreSetMetadata(restore, map[string]any{"failed_step": step})
+	restore.FailureCategory = backupFailureCategoryForStep(step, cause)
+	if err := c.registry.CreateOrUpdateBackupRestore(ctx, restore); err != nil {
+		return err
+	}
 	completed, err := c.registry.CompleteBackupRestore(ctx, restore.ID, nil, cause)
 	if err != nil {
 		return err

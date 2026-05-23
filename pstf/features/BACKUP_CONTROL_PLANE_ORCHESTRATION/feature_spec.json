@@ -1,7 +1,7 @@
 {
   "feature_id": "BACKUP_CONTROL_PLANE_ORCHESTRATION",
   "title": "Backup control-plane orchestration and provenance",
-  "status": "restore_retention_integration_verified",
+  "status": "operational_posture_verified",
   "source_evidence": [
     {
       "type": "operator_intent",
@@ -18,6 +18,10 @@
     {
       "type": "repository_observation",
       "summary": "Bahia now has a first-class BackupDefinition domain model and durable backup_definitions registry table/repository CRUD layer composing repository, policy, recipe, scheduling metadata, tenant/environment/owner scope, approval policy, restore target rules, executor targeting fields, labels/grouping, and audit fields."
+    },
+    {
+      "type": "repository_observation",
+      "summary": "Backup operational read models now persist and project first-class verification mode, evidence details, restore eligibility state/reason, verification policy failures, structured restore approval queue/audit reason fields, retention outcomes, failure categories, and fleet runtime posture summaries."
     }
   ],
   "actors": [
@@ -117,7 +121,7 @@
     "Implementing delta algorithms.",
     "Replacing Kopia, Restic, Velero, Borg, ZFS, Btrfs, LVM, Ceph, CSI, Longhorn, or Proxmox backup/snapshot capabilities.",
     "Polling relays or using timeout-based completion to detect backup or restore completion.",
-    "Inventing a retention execution read-model kind; retention execution is surfaced via BackupObservation 6984 and BackupRetentionResult 38414."
+    "Changing the allocated backup namespace; retention execution outcomes are projected through the existing BackupRetentionRegistry 31994 and fleet posture through BackupRuntimeObservationState 31999 rather than adding new kind numbers."
   ],
   "preconditions": [
     "Operators configure relay, signer, and backend adapter credentials outside production code paths.",
@@ -126,11 +130,12 @@
     "Implementation slices consume the allocated backup namespace from docs/control-planes.md rather than reusing 31200, 38395, or 38396."
   ],
   "postconditions": [
-    "Every backup run has signed provenance describing initiator, target, backend, repository, artifact hashes or backend snapshot identifiers, verification status, and restore-test status when applicable.",
+    "Every backup run has signed provenance describing initiator, target, backend, repository, artifact hashes or backend snapshot identifiers, verification mode/status/evidence details, explicit restore eligibility state, verification policy failures, and restore-test status when applicable.",
     "Every publish path verifies relay OK accepted flag and rejection message.",
     "Implemented backup, restore, and retention workflows are traceable from request through durable state, adapter execution, verification where required, signed status/result publication, and per-relay publish summaries.",
     "Remaining implementation gaps are tracked in Beads rather than TODOs or markdown-only lists.",
-    "Authoritative backup definitions persist composed operator intent before command handlers, MCP, UI, scheduling dispatch, or executor placement are implemented."
+    "Authoritative backup definitions persist composed operator intent before command handlers, MCP, UI, scheduling dispatch, or executor placement are implemented.",
+    "Backup fleet posture is projected as Nostr read-model state including last successful run, last verification, last restore outcome, retention outcomes, backend health failures, queued/running/stale counts, pending approvals, and structured failure categories."
   ],
   "happy_paths": [
     "Operator defines a Kopia-backed filesystem backup recipe with retention and verification requirements; Bahia schedules or accepts a run request, orchestrates adapter execution, verifies results, and publishes signed run and verification events.",
@@ -177,8 +182,8 @@
     },
     {
       "question": "When is a first-slice backup run restore-eligible?",
-      "decision": "Only a succeeded run with verification_status=succeeded is projected as restore_eligible=true. Snapshot creation with skipped, failed, unsupported, or pending verification remains restore_eligible=false.",
-      "evidence": "domain.BackupRunRestoreEligible, backup registry/coordinator tests, and projector_backup_test.go verify the derived field."
+      "decision": "Restore eligibility is a first-class persisted state, not only an inferred boolean: eligible, run_not_succeeded, snapshot_missing, verification_pending, verification_failed, verification_skipped, verification_unsupported, policy_blocked, or unknown with an operator-facing reason.",
+      "evidence": "domain.BackupRunRestoreEligibility/RestoreEligibility, backup run persistence/migration fields, registry/coordinator updates, and BackupRunState projection expose restore_eligibility and restore_eligibility_reason alongside verification mode/status."
     },
     {
       "question": "How should the first restore workflow be sourced and approved?",
@@ -187,13 +192,18 @@
     },
     {
       "question": "How should retention execution state be exposed without a dedicated read-model allocation?",
-      "decision": "Retention progress uses BackupObservation kind 6984 and terminal BackupRetentionResult kind 38414. No retention execution read-model kind is invented; 31994 remains a retention registry/definition projection.",
-      "evidence": "internal/controlplane/backup_retention_handlers.go, internal/controlplane/backup_retention_responder.go, docs/control-planes.md, and targeted controlplane tests verify retention request handling and observation/result publication semantics."
+      "decision": "Retention progress still uses BackupObservation kind 6984 and terminal BackupRetentionResult kind 38414; durable retention run outcomes are also projected through the existing BackupRetentionRegistry 31994, and fleet rollups use BackupRuntimeObservationState 31999.",
+      "evidence": "internal/adapters/nostr/projector.go publishes retention run state via KindBackupRetentionRegistry and fleet posture via KindBackupRuntimeObservationState; backup_kinds.go already allocates both kinds."
     },
     {
       "question": "What is a BackupDefinition in the first domain/repository slice?",
       "decision": "BackupDefinition is the canonical operator-facing registry object that composes repository, policy, recipe, schedule metadata, tenant/environment/owner scope, approval policy, restore target rules, executor targeting fields, labels/grouping, metadata, and audit fields. This slice persists and retrieves the model only; execution semantics are handled by dependent Beads.",
       "evidence": "internal/domain/backup.go, internal/repository/pg_backup_controlplane.go, and internal/db/migrations/000030_backup_definitions.up.sql implement the persisted domain/repository contract."
+    },
+    {
+      "question": "How should operators see pending restore approval and backup fleet health?",
+      "decision": "Restore state carries policy-driven approval_required/approval_requirement plus structured approval reason/audit provenance, while fleet posture is a replaceable runtime observation summarizing queue/running/stale counts, pending approvals, recent outcomes, backend health failures, and failure categories.",
+      "evidence": "internal/domain/backup.go, internal/controlplane/backup_restore_handlers.go, internal/service backup coordinators/registry methods, and internal/adapters/nostr/projector.go implement and project these fields."
     }
   ],
   "human_decisions": []

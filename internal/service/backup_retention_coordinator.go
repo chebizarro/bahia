@@ -290,8 +290,13 @@ func (c *BackupRetentionCoordinator) completeFailed(ctx context.Context, run *do
 	if cause == nil {
 		cause = fmt.Errorf("backup retention failed")
 	}
+	failureCategory := backupFailureCategoryForStep(step, cause)
 	backupSetRetentionMetadata(run, map[string]any{"failed_step": step})
-	completed, err := c.registry.CompleteBackupRetentionRun(ctx, run.ID, run.Evidence, cause)
+	run.FailureCategory = failureCategory
+	if err := c.registry.CreateOrUpdateBackupRetentionRun(ctx, run); err != nil {
+		c.logger.Warn("failed to persist backup retention failure metadata", zap.String("retention_run_id", run.ID.String()), zap.String("failed_step", step), zap.Error(err))
+	}
+	completed, err := c.registry.CompleteBackupRetentionRun(ctx, run.ID, run.Evidence, cause, failureCategory, step)
 	if err != nil {
 		return err
 	}

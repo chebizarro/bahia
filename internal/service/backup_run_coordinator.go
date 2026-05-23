@@ -258,6 +258,11 @@ func (c *BackupRunCoordinator) processBackupRunLocked(ctx context.Context, runID
 		}
 	}
 	mode, required := c.verificationPlan(recipe, policy)
+	run.VerificationMode = mode
+	backupSetRunMetadata(run, map[string]any{backupMetadataEffectiveVerificationMode: string(mode), backupMetadataPolicyRequiresVerification: policy != nil && policy.RequireVerification})
+	if err := c.registry.CreateOrUpdateBackupRun(ctx, run); err != nil {
+		return err
+	}
 	if !required {
 		completed, err := c.registry.CompleteBackupRun(ctx, run.ID, run.SnapshotID, nil, nil)
 		if err != nil {
@@ -420,6 +425,10 @@ func (c *BackupRunCoordinator) completeFailed(ctx context.Context, run *domain.B
 		cause = fmt.Errorf("backup run failed")
 	}
 	backupSetRunMetadata(run, map[string]any{"failed_step": step})
+	run.FailureCategory = backupFailureCategoryForStep(step, cause)
+	if err := c.registry.CreateOrUpdateBackupRun(ctx, run); err != nil {
+		return err
+	}
 	completed, err := c.registry.CompleteBackupRun(ctx, run.ID, run.SnapshotID, verification, cause)
 	if err != nil {
 		return err
@@ -430,13 +439,14 @@ func (c *BackupRunCoordinator) completeFailed(ctx context.Context, run *domain.B
 
 func backupVerificationRecord(runID uuid.UUID, mode domain.BackupVerificationMode, status domain.BackupVerificationStatus, verified bool, evidence map[string]any, errMsg string) *domain.BackupVerificationRecord {
 	return &domain.BackupVerificationRecord{
-		ID:          uuid.New(),
-		BackupRunID: runID,
-		Mode:        mode,
-		Status:      status,
-		Verified:    verified,
-		Evidence:    cloneMap(evidence),
-		Error:       strings.TrimSpace(errMsg),
+		ID:              uuid.New(),
+		BackupRunID:     runID,
+		Mode:            mode,
+		Status:          status,
+		Verified:        verified,
+		Evidence:        cloneMap(evidence),
+		EvidenceDetails: cloneMap(evidence),
+		Error:           strings.TrimSpace(errMsg),
 	}
 }
 

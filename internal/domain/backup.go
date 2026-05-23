@@ -163,17 +163,17 @@ type BackupDefinition struct {
 
 // BackupRun is the durable control-plane record for a backup request.
 type BackupRun struct {
-	ID                 uuid.UUID                `json:"id"`
-	RecipeID           uuid.UUID                `json:"recipe_id"`
-	RepositoryID       uuid.UUID                `json:"repository_id"`
-	PolicyID           *uuid.UUID               `json:"policy_id,omitempty"`
-	RequestedBy        string                   `json:"requested_by"`
-	RequestEventID     string                   `json:"request_event_id"`
-	RequestKind        int                      `json:"request_kind"`
-	RequestDTag        string                   `json:"request_d_tag"`
-	Status             DeploymentRunStatus      `json:"status"`
-	Backend            BackupBackendKind        `json:"backend"`
-	TargetRef          string                   `json:"target_ref"`
+	ID                        uuid.UUID                `json:"id"`
+	RecipeID                  uuid.UUID                `json:"recipe_id"`
+	RepositoryID              uuid.UUID                `json:"repository_id"`
+	PolicyID                  *uuid.UUID               `json:"policy_id,omitempty"`
+	RequestedBy               string                   `json:"requested_by"`
+	RequestEventID            string                   `json:"request_event_id"`
+	RequestKind               int                      `json:"request_kind"`
+	RequestDTag               string                   `json:"request_d_tag"`
+	Status                    DeploymentRunStatus      `json:"status"`
+	Backend                   BackupBackendKind        `json:"backend"`
+	TargetRef                 string                   `json:"target_ref"`
 	SnapshotCreated           bool                     `json:"snapshot_created"`
 	SnapshotID                string                   `json:"snapshot_id,omitempty"`
 	VerificationMode          BackupVerificationMode   `json:"verification_mode"`
@@ -185,86 +185,86 @@ type BackupRun struct {
 	PublishSummary            map[string]any           `json:"publish_summary,omitempty"`
 	Error                     string                   `json:"error,omitempty"`
 	Metadata                  map[string]any           `json:"metadata,omitempty"`
-	StartedAt          *time.Time               `json:"started_at,omitempty"`
-	FinishedAt         *time.Time               `json:"finished_at,omitempty"`
-	CreatedAt          time.Time                `json:"created_at"`
-	UpdatedAt          time.Time                `json:"updated_at"`
+	StartedAt                 *time.Time               `json:"started_at,omitempty"`
+	FinishedAt                *time.Time               `json:"finished_at,omitempty"`
+	CreatedAt                 time.Time                `json:"created_at"`
+	UpdatedAt                 time.Time                `json:"updated_at"`
 }
 
 // BackupVerificationRecord stores verification evidence for a backup run.
 type BackupVerificationRecord struct {
-	ID             uuid.UUID                `json:"id"`
-	BackupRunID    uuid.UUID                `json:"backup_run_id"`
-	Mode           BackupVerificationMode   `json:"mode"`
-	Status         BackupVerificationStatus `json:"status"`
-	Verified       bool                     `json:"verified"`
-	Evidence        map[string]any       `json:"evidence,omitempty"`
-	EvidenceDetails map[string]any       `json:"evidence_details,omitempty"`
-	Error           string               `json:"error,omitempty"`
-	PublishSummary map[string]any           `json:"publish_summary,omitempty"`
-	VerifiedAt     *time.Time               `json:"verified_at,omitempty"`
-	CreatedAt      time.Time                `json:"created_at"`
-	UpdatedAt      time.Time                `json:"updated_at"`
+	ID              uuid.UUID                `json:"id"`
+	BackupRunID     uuid.UUID                `json:"backup_run_id"`
+	Mode            BackupVerificationMode   `json:"mode"`
+	Status          BackupVerificationStatus `json:"status"`
+	Verified        bool                     `json:"verified"`
+	Evidence        map[string]any           `json:"evidence,omitempty"`
+	EvidenceDetails map[string]any           `json:"evidence_details,omitempty"`
+	Error           string                   `json:"error,omitempty"`
+	PublishSummary  map[string]any           `json:"publish_summary,omitempty"`
+	VerifiedAt      *time.Time               `json:"verified_at,omitempty"`
+	CreatedAt       time.Time                `json:"created_at"`
+	UpdatedAt       time.Time                `json:"updated_at"`
 }
 
 // BackupRestoreRun is the durable control-plane record for a restore request.
 type BackupRestoreRun struct {
-	ID                 uuid.UUID                `json:"id"`
-	BackupRunID        uuid.UUID                `json:"backup_run_id"`
-	RecipeID           uuid.UUID                `json:"recipe_id"`
-	RepositoryID       uuid.UUID                `json:"repository_id"`
-	PolicyID           *uuid.UUID               `json:"policy_id,omitempty"`
-	SnapshotID         string                   `json:"snapshot_id"`
-	RestoreTargetRef   string                   `json:"restore_target_ref"`
-	RequestedBy        string                   `json:"requested_by"`
-	RequestEventID     string                   `json:"request_event_id"`
-	RequestKind        int                      `json:"request_kind"`
-	RequestDTag        string                   `json:"request_d_tag"`
-	ApprovalStatus      BackupApprovalStatus      `json:"approval_status"`
-	ApprovalRequired    bool                      `json:"approval_required"`
-	ApprovalRequirement BackupApprovalRequirement `json:"approval_requirement"`
-	ApprovalEventID     string                    `json:"approval_event_id,omitempty"`
-	ApprovedBy          string                    `json:"approved_by,omitempty"`
-	ApprovedAt          *time.Time                `json:"approved_at,omitempty"`
-	ApprovalMessage     string                    `json:"approval_message,omitempty"`
-	ApprovalReasonCode  string                    `json:"approval_reason_code,omitempty"`
-	ApprovalReason      map[string]any            `json:"approval_reason,omitempty"`
-	Status              DeploymentRunStatus       `json:"status"`
-	Backend            BackupBackendKind        `json:"backend"`
-	VerificationStatus BackupVerificationStatus `json:"verification_status"`
-	Evidence                    map[string]any           `json:"evidence,omitempty"`
-	PublishSummary              map[string]any           `json:"publish_summary,omitempty"`
-	Error                       string                   `json:"error,omitempty"`
-	VerificationPolicyFailure   string                   `json:"verification_policy_failure,omitempty"`
-	FailureCategory             BackupFailureCategory    `json:"failure_category,omitempty"`
-	Metadata                    map[string]any           `json:"metadata,omitempty"`
-	StartedAt          *time.Time               `json:"started_at,omitempty"`
-	FinishedAt         *time.Time               `json:"finished_at,omitempty"`
-	CreatedAt          time.Time                `json:"created_at"`
-	UpdatedAt          time.Time                `json:"updated_at"`
+	ID                        uuid.UUID                 `json:"id"`
+	BackupRunID               uuid.UUID                 `json:"backup_run_id"`
+	RecipeID                  uuid.UUID                 `json:"recipe_id"`
+	RepositoryID              uuid.UUID                 `json:"repository_id"`
+	PolicyID                  *uuid.UUID                `json:"policy_id,omitempty"`
+	SnapshotID                string                    `json:"snapshot_id"`
+	RestoreTargetRef          string                    `json:"restore_target_ref"`
+	RequestedBy               string                    `json:"requested_by"`
+	RequestEventID            string                    `json:"request_event_id"`
+	RequestKind               int                       `json:"request_kind"`
+	RequestDTag               string                    `json:"request_d_tag"`
+	ApprovalStatus            BackupApprovalStatus      `json:"approval_status"`
+	ApprovalRequired          bool                      `json:"approval_required"`
+	ApprovalRequirement       BackupApprovalRequirement `json:"approval_requirement"`
+	ApprovalEventID           string                    `json:"approval_event_id,omitempty"`
+	ApprovedBy                string                    `json:"approved_by,omitempty"`
+	ApprovedAt                *time.Time                `json:"approved_at,omitempty"`
+	ApprovalMessage           string                    `json:"approval_message,omitempty"`
+	ApprovalReasonCode        string                    `json:"approval_reason_code,omitempty"`
+	ApprovalReason            map[string]any            `json:"approval_reason,omitempty"`
+	Status                    DeploymentRunStatus       `json:"status"`
+	Backend                   BackupBackendKind         `json:"backend"`
+	VerificationStatus        BackupVerificationStatus  `json:"verification_status"`
+	Evidence                  map[string]any            `json:"evidence,omitempty"`
+	PublishSummary            map[string]any            `json:"publish_summary,omitempty"`
+	Error                     string                    `json:"error,omitempty"`
+	VerificationPolicyFailure string                    `json:"verification_policy_failure,omitempty"`
+	FailureCategory           BackupFailureCategory     `json:"failure_category,omitempty"`
+	Metadata                  map[string]any            `json:"metadata,omitempty"`
+	StartedAt                 *time.Time                `json:"started_at,omitempty"`
+	FinishedAt                *time.Time                `json:"finished_at,omitempty"`
+	CreatedAt                 time.Time                 `json:"created_at"`
+	UpdatedAt                 time.Time                 `json:"updated_at"`
 }
 
 // BackupRetentionRun is the durable control-plane record for backend-native retention enforcement.
 type BackupRetentionRun struct {
-	ID             uuid.UUID           `json:"id"`
-	RepositoryID   uuid.UUID           `json:"repository_id"`
-	PolicyID       *uuid.UUID          `json:"policy_id,omitempty"`
-	RequestedBy    string              `json:"requested_by"`
-	RequestEventID string              `json:"request_event_id"`
-	RequestKind    int                 `json:"request_kind"`
-	RequestDTag    string              `json:"request_d_tag"`
-	Status         DeploymentRunStatus `json:"status"`
-	Backend        BackupBackendKind   `json:"backend"`
-	DryRun         bool                `json:"dry_run"`
+	ID              uuid.UUID             `json:"id"`
+	RepositoryID    uuid.UUID             `json:"repository_id"`
+	PolicyID        *uuid.UUID            `json:"policy_id,omitempty"`
+	RequestedBy     string                `json:"requested_by"`
+	RequestEventID  string                `json:"request_event_id"`
+	RequestKind     int                   `json:"request_kind"`
+	RequestDTag     string                `json:"request_d_tag"`
+	Status          DeploymentRunStatus   `json:"status"`
+	Backend         BackupBackendKind     `json:"backend"`
+	DryRun          bool                  `json:"dry_run"`
 	Evidence        map[string]any        `json:"evidence,omitempty"`
 	PublishSummary  map[string]any        `json:"publish_summary,omitempty"`
 	Error           string                `json:"error,omitempty"`
 	FailureCategory BackupFailureCategory `json:"failure_category,omitempty"`
 	Metadata        map[string]any        `json:"metadata,omitempty"`
-	StartedAt      *time.Time          `json:"started_at,omitempty"`
-	FinishedAt     *time.Time          `json:"finished_at,omitempty"`
-	CreatedAt      time.Time           `json:"created_at"`
-	UpdatedAt      time.Time           `json:"updated_at"`
+	StartedAt       *time.Time            `json:"started_at,omitempty"`
+	FinishedAt      *time.Time            `json:"finished_at,omitempty"`
+	CreatedAt       time.Time             `json:"created_at"`
+	UpdatedAt       time.Time             `json:"updated_at"`
 }
 
 func (k BackupBackendKind) IsValid() bool {
@@ -532,7 +532,7 @@ func ValidateBackupRun(run *BackupRun) error {
 	if !run.VerificationStatus.IsValid() {
 		return fmt.Errorf("%w: backup verification status %q is not valid", ErrInvalidValue, run.VerificationStatus)
 	}
-	if run.RestoreEligibility == "" {
+	if run.RestoreEligibility != RestoreEligibilityPolicyBlocked {
 		run.RestoreEligibility, run.RestoreEligibilityReason = BackupRunRestoreEligibility(run)
 	}
 	if !run.RestoreEligibility.IsValid() {

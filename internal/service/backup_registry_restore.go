@@ -81,7 +81,7 @@ func (s *BackupRegistryService) RequeueStaleBackupRestores(ctx context.Context, 
 }
 
 // ApplyBackupRestoreApproval records a deterministic approval decision. Rejections terminalize the restore before backend execution.
-func (s *BackupRegistryService) ApplyBackupRestoreApproval(ctx context.Context, restoreID uuid.UUID, approved bool, approvalEventID, approvedBy, message string) (*domain.BackupRestoreRun, bool, error) {
+func (s *BackupRegistryService) ApplyBackupRestoreApproval(ctx context.Context, restoreID uuid.UUID, approved bool, approvalEventID, approvedBy, message string, reasonParts ...any) (*domain.BackupRestoreRun, bool, error) {
 	restore, err := s.repo.GetBackupRestore(ctx, restoreID)
 	if err != nil {
 		return nil, false, err
@@ -94,6 +94,35 @@ func (s *BackupRegistryService) ApplyBackupRestoreApproval(ctx context.Context, 
 	}
 	restore.ApprovalEventID = strings.TrimSpace(approvalEventID)
 	restore.ApprovalMessage = strings.TrimSpace(message)
+	reasonCode := ""
+	reason := map[string]any(nil)
+	if len(reasonParts) > 0 {
+		reasonCode, _ = reasonParts[0].(string)
+	}
+	if len(reasonParts) > 1 {
+		reason, _ = reasonParts[1].(map[string]any)
+	}
+	reasonCode = strings.TrimSpace(reasonCode)
+	if reasonCode != "" {
+		restore.ApprovalReasonCode = reasonCode
+	} else if restore.ApprovalReasonCode == "" {
+		if approved {
+			restore.ApprovalReasonCode = "operator_approved"
+		} else {
+			restore.ApprovalReasonCode = "operator_rejected"
+		}
+	}
+	if restore.ApprovalReason == nil {
+		restore.ApprovalReason = map[string]any{}
+	}
+	for key, value := range reason {
+		if strings.TrimSpace(key) != "" && value != nil {
+			restore.ApprovalReason[strings.TrimSpace(key)] = value
+		}
+	}
+	if restore.ApprovalMessage != "" {
+		restore.ApprovalReason["message"] = restore.ApprovalMessage
+	}
 	now := time.Now().UTC()
 	if approved {
 		restore.ApprovalStatus = domain.BackupApprovalApproved
@@ -103,12 +132,14 @@ func (s *BackupRegistryService) ApplyBackupRestoreApproval(ctx context.Context, 
 			restore.Status = domain.RunStatusQueued
 		}
 		restore.Error = ""
+		restore.FailureCategory = domain.BackupFailureNone
 	} else {
 		restore.ApprovalStatus = domain.BackupApprovalRejected
 		restore.ApprovedBy = strings.TrimSpace(approvedBy)
 		restore.ApprovedAt = &now
 		restore.Status = domain.RunStatusFailed
 		restore.FinishedAt = &now
+		restore.FailureCategory = domain.BackupFailureApprovalRejected
 		restore.Error = "backup restore rejected"
 		if restore.ApprovalMessage != "" {
 			restore.Error = restore.Error + ": " + restore.ApprovalMessage
@@ -149,7 +180,10 @@ func (s *BackupRegistryService) CompleteBackupRestore(ctx context.Context, resto
 	if cause != nil {
 		restore.Status = domain.RunStatusFailed
 		restore.Error = strings.TrimSpace(cause.Error())
-		if contract.RestoreVerificationMode != domain.BackupVerificationNone {
+		if restore.FailureCategory == domain.BackupFailureNone {
+			restore.FailureCategory = domain.BackupFailureUnknown
+		}
+		if restoreEffectiveVerificationMode(restore, contract) != domain.BackupVerificationNone {
 			if errors.Is(cause, ErrBackupBackendUnsupported) {
 				restore.VerificationStatus = domain.BackupVerificationUnsupported
 			} else {
@@ -158,12 +192,14 @@ func (s *BackupRegistryService) CompleteBackupRestore(ctx context.Context, resto
 		} else if restore.VerificationStatus == "" || restore.VerificationStatus == domain.BackupVerificationPending {
 			restore.VerificationStatus = restoreVerificationStatus(result, false)
 		}
-	} else if contract.RestoreVerificationMode != domain.BackupVerificationNone {
+	} else if restoreEffectiveVerificationMode(restore, contract) != domain.BackupVerificationNone {
 		status := restoreVerificationStatus(result, true)
 		restore.VerificationStatus = status
 		if result == nil || !result.Verified || status != domain.BackupVerificationSucceeded {
 			restore.Status = domain.RunStatusFailed
-			restore.Error = restoreResultError(result, "backup restore policy requires successful verification")
+			restore.FailureCategory = domain.BackupFailurePolicy
+			restore.VerificationPolicyFailure = "backup restore policy requires successful verification"
+			restore.Error = restoreResultError(result, restore.VerificationPolicyFailure)
 		} else {
 			restore.Status = domain.RunStatusSucceeded
 			restore.Error = ""
@@ -171,6 +207,8 @@ func (s *BackupRegistryService) CompleteBackupRestore(ctx context.Context, resto
 	} else {
 		restore.Status = domain.RunStatusSucceeded
 		restore.Error = ""
+		restore.VerificationPolicyFailure = ""
+		restore.FailureCategory = domain.BackupFailureNone
 		status := restoreVerificationStatus(result, false)
 		if status == domain.BackupVerificationPending {
 			status = domain.BackupVerificationSkipped
@@ -193,6 +231,19 @@ func (s *BackupRegistryService) prepareRestoreFromSource(ctx context.Context, re
 	if err != nil {
 		return err
 	}
+	if contract.RestoreApprovalRequired {
+		restore.ApprovalRequired = true
+		restore.ApprovalRequirement = domain.BackupApprovalRequirementPolicy
+	} else {
+		restore.ApprovalRequired = false
+		restore.ApprovalRequirement = domain.BackupApprovalRequirementNone
+	}
+	if restore.Metadata == nil {
+		restore.Metadata = map[string]any{}
+	}
+	restore.Metadata[backupMetadataRestoreApprovalRequired] = restore.ApprovalRequired
+	restore.Metadata[backupMetadataRestoreApprovalRequirement] = string(restore.ApprovalRequirement)
+	snapshotRestoreVerificationMode(restore, contract.RestoreVerificationMode)
 	if restore.ApprovalStatus == "" {
 		if contract.RestoreApprovalRequired {
 			restore.ApprovalStatus = domain.BackupApprovalPending
@@ -272,6 +323,13 @@ func cloneUUIDPtr(in *uuid.UUID) *uuid.UUID {
 	}
 	out := *in
 	return &out
+}
+
+func restoreEffectiveVerificationMode(restore *domain.BackupRestoreRun, contract BackupPolicyRuntimeContract) domain.BackupVerificationMode {
+	if mode := restoreVerificationModeSnapshot(restore); mode != "" {
+		return mode
+	}
+	return contract.RestoreVerificationMode
 }
 
 func restoreVerificationStatus(result *BackupRestoreResult, required bool) domain.BackupVerificationStatus {

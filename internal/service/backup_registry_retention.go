@@ -69,7 +69,7 @@ func (s *BackupRegistryService) ListBackupRetentionRuns(ctx context.Context, sta
 	return s.repo.ListBackupRetentionRuns(ctx, status, limit, offset)
 }
 
-func (s *BackupRegistryService) CompleteBackupRetentionRun(ctx context.Context, runID uuid.UUID, evidence map[string]any, cause error) (*domain.BackupRetentionRun, error) {
+func (s *BackupRegistryService) CompleteBackupRetentionRun(ctx context.Context, runID uuid.UUID, evidence map[string]any, cause error, failureParts ...any) (*domain.BackupRetentionRun, error) {
 	run, err := s.repo.GetBackupRetentionRun(ctx, runID)
 	if err != nil {
 		return nil, err
@@ -91,12 +91,35 @@ func (s *BackupRegistryService) CompleteBackupRetentionRun(ctx context.Context, 
 	}
 	now := time.Now().UTC()
 	run.Evidence = cloneMap(evidence)
+	failureCategory := domain.BackupFailureNone
+	failedStep := ""
+	for _, part := range failureParts {
+		switch value := part.(type) {
+		case domain.BackupFailureCategory:
+			if value != domain.BackupFailureNone {
+				failureCategory = value
+			}
+		case string:
+			if failedStep == "" {
+				failedStep = strings.TrimSpace(value)
+			}
+		}
+	}
 	if cause != nil {
 		run.Status = domain.RunStatusFailed
 		run.Error = cause.Error()
+		if failureCategory != domain.BackupFailureNone {
+			run.FailureCategory = failureCategory
+		} else if run.FailureCategory == domain.BackupFailureNone {
+			run.FailureCategory = domain.BackupFailureUnknown
+		}
+		if failedStep != "" {
+			backupSetRetentionMetadata(run, map[string]any{"failed_step": failedStep})
+		}
 	} else {
 		run.Status = domain.RunStatusSucceeded
 		run.Error = ""
+		run.FailureCategory = domain.BackupFailureNone
 	}
 	run.FinishedAt = &now
 	if err := s.repo.UpsertBackupRetentionRun(ctx, run); err != nil {

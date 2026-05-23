@@ -18,7 +18,7 @@ type BackupRestoreControlPlaneExecutor interface {
 
 type backupRestoreRegistry interface {
 	CreateBackupRestoreIfAbsent(ctx context.Context, restore *domain.BackupRestoreRun) (*domain.BackupRestoreRun, bool, error)
-	ApplyBackupRestoreApproval(ctx context.Context, restoreID uuid.UUID, approved bool, approvalEventID, approvedBy, message string) (*domain.BackupRestoreRun, bool, error)
+	ApplyBackupRestoreApproval(ctx context.Context, restoreID uuid.UUID, approved bool, approvalEventID, approvedBy, message string, reasonParts ...any) (*domain.BackupRestoreRun, bool, error)
 }
 
 type backupRestoreApprovalResponder interface {
@@ -33,10 +33,12 @@ type backupRestoreRequest struct {
 }
 
 type backupRestoreApprovalRequest struct {
-	RestoreID string `json:"restore_id,omitempty"`
-	Approved  *bool  `json:"approved,omitempty"`
-	Decision  string `json:"decision,omitempty"`
-	Message   string `json:"message,omitempty"`
+	RestoreID  string         `json:"restore_id,omitempty"`
+	Approved   *bool          `json:"approved,omitempty"`
+	Decision   string         `json:"decision,omitempty"`
+	Message    string         `json:"message,omitempty"`
+	ReasonCode string         `json:"reason_code,omitempty"`
+	Reason     map[string]any `json:"reason,omitempty"`
 }
 
 func (r *Reactor) handleBackupRestoreRequest(ctx context.Context, event *nostr.Event) {
@@ -134,7 +136,7 @@ func (r *Reactor) handleBackupRestoreApproval(ctx context.Context, event *nostr.
 		_ = r.publishBackupCommandFailure(ctx, event, KindBackupRestoreApprovalResult, "failed", "validation_error", "restore_id must be a UUID")
 		return
 	}
-	restore, changed, err := registry.ApplyBackupRestoreApproval(ctx, restoreID, *req.Approved, event.ID, event.PubKey, req.Message)
+	restore, changed, err := registry.ApplyBackupRestoreApproval(ctx, restoreID, *req.Approved, event.ID, event.PubKey, req.Message, req.ReasonCode, req.Reason)
 	if err != nil {
 		_ = r.publishBackupCommandFailure(ctx, event, KindBackupRestoreApprovalResult, "failed", "restore_approval_error", err.Error())
 		return
@@ -204,7 +206,14 @@ func parseBackupRestoreApprovalRequest(event *nostr.Event) (*backupRestoreApprov
 		return nil, fmt.Errorf("approved decision is required")
 	}
 	req.RestoreID = strings.TrimSpace(req.RestoreID)
+	if req.Message == "" {
+		req.Message = firstNonEmpty(tagValueNostr(event.Tags, "message"), tagValueNostr(event.Tags, "reason"))
+	}
+	if req.ReasonCode == "" {
+		req.ReasonCode = firstNonEmpty(tagValueNostr(event.Tags, "reason_code"), tagValueNostr(event.Tags, "reason_kind"))
+	}
 	req.Message = strings.TrimSpace(req.Message)
+	req.ReasonCode = strings.TrimSpace(req.ReasonCode)
 	return &req, nil
 }
 

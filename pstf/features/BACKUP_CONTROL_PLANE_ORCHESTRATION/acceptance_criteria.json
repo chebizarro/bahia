@@ -1,6 +1,6 @@
 {
   "feature_id": "BACKUP_CONTROL_PLANE_ORCHESTRATION",
-  "status": "restore_retention_integration_verified",
+  "status": "operational_posture_verified",
   "criteria": [
     {
       "id": "AC-BACKUP-001",
@@ -64,14 +64,36 @@
       "given": "an operator defines fleet backup intent",
       "when": "the intent is persisted in Bahia registry state",
       "then": "a BackupDefinition composes repository, policy, recipe, schedule metadata, tenant/environment/owner scope, approval policy, restore target rules, executor targeting fields, labels/grouping, and audit fields without implementing execution handlers in this slice"
+    },
+    {
+      "id": "AC-BACKUP-010",
+      "title": "Verification and restore eligibility are first-class operational state",
+      "given": "a backup run creates, skips, fails, or verifies a snapshot",
+      "when": "durable state and Nostr read models are persisted or projected",
+      "then": "verification mode/status/evidence details, explicit restore_eligibility state/reason, and verification policy failure details are represented without requiring operators to infer them from booleans"
+    },
+    {
+      "id": "AC-BACKUP-011",
+      "title": "Restore approval queue is ergonomic and auditable",
+      "given": "a restore policy requires operator approval",
+      "when": "a restore request is queued and an approval or rejection event is processed",
+      "then": "durable restore state and BackupRestoreState expose approval_required, approval_requirement, pending approval state, who approved, when, structured reason code/details, and rejection categories before adapter execution"
+    },
+    {
+      "id": "AC-BACKUP-012",
+      "title": "Backup fleet posture is observable",
+      "given": "backup, verification, restore, and retention records exist across repositories",
+      "when": "the Nostr projector republishes snapshots or reacts to backup mutations",
+      "then": "BackupRuntimeObservationState summarizes last successful run, last verification, last restore outcome, retention outcomes, backend health failures, queued/running/stale counts, pending approvals, and structured failure categories"
     }
   ],
   "coverage_notes": [
     "The U4-1 docs/protocol slice resolves the namespace ambiguity; backup-run, restore, and retention slices now wire the relevant Nostr command/status/result/read-model contracts into reactor, responder, projector, and app composition.",
     "Restore request and approval events 38402/38403 use the existing reactor validation/dedup/authorization/EOSE/CLOSED/AUTH path; required approval gates adapter execution and BackupRestoreState 31998 is projected.",
-    "Retention enforcement event 38404 uses backend-native adapters, publishes progress as BackupObservation 6984 and terminal BackupRetentionResult 38414, and intentionally does not add a retention execution read model.",
+    "Retention enforcement event 38404 uses backend-native adapters, publishes progress as BackupObservation 6984 and terminal BackupRetentionResult 38414, and durable retention outcomes are projected through existing BackupRetentionRegistry 31994 plus fleet posture 31999.",
     "The allocated namespace avoids the known collisions: 31200 remains artifact signature attestation, and 38395/38396 remain AI/ML terminal result kinds.",
-    "BackupDefinition domain model and backup_definitions migration added for bahia-gbo2; handlers, MCP, UI, scheduling execution, and executor placement remain tracked in dependent Beads."
+    "BackupDefinition domain model and backup_definitions migration added for bahia-gbo2; handlers, MCP, UI, scheduling execution, and executor placement remain tracked in dependent Beads.",
+    "The 2026-05-23 operational posture slice adds persisted and projected verification/restore eligibility, restore approval queue/audit metadata, structured failure categories, retention outcomes, and fleet runtime observation summaries for bahia-bc66/bahia-gzjs/bahia-j46o."
   ],
   "unresolved_questions": [],
   "coverage_summary": {}

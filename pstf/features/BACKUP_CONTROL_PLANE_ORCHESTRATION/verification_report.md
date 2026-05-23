@@ -91,3 +91,45 @@ Oracle review findings were addressed before closeout:
 - `go test ./...` was run on 2026-05-23 after the targeted verification. The BackupDefinition-touched packages passed, but the full suite failed in unrelated packages:
   - `internal/api/handlers`: `continuity_test.go` still calls `NewContinuityHandler` with the old one-argument constructor; tracked as `bahia-b6h3`.
   - `internal/config`: `TestDNSValidationEnabled/unsupported_backend_type` expects an unsupported backend error, but current validation returns a missing coredns `etcd_endpoints` error first; tracked as `bahia-za2w`.
+
+---
+
+## 2026-05-23 — Backup operational posture slices (`bahia-bc66`, `bahia-gzjs`, `bahia-j46o`)
+
+### Evidence gathered
+
+- `internal/domain/backup.go` now models verification mode, evidence details, explicit `RestoreEligibility` state/reason, verification policy failures, structured failure categories, restore approval requirements, structured approval reasons, and retention failure categories.
+- `internal/db/migrations/000031_backup_operational_read_models.up.sql` persists the new operational state on backup runs, verification records, restore runs, and retention runs with a reversible down migration.
+- `internal/service/backup_registry.go` and `backup_run_coordinator.go` persist verification records before terminal backup completion, surface policy-blocked verification failures, recompute restore eligibility, and publish run/verification changes.
+- `internal/controlplane/backup_restore_handlers.go` and `internal/service/backup_registry_restore.go` capture approval reason tags/content, snapshot policy-driven approval requirements, record who/when/why approval provenance, and preserve restore verification policy at request time.
+- `internal/service` backup/restore/retention coordinators categorize failure causes for load input, backend resolution/health, snapshot, verification, restore, retention, policy, cancellation, and timeout paths.
+- `internal/adapters/nostr/projector.go` exposes enriched `BackupRunState`, `BackupVerificationState`, `BackupRestoreState`, retention outcome state via `31994`, and fleet `BackupRuntimeObservationState` `31999` with last outcomes, pending approvals, queued/running/stale counts, backend health failures, and failure category summaries.
+
+### Verification performed
+
+- `go test ./internal/domain ./internal/service ./internal/controlplane ./internal/adapters/nostr ./internal/repository`
+
+### Test evidence
+
+- `internal/repository/pg_backup_controlplane_test.go` validates persistence/scanning for new backup run, restore, retention, and verification operational columns.
+- `internal/service/backup_registry_test.go`, `backup_registry_restore_test.go`, `backup_registry_retention_test.go`, and coordinator tests validate fail-closed verification/restore/retention transitions and explicit failure categories.
+- `internal/controlplane/reactor_backup_requests_test.go` validates pending approval still gates execution and signed approval triggers execution through the event-driven reactor path.
+- `internal/adapters/nostr/projector_backup_test.go` validates backup projection behavior; projector implementation now includes enriched verification/approval/provenance fields plus fleet posture publication.
+
+### Current result
+
+The three operational posture beads are verified for the requested cross-cutting scope: verification is first-class, restore approval state is operator/audit friendly, and backup observability/provenance is projected through durable read models without adding polling or fake backend behavior.
+
+### Review follow-up
+
+Oracle review findings were addressed before closeout:
+
+- operational read-model migrations were renumbered from duplicate `000030` to `000031` to avoid colliding with the BackupDefinition migration
+- fleet `last_restore` and `last_retention` outcomes now ignore queued/running rows so pending work cannot overwrite the last terminal outcome
+- backup runtime observation staleness uses a projector option (`WithBackupProjectionStaleTimeout`) with the 15-minute default reflected in `stale_after_seconds`
+
+### Full-suite note
+
+- `go test ./...` was run on 2026-05-23 after the operational posture changes. The backup/control-plane touched packages passed, but the full suite failed in unrelated packages already tracked from the earlier BackupDefinition slice:
+  - `internal/api/handlers`: `continuity_test.go` still calls `NewContinuityHandler` with the old one-argument constructor; tracked as `bahia-b6h3`.
+  - `internal/config`: `TestDNSValidationEnabled/unsupported_backend_type` expects an unsupported backend error, but current validation returns a missing coredns `etcd_endpoints` error first; tracked as `bahia-za2w`.

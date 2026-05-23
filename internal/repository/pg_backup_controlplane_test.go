@@ -20,15 +20,18 @@ func TestPgBackupControlPlaneRepositoryCreateBackupRunIfAbsentInsertsNewCoordina
 	repo := newPgBackupControlPlaneRepositoryWithDB(mock)
 	policyID := uuid.New()
 	run := backupRunFixture(&policyID)
+	require.NoError(t, domain.ValidateBackupRun(run))
 	now := time.Now().UTC().Truncate(time.Second)
 
 	mock.ExpectQuery("INSERT INTO backup_runs").
 		WithArgs(run.ID, run.RecipeID, run.RepositoryID, policyID, run.RequestedBy, run.RequestEventID, run.RequestKind, run.RequestDTag,
-			run.Status, run.Backend, run.TargetRef, run.SnapshotCreated, run.SnapshotID, run.VerificationStatus, pgxmock.AnyArg(), run.Error,
+			run.Status, run.Backend, run.TargetRef, run.SnapshotCreated, run.SnapshotID, run.VerificationMode, run.VerificationStatus,
+			run.RestoreEligibility, run.RestoreEligibilityReason, run.VerificationPolicyFailure, run.FailureCategory, pgxmock.AnyArg(), run.Error,
 			pgxmock.AnyArg(), run.StartedAt, run.FinishedAt, pgxmock.AnyArg(), pgxmock.AnyArg()).
 		WillReturnRows(pgxmock.NewRows(splitColumns(backupRunColumns)).
 			AddRow(run.ID, run.RecipeID, run.RepositoryID, policyID.String(), run.RequestedBy, run.RequestEventID, run.RequestKind, run.RequestDTag,
-				run.Status, run.Backend, run.TargetRef, run.SnapshotCreated, run.SnapshotID, run.VerificationStatus, []byte(`{"relay":"accepted"}`), run.Error,
+				run.Status, run.Backend, run.TargetRef, run.SnapshotCreated, run.SnapshotID, run.VerificationMode, run.VerificationStatus,
+				run.RestoreEligibility, run.RestoreEligibilityReason, run.VerificationPolicyFailure, run.FailureCategory, []byte(`{"relay":"accepted"}`), run.Error,
 				[]byte(`{"source":"test"}`), nil, nil, now, now))
 
 	created, wasCreated, err := repo.CreateBackupRunIfAbsent(ctx, run)
@@ -49,19 +52,22 @@ func TestPgBackupControlPlaneRepositoryCreateBackupRunIfAbsentReturnsExistingCoo
 	defer mock.Close()
 	repo := newPgBackupControlPlaneRepositoryWithDB(mock)
 	run := backupRunFixture(nil)
+	require.NoError(t, domain.ValidateBackupRun(run))
 	existingID := uuid.New()
 	now := time.Now().UTC().Truncate(time.Second)
 
 	mock.ExpectQuery("INSERT INTO backup_runs").
 		WithArgs(run.ID, run.RecipeID, run.RepositoryID, nil, run.RequestedBy, run.RequestEventID, run.RequestKind, run.RequestDTag,
-			run.Status, run.Backend, run.TargetRef, run.SnapshotCreated, run.SnapshotID, run.VerificationStatus, pgxmock.AnyArg(), run.Error,
+			run.Status, run.Backend, run.TargetRef, run.SnapshotCreated, run.SnapshotID, run.VerificationMode, run.VerificationStatus,
+			run.RestoreEligibility, run.RestoreEligibilityReason, run.VerificationPolicyFailure, run.FailureCategory, pgxmock.AnyArg(), run.Error,
 			pgxmock.AnyArg(), run.StartedAt, run.FinishedAt, pgxmock.AnyArg(), pgxmock.AnyArg()).
 		WillReturnRows(pgxmock.NewRows(splitColumns(backupRunColumns)))
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT "+backupRunColumns+" FROM backup_runs WHERE requested_by = $1 AND request_kind = $2 AND request_d_tag = $3")).
 		WithArgs(run.RequestedBy, run.RequestKind, run.RequestDTag).
 		WillReturnRows(pgxmock.NewRows(splitColumns(backupRunColumns)).
 			AddRow(existingID, run.RecipeID, run.RepositoryID, nil, run.RequestedBy, "event-original", run.RequestKind, run.RequestDTag,
-				run.Status, run.Backend, run.TargetRef, false, "", run.VerificationStatus, []byte(`{}`), "", []byte(`{}`), nil, nil, now, now))
+				run.Status, run.Backend, run.TargetRef, false, "", run.VerificationMode, run.VerificationStatus,
+				run.RestoreEligibility, run.RestoreEligibilityReason, run.VerificationPolicyFailure, run.FailureCategory, []byte(`{}`), "", []byte(`{}`), nil, nil, now, now))
 
 	existing, wasCreated, err := repo.CreateBackupRunIfAbsent(ctx, run)
 
@@ -152,7 +158,7 @@ func TestPgBackupControlPlaneRepositoryUpsertVerificationReturnsPersistedID(t *t
 	}
 
 	mock.ExpectQuery("INSERT INTO backup_verifications").
-		WithArgs(record.ID, record.BackupRunID, record.Mode, record.Status, record.Verified, pgxmock.AnyArg(), record.Error, pgxmock.AnyArg(), record.VerifiedAt, pgxmock.AnyArg(), pgxmock.AnyArg()).
+		WithArgs(record.ID, record.BackupRunID, record.Mode, record.Status, record.Verified, pgxmock.AnyArg(), pgxmock.AnyArg(), record.Error, pgxmock.AnyArg(), record.VerifiedAt, pgxmock.AnyArg(), pgxmock.AnyArg()).
 		WillReturnRows(pgxmock.NewRows([]string{"id"}).AddRow(persistedID))
 
 	require.NoError(t, repo.UpsertBackupVerification(ctx, record))
@@ -168,18 +174,23 @@ func TestPgBackupControlPlaneRepositoryCreateBackupRestoreIfAbsentInsertsNewCoor
 	repo := newPgBackupControlPlaneRepositoryWithDB(mock)
 	policyID := uuid.New()
 	restore := backupRestoreFixture(&policyID)
+	restore.ApprovalRequired = true
+	restore.ApprovalRequirement = domain.BackupApprovalRequirementPolicy
+	require.NoError(t, domain.ValidateBackupRestoreRun(restore))
 	now := time.Now().UTC().Truncate(time.Second)
 
 	mock.ExpectQuery("INSERT INTO backup_restores").
 		WithArgs(restore.ID, restore.BackupRunID, restore.RecipeID, restore.RepositoryID, policyID, restore.SnapshotID, restore.RestoreTargetRef,
-			restore.RequestedBy, restore.RequestEventID, restore.RequestKind, restore.RequestDTag, restore.ApprovalStatus, restore.ApprovalEventID, restore.ApprovedBy,
-			restore.ApprovedAt, restore.ApprovalMessage, restore.Status, restore.Backend, restore.VerificationStatus, pgxmock.AnyArg(), pgxmock.AnyArg(), restore.Error,
-			pgxmock.AnyArg(), restore.StartedAt, restore.FinishedAt, pgxmock.AnyArg(), pgxmock.AnyArg()).
+			restore.RequestedBy, restore.RequestEventID, restore.RequestKind, restore.RequestDTag, restore.ApprovalStatus, restore.ApprovalRequired,
+			restore.ApprovalRequirement, restore.ApprovalEventID, restore.ApprovedBy, restore.ApprovedAt, restore.ApprovalMessage,
+			restore.ApprovalReasonCode, pgxmock.AnyArg(), restore.Status, restore.Backend, restore.VerificationStatus, pgxmock.AnyArg(), pgxmock.AnyArg(), restore.Error,
+			restore.VerificationPolicyFailure, restore.FailureCategory, pgxmock.AnyArg(), restore.StartedAt, restore.FinishedAt, pgxmock.AnyArg(), pgxmock.AnyArg()).
 		WillReturnRows(pgxmock.NewRows(splitColumns(backupRestoreColumns)).
 			AddRow(restore.ID, restore.BackupRunID, restore.RecipeID, restore.RepositoryID, policyID.String(), restore.SnapshotID, restore.RestoreTargetRef,
-				restore.RequestedBy, restore.RequestEventID, restore.RequestKind, restore.RequestDTag, restore.ApprovalStatus, restore.ApprovalEventID, restore.ApprovedBy,
-				nil, restore.ApprovalMessage, restore.Status, restore.Backend, restore.VerificationStatus, []byte(`{"checked":true}`), []byte(`{"relay":"accepted"}`),
-				restore.Error, []byte(`{"source":"test"}`), nil, nil, now, now))
+				restore.RequestedBy, restore.RequestEventID, restore.RequestKind, restore.RequestDTag, restore.ApprovalStatus, restore.ApprovalRequired,
+				restore.ApprovalRequirement, restore.ApprovalEventID, restore.ApprovedBy, nil, restore.ApprovalMessage,
+				restore.ApprovalReasonCode, []byte(`{}`), restore.Status, restore.Backend, restore.VerificationStatus, []byte(`{"checked":true}`), []byte(`{"relay":"accepted"}`),
+				restore.Error, restore.VerificationPolicyFailure, restore.FailureCategory, []byte(`{"source":"test"}`), nil, nil, now, now))
 
 	created, wasCreated, err := repo.CreateBackupRestoreIfAbsent(ctx, restore)
 
@@ -201,15 +212,18 @@ func TestPgBackupControlPlaneRepositoryClaimNextQueuedBackupRestoreRequiresAppro
 	repo := newPgBackupControlPlaneRepositoryWithDB(mock)
 	restore := backupRestoreFixture(nil)
 	restore.ApprovalStatus = domain.BackupApprovalApproved
+	restore.ApprovalRequired = true
+	restore.ApprovalRequirement = domain.BackupApprovalRequirementPolicy
 	now := time.Now().UTC().Truncate(time.Second)
 
 	mock.ExpectQuery("UPDATE backup_restores").
 		WithArgs(pgxmock.AnyArg()).
 		WillReturnRows(pgxmock.NewRows(splitColumns(backupRestoreColumns)).
 			AddRow(restore.ID, restore.BackupRunID, restore.RecipeID, restore.RepositoryID, nil, restore.SnapshotID, restore.RestoreTargetRef,
-				restore.RequestedBy, restore.RequestEventID, restore.RequestKind, restore.RequestDTag, restore.ApprovalStatus, restore.ApprovalEventID, restore.ApprovedBy,
-				nil, restore.ApprovalMessage, domain.RunStatusRunning, restore.Backend, restore.VerificationStatus, []byte(`{}`), []byte(`{}`),
-				restore.Error, []byte(`{}`), &now, nil, now, now))
+				restore.RequestedBy, restore.RequestEventID, restore.RequestKind, restore.RequestDTag, restore.ApprovalStatus, restore.ApprovalRequired,
+				restore.ApprovalRequirement, restore.ApprovalEventID, restore.ApprovedBy, nil, restore.ApprovalMessage,
+				restore.ApprovalReasonCode, []byte(`{}`), domain.RunStatusRunning, restore.Backend, restore.VerificationStatus, []byte(`{}`), []byte(`{}`),
+				restore.Error, restore.VerificationPolicyFailure, restore.FailureCategory, []byte(`{}`), &now, nil, now, now))
 
 	claimed, err := repo.ClaimNextQueuedBackupRestore(ctx)
 
@@ -232,10 +246,10 @@ func TestPgBackupControlPlaneRepositoryCreateBackupRetentionRunIfAbsentInsertsNe
 
 	mock.ExpectQuery("INSERT INTO backup_retention_runs").
 		WithArgs(run.ID, run.RepositoryID, policyID, run.RequestedBy, run.RequestEventID, run.RequestKind, run.RequestDTag, run.Status, run.Backend,
-			run.DryRun, pgxmock.AnyArg(), pgxmock.AnyArg(), run.Error, pgxmock.AnyArg(), run.StartedAt, run.FinishedAt, pgxmock.AnyArg(), pgxmock.AnyArg()).
+			run.DryRun, pgxmock.AnyArg(), pgxmock.AnyArg(), run.Error, run.FailureCategory, pgxmock.AnyArg(), run.StartedAt, run.FinishedAt, pgxmock.AnyArg(), pgxmock.AnyArg()).
 		WillReturnRows(pgxmock.NewRows(splitColumns(backupRetentionRunColumns)).
 			AddRow(run.ID, run.RepositoryID, policyID.String(), run.RequestedBy, run.RequestEventID, run.RequestKind, run.RequestDTag, run.Status, run.Backend,
-				run.DryRun, []byte(`{"deleted":0}`), []byte(`{"relay":"accepted"}`), run.Error, []byte(`{"source":"test"}`), nil, nil, now, now))
+				run.DryRun, []byte(`{"deleted":0}`), []byte(`{"relay":"accepted"}`), run.Error, run.FailureCategory, []byte(`{"source":"test"}`), nil, nil, now, now))
 
 	created, wasCreated, err := repo.CreateBackupRetentionRunIfAbsent(ctx, run)
 
@@ -262,7 +276,7 @@ func TestPgBackupControlPlaneRepositoryScansVerificationEvidence(t *testing.T) {
 		WithArgs(runID).
 		WillReturnRows(pgxmock.NewRows(splitColumns(backupVerificationColumns)).
 			AddRow(id, runID, domain.BackupVerificationKopiaSnapshotVerify, domain.BackupVerificationSucceeded, true,
-				[]byte(`{"snapshot_id":"snap-1"}`), "", []byte(`{"ok":true}`), &verifiedAt, verifiedAt, verifiedAt))
+				[]byte(`{"snapshot_id":"snap-1"}`), []byte(`{"snapshot_id":"snap-1"}`), "", []byte(`{"ok":true}`), &verifiedAt, verifiedAt, verifiedAt))
 
 	record, err := repo.GetBackupVerificationByRunID(ctx, runID)
 

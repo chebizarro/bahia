@@ -30,10 +30,10 @@ const backupRecipeColumns = `id, name, version, backend, repository_id, policy_i
 const backupPolicyColumns = `id, name, require_verification, verification_mode, metadata, created_at, updated_at`
 const backupRepositoryColumns = `id, name, backend, repository_uri, credential_profile, metadata, created_at, updated_at`
 const backupDefinitionColumns = `id, name, repository_id, repository_name, policy_id, policy_name, recipe_id, recipe_name, recipe_version, schedule_expression, schedule_enabled, schedule_jitter_window, tenant_id, tenant_name, environment_id, environment_name, owner_pubkey, requires_approval, approval_policy, restore_target_rules, executor_labels, capability_requirements, labels, group_name, metadata, created_at, updated_at, created_by`
-const backupRunColumns = `id, recipe_id, repository_id, policy_id, requested_by, request_event_id, request_kind, request_d_tag, status, backend, target_ref, snapshot_created, snapshot_id, verification_status, publish_summary, error, metadata, started_at, finished_at, created_at, updated_at`
-const backupRestoreColumns = `id, backup_run_id, recipe_id, repository_id, policy_id, snapshot_id, restore_target_ref, requested_by, request_event_id, request_kind, request_d_tag, approval_status, approval_event_id, approved_by, approved_at, approval_message, status, backend, verification_status, evidence, publish_summary, error, metadata, started_at, finished_at, created_at, updated_at`
-const backupRetentionRunColumns = `id, repository_id, policy_id, requested_by, request_event_id, request_kind, request_d_tag, status, backend, dry_run, evidence, publish_summary, error, metadata, started_at, finished_at, created_at, updated_at`
-const backupVerificationColumns = `id, backup_run_id, mode, status, verified, evidence, error, publish_summary, verified_at, created_at, updated_at`
+const backupRunColumns = `id, recipe_id, repository_id, policy_id, requested_by, request_event_id, request_kind, request_d_tag, status, backend, target_ref, snapshot_created, snapshot_id, verification_mode, verification_status, restore_eligibility, restore_eligibility_reason, verification_policy_failure, failure_category, publish_summary, error, metadata, started_at, finished_at, created_at, updated_at`
+const backupRestoreColumns = `id, backup_run_id, recipe_id, repository_id, policy_id, snapshot_id, restore_target_ref, requested_by, request_event_id, request_kind, request_d_tag, approval_status, approval_required, approval_requirement, approval_event_id, approved_by, approved_at, approval_message, approval_reason_code, approval_reason, status, backend, verification_status, evidence, publish_summary, error, verification_policy_failure, failure_category, metadata, started_at, finished_at, created_at, updated_at`
+const backupRetentionRunColumns = `id, repository_id, policy_id, requested_by, request_event_id, request_kind, request_d_tag, status, backend, dry_run, evidence, publish_summary, error, failure_category, metadata, started_at, finished_at, created_at, updated_at`
+const backupVerificationColumns = `id, backup_run_id, mode, status, verified, evidence, evidence_details, error, publish_summary, verified_at, created_at, updated_at`
 
 func (r *PgBackupControlPlaneRepository) UpsertBackupRecipe(ctx context.Context, recipe *domain.BackupRecipe) error {
 	if err := domain.ValidateBackupRecipe(recipe); err != nil {
@@ -282,7 +282,7 @@ func (r *PgBackupControlPlaneRepository) UpsertBackupRun(ctx context.Context, ru
 	}
 	_, err = r.pool.Exec(ctx, `
 		INSERT INTO backup_runs (`+backupRunColumns+`)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,COALESCE($15, '{}'::jsonb),$16,COALESCE($17, '{}'::jsonb),$18,$19,$20,$21)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,COALESCE($20, '{}'::jsonb),$21,COALESCE($22, '{}'::jsonb),$23,$24,$25,$26)
 		ON CONFLICT (id) DO UPDATE SET
 			recipe_id = EXCLUDED.recipe_id,
 			repository_id = EXCLUDED.repository_id,
@@ -296,7 +296,12 @@ func (r *PgBackupControlPlaneRepository) UpsertBackupRun(ctx context.Context, ru
 			target_ref = EXCLUDED.target_ref,
 			snapshot_created = EXCLUDED.snapshot_created,
 			snapshot_id = EXCLUDED.snapshot_id,
+			verification_mode = EXCLUDED.verification_mode,
 			verification_status = EXCLUDED.verification_status,
+			restore_eligibility = EXCLUDED.restore_eligibility,
+			restore_eligibility_reason = EXCLUDED.restore_eligibility_reason,
+			verification_policy_failure = EXCLUDED.verification_policy_failure,
+			failure_category = EXCLUDED.failure_category,
 			publish_summary = EXCLUDED.publish_summary,
 			error = EXCLUDED.error,
 			metadata = EXCLUDED.metadata,
@@ -304,8 +309,9 @@ func (r *PgBackupControlPlaneRepository) UpsertBackupRun(ctx context.Context, ru
 			finished_at = EXCLUDED.finished_at,
 			updated_at = EXCLUDED.updated_at
 	`, run.ID, run.RecipeID, run.RepositoryID, uuidPtrArg(run.PolicyID), run.RequestedBy, run.RequestEventID, run.RequestKind, run.RequestDTag,
-		run.Status, run.Backend, run.TargetRef, run.SnapshotCreated, run.SnapshotID, run.VerificationStatus, publishJSON, run.Error,
-		metadataJSON, run.StartedAt, run.FinishedAt, run.CreatedAt, run.UpdatedAt)
+		run.Status, run.Backend, run.TargetRef, run.SnapshotCreated, run.SnapshotID, run.VerificationMode, run.VerificationStatus, run.RestoreEligibility,
+		run.RestoreEligibilityReason, run.VerificationPolicyFailure, run.FailureCategory, publishJSON, run.Error, metadataJSON, run.StartedAt,
+		run.FinishedAt, run.CreatedAt, run.UpdatedAt)
 	if err != nil {
 		return fmt.Errorf("upserting backup run: %w", err)
 	}
@@ -338,12 +344,13 @@ func (r *PgBackupControlPlaneRepository) CreateBackupRunIfAbsent(ctx context.Con
 	}
 	createdRun, err := scanBackupRun(r.pool.QueryRow(ctx, `
 		INSERT INTO backup_runs (`+backupRunColumns+`)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,COALESCE($15, '{}'::jsonb),$16,COALESCE($17, '{}'::jsonb),$18,$19,$20,$21)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,COALESCE($20, '{}'::jsonb),$21,COALESCE($22, '{}'::jsonb),$23,$24,$25,$26)
 		ON CONFLICT (requested_by, request_kind, request_d_tag) DO NOTHING
 		RETURNING `+backupRunColumns,
 		run.ID, run.RecipeID, run.RepositoryID, uuidPtrArg(run.PolicyID), run.RequestedBy, run.RequestEventID, run.RequestKind, run.RequestDTag,
-		run.Status, run.Backend, run.TargetRef, run.SnapshotCreated, run.SnapshotID, run.VerificationStatus, publishJSON, run.Error,
-		metadataJSON, run.StartedAt, run.FinishedAt, run.CreatedAt, run.UpdatedAt))
+		run.Status, run.Backend, run.TargetRef, run.SnapshotCreated, run.SnapshotID, run.VerificationMode, run.VerificationStatus, run.RestoreEligibility,
+		run.RestoreEligibilityReason, run.VerificationPolicyFailure, run.FailureCategory, publishJSON, run.Error, metadataJSON, run.StartedAt,
+		run.FinishedAt, run.CreatedAt, run.UpdatedAt))
 	if err == nil {
 		return createdRun, true, nil
 	}
@@ -421,13 +428,13 @@ func (r *PgBackupControlPlaneRepository) UpsertBackupRestore(ctx context.Context
 		restore.ID = uuid.New()
 	}
 	setBackupTimes(&restore.CreatedAt, &restore.UpdatedAt)
-	evidenceJSON, publishJSON, metadataJSON, err := marshalBackupRestoreJSON(restore)
+	evidenceJSON, publishJSON, metadataJSON, approvalReasonJSON, err := marshalBackupRestoreJSON(restore)
 	if err != nil {
 		return err
 	}
 	_, err = r.pool.Exec(ctx, `
 		INSERT INTO backup_restores (`+backupRestoreColumns+`)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,COALESCE($20, '{}'::jsonb),COALESCE($21, '{}'::jsonb),$22,COALESCE($23, '{}'::jsonb),$24,$25,$26,$27)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,COALESCE($21, '{}'::jsonb),$22,$23,$24,COALESCE($25, '{}'::jsonb),COALESCE($26, '{}'::jsonb),$27,$28,$29,COALESCE($30, '{}'::jsonb),$31,$32,$33,$34)
 		ON CONFLICT (id) DO UPDATE SET
 			backup_run_id = EXCLUDED.backup_run_id,
 			recipe_id = EXCLUDED.recipe_id,
@@ -440,24 +447,31 @@ func (r *PgBackupControlPlaneRepository) UpsertBackupRestore(ctx context.Context
 			request_kind = EXCLUDED.request_kind,
 			request_d_tag = EXCLUDED.request_d_tag,
 			approval_status = EXCLUDED.approval_status,
+			approval_required = EXCLUDED.approval_required,
+			approval_requirement = EXCLUDED.approval_requirement,
 			approval_event_id = EXCLUDED.approval_event_id,
 			approved_by = EXCLUDED.approved_by,
 			approved_at = EXCLUDED.approved_at,
 			approval_message = EXCLUDED.approval_message,
+			approval_reason_code = EXCLUDED.approval_reason_code,
+			approval_reason = EXCLUDED.approval_reason,
 			status = EXCLUDED.status,
 			backend = EXCLUDED.backend,
 			verification_status = EXCLUDED.verification_status,
 			evidence = EXCLUDED.evidence,
 			publish_summary = EXCLUDED.publish_summary,
 			error = EXCLUDED.error,
+			verification_policy_failure = EXCLUDED.verification_policy_failure,
+			failure_category = EXCLUDED.failure_category,
 			metadata = EXCLUDED.metadata,
 			started_at = EXCLUDED.started_at,
 			finished_at = EXCLUDED.finished_at,
 			updated_at = EXCLUDED.updated_at
 	`, restore.ID, restore.BackupRunID, restore.RecipeID, restore.RepositoryID, uuidPtrArg(restore.PolicyID), restore.SnapshotID, restore.RestoreTargetRef,
-		restore.RequestedBy, restore.RequestEventID, restore.RequestKind, restore.RequestDTag, restore.ApprovalStatus, restore.ApprovalEventID, restore.ApprovedBy,
-		restore.ApprovedAt, restore.ApprovalMessage, restore.Status, restore.Backend, restore.VerificationStatus, evidenceJSON, publishJSON, restore.Error,
-		metadataJSON, restore.StartedAt, restore.FinishedAt, restore.CreatedAt, restore.UpdatedAt)
+		restore.RequestedBy, restore.RequestEventID, restore.RequestKind, restore.RequestDTag, restore.ApprovalStatus, restore.ApprovalRequired,
+		restore.ApprovalRequirement, restore.ApprovalEventID, restore.ApprovedBy, restore.ApprovedAt, restore.ApprovalMessage,
+		restore.ApprovalReasonCode, approvalReasonJSON, restore.Status, restore.Backend, restore.VerificationStatus, evidenceJSON, publishJSON,
+		restore.Error, restore.VerificationPolicyFailure, restore.FailureCategory, metadataJSON, restore.StartedAt, restore.FinishedAt, restore.CreatedAt, restore.UpdatedAt)
 	if err != nil {
 		return fmt.Errorf("upserting backup restore: %w", err)
 	}
@@ -484,19 +498,20 @@ func (r *PgBackupControlPlaneRepository) CreateBackupRestoreIfAbsent(ctx context
 		restore.ID = uuid.New()
 	}
 	setBackupTimes(&restore.CreatedAt, &restore.UpdatedAt)
-	evidenceJSON, publishJSON, metadataJSON, err := marshalBackupRestoreJSON(restore)
+	evidenceJSON, publishJSON, metadataJSON, approvalReasonJSON, err := marshalBackupRestoreJSON(restore)
 	if err != nil {
 		return nil, false, err
 	}
 	created, err := scanBackupRestore(r.pool.QueryRow(ctx, `
 		INSERT INTO backup_restores (`+backupRestoreColumns+`)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,COALESCE($20, '{}'::jsonb),COALESCE($21, '{}'::jsonb),$22,COALESCE($23, '{}'::jsonb),$24,$25,$26,$27)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,COALESCE($21, '{}'::jsonb),$22,$23,$24,COALESCE($25, '{}'::jsonb),COALESCE($26, '{}'::jsonb),$27,$28,$29,COALESCE($30, '{}'::jsonb),$31,$32,$33,$34)
 		ON CONFLICT (requested_by, request_kind, request_d_tag) DO NOTHING
 		RETURNING `+backupRestoreColumns,
 		restore.ID, restore.BackupRunID, restore.RecipeID, restore.RepositoryID, uuidPtrArg(restore.PolicyID), restore.SnapshotID, restore.RestoreTargetRef,
-		restore.RequestedBy, restore.RequestEventID, restore.RequestKind, restore.RequestDTag, restore.ApprovalStatus, restore.ApprovalEventID, restore.ApprovedBy,
-		restore.ApprovedAt, restore.ApprovalMessage, restore.Status, restore.Backend, restore.VerificationStatus, evidenceJSON, publishJSON, restore.Error,
-		metadataJSON, restore.StartedAt, restore.FinishedAt, restore.CreatedAt, restore.UpdatedAt))
+		restore.RequestedBy, restore.RequestEventID, restore.RequestKind, restore.RequestDTag, restore.ApprovalStatus, restore.ApprovalRequired,
+		restore.ApprovalRequirement, restore.ApprovalEventID, restore.ApprovedBy, restore.ApprovedAt, restore.ApprovalMessage,
+		restore.ApprovalReasonCode, approvalReasonJSON, restore.Status, restore.Backend, restore.VerificationStatus, evidenceJSON, publishJSON,
+		restore.Error, restore.VerificationPolicyFailure, restore.FailureCategory, metadataJSON, restore.StartedAt, restore.FinishedAt, restore.CreatedAt, restore.UpdatedAt))
 	if err == nil {
 		return created, true, nil
 	}
@@ -580,7 +595,7 @@ func (r *PgBackupControlPlaneRepository) UpsertBackupRetentionRun(ctx context.Co
 	}
 	_, err = r.pool.Exec(ctx, `
 		INSERT INTO backup_retention_runs (`+backupRetentionRunColumns+`)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,COALESCE($11, '{}'::jsonb),COALESCE($12, '{}'::jsonb),$13,COALESCE($14, '{}'::jsonb),$15,$16,$17,$18)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,COALESCE($11, '{}'::jsonb),COALESCE($12, '{}'::jsonb),$13,$14,COALESCE($15, '{}'::jsonb),$16,$17,$18,$19)
 		ON CONFLICT (id) DO UPDATE SET
 			repository_id = EXCLUDED.repository_id,
 			policy_id = EXCLUDED.policy_id,
@@ -594,12 +609,13 @@ func (r *PgBackupControlPlaneRepository) UpsertBackupRetentionRun(ctx context.Co
 			evidence = EXCLUDED.evidence,
 			publish_summary = EXCLUDED.publish_summary,
 			error = EXCLUDED.error,
+			failure_category = EXCLUDED.failure_category,
 			metadata = EXCLUDED.metadata,
 			started_at = EXCLUDED.started_at,
 			finished_at = EXCLUDED.finished_at,
 			updated_at = EXCLUDED.updated_at
 	`, run.ID, run.RepositoryID, uuidPtrArg(run.PolicyID), run.RequestedBy, run.RequestEventID, run.RequestKind, run.RequestDTag,
-		run.Status, run.Backend, run.DryRun, evidenceJSON, publishJSON, run.Error, metadataJSON, run.StartedAt, run.FinishedAt, run.CreatedAt, run.UpdatedAt)
+		run.Status, run.Backend, run.DryRun, evidenceJSON, publishJSON, run.Error, run.FailureCategory, metadataJSON, run.StartedAt, run.FinishedAt, run.CreatedAt, run.UpdatedAt)
 	if err != nil {
 		return fmt.Errorf("upserting backup retention run: %w", err)
 	}
@@ -632,11 +648,11 @@ func (r *PgBackupControlPlaneRepository) CreateBackupRetentionRunIfAbsent(ctx co
 	}
 	created, err := scanBackupRetentionRun(r.pool.QueryRow(ctx, `
 		INSERT INTO backup_retention_runs (`+backupRetentionRunColumns+`)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,COALESCE($11, '{}'::jsonb),COALESCE($12, '{}'::jsonb),$13,COALESCE($14, '{}'::jsonb),$15,$16,$17,$18)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,COALESCE($11, '{}'::jsonb),COALESCE($12, '{}'::jsonb),$13,$14,COALESCE($15, '{}'::jsonb),$16,$17,$18,$19)
 		ON CONFLICT (requested_by, request_kind, request_d_tag) DO NOTHING
 		RETURNING `+backupRetentionRunColumns,
 		run.ID, run.RepositoryID, uuidPtrArg(run.PolicyID), run.RequestedBy, run.RequestEventID, run.RequestKind, run.RequestDTag,
-		run.Status, run.Backend, run.DryRun, evidenceJSON, publishJSON, run.Error, metadataJSON, run.StartedAt, run.FinishedAt, run.CreatedAt, run.UpdatedAt))
+		run.Status, run.Backend, run.DryRun, evidenceJSON, publishJSON, run.Error, run.FailureCategory, metadataJSON, run.StartedAt, run.FinishedAt, run.CreatedAt, run.UpdatedAt))
 	if err == nil {
 		return created, true, nil
 	}
@@ -718,24 +734,29 @@ func (r *PgBackupControlPlaneRepository) UpsertBackupVerification(ctx context.Co
 	if err != nil {
 		return err
 	}
+	evidenceDetailsJSON, err := marshalJSON(record.EvidenceDetails, "backup verification evidence details")
+	if err != nil {
+		return err
+	}
 	publishJSON, err := marshalJSON(record.PublishSummary, "backup verification publish summary")
 	if err != nil {
 		return err
 	}
 	err = r.pool.QueryRow(ctx, `
 		INSERT INTO backup_verifications (`+backupVerificationColumns+`)
-		VALUES ($1,$2,$3,$4,$5,COALESCE($6, '{}'::jsonb),$7,COALESCE($8, '{}'::jsonb),$9,$10,$11)
+		VALUES ($1,$2,$3,$4,$5,COALESCE($6, '{}'::jsonb),COALESCE($7, '{}'::jsonb),$8,COALESCE($9, '{}'::jsonb),$10,$11,$12)
 		ON CONFLICT (backup_run_id) DO UPDATE SET
 			mode = EXCLUDED.mode,
 			status = EXCLUDED.status,
 			verified = EXCLUDED.verified,
 			evidence = EXCLUDED.evidence,
+			evidence_details = EXCLUDED.evidence_details,
 			error = EXCLUDED.error,
 			publish_summary = EXCLUDED.publish_summary,
 			verified_at = EXCLUDED.verified_at,
 			updated_at = EXCLUDED.updated_at
 		RETURNING id
-	`, record.ID, record.BackupRunID, record.Mode, record.Status, record.Verified, evidenceJSON, record.Error, publishJSON, record.VerifiedAt, record.CreatedAt, record.UpdatedAt).Scan(&record.ID)
+	`, record.ID, record.BackupRunID, record.Mode, record.Status, record.Verified, evidenceJSON, evidenceDetailsJSON, record.Error, publishJSON, record.VerifiedAt, record.CreatedAt, record.UpdatedAt).Scan(&record.ID)
 	if err != nil {
 		return fmt.Errorf("upserting backup verification: %w", err)
 	}
@@ -966,8 +987,9 @@ func scanBackupRun(row pgx.Row) (*domain.BackupRun, error) {
 	var policyID pgtype.UUID
 	var publishJSON, metadataJSON []byte
 	if err := row.Scan(&run.ID, &run.RecipeID, &run.RepositoryID, &policyID, &run.RequestedBy, &run.RequestEventID, &run.RequestKind, &run.RequestDTag,
-		&run.Status, &run.Backend, &run.TargetRef, &run.SnapshotCreated, &run.SnapshotID, &run.VerificationStatus, &publishJSON, &run.Error,
-		&metadataJSON, &run.StartedAt, &run.FinishedAt, &run.CreatedAt, &run.UpdatedAt); err != nil {
+		&run.Status, &run.Backend, &run.TargetRef, &run.SnapshotCreated, &run.SnapshotID, &run.VerificationMode, &run.VerificationStatus, &run.RestoreEligibility,
+		&run.RestoreEligibilityReason, &run.VerificationPolicyFailure, &run.FailureCategory, &publishJSON, &run.Error, &metadataJSON,
+		&run.StartedAt, &run.FinishedAt, &run.CreatedAt, &run.UpdatedAt); err != nil {
 		return nil, err
 	}
 	run.PolicyID = uuidPtrFromPG(policyID)
@@ -995,14 +1017,19 @@ func scanBackupRunRows(rows pgx.Rows) ([]domain.BackupRun, error) {
 func scanBackupRestore(row pgx.Row) (*domain.BackupRestoreRun, error) {
 	restore := &domain.BackupRestoreRun{}
 	var policyID pgtype.UUID
-	var evidenceJSON, publishJSON, metadataJSON []byte
+	var evidenceJSON, publishJSON, metadataJSON, approvalReasonJSON []byte
 	if err := row.Scan(&restore.ID, &restore.BackupRunID, &restore.RecipeID, &restore.RepositoryID, &policyID, &restore.SnapshotID, &restore.RestoreTargetRef,
-		&restore.RequestedBy, &restore.RequestEventID, &restore.RequestKind, &restore.RequestDTag, &restore.ApprovalStatus, &restore.ApprovalEventID,
-		&restore.ApprovedBy, &restore.ApprovedAt, &restore.ApprovalMessage, &restore.Status, &restore.Backend, &restore.VerificationStatus,
-		&evidenceJSON, &publishJSON, &restore.Error, &metadataJSON, &restore.StartedAt, &restore.FinishedAt, &restore.CreatedAt, &restore.UpdatedAt); err != nil {
+		&restore.RequestedBy, &restore.RequestEventID, &restore.RequestKind, &restore.RequestDTag, &restore.ApprovalStatus, &restore.ApprovalRequired,
+		&restore.ApprovalRequirement, &restore.ApprovalEventID, &restore.ApprovedBy, &restore.ApprovedAt, &restore.ApprovalMessage,
+		&restore.ApprovalReasonCode, &approvalReasonJSON, &restore.Status, &restore.Backend, &restore.VerificationStatus,
+		&evidenceJSON, &publishJSON, &restore.Error, &restore.VerificationPolicyFailure, &restore.FailureCategory, &metadataJSON,
+		&restore.StartedAt, &restore.FinishedAt, &restore.CreatedAt, &restore.UpdatedAt); err != nil {
 		return nil, err
 	}
 	restore.PolicyID = uuidPtrFromPG(policyID)
+	if err := unmarshalJSON(approvalReasonJSON, &restore.ApprovalReason, "backup restore approval reason"); err != nil {
+		return nil, err
+	}
 	if err := unmarshalJSON(evidenceJSON, &restore.Evidence, "backup restore evidence"); err != nil {
 		return nil, err
 	}
@@ -1032,7 +1059,7 @@ func scanBackupRetentionRun(row pgx.Row) (*domain.BackupRetentionRun, error) {
 	var policyID pgtype.UUID
 	var evidenceJSON, publishJSON, metadataJSON []byte
 	if err := row.Scan(&run.ID, &run.RepositoryID, &policyID, &run.RequestedBy, &run.RequestEventID, &run.RequestKind, &run.RequestDTag,
-		&run.Status, &run.Backend, &run.DryRun, &evidenceJSON, &publishJSON, &run.Error, &metadataJSON, &run.StartedAt, &run.FinishedAt,
+		&run.Status, &run.Backend, &run.DryRun, &evidenceJSON, &publishJSON, &run.Error, &run.FailureCategory, &metadataJSON, &run.StartedAt, &run.FinishedAt,
 		&run.CreatedAt, &run.UpdatedAt); err != nil {
 		return nil, err
 	}
@@ -1063,11 +1090,14 @@ func scanBackupRetentionRunRows(rows pgx.Rows) ([]domain.BackupRetentionRun, err
 
 func scanBackupVerification(row pgx.Row) (*domain.BackupVerificationRecord, error) {
 	record := &domain.BackupVerificationRecord{}
-	var evidenceJSON, publishJSON []byte
-	if err := row.Scan(&record.ID, &record.BackupRunID, &record.Mode, &record.Status, &record.Verified, &evidenceJSON, &record.Error, &publishJSON, &record.VerifiedAt, &record.CreatedAt, &record.UpdatedAt); err != nil {
+	var evidenceJSON, evidenceDetailsJSON, publishJSON []byte
+	if err := row.Scan(&record.ID, &record.BackupRunID, &record.Mode, &record.Status, &record.Verified, &evidenceJSON, &evidenceDetailsJSON, &record.Error, &publishJSON, &record.VerifiedAt, &record.CreatedAt, &record.UpdatedAt); err != nil {
 		return nil, err
 	}
 	if err := unmarshalJSON(evidenceJSON, &record.Evidence, "backup verification evidence"); err != nil {
+		return nil, err
+	}
+	if err := unmarshalJSON(evidenceDetailsJSON, &record.EvidenceDetails, "backup verification evidence details"); err != nil {
 		return nil, err
 	}
 	if err := unmarshalJSON(publishJSON, &record.PublishSummary, "backup verification publish summary"); err != nil {
@@ -1112,20 +1142,24 @@ func marshalBackupRunJSON(run *domain.BackupRun) ([]byte, []byte, error) {
 	return publishJSON, metadataJSON, nil
 }
 
-func marshalBackupRestoreJSON(restore *domain.BackupRestoreRun) ([]byte, []byte, []byte, error) {
+func marshalBackupRestoreJSON(restore *domain.BackupRestoreRun) ([]byte, []byte, []byte, []byte, error) {
 	evidenceJSON, err := marshalJSONObject(restore.Evidence, "backup restore evidence")
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 	publishJSON, err := marshalJSONObject(restore.PublishSummary, "backup restore publish summary")
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 	metadataJSON, err := marshalJSONObject(restore.Metadata, "backup restore metadata")
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
-	return evidenceJSON, publishJSON, metadataJSON, nil
+	approvalReasonJSON, err := marshalJSONObject(restore.ApprovalReason, "backup restore approval reason")
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	return evidenceJSON, publishJSON, metadataJSON, approvalReasonJSON, nil
 }
 
 func marshalBackupRetentionRunJSON(run *domain.BackupRetentionRun) ([]byte, []byte, []byte, error) {

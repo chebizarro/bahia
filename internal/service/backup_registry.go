@@ -198,7 +198,16 @@ func (s *BackupRegistryService) RecordBackupVerification(ctx context.Context, re
 	if err := s.repo.UpsertBackupVerification(ctx, record); err != nil {
 		return err
 	}
+	run.VerificationStatus = record.Status
+	if run.VerificationMode == "" || run.VerificationMode == domain.BackupVerificationNone {
+		run.VerificationMode = record.Mode
+	}
+	refreshBackupRunEligibility(run)
+	if err := s.repo.UpsertBackupRun(ctx, run); err != nil {
+		return err
+	}
 	s.publishVerificationChanged(ctx, record)
+	s.publishRunChanged(ctx, run)
 	return nil
 }
 
@@ -240,19 +249,26 @@ func (s *BackupRegistryService) CompleteBackupRun(ctx context.Context, runID uui
 		if err := s.repo.UpsertBackupVerification(ctx, verification); err != nil {
 			return nil, err
 		}
-		s.publishVerificationChanged(ctx, verification)
+		run.VerificationMode = verification.Mode
 		run.VerificationStatus = verification.Status
 	}
 	if cause != nil {
 		run.Status = domain.RunStatusFailed
 		run.Error = cause.Error()
+		if run.FailureCategory == domain.BackupFailureNone {
+			run.FailureCategory = domain.BackupFailureUnknown
+		}
 	} else if policy != nil && policy.RequireVerification {
 		if run.VerificationStatus == domain.BackupVerificationSucceeded {
 			run.Status = domain.RunStatusSucceeded
+			run.VerificationPolicyFailure = ""
 		} else {
 			run.Status = domain.RunStatusFailed
+			run.FailureCategory = domain.BackupFailurePolicy
+			run.RestoreEligibility = domain.RestoreEligibilityPolicyBlocked
+			run.VerificationPolicyFailure = "backup policy requires successful verification"
 			if run.Error == "" {
-				run.Error = "backup policy requires successful verification"
+				run.Error = run.VerificationPolicyFailure
 			}
 		}
 	} else if run.SnapshotCreated {
@@ -266,9 +282,15 @@ func (s *BackupRegistryService) CompleteBackupRun(ctx context.Context, runID uui
 			run.Error = "backup snapshot was not created"
 		}
 	}
+	if run.RestoreEligibility != domain.RestoreEligibilityPolicyBlocked {
+		refreshBackupRunEligibility(run)
+	}
 	run.FinishedAt = &now
 	if err := s.repo.UpsertBackupRun(ctx, run); err != nil {
 		return nil, err
+	}
+	if verification != nil {
+		s.publishVerificationChanged(ctx, verification)
 	}
 	s.publishRunChanged(ctx, run)
 	return run, nil
