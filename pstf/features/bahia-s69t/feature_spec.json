@@ -1,0 +1,25 @@
+{
+  "feature_id": "bahia-s69t",
+  "title": "Backup scheduling model",
+  "intent": "Bahia owns canonical backup schedule intent and dispatch state for BackupDefinition records.",
+  "observed_behavior_before": [
+    "BackupDefinition contained schedule expression, enabled, and jitter metadata fields.",
+    "Backup execution was request/queue-driven and no service evaluated recurring schedules.",
+    "No durable table tracked next scheduled run, last scheduled dispatch, pause/disable state, or missed runs."
+  ],
+  "intended_behavior": [
+    "A service evaluates enabled BackupDefinition schedules deterministically and creates idempotent queued BackupRun records when due.",
+    "Schedule state tracks next scheduled run, last scheduled dispatch, last scheduled due slot, pause/disable lifecycle, maintenance window, and missed runs.",
+    "Jitter and maintenance windows are applied before dispatch without sleep-based tests or timeout-based completion logic."
+  ],
+  "scope": [
+    "internal/domain backup schedule state types/helpers",
+    "internal/repository PostgreSQL schedule state persistence",
+    "internal/service backup scheduler evaluation and dispatch logic",
+    "internal/db migration 000032 for backup schedule states"
+  ],
+  "non_goals": [
+    "No controlplane handler/reactor changes in this slice",
+    "No backup backend adapter changes in this slice"
+  ]
+}

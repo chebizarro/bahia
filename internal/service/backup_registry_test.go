@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/events"
+	"github.com/openagentsinc/bahia/internal/repository"
 	"github.com/stretchr/testify/require"
 )
 
@@ -183,26 +184,28 @@ func (p *recordingPublisher) eventsOfType(typ events.EventType) []events.Event {
 }
 
 type fakeBackupRepo struct {
-	recipes       map[uuid.UUID]*domain.BackupRecipe
-	policies      map[uuid.UUID]*domain.BackupPolicy
-	repositories  map[uuid.UUID]*domain.BackupRepository
-	definitions   map[uuid.UUID]*domain.BackupDefinition
-	runs          map[uuid.UUID]*domain.BackupRun
-	coordinates   map[string]uuid.UUID
-	verifications map[uuid.UUID]*domain.BackupVerificationRecord
-	verifyByRun   map[uuid.UUID]uuid.UUID
+	recipes        map[uuid.UUID]*domain.BackupRecipe
+	policies       map[uuid.UUID]*domain.BackupPolicy
+	repositories   map[uuid.UUID]*domain.BackupRepository
+	definitions    map[uuid.UUID]*domain.BackupDefinition
+	scheduleStates map[uuid.UUID]*domain.BackupScheduleState
+	runs           map[uuid.UUID]*domain.BackupRun
+	coordinates    map[string]uuid.UUID
+	verifications  map[uuid.UUID]*domain.BackupVerificationRecord
+	verifyByRun    map[uuid.UUID]uuid.UUID
 }
 
 func newFakeBackupRepo() *fakeBackupRepo {
 	return &fakeBackupRepo{
-		recipes:       map[uuid.UUID]*domain.BackupRecipe{},
-		policies:      map[uuid.UUID]*domain.BackupPolicy{},
-		repositories:  map[uuid.UUID]*domain.BackupRepository{},
-		definitions:   map[uuid.UUID]*domain.BackupDefinition{},
-		runs:          map[uuid.UUID]*domain.BackupRun{},
-		coordinates:   map[string]uuid.UUID{},
-		verifications: map[uuid.UUID]*domain.BackupVerificationRecord{},
-		verifyByRun:   map[uuid.UUID]uuid.UUID{},
+		recipes:        map[uuid.UUID]*domain.BackupRecipe{},
+		policies:       map[uuid.UUID]*domain.BackupPolicy{},
+		repositories:   map[uuid.UUID]*domain.BackupRepository{},
+		definitions:    map[uuid.UUID]*domain.BackupDefinition{},
+		scheduleStates: map[uuid.UUID]*domain.BackupScheduleState{},
+		runs:           map[uuid.UUID]*domain.BackupRun{},
+		coordinates:    map[string]uuid.UUID{},
+		verifications:  map[uuid.UUID]*domain.BackupVerificationRecord{},
+		verifyByRun:    map[uuid.UUID]uuid.UUID{},
 	}
 }
 
@@ -312,7 +315,27 @@ func (r *fakeBackupRepo) ListBackupDefinitions(context.Context, int, int) ([]dom
 }
 func (r *fakeBackupRepo) DeleteBackupDefinition(_ context.Context, id uuid.UUID) error {
 	delete(r.definitions, id)
+	delete(r.scheduleStates, id)
 	return nil
+}
+func (r *fakeBackupRepo) UpsertBackupScheduleState(_ context.Context, state *domain.BackupScheduleState) error {
+	if err := domain.ValidateBackupScheduleState(state); err != nil {
+		return err
+	}
+	if r.definitions[state.DefinitionID] == nil {
+		return fmt.Errorf("backup definition %s not found: %w", state.DefinitionID, repository.ErrNotFound)
+	}
+	cp := *state
+	r.scheduleStates[cp.DefinitionID] = &cp
+	return nil
+}
+func (r *fakeBackupRepo) GetBackupScheduleState(_ context.Context, definitionID uuid.UUID) (*domain.BackupScheduleState, error) {
+	state := r.scheduleStates[definitionID]
+	if state == nil {
+		return nil, nil
+	}
+	cp := *state
+	return &cp, nil
 }
 func (r *fakeBackupRepo) UpsertBackupRun(_ context.Context, run *domain.BackupRun) error {
 	cp := *run

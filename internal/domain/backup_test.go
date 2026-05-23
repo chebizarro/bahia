@@ -2,6 +2,7 @@ package domain
 
 import (
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
@@ -121,6 +122,71 @@ func TestValidateBackupDefinitionRejectsIncompleteScheduleAndApprovalIntent(t *t
 	err = ValidateBackupDefinition(definition)
 	require.ErrorIs(t, err, ErrEmptyField)
 	require.Contains(t, err.Error(), "approval_policy")
+}
+
+func TestValidateBackupDefinitionRejectsInvalidScheduleJitterWindow(t *testing.T) {
+	definition := &BackupDefinition{
+		Name:                 "daily-service",
+		RepositoryID:         uuid.New(),
+		RepositoryName:       "primary",
+		PolicyID:             uuid.New(),
+		PolicyName:           "verified",
+		RecipeID:             uuid.New(),
+		RecipeName:           "service-data",
+		RecipeVersion:        "v1",
+		ScheduleExpression:   "0 2 * * *",
+		ScheduleEnabled:      true,
+		ScheduleJitterWindow: "not-a-duration",
+		CreatedBy:            "creator-pubkey",
+	}
+
+	err := ValidateBackupDefinition(definition)
+	require.ErrorIs(t, err, ErrInvalidValue)
+	require.Contains(t, err.Error(), "schedule_jitter_window")
+}
+
+func TestValidateBackupScheduleStateTracksPauseDisableAndMaintenanceIntent(t *testing.T) {
+	now := time.Now().UTC()
+	state := &BackupScheduleState{
+		DefinitionID:              uuid.New(),
+		MissedRunCount:            2,
+		PauseReason:               " operator maintenance ",
+		PausedBy:                  " scheduler-admin ",
+		PausedAt:                  &now,
+		DisabledBy:                " scheduler-admin ",
+		DisableReason:             " retired ",
+		DisabledAt:                &now,
+		MaintenanceWindow:         " 01:00-03:00 ",
+		MaintenanceWindowTimeZone: " UTC ",
+	}
+
+	require.NoError(t, ValidateBackupScheduleState(state))
+	require.True(t, state.Paused())
+	require.True(t, state.Disabled())
+	require.Equal(t, "operator maintenance", state.PauseReason)
+	require.Equal(t, "01:00-03:00", state.MaintenanceWindow)
+}
+
+func TestValidateBackupScheduleStateRejectsIncompletePauseAndNegativeMissedCount(t *testing.T) {
+	state := &BackupScheduleState{DefinitionID: uuid.New(), PauseReason: "maintenance"}
+
+	err := ValidateBackupScheduleState(state)
+	require.ErrorIs(t, err, ErrEmptyField)
+
+	state.PauseReason = ""
+	state.MissedRunCount = -1
+	err = ValidateBackupScheduleState(state)
+	require.ErrorIs(t, err, ErrInvalidValue)
+}
+
+func TestBackupDefinitionMaintenanceWindowReadsScheduleMetadata(t *testing.T) {
+	definition := &BackupDefinition{Metadata: map[string]any{
+		BackupDefinitionMetadataMaintenanceWindow: " 02:00-04:00 ",
+		BackupDefinitionMetadataMaintenanceTZ:     " UTC ",
+	}}
+
+	require.Equal(t, "02:00-04:00", BackupDefinitionMaintenanceWindow(definition))
+	require.Equal(t, "UTC", BackupDefinitionMaintenanceWindowTimeZone(definition))
 }
 
 func TestValidateBackupRecipeAndRunRejectVeleroUntilSnapshotCapabilityExists(t *testing.T) {

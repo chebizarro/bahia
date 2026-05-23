@@ -30,6 +30,7 @@ const backupRecipeColumns = `id, name, version, backend, repository_id, policy_i
 const backupPolicyColumns = `id, name, require_verification, verification_mode, metadata, created_at, updated_at`
 const backupRepositoryColumns = `id, name, backend, repository_uri, credential_profile, metadata, created_at, updated_at`
 const backupDefinitionColumns = `id, name, repository_id, repository_name, policy_id, policy_name, recipe_id, recipe_name, recipe_version, schedule_expression, schedule_enabled, schedule_jitter_window, tenant_id, tenant_name, environment_id, environment_name, owner_pubkey, requires_approval, approval_policy, restore_target_rules, executor_labels, capability_requirements, labels, group_name, metadata, created_at, updated_at, created_by`
+const backupScheduleStateColumns = `definition_id, next_scheduled_run, last_scheduled_dispatch, last_scheduled_run_due_at, missed_run_count, pause_reason, paused_by, paused_at, disabled_by, disable_reason, disabled_at, maintenance_window, maintenance_window_timezone, created_at, updated_at`
 const backupRunColumns = `id, recipe_id, repository_id, policy_id, requested_by, request_event_id, request_kind, request_d_tag, status, backend, target_ref, snapshot_created, snapshot_id, verification_mode, verification_status, restore_eligibility, restore_eligibility_reason, verification_policy_failure, failure_category, publish_summary, error, metadata, started_at, finished_at, created_at, updated_at`
 const backupRestoreColumns = `id, backup_run_id, recipe_id, repository_id, policy_id, snapshot_id, restore_target_ref, requested_by, request_event_id, request_kind, request_d_tag, approval_status, approval_required, approval_requirement, approval_event_id, approved_by, approved_at, approval_message, approval_reason_code, approval_reason, status, backend, verification_status, evidence, publish_summary, error, verification_policy_failure, failure_category, metadata, started_at, finished_at, created_at, updated_at`
 const backupRetentionRunColumns = `id, repository_id, policy_id, requested_by, request_event_id, request_kind, request_d_tag, status, backend, dry_run, evidence, publish_summary, error, failure_category, metadata, started_at, finished_at, created_at, updated_at`
@@ -266,6 +267,48 @@ func (r *PgBackupControlPlaneRepository) DeleteBackupDefinition(ctx context.Cont
 		return fmt.Errorf("deleting backup definition %s: %w", id, ErrNotFound)
 	}
 	return nil
+}
+
+func (r *PgBackupControlPlaneRepository) UpsertBackupScheduleState(ctx context.Context, state *domain.BackupScheduleState) error {
+	if err := domain.ValidateBackupScheduleState(state); err != nil {
+		return err
+	}
+	setBackupTimes(&state.CreatedAt, &state.UpdatedAt)
+	_, err := r.pool.Exec(ctx, `
+		INSERT INTO backup_schedule_states (`+backupScheduleStateColumns+`)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+		ON CONFLICT (definition_id) DO UPDATE SET
+			next_scheduled_run = EXCLUDED.next_scheduled_run,
+			last_scheduled_dispatch = EXCLUDED.last_scheduled_dispatch,
+			last_scheduled_run_due_at = EXCLUDED.last_scheduled_run_due_at,
+			missed_run_count = EXCLUDED.missed_run_count,
+			pause_reason = EXCLUDED.pause_reason,
+			paused_by = EXCLUDED.paused_by,
+			paused_at = EXCLUDED.paused_at,
+			disabled_by = EXCLUDED.disabled_by,
+			disable_reason = EXCLUDED.disable_reason,
+			disabled_at = EXCLUDED.disabled_at,
+			maintenance_window = EXCLUDED.maintenance_window,
+			maintenance_window_timezone = EXCLUDED.maintenance_window_timezone,
+			updated_at = EXCLUDED.updated_at
+	`, state.DefinitionID, state.NextScheduledRun, state.LastScheduledDispatch, state.LastScheduledRunDueAt, state.MissedRunCount,
+		state.PauseReason, state.PausedBy, state.PausedAt, state.DisabledBy, state.DisableReason, state.DisabledAt,
+		state.MaintenanceWindow, state.MaintenanceWindowTimeZone, state.CreatedAt, state.UpdatedAt)
+	if err != nil {
+		return fmt.Errorf("upserting backup schedule state: %w", err)
+	}
+	return nil
+}
+
+func (r *PgBackupControlPlaneRepository) GetBackupScheduleState(ctx context.Context, definitionID uuid.UUID) (*domain.BackupScheduleState, error) {
+	state, err := scanBackupScheduleState(r.pool.QueryRow(ctx, `SELECT `+backupScheduleStateColumns+` FROM backup_schedule_states WHERE definition_id = $1`, definitionID))
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("getting backup schedule state: %w", err)
+	}
+	return state, nil
 }
 
 func (r *PgBackupControlPlaneRepository) UpsertBackupRun(ctx context.Context, run *domain.BackupRun) error {
@@ -980,6 +1023,30 @@ func scanBackupDefinitionRows(rows pgx.Rows) ([]domain.BackupDefinition, error) 
 		out = append(out, *definition)
 	}
 	return out, rows.Err()
+}
+
+func scanBackupScheduleState(row pgx.Row) (*domain.BackupScheduleState, error) {
+	state := &domain.BackupScheduleState{}
+	var nextScheduledRun, lastScheduledDispatch, lastScheduledRunDueAt, pausedAt, disabledAt pgtype.Timestamptz
+	if err := row.Scan(&state.DefinitionID, &nextScheduledRun, &lastScheduledDispatch, &lastScheduledRunDueAt,
+		&state.MissedRunCount, &state.PauseReason, &state.PausedBy, &pausedAt, &state.DisabledBy, &state.DisableReason,
+		&disabledAt, &state.MaintenanceWindow, &state.MaintenanceWindowTimeZone, &state.CreatedAt, &state.UpdatedAt); err != nil {
+		return nil, err
+	}
+	state.NextScheduledRun = timePtrFromPG(nextScheduledRun)
+	state.LastScheduledDispatch = timePtrFromPG(lastScheduledDispatch)
+	state.LastScheduledRunDueAt = timePtrFromPG(lastScheduledRunDueAt)
+	state.PausedAt = timePtrFromPG(pausedAt)
+	state.DisabledAt = timePtrFromPG(disabledAt)
+	return state, nil
+}
+
+func timePtrFromPG(value pgtype.Timestamptz) *time.Time {
+	if !value.Valid {
+		return nil
+	}
+	t := value.Time
+	return &t
 }
 
 func scanBackupRun(row pgx.Row) (*domain.BackupRun, error) {

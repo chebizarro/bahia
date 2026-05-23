@@ -1,0 +1,26 @@
+{
+  "feature_id": "bahia-s69t",
+  "test_matrix": [
+    {
+      "test": "go test ./internal/domain ./internal/repository ./internal/service",
+      "covers": ["AC1", "AC2", "AC3", "AC4"],
+      "status": "passed",
+      "evidence": "GOCACHE=/tmp/bahia-go-cache go test ./internal/domain ./internal/repository ./internal/service"
+    },
+    {
+      "test": "TestBackupSchedulerDispatchesLatestDueRunAndAccountsMissedRuns",
+      "covers": ["AC1", "AC2"],
+      "status": "passed"
+    },
+    {
+      "test": "TestBackupSchedulerHonorsPauseAndDisableLifecycle",
+      "covers": ["AC3"],
+      "status": "passed"
+    },
+    {
+      "test": "TestBackupSchedulerAppliesJitterAndMaintenanceWindowBeforeDispatch",
+      "covers": ["AC4"],
+      "status": "passed"
+    }
+  ]
+}

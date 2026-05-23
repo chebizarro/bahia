@@ -121,6 +121,48 @@ func TestPgBackupControlPlaneRepositoryUpsertAndGetBackupDefinition(t *testing.T
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestPgBackupControlPlaneRepositoryUpsertAndGetBackupScheduleState(t *testing.T) {
+	ctx := context.Background()
+	mock, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	defer mock.Close()
+	repo := newPgBackupControlPlaneRepositoryWithDB(mock)
+	definitionID := uuid.New()
+	now := time.Now().UTC().Truncate(time.Second)
+	next := now.Add(time.Hour)
+	state := &domain.BackupScheduleState{
+		DefinitionID:              definitionID,
+		NextScheduledRun:          &next,
+		LastScheduledDispatch:     &now,
+		LastScheduledRunDueAt:     &now,
+		MissedRunCount:            3,
+		MaintenanceWindow:         "01:00-03:00",
+		MaintenanceWindowTimeZone: "UTC",
+	}
+
+	mock.ExpectExec("INSERT INTO backup_schedule_states").
+		WithArgs(state.DefinitionID, state.NextScheduledRun, state.LastScheduledDispatch, state.LastScheduledRunDueAt, state.MissedRunCount,
+			state.PauseReason, state.PausedBy, state.PausedAt, state.DisabledBy, state.DisableReason, state.DisabledAt,
+			state.MaintenanceWindow, state.MaintenanceWindowTimeZone, pgxmock.AnyArg(), pgxmock.AnyArg()).
+		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+
+	require.NoError(t, repo.UpsertBackupScheduleState(ctx, state))
+
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT " + backupScheduleStateColumns + " FROM backup_schedule_states WHERE definition_id = $1")).
+		WithArgs(definitionID).
+		WillReturnRows(pgxmock.NewRows(splitColumns(backupScheduleStateColumns)).
+			AddRow(definitionID, next, now, now, 3, "", "", nil, "", "", nil, "01:00-03:00", "UTC", now, now))
+
+	stored, err := repo.GetBackupScheduleState(ctx, definitionID)
+
+	require.NoError(t, err)
+	require.Equal(t, definitionID, stored.DefinitionID)
+	require.Equal(t, 3, stored.MissedRunCount)
+	require.Equal(t, "01:00-03:00", stored.MaintenanceWindow)
+	require.Equal(t, next, *stored.NextScheduledRun)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestPgBackupControlPlaneRepositoryDeleteBackupDefinitionReportsMissing(t *testing.T) {
 	ctx := context.Background()
 	mock, err := pgxmock.NewPool()

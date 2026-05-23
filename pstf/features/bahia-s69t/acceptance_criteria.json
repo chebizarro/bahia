@@ -1,0 +1,25 @@
+{
+  "feature_id": "bahia-s69t",
+  "criteria": [
+    {
+      "id": "AC1",
+      "description": "Enabled BackupDefinitions with due schedule expressions dispatch exactly one idempotent queued BackupRun per evaluated due slot.",
+      "tests": ["TestBackupSchedulerDispatchesLatestDueRunAndAccountsMissedRuns", "TestBackupSchedulerIsIdempotentForSameDueCoordinate"]
+    },
+    {
+      "id": "AC2",
+      "description": "Schedule state records next scheduled run, last scheduled dispatch, last due slot, and missed-run accounting.",
+      "tests": ["TestBackupSchedulerDispatchesLatestDueRunAndAccountsMissedRuns", "TestPgBackupControlPlaneRepositoryUpsertAndGetBackupScheduleState"]
+    },
+    {
+      "id": "AC3",
+      "description": "Pause and disable lifecycle controls prevent dispatch and persist operator-visible reason/provenance fields.",
+      "tests": ["TestBackupSchedulerHonorsPauseAndDisableLifecycle", "TestValidateBackupScheduleStateTracksPauseDisableAndMaintenanceIntent"]
+    },
+    {
+      "id": "AC4",
+      "description": "Jitter and maintenance windows are applied before dispatch, with invalid schedule expressions rejected explicitly.",
+      "tests": ["TestBackupSchedulerAppliesJitterAndMaintenanceWindowBeforeDispatch", "TestBackupSchedulerSkipsInvalidScheduleExpressionWithoutBlockingPass", "TestBackupSchedulerRejectsSubSecondCadence", "TestBackupSchedulerPauseRequiresExistingDefinition", "TestBackupSchedulerComputesNextCronRunWithoutSleeping"]
+    }
+  ]
+}

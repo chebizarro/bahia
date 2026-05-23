@@ -127,6 +127,11 @@ type BackupRepository struct {
 	UpdatedAt         time.Time         `json:"updated_at"`
 }
 
+const (
+	BackupDefinitionMetadataMaintenanceWindow = "schedule_maintenance_window"
+	BackupDefinitionMetadataMaintenanceTZ     = "schedule_maintenance_timezone"
+)
+
 // BackupDefinition is the canonical operator-facing backup registry object.
 // It composes repository, policy, recipe, schedule, scope, approval, restore,
 // executor targeting, and grouping intent without executing backup work itself.
@@ -159,6 +164,57 @@ type BackupDefinition struct {
 	CreatedAt              time.Time      `json:"created_at"`
 	UpdatedAt              time.Time      `json:"updated_at"`
 	CreatedBy              string         `json:"created_by"`
+}
+
+// BackupScheduleState is Bahia's durable, operator-visible dispatch state for one backup definition schedule.
+type BackupScheduleState struct {
+	DefinitionID              uuid.UUID  `json:"definition_id"`
+	NextScheduledRun          *time.Time `json:"next_scheduled_run,omitempty"`
+	LastScheduledDispatch     *time.Time `json:"last_scheduled_dispatch,omitempty"`
+	LastScheduledRunDueAt     *time.Time `json:"last_scheduled_run_due_at,omitempty"`
+	MissedRunCount            int        `json:"missed_run_count"`
+	PauseReason               string     `json:"pause_reason,omitempty"`
+	PausedBy                  string     `json:"paused_by,omitempty"`
+	PausedAt                  *time.Time `json:"paused_at,omitempty"`
+	DisabledBy                string     `json:"disabled_by,omitempty"`
+	DisableReason             string     `json:"disable_reason,omitempty"`
+	DisabledAt                *time.Time `json:"disabled_at,omitempty"`
+	MaintenanceWindow         string     `json:"maintenance_window,omitempty"`
+	MaintenanceWindowTimeZone string     `json:"maintenance_window_timezone,omitempty"`
+	CreatedAt                 time.Time  `json:"created_at"`
+	UpdatedAt                 time.Time  `json:"updated_at"`
+}
+
+func (s BackupScheduleState) Paused() bool {
+	return strings.TrimSpace(s.PauseReason) != "" || s.PausedAt != nil
+}
+
+func (s BackupScheduleState) Disabled() bool {
+	return strings.TrimSpace(s.DisableReason) != "" || s.DisabledAt != nil
+}
+
+func BackupDefinitionMaintenanceWindow(definition *BackupDefinition) string {
+	if definition == nil || definition.Metadata == nil {
+		return ""
+	}
+	for _, key := range []string{BackupDefinitionMetadataMaintenanceWindow, "maintenance_window"} {
+		if raw, ok := definition.Metadata[key]; ok {
+			return strings.TrimSpace(fmt.Sprint(raw))
+		}
+	}
+	return ""
+}
+
+func BackupDefinitionMaintenanceWindowTimeZone(definition *BackupDefinition) string {
+	if definition == nil || definition.Metadata == nil {
+		return ""
+	}
+	for _, key := range []string{BackupDefinitionMetadataMaintenanceTZ, "maintenance_timezone", "timezone"} {
+		if raw, ok := definition.Metadata[key]; ok {
+			return strings.TrimSpace(fmt.Sprint(raw))
+		}
+	}
+	return ""
 }
 
 // BackupRun is the durable control-plane record for a backup request.
@@ -459,6 +515,12 @@ func ValidateBackupDefinition(definition *BackupDefinition) error {
 			return err
 		}
 	}
+	if definition.ScheduleJitterWindow != "" {
+		jitter, err := time.ParseDuration(definition.ScheduleJitterWindow)
+		if err != nil || jitter < 0 {
+			return fmt.Errorf("%w: schedule_jitter_window %q is not a valid non-negative duration", ErrInvalidValue, definition.ScheduleJitterWindow)
+		}
+	}
 	if definition.ScheduleEnabled && definition.ScheduleExpression == "" {
 		return fmt.Errorf("%w: schedule_expression must not be empty when schedule is enabled", ErrEmptyField)
 	}
@@ -467,6 +529,34 @@ func ValidateBackupDefinition(definition *BackupDefinition) error {
 	}
 	if err := ValidateRequiredString(definition.CreatedBy, "created_by"); err != nil {
 		return err
+	}
+	return nil
+}
+
+func ValidateBackupScheduleState(state *BackupScheduleState) error {
+	if state == nil {
+		return fmt.Errorf("%w: backup schedule state must not be nil", ErrInvalidValue)
+	}
+	if err := ValidateRequiredUUID(state.DefinitionID, "definition_id"); err != nil {
+		return err
+	}
+	state.PauseReason = strings.TrimSpace(state.PauseReason)
+	state.PausedBy = strings.TrimSpace(state.PausedBy)
+	state.DisabledBy = strings.TrimSpace(state.DisabledBy)
+	state.DisableReason = strings.TrimSpace(state.DisableReason)
+	state.MaintenanceWindow = strings.TrimSpace(state.MaintenanceWindow)
+	state.MaintenanceWindowTimeZone = strings.TrimSpace(state.MaintenanceWindowTimeZone)
+	if state.MissedRunCount < 0 {
+		return fmt.Errorf("%w: missed_run_count must not be negative", ErrInvalidValue)
+	}
+	if state.PauseReason != "" && state.PausedAt == nil {
+		return fmt.Errorf("%w: paused_at must not be nil when pause_reason is set", ErrEmptyField)
+	}
+	if state.DisabledBy != "" && state.DisabledAt == nil {
+		return fmt.Errorf("%w: disabled_at must not be nil when disabled_by is set", ErrEmptyField)
+	}
+	if state.DisableReason != "" && state.DisabledAt == nil {
+		return fmt.Errorf("%w: disabled_at must not be nil when disable_reason is set", ErrEmptyField)
 	}
 	return nil
 }
