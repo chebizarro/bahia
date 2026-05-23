@@ -399,7 +399,7 @@
       {/if}
     </section>
   {:else}
-    <FipsMeshPanel state={fipsMeshState} nodes={meshNodes} />
+    <FipsMeshPanel meshState={fipsMeshState} nodes={meshNodes} />
   {/if}
 </div>
 

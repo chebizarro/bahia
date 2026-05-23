@@ -90,26 +90,26 @@
     <span>{filteredNodes.length} shown · {nodes.length} total</span>
   </div>
 
-  {#if state.error}
+  {#if meshState.error}
     <div class="empty-card error" role="status">
       <h3>FIPS mesh unavailable</h3>
-      <p>{state.error}</p>
+      <p>{meshState.error}</p>
     </div>
-  {:else if state.status === 'idle' || state.status === 'discovering' || state.status === 'connecting' || state.status === 'bootstrapping' || state.loading}
+  {:else if meshState.status === 'idle' || meshState.status === 'discovering' || meshState.status === 'connecting' || meshState.status === 'bootstrapping' || meshState.loading}
     <div class="empty-card" role="status">
       <h3>Connecting to FIPS mesh read models</h3>
-      <p>Status: {state.status || 'idle'} · waiting for relay EOSE before marking the view live.</p>
+      <p>Status: {meshState.status || 'idle'} · waiting for relay EOSE before marking the view live.</p>
     </div>
-  {:else if state.relays?.length === 0 && nodes.length === 0}
+  {:else if meshState.relays?.length === 0 && nodes.length === 0}
     <div class="empty-card" role="status">
       <h3>FIPS mesh relay configuration disabled</h3>
       <p>No browser relays are available for FIPS mesh read models.</p>
     </div>
   {:else}
     <div class="mesh-status" aria-label="FIPS mesh Nostr status">
-      <span class={`badge ${state.status === 'live' ? 'healthy' : state.status === 'degraded' || state.status === 'disconnected' ? 'warning' : 'unknown'}`}>{state.status || 'unknown'}</span>
-      <span>{state.relays?.length || 0} relay{state.relays?.length === 1 ? '' : 's'} · EOSE {state.bootstrapComplete ? 'complete' : 'pending'}</span>
-      {#if state.lastClosed?.reason}<span>Last CLOSED: {state.lastClosed.reason}</span>{/if}
+      <span class={`badge ${meshState.status === 'live' ? 'healthy' : meshState.status === 'degraded' || meshState.status === 'disconnected' ? 'warning' : 'unknown'}`}>{meshState.status || 'unknown'}</span>
+      <span>{meshState.relays?.length || 0} relay{meshState.relays?.length === 1 ? '' : 's'} · EOSE {meshState.bootstrapComplete ? 'complete' : 'pending'}</span>
+      {#if meshState.lastClosed?.reason}<span>Last CLOSED: {meshState.lastClosed.reason}</span>{/if}
     </div>
 
     <form class="filters" onsubmit={(event) => event.preventDefault()}>
