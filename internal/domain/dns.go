@@ -28,6 +28,7 @@ const (
 	ZoneVisibilityInternal ZoneVisibility = "internal"
 	ZoneVisibilityExternal ZoneVisibility = "external"
 	ZoneVisibilityEdge     ZoneVisibility = "edge"
+	ZoneVisibilityMesh     ZoneVisibility = "mesh"
 )
 
 // DNSRecordType identifies the DNS record families projected in Phase 0.
@@ -48,6 +49,7 @@ const (
 	DNSEndpointFamilyLLM     DNSEndpointFamily = "llm"
 	DNSEndpointFamilyML      DNSEndpointFamily = "ml"
 	DNSEndpointFamilyWorker  DNSEndpointFamily = "worker"
+	DNSEndpointFamilyMesh    DNSEndpointFamily = "mesh"
 )
 
 // DNSEndpoint is a materialized DNS endpoint derived from Bahia infrastructure state.
@@ -170,7 +172,7 @@ func (t DNSBackendType) IsValid() bool {
 
 func (v ZoneVisibility) IsValid() bool {
 	switch v {
-	case ZoneVisibilityInternal, ZoneVisibilityExternal, ZoneVisibilityEdge:
+	case ZoneVisibilityInternal, ZoneVisibilityExternal, ZoneVisibilityEdge, ZoneVisibilityMesh:
 		return true
 	default:
 		return false
@@ -188,7 +190,7 @@ func (t DNSRecordType) IsValid() bool {
 
 func (f DNSEndpointFamily) IsValid() bool {
 	switch f {
-	case DNSEndpointFamilyService, DNSEndpointFamilyLLM, DNSEndpointFamilyML, DNSEndpointFamilyWorker:
+	case DNSEndpointFamilyService, DNSEndpointFamilyLLM, DNSEndpointFamilyML, DNSEndpointFamilyWorker, DNSEndpointFamilyMesh:
 		return true
 	default:
 		return false

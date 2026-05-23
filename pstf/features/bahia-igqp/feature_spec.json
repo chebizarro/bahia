@@ -1,0 +1,23 @@
+{
+  "feature_id": "bahia-igqp",
+  "title": "FIPS subscriber + domain foundation (Phase A.1)",
+  "status": "implemented",
+  "source_documents": ["docs/designs/fips-bahia-integration.md"],
+  "observed_behavior_before": [
+    "Bahia had no FIPS config section.",
+    "Worker domain records had no fields for FIPS overlay address or transport endpoints.",
+    "DNS domain constants did not include mesh endpoint family or mesh zone visibility.",
+    "No FIPS Kind 37195 subscriber existed."
+  ],
+  "intended_behavior": [
+    "Bahia exposes FIPS config defaults for disabled-by-default overlay advert ingestion.",
+    "Workers can carry a derived FIPS fd00::/8 overlay address and advertised FIPS transport endpoints.",
+    "DNS domain constants recognize mesh endpoint family and mesh zone visibility.",
+    "A self-contained FIPS subscriber subscribes to Kind 37195 with a narrow d-tag filter, validates inbound Nostr events, parses OverlayAdvert JSON, matches workers by pubkey, derives overlay IPv6 addresses, and applies updates through the worker repository without app.go wiring."
+  ],
+  "scope_boundaries": [
+    "Did not modify internal/adapters/nostr/projector.go.",
+    "Did not modify cmd/fips-bahia-bridge/.",
+    "Did not modify internal/app/app.go."
+  ]
+}

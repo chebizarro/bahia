@@ -67,6 +67,12 @@ type WorkerPricing struct {
 	Unit           string `json:"unit"` // e.g. "sat"
 }
 
+// FIPSTransportEndpoint describes one transport endpoint from a FIPS overlay advert.
+type FIPSTransportEndpoint struct {
+	Transport string `json:"transport"`
+	Address   string `json:"address"`
+}
+
 // WorkerResources describes host-level resources advertised by a worker.
 type WorkerResources struct {
 	CPUCores int `json:"cpu_cores,omitempty"`
@@ -131,6 +137,8 @@ type Worker struct {
 	MaxDurationSecs     int                       `json:"max_duration_secs,omitempty"`
 	Geohash             string                    `json:"geohash,omitempty"`
 	PreferredRelays     []string                  `json:"preferred_relays,omitempty"`
+	FIPSOverlayAddr     string                    `json:"fips_overlay_addr,omitempty"`
+	FIPSEndpoints       []FIPSTransportEndpoint   `json:"fips_endpoints,omitempty"`
 	LastAdvertisementAt time.Time                 `json:"last_advertisement_at"`
 	Status              WorkerStatus              `json:"status"`
 	SchedulingState     WorkerSchedulingState     `json:"scheduling_state"`

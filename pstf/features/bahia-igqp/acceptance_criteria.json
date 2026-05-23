@@ -1,0 +1,25 @@
+{
+  "feature_id": "bahia-igqp",
+  "criteria": [
+    {
+      "id": "AC-FIPS-A1-001",
+      "statement": "Config contains a fips section with disabled-by-default ingestion, relay URLs, app namespace default fips-overlay-v1, auto-register default false, allowed npubs, and overlay prefix default fd00.",
+      "verification": "go test ./internal/config"
+    },
+    {
+      "id": "AC-FIPS-A1-002",
+      "statement": "Worker domain records can represent a FIPS overlay IPv6 address and advertised udp/tcp/tor transport endpoints.",
+      "verification": "go test ./internal/domain"
+    },
+    {
+      "id": "AC-FIPS-A1-003",
+      "statement": "DNS domain constants and validation accept mesh endpoint family and mesh zone visibility.",
+      "verification": "go test ./internal/domain"
+    },
+    {
+      "id": "AC-FIPS-A1-004",
+      "statement": "The FIPS subscriber subscribes to Kind 37195 with a d-tag scoped to fips-overlay-v1, handles EOSE/CLOSED/AUTH paths, validates events, parses OverlayAdvert content, matches workers by pubkey, and applies derived fd00::/8 overlay state through the worker repository.",
+      "verification": "go test ./internal/adapters/nostr"
+    }
+  ]
+}

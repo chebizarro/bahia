@@ -1,0 +1,30 @@
+{
+  "feature_id": "bahia-igqp",
+  "tests": [
+    {
+      "test": "TestParseOverlayAdvert",
+      "criteria": ["AC-FIPS-A1-004"],
+      "evidence": "Validates FIPS OverlayAdvert JSON parsing and endpoint normalization from addr to domain Address."
+    },
+    {
+      "test": "TestFIPSOverlayAddressKnownVector",
+      "criteria": ["AC-FIPS-A1-004"],
+      "evidence": "Checks fd00::/8 IPv6 derivation from SHA-256(pubkey) against a fixed vector."
+    },
+    {
+      "test": "TestFIPSSubscriberMatchesWorkerByPubkeyAndAppliesAdvert",
+      "criteria": ["AC-FIPS-A1-002", "AC-FIPS-A1-004"],
+      "evidence": "Injects a signed Kind 37195 EVENT and verifies pubkey matching plus worker overlay update without sleeps."
+    },
+    {
+      "test": "TestFIPSSubscriberIgnoresUnknownWorkerWhenAutoRegisterDisabled",
+      "criteria": ["AC-FIPS-A1-004"],
+      "evidence": "Verifies the default no-auto-registration trust boundary."
+    },
+    {
+      "test": "go test ./internal/config ./internal/domain",
+      "criteria": ["AC-FIPS-A1-001", "AC-FIPS-A1-002", "AC-FIPS-A1-003"],
+      "evidence": "Compiles and runs existing config/domain validation suites with the new config and domain constants."
+    }
+  ]
+}

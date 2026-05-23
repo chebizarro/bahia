@@ -40,6 +40,17 @@ type Config struct {
 	Packages      PackageControlplaneConfig `koanf:"packages"`
 	Assistant     AssistantConfig           `koanf:"assistant"`
 	DNS           DNSConfig                 `koanf:"dns"`
+	FIPS          FIPSConfig                `koanf:"fips"`
+}
+
+// FIPSConfig controls FIPS overlay advert ingestion.
+type FIPSConfig struct {
+	Enabled              bool     `koanf:"enabled"`
+	RelayURLs            []string `koanf:"relay_urls"`
+	AppNamespace         string   `koanf:"app_namespace"`
+	AutoRegisterWorkers  bool     `koanf:"auto_register_workers"`
+	AllowedNpubs         []string `koanf:"allowed_npubs"`
+	OverlayAddressPrefix string   `koanf:"overlay_address_prefix"`
 }
 
 // DNSConfig controls DNS orchestration projection and backend settings.
@@ -502,6 +513,14 @@ func Defaults() *Config {
 				EnvironmentZones: map[string]string{},
 			},
 		},
+		FIPS: FIPSConfig{
+			Enabled:              false,
+			RelayURLs:            []string{},
+			AppNamespace:         "fips-overlay-v1",
+			AutoRegisterWorkers:  false,
+			AllowedNpubs:         []string{},
+			OverlayAddressPrefix: "fd00",
+		},
 		Packages: PackageControlplaneConfig{
 			Enabled:            false,
 			AllowedSourceHosts: []string{},
@@ -738,6 +757,9 @@ func (c *Config) validate() error {
 		return err
 	}
 	if err := c.validateDNS(); err != nil {
+		return err
+	}
+	if err := c.validateFIPS(); err != nil {
 		return err
 	}
 	if err := c.validateRelaySidecar(); err != nil {
@@ -1051,7 +1073,7 @@ func (c *Config) validateDNS() error {
 		zoneNames[name] = struct{}{}
 		visibility := strings.TrimSpace(zone.Visibility)
 		switch visibility {
-		case "internal", "external", "edge":
+		case "internal", "external", "edge", "mesh":
 		default:
 			return fmt.Errorf("config validation failed: dns.zones[%d].visibility %q is unsupported", i, zone.Visibility)
 		}
@@ -1152,6 +1174,26 @@ func (c *Config) validateDNS() error {
 		if _, ok := zoneNames[workerZone]; !ok {
 			return fmt.Errorf("config validation failed: dns.projection.worker_zone %q references unknown zone", workerZone)
 		}
+	}
+	return nil
+}
+
+func (c *Config) validateFIPS() error {
+	c.FIPS.AppNamespace = strings.TrimSpace(c.FIPS.AppNamespace)
+	if c.FIPS.AppNamespace == "" {
+		c.FIPS.AppNamespace = "fips-overlay-v1"
+	}
+	c.FIPS.OverlayAddressPrefix = strings.ToLower(strings.TrimSpace(c.FIPS.OverlayAddressPrefix))
+	if c.FIPS.OverlayAddressPrefix == "" {
+		c.FIPS.OverlayAddressPrefix = "fd00"
+	}
+	if c.FIPS.OverlayAddressPrefix != "fd00" {
+		return fmt.Errorf("config validation failed: fips.overlay_address_prefix %q is unsupported; expected fd00", c.FIPS.OverlayAddressPrefix)
+	}
+	c.FIPS.RelayURLs = normalizeRelayList(c.FIPS.RelayURLs)
+	c.FIPS.AllowedNpubs = normalizeStringList(c.FIPS.AllowedNpubs)
+	if c.FIPS.Enabled && len(c.FIPS.RelayURLs) == 0 {
+		return fmt.Errorf("config validation failed: fips.relay_urls requires at least one relay when fips.enabled=true")
 	}
 	return nil
 }
