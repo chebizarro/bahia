@@ -79,6 +79,10 @@ const (
 	KindMLEvaluationExperimentState = 31987
 	KindMLArtifactProvenanceGraph   = 31988
 	KindMLRuntimeCapabilityProfile  = 31989
+	KindWorkerState                 = 32020
+	KindWorkerAssignmentState       = 32021
+	KindWorkerDrainStatus           = 32022
+	KindWorkerEligibilityPreview    = 32023
 )
 
 // Operator assistant event kinds. Keep these values aligned with

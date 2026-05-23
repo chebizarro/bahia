@@ -1,0 +1,10 @@
+{
+  "feature_id": "BUCKET_E_WORKER_MANAGEMENT",
+  "criteria": [
+    {"id": "AC1", "text": "MCP exposes signer-first worker cordon, uncordon, drain, undrain, maintenance enter/exit, and labels update tools that return request/result/read-model correlation metadata."},
+    {"id": "AC2", "text": "Worker assignment state read model reports worker pubkey and active service/inference assignments with workload ID, status, pinned/movable flags, and timestamps."},
+    {"id": "AC3", "text": "Drain status read model reports drain start/reason, remaining assignments, pinned blockers, and maintenance/disable safety."},
+    {"id": "AC4", "text": "Eligibility preview read model uses WorkerPolicyService.RankWorkers and ML placement preview scoring to split eligible/rejected workers, scores, and selected winner."},
+    {"id": "AC5", "text": "Nostr projector publishes replaceable worker assignment and drain status read models from authoritative service/ML state without polling or sleep-based completion."}
+  ]
+}

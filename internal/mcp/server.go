@@ -34,7 +34,9 @@ type Server struct {
 	llmCommands       LLMCommandPublisher
 	serviceCommands   ServiceCommandPublisher
 	packageCommands   PackageCommandPublisher
+	workerCommands    WorkerCommandPublisher
 	packageProjection repository.PackageControlPlaneRepository
+	workerReadModels  *service.WorkerReadModelService
 	logger            *zap.Logger
 	secretsRepo       repository.SecretRepository       // optional: for secret management tools
 	encryptor         *secrets.Encryptor                // optional: for secret encryption/decryption
@@ -77,7 +79,9 @@ type ServerDeps struct {
 	LLMCommandPublisher     LLMCommandPublisher
 	ServiceCommandPublisher ServiceCommandPublisher
 	PackageCommandPublisher PackageCommandPublisher
+	WorkerCommandPublisher  WorkerCommandPublisher
 	PackageProjection       repository.PackageControlPlaneRepository
+	WorkerReadModels        *service.WorkerReadModelService
 }
 
 // SignatureVerifier verifies signatures for an artifact.
@@ -143,7 +147,9 @@ func NewServerWithOptions(registry *service.RegistryService, logger *zap.Logger,
 		llmCommands:       deps.LLMCommandPublisher,
 		serviceCommands:   deps.ServiceCommandPublisher,
 		packageCommands:   deps.PackageCommandPublisher,
+		workerCommands:    deps.WorkerCommandPublisher,
 		packageProjection: deps.PackageProjection,
+		workerReadModels:  deps.WorkerReadModels,
 		logger:            logger,
 		secretsRepo:       deps.SecretsRepo,
 		encryptor:         deps.Encryptor,
@@ -1683,6 +1689,7 @@ func (s *Server) GetTools() []Tool {
 	}
 	tools = append(tools, mlToolDefinitions()...)
 	tools = append(tools, assistantAsyncToolDefinitions()...)
+	tools = append(tools, workerToolDefinitions()...)
 	return append(tools, packageToolDefinitions()...)
 }
 
@@ -1850,6 +1857,20 @@ func (s *Server) CallTool(ctx context.Context, name string, arguments map[string
 		return s.handleGetWorker(ctx, arguments)
 	case "bahia_get_worker_pricing":
 		return s.handleGetWorkerPricing(ctx, arguments)
+	case "bahia_worker_cordon", "bahia_worker_uncordon", "bahia_worker_drain", "bahia_worker_undrain", "bahia_worker_maintenance_enter", "bahia_worker_maintenance_exit":
+		return s.handleWorkerLifecycleCommand(ctx, name, arguments)
+	case "bahia_worker_labels_update":
+		return s.handleWorkerLabelsUpdate(ctx, arguments)
+	case "bahia_worker_get_assignments":
+		return s.handleWorkerGetAssignments(ctx, arguments)
+	case "bahia_worker_list_assignments":
+		return s.handleWorkerListAssignments(ctx, arguments)
+	case "bahia_worker_get_drain_status":
+		return s.handleWorkerGetDrainStatus(ctx, arguments)
+	case "bahia_worker_list_drain_status":
+		return s.handleWorkerListDrainStatus(ctx, arguments)
+	case "bahia_worker_preview_eligibility":
+		return s.handleWorkerPreviewEligibility(ctx, arguments)
 	// Payment operations
 	case "bahia_estimate_cost":
 		return s.handleEstimateCost(ctx, arguments)
@@ -4581,6 +4602,14 @@ func workerToMap(w *domain.Worker) map[string]interface{} {
 		"software":              w.Software,
 		"pricing":               w.Pricing,
 		"status":                string(w.Status),
+		"scheduling_state":      string(w.SchedulingState),
+		"scheduling_note":       w.SchedulingNote,
+		"labels":                w.Labels,
+		"capabilities":          w.Capabilities,
+		"ml_capabilities":       w.MLCapabilities,
+		"runtime_target":        w.RuntimeTarget,
+		"resources":             w.Resources,
+		"accelerators":          w.Accelerators,
 		"last_advertisement_at": w.LastAdvertisementAt.Format("2006-01-02T15:04:05Z"),
 		"created_at":            w.CreatedAt.Format("2006-01-02T15:04:05Z"),
 		"updated_at":            w.UpdatedAt.Format("2006-01-02T15:04:05Z"),

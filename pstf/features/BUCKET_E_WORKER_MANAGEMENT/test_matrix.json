@@ -1,0 +1,9 @@
+{
+  "feature_id": "BUCKET_E_WORKER_MANAGEMENT",
+  "mappings": [
+    {"criteria": ["AC1"], "tests": ["go test ./internal/mcp", "TestWorkerMutatingToolsPublishSignerFirstRequestsAndReturnCorrelation", "TestGetToolsIncludesWorkerManagementAndReadModelTools"]},
+    {"criteria": ["AC2", "AC3"], "tests": ["go test ./internal/service", "TestWorkerReadModelServiceBuildsAssignmentAndDrainStatus"]},
+    {"criteria": ["AC4"], "tests": ["go test ./internal/service", "TestWorkerReadModelServicePreviewsEligibilityWithRankWorkers"]},
+    {"criteria": ["AC5"], "tests": ["go test ./internal/adapters/nostr", "go test ./internal/app"]}
+  ]
+}

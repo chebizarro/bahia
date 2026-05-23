@@ -301,6 +301,7 @@ func New(cfg *config.Config) (*App, error) {
 	// long-running orchestration on the existing LLM path until dedicated buckets.
 	mlRegistryRepo := repository.NewPgMLRegistryRepository(pool)
 	mlRegistry := service.NewMLRegistryService(mlRegistryRepo, publisher, logger, service.WithMLEnvironmentRepository(envRepo))
+	workerReadModelSvc := service.NewWorkerReadModelService(workerRepo, registry, mlRegistry, workerPolicySvc, service.NewMLPlacementService(workerRepo, logger), logger)
 
 	// LLM provisioning control plane.
 	var llmRegistry *service.LLMRegistryService
@@ -379,6 +380,7 @@ func New(cfg *config.Config) (*App, error) {
 		nostrAdapter.WithBackupProjectionSource(backupRegistry),
 		nostrAdapter.WithMLProjectionSource(mlRegistry),
 		nostrAdapter.WithWorkerProjectionSource(workerRepo),
+		nostrAdapter.WithWorkerReadModelProjectionSource(workerReadModelSvc),
 		nostrAdapter.WithSystemDiscoveryConfig(cfg, true),
 	}
 	if llmRegistry != nil {
@@ -517,6 +519,10 @@ func New(cfg *config.Config) (*App, error) {
 	if packageRegistrySvc != nil && controlPlaneSigner != nil && controlPlanePool != nil && len(controlPlaneRelays) > 0 {
 		packageCommandPublisher = controlplane.NewPackageCommandPublisher(controlPlanePool, controlPlaneSigner)
 	}
+	var workerCommandPublisher mcp.WorkerCommandPublisher
+	if controlPlaneSigner != nil && controlPlanePool != nil && len(controlPlaneRelays) > 0 {
+		workerCommandPublisher = controlplane.NewWorkerCommandPublisher(controlPlanePool, controlPlaneSigner)
+	}
 	mcpServer := mcp.NewServerWithOptions(registry, logger, mcp.ServerDeps{
 		LogService:              runLogService,
 		Payments:                paymentSvc,
@@ -529,7 +535,10 @@ func New(cfg *config.Config) (*App, error) {
 		LLMCommandPublisher:     llmCommandPublisher,
 		ServiceCommandPublisher: serviceCommandPublisher,
 		PackageCommandPublisher: packageCommandPublisher,
+		WorkerCommandPublisher:  workerCommandPublisher,
 		PackageProjection:       packageProjection,
+		WorkerReadModels:        workerReadModelSvc,
+		Workers:                 workerRepo,
 	})
 	mcpHandler := handlers.NewMCPHandler(mcpServer, logger)
 	logger.Info("mcp server initialized")

@@ -75,6 +75,13 @@ type WorkerProjectionSource interface {
 	List(ctx context.Context, status string, limit int) ([]domain.Worker, error)
 }
 
+type WorkerReadModelProjectionSource interface {
+	ListAssignmentStates(ctx context.Context) ([]domain.WorkerAssignmentState, error)
+	GetAssignmentState(ctx context.Context, workerPubKey string) (*domain.WorkerAssignmentState, error)
+	ListDrainStatuses(ctx context.Context) ([]domain.WorkerDrainStatus, error)
+	GetDrainStatus(ctx context.Context, workerPubKey string) (*domain.WorkerDrainStatus, error)
+}
+
 type BackupProjectionSource interface {
 	ListRecipes(ctx context.Context, limit, offset int) ([]domain.BackupRecipe, error)
 	GetRecipe(ctx context.Context, id uuid.UUID) (*domain.BackupRecipe, error)
@@ -107,24 +114,25 @@ type ProjectionPublisher interface {
 // read models and append-only audit events. It is rebuildable: a startup and
 // periodic snapshot can repair a cold or wiped sidecar store.
 type Projector struct {
-	source           ProjectionSource
-	llmSource        LLMProjectionSource
-	mlSource         MLProjectionSource
-	workerSource     WorkerProjectionSource
-	policySource     PolicyProjectionSource
-	backupSource     BackupProjectionSource
-	dnsSource        DNSProjectionSource
-	publisher        ProjectionPublisher
-	eventRepo        repository.NostrEventRepository
-	privateKey       string
-	enabled          bool
-	repairInterval   time.Duration
-	logger           *zap.Logger
-	systemConfig     *config.Config
-	mcpTransport     bool
-	dnsPublishMu     sync.Mutex
-	dnsPublished     map[string]dnsPublishedEndpoint
-	dnsCacheHydrated bool
+	source                ProjectionSource
+	llmSource             LLMProjectionSource
+	mlSource              MLProjectionSource
+	workerSource          WorkerProjectionSource
+	workerReadModelSource WorkerReadModelProjectionSource
+	policySource          PolicyProjectionSource
+	backupSource          BackupProjectionSource
+	dnsSource             DNSProjectionSource
+	publisher             ProjectionPublisher
+	eventRepo             repository.NostrEventRepository
+	privateKey            string
+	enabled               bool
+	repairInterval        time.Duration
+	logger                *zap.Logger
+	systemConfig          *config.Config
+	mcpTransport          bool
+	dnsPublishMu          sync.Mutex
+	dnsPublished          map[string]dnsPublishedEndpoint
+	dnsCacheHydrated      bool
 }
 
 // ProjectorOption configures a projector.
@@ -146,6 +154,10 @@ func WithMLProjectionSource(source MLProjectionSource) ProjectorOption {
 
 func WithWorkerProjectionSource(source WorkerProjectionSource) ProjectorOption {
 	return func(p *Projector) { p.workerSource = source }
+}
+
+func WithWorkerReadModelProjectionSource(source WorkerReadModelProjectionSource) ProjectorOption {
+	return func(p *Projector) { p.workerReadModelSource = source }
 }
 
 func WithPolicyProjectionSource(source PolicyProjectionSource) ProjectorOption {
@@ -360,6 +372,7 @@ func (p *Projector) RepublishSnapshot(ctx context.Context) error {
 		}
 	}
 	mlModels, mlVersions, mlEndpoints, mlStates, mlProvenance, mlCapabilities := p.publishMLSnapshots(ctx)
+	workerAssignments, workerDrains := p.publishWorkerReadModelSnapshots(ctx)
 	backupRecipes, backupPolicies, backupRepositories, backupRuns, backupRestores, backupVerifications := p.publishBackupSnapshots(ctx)
 	dnsEndpoints, dnsTombstones := 0, 0
 	if p.dnsSource != nil {
@@ -371,7 +384,7 @@ func (p *Projector) RepublishSnapshot(ctx context.Context) error {
 			dnsTombstones = tombstones
 		}
 	}
-	p.logger.Info("Nostr projection snapshot republished", zap.Int("services", len(services)), zap.Int("environments", len(envs)), zap.Int("states", len(states)), zap.Int("builds", buildsPublished), zap.Int("artifacts", artifactsPublished), zap.Int("deployment_intents", intentsPublished), zap.Int("deployment_runs", runsPublished), zap.Int("policies", policiesPublished), zap.Int("llm_routes", llmRoutes), zap.Int("llm_route_states", llmStates), zap.Int("ml_models", mlModels), zap.Int("ml_model_versions", mlVersions), zap.Int("ml_endpoints", mlEndpoints), zap.Int("ml_endpoint_states", mlStates), zap.Int("ml_provenance_graphs", mlProvenance), zap.Int("ml_capabilities", mlCapabilities), zap.Int("backup_recipes", backupRecipes), zap.Int("backup_policies", backupPolicies), zap.Int("backup_repositories", backupRepositories), zap.Int("backup_runs", backupRuns), zap.Int("backup_restores", backupRestores), zap.Int("backup_verifications", backupVerifications), zap.Int("dns_endpoints", dnsEndpoints), zap.Int("dns_endpoint_tombstones", dnsTombstones))
+	p.logger.Info("Nostr projection snapshot republished", zap.Int("services", len(services)), zap.Int("environments", len(envs)), zap.Int("states", len(states)), zap.Int("builds", buildsPublished), zap.Int("artifacts", artifactsPublished), zap.Int("deployment_intents", intentsPublished), zap.Int("deployment_runs", runsPublished), zap.Int("policies", policiesPublished), zap.Int("llm_routes", llmRoutes), zap.Int("llm_route_states", llmStates), zap.Int("ml_models", mlModels), zap.Int("ml_model_versions", mlVersions), zap.Int("ml_endpoints", mlEndpoints), zap.Int("ml_endpoint_states", mlStates), zap.Int("ml_provenance_graphs", mlProvenance), zap.Int("ml_capabilities", mlCapabilities), zap.Int("worker_assignments", workerAssignments), zap.Int("worker_drains", workerDrains), zap.Int("backup_recipes", backupRecipes), zap.Int("backup_policies", backupPolicies), zap.Int("backup_repositories", backupRepositories), zap.Int("backup_runs", backupRuns), zap.Int("backup_restores", backupRestores), zap.Int("backup_verifications", backupVerifications), zap.Int("dns_endpoints", dnsEndpoints), zap.Int("dns_endpoint_tombstones", dnsTombstones))
 	return nil
 }
 
@@ -410,6 +423,7 @@ func (p *Projector) handleEvent(ctx context.Context, e events.Event) {
 		if id, ok := parseUUID(firstString(res.RunID, e.EntityID)); ok {
 			if run, err := p.source.GetDeploymentRun(ctx, id); err == nil && run != nil {
 				_ = p.publishDeploymentRunRegistry(ctx, run, false)
+				p.publishWorkerReadModelsForWorker(ctx, run.WorkerPubkey)
 			}
 			p.publishStateForRun(ctx, id)
 		} else if id, ok := parseUUID(res.IntentID); ok {
@@ -477,6 +491,11 @@ func (p *Projector) handleEvent(ctx context.Context, e events.Event) {
 		}
 	case service.EventMLRunChanged:
 		if id, ok := parseUUID(firstString(stringifyMapValue(e.Data, "run_id"), e.EntityID)); ok {
+			if p.mlSource != nil {
+				if run, err := p.mlSource.GetMLDeploymentRun(ctx, id); err == nil && run != nil {
+					p.publishWorkerReadModelsForWorker(ctx, run.WorkerPubkey)
+				}
+			}
 			p.publishMLStateForRun(ctx, id)
 		} else if id, ok := parseUUID(stringifyMapValue(e.Data, "intent_id")); ok {
 			p.publishMLStateForIntent(ctx, id)
@@ -1546,10 +1565,19 @@ func discoveryControlPlane(llmEnabled, mcpTransportEnabled, dnsEnabled bool) map
 	requestKinds := map[string]int{"deploy_request": 5961, "rollback_request": 5962, "service_action": 5963, "service_create": 5964, "environment_create": 5965, "deployment_approval": 5966, "observation_submit": 5967, "drift_remediate": 5968}
 	statusKinds := map[string]int{"deployment_status": 6961, "service_status": 6962}
 	resultKinds := map[string]int{"deployment_result": 7961, "action_result": 7962, "service_create_result": 7963, "environment_create_result": 7964, "observation_result": 7965, "remediation_result": 7966}
-	readModelKinds := map[string]int{"service_state": KindServiceState, "service_registry": KindServiceRegistry, "environment_registry": KindEnvironmentRegistry}
-	capabilities := []string{"service_deployments", "service_registry_read_models", "relay_read_models"}
-	correlationTags := []string{"service", "environment", "artifact", "intent", "run", "e", "p", "status", "step"}
-	mcpFields := []string{"request_event_id", "request_kind", "status_kind", "result_kind", "registry_kind", "state_kind", "service_id", "environment_id", "intent_id", "run_id"}
+	readModelKinds := map[string]int{"service_state": KindServiceState, "service_registry": KindServiceRegistry, "environment_registry": KindEnvironmentRegistry, "worker_state": KindWorkerState, "worker_assignment_state": KindWorkerAssignmentState, "worker_drain_status": KindWorkerDrainStatus, "worker_eligibility_preview": KindWorkerEligibilityPreview}
+	capabilities := []string{"service_deployments", "service_registry_read_models", "worker_management", "worker_read_models", "relay_read_models"}
+	correlationTags := []string{"service", "environment", "artifact", "intent", "run", "worker", "command", "e", "p", "status", "step"}
+	mcpFields := []string{"request_event_id", "request_kind", "status_kind", "result_kind", "registry_kind", "state_kind", "service_id", "environment_id", "intent_id", "run_id", "worker_pubkey", "d_tag", "read_model_kinds"}
+	requestKinds["worker_cordon_request"] = 5997
+	requestKinds["worker_uncordon_request"] = 5998
+	requestKinds["worker_drain_request"] = 5999
+	requestKinds["worker_undrain_request"] = 6000
+	requestKinds["worker_maintenance_enter_request"] = 6001
+	requestKinds["worker_maintenance_exit_request"] = 6002
+	requestKinds["worker_labels_update_request"] = 6003
+	statusKinds["worker_status"] = 6997
+	resultKinds["worker_result"] = 7997
 	if llmEnabled {
 		capabilities = append(capabilities, "llm_routes", "llm_deployments", "llm_rollback")
 		requestKinds["llm_route_create"] = 5971
@@ -2004,6 +2032,89 @@ func (p *Projector) publishMLRuntimeCapabilityProfile(ctx context.Context, worke
 		}
 	}
 	return p.publishReplaceableJSON(ctx, KindMLRuntimeCapabilityProfile, dTag, tags, worker, "ml_runtime_capability.projection", nil)
+}
+
+func (p *Projector) publishWorkerAssignmentState(ctx context.Context, state *domain.WorkerAssignmentState) error {
+	if state == nil || state.WorkerPubKey == "" {
+		return nil
+	}
+	tags := gonostr.Tags{{"worker", state.WorkerPubKey}, {"assignment_count", fmt.Sprintf("%d", len(state.ActiveAssignments))}}
+	for _, assignment := range state.ActiveAssignments {
+		if assignment.Type != "" {
+			tags = append(tags, gonostr.Tag{"assignment_type", string(assignment.Type)})
+		}
+		if assignment.WorkloadID != "" {
+			tags = append(tags, gonostr.Tag{"workload", assignment.WorkloadID})
+		}
+		if assignment.Status != "" {
+			tags = append(tags, gonostr.Tag{"status", assignment.Status})
+		}
+		if assignment.Pinned {
+			tags = append(tags, gonostr.Tag{"pinned", "true"})
+		}
+	}
+	return p.publishReplaceableJSON(ctx, KindWorkerAssignmentState, state.WorkerPubKey, tags, state, "worker_assignment_state.projection", nil)
+}
+
+func (p *Projector) publishWorkerDrainStatus(ctx context.Context, status *domain.WorkerDrainStatus) error {
+	if status == nil || status.WorkerPubKey == "" {
+		return nil
+	}
+	tags := gonostr.Tags{{"worker", status.WorkerPubKey}, {"scheduling_state", string(status.SchedulingState)}, {"safe_to_enter_maintenance", fmt.Sprintf("%t", status.SafeToEnterMaintenance)}, {"safe_to_disable", fmt.Sprintf("%t", status.SafeToDisable)}, {"remaining", fmt.Sprintf("%d", len(status.RemainingAssignments))}, {"pinned_blockers", fmt.Sprintf("%d", len(status.PinnedBlockers))}}
+	return p.publishReplaceableJSON(ctx, KindWorkerDrainStatus, status.WorkerPubKey, tags, status, "worker_drain_status.projection", nil)
+}
+
+func (p *Projector) publishWorkerReadModelsForWorker(ctx context.Context, workerPubKey string) {
+	if p.workerReadModelSource == nil || strings.TrimSpace(workerPubKey) == "" {
+		return
+	}
+	assignment, err := p.workerReadModelSource.GetAssignmentState(ctx, workerPubKey)
+	if err != nil {
+		p.logger.Warn("read worker assignment state for projection failed", zap.String("worker", workerPubKey), zap.Error(err))
+	} else if assignment != nil {
+		if err := p.publishWorkerAssignmentState(ctx, assignment); err != nil {
+			p.logger.Warn("publish worker assignment state failed", zap.String("worker", workerPubKey), zap.Error(err))
+		}
+	}
+	drain, err := p.workerReadModelSource.GetDrainStatus(ctx, workerPubKey)
+	if err != nil {
+		p.logger.Warn("read worker drain status for projection failed", zap.String("worker", workerPubKey), zap.Error(err))
+	} else if drain != nil {
+		if err := p.publishWorkerDrainStatus(ctx, drain); err != nil {
+			p.logger.Warn("publish worker drain status failed", zap.String("worker", workerPubKey), zap.Error(err))
+		}
+	}
+}
+
+func (p *Projector) publishWorkerReadModelSnapshots(ctx context.Context) (assignmentsPublished, drainsPublished int) {
+	if p.workerReadModelSource == nil {
+		return
+	}
+	assignments, err := p.workerReadModelSource.ListAssignmentStates(ctx)
+	if err != nil {
+		p.logger.Warn("list worker assignment states for projection failed", zap.Error(err))
+	} else {
+		for i := range assignments {
+			if err := p.publishWorkerAssignmentState(ctx, &assignments[i]); err != nil {
+				p.logger.Warn("publish worker assignment state failed", zap.String("worker", assignments[i].WorkerPubKey), zap.Error(err))
+			} else {
+				assignmentsPublished++
+			}
+		}
+	}
+	drains, err := p.workerReadModelSource.ListDrainStatuses(ctx)
+	if err != nil {
+		p.logger.Warn("list worker drain statuses for projection failed", zap.Error(err))
+	} else {
+		for i := range drains {
+			if err := p.publishWorkerDrainStatus(ctx, &drains[i]); err != nil {
+				p.logger.Warn("publish worker drain status failed", zap.String("worker", drains[i].WorkerPubKey), zap.Error(err))
+			} else {
+				drainsPublished++
+			}
+		}
+	}
+	return
 }
 
 func (p *Projector) publishLLMRouteRegistry(ctx context.Context, route *domain.LLMRoute, deleted bool) error {

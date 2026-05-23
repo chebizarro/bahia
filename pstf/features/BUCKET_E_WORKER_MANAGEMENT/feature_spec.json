@@ -1,0 +1,11 @@
+{
+  "feature_id": "BUCKET_E_WORKER_MANAGEMENT",
+  "title": "Worker management MCP tools and operator read models",
+  "beads": ["bahia-ggqd", "bahia-h71x", "bahia-pqh1", "bahia-wfvc"],
+  "observed_behavior": "Worker command publisher and handlers existed for lifecycle and label commands; MCP lacked signer-first worker command tools and worker operator read models were not exposed as assignment, drain, or eligibility projections.",
+  "intended_behavior": "Operators and agents can publish signer-first worker management commands and inspect Nostr-backed read models for worker assignment state, drain status, and eligibility previews without frontend changes.",
+  "scope": {
+    "included": ["internal/mcp worker tools", "domain worker read-model structures", "service read-model access layer", "Nostr projector plumbing", "app wiring", "deterministic Go tests"],
+    "excluded": ["frontend/Svelte", "worker_policy.go scheduling enforcement changes", "ml_placement.go scheduling enforcement changes"]
+  }
+}
