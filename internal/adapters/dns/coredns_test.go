@@ -121,6 +121,40 @@ func TestCoreDNSListRecordsRoundTripsRecordTypes(t *testing.T) {
 	}
 }
 
+func TestCoreDNSSRVRecordRoundTripsEtcdFormat(t *testing.T) {
+	backend, kv := newMockCoreDNSBackend()
+	zone := testCoreDNSZone("prod.cascadia")
+	port := 8080
+	priority := 10
+	weight := 100
+	record := domain.DNSRecord{
+		Zone:     zone.Name,
+		Name:     "_http._tcp.embeddings",
+		FQDN:     "_http._tcp.embeddings.prod.cascadia",
+		Type:     domain.DNSRecordTypeSRV,
+		Value:    "10.0.0.30",
+		TTL:      300,
+		Port:     &port,
+		Priority: &priority,
+		Weight:   &weight,
+	}
+	if err := backend.SyncZone(context.Background(), zone, []domain.DNSRecord{record}); err != nil {
+		t.Fatalf("sync SRV record: %v", err)
+	}
+	key := "/skydns/cascadia/prod/embeddings/_tcp/_http"
+	wantPayload := `{"host":"10.0.0.30","port":8080,"priority":10,"weight":100}`
+	if got := kv.values[key]; got != wantPayload {
+		t.Fatalf("SRV etcd payload mismatch\ngot  %s\nwant %s", got, wantPayload)
+	}
+	got, err := backend.ListRecords(context.Background(), zone)
+	if err != nil {
+		t.Fatalf("list SRV records: %v", err)
+	}
+	if !reflect.DeepEqual(got, []domain.DNSRecord{record}) {
+		t.Fatalf("SRV record mismatch\ngot  %#v\nwant %#v", got, []domain.DNSRecord{record})
+	}
+}
+
 func TestCoreDNSPrefixIsolationBetweenZones(t *testing.T) {
 	backend, _ := newMockCoreDNSBackend()
 	prod := testCoreDNSZone("prod.cascadia")

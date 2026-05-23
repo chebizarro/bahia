@@ -97,6 +97,36 @@ func TestFilesystemBackendRoundTripsZoneSnapshot(t *testing.T) {
 	}
 }
 
+func TestFilesystemBackendSerializesSRVRecordFields(t *testing.T) {
+	rootDir := t.TempDir()
+	backend := NewFilesystemBackend(rootDir)
+	zone := testZone()
+	port := 8080
+	priority := 10
+	weight := 100
+	want := []domain.DNSRecord{{Zone: zone.Name, Name: "_http._tcp.embeddings", FQDN: "_http._tcp.embeddings.prod.cascadia", Type: domain.DNSRecordTypeSRV, Value: "10.0.0.30", TTL: 300, Port: &port, Priority: &priority, Weight: &weight, SourceCoordinate: "endpoint:ml:embeddings:prod"}}
+	if err := backend.SyncZone(context.Background(), zone, want); err != nil {
+		t.Fatalf("sync SRV zone: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(rootDir, sanitizeZoneFilename(zone.Name)+".json"))
+	if err != nil {
+		t.Fatalf("read zone snapshot: %v", err)
+	}
+	content := string(data)
+	for _, field := range []string{`"type": "SRV"`, `"priority": 10`, `"weight": 100`, `"port": 8080`} {
+		if !strings.Contains(content, field) {
+			t.Fatalf("expected SRV field %s in snapshot:\n%s", field, content)
+		}
+	}
+	got, err := backend.ListRecords(context.Background(), zone)
+	if err != nil {
+		t.Fatalf("list SRV zone: %v", err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("SRV records mismatch:\ngot  %#v\nwant %#v", got, want)
+	}
+}
+
 func TestFilesystemBackendSyncIsDeterministicAndIdempotent(t *testing.T) {
 	rootDir := t.TempDir()
 	backend := NewFilesystemBackend(rootDir)

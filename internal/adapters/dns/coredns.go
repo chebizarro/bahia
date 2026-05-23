@@ -49,6 +49,9 @@ type etcdCoreDNSKV struct {
 type coreDNSServicePayload struct {
 	Host             string `json:"host"`
 	TTL              int    `json:"ttl,omitempty"`
+	Port             *int   `json:"port,omitempty"`
+	Priority         *int   `json:"priority,omitempty"`
+	Weight           *int   `json:"weight,omitempty"`
 	RecordType       string `json:"bahia_record_type,omitempty"`
 	SourceCoordinate string `json:"bahia_source_coordinate,omitempty"`
 }
@@ -151,6 +154,9 @@ func (b *CoreDNSBackend) ListRecords(ctx context.Context, zone domain.DNSZone) (
 			Type:             recordType,
 			Value:            payload.Host,
 			TTL:              ttl,
+			Priority:         payload.Priority,
+			Weight:           payload.Weight,
+			Port:             payload.Port,
 			SourceCoordinate: payload.SourceCoordinate,
 		})
 	}
@@ -239,16 +245,23 @@ func (b *CoreDNSBackend) recordKV(zone domain.DNSZone, record domain.DNSRecord) 
 	if err != nil {
 		return "", "", err
 	}
-	payload, err := json.Marshal(coreDNSServicePayload{
+	payload := coreDNSServicePayload{
 		Host:             value,
 		TTL:              ttl,
 		RecordType:       string(record.Type),
 		SourceCoordinate: strings.TrimSpace(record.SourceCoordinate),
-	})
+	}
+	if record.Type == domain.DNSRecordTypeSRV {
+		if record.Port == nil || record.Priority == nil || record.Weight == nil {
+			return "", "", fmt.Errorf("SRV record %q requires port, priority, and weight", fqdn)
+		}
+		payload = coreDNSServicePayload{Host: value, Port: record.Port, Priority: record.Priority, Weight: record.Weight}
+	}
+	encoded, err := json.Marshal(payload)
 	if err != nil {
 		return "", "", fmt.Errorf("encode CoreDNS record %q: %w", fqdn, err)
 	}
-	return key, string(payload), nil
+	return key, string(encoded), nil
 }
 
 func (kv *etcdCoreDNSKV) Health(ctx context.Context, prefix string) error {
@@ -341,6 +354,9 @@ func fqdnFromCoreDNSKey(prefix string, key string) (string, error) {
 }
 
 func decodeCoreDNSRecordType(payload coreDNSServicePayload) (domain.DNSRecordType, error) {
+	if payload.Port != nil || payload.Priority != nil || payload.Weight != nil {
+		return domain.DNSRecordTypeSRV, nil
+	}
 	if payload.RecordType != "" {
 		recordType := domain.DNSRecordType(strings.ToUpper(strings.TrimSpace(payload.RecordType)))
 		if !recordType.IsValid() {

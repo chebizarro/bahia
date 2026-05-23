@@ -88,13 +88,65 @@ func TestDNSProjectorProjectionRulesAndRecordTypes(t *testing.T) {
 		t.Fatalf("ProjectZoneRecords returned error: %v", err)
 	}
 	records := recordsByZone["prod.example"]
-	if got, want := len(records), 3; got != want {
+	if got, want := len(records), 4; got != want {
 		t.Fatalf("prod record count = %d, want %d: %#v", got, want, records)
 	}
 	assertRecord(t, records, "api.prod.example", domain.DNSRecordTypeA, "10.0.0.10")
 	assertRecord(t, records, "review.prod.example", domain.DNSRecordTypeCNAME, "llm-backend.internal")
 	assertRecord(t, records, "embeddings.prod.example", domain.DNSRecordTypeA, "10.0.0.30")
+	assertSRVRecord(t, records, "_http._tcp.embeddings.prod.example", "10.0.0.30", 8080, 10, 100)
 	assertRecord(t, recordsByZone["edge.example"], "gpu-node.edge.example", domain.DNSRecordTypeAAAA, "2001:db8::5")
+	assertRecord(t, recordsByZone["edge.example"], "l40s.edge.example", domain.DNSRecordTypeAAAA, "2001:db8::5")
+	assertRecord(t, recordsByZone["edge.example"], "l40s.gpu.edge.example", domain.DNSRecordTypeAAAA, "2001:db8::5")
+}
+
+func TestDNSProjectorHardwareAliasesRoundRobinSharedAcceleratorModels(t *testing.T) {
+	projector := NewDNSProjector(
+		&fakeServiceRepo{},
+		&fakeEnvironmentRepo{},
+		&fakeStateRepo{},
+		&fakeObservationRepo{},
+		nil,
+		nil,
+		&fakeWorkerSource{workers: []domain.Worker{
+			{PubKey: "a", Name: "worker-a", Status: domain.WorkerStatusOnline, RuntimeTarget: &domain.WorkerRuntimeTarget{PublicBaseURL: "http://10.0.1.44:9000"}, Accelerators: []domain.WorkerAccelerator{{Vendor: "NVIDIA", Model: "L40S", Driver: "cuda"}}},
+			{PubKey: "b", Name: "worker-b", Status: domain.WorkerStatusOnline, RuntimeTarget: &domain.WorkerRuntimeTarget{PublicBaseURL: "http://10.0.1.45:9000"}, Accelerators: []domain.WorkerAccelerator{{Vendor: "NVIDIA", Model: "L40S", Driver: "cuda"}}},
+			{PubKey: "c", Name: "worker-c", Status: domain.WorkerStatusOffline, RuntimeTarget: &domain.WorkerRuntimeTarget{PublicBaseURL: "http://10.0.1.46:9000"}, Accelerators: []domain.WorkerAccelerator{{Vendor: "NVIDIA", Model: "L40S", Driver: "cuda"}}},
+		}},
+		config.DNSConfig{DefaultTTL: 300, Projection: config.DNSProjectionConfig{Workers: true, WorkerZone: "edge.cascadia"}},
+		nil,
+	)
+	recordsByZone, err := projector.ProjectZoneRecords(context.Background())
+	if err != nil {
+		t.Fatalf("ProjectZoneRecords returned error: %v", err)
+	}
+	records := recordsByZone["edge.cascadia"]
+	assertRecord(t, records, "l40s.edge.cascadia", domain.DNSRecordTypeA, "10.0.1.44")
+	assertRecord(t, records, "l40s.edge.cascadia", domain.DNSRecordTypeA, "10.0.1.45")
+	assertRecord(t, records, "l40s.gpu.edge.cascadia", domain.DNSRecordTypeA, "10.0.1.44")
+	assertRecord(t, records, "l40s.gpu.edge.cascadia", domain.DNSRecordTypeA, "10.0.1.45")
+	assertNoRecord(t, records, "l40s.edge.cascadia", domain.DNSRecordTypeA, "10.0.1.46")
+}
+
+func TestDNSProjectorHardwareAliasesRequireWorkerProjection(t *testing.T) {
+	projector := NewDNSProjector(
+		&fakeServiceRepo{},
+		&fakeEnvironmentRepo{},
+		&fakeStateRepo{},
+		&fakeObservationRepo{},
+		nil,
+		nil,
+		&fakeWorkerSource{workers: []domain.Worker{{PubKey: "a", Name: "worker-a", Status: domain.WorkerStatusOnline, RuntimeTarget: &domain.WorkerRuntimeTarget{PublicBaseURL: "http://10.0.1.44:9000"}, Accelerators: []domain.WorkerAccelerator{{Vendor: "NVIDIA", Model: "L40S", Driver: "cuda"}}}}},
+		config.DNSConfig{DefaultTTL: 300, Projection: config.DNSProjectionConfig{Workers: false, WorkerZone: "edge.cascadia"}},
+		nil,
+	)
+	recordsByZone, err := projector.ProjectZoneRecords(context.Background())
+	if err != nil {
+		t.Fatalf("ProjectZoneRecords returned error: %v", err)
+	}
+	if len(recordsByZone["edge.cascadia"]) != 0 {
+		t.Fatalf("hardware aliases should not be projected when worker projection is disabled: %#v", recordsByZone)
+	}
 }
 
 func TestDNSProjectorDuplicateCoordinateDetection(t *testing.T) {
@@ -248,6 +300,29 @@ func assertRecord(t *testing.T, records []domain.DNSRecord, fqdn string, recordT
 		}
 	}
 	t.Fatalf("missing record fqdn=%s type=%s value=%s in %#v", fqdn, recordType, value, records)
+}
+
+func assertNoRecord(t *testing.T, records []domain.DNSRecord, fqdn string, recordType domain.DNSRecordType, value string) {
+	t.Helper()
+	for _, record := range records {
+		if record.FQDN == fqdn && record.Type == recordType && record.Value == value {
+			t.Fatalf("unexpected record fqdn=%s type=%s value=%s in %#v", fqdn, recordType, value, records)
+		}
+	}
+}
+
+func assertSRVRecord(t *testing.T, records []domain.DNSRecord, fqdn string, value string, port, priority, weight int) {
+	t.Helper()
+	for _, record := range records {
+		if record.FQDN != fqdn || record.Type != domain.DNSRecordTypeSRV || record.Value != value {
+			continue
+		}
+		if record.Port == nil || *record.Port != port || record.Priority == nil || *record.Priority != priority || record.Weight == nil || *record.Weight != weight {
+			t.Fatalf("SRV record fields mismatch for %s: %#v", fqdn, record)
+		}
+		return
+	}
+	t.Fatalf("missing SRV record fqdn=%s value=%s in %#v", fqdn, value, records)
 }
 
 func testDNSConfig() config.DNSConfig {

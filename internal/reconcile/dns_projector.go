@@ -139,6 +139,26 @@ func (p *DNSProjector) ProjectZoneRecords(ctx context.Context) (map[string][]dom
 			TTL:              ttl,
 			SourceCoordinate: endpoint.Coordinate,
 		})
+		if endpoint.Family == domain.DNSEndpointFamilyML && endpoint.Port != nil {
+			srvName := srvRecordName(endpoint.Protocol, endpoint.Name)
+			priority := 10
+			weight := 100
+			recordsByZone[endpoint.Zone] = append(recordsByZone[endpoint.Zone], domain.DNSRecord{
+				Zone:             endpoint.Zone,
+				Name:             srvName,
+				FQDN:             fqdn(srvName, endpoint.Zone),
+				Type:             domain.DNSRecordTypeSRV,
+				Value:            endpoint.Address,
+				TTL:              ttl,
+				Priority:         &priority,
+				Weight:           &weight,
+				Port:             endpoint.Port,
+				SourceCoordinate: endpoint.Coordinate,
+			})
+		}
+		if endpoint.Family == domain.DNSEndpointFamilyWorker {
+			recordsByZone[endpoint.Zone] = append(recordsByZone[endpoint.Zone], hardwareAliasRecords(endpoint, ttl)...)
+		}
 	}
 	for zone := range recordsByZone {
 		sortDNSRecords(recordsByZone[zone])
@@ -471,6 +491,7 @@ func (p *DNSProjector) projectWorkerEndpoints(ctx context.Context, projectedAt t
 			Health:         domain.HealthStatusHealthy,
 			DriftStatus:    domain.DriftStatusInSync,
 			Source:         "worker_state",
+			Metadata:       workerDNSMetadata(worker),
 			MaterializedAt: projectedAt,
 		})
 	}
@@ -558,6 +579,76 @@ func sortDNSRecords(records []domain.DNSRecord) {
 	})
 }
 
+func srvRecordName(protocol, name string) string {
+	protocol = dnsLabel(protocol)
+	if protocol == "" {
+		protocol = "http"
+	}
+	return "_" + protocol + "._tcp." + dnsLabel(name)
+}
+
+func hardwareAliasRecords(endpoint domain.DNSEndpoint, ttl int) []domain.DNSRecord {
+	models := stringSliceMetadata(endpoint.Metadata, "accelerator_models")
+	gpuModels := map[string]struct{}{}
+	for _, model := range stringSliceMetadata(endpoint.Metadata, "gpu_accelerator_models") {
+		gpuModels[model] = struct{}{}
+	}
+	records := make([]domain.DNSRecord, 0, len(models)*2)
+	for _, model := range models {
+		name := dnsLabel(model)
+		if name == "" {
+			continue
+		}
+		records = append(records, domain.DNSRecord{
+			Zone:             endpoint.Zone,
+			Name:             name,
+			FQDN:             fqdn(name, endpoint.Zone),
+			Type:             dnsRecordType(endpoint.Address),
+			Value:            endpoint.Address,
+			TTL:              ttl,
+			SourceCoordinate: endpoint.Coordinate,
+		})
+		if _, ok := gpuModels[model]; ok {
+			gpuName := name + ".gpu"
+			records = append(records, domain.DNSRecord{
+				Zone:             endpoint.Zone,
+				Name:             gpuName,
+				FQDN:             fqdn(gpuName, endpoint.Zone),
+				Type:             dnsRecordType(endpoint.Address),
+				Value:            endpoint.Address,
+				TTL:              ttl,
+				SourceCoordinate: endpoint.Coordinate,
+			})
+		}
+	}
+	return records
+}
+
+func stringSliceMetadata(metadata map[string]any, key string) []string {
+	if len(metadata) == 0 {
+		return nil
+	}
+	value, ok := metadata[key]
+	if !ok {
+		return nil
+	}
+	stringsValue, ok := value.([]string)
+	if ok {
+		return stringsValue
+	}
+	anyValues, ok := value.([]any)
+	if !ok {
+		return nil
+	}
+	out := make([]string, 0, len(anyValues))
+	for _, item := range anyValues {
+		if value, ok := item.(string); ok {
+			out = append(out, value)
+		}
+	}
+	return out
+}
+
 func dnsLabel(raw string) string {
 	value := strings.ToLower(strings.TrimSpace(raw))
 	var b strings.Builder
@@ -602,9 +693,27 @@ func mlTaskCapabilities(tasks []domain.MLTaskKind) []string {
 }
 
 func workerHardware(worker domain.Worker) string {
-	parts := make([]string, 0, len(worker.Accelerators))
+	parts := acceleratorModels(worker.Accelerators)
+	return strings.Join(parts, ",")
+}
+
+func workerDNSMetadata(worker domain.Worker) map[string]any {
+	models := acceleratorModels(worker.Accelerators)
+	if len(models) == 0 {
+		return nil
+	}
+	gpuModels := gpuAcceleratorModels(worker.Accelerators)
+	metadata := map[string]any{"accelerator_models": models}
+	if len(gpuModels) > 0 {
+		metadata["gpu_accelerator_models"] = gpuModels
+	}
+	return metadata
+}
+
+func acceleratorModels(accelerators []domain.WorkerAccelerator) []string {
+	parts := make([]string, 0, len(accelerators))
 	seen := map[string]struct{}{}
-	for _, accelerator := range worker.Accelerators {
+	for _, accelerator := range accelerators {
 		model := strings.ToLower(strings.TrimSpace(accelerator.Model))
 		if model == "" {
 			continue
@@ -616,7 +725,30 @@ func workerHardware(worker domain.Worker) string {
 		parts = append(parts, model)
 	}
 	sort.Strings(parts)
-	return strings.Join(parts, ",")
+	return parts
+}
+
+func gpuAcceleratorModels(accelerators []domain.WorkerAccelerator) []string {
+	parts := make([]string, 0, len(accelerators))
+	seen := map[string]struct{}{}
+	for _, accelerator := range accelerators {
+		model := strings.ToLower(strings.TrimSpace(accelerator.Model))
+		if model == "" || !isGPUAccelerator(accelerator) {
+			continue
+		}
+		if _, ok := seen[model]; ok {
+			continue
+		}
+		seen[model] = struct{}{}
+		parts = append(parts, model)
+	}
+	sort.Strings(parts)
+	return parts
+}
+
+func isGPUAccelerator(accelerator domain.WorkerAccelerator) bool {
+	value := strings.ToLower(strings.Join([]string{accelerator.Vendor, accelerator.Model, accelerator.Driver}, " "))
+	return strings.Contains(value, "gpu") || strings.Contains(value, "nvidia") || strings.Contains(value, "cuda") || strings.Contains(value, "amd") || strings.Contains(value, "rocm") || strings.Contains(value, "l40") || strings.Contains(value, "a100") || strings.Contains(value, "h100")
 }
 
 func workerCapabilities(worker domain.Worker) []string {
