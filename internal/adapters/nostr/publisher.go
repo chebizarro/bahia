@@ -45,7 +45,7 @@ const (
 	KindDNSEndpointDeregisteredAudit = 31024
 )
 
-// Canonical replaceable read-model kinds (3196x). Keep these values aligned
+// Canonical replaceable read-model kinds. Keep these values aligned
 // with internal/controlplane/reactor.go without importing that package (the
 // reactor already imports this adapter package for RelayPool).
 const (
@@ -79,10 +79,21 @@ const (
 	KindMLEvaluationExperimentState = 31987
 	KindMLArtifactProvenanceGraph   = 31988
 	KindMLRuntimeCapabilityProfile  = 31989
-	KindWorkerState                 = 31974
-	KindWorkerAssignmentState       = 31991
-	KindWorkerDrainStatus           = 31992
-	KindWorkerEligibilityPreview    = 31993
+
+	KindWorkerState              = 32000
+	KindWorkerAssignmentState    = 32001
+	KindWorkerDrainStatus        = 32002
+	KindWorkerEligibilityPreview = 32003
+)
+
+// Legacy worker read-model kinds accepted during the mixed-version release
+// window. New publisher/projector paths must use the canonical KindWorker*
+// constants above.
+const (
+	KindLegacyWorkerState              = 31974
+	KindLegacyWorkerAssignmentState    = 31991
+	KindLegacyWorkerDrainStatus        = 31992
+	KindLegacyWorkerEligibilityPreview = 31993
 )
 
 // Operator assistant event kinds. Keep these values aligned with

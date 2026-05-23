@@ -1,0 +1,20 @@
+{
+  "feature_id": "bahia-t9gd",
+  "criteria": [
+    {
+      "id": "AC-001",
+      "description": "KindSystemDiscovery remains 31974 and backup read-model kinds remain 31991-31999.",
+      "tests": ["TestWorkerPublisherKindConstantsUseNonCollidingCanonicalBlock"]
+    },
+    {
+      "id": "AC-002",
+      "description": "Canonical worker read-model kinds publish from the non-colliding 32000-32003 block.",
+      "tests": ["TestWorkerPublisherKindConstantsUseNonCollidingCanonicalBlock", "TestWorkerKindConstantsUseNonCollidingCanonicalBlock"]
+    },
+    {
+      "id": "AC-003",
+      "description": "Compatibility readers accept old and new worker read-model kind values for one release window while discovery advertises canonical and legacy read-model kind maps separately.",
+      "tests": ["TestWorkerPublisherLegacyKindConstantsRemainReadable", "TestWorkerReadModelCompatibilityKindsAcceptOldAndNewValues", "TestProjectorSystemDiscoveryAdvertisesDNSOnlyWhenSourceConfigured"]
+    }
+  ]
+}

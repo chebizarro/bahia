@@ -2,21 +2,34 @@ package nostr
 
 import "testing"
 
-func TestWorkerPublisherKindConstantsPreserveWireCompatibility(t *testing.T) {
-	if KindWorkerState != 31974 {
-		t.Fatalf("KindWorkerState must remain wire-compatible at kind 31974, got %d", KindWorkerState)
+func TestWorkerPublisherKindConstantsUseNonCollidingCanonicalBlock(t *testing.T) {
+	if KindSystemDiscovery != 31974 {
+		t.Fatalf("KindSystemDiscovery must remain at kind 31974, got %d", KindSystemDiscovery)
 	}
 	workerReadModels := map[string]int{
+		"KindWorkerState":              KindWorkerState,
 		"KindWorkerAssignmentState":    KindWorkerAssignmentState,
 		"KindWorkerDrainStatus":        KindWorkerDrainStatus,
 		"KindWorkerEligibilityPreview": KindWorkerEligibilityPreview,
 	}
 	expected := map[string]int{
-		"KindWorkerAssignmentState":    31991,
-		"KindWorkerDrainStatus":        31992,
-		"KindWorkerEligibilityPreview": 31993,
+		"KindWorkerState":              32000,
+		"KindWorkerAssignmentState":    32001,
+		"KindWorkerDrainStatus":        32002,
+		"KindWorkerEligibilityPreview": 32003,
 	}
-	seen := map[int]string{KindWorkerState: "KindWorkerState"}
+	seen := map[int]string{
+		KindSystemDiscovery:               "KindSystemDiscovery",
+		KindBackupDefinitionRegistry:      "KindBackupDefinitionRegistry",
+		KindBackupPolicyRegistry:          "KindBackupPolicyRegistry",
+		KindBackupRepositoryRegistry:      "KindBackupRepositoryRegistry",
+		KindBackupRetentionRegistry:       "KindBackupRetentionRegistry",
+		KindBackupRecipeRegistry:          "KindBackupRecipeRegistry",
+		KindBackupRunState:                "KindBackupRunState",
+		KindBackupVerificationState:       "KindBackupVerificationState",
+		KindBackupRestoreState:            "KindBackupRestoreState",
+		KindBackupRuntimeObservationState: "KindBackupRuntimeObservationState",
+	}
 	for name, kind := range workerReadModels {
 		if kind != expected[name] {
 			t.Fatalf("%s expected kind %d, got %d", name, expected[name], kind)
@@ -25,6 +38,26 @@ func TestWorkerPublisherKindConstantsPreserveWireCompatibility(t *testing.T) {
 			t.Fatalf("%s collides with %s at kind %d", name, previous, kind)
 		}
 		seen[kind] = name
+	}
+}
+
+func TestWorkerPublisherLegacyKindConstantsRemainReadable(t *testing.T) {
+	legacy := map[string]int{
+		"KindLegacyWorkerState":              KindLegacyWorkerState,
+		"KindLegacyWorkerAssignmentState":    KindLegacyWorkerAssignmentState,
+		"KindLegacyWorkerDrainStatus":        KindLegacyWorkerDrainStatus,
+		"KindLegacyWorkerEligibilityPreview": KindLegacyWorkerEligibilityPreview,
+	}
+	expected := map[string]int{
+		"KindLegacyWorkerState":              31974,
+		"KindLegacyWorkerAssignmentState":    31991,
+		"KindLegacyWorkerDrainStatus":        31992,
+		"KindLegacyWorkerEligibilityPreview": 31993,
+	}
+	for name, kind := range legacy {
+		if kind != expected[name] {
+			t.Fatalf("%s expected legacy kind %d, got %d", name, expected[name], kind)
+		}
 	}
 }
 

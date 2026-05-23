@@ -791,6 +791,28 @@ func TestProjectorSystemDiscoveryAdvertisesDNSOnlyWhenSourceConfigured(t *testin
 	if got := readModels["dns_endpoint_state"]; got != float64(KindDNSEndpointState) {
 		t.Fatalf("dns_endpoint_state kind = %#v, want %d", got, KindDNSEndpointState)
 	}
+	if got := readModels["worker_state"]; got != float64(KindWorkerState) {
+		t.Fatalf("worker_state kind = %#v, want %d", got, KindWorkerState)
+	}
+	legacyReadModels, ok := controlPlane["legacy_read_model_kinds"].(map[string]any)
+	if !ok {
+		t.Fatalf("control_plane.legacy_read_model_kinds missing: %#v", controlPlane["legacy_read_model_kinds"])
+	}
+	assertLegacyKindList(t, legacyReadModels, "worker_state", KindLegacyWorkerState)
+	assertLegacyKindList(t, legacyReadModels, "worker_assignment_state", KindLegacyWorkerAssignmentState)
+	assertLegacyKindList(t, legacyReadModels, "worker_drain_status", KindLegacyWorkerDrainStatus)
+	assertLegacyKindList(t, legacyReadModels, "worker_eligibility_preview", KindLegacyWorkerEligibilityPreview)
+}
+
+func assertLegacyKindList(t *testing.T, legacyReadModels map[string]any, key string, want int) {
+	t.Helper()
+	values, ok := legacyReadModels[key].([]any)
+	if !ok || len(values) != 1 {
+		t.Fatalf("legacy_read_model_kinds[%s] = %#v, want one-element list", key, legacyReadModels[key])
+	}
+	if values[0] != float64(want) {
+		t.Fatalf("legacy_read_model_kinds[%s] = %#v, want %d", key, values[0], want)
+	}
 }
 func assertOneSignedKind(t *testing.T, sink *captureProjectionPublisher, kind int) gonostr.Event {
 	t.Helper()

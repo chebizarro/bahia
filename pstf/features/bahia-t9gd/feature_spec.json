@@ -1,0 +1,30 @@
+{
+  "feature_id": "bahia-t9gd",
+  "title": "Resolve Nostr worker read-model kind collisions",
+  "observed_behavior": "Worker read-model kinds reused public system discovery and backup registry event kinds: KindWorkerState used 31974, which is also KindSystemDiscovery, and worker assignment/drain/eligibility used 31991-31993, which are backup registry kinds. The requested 31994-31997 target block was also occupied by backup read models.",
+  "intended_behavior": "System discovery remains on 31974, backup read models remain on 31991-31999, and worker read models publish only a non-colliding contiguous kind block. Mixed-version consumers can recognize the prior worker read-model kind values during one release window without new publisher paths emitting them.",
+  "scope": [
+    "internal/adapters/nostr/publisher.go",
+    "internal/adapters/nostr/backup_kinds.go",
+    "internal/adapters/nostr/projector.go",
+    "internal/controlplane/reactor.go",
+    "web/src/lib/nostr/client.js",
+    "web/src/lib/stores/controlplane.svelte.js"
+  ],
+  "allocation_decisions": {
+    "system_discovery": 31974,
+    "backup_read_models": "31991-31999",
+    "worker_read_models": {
+      "KindWorkerState": 32000,
+      "KindWorkerAssignmentState": 32001,
+      "KindWorkerDrainStatus": 32002,
+      "KindWorkerEligibilityPreview": 32003
+    },
+    "legacy_worker_read_models_accepted": {
+      "KindLegacyWorkerState": 31974,
+      "KindLegacyWorkerAssignmentState": 31991,
+      "KindLegacyWorkerDrainStatus": 31992,
+      "KindLegacyWorkerEligibilityPreview": 31993
+    }
+  }
+}

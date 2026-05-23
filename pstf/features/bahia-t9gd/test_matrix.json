@@ -1,0 +1,35 @@
+{
+  "feature_id": "bahia-t9gd",
+  "tests": [
+    {
+      "name": "TestWorkerPublisherKindConstantsUseNonCollidingCanonicalBlock",
+      "path": "internal/adapters/nostr/publisher_kinds_test.go",
+      "acceptance_criteria": ["AC-001", "AC-002"],
+      "status": "passed_clean_temp_worktree"
+    },
+    {
+      "name": "TestWorkerKindConstantsUseNonCollidingCanonicalBlock",
+      "path": "internal/controlplane/worker_command_publisher_test.go",
+      "acceptance_criteria": ["AC-002"],
+      "status": "passed_clean_temp_worktree"
+    },
+    {
+      "name": "TestWorkerReadModelCompatibilityKindsAcceptOldAndNewValues",
+      "path": "internal/controlplane/worker_command_publisher_test.go",
+      "acceptance_criteria": ["AC-003"],
+      "status": "passed_clean_temp_worktree"
+    },
+    {
+      "name": "TestProjectorSystemDiscoveryAdvertisesDNSOnlyWhenSourceConfigured",
+      "path": "internal/adapters/nostr/projector_test.go",
+      "acceptance_criteria": ["AC-003"],
+      "status": "passed_clean_temp_worktree"
+    },
+    {
+      "name": "controlplane-store unit suite",
+      "path": "web/tests/unit/controlplane-store.test.js",
+      "acceptance_criteria": ["AC-003"],
+      "status": "passed_live_worktree"
+    }
+  ]
+}

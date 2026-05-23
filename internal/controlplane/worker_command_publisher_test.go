@@ -8,12 +8,31 @@ import (
 	"github.com/nbd-wtf/go-nostr"
 )
 
-func TestWorkerKindConstantsPreserveWireCompatibility(t *testing.T) {
-	if KindWorkerState != 31974 {
-		t.Fatalf("KindWorkerState must remain wire-compatible at kind 31974, got %d", KindWorkerState)
+func TestWorkerKindConstantsUseNonCollidingCanonicalBlock(t *testing.T) {
+	if KindWorkerState != 32000 || KindWorkerAssignmentState != 32001 || KindWorkerDrainStatus != 32002 || KindWorkerEligibilityPreview != 32003 {
+		t.Fatalf("unexpected worker read model kinds: state=%d assignment=%d drain=%d eligibility=%d", KindWorkerState, KindWorkerAssignmentState, KindWorkerDrainStatus, KindWorkerEligibilityPreview)
 	}
-	if KindWorkerAssignmentState != 31991 || KindWorkerDrainStatus != 31992 || KindWorkerEligibilityPreview != 31993 {
-		t.Fatalf("unexpected worker read model kinds: assignment=%d drain=%d eligibility=%d", KindWorkerAssignmentState, KindWorkerDrainStatus, KindWorkerEligibilityPreview)
+}
+
+func TestWorkerReadModelCompatibilityKindsAcceptOldAndNewValues(t *testing.T) {
+	for _, kind := range []int{
+		KindWorkerState,
+		KindWorkerAssignmentState,
+		KindWorkerDrainStatus,
+		KindWorkerEligibilityPreview,
+		KindLegacyWorkerState,
+		KindLegacyWorkerAssignmentState,
+		KindLegacyWorkerDrainStatus,
+		KindLegacyWorkerEligibilityPreview,
+	} {
+		if !isAcceptedWorkerReadModelKind(kind) {
+			t.Fatalf("worker read-model kind %d should be accepted during compatibility window", kind)
+		}
+	}
+	for _, kind := range []int{31994, 31995, 31996, 31997, 31998, 31999, 32010} {
+		if isAcceptedWorkerReadModelKind(kind) {
+			t.Fatalf("non-worker read-model kind %d should not be accepted as a worker compatibility kind", kind)
+		}
 	}
 }
 

@@ -112,7 +112,7 @@ const (
 	KindPackageDriftEvent        = 7992 // Package drift observation result
 	KindWorkerResult             = 7997 // Worker lifecycle terminal result
 
-	// Replaceable registry kinds (3196x series, d-tag indexed)
+	// Replaceable registry kinds (d-tag indexed)
 	KindServiceState              = 31961 // Replaceable service state (d=service:env)
 	KindServiceRegistry           = 31962 // Replaceable service registry entry (d=service_id)
 	KindEnvironmentRegistry       = 31963 // Replaceable environment registry entry (d=env_id)
@@ -126,10 +126,20 @@ const (
 	KindPackageRepositoryRegistry = 31971 // Replaceable package repository state (d=repository_id)
 	KindPackageArtifactRegistry   = 31972 // Replaceable package artifact state (d=artifact_id)
 	KindPackagePromotionRegistry  = 31973 // Replaceable package promotion/publication state (d=publication_id)
-	KindWorkerState               = 31974 // Replaceable worker state (d=worker pubkey)
-	KindWorkerAssignmentState     = 31991 // Replaceable worker assignment state (d=worker pubkey)
-	KindWorkerDrainStatus         = 31992 // Replaceable worker drain status (d=worker pubkey)
-	KindWorkerEligibilityPreview  = 31993 // Replaceable worker eligibility preview (d=preview id)
+	KindWorkerState               = 32000 // Replaceable worker state (d=worker pubkey)
+	KindWorkerAssignmentState     = 32001 // Replaceable worker assignment state (d=worker pubkey)
+	KindWorkerDrainStatus         = 32002 // Replaceable worker drain status (d=worker pubkey)
+	KindWorkerEligibilityPreview  = 32003 // Replaceable worker eligibility preview (d=preview id)
+)
+
+// Legacy worker read-model kinds accepted during the mixed-version release
+// window. New reactor/publisher paths must use the canonical KindWorker*
+// constants above.
+const (
+	KindLegacyWorkerState              = 31974
+	KindLegacyWorkerAssignmentState    = 31991
+	KindLegacyWorkerDrainStatus        = 31992
+	KindLegacyWorkerEligibilityPreview = 31993
 )
 
 // Config holds reactor configuration.
@@ -1752,6 +1762,28 @@ const (
 	operatorScopeAdoption      operatorScope = "adoption"
 	operatorScopeDirectRuntime operatorScope = "direct_runtime"
 )
+
+func acceptedWorkerReadModelKinds() []int {
+	return []int{
+		KindWorkerState,
+		KindWorkerAssignmentState,
+		KindWorkerDrainStatus,
+		KindWorkerEligibilityPreview,
+		KindLegacyWorkerState,
+		KindLegacyWorkerAssignmentState,
+		KindLegacyWorkerDrainStatus,
+		KindLegacyWorkerEligibilityPreview,
+	}
+}
+
+func isAcceptedWorkerReadModelKind(kind int) bool {
+	for _, accepted := range acceptedWorkerReadModelKinds() {
+		if kind == accepted {
+			return true
+		}
+	}
+	return false
+}
 
 func (r *Reactor) buildRequestSubscriptionFilters(since nostr.Timestamp) []nostr.Filter {
 	return []nostr.Filter{

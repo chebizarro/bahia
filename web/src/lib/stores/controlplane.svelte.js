@@ -451,6 +451,15 @@ function applyWorkerEvent(event) {
   return true;
 }
 
+function hasWorkerReadModelTag(event) {
+  return Boolean(getTagValue(event, 'worker'));
+}
+
+function hasWorkerEligibilityPreviewShape(event) {
+  const content = parseJsonContent(event.content);
+  return Boolean(content.preview_id || getTagValue(event, 'preview'));
+}
+
 function applyWorkerStateEvent(event) {
   const { accepted } = upsertReplaceableEvent(replaceableEvents, event);
   if (!accepted) return false;
@@ -577,14 +586,26 @@ export function applyControlplaneEvent(event) {
     case KINDS.BAHIA_WORKER_STATE:
       changed = applyWorkerStateEvent(event);
       break;
+    case KINDS.BAHIA_LEGACY_WORKER_STATE:
+      changed = hasWorkerReadModelTag(event) ? applyWorkerStateEvent(event) : false;
+      break;
     case KINDS.BAHIA_WORKER_ASSIGNMENT_STATE:
       changed = applyProjectedEntity(event, workerAssignmentMap, ['worker_pubkey']);
+      break;
+    case KINDS.BAHIA_LEGACY_WORKER_ASSIGNMENT_STATE:
+      changed = hasWorkerReadModelTag(event) ? applyProjectedEntity(event, workerAssignmentMap, ['worker_pubkey']) : false;
       break;
     case KINDS.BAHIA_WORKER_DRAIN_STATUS:
       changed = applyProjectedEntity(event, workerDrainStatusMap, ['worker_pubkey']);
       break;
+    case KINDS.BAHIA_LEGACY_WORKER_DRAIN_STATUS:
+      changed = hasWorkerReadModelTag(event) ? applyProjectedEntity(event, workerDrainStatusMap, ['worker_pubkey']) : false;
+      break;
     case KINDS.BAHIA_WORKER_ELIGIBILITY_PREVIEW:
       changed = applyProjectedEntity(event, workerEligibilityPreviewMap, ['preview_id']);
+      break;
+    case KINDS.BAHIA_LEGACY_WORKER_ELIGIBILITY_PREVIEW:
+      changed = hasWorkerEligibilityPreviewShape(event) ? applyProjectedEntity(event, workerEligibilityPreviewMap, ['preview_id']) : false;
       break;
     case KINDS.BAHIA_ML_MODEL_REGISTRY:
       changed = applyProjectedEntity(event, mlModelMap, ['id', 'slug']);
