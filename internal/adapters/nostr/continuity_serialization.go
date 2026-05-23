@@ -38,6 +38,72 @@ type ContinuityCommandRequest struct {
 	Metadata           map[string]any        `json:"metadata,omitempty"`
 }
 
+// BahiaIdentityPayload is the JSON content for kind 31410 Bahia identity definitions.
+type BahiaIdentityPayload struct {
+	Version        string `json:"version"`
+	CatalogVersion string `json:"catalog_version"`
+	Mode           string `json:"mode"`
+	StartedAt      int64  `json:"started_at"`
+}
+
+// ReplayCheckpointPayload is the JSON content for kind 31411 Bahia replay checkpoints.
+type ReplayCheckpointPayload struct {
+	CatalogVersion string           `json:"catalog_version"`
+	Cursors        map[string]int64 `json:"cursors"`
+	Phase          string           `json:"phase"`
+}
+
+// ReadinessStatusPayload is the JSON content for kind 30360 Bahia readiness status events.
+type ReadinessStatusPayload struct {
+	Phase         string            `json:"phase"`
+	ActiveTier    int               `json:"active_tier"`
+	RequestedTier int               `json:"requested_tier"`
+	Ready         bool              `json:"ready"`
+	Checks        map[string]string `json:"checks"`
+}
+
+// EncodeBahiaIdentity serializes a Bahia identity definition as a kind 31410 replaceable event.
+func EncodeBahiaIdentity(payload BahiaIdentityPayload, dTag string) gonostr.Event {
+	return encodeBahiaSystemEvent(KindBahiaIdentityDefinition, dTag, "bahia-identity", payload)
+}
+
+// DecodeBahiaIdentity deserializes a kind 31410 Bahia identity definition.
+func DecodeBahiaIdentity(ev *gonostr.Event) (*BahiaIdentityPayload, error) {
+	var payload BahiaIdentityPayload
+	if err := decodeBahiaSystemEvent(ev, KindBahiaIdentityDefinition, &payload, "Bahia identity"); err != nil {
+		return nil, err
+	}
+	return &payload, nil
+}
+
+// EncodeReplayCheckpoint serializes a Bahia replay checkpoint as a kind 31411 replaceable event.
+func EncodeReplayCheckpoint(payload ReplayCheckpointPayload, dTag string) gonostr.Event {
+	return encodeBahiaSystemEvent(KindBahiaReplayCheckpoint, dTag, "bahia-replay-checkpoint", payload)
+}
+
+// DecodeReplayCheckpoint deserializes a kind 31411 Bahia replay checkpoint.
+func DecodeReplayCheckpoint(ev *gonostr.Event) (*ReplayCheckpointPayload, error) {
+	var payload ReplayCheckpointPayload
+	if err := decodeBahiaSystemEvent(ev, KindBahiaReplayCheckpoint, &payload, "replay checkpoint"); err != nil {
+		return nil, err
+	}
+	return &payload, nil
+}
+
+// EncodeReadinessStatus serializes a Bahia readiness status as a kind 30360 replaceable event.
+func EncodeReadinessStatus(payload ReadinessStatusPayload, dTag string) gonostr.Event {
+	return encodeBahiaSystemEvent(KindBahiaReadinessStatus, dTag, "bahia-readiness", payload)
+}
+
+// DecodeReadinessStatus deserializes a kind 30360 Bahia readiness status.
+func DecodeReadinessStatus(ev *gonostr.Event) (*ReadinessStatusPayload, error) {
+	var payload ReadinessStatusPayload
+	if err := decodeBahiaSystemEvent(ev, KindBahiaReadinessStatus, &payload, "readiness status"); err != nil {
+		return nil, err
+	}
+	return &payload, nil
+}
+
 // EncodeContinuityProfileEvent serializes a service continuity profile as a kind 31400 tag-block event.
 func EncodeContinuityProfileEvent(profile domain.ServiceContinuityProfile) (gonostr.Event, error) {
 	if err := profile.Validate(); err != nil {
@@ -491,6 +557,30 @@ func decodeContinuityCommandEvent(event *gonostr.Event, expectedKind int) (*Cont
 
 func continuityEventBase(kind int, tags gonostr.Tags, content string) gonostr.Event {
 	return gonostr.Event{Kind: kind, CreatedAt: gonostr.Now(), Tags: tags, Content: content}
+}
+
+func encodeBahiaSystemEvent(kind int, dTag, topic string, payload any) gonostr.Event {
+	content, _ := json.Marshal(payload)
+	return continuityEventBase(kind, gonostr.Tags{{"d", strings.TrimSpace(dTag)}, {"t", "bahia"}, {"t", topic}}, string(content))
+}
+
+func decodeBahiaSystemEvent(ev *gonostr.Event, expectedKind int, out any, label string) error {
+	if ev == nil {
+		return fmt.Errorf("%s event is nil", label)
+	}
+	if ev.Kind != expectedKind {
+		return fmt.Errorf("unexpected %s kind %d", label, ev.Kind)
+	}
+	if continuityTagValue(ev.Tags, "d") == "" {
+		return fmt.Errorf("%s d tag is required", label)
+	}
+	if strings.TrimSpace(ev.Content) == "" {
+		return fmt.Errorf("%s content is required", label)
+	}
+	if err := json.Unmarshal([]byte(ev.Content), out); err != nil {
+		return fmt.Errorf("decode %s content: %w", label, err)
+	}
+	return nil
 }
 
 func profileSpecForCurrent(profiles map[domain.ContinuityMode]domain.ContinuityProfileSpec, current domain.ContinuityMode, tag string) (domain.ContinuityProfileSpec, error) {

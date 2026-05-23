@@ -1,11 +1,14 @@
 package nostr
 
 import (
+	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	gonostr "github.com/nbd-wtf/go-nostr"
+	"github.com/openagentsinc/bahia/internal/domain"
 )
 
 const KindCatalogVersion = "2026-05-23.item4"
@@ -136,6 +139,7 @@ const (
 	FamilyIntent       ProjectionFamily = "intent"
 	FamilyRun          ProjectionFamily = "run"
 	FamilyPolicy       ProjectionFamily = "policy"
+	FamilyState        ProjectionFamily = "state"
 	FamilyContinuity   ProjectionFamily = "continuity"
 	FamilyBackup       ProjectionFamily = "backup"
 	FamilyDNS          ProjectionFamily = "dns"
@@ -169,6 +173,7 @@ type DecodedProjectionEvent struct {
 	Intent      *DecodedIntent
 	Run         *DecodedRun
 	Policy      *DecodedPolicy
+	State       *DecodedState
 	Continuity  *DecodedContinuity
 	Backup      *DecodedBackup
 	DNS         *DecodedDNS
@@ -186,15 +191,157 @@ type DecodedProjectionEvent struct {
 	Tombstone bool
 }
 
-type DecodedService struct{}
-type DecodedEnvironment struct{}
-type DecodedWorker struct{}
-type DecodedBuild struct{}
-type DecodedArtifact struct{}
-type DecodedIntent struct{}
-type DecodedRun struct{}
-type DecodedPolicy struct{}
-type DecodedContinuity struct{}
+type DecodedService struct {
+	Deleted       bool               `json:"deleted"`
+	ID            string             `json:"id"`
+	Name          string             `json:"name,omitempty"`
+	RepoURL       string             `json:"repo_url,omitempty"`
+	ArtifactRepo  string             `json:"artifact_repo,omitempty"`
+	DefaultBranch string             `json:"default_branch,omitempty"`
+	RuntimeType   domain.RuntimeType `json:"runtime_type,omitempty"`
+	CreatedAt     time.Time          `json:"created_at,omitempty"`
+	UpdatedAt     time.Time          `json:"updated_at,omitempty"`
+}
+
+type DecodedEnvironment struct {
+	Deleted        bool                  `json:"deleted"`
+	ID             string                `json:"id"`
+	Name           string                `json:"name,omitempty"`
+	Protected      bool                  `json:"protected"`
+	DeployStrategy domain.DeployStrategy `json:"deploy_strategy,omitempty"`
+	CreatedAt      time.Time             `json:"created_at,omitempty"`
+	UpdatedAt      time.Time             `json:"updated_at,omitempty"`
+}
+
+type DecodedWorker struct {
+	Worker             *domain.Worker                   `json:"worker,omitempty"`
+	AssignmentState    *domain.WorkerAssignmentState    `json:"assignment_state,omitempty"`
+	DrainStatus        *domain.WorkerDrainStatus        `json:"drain_status,omitempty"`
+	EligibilityPreview *domain.WorkerEligibilityPreview `json:"eligibility_preview,omitempty"`
+}
+
+type DecodedBuild struct {
+	Deleted       bool               `json:"deleted"`
+	ID            string             `json:"id"`
+	ServiceID     string             `json:"service_id"`
+	GitSHA        string             `json:"git_sha,omitempty"`
+	GitRef        string             `json:"git_ref,omitempty"`
+	CISystem      string             `json:"ci_system,omitempty"`
+	CIRunID       string             `json:"ci_run_id,omitempty"`
+	LoomJobID     string             `json:"loom_job_id,omitempty"`
+	Status        domain.BuildStatus `json:"status,omitempty"`
+	SourceEventID string             `json:"source_event_id,omitempty"`
+	StartedAt     *time.Time         `json:"started_at,omitempty"`
+	FinishedAt    *time.Time         `json:"finished_at,omitempty"`
+	Metadata      map[string]any     `json:"metadata,omitempty"`
+	CreatedAt     time.Time          `json:"created_at,omitempty"`
+}
+
+type DecodedArtifact struct {
+	Deleted           bool              `json:"deleted"`
+	ID                string            `json:"id"`
+	BuildID           string            `json:"build_id"`
+	ServiceID         string            `json:"service_id"`
+	ImageRepo         string            `json:"image_repo,omitempty"`
+	ImageTag          string            `json:"image_tag,omitempty"`
+	ImageDigest       string            `json:"image_digest,omitempty"`
+	ManifestMediaType string            `json:"manifest_media_type,omitempty"`
+	SizeBytes         *int64            `json:"size_bytes,omitempty"`
+	SBOMURL           string            `json:"sbom_url,omitempty"`
+	SignatureRef      string            `json:"signature_ref,omitempty"`
+	ScanStatus        domain.ScanStatus `json:"scan_status,omitempty"`
+	Metadata          map[string]any    `json:"metadata,omitempty"`
+	CreatedAt         time.Time         `json:"created_at,omitempty"`
+}
+
+type DecodedIntent struct {
+	Deleted          bool                          `json:"deleted"`
+	ID               string                        `json:"id"`
+	ServiceID        string                        `json:"service_id"`
+	EnvironmentID    string                        `json:"environment_id"`
+	ArtifactID       string                        `json:"artifact_id"`
+	RequestedBy      string                        `json:"requested_by,omitempty"`
+	SourceKind       domain.SourceKind             `json:"source_kind,omitempty"`
+	ApprovalStatus   domain.ApprovalStatus         `json:"approval_status,omitempty"`
+	Status           domain.DeploymentIntentStatus `json:"status,omitempty"`
+	DeploymentStatus string                        `json:"deployment_status,omitempty"`
+	ApprovalMetadata map[string]any                `json:"approval_metadata,omitempty"`
+	Metadata         map[string]any                `json:"metadata,omitempty"`
+	CreatedAt        time.Time                     `json:"created_at,omitempty"`
+	ApprovedAt       *time.Time                    `json:"approved_at,omitempty"`
+	UpdatedAt        time.Time                     `json:"updated_at,omitempty"`
+}
+
+type DecodedRun struct {
+	Deleted            bool                       `json:"deleted"`
+	ID                 string                     `json:"id"`
+	DeploymentIntentID string                     `json:"deployment_intent_id"`
+	LoomJobID          string                     `json:"loom_job_id,omitempty"`
+	WorkerPubkey       string                     `json:"worker_pubkey,omitempty"`
+	WorkerName         string                     `json:"worker_name,omitempty"`
+	Status             domain.DeploymentRunStatus `json:"status,omitempty"`
+	ExitCode           *int                       `json:"exit_code,omitempty"`
+	StdoutRef          string                     `json:"stdout_ref,omitempty"`
+	StderrRef          string                     `json:"stderr_ref,omitempty"`
+	StartedAt          *time.Time                 `json:"started_at,omitempty"`
+	FinishedAt         *time.Time                 `json:"finished_at,omitempty"`
+	Metadata           map[string]any             `json:"metadata,omitempty"`
+	CreatedAt          time.Time                  `json:"created_at,omitempty"`
+	UpdatedAt          time.Time                  `json:"updated_at,omitempty"`
+}
+
+type DecodedPolicy struct {
+	Deleted       bool                     `json:"deleted"`
+	ID            string                   `json:"id"`
+	Name          string                   `json:"name,omitempty"`
+	EnvironmentID *string                  `json:"environment_id,omitempty"`
+	Rules         []domain.PolicyRule      `json:"rules,omitempty"`
+	RuleCount     int                      `json:"rule_count,omitempty"`
+	Enforcement   domain.PolicyEnforcement `json:"enforcement,omitempty"`
+	Enabled       bool                     `json:"enabled"`
+	CreatedAt     time.Time                `json:"created_at,omitempty"`
+	UpdatedAt     time.Time                `json:"updated_at,omitempty"`
+}
+
+type DecodedState struct {
+	Deleted              bool               `json:"deleted"`
+	ServiceID            string             `json:"service_id"`
+	EnvironmentID        string             `json:"environment_id"`
+	DesiredArtifactID    *string            `json:"desired_artifact_id,omitempty"`
+	DesiredIntentID      *string            `json:"desired_intent_id,omitempty"`
+	LastSuccessfulRunID  *string            `json:"last_successful_run_id,omitempty"`
+	CurrentObservationID *string            `json:"current_observation_id,omitempty"`
+	DriftStatus          domain.DriftStatus `json:"drift_status,omitempty"`
+	LastReconciledAt     *time.Time         `json:"last_reconciled_at,omitempty"`
+	UpdatedAt            time.Time          `json:"updated_at,omitempty"`
+}
+
+type DecodedContinuity struct {
+	Profile             *domain.ServiceContinuityProfile `json:"profile,omitempty"`
+	Recipe              *domain.ContinuityRecipe         `json:"recipe,omitempty"`
+	StandbyNode         *StandbyNodeDefinition           `json:"standby_node,omitempty"`
+	ReplicationPolicy   *domain.ReplicationPolicy        `json:"replication_policy,omitempty"`
+	Heartbeat           *domain.HeartbeatObservation     `json:"heartbeat,omitempty"`
+	Command             *ContinuityCommandRequest        `json:"command,omitempty"`
+	Status              *DecodedContinuityStatus         `json:"status,omitempty"`
+	PreviousProfile     domain.ContinuityMode            `json:"previous_profile,omitempty"`
+	RecoveryProgressKey string                           `json:"recovery_progress_key,omitempty"`
+}
+
+type DecodedContinuityStatus struct {
+	ServiceKey          string                `json:"service_key"`
+	ActiveProfile       domain.ContinuityMode `json:"active_profile"`
+	OperationState      string                `json:"operation_state"`
+	PrimaryWorkerPubKey string                `json:"primary_worker_pubkey,omitempty"`
+	ActiveWorkerPubKey  string                `json:"active_worker_pubkey,omitempty"`
+	StandbyWorkerPubKey string                `json:"standby_worker_pubkey,omitempty"`
+	Reason              string                `json:"reason,omitempty"`
+	ChangedAt           time.Time             `json:"changed_at,omitempty"`
+	CurrentRunID        string                `json:"current_run_id,omitempty"`
+	CurrentStepIndex    int                   `json:"current_step_index,omitempty"`
+	CurrentStepCount    int                   `json:"current_step_count,omitempty"`
+	CurrentStepAction   string                `json:"current_step_action,omitempty"`
+}
 type DecodedBackup struct{}
 type DecodedDNS struct{}
 type DecodedLLM struct{}
@@ -243,6 +390,7 @@ func NewKindCatalog() *KindCatalog {
 	for _, kind := range catalog.AllKinds() {
 		catalog.decoders[kind] = decoderNotImplemented(kind)
 	}
+	catalog.registerProjectionDecoders()
 	return catalog
 }
 
@@ -309,6 +457,333 @@ func kindsFromGroups(groups []ReplayGroup) []int {
 	}
 	sort.Ints(kinds)
 	return kinds
+}
+
+func (c *KindCatalog) registerProjectionDecoders() {
+	c.decoders[KindServiceRegistry] = decodeServiceProjection
+	c.decoders[KindEnvironmentRegistry] = decodeEnvironmentProjection
+	c.decoders[KindBuildRegistry] = decodeBuildProjection
+	c.decoders[KindArtifactRegistry] = decodeArtifactProjection
+	c.decoders[KindDeploymentIntentRegistry] = decodeIntentProjection
+	c.decoders[KindDeploymentRunRegistry] = decodeRunProjection
+	c.decoders[KindPolicyRegistry] = decodePolicyProjection
+	c.decoders[KindServiceState] = decodeStateProjection
+
+	c.decoders[KindWorkerState] = decodeWorkerProjection
+	c.decoders[KindLegacyWorkerState] = decodeWorkerProjection
+	c.decoders[KindWorkerAssignmentState] = decodeWorkerAssignmentProjection
+	c.decoders[KindLegacyWorkerAssignmentState] = decodeWorkerAssignmentProjection
+	c.decoders[KindWorkerDrainStatus] = decodeWorkerDrainProjection
+	c.decoders[KindLegacyWorkerDrainStatus] = decodeWorkerDrainProjection
+	c.decoders[KindWorkerEligibilityPreview] = decodeWorkerEligibilityProjection
+	c.decoders[KindLegacyWorkerEligibilityPreview] = decodeWorkerEligibilityProjection
+	c.decoders[KindLoomWorkerAdvertisement] = decodeWorkerAdvertisementProjection
+
+	c.decoders[KindContinuityProfile] = decodeContinuityProfileProjection
+	c.decoders[KindFailoverPolicy] = decodeFailoverPolicyProjection
+	c.decoders[KindRecoveryWorkflow] = decodeRecoveryWorkflowProjection
+	c.decoders[KindStandbyNodeDefinition] = decodeStandbyNodeProjection
+	c.decoders[KindReplicationPolicy] = decodeReplicationPolicyProjection
+	c.decoders[KindHeartbeatObservation] = decodeHeartbeatProjection
+	c.decoders[KindFailoverRequest] = decodeContinuityCommandProjection
+	c.decoders[KindRecoveryRequest] = decodeContinuityCommandProjection
+	c.decoders[KindContinuityStatus] = decodeContinuityStatusProjection
+	c.decoders[KindDegradedModeActivation] = decodeContinuityStatusProjection
+	c.decoders[KindRecoveryProgress] = decodeContinuityStatusProjection
+}
+
+func decodeServiceProjection(ev *gonostr.Event) (*DecodedProjectionEvent, error) {
+	var payload DecodedService
+	if err := decodeContent(ev, &payload); err != nil {
+		return nil, err
+	}
+	return baseDecoded(ev, FamilyService, payload.ID, payload.UpdatedAt, payload.Deleted, func(out *DecodedProjectionEvent) { out.Service = &payload }), nil
+}
+
+func decodeEnvironmentProjection(ev *gonostr.Event) (*DecodedProjectionEvent, error) {
+	var payload DecodedEnvironment
+	if err := decodeContent(ev, &payload); err != nil {
+		return nil, err
+	}
+	return baseDecoded(ev, FamilyEnvironment, payload.ID, payload.UpdatedAt, payload.Deleted, func(out *DecodedProjectionEvent) { out.Environment = &payload }), nil
+}
+
+func decodeBuildProjection(ev *gonostr.Event) (*DecodedProjectionEvent, error) {
+	var payload DecodedBuild
+	if err := decodeContent(ev, &payload); err != nil {
+		return nil, err
+	}
+	return baseDecoded(ev, FamilyBuild, payload.ID, payload.CreatedAt, payload.Deleted, func(out *DecodedProjectionEvent) { out.Build = &payload }), nil
+}
+
+func decodeArtifactProjection(ev *gonostr.Event) (*DecodedProjectionEvent, error) {
+	var payload DecodedArtifact
+	if err := decodeContent(ev, &payload); err != nil {
+		return nil, err
+	}
+	return baseDecoded(ev, FamilyArtifact, payload.ID, payload.CreatedAt, payload.Deleted, func(out *DecodedProjectionEvent) { out.Artifact = &payload }), nil
+}
+
+func decodeIntentProjection(ev *gonostr.Event) (*DecodedProjectionEvent, error) {
+	var payload DecodedIntent
+	if err := decodeContent(ev, &payload); err != nil {
+		return nil, err
+	}
+	return baseDecoded(ev, FamilyIntent, payload.ID, payload.UpdatedAt, payload.Deleted, func(out *DecodedProjectionEvent) { out.Intent = &payload }), nil
+}
+
+func decodeRunProjection(ev *gonostr.Event) (*DecodedProjectionEvent, error) {
+	var payload DecodedRun
+	if err := decodeContent(ev, &payload); err != nil {
+		return nil, err
+	}
+	return baseDecoded(ev, FamilyRun, payload.ID, payload.UpdatedAt, payload.Deleted, func(out *DecodedProjectionEvent) { out.Run = &payload }), nil
+}
+
+func decodePolicyProjection(ev *gonostr.Event) (*DecodedProjectionEvent, error) {
+	var payload DecodedPolicy
+	if err := decodeContent(ev, &payload); err != nil {
+		return nil, err
+	}
+	return baseDecoded(ev, FamilyPolicy, payload.ID, payload.UpdatedAt, payload.Deleted, func(out *DecodedProjectionEvent) { out.Policy = &payload }), nil
+}
+
+func decodeStateProjection(ev *gonostr.Event) (*DecodedProjectionEvent, error) {
+	var payload DecodedState
+	if err := decodeContent(ev, &payload); err != nil {
+		return nil, err
+	}
+	key := payload.ServiceID + ":" + payload.EnvironmentID
+	return baseDecoded(ev, FamilyState, key, payload.UpdatedAt, payload.Deleted, func(out *DecodedProjectionEvent) { out.State = &payload }), nil
+}
+
+func decodeWorkerProjection(ev *gonostr.Event) (*DecodedProjectionEvent, error) {
+	var worker domain.Worker
+	if err := decodeContent(ev, &worker); err != nil {
+		return nil, err
+	}
+	return baseDecoded(ev, FamilyWorker, firstNonBlank(worker.PubKey, tagValueLocal(ev.Tags, "worker"), ev.PubKey), worker.UpdatedAt, false, func(out *DecodedProjectionEvent) {
+		out.Worker = &DecodedWorker{Worker: &worker}
+	}), nil
+}
+
+func decodeWorkerAssignmentProjection(ev *gonostr.Event) (*DecodedProjectionEvent, error) {
+	var state domain.WorkerAssignmentState
+	if err := decodeContent(ev, &state); err != nil {
+		return nil, err
+	}
+	return baseDecoded(ev, FamilyWorker, firstNonBlank(state.WorkerPubKey, tagValueLocal(ev.Tags, "worker")), state.UpdatedAt, false, func(out *DecodedProjectionEvent) {
+		out.Worker = &DecodedWorker{AssignmentState: &state}
+	}), nil
+}
+
+func decodeWorkerDrainProjection(ev *gonostr.Event) (*DecodedProjectionEvent, error) {
+	var status domain.WorkerDrainStatus
+	if err := decodeContent(ev, &status); err != nil {
+		return nil, err
+	}
+	return baseDecoded(ev, FamilyWorker, firstNonBlank(status.WorkerPubKey, tagValueLocal(ev.Tags, "worker")), status.UpdatedAt, false, func(out *DecodedProjectionEvent) {
+		out.Worker = &DecodedWorker{DrainStatus: &status}
+	}), nil
+}
+
+func decodeWorkerEligibilityProjection(ev *gonostr.Event) (*DecodedProjectionEvent, error) {
+	var preview domain.WorkerEligibilityPreview
+	if err := decodeContent(ev, &preview); err != nil {
+		return nil, err
+	}
+	return baseDecoded(ev, FamilyWorker, firstNonBlank(preview.PreviewID, tagValueLocal(ev.Tags, "d")), preview.UpdatedAt, false, func(out *DecodedProjectionEvent) {
+		out.Worker = &DecodedWorker{EligibilityPreview: &preview}
+	}), nil
+}
+
+func decodeWorkerAdvertisementProjection(ev *gonostr.Event) (*DecodedProjectionEvent, error) {
+	var content struct {
+		Name              string                      `json:"name"`
+		Description       string                      `json:"description"`
+		MaxConcurrentJobs int                         `json:"max_concurrent_jobs"`
+		CurrentQueueDepth int                         `json:"current_queue_depth"`
+		Resources         *domain.WorkerResources     `json:"resources,omitempty"`
+		Accelerators      []domain.WorkerAccelerator  `json:"accelerators,omitempty"`
+		RuntimeTarget     *domain.WorkerRuntimeTarget `json:"runtime_target,omitempty"`
+		MLCapabilities    domain.WorkerMLCapabilities `json:"ml_capabilities,omitempty"`
+	}
+	if strings.TrimSpace(ev.Content) != "" {
+		if err := json.Unmarshal([]byte(ev.Content), &content); err != nil {
+			return nil, fmt.Errorf("decode worker advertisement content: %w", err)
+		}
+	}
+	worker := &domain.Worker{PubKey: ev.PubKey, Name: content.Name, Description: content.Description, MaxConcurrentJobs: content.MaxConcurrentJobs, CurrentQueueDepth: content.CurrentQueueDepth, Resources: content.Resources, Accelerators: content.Accelerators, RuntimeTarget: content.RuntimeTarget, MLCapabilities: content.MLCapabilities, LastAdvertisementAt: ev.CreatedAt.Time().UTC(), Status: domain.WorkerStatusOnline, CreatedAt: ev.CreatedAt.Time().UTC(), UpdatedAt: ev.CreatedAt.Time().UTC()}
+	for _, tag := range ev.Tags {
+		if len(tag) < 2 {
+			continue
+		}
+		switch tag[0] {
+		case "S":
+			sw := domain.WorkerSoftware{Name: tag[1]}
+			if len(tag) >= 3 {
+				sw.Version = tag[2]
+			}
+			if len(tag) >= 4 {
+				sw.Path = tag[3]
+			}
+			worker.Software = append(worker.Software, sw)
+		case "A":
+			worker.Architecture = tag[1]
+		case "g":
+			worker.Geohash = tag[1]
+		case "relay":
+			worker.PreferredRelays = append(worker.PreferredRelays, tag[1])
+		case "runtime":
+			worker.MLCapabilities.Runtimes = append(worker.MLCapabilities.Runtimes, domain.MLRuntimeKind(tag[1]))
+		case "artifact_format", "format":
+			worker.MLCapabilities.ArtifactFormats = append(worker.MLCapabilities.ArtifactFormats, domain.MLArtifactFormat(tag[1]))
+		case "task":
+			worker.MLCapabilities.Tasks = append(worker.MLCapabilities.Tasks, domain.MLTaskKind(tag[1]))
+		case "accelerator":
+			worker.MLCapabilities.Accelerators = append(worker.MLCapabilities.Accelerators, tag[1])
+		case "toolchain":
+			worker.MLCapabilities.Toolchains = append(worker.MLCapabilities.Toolchains, tag[1])
+		case "cached_artifact", "artifact":
+			worker.MLCapabilities.CachedArtifacts = append(worker.MLCapabilities.CachedArtifacts, tag[1])
+		}
+	}
+	worker.MLCapabilities = domain.NormalizeWorkerMLCapabilities(*worker)
+	return baseDecoded(ev, FamilyWorker, worker.PubKey, worker.UpdatedAt, false, func(out *DecodedProjectionEvent) { out.Worker = &DecodedWorker{Worker: worker} }), nil
+}
+
+func decodeContinuityProfileProjection(ev *gonostr.Event) (*DecodedProjectionEvent, error) {
+	profile, err := DecodeContinuityProfileEvent(ev)
+	if err != nil {
+		return nil, err
+	}
+	return baseDecoded(ev, FamilyContinuity, continuityDTag(ev), profile.UpdatedAt, false, func(out *DecodedProjectionEvent) { out.Continuity = &DecodedContinuity{Profile: profile} }), nil
+}
+
+func decodeFailoverPolicyProjection(ev *gonostr.Event) (*DecodedProjectionEvent, error) {
+	recipe, err := DecodeFailoverPolicyEvent(ev)
+	if err != nil {
+		return nil, err
+	}
+	return baseDecoded(ev, FamilyContinuity, continuityDTag(ev), recipe.UpdatedAt, false, func(out *DecodedProjectionEvent) { out.Continuity = &DecodedContinuity{Recipe: recipe} }), nil
+}
+
+func decodeRecoveryWorkflowProjection(ev *gonostr.Event) (*DecodedProjectionEvent, error) {
+	recipe, err := DecodeRecoveryWorkflowEvent(ev)
+	if err != nil {
+		return nil, err
+	}
+	return baseDecoded(ev, FamilyContinuity, continuityDTag(ev), recipe.UpdatedAt, false, func(out *DecodedProjectionEvent) { out.Continuity = &DecodedContinuity{Recipe: recipe} }), nil
+}
+
+func decodeStandbyNodeProjection(ev *gonostr.Event) (*DecodedProjectionEvent, error) {
+	def, err := DecodeStandbyNodeDefinitionEvent(ev)
+	if err != nil {
+		return nil, err
+	}
+	return baseDecoded(ev, FamilyContinuity, continuityDTag(ev), def.UpdatedAt, false, func(out *DecodedProjectionEvent) { out.Continuity = &DecodedContinuity{StandbyNode: def} }), nil
+}
+
+func decodeReplicationPolicyProjection(ev *gonostr.Event) (*DecodedProjectionEvent, error) {
+	policy, err := DecodeReplicationPolicyEvent(ev)
+	if err != nil {
+		return nil, err
+	}
+	return baseDecoded(ev, FamilyContinuity, continuityDTag(ev), policy.UpdatedAt, false, func(out *DecodedProjectionEvent) { out.Continuity = &DecodedContinuity{ReplicationPolicy: policy} }), nil
+}
+
+func decodeHeartbeatProjection(ev *gonostr.Event) (*DecodedProjectionEvent, error) {
+	heartbeat, err := DecodeHeartbeatObservationEvent(ev)
+	if err != nil {
+		return nil, err
+	}
+	return baseDecoded(ev, FamilyContinuity, continuityDTag(ev), heartbeat.ObservedAt, false, func(out *DecodedProjectionEvent) { out.Continuity = &DecodedContinuity{Heartbeat: heartbeat} }), nil
+}
+
+func decodeContinuityCommandProjection(ev *gonostr.Event) (*DecodedProjectionEvent, error) {
+	var command *ContinuityCommandRequest
+	var err error
+	if ev.Kind == KindFailoverRequest {
+		command, err = DecodeFailoverRequestEvent(ev)
+	} else {
+		command, err = DecodeRecoveryRequestEvent(ev)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return baseDecoded(ev, FamilyContinuity, continuityDTag(ev), ev.CreatedAt.Time().UTC(), false, func(out *DecodedProjectionEvent) { out.Continuity = &DecodedContinuity{Command: command} }), nil
+}
+
+func decodeContinuityStatusProjection(ev *gonostr.Event) (*DecodedProjectionEvent, error) {
+	var status DecodedContinuityStatus
+	if err := decodeContent(ev, &status); err != nil {
+		return nil, err
+	}
+	previous := domain.ContinuityMode("")
+	if ev.Kind == KindDegradedModeActivation {
+		previous = domain.ContinuityMode(tagValueLocal(ev.Tags, "previous_profile"))
+	}
+	return baseDecoded(ev, FamilyContinuity, continuityDTag(ev), firstTime(status.ChangedAt, ev.CreatedAt.Time().UTC()), false, func(out *DecodedProjectionEvent) {
+		out.Continuity = &DecodedContinuity{Status: &status, PreviousProfile: previous, RecoveryProgressKey: tagValueLocal(ev.Tags, "run")}
+	}), nil
+}
+
+func decodeContent(ev *gonostr.Event, out any) error {
+	if ev == nil {
+		return fmt.Errorf("projection event is nil")
+	}
+	if strings.TrimSpace(ev.Content) == "" {
+		return fmt.Errorf("projection event kind %d content is required", ev.Kind)
+	}
+	if err := json.Unmarshal([]byte(ev.Content), out); err != nil {
+		return fmt.Errorf("decode projection event kind %d content: %w", ev.Kind, err)
+	}
+	return nil
+}
+
+func baseDecoded(ev *gonostr.Event, family ProjectionFamily, entityKey string, updatedAt time.Time, tombstone bool, fill func(*DecodedProjectionEvent)) *DecodedProjectionEvent {
+	if updatedAt.IsZero() {
+		updatedAt = ev.CreatedAt.Time().UTC()
+	}
+	out := &DecodedProjectionEvent{Kind: ev.Kind, DTag: firstNonBlank(tagValueLocal(ev.Tags, "d"), entityKey), Group: "", Tier: 0, Timestamp: updatedAt.UTC(), SourceID: ev.ID, Family: family, Tombstone: tombstone}
+	if out.DTag == "" {
+		out.DTag = entityKey
+	}
+	if fill != nil {
+		fill(out)
+	}
+	return out
+}
+
+func continuityDTag(ev *gonostr.Event) string {
+	return firstNonBlank(tagValueLocal(ev.Tags, "d"), tagValueLocal(ev.Tags, "service"), tagValueLocal(ev.Tags, "worker"), ev.ID)
+}
+
+func tagValueLocal(tags gonostr.Tags, key string) string {
+	for _, tag := range tags {
+		if len(tag) >= 2 && tag[0] == key {
+			return tag[1]
+		}
+	}
+	return ""
+}
+
+func firstNonBlank(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
+}
+
+func firstTime(values ...time.Time) time.Time {
+	for _, value := range values {
+		if !value.IsZero() {
+			return value
+		}
+	}
+	return time.Time{}
 }
 
 func decoderNotImplemented(kind int) DecodeFunc {

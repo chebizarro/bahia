@@ -30,117 +30,117 @@ import (
 // The 311xx series in internal/adapters/nostr/publisher.go is deprecated.
 const (
 	// Request kinds (5961-5975)
-	KindDeployRequest            = 5961 // Request to deploy a service
-	KindRollbackRequest          = 5962 // Request to rollback a service
-	KindServiceAction            = 5963 // Lifecycle action (scale, restart, stop)
-	KindServiceCreate            = 5964 // Create a new service
-	KindEnvironmentCreate        = 5965 // Create a new environment
-	KindDeploymentApproval       = 5966 // Approve or reject a deployment
-	KindObservationSubmit        = 5967 // Submit runtime observation
-	KindDriftRemediate           = 5968 // Request drift remediation
-	KindLLMRouteCreate           = 5971 // Create an LLM route
-	KindLLMReleaseRegister       = 5972 // Register an LLM release
-	KindLLMDeployRequest         = 5973 // Request LLM route deployment
-	KindLLMDeploymentApproval    = 5974 // Approve or reject an LLM deployment
-	KindLLMRollbackRequest       = 5975 // Request LLM route rollback
-	KindToolProvisionRequest     = 5976 // Agent → Bahia
-	KindToolApprovalRequest      = 5977 // Bahia → Operator
-	KindAdoptionScanRequest      = 5978 // Request adoption scan previews
-	KindAdoptionImportRequest    = 5979 // Request adoption import
-	KindServiceUpdate            = 5981 // Update a service registry entry
-	KindServiceDelete            = 5982 // Delete a service registry entry
-	KindEnvironmentUpdate        = 5983 // Update an environment registry entry
-	KindEnvironmentDelete        = 5984 // Delete an environment registry entry
-	KindArtifactRegister         = 5985 // Register an artifact
-	KindPolicyCreate             = 5986 // Create a deployment policy
-	KindPolicyUpdate             = 5987 // Update a deployment policy
-	KindPolicyDelete             = 5988 // Delete a deployment policy
-	KindPolicyEvaluate           = 5989 // Evaluate deployment policies
-	KindPackageRepositoryApply   = 5991 // Create/update a package repository
-	KindPackageRepositoryDelete  = 5992 // Delete a package repository
-	KindPackagePublishIntent     = 5993 // Request package artifact publication/upload from source_url
-	KindPackagePromotionRequest  = 5994 // Request package promotion to a target repository/channel
-	KindPackageYankRequest       = 5995 // Yank/deprecate a package artifact
-	KindPackageDriftDetect       = 5996 // Observe package backend drift
-	KindWorkerCordonRequest      = 5997 // Request worker cordon
-	KindWorkerUncordonRequest    = 5998 // Request worker uncordon
-	KindWorkerDrainRequest       = 5999 // Request worker drain
-	KindWorkerUndrainRequest     = 6000 // Request worker undrain
-	KindWorkerMaintenanceEnter   = 6001 // Request worker maintenance entry
-	KindWorkerMaintenanceExit    = 6002 // Request worker maintenance exit
-	KindWorkerLabelsUpdate       = 6003 // Request worker label update
-	KindWorkerPolicyApplyRequest = 6004 // Apply environment worker placement policy
-	KindWorkloadPinRequest       = 6005 // Pin workload placement to a worker
+	KindDeployRequest            = nostrpool.KindControlPlaneDeployRequest            // Request to deploy a service
+	KindRollbackRequest          = nostrpool.KindControlPlaneRollbackRequest          // Request to rollback a service
+	KindServiceAction            = nostrpool.KindControlPlaneServiceAction            // Lifecycle action (scale, restart, stop)
+	KindServiceCreate            = nostrpool.KindControlPlaneServiceCreate            // Create a new service
+	KindEnvironmentCreate        = nostrpool.KindControlPlaneEnvironmentCreate        // Create a new environment
+	KindDeploymentApproval       = nostrpool.KindControlPlaneDeploymentApproval       // Approve or reject a deployment
+	KindObservationSubmit        = nostrpool.KindControlPlaneObservationSubmit        // Submit runtime observation
+	KindDriftRemediate           = nostrpool.KindControlPlaneDriftRemediate           // Request drift remediation
+	KindLLMRouteCreate           = nostrpool.KindControlPlaneLLMRouteCreate           // Create an LLM route
+	KindLLMReleaseRegister       = nostrpool.KindControlPlaneLLMReleaseRegister       // Register an LLM release
+	KindLLMDeployRequest         = nostrpool.KindControlPlaneLLMDeployRequest         // Request LLM route deployment
+	KindLLMDeploymentApproval    = nostrpool.KindControlPlaneLLMDeploymentApproval    // Approve or reject an LLM deployment
+	KindLLMRollbackRequest       = nostrpool.KindControlPlaneLLMRollbackRequest       // Request LLM route rollback
+	KindToolProvisionRequest     = nostrpool.KindControlPlaneToolProvisionRequest     // Agent → Bahia
+	KindToolApprovalRequest      = nostrpool.KindControlPlaneToolApprovalRequest      // Bahia → Operator
+	KindAdoptionScanRequest      = nostrpool.KindControlPlaneAdoptionScanRequest      // Request adoption scan previews
+	KindAdoptionImportRequest    = nostrpool.KindControlPlaneAdoptionImportRequest    // Request adoption import
+	KindServiceUpdate            = nostrpool.KindControlPlaneServiceUpdate            // Update a service registry entry
+	KindServiceDelete            = nostrpool.KindControlPlaneServiceDelete            // Delete a service registry entry
+	KindEnvironmentUpdate        = nostrpool.KindControlPlaneEnvironmentUpdate        // Update an environment registry entry
+	KindEnvironmentDelete        = nostrpool.KindControlPlaneEnvironmentDelete        // Delete an environment registry entry
+	KindArtifactRegister         = nostrpool.KindControlPlaneArtifactRegister         // Register an artifact
+	KindPolicyCreate             = nostrpool.KindControlPlanePolicyCreate             // Create a deployment policy
+	KindPolicyUpdate             = nostrpool.KindControlPlanePolicyUpdate             // Update a deployment policy
+	KindPolicyDelete             = nostrpool.KindControlPlanePolicyDelete             // Delete a deployment policy
+	KindPolicyEvaluate           = nostrpool.KindControlPlanePolicyEvaluate           // Evaluate deployment policies
+	KindPackageRepositoryApply   = nostrpool.KindControlPlanePackageRepositoryApply   // Create/update a package repository
+	KindPackageRepositoryDelete  = nostrpool.KindControlPlanePackageRepositoryDelete  // Delete a package repository
+	KindPackagePublishIntent     = nostrpool.KindControlPlanePackagePublishIntent     // Request package artifact publication/upload from source_url
+	KindPackagePromotionRequest  = nostrpool.KindControlPlanePackagePromotionRequest  // Request package promotion to a target repository/channel
+	KindPackageYankRequest       = nostrpool.KindControlPlanePackageYankRequest       // Yank/deprecate a package artifact
+	KindPackageDriftDetect       = nostrpool.KindControlPlanePackageDriftDetect       // Observe package backend drift
+	KindWorkerCordonRequest      = nostrpool.KindControlPlaneWorkerCordonRequest      // Request worker cordon
+	KindWorkerUncordonRequest    = nostrpool.KindControlPlaneWorkerUncordonRequest    // Request worker uncordon
+	KindWorkerDrainRequest       = nostrpool.KindControlPlaneWorkerDrainRequest       // Request worker drain
+	KindWorkerUndrainRequest     = nostrpool.KindControlPlaneWorkerUndrainRequest     // Request worker undrain
+	KindWorkerMaintenanceEnter   = nostrpool.KindControlPlaneWorkerMaintenanceEnter   // Request worker maintenance entry
+	KindWorkerMaintenanceExit    = nostrpool.KindControlPlaneWorkerMaintenanceExit    // Request worker maintenance exit
+	KindWorkerLabelsUpdate       = nostrpool.KindControlPlaneWorkerLabelsUpdate       // Request worker label update
+	KindWorkerPolicyApplyRequest = nostrpool.KindControlPlaneWorkerPolicyApplyRequest // Apply environment worker placement policy
+	KindWorkloadPinRequest       = nostrpool.KindControlPlaneWorkloadPinRequest       // Pin workload placement to a worker
 
 	// Generic AI/ML command/result kinds (38390-38399). These intentionally
 	// avoid NIP-90's 5000-7000 DVM range.
-	KindMLRecipeRunRequest            = 38390 // Request a generic ML recipe run
-	KindMLInferenceDeployRequest      = 38391 // Request inference endpoint deployment
-	KindMLInferenceDeploymentApproval = 38392 // Approve or reject an inference deployment
-	KindMLInferenceRollbackRequest    = 38393 // Request inference endpoint rollback
-	KindMLModelImportRequest          = 38394 // Request model/model-version import
-	KindMLRecipeRunResult             = 38395 // Recipe run terminal result
-	KindMLInferenceDeployResult       = 38396 // Inference deployment terminal result
-	KindMLInferenceApprovalResult     = 38397 // Approval/rejection terminal result
-	KindMLInferenceRollbackResult     = 38398 // Rollback terminal result
-	KindMLModelImportResult           = 38399 // Model/model-version import terminal result
+	KindMLRecipeRunRequest            = nostrpool.KindMLRecipeRunRequest            // Request a generic ML recipe run
+	KindMLInferenceDeployRequest      = nostrpool.KindMLInferenceDeployRequest      // Request inference endpoint deployment
+	KindMLInferenceDeploymentApproval = nostrpool.KindMLInferenceDeploymentApproval // Approve or reject an inference deployment
+	KindMLInferenceRollbackRequest    = nostrpool.KindMLInferenceRollbackRequest    // Request inference endpoint rollback
+	KindMLModelImportRequest          = nostrpool.KindMLModelImportRequest          // Request model/model-version import
+	KindMLRecipeRunResult             = nostrpool.KindMLRecipeRunResult             // Recipe run terminal result
+	KindMLInferenceDeployResult       = nostrpool.KindMLInferenceDeployResult       // Inference deployment terminal result
+	KindMLInferenceApprovalResult     = nostrpool.KindMLInferenceApprovalResult     // Approval/rejection terminal result
+	KindMLInferenceRollbackResult     = nostrpool.KindMLInferenceRollbackResult     // Rollback terminal result
+	KindMLModelImportResult           = nostrpool.KindMLModelImportResult           // Model/model-version import terminal result
 
 	// Status kinds (6961-6978)
-	KindDeploymentStatus    = 6961 // Deployment progress updates
-	KindServiceStatus       = 6962 // Service health/state updates
-	KindActionStatus        = 6963 // Service action progress updates
-	KindLLMDeploymentStatus = 6973 // LLM deployment/rollback progress updates
-	KindToolProvisionStatus = 6976 // Bahia → Agent (progress)
-	KindAdoptionStatus      = 6978 // Adoption scan/import progress updates
-	KindPackageStatus       = 6991 // Package lifecycle progress/policy events
-	KindWorkerStatus        = 6997 // Worker lifecycle progress events
+	KindDeploymentStatus    = nostrpool.KindControlPlaneDeploymentStatus    // Deployment progress updates
+	KindServiceStatus       = nostrpool.KindControlPlaneServiceStatus       // Service health/state updates
+	KindActionStatus        = nostrpool.KindControlPlaneActionStatus        // Service action progress updates
+	KindLLMDeploymentStatus = nostrpool.KindControlPlaneLLMDeploymentStatus // LLM deployment/rollback progress updates
+	KindToolProvisionStatus = nostrpool.KindControlPlaneToolProvisionStatus // Bahia → Agent (progress)
+	KindAdoptionStatus      = nostrpool.KindControlPlaneAdoptionStatus      // Adoption scan/import progress updates
+	KindPackageStatus       = nostrpool.KindControlPlanePackageStatus       // Package lifecycle progress/policy events
+	KindWorkerStatus        = nostrpool.KindControlPlaneWorkerStatus        // Worker lifecycle progress events
 
 	// Result kinds (7961-7979)
-	KindDeploymentResult         = 7961 // Final deployment result
-	KindActionResult             = 7962 // Result of a service action
-	KindServiceCreateResult      = 7963 // Service creation result
-	KindEnvCreateResult          = 7964 // Environment creation result
-	KindObservationResult        = 7965 // Observation submission result
-	KindRemediationResult        = 7966 // Drift remediation result
-	KindLLMRouteCreateResult     = 7971 // LLM route creation result
-	KindLLMReleaseRegisterResult = 7972 // LLM release registration result
-	KindLLMDeploymentResult      = 7973 // LLM deployment/approval/rollback result
-	KindToolProvisionResult      = 7976 // Bahia → Agent (final)
-	KindToolApprovalResponse     = 7977 // Operator → Bahia
-	KindAdoptionScanResult       = 7978 // Adoption scan result
-	KindAdoptionImportResult     = 7979 // Adoption import result
-	KindPackageResult            = 7991 // Package lifecycle terminal result
-	KindPackageDriftEvent        = 7992 // Package drift observation result
-	KindWorkerResult             = 7997 // Worker lifecycle terminal result
+	KindDeploymentResult         = nostrpool.KindControlPlaneDeploymentResult         // Final deployment result
+	KindActionResult             = nostrpool.KindControlPlaneActionResult             // Result of a service action
+	KindServiceCreateResult      = nostrpool.KindControlPlaneServiceCreateResult      // Service creation result
+	KindEnvCreateResult          = nostrpool.KindControlPlaneEnvironmentCreateResult  // Environment creation result
+	KindObservationResult        = nostrpool.KindControlPlaneObservationResult        // Observation submission result
+	KindRemediationResult        = nostrpool.KindControlPlaneRemediationResult        // Drift remediation result
+	KindLLMRouteCreateResult     = nostrpool.KindControlPlaneLLMRouteCreateResult     // LLM route creation result
+	KindLLMReleaseRegisterResult = nostrpool.KindControlPlaneLLMReleaseRegisterResult // LLM release registration result
+	KindLLMDeploymentResult      = nostrpool.KindControlPlaneLLMDeploymentResult      // LLM deployment/approval/rollback result
+	KindToolProvisionResult      = nostrpool.KindControlPlaneToolProvisionResult      // Bahia → Agent (final)
+	KindToolApprovalResponse     = nostrpool.KindControlPlaneToolApprovalResponse     // Operator → Bahia
+	KindAdoptionScanResult       = nostrpool.KindControlPlaneAdoptionScanResult       // Adoption scan result
+	KindAdoptionImportResult     = nostrpool.KindControlPlaneAdoptionImportResult     // Adoption import result
+	KindPackageResult            = nostrpool.KindControlPlanePackageResult            // Package lifecycle terminal result
+	KindPackageDriftEvent        = nostrpool.KindControlPlanePackageDriftEvent        // Package drift observation result
+	KindWorkerResult             = nostrpool.KindControlPlaneWorkerResult             // Worker lifecycle terminal result
 
 	// Replaceable registry kinds (d-tag indexed)
-	KindServiceState              = 31961 // Replaceable service state (d=service:env)
-	KindServiceRegistry           = 31962 // Replaceable service registry entry (d=service_id)
-	KindEnvironmentRegistry       = 31963 // Replaceable environment registry entry (d=env_id)
-	KindLLMRouteRegistry          = 31964 // Replaceable LLM route registry entry (d=route_id)
-	KindLLMRouteState             = 31965 // Replaceable LLM route state (d=route:env)
-	KindArtifactRegistry          = 31966 // Replaceable artifact registry entry (d=artifact_id)
-	KindDeploymentIntentRegistry  = 31967 // Replaceable deployment intent entry (d=intent_id)
-	KindDeploymentRunRegistry     = 31968 // Replaceable deployment run entry (d=run_id)
-	KindBuildRegistry             = 31969 // Replaceable build registry entry (d=build_id)
-	KindPolicyRegistry            = 31970 // Replaceable policy registry entry (d=policy_id)
-	KindPackageRepositoryRegistry = 31971 // Replaceable package repository state (d=repository_id)
-	KindPackageArtifactRegistry   = 31972 // Replaceable package artifact state (d=artifact_id)
-	KindPackagePromotionRegistry  = 31973 // Replaceable package promotion/publication state (d=publication_id)
-	KindWorkerState               = 32000 // Replaceable worker state (d=worker pubkey)
-	KindWorkerAssignmentState     = 32001 // Replaceable worker assignment state (d=worker pubkey)
-	KindWorkerDrainStatus         = 32002 // Replaceable worker drain status (d=worker pubkey)
-	KindWorkerEligibilityPreview  = 32003 // Replaceable worker eligibility preview (d=preview id)
+	KindServiceState              = 31961                                  // Replaceable service state (d=service:env)
+	KindServiceRegistry           = 31962                                  // Replaceable service registry entry (d=service_id)
+	KindEnvironmentRegistry       = 31963                                  // Replaceable environment registry entry (d=env_id)
+	KindLLMRouteRegistry          = 31964                                  // Replaceable LLM route registry entry (d=route_id)
+	KindLLMRouteState             = 31965                                  // Replaceable LLM route state (d=route:env)
+	KindArtifactRegistry          = 31966                                  // Replaceable artifact registry entry (d=artifact_id)
+	KindDeploymentIntentRegistry  = 31967                                  // Replaceable deployment intent entry (d=intent_id)
+	KindDeploymentRunRegistry     = 31968                                  // Replaceable deployment run entry (d=run_id)
+	KindBuildRegistry             = 31969                                  // Replaceable build registry entry (d=build_id)
+	KindPolicyRegistry            = 31970                                  // Replaceable policy registry entry (d=policy_id)
+	KindPackageRepositoryRegistry = 31971                                  // Replaceable package repository state (d=repository_id)
+	KindPackageArtifactRegistry   = 31972                                  // Replaceable package artifact state (d=artifact_id)
+	KindPackagePromotionRegistry  = 31973                                  // Replaceable package promotion/publication state (d=publication_id)
+	KindWorkerState               = nostrpool.KindWorkerState              // Replaceable worker state (d=worker pubkey)
+	KindWorkerAssignmentState     = nostrpool.KindWorkerAssignmentState    // Replaceable worker assignment state (d=worker pubkey)
+	KindWorkerDrainStatus         = nostrpool.KindWorkerDrainStatus        // Replaceable worker drain status (d=worker pubkey)
+	KindWorkerEligibilityPreview  = nostrpool.KindWorkerEligibilityPreview // Replaceable worker eligibility preview (d=preview id)
 )
 
 // Legacy worker read-model kinds accepted during the mixed-version release
 // window. New reactor/publisher paths must use the canonical KindWorker*
 // constants above.
 const (
-	KindLegacyWorkerState              = 31974
-	KindLegacyWorkerAssignmentState    = 31991
-	KindLegacyWorkerDrainStatus        = 31992
-	KindLegacyWorkerEligibilityPreview = 31993
+	KindLegacyWorkerState              = nostrpool.KindLegacyWorkerState
+	KindLegacyWorkerAssignmentState    = nostrpool.KindLegacyWorkerAssignmentState
+	KindLegacyWorkerDrainStatus        = nostrpool.KindLegacyWorkerDrainStatus
+	KindLegacyWorkerEligibilityPreview = nostrpool.KindLegacyWorkerEligibilityPreview
 )
 
 // Config holds reactor configuration.
@@ -534,6 +534,36 @@ func (r *Reactor) handleRelayClosed(ctx context.Context, closed nostrpool.RelayC
 	return true
 }
 
+func (r *Reactor) auditInboundEvent(ctx context.Context, event *nostr.Event) bool {
+	if r.nostrEvents == nil {
+		return true
+	}
+	tagsJSON, err := json.Marshal(event.Tags)
+	if err != nil {
+		r.logger.Warn("failed to marshal inbound control-plane event tags for audit", "event_id", event.ID, "kind", event.Kind, "error", err)
+		tagsJSON = []byte("[]")
+	}
+	inserted, err := r.nostrEvents.Record(ctx, &repository.NostrEventRecord{
+		ID:         event.ID,
+		Kind:       event.Kind,
+		PubKey:     event.PubKey,
+		Content:    event.Content,
+		Tags:       tagsJSON,
+		Sig:        event.Sig,
+		CreatedAt:  event.CreatedAt.Time(),
+		ReceivedAt: time.Now().UTC(),
+	})
+	if err != nil {
+		r.logger.Warn("failed to audit inbound control-plane event", "event_id", event.ID, "kind", event.Kind, "error", err)
+		return false
+	}
+	if !inserted {
+		r.logger.Debug("skipping already-audited control-plane event", "event_id", event.ID, "kind", event.Kind)
+		return false
+	}
+	return true
+}
+
 // handleEvent dispatches events to the appropriate handler.
 func (r *Reactor) handleEvent(ctx context.Context, event *nostr.Event) {
 	if err := nostrpool.ValidateInboundEvent(event, time.Now().UTC(), nostrpool.InboundEventMaxFutureSkew); err != nil {
@@ -547,6 +577,9 @@ func (r *Reactor) handleEvent(ctx context.Context, event *nostr.Event) {
 
 	// Deduplicate events (relays may replay during reconnection)
 	if r.dedup.IsDuplicate(event.ID) {
+		return
+	}
+	if !r.auditInboundEvent(ctx, event) {
 		return
 	}
 	r.dedup.MarkSeen(event.ID)

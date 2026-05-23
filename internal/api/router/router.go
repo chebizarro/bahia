@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"reflect"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -67,6 +68,7 @@ type RouterDeps struct {
 	MLCommands         handlers.MLCommandPublisher
 	ContinuityStatuses service.ContinuityStatusReader
 	ContinuityGraph    handlers.ContinuityGraphReader
+	HealthProvider     any
 }
 
 // SignatureVerifier is the interface for signature verification.
@@ -117,10 +119,32 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 	authMiddleware := routeAuthConfig(deps, authCfg...)
 	// Health, readiness, and metrics (unauthenticated).
 	r.Get("/health", func(w http.ResponseWriter, r *http.Request) {
-		handlers.WriteHealthJSON(w, http.StatusOK, dto.HealthResponse{Status: "ok", Version: Version})
+		if deps.HealthProvider == nil {
+			handlers.WriteHealthJSON(w, http.StatusOK, dto.HealthResponse{Status: "ok", Version: Version})
+			return
+		}
+		resp, ok := healthResponseFromProvider(deps.HealthProvider, "Liveness")
+		if !ok {
+			handlers.WriteHealthJSON(w, http.StatusOK, dto.HealthResponse{Status: "ok", Version: Version})
+			return
+		}
+		handlers.WriteHealthJSON(w, http.StatusOK, resp)
 	})
 	r.Get("/ready", func(w http.ResponseWriter, r *http.Request) {
-		handlers.WriteHealthJSON(w, http.StatusOK, dto.HealthResponse{Status: "ready", Version: Version})
+		if deps.HealthProvider == nil {
+			handlers.WriteHealthJSON(w, http.StatusOK, dto.HealthResponse{Status: "ready", Version: Version})
+			return
+		}
+		resp, ok := healthResponseFromProvider(deps.HealthProvider, "Readiness")
+		if !ok {
+			handlers.WriteHealthJSON(w, http.StatusOK, dto.HealthResponse{Status: "ready", Version: Version})
+			return
+		}
+		status := http.StatusOK
+		if !resp.Ready {
+			status = http.StatusServiceUnavailable
+		}
+		handlers.WriteHealthJSON(w, status, resp)
 	})
 	if telemetryProvider != nil {
 		metricsHandler := telemetryProvider.MetricsHandler()
@@ -505,6 +529,123 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 	})
 
 	return r
+}
+
+func healthResponseFromProvider(provider any, methodName string) (dto.HealthResponse, bool) {
+	value := reflect.ValueOf(provider)
+	if !value.IsValid() || (value.Kind() == reflect.Pointer && value.IsNil()) {
+		return dto.HealthResponse{}, false
+	}
+	method := value.MethodByName(methodName)
+	if !method.IsValid() || method.Type().NumIn() != 0 || method.Type().NumOut() != 1 {
+		return dto.HealthResponse{}, false
+	}
+	out := method.Call(nil)
+	if len(out) != 1 {
+		return dto.HealthResponse{}, false
+	}
+	return healthResponseFromSnapshotValue(out[0]), true
+}
+
+func healthResponseFromSnapshotValue(snapshot reflect.Value) dto.HealthResponse {
+	if !snapshot.IsValid() {
+		return dto.HealthResponse{Version: Version}
+	}
+	if snapshot.Kind() == reflect.Pointer {
+		if snapshot.IsNil() {
+			return dto.HealthResponse{Version: Version}
+		}
+		snapshot = snapshot.Elem()
+	}
+	if snapshot.Kind() != reflect.Struct {
+		return dto.HealthResponse{Version: Version}
+	}
+
+	return dto.HealthResponse{
+		Status:        stringField(snapshot, "Status"),
+		Version:       Version,
+		Mode:          stringField(snapshot, "Mode"),
+		RequestedTier: intField(snapshot, "RequestedTier"),
+		ActiveTier:    intField(snapshot, "ActiveTier"),
+		Ready:         boolField(snapshot, "Ready"),
+		Checks:        healthChecksFromSnapshot(snapshot.FieldByName("Checks")),
+		Runners:       runnerStatusesFromSnapshot(snapshot.FieldByName("RunnerSummary")),
+	}
+}
+
+func healthChecksFromSnapshot(checksValue reflect.Value) []dto.HealthCheckDTO {
+	if !checksValue.IsValid() || checksValue.Kind() != reflect.Slice {
+		return nil
+	}
+	checks := make([]dto.HealthCheckDTO, 0, checksValue.Len())
+	for i := 0; i < checksValue.Len(); i++ {
+		check := checksValue.Index(i)
+		checks = append(checks, dto.HealthCheckDTO{
+			Name:    stringField(check, "Name"),
+			Status:  stringField(check, "Status"),
+			Message: stringField(check, "Message"),
+			Tier:    intField(check, "Tier"),
+		})
+	}
+	return checks
+}
+
+func runnerStatusesFromSnapshot(runnersValue reflect.Value) []dto.RunnerStatusDTO {
+	if !runnersValue.IsValid() || runnersValue.Kind() != reflect.Slice {
+		return nil
+	}
+	runners := make([]dto.RunnerStatusDTO, 0, runnersValue.Len())
+	for i := 0; i < runnersValue.Len(); i++ {
+		runner := runnersValue.Index(i)
+		runners = append(runners, dto.RunnerStatusDTO{
+			Name:    stringField(runner, "Name"),
+			Running: boolField(runner, "Running"),
+			Tier:    intField(runner, "Tier"),
+		})
+	}
+	return runners
+}
+
+func stringField(value reflect.Value, name string) string {
+	field := exportedField(value, name)
+	if !field.IsValid() || field.Kind() != reflect.String {
+		return ""
+	}
+	return field.String()
+}
+
+func intField(value reflect.Value, name string) int {
+	field := exportedField(value, name)
+	if !field.IsValid() {
+		return 0
+	}
+	switch field.Kind() {
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		return int(field.Int())
+	default:
+		return 0
+	}
+}
+
+func boolField(value reflect.Value, name string) bool {
+	field := exportedField(value, name)
+	if !field.IsValid() || field.Kind() != reflect.Bool {
+		return false
+	}
+	return field.Bool()
+}
+
+func exportedField(value reflect.Value, name string) reflect.Value {
+	if value.Kind() == reflect.Pointer {
+		if value.IsNil() {
+			return reflect.Value{}
+		}
+		value = value.Elem()
+	}
+	if value.Kind() != reflect.Struct {
+		return reflect.Value{}
+	}
+	return value.FieldByName(name)
 }
 
 func coreRBACEnabled(deps RouterDeps, authCfg auth.MiddlewareConfig) bool {

@@ -7,6 +7,7 @@ import (
 
 	gonostr "github.com/nbd-wtf/go-nostr"
 	nostradapter "github.com/openagentsinc/bahia/internal/adapters/nostr"
+	"github.com/openagentsinc/bahia/internal/repository"
 	"go.uber.org/zap"
 )
 
@@ -80,6 +81,37 @@ func TestReactorFallsBackToNowWhenPlannerReturnsNil(t *testing.T) {
 	after := gonostr.Now()
 	if got < before || got > after {
 		t.Fatalf("expected fallback cursor between %v and %v, got %v", before, after, got)
+	}
+}
+
+func TestSubscriberAndReactorDefaultSubscriptionsDoNotOverlap(t *testing.T) {
+	reactorKinds := requestSubscriptionKinds()
+	for _, kind := range nostradapter.DefaultInboundKinds {
+		for _, reactorKind := range reactorKinds {
+			if kind == reactorKind {
+				t.Fatalf("subscriber default kind %d duplicates reactor subscription kinds", kind)
+			}
+		}
+	}
+}
+
+func TestReactorAuditsAcceptedInboundEventToRepository(t *testing.T) {
+	ctx := context.Background()
+	repo := repository.NewInMemoryNostrEventRepository()
+	r := NewReactor(Config{}, nil, nostradapter.NewRelayPool(nil, zap.NewNop()), nil, zap.NewNop(), WithNostrEventRepository(repo))
+	event := signedControlPlaneTestEvent(t, KindDNSZoneCreateRequest)
+
+	r.handleEvent(ctx, event)
+
+	rec, err := repo.GetByID(ctx, event.ID)
+	if err != nil {
+		t.Fatalf("get audit record: %v", err)
+	}
+	if rec == nil {
+		t.Fatal("expected inbound control-plane event to be audited")
+	}
+	if rec.Kind != event.Kind || rec.PubKey != event.PubKey || rec.Content != event.Content || rec.Sig != event.Sig {
+		t.Fatalf("audit record mismatch: got %#v for event %#v", rec, event)
 	}
 }
 

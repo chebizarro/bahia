@@ -118,19 +118,32 @@ func (r *memoryNostrEventRepo) latestCreatedAt(kinds []int, authors []string) *t
 	return latest
 }
 
-func TestDefaultInboundKindsIncludesCanonicalControlPlaneNamespace(t *testing.T) {
+func TestDefaultInboundKindsContainsOnlyOperationalNonReactorStreams(t *testing.T) {
 	expected := []int{
-		5961, 5962, 5963, 5964, 5965, 5966, 5967, 5968,
-		5971, 5972, 5973, 5974, 5975, 5976, 5978, 5979,
-		5981, 5982, 5983, 5984, 5985, 5986, 5987, 5988, 5989,
-		38390, 38391, 38392, 38393, 38394,
-		5991, 5992, 5993, 5994, 5995, 5996,
-		7977,
-		KindAssistantPromptRequest, KindAssistantApproval,
+		KindHiveCIWorkflowRun,
+		KindHiveCIWorkflowResult,
+		KindLoomWorkerAdvertisement,
+		KindLoomJobStatusUpdate,
+		KindLoomJobResult,
+		KindLoomJobCancellation,
+		KindLegacyWorkerState,
+		KindLegacyWorkerAssignmentState,
+		KindLegacyWorkerDrainStatus,
+		KindLegacyWorkerEligibilityPreview,
+		KindWorkerState,
+		KindWorkerAssignmentState,
+		KindWorkerDrainStatus,
+		KindWorkerEligibilityPreview,
+		KindAssistantSession,
+		KindAssistantStatus,
+		KindAssistantResult,
 	}
 	for _, kind := range expected {
-		require.Contains(t, DefaultInboundKinds, kind, "canonical control-plane request kind %d must be audited by the generic subscriber", kind)
-		require.True(t, isCanonicalControlPlaneRequest(kind), "kind %d must be treated as canonical control-plane traffic", kind)
+		require.Contains(t, DefaultInboundKinds, kind)
+	}
+	for _, kind := range DefaultInboundKinds {
+		require.False(t, isCanonicalControlPlaneRequest(kind), "subscriber default kind %d must not duplicate reactor-owned control-plane traffic", kind)
+		require.False(t, kind >= 31100 && kind <= 31105, "subscriber default kind %d must not include deprecated command traffic", kind)
 	}
 }
 

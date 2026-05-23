@@ -15,37 +15,36 @@ import (
 // Inbound event kinds the subscriber listens for.
 //
 // Protocol boundary:
-//   - 5401/5402 are the Hive CI workflow events Bahia consumes.
-//   - 5100 is the Loom job request Bahia publishes later when dispatching work.
+//   - Control-plane request/response kinds are owned and audited by the reactor.
+//   - The subscriber tracks non-reactor operational streams: worker catalog updates,
+//     Hive-CI/Loom events, and assistant relay status/result events.
 //   - Legacy NIP-90 kind 5900 belongs to the old upstream dvm-cicd-runner path and is
 //     not part of this subscriber contract.
 var DefaultInboundKinds = []int{
 	// Hive-CI protocol kinds.
-	5401, // Hive-CI workflow run
-	5402, // Hive-CI workflow result
+	KindHiveCIWorkflowRun,
+	KindHiveCIWorkflowResult,
 
 	// Loom protocol kinds.
-	10100, // Worker Advertisement
-	30100, // Job Status Update
-	5101,  // Job Result
-	5102,  // Job Cancellation
+	KindLoomWorkerAdvertisement,
+	KindLoomJobStatusUpdate,
+	KindLoomJobResult,
+	KindLoomJobCancellation,
 
-	// Bahia command kinds (31100-31105) — registered by Phase 1 command definitions.
-	31100, 31101, 31102, 31103, 31104, 31105,
+	// Worker catalog/read-model updates accepted during the mixed-version window.
+	KindLegacyWorkerState,
+	KindLegacyWorkerAssignmentState,
+	KindLegacyWorkerDrainStatus,
+	KindLegacyWorkerEligibilityPreview,
+	KindWorkerState,
+	KindWorkerAssignmentState,
+	KindWorkerDrainStatus,
+	KindWorkerEligibilityPreview,
 
-	// Canonical Bahia control-plane request kinds. These are audited here only;
-	// the controlplane.Reactor remains the handler of record.
-	5961, 5962, 5963, 5964, 5965, 5966, 5967, 5968,
-	5971, 5972, 5973, 5974, 5975,
-	5976,       // Tool provisioning request
-	7977,       // Tool approval response
-	5978, 5979, // Adoption scan/import requests
-	5981, 5982, 5983, 5984, 5985, 5986, 5987, 5988, 5989,
-	38390, 38391, 38392, 38393, 38394,
-	5991, 5992, 5993, 5994, 5995, 5996,
-
-	// Operator assistant prompt/approval requests.
-	38420, 38421,
+	// Operator assistant relay events not handled by the reactor.
+	KindAssistantSession,
+	KindAssistantStatus,
+	KindAssistantResult,
 }
 
 // EventHandler is called for each inbound event after persistence.
@@ -344,10 +343,6 @@ func (s *Subscriber) handleEvent(ctx context.Context, ev *nostr.Event) {
 		zap.Int("kind", ev.Kind),
 		zap.String("pubkey", ev.PubKey),
 	)
-
-	if isCanonicalControlPlaneRequest(ev.Kind) {
-		return
-	}
 
 	// Invoke handlers - only for non-duplicate events.
 	for _, h := range s.handlers {

@@ -9,6 +9,80 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestBahiaIdentitySerializationRoundTrip(t *testing.T) {
+	payload := BahiaIdentityPayload{
+		Version:        "v0.9.0",
+		CatalogVersion: KindCatalogVersion,
+		Mode:           "degraded",
+		StartedAt:      1779559200,
+	}
+
+	event := EncodeBahiaIdentity(payload, "bahia-instance-1")
+	require.Equal(t, KindBahiaIdentityDefinition, event.Kind)
+	require.Equal(t, "bahia-instance-1", continuityTagValue(event.Tags, "d"))
+	require.ElementsMatch(t, []string{"bahia", "bahia-identity"}, continuityTagValues(event.Tags, "t"))
+	require.NotEmpty(t, event.Content)
+
+	decoded, err := DecodeBahiaIdentity(&event)
+	require.NoError(t, err)
+	require.Equal(t, payload, *decoded)
+}
+
+func TestReplayCheckpointSerializationRoundTrip(t *testing.T) {
+	payload := ReplayCheckpointPayload{
+		CatalogVersion: KindCatalogVersion,
+		Cursors: map[string]int64{
+			"continuity_snapshot": 1779559300,
+			"worker_snapshot":     1779559400,
+		},
+		Phase: "live_catchup",
+	}
+
+	event := EncodeReplayCheckpoint(payload, "bahia-instance-1")
+	require.Equal(t, KindBahiaReplayCheckpoint, event.Kind)
+	require.Equal(t, "bahia-instance-1", continuityTagValue(event.Tags, "d"))
+	require.ElementsMatch(t, []string{"bahia", "bahia-replay-checkpoint"}, continuityTagValues(event.Tags, "t"))
+	require.NotEmpty(t, event.Content)
+
+	decoded, err := DecodeReplayCheckpoint(&event)
+	require.NoError(t, err)
+	require.Equal(t, payload, *decoded)
+}
+
+func TestReadinessStatusSerializationRoundTrip(t *testing.T) {
+	payload := ReadinessStatusPayload{
+		Phase:         "ready",
+		ActiveTier:    2,
+		RequestedTier: 3,
+		Ready:         false,
+		Checks: map[string]string{
+			"relay_quorum":              "ok",
+			"extended_projection_cache": "degraded",
+		},
+	}
+
+	event := EncodeReadinessStatus(payload, "bahia-instance-1")
+	require.Equal(t, KindBahiaReadinessStatus, event.Kind)
+	require.Equal(t, "bahia-instance-1", continuityTagValue(event.Tags, "d"))
+	require.ElementsMatch(t, []string{"bahia", "bahia-readiness"}, continuityTagValues(event.Tags, "t"))
+	require.NotEmpty(t, event.Content)
+
+	decoded, err := DecodeReadinessStatus(&event)
+	require.NoError(t, err)
+	require.Equal(t, payload, *decoded)
+}
+
+func TestBahiaSystemDecodeRejectsWrongKindAndMissingDTag(t *testing.T) {
+	event := EncodeBahiaIdentity(BahiaIdentityPayload{Version: "v0.9.0"}, "bahia-instance-1")
+	event.Kind = KindBahiaReplayCheckpoint
+	_, err := DecodeBahiaIdentity(&event)
+	require.ErrorContains(t, err, "unexpected Bahia identity kind")
+
+	event = EncodeBahiaIdentity(BahiaIdentityPayload{Version: "v0.9.0"}, "")
+	_, err = DecodeBahiaIdentity(&event)
+	require.ErrorContains(t, err, "d tag is required")
+}
+
 func TestContinuityProfileSerializationUsesProfileTagBlocks(t *testing.T) {
 	profile := domain.ServiceContinuityProfile{
 		ServiceKey:          "svc.api",

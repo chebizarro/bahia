@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	gonostr "github.com/nbd-wtf/go-nostr"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 )
 
 func newTestSubscription() *gonostr.Subscription {
@@ -137,4 +139,73 @@ func TestMergeRelaySubscriptionsPreservesRelayClosedReasonAfterEventsClose(t *te
 	closed := <-merged.Closed
 	require.Equal(t, "wss://relay.example", closed.RelayURL)
 	require.Equal(t, "auth-required: sign in first", closed.Reason)
+}
+
+func TestRelayPool_ConnectedCount(t *testing.T) {
+	pool := newRelayPoolWithManagedRelays("wss://relay-one.example", "wss://relay-two.example", "wss://relay-three.example")
+	pool.relays["wss://relay-one.example"].connected = true
+	pool.relays["wss://relay-three.example"].connected = true
+	pool.health.GetOrCreate("wss://relay-one.example").SetConnected(true)
+	pool.health.GetOrCreate("wss://relay-three.example").SetConnected(true)
+
+	require.Equal(t, 2, pool.ConnectedCount())
+}
+
+func TestRelayPool_HealthyCount(t *testing.T) {
+	pool := newRelayPoolWithManagedRelays("wss://healthy.example", "wss://unhealthy.example", "wss://disconnected.example")
+
+	healthy := pool.health.GetOrCreate("wss://healthy.example")
+	healthy.SetConnected(true)
+	healthy.RecordPublishSuccess(10 * time.Millisecond)
+	pool.relays["wss://healthy.example"].connected = true
+
+	unhealthy := pool.health.GetOrCreate("wss://unhealthy.example")
+	unhealthy.SetConnected(true)
+	for i := 0; i < 10; i++ {
+		unhealthy.RecordPublishFailure("relay rejected event")
+	}
+	pool.relays["wss://unhealthy.example"].connected = true
+
+	require.Equal(t, 1, pool.HealthyCount())
+}
+
+func TestRelayPool_HealthSnapshotReturnsPerRelayStatus(t *testing.T) {
+	pool := newRelayPoolWithManagedRelays("wss://relay-one.example", "wss://relay-two.example")
+
+	relayOne := pool.health.GetOrCreate("wss://relay-one.example")
+	relayOne.SetConnected(true)
+	relayOne.RecordPublishSuccess(25 * time.Millisecond)
+	pool.relays["wss://relay-one.example"].connected = true
+
+	relayTwo := pool.health.GetOrCreate("wss://relay-two.example")
+	relayTwo.SetConnected(false)
+	relayTwo.RecordError("dial tcp: connection refused")
+
+	snapshot := pool.HealthSnapshot()
+	require.Equal(t, 2, snapshot.Total)
+	require.Equal(t, 1, snapshot.Connected)
+	require.Equal(t, 1, snapshot.Healthy)
+	require.Len(t, snapshot.Relays, 2)
+
+	statuses := make(map[string]RelayStatus, len(snapshot.Relays))
+	for _, relay := range snapshot.Relays {
+		statuses[relay.URL] = relay
+	}
+
+	require.True(t, statuses["wss://relay-one.example"].Connected)
+	require.True(t, statuses["wss://relay-one.example"].Healthy)
+	require.False(t, statuses["wss://relay-one.example"].LastSeen.IsZero())
+	require.Equal(t, 0, statuses["wss://relay-one.example"].Errors)
+
+	require.False(t, statuses["wss://relay-two.example"].Connected)
+	require.False(t, statuses["wss://relay-two.example"].Healthy)
+	require.Equal(t, 1, statuses["wss://relay-two.example"].Errors)
+}
+
+func newRelayPoolWithManagedRelays(urls ...string) *RelayPool {
+	pool := NewRelayPool(urls, zap.NewNop())
+	for _, url := range urls {
+		pool.relays[url] = &managedRelay{url: url}
+	}
+	return pool
 }

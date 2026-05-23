@@ -20,6 +20,7 @@ type RelayPool struct {
 	mu             sync.RWMutex
 	relays         map[string]*managedRelay
 	relayInfoCache map[string]*nip11.RelayInformationDocument // NIP-11 info cache
+	health         *RelayHealthTracker
 	urls           []string
 	logger         *zap.Logger
 	ctx            context.Context
@@ -52,10 +53,14 @@ func NewRelayPool(urls []string, logger *zap.Logger, opts ...RelayPoolOption) *R
 	p := &RelayPool{
 		relays:         make(map[string]*managedRelay),
 		relayInfoCache: make(map[string]*nip11.RelayInformationDocument),
+		health:         NewRelayHealthTracker(),
 		urls:           urls,
 		logger:         logger,
 		ctx:            ctx,
 		cancel:         cancel,
+	}
+	for _, url := range urls {
+		p.health.GetOrCreate(url)
 	}
 	for _, opt := range opts {
 		opt(p)
@@ -94,6 +99,8 @@ func (p *RelayPool) connectOne(ctx context.Context, mr *managedRelay) {
 	if err != nil {
 		mr.connected = false
 		mr.lastErr = err
+		p.recordRelayConnectionState(mr.url, false)
+		p.recordRelayError(mr.url, err.Error())
 		p.logger.Warn("failed to connect to relay", zap.String("relay", mr.url), zap.Error(err))
 		return
 	}
@@ -101,6 +108,7 @@ func (p *RelayPool) connectOne(ctx context.Context, mr *managedRelay) {
 	mr.relay = relay
 	mr.connected = true
 	mr.lastErr = nil
+	p.recordRelayConnectionState(mr.url, true)
 	p.logger.Debug("connected to relay", zap.String("relay", mr.url))
 }
 
@@ -184,6 +192,7 @@ func (p *RelayPool) publishToRelayWithResult(ctx context.Context, mr *managedRel
 
 	// Reconnect if needed.
 	if !mr.connected || mr.relay == nil {
+		p.recordRelayReconnect(mr.url)
 		connectCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
 		opts := p.buildRelayOptions(mr.url)
@@ -191,18 +200,23 @@ func (p *RelayPool) publishToRelayWithResult(ctx context.Context, mr *managedRel
 		if err != nil {
 			mr.connected = false
 			mr.lastErr = err
+			p.recordRelayConnectionState(mr.url, false)
+			p.recordRelayError(mr.url, err.Error())
 			result.Error = fmt.Errorf("reconnecting to %s: %w", mr.url, err)
 			return result
 		}
 		mr.relay = relay
 		mr.connected = true
 		mr.lastErr = nil
+		p.recordRelayConnectionState(mr.url, true)
 	}
 
+	startedAt := time.Now()
 	err := mr.relay.Publish(ctx, ev)
 	if err != nil {
 		if reason, ok := publishRejectionReason(err); ok {
 			result.Reason = reason
+			p.recordRelayPublishFailure(mr.url, reason)
 			p.logPublishRejection(mr.url, ev.ID, reason)
 			return result
 		}
@@ -210,6 +224,8 @@ func (p *RelayPool) publishToRelayWithResult(ctx context.Context, mr *managedRel
 		// Transport/connection error - mark as disconnected.
 		mr.connected = false
 		mr.lastErr = err
+		p.recordRelayConnectionState(mr.url, false)
+		p.recordRelayPublishFailure(mr.url, err.Error())
 		p.logger.Warn("publish failed (transport error), marking relay disconnected",
 			zap.String("relay", mr.url),
 			zap.String("event_id", ev.ID),
@@ -220,6 +236,8 @@ func (p *RelayPool) publishToRelayWithResult(ctx context.Context, mr *managedRel
 	}
 
 	// Success - relay accepted the event.
+	p.recordRelayPublishSuccess(mr.url, time.Since(startedAt))
+	p.recordRelayConnectionState(mr.url, true)
 	p.logger.Debug("event accepted by relay",
 		zap.String("relay", mr.url),
 		zap.String("event_id", ev.ID),
@@ -361,6 +379,7 @@ func (p *RelayPool) Subscribe(ctx context.Context, filters []nostr.Filter) (*nos
 	for _, mr := range p.relays {
 		mr.mu.Lock()
 		if !mr.connected || mr.relay == nil {
+			p.recordRelayReconnect(mr.url)
 			connectCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 			opts := p.buildRelayOptions(mr.url)
 			relay, err := nostr.RelayConnect(connectCtx, mr.url, opts)
@@ -368,20 +387,27 @@ func (p *RelayPool) Subscribe(ctx context.Context, filters []nostr.Filter) (*nos
 			if err != nil {
 				mr.connected = false
 				mr.lastErr = err
+				p.recordRelayConnectionState(mr.url, false)
+				p.recordRelayError(mr.url, err.Error())
 				mr.mu.Unlock()
 				continue
 			}
 			mr.relay = relay
 			mr.connected = true
 			mr.lastErr = nil
+			p.recordRelayConnectionState(mr.url, true)
 		}
 
 		sub, err := mr.relay.Subscribe(ctx, filters)
+		if err != nil {
+			p.recordRelayError(mr.url, err.Error())
+		}
 		mr.mu.Unlock()
 		if err != nil {
 			p.logger.Warn("subscription failed", zap.String("relay", mr.url), zap.Error(err))
 			continue
 		}
+		p.recordRelayConnectionState(mr.url, true)
 		return sub, nil
 	}
 
@@ -450,23 +476,34 @@ func (p *RelayPool) SubscribeAllWithEOSE(ctx context.Context, filters []nostr.Fi
 	for _, mr := range p.relays {
 		mr.mu.Lock()
 		if !mr.connected || mr.relay == nil {
+			p.recordRelayReconnect(mr.url)
 			connectCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 			opts := p.buildRelayOptions(mr.url)
 			relay, err := nostr.RelayConnect(connectCtx, mr.url, opts)
 			cancel()
 			if err != nil {
+				mr.connected = false
+				mr.lastErr = err
+				p.recordRelayConnectionState(mr.url, false)
+				p.recordRelayError(mr.url, err.Error())
 				mr.mu.Unlock()
 				continue
 			}
 			mr.relay = relay
 			mr.connected = true
+			mr.lastErr = nil
+			p.recordRelayConnectionState(mr.url, true)
 		}
 
 		sub, err := mr.relay.Subscribe(subCtx, filters)
+		if err != nil {
+			p.recordRelayError(mr.url, err.Error())
+		}
 		mr.mu.Unlock()
 		if err != nil {
 			continue
 		}
+		p.recordRelayConnectionState(mr.url, true)
 
 		subs = append(subs, relaySubscription{relayURL: mr.url, sub: sub})
 	}
@@ -632,6 +669,114 @@ func subscriptionID(sub *nostr.Subscription) string {
 		return ""
 	}
 	return sub.GetID()
+}
+
+// RelayHealthSnapshot summarizes relay connectivity and health state.
+type RelayHealthSnapshot struct {
+	Total     int
+	Connected int
+	Healthy   int
+	Relays    []RelayStatus
+}
+
+// RelayStatus describes the current status of a single relay.
+type RelayStatus struct {
+	URL       string
+	Connected bool
+	Healthy   bool
+	LastSeen  time.Time
+	Errors    int
+}
+
+// HealthSnapshot returns a point-in-time summary of configured relay state.
+func (p *RelayPool) HealthSnapshot() RelayHealthSnapshot {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+
+	snapshot := RelayHealthSnapshot{Relays: make([]RelayStatus, 0, len(p.urls)+len(p.relays))}
+	seen := make(map[string]struct{}, len(p.urls)+len(p.relays))
+	addStatus := func(url string, connected bool) {
+		if _, ok := seen[url]; ok {
+			return
+		}
+		seen[url] = struct{}{}
+
+		status := RelayStatus{URL: url, Connected: connected}
+		if p.health != nil {
+			stats := p.health.GetOrCreate(url).Stats()
+			status.Connected = connected || stats.Connected
+			status.Healthy = status.Connected && stats.IsHealthy()
+			status.LastSeen = stats.LastConnected
+			status.Errors = int(stats.ErrorCount)
+		} else {
+			status.Healthy = connected
+		}
+
+		snapshot.Total++
+		if status.Connected {
+			snapshot.Connected++
+		}
+		if status.Healthy {
+			snapshot.Healthy++
+		}
+		snapshot.Relays = append(snapshot.Relays, status)
+	}
+
+	for _, mr := range p.orderedRelaysLocked() {
+		mr.mu.Lock()
+		connected := mr.connected
+		mr.mu.Unlock()
+		addStatus(mr.url, connected)
+	}
+	for _, url := range p.urls {
+		addStatus(url, false)
+	}
+	return snapshot
+}
+
+// ConnectedCount returns the number of relays currently marked connected.
+func (p *RelayPool) ConnectedCount() int {
+	return p.HealthSnapshot().Connected
+}
+
+// HealthyCount returns the number of relays currently considered healthy.
+func (p *RelayPool) HealthyCount() int {
+	return p.HealthSnapshot().Healthy
+}
+
+func (p *RelayPool) recordRelayConnectionState(relayURL string, connected bool) {
+	if p.health == nil {
+		return
+	}
+	p.health.GetOrCreate(relayURL).SetConnected(connected)
+}
+
+func (p *RelayPool) recordRelayReconnect(relayURL string) {
+	if p.health == nil {
+		return
+	}
+	p.health.GetOrCreate(relayURL).RecordReconnect()
+}
+
+func (p *RelayPool) recordRelayPublishSuccess(relayURL string, latency time.Duration) {
+	if p.health == nil {
+		return
+	}
+	p.health.GetOrCreate(relayURL).RecordPublishSuccess(latency)
+}
+
+func (p *RelayPool) recordRelayPublishFailure(relayURL, reason string) {
+	if p.health == nil {
+		return
+	}
+	p.health.GetOrCreate(relayURL).RecordPublishFailure(reason)
+}
+
+func (p *RelayPool) recordRelayError(relayURL, reason string) {
+	if p.health == nil {
+		return
+	}
+	p.health.GetOrCreate(relayURL).RecordError(reason)
 }
 
 // URLs returns the list of configured relay URLs.
@@ -830,6 +975,7 @@ func (p *RelayPool) Close() {
 			mr.relay.Close()
 		}
 		mr.connected = false
+		p.recordRelayConnectionState(mr.url, false)
 		mr.mu.Unlock()
 	}
 }

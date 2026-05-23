@@ -17,6 +17,7 @@ type RelayHealth struct {
 	PublishSuccess  int64
 	PublishFailed   int64
 	Reconnects      int64
+	ErrorCount      int64
 
 	// Recent errors
 	LastError     string
@@ -59,6 +60,19 @@ func (h *RelayHealth) RecordPublishFailure(reason string) {
 
 	h.PublishAttempts++
 	h.PublishFailed++
+	h.recordErrorLocked(reason)
+}
+
+// RecordError records a non-publish relay error.
+func (h *RelayHealth) RecordError(reason string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	h.recordErrorLocked(reason)
+}
+
+func (h *RelayHealth) recordErrorLocked(reason string) {
+	h.ErrorCount++
 	h.LastError = reason
 	h.LastErrorTime = time.Now()
 }
@@ -150,6 +164,7 @@ func (h *RelayHealth) Stats() RelayHealthStats {
 		PublishSuccess:  h.PublishSuccess,
 		PublishFailed:   h.PublishFailed,
 		Reconnects:      h.Reconnects,
+		ErrorCount:      h.ErrorCount,
 		LastError:       h.LastError,
 		LastErrorTime:   h.LastErrorTime,
 		LastConnected:   h.LastConnected,
@@ -181,6 +196,7 @@ type RelayHealthStats struct {
 	PublishFailed     int64
 	SuccessRate       float64 // 0.0 to 1.0
 	Reconnects        int64
+	ErrorCount        int64
 	AvgLatencySeconds float64
 	LastError         string
 	LastErrorTime     time.Time

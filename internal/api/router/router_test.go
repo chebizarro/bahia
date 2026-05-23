@@ -16,6 +16,7 @@ import (
 	"github.com/nbd-wtf/go-nostr"
 	"github.com/openagentsinc/bahia/internal/api/handlers"
 	"github.com/openagentsinc/bahia/internal/api/router"
+	"github.com/openagentsinc/bahia/internal/app"
 	"github.com/openagentsinc/bahia/internal/auth"
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/domain"
@@ -433,13 +434,23 @@ func (m *rbacMemberLookup) ListByPubkey(_ context.Context, pubkey string) ([]dom
 }
 
 func newTestServer() *httptest.Server {
-	registry := service.NewRegistryService(
+	registry := newTestRegistryService()
+	handler := router.New(registry, zap.NewNop(), config.CORSConfig{AllowedOrigins: []string{"*"}}, nil)
+	return httptest.NewServer(handler)
+}
+
+func newHealthTestServer(healthProvider *app.HealthProvider) *httptest.Server {
+	registry := newTestRegistryService()
+	handler := router.NewWithDeps(registry, zap.NewNop(), config.CORSConfig{AllowedOrigins: []string{"*"}}, nil, router.RouterDeps{HealthProvider: healthProvider})
+	return httptest.NewServer(handler)
+}
+
+func newTestRegistryService() *service.RegistryService {
+	return service.NewRegistryService(
 		newMockServiceRepo(), newMockEnvRepo(), newMockBuildRepo(), newMockArtifactRepo(),
 		newMockIntentRepo(), newMockRunRepo(), newMockObsRepo(), newMockStateRepo(),
 		nil, &events.NoopPublisher{}, zap.NewNop(),
 	)
-	handler := router.New(registry, zap.NewNop(), config.CORSConfig{AllowedOrigins: []string{"*"}}, nil)
-	return httptest.NewServer(handler)
 }
 
 func doJSON(t *testing.T, method, url string, body any) (*http.Response, map[string]any) {
@@ -583,28 +594,62 @@ func TestRouter_ConfiguredNIP98AuthAllowsProtectedRoutesWithoutJWT(t *testing.T)
 }
 
 func TestHealth(t *testing.T) {
-	srv := newTestServer()
+	healthProvider := app.NewHealthProvider(app.NewModePolicy(app.ModeDegraded), nil)
+	srv := newHealthTestServer(healthProvider)
 	defer srv.Close()
 
 	resp, body := doJSON(t, "GET", srv.URL+"/health", nil)
-	if resp.StatusCode != 200 {
+	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("expected 200, got %d", resp.StatusCode)
 	}
-	if body["status"] != "ok" {
-		t.Errorf("expected status ok, got %v", body["status"])
+	if body["status"] != "healthy" {
+		t.Errorf("expected status healthy, got %v", body["status"])
+	}
+	if body["mode"] != "degraded" {
+		t.Errorf("expected mode degraded, got %v", body["mode"])
+	}
+	if body["requested_tier"] != float64(2) || body["active_tier"] != float64(2) {
+		t.Errorf("expected requested/active tier 2, got %v/%v", body["requested_tier"], body["active_tier"])
 	}
 }
 
 func TestReady(t *testing.T) {
-	srv := newTestServer()
+	healthProvider := app.NewHealthProvider(app.NewModePolicy(app.ModeEmergency), nil)
+	srv := newHealthTestServer(healthProvider)
 	defer srv.Close()
 
 	resp, body := doJSON(t, "GET", srv.URL+"/ready", nil)
-	if resp.StatusCode != 200 {
+	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("expected 200, got %d", resp.StatusCode)
 	}
-	if body["status"] != "ready" {
-		t.Errorf("expected status ready, got %v", body["status"])
+	if body["ready"] != true {
+		t.Errorf("expected ready true, got %v", body["ready"])
+	}
+	if body["mode"] != "emergency" {
+		t.Errorf("expected mode emergency, got %v", body["mode"])
+	}
+	if body["requested_tier"] != float64(1) || body["active_tier"] != float64(1) {
+		t.Errorf("expected requested/active tier 1, got %v/%v", body["requested_tier"], body["active_tier"])
+	}
+}
+
+func TestReadyReturnsServiceUnavailableWhenReadinessCheckFails(t *testing.T) {
+	healthProvider := app.NewHealthProvider(app.NewModePolicy(app.ModeEmergency), nil)
+	healthProvider.RegisterCheck("continuity_runtime", int(app.Tier1), func() app.HealthCheck {
+		return app.HealthCheck{Name: "continuity_runtime", Status: app.HealthStatusFail, Message: "not running", Tier: int(app.Tier1)}
+	})
+	srv := newHealthTestServer(healthProvider)
+	defer srv.Close()
+
+	resp, body := doJSON(t, "GET", srv.URL+"/ready", nil)
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503, got %d", resp.StatusCode)
+	}
+	if body["ready"] != false {
+		t.Errorf("expected ready false, got %v", body["ready"])
+	}
+	if body["status"] != "unhealthy" {
+		t.Errorf("expected status unhealthy, got %v", body["status"])
 	}
 }
 

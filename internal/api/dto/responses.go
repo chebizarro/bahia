@@ -21,12 +21,6 @@ type ListResponse struct {
 	Offset int `json:"offset"`
 }
 
-// HealthResponse represents the health check response.
-type HealthResponse struct {
-	Status  string `json:"status"`
-	Version string `json:"version,omitempty"`
-}
-
 // AdoptionTargetResponse identifies one scanned/imported Docker host.
 type AdoptionTargetResponse struct {
 	Name            string `json:"name"`
