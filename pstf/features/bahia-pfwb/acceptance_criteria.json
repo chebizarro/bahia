@@ -1,0 +1,40 @@
+{
+  "feature_id": "bahia-pfwb",
+  "criteria": [
+    {
+      "id": "AC1",
+      "description": "The summary header shows worker identity, full pubkey, separate liveness and scheduling badges, and state-aware cordon/drain/maintenance quick actions.",
+      "evidence": ["web/src/routes/workers/[pubkey]/+page.svelte renders summary-pubkey, liveness-* badge, scheduling-* badge, and QUICK_ACTIONS buttons backed by worker command request kinds 5997-6002."]
+    },
+    {
+      "id": "AC2",
+      "description": "The scheduling section explains scheduling state, note/reason, queue depth, max concurrency, accepting-new-work status, and drain blockers.",
+      "evidence": ["schedulingRows includes scheduling state, note/reason, current_queue_depth, max_concurrent_jobs, accepting new work, remaining assignments, and pinned drain blockers."]
+    },
+    {
+      "id": "AC3",
+      "description": "The capabilities section renders workload kinds, runtimes, toolchains, artifact formats, accelerators, features, and cached artifacts from current worker capability fields.",
+      "evidence": ["capabilityRows combines worker.capabilities and worker.ml_capabilities through guarded helper functions."]
+    },
+    {
+      "id": "AC4",
+      "description": "The resources section renders CPU, memory, disk, GPU/accelerator count, accelerator memory, architecture, and accelerator inventory.",
+      "evidence": ["resourceRows derives host resources and aggregate accelerator values, while acceleratorData renders the accelerator inventory table."]
+    },
+    {
+      "id": "AC5",
+      "description": "The labels and placement section displays labels, example selectors, copy selector actions, and an edit labels action that publishes a Nostr worker label update command.",
+      "evidence": ["workerLabelEntries renders label chips, selectorRows renders worker and label selectors, copySelector uses the Clipboard API, and LABEL_ACTION publishes kind 6003 through publishCommand."]
+    },
+    {
+      "id": "AC6",
+      "description": "The active assignments section renders current assignments when present and identifies movable, pinned, and drain-blocking assignments.",
+      "evidence": ["activeAssignments reads assignment-state fields, assignmentRows derives Movement and Drain columns, and drainBlockerData renders a warning panel for pinned or non-movable blockers."]
+    },
+    {
+      "id": "AC7",
+      "description": "The pricing section renders advertised pricing tiers using current domain.Worker pricing fields.",
+      "evidence": ["pricingData maps worker.pricing tiers to mint URL, price/sec, and hourly estimate rows."]
+    }
+  ]
+}

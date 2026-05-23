@@ -1,0 +1,23 @@
+{
+  "feature_id": "bahia-pfwb",
+  "title": "Worker detail operator page with scheduling, placement, assignments, and actions",
+  "date": "2026-05-23",
+  "source_plan": "docs/plans/bahia-worker-management-nostr-native-2026-05-22.md",
+  "beads": ["bahia-pfwb"],
+  "intended_behavior": [
+    "The worker detail page presents the worker name, full pubkey, separate liveness and scheduling badges, and state-aware quick actions for cordon, uncordon, drain, undrain, maintenance enter, and maintenance exit.",
+    "The scheduling section shows scheduling state, scheduling note or drain reason, queue depth, max concurrency, accepting-new-work status, drain remaining assignment count, and pinned blocker count.",
+    "The capabilities and resources sections render generic worker capabilities plus ML capability compatibility fields, host resources, accelerator inventory, and total accelerator memory from the current worker domain shape.",
+    "The labels and placement section renders worker labels, example placement selectors, copy-selector actions, and a labels update action that publishes a worker.labels.update.request command.",
+    "The active assignments section renders assignment read-model fields when present, distinguishes movable versus pinned or blocked work, and highlights drain blockers.",
+    "The pricing section renders advertised worker pricing tiers without depending on stale pseudo-fields."
+  ],
+  "observed_baseline": [
+    "Before this slice, web/src/routes/workers/[pubkey]/+page.svelte showed current domain worker capacity, capabilities, resources, accelerators, software, runtime target, pricing, relays, and timestamps.",
+    "Before this slice, the detail page did not expose scheduling state, labels, assignment/drain read-model fields, or Nostr worker-management command actions."
+  ],
+  "out_of_scope": [
+    "Backend Go code, worker read-model projection implementation, scheduling enforcement, MCP worker tools, workers list page, inference page, and environment pages.",
+    "Fixing the concurrent syntax error in web/src/routes/ml/+page.svelte."
+  ]
+}

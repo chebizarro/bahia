@@ -1,0 +1,26 @@
+{
+  "feature_id": "bahia-pfwb",
+  "test_runs": [
+    {
+      "command": "npm --prefix web run build",
+      "working_directory": ".",
+      "result": "blocked_out_of_scope",
+      "criteria": ["AC1", "AC2", "AC3", "AC4", "AC5", "AC6", "AC7"],
+      "notes": "Vite/Svelte build stopped in web/src/routes/ml/+page.svelte at line 483 due a syntax error in a concurrently edited file outside bahia-pfwb scope. The worker detail page was not reached by the full build before that failure."
+    },
+    {
+      "command": "node -e targeted Svelte compile for web/src/routes/workers/[pubkey]/+page.svelte",
+      "working_directory": ".",
+      "result": "passed",
+      "criteria": ["AC1", "AC2", "AC3", "AC4", "AC5", "AC6", "AC7"],
+      "notes": "Targeted Svelte compiler check for the touched worker detail page completed successfully."
+    },
+    {
+      "command": "Oracle review",
+      "working_directory": ".",
+      "result": "passed_after_fixes",
+      "criteria": ["AC1", "AC2", "AC3", "AC5", "AC6"],
+      "notes": "Review identified empty requested_by metadata, missing remaining-assignment fallback, and generic-only feature rendering. Fixes were applied and targeted Svelte compile was rerun successfully."
+    }
+  ]
+}
