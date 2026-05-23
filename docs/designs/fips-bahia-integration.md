@@ -17,6 +17,16 @@ This document analyzes how the two systems can be integrated, identifies concret
 
 The strongest near-term integration is a **read-only Nostr event bridge** — Bahia subscribes to FIPS Kind 37195 overlay adverts to auto-discover mesh nodes, and FIPS nodes subscribe to Bahia Kind 31976 endpoint events to populate their `.fips` host aliases. This requires no protocol changes in either system and leverages the shared Nostr relay infrastructure both already use.
 
+
+### Implemented operator UX status
+
+The current Bahia operator UX uses this integration surface without inventing a fake mesh state path:
+
+- The web DNS/FIPS dashboard reads DNS and FIPS mesh state from Nostr read models and live subscriptions. DNS endpoint projections and worker/FIPS mesh projections are the observed state; REST read catalogs are not the dashboard substrate.
+- Human DNS actions in the web UI publish signed Nostr DNS control-plane requests and display relay OK, progress, and terminal result events. No REST DNS write endpoints were introduced for the dashboard actions.
+- Agent operators use MCP DNS/FIPS tools and resources for discovery/action entry points, then follow Nostr correlation metadata and read models for async truth.
+- FIPS mesh visibility is derived from Nostr read models and the worker/DNS projection path, not placeholder or synthetic node state.
+
 ---
 
 ## 2. System Inventory

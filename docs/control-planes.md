@@ -64,7 +64,7 @@ This avoids duplicate event loops: Bahia publishes canonical 696x/796x/3196x/rea
 
 ## Nostr Control Plane
 
-The Nostr reactor subscribes to signed request events and publishes status, terminal results, and replaceable read models. Service registry operations delegate to `RegistryService`; adoption scan/import delegates to `AdoptionService`; direct-runtime `deploy|restart|stop` delegates to `RuntimeLifecycleService`; LLM route/release/deploy/approval/rollback operations delegate to `LLMRegistryService`. LLM deploy, adoption/import, and direct-runtime actions are Nostr-first async actions; REST is only a narrowed registry/query/compatibility surface.
+The Nostr reactor subscribes to signed request events and publishes status, terminal results, and replaceable read models. Service registry operations delegate to `RegistryService`; adoption scan/import delegates to `AdoptionService`; direct-runtime `deploy|restart|stop` delegates to `RuntimeLifecycleService`; LLM route/release/deploy/approval/rollback operations delegate to `LLMRegistryService`; DNS operator requests delegate to the configured DNS control-plane operator/reconciler. LLM deploy, adoption/import, direct-runtime, and DNS operator actions are Nostr-first async actions; REST is only a narrowed registry/query/compatibility surface.
 
 | Series | Range | Purpose |
 |--------|-------|---------|
@@ -88,8 +88,8 @@ The Nostr reactor subscribes to signed request events and publishes status, term
 | Backup attestations | 31310–31311 | Signed backup run and verification attestations |
 | Backup read models | 31991–31999 | Replaceable backup definition, policy, repository, run, verification, restore, and runtime observation read models |
 | Backup command/results | 38400–38419 | Addressable backup command and terminal result events |
-| DNS read models | 31976 | DNS endpoint catalog projection when `dns.enabled=true` |
-| DNS requests (reserved) | 5941–5945, 6941, 7941–7945 | Reserved DNS operator command/status/result kinds; not accepted by the reactor in Phase 0 |
+| DNS read models | 31975–31978 | DNS zone, endpoint, policy, and backend projections for browser/agent read models when DNS is enabled |
+| DNS command/status/results | 5941–5945, 6941, 7941–7945 | Signed DNS operator command, progress, and terminal result events handled by the Nostr reactor when DNS operator support is configured |
 
 ### Request Events (596x)
 
@@ -122,7 +122,21 @@ The Nostr reactor subscribes to signed request events and publishes status, term
 | 5988 | `PolicyDelete` | Delete a deployment policy |
 | 5989 | `PolicyEvaluate` | Evaluate deployment policies |
 
-Reserved DNS operator request kinds `5941`–`5945` (`DNSZoneCreate`, `DNSPolicyApply`, `DNSRecordOverride`, `DNSDriftRemediate`, `DNSBackendRegister`) are allocated for future DNS orchestration phases. Phase 0 does not subscribe to or accept them in `internal/controlplane/reactor.go`; operators must not treat them as active commands until a later implementation wires request validation and status/result replies.
+DNS operator request kinds `5941`–`5945` (`DNSZoneCreate`, `DNSPolicyApply`, `DNSRecordOverride`, `DNSDriftRemediate`, `DNSBackendRegister`) are signed Nostr control-plane events. `internal/controlplane/reactor.go` subscribes to these kinds and dispatches them to `internal/controlplane/dns_handlers.go` when a DNS operator is configured. Handlers validate authorization and payload shape, invoke the DNS operator/reconciler where supported, and publish `6941` progress plus the matching `7941`–`7945` terminal result. Unsupported or unconfigured operations must produce explicit result events rather than silent fallback behavior.
+
+### DNS/FIPS operator UX
+
+Human browser operators use the DNS dashboard as a Nostr-native console:
+
+- DNS state is read from replaceable read models (`31975` zone state, `31976` endpoint state, `31977` policy state, `31978` backend state) through scoped Nostr subscriptions. The dashboard bootstraps historical state through EOSE-aware queries and keeps subscriptions open for realtime EVENT updates. REST read catalogs are not the dashboard substrate.
+- FIPS mesh state is read through the FIPS mesh store from DNS endpoint read models and worker read models scoped to FIPS mesh tags/families. The UI shows worker/DNS projection state from the relay; it does not synthesize fake mesh nodes.
+- DNS writes are signed Nostr control-plane requests (`5941` zone create/reconcile, `5942` policy apply, `5943` record override, `5944` drift remediate). The browser records the request event id, relay OK accepted/rejected outcomes, `6941` progress events, and terminal `7941`–`7944` result events.
+- No REST DNS write endpoints are part of this UX. REST remains a compatibility/query surface for areas that have not moved to Nostr-native flows.
+
+Agent operators use MCP for synchronous discovery and action entry points while following Nostr truth for async state:
+
+- MCP exposes DNS/FIPS discovery via resources/tools backed by DNS/FIPS projection data, including FIPS mesh node/status resources from mesh DNS projection records.
+- Long-running MCP actions must return Nostr correlation metadata so agents can subscribe to read models/status/results instead of polling REST.
 
 ### Status and Result Events
 
@@ -162,9 +176,12 @@ Reserved DNS operator request kinds `5941`–`5945` (`DNSZoneCreate`, `DNSPolicy
 | 31968 | `DeploymentRunRegistry` | `run_id` | Deployment run registry entry |
 | 31969 | `BuildRegistry` | `build_id` | Build registry entry |
 | 31970 | `PolicyRegistry` | `policy_id` | Policy registry entry |
-| 31976 | `DNSEndpointState` | `endpoint:<family>:<name>:<environment>` or `endpoint:worker:<name>` | DNS endpoint catalog projection derived from healthy service, LLM, ML, and worker state when `dns.enabled=true` |
+| 31975 | `DNSZoneState` | `zone:<zone-name>` | Projected DNS zone definition and SOA/backend metadata when DNS is enabled |
+| 31976 | `DNSEndpointState` | `endpoint:<family>:<name>:<environment>` or `endpoint:worker:<name>` | DNS endpoint catalog projection derived from healthy service, LLM, ML, worker, and FIPS mesh projection state when `dns.enabled=true` |
+| 31977 | `DNSPolicyState` | `dnspolicy:<policy-id>` | Active DNS routing/split-horizon/TTL policy projection |
+| 31978 | `DNSBackendState` | `dnsbackend:<backend-id>` | DNS backend health and sync status projection |
 
-DNS endpoint read models are Bahia-signed replaceable events with `t=dns-endpoint` and `t=bahia`. Deletions are published as tombstone replacements with `deleted=true`; clients should bootstrap with kind `31976`, wait for EOSE, and keep the subscription open for realtime endpoint changes.
+DNS read models are Bahia-signed replaceable events with `t=bahia` and kind-specific type tags such as `t=dns-endpoint`. Deletions are published as tombstone replacements with `deleted=true`; clients should bootstrap with scoped DNS read-model filters, wait for EOSE, and keep subscriptions open for realtime endpoint, zone, policy, backend, and FIPS mesh projection changes.
 
 ### Phase-1 AI/ML Event Namespace
 

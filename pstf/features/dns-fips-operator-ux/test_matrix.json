@@ -1,0 +1,83 @@
+{
+  "feature_id": "dns-fips-operator-ux",
+  "child_verification": [
+    {
+      "bead": "bahia-5l4f",
+      "commands": [
+        "npm run test:unit -- --run tests/unit/dns-controlplane.test.js tests/unit/dns-store-commands.test.js tests/unit/controlplane-requests.test.js",
+        "npm run build"
+      ],
+      "result": "pass per pstf/features/bahia-5l4f/verification_report.md",
+      "coverage": "Web DNS command client publishes signed requests, verifies OK relay outcomes, subscribes for status, awaits terminal result events, and avoids REST writes."
+    },
+    {
+      "bead": "bahia-0jh6",
+      "commands": [
+        "pnpm vitest run --config vitest.config.js tests/unit/fips-mesh-store.test.js",
+        "pnpm vitest run --config vitest.config.js tests/unit/fips-mesh-store.test.js tests/unit/nostr-client-parsing.test.js tests/unit/stores-index.test.js",
+        "pnpm build"
+      ],
+      "result": "pass per pstf/features/bahia-0jh6/verification_report.md",
+      "coverage": "FIPS mesh browser store bootstraps via EOSE-aware queries, subscribes for live events, dedupes replaceable read models, handles tombstones/CLOSED, and does not add REST FIPS state."
+    },
+    {
+      "bead": "bahia-i9v3",
+      "commands": ["go test ./internal/mcp ./internal/api/handlers", "go vet ./internal/mcp ./internal/api/handlers"],
+      "result": "pass per pstf/features/bahia-i9v3/verification_report.md",
+      "coverage": "MCP tools/resources expose FIPS mesh discovery/status from DNS projection records without adding REST endpoints."
+    },
+    {
+      "bead": "bahia-xere",
+      "commands": [
+        "npm run test:unit -- tests/unit/dns-store-commands.test.js tests/unit/dns-store-subscriptions.test.js tests/unit/dns-controlplane.test.js",
+        "npm run build"
+      ],
+      "result": "pass per pstf/features/bahia-xere/verification_report.md",
+      "coverage": "DNS dashboard load paths use Nostr read-model subscriptions with scoped filters, EVENT/EOSE/CLOSED/AUTH handling, and no REST refresh substrate."
+    },
+    {
+      "bead": "bahia-66d4",
+      "commands": ["go test ./pkg/discovery", "go vet ./pkg/discovery"],
+      "result": "pass per pstf/features/bahia-66d4/verification_report.md",
+      "coverage": "Resolver uses shared EOSE/CLOSED-aware subscription path, NIP-11 metadata fetch, and inbound event validation."
+    },
+    {
+      "bead": "bahia-mou1",
+      "commands": [
+        "npm run test:unit -- --run tests/unit/dns-store-subscriptions.test.js tests/unit/dns-store-commands.test.js tests/unit/dns-controlplane.test.js tests/unit/dns-page-model.test.js",
+        "npm run build"
+      ],
+      "result": "pass per pstf/features/bahia-mou1/verification_report.md",
+      "coverage": "DNS web panels dispatch only through Nostr store command APIs and render signer readiness, OK summaries, progress status, terminal result, and errors."
+    },
+    {
+      "bead": "bahia-wprt",
+      "commands": [
+        "npm run test:unit -- tests/unit/fips-mesh-panel.test.js tests/unit/fips-mesh-store.test.js",
+        "npm run build"
+      ],
+      "result": "pass per pstf/features/bahia-wprt/verification_report.md",
+      "coverage": "FIPS mesh dashboard tab renders worker/read-model projection data through the EOSE-aware Nostr FIPS mesh store without polling or REST endpoints."
+    }
+  ],
+  "rollup_checks": [
+    {
+      "command": "go test ./internal/controlplane ./internal/mcp ./pkg/discovery",
+      "result": "pass",
+      "evidence": "ok github.com/openagentsinc/bahia/internal/controlplane 0.321s; ok github.com/openagentsinc/bahia/internal/mcp (cached); ok github.com/openagentsinc/bahia/pkg/discovery (cached)",
+      "coverage": "Focused backend DNS control-plane, MCP FIPS resources, and resolver subscription correctness."
+    },
+    {
+      "command": "cd web && npm run test:unit -- --run tests/unit/dns-controlplane.test.js tests/unit/dns-store-commands.test.js tests/unit/dns-store-subscriptions.test.js tests/unit/dns-page-model.test.js tests/unit/fips-mesh-store.test.js tests/unit/fips-mesh-panel.test.js",
+      "result": "pass",
+      "evidence": "Test Files 6 passed; Tests 31 passed",
+      "coverage": "Focused browser DNS/FIPS operator UX read/write behavior."
+    },
+    {
+      "command": "grep/status checks for REST write additions in internal/api and web DNS/FIPS paths",
+      "result": "pass",
+      "evidence": "No matches for REST DNS write route patterns in internal/api or cmd; no matches for fetch POST/PUT/PATCH/DELETE or /api DNS calls in web DNS/FIPS dashboard paths.",
+      "coverage": "No new REST write endpoints or fetch mutations in DNS/FIPS operator paths."
+    }
+  ]
+}

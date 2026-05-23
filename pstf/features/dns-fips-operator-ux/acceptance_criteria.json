@@ -1,0 +1,36 @@
+{
+  "feature_id": "dns-fips-operator-ux",
+  "title": "DNS/FIPS operator UX rollup",
+  "criteria": [
+    {
+      "id": "AC1",
+      "statement": "Rollup PSTF artifacts exist for feature spec, acceptance criteria, test matrix, verification report, defects, and HITL decisions.",
+      "tests": ["test -f pstf/features/dns-fips-operator-ux/feature_spec.json", "json validity checks"]
+    },
+    {
+      "id": "AC2",
+      "statement": "Operator docs explain that the web DNS/FIPS dashboard reads state from Nostr read models and long-lived subscriptions rather than REST catalog polling.",
+      "tests": ["docs/control-planes.md", "pstf/features/bahia-xere/verification_report.md", "pstf/features/bahia-0jh6/verification_report.md", "pstf/features/bahia-wprt/verification_report.md"]
+    },
+    {
+      "id": "AC3",
+      "statement": "Operator docs explain that web DNS writes use signed Nostr control-plane requests and track relay OK, status, and terminal result events without adding REST write endpoints.",
+      "tests": ["pstf/features/bahia-5l4f/verification_report.md", "pstf/features/bahia-mou1/verification_report.md", "focused grep checks for REST write additions"]
+    },
+    {
+      "id": "AC4",
+      "statement": "Operator docs explain that MCP exposes DNS/FIPS discovery/actions for agent operators.",
+      "tests": ["pstf/features/bahia-i9v3/verification_report.md", "docs/control-planes.md"]
+    },
+    {
+      "id": "AC5",
+      "statement": "Rollup verification cites actual child tests and records focused rollup checks or explicitly explains any tests not rerun.",
+      "tests": ["pstf/features/dns-fips-operator-ux/test_matrix.json", "pstf/features/dns-fips-operator-ux/verification_report.md"]
+    },
+    {
+      "id": "AC6",
+      "statement": "Any remaining real gaps discovered during rollup are tracked in Beads; otherwise defects.json states none observed in this scope.",
+      "tests": ["pstf/features/dns-fips-operator-ux/defects.json", "bd show bahia-ky76"]
+    }
+  ]
+}

@@ -232,9 +232,11 @@ Example `31976` endpoint projection:
 
 If a previously published coordinate disappears from the projected snapshot, Bahia publishes a replacement tombstone with the same `d` tag, `deleted=true`, `t=dns-endpoint`, and `t=bahia`. Clients should query kind `31976`, wait for EOSE for historical catch-up, then keep the subscription open for realtime changes.
 
-### Reserved DNS Kinds
+### DNS Operator and Read-Model Kinds
 
-The following DNS allocations are reserved for future phases and are not accepted by the Phase 0 reactor: request kinds `5941`–`5945`, status kind `6941`, result kinds `7941`–`7945`, read-model kinds `31975`, `31977`, `31978`, and audit kinds `31020`–`31024`. Phase 0 actively publishes only `31976`.
+DNS read models use replaceable events: `31975` zone state, `31976` endpoint state, `31977` policy state, and `31978` backend state. Browser and agent clients should bootstrap them with scoped filters, wait for EOSE, deduplicate by event id, and apply latest-by-`(kind,pubkey,d)` replaceable semantics.
+
+DNS operator commands use signed request/status/result events. Bahia subscribes to request kinds `5941`–`5945` (`DNSZoneCreate`, `DNSPolicyApply`, `DNSRecordOverride`, `DNSDriftRemediate`, `DNSBackendRegister`) when the DNS operator is configured, emits `6941` progress, and emits the matching terminal result kind `7941`–`7945`. Rejections, unsupported operations, and missing DNS operator configuration are represented as explicit result events rather than HTTP fallback completion. DNS audit kinds `31020`–`31024` remain the DNS audit allocation.
 
 ## Hive-CI Integration Events
 
@@ -300,11 +302,11 @@ Received from the ephemeral key declared in the 5401 event:
 | 5401 | Workflow Run | Subscribe | Receive CI workflow start (Hive-CI) |
 | 5402 | Workflow Result | Subscribe | Receive CI workflow result (Hive-CI) |
 | 31000–31019 | Bahia Audit Events | **Publish** | Emit build, deploy, drift, and LLM lifecycle events |
-| 31020–31024 | DNS Audit Events | Reserved | Allocated for future DNS audit publication; not emitted in Phase 0 |
+| 31020–31024 | DNS Audit Events | Reserved | DNS audit publication allocation |
 | 31964 | LLM Route Registry | **Publish** | Replaceable LLM route registry read model |
 | 31965 | LLM Route State | **Publish** | Replaceable LLM route/environment state read model |
-| 31976 | DNS Endpoint State | **Publish** | Replaceable DNS endpoint catalog when DNS is enabled |
-| 5941–5945 / 6941 / 7941–7945 | DNS Operator Commands | Reserved | Allocated but not subscribed to or emitted by the Phase 0 reactor |
+| 31975–31978 | DNS Read Models | **Publish** | Replaceable DNS zone, endpoint, policy, and backend projections when DNS is enabled |
+| 5941–5945 / 6941 / 7941–7945 | DNS Operator Commands | Subscribe / **Publish** | Subscribe to signed DNS operator requests; publish progress and terminal result events when DNS operator support is configured |
 | 5971–5975 | LLM Requests | Subscribe | Consume authorized LLM control-plane commands |
 | 6973 | LLM Deployment Status | **Publish** | Emit LLM deployment/rollback progress |
 | 7971–7973 | LLM Results | **Publish** | Emit LLM route/release/deployment terminal results |

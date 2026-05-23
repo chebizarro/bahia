@@ -1,0 +1,26 @@
+{
+  "feature_id": "dns-fips-operator-ux",
+  "title": "DNS/FIPS operator UX rollup",
+  "intent": "Document the completed DNS/FIPS operator experience as a Nostr-native workflow for human browser operators and MCP/agent operators, with PSTF evidence tied to the completed child Beads issues.",
+  "observed_behavior_before": "DNS and FIPS operator surfaces were split across child feature artifacts. Older docs still described DNS operator request kinds as reserved-only and did not summarize the human and agent UX that now reads state from Nostr read models and writes DNS commands through signed Nostr control-plane events.",
+  "implemented_behavior": "The rollup PSTF artifacts and operator docs describe the integrated UX: the web DNS dashboard reads DNS and FIPS mesh state from scoped Nostr read-model subscriptions, DNS actions publish signed 594x control-plane events and track OK/status/result events, MCP exposes DNS/FIPS discovery/action surfaces for agents, and REST remains a compatibility/query surface rather than the dashboard substrate or write path.",
+  "scope": [
+    "PSTF rollup artifacts under pstf/features/dns-fips-operator-ux/",
+    "Operator documentation near the DNS/FIPS docs and control-plane docs",
+    "Verification evidence from completed child Beads plus focused rollup checks"
+  ],
+  "constraints": [
+    "Docs/PSTF-only rollup; code changes are out of scope unless a serious inconsistency requires a tiny fix.",
+    "No fake claims: evidence cites concrete files, child PSTF reports, tests, and focused grep/status checks.",
+    "Remaining real gaps must be tracked in Beads rather than prose-only lists."
+  ],
+  "child_beads": [
+    "bahia-5l4f",
+    "bahia-0jh6",
+    "bahia-i9v3",
+    "bahia-xere",
+    "bahia-66d4",
+    "bahia-mou1",
+    "bahia-wprt"
+  ]
+}
