@@ -1,0 +1,12 @@
+{
+  "feature_id": "bahia-mou1",
+  "title": "DNS web control-plane panels mediated by Nostr events",
+  "intent": "Expose human operator controls on the DNS dashboard for zone create/reconcile, policy apply, record override, and drift remediation while preserving Bahia's Nostr-native signed event command semantics.",
+  "observed_behavior_before": "The DNS page rendered Nostr-backed read models for zones, endpoints, drift, and policies, but had no operator panels for DNS control-plane commands.",
+  "implemented_behavior": "The DNS page now renders signed command forms, validates local input, dispatches only through the DNS Nostr command store, and displays operator readiness, request event ids, relay OK summaries, status progress, terminal result details, and errors.",
+  "constraints": [
+    "No REST write endpoints or fetch-based mutations in the DNS command path.",
+    "Command completion is driven by explicit result events from the existing DNS control-plane run tracker.",
+    "Bahia control-plane remains source of truth; browser validation only prevents malformed form submissions."
+  ]
+}

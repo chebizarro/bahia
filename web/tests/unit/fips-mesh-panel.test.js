@@ -33,10 +33,14 @@ function setSelect(select, value) {
   select.dispatchEvent(new Event('change', { bubbles: true }));
 }
 
+function tableText(target) {
+  return textOf(target.querySelector('tbody') || target);
+}
+
 describe('FIPS mesh DNS panel', () => {
   it('renders healthy, degraded, and unhealthy mesh nodes with operator fields', () => {
     const target = renderComponent(FipsMeshPanel, {
-      state: liveState,
+      meshState: liveState,
       nodes: [
         node(),
         node({ pubkey: 'worker-b-pubkey', npub: 'npub-worker-b', name: 'Worker B', health: 'degraded', overlayAddress: 'fd00::2', dnsHostnames: ['worker-b.mesh.example'], projectionStatus: 'gated', gatingReason: 'loss above policy', meshHealth: { rtt: '2s', loss: 0.2, jitter: '90ms', goodput: '80Mbps' } }),
@@ -58,7 +62,7 @@ describe('FIPS mesh DNS panel', () => {
   });
 
   it('reflects tombstone removal from store data by rendering the empty state when nodes disappear', () => {
-    const target = renderComponent(FipsMeshPanel, { state: liveState, nodes: [] });
+    const target = renderComponent(FipsMeshPanel, { meshState: liveState, nodes: [] });
 
     const text = textOf(target);
     expect(text).toContain('No FIPS mesh nodes projected yet');
@@ -67,7 +71,7 @@ describe('FIPS mesh DNS panel', () => {
 
   it('filters by health, worker, capability, and projection state', async () => {
     const target = renderComponent(FipsMeshPanel, {
-      state: liveState,
+      meshState: liveState,
       nodes: [
         node(),
         node({ pubkey: 'worker-b-pubkey', npub: 'npub-worker-b', name: 'Worker B', health: 'degraded', capabilities: { storage: true }, mlCapabilities: {}, projectionStatus: 'gated', dnsHostnames: ['worker-b.mesh.example'] })
@@ -78,34 +82,34 @@ describe('FIPS mesh DNS panel', () => {
 
     setSelect(health, 'degraded');
     await tick();
-    expect(textOf(target)).toContain('Worker B');
-    expect(textOf(target)).not.toContain('Worker A');
+    expect(tableText(target)).toContain('Worker B');
+    expect(tableText(target)).not.toContain('Worker A');
 
     setSelect(health, '');
     setSelect(worker, 'Worker A');
     await tick();
-    expect(textOf(target)).toContain('Worker A');
-    expect(textOf(target)).not.toContain('Worker B');
+    expect(tableText(target)).toContain('Worker A');
+    expect(tableText(target)).not.toContain('Worker B');
 
     setSelect(worker, '');
     setSelect(capability, 'storage');
     await tick();
-    expect(textOf(target)).toContain('Worker B');
-    expect(textOf(target)).not.toContain('Worker A');
+    expect(tableText(target)).toContain('Worker B');
+    expect(tableText(target)).not.toContain('Worker A');
 
     setSelect(capability, '');
     setSelect(projection, 'projected');
     await tick();
-    expect(textOf(target)).toContain('Worker A');
-    expect(textOf(target)).not.toContain('Worker B');
+    expect(tableText(target)).toContain('Worker A');
+    expect(tableText(target)).not.toContain('Worker B');
   });
 
   it('renders disabled and unavailable FIPS mesh states', () => {
-    const unavailable = renderComponent(FipsMeshPanel, { state: { status: 'error', error: 'No browser Nostr relays available for FIPS mesh read models', relays: [] }, nodes: [] });
+    const unavailable = renderComponent(FipsMeshPanel, { meshState: { status: 'error', error: 'No browser Nostr relays available for FIPS mesh read models', relays: [] }, nodes: [] });
     expect(textOf(unavailable)).toContain('FIPS mesh unavailable');
     expect(textOf(unavailable)).toContain('No browser Nostr relays available');
 
-    const disabled = renderComponent(FipsMeshPanel, { state: { status: 'live', bootstrapComplete: true, relays: [] }, nodes: [] });
+    const disabled = renderComponent(FipsMeshPanel, { meshState: { status: 'live', bootstrapComplete: true, relays: [] }, nodes: [] });
     expect(textOf(disabled)).toContain('FIPS mesh relay configuration disabled');
   });
 });

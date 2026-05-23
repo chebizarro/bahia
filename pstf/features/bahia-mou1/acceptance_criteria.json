@@ -1,0 +1,31 @@
+{
+  "feature_id": "bahia-mou1",
+  "title": "DNS web control-plane panels mediated by Nostr events",
+  "criteria": [
+    {
+      "id": "AC1",
+      "statement": "DNS dashboard exposes human operator controls for zone create/reconcile, policy apply, record override, and drift remediation.",
+      "tests": ["tests/unit/dns-page-model.test.js", "npm run build"]
+    },
+    {
+      "id": "AC2",
+      "statement": "Actions use the Nostr DNS control-plane client/store and do not add REST write or fetch-based mutations.",
+      "tests": ["tests/unit/dns-controlplane.test.js", "tests/unit/dns-store-commands.test.js"]
+    },
+    {
+      "id": "AC3",
+      "statement": "UI run data includes operator/auth readiness, request event id, relay OK acceptance summary, status progress events, final result, and rejection/errors.",
+      "tests": ["tests/unit/dns-page-model.test.js", "tests/unit/dns-store-commands.test.js"]
+    },
+    {
+      "id": "AC4",
+      "statement": "Forms validate locally enough to avoid malformed command payloads while leaving control-plane result events as source of truth.",
+      "tests": ["tests/unit/dns-page-model.test.js"]
+    },
+    {
+      "id": "AC5",
+      "statement": "Completion remains driven by explicit DNS result events with no timeout-as-done behavior.",
+      "tests": ["tests/unit/dns-controlplane.test.js", "tests/unit/dns-store-commands.test.js"]
+    }
+  ]
+}
