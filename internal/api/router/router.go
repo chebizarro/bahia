@@ -66,6 +66,7 @@ type RouterDeps struct {
 	MLRegistry         *service.MLRegistryService
 	MLCommands         handlers.MLCommandPublisher
 	ContinuityStatuses service.ContinuityStatusReader
+	ContinuityGraph    handlers.ContinuityGraphReader
 }
 
 // SignatureVerifier is the interface for signature verification.
@@ -152,7 +153,7 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 	if deps.MLRegistry != nil || deps.MLCommands != nil {
 		mlH = handlers.NewMLHandler(deps.MLRegistry, deps.MLCommands)
 	}
-	continuityH := handlers.NewContinuityHandler(deps.ContinuityStatuses)
+	continuityH := handlers.NewContinuityHandler(deps.ContinuityStatuses, deps.ContinuityGraph)
 
 	var logsH *handlers.LogHandler
 	if deps.Runs != nil && deps.Services != nil && deps.Environments != nil {
@@ -185,6 +186,8 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 		r.Use(middleware.ContentType)
 		r.Use(auth.MiddlewareFromConfig(authMiddleware))
 		r.With(middleware.RateLimit(readLimiter)).Get("/continuity/status", continuityH.Status)
+		r.With(middleware.RateLimit(readLimiter)).Get("/continuity/topology", continuityH.Topology)
+		r.With(middleware.RateLimit(writeLimiter)).Post("/continuity/simulate", continuityH.Simulate)
 	})
 
 	// API v1 routes (authenticated when auth is enabled).

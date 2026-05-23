@@ -1,0 +1,8 @@
+{
+  "feature_id": "bahia-x18g",
+  "tests": [
+    { "acceptance_criteria": ["AC1", "AC2"], "command": "go build ./...", "result": "pass" },
+    { "acceptance_criteria": ["AC3", "AC4"], "command": "cd web && npm run build", "result": "pass with pre-existing warnings outside touched files" },
+    { "acceptance_criteria": ["AC3", "AC4"], "command": "cd web && npm run check", "result": "not run: package has no check script" }
+  ]
+}

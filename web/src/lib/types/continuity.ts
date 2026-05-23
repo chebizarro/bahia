@@ -25,3 +25,20 @@ export interface ContinuityServiceStatusDTO {
   changed_at: string;
   current_run?: ContinuityRunDTO;
 }
+
+export type ContinuitySurvivability =
+  | 'survivable'
+  | 'degraded_only'
+  | 'emergency_only'
+  | 'unsatisfied'
+  | string;
+
+export interface ContinuityAssessmentDTO {
+  service_key: string;
+  survivability: ContinuitySurvivability;
+  has_failover_recipe: boolean;
+  has_recovery_recipe: boolean;
+  standby_count: number;
+  replication_configured: boolean;
+  heartbeat_active: boolean;
+}

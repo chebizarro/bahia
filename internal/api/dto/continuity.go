@@ -58,6 +58,46 @@ func ContinuityServiceStatusDTOsFromService(statuses []service.ContinuityStatus)
 	return out
 }
 
+// ContinuityAssessmentDTO is the HTTP response shape for continuity graph survivability.
+type ContinuityAssessmentDTO struct {
+	ServiceKey            string `json:"service_key"`
+	Survivability         string `json:"survivability"`
+	HasFailoverRecipe     bool   `json:"has_failover_recipe"`
+	HasRecoveryRecipe     bool   `json:"has_recovery_recipe"`
+	StandbyCount          int    `json:"standby_count"`
+	ReplicationConfigured bool   `json:"replication_configured"`
+	HeartbeatActive       bool   `json:"heartbeat_active"`
+}
+
+// SimulateFailureRequest is the POST body for continuity failure simulation.
+type SimulateFailureRequest struct {
+	WorkerPubKey string `json:"worker_pubkey"`
+}
+
+func ContinuityAssessmentDTOFromService(assessment service.ContinuityAssessment) ContinuityAssessmentDTO {
+	standbyCount := 0
+	if assessment.SelectedStandby != "" {
+		standbyCount = 1
+	}
+	return ContinuityAssessmentDTO{
+		ServiceKey:            assessment.ServiceKey,
+		Survivability:         assessment.Survivability,
+		HasFailoverRecipe:     assessment.SelectedStandby != "",
+		HasRecoveryRecipe:     len(assessment.AvailableProfiles) > 0,
+		StandbyCount:          standbyCount,
+		ReplicationConfigured: assessment.ReplicationFreshness != "" && assessment.ReplicationFreshness != service.ReplicationFreshnessUnknown,
+		HeartbeatActive:       assessment.StandbyHealth == service.StandbyHealthHealthy,
+	}
+}
+
+func ContinuityAssessmentDTOsFromService(assessments []service.ContinuityAssessment) []ContinuityAssessmentDTO {
+	out := make([]ContinuityAssessmentDTO, 0, len(assessments))
+	for _, assessment := range assessments {
+		out = append(out, ContinuityAssessmentDTOFromService(assessment))
+	}
+	return out
+}
+
 func formatContinuityTime(value time.Time) string {
 	if value.IsZero() {
 		return ""

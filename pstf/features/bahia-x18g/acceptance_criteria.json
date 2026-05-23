@@ -1,0 +1,25 @@
+{
+  "feature_id": "bahia-x18g",
+  "criteria": [
+    {
+      "id": "AC1",
+      "statement": "Authenticated clients can fetch topology assessments from /api/continuity/topology.",
+      "verification": "go build ./..."
+    },
+    {
+      "id": "AC2",
+      "statement": "Authenticated clients can POST worker_pubkey to /api/continuity/simulate and receive simulated assessments.",
+      "verification": "go build ./..."
+    },
+    {
+      "id": "AC3",
+      "statement": "Continuity UI renders topology survivability, recipe coverage, standby count, replication, and heartbeat signals.",
+      "verification": "cd web && npm run build"
+    },
+    {
+      "id": "AC4",
+      "statement": "Continuity UI supports failure simulation with loading, error, empty, comparison, and unsatisfied warning states using Svelte 5 event syntax.",
+      "verification": "cd web && npm run build"
+    }
+  ]
+}

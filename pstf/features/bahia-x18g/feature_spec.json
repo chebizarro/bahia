@@ -1,0 +1,16 @@
+{
+  "feature_id": "bahia-x18g",
+  "title": "Continuity topology map and resilience simulation UI",
+  "observed_behavior": "The continuity dashboard exposed service status cards from /api/continuity/status only.",
+  "intended_behavior": "Operators can view continuity graph survivability assessments, inspect service-to-worker relationships, and simulate worker failure impact through authenticated continuity API endpoints and Svelte UI tabs.",
+  "scope": [
+    "GET /api/continuity/topology returns continuity assessment DTOs",
+    "POST /api/continuity/simulate accepts worker_pubkey and returns simulated assessment DTOs",
+    "Continuity page includes Status, Topology, and Simulation tabs",
+    "Topology and simulation UI render empty, error, loading, and result states"
+  ],
+  "out_of_scope": [
+    "Wiring RouterDeps.ContinuityGraph in internal/app/app.go",
+    "Changing internal/service continuity graph semantics"
+  ]
+}

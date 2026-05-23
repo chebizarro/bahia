@@ -1,7 +1,12 @@
 <script>
+  import SimulationPanel from './SimulationPanel.svelte';
+  import TopologyView from './TopologyView.svelte';
+
   let { data } = $props();
+  let activeTab = $state('status');
 
   const statuses = $derived(data?.statuses || []);
+  const assessments = $derived(data?.assessments || []);
   const sortedStatuses = $derived([...statuses].sort((left, right) =>
     String(left.service_key || '').localeCompare(String(right.service_key || ''))
   ));
@@ -75,13 +80,20 @@
     </div>
   {/if}
 
-  {#if sortedStatuses.length === 0 && !data?.error}
-    <section class="empty-card">
-      <h2>No continuity status projected yet</h2>
-      <p>Services will appear here after the continuity status projector records kind 30351/30353 read-model state.</p>
-    </section>
-  {:else}
-    <section class="status-grid" aria-label="Continuity service statuses">
+  <nav class="tabs" aria-label="Continuity views">
+    <button type="button" class:active={activeTab === 'status'} onclick={() => (activeTab = 'status')}>Status</button>
+    <button type="button" class:active={activeTab === 'topology'} onclick={() => (activeTab = 'topology')}>Topology</button>
+    <button type="button" class:active={activeTab === 'simulation'} onclick={() => (activeTab = 'simulation')}>Simulation</button>
+  </nav>
+
+  {#if activeTab === 'status'}
+    {#if sortedStatuses.length === 0 && !data?.error}
+      <section class="empty-card">
+        <h2>No continuity status projected yet</h2>
+        <p>Services will appear here after the continuity status projector records kind 30351/30353 read-model state.</p>
+      </section>
+    {:else}
+      <section class="status-grid" aria-label="Continuity service statuses">
       {#each sortedStatuses as status (status.service_key)}
         {@const presentation = profilePresentation(status)}
         <article class="service-card">
@@ -144,7 +156,12 @@
           </footer>
         </article>
       {/each}
-    </section>
+      </section>
+    {/if}
+  {:else if activeTab === 'topology'}
+    <TopologyView {assessments} {statuses} />
+  {:else}
+    <SimulationPanel baseline={assessments} {statuses} />
   {/if}
 </div>
 
@@ -228,6 +245,30 @@
 
   .alert strong {
     color: var(--error);
+  }
+
+  .tabs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    border-bottom: 1px solid var(--border-color);
+    padding-bottom: 0.75rem;
+  }
+
+  .tabs button {
+    border: 1px solid var(--border-color);
+    border-radius: 999px;
+    padding: 0.55rem 0.9rem;
+    background: var(--card-bg);
+    color: var(--text-primary);
+    cursor: pointer;
+    font-weight: 700;
+  }
+
+  .tabs button.active {
+    border-color: var(--primary);
+    background: color-mix(in srgb, var(--primary) 15%, transparent);
+    color: var(--primary);
   }
 
   .empty-card {
