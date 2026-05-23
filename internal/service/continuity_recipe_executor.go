@@ -86,15 +86,49 @@ type ContinuityRecipeProgressEvent struct {
 	At        time.Time `json:"at"`
 }
 
+// ContinuityWakeAdapter sends Wake-on-LAN magic packets.
+type ContinuityWakeAdapter interface {
+	WakeOnLAN(ctx context.Context, macAddress string) error
+}
+
+// ContinuityHeartbeatWaiter polls heartbeat status for a worker.
+type ContinuityHeartbeatWaiter interface {
+	WaitForHeartbeat(ctx context.Context, workerPubKey string, timeout time.Duration) error
+}
+
+// ContinuityRuntimeAdapter handles service lifecycle on workers.
+type ContinuityRuntimeAdapter interface {
+	DeployService(ctx context.Context, serviceKey string, workerPubKey string, params map[string]string) error
+	StopService(ctx context.Context, serviceKey string, workerPubKey string, params map[string]string) error
+	MoveService(ctx context.Context, serviceKey string, fromWorker string, toWorker string, params map[string]string) error
+}
+
+// ContinuityStorageAdapter handles volume and backup operations.
+type ContinuityStorageAdapter interface {
+	MountVolume(ctx context.Context, source string, params map[string]string) error
+	RestoreBackup(ctx context.Context, snapshotID string, params map[string]string) error
+	RestoreSCB(ctx context.Context, source string, params map[string]string) error
+}
+
+// ContinuityDNSAdapter handles DNS route restoration.
+type ContinuityDNSAdapter interface {
+	RestoreDNSRoutes(ctx context.Context, serviceKey string, params map[string]string) error
+}
+
 // ContinuityRecipeActionHandler executes one recipe step.
 type ContinuityRecipeActionHandler func(ctx context.Context, step domain.RecipeStep, run ContinuityRecipeRunContext) error
 
 type continuityRecipeExecutor struct {
-	publisher events.Publisher
-	logger    *zap.Logger
-	registry  map[string]continuityRecipeAction
-	locks     sync.Map
-	now       func() time.Time
+	publisher       events.Publisher
+	logger          *zap.Logger
+	registry        map[string]continuityRecipeAction
+	locks           sync.Map
+	now             func() time.Time
+	wakeAdapter     ContinuityWakeAdapter
+	heartbeatWaiter ContinuityHeartbeatWaiter
+	runtimeAdapter  ContinuityRuntimeAdapter
+	storageAdapter  ContinuityStorageAdapter
+	dnsAdapter      ContinuityDNSAdapter
 }
 
 type continuityRecipeAction struct {
@@ -123,6 +157,41 @@ func WithContinuityRecipeLogger(logger *zap.Logger) continuityRecipeExecutorOpti
 		if logger != nil {
 			e.logger = logger.Named("continuity-recipe-executor")
 		}
+	}
+}
+
+// WithContinuityWakeAdapter sets the adapter used by wake_on_lan actions.
+func WithContinuityWakeAdapter(adapter ContinuityWakeAdapter) continuityRecipeExecutorOption {
+	return func(e *continuityRecipeExecutor) {
+		e.wakeAdapter = adapter
+	}
+}
+
+// WithContinuityHeartbeatWaiter sets the adapter used by wait_for_heartbeat actions.
+func WithContinuityHeartbeatWaiter(waiter ContinuityHeartbeatWaiter) continuityRecipeExecutorOption {
+	return func(e *continuityRecipeExecutor) {
+		e.heartbeatWaiter = waiter
+	}
+}
+
+// WithContinuityRuntimeAdapter sets the adapter used by runtime lifecycle actions.
+func WithContinuityRuntimeAdapter(adapter ContinuityRuntimeAdapter) continuityRecipeExecutorOption {
+	return func(e *continuityRecipeExecutor) {
+		e.runtimeAdapter = adapter
+	}
+}
+
+// WithContinuityStorageAdapter sets the adapter used by storage and restore actions.
+func WithContinuityStorageAdapter(adapter ContinuityStorageAdapter) continuityRecipeExecutorOption {
+	return func(e *continuityRecipeExecutor) {
+		e.storageAdapter = adapter
+	}
+}
+
+// WithContinuityDNSAdapter sets the adapter used by restore_dns_routes actions.
+func WithContinuityDNSAdapter(adapter ContinuityDNSAdapter) continuityRecipeExecutorOption {
+	return func(e *continuityRecipeExecutor) {
+		e.dnsAdapter = adapter
 	}
 }
 
@@ -335,25 +404,25 @@ func (e *continuityRecipeExecutor) publish(ctx context.Context, eventType events
 
 func (e *continuityRecipeExecutor) defaultActionRegistry() map[string]continuityRecipeAction {
 	return map[string]continuityRecipeAction{
-		domain.RecipeActionWakeOnLAN:        e.loggingAction(domain.RecipeActionWakeOnLAN, requireAnyParamOrContext("worker", "target", "mac_address")),
-		domain.RecipeActionWaitHeartbeat:    e.loggingAction(domain.RecipeActionWaitHeartbeat, requireAnyParamOrContext("worker", "target")),
-		domain.RecipeActionMountVolume:      e.loggingAction(domain.RecipeActionMountVolume, requireAnyParam("source", "volume")),
-		domain.RecipeActionRestoreBackup:    e.loggingAction(domain.RecipeActionRestoreBackup, requireAnyParam("backup_run_id", "snapshot_id", "source")),
-		domain.RecipeActionRestoreSCB:       e.loggingAction(domain.RecipeActionRestoreSCB, requireAnyParam("backup_run_id", "snapshot_id", "source", "scb_path")),
-		domain.RecipeActionDeployService:    e.loggingAction(domain.RecipeActionDeployService, nil),
-		domain.RecipeActionPublishEndpoint:  e.loggingAction(domain.RecipeActionPublishEndpoint, nil),
-		domain.RecipeActionEmitEvent:        e.loggingAction(domain.RecipeActionEmitEvent, requireAnyParam("type", "event_type")),
-		domain.RecipeActionSyncRelayState:   e.loggingAction(domain.RecipeActionSyncRelayState, nil),
-		domain.RecipeActionStopService:      e.loggingAction(domain.RecipeActionStopService, nil),
-		domain.RecipeActionRestoreDNSRoutes: e.loggingAction(domain.RecipeActionRestoreDNSRoutes, nil),
-		domain.RecipeActionMoveService:      e.loggingAction(domain.RecipeActionMoveService, nil),
-		domain.RecipeActionReEnableAgents:   e.loggingAction(domain.RecipeActionReEnableAgents, nil),
+		domain.RecipeActionWakeOnLAN:        e.adapterAction(domain.RecipeActionWakeOnLAN, requireAnyParam("mac_address", "mac"), e.handleWakeOnLAN),
+		domain.RecipeActionWaitHeartbeat:    e.adapterAction(domain.RecipeActionWaitHeartbeat, requireAnyParamOrContext("worker", "target"), e.handleWaitForHeartbeat),
+		domain.RecipeActionMountVolume:      e.adapterAction(domain.RecipeActionMountVolume, requireAnyParam("source", "volume"), e.handleMountVolume),
+		domain.RecipeActionRestoreBackup:    e.adapterAction(domain.RecipeActionRestoreBackup, requireAnyParam("backup_run_id", "snapshot_id", "source"), e.handleRestoreBackup),
+		domain.RecipeActionRestoreSCB:       e.adapterAction(domain.RecipeActionRestoreSCB, requireAnyParam("backup_run_id", "snapshot_id", "source", "scb_path"), e.handleRestoreSCB),
+		domain.RecipeActionDeployService:    e.adapterAction(domain.RecipeActionDeployService, nil, e.handleDeployService),
+		domain.RecipeActionPublishEndpoint:  e.adapterAction(domain.RecipeActionPublishEndpoint, nil, e.handleEventOnlyAction),
+		domain.RecipeActionEmitEvent:        e.adapterAction(domain.RecipeActionEmitEvent, requireAnyParam("type", "event_type"), e.handleEventOnlyAction),
+		domain.RecipeActionSyncRelayState:   e.adapterAction(domain.RecipeActionSyncRelayState, nil, e.handleEventOnlyAction),
+		domain.RecipeActionStopService:      e.adapterAction(domain.RecipeActionStopService, nil, e.handleStopService),
+		domain.RecipeActionRestoreDNSRoutes: e.adapterAction(domain.RecipeActionRestoreDNSRoutes, nil, e.handleRestoreDNSRoutes),
+		domain.RecipeActionMoveService:      e.adapterAction(domain.RecipeActionMoveService, nil, e.handleMoveService),
+		domain.RecipeActionReEnableAgents:   e.adapterAction(domain.RecipeActionReEnableAgents, nil, e.handleEventOnlyAction),
 	}
 }
 
 type continuityActionValidator func(step domain.RecipeStep, run ContinuityRecipeRunContext) error
 
-func (e *continuityRecipeExecutor) loggingAction(action string, validate continuityActionValidator) continuityRecipeAction {
+func (e *continuityRecipeExecutor) adapterAction(action string, validate continuityActionValidator, handler ContinuityRecipeActionHandler) continuityRecipeAction {
 	return continuityRecipeAction{
 		validate: validate,
 		handler: func(ctx context.Context, step domain.RecipeStep, run ContinuityRecipeRunContext) error {
@@ -365,17 +434,154 @@ func (e *continuityRecipeExecutor) loggingAction(action string, validate continu
 			if err := ctx.Err(); err != nil {
 				return err
 			}
-			e.logger.Info("continuity recipe action accepted",
-				zap.String("action", action),
-				zap.String("run_id", run.RunID),
-				zap.String("service_key", run.ServiceKey),
-				zap.String("recipe_kind", string(run.RecipeKind)),
-				zap.String("recipe_name", run.RecipeName),
-				zap.String("step_name", step.Name),
-			)
+			if err := handler(ctx, step, run); err != nil {
+				return fmt.Errorf("%s action failed: %w", action, err)
+			}
 			return nil
 		},
 	}
+}
+
+func (e *continuityRecipeExecutor) handleWakeOnLAN(ctx context.Context, step domain.RecipeStep, run ContinuityRecipeRunContext) error {
+	if e.wakeAdapter == nil {
+		e.logMissingAdapter(domain.RecipeActionWakeOnLAN, run, step)
+		return nil
+	}
+	macAddress := firstParam(step.Params, "mac_address", "mac")
+	return e.wakeAdapter.WakeOnLAN(ctx, macAddress)
+}
+
+func (e *continuityRecipeExecutor) handleWaitForHeartbeat(ctx context.Context, step domain.RecipeStep, run ContinuityRecipeRunContext) error {
+	if e.heartbeatWaiter == nil {
+		e.logMissingAdapter(domain.RecipeActionWaitHeartbeat, run, step)
+		return nil
+	}
+	workerPubKey := firstContinuityNonEmpty(firstParam(step.Params, "worker", "target"), run.SelectedStandbyPubKey, run.PrimaryWorkerPubKey)
+	return e.heartbeatWaiter.WaitForHeartbeat(ctx, workerPubKey, step.Timeout)
+}
+
+func (e *continuityRecipeExecutor) handleMountVolume(ctx context.Context, step domain.RecipeStep, run ContinuityRecipeRunContext) error {
+	if e.storageAdapter == nil {
+		e.logMissingAdapter(domain.RecipeActionMountVolume, run, step)
+		return nil
+	}
+	return e.storageAdapter.MountVolume(ctx, firstParam(step.Params, "source", "volume"), copyParams(step.Params))
+}
+
+func (e *continuityRecipeExecutor) handleRestoreBackup(ctx context.Context, step domain.RecipeStep, run ContinuityRecipeRunContext) error {
+	if e.storageAdapter == nil {
+		e.logMissingAdapter(domain.RecipeActionRestoreBackup, run, step)
+		return nil
+	}
+	return e.storageAdapter.RestoreBackup(ctx, firstParam(step.Params, "snapshot_id", "backup_run_id", "source"), copyParams(step.Params))
+}
+
+func (e *continuityRecipeExecutor) handleRestoreSCB(ctx context.Context, step domain.RecipeStep, run ContinuityRecipeRunContext) error {
+	if e.storageAdapter == nil {
+		e.logMissingAdapter(domain.RecipeActionRestoreSCB, run, step)
+		return nil
+	}
+	return e.storageAdapter.RestoreSCB(ctx, firstParam(step.Params, "source", "scb_path", "snapshot_id", "backup_run_id"), copyParams(step.Params))
+}
+
+func (e *continuityRecipeExecutor) handleDeployService(ctx context.Context, step domain.RecipeStep, run ContinuityRecipeRunContext) error {
+	if e.runtimeAdapter == nil {
+		e.logMissingAdapter(domain.RecipeActionDeployService, run, step)
+		return nil
+	}
+	workerPubKey := firstContinuityNonEmpty(firstParam(step.Params, "worker", "target"), run.SelectedStandbyPubKey, run.PrimaryWorkerPubKey)
+	return e.runtimeAdapter.DeployService(ctx, run.ServiceKey, workerPubKey, copyParams(step.Params))
+}
+
+func (e *continuityRecipeExecutor) handleStopService(ctx context.Context, step domain.RecipeStep, run ContinuityRecipeRunContext) error {
+	if e.runtimeAdapter == nil {
+		e.logMissingAdapter(domain.RecipeActionStopService, run, step)
+		return nil
+	}
+	workerPubKey := firstContinuityNonEmpty(firstParam(step.Params, "worker", "target"), run.PrimaryWorkerPubKey, run.SelectedStandbyPubKey)
+	return e.runtimeAdapter.StopService(ctx, run.ServiceKey, workerPubKey, copyParams(step.Params))
+}
+
+func (e *continuityRecipeExecutor) handleMoveService(ctx context.Context, step domain.RecipeStep, run ContinuityRecipeRunContext) error {
+	if e.runtimeAdapter == nil {
+		e.logMissingAdapter(domain.RecipeActionMoveService, run, step)
+		return nil
+	}
+	fromWorker := firstContinuityNonEmpty(firstParam(step.Params, "from_worker", "source_worker", "from", "source"), run.SelectedStandbyPubKey, run.PrimaryWorkerPubKey)
+	toWorker := firstContinuityNonEmpty(firstParam(step.Params, "to_worker", "target_worker", "to", "target"), run.PrimaryWorkerPubKey, run.SelectedStandbyPubKey)
+	return e.runtimeAdapter.MoveService(ctx, run.ServiceKey, fromWorker, toWorker, copyParams(step.Params))
+}
+
+func (e *continuityRecipeExecutor) handleRestoreDNSRoutes(ctx context.Context, step domain.RecipeStep, run ContinuityRecipeRunContext) error {
+	if e.dnsAdapter == nil {
+		e.logMissingAdapter(domain.RecipeActionRestoreDNSRoutes, run, step)
+		return nil
+	}
+	return e.dnsAdapter.RestoreDNSRoutes(ctx, run.ServiceKey, copyParams(step.Params))
+}
+
+// Event-only continuity actions publish deterministic internal events so existing
+// Nostr forwarding can turn recipe state transitions into relay events.
+func (e *continuityRecipeExecutor) handleEventOnlyAction(ctx context.Context, step domain.RecipeStep, run ContinuityRecipeRunContext) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	e.publisher.Publish(ctx, events.Event{
+		Type:     continuityActionEventType(step),
+		EntityID: run.RunID,
+		Data: ContinuityRecipeProgressEvent{
+			ContinuityRecipeRunContext: run,
+			Status:                     ContinuityRecipeStepStatusCompleted,
+			StepName:                   step.Name,
+			Action:                     step.Action,
+			At:                         e.now(),
+		},
+	})
+	return nil
+}
+
+func (e *continuityRecipeExecutor) logMissingAdapter(action string, run ContinuityRecipeRunContext, step domain.RecipeStep) {
+	e.logger.Warn("continuity recipe action adapter is not configured",
+		zap.String("action", action),
+		zap.String("run_id", run.RunID),
+		zap.String("service_key", run.ServiceKey),
+		zap.String("recipe_kind", string(run.RecipeKind)),
+		zap.String("recipe_name", run.RecipeName),
+		zap.String("step_name", step.Name),
+	)
+}
+
+func continuityActionEventType(step domain.RecipeStep) events.EventType {
+	if step.Action == domain.RecipeActionEmitEvent {
+		return events.EventType(firstParam(step.Params, "type", "event_type"))
+	}
+	return events.EventType("continuity.recipe.action." + step.Action)
+}
+
+func copyParams(params map[string]string) map[string]string {
+	out := make(map[string]string, len(params))
+	for key, value := range params {
+		out[key] = value
+	}
+	return out
+}
+
+func firstParam(params map[string]string, names ...string) string {
+	for _, name := range names {
+		if value := strings.TrimSpace(params[name]); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func firstContinuityNonEmpty(values ...string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
 }
 
 func requireAnyParam(names ...string) continuityActionValidator {

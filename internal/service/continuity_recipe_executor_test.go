@@ -189,6 +189,133 @@ func TestContinuityRecipeExecutorSerializesRunsByServiceKey(t *testing.T) {
 	require.Equal(t, int32(1), maxActive.Load())
 }
 
+func TestContinuityRecipeExecutorDefaultActionsCallAdaptersAndPublishEventOnlyActions(t *testing.T) {
+	publisher := &continuityRecipeCapturePublisher{}
+	adapters := &continuityRecipeMockAdapters{}
+	executor := NewContinuityRecipeExecutor(
+		publisher,
+		WithContinuityWakeAdapter(adapters),
+		WithContinuityHeartbeatWaiter(adapters),
+		WithContinuityRuntimeAdapter(adapters),
+		WithContinuityStorageAdapter(adapters),
+		WithContinuityDNSAdapter(adapters),
+	)
+
+	err := executor.ExecuteFailover(context.Background(), failoverRequestWithRecipe("run-default-actions", []domain.RecipeStep{
+		{Name: "wake standby", Action: domain.RecipeActionWakeOnLAN, Params: map[string]string{"mac_address": "00:11:22:33:44:55"}},
+		{Name: "wait standby", Action: domain.RecipeActionWaitHeartbeat, Timeout: time.Minute, Params: map[string]string{"worker": "worker-standby"}},
+		{Name: "mount data", Action: domain.RecipeActionMountVolume, Params: map[string]string{"source": "vol-1"}},
+		{Name: "restore backup", Action: domain.RecipeActionRestoreBackup, Params: map[string]string{"snapshot_id": "snap-1"}},
+		{Name: "restore scb", Action: domain.RecipeActionRestoreSCB, Params: map[string]string{"scb_path": "/secure/scb"}},
+		{Name: "deploy", Action: domain.RecipeActionDeployService, Params: map[string]string{"target": "worker-standby"}},
+		{Name: "publish endpoint", Action: domain.RecipeActionPublishEndpoint},
+		{Name: "emit", Action: domain.RecipeActionEmitEvent, Params: map[string]string{"event_type": "continuity.custom"}},
+		{Name: "sync relay", Action: domain.RecipeActionSyncRelayState},
+		{Name: "stop primary", Action: domain.RecipeActionStopService, Params: map[string]string{"worker": "worker-primary"}},
+		{Name: "restore dns", Action: domain.RecipeActionRestoreDNSRoutes},
+		{Name: "move", Action: domain.RecipeActionMoveService, Params: map[string]string{"from_worker": "worker-standby", "to_worker": "worker-primary"}},
+		{Name: "agents", Action: domain.RecipeActionReEnableAgents},
+	}))
+
+	require.NoError(t, err)
+	require.Equal(t, []string{
+		"wake:00:11:22:33:44:55",
+		"heartbeat:worker-standby:1m0s",
+		"mount:vol-1",
+		"backup:snap-1",
+		"scb:/secure/scb",
+		"deploy:svc-api:worker-standby",
+		"stop:svc-api:worker-primary",
+		"dns:svc-api",
+		"move:svc-api:worker-standby:worker-primary",
+	}, adapters.snapshot())
+	require.Contains(t, publisher.eventTypes(), events.EventType("continuity.recipe.action.publish_endpoint"))
+	require.Contains(t, publisher.eventTypes(), events.EventType("continuity.custom"))
+	require.Contains(t, publisher.eventTypes(), events.EventType("continuity.recipe.action.sync_relay_state"))
+	require.Contains(t, publisher.eventTypes(), events.EventType("continuity.recipe.action.re_enable_agents"))
+	require.Equal(t, EventContinuityRecipeRunCompleted, publisher.eventTypes()[len(publisher.eventTypes())-1])
+}
+
+func TestContinuityRecipeExecutorDefaultActionAdapterFailuresStopRun(t *testing.T) {
+	cases := []struct {
+		name   string
+		step   domain.RecipeStep
+		failed string
+	}{
+		{name: domain.RecipeActionWakeOnLAN, step: domain.RecipeStep{Name: "wake", Action: domain.RecipeActionWakeOnLAN, Params: map[string]string{"mac_address": "00:11:22:33:44:55"}}, failed: "wake"},
+		{name: domain.RecipeActionWaitHeartbeat, step: domain.RecipeStep{Name: "heartbeat", Action: domain.RecipeActionWaitHeartbeat, Params: map[string]string{"worker": "worker-standby"}}, failed: "heartbeat"},
+		{name: domain.RecipeActionMountVolume, step: domain.RecipeStep{Name: "mount", Action: domain.RecipeActionMountVolume, Params: map[string]string{"source": "vol-1"}}, failed: "mount"},
+		{name: domain.RecipeActionRestoreBackup, step: domain.RecipeStep{Name: "backup", Action: domain.RecipeActionRestoreBackup, Params: map[string]string{"snapshot_id": "snap-1"}}, failed: "backup"},
+		{name: domain.RecipeActionRestoreSCB, step: domain.RecipeStep{Name: "scb", Action: domain.RecipeActionRestoreSCB, Params: map[string]string{"scb_path": "/secure/scb"}}, failed: "scb"},
+		{name: domain.RecipeActionDeployService, step: domain.RecipeStep{Name: "deploy", Action: domain.RecipeActionDeployService}, failed: "deploy"},
+		{name: domain.RecipeActionStopService, step: domain.RecipeStep{Name: "stop", Action: domain.RecipeActionStopService}, failed: "stop"},
+		{name: domain.RecipeActionRestoreDNSRoutes, step: domain.RecipeStep{Name: "dns", Action: domain.RecipeActionRestoreDNSRoutes}, failed: "dns"},
+		{name: domain.RecipeActionMoveService, step: domain.RecipeStep{Name: "move", Action: domain.RecipeActionMoveService}, failed: "move"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			publisher := &continuityRecipeCapturePublisher{}
+			expectedErr := errors.New(tc.failed + " failed")
+			adapters := &continuityRecipeMockAdapters{errByOperation: map[string]error{tc.failed: expectedErr}}
+			executor := NewContinuityRecipeExecutor(
+				publisher,
+				WithContinuityWakeAdapter(adapters),
+				WithContinuityHeartbeatWaiter(adapters),
+				WithContinuityRuntimeAdapter(adapters),
+				WithContinuityStorageAdapter(adapters),
+				WithContinuityDNSAdapter(adapters),
+			)
+
+			err := executor.ExecuteFailover(context.Background(), failoverRequestWithRecipe("run-failing-"+tc.name, []domain.RecipeStep{tc.step}))
+
+			require.ErrorIs(t, err, expectedErr)
+			require.Equal(t, []events.EventType{
+				EventContinuityRecipeRunStarted,
+				EventContinuityRecipeStepStarted,
+				EventContinuityRecipeStepFailed,
+				EventContinuityRecipeRunFailed,
+			}, publisher.eventTypes())
+		})
+	}
+}
+
+func TestContinuityRecipeExecutorNilAdaptersAreGracefulNoops(t *testing.T) {
+	publisher := &continuityRecipeCapturePublisher{}
+	executor := NewContinuityRecipeExecutor(publisher)
+
+	err := executor.ExecuteFailover(context.Background(), failoverRequestWithRecipe("run-nil-adapters", []domain.RecipeStep{
+		{Name: "wake", Action: domain.RecipeActionWakeOnLAN, Params: map[string]string{"mac_address": "00:11:22:33:44:55"}},
+		{Name: "heartbeat", Action: domain.RecipeActionWaitHeartbeat, Params: map[string]string{"worker": "worker-standby"}},
+		{Name: "mount", Action: domain.RecipeActionMountVolume, Params: map[string]string{"source": "vol-1"}},
+		{Name: "backup", Action: domain.RecipeActionRestoreBackup, Params: map[string]string{"snapshot_id": "snap-1"}},
+		{Name: "scb", Action: domain.RecipeActionRestoreSCB, Params: map[string]string{"scb_path": "/secure/scb"}},
+		{Name: "deploy", Action: domain.RecipeActionDeployService},
+		{Name: "stop", Action: domain.RecipeActionStopService},
+		{Name: "dns", Action: domain.RecipeActionRestoreDNSRoutes},
+		{Name: "move", Action: domain.RecipeActionMoveService},
+	}))
+
+	require.NoError(t, err)
+	require.Equal(t, EventContinuityRecipeRunCompleted, publisher.eventTypes()[len(publisher.eventTypes())-1])
+}
+
+func TestContinuityRecipeExecutorCancelledContextDoesNotCallDefaultAdapter(t *testing.T) {
+	publisher := &continuityRecipeCapturePublisher{}
+	adapters := &continuityRecipeMockAdapters{}
+	executor := NewContinuityRecipeExecutor(publisher, WithContinuityWakeAdapter(adapters))
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := executor.ExecuteFailover(ctx, failoverRequestWithRecipe("run-cancel-before-adapter", []domain.RecipeStep{
+		{Name: "wake", Action: domain.RecipeActionWakeOnLAN, Params: map[string]string{"mac_address": "00:11:22:33:44:55"}},
+	}))
+
+	require.ErrorIs(t, err, context.Canceled)
+	require.Empty(t, adapters.snapshot())
+	require.Empty(t, publisher.snapshot())
+}
+
 func TestContinuityRecipeExecutorExecutesRecoveryRecipe(t *testing.T) {
 	publisher := &continuityRecipeCapturePublisher{}
 	executor := NewContinuityRecipeExecutor(publisher)
@@ -240,6 +367,71 @@ func failoverRequestWithRecipe(runID string, steps []domain.RecipeStep) Failover
 			Steps: steps,
 		},
 	}
+}
+
+type continuityRecipeMockAdapters struct {
+	mu             sync.Mutex
+	calls          []string
+	errByOperation map[string]error
+}
+
+func (m *continuityRecipeMockAdapters) WakeOnLAN(_ context.Context, macAddress string) error {
+	m.record("wake:" + macAddress)
+	return m.errByOperation["wake"]
+}
+
+func (m *continuityRecipeMockAdapters) WaitForHeartbeat(_ context.Context, workerPubKey string, timeout time.Duration) error {
+	m.record("heartbeat:" + workerPubKey + ":" + timeout.String())
+	return m.errByOperation["heartbeat"]
+}
+
+func (m *continuityRecipeMockAdapters) DeployService(_ context.Context, serviceKey string, workerPubKey string, _ map[string]string) error {
+	m.record("deploy:" + serviceKey + ":" + workerPubKey)
+	return m.errByOperation["deploy"]
+}
+
+func (m *continuityRecipeMockAdapters) StopService(_ context.Context, serviceKey string, workerPubKey string, _ map[string]string) error {
+	m.record("stop:" + serviceKey + ":" + workerPubKey)
+	return m.errByOperation["stop"]
+}
+
+func (m *continuityRecipeMockAdapters) MoveService(_ context.Context, serviceKey string, fromWorker string, toWorker string, _ map[string]string) error {
+	m.record("move:" + serviceKey + ":" + fromWorker + ":" + toWorker)
+	return m.errByOperation["move"]
+}
+
+func (m *continuityRecipeMockAdapters) MountVolume(_ context.Context, source string, _ map[string]string) error {
+	m.record("mount:" + source)
+	return m.errByOperation["mount"]
+}
+
+func (m *continuityRecipeMockAdapters) RestoreBackup(_ context.Context, snapshotID string, _ map[string]string) error {
+	m.record("backup:" + snapshotID)
+	return m.errByOperation["backup"]
+}
+
+func (m *continuityRecipeMockAdapters) RestoreSCB(_ context.Context, source string, _ map[string]string) error {
+	m.record("scb:" + source)
+	return m.errByOperation["scb"]
+}
+
+func (m *continuityRecipeMockAdapters) RestoreDNSRoutes(_ context.Context, serviceKey string, _ map[string]string) error {
+	m.record("dns:" + serviceKey)
+	return m.errByOperation["dns"]
+}
+
+func (m *continuityRecipeMockAdapters) record(call string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.calls = append(m.calls, call)
+}
+
+func (m *continuityRecipeMockAdapters) snapshot() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]string, len(m.calls))
+	copy(out, m.calls)
+	return out
 }
 
 type continuityRecipeCapturePublisher struct {
