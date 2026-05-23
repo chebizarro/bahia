@@ -7,9 +7,11 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/nbd-wtf/go-nostr"
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/controlplane"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/mcp"
 	"github.com/openagentsinc/bahia/internal/repository"
 	"github.com/openagentsinc/bahia/internal/service"
 	"github.com/stretchr/testify/require"
@@ -84,6 +86,31 @@ func TestControlPlaneReactorBackupOptionsInjectFinalSliceDependencies(t *testing
 		require.True(t, field.IsValid(), "reactor %s field must exist", fieldName)
 		require.False(t, field.IsNil(), "reactor %s field must be injected", fieldName)
 	}
+}
+
+type appWiringBackupMCPPublisher struct{}
+
+func (appWiringBackupMCPPublisher) Publish(context.Context, nostr.Event) (int, error) { return 1, nil }
+
+func TestConfigureBackupMCPDepsProvidesPublisherAndPostgresReadModels(t *testing.T) {
+	var _ mcp.BackupReadModelRepository = (*repository.PgBackupControlPlaneRepository)(nil)
+
+	signer, err := controlplane.NewPrivateKeySigner(nostr.GeneratePrivateKey())
+	require.NoError(t, err)
+	readModels := repository.NewPgBackupControlPlaneRepository(nil)
+	deps := mcp.ServerDeps{}
+
+	configureBackupMCPDeps(&deps, readModels, appWiringBackupMCPPublisher{}, signer, []string{"ws://relay.test"})
+
+	require.NotNil(t, deps.BackupCommandPublisher)
+	require.Same(t, readModels, deps.BackupReadModels)
+	server := mcp.NewServerWithOptions(nil, zap.NewNop(), deps)
+	result, err := server.CallTool(context.Background(), "request_backup_run", map[string]interface{}{
+		"recipe":          "recipe:postgres:v1",
+		"idempotency_key": "backup-run:test",
+	})
+	require.NoError(t, err)
+	require.False(t, result.IsError, "configured backup MCP mutating tool should not return dependency errors: %#v", result)
 }
 
 func TestControlPlaneReactorAuditOptionIndependentOfPackageFeature(t *testing.T) {

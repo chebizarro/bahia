@@ -1,0 +1,16 @@
+{
+  "feature_id": "bahia-512d",
+  "title": "Wire concrete backup MCP command publisher into production server",
+  "observed_behavior": "Backup MCP tools were registered but production app wiring did not provide BackupCommandPublisher or BackupReadModels, so tools returned dependency errors at runtime.",
+  "intended_behavior": "The production MCP server publishes signed Nostr backup request events through the control-plane relay publisher and reads backup state from the PostgreSQL backup control-plane repository.",
+  "scope": [
+    "internal/mcp concrete backup command publisher",
+    "internal/app MCP dependency wiring",
+    "app-level wiring tests",
+    "MCP publisher tests"
+  ],
+  "nostr_semantics": {
+    "publish": "Signed Nostr request events are emitted with request kind, d tag idempotency coordinate, scoped tags, and relay publish OK outcomes checked by the RelayPool publisher contract.",
+    "completion": "MCP tools return correlation metadata only; workflow completion remains event-driven via backup result/status/read-model events."
+  }
+}

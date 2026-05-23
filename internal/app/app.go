@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	canonicalnostr "fiatjaf.com/nostr"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/nbd-wtf/go-nostr"
 	backupAdapter "github.com/openagentsinc/bahia/internal/adapters/backup"
@@ -555,7 +556,7 @@ func New(cfg *config.Config) (*App, error) {
 	if controlPlaneSigner != nil && controlPlanePool != nil && len(controlPlaneRelays) > 0 {
 		workerCommandPublisher = controlplane.NewWorkerCommandPublisher(controlPlanePool, controlPlaneSigner)
 	}
-	mcpServer := mcp.NewServerWithOptions(registry, logger, mcp.ServerDeps{
+	mcpDeps := mcp.ServerDeps{
 		LogService:              runLogService,
 		Payments:                paymentSvc,
 		SBOMs:                   sbomRepo,
@@ -571,7 +572,9 @@ func New(cfg *config.Config) (*App, error) {
 		PackageProjection:       packageProjection,
 		WorkerReadModels:        workerReadModelSvc,
 		Workers:                 workerRepo,
-	})
+	}
+	configureBackupMCPDeps(&mcpDeps, backupRegistryRepo, controlPlanePool, controlPlaneSigner, controlPlaneRelays)
+	mcpServer := mcp.NewServerWithOptions(registry, logger, mcpDeps)
 	mcpHandler := handlers.NewMCPHandler(mcpServer, logger)
 	logger.Info("mcp server initialized")
 
@@ -997,6 +1000,15 @@ func buildDNSRuntime(ctx context.Context, cfg config.DNSConfig, logger *zap.Logg
 				return nil, nil, fmt.Errorf("checking DNS CoreDNS backend %q: %w", ref, err)
 			}
 			registrations = append(registrations, dnsAdapter.BackendRegistration{Ref: ref, Backend: backend})
+		case string(domain.DNSBackendTypePowerDNS):
+			backend, err := dnsAdapter.NewPowerDNSBackend(dnsAdapter.PowerDNSConfig{APIURL: backendConfig.PowerDNSAPIURL, APIKey: backendConfig.PowerDNSAPIKey, ServerID: backendConfig.PowerDNSServerID})
+			if err != nil {
+				return nil, nil, fmt.Errorf("configuring DNS PowerDNS backend %q: %w", ref, err)
+			}
+			if err := backend.Health(ctx); err != nil {
+				return nil, nil, fmt.Errorf("checking DNS PowerDNS backend %q: %w", ref, err)
+			}
+			registrations = append(registrations, dnsAdapter.BackendRegistration{Ref: ref, Backend: backend})
 		default:
 			return nil, nil, fmt.Errorf("configuring DNS backend %q: unsupported type %q", ref, backendConfig.Type)
 		}
@@ -1208,6 +1220,16 @@ func appendControlPlaneAuditOption(opts []controlplane.ReactorOption, repo repos
 		return opts
 	}
 	return append(opts, controlplane.WithNostrEventRepository(repo))
+}
+
+func configureBackupMCPDeps(deps *mcp.ServerDeps, readModels mcp.BackupReadModelRepository, publisher controlplane.NostrEventPublisher, signer canonicalnostr.Signer, relays []string) {
+	if deps == nil {
+		return
+	}
+	deps.BackupReadModels = readModels
+	if publisher != nil && signer != nil && len(relays) > 0 {
+		deps.BackupCommandPublisher = mcp.NewBackupCommandPublisher(publisher, signer)
+	}
 }
 
 func appendPackageControlPlaneOptions(opts []controlplane.ReactorOption, packageRegistrySvc *service.PackageRegistryService, packageProjection repository.PackageControlPlaneRepository) []controlplane.ReactorOption {

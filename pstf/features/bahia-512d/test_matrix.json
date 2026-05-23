@@ -1,0 +1,23 @@
+{
+  "feature_id": "bahia-512d",
+  "tests": [
+    {
+      "name": "TestBackupCommandPublisherPublishesCanonicalRunRequest",
+      "package": "github.com/openagentsinc/bahia/internal/mcp",
+      "acceptance_criteria": ["AC3"],
+      "verification": "Checks signed event kind, signature validity, d tag, command/agent/recipe tags, content, receipt kinds, and relay acceptance count."
+    },
+    {
+      "name": "TestConfigureBackupMCPDepsProvidesPublisherAndPostgresReadModels",
+      "package": "github.com/openagentsinc/bahia/internal/app",
+      "acceptance_criteria": ["AC1", "AC2", "AC4"],
+      "verification": "Checks app wiring helper installs BackupCommandPublisher, uses PgBackupControlPlaneRepository for BackupReadModels, and a backup MCP tool call succeeds without dependency errors."
+    },
+    {
+      "name": "go test ./internal/mcp ./internal/app",
+      "package": "multiple",
+      "acceptance_criteria": ["AC1", "AC2", "AC3", "AC4"],
+      "verification": "Required package-level regression suite."
+    }
+  ]
+}

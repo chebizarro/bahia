@@ -1,0 +1,25 @@
+{
+  "feature_id": "bahia-512d",
+  "criteria": [
+    {
+      "id": "AC1",
+      "statement": "Production MCP server wiring provides a non-nil BackupCommandPublisher when control-plane relays, signer, and publisher are configured.",
+      "tests": ["TestConfigureBackupMCPDepsProvidesPublisherAndPostgresReadModels"]
+    },
+    {
+      "id": "AC2",
+      "statement": "Production MCP server wiring provides BackupReadModels backed by PgBackupControlPlaneRepository.",
+      "tests": ["TestConfigureBackupMCPDepsProvidesPublisherAndPostgresReadModels"]
+    },
+    {
+      "id": "AC3",
+      "statement": "Backup command publisher signs canonical backup request events with d-tag idempotency and scoped Nostr tags, then requires at least one relay acceptance.",
+      "tests": ["TestBackupCommandPublisherPublishesCanonicalRunRequest"]
+    },
+    {
+      "id": "AC4",
+      "statement": "Configured backup MCP mutating tools no longer fail due to missing publisher dependency.",
+      "tests": ["TestConfigureBackupMCPDepsProvidesPublisherAndPostgresReadModels"]
+    }
+  ]
+}
