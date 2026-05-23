@@ -1,0 +1,12 @@
+{
+  "feature_id": "bahia-s2uc",
+  "title": "Remove REST DNS catalog layer",
+  "observed_behavior": "internal/api/handlers/dns_catalog.go exposed projected DNS endpoint read-model data through HTTP GET routes wired from router.go and app.go.",
+  "intended_behavior": "DNS catalog read-model data is not exposed through the REST API. Client-facing DNS state must be consumed through Nostr event subscriptions, while non-REST MCP DNS tooling remains separate.",
+  "scope": [
+    "internal/api/handlers/dns_catalog.go",
+    "internal/api/handlers/dns_catalog_test.go",
+    "internal/api/router/router.go",
+    "internal/app/app.go"
+  ]
+}

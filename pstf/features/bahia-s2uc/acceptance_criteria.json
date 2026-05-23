@@ -1,0 +1,21 @@
+{
+  "feature_id": "bahia-s2uc",
+  "criteria": [
+    {
+      "id": "AC1",
+      "description": "DNS catalog HTTP handler and handler tests are removed from internal/api/handlers."
+    },
+    {
+      "id": "AC2",
+      "description": "RouterDeps no longer accepts DNSCatalog and /api/v1/dns/catalog, /api/v1/dns/catalog/{fqdn}, /api/v1/dns/zones, and /api/v1/dns/drift routes are not registered."
+    },
+    {
+      "id": "AC3",
+      "description": "Application wiring no longer constructs or passes a DNS catalog REST handler."
+    },
+    {
+      "id": "AC4",
+      "description": "Backend compiles after REST DNS catalog removal."
+    }
+  ]
+}

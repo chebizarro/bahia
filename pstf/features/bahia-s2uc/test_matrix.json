@@ -1,0 +1,17 @@
+{
+  "feature_id": "bahia-s2uc",
+  "tests": [
+    {
+      "command": "file_search DNSCatalogHandler|DNSCatalogProvider|NewDNSCatalogHandler|GetCatalogEndpoint|ListCatalog|DNSCatalog",
+      "criteria": ["AC1", "AC2", "AC3"],
+      "expected": "No production code references remain; only audit/Beads text may mention removed symbols.",
+      "result": "passed"
+    },
+    {
+      "command": "go build ./...",
+      "criteria": ["AC4"],
+      "expected": "All Go packages compile.",
+      "result": "passed"
+    }
+  ]
+}

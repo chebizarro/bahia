@@ -757,12 +757,6 @@ func New(cfg *config.Config) (*App, error) {
 		NIP05Resolver:  nip05Resolver,
 	}
 
-	// DNS catalog handler (optional — only when DNS is enabled).
-	var dnsCatalogHandler *handlers.DNSCatalogHandler
-	if dnsProjector != nil {
-		dnsCatalogHandler = handlers.NewDNSCatalogHandler(dnsProjector)
-	}
-
 	// HTTP router.
 	handler := router.NewWithDeps(registry, logger, cfg.CORS, telemetryProvider,
 		router.RouterDeps{
@@ -795,7 +789,6 @@ func New(cfg *config.Config) (*App, error) {
 			MLRegistry:         mlRegistry,
 			MLCommands:         mlCommandPublisher,
 			LLMRegistry:        llmRegistry,
-			DNSCatalog:         dnsCatalogHandler,
 			ContinuityStatuses: continuityStatusStore,
 		}, cfg.Auth)
 
