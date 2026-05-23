@@ -652,6 +652,7 @@ func New(cfg *config.Config) (*App, error) {
 		if assistantOrchestrator != nil {
 			reactorOpts = append(reactorOpts, controlplane.WithAssistantOrchestrator(assistantOrchestrator))
 		}
+		reactorOpts = append(reactorOpts, controlplane.WithWorkerRepository(workerRepo))
 		reactorOpts = appendPackageControlPlaneOptions(reactorOpts, packageRegistrySvc, packageProjection)
 		reactor := controlplane.NewReactor(reactorConfig, registry, controlPlanePool, controlPlaneSigner, logger, reactorOpts...)
 		bgManager.Register(&controlplaneRunner{reactor: reactor})

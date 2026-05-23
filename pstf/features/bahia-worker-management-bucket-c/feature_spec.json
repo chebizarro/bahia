@@ -1,0 +1,22 @@
+{
+  "feature_id": "bahia-worker-management-bucket-c",
+  "title": "Worker management controlplane command infrastructure",
+  "date": "2026-05-23",
+  "source_plan": "docs/plans/bahia-worker-management-nostr-native-2026-05-22.md",
+  "beads": ["bahia-jhmd", "bahia-iug7", "bahia-u8zl"],
+  "intended_behavior": [
+    "Operators publish signed Nostr command events for worker cordon, uncordon, drain, undrain, maintenance enter, maintenance exit, and labels update.",
+    "Worker command events carry worker pubkey, reason, operator metadata, and idempotency key/correlation tags.",
+    "The controlplane reactor validates authorized worker commands, applies scheduling state or label changes through the worker repository, emits worker status/result events, and publishes a replaceable worker state read model.",
+    "The reactor subscribes to and dispatches all worker command kinds through the same event-driven command/result/read-model pattern as existing controlplane domains."
+  ],
+  "observed_baseline": [
+    "Worker domain/repository fields for scheduling state, scheduling note, labels, and capabilities already existed before Bucket C.",
+    "No worker-specific controlplane command publisher, handlers, request kinds, result kinds, or worker state read model kind existed before Bucket C."
+  ],
+  "out_of_scope": [
+    "Frontend/Svelte worker UI changes.",
+    "Scheduling enforcement in worker_policy.go and ml_placement.go.",
+    "MCP worker tools and assignment/drain read models scheduled for later beads."
+  ]
+}

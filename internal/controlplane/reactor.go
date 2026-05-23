@@ -61,6 +61,13 @@ const (
 	KindPackagePromotionRequest = 5994 // Request package promotion to a target repository/channel
 	KindPackageYankRequest      = 5995 // Yank/deprecate a package artifact
 	KindPackageDriftDetect      = 5996 // Observe package backend drift
+	KindWorkerCordonRequest     = 5997 // Request worker cordon
+	KindWorkerUncordonRequest   = 5998 // Request worker uncordon
+	KindWorkerDrainRequest      = 5999 // Request worker drain
+	KindWorkerUndrainRequest    = 6000 // Request worker undrain
+	KindWorkerMaintenanceEnter  = 6001 // Request worker maintenance entry
+	KindWorkerMaintenanceExit   = 6002 // Request worker maintenance exit
+	KindWorkerLabelsUpdate      = 6003 // Request worker label update
 
 	// Generic AI/ML command/result kinds (38390-38399). These intentionally
 	// avoid NIP-90's 5000-7000 DVM range.
@@ -83,6 +90,7 @@ const (
 	KindToolProvisionStatus = 6976 // Bahia → Agent (progress)
 	KindAdoptionStatus      = 6978 // Adoption scan/import progress updates
 	KindPackageStatus       = 6991 // Package lifecycle progress/policy events
+	KindWorkerStatus        = 6997 // Worker lifecycle progress events
 
 	// Result kinds (7961-7979)
 	KindDeploymentResult         = 7961 // Final deployment result
@@ -100,6 +108,7 @@ const (
 	KindAdoptionImportResult     = 7979 // Adoption import result
 	KindPackageResult            = 7991 // Package lifecycle terminal result
 	KindPackageDriftEvent        = 7992 // Package drift observation result
+	KindWorkerResult             = 7997 // Worker lifecycle terminal result
 
 	// Replaceable registry kinds (3196x series, d-tag indexed)
 	KindServiceState              = 31961 // Replaceable service state (d=service:env)
@@ -115,6 +124,7 @@ const (
 	KindPackageRepositoryRegistry = 31971 // Replaceable package repository state (d=repository_id)
 	KindPackageArtifactRegistry   = 31972 // Replaceable package artifact state (d=artifact_id)
 	KindPackagePromotionRegistry  = 31973 // Replaceable package promotion/publication state (d=publication_id)
+	KindWorkerState               = 31974 // Replaceable worker state (d=worker pubkey)
 )
 
 // Config holds reactor configuration.
@@ -159,6 +169,7 @@ type Reactor struct {
 	runtimeLifecycle         RuntimeLifecycleOperatorService
 	packageService           *service.PackageRegistryService
 	packageProjection        repository.PackageControlPlaneRepository
+	workerRepo               repository.WorkerRepository
 	mlExecutor               MLInferenceControlPlaneExecutor
 	mlRecipeExecutor         MLRecipeControlPlaneExecutor
 	nostrEvents              repository.NostrEventRepository
@@ -283,6 +294,10 @@ func WithPackageRegistryService(packageService *service.PackageRegistryService) 
 
 func WithPackageProjectionRepository(repo repository.PackageControlPlaneRepository) ReactorOption {
 	return func(r *Reactor) { r.packageProjection = repo }
+}
+
+func WithWorkerRepository(repo repository.WorkerRepository) ReactorOption {
+	return func(r *Reactor) { r.workerRepo = repo }
 }
 
 func WithNostrEventRepository(repo repository.NostrEventRepository) ReactorOption {
@@ -556,6 +571,20 @@ func (r *Reactor) handleEvent(ctx context.Context, event *nostr.Event) {
 		go r.handlePackageYankRequest(ctx, event)
 	case KindPackageDriftDetect:
 		go r.handlePackageDriftDetect(ctx, event)
+	case KindWorkerCordonRequest:
+		go r.handleWorkerCordonRequest(ctx, event)
+	case KindWorkerUncordonRequest:
+		go r.handleWorkerUncordonRequest(ctx, event)
+	case KindWorkerDrainRequest:
+		go r.handleWorkerDrainRequest(ctx, event)
+	case KindWorkerUndrainRequest:
+		go r.handleWorkerUndrainRequest(ctx, event)
+	case KindWorkerMaintenanceEnter:
+		go r.handleWorkerMaintenanceEnterRequest(ctx, event)
+	case KindWorkerMaintenanceExit:
+		go r.handleWorkerMaintenanceExitRequest(ctx, event)
+	case KindWorkerLabelsUpdate:
+		go r.handleWorkerLabelsUpdateRequest(ctx, event)
 	case domain.KindAssistantPromptRequest:
 		r.handleAssistantPromptRequest(ctx, event)
 	case domain.KindAssistantApproval:
@@ -1778,6 +1807,13 @@ func defaultRequestSubscriptionKinds() []int {
 		KindPackagePromotionRequest,
 		KindPackageYankRequest,
 		KindPackageDriftDetect,
+		KindWorkerCordonRequest,
+		KindWorkerUncordonRequest,
+		KindWorkerDrainRequest,
+		KindWorkerUndrainRequest,
+		KindWorkerMaintenanceEnter,
+		KindWorkerMaintenanceExit,
+		KindWorkerLabelsUpdate,
 		domain.KindAssistantPromptRequest,
 		domain.KindAssistantApproval,
 	}

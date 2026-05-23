@@ -268,3 +268,31 @@ func (r *PgWorkerRepository) UpdateStatus(ctx context.Context, pubkey string, st
 	}
 	return nil
 }
+
+// UpdateSchedulingState updates only operator scheduling intent fields for a worker.
+func (r *PgWorkerRepository) UpdateSchedulingState(ctx context.Context, pubkey string, state domain.WorkerSchedulingState, note string) error {
+	if state == "" {
+		state = domain.WorkerSchedulingActive
+	}
+	_, err := r.pool.Exec(ctx, `UPDATE workers SET scheduling_state = $1, scheduling_note = $2, updated_at = now() WHERE pubkey = $3`, string(state), note, pubkey)
+	if err != nil {
+		return fmt.Errorf("updating worker scheduling state: %w", err)
+	}
+	return nil
+}
+
+// UpdateLabels updates only operator-managed labels for a worker.
+func (r *PgWorkerRepository) UpdateLabels(ctx context.Context, pubkey string, labels map[string]string) error {
+	if labels == nil {
+		labels = map[string]string{}
+	}
+	labelsJSON, err := marshalJSON(labels, "worker labels")
+	if err != nil {
+		return err
+	}
+	_, err = r.pool.Exec(ctx, `UPDATE workers SET labels = $1, updated_at = now() WHERE pubkey = $2`, labelsJSON, pubkey)
+	if err != nil {
+		return fmt.Errorf("updating worker labels: %w", err)
+	}
+	return nil
+}

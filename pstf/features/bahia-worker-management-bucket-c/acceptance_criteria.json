@@ -1,0 +1,35 @@
+{
+  "feature_id": "bahia-worker-management-bucket-c",
+  "criteria": [
+    {
+      "id": "AC-C1",
+      "statement": "Worker cordon, uncordon, drain, undrain, maintenance enter, maintenance exit, and labels update commands can be published as signed Nostr request events with worker pubkey, reason, operator metadata, and idempotency key.",
+      "verification": ["TestWorkerCommandPublisherPublishesLifecycleCommandsWithCorrelation", "TestWorkerCommandPublisherPublishesLabelsUpdateAndGeneratesIdempotencyKey"]
+    },
+    {
+      "id": "AC-C2",
+      "statement": "Worker lifecycle handlers validate authorization, worker pubkey, idempotency key, and command payload before mutating worker state.",
+      "verification": ["TestWorkerHandlerRejectsMissingIdempotencyKey", "TestWorkerHandlerRejectsConflictingWorkerTagAndContent", "TestWorkerHandlerRejectsDisabledWorkerTransition"]
+    },
+    {
+      "id": "AC-C3",
+      "statement": "Worker scheduling commands update the worker repository scheduling state and scheduling note without polling or timeout-based completion.",
+      "verification": ["TestWorkerCordonHandlerUpdatesWorkerAndPublishesLifecycle"]
+    },
+    {
+      "id": "AC-C4",
+      "statement": "Worker labels update commands persist labels and publish label-aware worker state read models.",
+      "verification": ["TestWorkerLabelsUpdateHandlerUpdatesLabelsAndPublishesReadModel"]
+    },
+    {
+      "id": "AC-C5",
+      "statement": "The reactor subscribes to and dispatches all worker command request kinds.",
+      "verification": ["TestWorkerCommandKindsAreInDefaultSubscriptionFilter", "go test ./internal/controlplane/..."]
+    },
+    {
+      "id": "AC-C6",
+      "statement": "Production app wiring provides the worker repository to the controlplane reactor.",
+      "verification": ["go test ./internal/app/...", "go test ./internal/repository/..."]
+    }
+  ]
+}

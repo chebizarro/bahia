@@ -1,0 +1,60 @@
+{
+  "feature_id": "bahia-worker-management-bucket-c",
+  "test_matrix": [
+    {
+      "test": "TestWorkerCommandPublisherPublishesLifecycleCommandsWithCorrelation",
+      "criteria": ["AC-C1"],
+      "evidence": "Verifies signed cordon request event kind, d tag, worker tag, command tag, agent tag, content reason/operator metadata/idempotency, and receipt correlation kinds."
+    },
+    {
+      "test": "TestWorkerCommandPublisherPublishesLabelsUpdateAndGeneratesIdempotencyKey",
+      "criteria": ["AC-C1"],
+      "evidence": "Verifies labels update request carries labels and receives a generated idempotency d tag when caller omits one."
+    },
+    {
+      "test": "TestWorkerCommandPublisherFailsWhenNoRelayAccepts",
+      "criteria": ["AC-C1"],
+      "evidence": "Verifies command publication treats zero accepted relays as failure rather than assuming publish success."
+    },
+    {
+      "test": "TestWorkerCordonHandlerUpdatesWorkerAndPublishesLifecycle",
+      "criteria": ["AC-C2", "AC-C3", "AC-C5"],
+      "evidence": "Verifies handler mutates scheduling state to cordoned, records scheduling note, emits status/result events, and publishes worker state read model."
+    },
+    {
+      "test": "TestWorkerLabelsUpdateHandlerUpdatesLabelsAndPublishesReadModel",
+      "criteria": ["AC-C2", "AC-C4", "AC-C5"],
+      "evidence": "Verifies labels update persists sanitized labels and worker state read model includes label tags."
+    },
+    {
+      "test": "TestWorkerHandlerRejectsMissingIdempotencyKey",
+      "criteria": ["AC-C2"],
+      "evidence": "Verifies missing idempotency key produces validation result and does not transition worker to draining."
+    },
+    {
+      "test": "TestWorkerHandlerRejectsConflictingWorkerTagAndContent",
+      "criteria": ["AC-C2"],
+      "evidence": "Verifies worker tag/content mismatch is rejected before either worker is mutated."
+    },
+    {
+      "test": "TestWorkerHandlerRejectsDisabledWorkerTransition",
+      "criteria": ["AC-C2"],
+      "evidence": "Verifies disabled workers cannot be moved back to active through maintenance exit or other lifecycle commands before enable support exists."
+    },
+    {
+      "test": "TestWorkerCommandKindsAreInDefaultSubscriptionFilter",
+      "criteria": ["AC-C5"],
+      "evidence": "Verifies all worker command kinds are in the default controlplane request subscription filter."
+    },
+    {
+      "test": "go test ./internal/app/...",
+      "criteria": ["AC-C6"],
+      "evidence": "Verifies app package still compiles with production reactor worker-repository wiring."
+    },
+    {
+      "test": "go test ./internal/repository/...",
+      "criteria": ["AC-C3", "AC-C4", "AC-C6"],
+      "evidence": "Verifies repository package still compiles with targeted worker scheduling-state and labels update methods used by controlplane handlers."
+    }
+  ]
+}
