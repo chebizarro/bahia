@@ -928,6 +928,8 @@ func TestProjectorPublishesDNSEndpointSnapshotAndTombstone(t *testing.T) {
 	assertTag(t, endpointEvent, "port", "8443")
 	assertTag(t, endpointEvent, "t", "dns-endpoint")
 	assertTag(t, endpointEvent, "t", "bahia")
+	assertNoTag(t, endpointEvent, "npub", "")
+	assertNoTag(t, endpointEvent, "mesh", "")
 	assertJSONField(t, endpointEvent.Content, "coordinate", "endpoint:service:api:prod")
 
 	dnsSource.endpoints = nil
@@ -944,6 +946,37 @@ func TestProjectorPublishesDNSEndpointSnapshotAndTombstone(t *testing.T) {
 	assertTag(t, tombstone, "dns", "api.prod.cascadia")
 	assertJSONField(t, tombstone.Content, "deleted", true)
 	assertJSONField(t, tombstone.Content, "coordinate", "endpoint:service:api:prod")
+}
+
+func TestProjectorPublishesDNSEndpointFIPSTagsWhenWorkerPubkeyPresent(t *testing.T) {
+	ctx := context.Background()
+	port := 8000
+	workerPubkey := "npub1workerpubkey"
+	dnsSource := &fakeDNSProjectionSource{endpoints: []domain.DNSEndpoint{{
+		Family:       domain.DNSEndpointFamilyWorker,
+		Name:         "t7920-l40s",
+		Zone:         "edge.cascadia",
+		FQDN:         "t7920-l40s.edge.cascadia",
+		Protocol:     "http",
+		Address:      "10.0.1.45",
+		Port:         &port,
+		WorkerPubkey: workerPubkey,
+		Health:       domain.HealthStatusHealthy,
+		DriftStatus:  domain.DriftStatusInSync,
+		Source:       "test",
+	}}}
+	sink := &captureProjectionPublisher{}
+	projector := NewProjector(projectorTestConfig(), newFakeProjectionSource(), sink, nil, zap.NewNop(), WithDNSProjectionSource(dnsSource))
+
+	if err := projector.RepublishSnapshot(ctx); err != nil {
+		t.Fatalf("republish snapshot: %v", err)
+	}
+
+	endpointEvent := assertOneSignedKind(t, sink, KindDNSEndpointState)
+	assertTag(t, endpointEvent, "d", "endpoint:worker:t7920-l40s")
+	assertTag(t, endpointEvent, "worker", workerPubkey)
+	assertTag(t, endpointEvent, "npub", workerPubkey)
+	assertTag(t, endpointEvent, "mesh", "fips")
 }
 
 func TestProjectorSystemDiscoveryAdvertisesDNSOnlyWhenSourceConfigured(t *testing.T) {
@@ -1063,6 +1096,18 @@ func assertTag(t *testing.T, ev gonostr.Event, key, value string) {
 		}
 	}
 	t.Fatalf("event kind %d missing tag %s=%s; tags=%v", ev.Kind, key, value, ev.Tags)
+}
+
+func assertNoTag(t *testing.T, ev gonostr.Event, key, value string) {
+	t.Helper()
+	for _, tag := range ev.Tags {
+		if len(tag) < 2 || tag[0] != key {
+			continue
+		}
+		if value == "" || tag[1] == value {
+			t.Fatalf("event kind %d unexpectedly had tag %s=%s; tags=%v", ev.Kind, key, tag[1], ev.Tags)
+		}
+	}
 }
 
 func assertJSONField(t *testing.T, content, key string, want any) {

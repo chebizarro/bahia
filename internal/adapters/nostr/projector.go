@@ -1804,6 +1804,9 @@ func dnsEndpointTags(endpoint domain.DNSEndpoint) gonostr.Tags {
 	if endpoint.Port != nil {
 		tags = append(tags, gonostr.Tag{"port", fmt.Sprintf("%d", *endpoint.Port)})
 	}
+	if endpoint.WorkerPubkey != "" {
+		tags = append(tags, gonostr.Tag{"npub", endpoint.WorkerPubkey}, gonostr.Tag{"mesh", "fips"})
+	}
 	switch endpoint.Family {
 	case domain.DNSEndpointFamilyService:
 		tags = append(tags, gonostr.Tag{"service", endpoint.Name})
