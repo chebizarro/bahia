@@ -9,12 +9,13 @@
   import LoadingButton from '$lib/components/LoadingButton.svelte';
   import EmptyState from '$lib/components/EmptyState.svelte';
   import { EnvironmentIcon, ProtectedIcon } from '$lib/icons/domain-icons.js';
-  import { environments, loading, loadEnvironments } from '$lib/stores';
+  import { environments, loading, loadEnvironments, workers, loadWorkers } from '$lib/stores';
   import { createEnvironment as createEnvironmentCommand } from '$lib/stores/public-controlplane.svelte.js';
+  import { parseKeyValueLines } from '../ml/page-model.js';
   import { environmentFormSchema, parseRuntimeConfig, validateForm } from '$lib/validation/forms.js';
 
   $effect(() => {
-    void loadEnvironments();
+    void Promise.all([loadEnvironments(), loadWorkers()]);
   });
 
   // Create modal state
@@ -26,6 +27,10 @@
     name: '',
     loom_worker_selector: '',
     runtime_config: '{}',
+    pinned_worker: '',
+    label_selector: '',
+    rollout_from_labels: '',
+    rollout_to_labels: '',
     deploy_strategy: 'rolling',
     protected: false
   });
@@ -35,6 +40,11 @@
     { value: 'blue-green', label: 'Blue-Green' },
     { value: 'canary', label: 'Canary' }
   ];
+
+  let workerOptions = $derived([
+    { value: '', label: 'Any eligible worker' },
+    ...workers.map((worker) => ({ value: worker.pubkey, label: `${worker.name || worker.pubkey?.slice(0, 16) + '…'} (${String(worker.pubkey || '').slice(0, 12)}…)` }))
+  ]);
 
   const deployStrategyApiMap = {
     rolling: 'replace',
@@ -67,6 +77,10 @@
       name: '',
       loom_worker_selector: '',
       runtime_config: '{}',
+      pinned_worker: '',
+      label_selector: '',
+      rollout_from_labels: '',
+      rollout_to_labels: '',
       deploy_strategy: 'rolling',
       protected: false
     };
@@ -79,7 +93,20 @@
       return;
     }
 
-    const parsedRuntimeConfig = parseRuntimeConfig(createForm.runtime_config);
+    let parsedRuntimeConfig;
+    try {
+      parsedRuntimeConfig = parseRuntimeConfig(createForm.runtime_config);
+      const workerPolicy = buildWorkerPolicy(createForm);
+      if (Object.keys(workerPolicy).length > 0) {
+        parsedRuntimeConfig.worker_policy = {
+          ...(parsedRuntimeConfig.worker_policy && typeof parsedRuntimeConfig.worker_policy === 'object' ? parsedRuntimeConfig.worker_policy : {}),
+          ...workerPolicy
+        };
+      }
+    } catch (err) {
+      createError = err.message || 'Invalid worker placement policy';
+      return;
+    }
 
     creating = true;
     createError = null;
@@ -100,6 +127,21 @@
     } finally {
       creating = false;
     }
+  }
+
+  function buildWorkerPolicy(form) {
+    const policy = {};
+    if (form.pinned_worker) policy.pinned_worker = form.pinned_worker;
+    const labelSelector = parseKeyValueLines(form.label_selector, { fieldName: 'Label selector' });
+    if (Object.keys(labelSelector).length > 0) policy.label_selector = labelSelector;
+    const fromLabels = parseKeyValueLines(form.rollout_from_labels, { fieldName: 'Rollout source labels' });
+    const toLabels = parseKeyValueLines(form.rollout_to_labels, { fieldName: 'Rollout target labels' });
+    if (Object.keys(fromLabels).length > 0 || Object.keys(toLabels).length > 0) {
+      policy.rollout = {};
+      if (Object.keys(fromLabels).length > 0) policy.rollout.from_labels = fromLabels;
+      if (Object.keys(toLabels).length > 0) policy.rollout.to_labels = toLabels;
+    }
+    return policy;
   }
 </script>
 
@@ -153,6 +195,50 @@
         placeholder="region=us-west"
         disabled={creating}
       />
+    </div>
+
+    <div class="form-field">
+      <label for="create-pinned-worker">Pin to worker (optional)</label>
+      <Select
+        id="create-pinned-worker"
+        bind:value={createForm.pinned_worker}
+        options={workerOptions}
+        disabled={creating}
+      />
+    </div>
+
+    <div class="form-field">
+      <label for="create-label-selector">Worker label selector</label>
+      <Textarea
+        id="create-label-selector"
+        bind:value={createForm.label_selector}
+        placeholder={'role=inference\ntrack=stable'}
+        rows={3}
+        disabled={creating}
+      />
+    </div>
+
+    <div class="placement-grid">
+      <div class="form-field">
+        <label for="create-rollout-from">Rollout from labels</label>
+        <Textarea
+          id="create-rollout-from"
+          bind:value={createForm.rollout_from_labels}
+          placeholder="track=canary"
+          rows={2}
+          disabled={creating}
+        />
+      </div>
+      <div class="form-field">
+        <label for="create-rollout-to">Rollout target labels</label>
+        <Textarea
+          id="create-rollout-to"
+          bind:value={createForm.rollout_to_labels}
+          placeholder="track=stable"
+          rows={2}
+          disabled={creating}
+        />
+      </div>
     </div>
 
     <div class="form-field">
@@ -252,6 +338,11 @@
     font-size: 0.875rem;
     font-weight: 500;
     color: var(--text-primary);
+  }
+  .placement-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 1rem;
   }
   .form-actions {
     display: flex;

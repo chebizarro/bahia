@@ -1,0 +1,29 @@
+{
+  "feature_id": "bahia-5asv",
+  "criteria": [
+    {
+      "id": "AC1",
+      "description": "Inference deployment form accepts an optional pinned worker and includes pinned_worker in placement policy."
+    },
+    {
+      "id": "AC2",
+      "description": "Inference deployment form previews eligible and rejected workers with reasons and an estimated eligible worker count before submit."
+    },
+    {
+      "id": "AC3",
+      "description": "Inference deployment supports label selector, worker selector, and rollout label inputs for deploy targeting."
+    },
+    {
+      "id": "AC4",
+      "description": "Existing inference endpoint pinning publishes workload.pin.request through publishCommand and waits for worker result events."
+    },
+    {
+      "id": "AC5",
+      "description": "Environment placement policy editing publishes worker-policy.apply.request through publishCommand and waits for worker result events."
+    },
+    {
+      "id": "AC6",
+      "description": "Frontend control-plane subscriptions include worker state and eligibility read-model kinds."
+    }
+  ]
+}

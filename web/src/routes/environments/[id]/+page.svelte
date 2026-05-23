@@ -22,8 +22,11 @@
     loadDeploymentIntents,
     loadWorkers
   } from '$lib/stores';
-  import { updateEnvironment, deleteEnvironment } from '$lib/stores/public-controlplane.svelte.js';
+  import { updateEnvironment, deleteEnvironment, publishCommand, resultContent } from '$lib/stores/public-controlplane.svelte.js';
+  import { KINDS } from '$lib/nostr/client.js';
+  import { currentRequesterPubkey } from '$lib/nostr/controlplane-requests.js';
   import { environmentFormSchema, parseRuntimeConfig, validateForm } from '$lib/validation/forms.js';
+  import { keyValueLines, parseKeyValueLines } from '../../ml/page-model.js';
   import {
     ArtifactIcon,
     DeploymentIcon,
@@ -75,10 +78,30 @@
     protected: false
   });
 
+  // Placement policy modal state
+  let placementOpen = $state(false);
+  let placementSaving = $state(false);
+  let placementError = $state(null);
+  let placementNotice = $state(null);
+  let placementForm = $state({
+    pinned_worker: '',
+    label_selector: '',
+    rollout_from_labels: '',
+    rollout_to_labels: ''
+  });
+
   // Delete modal state
   let deleteOpen = $state(false);
   let deleting = $state(false);
   let deleteError = $state(null);
+
+  const WORKER_PLACEMENT_KINDS = {
+    POLICY_APPLY_REQUEST: KINDS.BAHIA_REQUEST_WORKER_POLICY_APPLY,
+    RESULT: KINDS.BAHIA_WORKER_RESULT
+  };
+  const WORKER_PLACEMENT_COMMANDS = {
+    POLICY_APPLY: 'worker-policy.apply.request'
+  };
 
   const deployStrategyOptions = [
     { value: 'replace', label: 'Replace' },
@@ -137,6 +160,8 @@
   let environmentDriftStatus = $derived(
     states.length === 0 ? 'unknown' : driftedStates.length > 0 ? 'drifted' : 'in_sync'
   );
+  let workerPolicy = $derived(environment?.runtime_config?.worker_policy && typeof environment.runtime_config.worker_policy === 'object' ? environment.runtime_config.worker_policy : {});
+  let estimatedPolicyEligibleCount = $derived(countWorkersMatchingPolicy(workers, workerPolicy));
   let driftStatusIcon = $derived(
     environmentDriftStatus === 'drifted' ? WarningIcon : environmentDriftStatus === 'in_sync' ? SuccessIcon : UnknownIcon
   );
@@ -197,6 +222,108 @@
   function closeEditModal() {
     editOpen = false;
     editError = null;
+  }
+
+  function randomId() {
+    const cryptoApi = globalThis.crypto;
+    if (cryptoApi?.randomUUID) return cryptoApi.randomUUID();
+    if (cryptoApi?.getRandomValues) {
+      const bytes = new Uint8Array(16);
+      cryptoApi.getRandomValues(bytes);
+      return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
+    }
+    return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  }
+
+  function countWorkersMatchingPolicy(sourceWorkers, policy) {
+    const pinned = String(policy?.pinned_worker || '').trim();
+    const selector = policy?.label_selector && typeof policy.label_selector === 'object' ? policy.label_selector : {};
+    return (sourceWorkers || []).filter((worker) => {
+      if (String(worker?.status || 'online').toLowerCase() !== 'online') return false;
+      if (String(worker?.scheduling_state || 'active').toLowerCase() !== 'active') return false;
+      if (pinned && worker.pubkey !== pinned) return false;
+      const labels = worker?.labels && typeof worker.labels === 'object' ? worker.labels : {};
+      return Object.entries(selector).every(([key, value]) => String(labels[key] ?? '') === String(value ?? ''));
+    }).length;
+  }
+
+  function openPlacementModal() {
+    const rollout = workerPolicy.rollout && typeof workerPolicy.rollout === 'object' ? workerPolicy.rollout : {};
+    placementForm = {
+      pinned_worker: workerPolicy.pinned_worker || '',
+      label_selector: keyValueLines(workerPolicy.label_selector),
+      rollout_from_labels: keyValueLines(rollout.from_labels),
+      rollout_to_labels: keyValueLines(rollout.to_labels)
+    };
+    placementNotice = null;
+    placementError = null;
+    placementOpen = true;
+  }
+
+  function closePlacementModal() {
+    placementOpen = false;
+    placementError = null;
+  }
+
+  function estimatedPlacementFormCount() {
+    try {
+      return countWorkersMatchingPolicy(workers, buildPlacementPolicyFromForm(placementForm));
+    } catch {
+      return 0;
+    }
+  }
+
+  function buildPlacementPolicyFromForm(form) {
+    const policy = {};
+    if (form.pinned_worker) policy.pinned_worker = form.pinned_worker;
+    const labelSelector = parseKeyValueLines(form.label_selector, { fieldName: 'Label selector' });
+    if (Object.keys(labelSelector).length > 0) policy.label_selector = labelSelector;
+    const fromLabels = parseKeyValueLines(form.rollout_from_labels, { fieldName: 'Rollout source labels' });
+    const toLabels = parseKeyValueLines(form.rollout_to_labels, { fieldName: 'Rollout target labels' });
+    if (Object.keys(fromLabels).length > 0 || Object.keys(toLabels).length > 0) {
+      policy.rollout = {};
+      if (Object.keys(fromLabels).length > 0) policy.rollout.from_labels = fromLabels;
+      if (Object.keys(toLabels).length > 0) policy.rollout.to_labels = toLabels;
+    }
+    return policy;
+  }
+
+  async function handlePlacementPolicyApply() {
+    placementSaving = true;
+    placementError = null;
+    placementNotice = null;
+    try {
+      const policy = buildPlacementPolicyFromForm(placementForm);
+      const key = `${WORKER_PLACEMENT_COMMANDS.POLICY_APPLY}:${environmentId}:${randomId()}`;
+      const tags = [
+        ['d', key],
+        ['command', WORKER_PLACEMENT_COMMANDS.POLICY_APPLY],
+        ['environment', environmentId]
+      ];
+      if (policy.pinned_worker) tags.push(['worker', policy.pinned_worker]);
+      const result = await publishCommand({
+        kind: WORKER_PLACEMENT_KINDS.POLICY_APPLY_REQUEST,
+        tags,
+        content: {
+          environment_id: environmentId,
+          policy,
+          reason: 'Operator placement policy update from Environment page',
+          idempotency_key: key,
+          operator_metadata: {
+            source: 'web.environments.detail',
+            requested_by: currentRequesterPubkey() || ''
+          }
+        },
+        resultKinds: [WORKER_PLACEMENT_KINDS.RESULT]
+      });
+      placementNotice = resultContent(result)?.message || 'Worker placement policy command accepted';
+      await loadEnvironment(environmentId);
+      closePlacementModal();
+    } catch (err) {
+      placementError = err.message || 'Failed to publish worker placement policy command';
+    } finally {
+      placementSaving = false;
+    }
   }
 
   async function handleEdit() {
@@ -284,11 +411,29 @@
       <Card title="Deploy Strategy" titleIcon={DeploymentIcon} value={environment.deploy_strategy || 'replace'} />
       <Card title="Protected" titleIcon={environment.protected ? ProtectedIcon : UnknownIcon} value={environment.protected ? 'Yes' : 'No'} />
       <Card title="Worker Selector" titleIcon={ServiceIcon} value={environment.loom_worker_selector || 'Any worker'} />
+      <Card title="Eligible Workers" titleIcon={ServiceIcon} value={String(estimatedPolicyEligibleCount)} />
       <Card title="Current State" titleIcon={driftStatusIcon} value={environmentDriftStatus === 'drifted' ? 'Drifted' : environmentDriftStatus === 'in_sync' ? 'In Sync' : 'Unknown'} />
       <Card title="Drifted Services" titleIcon={WarningIcon} value={String(driftedStates.length)} />
       <Card title="In-Sync Services" titleIcon={SuccessIcon} value={String(inSyncStates.length)} />
       <Card title="ID" titleIcon={EnvironmentIcon} value={environment.id ? `${environment.id.slice(0, 16)}...` : '-'} />
     </div>
+
+    {#if placementNotice}
+      <p class="success-notice">{placementNotice}</p>
+    {/if}
+
+    <section>
+      <div class="section-header-row">
+        <h2 class="section-title"><ServiceIcon size={18} strokeWidth={1.75} ariaHidden="true" /> <span>Worker Placement Policy</span></h2>
+        <LoadingButton variant="secondary" onclick={openPlacementModal}>Edit placement policy</LoadingButton>
+      </div>
+      <div class="policy-summary">
+        <div><span>Pinned worker</span><code>{workerPolicy.pinned_worker || 'Any worker'}</code></div>
+        <div><span>Label selector</span><code>{keyValueLines(workerPolicy.label_selector) || 'No label selector'}</code></div>
+        <div><span>Rollout</span><code>{workerPolicy.rollout ? JSON.stringify(workerPolicy.rollout) : 'No rollout labels'}</code></div>
+      </div>
+      <p class="hint">Changes publish <code>worker-policy.apply.request</code> and wait for a Nostr result before the environment read model refreshes.</p>
+    </section>
 
     {#if environment.runtime_config && Object.keys(environment.runtime_config).length > 0}
       <section>
@@ -347,6 +492,66 @@
       </div>
     </div>
   {/if}
+</Modal>
+
+<!-- Placement Policy Modal -->
+<Modal bind:open={placementOpen} title="Edit Worker Placement Policy" titleIcon={ServiceIcon} onClose={closePlacementModal}>
+  <form onsubmit={(event) => { event.preventDefault(); handlePlacementPolicyApply(); }} class="edit-form">
+    <div class="form-field">
+      <label for="placement-pinned-worker">Pin to worker</label>
+      <Select
+        id="placement-pinned-worker"
+        bind:value={placementForm.pinned_worker}
+        options={workerOptions}
+        disabled={placementSaving}
+      />
+    </div>
+
+    <div class="form-field">
+      <label for="placement-label-selector">Label selector</label>
+      <Textarea
+        id="placement-label-selector"
+        bind:value={placementForm.label_selector}
+        placeholder={'role=inference\ntrack=stable'}
+        rows={4}
+        disabled={placementSaving}
+      />
+    </div>
+
+    <div class="placement-grid">
+      <div class="form-field">
+        <label for="placement-rollout-from">Rollout from labels</label>
+        <Textarea
+          id="placement-rollout-from"
+          bind:value={placementForm.rollout_from_labels}
+          placeholder="track=canary"
+          rows={2}
+          disabled={placementSaving}
+        />
+      </div>
+      <div class="form-field">
+        <label for="placement-rollout-to">Rollout target labels</label>
+        <Textarea
+          id="placement-rollout-to"
+          bind:value={placementForm.rollout_to_labels}
+          placeholder="track=stable"
+          rows={2}
+          disabled={placementSaving}
+        />
+      </div>
+    </div>
+
+    <p class="hint">Estimated matching active workers: {estimatedPlacementFormCount()}</p>
+
+    {#if placementError}
+      <p class="error">{placementError}</p>
+    {/if}
+
+    <div class="form-actions">
+      <LoadingButton type="button" variant="secondary" onclick={closePlacementModal} disabled={placementSaving}>Cancel</LoadingButton>
+      <LoadingButton type="submit" variant="primary" loading={placementSaving}>Publish Policy Command</LoadingButton>
+    </div>
+  </form>
 </Modal>
 
 <!-- Edit Modal -->
@@ -509,6 +714,41 @@
     color: var(--text-muted);
     margin: 0 0 1rem 0;
   }
+  .section-header-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    margin-bottom: 1rem;
+  }
+  .section-header-row h2 {
+    margin: 0;
+  }
+  .policy-summary {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 0.75rem;
+  }
+  .policy-summary div {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    padding: 0.75rem;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    background: var(--bg);
+  }
+  .policy-summary span,
+  .hint {
+    color: var(--text-muted);
+    font-size: 0.875rem;
+  }
+  .success-notice {
+    border: 1px solid rgba(16, 185, 129, 0.4);
+    background: rgba(16, 185, 129, 0.12);
+    padding: 0.75rem 1rem;
+    border-radius: 8px;
+  }
 
   .config-json {
     background: var(--bg);
@@ -579,6 +819,11 @@
     font-size: 0.875rem;
     font-weight: 500;
     color: var(--text-primary);
+  }
+  .placement-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 1rem;
   }
   .form-actions {
     display: flex;

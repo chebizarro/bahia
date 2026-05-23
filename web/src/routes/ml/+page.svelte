@@ -2,6 +2,9 @@
   import { bootstrapControlplane, controlplaneConnection, mlModels, mlModelVersions, mlEndpoints, mlEndpointStates, environments, workers } from '$lib/stores';
   import { MLFabricIcon, ArtifactIcon, DeploymentIcon, WarningIcon, ProgressIcon, AcceleratorIcon } from '$lib/icons/domain-icons.js';
   import { api } from '$lib/api/client.js';
+  import { publishCommand, resultContent } from '$lib/stores/public-controlplane.svelte.js';
+  import { KINDS } from '$lib/nostr/client.js';
+  import { currentRequesterPubkey } from '$lib/nostr/controlplane-requests.js';
   import {
     buildTaskKindOptions,
     buildModalityOptions,
@@ -16,7 +19,12 @@
     stateForEndpoint,
     endpointStatusBadge,
     buildImportPayload,
-    buildDeployPayload
+    buildDeployPayload,
+    buildPlacementPolicy,
+    keyValueLines,
+    previewWorkerEligibility,
+    resolveEndpointForInput,
+    workerDisplayName
   } from './page-model.js';
 
   let loading = $state(true);
@@ -49,8 +57,21 @@
     model_version: '',
     runtime_preference: 'vllm',
     accelerator: 'gpu_nvidia_cuda',
-    min_vram_gb: ''
+    min_vram_gb: '',
+    pinned_worker: '',
+    label_selector: '',
+    worker_selector: '',
+    rollout_from_labels: '',
+    rollout_to_labels: ''
   });
+
+  const WORKER_PLACEMENT_KINDS = {
+    WORKLOAD_PIN_REQUEST: KINDS.BAHIA_REQUEST_WORKLOAD_PIN,
+    RESULT: KINDS.BAHIA_WORKER_RESULT
+  };
+  const WORKER_PLACEMENT_COMMANDS = {
+    WORKLOAD_PIN: 'workload.pin.request'
+  };
 
   $effect(() => {
     void loadPage();
@@ -76,6 +97,18 @@
   let licenseOptions = $derived(buildLicenseOptions(mlModels));
   let filteredModels = $derived(filterModels(mlModels, { taskFilter, modalityFilter, licenseFilter, searchQuery }));
   let selectedVersions = $derived(versionsForModel(mlModelVersions, selectedModelId));
+  let workerOptions = $derived([
+    { value: '', label: 'Any eligible worker' },
+    ...workers.map((worker) => ({ value: worker.pubkey, label: `${workerDisplayName(worker)} (${String(worker.pubkey || '').slice(0, 12)}…)` }))
+  ]);
+  let deployEligibilityPreview = $derived.by(() => {
+    try {
+      return previewWorkerEligibility(workers, deployForm);
+    } catch (err) {
+      return { error: err.message, eligible_workers: [], rejected_workers: [], estimated_eligible_count: 0, ranking_scores: [] };
+    }
+  });
+  let existingEndpointForDeploy = $derived(resolveEndpointForInput(mlEndpoints, deployForm.endpoint));
 
   async function handleImport(event) {
     event.preventDefault();
@@ -92,13 +125,72 @@
     }
   }
 
+  function randomId() {
+    const cryptoApi = globalThis.crypto;
+    if (cryptoApi?.randomUUID) return cryptoApi.randomUUID();
+    if (cryptoApi?.getRandomValues) {
+      const bytes = new Uint8Array(16);
+      cryptoApi.getRandomValues(bytes);
+      return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
+    }
+    return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  }
+
+  function endpointEnvironmentId(endpoint) {
+    return endpoint?.environment_id || endpoint?.environmentId || '';
+  }
+
+  async function publishExistingEndpointPin(endpoint, workerPubkey) {
+    if (!endpoint || !workerPubkey) return null;
+    const endpointID = endpoint.id || endpoint.endpoint_id;
+    if (!endpointID) return null;
+    const key = `${WORKER_PLACEMENT_COMMANDS.WORKLOAD_PIN}:${endpointID}:${workerPubkey}:${randomId()}`;
+    const environmentID = endpointEnvironmentId(endpoint);
+    const tags = [
+      ['d', key],
+      ['command', WORKER_PLACEMENT_COMMANDS.WORKLOAD_PIN],
+      ['worker', workerPubkey],
+      ['workload', endpointID],
+      ['workload_kind', 'ml_inference']
+    ];
+    if (environmentID) tags.push(['environment', environmentID]);
+    const result = await publishCommand({
+      kind: WORKER_PLACEMENT_KINDS.WORKLOAD_PIN_REQUEST,
+      tags,
+      content: {
+        environment_id: environmentID,
+        workload_id: endpointID,
+        workload_kind: 'ml_inference',
+        worker_pubkey: workerPubkey,
+        reason: 'Operator pin from Inference deploy form',
+        idempotency_key: key,
+        operator_metadata: {
+          source: 'web.ml.deploy',
+          requested_by: currentRequesterPubkey() || ''
+        }
+      },
+      resultKinds: [WORKER_PLACEMENT_KINDS.RESULT]
+    });
+    return resultContent(result);
+  }
+
   async function handleDeploy(event) {
     event.preventDefault();
     deploySubmitting = true;
     resetNotice();
     try {
+      const preview = previewWorkerEligibility(workers, deployForm);
+      if (workers.length > 0 && preview.estimated_eligible_count === 0) {
+        throw new Error('No eligible workers match this placement policy. Review rejected workers before submitting.');
+      }
+      const policy = buildPlacementPolicy(deployForm);
+      let pinMessage = '';
+      if (policy.pinned_worker && existingEndpointForDeploy) {
+        const pinResult = await publishExistingEndpointPin(existingEndpointForDeploy, policy.pinned_worker);
+        pinMessage = pinResult?.message ? ` ${pinResult.message}.` : ' Existing endpoint pin command accepted.';
+      }
       const result = await api.deployMLEndpoint(buildDeployPayload(deployForm));
-      setSuccess(result?.message || 'Deployment request submitted. Subscribe to Nostr events for completion.');
+      setSuccess(result?.message || `Deployment request submitted with ${preview.estimated_eligible_count} eligible worker(s).${pinMessage}`);
       deployForm = { ...deployForm, endpoint: '', model_version: '' };
     } catch (err) {
       setFailure(err.message || 'Failed to submit deployment request');
@@ -375,8 +467,81 @@
             Min worker VRAM (GB, optional)
             <input bind:value={deployForm.min_vram_gb} name="min-vram" type="number" min="0" placeholder="48" />
           </label>
-          <p class="form-hint">Deployment requests are matched against the shared worker pool by runtime and accelerator requirements.</p>
-          <button type="submit" disabled={deploySubmitting}>{deploySubmitting ? 'Submitting…' : 'Request deployment'}</button>
+          <label>
+            Pin to worker (optional)
+            <select bind:value={deployForm.pinned_worker} name="pinned-worker">
+              {#each workerOptions as option}
+                <option value={option.value}>{option.label}</option>
+              {/each}
+            </select>
+          </label>
+          <label>
+            Label selector (optional)
+            <textarea bind:value={deployForm.label_selector} name="label-selector" rows="3" placeholder="role=inference&#10;track=canary"></textarea>
+          </label>
+          <label>
+            Worker selector JSON (optional)
+            <input bind:value={deployForm.worker_selector} name="worker-selector" placeholder={'{"architecture":"amd64"}'} />
+          </label>
+          <div class="form-split">
+            <label>
+              Rollout from labels
+              <textarea bind:value={deployForm.rollout_from_labels} name="rollout-from-labels" rows="2" placeholder="track=canary"></textarea>
+            </label>
+            <label>
+              Rollout target labels
+              <textarea bind:value={deployForm.rollout_to_labels} name="rollout-to-labels" rows="2" placeholder="track=stable"></textarea>
+            </label>
+          </div>
+
+          <div class="eligibility-preview" data-testid="ml-worker-eligibility-preview">
+            <div class="preview-header">
+              <strong>Worker eligibility preview</strong>
+              <span class="status-badge status-{deployEligibilityPreview.estimated_eligible_count > 0 ? 'healthy' : 'pending'}">
+                {deployEligibilityPreview.estimated_eligible_count || 0} eligible
+              </span>
+            </div>
+            {#if deployEligibilityPreview.error}
+              <p class="error-text">{deployEligibilityPreview.error}</p>
+            {:else}
+              {#if existingEndpointForDeploy && deployForm.pinned_worker}
+                <p class="form-hint">Submitting will publish <code>workload.pin.request</code> for the existing endpoint before requesting deployment.</p>
+              {:else if deployForm.pinned_worker}
+                <p class="form-hint">The pin is included in the inference deployment placement policy for backend placement.</p>
+              {/if}
+              {#if deployEligibilityPreview.selected_winner}
+                <p class="form-hint">Likely winner: <strong>{deployEligibilityPreview.selected_winner.worker_name}</strong> — {deployEligibilityPreview.selected_winner.reason}</p>
+              {/if}
+              <div class="preview-columns">
+                <div>
+                  <h3>Eligible workers</h3>
+                  {#if deployEligibilityPreview.eligible_workers.length === 0}
+                    <p class="empty small">No eligible workers.</p>
+                  {:else}
+                    <ul>
+                      {#each deployEligibilityPreview.eligible_workers.slice(0, 5) as candidate}
+                        <li><strong>{candidate.worker_name}</strong> <span>score {candidate.score}</span></li>
+                      {/each}
+                    </ul>
+                  {/if}
+                </div>
+                <div>
+                  <h3>Rejected workers</h3>
+                  {#if deployEligibilityPreview.rejected_workers.length === 0}
+                    <p class="empty small">No rejected workers.</p>
+                  {:else}
+                    <ul>
+                      {#each deployEligibilityPreview.rejected_workers.slice(0, 5) as candidate}
+                        <li><strong>{candidate.worker_name}</strong> <span>{candidate.reason}</span></li>
+                      {/each}
+                    </ul>
+                  {/if}
+                </div>
+              </div>
+            {/if}
+          </div>
+          <p class="form-hint">Deployment requests are matched against the shared worker pool by runtime, accelerator, pin, and label selector requirements.</p>
+          <button type="submit" disabled={deploySubmitting || Boolean(deployEligibilityPreview.error) || (workers.length > 0 && deployEligibilityPreview.estimated_eligible_count === 0)}>{deploySubmitting ? 'Submitting…' : 'Request deployment'}</button>
         </form>
       </section>
     </div>
@@ -559,7 +724,8 @@
     font-size: 0.9rem;
   }
   form input,
-  form select {
+  form select,
+  form textarea {
     padding: 0.7rem 0.8rem;
     border-radius: 8px;
     border: 1px solid var(--border-color);
@@ -567,9 +733,59 @@
     color: var(--text-primary);
     font: inherit;
   }
+  form textarea {
+    resize: vertical;
+  }
+  .form-split {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 0.75rem;
+  }
   .form-hint {
     margin: 0;
     color: var(--text-muted);
+    font-size: 0.85rem;
+  }
+  .eligibility-preview {
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    padding: 0.875rem;
+    background: rgba(100, 100, 120, 0.08);
+  }
+  .preview-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    margin-bottom: 0.75rem;
+  }
+  .preview-columns {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 0.75rem;
+  }
+  .preview-columns h3 {
+    margin: 0 0 0.4rem;
+    font-size: 0.85rem;
+    color: var(--text-muted);
+  }
+  .preview-columns ul {
+    margin: 0;
+    padding-left: 1rem;
+    font-size: 0.82rem;
+  }
+  .preview-columns li {
+    margin-bottom: 0.35rem;
+  }
+  .preview-columns span {
+    color: var(--text-muted);
+  }
+  .small {
+    font-size: 0.82rem;
+  }
+  .error-text {
+    color: var(--error);
+    margin: 0;
     font-size: 0.85rem;
   }
   button {

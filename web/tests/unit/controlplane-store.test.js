@@ -253,6 +253,36 @@ describe('controlplane store', () => {
     expect(store.llmRouteStates[0]).toMatchObject({ id: 'route-1:env-1', route_id: 'route-1', environment_id: 'env-1', gateway_status: 'synced' });
   });
 
+  it('applies worker state and eligibility read models from relay events', async () => {
+    await store.bootstrapControlplane();
+    const workerPubkey = 'c'.repeat(64);
+
+    expect(store.applyControlplaneEvent(event({
+      id: 'worker-state-1-event',
+      kind: KINDS.BAHIA_WORKER_STATE,
+      pubkey: 'b'.repeat(64),
+      tags: [['d', workerPubkey], ['worker', workerPubkey], ['deleted', 'false']],
+      content: { worker_pubkey: workerPubkey, name: 'Worker 1', scheduling_state: 'cordoned', labels: { role: 'inference' }, deleted: false }
+    }))).toBe(true);
+    expect(store.applyControlplaneEvent(event({
+      id: 'worker-preview-1-event',
+      kind: KINDS.BAHIA_WORKER_ELIGIBILITY_PREVIEW,
+      pubkey: 'b'.repeat(64),
+      tags: [['d', 'preview-1'], ['deleted', 'false']],
+      content: {
+        preview_id: 'preview-1',
+        workload_type: 'ml_inference',
+        eligible_workers: [{ worker_pubkey: workerPubkey, worker_name: 'Worker 1', eligible: true, score: 10, reason: 'eligible' }],
+        rejected_workers: []
+      }
+    }))).toBe(true);
+
+    expect(store.workers).toHaveLength(1);
+    expect(store.workers[0]).toMatchObject({ pubkey: workerPubkey, scheduling_state: 'cordoned', labels: { role: 'inference' } });
+    expect(store.workerEligibilityPreviews).toHaveLength(1);
+    expect(store.workerEligibilityPreviews[0]).toMatchObject({ preview_id: 'preview-1', workload_type: 'ml_inference' });
+  });
+
   it('bridges live subscription events into relay-backed state', async () => {
     let liveHandlers;
     nostrMock.subscribe.mockImplementation((_filters, handlers) => {

@@ -16,6 +16,9 @@ import {
   packageArtifacts,
   packagePromotions,
   workers,
+  workerAssignments,
+  workerDrainStatuses,
+  workerEligibilityPreviews,
   events,
   mlModels,
   mlModelVersions,
@@ -38,7 +41,7 @@ export { isAuthenticated, currentUser };
 export { systemInfo, loadSystemInfo, currentSystemInfo };
 
 // Nostr-backed dashboard/read-model state
-export { services, environments, states, llmRoutes, llmRouteStates, artifacts, builds, deploymentIntents, deploymentRuns, policies, packageRepositories, packageArtifacts, packagePromotions, workers, events, mlModels, mlModelVersions, mlEndpoints, mlEndpointStates, loading, controlplaneConnection, bootstrapControlplane, upsertServiceProjection };
+export { services, environments, states, llmRoutes, llmRouteStates, artifacts, builds, deploymentIntents, deploymentRuns, policies, packageRepositories, packageArtifacts, packagePromotions, workers, workerAssignments, workerDrainStatuses, workerEligibilityPreviews, events, mlModels, mlModelVersions, mlEndpoints, mlEndpointStates, loading, controlplaneConnection, bootstrapControlplane, upsertServiceProjection };
 
 // Derived state helpers
 export function driftedStates() {

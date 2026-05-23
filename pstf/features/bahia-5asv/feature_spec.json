@@ -1,0 +1,23 @@
+{
+  "feature_id": "bahia-5asv",
+  "title": "Frontend placement UX for worker pinning and eligibility preview",
+  "intent": "Expose completed Nostr-native worker placement controls in the Inference and Environment UI without direct state mutation.",
+  "observed_context": [
+    "docs/plans/bahia-worker-management-nostr-native-2026-05-22.md defines Inference and Environment placement UX requirements.",
+    "internal/controlplane/reactor.go defines worker-policy.apply.request kind 6004 and workload.pin.request kind 6005 with worker result kind 7997.",
+    "internal/service/ml_placement.go exposes PreviewCandidates semantics for eligible/rejected workers."
+  ],
+  "scope": [
+    "web/src/routes/ml/+page.svelte",
+    "web/src/routes/ml/page-model.js",
+    "web/src/routes/environments/+page.svelte",
+    "web/src/routes/environments/[id]/+page.svelte",
+    "web/src/lib/nostr/client.js",
+    "web/src/lib/stores/controlplane.svelte.js"
+  ],
+  "out_of_scope": [
+    "Backend Go changes",
+    "Worker list page changes",
+    "Worker detail page changes"
+  ]
+}

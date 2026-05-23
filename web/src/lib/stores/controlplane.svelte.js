@@ -49,6 +49,9 @@ export const packageRepositories = $state([]);
 export const packageArtifacts = $state([]);
 export const packagePromotions = $state([]);
 export const workers = $state([]);
+export const workerAssignments = $state([]);
+export const workerDrainStatuses = $state([]);
+export const workerEligibilityPreviews = $state([]);
 export const events = $state([]);
 
 // Inference state
@@ -85,6 +88,9 @@ const packageRepositoryMap = new Map();
 const packageArtifactMap = new Map();
 const packagePromotionMap = new Map();
 const workerMap = new Map();
+const workerAssignmentMap = new Map();
+const workerDrainStatusMap = new Map();
+const workerEligibilityPreviewMap = new Map();
 const mlModelMap = new Map();
 const mlModelVersionMap = new Map();
 const mlEndpointMap = new Map();
@@ -120,6 +126,9 @@ function resetArrays() {
   packageArtifacts.length = 0;
   packagePromotions.length = 0;
   workers.length = 0;
+  workerAssignments.length = 0;
+  workerDrainStatuses.length = 0;
+  workerEligibilityPreviews.length = 0;
   events.length = 0;
   mlModels.length = 0;
   mlModelVersions.length = 0;
@@ -153,6 +162,9 @@ function refreshCollections() {
   replaceArray(packageArtifacts, Array.from(packageArtifactMap.values()).sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || ''))));
   replaceArray(packagePromotions, Array.from(packagePromotionMap.values()).sort((a, b) => String(b.promoted_at || b.published_at || b.created_at || '').localeCompare(String(a.promoted_at || a.published_at || a.created_at || ''))));
   replaceArray(workers, Array.from(workerMap.values()).sort(sortByNameOrId));
+  replaceArray(workerAssignments, Array.from(workerAssignmentMap.values()).sort(sortByNameOrId));
+  replaceArray(workerDrainStatuses, Array.from(workerDrainStatusMap.values()).sort(sortByNameOrId));
+  replaceArray(workerEligibilityPreviews, Array.from(workerEligibilityPreviewMap.values()).sort((a, b) => String(b.updated_at || b.nostr_created_at || '').localeCompare(String(a.updated_at || a.nostr_created_at || ''))));
   replaceArray(mlModels, Array.from(mlModelMap.values()).sort(sortByNameOrId));
   replaceArray(mlModelVersions, Array.from(mlModelVersionMap.values()).sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || ''))));
   replaceArray(mlEndpoints, Array.from(mlEndpointMap.values()).sort(sortByNameOrId));
@@ -205,6 +217,9 @@ export function resetControlplaneStore() {
   packageArtifactMap.clear();
   packagePromotionMap.clear();
   workerMap.clear();
+  workerAssignmentMap.clear();
+  workerDrainStatusMap.clear();
+  workerEligibilityPreviewMap.clear();
   mlModelMap.clear();
   mlModelVersionMap.clear();
   mlEndpointMap.clear();
@@ -426,10 +441,32 @@ function applyWorkerEvent(event) {
     workerMap.delete(pubkey);
   } else {
     workerMap.set(pubkey, {
+      ...(workerMap.get(pubkey) || {}),
       ...content,
       pubkey,
       status: content.status || 'online',
       last_advertisement_at: new Date((event.created_at || 0) * 1000).toISOString()
+    });
+  }
+  return true;
+}
+
+function applyWorkerStateEvent(event) {
+  const { accepted } = upsertReplaceableEvent(replaceableEvents, event);
+  if (!accepted) return false;
+
+  const content = contentWithEventMeta(event);
+  const pubkey = content.worker_pubkey || getTagValue(event, 'worker') || getDTag(event);
+  if (!pubkey) return false;
+
+  if (isReplaceableTombstone(event) || content.deleted === true) {
+    workerMap.delete(pubkey);
+  } else {
+    workerMap.set(pubkey, {
+      ...(workerMap.get(pubkey) || {}),
+      ...content,
+      pubkey,
+      status: content.status || workerMap.get(pubkey)?.status || 'online'
     });
   }
   return true;
@@ -536,6 +573,18 @@ export function applyControlplaneEvent(event) {
       break;
     case KINDS.LOOM_WORKER_AD:
       changed = applyWorkerEvent(event);
+      break;
+    case KINDS.BAHIA_WORKER_STATE:
+      changed = applyWorkerStateEvent(event);
+      break;
+    case KINDS.BAHIA_WORKER_ASSIGNMENT_STATE:
+      changed = applyProjectedEntity(event, workerAssignmentMap, ['worker_pubkey']);
+      break;
+    case KINDS.BAHIA_WORKER_DRAIN_STATUS:
+      changed = applyProjectedEntity(event, workerDrainStatusMap, ['worker_pubkey']);
+      break;
+    case KINDS.BAHIA_WORKER_ELIGIBILITY_PREVIEW:
+      changed = applyProjectedEntity(event, workerEligibilityPreviewMap, ['preview_id']);
       break;
     case KINDS.BAHIA_ML_MODEL_REGISTRY:
       changed = applyProjectedEntity(event, mlModelMap, ['id', 'slug']);
