@@ -62,11 +62,14 @@ type DNSZoneConfig struct {
 
 // DNSBackendConfig describes one DNS backend connector.
 type DNSBackendConfig struct {
-	Type            string        `koanf:"type"`
-	RootDir         string        `koanf:"root_dir"`
-	EtcdEndpoints   []string      `koanf:"etcd_endpoints"`
-	EtcdPrefix      string        `koanf:"etcd_prefix"`
-	EtcdDialTimeout time.Duration `koanf:"etcd_dial_timeout"`
+	Type             string        `koanf:"type"`
+	RootDir          string        `koanf:"root_dir"`
+	EtcdEndpoints    []string      `koanf:"etcd_endpoints"`
+	EtcdPrefix       string        `koanf:"etcd_prefix"`
+	EtcdDialTimeout  time.Duration `koanf:"etcd_dial_timeout"`
+	PowerDNSAPIURL   string        `koanf:"powerdns_api_url" yaml:"powerdns_api_url"`
+	PowerDNSAPIKey   string        `koanf:"powerdns_api_key" yaml:"powerdns_api_key"`
+	PowerDNSServerID string        `koanf:"powerdns_server_id" yaml:"powerdns_server_id"`
 }
 
 // DNSProjectionConfig selects source state for DNS endpoint projection.
@@ -1067,6 +1070,9 @@ func (c *Config) validateDNS() error {
 		backend.Type = strings.TrimSpace(backend.Type)
 		backend.RootDir = strings.TrimSpace(backend.RootDir)
 		backend.EtcdPrefix = strings.TrimSpace(backend.EtcdPrefix)
+		backend.PowerDNSAPIURL = strings.TrimRight(strings.TrimSpace(backend.PowerDNSAPIURL), "/")
+		backend.PowerDNSAPIKey = strings.TrimSpace(backend.PowerDNSAPIKey)
+		backend.PowerDNSServerID = strings.TrimSpace(backend.PowerDNSServerID)
 		switch backend.Type {
 		case "filesystem":
 			if backend.RootDir == "" {
@@ -1086,6 +1092,20 @@ func (c *Config) validateDNS() error {
 			}
 			if backend.EtcdDialTimeout == 0 {
 				backend.EtcdDialTimeout = 5 * time.Second
+			}
+		case "powerdns":
+			if backend.PowerDNSAPIURL == "" {
+				return fmt.Errorf("config validation failed: dns.backends.%s.powerdns_api_url is required for powerdns", name)
+			}
+			parsed, err := url.Parse(backend.PowerDNSAPIURL)
+			if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+				return fmt.Errorf("config validation failed: dns.backends.%s.powerdns_api_url must be a valid URL", name)
+			}
+			if backend.PowerDNSAPIKey == "" {
+				return fmt.Errorf("config validation failed: dns.backends.%s.powerdns_api_key is required for powerdns", name)
+			}
+			if backend.PowerDNSServerID == "" {
+				backend.PowerDNSServerID = "localhost"
 			}
 		default:
 			return fmt.Errorf("config validation failed: dns.backends.%s.type %q is unsupported", name, backend.Type)
