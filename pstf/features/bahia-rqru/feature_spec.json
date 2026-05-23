@@ -1,0 +1,22 @@
+{
+  "feature_id": "bahia-rqru",
+  "title": "FIPS DNS backend adapter (Phase C.3)",
+  "intended_behavior": [
+    "Provide a DNS Backend implementation for FIPS hosts-file aliases.",
+    "Expose backend type fips as a valid DNS backend type.",
+    "Synchronize only DNS records whose values can be represented in FIPS hosts entries: npub values or fd00::/8 overlay addresses.",
+    "Preserve operator-managed hosts file content outside a Bahia-managed section.",
+    "List .fips hosts entries as CNAME-like DNS records."
+  ],
+  "scope": [
+    "internal/adapters/dns/fips.go",
+    "internal/adapters/dns/fips_test.go",
+    "internal/domain/dns.go"
+  ],
+  "out_of_scope": [
+    "Application wiring",
+    "Configuration loading",
+    "DNS projector changes",
+    "Mesh health changes"
+  ]
+}

@@ -1,0 +1,35 @@
+{
+  "feature_id": "bahia-rqru",
+  "criteria": [
+    {
+      "id": "AC1",
+      "description": "BackendType returns fips and fips validates as a DNSBackendType.",
+      "tests": ["go test ./internal/domain ./internal/adapters/dns"]
+    },
+    {
+      "id": "AC2",
+      "description": "SyncZone writes deterministic FIPS hosts entries for npub and fd00::/8 values using atomic temp-file replacement.",
+      "tests": ["TestFIPSBackendSyncZoneWritesHostsFile"]
+    },
+    {
+      "id": "AC3",
+      "description": "SyncZone preserves manual entries outside the Bahia-managed section and replaces prior managed entries.",
+      "tests": ["TestFIPSBackendManagedSectionPreservedOnRewrite"]
+    },
+    {
+      "id": "AC4",
+      "description": "ListRecords parses .fips hosts entries back into CNAME-like DNSRecord values.",
+      "tests": ["TestFIPSBackendListRecordsParsesHostsFile"]
+    },
+    {
+      "id": "AC5",
+      "description": "Health reports accessible readable/writable hosts files and fails for missing paths.",
+      "tests": ["TestFIPSBackendHealth", "TestFIPSBackendHealthFailsForMissingPath"]
+    },
+    {
+      "id": "AC6",
+      "description": "Records whose values are not npub or fd00::/8 are skipped instead of written to FIPS hosts.",
+      "tests": ["TestFIPSBackendSyncZoneSkipsRecordsWithoutNPubOrFIPSAddress"]
+    }
+  ]
+}

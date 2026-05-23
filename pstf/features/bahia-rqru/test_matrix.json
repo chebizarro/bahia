@@ -1,0 +1,12 @@
+{
+  "feature_id": "bahia-rqru",
+  "test_matrix": [
+    {"test": "TestFIPSBackendSyncZoneWritesHostsFile", "acceptance": ["AC2"]},
+    {"test": "TestFIPSBackendListRecordsParsesHostsFile", "acceptance": ["AC4"]},
+    {"test": "TestFIPSBackendManagedSectionPreservedOnRewrite", "acceptance": ["AC3"]},
+    {"test": "TestFIPSBackendHealth", "acceptance": ["AC5"]},
+    {"test": "TestFIPSBackendHealthFailsForMissingPath", "acceptance": ["AC5"]},
+    {"test": "TestFIPSBackendSyncZoneSkipsRecordsWithoutNPubOrFIPSAddress", "acceptance": ["AC6"]},
+    {"test": "go test ./internal/domain", "acceptance": ["AC1"]}
+  ]
+}
