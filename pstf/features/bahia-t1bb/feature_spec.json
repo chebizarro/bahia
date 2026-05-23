@@ -1,0 +1,17 @@
+{
+  "feature_id": "bahia-t1bb",
+  "title": "Failover trigger engine",
+  "intent": "Evaluate heartbeat-loss continuity recipes for managed services and emit exactly one in-process failover request when a primary heartbeat remains expired across two evaluations.",
+  "observed_before": [
+    "Phase 1 domain contracts existed for service continuity profiles, failover recipes, replication policies, and heartbeat observations.",
+    "HeartbeatMonitor existed for latest worker heartbeat snapshots, but no definition store or automatic failover evaluator existed."
+  ],
+  "implemented_behavior": [
+    "InMemoryContinuityDefinitionStore keeps latest ServiceContinuityProfile, ReplicationPolicy, and ContinuityRecipe definitions by service key using replaceable-event timestamp ordering with deterministic event-id tie breaking.",
+    "FailoverTriggerEngine enumerates managed services from the definition store, evaluates heartbeat_loss failover recipes against primary heartbeat snapshots, transitions healthy/suspect/firing/active state, and publishes FailoverRequested or FailoverRequestFailed in-process events.",
+    "Automatic failover requires an eligible non-primary replication target and does not auto-recover or emit duplicate requests after a run is firing or active."
+  ],
+  "scope_boundaries": [
+    "Nostr serialization, reactor wiring, recipe execution, status read models, DNS cutover, and bootstrap wiring are owned by other Wave 2 agents and were not modified."
+  ]
+}

@@ -1,0 +1,52 @@
+{
+  "feature_id": "bahia-t1bb",
+  "criteria": [
+    {
+      "id": "AC1",
+      "statement": "Continuity definitions are stored in memory by service key and only newer replaceable events replace existing profiles, replication policies, or recipes.",
+      "tests": [
+        "TestInMemoryContinuityDefinitionStoreProfileLatestValueRules",
+        "TestInMemoryContinuityDefinitionStoreReplicationPolicyLatestValueRules",
+        "TestInMemoryContinuityDefinitionStoreRecipeLatestValueRulesAndList"
+      ]
+    },
+    {
+      "id": "AC2",
+      "statement": "Stored definitions are returned as defensive copies and listed deterministically.",
+      "tests": [
+        "TestInMemoryContinuityDefinitionStoreProfileLatestValueRules",
+        "TestInMemoryContinuityDefinitionStoreListsProfilesDeterministically",
+        "TestInMemoryContinuityDefinitionStoreReplicationPolicyLatestValueRules",
+        "TestInMemoryContinuityDefinitionStoreRecipeLatestValueRulesAndList"
+      ]
+    },
+    {
+      "id": "AC3",
+      "statement": "The trigger engine enumerates profiles, evaluates heartbeat_loss recipes, and transitions expired primary heartbeats through suspect before firing.",
+      "tests": ["TestFailoverTriggerEngineTransitionsSuspectThenFiringAndPublishesOnce"]
+    },
+    {
+      "id": "AC4",
+      "statement": "The trigger engine emits exactly one FailoverRequested event per active service run and does not auto-recover when the primary heartbeat returns.",
+      "tests": ["TestFailoverTriggerEngineTransitionsSuspectThenFiringAndPublishesOnce"]
+    },
+    {
+      "id": "AC5",
+      "statement": "If no eligible non-primary standby replication target exists, the engine emits a failed status event once and suppresses duplicate threshold crossings.",
+      "tests": ["TestFailoverTriggerEngineNoEligibleStandbyEmitsFailedOnce"]
+    },
+    {
+      "id": "AC6",
+      "statement": "Services without a heartbeat snapshot remain unarmed and healthy heartbeats clear suspect state before any run fires.",
+      "tests": [
+        "TestFailoverTriggerEngineSkipsUnarmedServiceWithoutHeartbeatSnapshot",
+        "TestFailoverTriggerEngineFreshHeartbeatKeepsHealthyAndClearsSuspect"
+      ]
+    },
+    {
+      "id": "AC7",
+      "statement": "An external status projector can mark a matching firing run active without accepting unrelated run IDs.",
+      "tests": ["TestFailoverTriggerEngineMarkActiveOnlyForMatchingFiringRun"]
+    }
+  ]
+}
