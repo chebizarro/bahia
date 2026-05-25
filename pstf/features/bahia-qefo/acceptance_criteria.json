@@ -1,0 +1,19 @@
+{
+  "criteria": [
+    {
+      "id": "AC1",
+      "description": "$lib/types/continuity exports continuity DTO and enum-like string types consumed by continuity components.",
+      "tests": ["T1"]
+    },
+    {
+      "id": "AC2",
+      "description": "$lib/api/continuity exports fetchContinuityStatus, fetchContinuityTopology, and simulateWorkerFailure with JSON REST calls.",
+      "tests": ["T1"]
+    },
+    {
+      "id": "AC3",
+      "description": "cd web && npx svelte-check --threshold error reports zero errors.",
+      "tests": ["T1"]
+    }
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "feature_id": "bahia-qefo",
+  "title": "Resolve web continuity module imports for svelte-check",
+  "observed_behavior": "web svelte-check reported unresolved imports for $lib/api/continuity and $lib/types/continuity in continuity route Svelte components even though continuity route code imports those modules.",
+  "intended_behavior": "The web TypeScript/Svelte checker resolves continuity API and DTO type modules through $lib without modifying the continuity Svelte components.",
+  "scope": [
+    "web/src/lib/api/continuity.ts",
+    "web/src/lib/types/continuity.ts",
+    "web/tsconfig.json"
+  ]
+}

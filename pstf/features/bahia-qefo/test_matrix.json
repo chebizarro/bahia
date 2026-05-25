@@ -1,0 +1,9 @@
+{
+  "tests": [
+    {
+      "id": "T1",
+      "command": "cd web && npx svelte-check --threshold error",
+      "maps_to": ["AC1", "AC2", "AC3"]
+    }
+  ]
+}
