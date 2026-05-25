@@ -56,7 +56,7 @@ func TestWorkerLabelsUpdateHandlerUpdatesLabelsAndPublishesReadModel(t *testing.
 	operatorPubkey, _ := nostr.GetPublicKey(operatorKey)
 	workerPubkey, _ := nostr.GetPublicKey(nostr.GeneratePrivateKey())
 	capture := &captureNostrPublisher{published: 1}
-	repo := newMemoryWorkerRepo(domain.Worker{PubKey: workerPubkey, Name: "worker-a", Status: domain.WorkerStatusOnline, SchedulingState: domain.WorkerSchedulingActive, LastAdvertisementAt: time.Now().UTC()})
+	repo := newMemoryWorkerRepo(domain.Worker{PubKey: workerPubkey, Name: "worker-a", Status: domain.WorkerStatusOnline, SchedulingState: domain.WorkerSchedulingActive, LastAdvertisementAt: time.Now().UTC(), Telemetry: &domain.WorkerTelemetry{SampledAt: time.Unix(100, 0).UTC(), Memory: &domain.WorkerMemoryTelemetry{TotalBytes: 16 << 30, AvailableBytes: 8 << 30}}, Pressure: &domain.WorkerPressureAssessment{OverallLevel: domain.WorkerPressureWarning, CapacityClass: domain.WorkerCapacityReduced, RecommendedAction: domain.WorkerPressureActionOperatorIntervention, AssessedAt: time.Unix(101, 0).UTC()}})
 	reactor := newWorkerHandlerTestReactor(t, operatorPubkey, capture, repo)
 	event := &nostr.Event{ID: "labels-request", PubKey: operatorPubkey, Kind: KindWorkerLabelsUpdate, Tags: nostr.Tags{{"d", "labels-1"}, {"worker", workerPubkey}}, Content: mustJSON(WorkerLabelsUpdateCommand{WorkerPubKey: workerPubkey, Reason: "pool update", IdempotencyKey: "labels-1", Labels: map[string]string{" role ": " inference ", "track": "canary"}})}
 
@@ -72,6 +72,16 @@ func TestWorkerLabelsUpdateHandlerUpdatesLabelsAndPublishesReadModel(t *testing.
 	state := lastPublishedKind(t, capture.events, KindWorkerState)
 	if !hasFullTag(state.Tags, nostr.Tag{"label", "role", "inference"}) || !hasFullTag(state.Tags, nostr.Tag{"label", "track", "canary"}) {
 		t.Fatalf("state event missing label tags: %#v", state.Tags)
+	}
+	if tagValueNostr(state.Tags, "capacity_class") != string(domain.WorkerCapacityReduced) || tagValueNostr(state.Tags, "pressure_state") != string(domain.WorkerPressureWarning) || tagValueNostr(state.Tags, "recommended_action") != string(domain.WorkerPressureActionOperatorIntervention) {
+		t.Fatalf("state event missing pressure tags: %#v", state.Tags)
+	}
+	var statePayload map[string]any
+	if err := json.Unmarshal([]byte(state.Content), &statePayload); err != nil {
+		t.Fatalf("state content: %v", err)
+	}
+	if statePayload["telemetry"] == nil || statePayload["pressure"] == nil {
+		t.Fatalf("state content missing telemetry/pressure: %#v", statePayload)
 	}
 	assertPublishedKind(t, capture.events, KindWorkerResult)
 }

@@ -1,0 +1,15 @@
+{
+  "feature_id": "RESOURCE_PRESSURE_ITEM4",
+  "title": "Pressure transition monitor and worker-state publication extraction",
+  "intent": "Detect worker capacity-class transitions from canonical telemetry observations and publish reusable worker state read models that include telemetry and pressure data.",
+  "observed_context": [
+    "Items 1-3 added Worker telemetry and pressure fields plus EventWorkerTelemetryObserved/EventWorkerPressureChanged contracts.",
+    "worker_handlers.go previously embedded worker state publication inside Reactor.publishWorkerState."
+  ],
+  "scope": [
+    "internal/service/worker_pressure_monitor.go",
+    "internal/controlplane/worker_state_publisher.go",
+    "internal/controlplane/worker_handlers.go",
+    "internal/app/app.go"
+  ]
+}

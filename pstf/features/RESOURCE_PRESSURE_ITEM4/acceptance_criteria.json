@@ -1,0 +1,21 @@
+{
+  "feature_id": "RESOURCE_PRESSURE_ITEM4",
+  "criteria": [
+    {
+      "id": "AC1",
+      "statement": "A thread-safe pressure monitor records the latest worker pressure snapshot and ignores observations older than the stored LastAdvertisementAt."
+    },
+    {
+      "id": "AC2",
+      "statement": "The pressure monitor reports changed=true only when a stored worker capacity class transitions to a different class."
+    },
+    {
+      "id": "AC3",
+      "statement": "Worker state publication is reusable outside Reactor and includes telemetry and pressure content fields with filtering tags for capacity_class, pressure_state, and recommended_action."
+    },
+    {
+      "id": "AC4",
+      "statement": "App wiring reacts to EventWorkerTelemetryObserved by observing pressure, emitting EventWorkerPressureChanged for transitions, and republishing worker state."
+    }
+  ]
+}

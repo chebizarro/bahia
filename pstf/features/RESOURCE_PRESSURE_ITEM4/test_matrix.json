@@ -1,0 +1,23 @@
+{
+  "feature_id": "RESOURCE_PRESSURE_ITEM4",
+  "tests": [
+    {
+      "id": "T1",
+      "criteria": ["AC1", "AC2"],
+      "command": "go test ./internal/service -run TestWorkerPressureMonitor",
+      "status": "passed"
+    },
+    {
+      "id": "T2",
+      "criteria": ["AC3"],
+      "command": "go test ./internal/controlplane",
+      "status": "passed"
+    },
+    {
+      "id": "T3",
+      "criteria": ["AC4"],
+      "command": "go test ./internal/app",
+      "status": "passed"
+    }
+  ]
+}

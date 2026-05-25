@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/google/uuid"
 	"github.com/nbd-wtf/go-nostr"
@@ -705,41 +704,8 @@ func workerReplyTags(requestEvent *nostr.Event, req *workerCommandRequest, comma
 }
 
 func (r *Reactor) publishWorkerState(ctx context.Context, worker *domain.Worker) error {
-	if worker == nil {
-		return fmt.Errorf("worker is nil")
+	if r.workerStatePublisher == nil {
+		r.workerStatePublisher = NewWorkerStatePublisher(r.publisher, r.signer)
 	}
-	if worker.SchedulingState == "" {
-		worker.SchedulingState = domain.WorkerSchedulingActive
-	}
-	content := map[string]any{
-		"deleted":               false,
-		"pubkey":                worker.PubKey,
-		"name":                  worker.Name,
-		"description":           worker.Description,
-		"architecture":          worker.Architecture,
-		"max_concurrent_jobs":   worker.MaxConcurrentJobs,
-		"current_queue_depth":   worker.CurrentQueueDepth,
-		"status":                string(worker.Status),
-		"scheduling_state":      string(worker.SchedulingState),
-		"scheduling_note":       worker.SchedulingNote,
-		"labels":                worker.Labels,
-		"capabilities":          worker.Capabilities,
-		"ml_capabilities":       worker.MLCapabilities,
-		"runtime_target":        worker.RuntimeTarget,
-		"resources":             worker.Resources,
-		"accelerators":          worker.Accelerators,
-		"last_advertisement_at": worker.LastAdvertisementAt.Format(time.RFC3339),
-		"updated_at":            worker.UpdatedAt.Format(time.RFC3339),
-	}
-	event := &nostr.Event{Kind: KindWorkerState, CreatedAt: nostr.Now(), Tags: nostr.Tags{{"d", worker.PubKey}, {"worker", worker.PubKey}, {"deleted", "false"}, {"status", string(worker.Status)}, {"scheduling_state", string(worker.SchedulingState)}}, Content: mustJSON(content)}
-	for key, value := range worker.Labels {
-		if key != "" {
-			event.Tags = append(event.Tags, nostr.Tag{"label", key, value})
-		}
-	}
-	if err := r.signEvent(ctx, event); err != nil {
-		return fmt.Errorf("sign worker state: %w", err)
-	}
-	_, err := r.publishEvent(ctx, event)
-	return err
+	return r.workerStatePublisher.Publish(ctx, worker)
 }

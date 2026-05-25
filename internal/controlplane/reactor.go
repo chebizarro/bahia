@@ -206,6 +206,7 @@ type Reactor struct {
 	backupVerificationExecutor    BackupVerificationControlPlaneExecutor
 	backupRepositoryProbeExecutor BackupRepositoryProbeControlPlaneExecutor
 	eventBus                      events.Publisher
+	workerStatePublisher          *WorkerStatePublisher
 
 	mu   sync.Mutex
 	runs map[string]*DeploymentRun // requestEventID -> run
@@ -338,7 +339,12 @@ func WithWorkerRepository(repo repository.WorkerRepository) ReactorOption {
 }
 
 func WithNostrEventRepository(repo repository.NostrEventRepository) ReactorOption {
-	return func(r *Reactor) { r.nostrEvents = repo }
+	return func(r *Reactor) {
+		r.nostrEvents = repo
+		if r.workerStatePublisher != nil {
+			r.workerStatePublisher.ConfigureAudit(repo, r.zapLog)
+		}
+	}
 }
 
 // WithReplayCursorPlanner enables persisted cursor replay for control-plane subscriptions.
@@ -365,6 +371,8 @@ func WithControlPlanePublisher(publisher NostrEventPublisher) ReactorOption {
 	return func(r *Reactor) {
 		if publisher != nil {
 			r.publisher = publisher
+			r.workerStatePublisher = NewWorkerStatePublisher(publisher, r.signer)
+			r.workerStatePublisher.ConfigureAudit(r.nostrEvents, r.zapLog)
 		}
 	}
 }
@@ -416,8 +424,12 @@ func NewReactor(config Config, registry *service.RegistryService, pool *nostrpoo
 		lastSeenByGroup: make(map[string]nostr.Timestamp),
 		runs:            make(map[string]*DeploymentRun),
 	}
+	r.workerStatePublisher = NewWorkerStatePublisher(r.publisher, r.signer)
 	for _, opt := range opts {
 		opt(r)
+	}
+	if r.workerStatePublisher != nil {
+		r.workerStatePublisher.ConfigureAudit(r.nostrEvents, r.zapLog)
 	}
 	return r
 }

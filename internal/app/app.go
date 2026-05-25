@@ -243,6 +243,11 @@ func New(cfg *config.Config) (*App, error) {
 	}
 	service.NewContinuityStatusProjector(publisher, continuityStatusStore, continuityProjectionPublisher, logger)
 
+	pressureMonitor := service.NewWorkerPressureMonitor()
+	workerStatePublisher := controlplane.NewWorkerStatePublisher(controlPlanePool, controlPlaneSigner)
+	workerStatePublisher.ConfigureAudit(nostrEventRepo, logger)
+	setupWorkerPressureSubscriptions(publisher, pressureMonitor, workerStatePublisher, logger)
+
 	// Worker policy service for environment-specific worker selection.
 	workerPolicySvc := service.NewWorkerPolicyService(workerRepo, logger)
 
@@ -1041,6 +1046,46 @@ func setupContinuityRuntimeSubscriptions(
 			return
 		}
 		trigger.MarkActive(progress.ServiceKey, progress.RunID, progress.StartedAt)
+	})
+}
+
+func setupWorkerPressureSubscriptions(
+	publisher events.Publisher,
+	monitor *service.WorkerPressureMonitor,
+	statePublisher *controlplane.WorkerStatePublisher,
+	logger *zap.Logger,
+) {
+	if publisher == nil {
+		return
+	}
+	if logger == nil {
+		logger = zap.NewNop()
+	}
+	publisher.Subscribe(events.EventWorkerTelemetryObserved, func(ctx context.Context, e events.Event) {
+		observed, ok := e.Data.(events.WorkerTelemetryObserved)
+		if !ok {
+			logger.Warn("worker telemetry event carried unsupported payload", zap.String("event_type", string(e.Type)))
+			return
+		}
+		previous, current, changed := monitor.Observe(observed.Worker)
+		if changed {
+			publisher.Publish(ctx, events.Event{
+				Type:     events.EventWorkerPressureChanged,
+				EntityID: observed.Worker.PubKey,
+				Data: events.WorkerPressureChanged{
+					WorkerPubKey: observed.Worker.PubKey,
+					Previous:     previous,
+					Current:      current,
+					ChangedAt:    time.Now().UTC(),
+				},
+			})
+		}
+		if statePublisher == nil {
+			return
+		}
+		if err := statePublisher.Publish(ctx, &observed.Worker); err != nil {
+			logger.Warn("publish worker state after telemetry observation failed", zap.String("worker_pubkey", observed.Worker.PubKey), zap.Error(err))
+		}
 	})
 }
 
