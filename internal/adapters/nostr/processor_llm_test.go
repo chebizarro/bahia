@@ -2,6 +2,7 @@ package nostr
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -69,11 +70,12 @@ func TestProcessorWorkerAdvertisementParsesTelemetryAssessesPressureAndPublishes
 	repo := &captureWorkerRepo{}
 	publisher := &capturePublisher{}
 	processor := NewProcessorWithPublisher(nil, repo, publisher, zap.NewNop())
+	sampledAt := time.Now().UTC().Truncate(time.Second)
 	ev := &gonostr.Event{
 		PubKey:    "worker-pubkey",
 		Kind:      kindLoomWorkerAd,
-		CreatedAt: gonostr.Timestamp(fixedProcessorTime().Unix()),
-		Content:   `{"name":"telemetry-worker","max_concurrent_jobs":2,"current_queue_depth":0,"telemetry":{"sampled_at":"2026-05-24T12:00:00Z","memory":{"total_bytes":68719476736,"available_bytes":42949672960},"disk":{"path":"/","total_bytes":1073741824000,"available_bytes":322122547200},"thermal":{"max_temperature_c":60,"throttled":false}}}`,
+		CreatedAt: gonostr.Timestamp(sampledAt.Unix()),
+		Content:   fmt.Sprintf(`{"name":"telemetry-worker","max_concurrent_jobs":2,"current_queue_depth":0,"telemetry":{"sampled_at":%q,"memory":{"total_bytes":68719476736,"available_bytes":42949672960},"disk":{"path":"/","total_bytes":1073741824000,"available_bytes":322122547200},"thermal":{"max_temperature_c":60,"throttled":false}}}`, sampledAt.Format(time.RFC3339)),
 	}
 
 	if err := processor.handleWorkerAdvertisement(context.Background(), ev); err != nil {
