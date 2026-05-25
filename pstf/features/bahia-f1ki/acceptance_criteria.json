@@ -1,0 +1,30 @@
+{
+  "feature_id": "bahia-f1ki",
+  "criteria": [
+    {
+      "id": "AC1",
+      "statement": "deno check passes in loom-worker.",
+      "status": "verified"
+    },
+    {
+      "id": "AC2",
+      "statement": "deno test runs deterministic telemetry service tests for resource and accelerator advertisement behavior.",
+      "status": "verified"
+    },
+    {
+      "id": "AC3",
+      "statement": "deno test verifies Kind 10100 advertisement payload shape, including telemetry and protocol tags.",
+      "status": "verified"
+    },
+    {
+      "id": "AC4",
+      "statement": "deno test verifies immediate Kind 10100 republishes use monotonic created_at timestamps.",
+      "status": "verified"
+    },
+    {
+      "id": "AC5",
+      "statement": "loom-worker commits are pushed and git status is up to date with origin/main, or bahia-1bai remains open with the exact push blocker.",
+      "status": "blocked"
+    }
+  ]
+}

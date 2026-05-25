@@ -1,0 +1,17 @@
+{
+  "feature_id": "bahia-f1ki",
+  "title": "loom-worker telemetry advertisement verification",
+  "observed_behavior": [
+    "loom-worker telemetry advertisement implementation existed without Deno test modules.",
+    "loom-worker main was ahead of origin/main before this work."
+  ],
+  "intended_behavior": [
+    "Telemetry-derived worker resources and accelerator advertisements are covered by deterministic tests.",
+    "Kind 10100 worker advertisement payloads include telemetry, resources, accelerators, pricing, software, geohash, and duration tags.",
+    "Immediate repeated Kind 10100 advertisement publishes produce monotonic created_at timestamps."
+  ],
+  "scope": {
+    "implementation_repo": "/Users/bizarro/Documents/Dev/loom-worker",
+    "bahia_changes": "PSTF and Beads verification only"
+  }
+}

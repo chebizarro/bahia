@@ -1,0 +1,18 @@
+{
+  "feature_id": "bahia-f1ki",
+  "tests": [
+    {
+      "command": "deno check .",
+      "repo": "/Users/bizarro/Documents/Dev/loom-worker",
+      "maps_to": ["AC1"],
+      "result": "passed"
+    },
+    {
+      "command": "deno test --allow-all",
+      "repo": "/Users/bizarro/Documents/Dev/loom-worker",
+      "maps_to": ["AC2", "AC3", "AC4"],
+      "result": "passed",
+      "test_count": 4
+    }
+  ]
+}
