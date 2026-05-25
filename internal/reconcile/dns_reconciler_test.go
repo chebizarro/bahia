@@ -2,6 +2,7 @@ package reconcile
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -88,6 +89,48 @@ func TestDNSReconcilerNoOpWhenSnapshotsMatch(t *testing.T) {
 	if backend.syncCallCount() != 0 {
 		t.Fatalf("sync calls = %d, want 0", backend.syncCallCount())
 	}
+}
+
+func TestDNSReconcilerDiffPreservesMultiValueRRsets(t *testing.T) {
+	actual := []domain.DNSRecord{
+		{Zone: "prod.example", Name: "api", FQDN: "api.prod.example", Type: domain.DNSRecordTypeA, Value: "10.0.0.10", TTL: 120},
+	}
+	desired := []domain.DNSRecord{
+		{Zone: "prod.example", Name: "api", FQDN: "api.prod.example", Type: domain.DNSRecordTypeA, Value: "10.0.0.10", TTL: 120},
+		{Zone: "prod.example", Name: "api", FQDN: "api.prod.example", Type: domain.DNSRecordTypeA, Value: "10.0.0.11", TTL: 120},
+	}
+
+	diff := diffDNSRecords(actual, desired)
+
+	if len(diff.added) != 1 || diff.added[0].Value != "10.0.0.11" {
+		t.Fatalf("added records = %#v, want only 10.0.0.11", diff.added)
+	}
+	if len(diff.updated) != 0 {
+		t.Fatalf("updated records = %#v, want none", diff.updated)
+	}
+	if len(diff.deleted) != 0 {
+		t.Fatalf("deleted records = %#v, want none", diff.deleted)
+	}
+}
+
+func TestDNSReconcilerDoesNotEmitMutationEventsWhenSyncFails(t *testing.T) {
+	ctx := context.Background()
+	projector, zone, expected := testReconcilerProjector()
+	actual := cloneDNSRecords(expected)
+	actual[0].Value = "10.0.0.99"
+	publisher := &captureDNSPublisher{}
+	backend := &fakeDNSBackend{records: actual, syncErr: errors.New("sync failed")}
+	reconciler := NewDNSReconciler(projector, []domain.DNSZone{zone}, &fakeDNSResolver{backends: map[string]DNSBackend{"test": backend}}, 0, nil, publisher)
+
+	if err := reconciler.ReconcileOnce(ctx); err != nil {
+		t.Fatalf("ReconcileOnce returned error: %v", err)
+	}
+
+	assertEventCount(t, publisher.eventsOfType(dnsEventDriftDetected), 1)
+	assertEventCount(t, publisher.eventsOfType(dnsEventRecordChanged), 0)
+	assertEventCount(t, publisher.eventsOfType(dnsEventEndpointRegistered), 0)
+	assertEventCount(t, publisher.eventsOfType(dnsEventEndpointDeregistered), 0)
+	assertEventCount(t, publisher.eventsOfType(dnsEventZoneSynced), 0)
 }
 
 func TestDNSReconcilerEmitsDNSAuditEvents(t *testing.T) {
@@ -198,6 +241,7 @@ type fakeDNSBackend struct {
 	mu        sync.Mutex
 	records   []domain.DNSRecord
 	synced    []domain.DNSRecord
+	syncErr   error
 	syncCalls int
 	listCalls int
 }
@@ -213,6 +257,9 @@ func (b *fakeDNSBackend) SyncZone(_ context.Context, _ domain.DNSZone, records [
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.syncCalls++
+	if b.syncErr != nil {
+		return b.syncErr
+	}
 	b.synced = append([]domain.DNSRecord(nil), records...)
 	b.records = append([]domain.DNSRecord(nil), records...)
 	return nil

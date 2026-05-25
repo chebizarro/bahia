@@ -3,6 +3,7 @@ package reconcile
 import (
 	"context"
 	"sort"
+	"strconv"
 	"sync"
 	"time"
 
@@ -144,13 +145,13 @@ func (r *DNSReconciler) ReconcileOnce(ctx context.Context) error {
 		}
 
 		r.emitDriftDetected(ctx, zone, diff)
-		r.emitRecordChanges(ctx, zone, diff)
-		r.emitEndpointDeltas(ctx, zone, diff)
 		if err := backend.SyncZone(ctx, zone, desired); err != nil {
 			r.logger.Warn("DNS backend sync zone failed", zap.String("zone", zone.Name), zap.Error(err))
 			continue
 		}
 		changed++
+		r.emitRecordChanges(ctx, zone, diff)
+		r.emitEndpointDeltas(ctx, zone, diff)
 		r.emitZoneSynced(ctx, zone, len(actual), len(desired), diff)
 		r.logger.Info("DNS zone synced", zap.String("zone", zone.Name), zap.Int("desired_records", len(desired)), zap.Int("actual_records", len(actual)), zap.Int("added_records", len(diff.added)), zap.Int("deleted_records", len(diff.deleted)), zap.Int("updated_records", len(diff.updated)))
 	}
@@ -186,20 +187,29 @@ func diffDNSRecords(actual, desired []domain.DNSRecord) dnsRecordDiff {
 	actualByKey := dnsRecordMap(actual)
 	desiredByKey := dnsRecordMap(desired)
 	diff := dnsRecordDiff{}
+	pendingAdded := make(map[string]domain.DNSRecord)
+	pendingDeleted := make(map[string]domain.DNSRecord)
 	for key, desiredRecord := range desiredByKey {
 		actualRecord, ok := actualByKey[key]
 		if !ok {
-			diff.added = append(diff.added, desiredRecord)
+			pendingAdded[key] = desiredRecord
 			continue
 		}
-		if actualRecord.Value != desiredRecord.Value || actualRecord.TTL != desiredRecord.TTL {
+		if actualRecord.TTL != desiredRecord.TTL {
 			diff.updated = append(diff.updated, dnsRecordUpdate{old: actualRecord, new: desiredRecord})
 		}
 	}
 	for key, actualRecord := range actualByKey {
 		if _, ok := desiredByKey[key]; !ok {
-			diff.deleted = append(diff.deleted, actualRecord)
+			pendingDeleted[key] = actualRecord
 		}
+	}
+	pairSingleValueUpdates(&diff, pendingAdded, pendingDeleted)
+	for _, record := range pendingAdded {
+		diff.added = append(diff.added, record)
+	}
+	for _, record := range pendingDeleted {
+		diff.deleted = append(diff.deleted, record)
 	}
 	actualCoordinates := dnsCoordinateSet(actual)
 	desiredCoordinates := dnsCoordinateSet(desired)
@@ -225,8 +235,44 @@ func dnsRecordMap(records []domain.DNSRecord) map[string]domain.DNSRecord {
 	return out
 }
 
+func pairSingleValueUpdates(diff *dnsRecordDiff, pendingAdded, pendingDeleted map[string]domain.DNSRecord) {
+	addedBySet := dnsRecordSetCandidates(pendingAdded)
+	deletedBySet := dnsRecordSetCandidates(pendingDeleted)
+	for setKey, addedKeys := range addedBySet {
+		deletedKeys := deletedBySet[setKey]
+		if len(addedKeys) != 1 || len(deletedKeys) != 1 {
+			continue
+		}
+		addedKey := addedKeys[0]
+		deletedKey := deletedKeys[0]
+		diff.updated = append(diff.updated, dnsRecordUpdate{old: pendingDeleted[deletedKey], new: pendingAdded[addedKey]})
+		delete(pendingAdded, addedKey)
+		delete(pendingDeleted, deletedKey)
+	}
+}
+
+func dnsRecordSetCandidates(records map[string]domain.DNSRecord) map[string][]string {
+	out := make(map[string][]string)
+	for key, record := range records {
+		setKey := dnsRecordSetKey(record)
+		out[setKey] = append(out[setKey], key)
+	}
+	return out
+}
+
 func dnsRecordKey(record domain.DNSRecord) string {
-	return record.FQDN + "\x00" + string(record.Type)
+	return record.FQDN + "\x00" + string(record.Type) + "\x00" + record.Value + "\x00" + dnsOptionalIntKey(record.Port) + "\x00" + dnsOptionalIntKey(record.Priority) + "\x00" + dnsOptionalIntKey(record.Weight)
+}
+
+func dnsOptionalIntKey(value *int) string {
+	if value == nil {
+		return ""
+	}
+	return strconv.Itoa(*value)
+}
+
+func dnsRecordSetKey(record domain.DNSRecord) string {
+	return record.FQDN + "\x00" + string(record.Type) + "\x00" + dnsOptionalIntKey(record.Port) + "\x00" + dnsOptionalIntKey(record.Priority) + "\x00" + dnsOptionalIntKey(record.Weight)
 }
 
 func dnsCoordinateSet(records []domain.DNSRecord) map[string]struct{} {
