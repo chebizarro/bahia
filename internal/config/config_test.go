@@ -1093,6 +1093,17 @@ func TestDNSValidationEnabled(t *testing.T) {
 		}
 	})
 
+	t.Run("fips backend defaults hosts path", func(t *testing.T) {
+		cfg := validDNSConfig()
+		cfg.DNS.Backends["fs"] = DNSBackendConfig{Type: "fips"}
+		if err := cfg.validate(); err != nil {
+			t.Fatalf("valid fips DNS backend rejected: %v", err)
+		}
+		if got := cfg.DNS.Backends["fs"].HostsPath; got != "/etc/fips/hosts" {
+			t.Fatalf("fips hosts path = %q, want /etc/fips/hosts", got)
+		}
+	})
+
 	t.Run("environment zones required", func(t *testing.T) {
 		cfg := validDNSConfig()
 		cfg.DNS.Projection.EnvironmentZones = map[string]string{}

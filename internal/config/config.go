@@ -93,6 +93,7 @@ type DNSBackendConfig struct {
 	DnsmasqConfigDir     string        `koanf:"dnsmasq_config_dir" yaml:"dnsmasq_config_dir"`
 	DnsmasqReloadCommand string        `koanf:"dnsmasq_reload_command" yaml:"dnsmasq_reload_command"`
 	DnsmasqFilePrefix    string        `koanf:"dnsmasq_file_prefix" yaml:"dnsmasq_file_prefix"`
+	HostsPath            string        `koanf:"hosts_path" yaml:"hosts_path"`
 }
 
 // DNSProjectionConfig selects source state for DNS endpoint projection.
@@ -1140,6 +1141,7 @@ func (c *Config) validateDNS() error {
 		backend.DnsmasqConfigDir = strings.TrimSpace(backend.DnsmasqConfigDir)
 		backend.DnsmasqReloadCommand = strings.TrimSpace(backend.DnsmasqReloadCommand)
 		backend.DnsmasqFilePrefix = strings.TrimSpace(backend.DnsmasqFilePrefix)
+		backend.HostsPath = strings.TrimSpace(backend.HostsPath)
 		switch backend.Type {
 		case "filesystem":
 			if backend.RootDir == "" {
@@ -1183,6 +1185,10 @@ func (c *Config) validateDNS() error {
 			}
 			if backend.DnsmasqFilePrefix == "" {
 				backend.DnsmasqFilePrefix = "bahia-"
+			}
+		case "fips":
+			if backend.HostsPath == "" {
+				backend.HostsPath = "/etc/fips/hosts"
 			}
 		default:
 			return fmt.Errorf("config validation failed: dns.backends.%s.type %q is unsupported", name, backend.Type)

@@ -231,17 +231,7 @@ func (b *Bridge) subscribeOnce(ctx context.Context) error {
 }
 
 func (b *Bridge) subscriptionFilter() nostr.Filter {
-	filter := nostr.Filter{Kinds: []int{KindDNSEndpointState}, Authors: []string{b.cfg.BahiaPubkey}}
-	if len(b.cfg.CapabilityFilter) > 0 || len(b.cfg.EnvironmentFilter) > 0 {
-		filter.Tags = nostr.TagMap{}
-	}
-	if len(b.cfg.CapabilityFilter) > 0 {
-		filter.Tags["#capability"] = b.cfg.CapabilityFilter
-	}
-	if len(b.cfg.EnvironmentFilter) > 0 {
-		filter.Tags["#env"] = b.cfg.EnvironmentFilter
-	}
-	return filter
+	return nostr.Filter{Kinds: []int{KindDNSEndpointState}, Authors: []string{b.cfg.BahiaPubkey}}
 }
 
 func (b *Bridge) consume(ctx context.Context, merged *nostradapter.MergedSubscription, authAttempted map[string]struct{}) (bool, error) {

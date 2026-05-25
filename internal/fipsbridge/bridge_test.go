@@ -74,6 +74,21 @@ func TestBridgeHealthFilteringAddsAndRemovesHostsEntry(t *testing.T) {
 	require.NotContains(t, bridge.entries, "drydock-review")
 }
 
+func TestBridgeSubscriptionFilterUsesKindAndAuthorOnly(t *testing.T) {
+	pubkey, _ := testIdentity(t)
+	bridge := newBridgeWithPool(Config{
+		BahiaPubkey:       pubkey,
+		RelayURLs:         []string{"wss://relay.example.test"},
+		CapabilityFilter:  []string{"llm"},
+		EnvironmentFilter: []string{"prod"},
+	}, nil, slog.New(slog.NewTextHandler(os.Stderr, nil)))
+
+	filter := bridge.subscriptionFilter()
+	require.Equal(t, []int{KindDNSEndpointState}, filter.Kinds)
+	require.Equal(t, []string{pubkey}, filter.Authors)
+	require.Empty(t, filter.Tags)
+}
+
 func TestBridgeFiltersByCapabilityAndEnvironment(t *testing.T) {
 	pubkey, npub := testIdentity(t)
 	bridge := newBridgeWithPool(Config{

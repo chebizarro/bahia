@@ -1731,6 +1731,12 @@ func buildDNSRuntime(ctx context.Context, cfg config.DNSConfig, logger *zap.Logg
 				return nil, nil, fmt.Errorf("checking DNS dnsmasq backend %q: %w", ref, err)
 			}
 			registrations = append(registrations, dnsAdapter.BackendRegistration{Ref: ref, Backend: backend})
+		case string(domain.DNSBackendTypeFIPS):
+			backend := dnsAdapter.NewFIPSBackend(backendConfig.HostsPath, logger)
+			if err := backend.Health(ctx); err != nil {
+				return nil, nil, fmt.Errorf("checking DNS FIPS backend %q: %w", ref, err)
+			}
+			registrations = append(registrations, dnsAdapter.BackendRegistration{Ref: ref, Backend: backend})
 		default:
 			return nil, nil, fmt.Errorf("configuring DNS backend %q: unsupported type %q", ref, backendConfig.Type)
 		}
