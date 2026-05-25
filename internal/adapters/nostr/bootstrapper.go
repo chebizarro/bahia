@@ -21,6 +21,8 @@ const (
 	BootstrapPhaseFailed      BootstrapPhase = "failed"
 )
 
+const maxBootstrapRetryInterval = 5 * time.Minute
+
 type BootstrapProgress struct {
 	Phase          BootstrapPhase
 	RequestedTier  int
@@ -78,7 +80,7 @@ func NewBootstrapper(pool *RelayPool, catalog *KindCatalog, cursorPlanner *Repla
 		config.CatchupTimeout = 15 * time.Second
 	}
 	if config.RetryInterval <= 0 {
-		config.RetryInterval = 60 * time.Second
+		config.RetryInterval = 30 * time.Second
 	}
 	if config.RequestedTier < 0 {
 		config.RequestedTier = 0
@@ -103,6 +105,45 @@ func NewBootstrapper(pool *RelayPool, catalog *KindCatalog, cursorPlanner *Repla
 }
 
 func (b *Bootstrapper) Run(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	retryInterval := b.config.RetryInterval
+	if retryInterval <= 0 {
+		retryInterval = 30 * time.Second
+	}
+	for {
+		err := b.attemptBootstrap(ctx)
+		if err == nil {
+			return nil
+		}
+
+		b.setPhase(BootstrapPhaseFailed)
+		b.logger.Warn("bootstrap attempt failed, retrying",
+			zap.Error(err),
+			zap.Duration("retry_interval", retryInterval))
+
+		timer := time.NewTimer(retryInterval)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			return ctx.Err()
+		case <-timer.C:
+		}
+
+		retryInterval *= 2
+		if retryInterval > maxBootstrapRetryInterval {
+			retryInterval = maxBootstrapRetryInterval
+		}
+	}
+}
+
+func (b *Bootstrapper) attemptBootstrap(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}

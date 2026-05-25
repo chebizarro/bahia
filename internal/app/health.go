@@ -40,21 +40,38 @@ type registeredHealthCheck struct {
 	fn   func() HealthCheck
 }
 
+type RelayQuorumConfig struct {
+	FullMinHealthy      int
+	DegradedMinHealthy  int
+	EmergencyMinHealthy int
+}
+
 type HealthProvider struct {
 	modePolicy *ModePolicy
 	background *BackgroundManager
 	// Slots for future providers (relay pool, bootstrap state, etc.)
-	mu            sync.RWMutex
-	relayHealthFn func() (connected, healthy int)
-	bootstrapFn   func() (phase string, ready bool)
-	checks        []registeredHealthCheck
+	mu                sync.RWMutex
+	relayHealthFn     func() (connected, healthy int)
+	bootstrapFn       func() (phase string, ready bool)
+	relayQuorumConfig RelayQuorumConfig
+	checks            []registeredHealthCheck
 }
 
 func NewHealthProvider(policy *ModePolicy, bg *BackgroundManager) *HealthProvider {
 	if policy == nil {
 		policy = NewModePolicy(ModeFull)
 	}
-	return &HealthProvider{modePolicy: policy, background: bg}
+	return &HealthProvider{modePolicy: policy, background: bg, relayQuorumConfig: DefaultRelayQuorumConfig()}
+}
+
+func DefaultRelayQuorumConfig() RelayQuorumConfig {
+	return RelayQuorumConfig{FullMinHealthy: 2, DegradedMinHealthy: 1, EmergencyMinHealthy: 1}
+}
+
+func (p *HealthProvider) SetRelayQuorumConfig(config RelayQuorumConfig) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.relayQuorumConfig = normalizeRelayQuorumConfig(config)
 }
 
 func (p *HealthProvider) SetRelayHealthFunc(fn func() (connected, healthy int)) {
@@ -88,10 +105,11 @@ func (p *HealthProvider) Readiness() HealthSnapshot {
 	p.mu.RLock()
 	relayHealthFn := p.relayHealthFn
 	bootstrapFn := p.bootstrapFn
+	relayQuorumConfig := p.relayQuorumConfig
 	registeredChecks := append([]registeredHealthCheck(nil), p.checks...)
 	p.mu.RUnlock()
 
-	snapshot.Checks = append(snapshot.Checks, relayQuorumCheck(relayHealthFn, snapshot.ActiveTier))
+	snapshot.Checks = append(snapshot.Checks, relayQuorumCheck(relayHealthFn, snapshot.ActiveTier, currentMode(p.modePolicy), relayQuorumConfig))
 	snapshot.Checks = append(snapshot.Checks, bootstrapReadyCheck(bootstrapFn, snapshot.ActiveTier))
 	snapshot.Checks = append(snapshot.Checks, p.backgroundRunnersCheck(snapshot.ActiveTier))
 	for _, registered := range registeredChecks {
@@ -136,19 +154,60 @@ func (p *HealthProvider) baseSnapshot() HealthSnapshot {
 	return snapshot
 }
 
-func relayQuorumCheck(fn func() (connected, healthy int), tier int) HealthCheck {
-	check := HealthCheck{Name: "relay_quorum", Status: HealthStatusPass, Message: "relay health provider not configured", Tier: tier}
+func relayQuorumCheck(fn func() (connected, healthy int), tier int, mode Mode, config RelayQuorumConfig) HealthCheck {
+	minRequired := minHealthyForMode(mode, config)
+	check := HealthCheck{Name: "relay_quorum", Status: HealthStatusPass, Message: fmt.Sprintf("relay health provider not configured, min_required=%d", minRequired), Tier: tier}
 	if fn == nil {
 		return check
 	}
 
 	connected, healthy := fn()
-	check.Message = fmt.Sprintf("%d connected, %d healthy", connected, healthy)
-	if healthy > 0 {
+	check.Message = fmt.Sprintf("%d connected, %d healthy, min_required=%d", connected, healthy, minRequired)
+	if healthy >= minRequired {
 		return check
 	}
 	check.Status = HealthStatusFail
 	return check
+}
+
+func currentMode(policy *ModePolicy) Mode {
+	if policy == nil {
+		return ModeFull
+	}
+	switch policy.ActiveTier {
+	case Tier1:
+		return ModeEmergency
+	case Tier2:
+		return ModeDegraded
+	default:
+		return ModeFull
+	}
+}
+
+func minHealthyForMode(mode Mode, config RelayQuorumConfig) int {
+	config = normalizeRelayQuorumConfig(config)
+	switch mode {
+	case ModeEmergency:
+		return config.EmergencyMinHealthy
+	case ModeDegraded:
+		return config.DegradedMinHealthy
+	default:
+		return config.FullMinHealthy
+	}
+}
+
+func normalizeRelayQuorumConfig(config RelayQuorumConfig) RelayQuorumConfig {
+	defaults := DefaultRelayQuorumConfig()
+	if config.FullMinHealthy <= 0 {
+		config.FullMinHealthy = defaults.FullMinHealthy
+	}
+	if config.DegradedMinHealthy <= 0 {
+		config.DegradedMinHealthy = defaults.DegradedMinHealthy
+	}
+	if config.EmergencyMinHealthy <= 0 {
+		config.EmergencyMinHealthy = defaults.EmergencyMinHealthy
+	}
+	return config
 }
 
 func bootstrapReadyCheck(fn func() (phase string, ready bool), tier int) HealthCheck {

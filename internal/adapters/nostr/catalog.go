@@ -71,6 +71,7 @@ const (
 	KindControlPlaneWorkerLabelsUpdate       = 6003
 	KindControlPlaneWorkerPolicyApplyRequest = 6004
 	KindControlPlaneWorkloadPinRequest       = 6005
+	KindControlPlaneWorkerCleanupRequest     = 6006
 
 	KindMLRecipeRunRequest            = 38390
 	KindMLInferenceDeployRequest      = 38391
@@ -377,7 +378,7 @@ func NewKindCatalog() *KindCatalog {
 		{Name: "assistant_live", Kinds: []int{KindAssistantPromptRequest, KindAssistantApproval, KindAssistantStatus, KindAssistantResult}, Tier: 3, Snapshot: false, Required: false},
 		{Name: "tool_live", Kinds: []int{KindControlPlaneToolProvisionRequest, KindControlPlaneToolApprovalRequest, KindControlPlaneToolProvisionStatus, KindControlPlaneToolProvisionResult, KindControlPlaneToolApprovalResponse}, Tier: 3, Snapshot: false, Required: false},
 		{Name: "adoption_live", Kinds: []int{KindControlPlaneAdoptionScanRequest, KindControlPlaneAdoptionImportRequest, KindControlPlaneAdoptionStatus, KindControlPlaneAdoptionScanResult, KindControlPlaneAdoptionImportResult}, Tier: 3, Snapshot: false, Required: false},
-		{Name: "worker_control_live", Kinds: []int{KindControlPlaneWorkerCordonRequest, KindControlPlaneWorkerUncordonRequest, KindControlPlaneWorkerDrainRequest, KindControlPlaneWorkerUndrainRequest, KindControlPlaneWorkerMaintenanceEnter, KindControlPlaneWorkerMaintenanceExit, KindControlPlaneWorkerLabelsUpdate, KindControlPlaneWorkerPolicyApplyRequest, KindControlPlaneWorkloadPinRequest, KindControlPlaneWorkerStatus, KindControlPlaneWorkerResult}, Tier: 3, Snapshot: false, Required: false},
+		{Name: "worker_control_live", Kinds: []int{KindControlPlaneWorkerCordonRequest, KindControlPlaneWorkerUncordonRequest, KindControlPlaneWorkerDrainRequest, KindControlPlaneWorkerUndrainRequest, KindControlPlaneWorkerMaintenanceEnter, KindControlPlaneWorkerMaintenanceExit, KindControlPlaneWorkerLabelsUpdate, KindControlPlaneWorkerPolicyApplyRequest, KindControlPlaneWorkloadPinRequest, KindControlPlaneWorkerCleanupRequest, KindControlPlaneWorkerStatus, KindControlPlaneWorkerResult}, Tier: 3, Snapshot: false, Required: false},
 		{Name: "fips_snapshot", Kinds: []int{KindFIPSOverlayAdvert}, Tier: 3, Snapshot: true, Required: false},
 		{Name: "audit_live", Kinds: []int{KindBuildRegistered, KindArtifactRegistered, KindDeploymentCreated, KindDeploymentComplete, KindDriftDetected, KindObservation, KindServiceRegistryAudit, KindEnvironmentRegistryAudit, KindStateChangedAudit, KindRuntimeActionAudit, KindReconcileAudit, KindAdoptionAudit, KindDeploymentApprovalAudit, KindDeploymentRunAudit, KindLLMRouteRegistryAudit, KindLLMReleaseRegisteredAudit, KindLLMDeploymentAudit, KindLLMRunAudit, KindLLMRouteStateAudit, KindLLMGatewayAudit, KindDNSZoneSyncedAudit, KindDNSRecordChangedAudit, KindDNSDriftDetectedAudit, KindDNSEndpointRegisteredAudit, KindDNSEndpointDeregisteredAudit}, Tier: 3, Snapshot: false, Required: false},
 	}
@@ -390,6 +391,7 @@ func NewKindCatalog() *KindCatalog {
 	for _, kind := range catalog.AllKinds() {
 		catalog.decoders[kind] = decoderNotImplemented(kind)
 	}
+	catalog.registerRequiredGroupNoopDecoders()
 	catalog.registerProjectionDecoders()
 	return catalog
 }
@@ -457,6 +459,18 @@ func kindsFromGroups(groups []ReplayGroup) []int {
 	}
 	sort.Ints(kinds)
 	return kinds
+}
+
+func (c *KindCatalog) registerRequiredGroupNoopDecoders() {
+	for _, group := range c.Groups {
+		if !group.Required {
+			continue
+		}
+		family := noopProjectionFamily(group.Name)
+		for _, kind := range group.Kinds {
+			c.decoders[kind] = decodeNoopProjection(group.Name, group.Tier, family)
+		}
+	}
 }
 
 func (c *KindCatalog) registerProjectionDecoders() {
@@ -726,6 +740,48 @@ func decodeContinuityStatusProjection(ev *gonostr.Event) (*DecodedProjectionEven
 	return baseDecoded(ev, FamilyContinuity, continuityDTag(ev), firstTime(status.ChangedAt, ev.CreatedAt.Time().UTC()), false, func(out *DecodedProjectionEvent) {
 		out.Continuity = &DecodedContinuity{Status: &status, PreviousProfile: previous, RecoveryProgressKey: tagValueLocal(ev.Tags, "run")}
 	}), nil
+}
+
+func decodeNoopProjection(group string, tier int, family ProjectionFamily) DecodeFunc {
+	return func(ev *gonostr.Event) (*DecodedProjectionEvent, error) {
+		if ev == nil {
+			return nil, fmt.Errorf("projection event is nil")
+		}
+		return &DecodedProjectionEvent{
+			Kind:      ev.Kind,
+			DTag:      noopProjectionDTag(ev),
+			Group:     group,
+			Tier:      tier,
+			Timestamp: ev.CreatedAt.Time().UTC(),
+			SourceID:  ev.ID,
+			Family:    family,
+		}, nil
+	}
+}
+
+func noopProjectionFamily(group string) ProjectionFamily {
+	switch {
+	case strings.HasPrefix(group, "core_control_plane"):
+		return FamilyControlPlane
+	case strings.HasPrefix(group, "system"):
+		return FamilySystem
+	default:
+		return ProjectionFamily("")
+	}
+}
+
+func noopProjectionDTag(ev *gonostr.Event) string {
+	return firstNonBlank(
+		tagValueLocal(ev.Tags, "d"),
+		tagValueLocal(ev.Tags, "service"),
+		tagValueLocal(ev.Tags, "environment"),
+		tagValueLocal(ev.Tags, "artifact"),
+		tagValueLocal(ev.Tags, "intent"),
+		tagValueLocal(ev.Tags, "run"),
+		tagValueLocal(ev.Tags, "policy"),
+		tagValueLocal(ev.Tags, "e"),
+		ev.ID,
+	)
 }
 
 func decodeContent(ev *gonostr.Event, out any) error {

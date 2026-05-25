@@ -116,7 +116,7 @@ func TestBootstrapperNoRelayDataFails(t *testing.T) {
 		CatchupTimeout:  50 * time.Millisecond,
 	})
 
-	err := bootstrapper.Run(context.Background())
+	err := bootstrapper.attemptBootstrap(context.Background())
 
 	require.Error(t, err)
 	require.False(t, bootstrapper.Ready())
@@ -124,6 +124,55 @@ func TestBootstrapperNoRelayDataFails(t *testing.T) {
 	progress := bootstrapper.Progress()
 	require.Equal(t, BootstrapPhaseFailed, progress.Phase)
 	require.Equal(t, 3, progress.GroupsComplete)
+}
+
+func TestBootstrapperRunRetriesAfterFailedAttempt(t *testing.T) {
+	catalog := testBootstrapCatalog()
+	cache := &bootstrapApplyRecorder{}
+	attemptsByKind := make(map[int]int)
+	var attemptsMu sync.Mutex
+	original := bootstrapSubscribeAllWithEOSE
+	bootstrapSubscribeAllWithEOSE = func(_ *RelayPool, ctx context.Context, filters []gonostr.Filter) (*MergedSubscription, error) {
+		require.Len(t, filters, 1)
+		require.Len(t, filters[0].Kinds, 1)
+		kind := filters[0].Kinds[0]
+
+		attemptsMu.Lock()
+		attemptsByKind[kind]++
+		attempt := attemptsByKind[kind]
+		attemptsMu.Unlock()
+
+		script := scriptedBootstrapSubscription{eose: true}
+		if attempt > 1 {
+			switch kind {
+			case testKindTier1Snapshot:
+				script.events = []*gonostr.Event{signedBootstrapEvent(t, testKindTier1Snapshot, "retry-snapshot")}
+			case testKindTier1Live:
+				script.events = []*gonostr.Event{signedBootstrapEvent(t, testKindTier1Live, "retry-live")}
+			}
+		}
+		return scriptedMergedSubscription(ctx, script), nil
+	}
+	t.Cleanup(func() { bootstrapSubscribeAllWithEOSE = original })
+
+	bootstrapper := NewBootstrapper(nil, catalog, nil, cache, zap.NewNop(), BootstrapConfig{
+		RequestedTier:   1,
+		SnapshotTimeout: 50 * time.Millisecond,
+		CatchupTimeout:  50 * time.Millisecond,
+		RetryInterval:   time.Millisecond,
+	})
+
+	err := bootstrapper.Run(context.Background())
+
+	require.NoError(t, err)
+	require.True(t, bootstrapper.Ready())
+	require.Equal(t, 1, bootstrapper.ReadyTier())
+	require.Equal(t, 2, cache.count())
+	attemptsMu.Lock()
+	require.Equal(t, 2, attemptsByKind[testKindTier0Snapshot])
+	require.Equal(t, 2, attemptsByKind[testKindTier1Snapshot])
+	require.Equal(t, 2, attemptsByKind[testKindTier1Live])
+	attemptsMu.Unlock()
 }
 
 func TestBootstrapperProgressReturnsSnapshot(t *testing.T) {

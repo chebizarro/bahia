@@ -1,6 +1,11 @@
 package nostr
 
-import "testing"
+import (
+	"encoding/json"
+	"testing"
+
+	gonostr "github.com/nbd-wtf/go-nostr"
+)
 
 func TestNewKindCatalogContainsExpectedKinds(t *testing.T) {
 	catalog := NewKindCatalog()
@@ -85,6 +90,32 @@ func TestKindsForTierReturnsUniqueTierKinds(t *testing.T) {
 			t.Fatalf("KindsForTier returned duplicate kind %d", kind)
 		}
 		seen[kind] = struct{}{}
+	}
+}
+
+func TestRequiredGroupsHaveNonErrorDecoders(t *testing.T) {
+	catalog := NewKindCatalog()
+	for _, group := range catalog.Groups {
+		if !group.Required {
+			continue
+		}
+		for _, kind := range group.Kinds {
+			decoder, ok := catalog.Decoder(kind)
+			if !ok {
+				t.Fatalf("required group %q kind %d has no decoder", group.Name, kind)
+			}
+			ev := requiredDecoderFixture(kind)
+			decoded, err := decoder(ev)
+			if err != nil {
+				t.Fatalf("required group %q kind %d decoder returned error: %v", group.Name, kind, err)
+			}
+			if decoded == nil {
+				t.Fatalf("required group %q kind %d decoder returned nil event", group.Name, kind)
+			}
+			if decoded.Kind != kind {
+				t.Fatalf("required group %q kind %d decoded kind = %d", group.Name, kind, decoded.Kind)
+			}
+		}
 	}
 }
 
@@ -334,6 +365,52 @@ func reactorKindCoverage() []int {
 		KindLegacyWorkerDrainStatus,
 		KindLegacyWorkerEligibilityPreview,
 	}
+}
+
+func requiredDecoderFixture(kind int) *gonostr.Event {
+	tags := gonostr.Tags{
+		{"d", "test-dtag"},
+		{"service", "svc.api"},
+		{"environment", "env-prod"},
+		{"artifact", "artifact-1"},
+		{"intent", "intent-1"},
+		{"run", "run-1"},
+		{"policy", "policy-1"},
+		{"worker", "worker-pubkey"},
+	}
+	ev := &gonostr.Event{ID: "event-id", PubKey: "author-pubkey", Kind: kind, CreatedAt: gonostr.Now(), Tags: tags, Content: "{}"}
+	switch kind {
+	case KindContinuityProfile:
+		ev.Tags = gonostr.Tags{{"d", "continuity-profile:svc.api"}, {"service", "svc.api"}, {"profile", "full"}}
+		ev.Content = ""
+	case KindFailoverPolicy:
+		ev.Tags = gonostr.Tags{{"d", "failover-policy:svc.api:primary"}, {"service", "svc.api"}, {"recipe", "primary"}, {"recipe-kind", "failover"}}
+		ev.Content = mustJSON(map[string]any{"name": "primary", "service_key": "svc.api", "kind": "failover", "trigger": map[string]any{"type": "manual", "target": "operator", "timeout": 1000000000}, "steps": []map[string]any{{"name": "emit", "action": "emit_event", "timeout": 1000000000}}})
+	case KindRecoveryWorkflow:
+		ev.Tags = gonostr.Tags{{"d", "recovery-workflow:svc.api:primary"}, {"service", "svc.api"}, {"recipe", "primary"}, {"recipe-kind", "recovery"}}
+		ev.Content = mustJSON(map[string]any{"name": "primary", "service_key": "svc.api", "kind": "recovery", "steps": []map[string]any{{"name": "emit", "action": "emit_event", "timeout": 1000000000}}})
+	case KindStandbyNodeDefinition:
+		ev.Tags = gonostr.Tags{{"d", "standby:worker-pubkey:svc.api"}, {"worker", "worker-pubkey"}, {"host", "standby-1"}, {"role", "standby"}, {"service", "svc.api"}, {"profile", "full"}}
+		ev.Content = ""
+	case KindReplicationPolicy:
+		ev.Tags = gonostr.Tags{{"d", "replication-policy:svc.api"}, {"service", "svc.api"}}
+		ev.Content = mustJSON(map[string]any{"service_key": "svc.api", "targets": []map[string]any{{"worker_pubkey": "worker-pubkey", "strategy": "event_mirror", "max_staleness": 1000000000, "required_for_modes": []string{"full"}}}})
+	case KindHeartbeatObservation:
+		ev.Tags = gonostr.Tags{{"d", "heartbeat:worker-pubkey"}, {"worker", "worker-pubkey"}, {"sequence", "1"}, {"interval_ms", "1000"}}
+		ev.Content = ""
+	case KindFailoverRequest, KindRecoveryRequest:
+		ev.Tags = gonostr.Tags{{"d", "request-key"}, {"service", "svc.api"}, {"target", "worker-pubkey"}, {"profile", "full"}}
+		ev.Content = ""
+	}
+	return ev
+}
+
+func mustJSON(value any) string {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		panic(err)
+	}
+	return string(encoded)
 }
 
 func assertCatalogHasKinds(t *testing.T, catalog *KindCatalog, want []int) {

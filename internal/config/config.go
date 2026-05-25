@@ -35,6 +35,7 @@ type Config struct {
 	Cashu         CashuConfig               `koanf:"cashu"`
 	Qdrant        QdrantConfig              `koanf:"qdrant"`
 	Telemetry     TelemetryConfig           `koanf:"telemetry"`
+	WorkerCleanup WorkerCleanupConfig       `koanf:"worker_cleanup"`
 	Notifications NotificationsConfig       `koanf:"notifications"`
 	Registry      RegistryAdapterConfig     `koanf:"registry"`
 	LLM           LLMControlplaneConfig     `koanf:"llm"`
@@ -42,6 +43,13 @@ type Config struct {
 	Assistant     AssistantConfig           `koanf:"assistant"`
 	DNS           DNSConfig                 `koanf:"dns"`
 	FIPS          FIPSConfig                `koanf:"fips"`
+}
+
+// WorkerCleanupConfig controls pressure-triggered worker cleanup orchestration.
+type WorkerCleanupConfig struct {
+	Mode         string        `koanf:"mode" yaml:"mode"`
+	Cooldown     time.Duration `koanf:"cooldown" yaml:"cooldown"`
+	TargetFreeGB int           `koanf:"target_free_gb" yaml:"target_free_gb"`
 }
 
 // FIPSConfig controls FIPS overlay advert ingestion.
@@ -237,7 +245,15 @@ type NostrConfig struct {
 
 	AuthorizedPubkeys []string           `koanf:"authorized_pubkeys"`
 	PublishEnabled    bool               `koanf:"publish_enabled"`
+	RelayQuorum       RelayQuorumConfig  `koanf:"relay_quorum" yaml:"relay_quorum"`
 	Sidecar           RelaySidecarConfig `koanf:"sidecar"`
+}
+
+// RelayQuorumConfig holds readiness quorum thresholds by operating mode.
+type RelayQuorumConfig struct {
+	FullMinHealthy      int `koanf:"full_min_healthy" yaml:"full_min_healthy"`
+	DegradedMinHealthy  int `koanf:"degraded_min_healthy" yaml:"degraded_min_healthy"`
+	EmergencyMinHealthy int `koanf:"emergency_min_healthy" yaml:"emergency_min_healthy"`
 }
 
 // RelaySidecarConfig holds the local Khatru relay sidecar settings.
@@ -469,6 +485,11 @@ func Defaults() *Config {
 		},
 		Nostr: NostrConfig{
 			PublishEnabled: true,
+			RelayQuorum: RelayQuorumConfig{
+				FullMinHealthy:      2,
+				DegradedMinHealthy:  1,
+				EmergencyMinHealthy: 1,
+			},
 			Sidecar: RelaySidecarConfig{
 				Enabled:          false,
 				ListenAddr:       "0.0.0.0:3334",
@@ -581,6 +602,11 @@ func Defaults() *Config {
 		Telemetry: TelemetryConfig{
 			Enabled:     false,
 			ServiceName: "bahia",
+		},
+		WorkerCleanup: WorkerCleanupConfig{
+			Mode:         "recommend_only",
+			Cooldown:     30 * time.Minute,
+			TargetFreeGB: 40,
 		},
 		Notifications: NotificationsConfig{
 			Enabled: false,

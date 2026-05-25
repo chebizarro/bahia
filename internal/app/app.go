@@ -11,6 +11,7 @@ import (
 	"os/signal"
 	"sort"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -54,23 +55,24 @@ import (
 
 // App holds all application components.
 type App struct {
-	Config          *config.Config
-	Logger          *zap.Logger
-	DB              *pgxpool.Pool
-	Registry        *service.RegistryService
-	MLRegistry      *service.MLRegistryService
-	LLMRegistry     *service.LLMRegistryService
-	HTTPServer      *http.Server
-	Publisher       events.Publisher
-	Coordinator     *workflow.Coordinator
-	Reconciler      *reconcile.Reconciler
-	NostrPub        *nostrAdapter.Publisher
-	Telemetry       *telemetry.Provider
-	Background      *BackgroundManager
-	toolCoordinator *service.ToolProvisioningCoordinator
-	relayPools      []*nostrAdapter.RelayPool
-	ModePolicy      *ModePolicy
-	Health          *HealthProvider
+	Config             *config.Config
+	Logger             *zap.Logger
+	DB                 *pgxpool.Pool
+	Registry           *service.RegistryService
+	MLRegistry         *service.MLRegistryService
+	LLMRegistry        *service.LLMRegistryService
+	HTTPServer         *http.Server
+	Publisher          events.Publisher
+	Coordinator        *workflow.Coordinator
+	Reconciler         *reconcile.Reconciler
+	NostrPub           *nostrAdapter.Publisher
+	Telemetry          *telemetry.Provider
+	Background         *BackgroundManager
+	toolCoordinator    *service.ToolProvisioningCoordinator
+	relayPools         []*nostrAdapter.RelayPool
+	ModePolicy         *ModePolicy
+	Health             *HealthProvider
+	RelayFirstRegistry *service.RelayFirstRegistry
 }
 
 var (
@@ -130,16 +132,50 @@ func New(cfg *config.Config) (*App, error) {
 	// startup alive and use in-memory event audit/cursor storage.
 	pool, dbAvailable := connectOptionalDatabase(ctx, cfg, logger, policy)
 
-	// Repositories.
-	serviceRepo := repository.NewPgServiceRepository(pool)
-	envRepo := repository.NewPgEnvironmentRepository(pool)
-	buildRepo := repository.NewPgBuildRepository(pool)
-	artifactRepo := repository.NewPgArtifactRepository(pool)
-	intentRepo := repository.NewPgDeploymentIntentRepository(pool)
-	runRepo := repository.NewPgDeploymentRunRepository(pool)
-	obsRepo := repository.NewPgRuntimeObservationRepository(pool)
-	stateRepo := repository.NewPgEnvironmentServiceStateRepository(pool)
-	toolProvisionRepo := repository.NewPgToolProvisioningRepository(pool)
+	// Repositories. When DB is unavailable, PG-backed repositories are nil.
+	// Route gating prevents tier2/tier3 routes from being accessed, so nil repos
+	// won't be hit on those paths. Tier1 uses in-memory stores exclusively.
+	var serviceRepo repository.ServiceRepository
+	var envRepo repository.EnvironmentRepository
+	var buildRepo repository.BuildRepository
+	var artifactRepo repository.ArtifactRepository
+	var intentRepo repository.DeploymentIntentRepository
+	var runRepo repository.DeploymentRunRepository
+	var obsRepo repository.RuntimeObservationRepository
+	var stateRepo repository.EnvironmentServiceStateRepository
+	var toolProvisionRepo repository.ToolProvisioningRepository
+	var workerRepo repository.WorkerRepository
+	var paymentRepo repository.PaymentRecordRepository
+	var sbomRepo repository.SBOMRepository
+	var sigRepo repository.ArtifactSignatureRepository
+	var policyRepo repository.DeploymentPolicyRepository
+	var secretRepo repository.SecretRepository
+	var orgRepo repository.OrganizationRepository
+	var orgMemberRepo repository.OrgMemberRepository
+	var orgInviteRepo repository.OrgInviteRepository
+
+	if dbAvailable {
+		serviceRepo = repository.NewPgServiceRepository(pool)
+		envRepo = repository.NewPgEnvironmentRepository(pool)
+		buildRepo = repository.NewPgBuildRepository(pool)
+		artifactRepo = repository.NewPgArtifactRepository(pool)
+		intentRepo = repository.NewPgDeploymentIntentRepository(pool)
+		runRepo = repository.NewPgDeploymentRunRepository(pool)
+		obsRepo = repository.NewPgRuntimeObservationRepository(pool)
+		stateRepo = repository.NewPgEnvironmentServiceStateRepository(pool)
+		toolProvisionRepo = repository.NewPgToolProvisioningRepository(pool)
+		workerRepo = repository.NewPgWorkerRepository(pool)
+		paymentRepo = repository.NewPgPaymentRecordRepository(pool)
+		sbomRepo = repository.NewPgSBOMRepository(pool)
+		sigRepo = repository.NewPgArtifactSignatureRepository(pool)
+		policyRepo = repository.NewPgDeploymentPolicyRepository(pool)
+		secretRepo = repository.NewPgSecretRepository(pool)
+		orgRepo = repository.NewPgOrganizationRepository(pool)
+		orgMemberRepo = repository.NewPgOrgMemberRepository(pool)
+		orgInviteRepo = repository.NewPgOrgInviteRepository(pool)
+	} else {
+		logger.Warn("database unavailable: tier2/tier3 repositories are nil, route gating will return 503 for those tiers")
+	}
 
 	// Nostr event audit repository.
 	var nostrEventRepo repository.NostrEventRepository
@@ -148,27 +184,6 @@ func New(cfg *config.Config) (*App, error) {
 	} else {
 		nostrEventRepo = repository.NewInMemoryNostrEventRepository()
 	}
-
-	// Worker catalog repository.
-	workerRepo := repository.NewPgWorkerRepository(pool)
-
-	// Payment repository.
-	paymentRepo := repository.NewPgPaymentRecordRepository(pool)
-
-	// SBOM repository.
-	sbomRepo := repository.NewPgSBOMRepository(pool)
-
-	// Signature and policy repositories.
-	sigRepo := repository.NewPgArtifactSignatureRepository(pool)
-	policyRepo := repository.NewPgDeploymentPolicyRepository(pool)
-
-	// Secret repository.
-	secretRepo := repository.NewPgSecretRepository(pool)
-
-	// Tenant repositories.
-	orgRepo := repository.NewPgOrganizationRepository(pool)
-	orgMemberRepo := repository.NewPgOrgMemberRepository(pool)
-	orgInviteRepo := repository.NewPgOrgInviteRepository(pool)
 
 	loomClient := loom.NewClient(cfg.Loom, cfg.Nostr.PrivateKey, relayPool, logger,
 		loom.WithWorkerRepo(workerRepo),
@@ -220,6 +235,19 @@ func New(cfg *config.Config) (*App, error) {
 		verifier, publisher, logger,
 	)
 	nostrPub := nostrAdapter.NewPublisher(cfg.Nostr, relayPool, nostrEventRepo, logger)
+
+	// Relay-first write path: when mode is not "full" OR when explicitly enabled,
+	// wrap registry mutations so relay publish must succeed before local DB writes.
+	// In full mode, this defaults off for backward compatibility with existing
+	// DB-first semantics. Set mode to degraded/emergency or configure
+	// relay_canonical_writes: true to activate.
+	var relayFirstRegistry *service.RelayFirstRegistry
+	if policy.RequestedMode != ModeFull || cfg.Nostr.PublishEnabled {
+		signer := service.RelayFirstPrivateKeySigner(cfg.Nostr.PrivateKey)
+		relayFirstRegistry = service.NewRelayFirstRegistry(registry, relayFirstNostrPublisher{pool: relayPool}, signer, logger)
+		logger.Info("relay-first write path enabled for core registry mutations",
+			zap.String("mode", string(policy.RequestedMode)))
+	}
 	controlPlaneSigner, err := controlplane.NewPrivateKeySigner(cfg.Nostr.PrivateKey)
 	if err != nil {
 		return nil, fmt.Errorf("configuring control-plane signer: %w", err)
@@ -246,7 +274,6 @@ func New(cfg *config.Config) (*App, error) {
 	pressureMonitor := service.NewWorkerPressureMonitor()
 	workerStatePublisher := controlplane.NewWorkerStatePublisher(controlPlanePool, controlPlaneSigner)
 	workerStatePublisher.ConfigureAudit(nostrEventRepo, logger)
-	setupWorkerPressureSubscriptions(publisher, pressureMonitor, workerStatePublisher, logger)
 
 	// Worker policy service for environment-specific worker selection.
 	workerPolicySvc := service.NewWorkerPolicyService(workerRepo, logger)
@@ -312,18 +339,55 @@ func New(cfg *config.Config) (*App, error) {
 	// Background runner manager and startup health provider.
 	bgManager := NewBackgroundManager(logger)
 	healthProvider := NewHealthProvider(policy, bgManager)
+	healthProvider.SetRelayQuorumConfig(RelayQuorumConfig{
+		FullMinHealthy:      cfg.Nostr.RelayQuorum.FullMinHealthy,
+		DegradedMinHealthy:  cfg.Nostr.RelayQuorum.DegradedMinHealthy,
+		EmergencyMinHealthy: cfg.Nostr.RelayQuorum.EmergencyMinHealthy,
+	})
 	healthProvider.SetRelayHealthFunc(func() (connected, healthy int) {
 		return aggregateRelayHealth(controlPlanePool, relayPool, encryptedRequestPool)
 	})
 
 	catalog := nostrAdapter.NewKindCatalog()
 	cursorPlanner := nostrAdapter.NewReplayCursorPlanner(time.Second, nostrAdapter.NewNostrEventRepositoryCursorSource(nostrEventRepo))
-	bootstrapper := nostrAdapter.NewBootstrapper(relayPool, catalog, cursorPlanner, nil, logger, nostrAdapter.BootstrapConfig{RequestedTier: int(policy.RequestedTier)})
+
+	// Relay projection cache: applies decoded relay events to local repositories.
+	// When DB is unavailable, appliers are skipped (tier1-only mode has no
+	// projection cache). Uses in-memory meta repo so bootstrap can track
+	// ordering without requiring Postgres.
+	var bootstrapCache nostrAdapter.BootstrapCacheApplier
+	if dbAvailable {
+		projectionMetaRepo := newInMemoryProjectionMetaRepo()
+		projectionCache := service.NewRelayProjectionCache(projectionMetaRepo, logger)
+		projectionCache.RegisterTier1Tier2Appliers(service.ProjectionCacheRepositories{
+			Workers:      workerRepo,
+			Services:     serviceRepo,
+			Environments: envRepo,
+			Builds:       buildRepo,
+			Artifacts:    artifactRepo,
+			Policies:     policyRepo,
+		})
+		bootstrapCache = &bootstrapCacheAdapter{cache: projectionCache}
+	}
+
+	// Bahia self-identity publisher: emits 31410/31411/30360 events to relays.
+	// Wired but gated behind nostrPub availability (requires relay connectivity).
+	var bahiaStatusProjector *service.BahiaStatusProjector
+	if nostrPub != nil {
+		bahiaStatusProjector = service.NewBahiaStatusProjector(nostrPub, logger, cfg.Nostr.PrivateKey)
+	}
+
+	bootstrapper := nostrAdapter.NewBootstrapper(relayPool, catalog, cursorPlanner, bootstrapCache, logger, nostrAdapter.BootstrapConfig{RequestedTier: int(policy.RequestedTier)})
 	healthProvider.SetBootstrapFunc(func() (phase string, ready bool) {
 		progress := bootstrapper.Progress()
 		return string(progress.Phase), bootstrapper.Ready()
 	})
-	bgManager.RegisterWithOptions(&bootstrapperRunner{bootstrapper: bootstrapper, policy: policy}, RunnerTier(Tier0))
+	bgManager.RegisterWithOptions(&bootstrapperRunner{
+		bootstrapper:    bootstrapper,
+		policy:          policy,
+		statusProjector: bahiaStatusProjector,
+		catalogVersion:  catalog.Version,
+	}, RunnerTier(Tier0))
 
 	continuityGraph, err := service.NewContinuityGraph(
 		continuityDefinitionStore,
@@ -402,6 +466,8 @@ func New(cfg *config.Config) (*App, error) {
 	mlRegistryRepo := repository.NewPgMLRegistryRepository(pool)
 	mlRegistry := service.NewMLRegistryService(mlRegistryRepo, publisher, logger, service.WithMLEnvironmentRepository(envRepo))
 	workerReadModelSvc := service.NewWorkerReadModelService(workerRepo, registry, mlRegistry, workerPolicySvc, service.NewMLPlacementService(workerRepo, logger), logger)
+	workerCleanupOrchestrator := service.NewWorkerCleanupOrchestrator(workerRepo, workerReadModelSvc, loomCleanupClient{client: loomClient}, publisher, service.WorkerCleanupConfig{Mode: cfg.WorkerCleanup.Mode, Cooldown: cfg.WorkerCleanup.Cooldown, TargetFreeGB: cfg.WorkerCleanup.TargetFreeGB}, logger)
+	setupWorkerPressureSubscriptions(publisher, pressureMonitor, workerStatePublisher, workerCleanupOrchestrator, workerRepo, logger)
 
 	// LLM provisioning control plane.
 	var llmRegistry *service.LLMRegistryService
@@ -788,7 +854,7 @@ func New(cfg *config.Config) (*App, error) {
 		if dnsOperator != nil {
 			reactorOpts = append(reactorOpts, controlplane.WithDNSOperator(dnsOperator))
 		}
-		reactorOpts = append(reactorOpts, controlplane.WithWorkerRepository(workerRepo))
+		reactorOpts = append(reactorOpts, controlplane.WithWorkerRepository(workerRepo), controlplane.WithWorkerCleanupOrchestrator(workerCleanupOrchestrator))
 		reactorOpts = appendPackageControlPlaneOptions(reactorOpts, packageRegistrySvc, packageProjection)
 		reactor := controlplane.NewReactor(reactorConfig, registry, controlPlanePool, controlPlaneSigner, logger, reactorOpts...)
 		bgManager.RegisterWithOptions(&controlplaneRunner{reactor: reactor}, RunnerTier(Tier2))
@@ -846,6 +912,7 @@ func New(cfg *config.Config) (*App, error) {
 			ContinuityStatuses: continuityStatusStore,
 			ContinuityGraph:    continuityGraph,
 			HealthProvider:     healthProvider,
+			ModePolicy:         policy,
 		}, cfg.Auth)
 
 	httpServer := &http.Server{
@@ -856,23 +923,24 @@ func New(cfg *config.Config) (*App, error) {
 	}
 
 	return &App{
-		Config:          cfg,
-		Logger:          logger,
-		DB:              pool,
-		Registry:        registry,
-		MLRegistry:      mlRegistry,
-		LLMRegistry:     llmRegistry,
-		HTTPServer:      httpServer,
-		Publisher:       publisher,
-		Coordinator:     coord,
-		Reconciler:      rec,
-		NostrPub:        nostrPub,
-		Telemetry:       telemetryProvider,
-		Background:      bgManager,
-		toolCoordinator: toolCoordinator,
-		relayPools:      []*nostrAdapter.RelayPool{controlPlanePool, relayPool, encryptedRequestPool, fipsRelayPool},
-		ModePolicy:      policy,
-		Health:          healthProvider,
+		Config:             cfg,
+		Logger:             logger,
+		DB:                 pool,
+		Registry:           registry,
+		MLRegistry:         mlRegistry,
+		LLMRegistry:        llmRegistry,
+		HTTPServer:         httpServer,
+		Publisher:          publisher,
+		Coordinator:        coord,
+		Reconciler:         rec,
+		NostrPub:           nostrPub,
+		Telemetry:          telemetryProvider,
+		Background:         bgManager,
+		toolCoordinator:    toolCoordinator,
+		relayPools:         []*nostrAdapter.RelayPool{controlPlanePool, relayPool, encryptedRequestPool, fipsRelayPool},
+		ModePolicy:         policy,
+		Health:             healthProvider,
+		RelayFirstRegistry: relayFirstRegistry,
 	}, nil
 }
 
@@ -924,9 +992,61 @@ func aggregateRelayHealth(pools ...*nostrAdapter.RelayPool) (connected, healthy 
 }
 
 // Run starts the HTTP server and blocks until shutdown.
+// bootstrapCacheAdapter bridges RelayProjectionCache (which takes any) to
+// BootstrapCacheApplier (which takes *DecodedProjectionEvent).
+type bootstrapCacheAdapter struct {
+	cache *service.RelayProjectionCache
+}
+
+func (a *bootstrapCacheAdapter) Apply(ctx context.Context, event *nostrAdapter.DecodedProjectionEvent) error {
+	return a.cache.Apply(ctx, event)
+}
+
+// newInMemoryProjectionMetaRepo creates a simple in-memory RelayProjectionMetaRepository
+// for bootstrap ordering without requiring Postgres.
+func newInMemoryProjectionMetaRepo() repository.RelayProjectionMetaRepository {
+	return &inMemoryProjectionMetaRepo{store: make(map[string]*repository.RelayProjectionMeta)}
+}
+
+type inMemoryProjectionMetaRepo struct {
+	mu    sync.RWMutex
+	store map[string]*repository.RelayProjectionMeta
+}
+
+func (r *inMemoryProjectionMetaRepo) Get(_ context.Context, stream, entityKey string) (*repository.RelayProjectionMeta, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.store[stream+"/"+entityKey], nil
+}
+
+func (r *inMemoryProjectionMetaRepo) Upsert(_ context.Context, meta repository.RelayProjectionMeta) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	key := meta.Stream + "/" + meta.EntityKey
+	if existing, ok := r.store[key]; ok && !meta.UpdatedAt.After(existing.UpdatedAt) {
+		return nil
+	}
+	r.store[key] = &meta
+	return nil
+}
+
+func (r *inMemoryProjectionMetaRepo) ListByStream(_ context.Context, stream string) ([]repository.RelayProjectionMeta, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	var result []repository.RelayProjectionMeta
+	for k, v := range r.store {
+		if len(k) > len(stream)+1 && k[:len(stream)+1] == stream+"/" {
+			result = append(result, *v)
+		}
+	}
+	return result, nil
+}
+
 type bootstrapperRunner struct {
-	bootstrapper *nostrAdapter.Bootstrapper
-	policy       *ModePolicy
+	bootstrapper    *nostrAdapter.Bootstrapper
+	policy          *ModePolicy
+	statusProjector *service.BahiaStatusProjector
+	catalogVersion  string
 }
 
 func (r *bootstrapperRunner) Name() string { return "relay-bootstrapper" }
@@ -934,10 +1054,37 @@ func (r *bootstrapperRunner) Run(ctx context.Context) error {
 	if r.bootstrapper == nil {
 		return fmt.Errorf("relay bootstrapper is not configured")
 	}
+
+	// Publish identity at startup.
+	if r.statusProjector != nil {
+		_ = r.statusProjector.PublishIdentity(ctx, service.BahiaIdentityPayload{
+			Version:        "1.0.0",
+			CatalogVersion: r.catalogVersion,
+			Mode:           string(r.policy.RequestedMode),
+			StartedAt:      time.Now().Unix(),
+		})
+	}
+
 	err := r.bootstrapper.Run(ctx)
 	if r.policy != nil && r.bootstrapper.ReadyTier() >= 0 {
 		r.policy.SetActiveTier(Tier(r.bootstrapper.ReadyTier()))
 	}
+
+	// Publish checkpoint and readiness after bootstrap completes.
+	if r.statusProjector != nil {
+		progress := r.bootstrapper.Progress()
+		_ = r.statusProjector.PublishCheckpoint(ctx, service.ReplayCheckpointPayload{
+			CatalogVersion: r.catalogVersion,
+			Phase:          string(progress.Phase),
+		})
+		_ = r.statusProjector.PublishReadiness(ctx, service.ReadinessStatusPayload{
+			Phase:         string(progress.Phase),
+			ActiveTier:    int(r.policy.ActiveTier),
+			RequestedTier: int(r.policy.RequestedTier),
+			Ready:         r.bootstrapper.Ready(),
+		})
+	}
+
 	return err
 }
 
@@ -1053,6 +1200,8 @@ func setupWorkerPressureSubscriptions(
 	publisher events.Publisher,
 	monitor *service.WorkerPressureMonitor,
 	statePublisher *controlplane.WorkerStatePublisher,
+	cleanupOrchestrator *service.WorkerCleanupOrchestrator,
+	workerRepo repository.WorkerRepository,
 	logger *zap.Logger,
 ) {
 	if publisher == nil {
@@ -1080,12 +1229,35 @@ func setupWorkerPressureSubscriptions(
 				},
 			})
 		}
-		if statePublisher == nil {
+		if statePublisher != nil {
+			if err := statePublisher.Publish(ctx, &observed.Worker); err != nil {
+				logger.Warn("publish worker state after telemetry observation failed", zap.String("worker_pubkey", observed.Worker.PubKey), zap.Error(err))
+			}
+		}
+	})
+	publisher.Subscribe(events.EventWorkerPressureChanged, func(ctx context.Context, e events.Event) {
+		changed, ok := e.Data.(events.WorkerPressureChanged)
+		if !ok || cleanupOrchestrator == nil || !cleanupOrchestrator.AutoModeEnabled() || changed.Current == nil {
 			return
 		}
-		if err := statePublisher.Publish(ctx, &observed.Worker); err != nil {
-			logger.Warn("publish worker state after telemetry observation failed", zap.String("worker_pubkey", observed.Worker.PubKey), zap.Error(err))
+		if changed.Current.CapacityClass != domain.WorkerCapacityCleanupOnly || changed.Current.RecommendedAction != domain.WorkerPressureActionCleanupRecommended {
+			return
 		}
+		worker, err := workerRepo.GetByPubKey(ctx, changed.WorkerPubKey)
+		if err != nil || worker == nil {
+			if err != nil {
+				logger.Warn("lookup worker for automatic cleanup failed", zap.String("worker_pubkey", changed.WorkerPubKey), zap.Error(err))
+			}
+			return
+		}
+		if !strings.EqualFold(worker.Labels["bahia.cleanup.auto"], "true") {
+			return
+		}
+		go func() {
+			if _, err := cleanupOrchestrator.RequestCleanup(context.Background(), changed.WorkerPubKey, service.CleanupModeReclaimableOnly, "pressure monitor cleanup recommendation"); err != nil {
+				logger.Warn("automatic worker cleanup request failed", zap.String("worker_pubkey", changed.WorkerPubKey), zap.Error(err))
+			}
+		}()
 	})
 }
 
@@ -1182,6 +1354,41 @@ func continuityCommandRunID(command events.ContinuityCommandRequested) string {
 		return strings.TrimSpace(command.Source.EventID)
 	}
 	return fmt.Sprintf("continuity:%s:%d", strings.TrimSpace(command.ServiceKey), command.Source.CreatedAt.UnixNano())
+}
+
+type loomCleanupClient struct {
+	client *loom.Client
+}
+
+func (c loomCleanupClient) SubmitCleanupJob(ctx context.Context, job service.CleanupJobRequest) (string, error) {
+	if c.client == nil {
+		return "", fmt.Errorf("loom client is not configured")
+	}
+	return c.client.SubmitJob(ctx, loom.JobRequest{ID: job.ID, Type: job.Type, WorkerPubkey: job.WorkerPubkey, Cmd: job.Cmd, Args: job.Args, Env: job.Env})
+}
+
+func (c loomCleanupClient) PollCleanupJobStatusFromWorker(ctx context.Context, jobEventID string, expectedWorkerPubkey string, callbacks ...service.CleanupStatusCallback) (*service.CleanupJobStatus, error) {
+	if c.client == nil {
+		return nil, fmt.Errorf("loom client is not configured")
+	}
+	loomCallbacks := make([]loom.StatusCallback, 0, len(callbacks))
+	for _, cb := range callbacks {
+		callback := cb
+		loomCallbacks = append(loomCallbacks, func(status *loom.JobStatus) {
+			if callback != nil {
+				callback(cleanupJobStatusFromLoom(status))
+			}
+		})
+	}
+	status, err := c.client.PollJobStatusFromWorker(ctx, jobEventID, expectedWorkerPubkey, loomCallbacks...)
+	return cleanupJobStatusFromLoom(status), err
+}
+
+func cleanupJobStatusFromLoom(status *loom.JobStatus) *service.CleanupJobStatus {
+	if status == nil {
+		return nil
+	}
+	return &service.CleanupJobStatus{JobID: status.JobID, Status: status.Status, Success: status.Success, ExitCode: status.ExitCode, Duration: status.Duration, WorkerPubkey: status.WorkerPubkey, StdoutURL: status.StdoutURL, StderrURL: status.StderrURL, ChangeToken: status.ChangeToken, Error: status.Error, LogOutput: status.LogOutput}
 }
 
 type continuityWorkerReader struct {
@@ -1739,6 +1946,17 @@ type auditedNostrPublisher struct {
 	delegate controlplane.NostrEventPublisher
 	repo     repository.NostrEventRepository
 	logger   *zap.Logger
+}
+
+type relayFirstNostrPublisher struct {
+	pool *nostrAdapter.RelayPool
+}
+
+func (p relayFirstNostrPublisher) Publish(ctx context.Context, ev nostr.Event) (int, error) {
+	if p.pool == nil {
+		return 0, fmt.Errorf("relay pool is not configured")
+	}
+	return p.pool.Publish(ctx, ev)
 }
 
 func (p *auditedNostrPublisher) Publish(ctx context.Context, ev nostr.Event) (int, error) {

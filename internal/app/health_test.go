@@ -82,13 +82,54 @@ func TestHealthProviderModeAndTierReflectedInSnapshot(t *testing.T) {
 	require.True(t, snapshot.Ready)
 }
 
-func requireCheckStatus(t *testing.T, checks []HealthCheck, name string, status string) {
+func TestHealthProviderRelayQuorumUsesModeThresholds(t *testing.T) {
+	t.Run("full mode requires two healthy relays by default", func(t *testing.T) {
+		provider := NewHealthProvider(NewModePolicy(ModeFull), NewBackgroundManager(zap.NewNop()))
+		provider.SetRelayHealthFunc(func() (connected, healthy int) { return 3, 1 })
+
+		snapshot := provider.Readiness()
+
+		require.Equal(t, SnapshotStatusUnhealthy, snapshot.Status)
+		require.False(t, snapshot.Ready)
+		check := requireCheckStatus(t, snapshot.Checks, "relay_quorum", HealthStatusFail)
+		require.Contains(t, check.Message, "min_required=2")
+	})
+
+	t.Run("configured full threshold is honored", func(t *testing.T) {
+		provider := NewHealthProvider(NewModePolicy(ModeFull), NewBackgroundManager(zap.NewNop()))
+		provider.SetRelayQuorumConfig(RelayQuorumConfig{FullMinHealthy: 3, DegradedMinHealthy: 1, EmergencyMinHealthy: 1})
+		provider.SetRelayHealthFunc(func() (connected, healthy int) { return 4, 2 })
+
+		snapshot := provider.Readiness()
+
+		require.Equal(t, SnapshotStatusUnhealthy, snapshot.Status)
+		require.False(t, snapshot.Ready)
+		check := requireCheckStatus(t, snapshot.Checks, "relay_quorum", HealthStatusFail)
+		require.Contains(t, check.Message, "min_required=3")
+	})
+
+	t.Run("degraded and emergency modes use lower defaults", func(t *testing.T) {
+		for _, mode := range []Mode{ModeDegraded, ModeEmergency} {
+			provider := NewHealthProvider(NewModePolicy(mode), NewBackgroundManager(zap.NewNop()))
+			provider.SetRelayHealthFunc(func() (connected, healthy int) { return 1, 1 })
+
+			snapshot := provider.Readiness()
+
+			require.True(t, snapshot.Ready, "mode %s", mode)
+			check := requireCheckStatus(t, snapshot.Checks, "relay_quorum", HealthStatusPass)
+			require.Contains(t, check.Message, "min_required=1")
+		}
+	})
+}
+
+func requireCheckStatus(t *testing.T, checks []HealthCheck, name string, status string) HealthCheck {
 	t.Helper()
 	for _, check := range checks {
 		if check.Name == name {
 			require.Equal(t, status, check.Status)
-			return
+			return check
 		}
 	}
 	require.Failf(t, "missing health check", "check %q not found", name)
+	return HealthCheck{}
 }
