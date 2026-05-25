@@ -4,12 +4,14 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/google/uuid"
 	"github.com/nbd-wtf/go-nostr"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/service"
 )
 
 type workerCommandRequest struct {
@@ -22,6 +24,7 @@ type workerCommandRequest struct {
 	OperatorMetadata map[string]any    `json:"operator_metadata,omitempty"`
 	IdempotencyKey   string            `json:"idempotency_key,omitempty"`
 	Labels           map[string]string `json:"labels,omitempty"`
+	CleanupMode      string            `json:"cleanup_mode,omitempty"`
 }
 
 type workerSchedulingStateUpdater interface {
@@ -148,6 +151,55 @@ func (r *Reactor) handleWorkerPolicyApplyRequest(ctx context.Context, event *nos
 		return
 	}
 	_ = r.publishWorkerResult(ctx, event, req, WorkerPolicyApplyRequest, "succeeded", "policy_applied", "worker placement policy applied", nil)
+}
+
+func (r *Reactor) handleWorkerCleanupRequest(ctx context.Context, event *nostr.Event) {
+	req, ok := r.decodeWorkerRequest(ctx, event, WorkerCommandCleanupRequest, false)
+	if !ok {
+		return
+	}
+	_ = r.publishWorkerStatus(ctx, event, req, WorkerCommandCleanupRequest, "running", "dispatching", "worker cleanup dispatch started")
+	if r.workerCleanupOrchestrator == nil {
+		_ = r.publishWorkerCleanupResult(ctx, event, req, "failed", "cleanup_orchestrator_unavailable", "worker cleanup orchestrator is not configured", nil, nil)
+		return
+	}
+	worker, err := r.workerRepo.GetByPubKey(ctx, req.WorkerPubKey)
+	if err != nil {
+		_ = r.publishWorkerCleanupResult(ctx, event, req, "failed", "lookup_error", err.Error(), nil, nil)
+		return
+	}
+	if worker == nil {
+		_ = r.publishWorkerCleanupResult(ctx, event, req, "failed", "not_found", "worker not found", nil, nil)
+		return
+	}
+	if worker.Status == domain.WorkerStatusOffline {
+		_ = r.publishWorkerCleanupResult(ctx, event, req, "failed", "worker_offline", "worker is offline", worker, nil)
+		return
+	}
+	mode := strings.TrimSpace(req.CleanupMode)
+	if mode == "" {
+		mode = service.CleanupModeReclaimableOnly
+	}
+	exec, err := r.workerCleanupOrchestrator.RequestCleanup(ctx, req.WorkerPubKey, mode, req.Reason)
+	if err != nil {
+		code := "cleanup_failed"
+		status := "failed"
+		switch {
+		case errors.Is(err, service.ErrWorkerCleanupInFlight):
+			code = "cleanup_in_flight"
+			status = "rejected"
+		case errors.Is(err, service.ErrWorkerCleanupCooldown):
+			code = "cleanup_cooldown"
+			status = "rejected"
+		case errors.Is(err, service.ErrWorkerCleanupCapacityRejected):
+			code = "worker_queue_full"
+		case errors.Is(err, service.ErrWorkerCleanupInvalidMode):
+			code = "invalid_cleanup_mode"
+		}
+		_ = r.publishWorkerCleanupResult(ctx, event, req, status, code, err.Error(), worker, exec)
+		return
+	}
+	_ = r.publishWorkerCleanupResult(ctx, event, req, "succeeded", "cleanup_completed", "worker cleanup completed", worker, exec)
 }
 
 func (r *Reactor) handleWorkloadPinRequest(ctx context.Context, event *nostr.Event) {
@@ -621,6 +673,61 @@ func (r *Reactor) publishWorkerStatus(ctx context.Context, requestEvent *nostr.E
 	event := &nostr.Event{Kind: KindWorkerStatus, CreatedAt: nostr.Now(), Tags: workerReplyTags(requestEvent, req, command, status, step), Content: mustJSON(content)}
 	if err := r.signEvent(ctx, event); err != nil {
 		return fmt.Errorf("sign worker status: %w", err)
+	}
+	_, err := r.publishEvent(ctx, event)
+	return err
+}
+
+func (r *Reactor) publishWorkerCleanupResult(ctx context.Context, requestEvent *nostr.Event, req *workerCommandRequest, status, code, message string, worker *domain.Worker, exec *service.CleanupExecution) error {
+	if req == nil {
+		req = &workerCommandRequest{}
+	}
+	content := map[string]any{
+		"request_event_id": requestEvent.ID,
+		"command":          WorkerCommandCleanupRequest,
+		"status":           status,
+		"message":          message,
+		"worker_pubkey":    req.WorkerPubKey,
+		"idempotency_key":  req.IdempotencyKey,
+		"cleanup_mode":     req.CleanupMode,
+	}
+	if code != "" {
+		content["code"] = code
+	}
+	if req.Reason != "" {
+		content["reason"] = req.Reason
+	}
+	if exec != nil {
+		content["loom_job_id"] = exec.LoomJobID
+		content["cleanup_mode"] = exec.Mode
+		content["protected_refs"] = exec.ProtectedRefs
+		content["target_free_gb"] = exec.TargetFreeGB
+		content["capacity_rejected"] = exec.CapacityRejected
+		if exec.Error != "" {
+			content["cleanup_error"] = exec.Error
+		}
+	}
+	if worker != nil {
+		content["worker"] = worker
+		content["scheduling_state"] = string(worker.SchedulingState)
+		content["labels"] = worker.Labels
+	}
+	if status == "failed" || status == "rejected" {
+		content["error"] = map[string]any{"code": code, "message": message}
+	}
+	tags := workerReplyTags(requestEvent, req, WorkerCommandCleanupRequest, status, "result")
+	if code != "" {
+		tags = append(tags, nostr.Tag{"result", code})
+	}
+	if exec != nil && exec.LoomJobID != "" {
+		tags = append(tags, nostr.Tag{"loom_job", exec.LoomJobID})
+	}
+	if mode := strings.TrimSpace(fmt.Sprint(content["cleanup_mode"])); mode != "" {
+		tags = append(tags, nostr.Tag{"cleanup_mode", mode})
+	}
+	event := &nostr.Event{Kind: KindWorkerResult, CreatedAt: nostr.Now(), Tags: dedupeTags(tags), Content: mustJSON(content)}
+	if err := r.signEvent(ctx, event); err != nil {
+		return fmt.Errorf("sign worker cleanup result: %w", err)
 	}
 	_, err := r.publishEvent(ctx, event)
 	return err

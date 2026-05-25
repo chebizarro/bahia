@@ -71,6 +71,7 @@ const (
 	KindWorkerLabelsUpdate       = nostrpool.KindControlPlaneWorkerLabelsUpdate       // Request worker label update
 	KindWorkerPolicyApplyRequest = nostrpool.KindControlPlaneWorkerPolicyApplyRequest // Apply environment worker placement policy
 	KindWorkloadPinRequest       = nostrpool.KindControlPlaneWorkloadPinRequest       // Pin workload placement to a worker
+	KindWorkerCleanupRequest     = nostrpool.KindControlPlaneWorkerCleanupRequest     // Request worker cleanup
 
 	// Generic AI/ML command/result kinds (38390-38399). These intentionally
 	// avoid NIP-90's 5000-7000 DVM range.
@@ -190,6 +191,7 @@ type Reactor struct {
 	packageService                *service.PackageRegistryService
 	packageProjection             repository.PackageControlPlaneRepository
 	workerRepo                    repository.WorkerRepository
+	workerCleanupOrchestrator     *service.WorkerCleanupOrchestrator
 	mlExecutor                    MLInferenceControlPlaneExecutor
 	mlRecipeExecutor              MLRecipeControlPlaneExecutor
 	nostrEvents                   repository.NostrEventRepository
@@ -336,6 +338,10 @@ func WithPackageProjectionRepository(repo repository.PackageControlPlaneReposito
 
 func WithWorkerRepository(repo repository.WorkerRepository) ReactorOption {
 	return func(r *Reactor) { r.workerRepo = repo }
+}
+
+func WithWorkerCleanupOrchestrator(orchestrator *service.WorkerCleanupOrchestrator) ReactorOption {
+	return func(r *Reactor) { r.workerCleanupOrchestrator = orchestrator }
 }
 
 func WithNostrEventRepository(repo repository.NostrEventRepository) ReactorOption {
@@ -726,6 +732,8 @@ func (r *Reactor) handleEvent(ctx context.Context, event *nostr.Event) {
 		go r.handleWorkerPolicyApplyRequest(ctx, event)
 	case KindWorkloadPinRequest:
 		go r.handleWorkloadPinRequest(ctx, event)
+	case KindWorkerCleanupRequest:
+		go r.handleWorkerCleanupRequest(ctx, event)
 	case KindDNSZoneCreateRequest, KindDNSPolicyApplyRequest, KindDNSRecordOverrideRequest, KindDNSDriftRemediateRequest, KindDNSBackendRegisterRequest:
 		if r.dnsOperator == nil {
 			r.logger.Warn("DNS control-plane event skipped because DNS operator is not configured", "kind", event.Kind, "event_id", event.ID)
@@ -2135,6 +2143,7 @@ func defaultRequestSubscriptionKinds() []int {
 		KindWorkerLabelsUpdate,
 		KindWorkerPolicyApplyRequest,
 		KindWorkloadPinRequest,
+		KindWorkerCleanupRequest,
 		KindDNSZoneCreateRequest,
 		KindDNSPolicyApplyRequest,
 		KindDNSRecordOverrideRequest,

@@ -1,0 +1,5 @@
+{
+  "tests": [
+    {"command": "go test ./internal/service ./internal/controlplane ./internal/adapters/nostr ./internal/app", "criteria": ["AC1", "AC2", "AC3", "AC4", "AC5"]}
+  ]
+}

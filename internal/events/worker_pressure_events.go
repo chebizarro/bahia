@@ -20,3 +20,18 @@ type WorkerPressureChanged struct {
 	Current      *domain.WorkerPressureAssessment `json:"current,omitempty"`
 	ChangedAt    time.Time                        `json:"changed_at"`
 }
+
+// WorkerCleanupEvent reports cleanup orchestration lifecycle for a worker.
+type WorkerCleanupEvent struct {
+	WorkerPubKey     string     `json:"worker_pubkey"`
+	CleanupMode      string     `json:"cleanup_mode"`
+	Reason           string     `json:"reason,omitempty"`
+	LoomJobID        string     `json:"loom_job_id,omitempty"`
+	ProtectedRefs    []string   `json:"protected_refs,omitempty"`
+	TargetFreeGB     int        `json:"target_free_gb"`
+	Status           string     `json:"status"`
+	CapacityRejected bool       `json:"capacity_rejected,omitempty"`
+	Error            string     `json:"error,omitempty"`
+	StartedAt        time.Time  `json:"started_at"`
+	CompletedAt      *time.Time `json:"completed_at,omitempty"`
+}

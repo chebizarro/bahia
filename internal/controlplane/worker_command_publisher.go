@@ -21,6 +21,7 @@ const (
 	WorkerCommandLabelsUpdate     = "worker.labels.update.request"
 	WorkerPolicyApplyRequest      = "worker-policy.apply.request"
 	WorkloadPinRequest            = "workload.pin.request"
+	WorkerCommandCleanupRequest   = "worker.cleanup.request"
 )
 
 // WorkerCommandPublisher emits canonical worker-management command events.
