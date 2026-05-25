@@ -1,0 +1,11 @@
+{
+  "feature_id": "bahia-2r3q",
+  "defects": [
+    {
+      "id": "loom-worker-blossom-blobpart-typecheck",
+      "status": "tracked_in_beads",
+      "observed": "deno check main.ts fails at src/blossom/service.ts:72 due Uint8Array<ArrayBufferLike> not assignable to BlobPart.",
+      "scope": "pre-existing loom-worker type-check blocker outside Item 2 telemetry changes"
+    }
+  ]
+}

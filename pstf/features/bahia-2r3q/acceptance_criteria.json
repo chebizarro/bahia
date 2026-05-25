@@ -1,0 +1,11 @@
+{
+  "feature_id": "bahia-2r3q",
+  "criteria": [
+    { "id": "AC1", "text": "Telemetry sampler caches a latest snapshot, samples on a configurable interval, and supports forced refresh." },
+    { "id": "AC2", "text": "Memory, disk/docker, GPU, and thermal collectors degrade gracefully by omitting unavailable sections." },
+    { "id": "AC3", "text": "Kind 10100 content includes resources, accelerators when present, and telemetry." },
+    { "id": "AC4", "text": "Kind 10100 publishing mines monotonic same-second created_at values." },
+    { "id": "AC5", "text": "Queue depth changes on job queue and terminal job cleanup trigger immediate republish, with post-job telemetry refresh." },
+    { "id": "AC6", "text": "TELEMETRY_SAMPLE_INTERVAL_MS, TELEMETRY_DISK_PATH, and ADVERTISEMENT_INTERVAL_MS are configurable." }
+  ]
+}

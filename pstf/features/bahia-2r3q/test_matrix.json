@@ -1,0 +1,7 @@
+{
+  "feature_id": "bahia-2r3q",
+  "tests": [
+    { "criterion": "AC1-AC6", "command": "deno check src/telemetry/service.ts src/nostr/service.ts src/config/env.ts", "result": "pass" },
+    { "criterion": "AC1-AC6", "command": "deno check main.ts", "result": "blocked", "notes": "Fails on pre-existing src/blossom/service.ts BlobPart type error outside Item 2 scope." }
+  ]
+}

@@ -1,0 +1,8 @@
+{
+  "feature_id": "bahia-2r3q",
+  "title": "loom-worker telemetry collection and advertisement extension",
+  "intent": "loom-worker publishes static inventory and live host telemetry in Kind 10100 worker advertisements without breaking old Bahia readers.",
+  "scope": "loom-worker TypeScript only: telemetry collectors, telemetry sampler service, Kind 10100 advertisement payload extension, queue lifecycle republish wiring, and configuration knobs.",
+  "observed_behavior_before": "Worker advertisements contained name, description, max_concurrent_jobs, and current_queue_depth only; advertisement cadence was hardcoded; queue depth changes waited for the periodic advertisement; Kind 10100 created_at was not mined for same-second replacement ordering.",
+  "intended_behavior": "Worker advertisements include resources, accelerators, and best-effort telemetry content. Collector failures omit only the failed section. Queue depth changes trigger immediate republish, post-job ads use a refreshed snapshot, and Kind 10100 created_at remains monotonic for same-second updates."
+}
