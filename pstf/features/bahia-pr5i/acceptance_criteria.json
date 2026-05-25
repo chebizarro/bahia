@@ -1,0 +1,20 @@
+{
+  "feature_id": "bahia-pr5i",
+  "acceptance_criteria": [
+    {
+      "id": "AC1",
+      "statement": "Kind 31402 standby node definitions serialize and decode artifact_ref without changing existing standby tags.",
+      "tests": ["TestStandbyNodeDefinitionSerializationUsesHostRoleSupportAndProfileTags"]
+    },
+    {
+      "id": "AC2",
+      "statement": "Hot and warm standby definitions projected through the relay cache populate WorkerStandbyAssignment.ArtifactRef.",
+      "tests": ["TestRelayProjectionCacheStandbyDefinitionProjectsArtifactRefs"]
+    },
+    {
+      "id": "AC3",
+      "statement": "Cold standby definitions without artifact_ref project an empty ArtifactRef.",
+      "tests": ["TestRelayProjectionCacheStandbyDefinitionColdWithoutArtifactProjectsEmptyRef"]
+    }
+  ]
+}

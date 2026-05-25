@@ -57,6 +57,7 @@ func (r *Reactor) handleStandbyNodeDefinition(ctx context.Context, event *gonost
 			Role:         definition.Role,
 			ServiceKey:   definition.ServiceKey,
 			Tier:         definition.Tier,
+			ArtifactRef:  definition.ArtifactRef,
 			Supports:     append([]string(nil), definition.Supports...),
 			Profiles:     append([]domain.ContinuityMode(nil), definition.Profiles...),
 		},

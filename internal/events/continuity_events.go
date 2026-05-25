@@ -45,6 +45,7 @@ type StandbyNodeDefinitionObserved struct {
 	Role         string                  `json:"role"`
 	ServiceKey   string                  `json:"service_key"`
 	Tier         domain.StandbyTier      `json:"tier,omitempty"`
+	ArtifactRef  string                  `json:"artifact_ref,omitempty"`
 	Supports     []string                `json:"supports,omitempty"`
 	Profiles     []domain.ContinuityMode `json:"profiles"`
 }

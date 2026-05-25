@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -57,6 +58,7 @@ type ProjectionCacheRepositories struct {
 func (c *RelayProjectionCache) RegisterTier1Tier2Appliers(repos ProjectionCacheRepositories) {
 	if repos.Workers != nil {
 		c.RegisterApplier("worker", workerApplier(repos.Workers))
+		c.RegisterApplier("continuity", continuityApplier(repos.Workers))
 	}
 	if repos.Services != nil {
 		c.RegisterApplier("service", serviceApplier(repos.Services))
@@ -135,6 +137,78 @@ func workerApplier(repo repository.WorkerRepository) FamilyApplier {
 		}
 		return repo.Upsert(ctx, worker)
 	}
+}
+
+func continuityApplier(repo repository.WorkerRepository) FamilyApplier {
+	return func(ctx context.Context, event any) error {
+		value, err := decodedEventValue(event)
+		if err != nil {
+			return err
+		}
+		var payload struct {
+			StandbyNode *struct {
+				WorkerPubKey  string                  `json:"worker_pubkey"`
+				ServiceKey    string                  `json:"service_key"`
+				Tier          domain.StandbyTier      `json:"tier"`
+				ArtifactRef   string                  `json:"artifact_ref"`
+				Profiles      []domain.ContinuityMode `json:"profiles"`
+				UpdatedAt     time.Time               `json:"updated_at"`
+				SourceEventID string                  `json:"source_event_id"`
+			} `json:"standby_node"`
+		}
+		if ok, err := decodeProjectionPayload(value, "Continuity", &payload); err != nil || !ok || payload.StandbyNode == nil {
+			return err
+		}
+		workerPubKey := strings.TrimSpace(payload.StandbyNode.WorkerPubKey)
+		serviceKey := strings.TrimSpace(payload.StandbyNode.ServiceKey)
+		if workerPubKey == "" || serviceKey == "" {
+			return fmt.Errorf("standby node projection requires worker pubkey and service key")
+		}
+		worker, err := repo.GetByPubKey(ctx, workerPubKey)
+		if err != nil {
+			return err
+		}
+		if worker == nil {
+			if boolField(value, "Tombstone") {
+				return nil
+			}
+			worker = &domain.Worker{PubKey: workerPubKey, Status: domain.WorkerStatusOffline, SchedulingState: domain.WorkerSchedulingActive}
+		}
+		if boolField(value, "Tombstone") {
+			worker.StandbyAssignments = removeStandbyAssignment(worker.StandbyAssignments, serviceKey)
+			return repo.Upsert(ctx, worker)
+		}
+		assignment := domain.WorkerStandbyAssignment{
+			ServiceKey:        serviceKey,
+			Tier:              payload.StandbyNode.Tier,
+			SupportedProfiles: append([]domain.ContinuityMode(nil), payload.StandbyNode.Profiles...),
+			ArtifactRef:       strings.TrimSpace(payload.StandbyNode.ArtifactRef),
+			UpdatedAt:         payload.StandbyNode.UpdatedAt,
+			SourceEventID:     payload.StandbyNode.SourceEventID,
+		}
+		worker.StandbyAssignments = upsertStandbyAssignment(worker.StandbyAssignments, assignment)
+		return repo.Upsert(ctx, worker)
+	}
+}
+
+func upsertStandbyAssignment(assignments []domain.WorkerStandbyAssignment, assignment domain.WorkerStandbyAssignment) []domain.WorkerStandbyAssignment {
+	for i := range assignments {
+		if strings.TrimSpace(assignments[i].ServiceKey) == assignment.ServiceKey {
+			assignments[i] = assignment
+			return assignments
+		}
+	}
+	return append(assignments, assignment)
+}
+
+func removeStandbyAssignment(assignments []domain.WorkerStandbyAssignment, serviceKey string) []domain.WorkerStandbyAssignment {
+	out := assignments[:0]
+	for _, assignment := range assignments {
+		if strings.TrimSpace(assignment.ServiceKey) != serviceKey {
+			out = append(out, assignment)
+		}
+	}
+	return out
 }
 
 func serviceApplier(repo repository.ServiceRepository) FamilyApplier {

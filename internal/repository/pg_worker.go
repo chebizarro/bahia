@@ -13,7 +13,7 @@ import (
 const workerColumns = `pubkey, name, description, architecture,
 	max_concurrent_jobs, current_queue_depth, software, pricing, resources, accelerators, telemetry, pressure, ml_capabilities, capabilities, runtime_target,
 	min_duration_secs, max_duration_secs, geohash, preferred_relays,
-	last_advertisement_at, status, scheduling_state, scheduling_note, labels, created_at, updated_at`
+	last_advertisement_at, status, scheduling_state, scheduling_note, standby_assignments, labels, created_at, updated_at`
 
 // WorkerRepository manages Loom worker records.
 type WorkerRepository interface {
@@ -80,6 +80,11 @@ func (r *PgWorkerRepository) Upsert(ctx context.Context, w *domain.Worker) error
 	if err != nil {
 		return err
 	}
+	standbyAssignmentsUpdate := w.StandbyAssignments != nil
+	standbyAssignmentsJSON, err := marshalJSON(w.StandbyAssignments, "worker standby assignments")
+	if err != nil {
+		return err
+	}
 	labelsUpdate := w.Labels != nil
 	labels := w.Labels
 	if labels == nil {
@@ -100,8 +105,8 @@ func (r *PgWorkerRepository) Upsert(ctx context.Context, w *domain.Worker) error
 		max_concurrent_jobs, current_queue_depth, software, pricing,
 			resources, accelerators, telemetry, pressure, ml_capabilities, capabilities, runtime_target,
 			min_duration_secs, max_duration_secs, geohash, preferred_relays,
-			last_advertisement_at, status, scheduling_state, scheduling_note, labels, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, now(), now())
+			last_advertisement_at, status, scheduling_state, scheduling_note, standby_assignments, labels, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, now(), now())
 		ON CONFLICT (pubkey) DO UPDATE SET
 			name = EXCLUDED.name,
 			description = EXCLUDED.description,
@@ -123,15 +128,16 @@ func (r *PgWorkerRepository) Upsert(ctx context.Context, w *domain.Worker) error
 			preferred_relays = EXCLUDED.preferred_relays,
 			last_advertisement_at = EXCLUDED.last_advertisement_at,
 			status = EXCLUDED.status,
-			scheduling_state = CASE WHEN $25 THEN EXCLUDED.scheduling_state ELSE workers.scheduling_state END,
-			scheduling_note = CASE WHEN $25 THEN EXCLUDED.scheduling_note ELSE workers.scheduling_note END,
-			labels = CASE WHEN $26 THEN EXCLUDED.labels ELSE workers.labels END,
+			scheduling_state = CASE WHEN $26 THEN EXCLUDED.scheduling_state ELSE workers.scheduling_state END,
+			scheduling_note = CASE WHEN $26 THEN EXCLUDED.scheduling_note ELSE workers.scheduling_note END,
+			standby_assignments = CASE WHEN $27 THEN EXCLUDED.standby_assignments ELSE workers.standby_assignments END,
+			labels = CASE WHEN $28 THEN EXCLUDED.labels ELSE workers.labels END,
 			updated_at = now()
 		WHERE EXCLUDED.last_advertisement_at >= workers.last_advertisement_at
 	`, w.PubKey, w.Name, w.Description, w.Architecture,
 		w.MaxConcurrentJobs, w.CurrentQueueDepth, softwareJSON, pricingJSON, resourcesJSON, acceleratorsJSON, telemetryJSON, pressureJSON, mlCapabilitiesJSON, capabilitiesJSON, runtimeTargetJSON,
 		w.MinDurationSecs, w.MaxDurationSecs, w.Geohash, relaysJSON,
-		w.LastAdvertisementAt, string(w.Status), string(schedulingState), w.SchedulingNote, labelsJSON, schedulingStateProvided, labelsUpdate)
+		w.LastAdvertisementAt, string(w.Status), string(schedulingState), w.SchedulingNote, standbyAssignmentsJSON, labelsJSON, schedulingStateProvided, standbyAssignmentsUpdate, labelsUpdate)
 	if err != nil {
 		return fmt.Errorf("upserting worker: %w", err)
 	}
@@ -223,12 +229,12 @@ func scanWorkers(rows pgx.Rows) ([]domain.Worker, error) {
 
 func scanWorker(row pgx.Row) (*domain.Worker, error) {
 	w := &domain.Worker{}
-	var softwareJSON, pricingJSON, resourcesJSON, acceleratorsJSON, telemetryJSON, pressureJSON, mlCapabilitiesJSON, capabilitiesJSON, runtimeTargetJSON, relaysJSON, labelsJSON []byte
+	var softwareJSON, pricingJSON, resourcesJSON, acceleratorsJSON, telemetryJSON, pressureJSON, mlCapabilitiesJSON, capabilitiesJSON, runtimeTargetJSON, relaysJSON, standbyAssignmentsJSON, labelsJSON []byte
 	if err := row.Scan(
 		&w.PubKey, &w.Name, &w.Description, &w.Architecture,
 		&w.MaxConcurrentJobs, &w.CurrentQueueDepth, &softwareJSON, &pricingJSON, &resourcesJSON, &acceleratorsJSON, &telemetryJSON, &pressureJSON, &mlCapabilitiesJSON, &capabilitiesJSON, &runtimeTargetJSON,
 		&w.MinDurationSecs, &w.MaxDurationSecs, &w.Geohash, &relaysJSON,
-		&w.LastAdvertisementAt, &w.Status, &w.SchedulingState, &w.SchedulingNote, &labelsJSON, &w.CreatedAt, &w.UpdatedAt,
+		&w.LastAdvertisementAt, &w.Status, &w.SchedulingState, &w.SchedulingNote, &standbyAssignmentsJSON, &labelsJSON, &w.CreatedAt, &w.UpdatedAt,
 	); err != nil {
 		return nil, err
 	}
@@ -272,6 +278,9 @@ func scanWorker(row pgx.Row) (*domain.Worker, error) {
 		w.RuntimeTarget = nil
 	}
 	if err := unmarshalJSON(relaysJSON, &w.PreferredRelays, "worker preferred relays"); err != nil {
+		return nil, err
+	}
+	if err := unmarshalJSON(standbyAssignmentsJSON, &w.StandbyAssignments, "worker standby assignments"); err != nil {
 		return nil, err
 	}
 	if err := unmarshalJSON(labelsJSON, &w.Labels, "worker labels"); err != nil {

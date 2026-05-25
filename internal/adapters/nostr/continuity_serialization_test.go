@@ -189,6 +189,7 @@ func TestStandbyNodeDefinitionSerializationUsesHostRoleSupportAndProfileTags(t *
 		Role:         "standby",
 		ServiceKey:   "svc.api",
 		Tier:         domain.StandbyTierWarm,
+		ArtifactRef:  "registry.example/svc-api:sha256-deadbeef",
 		Supports:     []string{"postgres", "dns"},
 		Profiles:     []domain.ContinuityMode{domain.ContinuityModeDegraded, domain.ContinuityModeEmergency},
 	}
@@ -198,6 +199,7 @@ func TestStandbyNodeDefinitionSerializationUsesHostRoleSupportAndProfileTags(t *
 	require.Equal(t, KindStandbyNodeDefinition, event.Kind)
 	require.Equal(t, "edge-02", continuityTagValue(event.Tags, "host"))
 	require.Equal(t, "standby", continuityTagValue(event.Tags, "role"))
+	require.Equal(t, "registry.example/svc-api:sha256-deadbeef", continuityTagValue(event.Tags, "artifact_ref"))
 	require.ElementsMatch(t, []string{"dns", "postgres"}, continuityTagValues(event.Tags, "supports"))
 	require.ElementsMatch(t, []string{"degraded", "emergency"}, continuityTagValues(event.Tags, "profile"))
 
@@ -205,6 +207,7 @@ func TestStandbyNodeDefinitionSerializationUsesHostRoleSupportAndProfileTags(t *
 	require.NoError(t, err)
 	require.Equal(t, "standbypubkey", decoded.WorkerPubKey)
 	require.Equal(t, domain.StandbyTierWarm, decoded.Tier)
+	require.Equal(t, "registry.example/svc-api:sha256-deadbeef", decoded.ArtifactRef)
 	require.ElementsMatch(t, []domain.ContinuityMode{domain.ContinuityModeDegraded, domain.ContinuityModeEmergency}, decoded.Profiles)
 }
 

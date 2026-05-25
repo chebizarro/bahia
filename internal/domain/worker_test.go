@@ -24,6 +24,7 @@ func TestWorkerContinuityFieldsMarshalJSON(t *testing.T) {
 			ServiceKey:        "svc",
 			Tier:              StandbyTierWarm,
 			SupportedProfiles: []ContinuityMode{"degraded"},
+			ArtifactRef:       "registry.example/svc@sha256:abc",
 			UpdatedAt:         updatedAt,
 			SourceEventID:     "event-id",
 		}},
@@ -40,6 +41,7 @@ func TestWorkerContinuityFieldsMarshalJSON(t *testing.T) {
 			ServiceKey        string   `json:"service_key"`
 			Tier              string   `json:"tier"`
 			SupportedProfiles []string `json:"supported_profiles"`
+			ArtifactRef       string   `json:"artifact_ref"`
 			SourceEventID     string   `json:"source_event_id"`
 		} `json:"standby_assignments"`
 		LastHeartbeatAt string `json:"last_heartbeat_at"`
@@ -57,6 +59,9 @@ func TestWorkerContinuityFieldsMarshalJSON(t *testing.T) {
 	}
 	if len(assignment.SupportedProfiles) != 1 || assignment.SupportedProfiles[0] != "degraded" {
 		t.Fatalf("supported profiles = %#v, want [degraded]", assignment.SupportedProfiles)
+	}
+	if assignment.ArtifactRef != "registry.example/svc@sha256:abc" {
+		t.Fatalf("artifact_ref = %q", assignment.ArtifactRef)
 	}
 	if got.LastHeartbeatAt == "" {
 		t.Fatal("last_heartbeat_at was not marshaled")

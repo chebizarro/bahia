@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/openagentsinc/bahia/internal/adapters/nostr"
+	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/repository"
 	"github.com/openagentsinc/bahia/internal/service"
 	"go.uber.org/zap"
@@ -155,6 +156,133 @@ func TestRelayProjectionCacheApplyNoRegisteredApplierStoresMetaOnly(t *testing.T
 		t.Fatalf("apply without applier: %v", err)
 	}
 	assertStoredMeta(t, repo, "service", "svc-a", "evt-1", false)
+}
+
+func TestRelayProjectionCacheStandbyDefinitionProjectsArtifactRefs(t *testing.T) {
+	workerRepo := newStandbyProjectionWorkerRepo(&domain.Worker{PubKey: "worker-a", Status: domain.WorkerStatusOnline})
+	cache := service.NewRelayProjectionCache(newRelayProjectionMetaMemoryRepo(), zap.NewNop())
+	cache.RegisterTier1Tier2Appliers(service.ProjectionCacheRepositories{Workers: workerRepo})
+	now := time.Date(2026, 5, 25, 12, 0, 0, 0, time.UTC)
+
+	requireApply(t, cache, standbyProjectionEvent("standby-node:worker-a:svc-hot", now, "evt-hot", nostr.StandbyNodeDefinition{
+		WorkerPubKey: "worker-a",
+		ServiceKey:   "svc-hot",
+		Tier:         domain.StandbyTierHot,
+		ArtifactRef:  "registry.example/svc-hot@sha256:111",
+		Profiles:     []domain.ContinuityMode{domain.ContinuityModeDegraded},
+		UpdatedAt:    now,
+	}))
+	requireApply(t, cache, standbyProjectionEvent("standby-node:worker-a:svc-warm", now.Add(time.Minute), "evt-warm", nostr.StandbyNodeDefinition{
+		WorkerPubKey: "worker-a",
+		ServiceKey:   "svc-warm",
+		Tier:         domain.StandbyTierWarm,
+		ArtifactRef:  "registry.example/svc-warm@sha256:222",
+		Profiles:     []domain.ContinuityMode{domain.ContinuityModeEmergency},
+		UpdatedAt:    now.Add(time.Minute),
+	}))
+
+	worker := workerRepo.workers["worker-a"]
+	if len(worker.StandbyAssignments) != 2 {
+		t.Fatalf("standby assignments length = %d, want 2", len(worker.StandbyAssignments))
+	}
+	refs := standbyRefsByService(worker.StandbyAssignments)
+	if refs["svc-hot"] != "registry.example/svc-hot@sha256:111" {
+		t.Fatalf("hot standby artifact ref = %q", refs["svc-hot"])
+	}
+	if refs["svc-warm"] != "registry.example/svc-warm@sha256:222" {
+		t.Fatalf("warm standby artifact ref = %q", refs["svc-warm"])
+	}
+}
+
+func TestRelayProjectionCacheStandbyDefinitionColdWithoutArtifactProjectsEmptyRef(t *testing.T) {
+	workerRepo := newStandbyProjectionWorkerRepo(&domain.Worker{PubKey: "worker-a", Status: domain.WorkerStatusOnline})
+	cache := service.NewRelayProjectionCache(newRelayProjectionMetaMemoryRepo(), zap.NewNop())
+	cache.RegisterTier1Tier2Appliers(service.ProjectionCacheRepositories{Workers: workerRepo})
+	now := time.Date(2026, 5, 25, 12, 0, 0, 0, time.UTC)
+
+	requireApply(t, cache, standbyProjectionEvent("standby-node:worker-a:svc-cold", now, "evt-cold", nostr.StandbyNodeDefinition{
+		WorkerPubKey: "worker-a",
+		ServiceKey:   "svc-cold",
+		Tier:         domain.StandbyTierCold,
+		Profiles:     []domain.ContinuityMode{domain.ContinuityModeDegraded},
+		UpdatedAt:    now,
+	}))
+
+	assignments := workerRepo.workers["worker-a"].StandbyAssignments
+	if len(assignments) != 1 {
+		t.Fatalf("standby assignments length = %d, want 1", len(assignments))
+	}
+	if assignments[0].ArtifactRef != "" {
+		t.Fatalf("cold standby artifact ref = %q, want empty", assignments[0].ArtifactRef)
+	}
+}
+
+func requireApply(t *testing.T, cache *service.RelayProjectionCache, event *nostr.DecodedProjectionEvent) {
+	t.Helper()
+	if err := cache.Apply(context.Background(), event); err != nil {
+		t.Fatalf("apply standby projection: %v", err)
+	}
+}
+
+func standbyProjectionEvent(dTag string, timestamp time.Time, sourceID string, def nostr.StandbyNodeDefinition) *nostr.DecodedProjectionEvent {
+	def.SourceEventID = sourceID
+	return &nostr.DecodedProjectionEvent{
+		Kind:      nostr.KindStandbyNodeDefinition,
+		DTag:      dTag,
+		Timestamp: timestamp,
+		SourceID:  sourceID,
+		Family:    nostr.FamilyContinuity,
+		Continuity: &nostr.DecodedContinuity{
+			StandbyNode: &def,
+		},
+	}
+}
+
+func standbyRefsByService(assignments []domain.WorkerStandbyAssignment) map[string]string {
+	refs := make(map[string]string, len(assignments))
+	for _, assignment := range assignments {
+		refs[assignment.ServiceKey] = assignment.ArtifactRef
+	}
+	return refs
+}
+
+type standbyProjectionWorkerRepo struct {
+	workers map[string]*domain.Worker
+}
+
+func newStandbyProjectionWorkerRepo(workers ...*domain.Worker) *standbyProjectionWorkerRepo {
+	repo := &standbyProjectionWorkerRepo{workers: make(map[string]*domain.Worker)}
+	for _, worker := range workers {
+		copied := *worker
+		repo.workers[worker.PubKey] = &copied
+	}
+	return repo
+}
+
+func (r *standbyProjectionWorkerRepo) Upsert(_ context.Context, worker *domain.Worker) error {
+	copied := *worker
+	r.workers[worker.PubKey] = &copied
+	return nil
+}
+
+func (r *standbyProjectionWorkerRepo) GetByPubKey(_ context.Context, pubkey string) (*domain.Worker, error) {
+	worker := r.workers[pubkey]
+	if worker == nil {
+		return nil, nil
+	}
+	copied := *worker
+	return &copied, nil
+}
+
+func (r *standbyProjectionWorkerRepo) List(context.Context, string, int) ([]domain.Worker, error) {
+	return nil, nil
+}
+
+func (r *standbyProjectionWorkerRepo) UpdateStatus(_ context.Context, pubkey string, status domain.WorkerStatus) error {
+	if worker := r.workers[pubkey]; worker != nil {
+		worker.Status = status
+	}
+	return nil
 }
 
 func testProjectionEvent(dTag string, timestamp time.Time, sourceID string) *nostr.DecodedProjectionEvent {

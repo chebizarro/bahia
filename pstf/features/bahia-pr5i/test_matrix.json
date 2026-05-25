@@ -1,0 +1,8 @@
+{
+  "feature_id": "bahia-pr5i",
+  "tests": [
+    {"name": "TestStandbyNodeDefinitionSerializationUsesHostRoleSupportAndProfileTags", "acceptance": ["AC1"], "type": "unit"},
+    {"name": "TestRelayProjectionCacheStandbyDefinitionProjectsArtifactRefs", "acceptance": ["AC2"], "type": "unit"},
+    {"name": "TestRelayProjectionCacheStandbyDefinitionColdWithoutArtifactProjectsEmptyRef", "acceptance": ["AC3"], "type": "unit"}
+  ]
+}

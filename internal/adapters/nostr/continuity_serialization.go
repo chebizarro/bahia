@@ -19,6 +19,7 @@ type StandbyNodeDefinition struct {
 	Role          string                  `json:"role"`
 	ServiceKey    string                  `json:"service_key"`
 	Tier          domain.StandbyTier      `json:"tier,omitempty"`
+	ArtifactRef   string                  `json:"artifact_ref,omitempty"`
 	Supports      []string                `json:"supports,omitempty"`
 	Profiles      []domain.ContinuityMode `json:"profiles"`
 	UpdatedAt     time.Time               `json:"updated_at"`
@@ -255,6 +256,9 @@ func EncodeStandbyNodeDefinitionEvent(def StandbyNodeDefinition) (gonostr.Event,
 	if def.Tier != "" {
 		tags = append(tags, gonostr.Tag{"tier", string(def.Tier)})
 	}
+	if def.ArtifactRef != "" {
+		tags = append(tags, gonostr.Tag{"artifact_ref", def.ArtifactRef})
+	}
 	for _, support := range sortedStrings(def.Supports) {
 		tags = append(tags, gonostr.Tag{"supports", support})
 	}
@@ -283,6 +287,7 @@ func DecodeStandbyNodeDefinitionEvent(event *gonostr.Event) (*StandbyNodeDefinit
 		Role:          continuityTagValue(event.Tags, "role"),
 		ServiceKey:    continuityTagValue(event.Tags, "service"),
 		Tier:          domain.StandbyTier(continuityTagValue(event.Tags, "tier")),
+		ArtifactRef:   firstNonEmpty(continuityTagValue(event.Tags, "artifact_ref"), continuityTagValue(event.Tags, "image_ref"), continuityTagValue(event.Tags, "artifact"), continuityTagValue(event.Tags, "artifact_id")),
 		Supports:      continuityTagValues(event.Tags, "supports"),
 		UpdatedAt:     event.CreatedAt.Time().UTC(),
 		SourceEventID: event.ID,
@@ -598,6 +603,7 @@ func validateStandbyNodeDefinition(def *StandbyNodeDefinition) error {
 	def.Host = strings.TrimSpace(def.Host)
 	def.Role = strings.TrimSpace(def.Role)
 	def.ServiceKey = strings.TrimSpace(def.ServiceKey)
+	def.ArtifactRef = strings.TrimSpace(def.ArtifactRef)
 	if def.WorkerPubKey == "" {
 		return fmt.Errorf("standby worker pubkey is required")
 	}

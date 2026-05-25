@@ -1,0 +1,11 @@
+{
+  "feature_id": "bahia-pr5i",
+  "title": "Standby assignment artifact references",
+  "observed_behavior": "Kind 31402 standby node definitions decoded worker, service, tier, support, and profile data, but no artifact/image reference was projected into Worker.StandbyAssignments for cleanup protection.",
+  "intended_behavior": "Standby node definitions may carry an artifact_ref. Relay projection applies each standby definition to the target Worker.StandbyAssignments entry, preserving artifact_ref per service assignment so cleanup keep-lists can protect standby images.",
+  "scope": [
+    "internal/adapters/nostr/continuity_serialization.go",
+    "internal/service/relay_projection_cache.go",
+    "internal/repository/pg_worker.go"
+  ]
+}
