@@ -95,8 +95,12 @@ type endpointRecord struct {
 
 type endpointContent struct {
 	Address  string          `json:"address"`
+	Addr     string          `json:"addr"`
 	Port     int             `json:"port"`
 	Protocol string          `json:"protocol"`
+	Proto    string          `json:"proto"`
+	FQDN     string          `json:"fqdn"`
+	DNS      string          `json:"dns"`
 	Deleted  bool            `json:"deleted"`
 	Metadata json.RawMessage `json:"metadata"`
 }
@@ -187,11 +191,15 @@ func (r *Resolver) Resolve(name, environment string) (Endpoint, bool) {
 func (r *Resolver) ResolveByFQDN(fqdn string) (Endpoint, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	record, ok := r.records[fqdn]
-	if !ok || record.deleted {
-		return Endpoint{}, false
+	for _, record := range r.records {
+		if record.deleted {
+			continue
+		}
+		if record.endpoint.FQDN == fqdn {
+			return cloneEndpoint(record.endpoint), true
+		}
 	}
-	return cloneEndpoint(record.endpoint), true
+	return Endpoint{}, false
 }
 
 // FindByCapability returns endpoints matching a capability (e.g. "llm", "speech", "gpu").
@@ -369,17 +377,22 @@ func (r *Resolver) applyEvent(event *nostr.Event) error {
 		return err
 	}
 
+	coordinate := event.Tags.GetD()
+	if coordinate == "" {
+		return errors.New("missing d tag coordinate")
+	}
+
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	current, ok := r.records[endpoint.FQDN]
+	current, ok := r.records[coordinate]
 	if ok && current.createdAt >= event.CreatedAt {
 		return nil
 	}
 	if deleted {
-		r.records[endpoint.FQDN] = endpointRecord{createdAt: event.CreatedAt, deleted: true}
+		r.records[coordinate] = endpointRecord{createdAt: event.CreatedAt, deleted: true}
 		return nil
 	}
-	r.records[endpoint.FQDN] = endpointRecord{endpoint: endpoint, createdAt: event.CreatedAt}
+	r.records[coordinate] = endpointRecord{endpoint: endpoint, createdAt: event.CreatedAt}
 	return nil
 }
 
@@ -397,39 +410,46 @@ func (r *Resolver) endpointFromEvent(event *nostr.Event) (Endpoint, bool, error)
 		return Endpoint{}, false, fmt.Errorf("unexpected author %s", event.PubKey)
 	}
 
-	fqdn := event.Tags.GetD()
-	if fqdn == "" {
-		return Endpoint{}, false, errors.New("missing d tag FQDN")
+	coordinate := event.Tags.GetD()
+	if coordinate == "" {
+		return Endpoint{}, false, errors.New("missing d tag coordinate")
 	}
 
 	var content endpointContent
 	if err := json.Unmarshal([]byte(event.Content), &content); err != nil {
 		return Endpoint{}, false, fmt.Errorf("parse endpoint content JSON: %w", err)
 	}
+
+	fqdn := firstString(firstTagValue(event.Tags, "dns"), content.FQDN, content.DNS)
+	if fqdn == "" {
+		return Endpoint{}, false, errors.New("missing dns tag FQDN")
+	}
+	address := firstString(content.Addr, content.Address)
+	protocol := firstString(content.Proto, content.Protocol)
 	if !content.Deleted {
-		if strings.TrimSpace(content.Address) == "" {
+		if strings.TrimSpace(address) == "" {
 			return Endpoint{}, false, errors.New("endpoint content address is required")
 		}
 		if content.Port <= 0 || content.Port > 65535 {
 			return Endpoint{}, false, fmt.Errorf("endpoint content port %d is invalid", content.Port)
 		}
-		if strings.TrimSpace(content.Protocol) == "" {
+		if strings.TrimSpace(protocol) == "" {
 			return Endpoint{}, false, errors.New("endpoint content protocol is required")
 		}
 	}
 
-	environment := firstTagValue(event.Tags, "env")
+	environment := firstString(firstTagValue(event.Tags, "env"), firstTagValue(event.Tags, "environment"))
 	zone := firstTagValue(event.Tags, "zone")
 	endpoint := Endpoint{
 		FQDN:         fqdn,
 		Name:         endpointName(fqdn, environment, zone),
 		Environment:  environment,
 		ZoneName:     zone,
-		Address:      content.Address,
+		Address:      address,
 		Port:         content.Port,
-		Protocol:     content.Protocol,
+		Protocol:     protocol,
 		Health:       firstTagValue(event.Tags, "health"),
-		Capabilities: allTagValues(event.Tags, "cap"),
+		Capabilities: allTagValues(event.Tags, "capability"),
 		Runtime:      firstTagValue(event.Tags, "runtime"),
 		Hardware:     firstTagValue(event.Tags, "hardware"),
 		UpdatedAt:    time.Unix(int64(event.CreatedAt), 0).UTC(),
@@ -454,6 +474,15 @@ func allTagValues(tags nostr.Tags, key string) []string {
 		}
 	}
 	return values
+}
+
+func firstString(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func endpointName(fqdn, environment, zone string) string {

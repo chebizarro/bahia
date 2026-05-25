@@ -20,16 +20,17 @@ func TestResolverParsesAndResolvesEndpointEvent(t *testing.T) {
 
 	resolver := New([]string{"wss://relay.example.test"}, pubkey)
 	event := signedEndpointEvent(t, secretKey, "api.prod.example.com", nostr.Now(), map[string]any{
-		"address":  "10.0.0.12",
-		"port":     443,
-		"protocol": "https",
+		"addr":  "10.0.0.12",
+		"port":  443,
+		"proto": "https",
 	}, nostr.Tags{
-		{"d", "api.prod.example.com"},
-		{"env", "prod"},
+		{"d", "drydock:api:prod"},
+		{"dns", "api.prod.example.com"},
+		{"environment", "prod"},
 		{"zone", "example.com"},
 		{"health", "healthy"},
-		{"cap", "llm"},
-		{"cap", "gpu"},
+		{"capability", "llm"},
+		{"capability", "gpu"},
 		{"runtime", "vllm"},
 		{"hardware", "a100"},
 	})
@@ -58,6 +59,34 @@ func TestResolverParsesAndResolvesEndpointEvent(t *testing.T) {
 	require.Equal(t, "api.prod.example.com", endpoint.FQDN)
 }
 
+func TestResolverFallsBackToContentFQDNAndLegacyContentFields(t *testing.T) {
+	secretKey := nostr.GeneratePrivateKey()
+	pubkey, err := nostr.GetPublicKey(secretKey)
+	require.NoError(t, err)
+
+	resolver := New([]string{"wss://relay.example.test"}, pubkey)
+	event := signedEndpointEvent(t, secretKey, "api.prod.example.com", nostr.Now(), map[string]any{
+		"fqdn":     "api.prod.example.com",
+		"address":  "10.0.0.12",
+		"port":     443,
+		"protocol": "https",
+	}, nostr.Tags{
+		{"d", "drydock:api:prod"},
+		{"env", "prod"},
+		{"zone", "example.com"},
+		{"health", "healthy"},
+		{"capability", "llm"},
+	})
+
+	require.NoError(t, resolver.applyEvent(event))
+
+	endpoint, ok := resolver.ResolveByFQDN("api.prod.example.com")
+	require.True(t, ok)
+	require.Equal(t, "10.0.0.12", endpoint.Address)
+	require.Equal(t, "https", endpoint.Protocol)
+	require.Equal(t, []string{"llm"}, endpoint.Capabilities)
+}
+
 func TestResolverAppliesNewestReplaceableEvent(t *testing.T) {
 	secretKey := nostr.GeneratePrivateKey()
 	pubkey, err := nostr.GetPublicKey(secretKey)
@@ -66,15 +95,11 @@ func TestResolverAppliesNewestReplaceableEvent(t *testing.T) {
 	resolver := New([]string{"wss://relay.example.test"}, pubkey)
 	base := nostr.Timestamp(time.Now().Add(-time.Hour).Unix())
 	newer := signedEndpointEvent(t, secretKey, "api.prod.example.com", base+10, map[string]any{
-		"address":  "10.0.0.20",
-		"port":     8443,
-		"protocol": "https",
-	}, endpointTags("api.prod.example.com", "prod", "example.com", "healthy", "llm"))
+		"addr": "10.0.0.20", "port": 8443, "proto": "https",
+	}, endpointTags("drydock:api:prod", "api.prod.example.com", "prod", "example.com", "healthy", "llm"))
 	older := signedEndpointEvent(t, secretKey, "api.prod.example.com", base, map[string]any{
-		"address":  "10.0.0.10",
-		"port":     443,
-		"protocol": "https",
-	}, endpointTags("api.prod.example.com", "prod", "example.com", "healthy", "llm"))
+		"addr": "10.0.0.10", "port": 443, "proto": "https",
+	}, endpointTags("drydock:api:prod", "api.prod.example.com", "prod", "example.com", "healthy", "llm"))
 
 	require.NoError(t, resolver.applyEvent(newer))
 	require.NoError(t, resolver.applyEvent(older))
@@ -93,18 +118,14 @@ func TestResolverHandlesTombstones(t *testing.T) {
 	resolver := New([]string{"wss://relay.example.test"}, pubkey)
 	base := nostr.Timestamp(time.Now().Add(-time.Hour).Unix())
 	endpoint := signedEndpointEvent(t, secretKey, "api.prod.example.com", base, map[string]any{
-		"address":  "10.0.0.10",
-		"port":     443,
-		"protocol": "https",
-	}, endpointTags("api.prod.example.com", "prod", "example.com", "healthy", "llm"))
+		"addr": "10.0.0.10", "port": 443, "proto": "https",
+	}, endpointTags("drydock:api:prod", "api.prod.example.com", "prod", "example.com", "healthy", "llm"))
 	tombstone := signedEndpointEvent(t, secretKey, "api.prod.example.com", base+1, map[string]any{
 		"deleted": true,
-	}, endpointTags("api.prod.example.com", "prod", "example.com", "unknown", "llm"))
+	}, endpointTags("drydock:api:prod", "api.prod.example.com", "prod", "example.com", "unknown", "llm"))
 	olderLiveEvent := signedEndpointEvent(t, secretKey, "api.prod.example.com", base, map[string]any{
-		"address":  "10.0.0.11",
-		"port":     443,
-		"protocol": "https",
-	}, endpointTags("api.prod.example.com", "prod", "example.com", "healthy", "llm"))
+		"addr": "10.0.0.11", "port": 443, "proto": "https",
+	}, endpointTags("drydock:api:prod", "api.prod.example.com", "prod", "example.com", "healthy", "llm"))
 
 	require.NoError(t, resolver.applyEvent(endpoint))
 	require.NoError(t, resolver.applyEvent(tombstone))
@@ -137,8 +158,8 @@ func TestResolverConsumesEOSEAndLiveEventsWithoutRefreshTicker(t *testing.T) {
 
 	events := make(chan *nostr.Event, 1)
 	events <- signedEndpointEvent(t, secretKey, "api.prod.example.com", nostr.Now(), map[string]any{
-		"address": "10.0.0.30", "port": 443, "protocol": "https",
-	}, endpointTags("api.prod.example.com", "prod", "example.com", "healthy", "llm"))
+		"addr": "10.0.0.30", "port": 443, "proto": "https",
+	}, endpointTags("drydock:api:prod", "api.prod.example.com", "prod", "example.com", "healthy", "llm"))
 	close(events)
 	eose := make(chan struct{})
 	close(eose)
@@ -183,11 +204,11 @@ func TestResolverFindsByCapability(t *testing.T) {
 	resolver := New([]string{"wss://relay.example.test"}, pubkey)
 	createdAt := nostr.Timestamp(time.Now().Add(-time.Hour).Unix())
 	require.NoError(t, resolver.applyEvent(signedEndpointEvent(t, secretKey, "llm.prod.example.com", createdAt, map[string]any{
-		"address": "10.0.0.21", "port": 443, "protocol": "https",
-	}, endpointTags("llm.prod.example.com", "prod", "example.com", "healthy", "llm", "gpu"))))
+		"addr": "10.0.0.21", "port": 443, "proto": "https",
+	}, endpointTags("drydock:llm:prod", "llm.prod.example.com", "prod", "example.com", "healthy", "llm", "gpu"))))
 	require.NoError(t, resolver.applyEvent(signedEndpointEvent(t, secretKey, "speech.prod.example.com", createdAt, map[string]any{
-		"address": "10.0.0.22", "port": 443, "protocol": "https",
-	}, endpointTags("speech.prod.example.com", "prod", "example.com", "healthy", "speech"))))
+		"addr": "10.0.0.22", "port": 443, "proto": "https",
+	}, endpointTags("drydock:speech:prod", "speech.prod.example.com", "prod", "example.com", "healthy", "speech"))))
 
 	gpuEndpoints := resolver.FindByCapability("gpu")
 	require.Len(t, gpuEndpoints, 1)
@@ -204,8 +225,8 @@ func TestResolverRejectsInvalidEvent(t *testing.T) {
 
 	resolver := New([]string{"wss://relay.example.test"}, pubkey)
 	event := signedEndpointEvent(t, secretKey, "api.prod.example.com", nostr.Now(), map[string]any{
-		"address": "10.0.0.10", "port": 443, "protocol": "https",
-	}, endpointTags("api.prod.example.com", "prod", "example.com", "healthy", "llm"))
+		"addr": "10.0.0.10", "port": 443, "proto": "https",
+	}, endpointTags("drydock:api:prod", "api.prod.example.com", "prod", "example.com", "healthy", "llm"))
 	event.Content = `{"address":"tampered","port":443,"protocol":"https"}`
 
 	require.Error(t, resolver.applyEvent(event))
@@ -261,15 +282,16 @@ func (p *fakeRelayPool) Close() {
 	p.calls = append(p.calls, "close")
 }
 
-func endpointTags(fqdn, environment, zone, health string, capabilities ...string) nostr.Tags {
+func endpointTags(coordinate, fqdn, environment, zone, health string, capabilities ...string) nostr.Tags {
 	tags := nostr.Tags{
-		{"d", fqdn},
-		{"env", environment},
+		{"d", coordinate},
+		{"dns", fqdn},
+		{"environment", environment},
 		{"zone", zone},
 		{"health", health},
 	}
 	for _, capability := range capabilities {
-		tags = append(tags, nostr.Tag{"cap", capability})
+		tags = append(tags, nostr.Tag{"capability", capability})
 	}
 	return tags
 }
