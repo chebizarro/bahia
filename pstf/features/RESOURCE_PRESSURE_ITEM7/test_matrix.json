@@ -1,0 +1,15 @@
+{
+  "feature_id": "RESOURCE_PRESSURE_ITEM7",
+  "tests": [
+    {
+      "name": "TestExecuteDeployment_DispatchAdmissionRejectsLatestWorkerPressure",
+      "maps_to": ["AC1", "AC2"],
+      "evidence": "Selected worker is online during list-based selection, then repository GetByPubKey returns blocked pressure at dispatch admission; SubmitJob is not called and run metadata includes admission_code=capacity_class_rejected."
+    },
+    {
+      "name": "TestExecuteDeployment_WorkerlessLoomPathSkipsDispatchAdmission",
+      "maps_to": ["AC3"],
+      "evidence": "Coordinator without worker policy submits a Loom deployment with an empty WorkerPubkey."
+    }
+  ]
+}

@@ -153,6 +153,16 @@ func (c *Coordinator) ExecuteDeployment(ctx context.Context, intentID uuid.UUID)
 		)
 	}
 
+	if c.workerPolicy != nil && workerPubkey != "" {
+		decision, err := c.workerPolicy.EvaluateDispatchAdmission(ctx, env, workerPubkey)
+		if err != nil {
+			return err
+		}
+		if !decision.Eligible {
+			return c.failDeploymentRunForDispatchAdmission(ctx, intentID, workerPubkey, decision)
+		}
+	}
+
 	// Submit the deploy job to Loom.
 	jobReq := loom.JobRequest{
 		ID:           uuid.New().String(),
@@ -199,6 +209,41 @@ func (c *Coordinator) ExecuteDeployment(ctx context.Context, intentID uuid.UUID)
 		c.pollForCompletion(c.ctx, run.ID, jobEventID, workerPubkey)
 	}()
 
+	return nil
+}
+
+func (c *Coordinator) failDeploymentRunForDispatchAdmission(ctx context.Context, intentID uuid.UUID, workerPubkey string, decision service.WorkerAdmissionDecision) error {
+	now := time.Now().UTC()
+	run := &domain.DeploymentRun{
+		DeploymentIntentID: intentID,
+		LoomJobID:          "admission:rejected",
+		WorkerPubkey:       workerPubkey,
+		Status:             domain.RunStatusQueued,
+		StartedAt:          &now,
+		Metadata: map[string]any{
+			"failure_phase":     "dispatch_admission",
+			"admission_scope":   string(service.AdmissionScopeServiceDeploy),
+			"admission_code":    decision.Code,
+			"admission_reason":  decision.Reason,
+			"capacity_class":    string(decision.CapacityClass),
+			"pressure_level":    string(decision.PressureLevel),
+			"cleanup_suggested": decision.CleanupSuggested,
+		},
+	}
+	if err := c.registry.CreateDeploymentRun(ctx, run); err != nil {
+		return fmt.Errorf("creating dispatch admission rejection run: %w", err)
+	}
+	exitCode := 1
+	if err := c.registry.CompleteDeploymentRun(ctx, run.ID, domain.RunStatusFailed, &exitCode); err != nil {
+		return fmt.Errorf("marking dispatch admission rejection failed: %w", err)
+	}
+	c.logger.Warn("deployment blocked by dispatch admission",
+		zap.String("intent_id", intentID.String()),
+		zap.String("run_id", run.ID.String()),
+		zap.String("worker_pubkey", workerPubkey),
+		zap.String("admission_code", decision.Code),
+		zap.String("admission_reason", decision.Reason),
+	)
 	return nil
 }
 

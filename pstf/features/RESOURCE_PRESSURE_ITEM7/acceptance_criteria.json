@@ -1,0 +1,20 @@
+{
+  "feature_id": "RESOURCE_PRESSURE_ITEM7",
+  "criteria": [
+    {
+      "id": "AC1",
+      "description": "Worker-backed deployments reload the selected worker from the repository after selection and before Loom SubmitJob.",
+      "tests": ["TestExecuteDeployment_DispatchAdmissionRejectsLatestWorkerPressure"]
+    },
+    {
+      "id": "AC2",
+      "description": "If dispatch-time service_deploy admission rejects, the coordinator skips SubmitJob and marks the deployment run failed with stable admission metadata.",
+      "tests": ["TestExecuteDeployment_DispatchAdmissionRejectsLatestWorkerPressure"]
+    },
+    {
+      "id": "AC3",
+      "description": "Workerless Loom deployments are not subject to the worker-backed dispatch admission gate.",
+      "tests": ["TestExecuteDeployment_WorkerlessLoomPathSkipsDispatchAdmission"]
+    }
+  ]
+}

@@ -124,6 +124,30 @@ func (s *WorkerPolicyService) SelectWorker(ctx context.Context, env *domain.Envi
 	return &best, nil
 }
 
+// EvaluateDispatchAdmission reloads the selected worker and applies the service-deploy admission policy immediately before dispatch.
+func (s *WorkerPolicyService) EvaluateDispatchAdmission(ctx context.Context, env *domain.Environment, workerPubkey string) (WorkerAdmissionDecision, error) {
+	if s == nil || s.workerRepo == nil {
+		return WorkerAdmissionDecision{}, fmt.Errorf("worker repository is required for dispatch admission")
+	}
+	worker, err := s.workerRepo.GetByPubKey(ctx, workerPubkey)
+	if err != nil {
+		return WorkerAdmissionDecision{}, fmt.Errorf("loading selected worker for dispatch admission: %w", err)
+	}
+	policy := s.extractPolicy(env)
+	var selector map[string]any
+	if policy.Strategy == StrategyPreferred && env != nil {
+		selector = env.LoomWorkerSelector
+	}
+	return Evaluate(WorkerAdmissionRequest{
+		Scope:         AdmissionScopeServiceDeploy,
+		Worker:        worker,
+		Selector:      selector,
+		LabelSelector: requiredWorkerPolicyLabels(policy),
+		MaxPrice:      policy.MaxPrice,
+		PinnedWorker:  policy.PinnedWorker,
+	}), nil
+}
+
 // RankWorkers returns all online workers for a given environment, sorted best-first.
 // Eligible workers are scored normally. Ineligible workers are retained with
 // exclusion reasons so preview/read-model callers can explain why a worker will

@@ -290,9 +290,13 @@ type stubLoomClient struct {
 	err          error
 	gotJobID     string
 	gotWorkerKey string
+	submitCalls  int
+	lastJobReq   loom.JobRequest
 }
 
-func (s *stubLoomClient) SubmitJob(context.Context, loom.JobRequest) (string, error) {
+func (s *stubLoomClient) SubmitJob(_ context.Context, req loom.JobRequest) (string, error) {
+	s.submitCalls++
+	s.lastJobReq = req
 	return "stub-job", nil
 }
 
@@ -306,6 +310,59 @@ func (s *stubLoomClient) PollJobStatusFromWorker(_ context.Context, jobID string
 // Since loom.Client is a concrete struct (not an interface), we test the coordinator
 // indirectly through its public behavior. For direct unit tests, we verify the
 // Coordinator's Shutdown and goroutine tracking logic.
+
+type coordinatorWorkerRepo struct {
+	workers        map[string]domain.Worker
+	degradeOnFetch bool
+}
+
+func (r *coordinatorWorkerRepo) Upsert(_ context.Context, w *domain.Worker) error {
+	if r.workers == nil {
+		r.workers = map[string]domain.Worker{}
+	}
+	r.workers[w.PubKey] = *w
+	return nil
+}
+
+func (r *coordinatorWorkerRepo) GetByPubKey(_ context.Context, pubkey string) (*domain.Worker, error) {
+	w, ok := r.workers[pubkey]
+	if !ok {
+		return nil, nil
+	}
+	if r.degradeOnFetch {
+		w.Pressure = &domain.WorkerPressureAssessment{
+			OverallLevel:      domain.WorkerPressureCritical,
+			CapacityClass:     domain.WorkerCapacityBlocked,
+			RecommendedAction: domain.WorkerPressureActionOperatorIntervention,
+			AssessedAt:        time.Now().UTC(),
+		}
+	}
+	return &w, nil
+}
+
+func (r *coordinatorWorkerRepo) List(_ context.Context, status string, limit int) ([]domain.Worker, error) {
+	workers := make([]domain.Worker, 0, len(r.workers))
+	for _, w := range r.workers {
+		if status != "" && string(w.Status) != status {
+			continue
+		}
+		workers = append(workers, w)
+		if len(workers) >= limit {
+			break
+		}
+	}
+	return workers, nil
+}
+
+func (r *coordinatorWorkerRepo) UpdateStatus(_ context.Context, pubkey string, status domain.WorkerStatus) error {
+	w, ok := r.workers[pubkey]
+	if !ok {
+		return nil
+	}
+	w.Status = status
+	r.workers[pubkey] = w
+	return nil
+}
 
 // --- Test Helpers ---
 
@@ -702,6 +759,110 @@ func TestExecuteDeployment_UsesDirectRuntimeForLocalComposeArtifact(t *testing.T
 		if run.LoomJobID != "runtime:direct" {
 			t.Fatalf("expected direct runtime marker, got %q", run.LoomJobID)
 		}
+	}
+}
+
+func TestExecuteDeployment_DispatchAdmissionRejectsLatestWorkerPressure(t *testing.T) {
+	svcRepo, envRepo, artRepo, intentRepo, runRepo, stateRepo := newTestCoordinatorDeps()
+	svc, env, art := createCoordinatorTestServiceEnvArtifact(t, svcRepo, envRepo, artRepo)
+
+	registry := newTestRegistry(svcRepo, envRepo, artRepo, intentRepo, runRepo, stateRepo)
+	worker := domain.Worker{
+		PubKey:              "worker-pressure",
+		Name:                "pressure worker",
+		Status:              domain.WorkerStatusOnline,
+		SchedulingState:     domain.WorkerSchedulingActive,
+		MaxConcurrentJobs:   4,
+		LastAdvertisementAt: time.Now().UTC(),
+	}
+	workerRepo := &coordinatorWorkerRepo{workers: map[string]domain.Worker{worker.PubKey: worker}, degradeOnFetch: true}
+	workerPolicy := service.NewWorkerPolicyService(workerRepo, zap.NewNop())
+	stubLoom := &stubLoomClient{status: &loom.JobStatus{Status: "completed"}}
+	coord := NewCoordinator(registry, nil, &events.NoopPublisher{}, zap.NewNop(), WithWorkerPolicy(workerPolicy))
+	coord.loom = stubLoom
+
+	di := &domain.DeploymentIntent{
+		ServiceID: svc.ID, EnvironmentID: env.ID, ArtifactID: art.ID,
+		RequestedBy: "test", SourceKind: domain.SourceKindManual,
+		ApprovalStatus: domain.ApprovalStatusNotRequired, Status: domain.IntentStatusApproved,
+	}
+	if err := registry.CreateDeploymentIntent(context.Background(), di); err != nil {
+		t.Fatal(err)
+	}
+	intentRepo.mu.Lock()
+	intentRepo.intents[di.ID].Status = domain.IntentStatusApproved
+	intentRepo.mu.Unlock()
+
+	if err := coord.ExecuteDeployment(context.Background(), di.ID); err != nil {
+		t.Fatalf("ExecuteDeployment() error = %v", err)
+	}
+	if stubLoom.submitCalls != 0 {
+		t.Fatalf("expected admission rejection to skip SubmitJob, got %d calls", stubLoom.submitCalls)
+	}
+	if len(runRepo.runs) != 1 {
+		t.Fatalf("expected 1 failed admission run, got %d", len(runRepo.runs))
+	}
+	for _, run := range runRepo.runs {
+		if run.Status != domain.RunStatusFailed {
+			t.Fatalf("expected failed run, got %s", run.Status)
+		}
+		if run.WorkerPubkey != "worker-pressure" {
+			t.Fatalf("expected selected worker on failed run, got %q", run.WorkerPubkey)
+		}
+		if run.LoomJobID != "admission:rejected" {
+			t.Fatalf("expected admission rejection marker, got %q", run.LoomJobID)
+		}
+		if got := run.Metadata["failure_phase"]; got != "dispatch_admission" {
+			t.Fatalf("expected dispatch admission failure phase, got %v", got)
+		}
+		if got := run.Metadata["admission_code"]; got != "capacity_class_rejected" {
+			t.Fatalf("expected capacity_class_rejected, got %v", got)
+		}
+		if got := run.Metadata["capacity_class"]; got != string(domain.WorkerCapacityBlocked) {
+			t.Fatalf("expected blocked capacity class, got %v", got)
+		}
+	}
+	intentRepo.mu.Lock()
+	intentStatus := intentRepo.intents[di.ID].Status
+	intentRepo.mu.Unlock()
+	if intentStatus != domain.IntentStatusFailed {
+		t.Fatalf("expected failed intent after admission rejection, got %s", intentStatus)
+	}
+}
+
+func TestExecuteDeployment_WorkerlessLoomPathSkipsDispatchAdmission(t *testing.T) {
+	svcRepo, envRepo, artRepo, intentRepo, runRepo, stateRepo := newTestCoordinatorDeps()
+	svc, env, art := createCoordinatorTestServiceEnvArtifact(t, svcRepo, envRepo, artRepo)
+
+	registry := newTestRegistry(svcRepo, envRepo, artRepo, intentRepo, runRepo, stateRepo)
+	stubLoom := &stubLoomClient{status: &loom.JobStatus{Status: "completed"}}
+	coord := NewCoordinator(registry, nil, &events.NoopPublisher{}, zap.NewNop())
+	coord.loom = stubLoom
+
+	di := &domain.DeploymentIntent{
+		ServiceID: svc.ID, EnvironmentID: env.ID, ArtifactID: art.ID,
+		RequestedBy: "test", SourceKind: domain.SourceKindManual,
+		ApprovalStatus: domain.ApprovalStatusNotRequired, Status: domain.IntentStatusApproved,
+	}
+	if err := registry.CreateDeploymentIntent(context.Background(), di); err != nil {
+		t.Fatal(err)
+	}
+	intentRepo.mu.Lock()
+	intentRepo.intents[di.ID].Status = domain.IntentStatusApproved
+	intentRepo.mu.Unlock()
+
+	if err := coord.ExecuteDeployment(context.Background(), di.ID); err != nil {
+		t.Fatalf("ExecuteDeployment() error = %v", err)
+	}
+	coord.Shutdown(time.Second)
+	if stubLoom.submitCalls != 1 {
+		t.Fatalf("expected workerless Loom path to submit, got %d calls", stubLoom.submitCalls)
+	}
+	if stubLoom.lastJobReq.WorkerPubkey != "" {
+		t.Fatalf("expected workerless job request, got worker %q", stubLoom.lastJobReq.WorkerPubkey)
+	}
+	if len(runRepo.runs) != 1 {
+		t.Fatalf("expected 1 deployment run, got %d", len(runRepo.runs))
 	}
 }
 

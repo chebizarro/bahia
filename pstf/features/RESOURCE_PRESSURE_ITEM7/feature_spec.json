@@ -1,0 +1,7 @@
+{
+  "feature_id": "RESOURCE_PRESSURE_ITEM7",
+  "title": "Final dispatch-time admission gate",
+  "intent": "Block worker-backed deployments at dispatch time when the selected worker's latest repository state no longer satisfies universal worker admission.",
+  "observed_behavior_before": "Coordinator selected a worker, then submitted the Loom job without reloading current worker telemetry or pressure state.",
+  "intended_behavior": "After worker selection and before Loom SubmitJob, coordinator reloads the selected worker through worker policy admission, evaluates service_deploy admission, and fails the deployment run without submitting when admission rejects. Workerless paths remain ungated."
+}
