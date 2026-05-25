@@ -21,7 +21,9 @@ type WorkerAssignment struct {
 	Movable    bool                 `json:"movable"`
 	StartedAt  *time.Time           `json:"started_at,omitempty"`
 	UpdatedAt  time.Time            `json:"updated_at"`
-	Metadata   map[string]any       `json:"metadata,omitempty"`
+	// Metadata carries projector-populated workload details. Assignment projectors should
+	// include artifact_id and image_ref when deployment intent/artifact data is available.
+	Metadata map[string]any `json:"metadata,omitempty"`
 }
 
 // WorkerAssignmentState is the operator read model for current worker work.

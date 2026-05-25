@@ -1,0 +1,11 @@
+{
+  "feature_id": "bahia-7cok",
+  "title": "Assignment metadata enrichment for cleanup keep-list",
+  "observed_behavior": "Worker assignment read models projected service and inference assignments without cleanup keep-list artifact metadata. WorkerStandbyAssignment had no artifact/image reference field.",
+  "intended_behavior": "Active worker assignments expose artifact_id and image_ref metadata when deployment intent/artifact data is available. Standby assignment domain records can carry an artifact_ref for hot/warm standby cleanup protection.",
+  "scope": [
+    "internal/domain/worker.go",
+    "internal/domain/worker_read_models.go",
+    "internal/service/worker_read_models.go"
+  ]
+}

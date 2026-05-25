@@ -1,0 +1,19 @@
+{
+  "criteria": [
+    {
+      "id": "AC1",
+      "description": "Service worker assignments include artifact_id and image_ref metadata from deployment intent/artifact data.",
+      "tests": ["TestWorkerReadModelServiceBuildsAssignmentAndDrainStatus"]
+    },
+    {
+      "id": "AC2",
+      "description": "Inference worker assignments include artifact_id and image_ref metadata from ML intent/model artifact data.",
+      "tests": ["TestWorkerReadModelServiceBuildsAssignmentAndDrainStatus"]
+    },
+    {
+      "id": "AC3",
+      "description": "WorkerStandbyAssignment exposes additive artifact_ref JSON field.",
+      "tests": ["go test ./internal/domain"]
+    }
+  ]
+}

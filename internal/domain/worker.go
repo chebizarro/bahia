@@ -49,6 +49,7 @@ type WorkerStandbyAssignment struct {
 	ServiceKey        string           `json:"service_key"`
 	Tier              StandbyTier      `json:"tier"`
 	SupportedProfiles []ContinuityMode `json:"supported_profiles,omitempty"`
+	ArtifactRef       string           `json:"artifact_ref,omitempty"`
 	UpdatedAt         time.Time        `json:"updated_at"`
 	SourceEventID     string           `json:"source_event_id,omitempty"`
 }

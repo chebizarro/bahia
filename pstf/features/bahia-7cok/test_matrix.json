@@ -1,0 +1,9 @@
+{
+  "test_runs": [
+    {
+      "command": "go test ./internal/domain ./internal/service",
+      "result": "passed",
+      "evidence": "internal/domain and internal/service passed after assignment metadata enrichment."
+    }
+  ]
+}

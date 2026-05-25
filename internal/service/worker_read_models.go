@@ -19,11 +19,16 @@ import (
 type WorkerServiceAssignmentSource interface {
 	ListAllStates(ctx context.Context) ([]domain.EnvironmentServiceState, error)
 	GetDeploymentRun(ctx context.Context, id uuid.UUID) (*domain.DeploymentRun, error)
+	GetDeploymentIntent(ctx context.Context, id uuid.UUID) (*domain.DeploymentIntent, error)
+	GetArtifact(ctx context.Context, id uuid.UUID) (*domain.Artifact, error)
 }
 
 type WorkerInferenceAssignmentSource interface {
 	ListInferenceStates(ctx context.Context) ([]domain.MLInferenceState, error)
 	GetMLDeploymentRun(ctx context.Context, id uuid.UUID) (*domain.MLDeploymentRun, error)
+	GetDeploymentIntent(ctx context.Context, id uuid.UUID) (*domain.MLDeploymentIntent, error)
+	GetModelVersion(ctx context.Context, id uuid.UUID) (*domain.MLModelVersion, error)
+	ListArtifactRefsByModelVersion(ctx context.Context, modelVersionID uuid.UUID) ([]domain.MLArtifactRef, error)
 }
 
 // WorkerReadModelService assembles operator worker read models from authoritative repositories.
@@ -214,7 +219,11 @@ func (s *WorkerReadModelService) assignmentsByWorker(ctx context.Context) (map[s
 			if run == nil || strings.TrimSpace(run.WorkerPubkey) == "" {
 				continue
 			}
-			assignment := domain.WorkerAssignment{Type: domain.WorkerAssignmentService, WorkloadID: state.ServiceID.String() + ":" + state.EnvironmentID.String(), Status: string(state.DriftStatus), Pinned: assignmentPinned(run.Metadata, run.WorkerPubkey), Movable: !assignmentPinned(run.Metadata, run.WorkerPubkey), StartedAt: run.StartedAt, UpdatedAt: maxTime(state.UpdatedAt, run.UpdatedAt), Metadata: compactAssignmentMetadata(map[string]any{"service_id": state.ServiceID.String(), "environment_id": state.EnvironmentID.String(), "run_id": run.ID.String(), "intent_id": run.DeploymentIntentID.String(), "worker_name": run.WorkerName})}
+			metadata, err := s.serviceAssignmentMetadata(ctx, state, run)
+			if err != nil {
+				return nil, err
+			}
+			assignment := domain.WorkerAssignment{Type: domain.WorkerAssignmentService, WorkloadID: state.ServiceID.String() + ":" + state.EnvironmentID.String(), Status: string(state.DriftStatus), Pinned: assignmentPinned(run.Metadata, run.WorkerPubkey), Movable: !assignmentPinned(run.Metadata, run.WorkerPubkey), StartedAt: run.StartedAt, UpdatedAt: maxTime(state.UpdatedAt, run.UpdatedAt), Metadata: metadata}
 			byWorker[run.WorkerPubkey] = append(byWorker[run.WorkerPubkey], assignment)
 		}
 	}
@@ -235,7 +244,11 @@ func (s *WorkerReadModelService) assignmentsByWorker(ctx context.Context) (map[s
 			if run == nil || strings.TrimSpace(run.WorkerPubkey) == "" {
 				continue
 			}
-			assignment := domain.WorkerAssignment{Type: domain.WorkerAssignmentInference, WorkloadID: state.EndpointID.String() + ":" + state.EnvironmentID.String(), Status: string(state.DriftStatus), Pinned: assignmentPinned(run.Metadata, run.WorkerPubkey), Movable: !assignmentPinned(run.Metadata, run.WorkerPubkey), StartedAt: run.StartedAt, UpdatedAt: maxTime(state.UpdatedAt, run.UpdatedAt), Metadata: compactAssignmentMetadata(map[string]any{"endpoint_id": state.EndpointID.String(), "environment_id": state.EnvironmentID.String(), "run_id": run.ID.String(), "intent_id": run.DeploymentIntentID.String(), "runtime_kind": string(run.RuntimeKind), "worker_name": run.WorkerName})}
+			metadata, err := s.mlAssignmentMetadata(ctx, state, run)
+			if err != nil {
+				return nil, err
+			}
+			assignment := domain.WorkerAssignment{Type: domain.WorkerAssignmentInference, WorkloadID: state.EndpointID.String() + ":" + state.EnvironmentID.String(), Status: string(state.DriftStatus), Pinned: assignmentPinned(run.Metadata, run.WorkerPubkey), Movable: !assignmentPinned(run.Metadata, run.WorkerPubkey), StartedAt: run.StartedAt, UpdatedAt: maxTime(state.UpdatedAt, run.UpdatedAt), Metadata: metadata}
 			byWorker[run.WorkerPubkey] = append(byWorker[run.WorkerPubkey], assignment)
 		}
 	}
@@ -245,6 +258,97 @@ func (s *WorkerReadModelService) assignmentsByWorker(ctx context.Context) (map[s
 		})
 	}
 	return byWorker, nil
+}
+
+func (s *WorkerReadModelService) serviceAssignmentMetadata(ctx context.Context, state domain.EnvironmentServiceState, run *domain.DeploymentRun) (map[string]any, error) {
+	metadata := map[string]any{
+		"service_id":     state.ServiceID.String(),
+		"environment_id": state.EnvironmentID.String(),
+		"run_id":         run.ID.String(),
+		"intent_id":      run.DeploymentIntentID.String(),
+		"worker_name":    run.WorkerName,
+	}
+	artifactID := state.DesiredArtifactID
+	if run.Metadata != nil {
+		if id, ok := assignmentUUID(run.Metadata["artifact_id"]); ok {
+			artifactID = &id
+		}
+		if imageRef := assignmentString(run.Metadata["image_ref"]); imageRef != "" {
+			metadata["image_ref"] = imageRef
+		}
+	}
+	if run.DeploymentIntentID != uuid.Nil {
+		intent, err := s.services.GetDeploymentIntent(ctx, run.DeploymentIntentID)
+		if err != nil {
+			return nil, fmt.Errorf("read service intent %s for worker assignment metadata: %w", run.DeploymentIntentID.String(), err)
+		}
+		if intent != nil && intent.ArtifactID != uuid.Nil {
+			artifactID = &intent.ArtifactID
+		}
+	}
+	if artifactID != nil && *artifactID != uuid.Nil {
+		metadata["artifact_id"] = artifactID.String()
+		if assignmentString(metadata["image_ref"]) == "" {
+			artifact, err := s.services.GetArtifact(ctx, *artifactID)
+			if err != nil {
+				return nil, fmt.Errorf("read artifact %s for worker assignment metadata: %w", artifactID.String(), err)
+			}
+			metadata["image_ref"] = artifactImageRef(artifact)
+		}
+	}
+	return compactAssignmentMetadata(metadata), nil
+}
+
+func (s *WorkerReadModelService) mlAssignmentMetadata(ctx context.Context, state domain.MLInferenceState, run *domain.MLDeploymentRun) (map[string]any, error) {
+	metadata := map[string]any{
+		"endpoint_id":    state.EndpointID.String(),
+		"environment_id": state.EnvironmentID.String(),
+		"run_id":         run.ID.String(),
+		"intent_id":      run.DeploymentIntentID.String(),
+		"runtime_kind":   string(run.RuntimeKind),
+		"worker_name":    run.WorkerName,
+	}
+	if run.Metadata != nil {
+		if id, ok := assignmentUUID(run.Metadata["artifact_id"]); ok {
+			metadata["artifact_id"] = id.String()
+		}
+		if imageRef := assignmentString(run.Metadata["image_ref"]); imageRef != "" {
+			metadata["image_ref"] = imageRef
+		}
+	}
+	if assignmentString(metadata["artifact_id"]) != "" && assignmentString(metadata["image_ref"]) != "" {
+		return compactAssignmentMetadata(metadata), nil
+	}
+	if run.DeploymentIntentID == uuid.Nil {
+		return compactAssignmentMetadata(metadata), nil
+	}
+	intent, err := s.ml.GetDeploymentIntent(ctx, run.DeploymentIntentID)
+	if err != nil {
+		return nil, fmt.Errorf("read inference intent %s for worker assignment metadata: %w", run.DeploymentIntentID.String(), err)
+	}
+	if intent == nil || intent.ModelVersionID == uuid.Nil {
+		return compactAssignmentMetadata(metadata), nil
+	}
+	version, err := s.ml.GetModelVersion(ctx, intent.ModelVersionID)
+	if err != nil {
+		return nil, fmt.Errorf("read model version %s for worker assignment metadata: %w", intent.ModelVersionID.String(), err)
+	}
+	if version != nil && len(version.ArtifactIDs) > 0 && assignmentString(metadata["artifact_id"]) == "" {
+		metadata["artifact_id"] = version.ArtifactIDs[0].String()
+	}
+	if assignmentString(metadata["image_ref"]) == "" {
+		refs, err := s.ml.ListArtifactRefsByModelVersion(ctx, intent.ModelVersionID)
+		if err != nil {
+			return nil, fmt.Errorf("read model artifacts %s for worker assignment metadata: %w", intent.ModelVersionID.String(), err)
+		}
+		if len(refs) > 0 {
+			if assignmentString(metadata["artifact_id"]) == "" {
+				metadata["artifact_id"] = refs[0].ID.String()
+			}
+			metadata["image_ref"] = refs[0].URI
+		}
+	}
+	return compactAssignmentMetadata(metadata), nil
 }
 
 func drainStatusForWorker(worker *domain.Worker, assignments []domain.WorkerAssignment) *domain.WorkerDrainStatus {
@@ -310,11 +414,62 @@ func assignmentPinned(metadata map[string]any, workerPubKey string) bool {
 func compactAssignmentMetadata(in map[string]any) map[string]any {
 	out := map[string]any{}
 	for key, value := range in {
+		if value == nil {
+			continue
+		}
 		if fmt.Sprint(value) != "" {
 			out[key] = value
 		}
 	}
 	return out
+}
+
+func assignmentString(value any) string {
+	if value == nil {
+		return ""
+	}
+	switch v := value.(type) {
+	case string:
+		return strings.TrimSpace(v)
+	case fmt.Stringer:
+		return strings.TrimSpace(v.String())
+	default:
+		return strings.TrimSpace(fmt.Sprint(v))
+	}
+}
+
+func assignmentUUID(value any) (uuid.UUID, bool) {
+	switch v := value.(type) {
+	case uuid.UUID:
+		return v, v != uuid.Nil
+	case *uuid.UUID:
+		if v == nil || *v == uuid.Nil {
+			return uuid.Nil, false
+		}
+		return *v, true
+	case string:
+		parsed, err := uuid.Parse(strings.TrimSpace(v))
+		return parsed, err == nil && parsed != uuid.Nil
+	default:
+		return uuid.Nil, false
+	}
+}
+
+func artifactImageRef(artifact *domain.Artifact) string {
+	if artifact == nil {
+		return ""
+	}
+	repo := strings.TrimSpace(artifact.ImageRepo)
+	if repo == "" {
+		return ""
+	}
+	if tag := strings.TrimSpace(artifact.ImageTag); tag != "" {
+		return repo + ":" + tag
+	}
+	if digest := strings.TrimSpace(artifact.ImageDigest); digest != "" {
+		return repo + "@" + digest
+	}
+	return repo
 }
 
 func maxTime(a, b time.Time) time.Time {
