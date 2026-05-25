@@ -10,11 +10,17 @@
     workerToolchainsLabel,
     workerVRAMLabel,
     workerPriceLabel,
-    workerLastAdvertisementLabel
+    workerLastAdvertisementLabel,
+    workerPressureLevel,
+    workerCapacityClass,
+    workerRecommendedAction,
+    workerTelemetryIndicators,
+    hasWorkerTelemetry
   } from './list-utils.js';
 
   const SCHEDULING_STATES = ['active', 'cordoned', 'draining', 'maintenance', 'disabled'];
   const WORKER_KINDS = {
+    CLEANUP_REQUEST: 5100,
     CORDON_REQUEST: 5997,
     UNCORDON_REQUEST: 5998,
     DRAIN_REQUEST: 5999,
@@ -26,6 +32,7 @@
   };
 
   const WORKER_COMMANDS = {
+    CLEANUP_REQUEST: 'worker.cleanup.request',
     CORDON: 'worker.cordon.request',
     UNCORDON: 'worker.uncordon.request',
     DRAIN: 'worker.drain.request',
@@ -36,6 +43,14 @@
   };
 
   const WORKER_ACTIONS = [
+    {
+      label: 'Request cleanup',
+      command: WORKER_COMMANDS.CLEANUP_REQUEST,
+      kind: WORKER_KINDS.CLEANUP_REQUEST,
+      cleanup: true,
+      reasonPrompt: 'Reason for requesting worker cleanup (optional)',
+      allowedFrom: SCHEDULING_STATES
+    },
     {
       label: 'Cordon',
       command: WORKER_COMMANDS.CORDON,
@@ -95,6 +110,9 @@
   let acceleratorFilter = $state('');
   let toolchainFilter = $state('');
   let taskFilter = $state('');
+  let capacityFilter = $state('');
+  let pressureFilter = $state('');
+  let recommendedActionFilter = $state('');
   let labelKeyFilter = $state('');
   let labelValueFilter = $state('');
   let onlineOnly = $state(false);
@@ -111,6 +129,7 @@
   const acceleratorOptions = $derived(collectWorkerValues(workers, workerAcceleratorValues));
   const toolchainOptions = $derived(collectWorkerValues(workers, workerToolchainValues));
   const taskOptions = $derived(collectWorkerValues(workers, workerWorkloadValues));
+  const fleetSummary = $derived.by(() => summarizeFleetCapacity(workers));
 
   const filteredWorkers = $derived.by(() => filterWorkerRows(workers, {
     capabilityFilter,
@@ -121,6 +140,9 @@
     acceleratorFilter,
     toolchainFilter,
     taskFilter,
+    capacityFilter,
+    pressureFilter,
+    recommendedActionFilter,
     labelKeyFilter,
     labelValueFilter,
     onlineOnly
@@ -254,6 +276,9 @@
       if (filters.acceleratorFilter && !workerAcceleratorValues(worker).includes(filters.acceleratorFilter)) return false;
       if (filters.toolchainFilter && !workerToolchainValues(worker).includes(filters.toolchainFilter)) return false;
       if (filters.taskFilter && !workerWorkloadValues(worker).includes(filters.taskFilter)) return false;
+      if (filters.capacityFilter && workerCapacityClass(worker) !== filters.capacityFilter) return false;
+      if (filters.pressureFilter && workerPressureLevel(worker) !== filters.pressureFilter) return false;
+      if (filters.recommendedActionFilter && workerRecommendedAction(worker) !== filters.recommendedActionFilter) return false;
       if (!hasLabelMatch(worker, filters.labelKeyFilter, filters.labelValueFilter)) return false;
 
       if (!query) return true;
@@ -267,6 +292,9 @@
         ...workerToolchainValues(worker),
         ...workerWorkloadValues(worker),
         schedulingState(worker),
+        workerPressureLevel(worker),
+        workerCapacityClass(worker),
+        workerRecommendedAction(worker),
         labelText,
         worker.name || '',
         worker.description || '',
@@ -292,6 +320,16 @@
 
   function workerAcceleratorsLabel(worker) {
     return formatList(workerAcceleratorValues(worker));
+  }
+
+  function summarizeFleetCapacity(sourceWorkers) {
+    const summary = { total: 0, open: 0, reduced: 0, cleanup_only: 0, blocked: 0 };
+    for (const worker of sourceWorkers || []) {
+      summary.total += 1;
+      const capacity = workerCapacityClass(worker);
+      if (Object.prototype.hasOwnProperty.call(summary, capacity)) summary[capacity] += 1;
+    }
+    return summary;
   }
 
   function labelsText(worker) {
@@ -339,7 +377,7 @@
     ];
   }
 
-  function commandContent(action, worker, key, reason, labels = null) {
+  function commandContent(action, worker, key, reason, labels = null, cleanupMode = null) {
     const content = {
       worker_pubkey: worker.pubkey,
       reason: reason || '',
@@ -350,6 +388,7 @@
       }
     };
     if (labels) content.labels = labels;
+    if (cleanupMode) content.cleanup_mode = cleanupMode;
     return content;
   }
 
@@ -388,13 +427,13 @@
     notice = { type, message };
   }
 
-  async function publishWorkerAction(worker, action, reason, labels = null) {
+  async function publishWorkerAction(worker, action, reason, labels = null, cleanupMode = null) {
     if (!worker?.pubkey) throw new Error('Worker pubkey is required');
     const key = idempotencyKey(action, worker);
     const result = await publishCommand({
       kind: action.kind,
       tags: commandTags(action, worker, key),
-      content: commandContent(action, worker, key, reason, labels),
+      content: commandContent(action, worker, key, reason, labels, cleanupMode),
       resultKinds: [WORKER_KINDS.RESULT]
     });
     return resultContent(result);
@@ -406,7 +445,15 @@
 
     let reason = '';
     let labels = null;
+    let cleanupMode = null;
     try {
+      if (action.cleanup) {
+        const input = globalThis.prompt?.('Cleanup mode: reclaimable_only or aggressive', 'reclaimable_only');
+        if (input === null || input === undefined) return;
+        cleanupMode = input.trim();
+        if (!['reclaimable_only', 'aggressive'].includes(cleanupMode)) throw new Error('Cleanup mode must be reclaimable_only or aggressive');
+      }
+
       if (action.labels) {
         const input = globalThis.prompt?.('Worker labels as key=value lines. Empty input clears labels.', labelsText(worker));
         if (input === null || input === undefined) return;
@@ -420,7 +467,7 @@
 
       setActionPending(worker, action, true);
       resetNotice();
-      const content = await publishWorkerAction(worker, action, reason, labels);
+      const content = await publishWorkerAction(worker, action, reason, labels, cleanupMode);
       setNotice('success', content.message || `${action.label} command accepted for ${worker.name || worker.pubkey}`);
     } catch (err) {
       setNotice('error', err?.message || `Failed to publish ${action.label} command`);
@@ -456,6 +503,14 @@
   {#if notice}
     <div class={`notice ${notice.type}`} role="status">{notice.message}</div>
   {/if}
+
+  <div class="fleet-summary" aria-label="Fleet capacity summary">
+    <div class="summary-card"><strong>{fleetSummary.total}</strong><span>Total workers</span></div>
+    <div class="summary-card capacity-open"><strong>{fleetSummary.open}</strong><span>Open</span></div>
+    <div class="summary-card capacity-reduced"><strong>{fleetSummary.reduced}</strong><span>Reduced</span></div>
+    <div class="summary-card capacity-cleanup_only"><strong>{fleetSummary.cleanup_only}</strong><span>Cleanup only</span></div>
+    <div class="summary-card capacity-blocked"><strong>{fleetSummary.blocked}</strong><span>Blocked</span></div>
+  </div>
 
   <div class="filters">
     <label>
@@ -500,6 +555,38 @@
         {#each taskOptions as task}
           <option value={task}>{task}</option>
         {/each}
+      </select>
+    </label>
+
+    <label>
+      <span>Capacity</span>
+      <select bind:value={capacityFilter}>
+        <option value="">All capacity classes</option>
+        <option value="open">open</option>
+        <option value="reduced">reduced</option>
+        <option value="cleanup_only">cleanup_only</option>
+        <option value="blocked">blocked</option>
+      </select>
+    </label>
+
+    <label>
+      <span>Pressure</span>
+      <select bind:value={pressureFilter}>
+        <option value="">All pressure levels</option>
+        <option value="nominal">nominal</option>
+        <option value="warning">warning</option>
+        <option value="critical">critical</option>
+        <option value="unknown">unknown</option>
+      </select>
+    </label>
+
+    <label>
+      <span>Recommended action</span>
+      <select bind:value={recommendedActionFilter}>
+        <option value="">All recommended actions</option>
+        <option value="none">none</option>
+        <option value="cleanup_recommended">cleanup_recommended</option>
+        <option value="operator_intervention">operator_intervention</option>
       </select>
     </label>
 
@@ -568,6 +655,10 @@
             <th>VRAM</th>
             <th>Pricing</th>
             <th>Last Advertisement</th>
+            <th>Pressure</th>
+            <th>Capacity</th>
+            <th>Telemetry</th>
+            <th>Recommended Action</th>
             <th>Actions</th>
           </tr>
         </thead>
@@ -575,6 +666,9 @@
           {#each filteredWorkers as worker}
             {@const liveness = inferWorkerStatus(worker)}
             {@const scheduling = schedulingState(worker)}
+            {@const pressure = workerPressureLevel(worker)}
+            {@const capacity = workerCapacityClass(worker)}
+            {@const recommendedAction = workerRecommendedAction(worker)}
             <tr>
               <td><a class="worker-link" href={`/workers/${encodeURIComponent(worker.pubkey)}`}>{worker.name || '-'}</a></td>
               <td><code>{worker.pubkey?.slice(0, 12)}...</code></td>
@@ -605,6 +699,20 @@
               <td>{workerVRAMLabel(worker)}</td>
               <td>{workerPriceLabel(worker)}</td>
               <td>{workerLastAdvertisementLabel(worker)}</td>
+              <td><span class={`status-badge pressure-${pressure}`}>{pressure}</span></td>
+              <td><span class={`status-badge capacity-${capacity}`}>{capacity}</span></td>
+              <td>
+                {#if hasWorkerTelemetry(worker)}
+                  <div class="telemetry-list">
+                    {#each workerTelemetryIndicators(worker) as [label, value]}
+                      <span class="telemetry-chip"><strong>{label}</strong> {value}</span>
+                    {/each}
+                  </div>
+                {:else}
+                  <span class="muted">no telemetry</span>
+                {/if}
+              </td>
+              <td><span class="recommended-action">{recommendedAction}</span></td>
               <td>
                 <details class="action-menu">
                   <summary>Actions</summary>
@@ -628,7 +736,7 @@
             </tr>
           {/each}
           {#if filteredWorkers.length === 0}
-            <tr><td colspan="13" class="empty">No workers match the selected filters</td></tr>
+            <tr><td colspan="17" class="empty">No workers match the selected filters</td></tr>
           {/if}
         </tbody>
       </table>
@@ -654,6 +762,30 @@
 
   .notice.success { border-color: rgba(34, 197, 94, 0.5); color: #86efac; background: rgba(34, 197, 94, 0.08); }
   .notice.error { border-color: rgba(239, 68, 68, 0.5); color: #fca5a5; background: rgba(239, 68, 68, 0.08); }
+
+  .fleet-summary {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 0.75rem;
+    margin-bottom: 1rem;
+  }
+
+  .summary-card {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    border: 1px solid var(--border-color, #2a2a4a);
+    border-radius: 0.5rem;
+    padding: 0.85rem 1rem;
+    background: var(--surface-bg, #141426);
+  }
+
+  .summary-card strong { font-size: 1.5rem; line-height: 1; }
+  .summary-card span { color: var(--text-muted); font-size: 0.82rem; text-transform: uppercase; }
+  .summary-card.capacity-open { border-color: rgba(34, 197, 94, 0.45); }
+  .summary-card.capacity-reduced { border-color: rgba(234, 179, 8, 0.5); }
+  .summary-card.capacity-cleanup_only { border-color: rgba(249, 115, 22, 0.5); }
+  .summary-card.capacity-blocked { border-color: rgba(239, 68, 68, 0.5); }
 
   .filters {
     display: grid;
@@ -728,7 +860,7 @@
     gap: 0.375rem;
   }
 
-  .status-badge, .label-chip {
+  .status-badge, .label-chip, .telemetry-chip {
     display: inline-flex;
     align-items: center;
     gap: 0.35rem;
@@ -765,6 +897,27 @@
   .scheduling-draining { border-color: rgba(59, 130, 246, 0.5); color: #93c5fd; }
   .scheduling-maintenance { border-color: rgba(168, 85, 247, 0.5); color: #d8b4fe; }
   .scheduling-disabled { border-color: rgba(239, 68, 68, 0.5); color: #fca5a5; }
+
+  .pressure-nominal, .capacity-open { border-color: rgba(34, 197, 94, 0.45); color: #86efac; }
+  .pressure-warning, .capacity-reduced { border-color: rgba(234, 179, 8, 0.5); color: #fde68a; }
+  .pressure-critical, .capacity-blocked { border-color: rgba(239, 68, 68, 0.5); color: #fca5a5; }
+  .pressure-unknown { border-color: rgba(148, 163, 184, 0.5); color: #cbd5e1; }
+  .capacity-cleanup_only { border-color: rgba(249, 115, 22, 0.5); color: #fdba74; }
+
+  .telemetry-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+    min-width: 13rem;
+  }
+
+  .telemetry-chip {
+    color: var(--text-muted);
+    text-transform: none;
+  }
+
+  .telemetry-chip strong { color: var(--text-color, #fff); }
+  .recommended-action { white-space: nowrap; }
 
   .action-menu { position: relative; min-width: 8rem; }
   .action-menu summary { cursor: pointer; color: var(--primary, #8b5cf6); }

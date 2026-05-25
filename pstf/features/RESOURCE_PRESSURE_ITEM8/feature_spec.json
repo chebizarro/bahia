@@ -1,0 +1,16 @@
+{
+  "feature_id": "RESOURCE_PRESSURE_ITEM8",
+  "title": "Fleet Health + Capacity-Aware Workers UI",
+  "issue": "bahia-22p4",
+  "intent": "Surface backend worker telemetry and pressure assessment in the web UI so operators can see fleet capacity, filter by pressure state, request cleanup, and preview ML placement with resource-pressure-aware ranking.",
+  "observed_inputs": [
+    "Worker JSON includes telemetry and pressure objects from backend event content.",
+    "Workers page already reads worker objects from web stores and publishes worker commands through publishCommand.",
+    "ML preview computes local eligibility scores in web/src/routes/ml/page-model.js."
+  ],
+  "scope": [
+    "web/src/routes/workers/+page.svelte",
+    "web/src/routes/workers/list-utils.js",
+    "web/src/routes/ml/page-model.js"
+  ]
+}

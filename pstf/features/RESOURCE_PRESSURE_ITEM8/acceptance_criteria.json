@@ -1,0 +1,9 @@
+{
+  "criteria": [
+    {"id": "AC1", "statement": "Workers page renders fleet summary counts for total, open, reduced, cleanup_only, and blocked workers."},
+    {"id": "AC2", "statement": "Workers page supports filters for capacity class, pressure level, and recommended action."},
+    {"id": "AC3", "statement": "Worker rows display pressure, capacity class, recommended action, and compact telemetry indicators with a no-telemetry fallback."},
+    {"id": "AC4", "statement": "Worker action menu can publish worker.cleanup.request Kind 5100 with operator-selected cleanup_mode for any scheduling state."},
+    {"id": "AC5", "statement": "ML placement preview rejects blocked and cleanup_only workers, penalizes reduced workers by 5000 score points, and leaves missing pressure data unpenalized."}
+  ]
+}

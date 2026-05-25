@@ -98,6 +98,45 @@ describe('Inference placement page model', () => {
     expect(resolveEndpointForInput(endpoints, 'qwen')).toBeNull();
   });
 
+  it('rejects or penalizes workers according to pressure capacity class', () => {
+    const reducedWorker = {
+      ...onlineWorker,
+      pubkey: 'c'.repeat(64),
+      name: 'gpu-reduced',
+      pressure: { capacity_class: 'reduced' }
+    };
+    const blockedWorker = {
+      ...onlineWorker,
+      pubkey: 'd'.repeat(64),
+      name: 'gpu-blocked',
+      pressure: { capacity_class: 'blocked' }
+    };
+    const cleanupOnlyWorker = {
+      ...onlineWorker,
+      pubkey: 'e'.repeat(64),
+      name: 'gpu-cleanup',
+      pressure: { capacity_class: 'cleanup_only' }
+    };
+
+    const preview = previewWorkerEligibility([reducedWorker, blockedWorker, cleanupOnlyWorker, onlineWorker], {
+      runtime_preference: 'vllm',
+      accelerator: 'gpu_nvidia_cuda',
+      min_vram_gb: '24',
+      pinned_worker: '',
+      label_selector: '',
+      worker_selector: '',
+      rollout_from_labels: '',
+      rollout_to_labels: ''
+    });
+
+    const openScore = preview.eligible_workers.find((candidate) => candidate.worker_pubkey === onlineWorker.pubkey).score;
+    const reducedScore = preview.eligible_workers.find((candidate) => candidate.worker_pubkey === reducedWorker.pubkey).score;
+    expect(preview.eligible_workers.map((candidate) => candidate.worker_pubkey)).toEqual([onlineWorker.pubkey, reducedWorker.pubkey]);
+    expect(reducedScore).toBe(openScore - 5000);
+    expect(preview.rejected_workers.find((candidate) => candidate.worker_pubkey === blockedWorker.pubkey).reason).toContain('capacity blocked');
+    expect(preview.rejected_workers.find((candidate) => candidate.worker_pubkey === cleanupOnlyWorker.pubkey).reason).toContain('cleanup-only mode');
+  });
+
   it('rejects all non-pinned workers when a pin is selected', () => {
     const preview = previewWorkerEligibility([drainingWorker, onlineWorker], {
       runtime_preference: 'vllm',

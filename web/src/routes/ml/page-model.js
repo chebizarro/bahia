@@ -397,8 +397,21 @@ export function previewWorkerEligibility(workers, form) {
       continue;
     }
 
+    const capacityClass = String(worker?.pressure?.capacity_class || '').trim().toLowerCase();
+    if (capacityClass === 'blocked') {
+      candidate.reason = `${workerName} rejected: worker capacity blocked due to resource pressure`;
+      rejected.push(candidate);
+      continue;
+    }
+    if (capacityClass === 'cleanup_only') {
+      candidate.reason = `${workerName} rejected: worker in cleanup-only mode`;
+      rejected.push(candidate);
+      continue;
+    }
+
     candidate.eligible = true;
     candidate.score = Math.max(0, totalVRAM - minVRAM) + (runtime === 'vllm' && accelerator === 'gpu_nvidia_cuda' ? 10000 : 0);
+    if (capacityClass === 'reduced') candidate.score -= 5000;
     candidate.reason = `worker ${workerName} satisfies ML placement requirements`;
     eligible.push(candidate);
   }

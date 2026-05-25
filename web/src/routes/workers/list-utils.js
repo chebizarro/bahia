@@ -185,3 +185,50 @@ export function workerLastAdvertisementLabel(worker) {
   const value = worker?.last_advertisement_at;
   return value ? value.slice(0, 19).replace('T', ' ') : '-';
 }
+
+export function workerPressureLevel(worker) {
+  const value = String(worker?.pressure?.overall_level || '').trim().toLowerCase();
+  return ['unknown', 'nominal', 'warning', 'critical'].includes(value) ? value : 'unknown';
+}
+
+export function workerCapacityClass(worker) {
+  const value = String(worker?.pressure?.capacity_class || '').trim().toLowerCase();
+  return ['open', 'reduced', 'cleanup_only', 'blocked'].includes(value) ? value : 'open';
+}
+
+export function workerRecommendedAction(worker) {
+  const value = String(worker?.pressure?.recommended_action || '').trim().toLowerCase();
+  return ['none', 'cleanup_recommended', 'operator_intervention'].includes(value) ? value : 'none';
+}
+
+function percentLabel(value) {
+  const percent = Number(value);
+  return Number.isFinite(percent) ? `${Math.round(percent)}%` : '—';
+}
+
+export function workerTelemetryIndicators(worker) {
+  const telemetry = worker?.telemetry && typeof worker.telemetry === 'object' ? worker.telemetry : null;
+  if (!telemetry) return [];
+
+  const accelerators = Array.isArray(telemetry.accelerators) ? telemetry.accelerators : [];
+  const vramPercents = accelerators
+    .map((accelerator) => {
+      const total = Number(accelerator?.memory_total_bytes || 0);
+      const free = Number(accelerator?.memory_free_bytes || 0);
+      if (!Number.isFinite(total) || total <= 0 || !Number.isFinite(free)) return null;
+      return ((total - free) / total) * 100;
+    })
+    .filter((value) => Number.isFinite(value));
+  const vramPercent = vramPercents.length > 0 ? Math.max(...vramPercents) : null;
+
+  return [
+    ['mem', percentLabel(telemetry.memory?.used_percent)],
+    ['disk', percentLabel(telemetry.disk?.used_percent)],
+    ['vram', percentLabel(vramPercent)],
+    ['thermal', telemetry.thermal?.throttled ? 'throttled' : percentLabel(telemetry.thermal?.max_temperature_c).replace('%', '°C')]
+  ];
+}
+
+export function hasWorkerTelemetry(worker) {
+  return Boolean(worker?.telemetry && typeof worker.telemetry === 'object');
+}

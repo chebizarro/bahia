@@ -1,0 +1,6 @@
+{
+  "tests": [
+    {"id": "T1", "criteria": ["AC1", "AC2", "AC3", "AC4", "AC5"], "command": "cd web && npx svelte-check --threshold warning", "type": "static", "status": "blocked", "notes": "Command ran after npm cache escalation and reported pre-existing continuity import errors in src/routes/continuity plus unrelated warnings; no diagnostics were reported for touched workers or ML files."},
+    {"id": "T2", "criteria": ["AC5"], "command": "cd web && npm run test:unit -- ml-page-model.test.js", "type": "unit", "status": "passed", "notes": "6 tests passed, including pressure capacity-class rejection and reduced-score penalty coverage."}
+  ]
+}
