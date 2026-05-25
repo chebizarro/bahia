@@ -1,0 +1,11 @@
+{
+  "feature_id": "bahia-2jti",
+  "title": "Wire FIPS DNS backend into validation and app runtime",
+  "observed_behavior": "The DNS domain and adapter include a FIPS backend, but DNS config validation rejected type fips and app DNS runtime construction had no FIPS backend case.",
+  "intended_behavior": "DNS backend config accepts type fips and app DNS runtime instantiates the real FIPS hosts backend using configured hosts_path or /etc/fips/hosts by default.",
+  "scope": [
+    "internal/config/config.go",
+    "internal/app/app.go",
+    "internal/config/config_test.go"
+  ]
+}

@@ -1,0 +1,10 @@
+{
+  "feature_id": "bahia-xa2h",
+  "title": "Fix FIPS bridge relay subscription filter",
+  "observed_behavior": "The bridge relay subscription used multi-character custom tag filters #capability and #env, causing common relays to miss matching events because they do not index those tags.",
+  "intended_behavior": "The bridge subscribes narrowly by kind and Bahia author only, then applies capability and environment filters locally after validated event parsing.",
+  "scope": [
+    "internal/fipsbridge/bridge.go",
+    "internal/fipsbridge/bridge_test.go"
+  ]
+}

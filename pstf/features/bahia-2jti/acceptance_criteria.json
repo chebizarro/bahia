@@ -1,0 +1,15 @@
+{
+  "feature_id": "bahia-2jti",
+  "criteria": [
+    {
+      "id": "AC1",
+      "description": "DNS validation accepts backend type fips and defaults missing hosts_path to /etc/fips/hosts.",
+      "tests": ["go test ./internal/config/..."]
+    },
+    {
+      "id": "AC2",
+      "description": "DNS runtime construction instantiates dns.NewFIPSBackend(hosts_path, logger) for backend type fips.",
+      "tests": ["go build ./..."]
+    }
+  ]
+}

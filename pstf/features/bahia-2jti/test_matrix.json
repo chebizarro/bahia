@@ -1,0 +1,15 @@
+{
+  "feature_id": "bahia-2jti",
+  "tests": [
+    {
+      "command": "go test ./internal/config/...",
+      "covers": ["AC1"],
+      "result": "passed"
+    },
+    {
+      "command": "go build ./...",
+      "covers": ["AC2"],
+      "result": "passed"
+    }
+  ]
+}

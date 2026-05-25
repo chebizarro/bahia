@@ -1,0 +1,15 @@
+{
+  "feature_id": "bahia-xa2h",
+  "criteria": [
+    {
+      "id": "AC1",
+      "description": "The FIPS bridge relay subscription filter contains only kind 31976 and the configured Bahia author, with no #capability or #env tag filters.",
+      "tests": ["go test ./internal/fipsbridge/..."]
+    },
+    {
+      "id": "AC2",
+      "description": "Capability and environment filters are applied locally in event handling after event validation and parsing.",
+      "tests": ["go test ./internal/fipsbridge/..."]
+    }
+  ]
+}

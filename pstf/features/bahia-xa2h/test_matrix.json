@@ -1,0 +1,15 @@
+{
+  "feature_id": "bahia-xa2h",
+  "tests": [
+    {
+      "command": "go test ./internal/fipsbridge/...",
+      "covers": ["AC1", "AC2"],
+      "result": "passed"
+    },
+    {
+      "command": "go build ./...",
+      "covers": ["AC1", "AC2"],
+      "result": "passed"
+    }
+  ]
+}
