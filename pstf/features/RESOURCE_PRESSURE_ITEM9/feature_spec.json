@@ -1,0 +1,18 @@
+{
+  "feature_id": "RESOURCE_PRESSURE_ITEM9",
+  "title": "Resource Pressure Rollout Hardening and Integration Testing",
+  "issue": "bahia-4sid",
+  "intent": "Verify mixed-version resource-pressure safety across evaluator, admission, monitor, and repository stale-write behavior before rollout.",
+  "observed_inputs": [
+    "Old worker advertisements may omit telemetry and pressure fields.",
+    "Telemetry collectors can omit unavailable host, Docker, GPU, or thermal signals.",
+    "Relay delivery can reorder worker advertisements by event arrival time."
+  ],
+  "scope": [
+    "internal/service/worker_pressure_evaluator.go",
+    "internal/service/resource_pressure_integration_test.go",
+    "internal/service/worker_pressure_monitor_test.go",
+    "internal/repository/pg_worker_stalewrite_test.go",
+    "docs/rollout/resource-pressure-mixed-version.md"
+  ]
+}

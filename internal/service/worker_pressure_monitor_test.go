@@ -24,16 +24,26 @@ func TestWorkerPressureMonitorSamePressureNoChange(t *testing.T) {
 	}
 }
 
-func TestWorkerPressureMonitorCapacityClassTransitionChanged(t *testing.T) {
+func TestWorkerPressureMonitorCapacityClassTransitions(t *testing.T) {
 	monitor := NewWorkerPressureMonitor()
-	monitor.Observe(workerPressureObservation("worker-a", time.Unix(100, 0), domain.WorkerCapacityOpen))
-
-	previous, current, changed := monitor.Observe(workerPressureObservation("worker-a", time.Unix(101, 0), domain.WorkerCapacityBlocked))
-	if !changed {
-		t.Fatal("capacity class transition should report changed=true")
+	previous, current, changed := monitor.Observe(workerPressureObservation("worker-a", time.Unix(100, 0), domain.WorkerCapacityOpen))
+	if changed || previous != nil || current == nil || current.CapacityClass != domain.WorkerCapacityOpen {
+		t.Fatalf("first observation should establish baseline: previous=%#v current=%#v changed=%v", previous, current, changed)
 	}
-	if previous == nil || previous.CapacityClass != domain.WorkerCapacityOpen || current == nil || current.CapacityClass != domain.WorkerCapacityBlocked {
-		t.Fatalf("unexpected transition snapshots: previous=%#v current=%#v", previous, current)
+
+	previous, current, changed = monitor.Observe(workerPressureObservation("worker-a", time.Unix(101, 0), domain.WorkerCapacityReduced))
+	if !changed || previous == nil || previous.CapacityClass != domain.WorkerCapacityOpen || current == nil || current.CapacityClass != domain.WorkerCapacityReduced {
+		t.Fatalf("nominal to warning transition not detected: previous=%#v current=%#v changed=%v", previous, current, changed)
+	}
+
+	previous, current, changed = monitor.Observe(workerPressureObservation("worker-a", time.Unix(102, 0), domain.WorkerCapacityReduced))
+	if changed || previous == nil || previous.CapacityClass != domain.WorkerCapacityReduced || current == nil || current.CapacityClass != domain.WorkerCapacityReduced {
+		t.Fatalf("warning to warning should not transition: previous=%#v current=%#v changed=%v", previous, current, changed)
+	}
+
+	previous, current, changed = monitor.Observe(workerPressureObservation("worker-a", time.Unix(103, 0), domain.WorkerCapacityOpen))
+	if !changed || previous == nil || previous.CapacityClass != domain.WorkerCapacityReduced || current == nil || current.CapacityClass != domain.WorkerCapacityOpen {
+		t.Fatalf("warning to nominal recovery not detected: previous=%#v current=%#v changed=%v", previous, current, changed)
 	}
 }
 

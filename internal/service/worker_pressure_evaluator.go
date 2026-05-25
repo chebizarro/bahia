@@ -9,6 +9,8 @@ import (
 
 const gibibyte int64 = 1024 * 1024 * 1024
 
+const workerTelemetryStaleThreshold = 10 * time.Minute
+
 // WorkerPressureThresholds contains Bahia-owned pressure policy defaults.
 type WorkerPressureThresholds struct {
 	MemoryWarningMinBytes  int64
@@ -79,8 +81,21 @@ func AssessWithThresholds(worker domain.Worker, now time.Time, thresholds Worker
 		return assessment
 	}
 
-	standbyReserve := hasHotOrWarmStandby(worker)
 	telemetry := worker.Telemetry
+	if !telemetry.SampledAt.IsZero() && now.UTC().Sub(telemetry.SampledAt.UTC()) > workerTelemetryStaleThreshold {
+		assessment.OverallLevel = domain.WorkerPressureWarning
+		assessment.CapacityClass = domain.WorkerCapacityReduced
+		assessment.RecommendedAction = domain.WorkerPressureActionOperatorIntervention
+		assessment.Signals = append(assessment.Signals, domain.WorkerPressureSignal{
+			Name:              "telemetry_stale",
+			Level:             domain.WorkerPressureUnknown,
+			RecommendedAction: domain.WorkerPressureActionOperatorIntervention,
+			Reason:            "worker telemetry sample is stale",
+		})
+		return assessment
+	}
+
+	standbyReserve := hasHotOrWarmStandby(worker)
 	if telemetry.Memory != nil && telemetry.Memory.TotalBytes > 0 {
 		warningFloor := maxInt64(thresholds.MemoryWarningMinBytes, int64(float64(telemetry.Memory.TotalBytes)*thresholds.MemoryWarningMinRatio))
 		criticalFloor := maxInt64(thresholds.MemoryCriticalMinBytes, int64(float64(telemetry.Memory.TotalBytes)*thresholds.MemoryCriticalMinRatio))
@@ -89,6 +104,13 @@ func AssessWithThresholds(worker domain.Worker, now time.Time, thresholds Worker
 			criticalFloor += warningFloor / 2
 		}
 		assessment.Signals = append(assessment.Signals, freeBytesSignal("memory", telemetry.Memory.AvailableBytes, warningFloor, criticalFloor, false, 0))
+	} else {
+		assessment.Signals = append(assessment.Signals, domain.WorkerPressureSignal{
+			Name:              "memory",
+			Level:             domain.WorkerPressureUnknown,
+			RecommendedAction: domain.WorkerPressureActionOperatorIntervention,
+			Reason:            "memory telemetry unavailable",
+		})
 	}
 
 	if telemetry.Disk != nil && telemetry.Disk.TotalBytes > 0 {
@@ -188,6 +210,12 @@ func classifyAssessment(assessment *domain.WorkerPressureAssessment) {
 		}
 		if signal.RecommendedAction == domain.WorkerPressureActionOperatorIntervention {
 			operatorIntervention = true
+		}
+		if signal.Level == domain.WorkerPressureUnknown && signal.RecommendedAction == domain.WorkerPressureActionOperatorIntervention {
+			if assessment.OverallLevel != domain.WorkerPressureCritical {
+				assessment.OverallLevel = domain.WorkerPressureWarning
+			}
+			warning = true
 		}
 		switch signal.Level {
 		case domain.WorkerPressureCritical:

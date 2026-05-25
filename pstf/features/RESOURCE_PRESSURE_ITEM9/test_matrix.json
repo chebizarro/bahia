@@ -1,0 +1,6 @@
+{
+  "tests": [
+    {"id": "T1", "criteria": ["AC1", "AC2", "AC3", "AC5", "AC6"], "command": "go test ./internal/service/ -run \"Pressure|Admission|Mixed\" -v -count=1", "type": "unit-integration", "status": "passed", "notes": "Passed on 2026-05-25. Covers requested pressure/admission mixed-version tests; telemetry degradation also verified by explicit TestTelemetryDegradationOmitsUnavailableCollectorSignals run because the requested regex does not match its name."},
+    {"id": "T2", "criteria": ["AC4"], "command": "go test ./internal/repository/ -run TestWorkerStaleWriteGuardSemanticsPreserveNewestAdvertisement -v -count=1", "type": "unit", "status": "passed", "notes": "Passed on 2026-05-25. Logic-level coverage for SQL guard WHERE EXCLUDED.last_advertisement_at >= workers.last_advertisement_at."}
+  ]
+}

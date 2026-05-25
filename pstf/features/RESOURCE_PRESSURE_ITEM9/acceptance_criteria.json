@@ -1,0 +1,10 @@
+{
+  "criteria": [
+    {"id": "AC1", "statement": "Mixed old/new worker behavior is documented and tested: old workers without telemetry remain eligible with reduced capacity; new workers with fresh full telemetry remain open."},
+    {"id": "AC2", "statement": "Partial collector scenarios degrade cleanly: unavailable memory becomes unknown/reduced, unavailable disk/GPU/thermal signals are omitted, and all-missing telemetry is reduced."},
+    {"id": "AC3", "statement": "Stale telemetry older than ten minutes is treated as degraded."},
+    {"id": "AC4", "statement": "Worker advertisement stale-write guard preserves newer telemetry and pressure under relay reordering while accepting same-timestamp replacement."},
+    {"id": "AC5", "statement": "End-to-end disk-pressure lifecycle blocks standard admission, allows cleanup admission, then unblocks standard admission after pressure resolves."},
+    {"id": "AC6", "statement": "Worker pressure monitor reports capacity transitions for degradation and recovery without reporting unchanged warning states."}
+  ]
+}
