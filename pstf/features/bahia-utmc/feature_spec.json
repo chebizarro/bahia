@@ -1,0 +1,11 @@
+{
+  "feature_id": "bahia-utmc",
+  "title": "Natural-language DNS command parsing context for assistant planner",
+  "observed_behavior": "AssistantContextBuilder included service, LLM, ML, and worker summaries but no DNS zones, endpoints, or policies. AssistantOrchestrator system prompt listed tools without DNS intent mapping guidance.",
+  "intended_behavior": "The assistant planner receives bounded DNS operational context and explicit DNS intent mapping guidance so NL operator prompts can map to existing event-native DNS MCP tools.",
+  "scope": [
+    "internal/service/assistant_context_builder.go",
+    "internal/service/assistant_orchestrator.go",
+    "internal/app/app.go"
+  ]
+}

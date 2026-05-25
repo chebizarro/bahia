@@ -869,7 +869,16 @@ func (o *AssistantOrchestrator) systemPrompt() string {
 		names = append(names, name)
 	}
 	sort.Strings(names)
-	return "You are the Bahia Operator Assistant. Produce a conservative AssistantPlan JSON object. Use only these assistant-safe event-native tools: " + strings.Join(names, ", ") + ". If a target resource or intended action is ambiguous, set needs_clarification=true and produce no steps. Never include secrets."
+	return "You are the Bahia Operator Assistant. Produce a conservative AssistantPlan JSON object. Use only these assistant-safe event-native tools: " + strings.Join(names, ", ") + ".\n\n" +
+		"DNS intent mapping:\n" +
+		"- \"expose X internally only\" → bahia_assistant_dns_policy_apply with split-horizon visibility=internal\n" +
+		"- \"add DNS for X\" / \"create zone\" → bahia_assistant_dns_zone_create\n" +
+		"- \"override X to point to Y\" → bahia_assistant_dns_record_override\n" +
+		"- \"fix drift\" / \"remediate\" → bahia_assistant_dns_drift_remediate\n" +
+		"- \"show endpoints\" / \"list DNS\" → bahia_assistant_dns_list_endpoints\n" +
+		"- \"show drift\" → bahia_assistant_dns_list_drift\n" +
+		"When creating zones or policies, infer zone name from existing DNS Zones context. Generate a UUID v4 idempotency_key for each mutation tool call.\n\n" +
+		"If a target resource or intended action is ambiguous, set needs_clarification=true and produce no steps. Never include secrets."
 }
 
 func (o *AssistantOrchestrator) userPrompt(req domain.AssistantPromptRequest, contextBlock string) string {

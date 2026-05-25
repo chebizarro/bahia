@@ -1,0 +1,21 @@
+{
+  "feature_id": "bahia-utmc",
+  "criteria": [
+    {
+      "id": "AC1",
+      "description": "Assistant context includes DNS zones, endpoints, and policies when a DNS registry is configured."
+    },
+    {
+      "id": "AC2",
+      "description": "Assistant context omits DNS sections when no DNS registry is configured."
+    },
+    {
+      "id": "AC3",
+      "description": "Assistant system prompt includes DNS-specific natural-language intent mapping guidance for existing assistant DNS tools."
+    },
+    {
+      "id": "AC4",
+      "description": "Application wiring passes DNS endpoint, zone, and policy registry state into the assistant context builder when DNS projection is configured."
+    }
+  ]
+}

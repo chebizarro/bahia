@@ -1,0 +1,25 @@
+{
+  "feature_id": "bahia-utmc",
+  "tests": [
+    {
+      "name": "TestAssistantContextBuilderIncludesDNSContextWhenRegistryProvided",
+      "acceptance_criteria": ["AC1"],
+      "command": "go test ./internal/service/..."
+    },
+    {
+      "name": "TestAssistantContextBuilderOmitsDNSContextWhenRegistryMissing",
+      "acceptance_criteria": ["AC2"],
+      "command": "go test ./internal/service/..."
+    },
+    {
+      "name": "TestAssistantOrchestratorSystemPromptIncludesDNSGuidance",
+      "acceptance_criteria": ["AC3"],
+      "command": "go test ./internal/service/..."
+    },
+    {
+      "name": "internal/app package build/test",
+      "acceptance_criteria": ["AC4"],
+      "command": "go test ./internal/app/... && go build ./..."
+    }
+  ]
+}

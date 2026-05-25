@@ -512,6 +512,7 @@ func New(cfg *config.Config) (*App, error) {
 
 	// DNS persistence repositories are optional until concrete PostgreSQL adapters are available.
 	var dnsZoneRepo repository.DNSZoneRepository
+	var dnsPolicyRepo repository.DNSPolicyRepository
 	var dnsRecordOverrideRepo repository.DNSRecordOverrideRepository
 
 	var dnsProjector *reconcile.DNSProjector
@@ -738,7 +739,11 @@ func New(cfg *config.Config) (*App, error) {
 	if cfg.Assistant.Enabled {
 		identity := bootstrapOperatorAssistant(ctx, cfg, controlPlaneRelays, logger)
 		assistantIdentity = identity
-		contextBuilder := service.NewAssistantContextBuilder(registry, llmRegistry, mlRegistry, nil, service.AssistantContextBuilderConfig{})
+		var assistantDNS service.AssistantDNSRegistry
+		if dnsProjector != nil {
+			assistantDNS = assistantDNSRegistryAdapter{endpoints: dnsProjector, zones: dnsZoneRepo, staticZones: dnsZones, policies: dnsPolicyRepo}
+		}
+		contextBuilder := service.NewAssistantContextBuilder(registry, llmRegistry, mlRegistry, assistantDNS, nil, service.AssistantContextBuilderConfig{})
 		chatClient := llmadapter.NewChatClient(llmadapter.ChatClientConfig{
 			BaseURL: cfg.Assistant.LLMBaseURL,
 			Model:   cfg.Assistant.LLMModel,
@@ -1538,6 +1543,36 @@ type staticDNSZoneProjectionSource struct {
 
 func (s staticDNSZoneProjectionSource) ListDNSZones() []domain.DNSZone {
 	return append([]domain.DNSZone(nil), s.zones...)
+}
+
+type assistantDNSRegistryAdapter struct {
+	endpoints interface {
+		ListDNSEndpoints(ctx context.Context) ([]domain.DNSEndpoint, error)
+	}
+	zones       repository.DNSZoneRepository
+	staticZones []domain.DNSZone
+	policies    repository.DNSPolicyRepository
+}
+
+func (a assistantDNSRegistryAdapter) ListDNSEndpoints(ctx context.Context) ([]domain.DNSEndpoint, error) {
+	if a.endpoints == nil {
+		return nil, nil
+	}
+	return a.endpoints.ListDNSEndpoints(ctx)
+}
+
+func (a assistantDNSRegistryAdapter) ListDNSZones(ctx context.Context) ([]domain.DNSZone, error) {
+	if a.zones != nil {
+		return a.zones.List(ctx)
+	}
+	return append([]domain.DNSZone(nil), a.staticZones...), nil
+}
+
+func (a assistantDNSRegistryAdapter) ListDNSPolicies(ctx context.Context) ([]domain.DNSPolicy, error) {
+	if a.policies == nil {
+		return nil, nil
+	}
+	return a.policies.List(ctx)
 }
 
 type configDNSBackendProjectionSource struct {

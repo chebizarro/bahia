@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"net"
 	"sort"
 	"strings"
 
@@ -17,6 +18,7 @@ type AssistantContextBuilder struct {
 	services AssistantServiceRegistry
 	llm      AssistantLLMRegistry
 	ml       AssistantMLRegistry
+	dns      AssistantDNSRegistry
 	workers  AssistantWorkerCatalog
 	maxChars int
 }
@@ -49,6 +51,13 @@ type AssistantMLRegistry interface {
 	GetInferenceEndpoint(ctx context.Context, id uuid.UUID) (*domain.MLInferenceEndpoint, error)
 }
 
+// AssistantDNSRegistry provides DNS state for assistant context.
+type AssistantDNSRegistry interface {
+	ListDNSEndpoints(ctx context.Context) ([]domain.DNSEndpoint, error)
+	ListDNSZones(ctx context.Context) ([]domain.DNSZone, error)
+	ListDNSPolicies(ctx context.Context) ([]domain.DNSPolicy, error)
+}
+
 // AssistantWorkerCatalog is the worker-catalog surface needed for context assembly.
 type AssistantWorkerCatalog interface {
 	GetOnlineWorkers() []*domain.Worker
@@ -60,13 +69,14 @@ func NewAssistantContextBuilder(
 	services AssistantServiceRegistry,
 	llm AssistantLLMRegistry,
 	ml AssistantMLRegistry,
+	dns AssistantDNSRegistry,
 	workers AssistantWorkerCatalog,
 	config AssistantContextBuilderConfig,
 ) *AssistantContextBuilder {
 	if config.MaxChars <= 0 {
 		config.MaxChars = defaultAssistantContextMaxChars
 	}
-	return &AssistantContextBuilder{services: services, llm: llm, ml: ml, workers: workers, maxChars: config.MaxChars}
+	return &AssistantContextBuilder{services: services, llm: llm, ml: ml, dns: dns, workers: workers, maxChars: config.MaxChars}
 }
 
 // BuildContext returns a structured, bounded, secret-free text block for LLM planning.
@@ -248,6 +258,32 @@ func (b *AssistantContextBuilder) appendRegistrySummaries(ctx context.Context, o
 			fmt.Fprintf(out, "- endpoint_id=%s environment_id=%s drift=%s gateway=%s backend_health=%s runtime=%s updated_at=%s\n", st.EndpointID, st.EnvironmentID, st.DriftStatus, st.GatewayStatus, st.BackendHealth, st.RuntimeKind, st.UpdatedAt.Format(timeFormat))
 		}
 	}
+	if b.dns != nil {
+		zones, err := b.dns.ListDNSZones(ctx)
+		if err != nil {
+			return fmt.Errorf("list dns zones: %w", err)
+		}
+		endpoints, err := b.dns.ListDNSEndpoints(ctx)
+		if err != nil {
+			return fmt.Errorf("list dns endpoints: %w", err)
+		}
+		policies, err := b.dns.ListDNSPolicies(ctx)
+		if err != nil {
+			return fmt.Errorf("list dns policies: %w", err)
+		}
+		writeSection(out, "DNS Zones")
+		for _, zone := range limitSlice(zones, 25) {
+			fmt.Fprintf(out, "- name=%s visibility=%s backend=%s\n", zone.Name, zone.Visibility, zone.BackendRef)
+		}
+		writeSection(out, "DNS Endpoints")
+		for _, ep := range limitSlice(endpoints, 40) {
+			fmt.Fprintf(out, "- fqdn=%s family=%s zone=%s address=%s type=%s health=%s drift=%s\n", ep.FQDN, ep.Family, ep.Zone, ep.Address, assistantDNSRecordType(ep.Address), ep.Health, ep.DriftStatus)
+		}
+		writeSection(out, "DNS Policies")
+		for _, p := range limitSlice(policies, 20) {
+			fmt.Fprintf(out, "- id=%s name=%s zone=%s enabled=%t\n", p.ID, p.Name, uuidPtrString(p.ZoneID), p.Enabled)
+		}
+	}
 	if b.workers != nil {
 		writeSection(out, "Workers")
 		workers := b.workers.GetOnlineWorkers()
@@ -350,6 +386,24 @@ func limitMLStates(items []domain.MLInferenceState, n int) []domain.MLInferenceS
 		return items
 	}
 	return items[:n]
+}
+
+func limitSlice[T any](items []T, n int) []T {
+	if len(items) <= n {
+		return items
+	}
+	return items[:n]
+}
+
+func assistantDNSRecordType(address string) domain.DNSRecordType {
+	ip := net.ParseIP(strings.TrimSpace(address))
+	if ip == nil {
+		return domain.DNSRecordTypeCNAME
+	}
+	if ip.To4() != nil {
+		return domain.DNSRecordTypeA
+	}
+	return domain.DNSRecordTypeAAAA
 }
 
 var _ interface {

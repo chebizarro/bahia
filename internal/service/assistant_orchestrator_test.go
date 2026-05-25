@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -186,6 +187,33 @@ func TestAssistantOrchestratorRejectsUnknownToolAtPlanningTime(t *testing.T) {
 	}
 	if invoker.callCount() != 0 {
 		t.Fatalf("invalid plan dispatched tool calls: %d", invoker.callCount())
+	}
+}
+
+func TestAssistantOrchestratorSystemPromptIncludesDNSGuidance(t *testing.T) {
+	orchestrator := NewAssistantOrchestrator(AssistantOrchestratorConfig{AllowedToolNames: []string{
+		"bahia_assistant_dns_policy_apply",
+		"bahia_assistant_dns_zone_create",
+		"bahia_assistant_dns_record_override",
+		"bahia_assistant_dns_drift_remediate",
+		"bahia_assistant_dns_list_endpoints",
+		"bahia_assistant_dns_list_drift",
+	}})
+
+	got := orchestrator.systemPrompt()
+	for _, want := range []string{
+		"DNS intent mapping:",
+		"\"expose X internally only\" → bahia_assistant_dns_policy_apply with split-horizon visibility=internal",
+		"\"add DNS for X\" / \"create zone\" → bahia_assistant_dns_zone_create",
+		"\"override X to point to Y\" → bahia_assistant_dns_record_override",
+		"\"fix drift\" / \"remediate\" → bahia_assistant_dns_drift_remediate",
+		"\"show endpoints\" / \"list DNS\" → bahia_assistant_dns_list_endpoints",
+		"\"show drift\" → bahia_assistant_dns_list_drift",
+		"Generate a UUID v4 idempotency_key for each mutation tool call.",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("system prompt missing %q:\n%s", want, got)
+		}
 	}
 }
 
