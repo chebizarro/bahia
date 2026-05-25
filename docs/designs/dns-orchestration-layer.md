@@ -306,32 +306,25 @@ const (
 ### 5.1 Interface definition
 
 ```go
-// DNSBackend is the pluggable interface for DNS record management.
-// Adapters translate Bahia's projected records into backend-specific operations.
-type DNSBackend interface {
-    // CreateZone creates a new managed DNS zone.
-    CreateZone(ctx context.Context, zone *domain.DNSZone) error
-    
-    // DeleteZone removes a managed DNS zone and all its records.
-    DeleteZone(ctx context.Context, zoneID uuid.UUID) error
-    
-    // UpsertRecord creates or updates a single DNS record.
-    UpsertRecord(ctx context.Context, record *domain.DNSRecord) error
-    
-    // DeleteRecord removes a single DNS record.
-    DeleteRecord(ctx context.Context, zoneID uuid.UUID, recordName, recordType string) error
-    
+// Backend is the pluggable boundary for DNS zone snapshots.
+// Adapters translate Bahia's projected zone snapshots into backend-specific state.
+type Backend interface {
+    // BackendType identifies the backend adapter family.
+    BackendType() domain.DNSBackendType
+
+    // Health verifies backend reachability and readiness.
+    Health(ctx context.Context) error
+
     // ListRecords returns all records in a zone, for drift comparison.
-    ListRecords(ctx context.Context, zoneID uuid.UUID) ([]domain.DNSRecord, error)
-    
-    // SyncZone atomically replaces all records in a zone with the projected set.
+    ListRecords(ctx context.Context, zone domain.DNSZone) ([]domain.DNSRecord, error)
+
+    // SyncZone replaces the backend zone snapshot with the projected record set.
     // Backends that support transactional updates should use them.
-    SyncZone(ctx context.Context, zone *domain.DNSZone, records []domain.DNSRecord) error
-    
-    // Health returns the backend's current health status.
-    Health(ctx context.Context) (domain.HealthStatus, error)
+    SyncZone(ctx context.Context, zone domain.DNSZone, records []domain.DNSRecord) error
 }
 ```
+
+The shipped backend model is snapshot-sync only. Earlier drafts considered record-level CRUD methods (`CreateZone`, `DeleteZone`, `UpsertRecord`, `DeleteRecord`), but those are not implemented backend primitives. Zone definitions and operator overrides are persisted separately; backend adapters receive the complete projected zone through `SyncZone`.
 
 ### 5.2 Planned adapters
 
@@ -606,11 +599,11 @@ For each zone:
   2. Policies filter/transform endpoints (split-horizon, exclusions, weight bias)
   3. Projector derives DNSRecords from filtered endpoints
   4. Backend adapter lists actual records (ListRecords)
-  5. Diff: projected vs actual
-     - Records in projected but not actual → UpsertRecord
-     - Records in actual but not projected → DeleteRecord
-     - Records in both but different value/TTL → UpsertRecord
-     - Records in both and identical → no-op
+  5. Diff: projected snapshot vs actual snapshot
+     - Any projected/actual mismatch is drift
+     - Record-level create/update/delete operations were considered but are not implemented backend methods
+     - The reconciler remediates drift by calling SyncZone with the complete projected record set
+     - Identical snapshots require no backend write
   6. Emit audit events for changes
   7. Update DNSBackendState read model (kind 31978) with sync timestamp
   8. If diff was non-empty, emit drift detection event (kind 31022)
@@ -948,9 +941,9 @@ dns:
    → DNSEndpoint { FQDN: "drydock-review.prod.cascadia", Address: "10.0.1.44", Health: "healthy" }
 6. DNS Projector derives records
    → DNSRecord { Name: "drydock-review", Zone: "prod.cascadia", Type: "A", Value: "10.0.1.44" }
-7. DNS Reconciler compares with backend
-   → Record not in backend → UpsertRecord
-8. CoreDNS adapter writes to etcd
+7. DNS Reconciler compares the projected zone snapshot with backend records
+   → Snapshot drift detected → SyncZone with the complete projected record set
+8. CoreDNS adapter writes the synced snapshot to etcd
    → key: /skydns/cascadia/prod/drydock-review → {"host": "10.0.1.44"}
 9. CoreDNS serves:
    drydock-review.prod.cascadia → 10.0.1.44

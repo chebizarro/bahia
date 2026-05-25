@@ -70,9 +70,14 @@ func (o *recordingDNSPersistentOperator) ListOverridesByZone(_ context.Context, 
 	return overrides, nil
 }
 
-type recordingDNSPolicyRepository struct{}
+type recordingDNSPolicyRepository struct {
+	created []domain.DNSPolicy
+}
 
-func (r *recordingDNSPolicyRepository) Create(context.Context, *domain.DNSPolicy) error { return nil }
+func (r *recordingDNSPolicyRepository) Create(_ context.Context, policy *domain.DNSPolicy) error {
+	r.created = append(r.created, *policy)
+	return nil
+}
 func (r *recordingDNSPolicyRepository) Get(context.Context, uuid.UUID) (*domain.DNSPolicy, error) {
 	return nil, nil
 }
@@ -204,7 +209,7 @@ func TestDNSDurableHandlersInvalidPayloadsReturnErrors(t *testing.T) {
 	}
 }
 
-func TestDNSPolicyApplyValidPayloadTriggersReconcile(t *testing.T) {
+func TestDNSPolicyApplyValidPayloadPersistsPolicyAndTriggersReconcile(t *testing.T) {
 	reactor, capture, pubkey, operator := newDNSHandlerTestReactor(t)
 	operator.policyRepo = &recordingDNSPolicyRepository{}
 	ttl := 120
@@ -218,9 +223,23 @@ func TestDNSPolicyApplyValidPayloadTriggersReconcile(t *testing.T) {
 
 	reactor.handleDNSPolicyApply(context.Background(), event)
 
+	if len(operator.policyRepo.created) != 1 {
+		t.Fatalf("expected one policy persisted, got %#v", operator.policyRepo.created)
+	}
+	created := operator.policyRepo.created[0]
+	if created.Name != "latency-aware" {
+		t.Fatalf("persisted policy name = %q, want latency-aware", created.Name)
+	}
+	if created.ID == uuid.Nil {
+		t.Fatalf("expected generated policy ID")
+	}
+	if created.CreatedAt.IsZero() || created.UpdatedAt.IsZero() {
+		t.Fatalf("expected policy timestamps to be set, got created=%s updated=%s", created.CreatedAt, created.UpdatedAt)
+	}
 	if operator.reconcileAll != 1 {
 		t.Fatalf("expected ReconcileAll once, got %d", operator.reconcileAll)
 	}
+	assertDNSPublishedKind(t, capture.events, KindDNSOperationStatus)
 	result := assertDNSPublishedKind(t, capture.events, KindDNSPolicyApplyResult)
 	assertDNSResultStatus(t, result, "success")
 	assertDNSResultStep(t, result, "completed")

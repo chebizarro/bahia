@@ -227,7 +227,15 @@ func (r *Reactor) handleDNSPolicyApply(ctx context.Context, event *nostr.Event) 
 		_ = r.publishDNSOperationResult(ctx, event, KindDNSPolicyApplyResult, dnsActionPolicyApply, "error", "validation_error", err.Error(), map[string]any{"policy": policy.Name, "policy_id": policy.ID.String()})
 		return
 	}
-	logger.Info("accepted DNS policy apply request", "policy_id", policy.ID.String(), "policy", policy.Name, "rules", len(policy.Rules))
+	if err := policyRepo.Create(ctx, &policy); err != nil {
+		logger.Warn("DNS policy persistence failed", "policy_id", policy.ID.String(), "policy", policy.Name, "error", err)
+		_ = r.publishDNSOperationResult(ctx, event, KindDNSPolicyApplyResult, dnsActionPolicyApply, "error", "persist_failed", err.Error(), map[string]any{"policy": policy.Name, "policy_id": policy.ID.String(), "rule_count": len(policy.Rules)})
+		return
+	}
+	logger.Info("persisted DNS policy apply request", "policy_id", policy.ID.String(), "policy", policy.Name, "rules", len(policy.Rules))
+	if err := r.publishDNSOperationStatus(ctx, event, dnsActionPolicyApply, "reconciling", "DNS policy persisted; reconcile requested", ""); err != nil {
+		logger.Warn("publish DNS policy apply status failed", "error", err)
+	}
 	if err := r.dnsOperator.ReconcileAll(ctx); err != nil {
 		logger.Warn("DNS policy apply reconcile failed", "policy_id", policy.ID.String(), "error", err)
 		_ = r.publishDNSOperationResult(ctx, event, KindDNSPolicyApplyResult, dnsActionPolicyApply, "error", "reconcile_failed", err.Error(), map[string]any{"policy": policy.Name, "policy_id": policy.ID.String(), "rule_count": len(policy.Rules)})
