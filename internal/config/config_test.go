@@ -61,6 +61,9 @@ func TestDefaults(t *testing.T) {
 	if cfg.Nostr.Sidecar.MaxQueryLimit != 500 {
 		t.Errorf("default sidecar MaxQueryLimit = %d", cfg.Nostr.Sidecar.MaxQueryLimit)
 	}
+	if cfg.WorkerPressure.MemoryWarningMinGB != 4 || cfg.WorkerPressure.DiskWarningMinGB != 40 || cfg.WorkerPressure.VRAMWarningMinGB != 4 {
+		t.Errorf("worker pressure defaults = %#v", cfg.WorkerPressure)
+	}
 }
 
 func TestDBConfigDSN(t *testing.T) {
@@ -199,15 +202,16 @@ func TestDBConfigDSN_SpecialCharacters(t *testing.T) {
 func TestLoadFromEnvVars(t *testing.T) {
 	// Set env vars using single-underscore convention (matches .env.example).
 	envs := map[string]string{
-		"BAHIA_DB_HOST":               "envhost",
-		"BAHIA_DB_PORT":               "9999",
-		"BAHIA_DB_MAX_OPEN_CONNS":     "42",
-		"BAHIA_SERVER_READ_TIMEOUT":   "5s",
-		"BAHIA_SERVER_PORT":           "3000",
-		"BAHIA_NOSTR_PUBLISH_ENABLED": "false",
-		"BAHIA_RUNTIME_DOCKER_HOST":   "tcp://remote:2375",
-		"BAHIA_LOG_LEVEL":             "debug",
-		"BAHIA_RECONCILE_ENABLED":     "false",
+		"BAHIA_DB_HOST":                               "envhost",
+		"BAHIA_DB_PORT":                               "9999",
+		"BAHIA_DB_MAX_OPEN_CONNS":                     "42",
+		"BAHIA_SERVER_READ_TIMEOUT":                   "5s",
+		"BAHIA_SERVER_PORT":                           "3000",
+		"BAHIA_NOSTR_PUBLISH_ENABLED":                 "false",
+		"BAHIA_RUNTIME_DOCKER_HOST":                   "tcp://remote:2375",
+		"BAHIA_LOG_LEVEL":                             "debug",
+		"BAHIA_RECONCILE_ENABLED":                     "false",
+		"BAHIA_WORKER_PRESSURE_MEMORY_WARNING_MIN_GB": "8",
 	}
 	for k, v := range envs {
 		t.Setenv(k, v)
@@ -244,6 +248,46 @@ func TestLoadFromEnvVars(t *testing.T) {
 	}
 	if cfg.Reconcile.Enabled != false {
 		t.Error("Reconcile.Enabled should be false")
+	}
+	if cfg.WorkerPressure.MemoryWarningMinGB != 8 {
+		t.Errorf("WorkerPressure.MemoryWarningMinGB = %d, want 8", cfg.WorkerPressure.MemoryWarningMinGB)
+	}
+}
+
+func TestLoadWorkerPressureConfigOverridesDefaults(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte(`worker_pressure:
+  memory_warning_min_gb: 12
+  memory_warning_min_ratio: 0.25
+  thermal_warning_c: 80
+`), 0o644); err != nil {
+		t.Fatalf("writing temp config: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if cfg.WorkerPressure.MemoryWarningMinGB != 12 {
+		t.Fatalf("MemoryWarningMinGB = %d, want 12", cfg.WorkerPressure.MemoryWarningMinGB)
+	}
+	if cfg.WorkerPressure.MemoryWarningRatio != 0.25 {
+		t.Fatalf("MemoryWarningRatio = %v, want 0.25", cfg.WorkerPressure.MemoryWarningRatio)
+	}
+	if cfg.WorkerPressure.DiskWarningMinGB != 40 {
+		t.Fatalf("DiskWarningMinGB default = %d, want 40", cfg.WorkerPressure.DiskWarningMinGB)
+	}
+	if cfg.WorkerPressure.ThermalWarningC != 80 {
+		t.Fatalf("ThermalWarningC = %v, want 80", cfg.WorkerPressure.ThermalWarningC)
+	}
+}
+
+func TestValidateWorkerPressureRejectsUnsafeThresholds(t *testing.T) {
+	cfg := Defaults()
+	cfg.WorkerPressure.MemoryWarningMinGB = 1
+	cfg.WorkerPressure.MemoryCriticalMinGB = 2
+	if err := cfg.validate(); err == nil || !strings.Contains(err.Error(), "memory_warning_min_gb") {
+		t.Fatalf("validate() error = %v, want memory threshold ordering error", err)
 	}
 }
 

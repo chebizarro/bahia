@@ -96,6 +96,7 @@ func New(cfg *config.Config) (*App, error) {
 
 	ctx := context.Background()
 	policy := NewModePolicy(configuredMode(cfg.Mode))
+	pressureThresholds := workerPressureThresholds(cfg.WorkerPressure)
 
 	// Event publisher and tier0/tier1 continuity stores are available before the
 	// disposable PostgreSQL projection cache is attempted.
@@ -276,7 +277,7 @@ func New(cfg *config.Config) (*App, error) {
 	workerStatePublisher.ConfigureAudit(nostrEventRepo, logger)
 
 	// Worker policy service for environment-specific worker selection.
-	workerPolicySvc := service.NewWorkerPolicyService(workerRepo, logger)
+	workerPolicySvc := service.NewWorkerPolicyService(workerRepo, logger, service.WithWorkerPolicyPressureThresholds(pressureThresholds))
 
 	// Runtime resolver — selects Docker, Compose, or Kubernetes per service/environment.
 	runtimeRegistryAuth := runtimeRegistryAuth(cfg)
@@ -465,7 +466,7 @@ func New(cfg *config.Config) (*App, error) {
 	// long-running orchestration on the existing LLM path until dedicated buckets.
 	mlRegistryRepo := repository.NewPgMLRegistryRepository(pool)
 	mlRegistry := service.NewMLRegistryService(mlRegistryRepo, publisher, logger, service.WithMLEnvironmentRepository(envRepo))
-	workerReadModelSvc := service.NewWorkerReadModelService(workerRepo, registry, mlRegistry, workerPolicySvc, service.NewMLPlacementService(workerRepo, logger), logger)
+	workerReadModelSvc := service.NewWorkerReadModelService(workerRepo, registry, mlRegistry, workerPolicySvc, service.NewMLPlacementService(workerRepo, logger, service.WithMLPlacementPressureThresholds(pressureThresholds)), logger)
 	workerCleanupOrchestrator := service.NewWorkerCleanupOrchestrator(workerRepo, workerReadModelSvc, loomCleanupClient{client: loomClient}, publisher, service.WorkerCleanupConfig{Mode: cfg.WorkerCleanup.Mode, Cooldown: cfg.WorkerCleanup.Cooldown, TargetFreeGB: cfg.WorkerCleanup.TargetFreeGB}, logger)
 	setupWorkerPressureSubscriptions(publisher, pressureMonitor, workerStatePublisher, workerCleanupOrchestrator, workerRepo, logger)
 
@@ -492,7 +493,7 @@ func New(cfg *config.Config) (*App, error) {
 			}
 			provisioners[kind] = p
 		}
-		placementSvc := service.NewLLMPlacementService(workerRepo, logger)
+		placementSvc := service.NewLLMPlacementService(workerRepo, logger, service.WithLLMPlacementPressureThresholds(pressureThresholds))
 		coordOpts := []service.LLMProvisioningCoordinatorOption{
 			service.WithLLMCoordinatorIntervals(cfg.LLM.CoordinatorPollInterval, cfg.LLM.StaleRunTimeout),
 		}
@@ -590,7 +591,7 @@ func New(cfg *config.Config) (*App, error) {
 	}
 
 	// Nostr event processor: maps inbound events to domain commands.
-	nostrProcessor := nostrAdapter.NewProcessorWithPublisher(registry, workerRepo, publisher, logger)
+	nostrProcessor := nostrAdapter.NewProcessorWithPublisher(registry, workerRepo, publisher, logger, nostrAdapter.WithPressureThresholds(pressureThresholds))
 
 	// Blossom client wiring (used for artifact storage and browsing).
 	var blossomClient *blossom.Client
@@ -1891,6 +1892,33 @@ func appendUniqueRelay(relays []string, relay string) []string {
 		}
 	}
 	return append(relays, relay)
+}
+
+func workerPressureThresholds(cfg config.WorkerPressureConfig) service.WorkerPressureThresholds {
+	toBytes := func(gb int) int64 {
+		if gb <= 0 {
+			return 0
+		}
+		return int64(gb) * 1024 * 1024 * 1024
+	}
+	return service.EffectiveWorkerPressureThresholds(service.WorkerPressureThresholds{
+		MemoryWarningMinBytes:  toBytes(cfg.MemoryWarningMinGB),
+		MemoryWarningMinRatio:  cfg.MemoryWarningRatio,
+		MemoryCriticalMinBytes: toBytes(cfg.MemoryCriticalMinGB),
+		MemoryCriticalMinRatio: cfg.MemoryCriticalRatio,
+		DiskWarningMinBytes:    toBytes(cfg.DiskWarningMinGB),
+		DiskWarningMinRatio:    cfg.DiskWarningRatio,
+		DiskCriticalMinBytes:   toBytes(cfg.DiskCriticalMinGB),
+		DiskCriticalMinRatio:   cfg.DiskCriticalRatio,
+		VRAMWarningMinBytes:    toBytes(cfg.VRAMWarningMinGB),
+		VRAMWarningMinRatio:    cfg.VRAMWarningRatio,
+		VRAMCriticalMinBytes:   toBytes(cfg.VRAMCriticalMinGB),
+		VRAMCriticalMinRatio:   cfg.VRAMCriticalRatio,
+		ThermalWarningC:        cfg.ThermalWarningC,
+		ThermalCriticalC:       cfg.ThermalCriticalC,
+		QueueWarningRatio:      cfg.QueueWarningRatio,
+		QueueCriticalRatio:     cfg.QueueCriticalRatio,
+	})
 }
 
 func runtimeRegistryAuth(cfg *config.Config) *runtime.RegistryAuthConfig {

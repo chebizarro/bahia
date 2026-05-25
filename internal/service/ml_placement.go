@@ -39,15 +39,30 @@ type MLPlacementCandidate struct {
 
 // MLPlacementService filters and scores normalized worker AI/ML capabilities.
 type MLPlacementService struct {
-	workerRepo repository.WorkerRepository
-	logger     *zap.Logger
+	workerRepo         repository.WorkerRepository
+	logger             *zap.Logger
+	pressureThresholds WorkerPressureThresholds
 }
 
-func NewMLPlacementService(workerRepo repository.WorkerRepository, logger *zap.Logger) *MLPlacementService {
+type MLPlacementOption func(*MLPlacementService)
+
+func WithMLPlacementPressureThresholds(thresholds WorkerPressureThresholds) MLPlacementOption {
+	return func(s *MLPlacementService) {
+		s.pressureThresholds = EffectiveWorkerPressureThresholds(thresholds)
+	}
+}
+
+func NewMLPlacementService(workerRepo repository.WorkerRepository, logger *zap.Logger, opts ...MLPlacementOption) *MLPlacementService {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
-	return &MLPlacementService{workerRepo: workerRepo, logger: logger}
+	s := &MLPlacementService{workerRepo: workerRepo, logger: logger}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(s)
+		}
+	}
+	return s
 }
 
 func (s *MLPlacementService) SelectCandidate(ctx context.Context, req MLPlacementRequest) (*MLPlacementCandidate, error) {
@@ -85,7 +100,7 @@ func (s *MLPlacementService) PreviewCandidates(ctx context.Context, req MLPlacem
 	candidates := make([]MLPlacementCandidate, 0, len(workers))
 	for i := range workers {
 		w := &workers[i]
-		candidate, reason, ok := scoreMLWorker(w, req)
+		candidate, reason, ok := scoreMLWorker(w, req, s.pressureThresholds)
 		if !ok {
 			candidates = append(candidates, MLPlacementCandidate{RuntimeKind: req.RuntimeKind, Worker: w, Score: 0, Reason: reason, Eligible: false})
 			continue
@@ -150,7 +165,7 @@ func validateMLPlacementRequest(req MLPlacementRequest) error {
 	return nil
 }
 
-func scoreMLWorker(w *domain.Worker, req MLPlacementRequest) (MLPlacementCandidate, string, bool) {
+func scoreMLWorker(w *domain.Worker, req MLPlacementRequest, thresholds WorkerPressureThresholds) (MLPlacementCandidate, string, bool) {
 	admission := Evaluate(WorkerAdmissionRequest{
 		Scope:                AdmissionScopeMLDeploy,
 		Worker:               w,
@@ -161,6 +176,7 @@ func scoreMLWorker(w *domain.Worker, req MLPlacementRequest) (MLPlacementCandida
 		PinnedWorker:         req.PinnedWorker,
 		MinSystemMemoryBytes: bytesFromGiB(req.MinSystemMemoryGB),
 		MinVRAMBytes:         bytesFromGiB(req.MinVRAMGB),
+		PressureThresholds:   thresholds,
 	})
 	if !admission.Eligible {
 		return MLPlacementCandidate{}, fmt.Sprintf("%s rejected: %s", w.Name, admission.Reason), false

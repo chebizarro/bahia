@@ -65,17 +65,32 @@ type ScoredWorker struct {
 
 // WorkerPolicyService selects workers based on environment-specific policies.
 type WorkerPolicyService struct {
-	workerRepo repository.WorkerRepository
-	jobStats   *JobStatsTracker
-	logger     *zap.Logger
+	workerRepo         repository.WorkerRepository
+	jobStats           *JobStatsTracker
+	logger             *zap.Logger
+	pressureThresholds WorkerPressureThresholds
+}
+
+type WorkerPolicyOption func(*WorkerPolicyService)
+
+func WithWorkerPolicyPressureThresholds(thresholds WorkerPressureThresholds) WorkerPolicyOption {
+	return func(s *WorkerPolicyService) {
+		s.pressureThresholds = EffectiveWorkerPressureThresholds(thresholds)
+	}
 }
 
 // NewWorkerPolicyService creates a new WorkerPolicyService.
-func NewWorkerPolicyService(workerRepo repository.WorkerRepository, logger *zap.Logger) *WorkerPolicyService {
-	return &WorkerPolicyService{
+func NewWorkerPolicyService(workerRepo repository.WorkerRepository, logger *zap.Logger, opts ...WorkerPolicyOption) *WorkerPolicyService {
+	s := &WorkerPolicyService{
 		workerRepo: workerRepo,
 		logger:     logger,
 	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(s)
+		}
+	}
+	return s
 }
 
 // SetJobStatsTracker sets the job stats tracker for reputation scoring.
@@ -139,12 +154,13 @@ func (s *WorkerPolicyService) EvaluateDispatchAdmission(ctx context.Context, env
 		selector = env.LoomWorkerSelector
 	}
 	return Evaluate(WorkerAdmissionRequest{
-		Scope:         AdmissionScopeServiceDeploy,
-		Worker:        worker,
-		Selector:      selector,
-		LabelSelector: requiredWorkerPolicyLabels(policy),
-		MaxPrice:      policy.MaxPrice,
-		PinnedWorker:  policy.PinnedWorker,
+		Scope:              AdmissionScopeServiceDeploy,
+		Worker:             worker,
+		Selector:           selector,
+		LabelSelector:      requiredWorkerPolicyLabels(policy),
+		MaxPrice:           policy.MaxPrice,
+		PinnedWorker:       policy.PinnedWorker,
+		PressureThresholds: s.pressureThresholds,
 	}), nil
 }
 
@@ -292,12 +308,13 @@ func (s *WorkerPolicyService) workerEligibilityRejectionReason(w domain.Worker, 
 		selector = env.LoomWorkerSelector
 	}
 	decision := Evaluate(WorkerAdmissionRequest{
-		Scope:         AdmissionScopeServiceDeploy,
-		Worker:        &w,
-		Selector:      selector,
-		LabelSelector: requiredWorkerPolicyLabels(policy),
-		MaxPrice:      policy.MaxPrice,
-		PinnedWorker:  policy.PinnedWorker,
+		Scope:              AdmissionScopeServiceDeploy,
+		Worker:             &w,
+		Selector:           selector,
+		LabelSelector:      requiredWorkerPolicyLabels(policy),
+		MaxPrice:           policy.MaxPrice,
+		PinnedWorker:       policy.PinnedWorker,
+		PressureThresholds: s.pressureThresholds,
 	})
 	if !decision.Eligible {
 		return decision.Reason, false

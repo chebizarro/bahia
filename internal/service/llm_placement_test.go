@@ -111,7 +111,7 @@ func runtimeRelease() *domain.LLMRelease {
 		ID:              uuid.New(),
 		ModelRef:        "hf/model",
 		ModelSource:     domain.ModelSourceHuggingFace,
-		EstimatedVRAMGB: 24,
+		EstimatedVRAMGB: 18,
 		RuntimeBackend:  &domain.LLMRuntimeManagedBackendConfig{Image: "llm:latest", HostPort: 8000, ContainerPort: 8000, HealthPath: "/health"},
 	}
 }

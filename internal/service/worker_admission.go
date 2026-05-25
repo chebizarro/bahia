@@ -3,6 +3,7 @@ package service
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/openagentsinc/bahia/internal/domain"
 )
@@ -31,6 +32,7 @@ type WorkerAdmissionRequest struct {
 	MinSystemMemoryBytes int64
 	MinFreeDiskBytes     int64
 	MinVRAMBytes         int64
+	PressureThresholds   WorkerPressureThresholds
 }
 
 // WorkerAdmissionDecision explains whether a worker can receive a placement.
@@ -53,7 +55,7 @@ func Evaluate(req WorkerAdmissionRequest) WorkerAdmissionDecision {
 	}
 
 	w := req.Worker
-	capacityClass, pressureLevel, cleanupSuggested := workerAdmissionPressure(*w)
+	capacityClass, pressureLevel, cleanupSuggested := workerAdmissionPressure(*w, req.PressureThresholds)
 	cleanupScope := req.Scope == AdmissionScopeCleanup
 
 	if cleanupScope {
@@ -103,12 +105,13 @@ func rejectAdmission(code, reason string, capacityClass domain.WorkerCapacityCla
 	return WorkerAdmissionDecision{Eligible: false, Code: code, Reason: reason, CapacityClass: capacityClass, PressureLevel: pressureLevel, CleanupSuggested: cleanupSuggested}
 }
 
-func workerAdmissionPressure(w domain.Worker) (domain.WorkerCapacityClass, domain.WorkerPressureLevel, bool) {
+func workerAdmissionPressure(w domain.Worker, thresholds WorkerPressureThresholds) (domain.WorkerCapacityClass, domain.WorkerPressureLevel, bool) {
 	if w.Pressure == nil {
 		if w.Telemetry == nil {
 			return domain.WorkerCapacityReduced, domain.WorkerPressureWarning, false
 		}
-		return domain.WorkerCapacityOpen, domain.WorkerPressureNominal, false
+		assessment := AssessWithThresholds(w, time.Now().UTC(), thresholds)
+		return assessment.CapacityClass, assessment.OverallLevel, assessment.RecommendedAction == domain.WorkerPressureActionCleanupRecommended
 	}
 	return w.Pressure.CapacityClass, w.Pressure.OverallLevel, w.Pressure.RecommendedAction == domain.WorkerPressureActionCleanupRecommended
 }
@@ -124,13 +127,13 @@ func dynamicHeadroomAdmission(w domain.Worker, req WorkerAdmissionRequest) (stri
 	if w.Telemetry == nil {
 		return "worker telemetry unavailable for dynamic headroom admission", false
 	}
-	thresholds := DefaultWorkerPressureThresholds()
+	thresholds := EffectiveWorkerPressureThresholds(req.PressureThresholds)
 	if req.MinSystemMemoryBytes > 0 {
 		if w.Telemetry.Memory == nil || w.Telemetry.Memory.TotalBytes <= 0 {
 			return "memory telemetry unavailable for dynamic headroom admission", false
 		}
 		reserve := maxInt64(thresholds.MemoryWarningMinBytes, int64(float64(w.Telemetry.Memory.TotalBytes)*thresholds.MemoryWarningMinRatio))
-		if w.Telemetry.Memory.AvailableBytes < requiredAfterReserve(req.MinSystemMemoryBytes, reserve) {
+		if w.Telemetry.Memory.AvailableBytes < requiredWithReserve(req.MinSystemMemoryBytes, reserve) {
 			return "available system memory below requested dynamic headroom", false
 		}
 	}
@@ -139,7 +142,7 @@ func dynamicHeadroomAdmission(w domain.Worker, req WorkerAdmissionRequest) (stri
 			return "disk telemetry unavailable for dynamic headroom admission", false
 		}
 		reserve := maxInt64(thresholds.DiskWarningMinBytes, int64(float64(w.Telemetry.Disk.TotalBytes)*thresholds.DiskWarningMinRatio))
-		if w.Telemetry.Disk.AvailableBytes < requiredAfterReserve(req.MinFreeDiskBytes, reserve) {
+		if w.Telemetry.Disk.AvailableBytes < requiredWithReserve(req.MinFreeDiskBytes, reserve) {
 			return "available disk below requested dynamic headroom", false
 		}
 	}
@@ -157,19 +160,27 @@ func acceleratorHasVRAMHeadroom(accelerators []domain.WorkerAcceleratorTelemetry
 			continue
 		}
 		reserve := maxInt64(thresholds.VRAMWarningMinBytes, int64(float64(accelerator.MemoryTotalBytes)*thresholds.VRAMWarningMinRatio))
-		if accelerator.MemoryFreeBytes >= requiredAfterReserve(minBytes, reserve) {
+		if accelerator.MemoryFreeBytes >= requiredWithReserve(minBytes, reserve) {
 			return true
 		}
 	}
 	return false
 }
 
-func requiredAfterReserve(minBytes, reserveBytes int64) int64 {
-	if minBytes <= reserveBytes {
-		return 1
+func requiredWithReserve(minBytes, reserveBytes int64) int64 {
+	if minBytes <= 0 {
+		return reserveBytes
 	}
-	return minBytes - reserveBytes
+	if reserveBytes <= 0 {
+		return minBytes
+	}
+	if minBytes > maxInt64Value-reserveBytes {
+		return maxInt64Value
+	}
+	return minBytes + reserveBytes
 }
+
+const maxInt64Value = int64(1<<63 - 1)
 
 func bytesFromGiB(gib int) int64 {
 	if gib <= 0 {

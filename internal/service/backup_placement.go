@@ -23,16 +23,31 @@ type BackupPlacementRequest struct {
 
 // BackupPlacementService resolves backup definition executor placement against Bahia workers.
 type BackupPlacementService struct {
-	workerRepo      repository.WorkerRepository
-	backendResolver BackupBackendResolver
-	logger          *zap.Logger
+	workerRepo         repository.WorkerRepository
+	backendResolver    BackupBackendResolver
+	logger             *zap.Logger
+	pressureThresholds WorkerPressureThresholds
 }
 
-func NewBackupPlacementService(workerRepo repository.WorkerRepository, backendResolver BackupBackendResolver, logger *zap.Logger) *BackupPlacementService {
+type BackupPlacementOption func(*BackupPlacementService)
+
+func WithBackupPlacementPressureThresholds(thresholds WorkerPressureThresholds) BackupPlacementOption {
+	return func(s *BackupPlacementService) {
+		s.pressureThresholds = EffectiveWorkerPressureThresholds(thresholds)
+	}
+}
+
+func NewBackupPlacementService(workerRepo repository.WorkerRepository, backendResolver BackupBackendResolver, logger *zap.Logger, opts ...BackupPlacementOption) *BackupPlacementService {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
-	return &BackupPlacementService{workerRepo: workerRepo, backendResolver: backendResolver, logger: logger}
+	s := &BackupPlacementService{workerRepo: workerRepo, backendResolver: backendResolver, logger: logger}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(s)
+		}
+	}
+	return s
 }
 
 // ValidatePlacement returns an explainable decision and does not treat ordinary unplaceability as an error.
@@ -75,7 +90,7 @@ func (s *BackupPlacementService) ResolveExecutors(ctx context.Context, req Backu
 
 	decision.Candidates = make([]domain.BackupPlacementCandidate, 0, len(workers))
 	for i := range workers {
-		decision.Candidates = append(decision.Candidates, evaluateBackupPlacementWorker(workers[i], definition.ExecutorLabels, requiredWorkerCapabilities))
+		decision.Candidates = append(decision.Candidates, evaluateBackupPlacementWorker(workers[i], definition.ExecutorLabels, requiredWorkerCapabilities, s.pressureThresholds))
 	}
 	sortBackupPlacementCandidates(decision.Candidates, policy)
 
@@ -149,9 +164,9 @@ func (s *BackupPlacementService) appendBackendCapabilityReasons(decision *domain
 	return true
 }
 
-func evaluateBackupPlacementWorker(w domain.Worker, executorLabels []string, requirements []string) domain.BackupPlacementCandidate {
+func evaluateBackupPlacementWorker(w domain.Worker, executorLabels []string, requirements []string, thresholds WorkerPressureThresholds) domain.BackupPlacementCandidate {
 	candidate := domain.BackupPlacementCandidate{WorkerPubKey: w.PubKey, WorkerName: w.Name}
-	admission := Evaluate(WorkerAdmissionRequest{Scope: AdmissionScopeBackup, Worker: &w})
+	admission := Evaluate(WorkerAdmissionRequest{Scope: AdmissionScopeBackup, Worker: &w, PressureThresholds: thresholds})
 	if !admission.Eligible {
 		code := domain.BackupPlacementReasonWorkerStatus
 		if admission.Code == "worker_scheduling" {

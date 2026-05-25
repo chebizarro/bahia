@@ -9,6 +9,7 @@ import (
 	gonostr "github.com/nbd-wtf/go-nostr"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/events"
+	"github.com/openagentsinc/bahia/internal/service"
 	"go.uber.org/zap"
 )
 
@@ -100,6 +101,32 @@ func TestProcessorWorkerAdvertisementParsesTelemetryAssessesPressureAndPublishes
 	}
 	if payload.Worker.Pressure == nil || payload.Worker.Pressure.CapacityClass != domain.WorkerCapacityOpen {
 		t.Fatalf("published worker pressure = %#v", payload.Worker.Pressure)
+	}
+}
+
+func TestProcessorWorkerAdvertisementUsesConfiguredPressureThresholds(t *testing.T) {
+	repo := &captureWorkerRepo{}
+	publisher := &capturePublisher{}
+	thresholds := service.DefaultWorkerPressureThresholds()
+	thresholds.MemoryWarningMinBytes = 48 * 1024 * 1024 * 1024
+	thresholds.MemoryCriticalMinBytes = 24 * 1024 * 1024 * 1024
+	processor := NewProcessorWithPublisher(nil, repo, publisher, zap.NewNop(), WithPressureThresholds(thresholds))
+	sampledAt := time.Now().UTC().Truncate(time.Second)
+	ev := &gonostr.Event{
+		PubKey:    "worker-pubkey",
+		Kind:      kindLoomWorkerAd,
+		CreatedAt: gonostr.Timestamp(sampledAt.Unix()),
+		Content:   fmt.Sprintf(`{"name":"telemetry-worker","max_concurrent_jobs":2,"current_queue_depth":0,"telemetry":{"sampled_at":%q,"memory":{"total_bytes":68719476736,"available_bytes":42949672960},"disk":{"path":"/","total_bytes":1073741824000,"available_bytes":322122547200},"thermal":{"max_temperature_c":60,"throttled":false}}}`, sampledAt.Format(time.RFC3339)),
+	}
+
+	if err := processor.handleWorkerAdvertisement(context.Background(), ev); err != nil {
+		t.Fatalf("handle worker ad: %v", err)
+	}
+	if repo.worker == nil || repo.worker.Pressure == nil || repo.worker.Pressure.CapacityClass != domain.WorkerCapacityReduced {
+		t.Fatalf("pressure did not use configured thresholds: %#v", repo.worker)
+	}
+	if len(publisher.events) != 1 {
+		t.Fatalf("published events = %d, want 1", len(publisher.events))
 	}
 }
 

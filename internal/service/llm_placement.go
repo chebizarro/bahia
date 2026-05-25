@@ -21,16 +21,31 @@ type LLMPlacementCandidate struct {
 
 // LLMPlacementService evaluates hardware-aware backend placement policy.
 type LLMPlacementService struct {
-	workerRepo repository.WorkerRepository
-	logger     *zap.Logger
+	workerRepo         repository.WorkerRepository
+	logger             *zap.Logger
+	pressureThresholds WorkerPressureThresholds
+}
+
+type LLMPlacementOption func(*LLMPlacementService)
+
+func WithLLMPlacementPressureThresholds(thresholds WorkerPressureThresholds) LLMPlacementOption {
+	return func(s *LLMPlacementService) {
+		s.pressureThresholds = EffectiveWorkerPressureThresholds(thresholds)
+	}
 }
 
 // NewLLMPlacementService creates an LLM placement evaluator.
-func NewLLMPlacementService(workerRepo repository.WorkerRepository, logger *zap.Logger) *LLMPlacementService {
+func NewLLMPlacementService(workerRepo repository.WorkerRepository, logger *zap.Logger, opts ...LLMPlacementOption) *LLMPlacementService {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
-	return &LLMPlacementService{workerRepo: workerRepo, logger: logger}
+	s := &LLMPlacementService{workerRepo: workerRepo, logger: logger}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(s)
+		}
+	}
+	return s
 }
 
 // SelectCandidate returns the best backend candidate for route/release/env.
@@ -110,6 +125,7 @@ func (s *LLMPlacementService) runtimeCandidates(kind domain.LLMBackendKind, work
 			MaxPrice:             policy.MaxPrice,
 			MinSystemMemoryBytes: bytesFromGiB(policy.MinSystemMemoryGB),
 			MinVRAMBytes:         bytesFromGiB(minVRAMGB),
+			PressureThresholds:   s.pressureThresholds,
 		})
 		if !admission.Eligible {
 			rejected = append(rejected, fmt.Sprintf("%s rejected for %s: %s", w.Name, kind, admission.Reason))

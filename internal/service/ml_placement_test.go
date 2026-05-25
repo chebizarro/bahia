@@ -258,7 +258,7 @@ func mlWorker(pubkey, name string, queue int, caps domain.WorkerMLCapabilities) 
 	w := llmWorker(pubkey, name, queue, nil)
 	w.MLCapabilities = caps
 	if containsNormalizedString(caps.Accelerators, "gpu_nvidia_cuda") {
-		w.Telemetry.Accelerators = []domain.WorkerAcceleratorTelemetry{{Index: 0, MemoryTotalBytes: 48 * gibibyte, MemoryFreeBytes: 48 * gibibyte}}
+		w.Telemetry.Accelerators = []domain.WorkerAcceleratorTelemetry{{Index: 0, MemoryTotalBytes: 64 * gibibyte, MemoryFreeBytes: 64 * gibibyte}}
 	}
 	return w
 }

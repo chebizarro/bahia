@@ -1,0 +1,23 @@
+{
+  "feature_id": "bahia-zfww",
+  "tests": [
+    {
+      "id": "T1",
+      "command": "GOCACHE=/tmp/bahia-gocache go test ./internal/service -run 'Test(DynamicHeadroom|WorkerAdmission|MLPlacement|LLMPlacement|EndToEndPressureLifecycle|MixedVersionWorkerPressureBehavior)'",
+      "covers": ["AC3", "AC4", "AC5"],
+      "status": "passed"
+    },
+    {
+      "id": "T2",
+      "command": "GOCACHE=/tmp/bahia-gocache go test ./internal/service ./internal/adapters/nostr ./internal/config ./internal/app",
+      "covers": ["AC1", "AC2", "AC3", "AC4", "AC5"],
+      "status": "passed"
+    },
+    {
+      "id": "T3",
+      "command": "GOCACHE=/tmp/bahia-gocache go test ./...",
+      "covers": ["AC1", "AC2", "AC3", "AC4", "AC5"],
+      "status": "passed"
+    }
+  ]
+}

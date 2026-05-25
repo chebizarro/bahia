@@ -16,33 +16,54 @@ import (
 
 // Config is the top-level configuration for Bahia.
 type Config struct {
-	Mode          string                    `koanf:"mode" yaml:"mode"`
-	Server        ServerConfig              `koanf:"server"`
-	DB            DBConfig                  `koanf:"db"`
-	Harbor        HarborConfig              `koanf:"harbor"`
-	Loom          LoomConfig                `koanf:"loom"`
-	Nostr         NostrConfig               `koanf:"nostr"`
-	Reconcile     ReconcileConfig           `koanf:"reconcile"`
-	Runtime       RuntimeConfig             `koanf:"runtime"`
-	Log           LogConfig                 `koanf:"log"`
-	Auth          AuthConfig                `koanf:"auth"`
-	Adoption      AdoptionConfig            `koanf:"adoption"`
-	DirectRuntime DirectRuntimeConfig       `koanf:"direct_runtime_actions"`
-	CORS          CORSConfig                `koanf:"cors"`
-	Blossom       BlossomConfig             `koanf:"blossom"`
-	OCI           OCIServerConfig           `koanf:"oci"`
-	HiveCI        HiveCIConfig              `koanf:"hiveci"`
-	Cashu         CashuConfig               `koanf:"cashu"`
-	Qdrant        QdrantConfig              `koanf:"qdrant"`
-	Telemetry     TelemetryConfig           `koanf:"telemetry"`
-	WorkerCleanup WorkerCleanupConfig       `koanf:"worker_cleanup"`
-	Notifications NotificationsConfig       `koanf:"notifications"`
-	Registry      RegistryAdapterConfig     `koanf:"registry"`
-	LLM           LLMControlplaneConfig     `koanf:"llm"`
-	Packages      PackageControlplaneConfig `koanf:"packages"`
-	Assistant     AssistantConfig           `koanf:"assistant"`
-	DNS           DNSConfig                 `koanf:"dns"`
-	FIPS          FIPSConfig                `koanf:"fips"`
+	Mode           string                    `koanf:"mode" yaml:"mode"`
+	Server         ServerConfig              `koanf:"server"`
+	DB             DBConfig                  `koanf:"db"`
+	Harbor         HarborConfig              `koanf:"harbor"`
+	Loom           LoomConfig                `koanf:"loom"`
+	Nostr          NostrConfig               `koanf:"nostr"`
+	Reconcile      ReconcileConfig           `koanf:"reconcile"`
+	Runtime        RuntimeConfig             `koanf:"runtime"`
+	Log            LogConfig                 `koanf:"log"`
+	Auth           AuthConfig                `koanf:"auth"`
+	Adoption       AdoptionConfig            `koanf:"adoption"`
+	DirectRuntime  DirectRuntimeConfig       `koanf:"direct_runtime_actions"`
+	CORS           CORSConfig                `koanf:"cors"`
+	Blossom        BlossomConfig             `koanf:"blossom"`
+	OCI            OCIServerConfig           `koanf:"oci"`
+	HiveCI         HiveCIConfig              `koanf:"hiveci"`
+	Cashu          CashuConfig               `koanf:"cashu"`
+	Qdrant         QdrantConfig              `koanf:"qdrant"`
+	Telemetry      TelemetryConfig           `koanf:"telemetry"`
+	WorkerPressure WorkerPressureConfig      `koanf:"worker_pressure"`
+	WorkerCleanup  WorkerCleanupConfig       `koanf:"worker_cleanup"`
+	Notifications  NotificationsConfig       `koanf:"notifications"`
+	Registry       RegistryAdapterConfig     `koanf:"registry"`
+	LLM            LLMControlplaneConfig     `koanf:"llm"`
+	Packages       PackageControlplaneConfig `koanf:"packages"`
+	Assistant      AssistantConfig           `koanf:"assistant"`
+	DNS            DNSConfig                 `koanf:"dns"`
+	FIPS           FIPSConfig                `koanf:"fips"`
+}
+
+// WorkerPressureConfig controls Bahia-owned worker pressure and dynamic admission thresholds.
+type WorkerPressureConfig struct {
+	MemoryWarningMinGB  int     `koanf:"memory_warning_min_gb" yaml:"memory_warning_min_gb"`
+	MemoryWarningRatio  float64 `koanf:"memory_warning_min_ratio" yaml:"memory_warning_min_ratio"`
+	MemoryCriticalMinGB int     `koanf:"memory_critical_min_gb" yaml:"memory_critical_min_gb"`
+	MemoryCriticalRatio float64 `koanf:"memory_critical_min_ratio" yaml:"memory_critical_min_ratio"`
+	DiskWarningMinGB    int     `koanf:"disk_warning_min_gb" yaml:"disk_warning_min_gb"`
+	DiskWarningRatio    float64 `koanf:"disk_warning_min_ratio" yaml:"disk_warning_min_ratio"`
+	DiskCriticalMinGB   int     `koanf:"disk_critical_min_gb" yaml:"disk_critical_min_gb"`
+	DiskCriticalRatio   float64 `koanf:"disk_critical_min_ratio" yaml:"disk_critical_min_ratio"`
+	VRAMWarningMinGB    int     `koanf:"vram_warning_min_gb" yaml:"vram_warning_min_gb"`
+	VRAMWarningRatio    float64 `koanf:"vram_warning_min_ratio" yaml:"vram_warning_min_ratio"`
+	VRAMCriticalMinGB   int     `koanf:"vram_critical_min_gb" yaml:"vram_critical_min_gb"`
+	VRAMCriticalRatio   float64 `koanf:"vram_critical_min_ratio" yaml:"vram_critical_min_ratio"`
+	ThermalWarningC     float64 `koanf:"thermal_warning_c" yaml:"thermal_warning_c"`
+	ThermalCriticalC    float64 `koanf:"thermal_critical_c" yaml:"thermal_critical_c"`
+	QueueWarningRatio   float64 `koanf:"queue_warning_ratio" yaml:"queue_warning_ratio"`
+	QueueCriticalRatio  float64 `koanf:"queue_critical_ratio" yaml:"queue_critical_ratio"`
 }
 
 // WorkerCleanupConfig controls pressure-triggered worker cleanup orchestration.
@@ -453,6 +474,27 @@ type NotificationsConfig struct {
 	Kinds      []string `koanf:"kinds"`    // event kinds to notify on (e.g. "deployment.completed")
 }
 
+func defaultWorkerPressureConfig() WorkerPressureConfig {
+	return WorkerPressureConfig{
+		MemoryWarningMinGB:  4,
+		MemoryWarningRatio:  0.20,
+		MemoryCriticalMinGB: 2,
+		MemoryCriticalRatio: 0.10,
+		DiskWarningMinGB:    40,
+		DiskWarningRatio:    0.15,
+		DiskCriticalMinGB:   20,
+		DiskCriticalRatio:   0.08,
+		VRAMWarningMinGB:    4,
+		VRAMWarningRatio:    0.20,
+		VRAMCriticalMinGB:   2,
+		VRAMCriticalRatio:   0.10,
+		ThermalWarningC:     85,
+		ThermalCriticalC:    92,
+		QueueWarningRatio:   0.80,
+		QueueCriticalRatio:  1.0,
+	}
+}
+
 // Defaults returns a Config with sensible default values.
 func Defaults() *Config {
 	return &Config{
@@ -604,6 +646,7 @@ func Defaults() *Config {
 			Enabled:     false,
 			ServiceName: "bahia",
 		},
+		WorkerPressure: defaultWorkerPressureConfig(),
 		WorkerCleanup: WorkerCleanupConfig{
 			Mode:         "recommend_only",
 			Cooldown:     30 * time.Minute,
@@ -642,6 +685,9 @@ func Load(configPath string) (*Config, error) {
 		key := strings.ToLower(strings.TrimPrefix(s, "BAHIA_"))
 		// First, honour explicit double-underscore separators.
 		key = strings.ReplaceAll(key, "__", ".")
+		if strings.HasPrefix(key, "worker_pressure_") {
+			return "worker_pressure." + strings.TrimPrefix(key, "worker_pressure_")
+		}
 		switch key {
 		case "assistant_enabled", "assistant_llm_base_url", "assistant_llm_model", "assistant_llm_api_key":
 			return key
@@ -799,6 +845,9 @@ func (c *Config) validate() error {
 		return err
 	}
 	if err := c.validateFIPS(); err != nil {
+		return err
+	}
+	if err := c.validateWorkerPressure(); err != nil {
 		return err
 	}
 	if err := c.validateRelaySidecar(); err != nil {
@@ -1247,6 +1296,63 @@ func (c *Config) validateFIPS() error {
 	c.FIPS.AllowedNpubs = normalizeStringList(c.FIPS.AllowedNpubs)
 	if c.FIPS.Enabled && len(c.FIPS.RelayURLs) == 0 {
 		return fmt.Errorf("config validation failed: fips.relay_urls requires at least one relay when fips.enabled=true")
+	}
+	return nil
+}
+
+func (c *Config) validateWorkerPressure() error {
+	p := c.WorkerPressure
+	if p.MemoryWarningMinGB <= 0 || p.MemoryCriticalMinGB <= 0 || p.DiskWarningMinGB <= 0 || p.DiskCriticalMinGB <= 0 || p.VRAMWarningMinGB <= 0 || p.VRAMCriticalMinGB <= 0 {
+		return fmt.Errorf("config validation failed: worker_pressure minimum GB thresholds must be > 0")
+	}
+	if p.MemoryWarningMinGB < p.MemoryCriticalMinGB {
+		return fmt.Errorf("config validation failed: worker_pressure.memory_warning_min_gb must be >= memory_critical_min_gb")
+	}
+	if p.DiskWarningMinGB < p.DiskCriticalMinGB {
+		return fmt.Errorf("config validation failed: worker_pressure.disk_warning_min_gb must be >= disk_critical_min_gb")
+	}
+	if p.VRAMWarningMinGB < p.VRAMCriticalMinGB {
+		return fmt.Errorf("config validation failed: worker_pressure.vram_warning_min_gb must be >= vram_critical_min_gb")
+	}
+	if err := validatePressureRatio("memory_warning_min_ratio", p.MemoryWarningRatio); err != nil {
+		return err
+	}
+	if err := validatePressureRatio("memory_critical_min_ratio", p.MemoryCriticalRatio); err != nil {
+		return err
+	}
+	if err := validatePressureRatio("disk_warning_min_ratio", p.DiskWarningRatio); err != nil {
+		return err
+	}
+	if err := validatePressureRatio("disk_critical_min_ratio", p.DiskCriticalRatio); err != nil {
+		return err
+	}
+	if err := validatePressureRatio("vram_warning_min_ratio", p.VRAMWarningRatio); err != nil {
+		return err
+	}
+	if err := validatePressureRatio("vram_critical_min_ratio", p.VRAMCriticalRatio); err != nil {
+		return err
+	}
+	if p.MemoryWarningRatio < p.MemoryCriticalRatio {
+		return fmt.Errorf("config validation failed: worker_pressure.memory_warning_min_ratio must be >= memory_critical_min_ratio")
+	}
+	if p.DiskWarningRatio < p.DiskCriticalRatio {
+		return fmt.Errorf("config validation failed: worker_pressure.disk_warning_min_ratio must be >= disk_critical_min_ratio")
+	}
+	if p.VRAMWarningRatio < p.VRAMCriticalRatio {
+		return fmt.Errorf("config validation failed: worker_pressure.vram_warning_min_ratio must be >= vram_critical_min_ratio")
+	}
+	if p.ThermalWarningC <= 0 || p.ThermalCriticalC <= 0 || p.ThermalWarningC >= p.ThermalCriticalC {
+		return fmt.Errorf("config validation failed: worker_pressure thermal thresholds must be > 0 with warning below critical")
+	}
+	if p.QueueWarningRatio <= 0 || p.QueueCriticalRatio <= 0 || p.QueueWarningRatio >= p.QueueCriticalRatio {
+		return fmt.Errorf("config validation failed: worker_pressure queue ratios must be > 0 with warning below critical")
+	}
+	return nil
+}
+
+func validatePressureRatio(name string, value float64) error {
+	if value <= 0 || value > 1 {
+		return fmt.Errorf("config validation failed: worker_pressure.%s must be > 0 and <= 1", name)
 	}
 	return nil
 }

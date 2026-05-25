@@ -62,6 +62,7 @@ func Assess(worker domain.Worker, now time.Time) *domain.WorkerPressureAssessmen
 // AssessWithThresholds computes a worker pressure assessment from only the
 // worker snapshot, the supplied clock value, and explicit thresholds.
 func AssessWithThresholds(worker domain.Worker, now time.Time, thresholds WorkerPressureThresholds) *domain.WorkerPressureAssessment {
+	thresholds = EffectiveWorkerPressureThresholds(thresholds)
 	assessment := &domain.WorkerPressureAssessment{
 		OverallLevel:      domain.WorkerPressureNominal,
 		CapacityClass:     domain.WorkerCapacityOpen,
@@ -261,6 +262,59 @@ func hasHotOrWarmStandby(worker domain.Worker) bool {
 		}
 	}
 	return false
+}
+
+func EffectiveWorkerPressureThresholds(thresholds WorkerPressureThresholds) WorkerPressureThresholds {
+	defaults := DefaultWorkerPressureThresholds()
+	if thresholds.MemoryWarningMinBytes <= 0 {
+		thresholds.MemoryWarningMinBytes = defaults.MemoryWarningMinBytes
+	}
+	if thresholds.MemoryWarningMinRatio <= 0 {
+		thresholds.MemoryWarningMinRatio = defaults.MemoryWarningMinRatio
+	}
+	if thresholds.MemoryCriticalMinBytes <= 0 {
+		thresholds.MemoryCriticalMinBytes = defaults.MemoryCriticalMinBytes
+	}
+	if thresholds.MemoryCriticalMinRatio <= 0 {
+		thresholds.MemoryCriticalMinRatio = defaults.MemoryCriticalMinRatio
+	}
+	if thresholds.DiskWarningMinBytes <= 0 {
+		thresholds.DiskWarningMinBytes = defaults.DiskWarningMinBytes
+	}
+	if thresholds.DiskWarningMinRatio <= 0 {
+		thresholds.DiskWarningMinRatio = defaults.DiskWarningMinRatio
+	}
+	if thresholds.DiskCriticalMinBytes <= 0 {
+		thresholds.DiskCriticalMinBytes = defaults.DiskCriticalMinBytes
+	}
+	if thresholds.DiskCriticalMinRatio <= 0 {
+		thresholds.DiskCriticalMinRatio = defaults.DiskCriticalMinRatio
+	}
+	if thresholds.VRAMWarningMinBytes <= 0 {
+		thresholds.VRAMWarningMinBytes = defaults.VRAMWarningMinBytes
+	}
+	if thresholds.VRAMWarningMinRatio <= 0 {
+		thresholds.VRAMWarningMinRatio = defaults.VRAMWarningMinRatio
+	}
+	if thresholds.VRAMCriticalMinBytes <= 0 {
+		thresholds.VRAMCriticalMinBytes = defaults.VRAMCriticalMinBytes
+	}
+	if thresholds.VRAMCriticalMinRatio <= 0 {
+		thresholds.VRAMCriticalMinRatio = defaults.VRAMCriticalMinRatio
+	}
+	if thresholds.ThermalWarningC <= 0 {
+		thresholds.ThermalWarningC = defaults.ThermalWarningC
+	}
+	if thresholds.ThermalCriticalC <= 0 {
+		thresholds.ThermalCriticalC = defaults.ThermalCriticalC
+	}
+	if thresholds.QueueWarningRatio <= 0 {
+		thresholds.QueueWarningRatio = defaults.QueueWarningRatio
+	}
+	if thresholds.QueueCriticalRatio <= 0 {
+		thresholds.QueueCriticalRatio = defaults.QueueCriticalRatio
+	}
+	return thresholds
 }
 
 func maxInt64(a, b int64) int64 {

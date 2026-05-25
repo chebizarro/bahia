@@ -1,0 +1,30 @@
+{
+  "feature_id": "bahia-zfww",
+  "criteria": [
+    {
+      "id": "AC1",
+      "statement": "Pressure thresholds are configurable through Bahia config with safe defaults.",
+      "tests": ["TestDefaults", "TestLoadFromEnvVars", "TestLoadWorkerPressureConfigOverridesDefaults", "TestValidateWorkerPressureRejectsUnsafeThresholds"]
+    },
+    {
+      "id": "AC2",
+      "statement": "Nostr processor pressure assessment uses configured thresholds rather than hardcoded evaluator defaults.",
+      "tests": ["TestProcessorWorkerAdvertisementUsesConfiguredPressureThresholds", "TestWorkerAdmissionAssessesMissingPressureWithConfiguredThresholds"]
+    },
+    {
+      "id": "AC3",
+      "statement": "Dynamic headroom admission requires workload minimum plus reserve and covers workload minimum below, equal to, and above reserve.",
+      "tests": ["TestDynamicHeadroomRequiresWorkloadPlusReserveForMemoryScenarios", "TestDynamicHeadroomPreservesDiskAndVRAMReserve"]
+    },
+    {
+      "id": "AC4",
+      "statement": "Service, LLM, ML, and backup admission scopes preserve reserve when dynamic headroom is requested.",
+      "tests": ["TestDynamicHeadroomRequiresWorkloadPlusReserveForMemoryScenarios"]
+    },
+    {
+      "id": "AC5",
+      "statement": "Existing resource-pressure, placement, and admission behavior remains compatible when workers have sufficient reserve headroom.",
+      "tests": ["TestMLPlacementSelectsGPUVLLMWorker", "TestLLMPlacementPrefersOllamaForT7610P40WhenNoL40S", "TestEndToEndPressureLifecycle"]
+    }
+  ]
+}

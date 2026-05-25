@@ -27,29 +27,44 @@ const (
 // Processor maps ingested Nostr events to domain commands.
 // It is designed to be called from the Subscriber as an EventHandler.
 type Processor struct {
-	registry       *service.RegistryService
-	workerRepo     repository.WorkerRepository
-	eventPublisher events.Publisher
-	logger         *zap.Logger
+	registry           *service.RegistryService
+	workerRepo         repository.WorkerRepository
+	eventPublisher     events.Publisher
+	logger             *zap.Logger
+	pressureThresholds service.WorkerPressureThresholds
+}
+
+type ProcessorOption func(*Processor)
+
+func WithPressureThresholds(thresholds service.WorkerPressureThresholds) ProcessorOption {
+	return func(p *Processor) {
+		p.pressureThresholds = service.EffectiveWorkerPressureThresholds(thresholds)
+	}
 }
 
 // NewProcessor creates a new event processor.
 // workerRepo is optional; when nil, Kind 10100 events are logged but not persisted.
-func NewProcessor(registry *service.RegistryService, workerRepo repository.WorkerRepository, logger *zap.Logger) *Processor {
-	return NewProcessorWithPublisher(registry, workerRepo, &events.NoopPublisher{}, logger)
+func NewProcessor(registry *service.RegistryService, workerRepo repository.WorkerRepository, logger *zap.Logger, opts ...ProcessorOption) *Processor {
+	return NewProcessorWithPublisher(registry, workerRepo, &events.NoopPublisher{}, logger, opts...)
 }
 
 // NewProcessorWithPublisher creates a new event processor with an internal event publisher.
-func NewProcessorWithPublisher(registry *service.RegistryService, workerRepo repository.WorkerRepository, eventPublisher events.Publisher, logger *zap.Logger) *Processor {
+func NewProcessorWithPublisher(registry *service.RegistryService, workerRepo repository.WorkerRepository, eventPublisher events.Publisher, logger *zap.Logger, opts ...ProcessorOption) *Processor {
 	if eventPublisher == nil {
 		eventPublisher = &events.NoopPublisher{}
 	}
-	return &Processor{
+	p := &Processor{
 		registry:       registry,
 		workerRepo:     workerRepo,
 		eventPublisher: eventPublisher,
 		logger:         logger.Named("nostr-processor"),
 	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(p)
+		}
+	}
+	return p
 }
 
 // Handle implements EventHandler. It routes each event to the appropriate
@@ -389,7 +404,7 @@ func (p *Processor) handleWorkerAdvertisement(ctx context.Context, ev *gonostr.E
 		return nil
 	}
 
-	canonical.Pressure = service.Assess(*canonical, time.Now().UTC())
+	canonical.Pressure = service.AssessWithThresholds(*canonical, time.Now().UTC(), p.pressureThresholds)
 	if err := p.workerRepo.Upsert(ctx, canonical); err != nil {
 		return fmt.Errorf("upserting worker pressure %s: %w", ev.PubKey, err)
 	}

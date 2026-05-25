@@ -1,0 +1,27 @@
+{
+  "feature_id": "bahia-zfww",
+  "title": "Policy-backed worker pressure thresholds and reserve-preserving dynamic admission",
+  "issue": "bahia-zfww",
+  "observed_behavior": [
+    "internal/service/worker_pressure_evaluator.go exposed DefaultWorkerPressureThresholds and processor/admission paths used those hardcoded defaults directly.",
+    "internal/service/worker_admission.go used requiredAfterReserve(min,reserve), allowing a dynamic placement with only one byte free when the workload minimum was less than or equal to the reserve.",
+    "LLM and ML placement fixtures encoded exact-fit VRAM as eligible, which did not prove reserve preservation."
+  ],
+  "intended_behavior": [
+    "Bahia config owns worker pressure policy defaults and supports operator overrides under worker_pressure.",
+    "Nostr worker advertisement processing assesses pressure with the configured thresholds wired by app.New.",
+    "Worker admission dynamic headroom requires workload minimum plus the warning reserve for memory, disk, and VRAM.",
+    "Placement services pass configured thresholds into admission and tests model workers with explicit reserve headroom where eligibility is expected."
+  ],
+  "scope": [
+    "internal/config/config.go",
+    "internal/app/app.go",
+    "internal/adapters/nostr/processor.go",
+    "internal/service/worker_pressure_evaluator.go",
+    "internal/service/worker_admission.go",
+    "internal/service/worker_policy.go",
+    "internal/service/llm_placement.go",
+    "internal/service/ml_placement.go",
+    "internal/service/backup_placement.go"
+  ]
+}
