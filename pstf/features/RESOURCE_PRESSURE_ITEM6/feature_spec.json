@@ -1,0 +1,16 @@
+{
+  "feature_id": "RESOURCE_PRESSURE_ITEM6",
+  "title": "Universal worker admission service and placement integration",
+  "intent": "All worker-backed placement families delegate common availability, scheduling, price, selector, pressure, and dynamic headroom checks to one admission service. Workerless LLM external_api placement explicitly bypasses worker admission.",
+  "observed_before": [
+    "worker_policy.go, ml_placement.go, llm_placement.go, and backup_placement.go duplicated liveness/scheduling/price/selector checks",
+    "llm_placement.go did not enforce worker scheduling state for runtime-backed placements",
+    "Workers without telemetry were not conservatively rejected for dynamic headroom requests"
+  ],
+  "intended_behavior": [
+    "Admission evaluates ordered common checks before family-specific scoring",
+    "Standard placements reject cleanup_only and blocked capacity classes",
+    "Telemetry-missing workers remain eligible for non-dynamic standard placement with reduced capacity, but reject when memory/disk/VRAM headroom is requested",
+    "LLM external_api placement returns an explicit workerless bypass reason"
+  ]
+}

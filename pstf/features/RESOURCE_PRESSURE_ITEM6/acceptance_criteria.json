@@ -1,0 +1,10 @@
+{
+  "feature_id": "RESOURCE_PRESSURE_ITEM6",
+  "criteria": [
+    {"id": "AC1", "statement": "A shared worker admission service exposes typed scope, request, and decision structures and ordered common admission checks."},
+    {"id": "AC2", "statement": "worker_policy.go, ml_placement.go, llm_placement.go, and backup_placement.go delegate common worker admission checks to the service."},
+    {"id": "AC3", "statement": "LLM worker-backed placement enforces scheduling state and external_api placement uses an explicit workerless admission bypass reason."},
+    {"id": "AC4", "statement": "Telemetry-missing workers are reduced and allowed for non-dynamic placements but rejected when dynamic headroom is requested."},
+    {"id": "AC5", "statement": "ML and LLM dynamic GB minima are converted to byte-level admission headroom checks before family-specific scoring."}
+  ]
+}

@@ -151,11 +151,13 @@ func (s *BackupPlacementService) appendBackendCapabilityReasons(decision *domain
 
 func evaluateBackupPlacementWorker(w domain.Worker, executorLabels []string, requirements []string) domain.BackupPlacementCandidate {
 	candidate := domain.BackupPlacementCandidate{WorkerPubKey: w.PubKey, WorkerName: w.Name}
-	if w.Status != domain.WorkerStatusOnline {
-		candidate.Reasons = append(candidate.Reasons, workerPlacementReason(w, domain.BackupPlacementReasonWorkerStatus, fmt.Sprintf("worker status %s is not online", w.Status), nil, nil))
-	}
-	if !workerSchedulingStateAllowsNewPlacement(w.SchedulingState) {
-		candidate.Reasons = append(candidate.Reasons, workerPlacementReason(w, domain.BackupPlacementReasonWorkerScheduling, workerSchedulingStateRejectionReason(w.SchedulingState), nil, nil))
+	admission := Evaluate(WorkerAdmissionRequest{Scope: AdmissionScopeBackup, Worker: &w})
+	if !admission.Eligible {
+		code := domain.BackupPlacementReasonWorkerStatus
+		if admission.Code == "worker_scheduling" {
+			code = domain.BackupPlacementReasonWorkerScheduling
+		}
+		candidate.Reasons = append(candidate.Reasons, workerPlacementReason(w, code, admission.Reason, nil, nil))
 	}
 	if missing := missingBackupExecutorLabels(w, executorLabels); len(missing) > 0 {
 		candidate.Reasons = append(candidate.Reasons, workerPlacementReason(w, domain.BackupPlacementReasonLabelMismatch, fmt.Sprintf("worker missing executor labels %s", strings.Join(missing, ", ")), missing, nil))

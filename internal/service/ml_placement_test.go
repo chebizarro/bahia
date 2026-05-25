@@ -257,6 +257,9 @@ func TestMLPlacementTieBreaksByWorkerPubkey(t *testing.T) {
 func mlWorker(pubkey, name string, queue int, caps domain.WorkerMLCapabilities) domain.Worker {
 	w := llmWorker(pubkey, name, queue, nil)
 	w.MLCapabilities = caps
+	if containsNormalizedString(caps.Accelerators, "gpu_nvidia_cuda") {
+		w.Telemetry.Accelerators = []domain.WorkerAcceleratorTelemetry{{Index: 0, MemoryTotalBytes: 48 * gibibyte, MemoryFreeBytes: 48 * gibibyte}}
+	}
 	return w
 }
 

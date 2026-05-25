@@ -263,15 +263,20 @@ func (s *WorkerPolicyService) filterWorkers(workers []domain.Worker, policy Work
 }
 
 func (s *WorkerPolicyService) workerEligibilityRejectionReason(w domain.Worker, policy WorkerPolicy, env *domain.Environment) (string, bool) {
-	if w.Status != domain.WorkerStatusOnline {
-		return fmt.Sprintf("worker status %s is not online", w.Status), false
+	var selector map[string]any
+	if policy.Strategy == StrategyPreferred && env != nil {
+		selector = env.LoomWorkerSelector
 	}
-	if policy.PinnedWorker != "" && w.PubKey != policy.PinnedWorker {
-		return fmt.Sprintf("worker does not match pinned_worker %s", policy.PinnedWorker), false
-	}
-
-	if !workerSchedulingStateAllowsNewPlacement(w.SchedulingState) {
-		return workerSchedulingStateRejectionReason(w.SchedulingState), false
+	decision := Evaluate(WorkerAdmissionRequest{
+		Scope:         AdmissionScopeServiceDeploy,
+		Worker:        &w,
+		Selector:      selector,
+		LabelSelector: requiredWorkerPolicyLabels(policy),
+		MaxPrice:      policy.MaxPrice,
+		PinnedWorker:  policy.PinnedWorker,
+	})
+	if !decision.Eligible {
+		return decision.Reason, false
 	}
 
 	for _, pk := range policy.ExcludeWorkers {
@@ -284,22 +289,10 @@ func (s *WorkerPolicyService) workerEligibilityRejectionReason(w domain.Worker, 
 		return fmt.Sprintf("worker queue depth %d exceeds max %d", w.CurrentQueueDepth, policy.MaxQueueDepth), false
 	}
 
-	if policy.MaxPrice > 0 && !s.workerUnderPrice(w, policy.MaxPrice) {
-		return fmt.Sprintf("worker price %d exceeds max %d", lowestPrice(w), policy.MaxPrice), false
-	}
-
-	if reason, ok := workerLabelsMatchReason(w, requiredWorkerPolicyLabels(policy)); !ok {
-		return reason, false
-	}
-
 	for _, req := range policy.RequireSoftware {
 		if !w.HasSoftware(req) {
 			return fmt.Sprintf("worker missing required software %s", req), false
 		}
-	}
-
-	if policy.Strategy == StrategyPreferred && env != nil && !matchesSelector(w, env.LoomWorkerSelector) {
-		return "worker does not match selector", false
 	}
 
 	return "", true
@@ -612,11 +605,6 @@ func lowestPrice(w domain.Worker) int {
 		}
 	}
 	return min
-}
-
-func (s *WorkerPolicyService) workerUnderPrice(w domain.Worker, maxPrice int) bool {
-	price := lowestPrice(w)
-	return price == 0 || price <= maxPrice // free workers always pass
 }
 
 func workerSchedulingStateAllowsNewPlacement(state domain.WorkerSchedulingState) bool {

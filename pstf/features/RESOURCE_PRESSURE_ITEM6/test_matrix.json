@@ -1,0 +1,10 @@
+{
+  "feature_id": "RESOURCE_PRESSURE_ITEM6",
+  "tests": [
+    {"criteria": ["AC1", "AC4"], "test": "TestWorkerAdmissionAllowsTelemetryMissingForNonDynamicPlacement", "evidence": "go test ./internal/service"},
+    {"criteria": ["AC1", "AC4"], "test": "TestWorkerAdmissionRejectsTelemetryMissingForDynamicHeadroom", "evidence": "go test ./internal/service"},
+    {"criteria": ["AC1"], "test": "TestWorkerAdmissionRejectsBlockedCapacityForStandardPlacement", "evidence": "go test ./internal/service"},
+    {"criteria": ["AC3"], "test": "TestWorkerAdmissionWorkerlessBypass, TestLLMPlacementExternalReleaseResolvesExternalAPI", "evidence": "go test ./internal/service"},
+    {"criteria": ["AC2", "AC3", "AC5"], "test": "Existing worker_policy, ml_placement, llm_placement, backup_placement service tests", "evidence": "go test ./internal/service"}
+  ]
+}

@@ -42,9 +42,10 @@ func (s *LLMPlacementService) SelectCandidate(ctx context.Context, route *domain
 	preferences := backendPreferenceOrder(route, release, policy)
 	if len(preferences) > 0 && preferences[0] == domain.LLMBackendKindExternalAPI {
 		if externalAllowed(policy, release) {
+			admission := Evaluate(WorkerAdmissionRequest{Scope: AdmissionScopeWorkerless})
 			return &LLMPlacementCandidate{
 				BackendKind: domain.LLMBackendKindExternalAPI,
-				Reason:      "external_api selected by policy/release",
+				Reason:      "external_api selected by policy/release; " + admission.Reason,
 			}, nil
 		}
 		return nil, fmt.Errorf("no compatible LLM placement target found (external_api unavailable: policy disallows external or release lacks external_backend)")
@@ -61,9 +62,10 @@ func (s *LLMPlacementService) SelectCandidate(ctx context.Context, route *domain
 	for _, kind := range preferences {
 		if kind == domain.LLMBackendKindExternalAPI {
 			if externalAllowed(policy, release) {
+				admission := Evaluate(WorkerAdmissionRequest{Scope: AdmissionScopeWorkerless})
 				return &LLMPlacementCandidate{
 					BackendKind: kind,
-					Reason:      "external_api selected by policy/release",
+					Reason:      "external_api selected by policy/release; " + admission.Reason,
 				}, nil
 			}
 			reasons = append(reasons, "external_api unavailable: policy disallows external or release lacks external_backend")
@@ -99,26 +101,18 @@ func (s *LLMPlacementService) runtimeCandidates(kind domain.LLMBackendKind, work
 	var rejected []string
 	for i := range workers {
 		w := &workers[i]
-		if w.RuntimeTarget == nil {
-			rejected = append(rejected, fmt.Sprintf("%s rejected for %s: runtime_target missing", w.Name, kind))
-			continue
-		}
-		if strings.TrimSpace(w.RuntimeTarget.PublicBaseURL) == "" {
-			rejected = append(rejected, fmt.Sprintf("%s rejected for %s: public_base_url missing", w.Name, kind))
-			continue
-		}
-		if !matchesSelector(*w, selectorFor(policy, env)) {
-			rejected = append(rejected, fmt.Sprintf("%s rejected for %s: selector mismatch", w.Name, kind))
-			continue
-		}
-		if policy.MaxPrice > 0 {
-			if price := lowestPrice(*w); price > 0 && price > policy.MaxPrice {
-				rejected = append(rejected, fmt.Sprintf("%s rejected for %s: price above max", w.Name, kind))
-				continue
-			}
-		}
-		if policy.MinSystemMemoryGB > 0 && (w.Resources == nil || w.Resources.MemoryGB < policy.MinSystemMemoryGB) {
-			rejected = append(rejected, fmt.Sprintf("%s rejected for %s: system memory below minimum", w.Name, kind))
+		minVRAMGB := max(policy.MinGPUMemoryGB, release.EstimatedVRAMGB)
+		admission := Evaluate(WorkerAdmissionRequest{
+			Scope:                AdmissionScopeLLMDeploy,
+			Worker:               w,
+			RequireRuntimeTarget: true,
+			Selector:             selectorFor(policy, env),
+			MaxPrice:             policy.MaxPrice,
+			MinSystemMemoryBytes: bytesFromGiB(policy.MinSystemMemoryGB),
+			MinVRAMBytes:         bytesFromGiB(minVRAMGB),
+		})
+		if !admission.Eligible {
+			rejected = append(rejected, fmt.Sprintf("%s rejected for %s: %s", w.Name, kind, admission.Reason))
 			continue
 		}
 		if !gpuCompatible(*w, kind, policy, release) {

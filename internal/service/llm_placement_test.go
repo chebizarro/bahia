@@ -91,6 +91,18 @@ func llmWorker(pubkey, name string, queue int, accelerators []domain.WorkerAccel
 	}
 	w.Resources = &domain.WorkerResources{MemoryGB: 128}
 	w.Accelerators = accelerators
+	w.Telemetry = &domain.WorkerTelemetry{
+		Memory: &domain.WorkerMemoryTelemetry{TotalBytes: 128 * gibibyte, AvailableBytes: 96 * gibibyte},
+	}
+	for _, accelerator := range accelerators {
+		count := accelerator.Count
+		if count <= 0 {
+			count = 1
+		}
+		for i := 0; i < count; i++ {
+			w.Telemetry.Accelerators = append(w.Telemetry.Accelerators, domain.WorkerAcceleratorTelemetry{Index: len(w.Telemetry.Accelerators), MemoryTotalBytes: int64(accelerator.MemoryGB) * gibibyte, MemoryFreeBytes: int64(accelerator.MemoryGB) * gibibyte})
+		}
+	}
 	return w
 }
 

@@ -151,28 +151,19 @@ func validateMLPlacementRequest(req MLPlacementRequest) error {
 }
 
 func scoreMLWorker(w *domain.Worker, req MLPlacementRequest) (MLPlacementCandidate, string, bool) {
-	if w.Status != domain.WorkerStatusOnline {
-		return MLPlacementCandidate{}, fmt.Sprintf("%s rejected: worker status %s is not online", w.Name, w.Status), false
-	}
-	if req.PinnedWorker != "" && w.PubKey != req.PinnedWorker {
-		return MLPlacementCandidate{}, fmt.Sprintf("%s rejected: worker does not match pinned_worker %s", w.Name, req.PinnedWorker), false
-	}
-	if !workerSchedulingStateAllowsNewPlacement(w.SchedulingState) {
-		return MLPlacementCandidate{}, fmt.Sprintf("%s rejected: %s", w.Name, workerSchedulingStateRejectionReason(w.SchedulingState)), false
-	}
-	if w.RuntimeTarget == nil || strings.TrimSpace(w.RuntimeTarget.PublicBaseURL) == "" {
-		return MLPlacementCandidate{}, fmt.Sprintf("%s rejected: runtime target missing", w.Name), false
-	}
-	if !matchesSelector(*w, req.WorkerSelector) {
-		return MLPlacementCandidate{}, fmt.Sprintf("%s rejected: selector mismatch", w.Name), false
-	}
-	if reason, ok := workerLabelsMatchReason(*w, requiredMLPlacementLabels(req)); !ok {
-		return MLPlacementCandidate{}, fmt.Sprintf("%s rejected: %s", w.Name, reason), false
-	}
-	if req.MaxPrice > 0 {
-		if price := lowestPrice(*w); price > 0 && price > req.MaxPrice {
-			return MLPlacementCandidate{}, fmt.Sprintf("%s rejected: price above max", w.Name), false
-		}
+	admission := Evaluate(WorkerAdmissionRequest{
+		Scope:                AdmissionScopeMLDeploy,
+		Worker:               w,
+		RequireRuntimeTarget: true,
+		Selector:             req.WorkerSelector,
+		LabelSelector:        requiredMLPlacementLabels(req),
+		MaxPrice:             req.MaxPrice,
+		PinnedWorker:         req.PinnedWorker,
+		MinSystemMemoryBytes: bytesFromGiB(req.MinSystemMemoryGB),
+		MinVRAMBytes:         bytesFromGiB(req.MinVRAMGB),
+	})
+	if !admission.Eligible {
+		return MLPlacementCandidate{}, fmt.Sprintf("%s rejected: %s", w.Name, admission.Reason), false
 	}
 	caps := domain.NormalizeWorkerMLCapabilities(*w)
 	if !containsRuntime(caps.Runtimes, req.RuntimeKind) {
@@ -193,9 +184,6 @@ func scoreMLWorker(w *domain.Worker, req MLPlacementRequest) (MLPlacementCandida
 		if !containsNormalizedString(caps.Toolchains, toolchain) {
 			return MLPlacementCandidate{}, fmt.Sprintf("%s rejected: toolchain %s not advertised", w.Name, toolchain), false
 		}
-	}
-	if req.MinSystemMemoryGB > 0 && (w.Resources == nil || w.Resources.MemoryGB < req.MinSystemMemoryGB) {
-		return MLPlacementCandidate{}, fmt.Sprintf("%s rejected: system memory below minimum", w.Name), false
 	}
 	if req.MinVRAMGB > 0 && totalGPUMemoryGB(*w) < req.MinVRAMGB {
 		return MLPlacementCandidate{}, fmt.Sprintf("%s rejected: VRAM below minimum", w.Name), false
