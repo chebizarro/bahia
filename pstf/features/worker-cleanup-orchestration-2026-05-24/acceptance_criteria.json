@@ -4,6 +4,7 @@
     {"id": "AC2", "statement": "Per-worker in-flight dedupe and 30 minute configurable cooldown reject duplicate cleanup attempts; queue-capacity rejection does not burn cooldown."},
     {"id": "AC3", "statement": "Protected refs include active assignment metadata image_ref and standby assignment artifact_ref when available."},
     {"id": "AC4", "statement": "worker.cleanup.request validates worker existence/liveness and publishes terminal worker result including loom_job_id, cleanup_mode, and worker_pubkey."},
-    {"id": "AC5", "statement": "Pressure auto-trigger defaults to recommend_only and only dispatches reclaimable_only when config enables auto and worker label bahia.cleanup.auto=true."}
+    {"id": "AC5", "statement": "Pressure auto-trigger defaults to recommend_only and only dispatches reclaimable_only when config enables auto and worker label bahia.cleanup.auto=true."},
+    {"id": "AC6", "statement": "Workers page cleanup action publishes Bahia control-plane Kind 6006 with worker.cleanup.request tags and JSON content including worker_pubkey, idempotency_key, cleanup_mode, reason, and operator metadata."}
   ]
 }

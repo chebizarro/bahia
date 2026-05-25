@@ -5,6 +5,12 @@
   import { publishCommand, resultContent } from '$lib/stores/public-controlplane.svelte.js';
   import { currentRequesterPubkey } from '$lib/nostr/controlplane-requests.js';
   import {
+    SCHEDULING_STATES,
+    WORKER_COMMANDS,
+    WORKER_KINDS,
+    workerCommandPublishPayload
+  } from './actions.js';
+  import {
     inferWorkerStatus,
     workerFormatsLabel,
     workerToolchainsLabel,
@@ -18,29 +24,6 @@
     hasWorkerTelemetry
   } from './list-utils.js';
 
-  const SCHEDULING_STATES = ['active', 'cordoned', 'draining', 'maintenance', 'disabled'];
-  const WORKER_KINDS = {
-    CLEANUP_REQUEST: 5100,
-    CORDON_REQUEST: 5997,
-    UNCORDON_REQUEST: 5998,
-    DRAIN_REQUEST: 5999,
-    UNDRAIN_REQUEST: 6000,
-    MAINTENANCE_ENTER_REQUEST: 6001,
-    MAINTENANCE_EXIT_REQUEST: 6002,
-    LABELS_UPDATE_REQUEST: 6003,
-    RESULT: 7997
-  };
-
-  const WORKER_COMMANDS = {
-    CLEANUP_REQUEST: 'worker.cleanup.request',
-    CORDON: 'worker.cordon.request',
-    UNCORDON: 'worker.uncordon.request',
-    DRAIN: 'worker.drain.request',
-    UNDRAIN: 'worker.undrain.request',
-    MAINTENANCE_ENTER: 'worker.maintenance.enter.request',
-    MAINTENANCE_EXIT: 'worker.maintenance.exit.request',
-    LABELS_UPDATE: 'worker.labels.update.request'
-  };
 
   const WORKER_ACTIONS = [
     {
@@ -369,28 +352,6 @@
     return `${action.command}:${worker.pubkey}:${randomId()}`;
   }
 
-  function commandTags(action, worker, key) {
-    return [
-      ['d', key],
-      ['worker', worker.pubkey],
-      ['command', action.command]
-    ];
-  }
-
-  function commandContent(action, worker, key, reason, labels = null, cleanupMode = null) {
-    const content = {
-      worker_pubkey: worker.pubkey,
-      reason: reason || '',
-      idempotency_key: key,
-      operator_metadata: {
-        source: 'web.workers.list',
-        requested_by: currentRequesterPubkey() || ''
-      }
-    };
-    if (labels) content.labels = labels;
-    if (cleanupMode) content.cleanup_mode = cleanupMode;
-    return content;
-  }
 
   function actionPendingKey(worker, action) {
     return `${worker.pubkey}:${action.command}`;
@@ -430,12 +391,15 @@
   async function publishWorkerAction(worker, action, reason, labels = null, cleanupMode = null) {
     if (!worker?.pubkey) throw new Error('Worker pubkey is required');
     const key = idempotencyKey(action, worker);
-    const result = await publishCommand({
-      kind: action.kind,
-      tags: commandTags(action, worker, key),
-      content: commandContent(action, worker, key, reason, labels, cleanupMode),
-      resultKinds: [WORKER_KINDS.RESULT]
-    });
+    const result = await publishCommand(workerCommandPublishPayload({
+      action,
+      worker,
+      key,
+      reason,
+      requesterPubkey: currentRequesterPubkey() || '',
+      labels,
+      cleanupMode
+    }));
     return resultContent(result);
   }
 
