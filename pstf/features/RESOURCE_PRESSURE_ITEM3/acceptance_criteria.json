@@ -1,0 +1,20 @@
+{
+  "feature_id": "RESOURCE_PRESSURE_ITEM3",
+  "criteria": [
+    {
+      "id": "AC1",
+      "statement": "Processor parses the Kind 10100 telemetry content field into canonical Worker.Telemetry.",
+      "tests": ["T1"]
+    },
+    {
+      "id": "AC2",
+      "statement": "Pressure assessment maps nominal, warning memory, critical reclaimable disk, critical thermal, missing telemetry, and hot/warm standby reserve cases to the expected pressure level, capacity class, and action.",
+      "tests": ["T2"]
+    },
+    {
+      "id": "AC3",
+      "statement": "Processor reloads canonical worker state after upsert, persists the assessment, and publishes worker.telemetry.observed only for non-stale advertisements.",
+      "tests": ["T1", "T3"]
+    }
+  ]
+}

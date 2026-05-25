@@ -1,0 +1,20 @@
+{
+  "feature_id": "RESOURCE_PRESSURE_ITEM3",
+  "tests": [
+    {
+      "id": "T1",
+      "command": "GOCACHE=/tmp/bahia-gocache go test ./internal/adapters/nostr",
+      "covers": ["AC1", "AC3"]
+    },
+    {
+      "id": "T2",
+      "command": "GOCACHE=/tmp/bahia-gocache go test ./internal/service -run 'TestAssessWorkerPressure'",
+      "covers": ["AC2"]
+    },
+    {
+      "id": "T3",
+      "command": "GOCACHE=/tmp/bahia-gocache go test ./internal/events ./internal/app",
+      "covers": ["AC3"]
+    }
+  ]
+}

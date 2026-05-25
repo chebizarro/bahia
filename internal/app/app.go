@@ -518,7 +518,7 @@ func New(cfg *config.Config) (*App, error) {
 	}
 
 	// Nostr event processor: maps inbound events to domain commands.
-	nostrProcessor := nostrAdapter.NewProcessor(registry, workerRepo, logger)
+	nostrProcessor := nostrAdapter.NewProcessorWithPublisher(registry, workerRepo, publisher, logger)
 
 	// Blossom client wiring (used for artifact storage and browsing).
 	var blossomClient *blossom.Client

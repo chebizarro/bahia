@@ -3,21 +3,30 @@ package nostr
 import (
 	"context"
 	"testing"
+	"time"
 
 	gonostr "github.com/nbd-wtf/go-nostr"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/events"
 	"go.uber.org/zap"
 )
 
 type captureWorkerRepo struct{ worker *domain.Worker }
 
 func (r *captureWorkerRepo) Upsert(_ context.Context, w *domain.Worker) error {
+	if r.worker != nil && r.worker.LastAdvertisementAt.After(w.LastAdvertisementAt) {
+		return nil
+	}
 	cp := *w
 	r.worker = &cp
 	return nil
 }
 func (r *captureWorkerRepo) GetByPubKey(context.Context, string) (*domain.Worker, error) {
-	return nil, nil
+	if r.worker == nil {
+		return nil, nil
+	}
+	cp := *r.worker
+	return &cp, nil
 }
 func (r *captureWorkerRepo) List(context.Context, string, int) ([]domain.Worker, error) {
 	return nil, nil
@@ -25,6 +34,13 @@ func (r *captureWorkerRepo) List(context.Context, string, int) ([]domain.Worker,
 func (r *captureWorkerRepo) UpdateStatus(context.Context, string, domain.WorkerStatus) error {
 	return nil
 }
+
+type capturePublisher struct{ events []events.Event }
+
+func (p *capturePublisher) Publish(_ context.Context, e events.Event) {
+	p.events = append(p.events, e)
+}
+func (p *capturePublisher) Subscribe(events.EventType, events.Handler) {}
 
 func TestProcessorWorkerAdvertisementParsesLLMRuntimeMetadata(t *testing.T) {
 	repo := &captureWorkerRepo{}
@@ -47,4 +63,63 @@ func TestProcessorWorkerAdvertisementParsesLLMRuntimeMetadata(t *testing.T) {
 	if repo.worker.RuntimeTarget == nil || repo.worker.RuntimeTarget.EndpointRef != "gpu-a" || repo.worker.RuntimeTarget.PublicBaseURL != "https://gpu-a.example" {
 		t.Fatalf("runtime target not parsed: %#v", repo.worker.RuntimeTarget)
 	}
+}
+
+func TestProcessorWorkerAdvertisementParsesTelemetryAssessesPressureAndPublishesEvent(t *testing.T) {
+	repo := &captureWorkerRepo{}
+	publisher := &capturePublisher{}
+	processor := NewProcessorWithPublisher(nil, repo, publisher, zap.NewNop())
+	ev := &gonostr.Event{
+		PubKey:    "worker-pubkey",
+		Kind:      kindLoomWorkerAd,
+		CreatedAt: gonostr.Timestamp(fixedProcessorTime().Unix()),
+		Content:   `{"name":"telemetry-worker","max_concurrent_jobs":2,"current_queue_depth":0,"telemetry":{"sampled_at":"2026-05-24T12:00:00Z","memory":{"total_bytes":68719476736,"available_bytes":42949672960},"disk":{"path":"/","total_bytes":1073741824000,"available_bytes":322122547200},"thermal":{"max_temperature_c":60,"throttled":false}}}`,
+	}
+
+	if err := processor.handleWorkerAdvertisement(context.Background(), ev); err != nil {
+		t.Fatalf("handle worker ad: %v", err)
+	}
+	if repo.worker == nil || repo.worker.Telemetry == nil || repo.worker.Telemetry.Memory == nil {
+		t.Fatalf("telemetry not parsed: %#v", repo.worker)
+	}
+	if repo.worker.Pressure == nil || repo.worker.Pressure.CapacityClass != domain.WorkerCapacityOpen {
+		t.Fatalf("pressure not assessed as open: %#v", repo.worker.Pressure)
+	}
+	if len(publisher.events) != 1 {
+		t.Fatalf("published events = %d, want 1", len(publisher.events))
+	}
+	published := publisher.events[0]
+	if published.Type != events.EventWorkerTelemetryObserved || published.EntityID != "worker-pubkey" {
+		t.Fatalf("published event = %#v", published)
+	}
+	payload, ok := published.Data.(events.WorkerTelemetryObserved)
+	if !ok {
+		t.Fatalf("published payload type = %T", published.Data)
+	}
+	if payload.Worker.Pressure == nil || payload.Worker.Pressure.CapacityClass != domain.WorkerCapacityOpen {
+		t.Fatalf("published worker pressure = %#v", payload.Worker.Pressure)
+	}
+}
+
+func TestProcessorWorkerAdvertisementSkipsTelemetryEventForStaleAd(t *testing.T) {
+	repo := &captureWorkerRepo{worker: &domain.Worker{PubKey: "worker-pubkey", LastAdvertisementAt: fixedProcessorTime().Add(time.Minute)}}
+	publisher := &capturePublisher{}
+	processor := NewProcessorWithPublisher(nil, repo, publisher, zap.NewNop())
+	ev := &gonostr.Event{
+		PubKey:    "worker-pubkey",
+		Kind:      kindLoomWorkerAd,
+		CreatedAt: gonostr.Timestamp(fixedProcessorTime().Unix()),
+		Content:   `{"name":"stale-worker","telemetry":{"sampled_at":"2026-05-24T12:00:00Z"}}`,
+	}
+
+	if err := processor.handleWorkerAdvertisement(context.Background(), ev); err != nil {
+		t.Fatalf("handle worker ad: %v", err)
+	}
+	if len(publisher.events) != 0 {
+		t.Fatalf("published events = %d, want 0", len(publisher.events))
+	}
+}
+
+func fixedProcessorTime() time.Time {
+	return time.Date(2026, 5, 24, 12, 0, 0, 0, time.UTC)
 }

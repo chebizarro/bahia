@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
+	"time"
 
 	"github.com/google/uuid"
 	gonostr "github.com/nbd-wtf/go-nostr"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/events"
 	"github.com/openagentsinc/bahia/internal/repository"
 	"github.com/openagentsinc/bahia/internal/service"
 	"go.uber.org/zap"
@@ -25,18 +27,28 @@ const (
 // Processor maps ingested Nostr events to domain commands.
 // It is designed to be called from the Subscriber as an EventHandler.
 type Processor struct {
-	registry   *service.RegistryService
-	workerRepo repository.WorkerRepository
-	logger     *zap.Logger
+	registry       *service.RegistryService
+	workerRepo     repository.WorkerRepository
+	eventPublisher events.Publisher
+	logger         *zap.Logger
 }
 
 // NewProcessor creates a new event processor.
 // workerRepo is optional; when nil, Kind 10100 events are logged but not persisted.
 func NewProcessor(registry *service.RegistryService, workerRepo repository.WorkerRepository, logger *zap.Logger) *Processor {
+	return NewProcessorWithPublisher(registry, workerRepo, &events.NoopPublisher{}, logger)
+}
+
+// NewProcessorWithPublisher creates a new event processor with an internal event publisher.
+func NewProcessorWithPublisher(registry *service.RegistryService, workerRepo repository.WorkerRepository, eventPublisher events.Publisher, logger *zap.Logger) *Processor {
+	if eventPublisher == nil {
+		eventPublisher = &events.NoopPublisher{}
+	}
 	return &Processor{
-		registry:   registry,
-		workerRepo: workerRepo,
-		logger:     logger.Named("nostr-processor"),
+		registry:       registry,
+		workerRepo:     workerRepo,
+		eventPublisher: eventPublisher,
+		logger:         logger.Named("nostr-processor"),
 	}
 }
 
@@ -285,6 +297,7 @@ func (p *Processor) handleWorkerAdvertisement(ctx context.Context, ev *gonostr.E
 		Accelerators      []domain.WorkerAccelerator  `json:"accelerators,omitempty"`
 		RuntimeTarget     *domain.WorkerRuntimeTarget `json:"runtime_target,omitempty"`
 		MLCapabilities    domain.WorkerMLCapabilities `json:"ml_capabilities,omitempty"`
+		Telemetry         *domain.WorkerTelemetry     `json:"telemetry,omitempty"`
 	}
 	if ev.Content != "" {
 		_ = json.Unmarshal([]byte(ev.Content), &content)
@@ -300,6 +313,7 @@ func (p *Processor) handleWorkerAdvertisement(ctx context.Context, ev *gonostr.E
 		Accelerators:        content.Accelerators,
 		RuntimeTarget:       content.RuntimeTarget,
 		MLCapabilities:      content.MLCapabilities,
+		Telemetry:           content.Telemetry,
 		LastAdvertisementAt: ev.CreatedAt.Time(),
 		Status:              domain.WorkerStatusOnline,
 	}
@@ -359,10 +373,52 @@ func (p *Processor) handleWorkerAdvertisement(ctx context.Context, ev *gonostr.E
 		return fmt.Errorf("upserting worker %s: %w", ev.PubKey, err)
 	}
 
+	canonical, err := p.workerRepo.GetByPubKey(ctx, ev.PubKey)
+	if err != nil {
+		return fmt.Errorf("reloading worker %s: %w", ev.PubKey, err)
+	}
+	if canonical == nil {
+		return fmt.Errorf("reloading worker %s: not found after upsert", ev.PubKey)
+	}
+	if canonical.LastAdvertisementAt.After(ev.CreatedAt.Time()) {
+		p.logger.Info("stale worker advertisement ignored after repository timestamp guard",
+			zap.String("pubkey", ev.PubKey),
+			zap.Time("event_created_at", ev.CreatedAt.Time()),
+			zap.Time("stored_last_advertisement_at", canonical.LastAdvertisementAt),
+		)
+		return nil
+	}
+
+	canonical.Pressure = service.Assess(*canonical, time.Now().UTC())
+	if err := p.workerRepo.Upsert(ctx, canonical); err != nil {
+		return fmt.Errorf("upserting worker pressure %s: %w", ev.PubKey, err)
+	}
+	assessed, err := p.workerRepo.GetByPubKey(ctx, ev.PubKey)
+	if err != nil {
+		return fmt.Errorf("reloading assessed worker %s: %w", ev.PubKey, err)
+	}
+	if assessed == nil {
+		return fmt.Errorf("reloading assessed worker %s: not found after pressure upsert", ev.PubKey)
+	}
+	if assessed.LastAdvertisementAt.After(ev.CreatedAt.Time()) {
+		p.logger.Info("worker telemetry event skipped after newer advertisement won pressure upsert",
+			zap.String("pubkey", ev.PubKey),
+			zap.Time("event_created_at", ev.CreatedAt.Time()),
+			zap.Time("stored_last_advertisement_at", assessed.LastAdvertisementAt),
+		)
+		return nil
+	}
+
+	p.eventPublisher.Publish(ctx, events.Event{
+		Type:     events.EventWorkerTelemetryObserved,
+		EntityID: assessed.PubKey,
+		Data:     events.WorkerTelemetryObserved{Worker: *assessed},
+	})
+
 	p.logger.Info("worker advertisement processed",
 		zap.String("pubkey", ev.PubKey),
-		zap.String("name", w.Name),
-		zap.Int("software_count", len(w.Software)),
+		zap.String("name", assessed.Name),
+		zap.Int("software_count", len(assessed.Software)),
 	)
 	return nil
 }

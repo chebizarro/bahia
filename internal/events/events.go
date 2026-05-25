@@ -53,6 +53,11 @@ const (
 	EventToolProvisionApprovalRequired  EventType = "tool_provision.approval_required"
 	EventToolProvisionCompleted         EventType = "tool_provision.completed"
 	EventToolProvisionFailed            EventType = "tool_provision.failed"
+	EventWorkerTelemetryObserved        EventType = "worker.telemetry.observed"
+	EventWorkerPressureChanged          EventType = "worker.pressure.changed"
+	EventWorkerCleanupRequested         EventType = "worker.cleanup.requested"
+	EventWorkerCleanupCompleted         EventType = "worker.cleanup.completed"
+	EventWorkerCleanupFailed            EventType = "worker.cleanup.failed"
 )
 
 // ResourceData carries projection-relevant resource identifiers in internal
@@ -107,17 +112,19 @@ func (p *InProcessPublisher) Publish(ctx context.Context, e Event) {
 	p.mu.RUnlock()
 
 	handlerCtx := context.Background()
+	var cancel context.CancelFunc
 	if ctx != nil {
 		if deadline, ok := ctx.Deadline(); ok {
-			var cancel context.CancelFunc
 			handlerCtx, cancel = context.WithDeadline(handlerCtx, deadline)
-			defer cancel()
 		}
 	}
 
+	var wg sync.WaitGroup
 	for _, h := range handlers {
 		h := h
+		wg.Add(1)
 		go func() {
+			defer wg.Done()
 			defer func() {
 				if r := recover(); r != nil {
 					p.logger.Error("event handler panic",
@@ -127,6 +134,13 @@ func (p *InProcessPublisher) Publish(ctx context.Context, e Event) {
 				}
 			}()
 			h(handlerCtx, e)
+		}()
+	}
+
+	if cancel != nil {
+		go func() {
+			wg.Wait()
+			cancel()
 		}()
 	}
 }

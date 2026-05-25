@@ -1,0 +1,16 @@
+{
+  "feature_id": "RESOURCE_PRESSURE_ITEM3",
+  "title": "Bahia worker telemetry parsing and pressure assessment",
+  "issues": ["bahia-bj6d"],
+  "intent": "Turn current Kind 10100 worker telemetry advertisements into canonical Worker telemetry and Bahia-owned pressure assessments, then publish internal telemetry observed events for downstream monitors.",
+  "observed_behavior": [
+    "internal/domain/worker.go already defines WorkerTelemetry and WorkerPressureAssessment fields and enums.",
+    "internal/repository/pg_worker.go persists telemetry and pressure JSONB and guards worker upserts by last_advertisement_at.",
+    "internal/adapters/nostr/processor.go previously parsed extended content fields but did not parse telemetry, assess pressure, reload canonical worker state, or publish telemetry observed events."
+  ],
+  "intended_behavior": [
+    "Kind 10100 content telemetry is parsed into Worker.Telemetry.",
+    "Bahia computes a deterministic pressure assessment from telemetry, queue, and standby state using the resource pressure plan thresholds.",
+    "The processor reloads canonical worker state after upsert, persists pressure, and emits worker.telemetry.observed only when the stored row is not newer than the ingested advertisement."
+  ]
+}
