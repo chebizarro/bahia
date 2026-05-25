@@ -1,0 +1,29 @@
+{
+  "feature_id": "bahia-42fy",
+  "tests": [
+    {
+      "name": "TestPgWorkerRepository_GetByPubKeyScansRuntimeCapabilities",
+      "covers": ["AC1", "AC3"],
+      "type": "unit",
+      "status": "passing"
+    },
+    {
+      "name": "TestPgWorkerRepository_UpsertWritesSchedulingLabelsAndCapabilities",
+      "covers": ["AC3"],
+      "type": "unit",
+      "status": "passing"
+    },
+    {
+      "name": "TestPgWorkerRepository_UpsertPreservesSchedulingAndLabelsWhenOmitted",
+      "covers": ["AC4"],
+      "type": "unit",
+      "status": "passing"
+    },
+    {
+      "name": "Migration inspection: 000035_worker_telemetry_pressure.up.sql",
+      "covers": ["AC2"],
+      "type": "static",
+      "status": "passing"
+    }
+  ]
+}

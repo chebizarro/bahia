@@ -1,0 +1,22 @@
+{
+  "feature_id": "bahia-42fy",
+  "title": "Worker telemetry and pressure persistence",
+  "source_plan": "docs/plans/resource-pressure-orchestration-2026-05-24.md#item-1--worker-telemetrypressure-data-model-and-persistence",
+  "observed_behavior_before": [
+    "domain.Worker had no raw telemetry or Bahia-derived pressure fields.",
+    "workers table had no telemetry or pressure JSONB columns.",
+    "PgWorkerRepository.Upsert updated an existing worker row on pubkey conflict without comparing advertisement timestamps."
+  ],
+  "intended_behavior": [
+    "domain.Worker stores raw worker telemetry matching the Kind 10100 telemetry JSON shape.",
+    "domain.Worker stores Bahia-owned worker pressure assessment with pressure level, capacity class, action, per-signal detail, and assessment time.",
+    "workers rows persist telemetry and pressure JSONB fields.",
+    "Older worker advertisements do not overwrite newer worker rows."
+  ],
+  "scope_boundaries": [
+    "No Nostr processor changes.",
+    "No event bus changes.",
+    "No placement service changes.",
+    "No loom-worker changes."
+  ]
+}

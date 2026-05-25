@@ -98,6 +98,92 @@ type WorkerAccelerator struct {
 	Driver   string `json:"driver,omitempty"`
 }
 
+// WorkerTelemetry describes live host telemetry sampled by a worker.
+type WorkerTelemetry struct {
+	SampledAt    time.Time                    `json:"sampled_at,omitempty"`
+	Memory       *WorkerMemoryTelemetry       `json:"memory,omitempty"`
+	Disk         *WorkerDiskTelemetry         `json:"disk,omitempty"`
+	Accelerators []WorkerAcceleratorTelemetry `json:"accelerators,omitempty"`
+	Thermal      *WorkerThermalTelemetry      `json:"thermal,omitempty"`
+}
+
+// WorkerMemoryTelemetry describes memory pressure inputs.
+type WorkerMemoryTelemetry struct {
+	TotalBytes     int64   `json:"total_bytes,omitempty"`
+	AvailableBytes int64   `json:"available_bytes,omitempty"`
+	UsedPercent    float64 `json:"used_percent,omitempty"`
+}
+
+// WorkerDiskTelemetry describes disk and Docker cache pressure inputs.
+type WorkerDiskTelemetry struct {
+	Path                   string  `json:"path,omitempty"`
+	TotalBytes             int64   `json:"total_bytes,omitempty"`
+	AvailableBytes         int64   `json:"available_bytes,omitempty"`
+	UsedPercent            float64 `json:"used_percent,omitempty"`
+	DockerCacheBytes       int64   `json:"docker_cache_bytes,omitempty"`
+	DockerReclaimableBytes int64   `json:"docker_reclaimable_bytes,omitempty"`
+}
+
+// WorkerAcceleratorTelemetry describes live accelerator telemetry.
+type WorkerAcceleratorTelemetry struct {
+	Index            int     `json:"index"`
+	MemoryTotalBytes int64   `json:"memory_total_bytes,omitempty"`
+	MemoryFreeBytes  int64   `json:"memory_free_bytes,omitempty"`
+	TemperatureC     float64 `json:"temperature_c,omitempty"`
+}
+
+// WorkerThermalTelemetry describes host thermal pressure inputs.
+type WorkerThermalTelemetry struct {
+	MaxTemperatureC float64 `json:"max_temperature_c,omitempty"`
+	Throttled       bool    `json:"throttled"`
+}
+
+// WorkerPressureLevel describes pressure severity for a worker or resource signal.
+type WorkerPressureLevel string
+
+const (
+	WorkerPressureUnknown  WorkerPressureLevel = "unknown"
+	WorkerPressureNominal  WorkerPressureLevel = "nominal"
+	WorkerPressureWarning  WorkerPressureLevel = "warning"
+	WorkerPressureCritical WorkerPressureLevel = "critical"
+)
+
+// WorkerCapacityClass describes how placement admission should treat worker capacity.
+type WorkerCapacityClass string
+
+const (
+	WorkerCapacityOpen        WorkerCapacityClass = "open"
+	WorkerCapacityReduced     WorkerCapacityClass = "reduced"
+	WorkerCapacityCleanupOnly WorkerCapacityClass = "cleanup_only"
+	WorkerCapacityBlocked     WorkerCapacityClass = "blocked"
+)
+
+// WorkerPressureAction describes operator or cleanup action recommended by Bahia.
+type WorkerPressureAction string
+
+const (
+	WorkerPressureActionNone                 WorkerPressureAction = "none"
+	WorkerPressureActionCleanupRecommended   WorkerPressureAction = "cleanup_recommended"
+	WorkerPressureActionOperatorIntervention WorkerPressureAction = "operator_intervention"
+)
+
+// WorkerPressureSignal describes pressure detail for one resource signal.
+type WorkerPressureSignal struct {
+	Name              string               `json:"name"`
+	Level             WorkerPressureLevel  `json:"level"`
+	RecommendedAction WorkerPressureAction `json:"recommended_action,omitempty"`
+	Reason            string               `json:"reason,omitempty"`
+}
+
+// WorkerPressureAssessment describes Bahia's derived worker pressure state.
+type WorkerPressureAssessment struct {
+	OverallLevel      WorkerPressureLevel    `json:"overall_level"`
+	CapacityClass     WorkerCapacityClass    `json:"capacity_class"`
+	RecommendedAction WorkerPressureAction   `json:"recommended_action"`
+	Signals           []WorkerPressureSignal `json:"signals,omitempty"`
+	AssessedAt        time.Time              `json:"assessed_at"`
+}
+
 // WorkerRuntimeTarget describes where Bahia may deploy runtime-managed work for a worker.
 type WorkerRuntimeTarget struct {
 	Type          RuntimeType `json:"type,omitempty"`
@@ -139,6 +225,8 @@ type Worker struct {
 	Pricing             []WorkerPricing           `json:"pricing,omitempty"`
 	Resources           *WorkerResources          `json:"resources,omitempty"`
 	Accelerators        []WorkerAccelerator       `json:"accelerators,omitempty"`
+	Telemetry           *WorkerTelemetry          `json:"telemetry,omitempty"`
+	Pressure            *WorkerPressureAssessment `json:"pressure,omitempty"`
 	MLCapabilities      WorkerMLCapabilities      `json:"ml_capabilities,omitempty"`
 	Capabilities        WorkerCapabilities        `json:"capabilities,omitempty"`
 	RuntimeTarget       *WorkerRuntimeTarget      `json:"runtime_target,omitempty"`

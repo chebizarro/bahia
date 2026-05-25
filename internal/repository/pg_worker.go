@@ -11,7 +11,7 @@ import (
 )
 
 const workerColumns = `pubkey, name, description, architecture,
-	max_concurrent_jobs, current_queue_depth, software, pricing, resources, accelerators, ml_capabilities, capabilities, runtime_target,
+	max_concurrent_jobs, current_queue_depth, software, pricing, resources, accelerators, telemetry, pressure, ml_capabilities, capabilities, runtime_target,
 	min_duration_secs, max_duration_secs, geohash, preferred_relays,
 	last_advertisement_at, status, scheduling_state, scheduling_note, labels, created_at, updated_at`
 
@@ -56,6 +56,14 @@ func (r *PgWorkerRepository) Upsert(ctx context.Context, w *domain.Worker) error
 	if err != nil {
 		return err
 	}
+	telemetryJSON, err := marshalJSON(w.Telemetry, "worker telemetry")
+	if err != nil {
+		return err
+	}
+	pressureJSON, err := marshalJSON(w.Pressure, "worker pressure")
+	if err != nil {
+		return err
+	}
 	mlCapabilitiesJSON, err := marshalJSON(w.MLCapabilities, "worker ML capabilities")
 	if err != nil {
 		return err
@@ -90,10 +98,10 @@ func (r *PgWorkerRepository) Upsert(ctx context.Context, w *domain.Worker) error
 	_, err = r.pool.Exec(ctx, `
 		INSERT INTO workers (pubkey, name, description, architecture,
 		max_concurrent_jobs, current_queue_depth, software, pricing,
-			resources, accelerators, ml_capabilities, capabilities, runtime_target,
+			resources, accelerators, telemetry, pressure, ml_capabilities, capabilities, runtime_target,
 			min_duration_secs, max_duration_secs, geohash, preferred_relays,
 			last_advertisement_at, status, scheduling_state, scheduling_note, labels, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, now(), now())
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, now(), now())
 		ON CONFLICT (pubkey) DO UPDATE SET
 			name = EXCLUDED.name,
 			description = EXCLUDED.description,
@@ -104,6 +112,8 @@ func (r *PgWorkerRepository) Upsert(ctx context.Context, w *domain.Worker) error
 			pricing = EXCLUDED.pricing,
 			resources = EXCLUDED.resources,
 			accelerators = EXCLUDED.accelerators,
+			telemetry = EXCLUDED.telemetry,
+			pressure = EXCLUDED.pressure,
 			ml_capabilities = EXCLUDED.ml_capabilities,
 			capabilities = EXCLUDED.capabilities,
 			runtime_target = EXCLUDED.runtime_target,
@@ -113,12 +123,13 @@ func (r *PgWorkerRepository) Upsert(ctx context.Context, w *domain.Worker) error
 			preferred_relays = EXCLUDED.preferred_relays,
 			last_advertisement_at = EXCLUDED.last_advertisement_at,
 			status = EXCLUDED.status,
-			scheduling_state = CASE WHEN $23 THEN EXCLUDED.scheduling_state ELSE workers.scheduling_state END,
-			scheduling_note = CASE WHEN $23 THEN EXCLUDED.scheduling_note ELSE workers.scheduling_note END,
-			labels = CASE WHEN $24 THEN EXCLUDED.labels ELSE workers.labels END,
+			scheduling_state = CASE WHEN $25 THEN EXCLUDED.scheduling_state ELSE workers.scheduling_state END,
+			scheduling_note = CASE WHEN $25 THEN EXCLUDED.scheduling_note ELSE workers.scheduling_note END,
+			labels = CASE WHEN $26 THEN EXCLUDED.labels ELSE workers.labels END,
 			updated_at = now()
+		WHERE EXCLUDED.last_advertisement_at >= workers.last_advertisement_at
 	`, w.PubKey, w.Name, w.Description, w.Architecture,
-		w.MaxConcurrentJobs, w.CurrentQueueDepth, softwareJSON, pricingJSON, resourcesJSON, acceleratorsJSON, mlCapabilitiesJSON, capabilitiesJSON, runtimeTargetJSON,
+		w.MaxConcurrentJobs, w.CurrentQueueDepth, softwareJSON, pricingJSON, resourcesJSON, acceleratorsJSON, telemetryJSON, pressureJSON, mlCapabilitiesJSON, capabilitiesJSON, runtimeTargetJSON,
 		w.MinDurationSecs, w.MaxDurationSecs, w.Geohash, relaysJSON,
 		w.LastAdvertisementAt, string(w.Status), string(schedulingState), w.SchedulingNote, labelsJSON, schedulingStateProvided, labelsUpdate)
 	if err != nil {
@@ -212,10 +223,10 @@ func scanWorkers(rows pgx.Rows) ([]domain.Worker, error) {
 
 func scanWorker(row pgx.Row) (*domain.Worker, error) {
 	w := &domain.Worker{}
-	var softwareJSON, pricingJSON, resourcesJSON, acceleratorsJSON, mlCapabilitiesJSON, capabilitiesJSON, runtimeTargetJSON, relaysJSON, labelsJSON []byte
+	var softwareJSON, pricingJSON, resourcesJSON, acceleratorsJSON, telemetryJSON, pressureJSON, mlCapabilitiesJSON, capabilitiesJSON, runtimeTargetJSON, relaysJSON, labelsJSON []byte
 	if err := row.Scan(
 		&w.PubKey, &w.Name, &w.Description, &w.Architecture,
-		&w.MaxConcurrentJobs, &w.CurrentQueueDepth, &softwareJSON, &pricingJSON, &resourcesJSON, &acceleratorsJSON, &mlCapabilitiesJSON, &capabilitiesJSON, &runtimeTargetJSON,
+		&w.MaxConcurrentJobs, &w.CurrentQueueDepth, &softwareJSON, &pricingJSON, &resourcesJSON, &acceleratorsJSON, &telemetryJSON, &pressureJSON, &mlCapabilitiesJSON, &capabilitiesJSON, &runtimeTargetJSON,
 		&w.MinDurationSecs, &w.MaxDurationSecs, &w.Geohash, &relaysJSON,
 		&w.LastAdvertisementAt, &w.Status, &w.SchedulingState, &w.SchedulingNote, &labelsJSON, &w.CreatedAt, &w.UpdatedAt,
 	); err != nil {
@@ -235,6 +246,18 @@ func scanWorker(row pgx.Row) (*domain.Worker, error) {
 	}
 	if err := unmarshalJSON(acceleratorsJSON, &w.Accelerators, "worker accelerators"); err != nil {
 		return nil, err
+	}
+	if err := unmarshalJSON(telemetryJSON, &w.Telemetry, "worker telemetry"); err != nil {
+		return nil, err
+	}
+	if w.Telemetry != nil && reflect.DeepEqual(*w.Telemetry, domain.WorkerTelemetry{}) {
+		w.Telemetry = nil
+	}
+	if err := unmarshalJSON(pressureJSON, &w.Pressure, "worker pressure"); err != nil {
+		return nil, err
+	}
+	if w.Pressure != nil && reflect.DeepEqual(*w.Pressure, domain.WorkerPressureAssessment{}) {
+		w.Pressure = nil
 	}
 	if err := unmarshalJSON(mlCapabilitiesJSON, &w.MLCapabilities, "worker ML capabilities"); err != nil {
 		return nil, err

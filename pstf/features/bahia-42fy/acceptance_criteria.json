@@ -1,0 +1,25 @@
+{
+  "feature_id": "bahia-42fy",
+  "criteria": [
+    {
+      "id": "AC1",
+      "description": "Worker domain model exposes Telemetry and Pressure fields plus pressure level, capacity class, action, and per-signal detail types.",
+      "verification": "go test ./internal/repository"
+    },
+    {
+      "id": "AC2",
+      "description": "Database migrations add telemetry and pressure JSONB columns to workers with non-null empty-object defaults.",
+      "verification": "internal/db/migrations/000035_worker_telemetry_pressure.up.sql inspection"
+    },
+    {
+      "id": "AC3",
+      "description": "PgWorkerRepository reads and writes telemetry and pressure JSON fields.",
+      "verification": "TestPgWorkerRepository_GetByPubKeyScansRuntimeCapabilities and TestPgWorkerRepository_UpsertWritesSchedulingLabelsAndCapabilities"
+    },
+    {
+      "id": "AC4",
+      "description": "Worker advertisement upsert updates an existing row only when the incoming last_advertisement_at is at least as new as the stored row.",
+      "verification": "TestPgWorkerRepository_UpsertPreservesSchedulingAndLabelsWhenOmitted asserts SQL timestamp guard"
+    }
+  ]
+}

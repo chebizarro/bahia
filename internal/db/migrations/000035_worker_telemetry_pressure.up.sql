@@ -1,0 +1,3 @@
+ALTER TABLE workers
+  ADD COLUMN IF NOT EXISTS telemetry JSONB NOT NULL DEFAULT '{}'::jsonb,
+  ADD COLUMN IF NOT EXISTS pressure JSONB NOT NULL DEFAULT '{}'::jsonb;

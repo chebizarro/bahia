@@ -1,0 +1,3 @@
+ALTER TABLE workers
+  DROP COLUMN IF EXISTS pressure,
+  DROP COLUMN IF EXISTS telemetry;
