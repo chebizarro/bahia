@@ -1,7 +1,7 @@
 {
   "feature_id": "worker-cleanup-orchestration-2026-05-24",
   "source_plan": "docs/plans/resource-pressure-orchestration-2026-05-24.md#item-5-cleanup-orchestration-and-operator-cleanup-command",
-  "intended_behavior": "Bahia accepts operator-triggered cleanup on control-plane worker.cleanup.request Kind 6006, dispatches eligible cleanup as Loom Kind 5100 jobs with per-worker dedupe, cooldown, protected image references, and terminal cleanup lifecycle events.",
+  "intended_behavior": "Bahia accepts operator-triggered cleanup on control-plane worker.cleanup.request Kind 6006, enforces cleanup admission/capability/payment-token gates, dispatches eligible cleanup as Loom Kind 5100 jobs with per-worker dedupe, cooldown, protected image references, immediate loom_job_id dispatch evidence, and asynchronous terminal cleanup lifecycle events.",
   "scope": [
     "internal/service/worker_cleanup_orchestrator.go",
     "internal/controlplane/worker_handlers.go",

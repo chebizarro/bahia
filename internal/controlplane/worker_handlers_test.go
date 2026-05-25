@@ -249,6 +249,106 @@ func TestWorkloadPinHandlerUpdatesEnvironmentPolicy(t *testing.T) {
 	}
 }
 
+func TestWorkerCleanupHandlerPublishesDispatchResultWithLoomJobID(t *testing.T) {
+	ctx := context.Background()
+	operatorKey := nostr.GeneratePrivateKey()
+	operatorPubkey, _ := nostr.GetPublicKey(operatorKey)
+	workerPubkey, _ := nostr.GetPublicKey(nostr.GeneratePrivateKey())
+	capture := &captureNostrPublisher{published: 1}
+	worker := domain.Worker{PubKey: workerPubkey, Name: "cleanup-worker", Status: domain.WorkerStatusOnline, SchedulingState: domain.WorkerSchedulingActive, LastAdvertisementAt: time.Now().UTC(), Software: []domain.WorkerSoftware{{Name: "bash"}, {Name: "docker"}}, Pressure: &domain.WorkerPressureAssessment{CapacityClass: domain.WorkerCapacityOpen, OverallLevel: domain.WorkerPressureNominal}}
+	repo := newMemoryWorkerRepo(worker)
+	releasePoll := make(chan struct{})
+	loom := &controlplaneCleanupLoomFake{releasePoll: releasePoll}
+	t.Cleanup(func() { close(releasePoll) })
+	orchestrator := service.NewWorkerCleanupOrchestrator(repo, nil, loom, &events.NoopPublisher{}, service.WorkerCleanupConfig{RequiredSoftware: []string{"bash", "docker"}}, zap.NewNop())
+	signer, err := NewPrivateKeySigner(nostr.GeneratePrivateKey())
+	if err != nil {
+		t.Fatalf("create signer: %v", err)
+	}
+	reactor := NewReactor(Config{AuthorizedPubkeys: []string{operatorPubkey}}, nil, nil, signer, zap.NewNop(), WithControlPlanePublisher(capture), WithWorkerRepository(repo), WithWorkerCleanupOrchestrator(orchestrator))
+	event := &nostr.Event{ID: "cleanup-request", PubKey: operatorPubkey, Kind: KindWorkerCleanupRequest, Tags: nostr.Tags{{"d", "cleanup-1"}, {"worker", workerPubkey}}, Content: mustJSON(map[string]any{"worker_pubkey": workerPubkey, "idempotency_key": "cleanup-1", "cleanup_mode": service.CleanupModeReclaimableOnly, "reason": "operator cleanup"})}
+
+	reactor.handleWorkerCleanupRequest(ctx, event)
+
+	result := lastPublishedKind(t, capture.events, KindWorkerResult)
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(result.Content), &payload); err != nil {
+		t.Fatalf("result content: %v", err)
+	}
+	if payload["status"] != "succeeded" || payload["code"] != "cleanup_dispatched" || payload["loom_job_id"] != "loom-cleanup-dispatch" {
+		t.Fatalf("expected dispatch result with loom job id, got %#v", payload)
+	}
+	if tagValueNostr(result.Tags, "loom_job") != "loom-cleanup-dispatch" || tagValueNostr(result.Tags, "result") != "cleanup_dispatched" {
+		t.Fatalf("expected loom dispatch tags, got %#v", result.Tags)
+	}
+}
+
+func TestWorkerCleanupHandlerPublishesNewRejectionCodes(t *testing.T) {
+	ctx := context.Background()
+	operatorKey := nostr.GeneratePrivateKey()
+	operatorPubkey, _ := nostr.GetPublicKey(operatorKey)
+	cases := []struct {
+		name     string
+		worker   domain.Worker
+		cfg      service.WorkerCleanupConfig
+		wantCode string
+	}{
+		{
+			name:     "admission disabled",
+			worker:   domain.Worker{PubKey: mustTestPubkey(t), Name: "disabled", Status: domain.WorkerStatusOnline, SchedulingState: domain.WorkerSchedulingDisabled, LastAdvertisementAt: time.Now().UTC(), Software: []domain.WorkerSoftware{{Name: "bash"}, {Name: "docker"}}, Pressure: &domain.WorkerPressureAssessment{CapacityClass: domain.WorkerCapacityOpen, OverallLevel: domain.WorkerPressureNominal}},
+			cfg:      service.WorkerCleanupConfig{RequiredSoftware: []string{"bash", "docker"}},
+			wantCode: "cleanup_admission_rejected",
+		},
+		{
+			name:     "capability missing",
+			worker:   domain.Worker{PubKey: mustTestPubkey(t), Name: "no-docker", Status: domain.WorkerStatusOnline, SchedulingState: domain.WorkerSchedulingActive, LastAdvertisementAt: time.Now().UTC(), Software: []domain.WorkerSoftware{{Name: "bash"}}, Pressure: &domain.WorkerPressureAssessment{CapacityClass: domain.WorkerCapacityOpen, OverallLevel: domain.WorkerPressureNominal}},
+			cfg:      service.WorkerCleanupConfig{RequiredSoftware: []string{"bash", "docker"}},
+			wantCode: "cleanup_capability_missing",
+		},
+		{
+			name:     "payment required",
+			worker:   domain.Worker{PubKey: mustTestPubkey(t), Name: "paid", Status: domain.WorkerStatusOnline, SchedulingState: domain.WorkerSchedulingActive, LastAdvertisementAt: time.Now().UTC(), Software: []domain.WorkerSoftware{{Name: "bash"}, {Name: "docker"}}, Pricing: []domain.WorkerPricing{{MintURL: "https://mint.example.com", PricePerSecond: 7, Unit: "sat"}}, Pressure: &domain.WorkerPressureAssessment{CapacityClass: domain.WorkerCapacityOpen, OverallLevel: domain.WorkerPressureNominal}},
+			cfg:      service.WorkerCleanupConfig{RequiredSoftware: []string{"bash", "docker"}},
+			wantCode: "cleanup_payment_required",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			capture := &captureNostrPublisher{published: 1}
+			repo := newMemoryWorkerRepo(tc.worker)
+			releasePoll := make(chan struct{})
+			close(releasePoll)
+			orchestrator := service.NewWorkerCleanupOrchestrator(repo, nil, &controlplaneCleanupLoomFake{releasePoll: releasePoll}, &events.NoopPublisher{}, tc.cfg, zap.NewNop())
+			signer, err := NewPrivateKeySigner(nostr.GeneratePrivateKey())
+			if err != nil {
+				t.Fatalf("create signer: %v", err)
+			}
+			reactor := NewReactor(Config{AuthorizedPubkeys: []string{operatorPubkey}}, nil, nil, signer, zap.NewNop(), WithControlPlanePublisher(capture), WithWorkerRepository(repo), WithWorkerCleanupOrchestrator(orchestrator))
+			event := &nostr.Event{ID: "cleanup-reject", PubKey: operatorPubkey, Kind: KindWorkerCleanupRequest, Tags: nostr.Tags{{"d", "cleanup-reject-1"}, {"worker", tc.worker.PubKey}}, Content: mustJSON(map[string]any{"worker_pubkey": tc.worker.PubKey, "idempotency_key": "cleanup-reject-1", "cleanup_mode": service.CleanupModeReclaimableOnly})}
+
+			reactor.handleWorkerCleanupRequest(ctx, event)
+
+			result := lastPublishedKind(t, capture.events, KindWorkerResult)
+			var payload map[string]any
+			if err := json.Unmarshal([]byte(result.Content), &payload); err != nil {
+				t.Fatalf("result content: %v", err)
+			}
+			if payload["status"] != "rejected" || payload["code"] != tc.wantCode {
+				t.Fatalf("unexpected cleanup rejection payload: %#v", payload)
+			}
+		})
+	}
+}
+
+func mustTestPubkey(t *testing.T) string {
+	t.Helper()
+	pubkey, err := nostr.GetPublicKey(nostr.GeneratePrivateKey())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return pubkey
+}
+
 func TestWorkerHandlerRejectsMissingIdempotencyKey(t *testing.T) {
 	ctx := context.Background()
 	operatorKey := nostr.GeneratePrivateKey()
@@ -302,6 +402,20 @@ func newWorkerHandlerTestReactorWithRegistry(t *testing.T, authorizedPubkey stri
 		t.Fatalf("create signer: %v", err)
 	}
 	return NewReactor(Config{AuthorizedPubkeys: []string{authorizedPubkey}}, registry, nil, signer, zap.NewNop(), WithControlPlanePublisher(capture), WithWorkerRepository(repo))
+}
+
+type controlplaneCleanupLoomFake struct {
+	releasePoll <-chan struct{}
+}
+
+func (f *controlplaneCleanupLoomFake) SubmitCleanupJob(context.Context, service.CleanupJobRequest) (string, error) {
+	return "loom-cleanup-dispatch", nil
+}
+
+func (f *controlplaneCleanupLoomFake) PollCleanupJobStatusFromWorker(context.Context, string, string, ...service.CleanupStatusCallback) (*service.CleanupJobStatus, error) {
+	<-f.releasePoll
+	success := true
+	return &service.CleanupJobStatus{Status: "completed", Success: &success}, nil
 }
 
 type memoryWorkerRepo struct {

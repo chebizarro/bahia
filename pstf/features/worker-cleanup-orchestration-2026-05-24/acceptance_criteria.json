@@ -3,8 +3,9 @@
     {"id": "AC1", "statement": "Cleanup requests dispatch Loom Kind 5100 jobs targeted to the requested worker with bash -c cleanup script and cleanup environment metadata."},
     {"id": "AC2", "statement": "Per-worker in-flight dedupe and 30 minute configurable cooldown reject duplicate cleanup attempts; queue-capacity rejection does not burn cooldown."},
     {"id": "AC3", "statement": "Protected refs include active assignment metadata image_ref and standby assignment artifact_ref when available."},
-    {"id": "AC4", "statement": "worker.cleanup.request validates worker existence/liveness and publishes terminal worker result including loom_job_id, cleanup_mode, and worker_pubkey."},
+    {"id": "AC4", "statement": "worker.cleanup.request validates worker existence/liveness and publishes a dispatch result including loom_job_id, cleanup_mode, and worker_pubkey without waiting for terminal Loom job completion."},
     {"id": "AC5", "statement": "Pressure auto-trigger defaults to recommend_only and only dispatches reclaimable_only when config enables auto and worker label bahia.cleanup.auto=true."},
-    {"id": "AC6", "statement": "Workers page cleanup action publishes Bahia control-plane Kind 6006 with worker.cleanup.request tags and JSON content including worker_pubkey, idempotency_key, cleanup_mode, reason, and operator metadata."}
+    {"id": "AC6", "statement": "Workers page cleanup action publishes Bahia control-plane Kind 6006 with worker.cleanup.request tags and JSON content including worker_pubkey, idempotency_key, cleanup_mode, reason, and operator metadata."},
+    {"id": "AC7", "statement": "Cleanup dispatch enforces AdmissionScopeCleanup, validates bash/docker cleanup capability requirements before dispatch, and requires/configures an internal payment token for paid workers."}
   ]
 }

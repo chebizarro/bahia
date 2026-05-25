@@ -467,7 +467,7 @@ func New(cfg *config.Config) (*App, error) {
 	mlRegistryRepo := repository.NewPgMLRegistryRepository(pool)
 	mlRegistry := service.NewMLRegistryService(mlRegistryRepo, publisher, logger, service.WithMLEnvironmentRepository(envRepo))
 	workerReadModelSvc := service.NewWorkerReadModelService(workerRepo, registry, mlRegistry, workerPolicySvc, service.NewMLPlacementService(workerRepo, logger, service.WithMLPlacementPressureThresholds(pressureThresholds)), logger)
-	workerCleanupOrchestrator := service.NewWorkerCleanupOrchestrator(workerRepo, workerReadModelSvc, loomCleanupClient{client: loomClient}, publisher, service.WorkerCleanupConfig{Mode: cfg.WorkerCleanup.Mode, Cooldown: cfg.WorkerCleanup.Cooldown, TargetFreeGB: cfg.WorkerCleanup.TargetFreeGB}, logger)
+	workerCleanupOrchestrator := service.NewWorkerCleanupOrchestrator(workerRepo, workerReadModelSvc, loomCleanupClient{client: loomClient}, publisher, service.WorkerCleanupConfig{Mode: cfg.WorkerCleanup.Mode, Cooldown: cfg.WorkerCleanup.Cooldown, TargetFreeGB: cfg.WorkerCleanup.TargetFreeGB, PaymentToken: cfg.WorkerCleanup.PaymentToken, RequiredSoftware: cfg.WorkerCleanup.RequiredSoftware, PressureThresholds: pressureThresholds}, logger)
 	setupWorkerPressureSubscriptions(publisher, pressureMonitor, workerStatePublisher, workerCleanupOrchestrator, workerRepo, logger)
 
 	// LLM provisioning control plane.
@@ -1370,7 +1370,7 @@ func (c loomCleanupClient) SubmitCleanupJob(ctx context.Context, job service.Cle
 	if c.client == nil {
 		return "", fmt.Errorf("loom client is not configured")
 	}
-	return c.client.SubmitJob(ctx, loom.JobRequest{ID: job.ID, Type: job.Type, WorkerPubkey: job.WorkerPubkey, Cmd: job.Cmd, Args: job.Args, Env: job.Env})
+	return c.client.SubmitJob(ctx, loom.JobRequest{ID: job.ID, Type: job.Type, WorkerPubkey: job.WorkerPubkey, Cmd: job.Cmd, Args: job.Args, Env: job.Env, PaymentToken: job.PaymentToken})
 }
 
 func (c loomCleanupClient) PollCleanupJobStatusFromWorker(ctx context.Context, jobEventID string, expectedWorkerPubkey string, callbacks ...service.CleanupStatusCallback) (*service.CleanupJobStatus, error) {

@@ -25,16 +25,22 @@ const (
 )
 
 var (
-	ErrWorkerCleanupInFlight         = errors.New("worker cleanup already in-flight")
-	ErrWorkerCleanupCooldown         = errors.New("worker cleanup cooldown active")
-	ErrWorkerCleanupInvalidMode      = errors.New("invalid worker cleanup mode")
-	ErrWorkerCleanupCapacityRejected = errors.New("worker cleanup rejected because worker queue is full")
+	ErrWorkerCleanupInFlight          = errors.New("worker cleanup already in-flight")
+	ErrWorkerCleanupCooldown          = errors.New("worker cleanup cooldown active")
+	ErrWorkerCleanupInvalidMode       = errors.New("invalid worker cleanup mode")
+	ErrWorkerCleanupCapacityRejected  = errors.New("worker cleanup rejected because worker queue is full")
+	ErrWorkerCleanupAdmissionRejected = errors.New("worker cleanup rejected by admission policy")
+	ErrWorkerCleanupCapabilityMissing = errors.New("worker cleanup capability requirement not satisfied")
+	ErrWorkerCleanupPaymentRequired   = errors.New("worker cleanup payment token required")
 )
 
 type WorkerCleanupConfig struct {
-	Mode         string
-	Cooldown     time.Duration
-	TargetFreeGB int
+	Mode               string
+	Cooldown           time.Duration
+	TargetFreeGB       int
+	PaymentToken       string
+	RequiredSoftware   []string
+	PressureThresholds WorkerPressureThresholds
 }
 
 type CleanupExecution struct {
@@ -63,6 +69,7 @@ type CleanupJobRequest struct {
 	Cmd          string
 	Args         []string
 	Env          map[string]string
+	PaymentToken string
 }
 
 type CleanupJobStatus struct {
@@ -116,6 +123,9 @@ func NewWorkerCleanupOrchestrator(workers repository.WorkerRepository, assignmen
 	if cfg.TargetFreeGB <= 0 {
 		cfg.TargetFreeGB = DefaultCleanupTargetFreeGB
 	}
+	cfg.PaymentToken = strings.TrimSpace(cfg.PaymentToken)
+	cfg.RequiredSoftware = normalizeCleanupRequiredSoftware(cfg.RequiredSoftware)
+	cfg.PressureThresholds = EffectiveWorkerPressureThresholds(cfg.PressureThresholds)
 	return &WorkerCleanupOrchestrator{workers: workers, assignments: assignments, loom: loomClient, publisher: publisher, config: cfg, logger: logger, activeByWorker: map[string]*CleanupExecution{}, lastAttemptByWorker: map[string]time.Time{}}
 }
 
@@ -148,6 +158,15 @@ func (o *WorkerCleanupOrchestrator) RequestCleanup(ctx context.Context, workerPu
 	if worker == nil {
 		return nil, fmt.Errorf("worker not found")
 	}
+	if err := o.validateAdmission(worker); err != nil {
+		return nil, err
+	}
+	if err := o.validateCleanupCapabilities(worker); err != nil {
+		return nil, err
+	}
+	if err := o.validateCleanupPayment(worker); err != nil {
+		return nil, err
+	}
 	if mode == CleanupModeAggressive && strings.EqualFold(worker.Labels["bahia.cleanup.protect"], "true") {
 		return nil, fmt.Errorf("worker label bahia.cleanup.protect=true rejects aggressive cleanup")
 	}
@@ -161,7 +180,6 @@ func (o *WorkerCleanupOrchestrator) RequestCleanup(ctx context.Context, workerPu
 	if err := o.reserve(workerPubKey, exec, now); err != nil {
 		return nil, err
 	}
-	o.publish(ctx, events.EventWorkerCleanupRequested, exec)
 
 	jobID, err := o.loom.SubmitCleanupJob(ctx, CleanupJobRequest{
 		ID:           "cleanup:" + workerPubKey + ":" + now.Format("20060102T150405Z"),
@@ -170,6 +188,7 @@ func (o *WorkerCleanupOrchestrator) RequestCleanup(ctx context.Context, workerPu
 		Cmd:          "bash",
 		Args:         []string{"-c", buildCleanupScript(mode)},
 		Env:          cleanupEnv(mode, reason, protectedRefs, o.config.TargetFreeGB),
+		PaymentToken: o.config.PaymentToken,
 	})
 	if err != nil {
 		exec.Status = "failed"
@@ -178,35 +197,77 @@ func (o *WorkerCleanupOrchestrator) RequestCleanup(ctx context.Context, workerPu
 		return exec, err
 	}
 	exec.LoomJobID = jobID
-	exec.Status = "running"
+	exec.Status = "dispatched"
+	dispatch := cloneCleanupExecution(exec)
+	o.publish(ctx, events.EventWorkerCleanupRequested, dispatch)
+	o.watchCleanupJob(ctx, workerPubKey, exec, jobID)
+	return dispatch, nil
+}
 
-	status, err := o.loom.PollCleanupJobStatusFromWorker(ctx, jobID, workerPubKey)
-	exec.JobStatus = status
-	if err != nil {
-		exec.Status = "failed"
-		exec.Error = err.Error()
-		o.finish(ctx, workerPubKey, exec, false)
-		return exec, err
+func (o *WorkerCleanupOrchestrator) watchCleanupJob(ctx context.Context, workerPubKey string, exec *CleanupExecution, jobID string) {
+	watchCtx := context.Background()
+	if ctx != nil {
+		watchCtx = context.WithoutCancel(ctx)
 	}
-	if status == nil || status.Success == nil || !*status.Success {
-		exec.Status = "failed"
-		if status != nil {
-			exec.Error = strings.TrimSpace(status.Error)
+	go func() {
+		status, err := o.loom.PollCleanupJobStatusFromWorker(watchCtx, jobID, workerPubKey)
+		exec.JobStatus = status
+		if err != nil {
+			exec.Status = "failed"
+			exec.Error = err.Error()
+			o.finish(watchCtx, workerPubKey, exec, false)
+			return
 		}
-		if exec.Error == "" {
-			exec.Error = "cleanup job failed"
+		if status == nil || status.Success == nil || !*status.Success {
+			exec.Status = "failed"
+			if status != nil {
+				exec.Error = strings.TrimSpace(status.Error)
+			}
+			if exec.Error == "" {
+				exec.Error = "cleanup job failed"
+			}
+			if isLoomCapacityRejection(status, exec.Error) {
+				exec.CapacityRejected = true
+				o.finish(watchCtx, workerPubKey, exec, true)
+				return
+			}
+			o.finish(watchCtx, workerPubKey, exec, false)
+			return
 		}
-		if isLoomCapacityRejection(status, exec.Error) {
-			exec.CapacityRejected = true
-			o.finish(ctx, workerPubKey, exec, true)
-			return exec, ErrWorkerCleanupCapacityRejected
-		}
-		o.finish(ctx, workerPubKey, exec, false)
-		return exec, fmt.Errorf("cleanup job failed: %s", exec.Error)
+		exec.Status = "completed"
+		o.finish(watchCtx, workerPubKey, exec, false)
+	}()
+}
+
+func (o *WorkerCleanupOrchestrator) validateAdmission(worker *domain.Worker) error {
+	decision := Evaluate(WorkerAdmissionRequest{Scope: AdmissionScopeCleanup, Worker: worker, PressureThresholds: o.config.PressureThresholds})
+	if decision.Eligible {
+		return nil
 	}
-	exec.Status = "completed"
-	o.finish(ctx, workerPubKey, exec, false)
-	return exec, nil
+	return fmt.Errorf("%w: %s: %s", ErrWorkerCleanupAdmissionRejected, decision.Code, decision.Reason)
+}
+
+func (o *WorkerCleanupOrchestrator) validateCleanupCapabilities(worker *domain.Worker) error {
+	if worker == nil {
+		return fmt.Errorf("%w: worker is required", ErrWorkerCleanupCapabilityMissing)
+	}
+	missing := make([]string, 0)
+	for _, required := range o.config.RequiredSoftware {
+		if !workerAdvertisesCleanupSoftware(*worker, required) {
+			missing = append(missing, required)
+		}
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("%w: missing %s", ErrWorkerCleanupCapabilityMissing, strings.Join(missing, ","))
+	}
+	return nil
+}
+
+func (o *WorkerCleanupOrchestrator) validateCleanupPayment(worker *domain.Worker) error {
+	if !workerRequiresPayment(*worker) || o.config.PaymentToken != "" {
+		return nil
+	}
+	return fmt.Errorf("%w: worker advertises paid pricing but worker_cleanup.payment_token is not configured", ErrWorkerCleanupPaymentRequired)
 }
 
 func (o *WorkerCleanupOrchestrator) reserve(workerPubKey string, exec *CleanupExecution, now time.Time) error {
@@ -237,6 +298,19 @@ func (o *WorkerCleanupOrchestrator) finish(ctx context.Context, workerPubKey str
 	} else {
 		o.publish(ctx, events.EventWorkerCleanupFailed, exec)
 	}
+}
+
+func cloneCleanupExecution(exec *CleanupExecution) *CleanupExecution {
+	if exec == nil {
+		return nil
+	}
+	out := *exec
+	out.ProtectedRefs = append([]string(nil), exec.ProtectedRefs...)
+	if exec.JobStatus != nil {
+		status := *exec.JobStatus
+		out.JobStatus = &status
+	}
+	return &out
 }
 
 func (o *WorkerCleanupOrchestrator) publish(ctx context.Context, eventType events.EventType, exec *CleanupExecution) {
@@ -277,6 +351,67 @@ func (o *WorkerCleanupOrchestrator) protectedRefs(ctx context.Context, worker *d
 	}
 	sort.Strings(refs)
 	return refs, nil
+}
+
+func normalizeCleanupRequiredSoftware(required []string) []string {
+	if len(required) == 0 {
+		required = []string{"bash", "docker"}
+	}
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(required))
+	for _, item := range required {
+		item = normalizeCleanupCapabilityToken(item)
+		if item == "" {
+			continue
+		}
+		if _, ok := seen[item]; ok {
+			continue
+		}
+		seen[item] = struct{}{}
+		out = append(out, item)
+	}
+	return out
+}
+
+func workerAdvertisesCleanupSoftware(worker domain.Worker, required string) bool {
+	required = normalizeCleanupCapabilityToken(required)
+	if required == "" {
+		return true
+	}
+	for _, software := range worker.Software {
+		if normalizeCleanupCapabilityToken(software.Name) == required {
+			return true
+		}
+	}
+	for _, candidate := range worker.Capabilities.Runtimes {
+		if normalizeCleanupCapabilityToken(candidate) == required {
+			return true
+		}
+	}
+	for _, candidate := range worker.Capabilities.Toolchains {
+		if normalizeCleanupCapabilityToken(candidate) == required {
+			return true
+		}
+	}
+	for _, candidate := range worker.Capabilities.Features {
+		if normalizeCleanupCapabilityToken(candidate) == required {
+			return true
+		}
+	}
+	return false
+}
+
+func workerRequiresPayment(worker domain.Worker) bool {
+	for _, pricing := range worker.Pricing {
+		if pricing.PricePerSecond > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func normalizeCleanupCapabilityToken(value string) string {
+	return strings.ToLower(strings.TrimSpace(value))
 }
 
 func normalizeCleanupMode(mode string) string {

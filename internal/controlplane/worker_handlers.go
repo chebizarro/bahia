@@ -172,10 +172,6 @@ func (r *Reactor) handleWorkerCleanupRequest(ctx context.Context, event *nostr.E
 		_ = r.publishWorkerCleanupResult(ctx, event, req, "failed", "not_found", "worker not found", nil, nil)
 		return
 	}
-	if worker.Status == domain.WorkerStatusOffline {
-		_ = r.publishWorkerCleanupResult(ctx, event, req, "failed", "worker_offline", "worker is offline", worker, nil)
-		return
-	}
 	mode := strings.TrimSpace(req.CleanupMode)
 	if mode == "" {
 		mode = service.CleanupModeReclaimableOnly
@@ -195,11 +191,20 @@ func (r *Reactor) handleWorkerCleanupRequest(ctx context.Context, event *nostr.E
 			code = "worker_queue_full"
 		case errors.Is(err, service.ErrWorkerCleanupInvalidMode):
 			code = "invalid_cleanup_mode"
+		case errors.Is(err, service.ErrWorkerCleanupAdmissionRejected):
+			code = "cleanup_admission_rejected"
+			status = "rejected"
+		case errors.Is(err, service.ErrWorkerCleanupCapabilityMissing):
+			code = "cleanup_capability_missing"
+			status = "rejected"
+		case errors.Is(err, service.ErrWorkerCleanupPaymentRequired):
+			code = "cleanup_payment_required"
+			status = "rejected"
 		}
 		_ = r.publishWorkerCleanupResult(ctx, event, req, status, code, err.Error(), worker, exec)
 		return
 	}
-	_ = r.publishWorkerCleanupResult(ctx, event, req, "succeeded", "cleanup_completed", "worker cleanup completed", worker, exec)
+	_ = r.publishWorkerCleanupResult(ctx, event, req, "succeeded", "cleanup_dispatched", "worker cleanup dispatched", worker, exec)
 }
 
 func (r *Reactor) handleWorkloadPinRequest(ctx context.Context, event *nostr.Event) {

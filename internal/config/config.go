@@ -68,9 +68,11 @@ type WorkerPressureConfig struct {
 
 // WorkerCleanupConfig controls pressure-triggered worker cleanup orchestration.
 type WorkerCleanupConfig struct {
-	Mode         string        `koanf:"mode" yaml:"mode"`
-	Cooldown     time.Duration `koanf:"cooldown" yaml:"cooldown"`
-	TargetFreeGB int           `koanf:"target_free_gb" yaml:"target_free_gb"`
+	Mode             string        `koanf:"mode" yaml:"mode"`
+	Cooldown         time.Duration `koanf:"cooldown" yaml:"cooldown"`
+	TargetFreeGB     int           `koanf:"target_free_gb" yaml:"target_free_gb"`
+	PaymentToken     string        `koanf:"payment_token" yaml:"payment_token"`
+	RequiredSoftware []string      `koanf:"required_software" yaml:"required_software"`
 }
 
 // FIPSConfig controls FIPS overlay advert ingestion.
@@ -648,9 +650,10 @@ func Defaults() *Config {
 		},
 		WorkerPressure: defaultWorkerPressureConfig(),
 		WorkerCleanup: WorkerCleanupConfig{
-			Mode:         "recommend_only",
-			Cooldown:     30 * time.Minute,
-			TargetFreeGB: 40,
+			Mode:             "recommend_only",
+			Cooldown:         30 * time.Minute,
+			TargetFreeGB:     40,
+			RequiredSoftware: []string{"bash", "docker"},
 		},
 		Notifications: NotificationsConfig{
 			Enabled: false,
