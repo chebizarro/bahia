@@ -75,6 +75,17 @@ func TestFIPSOverlayAddressKnownVector(t *testing.T) {
 	require.Equal(t, "fd63:dcd:2966:c433:6691:1254:48bb:b25b", ip.String())
 }
 
+func TestFIPSSubscriberFilterUsesFixedDTagAndOptionalProtocolNamespace(t *testing.T) {
+	unscoped := NewFIPSSubscriber(nil, newFIPSTestWorkerRepo(), zap.NewNop())
+	require.Equal(t, []int{FIPSOverlayAdvertKind}, unscoped.filter().Kinds)
+	require.Equal(t, []string{FIPSOverlayAdvertIdentifier}, unscoped.filter().Tags["d"])
+	require.NotContains(t, unscoped.filter().Tags, "protocol")
+
+	scoped := NewFIPSSubscriber(nil, newFIPSTestWorkerRepo(), zap.NewNop(), WithFIPSAppNamespace("bahia-mesh-v1"))
+	require.Equal(t, []string{FIPSOverlayAdvertIdentifier}, scoped.filter().Tags["d"])
+	require.Equal(t, []string{"bahia-mesh-v1"}, scoped.filter().Tags["protocol"])
+}
+
 func TestFIPSSubscriberMatchesWorkerByPubkeyAndAppliesAdvert(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0).UTC()
 	ev := signedFIPSAdvertEvent(t, now, `{
@@ -116,13 +127,49 @@ func TestFIPSSubscriberIgnoresUnknownWorkerWhenAutoRegisterDisabled(t *testing.T
 	require.Empty(t, repo.upserts)
 }
 
-func signedFIPSAdvertEvent(t *testing.T, createdAt time.Time, content string) *gonostr.Event {
+func TestFIPSSubscriberRequiresFixedIdentifier(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0).UTC()
+	ev := signedFIPSAdvertEvent(t, now, `{
+		"identifier":"bahia-mesh-v1",
+		"version":1,
+		"endpoints":[{"transport":"udp","addr":"203.0.113.45:2121"}]
+	}`)
+	repo := newFIPSTestWorkerRepo(&domain.Worker{PubKey: ev.PubKey})
+	subscriber := NewFIPSSubscriber(nil, repo, zap.NewNop(), withFIPSClock(func() time.Time { return now }))
+
+	subscriber.handleEvent(context.Background(), ev)
+
+	require.Empty(t, repo.upserts)
+}
+
+func TestFIPSSubscriberRequiresConfiguredProtocolTag(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0).UTC()
+	content := `{
+		"identifier":"fips-overlay-v1",
+		"version":1,
+		"endpoints":[{"transport":"udp","addr":"203.0.113.45:2121"}]
+	}`
+	missingProtocol := signedFIPSAdvertEvent(t, now, content)
+	wrongProtocol := signedFIPSAdvertEvent(t, now, content, gonostr.Tag{"protocol", "other-namespace"})
+	matchingProtocol := signedFIPSAdvertEvent(t, now, content, gonostr.Tag{"protocol", "bahia-mesh-v1"})
+	repo := newFIPSTestWorkerRepo(&domain.Worker{PubKey: missingProtocol.PubKey})
+	subscriber := NewFIPSSubscriber(nil, repo, zap.NewNop(), WithFIPSAppNamespace("bahia-mesh-v1"), withFIPSClock(func() time.Time { return now }))
+
+	subscriber.handleEvent(context.Background(), missingProtocol)
+	subscriber.handleEvent(context.Background(), wrongProtocol)
+	require.Empty(t, repo.upserts)
+
+	subscriber.handleEvent(context.Background(), matchingProtocol)
+	require.Len(t, repo.upserts, 1)
+}
+
+func signedFIPSAdvertEvent(t *testing.T, createdAt time.Time, content string, extraTags ...gonostr.Tag) *gonostr.Event {
 	t.Helper()
 	ev := &gonostr.Event{
 		Kind:      FIPSOverlayAdvertKind,
 		CreatedAt: gonostr.Timestamp(createdAt.Unix()),
 		Content:   content,
-		Tags:      gonostr.Tags{{"d", "fips-overlay-v1"}},
+		Tags:      append(gonostr.Tags{{"d", FIPSOverlayAdvertIdentifier}}, extraTags...),
 	}
 	require.NoError(t, ev.Sign(testNostrPrivateKey))
 	return ev

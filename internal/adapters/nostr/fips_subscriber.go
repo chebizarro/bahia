@@ -18,7 +18,10 @@ import (
 	"go.uber.org/zap"
 )
 
-const FIPSOverlayAdvertKind = 37195
+const (
+	FIPSOverlayAdvertKind       = 37195
+	FIPSOverlayAdvertIdentifier = "fips-overlay-v1"
+)
 
 // OverlayAdvert is the Kind 37195 content Bahia consumes from FIPS nodes.
 type OverlayAdvert struct {
@@ -57,7 +60,7 @@ type FIPSSubscriber struct {
 // FIPSSubscriberOption configures a FIPSSubscriber.
 type FIPSSubscriberOption func(*FIPSSubscriber)
 
-// WithFIPSAppNamespace sets the expected FIPS advert identifier and d tag.
+// WithFIPSAppNamespace sets the expected FIPS advert protocol tag namespace.
 func WithFIPSAppNamespace(namespace string) FIPSSubscriberOption {
 	return func(s *FIPSSubscriber) {
 		if strings.TrimSpace(namespace) != "" {
@@ -99,11 +102,10 @@ func NewFIPSSubscriber(pool *RelayPool, workerRepo repository.WorkerRepository, 
 		logger = zap.NewNop()
 	}
 	s := &FIPSSubscriber{
-		pool:         pool,
-		workerRepo:   workerRepo,
-		appNamespace: "fips-overlay-v1",
-		logger:       logger.Named("fips-subscriber"),
-		now:          func() time.Time { return time.Now().UTC() },
+		pool:       pool,
+		workerRepo: workerRepo,
+		logger:     logger.Named("fips-subscriber"),
+		now:        func() time.Time { return time.Now().UTC() },
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -227,9 +229,13 @@ func (s *FIPSSubscriber) subscribe(ctx context.Context) error {
 }
 
 func (s *FIPSSubscriber) filter() gonostr.Filter {
+	tags := gonostr.TagMap{"d": []string{FIPSOverlayAdvertIdentifier}}
+	if s.appNamespace != "" {
+		tags["protocol"] = []string{s.appNamespace}
+	}
 	return gonostr.Filter{
 		Kinds: []int{FIPSOverlayAdvertKind},
-		Tags:  gonostr.TagMap{"d": []string{s.appNamespace}},
+		Tags:  tags,
 	}
 }
 
@@ -280,15 +286,18 @@ func (s *FIPSSubscriber) workerFromEvent(ctx context.Context, ev *gonostr.Event)
 	if ev.Kind != FIPSOverlayAdvertKind {
 		return nil, OverlayAdvert{}, fmt.Errorf("unexpected event kind %d", ev.Kind)
 	}
-	if !eventHasTagValue(ev.Tags, "d", s.appNamespace) {
-		return nil, OverlayAdvert{}, fmt.Errorf("missing expected d tag %q", s.appNamespace)
+	if !eventHasTagValue(ev.Tags, "d", FIPSOverlayAdvertIdentifier) {
+		return nil, OverlayAdvert{}, fmt.Errorf("missing expected d tag %q", FIPSOverlayAdvertIdentifier)
+	}
+	if s.appNamespace != "" && !eventHasTagValue(ev.Tags, "protocol", s.appNamespace) {
+		return nil, OverlayAdvert{}, fmt.Errorf("missing expected protocol tag %q", s.appNamespace)
 	}
 	if len(s.allowedPubkeys) > 0 {
 		if _, ok := s.allowedPubkeys[strings.ToLower(ev.PubKey)]; !ok {
 			return nil, OverlayAdvert{}, fmt.Errorf("pubkey is not allowlisted")
 		}
 	}
-	advert, err := ParseOverlayAdvert(ev.Content, s.appNamespace)
+	advert, err := ParseOverlayAdvert(ev.Content, FIPSOverlayAdvertIdentifier)
 	if err != nil {
 		return nil, OverlayAdvert{}, err
 	}
