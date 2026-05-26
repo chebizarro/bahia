@@ -27,7 +27,7 @@ func NewPgDeploymentIntentRepository(pool *pgxpool.Pool) *PgDeploymentIntentRepo
 	return &PgDeploymentIntentRepository{pool: pool}
 }
 
-const intentColumns = `id, service_id, environment_id, artifact_id, requested_by, source_kind, approval_status, status, supersedes_intent_id, approval_metadata, metadata, created_at, approved_at, updated_at`
+const intentColumns = `id, service_id, environment_id, artifact_id, requested_by, source_kind, approval_status, status, supersedes_intent_id, approval_metadata, metadata, desired_state, desired_hash, created_at, approved_at, updated_at`
 
 func (r *PgDeploymentIntentRepository) Create(ctx context.Context, di *domain.DeploymentIntent) error {
 	if di.ID == uuid.Nil {
@@ -45,12 +45,16 @@ func (r *PgDeploymentIntentRepository) Create(ctx context.Context, di *domain.De
 	if err != nil {
 		return err
 	}
+	desiredStateJSON, err := marshalJSON(di.DesiredState, "desired state")
+	if err != nil {
+		return err
+	}
 
 	_, err = r.pool.Exec(ctx, `
 		INSERT INTO deployment_intents (`+intentColumns+`)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
 	`, di.ID, di.ServiceID, di.EnvironmentID, di.ArtifactID, di.RequestedBy, di.SourceKind, di.ApprovalStatus, di.Status,
-		di.SupersedesIntentID, approvalJSON, metaJSON, di.CreatedAt, di.ApprovedAt, di.UpdatedAt)
+		di.SupersedesIntentID, approvalJSON, metaJSON, desiredStateJSON, di.DesiredHash, di.CreatedAt, di.ApprovedAt, di.UpdatedAt)
 	if err != nil {
 		return fmt.Errorf("inserting deployment intent: %w", err)
 	}
@@ -59,10 +63,10 @@ func (r *PgDeploymentIntentRepository) Create(ctx context.Context, di *domain.De
 
 func (r *PgDeploymentIntentRepository) scanIntent(row pgx.Row) (*domain.DeploymentIntent, error) {
 	di := &domain.DeploymentIntent{}
-	var approvalJSON, metaJSON []byte
+	var approvalJSON, metaJSON, desiredStateJSON []byte
 	err := row.Scan(&di.ID, &di.ServiceID, &di.EnvironmentID, &di.ArtifactID, &di.RequestedBy, &di.SourceKind,
 		&di.ApprovalStatus, &di.Status, &di.SupersedesIntentID, &approvalJSON, &metaJSON,
-		&di.CreatedAt, &di.ApprovedAt, &di.UpdatedAt)
+		&desiredStateJSON, &di.DesiredHash, &di.CreatedAt, &di.ApprovedAt, &di.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -71,6 +75,12 @@ func (r *PgDeploymentIntentRepository) scanIntent(row pgx.Row) (*domain.Deployme
 	}
 	if err := unmarshalJSON(metaJSON, &di.Metadata, "intent metadata"); err != nil {
 		return nil, err
+	}
+	if len(desiredStateJSON) > 0 && string(desiredStateJSON) != "null" {
+		di.DesiredState = &domain.DesiredServiceSpec{}
+		if err := unmarshalJSON(desiredStateJSON, di.DesiredState, "desired state"); err != nil {
+			return nil, err
+		}
 	}
 	return di, nil
 }
@@ -117,10 +127,10 @@ func (r *PgDeploymentIntentRepository) ListByServiceEnv(ctx context.Context, ser
 	var intents []domain.DeploymentIntent
 	for rows.Next() {
 		var di domain.DeploymentIntent
-		var approvalJSON, metaJSON []byte
+		var approvalJSON, metaJSON, desiredStateJSON []byte
 		if err := rows.Scan(&di.ID, &di.ServiceID, &di.EnvironmentID, &di.ArtifactID, &di.RequestedBy, &di.SourceKind,
 			&di.ApprovalStatus, &di.Status, &di.SupersedesIntentID, &approvalJSON, &metaJSON,
-			&di.CreatedAt, &di.ApprovedAt, &di.UpdatedAt); err != nil {
+			&desiredStateJSON, &di.DesiredHash, &di.CreatedAt, &di.ApprovedAt, &di.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("scanning deployment intent: %w", err)
 		}
 		if err := unmarshalJSON(approvalJSON, &di.ApprovalMetadata, "approval metadata"); err != nil {
@@ -128,6 +138,12 @@ func (r *PgDeploymentIntentRepository) ListByServiceEnv(ctx context.Context, ser
 		}
 		if err := unmarshalJSON(metaJSON, &di.Metadata, "intent metadata"); err != nil {
 			return nil, fmt.Errorf("reading intent %s: %w", di.ID, err)
+		}
+		if len(desiredStateJSON) > 0 && string(desiredStateJSON) != "null" {
+			di.DesiredState = &domain.DesiredServiceSpec{}
+			if err := unmarshalJSON(desiredStateJSON, di.DesiredState, "desired state"); err != nil {
+				return nil, fmt.Errorf("reading intent %s desired state: %w", di.ID, err)
+			}
 		}
 		intents = append(intents, di)
 	}
@@ -170,7 +186,7 @@ func NewPgDeploymentRunRepository(pool *pgxpool.Pool) *PgDeploymentRunRepository
 	return &PgDeploymentRunRepository{pool: pool}
 }
 
-const runColumns = `id, deployment_intent_id, loom_job_id, worker_pubkey, worker_name, status, exit_code, stdout_ref, stderr_ref, started_at, finished_at, metadata, created_at, updated_at`
+const runColumns = `id, deployment_intent_id, loom_job_id, worker_pubkey, worker_name, status, exit_code, stdout_ref, stderr_ref, started_at, finished_at, metadata, apply_metadata, created_at, updated_at`
 
 func (r *PgDeploymentRunRepository) Create(ctx context.Context, dr *domain.DeploymentRun) error {
 	if dr.ID == uuid.Nil {
@@ -184,12 +200,16 @@ func (r *PgDeploymentRunRepository) Create(ctx context.Context, dr *domain.Deplo
 	if err != nil {
 		return err
 	}
+	applyMetaJSON, err := marshalJSON(dr.ApplyMetadata, "apply metadata")
+	if err != nil {
+		return err
+	}
 
 	_, err = r.pool.Exec(ctx, `
 		INSERT INTO deployment_runs (`+runColumns+`)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
 	`, dr.ID, dr.DeploymentIntentID, dr.LoomJobID, dr.WorkerPubkey, dr.WorkerName, dr.Status,
-		dr.ExitCode, dr.StdoutRef, dr.StderrRef, dr.StartedAt, dr.FinishedAt, metaJSON, dr.CreatedAt, dr.UpdatedAt)
+		dr.ExitCode, dr.StdoutRef, dr.StderrRef, dr.StartedAt, dr.FinishedAt, metaJSON, applyMetaJSON, dr.CreatedAt, dr.UpdatedAt)
 	if err != nil {
 		return fmt.Errorf("inserting deployment run: %w", err)
 	}
@@ -198,10 +218,10 @@ func (r *PgDeploymentRunRepository) Create(ctx context.Context, dr *domain.Deplo
 
 func (r *PgDeploymentRunRepository) GetByID(ctx context.Context, id uuid.UUID) (*domain.DeploymentRun, error) {
 	dr := &domain.DeploymentRun{}
-	var metaJSON []byte
+	var metaJSON, applyMetaJSON []byte
 	err := r.pool.QueryRow(ctx, `SELECT `+runColumns+` FROM deployment_runs WHERE id = $1`, id).
 		Scan(&dr.ID, &dr.DeploymentIntentID, &dr.LoomJobID, &dr.WorkerPubkey, &dr.WorkerName, &dr.Status,
-			&dr.ExitCode, &dr.StdoutRef, &dr.StderrRef, &dr.StartedAt, &dr.FinishedAt, &metaJSON, &dr.CreatedAt, &dr.UpdatedAt)
+			&dr.ExitCode, &dr.StdoutRef, &dr.StderrRef, &dr.StartedAt, &dr.FinishedAt, &metaJSON, &applyMetaJSON, &dr.CreatedAt, &dr.UpdatedAt)
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			return nil, nil
@@ -209,6 +229,9 @@ func (r *PgDeploymentRunRepository) GetByID(ctx context.Context, id uuid.UUID) (
 		return nil, fmt.Errorf("querying deployment run by id: %w", err)
 	}
 	if err := unmarshalJSON(metaJSON, &dr.Metadata, "run metadata"); err != nil {
+		return nil, fmt.Errorf("reading run %s: %w", id, err)
+	}
+	if err := unmarshalJSON(applyMetaJSON, &dr.ApplyMetadata, "apply metadata"); err != nil {
 		return nil, fmt.Errorf("reading run %s: %w", id, err)
 	}
 	return dr, nil
@@ -224,12 +247,15 @@ func (r *PgDeploymentRunRepository) ListByIntent(ctx context.Context, intentID u
 	var runs []domain.DeploymentRun
 	for rows.Next() {
 		var dr domain.DeploymentRun
-		var metaJSON []byte
+		var metaJSON, applyMetaJSON []byte
 		if err := rows.Scan(&dr.ID, &dr.DeploymentIntentID, &dr.LoomJobID, &dr.WorkerPubkey, &dr.WorkerName, &dr.Status,
-			&dr.ExitCode, &dr.StdoutRef, &dr.StderrRef, &dr.StartedAt, &dr.FinishedAt, &metaJSON, &dr.CreatedAt, &dr.UpdatedAt); err != nil {
+			&dr.ExitCode, &dr.StdoutRef, &dr.StderrRef, &dr.StartedAt, &dr.FinishedAt, &metaJSON, &applyMetaJSON, &dr.CreatedAt, &dr.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("scanning deployment run: %w", err)
 		}
 		if err := unmarshalJSON(metaJSON, &dr.Metadata, "run metadata"); err != nil {
+			return nil, fmt.Errorf("reading run %s: %w", dr.ID, err)
+		}
+		if err := unmarshalJSON(applyMetaJSON, &dr.ApplyMetadata, "apply metadata"); err != nil {
 			return nil, fmt.Errorf("reading run %s: %w", dr.ID, err)
 		}
 		runs = append(runs, dr)

@@ -437,6 +437,348 @@ func TestDesiredServiceSpec_HashIncludesSecretKeys(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// Golden hash fixtures — these lock hash stability across serialization changes.
+// If any of these tests fail, it means the canonical serialization has changed
+// and hash continuity is broken. This is a breaking change for drift detection
+// and no-op apply logic.
+// ---------------------------------------------------------------------------
+
+func TestDesiredServiceSpec_GoldenHash(t *testing.T) {
+	spec := DesiredServiceSpec{
+		SchemaVersion:    "1",
+		ServiceID:        uuid.MustParse("11111111-1111-1111-1111-111111111111"),
+		EnvironmentID:    uuid.MustParse("22222222-2222-2222-2222-222222222222"),
+		ArtifactID:       uuid.MustParse("33333333-3333-3333-3333-333333333333"),
+		StableServiceKey: "my-app",
+		ImageRef:         "ghcr.io/org/my-app:v1.2.3",
+		Command:          []string{"/bin/app", "serve"},
+		Entrypoint:       []string{"/entrypoint.sh"},
+		WorkDir:          "/app",
+		Env:              map[string]string{"LOG_LEVEL": "info", "PORT": "8080"},
+		SecretRefs: []DesiredSecretRef{
+			{EnvVar: "DB_PASSWORD", Name: "db-password", SecretID: uuid.MustParse("44444444-4444-4444-4444-444444444444"), RedactedValue: "REDACTED(db-password)"},
+		},
+		Ports:         []string{"8080:8080", "9090:9090"},
+		Volumes:       []string{"/data:/app/data"},
+		Labels:        map[string]string{"bahia.managed": "true"},
+		Healthcheck:   &HealthcheckConfig{Test: []string{"CMD", "curl", "-f", "http://localhost:8080/health"}, Interval: "30s", Retries: 3},
+		DependsOn:     []string{"postgres"},
+		NetworkMode:   "bridge",
+		RestartPolicy: "unless-stopped",
+		PullPolicy:    "always",
+	}
+
+	got := spec.ComputeDesiredHash()
+
+	// This is the golden hash. If this changes, canonical serialization has broken.
+	// To update: run the test, get the new hash, verify the serialization change
+	// is intentional, bump DesiredStateSchemaVersion, and update this value.
+	want := "sha256:a783ee5860f8bf9d07e89d1dae4111b6c84d6b591c7b8ca210adc963b48d92e8"
+	if got != want {
+		t.Fatalf("golden desired hash changed — canonical serialization broken:\n  got:  %s\n  want: %s", got, want)
+	}
+
+	// Verify determinism: compute again and compare.
+	spec2 := DesiredServiceSpec{
+		SchemaVersion:    "1",
+		ServiceID:        uuid.MustParse("11111111-1111-1111-1111-111111111111"),
+		EnvironmentID:    uuid.MustParse("22222222-2222-2222-2222-222222222222"),
+		ArtifactID:       uuid.MustParse("33333333-3333-3333-3333-333333333333"),
+		StableServiceKey: "my-app",
+		ImageRef:         "ghcr.io/org/my-app:v1.2.3",
+		Command:          []string{"/bin/app", "serve"},
+		Entrypoint:       []string{"/entrypoint.sh"},
+		WorkDir:          "/app",
+		Env:              map[string]string{"LOG_LEVEL": "info", "PORT": "8080"},
+		SecretRefs: []DesiredSecretRef{
+			{EnvVar: "DB_PASSWORD", Name: "db-password", SecretID: uuid.MustParse("44444444-4444-4444-4444-444444444444"), RedactedValue: "REDACTED(db-password)"},
+		},
+		Ports:         []string{"8080:8080", "9090:9090"},
+		Volumes:       []string{"/data:/app/data"},
+		Labels:        map[string]string{"bahia.managed": "true"},
+		Healthcheck:   &HealthcheckConfig{Test: []string{"CMD", "curl", "-f", "http://localhost:8080/health"}, Interval: "30s", Retries: 3},
+		DependsOn:     []string{"postgres"},
+		NetworkMode:   "bridge",
+		RestartPolicy: "unless-stopped",
+		PullPolicy:    "always",
+	}
+	got2 := spec2.ComputeDesiredHash()
+
+	if got != got2 {
+		t.Fatalf("golden hash not deterministic:\n  first:  %s\n  second: %s", got, got2)
+	}
+
+	t.Logf("Golden desired hash: %s", got)
+}
+
+func TestDesiredServiceSpec_GoldenHash_Minimal(t *testing.T) {
+	// Minimal spec — verifies hash stability for services with no optional fields.
+	spec := DesiredServiceSpec{
+		SchemaVersion:    "1",
+		ServiceID:        uuid.MustParse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"),
+		EnvironmentID:    uuid.MustParse("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"),
+		ArtifactID:       uuid.MustParse("cccccccc-cccc-cccc-cccc-cccccccccccc"),
+		StableServiceKey: "nginx",
+		ImageRef:         "nginx:1.25",
+	}
+
+	got := spec.ComputeDesiredHash()
+	want := "sha256:4dd98b19876ad163db3cc22f8905e64cc56db8391a468993af599fc467a1f69e"
+	if got != want {
+		t.Fatalf("minimal golden desired hash changed — canonical serialization broken:\n  got:  %s\n  want: %s", got, want)
+	}
+
+	// Rebuild from scratch and verify determinism.
+	spec2 := DesiredServiceSpec{
+		SchemaVersion:    "1",
+		ServiceID:        uuid.MustParse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"),
+		EnvironmentID:    uuid.MustParse("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"),
+		ArtifactID:       uuid.MustParse("cccccccc-cccc-cccc-cccc-cccccccccccc"),
+		StableServiceKey: "nginx",
+		ImageRef:         "nginx:1.25",
+	}
+	got2 := spec2.ComputeDesiredHash()
+
+	if got != got2 {
+		t.Fatalf("minimal golden hash not deterministic:\n  first:  %s\n  second: %s", got, got2)
+	}
+
+	t.Logf("Golden minimal desired hash: %s", got)
+}
+
+func TestNormalizedObservation_GoldenHash(t *testing.T) {
+	obs := NormalizedObservation{
+		SchemaVersion:      "1",
+		ImageRef:           "ghcr.io/org/my-app:v1.2.3",
+		ImageDigest:        "sha256:abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890",
+		Command:            []string{"/bin/app", "serve"},
+		Entrypoint:         []string{"/entrypoint.sh"},
+		WorkDir:            "/app",
+		Env:                map[string]string{"LOG_LEVEL": "info", "PORT": "8080"},
+		SecretEnvKeys:      []string{"DB_PASSWORD"},
+		Ports:              []string{"8080:8080", "9090:9090"},
+		Volumes:            []string{"/data:/app/data"},
+		RestartPolicy:      "unless-stopped",
+		NetworkAttachments: []string{"bahia-net", "default"},
+		BahiaLabels:        map[string]string{"bahia.managed": "true", "bahia.service_id": "11111111-1111-1111-1111-111111111111"},
+	}
+
+	got := obs.ComputeObservationHash()
+	want := "sha256:a43e0096d1b415177274da66dff0f90d42f0dfd570f9e6118b78e698648d0a34"
+	if got != want {
+		t.Fatalf("golden observation hash changed — canonical serialization broken:\n  got:  %s\n  want: %s", got, want)
+	}
+
+	// Rebuild from scratch and verify determinism.
+	obs2 := NormalizedObservation{
+		SchemaVersion:      "1",
+		ImageRef:           "ghcr.io/org/my-app:v1.2.3",
+		ImageDigest:        "sha256:abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890",
+		Command:            []string{"/bin/app", "serve"},
+		Entrypoint:         []string{"/entrypoint.sh"},
+		WorkDir:            "/app",
+		Env:                map[string]string{"LOG_LEVEL": "info", "PORT": "8080"},
+		SecretEnvKeys:      []string{"DB_PASSWORD"},
+		Ports:              []string{"8080:8080", "9090:9090"},
+		Volumes:            []string{"/data:/app/data"},
+		RestartPolicy:      "unless-stopped",
+		NetworkAttachments: []string{"bahia-net", "default"},
+		BahiaLabels:        map[string]string{"bahia.managed": "true", "bahia.service_id": "11111111-1111-1111-1111-111111111111"},
+	}
+	got2 := obs2.ComputeObservationHash()
+
+	if got != got2 {
+		t.Fatalf("golden observation hash not deterministic:\n  first:  %s\n  second: %s", got, got2)
+	}
+
+	if !strings.HasPrefix(got, "sha256:") {
+		t.Errorf("observation hash missing sha256: prefix, got %q", got)
+	}
+
+	t.Logf("Golden observation hash: %s", got)
+}
+
+func TestNormalizedObservation_GoldenHash_Minimal(t *testing.T) {
+	obs := NormalizedObservation{
+		SchemaVersion: "1",
+		ImageRef:      "nginx:1.25",
+	}
+
+	got := obs.ComputeObservationHash()
+	want := "sha256:ee47aea3161532209ef9d4022324903a5bd414941f3a40d8d60fe7ea5256ec3a"
+	if got != want {
+		t.Fatalf("minimal observation golden hash changed — canonical serialization broken:\n  got:  %s\n  want: %s", got, want)
+	}
+
+	obs2 := NormalizedObservation{
+		SchemaVersion: "1",
+		ImageRef:      "nginx:1.25",
+	}
+	got2 := obs2.ComputeObservationHash()
+
+	if got != got2 {
+		t.Fatalf("minimal observation golden hash not deterministic:\n  first:  %s\n  second: %s", got, got2)
+	}
+
+	t.Logf("Golden minimal observation hash: %s", got)
+}
+
+// ---------------------------------------------------------------------------
+// Observation hash behavior tests
+// ---------------------------------------------------------------------------
+
+func TestNormalizedObservation_HashChangesOnImageChange(t *testing.T) {
+	obs := NormalizedObservation{
+		SchemaVersion: "1",
+		ImageRef:      "app:v1",
+	}
+	h1 := obs.ComputeObservationHash()
+
+	obs.ImageRef = "app:v2"
+	h2 := obs.ComputeObservationHash()
+
+	if h1 == h2 {
+		t.Error("observation hash should change when ImageRef changes")
+	}
+}
+
+func TestNormalizedObservation_HashIgnoresOrder(t *testing.T) {
+	obs1 := NormalizedObservation{
+		SchemaVersion:      "1",
+		ImageRef:           "app:v1",
+		Ports:              []string{"9090:9090", "8080:8080"},
+		NetworkAttachments: []string{"net-b", "net-a"},
+		Volumes:            []string{"/z:/z", "/a:/a"},
+	}
+	h1 := obs1.ComputeObservationHash()
+
+	obs2 := NormalizedObservation{
+		SchemaVersion:      "1",
+		ImageRef:           "app:v1",
+		Ports:              []string{"8080:8080", "9090:9090"},
+		NetworkAttachments: []string{"net-a", "net-b"},
+		Volumes:            []string{"/a:/a", "/z:/z"},
+	}
+	h2 := obs2.ComputeObservationHash()
+
+	if h1 != h2 {
+		t.Errorf("observation hash should be order-independent for slices:\n  h1: %s\n  h2: %s", h1, h2)
+	}
+}
+
+func TestNormalizedObservation_HashExcludesVolatileFields(t *testing.T) {
+	obs := NormalizedObservation{
+		SchemaVersion: "1",
+		ImageRef:      "app:v1",
+	}
+	h1 := obs.ComputeObservationHash()
+
+	// ObservationHash itself should not affect the next computation.
+	obs.ObservationHash = "sha256:something-old"
+	h2 := obs.ComputeObservationHash()
+
+	if h1 != h2 {
+		t.Error("observation hash should not be affected by the ObservationHash field itself")
+	}
+}
+
+func TestNormalizedObservation_SecretKeysAffectHash(t *testing.T) {
+	obs := NormalizedObservation{
+		SchemaVersion: "1",
+		ImageRef:      "app:v1",
+	}
+	h1 := obs.ComputeObservationHash()
+
+	obs.SecretEnvKeys = []string{"API_KEY"}
+	h2 := obs.ComputeObservationHash()
+
+	if h1 == h2 {
+		t.Error("observation hash should change when secret env keys are added")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Helper function tests
+// ---------------------------------------------------------------------------
+
+func TestFilterBahiaLabels(t *testing.T) {
+	labels := map[string]string{
+		"bahia.managed":                   "true",
+		"bahia.service_id":                "abc",
+		"com.docker.compose.project":      "myproject",
+		"com.docker.compose.service":      "web",
+		"org.opencontainers.image.source": "https://github.com/org/repo",
+	}
+
+	got := FilterBahiaLabels(labels)
+
+	if len(got) != 2 {
+		t.Fatalf("expected 2 bahia labels, got %d", len(got))
+	}
+	if got["bahia.managed"] != "true" {
+		t.Error("missing bahia.managed")
+	}
+	if got["bahia.service_id"] != "abc" {
+		t.Error("missing bahia.service_id")
+	}
+}
+
+func TestFilterBahiaLabels_Empty(t *testing.T) {
+	got := FilterBahiaLabels(nil)
+	if len(got) != 0 {
+		t.Errorf("expected empty map, got %d entries", len(got))
+	}
+}
+
+func TestFilterNonSecretEnv(t *testing.T) {
+	env := map[string]string{
+		"PORT":        "8080",
+		"LOG_LEVEL":   "info",
+		"DB_PASSWORD": "secret123",
+		"API_KEY":     "key456",
+	}
+	secretNames := map[string]bool{
+		"DB_PASSWORD": true,
+		"API_KEY":     true,
+	}
+
+	nonSecret, secretKeys := FilterNonSecretEnv(env, secretNames)
+
+	if len(nonSecret) != 2 {
+		t.Fatalf("expected 2 non-secret env vars, got %d", len(nonSecret))
+	}
+	if nonSecret["PORT"] != "8080" {
+		t.Error("missing PORT")
+	}
+	if nonSecret["LOG_LEVEL"] != "info" {
+		t.Error("missing LOG_LEVEL")
+	}
+	if _, ok := nonSecret["DB_PASSWORD"]; ok {
+		t.Error("DB_PASSWORD should not be in non-secret map")
+	}
+
+	if len(secretKeys) != 2 {
+		t.Fatalf("expected 2 secret keys, got %d", len(secretKeys))
+	}
+	// Should be sorted.
+	if secretKeys[0] != "API_KEY" || secretKeys[1] != "DB_PASSWORD" {
+		t.Errorf("secret keys not sorted: %v", secretKeys)
+	}
+}
+
+func TestFilterNonSecretEnv_NoSecrets(t *testing.T) {
+	env := map[string]string{"PORT": "8080"}
+	nonSecret, secretKeys := FilterNonSecretEnv(env, nil)
+
+	if len(nonSecret) != 1 || nonSecret["PORT"] != "8080" {
+		t.Error("non-secret env should pass through")
+	}
+	if len(secretKeys) != 0 {
+		t.Errorf("expected no secret keys, got %v", secretKeys)
+	}
+}
+
 func TestDesiredEnvironmentPlan_RevisionHashDeterministic(t *testing.T) {
 	envID := uuid.MustParse("eeee0000-0000-0000-0000-000000000000")
 	artA := uuid.MustParse("cccc0000-0000-0000-0000-000000000000")

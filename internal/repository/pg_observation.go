@@ -24,7 +24,7 @@ func newPgRuntimeObservationRepositoryWithDB(db pgQueryer) *PgRuntimeObservation
 	return &PgRuntimeObservationRepository{pool: db}
 }
 
-const obsColumns = `id, service_id, environment_id, observed_image_digest, observed_image_repo, observed_container_id, observed_host, observed_version, health_status, source, metadata, observed_at`
+const obsColumns = `id, service_id, environment_id, observed_image_digest, observed_image_repo, observed_container_id, observed_host, observed_version, health_status, source, metadata, normalized_state, normalized_hash, observed_at`
 
 func (r *PgRuntimeObservationRepository) Create(ctx context.Context, obs *domain.RuntimeObservation) error {
 	if obs.ID == uuid.Nil {
@@ -38,12 +38,17 @@ func (r *PgRuntimeObservationRepository) Create(ctx context.Context, obs *domain
 	if err != nil {
 		return err
 	}
+	normalizedStateJSON, err := marshalJSON(obs.NormalizedState, "normalized state")
+	if err != nil {
+		return err
+	}
 
 	_, err = r.pool.Exec(ctx, `
 		INSERT INTO runtime_observations (`+obsColumns+`)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 	`, obs.ID, obs.ServiceID, obs.EnvironmentID, obs.ObservedImageDigest, obs.ObservedImageRepo,
-		obs.ObservedContainerID, obs.ObservedHost, obs.ObservedVersion, obs.HealthStatus, obs.Source, metaJSON, obs.ObservedAt)
+		obs.ObservedContainerID, obs.ObservedHost, obs.ObservedVersion, obs.HealthStatus, obs.Source, metaJSON,
+		normalizedStateJSON, obs.NormalizedHash, obs.ObservedAt)
 	if err != nil {
 		return fmt.Errorf("inserting runtime observation: %w", err)
 	}
@@ -52,14 +57,21 @@ func (r *PgRuntimeObservationRepository) Create(ctx context.Context, obs *domain
 
 func (r *PgRuntimeObservationRepository) scanObs(row pgx.Row) (*domain.RuntimeObservation, error) {
 	obs := &domain.RuntimeObservation{}
-	var metaJSON []byte
+	var metaJSON, normalizedStateJSON []byte
 	err := row.Scan(&obs.ID, &obs.ServiceID, &obs.EnvironmentID, &obs.ObservedImageDigest, &obs.ObservedImageRepo,
-		&obs.ObservedContainerID, &obs.ObservedHost, &obs.ObservedVersion, &obs.HealthStatus, &obs.Source, &metaJSON, &obs.ObservedAt)
+		&obs.ObservedContainerID, &obs.ObservedHost, &obs.ObservedVersion, &obs.HealthStatus, &obs.Source, &metaJSON,
+		&normalizedStateJSON, &obs.NormalizedHash, &obs.ObservedAt)
 	if err != nil {
 		return nil, err
 	}
 	if err := unmarshalJSON(metaJSON, &obs.Metadata, "observation metadata"); err != nil {
 		return nil, err
+	}
+	if len(normalizedStateJSON) > 0 && string(normalizedStateJSON) != "null" {
+		obs.NormalizedState = &domain.NormalizedObservation{}
+		if err := unmarshalJSON(normalizedStateJSON, obs.NormalizedState, "normalized state"); err != nil {
+			return nil, err
+		}
 	}
 	return obs, nil
 }
@@ -94,13 +106,20 @@ func (r *PgRuntimeObservationRepository) ListByServiceEnv(ctx context.Context, s
 	var observations []domain.RuntimeObservation
 	for rows.Next() {
 		var obs domain.RuntimeObservation
-		var metaJSON []byte
+		var metaJSON, normalizedStateJSON []byte
 		if err := rows.Scan(&obs.ID, &obs.ServiceID, &obs.EnvironmentID, &obs.ObservedImageDigest, &obs.ObservedImageRepo,
-			&obs.ObservedContainerID, &obs.ObservedHost, &obs.ObservedVersion, &obs.HealthStatus, &obs.Source, &metaJSON, &obs.ObservedAt); err != nil {
+			&obs.ObservedContainerID, &obs.ObservedHost, &obs.ObservedVersion, &obs.HealthStatus, &obs.Source, &metaJSON,
+			&normalizedStateJSON, &obs.NormalizedHash, &obs.ObservedAt); err != nil {
 			return nil, fmt.Errorf("scanning observation: %w", err)
 		}
 		if err := unmarshalJSON(metaJSON, &obs.Metadata, "observation metadata"); err != nil {
 			return nil, fmt.Errorf("reading observation %s: %w", obs.ID, err)
+		}
+		if len(normalizedStateJSON) > 0 && string(normalizedStateJSON) != "null" {
+			obs.NormalizedState = &domain.NormalizedObservation{}
+			if err := unmarshalJSON(normalizedStateJSON, obs.NormalizedState, "normalized state"); err != nil {
+				return nil, fmt.Errorf("reading observation %s normalized state: %w", obs.ID, err)
+			}
 		}
 		observations = append(observations, obs)
 	}

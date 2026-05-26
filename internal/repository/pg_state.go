@@ -24,24 +24,32 @@ func newPgEnvironmentServiceStateRepositoryWithDB(db pgQueryer) *PgEnvironmentSe
 	return &PgEnvironmentServiceStateRepository{pool: db}
 }
 
-const stateColumns = `service_id, environment_id, desired_artifact_id, desired_intent_id, last_successful_run_id, current_observation_id, drift_status, last_reconciled_at, updated_at`
+const stateColumns = `service_id, environment_id, desired_artifact_id, desired_intent_id, last_successful_run_id, current_observation_id, drift_status, desired_runtime_state, desired_hash, last_reconciled_at, updated_at`
 
 func (r *PgEnvironmentServiceStateRepository) Upsert(ctx context.Context, state *domain.EnvironmentServiceState) error {
 	state.UpdatedAt = time.Now().UTC()
 
-	_, err := r.pool.Exec(ctx, `
+	desiredRuntimeStateJSON, err := marshalJSON(state.DesiredRuntimeState, "desired runtime state")
+	if err != nil {
+		return err
+	}
+
+	_, err = r.pool.Exec(ctx, `
 		INSERT INTO environment_service_state (`+stateColumns+`)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 		ON CONFLICT (service_id, environment_id) DO UPDATE SET
 			desired_artifact_id = EXCLUDED.desired_artifact_id,
 			desired_intent_id = EXCLUDED.desired_intent_id,
 			last_successful_run_id = EXCLUDED.last_successful_run_id,
 			current_observation_id = EXCLUDED.current_observation_id,
 			drift_status = EXCLUDED.drift_status,
+			desired_runtime_state = EXCLUDED.desired_runtime_state,
+			desired_hash = EXCLUDED.desired_hash,
 			last_reconciled_at = EXCLUDED.last_reconciled_at,
 			updated_at = EXCLUDED.updated_at
 	`, state.ServiceID, state.EnvironmentID, state.DesiredArtifactID, state.DesiredIntentID,
-		state.LastSuccessfulRunID, state.CurrentObservationID, state.DriftStatus, state.LastReconciledAt, state.UpdatedAt)
+		state.LastSuccessfulRunID, state.CurrentObservationID, state.DriftStatus,
+		desiredRuntimeStateJSON, state.DesiredHash, state.LastReconciledAt, state.UpdatedAt)
 	if err != nil {
 		return fmt.Errorf("upserting environment service state: %w", err)
 	}
@@ -50,10 +58,18 @@ func (r *PgEnvironmentServiceStateRepository) Upsert(ctx context.Context, state 
 
 func (r *PgEnvironmentServiceStateRepository) scanState(row pgx.Row) (*domain.EnvironmentServiceState, error) {
 	s := &domain.EnvironmentServiceState{}
+	var desiredRuntimeStateJSON []byte
 	err := row.Scan(&s.ServiceID, &s.EnvironmentID, &s.DesiredArtifactID, &s.DesiredIntentID,
-		&s.LastSuccessfulRunID, &s.CurrentObservationID, &s.DriftStatus, &s.LastReconciledAt, &s.UpdatedAt)
+		&s.LastSuccessfulRunID, &s.CurrentObservationID, &s.DriftStatus,
+		&desiredRuntimeStateJSON, &s.DesiredHash, &s.LastReconciledAt, &s.UpdatedAt)
 	if err != nil {
 		return nil, err
+	}
+	if len(desiredRuntimeStateJSON) > 0 && string(desiredRuntimeStateJSON) != "null" {
+		s.DesiredRuntimeState = &domain.DesiredServiceSpec{}
+		if err := unmarshalJSON(desiredRuntimeStateJSON, s.DesiredRuntimeState, "desired runtime state"); err != nil {
+			return nil, err
+		}
 	}
 	return s, nil
 }
@@ -80,9 +96,17 @@ func (r *PgEnvironmentServiceStateRepository) listByQuery(ctx context.Context, q
 	var states []domain.EnvironmentServiceState
 	for rows.Next() {
 		var s domain.EnvironmentServiceState
+		var desiredRuntimeStateJSON []byte
 		if err := rows.Scan(&s.ServiceID, &s.EnvironmentID, &s.DesiredArtifactID, &s.DesiredIntentID,
-			&s.LastSuccessfulRunID, &s.CurrentObservationID, &s.DriftStatus, &s.LastReconciledAt, &s.UpdatedAt); err != nil {
+			&s.LastSuccessfulRunID, &s.CurrentObservationID, &s.DriftStatus,
+			&desiredRuntimeStateJSON, &s.DesiredHash, &s.LastReconciledAt, &s.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("scanning state: %w", err)
+		}
+		if len(desiredRuntimeStateJSON) > 0 && string(desiredRuntimeStateJSON) != "null" {
+			s.DesiredRuntimeState = &domain.DesiredServiceSpec{}
+			if err := unmarshalJSON(desiredRuntimeStateJSON, s.DesiredRuntimeState, "desired runtime state"); err != nil {
+				return nil, fmt.Errorf("scanning state desired runtime: %w", err)
+			}
 		}
 		states = append(states, s)
 	}

@@ -349,3 +349,166 @@ func (s *DesiredServiceSpec) ContainsPlaintextSecret() bool {
 	}
 	return false
 }
+
+// ---------------------------------------------------------------------------
+// Normalized observation — comparable runtime state snapshot
+// ---------------------------------------------------------------------------
+
+// NormalizedObservation is a renderer-agnostic snapshot of observed runtime
+// state, normalized into a comparable subset for drift detection. It uses the
+// same canonical serialization approach as desired-state hashing.
+//
+// Included: image ref/digest, command, entrypoint, working dir, non-secret
+// env, secret env key presence, ports, volumes, restart policy, network
+// attachments, and Bahia labels.
+//
+// Excluded: container IDs, timestamps, ephemeral IPs, Compose-generated
+// non-semantic labels, and secret plaintext.
+type NormalizedObservation struct {
+	// SchemaVersion tracks the serialization format for hash stability.
+	SchemaVersion string `json:"schema_version"`
+
+	// Image
+	ImageRef    string `json:"image_ref"`
+	ImageDigest string `json:"image_digest,omitempty"`
+
+	// Process
+	Command    []string `json:"command,omitempty"`
+	Entrypoint []string `json:"entrypoint,omitempty"`
+	WorkDir    string   `json:"work_dir,omitempty"`
+
+	// Environment — non-secret literal values only.
+	Env map[string]string `json:"env,omitempty"`
+	// SecretEnvKeys lists env var names known to be secret-backed.
+	// Only key presence is tracked; plaintext is never stored.
+	SecretEnvKeys []string `json:"secret_env_keys,omitempty"`
+
+	// Resources
+	Ports   []string `json:"ports,omitempty"`
+	Volumes []string `json:"volumes,omitempty"`
+
+	// Policies
+	RestartPolicy string `json:"restart_policy,omitempty"`
+
+	// Network
+	NetworkAttachments []string `json:"network_attachments,omitempty"`
+
+	// Labels — only Bahia-managed labels (bahia.* prefix).
+	BahiaLabels map[string]string `json:"bahia_labels,omitempty"`
+
+	// ObservationHash is the deterministic hash of the normalized observation.
+	ObservationHash string `json:"observation_hash,omitempty"`
+}
+
+// observationHashInput is the canonical structure for deterministic observation
+// hashing. It mirrors NormalizedObservation but with explicit nil-to-empty
+// normalization. The hash excludes the ObservationHash field itself.
+type observationHashInput struct {
+	SchemaVersion      string            `json:"schema_version"`
+	ImageRef           string            `json:"image_ref"`
+	ImageDigest        string            `json:"image_digest"`
+	Command            []string          `json:"command"`
+	Entrypoint         []string          `json:"entrypoint"`
+	WorkDir            string            `json:"work_dir"`
+	Env                map[string]string `json:"env"`
+	SecretEnvKeys      []string          `json:"secret_env_keys"`
+	Ports              []string          `json:"ports"`
+	Volumes            []string          `json:"volumes"`
+	RestartPolicy      string            `json:"restart_policy"`
+	NetworkAttachments []string          `json:"network_attachments"`
+	BahiaLabels        map[string]string `json:"bahia_labels"`
+}
+
+// ComputeObservationHash computes the deterministic hash of a NormalizedObservation.
+// It uses the same canonical serialization approach as ComputeDesiredHash:
+// sorted map keys (via encoding/json), sorted slices, and nil-to-empty normalization.
+func (o *NormalizedObservation) ComputeObservationHash() string {
+	cmd := o.Command
+	if cmd == nil {
+		cmd = []string{}
+	}
+	ep := o.Entrypoint
+	if ep == nil {
+		ep = []string{}
+	}
+	env := o.Env
+	if env == nil {
+		env = map[string]string{}
+	}
+
+	secretKeys := make([]string, len(o.SecretEnvKeys))
+	copy(secretKeys, o.SecretEnvKeys)
+	sort.Strings(secretKeys)
+
+	ports := make([]string, len(o.Ports))
+	copy(ports, o.Ports)
+	sort.Strings(ports)
+
+	volumes := make([]string, len(o.Volumes))
+	copy(volumes, o.Volumes)
+	sort.Strings(volumes)
+
+	networks := make([]string, len(o.NetworkAttachments))
+	copy(networks, o.NetworkAttachments)
+	sort.Strings(networks)
+
+	labels := o.BahiaLabels
+	if labels == nil {
+		labels = map[string]string{}
+	}
+
+	input := observationHashInput{
+		SchemaVersion:      o.SchemaVersion,
+		ImageRef:           o.ImageRef,
+		ImageDigest:        o.ImageDigest,
+		Command:            cmd,
+		Entrypoint:         ep,
+		WorkDir:            o.WorkDir,
+		Env:                env,
+		SecretEnvKeys:      secretKeys,
+		Ports:              ports,
+		Volumes:            volumes,
+		RestartPolicy:      o.RestartPolicy,
+		NetworkAttachments: networks,
+		BahiaLabels:        labels,
+	}
+
+	data, err := json.Marshal(input)
+	if err != nil {
+		// observationHashInput is fully controlled; marshal should never fail.
+		panic(fmt.Sprintf("domain: failed to marshal observation hash input: %v", err))
+	}
+
+	sum := sha256.Sum256(data)
+	o.ObservationHash = fmt.Sprintf("sha256:%x", sum[:])
+	return o.ObservationHash
+}
+
+// FilterBahiaLabels returns a new map containing only labels with the "bahia."
+// prefix. This is used to strip Compose-generated and other non-semantic labels
+// from runtime observations before normalization.
+func FilterBahiaLabels(labels map[string]string) map[string]string {
+	result := make(map[string]string)
+	for k, v := range labels {
+		if strings.HasPrefix(k, "bahia.") {
+			result[k] = v
+		}
+	}
+	return result
+}
+
+// FilterNonSecretEnv returns a new map with only non-secret env vars and a
+// sorted slice of secret env var keys. The secretNames set identifies which
+// env var names are secret-backed.
+func FilterNonSecretEnv(env map[string]string, secretNames map[string]bool) (nonSecret map[string]string, secretKeys []string) {
+	nonSecret = make(map[string]string)
+	for k, v := range env {
+		if secretNames[k] {
+			secretKeys = append(secretKeys, k)
+		} else {
+			nonSecret[k] = v
+		}
+	}
+	sort.Strings(secretKeys)
+	return nonSecret, secretKeys
+}
