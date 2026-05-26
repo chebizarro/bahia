@@ -114,7 +114,7 @@ var ErrDesiredStateNotSupported = fmt.Errorf("runtime adapter does not support d
 // Stub implementations for adapters not yet migrated
 // ---------------------------------------------------------------------------
 
-// Compile-time assertions that stub implementations satisfy DesiredStateApplier.
+// Compile-time assertions that implementations satisfy DesiredStateApplier.
 var (
 	_ DesiredStateApplier = (*DockerObserver)(nil)
 	_ DesiredStateApplier = (*ComposeRuntime)(nil)
@@ -122,22 +122,18 @@ var (
 	_ DesiredStateApplier = (*PodmanObserver)(nil)
 )
 
-// SupportsDesiredState returns false — the Docker adapter has not yet been
-// migrated to desired-state convergence.
-func (o *DockerObserver) SupportsDesiredState() bool { return false }
+// Docker desired-state implementation lives in docker_apply.go.
 
-// ApplyDesiredState returns ErrDesiredStateNotSupported for the Docker adapter.
-func (o *DockerObserver) ApplyDesiredState(_ context.Context, _ DesiredStateApplyRequest) (*DesiredStateApplyResult, error) {
-	return nil, ErrDesiredStateNotSupported
-}
+// SupportsDesiredState returns true — the Compose adapter supports
+// desired-state convergence via full-project apply.
+func (r *ComposeRuntime) SupportsDesiredState() bool { return true }
 
-// SupportsDesiredState returns false — the Compose adapter has not yet been
-// migrated to desired-state convergence.
-func (r *ComposeRuntime) SupportsDesiredState() bool { return false }
-
-// ApplyDesiredState returns ErrDesiredStateNotSupported for the Compose adapter.
-func (r *ComposeRuntime) ApplyDesiredState(_ context.Context, _ DesiredStateApplyRequest) (*DesiredStateApplyResult, error) {
-	return nil, ErrDesiredStateNotSupported
+// ApplyDesiredState converges the Compose project to match the desired
+// environment plan using full-project render, staged validation, and
+// `docker compose up -d --remove-orphans`.
+func (r *ComposeRuntime) ApplyDesiredState(ctx context.Context, req DesiredStateApplyRequest) (*DesiredStateApplyResult, error) {
+	applier := NewComposeDesiredStateApplier(r, r.logger) // uses production exec runner
+	return applier.ApplyDesiredState(ctx, req)
 }
 
 // SupportsDesiredState returns false — the Kubernetes adapter has not yet been
