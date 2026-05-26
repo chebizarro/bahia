@@ -1,0 +1,81 @@
+name: bahia-production
+services:
+  api-server:
+    image: registry.example.com/api:v3.0.1
+    container_name: api-server
+    command:
+      - ./api-server
+      - --port=8080
+    entrypoint:
+      - /entrypoint.sh
+    working_dir: /app
+    environment:
+      LOG_LEVEL: debug
+      PORT: "8080"
+    ports:
+      - 8080:8080
+    volumes:
+      - api-data:/app/data
+    labels:
+      bahia.artifact_id: 6172742d-6170-692d-3030-303031000000
+      bahia.environment: production
+      bahia.managed: "true"
+      bahia.service_id: 7376632d-6170-692d-3030-303031000000
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - curl -f http://localhost:8080/healthz || exit 1
+      interval: 15s
+      timeout: 3s
+      retries: "5"
+    networks:
+      - backend
+    restart: always
+  web-frontend:
+    image: registry.example.com/web:v2.1.0
+    container_name: web-frontend
+    command:
+      - nginx
+      - -g
+      - daemon off;
+    working_dir: /usr/share/nginx
+    environment:
+      API_URL: http://api:8080
+      LOG_LEVEL: info
+      NODE_ENV: production
+    env_file:
+      - .bahia/env/web-frontend.env
+    ports:
+      - 443:443
+      - 80:80
+    volumes:
+      - /data/web/certs:/etc/nginx/certs:ro
+      - /data/web/static:/usr/share/nginx/html:ro
+    labels:
+      bahia.environment: production
+      bahia.managed: "true"
+      bahia.service_id: 7376632d-7765-622d-3030-303031000000
+    healthcheck:
+      test:
+        - CMD
+        - curl
+        - -f
+        - http://localhost:80/health
+      interval: 30s
+      timeout: 5s
+      retries: "3"
+      start_period: 10s
+    depends_on:
+      api-server:
+        condition: service_healthy
+    networks:
+      - backend
+      - frontend
+    restart: unless-stopped
+    pull_policy: if-not-present
+networks:
+  backend: {}
+  frontend: {}
+volumes:
+  api-data: {}
+  web-static: {}

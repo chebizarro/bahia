@@ -1,0 +1,5 @@
+name: bahia-656e762d
+services:
+  bare-service:
+    image: busybox:latest
+    container_name: bare-service
