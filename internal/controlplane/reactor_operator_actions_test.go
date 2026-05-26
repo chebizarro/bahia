@@ -34,6 +34,7 @@ type stubRuntimeLifecycleOperatorService struct {
 	deployCalled     bool
 	restartCalled    bool
 	stopCalled       bool
+	emitSteps        bool
 }
 
 func (s *stubRuntimeLifecycleOperatorService) Deploy(_ context.Context, serviceID, envID uuid.UUID, artifactID *uuid.UUID) (*domain.RuntimeObservation, error) {
@@ -44,11 +45,23 @@ func (s *stubRuntimeLifecycleOperatorService) Deploy(_ context.Context, serviceI
 	return s.deployResp, s.deployErr
 }
 
-func (s *stubRuntimeLifecycleOperatorService) DeployWithStatus(_ context.Context, serviceID, envID uuid.UUID, artifactID *uuid.UUID, _ service.DeployStatusCallback) (*domain.RuntimeObservation, error) {
+func (s *stubRuntimeLifecycleOperatorService) DeployWithStatus(ctx context.Context, serviceID, envID uuid.UUID, artifactID *uuid.UUID, statusFn service.DeployStatusCallback) (*domain.RuntimeObservation, error) {
 	s.deployCalled = true
 	s.deployServiceID = serviceID
 	s.deployEnvID = envID
 	s.deployArtifact = artifactID
+	if statusFn != nil && s.emitSteps {
+		for _, step := range []service.DeployStep{
+			service.DeployStepBuildingDesiredState,
+			service.DeployStepLockingEnvironment,
+			service.DeployStepRendering,
+			service.DeployStepApplying,
+			service.DeployStepObserving,
+			service.DeployStepProjecting,
+		} {
+			statusFn(ctx, step, "step: "+string(step))
+		}
+	}
 	return s.deployResp, s.deployErr
 }
 
@@ -537,5 +550,124 @@ func assertSignedEvent(t *testing.T, ev nostr.Event) {
 	t.Helper()
 	if ok, err := ev.CheckSignature(); err != nil || !ok {
 		t.Fatalf("published event signature invalid: ok=%v err=%v", ok, err)
+	}
+}
+
+func TestDeployStepProgressionEmitsStatusEvents(t *testing.T) {
+	capture := &captureNostrPublisher{published: 1}
+	serviceID := uuid.New()
+	envID := uuid.New()
+	artifactID := uuid.New()
+	obsID := uuid.New()
+	runtimeStub := &stubRuntimeLifecycleOperatorService{
+		emitSteps: true,
+		deployResp: &domain.RuntimeObservation{
+			ID:            obsID,
+			ServiceID:     serviceID,
+			EnvironmentID: envID,
+			HealthStatus:  domain.HealthStatusHealthy,
+			Source:        "direct_runtime",
+		},
+	}
+	reactor := newOperatorActionTestReactor(t, Config{DirectRuntimeAuthorizedPubkeys: []string{"operator"}}, capture, nil, runtimeStub)
+
+	reactor.handleServiceAction(context.Background(), &nostr.Event{
+		ID:      "deploy-steps-request",
+		PubKey:  "operator",
+		Kind:    KindServiceAction,
+		Content: `{"action":"deploy","service_id":"` + serviceID.String() + `","environment_id":"` + envID.String() + `","artifact_id":"` + artifactID.String() + `"}`,
+	})
+
+	if !runtimeStub.deployCalled {
+		t.Fatal("deploy was not called")
+	}
+
+	// Expected events: 1 initial "executing" status + 6 step statuses + 1 final result = 8
+	expectedSteps := []string{
+		"executing",
+		"building_desired_state",
+		"locking_environment",
+		"rendering",
+		"applying",
+		"observing",
+		"projecting",
+	}
+	expectedTotal := len(expectedSteps) + 1 // steps + final result
+	if len(capture.events) != expectedTotal {
+		t.Fatalf("published events = %d, want %d (7 status + 1 result)", len(capture.events), expectedTotal)
+	}
+
+	// Verify step status events are emitted in order with correct tags
+	for i, expectedStep := range expectedSteps {
+		ev := capture.events[i]
+		if ev.Kind != KindActionStatus {
+			t.Fatalf("event[%d] kind = %d, want %d (KindActionStatus)", i, ev.Kind, KindActionStatus)
+		}
+		assertReactorTag(t, ev.Tags, "status", "processing")
+		assertReactorTag(t, ev.Tags, "action", "deploy")
+		assertReactorTag(t, ev.Tags, "step", expectedStep)
+		// Resource correlation tags from appendRequestResourceTags
+		assertReactorTag(t, ev.Tags, "service", serviceID.String())
+		assertReactorTag(t, ev.Tags, "environment", envID.String())
+		assertReactorTag(t, ev.Tags, "artifact", artifactID.String())
+		assertSignedEvent(t, ev)
+	}
+
+	// Verify final result event
+	resultEvent := capture.events[len(capture.events)-1]
+	if resultEvent.Kind != KindActionResult {
+		t.Fatalf("final event kind = %d, want %d (KindActionResult)", resultEvent.Kind, KindActionResult)
+	}
+	assertReactorTag(t, resultEvent.Tags, "status", "success")
+	assertReactorTag(t, resultEvent.Tags, "action", "deploy")
+	assertReactorTag(t, resultEvent.Tags, "service", serviceID.String())
+	assertReactorTag(t, resultEvent.Tags, "environment", envID.String())
+	assertSignedEvent(t, resultEvent)
+}
+
+func TestDeployStepProgressionBackwardCompatible(t *testing.T) {
+	// Verify that status events with step tags can be decoded by consumers
+	// that only look for known tags — unknown tags are silently ignored.
+	capture := &captureNostrPublisher{published: 1}
+	serviceID := uuid.New()
+	envID := uuid.New()
+	runtimeStub := &stubRuntimeLifecycleOperatorService{
+		emitSteps: true,
+		deployResp: &domain.RuntimeObservation{
+			ID:            uuid.New(),
+			ServiceID:     serviceID,
+			EnvironmentID: envID,
+			HealthStatus:  domain.HealthStatusHealthy,
+			Source:        "direct_runtime",
+		},
+	}
+	reactor := newOperatorActionTestReactor(t, Config{DirectRuntimeAuthorizedPubkeys: []string{"operator"}}, capture, nil, runtimeStub)
+
+	reactor.handleServiceAction(context.Background(), &nostr.Event{
+		ID:      "compat-request",
+		PubKey:  "operator",
+		Kind:    KindServiceAction,
+		Content: `{"action":"deploy","service_id":"` + serviceID.String() + `","environment_id":"` + envID.String() + `"}`,
+	})
+
+	// All status events must have valid nostr event structure
+	for i, ev := range capture.events {
+		if ev.Kind == KindActionStatus {
+			// A consumer that only reads "status" and "action" tags should work fine
+			var foundStatus, foundAction bool
+			for _, tag := range ev.Tags {
+				if len(tag) >= 2 {
+					switch tag[0] {
+					case "status":
+						foundStatus = true
+					case "action":
+						foundAction = true
+					}
+				}
+			}
+			if !foundStatus || !foundAction {
+				t.Fatalf("event[%d] missing required base tags: status=%v action=%v", i, foundStatus, foundAction)
+			}
+		}
 	}
 }
