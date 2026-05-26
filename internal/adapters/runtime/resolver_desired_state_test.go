@@ -24,16 +24,16 @@ func TestResolveDesiredStateApplier_ComposeEndpoint(t *testing.T) {
 	svc := resolverTestService(domain.RuntimeTypeCompose)
 	env := resolverTestEnv("production", map[string]any{"endpoint_ref": "local"})
 
-	_, err := resolver.ResolveDesiredStateApplier(svc, env)
-	// Currently Compose stub returns unsupported — verify we get the sentinel error
-	if err == nil {
-		t.Fatal("expected error since Compose stub does not yet support desired state")
+	applier, err := resolver.ResolveDesiredStateApplier(svc, env)
+	// Compose now supports desired-state convergence.
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
-	if !errors.Is(err, ErrDesiredStateNotSupported) {
-		t.Fatalf("expected ErrDesiredStateNotSupported, got: %v", err)
+	if applier == nil {
+		t.Fatal("expected non-nil applier")
 	}
-	if !strings.Contains(err.Error(), "compose") {
-		t.Errorf("error should mention compose runtime type, got: %v", err)
+	if !applier.SupportsDesiredState() {
+		t.Error("expected Compose to support desired state")
 	}
 }
 
@@ -51,16 +51,16 @@ func TestResolveDesiredStateApplier_DockerEndpoint(t *testing.T) {
 	svc := resolverTestService(domain.RuntimeTypeDocker)
 	env := resolverTestEnv("production", map[string]any{"endpoint_ref": "prod-docker"})
 
-	_, err := resolver.ResolveDesiredStateApplier(svc, env)
-	// Docker stub returns unsupported — verify we get the sentinel error
-	if err == nil {
-		t.Fatal("expected error since Docker stub does not yet support desired state")
+	applier, err := resolver.ResolveDesiredStateApplier(svc, env)
+	// Docker now supports desired-state convergence.
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
-	if !errors.Is(err, ErrDesiredStateNotSupported) {
-		t.Fatalf("expected ErrDesiredStateNotSupported, got: %v", err)
+	if applier == nil {
+		t.Fatal("expected non-nil applier")
 	}
-	if !strings.Contains(err.Error(), "docker") {
-		t.Errorf("error should mention docker runtime type, got: %v", err)
+	if !applier.SupportsDesiredState() {
+		t.Error("expected Docker to support desired state")
 	}
 }
 
@@ -179,15 +179,16 @@ func TestResolveDesiredStateApplier_UsesFullResolutionPath(t *testing.T) {
 		"compose_dir": "/srv/prod-from-env",
 	})
 
-	_, err := resolver.ResolveDesiredStateApplier(svc, env)
-	// The resolution itself should succeed (Compose runtime created),
-	// but the capability check returns ErrDesiredStateNotSupported since
-	// the stub doesn't yet support it. The key is that resolution doesn't
-	// error on config/endpoint/type issues.
-	if err == nil {
-		t.Fatal("expected error since Compose stub does not yet support desired state")
+	applier, err := resolver.ResolveDesiredStateApplier(svc, env)
+	// Both Compose and Docker now support desired-state convergence.
+	// The key is that resolution doesn't error on config/endpoint/type issues.
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
-	if !errors.Is(err, ErrDesiredStateNotSupported) {
-		t.Fatalf("expected ErrDesiredStateNotSupported (resolution should succeed), got: %v", err)
+	if applier == nil {
+		t.Fatal("expected non-nil applier")
+	}
+	if !applier.SupportsDesiredState() {
+		t.Error("expected resolved applier to support desired state")
 	}
 }

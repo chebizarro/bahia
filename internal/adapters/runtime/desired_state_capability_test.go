@@ -148,12 +148,12 @@ func TestDesiredStateApplyResultConstruction(t *testing.T) {
 func TestUnsupportedRuntimesReturnExplicitError(t *testing.T) {
 	ctx := context.Background()
 
+	// Only Kubernetes and Podman are unsupported; Docker and Compose now
+	// support desired-state convergence.
 	cases := []struct {
 		name    string
 		applier DesiredStateApplier
 	}{
-		{"docker", NewDockerObserver("unix:///var/run/docker.sock", zap.NewNop())},
-		{"compose", NewComposeRuntime("/tmp/test", zap.NewNop())},
 		{"kubernetes", NewKubernetesRuntime("", "default", "", zap.NewNop())},
 		{"podman", NewPodmanObserver("unix:///run/podman/podman.sock", zap.NewNop())},
 	}
@@ -175,6 +175,19 @@ func TestUnsupportedRuntimesReturnExplicitError(t *testing.T) {
 	}
 }
 
+func TestSupportedRuntimesReportCapability(t *testing.T) {
+	// Docker and Compose now support desired-state convergence.
+	docker := NewDockerObserver("unix:///var/run/docker.sock", zap.NewNop())
+	if !docker.SupportsDesiredState() {
+		t.Error("Docker should support desired state")
+	}
+
+	compose := NewComposeRuntime("/tmp/test", zap.NewNop())
+	if !compose.SupportsDesiredState() {
+		t.Error("Compose should support desired state")
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Capability probe helper test
 // ---------------------------------------------------------------------------
@@ -182,14 +195,13 @@ func TestUnsupportedRuntimesReturnExplicitError(t *testing.T) {
 func TestAsDesiredStateApplier(t *testing.T) {
 	docker := NewDockerObserver("unix:///var/run/docker.sock", zap.NewNop())
 
-	// Docker implements DesiredStateApplier but SupportsDesiredState() = false,
-	// so the helper should return (applier, false).
+	// Docker implements DesiredStateApplier and SupportsDesiredState() = true.
 	applier, supported := AsDesiredStateApplier(docker)
 	if applier == nil {
 		t.Fatal("expected non-nil applier from AsDesiredStateApplier")
 	}
-	if supported {
-		t.Error("expected supported = false for docker stub")
+	if !supported {
+		t.Error("expected supported = true for docker desired-state applier")
 	}
 }
 
