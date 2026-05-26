@@ -373,6 +373,13 @@ func (r *Reactor) publishRuntimeActionResult(ctx context.Context, requestEvent *
 		{"service", serviceID.String()},
 		{"environment", environmentID.String()},
 	}
+	// Observation metadata (additive — old decoders ignore unknown tags).
+	if obs != nil {
+		tags = append(tags, nostr.Tag{"observation_id", obs.ID.String()})
+		if obs.NormalizedHash != "" {
+			tags = append(tags, nostr.Tag{"observed_hash", obs.NormalizedHash})
+		}
+	}
 	tags = r.appendRequestResourceTags(ctx, tags, requestEvent)
 	event := &nostr.Event{Kind: KindActionResult, CreatedAt: nostr.Now(), Tags: tags, Content: string(content)}
 	if err := r.signEvent(ctx, event); err != nil {

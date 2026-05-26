@@ -11,7 +11,7 @@ import (
 	"github.com/openagentsinc/bahia/internal/domain"
 )
 
-const KindCatalogVersion = "2026-05-23.item4"
+const KindCatalogVersion = "2026-05-26.item8"
 
 const (
 	KindNIP65RelayList = 10002
@@ -266,6 +266,9 @@ type DecodedIntent struct {
 	ApprovalStatus   domain.ApprovalStatus         `json:"approval_status,omitempty"`
 	Status           domain.DeploymentIntentStatus `json:"status,omitempty"`
 	DeploymentStatus string                        `json:"deployment_status,omitempty"`
+	DesiredHash      string                        `json:"desired_hash,omitempty"`
+	Renderer         string                        `json:"renderer,omitempty"`
+	Target           string                        `json:"target,omitempty"`
 	ApprovalMetadata map[string]any                `json:"approval_metadata,omitempty"`
 	Metadata         map[string]any                `json:"metadata,omitempty"`
 	CreatedAt        time.Time                     `json:"created_at,omitempty"`
@@ -284,6 +287,12 @@ type DecodedRun struct {
 	ExitCode           *int                       `json:"exit_code,omitempty"`
 	StdoutRef          string                     `json:"stdout_ref,omitempty"`
 	StderrRef          string                     `json:"stderr_ref,omitempty"`
+	Renderer           string                     `json:"renderer,omitempty"`
+	DesiredHash        string                     `json:"desired_hash,omitempty"`
+	RevisionHash       string                     `json:"revision_hash,omitempty"`
+	Target             string                     `json:"target,omitempty"`
+	ApplySummary       string                     `json:"apply_summary,omitempty"`
+	ObservationID      string                     `json:"observation_id,omitempty"`
 	StartedAt          *time.Time                 `json:"started_at,omitempty"`
 	FinishedAt         *time.Time                 `json:"finished_at,omitempty"`
 	Metadata           map[string]any             `json:"metadata,omitempty"`
@@ -313,6 +322,9 @@ type DecodedState struct {
 	LastSuccessfulRunID  *string            `json:"last_successful_run_id,omitempty"`
 	CurrentObservationID *string            `json:"current_observation_id,omitempty"`
 	DriftStatus          domain.DriftStatus `json:"drift_status,omitempty"`
+	DesiredHash          string             `json:"desired_hash,omitempty"`
+	Renderer             string             `json:"renderer,omitempty"`
+	Target               string             `json:"target,omitempty"`
 	LastReconciledAt     *time.Time         `json:"last_reconciled_at,omitempty"`
 	UpdatedAt            time.Time          `json:"updated_at,omitempty"`
 }

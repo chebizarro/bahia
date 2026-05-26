@@ -1124,3 +1124,282 @@ func assertJSONField(t *testing.T, content, key string, want any) {
 func stateKeyForTest(serviceID, envID uuid.UUID) string {
 	return serviceID.String() + ":" + envID.String()
 }
+
+// ---------------------------------------------------------------------------
+// Desired-state metadata enrichment tests (Item 8 — bahia-zu2p.7.2)
+// ---------------------------------------------------------------------------
+
+func TestProjectorStateCarriesDesiredStateMetadata(t *testing.T) {
+	ctx := context.Background()
+	now := time.Now().UTC()
+	serviceID := uuid.New()
+	envID := uuid.New()
+	artifactID := uuid.New()
+	intentID := uuid.New()
+
+	source := newFakeProjectionSource()
+	source.services[serviceID] = domain.Service{ID: serviceID, Name: "api", RuntimeType: domain.RuntimeTypeCompose, CreatedAt: now, UpdatedAt: now}
+	source.envs[envID] = domain.Environment{ID: envID, Name: "prod", CreatedAt: now, UpdatedAt: now}
+	source.states[stateKeyForTest(serviceID, envID)] = domain.EnvironmentServiceState{
+		ServiceID:         serviceID,
+		EnvironmentID:     envID,
+		DesiredArtifactID: &artifactID,
+		DesiredIntentID:   &intentID,
+		DriftStatus:       domain.DriftStatusInSync,
+		DesiredHash:       "sha256:abc123",
+		DesiredRuntimeState: &domain.DesiredServiceSpec{
+			SchemaVersion:    domain.DesiredStateSchemaVersion,
+			ServiceID:        serviceID,
+			EnvironmentID:    envID,
+			ArtifactID:       artifactID,
+			StableServiceKey: "api-prod",
+			ImageRef:         "ghcr.io/org/api:v1",
+			ComposeExtension: &domain.ComposeExtension{ProjectName: "bahia-prod"},
+		},
+		UpdatedAt: now,
+	}
+
+	sink := &captureProjectionPublisher{}
+	projector := NewProjector(projectorTestConfig(), source, sink, nil, zap.NewNop())
+	if err := projector.RepublishSnapshot(ctx); err != nil {
+		t.Fatalf("republish snapshot: %v", err)
+	}
+
+	stateEvent := assertOneSignedKind(t, sink, KindServiceState)
+	// Existing tags preserved
+	assertTag(t, stateEvent, "service", serviceID.String())
+	assertTag(t, stateEvent, "environment", envID.String())
+	assertTag(t, stateEvent, "drift_status", "in_sync")
+	// New desired-state tags
+	assertTag(t, stateEvent, "desired_hash", "sha256:abc123")
+	// New desired-state content fields
+	assertJSONField(t, stateEvent.Content, "desired_hash", "sha256:abc123")
+	assertJSONField(t, stateEvent.Content, "renderer", "compose")
+	assertJSONField(t, stateEvent.Content, "target", "api-prod")
+}
+
+func TestProjectorStateOmitsDesiredMetadataWhenAbsent(t *testing.T) {
+	ctx := context.Background()
+	now := time.Now().UTC()
+	serviceID := uuid.New()
+	envID := uuid.New()
+
+	source := newFakeProjectionSource()
+	source.services[serviceID] = domain.Service{ID: serviceID, Name: "api", RuntimeType: domain.RuntimeTypeDocker, CreatedAt: now, UpdatedAt: now}
+	source.envs[envID] = domain.Environment{ID: envID, Name: "staging", CreatedAt: now, UpdatedAt: now}
+	source.states[stateKeyForTest(serviceID, envID)] = domain.EnvironmentServiceState{
+		ServiceID:     serviceID,
+		EnvironmentID: envID,
+		DriftStatus:   domain.DriftStatusUnknown,
+		UpdatedAt:     now,
+	}
+
+	sink := &captureProjectionPublisher{}
+	projector := NewProjector(projectorTestConfig(), source, sink, nil, zap.NewNop())
+	if err := projector.RepublishSnapshot(ctx); err != nil {
+		t.Fatalf("republish snapshot: %v", err)
+	}
+
+	stateEvent := assertOneSignedKind(t, sink, KindServiceState)
+	// No desired_hash tag when empty
+	assertNoTag(t, stateEvent, "desired_hash", "")
+	// Content should not carry these fields
+	var content map[string]any
+	if err := json.Unmarshal([]byte(stateEvent.Content), &content); err != nil {
+		t.Fatalf("unmarshal content: %v", err)
+	}
+	if _, ok := content["desired_hash"]; ok {
+		t.Fatal("content should not have desired_hash when empty")
+	}
+	if _, ok := content["renderer"]; ok {
+		t.Fatal("content should not have renderer when no desired state")
+	}
+}
+
+func TestProjectorIntentRegistryCarriesDesiredHash(t *testing.T) {
+	ctx := context.Background()
+	now := time.Now().UTC()
+	serviceID := uuid.New()
+	envID := uuid.New()
+	artifactID := uuid.New()
+	intentID := uuid.New()
+
+	source := newFakeProjectionSource()
+	source.services[serviceID] = domain.Service{ID: serviceID, Name: "api", CreatedAt: now, UpdatedAt: now}
+	source.envs[envID] = domain.Environment{ID: envID, Name: "prod", CreatedAt: now, UpdatedAt: now}
+	source.intents[intentID] = domain.DeploymentIntent{
+		ID:            intentID,
+		ServiceID:     serviceID,
+		EnvironmentID: envID,
+		ArtifactID:    artifactID,
+		Status:        domain.IntentStatusDeploying,
+		DesiredHash:   "sha256:intent-hash",
+		DesiredState: &domain.DesiredServiceSpec{
+			StableServiceKey: "api-prod",
+			DockerExtension:  &domain.DockerExtension{},
+		},
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	source.states[stateKeyForTest(serviceID, envID)] = domain.EnvironmentServiceState{
+		ServiceID: serviceID, EnvironmentID: envID, DriftStatus: domain.DriftStatusUnknown, UpdatedAt: now,
+	}
+
+	sink := &captureProjectionPublisher{}
+	projector := NewProjector(projectorTestConfig(), source, sink, nil, zap.NewNop())
+	if err := projector.RepublishSnapshot(ctx); err != nil {
+		t.Fatalf("republish snapshot: %v", err)
+	}
+
+	intentEvent := assertOneSignedKind(t, sink, KindDeploymentIntentRegistry)
+	assertTag(t, intentEvent, "desired_hash", "sha256:intent-hash")
+	assertJSONField(t, intentEvent.Content, "desired_hash", "sha256:intent-hash")
+	assertJSONField(t, intentEvent.Content, "renderer", "docker")
+	assertJSONField(t, intentEvent.Content, "target", "api-prod")
+}
+
+func TestProjectorRunRegistryCarriesApplyMetadata(t *testing.T) {
+	ctx := context.Background()
+	now := time.Now().UTC()
+	serviceID := uuid.New()
+	envID := uuid.New()
+	artifactID := uuid.New()
+	intentID := uuid.New()
+	runID := uuid.New()
+	obsID := uuid.New()
+
+	source := newFakeProjectionSource()
+	source.services[serviceID] = domain.Service{ID: serviceID, Name: "api", CreatedAt: now, UpdatedAt: now}
+	source.envs[envID] = domain.Environment{ID: envID, Name: "prod", CreatedAt: now, UpdatedAt: now}
+	source.intents[intentID] = domain.DeploymentIntent{ID: intentID, ServiceID: serviceID, EnvironmentID: envID, ArtifactID: artifactID, Status: domain.IntentStatusDeploying, CreatedAt: now, UpdatedAt: now}
+	source.runs[runID] = domain.DeploymentRun{
+		ID:                 runID,
+		DeploymentIntentID: intentID,
+		Status:             domain.RunStatusSucceeded,
+		ApplyMetadata: map[string]any{
+			"renderer":       "compose",
+			"desired_hash":   "sha256:run-hash",
+			"revision_hash":  "sha256:rev-hash",
+			"target":         "api-prod",
+			"apply_summary":  "recreated 1 service",
+			"observation_id": obsID.String(),
+		},
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+
+	sink := &captureProjectionPublisher{}
+	projector := NewProjector(projectorTestConfig(), source, sink, nil, zap.NewNop())
+	if err := projector.RepublishSnapshot(ctx); err != nil {
+		t.Fatalf("republish snapshot: %v", err)
+	}
+
+	runEvent := assertOneSignedKind(t, sink, KindDeploymentRunRegistry)
+	assertTag(t, runEvent, "renderer", "compose")
+	assertJSONField(t, runEvent.Content, "renderer", "compose")
+	assertJSONField(t, runEvent.Content, "desired_hash", "sha256:run-hash")
+	assertJSONField(t, runEvent.Content, "revision_hash", "sha256:rev-hash")
+	assertJSONField(t, runEvent.Content, "target", "api-prod")
+	assertJSONField(t, runEvent.Content, "apply_summary", "recreated 1 service")
+	assertJSONField(t, runEvent.Content, "observation_id", obsID.String())
+}
+
+func TestProjectorRunRegistryOmitsApplyMetadataWhenNil(t *testing.T) {
+	ctx := context.Background()
+	now := time.Now().UTC()
+	serviceID := uuid.New()
+	envID := uuid.New()
+	artifactID := uuid.New()
+	intentID := uuid.New()
+	runID := uuid.New()
+
+	source := newFakeProjectionSource()
+	source.services[serviceID] = domain.Service{ID: serviceID, Name: "api", CreatedAt: now, UpdatedAt: now}
+	source.envs[envID] = domain.Environment{ID: envID, Name: "prod", CreatedAt: now, UpdatedAt: now}
+	source.intents[intentID] = domain.DeploymentIntent{ID: intentID, ServiceID: serviceID, EnvironmentID: envID, ArtifactID: artifactID, Status: domain.IntentStatusDeploying, CreatedAt: now, UpdatedAt: now}
+	source.runs[runID] = domain.DeploymentRun{
+		ID:                 runID,
+		DeploymentIntentID: intentID,
+		Status:             domain.RunStatusSucceeded,
+		CreatedAt:          now,
+		UpdatedAt:          now,
+	}
+
+	sink := &captureProjectionPublisher{}
+	projector := NewProjector(projectorTestConfig(), source, sink, nil, zap.NewNop())
+	if err := projector.RepublishSnapshot(ctx); err != nil {
+		t.Fatalf("republish snapshot: %v", err)
+	}
+
+	runEvent := assertOneSignedKind(t, sink, KindDeploymentRunRegistry)
+	// No renderer tag when no apply_metadata
+	assertNoTag(t, runEvent, "renderer", "")
+	var content map[string]any
+	if err := json.Unmarshal([]byte(runEvent.Content), &content); err != nil {
+		t.Fatalf("unmarshal content: %v", err)
+	}
+	if _, ok := content["renderer"]; ok {
+		t.Fatal("content should not have renderer when apply_metadata is nil")
+	}
+}
+
+func TestProjectorStateSecretPlaintextNeverProjected(t *testing.T) {
+	ctx := context.Background()
+	now := time.Now().UTC()
+	serviceID := uuid.New()
+	envID := uuid.New()
+	artifactID := uuid.New()
+	secretID := uuid.New()
+
+	source := newFakeProjectionSource()
+	source.services[serviceID] = domain.Service{ID: serviceID, Name: "api", CreatedAt: now, UpdatedAt: now}
+	source.envs[envID] = domain.Environment{ID: envID, Name: "prod", CreatedAt: now, UpdatedAt: now}
+	source.states[stateKeyForTest(serviceID, envID)] = domain.EnvironmentServiceState{
+		ServiceID:     serviceID,
+		EnvironmentID: envID,
+		DriftStatus:   domain.DriftStatusInSync,
+		DesiredHash:   "sha256:abc",
+		DesiredRuntimeState: &domain.DesiredServiceSpec{
+			SchemaVersion:    domain.DesiredStateSchemaVersion,
+			ServiceID:        serviceID,
+			EnvironmentID:    envID,
+			ArtifactID:       artifactID,
+			StableServiceKey: "api-prod",
+			ImageRef:         "ghcr.io/org/api:v1",
+			Env:              map[string]string{"APP_ENV": "production"},
+			SecretRefs: []domain.DesiredSecretRef{
+				{EnvVar: "DB_PASSWORD", Name: "DB_PASSWORD", SecretID: secretID, RedactedValue: "REDACTED(DB_PASSWORD)"},
+			},
+			ComposeExtension: &domain.ComposeExtension{ProjectName: "bahia-prod"},
+		},
+		UpdatedAt: now,
+	}
+
+	sink := &captureProjectionPublisher{}
+	projector := NewProjector(projectorTestConfig(), source, sink, nil, zap.NewNop())
+	if err := projector.RepublishSnapshot(ctx); err != nil {
+		t.Fatalf("republish snapshot: %v", err)
+	}
+
+	stateEvent := assertOneSignedKind(t, sink, KindServiceState)
+	// The content should carry sanitized metadata (renderer/target) but never
+	// the DesiredRuntimeState with potential env values. publishState only
+	// projects scalar metadata, not the full spec.
+	var content map[string]any
+	if err := json.Unmarshal([]byte(stateEvent.Content), &content); err != nil {
+		t.Fatalf("unmarshal content: %v", err)
+	}
+	// Must NOT contain env or secret_refs in the projected event
+	if _, ok := content["env"]; ok {
+		t.Fatal("projected state must not contain env map")
+	}
+	if _, ok := content["secret_refs"]; ok {
+		t.Fatal("projected state must not contain secret_refs")
+	}
+	if _, ok := content["desired_runtime_state"]; ok {
+		t.Fatal("projected state must not contain full desired_runtime_state")
+	}
+	// Sanitized metadata should be present
+	assertJSONField(t, stateEvent.Content, "renderer", "compose")
+	assertJSONField(t, stateEvent.Content, "target", "api-prod")
+}

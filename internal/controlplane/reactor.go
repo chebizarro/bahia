@@ -2362,27 +2362,37 @@ func (r *Reactor) publishStatus(ctx context.Context, requestEvent *nostr.Event, 
 
 // publishDeploymentResult publishes a kind:7961 deployment result event.
 func (r *Reactor) publishDeploymentResult(ctx context.Context, requestEvent *nostr.Event, intent *domain.DeploymentIntent) error {
-	content, _ := json.Marshal(map[string]interface{}{
+	payload := map[string]interface{}{
 		"intent_id":      intent.ID.String(),
 		"service_id":     intent.ServiceID.String(),
 		"environment_id": intent.EnvironmentID.String(),
 		"artifact_id":    intent.ArtifactID.String(),
 		"status":         intent.Status,
-	})
+	}
+	tags := nostr.Tags{
+		{"e", requestEvent.ID, "", "reply"},
+		{"p", requestEvent.PubKey},
+		{"status", "success"},
+		{"service", intent.ServiceID.String()},
+		{"environment", intent.EnvironmentID.String()},
+		{"artifact", intent.ArtifactID.String()},
+		{"intent", intent.ID.String()},
+	}
+	// Desired-state metadata (additive — old decoders ignore unknown fields).
+	if intent.DesiredHash != "" {
+		payload["desired_hash"] = intent.DesiredHash
+		tags = append(tags, nostr.Tag{"desired_hash", intent.DesiredHash})
+	}
+	if intent.DesiredState != nil {
+		appendDesiredStateMeta(intent.DesiredState, payload, &tags)
+	}
 
+	content, _ := json.Marshal(payload)
 	event := &nostr.Event{
 		Kind:      KindDeploymentResult,
 		CreatedAt: nostr.Now(),
-		Tags: nostr.Tags{
-			{"e", requestEvent.ID, "", "reply"},
-			{"p", requestEvent.PubKey},
-			{"status", "success"},
-			{"service", intent.ServiceID.String()},
-			{"environment", intent.EnvironmentID.String()},
-			{"artifact", intent.ArtifactID.String()},
-			{"intent", intent.ID.String()},
-		},
-		Content: string(content),
+		Tags:      tags,
+		Content:   string(content),
 	}
 
 	if err := r.signEvent(ctx, event); err != nil {
@@ -3173,5 +3183,33 @@ func (r *Reactor) cleanupRuns(ctx context.Context) {
 				r.logger.Info("cleaned up completed runs", "deleted", deleted)
 			}
 		}
+	}
+}
+
+// appendDesiredStateMeta adds renderer and target metadata from a DesiredServiceSpec
+// to a result/status payload and tags. This is additive — old decoders ignore
+// unknown content fields and tags.
+func appendDesiredStateMeta(spec *domain.DesiredServiceSpec, payload map[string]interface{}, tags *nostr.Tags) {
+	if spec == nil {
+		return
+	}
+	renderer := ""
+	switch {
+	case spec.ComposeExtension != nil:
+		renderer = "compose"
+	case spec.DockerExtension != nil:
+		renderer = "docker"
+	case spec.KubernetesExtension != nil:
+		renderer = "kubernetes"
+	case spec.PodmanExtension != nil:
+		renderer = "podman"
+	}
+	if renderer != "" {
+		payload["renderer"] = renderer
+		*tags = append(*tags, nostr.Tag{"renderer", renderer})
+	}
+	if spec.StableServiceKey != "" {
+		payload["target"] = spec.StableServiceKey
+		*tags = append(*tags, nostr.Tag{"target", spec.StableServiceKey})
 	}
 }

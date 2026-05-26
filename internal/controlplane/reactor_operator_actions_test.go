@@ -671,3 +671,73 @@ func TestDeployStepProgressionBackwardCompatible(t *testing.T) {
 		}
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Desired-state metadata enrichment tests (Item 8 — bahia-zu2p.7.2)
+// ---------------------------------------------------------------------------
+
+func TestRuntimeActionResultCarriesObservationID(t *testing.T) {
+	capture := &captureNostrPublisher{published: 1}
+	serviceID := uuid.New()
+	envID := uuid.New()
+	obsID := uuid.New()
+	runtimeStub := &stubRuntimeLifecycleOperatorService{deployResp: &domain.RuntimeObservation{
+		ID:             obsID,
+		ServiceID:      serviceID,
+		EnvironmentID:  envID,
+		HealthStatus:   domain.HealthStatusHealthy,
+		Source:         "direct_runtime",
+		NormalizedHash: "sha256:obs-hash",
+	}}
+	reactor := newOperatorActionTestReactor(t, Config{DirectRuntimeAuthorizedPubkeys: []string{"operator"}}, capture, nil, runtimeStub)
+
+	reactor.handleServiceAction(context.Background(), &nostr.Event{
+		ID:      "enriched-deploy-request",
+		PubKey:  "operator",
+		Kind:    KindServiceAction,
+		Content: `{"action":"deploy","service_id":"` + serviceID.String() + `","environment_id":"` + envID.String() + `"}`,
+	})
+
+	if len(capture.events) < 2 {
+		t.Fatalf("expected at least 2 events, got %d", len(capture.events))
+	}
+	resultEvent := capture.events[len(capture.events)-1]
+	if resultEvent.Kind != KindActionResult {
+		t.Fatalf("last event kind = %d, want %d", resultEvent.Kind, KindActionResult)
+	}
+	// Verify observation_id and observed_hash tags are present
+	assertReactorTag(t, resultEvent.Tags, "observation_id", obsID.String())
+	assertReactorTag(t, resultEvent.Tags, "observed_hash", "sha256:obs-hash")
+	assertSignedEvent(t, resultEvent)
+}
+
+func TestRuntimeActionResultOmitsObservationTagsWhenNil(t *testing.T) {
+	capture := &captureNostrPublisher{published: 1}
+	serviceID := uuid.New()
+	envID := uuid.New()
+	// Restart returns nil observation
+	runtimeStub := &stubRuntimeLifecycleOperatorService{restartResp: nil}
+	reactor := newOperatorActionTestReactor(t, Config{DirectRuntimeAuthorizedPubkeys: []string{"operator"}}, capture, nil, runtimeStub)
+
+	reactor.handleServiceAction(context.Background(), &nostr.Event{
+		ID:      "restart-request",
+		PubKey:  "operator",
+		Kind:    KindServiceAction,
+		Content: `{"action":"restart","service_id":"` + serviceID.String() + `","environment_id":"` + envID.String() + `"}`,
+	})
+
+	if len(capture.events) < 2 {
+		t.Fatalf("expected at least 2 events, got %d", len(capture.events))
+	}
+	resultEvent := capture.events[len(capture.events)-1]
+	if resultEvent.Kind != KindActionResult {
+		t.Fatalf("last event kind = %d, want %d", resultEvent.Kind, KindActionResult)
+	}
+	// observation_id should NOT be present when obs is nil
+	for _, tag := range resultEvent.Tags {
+		if len(tag) >= 2 && tag[0] == "observation_id" {
+			t.Fatal("observation_id tag should not be present when observation is nil")
+		}
+	}
+	assertSignedEvent(t, resultEvent)
+}

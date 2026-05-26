@@ -477,3 +477,146 @@ func assertStringSetEqual(t *testing.T, got []string, want []string) {
 		}
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Backward-compatible decoding tests (Item 8 — bahia-zu2p.7.2)
+// ---------------------------------------------------------------------------
+
+func catalogDecode(t *testing.T, catalog *KindCatalog, ev *gonostr.Event) *DecodedProjectionEvent {
+	t.Helper()
+	decoder, ok := catalog.Decoder(ev.Kind)
+	if !ok {
+		t.Fatalf("no decoder for kind %d", ev.Kind)
+	}
+	decoded, err := decoder(ev)
+	if err != nil {
+		t.Fatalf("decode kind %d: %v", ev.Kind, err)
+	}
+	return decoded
+}
+
+func TestCatalogDecodesLegacyStateWithoutDesiredMetadata(t *testing.T) {
+	catalog := NewKindCatalog()
+	ev := &gonostr.Event{
+		Kind:      KindServiceState,
+		CreatedAt: gonostr.Now(),
+		Tags:      gonostr.Tags{{"d", "svc:env"}, {"service", "svc"}, {"environment", "env"}, {"drift_status", "unknown"}},
+		Content:   `{"deleted":false,"service_id":"svc","environment_id":"env","drift_status":"unknown","updated_at":"2026-05-01T00:00:00Z"}`,
+	}
+	decoded := catalogDecode(t, catalog, ev)
+	if decoded.State == nil {
+		t.Fatal("decoded state is nil")
+	}
+	if decoded.State.DesiredHash != "" {
+		t.Fatalf("legacy state should have empty desired_hash, got %q", decoded.State.DesiredHash)
+	}
+	if decoded.State.Renderer != "" {
+		t.Fatalf("legacy state should have empty renderer, got %q", decoded.State.Renderer)
+	}
+}
+
+func TestCatalogDecodesEnrichedStateWithDesiredMetadata(t *testing.T) {
+	catalog := NewKindCatalog()
+	ev := &gonostr.Event{
+		Kind:      KindServiceState,
+		CreatedAt: gonostr.Now(),
+		Tags:      gonostr.Tags{{"d", "svc:env"}, {"service", "svc"}, {"environment", "env"}, {"drift_status", "in_sync"}, {"desired_hash", "sha256:abc"}},
+		Content:   `{"deleted":false,"service_id":"svc","environment_id":"env","drift_status":"in_sync","desired_hash":"sha256:abc","renderer":"compose","target":"api-prod","updated_at":"2026-05-26T00:00:00Z"}`,
+	}
+	decoded := catalogDecode(t, catalog, ev)
+	if decoded.State == nil {
+		t.Fatal("decoded state is nil")
+	}
+	if decoded.State.DesiredHash != "sha256:abc" {
+		t.Fatalf("desired_hash = %q, want sha256:abc", decoded.State.DesiredHash)
+	}
+	if decoded.State.Renderer != "compose" {
+		t.Fatalf("renderer = %q, want compose", decoded.State.Renderer)
+	}
+	if decoded.State.Target != "api-prod" {
+		t.Fatalf("target = %q, want api-prod", decoded.State.Target)
+	}
+}
+
+func TestCatalogDecodesLegacyIntentWithoutDesiredHash(t *testing.T) {
+	catalog := NewKindCatalog()
+	ev := &gonostr.Event{
+		Kind:      KindDeploymentIntentRegistry,
+		CreatedAt: gonostr.Now(),
+		Tags:      gonostr.Tags{{"d", "intent-123"}, {"intent", "intent-123"}, {"status", "deploying"}},
+		Content:   `{"deleted":false,"id":"intent-123","service_id":"svc","environment_id":"env","artifact_id":"art","status":"deploying","updated_at":"2026-05-01T00:00:00Z"}`,
+	}
+	decoded := catalogDecode(t, catalog, ev)
+	if decoded.Intent == nil {
+		t.Fatal("decoded intent is nil")
+	}
+	if decoded.Intent.DesiredHash != "" {
+		t.Fatalf("legacy intent should have empty desired_hash, got %q", decoded.Intent.DesiredHash)
+	}
+}
+
+func TestCatalogDecodesEnrichedIntentWithDesiredHash(t *testing.T) {
+	catalog := NewKindCatalog()
+	ev := &gonostr.Event{
+		Kind:      KindDeploymentIntentRegistry,
+		CreatedAt: gonostr.Now(),
+		Tags:      gonostr.Tags{{"d", "intent-123"}, {"intent", "intent-123"}, {"status", "deploying"}, {"desired_hash", "sha256:xyz"}},
+		Content:   `{"deleted":false,"id":"intent-123","service_id":"svc","environment_id":"env","artifact_id":"art","status":"deploying","desired_hash":"sha256:xyz","renderer":"docker","target":"api-prod","updated_at":"2026-05-26T00:00:00Z"}`,
+	}
+	decoded := catalogDecode(t, catalog, ev)
+	if decoded.Intent.DesiredHash != "sha256:xyz" {
+		t.Fatalf("desired_hash = %q, want sha256:xyz", decoded.Intent.DesiredHash)
+	}
+	if decoded.Intent.Renderer != "docker" {
+		t.Fatalf("renderer = %q, want docker", decoded.Intent.Renderer)
+	}
+	if decoded.Intent.Target != "api-prod" {
+		t.Fatalf("target = %q, want api-prod", decoded.Intent.Target)
+	}
+}
+
+func TestCatalogDecodesLegacyRunWithoutApplyMetadata(t *testing.T) {
+	catalog := NewKindCatalog()
+	ev := &gonostr.Event{
+		Kind:      KindDeploymentRunRegistry,
+		CreatedAt: gonostr.Now(),
+		Tags:      gonostr.Tags{{"d", "run-123"}, {"run", "run-123"}, {"status", "succeeded"}},
+		Content:   `{"deleted":false,"id":"run-123","deployment_intent_id":"intent-123","status":"succeeded","updated_at":"2026-05-01T00:00:00Z"}`,
+	}
+	decoded := catalogDecode(t, catalog, ev)
+	if decoded.Run == nil {
+		t.Fatal("decoded run is nil")
+	}
+	if decoded.Run.Renderer != "" {
+		t.Fatalf("legacy run should have empty renderer, got %q", decoded.Run.Renderer)
+	}
+}
+
+func TestCatalogDecodesEnrichedRunWithApplyMetadata(t *testing.T) {
+	catalog := NewKindCatalog()
+	ev := &gonostr.Event{
+		Kind:      KindDeploymentRunRegistry,
+		CreatedAt: gonostr.Now(),
+		Tags:      gonostr.Tags{{"d", "run-123"}, {"run", "run-123"}, {"status", "succeeded"}, {"renderer", "compose"}},
+		Content:   `{"deleted":false,"id":"run-123","deployment_intent_id":"intent-123","status":"succeeded","renderer":"compose","desired_hash":"sha256:h1","revision_hash":"sha256:r1","target":"api-prod","apply_summary":"recreated 1 service","observation_id":"obs-123","updated_at":"2026-05-26T00:00:00Z"}`,
+	}
+	decoded := catalogDecode(t, catalog, ev)
+	if decoded.Run.Renderer != "compose" {
+		t.Fatalf("renderer = %q, want compose", decoded.Run.Renderer)
+	}
+	if decoded.Run.DesiredHash != "sha256:h1" {
+		t.Fatalf("desired_hash = %q, want sha256:h1", decoded.Run.DesiredHash)
+	}
+	if decoded.Run.RevisionHash != "sha256:r1" {
+		t.Fatalf("revision_hash = %q, want sha256:r1", decoded.Run.RevisionHash)
+	}
+	if decoded.Run.Target != "api-prod" {
+		t.Fatalf("target = %q, want api-prod", decoded.Run.Target)
+	}
+	if decoded.Run.ApplySummary != "recreated 1 service" {
+		t.Fatalf("apply_summary = %q, want 'recreated 1 service'", decoded.Run.ApplySummary)
+	}
+	if decoded.Run.ObservationID != "obs-123" {
+		t.Fatalf("observation_id = %q, want obs-123", decoded.Run.ObservationID)
+	}
+}

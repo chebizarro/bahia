@@ -2131,14 +2131,53 @@ func (p *Projector) publishDeploymentIntentRegistry(ctx context.Context, intent 
 	if deleted {
 		return nil
 	}
-	return p.publishReplaceableJSON(ctx, KindDeploymentIntentRegistry, intent.ID.String(), gonostr.Tags{{"service", intent.ServiceID.String()}, {"environment", intent.EnvironmentID.String()}, {"artifact", intent.ArtifactID.String()}, {"intent", intent.ID.String()}, {"status", string(intent.Status)}, {"approval", string(intent.ApprovalStatus)}}, map[string]any{"deleted": false, "id": intent.ID.String(), "service_id": intent.ServiceID.String(), "environment_id": intent.EnvironmentID.String(), "artifact_id": intent.ArtifactID.String(), "requested_by": intent.RequestedBy, "source_kind": string(intent.SourceKind), "approval_status": string(intent.ApprovalStatus), "status": string(intent.Status), "deployment_status": string(intent.Status), "approval_metadata": intent.ApprovalMetadata, "metadata": intent.Metadata, "created_at": formatTime(intent.CreatedAt), "approved_at": intent.ApprovedAt, "updated_at": formatTime(intent.UpdatedAt)}, "deployment_intent.projection", &intent.ID)
+	tags := gonostr.Tags{{"service", intent.ServiceID.String()}, {"environment", intent.EnvironmentID.String()}, {"artifact", intent.ArtifactID.String()}, {"intent", intent.ID.String()}, {"status", string(intent.Status)}, {"approval", string(intent.ApprovalStatus)}}
+	content := map[string]any{"deleted": false, "id": intent.ID.String(), "service_id": intent.ServiceID.String(), "environment_id": intent.EnvironmentID.String(), "artifact_id": intent.ArtifactID.String(), "requested_by": intent.RequestedBy, "source_kind": string(intent.SourceKind), "approval_status": string(intent.ApprovalStatus), "status": string(intent.Status), "deployment_status": string(intent.Status), "approval_metadata": intent.ApprovalMetadata, "metadata": intent.Metadata, "created_at": formatTime(intent.CreatedAt), "approved_at": intent.ApprovedAt, "updated_at": formatTime(intent.UpdatedAt)}
+	// Desired-state metadata (additive — old decoders ignore unknown fields).
+	if intent.DesiredHash != "" {
+		content["desired_hash"] = intent.DesiredHash
+		tags = append(tags, gonostr.Tag{"desired_hash", intent.DesiredHash})
+	}
+	if intent.DesiredState != nil {
+		if renderer := desiredStateRenderer(intent.DesiredState); renderer != "" {
+			content["renderer"] = renderer
+		}
+		if target := desiredStateTarget(intent.DesiredState); target != "" {
+			content["target"] = target
+		}
+	}
+	return p.publishReplaceableJSON(ctx, KindDeploymentIntentRegistry, intent.ID.String(), tags, content, "deployment_intent.projection", &intent.ID)
 }
 
 func (p *Projector) publishDeploymentRunRegistry(ctx context.Context, run *domain.DeploymentRun, deleted bool) error {
 	if deleted {
 		return nil
 	}
-	return p.publishReplaceableJSON(ctx, KindDeploymentRunRegistry, run.ID.String(), gonostr.Tags{{"intent", run.DeploymentIntentID.String()}, {"run", run.ID.String()}, {"status", string(run.Status)}}, map[string]any{"deleted": false, "id": run.ID.String(), "deployment_intent_id": run.DeploymentIntentID.String(), "loom_job_id": run.LoomJobID, "worker_pubkey": run.WorkerPubkey, "worker_name": run.WorkerName, "status": string(run.Status), "exit_code": run.ExitCode, "stdout_ref": run.StdoutRef, "stderr_ref": run.StderrRef, "started_at": run.StartedAt, "finished_at": run.FinishedAt, "metadata": run.Metadata, "created_at": formatTime(run.CreatedAt), "updated_at": formatTime(run.UpdatedAt)}, "deployment_run.projection", &run.ID)
+	tags := gonostr.Tags{{"intent", run.DeploymentIntentID.String()}, {"run", run.ID.String()}, {"status", string(run.Status)}}
+	content := map[string]any{"deleted": false, "id": run.ID.String(), "deployment_intent_id": run.DeploymentIntentID.String(), "loom_job_id": run.LoomJobID, "worker_pubkey": run.WorkerPubkey, "worker_name": run.WorkerName, "status": string(run.Status), "exit_code": run.ExitCode, "stdout_ref": run.StdoutRef, "stderr_ref": run.StderrRef, "started_at": run.StartedAt, "finished_at": run.FinishedAt, "metadata": run.Metadata, "created_at": formatTime(run.CreatedAt), "updated_at": formatTime(run.UpdatedAt)}
+	// Apply metadata enrichment (additive — old decoders ignore unknown fields).
+	if run.ApplyMetadata != nil {
+		if renderer, ok := run.ApplyMetadata["renderer"].(string); ok && renderer != "" {
+			content["renderer"] = renderer
+			tags = append(tags, gonostr.Tag{"renderer", renderer})
+		}
+		if desiredHash, ok := run.ApplyMetadata["desired_hash"].(string); ok && desiredHash != "" {
+			content["desired_hash"] = desiredHash
+		}
+		if revisionHash, ok := run.ApplyMetadata["revision_hash"].(string); ok && revisionHash != "" {
+			content["revision_hash"] = revisionHash
+		}
+		if target, ok := run.ApplyMetadata["target"].(string); ok && target != "" {
+			content["target"] = target
+		}
+		if applySummary, ok := run.ApplyMetadata["apply_summary"].(string); ok && applySummary != "" {
+			content["apply_summary"] = applySummary
+		}
+		if obsID, ok := run.ApplyMetadata["observation_id"].(string); ok && obsID != "" {
+			content["observation_id"] = obsID
+		}
+	}
+	return p.publishReplaceableJSON(ctx, KindDeploymentRunRegistry, run.ID.String(), tags, content, "deployment_run.projection", &run.ID)
 }
 
 func (p *Projector) publishPolicyRegistry(ctx context.Context, policy *domain.DeploymentPolicy, deleted bool) error {
@@ -2813,6 +2852,18 @@ func (p *Projector) publishState(ctx context.Context, state *domain.EnvironmentS
 	if state.LastReconciledAt != nil {
 		content["last_reconciled_at"] = formatTime(*state.LastReconciledAt)
 	}
+	// Desired-state metadata (additive — old decoders ignore unknown fields).
+	if state.DesiredHash != "" {
+		content["desired_hash"] = state.DesiredHash
+	}
+	if state.DesiredRuntimeState != nil {
+		if renderer := desiredStateRenderer(state.DesiredRuntimeState); renderer != "" {
+			content["renderer"] = renderer
+		}
+		if target := desiredStateTarget(state.DesiredRuntimeState); target != "" {
+			content["target"] = target
+		}
+	}
 
 	contentJSON, _ := json.Marshal(content)
 	dTag := fmt.Sprintf("%s:%s", state.ServiceID, state.EnvironmentID)
@@ -2831,6 +2882,9 @@ func (p *Projector) publishState(ctx context.Context, state *domain.EnvironmentS
 	}
 	if state.LastSuccessfulRunID != nil {
 		tags = append(tags, gonostr.Tag{"run", state.LastSuccessfulRunID.String()})
+	}
+	if state.DesiredHash != "" {
+		tags = append(tags, gonostr.Tag{"desired_hash", state.DesiredHash})
 	}
 	return p.publishSigned(ctx, KindServiceState, tags, string(contentJSON), "state.projection", &state.ServiceID)
 }
@@ -3237,4 +3291,34 @@ func formatTime(t time.Time) string {
 		return ""
 	}
 	return t.UTC().Format(time.RFC3339)
+}
+
+// desiredStateRenderer determines the renderer name from a DesiredServiceSpec
+// based on which extension is populated.
+func desiredStateRenderer(spec *domain.DesiredServiceSpec) string {
+	if spec == nil {
+		return ""
+	}
+	if spec.ComposeExtension != nil {
+		return "compose"
+	}
+	if spec.DockerExtension != nil {
+		return "docker"
+	}
+	if spec.KubernetesExtension != nil {
+		return "kubernetes"
+	}
+	if spec.PodmanExtension != nil {
+		return "podman"
+	}
+	return ""
+}
+
+// desiredStateTarget returns the stable service key from a DesiredServiceSpec,
+// which identifies the runtime target (container/service name).
+func desiredStateTarget(spec *domain.DesiredServiceSpec) string {
+	if spec == nil {
+		return ""
+	}
+	return spec.StableServiceKey
 }
