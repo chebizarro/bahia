@@ -86,7 +86,12 @@ printf '%s|%s|%s\n' "$AGENT_API_IMAGE" "$DOCKER_HOST" "$*" >> "$COMPOSE_CALL_LOG
 `)
 	t.Setenv("COMPOSE_CALL_LOG", logPath)
 
+	// Create a Bahia-owned project directory so the ownership gate passes.
+	projectDir := t.TempDir()
+	createBahiaMarker(t, projectDir)
+
 	r := &ComposeRuntime{
+		projectDir: projectDir,
 		binary:     bin,
 		dockerHost: "tcp://docker:2375",
 		logger:     zap.NewNop(),
@@ -126,7 +131,11 @@ printf '%s|%s\n' "$MY_SERVICE_IMAGE" "$*" >> "$COMPOSE_CALL_LOG"
 `)
 	t.Setenv("COMPOSE_CALL_LOG", logPath)
 
-	r := &ComposeRuntime{binary: bin, logger: zap.NewNop()}
+	// Create a Bahia-owned project directory so the ownership gate passes.
+	projectDir := t.TempDir()
+	createBahiaMarker(t, projectDir)
+
+	r := &ComposeRuntime{projectDir: projectDir, binary: bin, logger: zap.NewNop()}
 	if err := r.Deploy(context.Background(), "my-service", "   ", DeployOptions{}); err != nil {
 		t.Fatalf("Deploy() error = %v", err)
 	}

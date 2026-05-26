@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -180,6 +181,57 @@ func ValidateComposeOwnership(composeDir string, cfg ComposeOwnershipConfig) Com
 		ComposePath: absDir,
 		MarkerPath:  markerPath,
 	}
+}
+
+// ComposeOwnershipError is a structured error returned when Compose ownership
+// validation fails. It carries machine-readable reason codes for programmatic
+// handling and correlation in failure events.
+type ComposeOwnershipError struct {
+	// Reason is the machine-readable ownership classification.
+	Reason ComposeOwnershipReason
+	// ReasonCode is the string form of Reason for structured logging/events.
+	ReasonCode string
+	// Message is a human-readable description of why ownership failed.
+	Message string
+	// ComposePath is the resolved compose directory path (may be empty).
+	ComposePath string
+}
+
+func (e *ComposeOwnershipError) Error() string {
+	if e.ComposePath != "" {
+		return fmt.Sprintf("compose ownership validation failed (%s): %s", e.ReasonCode, e.Message)
+	}
+	return fmt.Sprintf("compose ownership validation failed (%s): %s", e.ReasonCode, e.Message)
+}
+
+// NewComposeOwnershipError creates a ComposeOwnershipError from a
+// ComposeOwnershipStatus that represents a failed ownership check.
+func NewComposeOwnershipError(status ComposeOwnershipStatus) *ComposeOwnershipError {
+	msg := fmt.Sprintf("compose directory is not Bahia-owned (reason: %s)", status.Reason)
+	if status.Error != nil {
+		msg = status.Error.Error()
+	}
+	return &ComposeOwnershipError{
+		Reason:      status.Reason,
+		ReasonCode:  status.Reason.String(),
+		Message:     msg,
+		ComposePath: status.ComposePath,
+	}
+}
+
+// IsComposeOwnershipError returns true if err is a *ComposeOwnershipError.
+func IsComposeOwnershipError(err error) bool {
+	_, ok := err.(*ComposeOwnershipError)
+	return ok
+}
+
+// AsComposeOwnershipError extracts a *ComposeOwnershipError from err if present.
+func AsComposeOwnershipError(err error) (*ComposeOwnershipError, bool) {
+	var ownershipErr *ComposeOwnershipError
+	if errors.As(err, &ownershipErr) {
+		return ownershipErr, true
+	}
+	return nil, false
 }
 
 // validateRenderStateFile checks that the render-state.json file exists and

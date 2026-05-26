@@ -161,6 +161,37 @@ func (s *RuntimeLifecycleService) deployDesiredState(ctx context.Context, servic
 	opts.Labels["bahia.service"] = svc.Name
 	opts.Labels["bahia.managed"] = "true"
 
+	// Compose ownership gate: if the resolved runtime is Compose, validate
+	// ownership BEFORE any locking, staging, file writes, validation, pull,
+	// or up operations. On failure, attempt best-effort observation (safe
+	// and non-mutating), persist failed apply metadata, and publish a
+	// correlated failure event with ownership error details.
+	if composeRT, ok := rt.(*runtime.ComposeRuntime); ok {
+		if ownershipErr := composeRT.ValidateOwnership(runtime.ComposeOwnershipConfig{}); ownershipErr != nil {
+			notify(DeployStepRendering, "Compose ownership validation failed")
+
+			// Best-effort observation — non-mutating, safe even for non-owned dirs.
+			var bestEffortObs *domain.RuntimeObservation
+			if obsResult, obsErr := rt.Observe(ctx, serviceID, envID, targetName); obsErr == nil {
+				bestEffortObs = obsResult
+				_ = s.registry.RecordObservation(ctx, bestEffortObs)
+			}
+
+			// Publish failure event with ownership error details.
+			failureData := map[string]any{
+				"artifact_id":      artifact.ID,
+				"failure_reason":   "compose_ownership_validation_failed",
+				"ownership_reason": ownershipErr.Error(),
+			}
+			if ownershipTyped, ok := runtime.AsComposeOwnershipError(ownershipErr); ok {
+				failureData["ownership_reason_code"] = ownershipTyped.ReasonCode
+			}
+			s.publishFailure(ctx, svc, env, bestEffortObs, failureData)
+			s.logRuntimeAction("deploy", svc, env, serviceID, envID, &artifact.ID, start, "failed", ownershipErr)
+			return nil, fmt.Errorf("compose ownership validation failed: %w", ownershipErr)
+		}
+	}
+
 	// Step: locking_environment — acquire environment-scoped advisory lock.
 	notify(DeployStepLockingEnvironment, "Acquiring environment apply lock")
 
@@ -413,6 +444,25 @@ func (s *RuntimeLifecycleService) updateDesiredArtifact(ctx context.Context, ser
 	st.DesiredArtifactID = &artifactID
 	st.DriftStatus = domain.DriftStatusDeploying
 	return s.state.Upsert(ctx, st)
+}
+
+func (s *RuntimeLifecycleService) publishFailure(ctx context.Context, svc *domain.Service, env *domain.Environment, obs *domain.RuntimeObservation, extra map[string]any) {
+	data := map[string]any{
+		"service_id":     svc.ID,
+		"environment_id": env.ID,
+		"service":        svc.Name,
+		"environment":    env.Name,
+		"runtime_target": svc.RuntimeTargetName(),
+		"result":         "failed",
+	}
+	if obs != nil {
+		data["observation_id"] = obs.ID
+		data["health_status"] = obs.HealthStatus
+	}
+	for k, v := range extra {
+		data[k] = v
+	}
+	s.publisher.Publish(ctx, events.Event{Type: runtimeActionDeployEvent, EntityID: svc.ID.String(), Data: data})
 }
 
 func (s *RuntimeLifecycleService) publishAction(ctx context.Context, eventType events.EventType, svc *domain.Service, env *domain.Environment, obs *domain.RuntimeObservation, extra map[string]any) {

@@ -130,8 +130,26 @@ func (r *ComposeRuntime) Observe(ctx context.Context, serviceID, envID uuid.UUID
 	}, nil
 }
 
+// ValidateOwnership checks whether this Compose runtime's project directory
+// is Bahia-owned and safe for authoritative writes. It returns nil if owned,
+// or a *ComposeOwnershipError with a machine-readable reason code if not.
+func (r *ComposeRuntime) ValidateOwnership(cfg ComposeOwnershipConfig) error {
+	status := ValidateComposeOwnership(r.projectDir, cfg)
+	if status.Owned {
+		return nil
+	}
+	return NewComposeOwnershipError(status)
+}
+
 // Deploy updates a Compose service with a new image and restarts it.
 func (r *ComposeRuntime) Deploy(ctx context.Context, serviceName, image string, opts DeployOptions) error {
+	// Ownership gate: block all mutating operations if the compose directory
+	// is not Bahia-owned. This runs BEFORE any staging, file writes,
+	// validation, pull, or up operations.
+	if err := r.ValidateOwnership(ComposeOwnershipConfig{}); err != nil {
+		return fmt.Errorf("compose deploy blocked: %w", err)
+	}
+
 	// Set environment variables for the image override.
 	envVars := make([]string, 0, len(opts.Environment)+1)
 	for k, v := range opts.Environment {
