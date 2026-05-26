@@ -75,16 +75,16 @@ func TestResolveDesiredStateApplier_PodmanEndpoint(t *testing.T) {
 	svc := resolverTestService(domain.RuntimeTypePodman)
 	env := resolverTestEnv("staging", map[string]any{"endpoint_ref": "podman-local"})
 
-	_, err := resolver.ResolveDesiredStateApplier(svc, env)
-	// Podman stub returns unsupported — verify we get the sentinel error
-	if err == nil {
-		t.Fatal("expected error since Podman stub does not yet support desired state")
+	applier, err := resolver.ResolveDesiredStateApplier(svc, env)
+	// Podman now supports desired-state convergence via Docker delegation.
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
-	if !errors.Is(err, ErrDesiredStateNotSupported) {
-		t.Fatalf("expected ErrDesiredStateNotSupported, got: %v", err)
+	if applier == nil {
+		t.Fatal("expected non-nil applier for Podman")
 	}
-	if !strings.Contains(err.Error(), "podman") {
-		t.Errorf("error should mention podman runtime type, got: %v", err)
+	if !applier.SupportsDesiredState() {
+		t.Error("expected Podman to support desired state")
 	}
 }
 

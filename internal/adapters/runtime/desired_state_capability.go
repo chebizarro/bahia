@@ -145,14 +145,8 @@ func (k *KubernetesRuntime) ApplyDesiredState(_ context.Context, _ DesiredStateA
 	return nil, ErrDesiredStateNotSupported
 }
 
-// SupportsDesiredState returns false — the Podman adapter has not yet been
-// migrated to desired-state convergence.
-func (o *PodmanObserver) SupportsDesiredState() bool { return false }
-
-// ApplyDesiredState returns ErrDesiredStateNotSupported for the Podman adapter.
-func (o *PodmanObserver) ApplyDesiredState(_ context.Context, _ DesiredStateApplyRequest) (*DesiredStateApplyResult, error) {
-	return nil, ErrDesiredStateNotSupported
-}
+// Podman desired-state implementation lives in podman.go — it delegates to
+// the Docker implementation after Podman-specific compatibility validation.
 
 // ---------------------------------------------------------------------------
 // Capability probe helper

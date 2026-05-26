@@ -148,14 +148,13 @@ func TestDesiredStateApplyResultConstruction(t *testing.T) {
 func TestUnsupportedRuntimesReturnExplicitError(t *testing.T) {
 	ctx := context.Background()
 
-	// Only Kubernetes and Podman are unsupported; Docker and Compose now
+	// Only Kubernetes is unsupported; Docker, Compose, and Podman now
 	// support desired-state convergence.
 	cases := []struct {
 		name    string
 		applier DesiredStateApplier
 	}{
 		{"kubernetes", NewKubernetesRuntime("", "default", "", zap.NewNop())},
-		{"podman", NewPodmanObserver("unix:///run/podman/podman.sock", zap.NewNop())},
 	}
 
 	for _, tc := range cases {
@@ -176,7 +175,7 @@ func TestUnsupportedRuntimesReturnExplicitError(t *testing.T) {
 }
 
 func TestSupportedRuntimesReportCapability(t *testing.T) {
-	// Docker and Compose now support desired-state convergence.
+	// Docker, Compose, and Podman now support desired-state convergence.
 	docker := NewDockerObserver("unix:///var/run/docker.sock", zap.NewNop())
 	if !docker.SupportsDesiredState() {
 		t.Error("Docker should support desired state")
@@ -185,6 +184,11 @@ func TestSupportedRuntimesReportCapability(t *testing.T) {
 	compose := NewComposeRuntime("/tmp/test", zap.NewNop())
 	if !compose.SupportsDesiredState() {
 		t.Error("Compose should support desired state")
+	}
+
+	podman := NewPodmanObserver("unix:///run/podman/podman.sock", zap.NewNop())
+	if !podman.SupportsDesiredState() {
+		t.Error("Podman should support desired state")
 	}
 }
 
