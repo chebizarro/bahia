@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -362,3 +364,180 @@ func (m *lifecycleMockRuntime) Observe(_ context.Context, serviceID, envID uuid.
 }
 
 var _ runtime.LifecycleRuntime = (*lifecycleMockRuntime)(nil)
+
+func TestRuntimeLifecycleDeployWithStatusReportsStepProgression(t *testing.T) {
+	ctx := context.Background()
+	registry, svcRepo, envRepo, _, artifactRepo, _, _ := newTestRegistry()
+	stateRepo := registry.state.(*mockStateRepo)
+	rt := &lifecycleMockRuntime{}
+	lifecycle := NewRuntimeLifecycleService(registry, svcRepo, envRepo, artifactRepo, stateRepo, &mockRuntimeResolver{rt: rt}, &events.NoopPublisher{}, zap.NewNop())
+
+	svc, env, artifact := seedRuntimeLifecycleFixtures(t, registry)
+
+	var steps []DeployStep
+	statusFn := func(_ context.Context, step DeployStep, _ string) {
+		steps = append(steps, step)
+	}
+
+	obs, err := lifecycle.DeployWithStatus(ctx, svc.ID, env.ID, &artifact.ID, statusFn)
+	if err != nil {
+		t.Fatalf("DeployWithStatus returned error: %v", err)
+	}
+	if obs == nil {
+		t.Fatal("expected observation, got nil")
+	}
+
+	expectedSteps := []DeployStep{
+		DeployStepBuildingDesiredState,
+		DeployStepLockingEnvironment,
+		DeployStepRendering,
+		DeployStepApplying,
+		DeployStepObserving,
+		DeployStepProjecting,
+	}
+	if len(steps) != len(expectedSteps) {
+		t.Fatalf("expected %d steps, got %d: %v", len(expectedSteps), len(steps), steps)
+	}
+	for i, expected := range expectedSteps {
+		if steps[i] != expected {
+			t.Fatalf("step %d: expected %q, got %q", i, expected, steps[i])
+		}
+	}
+}
+
+func TestRuntimeLifecycleDeployNilStatusCallbackDoesNotPanic(t *testing.T) {
+	ctx := context.Background()
+	registry, svcRepo, envRepo, _, artifactRepo, _, _ := newTestRegistry()
+	stateRepo := registry.state.(*mockStateRepo)
+	rt := &lifecycleMockRuntime{}
+	lifecycle := NewRuntimeLifecycleService(registry, svcRepo, envRepo, artifactRepo, stateRepo, &mockRuntimeResolver{rt: rt}, &events.NoopPublisher{}, zap.NewNop())
+
+	svc, env, artifact := seedRuntimeLifecycleFixtures(t, registry)
+
+	// Deploy (no status callback) should work exactly as before.
+	obs, err := lifecycle.Deploy(ctx, svc.ID, env.ID, &artifact.ID)
+	if err != nil {
+		t.Fatalf("Deploy returned error: %v", err)
+	}
+	if obs == nil || obs.ObservedContainerID == "" {
+		t.Fatalf("expected observation, got %#v", obs)
+	}
+}
+
+func TestRuntimeLifecycleConcurrentDeploysSerialize(t *testing.T) {
+	ctx := context.Background()
+	registry, svcRepo, envRepo, _, artifactRepo, _, _ := newTestRegistry()
+	stateRepo := registry.state.(*mockStateRepo)
+
+	// Track deploy ordering with a channel.
+	orderCh := make(chan int, 10)
+	rt := &orderingMockRuntime{orderCh: orderCh}
+	resolver := &mockRuntimeResolver{rt: rt}
+
+	lock := newInMemoryApplyLock()
+	lifecycle := NewRuntimeLifecycleService(
+		registry, svcRepo, envRepo, artifactRepo, stateRepo, resolver, &events.NoopPublisher{}, zap.NewNop(),
+		WithRuntimeApplyLock(lock),
+	)
+
+	svc, env, artifact := seedRuntimeLifecycleFixtures(t, registry)
+
+	// Launch two concurrent deploys for the same environment.
+	errs := make(chan error, 2)
+	for i := 0; i < 2; i++ {
+		go func() {
+			_, err := lifecycle.Deploy(ctx, svc.ID, env.ID, &artifact.ID)
+			errs <- err
+		}()
+	}
+
+	// Collect results.
+	for i := 0; i < 2; i++ {
+		if err := <-errs; err != nil {
+			t.Fatalf("concurrent deploy %d failed: %v", i, err)
+		}
+	}
+
+	// Verify deploys completed (both should have run, serialized).
+	close(orderCh)
+	var order []int
+	for v := range orderCh {
+		order = append(order, v)
+	}
+	if len(order) != 2 {
+		t.Fatalf("expected 2 serialized deploys, got %d", len(order))
+	}
+}
+
+// inMemoryApplyLock is a test-only EnvironmentApplyLocker using sync.Mutex.
+type inMemoryApplyLock struct {
+	mu    sync.Mutex
+	locks map[uuid.UUID]*sync.Mutex
+}
+
+func newInMemoryApplyLock() *inMemoryApplyLock {
+	return &inMemoryApplyLock{locks: map[uuid.UUID]*sync.Mutex{}}
+}
+
+func (a *inMemoryApplyLock) Lock(_ context.Context, envID uuid.UUID) (func(), error) {
+	a.mu.Lock()
+	if _, ok := a.locks[envID]; !ok {
+		a.locks[envID] = &sync.Mutex{}
+	}
+	envLock := a.locks[envID]
+	a.mu.Unlock()
+
+	envLock.Lock()
+	return func() { envLock.Unlock() }, nil
+}
+
+// orderingMockRuntime records deploy order via a channel.
+type orderingMockRuntime struct {
+	lifecycleMockRuntime
+	orderCh chan int
+	counter int32
+}
+
+func (m *orderingMockRuntime) Deploy(ctx context.Context, serviceName, image string, opts runtime.DeployOptions) error {
+	n := atomic.AddInt32(&m.counter, 1)
+	m.orderCh <- int(n)
+	return nil
+}
+
+func TestRuntimeLifecycleDispatchesCorrectly(t *testing.T) {
+	ctx := context.Background()
+	registry, svcRepo, envRepo, _, artifactRepo, _, _ := newTestRegistry()
+	stateRepo := registry.state.(*mockStateRepo)
+	publisher := &capturePublisher{}
+	rt := &lifecycleMockRuntime{}
+	lifecycle := NewRuntimeLifecycleService(registry, svcRepo, envRepo, artifactRepo, stateRepo, &mockRuntimeResolver{rt: rt}, publisher, zap.NewNop())
+
+	svc, env, _ := seedRuntimeLifecycleFixtures(t, registry)
+
+	// Restart dispatches through LifecycleRuntime, not deployDesiredState.
+	if _, err := lifecycle.Restart(ctx, svc.ID, env.ID); err != nil {
+		t.Fatalf("Restart error: %v", err)
+	}
+	if rt.restartTarget != "legacy-api" {
+		t.Fatalf("expected restart target, got %q", rt.restartTarget)
+	}
+	if rt.deployTarget != "" {
+		t.Fatalf("restart should not trigger deploy, got target %q", rt.deployTarget)
+	}
+
+	// Stop dispatches through LifecycleRuntime, not deployDesiredState.
+	if _, err := lifecycle.Stop(ctx, svc.ID, env.ID); err != nil {
+		t.Fatalf("Stop error: %v", err)
+	}
+	if rt.stopTarget != "legacy-api" {
+		t.Fatalf("expected stop target, got %q", rt.stopTarget)
+	}
+
+	// Verify events.
+	if !publisher.hasEvent(runtimeActionRestartEvent) {
+		t.Fatalf("expected runtime.restart event")
+	}
+	if !publisher.hasEvent(runtimeActionStopEvent) {
+		t.Fatalf("expected runtime.stop event")
+	}
+}

@@ -25,6 +25,7 @@ type AdoptionOperatorService interface {
 // signer-first direct-runtime control-plane transport.
 type RuntimeLifecycleOperatorService interface {
 	Deploy(context.Context, uuid.UUID, uuid.UUID, *uuid.UUID) (*domain.RuntimeObservation, error)
+	DeployWithStatus(context.Context, uuid.UUID, uuid.UUID, *uuid.UUID, service.DeployStatusCallback) (*domain.RuntimeObservation, error)
 	Restart(context.Context, uuid.UUID, uuid.UUID) (*domain.RuntimeObservation, error)
 	Stop(context.Context, uuid.UUID, uuid.UUID) (*domain.RuntimeObservation, error)
 }
@@ -138,7 +139,8 @@ func (r *Reactor) handleDirectRuntimeActionRequest(ctx context.Context, event *n
 	var err error
 	switch req.Action {
 	case "deploy":
-		obs, err = r.runtimeLifecycle.Deploy(ctx, req.ServiceID, req.EnvironmentID, req.ArtifactID)
+		statusFn := r.deployStatusCallbackFor(ctx, event, req.Action)
+		obs, err = r.runtimeLifecycle.DeployWithStatus(ctx, req.ServiceID, req.EnvironmentID, req.ArtifactID, statusFn)
 	case "restart":
 		obs, err = r.runtimeLifecycle.Restart(ctx, req.ServiceID, req.EnvironmentID)
 	case "stop":
@@ -151,6 +153,14 @@ func (r *Reactor) handleDirectRuntimeActionRequest(ctx context.Context, event *n
 	}
 	if err := r.publishRuntimeActionResult(ctx, event, req.Action, req.ServiceID, req.EnvironmentID, obs); err != nil {
 		logger.Error("failed to publish direct-runtime action result", "error", err)
+	}
+}
+
+// deployStatusCallbackFor returns a DeployStatusCallback that publishes step
+// progression through the control-plane action status event (kind:7962 status).
+func (r *Reactor) deployStatusCallbackFor(ctx context.Context, event *nostr.Event, action string) service.DeployStatusCallback {
+	return func(cbCtx context.Context, step service.DeployStep, message string) {
+		_ = r.publishActionStatus(cbCtx, event, action, string(step), message)
 	}
 }
 

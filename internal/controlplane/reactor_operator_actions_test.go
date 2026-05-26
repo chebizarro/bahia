@@ -44,6 +44,14 @@ func (s *stubRuntimeLifecycleOperatorService) Deploy(_ context.Context, serviceI
 	return s.deployResp, s.deployErr
 }
 
+func (s *stubRuntimeLifecycleOperatorService) DeployWithStatus(_ context.Context, serviceID, envID uuid.UUID, artifactID *uuid.UUID, _ service.DeployStatusCallback) (*domain.RuntimeObservation, error) {
+	s.deployCalled = true
+	s.deployServiceID = serviceID
+	s.deployEnvID = envID
+	s.deployArtifact = artifactID
+	return s.deployResp, s.deployErr
+}
+
 func (s *stubRuntimeLifecycleOperatorService) Restart(_ context.Context, serviceID, envID uuid.UUID) (*domain.RuntimeObservation, error) {
 	s.restartCalled = true
 	s.restartServiceID = serviceID

@@ -22,6 +22,27 @@ const (
 	directRuntimeGuardrailMessage = "direct runtime actions are only allowed for adopted direct_runtime workloads"
 )
 
+// DeployStep represents a step in the desired-state deploy lifecycle.
+type DeployStep string
+
+const (
+	DeployStepBuildingDesiredState DeployStep = "building_desired_state"
+	DeployStepLockingEnvironment   DeployStep = "locking_environment"
+	DeployStepRendering            DeployStep = "rendering"
+	DeployStepApplying             DeployStep = "applying"
+	DeployStepObserving            DeployStep = "observing"
+	DeployStepProjecting           DeployStep = "projecting"
+)
+
+// DeployStatusCallback is called during deploy to report step progression.
+// Implementations should be non-blocking and best-effort.
+type DeployStatusCallback func(ctx context.Context, step DeployStep, message string)
+
+// EnvironmentApplyLocker serializes deploy operations per environment.
+type EnvironmentApplyLocker interface {
+	Lock(ctx context.Context, environmentID uuid.UUID) (unlock func(), err error)
+}
+
 // RuntimeLifecycleService performs direct runtime actions for services resolved to a runtime.
 type RuntimeLifecycleService struct {
 	registry     *RegistryService
@@ -33,7 +54,7 @@ type RuntimeLifecycleService struct {
 	secrets      repository.SecretRepository
 	publisher    events.Publisher
 	logger       *zap.Logger
-	applyLock    *RuntimeApplyLock
+	applyLock    EnvironmentApplyLocker
 
 	secretEncryptor *secretsAdapter.Encryptor
 }
@@ -50,7 +71,7 @@ func WithRuntimeLifecycleSecrets(repo repository.SecretRepository, encryptor *se
 }
 
 // WithRuntimeApplyLock injects an environment-scoped advisory lock for serializing deploys.
-func WithRuntimeApplyLock(lock *RuntimeApplyLock) RuntimeLifecycleOption {
+func WithRuntimeApplyLock(lock EnvironmentApplyLocker) RuntimeLifecycleOption {
 	return func(s *RuntimeLifecycleService) {
 		s.applyLock = lock
 	}
@@ -92,7 +113,29 @@ func NewRuntimeLifecycleService(
 
 // Deploy deploys an artifact directly through the resolved runtime and records a fresh observation.
 func (s *RuntimeLifecycleService) Deploy(ctx context.Context, serviceID, envID uuid.UUID, artifactID *uuid.UUID) (*domain.RuntimeObservation, error) {
+	return s.DeployWithStatus(ctx, serviceID, envID, artifactID, nil)
+}
+
+// DeployWithStatus deploys an artifact and reports step progression through the callback.
+func (s *RuntimeLifecycleService) DeployWithStatus(ctx context.Context, serviceID, envID uuid.UUID, artifactID *uuid.UUID, statusFn DeployStatusCallback) (*domain.RuntimeObservation, error) {
+	return s.deployDesiredState(ctx, serviceID, envID, artifactID, statusFn)
+}
+
+// deployDesiredState is the shared internal deploy helper used by deployment requests,
+// direct runtime action=deploy, and rollback-to-artifact. It acquires the environment
+// apply lock, builds deploy options, applies through the runtime adapter, observes,
+// persists the outcome, and publishes correlated events.
+func (s *RuntimeLifecycleService) deployDesiredState(ctx context.Context, serviceID, envID uuid.UUID, artifactID *uuid.UUID, statusFn DeployStatusCallback) (*domain.RuntimeObservation, error) {
 	start := time.Now()
+	notify := func(step DeployStep, msg string) {
+		if statusFn != nil {
+			statusFn(ctx, step, msg)
+		}
+	}
+
+	// Step: building_desired_state — resolve service, env, runtime, artifact, and build deploy options.
+	notify(DeployStepBuildingDesiredState, "Resolving service, environment, and artifact")
+
 	svc, env, rt, err := s.resolve(ctx, serviceID, envID)
 	if err != nil {
 		s.logRuntimeAction("deploy", nil, nil, serviceID, envID, artifactID, start, "failed", err)
@@ -118,18 +161,46 @@ func (s *RuntimeLifecycleService) Deploy(ctx context.Context, serviceID, envID u
 	opts.Labels["bahia.service"] = svc.Name
 	opts.Labels["bahia.managed"] = "true"
 
-	if err := rt.Deploy(ctx, targetName, imageRefForArtifact(artifact), opts); err != nil {
+	// Step: locking_environment — acquire environment-scoped advisory lock.
+	notify(DeployStepLockingEnvironment, "Acquiring environment apply lock")
+
+	if s.applyLock != nil {
+		unlock, lockErr := s.applyLock.Lock(ctx, envID)
+		if lockErr != nil {
+			s.logRuntimeAction("deploy", svc, env, serviceID, envID, &artifact.ID, start, "failed", lockErr)
+			return nil, fmt.Errorf("acquiring environment apply lock: %w", lockErr)
+		}
+		defer unlock()
+	}
+
+	// Step: rendering — prepare the runtime target configuration.
+	notify(DeployStepRendering, "Preparing runtime deploy configuration")
+
+	imageRef := imageRefForArtifact(artifact)
+
+	// Step: applying — execute the deploy through the runtime adapter.
+	notify(DeployStepApplying, fmt.Sprintf("Deploying %s to %s", imageRef, targetName))
+
+	if err := rt.Deploy(ctx, targetName, imageRef, opts); err != nil {
 		s.logRuntimeAction("deploy", svc, env, serviceID, envID, &artifact.ID, start, "failed", err)
 		return nil, fmt.Errorf("deploying runtime target %q: %w", targetName, err)
 	}
-	if err := s.updateDesiredArtifact(ctx, serviceID, envID, artifact.ID); err != nil {
-		s.logRuntimeAction("deploy", svc, env, serviceID, envID, &artifact.ID, start, "failed", err)
-		return nil, err
-	}
+
+	// Step: observing — observe the runtime state after deploy.
+	notify(DeployStepObserving, "Observing runtime state after deploy")
+
 	obs, err := rt.Observe(ctx, serviceID, envID, targetName)
 	if err != nil {
 		s.logRuntimeAction("deploy", svc, env, serviceID, envID, &artifact.ID, start, "failed", err)
 		return nil, fmt.Errorf("observing runtime target %q after deploy: %w", targetName, err)
+	}
+
+	// Step: projecting — persist state and publish events.
+	notify(DeployStepProjecting, "Persisting deployment outcome")
+
+	if err := s.updateDesiredArtifact(ctx, serviceID, envID, artifact.ID); err != nil {
+		s.logRuntimeAction("deploy", svc, env, serviceID, envID, &artifact.ID, start, "failed", err)
+		return nil, err
 	}
 	if err := s.registry.RecordObservation(ctx, obs); err != nil {
 		s.logRuntimeAction("deploy", svc, env, serviceID, envID, &artifact.ID, start, "failed", err)
