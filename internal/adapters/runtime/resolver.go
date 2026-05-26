@@ -227,4 +227,27 @@ func runtimeCacheKey(target config.RuntimeTargetConfig) string {
 	}, "\x00")
 }
 
+// ResolveDesiredStateApplier resolves a runtime for the given service and
+// environment using the full config overlay path (runtime.default, environment
+// overrides, service runtime type, endpoint alias resolution, TLS) and then
+// probes for the DesiredStateApplier capability.
+//
+// Returns ErrDesiredStateNotSupported if the resolved runtime does not implement
+// desired-state convergence or explicitly reports it as unsupported.
+func (r *ConfigRuntimeResolver) ResolveDesiredStateApplier(service *domain.Service, env *domain.Environment) (DesiredStateApplier, error) {
+	rt, err := r.Resolve(service, env)
+	if err != nil {
+		return nil, err
+	}
+
+	applier, ok := rt.(DesiredStateApplier)
+	if !ok {
+		return nil, fmt.Errorf("%w: runtime type %q does not implement DesiredStateApplier", ErrDesiredStateNotSupported, rt.Type())
+	}
+	if !applier.SupportsDesiredState() {
+		return nil, fmt.Errorf("%w: runtime type %q has not been migrated to desired-state convergence", ErrDesiredStateNotSupported, rt.Type())
+	}
+	return applier, nil
+}
+
 var _ RuntimeResolver = (*ConfigRuntimeResolver)(nil)

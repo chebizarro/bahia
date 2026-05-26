@@ -1,0 +1,193 @@
+package runtime
+
+import (
+	"errors"
+	"strings"
+	"testing"
+
+	"github.com/openagentsinc/bahia/internal/config"
+	"github.com/openagentsinc/bahia/internal/domain"
+	"go.uber.org/zap"
+)
+
+func TestResolveDesiredStateApplier_ComposeEndpoint(t *testing.T) {
+	resolver := NewConfigRuntimeResolver(config.RuntimeConfig{
+		Default: config.RuntimeTargetConfig{
+			Type:       "compose",
+			ComposeDir: "/srv/data/bahia-managed",
+		},
+		Endpoints: map[string]config.RuntimeEndpointConfig{
+			"local": {DockerHost: "unix:///var/run/docker.sock"},
+		},
+	}, zap.NewNop(), nil)
+
+	svc := resolverTestService(domain.RuntimeTypeCompose)
+	env := resolverTestEnv("production", map[string]any{"endpoint_ref": "local"})
+
+	_, err := resolver.ResolveDesiredStateApplier(svc, env)
+	// Currently Compose stub returns unsupported — verify we get the sentinel error
+	if err == nil {
+		t.Fatal("expected error since Compose stub does not yet support desired state")
+	}
+	if !errors.Is(err, ErrDesiredStateNotSupported) {
+		t.Fatalf("expected ErrDesiredStateNotSupported, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "compose") {
+		t.Errorf("error should mention compose runtime type, got: %v", err)
+	}
+}
+
+func TestResolveDesiredStateApplier_DockerEndpoint(t *testing.T) {
+	resolver := NewConfigRuntimeResolver(config.RuntimeConfig{
+		Default: config.RuntimeTargetConfig{Type: "docker"},
+		Endpoints: map[string]config.RuntimeEndpointConfig{
+			"prod-docker": {
+				DockerHost:         "tcp://docker-prod:2376",
+				InsecureSkipVerify: true,
+			},
+		},
+	}, zap.NewNop(), nil)
+
+	svc := resolverTestService(domain.RuntimeTypeDocker)
+	env := resolverTestEnv("production", map[string]any{"endpoint_ref": "prod-docker"})
+
+	_, err := resolver.ResolveDesiredStateApplier(svc, env)
+	// Docker stub returns unsupported — verify we get the sentinel error
+	if err == nil {
+		t.Fatal("expected error since Docker stub does not yet support desired state")
+	}
+	if !errors.Is(err, ErrDesiredStateNotSupported) {
+		t.Fatalf("expected ErrDesiredStateNotSupported, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "docker") {
+		t.Errorf("error should mention docker runtime type, got: %v", err)
+	}
+}
+
+func TestResolveDesiredStateApplier_PodmanEndpoint(t *testing.T) {
+	resolver := NewConfigRuntimeResolver(config.RuntimeConfig{
+		Default: config.RuntimeTargetConfig{Type: "podman"},
+		Endpoints: map[string]config.RuntimeEndpointConfig{
+			"podman-local": {DockerHost: "unix:///run/user/1000/podman/podman.sock"},
+		},
+	}, zap.NewNop(), nil)
+
+	svc := resolverTestService(domain.RuntimeTypePodman)
+	env := resolverTestEnv("staging", map[string]any{"endpoint_ref": "podman-local"})
+
+	_, err := resolver.ResolveDesiredStateApplier(svc, env)
+	// Podman stub returns unsupported — verify we get the sentinel error
+	if err == nil {
+		t.Fatal("expected error since Podman stub does not yet support desired state")
+	}
+	if !errors.Is(err, ErrDesiredStateNotSupported) {
+		t.Fatalf("expected ErrDesiredStateNotSupported, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "podman") {
+		t.Errorf("error should mention podman runtime type, got: %v", err)
+	}
+}
+
+func TestResolveDesiredStateApplier_KubernetesExplicitError(t *testing.T) {
+	resolver := NewConfigRuntimeResolver(config.RuntimeConfig{
+		Default: config.RuntimeTargetConfig{
+			Type:          "kubernetes",
+			KubeNamespace: "default",
+		},
+	}, zap.NewNop(), nil)
+
+	svc := resolverTestService(domain.RuntimeTypeK8s)
+	env := resolverTestEnv("production", nil)
+
+	_, err := resolver.ResolveDesiredStateApplier(svc, env)
+	if err == nil {
+		t.Fatal("expected error for Kubernetes runtime")
+	}
+	if !errors.Is(err, ErrDesiredStateNotSupported) {
+		t.Fatalf("expected ErrDesiredStateNotSupported, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "kubernetes") {
+		t.Errorf("error should mention kubernetes runtime type, got: %v", err)
+	}
+}
+
+func TestResolveDesiredStateApplier_InvalidEndpoint(t *testing.T) {
+	resolver := NewConfigRuntimeResolver(config.RuntimeConfig{
+		Default: config.RuntimeTargetConfig{Type: "docker"},
+	}, zap.NewNop(), nil)
+
+	svc := resolverTestService(domain.RuntimeTypeDocker)
+	env := resolverTestEnv("production", map[string]any{"endpoint_ref": "nonexistent"})
+
+	_, err := resolver.ResolveDesiredStateApplier(svc, env)
+	if err == nil {
+		t.Fatal("expected error for missing endpoint")
+	}
+	if errors.Is(err, ErrDesiredStateNotSupported) {
+		t.Fatal("missing endpoint should not be ErrDesiredStateNotSupported")
+	}
+	if !strings.Contains(err.Error(), "nonexistent") {
+		t.Errorf("error should mention the missing endpoint ref, got: %v", err)
+	}
+}
+
+func TestResolveDesiredStateApplier_NilService(t *testing.T) {
+	resolver := NewConfigRuntimeResolver(config.RuntimeConfig{}, zap.NewNop(), nil)
+
+	_, err := resolver.ResolveDesiredStateApplier(nil, resolverTestEnv("production", nil))
+	if err == nil {
+		t.Fatal("expected error for nil service")
+	}
+	if !strings.Contains(err.Error(), "service is required") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestResolveDesiredStateApplier_NilEnvironment(t *testing.T) {
+	resolver := NewConfigRuntimeResolver(config.RuntimeConfig{}, zap.NewNop(), nil)
+
+	_, err := resolver.ResolveDesiredStateApplier(resolverTestService(domain.RuntimeTypeDocker), nil)
+	if err == nil {
+		t.Fatal("expected error for nil environment")
+	}
+	if !strings.Contains(err.Error(), "environment is required") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestResolveDesiredStateApplier_UsesFullResolutionPath(t *testing.T) {
+	// Verify that the full config overlay path is exercised:
+	// flat config → runtime.default → environments[name] → env.RuntimeConfig → endpoint_ref
+	resolver := NewConfigRuntimeResolver(config.RuntimeConfig{
+		Type:       "docker",
+		DockerHost: "unix:///legacy.sock",
+		Default: config.RuntimeTargetConfig{
+			Type:       "compose",
+			DockerHost: "tcp://default:2375",
+			ComposeDir: "/srv/default",
+		},
+		Environments: map[string]config.RuntimeTargetConfig{
+			"production": {
+				DockerHost: "tcp://prod:2375",
+				ComposeDir: "/srv/prod-from-config",
+			},
+		},
+	}, zap.NewNop(), nil)
+
+	svc := resolverTestService(domain.RuntimeTypeCompose)
+	env := resolverTestEnv("production", map[string]any{
+		"compose_dir": "/srv/prod-from-env",
+	})
+
+	_, err := resolver.ResolveDesiredStateApplier(svc, env)
+	// The resolution itself should succeed (Compose runtime created),
+	// but the capability check returns ErrDesiredStateNotSupported since
+	// the stub doesn't yet support it. The key is that resolution doesn't
+	// error on config/endpoint/type issues.
+	if err == nil {
+		t.Fatal("expected error since Compose stub does not yet support desired state")
+	}
+	if !errors.Is(err, ErrDesiredStateNotSupported) {
+		t.Fatalf("expected ErrDesiredStateNotSupported (resolution should succeed), got: %v", err)
+	}
+}
