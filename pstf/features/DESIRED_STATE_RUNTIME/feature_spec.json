@@ -1,0 +1,133 @@
+{
+  "feature_id": "DESIRED_STATE_RUNTIME",
+  "title": "Desired-State Runtime: Environment-Scoped Compose and Docker Engine Apply",
+  "priority": "P1",
+  "status": "draft",
+  "description": "Move Bahia from environment-level, monolithic Compose operations toward Nostr-native structured service desired state that can render to Compose and Docker Engine targets first, while keeping Kubernetes and Podman as later renderer/adapter targets. This feature introduces typed desired-state domain models, environment-scoped apply locking, full-project Compose synthesis, Docker Engine desired-state apply, observation normalization and drift detection, legacy environment hydration, and additive Nostr status/result/read-model enrichment -- all without adding new Nostr event kinds or breaking existing control-plane semantics.",
+  "source_plan": "docs/plans/desired-state-runtime-architecture-2026-05-26.md",
+  "source_evidence": [
+    "docs/plans/desired-state-runtime-architecture-2026-05-26.md",
+    "internal/adapters/runtime/compose.go",
+    "internal/adapters/runtime/docker.go",
+    "internal/adapters/runtime/factory.go",
+    "internal/adapters/runtime/resolver.go",
+    "internal/service/runtime_lifecycle.go",
+    "internal/domain/models.go",
+    "internal/db/migrations/000001_init.up.sql",
+    "internal/db/migrations/000017_service_runtime_config.up.sql",
+    "internal/controlplane/reactor.go",
+    "internal/adapters/nostr/projector.go",
+    "internal/adapters/nostr/catalog.go",
+    "internal/controlplane/service_command_publisher.go",
+    "internal/repository/pg_deployment.go",
+    "internal/repository/pg_state.go",
+    "internal/repository/pg_observation.go"
+  ],
+  "dependencies": [
+    "Existing Nostr request/status/result event families (5961/6961/7961) and replaceable read-model kinds (31961/31967/31968)",
+    "Existing runtime resolver, factory, and adapter infrastructure",
+    "Existing deployment intent/run/state persistence",
+    "Docker Compose CLI (docker compose config, up, pull)",
+    "Docker Engine API for direct container operations",
+    "PostgreSQL advisory locking for environment-level serialization"
+  ],
+  "actors": [
+    {
+      "name": "runtime_lifecycle_service",
+      "role": "Owns desired-state apply for Compose/Docker deploys, orchestrates build/render/apply/observe, holds environment advisory locks, and publishes correlated Nostr status/result events",
+      "evidence": ["internal/service/runtime_lifecycle.go"]
+    },
+    {
+      "name": "desired_state_builder",
+      "role": "Maps service/environment/artifact/runtime config/secrets into canonical desired service specs with Bahia labels and secret redaction",
+      "evidence": ["internal/service/runtime_desired_state_builder.go (new)"]
+    },
+    {
+      "name": "environment_plan_assembler",
+      "role": "Loads active sibling services, hydrates missing snapshots from persisted state, computes environment revision hashes, and produces the full environment runtime plan",
+      "evidence": ["internal/service/runtime_environment_plan.go (new)"]
+    },
+    {
+      "name": "compose_renderer",
+      "role": "Renders full-project Compose YAML, env files, and render metadata from the environment plan; validates with docker compose config; executes atomic swap and apply",
+      "evidence": ["internal/adapters/runtime/compose_renderer.go (new)", "internal/adapters/runtime/compose.go"]
+    },
+    {
+      "name": "docker_renderer",
+      "role": "Maps desired service specs to Docker Engine container/host/network config; performs desired-hash comparison for no-op apply; manages container lifecycle",
+      "evidence": ["internal/adapters/runtime/docker_renderer.go (new)", "internal/adapters/runtime/docker.go"]
+    },
+    {
+      "name": "observation_normalizer",
+      "role": "Normalizes Compose and Docker runtime observations into a comparable subset for drift detection",
+      "evidence": ["internal/domain/models.go", "internal/adapters/runtime/compose.go", "internal/adapters/runtime/docker.go"]
+    },
+    {
+      "name": "nostr_projector",
+      "role": "Enriches existing status/result/read-model events with desired-state metadata additively",
+      "evidence": ["internal/adapters/nostr/projector.go", "internal/adapters/nostr/catalog.go"]
+    }
+  ],
+  "feature_boundary": {
+    "in_scope": [
+      "Typed desired-state domain model with JSONB persistence and hash columns",
+      "Canonical hash serialization with deterministic JSON, sorted keys, stable ordering, and golden fixtures",
+      "Environment-scoped DB advisory locking for Compose/Docker apply serialization",
+      "RuntimeLifecycleService refactor to shared internal deploy helper",
+      "Desired-state builder with Bahia label injection and secret ref separation",
+      "Legacy environment-plan hydration from persisted registry/runtime/artifact state",
+      "Compose phase 1: full-project synthesis to Bahia-owned compose_dir",
+      "Docker Engine phase 1: desired-state apply with hash-based no-op detection",
+      "Podman reuse of Docker-compatible desired-state path where feasible",
+      "Observation normalization for Compose and Docker into comparable subset",
+      "Drift detection: in_sync / drifted / unknown based on desired vs observed hash",
+      "Additive Nostr status step progression (building_desired_state, locking_environment, rendering, applying, observing, projecting)",
+      "Additive result/read-model payload enrichment without new kinds or d-tag coordinates",
+      "Compose ownership gate for Bahia-owned compose_dir validation",
+      "Renderer-specific typed extension payloads (Compose, Docker) stored as JSONB"
+    ],
+    "out_of_scope": [
+      "Compose phase 2 per-service fragment optimization (deferred until full-project synthesis is stable)",
+      "Kubernetes desired-state implementation (stays on legacy deploy path)",
+      "Podman-specific desired-state design beyond Docker-compatible reuse",
+      "New Nostr event kinds or d-tag coordinate changes",
+      "Merging arbitrary operator-authored Compose YAML",
+      "Resolved secret plaintext persistence",
+      "Platform rewrite of reactor, authorization, event validation, or endpoint aliasing"
+    ]
+  },
+  "terminal_semantics": {
+    "principle": "Desired-state apply completion is determined by explicit terminal signals, never by polling or timeout-based heuristics",
+    "details": [
+      "Deploy execution completes when the runtime adapter returns a terminal apply result (success or failure), not after elapsed time",
+      "Advisory locks are released deterministically via defer, not via timeout expiry",
+      "Nostr status events report explicit step progression; terminal results are published as correlated 7961 events with explicit success/failure payloads",
+      "Observation is attempted synchronously after apply; failure paths persist explicit failure state rather than leaving unknown state",
+      "Drift detection compares deterministic hashes, not polling-derived snapshots",
+      "No ticker-based reconciliation or periodic polling is part of the approved desired-state contract"
+    ]
+  },
+  "work_items": [
+    {"id": "DSR-WI-01", "title": "Runtime desired-state domain contract and schema", "size": "M", "dependencies": []},
+    {"id": "DSR-WI-02", "title": "Runtime lifecycle refactor and environment apply locking", "size": "L", "dependencies": ["DSR-WI-01"]},
+    {"id": "DSR-WI-03", "title": "Desired-state builder and legacy environment-plan hydration", "size": "L", "dependencies": ["DSR-WI-01", "DSR-WI-02"]},
+    {"id": "DSR-WI-04", "title": "Add desired-state runtime adapter capability", "size": "M", "dependencies": ["DSR-WI-01"]},
+    {"id": "DSR-WI-05", "title": "Compose phase 1 full-project renderer and apply path", "size": "L", "dependencies": ["DSR-WI-03", "DSR-WI-04"]},
+    {"id": "DSR-WI-06", "title": "Docker Engine and Podman desired-state apply", "size": "L", "dependencies": ["DSR-WI-03", "DSR-WI-04"]},
+    {"id": "DSR-WI-07", "title": "Observation normalization and drift alignment", "size": "M", "dependencies": ["DSR-WI-05", "DSR-WI-06"]},
+    {"id": "DSR-WI-08", "title": "Nostr status/result/read-model enrichment", "size": "M", "dependencies": ["DSR-WI-01", "DSR-WI-05", "DSR-WI-06", "DSR-WI-07"]},
+    {"id": "DSR-WI-09", "title": "Rollout hardening, verification, and docs", "size": "M", "dependencies": ["DSR-WI-01", "DSR-WI-02", "DSR-WI-03", "DSR-WI-04", "DSR-WI-05", "DSR-WI-06", "DSR-WI-07", "DSR-WI-08"]}
+  ],
+  "risks": [
+    {"id": "DSR-RISK-001", "title": "Compose directory ownership", "description": "Accidentally treating a non-Bahia-owned compose_dir as managed could destroy operator-authored Compose files", "mitigation": "Gate phase 1 behind validation that the target directory is dedicated to Bahia-managed services"},
+    {"id": "DSR-RISK-002", "title": "Legacy environment hydration", "description": "First render must include sibling services that lack desired snapshots; missing hydration would remove services from generated output", "mitigation": "Reconstruct missing sibling specs from current persisted registry/runtime/artifact state and persist opportunistically"},
+    {"id": "DSR-RISK-003", "title": "Rollback safety", "description": "Additive DB columns and Nostr fields are safe for old readers, but older application code must be validated against generated Compose projects", "mitigation": "Staging validation before production rollout"},
+    {"id": "DSR-RISK-004", "title": "Concurrency tradeoff", "description": "Environment-level advisory locking reduces Docker parallelism compared to service-level locking", "mitigation": "Accept tradeoff for consistent behavior across runtimes"},
+    {"id": "DSR-RISK-005", "title": "Secret exposure in generated files", "description": "Generated Compose env files may contain resolved secrets", "mitigation": "Test ownership, permissions, cleanup, and redaction of generated env files"},
+    {"id": "DSR-RISK-006", "title": "Renderer observation drift", "description": "Compose and Docker must normalize observations into the same semantic subset to avoid false drift", "mitigation": "Shared normalization contract with golden test fixtures for parity"}
+  ],
+  "open_questions": [
+    "Does 5961 deploy currently reach RuntimeLifecycleService directly, or through an intermediate orchestration layer that must be refactored before the shared deploy helper lands?",
+    "Is every configured production compose_dir Bahia-owned and safe for authoritative regeneration, or does rollout need a per-environment opt-in flag before Item 5 can be enabled?"
+  ]
+}
