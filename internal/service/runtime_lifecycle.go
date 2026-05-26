@@ -33,6 +33,7 @@ type RuntimeLifecycleService struct {
 	secrets      repository.SecretRepository
 	publisher    events.Publisher
 	logger       *zap.Logger
+	applyLock    *RuntimeApplyLock
 
 	secretEncryptor *secretsAdapter.Encryptor
 }
@@ -45,6 +46,13 @@ func WithRuntimeLifecycleSecrets(repo repository.SecretRepository, encryptor *se
 	return func(s *RuntimeLifecycleService) {
 		s.secrets = repo
 		s.secretEncryptor = encryptor
+	}
+}
+
+// WithRuntimeApplyLock injects an environment-scoped advisory lock for serializing deploys.
+func WithRuntimeApplyLock(lock *RuntimeApplyLock) RuntimeLifecycleOption {
+	return func(s *RuntimeLifecycleService) {
+		s.applyLock = lock
 	}
 }
 

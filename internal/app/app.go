@@ -315,9 +315,14 @@ func New(cfg *config.Config) (*App, error) {
 	}
 	var runtimeLifecycleSvc *service.RuntimeLifecycleService
 	if cfg.DirectRuntime.Enabled {
+		var runtimeApplyLockOpts []service.RuntimeLifecycleOption
+		runtimeApplyLockOpts = append(runtimeApplyLockOpts, service.WithRuntimeLifecycleSecrets(secretRepo, secretEncryptor))
+		if dbAvailable {
+			runtimeApplyLockOpts = append(runtimeApplyLockOpts, service.WithRuntimeApplyLock(service.NewRuntimeApplyLock(pool, logger)))
+		}
 		runtimeLifecycleSvc = service.NewRuntimeLifecycleService(
 			registry, serviceRepo, envRepo, artifactRepo, stateRepo, runtimeResolver, publisher, logger,
-			service.WithRuntimeLifecycleSecrets(secretRepo, secretEncryptor),
+			runtimeApplyLockOpts...,
 		)
 	}
 
