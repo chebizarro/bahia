@@ -1,0 +1,174 @@
+package runtime
+
+import (
+	"context"
+	"fmt"
+
+	"github.com/openagentsinc/bahia/internal/domain"
+)
+
+// ---------------------------------------------------------------------------
+// Desired-state capability contract
+// ---------------------------------------------------------------------------
+
+// DesiredStateApplier is the capability interface for runtimes that support
+// desired-state convergence. Runtimes that implement this interface can
+// accept a declarative service specification and converge the actual runtime
+// state to match.
+//
+// This is an additive seam — existing runtimes that do not yet support
+// desired-state convergence continue to work through the imperative Runtime
+// interface unchanged. Callers can probe for capability via type assertion
+// or the SupportsDesiredState method.
+type DesiredStateApplier interface {
+	// ApplyDesiredState converges a single service toward its desired runtime
+	// state. Secrets are resolved at apply time and supplied via the request;
+	// they are never persisted in the desired-state plan.
+	ApplyDesiredState(ctx context.Context, req DesiredStateApplyRequest) (*DesiredStateApplyResult, error)
+
+	// SupportsDesiredState reports whether this runtime adapter currently
+	// supports desired-state convergence. Adapters that return false will
+	// return ErrDesiredStateNotSupported from ApplyDesiredState.
+	SupportsDesiredState() bool
+}
+
+// ---------------------------------------------------------------------------
+// Request / Result types
+// ---------------------------------------------------------------------------
+
+// DesiredStateApplyRequest carries everything needed to converge a single
+// service to its desired runtime state.
+type DesiredStateApplyRequest struct {
+	// EnvironmentPlan is the full environment-level desired-state plan.
+	// The applier uses it for cross-service context (e.g. network topology,
+	// dependency ordering).
+	EnvironmentPlan *domain.DesiredEnvironmentPlan
+
+	// TargetService is the specific service spec to converge.
+	TargetService *domain.DesiredServiceSpec
+
+	// Secrets are plaintext secret values resolved at apply time, keyed by
+	// environment variable name. These are never persisted in the plan.
+	Secrets map[string]string
+
+	// PullPolicy controls image pull behavior ("always", "if-not-present", "never").
+	PullPolicy string
+
+	// DryRun, when true, validates and renders the desired state without
+	// mutating any runtime resources. The result still contains the rendered
+	// hash and resource names for preview purposes.
+	DryRun bool
+}
+
+// DesiredStateApplyResult reports the outcome of a desired-state convergence.
+type DesiredStateApplyResult struct {
+	// Renderer identifies which runtime rendered the state (e.g. "compose",
+	// "docker", "podman", "kubernetes").
+	Renderer string
+
+	// DesiredHash is the deterministic hash of the applied service spec.
+	DesiredHash string
+
+	// EnvironmentRevision is the environment-level revision hash after apply.
+	EnvironmentRevision string
+
+	// ResourceIDs are runtime-specific identifiers for the created/updated
+	// resources (e.g. container IDs, Compose service names).
+	ResourceIDs []string
+
+	// ResourceNames are human-readable resource names corresponding to
+	// ResourceIDs (e.g. container names, service keys).
+	ResourceNames []string
+
+	// ObservationHints provides hints for post-apply observation, allowing
+	// the observer to quickly locate the resources that were just applied.
+	ObservationHints *ObservationHints
+
+	// Warnings collects non-fatal issues encountered during apply (e.g.
+	// image pull fallback, deprecated config, port conflicts resolved).
+	Warnings []string
+}
+
+// ObservationHints carries runtime-specific identifiers that help the
+// observation layer quickly locate resources after a desired-state apply.
+type ObservationHints struct {
+	// ContainerID is the primary container ID (Docker/Podman).
+	ContainerID string
+
+	// NetworkIDs are the IDs of networks the service is attached to.
+	NetworkIDs []string
+
+	// VolumeNames are the names of volumes mounted by the service.
+	VolumeNames []string
+}
+
+// ---------------------------------------------------------------------------
+// Sentinel error
+// ---------------------------------------------------------------------------
+
+// ErrDesiredStateNotSupported is returned by adapters that do not yet support
+// desired-state convergence.
+var ErrDesiredStateNotSupported = fmt.Errorf("runtime adapter does not support desired-state convergence")
+
+// ---------------------------------------------------------------------------
+// Stub implementations for adapters not yet migrated
+// ---------------------------------------------------------------------------
+
+// Compile-time assertions that stub implementations satisfy DesiredStateApplier.
+var (
+	_ DesiredStateApplier = (*DockerObserver)(nil)
+	_ DesiredStateApplier = (*ComposeRuntime)(nil)
+	_ DesiredStateApplier = (*KubernetesRuntime)(nil)
+	_ DesiredStateApplier = (*PodmanObserver)(nil)
+)
+
+// SupportsDesiredState returns false — the Docker adapter has not yet been
+// migrated to desired-state convergence.
+func (o *DockerObserver) SupportsDesiredState() bool { return false }
+
+// ApplyDesiredState returns ErrDesiredStateNotSupported for the Docker adapter.
+func (o *DockerObserver) ApplyDesiredState(_ context.Context, _ DesiredStateApplyRequest) (*DesiredStateApplyResult, error) {
+	return nil, ErrDesiredStateNotSupported
+}
+
+// SupportsDesiredState returns false — the Compose adapter has not yet been
+// migrated to desired-state convergence.
+func (r *ComposeRuntime) SupportsDesiredState() bool { return false }
+
+// ApplyDesiredState returns ErrDesiredStateNotSupported for the Compose adapter.
+func (r *ComposeRuntime) ApplyDesiredState(_ context.Context, _ DesiredStateApplyRequest) (*DesiredStateApplyResult, error) {
+	return nil, ErrDesiredStateNotSupported
+}
+
+// SupportsDesiredState returns false — the Kubernetes adapter has not yet been
+// migrated to desired-state convergence.
+func (k *KubernetesRuntime) SupportsDesiredState() bool { return false }
+
+// ApplyDesiredState returns ErrDesiredStateNotSupported for the Kubernetes adapter.
+func (k *KubernetesRuntime) ApplyDesiredState(_ context.Context, _ DesiredStateApplyRequest) (*DesiredStateApplyResult, error) {
+	return nil, ErrDesiredStateNotSupported
+}
+
+// SupportsDesiredState returns false — the Podman adapter has not yet been
+// migrated to desired-state convergence.
+func (o *PodmanObserver) SupportsDesiredState() bool { return false }
+
+// ApplyDesiredState returns ErrDesiredStateNotSupported for the Podman adapter.
+func (o *PodmanObserver) ApplyDesiredState(_ context.Context, _ DesiredStateApplyRequest) (*DesiredStateApplyResult, error) {
+	return nil, ErrDesiredStateNotSupported
+}
+
+// ---------------------------------------------------------------------------
+// Capability probe helper
+// ---------------------------------------------------------------------------
+
+// AsDesiredStateApplier checks whether a Runtime also implements
+// DesiredStateApplier and returns it. This is a convenience for callers that
+// hold a Runtime interface and want to probe for the capability.
+func AsDesiredStateApplier(rt Runtime) (DesiredStateApplier, bool) {
+	dsa, ok := rt.(DesiredStateApplier)
+	if !ok {
+		return nil, false
+	}
+	return dsa, dsa.SupportsDesiredState()
+}
