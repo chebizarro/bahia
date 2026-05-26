@@ -93,6 +93,40 @@ type DockerExtension struct {
 	Healthcheck map[string]any `json:"healthcheck,omitempty"`
 }
 
+// ---------------------------------------------------------------------------
+// Network and Volume specs for resource ensure
+// ---------------------------------------------------------------------------
+
+// NetworkSpec describes a Docker network that must exist before container
+// creation. The ensure helpers inspect existing networks and create missing
+// ones, erroring on incompatible existing resources.
+type NetworkSpec struct {
+	// Name is the Docker network name.
+	Name string `json:"name"`
+	// Driver is the network driver (e.g. "bridge", "overlay"). Empty means
+	// the Docker daemon default (bridge).
+	Driver string `json:"driver,omitempty"`
+	// Options are driver-specific options (e.g. subnet, gateway).
+	Options map[string]string `json:"options,omitempty"`
+	// Labels are user-defined metadata applied to the network.
+	Labels map[string]string `json:"labels,omitempty"`
+}
+
+// VolumeSpec describes a Docker named volume that must exist before container
+// creation. The ensure helpers inspect existing volumes and create missing
+// ones, erroring on incompatible existing resources.
+type VolumeSpec struct {
+	// Name is the Docker volume name.
+	Name string `json:"name"`
+	// Driver is the volume driver (e.g. "local"). Empty means the Docker
+	// daemon default (local).
+	Driver string `json:"driver,omitempty"`
+	// DriverOpts are driver-specific options.
+	DriverOpts map[string]string `json:"driver_opts,omitempty"`
+	// Labels are user-defined metadata applied to the volume.
+	Labels map[string]string `json:"labels,omitempty"`
+}
+
 // KubernetesExtension is a placeholder for future Kubernetes renderer data.
 type KubernetesExtension struct{}
 
