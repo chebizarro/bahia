@@ -157,7 +157,7 @@ func (r *Reactor) handleDirectRuntimeActionRequest(ctx context.Context, event *n
 }
 
 // deployStatusCallbackFor returns a DeployStatusCallback that publishes step
-// progression through the control-plane action status event (kind:7962 status).
+// progression through the control-plane action status event (kind:6963 status).
 func (r *Reactor) deployStatusCallbackFor(ctx context.Context, event *nostr.Event, action string) service.DeployStatusCallback {
 	return func(cbCtx context.Context, step service.DeployStep, message string) {
 		_ = r.publishActionStatus(cbCtx, event, action, string(step), message)

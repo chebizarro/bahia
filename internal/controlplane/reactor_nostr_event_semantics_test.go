@@ -1,0 +1,488 @@
+package controlplane
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"testing"
+
+	"github.com/google/uuid"
+	"github.com/nbd-wtf/go-nostr"
+	"github.com/openagentsinc/bahia/internal/api/dto"
+	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/service"
+)
+
+// TestDeployStatusEventsIncludeStepTags verifies that step-progression status
+// events (kind:6963) published during DeployWithStatus carry the expected step
+// tag, action tag, and correlation tags (e, p, service, environment, artifact).
+func TestDeployStatusEventsIncludeStepTags(t *testing.T) {
+	capture := &captureNostrPublisher{published: 1}
+	serviceID := uuid.New()
+	envID := uuid.New()
+	artifactID := uuid.New()
+	obsID := uuid.New()
+
+	// Stub that records status callback steps and publishes them.
+	var capturedSteps []service.DeployStep
+	runtimeStub := &stubRuntimeLifecycleOperatorService{
+		deployResp: &domain.RuntimeObservation{
+			ID:                  obsID,
+			ServiceID:           serviceID,
+			EnvironmentID:       envID,
+			ObservedImageDigest: "sha256:abc",
+			ObservedContainerID: "container-1",
+			HealthStatus:        domain.HealthStatusHealthy,
+			Source:              "direct_runtime",
+		},
+	}
+
+	// Override DeployWithStatus to actually invoke the callback.
+	runtimeStub.deployResp = &domain.RuntimeObservation{
+		ID:            obsID,
+		ServiceID:     serviceID,
+		EnvironmentID: envID,
+		HealthStatus:  domain.HealthStatusHealthy,
+		Source:        "direct_runtime",
+	}
+
+	reactor := newOperatorActionTestReactor(t,
+		Config{DirectRuntimeAuthorizedPubkeys: []string{"operator"}},
+		capture, nil, &statusCapturingRuntimeStub{
+			obs:           runtimeStub.deployResp,
+			capturedSteps: &capturedSteps,
+		},
+	)
+
+	requestEvent := &nostr.Event{
+		ID:      "deploy-step-test",
+		PubKey:  "operator",
+		Kind:    KindServiceAction,
+		Content: fmt.Sprintf(`{"action":"deploy","service_id":"%s","environment_id":"%s","artifact_id":"%s"}`, serviceID, envID, artifactID),
+	}
+
+	reactor.handleServiceAction(context.Background(), requestEvent)
+
+	// Find all status events (kind:6963).
+	var statusEvents []nostr.Event
+	var resultEvents []nostr.Event
+	for _, ev := range capture.events {
+		switch ev.Kind {
+		case KindActionStatus:
+			statusEvents = append(statusEvents, ev)
+		case KindActionResult:
+			resultEvents = append(resultEvents, ev)
+		}
+	}
+
+	if len(statusEvents) == 0 {
+		t.Fatal("expected at least one status event (kind:6963)")
+	}
+
+	// The first status event should be the initial "executing" step from handleDirectRuntimeActionRequest.
+	first := statusEvents[0]
+	assertReactorTag(t, first.Tags, "e", "deploy-step-test")
+	assertReactorTag(t, first.Tags, "p", "operator")
+	assertReactorTag(t, first.Tags, "status", "processing")
+	assertReactorTag(t, first.Tags, "action", "deploy")
+	assertReactorTag(t, first.Tags, "step", "executing")
+	assertSignedEvent(t, first)
+
+	// All status events must have correlation tags.
+	for i, ev := range statusEvents {
+		assertReactorTag(t, ev.Tags, "e", "deploy-step-test")
+		assertReactorTag(t, ev.Tags, "p", "operator")
+		assertReactorTag(t, ev.Tags, "action", "deploy")
+		foundStep := false
+		for _, tag := range ev.Tags {
+			if len(tag) >= 2 && tag[0] == "step" {
+				foundStep = true
+				break
+			}
+		}
+		if !foundStep {
+			t.Fatalf("status event %d missing step tag", i)
+		}
+		// Resource tags should be present (from appendRequestResourceTags parsing content).
+		assertReactorTag(t, ev.Tags, "service", serviceID.String())
+		assertReactorTag(t, ev.Tags, "environment", envID.String())
+		assertReactorTag(t, ev.Tags, "artifact", artifactID.String())
+	}
+
+	// Must have exactly one result event.
+	if len(resultEvents) != 1 {
+		t.Fatalf("expected 1 result event, got %d", len(resultEvents))
+	}
+}
+
+// TestResultEventsCorrelateToOriginalRequest verifies that kind:7962 result
+// events carry the correct correlation tags linking back to the request event.
+func TestResultEventsCorrelateToOriginalRequest(t *testing.T) {
+	capture := &captureNostrPublisher{published: 1}
+	serviceID := uuid.New()
+	envID := uuid.New()
+	artifactID := uuid.New()
+	obsID := uuid.New()
+
+	runtimeStub := &stubRuntimeLifecycleOperatorService{
+		deployResp: &domain.RuntimeObservation{
+			ID:                  obsID,
+			ServiceID:           serviceID,
+			EnvironmentID:       envID,
+			ObservedImageDigest: "sha256:def456",
+			ObservedContainerID: "container-2",
+			HealthStatus:        domain.HealthStatusHealthy,
+			Source:              "direct_runtime",
+		},
+	}
+
+	reactor := newOperatorActionTestReactor(t,
+		Config{DirectRuntimeAuthorizedPubkeys: []string{"op1"}},
+		capture, nil, runtimeStub,
+	)
+
+	requestEventID := "request-correlation-test-" + uuid.NewString()[:8]
+	reactor.handleServiceAction(context.Background(), &nostr.Event{
+		ID:      requestEventID,
+		PubKey:  "op1",
+		Kind:    KindServiceAction,
+		Content: fmt.Sprintf(`{"action":"deploy","service_id":"%s","environment_id":"%s","artifact_id":"%s"}`, serviceID, envID, artifactID),
+	})
+
+	// Find the result event.
+	var result *nostr.Event
+	for i := range capture.events {
+		if capture.events[i].Kind == KindActionResult {
+			result = &capture.events[i]
+			break
+		}
+	}
+	if result == nil {
+		t.Fatal("no result event (kind:7962) published")
+	}
+
+	// Verify correlation tags.
+	assertReactorTag(t, result.Tags, "e", requestEventID)
+	assertReactorTag(t, result.Tags, "p", "op1")
+	assertReactorTag(t, result.Tags, "status", "success")
+	assertReactorTag(t, result.Tags, "action", "deploy")
+	assertReactorTag(t, result.Tags, "service", serviceID.String())
+	assertReactorTag(t, result.Tags, "environment", envID.String())
+	assertSignedEvent(t, *result)
+
+	// Verify the e tag has the "reply" marker (NIP-10 style).
+	for _, tag := range result.Tags {
+		if len(tag) >= 2 && tag[0] == "e" && tag[1] == requestEventID {
+			if len(tag) < 4 || tag[3] != "reply" {
+				t.Fatalf("e tag missing reply marker: %v", tag)
+			}
+			break
+		}
+	}
+
+	// Verify result content is valid and contains the expected payload.
+	var payload dto.RuntimeActionResponse
+	if err := json.Unmarshal([]byte(result.Content), &payload); err != nil {
+		t.Fatalf("decode result content: %v", err)
+	}
+	if payload.Action != "deploy" {
+		t.Fatalf("result action = %q, want deploy", payload.Action)
+	}
+	if payload.ServiceID != serviceID {
+		t.Fatalf("result service_id = %s, want %s", payload.ServiceID, serviceID)
+	}
+	if payload.EnvironmentID != envID {
+		t.Fatalf("result environment_id = %s, want %s", payload.EnvironmentID, envID)
+	}
+	if payload.Observation == nil || payload.Observation.ID != obsID {
+		t.Fatalf("result observation missing or wrong ID")
+	}
+}
+
+// TestFailurePathsPublishTerminalResults verifies that when the runtime
+// lifecycle service returns an error, a terminal result event (kind:7962) is
+// still published with status=failed and the error message.
+func TestFailurePathsPublishTerminalResults(t *testing.T) {
+	tests := []struct {
+		name     string
+		action   string
+		errMsg   string
+		setupErr func(*stubRuntimeLifecycleOperatorService)
+	}{
+		{
+			name:   "deploy failure",
+			action: "deploy",
+			errMsg: "image pull timeout",
+			setupErr: func(s *stubRuntimeLifecycleOperatorService) {
+				s.deployErr = errors.New("image pull timeout")
+			},
+		},
+		{
+			name:   "restart failure",
+			action: "restart",
+			errMsg: "container not found",
+			setupErr: func(s *stubRuntimeLifecycleOperatorService) {
+				s.restartErr = errors.New("container not found")
+			},
+		},
+		{
+			name:   "stop failure",
+			action: "stop",
+			errMsg: "permission denied",
+			setupErr: func(s *stubRuntimeLifecycleOperatorService) {
+				s.stopErr = errors.New("permission denied")
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			capture := &captureNostrPublisher{published: 1}
+			serviceID := uuid.New()
+			envID := uuid.New()
+			runtimeStub := &stubRuntimeLifecycleOperatorService{}
+			tc.setupErr(runtimeStub)
+
+			reactor := newOperatorActionTestReactor(t,
+				Config{DirectRuntimeAuthorizedPubkeys: []string{"operator"}},
+				capture, nil, runtimeStub,
+			)
+
+			content := fmt.Sprintf(`{"action":"%s","service_id":"%s","environment_id":"%s"}`, tc.action, serviceID, envID)
+			if tc.action == "deploy" {
+				artifactID := uuid.New()
+				content = fmt.Sprintf(`{"action":"deploy","service_id":"%s","environment_id":"%s","artifact_id":"%s"}`, serviceID, envID, artifactID)
+			}
+
+			requestEventID := tc.action + "-fail-" + uuid.NewString()[:8]
+			reactor.handleServiceAction(context.Background(), &nostr.Event{
+				ID:      requestEventID,
+				PubKey:  "operator",
+				Kind:    KindServiceAction,
+				Content: content,
+			})
+
+			// Find the terminal result event.
+			var result *nostr.Event
+			for i := range capture.events {
+				if capture.events[i].Kind == KindActionResult {
+					ev := capture.events[i]
+					// Check if this is the terminal result (not the status event).
+					for _, tag := range ev.Tags {
+						if len(tag) >= 2 && tag[0] == "status" && tag[1] == "failed" {
+							result = &ev
+							break
+						}
+					}
+				}
+			}
+			if result == nil {
+				t.Fatal("no terminal failure result event (kind:7962 status=failed) published")
+			}
+
+			// Verify correlation tags on failure result.
+			assertReactorTag(t, result.Tags, "e", requestEventID)
+			assertReactorTag(t, result.Tags, "p", "operator")
+			assertReactorTag(t, result.Tags, "status", "failed")
+			assertReactorTag(t, result.Tags, "action", tc.action)
+			assertSignedEvent(t, *result)
+
+			// Verify the error is included.
+			hasError := false
+			for _, tag := range result.Tags {
+				if len(tag) >= 2 && tag[0] == "error" {
+					hasError = true
+					break
+				}
+			}
+			if !hasError {
+				t.Fatal("failure result missing error tag")
+			}
+
+			// Verify error content includes the error message.
+			var content2 map[string]interface{}
+			if err := json.Unmarshal([]byte(result.Content), &content2); err != nil {
+				t.Fatalf("decode failure result content: %v", err)
+			}
+			if errStr, ok := content2["error"].(string); !ok || errStr == "" {
+				t.Fatalf("failure result content missing error field: %v", content2)
+			}
+
+			// Verify resource correlation tags are present.
+			assertReactorTag(t, result.Tags, "service", serviceID.String())
+			assertReactorTag(t, result.Tags, "environment", envID.String())
+		})
+	}
+}
+
+// TestDeployStatusStepProgressionPublishesAllSteps verifies that the
+// deployStatusCallbackFor mechanism publishes a status event for each step
+// reported by the lifecycle service, preserving correct tags.
+func TestDeployStatusStepProgressionPublishesAllSteps(t *testing.T) {
+	capture := &captureNostrPublisher{published: 1}
+	serviceID := uuid.New()
+	envID := uuid.New()
+	artifactID := uuid.New()
+	obsID := uuid.New()
+
+	expectedSteps := []service.DeployStep{
+		service.DeployStepBuildingDesiredState,
+		service.DeployStepLockingEnvironment,
+		service.DeployStepRendering,
+		service.DeployStepApplying,
+		service.DeployStepObserving,
+		service.DeployStepProjecting,
+	}
+
+	reactor := newOperatorActionTestReactor(t,
+		Config{DirectRuntimeAuthorizedPubkeys: []string{"operator"}},
+		capture, nil, &allStepsRuntimeStub{
+			obs:   &domain.RuntimeObservation{ID: obsID, ServiceID: serviceID, EnvironmentID: envID, HealthStatus: domain.HealthStatusHealthy, Source: "direct_runtime"},
+			steps: expectedSteps,
+		},
+	)
+
+	reactor.handleServiceAction(context.Background(), &nostr.Event{
+		ID:      "step-progression-test",
+		PubKey:  "operator",
+		Kind:    KindServiceAction,
+		Content: fmt.Sprintf(`{"action":"deploy","service_id":"%s","environment_id":"%s","artifact_id":"%s"}`, serviceID, envID, artifactID),
+	})
+
+	// Collect all status events.
+	var statusSteps []string
+	for _, ev := range capture.events {
+		if ev.Kind == KindActionStatus {
+			for _, tag := range ev.Tags {
+				if len(tag) >= 2 && tag[0] == "step" {
+					statusSteps = append(statusSteps, tag[1])
+					break
+				}
+			}
+		}
+	}
+
+	// Expect "executing" initial + each deploy step.
+	expectedCount := 1 + len(expectedSteps)
+	if len(statusSteps) != expectedCount {
+		t.Fatalf("expected %d status step events, got %d: %v", expectedCount, len(statusSteps), statusSteps)
+	}
+
+	// First should be "executing" from handleDirectRuntimeActionRequest.
+	if statusSteps[0] != "executing" {
+		t.Fatalf("first step = %q, want executing", statusSteps[0])
+	}
+
+	// Remaining should match the deploy lifecycle steps.
+	for i, expected := range expectedSteps {
+		got := statusSteps[i+1]
+		if got != string(expected) {
+			t.Fatalf("step %d = %q, want %q", i+1, got, expected)
+		}
+	}
+}
+
+// TestResultEventKindsMatchDocumentedSemantics verifies that the event kinds
+// used for status and result events match the documented Nostr command spec.
+func TestResultEventKindsMatchDocumentedSemantics(t *testing.T) {
+	// Kind:6963 is KindActionStatus (service action progress).
+	if KindActionStatus != 6963 {
+		t.Fatalf("KindActionStatus = %d, want 6963", KindActionStatus)
+	}
+
+	// Kind:7962 is KindActionResult (service action terminal result).
+	if KindActionResult != 7962 {
+		t.Fatalf("KindActionResult = %d, want 7962", KindActionResult)
+	}
+
+	// Kind:6961 is KindDeploymentStatus (deployment progress).
+	if KindDeploymentStatus != 6961 {
+		t.Fatalf("KindDeploymentStatus = %d, want 6961", KindDeploymentStatus)
+	}
+
+	// Kind:7961 is KindDeploymentResult (deployment terminal result).
+	if KindDeploymentResult != 7961 {
+		t.Fatalf("KindDeploymentResult = %d, want 7961", KindDeploymentResult)
+	}
+
+	// Kind:31961 is KindServiceState (replaceable service state read model).
+	if KindServiceState != 31961 {
+		t.Fatalf("KindServiceState = %d, want 31961", KindServiceState)
+	}
+}
+
+// --- Test helpers ---
+
+// statusCapturingRuntimeStub invokes the status callback with all deploy steps.
+type statusCapturingRuntimeStub struct {
+	obs           *domain.RuntimeObservation
+	capturedSteps *[]service.DeployStep
+}
+
+func (s *statusCapturingRuntimeStub) Deploy(_ context.Context, serviceID, envID uuid.UUID, artifactID *uuid.UUID) (*domain.RuntimeObservation, error) {
+	return s.obs, nil
+}
+
+func (s *statusCapturingRuntimeStub) DeployWithStatus(_ context.Context, serviceID, envID uuid.UUID, artifactID *uuid.UUID, statusFn service.DeployStatusCallback) (*domain.RuntimeObservation, error) {
+	if statusFn != nil {
+		steps := []service.DeployStep{
+			service.DeployStepBuildingDesiredState,
+			service.DeployStepLockingEnvironment,
+			service.DeployStepRendering,
+			service.DeployStepApplying,
+			service.DeployStepObserving,
+			service.DeployStepProjecting,
+		}
+		for _, step := range steps {
+			*s.capturedSteps = append(*s.capturedSteps, step)
+			statusFn(context.Background(), step, "test")
+		}
+	}
+	return s.obs, nil
+}
+
+func (s *statusCapturingRuntimeStub) Restart(_ context.Context, _, _ uuid.UUID) (*domain.RuntimeObservation, error) {
+	return s.obs, nil
+}
+
+func (s *statusCapturingRuntimeStub) Stop(_ context.Context, _, _ uuid.UUID) (*domain.RuntimeObservation, error) {
+	return s.obs, nil
+}
+
+// allStepsRuntimeStub is like statusCapturingRuntimeStub but takes expected steps.
+type allStepsRuntimeStub struct {
+	obs   *domain.RuntimeObservation
+	steps []service.DeployStep
+}
+
+func (s *allStepsRuntimeStub) Deploy(_ context.Context, _, _ uuid.UUID, _ *uuid.UUID) (*domain.RuntimeObservation, error) {
+	return s.obs, nil
+}
+
+func (s *allStepsRuntimeStub) DeployWithStatus(_ context.Context, _, _ uuid.UUID, _ *uuid.UUID, statusFn service.DeployStatusCallback) (*domain.RuntimeObservation, error) {
+	if statusFn != nil {
+		for _, step := range s.steps {
+			statusFn(context.Background(), step, "step: "+string(step))
+		}
+	}
+	return s.obs, nil
+}
+
+func (s *allStepsRuntimeStub) Restart(_ context.Context, _, _ uuid.UUID) (*domain.RuntimeObservation, error) {
+	return s.obs, nil
+}
+
+func (s *allStepsRuntimeStub) Stop(_ context.Context, _, _ uuid.UUID) (*domain.RuntimeObservation, error) {
+	return s.obs, nil
+}
+
+// hasTagKey checks if any tag with the given key exists.
+func hasTagKey(tags nostr.Tags, key string) bool {
+	for _, tag := range tags {
+		if len(tag) >= 2 && tag[0] == key {
+			return true
+		}
+	}
+	return false
+}
