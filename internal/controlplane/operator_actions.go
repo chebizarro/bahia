@@ -24,6 +24,7 @@ type AdoptionOperatorService interface {
 // RuntimeLifecycleOperatorService is the narrow service surface required by the
 // signer-first direct-runtime control-plane transport.
 type RuntimeLifecycleOperatorService interface {
+	BuildDesiredStateSnapshot(context.Context, uuid.UUID, uuid.UUID, uuid.UUID) (*domain.DesiredServiceSpec, error)
 	Deploy(context.Context, uuid.UUID, uuid.UUID, *uuid.UUID) (*domain.RuntimeObservation, error)
 	DeployWithStatus(context.Context, uuid.UUID, uuid.UUID, *uuid.UUID, service.DeployStatusCallback) (*domain.RuntimeObservation, error)
 	Restart(context.Context, uuid.UUID, uuid.UUID) (*domain.RuntimeObservation, error)
@@ -161,6 +162,12 @@ func (r *Reactor) handleDirectRuntimeActionRequest(ctx context.Context, event *n
 func (r *Reactor) deployStatusCallbackFor(ctx context.Context, event *nostr.Event, action string) service.DeployStatusCallback {
 	return func(cbCtx context.Context, step service.DeployStep, message string) {
 		_ = r.publishActionStatus(cbCtx, event, action, string(step), message)
+	}
+}
+
+func (r *Reactor) deploymentStatusCallbackFor(ctx context.Context, event *nostr.Event) service.DeployStatusCallback {
+	return func(cbCtx context.Context, step service.DeployStep, message string) {
+		_ = r.publishStatus(cbCtx, event, string(step), message)
 	}
 }
 

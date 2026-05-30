@@ -28,6 +28,8 @@ type stubRuntimeLifecycleOperatorService struct {
 	deployResp       *domain.RuntimeObservation
 	restartResp      *domain.RuntimeObservation
 	stopResp         *domain.RuntimeObservation
+	desiredState     *domain.DesiredServiceSpec
+	buildErr         error
 	deployErr        error
 	restartErr       error
 	stopErr          error
@@ -35,6 +37,18 @@ type stubRuntimeLifecycleOperatorService struct {
 	restartCalled    bool
 	stopCalled       bool
 	emitSteps        bool
+}
+
+func (s *stubRuntimeLifecycleOperatorService) BuildDesiredStateSnapshot(_ context.Context, serviceID, envID, artifactID uuid.UUID) (*domain.DesiredServiceSpec, error) {
+	if s.buildErr != nil {
+		return nil, s.buildErr
+	}
+	if s.desiredState != nil {
+		return s.desiredState, nil
+	}
+	spec := &domain.DesiredServiceSpec{ServiceID: serviceID, EnvironmentID: envID, ArtifactID: artifactID, StableServiceKey: "api", ImageRef: "registry.example.com/api:latest"}
+	spec.ComputeDesiredHash()
+	return spec, nil
 }
 
 func (s *stubRuntimeLifecycleOperatorService) Deploy(_ context.Context, serviceID, envID uuid.UUID, artifactID *uuid.UUID) (*domain.RuntimeObservation, error) {

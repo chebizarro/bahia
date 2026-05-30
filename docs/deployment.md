@@ -164,6 +164,17 @@ Dedicated operational limits protect runtime endpoints from expensive control-pl
 - adoption import: 10 requests/minute/IP;
 - direct runtime deploy/restart/stop: 20 requests/minute/IP.
 
+## Desired-State Persistence
+
+Bahia persists desired-state metadata additively so deploy, observe, and projection paths can compare deterministic state without relying on image digest alone:
+
+- `deployment_intents.desired_state` / `deployment_intents.desired_hash` store the canonical `DesiredServiceSpec` snapshot and hash accepted for a deploy intent.
+- `deployment_runs.apply_metadata` stores runtime apply metadata such as renderer, revision, resources, and warnings.
+- `environment_service_state.desired_runtime_state` / `environment_service_state.desired_hash` store the current desired runtime snapshot for the service/environment row.
+- `runtime_observations.normalized_state` / `runtime_observations.normalized_hash` store normalized observed runtime state for drift comparison.
+
+Secret plaintext is never stored in desired-state or normalized-observation JSON. Desired-state secret entries use redacted references only.
+
 ## Podman Runtime
 
 Bahia supports Podman as an alternative to Docker. Since Podman emulates Docker's API, Bahia communicates with Podman via its Docker-compatible socket.

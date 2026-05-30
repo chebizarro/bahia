@@ -2,17 +2,26 @@
 
 ## Summary
 
-**Status:** not started — feature is in pre-implementation specification phase.
+**Status:** partially verified — desired-state baseline persistence and 5961 runtime lifecycle routing are implemented and covered by targeted tests.
 
-- **Verified:** none
-- **Open defects:** none (pre-implementation)
-- **Matrix status:** 0 of 21 mapped tests implemented
-
-This report will be populated as implementation progresses through the work items.
+- **Verified:** canonical desired-state hash stability; repository persistence for desired snapshots/hashes; Compose/Docker desired-state adapter capability; 5961 deploy path into `RuntimeLifecycleService.DeployWithStatus`.
+- **Open defects:** none recorded for the Task 1 touched scope.
+- **Matrix status:** baseline Task 1 tests passing; broader roadmap items remain outside this verification pass.
 
 ## Commands Run
 
-_No verification commands have been run yet._
+- `go test ./internal/controlplane ./internal/service ./internal/domain ./internal/repository ./internal/adapters/runtime`
+- `go test ./...`
+- `go build ./...`
+
+## 2026-05-30 Task 1 Evidence
+
+- `internal/controlplane/reactor.go`: kind `5961` now builds a desired-state snapshot before intent persistence and invokes `RuntimeLifecycleService.DeployWithStatus` for approved intents.
+- `internal/app/app.go`: reactor wiring passes `runtimeLifecycleSvc` via `controlplane.WithRuntimeLifecycleService(runtimeLifecycleSvc)`.
+- `internal/service/runtime_lifecycle.go`: deploy path builds `DesiredServiceSpec`, assembles an environment plan, applies through `DesiredStateApplier` when supported, records observations, and updates `EnvironmentServiceState` with desired runtime state/hash.
+- `internal/db/migrations/000037_desired_state_persistence.up.sql`: additive columns exist for intent desired state/hash, run apply metadata, state desired runtime state/hash, and observation normalized state/hash.
+- `internal/domain/runtime_desired_state_golden_test.go`: golden hash fixture locks deterministic canonical hashing.
+- `internal/controlplane/reactor_policy_gate_test.go`: `TestHandleDeployRequestInvokesRuntimeLifecycleAndPersistsDesiredState` proves 5961 routes to runtime lifecycle and persists desired state/hash on the intent.
 
 ## Acceptance Criteria Status
 

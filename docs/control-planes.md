@@ -95,7 +95,7 @@ The Nostr reactor subscribes to signed request events and publishes status, term
 
 | Kind | Name | Description |
 |------|------|-------------|
-| 5961 | `DeployRequest` | Request to deploy an artifact |
+| 5961 | `DeployRequest` | Request to deploy an artifact; accepted requests build/persist a desired-state snapshot and approved intents invoke `RuntimeLifecycleService.DeployWithStatus` |
 | 5962 | `RollbackRequest` | Request to roll back a service |
 | 5963 | `ServiceAction` | Lifecycle action; signer-first direct-runtime `deploy`, `restart`, `stop` |
 | 5964 | `ServiceCreate` | Create a service |
@@ -161,6 +161,8 @@ Agent operators use MCP for synchronous discovery and action entry points while 
 | 7977 | `ToolApprovalResponse` | Operator → Bahia approval response for tool provisioning |
 | 7978 | `AdoptionScanResult` | Adoption scan terminal result |
 | 7979 | `AdoptionImportResult` | Adoption import terminal result |
+
+`7961` `DeploymentResult` content includes `intent_id`, `service_id`, `environment_id`, `artifact_id`, and `status`. When a desired-state snapshot is available it also includes `desired_hash`, and the event carries a matching `desired_hash` tag. `6961` `DeploymentStatus` events emitted during `5961` execution use step tags from the desired-state lifecycle (`building_desired_state`, `locking_environment`, `rendering`, `applying`, `observing`, `projecting`).
 
 ### Replaceable Read Models
 

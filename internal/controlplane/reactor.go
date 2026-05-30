@@ -807,6 +807,12 @@ func (r *Reactor) handleDeployRequest(ctx context.Context, event *nostr.Event) {
 		return
 	}
 
+	if r.runtimeLifecycle == nil {
+		logger.Error("runtime lifecycle service is not configured")
+		r.publishError(ctx, event, "runtime_lifecycle_unavailable", "runtime lifecycle service is not configured")
+		return
+	}
+
 	// Create run tracker
 	run := &DeploymentRun{
 		ID:              uuid.New(),
@@ -828,6 +834,16 @@ func (r *Reactor) handleDeployRequest(ctx context.Context, event *nostr.Event) {
 	r.publishStatus(ctx, event, "creating_intent", "Creating deployment intent")
 
 	// Create deployment intent
+	desiredState, err := r.runtimeLifecycle.BuildDesiredStateSnapshot(ctx, req.ServiceID, req.EnvironmentID, req.ArtifactID)
+	if err != nil {
+		logger.Error("failed to build desired state", "error", err)
+		run.Status = "failed"
+		run.Error = err.Error()
+		now := time.Now()
+		run.CompletedAt = &now
+		r.publishError(ctx, event, "desired_state_error", err.Error())
+		return
+	}
 	intent := &domain.DeploymentIntent{
 		ID:            uuid.New(),
 		ServiceID:     req.ServiceID,
@@ -836,6 +852,8 @@ func (r *Reactor) handleDeployRequest(ctx context.Context, event *nostr.Event) {
 		RequestedBy:   event.PubKey,
 		SourceKind:    domain.SourceKindEventTriggered,
 		Metadata:      map[string]any{"nostr_event_id": event.ID},
+		DesiredState:  desiredState,
+		DesiredHash:   desiredState.DesiredHash,
 	}
 
 	if err := r.registry.CreateDeploymentIntent(ctx, intent); err != nil {
@@ -851,12 +869,72 @@ func (r *Reactor) handleDeployRequest(ctx context.Context, event *nostr.Event) {
 	run.IntentID = &intent.ID
 	run.CurrentStep = "intent_created"
 
-	// Publish success result
+	logger.Info("deployment intent created", "intent_id", intent.ID, "desired_hash", intent.DesiredHash)
+
+	if intent.Status != domain.IntentStatusApproved {
+		run.Status = "completed"
+		now := time.Now()
+		run.CompletedAt = &now
+		r.publishDeploymentResult(ctx, event, intent)
+		return
+	}
+
+	startedAt := time.Now().UTC()
+	domainRun := &domain.DeploymentRun{
+		ID:                 run.ID,
+		DeploymentIntentID: intent.ID,
+		Status:             domain.RunStatusRunning,
+		StartedAt:          &startedAt,
+		Metadata:           map[string]any{"nostr_event_id": event.ID},
+		ApplyMetadata: map[string]any{
+			"desired_hash":                 desiredState.DesiredHash,
+			"desired_state_schema_version": desiredState.SchemaVersion,
+		},
+	}
+	if err := r.registry.CreateDeploymentRun(ctx, domainRun); err != nil {
+		logger.Error("failed to create deployment run", "error", err)
+		run.Status = "failed"
+		run.Error = err.Error()
+		now := time.Now()
+		run.CompletedAt = &now
+		r.publishError(ctx, event, "run_error", err.Error())
+		return
+	}
+	intent.Status = domain.IntentStatusDeploying
+
+	r.publishStatus(ctx, event, "applying_desired_state", "Applying desired runtime state")
+	artifactID := req.ArtifactID
+	obs, err := r.runtimeLifecycle.DeployWithStatus(ctx, req.ServiceID, req.EnvironmentID, &artifactID, r.deploymentStatusCallbackFor(ctx, event))
+	if err != nil {
+		logger.Error("deployment execution failed", "error", err)
+		failureExitCode := 1
+		_ = r.registry.CompleteDeploymentRun(ctx, domainRun.ID, domain.RunStatusFailed, &failureExitCode)
+		run.Status = "failed"
+		run.Error = err.Error()
+		now := time.Now()
+		run.CompletedAt = &now
+		r.publishError(ctx, event, "deployment_failed", err.Error())
+		return
+	}
+
+	successExitCode := 0
+	if err := r.registry.CompleteDeploymentRun(ctx, domainRun.ID, domain.RunStatusSucceeded, &successExitCode); err != nil {
+		logger.Error("failed to complete deployment run", "error", err)
+		run.Status = "failed"
+		run.Error = err.Error()
+		now := time.Now()
+		run.CompletedAt = &now
+		r.publishError(ctx, event, "run_completion_error", err.Error())
+		return
+	}
+	intent.Status = domain.IntentStatusDeployed
+
 	run.Status = "completed"
 	now := time.Now()
 	run.CompletedAt = &now
-
-	logger.Info("deployment intent created", "intent_id", intent.ID)
+	if obs != nil {
+		run.CurrentStep = "observation_recorded"
+	}
 
 	r.publishDeploymentResult(ctx, event, intent)
 }

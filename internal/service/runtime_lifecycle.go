@@ -111,6 +111,31 @@ func NewRuntimeLifecycleService(
 	return svc
 }
 
+// BuildDesiredStateSnapshot builds the canonical desired-state snapshot that a
+// deploy will apply. It is used before intent persistence so request records
+// carry the same deterministic desired hash as runtime state rows.
+func (s *RuntimeLifecycleService) BuildDesiredStateSnapshot(ctx context.Context, serviceID, envID, artifactID uuid.UUID) (*domain.DesiredServiceSpec, error) {
+	svc, env, _, err := s.resolve(ctx, serviceID, envID)
+	if err != nil {
+		return nil, err
+	}
+	artifact, err := s.resolveDeployArtifact(ctx, serviceID, envID, &artifactID)
+	if err != nil {
+		return nil, err
+	}
+	secrets, err := s.effectiveSecrets(ctx, serviceID, envID)
+	if err != nil {
+		return nil, err
+	}
+	return NewDesiredStateBuilder().Build(BuildInput{
+		Service:       svc,
+		Environment:   env,
+		Artifact:      artifact,
+		RuntimeConfig: svc.RuntimeConfig,
+		Secrets:       secrets,
+	})
+}
+
 // Deploy deploys an artifact directly through the resolved runtime and records a fresh observation.
 func (s *RuntimeLifecycleService) Deploy(ctx context.Context, serviceID, envID uuid.UUID, artifactID *uuid.UUID) (*domain.RuntimeObservation, error) {
 	return s.DeployWithStatus(ctx, serviceID, envID, artifactID, nil)
@@ -153,6 +178,37 @@ func (s *RuntimeLifecycleService) deployDesiredState(ctx context.Context, servic
 	if err := s.mergeEffectiveSecrets(ctx, serviceID, envID, &opts); err != nil {
 		s.logRuntimeAction("deploy", svc, env, serviceID, envID, &artifact.ID, start, "failed", err)
 		return nil, err
+	}
+
+	secrets, err := s.effectiveSecrets(ctx, serviceID, envID)
+	if err != nil {
+		s.logRuntimeAction("deploy", svc, env, serviceID, envID, &artifact.ID, start, "failed", err)
+		return nil, err
+	}
+
+	builder := NewDesiredStateBuilder()
+	targetSpec, err := builder.Build(BuildInput{
+		Service:       svc,
+		Environment:   env,
+		Artifact:      artifact,
+		RuntimeConfig: svc.RuntimeConfig,
+		Secrets:       secrets,
+	})
+	if err != nil {
+		s.logRuntimeAction("deploy", svc, env, serviceID, envID, &artifact.ID, start, "failed", err)
+		return nil, fmt.Errorf("building desired state: %w", err)
+	}
+	plan, err := NewEnvironmentPlanAssembler(EnvironmentPlanAssemblerDeps{
+		StateLoader: s.state,
+		StateWriter: s.state,
+		Services:    s.services,
+		Artifacts:   s.artifacts,
+		Secrets:     secretListerOrEmpty{s.secrets},
+		Builder:     builder,
+	}).Assemble(ctx, envID, serviceID, targetSpec)
+	if err != nil {
+		s.logRuntimeAction("deploy", svc, env, serviceID, envID, &artifact.ID, start, "failed", err)
+		return nil, fmt.Errorf("assembling desired environment plan: %w", err)
 	}
 
 	if opts.Labels == nil {
@@ -212,9 +268,23 @@ func (s *RuntimeLifecycleService) deployDesiredState(ctx context.Context, servic
 	// Step: applying — execute the deploy through the runtime adapter.
 	notify(DeployStepApplying, fmt.Sprintf("Deploying %s to %s", imageRef, targetName))
 
-	if err := rt.Deploy(ctx, targetName, imageRef, opts); err != nil {
-		s.logRuntimeAction("deploy", svc, env, serviceID, envID, &artifact.ID, start, "failed", err)
-		return nil, fmt.Errorf("deploying runtime target %q: %w", targetName, err)
+	var applyResult *runtime.DesiredStateApplyResult
+	if applier, ok := runtime.AsDesiredStateApplier(rt); ok {
+		applyResult, err = applier.ApplyDesiredState(ctx, runtime.DesiredStateApplyRequest{
+			EnvironmentPlan: plan,
+			TargetService:   targetSpec,
+			Secrets:         opts.Environment,
+			PullPolicy:      targetSpec.PullPolicy,
+		})
+		if err != nil {
+			s.logRuntimeAction("deploy", svc, env, serviceID, envID, &artifact.ID, start, "failed", err)
+			return nil, fmt.Errorf("applying desired state for runtime target %q: %w", targetName, err)
+		}
+	} else {
+		if err := rt.Deploy(ctx, targetName, imageRef, opts); err != nil {
+			s.logRuntimeAction("deploy", svc, env, serviceID, envID, &artifact.ID, start, "failed", err)
+			return nil, fmt.Errorf("deploying runtime target %q: %w", targetName, err)
+		}
 	}
 
 	// Step: observing — observe the runtime state after deploy.
@@ -229,7 +299,7 @@ func (s *RuntimeLifecycleService) deployDesiredState(ctx context.Context, servic
 	// Step: projecting — persist state and publish events.
 	notify(DeployStepProjecting, "Persisting deployment outcome")
 
-	if err := s.updateDesiredArtifact(ctx, serviceID, envID, artifact.ID); err != nil {
+	if err := s.updateDesiredArtifact(ctx, serviceID, envID, artifact.ID, targetSpec); err != nil {
 		s.logRuntimeAction("deploy", svc, env, serviceID, envID, &artifact.ID, start, "failed", err)
 		return nil, err
 	}
@@ -237,7 +307,13 @@ func (s *RuntimeLifecycleService) deployDesiredState(ctx context.Context, servic
 		s.logRuntimeAction("deploy", svc, env, serviceID, envID, &artifact.ID, start, "failed", err)
 		return nil, fmt.Errorf("recording deploy observation: %w", err)
 	}
-	s.publishAction(ctx, runtimeActionDeployEvent, svc, env, obs, map[string]any{"artifact_id": artifact.ID})
+	actionData := map[string]any{"artifact_id": artifact.ID, "desired_hash": targetSpec.DesiredHash, "environment_revision": plan.RevisionHash}
+	if applyResult != nil {
+		actionData["renderer"] = applyResult.Renderer
+		actionData["resource_names"] = applyResult.ResourceNames
+		actionData["warnings"] = applyResult.Warnings
+	}
+	s.publishAction(ctx, runtimeActionDeployEvent, svc, env, obs, actionData)
 	s.logRuntimeAction("deploy", svc, env, serviceID, envID, &artifact.ID, start, "success", nil)
 	return obs, nil
 }
@@ -400,11 +476,24 @@ func (s *RuntimeLifecycleService) resolveDeployArtifact(ctx context.Context, ser
 	return artifact, nil
 }
 
-func (s *RuntimeLifecycleService) mergeEffectiveSecrets(ctx context.Context, serviceID, envID uuid.UUID, opts *runtime.DeployOptions) error {
+func (s *RuntimeLifecycleService) effectiveSecrets(ctx context.Context, serviceID, envID uuid.UUID) ([]domain.ServiceSecret, error) {
 	if s.secrets == nil {
-		return nil
+		return nil, nil
 	}
-	secrets, err := s.secrets.ListEffective(ctx, serviceID, envID)
+	return s.secrets.ListEffective(ctx, serviceID, envID)
+}
+
+type secretListerOrEmpty struct{ repo repository.SecretRepository }
+
+func (l secretListerOrEmpty) ListEffective(ctx context.Context, serviceID, envID uuid.UUID) ([]domain.ServiceSecret, error) {
+	if l.repo == nil {
+		return nil, nil
+	}
+	return l.repo.ListEffective(ctx, serviceID, envID)
+}
+
+func (s *RuntimeLifecycleService) mergeEffectiveSecrets(ctx context.Context, serviceID, envID uuid.UUID, opts *runtime.DeployOptions) error {
+	secrets, err := s.effectiveSecrets(ctx, serviceID, envID)
 	if err != nil {
 		return fmt.Errorf("loading effective secrets: %w", err)
 	}
@@ -430,7 +519,7 @@ func (s *RuntimeLifecycleService) mergeEffectiveSecrets(ctx context.Context, ser
 	return nil
 }
 
-func (s *RuntimeLifecycleService) updateDesiredArtifact(ctx context.Context, serviceID, envID, artifactID uuid.UUID) error {
+func (s *RuntimeLifecycleService) updateDesiredArtifact(ctx context.Context, serviceID, envID, artifactID uuid.UUID, desiredState *domain.DesiredServiceSpec) error {
 	st, err := s.state.Get(ctx, serviceID, envID)
 	if err != nil {
 		return fmt.Errorf("looking up current state: %w", err)
@@ -438,10 +527,11 @@ func (s *RuntimeLifecycleService) updateDesiredArtifact(ctx context.Context, ser
 	if st == nil {
 		st = &domain.EnvironmentServiceState{ServiceID: serviceID, EnvironmentID: envID}
 	}
-	if st.DesiredArtifactID != nil && *st.DesiredArtifactID == artifactID {
-		return nil
-	}
 	st.DesiredArtifactID = &artifactID
+	st.DesiredRuntimeState = desiredState
+	if desiredState != nil {
+		st.DesiredHash = desiredState.DesiredHash
+	}
 	st.DriftStatus = domain.DriftStatusDeploying
 	return s.state.Upsert(ctx, st)
 }

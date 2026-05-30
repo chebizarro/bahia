@@ -15,6 +15,85 @@ import (
 	"go.uber.org/zap"
 )
 
+func TestHandleDeployRequestInvokesRuntimeLifecycleAndPersistsDesiredState(t *testing.T) {
+	ctx := context.Background()
+	serviceID := uuid.New()
+	environmentID := uuid.New()
+	artifactID := uuid.New()
+	obsID := uuid.New()
+
+	svcRepo := &testServiceRepo{service: &domain.Service{ID: serviceID, Name: "api"}}
+	envRepo := &testEnvironmentRepo{environment: &domain.Environment{ID: environmentID, Name: "prod", Protected: false}}
+	artifactRepo := &testArtifactRepo{artifact: &domain.Artifact{ID: artifactID, ServiceID: serviceID, ImageRepo: "registry.example.com/api", ImageTag: "v1", ImageDigest: "sha256:abc"}}
+	intentRepo := &testDeploymentIntentRepo{intents: map[uuid.UUID]*domain.DeploymentIntent{}}
+	runRepo := &testDeploymentRunRepo{runs: map[uuid.UUID]*domain.DeploymentRun{}}
+	stateRepo := &testEnvironmentServiceStateRepo{states: map[string]*domain.EnvironmentServiceState{}}
+
+	registry := service.NewRegistryService(
+		svcRepo,
+		envRepo,
+		&testBuildRepo{},
+		artifactRepo,
+		intentRepo,
+		runRepo,
+		&testObservationRepo{},
+		stateRepo,
+		nil,
+		&events.NoopPublisher{},
+		zap.NewNop(),
+	)
+	policyService := service.NewPolicyService(&testPolicyRepo{}, &testSignatureRepo{hasVerifiedSignature: true}, &testSBOMRepo{}, zap.NewNop())
+	desired := &domain.DesiredServiceSpec{ServiceID: serviceID, EnvironmentID: environmentID, ArtifactID: artifactID, StableServiceKey: "api", ImageRef: "registry.example.com/api@sha256:abc"}
+	desired.ComputeDesiredHash()
+	runtimeStub := &stubRuntimeLifecycleOperatorService{
+		desiredState: desired,
+		deployResp:   &domain.RuntimeObservation{ID: obsID, ServiceID: serviceID, EnvironmentID: environmentID, HealthStatus: domain.HealthStatusHealthy, Source: "direct_runtime"},
+	}
+	capture := &captureNostrPublisher{published: 1}
+	reactor := newDeployRequestTestReactor(t, Config{AuthorizedPubkeys: []string{"operator"}}, capture, registry, policyService, runtimeStub)
+
+	request := &nostr.Event{
+		ID:      "deploy-request",
+		PubKey:  "operator",
+		Kind:    KindDeployRequest,
+		Content: fmt.Sprintf(`{"service_id":"%s","environment_id":"%s","artifact_id":"%s"}`, serviceID, environmentID, artifactID),
+	}
+
+	reactor.handleDeployRequest(ctx, request)
+
+	if !runtimeStub.deployCalled {
+		t.Fatal("5961 deploy request did not invoke RuntimeLifecycleService.DeployWithStatus")
+	}
+	if runtimeStub.deployServiceID != serviceID || runtimeStub.deployEnvID != environmentID || runtimeStub.deployArtifact == nil || *runtimeStub.deployArtifact != artifactID {
+		t.Fatalf("runtime deploy call mismatch: %#v", runtimeStub)
+	}
+	if got := len(intentRepo.intents); got != 1 {
+		t.Fatalf("deployment intents created = %d, want 1", got)
+	}
+	var persisted *domain.DeploymentIntent
+	for _, intent := range intentRepo.intents {
+		persisted = intent
+	}
+	if persisted.DesiredState == nil || persisted.DesiredHash != desired.DesiredHash {
+		t.Fatalf("persisted desired state/hash mismatch: state=%#v hash=%q want %q", persisted.DesiredState, persisted.DesiredHash, desired.DesiredHash)
+	}
+	if got := len(runRepo.runs); got != 1 {
+		t.Fatalf("deployment runs created = %d, want 1", got)
+	}
+	for _, deploymentRun := range runRepo.runs {
+		if deploymentRun.ApplyMetadata["desired_hash"] != desired.DesiredHash {
+			t.Fatalf("run apply desired_hash = %#v, want %q", deploymentRun.ApplyMetadata["desired_hash"], desired.DesiredHash)
+		}
+		if deploymentRun.Status != domain.RunStatusSucceeded {
+			t.Fatalf("run status = %q, want %q", deploymentRun.Status, domain.RunStatusSucceeded)
+		}
+	}
+	if len(capture.events) == 0 || capture.events[len(capture.events)-1].Kind != KindDeploymentResult {
+		t.Fatalf("expected final deployment result, got %#v", capture.events)
+	}
+	assertReactorTag(t, capture.events[len(capture.events)-1].Tags, "desired_hash", desired.DesiredHash)
+}
+
 func TestHandleDeployRequestRejectsPolicyBlockedRequest(t *testing.T) {
 	ctx := context.Background()
 	serviceID := uuid.New()
@@ -94,13 +173,17 @@ func TestHandleDeployRequestRejectsPolicyBlockedRequest(t *testing.T) {
 	}
 }
 
-func newDeployRequestTestReactor(t *testing.T, cfg Config, capture *captureNostrPublisher, registry *service.RegistryService, policyService *service.PolicyService) *Reactor {
+func newDeployRequestTestReactor(t *testing.T, cfg Config, capture *captureNostrPublisher, registry *service.RegistryService, policyService *service.PolicyService, runtimeLifecycle ...RuntimeLifecycleOperatorService) *Reactor {
 	t.Helper()
 	signer, err := NewPrivateKeySigner(nostr.GeneratePrivateKey())
 	if err != nil {
 		t.Fatalf("create signer: %v", err)
 	}
-	return NewReactor(cfg, registry, nil, signer, zap.NewNop(), WithControlPlanePublisher(capture), WithPolicyService(policyService))
+	opts := []ReactorOption{WithControlPlanePublisher(capture), WithPolicyService(policyService)}
+	if len(runtimeLifecycle) > 0 {
+		opts = append(opts, WithRuntimeLifecycleService(runtimeLifecycle[0]))
+	}
+	return NewReactor(cfg, registry, nil, signer, zap.NewNop(), opts...)
 }
 
 type testServiceRepo struct {
@@ -115,8 +198,10 @@ func (r *testServiceRepo) GetByID(_ context.Context, id uuid.UUID) (*domain.Serv
 	}
 	return nil, nil
 }
-func (r *testServiceRepo) GetByName(context.Context, string) (*domain.Service, error) { return nil, nil }
-func (r *testServiceRepo) List(context.Context) ([]domain.Service, error)              { return nil, nil }
+func (r *testServiceRepo) GetByName(context.Context, string) (*domain.Service, error) {
+	return nil, nil
+}
+func (r *testServiceRepo) List(context.Context) ([]domain.Service, error) { return nil, nil }
 func (r *testServiceRepo) ListByOrg(context.Context, uuid.UUID) ([]domain.Service, error) {
 	return nil, nil
 }
@@ -135,8 +220,10 @@ func (r *testEnvironmentRepo) GetByID(_ context.Context, id uuid.UUID) (*domain.
 	}
 	return nil, nil
 }
-func (r *testEnvironmentRepo) GetByName(context.Context, string) (*domain.Environment, error) { return nil, nil }
-func (r *testEnvironmentRepo) List(context.Context) ([]domain.Environment, error)              { return nil, nil }
+func (r *testEnvironmentRepo) GetByName(context.Context, string) (*domain.Environment, error) {
+	return nil, nil
+}
+func (r *testEnvironmentRepo) List(context.Context) ([]domain.Environment, error) { return nil, nil }
 func (r *testEnvironmentRepo) ListByOrg(context.Context, uuid.UUID) ([]domain.Environment, error) {
 	return nil, nil
 }
@@ -155,7 +242,9 @@ func (r *testBuildRepo) GetByCISystemRunID(context.Context, string, string) (*do
 func (r *testBuildRepo) ListByService(context.Context, uuid.UUID, int, int) ([]domain.Build, error) {
 	return nil, nil
 }
-func (r *testBuildRepo) UpdateStatus(context.Context, uuid.UUID, domain.BuildStatus) error { return nil }
+func (r *testBuildRepo) UpdateStatus(context.Context, uuid.UUID, domain.BuildStatus) error {
+	return nil
+}
 
 type testArtifactRepo struct {
 	artifact *domain.Artifact
@@ -227,16 +316,39 @@ func (r *testDeploymentIntentRepo) UpdateApproval(_ context.Context, id uuid.UUI
 	return nil
 }
 
-type testDeploymentRunRepo struct{}
+type testDeploymentRunRepo struct {
+	runs map[uuid.UUID]*domain.DeploymentRun
+}
 
-func (r *testDeploymentRunRepo) Create(context.Context, *domain.DeploymentRun) error { return nil }
-func (r *testDeploymentRunRepo) GetByID(context.Context, uuid.UUID) (*domain.DeploymentRun, error) {
+func (r *testDeploymentRunRepo) Create(_ context.Context, run *domain.DeploymentRun) error {
+	if r.runs == nil {
+		r.runs = map[uuid.UUID]*domain.DeploymentRun{}
+	}
+	cp := *run
+	r.runs[run.ID] = &cp
+	return nil
+}
+func (r *testDeploymentRunRepo) GetByID(_ context.Context, id uuid.UUID) (*domain.DeploymentRun, error) {
+	if run, ok := r.runs[id]; ok {
+		cp := *run
+		return &cp, nil
+	}
 	return nil, nil
 }
-func (r *testDeploymentRunRepo) ListByIntent(context.Context, uuid.UUID) ([]domain.DeploymentRun, error) {
-	return nil, nil
+func (r *testDeploymentRunRepo) ListByIntent(_ context.Context, intentID uuid.UUID) ([]domain.DeploymentRun, error) {
+	out := make([]domain.DeploymentRun, 0, len(r.runs))
+	for _, run := range r.runs {
+		if run.DeploymentIntentID == intentID {
+			out = append(out, *run)
+		}
+	}
+	return out, nil
 }
-func (r *testDeploymentRunRepo) UpdateStatus(context.Context, uuid.UUID, domain.DeploymentRunStatus, *int) error {
+func (r *testDeploymentRunRepo) UpdateStatus(_ context.Context, id uuid.UUID, status domain.DeploymentRunStatus, exitCode *int) error {
+	if run, ok := r.runs[id]; ok {
+		run.Status = status
+		run.ExitCode = exitCode
+	}
 	return nil
 }
 
@@ -294,7 +406,9 @@ func (r *testPolicyRepo) GetByID(context.Context, uuid.UUID) (*domain.Deployment
 func (r *testPolicyRepo) GetByName(context.Context, string) (*domain.DeploymentPolicy, error) {
 	return nil, nil
 }
-func (r *testPolicyRepo) List(context.Context, bool) ([]domain.DeploymentPolicy, error) { return nil, nil }
+func (r *testPolicyRepo) List(context.Context, bool) ([]domain.DeploymentPolicy, error) {
+	return nil, nil
+}
 func (r *testPolicyRepo) ListByEnvironment(context.Context, uuid.UUID) ([]domain.DeploymentPolicy, error) {
 	return append([]domain.DeploymentPolicy(nil), r.envPolicies...), nil
 }
@@ -302,7 +416,7 @@ func (r *testPolicyRepo) ListGlobal(context.Context) ([]domain.DeploymentPolicy,
 	return append([]domain.DeploymentPolicy(nil), r.globalPolicies...), nil
 }
 func (r *testPolicyRepo) Update(context.Context, *domain.DeploymentPolicy) error { return nil }
-func (r *testPolicyRepo) Delete(context.Context, uuid.UUID) error                 { return nil }
+func (r *testPolicyRepo) Delete(context.Context, uuid.UUID) error                { return nil }
 
 type testSignatureRepo struct {
 	hasVerifiedSignature bool

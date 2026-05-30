@@ -420,6 +420,12 @@ type statusCapturingRuntimeStub struct {
 	capturedSteps *[]service.DeployStep
 }
 
+func (s *statusCapturingRuntimeStub) BuildDesiredStateSnapshot(_ context.Context, serviceID, envID, artifactID uuid.UUID) (*domain.DesiredServiceSpec, error) {
+	spec := &domain.DesiredServiceSpec{ServiceID: serviceID, EnvironmentID: envID, ArtifactID: artifactID, StableServiceKey: "api", ImageRef: "registry.example.com/api:latest"}
+	spec.ComputeDesiredHash()
+	return spec, nil
+}
+
 func (s *statusCapturingRuntimeStub) Deploy(_ context.Context, serviceID, envID uuid.UUID, artifactID *uuid.UUID) (*domain.RuntimeObservation, error) {
 	return s.obs, nil
 }
@@ -454,6 +460,12 @@ func (s *statusCapturingRuntimeStub) Stop(_ context.Context, _, _ uuid.UUID) (*d
 type allStepsRuntimeStub struct {
 	obs   *domain.RuntimeObservation
 	steps []service.DeployStep
+}
+
+func (s *allStepsRuntimeStub) BuildDesiredStateSnapshot(_ context.Context, serviceID, envID, artifactID uuid.UUID) (*domain.DesiredServiceSpec, error) {
+	spec := &domain.DesiredServiceSpec{ServiceID: serviceID, EnvironmentID: envID, ArtifactID: artifactID, StableServiceKey: "api", ImageRef: "registry.example.com/api:latest"}
+	spec.ComputeDesiredHash()
+	return spec, nil
 }
 
 func (s *allStepsRuntimeStub) Deploy(_ context.Context, _, _ uuid.UUID, _ *uuid.UUID) (*domain.RuntimeObservation, error) {
