@@ -1,0 +1,24 @@
+{
+  "feature_id": "bahia-ha43",
+  "title": "Migrate Docker/Podman to API-Owned Control Clients",
+  "task": "Task 10 from the Bahia Platform Maturity plan",
+  "observed_behavior_before": [
+    "Docker desired-state apply already had a RuntimeControlClient seam but Engine API mutation implementations still lived on DockerObserver in docker_apply.go.",
+    "Legacy Docker Deploy built create/start Engine API requests directly in docker.go instead of delegating mutating operations to the control client."
+  ],
+  "intended_behavior": [
+    "Docker and Podman desired-state apply use an explicit DockerControlClient for find, ensure, pull, stop, remove, create, start, and network connect operations.",
+    "Docker-compatible Engine API mutation ownership lives in dockerEngineControlClient.",
+    "Apply results surface the RuntimeExecutionMode from the control client."
+  ],
+  "scope": [
+    "internal/adapters/runtime/control_client.go",
+    "internal/adapters/runtime/docker.go",
+    "internal/adapters/runtime/docker_apply.go",
+    "internal/adapters/runtime/docker_apply_test.go"
+  ],
+  "out_of_scope": [
+    "Nostr protocol behavior; this task changes runtime adapter control flow only.",
+    "Deployment documentation changes; no user-facing deployment configuration changed."
+  ]
+}

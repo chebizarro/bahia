@@ -1130,3 +1130,140 @@ func TestEnvironmentRevision_WithPlan(t *testing.T) {
 		t.Errorf("expected sha256:abc123, got %q", got)
 	}
 }
+
+// ===========================================================================
+// Control client delegation
+// ===========================================================================
+
+type recordingDockerControlClient struct {
+	mode RuntimeExecutionMode
+
+	findSpec       *domain.DesiredServiceSpec
+	ensureNetworks []domain.NetworkSpec
+	ensureVolumes  []domain.VolumeSpec
+	pullImages     []string
+	stopIDs        []string
+	removeIDs      []string
+	createNames    []string
+	startIDs       []string
+	connectCalls   []connectCall
+
+	existingContainer *DockerContainer
+}
+
+func (c *recordingDockerControlClient) ExecutionMode() RuntimeExecutionMode {
+	if c.mode != "" {
+		return c.mode
+	}
+	return ExecutionModeEngineAPI
+}
+
+func (c *recordingDockerControlClient) FindManagedContainer(_ context.Context, spec *domain.DesiredServiceSpec) (*DockerContainer, error) {
+	c.findSpec = spec
+	return c.existingContainer, nil
+}
+
+func (c *recordingDockerControlClient) EnsureNetworks(_ context.Context, specs []domain.NetworkSpec) error {
+	c.ensureNetworks = append(c.ensureNetworks, specs...)
+	return nil
+}
+
+func (c *recordingDockerControlClient) EnsureVolumes(_ context.Context, specs []domain.VolumeSpec) error {
+	c.ensureVolumes = append(c.ensureVolumes, specs...)
+	return nil
+}
+
+func (c *recordingDockerControlClient) PullImage(_ context.Context, image string) error {
+	c.pullImages = append(c.pullImages, image)
+	return nil
+}
+
+func (c *recordingDockerControlClient) StopContainer(_ context.Context, containerID string) error {
+	c.stopIDs = append(c.stopIDs, containerID)
+	return nil
+}
+
+func (c *recordingDockerControlClient) RemoveContainer(_ context.Context, containerID string) error {
+	c.removeIDs = append(c.removeIDs, containerID)
+	return nil
+}
+
+func (c *recordingDockerControlClient) CreateContainer(_ context.Context, name string, _ *DockerContainerConfigs) (string, error) {
+	c.createNames = append(c.createNames, name)
+	return "delegated-container", nil
+}
+
+func (c *recordingDockerControlClient) StartContainer(_ context.Context, containerID string) error {
+	c.startIDs = append(c.startIDs, containerID)
+	return nil
+}
+
+func (c *recordingDockerControlClient) ConnectNetwork(_ context.Context, containerID, networkName, _ string) error {
+	c.connectCalls = append(c.connectCalls, connectCall{NetworkName: networkName, ContainerID: containerID})
+	return nil
+}
+
+func TestApplyDesiredState_DelegatesMutationsToControlClient(t *testing.T) {
+	t.Parallel()
+	spec := applyTestSpec()
+	spec.NetworkMode = "custom-network"
+	spec.Volumes = []string{"app-data:/data"}
+	control := &recordingDockerControlClient{mode: ExecutionModeEngineAPI}
+	observer := &DockerObserver{logger: zap.NewNop(), controlClient: control}
+
+	result, err := observer.ApplyDesiredState(context.Background(), applyTestRequest(spec))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if control.findSpec != spec {
+		t.Fatal("expected managed container lookup through control client")
+	}
+	if len(control.ensureNetworks) != 1 || control.ensureNetworks[0].Name != "custom-network" {
+		t.Fatalf("ensure networks = %+v, want custom-network", control.ensureNetworks)
+	}
+	if len(control.ensureVolumes) != 1 || control.ensureVolumes[0].Name != "app-data" {
+		t.Fatalf("ensure volumes = %+v, want app-data", control.ensureVolumes)
+	}
+	if len(control.pullImages) != 1 || control.pullImages[0] != spec.ImageRef {
+		t.Fatalf("pull images = %v, want [%s]", control.pullImages, spec.ImageRef)
+	}
+	if len(control.createNames) != 1 || control.createNames[0] != BahiaContainerName(spec) {
+		t.Fatalf("create names = %v, want [%s]", control.createNames, BahiaContainerName(spec))
+	}
+	if len(control.startIDs) != 1 || control.startIDs[0] != "delegated-container" {
+		t.Fatalf("start IDs = %v, want [delegated-container]", control.startIDs)
+	}
+	if result.ExecutionMode != ExecutionModeEngineAPI {
+		t.Fatalf("execution mode = %q, want %q", result.ExecutionMode, ExecutionModeEngineAPI)
+	}
+	if len(result.ResourceIDs) != 1 || result.ResourceIDs[0] != "delegated-container" {
+		t.Fatalf("resource IDs = %v, want [delegated-container]", result.ResourceIDs)
+	}
+}
+
+func TestDockerDeploy_DelegatesMutationsToControlClient(t *testing.T) {
+	t.Parallel()
+	mock := newApplyMockState()
+	server, observer := setupApplyTest(mock)
+	defer server.Close()
+	control := &recordingDockerControlClient{}
+	observer.controlClient = control
+
+	err := observer.Deploy(context.Background(), "legacy-service", "example.com/app:1", DeployOptions{
+		PullAlways: true,
+		Ports:      []string{"8080:80"},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(control.pullImages) != 1 || control.pullImages[0] != "example.com/app:1" {
+		t.Fatalf("pull images = %v, want [example.com/app:1]", control.pullImages)
+	}
+	if len(control.createNames) != 1 || control.createNames[0] != "legacy-service" {
+		t.Fatalf("create names = %v, want [legacy-service]", control.createNames)
+	}
+	if len(control.startIDs) != 1 || control.startIDs[0] != "delegated-container" {
+		t.Fatalf("start IDs = %v, want [delegated-container]", control.startIDs)
+	}
+}

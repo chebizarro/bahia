@@ -1,0 +1,18 @@
+{
+  "feature_id": "bahia-ha43",
+  "test_runs": [
+    {
+      "command": "go test ./internal/adapters/runtime",
+      "result": "pass",
+      "duration": "7.641s",
+      "criteria": ["AC1", "AC2", "AC3", "AC4"],
+      "notable_tests": [
+        "TestApplyDesiredState_DelegatesMutationsToControlClient",
+        "TestDockerDeploy_DelegatesMutationsToControlClient",
+        "TestApplyDesiredState_NoOp_HashMatch",
+        "TestApplyDesiredState_MissingContainer_CreatesFresh",
+        "TestPodmanApplyDesiredState_DelegatesToDocker"
+      ]
+    }
+  ]
+}

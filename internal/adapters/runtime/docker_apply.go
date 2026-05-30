@@ -2,9 +2,7 @@ package runtime
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"net/http"
 	"strings"
 
 	"github.com/openagentsinc/bahia/internal/domain"
@@ -177,111 +175,6 @@ func (o *DockerObserver) ApplyDesiredState(ctx context.Context, req DesiredState
 // convergence.
 func (o *DockerObserver) SupportsDesiredState() bool { return true }
 
-// ---------------------------------------------------------------------------
-// Container lifecycle helpers
-// ---------------------------------------------------------------------------
-
-func (o *DockerObserver) stopContainer(ctx context.Context, containerID string) error {
-	stopURL := fmt.Sprintf("%s/v1.44/containers/%s/stop?t=10", o.host, containerID)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, stopURL, nil)
-	if err != nil {
-		return fmt.Errorf("creating stop request: %w", err)
-	}
-	resp, err := o.httpClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("stopping container: %w", err)
-	}
-	defer resp.Body.Close()
-
-	// 204 = stopped, 304 = already stopped — both are fine.
-	if resp.StatusCode != http.StatusNoContent &&
-		resp.StatusCode != http.StatusOK &&
-		resp.StatusCode != http.StatusNotModified {
-		return fmt.Errorf("docker stop returned %d", resp.StatusCode)
-	}
-	return nil
-}
-
-func (o *DockerObserver) removeContainer(ctx context.Context, containerID string) error {
-	rmURL := fmt.Sprintf("%s/v1.44/containers/%s?force=true", o.host, containerID)
-	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, rmURL, nil)
-	if err != nil {
-		return fmt.Errorf("creating remove request: %w", err)
-	}
-	resp, err := o.httpClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("removing container: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("docker remove returned %d", resp.StatusCode)
-	}
-	return nil
-}
-
-func (o *DockerObserver) createContainer(ctx context.Context, name string, configs *DockerContainerConfigs) (string, error) {
-	body := map[string]any{}
-
-	// Merge container config fields.
-	for k, v := range configs.ContainerConfig {
-		body[k] = v
-	}
-	body["HostConfig"] = configs.HostConfig
-	if len(configs.NetworkingConfig) > 0 {
-		body["NetworkingConfig"] = configs.NetworkingConfig
-	}
-
-	bodyJSON, err := json.Marshal(body)
-	if err != nil {
-		return "", fmt.Errorf("marshaling container config: %w", err)
-	}
-
-	createURL := fmt.Sprintf("%s/v1.44/containers/create?name=%s", o.host, name)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, createURL, strings.NewReader(string(bodyJSON)))
-	if err != nil {
-		return "", fmt.Errorf("creating request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := o.httpClient.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("creating container: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusCreated {
-		return "", fmt.Errorf("docker create returned %d", resp.StatusCode)
-	}
-
-	var createResp struct {
-		ID string `json:"Id"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&createResp); err != nil {
-		return "", fmt.Errorf("decoding create response: %w", err)
-	}
-	return createResp.ID, nil
-}
-
-func (o *DockerObserver) startContainer(ctx context.Context, containerID string) error {
-	startURL := fmt.Sprintf("%s/v1.44/containers/%s/start", o.host, containerID)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, startURL, nil)
-	if err != nil {
-		return fmt.Errorf("creating start request: %w", err)
-	}
-
-	resp, err := o.httpClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("starting container: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("docker start returned %d", resp.StatusCode)
-	}
-	return nil
-}
-
 // attachAdditionalNetworks connects a container to networks listed in the
 // spec's DockerExtension that are not the primary network mode. Returns
 // warnings for non-fatal attachment failures.
@@ -310,37 +203,6 @@ func attachAdditionalNetworks(ctx context.Context, control DockerControlClient, 
 		}
 	}
 	return warnings
-}
-
-func (o *DockerObserver) connectNetwork(ctx context.Context, containerID, networkName, alias string) error {
-	body := map[string]any{
-		"Container": containerID,
-		"EndpointConfig": map[string]any{
-			"Aliases": []string{alias},
-		},
-	}
-	bodyJSON, err := json.Marshal(body)
-	if err != nil {
-		return err
-	}
-
-	connectURL := fmt.Sprintf("%s/v1.44/networks/%s/connect", o.host, networkName)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, connectURL, strings.NewReader(string(bodyJSON)))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := o.httpClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
-		return fmt.Errorf("docker network connect returned %d", resp.StatusCode)
-	}
-	return nil
 }
 
 // ---------------------------------------------------------------------------

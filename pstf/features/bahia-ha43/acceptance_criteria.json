@@ -1,0 +1,25 @@
+{
+  "feature_id": "bahia-ha43",
+  "criteria": [
+    {
+      "id": "AC1",
+      "description": "Docker desired-state apply delegates runtime lookup and mutating operations to DockerControlClient.",
+      "evidence": ["TestApplyDesiredState_DelegatesMutationsToControlClient"]
+    },
+    {
+      "id": "AC2",
+      "description": "Docker-compatible Engine API create/start/stop/remove/pull/network-connect control operations are owned by dockerEngineControlClient.",
+      "evidence": ["internal/adapters/runtime/control_client.go", "go test ./internal/adapters/runtime"]
+    },
+    {
+      "id": "AC3",
+      "description": "Execution mode is sourced from the control client and surfaced in DesiredStateApplyResult.",
+      "evidence": ["TestApplyDesiredState_DelegatesMutationsToControlClient", "existing Docker/Podman apply tests"]
+    },
+    {
+      "id": "AC4",
+      "description": "Business logic for Docker legacy Deploy no longer performs create/start/pull mutations directly in docker.go and delegates those mutations to the control client.",
+      "evidence": ["TestDockerDeploy_DelegatesMutationsToControlClient"]
+    }
+  ]
+}

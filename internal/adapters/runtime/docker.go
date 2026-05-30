@@ -100,11 +100,12 @@ type DockerContainer struct {
 
 // DockerObserver queries the Docker Engine API for container state.
 type DockerObserver struct {
-	httpClient   *http.Client
-	host         string
-	observedHost string
-	registryAuth *RegistryAuthConfig
-	logger       *zap.Logger
+	httpClient    *http.Client
+	host          string
+	observedHost  string
+	registryAuth  *RegistryAuthConfig
+	logger        *zap.Logger
+	controlClient DockerControlClient
 }
 
 // NewDockerObserver creates a new DockerObserver.
@@ -331,88 +332,57 @@ func (o *DockerObserver) Deploy(ctx context.Context, serviceName, image string, 
 		hostConfig["NetworkMode"] = opts.NetworkMode
 	}
 
-	body := map[string]any{
-		"Image":      image,
-		"Labels":     labels,
-		"Env":        env,
-		"HostConfig": hostConfig,
+	containerConfig := map[string]any{
+		"Image":  image,
+		"Labels": labels,
+	}
+	if len(env) > 0 {
+		containerConfig["Env"] = env
 	}
 	if len(opts.Command) > 0 {
-		body["Cmd"] = opts.Command
+		containerConfig["Cmd"] = opts.Command
 	}
 	if len(opts.Entrypoint) > 0 {
-		body["Entrypoint"] = opts.Entrypoint
+		containerConfig["Entrypoint"] = opts.Entrypoint
 	}
 	if opts.WorkingDir != "" {
-		body["WorkingDir"] = opts.WorkingDir
+		containerConfig["WorkingDir"] = opts.WorkingDir
 	}
 	if len(exposedPorts) > 0 {
-		body["ExposedPorts"] = exposedPorts
+		containerConfig["ExposedPorts"] = exposedPorts
 	}
 
-	bodyJSON, err := json.Marshal(body)
-	if err != nil {
-		return fmt.Errorf("marshaling container config: %w", err)
+	configs := &DockerContainerConfigs{
+		ContainerConfig: containerConfig,
+		HostConfig:      hostConfig,
 	}
+	control := o.ControlClient()
 
 	// Stop and remove any existing container only after option validation succeeds.
-	_ = o.stopAndRemove(ctx, serviceName)
+	if err := o.stopAndRemove(ctx, serviceName); err != nil {
+		return fmt.Errorf("removing existing container: %w", err)
+	}
 
 	// Pull the image if requested.
 	if opts.PullAlways {
-		if err := o.pullImage(ctx, image); err != nil {
+		if err := control.PullImage(ctx, image); err != nil {
 			o.logger.Warn("failed to pull image, trying with local",
 				zap.String("image", image), zap.Error(err))
 		}
 	}
 
-	// Create container.
-	createURL := fmt.Sprintf("%s/v1.44/containers/create?name=%s", o.host, serviceName)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, createURL,
-		strings.NewReader(string(bodyJSON)))
+	containerID, err := control.CreateContainer(ctx, serviceName, configs)
 	if err != nil {
-		return fmt.Errorf("creating container request: %w", err)
+		return err
 	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := o.httpClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("creating container: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusCreated {
-		return fmt.Errorf("docker create returned %d", resp.StatusCode)
-	}
-
-	var createResp struct {
-		ID string `json:"Id"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&createResp); err != nil {
-		return fmt.Errorf("decoding create response: %w", err)
-	}
-
-	// Start container.
-	startURL := fmt.Sprintf("%s/v1.44/containers/%s/start", o.host, createResp.ID)
-	startReq, err := http.NewRequestWithContext(ctx, http.MethodPost, startURL, nil)
-	if err != nil {
-		return fmt.Errorf("creating start request: %w", err)
-	}
-
-	startResp, err := o.httpClient.Do(startReq)
-	if err != nil {
-		return fmt.Errorf("starting container: %w", err)
-	}
-	defer startResp.Body.Close()
-
-	if startResp.StatusCode != http.StatusNoContent && startResp.StatusCode != http.StatusOK {
-		return fmt.Errorf("docker start returned %d", startResp.StatusCode)
+	if err := control.StartContainer(ctx, containerID); err != nil {
+		return err
 	}
 
 	o.logger.Info("container deployed",
 		zap.String("service", serviceName),
 		zap.String("image", image),
-		zap.String("container_id", createResp.ID),
+		zap.String("container_id", containerID),
 	)
 	return nil
 }
@@ -739,48 +709,13 @@ func (o *DockerObserver) stopAndRemove(ctx context.Context, serviceName string) 
 	if err != nil {
 		return err
 	}
+	control := o.ControlClient()
 	for _, c := range containers {
-		// Stop.
-		stopURL := fmt.Sprintf("%s/v1.44/containers/%s/stop?t=10", o.host, c.ID)
-		req, _ := http.NewRequestWithContext(ctx, http.MethodPost, stopURL, nil)
-		resp, err := o.httpClient.Do(req)
-		if err == nil {
-			resp.Body.Close()
+		if err := control.StopContainer(ctx, c.ID); err != nil {
+			return err
 		}
-
-		// Remove.
-		rmURL := fmt.Sprintf("%s/v1.44/containers/%s?force=true", o.host, c.ID)
-		req, _ = http.NewRequestWithContext(ctx, http.MethodDelete, rmURL, nil)
-		resp, err = o.httpClient.Do(req)
-		if err == nil {
-			resp.Body.Close()
-		}
-	}
-	return nil
-}
-
-func (o *DockerObserver) pullImage(ctx context.Context, image string) error {
-	url := fmt.Sprintf("%s/v1.44/images/create?fromImage=%s", o.host, image)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, nil)
-	if err != nil {
-		return err
-	}
-	if authHeader, ok := o.registryAuthHeader(image); ok {
-		req.Header.Set("X-Registry-Auth", authHeader)
-	}
-	resp, err := o.httpClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("docker pull returned %d", resp.StatusCode)
-	}
-	// Drain response body (pull progress).
-	buf := make([]byte, 1024)
-	for {
-		if _, err := resp.Body.Read(buf); err != nil {
-			break
+		if err := control.RemoveContainer(ctx, c.ID); err != nil {
+			return err
 		}
 	}
 	return nil
