@@ -42,48 +42,50 @@ func (p *captureProjectionPublisher) byKind(kind int) []gonostr.Event {
 }
 
 type fakeProjectionSource struct {
-	services    map[uuid.UUID]domain.Service
-	envs        map[uuid.UUID]domain.Environment
-	states      map[string]domain.EnvironmentServiceState
-	builds      map[uuid.UUID]domain.Build
-	artifacts   map[uuid.UUID]domain.Artifact
-	intents     map[uuid.UUID]domain.DeploymentIntent
-	runs        map[uuid.UUID]domain.DeploymentRun
-	policies    map[uuid.UUID]domain.DeploymentPolicy
-	llmRoutes   map[uuid.UUID]domain.LLMRoute
-	llmStates   map[string]domain.LLMRouteState
-	llmIntents  map[uuid.UUID]domain.LLMDeploymentIntent
-	llmRuns     map[uuid.UUID]domain.LLMDeploymentRun
-	mlModels    map[uuid.UUID]domain.MLModel
-	mlVersions  map[uuid.UUID]domain.MLModelVersion
-	mlEndpoints map[uuid.UUID]domain.MLInferenceEndpoint
-	mlStates    map[string]domain.MLInferenceState
-	mlArtifacts map[uuid.UUID]domain.MLArtifactRef
-	mlEdges     map[uuid.UUID]domain.MLProvenanceEdge
-	workers     map[string]domain.Worker
+	services     map[uuid.UUID]domain.Service
+	envs         map[uuid.UUID]domain.Environment
+	states       map[string]domain.EnvironmentServiceState
+	observations map[uuid.UUID]domain.RuntimeObservation
+	builds       map[uuid.UUID]domain.Build
+	artifacts    map[uuid.UUID]domain.Artifact
+	intents      map[uuid.UUID]domain.DeploymentIntent
+	runs         map[uuid.UUID]domain.DeploymentRun
+	policies     map[uuid.UUID]domain.DeploymentPolicy
+	llmRoutes    map[uuid.UUID]domain.LLMRoute
+	llmStates    map[string]domain.LLMRouteState
+	llmIntents   map[uuid.UUID]domain.LLMDeploymentIntent
+	llmRuns      map[uuid.UUID]domain.LLMDeploymentRun
+	mlModels     map[uuid.UUID]domain.MLModel
+	mlVersions   map[uuid.UUID]domain.MLModelVersion
+	mlEndpoints  map[uuid.UUID]domain.MLInferenceEndpoint
+	mlStates     map[string]domain.MLInferenceState
+	mlArtifacts  map[uuid.UUID]domain.MLArtifactRef
+	mlEdges      map[uuid.UUID]domain.MLProvenanceEdge
+	workers      map[string]domain.Worker
 }
 
 func newFakeProjectionSource() *fakeProjectionSource {
 	return &fakeProjectionSource{
-		services:    map[uuid.UUID]domain.Service{},
-		envs:        map[uuid.UUID]domain.Environment{},
-		states:      map[string]domain.EnvironmentServiceState{},
-		builds:      map[uuid.UUID]domain.Build{},
-		artifacts:   map[uuid.UUID]domain.Artifact{},
-		intents:     map[uuid.UUID]domain.DeploymentIntent{},
-		runs:        map[uuid.UUID]domain.DeploymentRun{},
-		policies:    map[uuid.UUID]domain.DeploymentPolicy{},
-		llmRoutes:   map[uuid.UUID]domain.LLMRoute{},
-		llmStates:   map[string]domain.LLMRouteState{},
-		llmIntents:  map[uuid.UUID]domain.LLMDeploymentIntent{},
-		llmRuns:     map[uuid.UUID]domain.LLMDeploymentRun{},
-		mlModels:    map[uuid.UUID]domain.MLModel{},
-		mlVersions:  map[uuid.UUID]domain.MLModelVersion{},
-		mlEndpoints: map[uuid.UUID]domain.MLInferenceEndpoint{},
-		mlStates:    map[string]domain.MLInferenceState{},
-		mlArtifacts: map[uuid.UUID]domain.MLArtifactRef{},
-		mlEdges:     map[uuid.UUID]domain.MLProvenanceEdge{},
-		workers:     map[string]domain.Worker{},
+		services:     map[uuid.UUID]domain.Service{},
+		envs:         map[uuid.UUID]domain.Environment{},
+		states:       map[string]domain.EnvironmentServiceState{},
+		observations: map[uuid.UUID]domain.RuntimeObservation{},
+		builds:       map[uuid.UUID]domain.Build{},
+		artifacts:    map[uuid.UUID]domain.Artifact{},
+		intents:      map[uuid.UUID]domain.DeploymentIntent{},
+		runs:         map[uuid.UUID]domain.DeploymentRun{},
+		policies:     map[uuid.UUID]domain.DeploymentPolicy{},
+		llmRoutes:    map[uuid.UUID]domain.LLMRoute{},
+		llmStates:    map[string]domain.LLMRouteState{},
+		llmIntents:   map[uuid.UUID]domain.LLMDeploymentIntent{},
+		llmRuns:      map[uuid.UUID]domain.LLMDeploymentRun{},
+		mlModels:     map[uuid.UUID]domain.MLModel{},
+		mlVersions:   map[uuid.UUID]domain.MLModelVersion{},
+		mlEndpoints:  map[uuid.UUID]domain.MLInferenceEndpoint{},
+		mlStates:     map[string]domain.MLInferenceState{},
+		mlArtifacts:  map[uuid.UUID]domain.MLArtifactRef{},
+		mlEdges:      map[uuid.UUID]domain.MLProvenanceEdge{},
+		workers:      map[string]domain.Worker{},
 	}
 }
 
@@ -133,6 +135,20 @@ func (s *fakeProjectionSource) GetEnvironmentServiceState(_ context.Context, ser
 		return nil, nil
 	}
 	return &state, nil
+}
+
+func (s *fakeProjectionSource) GetLatestObservation(_ context.Context, serviceID, envID uuid.UUID) (*domain.RuntimeObservation, error) {
+	var latest *domain.RuntimeObservation
+	for _, obs := range s.observations {
+		if obs.ServiceID != serviceID || obs.EnvironmentID != envID {
+			continue
+		}
+		candidate := obs
+		if latest == nil || candidate.ObservedAt.After(latest.ObservedAt) {
+			latest = &candidate
+		}
+	}
+	return latest, nil
 }
 
 func (s *fakeProjectionSource) GetBuild(_ context.Context, id uuid.UUID) (*domain.Build, error) {
@@ -1136,17 +1152,19 @@ func TestProjectorStateCarriesDesiredStateMetadata(t *testing.T) {
 	envID := uuid.New()
 	artifactID := uuid.New()
 	intentID := uuid.New()
+	observationID := uuid.New()
 
 	source := newFakeProjectionSource()
 	source.services[serviceID] = domain.Service{ID: serviceID, Name: "api", RuntimeType: domain.RuntimeTypeCompose, CreatedAt: now, UpdatedAt: now}
 	source.envs[envID] = domain.Environment{ID: envID, Name: "prod", CreatedAt: now, UpdatedAt: now}
 	source.states[stateKeyForTest(serviceID, envID)] = domain.EnvironmentServiceState{
-		ServiceID:         serviceID,
-		EnvironmentID:     envID,
-		DesiredArtifactID: &artifactID,
-		DesiredIntentID:   &intentID,
-		DriftStatus:       domain.DriftStatusInSync,
-		DesiredHash:       "sha256:abc123",
+		ServiceID:            serviceID,
+		EnvironmentID:        envID,
+		DesiredArtifactID:    &artifactID,
+		DesiredIntentID:      &intentID,
+		CurrentObservationID: &observationID,
+		DriftStatus:          domain.DriftStatusInSync,
+		DesiredHash:          "sha256:abc123",
 		DesiredRuntimeState: &domain.DesiredServiceSpec{
 			SchemaVersion:    domain.DesiredStateSchemaVersion,
 			ServiceID:        serviceID,
@@ -1157,6 +1175,13 @@ func TestProjectorStateCarriesDesiredStateMetadata(t *testing.T) {
 			ComposeExtension: &domain.ComposeExtension{ProjectName: "bahia-prod"},
 		},
 		UpdatedAt: now,
+	}
+	source.observations[observationID] = domain.RuntimeObservation{
+		ID:             observationID,
+		ServiceID:      serviceID,
+		EnvironmentID:  envID,
+		NormalizedHash: "sha256:observed123",
+		ObservedAt:     now,
 	}
 
 	sink := &captureProjectionPublisher{}
@@ -1172,8 +1197,10 @@ func TestProjectorStateCarriesDesiredStateMetadata(t *testing.T) {
 	assertTag(t, stateEvent, "drift_status", "in_sync")
 	// New desired-state tags
 	assertTag(t, stateEvent, "desired_hash", "sha256:abc123")
+	assertTag(t, stateEvent, "observed_hash", "sha256:observed123")
 	// New desired-state content fields
 	assertJSONField(t, stateEvent.Content, "desired_hash", "sha256:abc123")
+	assertJSONField(t, stateEvent.Content, "observed_hash", "sha256:observed123")
 	assertJSONField(t, stateEvent.Content, "renderer", "compose")
 	assertJSONField(t, stateEvent.Content, "target", "api-prod")
 }

@@ -1229,6 +1229,149 @@ func TestRecordObservation_PropagatesStateGetError(t *testing.T) {
 	}
 }
 
+func TestRecordObservation_DesiredStateHashMatchHealthy_SetsInSync(t *testing.T) {
+	registry, _, _, _, _, _, _, obsRepo, stateRepo := newTestRegistryAll()
+	ctx := context.Background()
+
+	svc, env := seedServiceAndEnv(t, registry)
+	desiredHash := "sha256:desired-state"
+	stateRepo.states[stateKey(svc.ID, env.ID)] = &domain.EnvironmentServiceState{
+		ServiceID:     svc.ID,
+		EnvironmentID: env.ID,
+		DesiredHash:   desiredHash,
+		DriftStatus:   domain.DriftStatusUnknown,
+	}
+
+	obs := &domain.RuntimeObservation{
+		ServiceID:     svc.ID,
+		EnvironmentID: env.ID,
+		HealthStatus:  domain.HealthStatusHealthy,
+		Source:        "docker",
+		NormalizedState: &domain.NormalizedObservation{
+			ObservationHash: desiredHash,
+		},
+		ObservedAt: time.Now().UTC(),
+	}
+	if err := registry.RecordObservation(ctx, obs); err != nil {
+		t.Fatalf("record observation: %v", err)
+	}
+
+	state := stateRepo.states[stateKey(svc.ID, env.ID)]
+	if state.DriftStatus != domain.DriftStatusInSync {
+		t.Fatalf("drift status = %q, want %q", state.DriftStatus, domain.DriftStatusInSync)
+	}
+	if state.CurrentObservationID == nil || *state.CurrentObservationID != obs.ID {
+		t.Fatalf("state current observation not updated")
+	}
+	if got := obsRepo.observations[obs.ID].NormalizedHash; got != desiredHash {
+		t.Fatalf("persisted normalized hash = %q, want %q", got, desiredHash)
+	}
+}
+
+func TestRecordObservation_DesiredStateHashMismatch_SetsDrifted(t *testing.T) {
+	registry, _, _, _, _, _, _, _, stateRepo := newTestRegistryAll()
+	ctx := context.Background()
+
+	svc, env := seedServiceAndEnv(t, registry)
+	stateRepo.states[stateKey(svc.ID, env.ID)] = &domain.EnvironmentServiceState{
+		ServiceID:     svc.ID,
+		EnvironmentID: env.ID,
+		DesiredHash:   "sha256:desired-state",
+		DriftStatus:   domain.DriftStatusInSync,
+	}
+
+	obs := &domain.RuntimeObservation{
+		ServiceID:      svc.ID,
+		EnvironmentID:  env.ID,
+		HealthStatus:   domain.HealthStatusHealthy,
+		Source:         "docker",
+		NormalizedHash: "sha256:observed-state",
+		ObservedAt:     time.Now().UTC(),
+	}
+	if err := registry.RecordObservation(ctx, obs); err != nil {
+		t.Fatalf("record observation: %v", err)
+	}
+
+	state := stateRepo.states[stateKey(svc.ID, env.ID)]
+	if state.DriftStatus != domain.DriftStatusDrifted {
+		t.Fatalf("drift status = %q, want %q", state.DriftStatus, domain.DriftStatusDrifted)
+	}
+}
+
+func TestRecordObservation_DesiredStateMissingObservedHash_SetsUnknown(t *testing.T) {
+	registry, _, _, _, _, _, _, _, stateRepo := newTestRegistryAll()
+	ctx := context.Background()
+
+	svc, env := seedServiceAndEnv(t, registry)
+	stateRepo.states[stateKey(svc.ID, env.ID)] = &domain.EnvironmentServiceState{
+		ServiceID:     svc.ID,
+		EnvironmentID: env.ID,
+		DesiredHash:   "sha256:desired-state",
+		DriftStatus:   domain.DriftStatusInSync,
+	}
+
+	obs := &domain.RuntimeObservation{
+		ServiceID:     svc.ID,
+		EnvironmentID: env.ID,
+		HealthStatus:  domain.HealthStatusHealthy,
+		Source:        "docker",
+		ObservedAt:    time.Now().UTC(),
+	}
+	if err := registry.RecordObservation(ctx, obs); err != nil {
+		t.Fatalf("record observation: %v", err)
+	}
+
+	state := stateRepo.states[stateKey(svc.ID, env.ID)]
+	if state.DriftStatus != domain.DriftStatusUnknown {
+		t.Fatalf("drift status = %q, want %q", state.DriftStatus, domain.DriftStatusUnknown)
+	}
+}
+
+func TestRecordObservation_NonDesiredStateArtifactDigestPathStillWorks(t *testing.T) {
+	registry, _, _, _, _, _, _, _, stateRepo := newTestRegistryAll()
+	ctx := context.Background()
+
+	svc, env := seedServiceAndEnv(t, registry)
+	artifact := seedArtifact(t, registry, svc, "sha256:artifact")
+	desiredID := artifact.ID
+	stateRepo.states[stateKey(svc.ID, env.ID)] = &domain.EnvironmentServiceState{
+		ServiceID:         svc.ID,
+		EnvironmentID:     env.ID,
+		DesiredArtifactID: &desiredID,
+		DriftStatus:       domain.DriftStatusUnknown,
+	}
+
+	obs := &domain.RuntimeObservation{
+		ServiceID:           svc.ID,
+		EnvironmentID:       env.ID,
+		ObservedImageDigest: "sha256:artifact",
+		HealthStatus:        domain.HealthStatusStopped,
+		Source:              "docker",
+		ObservedAt:          time.Now().UTC(),
+	}
+	if err := registry.RecordObservation(ctx, obs); err != nil {
+		t.Fatalf("record observation: %v", err)
+	}
+	if got := stateRepo.states[stateKey(svc.ID, env.ID)].DriftStatus; got != domain.DriftStatusInSync {
+		t.Fatalf("matching artifact digest drift status = %q, want %q", got, domain.DriftStatusInSync)
+	}
+
+	obs = &domain.RuntimeObservation{
+		ServiceID:           svc.ID,
+		EnvironmentID:       env.ID,
+		ObservedImageDigest: "sha256:other-artifact",
+		HealthStatus:        domain.HealthStatusHealthy,
+		Source:              "docker",
+		ObservedAt:          time.Now().UTC().Add(time.Second),
+	}
+	if err := registry.RecordObservation(ctx, obs); err != nil {
+		t.Fatalf("record observation: %v", err)
+	}
+	if got := stateRepo.states[stateKey(svc.ID, env.ID)].DriftStatus; got != domain.DriftStatusDrifted {
+		t.Fatalf("mismatched artifact digest drift status = %q, want %q", got, domain.DriftStatusDrifted)
+	}
+}
+
 func TestRecordObservation_ArtifactGetError_SetsDriftUnknown(t *testing.T) {
 	registry, _, _, _, artRepo, _, _, _, stateRepo := newTestRegistryAll()
 	ctx := context.Background()

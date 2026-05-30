@@ -1,0 +1,26 @@
+{
+  "feature_id": "bahia-jrkp",
+  "title": "Switch Service State/Drift to Desired-vs-Observed Hashes",
+  "intent": "Desired-state-managed workloads determine drift by comparing the desired service-state hash against the normalized observed runtime hash, while non-desired-state workloads retain artifact digest drift semantics.",
+  "observed_behavior_before": [
+    "RegistryService.RecordObservation compared DesiredArtifactID image digest with RuntimeObservation.ObservedImageDigest for all service state rows.",
+    "Runtime observations already persisted normalized_state and normalized_hash columns through PgRuntimeObservationRepository.",
+    "Service-state projections included desired_hash metadata but not observed_hash metadata."
+  ],
+  "intended_behavior": [
+    "When EnvironmentServiceState has desired-state metadata, drift compares desired_hash with normalized observed hash.",
+    "Drift is in_sync only when hashes match and health is acceptable.",
+    "Drift is drifted when hashes differ or matching state is unhealthy.",
+    "Drift is unknown when desired or observed hash is unavailable.",
+    "Rows without desired-state metadata continue using artifact digest comparison.",
+    "Service-state projections include desired_hash and observed_hash when available."
+  ],
+  "scope": [
+    "internal/service/registry.go",
+    "internal/repository/pg_observation.go",
+    "internal/adapters/nostr/projector.go",
+    "internal/adapters/nostr/catalog.go",
+    "docs/deployment.md",
+    "docs/event-spec.md"
+  ]
+}

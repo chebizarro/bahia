@@ -37,6 +37,7 @@ type ProjectorSourceRepositories struct {
 	Services     repository.ServiceRepository
 	Environments repository.EnvironmentRepository
 	States       repository.EnvironmentServiceStateRepository
+	Observations repository.RuntimeObservationRepository
 	Builds       repository.BuildRepository
 	Artifacts    repository.ArtifactRepository
 	Intents      repository.DeploymentIntentRepository
@@ -72,6 +73,13 @@ func (s *DBProjectorSource) ListStates(ctx context.Context) ([]ProjectorStateSna
 		return nil, nil
 	}
 	return s.States.ListAll(ctx)
+}
+
+func (s *DBProjectorSource) GetLatestObservation(ctx context.Context, serviceID, envID uuid.UUID) (*domain.RuntimeObservation, error) {
+	if s == nil || s.Observations == nil {
+		return nil, nil
+	}
+	return s.Observations.GetLatest(ctx, serviceID, envID)
 }
 
 func (s *DBProjectorSource) ListBuilds(ctx context.Context, serviceID uuid.UUID, limit, offset int) ([]ProjectorBuildSnapshot, error) {
@@ -142,6 +150,10 @@ func (s legacyProjectorSource) ListStates(ctx context.Context) ([]ProjectorState
 	return s.source.ListAllStates(ctx)
 }
 
+func (s legacyProjectorSource) GetLatestObservation(ctx context.Context, serviceID, envID uuid.UUID) (*domain.RuntimeObservation, error) {
+	return s.source.GetLatestObservation(ctx, serviceID, envID)
+}
+
 func (s legacyProjectorSource) ListBuilds(ctx context.Context, serviceID uuid.UUID, limit, offset int) ([]ProjectorBuildSnapshot, error) {
 	return s.source.ListBuilds(ctx, serviceID, limit, offset)
 }
@@ -192,6 +204,10 @@ func (s workerOnlyProjectorSource) ListEnvironments(context.Context) ([]Projecto
 }
 
 func (s workerOnlyProjectorSource) ListStates(context.Context) ([]ProjectorStateSnapshot, error) {
+	return nil, nil
+}
+
+func (s workerOnlyProjectorSource) GetLatestObservation(context.Context, uuid.UUID, uuid.UUID) (*domain.RuntimeObservation, error) {
 	return nil, nil
 }
 

@@ -1,0 +1,13 @@
+{
+  "feature_id": "bahia-jrkp",
+  "criteria": [
+    {"id": "AC1", "description": "Desired-state-managed service state uses desired_hash versus normalized observed hash for drift detection.", "status": "verified"},
+    {"id": "AC2", "description": "Drift status is in_sync only when desired and observed hashes match and health is acceptable.", "status": "verified"},
+    {"id": "AC3", "description": "Drift status is drifted when desired and observed hashes differ.", "status": "verified"},
+    {"id": "AC4", "description": "Drift status is unknown when normalized observation hash is unavailable.", "status": "verified"},
+    {"id": "AC5", "description": "Runtime observation persistence includes normalized_hash and stores it when normalized_state carries an observation_hash.", "status": "verified"},
+    {"id": "AC6", "description": "Non-desired-state workloads continue to use artifact digest drift detection.", "status": "verified"},
+    {"id": "AC7", "description": "Service-state Nostr projections include desired/observed hash metadata when available.", "status": "verified"},
+    {"id": "AC8", "description": "Normative documentation describes desired-vs-observed hash drift semantics.", "status": "verified"}
+  ]
+}

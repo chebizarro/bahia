@@ -323,6 +323,7 @@ type DecodedState struct {
 	CurrentObservationID *string            `json:"current_observation_id,omitempty"`
 	DriftStatus          domain.DriftStatus `json:"drift_status,omitempty"`
 	DesiredHash          string             `json:"desired_hash,omitempty"`
+	ObservedHash         string             `json:"observed_hash,omitempty"`
 	Renderer             string             `json:"renderer,omitempty"`
 	Target               string             `json:"target,omitempty"`
 	LastReconciledAt     *time.Time         `json:"last_reconciled_at,omitempty"`

@@ -978,6 +978,7 @@ func (s *RegistryService) Rollback(ctx context.Context, serviceID, envID uuid.UU
 // --- Runtime Observation ---
 
 func (s *RegistryService) RecordObservation(ctx context.Context, obs *domain.RuntimeObservation) error {
+	normalizeRuntimeObservationHash(obs)
 	if err := s.observations.Create(ctx, obs); err != nil {
 		return err
 	}
@@ -1000,8 +1001,22 @@ func (s *RegistryService) RecordObservation(ctx context.Context, obs *domain.Run
 	}
 	state.CurrentObservationID = &obs.ID
 
-	// Determine drift.
-	if state.DesiredArtifactID != nil {
+	// Determine drift. Desired-state-managed rows compare the desired hash
+	// against the normalized observed hash. Legacy artifact-managed rows keep
+	// the existing artifact-digest comparison path.
+	if desiredStateManaged(state) {
+		desiredHash := desiredStateHash(state)
+		observedHash := observedStateHash(obs)
+		if desiredHash == "" || observedHash == "" {
+			state.DriftStatus = domain.DriftStatusUnknown
+		} else if desiredHash != observedHash {
+			state.DriftStatus = domain.DriftStatusDrifted
+		} else if observationHealthOK(obs.HealthStatus) {
+			state.DriftStatus = domain.DriftStatusInSync
+		} else {
+			state.DriftStatus = domain.DriftStatusDrifted
+		}
+	} else if state.DesiredArtifactID != nil {
 		desired, err := s.artifacts.GetByID(ctx, *state.DesiredArtifactID)
 		if err != nil {
 			s.logger.Error("failed to fetch desired artifact for drift check",
@@ -1040,6 +1055,54 @@ func (s *RegistryService) RecordObservation(ctx context.Context, obs *domain.Run
 
 func (s *RegistryService) GetLatestObservation(ctx context.Context, serviceID, envID uuid.UUID) (*domain.RuntimeObservation, error) {
 	return s.observations.GetLatest(ctx, serviceID, envID)
+}
+
+func normalizeRuntimeObservationHash(obs *domain.RuntimeObservation) {
+	if obs == nil {
+		return
+	}
+	if obs.NormalizedState != nil && obs.NormalizedState.ObservationHash == "" {
+		obs.NormalizedState.ComputeObservationHash()
+	}
+	if obs.NormalizedHash == "" && obs.NormalizedState != nil {
+		obs.NormalizedHash = obs.NormalizedState.ObservationHash
+	}
+}
+
+func desiredStateManaged(state *domain.EnvironmentServiceState) bool {
+	return state != nil && (state.DesiredHash != "" || state.DesiredRuntimeState != nil)
+}
+
+func desiredStateHash(state *domain.EnvironmentServiceState) string {
+	if state == nil {
+		return ""
+	}
+	if state.DesiredHash != "" {
+		return state.DesiredHash
+	}
+	if state.DesiredRuntimeState == nil {
+		return ""
+	}
+	if state.DesiredRuntimeState.DesiredHash != "" {
+		state.DesiredHash = state.DesiredRuntimeState.DesiredHash
+		return state.DesiredHash
+	}
+	state.DesiredHash = state.DesiredRuntimeState.ComputeDesiredHash()
+	return state.DesiredHash
+}
+
+func observedStateHash(obs *domain.RuntimeObservation) string {
+	if obs == nil {
+		return ""
+	}
+	if obs.NormalizedState != nil && obs.NormalizedState.ObservationHash != "" {
+		return obs.NormalizedState.ObservationHash
+	}
+	return obs.NormalizedHash
+}
+
+func observationHealthOK(health domain.HealthStatus) bool {
+	return health == domain.HealthStatusHealthy || health == domain.HealthStatusStarting
 }
 
 // --- State queries ---

@@ -1,0 +1,12 @@
+{
+  "feature_id": "bahia-jrkp",
+  "tests": [
+    {"test": "TestRecordObservation_DesiredStateHashMatchHealthy_SetsInSync", "package": "internal/service", "criteria": ["AC1", "AC2", "AC5"]},
+    {"test": "TestRecordObservation_DesiredStateHashMismatch_SetsDrifted", "package": "internal/service", "criteria": ["AC1", "AC3"]},
+    {"test": "TestRecordObservation_DesiredStateMissingObservedHash_SetsUnknown", "package": "internal/service", "criteria": ["AC1", "AC4"]},
+    {"test": "TestRecordObservation_NonDesiredStateArtifactDigestPathStillWorks", "package": "internal/service", "criteria": ["AC6"]},
+    {"test": "TestPgRuntimeObservationRepository_NormalizedStateRoundTrip", "package": "internal/repository", "criteria": ["AC5"]},
+    {"test": "TestProjectorStateCarriesDesiredStateMetadata", "package": "internal/adapters/nostr", "criteria": ["AC7"]}
+  ],
+  "quality_gate": "go test ./internal/service ./internal/repository ./internal/adapters/nostr"
+}

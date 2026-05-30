@@ -203,6 +203,10 @@ LLM route registry and route-state projections are Bahia-signed replaceable even
 3. Publishes status/result replies with `route`, `release`, `environment`, `intent`, and `run` tags.
 4. Projects `31964`/`31965` read models and `31014–31019` audit/activity events.
 
+## Service State Drift Semantics
+
+Kind `31960` service-state projections include desired/observed hash metadata when available. Desired-state-managed workloads compare `desired_hash` from `environment_service_state` with the current observation hash (`normalized_state.observation_hash`, or `normalized_hash` when no embedded normalized-state hash exists). `drift_status` is `in_sync` only when hashes match and health is acceptable, `drifted` when hashes differ or matching state is unhealthy, and `unknown` when the observation or either hash is unavailable. Non-desired-state workloads retain artifact digest drift semantics by comparing desired artifact image digest with `observed_image_digest`.
+
 ## DNS Endpoint Read Model
 
 When `dns.enabled=true`, Bahia derives healthy DNS endpoints from materialized service, LLM route, ML inference, and worker state, then publishes each endpoint as a kind `31976` replaceable read model. The `d` tag is `DNSEndpoint.Coordinate`, such as `endpoint:service:api:prod`, `endpoint:llm:chat:prod`, `endpoint:ml:embeddings:prod`, or `endpoint:worker:t7920-l40s`.

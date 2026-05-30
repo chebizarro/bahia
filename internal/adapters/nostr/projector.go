@@ -28,6 +28,7 @@ type ProjectionSource interface {
 	GetEnvironment(ctx context.Context, id uuid.UUID) (*domain.Environment, error)
 	ListAllStates(ctx context.Context) ([]domain.EnvironmentServiceState, error)
 	GetEnvironmentServiceState(ctx context.Context, serviceID, envID uuid.UUID) (*domain.EnvironmentServiceState, error)
+	GetLatestObservation(ctx context.Context, serviceID, envID uuid.UUID) (*domain.RuntimeObservation, error)
 	GetBuild(ctx context.Context, id uuid.UUID) (*domain.Build, error)
 	ListBuilds(ctx context.Context, serviceID uuid.UUID, limit, offset int) ([]domain.Build, error)
 	GetArtifact(ctx context.Context, id uuid.UUID) (*domain.Artifact, error)
@@ -80,6 +81,10 @@ type WorkerReadModelProjectionSource interface {
 	GetAssignmentState(ctx context.Context, workerPubKey string) (*domain.WorkerAssignmentState, error)
 	ListDrainStatuses(ctx context.Context) ([]domain.WorkerDrainStatus, error)
 	GetDrainStatus(ctx context.Context, workerPubKey string) (*domain.WorkerDrainStatus, error)
+}
+
+type latestObservationSource interface {
+	GetLatestObservation(ctx context.Context, serviceID, envID uuid.UUID) (*domain.RuntimeObservation, error)
 }
 
 type BackupProjectionSource interface {
@@ -2872,6 +2877,10 @@ func (p *Projector) publishState(ctx context.Context, state *domain.EnvironmentS
 	if state.DesiredHash != "" {
 		content["desired_hash"] = state.DesiredHash
 	}
+	observedHash := p.latestObservedHash(ctx, state)
+	if observedHash != "" {
+		content["observed_hash"] = observedHash
+	}
 	if state.DesiredRuntimeState != nil {
 		if renderer := desiredStateRenderer(state.DesiredRuntimeState); renderer != "" {
 			content["renderer"] = renderer
@@ -2903,7 +2912,33 @@ func (p *Projector) publishState(ctx context.Context, state *domain.EnvironmentS
 	if state.DesiredHash != "" {
 		tags = append(tags, gonostr.Tag{"desired_hash", state.DesiredHash})
 	}
+	if observedHash != "" {
+		tags = append(tags, gonostr.Tag{"observed_hash", observedHash})
+	}
 	return p.publishSigned(ctx, KindServiceState, tags, string(contentJSON), "state.projection", &state.ServiceID)
+}
+
+func (p *Projector) latestObservedHash(ctx context.Context, state *domain.EnvironmentServiceState) string {
+	if p == nil || state == nil || state.CurrentObservationID == nil {
+		return ""
+	}
+	for _, source := range []any{p.snapshotSource(), p.source} {
+		obsSource, ok := source.(latestObservationSource)
+		if !ok || obsSource == nil {
+			continue
+		}
+		obs, err := obsSource.GetLatestObservation(ctx, state.ServiceID, state.EnvironmentID)
+		if err != nil || obs == nil || obs.ID != *state.CurrentObservationID {
+			continue
+		}
+		if obs.NormalizedState != nil && obs.NormalizedState.ObservationHash != "" {
+			return obs.NormalizedState.ObservationHash
+		}
+		if obs.NormalizedHash != "" {
+			return obs.NormalizedHash
+		}
+	}
+	return ""
 }
 
 func (p *Projector) publishStateTombstone(ctx context.Context, res events.ResourceData) error {
