@@ -1,0 +1,10 @@
+{
+  "feature_id": "bahia-dskm",
+  "tests": [
+    {"criteria": ["AC3", "AC5"], "test": "go test ./internal/reconcile -run TestReconcilerApprovalRequiredMarksRemediationNeededWithoutInternalDeploy"},
+    {"criteria": ["AC2"], "test": "go test ./internal/reconcile -run TestReconcilerAutoApplyUsesSharedDesiredStateHelper"},
+    {"criteria": ["AC4"], "test": "go test ./internal/reconcile -run TestReconcilerAutoApplyFailureKeepsDesiredStateAndBacksOff"},
+    {"criteria": ["AC1"], "test": "go test ./internal/service -run TestRuntimeLifecycleAutoRemediationDoesNotBlockBehindActiveUserApply"},
+    {"criteria": ["AC1", "AC2", "AC3", "AC4"], "test": "go test ./internal/reconcile ./internal/service"}
+  ]
+}

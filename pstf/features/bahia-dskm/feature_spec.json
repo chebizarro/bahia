@@ -1,0 +1,24 @@
+{
+  "feature_id": "bahia-dskm",
+  "title": "Policy-Driven Reconciliation",
+  "intent": "Enable approval_required and auto_apply reconciliation modes through the shared desired-state runtime lifecycle helper.",
+  "observed_before": {
+    "reconciler": "Recorded observations and drift but did not invoke the desired-state deploy helper for auto_apply, and approval_required did not project a distinct remediation-needed state.",
+    "locking": "Deploy/apply used RuntimeApplyLock; scheduled reconciliation did not participate in the same lock path."
+  },
+  "intended_behavior": {
+    "observe_only": "Observe and record drift without remediation.",
+    "approval_required": "Observe drift, mark state remediation_needed, and wait for authorized kind 5968 DriftRemediate.",
+    "auto_apply": "Apply the persisted desired state through RuntimeLifecycleService.AutoRemediateDesiredState.",
+    "lock_contention": "User deploy/apply holds the blocking environment lock; scheduled auto-remediation attempts the same lock non-blocking, records backoff on contention, and retries later.",
+    "failure": "Desired state remains persisted; failure metadata and reconcile backoff are stored on environment_service_state."
+  },
+  "scope": [
+    "internal/reconcile/reconciler.go",
+    "internal/service/runtime_lifecycle.go",
+    "internal/service/runtime_apply_lock.go",
+    "internal/domain/models.go",
+    "internal/repository/pg_state.go",
+    "docs/deployment.md"
+  ]
+}

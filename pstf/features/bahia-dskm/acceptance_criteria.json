@@ -1,0 +1,11 @@
+{
+  "feature_id": "bahia-dskm",
+  "criteria": [
+    {"id": "AC1", "statement": "Reconciler uses the shared environment apply lock path for auto-remediation and does not block behind active user operations."},
+    {"id": "AC2", "statement": "auto_apply invokes the shared desired-state deploy helper using the persisted desired artifact/state."},
+    {"id": "AC3", "statement": "approval_required marks drift as remediation_needed and waits for an authorized 5968 event."},
+    {"id": "AC4", "statement": "Auto-remediation failure or lock contention preserves desired state, stores failure metadata, and applies backoff."},
+    {"id": "AC5", "statement": "Internal auto-remediation does not synthesize fake external control-plane events."},
+    {"id": "AC6", "statement": "Normative deployment docs describe reconciliation behavior."}
+  ]
+}

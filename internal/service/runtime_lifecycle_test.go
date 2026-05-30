@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -318,6 +319,7 @@ type lifecycleMockRuntime struct {
 	deployTarget  string
 	deployImage   string
 	deployOpts    runtime.DeployOptions
+	deployed      []string
 	deployErr     error
 	restartTarget string
 	stopTarget    string
@@ -329,6 +331,7 @@ func (m *lifecycleMockRuntime) Deploy(_ context.Context, serviceName, image stri
 	m.deployTarget = serviceName
 	m.deployImage = image
 	m.deployOpts = opts
+	m.deployed = append(m.deployed, serviceName)
 	return m.deployErr
 }
 
@@ -480,15 +483,26 @@ func newInMemoryApplyLock() *inMemoryApplyLock {
 }
 
 func (a *inMemoryApplyLock) Lock(_ context.Context, envID uuid.UUID) (func(), error) {
+	envLock := a.lockFor(envID)
+	envLock.Lock()
+	return func() { envLock.Unlock() }, nil
+}
+
+func (a *inMemoryApplyLock) TryLock(_ context.Context, envID uuid.UUID) (func(), bool, error) {
+	envLock := a.lockFor(envID)
+	if !envLock.TryLock() {
+		return nil, false, nil
+	}
+	return func() { envLock.Unlock() }, true, nil
+}
+
+func (a *inMemoryApplyLock) lockFor(envID uuid.UUID) *sync.Mutex {
 	a.mu.Lock()
+	defer a.mu.Unlock()
 	if _, ok := a.locks[envID]; !ok {
 		a.locks[envID] = &sync.Mutex{}
 	}
-	envLock := a.locks[envID]
-	a.mu.Unlock()
-
-	envLock.Lock()
-	return func() { envLock.Unlock() }, nil
+	return a.locks[envID]
 }
 
 // orderingMockRuntime records deploy order via a channel.
@@ -502,6 +516,34 @@ func (m *orderingMockRuntime) Deploy(ctx context.Context, serviceName, image str
 	n := atomic.AddInt32(&m.counter, 1)
 	m.orderCh <- int(n)
 	return nil
+}
+
+func TestRuntimeLifecycleAutoRemediationDoesNotBlockBehindActiveUserApply(t *testing.T) {
+	ctx := context.Background()
+	registry, svcRepo, envRepo, _, artifactRepo, _, _ := newTestRegistry()
+	stateRepo := registry.state.(*mockStateRepo)
+	rt := &lifecycleMockRuntime{}
+	lock := newInMemoryApplyLock()
+	lifecycle := NewRuntimeLifecycleService(
+		registry, svcRepo, envRepo, artifactRepo, stateRepo,
+		&mockRuntimeResolver{rt: rt}, &events.NoopPublisher{}, zap.NewNop(),
+		WithRuntimeApplyLock(lock),
+	)
+	svc, env, _ := seedRuntimeLifecycleFixtures(t, registry)
+
+	unlock, err := lock.Lock(ctx, env.ID)
+	if err != nil {
+		t.Fatalf("lock setup failed: %v", err)
+	}
+	defer unlock()
+
+	_, err = lifecycle.AutoRemediateDesiredState(ctx, svc.ID, env.ID, nil)
+	if !errors.Is(err, ErrEnvironmentApplyLockContended) {
+		t.Fatalf("expected lock contention, got %v", err)
+	}
+	if len(rt.deployed) != 0 {
+		t.Fatalf("auto-remediation deployed despite active user lock: %#v", rt.deployed)
+	}
 }
 
 func TestRuntimeLifecycleDispatchesCorrectly(t *testing.T) {

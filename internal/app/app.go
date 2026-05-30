@@ -329,9 +329,14 @@ func New(cfg *config.Config) (*App, error) {
 	// Reconciler (created here but started in Run() with the lifecycle context).
 	var rec *reconcile.Reconciler
 	if cfg.Reconcile.Enabled {
+		reconcilerOpts := []reconcile.Option{}
+		if runtimeLifecycleSvc != nil {
+			reconcilerOpts = append(reconcilerOpts, reconcile.WithAutoRemediationDeployer(runtimeLifecycleSvc))
+		}
 		rec = reconcile.NewReconciler(
 			serviceRepo, envRepo, artifactRepo, deploymentUnitRepo, obsRepo, stateRepo,
 			runtimeResolver, publisher, cfg.Reconcile.Interval, logger,
+			reconcilerOpts...,
 		)
 	}
 

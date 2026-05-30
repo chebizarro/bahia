@@ -32,6 +32,24 @@ func NewRuntimeApplyLock(pool *pgxpool.Pool, logger *zap.Logger) *RuntimeApplyLo
 // (typically via defer) to release the lock. The lock is held on a dedicated connection
 // so it does not interfere with short-lived transactions used for persistence.
 func (l *RuntimeApplyLock) Lock(ctx context.Context, environmentID uuid.UUID) (unlock func(), err error) {
+	return l.acquire(ctx, environmentID, true)
+}
+
+// TryLock attempts to acquire the same environment-scoped advisory lock without
+// blocking. It returns acquired=false when another operation already holds the
+// environment lock.
+func (l *RuntimeApplyLock) TryLock(ctx context.Context, environmentID uuid.UUID) (unlock func(), acquired bool, err error) {
+	unlock, err = l.acquire(ctx, environmentID, false)
+	if err != nil {
+		return nil, false, err
+	}
+	if unlock == nil {
+		return nil, false, nil
+	}
+	return unlock, true, nil
+}
+
+func (l *RuntimeApplyLock) acquire(ctx context.Context, environmentID uuid.UUID, wait bool) (unlock func(), err error) {
 	key := advisoryLockKey(environmentID)
 
 	// Acquire a dedicated connection from the pool to hold the advisory lock.
@@ -45,13 +63,30 @@ func (l *RuntimeApplyLock) Lock(ctx context.Context, environmentID uuid.UUID) (u
 	l.logger.Debug("acquiring environment apply lock",
 		zap.String("environment_id", environmentID.String()),
 		zap.Int64("advisory_key", key),
+		zap.Bool("wait", wait),
 	)
 
-	// pg_advisory_lock blocks until the lock is available.
-	_, err = conn.Exec(ctx, "SELECT pg_advisory_lock($1)", key)
-	if err != nil {
-		conn.Release()
-		return nil, fmt.Errorf("acquiring advisory lock for environment %s: %w", environmentID, err)
+	if wait {
+		_, err = conn.Exec(ctx, "SELECT pg_advisory_lock($1)", key)
+		if err != nil {
+			conn.Release()
+			return nil, fmt.Errorf("acquiring advisory lock for environment %s: %w", environmentID, err)
+		}
+	} else {
+		var acquired bool
+		err = conn.QueryRow(ctx, "SELECT pg_try_advisory_lock($1)", key).Scan(&acquired)
+		if err != nil {
+			conn.Release()
+			return nil, fmt.Errorf("trying advisory lock for environment %s: %w", environmentID, err)
+		}
+		if !acquired {
+			conn.Release()
+			l.logger.Debug("environment apply lock already held",
+				zap.String("environment_id", environmentID.String()),
+				zap.Int64("advisory_key", key),
+			)
+			return nil, nil
+		}
 	}
 
 	l.logger.Debug("acquired environment apply lock",

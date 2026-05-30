@@ -91,10 +91,11 @@ const (
 type DriftStatus string
 
 const (
-	DriftStatusUnknown   DriftStatus = "unknown"
-	DriftStatusInSync    DriftStatus = "in_sync"
-	DriftStatusDrifted   DriftStatus = "drifted"
-	DriftStatusDeploying DriftStatus = "deploying"
+	DriftStatusUnknown           DriftStatus = "unknown"
+	DriftStatusInSync            DriftStatus = "in_sync"
+	DriftStatusDrifted           DriftStatus = "drifted"
+	DriftStatusDeploying         DriftStatus = "deploying"
+	DriftStatusRemediationNeeded DriftStatus = "remediation_needed"
 )
 
 // DeployStrategy is the method used to deploy to an environment.
@@ -317,16 +318,19 @@ type RuntimeObservation struct {
 
 // EnvironmentServiceState is a denormalized view of current desired and observed state.
 type EnvironmentServiceState struct {
-	ServiceID            uuid.UUID           `json:"service_id"`
-	EnvironmentID        uuid.UUID           `json:"environment_id"`
-	DeploymentUnitID     *uuid.UUID          `json:"deployment_unit_id,omitempty"`
-	DesiredArtifactID    *uuid.UUID          `json:"desired_artifact_id,omitempty"`
-	DesiredIntentID      *uuid.UUID          `json:"desired_intent_id,omitempty"`
-	LastSuccessfulRunID  *uuid.UUID          `json:"last_successful_run_id,omitempty"`
-	CurrentObservationID *uuid.UUID          `json:"current_observation_id,omitempty"`
-	DriftStatus          DriftStatus         `json:"drift_status"`
-	DesiredRuntimeState  *DesiredServiceSpec `json:"desired_runtime_state,omitempty"`
-	DesiredHash          string              `json:"desired_hash,omitempty"`
-	LastReconciledAt     *time.Time          `json:"last_reconciled_at,omitempty"`
-	UpdatedAt            time.Time           `json:"updated_at"`
+	ServiceID                    uuid.UUID           `json:"service_id"`
+	EnvironmentID                uuid.UUID           `json:"environment_id"`
+	DeploymentUnitID             *uuid.UUID          `json:"deployment_unit_id,omitempty"`
+	DesiredArtifactID            *uuid.UUID          `json:"desired_artifact_id,omitempty"`
+	DesiredIntentID              *uuid.UUID          `json:"desired_intent_id,omitempty"`
+	LastSuccessfulRunID          *uuid.UUID          `json:"last_successful_run_id,omitempty"`
+	CurrentObservationID         *uuid.UUID          `json:"current_observation_id,omitempty"`
+	DriftStatus                  DriftStatus         `json:"drift_status"`
+	DesiredRuntimeState          *DesiredServiceSpec `json:"desired_runtime_state,omitempty"`
+	DesiredHash                  string              `json:"desired_hash,omitempty"`
+	ReconcileFailureMetadata     map[string]any      `json:"reconcile_failure_metadata,omitempty"`
+	ReconcileBackoffUntil        *time.Time          `json:"reconcile_backoff_until,omitempty"`
+	ReconcileConsecutiveFailures int                 `json:"reconcile_consecutive_failures,omitempty"`
+	LastReconciledAt             *time.Time          `json:"last_reconciled_at,omitempty"`
+	UpdatedAt                    time.Time           `json:"updated_at"`
 }

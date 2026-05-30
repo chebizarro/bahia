@@ -43,6 +43,17 @@ type EnvironmentApplyLocker interface {
 	Lock(ctx context.Context, environmentID uuid.UUID) (unlock func(), err error)
 }
 
+// EnvironmentApplyTryLocker exposes non-blocking acquisition for scheduled
+// auto-remediation so user-initiated deploys keep priority on contention.
+type EnvironmentApplyTryLocker interface {
+	EnvironmentApplyLocker
+	TryLock(ctx context.Context, environmentID uuid.UUID) (unlock func(), acquired bool, err error)
+}
+
+// ErrEnvironmentApplyLockContended means an internal auto-remediation pass found
+// an active user/runtime operation holding the environment apply lock.
+var ErrEnvironmentApplyLockContended = fmt.Errorf("environment apply lock contended")
+
 // RuntimeLifecycleService performs direct runtime actions for services resolved to a runtime.
 type RuntimeLifecycleService struct {
 	registry     *RegistryService
@@ -143,14 +154,22 @@ func (s *RuntimeLifecycleService) Deploy(ctx context.Context, serviceID, envID u
 
 // DeployWithStatus deploys an artifact and reports step progression through the callback.
 func (s *RuntimeLifecycleService) DeployWithStatus(ctx context.Context, serviceID, envID uuid.UUID, artifactID *uuid.UUID, statusFn DeployStatusCallback) (*domain.RuntimeObservation, error) {
-	return s.deployDesiredState(ctx, serviceID, envID, artifactID, statusFn)
+	return s.deployDesiredState(ctx, serviceID, envID, artifactID, statusFn, true)
+}
+
+// AutoRemediateDesiredState applies the currently persisted desired artifact for
+// scheduled reconciliation. It uses the same desired-state deploy helper as user
+// deploys, but attempts the environment apply lock without blocking so active
+// user operations preempt scheduled remediation.
+func (s *RuntimeLifecycleService) AutoRemediateDesiredState(ctx context.Context, serviceID, envID uuid.UUID, statusFn DeployStatusCallback) (*domain.RuntimeObservation, error) {
+	return s.deployDesiredState(ctx, serviceID, envID, nil, statusFn, false)
 }
 
 // deployDesiredState is the shared internal deploy helper used by deployment requests,
 // direct runtime action=deploy, and rollback-to-artifact. It acquires the environment
 // apply lock, builds deploy options, applies through the runtime adapter, observes,
 // persists the outcome, and publishes correlated events.
-func (s *RuntimeLifecycleService) deployDesiredState(ctx context.Context, serviceID, envID uuid.UUID, artifactID *uuid.UUID, statusFn DeployStatusCallback) (*domain.RuntimeObservation, error) {
+func (s *RuntimeLifecycleService) deployDesiredState(ctx context.Context, serviceID, envID uuid.UUID, artifactID *uuid.UUID, statusFn DeployStatusCallback, waitForLock bool) (*domain.RuntimeObservation, error) {
 	start := time.Now()
 	notify := func(step DeployStep, msg string) {
 		if statusFn != nil {
@@ -253,7 +272,7 @@ func (s *RuntimeLifecycleService) deployDesiredState(ctx context.Context, servic
 	notify(DeployStepLockingEnvironment, "Acquiring environment apply lock")
 
 	if s.applyLock != nil {
-		unlock, lockErr := s.applyLock.Lock(ctx, envID)
+		unlock, lockErr := s.acquireApplyLock(ctx, envID, waitForLock)
 		if lockErr != nil {
 			s.logRuntimeAction("deploy", svc, env, serviceID, envID, &artifact.ID, start, "failed", lockErr)
 			return nil, fmt.Errorf("acquiring environment apply lock: %w", lockErr)
@@ -387,6 +406,27 @@ func (s *RuntimeLifecycleService) Stop(ctx context.Context, serviceID, envID uui
 	s.publishAction(ctx, runtimeActionStopEvent, svc, env, obs, nil)
 	s.logRuntimeAction("stop", svc, env, serviceID, envID, nil, start, "success", nil)
 	return obs, nil
+}
+
+func (s *RuntimeLifecycleService) acquireApplyLock(ctx context.Context, envID uuid.UUID, wait bool) (func(), error) {
+	if s.applyLock == nil {
+		return func() {}, nil
+	}
+	if wait {
+		return s.applyLock.Lock(ctx, envID)
+	}
+	tryLock, ok := s.applyLock.(EnvironmentApplyTryLocker)
+	if !ok {
+		return nil, ErrEnvironmentApplyLockContended
+	}
+	unlock, acquired, err := tryLock.TryLock(ctx, envID)
+	if err != nil {
+		return nil, err
+	}
+	if !acquired {
+		return nil, ErrEnvironmentApplyLockContended
+	}
+	return unlock, nil
 }
 
 func (s *RuntimeLifecycleService) resolve(ctx context.Context, serviceID, envID uuid.UUID) (*domain.Service, *domain.Environment, runtime.Runtime, error) {

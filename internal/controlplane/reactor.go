@@ -2968,9 +2968,10 @@ func (r *Reactor) handleDriftRemediate(ctx context.Context, event *nostr.Event) 
 		return
 	}
 
-	// Check if drifted
-	if state.DriftStatus != domain.DriftStatusDrifted {
-		r.publishRemediationResult(ctx, event, state, "not_drifted", "Service is not in drifted state")
+	// Check if remediation is currently needed. approval_required reconciliation
+	// records remediation_needed and waits for an authorized kind:5968 request.
+	if state.DriftStatus != domain.DriftStatusDrifted && state.DriftStatus != domain.DriftStatusRemediationNeeded {
+		r.publishRemediationResult(ctx, event, state, "not_drifted", "Service is not in drifted or remediation-needed state")
 		return
 	}
 

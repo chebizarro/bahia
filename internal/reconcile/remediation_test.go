@@ -209,13 +209,14 @@ func (m *mockStateRepo) ListAll(_ context.Context) ([]domain.EnvironmentServiceS
 }
 
 type mockRuntime struct {
-	mu            sync.Mutex
-	deployed      []string
-	deployedOpts  []runtime.DeployOptions
-	undeployed    []string
-	deployErr     error
-	undeployErr   error
-	observeDigest string
+	mu              sync.Mutex
+	deployed        []string
+	deployedOpts    []runtime.DeployOptions
+	undeployed      []string
+	deployErr       error
+	undeployErr     error
+	observeDigest   string
+	observeNormHash string
 }
 
 func (m *mockRuntime) Type() domain.RuntimeType {
@@ -230,6 +231,7 @@ func (m *mockRuntime) Observe(_ context.Context, serviceID, envID uuid.UUID, ser
 		ServiceID:           serviceID,
 		EnvironmentID:       envID,
 		ObservedImageDigest: digest,
+		NormalizedHash:      m.observeNormHash,
 		HealthStatus:        domain.HealthStatusHealthy,
 		Source:              "mock",
 		ObservedAt:          time.Now().UTC(),

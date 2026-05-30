@@ -47,13 +47,15 @@ func TestDriftStatusValues(t *testing.T) {
 		DriftStatusInSync,
 		DriftStatusDrifted,
 		DriftStatusDeploying,
+		DriftStatusRemediationNeeded,
 	}
 
 	expected := map[DriftStatus]bool{
-		"unknown":   true,
-		"in_sync":   true,
-		"drifted":   true,
-		"deploying": true,
+		"unknown":            true,
+		"in_sync":            true,
+		"drifted":            true,
+		"deploying":          true,
+		"remediation_needed": true,
 	}
 
 	for _, s := range statuses {

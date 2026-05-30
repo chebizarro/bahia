@@ -258,6 +258,9 @@ func TestPgEnvironmentServiceStateRepository_DesiredRuntimeStateRoundTrip(t *tes
 			pgxmock.AnyArg(), // drift_status
 			pgxmock.AnyArg(), // desired_runtime_state JSON
 			pgxmock.AnyArg(), // desired_hash
+			pgxmock.AnyArg(), // reconcile_failure_metadata JSON
+			pgxmock.AnyArg(), // reconcile_backoff_until
+			pgxmock.AnyArg(), // reconcile_consecutive_failures
 			pgxmock.AnyArg(), // last_reconciled_at
 			pgxmock.AnyArg(), // updated_at
 		).
@@ -282,10 +285,10 @@ func TestPgEnvironmentServiceStateRepository_DesiredRuntimeStateRoundTrip(t *tes
 		WillReturnRows(pgxmock.NewRows([]string{
 			"service_id", "environment_id", "deployment_unit_id", "desired_artifact_id", "desired_intent_id",
 			"last_successful_run_id", "current_observation_id", "drift_status",
-			"desired_runtime_state", "desired_hash", "last_reconciled_at", "updated_at",
+			"desired_runtime_state", "desired_hash", "reconcile_failure_metadata", "reconcile_backoff_until", "reconcile_consecutive_failures", "last_reconciled_at", "updated_at",
 		}).AddRow(
 			svcID, envID, nil, nil, nil, nil, nil, "unknown",
-			specJSON, spec.DesiredHash, nil, now,
+			specJSON, spec.DesiredHash, nil, nil, 0, nil, now,
 		))
 
 	got, err := repo.Get(context.Background(), svcID, envID)
