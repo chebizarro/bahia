@@ -9,6 +9,12 @@ import (
 	"github.com/openagentsinc/bahia/internal/domain"
 )
 
+// AdoptedRuntimeIdentityRepository manages stable workload fingerprints for adoption matching.
+type AdoptedRuntimeIdentityRepository interface {
+	UpsertMany(ctx context.Context, identities []domain.AdoptedRuntimeIdentity) error
+	FindByFingerprints(ctx context.Context, fingerprints []string) ([]domain.AdoptedRuntimeIdentity, error)
+}
+
 // ServiceRepository manages service records.
 type ServiceRepository interface {
 	Create(ctx context.Context, svc *domain.Service) error

@@ -18,6 +18,72 @@ import (
 	"go.uber.org/zap"
 )
 
+func TestAdoptionServiceImportInfersSingleOrgAndPersistsRuntimeIdentities(t *testing.T) {
+	ctx := context.Background()
+	server := newAdoptionDockerServer(t)
+	defer server.Close()
+
+	orgID := uuid.New()
+	orgRepo := &mockOrgRepo{orgs: []domain.Organization{{ID: orgID, Name: "platform", DisplayName: "Platform"}}}
+	identityRepo := newMockAdoptedIdentityRepo()
+	registry, svcRepo, envRepo, buildRepo, artifactRepo, _, _ := newTestRegistry()
+	adoption := NewAdoptionService(
+		registry, svcRepo, envRepo, buildRepo, artifactRepo, registry.state, registry.observations, &events.NoopPublisher{}, zap.NewNop(),
+		WithAdoptionOrganizations(orgRepo),
+		WithAdoptionRuntimeIdentities(identityRepo),
+	)
+
+	results, err := adoption.Import(ctx, AdoptionImportRequest{
+		Targets:   []AdoptionTarget{{Name: "local", DockerHost: server.URL, EnvironmentName: "prod"}},
+		ImportAll: true,
+	})
+	if err != nil {
+		t.Fatalf("Import returned error: %v", err)
+	}
+	if len(results) != 1 || results[0].Status != adoptionStatusCreated {
+		t.Fatalf("unexpected import result: %#v", results)
+	}
+	svc, err := svcRepo.GetByName(ctx, "demo-web")
+	if err != nil || svc == nil {
+		t.Fatalf("expected adopted service, svc=%#v err=%v", svc, err)
+	}
+	if svc.OrgID != orgID {
+		t.Fatalf("service org_id = %s, want %s", svc.OrgID, orgID)
+	}
+	env, err := envRepo.GetByName(ctx, "prod")
+	if err != nil || env == nil {
+		t.Fatalf("expected adopted environment, env=%#v err=%v", env, err)
+	}
+	if env.OrgID != orgID {
+		t.Fatalf("environment org_id = %s, want %s", env.OrgID, orgID)
+	}
+	for _, kind := range []string{"container_id", "image_digest", "compose_coordinates", "endpoint_target"} {
+		if identityRepo.byKind(kind) == nil {
+			t.Fatalf("missing persisted adopted runtime identity kind %q: %#v", kind, identityRepo.identities)
+		}
+	}
+}
+
+func TestAdoptionServiceImportRequiresOrgWhenMultipleOrgsAreAvailable(t *testing.T) {
+	orgRepo := &mockOrgRepo{orgs: []domain.Organization{
+		{ID: uuid.New(), Name: "platform-a", DisplayName: "Platform A"},
+		{ID: uuid.New(), Name: "platform-b", DisplayName: "Platform B"},
+	}}
+	registry, svcRepo, envRepo, buildRepo, artifactRepo, _, _ := newTestRegistry()
+	adoption := NewAdoptionService(
+		registry, svcRepo, envRepo, buildRepo, artifactRepo, registry.state, registry.observations, &events.NoopPublisher{}, zap.NewNop(),
+		WithAdoptionOrganizations(orgRepo),
+	)
+
+	_, err := adoption.Import(context.Background(), AdoptionImportRequest{
+		Targets:   []AdoptionTarget{{Name: "local", DockerHost: "http://docker.example", EnvironmentName: "prod"}},
+		ImportAll: true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "requires org_id") {
+		t.Fatalf("Import error = %v, want org_id requirement", err)
+	}
+}
+
 func TestAdoptionServiceImportSeedsModelsAndIsIdempotent(t *testing.T) {
 	ctx := context.Background()
 	server := newAdoptionDockerServer(t)
@@ -670,6 +736,100 @@ func newUnsafeAdoptionDockerServer(t *testing.T) *httptest.Server {
 	}))
 }
 
+type mockOrgRepo struct {
+	orgs []domain.Organization
+}
+
+func (m *mockOrgRepo) Create(_ context.Context, org *domain.Organization) error {
+	if org.ID == uuid.Nil {
+		org.ID = uuid.New()
+	}
+	m.orgs = append(m.orgs, *org)
+	return nil
+}
+
+func (m *mockOrgRepo) GetByID(_ context.Context, id uuid.UUID) (*domain.Organization, error) {
+	for i := range m.orgs {
+		if m.orgs[i].ID == id {
+			return &m.orgs[i], nil
+		}
+	}
+	return nil, repository.ErrNotFound
+}
+
+func (m *mockOrgRepo) GetByName(_ context.Context, name string) (*domain.Organization, error) {
+	for i := range m.orgs {
+		if m.orgs[i].Name == name {
+			return &m.orgs[i], nil
+		}
+	}
+	return nil, repository.ErrNotFound
+}
+
+func (m *mockOrgRepo) List(_ context.Context) ([]domain.Organization, error) {
+	out := make([]domain.Organization, len(m.orgs))
+	copy(out, m.orgs)
+	return out, nil
+}
+
+func (m *mockOrgRepo) Update(_ context.Context, org *domain.Organization) error {
+	for i := range m.orgs {
+		if m.orgs[i].ID == org.ID {
+			m.orgs[i] = *org
+			return nil
+		}
+	}
+	return repository.ErrNotFound
+}
+
+func (m *mockOrgRepo) Delete(_ context.Context, id uuid.UUID) error {
+	for i := range m.orgs {
+		if m.orgs[i].ID == id {
+			m.orgs = append(m.orgs[:i], m.orgs[i+1:]...)
+			return nil
+		}
+	}
+	return repository.ErrNotFound
+}
+
+type mockAdoptedIdentityRepo struct {
+	identities map[string]domain.AdoptedRuntimeIdentity
+}
+
+func newMockAdoptedIdentityRepo() *mockAdoptedIdentityRepo {
+	return &mockAdoptedIdentityRepo{identities: map[string]domain.AdoptedRuntimeIdentity{}}
+}
+
+func (m *mockAdoptedIdentityRepo) UpsertMany(_ context.Context, identities []domain.AdoptedRuntimeIdentity) error {
+	for _, identity := range identities {
+		if identity.ID == uuid.Nil {
+			identity.ID = uuid.New()
+		}
+		m.identities[identity.Fingerprint] = identity
+	}
+	return nil
+}
+
+func (m *mockAdoptedIdentityRepo) FindByFingerprints(_ context.Context, fingerprints []string) ([]domain.AdoptedRuntimeIdentity, error) {
+	var out []domain.AdoptedRuntimeIdentity
+	for _, fingerprint := range fingerprints {
+		if identity, ok := m.identities[fingerprint]; ok {
+			out = append(out, identity)
+		}
+	}
+	return out, nil
+}
+
+func (m *mockAdoptedIdentityRepo) byKind(kind string) *domain.AdoptedRuntimeIdentity {
+	for _, identity := range m.identities {
+		if identity.FingerprintKind == kind {
+			copy := identity
+			return &copy
+		}
+	}
+	return nil
+}
+
 type capturePublisher struct {
 	events []events.Event
 }
@@ -689,6 +849,7 @@ type mockAdoptionTxExecutor struct {
 	state        *mockStateRepo
 	observations *mockObsRepo
 	secrets      *mockSecretRepo
+	identities   *mockAdoptedIdentityRepo
 }
 
 func newMockAdoptionTxExecutor(services *mockServiceRepo, environments *mockEnvRepo, builds *mockBuildRepo, artifacts *mockArtifactRepo, state *mockStateRepo, observations *mockObsRepo, secrets *mockSecretRepo) *mockAdoptionTxExecutor {
@@ -708,8 +869,9 @@ func (e *mockAdoptionTxExecutor) WithinTx(ctx context.Context, fn func(repos rep
 	txState := cloneMockStateRepo(e.state)
 	txObservations := cloneMockObsRepo(e.observations)
 	txSecrets := cloneMockSecretRepo(e.secrets)
+	txIdentities := cloneMockAdoptedIdentityRepo(e.identities)
 
-	if err := fn(repository.TxRepos{
+	txRepos := repository.TxRepos{
 		Services:     txServices,
 		Environments: txEnvironments,
 		Builds:       txBuilds,
@@ -717,7 +879,11 @@ func (e *mockAdoptionTxExecutor) WithinTx(ctx context.Context, fn func(repos rep
 		State:        txState,
 		Observations: txObservations,
 		Secrets:      txSecrets,
-	}); err != nil {
+	}
+	if txIdentities != nil {
+		txRepos.AdoptedIdentities = txIdentities
+	}
+	if err := fn(txRepos); err != nil {
 		return err
 	}
 
@@ -729,6 +895,9 @@ func (e *mockAdoptionTxExecutor) WithinTx(ctx context.Context, fn func(repos rep
 	e.observations.observations = txObservations.observations
 	if e.secrets != nil && txSecrets != nil {
 		e.secrets.secrets = txSecrets.secrets
+	}
+	if e.identities != nil && txIdentities != nil {
+		e.identities.identities = txIdentities.identities
 	}
 	_ = ctx
 	return nil
@@ -805,6 +974,17 @@ func cloneMockSecretRepo(src *mockSecretRepo) *mockSecretRepo {
 	for id, secret := range src.secrets {
 		copied := *secret
 		clone.secrets[id] = &copied
+	}
+	return clone
+}
+
+func cloneMockAdoptedIdentityRepo(src *mockAdoptedIdentityRepo) *mockAdoptedIdentityRepo {
+	if src == nil {
+		return nil
+	}
+	clone := newMockAdoptedIdentityRepo()
+	for fingerprint, identity := range src.identities {
+		clone.identities[fingerprint] = identity
 	}
 	return clone
 }

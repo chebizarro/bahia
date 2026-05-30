@@ -152,6 +152,7 @@ type ServiceRuntimeConfig struct {
 type AdoptedRuntimeConfig struct {
 	TargetName    string            `json:"target_name"`
 	ContainerID   string            `json:"container_id,omitempty"`
+	ImageDigest   string            `json:"image_digest,omitempty"`
 	SourceRuntime string            `json:"source_runtime"`
 	HostAlias     string            `json:"host_alias"`
 	EndpointRef   string            `json:"endpoint_ref,omitempty"`
@@ -173,6 +174,24 @@ type ComposeMetadata struct {
 	ServiceName string   `json:"service_name,omitempty"`
 	WorkingDir  string   `json:"working_dir,omitempty"`
 	ConfigFiles []string `json:"config_files,omitempty"`
+}
+
+// AdoptedRuntimeIdentity stores one stable adoption fingerprint for a runtime workload.
+type AdoptedRuntimeIdentity struct {
+	ID              uuid.UUID        `json:"id"`
+	OrgID           uuid.UUID        `json:"org_id"`
+	ServiceID       uuid.UUID        `json:"service_id"`
+	EnvironmentID   uuid.UUID        `json:"environment_id"`
+	FingerprintKind string           `json:"fingerprint_kind"`
+	Fingerprint     string           `json:"fingerprint"`
+	ContainerID     string           `json:"container_id,omitempty"`
+	ImageDigest     string           `json:"image_digest,omitempty"`
+	EndpointRef     string           `json:"endpoint_ref,omitempty"`
+	HostAlias       string           `json:"host_alias,omitempty"`
+	TargetName      string           `json:"target_name,omitempty"`
+	Compose         *ComposeMetadata `json:"compose,omitempty"`
+	CreatedAt       time.Time        `json:"created_at"`
+	UpdatedAt       time.Time        `json:"updated_at"`
 }
 
 // RepositoryRef captures structured source repository metadata for a service.

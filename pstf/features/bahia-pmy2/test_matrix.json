@@ -1,0 +1,25 @@
+{
+  "feature_id": "bahia-pmy2",
+  "tests": [
+    {
+      "name": "TestAdoptionServiceImportInfersSingleOrgAndPersistsRuntimeIdentities",
+      "package": "./internal/service",
+      "acceptance_criteria": ["AC2", "AC3", "AC5"]
+    },
+    {
+      "name": "TestAdoptionServiceImportRequiresOrgWhenMultipleOrgsAreAvailable",
+      "package": "./internal/service",
+      "acceptance_criteria": ["AC3"]
+    },
+    {
+      "name": "go test ./internal/service ./internal/repository ./internal/adapters/runtime",
+      "package": "multiple",
+      "acceptance_criteria": ["AC1", "AC2", "AC3", "AC5"]
+    },
+    {
+      "name": "Migration review: 000041_adopted_runtime_identity.up.sql",
+      "package": "internal/db/migrations",
+      "acceptance_criteria": ["AC1", "AC4"]
+    }
+  ]
+}

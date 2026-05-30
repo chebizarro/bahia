@@ -19,6 +19,7 @@ import (
 type DockerDiscoveryTarget struct {
 	Name            string
 	DockerHost      string
+	EndpointRef     string
 	Endpoint        config.RuntimeEndpointConfig
 	EnvironmentName string
 }
@@ -36,6 +37,7 @@ type DiscoveredContainer struct {
 	EnvironmentName string
 	ContainerID     string
 	ContainerName   string
+	EndpointRef     string
 	ImageRef        string
 	ImageRepo       string
 	ImageTag        string
@@ -291,6 +293,7 @@ func normalizeDiscoveredContainer(target DockerDiscoveryTarget, inspected *docke
 		EnvironmentName: target.EnvironmentName,
 		ContainerID:     inspected.ID,
 		ContainerName:   containerName,
+		EndpointRef:     target.EndpointRef,
 		ImageRef:        imageRef,
 		ImageRepo:       imageRepo,
 		ImageTag:        imageTag,

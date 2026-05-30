@@ -16,13 +16,14 @@ type TxExecutor interface {
 
 // TxRepos contains repositories bound to one transaction.
 type TxRepos struct {
-	Services     ServiceRepository
-	Environments EnvironmentRepository
-	Builds       BuildRepository
-	Artifacts    ArtifactRepository
-	State        EnvironmentServiceStateRepository
-	Observations RuntimeObservationRepository
-	Secrets      SecretRepository
+	Services          ServiceRepository
+	Environments      EnvironmentRepository
+	Builds            BuildRepository
+	Artifacts         ArtifactRepository
+	State             EnvironmentServiceStateRepository
+	Observations      RuntimeObservationRepository
+	Secrets           SecretRepository
+	AdoptedIdentities AdoptedRuntimeIdentityRepository
 }
 
 type pgQueryer interface {
@@ -58,13 +59,14 @@ func (e *PgTxExecutor) WithinTx(ctx context.Context, fn func(repos TxRepos) erro
 	}()
 
 	repos := TxRepos{
-		Services:     newPgServiceRepositoryWithDB(tx),
-		Environments: newPgEnvironmentRepositoryWithDB(tx),
-		Builds:       newPgBuildRepositoryWithDB(tx),
-		Artifacts:    newPgArtifactRepositoryWithDB(tx),
-		State:        newPgEnvironmentServiceStateRepositoryWithDB(tx),
-		Observations: newPgRuntimeObservationRepositoryWithDB(tx),
-		Secrets:      newPgSecretRepositoryWithDB(tx),
+		Services:          newPgServiceRepositoryWithDB(tx),
+		Environments:      newPgEnvironmentRepositoryWithDB(tx),
+		Builds:            newPgBuildRepositoryWithDB(tx),
+		Artifacts:         newPgArtifactRepositoryWithDB(tx),
+		State:             newPgEnvironmentServiceStateRepositoryWithDB(tx),
+		Observations:      newPgRuntimeObservationRepositoryWithDB(tx),
+		Secrets:           newPgSecretRepositoryWithDB(tx),
+		AdoptedIdentities: newPgAdoptedRuntimeIdentityRepositoryWithDB(tx),
 	}
 	if err := fn(repos); err != nil {
 		return err

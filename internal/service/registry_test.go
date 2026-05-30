@@ -418,6 +418,15 @@ func (m *mockStateRepo) ListDrifted(_ context.Context) ([]domain.EnvironmentServ
 	}
 	return result, nil
 }
+func (m *mockStateRepo) ListDueForObservation(_ context.Context, dueBefore time.Time) ([]domain.EnvironmentServiceState, error) {
+	var result []domain.EnvironmentServiceState
+	for _, s := range m.states {
+		if s.LastReconciledAt == nil || !s.LastReconciledAt.After(dueBefore) {
+			result = append(result, *s)
+		}
+	}
+	return result, nil
+}
 func (m *mockStateRepo) ListAll(_ context.Context) ([]domain.EnvironmentServiceState, error) {
 	var result []domain.EnvironmentServiceState
 	for _, s := range m.states {

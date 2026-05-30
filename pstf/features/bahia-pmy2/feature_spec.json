@@ -1,0 +1,15 @@
+{
+  "feature_id": "bahia-pmy2",
+  "title": "Adoption Identity Persistence and OrgID Migration",
+  "observed_behavior_before": [
+    "Adoption matched existing services by runtime_config.adopted target_name and host_alias only.",
+    "Adoption imports could create services and environments without org_id ownership when invoked outside tenant-scoped routes.",
+    "No adopted_runtime_identity table existed for durable workload fingerprints."
+  ],
+  "intended_behavior": [
+    "Persist stable adopted runtime fingerprints for container ID, image digest, Compose coordinates, and endpoint target references.",
+    "Surface endpoint identity input from Docker discovery responses without leaking managed Docker hosts.",
+    "Resolve adoption import ownership from an explicit org_id, an existing target environment org, or exactly one configured organization; otherwise fail closed.",
+    "Mark pre-existing unresolved service/environment ownership rows for operator repair during migration."
+  ]
+}

@@ -30,17 +30,19 @@ const (
 
 // AdoptionService scans Docker hosts and imports existing containers into Bahia models.
 type AdoptionService struct {
-	registry     *RegistryService
-	services     repository.ServiceRepository
-	environments repository.EnvironmentRepository
-	builds       repository.BuildRepository
-	artifacts    repository.ArtifactRepository
-	state        repository.EnvironmentServiceStateRepository
-	observations repository.RuntimeObservationRepository
-	secrets      repository.SecretRepository
-	txExecutor   repository.TxExecutor
-	publisher    events.Publisher
-	logger       *zap.Logger
+	registry          *RegistryService
+	services          repository.ServiceRepository
+	environments      repository.EnvironmentRepository
+	builds            repository.BuildRepository
+	artifacts         repository.ArtifactRepository
+	state             repository.EnvironmentServiceStateRepository
+	observations      repository.RuntimeObservationRepository
+	secrets           repository.SecretRepository
+	organizations     repository.OrganizationRepository
+	adoptedIdentities repository.AdoptedRuntimeIdentityRepository
+	txExecutor        repository.TxExecutor
+	publisher         events.Publisher
+	logger            *zap.Logger
 
 	secretEncryptor      *secretsAdapter.Encryptor
 	runtimeCfg           config.RuntimeConfig
@@ -79,6 +81,20 @@ func WithAdoptionSecrets(repo repository.SecretRepository, encryptor *secretsAda
 func WithAdoptionTxExecutor(txExecutor repository.TxExecutor) AdoptionServiceOption {
 	return func(s *AdoptionService) {
 		s.txExecutor = txExecutor
+	}
+}
+
+// WithAdoptionOrganizations enables org ownership resolution for imported resources.
+func WithAdoptionOrganizations(repo repository.OrganizationRepository) AdoptionServiceOption {
+	return func(s *AdoptionService) {
+		s.organizations = repo
+	}
+}
+
+// WithAdoptionRuntimeIdentities enables persistent adopted workload fingerprint matching.
+func WithAdoptionRuntimeIdentities(repo repository.AdoptedRuntimeIdentityRepository) AdoptionServiceOption {
+	return func(s *AdoptionService) {
+		s.adoptedIdentities = repo
 	}
 }
 
@@ -139,6 +155,7 @@ type AdoptionImportRequest struct {
 	Targets    []AdoptionTarget
 	Selections []AdoptionSelection
 	ImportAll  bool
+	OrgID      uuid.UUID
 }
 
 // AdoptionSelection selects one container on a target host.
@@ -239,6 +256,11 @@ func (s *AdoptionService) Import(ctx context.Context, req AdoptionImportRequest)
 		s.logger.Warn("adoption import selections rejected", zap.Int("target_count", len(targets)), zap.String("result", "failed"), zap.Error(err), zap.Int64("duration_ms", time.Since(start).Milliseconds()))
 		return nil, err
 	}
+	orgID, err := s.resolveImportOrgID(ctx, req.OrgID, targets)
+	if err != nil {
+		s.logger.Warn("adoption import org resolution rejected", zap.Int("target_count", len(targets)), zap.String("result", "failed"), zap.Error(err), zap.Int64("duration_ms", time.Since(start).Milliseconds()))
+		return nil, err
+	}
 
 	results, err := runtime.DiscoverDockerTargets(ctx, toDockerDiscoveryTargets(targets), s.logger)
 	if err != nil {
@@ -274,7 +296,7 @@ func (s *AdoptionService) Import(ctx context.Context, req AdoptionImportRequest)
 			if selected && selection.ServiceNameOverride != "" {
 				serviceName = normalizeResourceName(selection.ServiceNameOverride)
 			}
-			imported = append(imported, s.importCandidate(ctx, preview.Target, container, serviceName))
+			imported = append(imported, s.importCandidate(ctx, orgID, preview.Target, container, serviceName))
 		}
 	}
 	if !req.ImportAll {
@@ -375,7 +397,7 @@ func (s *AdoptionService) serviceNameConflicts(ctx context.Context, name string,
 	return !sameAdoptedTarget(existing, target, discovered)
 }
 
-func (s *AdoptionService) importCandidate(ctx context.Context, target AdoptionTarget, candidate AdoptionPreviewContainer, serviceName string) AdoptionImportResult {
+func (s *AdoptionService) importCandidate(ctx context.Context, orgID uuid.UUID, target AdoptionTarget, candidate AdoptionPreviewContainer, serviceName string) AdoptionImportResult {
 	discovered := candidate.Discovered
 	result := AdoptionImportResult{
 		TargetName:              target.Name,
@@ -422,13 +444,13 @@ func (s *AdoptionService) importCandidate(ctx context.Context, target AdoptionTa
 		repos = s.completeTxRepos(repos)
 		registry := s.registryForRepos(repos)
 
-		env, err := s.ensureAdoptionEnvironment(ctx, registry, repos.Environments, target)
+		env, err := s.ensureAdoptionEnvironment(ctx, registry, repos.Environments, orgID, target)
 		if err != nil {
 			return err
 		}
 		stagedResult.EnvironmentID = &env.ID
 
-		svc, createdService, err := s.ensureAdoptionService(ctx, registry, repos.Services, target, discovered, classified, serviceName)
+		svc, createdService, err := s.ensureAdoptionService(ctx, registry, repos.Services, orgID, target, discovered, classified, serviceName)
 		if err != nil {
 			return err
 		}
@@ -463,6 +485,9 @@ func (s *AdoptionService) importCandidate(ctx context.Context, target AdoptionTa
 		}
 
 		if err := s.importSensitiveEnvironmentSecrets(ctx, repos.Secrets, svc.ID, env.ID, classified.SensitiveEnvironment); err != nil {
+			return err
+		}
+		if err := s.persistAdoptedRuntimeIdentities(ctx, repos.AdoptedIdentities, orgID, svc.ID, env.ID, target, discovered); err != nil {
 			return err
 		}
 
@@ -607,6 +632,9 @@ func (s *AdoptionService) completeTxRepos(repos repository.TxRepos) repository.T
 	if repos.Secrets == nil {
 		repos.Secrets = s.secrets
 	}
+	if repos.AdoptedIdentities == nil {
+		repos.AdoptedIdentities = s.adoptedIdentities
+	}
 	return repos
 }
 
@@ -626,7 +654,54 @@ func (s *AdoptionService) registryForRepos(repos repository.TxRepos) *RegistrySe
 	)
 }
 
-func (s *AdoptionService) ensureAdoptionEnvironment(ctx context.Context, registry *RegistryService, environments repository.EnvironmentRepository, target AdoptionTarget) (*domain.Environment, error) {
+func (s *AdoptionService) resolveImportOrgID(ctx context.Context, requested uuid.UUID, targets []AdoptionTarget) (uuid.UUID, error) {
+	if s.organizations == nil {
+		return requested, nil
+	}
+	if requested != uuid.Nil {
+		org, err := s.organizations.GetByID(ctx, requested)
+		if err != nil {
+			return uuid.Nil, fmt.Errorf("resolving adoption org_id %s: %w", requested, err)
+		}
+		if org == nil {
+			return uuid.Nil, fmt.Errorf("resolving adoption org_id %s: %w", requested, repository.ErrNotFound)
+		}
+		return requested, nil
+	}
+
+	resolvedFromEnvironments := map[uuid.UUID]struct{}{}
+	for _, target := range targets {
+		env, err := s.environments.GetByName(ctx, target.EnvironmentName)
+		if err != nil {
+			return uuid.Nil, fmt.Errorf("looking up environment %q for org resolution: %w", target.EnvironmentName, err)
+		}
+		if env != nil && env.OrgID != uuid.Nil {
+			resolvedFromEnvironments[env.OrgID] = struct{}{}
+		}
+	}
+	if len(resolvedFromEnvironments) == 1 {
+		for orgID := range resolvedFromEnvironments {
+			return orgID, nil
+		}
+	}
+	if len(resolvedFromEnvironments) > 1 {
+		return uuid.Nil, fmt.Errorf("adoption import org_id is required because target environments resolve to multiple orgs")
+	}
+
+	orgs, err := s.organizations.List(ctx)
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("listing organizations for adoption org resolution: %w", err)
+	}
+	if len(orgs) == 1 {
+		return orgs[0].ID, nil
+	}
+	if len(orgs) == 0 {
+		return uuid.Nil, fmt.Errorf("adoption import requires org_id because no organization is available for inference")
+	}
+	return uuid.Nil, fmt.Errorf("adoption import requires org_id because %d organizations are available", len(orgs))
+}
+
+func (s *AdoptionService) ensureAdoptionEnvironment(ctx context.Context, registry *RegistryService, environments repository.EnvironmentRepository, orgID uuid.UUID, target AdoptionTarget) (*domain.Environment, error) {
 	existing, err := environments.GetByName(ctx, target.EnvironmentName)
 	if err != nil {
 		return nil, fmt.Errorf("looking up environment %q: %w", target.EnvironmentName, err)
@@ -643,6 +718,7 @@ func (s *AdoptionService) ensureAdoptionEnvironment(ctx context.Context, registr
 	}
 	if existing == nil {
 		env := &domain.Environment{
+			OrgID:         orgID,
 			Name:          target.EnvironmentName,
 			RuntimeConfig: config,
 		}
@@ -652,6 +728,14 @@ func (s *AdoptionService) ensureAdoptionEnvironment(ctx context.Context, registr
 		return env, nil
 	}
 
+	if existing.OrgID != uuid.Nil && existing.OrgID != orgID {
+		return nil, fmt.Errorf("environment %q belongs to different org %s", target.EnvironmentName, existing.OrgID)
+	}
+	changed := false
+	if existing.OrgID == uuid.Nil {
+		existing.OrgID = orgID
+		changed = true
+	}
 	if existing.RuntimeConfig == nil {
 		existing.RuntimeConfig = map[string]any{}
 	}
@@ -667,7 +751,6 @@ func (s *AdoptionService) ensureAdoptionEnvironment(ctx context.Context, registr
 	if currentHost, ok := stringFromAny(existing.RuntimeConfig["docker_host"]); ok && currentHost != "" && currentHost != target.DockerHost {
 		return nil, fmt.Errorf("environment %q already targets docker_host %q", target.EnvironmentName, currentHost)
 	}
-	changed := false
 	if target.EndpointRef != "" {
 		if _, ok := existing.RuntimeConfig["docker_host"]; ok {
 			delete(existing.RuntimeConfig, "docker_host")
@@ -691,9 +774,9 @@ func (s *AdoptionService) ensureAdoptionEnvironment(ctx context.Context, registr
 	return existing, nil
 }
 
-func (s *AdoptionService) ensureAdoptionService(ctx context.Context, registry *RegistryService, services repository.ServiceRepository, target AdoptionTarget, discovered runtime.DiscoveredContainer, classified sensitiveDataClassification, serviceName string) (*domain.Service, bool, error) {
+func (s *AdoptionService) ensureAdoptionService(ctx context.Context, registry *RegistryService, services repository.ServiceRepository, orgID uuid.UUID, target AdoptionTarget, discovered runtime.DiscoveredContainer, classified sensitiveDataClassification, serviceName string) (*domain.Service, bool, error) {
 	adopted := adoptedRuntimeConfig(target, discovered, classified)
-	byIdentity, err := s.findServiceByAdoptedTarget(ctx, services, target, discovered)
+	byIdentity, err := s.findServiceByAdoptedTarget(ctx, services, orgID, target, discovered)
 	if err != nil {
 		return nil, false, err
 	}
@@ -701,10 +784,13 @@ func (s *AdoptionService) ensureAdoptionService(ctx context.Context, registry *R
 	if err != nil {
 		return nil, false, fmt.Errorf("looking up service %q: %w", serviceName, err)
 	}
+	if byName != nil && byName.OrgID != uuid.Nil && byName.OrgID != orgID {
+		return nil, false, fmt.Errorf("service name %q belongs to different org %s", serviceName, byName.OrgID)
+	}
 	if byName != nil && byIdentity != nil && byName.ID != byIdentity.ID {
 		return nil, false, fmt.Errorf("service name %q already exists for a different target", serviceName)
 	}
-	if byName != nil && !sameAdoptedTarget(byName, target, discovered) {
+	if byName != nil && byIdentity == nil && !sameAdoptedTarget(byName, target, discovered) {
 		return nil, false, fmt.Errorf("service name %q already exists for a different target", serviceName)
 	}
 
@@ -714,6 +800,7 @@ func (s *AdoptionService) ensureAdoptionService(ctx context.Context, registry *R
 	}
 	if existing == nil {
 		svc := &domain.Service{
+			OrgID:         orgID,
 			Name:          serviceName,
 			ArtifactRepo:  discovered.ImageRepo,
 			RuntimeType:   domain.RuntimeTypeDocker,
@@ -724,6 +811,10 @@ func (s *AdoptionService) ensureAdoptionService(ctx context.Context, registry *R
 		}
 		return svc, true, nil
 	}
+	if existing.OrgID != uuid.Nil && existing.OrgID != orgID {
+		return nil, false, fmt.Errorf("service %q belongs to different org %s", existing.Name, existing.OrgID)
+	}
+	existing.OrgID = orgID
 	existing.RuntimeType = domain.RuntimeTypeDocker
 	existing.ArtifactRepo = discovered.ImageRepo
 	existing.RuntimeConfig = &domain.ServiceRuntimeConfig{Adopted: adopted}
@@ -733,13 +824,39 @@ func (s *AdoptionService) ensureAdoptionService(ctx context.Context, registry *R
 	return existing, false, nil
 }
 
-func (s *AdoptionService) findServiceByAdoptedTarget(ctx context.Context, serviceRepo repository.ServiceRepository, target AdoptionTarget, discovered runtime.DiscoveredContainer) (*domain.Service, error) {
+func (s *AdoptionService) findServiceByAdoptedTarget(ctx context.Context, serviceRepo repository.ServiceRepository, orgID uuid.UUID, target AdoptionTarget, discovered runtime.DiscoveredContainer) (*domain.Service, error) {
+	if s.adoptedIdentities != nil {
+		identities, err := s.adoptedIdentities.FindByFingerprints(ctx, adoptedRuntimeFingerprints(target, discovered))
+		if err != nil {
+			return nil, err
+		}
+		var matched *domain.Service
+		for _, identity := range identities {
+			if identity.OrgID != orgID {
+				continue
+			}
+			svc, err := serviceRepo.GetByID(ctx, identity.ServiceID)
+			if err != nil {
+				return nil, fmt.Errorf("looking up service by adopted identity: %w", err)
+			}
+			if svc == nil {
+				continue
+			}
+			if matched != nil && matched.ID != svc.ID {
+				return nil, fmt.Errorf("adopted runtime identity matches multiple services in org %s", orgID)
+			}
+			matched = svc
+		}
+		if matched != nil {
+			return matched, nil
+		}
+	}
 	services, err := serviceRepo.List(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("listing services for adopted target lookup: %w", err)
 	}
 	for i := range services {
-		if sameAdoptedTarget(&services[i], target, discovered) {
+		if services[i].OrgID == orgID && sameAdoptedTarget(&services[i], target, discovered) {
 			return &services[i], nil
 		}
 	}
@@ -908,7 +1025,7 @@ func normalizeAdoptionSelections(req AdoptionImportRequest) (map[string]Adoption
 func toDockerDiscoveryTargets(targets []AdoptionTarget) []runtime.DockerDiscoveryTarget {
 	out := make([]runtime.DockerDiscoveryTarget, 0, len(targets))
 	for _, target := range targets {
-		out = append(out, runtime.DockerDiscoveryTarget{Name: target.Name, DockerHost: target.DockerHost, Endpoint: target.Endpoint, EnvironmentName: target.EnvironmentName})
+		out = append(out, runtime.DockerDiscoveryTarget{Name: target.Name, DockerHost: target.DockerHost, EndpointRef: target.EndpointRef, Endpoint: target.Endpoint, EnvironmentName: target.EnvironmentName})
 	}
 	return out
 }
@@ -924,6 +1041,7 @@ func adoptedRuntimeConfig(target AdoptionTarget, discovered runtime.DiscoveredCo
 	return &domain.AdoptedRuntimeConfig{
 		TargetName:    discovered.TargetName,
 		ContainerID:   discovered.ContainerID,
+		ImageDigest:   discovered.ImageDigest,
 		SourceRuntime: discovered.SourceRuntime,
 		HostAlias:     target.Name,
 		EndpointRef:   target.EndpointRef,
@@ -988,6 +1106,73 @@ func (s *AdoptionService) importSensitiveEnvironmentSecrets(ctx context.Context,
 		}
 	}
 	return nil
+}
+
+func (s *AdoptionService) persistAdoptedRuntimeIdentities(ctx context.Context, repo repository.AdoptedRuntimeIdentityRepository, orgID, serviceID, envID uuid.UUID, target AdoptionTarget, discovered runtime.DiscoveredContainer) error {
+	if repo == nil {
+		return nil
+	}
+	fingerprints := adoptedRuntimeFingerprintsByKind(target, discovered)
+	identities := make([]domain.AdoptedRuntimeIdentity, 0, len(fingerprints))
+	for kind, fingerprint := range fingerprints {
+		identities = append(identities, domain.AdoptedRuntimeIdentity{
+			OrgID:           orgID,
+			ServiceID:       serviceID,
+			EnvironmentID:   envID,
+			FingerprintKind: kind,
+			Fingerprint:     fingerprint,
+			ContainerID:     discovered.ContainerID,
+			ImageDigest:     discovered.ImageDigest,
+			EndpointRef:     target.EndpointRef,
+			HostAlias:       target.Name,
+			TargetName:      discovered.TargetName,
+			Compose:         discovered.Compose,
+		})
+	}
+	if len(identities) == 0 {
+		return fmt.Errorf("adopted runtime identity requires at least one stable fingerprint")
+	}
+	if err := repo.UpsertMany(ctx, identities); err != nil {
+		return fmt.Errorf("persisting adopted runtime identities: %w", err)
+	}
+	return nil
+}
+
+func adoptedRuntimeFingerprints(target AdoptionTarget, discovered runtime.DiscoveredContainer) []string {
+	byKind := adoptedRuntimeFingerprintsByKind(target, discovered)
+	keys := make([]string, 0, len(byKind))
+	for kind := range byKind {
+		keys = append(keys, kind)
+	}
+	sort.Strings(keys)
+	fingerprints := make([]string, 0, len(keys))
+	for _, kind := range keys {
+		fingerprints = append(fingerprints, byKind[kind])
+	}
+	return fingerprints
+}
+
+func adoptedRuntimeFingerprintsByKind(target AdoptionTarget, discovered runtime.DiscoveredContainer) map[string]string {
+	anchor := target.EndpointRef
+	if anchor == "" {
+		anchor = target.Name
+	}
+	out := map[string]string{}
+	if discovered.ContainerID != "" {
+		out["container_id"] = strings.Join([]string{"container_id", anchor, discovered.ContainerID}, "|")
+	}
+	if discovered.ImageDigest != "" && discovered.TargetName != "" {
+		out["image_digest"] = strings.Join([]string{"image_digest", anchor, discovered.TargetName, discovered.ImageDigest}, "|")
+	}
+	if discovered.Compose != nil && discovered.Compose.ProjectName != "" && discovered.Compose.ServiceName != "" {
+		parts := []string{"compose_coordinates", anchor, discovered.Compose.ProjectName, discovered.Compose.ServiceName, discovered.Compose.WorkingDir}
+		parts = append(parts, discovered.Compose.ConfigFiles...)
+		out["compose_coordinates"] = strings.Join(parts, "|")
+	}
+	if discovered.TargetName != "" {
+		out["endpoint_target"] = strings.Join([]string{"endpoint_target", anchor, discovered.TargetName}, "|")
+	}
+	return out
 }
 
 type sensitiveDataClassification struct {

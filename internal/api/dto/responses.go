@@ -35,6 +35,7 @@ type DiscoveredContainerResponse struct {
 	EnvironmentName         string                   `json:"environment_name"`
 	ContainerID             string                   `json:"container_id"`
 	ContainerName           string                   `json:"container_name"`
+	EndpointRef             string                   `json:"endpoint_ref,omitempty"`
 	ImageRef                string                   `json:"image_ref"`
 	ImageRepo               string                   `json:"image_repo"`
 	ImageTag                string                   `json:"image_tag"`

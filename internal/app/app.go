@@ -310,6 +310,8 @@ func New(cfg *config.Config) (*App, error) {
 			service.WithAdoptionRuntimeConfig(cfg.Runtime, cfg.Adoption.AllowRawDockerHosts),
 			service.WithAdoptionComposeTakeoverPolicy(cfg.Adoption.AllowComposeTakeover),
 			service.WithAdoptionSecrets(secretRepo, secretEncryptor),
+			service.WithAdoptionOrganizations(orgRepo),
+			service.WithAdoptionRuntimeIdentities(repository.NewPgAdoptedRuntimeIdentityRepository(pool)),
 			service.WithAdoptionTxExecutor(repository.NewPgTxExecutor(pool)),
 		)
 	}

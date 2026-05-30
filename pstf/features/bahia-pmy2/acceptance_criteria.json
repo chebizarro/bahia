@@ -1,0 +1,25 @@
+{
+  "feature_id": "bahia-pmy2",
+  "criteria": [
+    {
+      "id": "AC1",
+      "description": "A database migration creates adopted_runtime_identity with unique persisted fingerprints for adopted workloads."
+    },
+    {
+      "id": "AC2",
+      "description": "Docker discovery surfaces endpoint identity input and adoption stores image digest in adopted runtime config."
+    },
+    {
+      "id": "AC3",
+      "description": "Adoption import resolves org_id from explicit input, a single existing environment org, or exactly one organization; ambiguous ownership fails closed."
+    },
+    {
+      "id": "AC4",
+      "description": "Existing unresolved org ownership rows are marked for operator repair by migration instead of being silently assigned."
+    },
+    {
+      "id": "AC5",
+      "description": "Persistent adoption identities are written atomically with service/environment import and used for subsequent service matching."
+    }
+  ]
+}

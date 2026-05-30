@@ -130,6 +130,7 @@ func (h *AdoptionHandler) Import(w http.ResponseWriter, r *http.Request) {
 		Targets:    mapAdoptionTargets(req.Targets),
 		Selections: mapAdoptionSelections(req.Selections),
 		ImportAll:  req.ImportAll,
+		OrgID:      req.OrgID,
 	})
 	if err != nil {
 		writeAdoptionServiceError(w, err)

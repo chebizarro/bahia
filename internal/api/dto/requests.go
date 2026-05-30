@@ -325,6 +325,7 @@ type ImportAdoptionRequest struct {
 	Targets    []AdoptionTargetRequest    `json:"targets"`
 	Selections []AdoptionSelectionRequest `json:"selections,omitempty"`
 	ImportAll  bool                       `json:"import_all,omitempty"`
+	OrgID      uuid.UUID                  `json:"org_id,omitempty"`
 }
 
 // DeployServiceActionRequest requests a direct runtime deploy action.

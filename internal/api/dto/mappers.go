@@ -110,6 +110,7 @@ func discoveredContainerResponseFromRuntime(discovered runtime.DiscoveredContain
 		EnvironmentName:         discovered.EnvironmentName,
 		ContainerID:             discovered.ContainerID,
 		ContainerName:           discovered.ContainerName,
+		EndpointRef:             discovered.EndpointRef,
 		ImageRef:                discovered.ImageRef,
 		ImageRepo:               discovered.ImageRepo,
 		ImageTag:                discovered.ImageTag,
