@@ -122,6 +122,10 @@ func (r *recordingSecretRepo) GetByID(ctx context.Context, id uuid.UUID) (*domai
 	return nil, nil
 }
 
+func (r *recordingSecretRepo) GetCurrentVersion(ctx context.Context, secretID uuid.UUID) (*domain.SecretVersion, error) {
+	return nil, nil
+}
+
 func (r *recordingSecretRepo) ListByService(ctx context.Context, serviceID uuid.UUID) ([]domain.ServiceSecret, error) {
 	return nil, nil
 }
@@ -135,6 +139,10 @@ func (r *recordingSecretRepo) ListEffective(ctx context.Context, serviceID, envI
 }
 
 func (r *recordingSecretRepo) Update(ctx context.Context, s *domain.ServiceSecret) error {
+	return nil
+}
+
+func (r *recordingSecretRepo) RecordSecretAccessAudit(ctx context.Context, audit *domain.SecretAccessAudit) error {
 	return nil
 }
 

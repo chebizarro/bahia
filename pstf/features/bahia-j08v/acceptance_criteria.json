@@ -1,0 +1,11 @@
+{
+  "feature_id": "bahia-j08v",
+  "criteria": [
+    {"id":"AC1","description":"SecretVersion domain type exists and omits encrypted payload from JSON."},
+    {"id":"AC2","description":"secret_versions and secret_access_audit tables are created additively and existing secrets are migrated to version 1."},
+    {"id":"AC3","description":"Creating or updating a secret writes immutable version rows."},
+    {"id":"AC4","description":"Resolver can return a safe audit manifest alongside resolved plaintext values."},
+    {"id":"AC5","description":"Resolve and runtime apply attempts write audit rows without plaintext."},
+    {"id":"AC6","description":"No plaintext is stored in database schema, logs, read models, or status/result payload additions."}
+  ]
+}

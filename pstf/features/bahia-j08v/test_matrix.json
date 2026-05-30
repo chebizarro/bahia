@@ -1,0 +1,11 @@
+{
+  "feature_id": "bahia-j08v",
+  "tests": [
+    {"name":"TestResolverResolveSecretWithAuditRecordsVersionedAccess","criteria":["AC4","AC5","AC6"]},
+    {"name":"TestResolverResolveSecretWithAuditAuditsDecryptFailureWithoutPlaintext","criteria":["AC4","AC5","AC6"]},
+    {"name":"TestPgSecretRepositoryCreateWritesVersionRow","criteria":["AC2","AC3"]},
+    {"name":"TestPgSecretRepositoryUpdateWritesNextVersionRow","criteria":["AC3"]},
+    {"name":"TestPgSecretRepositoryRecordSecretAccessAudit","criteria":["AC5","AC6"]},
+    {"name":"go test ./internal/adapters/secrets ./internal/repository ./internal/service ./internal/api/handlers ./internal/controlplane ./internal/mcp","criteria":["AC1","AC2","AC3","AC4","AC5","AC6"]}
+  ]
+}

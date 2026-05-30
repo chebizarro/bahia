@@ -175,7 +175,8 @@ func (s *RuntimeLifecycleService) deployDesiredState(ctx context.Context, servic
 
 	targetName := svc.RuntimeTargetName()
 	opts := deployOptionsFromServiceRuntimeConfig(svc)
-	if err := s.mergeEffectiveSecrets(ctx, serviceID, envID, &opts); err != nil {
+	secretAccesses, err := s.mergeEffectiveSecrets(ctx, serviceID, envID, &opts)
+	if err != nil {
 		s.logRuntimeAction("deploy", svc, env, serviceID, envID, &artifact.ID, start, "failed", err)
 		return nil, err
 	}
@@ -277,15 +278,18 @@ func (s *RuntimeLifecycleService) deployDesiredState(ctx context.Context, servic
 			PullPolicy:      targetSpec.PullPolicy,
 		})
 		if err != nil {
+			s.recordRuntimeApplySecretAudit(ctx, secretAccesses, domain.SecretAccessOutcomeFailure, err)
 			s.logRuntimeAction("deploy", svc, env, serviceID, envID, &artifact.ID, start, "failed", err)
 			return nil, fmt.Errorf("applying desired state for runtime target %q: %w", targetName, err)
 		}
 	} else {
 		if err := rt.Deploy(ctx, targetName, imageRef, opts); err != nil {
+			s.recordRuntimeApplySecretAudit(ctx, secretAccesses, domain.SecretAccessOutcomeFailure, err)
 			s.logRuntimeAction("deploy", svc, env, serviceID, envID, &artifact.ID, start, "failed", err)
 			return nil, fmt.Errorf("deploying runtime target %q: %w", targetName, err)
 		}
 	}
+	s.recordRuntimeApplySecretAudit(ctx, secretAccesses, domain.SecretAccessOutcomeSuccess, nil)
 
 	// Step: observing — observe the runtime state after deploy.
 	notify(DeployStepObserving, "Observing runtime state after deploy")
@@ -492,31 +496,101 @@ func (l secretListerOrEmpty) ListEffective(ctx context.Context, serviceID, envID
 	return l.repo.ListEffective(ctx, serviceID, envID)
 }
 
-func (s *RuntimeLifecycleService) mergeEffectiveSecrets(ctx context.Context, serviceID, envID uuid.UUID, opts *runtime.DeployOptions) error {
+func (s *RuntimeLifecycleService) mergeEffectiveSecrets(ctx context.Context, serviceID, envID uuid.UUID, opts *runtime.DeployOptions) ([]domain.SecretAccessManifest, error) {
 	secrets, err := s.effectiveSecrets(ctx, serviceID, envID)
 	if err != nil {
-		return fmt.Errorf("loading effective secrets: %w", err)
+		return nil, fmt.Errorf("loading effective secrets: %w", err)
 	}
 	if len(secrets) == 0 {
-		return nil
+		return nil, nil
 	}
 	if s.secretEncryptor == nil {
-		return fmt.Errorf("effective secrets are configured but secret encryption is unavailable")
+		return nil, fmt.Errorf("effective secrets are configured but secret encryption is unavailable")
 	}
 	if opts.Environment == nil {
 		opts.Environment = map[string]string{}
 	}
+	accesses := make([]domain.SecretAccessManifest, 0, len(secrets))
 	for _, secret := range secrets {
 		if secret.Name == "" {
 			continue
 		}
-		value, err := s.secretEncryptor.Decrypt(secret.EncryptedValue, secret.EncryptionMethod)
+		version, err := s.secrets.GetCurrentVersion(ctx, secret.ID)
 		if err != nil {
-			return fmt.Errorf("decrypting effective secret %q: %w", secret.Name, err)
+			return nil, fmt.Errorf("loading current version for effective secret %q: %w", secret.Name, err)
+		}
+		if version == nil {
+			return nil, fmt.Errorf("effective secret %q has no versioned payload", secret.Name)
+		}
+		accessedAt := time.Now().UTC()
+		value, decryptErr := s.secretEncryptor.Decrypt(version.EncryptedValue, version.EncryptionMethod)
+		manifest := domain.SecretAccessManifest{
+			SecretID:      secret.ID,
+			VersionID:     version.ID,
+			Version:       version.Version,
+			ServiceID:     secret.ServiceID,
+			EnvironmentID: secret.EnvironmentID,
+			Name:          secret.Name,
+			Operation:     domain.SecretAccessOperationResolve,
+			Outcome:       domain.SecretAccessOutcomeSuccess,
+			AccessedAt:    accessedAt,
+		}
+		audit := &domain.SecretAccessAudit{
+			SecretID:      secret.ID,
+			VersionID:     version.ID,
+			Version:       version.Version,
+			ServiceID:     secret.ServiceID,
+			EnvironmentID: secret.EnvironmentID,
+			Operation:     domain.SecretAccessOperationResolve,
+			Outcome:       domain.SecretAccessOutcomeSuccess,
+			Reason:        "runtime_desired_state_apply",
+			AccessedAt:    accessedAt,
+		}
+		if decryptErr != nil {
+			manifest.Outcome = domain.SecretAccessOutcomeFailure
+			audit.Outcome = domain.SecretAccessOutcomeFailure
+			audit.Error = decryptErr.Error()
+		}
+		if auditErr := s.secrets.RecordSecretAccessAudit(ctx, audit); auditErr != nil {
+			return nil, auditErr
+		}
+		accesses = append(accesses, manifest)
+		if decryptErr != nil {
+			return accesses, fmt.Errorf("decrypting effective secret %q version %d: %w", secret.Name, version.Version, decryptErr)
 		}
 		opts.Environment[secret.Name] = value
 	}
-	return nil
+	return accesses, nil
+}
+
+func (s *RuntimeLifecycleService) recordRuntimeApplySecretAudit(ctx context.Context, accesses []domain.SecretAccessManifest, outcome domain.SecretAccessOutcome, applyErr error) {
+	if s == nil || s.secrets == nil || len(accesses) == 0 {
+		return
+	}
+	errorText := ""
+	if applyErr != nil {
+		errorText = applyErr.Error()
+	}
+	for _, access := range accesses {
+		if access.SecretID == uuid.Nil || access.VersionID == uuid.Nil {
+			continue
+		}
+		err := s.secrets.RecordSecretAccessAudit(ctx, &domain.SecretAccessAudit{
+			SecretID:      access.SecretID,
+			VersionID:     access.VersionID,
+			Version:       access.Version,
+			ServiceID:     access.ServiceID,
+			EnvironmentID: access.EnvironmentID,
+			Operation:     domain.SecretAccessOperationRuntimeApply,
+			Outcome:       outcome,
+			Reason:        "runtime_desired_state_apply",
+			Error:         errorText,
+			AccessedAt:    time.Now().UTC(),
+		})
+		if err != nil {
+			s.logger.Warn("failed to record secret apply audit", zap.Error(err), zap.String("secret_id", access.SecretID.String()))
+		}
+	}
 }
 
 func (s *RuntimeLifecycleService) updateDesiredArtifact(ctx context.Context, serviceID, envID, artifactID uuid.UUID, desiredState *domain.DesiredServiceSpec) error {

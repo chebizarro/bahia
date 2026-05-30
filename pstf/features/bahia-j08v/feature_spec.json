@@ -1,0 +1,15 @@
+{
+  "feature_id": "bahia-j08v",
+  "title": "Secret versioning and access audit",
+  "intent": "Model secret rotation and access explicitly while keeping plaintext out of persistence, logs, read models, and status/result payloads.",
+  "observed_behavior": [
+    "service_secrets stored only the current encrypted payload and integer version.",
+    "secret resolution returned plaintext without a versioned audit manifest or access audit row."
+  ],
+  "intended_behavior": [
+    "Each service secret has immutable encrypted version rows in secret_versions.",
+    "Existing service_secrets rows are backfilled as version 1 during migration.",
+    "Each resolve and runtime apply attempt writes secret_access_audit metadata without plaintext.",
+    "Resolvers can return a safe SecretAccessManifest alongside resolved plaintext values."
+  ]
+}

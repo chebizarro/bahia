@@ -130,10 +130,12 @@ type ArtifactSignatureRepository interface {
 type SecretRepository interface {
 	Create(ctx context.Context, s *domain.ServiceSecret) error
 	GetByID(ctx context.Context, id uuid.UUID) (*domain.ServiceSecret, error)
+	GetCurrentVersion(ctx context.Context, secretID uuid.UUID) (*domain.SecretVersion, error)
 	ListByService(ctx context.Context, serviceID uuid.UUID) ([]domain.ServiceSecret, error)
 	ListByServiceAndEnv(ctx context.Context, serviceID, envID uuid.UUID) ([]domain.ServiceSecret, error)
 	ListEffective(ctx context.Context, serviceID, envID uuid.UUID) ([]domain.ServiceSecret, error)
 	Update(ctx context.Context, s *domain.ServiceSecret) error
+	RecordSecretAccessAudit(ctx context.Context, audit *domain.SecretAccessAudit) error
 	Delete(ctx context.Context, id uuid.UUID) error
 	DeleteByName(ctx context.Context, serviceID uuid.UUID, envID *uuid.UUID, name string) error
 }
