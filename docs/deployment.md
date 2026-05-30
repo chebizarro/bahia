@@ -147,6 +147,16 @@ Resolution order is: legacy flat `runtime.*`, then `runtime.default.*`, then `ru
 
 Docker API access accepts individual CA/client certificate file paths. Docker Compose uses the Docker CLI `DOCKER_CERT_PATH` convention, so configured Compose endpoint certificates must live in one directory with Docker's standard names (`ca.pem`, `cert.pem`, `key.pem`).
 
+## Deployment Units
+
+A deployment unit is the runtime ownership boundary inside an environment. Each unit records its environment reference, runtime type (`docker`, `compose`, `kubernetes`, or `podman`), reconcile mode (`observe_only`, `auto_apply`, `approval_required`, or `disabled`), ownership mode (`bahia_managed`, `adopted`, or `external`), and unit-local runtime configuration.
+
+Existing single-runtime environments do not need a persisted unit row. When no explicit `deployment_units` row exists, Bahia resolves an in-memory default unit with key `default` from the environment runtime configuration. The implicit default is used for planning and placement resolution, but its ID remains absent from state, intent, run, and observation rows until an operator creates a real unit boundary.
+
+Unit persistence is intentionally transition-triggered, not write-triggered. Bahia persists a unit only when an operator explicitly creates one through `POST /environments/{id}/units`, or when the first multi-unit configuration change requires durable unit identities. Deploy, apply, observe, and ordinary environment writes must not materialize the implicit default unit on their own.
+
+The core control-plane tables include nullable `deployment_unit_id` foreign keys on `deployment_intents`, `deployment_runs`, `runtime_observations`, and `environment_service_state`. A `NULL` value means the record belongs to the implicit default unit for the environment.
+
 For adoption, prefer endpoint aliases:
 
 ```bash

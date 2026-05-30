@@ -242,6 +242,7 @@ type DeploymentIntent struct {
 	ID                 uuid.UUID              `json:"id"`
 	ServiceID          uuid.UUID              `json:"service_id"`
 	EnvironmentID      uuid.UUID              `json:"environment_id"`
+	DeploymentUnitID   *uuid.UUID             `json:"deployment_unit_id,omitempty"`
 	ArtifactID         uuid.UUID              `json:"artifact_id"`
 	RequestedBy        string                 `json:"requested_by"`
 	SourceKind         SourceKind             `json:"source_kind"`
@@ -261,6 +262,7 @@ type DeploymentIntent struct {
 type DeploymentRun struct {
 	ID                 uuid.UUID           `json:"id"`
 	DeploymentIntentID uuid.UUID           `json:"deployment_intent_id"`
+	DeploymentUnitID   *uuid.UUID          `json:"deployment_unit_id,omitempty"`
 	LoomJobID          string              `json:"loom_job_id,omitempty"`
 	WorkerPubkey       string              `json:"worker_pubkey,omitempty"`
 	WorkerName         string              `json:"worker_name,omitempty"`
@@ -278,33 +280,35 @@ type DeploymentRun struct {
 
 // RuntimeObservation represents a snapshot of actual runtime state.
 type RuntimeObservation struct {
-	ID                  uuid.UUID             `json:"id"`
-	ServiceID           uuid.UUID             `json:"service_id"`
-	EnvironmentID       uuid.UUID             `json:"environment_id"`
-	ObservedImageDigest string                `json:"observed_image_digest"`
-	ObservedImageRepo   string                `json:"observed_image_repo,omitempty"`
-	ObservedContainerID string                `json:"observed_container_id,omitempty"`
-	ObservedHost        string                `json:"observed_host,omitempty"`
-	ObservedVersion     string                `json:"observed_version,omitempty"`
-	HealthStatus        HealthStatus          `json:"health_status"`
-	Source              string                `json:"source"`
-	Metadata            map[string]any        `json:"metadata"`
+	ID                  uuid.UUID              `json:"id"`
+	ServiceID           uuid.UUID              `json:"service_id"`
+	EnvironmentID       uuid.UUID              `json:"environment_id"`
+	DeploymentUnitID    *uuid.UUID             `json:"deployment_unit_id,omitempty"`
+	ObservedImageDigest string                 `json:"observed_image_digest"`
+	ObservedImageRepo   string                 `json:"observed_image_repo,omitempty"`
+	ObservedContainerID string                 `json:"observed_container_id,omitempty"`
+	ObservedHost        string                 `json:"observed_host,omitempty"`
+	ObservedVersion     string                 `json:"observed_version,omitempty"`
+	HealthStatus        HealthStatus           `json:"health_status"`
+	Source              string                 `json:"source"`
+	Metadata            map[string]any         `json:"metadata"`
 	NormalizedState     *NormalizedObservation `json:"normalized_state,omitempty"`
-	NormalizedHash      string                `json:"normalized_hash,omitempty"`
-	ObservedAt          time.Time             `json:"observed_at"`
+	NormalizedHash      string                 `json:"normalized_hash,omitempty"`
+	ObservedAt          time.Time              `json:"observed_at"`
 }
 
 // EnvironmentServiceState is a denormalized view of current desired and observed state.
 type EnvironmentServiceState struct {
-	ServiceID            uuid.UUID          `json:"service_id"`
-	EnvironmentID        uuid.UUID          `json:"environment_id"`
-	DesiredArtifactID    *uuid.UUID         `json:"desired_artifact_id,omitempty"`
-	DesiredIntentID      *uuid.UUID         `json:"desired_intent_id,omitempty"`
-	LastSuccessfulRunID  *uuid.UUID         `json:"last_successful_run_id,omitempty"`
-	CurrentObservationID *uuid.UUID         `json:"current_observation_id,omitempty"`
-	DriftStatus          DriftStatus        `json:"drift_status"`
+	ServiceID            uuid.UUID           `json:"service_id"`
+	EnvironmentID        uuid.UUID           `json:"environment_id"`
+	DeploymentUnitID     *uuid.UUID          `json:"deployment_unit_id,omitempty"`
+	DesiredArtifactID    *uuid.UUID          `json:"desired_artifact_id,omitempty"`
+	DesiredIntentID      *uuid.UUID          `json:"desired_intent_id,omitempty"`
+	LastSuccessfulRunID  *uuid.UUID          `json:"last_successful_run_id,omitempty"`
+	CurrentObservationID *uuid.UUID          `json:"current_observation_id,omitempty"`
+	DriftStatus          DriftStatus         `json:"drift_status"`
 	DesiredRuntimeState  *DesiredServiceSpec `json:"desired_runtime_state,omitempty"`
-	DesiredHash          string             `json:"desired_hash,omitempty"`
-	LastReconciledAt     *time.Time         `json:"last_reconciled_at,omitempty"`
-	UpdatedAt            time.Time          `json:"updated_at"`
+	DesiredHash          string              `json:"desired_hash,omitempty"`
+	LastReconciledAt     *time.Time          `json:"last_reconciled_at,omitempty"`
+	UpdatedAt            time.Time           `json:"updated_at"`
 }

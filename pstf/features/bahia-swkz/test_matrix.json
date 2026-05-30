@@ -1,0 +1,9 @@
+{
+  "feature_id": "bahia-swkz",
+  "tests": [
+    {"criterion_id": "AC1", "command": "go test ./internal/domain", "tests": ["TestNewImplicitDefaultDeploymentUnitUsesEnvironmentRuntimeConfig", "TestValidateDeploymentUnitRequiresPolicyAndOwnership"]},
+    {"criterion_id": "AC2", "command": "go test ./internal/repository", "tests": ["TestPgDeploymentUnitRepositoryCreateAndGet", "TestPgDeploymentIntentRepository_DesiredStateRoundTrip", "TestPgDeploymentRunRepository_ApplyMetadataRoundTrip", "TestPgEnvironmentServiceStateRepository_DesiredRuntimeStateRoundTrip", "TestPgRuntimeObservationRepository_NormalizedStateRoundTrip"]},
+    {"criterion_id": "AC3", "command": "go test ./internal/repository", "tests": ["TestPgDeploymentUnitRepositoryResolveDefaultSynthesizesWhenMissing"]},
+    {"criterion_id": "AC4", "command": "manual review", "tests": ["docs/deployment.md Deployment Units section"]}
+  ]
+}

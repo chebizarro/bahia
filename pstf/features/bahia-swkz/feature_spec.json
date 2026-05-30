@@ -1,0 +1,16 @@
+{
+  "feature_id": "bahia-swkz",
+  "title": "DeploymentUnit Domain Types and Persistence",
+  "intended_behavior": "Bahia models deployment units as first-class environment-scoped runtime ownership boundaries while preserving implicit default-unit behavior for existing single-unit environments.",
+  "scope": [
+    "DeploymentUnit domain type and validation",
+    "deployment_units table and nullable deployment_unit_id placement columns",
+    "repository persistence and implicit default resolution",
+    "normative deployment documentation"
+  ],
+  "out_of_scope": [
+    "desired-state planning grouped by unit",
+    "REST handler implementation for POST /environments/{id}/units",
+    "projection tags for deployment units"
+  ]
+}

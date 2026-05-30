@@ -54,6 +54,7 @@ func TestPgDeploymentIntentRepository_DesiredStateRoundTrip(t *testing.T) {
 			pgxmock.AnyArg(), // id
 			pgxmock.AnyArg(), // service_id
 			pgxmock.AnyArg(), // environment_id
+			pgxmock.AnyArg(), // deployment_unit_id
 			pgxmock.AnyArg(), // artifact_id
 			pgxmock.AnyArg(), // requested_by
 			pgxmock.AnyArg(), // source_kind
@@ -91,11 +92,11 @@ func TestPgDeploymentIntentRepository_DesiredStateRoundTrip(t *testing.T) {
 	mock.ExpectQuery("SELECT .+ FROM deployment_intents WHERE id").
 		WithArgs(di.ID).
 		WillReturnRows(pgxmock.NewRows([]string{
-			"id", "service_id", "environment_id", "artifact_id", "requested_by", "source_kind",
+			"id", "service_id", "environment_id", "deployment_unit_id", "artifact_id", "requested_by", "source_kind",
 			"approval_status", "status", "supersedes_intent_id", "approval_metadata", "metadata",
 			"desired_state", "desired_hash", "created_at", "approved_at", "updated_at",
 		}).AddRow(
-			di.ID, svcID, envID, artID, "npub1test", "manual",
+			di.ID, svcID, envID, nil, artID, "npub1test", "manual",
 			"not_required", "pending", nil, []byte(`{}`), []byte(`{}`),
 			specJSON, spec.DesiredHash, di.CreatedAt, nil, di.UpdatedAt,
 		))
@@ -125,11 +126,11 @@ func TestPgDeploymentIntentRepository_NilDesiredState(t *testing.T) {
 	mock.ExpectQuery("SELECT .+ FROM deployment_intents WHERE id").
 		WithArgs(id).
 		WillReturnRows(pgxmock.NewRows([]string{
-			"id", "service_id", "environment_id", "artifact_id", "requested_by", "source_kind",
+			"id", "service_id", "environment_id", "deployment_unit_id", "artifact_id", "requested_by", "source_kind",
 			"approval_status", "status", "supersedes_intent_id", "approval_metadata", "metadata",
 			"desired_state", "desired_hash", "created_at", "approved_at", "updated_at",
 		}).AddRow(
-			id, uuid.New(), uuid.New(), uuid.New(), "npub1test", "manual",
+			id, uuid.New(), uuid.New(), nil, uuid.New(), "npub1test", "manual",
 			"not_required", "pending", nil, []byte(`{}`), []byte(`{}`),
 			nil, "", now, nil, now,
 		))
@@ -167,6 +168,7 @@ func TestPgDeploymentRunRepository_ApplyMetadataRoundTrip(t *testing.T) {
 		WithArgs(
 			pgxmock.AnyArg(), // id
 			pgxmock.AnyArg(), // deployment_intent_id
+			pgxmock.AnyArg(), // deployment_unit_id
 			pgxmock.AnyArg(), // loom_job_id
 			pgxmock.AnyArg(), // worker_pubkey
 			pgxmock.AnyArg(), // worker_name
@@ -198,11 +200,11 @@ func TestPgDeploymentRunRepository_ApplyMetadataRoundTrip(t *testing.T) {
 	mock.ExpectQuery("SELECT .+ FROM deployment_runs WHERE id").
 		WithArgs(runID).
 		WillReturnRows(pgxmock.NewRows([]string{
-			"id", "deployment_intent_id", "loom_job_id", "worker_pubkey", "worker_name",
+			"id", "deployment_intent_id", "deployment_unit_id", "loom_job_id", "worker_pubkey", "worker_name",
 			"status", "exit_code", "stdout_ref", "stderr_ref", "started_at", "finished_at",
 			"metadata", "apply_metadata", "created_at", "updated_at",
 		}).AddRow(
-			runID, intentID, "", "", "",
+			runID, intentID, nil, "", "", "",
 			"succeeded", nil, "", "", nil, nil,
 			[]byte(`{}`), applyMetaJSON, now, now,
 		))
@@ -248,6 +250,7 @@ func TestPgEnvironmentServiceStateRepository_DesiredRuntimeStateRoundTrip(t *tes
 		WithArgs(
 			pgxmock.AnyArg(), // service_id
 			pgxmock.AnyArg(), // environment_id
+			pgxmock.AnyArg(), // deployment_unit_id
 			pgxmock.AnyArg(), // desired_artifact_id
 			pgxmock.AnyArg(), // desired_intent_id
 			pgxmock.AnyArg(), // last_successful_run_id
@@ -277,11 +280,11 @@ func TestPgEnvironmentServiceStateRepository_DesiredRuntimeStateRoundTrip(t *tes
 	mock.ExpectQuery("SELECT .+ FROM environment_service_state WHERE service_id").
 		WithArgs(svcID, envID).
 		WillReturnRows(pgxmock.NewRows([]string{
-			"service_id", "environment_id", "desired_artifact_id", "desired_intent_id",
+			"service_id", "environment_id", "deployment_unit_id", "desired_artifact_id", "desired_intent_id",
 			"last_successful_run_id", "current_observation_id", "drift_status",
 			"desired_runtime_state", "desired_hash", "last_reconciled_at", "updated_at",
 		}).AddRow(
-			svcID, envID, nil, nil, nil, nil, "unknown",
+			svcID, envID, nil, nil, nil, nil, nil, "unknown",
 			specJSON, spec.DesiredHash, nil, now,
 		))
 
@@ -331,6 +334,7 @@ func TestPgRuntimeObservationRepository_NormalizedStateRoundTrip(t *testing.T) {
 			pgxmock.AnyArg(), // id
 			pgxmock.AnyArg(), // service_id
 			pgxmock.AnyArg(), // environment_id
+			pgxmock.AnyArg(), // deployment_unit_id
 			pgxmock.AnyArg(), // observed_image_digest
 			pgxmock.AnyArg(), // observed_image_repo
 			pgxmock.AnyArg(), // observed_container_id
@@ -368,11 +372,11 @@ func TestPgRuntimeObservationRepository_NormalizedStateRoundTrip(t *testing.T) {
 	mock.ExpectQuery("SELECT .+ FROM runtime_observations").
 		WithArgs(svcID, envID).
 		WillReturnRows(pgxmock.NewRows([]string{
-			"id", "service_id", "environment_id", "observed_image_digest", "observed_image_repo",
+			"id", "service_id", "environment_id", "deployment_unit_id", "observed_image_digest", "observed_image_repo",
 			"observed_container_id", "observed_host", "observed_version", "health_status", "source",
 			"metadata", "normalized_state", "normalized_hash", "observed_at",
 		}).AddRow(
-			obs.ID, svcID, envID, "sha256:deadbeef", "registry.example.com/my-service",
+			obs.ID, svcID, envID, nil, "sha256:deadbeef", "registry.example.com/my-service",
 			"container-abc", "worker-1", "v1.2.3", "healthy", "compose",
 			[]byte(`{}`), normalizedJSON, normalized.ObservationHash, now,
 		))

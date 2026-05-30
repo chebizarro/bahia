@@ -1,0 +1,9 @@
+{
+  "feature_id": "bahia-swkz",
+  "criteria": [
+    {"id": "AC1", "description": "DeploymentUnit domain type defines environment reference, runtime type, reconcile mode, and ownership mode."},
+    {"id": "AC2", "description": "Database migration creates deployment_units and nullable deployment_unit_id foreign keys on intent, run, observation, and state tables."},
+    {"id": "AC3", "description": "Repository resolves an in-memory implicit default unit when no explicit default unit exists without persisting it."},
+    {"id": "AC4", "description": "Normative docs define the unit model and transition trigger."}
+  ]
+}

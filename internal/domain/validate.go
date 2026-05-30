@@ -92,7 +92,7 @@ func ValidateRuntimeType(s RuntimeType) error {
 	case "":
 		return nil // defaults to "docker"
 	default:
-		return fmt.Errorf("%w: runtime type %q is not valid (allowed: docker, compose, kubernetes)", ErrInvalidValue, s)
+		return fmt.Errorf("%w: runtime type %q is not valid (allowed: docker, compose, kubernetes, podman)", ErrInvalidValue, s)
 	}
 }
 

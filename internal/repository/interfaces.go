@@ -50,6 +50,15 @@ type ArtifactRepository interface {
 	ListByBuild(ctx context.Context, buildID uuid.UUID) ([]domain.Artifact, error)
 }
 
+// DeploymentUnitRepository manages runtime ownership boundaries inside environments.
+type DeploymentUnitRepository interface {
+	Create(ctx context.Context, unit *domain.DeploymentUnit) error
+	GetByID(ctx context.Context, id uuid.UUID) (*domain.DeploymentUnit, error)
+	GetByEnvironmentKey(ctx context.Context, environmentID uuid.UUID, key string) (*domain.DeploymentUnit, error)
+	ListByEnvironment(ctx context.Context, environmentID uuid.UUID) ([]domain.DeploymentUnit, error)
+	ResolveDefault(ctx context.Context, env *domain.Environment) (*domain.DeploymentUnit, error)
+}
+
 // DeploymentIntentRepository manages deployment intent records.
 type DeploymentIntentRepository interface {
 	Create(ctx context.Context, di *domain.DeploymentIntent) error
