@@ -39,7 +39,7 @@ func TestNewRuntime_DockerDefault(t *testing.T) {
 
 func TestNewRuntime_Compose(t *testing.T) {
 	logger := zap.NewNop()
-	rt, err := NewRuntime(RuntimeConfig{Type: "compose", ComposeDir: "/tmp/project", DockerHost: "tcp://compose-docker:2375"}, logger)
+	rt, err := NewRuntime(RuntimeConfig{Type: "compose", ComposeDir: "/tmp/project", DockerHost: "tcp://compose-docker:2375", ExecutionMode: "cli"}, logger)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -60,9 +60,10 @@ func TestNewRuntime_Compose(t *testing.T) {
 
 func TestRuntimeConfigFromWorkerTargetResolvesEndpointRef(t *testing.T) {
 	cfg, err := RuntimeConfigFromWorkerTarget(&domain.WorkerRuntimeTarget{
-		Type:        domain.RuntimeTypeCompose,
-		EndpointRef: "worker-docker",
-		ComposeDir:  "/srv/llm",
+		Type:          domain.RuntimeTypeCompose,
+		EndpointRef:   "worker-docker",
+		ComposeDir:    "/srv/llm",
+		ExecutionMode: "cli",
 	}, config.RuntimeConfig{
 		Endpoints: map[string]config.RuntimeEndpointConfig{
 			"worker-docker": {DockerHost: "tcp://worker:2376"},
@@ -71,7 +72,7 @@ func TestRuntimeConfigFromWorkerTargetResolvesEndpointRef(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if cfg.Type != "compose" || cfg.ComposeDir != "/srv/llm" {
+	if cfg.Type != "compose" || cfg.ComposeDir != "/srv/llm" || cfg.ExecutionMode != "cli" {
 		t.Fatalf("unexpected runtime config: %#v", cfg)
 	}
 	if cfg.DockerHost != "tcp://worker:2376" || cfg.Endpoint.Ref != "worker-docker" {
@@ -177,11 +178,21 @@ func TestNewRuntime_UnsupportedType(t *testing.T) {
 }
 
 func TestNewRuntime_ComposeRequiresComposeDir(t *testing.T) {
-	_, err := NewRuntime(RuntimeConfig{Type: "compose"}, zap.NewNop())
+	_, err := NewRuntime(RuntimeConfig{Type: "compose", ExecutionMode: "cli"}, zap.NewNop())
 	if err == nil {
 		t.Fatal("expected error for missing compose_dir")
 	}
 	if !contains(err.Error(), "compose_dir is required") {
+		t.Errorf("unexpected error message: %v", err)
+	}
+}
+
+func TestNewRuntime_ComposeRequiresExplicitCLIExecutionMode(t *testing.T) {
+	_, err := NewRuntime(RuntimeConfig{Type: "compose", ComposeDir: "/tmp/project"}, zap.NewNop())
+	if err == nil {
+		t.Fatal("expected error for missing compose execution_mode")
+	}
+	if !contains(err.Error(), "execution_mode") || !contains(err.Error(), "cli") {
 		t.Errorf("unexpected error message: %v", err)
 	}
 }

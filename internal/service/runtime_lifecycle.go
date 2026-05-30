@@ -314,6 +314,7 @@ func (s *RuntimeLifecycleService) deployDesiredState(ctx context.Context, servic
 	actionData := map[string]any{"artifact_id": artifact.ID, "desired_hash": targetSpec.DesiredHash, "environment_revision": plan.RevisionHash}
 	if applyResult != nil {
 		actionData["renderer"] = applyResult.Renderer
+		actionData["execution_mode"] = string(applyResult.ExecutionMode)
 		actionData["resource_names"] = applyResult.ResourceNames
 		actionData["warnings"] = applyResult.Warnings
 	}

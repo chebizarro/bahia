@@ -66,6 +66,10 @@ type DesiredStateApplyResult struct {
 	// "docker", "podman", "kubernetes").
 	Renderer string
 
+	// ExecutionMode identifies whether runtime control executed through the
+	// direct Engine API or explicit CLI compatibility mode.
+	ExecutionMode RuntimeExecutionMode
+
 	// DesiredHash is the deterministic hash of the applied service spec.
 	DesiredHash string
 

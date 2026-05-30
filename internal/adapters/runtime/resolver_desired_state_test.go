@@ -13,8 +13,9 @@ import (
 func TestResolveDesiredStateApplier_ComposeEndpoint(t *testing.T) {
 	resolver := NewConfigRuntimeResolver(config.RuntimeConfig{
 		Default: config.RuntimeTargetConfig{
-			Type:       "compose",
-			ComposeDir: "/srv/data/bahia-managed",
+			Type:          "compose",
+			ComposeDir:    "/srv/data/bahia-managed",
+			ExecutionMode: "cli",
 		},
 		Endpoints: map[string]config.RuntimeEndpointConfig{
 			"local": {DockerHost: "unix:///var/run/docker.sock"},
@@ -162,9 +163,10 @@ func TestResolveDesiredStateApplier_UsesFullResolutionPath(t *testing.T) {
 		Type:       "docker",
 		DockerHost: "unix:///legacy.sock",
 		Default: config.RuntimeTargetConfig{
-			Type:       "compose",
-			DockerHost: "tcp://default:2375",
-			ComposeDir: "/srv/default",
+			Type:          "compose",
+			DockerHost:    "tcp://default:2375",
+			ComposeDir:    "/srv/default",
+			ExecutionMode: "cli",
 		},
 		Environments: map[string]config.RuntimeTargetConfig{
 			"production": {

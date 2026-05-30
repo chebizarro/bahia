@@ -348,11 +348,13 @@ func TestLoadNestedRuntimeConfigFromYAML(t *testing.T) {
   docker_host: unix:///legacy.sock
   default:
     type: compose
+    execution_mode: cli
     docker_host: tcp://default:2375
     compose_dir: /srv/bahia/default
   environments:
     production:
       endpoint_ref: prod-docker
+      execution_mode: cli
       compose_dir: /srv/bahia/production
       docker_host: tcp://prod:2375
     staging:
@@ -384,8 +386,11 @@ func TestLoadNestedRuntimeConfigFromYAML(t *testing.T) {
 	if cfg.Runtime.Default.ComposeDir != "/srv/bahia/default" {
 		t.Errorf("Runtime.Default.ComposeDir = %q", cfg.Runtime.Default.ComposeDir)
 	}
+	if cfg.Runtime.Default.ExecutionMode != "cli" {
+		t.Errorf("Runtime.Default.ExecutionMode = %q", cfg.Runtime.Default.ExecutionMode)
+	}
 	prod := cfg.Runtime.Environments["production"]
-	if prod.ComposeDir != "/srv/bahia/production" || prod.DockerHost != "tcp://prod:2375" || prod.EndpointRef != "prod-docker" {
+	if prod.ComposeDir != "/srv/bahia/production" || prod.ExecutionMode != "cli" || prod.DockerHost != "tcp://prod:2375" || prod.EndpointRef != "prod-docker" {
 		t.Errorf("production runtime target = %+v", prod)
 	}
 	staging := cfg.Runtime.Environments["staging"]

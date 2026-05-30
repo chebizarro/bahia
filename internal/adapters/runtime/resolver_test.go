@@ -15,9 +15,10 @@ func TestConfigRuntimeResolver_Precedence(t *testing.T) {
 		Type:       "docker",
 		DockerHost: "unix:///legacy.sock",
 		Default: config.RuntimeTargetConfig{
-			Type:       "compose",
-			DockerHost: "tcp://default:2375",
-			ComposeDir: "/srv/default",
+			Type:          "compose",
+			DockerHost:    "tcp://default:2375",
+			ComposeDir:    "/srv/default",
+			ExecutionMode: "cli",
 		},
 		Environments: map[string]config.RuntimeTargetConfig{
 			"production": {
@@ -50,7 +51,7 @@ func TestConfigRuntimeResolver_Precedence(t *testing.T) {
 
 func TestConfigRuntimeResolver_ServiceRuntimeTypeBeatsDefaultType(t *testing.T) {
 	resolver := NewConfigRuntimeResolver(config.RuntimeConfig{
-		Default: config.RuntimeTargetConfig{Type: "docker", ComposeDir: "/srv/default"},
+		Default: config.RuntimeTargetConfig{Type: "docker", ComposeDir: "/srv/default", ExecutionMode: "cli"},
 	}, zap.NewNop(), nil)
 
 	rt, err := resolver.Resolve(

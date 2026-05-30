@@ -1,0 +1,10 @@
+{
+  "feature_id": "bahia-xrjj",
+  "criteria": [
+    {"id": "AC1", "statement": "Runtime control interface exposes execution-mode metadata and remains a narrow execution seam."},
+    {"id": "AC2", "statement": "Docker and Podman desired-state apply report execution_mode=engine_api and route runtime mutations through the Engine API control client."},
+    {"id": "AC3", "statement": "Compose desired-state apply reports execution_mode=cli and routes Compose up through a CLI-backed executor."},
+    {"id": "AC4", "statement": "Compose compatibility mode is explicit in config; factory construction rejects Compose targets without execution_mode=cli."},
+    {"id": "AC5", "statement": "Normative deployment docs describe execution_mode values and Compose compatibility requirements."}
+  ]
+}

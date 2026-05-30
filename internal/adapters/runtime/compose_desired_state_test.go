@@ -179,6 +179,9 @@ func TestComposeDesiredStateApplier_Success(t *testing.T) {
 	if result.Renderer != "compose" {
 		t.Errorf("renderer: want compose, got %s", result.Renderer)
 	}
+	if result.ExecutionMode != ExecutionModeCLI {
+		t.Errorf("execution mode: want %s, got %s", ExecutionModeCLI, result.ExecutionMode)
+	}
 	if result.DesiredHash != target.DesiredHash {
 		t.Errorf("desired hash mismatch")
 	}
@@ -458,6 +461,9 @@ func TestComposeDesiredStateApplier_DryRun(t *testing.T) {
 
 	if result.Renderer != "compose" {
 		t.Errorf("renderer: want compose, got %s", result.Renderer)
+	}
+	if result.ExecutionMode != ExecutionModeCLI {
+		t.Errorf("execution mode: want %s, got %s", ExecutionModeCLI, result.ExecutionMode)
 	}
 	if len(result.Warnings) == 0 {
 		t.Error("dry run should include a warning")

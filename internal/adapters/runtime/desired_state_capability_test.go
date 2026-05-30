@@ -97,6 +97,7 @@ func TestDesiredStateApplyRequestConstruction(t *testing.T) {
 func TestDesiredStateApplyResultConstruction(t *testing.T) {
 	result := &DesiredStateApplyResult{
 		Renderer:            "compose",
+		ExecutionMode:       ExecutionModeCLI,
 		DesiredHash:         "sha256:abc123",
 		EnvironmentRevision: "sha256:def456",
 		ResourceIDs:         []string{"container-abc123"},
@@ -111,6 +112,9 @@ func TestDesiredStateApplyResultConstruction(t *testing.T) {
 
 	if result.Renderer != "compose" {
 		t.Errorf("expected renderer 'compose', got %q", result.Renderer)
+	}
+	if result.ExecutionMode != ExecutionModeCLI {
+		t.Errorf("expected execution mode %q, got %q", ExecutionModeCLI, result.ExecutionMode)
 	}
 	if result.DesiredHash != "sha256:abc123" {
 		t.Errorf("unexpected desired hash: %s", result.DesiredHash)
@@ -226,7 +230,7 @@ func TestAsDesiredStateApplierWithNonImplementor(t *testing.T) {
 // DesiredStateApplier, used to test the capability probe negative case.
 type mockRuntimeNoDesiredState struct{}
 
-func (m *mockRuntimeNoDesiredState) Type() domain.RuntimeType                { return "mock" }
+func (m *mockRuntimeNoDesiredState) Type() domain.RuntimeType { return "mock" }
 func (m *mockRuntimeNoDesiredState) Observe(_ context.Context, _, _ uuid.UUID, _ string) (*domain.RuntimeObservation, error) {
 	return nil, nil
 }

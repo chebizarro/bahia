@@ -102,6 +102,7 @@ Nested runtime target settings use double underscores in environment variables:
 
 ```bash
 export BAHIA_RUNTIME__DEFAULT__TYPE=compose
+export BAHIA_RUNTIME__DEFAULT__EXECUTION_MODE=cli
 export BAHIA_RUNTIME__DEFAULT__COMPOSE_DIR=/srv/bahia/compose/default
 export BAHIA_RUNTIME__ENVIRONMENTS__production__COMPOSE_DIR=/srv/bahia/compose/production
 export BAHIA_RUNTIME__ENVIRONMENTS__production__ENDPOINT_REF=prod-docker
@@ -123,6 +124,8 @@ runtime:
 
   default:
     type: compose
+    # Compose control is explicit CLI compatibility mode.
+    execution_mode: cli
     docker_host: unix:///var/run/docker.sock
     compose_dir: /srv/bahia/compose/default
 
@@ -146,6 +149,15 @@ runtime:
 Resolution order is: legacy flat `runtime.*`, then `runtime.default.*`, then `runtime.environments.<environment-name>.*`, then the persisted `Environment.runtime_config` keys (`type`, `endpoint_ref`, `docker_host`, `podman_host`, `compose_dir`, `kube_context`, `kube_namespace`, `kube_config`). When `endpoint_ref` is present, Bahia resolves the concrete Docker host and TLS material from server-managed `runtime.endpoints` and does not need callers or imported environments to carry raw Docker credentials. A service's `runtime_type` remains authoritative for whether Bahia uses Docker, Compose, Kubernetes, or Podman; environment-specific `type` overrides are rejected if they conflict with the service.
 
 Docker API access accepts individual CA/client certificate file paths. Docker Compose uses the Docker CLI `DOCKER_CERT_PATH` convention, so configured Compose endpoint certificates must live in one directory with Docker's standard names (`ca.pem`, `cert.pem`, `key.pem`).
+
+### Runtime execution mode
+
+Runtime apply results report `execution_mode`:
+
+- `engine_api`: Docker and Podman control clients mutate runtime resources directly through the Docker-compatible Engine API.
+- `cli`: Compose control executes through the configured `docker compose`/`docker-compose` CLI compatibility path.
+
+Compose compatibility mode is not implicit. Any Compose runtime target must set `execution_mode: cli` (or `BAHIA_RUNTIME__...__EXECUTION_MODE=cli`). Docker and Podman use `engine_api`; operators should not configure Compose as an Engine API target because Compose project convergence is CLI-backed.
 
 ## Deployment Units and Targeting
 
@@ -186,6 +198,8 @@ Bahia persists desired-state metadata additively so deploy, observe, and project
 - `deployment_runs.apply_metadata` stores runtime apply metadata such as renderer, revision, resources, and warnings.
 - `environment_service_state.desired_runtime_state` / `environment_service_state.desired_hash` store the current desired runtime snapshot for the service/environment row.
 - `runtime_observations.normalized_state` / `runtime_observations.normalized_hash` store normalized observed runtime state for drift comparison.
+
+For desired-state-managed workloads, service drift is evaluated from deterministic hashes: `environment_service_state.desired_hash` is compared with the latest observation's normalized hash (`normalized_state.observation_hash`, falling back to `normalized_hash`). The resulting `drift_status` is `in_sync` only when hashes match and runtime health is acceptable, `drifted` when hashes differ or matching state is unhealthy, and `unknown` when the desired or observed hash is unavailable. Workloads without desired-state metadata continue to use the legacy desired artifact digest versus observed image digest comparison.
 
 `DesiredServiceSpec` includes deployment-unit identity: `deployment_unit_id` when a persisted unit exists, `deployment_unit_key` for implicit or explicit unit grouping, and `unit_runtime_type` for renderer/runtime ownership. Older snapshots without those fields are normalized into the implicit `default` unit during planning.
 

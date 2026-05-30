@@ -1,0 +1,10 @@
+{
+  "feature_id": "bahia-xrjj",
+  "tests": [
+    {"criterion_id": "AC1", "command": "go test ./internal/adapters/runtime", "tests": ["TestDesiredStateApplyResultConstruction", "TestRuntimeInterfaceCompileTime"]},
+    {"criterion_id": "AC2", "command": "go test ./internal/adapters/runtime", "tests": ["TestDockerApplyDesiredState_NoOpWhenHashMatches", "TestDockerApplyDesiredState_CreateNewContainer"]},
+    {"criterion_id": "AC3", "command": "go test ./internal/adapters/runtime", "tests": ["TestComposeDesiredStateApplier_Success", "TestComposeDesiredStateApplier_DryRun", "TestComposeDesiredStateApplier_CommandArgs_UpWithRemoveOrphans"]},
+    {"criterion_id": "AC4", "command": "go test ./internal/adapters/runtime", "tests": ["TestNewRuntime_ComposeRequiresExplicitCLIExecutionMode", "TestConfigRuntimeResolver_Precedence", "TestResolveDesiredStateApplier_ComposeEndpoint"]},
+    {"criterion_id": "AC5", "command": "manual review", "tests": ["docs/deployment.md Runtime execution mode section"]}
+  ]
+}

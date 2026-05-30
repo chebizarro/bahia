@@ -35,9 +35,11 @@ func (o *DockerObserver) ApplyDesiredState(ctx context.Context, req DesiredState
 		zap.String("container_name", containerName),
 		zap.String("desired_hash", spec.DesiredHash),
 	)
+	control := o.ControlClient()
+	executionMode := control.ExecutionMode()
 
 	// Step 1: Find existing managed container.
-	existing, err := FindBahiaManagedContainer(ctx, o, spec)
+	existing, err := control.FindManagedContainer(ctx, spec)
 	if err != nil {
 		return nil, fmt.Errorf("docker apply: finding managed container: %w", err)
 	}
@@ -52,6 +54,7 @@ func (o *DockerObserver) ApplyDesiredState(ctx context.Context, req DesiredState
 			)
 			return &DesiredStateApplyResult{
 				Renderer:            "docker",
+				ExecutionMode:       executionMode,
 				DesiredHash:         spec.DesiredHash,
 				EnvironmentRevision: environmentRevision(req.EnvironmentPlan),
 				ResourceIDs:         []string{existing.ID},
@@ -71,6 +74,7 @@ func (o *DockerObserver) ApplyDesiredState(ctx context.Context, req DesiredState
 		}
 		return &DesiredStateApplyResult{
 			Renderer:            "docker",
+			ExecutionMode:       executionMode,
 			DesiredHash:         spec.DesiredHash,
 			EnvironmentRevision: environmentRevision(req.EnvironmentPlan),
 			Warnings:            []string{fmt.Sprintf("dry-run: would %s container %s", action, containerName)},
@@ -89,14 +93,14 @@ func (o *DockerObserver) ApplyDesiredState(ctx context.Context, req DesiredState
 	if req.EnvironmentPlan != nil {
 		networkSpecs := collectNetworkSpecs(spec)
 		if len(networkSpecs) > 0 {
-			if err := EnsureNetworks(ctx, o, networkSpecs); err != nil {
+			if err := control.EnsureNetworks(ctx, networkSpecs); err != nil {
 				return nil, fmt.Errorf("docker apply: ensuring networks: %w", err)
 			}
 		}
 
 		volumeSpecs := collectVolumeSpecs(spec)
 		if len(volumeSpecs) > 0 {
-			if err := EnsureVolumes(ctx, o, volumeSpecs); err != nil {
+			if err := control.EnsureVolumes(ctx, volumeSpecs); err != nil {
 				return nil, fmt.Errorf("docker apply: ensuring volumes: %w", err)
 			}
 		}
@@ -111,7 +115,7 @@ func (o *DockerObserver) ApplyDesiredState(ctx context.Context, req DesiredState
 
 	if shouldPull(pullPolicy, existingHash, spec.DesiredHash, existing == nil) {
 		logger.Info("pulling image", zap.String("image", spec.ImageRef))
-		if err := o.pullImage(ctx, spec.ImageRef); err != nil {
+		if err := control.PullImage(ctx, spec.ImageRef); err != nil {
 			if pullPolicy == "always" {
 				return nil, fmt.Errorf("docker apply: pulling image %s: %w", spec.ImageRef, err)
 			}
@@ -130,33 +134,34 @@ func (o *DockerObserver) ApplyDesiredState(ctx context.Context, req DesiredState
 			zap.String("container_id", existing.ID),
 			zap.String("existing_hash", existingHash),
 		)
-		if err := o.stopContainer(ctx, existing.ID); err != nil {
+		if err := control.StopContainer(ctx, existing.ID); err != nil {
 			return nil, fmt.Errorf("docker apply: stopping container %s: %w", existing.ID, err)
 		}
-		if err := o.removeContainer(ctx, existing.ID); err != nil {
+		if err := control.RemoveContainer(ctx, existing.ID); err != nil {
 			return nil, fmt.Errorf("docker apply: removing container %s: %w", existing.ID, err)
 		}
 	}
 
 	// Step 7: Create new container.
-	containerID, err := o.createContainer(ctx, containerName, configs)
+	containerID, err := control.CreateContainer(ctx, containerName, configs)
 	if err != nil {
 		return nil, fmt.Errorf("docker apply: creating container %s: %w", containerName, err)
 	}
 	logger.Info("container created", zap.String("container_id", containerID))
 
 	// Step 8: Attach to additional networks (beyond the primary network mode).
-	networkWarnings := o.attachAdditionalNetworks(ctx, containerID, spec)
+	networkWarnings := attachAdditionalNetworks(ctx, control, containerID, spec)
 	warnings = append(warnings, networkWarnings...)
 
 	// Step 9: Start the container.
-	if err := o.startContainer(ctx, containerID); err != nil {
+	if err := control.StartContainer(ctx, containerID); err != nil {
 		return nil, fmt.Errorf("docker apply: starting container %s: %w", containerID, err)
 	}
 	logger.Info("container started", zap.String("container_id", containerID))
 
 	return &DesiredStateApplyResult{
 		Renderer:            "docker",
+		ExecutionMode:       executionMode,
 		DesiredHash:         spec.DesiredHash,
 		EnvironmentRevision: environmentRevision(req.EnvironmentPlan),
 		ResourceIDs:         []string{containerID},
@@ -280,7 +285,7 @@ func (o *DockerObserver) startContainer(ctx context.Context, containerID string)
 // attachAdditionalNetworks connects a container to networks listed in the
 // spec's DockerExtension that are not the primary network mode. Returns
 // warnings for non-fatal attachment failures.
-func (o *DockerObserver) attachAdditionalNetworks(ctx context.Context, containerID string, spec *domain.DesiredServiceSpec) []string {
+func attachAdditionalNetworks(ctx context.Context, control DockerControlClient, containerID string, spec *domain.DesiredServiceSpec) []string {
 	if spec.DockerExtension == nil {
 		return nil
 	}
@@ -300,7 +305,7 @@ func (o *DockerObserver) attachAdditionalNetworks(ctx context.Context, container
 		if network == spec.NetworkMode {
 			continue // Already the primary network.
 		}
-		if err := o.connectNetwork(ctx, containerID, network, spec.StableServiceKey); err != nil {
+		if err := control.ConnectNetwork(ctx, containerID, network, spec.StableServiceKey); err != nil {
 			warnings = append(warnings, fmt.Sprintf("failed to attach network %s: %v", network, err))
 		}
 	}

@@ -16,6 +16,7 @@ type RuntimeConfig struct {
 	DockerHost    string // Docker socket or TCP address
 	PodmanHost    string // Podman socket path (defaults to rootless user socket)
 	ComposeDir    string // Directory containing docker-compose.yml
+	ExecutionMode string // "engine_api" or "cli"; compose requires explicit "cli"
 	Endpoint      config.RuntimeEndpointConfig
 	RegistryAuth  *RegistryAuthConfig
 	KubeContext   string // Kubernetes context name
@@ -50,6 +51,9 @@ func NewRuntime(cfg RuntimeConfig, logger *zap.Logger) (Runtime, error) {
 		dir := cfg.ComposeDir
 		if dir == "" {
 			return nil, fmt.Errorf("compose_dir is required for compose runtime")
+		}
+		if normalizeRuntimeExecutionMode(cfg.ExecutionMode) != ExecutionModeCLI {
+			return nil, fmt.Errorf("compose runtime requires execution_mode %q because Compose control uses explicit CLI compatibility mode", ExecutionModeCLI)
 		}
 		endpoint := cfg.Endpoint
 		if strings.TrimSpace(endpoint.DockerHost) == "" {
@@ -107,6 +111,7 @@ func RuntimeConfigFromWorkerTarget(target *domain.WorkerRuntimeTarget, cfg confi
 	runtimeCfg := RuntimeConfig{
 		Type:          string(rt),
 		ComposeDir:    strings.TrimSpace(target.ComposeDir),
+		ExecutionMode: strings.TrimSpace(target.ExecutionMode),
 		KubeNamespace: strings.TrimSpace(target.KubeNamespace),
 	}
 
@@ -146,7 +151,21 @@ func RuntimeConfigFromWorkerTarget(target *domain.WorkerRuntimeTarget, cfg confi
 	if runtimeCfg.DockerHost == "" {
 		runtimeCfg.DockerHost = strings.TrimSpace(cfg.DockerHost)
 	}
+	if runtimeCfg.ExecutionMode == "" {
+		runtimeCfg.ExecutionMode = strings.TrimSpace(cfg.ExecutionMode)
+	}
 	return runtimeCfg, nil
+}
+
+func normalizeRuntimeExecutionMode(mode string) RuntimeExecutionMode {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case string(ExecutionModeCLI):
+		return ExecutionModeCLI
+	case string(ExecutionModeEngineAPI):
+		return ExecutionModeEngineAPI
+	default:
+		return ""
+	}
 }
 
 // NewObserver creates a Runtime and returns it as an Observer.

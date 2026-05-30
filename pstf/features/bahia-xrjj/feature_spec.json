@@ -1,0 +1,21 @@
+{
+  "feature_id": "bahia-xrjj",
+  "title": "Introduce Runtime Control Client Seam",
+  "observed_behavior": [
+    "Docker and Podman desired-state apply paths previously executed Engine API helper calls directly from the adapter apply method.",
+    "Compose desired-state apply previously executed docker compose up through the applier's CommandRunner without an explicit execution-mode result field.",
+    "Runtime configuration did not expose execution_mode for runtime targets."
+  ],
+  "intended_behavior": [
+    "Runtime mutation ownership is represented by narrow runtime control clients that report execution mode.",
+    "Docker and Podman desired-state apply use direct Docker-compatible Engine API control clients and report execution_mode=engine_api.",
+    "Compose desired-state apply uses an explicit CLI-backed executor and reports execution_mode=cli.",
+    "Compose CLI compatibility mode is explicit in configuration; factory construction rejects Compose targets without execution_mode=cli.",
+    "Deployment documentation defines execution mode semantics."
+  ],
+  "scope": [
+    "internal/adapters/runtime control seam and desired-state apply metadata",
+    "runtime target configuration plumbing for execution_mode",
+    "deployment documentation and PSTF evidence"
+  ]
+}

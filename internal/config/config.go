@@ -306,6 +306,7 @@ type RuntimeTargetConfig struct {
 	DockerHost    string `koanf:"docker_host"`
 	EndpointRef   string `koanf:"endpoint_ref"`
 	ComposeDir    string `koanf:"compose_dir"`
+	ExecutionMode string `koanf:"execution_mode"`
 	KubeContext   string `koanf:"kube_context"`
 	KubeNamespace string `koanf:"kube_namespace"`
 	KubeConfig    string `koanf:"kube_config"`
@@ -346,6 +347,7 @@ type RuntimeConfig struct {
 	Type          string `koanf:"type"`
 	DockerHost    string `koanf:"docker_host"`
 	ComposeDir    string `koanf:"compose_dir"`
+	ExecutionMode string `koanf:"execution_mode"`
 	KubeContext   string `koanf:"kube_context"`
 	KubeNamespace string `koanf:"kube_namespace"`
 	KubeConfig    string `koanf:"kube_config"`

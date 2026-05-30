@@ -30,12 +30,12 @@ type applyMockState struct {
 	nextContainerID int
 
 	// API call tracking.
-	pullCalls     []string
-	stopCalls     []string
-	removeCalls   []string
-	createCalls   []createCall
-	startCalls    []string
-	connectCalls  []connectCall
+	pullCalls    []string
+	stopCalls    []string
+	removeCalls  []string
+	createCalls  []createCall
+	startCalls   []string
+	connectCalls []connectCall
 
 	// Failure injection.
 	failPull   bool
@@ -330,6 +330,9 @@ func TestApplyDesiredState_NoOp_HashMatch(t *testing.T) {
 	if result.Renderer != "docker" {
 		t.Errorf("renderer = %q, want docker", result.Renderer)
 	}
+	if result.ExecutionMode != ExecutionModeEngineAPI {
+		t.Errorf("execution mode = %q, want %q", result.ExecutionMode, ExecutionModeEngineAPI)
+	}
 	if result.DesiredHash != spec.DesiredHash {
 		t.Errorf("desired_hash = %q, want %q", result.DesiredHash, spec.DesiredHash)
 	}
@@ -509,6 +512,9 @@ func TestApplyDesiredState_MissingContainer_CreatesFresh(t *testing.T) {
 
 	if result.Renderer != "docker" {
 		t.Errorf("renderer = %q, want docker", result.Renderer)
+	}
+	if result.ExecutionMode != ExecutionModeEngineAPI {
+		t.Errorf("execution mode = %q, want %q", result.ExecutionMode, ExecutionModeEngineAPI)
 	}
 	if len(result.ResourceIDs) != 1 {
 		t.Errorf("expected 1 resource ID, got %d", len(result.ResourceIDs))
@@ -1006,13 +1012,13 @@ func TestNormalizePullPolicy(t *testing.T) {
 		specPolicy string
 		want       string
 	}{
-		{"always", "never", "always"},      // request overrides spec
-		{"", "always", "always"},           // spec used when request empty
-		{"", "", "if-not-present"},         // default
-		{"ALWAYS", "", "always"},           // case insensitive
-		{"", "Never", "never"},             // case insensitive
-		{"  always  ", "", "always"},       // trimmed
-		{"garbage", "", "if-not-present"},  // unknown → default
+		{"always", "never", "always"},     // request overrides spec
+		{"", "always", "always"},          // spec used when request empty
+		{"", "", "if-not-present"},        // default
+		{"ALWAYS", "", "always"},          // case insensitive
+		{"", "Never", "never"},            // case insensitive
+		{"  always  ", "", "always"},      // trimmed
+		{"garbage", "", "if-not-present"}, // unknown → default
 	}
 	for _, tt := range tests {
 		t.Run(fmt.Sprintf("req=%q_spec=%q", tt.reqPolicy, tt.specPolicy), func(t *testing.T) {

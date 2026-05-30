@@ -190,6 +190,7 @@ type WorkerRuntimeTarget struct {
 	Type          RuntimeType `json:"type,omitempty"`
 	EndpointRef   string      `json:"endpoint_ref,omitempty"`
 	ComposeDir    string      `json:"compose_dir,omitempty"`
+	ExecutionMode string      `json:"execution_mode,omitempty"`
 	KubeNamespace string      `json:"kube_namespace,omitempty"`
 	PublicBaseURL string      `json:"public_base_url,omitempty"`
 }

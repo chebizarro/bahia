@@ -19,8 +19,8 @@ type RuntimeResolver interface {
 // ConfigRuntimeResolver resolves runtime targets from global config plus
 // environment-scoped overrides and caches runtime instances per resolved target.
 type ConfigRuntimeResolver struct {
-	cfg    config.RuntimeConfig
-	logger *zap.Logger
+	cfg          config.RuntimeConfig
+	logger       *zap.Logger
 	registryAuth *RegistryAuthConfig
 
 	mu    sync.Mutex
@@ -74,6 +74,7 @@ func (r *ConfigRuntimeResolver) Resolve(service *domain.Service, env *domain.Env
 		Type:          target.Type,
 		DockerHost:    target.DockerHost,
 		ComposeDir:    target.ComposeDir,
+		ExecutionMode: target.ExecutionMode,
 		Endpoint:      target.ResolvedEndpoint,
 		RegistryAuth:  r.registryAuth,
 		KubeContext:   target.KubeContext,
@@ -93,6 +94,7 @@ func (r *ConfigRuntimeResolver) resolveTarget(env *domain.Environment) (config.R
 		DockerHost:    r.cfg.DockerHost,
 		EndpointRef:   "",
 		ComposeDir:    r.cfg.ComposeDir,
+		ExecutionMode: r.cfg.ExecutionMode,
 		KubeContext:   r.cfg.KubeContext,
 		KubeNamespace: r.cfg.KubeNamespace,
 		KubeConfig:    r.cfg.KubeConfig,
@@ -135,6 +137,9 @@ func overlayTarget(base, override config.RuntimeTargetConfig) config.RuntimeTarg
 	if override.ComposeDir != "" {
 		base.ComposeDir = override.ComposeDir
 	}
+	if override.ExecutionMode != "" {
+		base.ExecutionMode = override.ExecutionMode
+	}
 	if override.KubeContext != "" {
 		base.KubeContext = override.KubeContext
 	}
@@ -164,6 +169,8 @@ func overlayRuntimeConfig(base config.RuntimeTargetConfig, values map[string]any
 			base.EndpointRef = value
 		case "compose_dir":
 			base.ComposeDir = value
+		case "execution_mode":
+			base.ExecutionMode = value
 		case "kube_context":
 			base.KubeContext = value
 		case "kube_namespace":
@@ -221,6 +228,7 @@ func runtimeCacheKey(target config.RuntimeTargetConfig) string {
 		target.ResolvedEndpoint.ClientKeyFile,
 		fmt.Sprintf("%t", target.ResolvedEndpoint.InsecureSkipVerify),
 		target.ComposeDir,
+		target.ExecutionMode,
 		target.KubeContext,
 		target.KubeNamespace,
 		target.KubeConfig,

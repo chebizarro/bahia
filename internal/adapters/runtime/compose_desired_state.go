@@ -31,6 +31,7 @@ type ComposeDesiredStateApplier struct {
 	renderer *ComposeRenderer
 	staging  *ComposeStagingManager
 	runner   CommandRunner
+	executor ComposeExecutor
 	logger   *zap.Logger
 }
 
@@ -38,11 +39,13 @@ type ComposeDesiredStateApplier struct {
 // Compose runtime. It uses the production command runner for staging
 // validation and Compose CLI execution.
 func NewComposeDesiredStateApplier(rt *ComposeRuntime, logger *zap.Logger) *ComposeDesiredStateApplier {
+	runner := &execCommandRunner{}
 	return &ComposeDesiredStateApplier{
 		runtime:  rt,
 		renderer: NewComposeRenderer(),
 		staging:  NewComposeStagingManager(logger),
-		runner:   &execCommandRunner{},
+		runner:   runner,
+		executor: NewCLIComposeExecutor(rt, runner, logger),
 		logger:   logger,
 	}
 }
@@ -55,6 +58,7 @@ func NewComposeDesiredStateApplierWithRunner(rt *ComposeRuntime, runner CommandR
 		renderer: NewComposeRenderer(),
 		staging:  NewComposeStagingManagerWithRunner(logger, runner),
 		runner:   runner,
+		executor: NewCLIComposeExecutor(rt, runner, logger),
 		logger:   logger,
 	}
 }
@@ -87,6 +91,7 @@ func (a *ComposeDesiredStateApplier) ApplyDesiredState(ctx context.Context, req 
 	}
 
 	composeDir := a.runtime.projectDir
+	executionMode := a.executor.ExecutionMode()
 
 	// Step 1: Validate ownership.
 	if err := a.runtime.ValidateOwnership(ComposeOwnershipConfig{}); err != nil {
@@ -125,6 +130,7 @@ func (a *ComposeDesiredStateApplier) ApplyDesiredState(ctx context.Context, req 
 
 		return &DesiredStateApplyResult{
 			Renderer:            "compose",
+			ExecutionMode:       executionMode,
 			DesiredHash:         req.TargetService.DesiredHash,
 			EnvironmentRevision: req.EnvironmentPlan.RevisionHash,
 			ResourceNames:       serviceKeys,
@@ -156,6 +162,7 @@ func (a *ComposeDesiredStateApplier) ApplyDesiredState(ctx context.Context, req 
 
 	return &DesiredStateApplyResult{
 		Renderer:            "compose",
+		ExecutionMode:       executionMode,
 		DesiredHash:         req.TargetService.DesiredHash,
 		EnvironmentRevision: req.EnvironmentPlan.RevisionHash,
 		ResourceNames:       serviceKeys,
@@ -172,24 +179,9 @@ func (a *ComposeDesiredStateApplier) ApplyDesiredState(ctx context.Context, req 
 // desired-state path — no service-scoped up, no --force-recreate, no
 // <SERVICE>_IMAGE env overrides.
 func (a *ComposeDesiredStateApplier) composeUp(ctx context.Context, composeDir string, pullPolicy string) error {
-	args := a.runtime.composeArgs("up", "-d", "--remove-orphans")
-
-	// Add pull policy flag if specified.
-	pullPolicy = normalizeComposePullPolicy(pullPolicy)
-	if pullPolicy != "" {
-		args = append(args, "--pull", pullPolicy)
-	}
-
-	a.logger.Info("compose desired-state apply: running up",
-		zap.String("compose_dir", composeDir),
-		zap.Strings("args", args),
-		zap.String("pull_policy", pullPolicy),
-	)
-
 	// Run without any <SERVICE>_IMAGE env overrides — the rendered
 	// docker-compose.yml is the sole source of truth.
-	env := a.runtime.commandEnv(nil)
-	stdout, stderr, err := a.runner.RunCommand(ctx, args[0], args[1:], composeDir, env)
+	stdout, stderr, err := a.executor.Up(ctx, composeDir, pullPolicy)
 	if err != nil {
 		detail := strings.TrimSpace(stderr)
 		if detail == "" {
