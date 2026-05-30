@@ -1,0 +1,161 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openagentsinc.github.io/bahia/schemas/deployment_unit.json",
+  "title": "Bahia Deployment Unit",
+  "description": "Contract for domain.DeploymentUnit and API deployment unit request payloads.",
+  "$defs": {
+    "uuid": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "dateTime": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "runtimeType": {
+      "type": "string",
+      "enum": [
+        "docker",
+        "compose",
+        "kubernetes",
+        "podman"
+      ]
+    },
+    "reconcileMode": {
+      "type": "string",
+      "enum": [
+        "observe_only",
+        "auto_apply",
+        "approval_required",
+        "disabled"
+      ]
+    },
+    "ownershipMode": {
+      "type": "string",
+      "enum": [
+        "bahia_managed",
+        "adopted",
+        "external"
+      ]
+    },
+    "stringMap": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "deploymentUnitRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "key"
+      ],
+      "properties": {
+        "key": {
+          "type": "string",
+          "minLength": 1
+        },
+        "display_name": {
+          "type": "string"
+        },
+        "runtime_type": {
+          "$ref": "#/$defs/runtimeType"
+        },
+        "endpoint_ref": {
+          "type": "string"
+        },
+        "compose_dir": {
+          "type": "string"
+        },
+        "namespace": {
+          "type": "string"
+        },
+        "network_profile": {
+          "$ref": "#/$defs/stringMap"
+        },
+        "ownership_mode": {
+          "$ref": "#/$defs/ownershipMode"
+        },
+        "reconcile_mode": {
+          "$ref": "#/$defs/reconcileMode"
+        },
+        "runtime_config": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      }
+    },
+    "persistedDeploymentUnit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "environment_id",
+        "key",
+        "runtime_type",
+        "reconcile_mode",
+        "ownership_mode",
+        "implicit",
+        "created_at",
+        "updated_at"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "environment_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "key": {
+          "type": "string",
+          "minLength": 1
+        },
+        "display_name": {
+          "type": "string"
+        },
+        "runtime_type": {
+          "$ref": "#/$defs/runtimeType"
+        },
+        "endpoint_ref": {
+          "type": "string"
+        },
+        "compose_dir": {
+          "type": "string"
+        },
+        "namespace": {
+          "type": "string"
+        },
+        "network_profile": {
+          "$ref": "#/$defs/stringMap"
+        },
+        "reconcile_mode": {
+          "$ref": "#/$defs/reconcileMode"
+        },
+        "ownership_mode": {
+          "$ref": "#/$defs/ownershipMode"
+        },
+        "runtime_config": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "implicit": {
+          "type": "boolean"
+        },
+        "created_at": {
+          "$ref": "#/$defs/dateTime"
+        },
+        "updated_at": {
+          "$ref": "#/$defs/dateTime"
+        }
+      }
+    }
+  },
+  "oneOf": [
+    {
+      "$ref": "#/$defs/persistedDeploymentUnit"
+    },
+    {
+      "$ref": "#/$defs/deploymentUnitRequest"
+    }
+  ]
+}

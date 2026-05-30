@@ -1,0 +1,35 @@
+{
+  "feature_id": "bahia-hxpe",
+  "tests": [
+    {
+      "criterion_id": "AC1",
+      "command": "python3 -m json.tool schemas/desired_state.json",
+      "evidence": "valid JSON schema document for desired-state payloads"
+    },
+    {
+      "criterion_id": "AC2",
+      "command": "python3 -m json.tool schemas/deployment_unit.json",
+      "evidence": "valid JSON schema document for deployment-unit payloads"
+    },
+    {
+      "criterion_id": "AC3",
+      "command": "python3 -m json.tool schemas/command_receipt.json",
+      "evidence": "valid JSON schema document for command receipt payloads"
+    },
+    {
+      "criterion_id": "AC4",
+      "command": "python3 -m json.tool schemas/reconcile_policy.json",
+      "evidence": "valid JSON schema document for reconcile policy/state payloads"
+    },
+    {
+      "criterion_id": "AC5",
+      "command": "python3 -m json.tool pstf/features/bahia-hxpe/maturity_slices/*.json",
+      "evidence": "all maturity-slice PSTF bundles are valid JSON"
+    },
+    {
+      "criterion_id": "AC6",
+      "command": "git diff --name-only -- schemas pstf/features/bahia-hxpe",
+      "evidence": "task changes are limited to schema and PSTF evidence artifacts"
+    }
+  ]
+}

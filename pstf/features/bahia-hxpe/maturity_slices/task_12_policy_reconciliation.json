@@ -1,0 +1,73 @@
+{
+  "feature_id": "bahia-dskm",
+  "maturity_slice": "Policy-Driven Reconciliation",
+  "acceptance_criteria": [
+    {
+      "id": "bahia-dskm-AC1",
+      "statement": "AC1 Auto-remediation uses shared environment apply lock."
+    },
+    {
+      "id": "bahia-dskm-AC2",
+      "statement": "AC2 auto_apply invokes the desired-state deploy helper."
+    },
+    {
+      "id": "bahia-dskm-AC3",
+      "statement": "AC3 approval_required marks remediation_needed and waits for authorized remediation."
+    },
+    {
+      "id": "bahia-dskm-AC4",
+      "statement": "AC4 Failure metadata and backoff are stored."
+    },
+    {
+      "id": "bahia-dskm-AC5",
+      "statement": "AC5 No fake external control-plane events are synthesized."
+    }
+  ],
+  "rollout_gates": [
+    {
+      "id": "bahia-dskm-G1",
+      "gate": "Observe_only remains the default rollout mode."
+    },
+    {
+      "id": "bahia-dskm-G2",
+      "gate": "Auto_apply enabled only after lock-contention and failure metadata tests pass."
+    }
+  ],
+  "metrics": [
+    {
+      "name": "auto_remediation_attempt_count",
+      "type": "counter_or_gauge",
+      "purpose": "rollout and regression evidence"
+    },
+    {
+      "name": "auto_remediation_success_count",
+      "type": "counter_or_gauge",
+      "purpose": "rollout and regression evidence"
+    },
+    {
+      "name": "reconcile_backoff_count",
+      "type": "counter_or_gauge",
+      "purpose": "rollout and regression evidence"
+    },
+    {
+      "name": "remediation_needed_state_count",
+      "type": "counter_or_gauge",
+      "purpose": "rollout and regression evidence"
+    }
+  ],
+  "rollback_criteria": [
+    {
+      "id": "bahia-dskm-R1",
+      "criterion": "Change reconcile_mode to observe_only or disabled."
+    },
+    {
+      "id": "bahia-dskm-R2",
+      "criterion": "Clear scheduled auto-remediation workers after lock contention drains."
+    }
+  ],
+  "evidence_refs": [
+    "pstf/features/bahia-dskm/acceptance_criteria.json",
+    "pstf/features/bahia-dskm/test_matrix.json",
+    "pstf/features/bahia-dskm/verification_report.md"
+  ]
+}

@@ -1,0 +1,29 @@
+{
+  "feature_id": "bahia-hxpe",
+  "criteria": [
+    {
+      "id": "AC1",
+      "statement": "schemas/desired_state.json describes desired service, unit-plan, and environment-plan payloads with schema_version 2, UUID fields, hashes, safe secret references, and runtime extensions."
+    },
+    {
+      "id": "AC2",
+      "statement": "schemas/deployment_unit.json describes persisted deployment units and API deployment-unit requests with runtime, ownership, reconcile, targeting, implicit, and timestamp fields."
+    },
+    {
+      "id": "AC3",
+      "statement": "schemas/command_receipt.json describes canonical Nostr command receipt fields including request event identity, kinds, idempotency key, status, relay count, timeout, error, retry hint, and message."
+    },
+    {
+      "id": "AC4",
+      "statement": "schemas/reconcile_policy.json describes environment targeting, deployment-unit reconcile modes, and reconcile state/backoff metadata."
+    },
+    {
+      "id": "AC5",
+      "statement": "PSTF maturity-slice bundles include acceptance criteria, rollout gates, metrics, rollback criteria, and evidence references for completed maturity dependencies plus Task 14."
+    },
+    {
+      "id": "AC6",
+      "statement": "Schema and PSTF artifacts are valid JSON and do not alter production code paths."
+    }
+  ]
+}

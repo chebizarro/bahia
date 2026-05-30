@@ -1,0 +1,64 @@
+{
+  "feature_id": "bahia-swkz",
+  "maturity_slice": "DeploymentUnit Domain Types and Persistence",
+  "acceptance_criteria": [
+    {
+      "id": "bahia-swkz-AC1",
+      "statement": "AC1 Domain validation preserves environment-scoped unit identity and policy fields."
+    },
+    {
+      "id": "bahia-swkz-AC2",
+      "statement": "AC2 Persistence round-trips explicit units and unit-scoped placement columns."
+    },
+    {
+      "id": "bahia-swkz-AC3",
+      "statement": "AC3 Implicit default unit behavior remains backward compatible."
+    },
+    {
+      "id": "bahia-swkz-AC4",
+      "statement": "AC4 Deployment-unit semantics are documented."
+    }
+  ],
+  "rollout_gates": [
+    {
+      "id": "bahia-swkz-G1",
+      "gate": "No existing single-unit environment loses implicit default behavior."
+    },
+    {
+      "id": "bahia-swkz-G2",
+      "gate": "deployment_units writes validate runtime_type, reconcile_mode, and ownership_mode before rollout."
+    }
+  ],
+  "metrics": [
+    {
+      "name": "deployment_unit_create_error_count",
+      "type": "counter_or_gauge",
+      "purpose": "rollout and regression evidence"
+    },
+    {
+      "name": "implicit_default_unit_resolution_count",
+      "type": "counter_or_gauge",
+      "purpose": "rollout and regression evidence"
+    },
+    {
+      "name": "unit_scoped_state_rows",
+      "type": "counter_or_gauge",
+      "purpose": "rollout and regression evidence"
+    }
+  ],
+  "rollback_criteria": [
+    {
+      "id": "bahia-swkz-R1",
+      "criterion": "Disable explicit unit creation and continue resolving implicit default units."
+    },
+    {
+      "id": "bahia-swkz-R2",
+      "criterion": "Revert deployment-unit migrations only before dependent desired-state/unit data is written."
+    }
+  ],
+  "evidence_refs": [
+    "pstf/features/bahia-swkz/acceptance_criteria.json",
+    "pstf/features/bahia-swkz/test_matrix.json",
+    "pstf/features/bahia-swkz/verification_report.md"
+  ]
+}

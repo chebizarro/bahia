@@ -1,0 +1,60 @@
+{
+  "feature_id": "bahia-xrjj",
+  "maturity_slice": "Runtime Control Client Seam",
+  "acceptance_criteria": [
+    {
+      "id": "bahia-xrjj-AC1",
+      "statement": "AC1 Runtime apply paths use typed control clients rather than direct runtime calls."
+    },
+    {
+      "id": "bahia-xrjj-AC2",
+      "statement": "AC2 Control-client errors are explicit and observable."
+    },
+    {
+      "id": "bahia-xrjj-AC3",
+      "statement": "AC3 Tests inject client responses deterministically."
+    }
+  ],
+  "rollout_gates": [
+    {
+      "id": "bahia-xrjj-G1",
+      "gate": "Docker/Podman/Compose clients report capability checks before use."
+    },
+    {
+      "id": "bahia-xrjj-G2",
+      "gate": "Apply paths surface client errors without silent fallback."
+    }
+  ],
+  "metrics": [
+    {
+      "name": "runtime_client_apply_count",
+      "type": "counter_or_gauge",
+      "purpose": "rollout and regression evidence"
+    },
+    {
+      "name": "runtime_client_error_count",
+      "type": "counter_or_gauge",
+      "purpose": "rollout and regression evidence"
+    },
+    {
+      "name": "capability_check_failure_count",
+      "type": "counter_or_gauge",
+      "purpose": "rollout and regression evidence"
+    }
+  ],
+  "rollback_criteria": [
+    {
+      "id": "bahia-xrjj-R1",
+      "criterion": "Route apply traffic back to the previous verified client implementation."
+    },
+    {
+      "id": "bahia-xrjj-R2",
+      "criterion": "Disable affected runtime type until capability checks pass."
+    }
+  ],
+  "evidence_refs": [
+    "pstf/features/bahia-xrjj/acceptance_criteria.json",
+    "pstf/features/bahia-xrjj/test_matrix.json",
+    "pstf/features/bahia-xrjj/verification_report.md"
+  ]
+}

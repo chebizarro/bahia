@@ -1,0 +1,60 @@
+{
+  "feature_id": "bahia-pmy2",
+  "maturity_slice": "Adoption Identity Persistence and OrgID Migration",
+  "acceptance_criteria": [
+    {
+      "id": "bahia-pmy2-AC1",
+      "statement": "AC1 Adopted runtime identity fingerprints persist per org/service/environment."
+    },
+    {
+      "id": "bahia-pmy2-AC2",
+      "statement": "AC2 OrgID migration preserves tenant boundaries."
+    },
+    {
+      "id": "bahia-pmy2-AC3",
+      "statement": "AC3 Adoption metadata is available to desired-state planning."
+    }
+  ],
+  "rollout_gates": [
+    {
+      "id": "bahia-pmy2-G1",
+      "gate": "Fingerprint uniqueness checks pass for migrated rows."
+    },
+    {
+      "id": "bahia-pmy2-G2",
+      "gate": "Adoption import does not cross org boundaries."
+    }
+  ],
+  "metrics": [
+    {
+      "name": "adoption_identity_count",
+      "type": "counter_or_gauge",
+      "purpose": "rollout and regression evidence"
+    },
+    {
+      "name": "fingerprint_conflict_count",
+      "type": "counter_or_gauge",
+      "purpose": "rollout and regression evidence"
+    },
+    {
+      "name": "org_migration_error_count",
+      "type": "counter_or_gauge",
+      "purpose": "rollout and regression evidence"
+    }
+  ],
+  "rollback_criteria": [
+    {
+      "id": "bahia-pmy2-R1",
+      "criterion": "Stop adoption import endpoints."
+    },
+    {
+      "id": "bahia-pmy2-R2",
+      "criterion": "Restore from pre-migration backup if org-boundary checks fail."
+    }
+  ],
+  "evidence_refs": [
+    "pstf/features/bahia-pmy2/acceptance_criteria.json",
+    "pstf/features/bahia-pmy2/test_matrix.json",
+    "pstf/features/bahia-pmy2/verification_report.md"
+  ]
+}

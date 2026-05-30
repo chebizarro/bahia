@@ -1,0 +1,159 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openagentsinc.github.io/bahia/schemas/reconcile_policy.json",
+  "title": "Bahia Reconcile Policy Payload",
+  "description": "Machine-readable reconcile policy contract for environment targeting, deployment units, and reconcile state metadata.",
+  "$defs": {
+    "uuid": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "dateTime": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "reconcileMode": {
+      "type": "string",
+      "enum": [
+        "observe_only",
+        "auto_apply",
+        "approval_required",
+        "disabled"
+      ]
+    },
+    "secretScopeMode": {
+      "type": "string",
+      "enum": [
+        "service",
+        "environment",
+        "unit"
+      ]
+    },
+    "driftStatus": {
+      "type": "string",
+      "enum": [
+        "unknown",
+        "in_sync",
+        "drifted",
+        "deploying",
+        "remediation_needed"
+      ]
+    },
+    "stringMap": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "environmentTargeting": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "default_unit_key": {
+          "type": "string",
+          "minLength": 1
+        },
+        "failure_domain_labels": {
+          "$ref": "#/$defs/stringMap"
+        },
+        "secret_scope_mode": {
+          "$ref": "#/$defs/secretScopeMode"
+        },
+        "default_reconcile_mode": {
+          "$ref": "#/$defs/reconcileMode"
+        }
+      }
+    },
+    "reconcilePolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode"
+      ],
+      "properties": {
+        "mode": {
+          "$ref": "#/$defs/reconcileMode"
+        },
+        "scope": {
+          "type": "string",
+          "enum": [
+            "environment",
+            "deployment_unit"
+          ]
+        },
+        "environment_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "deployment_unit_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "deployment_unit_key": {
+          "type": "string",
+          "minLength": 1
+        },
+        "failure_domain_labels": {
+          "$ref": "#/$defs/stringMap"
+        },
+        "secret_scope_mode": {
+          "$ref": "#/$defs/secretScopeMode"
+        }
+      }
+    },
+    "reconcileState": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "service_id",
+        "environment_id",
+        "drift_status",
+        "updated_at"
+      ],
+      "properties": {
+        "service_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "environment_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "deployment_unit_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "desired_hash": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "drift_status": {
+          "$ref": "#/$defs/driftStatus"
+        },
+        "reconcile_failure_metadata": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "reconcile_backoff_until": {
+          "$ref": "#/$defs/dateTime"
+        },
+        "reconcile_consecutive_failures": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "last_reconciled_at": {
+          "$ref": "#/$defs/dateTime"
+        },
+        "updated_at": {
+          "$ref": "#/$defs/dateTime"
+        }
+      }
+    }
+  },
+  "oneOf": [
+    {
+      "$ref": "#/$defs/environmentTargeting"
+    },
+    {
+      "$ref": "#/$defs/reconcilePolicy"
+    },
+    {
+      "$ref": "#/$defs/reconcileState"
+    }
+  ]
+}

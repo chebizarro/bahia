@@ -1,0 +1,68 @@
+{
+  "feature_id": "bahia-hxpe",
+  "maturity_slice": "Machine-Readable Schemas and PSTF Bundles",
+  "acceptance_criteria": [
+    {
+      "id": "bahia-hxpe-AC1",
+      "statement": "AC1 Desired-state schema exists."
+    },
+    {
+      "id": "bahia-hxpe-AC2",
+      "statement": "AC2 Deployment-unit schema exists."
+    },
+    {
+      "id": "bahia-hxpe-AC3",
+      "statement": "AC3 Command-receipt schema exists."
+    },
+    {
+      "id": "bahia-hxpe-AC4",
+      "statement": "AC4 Reconcile-policy schema exists."
+    },
+    {
+      "id": "bahia-hxpe-AC5",
+      "statement": "AC5 Every maturity slice has PSTF acceptance/gate/metric/rollback evidence."
+    }
+  ],
+  "rollout_gates": [
+    {
+      "id": "bahia-hxpe-G1",
+      "gate": "All schema and bundle JSON files parse successfully."
+    },
+    {
+      "id": "bahia-hxpe-G2",
+      "gate": "No production code files are changed by this task."
+    }
+  ],
+  "metrics": [
+    {
+      "name": "schema_artifact_count",
+      "type": "counter_or_gauge",
+      "purpose": "rollout and regression evidence"
+    },
+    {
+      "name": "pstf_slice_bundle_count",
+      "type": "counter_or_gauge",
+      "purpose": "rollout and regression evidence"
+    },
+    {
+      "name": "json_validation_failure_count",
+      "type": "counter_or_gauge",
+      "purpose": "rollout and regression evidence"
+    }
+  ],
+  "rollback_criteria": [
+    {
+      "id": "bahia-hxpe-R1",
+      "criterion": "Remove invalid schema artifact from release packaging."
+    },
+    {
+      "id": "bahia-hxpe-R2",
+      "criterion": "Keep runtime rollout blocked until corrected PSTF evidence validates."
+    }
+  ],
+  "evidence_refs": [
+    "pstf/features/bahia-hxpe/acceptance_criteria.json",
+    "pstf/features/bahia-hxpe/test_matrix.json",
+    "pstf/features/bahia-hxpe/verification_report.md"
+  ]
+}

@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openagentsinc.github.io/bahia/schemas/command_receipt.json",
+  "title": "Bahia Command Receipt",
+  "description": "Canonical control-plane write receipt returned after publishing a Nostr command event.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "request_event_id",
+    "request_kind",
+    "idempotency_key",
+    "status",
+    "published_relays"
+  ],
+  "properties": {
+    "request_event_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "request_pubkey": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "request_kind": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "status_kind": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "result_kind": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "read_model_kinds": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "integer",
+        "minimum": 0
+      }
+    },
+    "idempotency_key": {
+      "type": "string",
+      "minLength": 1
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "accepted",
+        "published",
+        "pending",
+        "succeeded",
+        "failed",
+        "rejected",
+        "timeout",
+        "partial_failure",
+        "duplicate"
+      ]
+    },
+    "error": {
+      "type": "string"
+    },
+    "retry_hint": {
+      "type": "string"
+    },
+    "published_relays": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "timeout_seconds": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "message": {
+      "type": "string"
+    }
+  }
+}

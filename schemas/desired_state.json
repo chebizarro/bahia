@@ -1,0 +1,368 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openagentsinc.github.io/bahia/schemas/desired_state.json",
+  "title": "Bahia Desired Runtime State",
+  "description": "Machine-readable contract for internal/domain.DesiredServiceSpec, DesiredEnvironmentPlan, and DesiredDeploymentUnitPlan JSON payloads.",
+  "$defs": {
+    "uuid": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "stringMap": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "secretRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "env_var",
+        "name",
+        "secret_id",
+        "redacted_value"
+      ],
+      "properties": {
+        "env_var": {
+          "type": "string",
+          "minLength": 1
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "secret_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "redacted_value": {
+          "type": "string",
+          "pattern": "^REDACTED\\(.+\\)$"
+        }
+      }
+    },
+    "healthcheck": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "test"
+      ],
+      "properties": {
+        "test": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string"
+          }
+        },
+        "interval": {
+          "type": "string",
+          "minLength": 1
+        },
+        "timeout": {
+          "type": "string",
+          "minLength": 1
+        },
+        "retries": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "start_period": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "composeDependency": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "condition": {
+          "type": "string",
+          "enum": [
+            "service_started",
+            "service_healthy",
+            "service_completed_successfully"
+          ]
+        }
+      }
+    },
+    "composeExtension": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "depends_on": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/composeDependency"
+          }
+        },
+        "healthcheck_override": {
+          "$ref": "#/$defs/healthcheck"
+        },
+        "env_file": {
+          "type": "string",
+          "minLength": 1
+        },
+        "project_name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "networks": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        },
+        "volume_declarations": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        }
+      }
+    },
+    "dockerExtension": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "host_config": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "networking_config": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "volume_options": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "healthcheck": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      }
+    },
+    "desiredServiceSpec": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "service_id",
+        "environment_id",
+        "deployment_unit_key",
+        "artifact_id",
+        "stable_service_key",
+        "image_ref",
+        "desired_hash"
+      ],
+      "properties": {
+        "schema_version": {
+          "type": "string",
+          "const": "2"
+        },
+        "service_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "environment_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "deployment_unit_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "deployment_unit_key": {
+          "type": "string",
+          "minLength": 1
+        },
+        "unit_runtime_type": {
+          "type": "string",
+          "enum": [
+            "docker",
+            "compose",
+            "kubernetes",
+            "podman"
+          ]
+        },
+        "artifact_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "stable_service_key": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[a-z0-9][a-z0-9_-]*$"
+        },
+        "image_ref": {
+          "type": "string",
+          "minLength": 1
+        },
+        "command": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "entrypoint": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "work_dir": {
+          "type": "string"
+        },
+        "env": {
+          "$ref": "#/$defs/stringMap"
+        },
+        "secret_refs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/secretRef"
+          },
+          "uniqueItems": true
+        },
+        "ports": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "volumes": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "labels": {
+          "$ref": "#/$defs/stringMap"
+        },
+        "healthcheck": {
+          "$ref": "#/$defs/healthcheck"
+        },
+        "depends_on": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "network_mode": {
+          "type": "string"
+        },
+        "restart_policy": {
+          "type": "string"
+        },
+        "pull_policy": {
+          "type": "string"
+        },
+        "desired_hash": {
+          "$ref": "#/$defs/sha256"
+        },
+        "compose_extension": {
+          "$ref": "#/$defs/composeExtension"
+        },
+        "docker_extension": {
+          "$ref": "#/$defs/dockerExtension"
+        },
+        "kubernetes_extension": {
+          "type": "object",
+          "maxProperties": 0
+        },
+        "podman_extension": {
+          "type": "object",
+          "maxProperties": 0
+        }
+      },
+      "not": {
+        "required": [
+          "compose_extension",
+          "docker_extension"
+        ]
+      }
+    },
+    "deploymentUnitPlan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "deployment_unit_key",
+        "revision_hash",
+        "services"
+      ],
+      "properties": {
+        "deployment_unit_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "deployment_unit_key": {
+          "type": "string",
+          "minLength": 1
+        },
+        "runtime_type": {
+          "type": "string",
+          "enum": [
+            "docker",
+            "compose",
+            "kubernetes",
+            "podman"
+          ]
+        },
+        "revision_hash": {
+          "$ref": "#/$defs/sha256"
+        },
+        "services": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/desiredServiceSpec"
+          }
+        }
+      }
+    }
+  },
+  "oneOf": [
+    {
+      "$ref": "#/$defs/desiredServiceSpec"
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "environment_id",
+        "revision_hash",
+        "services",
+        "unit_plans"
+      ],
+      "properties": {
+        "environment_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "revision_hash": {
+          "$ref": "#/$defs/sha256"
+        },
+        "services": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/desiredServiceSpec"
+          }
+        },
+        "unit_plans": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/deploymentUnitPlan"
+          }
+        }
+      }
+    },
+    {
+      "$ref": "#/$defs/deploymentUnitPlan"
+    }
+  ]
+}

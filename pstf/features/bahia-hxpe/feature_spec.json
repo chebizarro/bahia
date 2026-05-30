@@ -1,0 +1,23 @@
+{
+  "feature_id": "bahia-hxpe",
+  "title": "Machine-Readable Schemas and PSTF Bundles",
+  "intent": "Publish machine-readable JSON schemas for Bahia desired-state, deployment-unit, command-receipt, and reconcile-policy payloads, and package PSTF maturity-slice acceptance evidence with rollout gates, metrics, and rollback criteria.",
+  "observed_repository_state": [
+    "internal/domain/runtime_desired_state.go defines DesiredServiceSpec, DesiredEnvironmentPlan, DesiredDeploymentUnitPlan, and schema version 2.",
+    "internal/domain/deployment_unit.go defines DeploymentUnit, ReconcileMode, OwnershipMode, runtime targeting normalization, and validation.",
+    "internal/api/dto/command_receipt.go defines the canonical command receipt DTO returned by Nostr-backed control-plane writes.",
+    "internal/domain/models.go stores desired runtime state, drift status, reconcile failure metadata, backoff, and last reconciliation timestamps."
+  ],
+  "scope": [
+    "schemas/desired_state.json",
+    "schemas/deployment_unit.json",
+    "schemas/command_receipt.json",
+    "schemas/reconcile_policy.json",
+    "pstf/features/bahia-hxpe/maturity_slices/*.json"
+  ],
+  "out_of_scope": [
+    "runtime behavior changes",
+    "new control-plane write handlers",
+    "new Nostr event kinds"
+  ]
+}

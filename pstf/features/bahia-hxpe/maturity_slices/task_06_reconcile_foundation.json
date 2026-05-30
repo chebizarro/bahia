@@ -1,0 +1,60 @@
+{
+  "feature_id": "bahia-jmea",
+  "maturity_slice": "Reconcile Policy Fields and Observation Scheduler",
+  "acceptance_criteria": [
+    {
+      "id": "bahia-jmea-AC1",
+      "statement": "AC1 Reconcile modes persist on environments and deployment units."
+    },
+    {
+      "id": "bahia-jmea-AC2",
+      "statement": "AC2 Disabled policy prevents scheduled observations."
+    },
+    {
+      "id": "bahia-jmea-AC3",
+      "statement": "AC3 Non-disabled policies observe and update drift without remediation."
+    }
+  ],
+  "rollout_gates": [
+    {
+      "id": "bahia-jmea-G1",
+      "gate": "Observation scheduler selects only due rows."
+    },
+    {
+      "id": "bahia-jmea-G2",
+      "gate": "Disabled-mode environments remain quiet during rollout."
+    }
+  ],
+  "metrics": [
+    {
+      "name": "scheduled_observation_count",
+      "type": "counter_or_gauge",
+      "purpose": "rollout and regression evidence"
+    },
+    {
+      "name": "disabled_policy_skip_count",
+      "type": "counter_or_gauge",
+      "purpose": "rollout and regression evidence"
+    },
+    {
+      "name": "drift_state_update_count",
+      "type": "counter_or_gauge",
+      "purpose": "rollout and regression evidence"
+    }
+  ],
+  "rollback_criteria": [
+    {
+      "id": "bahia-jmea-R1",
+      "criterion": "Set default_reconcile_mode to disabled for affected environments."
+    },
+    {
+      "id": "bahia-jmea-R2",
+      "criterion": "Stop observation scheduler if policy selection metrics diverge."
+    }
+  ],
+  "evidence_refs": [
+    "pstf/features/bahia-jmea/acceptance_criteria.json",
+    "pstf/features/bahia-jmea/test_matrix.json",
+    "pstf/features/bahia-jmea/verification_report.md"
+  ]
+}

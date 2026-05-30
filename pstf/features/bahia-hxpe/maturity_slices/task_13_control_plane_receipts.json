@@ -1,0 +1,77 @@
+{
+  "feature_id": "bahia-fplp",
+  "maturity_slice": "Unified Control-Plane Write Interfaces",
+  "acceptance_criteria": [
+    {
+      "id": "bahia-fplp-AC1",
+      "statement": "AC1 CommandReceipt exposes event ID, kinds, and idempotency key."
+    },
+    {
+      "id": "bahia-fplp-AC2",
+      "statement": "AC2 Publish-and-wait distinguishes relay acceptance states."
+    },
+    {
+      "id": "bahia-fplp-AC3",
+      "statement": "AC3 Idempotency uses Nostr d tags and replay lookup."
+    },
+    {
+      "id": "bahia-fplp-AC4",
+      "statement": "AC4 REST long-running writes return canonical receipt shape where migrated."
+    },
+    {
+      "id": "bahia-fplp-AC5",
+      "statement": "AC5 MCP deploy/rollback use command publisher when configured."
+    },
+    {
+      "id": "bahia-fplp-AC6",
+      "statement": "AC6 CLI requests generate deterministic idempotency keys."
+    }
+  ],
+  "rollout_gates": [
+    {
+      "id": "bahia-fplp-G1",
+      "gate": "Receipt-producing routes preserve documented synchronous compatibility exceptions."
+    },
+    {
+      "id": "bahia-fplp-G2",
+      "gate": "No command is considered accepted without relay OK acceptance."
+    }
+  ],
+  "metrics": [
+    {
+      "name": "command_receipt_count",
+      "type": "counter_or_gauge",
+      "purpose": "rollout and regression evidence"
+    },
+    {
+      "name": "relay_ok_rejection_count",
+      "type": "counter_or_gauge",
+      "purpose": "rollout and regression evidence"
+    },
+    {
+      "name": "idempotency_replay_count",
+      "type": "counter_or_gauge",
+      "purpose": "rollout and regression evidence"
+    },
+    {
+      "name": "partial_publish_failure_count",
+      "type": "counter_or_gauge",
+      "purpose": "rollout and regression evidence"
+    }
+  ],
+  "rollback_criteria": [
+    {
+      "id": "bahia-fplp-R1",
+      "criterion": "Return affected route to synchronous compatibility mode."
+    },
+    {
+      "id": "bahia-fplp-R2",
+      "criterion": "Disable publisher-backed write path if relay OK failures spike."
+    }
+  ],
+  "evidence_refs": [
+    "pstf/features/bahia-fplp/acceptance_criteria.json",
+    "pstf/features/bahia-fplp/test_matrix.json",
+    "pstf/features/bahia-fplp/verification_report.md"
+  ]
+}
