@@ -1,0 +1,11 @@
+{
+  "feature_id": "bahia-g486",
+  "title": "Task 5: Deepen Environment Targeting and Placement",
+  "intent": "Add typed environment and deployment-unit targeting while preserving legacy runtime_config readers.",
+  "scope": [
+    "Environment targeting owns default unit key, failure-domain labels, secret scope mode, and default reconcile mode.",
+    "Deployment units own runtime type, endpoint ref, Compose dir, namespace, network profile, ownership mode, and reconcile override.",
+    "Service/environment placement is carried by deployment_unit_id where placement rows already support it.",
+    "Nostr projections expose additive unit tags for 31961, 31963, 31967, and 31968."
+  ]
+}

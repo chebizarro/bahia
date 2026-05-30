@@ -147,15 +147,19 @@ Resolution order is: legacy flat `runtime.*`, then `runtime.default.*`, then `ru
 
 Docker API access accepts individual CA/client certificate file paths. Docker Compose uses the Docker CLI `DOCKER_CERT_PATH` convention, so configured Compose endpoint certificates must live in one directory with Docker's standard names (`ca.pem`, `cert.pem`, `key.pem`).
 
-## Deployment Units
+## Deployment Units and Targeting
 
-A deployment unit is the runtime ownership boundary inside an environment. Each unit records its environment reference, runtime type (`docker`, `compose`, `kubernetes`, or `podman`), reconcile mode (`observe_only`, `auto_apply`, `approval_required`, or `disabled`), ownership mode (`bahia_managed`, `adopted`, or `external`), and unit-local runtime configuration.
+Environment targeting is typed and additive. Each environment owns a `targeting` object with `default_unit_key`, `failure_domain_labels`, `secret_scope_mode`, and `default_reconcile_mode`. `default_reconcile_mode` accepts `observe_only`, `auto_apply`, `approval_required`, or `disabled`; `secret_scope_mode` accepts `service`, `environment`, or `unit`.
 
-Existing single-runtime environments do not need a persisted unit row. When no explicit `deployment_units` row exists, Bahia resolves an in-memory default unit with key `default` from the environment runtime configuration. The implicit default is used for planning and placement resolution, but its ID remains absent from state, intent, run, and observation rows until an operator creates a real unit boundary.
+A deployment unit is the runtime ownership boundary inside an environment. Each unit records its environment reference, runtime type (`docker`, `compose`, `kubernetes`, or `podman`), endpoint reference, Compose directory, namespace, network profile, reconcile mode override, ownership mode (`bahia_managed`, `adopted`, or `external`), and unit-local runtime configuration.
+
+Existing single-runtime environments do not need a persisted unit row. When no explicit `deployment_units` row exists, Bahia resolves an in-memory default unit from typed environment targeting first, then falls back to legacy `Environment.runtime_config` keys. The implicit default is used for planning and placement resolution, but its ID remains absent from state, intent, run, and observation rows until an operator creates a real unit boundary.
+
+Backward compatibility is read-tolerant and write-forward. Runtime fields moved into typed targeting are read from typed fields first and then from `runtime_config` (`default_unit_key`, `failure_domain_labels`, `secret_scope_mode`, `default_reconcile_mode`, `reconcile_mode`, `type`, `endpoint_ref`, `compose_dir`, `namespace`, `kube_namespace`, and `network_profile`). Environment and unit writes normalize those values into typed targeting columns/JSON so new reads do not depend on raw runtime JSON alone.
 
 Unit persistence is intentionally transition-triggered, not write-triggered. Bahia persists a unit only when an operator explicitly creates one through `POST /environments/{id}/units`, or when the first multi-unit configuration change requires durable unit identities. Deploy, apply, observe, and ordinary environment writes must not materialize the implicit default unit on their own.
 
-The core control-plane tables include nullable `deployment_unit_id` foreign keys on `deployment_intents`, `deployment_runs`, `runtime_observations`, and `environment_service_state`. A `NULL` value means the record belongs to the implicit default unit for the environment.
+The core control-plane tables include nullable `deployment_unit_id` foreign keys on `deployment_intents`, `deployment_runs`, `runtime_observations`, and `environment_service_state`. A `NULL` value means the record belongs to the implicit default unit for the environment. API request DTOs accept additive `deployment_unit_id`, `deployment_units`, `targeting`, and `reconcile_mode` fields. Nostr projections for `31961`, `31963`, `31967`, and `31968` include additive `unit` tags; `NULL` placement is tagged as `default`.
 
 For adoption, prefer endpoint aliases:
 

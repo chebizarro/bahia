@@ -12,8 +12,11 @@ func TestNewImplicitDefaultDeploymentUnitUsesEnvironmentRuntimeConfig(t *testing
 	env := &Environment{
 		ID: envID,
 		RuntimeConfig: map[string]any{
-			"type":        "compose",
-			"compose_dir": "/srv/bahia/compose/prod",
+			"type":                   "compose",
+			"compose_dir":            "/srv/bahia/compose/prod",
+			"endpoint_ref":           "prod-docker",
+			"default_reconcile_mode": "approval_required",
+			"secret_scope_mode":      "unit",
 		},
 	}
 
@@ -24,7 +27,10 @@ func TestNewImplicitDefaultDeploymentUnitUsesEnvironmentRuntimeConfig(t *testing
 	require.Equal(t, envID, unit.EnvironmentID)
 	require.Equal(t, DefaultDeploymentUnitKey, unit.Key)
 	require.Equal(t, RuntimeTypeCompose, unit.RuntimeType)
-	require.Equal(t, ReconcileModeObserveOnly, unit.ReconcileMode)
+	require.Equal(t, "prod-docker", unit.EndpointRef)
+	require.Equal(t, "/srv/bahia/compose/prod", unit.ComposeDir)
+	require.Equal(t, ReconcileModeApprovalRequired, unit.ReconcileMode)
+	require.Equal(t, SecretScopeModeUnit, env.Targeting.SecretScopeMode)
 	require.Equal(t, OwnershipModeBahiaManaged, unit.OwnershipMode)
 	require.Equal(t, "/srv/bahia/compose/prod", unit.RuntimeConfig["compose_dir"])
 }

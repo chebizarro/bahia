@@ -21,20 +21,22 @@ func TestPgDeploymentUnitRepositoryCreateAndGet(t *testing.T) {
 	repo := newPgDeploymentUnitRepositoryWithDB(mock)
 	envID := uuid.New()
 	unitID := uuid.New()
-	runtimeConfig := map[string]any{"compose_dir": "/srv/bahia/compose/prod"}
+	runtimeConfig := map[string]any{"compose_dir": "/srv/bahia/compose/prod", "endpoint_ref": "prod-docker", "network_profile": map[string]any{"zone": "a"}}
+	networkProfile := map[string]string{"zone": "a"}
 	unit := &domain.DeploymentUnit{
-		ID:            unitID,
-		EnvironmentID: envID,
-		Key:           "default",
-		DisplayName:   "Default",
-		RuntimeType:   domain.RuntimeTypeCompose,
-		ReconcileMode: domain.ReconcileModeObserveOnly,
-		OwnershipMode: domain.OwnershipModeBahiaManaged,
-		RuntimeConfig: runtimeConfig,
+		ID:             unitID,
+		EnvironmentID:  envID,
+		Key:            "default",
+		DisplayName:    "Default",
+		RuntimeType:    domain.RuntimeTypeCompose,
+		NetworkProfile: networkProfile,
+		ReconcileMode:  domain.ReconcileModeObserveOnly,
+		OwnershipMode:  domain.OwnershipModeBahiaManaged,
+		RuntimeConfig:  runtimeConfig,
 	}
 
 	mock.ExpectExec("INSERT INTO deployment_units").
-		WithArgs(unitID, envID, "default", "Default", domain.RuntimeTypeCompose, domain.ReconcileModeObserveOnly, domain.OwnershipModeBahiaManaged, pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).
+		WithArgs(unitID, envID, "default", "Default", domain.RuntimeTypeCompose, "prod-docker", "/srv/bahia/compose/prod", "", pgxmock.AnyArg(), domain.ReconcileModeObserveOnly, domain.OwnershipModeBahiaManaged, pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	require.NoError(t, repo.Create(context.Background(), unit))
 	require.False(t, unit.Implicit)
@@ -45,7 +47,7 @@ func TestPgDeploymentUnitRepositoryCreateAndGet(t *testing.T) {
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT " + deploymentUnitColumns + " FROM deployment_units WHERE id = $1")).
 		WithArgs(unitID).
 		WillReturnRows(pgxmock.NewRows(splitColumns(deploymentUnitColumns)).AddRow(
-			unitID, envID, "default", "Default", domain.RuntimeTypeCompose, domain.ReconcileModeObserveOnly,
+			unitID, envID, "default", "Default", domain.RuntimeTypeCompose, "prod-docker", "/srv/bahia/compose/prod", "", []byte(`{"zone":"a"}`), domain.ReconcileModeObserveOnly,
 			domain.OwnershipModeBahiaManaged, configJSON, now, now,
 		))
 
@@ -54,6 +56,9 @@ func TestPgDeploymentUnitRepositoryCreateAndGet(t *testing.T) {
 	require.NotNil(t, got)
 	require.Equal(t, envID, got.EnvironmentID)
 	require.Equal(t, domain.RuntimeTypeCompose, got.RuntimeType)
+	require.Equal(t, "prod-docker", got.EndpointRef)
+	require.Equal(t, "/srv/bahia/compose/prod", got.ComposeDir)
+	require.Equal(t, "a", got.NetworkProfile["zone"])
 	require.Equal(t, "/srv/bahia/compose/prod", got.RuntimeConfig["compose_dir"])
 	require.NoError(t, mock.ExpectationsWereMet())
 }

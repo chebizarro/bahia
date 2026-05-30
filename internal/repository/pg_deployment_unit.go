@@ -11,7 +11,7 @@ import (
 	"github.com/openagentsinc/bahia/internal/domain"
 )
 
-const deploymentUnitColumns = `id, environment_id, unit_key, display_name, runtime_type, reconcile_mode, ownership_mode, runtime_config, created_at, updated_at`
+const deploymentUnitColumns = `id, environment_id, unit_key, display_name, runtime_type, endpoint_ref, compose_dir, namespace, network_profile, reconcile_mode, ownership_mode, runtime_config, created_at, updated_at`
 
 // PgDeploymentUnitRepository is a PostgreSQL implementation for deployment units.
 type PgDeploymentUnitRepository struct {
@@ -30,6 +30,7 @@ func (r *PgDeploymentUnitRepository) Create(ctx context.Context, unit *domain.De
 	if unit.ID == uuid.Nil {
 		unit.ID = uuid.New()
 	}
+	domain.NormalizeDeploymentUnitTargeting(unit)
 	if err := domain.ValidateDeploymentUnit(unit); err != nil {
 		return err
 	}
@@ -42,12 +43,16 @@ func (r *PgDeploymentUnitRepository) Create(ctx context.Context, unit *domain.De
 	if err != nil {
 		return err
 	}
+	networkProfileJSON, err := marshalJSON(unit.NetworkProfile, "deployment unit network profile")
+	if err != nil {
+		return err
+	}
 
 	_, err = r.pool.Exec(ctx, `
 		INSERT INTO deployment_units (`+deploymentUnitColumns+`)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-	`, unit.ID, unit.EnvironmentID, unit.Key, unit.DisplayName, unit.RuntimeType, unit.ReconcileMode,
-		unit.OwnershipMode, runtimeConfigJSON, unit.CreatedAt, unit.UpdatedAt)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+	`, unit.ID, unit.EnvironmentID, unit.Key, unit.DisplayName, unit.RuntimeType, unit.EndpointRef, unit.ComposeDir, unit.Namespace,
+		networkProfileJSON, unit.ReconcileMode, unit.OwnershipMode, runtimeConfigJSON, unit.CreatedAt, unit.UpdatedAt)
 	if err != nil {
 		return fmt.Errorf("inserting deployment unit: %w", err)
 	}
@@ -56,17 +61,24 @@ func (r *PgDeploymentUnitRepository) Create(ctx context.Context, unit *domain.De
 
 func (r *PgDeploymentUnitRepository) scanUnit(row pgx.Row) (*domain.DeploymentUnit, error) {
 	unit := &domain.DeploymentUnit{}
-	var runtimeConfigJSON []byte
+	var runtimeConfigJSON, networkProfileJSON []byte
 	err := row.Scan(&unit.ID, &unit.EnvironmentID, &unit.Key, &unit.DisplayName, &unit.RuntimeType,
-		&unit.ReconcileMode, &unit.OwnershipMode, &runtimeConfigJSON, &unit.CreatedAt, &unit.UpdatedAt)
+		&unit.EndpointRef, &unit.ComposeDir, &unit.Namespace, &networkProfileJSON, &unit.ReconcileMode, &unit.OwnershipMode,
+		&runtimeConfigJSON, &unit.CreatedAt, &unit.UpdatedAt)
 	if err != nil {
 		return nil, err
+	}
+	if len(networkProfileJSON) > 0 && string(networkProfileJSON) != "null" {
+		if err := unmarshalJSON(networkProfileJSON, &unit.NetworkProfile, "deployment unit network profile"); err != nil {
+			return nil, err
+		}
 	}
 	if len(runtimeConfigJSON) > 0 && string(runtimeConfigJSON) != "null" {
 		if err := unmarshalJSON(runtimeConfigJSON, &unit.RuntimeConfig, "deployment unit runtime config"); err != nil {
 			return nil, err
 		}
 	}
+	domain.NormalizeDeploymentUnitTargeting(unit)
 	return unit, nil
 }
 

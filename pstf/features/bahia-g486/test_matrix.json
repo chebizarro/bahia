@@ -1,0 +1,9 @@
+{
+  "feature_id": "bahia-g486",
+  "tests": [
+    {"criterion": "AC1 AC2 AC3", "command": "go test ./internal/domain ./internal/repository", "evidence": "Domain and repository tests cover runtime_config fallback and typed deployment-unit projection."},
+    {"criterion": "AC4", "command": "go test ./internal/api/handlers", "evidence": "Handler compilation and validation tests cover additive DTO wiring."},
+    {"criterion": "AC5", "command": "go test ./internal/adapters/nostr", "evidence": "Projection/catalog tests compile and preserve backward-compatible read models with additive fields."},
+    {"criterion": "AC6", "command": "manual inspection", "evidence": "docs/deployment.md updated under Deployment Units and Targeting."}
+  ]
+}

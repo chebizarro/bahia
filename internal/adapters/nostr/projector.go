@@ -2131,8 +2131,8 @@ func (p *Projector) publishDeploymentIntentRegistry(ctx context.Context, intent 
 	if deleted {
 		return nil
 	}
-	tags := gonostr.Tags{{"service", intent.ServiceID.String()}, {"environment", intent.EnvironmentID.String()}, {"artifact", intent.ArtifactID.String()}, {"intent", intent.ID.String()}, {"status", string(intent.Status)}, {"approval", string(intent.ApprovalStatus)}}
-	content := map[string]any{"deleted": false, "id": intent.ID.String(), "service_id": intent.ServiceID.String(), "environment_id": intent.EnvironmentID.String(), "artifact_id": intent.ArtifactID.String(), "requested_by": intent.RequestedBy, "source_kind": string(intent.SourceKind), "approval_status": string(intent.ApprovalStatus), "status": string(intent.Status), "deployment_status": string(intent.Status), "approval_metadata": intent.ApprovalMetadata, "metadata": intent.Metadata, "created_at": formatTime(intent.CreatedAt), "approved_at": intent.ApprovedAt, "updated_at": formatTime(intent.UpdatedAt)}
+	tags := gonostr.Tags{{"service", intent.ServiceID.String()}, {"environment", intent.EnvironmentID.String()}, {"artifact", intent.ArtifactID.String()}, {"intent", intent.ID.String()}, {"status", string(intent.Status)}, {"approval", string(intent.ApprovalStatus)}, {"unit", unitTagValue(intent.DeploymentUnitID)}}
+	content := map[string]any{"deleted": false, "id": intent.ID.String(), "service_id": intent.ServiceID.String(), "environment_id": intent.EnvironmentID.String(), "deployment_unit_id": uuidStringPtr(intent.DeploymentUnitID), "artifact_id": intent.ArtifactID.String(), "requested_by": intent.RequestedBy, "source_kind": string(intent.SourceKind), "approval_status": string(intent.ApprovalStatus), "status": string(intent.Status), "deployment_status": string(intent.Status), "approval_metadata": intent.ApprovalMetadata, "metadata": intent.Metadata, "created_at": formatTime(intent.CreatedAt), "approved_at": intent.ApprovedAt, "updated_at": formatTime(intent.UpdatedAt)}
 	// Desired-state metadata (additive — old decoders ignore unknown fields).
 	if intent.DesiredHash != "" {
 		content["desired_hash"] = intent.DesiredHash
@@ -2153,8 +2153,8 @@ func (p *Projector) publishDeploymentRunRegistry(ctx context.Context, run *domai
 	if deleted {
 		return nil
 	}
-	tags := gonostr.Tags{{"intent", run.DeploymentIntentID.String()}, {"run", run.ID.String()}, {"status", string(run.Status)}}
-	content := map[string]any{"deleted": false, "id": run.ID.String(), "deployment_intent_id": run.DeploymentIntentID.String(), "loom_job_id": run.LoomJobID, "worker_pubkey": run.WorkerPubkey, "worker_name": run.WorkerName, "status": string(run.Status), "exit_code": run.ExitCode, "stdout_ref": run.StdoutRef, "stderr_ref": run.StderrRef, "started_at": run.StartedAt, "finished_at": run.FinishedAt, "metadata": run.Metadata, "created_at": formatTime(run.CreatedAt), "updated_at": formatTime(run.UpdatedAt)}
+	tags := gonostr.Tags{{"intent", run.DeploymentIntentID.String()}, {"run", run.ID.String()}, {"status", string(run.Status)}, {"unit", unitTagValue(run.DeploymentUnitID)}}
+	content := map[string]any{"deleted": false, "id": run.ID.String(), "deployment_intent_id": run.DeploymentIntentID.String(), "deployment_unit_id": uuidStringPtr(run.DeploymentUnitID), "loom_job_id": run.LoomJobID, "worker_pubkey": run.WorkerPubkey, "worker_name": run.WorkerName, "status": string(run.Status), "exit_code": run.ExitCode, "stdout_ref": run.StdoutRef, "stderr_ref": run.StderrRef, "started_at": run.StartedAt, "finished_at": run.FinishedAt, "metadata": run.Metadata, "created_at": formatTime(run.CreatedAt), "updated_at": formatTime(run.UpdatedAt)}
 	// Apply metadata enrichment (additive — old decoders ignore unknown fields).
 	if run.ApplyMetadata != nil {
 		if renderer, ok := run.ApplyMetadata["renderer"].(string); ok && renderer != "" {
@@ -2231,6 +2231,9 @@ func (p *Projector) publishServiceRegistry(ctx context.Context, svc *domain.Serv
 }
 
 func (p *Projector) publishEnvironmentRegistry(ctx context.Context, env *domain.Environment, deleted bool) error {
+	if env != nil {
+		domain.NormalizeEnvironmentTargeting(env)
+	}
 	content := map[string]any{
 		"deleted": deleted,
 		"id":      env.ID.String(),
@@ -2239,6 +2242,9 @@ func (p *Projector) publishEnvironmentRegistry(ctx context.Context, env *domain.
 		content["name"] = env.Name
 		content["protected"] = env.Protected
 		content["deploy_strategy"] = string(env.DeployStrategy)
+		content["targeting"] = env.Targeting
+		content["deployment_units"] = []map[string]any{{"key": env.Targeting.DefaultUnitKey, "implicit": true}}
+		content["reconcile_mode"] = string(env.Targeting.DefaultReconcileMode)
 		content["created_at"] = formatTime(env.CreatedAt)
 		content["updated_at"] = formatTime(env.UpdatedAt)
 	} else {
@@ -2253,6 +2259,8 @@ func (p *Projector) publishEnvironmentRegistry(ctx context.Context, env *domain.
 		tags = append(tags,
 			gonostr.Tag{"name", env.Name},
 			gonostr.Tag{"protected", fmt.Sprintf("%t", env.Protected)},
+			gonostr.Tag{"unit", env.Targeting.DefaultUnitKey},
+			gonostr.Tag{"reconcile_mode", string(env.Targeting.DefaultReconcileMode)},
 		)
 	}
 	return p.publishSigned(ctx, KindEnvironmentRegistry, tags, string(contentJSON), "environment.projection", &env.ID)
@@ -2474,6 +2482,13 @@ func updateLastBackupOutcome(last map[string]any, key, id string, finishedAt *ti
 	values["id"] = id
 	values["at"] = formatTime(candidate)
 	last[key] = values
+}
+
+func unitTagValue(id *uuid.UUID) string {
+	if id == nil {
+		return domain.DefaultDeploymentUnitKey
+	}
+	return id.String()
 }
 
 func uuidStringPtr(id *uuid.UUID) string {
@@ -2831,11 +2846,12 @@ func (p *Projector) publishLLMRouteStateTombstone(ctx context.Context, res event
 
 func (p *Projector) publishState(ctx context.Context, state *domain.EnvironmentServiceState) error {
 	content := map[string]any{
-		"deleted":        false,
-		"service_id":     state.ServiceID.String(),
-		"environment_id": state.EnvironmentID.String(),
-		"drift_status":   string(state.DriftStatus),
-		"updated_at":     formatTime(state.UpdatedAt),
+		"deleted":            false,
+		"service_id":         state.ServiceID.String(),
+		"environment_id":     state.EnvironmentID.String(),
+		"deployment_unit_id": uuidStringPtr(state.DeploymentUnitID),
+		"drift_status":       string(state.DriftStatus),
+		"updated_at":         formatTime(state.UpdatedAt),
 	}
 	if state.DesiredArtifactID != nil {
 		content["desired_artifact_id"] = state.DesiredArtifactID.String()
@@ -2871,6 +2887,7 @@ func (p *Projector) publishState(ctx context.Context, state *domain.EnvironmentS
 		{"d", dTag},
 		{"service", state.ServiceID.String()},
 		{"environment", state.EnvironmentID.String()},
+		{"unit", unitTagValue(state.DeploymentUnitID)},
 		{"deleted", "false"},
 		{"drift_status", string(state.DriftStatus)},
 	}
@@ -2906,6 +2923,7 @@ func (p *Projector) publishStateTombstone(ctx context.Context, res events.Resour
 		{"d", dTag},
 		{"service", serviceID.String()},
 		{"environment", envID.String()},
+		{"unit", domain.DefaultDeploymentUnitKey},
 		{"deleted", "true"},
 	}
 	return p.publishSigned(ctx, KindServiceState, tags, string(content), "state.projection", &serviceID)

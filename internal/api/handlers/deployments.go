@@ -78,12 +78,13 @@ func (h *DeploymentHandler) CreateIntent(w http.ResponseWriter, r *http.Request)
 	}
 
 	di := &domain.DeploymentIntent{
-		ServiceID:     req.ServiceID,
-		EnvironmentID: req.EnvironmentID,
-		ArtifactID:    req.ArtifactID,
-		RequestedBy:   req.RequestedBy,
-		SourceKind:    sourceKind,
-		Metadata:      req.Metadata,
+		ServiceID:        req.ServiceID,
+		EnvironmentID:    req.EnvironmentID,
+		DeploymentUnitID: req.DeploymentUnitID,
+		ArtifactID:       req.ArtifactID,
+		RequestedBy:      req.RequestedBy,
+		SourceKind:       sourceKind,
+		Metadata:         req.Metadata,
 	}
 
 	if err := h.registry.CreateDeploymentIntent(r.Context(), di); err != nil {
@@ -276,6 +277,7 @@ func (h *DeploymentHandler) CreateRun(w http.ResponseWriter, r *http.Request) {
 
 	dr := &domain.DeploymentRun{
 		DeploymentIntentID: req.DeploymentIntentID,
+		DeploymentUnitID:   req.DeploymentUnitID,
 		LoomJobID:          req.LoomJobID,
 		WorkerPubkey:       req.WorkerPubkey,
 		WorkerName:         req.WorkerName,

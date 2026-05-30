@@ -190,17 +190,35 @@ type ServiceCIConfig struct {
 	WorkflowPath string `json:"workflow_path,omitempty"`
 }
 
+// SecretScopeMode defines the default scope used when resolving environment secrets.
+type SecretScopeMode string
+
+const (
+	SecretScopeModeService     SecretScopeMode = "service"
+	SecretScopeModeEnvironment SecretScopeMode = "environment"
+	SecretScopeModeUnit        SecretScopeMode = "unit"
+)
+
+// EnvironmentTargeting contains typed environment-level placement defaults.
+type EnvironmentTargeting struct {
+	DefaultUnitKey       string            `json:"default_unit_key,omitempty"`
+	FailureDomainLabels  map[string]string `json:"failure_domain_labels,omitempty"`
+	SecretScopeMode      SecretScopeMode   `json:"secret_scope_mode,omitempty"`
+	DefaultReconcileMode ReconcileMode     `json:"default_reconcile_mode,omitempty"`
+}
+
 // Environment represents a named deployment target.
 type Environment struct {
-	ID                 uuid.UUID      `json:"id"`
-	OrgID              uuid.UUID      `json:"org_id"`
-	Name               string         `json:"name"`
-	LoomWorkerSelector map[string]any `json:"loom_worker_selector"`
-	RuntimeConfig      map[string]any `json:"runtime_config"`
-	DeployStrategy     DeployStrategy `json:"deploy_strategy"`
-	Protected          bool           `json:"protected"`
-	CreatedAt          time.Time      `json:"created_at"`
-	UpdatedAt          time.Time      `json:"updated_at"`
+	ID                 uuid.UUID            `json:"id"`
+	OrgID              uuid.UUID            `json:"org_id"`
+	Name               string               `json:"name"`
+	LoomWorkerSelector map[string]any       `json:"loom_worker_selector"`
+	RuntimeConfig      map[string]any       `json:"runtime_config"`
+	Targeting          EnvironmentTargeting `json:"targeting,omitempty"`
+	DeployStrategy     DeployStrategy       `json:"deploy_strategy"`
+	Protected          bool                 `json:"protected"`
+	CreatedAt          time.Time            `json:"created_at"`
+	UpdatedAt          time.Time            `json:"updated_at"`
 }
 
 // Build represents a CI build execution.

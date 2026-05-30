@@ -43,6 +43,7 @@ func (h *EnvironmentHandler) Create(w http.ResponseWriter, r *http.Request) {
 		Name:               req.Name,
 		LoomWorkerSelector: req.LoomWorkerSelector,
 		RuntimeConfig:      req.RuntimeConfig,
+		Targeting:          environmentTargetingFromRequest(req.Targeting, req.ReconcileMode),
 		DeployStrategy:     domain.DeployStrategy(req.DeployStrategy),
 		Protected:          req.Protected,
 	}
@@ -129,6 +130,13 @@ func (h *EnvironmentHandler) Update(w http.ResponseWriter, r *http.Request) {
 	if req.RuntimeConfig != nil {
 		env.RuntimeConfig = *req.RuntimeConfig
 	}
+	if req.Targeting != nil || req.ReconcileMode != nil {
+		reconcileMode := ""
+		if req.ReconcileMode != nil {
+			reconcileMode = *req.ReconcileMode
+		}
+		env.Targeting = environmentTargetingFromRequest(req.Targeting, reconcileMode)
+	}
 	if req.DeployStrategy != nil {
 		if err := domain.ValidateDeployStrategy(domain.DeployStrategy(*req.DeployStrategy)); err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
@@ -145,6 +153,20 @@ func (h *EnvironmentHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeData(w, http.StatusOK, env)
+}
+
+func environmentTargetingFromRequest(req *dto.EnvironmentTargetingRequest, reconcileMode string) domain.EnvironmentTargeting {
+	var targeting domain.EnvironmentTargeting
+	if req != nil {
+		targeting.DefaultUnitKey = req.DefaultUnitKey
+		targeting.FailureDomainLabels = req.FailureDomainLabels
+		targeting.SecretScopeMode = domain.SecretScopeMode(req.SecretScopeMode)
+		targeting.DefaultReconcileMode = domain.ReconcileMode(req.DefaultReconcileMode)
+	}
+	if reconcileMode != "" {
+		targeting.DefaultReconcileMode = domain.ReconcileMode(reconcileMode)
+	}
+	return targeting
 }
 
 func (h *EnvironmentHandler) Delete(w http.ResponseWriter, r *http.Request) {

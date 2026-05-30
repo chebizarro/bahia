@@ -31,17 +31,21 @@ const (
 
 // DeploymentUnit is a runtime ownership boundary inside one environment.
 type DeploymentUnit struct {
-	ID            uuid.UUID      `json:"id"`
-	EnvironmentID uuid.UUID      `json:"environment_id"`
-	Key           string         `json:"key"`
-	DisplayName   string         `json:"display_name,omitempty"`
-	RuntimeType   RuntimeType    `json:"runtime_type"`
-	ReconcileMode ReconcileMode  `json:"reconcile_mode"`
-	OwnershipMode OwnershipMode  `json:"ownership_mode"`
-	RuntimeConfig map[string]any `json:"runtime_config,omitempty"`
-	Implicit      bool           `json:"implicit"`
-	CreatedAt     time.Time      `json:"created_at"`
-	UpdatedAt     time.Time      `json:"updated_at"`
+	ID             uuid.UUID         `json:"id"`
+	EnvironmentID  uuid.UUID         `json:"environment_id"`
+	Key            string            `json:"key"`
+	DisplayName    string            `json:"display_name,omitempty"`
+	RuntimeType    RuntimeType       `json:"runtime_type"`
+	EndpointRef    string            `json:"endpoint_ref,omitempty"`
+	ComposeDir     string            `json:"compose_dir,omitempty"`
+	Namespace      string            `json:"namespace,omitempty"`
+	NetworkProfile map[string]string `json:"network_profile,omitempty"`
+	ReconcileMode  ReconcileMode     `json:"reconcile_mode"`
+	OwnershipMode  OwnershipMode     `json:"ownership_mode"`
+	RuntimeConfig  map[string]any    `json:"runtime_config,omitempty"`
+	Implicit       bool              `json:"implicit"`
+	CreatedAt      time.Time         `json:"created_at"`
+	UpdatedAt      time.Time         `json:"updated_at"`
 }
 
 // NewImplicitDefaultDeploymentUnit resolves the in-memory default unit for an environment.
@@ -55,7 +59,8 @@ func NewImplicitDefaultDeploymentUnit(env *Environment) (*DeploymentUnit, error)
 		return nil, fmt.Errorf("%w: environment_id", ErrNilUUID)
 	}
 
-	runtimeType := runtimeTypeFromConfig(env.RuntimeConfig)
+	NormalizeEnvironmentTargeting(env)
+	runtimeType := RuntimeTypeFromRuntimeConfig(env.RuntimeConfig)
 	if runtimeType == "" {
 		runtimeType = RuntimeTypeDocker
 	}
@@ -63,25 +68,131 @@ func NewImplicitDefaultDeploymentUnit(env *Environment) (*DeploymentUnit, error)
 		return nil, err
 	}
 
-	return &DeploymentUnit{
+	unit := &DeploymentUnit{
 		EnvironmentID: env.ID,
-		Key:           DefaultDeploymentUnitKey,
+		Key:           env.Targeting.DefaultUnitKey,
 		DisplayName:   "Default",
 		RuntimeType:   runtimeType,
-		ReconcileMode: ReconcileModeObserveOnly,
+		ReconcileMode: env.Targeting.DefaultReconcileMode,
 		OwnershipMode: OwnershipModeBahiaManaged,
 		RuntimeConfig: copyRuntimeConfig(env.RuntimeConfig),
 		Implicit:      true,
-	}, nil
+	}
+	NormalizeDeploymentUnitTargeting(unit)
+	return unit, nil
 }
 
-func runtimeTypeFromConfig(config map[string]any) RuntimeType {
+func RuntimeTypeFromRuntimeConfig(config map[string]any) RuntimeType {
 	if config == nil {
 		return ""
 	}
 	if raw, ok := config["type"]; ok {
 		if s, ok := raw.(string); ok {
 			return RuntimeType(strings.TrimSpace(s))
+		}
+	}
+	return ""
+}
+
+func NormalizeEnvironmentTargeting(env *Environment) {
+	if env == nil {
+		return
+	}
+	if strings.TrimSpace(env.Targeting.DefaultUnitKey) == "" {
+		env.Targeting.DefaultUnitKey = stringFromRuntimeConfig(env.RuntimeConfig, "default_unit_key")
+	}
+	if strings.TrimSpace(env.Targeting.DefaultUnitKey) == "" {
+		env.Targeting.DefaultUnitKey = DefaultDeploymentUnitKey
+	}
+	if env.Targeting.FailureDomainLabels == nil {
+		env.Targeting.FailureDomainLabels = stringMapFromRuntimeConfig(env.RuntimeConfig, "failure_domain_labels")
+	}
+	if env.Targeting.SecretScopeMode == "" {
+		env.Targeting.SecretScopeMode = SecretScopeMode(stringFromRuntimeConfig(env.RuntimeConfig, "secret_scope_mode"))
+	}
+	if env.Targeting.DefaultReconcileMode == "" {
+		env.Targeting.DefaultReconcileMode = ReconcileMode(firstNonEmpty(
+			stringFromRuntimeConfig(env.RuntimeConfig, "default_reconcile_mode"),
+			stringFromRuntimeConfig(env.RuntimeConfig, "reconcile_mode"),
+		))
+	}
+	if env.Targeting.DefaultReconcileMode == "" {
+		env.Targeting.DefaultReconcileMode = ReconcileModeObserveOnly
+	}
+}
+
+func NormalizeDeploymentUnitTargeting(unit *DeploymentUnit) {
+	if unit == nil {
+		return
+	}
+	if unit.RuntimeType == "" {
+		unit.RuntimeType = RuntimeTypeFromRuntimeConfig(unit.RuntimeConfig)
+	}
+	if strings.TrimSpace(unit.EndpointRef) == "" {
+		unit.EndpointRef = stringFromRuntimeConfig(unit.RuntimeConfig, "endpoint_ref")
+	}
+	if strings.TrimSpace(unit.ComposeDir) == "" {
+		unit.ComposeDir = stringFromRuntimeConfig(unit.RuntimeConfig, "compose_dir")
+	}
+	if strings.TrimSpace(unit.Namespace) == "" {
+		unit.Namespace = firstNonEmpty(stringFromRuntimeConfig(unit.RuntimeConfig, "namespace"), stringFromRuntimeConfig(unit.RuntimeConfig, "kube_namespace"))
+	}
+	if unit.NetworkProfile == nil {
+		unit.NetworkProfile = stringMapFromRuntimeConfig(unit.RuntimeConfig, "network_profile")
+	}
+	if unit.ReconcileMode == "" {
+		unit.ReconcileMode = ReconcileModeObserveOnly
+	}
+	if unit.OwnershipMode == "" {
+		unit.OwnershipMode = OwnershipModeBahiaManaged
+	}
+}
+
+func stringFromRuntimeConfig(config map[string]any, key string) string {
+	if config == nil {
+		return ""
+	}
+	if raw, ok := config[key]; ok {
+		if s, ok := raw.(string); ok {
+			return strings.TrimSpace(s)
+		}
+	}
+	return ""
+}
+
+func stringMapFromRuntimeConfig(config map[string]any, key string) map[string]string {
+	if config == nil {
+		return nil
+	}
+	raw, ok := config[key]
+	if !ok {
+		return nil
+	}
+	out := map[string]string{}
+	switch m := raw.(type) {
+	case map[string]string:
+		for k, v := range m {
+			if strings.TrimSpace(k) != "" && strings.TrimSpace(v) != "" {
+				out[strings.TrimSpace(k)] = strings.TrimSpace(v)
+			}
+		}
+	case map[string]any:
+		for k, v := range m {
+			if s, ok := v.(string); ok && strings.TrimSpace(k) != "" && strings.TrimSpace(s) != "" {
+				out[strings.TrimSpace(k)] = strings.TrimSpace(s)
+			}
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
 		}
 	}
 	return ""

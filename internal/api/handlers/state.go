@@ -105,6 +105,7 @@ func (h *StateHandler) RecordObservation(w http.ResponseWriter, r *http.Request)
 	obs := &domain.RuntimeObservation{
 		ServiceID:           req.ServiceID,
 		EnvironmentID:       req.EnvironmentID,
+		DeploymentUnitID:    req.DeploymentUnitID,
 		ObservedImageDigest: req.ObservedImageDigest,
 		ObservedImageRepo:   req.ObservedImageRepo,
 		ObservedContainerID: req.ObservedContainerID,

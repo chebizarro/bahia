@@ -3,6 +3,26 @@ package dto
 
 import "github.com/google/uuid"
 
+type EnvironmentTargetingRequest struct {
+	DefaultUnitKey       string            `json:"default_unit_key,omitempty"`
+	FailureDomainLabels  map[string]string `json:"failure_domain_labels,omitempty"`
+	SecretScopeMode      string            `json:"secret_scope_mode,omitempty"`
+	DefaultReconcileMode string            `json:"default_reconcile_mode,omitempty"`
+}
+
+type DeploymentUnitRequest struct {
+	Key            string            `json:"key"`
+	DisplayName    string            `json:"display_name,omitempty"`
+	RuntimeType    string            `json:"runtime_type,omitempty"`
+	EndpointRef    string            `json:"endpoint_ref,omitempty"`
+	ComposeDir     string            `json:"compose_dir,omitempty"`
+	Namespace      string            `json:"namespace,omitempty"`
+	NetworkProfile map[string]string `json:"network_profile,omitempty"`
+	OwnershipMode  string            `json:"ownership_mode,omitempty"`
+	ReconcileMode  string            `json:"reconcile_mode,omitempty"`
+	RuntimeConfig  map[string]any    `json:"runtime_config,omitempty"`
+}
+
 // CreateServiceRequest represents a request to register a new service.
 type CreateServiceRequest struct {
 	Name          string                `json:"name"`
@@ -41,20 +61,26 @@ type ServiceCIConfigRequest struct {
 
 // CreateEnvironmentRequest represents a request to register a new environment.
 type CreateEnvironmentRequest struct {
-	Name               string         `json:"name"`
-	LoomWorkerSelector map[string]any `json:"loom_worker_selector,omitempty"`
-	RuntimeConfig      map[string]any `json:"runtime_config,omitempty"`
-	DeployStrategy     string         `json:"deploy_strategy,omitempty"`
-	Protected          bool           `json:"protected"`
+	Name               string                       `json:"name"`
+	LoomWorkerSelector map[string]any               `json:"loom_worker_selector,omitempty"`
+	RuntimeConfig      map[string]any               `json:"runtime_config,omitempty"`
+	Targeting          *EnvironmentTargetingRequest `json:"targeting,omitempty"`
+	DeploymentUnits    []DeploymentUnitRequest      `json:"deployment_units,omitempty"`
+	ReconcileMode      string                       `json:"reconcile_mode,omitempty"`
+	DeployStrategy     string                       `json:"deploy_strategy,omitempty"`
+	Protected          bool                         `json:"protected"`
 }
 
 // UpdateEnvironmentRequest represents a request to update an environment.
 type UpdateEnvironmentRequest struct {
-	Name               *string         `json:"name,omitempty"`
-	LoomWorkerSelector *map[string]any `json:"loom_worker_selector,omitempty"`
-	RuntimeConfig      *map[string]any `json:"runtime_config,omitempty"`
-	DeployStrategy     *string         `json:"deploy_strategy,omitempty"`
-	Protected          *bool           `json:"protected,omitempty"`
+	Name               *string                      `json:"name,omitempty"`
+	LoomWorkerSelector *map[string]any              `json:"loom_worker_selector,omitempty"`
+	RuntimeConfig      *map[string]any              `json:"runtime_config,omitempty"`
+	Targeting          *EnvironmentTargetingRequest `json:"targeting,omitempty"`
+	DeploymentUnits    []DeploymentUnitRequest      `json:"deployment_units,omitempty"`
+	ReconcileMode      *string                      `json:"reconcile_mode,omitempty"`
+	DeployStrategy     *string                      `json:"deploy_strategy,omitempty"`
+	Protected          *bool                        `json:"protected,omitempty"`
 }
 
 // RegisterBuildRequest represents a request to register a new build.
@@ -92,17 +118,19 @@ type RegisterArtifactRequest struct {
 
 // CreateDeploymentIntentRequest represents a request to create a deployment intent.
 type CreateDeploymentIntentRequest struct {
-	ServiceID     uuid.UUID      `json:"service_id"`
-	EnvironmentID uuid.UUID      `json:"environment_id"`
-	ArtifactID    uuid.UUID      `json:"artifact_id"`
-	RequestedBy   string         `json:"requested_by"`
-	SourceKind    string         `json:"source_kind,omitempty"`
-	Metadata      map[string]any `json:"metadata,omitempty"`
+	ServiceID        uuid.UUID      `json:"service_id"`
+	EnvironmentID    uuid.UUID      `json:"environment_id"`
+	DeploymentUnitID *uuid.UUID     `json:"deployment_unit_id,omitempty"`
+	ArtifactID       uuid.UUID      `json:"artifact_id"`
+	RequestedBy      string         `json:"requested_by"`
+	SourceKind       string         `json:"source_kind,omitempty"`
+	Metadata         map[string]any `json:"metadata,omitempty"`
 }
 
 // CreateDeploymentRunRequest represents a request to create a deployment run.
 type CreateDeploymentRunRequest struct {
 	DeploymentIntentID uuid.UUID      `json:"deployment_intent_id"`
+	DeploymentUnitID   *uuid.UUID     `json:"deployment_unit_id,omitempty"`
 	LoomJobID          string         `json:"loom_job_id,omitempty"`
 	WorkerPubkey       string         `json:"worker_pubkey,omitempty"`
 	WorkerName         string         `json:"worker_name,omitempty"`
@@ -126,6 +154,7 @@ type RollbackRequest struct {
 type RecordObservationRequest struct {
 	ServiceID           uuid.UUID      `json:"service_id"`
 	EnvironmentID       uuid.UUID      `json:"environment_id"`
+	DeploymentUnitID    *uuid.UUID     `json:"deployment_unit_id,omitempty"`
 	ObservedImageDigest string         `json:"observed_image_digest"`
 	ObservedImageRepo   string         `json:"observed_image_repo,omitempty"`
 	ObservedContainerID string         `json:"observed_container_id,omitempty"`

@@ -1,0 +1,11 @@
+{
+  "feature_id": "bahia-g486",
+  "criteria": [
+    {"id": "AC1", "description": "Environment targeting has typed fields for default unit key, failure domains, secret scope mode, and default reconcile mode."},
+    {"id": "AC2", "description": "Deployment units have typed runtime endpoint, compose directory, namespace, network profile, ownership, and reconcile fields."},
+    {"id": "AC3", "description": "Legacy runtime_config fields are read as fallback and normalized into typed fields on writes."},
+    {"id": "AC4", "description": "API DTOs expose additive deployment_units, targeting, reconcile_mode, and deployment_unit_id placement fields."},
+    {"id": "AC5", "description": "Nostr projections 31961, 31963, 31967, and 31968 carry additive unit placement tags."},
+    {"id": "AC6", "description": "Normative deployment documentation describes typed targeting and compatibility semantics."}
+  ]
+}
