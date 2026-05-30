@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"gopkg.in/yaml.v3"
 )
@@ -39,6 +40,8 @@ type RenderMetadata struct {
 	Renderer          string    `json:"renderer"`
 	RenderedAt        time.Time `json:"rendered_at"`
 	EnvironmentID     string    `json:"environment_id"`
+	DeploymentUnitID  string    `json:"deployment_unit_id,omitempty"`
+	DeploymentUnitKey string    `json:"deployment_unit_key,omitempty"`
 	RevisionHash      string    `json:"revision_hash"`
 	ProjectName       string    `json:"project_name"`
 	ServiceCount      int       `json:"service_count"`
@@ -75,58 +78,69 @@ func (r *ComposeRenderer) RenderEnvironmentPlan(ctx context.Context, plan *domai
 	if plan == nil {
 		return nil, fmt.Errorf("compose renderer: plan is nil")
 	}
-	if len(plan.Services) == 0 {
-		return nil, fmt.Errorf("compose renderer: plan has no services")
+	unit := domain.DesiredDeploymentUnitPlan{
+		DeploymentUnitKey: domain.DefaultDeploymentUnitKey,
+		RevisionHash:      plan.RevisionHash,
+		Services:          append([]domain.DesiredServiceSpec(nil), plan.Services...),
+	}
+	return r.RenderDeploymentUnitPlan(ctx, plan.EnvironmentID.String(), &unit)
+}
+
+// RenderDeploymentUnitPlan renders the full Compose project owned by a single
+// deployment unit. Compose output is unit-scoped even when the source desired
+// state was assembled at environment scope.
+func (r *ComposeRenderer) RenderDeploymentUnitPlan(ctx context.Context, environmentID string, unitPlan *domain.DesiredDeploymentUnitPlan) (*RenderResult, error) {
+	_ = ctx
+	if unitPlan == nil {
+		return nil, fmt.Errorf("compose renderer: unit plan is nil")
+	}
+	if len(unitPlan.Services) == 0 {
+		return nil, fmt.Errorf("compose renderer: unit plan has no services")
+	}
+	if unitPlan.RuntimeType != "" && unitPlan.RuntimeType != domain.RuntimeTypeCompose {
+		return nil, fmt.Errorf("compose renderer: unit %q runtime type %q is not compose", unitPlan.DeploymentUnitKey, unitPlan.RuntimeType)
 	}
 
-	// Ensure deterministic ordering.
-	plan.SortServices()
-
+	unitPlan.SortServices()
+	plan := &domain.DesiredEnvironmentPlan{
+		Services: append([]domain.DesiredServiceSpec(nil), unitPlan.Services...),
+	}
+	if parsedEnvironmentID, err := uuid.Parse(environmentID); err == nil {
+		plan.EnvironmentID = parsedEnvironmentID
+	}
 	projectName := r.projectName(plan)
-
-	// Build the Compose document.
 	doc := r.buildComposeDocument(plan, projectName)
-
-	// Marshal to deterministic YAML.
 	composeYAML, err := marshalDeterministicYAML(doc)
 	if err != nil {
 		return nil, fmt.Errorf("compose renderer: marshal YAML: %w", err)
 	}
-
-	// Build env material (includes secrets for file writing).
 	envMaterial := r.buildEnvMaterial(plan)
-
-	// Collect declared networks and volumes for metadata.
 	networks, volumes := r.collectDeclarations(plan)
-
-	// Build service keys list.
 	serviceKeys := make([]string, 0, len(plan.Services))
 	for _, svc := range plan.Services {
 		serviceKeys = append(serviceKeys, svc.StableServiceKey)
 	}
-
-	// Compute content hash of the rendered YAML.
 	contentHash := fmt.Sprintf("sha256:%x", sha256.Sum256(composeYAML))
-
-	metadata := RenderMetadata{
-		SchemaVersion:    1,
-		Renderer:         "compose",
-		RenderedAt:       time.Now().UTC(),
-		EnvironmentID:    plan.EnvironmentID.String(),
-		RevisionHash:     plan.RevisionHash,
-		ProjectName:      projectName,
-		ServiceCount:     len(plan.Services),
-		ServiceKeys:      serviceKeys,
-		ContentHash:      contentHash,
-		NetworksDeclared: networks,
-		VolumesDeclared:  volumes,
+	unitID := ""
+	if unitPlan.DeploymentUnitID != nil {
+		unitID = unitPlan.DeploymentUnitID.String()
 	}
-
-	return &RenderResult{
-		ComposeYAML: composeYAML,
-		EnvMaterial: envMaterial,
-		Metadata:    metadata,
-	}, nil
+	metadata := RenderMetadata{
+		SchemaVersion:     1,
+		Renderer:          "compose",
+		RenderedAt:        time.Now().UTC(),
+		EnvironmentID:     environmentID,
+		DeploymentUnitID:  unitID,
+		DeploymentUnitKey: unitPlan.DeploymentUnitKey,
+		RevisionHash:      unitPlan.RevisionHash,
+		ProjectName:       projectName,
+		ServiceCount:      len(plan.Services),
+		ServiceKeys:       serviceKeys,
+		ContentHash:       contentHash,
+		NetworksDeclared:  networks,
+		VolumesDeclared:   volumes,
+	}
+	return &RenderResult{ComposeYAML: composeYAML, EnvMaterial: envMaterial, Metadata: metadata}, nil
 }
 
 // ---------------------------------------------------------------------------

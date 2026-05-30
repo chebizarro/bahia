@@ -119,16 +119,14 @@ func NewComposeStagingManagerWithRunner(logger *zap.Logger, runner CommandRunner
 }
 
 // ---------------------------------------------------------------------------
-// StageAndValidate — write staged files and validate with docker compose
+// Stage — write staged files for executor validation
 // ---------------------------------------------------------------------------
 
-// StageAndValidate writes the rendered Compose output to a staging directory
-// under .bahia/staging/ and validates it with `docker compose config -q`.
-//
-// On success, the returned StagedFiles has Validated=true and is ready for
-// Promote(). On validation failure, an error is returned and the caller
-// should call Rollback() to clean up.
-func (m *ComposeStagingManager) StageAndValidate(ctx context.Context, composeDir string, result *RenderResult) (*StagedFiles, error) {
+// Stage writes the rendered Compose output to a staging directory under
+// .bahia/staging/. The caller must validate the returned staged files through
+// a ComposeExecutor before Promote().
+func (m *ComposeStagingManager) Stage(ctx context.Context, composeDir string, result *RenderResult) (*StagedFiles, error) {
+	_ = ctx
 	if result == nil {
 		return nil, fmt.Errorf("compose staging: render result is nil")
 	}
@@ -190,18 +188,31 @@ func (m *ComposeStagingManager) StageAndValidate(ctx context.Context, composeDir
 		return staged, fmt.Errorf("compose staging: write metadata: %w", err)
 	}
 
-	// Validate with docker compose config -q.
-	if err := m.validate(ctx, staged); err != nil {
-		return staged, fmt.Errorf("compose staging: validation failed: %w", err)
-	}
-
-	staged.Validated = true
-	m.logger.Info("compose staging: validated successfully",
+	m.logger.Info("compose staging: staged rendered project",
 		zap.String("compose_dir", composeDir),
 		zap.String("staging_dir", staged.StagingDir),
 		zap.Int("env_files", len(staged.EnvFiles)),
 	)
 
+	return staged, nil
+}
+
+// StageAndValidate preserves the staging manager's existing test/helper API.
+// Desired-state production apply validates through ComposeExecutor instead.
+func (m *ComposeStagingManager) StageAndValidate(ctx context.Context, composeDir string, result *RenderResult) (*StagedFiles, error) {
+	staged, err := m.Stage(ctx, composeDir, result)
+	if err != nil {
+		return staged, err
+	}
+	if err := m.validate(ctx, staged); err != nil {
+		return staged, fmt.Errorf("compose staging: validation failed: %w", err)
+	}
+	staged.Validated = true
+	m.logger.Info("compose staging: validated successfully",
+		zap.String("compose_dir", staged.ComposeDir),
+		zap.String("staging_dir", staged.StagingDir),
+		zap.Int("env_files", len(staged.EnvFiles)),
+	)
 	return staged, nil
 }
 

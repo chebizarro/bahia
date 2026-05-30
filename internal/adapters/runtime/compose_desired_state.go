@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/google/uuid"
+	"github.com/openagentsinc/bahia/internal/domain"
 	"go.uber.org/zap"
 )
 
@@ -13,13 +15,14 @@ import (
 // ---------------------------------------------------------------------------
 
 // ComposeDesiredStateApplier implements desired-state convergence for the
-// Compose runtime. It renders a full environment plan into canonical Compose
-// YAML, stages and validates the output, promotes to live files, and runs
-// `docker compose up -d --remove-orphans` against the full project.
+// Compose runtime. It selects the target deployment unit, renders that unit's
+// full Compose project into canonical Compose YAML, validates through the
+// executor seam, promotes to live files, and runs `docker compose up -d
+// --remove-orphans` against the unit-owned project.
 //
 // Key design decisions:
-//   - Full-project apply: the entire environment plan is rendered and applied
-//     as a single Compose project. No per-service image substitution or
+//   - Unit-owned full-project apply: the target deployment unit is rendered and
+//     applied as a single Compose project. No per-service image substitution or
 //     service-scoped `up` commands.
 //   - No <SERVICE>_IMAGE mutation: image references come from the rendered
 //     Compose YAML, not environment variable overrides.
@@ -70,10 +73,10 @@ func NewComposeDesiredStateApplierWithRunner(rt *ComposeRuntime, runner CommandR
 // ApplyDesiredState converges the Compose project to match the desired
 // environment plan. The flow is:
 //
-//  1. Validate ownership of the compose directory.
-//  2. Render the full environment plan into canonical Compose YAML.
+//  1. Validate ownership of the unit-owned compose directory.
+//  2. Select and render the target deployment unit into canonical Compose YAML.
 //  3. Stage rendered files under .bahia/staging/.
-//  4. Validate staged output with `docker compose config -q`.
+//  4. Validate staged output through the ComposeExecutor control seam.
 //  5. Atomically promote staged files to live locations.
 //  6. Run `docker compose --project-directory <dir> up -d --remove-orphans`
 //     with pull policy.
@@ -105,34 +108,38 @@ func (a *ComposeDesiredStateApplier) ApplyDesiredState(ctx context.Context, req 
 		zap.Int("service_count", len(req.EnvironmentPlan.Services)),
 	)
 
-	// Step 2: Render the full environment plan.
-	renderResult, err := a.renderer.RenderEnvironmentPlan(ctx, req.EnvironmentPlan)
+	// Step 2: Render the full project owned by the target deployment unit.
+	unitPlan, err := selectComposeDeploymentUnitPlan(req.EnvironmentPlan, req.TargetService)
+	if err != nil {
+		return nil, fmt.Errorf("compose desired-state apply: unit selection failed: %w", err)
+	}
+	renderResult, err := a.renderer.RenderDeploymentUnitPlan(ctx, req.EnvironmentPlan.EnvironmentID.String(), unitPlan)
 	if err != nil {
 		return nil, fmt.Errorf("compose desired-state apply: render failed: %w", err)
 	}
 
-	// Step 3–4: Stage and validate.
-	staged, err := a.staging.StageAndValidate(ctx, composeDir, renderResult)
+	// Step 3–4: Stage rendered files and validate through the executor seam.
+	staged, err := a.staging.Stage(ctx, composeDir, renderResult)
 	if err != nil {
-		// Clean up staging on failure.
 		a.staging.Rollback(ctx, staged)
-		return nil, fmt.Errorf("compose desired-state apply: stage/validate failed: %w", err)
+		return nil, fmt.Errorf("compose desired-state apply: stage failed: %w", err)
+	}
+	if _, _, err := a.executor.Validate(ctx, staged); err != nil {
+		a.staging.Rollback(ctx, staged)
+		return nil, fmt.Errorf("compose desired-state apply: validation failed: %w", err)
 	}
 
 	// Dry run stops after validation — do not promote or run up.
 	if req.DryRun {
 		a.staging.Rollback(ctx, staged)
 
-		serviceKeys := make([]string, 0, len(req.EnvironmentPlan.Services))
-		for _, svc := range req.EnvironmentPlan.Services {
-			serviceKeys = append(serviceKeys, svc.StableServiceKey)
-		}
+		serviceKeys := composeUnitServiceKeys(unitPlan)
 
 		return &DesiredStateApplyResult{
 			Renderer:            "compose",
 			ExecutionMode:       executionMode,
 			DesiredHash:         req.TargetService.DesiredHash,
-			EnvironmentRevision: req.EnvironmentPlan.RevisionHash,
+			EnvironmentRevision: unitPlan.RevisionHash,
 			ResourceNames:       serviceKeys,
 			Warnings:            []string{"dry-run: staged and validated but not applied"},
 		}, nil
@@ -149,10 +156,7 @@ func (a *ComposeDesiredStateApplier) ApplyDesiredState(ctx context.Context, req 
 	}
 
 	// Step 7: Build result.
-	serviceKeys := make([]string, 0, len(req.EnvironmentPlan.Services))
-	for _, svc := range req.EnvironmentPlan.Services {
-		serviceKeys = append(serviceKeys, svc.StableServiceKey)
-	}
+	serviceKeys := composeUnitServiceKeys(unitPlan)
 
 	a.logger.Info("compose desired-state apply: completed",
 		zap.String("compose_dir", composeDir),
@@ -164,10 +168,64 @@ func (a *ComposeDesiredStateApplier) ApplyDesiredState(ctx context.Context, req 
 		Renderer:            "compose",
 		ExecutionMode:       executionMode,
 		DesiredHash:         req.TargetService.DesiredHash,
-		EnvironmentRevision: req.EnvironmentPlan.RevisionHash,
+		EnvironmentRevision: unitPlan.RevisionHash,
 		ResourceNames:       serviceKeys,
 		ObservationHints:    &ObservationHints{},
 	}, nil
+}
+
+// ---------------------------------------------------------------------------
+// Deployment-unit selection
+// ---------------------------------------------------------------------------
+
+func selectComposeDeploymentUnitPlan(plan *domain.DesiredEnvironmentPlan, target *domain.DesiredServiceSpec) (*domain.DesiredDeploymentUnitPlan, error) {
+	if plan == nil {
+		return nil, fmt.Errorf("environment plan is nil")
+	}
+	if target == nil {
+		return nil, fmt.Errorf("target service is nil")
+	}
+	plan.NormalizeUnitIdentity()
+	plan.GroupByDeploymentUnit()
+	targetKey := composeUnitIdentityKey(target.DeploymentUnitID, target.DeploymentUnitKey)
+	for i := range plan.UnitPlans {
+		unit := &plan.UnitPlans[i]
+		if composeUnitIdentityKey(unit.DeploymentUnitID, unit.DeploymentUnitKey) != targetKey {
+			continue
+		}
+		if unit.RuntimeType != "" && unit.RuntimeType != domain.RuntimeTypeCompose {
+			return nil, fmt.Errorf("target unit %q runtime type %q is not compose", unit.DeploymentUnitKey, unit.RuntimeType)
+		}
+		for _, svc := range unit.Services {
+			if svc.UnitRuntimeType != "" && svc.UnitRuntimeType != domain.RuntimeTypeCompose {
+				return nil, fmt.Errorf("service %q runtime type %q is not compose", svc.StableServiceKey, svc.UnitRuntimeType)
+			}
+		}
+		return unit, nil
+	}
+	return nil, fmt.Errorf("target service unit %q not present in environment plan", targetKey)
+}
+
+func composeUnitIdentityKey(unitID *uuid.UUID, unitKey string) string {
+	if unitID != nil && *unitID != uuid.Nil {
+		return "id:" + unitID.String()
+	}
+	unitKey = strings.TrimSpace(unitKey)
+	if unitKey == "" {
+		unitKey = domain.DefaultDeploymentUnitKey
+	}
+	return "key:" + unitKey
+}
+
+func composeUnitServiceKeys(unitPlan *domain.DesiredDeploymentUnitPlan) []string {
+	if unitPlan == nil {
+		return nil
+	}
+	serviceKeys := make([]string, 0, len(unitPlan.Services))
+	for _, svc := range unitPlan.Services {
+		serviceKeys = append(serviceKeys, svc.StableServiceKey)
+	}
+	return serviceKeys
 }
 
 // ---------------------------------------------------------------------------

@@ -1,0 +1,16 @@
+{
+  "feature_id": "bahia-e6uz",
+  "test_command": "go test ./internal/adapters/runtime",
+  "test_run": {
+    "date": "2026-05-30",
+    "result": "pass",
+    "evidence": "ok github.com/openagentsinc/bahia/internal/adapters/runtime 7.640s"
+  },
+  "coverage": [
+    {"acceptance_criterion": "AC1", "tests": ["TestComposeDesiredStateApplier_RendersOnlyTargetDeploymentUnit"]},
+    {"acceptance_criterion": "AC2", "tests": ["TestComposeDesiredStateApplier_OwnershipFailure"]},
+    {"acceptance_criterion": "AC3", "tests": ["TestComposeDesiredStateApplier_ValidationFailure", "TestComposeDesiredStateApplier_CommandArgs_UpWithRemoveOrphans"]},
+    {"acceptance_criterion": "AC4", "tests": ["TestComposeDesiredStateApplier_NoServiceImageEnv", "TestComposeDesiredStateApplier_CommandArgs_UpWithRemoveOrphans"]},
+    {"acceptance_criterion": "AC5", "tests": ["TestComposeDesiredStateApplier_RejectsNonComposeTargetUnit"]}
+  ]
+}

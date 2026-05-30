@@ -1,0 +1,30 @@
+{
+  "feature_id": "bahia-e6uz",
+  "criteria": [
+    {
+      "id": "AC1",
+      "statement": "Full-project Compose rendering uses only the target deployment unit's services and records unit metadata.",
+      "tests": ["TestComposeDesiredStateApplier_RendersOnlyTargetDeploymentUnit"]
+    },
+    {
+      "id": "AC2",
+      "statement": "Compose ownership is enforced before any desired-state command runs for the unit-owned compose directory.",
+      "tests": ["TestComposeDesiredStateApplier_OwnershipFailure"]
+    },
+    {
+      "id": "AC3",
+      "statement": "CLI Compose executor validates staged Compose output and applies the full project under the RuntimeControlClient seam.",
+      "tests": ["TestComposeDesiredStateApplier_ValidationFailure", "TestComposeDesiredStateApplier_CommandArgs_UpWithRemoveOrphans"]
+    },
+    {
+      "id": "AC4",
+      "statement": "Desired-state Compose apply does not use service image environment substitution, service-scoped up, or force recreate.",
+      "tests": ["TestComposeDesiredStateApplier_NoServiceImageEnv", "TestComposeDesiredStateApplier_CommandArgs_UpWithRemoveOrphans"]
+    },
+    {
+      "id": "AC5",
+      "statement": "Compose apply rejects a target deployment unit whose runtime type is not compose before staging or executor commands run.",
+      "tests": ["TestComposeDesiredStateApplier_RejectsNonComposeTargetUnit"]
+    }
+  ]
+}

@@ -185,7 +185,10 @@ func TestComposeDesiredStateApplier_Success(t *testing.T) {
 	if result.DesiredHash != target.DesiredHash {
 		t.Errorf("desired hash mismatch")
 	}
-	if result.EnvironmentRevision != plan.RevisionHash {
+	if len(plan.UnitPlans) != 1 {
+		t.Fatalf("expected one unit plan, got %d", len(plan.UnitPlans))
+	}
+	if result.EnvironmentRevision != plan.UnitPlans[0].RevisionHash {
 		t.Errorf("revision hash mismatch")
 	}
 	if len(result.ResourceNames) != 1 || result.ResourceNames[0] != "web-frontend" {
@@ -571,8 +574,8 @@ func TestComposeDesiredStateApplier_ValidationFailure(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected validation error")
 	}
-	if !strings.Contains(err.Error(), "stage/validate") {
-		t.Errorf("expected stage/validate error, got: %v", err)
+	if !strings.Contains(err.Error(), "validation failed") {
+		t.Errorf("expected validation error, got: %v", err)
 	}
 
 	// No `up` command should have been run.
@@ -615,6 +618,79 @@ func TestComposeDesiredStateApplier_UpFailure(t *testing.T) {
 // ---------------------------------------------------------------------------
 // Tests: Multi-service plan
 // ---------------------------------------------------------------------------
+
+func TestComposeDesiredStateApplier_RendersOnlyTargetDeploymentUnit(t *testing.T) {
+	dir := setupBahiaOwnedDir(t)
+	runner := allSuccessRunner()
+	applier := newTestApplier(t, dir, runner)
+
+	plan := testMultiServicePlan()
+	plan.Services[0].DeploymentUnitKey = "api-unit"
+	plan.Services[0].UnitRuntimeType = domain.RuntimeTypeCompose
+	plan.Services[0].ComposeExtension.ProjectName = "api-unit"
+	plan.Services[1].DeploymentUnitKey = "web-unit"
+	plan.Services[1].UnitRuntimeType = domain.RuntimeTypeCompose
+	plan.ComputeRevisionHash()
+	target := &plan.Services[1]
+
+	result, err := applier.ApplyDesiredState(context.Background(), DesiredStateApplyRequest{
+		EnvironmentPlan: plan,
+		TargetService:   target,
+	})
+	if err != nil {
+		t.Fatalf("ApplyDesiredState: %v", err)
+	}
+	if len(result.ResourceNames) != 1 || result.ResourceNames[0] != "web-frontend" {
+		t.Fatalf("expected only target unit resources, got %v", result.ResourceNames)
+	}
+
+	liveCompose := filepath.Join(dir, "docker-compose.yml")
+	data, err := os.ReadFile(liveCompose)
+	if err != nil {
+		t.Fatalf("read live compose: %v", err)
+	}
+	content := string(data)
+	if strings.Contains(content, "myapp/api:v2.1") {
+		t.Error("compose render must not include service images from a different deployment unit")
+	}
+	if !strings.Contains(content, "web-frontend") || !strings.Contains(content, "myapp/web:v1.5") {
+		t.Error("compose render should include the target unit service")
+	}
+
+	metadata, err := os.ReadFile(filepath.Join(dir, ".bahia", "render-state.json"))
+	if err != nil {
+		t.Fatalf("read metadata: %v", err)
+	}
+	if !strings.Contains(string(metadata), `"deployment_unit_key": "web-unit"`) {
+		t.Errorf("metadata should record unit key, got: %s", metadata)
+	}
+}
+
+func TestComposeDesiredStateApplier_RejectsNonComposeTargetUnit(t *testing.T) {
+	dir := setupBahiaOwnedDir(t)
+	runner := allSuccessRunner()
+	applier := newTestApplier(t, dir, runner)
+
+	plan := testEnvironmentPlan()
+	plan.Services[0].DeploymentUnitKey = "docker-unit"
+	plan.Services[0].UnitRuntimeType = domain.RuntimeTypeDocker
+	plan.ComputeRevisionHash()
+	target := &plan.Services[0]
+
+	_, err := applier.ApplyDesiredState(context.Background(), DesiredStateApplyRequest{
+		EnvironmentPlan: plan,
+		TargetService:   target,
+	})
+	if err == nil {
+		t.Fatal("expected non-compose unit error")
+	}
+	if !strings.Contains(err.Error(), "not compose") {
+		t.Fatalf("expected not compose error, got: %v", err)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("executor should not run for non-compose unit, got %d calls", len(runner.calls))
+	}
+}
 
 func TestComposeDesiredStateApplier_MultiService(t *testing.T) {
 	dir := setupBahiaOwnedDir(t)

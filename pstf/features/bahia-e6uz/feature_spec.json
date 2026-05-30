@@ -1,0 +1,23 @@
+{
+  "feature_id": "bahia-e6uz",
+  "title": "Convert Compose Execution to Unit-Owned Renderer/Executor Flow",
+  "observed_behavior": [
+    "Compose desired-state apply already rendered a full project and avoided service-scoped up in the desired-state path.",
+    "Validation was performed by ComposeStagingManager instead of the ComposeExecutor control seam.",
+    "Compose rendering consumed the environment plan directly, so multi-unit plans could render services outside the target deployment unit."
+  ],
+  "intended_behavior": [
+    "Compose desired-state apply selects the target deployment unit and renders only that unit-owned full Compose project into the runtime compose_dir.",
+    "The compose_dir ownership gate runs before staging, validation, promotion, or apply for the unit-owned directory.",
+    "The CLI executor handles staged validation and full-project apply through the ComposeExecutor/RuntimeControlClient seam.",
+    "Desired-state apply does not use service image environment substitution, service-scoped up, or unconditional force recreate."
+  ],
+  "scope": [
+    "internal/adapters/runtime/compose_desired_state.go",
+    "internal/adapters/runtime/compose_renderer.go",
+    "internal/adapters/runtime/compose_executor.go",
+    "internal/adapters/runtime/compose_staging.go",
+    "internal/adapters/runtime/compose_desired_state_test.go",
+    "docs/deployment.md"
+  ]
+}
