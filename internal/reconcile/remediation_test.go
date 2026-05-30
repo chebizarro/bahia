@@ -190,6 +190,16 @@ func (m *mockStateRepo) ListDrifted(_ context.Context) ([]domain.EnvironmentServ
 	return nil, nil
 }
 
+func (m *mockStateRepo) ListDueForObservation(_ context.Context, dueBefore time.Time) ([]domain.EnvironmentServiceState, error) {
+	var result []domain.EnvironmentServiceState
+	for _, s := range m.states {
+		if s.LastReconciledAt == nil || !s.LastReconciledAt.After(dueBefore) {
+			result = append(result, *s)
+		}
+	}
+	return result, nil
+}
+
 func (m *mockStateRepo) ListAll(_ context.Context) ([]domain.EnvironmentServiceState, error) {
 	var result []domain.EnvironmentServiceState
 	for _, s := range m.states {
@@ -199,12 +209,13 @@ func (m *mockStateRepo) ListAll(_ context.Context) ([]domain.EnvironmentServiceS
 }
 
 type mockRuntime struct {
-	mu           sync.Mutex
-	deployed     []string
-	deployedOpts []runtime.DeployOptions
-	undeployed   []string
-	deployErr    error
-	undeployErr  error
+	mu            sync.Mutex
+	deployed      []string
+	deployedOpts  []runtime.DeployOptions
+	undeployed    []string
+	deployErr     error
+	undeployErr   error
+	observeDigest string
 }
 
 func (m *mockRuntime) Type() domain.RuntimeType {
@@ -212,12 +223,16 @@ func (m *mockRuntime) Type() domain.RuntimeType {
 }
 
 func (m *mockRuntime) Observe(_ context.Context, serviceID, envID uuid.UUID, serviceName string) (*domain.RuntimeObservation, error) {
+	m.mu.Lock()
+	digest := m.observeDigest
+	m.mu.Unlock()
 	return &domain.RuntimeObservation{
-		ServiceID:     serviceID,
-		EnvironmentID: envID,
-		HealthStatus:  domain.HealthStatusHealthy,
-		Source:        "mock",
-		ObservedAt:    time.Now().UTC(),
+		ServiceID:           serviceID,
+		EnvironmentID:       envID,
+		ObservedImageDigest: digest,
+		HealthStatus:        domain.HealthStatusHealthy,
+		Source:              "mock",
+		ObservedAt:          time.Now().UTC(),
 	}, nil
 }
 

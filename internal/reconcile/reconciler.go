@@ -5,6 +5,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/adapters/runtime"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/events"
@@ -17,6 +18,7 @@ type Reconciler struct {
 	services     repository.ServiceRepository
 	environments repository.EnvironmentRepository
 	artifacts    repository.ArtifactRepository
+	units        repository.DeploymentUnitRepository
 	observations repository.RuntimeObservationRepository
 	state        repository.EnvironmentServiceStateRepository
 	resolver     runtime.RuntimeResolver
@@ -30,6 +32,7 @@ func NewReconciler(
 	services repository.ServiceRepository,
 	environments repository.EnvironmentRepository,
 	artifacts repository.ArtifactRepository,
+	units repository.DeploymentUnitRepository,
 	observations repository.RuntimeObservationRepository,
 	state repository.EnvironmentServiceStateRepository,
 	resolver runtime.RuntimeResolver,
@@ -41,6 +44,7 @@ func NewReconciler(
 		services:     services,
 		environments: environments,
 		artifacts:    artifacts,
+		units:        units,
 		observations: observations,
 		state:        state,
 		resolver:     resolver,
@@ -71,7 +75,8 @@ func (r *Reconciler) Run(ctx context.Context) {
 }
 
 func (r *Reconciler) reconcileAll(ctx context.Context) {
-	states, err := r.state.ListAll(ctx)
+	dueBefore := time.Now().UTC().Add(-r.interval)
+	states, err := r.state.ListDueForObservation(ctx, dueBefore)
 	if err != nil {
 		r.logger.Error("failed to list all states for reconciliation", zap.Error(err))
 		return
@@ -93,6 +98,25 @@ func (r *Reconciler) reconcileAll(ctx context.Context) {
 	})
 }
 
+func (r *Reconciler) reconcileMode(ctx context.Context, env *domain.Environment, deploymentUnitID *uuid.UUID) (domain.ReconcileMode, error) {
+	if deploymentUnitID != nil && *deploymentUnitID != uuid.Nil && r.units != nil {
+		unit, err := r.units.GetByID(ctx, *deploymentUnitID)
+		if err != nil || unit == nil {
+			return "", err
+		}
+		domain.NormalizeDeploymentUnitTargeting(unit)
+		if err := domain.ValidateReconcileMode(unit.ReconcileMode); err != nil {
+			return "", err
+		}
+		return unit.ReconcileMode, nil
+	}
+	domain.NormalizeEnvironmentTargeting(env)
+	if err := domain.ValidateReconcileMode(env.Targeting.DefaultReconcileMode); err != nil {
+		return "", err
+	}
+	return env.Targeting.DefaultReconcileMode, nil
+}
+
 func (r *Reconciler) reconcileOne(ctx context.Context, currentState *domain.EnvironmentServiceState) error {
 	// Skip entries currently deploying.
 	if currentState.DriftStatus == domain.DriftStatusDeploying {
@@ -109,6 +133,14 @@ func (r *Reconciler) reconcileOne(ctx context.Context, currentState *domain.Envi
 	env, err := r.environments.GetByID(ctx, currentState.EnvironmentID)
 	if err != nil || env == nil {
 		return err
+	}
+
+	mode, err := r.reconcileMode(ctx, env, currentState.DeploymentUnitID)
+	if err != nil {
+		return err
+	}
+	if mode == domain.ReconcileModeDisabled {
+		return nil
 	}
 
 	rt, err := r.resolver.Resolve(svc, env)
@@ -130,6 +162,8 @@ func (r *Reconciler) reconcileOne(ctx context.Context, currentState *domain.Envi
 		)
 		return nil // Non-fatal; we'll try again next cycle.
 	}
+
+	obs.DeploymentUnitID = currentState.DeploymentUnitID
 
 	// Record the observation.
 	if err := r.observations.Create(ctx, obs); err != nil {

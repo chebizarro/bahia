@@ -26,6 +26,8 @@ func newPgEnvironmentServiceStateRepositoryWithDB(db pgQueryer) *PgEnvironmentSe
 
 const stateColumns = `service_id, environment_id, deployment_unit_id, desired_artifact_id, desired_intent_id, last_successful_run_id, current_observation_id, drift_status, desired_runtime_state, desired_hash, last_reconciled_at, updated_at`
 
+const stateColumnsWithAlias = `ess.service_id, ess.environment_id, ess.deployment_unit_id, ess.desired_artifact_id, ess.desired_intent_id, ess.last_successful_run_id, ess.current_observation_id, ess.drift_status, ess.desired_runtime_state, ess.desired_hash, ess.last_reconciled_at, ess.updated_at`
+
 func (r *PgEnvironmentServiceStateRepository) Upsert(ctx context.Context, state *domain.EnvironmentServiceState) error {
 	state.UpdatedAt = time.Now().UTC()
 
@@ -124,6 +126,23 @@ func (r *PgEnvironmentServiceStateRepository) ListByService(ctx context.Context,
 
 func (r *PgEnvironmentServiceStateRepository) ListDrifted(ctx context.Context) ([]domain.EnvironmentServiceState, error) {
 	return r.listByQuery(ctx, `SELECT `+stateColumns+` FROM environment_service_state WHERE drift_status = 'drifted'`)
+}
+
+func (r *PgEnvironmentServiceStateRepository) ListDueForObservation(ctx context.Context, dueBefore time.Time) ([]domain.EnvironmentServiceState, error) {
+	return r.listByQuery(ctx, `
+		SELECT `+stateColumnsWithAlias+`
+		FROM environment_service_state ess
+		JOIN environments env ON env.id = ess.environment_id
+		LEFT JOIN deployment_units du ON du.id = ess.deployment_unit_id
+		WHERE (ess.last_reconciled_at IS NULL OR ess.last_reconciled_at <= $1)
+		AND COALESCE(
+			NULLIF(du.reconcile_mode, ''),
+			NULLIF(env.targeting->>'default_reconcile_mode', ''),
+			NULLIF(env.runtime_config->>'default_reconcile_mode', ''),
+			NULLIF(env.runtime_config->>'reconcile_mode', ''),
+			'observe_only'
+		) <> 'disabled'
+	`, dueBefore)
 }
 
 func (r *PgEnvironmentServiceStateRepository) ListAll(ctx context.Context) ([]domain.EnvironmentServiceState, error) {

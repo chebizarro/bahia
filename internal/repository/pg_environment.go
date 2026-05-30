@@ -95,7 +95,7 @@ func (r *PgEnvironmentRepository) GetByID(ctx context.Context, id uuid.UUID) (*d
 
 func (r *PgEnvironmentRepository) GetByName(ctx context.Context, name string) (*domain.Environment, error) {
 	row := r.pool.QueryRow(ctx, `
-		SELECT id, COALESCE(org_id, '00000000-0000-0000-0000-000000000000'::uuid), name, loom_worker_selector, runtime_config, deploy_strategy, protected, created_at, updated_at
+		SELECT id, COALESCE(org_id, '00000000-0000-0000-0000-000000000000'::uuid), name, loom_worker_selector, runtime_config, targeting, deploy_strategy, protected, created_at, updated_at
 		FROM environments WHERE name = $1
 	`, name)
 	env, err := r.scanEnv(row)
@@ -110,7 +110,7 @@ func (r *PgEnvironmentRepository) GetByName(ctx context.Context, name string) (*
 
 func (r *PgEnvironmentRepository) List(ctx context.Context) ([]domain.Environment, error) {
 	rows, err := r.pool.Query(ctx, `
-		SELECT id, COALESCE(org_id, '00000000-0000-0000-0000-000000000000'::uuid), name, loom_worker_selector, runtime_config, deploy_strategy, protected, created_at, updated_at
+		SELECT id, COALESCE(org_id, '00000000-0000-0000-0000-000000000000'::uuid), name, loom_worker_selector, runtime_config, targeting, deploy_strategy, protected, created_at, updated_at
 		FROM environments ORDER BY name
 	`)
 	if err != nil {

@@ -824,6 +824,11 @@ func (r *fakeStateRepo) ListByService(_ context.Context, serviceID uuid.UUID) ([
 func (r *fakeStateRepo) ListDrifted(context.Context) ([]domain.EnvironmentServiceState, error) {
 	return filterStates(r.states, func(state domain.EnvironmentServiceState) bool { return state.DriftStatus == domain.DriftStatusDrifted }), nil
 }
+func (r *fakeStateRepo) ListDueForObservation(_ context.Context, dueBefore time.Time) ([]domain.EnvironmentServiceState, error) {
+	return filterStates(r.states, func(state domain.EnvironmentServiceState) bool {
+		return state.LastReconciledAt == nil || !state.LastReconciledAt.After(dueBefore)
+	}), nil
+}
 func (r *fakeStateRepo) ListAll(context.Context) ([]domain.EnvironmentServiceState, error) {
 	return r.states, nil
 }

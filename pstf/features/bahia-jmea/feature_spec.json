@@ -1,0 +1,15 @@
+{
+  "feature_id": "bahia-jmea",
+  "title": "Add Reconcile Policy Fields and Observation Scheduler",
+  "intent": "Persist reconcile policy for environments and deployment units, and schedule due observations without triggering remediation.",
+  "observed_repository_state": [
+    "domain.ReconcileMode defines observe_only, auto_apply, approval_required, and disabled in internal/domain/deployment_unit.go.",
+    "deployment_units.reconcile_mode is persisted by migration 000038 and PgDeploymentUnitRepository.",
+    "environments.targeting.default_reconcile_mode is persisted in the targeting JSONB column by migration 000039 and PgEnvironmentRepository."
+  ],
+  "intended_behavior": [
+    "The reconciler selects only service/environment state rows due for observation.",
+    "Disabled environment or deployment-unit policy prevents scheduled observation.",
+    "Non-disabled reconcile modes perform observation and drift-state updates only; remediation is not triggered by this task."
+  ]
+}

@@ -177,6 +177,7 @@ type EnvironmentServiceStateRepository interface {
 	ListByEnvironment(ctx context.Context, envID uuid.UUID) ([]domain.EnvironmentServiceState, error)
 	ListByService(ctx context.Context, serviceID uuid.UUID) ([]domain.EnvironmentServiceState, error)
 	ListDrifted(ctx context.Context) ([]domain.EnvironmentServiceState, error)
+	ListDueForObservation(ctx context.Context, dueBefore time.Time) ([]domain.EnvironmentServiceState, error)
 	ListAll(ctx context.Context) ([]domain.EnvironmentServiceState, error)
 }
 

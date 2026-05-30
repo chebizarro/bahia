@@ -1,0 +1,25 @@
+{
+  "feature_id": "bahia-jmea",
+  "matrix": [
+    {
+      "test": "TestReconcilerObserveOnlyRecordsDriftWithoutRemediation",
+      "acceptance_criteria": ["AC3", "AC4"],
+      "evidence": "Injects an observed digest mismatch and verifies observation/state updates while Deploy and Undeploy calls remain empty."
+    },
+    {
+      "test": "TestReconcilerSkipsDisabledDeploymentUnit",
+      "acceptance_criteria": ["AC3"],
+      "evidence": "Configures a disabled deployment unit and verifies no observation or reconciliation timestamp is recorded."
+    },
+    {
+      "test": "TestValidateDeploymentUnitRequiresPolicyAndOwnership",
+      "acceptance_criteria": ["AC1", "AC2"],
+      "evidence": "Validates required reconcile policy values on deployment units."
+    },
+    {
+      "test": "TestPgDeploymentUnitRepositoryCreateAndGet",
+      "acceptance_criteria": ["AC2"],
+      "evidence": "Verifies deployment_units.reconcile_mode persists through repository create/read paths."
+    }
+  ]
+}

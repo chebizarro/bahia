@@ -1,0 +1,30 @@
+{
+  "feature_id": "bahia-jmea",
+  "criteria": [
+    {
+      "id": "AC1",
+      "statement": "ReconcileMode exposes observe_only, auto_apply, approval_required, and disabled as valid domain values.",
+      "tests": ["go test ./internal/domain"]
+    },
+    {
+      "id": "AC2",
+      "statement": "Environment and deployment-unit persistence retain reconcile policy fields.",
+      "tests": ["go test ./internal/repository"]
+    },
+    {
+      "id": "AC3",
+      "statement": "The scheduler selects due service/environment rows for observation and skips disabled policy.",
+      "tests": ["TestReconcilerSkipsDisabledDeploymentUnit", "PgEnvironmentServiceStateRepository.ListDueForObservation query coverage"]
+    },
+    {
+      "id": "AC4",
+      "statement": "Observe-only reconciliation records observations and drift without invoking runtime remediation operations.",
+      "tests": ["TestReconcilerObserveOnlyRecordsDriftWithoutRemediation"]
+    },
+    {
+      "id": "AC5",
+      "statement": "Normative deployment documentation describes reconcile policy persistence and observe-only scheduler behavior.",
+      "tests": ["docs/deployment.md review"]
+    }
+  ]
+}

@@ -330,7 +330,7 @@ func New(cfg *config.Config) (*App, error) {
 	var rec *reconcile.Reconciler
 	if cfg.Reconcile.Enabled {
 		rec = reconcile.NewReconciler(
-			serviceRepo, envRepo, artifactRepo, obsRepo, stateRepo,
+			serviceRepo, envRepo, artifactRepo, deploymentUnitRepo, obsRepo, stateRepo,
 			runtimeResolver, publisher, cfg.Reconcile.Interval, logger,
 		)
 	}
