@@ -183,6 +183,12 @@ Bahia persists desired-state metadata additively so deploy, observe, and project
 - `environment_service_state.desired_runtime_state` / `environment_service_state.desired_hash` store the current desired runtime snapshot for the service/environment row.
 - `runtime_observations.normalized_state` / `runtime_observations.normalized_hash` store normalized observed runtime state for drift comparison.
 
+`DesiredServiceSpec` includes deployment-unit identity: `deployment_unit_id` when a persisted unit exists, `deployment_unit_key` for implicit or explicit unit grouping, and `unit_runtime_type` for renderer/runtime ownership. Older snapshots without those fields are normalized into the implicit `default` unit during planning.
+
+`DesiredEnvironmentPlan` is both environment-scoped and unit-scoped. The flat `services` list remains available for existing renderers, and `unit_plans` groups the same services by deployment unit. Each unit plan computes a unit `revision_hash` from its unit identity, runtime type, and sorted service desired hashes. The environment `revision_hash` is an aggregate over sorted unit revision hashes, so moving a service between units or changing one unit's desired state changes the aggregate deterministically.
+
+Compose dependencies are unit-local. During plan assembly Bahia rejects `depends_on` edges that reference a service in a different deployment unit; operators must colocate those services in one Compose-owned unit or express the relationship through runtime/network configuration instead of a cross-unit Compose graph.
+
 Secret plaintext is never stored in desired-state or normalized-observation JSON. Desired-state secret entries use redacted references only.
 
 ## Podman Runtime
