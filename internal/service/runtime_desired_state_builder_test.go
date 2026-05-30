@@ -110,6 +110,12 @@ func TestDesiredStateBuilder_Build(t *testing.T) {
 	if spec.ArtifactID != artifactID {
 		t.Errorf("ArtifactID = %v, want %v", spec.ArtifactID, artifactID)
 	}
+	if spec.DeploymentUnitKey != domain.DefaultDeploymentUnitKey {
+		t.Errorf("DeploymentUnitKey = %q, want %q", spec.DeploymentUnitKey, domain.DefaultDeploymentUnitKey)
+	}
+	if spec.UnitRuntimeType != domain.RuntimeTypeCompose {
+		t.Errorf("UnitRuntimeType = %q, want %q", spec.UnitRuntimeType, domain.RuntimeTypeCompose)
+	}
 
 	// Verify stable service key is normalized.
 	if spec.StableServiceKey != "my-app-container" {
@@ -166,10 +172,11 @@ func TestDesiredStateBuilder_BahiaLabelsAlwaysInjected(t *testing.T) {
 
 	// Verify all required Bahia labels.
 	requiredLabels := map[string]string{
-		"bahia.managed":        "true",
-		"bahia.service_id":     input.Service.ID.String(),
-		"bahia.environment_id": input.Environment.ID.String(),
-		"bahia.artifact_id":    input.Artifact.ID.String(),
+		"bahia.managed":             "true",
+		"bahia.service_id":          input.Service.ID.String(),
+		"bahia.environment_id":      input.Environment.ID.String(),
+		"bahia.deployment_unit_key": domain.DefaultDeploymentUnitKey,
+		"bahia.artifact_id":         input.Artifact.ID.String(),
 	}
 
 	for label, want := range requiredLabels {
@@ -191,6 +198,35 @@ func TestDesiredStateBuilder_BahiaLabelsAlwaysInjected(t *testing.T) {
 	// Original user labels should be preserved alongside Bahia labels.
 	if got := spec.Labels["app.version"]; got != "1.0" {
 		t.Errorf("user label app.version = %q, want %q", got, "1.0")
+	}
+}
+
+func TestDesiredStateBuilder_UsesExplicitDeploymentUnitIdentity(t *testing.T) {
+	builder := NewDesiredStateBuilder()
+	input := makeTestInput()
+	unitID := uuid.MustParse("00000000-0000-0000-0000-000000000099")
+	input.DeploymentUnit = &domain.DeploymentUnit{
+		ID:            unitID,
+		EnvironmentID: input.Environment.ID,
+		Key:           "edge",
+		RuntimeType:   domain.RuntimeTypeDocker,
+	}
+
+	spec, err := builder.Build(input)
+	if err != nil {
+		t.Fatalf("Build() error: %v", err)
+	}
+	if spec.DeploymentUnitID == nil || *spec.DeploymentUnitID != unitID {
+		t.Fatalf("DeploymentUnitID = %v, want %s", spec.DeploymentUnitID, unitID)
+	}
+	if spec.DeploymentUnitKey != "edge" {
+		t.Errorf("DeploymentUnitKey = %q, want edge", spec.DeploymentUnitKey)
+	}
+	if spec.UnitRuntimeType != domain.RuntimeTypeDocker {
+		t.Errorf("UnitRuntimeType = %q, want docker", spec.UnitRuntimeType)
+	}
+	if spec.Labels["bahia.deployment_unit_id"] != unitID.String() {
+		t.Errorf("deployment unit id label missing or wrong")
 	}
 }
 

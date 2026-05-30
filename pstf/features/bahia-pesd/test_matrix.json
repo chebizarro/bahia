@@ -1,0 +1,8 @@
+{
+  "feature_id": "bahia-pesd",
+  "tests": [
+    {"criteria": ["AC1", "AC2", "AC3"], "command": "GOCACHE=/tmp/bahia-go-cache go test ./internal/domain", "coverage": "Golden desired-service and environment-plan hash tests lock schema version 2 and unit aggregate hashes."},
+    {"criteria": ["AC1", "AC2", "AC3", "AC4"], "command": "GOCACHE=/tmp/bahia-go-cache go test ./internal/service", "coverage": "Builder and assembler tests verify default/explicit unit identity, unit grouping, unit hashes, aggregate hash determinism, and cross-unit Compose dependency rejection."},
+    {"criteria": ["AC2", "AC3"], "command": "GOCACHE=/tmp/bahia-go-cache go test ./internal/adapters/runtime", "coverage": "Runtime adapter tests verify existing renderers remain compatible with unit-aware environment plans."}
+  ]
+}

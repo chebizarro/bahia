@@ -14,7 +14,7 @@ import (
 
 // DesiredStateSchemaVersion is the current schema version for desired-state serialization.
 // Bump this when the canonical hash inputs change.
-const DesiredStateSchemaVersion = "1"
+const DesiredStateSchemaVersion = "2"
 
 // ---------------------------------------------------------------------------
 // Secret handling types
@@ -146,9 +146,12 @@ type DesiredServiceSpec struct {
 	SchemaVersion string `json:"schema_version"`
 
 	// Identity
-	ServiceID     uuid.UUID `json:"service_id"`
-	EnvironmentID uuid.UUID `json:"environment_id"`
-	ArtifactID    uuid.UUID `json:"artifact_id"`
+	ServiceID         uuid.UUID   `json:"service_id"`
+	EnvironmentID     uuid.UUID   `json:"environment_id"`
+	DeploymentUnitID  *uuid.UUID  `json:"deployment_unit_id,omitempty"`
+	DeploymentUnitKey string      `json:"deployment_unit_key"`
+	UnitRuntimeType   RuntimeType `json:"unit_runtime_type,omitempty"`
+	ArtifactID        uuid.UUID   `json:"artifact_id"`
 
 	// StableServiceKey is the normalized runtime name derived from
 	// Service.RuntimeTargetName(). It is safe for Compose service names,
@@ -201,28 +204,160 @@ type DesiredServiceSpec struct {
 // containing all managed services. Services are sorted deterministically by
 // StableServiceKey for hash stability.
 type DesiredEnvironmentPlan struct {
-	EnvironmentID uuid.UUID            `json:"environment_id"`
-	RevisionHash  string               `json:"revision_hash"`
-	Services      []DesiredServiceSpec  `json:"services"`
+	EnvironmentID uuid.UUID                   `json:"environment_id"`
+	RevisionHash  string                      `json:"revision_hash"`
+	Services      []DesiredServiceSpec        `json:"services"`
+	UnitPlans     []DesiredDeploymentUnitPlan `json:"unit_plans"`
 }
 
-// SortServices sorts the plan's services deterministically by StableServiceKey.
+// DesiredDeploymentUnitPlan is the unit-scoped subset of an environment plan.
+// Services are sorted deterministically by StableServiceKey for hash stability.
+type DesiredDeploymentUnitPlan struct {
+	DeploymentUnitID  *uuid.UUID           `json:"deployment_unit_id,omitempty"`
+	DeploymentUnitKey string               `json:"deployment_unit_key"`
+	RuntimeType       RuntimeType          `json:"runtime_type,omitempty"`
+	RevisionHash      string               `json:"revision_hash"`
+	Services          []DesiredServiceSpec `json:"services"`
+}
+
+// SortServices sorts the plan's services deterministically by unit identity and StableServiceKey.
 func (p *DesiredEnvironmentPlan) SortServices() {
 	sort.Slice(p.Services, func(i, j int) bool {
+		left := serviceUnitSortKey(p.Services[i])
+		right := serviceUnitSortKey(p.Services[j])
+		if left != right {
+			return left < right
+		}
 		return p.Services[i].StableServiceKey < p.Services[j].StableServiceKey
 	})
 }
 
-// ComputeRevisionHash computes the environment revision hash from the sorted
-// service desired hashes. Services are sorted before hashing.
-func (p *DesiredEnvironmentPlan) ComputeRevisionHash() string {
-	p.SortServices()
+// SortServices sorts a unit plan's services deterministically by StableServiceKey.
+func (u *DesiredDeploymentUnitPlan) SortServices() {
+	sort.Slice(u.Services, func(i, j int) bool {
+		return u.Services[i].StableServiceKey < u.Services[j].StableServiceKey
+	})
+}
+
+// ComputeRevisionHash computes a unit revision hash from sorted service desired hashes.
+func (u *DesiredDeploymentUnitPlan) ComputeRevisionHash() string {
+	u.SortServices()
 	h := sha256.New()
-	for _, svc := range p.Services {
+	h.Write([]byte(unitIdentityHashKey(u.DeploymentUnitID, u.DeploymentUnitKey)))
+	h.Write([]byte(string(u.RuntimeType)))
+	for _, svc := range u.Services {
 		h.Write([]byte(svc.DesiredHash))
+	}
+	u.RevisionHash = fmt.Sprintf("sha256:%x", h.Sum(nil))
+	return u.RevisionHash
+}
+
+// ComputeRevisionHash computes the aggregate environment revision hash from
+// sorted unit revision hashes. Services are sorted and grouped by deployment unit before hashing.
+func (p *DesiredEnvironmentPlan) ComputeRevisionHash() string {
+	p.NormalizeUnitIdentity()
+	p.SortServices()
+	p.GroupByDeploymentUnit()
+	h := sha256.New()
+	for i := range p.UnitPlans {
+		u := &p.UnitPlans[i]
+		u.ComputeRevisionHash()
+		h.Write([]byte(unitIdentityHashKey(u.DeploymentUnitID, u.DeploymentUnitKey)))
+		h.Write([]byte(u.RevisionHash))
 	}
 	p.RevisionHash = fmt.Sprintf("sha256:%x", h.Sum(nil))
 	return p.RevisionHash
+}
+
+// NormalizeUnitIdentity fills backward-compatible default unit identity on services that predate deployment units.
+func (p *DesiredEnvironmentPlan) NormalizeUnitIdentity() {
+	for i := range p.Services {
+		NormalizeDesiredServiceUnitIdentity(&p.Services[i], nil, "", "")
+	}
+}
+
+// GroupByDeploymentUnit rebuilds UnitPlans from the flat Services slice.
+func (p *DesiredEnvironmentPlan) GroupByDeploymentUnit() {
+	units := make(map[string]*DesiredDeploymentUnitPlan)
+	keys := make([]string, 0)
+	for _, svc := range p.Services {
+		key := serviceUnitSortKey(svc)
+		unit, ok := units[key]
+		if !ok {
+			unit = &DesiredDeploymentUnitPlan{
+				DeploymentUnitID:  copyUUIDPtr(svc.DeploymentUnitID),
+				DeploymentUnitKey: svc.DeploymentUnitKey,
+				RuntimeType:       svc.UnitRuntimeType,
+			}
+			units[key] = unit
+			keys = append(keys, key)
+		}
+		unit.Services = append(unit.Services, svc)
+	}
+	sort.Strings(keys)
+	p.UnitPlans = make([]DesiredDeploymentUnitPlan, 0, len(keys))
+	for _, key := range keys {
+		unit := units[key]
+		unit.ComputeRevisionHash()
+		p.UnitPlans = append(p.UnitPlans, *unit)
+	}
+}
+
+// NormalizeDesiredServiceUnitIdentity applies explicit unit identity when supplied, or the implicit default unit otherwise.
+func NormalizeDesiredServiceUnitIdentity(svc *DesiredServiceSpec, unitID *uuid.UUID, unitKey string, runtimeType RuntimeType) {
+	if svc == nil {
+		return
+	}
+	if unitID != nil && *unitID != uuid.Nil {
+		svc.DeploymentUnitID = copyUUIDPtr(unitID)
+	} else if svc.DeploymentUnitID != nil && *svc.DeploymentUnitID == uuid.Nil {
+		svc.DeploymentUnitID = nil
+	}
+	if strings.TrimSpace(unitKey) != "" {
+		svc.DeploymentUnitKey = strings.TrimSpace(unitKey)
+	}
+	if svc.DeploymentUnitKey == "" {
+		svc.DeploymentUnitKey = DefaultDeploymentUnitKey
+	}
+	if runtimeType != "" {
+		svc.UnitRuntimeType = runtimeType
+	}
+}
+
+func canonicalDesiredLabels(labels map[string]string) map[string]string {
+	if len(labels) == 0 {
+		return map[string]string{}
+	}
+	out := make(map[string]string, len(labels))
+	for k, v := range labels {
+		if k == "bahia.desired_hash" {
+			continue
+		}
+		out[k] = v
+	}
+	return out
+}
+
+func copyUUIDPtr(id *uuid.UUID) *uuid.UUID {
+	if id == nil || *id == uuid.Nil {
+		return nil
+	}
+	cp := *id
+	return &cp
+}
+
+func serviceUnitSortKey(svc DesiredServiceSpec) string {
+	return unitIdentityHashKey(svc.DeploymentUnitID, svc.DeploymentUnitKey)
+}
+
+func unitIdentityHashKey(id *uuid.UUID, key string) string {
+	if id != nil && *id != uuid.Nil {
+		return "id:" + id.String()
+	}
+	if strings.TrimSpace(key) == "" {
+		key = DefaultDeploymentUnitKey
+	}
+	return "key:" + strings.TrimSpace(key)
 }
 
 // ---------------------------------------------------------------------------
@@ -271,25 +406,28 @@ func NormalizeServiceKeyWithSuffix(name string, serviceID uuid.UUID) string {
 // (struct field order is stable in encoding/json). Volatile fields like
 // DesiredHash itself, extensions, and timestamps are excluded.
 type hashInput struct {
-	SchemaVersion    string            `json:"schema_version"`
-	ServiceID        uuid.UUID         `json:"service_id"`
-	EnvironmentID    uuid.UUID         `json:"environment_id"`
-	ArtifactID       uuid.UUID         `json:"artifact_id"`
-	StableServiceKey string            `json:"stable_service_key"`
-	ImageRef         string            `json:"image_ref"`
-	Command          []string          `json:"command"`
-	Entrypoint       []string          `json:"entrypoint"`
-	WorkDir          string            `json:"work_dir"`
-	Env              map[string]string `json:"env"`
-	SecretRefKeys    []string          `json:"secret_ref_keys"`
-	Ports            []string          `json:"ports"`
-	Volumes          []string          `json:"volumes"`
-	Labels           map[string]string `json:"labels"`
-	Healthcheck      *HealthcheckConfig `json:"healthcheck"`
-	DependsOn        []string          `json:"depends_on"`
-	NetworkMode      string            `json:"network_mode"`
-	RestartPolicy    string            `json:"restart_policy"`
-	PullPolicy       string            `json:"pull_policy"`
+	SchemaVersion     string             `json:"schema_version"`
+	ServiceID         uuid.UUID          `json:"service_id"`
+	EnvironmentID     uuid.UUID          `json:"environment_id"`
+	DeploymentUnitID  *uuid.UUID         `json:"deployment_unit_id,omitempty"`
+	DeploymentUnitKey string             `json:"deployment_unit_key"`
+	UnitRuntimeType   RuntimeType        `json:"unit_runtime_type,omitempty"`
+	ArtifactID        uuid.UUID          `json:"artifact_id"`
+	StableServiceKey  string             `json:"stable_service_key"`
+	ImageRef          string             `json:"image_ref"`
+	Command           []string           `json:"command"`
+	Entrypoint        []string           `json:"entrypoint"`
+	WorkDir           string             `json:"work_dir"`
+	Env               map[string]string  `json:"env"`
+	SecretRefKeys     []string           `json:"secret_ref_keys"`
+	Ports             []string           `json:"ports"`
+	Volumes           []string           `json:"volumes"`
+	Labels            map[string]string  `json:"labels"`
+	Healthcheck       *HealthcheckConfig `json:"healthcheck"`
+	DependsOn         []string           `json:"depends_on"`
+	NetworkMode       string             `json:"network_mode"`
+	RestartPolicy     string             `json:"restart_policy"`
+	PullPolicy        string             `json:"pull_policy"`
 }
 
 // ComputeDesiredHash computes the deterministic hash of a DesiredServiceSpec.
@@ -299,6 +437,8 @@ type hashInput struct {
 // Map keys are sorted by encoding/json; slice fields should already be in
 // canonical order (ports, volumes sorted lexicographically by the caller).
 func (s *DesiredServiceSpec) ComputeDesiredHash() string {
+	NormalizeDesiredServiceUnitIdentity(s, nil, "", "")
+
 	// Collect secret ref env var names (sorted) — only presence matters for hash.
 	secretKeys := make([]string, 0, len(s.SecretRefs))
 	for _, ref := range s.SecretRefs {
@@ -329,10 +469,7 @@ func (s *DesiredServiceSpec) ComputeDesiredHash() string {
 		volumes = []string{}
 	}
 	sort.Strings(volumes)
-	labels := s.Labels
-	if labels == nil {
-		labels = map[string]string{}
-	}
+	labels := canonicalDesiredLabels(s.Labels)
 	deps := s.DependsOn
 	if deps == nil {
 		deps = []string{}
@@ -340,25 +477,28 @@ func (s *DesiredServiceSpec) ComputeDesiredHash() string {
 	sort.Strings(deps)
 
 	input := hashInput{
-		SchemaVersion:    s.SchemaVersion,
-		ServiceID:        s.ServiceID,
-		EnvironmentID:    s.EnvironmentID,
-		ArtifactID:       s.ArtifactID,
-		StableServiceKey: s.StableServiceKey,
-		ImageRef:         s.ImageRef,
-		Command:          cmd,
-		Entrypoint:       ep,
-		WorkDir:          s.WorkDir,
-		Env:              env,
-		SecretRefKeys:    secretKeys,
-		Ports:            ports,
-		Volumes:          volumes,
-		Labels:           labels,
-		Healthcheck:      s.Healthcheck,
-		DependsOn:        deps,
-		NetworkMode:      s.NetworkMode,
-		RestartPolicy:    s.RestartPolicy,
-		PullPolicy:       s.PullPolicy,
+		SchemaVersion:     s.SchemaVersion,
+		ServiceID:         s.ServiceID,
+		EnvironmentID:     s.EnvironmentID,
+		DeploymentUnitID:  s.DeploymentUnitID,
+		DeploymentUnitKey: s.DeploymentUnitKey,
+		UnitRuntimeType:   s.UnitRuntimeType,
+		ArtifactID:        s.ArtifactID,
+		StableServiceKey:  s.StableServiceKey,
+		ImageRef:          s.ImageRef,
+		Command:           cmd,
+		Entrypoint:        ep,
+		WorkDir:           s.WorkDir,
+		Env:               env,
+		SecretRefKeys:     secretKeys,
+		Ports:             ports,
+		Volumes:           volumes,
+		Labels:            labels,
+		Healthcheck:       s.Healthcheck,
+		DependsOn:         deps,
+		NetworkMode:       s.NetworkMode,
+		RestartPolicy:     s.RestartPolicy,
+		PullPolicy:        s.PullPolicy,
 	}
 
 	data, err := json.Marshal(input)

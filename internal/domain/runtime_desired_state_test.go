@@ -446,7 +446,7 @@ func TestDesiredServiceSpec_HashIncludesSecretKeys(t *testing.T) {
 
 func TestDesiredServiceSpec_GoldenHash(t *testing.T) {
 	spec := DesiredServiceSpec{
-		SchemaVersion:    "1",
+		SchemaVersion:    DesiredStateSchemaVersion,
 		ServiceID:        uuid.MustParse("11111111-1111-1111-1111-111111111111"),
 		EnvironmentID:    uuid.MustParse("22222222-2222-2222-2222-222222222222"),
 		ArtifactID:       uuid.MustParse("33333333-3333-3333-3333-333333333333"),
@@ -474,14 +474,14 @@ func TestDesiredServiceSpec_GoldenHash(t *testing.T) {
 	// This is the golden hash. If this changes, canonical serialization has broken.
 	// To update: run the test, get the new hash, verify the serialization change
 	// is intentional, bump DesiredStateSchemaVersion, and update this value.
-	want := "sha256:a783ee5860f8bf9d07e89d1dae4111b6c84d6b591c7b8ca210adc963b48d92e8"
+	want := "sha256:8ca65902196c5983f49c14be60d8368f8a92d239bd0abc76b267e46619e55e80"
 	if got != want {
 		t.Fatalf("golden desired hash changed — canonical serialization broken:\n  got:  %s\n  want: %s", got, want)
 	}
 
 	// Verify determinism: compute again and compare.
 	spec2 := DesiredServiceSpec{
-		SchemaVersion:    "1",
+		SchemaVersion:    DesiredStateSchemaVersion,
 		ServiceID:        uuid.MustParse("11111111-1111-1111-1111-111111111111"),
 		EnvironmentID:    uuid.MustParse("22222222-2222-2222-2222-222222222222"),
 		ArtifactID:       uuid.MustParse("33333333-3333-3333-3333-333333333333"),
@@ -515,7 +515,7 @@ func TestDesiredServiceSpec_GoldenHash(t *testing.T) {
 func TestDesiredServiceSpec_GoldenHash_Minimal(t *testing.T) {
 	// Minimal spec — verifies hash stability for services with no optional fields.
 	spec := DesiredServiceSpec{
-		SchemaVersion:    "1",
+		SchemaVersion:    DesiredStateSchemaVersion,
 		ServiceID:        uuid.MustParse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"),
 		EnvironmentID:    uuid.MustParse("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"),
 		ArtifactID:       uuid.MustParse("cccccccc-cccc-cccc-cccc-cccccccccccc"),
@@ -524,14 +524,14 @@ func TestDesiredServiceSpec_GoldenHash_Minimal(t *testing.T) {
 	}
 
 	got := spec.ComputeDesiredHash()
-	want := "sha256:4dd98b19876ad163db3cc22f8905e64cc56db8391a468993af599fc467a1f69e"
+	want := "sha256:ef26e7506549ae9258556d0f97a75ce74bfb62fad60865bad5c76fc2eaca0691"
 	if got != want {
 		t.Fatalf("minimal golden desired hash changed — canonical serialization broken:\n  got:  %s\n  want: %s", got, want)
 	}
 
 	// Rebuild from scratch and verify determinism.
 	spec2 := DesiredServiceSpec{
-		SchemaVersion:    "1",
+		SchemaVersion:    DesiredStateSchemaVersion,
 		ServiceID:        uuid.MustParse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"),
 		EnvironmentID:    uuid.MustParse("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"),
 		ArtifactID:       uuid.MustParse("cccccccc-cccc-cccc-cccc-cccccccccccc"),

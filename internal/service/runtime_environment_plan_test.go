@@ -78,32 +78,48 @@ func (f *fakeSecretLister) ListEffective(_ context.Context, serviceID, envID uui
 	return f.secrets[key], nil
 }
 
+type fakeUnitLister struct {
+	units map[uuid.UUID][]domain.DeploymentUnit
+	err   error
+}
+
+func (f *fakeUnitLister) ListByEnvironment(_ context.Context, envID uuid.UUID) ([]domain.DeploymentUnit, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.units[envID], nil
+}
+
 // ---------------------------------------------------------------------------
 // Deterministic test IDs
 // ---------------------------------------------------------------------------
 
 var (
-	planEnvID       = uuid.MustParse("00000000-0000-0000-0000-000000000010")
-	planTargetSvcID = uuid.MustParse("00000000-0000-0000-0000-000000000011")
+	planEnvID         = uuid.MustParse("00000000-0000-0000-0000-000000000010")
+	planTargetSvcID   = uuid.MustParse("00000000-0000-0000-0000-000000000011")
 	planSiblingSvcID1 = uuid.MustParse("00000000-0000-0000-0000-000000000012")
 	planSiblingSvcID2 = uuid.MustParse("00000000-0000-0000-0000-000000000013")
 	planDeletedSvcID  = uuid.MustParse("00000000-0000-0000-0000-000000000014")
 	planArtifactID1   = uuid.MustParse("00000000-0000-0000-0000-000000000021")
 	planArtifactID2   = uuid.MustParse("00000000-0000-0000-0000-000000000022")
 	planBuildID       = uuid.MustParse("00000000-0000-0000-0000-000000000030")
+	planUnitID1       = uuid.MustParse("00000000-0000-0000-0000-000000000041")
+	planUnitID2       = uuid.MustParse("00000000-0000-0000-0000-000000000042")
 )
 
 func makeTargetSpec() *domain.DesiredServiceSpec {
 	spec := &domain.DesiredServiceSpec{
-		SchemaVersion:    domain.DesiredStateSchemaVersion,
-		ServiceID:        planTargetSvcID,
-		EnvironmentID:    planEnvID,
-		ArtifactID:       planArtifactID1,
-		StableServiceKey: "target-app",
-		ImageRef:         "ghcr.io/org/target@sha256:aaa",
-		Env:              map[string]string{"APP_ENV": "prod"},
-		Labels:           map[string]string{"bahia.managed": "true"},
-		RestartPolicy:    "unless-stopped",
+		SchemaVersion:     domain.DesiredStateSchemaVersion,
+		ServiceID:         planTargetSvcID,
+		EnvironmentID:     planEnvID,
+		ArtifactID:        planArtifactID1,
+		StableServiceKey:  "target-app",
+		ImageRef:          "ghcr.io/org/target@sha256:aaa",
+		Env:               map[string]string{"APP_ENV": "prod"},
+		DeploymentUnitKey: domain.DefaultDeploymentUnitKey,
+		UnitRuntimeType:   domain.RuntimeTypeCompose,
+		Labels:            map[string]string{"bahia.managed": "true", "bahia.deployment_unit_key": domain.DefaultDeploymentUnitKey},
+		RestartPolicy:     "unless-stopped",
 	}
 	spec.ComputeDesiredHash()
 	return spec
@@ -111,15 +127,17 @@ func makeTargetSpec() *domain.DesiredServiceSpec {
 
 func makeSiblingSpec(serviceID uuid.UUID, key string) *domain.DesiredServiceSpec {
 	spec := &domain.DesiredServiceSpec{
-		SchemaVersion:    domain.DesiredStateSchemaVersion,
-		ServiceID:        serviceID,
-		EnvironmentID:    planEnvID,
-		ArtifactID:       planArtifactID2,
-		StableServiceKey: key,
-		ImageRef:         "ghcr.io/org/" + key + "@sha256:bbb",
-		Env:              map[string]string{"MODE": "sibling"},
-		Labels:           map[string]string{"bahia.managed": "true"},
-		RestartPolicy:    "always",
+		SchemaVersion:     domain.DesiredStateSchemaVersion,
+		ServiceID:         serviceID,
+		EnvironmentID:     planEnvID,
+		ArtifactID:        planArtifactID2,
+		StableServiceKey:  key,
+		ImageRef:          "ghcr.io/org/" + key + "@sha256:bbb",
+		Env:               map[string]string{"MODE": "sibling"},
+		DeploymentUnitKey: domain.DefaultDeploymentUnitKey,
+		UnitRuntimeType:   domain.RuntimeTypeCompose,
+		Labels:            map[string]string{"bahia.managed": "true", "bahia.deployment_unit_key": domain.DefaultDeploymentUnitKey},
+		RestartPolicy:     "always",
 	}
 	spec.ComputeDesiredHash()
 	return spec
@@ -138,6 +156,7 @@ func newAssembler(
 		Services:    services,
 		Artifacts:   artifacts,
 		Secrets:     secrets,
+		Units:       &fakeUnitLister{units: map[uuid.UUID][]domain.DeploymentUnit{}},
 		Builder:     NewDesiredStateBuilder(),
 	})
 }
@@ -156,10 +175,10 @@ func TestAssemble_TargetReplacesExisting(t *testing.T) {
 		states: map[uuid.UUID][]domain.EnvironmentServiceState{
 			planEnvID: {
 				{
-					ServiceID:       planTargetSvcID,
-					EnvironmentID:   planEnvID,
+					ServiceID:           planTargetSvcID,
+					EnvironmentID:       planEnvID,
 					DesiredRuntimeState: oldSpec,
-					DesiredHash:     oldSpec.DesiredHash,
+					DesiredHash:         oldSpec.DesiredHash,
 				},
 			},
 		},
@@ -191,8 +210,8 @@ func TestAssemble_SiblingFromStoredState(t *testing.T) {
 		states: map[uuid.UUID][]domain.EnvironmentServiceState{
 			planEnvID: {
 				{
-					ServiceID:       planTargetSvcID,
-					EnvironmentID:   planEnvID,
+					ServiceID:     planTargetSvcID,
+					EnvironmentID: planEnvID,
 				},
 				{
 					ServiceID:           planSiblingSvcID1,
@@ -246,8 +265,8 @@ func TestAssemble_LegacySiblingHydratedFromServiceArtifact(t *testing.T) {
 					EnvironmentID: planEnvID,
 				},
 				{
-					ServiceID:        planSiblingSvcID1,
-					EnvironmentID:    planEnvID,
+					ServiceID:         planSiblingSvcID1,
+					EnvironmentID:     planEnvID,
 					DesiredArtifactID: &planArtifactID2,
 					// No DesiredRuntimeState — legacy.
 				},
@@ -601,6 +620,73 @@ func TestAssemble_RevisionHashChangesWithDifferentSpecs(t *testing.T) {
 
 	if plan1.RevisionHash == plan2.RevisionHash {
 		t.Error("different specs should produce different revision hashes")
+	}
+}
+
+func TestAssemble_GroupsServicesByDeploymentUnitAndComputesUnitHashes(t *testing.T) {
+	unitA := domain.DeploymentUnit{ID: planUnitID1, EnvironmentID: planEnvID, Key: "api", RuntimeType: domain.RuntimeTypeCompose}
+	unitB := domain.DeploymentUnit{ID: planUnitID2, EnvironmentID: planEnvID, Key: "worker", RuntimeType: domain.RuntimeTypeDocker}
+	targetSpec := makeTargetSpec()
+	siblingSpec := makeSiblingSpec(planSiblingSvcID1, "worker-svc")
+
+	loader := &fakeStateLoader{
+		states: map[uuid.UUID][]domain.EnvironmentServiceState{
+			planEnvID: {
+				{ServiceID: planTargetSvcID, EnvironmentID: planEnvID, DeploymentUnitID: &planUnitID1},
+				{ServiceID: planSiblingSvcID1, EnvironmentID: planEnvID, DeploymentUnitID: &planUnitID2, DesiredRuntimeState: siblingSpec},
+			},
+		},
+	}
+	svcLoader := &fakeServiceLoader{services: map[uuid.UUID]*domain.Service{planSiblingSvcID1: {ID: planSiblingSvcID1, Name: "worker-svc"}}}
+	asm := newAssembler(loader, &fakeStateWriter{}, svcLoader, &fakeArtifactLoader{}, &fakeSecretLister{})
+	asm.units = &fakeUnitLister{units: map[uuid.UUID][]domain.DeploymentUnit{planEnvID: {unitA, unitB}}}
+
+	plan, err := asm.Assemble(context.Background(), planEnvID, planTargetSvcID, targetSpec)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(plan.UnitPlans) != 2 {
+		t.Fatalf("expected 2 unit plans, got %d", len(plan.UnitPlans))
+	}
+	if plan.RevisionHash == "" {
+		t.Fatal("environment revision hash should be computed")
+	}
+	for _, unitPlan := range plan.UnitPlans {
+		if unitPlan.RevisionHash == "" {
+			t.Fatalf("unit %q revision hash should be computed", unitPlan.DeploymentUnitKey)
+		}
+		if len(unitPlan.Services) != 1 {
+			t.Fatalf("unit %q should contain one service, got %d", unitPlan.DeploymentUnitKey, len(unitPlan.Services))
+		}
+	}
+}
+
+func TestAssemble_RejectsCrossUnitComposeDependency(t *testing.T) {
+	unitA := domain.DeploymentUnit{ID: planUnitID1, EnvironmentID: planEnvID, Key: "frontend", RuntimeType: domain.RuntimeTypeCompose}
+	unitB := domain.DeploymentUnit{ID: planUnitID2, EnvironmentID: planEnvID, Key: "backend", RuntimeType: domain.RuntimeTypeCompose}
+	targetSpec := makeTargetSpec()
+	targetSpec.StableServiceKey = "web"
+	targetSpec.ComposeExtension = &domain.ComposeExtension{DependsOn: map[string]domain.ComposeDependency{"api": {Condition: "service_started"}}}
+	targetSpec.ComputeDesiredHash()
+	siblingSpec := makeSiblingSpec(planSiblingSvcID1, "api")
+	siblingSpec.ComposeExtension = &domain.ComposeExtension{}
+	siblingSpec.ComputeDesiredHash()
+
+	loader := &fakeStateLoader{
+		states: map[uuid.UUID][]domain.EnvironmentServiceState{
+			planEnvID: {
+				{ServiceID: planTargetSvcID, EnvironmentID: planEnvID, DeploymentUnitID: &planUnitID1},
+				{ServiceID: planSiblingSvcID1, EnvironmentID: planEnvID, DeploymentUnitID: &planUnitID2, DesiredRuntimeState: siblingSpec},
+			},
+		},
+	}
+	svcLoader := &fakeServiceLoader{services: map[uuid.UUID]*domain.Service{planSiblingSvcID1: {ID: planSiblingSvcID1, Name: "api"}}}
+	asm := newAssembler(loader, &fakeStateWriter{}, svcLoader, &fakeArtifactLoader{}, &fakeSecretLister{})
+	asm.units = &fakeUnitLister{units: map[uuid.UUID][]domain.DeploymentUnit{planEnvID: {unitA, unitB}}}
+
+	_, err := asm.Assemble(context.Background(), planEnvID, planTargetSvcID, targetSpec)
+	if err == nil {
+		t.Fatal("expected cross-unit compose dependency error")
 	}
 }
 

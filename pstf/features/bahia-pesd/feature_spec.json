@@ -1,0 +1,7 @@
+{
+  "feature_id": "bahia-pesd",
+  "title": "Task 3: Make Desired-State Planning Unit-Aware",
+  "intent": "Desired-state planning carries deployment-unit identity, groups environment plans by unit, rejects cross-unit Compose dependencies, and computes deterministic unit and environment revision hashes.",
+  "observed_before": "DesiredServiceSpec only identified service/environment/artifact, and DesiredEnvironmentPlan computed one flat environment hash from service hashes.",
+  "intended_behavior": "Planning normalizes implicit default-unit services, preserves explicit unit identity, computes per-unit revision hashes, aggregates environment revision from units, and fails plan assembly when Compose dependencies cross units."
+}

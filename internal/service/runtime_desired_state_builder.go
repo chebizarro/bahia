@@ -20,10 +20,11 @@ func NewDesiredStateBuilder() *DesiredStateBuilder {
 
 // BuildInput groups all inputs needed to construct a DesiredServiceSpec.
 type BuildInput struct {
-	Service       *domain.Service
-	Environment   *domain.Environment
-	Artifact      *domain.Artifact
-	RuntimeConfig *domain.ServiceRuntimeConfig
+	Service        *domain.Service
+	Environment    *domain.Environment
+	Artifact       *domain.Artifact
+	RuntimeConfig  *domain.ServiceRuntimeConfig
+	DeploymentUnit *domain.DeploymentUnit
 	// Secrets are decrypted secret name→value pairs resolved for this
 	// service+environment. The builder will separate them into SecretRefs
 	// and will NEVER include plaintext values in the returned spec.
@@ -56,14 +57,14 @@ func (b *DesiredStateBuilder) Build(input BuildInput) (*domain.DesiredServiceSpe
 
 	// Resolve process fields from adopted runtime config.
 	var (
-		command    []string
-		entrypoint []string
-		workDir    string
-		restart    string
+		command     []string
+		entrypoint  []string
+		workDir     string
+		restart     string
 		networkMode string
-		ports      []string
-		volumes    []string
-		labels     map[string]string
+		ports       []string
+		volumes     []string
+		labels      map[string]string
 		envLiterals map[string]string
 	)
 
@@ -120,10 +121,16 @@ func (b *DesiredStateBuilder) Build(input BuildInput) (*domain.DesiredServiceSpe
 		return secretRefs[i].EnvVar < secretRefs[j].EnvVar
 	})
 
+	unitID, unitKey, unitRuntimeType := desiredUnitIdentity(input)
+
 	// Inject Bahia labels — these are always present for managed services.
 	labels["bahia.managed"] = "true"
 	labels["bahia.service_id"] = input.Service.ID.String()
 	labels["bahia.environment_id"] = input.Environment.ID.String()
+	labels["bahia.deployment_unit_key"] = unitKey
+	if unitID != nil {
+		labels["bahia.deployment_unit_id"] = unitID.String()
+	}
 	labels["bahia.artifact_id"] = input.Artifact.ID.String()
 	// bahia.desired_hash is set after hash computation below.
 
@@ -132,22 +139,25 @@ func (b *DesiredStateBuilder) Build(input BuildInput) (*domain.DesiredServiceSpe
 	sort.Strings(volumes)
 
 	spec := &domain.DesiredServiceSpec{
-		SchemaVersion:    domain.DesiredStateSchemaVersion,
-		ServiceID:        input.Service.ID,
-		EnvironmentID:    input.Environment.ID,
-		ArtifactID:       input.Artifact.ID,
-		StableServiceKey: stableKey,
-		ImageRef:         imageRef,
-		Command:          command,
-		Entrypoint:       entrypoint,
-		WorkDir:          workDir,
-		Env:              envLiterals,
-		SecretRefs:       secretRefs,
-		Ports:            ports,
-		Volumes:          volumes,
-		Labels:           labels,
-		RestartPolicy:    restart,
-		NetworkMode:      networkMode,
+		SchemaVersion:     domain.DesiredStateSchemaVersion,
+		ServiceID:         input.Service.ID,
+		EnvironmentID:     input.Environment.ID,
+		DeploymentUnitID:  unitID,
+		DeploymentUnitKey: unitKey,
+		UnitRuntimeType:   unitRuntimeType,
+		ArtifactID:        input.Artifact.ID,
+		StableServiceKey:  stableKey,
+		ImageRef:          imageRef,
+		Command:           command,
+		Entrypoint:        entrypoint,
+		WorkDir:           workDir,
+		Env:               envLiterals,
+		SecretRefs:        secretRefs,
+		Ports:             ports,
+		Volumes:           volumes,
+		Labels:            labels,
+		RestartPolicy:     restart,
+		NetworkMode:       networkMode,
 	}
 
 	// Build renderer extensions based on runtime type.
@@ -164,6 +174,25 @@ func (b *DesiredStateBuilder) Build(input BuildInput) (*domain.DesiredServiceSpe
 
 // buildRendererExtensions populates the appropriate renderer extension
 // based on the service's RuntimeType.
+func desiredUnitIdentity(input BuildInput) (*uuid.UUID, string, domain.RuntimeType) {
+	unitKey := domain.DefaultDeploymentUnitKey
+	runtimeType := input.Service.RuntimeType
+	var unitID *uuid.UUID
+	if input.DeploymentUnit != nil {
+		if input.DeploymentUnit.ID != uuid.Nil {
+			id := input.DeploymentUnit.ID
+			unitID = &id
+		}
+		if input.DeploymentUnit.Key != "" {
+			unitKey = input.DeploymentUnit.Key
+		}
+		if input.DeploymentUnit.RuntimeType != "" {
+			runtimeType = input.DeploymentUnit.RuntimeType
+		}
+	}
+	return unitID, unitKey, runtimeType
+}
+
 func buildRendererExtensions(spec *domain.DesiredServiceSpec, svc *domain.Service, adopted *domain.AdoptedRuntimeConfig) {
 	switch svc.RuntimeType {
 	case domain.RuntimeTypeCompose:
@@ -242,6 +271,7 @@ func ValidateSpec(spec *domain.DesiredServiceSpec) error {
 		"bahia.managed",
 		"bahia.service_id",
 		"bahia.environment_id",
+		"bahia.deployment_unit_key",
 		"bahia.artifact_id",
 		"bahia.desired_hash",
 	}
@@ -261,6 +291,12 @@ func ValidateSpec(spec *domain.DesiredServiceSpec) error {
 	}
 	if spec.Labels["bahia.environment_id"] != spec.EnvironmentID.String() {
 		return fmt.Errorf("bahia.environment_id label does not match spec EnvironmentID")
+	}
+	if spec.Labels["bahia.deployment_unit_key"] != spec.DeploymentUnitKey {
+		return fmt.Errorf("bahia.deployment_unit_key label does not match spec DeploymentUnitKey")
+	}
+	if spec.DeploymentUnitID != nil && spec.Labels["bahia.deployment_unit_id"] != spec.DeploymentUnitID.String() {
+		return fmt.Errorf("bahia.deployment_unit_id label does not match spec DeploymentUnitID")
 	}
 	if spec.Labels["bahia.artifact_id"] != spec.ArtifactID.String() {
 		return fmt.Errorf("bahia.artifact_id label does not match spec ArtifactID")

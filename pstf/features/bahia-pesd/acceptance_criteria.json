@@ -1,0 +1,10 @@
+{
+  "feature_id": "bahia-pesd",
+  "criteria": [
+    {"id": "AC1", "statement": "DesiredServiceSpec carries deployment-unit identity fields and hashes include those canonical fields."},
+    {"id": "AC2", "statement": "DesiredEnvironmentPlan groups services into unit_plans and computes unit revision hashes."},
+    {"id": "AC3", "statement": "Environment revision hash aggregates sorted unit revision hashes deterministically."},
+    {"id": "AC4", "statement": "Plan assembly rejects Compose dependencies that cross deployment-unit boundaries."},
+    {"id": "AC5", "statement": "Normative deployment documentation describes unit-aware desired-state planning."}
+  ]
+}

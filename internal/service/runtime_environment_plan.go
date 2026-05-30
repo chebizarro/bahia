@@ -40,6 +40,11 @@ type secretLister interface {
 	ListEffective(ctx context.Context, serviceID, envID uuid.UUID) ([]domain.ServiceSecret, error)
 }
 
+// deploymentUnitLister loads explicit deployment units for an environment.
+type deploymentUnitLister interface {
+	ListByEnvironment(ctx context.Context, envID uuid.UUID) ([]domain.DeploymentUnit, error)
+}
+
 // ---------------------------------------------------------------------------
 // EnvironmentPlanAssembler
 // ---------------------------------------------------------------------------
@@ -59,26 +64,28 @@ type secretLister interface {
 // Deleted or tombstoned services (whose Service record no longer exists in
 // the repository) are silently excluded from the plan.
 type EnvironmentPlanAssembler struct {
-	stateLoader  envServiceStateLoader
-	stateWriter  envServiceStateWriter
-	services     serviceLoader
-	artifacts    artifactLoader
-	secrets      secretLister
-	builder      *DesiredStateBuilder
-	logger       *slog.Logger
+	stateLoader envServiceStateLoader
+	stateWriter envServiceStateWriter
+	services    serviceLoader
+	artifacts   artifactLoader
+	secrets     secretLister
+	units       deploymentUnitLister
+	builder     *DesiredStateBuilder
+	logger      *slog.Logger
 }
 
 // EnvironmentPlanAssemblerDeps groups the dependencies needed to construct an
 // EnvironmentPlanAssembler. Callers in app.go can populate this from their
 // concrete repositories.
 type EnvironmentPlanAssemblerDeps struct {
-	StateLoader  envServiceStateLoader
-	StateWriter  envServiceStateWriter
-	Services     serviceLoader
-	Artifacts    artifactLoader
-	Secrets      secretLister
-	Builder      *DesiredStateBuilder
-	Logger       *slog.Logger
+	StateLoader envServiceStateLoader
+	StateWriter envServiceStateWriter
+	Services    serviceLoader
+	Artifacts   artifactLoader
+	Secrets     secretLister
+	Units       deploymentUnitLister
+	Builder     *DesiredStateBuilder
+	Logger      *slog.Logger
 }
 
 // NewEnvironmentPlanAssembler creates a new assembler.
@@ -93,6 +100,7 @@ func NewEnvironmentPlanAssembler(deps EnvironmentPlanAssemblerDeps) *Environment
 		services:    deps.Services,
 		artifacts:   deps.Artifacts,
 		secrets:     deps.Secrets,
+		units:       deps.Units,
 		builder:     deps.Builder,
 		logger:      logger,
 	}
@@ -127,6 +135,11 @@ func (a *EnvironmentPlanAssembler) Assemble(
 		EnvironmentID: envID,
 	}
 
+	unitIndex, err := a.loadDeploymentUnitIndex(ctx, envID)
+	if err != nil {
+		return nil, err
+	}
+
 	// Track whether we've seen the target service in the state rows.
 	targetSeen := false
 
@@ -134,7 +147,11 @@ func (a *EnvironmentPlanAssembler) Assemble(
 		// Is this the target service?
 		if state.ServiceID == targetServiceID {
 			targetSeen = true
-			plan.Services = append(plan.Services, *targetSpec)
+			spec := *targetSpec
+			if err := a.applyUnitIdentity(&spec, state.DeploymentUnitID, unitIndex); err != nil {
+				return nil, fmt.Errorf("resolving target deployment unit: %w", err)
+			}
+			plan.Services = append(plan.Services, spec)
 			continue
 		}
 
@@ -154,7 +171,11 @@ func (a *EnvironmentPlanAssembler) Assemble(
 
 		// Prefer stored desired state when available.
 		if state.DesiredRuntimeState != nil {
-			plan.Services = append(plan.Services, *state.DesiredRuntimeState)
+			spec := *state.DesiredRuntimeState
+			if err := a.applyUnitIdentity(&spec, state.DeploymentUnitID, unitIndex); err != nil {
+				return nil, fmt.Errorf("resolving deployment unit for service %s: %w", state.ServiceID, err)
+			}
+			plan.Services = append(plan.Services, spec)
 			continue
 		}
 
@@ -169,6 +190,9 @@ func (a *EnvironmentPlanAssembler) Assemble(
 			continue
 		}
 
+		if err := a.applyUnitIdentity(spec, state.DeploymentUnitID, unitIndex); err != nil {
+			return nil, fmt.Errorf("resolving deployment unit for legacy sibling %s: %w", state.ServiceID, err)
+		}
 		plan.Services = append(plan.Services, *spec)
 
 		// Persist hydrated spec opportunistically so future renders have it.
@@ -178,10 +202,18 @@ func (a *EnvironmentPlanAssembler) Assemble(
 	// If the target service wasn't already tracked in environment state,
 	// include it anyway (first deploy to this environment).
 	if !targetSeen {
-		plan.Services = append(plan.Services, *targetSpec)
+		spec := *targetSpec
+		if err := a.applyUnitIdentity(&spec, spec.DeploymentUnitID, unitIndex); err != nil {
+			return nil, fmt.Errorf("resolving target deployment unit: %w", err)
+		}
+		plan.Services = append(plan.Services, spec)
 	}
 
-	// Sort deterministically and compute revision hash.
+	if err := validateComposeDependenciesStayWithinUnit(plan.Services); err != nil {
+		return nil, err
+	}
+
+	// Sort deterministically, group by deployment unit, and compute unit + environment revision hashes.
 	plan.ComputeRevisionHash()
 
 	return plan, nil
@@ -190,6 +222,88 @@ func (a *EnvironmentPlanAssembler) Assemble(
 // hydrateLegacySibling reconstructs a DesiredServiceSpec for a sibling that
 // has no stored desired state by loading its service config, latest artifact,
 // and secrets, then running them through the DesiredStateBuilder.
+type deploymentUnitIndex struct {
+	byID map[uuid.UUID]domain.DeploymentUnit
+}
+
+func (a *EnvironmentPlanAssembler) loadDeploymentUnitIndex(ctx context.Context, envID uuid.UUID) (*deploymentUnitIndex, error) {
+	idx := &deploymentUnitIndex{byID: make(map[uuid.UUID]domain.DeploymentUnit)}
+	if a.units == nil {
+		return idx, nil
+	}
+	units, err := a.units.ListByEnvironment(ctx, envID)
+	if err != nil {
+		return nil, fmt.Errorf("loading deployment units: %w", err)
+	}
+	for _, unit := range units {
+		idx.byID[unit.ID] = unit
+	}
+	return idx, nil
+}
+
+func (a *EnvironmentPlanAssembler) applyUnitIdentity(spec *domain.DesiredServiceSpec, unitID *uuid.UUID, idx *deploymentUnitIndex) error {
+	var unit *domain.DeploymentUnit
+	if unitID != nil && *unitID != uuid.Nil {
+		resolved, ok := idx.byID[*unitID]
+		if !ok {
+			return fmt.Errorf("deployment unit %s not found in environment", *unitID)
+		}
+		unit = &resolved
+	}
+	if unit != nil {
+		domain.NormalizeDesiredServiceUnitIdentity(spec, &unit.ID, unit.Key, unit.RuntimeType)
+	} else {
+		domain.NormalizeDesiredServiceUnitIdentity(spec, nil, "", "")
+	}
+	spec.Labels = copyStringMap(spec.Labels)
+	if spec.Labels == nil {
+		spec.Labels = map[string]string{}
+	}
+	spec.Labels["bahia.deployment_unit_key"] = spec.DeploymentUnitKey
+	if spec.DeploymentUnitID != nil {
+		spec.Labels["bahia.deployment_unit_id"] = spec.DeploymentUnitID.String()
+	} else {
+		delete(spec.Labels, "bahia.deployment_unit_id")
+	}
+	spec.ComputeDesiredHash()
+	spec.Labels["bahia.desired_hash"] = spec.DesiredHash
+	return nil
+}
+
+func validateComposeDependenciesStayWithinUnit(services []domain.DesiredServiceSpec) error {
+	unitsByServiceKey := make(map[string]string, len(services))
+	for _, svc := range services {
+		unitsByServiceKey[svc.StableServiceKey] = svc.DeploymentUnitKey
+	}
+	for _, svc := range services {
+		if svc.ComposeExtension == nil {
+			continue
+		}
+		for _, depKey := range svc.DependsOn {
+			if err := validateDependencyUnit(svc, depKey, unitsByServiceKey); err != nil {
+				return err
+			}
+		}
+		for depKey := range svc.ComposeExtension.DependsOn {
+			if err := validateDependencyUnit(svc, depKey, unitsByServiceKey); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func validateDependencyUnit(svc domain.DesiredServiceSpec, depKey string, unitsByServiceKey map[string]string) error {
+	depUnit, ok := unitsByServiceKey[depKey]
+	if !ok {
+		return nil
+	}
+	if depUnit != svc.DeploymentUnitKey {
+		return fmt.Errorf("compose dependency %q for service %q crosses deployment units (%s -> %s)", depKey, svc.StableServiceKey, svc.DeploymentUnitKey, depUnit)
+	}
+	return nil
+}
+
 func (a *EnvironmentPlanAssembler) hydrateLegacySibling(
 	ctx context.Context,
 	svc *domain.Service,

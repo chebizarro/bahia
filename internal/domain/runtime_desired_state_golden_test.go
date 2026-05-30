@@ -39,7 +39,7 @@ var (
 func TestGoldenDesiredServiceHash(t *testing.T) {
 	t.Run("full spec with all hash-relevant fields", func(t *testing.T) {
 		spec := DesiredServiceSpec{
-			SchemaVersion:    "1",
+			SchemaVersion:    DesiredStateSchemaVersion,
 			ServiceID:        goldenSvcID,
 			EnvironmentID:    goldenEnvID,
 			ArtifactID:       goldenArtID,
@@ -63,7 +63,7 @@ func TestGoldenDesiredServiceHash(t *testing.T) {
 		}
 
 		got := spec.ComputeDesiredHash()
-		want := "sha256:a783ee5860f8bf9d07e89d1dae4111b6c84d6b591c7b8ca210adc963b48d92e8"
+		want := "sha256:8ca65902196c5983f49c14be60d8368f8a92d239bd0abc76b267e46619e55e80"
 		if got != want {
 			t.Fatalf("golden desired hash changed:\n  got:  %s\n  want: %s", got, want)
 		}
@@ -71,7 +71,7 @@ func TestGoldenDesiredServiceHash(t *testing.T) {
 
 	t.Run("minimal spec with nil/empty fields normalized", func(t *testing.T) {
 		spec := DesiredServiceSpec{
-			SchemaVersion:    "1",
+			SchemaVersion:    DesiredStateSchemaVersion,
 			ServiceID:        goldenSvcID,
 			EnvironmentID:    goldenEnvID,
 			ArtifactID:       goldenArtID,
@@ -81,7 +81,7 @@ func TestGoldenDesiredServiceHash(t *testing.T) {
 		}
 
 		got := spec.ComputeDesiredHash()
-		want := "sha256:86eb3e4a2b5055f3890829466dec533b8a21104006634cd8eb41f61c9d8b6689"
+		want := "sha256:badbf07b026630ef8304ce0196c18821ad5c166b99bab15cb755c72f3f6eb8da"
 		if got != want {
 			t.Fatalf("golden minimal desired hash changed:\n  got:  %s\n  want: %s", got, want)
 		}
@@ -90,7 +90,7 @@ func TestGoldenDesiredServiceHash(t *testing.T) {
 	t.Run("empty env map and nil env produce same hash", func(t *testing.T) {
 		base := func() DesiredServiceSpec {
 			return DesiredServiceSpec{
-				SchemaVersion:    "1",
+				SchemaVersion:    DesiredStateSchemaVersion,
 				ServiceID:        goldenSvcID,
 				EnvironmentID:    goldenEnvID,
 				ArtifactID:       goldenArtID,
@@ -115,7 +115,7 @@ func TestGoldenDesiredServiceHash(t *testing.T) {
 	t.Run("nil slices and empty slices produce same hash", func(t *testing.T) {
 		base := func() DesiredServiceSpec {
 			return DesiredServiceSpec{
-				SchemaVersion:    "1",
+				SchemaVersion:    DesiredStateSchemaVersion,
 				ServiceID:        goldenSvcID,
 				EnvironmentID:    goldenEnvID,
 				ArtifactID:       goldenArtID,
@@ -148,7 +148,7 @@ func TestGoldenDesiredServiceHash(t *testing.T) {
 		// and different redacted values should produce the same hash,
 		// because only the EnvVar key list is hashed.
 		spec1 := DesiredServiceSpec{
-			SchemaVersion:    "1",
+			SchemaVersion:    DesiredStateSchemaVersion,
 			ServiceID:        goldenSvcID,
 			EnvironmentID:    goldenEnvID,
 			ArtifactID:       goldenArtID,
@@ -160,7 +160,7 @@ func TestGoldenDesiredServiceHash(t *testing.T) {
 		}
 
 		spec2 := DesiredServiceSpec{
-			SchemaVersion:    "1",
+			SchemaVersion:    DesiredStateSchemaVersion,
 			ServiceID:        goldenSvcID,
 			EnvironmentID:    goldenEnvID,
 			ArtifactID:       goldenArtID,
@@ -182,7 +182,7 @@ func TestGoldenDesiredServiceHash(t *testing.T) {
 	t.Run("extension data excluded from hash", func(t *testing.T) {
 		base := func() DesiredServiceSpec {
 			return DesiredServiceSpec{
-				SchemaVersion:    "1",
+				SchemaVersion:    DesiredStateSchemaVersion,
 				ServiceID:        goldenSvcID,
 				EnvironmentID:    goldenEnvID,
 				ArtifactID:       goldenArtID,
@@ -196,8 +196,8 @@ func TestGoldenDesiredServiceHash(t *testing.T) {
 
 		specCompose := base()
 		specCompose.ComposeExtension = &ComposeExtension{
-			ProjectName:      "my-project",
-			Networks:         []string{"net1"},
+			ProjectName:        "my-project",
+			Networks:           []string{"net1"},
 			VolumeDeclarations: []string{"vol1"},
 			DependsOn: map[string]ComposeDependency{
 				"db": {Condition: "service_healthy"},
@@ -237,7 +237,7 @@ func TestGoldenDesiredServiceHash(t *testing.T) {
 
 	t.Run("volatile DesiredHash field excluded from hash", func(t *testing.T) {
 		spec := DesiredServiceSpec{
-			SchemaVersion:    "1",
+			SchemaVersion:    DesiredStateSchemaVersion,
 			ServiceID:        goldenSvcID,
 			EnvironmentID:    goldenEnvID,
 			ArtifactID:       goldenArtID,
@@ -373,7 +373,7 @@ func TestGoldenObservationHash(t *testing.T) {
 func TestGoldenEnvironmentRevisionHash(t *testing.T) {
 	t.Run("two-service plan with deterministic hashes", func(t *testing.T) {
 		svcA := DesiredServiceSpec{
-			SchemaVersion:    "1",
+			SchemaVersion:    DesiredStateSchemaVersion,
 			ServiceID:        goldenSvcID,
 			EnvironmentID:    goldenEnvID,
 			ArtifactID:       goldenArtID,
@@ -383,7 +383,7 @@ func TestGoldenEnvironmentRevisionHash(t *testing.T) {
 		svcA.ComputeDesiredHash()
 
 		svcB := DesiredServiceSpec{
-			SchemaVersion:    "1",
+			SchemaVersion:    DesiredStateSchemaVersion,
 			ServiceID:        goldenSvcID2,
 			EnvironmentID:    goldenEnvID,
 			ArtifactID:       goldenArtID2,
@@ -399,7 +399,7 @@ func TestGoldenEnvironmentRevisionHash(t *testing.T) {
 
 		got := plan.ComputeRevisionHash()
 		// Lock the golden revision hash.
-		want := "sha256:ded6d951b3102510cda47519ebd07c72d4f161dcd741bf3f9eb8286cce51c23a"
+		want := "sha256:18d47ee52116d55949f4486a3ce598ebaf6999ab2b7e6bc69362bf0e114581d9"
 		if got != want {
 			t.Fatalf("golden environment revision hash changed:\n  got:  %s\n  want: %s", got, want)
 		}
@@ -407,7 +407,7 @@ func TestGoldenEnvironmentRevisionHash(t *testing.T) {
 
 	t.Run("service order does not affect revision hash", func(t *testing.T) {
 		svcA := DesiredServiceSpec{
-			SchemaVersion:    "1",
+			SchemaVersion:    DesiredStateSchemaVersion,
 			ServiceID:        goldenSvcID,
 			EnvironmentID:    goldenEnvID,
 			ArtifactID:       goldenArtID,
@@ -417,7 +417,7 @@ func TestGoldenEnvironmentRevisionHash(t *testing.T) {
 		svcA.ComputeDesiredHash()
 
 		svcB := DesiredServiceSpec{
-			SchemaVersion:    "1",
+			SchemaVersion:    DesiredStateSchemaVersion,
 			ServiceID:        goldenSvcID2,
 			EnvironmentID:    goldenEnvID,
 			ArtifactID:       goldenArtID2,
@@ -445,7 +445,7 @@ func TestGoldenEnvironmentRevisionHash(t *testing.T) {
 
 	t.Run("single-service plan", func(t *testing.T) {
 		svc := DesiredServiceSpec{
-			SchemaVersion:    "1",
+			SchemaVersion:    DesiredStateSchemaVersion,
 			ServiceID:        goldenSvcID,
 			EnvironmentID:    goldenEnvID,
 			ArtifactID:       goldenArtID,
@@ -460,7 +460,7 @@ func TestGoldenEnvironmentRevisionHash(t *testing.T) {
 		}
 
 		got := plan.ComputeRevisionHash()
-		want := "sha256:4b48e8c4792b9d3fa90edb55a487534e418c8ece5a51ae1e6b857dee1a65eff6"
+		want := "sha256:4d1451747a25b5154081d0c45efc85dd672a0b31a71004544232d9332c3dffb5"
 		if got != want {
 			t.Fatalf("golden single-service revision hash changed:\n  got:  %s\n  want: %s", got, want)
 		}
@@ -588,7 +588,7 @@ func TestGoldenRedaction_ContainsPlaintextSecret(t *testing.T) {
 func TestGoldenRedaction_SerializedJSONNeverContainsPlaintext(t *testing.T) {
 	t.Run("secret ref values are redacted in JSON", func(t *testing.T) {
 		spec := DesiredServiceSpec{
-			SchemaVersion:    "1",
+			SchemaVersion:    DesiredStateSchemaVersion,
 			ServiceID:        goldenSvcID,
 			EnvironmentID:    goldenEnvID,
 			ArtifactID:       goldenArtID,
@@ -637,7 +637,7 @@ func TestGoldenRedaction_SerializedJSONNeverContainsPlaintext(t *testing.T) {
 		// Two specs with same secret key but different redacted values
 		// should hash identically — proving the hash excludes secret metadata.
 		spec1 := DesiredServiceSpec{
-			SchemaVersion:    "1",
+			SchemaVersion:    DesiredStateSchemaVersion,
 			ServiceID:        goldenSvcID,
 			EnvironmentID:    goldenEnvID,
 			ArtifactID:       goldenArtID,
@@ -650,7 +650,7 @@ func TestGoldenRedaction_SerializedJSONNeverContainsPlaintext(t *testing.T) {
 		h1 := spec1.ComputeDesiredHash()
 
 		spec2 := DesiredServiceSpec{
-			SchemaVersion:    "1",
+			SchemaVersion:    DesiredStateSchemaVersion,
 			ServiceID:        goldenSvcID,
 			EnvironmentID:    goldenEnvID,
 			ArtifactID:       goldenArtID,
@@ -669,7 +669,7 @@ func TestGoldenRedaction_SerializedJSONNeverContainsPlaintext(t *testing.T) {
 
 	t.Run("environment plan JSON contains only redacted secrets", func(t *testing.T) {
 		svc := DesiredServiceSpec{
-			SchemaVersion:    "1",
+			SchemaVersion:    DesiredStateSchemaVersion,
 			ServiceID:        goldenSvcID,
 			EnvironmentID:    goldenEnvID,
 			ArtifactID:       goldenArtID,
