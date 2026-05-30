@@ -2,10 +2,13 @@ package client
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	canonicalnostr "fiatjaf.com/nostr"
 	"github.com/nbd-wtf/go-nostr"
@@ -16,8 +19,9 @@ import (
 
 // OperatorControlPlaneConfig configures the signer-first operator Nostr client.
 type OperatorControlPlaneConfig struct {
-	Relays     []string
-	PrivateKey string // 64-character hex or nsec input
+	Relays             []string
+	PrivateKey         string // 64-character hex or nsec input
+	PublishWaitTimeout time.Duration
 }
 
 // OperatorStatusEvent is a correlated non-terminal operator progress event.
@@ -114,6 +118,7 @@ type OperatorControlPlaneClient struct {
 	signer     canonicalnostr.Signer
 	pubkey     string
 	transport  operatorRelayTransport
+	timeout    time.Duration
 }
 
 // NewOperatorControlPlaneClient builds a signer-first operator control-plane client.
@@ -138,12 +143,17 @@ func NewOperatorControlPlaneClient(cfg OperatorControlPlaneConfig) (*OperatorCon
 		return nil, fmt.Errorf("at least one operator relay is required")
 	}
 	pool := nostrpool.NewRelayPool(relays, zap.NewNop(), nostrpool.WithPrivateKey(privateKey))
+	timeout := cfg.PublishWaitTimeout
+	if timeout <= 0 {
+		timeout = 30 * time.Second
+	}
 	return &OperatorControlPlaneClient{
 		relays:     relays,
 		privateKey: privateKey,
 		signer:     signer,
 		pubkey:     pubkey,
 		transport:  &relayPoolOperatorTransport{pool: pool},
+		timeout:    timeout,
 	}, nil
 }
 
@@ -281,7 +291,16 @@ func (c *OperatorControlPlaneClient) publishAndAwait(ctx context.Context, req op
 	if err != nil {
 		return nil, &ControlPlaneRequestError{Phase: "encode operator request", RequestAccepted: false, Cause: err}
 	}
-	event := &nostr.Event{Kind: req.Kind, CreatedAt: nostr.Now(), Tags: req.Tags, Content: string(content)}
+	tags := req.Tags
+	if !tagHasValue(tags, "d", "") && firstTagValue(tags, "d") == "" {
+		tags = append(nostr.Tags{{"d", deterministicOperatorIdempotencyKey(req.Kind, tags, content)}}, tags...)
+	}
+	event := &nostr.Event{Kind: req.Kind, CreatedAt: nostr.Now(), Tags: tags, Content: string(content)}
+	if c.timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, c.timeout)
+		defer cancel()
+	}
 	if err := controlplane.SignGoNostrEvent(ctx, c.signer, event); err != nil {
 		return nil, &ControlPlaneRequestError{Phase: "sign operator request", RequestAccepted: false, Cause: err}
 	}
@@ -332,6 +351,20 @@ func (c *OperatorControlPlaneClient) publishAndAwait(ctx context.Context, req op
 			}
 		}
 	}
+}
+
+func deterministicOperatorIdempotencyKey(kind int, tags nostr.Tags, content []byte) string {
+	h := sha256.New()
+	_, _ = h.Write([]byte(fmt.Sprintf("operator:%d", kind)))
+	for _, tag := range tags {
+		if len(tag) >= 2 && tag[0] != "d" {
+			_, _ = h.Write([]byte{0})
+			_, _ = h.Write([]byte(strings.Join(tag, "=")))
+		}
+	}
+	_, _ = h.Write([]byte{0})
+	_, _ = h.Write(content)
+	return fmt.Sprintf("operator:%d:%s", kind, hex.EncodeToString(h.Sum(nil))[:24])
 }
 
 func validSignedEvent(event *nostr.Event) bool {

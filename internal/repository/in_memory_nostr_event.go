@@ -84,6 +84,24 @@ func (r *InMemoryNostrEventRepository) FindSince(_ context.Context, since time.T
 	return records, nil
 }
 
+// FindLatestByKindPubkeyDTag returns the newest event with the same kind, pubkey, and Nostr d tag.
+func (r *InMemoryNostrEventRepository) FindLatestByKindPubkeyDTag(_ context.Context, kind int, pubkey, dTag, excludeID string) (*NostrEventRecord, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	var newest *NostrEventRecord
+	for _, rec := range r.records {
+		if rec.ID == excludeID || rec.Kind != kind || rec.PubKey != pubkey || !recordHasDTag(rec.Tags, dTag) {
+			continue
+		}
+		candidate := cloneNostrEventRecord(&rec)
+		if newest == nil || candidate.CreatedAt.After(newest.CreatedAt) {
+			newest = &candidate
+		}
+	}
+	return newest, nil
+}
+
 // ListByKind returns the most recent events of a given kind.
 func (r *InMemoryNostrEventRepository) ListByKind(_ context.Context, kind int, limit int) ([]NostrEventRecord, error) {
 	r.mu.RLock()
@@ -168,6 +186,22 @@ func (r *InMemoryNostrEventRepository) LatestCreatedAtForKindsAndAuthors(_ conte
 		}
 	}
 	return latest, nil
+}
+
+func recordHasDTag(raw json.RawMessage, dTag string) bool {
+	if dTag == "" {
+		return false
+	}
+	var tags [][]string
+	if err := json.Unmarshal(raw, &tags); err != nil {
+		return false
+	}
+	for _, tag := range tags {
+		if len(tag) >= 2 && tag[0] == "d" && tag[1] == dTag {
+			return true
+		}
+	}
+	return false
 }
 
 func cloneNostrEventRecordPtr(rec *NostrEventRecord) *NostrEventRecord {

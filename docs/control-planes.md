@@ -48,6 +48,27 @@ curl -X POST http://localhost:8080/mcp \
 
 ---
 
+## Command receipts and idempotency
+
+Every long-running control-plane write surface returns a `CommandReceipt`-compatible object after the request event has been signed and at least one relay has accepted it. The canonical fields are:
+
+- `request_event_id`: signed Nostr request event id.
+- `request_kind`: Nostr request kind.
+- `status_kind` / `result_kind`: progress and terminal event kinds to subscribe to.
+- `idempotency_key`: the Nostr `d` tag used to collapse retries of the same logical command.
+- `status`: `submitted` when the request was accepted; `error` when only a partial publish succeeded.
+- `published_relays`: number of relays that accepted the request.
+- `timeout_seconds`: publish-and-wait compatibility timeout; default is 30 seconds unless configured by the caller.
+- `error` / `retry_hint`: present for partial failure or relay-unreachable failures.
+
+Publish-and-wait compatibility is not terminal truth. Clients must subscribe with scoped filters using `request_event_id`, `request_kind`, `status_kind`, `result_kind`, requester `p`, and relevant resource tags; EOSE only marks historical catch-up complete. Relay-unreachable failures return immediately with a retry hint because no relay accepted the command. Partial relay failures return a receipt with `status=error` and the accepted relay count so callers can avoid unsafe fallback once any relay has accepted the event.
+
+Command publishers and reactors use idempotency keys as Nostr `d` tags. If a caller does not provide one, publishers generate one; CLI signer-first operator commands derive deterministic keys from the command kind, scoped tags, and payload. The reactor deduplicates both event ids and `(kind, pubkey, d-tag)` command replays before executing business logic; persistence exposes lookups by that coordinate so replay protection survives process restarts when the Nostr event audit repository is configured.
+
+MCP runtime/deployment, LLM, AI/ML, DNS, adoption, and remediation tools return uniform receipt fields. REST long-running Nostr-backed AI/ML routes return `202 Accepted` with `CommandReceipt`; legacy REST registry routes that frontend clients still consume synchronously remain compatibility routes until their clients are migrated.
+
+---
+
 ## Nostr Sidecar Topology
 
 Browser and Bahia control-plane traffic should target the relay sidecar first.

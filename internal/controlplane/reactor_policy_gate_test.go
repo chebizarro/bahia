@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/nbd-wtf/go-nostr"
@@ -388,6 +389,9 @@ func (r *testEnvironmentServiceStateRepo) ListByService(context.Context, uuid.UU
 	return nil, nil
 }
 func (r *testEnvironmentServiceStateRepo) ListDrifted(context.Context) ([]domain.EnvironmentServiceState, error) {
+	return nil, nil
+}
+func (r *testEnvironmentServiceStateRepo) ListDueForObservation(context.Context, time.Time) ([]domain.EnvironmentServiceState, error) {
 	return nil, nil
 }
 func (r *testEnvironmentServiceStateRepo) ListAll(context.Context) ([]domain.EnvironmentServiceState, error) {

@@ -61,7 +61,32 @@ The `control_plane` payload is currently a core discovery subset. Broader comman
 | POST | `/mcp` | Native MCP JSON-RPC endpoint |
 | POST | `/api/v1/mcp` | Alternate native MCP JSON-RPC endpoint |
 
-MCP tool responses may include Nostr correlation metadata so clients can subscribe to async truth on relays rather than polling HTTP for completion.
+MCP tool responses for long-running writes return the same receipt fields as REST Nostr-backed writes: `request_event_id`, `request_kind`, `status_kind`, `result_kind`, `idempotency_key`, `status`, `published_relays`, and `timeout_seconds`.
+
+## Command receipts for long-running writes
+
+Long-running HTTP writes that publish canonical Nostr command events return `202 Accepted` with `data` set to a `CommandReceipt` object:
+
+```json
+{
+  "data": {
+    "request_event_id": "<nostr-event-id>",
+    "request_kind": 38391,
+    "result_kind": 38396,
+    "idempotency_key": "ml-inference-deploy:<key>",
+    "status": "submitted",
+    "published_relays": 1,
+    "timeout_seconds": 30,
+    "message": "request published; subscribe to Nostr result/read-model events for completion"
+  }
+}
+```
+
+`timeout_seconds` is the publish-and-wait compatibility timeout and defaults to 30 seconds. A relay-unreachable failure returns an immediate HTTP error with a retry hint in the message because no relay accepted the request. A partial relay failure returns a receipt with `status="error"`, `published_relays > 0`, and an `error` field; clients must not fall back to a second business path after any relay has accepted the command.
+
+Idempotency keys are represented as the Nostr `d` tag. Clients may provide `idempotency_key`; otherwise publishers generate one and signer-first CLI operator requests derive deterministic keys from the command kind, scoped tags, and payload. Consumers should subscribe for the receipt's status/result kinds using `request_event_id` and resource tags rather than polling REST for completion.
+
+Compatibility note: frontend pre-work found existing synchronous REST consumers under `web/src/lib/api/client.js` for deployment, adoption, and direct-runtime actions. Those REST defaults remain compatibility responses unless explicitly documented as Nostr-backed `202` receipt routes.
 
 ## Core registry routes
 

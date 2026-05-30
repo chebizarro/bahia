@@ -151,6 +151,10 @@ func (m *testDeploymentStateRepo) ListDrifted(_ context.Context) ([]domain.Envir
 	return out, nil
 }
 
+func (m *testDeploymentStateRepo) ListDueForObservation(_ context.Context, _ time.Time) ([]domain.EnvironmentServiceState, error) {
+	return m.ListAll(context.Background())
+}
+
 func (m *testDeploymentStateRepo) ListAll(_ context.Context) ([]domain.EnvironmentServiceState, error) {
 	out := make([]domain.EnvironmentServiceState, 0, len(m.states))
 	for _, state := range m.states {

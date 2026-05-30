@@ -174,6 +174,10 @@ func (r *testRuntimeStateRepo) ListDrifted(_ context.Context) ([]domain.Environm
 	return out, nil
 }
 
+func (r *testRuntimeStateRepo) ListDueForObservation(_ context.Context, _ time.Time) ([]domain.EnvironmentServiceState, error) {
+	return r.ListAll(context.Background())
+}
+
 func (r *testRuntimeStateRepo) ListAll(_ context.Context) ([]domain.EnvironmentServiceState, error) {
 	out := make([]domain.EnvironmentServiceState, 0, len(r.states))
 	for _, state := range r.states {

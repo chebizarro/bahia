@@ -52,7 +52,12 @@ type MLCommandReceipt struct {
 	ResultKind      int            `json:"result_kind"`
 	ReadModelKinds  map[string]int `json:"read_model_kinds,omitempty"`
 	DTag            string         `json:"d_tag"`
+	IdempotencyKey  string         `json:"idempotency_key"`
+	Status          string         `json:"status"`
+	Error           string         `json:"error,omitempty"`
+	RetryHint       string         `json:"retry_hint,omitempty"`
 	PublishedRelays int            `json:"published_relays"`
+	TimeoutSeconds  int            `json:"timeout_seconds,omitempty"`
 	Endpoint        string         `json:"endpoint,omitempty"`
 	EndpointID      string         `json:"endpoint_id,omitempty"`
 	Environment     string         `json:"environment,omitempty"`
@@ -131,12 +136,16 @@ func (p *MLCommandPublisher) publish(ctx context.Context, kind, resultKind int, 
 	}
 	published, err := p.publisher.Publish(ctx, *ev)
 	if err != nil {
+		if published > 0 {
+			receipt := &MLCommandReceipt{RequestEventID: ev.ID, RequestPubkey: ev.PubKey, RequestKind: kind, ResultKind: resultKind, ReadModelKinds: readModels, DTag: dTag, IdempotencyKey: dTag, Status: "error", Error: err.Error(), PublishedRelays: published}
+			return receipt, nil
+		}
 		return nil, fmt.Errorf("publish ML command event: %w", err)
 	}
 	if published == 0 {
-		return nil, fmt.Errorf("publish ML command event: no relay accepted the request")
+		return nil, fmt.Errorf("publish ML command event: no relay accepted the request; retry after relay reconnect")
 	}
-	receipt := &MLCommandReceipt{RequestEventID: ev.ID, RequestPubkey: ev.PubKey, RequestKind: kind, ResultKind: resultKind, ReadModelKinds: readModels, DTag: dTag, PublishedRelays: published}
+	receipt := &MLCommandReceipt{RequestEventID: ev.ID, RequestPubkey: ev.PubKey, RequestKind: kind, ResultKind: resultKind, ReadModelKinds: readModels, DTag: dTag, IdempotencyKey: dTag, Status: "submitted", PublishedRelays: published}
 	receipt.Endpoint = tagValueNostr(ev.Tags, "endpoint")
 	receipt.EndpointID = tagValueNostr(ev.Tags, "endpoint_id")
 	receipt.Environment = tagValueNostr(ev.Tags, "environment")

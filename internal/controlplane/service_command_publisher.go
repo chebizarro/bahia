@@ -43,7 +43,12 @@ type ServiceCommandReceipt struct {
 	StatusKind      int    `json:"status_kind"`
 	ResultKind      int    `json:"result_kind"`
 	DTag            string `json:"d_tag,omitempty"`
+	IdempotencyKey  string `json:"idempotency_key"`
+	Status          string `json:"status"`
+	Error           string `json:"error,omitempty"`
+	RetryHint       string `json:"retry_hint,omitempty"`
 	PublishedRelays int    `json:"published_relays"`
+	TimeoutSeconds  int    `json:"timeout_seconds,omitempty"`
 	ServiceID       string `json:"service_id,omitempty"`
 	EnvironmentID   string `json:"environment_id,omitempty"`
 	ArtifactID      string `json:"artifact_id,omitempty"`
@@ -77,9 +82,10 @@ func (p *ServiceCommandPublisher) publish(ctx context.Context, kind int, tags no
 		return nil, fmt.Errorf("service command publisher is not configured")
 	}
 	dTag = strings.TrimSpace(dTag)
-	if dTag != "" {
-		tags = append(nostr.Tags{{"d", dTag}}, tags...)
+	if dTag == "" {
+		dTag = fmt.Sprintf("service-command:%d:%s", kind, uuid.NewString())
 	}
+	tags = append(nostr.Tags{{"d", dTag}}, tags...)
 	if agentID = strings.TrimSpace(agentID); agentID != "" {
 		tags = append(tags, nostr.Tag{"agent", agentID})
 	}
@@ -93,10 +99,13 @@ func (p *ServiceCommandPublisher) publish(ctx context.Context, kind int, tags no
 	}
 	published, err := p.publisher.Publish(ctx, *ev)
 	if err != nil {
+		if published > 0 {
+			return &ServiceCommandReceipt{RequestEventID: ev.ID, RequestPubkey: ev.PubKey, RequestKind: kind, StatusKind: KindDeploymentStatus, ResultKind: KindDeploymentResult, DTag: dTag, IdempotencyKey: dTag, Status: "error", Error: err.Error(), PublishedRelays: published}, nil
+		}
 		return nil, fmt.Errorf("publish service command event: %w", err)
 	}
 	if published == 0 {
-		return nil, fmt.Errorf("publish service command event: no relay accepted the request")
+		return nil, fmt.Errorf("publish service command event: no relay accepted the request; retry after relay reconnect")
 	}
-	return &ServiceCommandReceipt{RequestEventID: ev.ID, RequestPubkey: ev.PubKey, RequestKind: kind, StatusKind: KindDeploymentStatus, ResultKind: KindDeploymentResult, DTag: dTag, PublishedRelays: published}, nil
+	return &ServiceCommandReceipt{RequestEventID: ev.ID, RequestPubkey: ev.PubKey, RequestKind: kind, StatusKind: KindDeploymentStatus, ResultKind: KindDeploymentResult, DTag: dTag, IdempotencyKey: dTag, Status: "submitted", PublishedRelays: published}, nil
 }

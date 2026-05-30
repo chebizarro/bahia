@@ -145,6 +145,9 @@ func (m *mockEnvStateRepo) ListByService(_ context.Context, _ uuid.UUID) ([]doma
 func (m *mockEnvStateRepo) ListDrifted(_ context.Context) ([]domain.EnvironmentServiceState, error) {
 	return nil, nil
 }
+func (m *mockEnvStateRepo) ListDueForObservation(_ context.Context, _ time.Time) ([]domain.EnvironmentServiceState, error) {
+	return nil, nil
+}
 func (m *mockEnvStateRepo) ListAll(_ context.Context) ([]domain.EnvironmentServiceState, error) {
 	return nil, nil
 }

@@ -97,6 +97,20 @@ func (r *PgNostrEventRepository) GetByID(ctx context.Context, id string) (*Nostr
 	return rec, nil
 }
 
+// FindLatestByKindPubkeyDTag returns the newest event with the same kind, pubkey, and Nostr d tag.
+func (r *PgNostrEventRepository) FindLatestByKindPubkeyDTag(ctx context.Context, kind int, pubkey, dTag, excludeID string) (*NostrEventRecord, error) {
+	rec := &NostrEventRecord{}
+	err := r.pool.QueryRow(ctx, `SELECT `+nostrEventColumns+` FROM nostr_events WHERE kind = $1 AND pubkey = $2 AND id <> $4 AND EXISTS (SELECT 1 FROM jsonb_array_elements(tags::jsonb) tag WHERE tag->>0 = 'd' AND tag->>1 = $3) ORDER BY created_at DESC LIMIT 1`, kind, pubkey, dTag, excludeID).
+		Scan(&rec.ID, &rec.Kind, &rec.PubKey, &rec.Content, &rec.Tags, &rec.Sig, &rec.CreatedAt, &rec.ReceivedAt, &rec.EntityType, &rec.EntityID)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("querying nostr event by d tag: %w", err)
+	}
+	return rec, nil
+}
+
 // ListByKind returns the most recent events of a given kind.
 func (r *PgNostrEventRepository) ListByKind(ctx context.Context, kind int, limit int) ([]NostrEventRecord, error) {
 	if limit <= 0 {

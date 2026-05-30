@@ -1,0 +1,12 @@
+{
+  "feature_id": "bahia-fplp",
+  "criteria": [
+    {"id": "AC1", "statement": "CommandReceipt DTO exposes request_event_id, status/result kinds, and idempotency_key."},
+    {"id": "AC2", "statement": "Publish-and-wait defaults to 30 seconds and distinguishes no-relay acceptance from post-acceptance/partial failure."},
+    {"id": "AC3", "statement": "Idempotency keys are represented as Nostr d tags and reactor/persistence support replay detection by kind, pubkey, and d tag."},
+    {"id": "AC4", "statement": "REST Nostr-backed long-running writes return 202 with canonical receipt shape without breaking known synchronous frontend compatibility routes."},
+    {"id": "AC5", "statement": "MCP deployment and rollback use the canonical service command publisher when configured and return uniform receipt fields."},
+    {"id": "AC6", "statement": "CLI signer-first operator requests generate deterministic idempotency keys and apply a 30 second default publish-and-wait timeout."},
+    {"id": "AC7", "statement": "Normative docs describe command receipt and idempotency semantics."}
+  ]
+}

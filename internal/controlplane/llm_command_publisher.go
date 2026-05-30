@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	canonicalnostr "fiatjaf.com/nostr"
 	"github.com/google/uuid"
@@ -90,7 +91,13 @@ type LLMCommandReceipt struct {
 	ResultKind      int    `json:"result_kind"`
 	RegistryKind    int    `json:"registry_kind"`
 	StateKind       int    `json:"state_kind"`
+	DTag            string `json:"d_tag,omitempty"`
+	IdempotencyKey  string `json:"idempotency_key"`
+	Status          string `json:"status"`
+	Error           string `json:"error,omitempty"`
+	RetryHint       string `json:"retry_hint,omitempty"`
 	PublishedRelays int    `json:"published_relays"`
+	TimeoutSeconds  int    `json:"timeout_seconds,omitempty"`
 	RouteID         string `json:"route_id,omitempty"`
 	EnvironmentID   string `json:"environment_id,omitempty"`
 	ReleaseID       string `json:"release_id,omitempty"`
@@ -231,9 +238,11 @@ func (p *LLMCommandPublisher) PublishLLMRollbackRequest(ctx context.Context, cmd
 }
 
 func appendLLMCommandTags(tags *nostr.Tags, dTag, agentID string) {
-	if dTag != "" {
-		*tags = append(nostr.Tags{{"d", dTag}}, (*tags)...)
+	dTag = strings.TrimSpace(dTag)
+	if dTag == "" {
+		dTag = "llm-command:" + uuid.NewString()
 	}
+	*tags = append(nostr.Tags{{"d", dTag}}, (*tags)...)
 	if agentID != "" {
 		*tags = append(*tags, nostr.Tag{"agent", agentID})
 	}
@@ -243,6 +252,7 @@ func (p *LLMCommandPublisher) publish(ctx context.Context, kind, statusKind, res
 	if p == nil || p.publisher == nil {
 		return nil, fmt.Errorf("LLM command publisher is not configured")
 	}
+	dTag := strings.TrimSpace(tagValueNostr(tags, "d"))
 	contentJSON, err := json.Marshal(content)
 	if err != nil {
 		return nil, fmt.Errorf("marshal LLM command content: %w", err)
@@ -253,10 +263,13 @@ func (p *LLMCommandPublisher) publish(ctx context.Context, kind, statusKind, res
 	}
 	published, err := p.publisher.Publish(ctx, *ev)
 	if err != nil {
+		if published > 0 {
+			return &LLMCommandReceipt{RequestEventID: ev.ID, RequestPubkey: ev.PubKey, RequestKind: kind, StatusKind: statusKind, ResultKind: resultKind, RegistryKind: KindLLMRouteRegistry, StateKind: KindLLMRouteState, DTag: dTag, IdempotencyKey: dTag, Status: "error", Error: err.Error(), PublishedRelays: published}, nil
+		}
 		return nil, fmt.Errorf("publish LLM command event: %w", err)
 	}
 	if published == 0 {
-		return nil, fmt.Errorf("publish LLM command event: no relay accepted the request")
+		return nil, fmt.Errorf("publish LLM command event: no relay accepted the request; retry after relay reconnect")
 	}
 	return &LLMCommandReceipt{
 		RequestEventID:  ev.ID,
@@ -266,6 +279,9 @@ func (p *LLMCommandPublisher) publish(ctx context.Context, kind, statusKind, res
 		ResultKind:      resultKind,
 		RegistryKind:    KindLLMRouteRegistry,
 		StateKind:       KindLLMRouteState,
+		DTag:            dTag,
+		IdempotencyKey:  dTag,
+		Status:          "submitted",
 		PublishedRelays: published,
 	}, nil
 }

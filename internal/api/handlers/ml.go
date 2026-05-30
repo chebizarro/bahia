@@ -254,7 +254,20 @@ func (h *MLHandler) publishAsync(w http.ResponseWriter, r *http.Request, publish
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
 	}
-	writeData(w, http.StatusAccepted, map[string]any{"status": "submitted", "correlation": receipt, "message": "request published; subscribe to Nostr result/read-model events for completion"})
+	writeData(w, http.StatusAccepted, dto.CommandReceipt{
+		RequestEventID:  receipt.RequestEventID,
+		RequestPubkey:   receipt.RequestPubkey,
+		RequestKind:     receipt.RequestKind,
+		ResultKind:      receipt.ResultKind,
+		ReadModelKinds:  receipt.ReadModelKinds,
+		IdempotencyKey:  receipt.IdempotencyKey,
+		Status:          receipt.Status,
+		Error:           receipt.Error,
+		RetryHint:       receipt.RetryHint,
+		PublishedRelays: receipt.PublishedRelays,
+		TimeoutSeconds:  30,
+		Message:         "request published; subscribe to Nostr result/read-model events for completion",
+	})
 }
 
 func (h *MLHandler) requireRegistry(w http.ResponseWriter) bool {

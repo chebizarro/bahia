@@ -39,6 +39,10 @@ func (m *testStateRepo) ListDrifted(_ context.Context) ([]domain.EnvironmentServ
 	return nil, nil
 }
 
+func (m *testStateRepo) ListDueForObservation(_ context.Context, _ time.Time) ([]domain.EnvironmentServiceState, error) {
+	return nil, nil
+}
+
 func (m *testStateRepo) ListAll(_ context.Context) ([]domain.EnvironmentServiceState, error) {
 	return nil, nil
 }

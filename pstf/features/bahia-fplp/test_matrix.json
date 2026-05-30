@@ -1,0 +1,10 @@
+{
+  "feature_id": "bahia-fplp",
+  "tests": [
+    {"command": "GOCACHE=/tmp/bahia-gocache go test ./internal/controlplane ./internal/api/handlers ./internal/mcp", "criteria": ["AC1", "AC2", "AC3", "AC4", "AC5"], "status": "passed"}
+  ],
+  "notes": [
+    "Initial go test without GOCACHE failed because the sandbox could not write to the user Go build cache; rerun used /tmp/bahia-gocache.",
+    "Existing test mocks missing ListDueForObservation were updated to satisfy the current repository interface so the required gate could compile."
+  ]
+}

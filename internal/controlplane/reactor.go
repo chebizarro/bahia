@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -593,8 +594,8 @@ func (r *Reactor) handleEvent(ctx context.Context, event *nostr.Event) {
 		return
 	}
 
-	// Deduplicate events (relays may replay during reconnection)
-	if r.dedup.IsDuplicate(event.ID) {
+	// Deduplicate events (relays may replay during reconnection) and idempotency-keyed commands.
+	if r.dedup.IsDuplicate(event.ID) || r.isDuplicateIdempotencyCommand(ctx, event) {
 		return
 	}
 	if !r.auditInboundEvent(ctx, event) {
@@ -750,6 +751,38 @@ func (r *Reactor) handleEvent(ctx context.Context, event *nostr.Event) {
 }
 
 // handleDeployRequest processes a kind:5961 deployment request.
+type idempotencyEventRepository interface {
+	FindLatestByKindPubkeyDTag(ctx context.Context, kind int, pubkey, dTag, excludeID string) (*repository.NostrEventRecord, error)
+}
+
+func (r *Reactor) isDuplicateIdempotencyCommand(ctx context.Context, event *nostr.Event) bool {
+	if r == nil || r.nostrEvents == nil || event == nil || !isIdempotencyCommandKind(event.Kind) {
+		return false
+	}
+	dTag := strings.TrimSpace(tagValueNostr(event.Tags, "d"))
+	if dTag == "" {
+		return false
+	}
+	repo, ok := r.nostrEvents.(idempotencyEventRepository)
+	if !ok {
+		return false
+	}
+	previous, err := repo.FindLatestByKindPubkeyDTag(ctx, event.Kind, event.PubKey, dTag, event.ID)
+	if err != nil {
+		r.logger.Warn("failed to check idempotency key", "event_id", event.ID, "idempotency_key", dTag, "error", err)
+		return false
+	}
+	if previous == nil {
+		return false
+	}
+	r.logger.Info("dropping duplicate idempotency-keyed control-plane command", "event_id", event.ID, "previous_event_id", previous.ID, "idempotency_key", dTag, "kind", event.Kind)
+	return true
+}
+
+func isIdempotencyCommandKind(kind int) bool {
+	return slices.Contains(defaultRequestSubscriptionKinds(), kind) || kind == nostrpool.KindFailoverRequest || kind == nostrpool.KindRecoveryRequest
+}
+
 func (r *Reactor) handleDeployRequest(ctx context.Context, event *nostr.Event) {
 	logger := r.logger.With("event_id", event.ID, "requester", event.PubKey)
 	logger.Info("received deployment request")

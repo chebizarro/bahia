@@ -2294,6 +2294,14 @@ func (s *Server) handleDeploy(ctx context.Context, args map[string]interface{}) 
 		requestedBy = "mcp-agent"
 	}
 
+	if s.serviceCommands != nil {
+		receipt, err := s.serviceCommands.PublishDeployRequest(ctx, controlplane.ServiceDeployCommand{ServiceID: serviceID, EnvironmentID: envID, ArtifactID: artifactID, IdempotencyKey: mcpIdempotencyKey(args, "service-deploy", serviceID.String(), envID.String(), artifactID.String()), AgentID: requestedBy})
+		if err != nil {
+			return errorResult(fmt.Sprintf("failed to publish deployment request: %v", err)), nil
+		}
+		return jsonResult(serviceCommandReceiptToMap(receipt))
+	}
+
 	// Validate that service, environment, and artifact exist
 	if _, err := s.registry.GetService(ctx, serviceID); err != nil {
 		return errorResult(fmt.Sprintf("service not found: %v", err)), nil
@@ -2352,6 +2360,14 @@ func (s *Server) handleRollback(ctx context.Context, args map[string]interface{}
 
 	if requestedBy == "" {
 		requestedBy = "mcp-agent"
+	}
+
+	if s.serviceCommands != nil {
+		receipt, err := s.serviceCommands.PublishRollbackRequest(ctx, controlplane.ServiceRollbackCommand{ServiceID: serviceID, EnvironmentID: envID, IdempotencyKey: mcpIdempotencyKey(args, "service-rollback", serviceID.String(), envID.String()), AgentID: requestedBy})
+		if err != nil {
+			return errorResult(fmt.Sprintf("failed to publish rollback request: %v", err)), nil
+		}
+		return jsonResult(serviceCommandReceiptToMap(receipt))
 	}
 
 	intent, err := s.registry.Rollback(ctx, serviceID, envID, requestedBy)
@@ -4279,8 +4295,54 @@ func llmReleaseToMap(release *domain.LLMRelease) map[string]interface{} {
 	}
 }
 
+func serviceCommandReceiptToMap(receipt *controlplane.ServiceCommandReceipt) map[string]interface{} {
+	result := map[string]interface{}{"status": "submitted", "timeout_seconds": 30}
+	if receipt == nil {
+		return result
+	}
+	if receipt.Status != "" {
+		result["status"] = receipt.Status
+	}
+	result["request_event_id"] = receipt.RequestEventID
+	result["request_pubkey"] = receipt.RequestPubkey
+	result["request_kind"] = receipt.RequestKind
+	result["status_kind"] = receipt.StatusKind
+	result["result_kind"] = receipt.ResultKind
+	result["idempotency_key"] = receipt.IdempotencyKey
+	result["published_relays"] = receipt.PublishedRelays
+	if receipt.Error != "" {
+		result["error"] = receipt.Error
+	}
+	if receipt.RetryHint != "" {
+		result["retry_hint"] = receipt.RetryHint
+	}
+	if receipt.ServiceID != "" {
+		result["service_id"] = receipt.ServiceID
+	}
+	if receipt.EnvironmentID != "" {
+		result["environment_id"] = receipt.EnvironmentID
+	}
+	if receipt.ArtifactID != "" {
+		result["artifact_id"] = receipt.ArtifactID
+	}
+	return result
+}
+
+func mcpIdempotencyKey(args map[string]interface{}, prefix string, parts ...string) string {
+	if explicit, _ := args["idempotency_key"].(string); strings.TrimSpace(explicit) != "" {
+		return strings.TrimSpace(explicit)
+	}
+	h := sha256.New()
+	_, _ = h.Write([]byte(prefix))
+	for _, part := range parts {
+		_, _ = h.Write([]byte{0})
+		_, _ = h.Write([]byte(part))
+	}
+	return prefix + ":" + hex.EncodeToString(h.Sum(nil))[:24]
+}
+
 func llmCommandReceiptToMap(status string, receipt *controlplane.LLMCommandReceipt) map[string]interface{} {
-	result := map[string]interface{}{"status": status}
+	result := map[string]interface{}{"status": status, "timeout_seconds": 30}
 	if receipt == nil {
 		return result
 	}
@@ -4293,7 +4355,17 @@ func llmCommandReceiptToMap(status string, receipt *controlplane.LLMCommandRecei
 	result["result_kind"] = receipt.ResultKind
 	result["registry_kind"] = receipt.RegistryKind
 	result["state_kind"] = receipt.StateKind
+	result["idempotency_key"] = receipt.IdempotencyKey
 	result["published_relays"] = receipt.PublishedRelays
+	if receipt.Status != "" {
+		result["status"] = receipt.Status
+	}
+	if receipt.Error != "" {
+		result["error"] = receipt.Error
+	}
+	if receipt.RetryHint != "" {
+		result["retry_hint"] = receipt.RetryHint
+	}
 	if receipt.RouteID != "" {
 		result["route_id"] = receipt.RouteID
 	}
