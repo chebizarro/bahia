@@ -90,13 +90,11 @@
     }
   }
 
-  function toggleMenu(event) {
-    event?.stopPropagation();
-    if (open) {
-      closeMenu(false);
-    } else {
-      openMenu(-1);
-    }
+  function handleTriggerClick(event) {
+    event.stopPropagation();
+    ignoreNextWindowClick = true;
+    open = !open;
+    console.log('UserMenu clicked, open is now:', open);
   }
 
   function handleTriggerKeydown(event) {
@@ -190,7 +188,7 @@
       aria-controls="user-menu"
       title="{authUi.pubkey}\n{authUi.nip05 ? authUi.nip05 : ''}"
       bind:this={triggerEl}
-      onclick={(e) => { e.stopPropagation(); ignoreNextWindowClick = true; open = !open; alert('clicked! open=' + open); }}
+      onclick={handleTriggerClick}
       onkeydown={handleTriggerKeydown}
     >
       {#if authUi.avatarUrl}
@@ -218,7 +216,7 @@
       aria-controls="user-menu"
       title={authUi.extensionAvailable ? 'Sign in with Nostr' : 'NIP-07 not detected; Nostr Connect is available in settings'}
       bind:this={triggerEl}
-      onclick={(e) => { e.stopPropagation(); ignoreNextWindowClick = true; open = !open; }}
+      onclick={handleTriggerClick}
       onkeydown={handleTriggerKeydown}
     >
       {#if authUi.extensionAvailable}
