@@ -1,0 +1,35 @@
+{
+  "feature_id": "bahia-22gv",
+  "title": "Replace custom browser Nostr WebSocket management with nostr-tools SimplePool",
+  "bead": "bahia-22gv",
+  "observed_behavior_before": [
+    "web/src/lib/nostr/client.js contained an exported NostrClient class with a sockets Map, custom reconnect timers, subscription bookkeeping, per-relay message queues, and pending publish OK tracking.",
+    "control-plane helpers inspected nostr.sockets directly to determine open relay URLs."
+  ],
+  "intended_behavior": [
+    "Browser Nostr relay transport uses nostr-tools SimplePool for relay connection lifecycle, reconnection, subscription reissue, event dedupe, and publish OK handling.",
+    "The existing nostr singleton API remains available for consumers: connect, subscribe, queryUntilEose, query, publish, disconnect, getRelays, setRelays, connected, and connectionStatus.",
+    "Inbound EVENTs remain validated before application callbacks trust them.",
+    "Historical queries still complete only after EOSE from every connected relay in the query snapshot, and CLOSED/abort/timeout paths fail closed with NostrIncompleteEOSEError.",
+    "Publish results preserve per-relay accepted/rejected outcome semantics and do not assume batch atomicity."
+  ],
+  "scope": {
+    "included": [
+      "web/src/lib/nostr/client.js",
+      "web/src/lib/nostr/pool.js",
+      "web/src/lib/nostr/controlplane-requests.js",
+      "web/src/lib/nostr/encrypted-controlplane.js",
+      "web/src/lib/stores/controlplane.svelte.js",
+      "Nostr-related unit tests"
+    ],
+    "incidental_quality_gate_fix": [
+      "web/src/lib/components/EmptyState.svelte",
+      "web/src/lib/components/Card.svelte"
+    ],
+    "excluded": [
+      "Splitting client.js helpers/constants into separate modules; tracked by downstream bead bahia-rbqz.",
+      "Replacing queryUntilEose bootstrap with streaming application; tracked by downstream bead bahia-ef15."
+    ]
+  },
+  "date_updated": "2026-05-31"
+}

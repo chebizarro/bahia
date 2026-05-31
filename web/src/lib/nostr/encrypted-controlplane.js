@@ -1,6 +1,6 @@
 import { authState, decryptWithAuth, encryptWithAuth, signWithAuth } from '$lib/stores/auth.js';
 import { currentSystemInfo } from '$lib/stores/system.svelte.js';
-import { NostrClient, getTagValues, nostr } from './client.js';
+import { createNostrPoolClient, getTagValues, nostr } from './client.js';
 
 export const ENCRYPTED_REQUEST_ROUTING_TAG = 'encrypted';
 export const ENCRYPTED_REQUEST_WIRE_VERSION = 'bahia-encrypted-v1';
@@ -55,11 +55,8 @@ function hasTagValue(event, name, value) {
 }
 
 function openRelayUrls(client) {
-  if (!(client?.sockets instanceof Map)) return null;
-  const openState = typeof WebSocket !== 'undefined' ? WebSocket.OPEN : 1;
-  return Array.from(client.sockets.entries())
-    .filter(([, ws]) => ws?.readyState === openState)
-    .map(([url]) => url);
+  if (typeof client?.getConnectedRelays !== 'function') return null;
+  return client.getConnectedRelays();
 }
 
 export function encryptedRelayUrlsFromSystemInfo(systemInfo = currentSystemInfo()) {
@@ -84,7 +81,7 @@ export class EncryptedControlplaneTransport {
     // Encrypted requests are a separate relay plane. Use an isolated client by
     // default so sensitive requests cannot publish on already-open public sockets.
     // Passing an explicit client is reserved for tests / edge-cases.
-    this.client = client || new NostrClient({ relays: this.relays });
+    this.client = client || createNostrPoolClient({ relays: this.relays });
     this.ownClient = !client;
     this.connected = false;
   }

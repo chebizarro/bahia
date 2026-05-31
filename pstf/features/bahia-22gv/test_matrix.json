@@ -1,0 +1,29 @@
+{
+  "feature_id": "bahia-22gv",
+  "tests": [
+    {
+      "command": "npm run test:unit -- --run tests/unit/sanity.test.js tests/unit/nostr-client-parsing.test.js tests/unit/controlplane-requests.test.js tests/unit/encrypted-controlplane.test.js tests/unit/controlplane-store.test.js",
+      "acceptance_criteria": ["AC3", "AC4"],
+      "result": "passed",
+      "evidence": "79 tests passed before follow-up AUTH/disconnect coverage; focused rerun after Oracle fixes passed sanity + nostr-client-parsing with 51 tests."
+    },
+    {
+      "command": "npm run test:unit",
+      "acceptance_criteria": ["AC3", "AC4", "AC5"],
+      "result": "passed",
+      "evidence": "54 test files passed; 496 tests passed."
+    },
+    {
+      "command": "npm run build",
+      "acceptance_criteria": ["AC5"],
+      "result": "passed",
+      "evidence": "Vite/SvelteKit static build completed successfully and wrote the site to web/build. Existing warnings are tracked in Bead bahia-uue5."
+    },
+    {
+      "command": "Oracle review mode over selected diff",
+      "acceptance_criteria": ["AC1", "AC2", "AC4"],
+      "result": "reviewed-and-addressed",
+      "evidence": "Review found active subscription cleanup and AUTH forwarding gaps; both were fixed and covered by unit tests."
+    }
+  ]
+}

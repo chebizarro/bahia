@@ -28,7 +28,7 @@ vi.mock('$lib/stores/system.svelte.js', () => systemMock);
 
 function fakeClient() {
   return {
-    sockets: new Map([['wss://requests.example', { readyState: 1 }]]),
+    getConnectedRelays: vi.fn(() => ['wss://requests.example']),
     connect: vi.fn().mockResolvedValue(),
     publish: vi.fn().mockResolvedValue([{ relay: 'wss://requests.example', sent: true, accepted: true, message: '' }]),
     subscribe: vi.fn(() => vi.fn())

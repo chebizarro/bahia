@@ -3,7 +3,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 const nostrMock = vi.hoisted(() => ({
   publish: vi.fn(),
   subscribe: vi.fn(),
-  sockets: null
+  getConnectedRelays: vi.fn()
 }));
 
 const authMock = vi.hoisted(() => ({
@@ -48,7 +48,7 @@ describe('controlplane request helpers', () => {
       { relay: 'ws://relay-2.test', sent: true, accepted: false, message: 'blocked: duplicate' }
     ]);
     nostrMock.subscribe.mockReturnValue(vi.fn());
-    nostrMock.sockets = null;
+    nostrMock.getConnectedRelays.mockReturnValue(null);
     systemMock.currentSystemInfo.mockReturnValue({ nostr: { service_pubkey: 'b'.repeat(64) } });
     helper = await import('../../src/lib/nostr/controlplane-requests.js');
   });
@@ -108,9 +108,7 @@ describe('controlplane request helpers', () => {
   it('awaitResult reports auth-related subscription closures distinctly', async () => {
     let handlers;
     const unsubscribe = vi.fn();
-    nostrMock.sockets = new Map([
-      ['ws://relay-auth.test', { readyState: WebSocket.OPEN }]
-    ]);
+    nostrMock.getConnectedRelays.mockReturnValue(['ws://relay-auth.test']);
     nostrMock.subscribe.mockImplementation((_filters, nextHandlers) => {
       handlers = nextHandlers;
       return unsubscribe;
@@ -125,10 +123,7 @@ describe('controlplane request helpers', () => {
 
   it('awaitResult aggregates relay close reasons when all result subscriptions close incomplete', async () => {
     let handlers;
-    nostrMock.sockets = new Map([
-      ['ws://relay-1.test', { readyState: WebSocket.OPEN }],
-      ['ws://relay-2.test', { readyState: WebSocket.OPEN }]
-    ]);
+    nostrMock.getConnectedRelays.mockReturnValue(['ws://relay-1.test', 'ws://relay-2.test']);
     nostrMock.subscribe.mockImplementation((_filters, nextHandlers) => {
       handlers = nextHandlers;
       return vi.fn();

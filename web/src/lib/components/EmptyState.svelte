@@ -1,21 +1,25 @@
-<svelte:options runes={false} />
 <script>
   import { EmptyIcon } from '$lib/icons/domain-icons.js';
 
-  export let title = 'No data';
-  export let message = '';
-  export let icon = '';
-  export let iconComponent = null;
-  export let actionLabel = '';
-  export let showIcon = true;
-  export let onAction = null;
+  let {
+    title = 'No data',
+    message = '',
+    icon = '',
+    iconComponent = null,
+    actionLabel = '',
+    showIcon = true,
+    onAction = null,
+    action,
+    children
+  } = $props();
 </script>
 
 <div class="empty-state">
   {#if showIcon}
     <div class="icon" aria-hidden="true">
       {#if iconComponent}
-        <svelte:component this={iconComponent} size={48} strokeWidth={1.5} />
+        {@const IconComponent = iconComponent}
+        <IconComponent size={48} strokeWidth={1.5} />
       {:else if icon}
         {icon}
       {:else}
@@ -27,14 +31,18 @@
   {#if message}
     <p class="message">{message}</p>
   {/if}
-  {#if actionLabel}
+  {#if action}
+    <div class="actions">
+      {@render action?.()}
+    </div>
+  {:else if actionLabel}
     <div class="actions">
       <button class="action-button" onclick={onAction}>
         {actionLabel}
       </button>
     </div>
   {/if}
-  <slot />
+  {@render children?.()}
 </div>
 
 <style>

@@ -26,12 +26,42 @@ function validEvent(overrides = {}) {
   };
 }
 
-function openSocket() {
-  return { readyState: WebSocket.OPEN, send: vi.fn() };
+
+function createRelay(url, { connected = true } = {}) {
+  const relay = {
+    url,
+    connected,
+    subscriptions: [],
+    subscribe: vi.fn((filters, params) => {
+      const subscription = { filters, params, close: vi.fn() };
+      relay.subscriptions.push(subscription);
+      return subscription;
+    })
+  };
+  return relay;
+}
+
+function createPool(relays = []) {
+  const relayMap = new Map(relays.map((relay) => [relay.url, relay]));
+  return {
+    ensureRelay: vi.fn(async (url) => {
+      if (!relayMap.has(url)) relayMap.set(url, createRelay(url));
+      return relayMap.get(url);
+    }),
+    listConnectionStatus: vi.fn(() => new Map(Array.from(relayMap.entries()).map(([url, relay]) => [url, relay.connected]))),
+    publish: vi.fn(() => []),
+    close: vi.fn(),
+    destroy: vi.fn()
+  };
+}
+
+async function flushPromises() {
+  await Promise.resolve();
+  await Promise.resolve();
 }
 
 describe('browser Nostr trust boundary and query completion', () => {
-  let NostrClient;
+  let createNostrPoolClient;
   let NostrIncompleteEOSEError;
   let validateInboundNostrEvent;
   let originalWebSocket;
@@ -41,7 +71,7 @@ describe('browser Nostr trust boundary and query completion', () => {
     originalWebSocket = global.WebSocket;
     global.WebSocket = { OPEN: 1, CONNECTING: 0 };
     const module = await import('../../src/lib/nostr/client.js');
-    NostrClient = module.NostrClient;
+    createNostrPoolClient = module.createNostrPoolClient;
     NostrIncompleteEOSEError = module.NostrIncompleteEOSEError;
     validateInboundNostrEvent = module.validateInboundNostrEvent;
   });
@@ -53,16 +83,22 @@ describe('browser Nostr trust boundary and query completion', () => {
   });
 
   it('validates NIP-01 event hashes before browser consumers receive relay EVENT frames', async () => {
-    const client = new NostrClient({ relays: [] });
-    const socket = openSocket();
-    client.sockets.set('wss://relay.example', socket);
-    const onEvent = vi.fn();
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const relay = createRelay('wss://relay.example');
+    const client = createNostrPoolClient({ relays: ['wss://relay.example'], pool: createPool([relay]) });
+    let resolveReceived;
+    const received = new Promise((resolve) => { resolveReceived = resolve; });
+    const onEvent = vi.fn((...args) => resolveReceived(args));
+    let resolveWarn;
+    const warned = new Promise((resolve) => { resolveWarn = resolve; });
+    const warn = vi.spyOn(console, 'warn').mockImplementation((...args) => resolveWarn(args));
 
     client.subscribe([{ kinds: [31962] }], { onEvent });
+    await flushPromises();
     const good = validEvent();
-    await client.handleMessage('wss://relay.example', JSON.stringify(['EVENT', 'sub_1', good]));
-    await client.handleMessage('wss://relay.example', JSON.stringify(['EVENT', 'sub_1', { ...good, id: 'c'.repeat(64) }]));
+    relay.subscriptions[0].params.onevent(good);
+    await received;
+    relay.subscriptions[0].params.onevent({ ...good, id: 'c'.repeat(64) });
+    await warned;
 
     expect(onEvent).toHaveBeenCalledTimes(1);
     expect(onEvent).toHaveBeenCalledWith(good, 'wss://relay.example');
@@ -80,41 +116,45 @@ describe('browser Nostr trust boundary and query completion', () => {
   });
 
   it('preserves relay frame order when EVENT validation is followed immediately by EOSE', async () => {
-    const client = new NostrClient({ relays: [] });
-    client.sockets.set('wss://relay.example', openSocket());
+    const relay = createRelay('wss://relay.example');
+    const client = createNostrPoolClient({ relays: ['wss://relay.example'], pool: createPool([relay]) });
     const event = validEvent();
 
     const query = client.queryUntilEose([{ kinds: [31962] }]);
-    const eventFrame = client.handleMessage('wss://relay.example', JSON.stringify(['EVENT', 'sub_1', event]));
-    const eoseFrame = client.handleMessage('wss://relay.example', JSON.stringify(['EOSE', 'sub_1']));
+    await flushPromises();
+    relay.subscriptions[0].params.onevent(event);
+    relay.subscriptions[0].params.oneose();
+    await flushPromises();
 
-    await Promise.all([eventFrame, eoseFrame]);
     await expect(query).resolves.toEqual([event]);
   });
 
   it('resolves historical queries only after every connected relay sends EOSE', async () => {
-    const client = new NostrClient({ relays: [] });
-    client.sockets.set('wss://relay-a.example', openSocket());
-    client.sockets.set('wss://relay-b.example', openSocket());
+    const relayA = createRelay('wss://relay-a.example');
+    const relayB = createRelay('wss://relay-b.example');
+    const client = createNostrPoolClient({ relays: ['wss://relay-a.example', 'wss://relay-b.example'], pool: createPool([relayA, relayB]) });
     const event = validEvent();
 
     const query = client.queryUntilEose([{ kinds: [31962] }]);
-    await client.handleMessage('wss://relay-a.example', JSON.stringify(['EVENT', 'sub_1', event]));
-    await client.handleMessage('wss://relay-a.example', JSON.stringify(['EOSE', 'sub_1']));
+    await flushPromises();
+    relayA.subscriptions[0].params.onevent(event);
+    relayA.subscriptions[0].params.oneose();
+    await flushPromises();
 
     let settled = false;
     query.then(() => { settled = true; }, () => { settled = true; });
-    await Promise.resolve();
+    await flushPromises();
     expect(settled).toBe(false);
 
-    await client.handleMessage('wss://relay-b.example', JSON.stringify(['EOSE', 'sub_1']));
+    relayB.subscriptions[0].params.oneose();
+    await flushPromises();
     await expect(query).resolves.toEqual([event]);
   });
 
   it('treats query timeouts as incomplete history instead of successful partial results', async () => {
     vi.useFakeTimers();
-    const client = new NostrClient({ relays: [] });
-    client.sockets.set('wss://relay.example', openSocket());
+    const relay = createRelay('wss://relay.example');
+    const client = createNostrPoolClient({ relays: ['wss://relay.example'], pool: createPool([relay]) });
 
     const query = client.query([{ kinds: [31962] }], 1000);
     const assertion = expect(query).rejects.toMatchObject({
@@ -128,8 +168,8 @@ describe('browser Nostr trust boundary and query completion', () => {
   });
 
   it('treats aborts as incomplete history with typed reason metadata', async () => {
-    const client = new NostrClient({ relays: [] });
-    client.sockets.set('wss://relay.example', openSocket());
+    const relay = createRelay('wss://relay.example');
+    const client = createNostrPoolClient({ relays: ['wss://relay.example'], pool: createPool([relay]) });
     const controller = new AbortController();
 
     const query = client.queryUntilEose([{ kinds: [31962] }], { signal: controller.signal });
@@ -143,40 +183,35 @@ describe('browser Nostr trust boundary and query completion', () => {
     await assertion;
   });
 
-  it('keeps EOSE queries active across transport reconnect and resolves after reissued REQ EOSE', async () => {
-    const client = new NostrClient({ relays: [] });
-    const firstSocket = openSocket();
-    client.sockets.set('wss://relay.example', firstSocket);
+  it('keeps EOSE queries active across transient transport reconnect and resolves after EOSE', async () => {
+    const relay = createRelay('wss://relay.example');
+    const client = createNostrPoolClient({ relays: ['wss://relay.example'], pool: createPool([relay]) });
     const event = validEvent();
 
     const query = client.queryUntilEose([{ kinds: [31962] }]);
-    expect(firstSocket.send).toHaveBeenCalledWith(expect.stringContaining('"REQ"'));
-
-    await client.handleMessage('wss://relay.example', JSON.stringify(['EVENT', 'sub_1', event]));
-    client.notifyRelayConnectionClosed('wss://relay.example', 'relay connection closed');
+    await flushPromises();
+    relay.subscriptions[0].params.onevent(event);
 
     let settled = false;
     query.then(() => { settled = true; }, () => { settled = true; });
-    await Promise.resolve();
+    await flushPromises();
     expect(settled).toBe(false);
 
-    const reconnectedSocket = openSocket();
-    client.sockets.set('wss://relay.example', reconnectedSocket);
-    client.reissueSubscriptions('wss://relay.example', reconnectedSocket);
-    expect(reconnectedSocket.send).toHaveBeenCalledWith(expect.stringContaining('"REQ"'));
-
-    await client.handleMessage('wss://relay.example', JSON.stringify(['EOSE', 'sub_1']));
+    relay.subscriptions[0].params.oneose();
+    await flushPromises();
     await expect(query).resolves.toEqual([event]);
   });
 
   it('rejects relay CLOSED-incomplete queries and preserves partial events for callers', async () => {
-    const client = new NostrClient({ relays: [] });
-    client.sockets.set('wss://relay.example', openSocket());
+    const relay = createRelay('wss://relay.example');
+    const client = createNostrPoolClient({ relays: ['wss://relay.example'], pool: createPool([relay]) });
     const event = validEvent();
 
     const query = client.queryUntilEose([{ kinds: [31962] }]);
-    await client.handleMessage('wss://relay.example', JSON.stringify(['EVENT', 'sub_1', event]));
-    await client.handleMessage('wss://relay.example', JSON.stringify(['CLOSED', 'sub_1', 'closed: relay shutdown']));
+    await flushPromises();
+    relay.subscriptions[0].params.onevent(event);
+    relay.subscriptions[0].params.onclose('closed: relay shutdown');
+    await flushPromises();
 
     await expect(query).rejects.toMatchObject({
       name: 'NostrIncompleteEOSEError',

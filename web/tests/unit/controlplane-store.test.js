@@ -70,8 +70,15 @@ describe('controlplane store', () => {
     vi.resetModules();
     vi.clearAllMocks();
     nostrMock.connected.set(false);
-    nostrMock.connect.mockImplementation(async () => {
+    nostrMock.connect.mockImplementation(async (relays = []) => {
       nostrMock.connected.set(true);
+      return {
+        total: relays.length,
+        connected: relays.length,
+        failed: 0,
+        connecting: 0,
+        relays: relays.map((url) => ({ url, status: 'connected' }))
+      };
     });
     nostrMock.queryUntilEose.mockResolvedValue([]);
     nostrMock.subscribe.mockReturnValue(vi.fn());

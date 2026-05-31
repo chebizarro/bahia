@@ -43,11 +43,8 @@ function requestFilter(kinds, requestEventId, servicePubkey) {
 }
 
 function openRelayUrls() {
-  if (!(nostr?.sockets instanceof Map)) return null;
-  const openState = typeof WebSocket !== 'undefined' ? WebSocket.OPEN : 1;
-  return Array.from(nostr.sockets.entries())
-    .filter(([, ws]) => ws?.readyState === openState)
-    .map(([url]) => url);
+  if (typeof nostr?.getConnectedRelays !== 'function') return null;
+  return nostr.getConnectedRelays();
 }
 
 function formatClosedRelays(closedRelays) {

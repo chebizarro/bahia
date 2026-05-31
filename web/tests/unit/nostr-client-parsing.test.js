@@ -5,6 +5,44 @@ import { get } from 'svelte/store';
 global.window = global;
 global.WebSocket = vi.fn();
 
+function createRelay(url, { connected = true } = {}) {
+  const relay = {
+    url,
+    connected,
+    subscriptions: [],
+    subscribe: vi.fn((filters, params) => {
+      const subscription = { filters, params, close: vi.fn() };
+      relay.subscriptions.push(subscription);
+      return subscription;
+    })
+  };
+  return relay;
+}
+
+function createPool(relays = []) {
+  const relayMap = new Map(relays.map((relay) => [relay.url, relay]));
+  return {
+    ensureRelay: vi.fn(async (url) => {
+      if (!relayMap.has(url)) relayMap.set(url, createRelay(url));
+      return relayMap.get(url);
+    }),
+    listConnectionStatus: vi.fn(() => new Map(Array.from(relayMap.entries()).map(([url, relay]) => [url, relay.connected]))),
+    publish: vi.fn(() => []),
+    close: vi.fn((urls = []) => {
+      for (const url of urls) {
+        const relay = relayMap.get(url);
+        if (relay) relay.connected = false;
+      }
+    }),
+    destroy: vi.fn()
+  };
+}
+
+async function flushPromises() {
+  await Promise.resolve();
+  await Promise.resolve();
+}
+
 describe('Nostr Client - Parsing Functions', () => {
   let parseSoulEvent;
   let parseTemplateEvent;
@@ -19,7 +57,7 @@ describe('Nostr Client - Parsing Functions', () => {
   let runtimeCapabilitySupports;
   let fetchRuntimeCapabilities;
   let normalizeSoulDraftContent;
-  let NostrClient;
+  let createNostrPoolClient;
 
   beforeEach(async () => {
     // Reset modules to avoid state leakage
@@ -40,7 +78,7 @@ describe('Nostr Client - Parsing Functions', () => {
     runtimeCapabilitySupports = module.runtimeCapabilitySupports;
     fetchRuntimeCapabilities = module.fetchRuntimeCapabilities;
     normalizeSoulDraftContent = module.normalizeSoulDraftContent;
-    NostrClient = module.NostrClient;
+    createNostrPoolClient = module.createNostrPoolClient;
     global.WebSocket.OPEN = 1;
     global.WebSocket.CONNECTING = 0;
   });
@@ -225,33 +263,36 @@ describe('Nostr Client - Parsing Functions', () => {
   });
 
   describe('queryUntilEose', () => {
-    it('keeps pending bootstrap queries subscribed when relay transport closes before EOSE', async () => {
-      const client = new NostrClient({ relays: [] });
-      const socket = { readyState: WebSocket.OPEN, send: vi.fn() };
-      client.sockets.set('ws://relay.example', socket);
+    it('keeps pending bootstrap queries subscribed across transient relay reconnects', async () => {
+      const relay = createRelay('ws://relay.example');
+      const pool = createPool([relay]);
+      const client = createNostrPoolClient({ relays: ['ws://relay.example'], pool });
 
       const query = client.queryUntilEose([{ kinds: [31962] }]);
-      expect(socket.send).toHaveBeenCalledWith(expect.stringContaining('"REQ"'));
+      await flushPromises();
 
-      client.notifyRelayConnectionClosed('ws://relay.example', 'relay connection closed');
+      expect(pool.ensureRelay).toHaveBeenCalledWith('ws://relay.example');
+      expect(relay.subscribe).toHaveBeenCalledWith([{ kinds: [31962] }], expect.objectContaining({ id: 'sub_1' }));
 
       let settled = false;
       query.then(() => { settled = true; }, () => { settled = true; });
-      await Promise.resolve();
+      await flushPromises();
       expect(settled).toBe(false);
-      expect(client.subscriptions.has('sub_1')).toBe(true);
 
-      await client.handleMessage('ws://relay.example', JSON.stringify(['EOSE', 'sub_1']));
+      relay.subscriptions[0].params.oneose();
+      await flushPromises();
       await expect(query).resolves.toEqual([]);
     });
 
-    it('rejects pending bootstrap queries when reconnect attempts are exhausted before EOSE', async () => {
-      const client = new NostrClient({ relays: [] });
-      const socket = { readyState: WebSocket.OPEN, send: vi.fn() };
-      client.sockets.set('ws://relay.example', socket);
+    it('rejects pending bootstrap queries when a relay subscription closes before EOSE', async () => {
+      const relay = createRelay('ws://relay.example');
+      const pool = createPool([relay]);
+      const client = createNostrPoolClient({ relays: ['ws://relay.example'], pool });
 
       const query = client.queryUntilEose([{ kinds: [31962] }]);
-      client.notifyRelayClosed('ws://relay.example', 'relay reconnect attempts exhausted before EOSE', { terminal: true });
+      await flushPromises();
+      relay.subscriptions[0].params.onclose('relay reconnect attempts exhausted before EOSE');
+      await flushPromises();
 
       await expect(query).rejects.toMatchObject({
         name: 'NostrIncompleteEOSEError',
@@ -263,87 +304,96 @@ describe('Nostr Client - Parsing Functions', () => {
 
   describe('publish', () => {
     it('resolves relay publish result using OK acceptance', async () => {
-      const client = new NostrClient({ relays: [] });
-      const socket = { readyState: WebSocket.OPEN, send: vi.fn() };
-      client.sockets.set('wss://relay.example', socket);
+      const relay = createRelay('wss://relay.example');
+      const pool = createPool([relay]);
+      pool.publish.mockReturnValueOnce([Promise.resolve('accepted')]);
+      const client = createNostrPoolClient({ relays: ['wss://relay.example'], pool });
 
-      const publishPromise = client.publish({ id: 'evt-1', kind: 5950, tags: [], content: '' });
-
-      expect(socket.send).toHaveBeenCalledWith(expect.stringContaining('"EVENT"'));
-
-      client.handleMessage('wss://relay.example', JSON.stringify(['OK', 'evt-1', true, 'accepted']));
-
-      await expect(publishPromise).resolves.toEqual([
+      await expect(client.publish({ id: 'evt-1', kind: 5950, tags: [], content: '' })).resolves.toEqual([
         { relay: 'wss://relay.example', sent: true, accepted: true, message: 'accepted' }
       ]);
+      expect(pool.publish).toHaveBeenCalledWith(['wss://relay.example'], { id: 'evt-1', kind: 5950, tags: [], content: '' }, {});
     });
 
     it('returns rejected result when relay rejects event', async () => {
-      const client = new NostrClient({ relays: [] });
-      const socket = { readyState: WebSocket.OPEN, send: vi.fn() };
-      client.sockets.set('wss://relay.example', socket);
+      const relay = createRelay('wss://relay.example');
+      const pool = createPool([relay]);
+      pool.publish.mockReturnValueOnce([Promise.reject(new Error('auth required'))]);
+      const client = createNostrPoolClient({ relays: ['wss://relay.example'], pool });
 
-      const publishPromise = client.publish({ id: 'evt-2', kind: 5950, tags: [], content: '' });
-      client.handleMessage('wss://relay.example', JSON.stringify(['OK', 'evt-2', false, 'auth required']));
-
-      await expect(publishPromise).resolves.toEqual([
+      await expect(client.publish({ id: 'evt-2', kind: 5950, tags: [], content: '' })).resolves.toEqual([
         { relay: 'wss://relay.example', sent: true, accepted: false, message: 'auth required' }
       ]);
     });
 
     it('returns send failure if relay closes before OK', async () => {
-      const client = new NostrClient({ relays: [] });
-      const socket = { readyState: WebSocket.OPEN, send: vi.fn() };
-      client.sockets.set('wss://relay.example', socket);
+      const relay = createRelay('wss://relay.example');
+      const pool = createPool([relay]);
+      pool.publish.mockReturnValueOnce([Promise.reject(new Error('connection failure: relay connection closed'))]);
+      const client = createNostrPoolClient({ relays: ['wss://relay.example'], pool });
 
-      const publishPromise = client.publish({ id: 'evt-3', kind: 5950, tags: [], content: '' });
-      client.rejectPendingPublishesForRelay('wss://relay.example', 'relay connection closed');
-
-      await expect(publishPromise).resolves.toEqual([
-        { relay: 'wss://relay.example', sent: false, accepted: false, message: 'relay connection closed' }
+      await expect(client.publish({ id: 'evt-3', kind: 5950, tags: [], content: '' })).resolves.toEqual([
+        { relay: 'wss://relay.example', sent: false, accepted: false, message: 'connection failure: relay connection closed' }
       ]);
     });
 
     it('throws when publishing unsigned event without id', async () => {
-      const client = new NostrClient({ relays: [] });
+      const client = createNostrPoolClient({ relays: [], pool: createPool() });
       await expect(client.publish({ kind: 5950, tags: [], content: '' })).rejects.toThrow(
         'Cannot publish event without id'
       );
     });
   });
 
+  describe('subscribe lifecycle', () => {
+    it('forwards relay AUTH challenges to the subscription onAuth handler', async () => {
+      const relay = createRelay('wss://relay.example');
+      relay.challenge = 'challenge-1';
+      const client = createNostrPoolClient({ relays: ['wss://relay.example'], pool: createPool([relay]) });
+      const authEvent = { id: 'auth-event' };
+      const onAuth = vi.fn(async () => authEvent);
+
+      client.subscribe([{ kinds: [31962] }], { onAuth });
+      await flushPromises();
+
+      await expect(relay.onauth({ kind: 22242, tags: [] })).resolves.toBe(authEvent);
+      expect(onAuth).toHaveBeenCalledWith('challenge-1', 'wss://relay.example', { kind: 22242, tags: [] });
+    });
+
+    it('disconnect closes active subscriptions', async () => {
+      const relay = createRelay('wss://relay.example');
+      const pool = createPool([relay]);
+      const client = createNostrPoolClient({ relays: ['wss://relay.example'], pool });
+
+      client.subscribe([{ kinds: [31962] }], { onEvent: vi.fn() });
+      await flushPromises();
+      client.disconnect();
+      await flushPromises();
+
+      expect(relay.subscriptions[0].close).toHaveBeenCalledWith('closed by caller');
+      expect(pool.destroy).toHaveBeenCalled();
+    });
+  });
+
   describe('connect', () => {
     it('reports relay connection progress and returns a summary', async () => {
-      class MockWebSocket {
-        static CONNECTING = 0;
-        static OPEN = 1;
-        static CLOSED = 3;
-
-        constructor(url) {
-          this.url = url;
-          this.readyState = MockWebSocket.CONNECTING;
-          setTimeout(() => {
-            this.readyState = MockWebSocket.OPEN;
-            this.onopen?.();
-          }, 0);
-        }
-
-        close() {
-          this.readyState = MockWebSocket.CLOSED;
-          this.onclose?.();
-        }
-
-        send() {}
-      }
-
-      global.WebSocket = MockWebSocket;
-      const client = new NostrClient({ relays: ['wss://relay.example'] });
+      const relay = createRelay('wss://relay.example', { connected: false });
+      const pool = createPool([relay]);
+      let resolveConnection;
+      pool.ensureRelay.mockImplementationOnce(() => new Promise((resolve) => {
+        resolveConnection = () => {
+          relay.connected = true;
+          resolve(relay);
+        };
+      }));
+      const client = createNostrPoolClient({ relays: ['wss://relay.example'], pool });
 
       const connectPromise = client.connect(['wss://relay.example']);
       expect(get(client.connectionStatus)).toEqual({
         'wss://relay.example': 'connecting'
       });
 
+      resolveConnection();
       await expect(connectPromise).resolves.toEqual({
         total: 1,
         connected: 1,
@@ -355,28 +405,18 @@ describe('Nostr Client - Parsing Functions', () => {
       });
     });
 
-    it('resolves pending relay work when a configured relay is removed', async () => {
-      const client = new NostrClient({ relays: ['wss://relay.example'] });
-      const socket = {
-        readyState: WebSocket.OPEN,
-        send: vi.fn(),
-        close: vi.fn()
-      };
-      client.sockets.set('wss://relay.example', socket);
+    it('closes relay connections removed from configuration', async () => {
+      const relay = createRelay('wss://relay.example');
+      const pool = createPool([relay]);
+      const client = createNostrPoolClient({ relays: ['wss://relay.example'], pool });
 
-      const publishPromise = client.publish({ id: 'evt-remove', kind: 5950, tags: [], content: '' });
       await client.connect([]);
 
-      await expect(publishPromise).resolves.toEqual([
-        {
-          relay: 'wss://relay.example',
-          sent: false,
-          accepted: false,
-          message: 'relay removed from configuration'
-        }
-      ]);
+      expect(pool.close).toHaveBeenCalledWith(['wss://relay.example']);
+      expect(get(client.connectionStatus)).toEqual({});
     });
   });
+
 
   describe('parseSoulEvent', () => {
     it('should parse minimal soul event with defaults', () => {

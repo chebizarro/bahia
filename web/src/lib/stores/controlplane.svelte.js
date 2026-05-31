@@ -1,5 +1,4 @@
 import { browser } from '$app/environment';
-import { get } from 'svelte/store';
 import { loadSystemInfo } from './system.svelte.js';
 import {
   nostr,
@@ -806,9 +805,9 @@ export async function bootstrapControlplane({ force = false } = {}) {
       controlplaneConnection.status = 'connecting';
       subscribeToConnectionState();
       nostr.setRelays(relays, false);
-      await nostr.connect(relays, { force: true });
+      const summary = await nostr.connect(relays, { force: true });
 
-      if (!get(nostr.connected)) {
+      if (Number(summary?.connected || 0) === 0) {
         throw new Error('Unable to connect to any advertised browser relay');
       }
 

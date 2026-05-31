@@ -1,0 +1,30 @@
+{
+  "feature_id": "bahia-22gv",
+  "criteria": [
+    {
+      "id": "AC1",
+      "description": "The exported NostrClient class and custom socket/reconnect/message-queue implementation are removed from client.js.",
+      "verification": "Static inspection: no NostrClient export, sockets Map, handleMessage, notifyRelay*, reissueSubscriptions, custom reconnect timers, or rejectPendingPublishesForRelay remain in client.js."
+    },
+    {
+      "id": "AC2",
+      "description": "All browser relay connections are mediated by nostr-tools SimplePool through a thin pool wrapper.",
+      "verification": "pool.js constructs SimplePool({ enableReconnect: true }) and uses ensureRelay/relay.subscribe/pool.publish/pool.close/pool.destroy for connection, subscription, publish, and cleanup paths."
+    },
+    {
+      "id": "AC3",
+      "description": "Existing nostr singleton API remains usable by stores and helpers.",
+      "verification": "controlplane, controlplane request, encrypted request, DNS, assistant, and soul helper tests import client.js and exercise connect/subscribe/queryUntilEose/query/publish compatible behavior."
+    },
+    {
+      "id": "AC4",
+      "description": "EOSE-authoritative query behavior, CLOSED/abort/timeout fail-closed behavior, inbound validation, event dedupe, AUTH notification, and subscription cleanup are deterministic and tested.",
+      "verification": "sanity.test.js and nostr-client-parsing.test.js cover validator rejection, frame ordering, multi-relay EOSE, timeout/abort, CLOSED incomplete errors, publish OK mapping, AUTH callback forwarding, and disconnect subscription cleanup."
+    },
+    {
+      "id": "AC5",
+      "description": "Existing web unit tests and production build pass after the replacement.",
+      "verification": "npm run test:unit passes 54 files / 496 tests; npm run build exits 0."
+    }
+  ]
+}
