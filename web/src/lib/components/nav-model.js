@@ -17,29 +17,28 @@ const OPERATIONS_LINKS = [
   { href: '/workers', label: 'Workers' },
   { href: '/backup', label: 'Backup' },
   { href: '/continuity', label: 'Continuity' },
-  { href: '/ml', label: 'Inference' },
-  { href: '/llm', label: 'LLM' },
-  { href: '/payments', label: 'Payments' },
-  { href: '/policies', label: 'Policies' },
+  { href: '/dns', label: 'DNS' },
+  { href: '/notifications', label: 'Notifications' },
   { href: '/events', label: 'Events' }
 ];
 
+const INTELLIGENCE_LINKS = [
+  { href: '/ml', label: 'Inference' },
+  { href: '/llm', label: 'LLM' }
+];
+
 const ADMIN_LINKS = [
+  { href: '/payments', label: 'Payments' },
+  { href: '/policies', label: 'Policies' },
   { href: '/settings', label: 'Settings' }
 ];
 
-export const PRIMARY_NAV_LINKS = [
-  WORKSPACE_LINKS[0],
-  DELIVERY_LINKS[0],
-  DELIVERY_LINKS[2],
-  OPERATIONS_LINKS[0]
-];
-
 export const NAV_SECTIONS = [
-  { title: 'Workspace', links: WORKSPACE_LINKS },
-  { title: 'Delivery', links: DELIVERY_LINKS },
-  { title: 'Operations', links: OPERATIONS_LINKS },
-  { title: 'Admin', links: ADMIN_LINKS }
+  { title: 'Workspace', icon: 'layout-dashboard', links: WORKSPACE_LINKS },
+  { title: 'Delivery', icon: 'rocket', links: DELIVERY_LINKS },
+  { title: 'Operations', icon: 'server', links: OPERATIONS_LINKS },
+  { title: 'Intelligence', icon: 'brain', links: INTELLIGENCE_LINKS },
+  { title: 'Admin', icon: 'shield', links: ADMIN_LINKS }
 ];
 
 export const NAV_LINKS = NAV_SECTIONS.flatMap((section) => section.links);
@@ -61,6 +60,17 @@ export function isActiveNavLink(pathname = '/', href = '/') {
 
 export function isActiveNavSection(pathname = '/', section = {}) {
   return Array.isArray(section.links) && section.links.some((link) => isActiveNavLink(pathname, link.href));
+}
+
+export function currentLocation(pathname = '/') {
+  for (const section of NAV_SECTIONS) {
+    const match = section.links.find((link) => isActiveNavLink(pathname, link.href));
+    if (match) {
+      return { section: section.title, page: match.label, icon: section.icon };
+    }
+  }
+
+  return { section: null, page: null, icon: null };
 }
 
 export function authPresentation(authState = {}, authenticated = false) {

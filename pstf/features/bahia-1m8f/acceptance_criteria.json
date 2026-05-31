@@ -1,0 +1,25 @@
+{
+  "feature_id": "bahia-1m8f",
+  "criteria": [
+    {
+      "id": "AC1",
+      "statement": "Navigation model exposes five icon-bearing sections: Workspace, Delivery, Operations, Intelligence, and Admin."
+    },
+    {
+      "id": "AC2",
+      "statement": "DNS and Notifications routes are present in Operations."
+    },
+    {
+      "id": "AC3",
+      "statement": "PRIMARY_NAV_LINKS is no longer exported or rendered by Nav.svelte."
+    },
+    {
+      "id": "AC4",
+      "statement": "currentLocation(pathname) derives section, page, and icon from NAV_SECTIONS."
+    },
+    {
+      "id": "AC5",
+      "statement": "Nav.svelte places the menu trigger left of the logo, renders a breadcrumb after the logo, and opens navigation as a left-side drawer with backdrop."
+    }
+  ]
+}

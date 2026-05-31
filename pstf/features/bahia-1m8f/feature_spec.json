@@ -1,0 +1,21 @@
+{
+  "feature_id": "bahia-1m8f",
+  "title": "Consolidated navigation",
+  "source_design": "docs/designs/consolidated-navigation.md",
+  "observed_behavior_before": [
+    "web/src/lib/components/nav-model.js exported PRIMARY_NAV_LINKS and NAV_SECTIONS, creating duplicate navigation surfaces.",
+    "DNS and Notifications routes were absent from NAV_SECTIONS.",
+    "web/src/lib/components/Nav.svelte rendered primary shortcut links in the topbar and a dropdown-style all-destinations menu."
+  ],
+  "intended_behavior": [
+    "NAV_SECTIONS is the single source of truth for page navigation.",
+    "Navigation is grouped into Workspace, Delivery, Operations, Intelligence, and Admin sections with section icons.",
+    "The topbar shows the menu trigger to the left of the logo and a breadcrumb derived from currentLocation(pathname).",
+    "The all-destinations menu opens as a left-side slide-out drawer with a backdrop overlay."
+  ],
+  "files_touched": [
+    "web/src/lib/components/nav-model.js",
+    "web/src/lib/components/Nav.svelte",
+    "web/tests/unit/nav.test.js"
+  ]
+}
