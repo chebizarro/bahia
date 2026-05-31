@@ -1,3 +1,7 @@
+const BOOTSTRAP_RETRY_INTERVAL_MS = 30_000;
+let lastBootstrapFailedAt = null;
+let bootstrapControlplaneForRetry = null;
+
 export const controlplaneConnection = $state({
   status: 'idle',
   connected: false,
@@ -11,7 +15,33 @@ export const controlplaneConnection = $state({
   reconnects: 0
 });
 
+export function clearBootstrapRetryLimit() {
+  lastBootstrapFailedAt = null;
+}
+
+export function markBootstrapFailedAt(timestamp = Date.now()) {
+  lastBootstrapFailedAt = timestamp;
+}
+
+export function bootstrapRetryLimited(now = Date.now()) {
+  if (lastBootstrapFailedAt === null) return false;
+  return now - lastBootstrapFailedAt < BOOTSTRAP_RETRY_INTERVAL_MS;
+}
+
+export function registerBootstrapControlplaneForRetry(fn) {
+  bootstrapControlplaneForRetry = fn;
+}
+
+export async function manualRetry() {
+  clearBootstrapRetryLimit();
+  if (typeof bootstrapControlplaneForRetry !== 'function') {
+    return { ok: false, reason: 'controlplane bootstrap is not registered' };
+  }
+  return bootstrapControlplaneForRetry({ force: true });
+}
+
 export function resetConnectionState() {
+  clearBootstrapRetryLimit();
   controlplaneConnection.status = 'idle';
   controlplaneConnection.connected = false;
   controlplaneConnection.ready = false;

@@ -3,16 +3,14 @@ import { nostr } from '../../nostr/client.js';
 import { loadSystemInfo } from '../system.svelte.js';
 import { resetCollections, refreshCollections, setAllLoading } from '../collections/index.svelte.js';
 import { applyControlplaneEvent, readModelFilters, resetEventRouting } from './events.svelte.js';
-import { connectedRelaysFromSummary, controlplaneConnection, markBootstrapComplete, normalizeRelayUrl, resetConnectionState, resolveBrowserRelays, setBootstrapError } from './connection.svelte.js';
+import { bootstrapRetryLimited, connectedRelaysFromSummary, controlplaneConnection, markBootstrapComplete, markBootstrapFailedAt, normalizeRelayUrl, registerBootstrapControlplaneForRetry, resetConnectionState, resolveBrowserRelays, setBootstrapError } from './connection.svelte.js';
 
 let bootstrapPromise = null;
 let liveUnsubscribe = null;
 let connectedUnsubscribe = null;
 let lastConnected = false;
-let lastBootstrapFailedAt = null;
 let bootstrapExpectedRelays = [];
 let bootstrapSubscriptionGeneration = 0;
-const BOOTSTRAP_RETRY_INTERVAL_MS = 30_000;
 const CLEANUP_KEY = Symbol.for('bahia.controlplane.store.cleanup');
 
 function cleanupSubscriptions() {
@@ -78,7 +76,6 @@ function startStreamingSubscription(expectedRelays) {
 export function resetControlplaneStore() {
   cleanupSubscriptions();
   bootstrapPromise = null;
-  lastBootstrapFailedAt = null;
   lastConnected = false;
   bootstrapExpectedRelays = [];
   bootstrapSubscriptionGeneration = 0;
@@ -92,13 +89,9 @@ export async function bootstrapControlplane({ force = false } = {}) {
   if (bootstrapPromise && !force) return bootstrapPromise;
   if (controlplaneConnection.ready && !force) return { ok: true };
 
-  if (!force && lastBootstrapFailedAt !== null) {
-    const elapsed = Date.now() - lastBootstrapFailedAt;
-    if (elapsed < BOOTSTRAP_RETRY_INTERVAL_MS) {
-      return { ok: false, reason: controlplaneConnection.lastError || 'bootstrap failed recently, waiting before retry' };
-    }
+  if (!force && bootstrapRetryLimited()) {
+    return { ok: false, reason: controlplaneConnection.lastError || 'bootstrap failed recently, waiting before retry' };
   }
-  if (force) lastBootstrapFailedAt = null;
 
   bootstrapPromise = (async () => {
     controlplaneConnection.status = 'discovering';
@@ -130,7 +123,7 @@ export async function bootstrapControlplane({ force = false } = {}) {
       refreshCollections();
       return { ok: true };
     } catch (err) {
-      lastBootstrapFailedAt = Date.now();
+      markBootstrapFailedAt();
       setBootstrapError(err?.message || String(err));
       return { ok: false, reason: controlplaneConnection.lastError };
     } finally {
@@ -147,3 +140,5 @@ export function disconnectControlplane() {
   liveUnsubscribe = null;
   controlplaneConnection.status = controlplaneConnection.ready ? 'disconnected' : 'idle';
 }
+
+registerBootstrapControlplaneForRetry(bootstrapControlplane);

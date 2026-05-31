@@ -1,6 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import ConnectionStatus from '../../src/lib/components/ConnectionStatus.svelte';
-import { click, renderComponent, textOf } from './utils/svelte-component-test';
+import { click, renderComponent, textOf, tick } from './utils/svelte-component-test';
 
 function connection(overrides = {}) {
   return {
@@ -66,5 +66,47 @@ describe('ConnectionStatus', () => {
     await click(button);
 
     expect(textOf(target)).toContain('auth required by relay');
+  });
+
+  it('shows Retry Now immediately for failed connections and reports retry failure', async () => {
+    const retry = vi.fn().mockResolvedValue({ ok: false, reason: 'auth required by relay' });
+    const target = renderComponent(ConnectionStatus, {
+      connection: connection({ status: 'error', lastError: 'auth required by relay' }),
+      retry
+    });
+
+    const retryButton = target.querySelector('.retry-button');
+    expect(retryButton?.textContent).toContain('Retry Now');
+    expect(retryButton?.disabled).toBe(false);
+
+    await click(retryButton);
+
+    expect(retry).toHaveBeenCalledTimes(1);
+    expect(textOf(target)).toContain('Retry failed: auth required by relay');
+  });
+
+  it('disables Retry Now while a manual connection attempt is in flight', async () => {
+    let resolveRetry;
+    const retry = vi.fn(() => new Promise((resolve) => {
+      resolveRetry = resolve;
+    }));
+    const target = renderComponent(ConnectionStatus, {
+      connection: connection({ status: 'disconnected', lastError: 'relay closed subscription' }),
+      retry
+    });
+    const retryButton = target.querySelector('.retry-button');
+
+    retryButton.click();
+    await tick();
+
+    expect(retryButton.disabled).toBe(true);
+    expect(textOf(target)).toContain('Retrying…');
+
+    resolveRetry({ ok: true });
+    await tick();
+    await tick();
+
+    expect(retryButton.disabled).toBe(false);
+    expect(textOf(target)).toContain('Connection retry started.');
   });
 });

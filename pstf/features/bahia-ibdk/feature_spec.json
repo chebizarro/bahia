@@ -1,0 +1,10 @@
+{
+  "feature_id": "bahia-ibdk",
+  "title": "Manual retry controls for failed controlplane connections",
+  "intended_behavior": "When relay-backed controlplane bootstrap fails or disconnects, the connection status UI exposes an immediate manual retry control. Manual retry bypasses the automatic retry throttle by clearing the failure timestamp and forcing bootstrap. Automatic retry calls remain rate-limited after recent bootstrap failure.",
+  "scope": [
+    "web/src/lib/stores/controlplane/connection.svelte.js",
+    "web/src/lib/stores/controlplane/bootstrap.svelte.js",
+    "web/src/lib/components/ConnectionStatus.svelte"
+  ]
+}

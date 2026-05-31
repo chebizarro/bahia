@@ -1,5 +1,6 @@
 export {
   controlplaneConnection,
+  manualRetry,
   normalizeRelayUrl,
   resolveBrowserRelays
 } from './connection.svelte.js';

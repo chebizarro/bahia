@@ -1,0 +1,10 @@
+{
+  "feature_id": "bahia-ibdk",
+  "criteria": [
+    { "id": "AC1", "description": "Manual retry is available immediately after a failed or disconnected controlplane connection." },
+    { "id": "AC2", "description": "The retry control is disabled and provides in-progress feedback while a manual connection attempt is running." },
+    { "id": "AC3", "description": "The UI displays success or failure feedback from the manual retry result." },
+    { "id": "AC4", "description": "Manual retry clears the bootstrap retry throttle and forces bootstrap, while automatic retries remain rate-limited after recent failure." },
+    { "id": "AC5", "description": "The connection details panel displays the last connection error when available." }
+  ]
+}

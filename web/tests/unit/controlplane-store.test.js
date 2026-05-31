@@ -467,6 +467,35 @@ describe('controlplane store', () => {
     expect(store.controlplaneConnection.status).toBe('error');
   });
 
+  it('lets manual retry bypass the automatic retry rate limit', async () => {
+    nostrMock.connect
+      .mockImplementationOnce(async () => {
+        nostrMock.connected.set(false);
+      })
+      .mockImplementation(async (relays = []) => {
+        nostrMock.connected.set(true);
+        return {
+          total: relays.length,
+          connected: relays.length,
+          failed: 0,
+          connecting: 0,
+          relays: relays.map((url) => ({ url, status: 'connected' }))
+        };
+      });
+
+    const failed = await store.bootstrapControlplane();
+    const automaticRetry = await store.bootstrapControlplane();
+    const manual = await store.manualRetry();
+
+    expect(failed.ok).toBe(false);
+    expect(automaticRetry.ok).toBe(false);
+    expect(automaticRetry.reason).toBe('Unable to connect to any advertised browser relay');
+    expect(manual.ok).toBe(true);
+    expect(systemInfoMock.loadSystemInfo).toHaveBeenNthCalledWith(2, { force: true });
+    expect(nostrMock.connect).toHaveBeenCalledTimes(2);
+    expect(store.controlplaneConnection.status).toBe('syncing');
+  });
+
   it('fails closed when relay read models are not advertised', async () => {
     systemInfoMock.loadSystemInfo.mockResolvedValueOnce({
       nostr: {

@@ -1,0 +1,9 @@
+{
+  "feature_id": "bahia-ibdk",
+  "tests": [
+    { "test": "web/tests/unit/connection-status.test.js::shows Retry Now immediately for failed connections and reports retry failure", "criteria": ["AC1", "AC3", "AC5"] },
+    { "test": "web/tests/unit/connection-status.test.js::disables Retry Now while a manual connection attempt is in flight", "criteria": ["AC2", "AC3"] },
+    { "test": "web/tests/unit/controlplane-store.test.js::lets manual retry bypass the automatic retry rate limit", "criteria": ["AC4"] },
+    { "test": "web/tests/unit/connection-status.test.js::shows error details in the tooltip and expanded panel", "criteria": ["AC5"] }
+  ]
+}

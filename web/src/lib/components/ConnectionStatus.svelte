@@ -1,8 +1,10 @@
 <script>
-  import { controlplaneConnection } from '$lib/stores';
+  import { controlplaneConnection, manualRetry as storeManualRetry } from '$lib/stores';
 
-  let { connection = controlplaneConnection } = $props();
+  let { connection = controlplaneConnection, retry = storeManualRetry } = $props();
   let expanded = $state(false);
+  let retrying = $state(false);
+  let retryFeedback = $state('');
 
   const STATUS_PRESENTATION = {
     idle: { tone: 'disconnected', label: 'Disconnected', detail: 'Not connected' },
@@ -21,6 +23,8 @@
   let title = $derived(connection.status === 'error' ? errorMessage : `${presentation.label}: ${presentation.detail}`);
   let lastEventLabel = $derived(formatTimestamp(connection.lastEventAt));
   let lastEoseLabel = $derived(formatTimestamp(connection.lastEoseAt));
+  let retryVisible = $derived(['error', 'disconnected'].includes(connection.status));
+  let retryDisabled = $derived(retrying || ['discovering', 'connecting', 'syncing', 'bootstrapping'].includes(connection.status));
 
   function formatTimestamp(value) {
     if (!value) return 'Never';
@@ -31,6 +35,20 @@
 
   function toggleExpanded() {
     expanded = !expanded;
+  }
+
+  async function handleRetry() {
+    if (retryDisabled) return;
+    retrying = true;
+    retryFeedback = 'Retrying connection…';
+    try {
+      const result = await retry();
+      retryFeedback = result?.ok ? 'Connection retry started.' : `Retry failed: ${result?.reason || 'Connection retry failed'}`;
+    } catch (err) {
+      retryFeedback = `Retry failed: ${err?.message || String(err)}`;
+    } finally {
+      retrying = false;
+    }
   }
 </script>
 
@@ -50,10 +68,29 @@
     </span>
   </button>
 
+  {#if retryVisible}
+    <button
+      type="button"
+      class="retry-button"
+      disabled={retryDisabled}
+      onclick={handleRetry}
+    >
+      {retrying ? 'Retrying…' : 'Retry Now'}
+    </button>
+  {/if}
+
+  {#if retryFeedback}
+    <span class="retry-feedback-inline" aria-live="polite">{retryFeedback}</span>
+  {/if}
+
   {#if expanded}
     <div id="connection-status-details" class="status-details" role="status">
-      {#if connection.status === 'error'}
+      {#if connection.lastError}
         <p class="status-error">{errorMessage}</p>
+      {/if}
+
+      {#if retryFeedback}
+        <p class="retry-feedback">{retryFeedback}</p>
       {/if}
 
       <dl>
@@ -109,6 +146,38 @@
     background: var(--hover-bg);
   }
 
+  .retry-button {
+    margin-left: 0.5rem;
+    border: 1px solid var(--connection-status-color, var(--border-color));
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--connection-status-color, var(--card-bg)) 12%, var(--card-bg));
+    color: var(--text-primary);
+    padding: 0.35rem 0.65rem;
+    font-size: 0.72rem;
+    font-weight: 700;
+    cursor: pointer;
+  }
+
+  .retry-button:disabled {
+    cursor: not-allowed;
+    opacity: 0.6;
+  }
+
+  .retry-button:not(:disabled):hover,
+  .retry-button:not(:disabled):focus-visible {
+    background: var(--hover-bg);
+  }
+
+  .retry-feedback-inline {
+    position: absolute;
+    top: calc(100% + 0.25rem);
+    right: 0;
+    width: max-content;
+    max-width: min(320px, calc(100vw - 2rem));
+    color: var(--text-muted);
+    font-size: 0.72rem;
+  }
+
   .status-dot {
     width: 0.65rem;
     height: 0.65rem;
@@ -152,6 +221,7 @@
   }
 
   .status-error,
+  .retry-feedback,
   .empty-relays {
     margin: 0 0 0.75rem;
     color: var(--text-muted);
