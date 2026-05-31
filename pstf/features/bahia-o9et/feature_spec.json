@@ -1,0 +1,10 @@
+{
+  "feature_id": "bahia-o9et",
+  "title": "Bootstrapper retry loop with backoff",
+  "observed_behavior": "Bootstrapper Run returned after a failed one-shot attempt, leaving readiness failed until process restart.",
+  "intended_behavior": "Bootstrapper Run retries failed bootstrap attempts while the process context remains active, with exponential backoff capped at five minutes, and returns nil once an attempt establishes readiness.",
+  "affected_files": [
+    "internal/adapters/nostr/bootstrapper.go",
+    "internal/adapters/nostr/bootstrapper_test.go"
+  ]
+}

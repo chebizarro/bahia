@@ -174,7 +174,8 @@
 
 <svelte:window onclick={handleWindowClick} onkeydown={handleWindowKeydown} />
 
-<div class="user-menu" bind:this={rootEl}>
+<!-- DEBUG: mode={authUi.mode} open={open} -->
+<div class="user-menu" bind:this={rootEl} data-mode={authUi.mode} data-open={open}>
   {#if authUi.mode === 'loading'}
     <button type="button" class="user-menu-trigger user-menu-loading" disabled aria-live="polite">
       <span class="spinner"></span>
@@ -231,6 +232,7 @@
     </button>
   {/if}
 
+  <!-- DEBUG: open state = {open} -->
   {#if open}
     <button type="button" class="user-menu-backdrop" aria-label="Close user menu" onclick={() => closeMenu(false)}></button>
     <div

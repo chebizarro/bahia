@@ -1,0 +1,21 @@
+{
+  "feature_id": "bahia-o9et",
+  "criteria": [
+    {
+      "id": "AC1",
+      "description": "Run retries after an unsuccessful bootstrap attempt instead of permanently returning the bootstrap failure."
+    },
+    {
+      "id": "AC2",
+      "description": "Retry interval defaults to 30 seconds when unset and doubles after failures up to a five minute cap."
+    },
+    {
+      "id": "AC3",
+      "description": "Progress is reset for each attempt and failed attempts mark the health-visible phase as failed before waiting to retry."
+    },
+    {
+      "id": "AC4",
+      "description": "Run returns context cancellation when the process context is cancelled during retry waiting."
+    }
+  ]
+}

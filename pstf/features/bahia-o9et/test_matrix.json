@@ -1,0 +1,25 @@
+{
+  "feature_id": "bahia-o9et",
+  "tests": [
+    {
+      "name": "TestBootstrapperRunRetriesAfterFailedAttempt",
+      "criteria": ["AC1", "AC3"],
+      "evidence": "First scripted attempt returns EOSE with no decoded events; second scripted attempt provides snapshot and live events and Run returns ready."
+    },
+    {
+      "name": "TestBootstrapperNoRelayDataFails",
+      "criteria": ["AC3"],
+      "evidence": "Direct attemptBootstrap invocation records failed progress when no relay data establishes a tier."
+    },
+    {
+      "name": "go build ./...",
+      "criteria": ["AC1", "AC2", "AC3", "AC4"],
+      "evidence": "Build completed successfully after implementation."
+    },
+    {
+      "name": "go test ./internal/adapters/nostr/...",
+      "criteria": ["AC1", "AC3"],
+      "evidence": "Nostr adapter package tests completed successfully."
+    }
+  ]
+}
