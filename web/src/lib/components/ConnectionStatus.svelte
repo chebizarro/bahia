@@ -48,6 +48,8 @@
       retryFeedback = `Retry failed: ${err?.message || String(err)}`;
     } finally {
       retrying = false;
+      // Auto-clear feedback after 4 seconds
+      setTimeout(() => { retryFeedback = ''; }, 4000);
     }
   }
 </script>
@@ -79,9 +81,7 @@
     </button>
   {/if}
 
-  {#if retryFeedback}
-    <span class="retry-feedback-inline" aria-live="polite">{retryFeedback}</span>
-  {/if}
+
 
   {#if expanded}
     <div id="connection-status-details" class="status-details" role="status">
@@ -168,15 +168,7 @@
     background: var(--hover-bg);
   }
 
-  .retry-feedback-inline {
-    position: absolute;
-    top: calc(100% + 0.25rem);
-    right: 0;
-    width: max-content;
-    max-width: min(320px, calc(100vw - 2rem));
-    color: var(--text-muted);
-    font-size: 0.72rem;
-  }
+
 
   .status-dot {
     width: 0.65rem;
