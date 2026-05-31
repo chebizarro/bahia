@@ -82,6 +82,9 @@ describe('ConnectionStatus', () => {
     await click(retryButton);
 
     expect(retry).toHaveBeenCalledTimes(1);
+    // Feedback now only shows in expanded panel, click trigger to expand
+    const trigger = target.querySelector('.status-trigger');
+    await click(trigger);
     expect(textOf(target)).toContain('Retry failed: auth required by relay');
   });
 
@@ -107,6 +110,9 @@ describe('ConnectionStatus', () => {
     await tick();
 
     expect(retryButton.disabled).toBe(false);
+    // Feedback now only shows in expanded panel, click trigger to expand
+    const trigger = target.querySelector('.status-trigger');
+    await click(trigger);
     expect(textOf(target)).toContain('Connection retry started.');
   });
 });
