@@ -9,6 +9,7 @@ import (
 	"fiatjaf.com/nostr"
 	"fiatjaf.com/nostr/nip19"
 	"github.com/openagentsinc/bahia/internal/config"
+	"github.com/openagentsinc/bahia/internal/kinds"
 )
 
 type policy struct {
@@ -125,43 +126,15 @@ func deriveFiatjafPubkey(raw string) (nostr.PubKey, bool, error) {
 }
 
 func isRequestKind(kind nostr.Kind) bool {
-	return (kind >= 5961 && kind <= 5989) ||
-		(kind >= 5991 && kind <= 6005) ||
-		(kind >= 38390 && kind <= 38394) ||
-		(kind >= 38400 && kind <= 38409) ||
-		(kind >= 38420 && kind <= 38421) ||
-		(kind >= 38430 && kind <= 38431)
+	return kinds.IsRequestKind(int(kind))
 }
 
 func isBahiaProjectionKind(kind nostr.Kind) bool {
-	return kind == 30002 ||
-		kind == 30078 ||
-		kind == 30079 ||
-		kind == 31310 ||
-		kind == 31311 ||
-		(kind >= 31400 && kind <= 31404) ||
-		(kind >= 31974 && kind <= 31978) ||
-		(kind >= 6961 && kind <= 6991) ||
-		kind == 6997 ||
-		(kind >= 7961 && kind <= 7992) ||
-		kind == 7997 ||
-		(kind >= 30350 && kind <= 30353) ||
-		(kind >= 31961 && kind <= 31973) ||
-		(kind >= 31980 && kind <= 31999) ||
-		(kind >= 32000 && kind <= 32003) ||
-		(kind >= 31000 && kind <= 31099) ||
-		(kind >= 38395 && kind <= 38399) ||
-		(kind >= 38410 && kind <= 38419) ||
-		(kind >= 38422 && kind <= 38423)
+	return kinds.IsBahiaProjectionKind(int(kind))
 }
 
 func isOpenInteropKind(kind nostr.Kind) bool {
-	switch kind {
-	case 10100, 30100, 5101, 5102, 5401, 5402:
-		return true
-	default:
-		return false
-	}
+	return kinds.IsOpenInteropKind(int(kind))
 }
 
 func (p *policy) hasAuthorizedAuthors(authors []nostr.PubKey) bool {
@@ -177,9 +150,9 @@ func (p *policy) hasAuthorizedAuthors(authors []nostr.PubKey) bool {
 }
 
 func isAuthorScopedReadableRequestKind(kind nostr.Kind) bool {
-	return isRequestKind(kind) && kind != 5980
+	return kinds.IsAuthorScopedReadableRequestKind(int(kind))
 }
 
 func isReadableKind(kind nostr.Kind) bool {
-	return isBahiaProjectionKind(kind) || isOpenInteropKind(kind)
+	return kinds.IsReadableKind(int(kind))
 }

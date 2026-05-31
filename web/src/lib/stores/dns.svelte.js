@@ -15,11 +15,18 @@ import {
   upsertReplaceableEvent
 } from '$lib/nostr/client.js';
 
+import {
+  DNS_ZONE_STATE,
+  DNS_ENDPOINT_STATE,
+  DNS_POLICY_STATE,
+  DNS_BACKEND_STATE,
+} from '$lib/nostr/kinds.gen.js';
+
 export const DNS_READ_MODEL_KINDS = {
-  ZONE: 31975,
-  ENDPOINT: 31976,
-  POLICY: 31977,
-  BACKEND: 31978
+  ZONE: DNS_ZONE_STATE,
+  ENDPOINT: DNS_ENDPOINT_STATE,
+  POLICY: DNS_POLICY_STATE,
+  BACKEND: DNS_BACKEND_STATE
 };
 
 const DNS_KIND_LIST = Object.values(DNS_READ_MODEL_KINDS);
