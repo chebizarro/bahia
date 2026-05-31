@@ -151,6 +151,7 @@ func New(cfg *config.Config) (*App, error) {
 	var sigRepo repository.ArtifactSignatureRepository
 	var policyRepo repository.DeploymentPolicyRepository
 	var secretRepo repository.SecretRepository
+	var deploymentUnitRepo repository.DeploymentUnitRepository
 	var orgRepo repository.OrganizationRepository
 	var orgMemberRepo repository.OrgMemberRepository
 	var orgInviteRepo repository.OrgInviteRepository
@@ -171,6 +172,7 @@ func New(cfg *config.Config) (*App, error) {
 		sigRepo = repository.NewPgArtifactSignatureRepository(pool)
 		policyRepo = repository.NewPgDeploymentPolicyRepository(pool)
 		secretRepo = repository.NewPgSecretRepository(pool)
+		deploymentUnitRepo = repository.NewPgDeploymentUnitRepository(pool)
 		orgRepo = repository.NewPgOrganizationRepository(pool)
 		orgMemberRepo = repository.NewPgOrgMemberRepository(pool)
 		orgInviteRepo = repository.NewPgOrgInviteRepository(pool)
