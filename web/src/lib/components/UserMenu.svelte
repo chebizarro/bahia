@@ -12,6 +12,7 @@
   let triggerEl = $state();
   let menuEl = $state();
   let rootEl = $state();
+  let ignoreNextWindowClick = $state(false);
 
   let authUi = $derived.by(() => {
     const authenticated = isAuthenticated();
@@ -156,6 +157,10 @@
   }
 
   function handleWindowClick(event) {
+    if (ignoreNextWindowClick) {
+      ignoreNextWindowClick = false;
+      return;
+    }
     if (!open || rootEl?.contains(event.target)) return;
     closeMenu(false);
   }
@@ -184,7 +189,7 @@
       aria-controls="user-menu"
       title="{authUi.pubkey}\n{authUi.nip05 ? authUi.nip05 : ''}"
       bind:this={triggerEl}
-      onclick={toggleMenu}
+      onclick={(e) => { e.stopPropagation(); ignoreNextWindowClick = true; open = !open; }}
       onkeydown={handleTriggerKeydown}
     >
       {#if authUi.avatarUrl}
@@ -212,7 +217,7 @@
       aria-controls="user-menu"
       title={authUi.extensionAvailable ? 'Sign in with Nostr' : 'NIP-07 not detected; Nostr Connect is available in settings'}
       bind:this={triggerEl}
-      onclick={toggleMenu}
+      onclick={(e) => { e.stopPropagation(); ignoreNextWindowClick = true; open = !open; }}
       onkeydown={handleTriggerKeydown}
     >
       {#if authUi.extensionAvailable}
