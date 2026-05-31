@@ -140,8 +140,7 @@ func isBahiaProjectionKind(kind nostr.Kind) bool {
 		kind == 31310 ||
 		kind == 31311 ||
 		(kind >= 31400 && kind <= 31404) ||
-		kind == 31974 ||
-		kind == 31976 ||
+		(kind >= 31974 && kind <= 31978) ||
 		(kind >= 6961 && kind <= 6991) ||
 		kind == 6997 ||
 		(kind >= 7961 && kind <= 7992) ||
