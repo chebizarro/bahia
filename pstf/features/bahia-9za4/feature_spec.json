@@ -1,0 +1,27 @@
+{
+  "feature_id": "bahia-9za4",
+  "title": "Split controlplane.svelte.js into modular stores",
+  "status": "implemented",
+  "observed_behavior_before": [
+    "web/src/lib/stores/controlplane.svelte.js contained connection state, bootstrap orchestration, event routing, collection state arrays, and dedupe maps in one 880-line module.",
+    "The controlplane-store unit test failed before this split because stale module instances retained nostr.connected subscribers across vi.resetModules(), causing duplicate subscriptions and stale EOSE handling."
+  ],
+  "intended_behavior": [
+    "Existing imports from web/src/lib/stores/controlplane.svelte.js remain compatible through a slim re-export layer.",
+    "Connection, bootstrap, event routing, and collection concerns live in focused modules under web/src/lib/stores/controlplane/ and web/src/lib/stores/collections/.",
+    "Each collection module owns its $state arrays and dedupe Maps while event routing delegates application to those modules.",
+    "Bootstrap remains Nostr-native: it subscribes to scoped REQ filters, applies EVENTs immediately, marks historical catch-up complete only after EOSE from connected relays, and ignores stale EOSE from replaced subscriptions."
+  ],
+  "scope": {
+    "owned_paths": [
+      "web/src/lib/stores/controlplane.svelte.js",
+      "web/src/lib/stores/controlplane/",
+      "web/src/lib/stores/collections/"
+    ],
+    "excluded_paths_due_parallel_work": [
+      "web/src/lib/components/Nav.svelte",
+      "web/src/lib/components/ConnectionStatus.svelte",
+      "web/src/routes/"
+    ]
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "feature_id": "bahia-9za4",
+  "defects": [
+    {
+      "id": "D1",
+      "status": "fixed",
+      "observed": "Before the split, stale module instances retained nostr.connected subscribers across vi.resetModules(), causing duplicate subscriptions and stale bootstrap state in controlplane-store tests.",
+      "intended": "Reset/import cycles must clean obsolete live and connection subscriptions so bootstrap EOSE tracking is generation-scoped and deterministic.",
+      "fix": "controlplane/bootstrap.svelte.js registers a global cleanup hook and resetControlplaneStore() clears subscription, routing, collection, and connection state."
+    }
+  ]
+}

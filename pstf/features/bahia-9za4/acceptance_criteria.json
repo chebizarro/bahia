@@ -1,0 +1,25 @@
+{
+  "feature_id": "bahia-9za4",
+  "criteria": [
+    {
+      "id": "AC1",
+      "description": "No owned controlplane or collection store module exceeds 150 lines.",
+      "verification": "wc -l web/src/lib/stores/controlplane.svelte.js web/src/lib/stores/controlplane/*.js web/src/lib/stores/controlplane/*.svelte.js web/src/lib/stores/collections/*.js web/src/lib/stores/collections/*.svelte.js"
+    },
+    {
+      "id": "AC2",
+      "description": "Existing imports from web/src/lib/stores/controlplane.svelte.js continue to work.",
+      "verification": "controlplane.svelte.js re-exports ./controlplane/index.js; controlplane-store unit tests import the compatibility path."
+    },
+    {
+      "id": "AC3",
+      "description": "Each collection manages its own Map and $state arrays while preserving existing exported collection names.",
+      "verification": "Collection modules under web/src/lib/stores/collections/ own their arrays/maps and aggregate through collections/index.svelte.js."
+    },
+    {
+      "id": "AC4",
+      "description": "Event application is delegated to collection modules and preserves streaming EVENT/EOSE behavior.",
+      "verification": "npm --prefix web run test:unit -- --run tests/unit/controlplane-store.test.js"
+    }
+  ]
+}

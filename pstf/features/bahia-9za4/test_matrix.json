@@ -1,0 +1,19 @@
+{
+  "feature_id": "bahia-9za4",
+  "tests": [
+    {
+      "test_id": "T1",
+      "criteria": ["AC1"],
+      "command": "wc -l web/src/lib/stores/controlplane.svelte.js web/src/lib/stores/controlplane/*.js web/src/lib/stores/controlplane/*.svelte.js web/src/lib/stores/collections/*.js web/src/lib/stores/collections/*.svelte.js",
+      "expected": "Every owned module reports 150 lines or fewer.",
+      "result": "passed"
+    },
+    {
+      "test_id": "T2",
+      "criteria": ["AC2", "AC3", "AC4"],
+      "command": "npm --prefix web run test:unit -- --run tests/unit/controlplane-store.test.js",
+      "expected": "All controlplane-store unit tests pass, including import compatibility, streaming EVENT application before EOSE, multi-relay EOSE completion, stale EOSE rejection, reconnect status, and collection routing.",
+      "result": "passed"
+    }
+  ]
+}
