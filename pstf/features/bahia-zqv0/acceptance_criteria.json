@@ -1,0 +1,9 @@
+{
+  "feature_id": "bahia-zqv0",
+  "criteria": [
+    { "id": "AC1", "description": "Nav renders an always-visible relay connection indicator near the auth controls." },
+    { "id": "AC2", "description": "The indicator maps idle and disconnected to Disconnected, discovering and connecting to Connecting, syncing and bootstrapping to Syncing, live to Live, and error to Error." },
+    { "id": "AC3", "description": "Clicking the indicator expands details containing relay count/list, last event time, and last EOSE time." },
+    { "id": "AC4", "description": "Error state exposes the relay error message through the trigger tooltip and expanded details." }
+  ]
+}

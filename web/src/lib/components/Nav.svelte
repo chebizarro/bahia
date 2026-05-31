@@ -4,6 +4,7 @@
   import { theme, toggleTheme } from '$lib/stores/theme.js';
   import { authState, isAuthenticated, login, logout } from '$lib/stores/auth.js';
   import { LoginIcon, MoonIcon, SunIcon, WarningIcon } from '$lib/icons/domain-icons.js';
+  import ConnectionStatus from '$lib/components/ConnectionStatus.svelte';
   import {
     NAV_SECTIONS,
     PRIMARY_NAV_LINKS,
@@ -127,6 +128,8 @@
       >
         {menuOpen ? 'Close' : 'Menu'}
       </button>
+
+      <ConnectionStatus />
 
       <div class="auth-section">
         {#if authUi.mode === 'loading'}

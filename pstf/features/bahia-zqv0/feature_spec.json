@@ -1,0 +1,16 @@
+{
+  "feature_id": "bahia-zqv0",
+  "title": "Nav relay connection status indicator",
+  "intent": "Display the controlplane relay connection state in the Nav topbar so operators can distinguish disconnected, connecting, syncing, live, and error states without leaving the current page.",
+  "observed_behavior": "Nav.svelte previously rendered authentication and theme controls without exposing controlplaneConnection.status, relays, lastEventAt, lastEoseAt, or lastError.",
+  "intended_behavior": "Nav.svelte renders a non-intrusive always-visible ConnectionStatus component near the auth section. The component reads controlplaneConnection from $lib/stores, maps status values to required visual states, and expands on click to show relay count, relay URLs, last event time, and last EOSE time. Error state exposes the error message in the button tooltip and detail panel.",
+  "scope": {
+    "owned_files": [
+      "web/src/lib/components/Nav.svelte",
+      "web/src/lib/components/ConnectionStatus.svelte"
+    ],
+    "test_files": [
+      "web/tests/unit/connection-status.test.js"
+    ]
+  }
+}
