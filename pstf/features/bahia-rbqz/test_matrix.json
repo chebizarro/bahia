@@ -1,0 +1,23 @@
+{
+  "feature_id": "bahia-rbqz",
+  "tests": [
+    {
+      "command": "npm --prefix web run test:unit -- --run tests/unit/sanity.test.js tests/unit/nostr-client-parsing.test.js tests/unit/controlplane-requests.test.js",
+      "criteria": ["AC1", "AC3", "AC4"],
+      "result": "pass",
+      "notes": "58 tests passed. Covers client exports, validation, query EOSE/CLOSED behavior, AUTH callbacks, publish OK mapping, parsing, and controlplane request helpers."
+    },
+    {
+      "command": "npm --prefix web run build",
+      "criteria": ["AC3"],
+      "result": "pass",
+      "notes": "Production build passed with pre-existing Svelte warnings unrelated to this split."
+    },
+    {
+      "command": "npm --prefix web run test:unit",
+      "criteria": ["AC3", "AC4"],
+      "result": "blocked_external",
+      "notes": "Full suite has 5 failing controlplane-store tests in the concurrently owned streaming bootstrap area (bahia-ef15). This task did not modify controlplane.svelte.js per parallel-work constraint."
+    }
+  ]
+}

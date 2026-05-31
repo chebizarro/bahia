@@ -1,0 +1,26 @@
+{
+  "feature_id": "bahia-rbqz",
+  "title": "Split web Nostr client module into focused components",
+  "observed_behavior": {
+    "before": "web/src/lib/nostr/client.js contained validation, kind constants, tag/content helpers, replaceable logic, assistant parsing, runtime/soul/repository helpers, relay config, singleton client creation, and fetch/subscribe helpers in one 1369-line module. web/src/lib/nostr/pool.js contained the SimplePool wrapper in one 467-line module.",
+    "evidence": [
+      "git diff shows client.js reduced to a compatibility re-export layer",
+      "git diff shows pool.js reduced to a public factory/error re-export layer"
+    ]
+  },
+  "intended_behavior": {
+    "summary": "Nostr browser client helpers are organized by responsibility while preserving existing imports from $lib/nostr/client.js and event-driven SimplePool behavior.",
+    "compatibility": "Existing import paths continue to resolve through client.js -> index.js re-exports. No controlplane.svelte.js, +layout.svelte, or system.svelte.js edits are part of this feature."
+  },
+  "scope": {
+    "included": [
+      "Split client.js helpers into focused modules",
+      "Split pool.js internals into focused modules to keep touched pool wrapper files under 200 lines",
+      "Preserve Nostr validation, EOSE query completion, AUTH/CLOSED/OK handling, dedupe, and replaceable semantics"
+    ],
+    "excluded_tracked_elsewhere": [
+      "controlplane.svelte.js streaming bootstrap changes are owned by bahia-ef15",
+      "pre-existing oversized nip07.js, nip46.js, and encrypted-controlplane.js are tracked by bahia-kw04"
+    ]
+  }
+}

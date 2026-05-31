@@ -1,0 +1,19 @@
+{
+  "feature_id": "bahia-rbqz",
+  "defects": [
+    {
+      "id": "D1",
+      "status": "tracked_elsewhere",
+      "bead": "bahia-ef15",
+      "summary": "Full unit suite currently reports controlplane-store streaming bootstrap failures in the concurrently modified controlplane.svelte.js scope.",
+      "verification": "npm --prefix web run test:unit fails 5 tests in tests/unit/controlplane-store.test.js."
+    },
+    {
+      "id": "D2",
+      "status": "tracked_elsewhere",
+      "bead": "bahia-kw04",
+      "summary": "Pre-existing Nostr helper modules outside the client split exceed 200 lines.",
+      "verification": "Line count shows nip07.js, nip46.js, and encrypted-controlplane.js exceed 200 lines."
+    }
+  ]
+}

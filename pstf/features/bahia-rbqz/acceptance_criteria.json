@@ -1,0 +1,25 @@
+{
+  "feature_id": "bahia-rbqz",
+  "criteria": [
+    {
+      "id": "AC1",
+      "description": "client.js is reduced to a slim compatibility re-export layer.",
+      "verification": "web/src/lib/nostr/client.js is 2 lines and re-exports index.js."
+    },
+    {
+      "id": "AC2",
+      "description": "New modules have focused responsibilities and touched client/pool split modules remain under 200 lines.",
+      "verification": "Line-count check shows all newly added or modified split modules are <=200 lines. Pre-existing unrelated Nostr helper overages are tracked in bahia-kw04."
+    },
+    {
+      "id": "AC3",
+      "description": "Existing imports from $lib/nostr/client.js continue to work.",
+      "verification": "Focused unit tests import ../../src/lib/nostr/client.js and pass. Build passes."
+    },
+    {
+      "id": "AC4",
+      "description": "Nostr event-driven semantics are preserved.",
+      "verification": "Focused tests cover inbound NIP-01 validation, EOSE completion, CLOSED handling, AUTH handling, OK publish result mapping, and replaceable dedupe."
+    }
+  ]
+}
