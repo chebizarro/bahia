@@ -10,8 +10,8 @@
 ## Commands Run
 
 - `npm run test:unit -- --run tests/unit/nav.test.js` — passed, 5 tests.
-- `npm run build` — failed outside touched scope because `src/lib/components/assistant/AssistantSidebar.svelte` imports `setAssistantSidebarOpen` and `toggleAssistantCollapsed`, which are not exported by `src/lib/stores/assistant.svelte.js`. Existing Svelte warnings also appeared in `src/routes/policies/+page.svelte` and `src/lib/components/assistant/AssistantPlanApproval.svelte`.
+- `npm run build` — initially failed outside touched scope because `src/lib/components/assistant/AssistantSidebar.svelte` imported missing assistant store exports. After concurrent assistant-menu work resolved that blocker, rerunning `npm run build` passed; existing Svelte warnings remain in `src/routes/policies/+page.svelte` and `src/lib/components/assistant/AssistantPlanApproval.svelte`.
 
 ## Result
 
-Navigation model acceptance criteria are covered by deterministic unit tests. Full production build verification is blocked by pre-existing assistant exports unrelated to the navigation files changed for this issue.
+Navigation model acceptance criteria are covered by deterministic unit tests. Production build verification now passes after the unrelated assistant export blocker was resolved concurrently.

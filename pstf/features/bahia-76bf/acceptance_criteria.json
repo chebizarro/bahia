@@ -1,0 +1,10 @@
+{
+  "feature_id": "bahia-76bf",
+  "criteria": [
+    {"id":"AC1","statement":"Nav.svelte replaces the auth-section block with UserMenu without modifying auth store behavior.","evidence":["web/src/lib/components/Nav.svelte","web/src/lib/components/UserMenu.svelte"]},
+    {"id":"AC2","statement":"Anonymous users can open a Sign In menu with NIP-07 and NIP-46 choices, with NIP-07 disabled when the browser signer is unavailable.","evidence":["web/src/lib/components/UserMenu.svelte","web/src/lib/components/user-menu-model.js"]},
+    {"id":"AC3","statement":"Authenticated users see an avatar/profile pill menu with profile summary, Edit Profile, Manage Relays, auth method indicator, and Logout.","evidence":["web/src/lib/components/UserMenu.svelte","web/src/lib/components/user-menu-model.js"]},
+    {"id":"AC4","statement":"Menu keyboard handling supports ArrowDown, ArrowUp, Home, End, Escape, Tab, and activation by Enter/Space.","evidence":["web/src/lib/components/user-menu-model.js","web/tests/unit/nav.test.js"]},
+    {"id":"AC5","statement":"At max-width 560px the dropdown renders as a bottom sheet with backdrop and 48px minimum item targets.","evidence":["web/src/lib/components/UserMenu.svelte"]}
+  ]
+}

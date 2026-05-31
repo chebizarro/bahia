@@ -1,0 +1,7 @@
+{
+  "feature_id": "bahia-76bf",
+  "tests": [
+    {"command":"npm run test:unit -- tests/unit/nav.test.js","status":"passed","criteria":["AC2","AC3","AC4"],"notes":"Covers menu item definitions and keyboard navigation wrapping/disabled-item behavior."},
+    {"command":"npm run build","status":"passed","criteria":["AC1","AC2","AC3","AC4","AC5"],"notes":"Verifies Svelte compile and production bundle generation. Existing unrelated warnings remain in policies, assistant plan approval, settings qrcode import, and tsconfig guidance."}
+  ]
+}

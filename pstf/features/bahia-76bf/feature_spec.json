@@ -1,0 +1,19 @@
+{
+  "feature_id": "bahia-76bf",
+  "title": "Unified UserMenu component",
+  "status": "verified",
+  "source_design": "docs/designs/unified-user-menu.md",
+  "observed_before": {
+    "nav_auth_ui": "Nav.svelte rendered separate login/profile/auth-method/warning/logout controls inside div.auth-section."
+  },
+  "intended_behavior": {
+    "nav_auth_ui": "Nav.svelte renders a single UserMenu component in nav-actions.",
+    "anonymous_state": "UserMenu exposes Sign In dropdown options for NIP-07 browser extension and NIP-46 Nostr Connect via settings.",
+    "authenticated_state": "UserMenu exposes an avatar/profile pill trigger and menu content for profile summary, edit profile, relay management, auth method indicator, and logout.",
+    "accessibility": "Menu follows WAI-ARIA menu button keyboard navigation and provides a mobile bottom-sheet layout at max-width 560px."
+  },
+  "out_of_scope": [
+    "Implementing /settings/profile route; tracked in bahia-dfc2.",
+    "Extracting /settings/relays route; tracked in bahia-zgo6."
+  ]
+}

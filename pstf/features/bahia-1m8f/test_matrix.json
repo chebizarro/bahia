@@ -11,7 +11,7 @@
       "acceptance_criteria": ["AC5"],
       "test": "Svelte production build compile",
       "command": "npm run build",
-      "result": "blocked by pre-existing assistant store export errors outside touched navigation scope"
+      "result": "passed after unrelated assistant export blocker was resolved concurrently"
     }
   ]
 }

@@ -2,46 +2,23 @@
   import { tick } from 'svelte';
   import { page } from '$app/stores';
   import { theme, toggleTheme } from '$lib/stores/theme.js';
-  import { authState, isAuthenticated, login, logout } from '$lib/stores/auth.js';
   import {
     DeploymentIcon,
     LlmIcon,
-    LoginIcon,
     MoonIcon,
     ProtectedIcon,
     ServiceIcon,
     SunIcon,
-    WarningIcon,
     WorkspaceIcon
   } from '$lib/icons/domain-icons.js';
   import ConnectionStatus from '$lib/components/ConnectionStatus.svelte';
+  import UserMenu from '$lib/components/UserMenu.svelte';
   import {
     NAV_SECTIONS,
-    authPresentation,
     currentLocation,
-    truncatePubkey,
     isActiveNavLink,
     isActiveNavSection
   } from '$lib/components/nav-model.js';
-
-  // Derive auth UI state — read all relevant $state properties directly so
-  // Svelte 5 tracks each one and re-runs when profile loads asynchronously.
-  let authUi = $derived.by(() => {
-    const authenticated = isAuthenticated();
-    const base = authPresentation(authState, authenticated);
-    if (authenticated) {
-      // Re-read profile directly here to guarantee fine-grained tracking
-      const profile = authState.profile || null;
-      return {
-        ...base,
-        profile,
-        displayLabel: profile?.displayName || profile?.name || truncatePubkey(authState.pubkey || ''),
-        nip05: profile?.nip05 || '',
-        avatarUrl: profile?.picture || ''
-      };
-    }
-    return base;
-  });
   const SECTION_ICONS = {
     'layout-dashboard': WorkspaceIcon,
     rocket: DeploymentIcon,
@@ -75,25 +52,6 @@
     });
   });
 
-  async function handleLogin() {
-    try {
-      await login();
-    } catch (error) {
-      console.error('Login failed:', error);
-    }
-  }
-
-  function handleLogout() {
-    logout();
-  }
-
-  function profileInitials(label) {
-    const text = String(label || '').trim();
-    if (!text) return 'N';
-    const parts = text.split(/\s+/).filter(Boolean).slice(0, 2);
-    const initials = parts.map((part) => part[0]?.toUpperCase() || '').join('');
-    return initials || text.slice(0, 1).toUpperCase();
-  }
 
   function toggleMenu() {
     menuOpen = !menuOpen;
@@ -147,61 +105,7 @@
     <div class="nav-actions">
       <ConnectionStatus />
 
-      <div class="auth-section">
-        {#if authUi.mode === 'loading'}
-          <span class="auth-loading">
-            <span class="spinner"></span>
-            {authUi.label}
-          </span>
-        {:else if authUi.mode === 'authenticated'}
-          <div class="user-info">
-            <div class="user-profile" title="{authUi.pubkey}\n{authUi.nip05 ? authUi.nip05 : ''}">
-              {#if authUi.avatarUrl}
-                <img
-                  class="profile-avatar"
-                  src={authUi.avatarUrl}
-                  alt={authUi.displayLabel}
-                  onerror={(e) => e.currentTarget.style.display='none'}
-                />
-              {:else}
-                <span class="profile-avatar profile-avatar-fallback">{profileInitials(authUi.displayLabel)}</span>
-              {/if}
-              <span class="profile-copy">
-                <span class="profile-name">{authUi.displayLabel}</span>
-                <span class="profile-secondary">{authUi.nip05 || authUi.truncatedPubkey}</span>
-              </span>
-              <span class="auth-method">{authState.authMethod === 'nip46' ? 'NIP-46' : 'NIP-07'}</span>
-            </div>
-            {#if authUi.showWarning}
-              <span class="auth-warning" title={authUi.warning} aria-label={authUi.warning || 'Authentication warning'}>
-                <WarningIcon size={18} strokeWidth={1.75} ariaHidden="true" />
-              </span>
-            {/if}
-            <button class="logout-btn" onclick={handleLogout}>
-              Log out
-            </button>
-          </div>
-        {:else}
-          <button
-            class="login-btn"
-            onclick={handleLogin}
-            disabled={!authUi.extensionAvailable}
-            title={authUi.buttonTitle}
-          >
-            {#if authUi.extensionAvailable}
-              <LoginIcon size={16} strokeWidth={1.75} ariaHidden="true" />
-            {:else}
-              <WarningIcon size={16} strokeWidth={1.75} ariaHidden="true" />
-            {/if}
-            {authUi.buttonLabel}
-          </button>
-          {#if authUi.showError}
-            <span class="auth-error" title={authUi.error} aria-label={authUi.error || 'Authentication error'}>
-              <WarningIcon size={18} strokeWidth={1.75} ariaHidden="true" />
-            </span>
-          {/if}
-        {/if}
-      </div>
+      <UserMenu />
 
       <button class="theme-toggle" onclick={toggleTheme} aria-label="Toggle theme">
         {#if theme.value === 'dark'}
@@ -347,17 +251,14 @@
 
   .menu-toggle,
   .drawer-close,
-  .theme-toggle,
-  .logout-btn,
-  .login-btn {
+  .theme-toggle {
     border-radius: 8px;
     transition: all 0.15s;
   }
 
   .menu-toggle,
   .drawer-close,
-  .theme-toggle,
-  .logout-btn {
+  .theme-toggle {
     background: transparent;
     color: var(--text-muted);
     border: 1px solid var(--border-color);
@@ -381,152 +282,9 @@
   .drawer-close:hover,
   .drawer-close:focus-visible,
   .theme-toggle:hover,
-  .theme-toggle:focus-visible,
-  .logout-btn:hover,
-  .logout-btn:focus-visible {
+  .theme-toggle:focus-visible {
     background: var(--hover-bg);
     color: var(--text-primary);
-  }
-
-  .auth-section {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    flex-wrap: wrap;
-    justify-content: flex-end;
-  }
-
-  .auth-loading {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    color: var(--text-muted);
-    font-size: 0.875rem;
-  }
-
-  .spinner {
-    width: 14px;
-    height: 14px;
-    border: 2px solid var(--border-color);
-    border-top-color: var(--primary);
-    border-radius: 50%;
-    animation: spin 0.8s linear infinite;
-  }
-
-  @keyframes spin {
-    to {
-      transform: rotate(360deg);
-    }
-  }
-
-  .user-info {
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
-    flex-wrap: wrap;
-    justify-content: flex-end;
-  }
-
-  .user-profile {
-    display: flex;
-    align-items: center;
-    gap: 0.6rem;
-    background: var(--card-bg);
-    padding: 0.35rem 0.7rem;
-    border-radius: 999px;
-    border: 1px solid var(--border-color);
-    cursor: default;
-    max-width: min(320px, 50vw);
-  }
-
-  .profile-avatar {
-    width: 30px;
-    height: 30px;
-    border-radius: 50%;
-    object-fit: cover;
-    flex-shrink: 0;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-  }
-
-  .profile-avatar-fallback {
-    background: color-mix(in srgb, var(--primary) 18%, var(--card-bg));
-    color: var(--text-primary);
-    font-size: 0.72rem;
-    font-weight: 700;
-    letter-spacing: 0.04em;
-  }
-
-  .profile-copy {
-    min-width: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 0.05rem;
-  }
-
-  .auth-method {
-    flex-shrink: 0;
-    border: 1px solid var(--border-color);
-    border-radius: 999px;
-    padding: 0.1rem 0.35rem;
-    color: var(--text-muted);
-    font-size: 0.62rem;
-    font-weight: 700;
-    letter-spacing: 0.04em;
-  }
-
-  .profile-name {
-    font-size: 0.82rem;
-    font-weight: 600;
-    color: var(--text-primary);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .profile-secondary {
-    font-size: 0.72rem;
-    color: var(--text-muted);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .login-btn {
-    background: var(--primary);
-    color: #fff;
-    border: none;
-    padding: 0.5rem 1rem;
-    font-size: 0.875rem;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-  }
-
-  .login-btn:hover:not(:disabled),
-  .login-btn:focus-visible:not(:disabled) {
-    filter: brightness(1.08);
-    transform: translateY(-1px);
-  }
-
-  .login-btn:disabled {
-    background: var(--text-muted);
-    cursor: not-allowed;
-    opacity: 0.7;
-  }
-
-  .auth-error,
-  .auth-warning {
-    cursor: help;
-    display: inline-flex;
-    align-items: center;
-  }
-
-  .auth-warning,
-  .auth-error {
-    color: var(--warning);
   }
 
   .theme-toggle {
@@ -680,11 +438,6 @@
     .brand-logo {
       height: 32px;
     }
-
-    .profile-secondary,
-    .auth-method {
-      display: none;
-    }
   }
 
   @media (max-width: 560px) {
@@ -698,8 +451,6 @@
 
     .menu-toggle,
     .theme-toggle,
-    .logout-btn,
-    .login-btn,
     .drawer-close {
       padding: 0.5rem 0.75rem;
     }
