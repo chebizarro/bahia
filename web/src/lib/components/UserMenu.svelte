@@ -190,7 +190,7 @@
       aria-controls="user-menu"
       title="{authUi.pubkey}\n{authUi.nip05 ? authUi.nip05 : ''}"
       bind:this={triggerEl}
-      onclick={(e) => { e.stopPropagation(); ignoreNextWindowClick = true; open = !open; }}
+      onclick={(e) => { e.stopPropagation(); ignoreNextWindowClick = true; open = !open; alert('clicked! open=' + open); }}
       onkeydown={handleTriggerKeydown}
     >
       {#if authUi.avatarUrl}
