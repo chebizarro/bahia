@@ -244,6 +244,9 @@ func (m *stubStateRepo) ListByService(_ context.Context, _ uuid.UUID) ([]domain.
 func (m *stubStateRepo) ListDrifted(_ context.Context) ([]domain.EnvironmentServiceState, error) {
 	return nil, nil
 }
+func (m *stubStateRepo) ListDueForObservation(_ context.Context, _ time.Time) ([]domain.EnvironmentServiceState, error) {
+	return nil, nil
+}
 func (m *stubStateRepo) ListAll(_ context.Context) ([]domain.EnvironmentServiceState, error) {
 	return nil, nil
 }

@@ -226,6 +226,9 @@ func (r *projectorSourceStateRepo) ListByService(_ context.Context, serviceID uu
 func (r *projectorSourceStateRepo) ListDrifted(context.Context) ([]domain.EnvironmentServiceState, error) {
 	return r.filtered(func(v domain.EnvironmentServiceState) bool { return v.DriftStatus != domain.DriftStatusInSync }), nil
 }
+func (r *projectorSourceStateRepo) ListDueForObservation(_ context.Context, _ time.Time) ([]domain.EnvironmentServiceState, error) {
+	return nil, nil
+}
 func (r *projectorSourceStateRepo) ListAll(context.Context) ([]domain.EnvironmentServiceState, error) {
 	return r.filtered(func(domain.EnvironmentServiceState) bool { return true }), nil
 }

@@ -408,6 +408,9 @@ func (m *mockStateRepo) ListAll(_ context.Context) ([]domain.EnvironmentServiceS
 	}
 	return r, nil
 }
+func (m *mockStateRepo) ListDueForObservation(_ context.Context, _ time.Time) ([]domain.EnvironmentServiceState, error) {
+	return nil, nil
+}
 
 // --- Test Setup ---
 

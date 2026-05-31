@@ -458,3 +458,6 @@ func (m *sfMockStateRepo) ListAll(_ context.Context) ([]domain.EnvironmentServic
 	}
 	return out, nil
 }
+func (m *sfMockStateRepo) ListDueForObservation(_ context.Context, _ time.Time) ([]domain.EnvironmentServiceState, error) {
+	return nil, nil
+}
