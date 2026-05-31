@@ -49,6 +49,24 @@ describe('Nostr discovery store', () => {
     expect(discovery.discoverSystemInfo).toHaveBeenCalledTimes(1);
   });
 
+  it('starts eager relay discovery immediately and reuses the in-flight system load', async () => {
+    let resolveInfo;
+    const infoPromise = new Promise((resolve) => {
+      resolveInfo = resolve;
+    });
+    discovery.discoverSystemInfo.mockReturnValue(infoPromise);
+
+    const eager = store.eagerRelayConnect();
+    expect(discovery.discoverSystemInfo).toHaveBeenCalledTimes(1);
+
+    const load = store.loadSystemInfo();
+    resolveInfo({ features: { relay_read_models: true }, nostr: { browser_relays: ['ws://relay.test/relay'] } });
+
+    await expect(Promise.all([eager, load])).resolves.toHaveLength(2);
+    expect(discovery.discoverSystemInfo).toHaveBeenCalledTimes(1);
+    expect(store.systemInfo.data?.nostr?.browser_relays).toEqual(['ws://relay.test/relay']);
+  });
+
   it('reloads when force is requested', async () => {
     discovery.discoverSystemInfo
       .mockResolvedValueOnce({ version: 'old' })

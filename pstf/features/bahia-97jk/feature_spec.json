@@ -1,0 +1,29 @@
+{
+  "feature_id": "bahia-97jk",
+  "title": "Eager relay connection on app load",
+  "bead": "bahia-97jk",
+  "observed_behavior_before": [
+    "web/src/routes/+layout.svelte called initializeAuth() first and only invoked loadAll() from the auth promise finally handler.",
+    "Relay discovery and nostr.connect() were reached through loadAll() / bootstrapControlplane() after auth initialization had settled."
+  ],
+  "intended_behavior": [
+    "App layout starts auth initialization and public relay discovery/connection in parallel during the first client microtask after layout mount.",
+    "The eager relay path reuses the existing Nostr-native discovery flow and starts nostr.connect() before authenticated control-plane bootstrap.",
+    "Control-plane bootstrap runs after auth and eager relay discovery settle, allowing it to reuse cached system discovery and pre-established SimplePool relay connections.",
+    "Concurrent connect attempts for the same relay set share the in-flight SimplePool connection attempt instead of opening duplicate handshakes."
+  ],
+  "scope": {
+    "included": [
+      "web/src/routes/+layout.svelte",
+      "web/src/lib/stores/system.svelte.js",
+      "web/src/lib/nostr/pool.js",
+      "web/tests/unit/system-store.test.js",
+      "web/tests/unit/nostr-pool.test.js"
+    ],
+    "excluded": [
+      "controlplane.svelte.js streaming architecture changes are owned by bahia-ef15.",
+      "client.js module splitting is owned by bahia-rbqz."
+    ]
+  },
+  "date_updated": "2026-05-31"
+}

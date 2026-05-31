@@ -1,0 +1,25 @@
+{
+  "feature_id": "bahia-97jk",
+  "criteria": [
+    {
+      "id": "AC1",
+      "statement": "Relay discovery/connection starts immediately from app layout initialization rather than waiting for auth completion.",
+      "mapped_tests": ["web/tests/unit/system-store.test.js::starts eager relay discovery immediately and reuses the in-flight system load"]
+    },
+    {
+      "id": "AC2",
+      "statement": "Auth initialization and eager relay connection are launched in parallel before control-plane bootstrap.",
+      "mapped_tests": ["source inspection: web/src/routes/+layout.svelte Promise.all([initializeAuth(), eagerRelayConnect()])"]
+    },
+    {
+      "id": "AC3",
+      "statement": "Control-plane bootstrap can reuse cached discovery and pre-established relay connections.",
+      "mapped_tests": ["web/tests/unit/system-store.test.js::starts eager relay discovery immediately and reuses the in-flight system load"]
+    },
+    {
+      "id": "AC4",
+      "statement": "Concurrent early connect calls for the same relay set share one SimplePool ensureRelay handshake.",
+      "mapped_tests": ["web/tests/unit/nostr-pool.test.js::reuses an in-flight eager connection for the same relay set"]
+    }
+  ]
+}

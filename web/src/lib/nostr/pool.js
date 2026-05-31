@@ -99,6 +99,8 @@ class PoolBackedClient {
     this.connectionStatus = writable({});
     this.subIdCounter = 0;
     this.activeSubscriptions = new Set();
+    this.connectPromise = null;
+    this.connectRelaysKey = '';
     this.relayAliases = new Map();
     this.configurePool();
     this.updateRelayAliases();
@@ -181,8 +183,12 @@ class PoolBackedClient {
   }
 
   async connect(relays = this.relays, { force = false } = {}) {
+    const targetRelays = uniqueRelays(relays);
+    const connectKey = targetRelays.map(normalizeRelayUrl).join('\n');
+    if (this.connectPromise && this.connectRelaysKey === connectKey) return this.connectPromise;
+
     const previousRelays = this.relays;
-    this.relays = uniqueRelays(relays);
+    this.relays = targetRelays;
     this.updateRelayAliases();
 
     const nextKeys = new Set(this.relays.map(normalizeRelayUrl));
@@ -194,10 +200,24 @@ class PoolBackedClient {
     this.connectionStatus.set(Object.fromEntries(this.relays.map((url) => [url, 'connecting'])));
     this.updateConnectedStatus();
 
-    await Promise.allSettled(this.relays.map((url) => this.connectRelay(url)));
-    const summary = summarizeRelayConnections(this.relays, this.refreshConnectionStatus());
-    console.log(`[nostr] Connected to ${summary.connected}/${summary.total} relays`);
-    return summary;
+    const connection = Promise.resolve().then(async () => {
+      await Promise.allSettled(this.relays.map((url) => this.connectRelay(url)));
+      const summary = summarizeRelayConnections(this.relays, this.refreshConnectionStatus());
+      console.log(`[nostr] Connected to ${summary.connected}/${summary.total} relays`);
+      return summary;
+    });
+
+    this.connectPromise = connection;
+    this.connectRelaysKey = connectKey;
+
+    try {
+      return await connection;
+    } finally {
+      if (this.connectPromise === connection) {
+        this.connectPromise = null;
+        this.connectRelaysKey = '';
+      }
+    }
   }
 
   async connectRelay(url) {

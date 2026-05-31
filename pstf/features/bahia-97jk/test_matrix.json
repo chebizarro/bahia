@@ -1,0 +1,20 @@
+{
+  "feature_id": "bahia-97jk",
+  "tests": [
+    {
+      "test": "web/tests/unit/system-store.test.js",
+      "acceptance_criteria": ["AC1", "AC3"],
+      "purpose": "Verifies eagerRelayConnect starts discovery synchronously and shares the in-flight loadSystemInfo promise."
+    },
+    {
+      "test": "web/tests/unit/nostr-pool.test.js",
+      "acceptance_criteria": ["AC4"],
+      "purpose": "Verifies concurrent connect() calls for the same relay set use one ensureRelay connection attempt."
+    },
+    {
+      "test": "source inspection: web/src/routes/+layout.svelte",
+      "acceptance_criteria": ["AC2"],
+      "purpose": "Verifies layout starts initializeAuth and eagerRelayConnect in the same Promise.all before loadAll."
+    }
+  ]
+}

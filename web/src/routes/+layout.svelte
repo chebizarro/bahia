@@ -6,6 +6,7 @@
   import ToastContainer from '$lib/components/ToastContainer.svelte';
   import AssistantSidebar from '$lib/components/assistant/AssistantSidebar.svelte';
   import { loadAll, unsubscribeFromEvents } from '$lib/stores';
+  import { eagerRelayConnect } from '$lib/stores/system.svelte.js';
   import { bootstrapAssistant, disconnectAssistant, assistantUi } from '$lib/stores/assistant.svelte.js';
   import { theme } from '$lib/stores/theme.js';
   import { authState, initializeAuth, isAuthenticated } from '$lib/stores/auth.js';
@@ -38,17 +39,20 @@
 
     queueMicrotask(() => {
       if (!active) return;
-      initializeAuth()
-        .catch((error) => {
+      Promise.all([
+        initializeAuth().catch((error) => {
           console.error('Auth bootstrap failed before controlplane load:', error);
+        }),
+        eagerRelayConnect().catch((error) => {
+          console.error('Eager relay connection failed before controlplane load:', error);
         })
-        .finally(() => {
-          if (!active) return;
-          loadAll();
-          bootstrapAssistant().catch((error) => {
-            console.error('Assistant bootstrap failed:', error);
-          });
+      ]).finally(() => {
+        if (!active) return;
+        loadAll();
+        bootstrapAssistant().catch((error) => {
+          console.error('Assistant bootstrap failed:', error);
         });
+      });
     });
 
     return () => {

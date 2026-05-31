@@ -9,6 +9,7 @@ export const systemInfo = $state({
 });
 
 let loadPromise = null;
+let eagerConnectPromise = null;
 
 export function currentSystemInfo() {
   return systemInfo.data;
@@ -16,10 +17,23 @@ export function currentSystemInfo() {
 
 export function resetSystemInfoStore() {
   loadPromise = null;
+  eagerConnectPromise = null;
   systemInfo.data = null;
   systemInfo.loading = false;
   systemInfo.error = null;
   systemInfo.loadedAt = null;
+}
+
+export function eagerRelayConnect({ force = false } = {}) {
+  if (!browser) return Promise.resolve(null);
+  if (systemInfo.data && !force) return Promise.resolve(systemInfo.data);
+  if (eagerConnectPromise && !force) return eagerConnectPromise;
+
+  eagerConnectPromise = loadSystemInfo({ force }).finally(() => {
+    eagerConnectPromise = null;
+  });
+
+  return eagerConnectPromise;
 }
 
 export async function loadSystemInfo({ force = false } = {}) {
