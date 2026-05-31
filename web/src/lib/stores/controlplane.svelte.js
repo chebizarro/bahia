@@ -22,7 +22,7 @@ const CANONICAL_READ_MODEL_KINDS = BAHIA_READ_MODEL_KINDS.filter((kind) => kind 
 const ACTIVITY_KINDS = [...BAHIA_AUDIT_KINDS, ...BAHIA_STATUS_KINDS, ...BAHIA_SBOM_KINDS];
 
 export const controlplaneConnection = $state({
-  status: 'idle', // idle | discovering | connecting | bootstrapping | live | error | disconnected
+  status: 'idle', // idle | discovering | connecting | syncing | live | error | disconnected
   connected: false,
   ready: false,
   bootstrapComplete: false,
@@ -119,6 +119,8 @@ let liveUnsubscribe = null;
 let connectedUnsubscribe = null;
 let lastConnected = false;
 let lastBootstrapFailedAt = null;
+let bootstrapExpectedRelays = [];
+let bootstrapSubscriptionGeneration = 0;
 const BOOTSTRAP_RETRY_INTERVAL_MS = 30_000; // 30 s minimum between failed retries
 
 function setAllLoading(value) {
@@ -282,6 +284,8 @@ export function resetControlplaneStore() {
   controlplaneConnection.lastEventAt = null;
   controlplaneConnection.reconnects = 0;
   lastConnected = false;
+  bootstrapExpectedRelays = [];
+  bootstrapSubscriptionGeneration = 0;
 }
 
 function normalizeRelayUrl(url) {
@@ -322,15 +326,6 @@ function readModelFilters() {
       limit: ACTIVITY_BACKFILL_LIMIT,
       ...authorFilter
     }
-  ];
-}
-
-function liveFilters(since) {
-  const authorFilter = canonicalAuthorFilter();
-  return [
-    { kinds: CANONICAL_READ_MODEL_KINDS, since, ...authorFilter },
-    { kinds: [KINDS.LOOM_WORKER_AD], since },
-    { kinds: ACTIVITY_KINDS, since, ...authorFilter }
   ];
 }
 
@@ -740,32 +735,68 @@ function subscribeToConnectionState() {
   if (connectedUnsubscribe) return;
   connectedUnsubscribe = nostr.connected.subscribe((connected) => {
     controlplaneConnection.connected = connected;
-    if (lastConnected && !connected && controlplaneConnection.status === 'live') {
+    if (lastConnected && !connected && ['syncing', 'live'].includes(controlplaneConnection.status)) {
+      if (!controlplaneConnection.bootstrapComplete) bootstrapSubscriptionGeneration += 1;
       controlplaneConnection.status = 'disconnected';
     }
-    if (!lastConnected && connected && controlplaneConnection.bootstrapComplete) {
+    if (!lastConnected && connected && controlplaneConnection.ready) {
       controlplaneConnection.reconnects += 1;
-      controlplaneConnection.status = 'live';
+      controlplaneConnection.status = controlplaneConnection.bootstrapComplete ? 'live' : 'syncing';
+      if (!controlplaneConnection.bootstrapComplete) {
+        startStreamingSubscription(bootstrapExpectedRelays);
+      }
     }
     lastConnected = connected;
   });
 }
 
-function startLiveSubscription(since) {
+function connectedRelaysFromSummary(summary) {
+  return (summary?.relays || [])
+    .filter((relay) => relay?.status === 'connected')
+    .map((relay) => relay.url)
+    .filter(Boolean);
+}
+
+function markBootstrapComplete(generation) {
+  if (generation !== bootstrapSubscriptionGeneration) return;
+  controlplaneConnection.ready = true;
+  controlplaneConnection.bootstrapComplete = true;
+  controlplaneConnection.lastEoseAt = new Date().toISOString();
+  controlplaneConnection.status = 'live';
+  setAllLoading(false);
+}
+
+function startStreamingSubscription(expectedRelays) {
   if (liveUnsubscribe) {
     liveUnsubscribe();
     liveUnsubscribe = null;
   }
 
-  liveUnsubscribe = nostr.subscribe(liveFilters(since), {
+  bootstrapExpectedRelays = [...expectedRelays];
+  const generation = ++bootstrapSubscriptionGeneration;
+  const pendingEoseRelays = new Set(expectedRelays.map(normalizeRelayUrl));
+  const markRelayEose = (relay) => {
+    if (generation !== bootstrapSubscriptionGeneration) return;
+    pendingEoseRelays.delete(normalizeRelayUrl(relay));
+    if (pendingEoseRelays.size === 0) {
+      markBootstrapComplete(generation);
+    }
+  };
+
+  liveUnsubscribe = nostr.subscribe(readModelFilters(), {
     onEvent: (event) => applyControlplaneEvent(event),
+    onEose: (relay) => markRelayEose(relay),
     onClosed: (reason, relay) => {
       controlplaneConnection.lastError = reason || `subscription closed by ${relay}`;
-      if (controlplaneConnection.status === 'live') {
+      if (['syncing', 'live'].includes(controlplaneConnection.status)) {
         controlplaneConnection.status = 'disconnected';
       }
     }
   });
+
+  if (pendingEoseRelays.size === 0) {
+    markBootstrapComplete(generation);
+  }
 }
 
 export async function bootstrapControlplane({ force = false } = {}) {
@@ -783,7 +814,6 @@ export async function bootstrapControlplane({ force = false } = {}) {
   if (force) lastBootstrapFailedAt = null;
 
   bootstrapPromise = (async () => {
-    const bootstrapSince = Math.floor(Date.now() / 1000);
     controlplaneConnection.status = 'discovering';
     controlplaneConnection.lastError = null;
     setAllLoading(true);
@@ -811,17 +841,15 @@ export async function bootstrapControlplane({ force = false } = {}) {
         throw new Error('Unable to connect to any advertised browser relay');
       }
 
-      controlplaneConnection.status = 'bootstrapping';
-      const initialEvents = await nostr.queryUntilEose(readModelFilters());
-      for (const event of initialEvents) {
-        applyControlplaneEvent(event);
+      const connectedRelays = connectedRelaysFromSummary(summary);
+      if (connectedRelays.length === 0) {
+        throw new Error('Unable to determine connected relay URLs for bootstrap EOSE tracking');
       }
 
       controlplaneConnection.ready = true;
-      controlplaneConnection.bootstrapComplete = true;
-      controlplaneConnection.lastEoseAt = new Date().toISOString();
-      controlplaneConnection.status = 'live';
-      startLiveSubscription(bootstrapSince);
+      controlplaneConnection.bootstrapComplete = false;
+      controlplaneConnection.status = 'syncing';
+      startStreamingSubscription(connectedRelays);
       refreshCollections();
       return { ok: true };
     } catch (err) {

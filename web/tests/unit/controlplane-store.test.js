@@ -65,6 +65,7 @@ function event({ id, kind, pubkey = 'a'.repeat(64), created_at = 100, tags = [],
 describe('controlplane store', () => {
   let store;
   let KINDS;
+  let subscriptionHandlers;
 
   beforeEach(async () => {
     vi.resetModules();
@@ -81,7 +82,11 @@ describe('controlplane store', () => {
       };
     });
     nostrMock.queryUntilEose.mockResolvedValue([]);
-    nostrMock.subscribe.mockReturnValue(vi.fn());
+    subscriptionHandlers = [];
+    nostrMock.subscribe.mockImplementation((_filters, handlers) => {
+      subscriptionHandlers.push(handlers);
+      return vi.fn();
+    });
 
     systemInfoMock.loadSystemInfo.mockResolvedValue({
       nostr: {
@@ -177,8 +182,8 @@ describe('controlplane store', () => {
     expect(store.services).toEqual([]);
   });
 
-  it('bootstraps from Nostr discovery relays, waits for EOSE query, then subscribes live', async () => {
-    nostrMock.queryUntilEose.mockResolvedValue([
+  it('streams bootstrap events immediately and marks live only after EOSE', async () => {
+    const bootstrapEvents = [
       event({
         id: 'svc-1-event',
         kind: KINDS.BAHIA_SERVICE_REGISTRY,
@@ -206,7 +211,7 @@ describe('controlplane store', () => {
         pubkey: 'c'.repeat(64),
         content: { name: 'Worker 1', description: 'test worker' }
       })
-    ]);
+    ];
 
     const result = await store.bootstrapControlplane();
 
@@ -214,26 +219,104 @@ describe('controlplane store', () => {
     expect(systemInfoMock.loadSystemInfo).toHaveBeenCalledTimes(1);
     expect(nostrMock.setRelays).toHaveBeenCalledWith(['ws://localhost:10547/relay'], false);
     expect(nostrMock.connect).toHaveBeenCalledWith(['ws://localhost:10547/relay'], { force: true });
-    expect(nostrMock.queryUntilEose).toHaveBeenCalledWith(expect.arrayContaining([
-      expect.objectContaining({ kinds: expect.arrayContaining([31961, 31962, 31963, 31964, 31965]), authors: ['b'.repeat(64)] }),
-      expect.objectContaining({ kinds: [10100] }),
-      expect.objectContaining({ kinds: expect.arrayContaining([6961, 6962, 6973, 7961, 7971, 7972, 7973]), authors: ['b'.repeat(64)] })
-    ]));
+    expect(nostrMock.queryUntilEose).not.toHaveBeenCalled();
     expect(nostrMock.subscribe).toHaveBeenCalledWith(
       expect.arrayContaining([
-        expect.objectContaining({ kinds: expect.arrayContaining([31961, 31962, 31963, 31964, 31965]), authors: ['b'.repeat(64)] }),
-        expect.objectContaining({ kinds: [10100] }),
-        expect.objectContaining({ kinds: expect.arrayContaining([6961, 6962, 6973, 7961, 7971, 7972, 7973]), authors: ['b'.repeat(64)] })
+        expect.objectContaining({ kinds: expect.arrayContaining([31961, 31962, 31963, 31964, 31965]), authors: ['b'.repeat(64)], limit: 1000 }),
+        expect.objectContaining({ kinds: [10100], limit: 1000 }),
+        expect.objectContaining({ kinds: expect.arrayContaining([6961, 6962, 6973, 7961, 7971, 7972, 7973]), authors: ['b'.repeat(64)], limit: 100 })
       ]),
-      expect.objectContaining({ onEvent: expect.any(Function), onClosed: expect.any(Function) })
+      expect.objectContaining({ onEvent: expect.any(Function), onEose: expect.any(Function), onClosed: expect.any(Function) })
     );
     expect(store.controlplaneConnection.ready).toBe(true);
-    expect(store.controlplaneConnection.bootstrapComplete).toBe(true);
-    expect(store.controlplaneConnection.status).toBe('live');
+    expect(store.controlplaneConnection.bootstrapComplete).toBe(false);
+    expect(store.controlplaneConnection.status).toBe('syncing');
+    expect(store.services).toHaveLength(0);
+
+    for (const relayEvent of bootstrapEvents) {
+      subscriptionHandlers[0].onEvent(relayEvent);
+    }
+
+    expect(store.controlplaneConnection.bootstrapComplete).toBe(false);
+    expect(store.controlplaneConnection.status).toBe('syncing');
     expect(store.services).toHaveLength(1);
     expect(store.environments).toHaveLength(1);
     expect(store.states).toHaveLength(1);
     expect(store.workers).toHaveLength(1);
+
+    subscriptionHandlers[0].onEose('ws://localhost:10547/relay');
+
+    expect(store.controlplaneConnection.bootstrapComplete).toBe(true);
+    expect(store.controlplaneConnection.status).toBe('live');
+  });
+
+  it('requires EOSE from every connected bootstrap relay before marking live', async () => {
+    systemInfoMock.loadSystemInfo.mockResolvedValueOnce({
+      nostr: {
+        browser_relays: ['wss://relay-one.example', 'wss://relay-two.example'],
+        service_pubkey: 'b'.repeat(64)
+      },
+      features: {
+        relay_read_models: true,
+        legacy_sse: false
+      }
+    });
+
+    const result = await store.bootstrapControlplane();
+
+    expect(result.ok).toBe(true);
+    expect(store.controlplaneConnection.status).toBe('syncing');
+
+    subscriptionHandlers[0].onEose('wss://relay-one.example');
+    expect(store.controlplaneConnection.bootstrapComplete).toBe(false);
+    expect(store.controlplaneConnection.status).toBe('syncing');
+
+    subscriptionHandlers[0].onEose('wss://relay-two.example');
+    expect(store.controlplaneConnection.bootstrapComplete).toBe(true);
+    expect(store.controlplaneConnection.status).toBe('live');
+  });
+
+  it('fails closed when connected relay URLs are unavailable for EOSE tracking', async () => {
+    nostrMock.connect.mockImplementation(async (relays = []) => {
+      nostrMock.connected.set(true);
+      return {
+        total: relays.length,
+        connected: 1,
+        failed: 0,
+        connecting: 0,
+        relays: []
+      };
+    });
+
+    const result = await store.bootstrapControlplane();
+
+    expect(result.ok).toBe(false);
+    expect(result.reason).toBe('Unable to determine connected relay URLs for bootstrap EOSE tracking');
+    expect(store.controlplaneConnection.status).toBe('error');
+    expect(nostrMock.subscribe).not.toHaveBeenCalled();
+  });
+
+  it('ignores stale EOSE from a pre-reconnect syncing subscription', async () => {
+    await store.bootstrapControlplane();
+    const staleHandlers = subscriptionHandlers[0];
+
+    nostrMock.connected.set(false);
+    expect(store.controlplaneConnection.status).toBe('disconnected');
+
+    staleHandlers.onEose('ws://localhost:10547/relay');
+    expect(store.controlplaneConnection.bootstrapComplete).toBe(false);
+    expect(store.controlplaneConnection.status).toBe('disconnected');
+
+    nostrMock.connected.set(true);
+    expect(subscriptionHandlers).toHaveLength(2);
+    expect(store.controlplaneConnection.status).toBe('syncing');
+
+    staleHandlers.onEose('ws://localhost:10547/relay');
+    expect(store.controlplaneConnection.bootstrapComplete).toBe(false);
+
+    subscriptionHandlers[1].onEose('ws://localhost:10547/relay');
+    expect(store.controlplaneConnection.bootstrapComplete).toBe(true);
+    expect(store.controlplaneConnection.status).toBe('live');
   });
 
   it('applies LLM route and route-state read models from relay events', async () => {
@@ -359,6 +442,9 @@ describe('controlplane store', () => {
 
   it('tracks reconnect status from the shared Nostr client connection store', async () => {
     await store.bootstrapControlplane();
+    expect(store.controlplaneConnection.status).toBe('syncing');
+
+    subscriptionHandlers[0].onEose('ws://localhost:10547/relay');
     expect(store.controlplaneConnection.status).toBe('live');
 
     nostrMock.connected.set(false);

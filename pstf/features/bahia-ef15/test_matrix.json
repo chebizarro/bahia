@@ -1,0 +1,44 @@
+{
+  "feature_id": "bahia-ef15",
+  "tests": [
+    {
+      "id": "T1",
+      "command": "npm run test:unit -- --run tests/unit/controlplane-store.test.js",
+      "test_name": "streams bootstrap events immediately and marks live only after EOSE",
+      "acceptance_criteria": ["AC1", "AC2", "AC3"],
+      "result": "blocked",
+      "evidence": "Deterministic unit test added, but the suite cannot import web/src/lib/nostr/client.js while parallel bahia-rbqz split files contain invalid JavaScript. Latest failure: Vite import analysis failed on web/src/lib/nostr/soul-drafts.js before assertions ran. Tracked by bahia-uigl."
+    },
+    {
+      "id": "T2",
+      "command": "npm run test:unit -- --run tests/unit/controlplane-store.test.js",
+      "test_name": "requires EOSE from every connected bootstrap relay before marking live",
+      "acceptance_criteria": ["AC2", "AC3"],
+      "result": "blocked",
+      "evidence": "Test added; execution blocked by unrelated parallel nostr client split syntax errors before the test body runs. Tracked by bahia-uigl."
+    },
+    {
+      "id": "T3",
+      "command": "npm run test:unit -- --run tests/unit/controlplane-store.test.js",
+      "test_name": "fails closed when connected relay URLs are unavailable for EOSE tracking",
+      "acceptance_criteria": ["AC4"],
+      "result": "blocked",
+      "evidence": "Test added; execution blocked by unrelated parallel nostr client split syntax errors before the test body runs. Tracked by bahia-uigl."
+    },
+    {
+      "id": "T4",
+      "command": "npm run test:unit -- --run tests/unit/controlplane-store.test.js",
+      "test_name": "ignores stale EOSE from a pre-reconnect syncing subscription",
+      "acceptance_criteria": ["AC5"],
+      "result": "blocked",
+      "evidence": "Test added; execution blocked by unrelated parallel nostr client split syntax errors before the test body runs. Tracked by bahia-uigl."
+    },
+    {
+      "id": "R1",
+      "command": "Oracle review mode over selected controlplane diff",
+      "acceptance_criteria": ["AC2", "AC3", "AC4", "AC5"],
+      "result": "reviewed-and-addressed",
+      "evidence": "Review found empty connected-relay EOSE tracking and stale reconnect EOSE risks; implementation now fails closed on missing connected relay URLs and uses subscription generations plus reconnect resubscription while syncing."
+    }
+  ]
+}

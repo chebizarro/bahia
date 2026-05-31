@@ -1,0 +1,16 @@
+{
+  "feature_id": "bahia-ef15",
+  "defects": [
+    {
+      "id": "D1",
+      "status": "external-blocker",
+      "bead": "bahia-uigl",
+      "description": "Focused controlplane unit tests cannot execute because the parallel web/src/lib/nostr client split currently contains invalid JavaScript modules imported by client.js.",
+      "observed_evidence": [
+        "First focused run failed during import analysis on web/src/lib/nostr/pool-errors.js.",
+        "Second focused run failed during import analysis on web/src/lib/nostr/soul-drafts.js."
+      ],
+      "intended_resolution": "Complete or repair bahia-rbqz so client.js and its re-exported modules parse, then rerun the bahia-ef15 controlplane-store unit tests under blocker bead bahia-uigl."
+    }
+  ]
+}

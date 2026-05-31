@@ -1,0 +1,30 @@
+{
+  "feature_id": "bahia-ef15",
+  "acceptance_criteria": [
+    {
+      "id": "AC1",
+      "description": "Controlplane bootstrap applies relay EVENT callbacks immediately before EOSE completes.",
+      "tests": ["T1"]
+    },
+    {
+      "id": "AC2",
+      "description": "EOSE marks historical sync complete but does not block rendering or event application.",
+      "tests": ["T1", "T2"]
+    },
+    {
+      "id": "AC3",
+      "description": "Connection status exposes syncing while EOSE is pending and live after all connected bootstrap relays have sent EOSE.",
+      "tests": ["T1", "T2"]
+    },
+    {
+      "id": "AC4",
+      "description": "Bootstrap fails closed when connected relay URLs cannot be determined for EOSE tracking.",
+      "tests": ["T3"]
+    },
+    {
+      "id": "AC5",
+      "description": "Stale EOSE from a disconnected pre-reconnect syncing subscription cannot mark the current connection live.",
+      "tests": ["T4"]
+    }
+  ]
+}

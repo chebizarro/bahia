@@ -1,0 +1,26 @@
+{
+  "feature_id": "bahia-ef15",
+  "title": "Streaming controlplane bootstrap event architecture",
+  "bead": "bahia-ef15",
+  "observed_behavior_before": [
+    "bootstrapControlplane() called nostr.queryUntilEose(readModelFilters()) and applied read-model events only after the EOSE query resolved.",
+    "Connection status moved directly from bootstrapping to live after the blocking query completed."
+  ],
+  "intended_behavior": [
+    "bootstrapControlplane() starts one streaming Nostr subscription over scoped read-model filters after relay connection.",
+    "EVENT callbacks apply controlplane projections immediately while status is syncing.",
+    "EOSE marks historical catch-up complete only after every connected bootstrap relay reports EOSE for the current subscription generation.",
+    "Stale EOSE callbacks from pre-reconnect subscriptions do not mark the current stream live."
+  ],
+  "scope": {
+    "included": [
+      "web/src/lib/stores/controlplane.svelte.js",
+      "web/tests/unit/controlplane-store.test.js"
+    ],
+    "excluded": [
+      "web/src/lib/nostr/* parallel bahia-rbqz client split",
+      "web/src/routes/+layout.svelte and system eager connect owned by bahia-97jk"
+    ]
+  },
+  "date_updated": "2026-05-31"
+}
