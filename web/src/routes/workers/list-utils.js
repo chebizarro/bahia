@@ -1,19 +1,50 @@
+export const LIVE_WORKER_WINDOW_MS = 5 * 60 * 1000;
+export const RECENT_WORKER_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+function workerAdvertisementAgeMs(worker, now = Date.now()) {
+  const advertisedAt = worker?.last_advertisement_at;
+  if (!advertisedAt) return Number.POSITIVE_INFINITY;
+
+  const lastAdvertisement = new Date(advertisedAt).getTime();
+  if (Number.isNaN(lastAdvertisement)) return Number.POSITIVE_INFINITY;
+
+  return Math.max(0, now - lastAdvertisement);
+}
+
 export function inferWorkerStatus(worker) {
   if (typeof worker?.status === 'string' && worker.status.trim().length > 0) {
     const normalized = worker.status.trim().toLowerCase();
     if (['online', 'stale', 'offline'].includes(normalized)) return normalized;
   }
 
-  const advertisedAt = worker?.last_advertisement_at;
-  if (!advertisedAt) return 'offline';
-
-  const lastAdvertisement = new Date(advertisedAt).getTime();
-  if (Number.isNaN(lastAdvertisement)) return 'offline';
-
-  const ageMs = Date.now() - lastAdvertisement;
+  const ageMs = workerAdvertisementAgeMs(worker);
   if (ageMs > 30 * 60 * 1000) return 'offline';
-  if (ageMs > 5 * 60 * 1000) return 'stale';
+  if (ageMs > LIVE_WORKER_WINDOW_MS) return 'stale';
   return 'online';
+}
+
+export function inferWorkerActivityBucket(worker, now = Date.now()) {
+  const ageMs = workerAdvertisementAgeMs(worker, now);
+  if (ageMs <= LIVE_WORKER_WINDOW_MS) return 'live';
+  if (ageMs <= RECENT_WORKER_WINDOW_MS) return 'recent';
+  return 'catalog';
+}
+
+export function summarizeWorkerActivity(workers, now = Date.now()) {
+  const summary = { catalog: 0, recent: 0, live: 0 };
+  for (const worker of workers || []) {
+    summary.catalog += 1;
+    const bucket = inferWorkerActivityBucket(worker, now);
+    if (bucket === 'live') {
+      summary.live += 1;
+      summary.recent += 1;
+      continue;
+    }
+    if (bucket === 'recent') {
+      summary.recent += 1;
+    }
+  }
+  return summary;
 }
 
 export function getCapabilityOptions(workers) {

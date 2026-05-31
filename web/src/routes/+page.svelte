@@ -14,6 +14,7 @@
   import { requestPaymentHistoryRecords } from '$lib/stores/payments.svelte.js';
   import { services, environments, states, workers, driftedStates, events, loading, deploymentIntents } from '$lib/stores';
   import { formatDashboardSats, normalizePaymentHistory, summarizeRecentSpend } from './dashboard-cost-summary.js';
+  import { summarizeWorkerActivity } from './workers/list-utils.js';
 
   // Pending deployments state
   let pendingDeployments = $state([]);
@@ -553,6 +554,13 @@
     { key: 'entity_id', label: 'Entity', render: dashboardActivityEntityLinks }
   ]);
   let pendingCount = $derived(pendingDeployments.length);
+  let workerActivity = $derived(summarizeWorkerActivity(workers));
+  let workerCardValue = $derived(workerActivity.live);
+  let workerCardSubtitle = $derived(
+    workerActivity.catalog === 0
+      ? 'No workers yet'
+      : `${workerActivity.recent} recent / ${workerActivity.catalog} catalog`
+  );
   let pendingSubtitle = $derived(pendingError
     ? 'Unable to load'
     : pendingCount > 0
@@ -593,7 +601,7 @@
       </Card>
     </a>
     <a href="/workers" class="card-link">
-      <Card title="Workers" titleIcon={StandardIcon} value={workers.length} subtitle="Available">
+      <Card title="Workers" titleIcon={StandardIcon} value={workerCardValue} subtitle={workerCardSubtitle}>
         <span class="card-action">View workers</span>
       </Card>
     </a>

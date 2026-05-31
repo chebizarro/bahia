@@ -12,7 +12,9 @@
     workerCommandPublishPayload
   } from './actions.js';
   import {
+    inferWorkerActivityBucket,
     inferWorkerStatus,
+    summarizeWorkerActivity,
     workerFormatsLabel,
     workerToolchainsLabel,
     workerVRAMLabel,
@@ -97,6 +99,7 @@
   let capacityFilter = $state('');
   let pressureFilter = $state('');
   let recommendedActionFilter = $state('');
+  let activityFilter = $state('');
   let labelKeyFilter = $state('');
   let labelValueFilter = $state('');
   let onlineOnly = $state(false);
@@ -117,6 +120,7 @@
   const toolchainOptions = $derived(collectWorkerValues(workers, workerToolchainValues));
   const taskOptions = $derived(collectWorkerValues(workers, workerWorkloadValues));
   const fleetSummary = $derived.by(() => summarizeFleetCapacity(workers));
+  const workerActivity = $derived(summarizeWorkerActivity(workers));
 
   const filteredWorkers = $derived.by(() => filterWorkerRows(workers, {
     capabilityFilter,
@@ -130,6 +134,7 @@
     capacityFilter,
     pressureFilter,
     recommendedActionFilter,
+    activityFilter,
     labelKeyFilter,
     labelValueFilter,
     onlineOnly
@@ -254,6 +259,7 @@
       const liveness = inferWorkerStatus(worker);
       if (filters.onlineOnly && liveness !== 'online') return false;
       if (filters.schedulingFilter && schedulingState(worker) !== filters.schedulingFilter) return false;
+      if (filters.activityFilter && inferWorkerActivityBucket(worker) !== filters.activityFilter) return false;
 
       const capabilities = workerCapabilityValues(worker);
       const normalizedCapabilities = capabilities.map((capability) => capability.toLowerCase());
@@ -468,6 +474,24 @@
   </div>
   <p class="subtitle">Shared execution pool for CI/CD, inference, and scheduled compute workloads.</p>
 
+  <div class="worker-census" aria-label="Worker activity census">
+    <div class="census-card">
+      <span class="census-label">Live</span>
+      <strong class="census-value">{workerActivity.live}</strong>
+      <span class="census-note">advertised in the last 5 minutes</span>
+    </div>
+    <div class="census-card">
+      <span class="census-label">Recent</span>
+      <strong class="census-value">{workerActivity.recent}</strong>
+      <span class="census-note">advertised in the last 24 hours, including live</span>
+    </div>
+    <div class="census-card">
+      <span class="census-label">Catalog</span>
+      <strong class="census-value">{workerActivity.catalog}</strong>
+      <span class="census-note">all known worker identities, including stale entries</span>
+    </div>
+  </div>
+
   {#if notice}
     <div class={`notice ${notice.type}`} role="status">{notice.message}</div>
   {/if}
@@ -493,6 +517,16 @@
         {#each SCHEDULING_STATES as state}
           <option value={state}>{state}</option>
         {/each}
+      </select>
+    </label>
+
+    <label>
+      <span>Activity</span>
+      <select bind:value={activityFilter}>
+        <option value="">All worker buckets</option>
+        <option value="live">Live</option>
+        <option value="recent">Recent</option>
+        <option value="catalog">Catalog-only</option>
       </select>
     </label>
 
@@ -720,6 +754,39 @@
   .subtitle { color: var(--text-muted); margin: -0.75rem 0 1.25rem; }
   .loading, .empty { color: var(--text-muted); padding: 2rem; text-align: center; }
   .muted { color: var(--text-muted); }
+
+  .worker-census {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 0.75rem;
+    margin: 0 0 1rem;
+  }
+
+  .census-card {
+    border: 1px solid var(--border-color, #2a2a4a);
+    border-radius: 0.75rem;
+    padding: 0.85rem 1rem;
+    background: linear-gradient(180deg, rgba(26, 26, 46, 0.95), rgba(20, 20, 38, 0.95));
+    display: grid;
+    gap: 0.2rem;
+  }
+
+  .census-label {
+    color: var(--text-muted);
+    font-size: 0.78rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+
+  .census-value {
+    font-size: 1.8rem;
+    line-height: 1;
+  }
+
+  .census-note {
+    color: var(--text-muted);
+    font-size: 0.78rem;
+  }
 
   .notice {
     border: 1px solid var(--border-color, #2a2a4a);

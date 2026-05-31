@@ -1,5 +1,13 @@
 import { describe, it, expect, vi } from 'vitest';
-import { inferWorkerStatus, getCapabilityOptions, filterWorkers, workerPriceLabel, workerLastAdvertisementLabel } from '../../src/routes/workers/list-utils.js';
+import {
+  inferWorkerActivityBucket,
+  inferWorkerStatus,
+  getCapabilityOptions,
+  filterWorkers,
+  summarizeWorkerActivity,
+  workerPriceLabel,
+  workerLastAdvertisementLabel
+} from '../../src/routes/workers/list-utils.js';
 
 describe('workers list utils', () => {
   it('prefers explicit worker liveness status', () => {
@@ -15,6 +23,22 @@ describe('workers list utils', () => {
     expect(inferWorkerStatus({ last_advertisement_at: '2026-05-02T11:58:00Z' })).toBe('online');
     expect(inferWorkerStatus({ last_advertisement_at: '2026-05-02T11:52:00Z' })).toBe('stale');
     expect(inferWorkerStatus({ last_advertisement_at: '2026-05-02T11:20:00Z' })).toBe('offline');
+
+    vi.useRealTimers();
+  });
+
+  it('groups workers into live, recent, and catalog activity buckets', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-05-02T12:00:00Z'));
+
+    expect(inferWorkerActivityBucket({ last_advertisement_at: '2026-05-02T11:58:00Z' })).toBe('live');
+    expect(inferWorkerActivityBucket({ last_advertisement_at: '2026-05-02T03:00:00Z' })).toBe('recent');
+    expect(inferWorkerActivityBucket({ last_advertisement_at: '2026-04-30T11:59:59Z' })).toBe('catalog');
+    expect(summarizeWorkerActivity([
+      { last_advertisement_at: '2026-05-02T11:58:00Z' },
+      { last_advertisement_at: '2026-05-02T03:00:00Z' },
+      { last_advertisement_at: '2026-04-30T11:59:59Z' }
+    ])).toEqual({ live: 1, recent: 2, catalog: 3 });
 
     vi.useRealTimers();
   });

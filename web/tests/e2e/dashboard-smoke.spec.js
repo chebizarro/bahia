@@ -72,17 +72,20 @@ const mockWorkers = [
   {
     pubkey: 'npub1worker1abc',
     status: 'online',
-    last_seen: new Date().toISOString()
+    last_seen: new Date().toISOString(),
+    last_advertisement_at: new Date(Date.now() - 2 * 60 * 1000).toISOString()
   },
   {
     pubkey: 'npub1worker2def',
     status: 'online',
-    last_seen: new Date().toISOString()
+    last_seen: new Date().toISOString(),
+    last_advertisement_at: new Date(Date.now() - 4 * 60 * 1000).toISOString()
   },
   {
     pubkey: 'npub1worker3ghi',
     status: 'offline',
-    last_seen: new Date(Date.now() - 3600000).toISOString()
+    last_seen: new Date(Date.now() - 3600000).toISOString(),
+    last_advertisement_at: new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString()
   }
 ];
 
@@ -463,13 +466,13 @@ test.describe('Dashboard Smoke Test', () => {
     await expect(page.locator('.card:has-text("Workers")')).toBeVisible();
   });
   
-  test('should show online workers count in stat card', async ({ page }) => {
+  test('should show live workers count in stat card', async ({ page }) => {
     await page.goto('/');
     await page.waitForLoadState('networkidle');
     await page.waitForTimeout(800);
     
-    // Workers card shows the total workers loaded from the API.
-    await expect(page.locator('.card:has-text("Workers") .card-value')).toHaveText('3');
+    await expect(page.locator('.card:has-text("Workers") .card-value')).toHaveText('2');
+    await expect(page.locator('.card:has-text("Workers") .card-subtitle')).toHaveText('2 recent / 3 catalog');
   });
   
   test('should show drift count in states stat card', async ({ page }) => {
