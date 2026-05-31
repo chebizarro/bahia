@@ -76,9 +76,8 @@ func TestMLRESTAsyncRoutesReturnNostrCorrelationMetadata(t *testing.T) {
 				t.Fatalf("decode response: %v", err)
 			}
 			data := resp["data"].(map[string]any)
-			corr := data["correlation"].(map[string]any)
-			if corr["request_event_id"] != "rest-ml-event" || corr["request_kind"].(float64) != float64(tt.wantKind) || corr["result_kind"].(float64) == 0 {
-				t.Fatalf("missing Nostr correlation metadata: %#v", corr)
+			if data["request_event_id"] != "rest-ml-event" || data["request_kind"].(float64) != float64(tt.wantKind) || data["result_kind"].(float64) == 0 {
+				t.Fatalf("missing Nostr correlation metadata: %#v", data)
 			}
 		})
 	}
