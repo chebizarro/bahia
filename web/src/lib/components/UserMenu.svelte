@@ -67,7 +67,11 @@
   }
 
   function canOpenMenu() {
-    return authUi.mode !== 'loading' && !(authUi.mode === 'anonymous' && !authUi.extensionAvailable && !menuItems.some((item) => !item.disabled));
+    // Can always open when authenticated or anonymous with any available signer
+    if (authUi.mode === 'loading') return false;
+    if (authUi.mode === 'authenticated') return true;
+    // Anonymous: allow if extension available or NIP-46 available
+    return authUi.extensionAvailable || menuItems.some((item) => !item.disabled);
   }
 
   function openMenu(index = -1) {
@@ -85,7 +89,8 @@
     }
   }
 
-  function toggleMenu() {
+  function toggleMenu(event) {
+    event?.stopPropagation();
     if (open) {
       closeMenu(false);
     } else {
