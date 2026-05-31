@@ -1,13 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import AuthGuard from '../../src/lib/components/AuthGuard.svelte';
-import AssistantSidebar from '../../src/lib/components/assistant/AssistantSidebar.svelte';
+import AssistantChat from '../../src/lib/components/assistant/AssistantChat.svelte';
 import Table from '../../src/lib/components/Table.svelte';
 import SoulCard from '../../src/lib/components/SoulCard.svelte';
 import { renderComponent } from './utils/svelte-component-test';
 
 const cases = [
   ['AuthGuard', AuthGuard, {}],
-  ['AssistantSidebar', AssistantSidebar, {}],
+  ['AssistantChat', AssistantChat, {}],
   ['Table', Table, {}],
   ['SoulCard', SoulCard, { soul: { pubkey: 'abc', profile: { name: 'test' } } }]
 ];

@@ -1,0 +1,25 @@
+{
+  "feature_id": "bahia-zq4x",
+  "criteria": [
+    {
+      "id": "AC1",
+      "description": "The layout mounts AssistantChat instead of AssistantSidebar and main content has no assistant-driven margin-right."
+    },
+    {
+      "id": "AC2",
+      "description": "Assistant UI state exposes panelOpen, activeSessionId, hasUnread, and lastDismissedAt, with old open/collapsed localStorage migrated."
+    },
+    {
+      "id": "AC3",
+      "description": "The closed assistant affordance is a fixed bottom-right bubble that toggles the overlay panel and shows unread/connection badge state."
+    },
+    {
+      "id": "AC4",
+      "description": "The open assistant panel is a fixed overlay with header, session tabs, transcript, and composer, while preserving existing AssistantTurn and AssistantPlanApproval behavior."
+    },
+    {
+      "id": "AC5",
+      "description": "New assistant status/result events received while the panel is closed set hasUnread, and opening the panel clears hasUnread."
+    }
+  ]
+}

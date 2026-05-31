@@ -156,6 +156,9 @@ describe('assistant store', () => {
     await store.bootstrapAssistant({ force: true });
     expect(store.assistantSessions[0].transcript).toHaveLength(0);
 
+    expect(store.assistantUi.panelOpen).toBe(false);
+    expect(store.assistantUi.hasUnread).toBe(false);
+
     liveHandlers.onEvent(event({
       id: 'status-executing',
       kind: KINDS.ASSISTANT_STATUS,
@@ -164,6 +167,11 @@ describe('assistant store', () => {
       tags: [['session', sessionId], ['status', 'executing'], ['downstream-request', 'downstream-live']],
       content: { session_id: sessionId, status: 'executing', message: 'Deploying route' }
     }));
+
+    expect(store.assistantUi.hasUnread).toBe(true);
+    store.openAssistantPanel();
+    expect(store.assistantUi.panelOpen).toBe(true);
+    expect(store.assistantUi.hasUnread).toBe(false);
 
     const session = store.assistantSessions[0];
     expect(session.transcript).toHaveLength(1);

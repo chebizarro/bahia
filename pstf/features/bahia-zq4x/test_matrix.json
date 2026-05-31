@@ -1,0 +1,30 @@
+{
+  "feature_id": "bahia-zq4x",
+  "tests": [
+    {
+      "criterion_id": "AC1",
+      "test": "npm run build",
+      "evidence": "Svelte layout compiles with AssistantChat import and no AssistantSidebar references."
+    },
+    {
+      "criterion_id": "AC2",
+      "test": "npm run test:unit -- --run tests/unit/assistant/assistant-store.test.js",
+      "evidence": "Store tests import the new API and reset/use panelOpen and hasUnread state."
+    },
+    {
+      "criterion_id": "AC3",
+      "test": "npm run build",
+      "evidence": "AssistantBubble compiles as part of AssistantChat."
+    },
+    {
+      "criterion_id": "AC4",
+      "test": "npm run test:unit -- --run tests/unit/props-helper-regression.test.js",
+      "evidence": "AssistantChat mounts without the props-helper regression and composes the new panel tree."
+    },
+    {
+      "criterion_id": "AC5",
+      "test": "npm run test:unit -- --run tests/unit/assistant/assistant-store.test.js",
+      "evidence": "Live status event sets hasUnread while closed, and openAssistantPanel clears it."
+    }
+  ]
+}

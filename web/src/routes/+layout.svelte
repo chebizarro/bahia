@@ -4,10 +4,10 @@
   import ErrorBoundary from '$lib/components/ErrorBoundary.svelte';
   import AuthGuard from '$lib/components/AuthGuard.svelte';
   import ToastContainer from '$lib/components/ToastContainer.svelte';
-  import AssistantSidebar from '$lib/components/assistant/AssistantSidebar.svelte';
+  import AssistantChat from '$lib/components/assistant/AssistantChat.svelte';
   import { loadAll, unsubscribeFromEvents } from '$lib/stores';
   import { eagerRelayConnect } from '$lib/stores/system.svelte.js';
-  import { bootstrapAssistant, disconnectAssistant, assistantUi } from '$lib/stores/assistant.svelte.js';
+  import { bootstrapAssistant, disconnectAssistant } from '$lib/stores/assistant.svelte.js';
   import { theme } from '$lib/stores/theme.js';
   import { authState, initializeAuth, isAuthenticated } from '$lib/stores/auth.js';
   import { canAccessRoute } from '$lib/auth/route-access.js';
@@ -32,7 +32,6 @@
     route: page.url.pathname,
     params: page.params || {}
   });
-  const assistantWidth = $derived(assistantUi.open ? (assistantUi.collapsed ? '64px' : '360px') : '0px');
 
   $effect(() => {
     let active = true;
@@ -63,7 +62,7 @@
   });
 </script>
 
-<div class="app" style:--assistant-sidebar-width={assistantWidth}>
+<div class="app">
   <Nav />
   <main>
     <ErrorBoundary>
@@ -76,7 +75,7 @@
       {/if}
     </ErrorBoundary>
   </main>
-  <AssistantSidebar routeContext={assistantRouteContext} />
+  <AssistantChat routeContext={assistantRouteContext} />
 </div>
 
 <ToastContainer />
@@ -131,11 +130,5 @@
     padding: 2rem;
     max-width: 1400px;
     margin: 0 auto;
-    margin-right: var(--assistant-sidebar-width, 0px);
-  }
-  @media (max-width: 900px) {
-    main {
-      margin-right: 0;
-    }
   }
 </style>

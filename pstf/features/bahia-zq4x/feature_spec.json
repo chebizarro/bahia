@@ -1,0 +1,16 @@
+{
+  "feature_id": "bahia-zq4x",
+  "title": "Floating assistant chat bubble",
+  "source_design": "docs/designs/floating-chat-bubble.md",
+  "observed_behavior": [
+    "AssistantSidebar was mounted as a fixed right sidebar from web/src/routes/+layout.svelte.",
+    "Layout computed --assistant-sidebar-width from assistantUi.open and assistantUi.collapsed and applied it as main margin-right.",
+    "Assistant UI state used open/collapsed/activeSessionId in web/src/lib/stores/assistant.svelte.js."
+  ],
+  "intended_behavior": [
+    "AssistantChat replaces AssistantSidebar as the layout-mounted assistant wrapper.",
+    "AssistantBubble remains available at bottom-right and toggles AssistantPanel without shifting main content.",
+    "AssistantPanel is a fixed overlay panel that reuses AssistantTurn and AssistantPlanApproval behavior through AssistantTurn.",
+    "Assistant UI state uses panelOpen/activeSessionId/hasUnread/lastDismissedAt and migrates the old localStorage shape."
+  ]
+}

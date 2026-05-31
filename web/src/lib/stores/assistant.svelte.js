@@ -32,9 +32,10 @@ export const assistantConnection = $state({
 });
 
 export const assistantUi = $state({
-  open: true,
-  collapsed: false,
-  activeSessionId: ''
+  panelOpen: false,
+  activeSessionId: '',
+  hasUnread: false,
+  lastDismissedAt: 0
 });
 
 export const assistantSessions = $state([]);
@@ -68,28 +69,39 @@ function syncPendingRequests() {
   for (const [key, value] of pendingMap.entries()) pendingAssistantRequests[key] = value;
 }
 
-function loadSidebarState() {
+function loadAssistantUiState() {
   if (!browser) return;
   try {
     const stored = JSON.parse(localStorage.getItem(SIDEBAR_STORAGE_KEY) || '{}');
-    if (typeof stored.open === 'boolean') assistantUi.open = stored.open;
-    if (typeof stored.collapsed === 'boolean') assistantUi.collapsed = stored.collapsed;
+    if ('open' in stored && !('panelOpen' in stored)) {
+      stored.panelOpen = Boolean(stored.open) && !Boolean(stored.collapsed);
+      delete stored.open;
+      delete stored.collapsed;
+    }
+    if (typeof stored.panelOpen === 'boolean') assistantUi.panelOpen = stored.panelOpen;
     if (typeof stored.activeSessionId === 'string') assistantUi.activeSessionId = stored.activeSessionId;
-  } catch {}
+    if (typeof stored.hasUnread === 'boolean') assistantUi.hasUnread = stored.hasUnread;
+    if (Number.isFinite(stored.lastDismissedAt)) assistantUi.lastDismissedAt = stored.lastDismissedAt;
+  } catch (err) {
+    console.warn('Unable to load assistant UI state:', err);
+  }
 }
 
-function persistSidebarState() {
+function persistAssistantUiState() {
   if (!browser) return;
   try {
     localStorage.setItem(
       SIDEBAR_STORAGE_KEY,
       JSON.stringify({
-        open: assistantUi.open,
-        collapsed: assistantUi.collapsed,
-        activeSessionId: assistantUi.activeSessionId || ''
+        panelOpen: assistantUi.panelOpen,
+        activeSessionId: assistantUi.activeSessionId || '',
+        hasUnread: assistantUi.hasUnread,
+        lastDismissedAt: assistantUi.lastDismissedAt || 0
       })
     );
-  } catch {}
+  } catch (err) {
+    console.warn('Unable to persist assistant UI state:', err);
+  }
 }
 
 function emptySession(sessionId) {
@@ -140,7 +152,7 @@ function refreshSessions() {
   replaceArray(assistantSessions, values);
 
   if (!assistantUi.activeSessionId && values[0]?.sessionId) assistantUi.activeSessionId = values[0].sessionId;
-  persistSidebarState();
+  persistAssistantUiState();
 }
 
 function applySessionEvent(event) {
@@ -293,6 +305,13 @@ function applyAssistantEvent(event) {
   else changed = applyTranscriptEvent(event);
 
   if (changed) {
+    if (
+      !assistantUi.panelOpen &&
+      (event.kind === KINDS.ASSISTANT_STATUS || event.kind === KINDS.ASSISTANT_RESULT) &&
+      event.created_at > assistantUi.lastDismissedAt
+    ) {
+      assistantUi.hasUnread = true;
+    }
     assistantConnection.lastEventAt = new Date().toISOString();
     refreshSessions();
   }
@@ -356,6 +375,10 @@ export function resetAssistantStore() {
   assistantConnection.lastError = null;
   assistantConnection.lastEoseAt = null;
   assistantConnection.lastEventAt = null;
+  assistantUi.panelOpen = false;
+  assistantUi.activeSessionId = '';
+  assistantUi.hasUnread = false;
+  assistantUi.lastDismissedAt = 0;
 }
 
 export async function bootstrapAssistant({ force = false } = {}) {
@@ -363,7 +386,7 @@ export async function bootstrapAssistant({ force = false } = {}) {
   if (bootstrapPromise && !force) return bootstrapPromise;
   if (assistantConnection.ready && !force) return { ok: true };
 
-  loadSidebarState();
+  loadAssistantUiState();
   bootstrapPromise = (async () => {
     const liveSince = nowSeconds();
     assistantConnection.status = 'waiting_auth';
@@ -414,19 +437,33 @@ export function disconnectAssistant() {
   assistantConnection.status = assistantConnection.ready ? 'disconnected' : 'idle';
 }
 
-export function setAssistantSidebarOpen(open) {
-  assistantUi.open = Boolean(open);
-  persistSidebarState();
+export function toggleAssistantPanel() {
+  assistantUi.panelOpen = !assistantUi.panelOpen;
+  if (assistantUi.panelOpen) {
+    assistantUi.hasUnread = false;
+    assistantUi.lastDismissedAt = nowSeconds();
+  } else {
+    assistantUi.lastDismissedAt = nowSeconds();
+  }
+  persistAssistantUiState();
 }
 
-export function toggleAssistantCollapsed() {
-  assistantUi.collapsed = !assistantUi.collapsed;
-  persistSidebarState();
+export function openAssistantPanel() {
+  assistantUi.panelOpen = true;
+  assistantUi.hasUnread = false;
+  assistantUi.lastDismissedAt = nowSeconds();
+  persistAssistantUiState();
+}
+
+export function closeAssistantPanel() {
+  assistantUi.panelOpen = false;
+  assistantUi.lastDismissedAt = nowSeconds();
+  persistAssistantUiState();
 }
 
 export function setActiveAssistantSession(sessionId) {
   assistantUi.activeSessionId = sessionId || '';
-  persistSidebarState();
+  persistAssistantUiState();
 }
 
 export function createAssistantSessionId() {
@@ -510,4 +547,4 @@ export function downstreamRequestsForTurn(item) {
   return Array.from(ids);
 }
 
-if (browser) loadSidebarState();
+if (browser) loadAssistantUiState();
