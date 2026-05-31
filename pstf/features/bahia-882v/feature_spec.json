@@ -1,0 +1,33 @@
+{
+  "feature_id": "bahia-882v",
+  "title": "Reactive collection route displays without polling",
+  "date": "2026-05-31",
+  "observed_behavior": {
+    "streaming_context": "bahia-ef15 completed live event application in stores; route pages consume those stores.",
+    "audited_pages": [
+      "web/src/routes/services/+page.svelte",
+      "web/src/routes/workers/+page.svelte",
+      "web/src/routes/events/+page.svelte",
+      "web/src/routes/deployments/+page.svelte"
+    ],
+    "findings": [
+      "No setInterval or setTimeout data refresh loops were present in the audited route pages.",
+      "No manual refresh buttons were present in the audited route pages.",
+      "Services and deployment routes reloaded collection data after create/rollback actions instead of relying on live subscription updates.",
+      "Workers and deployments bootstrap effects were made explicitly one-shot to prevent accidental reactive re-fetching."
+    ]
+  },
+  "intended_behavior": "Collection route pages perform at most one initial bootstrap, then render directly from reactive stores updated by live Nostr subscriptions. Filters and pagination are computed with Svelte derived state and do not trigger collection reloads.",
+  "scope": {
+    "included": [
+      "Route page audit for services, workers, events, and deployments",
+      "Removal of mutation-triggered collection re-bootstrap calls in services and deployments",
+      "Explicit one-shot bootstrap guards for workers and deployment history"
+    ],
+    "excluded": [
+      "Store internals",
+      "Navigation connection status",
+      "Controlplane store splitting"
+    ]
+  }
+}

@@ -1,4 +1,5 @@
 <script>
+  import { untrack } from 'svelte';
   import { workers, loading, loadWorkers } from '$lib/stores';
   import { goto } from '$app/navigation';
   import { StandardIcon } from '$lib/icons/domain-icons.js';
@@ -101,9 +102,12 @@
   let onlineOnly = $state(false);
   let pendingCommands = $state({});
   let notice = $state(null);
+  let workersPageInitialized = $state(false);
 
   $effect(() => {
-    void loadWorkers();
+    if (workersPageInitialized) return;
+    workersPageInitialized = true;
+    void untrack(() => loadWorkers());
   });
 
   const capabilityOptions = $derived(collectWorkerValues(workers, workerCapabilityValues));

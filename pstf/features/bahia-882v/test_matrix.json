@@ -1,0 +1,26 @@
+{
+  "feature_id": "bahia-882v",
+  "tests": [
+    {
+      "id": "TM1",
+      "acceptance_criteria": ["AC1", "AC2", "AC3"],
+      "type": "static audit",
+      "command": "Search audited route pages for setInterval, setTimeout, refresh, loadAll, and load-on-click patterns.",
+      "expected": "No timer-based refresh, no manual refresh UI, and no post-mutation collection re-bootstrap calls remain."
+    },
+    {
+      "id": "TM2",
+      "acceptance_criteria": ["AC4"],
+      "type": "code inspection",
+      "command": "Inspect services, workers, events, and deployments route pages for $derived filtered/paginated collection views.",
+      "expected": "Filtered and paginated views are derived from store-backed collection state."
+    },
+    {
+      "id": "TM3",
+      "acceptance_criteria": ["AC1", "AC2", "AC3", "AC4"],
+      "type": "build verification",
+      "command": "npm run build in web/",
+      "expected": "Svelte/Vite build succeeds after reactive route changes."
+    }
+  ]
+}

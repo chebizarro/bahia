@@ -204,7 +204,6 @@
       }
 
       closeCreateModal();
-      void loadServices();
     } catch (err) {
       createError = err.message || 'Failed to create service';
     } finally {

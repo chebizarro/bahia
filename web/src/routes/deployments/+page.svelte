@@ -1,5 +1,6 @@
 <script>
   import { goto } from '$app/navigation';
+  import { untrack } from 'svelte';
   import Table from '$lib/components/Table.svelte';
   import EmptyState from '$lib/components/EmptyState.svelte';
   import Select from '$lib/components/Select.svelte';
@@ -20,6 +21,7 @@
 
   let loading = $state(true);
   let error = $state(null);
+  let deploymentHistoryInitialized = $state(false);
 
   let statusFilter = $state('all');
   let serviceFilter = $state('all');
@@ -204,10 +206,12 @@
   });
 
   $effect(() => {
-    void loadAllIntents();
+    if (deploymentHistoryInitialized) return;
+    deploymentHistoryInitialized = true;
+    void untrack(() => bootstrapDeploymentHistory());
   });
 
-  async function loadAllIntents() {
+  async function bootstrapDeploymentHistory() {
     loading = true;
     error = null;
 
@@ -259,7 +263,6 @@
         );
       }
       rollbackOpen = false;
-      await loadAllIntents();
     } catch (err) {
       rollbackError = err.message || 'Failed to create rollback intent';
     } finally {

@@ -1,0 +1,25 @@
+{
+  "feature_id": "bahia-882v",
+  "criteria": [
+    {
+      "id": "AC1",
+      "description": "The audited collection route pages contain no setInterval or setTimeout data refresh logic.",
+      "verification": "Search audited route pages for setInterval and setTimeout."
+    },
+    {
+      "id": "AC2",
+      "description": "The audited collection route pages do not expose manual refresh buttons or click handlers that reload all collection data.",
+      "verification": "Search audited route pages for refresh UI and load-on-click patterns."
+    },
+    {
+      "id": "AC3",
+      "description": "Mutation handlers do not re-bootstrap services or deployment history collections; they rely on store updates from command results and live subscription events.",
+      "verification": "Inspect services create handler and deployments rollback handler for post-mutation loadServices/loadAll/bootstrap calls."
+    },
+    {
+      "id": "AC4",
+      "description": "Filters and pagination are computed reactively with $derived so store changes are reflected without manual reloads.",
+      "verification": "Inspect audited route pages for $derived filtered and paginated views."
+    }
+  ]
+}
