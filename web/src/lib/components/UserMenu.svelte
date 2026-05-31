@@ -1,5 +1,5 @@
 <script>
-  import { tick } from 'svelte';
+  import { tick, untrack } from 'svelte';
   import { goto } from '$app/navigation';
   import { page } from '$app/stores';
   import { authState, isAuthenticated, login, logout } from '$lib/stores/auth.js';
@@ -43,10 +43,16 @@
   let authMethodLabel = $derived(authState.authMethod === 'nip46' ? 'NIP-46 Remote Signer' : 'NIP-07 Extension');
   let triggerLabel = $derived(authUi.mode === 'authenticated' ? authUi.displayLabel : 'Sign In');
 
+  // Close menu on navigation - use untrack to prevent `open` from becoming a dependency
   $effect(() => {
+    // Track only page URL changes
     $page.url.pathname;
     $page.url.hash;
-    closeMenu(false);
+    // Close menu without tracking the current open state
+    untrack(() => {
+      open = false;
+      activeIndex = -1;
+    });
   });
 
   $effect(() => {
