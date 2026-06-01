@@ -1,3 +1,39 @@
+import { services, upsertServiceProjection } from './services.svelte.js';
+import { environments } from './environments.svelte.js';
+import {
+  states,
+  llmRoutes,
+  llmRouteStates,
+  artifacts,
+  builds,
+  deploymentIntents,
+  deploymentRuns,
+  policies,
+  packageRepositories,
+  packageArtifacts,
+  packagePromotions
+} from './deployments.svelte.js';
+import {
+  workers,
+  workerAssignments,
+  workerDrainStatuses,
+  workerEligibilityPreviews
+} from './workers.svelte.js';
+import {
+  backupRepositories,
+  backupPolicies,
+  backupRecipes,
+  backupDefinitions,
+  backupRuns,
+  backupVerifications,
+  backupRestores,
+  backupRetentionRuns,
+  backupRuntimeObservations
+} from './backup.svelte.js';
+import { mlModels, mlModelVersions, mlEndpoints, mlEndpointStates } from './ml.svelte.js';
+import { events } from './activity.svelte.js';
+import { browser } from '$app/environment';
+
 export { services, upsertServiceProjection } from './services.svelte.js';
 export { environments } from './environments.svelte.js';
 export {
@@ -32,7 +68,6 @@ export {
 } from './backup.svelte.js';
 export { mlModels, mlModelVersions, mlEndpoints, mlEndpointStates } from './ml.svelte.js';
 export { events } from './activity.svelte.js';
-import { browser } from '$app/environment';
 
 import { resetServices, refreshServices } from './services.svelte.js';
 import { resetEnvironments, refreshEnvironments } from './environments.svelte.js';
