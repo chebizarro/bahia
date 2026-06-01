@@ -5,23 +5,6 @@ vi.mock('$lib/nostr/encrypted-controlplane.js', () => ({
   requestEncryptedResult: vi.fn()
 }));
 
-vi.mock('$lib/api/client.js', () => ({
-  default: {
-    listOrgs: vi.fn(),
-    getMyInvites: vi.fn(),
-    getOrg: vi.fn(),
-    listOrgMembers: vi.fn(),
-    listOrgInvites: vi.fn(),
-    createOrg: vi.fn(),
-    deleteOrg: vi.fn(),
-    acceptInvite: vi.fn(),
-    createOrgInvite: vi.fn(),
-    revokeOrgInvite: vi.fn(),
-    updateOrgMemberRole: vi.fn(),
-    removeOrgMember: vi.fn()
-  }
-}));
-
 vi.mock('$lib/stores/auth.js', () => {
   const authState = { status: 'authenticated', pubkey: 'f'.repeat(64) };
   return {
@@ -41,7 +24,6 @@ describe('encrypted payments/orgs stores', () => {
   let paymentsStore;
   let systemStore;
   let orgsStore;
-  let apiClient;
 
   beforeEach(async () => {
     vi.resetModules();
@@ -51,7 +33,6 @@ describe('encrypted payments/orgs stores', () => {
     systemStore = await import('$lib/stores/system.svelte.js');
     paymentsStore = await import('$lib/stores/payments.svelte.js');
     orgsStore = await import('$lib/stores/orgs.svelte.js');
-    apiClient = (await import('$lib/api/client.js')).default;
     paymentsStore.resetPaymentHistory();
     orgsStore.resetOrgsState();
     orgsStore.resetOrgDetailState();
@@ -66,18 +47,6 @@ describe('encrypted payments/orgs stores', () => {
       }
     });
     systemStore.loadSystemInfo.mockResolvedValue(systemStore.currentSystemInfo());
-    apiClient.listOrgs.mockResolvedValue([]);
-    apiClient.getMyInvites.mockResolvedValue([]);
-    apiClient.getOrg.mockResolvedValue(null);
-    apiClient.listOrgMembers.mockResolvedValue([]);
-    apiClient.listOrgInvites.mockResolvedValue([]);
-    apiClient.createOrg.mockResolvedValue({ id: 'org-1' });
-    apiClient.deleteOrg.mockResolvedValue(null);
-    apiClient.acceptInvite.mockResolvedValue({ org_id: 'org-1', role: 'viewer' });
-    apiClient.createOrgInvite.mockResolvedValue({ id: 'invite-2' });
-    apiClient.revokeOrgInvite.mockResolvedValue(null);
-    apiClient.updateOrgMemberRole.mockResolvedValue({ message: 'role updated' });
-    apiClient.removeOrgMember.mockResolvedValue(null);
   });
 
   it('waits for auth and system readiness before requesting encrypted payment history', async () => {
@@ -163,39 +132,60 @@ describe('encrypted payments/orgs stores', () => {
     expect(paymentsStore.paymentHistoryState.error).toBe('worker is required');
   });
 
-  it('loads org overview and accepts invites through the REST API client', async () => {
-    apiClient.listOrgs.mockResolvedValueOnce([{ id: 'org-1', role: 'owner' }]);
-    apiClient.getMyInvites.mockResolvedValueOnce([{ id: 'invite-1', org_name: 'demo' }]);
-    apiClient.acceptInvite.mockResolvedValueOnce({ org_id: 'org-1', role: 'viewer' });
+  it('loads org overview and accepts invites through encrypted operations', async () => {
+    encryptedRequests.requestEncryptedResult
+      .mockResolvedValueOnce({ result: { status: 'ok', payload: [{ id: 'org-1', role: 'owner' }] } })
+      .mockResolvedValueOnce({ result: { status: 'ok', payload: [{ id: 'invite-1', org_name: 'demo' }] } })
+      .mockResolvedValueOnce({ result: { status: 'ok', payload: { org_id: 'org-1', role: 'viewer' } } });
 
     const overview = await orgsStore.loadOrgsOverview();
     const accepted = await orgsStore.acceptInvite('invite-1');
 
-    expect(apiClient.listOrgs).toHaveBeenCalledTimes(1);
-    expect(apiClient.getMyInvites).toHaveBeenCalledTimes(1);
-    expect(apiClient.acceptInvite).toHaveBeenCalledWith('invite-1');
+    expect(encryptedRequests.requestEncryptedResult).toHaveBeenNthCalledWith(1, {
+      operation: 'orgs.list',
+      payload: {},
+      tags: [['domain', 'orgs']]
+    });
+    expect(encryptedRequests.requestEncryptedResult).toHaveBeenNthCalledWith(2, {
+      operation: 'orgs.my_invites',
+      payload: {},
+      tags: [['domain', 'orgs']]
+    });
+    expect(encryptedRequests.requestEncryptedResult).toHaveBeenNthCalledWith(3, {
+      operation: 'orgs.accept_invite',
+      payload: { invite_id: 'invite-1' },
+      tags: [['domain', 'orgs']]
+    });
     expect(overview.orgs).toEqual([{ id: 'org-1', role: 'owner' }]);
     expect(overview.myInvites).toEqual([{ id: 'invite-1', org_name: 'demo' }]);
     expect(accepted).toEqual({ org_id: 'org-1', role: 'viewer' });
   });
 
-  it('loads org detail and sends member mutations through the REST API client', async () => {
-    authStore.authState.pubkey = 'alice';
-    apiClient.getOrg.mockResolvedValueOnce({ id: 'org-1' });
-    apiClient.listOrgMembers.mockResolvedValueOnce([{ pubkey: 'alice', role: 'owner' }]);
-    apiClient.listOrgInvites.mockResolvedValueOnce([]);
-    apiClient.updateOrgMemberRole.mockResolvedValueOnce({ message: 'role updated' });
-    apiClient.createOrgInvite.mockResolvedValueOnce({ id: 'invite-2' });
+  it('loads org detail and sends member mutations as encrypted operations', async () => {
+    encryptedRequests.requestEncryptedResult
+      .mockResolvedValueOnce({
+        result: {
+          status: 'ok',
+          payload: { org: { id: 'org-1' }, members: [{ pubkey: 'alice', role: 'owner' }], invites: [], my_role: 'owner' }
+        }
+      })
+      .mockResolvedValueOnce({ result: { status: 'ok', payload: { message: 'role updated' } } })
+      .mockResolvedValueOnce({ result: { status: 'ok', payload: { id: 'invite-2' } } });
 
     await orgsStore.loadOrgDetail('org-1');
     await orgsStore.updateOrgMemberRole('org-1', 'bob', { role: 'admin' });
     await orgsStore.createOrgInvite('org-1', { pubkey: 'carol', role: 'viewer', expiresIn: 168 });
 
     expect(orgsStore.orgDetailState.myRole).toBe('owner');
-    expect(apiClient.getOrg).toHaveBeenCalledWith('org-1');
-    expect(apiClient.listOrgMembers).toHaveBeenCalledWith('org-1');
-    expect(apiClient.listOrgInvites).toHaveBeenCalledWith('org-1');
-    expect(apiClient.updateOrgMemberRole).toHaveBeenCalledWith('org-1', 'bob', { role: 'admin' });
-    expect(apiClient.createOrgInvite).toHaveBeenCalledWith('org-1', { pubkey: 'carol', role: 'viewer', expiresIn: 168 });
+    expect(encryptedRequests.requestEncryptedResult).toHaveBeenNthCalledWith(2, {
+      operation: 'orgs.update_member_role',
+      payload: { org_id: 'org-1', pubkey: 'bob', role: 'admin' },
+      tags: [['domain', 'orgs']]
+    });
+    expect(encryptedRequests.requestEncryptedResult).toHaveBeenNthCalledWith(3, {
+      operation: 'orgs.create_invite',
+      payload: { org_id: 'org-1', pubkey: 'carol', role: 'viewer', expires_in: 168 },
+      tags: [['domain', 'orgs']]
+    });
   });
 });
