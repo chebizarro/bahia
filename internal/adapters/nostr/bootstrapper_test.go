@@ -175,6 +175,95 @@ func TestBootstrapperRunRetriesAfterFailedAttempt(t *testing.T) {
 	attemptsMu.Unlock()
 }
 
+func TestBootstrapperSkipsMalformedEventsAndContinuesGroup(t *testing.T) {
+	catalog := testBootstrapCatalog()
+	cache := &bootstrapApplyRecorder{}
+	badEvent := signedBootstrapEvent(t, testKindTier1Snapshot, "bad")
+	badEvent.Content = `not-json`
+	goodEvent := signedBootstrapEvent(t, testKindTier1Snapshot, "good")
+	setBootstrapSubscribeScript(t, map[int]scriptedBootstrapSubscription{
+		testKindTier0Snapshot: {eose: true},
+		testKindTier1Snapshot: {events: []*gonostr.Event{badEvent, goodEvent}, eose: true},
+		testKindTier1Live:     {events: []*gonostr.Event{signedBootstrapEvent(t, testKindTier1Live, "live-1")}, eose: true},
+	})
+
+	bootstrapper := NewBootstrapper(nil, catalog, nil, cache, zap.NewNop(), BootstrapConfig{
+		RequestedTier:   1,
+		SnapshotTimeout: 50 * time.Millisecond,
+		CatchupTimeout:  50 * time.Millisecond,
+	})
+	// Replace the tier1 snapshot decoder with strict JSON decoding so malformed content is skipped.
+	catalog.decoders[testKindTier1Snapshot] = func(ev *gonostr.Event) (*DecodedProjectionEvent, error) {
+		var payload map[string]bool
+		if err := decodeContent(ev, &payload); err != nil {
+			return nil, err
+		}
+		return &DecodedProjectionEvent{Kind: ev.Kind, DTag: tagValueLocal(ev.Tags, "d"), Timestamp: ev.CreatedAt.Time().UTC(), SourceID: ev.ID}, nil
+	}
+
+	err := bootstrapper.Run(context.Background())
+
+	require.NoError(t, err)
+	require.True(t, bootstrapper.Ready())
+	require.Positive(t, cache.count())
+}
+
+func TestBootstrapperScopesRequiredGroupsToConfiguredAuthors(t *testing.T) {
+	catalog := &KindCatalog{
+		Version: "test",
+		Groups: []ReplayGroup{
+			{Name: "system_snapshot", Kinds: []int{testKindTier0Snapshot}, Tier: 0, Snapshot: true, Required: true},
+			{Name: "continuity_snapshot", Kinds: []int{testKindTier1Snapshot}, Tier: 1, Snapshot: true, Required: true},
+			{Name: "continuity_live", Kinds: []int{testKindTier1Live}, Tier: 1, Snapshot: false, Required: true},
+			{Name: "core_registry_snapshot", Kinds: []int{testKindTier2Snapshot}, Tier: 2, Snapshot: true, Required: true},
+			{Name: "core_control_plane_live", Kinds: []int{testKindTier2Live}, Tier: 2, Snapshot: false, Required: true},
+		},
+		decoders: map[int]DecodeFunc{
+			testKindTier0Snapshot: func(ev *gonostr.Event) (*DecodedProjectionEvent, error) {
+				return &DecodedProjectionEvent{Kind: ev.Kind, SourceID: ev.ID, Timestamp: ev.CreatedAt.Time().UTC()}, nil
+			},
+			testKindTier1Snapshot: func(ev *gonostr.Event) (*DecodedProjectionEvent, error) {
+				return &DecodedProjectionEvent{Kind: ev.Kind, SourceID: ev.ID, Timestamp: ev.CreatedAt.Time().UTC()}, nil
+			},
+			testKindTier1Live: func(ev *gonostr.Event) (*DecodedProjectionEvent, error) {
+				return &DecodedProjectionEvent{Kind: ev.Kind, SourceID: ev.ID, Timestamp: ev.CreatedAt.Time().UTC()}, nil
+			},
+			testKindTier2Snapshot: func(ev *gonostr.Event) (*DecodedProjectionEvent, error) {
+				return &DecodedProjectionEvent{Kind: ev.Kind, SourceID: ev.ID, Timestamp: ev.CreatedAt.Time().UTC()}, nil
+			},
+			testKindTier2Live: func(ev *gonostr.Event) (*DecodedProjectionEvent, error) {
+				return &DecodedProjectionEvent{Kind: ev.Kind, SourceID: ev.ID, Timestamp: ev.CreatedAt.Time().UTC()}, nil
+			},
+		},
+	}
+	var captured []gonostr.Filter
+	original := bootstrapSubscribeAllWithEOSE
+	bootstrapSubscribeAllWithEOSE = func(_ *RelayPool, ctx context.Context, filters []gonostr.Filter) (*MergedSubscription, error) {
+		require.Len(t, filters, 1)
+		captured = append(captured, filters[0])
+		return scriptedMergedSubscription(ctx, scriptedBootstrapSubscription{eose: true}), nil
+	}
+	t.Cleanup(func() { bootstrapSubscribeAllWithEOSE = original })
+
+	bootstrapper := NewBootstrapper(nil, catalog, nil, &bootstrapApplyRecorder{}, zap.NewNop(), BootstrapConfig{
+		RequestedTier:       2,
+		SnapshotTimeout:     50 * time.Millisecond,
+		CatchupTimeout:      50 * time.Millisecond,
+		ProjectionAuthors:   []string{"service-pubkey"},
+		ControlPlaneAuthors: []string{"operator-a", "operator-b"},
+	})
+
+	err := bootstrapper.attemptBootstrap(context.Background())
+
+	require.Error(t, err)
+	require.NotEmpty(t, captured)
+	require.Equal(t, []string{"service-pubkey"}, captured[0].Authors)
+	require.Equal(t, []string{"operator-a", "operator-b"}, captured[1].Authors)
+	require.Equal(t, []string{"service-pubkey"}, captured[2].Authors)
+	require.Equal(t, []string{"operator-a", "operator-b"}, captured[3].Authors)
+	require.Equal(t, []string{"operator-a", "operator-b"}, captured[4].Authors)
+}
+
 func TestBootstrapperProgressReturnsSnapshot(t *testing.T) {
 	bootstrapper := NewBootstrapper(nil, testBootstrapCatalog(), nil, nil, zap.NewNop(), BootstrapConfig{RequestedTier: 2})
 	startedAt := time.Unix(100, 0).UTC()

@@ -392,7 +392,15 @@ func New(cfg *config.Config) (*App, error) {
 		bahiaStatusProjector = service.NewBahiaStatusProjector(nostrPub, logger, cfg.Nostr.PrivateKey)
 	}
 
-	bootstrapper := nostrAdapter.NewBootstrapper(relayPool, catalog, cursorPlanner, bootstrapCache, logger, nostrAdapter.BootstrapConfig{RequestedTier: int(policy.RequestedTier)})
+	servicePubkey := ""
+	if strings.TrimSpace(cfg.Nostr.PrivateKey) != "" {
+		servicePubkey, _ = nostr.GetPublicKey(cfg.Nostr.PrivateKey)
+	}
+	bootstrapper := nostrAdapter.NewBootstrapper(relayPool, catalog, cursorPlanner, bootstrapCache, logger, nostrAdapter.BootstrapConfig{
+		RequestedTier:       int(policy.RequestedTier),
+		ProjectionAuthors:   compactBootstrapAuthors([]string{servicePubkey}),
+		ControlPlaneAuthors: compactBootstrapAuthors([]string{servicePubkey}, cfg.Nostr.AuthorizedPubkeys, cfg.Auth.BootstrapOwnerPubkeys),
+	})
 	healthProvider.SetBootstrapFunc(func() (phase string, ready bool) {
 		progress := bootstrapper.Progress()
 		return string(progress.Phase), bootstrapper.Ready()
@@ -1843,6 +1851,28 @@ func interopRelayURLs(cfg *config.Config, controlPlaneRelays []string) []string 
 		relays = appendUniqueRelay(relays, r)
 	}
 	return relays
+}
+
+func compactBootstrapAuthors(groups ...[]string) []string {
+	seen := make(map[string]struct{})
+	authors := make([]string, 0)
+	for _, group := range groups {
+		for _, raw := range group {
+			value := strings.TrimSpace(raw)
+			if value == "" {
+				continue
+			}
+			if _, ok := seen[value]; ok {
+				continue
+			}
+			seen[value] = struct{}{}
+			authors = append(authors, value)
+		}
+	}
+	if len(authors) == 0 {
+		return nil
+	}
+	return authors
 }
 
 func llmGatewayHTTPConfig(cfg config.LLMControlplaneConfig) llmadapter.GatewayHTTPConfig {

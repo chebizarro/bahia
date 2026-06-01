@@ -33,10 +33,12 @@ type BootstrapProgress struct {
 }
 
 type BootstrapConfig struct {
-	RequestedTier   int
-	SnapshotTimeout time.Duration
-	CatchupTimeout  time.Duration
-	RetryInterval   time.Duration
+	RequestedTier       int
+	SnapshotTimeout     time.Duration
+	CatchupTimeout      time.Duration
+	RetryInterval       time.Duration
+	ProjectionAuthors   []string
+	ControlPlaneAuthors []string
 }
 
 type BootstrapCacheApplier interface {
@@ -57,6 +59,24 @@ type Bootstrapper struct {
 	mu            sync.RWMutex
 	progress      BootstrapProgress
 	config        BootstrapConfig
+}
+
+type bootstrapEventDecodeError struct {
+	err error
+}
+
+func (e *bootstrapEventDecodeError) Error() string {
+	if e == nil || e.err == nil {
+		return "bootstrap event decode error"
+	}
+	return e.err.Error()
+}
+
+func (e *bootstrapEventDecodeError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.err
 }
 
 var bootstrapSubscribeAllWithEOSE = func(pool *RelayPool, ctx context.Context, filters []gonostr.Filter) (*MergedSubscription, error) {
@@ -267,6 +287,15 @@ func (b *Bootstrapper) runGroup(ctx context.Context, group ReplayGroup, filters 
 				continue
 			}
 			if err := b.decodeAndApply(ctx, group, event); err != nil {
+				var decodeErr *bootstrapEventDecodeError
+				if errors.As(err, &decodeErr) {
+					b.logger.Warn("bootstrap event skipped",
+						zap.String("group", group.Name),
+						zap.Int("kind", event.Kind),
+						zap.String("event_id", event.ID),
+						zap.Error(decodeErr))
+					continue
+				}
 				return false, applied, err
 			}
 			applied++
@@ -280,11 +309,11 @@ func (b *Bootstrapper) decodeAndApply(ctx context.Context, group ReplayGroup, ev
 	}
 	decoder, ok := b.catalog.Decoder(event.Kind)
 	if !ok {
-		return fmt.Errorf("no decoder registered for kind %d", event.Kind)
+		return &bootstrapEventDecodeError{err: fmt.Errorf("no decoder registered for kind %d", event.Kind)}
 	}
 	decoded, err := decoder(event)
 	if err != nil {
-		return fmt.Errorf("decode bootstrap event %s kind %d: %w", event.ID, event.Kind, err)
+		return &bootstrapEventDecodeError{err: fmt.Errorf("decode bootstrap event %s kind %d: %w", event.ID, event.Kind, err)}
 	}
 	if decoded == nil {
 		return nil
@@ -308,7 +337,7 @@ func (b *Bootstrapper) decodeAndApply(ctx context.Context, group ReplayGroup, ev
 
 func (b *Bootstrapper) snapshotFilters(group ReplayGroup, startedAt time.Time) []gonostr.Filter {
 	until := gonostr.Timestamp(startedAt.Unix())
-	return []gonostr.Filter{{Kinds: append([]int(nil), group.Kinds...), Until: &until}}
+	return []gonostr.Filter{b.scopedFilter(group, gonostr.Filter{Kinds: append([]int(nil), group.Kinds...), Until: &until})}
 }
 
 func (b *Bootstrapper) liveFilters(ctx context.Context, group ReplayGroup, startedAt time.Time) []gonostr.Filter {
@@ -317,7 +346,7 @@ func (b *Bootstrapper) liveFilters(ctx context.Context, group ReplayGroup, start
 		fallback := gonostr.Timestamp(startedAt.Unix())
 		since = &fallback
 	}
-	return []gonostr.Filter{{Kinds: append([]int(nil), group.Kinds...), Since: since}}
+	return []gonostr.Filter{b.scopedFilter(group, gonostr.Filter{Kinds: append([]int(nil), group.Kinds...), Since: since})}
 }
 
 func (b *Bootstrapper) cursorSince(ctx context.Context, kinds []int) *gonostr.Timestamp {
@@ -325,6 +354,20 @@ func (b *Bootstrapper) cursorSince(ctx context.Context, kinds []int) *gonostr.Ti
 		return nil
 	}
 	return b.cursorPlanner.ComputeSince(ctx, kinds)
+}
+
+func (b *Bootstrapper) scopedFilter(group ReplayGroup, filter gonostr.Filter) gonostr.Filter {
+	switch group.Name {
+	case "system_snapshot", "worker_snapshot", "core_registry_snapshot":
+		if len(b.config.ProjectionAuthors) > 0 {
+			filter.Authors = append([]string(nil), b.config.ProjectionAuthors...)
+		}
+	case "continuity_snapshot", "continuity_live", "core_control_plane_live":
+		if len(b.config.ControlPlaneAuthors) > 0 {
+			filter.Authors = append([]string(nil), b.config.ControlPlaneAuthors...)
+		}
+	}
+	return filter
 }
 
 func (b *Bootstrapper) computeReadyTier(completed map[string]bool) int {
