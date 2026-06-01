@@ -71,6 +71,8 @@ func IsBahiaProjectionKind(kind int) bool {
 		return true
 	case kind >= ToolProvisionResult && kind <= AdoptionImportResult:
 		return true
+	case kind == EncryptedResult:
+		return true
 	case kind >= PackageResult && kind <= PackageDriftEvent:
 		return true
 	case kind == WorkerResult:

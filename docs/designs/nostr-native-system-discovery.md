@@ -28,7 +28,7 @@ Replace `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` with signed No
 
 | Section | Fields | Primary consumers |
 |---|---|---|
-| `nostr` | `browser_relays`, `sidecar_url`, `browser_encrypted_request_relays`, `service_pubkey`, `service_npub`, `publish_enabled` | Browser bootstrap, CLI relay resolution |
+| `nostr` | `browser_relays`, `sidecar_url`, `service_pubkey`, `service_npub`, `publish_enabled` | Browser bootstrap, encrypted transport gating, CLI relay resolution |
 | `control_plane` | `version`, `capabilities`, `request_kinds`, `status_kinds`, `result_kinds`, `read_model_kinds`, `correlation_tags`, MCP metadata | Browser control-plane store, MCP agents |
 | `registries` | OCI, Harbor, configured, public registries | Settings page |
 | `blossom` | `enabled`, `url`, `servers`, `storage_class` | Settings page |
@@ -104,12 +104,12 @@ Standard NIP-51 relay set events for relay URL discovery. Each is a parameterize
 | d-tag | Purpose | Tags |
 |---|---|---|
 | `bahia-browser-v1` | Public browser bootstrap relays (sidecar URL first if sidecar-first) | `["relay", "wss://..."]` per URL |
-| `bahia-requests-v1` | Request-domain relays for encrypted event traffic | `["relay", "wss://..."]` per URL |
+| `bahia-browser-v1` | Request-domain relays for encrypted event traffic | `["relay", "wss://..."]` per URL |
 | `bahia-service-v1` | Relays the service publishes to (operator/settings visibility, per HITL-004) | `["relay", "wss://..."]` per URL |
 
 **Sidecar URL handling:** The sidecar URL is included as the first entry in the `bahia-browser-v1` relay set, not given its own d-tag. As a **Bahia-specific convention**, consumers treat the first relay in the set as preferred (NIP-51 preserves tag order but does not define preference semantics). This avoids an artificial consumer distinction that no current code requires.
 
-**Naming rationale:** `bahia-requests-v1` instead of `bahia-encrypted` avoids the "encrypted relay" framing rejected by HITL-003. The relays themselves are not encrypted; they carry events whose *content* is NIP-44 encrypted.
+**Naming rationale:** `bahia-browser-v1` instead of `bahia-encrypted` avoids the "encrypted relay" framing rejected by HITL-003. The relays themselves are not encrypted; they carry events whose *content* is NIP-44 encrypted.
 
 ### 2.3 What each consumer subscribes to
 
@@ -118,7 +118,7 @@ Standard NIP-51 relay set events for relay URL discovery. Each is a parameterize
 | Browser bootstrap | `{kinds: [31974, 30002], authors: [<service-pubkey>]}` | System discovery + all relay sets |
 | CLI relay resolution | `{kinds: [30002], authors: [<service-pubkey>], "#d": ["bahia-browser-v1"]}` | Browser relay set only |
 | Settings page | `{kinds: [31974, 30002], authors: [<service-pubkey>]}` | Full discovery + all relay sets |
-| Encrypted transport | `{kinds: [30002], authors: [<service-pubkey>], "#d": ["bahia-requests-v1"]}` | Request-domain relay set |
+| Encrypted transport | `{kinds: [30002], authors: [<service-pubkey>], "#d": ["bahia-browser-v1"]}` | Request-domain relay set |
 
 ### 2.4 Service identity
 
@@ -331,7 +331,7 @@ Registries remain in the kind 31974 content. Public registries (ghcr, dockerhub,
 ### Encrypted request transport
 
 Encrypted capability gating reads from:
-- Kind 30002 `bahia-requests-v1` → relay URLs for request-domain traffic
+- Kind 30002 `bahia-browser-v1` → relay URLs for request-domain traffic
 - Kind 31974 `features.encrypted_nostr_requests` → feature flag
 - Kind 31974 author pubkey → service pubkey for NIP-44 encryption
 
@@ -365,7 +365,7 @@ The browser encrypted transport module (`encrypted-controlplane.js`) continues c
 | `web/src/lib/stores/controlplane.svelte.js` | Remove any `nostr.relays` fallback; validate works with normalized Nostr discovery |
 | `web/src/routes/settings/+page.svelte` | Read server relays from kind 30002 subscription; read other metadata from normalized discovery |
 | `web/src/lib/nostr/client.js` | Add `BAHIA_KINDS.SYSTEM_DISCOVERY = 31974`; ensure kind 30002 support |
-| `web/src/lib/nostr/encrypted-controlplane.js` | Read encrypted relay URLs from kind 30002 `bahia-requests-v1` instead of Nostr discovery |
+| `web/src/lib/nostr/encrypted-controlplane.js` | Read encrypted relay URLs from kind 30002 `bahia-browser-v1` instead of Nostr discovery |
 | `docs/control-planes.md` | Document discovery protocol, kind constant, relay-set d-tags, bootstrap seed, trust model |
 | `pstf/features/SYSTEM_DISCOVERY_RELAY_BOOTSTRAP/feature_spec.json` | Update feature boundary and intended behavior |
 | `pstf/features/SYSTEM_DISCOVERY_RELAY_BOOTSTRAP/hitl_decisions.md` | Add HITL decisions for seed mechanism, trust model, mirroring policy |

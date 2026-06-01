@@ -31,5 +31,5 @@ Filename note: this document filename retains `private-transport` for historical
 - Browser route code uses `web/src/lib/stores/payments.svelte.js` and `web/src/lib/stores/orgs.svelte.js`, which call encrypted request/result helpers.
 - Backend operation handlers live in `internal/controlplane/private_domain_handlers.go` and reuse existing repository/RBAC/payment service logic.
 - The `/payments` and `/orgs` compatibility gates were removed only after all route files under those prefixes stopped importing the REST API client.
-- Canonical operator-facing names are `nostr.encrypted_request_relays`, `nostr.browser_encrypted_request_relays`, and `features.encrypted_nostr_requests`.
+- Canonical operator-facing names are `nostr.relays`, `nostr.browser_relays`, and `features.encrypted_nostr_requests`.
 - Wire marker is `encrypted=bahia-encrypted-v1`.

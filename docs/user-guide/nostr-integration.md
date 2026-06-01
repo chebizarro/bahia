@@ -90,13 +90,13 @@ nostr:
     - "wss://nos.lol"
 ```
 
-### Encrypted Request Relays
+### Encrypted Request Transport
 
-Sensitive operations use separate relays:
+Sensitive operations use the same Bahia browser relay set, with encrypted capability gated by discovery metadata:
 
 ```yaml
 nostr:
-  browser_encrypted_request_relays:
+  browser_relays:
     - "wss://encrypted.relay.example.com"
 ```
 

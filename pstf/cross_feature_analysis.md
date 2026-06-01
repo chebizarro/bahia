@@ -43,7 +43,7 @@ Promoted / ranked adjacent slices considered for system reasoning:
 - `SYSTEM_DISCOVERY_RELAY_BOOTSTRAP` **gates** `CORE_SERVICE_TO_DEPLOYMENT`
   - Evidence: `CORE_SERVICE_TO_DEPLOYMENT/feature_spec.json` requires `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` to advertise relay-read-model capability, public relay URLs, and a service pubkey.
 - `SYSTEM_DISCOVERY_RELAY_BOOTSTRAP` **gates** `ENCRYPTED_CONTROL_PLANE_NOTIFICATIONS`
-  - Evidence: `ENCRYPTED_CONTROL_PLANE_NOTIFICATIONS/feature_spec.json` requires `nostr.service_pubkey` and `nostr.browser_encrypted_request_relays` from `Nostr discovery events (kind 31974 + NIP-51 kind 30002)`.
+  - Evidence: `ENCRYPTED_CONTROL_PLANE_NOTIFICATIONS/feature_spec.json` requires `nostr.service_pubkey` and `nostr.browser_relays` from `Nostr discovery events (kind 31974 + NIP-51 kind 30002)`.
 - `SYSTEM_DISCOVERY_RELAY_BOOTSTRAP` **gates** `LLM_ROUTE_RELEASE_DEPLOYMENT`
   - Evidence: `LLM_ROUTE_RELEASE_DEPLOYMENT/feature_spec.json` depends on LLM kind advertisement from `Nostr discovery events (kind 31974 + NIP-51 kind 30002)`.
 - `SYSTEM_DISCOVERY_RELAY_BOOTSTRAP` **produces_for** `SIGNER_FIRST_OPERATOR_ADOPTION_RUNTIME`
@@ -84,7 +84,7 @@ Promoted / ranked adjacent slices considered for system reasoning:
 - Evidence:
   - `pstf/spec_gap_report.md` identifies `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` and relay-read-model-first behavior as high-risk missing specification areas.
   - `pstf/feature_backlog.md` ranks `SYSTEM_DISCOVERY_RELAY_BOOTSTRAP` first because every relay-backed browser flow depends on it.
-  - `internal/adapters/nostr/projector.go` emits `browser_relays`, `browser_encrypted_request_relays`, `sidecar_url`, `service_pubkey`, and control-plane kind advertisement from one payload.
+  - `internal/adapters/nostr/projector.go` emits `browser_relays`, `sidecar_url`, `service_pubkey`, and control-plane kind advertisement from one payload.
   - All four completed/approved slices consume that contract directly or indirectly.
 - Why this matters:
   - Release planning currently assumes one discovery contract is stable across browser public flows, browser encrypted flows, and operator CLI fallback discovery.

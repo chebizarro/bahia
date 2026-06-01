@@ -10,7 +10,7 @@ Issue lineage: superseded by `bahia-sqfx.5`
 Purpose: compatibility-only reference checklist for the deprecated HTTP/NIP-98 operator surface.
 
 Terminology compatibility note:
-- Canonical names: `nostr.encrypted_request_relays`, `nostr.browser_encrypted_request_relays`, `features.encrypted_nostr_requests`.
+- Canonical names: `nostr.relays`, `nostr.browser_relays`, `features.encrypted_nostr_requests`.
 - Encrypted request/result wire marker is `encrypted=bahia-encrypted-v1`.
 
 Use this document **while executing** the rollout signoff. It is intentionally procedural. The verification matrix in [`adoption-live-network-verification.md`](adoption-live-network-verification.md) remains the normative gate definition; this checklist turns that matrix into an operator run sheet.
@@ -44,7 +44,7 @@ Use this document **while executing** the rollout signoff. It is intentionally p
 | Compose takeover policy for this environment | `disabled` / `enabled for named services only` / `not applicable` |
 | `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` evidence captured | `<fill path + timestamp>` |
 | Relay sidecar `/relay` check (if applicable) | `<fill pass/fail + evidence>` |
-| Encrypted request/result evidence (if encrypted web flows in scope) | `<fill browser_encrypted_request_relays + feature flag evidence or N/A>` |
+| Encrypted request/result evidence (if encrypted web flows in scope) | `<fill browser_relays + feature flag/service pubkey evidence or N/A>` |
 
 ## Environment prerequisites
 
@@ -61,7 +61,7 @@ Check each box before LN-01 starts.
 - [ ] Monitoring can reach `/metrics` with fresh per-request NIP-98 headers when API auth is enabled.
 - [ ] `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` confirms `features.direct_nostr_http_auth=true`.
 - [ ] If sidecar/web verification is in scope, `/relay` is reachable and aligned with the configured sidecar URL/path.
-- [ ] If encrypted web flows are in scope, `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` exposes `nostr.browser_encrypted_request_relays` and `features.encrypted_nostr_requests=true`.
+- [ ] If encrypted web flows are in scope, `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` exposes `nostr.browser_relays` and `features.encrypted_nostr_requests=true`.
 - [ ] A non-critical candidate workload is available for import.
 - [ ] Rollback owner/procedure for the candidate workload is confirmed.
 
@@ -75,7 +75,7 @@ Collect these artifacts as files or links under the evidence bundle location.
 - [ ] API request/response captures with secrets redacted
 - [ ] `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` capture showing auth/topology capability flags
 - [ ] Relay `/relay` reachability capture when web/sidecar validation is in scope
-- [ ] Encrypted request/result discovery capture (`nostr.browser_encrypted_request_relays`, `features.encrypted_nostr_requests`) when encrypted web flows are in scope
+- [ ] Encrypted request/result discovery capture (`nostr.browser_relays`, `features.encrypted_nostr_requests`) when encrypted web flows are in scope
 - [ ] Relevant log excerpts with request IDs
 - [ ] Metrics snapshots
 - [ ] Database row IDs / record references for imported entities

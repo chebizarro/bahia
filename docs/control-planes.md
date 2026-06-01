@@ -515,10 +515,10 @@ Sensitive browser route families and encrypted request-domain actions (notificat
 
 Discovery/config contract:
 
-- Backend-only relay URLs for encrypted request/result handling are configured as `nostr.encrypted_request_relays` and are not exposed by `Nostr discovery events (kind 31974 + NIP-51 kind 30002)`.
-- Browser-discoverable relay URLs for encrypted request/result handling are configured as `nostr.browser_encrypted_request_relays` and are exposed as `nostr.browser_encrypted_request_relays`.
-- `Nostr discovery events (kind 31974 + NIP-51 kind 30002).features.encrypted_nostr_requests=true` means the backend has a service key, at least one backend `nostr.encrypted_request_relays` subscription target, and at least one browser encrypted-request relay URL advertised.
-- Browser clients must keep public `nostr.browser_relays` / `nostr.sidecar_url` separate from `nostr.browser_encrypted_request_relays`; sensitive payloads must never be published to the public sidecar relay.
+- Backend-only relay URLs for encrypted request/result handling are configured as `nostr.relays` and are not exposed by `Nostr discovery events (kind 31974 + NIP-51 kind 30002)`.
+- Browser-discoverable relay URLs for encrypted request/result handling are configured as `nostr.browser_relays` and are exposed as `nostr.browser_relays`.
+- `Nostr discovery events (kind 31974 + NIP-51 kind 30002).features.encrypted_nostr_requests=true` means the backend has a service key, at least one backend `nostr.relays` subscription target, and at least one browser encrypted-request relay URL advertised.
+- Browser clients must keep public `nostr.browser_relays` / `nostr.sidecar_url` separate from `nostr.browser_relays`; sensitive payloads must never be published to the public sidecar relay.
 
 Event contract:
 

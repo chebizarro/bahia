@@ -74,6 +74,7 @@ func TestIsBahiaProjectionKind(t *testing.T) {
 		// Core result kinds
 		{"Deployment result", DeploymentResult, true},
 		{"Action result", ActionResult, true},
+		{"Encrypted result", EncryptedResult, true},
 		{"Package result", PackageResult, true},
 		{"Worker result", WorkerResult, true},
 		// Read-model kinds
@@ -158,6 +159,7 @@ func TestIsReadableKind(t *testing.T) {
 		{"DNS operation status", DNSOperationStatus, true},
 		{"Service registry", ServiceRegistry, true},
 		{"Worker state", WorkerState, true},
+		{"Encrypted result", EncryptedResult, true},
 		// Interop kinds
 		{"Loom worker ad", LoomWorkerAdvertisement, true},
 		{"Hive CI workflow run", HiveCIWorkflowRun, true},

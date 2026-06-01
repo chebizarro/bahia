@@ -31,13 +31,13 @@
       "role": "service pubkey owner that decrypts requests, authorizes operations, dispatches handlers, and publishes encrypted results"
     },
     {
-      "name": "encrypted_request_relays",
-      "role": "relay set explicitly configured for encrypted browser request/result traffic"
+      "name": "browser_relays",
+      "role": "shared Bahia browser relay set used for both public and encrypted browser traffic"
     }
   ],
   "description": "This slice covers the signer-first encrypted browser request/result transport used for sensitive operations, with notifications as the primary product vertical. It includes system discovery requirements, relay selection rules, request construction, publish/result correlation behavior, backend decrypt/authorize/dispatch behavior, and notification channel/log operations built on that transport.",
   "in_scope": [
-    "`Nostr discovery events (kind 31974 + NIP-51 kind 30002)` fields required for encrypted browser operations: `nostr.service_pubkey`, `nostr.browser_encrypted_request_relays`, and the effective encrypted capability gate used by frontend stores",
+    "`Nostr discovery events (kind 31974 + NIP-51 kind 30002)` fields required for encrypted browser operations: `nostr.service_pubkey`, `nostr.browser_relays`, and the effective encrypted capability gate used by frontend stores",
     "browser encrypted transport behavior in `web/src/lib/nostr/encrypted-controlplane.js`",
     "backend encrypted request/result handling in `internal/controlplane/encrypted_transport.go`",
     "notification encrypted operations in `internal/controlplane/notification_encrypted_handlers.go` and `web/src/lib/stores/notifications.svelte.js`",
@@ -52,7 +52,7 @@
   ],
   "preconditions": [
     "The browser has an authenticated signer capable of signing and encrypting requests",
-    "`Nostr discovery events (kind 31974 + NIP-51 kind 30002)` advertises a valid Bahia service pubkey and at least one `browser_encrypted_request_relays` URL",
+    "`Nostr discovery events (kind 31974 + NIP-51 kind 30002)` advertises a valid Bahia service pubkey, the encrypted feature flag, and at least one `browser_relays` URL",
     "The encrypted transport is enabled in the current deployment topology and the backend is subscribed to the encrypted request kind family",
     "The requesting pubkey is allowed to invoke the targeted encrypted operation"
   ],

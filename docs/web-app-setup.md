@@ -77,7 +77,7 @@ Most realtime app state is sourced from the Nostr sidecar/control-plane subscrip
 
 ### Encrypted Nostr Request/Result Flows
 
-Sensitive route migrations use a separate signer-first encrypted Nostr request/result flow instead of the public relay sidecar. The backend advertises this only when operators configure backend `nostr.encrypted_request_relays`, browser-facing `nostr.browser_encrypted_request_relays`, and a service key; browser code reads `Nostr discovery events (kind 31974 + NIP-51 kind 30002).nostr.browser_encrypted_request_relays` and publishes kind `5980` encrypted NIP-44 requests to those relay URLs only. Results arrive as kind `7980` events tagged with the original request event id and encrypted back to the requester.
+Sensitive route migrations use a separate signer-first encrypted Nostr request/result flow instead of the public relay sidecar. The backend advertises this only when operators configure backend `nostr.relays`, browser-facing `nostr.browser_relays`, and a service key; browser code reads `Nostr discovery events (kind 31974 + NIP-51 kind 30002).nostr.browser_relays` and publishes kind `5980` encrypted NIP-44 requests to those relay URLs only. Results arrive as kind `7980` events tagged with the original request event id and encrypted back to the requester.
 
 Important signer constraints:
 
@@ -118,7 +118,7 @@ Important signer constraints:
 
 Compatibility notes for renamed keys:
 
-- Canonical names: `nostr.encrypted_request_relays`, `nostr.browser_encrypted_request_relays`, `features.encrypted_nostr_requests`.
+- Canonical names: `nostr.relays`, `nostr.browser_relays`, `features.encrypted_nostr_requests`.
 - Wire marker for encrypted request/result routing is `encrypted=bahia-encrypted-v1`.
 
 ### Real-Time Events Not Updating

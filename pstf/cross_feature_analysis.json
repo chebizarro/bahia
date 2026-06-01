@@ -60,7 +60,7 @@
         "target": "ENCRYPTED_CONTROL_PLANE_NOTIFICATIONS",
         "relationship": "gates",
         "evidence": [
-          "`ENCRYPTED_CONTROL_PLANE_NOTIFICATIONS/feature_spec.json` preconditions require `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` to advertise `nostr.service_pubkey` and `nostr.browser_encrypted_request_relays`.",
+          "`ENCRYPTED_CONTROL_PLANE_NOTIFICATIONS/feature_spec.json` preconditions require `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` to advertise `nostr.service_pubkey` and `nostr.browser_relays`.",
           "`pstf/spec_gap_report.md` marks `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` as a critical under-documented contract."
         ]
       },
@@ -179,11 +179,11 @@
         "LLM_ROUTE_RELEASE_DEPLOYMENT",
         "SYSTEM_DISCOVERY_RELAY_BOOTSTRAP"
       ],
-      "summary": "The current portfolio treats `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` as normative for public relay discovery, encrypted relay discovery, service pubkey discovery, and control-plane kind advertisement, but no completed PSTF slice yet verifies that contract directly as a first-class product feature.",
+      "summary": "The current portfolio treats `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` as normative for browser relay discovery, encrypted capability gating, service pubkey discovery, and control-plane kind advertisement, but no completed PSTF slice yet verifies that contract directly as a first-class product feature.",
       "evidence": [
         "`pstf/spec_gap_report.md` marks `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` and relay-read-model-first frontend behavior as high-risk missing specification areas.",
         "`pstf/feature_backlog.md` ranks `SYSTEM_DISCOVERY_RELAY_BOOTSTRAP` first because every relay-backed browser flow depends on it.",
-        "`internal/adapters/nostr/projector.go` emits `browser_relays`, `browser_encrypted_request_relays`, `sidecar_url`, `service_pubkey`, and control-plane kinds from the same payload.",
+        "`internal/adapters/nostr/projector.go` emits `browser_relays`, `sidecar_url`, `service_pubkey`, and control-plane kinds from the same payload.",
         "Completed slices for core deployments, encrypted notifications, operator signer-first CLI discovery, and LLM all list `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` as a dependency or precondition."
       ],
       "recommended_actions": [
@@ -211,7 +211,7 @@
         "LLM_ROUTE_RELEASE_DEPLOYMENT",
         "SYSTEM_DISCOVERY_RELAY_BOOTSTRAP"
       ],
-      "summary": "The portfolio has per-slice public and encrypted browser evidence, but no test proves that one browser session can bootstrap from one Nostr discovery contract, execute public signer-first flows and encrypted flows, and preserve the public-vs-encrypted relay boundary end to end.",
+      "summary": "The portfolio has per-slice public and encrypted browser evidence, but no test proves that one browser session can bootstrap from one Nostr discovery contract, execute public signer-first flows and encrypted flows, and preserve the shared-relay kind boundary end to end.",
       "evidence": [
         "`CORE_SERVICE_TO_DEPLOYMENT/verification_report.md` points to `service-deployment-public-smoke.spec.js` for the public browser journey.",
         "`ENCRYPTED_CONTROL_PLANE_NOTIFICATIONS/verification_report.md` points to `notifications-encrypted-smoke.spec.js` and `notifications-form-error.spec.js` for encrypted browser journeys.",
@@ -257,7 +257,7 @@
         "`pstf/spec_gap_report.md` describes the mixed transport model as high-risk and explicitly calls public-vs-encrypted separation security-critical.",
         "`web/src/lib/auth/route-access.js` contains route-level REST compatibility machinery, but `ROUTE_COMPATIBILITY_REQUIREMENTS` is empty, so the portfolio-level compatibility map is still implicit rather than explicit.",
         "`CORE_SERVICE_TO_DEPLOYMENT/feature_spec.json` excludes encrypted request kind `5980` from the approved public deployment flow.",
-        "`ENCRYPTED_CONTROL_PLANE_NOTIFICATIONS/feature_spec.json` requires `browser_encrypted_request_relays` and forbids treating public relay URLs as encrypted request relays.",
+        "`ENCRYPTED_CONTROL_PLANE_NOTIFICATIONS/feature_spec.json` requires encrypted browser flows to use the shared Bahia relay set only when `features.encrypted_nostr_requests` and `service_pubkey` are present.",
         "`SIGNER_FIRST_OPERATOR_ADOPTION_RUNTIME/feature_spec.json` permits explicit explicit relay configuration only for pre-acceptance failures.",
         "`LLM_ROUTE_RELEASE_DEPLOYMENT/hitl_decisions.md` removes operational REST mutations from the intended product contract."
       ],

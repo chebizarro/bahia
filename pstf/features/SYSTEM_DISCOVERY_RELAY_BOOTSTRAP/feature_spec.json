@@ -70,7 +70,7 @@
     "in_scope": [
       "`Nostr discovery events (kind 31974 + NIP-51 kind 30002)` advertisement of sidecar-first public browser relay bootstrap fields (`nostr.browser_relays`, `nostr.sidecar_url`)",
       "Advertisement of `nostr.service_pubkey` and `features.relay_read_models` required by shared browser read-model bootstrap",
-      "Advertisement of `nostr.browser_encrypted_request_relays` and `features.encrypted_nostr_requests` as discovery inputs for encrypted browser domains",
+      "Advertisement of `nostr.browser_relays` and `features.encrypted_nostr_requests` as discovery inputs for encrypted browser domains",
       "Advertisement of `control_plane.version`, capabilities, request/status/result/read-model kind maps, correlation tags, and MCP async-correlation metadata",
       "Shared browser Nostr discovery caching, concurrent-load dedupe, and force-reload behavior",
       "Shared browser control-plane bootstrap behavior: fail closed unless relay-read-model capability is advertised, query until EOSE, then transition into live subscriptions",
@@ -117,7 +117,7 @@
       "The browser must load Nostr discovery once per bootstrap cycle, deduplicate concurrent loads, and avoid per-store refetching of the same discovery payload unless a force reload is explicitly requested.",
       "After discovery, the browser must query canonical read models and recent activity/status through scoped relay filters, wait for EOSE to complete historical catch-up, and then remain subscribed for realtime updates.",
       "Canonical Bahia read models and status/result activity must be filtered by the advertised Bahia service pubkey once that pubkey is known.",
-      "Sensitive encrypted browser flows must derive availability only from `nostr.browser_encrypted_request_relays`, `nostr.service_pubkey`, and `features.encrypted_nostr_requests`, while keeping those relay URLs separate from public browser relays.",
+      "Sensitive encrypted browser flows must derive availability only from `nostr.browser_relays`, `nostr.service_pubkey`, and `features.encrypted_nostr_requests`, while keeping those relay URLs separate from public browser relays.",
       "`control_plane` kind advertisement is part of the intended discovery contract because browser public flows, encrypted browser flows, MCP async consumers, and LLM/operator consumers all depend on it."
     ],
     "approved_decisions": [
@@ -155,7 +155,7 @@
       "title": "Encrypted browser domains use discovery only to gate encrypted transport",
       "steps": [
         "Browser loads `Nostr discovery events (kind 31974 + NIP-51 kind 30002)`",
-        "Browser checks `nostr.service_pubkey`, `nostr.browser_encrypted_request_relays`, and `features.encrypted_nostr_requests`",
+        "Browser checks `nostr.service_pubkey`, `nostr.browser_relays`, and `features.encrypted_nostr_requests`",
         "Browser enables encrypted request/result flows only when those encrypted discovery inputs are coherently advertised and keeps them separate from public browser relay URLs"
       ]
     },

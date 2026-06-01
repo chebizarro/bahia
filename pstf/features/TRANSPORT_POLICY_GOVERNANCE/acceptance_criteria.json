@@ -11,7 +11,7 @@
       "title": "System discovery keeps public bootstrap and encrypted capability gating distinct",
       "type": "contract",
       "priority": "must",
-      "assertion": "`Nostr discovery events (kind 31974 + NIP-51 kind 30002)` must advertise public browser bootstrap inputs (`browser_relays` and/or `sidecar_url`) separately from encrypted browser capability inputs (`browser_encrypted_request_relays`, `service_pubkey`, and `features.encrypted_nostr_requests`). Public bootstrap fields alone must not imply encrypted capability.",
+      "assertion": "`Nostr discovery events (kind 31974 + NIP-51 kind 30002)` must advertise public browser bootstrap inputs (`browser_relays` and/or `sidecar_url`) distinctly from encrypted browser capability inputs (`service_pubkey` and `features.encrypted_nostr_requests`). The relay set is shared; bootstrap fields alone must not imply encrypted capability.",
       "testable_by": ["unit", "contract"],
       "preconditions": [
         "Nostr discovery payloads are available for public-only and public-plus-encrypted configurations."
@@ -68,7 +68,7 @@
       "title": "Representative encrypted browser proof uses only encrypted request/result transport",
       "type": "security",
       "priority": "must",
-      "assertion": "A representative approved encrypted browser proof surface — drawn from either `ENCRYPTED_CONTROL_PLANE_NOTIFICATIONS` or browser payment-history behavior — must publish only encrypted kind `5980` events to `browser_encrypted_request_relays`, target the Bahia service pubkey, and resolve only correlated encrypted kind `7980` results from the Bahia service author. Sensitive browser payloads must never be published to public browser relays.",
+      "assertion": "A representative approved encrypted browser proof surface — drawn from either `ENCRYPTED_CONTROL_PLANE_NOTIFICATIONS` or browser payment-history behavior — must publish encrypted kind `5980` events only to relays from `browser_relays`, target the Bahia service pubkey, and resolve only correlated encrypted kind `7980` results from the Bahia service author. Sensitive browser payloads must never be published outside the shared Bahia relay set.",
       "testable_by": ["unit", "contract", "e2e"],
       "preconditions": [
         "Encrypted capability is advertised by system discovery.",

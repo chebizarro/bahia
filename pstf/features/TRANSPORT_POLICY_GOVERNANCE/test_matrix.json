@@ -491,7 +491,7 @@
       "ac_ids": [
         "TPG-AC-012"
       ],
-      "title": "One authenticated browser session keeps public and encrypted journeys on separate relay sets",
+      "title": "One authenticated browser session keeps public and encrypted journeys on the shared Bahia relay set",
       "type": "e2e",
       "existing_or_new": "new",
       "target_path": "web/tests/e2e/mixed-transport-session.spec.js",

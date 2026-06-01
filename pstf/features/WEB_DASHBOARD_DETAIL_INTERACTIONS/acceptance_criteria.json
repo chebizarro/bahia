@@ -24,7 +24,7 @@
     },
     {
       "id": "AC5",
-      "text": "Service-secret unavailability messaging refers to encrypted Nostr events and Settings rather than fictional encrypted requests or a nonexistent nostr.browser_encrypted_request_relays setting requirement for this flow.",
+      "text": "Service-secret unavailability messaging refers to encrypted Nostr events and Settings rather than fictional encrypted requests or a nonexistent nostr.browser_relays setting requirement for this flow.",
       "status": "passed"
     }
   ],

@@ -27,7 +27,7 @@
         "`$lib/stores/system.svelte.js`"
       ],
       "data_requirements": [
-        "Deterministic Nostr discovery object without `browser_encrypted_request_relays`."
+        "Deterministic Nostr discovery object without encrypted capability indicators."
       ],
       "determinism_notes": [
         "No network or timer dependency."
@@ -44,7 +44,7 @@
       "type": "unit",
       "existing_or_new": "existing",
       "target_path": "web/tests/unit/encrypted-controlplane.test.js",
-      "description": "Confirms encrypted relay resolution uses only `browser_encrypted_request_relays` and does not become available from `browser_relays` alone.",
+      "description": "Confirms encrypted relay resolution stays on `browser_relays` and does not become available from relay URLs alone without the encrypted feature gate and service pubkey.",
       "preconditions": [
         "Encrypted controlplane module is loaded under Vitest."
       ],
@@ -187,7 +187,7 @@
       ],
       "expected_result": "The notifications page renders the existing channel and all encrypted publishes target the encrypted relay URL, not the public relay URL.",
       "fixtures": [
-        "Mock Nostr discovery with `browser_relays` and `browser_encrypted_request_relays`.",
+        "Mock Nostr discovery with `browser_relays`, `service_pubkey`, and `features.encrypted_nostr_requests`.",
         "Initial notification channel fixture."
       ],
       "mocks": [

@@ -117,8 +117,8 @@
       "`pstf/cross_feature_analysis.md`, `pstf/spec_gap_report.md`, and `pstf/feature_backlog.json` all identify shared transport governance as a high-risk cross-feature gap rather than a single-slice detail."
     ],
     "code": [
-      "`internal/adapters/nostr/projector.go` advertises the public-vs-encrypted discovery inputs that every browser flow relies on: `browser_relays`, `browser_encrypted_request_relays`, `service_pubkey`, and feature gates such as `relay_read_models` and `encrypted_nostr_requests`.",
-      "`web/src/lib/nostr/encrypted-controlplane.js` enforces the browser encrypted transport boundary in code by deriving relay URLs only from `browser_encrypted_request_relays`, requiring the service pubkey, filtering correlated results by service author and requester pubkey, and rejecting publishes with no accepted OK.",
+      "`internal/adapters/nostr/projector.go` advertises the browser discovery inputs that every browser flow relies on: `browser_relays`, `service_pubkey`, and feature gates such as `relay_read_models` and `encrypted_nostr_requests`.",
+      "`web/src/lib/nostr/encrypted-controlplane.js` enforces the browser encrypted transport boundary in code by deriving relay URLs from `browser_relays`, requiring the service pubkey and encrypted feature gate, filtering correlated results by service author and requester pubkey, and rejecting publishes with no accepted OK.",
       "`web/src/lib/auth/route-access.js` currently has an empty `ROUTE_COMPATIBILITY_REQUIREMENTS` map, matching the approved intended browser policy; the older auth audit has been refreshed to mark its route-level compatibility-gating conclusion as superseded historical evidence.",
       "`web/src/routes/payments/+page.svelte`, `/orgs`, and `/notifications` are currently browser-store driven for sensitive domains, while `web/src/routes/+page.svelte` still uses REST payment history for dashboard cost summary and `web/src/lib/api/client.js` still exposes EventSource log streaming and numerous REST compatibility methods."
     ],
@@ -200,7 +200,7 @@
   "approved_intended_behavior": {
     "summary": [
       "Bahia's canonical public control-plane contract is signer-first, relay-backed, and event-driven: browser and operator clients should publish signed public request kinds, require accepted relay OK responses, follow correlated status/result events, and derive shared state from relay-backed read models rather than REST writes or polling.",
-      "Sensitive browser-visible domains belong on encrypted `5980`/`7980` request/result transport and must use only `browser_encrypted_request_relays` plus the Bahia service pubkey; sensitive payloads must never be published to the public browser/sidecar relay plane.",
+      "Sensitive browser-visible domains belong on encrypted `5980`/`7980` request/result transport and must use the shared `browser_relays` set plus the Bahia service pubkey and encrypted feature gate; sensitive payloads must never be published outside the Bahia relay plane.",
       "Direct NIP-98-protected REST and MCP surfaces may remain as narrowed compatibility/query/tooling transports, but they do not replace relay-backed async truth for canonical control-plane workflows.",
       "Route-level REST compatibility gating is not part of the intended browser policy today; the empty route-level compatibility map is approved and the older audit statement is stale.",
       "All browser-visible payment surfaces should move to encrypted transport. Remaining browser REST payment reads are legacy drift to fix or remove rather than intended coexistence.",
@@ -250,7 +250,7 @@
       "title": "Sensitive browser flow stays on encrypted request/result transport",
       "observed_or_intended": "approved_intended_behavior",
       "steps": [
-        "Browser reads `browser_encrypted_request_relays`, `service_pubkey`, and `features.encrypted_nostr_requests` from system discovery.",
+        "Browser reads `browser_relays`, `service_pubkey`, and `features.encrypted_nostr_requests` from system discovery.",
         "Browser encrypts a `5980` request to the Bahia service pubkey and publishes only to the encrypted-request relay set.",
         "Browser ignores unrelated or spoofed results and resolves only a correlated encrypted `7980` terminal result from the Bahia service author.",
         "Sensitive domain data remains absent from public relay read-model traffic."
@@ -302,7 +302,7 @@
   ],
   "non_functional_requirements": [
     "Transport governance must preserve Bahia's Nostr-native event-driven semantics: subscribe and react, use EOSE for historical catch-up, and verify accepted publishes plus correlated results rather than polling for completion.",
-    "Public and encrypted browser relay sets must remain distinct security boundaries.",
+    "Public and shared Bahia browser relay sets must remain distinct security boundaries.",
     "Sensitive browser-visible data must never leak onto public sidecar/browser relays as plaintext or public read-model payloads.",
     "Legacy compatibility surfaces must be explicit and narrow; they must not silently re-become the canonical product contract through implementation drift.",
     "Cross-feature transport rules must remain stable enough that new encrypted or signer-first slices can inherit them instead of redefining them ad hoc."

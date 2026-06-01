@@ -7,7 +7,7 @@
       "title": "Encrypted notifications fail locally when discovery does not advertise encrypted request support",
       "type": "functional",
       "priority": "must",
-      "assertion": "When notification operations are invoked and current system discovery does not advertise both `nostr.service_pubkey` and at least one `nostr.browser_encrypted_request_relays` value, the notifications store rejects locally before publish and does not call `requestEncryptedResult`.",
+      "assertion": "When notification operations are invoked and current system discovery does not advertise both `nostr.service_pubkey` and at least one `nostr.browser_relays` value, the notifications store rejects locally before publish and does not call `requestEncryptedResult`.",
       "preconditions": [
         "The requester is using the browser notifications store.",
         "`encryptedRequestsAvailable(info)` returns false for current or lazily loaded Nostr discovery."
@@ -39,22 +39,22 @@
     },
     {
       "ac_id": "ECPN-AC-002",
-      "title": "Encrypted relay discovery excludes public browser relays",
+      "title": "Encrypted relay discovery uses the shared Bahia relay set with explicit capability gating",
       "type": "security",
       "priority": "must",
-      "assertion": "Encrypted notification transport derives relay URLs only from `nostr.browser_encrypted_request_relays` and must not treat `nostr.browser_relays` as eligible encrypted request/result relays.",
+      "assertion": "Encrypted notification transport derives relay URLs from `nostr.browser_relays`, but must become available only when discovery also advertises `nostr.service_pubkey` and `features.encrypted_nostr_requests`.",
       "preconditions": [
         "System discovery contains `nostr.service_pubkey`.",
-        "System discovery may contain both `browser_relays` and `browser_encrypted_request_relays`."
+        "System discovery may contain `browser_relays`, `service_pubkey`, and `features.encrypted_nostr_requests`."
       ],
       "steps": [
         "Resolve encrypted relay URLs from Nostr discovery.",
         "Build or execute an encrypted notification request."
       ],
-      "expected_result": "Only URLs advertised in `browser_encrypted_request_relays` are used for encrypted publish and result subscription.",
+      "expected_result": "Only URLs advertised in `browser_relays` are used for encrypted publish and result subscription, and encrypted transport stays unavailable unless the service pubkey and encrypted feature flag are present.",
       "negative_cases": [
-        "If a public relay URL from `browser_relays` is selected as an encrypted request relay, the criterion fails.",
-        "If encrypted availability becomes true with only `browser_relays` present, the criterion fails."
+        "If a relay URL outside `browser_relays` is selected for encrypted request/result transport, the criterion fails.",
+        "If encrypted availability becomes true with only `browser_relays` present and no service pubkey/feature flag, the criterion fails."
       ],
       "observability": {
         "logs": [],

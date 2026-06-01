@@ -56,7 +56,7 @@ Legacy privileged HTTP/NIP-98 paths remain compatibility-only and secondary.
 3. Confirm signer-first discovery and topology evidence:
    - `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` is captured for the release candidate
    - relay URLs are available either via explicit `--relay`, `BAHIA_NOSTR_RELAYS`, or `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` discovery (`nostr.browser_relays`, `nostr.sidecar_url`)
-   - if encrypted request/result web validation is in scope, verify `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` advertises `nostr.browser_encrypted_request_relays` and `features.encrypted_nostr_requests`
+   - if encrypted request/result web validation is in scope, verify `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` advertises `nostr.browser_relays` and `features.encrypted_nostr_requests`
    - if sidecar/web validation is in scope, verify `/relay` pathing and reachability
 
 4. Prepare signer/operator execution inputs:
@@ -174,6 +174,6 @@ If adoption or direct-runtime execution causes unexpected behavior:
 
 - HTTP privileged adoption/import/direct-runtime endpoints are no longer the primary rollout gate.
 - Bearer rejection (`401`) and any legacy NIP-98 execution checks are compatibility evidence only.
-- Canonical encrypted request/result terminology: `nostr.encrypted_request_relays`, `nostr.browser_encrypted_request_relays`, `features.encrypted_nostr_requests`.
+- Canonical encrypted request/result terminology: `nostr.relays`, `nostr.browser_relays`, `features.encrypted_nostr_requests`.
 - Encrypted request/result wire marker is `encrypted=bahia-encrypted-v1`.
 - If a release requirement still depends on the legacy HTTP operator path, record that dependency explicitly in the signoff evidence.
