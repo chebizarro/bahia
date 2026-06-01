@@ -12,7 +12,7 @@
     WarningIcon
   } from '$lib/icons/domain-icons.js';
   import { requestPaymentHistoryRecords } from '$lib/stores/payments.svelte.js';
-  import { services, environments, states, workers, driftedStates, events, loading, deploymentIntents } from '$lib/stores';
+  import { services, environments, states, workers, driftedStates, events, deploymentIntents, controlplaneConnection } from '$lib/stores';
   import { formatDashboardSats, normalizePaymentHistory, summarizeRecentSpend } from './dashboard-cost-summary.js';
   import { summarizeWorkerActivity } from './workers/list-utils.js';
 
@@ -155,6 +155,14 @@
 
   function pluralize(count, singular, plural = `${singular}s`) {
     return count === 1 ? singular : plural;
+  }
+
+  function isDashboardSyncing(status, bootstrapComplete) {
+    return !bootstrapComplete && ['discovering', 'connecting', 'syncing', 'bootstrapping'].includes(status);
+  }
+
+  function formatMetricValue(value, syncing) {
+    return syncing && Number(value) === 0 ? '...' : value;
   }
 
   function emptyCostSummary(workerCount = 0) {
@@ -555,17 +563,42 @@
   ]);
   let pendingCount = $derived(pendingDeployments.length);
   let workerActivity = $derived(summarizeWorkerActivity(workers));
+  let dashboardSyncing = $derived(
+    isDashboardSyncing(controlplaneConnection.status, controlplaneConnection.bootstrapComplete)
+  );
+  let dashboardHasSnapshotData = $derived(
+    services.length > 0 ||
+    environments.length > 0 ||
+    states.length > 0 ||
+    workers.length > 0 ||
+    events.length > 0 ||
+    deploymentIntents.length > 0
+  );
+  let dashboardSyncMessage = $derived.by(() => {
+    if (!dashboardSyncing) return '';
+    if (controlplaneConnection.status === 'discovering') return 'Discovering relays for the dashboard snapshot…';
+    if (controlplaneConnection.status === 'connecting') return 'Connecting to relays…';
+    return dashboardHasSnapshotData
+      ? 'Streaming relay snapshot… partial results are already live.'
+      : 'Streaming relay snapshot… results will appear as they arrive.';
+  });
+  let servicesCardValue = $derived(formatMetricValue(services.length, dashboardSyncing));
+  let environmentsCardValue = $derived(formatMetricValue(environments.length, dashboardSyncing));
   let workerCardValue = $derived(workerActivity.live);
   let workerCardSubtitle = $derived(
     workerActivity.catalog === 0
-      ? 'No workers yet'
+      ? (dashboardSyncing ? 'Waiting for worker ads…' : 'No workers yet')
       : `${workerActivity.recent} recent / ${workerActivity.catalog} catalog`
   );
+  let workerCardDisplayValue = $derived(formatMetricValue(workerCardValue, dashboardSyncing));
+  let driftedCardValue = $derived(formatMetricValue(driftedStates().length, dashboardSyncing));
   let pendingSubtitle = $derived(pendingError
     ? 'Unable to load'
     : pendingCount > 0
       ? 'Needs review'
-      : 'All clear');
+      : dashboardSyncing
+        ? 'Streaming approvals'
+        : 'All clear');
   let costSummaryValue = $derived(costSummaryLoading ? '...' : formatDashboardSats(costSummary.totalSats));
   let costSummarySubtitle = $derived(costSummaryError
     ? 'Unable to load payment history'
@@ -583,6 +616,13 @@
 
 <div class="dashboard">
   <h1>Dashboard</h1>
+
+  {#if dashboardSyncing}
+    <div class="dashboard-sync-banner" role="status" aria-live="polite">
+      <span class="dashboard-sync-spinner" aria-hidden="true"></span>
+      <span>{dashboardSyncMessage}</span>
+    </div>
+  {/if}
   
   <div class="quick-actions">
     <a href="/services" class="action-link">+ Create Service</a>
@@ -591,17 +631,17 @@
 
   <div class="stats">
     <a href="/services" class="card-link">
-      <Card title="Services" titleIcon={ServiceIcon} value={services.length} subtitle="Total registered">
+      <Card title="Services" titleIcon={ServiceIcon} value={servicesCardValue} subtitle={dashboardSyncing && services.length === 0 ? 'Waiting for relay snapshot' : 'Total registered'}>
         <span class="card-action">View services</span>
       </Card>
     </a>
     <a href="/environments" class="card-link">
-      <Card title="Environments" titleIcon={EnvironmentIcon} value={environments.length} subtitle="Configured">
+      <Card title="Environments" titleIcon={EnvironmentIcon} value={environmentsCardValue} subtitle={dashboardSyncing && environments.length === 0 ? 'Waiting for relay snapshot' : 'Configured'}>
         <span class="card-action">View environments</span>
       </Card>
     </a>
     <a href="/workers" class="card-link">
-      <Card title="Workers" titleIcon={StandardIcon} value={workerCardValue} subtitle={workerCardSubtitle}>
+      <Card title="Workers" titleIcon={StandardIcon} value={workerCardDisplayValue} subtitle={workerCardSubtitle}>
         <span class="card-action">View workers</span>
       </Card>
     </a>
@@ -609,8 +649,8 @@
       <Card 
         title="Drifted" 
         titleIcon={WarningIcon}
-        value={driftedStates().length} 
-        subtitle={driftedStates().length > 0 ? 'Review drifted rows' : 'All clear'}
+        value={driftedCardValue} 
+        subtitle={driftedStates().length > 0 ? 'Review drifted rows' : dashboardSyncing ? 'Waiting for state snapshot' : 'All clear'}
         status={driftedStates().length > 0 ? 'error' : 'success'}
       >
         <span class="card-action">Review states</span>
@@ -647,12 +687,21 @@
         Environment States
       </h2>
       <Table columns={stateColumns} data={states.slice(0, 10)} onRowClick={handleEnvironmentStatesRowClick} rowClickable={false} />
+      {#if dashboardSyncing}
+        <p class="section-streaming-hint">Snapshot still streaming from relays. Additional states will appear as they arrive.</p>
+      {/if}
+      {#if !dashboardSyncing && states.length === 0}
+        <p class="hint">No environment states have arrived from the relay-backed control plane yet.</p>
+      {/if}
     </section>
 
     <section>
       <h2>Recent Activity</h2>
       <Table columns={eventColumns} data={events.slice(0, 10)} onRowClick={handleRecentActivityRowClick} rowClickable={false} />
-      {#if events.length === 0}
+      {#if dashboardSyncing}
+        <p class="section-streaming-hint">Recent activity is loading live from the relay snapshot.</p>
+      {/if}
+      {#if !dashboardSyncing && events.length === 0}
         <p class="hint">Events will appear here in real-time from the relay-backed control plane</p>
       {/if}
     </section>
@@ -770,6 +819,27 @@
   .dashboard h1 {
     margin-bottom: 1rem;
   }
+  .dashboard-sync-banner {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin-bottom: 1rem;
+    padding: 0.75rem 1rem;
+    border: 1px solid color-mix(in srgb, var(--primary) 28%, var(--border-color));
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--primary) 10%, var(--card-bg));
+    color: var(--text-primary);
+    font-size: 0.9rem;
+  }
+  .dashboard-sync-spinner {
+    width: 0.9rem;
+    height: 0.9rem;
+    border: 2px solid color-mix(in srgb, var(--primary) 22%, transparent);
+    border-top-color: var(--primary);
+    border-radius: 999px;
+    animation: dashboard-spin 0.75s linear infinite;
+    flex-shrink: 0;
+  }
   .quick-actions {
     display: flex;
     gap: 0.75rem;
@@ -846,6 +916,11 @@
     font-size: 0.875rem;
     text-align: center;
     padding: 2rem;
+  }
+  .section-streaming-hint {
+    margin-top: 1rem;
+    color: var(--text-muted);
+    font-size: 0.875rem;
   }
   :global(.badge-success) {
     background: var(--success);
@@ -1016,5 +1091,10 @@
   :global(code) {
     font-family: 'SF Mono', Monaco, monospace;
     font-size: 0.8em;
+  }
+  @keyframes dashboard-spin {
+    to {
+      transform: rotate(360deg);
+    }
   }
 </style>
