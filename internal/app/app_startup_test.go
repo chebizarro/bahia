@@ -97,7 +97,6 @@ func startupTestConfig(mode Mode) *config.Config {
 	cfg.Mode = string(mode)
 	cfg.Nostr.PrivateKey = nostr.GeneratePrivateKey()
 	cfg.Nostr.Relays = nil
-	cfg.Nostr.EncryptedRequestRelays = nil
 	cfg.Loom.Relays = nil
 	cfg.Reconcile.Enabled = true
 	cfg.Server.Port = 0

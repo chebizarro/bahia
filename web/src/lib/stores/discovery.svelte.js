@@ -5,7 +5,6 @@ export const BOOTSTRAP_SCHEMA = 'bahia.bootstrap.v1';
 export const DISCOVERY_SCHEMA = 'bahia.system-discovery.v1';
 export const SYSTEM_DISCOVERY_DTAG = 'bahia-system-v1';
 export const BROWSER_RELAY_SET_DTAG = 'bahia-browser-v1';
-export const REQUEST_RELAY_SET_DTAG = 'bahia-requests-v1';
 export const SERVICE_RELAY_SET_DTAG = 'bahia-service-v1';
 const DISCOVERY_CACHE_KEY = 'bahia_system_discovery_cache_v1';
 const DISCOVERY_CACHE_TTL_MS = 15 * 60 * 1000;
@@ -76,7 +75,7 @@ export function normalizeDiscoveryEvents(events, trustedPubkeys) {
     if (![KINDS.BAHIA_SYSTEM_DISCOVERY, KINDS.NIP51_RELAY_SET].includes(event.kind)) return false;
     const d = getDTag(event);
     if (event.kind === KINDS.BAHIA_SYSTEM_DISCOVERY) return d === SYSTEM_DISCOVERY_DTAG;
-    return [BROWSER_RELAY_SET_DTAG, REQUEST_RELAY_SET_DTAG, SERVICE_RELAY_SET_DTAG].includes(d);
+    return [BROWSER_RELAY_SET_DTAG, SERVICE_RELAY_SET_DTAG].includes(d);
   }));
 
   const discoveryEvent = filtered
@@ -106,7 +105,6 @@ export function normalizeDiscoveryEvents(events, trustedPubkeys) {
     nostr: {
       browser_relays: browserRelays,
       sidecar_url: browserRelays[0] || '',
-      browser_encrypted_request_relays: relaySets[REQUEST_RELAY_SET_DTAG] || [],
       service_relays: relaySets[SERVICE_RELAY_SET_DTAG] || [],
       service_pubkey: discoveryEvent.pubkey,
       service_npub: '',

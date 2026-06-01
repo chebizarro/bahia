@@ -33,7 +33,6 @@ test.beforeEach(async ({ page }) => {
     systemInfo: {
       nostr: {
         browser_relays: [ENCRYPTED_RELAY],
-        browser_encrypted_request_relays: [ENCRYPTED_RELAY],
         service_relays: [ENCRYPTED_RELAY],
         service_pubkey: 'b'.repeat(64)
       },

@@ -111,19 +111,11 @@ func New(cfg *config.Config) (*App, error) {
 	controlPlanePool := nostrAdapter.NewRelayPool(controlPlaneRelays, logger, nostrAdapter.WithPrivateKey(cfg.Nostr.PrivateKey))
 	controlPlanePool.Connect(ctx)
 
-	encryptedRequestRelays := encryptedRequestRelayURLs(cfg.Nostr)
-	var encryptedRequestPool *nostrAdapter.RelayPool
-	if len(encryptedRequestRelays) > 0 {
-		encryptedRequestPool = nostrAdapter.NewRelayPool(encryptedRequestRelays, logger, nostrAdapter.WithPrivateKey(cfg.Nostr.PrivateKey))
-		encryptedRequestPool.Connect(ctx)
-	}
-
 	relayURLs := interopRelayURLs(cfg, controlPlaneRelays)
 	relayPool := nostrAdapter.NewRelayPool(relayURLs, logger, nostrAdapter.WithPrivateKey(cfg.Nostr.PrivateKey))
 	relayPool.Connect(ctx)
 	logger.Info("nostr relay topology initialized",
 		zap.Strings("control_plane_relays", controlPlaneRelays),
-		zap.Strings("encrypted_request_relay_urls", encryptedRequestRelays),
 		zap.Strings("interop_relays", relayURLs),
 		zap.Bool("sidecar_enabled", cfg.Nostr.Sidecar.Enabled),
 		zap.Bool("mirror_external", cfg.Nostr.Sidecar.MirrorExternal),
@@ -800,9 +792,9 @@ func New(cfg *config.Config) (*App, error) {
 	bgManager.RegisterWithOptions(nostrSub, RunnerTier(Tier1))
 
 	// Encrypted request/result event runtime for sensitive browser route migrations.
-	if len(encryptedRequestRelays) > 0 && encryptedRequestPool != nil && controlPlaneSigner != nil && cfg.Nostr.PrivateKey != "" {
-		responder := controlplane.NewEncryptedResponder(encryptedRequestPool, controlPlaneSigner, cfg.Nostr.PrivateKey, logger)
-		encryptedRequestTransport := controlplane.NewEncryptedRequestTransport(encryptedRequestPool, responder, cfg.Nostr.AuthorizedPubkeys, logger)
+	if len(controlPlaneRelays) > 0 && controlPlaneSigner != nil && cfg.Nostr.PrivateKey != "" {
+		responder := controlplane.NewEncryptedResponder(controlPlanePool, controlPlaneSigner, cfg.Nostr.PrivateKey, logger)
+		encryptedRequestTransport := controlplane.NewEncryptedRequestTransport(controlPlanePool, responder, cfg.Nostr.AuthorizedPubkeys, logger)
 		controlplane.NewEncryptedDomainHandlers(controlplane.EncryptedDomainHandlersConfig{
 			Payments:              paymentSvc,
 			Orgs:                  orgRepo,
@@ -827,7 +819,7 @@ func New(cfg *config.Config) (*App, error) {
 		}).Register(encryptedRequestTransport)
 		controlplane.RegisterNotificationEncryptedHandlers(encryptedRequestTransport, notifRepo, notifDispatcher)
 		bgManager.RegisterWithOptions(&encryptedRequestTransportRunner{transport: encryptedRequestTransport}, RunnerTier(Tier2))
-		logger.Info("encrypted request/result event runtime registered", zap.Strings("relay_urls_for_encrypted_nostr_requests", encryptedRequestRelays))
+		logger.Info("encrypted request/result event runtime registered", zap.Strings("relay_urls_for_encrypted_nostr_requests", controlPlaneRelays))
 	}
 
 	// Nostr control plane reactor for event-driven deployment operations.
@@ -1826,10 +1818,6 @@ func controlPlaneRelayURLs(cfg config.NostrConfig) []string {
 	return append([]string(nil), cfg.Relays...)
 }
 
-func encryptedRequestRelayURLs(cfg config.NostrConfig) []string {
-	return append([]string(nil), cfg.EncryptedRequestRelays...)
-}
-
 func interopRelayURLs(cfg *config.Config, controlPlaneRelays []string) []string {
 	var relays []string
 	if cfg.Nostr.Sidecar.Enabled && cfg.Nostr.Sidecar.MirrorExternal {
@@ -1843,9 +1831,6 @@ func interopRelayURLs(cfg *config.Config, controlPlaneRelays []string) []string 
 		for _, r := range cfg.Nostr.Relays {
 			relays = appendUniqueRelay(relays, r)
 		}
-	}
-	for _, r := range cfg.Nostr.EncryptedRequestRelays {
-		relays = appendUniqueRelay(relays, r)
 	}
 	for _, r := range cfg.Loom.Relays {
 		relays = appendUniqueRelay(relays, r)

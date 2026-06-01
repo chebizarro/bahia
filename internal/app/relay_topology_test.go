@@ -24,13 +24,12 @@ func TestControlPlaneRelayURLsPreferSidecarBackend(t *testing.T) {
 func TestInteropRelayURLsMirrorExternalUsesSidecarBoundary(t *testing.T) {
 	cfg := config.Defaults()
 	cfg.Nostr.Relays = []string{"wss://upstream.example"}
-	cfg.Nostr.EncryptedRequestRelays = []string{"wss://encrypted.example"}
 	cfg.Loom.Relays = []string{"wss://loom.example"}
 	cfg.Nostr.Sidecar.Enabled = true
 	cfg.Nostr.Sidecar.MirrorExternal = true
 
 	got := interopRelayURLs(cfg, []string{"ws://relay:3334"})
-	want := []string{"ws://relay:3334", "wss://encrypted.example", "wss://loom.example"}
+	want := []string{"ws://relay:3334", "wss://loom.example"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("interopRelayURLs() = %v, want %v", got, want)
 	}
@@ -39,13 +38,12 @@ func TestInteropRelayURLsMirrorExternalUsesSidecarBoundary(t *testing.T) {
 func TestInteropRelayURLsWithoutMirrorKeepsUpstreamRelays(t *testing.T) {
 	cfg := config.Defaults()
 	cfg.Nostr.Relays = []string{"wss://upstream.example"}
-	cfg.Nostr.EncryptedRequestRelays = []string{"wss://encrypted.example"}
 	cfg.Loom.Relays = []string{"wss://loom.example"}
 	cfg.Nostr.Sidecar.Enabled = true
 	cfg.Nostr.Sidecar.MirrorExternal = false
 
 	got := interopRelayURLs(cfg, []string{"ws://relay:3334"})
-	want := []string{"wss://upstream.example", "wss://encrypted.example", "wss://loom.example"}
+	want := []string{"wss://upstream.example", "wss://loom.example"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("interopRelayURLs() = %v, want %v", got, want)
 	}

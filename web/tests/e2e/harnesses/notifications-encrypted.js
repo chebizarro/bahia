@@ -10,8 +10,7 @@ export function createEncryptedNotificationsSystemInfo({
 } = {}) {
   return {
     nostr: {
-      browser_relays: [publicRelay],
-      browser_encrypted_request_relays: [encryptedRelay],
+      browser_relays: [encryptedRelay || publicRelay],
       service_pubkey: servicePubkey
     },
     features: {

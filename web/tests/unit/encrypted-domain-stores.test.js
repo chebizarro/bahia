@@ -42,7 +42,7 @@ describe('encrypted payments/orgs stores', () => {
     encryptedRequests.encryptedRequestsAvailable.mockReturnValue(true);
     systemStore.currentSystemInfo.mockReturnValue({
       nostr: {
-        browser_encrypted_request_relays: ['wss://encrypted.test.local'],
+        browser_relays: ['wss://encrypted.test.local'],
         service_pubkey: 'b'.repeat(64)
       }
     });
@@ -52,7 +52,7 @@ describe('encrypted payments/orgs stores', () => {
   it('waits for auth and system readiness before requesting encrypted payment history', async () => {
     const discoveredInfo = {
       nostr: {
-        browser_encrypted_request_relays: ['wss://encrypted.test.local'],
+        browser_relays: ['wss://encrypted.test.local'],
         service_pubkey: 'b'.repeat(64)
       }
     };
@@ -165,7 +165,7 @@ describe('encrypted payments/orgs stores', () => {
     const discoveredInfo = {
       features: { encrypted_nostr_requests: true },
       nostr: {
-        browser_encrypted_request_relays: ['wss://encrypted.test.local'],
+        browser_relays: ['wss://encrypted.test.local'],
         service_pubkey: 'b'.repeat(64)
       }
     };

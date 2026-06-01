@@ -405,12 +405,10 @@ func TestLoadNestedRuntimeConfigFromYAML(t *testing.T) {
 
 func TestLoadRelaySidecarConfigFromYAML(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
-	content := []byte(`nostr:
+content := []byte(`nostr:
   private_key: ""
   browser_relays:
     - "ws://localhost:3000/relay"
-  browser_encrypted_request_relays:
-    - "wss://request-browser.example"
   sidecar:
     enabled: true
     listen_addr: "127.0.0.1:3334"
@@ -446,19 +444,16 @@ func TestLoadRelaySidecarConfigFromYAML(t *testing.T) {
 	if got := cfg.Nostr.BrowserRelays; len(got) != 1 || got[0] != "ws://localhost:3000/relay" {
 		t.Fatalf("BrowserRelays = %#v", got)
 	}
-	if got := cfg.Nostr.BrowserEncryptedRequestRelays; len(got) != 1 || got[0] != "wss://request-browser.example" {
-		t.Fatalf("BrowserEncryptedRequestRelays = %#v", got)
-	}
 }
 
-func TestEncryptedRequestRelaysFromYAML(t *testing.T) {
+func TestNormalizeNostrRelaysFromYAML(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	content := []byte(`nostr:
-  encrypted_request_relays:
-    - " wss://request-backend.example "
-    - "wss://request-backend.example"
-  browser_encrypted_request_relays:
-    - "wss://request-browser.example"
+  relays:
+    - " wss://relay-backend.example "
+    - "wss://relay-backend.example"
+  browser_relays:
+    - "wss://relay-browser.example"
     - ""
 `)
 	if err := os.WriteFile(path, content, 0o644); err != nil {
@@ -468,8 +463,8 @@ func TestEncryptedRequestRelaysFromYAML(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error: %v", err)
 	}
-	assertStringSlice(t, cfg.Nostr.EncryptedRequestRelays, []string{"wss://request-backend.example"})
-	assertStringSlice(t, cfg.Nostr.BrowserEncryptedRequestRelays, []string{"wss://request-browser.example"})
+	assertStringSlice(t, cfg.Nostr.Relays, []string{"wss://relay-backend.example"})
+	assertStringSlice(t, cfg.Nostr.BrowserRelays, []string{"wss://relay-browser.example"})
 }
 
 func TestLoadRejectsRemovedEncryptedRequestKeys(t *testing.T) {
@@ -485,40 +480,66 @@ func TestLoadRejectsRemovedEncryptedRequestKeys(t *testing.T) {
 			name:        "private relays yaml",
 			yaml:        "nostr:\n  private_relays:\n    - wss://legacy-backend.example\n",
 			want:        "nostr.private_relays has been removed",
-			replacement: "use nostr.encrypted_request_relays",
+			replacement: "use nostr.relays",
 		},
 		{
 			name:        "private browser relays yaml",
 			yaml:        "nostr:\n  private_browser_relays:\n    - wss://legacy-browser.example\n",
 			want:        "nostr.private_browser_relays has been removed",
-			replacement: "use nostr.browser_encrypted_request_relays",
+			replacement: "use nostr.browser_relays",
+		},
+		{
+			name:        "encrypted request relays yaml",
+			yaml:        "nostr:\n  encrypted_request_relays:\n    - wss://legacy-encrypted.example\n",
+			want:        "nostr.encrypted_request_relays has been removed",
+			replacement: "use nostr.relays",
+		},
+		{
+			name:        "browser encrypted request relays yaml",
+			yaml:        "nostr:\n  browser_encrypted_request_relays:\n    - wss://legacy-browser-encrypted.example\n",
+			want:        "nostr.browser_encrypted_request_relays has been removed",
+			replacement: "use nostr.browser_relays",
 		},
 		{
 			name:        "private transport feature yaml",
 			yaml:        "features:\n  private_nostr_transport: true\n",
 			want:        "features.private_nostr_transport has been removed",
-			replacement: "use the encrypted_nostr_requests discovery feature; configure nostr.encrypted_request_relays, nostr.browser_encrypted_request_relays, and nostr.private_key to enable it",
+			replacement: "use the encrypted_nostr_requests discovery feature; configure nostr.private_key and Bahia browser relay discovery to enable it",
 		},
 		{
 			name:        "private relays env",
 			envKey:      "BAHIA_NOSTR_PRIVATE_RELAYS",
 			envValue:    "wss://legacy-backend.example",
 			want:        "nostr.private_relays has been removed",
-			replacement: "use nostr.encrypted_request_relays",
+			replacement: "use nostr.relays",
 		},
 		{
 			name:        "private browser relays env",
 			envKey:      "BAHIA_NOSTR_PRIVATE_BROWSER_RELAYS",
 			envValue:    "wss://legacy-browser.example",
 			want:        "nostr.private_browser_relays has been removed",
-			replacement: "use nostr.browser_encrypted_request_relays",
+			replacement: "use nostr.browser_relays",
+		},
+		{
+			name:        "encrypted request relays env",
+			envKey:      "BAHIA_NOSTR_ENCRYPTED_REQUEST_RELAYS",
+			envValue:    "wss://legacy-encrypted.example",
+			want:        "nostr.encrypted_request_relays has been removed",
+			replacement: "use nostr.relays",
+		},
+		{
+			name:        "browser encrypted request relays env",
+			envKey:      "BAHIA_NOSTR_BROWSER_ENCRYPTED_REQUEST_RELAYS",
+			envValue:    "wss://legacy-browser-encrypted.example",
+			want:        "nostr.browser_encrypted_request_relays has been removed",
+			replacement: "use nostr.browser_relays",
 		},
 		{
 			name:        "private transport feature env",
 			envKey:      "BAHIA_FEATURES_PRIVATE_NOSTR_TRANSPORT",
 			envValue:    "true",
 			want:        "features.private_nostr_transport has been removed",
-			replacement: "use the encrypted_nostr_requests discovery feature; configure nostr.encrypted_request_relays, nostr.browser_encrypted_request_relays, and nostr.private_key to enable it",
+			replacement: "use the encrypted_nostr_requests discovery feature; configure nostr.private_key and Bahia browser relay discovery to enable it",
 		},
 	}
 

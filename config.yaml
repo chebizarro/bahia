@@ -35,16 +35,10 @@ nostr:
   relays:
     - "wss://relay.damus.io"
     - "wss://nos.lol"
-  # Ordinary backend relay endpoints used for encrypted request/result Nostr
-  # events. A separate relay set is optional; operators may reuse public relays.
-  encrypted_request_relays: []
   # Browser-safe relay endpoints advertised by Nostr discovery events (kind 31974 + NIP-51 kind 30002) only when
   # nostr.sidecar.enabled=true. Use the nginx /relay proxy for the web app.
   browser_relays:
     - "ws://localhost:3000/relay"
-  # Browser-safe relay URLs advertised for encrypted request/result Nostr
-  # events.
-  browser_encrypted_request_relays: []
   publish_enabled: false
   sidecar:
     enabled: false

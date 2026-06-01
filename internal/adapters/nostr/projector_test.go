@@ -440,8 +440,6 @@ func TestProjectorPublishesSystemDiscoverySnapshot(t *testing.T) {
 	cfg.Nostr.Sidecar.Enabled = true
 	cfg.Nostr.Sidecar.PublicURL = "ws://localhost:3000/relay"
 	cfg.Nostr.BrowserRelays = []string{"ws://localhost:3000/relay"}
-	cfg.Nostr.BrowserEncryptedRequestRelays = []string{"wss://requests.example"}
-	cfg.Nostr.EncryptedRequestRelays = []string{"wss://requests-backend.example"}
 
 	sink := &captureProjectionPublisher{}
 	projector := NewProjector(cfg.Nostr, newFakeProjectionSource(), sink, nil, zap.NewNop(), WithSystemDiscoveryConfig(cfg, true))
@@ -454,8 +452,6 @@ func TestProjectorPublishesSystemDiscoverySnapshot(t *testing.T) {
 	assertJSONField(t, discovery.Content, "schema", "bahia.system-discovery.v1")
 	browserSet := assertOneRelaySet(t, sink, "bahia-browser-v1")
 	assertTag(t, browserSet, "relay", "ws://localhost:3000/relay")
-	requestSet := assertOneRelaySet(t, sink, "bahia-requests-v1")
-	assertTag(t, requestSet, "relay", "wss://requests.example")
 	serviceSet := assertOneRelaySet(t, sink, "bahia-service-v1")
 	assertTag(t, serviceSet, "relay", "ws://localhost:3000/relay")
 }

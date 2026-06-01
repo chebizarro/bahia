@@ -55,6 +55,11 @@ func (p *policy) acceptEvent(ctx context.Context, event nostr.Event) (bool, stri
 	}
 
 	switch {
+	case event.Kind == nostr.Kind(kinds.EncryptedRequest):
+		if _, ok := p.authorized[event.PubKey]; ok {
+			return false, ""
+		}
+		return true, "restricted: encrypted request kind requires an authorized operator pubkey"
 	case isRequestKind(event.Kind):
 		if _, ok := p.authorized[event.PubKey]; ok {
 			return false, ""

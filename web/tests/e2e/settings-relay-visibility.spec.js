@@ -9,7 +9,6 @@ const SERVICE_RELAYS = ['ws://service-read.test.local', 'wss://service-write.exa
 const systemInfo = {
   nostr: {
     browser_relays: [BROWSER_RELAY],
-    browser_encrypted_request_relays: [ENCRYPTED_RELAY],
     service_relays: SERVICE_RELAYS,
     service_pubkey: SERVICE_PUBKEY,
     service_npub: 'npub1serviceexample',
@@ -35,6 +34,5 @@ test.describe('Settings relay visibility', () => {
     await expect(serverConfig.getByText('Service Relay List (NIP-51)')).toBeVisible();
     await expect(serverConfig.getByText(SERVICE_RELAYS.join(', '))).toBeVisible();
     await expect(serverConfig).not.toContainText(BROWSER_RELAY);
-    await expect(serverConfig).not.toContainText(ENCRYPTED_RELAY);
   });
 });

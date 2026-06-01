@@ -252,13 +252,7 @@ type LoomConfig struct {
 type NostrConfig struct {
 	PrivateKey string   `koanf:"private_key"`
 	Relays     []string `koanf:"relays"`
-	// EncryptedRequestRelays are ordinary backend relay URLs used for encrypted
-	// request/result Nostr events.
-	EncryptedRequestRelays []string `koanf:"encrypted_request_relays"`
 	BrowserRelays          []string `koanf:"browser_relays"`
-	// BrowserEncryptedRequestRelays are browser-safe relay URLs advertised for
-	// encrypted request/result Nostr events.
-	BrowserEncryptedRequestRelays []string `koanf:"browser_encrypted_request_relays"`
 
 	// PrivateRelays and PrivateBrowserRelays are internal mirrors for runtime
 	// callers that have not moved to the canonical field names yet. They are not
@@ -754,9 +748,11 @@ func rejectRemovedEncryptedRequestKeys(k *koanf.Koanf) error {
 		key      string
 		guidance string
 	}{
-		{"nostr.private_relays", "use nostr.encrypted_request_relays"},
-		{"nostr.private_browser_relays", "use nostr.browser_encrypted_request_relays"},
-		{"features.private_nostr_transport", "use the encrypted_nostr_requests discovery feature; configure nostr.encrypted_request_relays, nostr.browser_encrypted_request_relays, and nostr.private_key to enable it"},
+		{"nostr.private_relays", "use nostr.relays"},
+		{"nostr.private_browser_relays", "use nostr.browser_relays"},
+		{"nostr.encrypted_request_relays", "encrypted request/result traffic now uses the standard Bahia relay set; use nostr.relays"},
+		{"nostr.browser_encrypted_request_relays", "encrypted browser traffic now uses the standard Bahia browser relay set; use nostr.browser_relays"},
+		{"features.private_nostr_transport", "use the encrypted_nostr_requests discovery feature; configure nostr.private_key and Bahia browser relay discovery to enable it"},
 	}
 	for _, item := range removed {
 		if k.Exists(item.key) {
@@ -858,7 +854,7 @@ func (c *Config) validate() error {
 	if err := c.validateRelaySidecar(); err != nil {
 		return err
 	}
-	c.normalizeEncryptedRequestRelays()
+	c.normalizeNostrRelays()
 
 	nostrAuthorized, err := normalizePubkeyList(c.Nostr.AuthorizedPubkeys)
 	if err != nil {
@@ -903,11 +899,11 @@ func isLocalQdrantURL(parsed *url.URL) bool {
 	return host == "localhost" || host == "127.0.0.1" || host == "::1"
 }
 
-func (c *Config) normalizeEncryptedRequestRelays() {
-	c.Nostr.EncryptedRequestRelays = normalizeRelayList(c.Nostr.EncryptedRequestRelays)
-	c.Nostr.BrowserEncryptedRequestRelays = normalizeRelayList(c.Nostr.BrowserEncryptedRequestRelays)
-	c.Nostr.PrivateRelays = cloneStrings(c.Nostr.EncryptedRequestRelays)
-	c.Nostr.PrivateBrowserRelays = cloneStrings(c.Nostr.BrowserEncryptedRequestRelays)
+func (c *Config) normalizeNostrRelays() {
+	c.Nostr.Relays = normalizeRelayList(c.Nostr.Relays)
+	c.Nostr.BrowserRelays = normalizeRelayList(c.Nostr.BrowserRelays)
+	c.Nostr.PrivateRelays = cloneStrings(c.Nostr.Relays)
+	c.Nostr.PrivateBrowserRelays = cloneStrings(c.Nostr.BrowserRelays)
 }
 
 func normalizeRelayList(values []string) []string {

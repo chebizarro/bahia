@@ -251,7 +251,6 @@ function dashboardNostrEvents({ services = mockServices, environments = mockEnvi
 const relaySystemInfo = {
   nostr: {
     browser_relays: ['ws://relay.test.local'],
-    browser_encrypted_request_relays: [ENCRYPTED_RELAY],
     service_pubkey: SERVICE_PUBKEY
   },
   features: { relay_sidecar: true, relay_read_models: true, encrypted_nostr_requests: true, legacy_sse: false }

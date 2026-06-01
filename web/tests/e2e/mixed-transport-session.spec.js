@@ -15,7 +15,6 @@ const PUBLIC_RELAY = 'ws://relay.test.local';
 const systemInfo = {
   nostr: {
     browser_relays: [PUBLIC_RELAY],
-    browser_encrypted_request_relays: [ENCRYPTED_RELAY],
     service_relays: [PUBLIC_RELAY],
     service_pubkey: SERVICE_PUBKEY
   },
@@ -42,7 +41,7 @@ const initialChannels = [
 ];
 
 test.describe('Mixed public plus encrypted browser session transport', () => {
-  test('keeps public signer-first and encrypted notification journeys on separate relay sets', async ({ page }) => {
+  test('keeps public signer-first and encrypted notification journeys on the shared Bahia relay set', async ({ page }) => {
     await installE2EMocks(page, { systemInfo });
     await installPublicServiceDeploymentHarness(page, {
       publicRelay: PUBLIC_RELAY,

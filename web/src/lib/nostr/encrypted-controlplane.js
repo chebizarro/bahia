@@ -60,7 +60,7 @@ function openRelayUrls(client) {
 }
 
 export function encryptedRelayUrlsFromSystemInfo(systemInfo = currentSystemInfo()) {
-  return normalizeRelays(systemInfo?.nostr?.browser_encrypted_request_relays);
+  return normalizeRelays(systemInfo?.nostr?.browser_relays);
 }
 
 export function servicePubkeyFromSystemInfo(systemInfo = currentSystemInfo()) {
@@ -78,9 +78,8 @@ export class EncryptedControlplaneTransport {
     this.relays = normalizeRelays(relays);
     this.servicePubkey = servicePubkey || '';
 
-    // Encrypted requests are a separate relay plane. Use an isolated client by
-    // default so sensitive requests cannot publish on already-open public sockets.
-    // Passing an explicit client is reserved for tests / edge-cases.
+    // Use an isolated client by default so request/result flows do not interfere
+    // with the general dashboard subscription lifecycle.
     this.client = client || createNostrPoolClient({ relays: this.relays });
     this.ownClient = !client;
     this.connected = false;

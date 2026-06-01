@@ -111,7 +111,7 @@ const systemInfo = createPublicSystemInfo({
   servicePubkey: SERVICE_PUBKEY,
   extraFeatures: { encrypted_nostr_requests: true }
 });
-systemInfo.nostr.browser_encrypted_request_relays = [ENCRYPTED_RELAY];
+systemInfo.nostr.browser_relays = [ENCRYPTED_RELAY];
 
 async function installEncryptedRunLogHarness(page) {
   await page.addInitScript(({ servicePubkey, encryptedRelay }) => {

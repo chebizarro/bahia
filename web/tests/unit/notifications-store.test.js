@@ -7,10 +7,10 @@ const encryptedRequestsMock = vi.hoisted(() => ({
 
 const systemMock = vi.hoisted(() => ({
   currentSystemInfo: vi.fn(() => ({
-    nostr: { service_pubkey: 'b'.repeat(64), browser_encrypted_request_relays: ['wss://requests.example'] }
+    nostr: { service_pubkey: 'b'.repeat(64), browser_relays: ['wss://requests.example'] }
   })),
   loadSystemInfo: vi.fn(async () => ({
-    nostr: { service_pubkey: 'b'.repeat(64), browser_encrypted_request_relays: ['wss://requests.example'] }
+    nostr: { service_pubkey: 'b'.repeat(64), browser_relays: ['wss://requests.example'] }
   }))
 }));
 
@@ -27,7 +27,7 @@ describe('notifications encrypted store', () => {
     vi.clearAllMocks();
     encryptedRequestsMock.encryptedRequestsAvailable.mockReturnValue(true);
     systemMock.currentSystemInfo.mockReturnValue({
-      nostr: { service_pubkey: 'b'.repeat(64), browser_encrypted_request_relays: ['wss://requests.example'] }
+      nostr: { service_pubkey: 'b'.repeat(64), browser_relays: ['wss://requests.example'] }
     });
     store = await import('../../src/lib/stores/notifications.svelte.js');
     store.resetNotificationStore();

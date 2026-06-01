@@ -20,7 +20,6 @@ const systemMock = vi.hoisted(() => ({
     },
     nostr: {
       service_pubkey: 'b'.repeat(64),
-      browser_encrypted_request_relays: ['wss://requests.example'],
       browser_relays: ['wss://relay.example']
     }
   }))
@@ -56,7 +55,6 @@ describe('encrypted controlplane transport', () => {
       },
       nostr: {
         service_pubkey: 'b'.repeat(64),
-        browser_encrypted_request_relays: ['wss://requests.example'],
         browser_relays: ['wss://relay.example']
       }
     });
@@ -65,19 +63,18 @@ describe('encrypted controlplane transport', () => {
   });
 
   it('uses the advertised encrypted request relays when the feature is enabled', () => {
-    expect(module.encryptedRelayUrlsFromSystemInfo()).toEqual(['wss://requests.example']);
+    expect(module.encryptedRelayUrlsFromSystemInfo()).toEqual(['wss://relay.example']);
     expect(module.encryptedRequestsAvailable()).toBe(true);
   });
 
-  it('returns configured encrypted request relays', () => {
+  it('returns configured Bahia browser relays for encrypted requests', () => {
     expect(module.encryptedRelayUrlsFromSystemInfo({
       features: {
         encrypted_nostr_requests: true
       },
       nostr: {
         service_pubkey: 'b'.repeat(64),
-        browser_encrypted_request_relays: ['wss://my-relay.example'],
-        browser_relays: ['wss://public.example']
+        browser_relays: ['wss://my-relay.example']
       }
     })).toEqual(['wss://my-relay.example']);
     expect(module.encryptedRequestsAvailable({
@@ -86,8 +83,7 @@ describe('encrypted controlplane transport', () => {
       },
       nostr: {
         service_pubkey: 'b'.repeat(64),
-        browser_encrypted_request_relays: ['wss://my-relay.example'],
-        browser_relays: ['wss://public.example']
+        browser_relays: ['wss://my-relay.example']
       }
     })).toBe(true);
   });
@@ -104,7 +100,7 @@ describe('encrypted controlplane transport', () => {
     };
 
     expect(module.encryptedRequestsAvailable(publicOnly)).toBe(false);
-    expect(module.encryptedRelayUrlsFromSystemInfo(publicOnly)).toEqual([]);
+    expect(module.encryptedRelayUrlsFromSystemInfo(publicOnly)).toEqual(['wss://relay.example']);
   });
 
   it('requires service_pubkey for encrypted capability', () => {
@@ -113,22 +109,22 @@ describe('encrypted controlplane transport', () => {
         encrypted_nostr_requests: true
       },
       nostr: {
-        browser_encrypted_request_relays: ['wss://requests.example']
+        browser_relays: ['wss://relay.example']
       }
     };
 
     expect(module.encryptedRequestsAvailable(noServicePubkey)).toBe(false);
-    expect(module.encryptedRelayUrlsFromSystemInfo(noServicePubkey)).toEqual(['wss://requests.example']);
+    expect(module.encryptedRelayUrlsFromSystemInfo(noServicePubkey)).toEqual(['wss://relay.example']);
     expect(module.encryptedRequestsAvailable({
       features: {
         encrypted_nostr_requests: true
       },
       nostr: {
         service_pubkey: 'b'.repeat(64),
-        browser_encrypted_request_relays: ['wss://requests.example']
+        browser_relays: ['wss://relay.example']
       }
     })).toBe(true);
-    expect(module.encryptedRelayUrlsFromSystemInfo(canonicalDiscoveryFixture)).toEqual([]);
+    expect(module.encryptedRelayUrlsFromSystemInfo(canonicalDiscoveryFixture)).toEqual(['wss://public.example']);
   });
 
   it('builds encrypted request events without targeting public browser relays', async () => {
@@ -160,10 +156,9 @@ describe('encrypted controlplane transport', () => {
       },
       nostr: {
         service_pubkey: 'b'.repeat(64),
-        browser_encrypted_request_relays: ['wss://requests.example'],
         browser_relays: ['wss://relay.example']
       }
-    })).toEqual(['wss://requests.example']);
+    })).toEqual(['wss://relay.example']);
   });
 
   it('publishes through the encrypted-request client and requires an accepted OK', async () => {

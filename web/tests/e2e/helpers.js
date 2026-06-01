@@ -62,18 +62,6 @@ export async function installE2EMocks(
         sig: 'e2e'
       }
     ];
-    const requestRelays = systemInfo?.nostr?.browser_encrypted_request_relays || [];
-    if (requestRelays.length > 0) {
-      discoveryEvents.push({
-        id: 'e2e-request-relays',
-        kind: 30002,
-        pubkey: servicePubkey,
-        created_at: 1,
-        tags: [['d', 'bahia-requests-v1'], ...requestRelays.map((relay) => ['relay', relay])],
-        content: '',
-        sig: 'e2e'
-      });
-    }
     const serviceRelays = systemInfo?.nostr?.service_relays || browserRelays;
     discoveryEvents.push({
       id: 'e2e-service-relays',

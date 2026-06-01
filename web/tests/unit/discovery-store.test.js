@@ -73,8 +73,7 @@ describe('Nostr system discovery store', () => {
     nostrMock.connect.mockResolvedValue({ connected: 1, total: 1, failed: 0, connecting: 0, relays: [{ url: 'ws://localhost:10547/relay', status: 'connected' }] });
     nostrMock.queryUntilEose.mockResolvedValue([
       systemDiscovery(),
-      relaySet('bahia-browser-v1', ['http://localhost:10547/relay', 'wss://public.example']),
-      relaySet('bahia-requests-v1', ['wss://requests.example'])
+      relaySet('bahia-browser-v1', ['http://localhost:10547/relay', 'wss://public.example'])
     ]);
     store = await import('../../src/lib/stores/discovery.svelte.js');
     store.resetDiscoveryStore();
@@ -91,7 +90,6 @@ describe('Nostr system discovery store', () => {
     expect(info.features.relay_read_models).toBe(true);
     expect(info.nostr.service_pubkey).toBe(trustedPubkey);
     expect(info.nostr.browser_relays).toEqual(['ws://localhost:10547/relay', 'wss://public.example']);
-    expect(info.nostr.browser_encrypted_request_relays).toEqual(['wss://requests.example']);
     expect(info._discovery.relay_sets['bahia-browser-v1']).toHaveLength(2);
   });
 

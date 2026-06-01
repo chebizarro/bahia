@@ -1913,8 +1913,7 @@ func (p *Projector) publishSystemDiscovery(ctx context.Context) error {
 	if len(browserRelays) == 0 {
 		return nil
 	}
-	requestRelays := append([]string(nil), cfg.Nostr.BrowserEncryptedRequestRelays...)
-	encryptedRequestsEnabled := len(requestRelays) > 0 && len(cfg.Nostr.EncryptedRequestRelays) > 0 && cfg.Nostr.PrivateKey != ""
+	encryptedRequestsEnabled := len(browserRelays) > 0 && cfg.Nostr.PrivateKey != ""
 	payload := map[string]any{
 		"schema":        "bahia.system-discovery.v1",
 		"registries":    discoveryRegistries(cfg),
@@ -1957,11 +1956,6 @@ func (p *Projector) publishSystemDiscovery(ctx context.Context) error {
 	}
 	if err := p.publishRelaySet(ctx, "bahia-browser-v1", browserRelays); err != nil {
 		return err
-	}
-	if len(requestRelays) > 0 {
-		if err := p.publishRelaySet(ctx, "bahia-requests-v1", requestRelays); err != nil {
-			return err
-		}
 	}
 	return p.publishRelaySet(ctx, "bahia-service-v1", browserRelays)
 }
