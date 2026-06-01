@@ -8,14 +8,37 @@
 // Browser detection that works in both SvelteKit and test environments
 const isBrowser = typeof window !== 'undefined' && typeof document !== 'undefined';
 
-// Lazy import to avoid issues in test environments
-let _eagerRelayConnect = null;
-async function getEagerRelayConnect() {
-  if (!_eagerRelayConnect) {
-    const module = await import('$lib/stores/system.svelte.js');
-    _eagerRelayConnect = module.eagerRelayConnect;
+// Lazy imports avoid pulling browser-only stores into non-browser tests.
+let _systemModule = null;
+let _nostrModule = null;
+
+async function getSystemModule() {
+  if (!_systemModule) {
+    _systemModule = await import('$lib/stores/system.svelte.js');
   }
-  return _eagerRelayConnect;
+  return _systemModule;
+}
+
+async function getNostrModule() {
+  if (!_nostrModule) {
+    _nostrModule = await import('$lib/nostr/client.js');
+  }
+  return _nostrModule;
+}
+
+function normalizeRelayUrl(url) {
+  if (!url || typeof url !== 'string') return '';
+  if (url.startsWith('ws://') || url.startsWith('wss://')) return url;
+  if (url.startsWith('https://')) return `wss://${url.slice('https://'.length)}`;
+  if (url.startsWith('http://')) return `ws://${url.slice('http://'.length)}`;
+  return url;
+}
+
+function resolveBrowserRelays(info) {
+  const relays = [];
+  if (Array.isArray(info?.nostr?.browser_relays)) relays.push(...info.nostr.browser_relays);
+  if (info?.nostr?.sidecar_url) relays.push(info.nostr.sidecar_url);
+  return Array.from(new Set(relays.map(normalizeRelayUrl).filter(Boolean)));
 }
 
 /**
@@ -37,8 +60,21 @@ export async function ensureRelayConnection({ silent = false } = {}) {
   if (!isBrowser) return;
   
   try {
-    const eagerRelayConnect = await getEagerRelayConnect();
-    await eagerRelayConnect();
+    const systemModule = await getSystemModule();
+    const nostrModule = await getNostrModule();
+    const info = systemModule.currentSystemInfo?.() || await systemModule.loadSystemInfo();
+    const relays = resolveBrowserRelays(info);
+
+    if (relays.length === 0) {
+      throw new Error('No browser relays advertised by system discovery');
+    }
+
+    const { nostr } = nostrModule;
+    nostr.setRelays(relays, false);
+    const summary = await nostr.connect(relays, { force: false });
+    if (!summary?.connected) {
+      throw new Error('Unable to connect to any advertised browser relay');
+    }
   } catch (err) {
     // Log warning but continue - let queries fail with clearer errors
     if (!silent) {
