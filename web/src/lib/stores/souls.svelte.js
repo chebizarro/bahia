@@ -10,6 +10,7 @@ import {
   parseSoulDraftEvent,
   parseTemplateEvent,
   parseRuntimeCapabilityEvent,
+  queryOrPartial,
   normalizeSoulDraftContent,
   upsertReplaceableEvent,
   isReplaceableTombstone,
@@ -1064,7 +1065,7 @@ export async function fetchSoulHistory(soul, { limit = 50 } = {}) {
     { kinds: lifecycleKinds, limit }
   ];
 
-  const events = await nostr.query(filters);
+  const events = await queryOrPartial(filters, { scope: 'soul-history' });
   const deduped = new Map();
   for (const event of events) {
     if (deduped.has(event.id)) continue;

@@ -71,9 +71,24 @@ describe('Nostr branch behavior coverage', () => {
     });
   });
 
-  it('returns an explicit degraded error when branch history is incomplete before EOSE', async () => {
+  it('uses partial repo state when branch history is incomplete before EOSE', async () => {
     nostrMock.queryUntilEose.mockRejectedValue(new NostrIncompleteEOSEError('timeout', {
       partialEvents: [repoStateEvent()],
+      relaySummary: [{ relay: 'wss://relay.example', status: 'pending' }]
+    }));
+
+    const result = await fetchRepoBranches(repoCoordinate(), { timeout: 100 });
+
+    expect(result).toEqual({
+      branches: ['main', 'feature/auth'],
+      defaultBranch: 'main',
+      error: null
+    });
+  });
+
+  it('still reports an error when branch history is incomplete and no partial events exist', async () => {
+    nostrMock.queryUntilEose.mockRejectedValue(new NostrIncompleteEOSEError('timeout', {
+      partialEvents: [],
       relaySummary: [{ relay: 'wss://relay.example', status: 'pending' }]
     }));
 

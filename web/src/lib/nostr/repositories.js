@@ -1,5 +1,5 @@
 import { KINDS } from './kinds.js';
-import { nostr } from './subscriptions.js';
+import { queryOrPartial } from './subscriptions.js';
 
 export function parseRepositoryEvent(event) {
   if (!event || !event.id || !event.pubkey || !Array.isArray(event.tags)) {
@@ -87,7 +87,7 @@ export async function fetchRepositories({ authors = null, limit = 200, since = n
     filter.since = since;
   }
 
-  const events = await nostr.query([filter]);
+  const events = await queryOrPartial([filter], { scope: 'repositories' });
   const deduped = new Map();
 
   for (const event of events) {

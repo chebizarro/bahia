@@ -3,7 +3,7 @@
  * Fetches repo state events (NIP-34 kind 30618) to extract branch information
  */
 
-import { nostr, KINDS } from './client.js';
+import { KINDS, queryUntilEoseOrPartial } from './client.js';
 
 // Repo state event kind (NIP-34)
 const REPO_STATE_KIND = 30618;
@@ -115,11 +115,11 @@ export async function fetchRepoBranches(repoCoordinate, { timeout = 5000 } = {})
 
   try {
     // Query for repo state events (kind 30618) with matching author and d-tag
-    const events = await nostr.queryUntilEose([{
+    const events = await queryUntilEoseOrPartial([{
       kinds: [REPO_STATE_KIND],
       authors: [pubkey],
       '#d': [identifier]
-    }], { timeoutMs: timeout });
+    }], { timeoutMs: timeout, scope: 'repo-branches' });
 
     if (!events || events.length === 0) {
       // No state event found - repo may not have state published yet

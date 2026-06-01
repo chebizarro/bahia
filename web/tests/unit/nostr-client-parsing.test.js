@@ -56,6 +56,7 @@ describe('Nostr Client - Parsing Functions', () => {
   let parseRuntimeCapabilityEvent;
   let runtimeCapabilitySupports;
   let fetchRuntimeCapabilities;
+  let NostrIncompleteEOSEError;
   let normalizeSoulDraftContent;
   let createNostrPoolClient;
 
@@ -77,6 +78,7 @@ describe('Nostr Client - Parsing Functions', () => {
     parseRuntimeCapabilityEvent = module.parseRuntimeCapabilityEvent;
     runtimeCapabilitySupports = module.runtimeCapabilitySupports;
     fetchRuntimeCapabilities = module.fetchRuntimeCapabilities;
+    NostrIncompleteEOSEError = module.NostrIncompleteEOSEError;
     normalizeSoulDraftContent = module.normalizeSoulDraftContent;
     createNostrPoolClient = module.createNostrPoolClient;
     global.WebSocket.OPEN = 1;
@@ -259,6 +261,35 @@ describe('Nostr Client - Parsing Functions', () => {
 
       expect(module.nostr.queryUntilEose).toHaveBeenCalledWith([{ kinds: [30317], limit: 200 }]);
       expect(capabilities.map((capability) => capability.id)).toEqual(['new-cap']);
+    });
+
+    it('fetchRuntimeCapabilities falls back to partial events when EOSE is incomplete', async () => {
+      const old = {
+        id: 'old-cap',
+        kind: 30317,
+        pubkey: 'runtime-pubkey',
+        created_at: 100,
+        tags: [['d', 'openclaw'], ['runtime', 'openclaw']],
+        content: JSON.stringify({ schema: 'soulfactory-runtime-capability/v1', runtime: 'openclaw', control_schema: 'soulfactory-runtime-control/v1', methods: ['soulfactory.provision'] })
+      };
+      const latest = {
+        ...old,
+        id: 'new-cap',
+        created_at: 200,
+        content: JSON.stringify({ schema: 'soulfactory-runtime-capability/v1', runtime: 'openclaw', control_schema: 'soulfactory-runtime-control/v1', methods: ['soulfactory.update'] })
+      };
+
+      const module = await import('../../src/lib/nostr/client.js');
+      vi.spyOn(console, 'warn').mockImplementation(() => {});
+      vi.spyOn(module.nostr, 'queryUntilEose').mockRejectedValue(new NostrIncompleteEOSEError('all_relays_closed', {
+        partialEvents: [old, latest],
+        relaySummary: [{ relay: 'wss://relay.example', status: 'closed', reason: 'relay closed' }]
+      }));
+
+      const capabilities = await fetchRuntimeCapabilities({ method: 'soulfactory.update' });
+
+      expect(capabilities.map((capability) => capability.id)).toEqual(['new-cap']);
+      expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('[runtime-capabilities] Using 2 partial Nostr event(s) after incomplete EOSE'));
     });
   });
 
