@@ -18,6 +18,7 @@ import {
   SOUL_RUNTIME_METHODS
 } from '$lib/nostr/client.js';
 import { authState, login, signWithAuth } from '$lib/stores/auth.js';
+import { ensureRelayConnection } from '$lib/nostr/client.js';
 
 /** @typedef {import('$lib/types/customization').SoulAvatarSpec} SoulAvatarSpec */
 /** @typedef {import('$lib/types/customization').SoulDraftContentV2} SoulDraftContentV2 */
@@ -379,6 +380,7 @@ export async function loadSouls(authorPubkey = null) {
   error.value = null;
 
   try {
+    await ensureRelayConnection();
     const events = await fetchSouls(authorPubkey);
     resetReplaceableState(soulEvents, events, souls, parseSoulEvent, newestFirst);
   } catch (err) {
@@ -395,6 +397,7 @@ export async function loadTemplates(authorPubkey = null) {
   error.value = null;
 
   try {
+    await ensureRelayConnection();
     const events = await fetchTemplates(authorPubkey);
     resetReplaceableState(templateEvents, events, templates, parseTemplateEvent, templateSort);
   } catch (err) {
@@ -410,6 +413,7 @@ export async function loadDrafts(authorPubkey = null) {
   error.value = null;
 
   try {
+    await ensureRelayConnection();
     const events = await fetchSoulDrafts(authorPubkey);
     resetReplaceableState(draftEvents, events, drafts, parseSoulDraftEvent, newestFirst);
   } catch (err) {
@@ -425,6 +429,7 @@ export async function loadRuntimeCapabilities(options = {}) {
   error.value = null;
 
   try {
+    await ensureRelayConnection();
     const capabilities = await fetchRuntimeCapabilities(options);
     const events = capabilities.map((capability) => capability?.event || capability).filter((event) => event?.kind === KINDS.RUNTIME_CAPABILITY);
 

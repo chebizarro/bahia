@@ -3,6 +3,11 @@ import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 // Mock browser environment
 global.window = global;
 
+// Mock connection guard (shared relay connection utility)
+vi.mock('../../src/lib/nostr/connection-guard.js', () => ({
+  ensureRelayConnection: vi.fn(async () => {})
+}));
+
 // Mock the nostr client module
 vi.mock('../../src/lib/nostr/client.js', () => {
   const KINDS = {
@@ -88,6 +93,7 @@ vi.mock('../../src/lib/nostr/client.js', () => {
     normalizeSoulDraftContent: vi.fn((content) => ({ ...content, identity: content.identity || {} })),
     upsertReplaceableEvent,
     isReplaceableTombstone: vi.fn((event) => event.content && JSON.parse(event.content).deleted === true),
+    ensureRelayConnection: vi.fn(async () => {}),
     SOUL_LIFECYCLE_ACTIONS: { UPDATE: 'update' },
     SOUL_RUNTIME_METHODS: { PROVISION: 'soulfactory.provision', UPDATE: 'soulfactory.update' },
     KINDS
