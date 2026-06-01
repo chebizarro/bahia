@@ -226,10 +226,8 @@ function collectBootstrapRelayCandidates(userRelays = {}) {
   ]).filter((relay) => normalizeRelayUrl(relay) !== LEGACY_BAHIA_RELAY).slice(0, 10);
 }
 
-async function queryAuthEvents(pubkey, userRelays = {}, kinds = [], limit = 5) {
+async function queryAuthEventsOnRelays(pubkey, relays = [], kinds = [], limit = 5) {
   if (!isValidHexPubkey(pubkey) || !Array.isArray(kinds) || kinds.length === 0) return [];
-
-  const relays = collectBootstrapRelayCandidates(userRelays);
   if (relays.length === 0) return [];
 
   const client = new PoolBackedClient({
@@ -249,6 +247,19 @@ async function queryAuthEvents(pubkey, userRelays = {}, kinds = [], limit = 5) {
   } finally {
     client.disconnect();
   }
+}
+
+async function queryAuthEvents(pubkey, userRelays = {}, kinds = [], limit = 5) {
+  const relayCandidates = collectBootstrapRelayCandidates(userRelays);
+  const bootstrapRelays = relayCandidates.filter((relay) => AUTH_BOOTSTRAP_RELAYS.includes(relay));
+  const fallbackRelays = relayCandidates.filter((relay) => !AUTH_BOOTSTRAP_RELAYS.includes(relay));
+
+  const bootstrapEvents = await queryAuthEventsOnRelays(pubkey, bootstrapRelays, kinds, limit);
+  if (bootstrapEvents.length > 0 || fallbackRelays.length === 0) {
+    return bootstrapEvents;
+  }
+
+  return queryAuthEventsOnRelays(pubkey, fallbackRelays, kinds, limit);
 }
 
 function latestAuthEvent(events, kind, pubkey) {

@@ -1,4 +1,5 @@
-import { requestEncryptedResult } from '$lib/nostr/encrypted-controlplane.js';
+import api from '$lib/api/client.js';
+import { authState, initializeAuth } from '$lib/stores/auth.js';
 
 export const orgsState = $state({
   orgs: [],
@@ -16,21 +17,14 @@ export const orgDetailState = $state({
   error: null
 });
 
-function unwrapEncryptedResult(response, fallback = null) {
-  const envelope = response?.result;
-  if (envelope?.status === 'error') {
-    throw new Error(envelope?.error?.message || 'Encrypted org request failed');
+async function ensureOrgApiReady() {
+  if (!api) {
+    throw new Error('Organization API client is not available in this runtime');
   }
-  return envelope?.payload ?? fallback;
-}
-
-async function encryptedOrgRequest(operation, payload = {}) {
-  const response = await requestEncryptedResult({
-    operation,
-    payload,
-    tags: [['domain', 'orgs']]
-  });
-  return unwrapEncryptedResult(response);
+  if (authState.status === 'unknown' || authState.status === 'checking') {
+    await initializeAuth();
+  }
+  return api;
 }
 
 export function resetOrgsState() {
@@ -53,9 +47,10 @@ export async function loadOrgsOverview() {
   orgsState.loading = true;
   orgsState.error = null;
   try {
+    const client = await ensureOrgApiReady();
     const [orgs, myInvites] = await Promise.all([
-      encryptedOrgRequest('orgs.list'),
-      encryptedOrgRequest('orgs.my_invites')
+      client.listOrgs(),
+      client.getMyInvites()
     ]);
     orgsState.orgs = Array.isArray(orgs) ? orgs : [];
     orgsState.myInvites = Array.isArray(myInvites) ? myInvites : [];
@@ -78,11 +73,22 @@ export async function loadOrgDetail(id) {
   orgDetailState.loading = true;
   orgDetailState.error = null;
   try {
-    const detail = await encryptedOrgRequest('orgs.detail', { id: orgId });
-    orgDetailState.org = detail?.org ?? null;
-    orgDetailState.members = Array.isArray(detail?.members) ? detail.members : [];
-    orgDetailState.invites = Array.isArray(detail?.invites) ? detail.invites : [];
-    orgDetailState.myRole = detail?.my_role || null;
+    const client = await ensureOrgApiReady();
+    const [org, members, invites] = await Promise.all([
+      client.getOrg(orgId),
+      client.listOrgMembers(orgId),
+      client.listOrgInvites(orgId)
+    ]);
+    orgDetailState.org = org ?? null;
+    orgDetailState.members = Array.isArray(members) ? members : [];
+    orgDetailState.invites = Array.isArray(invites) ? invites : [];
+    orgDetailState.myRole = orgDetailState.members.find((member) => member?.pubkey === authState.pubkey)?.role || null;
+    const detail = {
+      org: orgDetailState.org,
+      members: orgDetailState.members,
+      invites: orgDetailState.invites,
+      my_role: orgDetailState.myRole
+    };
     return detail;
   } catch (error) {
     orgDetailState.error = error?.message || 'Failed to load organization';
@@ -93,34 +99,29 @@ export async function loadOrgDetail(id) {
 }
 
 export async function createOrg({ name, displayName }) {
-  return encryptedOrgRequest('orgs.create', { name, display_name: displayName });
+  return (await ensureOrgApiReady()).createOrg({ name, displayName });
 }
 
 export async function deleteOrg(id) {
-  return encryptedOrgRequest('orgs.delete', { id });
+  return (await ensureOrgApiReady()).deleteOrg(id);
 }
 
 export async function acceptInvite(inviteId) {
-  return encryptedOrgRequest('orgs.accept_invite', { invite_id: inviteId });
+  return (await ensureOrgApiReady()).acceptInvite(inviteId);
 }
 
 export async function createOrgInvite(orgId, { pubkey, role, expiresIn = 72 } = {}) {
-  return encryptedOrgRequest('orgs.create_invite', {
-    org_id: orgId,
-    pubkey,
-    role,
-    expires_in: expiresIn
-  });
+  return (await ensureOrgApiReady()).createOrgInvite(orgId, { pubkey, role, expiresIn });
 }
 
 export async function revokeOrgInvite(orgId, inviteId) {
-  return encryptedOrgRequest('orgs.revoke_invite', { org_id: orgId, invite_id: inviteId });
+  return (await ensureOrgApiReady()).revokeOrgInvite(orgId, inviteId);
 }
 
 export async function updateOrgMemberRole(orgId, pubkey, { role }) {
-  return encryptedOrgRequest('orgs.update_member_role', { org_id: orgId, pubkey, role });
+  return (await ensureOrgApiReady()).updateOrgMemberRole(orgId, pubkey, { role });
 }
 
 export async function removeOrgMember(orgId, pubkey) {
-  return encryptedOrgRequest('orgs.remove_member', { org_id: orgId, pubkey });
+  return (await ensureOrgApiReady()).removeOrgMember(orgId, pubkey);
 }
