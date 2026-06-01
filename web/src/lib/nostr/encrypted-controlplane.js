@@ -60,9 +60,12 @@ function openRelayUrls(client) {
 }
 
 export function encryptedRelayUrlsFromSystemInfo(systemInfo = currentSystemInfo()) {
-  // Encrypted browser requests are a distinct transport plane. Public/browser
-  // relay configuration must never be treated as an encrypted request fallback.
-  return normalizeRelays(systemInfo?.nostr?.browser_encrypted_request_relays || []);
+  const nostrInfo = systemInfo?.nostr;
+  // Prefer dedicated encrypted relay URLs, but fall back to normal browser
+  // relays. NIP-44 encrypted content is safe on any relay.
+  const encrypted = normalizeRelays(nostrInfo?.browser_encrypted_request_relays);
+  if (encrypted.length > 0) return encrypted;
+  return normalizeRelays(nostrInfo?.browser_relays);
 }
 
 export function servicePubkeyFromSystemInfo(systemInfo = currentSystemInfo()) {
@@ -70,6 +73,8 @@ export function servicePubkeyFromSystemInfo(systemInfo = currentSystemInfo()) {
 }
 
 export function encryptedRequestsAvailable(systemInfo = currentSystemInfo()) {
+  // Encrypted requests require a service pubkey and at least one relay
+  // (either dedicated encrypted relays or normal browser relays).
   return encryptedRelayUrlsFromSystemInfo(systemInfo).length > 0 && Boolean(servicePubkeyFromSystemInfo(systemInfo));
 }
 

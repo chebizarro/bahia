@@ -63,22 +63,23 @@ describe('encrypted controlplane transport', () => {
     expect(module.encryptedRequestsAvailable()).toBe(true);
   });
 
-  it('does not treat public browser relays as encrypted request relays', () => {
+  it('falls back to browser relays when dedicated encrypted relays are not configured', () => {
+    // NIP-44 encrypted content is safe on any relay, so browser_relays are valid fallback
     expect(module.encryptedRelayUrlsFromSystemInfo({
       nostr: {
         service_pubkey: 'b'.repeat(64),
         browser_relays: ['wss://public.example']
       }
-    })).toEqual([]);
+    })).toEqual(['wss://public.example']);
     expect(module.encryptedRequestsAvailable({
       nostr: {
         service_pubkey: 'b'.repeat(64),
         browser_relays: ['wss://public.example']
       }
-    })).toBe(false);
+    })).toBe(true);
   });
 
-  it('requires explicit encrypted capability indicators rather than public bootstrap fields alone', () => {
+  it('requires service_pubkey for encrypted capability but falls back to browser relays', () => {
     const publicOnly = {
       nostr: {
         browser_relays: canonicalDiscoveryFixture.nostr.browser_relays,
@@ -90,8 +91,11 @@ describe('encrypted controlplane transport', () => {
       }
     };
 
+    // No service_pubkey = no encrypted capability, even with relays
     expect(module.encryptedRequestsAvailable(publicOnly)).toBe(false);
-    expect(module.encryptedRelayUrlsFromSystemInfo(publicOnly)).toEqual([]);
+    // But relay URLs are still available as fallback
+    expect(module.encryptedRelayUrlsFromSystemInfo(publicOnly)).toEqual(canonicalDiscoveryFixture.nostr.browser_relays);
+    // With service_pubkey and dedicated encrypted relays, prefer those
     expect(module.encryptedRequestsAvailable(canonicalDiscoveryFixture)).toBe(true);
     expect(module.encryptedRelayUrlsFromSystemInfo(canonicalDiscoveryFixture)).toEqual(['wss://requests.example']);
   });
@@ -119,12 +123,13 @@ describe('encrypted controlplane transport', () => {
 
     expect(client.publish).not.toHaveBeenCalled();
     expect(client.subscribe).not.toHaveBeenCalled();
+    // With fallback to browser_relays, we get those URLs back
     expect(module.encryptedRelayUrlsFromSystemInfo({
       nostr: {
         service_pubkey: 'b'.repeat(64),
         browser_relays: ['wss://public.example']
       }
-    })).toEqual([]);
+    })).toEqual(['wss://public.example']);
   });
 
   it('publishes through the encrypted-request client and requires an accepted OK', async () => {
