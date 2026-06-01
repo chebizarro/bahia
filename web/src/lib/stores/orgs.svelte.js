@@ -1,4 +1,5 @@
-import { requestEncryptedResult } from '$lib/nostr/encrypted-controlplane.js';
+import { encryptedRequestsAvailable, requestEncryptedResult } from '$lib/nostr/encrypted-controlplane.js';
+import { currentSystemInfo, loadSystemInfo } from './system.svelte.js';
 
 export const orgsState = $state({
   orgs: [],
@@ -24,7 +25,17 @@ function unwrapEncryptedResult(response, fallback = null) {
   return envelope?.payload ?? fallback;
 }
 
+async function ensureEncryptedOrgs() {
+  let info = currentSystemInfo();
+  if (!info) info = await loadSystemInfo();
+  if (!encryptedRequestsAvailable(info)) {
+    throw new Error('Encrypted Nostr events are not available for organizations. Configure the Bahia service pubkey and encrypted relay settings before managing organizations.');
+  }
+  return info;
+}
+
 async function encryptedOrgRequest(operation, payload = {}) {
+  await ensureEncryptedOrgs();
   const response = await requestEncryptedResult({
     operation,
     payload,

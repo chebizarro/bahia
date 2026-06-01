@@ -161,6 +161,31 @@ describe('encrypted payments/orgs stores', () => {
     expect(accepted).toEqual({ org_id: 'org-1', role: 'viewer' });
   });
 
+  it('waits for system discovery before issuing encrypted org requests', async () => {
+    const discoveredInfo = {
+      features: { encrypted_nostr_requests: true },
+      nostr: {
+        browser_encrypted_request_relays: ['wss://encrypted.test.local'],
+        service_pubkey: 'b'.repeat(64)
+      }
+    };
+    systemStore.currentSystemInfo.mockReturnValue(null);
+    systemStore.loadSystemInfo.mockResolvedValue(discoveredInfo);
+    encryptedRequests.requestEncryptedResult
+      .mockResolvedValueOnce({ result: { status: 'ok', payload: [] } })
+      .mockResolvedValueOnce({ result: { status: 'ok', payload: [] } });
+
+    await orgsStore.loadOrgsOverview();
+
+    expect(systemStore.loadSystemInfo).toHaveBeenCalledTimes(2);
+    expect(encryptedRequests.encryptedRequestsAvailable).toHaveBeenCalledWith(discoveredInfo);
+    expect(encryptedRequests.requestEncryptedResult).toHaveBeenNthCalledWith(1, {
+      operation: 'orgs.list',
+      payload: {},
+      tags: [['domain', 'orgs']]
+    });
+  });
+
   it('loads org detail and sends member mutations as encrypted operations', async () => {
     encryptedRequests.requestEncryptedResult
       .mockResolvedValueOnce({
