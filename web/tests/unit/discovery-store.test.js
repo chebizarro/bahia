@@ -91,7 +91,6 @@ describe('Nostr system discovery store', () => {
     expect(info.features.relay_read_models).toBe(true);
     expect(info.nostr.service_pubkey).toBe(trustedPubkey);
     expect(info.nostr.browser_relays).toEqual(['ws://localhost:10547/relay', 'wss://public.example']);
-    expect(info.nostr.browser_encrypted_request_relays).toEqual(['wss://requests.example']);
     expect(info._discovery.relay_sets['bahia-browser-v1']).toHaveLength(2);
   });
 

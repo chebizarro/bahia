@@ -60,12 +60,9 @@ function openRelayUrls(client) {
 }
 
 export function encryptedRelayUrlsFromSystemInfo(systemInfo = currentSystemInfo()) {
-  const nostrInfo = systemInfo?.nostr;
-  // Prefer dedicated encrypted relay URLs, but fall back to normal browser
-  // relays. NIP-44 encrypted content is safe on any relay.
-  const encrypted = normalizeRelays(nostrInfo?.browser_encrypted_request_relays);
-  if (encrypted.length > 0) return encrypted;
-  return normalizeRelays(nostrInfo?.browser_relays);
+  // NIP-44 encryption is in the event content, not the transport.
+  // Any configured relay works for encrypted requests.
+  return normalizeRelays(systemInfo?.nostr?.browser_relays);
 }
 
 export function servicePubkeyFromSystemInfo(systemInfo = currentSystemInfo()) {

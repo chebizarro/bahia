@@ -106,7 +106,6 @@ export function normalizeDiscoveryEvents(events, trustedPubkeys) {
     nostr: {
       browser_relays: browserRelays,
       sidecar_url: browserRelays[0] || '',
-      browser_encrypted_request_relays: relaySets[REQUEST_RELAY_SET_DTAG] || [],
       service_relays: relaySets[SERVICE_RELAY_SET_DTAG] || [],
       service_pubkey: discoveryEvent.pubkey,
       service_npub: '',
