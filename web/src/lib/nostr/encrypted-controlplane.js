@@ -60,9 +60,7 @@ function openRelayUrls(client) {
 }
 
 export function encryptedRelayUrlsFromSystemInfo(systemInfo = currentSystemInfo()) {
-  // NIP-44 encryption is in the event content, not the transport.
-  // Any configured relay works for encrypted requests.
-  return normalizeRelays(systemInfo?.nostr?.browser_relays);
+  return normalizeRelays(systemInfo?.nostr?.browser_encrypted_request_relays);
 }
 
 export function servicePubkeyFromSystemInfo(systemInfo = currentSystemInfo()) {
@@ -70,9 +68,9 @@ export function servicePubkeyFromSystemInfo(systemInfo = currentSystemInfo()) {
 }
 
 export function encryptedRequestsAvailable(systemInfo = currentSystemInfo()) {
-  // Encrypted requests require a service pubkey and at least one relay
-  // (either dedicated encrypted relays or normal browser relays).
-  return encryptedRelayUrlsFromSystemInfo(systemInfo).length > 0 && Boolean(servicePubkeyFromSystemInfo(systemInfo));
+  return systemInfo?.features?.encrypted_nostr_requests === true
+    && encryptedRelayUrlsFromSystemInfo(systemInfo).length > 0
+    && Boolean(servicePubkeyFromSystemInfo(systemInfo));
 }
 
 export class EncryptedControlplaneTransport {
