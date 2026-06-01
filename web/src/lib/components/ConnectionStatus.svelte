@@ -1,5 +1,5 @@
 <script>
-  import { controlplaneConnection, manualRetry as storeManualRetry } from '$lib/stores';
+  import { controlplaneConnection, discoveryState, manualRetry as storeManualRetry } from '$lib/stores';
 
   let { connection = controlplaneConnection, retry = storeManualRetry } = $props();
   let expanded = $state(false);
@@ -7,7 +7,7 @@
   let retryFeedback = $state('');
 
   const STATUS_PRESENTATION = {
-    idle: { tone: 'disconnected', label: 'Disconnected', detail: 'Not connected' },
+    idle: { tone: 'connecting', label: 'Starting', detail: 'Loading dashboard snapshot' },
     disconnected: { tone: 'disconnected', label: 'Disconnected', detail: 'Not connected' },
     discovering: { tone: 'connecting', label: 'Connecting', detail: 'Discovering relays' },
     connecting: { tone: 'connecting', label: 'Connecting', detail: 'Connecting to relays' },
@@ -17,7 +17,12 @@
     error: { tone: 'error', label: 'Error', detail: 'Connection error' }
   };
 
-  let presentation = $derived(STATUS_PRESENTATION[connection.status] || STATUS_PRESENTATION.disconnected);
+  let presentation = $derived.by(() => {
+    if (connection.status === 'idle' && discoveryState.loading) {
+      return { tone: 'connecting', label: 'Starting', detail: 'Loading bootstrap cache' };
+    }
+    return STATUS_PRESENTATION[connection.status] || STATUS_PRESENTATION.disconnected;
+  });
   let relays = $derived(Array.isArray(connection.relays) ? connection.relays : []);
   let errorMessage = $derived(connection.lastError?.message || connection.lastError || 'Relay connection error');
   let title = $derived(connection.status === 'error' ? errorMessage : `${presentation.label}: ${presentation.detail}`);

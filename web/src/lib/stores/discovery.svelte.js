@@ -7,6 +7,8 @@ export const SYSTEM_DISCOVERY_DTAG = 'bahia-system-v1';
 export const BROWSER_RELAY_SET_DTAG = 'bahia-browser-v1';
 export const REQUEST_RELAY_SET_DTAG = 'bahia-requests-v1';
 export const SERVICE_RELAY_SET_DTAG = 'bahia-service-v1';
+const DISCOVERY_CACHE_KEY = 'bahia_system_discovery_cache_v1';
+const DISCOVERY_CACHE_TTL_MS = 15 * 60 * 1000;
 
 export const discoveryState = $state({
   seed: null,
@@ -129,6 +131,47 @@ export function resetDiscoveryStore() {
   discoveryState.loadedAt = null;
 }
 
+function loadCachedDiscovery(seed) {
+  if (!browser || typeof localStorage?.getItem !== 'function') return null;
+
+  try {
+    const raw = localStorage.getItem(DISCOVERY_CACHE_KEY);
+    if (!raw) return null;
+
+    const cached = JSON.parse(raw);
+    const age = Date.now() - Number(cached?.cachedAt || 0);
+    const trustedPubkeys = Array.isArray(seed?.service_pubkeys) ? seed.service_pubkeys : [];
+    const cachedPubkey = cached?.normalized?.nostr?.service_pubkey;
+    if (cached?.schema !== DISCOVERY_CACHE_KEY || age > DISCOVERY_CACHE_TTL_MS) return null;
+    if (trustedPubkeys.length > 0 && cachedPubkey && !trustedPubkeys.includes(cachedPubkey)) return null;
+    if (!cached?.normalized?.nostr?.browser_relays?.length) return null;
+
+    return cached;
+  } catch (error) {
+    console.warn('Failed to load cached system discovery:', error);
+    return null;
+  }
+}
+
+function persistDiscoveryCache(seed, normalized, events) {
+  if (!browser || typeof localStorage?.setItem !== 'function') return;
+
+  try {
+    localStorage.setItem(
+      DISCOVERY_CACHE_KEY,
+      JSON.stringify({
+        schema: DISCOVERY_CACHE_KEY,
+        cachedAt: Date.now(),
+        seed,
+        normalized,
+        events
+      })
+    );
+  } catch (error) {
+    console.warn('Failed to persist system discovery cache:', error);
+  }
+}
+
 export async function discoverSystemInfo({ force = false } = {}) {
   if (!browser) return null;
   if (discoveryState.events.length > 0 && !force) return normalizeDiscoveryEvents(discoveryState.events, discoveryState.seed?.service_pubkeys || []);
@@ -144,6 +187,14 @@ export async function discoverSystemInfo({ force = false } = {}) {
       if (!seed?.service_pubkeys?.length) throw new Error('No trusted service pubkeys configured. Set PUBLIC_BAHIA_SERVICE_PUBKEYS before deploying.');
 
       discoveryState.seed = seed;
+      const cached = !force ? loadCachedDiscovery(seed) : null;
+      if (cached?.normalized) {
+        discoveryState.events = Array.isArray(cached.events) ? cached.events : [];
+        discoveryState.relaySets = cached.normalized?._discovery?.relay_sets || {};
+        discoveryState.loadedAt = new Date(cached.cachedAt).toISOString();
+        return cached.normalized;
+      }
+
       const relays = Array.from(new Set(seed.relay_urls.map(normalizeRelayUrl).filter(Boolean)));
       nostr.setRelays(relays, false);
       const summary = await nostr.connect(relays, { force: true });
@@ -158,6 +209,7 @@ export async function discoverSystemInfo({ force = false } = {}) {
       discoveryState.events = events;
       discoveryState.relaySets = normalized._discovery.relay_sets;
       discoveryState.loadedAt = new Date().toISOString();
+      persistDiscoveryCache(seed, normalized, events);
       return normalized;
     } catch (error) {
       discoveryState.error = error?.message || String(error);

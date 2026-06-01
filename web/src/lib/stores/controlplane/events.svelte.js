@@ -24,7 +24,7 @@ import {
 } from '../collections/backup.svelte.js';
 import { mlApplicators } from '../collections/ml.svelte.js';
 import { applyActivityEvent } from '../collections/activity.svelte.js';
-import { refreshCollections } from '../collections/index.svelte.js';
+import { refreshCollections, schedulePersistCachedCollections } from '../collections/index.svelte.js';
 
 const ACTIVITY_BACKFILL_LIMIT = 100;
 const READ_MODEL_LIMIT = 1000;
@@ -141,6 +141,7 @@ export function applyControlplaneEvent(event) {
   if (changed) {
     controlplaneConnection.lastEventAt = new Date().toISOString();
     refreshCollections();
+    schedulePersistCachedCollections();
   }
   return changed;
 }

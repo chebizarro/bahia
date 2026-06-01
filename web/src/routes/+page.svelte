@@ -12,7 +12,7 @@
     WarningIcon
   } from '$lib/icons/domain-icons.js';
   import { requestPaymentHistoryRecords } from '$lib/stores/payments.svelte.js';
-  import { services, environments, states, workers, driftedStates, events, deploymentIntents, controlplaneConnection } from '$lib/stores';
+  import { services, environments, states, workers, driftedStates, events, deploymentIntents, controlplaneConnection, discoveryState } from '$lib/stores';
   import { formatDashboardSats, normalizePaymentHistory, summarizeRecentSpend } from './dashboard-cost-summary.js';
   import { summarizeWorkerActivity } from './workers/list-utils.js';
 
@@ -157,8 +157,8 @@
     return count === 1 ? singular : plural;
   }
 
-  function isDashboardSyncing(status, bootstrapComplete) {
-    return !bootstrapComplete && ['discovering', 'connecting', 'syncing', 'bootstrapping'].includes(status);
+  function isDashboardSyncing(status, bootstrapComplete, discoveryLoading) {
+    return discoveryLoading || (!bootstrapComplete && ['discovering', 'connecting', 'syncing', 'bootstrapping', 'idle'].includes(status));
   }
 
   function formatMetricValue(value, syncing) {
@@ -564,7 +564,7 @@
   let pendingCount = $derived(pendingDeployments.length);
   let workerActivity = $derived(summarizeWorkerActivity(workers));
   let dashboardSyncing = $derived(
-    isDashboardSyncing(controlplaneConnection.status, controlplaneConnection.bootstrapComplete)
+    isDashboardSyncing(controlplaneConnection.status, controlplaneConnection.bootstrapComplete, discoveryState.loading)
   );
   let dashboardHasSnapshotData = $derived(
     services.length > 0 ||
@@ -576,6 +576,11 @@
   );
   let dashboardSyncMessage = $derived.by(() => {
     if (!dashboardSyncing) return '';
+    if (discoveryState.loading && controlplaneConnection.status === 'idle') {
+      return dashboardHasSnapshotData
+        ? 'Warming the dashboard from browser cache while bootstrap discovery completes…'
+        : 'Loading cached controlplane snapshot…';
+    }
     if (controlplaneConnection.status === 'discovering') return 'Discovering relays for the dashboard snapshot…';
     if (controlplaneConnection.status === 'connecting') return 'Connecting to relays…';
     return dashboardHasSnapshotData

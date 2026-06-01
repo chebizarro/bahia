@@ -38,19 +38,18 @@
 
     queueMicrotask(() => {
       if (!active) return;
-      Promise.all([
-        initializeAuth().catch((error) => {
-          console.error('Auth bootstrap failed before controlplane load:', error);
-        }),
-        eagerRelayConnect().catch((error) => {
-          console.error('Eager relay connection failed before controlplane load:', error);
-        })
-      ]).finally(() => {
-        if (!active) return;
-        loadAll();
-        bootstrapAssistant().catch((error) => {
-          console.error('Assistant bootstrap failed:', error);
-        });
+      loadAll();
+
+      initializeAuth().catch((error) => {
+        console.error('Auth bootstrap failed before controlplane load:', error);
+      });
+
+      eagerRelayConnect().catch((error) => {
+        console.error('Eager relay connection failed before controlplane load:', error);
+      });
+
+      bootstrapAssistant().catch((error) => {
+        console.error('Assistant bootstrap failed:', error);
       });
     });
 

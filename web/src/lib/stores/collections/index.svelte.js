@@ -32,6 +32,7 @@ export {
 } from './backup.svelte.js';
 export { mlModels, mlModelVersions, mlEndpoints, mlEndpointStates } from './ml.svelte.js';
 export { events } from './activity.svelte.js';
+import { browser } from '$app/environment';
 
 import { resetServices, refreshServices } from './services.svelte.js';
 import { resetEnvironments, refreshEnvironments } from './environments.svelte.js';
@@ -40,6 +41,10 @@ import { resetWorkers, refreshWorkers } from './workers.svelte.js';
 import { resetBackup, refreshBackup } from './backup.svelte.js';
 import { resetML, refreshML } from './ml.svelte.js';
 import { resetActivity, refreshActivity } from './activity.svelte.js';
+
+const CONTROLPLANE_SNAPSHOT_KEY = 'bahia_controlplane_snapshot_v1';
+const CONTROLPLANE_SNAPSHOT_TTL_MS = 15 * 60 * 1000;
+let persistTimer = null;
 
 export const loading = $state({
   services: false,
@@ -79,4 +84,120 @@ export function refreshCollections() {
   refreshBackup();
   refreshML();
   refreshActivity();
+}
+
+function replaceSnapshotArray(target, values) {
+  target.length = 0;
+  if (Array.isArray(values)) target.push(...values);
+}
+
+export function controlplaneSnapshot() {
+  return {
+    schema: CONTROLPLANE_SNAPSHOT_KEY,
+    cachedAt: Date.now(),
+    collections: {
+      services: Array.from(services),
+      environments: Array.from(environments),
+      states: Array.from(states),
+      llmRoutes: Array.from(llmRoutes),
+      llmRouteStates: Array.from(llmRouteStates),
+      artifacts: Array.from(artifacts),
+      builds: Array.from(builds),
+      deploymentIntents: Array.from(deploymentIntents),
+      deploymentRuns: Array.from(deploymentRuns),
+      policies: Array.from(policies),
+      packageRepositories: Array.from(packageRepositories),
+      packageArtifacts: Array.from(packageArtifacts),
+      packagePromotions: Array.from(packagePromotions),
+      workers: Array.from(workers),
+      workerAssignments: Array.from(workerAssignments),
+      workerDrainStatuses: Array.from(workerDrainStatuses),
+      workerEligibilityPreviews: Array.from(workerEligibilityPreviews),
+      events: Array.from(events),
+      backupRepositories: Array.from(backupRepositories),
+      backupPolicies: Array.from(backupPolicies),
+      backupRecipes: Array.from(backupRecipes),
+      backupDefinitions: Array.from(backupDefinitions),
+      backupRuns: Array.from(backupRuns),
+      backupVerifications: Array.from(backupVerifications),
+      backupRestores: Array.from(backupRestores),
+      backupRetentionRuns: Array.from(backupRetentionRuns),
+      backupRuntimeObservations: Array.from(backupRuntimeObservations),
+      mlModels: Array.from(mlModels),
+      mlModelVersions: Array.from(mlModelVersions),
+      mlEndpoints: Array.from(mlEndpoints),
+      mlEndpointStates: Array.from(mlEndpointStates)
+    }
+  };
+}
+
+export function hydrateCachedCollections() {
+  if (!browser || typeof localStorage?.getItem !== 'function') return false;
+
+  try {
+    const raw = localStorage.getItem(CONTROLPLANE_SNAPSHOT_KEY);
+    if (!raw) return false;
+
+    const snapshot = JSON.parse(raw);
+    const age = Date.now() - Number(snapshot?.cachedAt || 0);
+    if (snapshot?.schema !== CONTROLPLANE_SNAPSHOT_KEY || age > CONTROLPLANE_SNAPSHOT_TTL_MS) return false;
+
+    const cached = snapshot.collections || {};
+    replaceSnapshotArray(services, cached.services);
+    replaceSnapshotArray(environments, cached.environments);
+    replaceSnapshotArray(states, cached.states);
+    replaceSnapshotArray(llmRoutes, cached.llmRoutes);
+    replaceSnapshotArray(llmRouteStates, cached.llmRouteStates);
+    replaceSnapshotArray(artifacts, cached.artifacts);
+    replaceSnapshotArray(builds, cached.builds);
+    replaceSnapshotArray(deploymentIntents, cached.deploymentIntents);
+    replaceSnapshotArray(deploymentRuns, cached.deploymentRuns);
+    replaceSnapshotArray(policies, cached.policies);
+    replaceSnapshotArray(packageRepositories, cached.packageRepositories);
+    replaceSnapshotArray(packageArtifacts, cached.packageArtifacts);
+    replaceSnapshotArray(packagePromotions, cached.packagePromotions);
+    replaceSnapshotArray(workers, cached.workers);
+    replaceSnapshotArray(workerAssignments, cached.workerAssignments);
+    replaceSnapshotArray(workerDrainStatuses, cached.workerDrainStatuses);
+    replaceSnapshotArray(workerEligibilityPreviews, cached.workerEligibilityPreviews);
+    replaceSnapshotArray(events, cached.events);
+    replaceSnapshotArray(backupRepositories, cached.backupRepositories);
+    replaceSnapshotArray(backupPolicies, cached.backupPolicies);
+    replaceSnapshotArray(backupRecipes, cached.backupRecipes);
+    replaceSnapshotArray(backupDefinitions, cached.backupDefinitions);
+    replaceSnapshotArray(backupRuns, cached.backupRuns);
+    replaceSnapshotArray(backupVerifications, cached.backupVerifications);
+    replaceSnapshotArray(backupRestores, cached.backupRestores);
+    replaceSnapshotArray(backupRetentionRuns, cached.backupRetentionRuns);
+    replaceSnapshotArray(backupRuntimeObservations, cached.backupRuntimeObservations);
+    replaceSnapshotArray(mlModels, cached.mlModels);
+    replaceSnapshotArray(mlModelVersions, cached.mlModelVersions);
+    replaceSnapshotArray(mlEndpoints, cached.mlEndpoints);
+    replaceSnapshotArray(mlEndpointStates, cached.mlEndpointStates);
+    return true;
+  } catch (error) {
+    console.warn('Failed to hydrate cached controlplane snapshot:', error);
+    return false;
+  }
+}
+
+export function persistCachedCollections() {
+  if (!browser || typeof localStorage?.setItem !== 'function') return false;
+
+  try {
+    localStorage.setItem(CONTROLPLANE_SNAPSHOT_KEY, JSON.stringify(controlplaneSnapshot()));
+    return true;
+  } catch (error) {
+    console.warn('Failed to persist controlplane snapshot:', error);
+    return false;
+  }
+}
+
+export function schedulePersistCachedCollections(delayMs = 150) {
+  if (!browser) return;
+  if (persistTimer) clearTimeout(persistTimer);
+  persistTimer = setTimeout(() => {
+    persistTimer = null;
+    persistCachedCollections();
+  }, delayMs);
 }

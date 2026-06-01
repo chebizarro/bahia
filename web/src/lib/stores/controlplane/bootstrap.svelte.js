@@ -1,7 +1,7 @@
 import { browser } from '$app/environment';
 import { nostr } from '../../nostr/client.js';
 import { loadSystemInfo } from '../system.svelte.js';
-import { resetCollections, refreshCollections, setAllLoading } from '../collections/index.svelte.js';
+import { hydrateCachedCollections, resetCollections, refreshCollections, schedulePersistCachedCollections, setAllLoading } from '../collections/index.svelte.js';
 import { applyControlplaneEvent, readModelFilters, resetEventRouting } from './events.svelte.js';
 import { bootstrapRetryLimited, connectedRelaysFromSummary, controlplaneConnection, markBootstrapComplete, markBootstrapFailedAt, normalizeRelayUrl, registerBootstrapControlplaneForRetry, resetConnectionState, resolveBrowserRelays, setBootstrapError } from './connection.svelte.js';
 
@@ -97,6 +97,10 @@ export async function bootstrapControlplane({ force = false } = {}) {
     controlplaneConnection.status = 'discovering';
     controlplaneConnection.lastError = null;
     setAllLoading(true);
+    const hydratedFromCache = hydrateCachedCollections();
+    if (hydratedFromCache) {
+      controlplaneConnection.lastEventAt = controlplaneConnection.lastEventAt || new Date().toISOString();
+    }
 
     try {
       const systemInfo = await loadSystemInfo({ force });
@@ -121,6 +125,7 @@ export async function bootstrapControlplane({ force = false } = {}) {
       controlplaneConnection.status = 'syncing';
       startStreamingSubscription(connectedRelays);
       refreshCollections();
+      schedulePersistCachedCollections();
       return { ok: true };
     } catch (err) {
       markBootstrapFailedAt();
