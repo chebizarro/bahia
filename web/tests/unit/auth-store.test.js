@@ -44,8 +44,37 @@ const nostrClientMock = vi.hoisted(() => ({
   }
 }));
 
+const poolClientMock = vi.hoisted(() => ({
+  connect: vi.fn(async (relays) => ({ total: Array.isArray(relays) ? relays.length : 0, connected: Array.isArray(relays) ? relays.length : 0 })),
+  queryUntilEose: vi.fn(async (filters) => {
+    const kinds = Array.isArray(filters?.[0]?.kinds) ? filters[0].kinds : [];
+    return kinds.flatMap((kind) => poolClientMock.eventsByKind[kind] || []);
+  }),
+  disconnect: vi.fn(),
+  eventsByKind: {}
+}));
+
 vi.mock('$lib/nostr/client.js', () => nostrClientMock);
 vi.mock('../../src/lib/nostr/client.js', () => nostrClientMock);
+vi.mock('../../src/lib/nostr/pool-client.js', () => ({
+  PoolBackedClient: class {
+    constructor({ relays = [] } = {}) {
+      this.relays = relays;
+    }
+
+    async connect(relays = this.relays) {
+      return poolClientMock.connect(relays);
+    }
+
+    async queryUntilEose(filters, options) {
+      return poolClientMock.queryUntilEose(filters, options);
+    }
+
+    disconnect() {
+      poolClientMock.disconnect();
+    }
+  }
+}));
 
 describe('Auth Store', () => {
   let authModule;
@@ -60,6 +89,28 @@ describe('Auth Store', () => {
     vi.clearAllMocks();
     vi.resetModules();
     systemStoreMock.info = null;
+    poolClientMock.eventsByKind = {
+      0: [{
+        id: 'kind0',
+        kind: 0,
+        pubkey: 'a'.repeat(64),
+        created_at: 1714521600,
+        content: JSON.stringify({ name: 'Test User', picture: 'https://example.com/avatar.png' }),
+        tags: []
+      }],
+      10002: [{
+        id: 'relaylist',
+        kind: 10002,
+        pubkey: 'a'.repeat(64),
+        created_at: 1714521601,
+        content: '',
+        tags: [
+          ['r', 'wss://user-relay.example', 'read'],
+          ['r', 'wss://user-write.example', 'write'],
+          ['r', 'wss://user-both.example']
+        ]
+      }]
+    };
     
     // Import mocked NIP-07 module
     nip07Module = await import('../../src/lib/nostr/nip07.js');
@@ -118,20 +169,6 @@ describe('Auth Store', () => {
       ok: true,
       json: async () => ({ data: { token: 'test-token', expires_at: new Date(Date.now() + 3600000).toISOString() } })
     });
-    global.WebSocket = class MockWebSocket {
-      static OPEN = 1;
-      static CONNECTING = 0;
-      readyState = MockWebSocket.OPEN;
-      constructor() {
-        queueMicrotask(() => this.onopen?.({}));
-        queueMicrotask(() => this.onmessage?.({ data: JSON.stringify(['EOSE', 'profile']) }));
-      }
-      send = vi.fn();
-      close = vi.fn(() => { this.readyState = 3; this.onclose?.({}); });
-      addEventListener = vi.fn();
-      removeEventListener = vi.fn();
-    };
-    
     // Dynamically import auth module to get fresh state
     authModule = await import('../../src/lib/stores/auth.js');
   });
@@ -169,7 +206,7 @@ describe('Auth Store', () => {
       
       expect(state.status).toBe('authenticated');
       expect(state.pubkey).toBe(session.pubkey);
-      expect(state.relays).toEqual(session.relays);
+      expect(state.relays).toEqual({ 'wss://relay.test/': { read: true, write: true } });
       expect(state.lastAuthenticatedAt).toBe(session.lastAuthenticatedAt);
     });
 
@@ -331,7 +368,7 @@ describe('Auth Store', () => {
       // Check localStorage persistence
       const stored = JSON.parse(localStorage.getItem('bahia_auth_session'));
       expect(stored.pubkey).toBe(pubkey);
-      expect(stored.relays).toEqual(relays);
+      expect(stored.relays).toEqual({ 'wss://relay.login/': { read: true, write: true } });
     });
 
     it('should update capabilities on login', async () => {
@@ -349,6 +386,46 @@ describe('Auth Store', () => {
       const state = authModule.authState;
       
       expect(state.capabilities).toEqual(capabilities);
+    });
+
+    it('hydrates relay lists and profile metadata from bootstrap relays', async () => {
+      const pubkey = 'a'.repeat(64);
+      nip07Module.getPublicKey.mockResolvedValue(pubkey);
+      nip07Module.getRelays.mockResolvedValue({});
+
+      await authModule.login();
+
+      expect(poolClientMock.connect).toHaveBeenCalled();
+      expect(poolClientMock.connect.mock.calls[0][0]).toEqual(
+        expect.arrayContaining(['wss://nos.lol', 'wss://relay.primal.net'])
+      );
+      expect(authModule.authState.profile).toMatchObject({
+        name: 'Test User',
+        picture: 'https://example.com/avatar.png'
+      });
+      expect(authModule.authState.relays).toEqual({
+        'wss://user-both.example/': { read: true, write: true },
+        'wss://user-relay.example/': { read: true, write: false },
+        'wss://user-write.example/': { read: false, write: true }
+      });
+
+      const stored = JSON.parse(localStorage.getItem('bahia_auth_session'));
+      expect(stored.profile.name).toBe('Test User');
+      expect(stored.relays).toEqual(authModule.authState.relays);
+    });
+
+    it('does not use the legacy Bahia relay for bootstrap metadata queries', async () => {
+      const pubkey = 'a'.repeat(64);
+      nip07Module.getPublicKey.mockResolvedValue(pubkey);
+      nip07Module.getRelays.mockResolvedValue({
+        'wss://bahia.sharegap.net/relay': { read: true, write: true }
+      });
+
+      await authModule.login();
+
+      const requestedRelays = poolClientMock.connect.mock.calls[0][0];
+      expect(requestedRelays).toEqual(expect.arrayContaining(['wss://nos.lol', 'wss://relay.primal.net']));
+      expect(requestedRelays).not.toContain('wss://bahia.sharegap.net/relay');
     });
 
     it('should handle login failure and preserve existing session if any', async () => {

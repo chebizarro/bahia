@@ -20,10 +20,16 @@ import {
   getNip46Signer,
   getCapabilities as getNip46Capabilities
 } from '$lib/nostr/nip46.js';
+import { KINDS } from '$lib/nostr/kinds.js';
+import { PoolBackedClient } from '$lib/nostr/pool-client.js';
+import { normalizeRelayUrl, uniqueRelays } from '$lib/nostr/pool-utils.js';
 import { supportsDirectNip98Auth } from '$lib/auth/capabilities.js';
 import { currentSystemInfo, loadSystemInfo } from './system.svelte.js';
 
 const SESSION_KEY = 'bahia_auth_session';
+const AUTH_BOOTSTRAP_RELAYS = ['wss://nos.lol', 'wss://relay.primal.net'];
+const AUTH_QUERY_TIMEOUT_MS = 5000;
+const LEGACY_BAHIA_RELAY = normalizeRelayUrl('wss://bahia.sharegap.net/relay');
 
 const initialState = {
   status: 'unknown',
@@ -100,7 +106,7 @@ function loadPersistedSession() {
     if (!isValidHexPubkey(session.pubkey)) return null;
     return {
       pubkey: session.pubkey,
-      relays: session.relays || {},
+      relays: normalizeRelayMap(session.relays || {}),
       authMethod: session.authMethod || 'nip07',
       nip46: session.nip46 || null,
       lastAuthenticatedAt: session.lastAuthenticatedAt,
@@ -117,7 +123,7 @@ function persistSession({ pubkey, relays, authMethod = 'nip07', nip46 = null, pr
   try {
     localStorage.setItem(
       SESSION_KEY,
-      JSON.stringify({ pubkey, relays, authMethod, nip46, profile, lastAuthenticatedAt })
+      JSON.stringify({ pubkey, relays: normalizeRelayMap(relays), authMethod, nip46, profile, lastAuthenticatedAt })
     );
   } catch (error) {
     console.error('Failed to persist auth session:', error);
@@ -164,114 +170,149 @@ function normalizeProfileMetadata(metadata = {}) {
   };
 }
 
-function normalizeRelayUrls(relays = {}) {
+function normalizeRelayMap(relays = {}) {
   if (Array.isArray(relays)) {
-    return relays.filter((relay) => typeof relay === 'string' && /^wss?:\/\//i.test(relay));
+    return Object.fromEntries(uniqueRelays(relays)
+      .filter((relay) => /^wss?:\/\//i.test(relay))
+      .map((relay) => [normalizeRelayUrl(relay), { read: true, write: true }]));
   }
 
-  return Object.entries(relays || {})
-    .filter(([url, config]) => /^wss?:\/\//i.test(url) && config?.read !== false)
+  return Object.fromEntries(
+    Object.entries(relays || {})
+      .filter(([url]) => /^wss?:\/\//i.test(url))
+      .map(([url, config]) => [
+        normalizeRelayUrl(url),
+        {
+          read: config?.read !== false,
+          write: config?.write !== false
+        }
+      ])
+  );
+}
+
+function normalizeRelayUrls(relays = {}) {
+  return Object.entries(normalizeRelayMap(relays))
+    .filter(([, config]) => config?.read !== false)
     .map(([url]) => url);
 }
 
-function collectProfileRelayCandidates(userRelays = {}) {
-  const candidates = [];
-  candidates.push(...normalizeRelayUrls(userRelays));
-
-  // Do not use the legacy Sharegap relay fallback here. Profile lookup should stay on
-  // user relays plus generic public relays so a deprecated relay endpoint cannot poison
-  // bootstrap or emit distracting console failures.
-  candidates.push('wss://relay.primal.net', 'wss://nos.lol');
-
-  return Array.from(new Set(candidates.filter((relay) => typeof relay === 'string' && /^wss?:\/\//i.test(relay)))).slice(0, 8);
+function mergeRelayMaps(...relayMaps) {
+  const merged = {};
+  for (const candidate of relayMaps) {
+    const normalized = normalizeRelayMap(candidate);
+    for (const [url, config] of Object.entries(normalized)) {
+      if (!merged[url]) {
+        merged[url] = { read: false, write: false };
+      }
+      merged[url] = {
+        read: merged[url].read || config.read !== false,
+        write: merged[url].write || config.write !== false
+      };
+    }
+  }
+  return merged;
 }
 
-async function queryKind0OverRelay(relayUrl, pubkey, timeoutMs = 5000) {
-  return new Promise((resolve) => {
-    let settled = false;
-    let latest = null;
-    let socket;
+function sameRelayMap(left = {}, right = {}) {
+  const leftEntries = Object.entries(normalizeRelayMap(left)).sort(([a], [b]) => a.localeCompare(b));
+  const rightEntries = Object.entries(normalizeRelayMap(right)).sort(([a], [b]) => a.localeCompare(b));
+  return JSON.stringify(leftEntries) === JSON.stringify(rightEntries);
+}
 
-    const finish = (event = null) => {
-      if (settled) return;
-      settled = true;
-      try {
-        if (socket && socket.readyState === WebSocket.OPEN) {
-          socket.send(JSON.stringify(['CLOSE', `profile-${pubkey}`]));
-        }
-      } catch {}
-      try {
-        socket?.close();
-      } catch {}
-      resolve(event);
-    };
+function collectBootstrapRelayCandidates(userRelays = {}) {
+  return uniqueRelays([
+    ...AUTH_BOOTSTRAP_RELAYS,
+    ...normalizeRelayUrls(userRelays)
+  ]).filter((relay) => normalizeRelayUrl(relay) !== LEGACY_BAHIA_RELAY).slice(0, 10);
+}
 
-    const timer = setTimeout(() => finish(latest), timeoutMs);
+async function queryAuthEvents(pubkey, userRelays = {}, kinds = [], limit = 5) {
+  if (!isValidHexPubkey(pubkey) || !Array.isArray(kinds) || kinds.length === 0) return [];
 
-    try {
-      socket = new WebSocket(relayUrl);
-    } catch {
-      clearTimeout(timer);
-      finish(null);
-      return;
-    }
+  const relays = collectBootstrapRelayCandidates(userRelays);
+  if (relays.length === 0) return [];
 
-    socket.onopen = () => {
-      socket.send(JSON.stringify(['REQ', `profile-${pubkey}`, { kinds: [0], authors: [pubkey], limit: 5 }]));
-    };
-
-    socket.onmessage = (message) => {
-      try {
-        const payload = JSON.parse(message.data);
-        if (payload[0] === 'EVENT' && payload[2]?.pubkey === pubkey && typeof payload[2]?.content === 'string') {
-          if (!latest || Number(payload[2].created_at || 0) > Number(latest.created_at || 0)) {
-            latest = payload[2];
-          }
-        }
-        if (payload[0] === 'EOSE' || payload[0] === 'CLOSED') {
-          clearTimeout(timer);
-          finish(latest);
-        }
-      } catch {
-        clearTimeout(timer);
-        finish(latest);
-      }
-    };
-
-    socket.onerror = () => {
-      clearTimeout(timer);
-      finish(latest);
-    };
-
-    socket.onclose = () => {
-      clearTimeout(timer);
-      finish(latest);
-    };
+  const client = new PoolBackedClient({
+    relays,
+    saveRelayConfig: () => {}
   });
+
+  try {
+    const summary = await client.connect(relays, { force: true });
+    if (!summary?.connected) return [];
+    return await client.queryUntilEose([
+      { kinds, authors: [pubkey], limit }
+    ], { timeoutMs: AUTH_QUERY_TIMEOUT_MS });
+  } catch (error) {
+    console.warn('Failed auth metadata relay query:', error);
+    return [];
+  } finally {
+    client.disconnect();
+  }
+}
+
+function latestAuthEvent(events, kind, pubkey) {
+  return (events || [])
+    .filter((event) => event?.kind === kind && event?.pubkey === pubkey)
+    .sort((a, b) => Number(b?.created_at || 0) - Number(a?.created_at || 0))[0] || null;
+}
+
+function parseNip65RelayList(event) {
+  const relays = {};
+  for (const tag of Array.isArray(event?.tags) ? event.tags : []) {
+    if (tag[0] !== 'r' || typeof tag[1] !== 'string' || !/^wss?:\/\//i.test(tag[1])) continue;
+    const marker = String(tag[2] || '').toLowerCase();
+    relays[normalizeRelayUrl(tag[1])] = {
+      read: marker !== 'write',
+      write: marker !== 'read'
+    };
+  }
+  return relays;
+}
+
+async function fetchRelayList(pubkey, userRelays = {}) {
+  const relayListKind = KINDS.NIP65_RELAY_LIST || 10002;
+  const events = await queryAuthEvents(pubkey, userRelays, [relayListKind], 5);
+  const latest = latestAuthEvent(events, relayListKind, pubkey);
+  if (!latest) return {};
+  return parseNip65RelayList(latest);
 }
 
 async function fetchProfile(pubkey, userRelays = {}) {
   if (!isValidHexPubkey(pubkey)) return null;
 
   try {
-    // Avoid querying the shared Bahia control-plane relay for kind-0 metadata.
-    // That relay is scoped for Bahia control-plane/read-model traffic and may
-    // close profile queries as blocked. Use user/public relays instead.
-    const relayCandidates = collectProfileRelayCandidates(userRelays);
-    if (relayCandidates.length === 0) return null;
-
-    const results = await Promise.allSettled(relayCandidates.map((relay) => queryKind0OverRelay(relay, pubkey)));
-    const latest = results
-      .filter((result) => result.status === 'fulfilled' && result.value?.content)
-      .map((result) => result.value)
-      .sort((a, b) => Number(b?.created_at || 0) - Number(a?.created_at || 0))[0];
-
+    const events = await queryAuthEvents(pubkey, userRelays, [0], 5);
+    const latest = latestAuthEvent(events, 0, pubkey);
     if (!latest?.content) return null;
     return normalizeProfileMetadata(JSON.parse(latest.content));
   } catch (error) {
     console.warn('Failed to load Nostr kind-0 profile:', error);
     return null;
   }
+}
+
+async function hydrateAuthMetadata({ pubkey, relays = {}, authMethod = 'nip07', nip46 = null, lastAuthenticatedAt = new Date().toISOString() }) {
+  const mergedRelays = mergeRelayMaps(relays, await fetchRelayList(pubkey, relays));
+  if (!sameRelayMap(relays, mergedRelays)) {
+    updateAuthState({ relays: mergedRelays });
+  }
+
+  const profile = await fetchProfile(pubkey, mergedRelays);
+  if (profile) {
+    updateAuthState({ profile });
+  }
+
+  persistSession({
+    pubkey,
+    relays: mergedRelays,
+    authMethod,
+    nip46,
+    profile,
+    lastAuthenticatedAt
+  });
+
+  return { relays: mergedRelays, profile };
 }
 
 function installDirectNip98Provider(api) {
@@ -430,18 +471,13 @@ export async function initializeAuth() {
           } catch (backendError) {
             console.warn('Backend auth provider initialization failed:', backendError.message);
           }
-          const profile = await fetchProfile(persisted.pubkey, persisted.relays);
-          if (profile) {
-            updateAuthState({ profile });
-            persistSession({
-              pubkey: persisted.pubkey,
-              relays: persisted.relays,
-              authMethod: persisted.authMethod,
-              nip46: persisted.nip46,
-              profile,
-              lastAuthenticatedAt: persisted.lastAuthenticatedAt
-            });
-          }
+          await hydrateAuthMetadata({
+            pubkey: persisted.pubkey,
+            relays: persisted.relays,
+            authMethod: persisted.authMethod,
+            nip46: persisted.nip46,
+            lastAuthenticatedAt: persisted.lastAuthenticatedAt
+          });
           return;
         }
       }
@@ -494,17 +530,18 @@ export async function login() {
         error: null
       });
       dismissMissingSignerToast();
-      let profile = null;
       try {
         await authenticateBackendInternal(pubkey);
       } catch (backendError) {
         console.warn('Backend authentication failed:', backendError.message);
       }
-      profile = await fetchProfile(pubkey, relays);
-      if (profile) {
-        updateAuthState({ profile });
-      }
-      persistSession({ pubkey, relays, authMethod: 'nip07', nip46: null, profile });
+      await hydrateAuthMetadata({
+        pubkey,
+        relays,
+        authMethod: 'nip07',
+        nip46: null,
+        lastAuthenticatedAt: authState.lastAuthenticatedAt
+      });
       toast.success('Signed in successfully');
     } catch (error) {
       console.error('Login failed:', error);
@@ -555,23 +592,17 @@ export async function loginWithNostrConnect(uri) {
       });
       dismissMissingSignerToast();
 
-      let profile = null;
       try {
         await authenticateBackendInternal(connected.pubkey);
       } catch (backendError) {
         console.warn('Backend authentication failed:', backendError.message);
       }
-      profile = await fetchProfile(connected.pubkey, connected.relays);
-      if (profile) {
-        updateAuthState({ profile });
-      }
-
-      persistSession({
+      await hydrateAuthMetadata({
         pubkey: connected.pubkey,
         relays: connected.relays,
         authMethod: 'nip46',
         nip46: connected,
-        profile
+        lastAuthenticatedAt: authState.lastAuthenticatedAt
       });
       toast.success('Connected signer successfully');
     } catch (error) {
