@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/openagentsinc/bahia/internal/domain"
+	"go.uber.org/zap"
 )
 
 // DNSEndpointLister exposes materialized DNS endpoints to the MCP server.
@@ -34,6 +35,16 @@ func (s *Server) GetResources(ctx context.Context) ([]Resource, error) {
 		return nil, err
 	}
 	resources = append(resources, fipsResources...)
+
+	// Add documentation resources
+	docsResources, err := s.listDocsResources(ctx)
+	if err != nil {
+		// Log but don't fail - docs are optional
+		s.logger.Warn("failed to list docs resources", zap.Error(err))
+	} else {
+		resources = append(resources, docsResources...)
+	}
+
 	sort.SliceStable(resources, func(i, j int) bool {
 		if resources[i].URI != resources[j].URI {
 			return resources[i].URI < resources[j].URI

@@ -351,6 +351,49 @@ Production Readiness
 
 ⸻
 
+Documentation Maintenance
+
+User-facing documentation lives in `docs/user-guide/`. When you add or change app behavior, update the corresponding documentation.
+
+Documentation scope:
+
+| Changed Area | Documentation to Update |
+|--------------|------------------------|
+| Services | `docs/user-guide/features/services.md` |
+| Environments | `docs/user-guide/features/environments.md` |
+| Deployments | `docs/user-guide/features/deployments.md` |
+| Artifacts | `docs/user-guide/features/artifacts.md` |
+| Notifications | `docs/user-guide/features/notifications.md` |
+| Organizations | `docs/user-guide/features/organizations.md` |
+| LLM Routes | `docs/user-guide/features/llm-routes.md` |
+| ML Models | `docs/user-guide/features/ml-models.md` |
+| Souls/Soul Factory | `docs/user-guide/features/souls.md` |
+| Workers | `docs/user-guide/features/workers.md` |
+| Backup | `docs/user-guide/features/backup.md` |
+| DNS | `docs/user-guide/features/dns.md` |
+| Packages | `docs/user-guide/features/packages.md` |
+| Policies | `docs/user-guide/features/policies.md` |
+| Payments | `docs/user-guide/features/payments.md` |
+| MCP tools | `docs/user-guide/mcp-tools.md` |
+| CLI commands | `docs/user-guide/cli-reference.md` |
+| Nostr events | `docs/user-guide/nostr-integration.md` |
+| Core concepts | `docs/user-guide/core-concepts.md` |
+| Setup/config | `docs/user-guide/getting-started.md` |
+
+Rules:
+
+1. When adding a new MCP tool, document it in `docs/user-guide/mcp-tools.md`.
+2. When adding a new CLI command, document it in `docs/user-guide/cli-reference.md`.
+3. When changing Nostr event kinds or payloads, update `docs/user-guide/nostr-integration.md` and `docs/control-planes.md`.
+4. When adding a new feature area, create a new file in `docs/user-guide/features/` and add it to the index in `docs/user-guide/index.md`.
+5. When changing behavior described in existing docs, update those docs to match.
+6. Documentation uses markdown. Include code examples for CLI, MCP, and Nostr where relevant.
+7. Keep documentation accessible to both human users and AI agents — the same docs serve both audiences via web and MCP.
+
+Documentation is part of the deliverable. Undocumented features are incomplete features.
+
+⸻
+
 Session Completion
 
 Work is not complete until changes are committed and pushed.

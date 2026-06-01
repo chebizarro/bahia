@@ -1706,7 +1706,8 @@ func (s *Server) GetTools() []Tool {
 	tools = append(tools, fipsToolDefinitions()...)
 	tools = append(tools, workerToolDefinitions()...)
 	tools = append(tools, packageToolDefinitions()...)
-	return append(tools, backupToolDefinitions()...)
+	tools = append(tools, backupToolDefinitions()...)
+	return append(tools, docsToolDefinitions()...)
 }
 
 // CallTool handles an MCP tool call.
@@ -1975,6 +1976,10 @@ func (s *Server) CallTool(ctx context.Context, name string, arguments map[string
 		return s.handleMarkNotificationRead(ctx, arguments)
 	case "bahia_dismiss_notification":
 		return s.handleDismissNotification(ctx, arguments)
+	case "bahia_docs_read":
+		return s.handleDocsRead(ctx, arguments)
+	case "bahia_docs_list":
+		return s.handleDocsList(ctx, arguments)
 	default:
 		return errorResult(fmt.Sprintf("unknown tool: %s", name)), nil
 	}

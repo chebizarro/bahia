@@ -1,0 +1,410 @@
+# CLI Reference
+
+The `bahia` CLI provides command-line access to all Bahia operations.
+
+## Installation
+
+```bash
+# From source
+go install github.com/openagentsinc/bahia/cmd/cli@latest
+
+# Or build locally
+cd bahia
+make build
+./bin/bahia --help
+```
+
+## Configuration
+
+### Environment Variables
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `BAHIA_API_URL` | API server URL | `http://localhost:8080` |
+| `BAHIA_NOSTR_RELAYS` | Comma-separated relay URLs | (discovery) |
+| `BAHIA_AUTH_ENABLED` | Enable authentication | `false` |
+| `BAHIA_OPERATOR_HTTP_FALLBACK` | Allow HTTP fallback | `false` |
+
+### Config File
+
+```yaml
+# ~/.bahia/config.yaml
+api_url: "https://bahia.example.com"
+relays:
+  - "wss://relay.example.com"
+auth:
+  enabled: true
+```
+
+## Authentication
+
+### NIP-07 (Browser Extension)
+
+```bash
+# Authenticate with browser extension
+bahia auth login --nip07
+```
+
+### NIP-46 (Remote Signer)
+
+```bash
+# Connect to bunker
+bahia auth login --nip46 "bunker://pubkey@relay?secret=..."
+```
+
+### Verify Auth
+
+```bash
+bahia auth status
+```
+
+## Commands
+
+### Services
+
+```bash
+# List services
+bahia services list
+bahia services list -o json
+
+# Get service
+bahia services get payment-api
+bahia services get svc-123 -o yaml
+
+# Create service
+bahia services create \
+  --name "payment-api" \
+  --repository "https://github.com/company/payment-api"
+
+# Update service
+bahia services update payment-api \
+  --description "Updated description"
+
+# Delete service
+bahia services delete payment-api
+```
+
+### Environments
+
+```bash
+# List environments
+bahia environments list
+
+# Get environment
+bahia environments get production
+
+# Create environment
+bahia environments create \
+  --name "Production" \
+  --slug "production"
+
+# Update environment
+bahia environments update production \
+  --requires-approval true
+
+# Delete environment
+bahia environments delete staging
+```
+
+### Deployments
+
+```bash
+# Deploy
+bahia deploy \
+  --service payment-api \
+  --environment production \
+  --artifact art-789
+
+# List intents
+bahia deployments list
+bahia deployments list --service payment-api
+
+# Get intent
+bahia deployments get intent-123
+
+# Approve/reject
+bahia deployments approve intent-123
+bahia deployments reject intent-123 --reason "Missing tests"
+
+# List runs
+bahia deployments runs list
+bahia deployments runs get run-456
+
+# View logs
+bahia deployments logs run-456 --tail 100
+
+# Rollback
+bahia rollback \
+  --service payment-api \
+  --environment production
+```
+
+### State
+
+```bash
+# List state
+bahia state list
+bahia state list --environment production
+bahia state list --service payment-api
+
+# Drifted services
+bahia state drifted
+bahia state drifted --environment production
+```
+
+### Direct Runtime Actions
+
+```bash
+# Deploy (signer-first)
+bahia services actions deploy payment-api \
+  --environment production \
+  --artifact art-789
+
+# Restart
+bahia services actions restart payment-api \
+  --environment production
+
+# Stop
+bahia services actions stop payment-api \
+  --environment production
+```
+
+### Artifacts
+
+```bash
+# List artifacts
+bahia artifacts list --service-id svc-123
+
+# Get artifact
+bahia artifacts get art-456
+
+# Register artifact
+bahia artifacts register \
+  --service-id svc-123 \
+  --image "registry.example.com/api:v2.0.0" \
+  --digest "sha256:abc123..."
+
+# SBOM
+bahia artifacts sbom art-456
+bahia artifacts sbom art-456 --packages
+
+# Signatures
+bahia artifacts signatures art-456
+bahia artifacts verify art-456
+```
+
+### Builds
+
+```bash
+# List builds
+bahia builds list --service-id svc-123
+
+# Get build
+bahia builds get build-123
+
+# Register build
+bahia builds register \
+  --service-id svc-123 \
+  --workflow-id "ci-run-456" \
+  --commit-sha "abc123"
+```
+
+### Workers
+
+```bash
+# List workers
+bahia workers list
+
+# Get worker
+bahia workers get npub1worker...
+
+# Pricing
+bahia workers pricing npub1worker...
+```
+
+### Policies
+
+```bash
+# List policies
+bahia policies list
+
+# Get policy
+bahia policies get require-sbom
+
+# Create policy
+bahia policies create \
+  --name "require-sbom" \
+  --type sbom \
+  --rule require_sbom=true
+
+# Update policy
+bahia policies update require-sbom \
+  --rule max_critical_vulns=0
+
+# Delete policy
+bahia policies delete require-sbom
+
+# Evaluate
+bahia policies evaluate \
+  --artifact-id art-123 \
+  --environment production
+```
+
+### LLM Routes
+
+```bash
+# List routes
+bahia llm routes list
+
+# Get route
+bahia llm routes get gpt4-proxy
+
+# Create route
+bahia llm routes create \
+  --name "gpt4-proxy" \
+  --model-family openai
+
+# Releases
+bahia llm releases list --route-id route-123
+bahia llm releases create \
+  --route-id route-123 \
+  --version "v1.2.0"
+
+# Deploy
+bahia llm deploy \
+  --route-id route-123 \
+  --release-id release-456 \
+  --environment production
+
+# Approve
+bahia llm approve intent-123
+
+# Rollback
+bahia llm rollback \
+  --route-id route-123 \
+  --environment production
+
+# State
+bahia llm state list
+bahia llm state drifted
+```
+
+### Souls
+
+```bash
+# List souls
+bahia souls list
+bahia souls list --status active
+
+# Get soul
+bahia souls get scout
+
+# Provision
+bahia souls provision scout \
+  --template "31950:pubkey:research-agent" \
+  --tier standard \
+  --follow
+
+bahia souls provision codebot \
+  --brief "A code review specialist" \
+  --tier heavy
+
+# Lifecycle
+bahia souls suspend scout --reason "Maintenance"
+bahia souls resume scout
+bahia souls revoke scout --reason "No longer needed"
+bahia souls redeploy scout
+bahia souls regenerate scout --brief "New purpose..."
+
+# Templates
+bahia souls templates list
+bahia souls templates get research-agent
+```
+
+### Notifications
+
+```bash
+# List channels
+bahia notifications channels list
+
+# Get channel
+bahia notifications channels get channel-123
+
+# Create channel
+bahia notifications channels create \
+  --name "Deploy Alerts" \
+  --type webhook \
+  --config url="https://hooks.example.com/bahia"
+
+# Update channel
+bahia notifications channels update channel-123 \
+  --events deployment.completed,deployment.failed
+
+# Delete channel
+bahia notifications channels delete channel-123
+
+# Test channel
+bahia notifications channels test channel-123
+
+# Logs
+bahia notifications log --limit 50
+```
+
+### Adoption
+
+```bash
+# Scan for containers
+bahia adopt scan \
+  --target name=prod,endpoint_ref=prod-docker
+
+# Import discovered containers
+bahia adopt import \
+  --target name=prod,endpoint_ref=prod-docker \
+  --all
+```
+
+### Payments
+
+```bash
+# Estimate cost
+bahia payments estimate \
+  --service-id svc-123 \
+  --environment-id env-456
+
+# Get run cost
+bahia payments cost run-789
+
+# Payment history
+bahia payments history
+bahia payments history --worker npub1worker...
+```
+
+## Output Formats
+
+```bash
+# Table (default)
+bahia services list
+
+# JSON
+bahia services list -o json
+
+# YAML
+bahia services get payment-api -o yaml
+```
+
+## Global Flags
+
+| Flag | Description |
+|------|-------------|
+| `--api-url` | Override API URL |
+| `--relay` | Specify relay (repeatable) |
+| `--http-fallback` | Allow HTTP fallback |
+| `-o, --output` | Output format (table, json, yaml) |
+| `-v, --verbose` | Verbose output |
+| `--help` | Show help |
+
+## Related
+
+- [Getting Started](getting-started.md) — Setup guide
+- [MCP Tools](mcp-tools.md) — Programmatic access
+- [Nostr Integration](nostr-integration.md) — Event model
