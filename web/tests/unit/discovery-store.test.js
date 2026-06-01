@@ -1,18 +1,21 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
-const nostrMock = vi.hoisted(() => ({
-  setRelays: vi.fn(),
+const poolClientMock = vi.hoisted(() => ({
   connect: vi.fn(),
-  queryUntilEose: vi.fn()
+  queryUntilEose: vi.fn(),
+  disconnect: vi.fn()
 }));
 
 vi.mock('../../src/lib/nostr/client.js', async () => {
   const actual = await vi.importActual('../../src/lib/nostr/client.js');
   return {
-    ...actual,
-    nostr: nostrMock
+    ...actual
   };
 });
+
+vi.mock('../../src/lib/nostr/pool-client.js', () => ({
+  PoolBackedClient: vi.fn().mockImplementation(() => poolClientMock)
+}));
 
 const trustedPubkey = 'b'.repeat(64);
 const otherPubkey = 'f'.repeat(64);
@@ -70,8 +73,8 @@ describe('Nostr system discovery store', () => {
       relay_urls: ['http://localhost:10547/relay'],
       service_pubkeys: [trustedPubkey]
     };
-    nostrMock.connect.mockResolvedValue({ connected: 1, total: 1, failed: 0, connecting: 0, relays: [{ url: 'ws://localhost:10547/relay', status: 'connected' }] });
-    nostrMock.queryUntilEose.mockResolvedValue([
+    poolClientMock.connect.mockResolvedValue({ connected: 1, total: 1, failed: 0, connecting: 0, relays: [{ url: 'ws://localhost:10547/relay', status: 'connected' }] });
+    poolClientMock.queryUntilEose.mockResolvedValue([
       systemDiscovery(),
       relaySet('bahia-browser-v1', ['http://localhost:10547/relay', 'wss://public.example'])
     ]);
@@ -82,11 +85,11 @@ describe('Nostr system discovery store', () => {
   it('reads bootstrap seed, subscribes until EOSE, and normalizes discovery into systemInfo shape', async () => {
     const info = await store.discoverSystemInfo();
 
-    expect(nostrMock.setRelays).toHaveBeenCalledWith(['ws://localhost:10547/relay'], false);
-    expect(nostrMock.connect).toHaveBeenCalledWith(['ws://localhost:10547/relay'], { force: true });
-    expect(nostrMock.queryUntilEose).toHaveBeenCalledWith([
+    expect(poolClientMock.connect).toHaveBeenCalledWith(['ws://localhost:10547/relay'], { force: true });
+    expect(poolClientMock.queryUntilEose).toHaveBeenCalledWith([
       { kinds: [31974, 30002], authors: [trustedPubkey] }
     ]);
+    expect(poolClientMock.disconnect).toHaveBeenCalledTimes(1);
     expect(info.features.relay_read_models).toBe(true);
     expect(info.nostr.service_pubkey).toBe(trustedPubkey);
     expect(info.nostr.browser_relays).toEqual(['ws://localhost:10547/relay', 'wss://public.example']);
@@ -97,11 +100,11 @@ describe('Nostr system discovery store', () => {
     delete window.__BAHIA_BOOTSTRAP__;
 
     await expect(store.discoverSystemInfo({ force: true })).rejects.toThrow('No relay URLs configured');
-    expect(nostrMock.queryUntilEose).not.toHaveBeenCalled();
+    expect(poolClientMock.queryUntilEose).not.toHaveBeenCalled();
   });
 
   it('fails closed when EOSE completes without a trusted system discovery event', async () => {
-    nostrMock.queryUntilEose.mockResolvedValue([
+    poolClientMock.queryUntilEose.mockResolvedValue([
       systemDiscovery({ pubkey: otherPubkey }),
       relaySet('bahia-browser-v1', ['wss://relay.example'])
     ]);
@@ -110,7 +113,7 @@ describe('Nostr system discovery store', () => {
   });
 
   it('fails closed when EOSE completes without a browser relay set', async () => {
-    nostrMock.queryUntilEose.mockResolvedValue([systemDiscovery()]);
+    poolClientMock.queryUntilEose.mockResolvedValue([systemDiscovery()]);
 
     await expect(store.discoverSystemInfo({ force: true })).rejects.toThrow('No trusted Bahia browser relay set received before EOSE');
   });

@@ -1,5 +1,6 @@
 import { browser } from '$app/environment';
-import { nostr, KINDS, getDTag, getTagValues, parseJsonContent, upsertReplaceableEvent } from '../nostr/client.js';
+import { KINDS, getDTag, getTagValues, parseJsonContent, upsertReplaceableEvent } from '../nostr/client.js';
+import { PoolBackedClient } from '../nostr/pool-client.js';
 
 export const BOOTSTRAP_SCHEMA = 'bahia.bootstrap.v1';
 export const DISCOVERY_SCHEMA = 'bahia.system-discovery.v1';
@@ -194,15 +195,24 @@ export async function discoverSystemInfo({ force = false } = {}) {
       }
 
       const relays = Array.from(new Set(seed.relay_urls.map(normalizeRelayUrl).filter(Boolean)));
-      nostr.setRelays(relays, false);
-      const summary = await nostr.connect(relays, { force: true });
-      if (summary.connected === 0) {
-        throw new Error('Unable to connect to any bootstrap relay');
+      const bootstrapClient = new PoolBackedClient({
+        relays,
+        saveRelayConfig: () => {}
+      });
+      let events;
+      try {
+        const summary = await bootstrapClient.connect(relays, { force: true });
+        if (summary.connected === 0) {
+          throw new Error('Unable to connect to any bootstrap relay');
+        }
+
+        events = await bootstrapClient.queryUntilEose([
+          { kinds: [KINDS.BAHIA_SYSTEM_DISCOVERY, KINDS.NIP51_RELAY_SET], authors: seed.service_pubkeys }
+        ]);
+      } finally {
+        bootstrapClient.disconnect();
       }
 
-      const events = await nostr.queryUntilEose([
-        { kinds: [KINDS.BAHIA_SYSTEM_DISCOVERY, KINDS.NIP51_RELAY_SET], authors: seed.service_pubkeys }
-      ]);
       const normalized = normalizeDiscoveryEvents(events, seed.service_pubkeys);
       discoveryState.events = events;
       discoveryState.relaySets = normalized._discovery.relay_sets;
