@@ -352,7 +352,7 @@ func New(cfg *config.Config) (*App, error) {
 		EmergencyMinHealthy: cfg.Nostr.RelayQuorum.EmergencyMinHealthy,
 	})
 	healthProvider.SetRelayHealthFunc(func() (connected, healthy int) {
-		return aggregateRelayHealth(controlPlanePool, relayPool, encryptedRequestPool)
+		return aggregateRelayHealth(controlPlanePool, relayPool)
 	})
 
 	catalog := nostrAdapter.NewKindCatalog()
@@ -957,7 +957,7 @@ func New(cfg *config.Config) (*App, error) {
 		Telemetry:          telemetryProvider,
 		Background:         bgManager,
 		toolCoordinator:    toolCoordinator,
-		relayPools:         []*nostrAdapter.RelayPool{controlPlanePool, relayPool, encryptedRequestPool, fipsRelayPool},
+			relayPools:         []*nostrAdapter.RelayPool{controlPlanePool, relayPool, fipsRelayPool},
 		ModePolicy:         policy,
 		Health:             healthProvider,
 		RelayFirstRegistry: relayFirstRegistry,
