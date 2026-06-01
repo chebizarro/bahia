@@ -6,6 +6,7 @@ export const ENCRYPTED_REQUEST_ROUTING_TAG = 'encrypted';
 export const ENCRYPTED_REQUEST_WIRE_VERSION = 'bahia-encrypted-v1';
 export const ENCRYPTED_REQUEST_KIND = 5980;
 export const ENCRYPTED_RESULT_KIND = 7980;
+export const ENCRYPTED_RESULT_TIMEOUT_MS = 15000;
 
 function ensureHexPubkey(pubkey, field) {
   if (typeof pubkey !== 'string' || !/^[0-9a-fA-F]{64}$/.test(pubkey)) {
@@ -154,7 +155,7 @@ export class EncryptedControlplaneTransport {
     };
   }
 
-  awaitEncryptedResult({ requestEventId, resultKinds = [ENCRYPTED_RESULT_KIND], signal, servicePubkey = this.servicePubkey } = {}) {
+  awaitEncryptedResult({ requestEventId, resultKinds = [ENCRYPTED_RESULT_KIND], signal, servicePubkey = this.servicePubkey, timeoutMs = ENCRYPTED_RESULT_TIMEOUT_MS } = {}) {
     if (!requestEventId) return Promise.reject(new Error('requestEventId is required'));
     if (!Array.isArray(resultKinds) || resultKinds.length === 0) return Promise.reject(new Error('resultKinds are required'));
     if (authState.status !== 'authenticated' || !authState.pubkey) return Promise.reject(new Error('Nostr authentication is required for encrypted Nostr events'));
@@ -163,11 +164,16 @@ export class EncryptedControlplaneTransport {
     return new Promise((resolve, reject) => {
       let unsubscribe = null;
       let settled = false;
+      let timer = null;
       const seen = new Set();
       const pendingRelays = openRelayUrls(this.client);
       const requesterPubkey = authState.pubkey;
 
       const cleanup = () => {
+        if (timer) {
+          clearTimeout(timer);
+          timer = null;
+        }
         if (unsubscribe) unsubscribe();
         unsubscribe = null;
         signal?.removeEventListener?.('abort', onAbort);
@@ -193,6 +199,12 @@ export class EncryptedControlplaneTransport {
       }
 
       signal?.addEventListener?.('abort', onAbort, { once: true });
+
+      if (Number.isFinite(timeoutMs) && timeoutMs > 0) {
+        timer = setTimeout(() => {
+          settle(reject, new Error(`Timed out waiting for encrypted Nostr result for ${requestEventId}`));
+        }, timeoutMs);
+      }
 
       const filter = { kinds: resultKinds, '#e': [requestEventId], '#p': [requesterPubkey], authors: [servicePubkey] };
       unsubscribe = this.client.subscribe([filter], {
@@ -228,7 +240,7 @@ export class EncryptedControlplaneTransport {
     });
   }
 
-  async requestEncryptedResult({ resultKinds = [ENCRYPTED_RESULT_KIND], signal, ...request } = {}) {
+  async requestEncryptedResult({ resultKinds = [ENCRYPTED_RESULT_KIND], signal, timeoutMs = ENCRYPTED_RESULT_TIMEOUT_MS, ...request } = {}) {
     await this.connect();
     const event = await this.buildEncryptedRequestEvent(request);
     const abortController = typeof AbortController !== 'undefined' ? new AbortController() : null;
@@ -236,7 +248,7 @@ export class EncryptedControlplaneTransport {
     const forwardAbort = () => abortController?.abort(signal?.reason);
     signal?.addEventListener?.('abort', forwardAbort, { once: true });
 
-    const resultPromise = this.awaitEncryptedResult({ requestEventId: event.id, resultKinds, signal: waitSignal });
+    const resultPromise = this.awaitEncryptedResult({ requestEventId: event.id, resultKinds, signal: waitSignal, timeoutMs });
     try {
       const publishResult = await this.publishEncryptedRequest(event);
       const result = await resultPromise;

@@ -221,4 +221,24 @@ describe('encrypted controlplane transport', () => {
 
     await expect(promise).rejects.toThrow('bad ciphertext');
   });
+
+  it('times out when no correlated encrypted result arrives', async () => {
+    vi.useFakeTimers();
+    try {
+      client.subscribe.mockImplementation((_filters, _handlers) => vi.fn());
+      const transport = new module.EncryptedControlplaneTransport({ client, relays: ['wss://requests.example'], servicePubkey: 'b'.repeat(64) });
+
+      const promise = transport.requestEncryptedResult({
+        operation: 'orgs.list',
+        payload: {},
+        timeoutMs: 25
+      });
+
+      await vi.advanceTimersByTimeAsync(25);
+
+      await expect(promise).rejects.toThrow('Timed out waiting for encrypted Nostr result for request-id');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
