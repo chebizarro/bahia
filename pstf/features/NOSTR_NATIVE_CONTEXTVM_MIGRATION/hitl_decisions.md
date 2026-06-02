@@ -4,8 +4,8 @@
 
 **Question:** Should CLI/pkg client operator paths switch immediately to kind `25910` ContextVM publication even though backend handlers for all legacy request families are not yet present?
 
-**Decision needed:** Product/architecture owner must confirm the cutover sequence.
+**Decision:** Resolved by completed sibling streams. `bahia-dgju` implemented CEP-4/NIP-59 gift-wrap around inner ContextVM `25910`; `bahia-f0uw` removed production legacy runtime kind reactor/subscriber support outside startup migration; `bahia-viys` completed web/CLI client cutover to ContextVM/canonical observables.
 
-**Current slice resolution:** Do not create fake client behavior. Web encrypted transport now emits ContextVM JSON-RPC by default, docs define the intended method surface, and `pkg/client` keeps legacy request-kind publication isolated with an explicit dependency on `bahia-viys`.
+**Final resolution:** Production mutation paths use ContextVM JSON-RPC kind `25910`, normally wrapped with `1059`/`21059` where encrypted transport is available. Legacy Bahia custom kinds are migration/test fixtures only, not live runtime support.
 
-**Dependency beads:** `bahia-viys`, `bahia-itrq`.
+**Dependency beads:** none remaining for this feature.

@@ -8,7 +8,6 @@
   import {
     SCHEDULING_STATES,
     WORKER_COMMANDS,
-    WORKER_KINDS,
     workerCommandPublishPayload
   } from './actions.js';
   import {
@@ -32,7 +31,6 @@
     {
       label: 'Request cleanup',
       command: WORKER_COMMANDS.CLEANUP_REQUEST,
-      kind: WORKER_KINDS.CLEANUP_REQUEST,
       cleanup: true,
       reasonPrompt: 'Reason for requesting worker cleanup (optional)',
       allowedFrom: SCHEDULING_STATES
@@ -40,49 +38,42 @@
     {
       label: 'Cordon',
       command: WORKER_COMMANDS.CORDON,
-      kind: WORKER_KINDS.CORDON_REQUEST,
       reasonPrompt: 'Reason for cordoning this worker (optional)',
       allowedFrom: ['active']
     },
     {
       label: 'Uncordon',
       command: WORKER_COMMANDS.UNCORDON,
-      kind: WORKER_KINDS.UNCORDON_REQUEST,
       reasonPrompt: 'Reason for uncordoning this worker (optional)',
       allowedFrom: ['cordoned']
     },
     {
       label: 'Drain',
       command: WORKER_COMMANDS.DRAIN,
-      kind: WORKER_KINDS.DRAIN_REQUEST,
       reasonPrompt: 'Reason for draining this worker (optional)',
       allowedFrom: ['active', 'cordoned']
     },
     {
       label: 'Cancel drain',
       command: WORKER_COMMANDS.UNDRAIN,
-      kind: WORKER_KINDS.UNDRAIN_REQUEST,
       reasonPrompt: 'Reason for canceling drain (optional)',
       allowedFrom: ['draining']
     },
     {
       label: 'Enter maintenance',
       command: WORKER_COMMANDS.MAINTENANCE_ENTER,
-      kind: WORKER_KINDS.MAINTENANCE_ENTER_REQUEST,
       reasonPrompt: 'Reason for entering maintenance (optional)',
       allowedFrom: ['active', 'cordoned', 'draining']
     },
     {
       label: 'Exit maintenance',
       command: WORKER_COMMANDS.MAINTENANCE_EXIT,
-      kind: WORKER_KINDS.MAINTENANCE_EXIT_REQUEST,
       reasonPrompt: 'Reason for exiting maintenance (optional)',
       allowedFrom: ['maintenance']
     },
     {
       label: 'Edit labels',
       command: WORKER_COMMANDS.LABELS_UPDATE,
-      kind: WORKER_KINDS.LABELS_UPDATE_REQUEST,
       labels: true,
       allowedFrom: SCHEDULING_STATES
     }

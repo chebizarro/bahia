@@ -375,9 +375,9 @@ func TestWorkerHandlerRejectsMissingIdempotencyKey(t *testing.T) {
 	}
 }
 
-func TestWorkerCommandKindsAreInDefaultSubscriptionFilter(t *testing.T) {
+func TestWorkerCommandKindsAreOmittedFromDefaultRuntimeSubscription(t *testing.T) {
 	filter := nostr.Filter{Kinds: defaultRequestSubscriptionKinds()}
-	assertFilterHasKinds(t, filter,
+	assertFilterMissingKinds(t, filter,
 		KindWorkerCordonRequest,
 		KindWorkerUncordonRequest,
 		KindWorkerDrainRequest,

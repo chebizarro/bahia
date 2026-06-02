@@ -122,9 +122,12 @@ describe('Nostr Client - Parsing Functions', () => {
       expect(KINDS.BAHIA_LLM_DEPLOYMENT_RESULT).toBe(7973);
     });
 
-    it('includes LLM read models and lifecycle events in Bahia subscription groups', () => {
-      expect(BAHIA_READ_MODEL_KINDS).toEqual(expect.arrayContaining([31964, 31965]));
-      expect(BAHIA_STATUS_KINDS).toEqual(expect.arrayContaining([6973, 7971, 7972, 7973]));
+    it('uses canonical ContextVM observables in Bahia subscription groups', () => {
+      expect(BAHIA_READ_MODEL_KINDS).toEqual(expect.arrayContaining([30900, 11316, 11317, 11318, 11319, 11320, 30002]));
+      expect(BAHIA_READ_MODEL_KINDS).not.toContain(31964);
+      expect(BAHIA_READ_MODEL_KINDS).not.toContain(31965);
+      expect(BAHIA_READ_MODEL_KINDS).not.toContain(32000);
+      expect(BAHIA_STATUS_KINDS).toEqual([30315]);
     });
   });
 

@@ -9,8 +9,6 @@ export const CONTEXTVM_GIFT_WRAP_KIND = 1059;
 export const CONTEXTVM_EPHEMERAL_GIFT_WRAP_KIND = 21059;
 export const ENCRYPTED_REQUEST_KIND = CONTEXTVM_MESSAGE_KIND;
 export const ENCRYPTED_RESULT_KIND = CONTEXTVM_MESSAGE_KIND;
-export const LEGACY_ENCRYPTED_REQUEST_KIND = 5980;
-export const LEGACY_ENCRYPTED_RESULT_KIND = 7980;
 export const ENCRYPTED_RESULT_TIMEOUT_MS = 15000;
 
 function ensureHexPubkey(pubkey, field) {
@@ -77,10 +75,10 @@ function buildContextVMRequest({ operation, payload, requestId }) {
   };
 }
 
-function extractContextVMResult(payload, requestEventId) {
+function extractContextVMResult(payload, requestEventId, contextVMRequestId = requestEventId) {
   if (payload?.jsonrpc === '2.0') {
-    if (payload.id !== requestEventId) {
-      throw new Error('ContextVM encrypted result payload did not correlate to the request event id');
+    if (payload.id !== contextVMRequestId) {
+      throw new Error('ContextVM encrypted result payload did not correlate to the ContextVM request id');
     }
     if (payload.error) {
       const message = payload.error.message || 'ContextVM encrypted request failed';
@@ -220,7 +218,7 @@ export class EncryptedControlplaneTransport {
     };
   }
 
-  awaitEncryptedResult({ requestEventId, resultKinds = [ENCRYPTED_RESULT_KIND], signal, servicePubkey = this.servicePubkey, timeoutMs = ENCRYPTED_RESULT_TIMEOUT_MS } = {}) {
+  awaitEncryptedResult({ requestEventId, contextVMRequestId = requestEventId, resultKinds = [ENCRYPTED_RESULT_KIND], signal, servicePubkey = this.servicePubkey, timeoutMs = ENCRYPTED_RESULT_TIMEOUT_MS } = {}) {
     if (!requestEventId) return Promise.reject(new Error('requestEventId is required'));
     if (!Array.isArray(resultKinds) || resultKinds.length === 0) return Promise.reject(new Error('resultKinds are required'));
     if (authState.status !== 'authenticated' || !authState.pubkey) return Promise.reject(new Error('Nostr authentication is required for encrypted Nostr events'));
@@ -283,7 +281,7 @@ export class EncryptedControlplaneTransport {
           try {
             const plaintext = await decryptWithAuth(servicePubkey, event.content || '');
             const payload = parseJson(plaintext);
-            const resultPayload = extractContextVMResult(payload, requestEventId);
+            const resultPayload = extractContextVMResult(payload, requestEventId, contextVMRequestId);
             settle(resolve, { event, payload: resultPayload, jsonrpc: payload?.jsonrpc === '2.0' ? payload : null });
           } catch (error) {
             settle(reject, error);
@@ -312,13 +310,14 @@ export class EncryptedControlplaneTransport {
 
   async requestEncryptedResult({ resultKinds = [ENCRYPTED_RESULT_KIND], signal, timeoutMs = ENCRYPTED_RESULT_TIMEOUT_MS, ...request } = {}) {
     await this.connect();
-    const event = await this.buildEncryptedRequestEvent(request);
+    const contextVMRequestId = request.requestId || randomId();
+    const event = await this.buildEncryptedRequestEvent({ ...request, requestId: contextVMRequestId });
     const abortController = typeof AbortController !== 'undefined' ? new AbortController() : null;
     const waitSignal = abortController?.signal || signal;
     const forwardAbort = () => abortController?.abort(signal?.reason);
     signal?.addEventListener?.('abort', forwardAbort, { once: true });
 
-    const resultPromise = this.awaitEncryptedResult({ requestEventId: event.id, resultKinds, signal: waitSignal, timeoutMs });
+    const resultPromise = this.awaitEncryptedResult({ requestEventId: event.id, contextVMRequestId, resultKinds, signal: waitSignal, timeoutMs });
     try {
       const publishResult = await this.publishEncryptedRequest(event);
       const result = await resultPromise;

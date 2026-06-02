@@ -1,5 +1,5 @@
-import { KINDS, getTagValue, parseJsonContent } from './client.js';
-import { awaitResult, buildRequestEvent, publishSignedRequest, subscribeStatus } from './controlplane-requests.js';
+import { getTagValue, parseJsonContent } from './client.js';
+import { requestEncryptedResult } from './encrypted-controlplane.js';
 
 export const DNS_COMMANDS = {
   ZONE_CREATE: 'zone_create',
@@ -8,20 +8,11 @@ export const DNS_COMMANDS = {
   DRIFT_REMEDIATE: 'drift_remediate'
 };
 
-export const DNS_OPERATION_STATUS_KIND = KINDS.BAHIA_DNS_OPERATION_STATUS;
-
-export const DNS_COMMAND_KINDS = {
-  [DNS_COMMANDS.ZONE_CREATE]: KINDS.BAHIA_REQUEST_DNS_ZONE_CREATE,
-  [DNS_COMMANDS.POLICY_APPLY]: KINDS.BAHIA_REQUEST_DNS_POLICY_APPLY,
-  [DNS_COMMANDS.RECORD_OVERRIDE]: KINDS.BAHIA_REQUEST_DNS_RECORD_OVERRIDE,
-  [DNS_COMMANDS.DRIFT_REMEDIATE]: KINDS.BAHIA_REQUEST_DNS_DRIFT_REMEDIATE
-};
-
-export const DNS_RESULT_KINDS = {
-  [DNS_COMMANDS.ZONE_CREATE]: KINDS.BAHIA_DNS_ZONE_CREATE_RESULT,
-  [DNS_COMMANDS.POLICY_APPLY]: KINDS.BAHIA_DNS_POLICY_APPLY_RESULT,
-  [DNS_COMMANDS.RECORD_OVERRIDE]: KINDS.BAHIA_DNS_RECORD_OVERRIDE_RESULT,
-  [DNS_COMMANDS.DRIFT_REMEDIATE]: KINDS.BAHIA_DNS_DRIFT_REMEDIATE_RESULT
+export const DNS_CONTEXTVM_OPERATIONS = {
+  [DNS_COMMANDS.ZONE_CREATE]: 'dns/zone-create',
+  [DNS_COMMANDS.POLICY_APPLY]: 'dns/policy-apply',
+  [DNS_COMMANDS.RECORD_OVERRIDE]: 'dns/record-set',
+  [DNS_COMMANDS.DRIFT_REMEDIATE]: 'dns/drift-remediate'
 };
 
 export const DNS_ACTIONS = {
@@ -81,12 +72,12 @@ function defaultTagsForCommand(command, payload = {}) {
 }
 
 export function buildDNSCommandRequest({ command, payload = {}, tags = [] } = {}) {
-  const kind = DNS_COMMAND_KINDS[command];
-  if (!kind) throw new Error(`Unknown DNS command: ${command}`);
+  const operation = DNS_CONTEXTVM_OPERATIONS[command];
+  if (!operation) throw new Error(`Unknown DNS command: ${command}`);
   return {
-    kind,
+    operation,
     tags: [...defaultTagsForCommand(command, payload), ...normalizeTags(tags)],
-    content: payload
+    payload
   };
 }
 
@@ -95,6 +86,18 @@ function taggedRequestEventId(event) {
     Array.isArray(candidate) && candidate[0] === 'e' && candidate[1] && (!candidate[3] || candidate[3] === 'reply')
   );
   return tag?.[1] || '';
+}
+
+function resultEventFromContextVM(response) {
+  if (response?.resultEvent) return response.resultEvent;
+  return {
+    id: response?.requestEventId || '',
+    kind: 25910,
+    pubkey: '',
+    created_at: Math.floor(Date.now() / 1000),
+    tags: [['e', response?.requestEventId || '', '', 'reply']],
+    content: JSON.stringify(response?.result ?? {})
+  };
 }
 
 export function parseDNSOperationEvent(event) {
@@ -121,66 +124,27 @@ export function dnsResultIsFailure(result) {
   return status === 'error' || status === 'failed' || status === 'rejected';
 }
 
-export async function startDNSCommand({ command, payload = {}, tags = [], signal, onStatus, onClosed, servicePubkey } = {}) {
+export async function startDNSCommand({ command, payload = {}, tags = [], signal } = {}) {
   const request = buildDNSCommandRequest({ command, payload, tags });
-  const event = await buildRequestEvent(request);
-  const requestEventId = event.id;
-  const resultKind = DNS_RESULT_KINDS[command];
-
-  let unsubscribeStatus = subscribeStatus({
-    requestEventId,
-    statusKinds: [DNS_OPERATION_STATUS_KIND],
-    servicePubkey,
-    onStatus: (event, relay) => {
-      if (typeof onStatus === 'function') onStatus(parseDNSOperationEvent(event), event, relay);
-    },
-    onClosed: (reason, relay) => {
-      if (typeof onClosed === 'function') onClosed(new Error(`Nostr DNS status subscription closed${relay ? ` on ${relay}` : ''}: ${reason || 'closed'}`), reason, relay);
-    }
+  const response = await requestEncryptedResult({
+    operation: request.operation,
+    payload: request.payload,
+    tags: request.tags,
+    signal
   });
-
-  const abortController = typeof AbortController !== 'undefined' ? new AbortController() : null;
-  const waitSignal = abortController?.signal || signal;
-  const forwardAbort = () => abortController?.abort(signal?.reason);
-  signal?.addEventListener?.('abort', forwardAbort, { once: true });
-
-  const result = awaitResult({
-    requestEventId,
-    resultKinds: [resultKind],
-    signal: waitSignal,
-    servicePubkey
-  }).then((event) => parseDNSOperationEvent(event)).finally(() => {
-    if (unsubscribeStatus) unsubscribeStatus();
-    unsubscribeStatus = null;
-    signal?.removeEventListener?.('abort', forwardAbort);
-  });
-
-  let published;
-  try {
-    published = await publishSignedRequest(event);
-  } catch (error) {
-    if (!signal?.aborted) {
-      abortController?.abort(new Error(`Nostr DNS request failed before terminal result: ${error.message}`));
-    }
-    await result.catch(() => null);
-    signal?.throwIfAborted?.();
-    throw error;
-  }
+  const resultEvent = resultEventFromContextVM(response);
+  const parsedResult = parseDNSOperationEvent(resultEvent);
 
   return {
     command,
-    requestEventId,
-    resultKind,
+    requestEventId: response.requestEventId,
+    resultKind: 25910,
     request,
-    event: published.event,
-    ok: published.ok,
-    acceptedRelays: published.acceptedRelays,
-    rejectedRelays: published.rejectedRelays,
-    result,
-    unsubscribeStatus: () => {
-      if (unsubscribeStatus) unsubscribeStatus();
-      unsubscribeStatus = null;
-      abortController?.abort(new Error('Nostr DNS status/result tracking aborted by caller'));
-    }
+    event: response.event,
+    ok: response.ok,
+    acceptedRelays: response.acceptedRelays,
+    rejectedRelays: response.rejectedRelays,
+    result: Promise.resolve(parsedResult),
+    unsubscribeStatus: () => {}
   };
 }

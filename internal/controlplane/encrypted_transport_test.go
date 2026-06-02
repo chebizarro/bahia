@@ -119,7 +119,16 @@ func contextVMResponse(t *testing.T, ev nostr.Event) ContextVMJSONRPCResponse {
 	return response
 }
 
-func wrapContextVMEvent(t *testing.T, inner *nostr.Event, requesterKey string, kind int) *nostr.Event {
+func wrapContextVMEvent(t *testing.T, inner *nostr.Event, kind int) *nostr.Event {
+	t.Helper()
+	outer := wrapContextVMEventWithWrapperKey(t, inner, nostr.GeneratePrivateKey(), kind)
+	if outer.PubKey == inner.PubKey {
+		t.Fatalf("test wrapper must use a random pubkey, got inner pubkey %s", inner.PubKey)
+	}
+	return outer
+}
+
+func wrapContextVMEventWithWrapperKey(t *testing.T, inner *nostr.Event, wrapperKey string, kind int) *nostr.Event {
 	t.Helper()
 	servicePubkey, err := nostr.GetPublicKey(testServiceKey)
 	if err != nil {
@@ -129,7 +138,7 @@ func wrapContextVMEvent(t *testing.T, inner *nostr.Event, requesterKey string, k
 	if err != nil {
 		t.Fatalf("marshal inner ContextVM event: %v", err)
 	}
-	conversationKey, err := nip44.GenerateConversationKey(servicePubkey, requesterKey)
+	conversationKey, err := nip44.GenerateConversationKey(servicePubkey, wrapperKey)
 	if err != nil {
 		t.Fatalf("conversation key: %v", err)
 	}
@@ -138,19 +147,15 @@ func wrapContextVMEvent(t *testing.T, inner *nostr.Event, requesterKey string, k
 		t.Fatalf("encrypt ContextVM event: %v", err)
 	}
 	outer := &nostr.Event{Kind: kind, CreatedAt: nostr.Now(), Tags: nostr.Tags{{"p", servicePubkey}}, Content: ciphertext}
-	if err := outer.Sign(requesterKey); err != nil {
+	if err := outer.Sign(wrapperKey); err != nil {
 		t.Fatalf("sign ContextVM wrapper: %v", err)
 	}
 	return outer
 }
 
-func unwrapContextVMResponse(t *testing.T, ev nostr.Event, requesterKey string) ContextVMJSONRPCResponse {
+func unwrapContextVMResponseEvent(t *testing.T, ev nostr.Event, requesterKey string) nostr.Event {
 	t.Helper()
-	servicePubkey, err := nostr.GetPublicKey(testServiceKey)
-	if err != nil {
-		t.Fatalf("service pubkey: %v", err)
-	}
-	conversationKey, err := nip44.GenerateConversationKey(servicePubkey, requesterKey)
+	conversationKey, err := nip44.GenerateConversationKey(ev.PubKey, requesterKey)
 	if err != nil {
 		t.Fatalf("conversation key: %v", err)
 	}
@@ -162,6 +167,12 @@ func unwrapContextVMResponse(t *testing.T, ev nostr.Event, requesterKey string) 
 	if err := json.Unmarshal([]byte(plaintext), &inner); err != nil {
 		t.Fatalf("unmarshal inner response event: %v", err)
 	}
+	return inner
+}
+
+func unwrapContextVMResponse(t *testing.T, ev nostr.Event, requesterKey string) ContextVMJSONRPCResponse {
+	t.Helper()
+	inner := unwrapContextVMResponseEvent(t, ev, requesterKey)
 	return contextVMResponse(t, inner)
 }
 
@@ -494,7 +505,105 @@ func TestContextVMTransport_IdempotencyCachesProgressToken(t *testing.T) {
 	}
 }
 
-func TestContextVMTransport_EncryptedGiftWrapDispatchesAndResponds(t *testing.T) {
+func TestContextVMTransport_RandomKeyGiftWrapDispatchesAndResponds(t *testing.T) {
+	servicePubkey, err := nostr.GetPublicKey(testServiceKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requesterPubkey, err := nostr.GetPublicKey(testRequesterKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name string
+		kind int
+	}{
+		{name: "kind 1059", kind: KindContextVMGiftWrap},
+		{name: "kind 21059", kind: KindContextVMEphemeralWrap},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			publisher := &mockEncryptedPublisher{}
+			responder := newResponder(t, publisher)
+			transport := NewEncryptedRequestTransport(nil, responder, []string{requesterPubkey}, zap.NewNop())
+			transport.RegisterContextVMHandler(ContextVMMethodBackupRun, func(_ context.Context, request ContextVMRequest) (any, error) {
+				if request.Event.PubKey != requesterPubkey {
+					t.Fatalf("handler saw sender %s, want inner requester %s", request.Event.PubKey, requesterPubkey)
+				}
+				if request.OuterEvent == nil || request.OuterEvent.Kind != tc.kind {
+					t.Fatalf("handler outer event = %+v, want kind %d", request.OuterEvent, tc.kind)
+				}
+				if request.OuterEvent.PubKey == requesterPubkey || request.OuterEvent.PubKey == servicePubkey {
+					t.Fatalf("wrapper pubkey %s must be random, not requester/service", request.OuterEvent.PubKey)
+				}
+				return map[string]any{"accepted": true}, nil
+			})
+			inner := makeContextVMEvent(t, testRequesterKey, `{"jsonrpc":"2.0","id":"backup","method":"backup/run","params":{"_meta":{"progressToken":"backup-1"}}}`)
+			outer := wrapContextVMEvent(t, inner, tc.kind)
+
+			transport.HandleEvent(context.Background(), outer)
+
+			if len(publisher.events) != 1 {
+				t.Fatalf("expected encrypted ContextVM response, got %d", len(publisher.events))
+			}
+			wrappedResponse := publisher.events[0]
+			if err := nostrpool.ValidateInboundEvent(&wrappedResponse, time.Now().UTC(), nostrpool.InboundEventMaxFutureSkew); err != nil {
+				t.Fatalf("response wrapper failed NIP-01 validation: %v", err)
+			}
+			if wrappedResponse.Kind != tc.kind || !hasTag(wrappedResponse.Tags, "e", outer.ID) || !hasTag(wrappedResponse.Tags, "p", inner.PubKey) {
+				t.Fatalf("unexpected wrapper response: kind=%d tags=%#v", wrappedResponse.Kind, wrappedResponse.Tags)
+			}
+			if wrappedResponse.PubKey == servicePubkey || wrappedResponse.PubKey == requesterPubkey {
+				t.Fatalf("response wrapper pubkey %s must be random", wrappedResponse.PubKey)
+			}
+			innerResponse := unwrapContextVMResponseEvent(t, wrappedResponse, testRequesterKey)
+			if innerResponse.Kind != KindContextVMMessage || innerResponse.PubKey != servicePubkey || !hasTag(innerResponse.Tags, "e", inner.ID) || !hasTag(innerResponse.Tags, "p", inner.PubKey) {
+				t.Fatalf("unexpected inner response event: kind=%d pubkey=%s tags=%#v", innerResponse.Kind, innerResponse.PubKey, innerResponse.Tags)
+			}
+			if ok, err := innerResponse.CheckSignature(); err != nil || !ok {
+				t.Fatalf("inner response signature invalid: ok=%v err=%v", ok, err)
+			}
+			response := contextVMResponse(t, innerResponse)
+			if string(response.ID) != `"backup"` || response.Error != nil {
+				t.Fatalf("unexpected encrypted response = %+v", response)
+			}
+		})
+	}
+}
+
+func TestContextVMTransport_EncryptedGiftWrapAuthorizesInnerSenderNotWrapper(t *testing.T) {
+	publisher := &mockEncryptedPublisher{}
+	responder := newResponder(t, publisher)
+	otherPubkey, err := nostr.GetPublicKey(testOtherKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	transport := NewEncryptedRequestTransport(nil, responder, []string{otherPubkey}, zap.NewNop())
+	called := false
+	transport.RegisterContextVMHandler(ContextVMMethodBackupRun, func(context.Context, ContextVMRequest) (any, error) {
+		called = true
+		return map[string]any{"accepted": true}, nil
+	})
+	inner := makeContextVMEvent(t, testRequesterKey, `{"jsonrpc":"2.0","id":"backup","method":"backup/run","params":{"_meta":{"progressToken":"backup-unauthorized"}}}`)
+	outer := wrapContextVMEvent(t, inner, KindContextVMGiftWrap)
+
+	transport.HandleEvent(context.Background(), outer)
+
+	if called {
+		t.Fatalf("unauthorized inner sender should not reach handler")
+	}
+	if len(publisher.events) != 1 {
+		t.Fatalf("expected encrypted unauthorized response, got %d", len(publisher.events))
+	}
+	if publisher.events[0].Kind != KindContextVMGiftWrap || !hasTag(publisher.events[0].Tags, "e", outer.ID) || !hasTag(publisher.events[0].Tags, "p", inner.PubKey) {
+		t.Fatalf("unexpected unauthorized wrapper response: kind=%d tags=%#v", publisher.events[0].Kind, publisher.events[0].Tags)
+	}
+	response := unwrapContextVMResponse(t, publisher.events[0], testRequesterKey)
+	if response.Error == nil || response.Error.Code != -32001 || string(response.ID) != "null" {
+		t.Fatalf("unauthorized encrypted response = %+v", response)
+	}
+}
+
+func TestContextVMTransport_RejectsNonRandomRequesterWrapperPubkey(t *testing.T) {
 	publisher := &mockEncryptedPublisher{}
 	responder := newResponder(t, publisher)
 	requesterPubkey, err := nostr.GetPublicKey(testRequesterKey)
@@ -502,22 +611,74 @@ func TestContextVMTransport_EncryptedGiftWrapDispatchesAndResponds(t *testing.T)
 		t.Fatal(err)
 	}
 	transport := NewEncryptedRequestTransport(nil, responder, []string{requesterPubkey}, zap.NewNop())
+	called := false
 	transport.RegisterContextVMHandler(ContextVMMethodBackupRun, func(context.Context, ContextVMRequest) (any, error) {
-		return map[string]any{"accepted": true}, nil
+		called = true
+		return nil, nil
 	})
-	inner := makeContextVMEvent(t, testRequesterKey, `{"jsonrpc":"2.0","id":"backup","method":"backup/run","params":{"_meta":{"progressToken":"backup-1"}}}`)
-	outer := wrapContextVMEvent(t, inner, testRequesterKey, KindContextVMEphemeralWrap)
+	inner := makeContextVMEvent(t, testRequesterKey, `{"jsonrpc":"2.0","id":"backup","method":"backup/run"}`)
+	outer := wrapContextVMEventWithWrapperKey(t, inner, testRequesterKey, KindContextVMGiftWrap)
 
 	transport.HandleEvent(context.Background(), outer)
 
-	if len(publisher.events) != 1 {
-		t.Fatalf("expected encrypted ContextVM response, got %d", len(publisher.events))
+	if called {
+		t.Fatalf("non-random requester wrapper should not reach handler")
 	}
-	if publisher.events[0].Kind != KindContextVMEphemeralWrap || !hasTag(publisher.events[0].Tags, "e", outer.ID) || !hasTag(publisher.events[0].Tags, "p", inner.PubKey) {
-		t.Fatalf("unexpected wrapper response: kind=%d tags=%#v", publisher.events[0].Kind, publisher.events[0].Tags)
+	if len(publisher.events) != 0 {
+		t.Fatalf("non-random requester wrapper should be dropped without response, got %d events", len(publisher.events))
 	}
-	response := unwrapContextVMResponse(t, publisher.events[0], testRequesterKey)
-	if string(response.ID) != `"backup"` || response.Error != nil {
-		t.Fatalf("unexpected encrypted response = %+v", response)
+}
+
+func TestContextVMTransport_RejectsInvalidRandomKeyWrapper(t *testing.T) {
+	publisher := &mockEncryptedPublisher{}
+	responder := newResponder(t, publisher)
+	requesterPubkey, err := nostr.GetPublicKey(testRequesterKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	transport := NewEncryptedRequestTransport(nil, responder, []string{requesterPubkey}, zap.NewNop())
+	called := false
+	transport.RegisterContextVMHandler(ContextVMMethodBackupRun, func(context.Context, ContextVMRequest) (any, error) {
+		called = true
+		return nil, nil
+	})
+	inner := makeContextVMEvent(t, testRequesterKey, `{"jsonrpc":"2.0","id":"backup","method":"backup/run"}`)
+	outer := wrapContextVMEvent(t, inner, KindContextVMGiftWrap)
+	outer.Content = "tampered-" + outer.Content
+
+	transport.HandleEvent(context.Background(), outer)
+
+	if called {
+		t.Fatalf("invalid wrapper should not reach handler")
+	}
+	if len(publisher.events) != 0 {
+		t.Fatalf("invalid wrapper should be dropped without response, got %d events", len(publisher.events))
+	}
+}
+
+func TestContextVMTransport_RejectsInvalidWrappedInnerEvent(t *testing.T) {
+	publisher := &mockEncryptedPublisher{}
+	responder := newResponder(t, publisher)
+	requesterPubkey, err := nostr.GetPublicKey(testRequesterKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	transport := NewEncryptedRequestTransport(nil, responder, []string{requesterPubkey}, zap.NewNop())
+	called := false
+	transport.RegisterContextVMHandler(ContextVMMethodBackupRun, func(context.Context, ContextVMRequest) (any, error) {
+		called = true
+		return nil, nil
+	})
+	inner := makeContextVMEvent(t, testRequesterKey, `{"jsonrpc":"2.0","id":"backup","method":"backup/run"}`)
+	inner.Content = `{"jsonrpc":"2.0","id":"backup","method":"tools/call"}`
+	outer := wrapContextVMEvent(t, inner, KindContextVMEphemeralWrap)
+
+	transport.HandleEvent(context.Background(), outer)
+
+	if called {
+		t.Fatalf("invalid inner event should not reach handler")
+	}
+	if len(publisher.events) != 0 {
+		t.Fatalf("invalid inner event should be dropped without response, got %d events", len(publisher.events))
 	}
 }

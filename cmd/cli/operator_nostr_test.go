@@ -18,6 +18,9 @@ func TestRootCommandExposesOperatorFlags(t *testing.T) {
 	if flag := cmd.PersistentFlags().Lookup("relay"); flag == nil {
 		t.Fatal("root command missing --relay")
 	}
+	if flag := cmd.PersistentFlags().Lookup("service-pubkey"); flag == nil {
+		t.Fatal("root command missing --service-pubkey")
+	}
 	if flag := cmd.PersistentFlags().Lookup("http-fallback"); flag == nil {
 		t.Fatal("root command missing --http-fallback")
 	}
@@ -70,6 +73,10 @@ func TestResolveOperatorRelaysPrecedence(t *testing.T) {
 func TestServiceActionCommandUsesSignerFirstClientByDefault(t *testing.T) {
 	resetOperatorGlobals(t)
 	key := nostr.GeneratePrivateKey()
+	servicePubkey, err := nostr.GetPublicKey(nostr.GeneratePrivateKey())
+	if err != nil {
+		t.Fatalf("derive service pubkey: %v", err)
+	}
 	factoryCalls := 0
 	restoreFactory := replaceOperatorFactory(func(cfg client.OperatorControlPlaneConfig) (cliOperatorClient, error) {
 		factoryCalls++
@@ -79,12 +86,15 @@ func TestServiceActionCommandUsesSignerFirstClientByDefault(t *testing.T) {
 		if len(cfg.Relays) != 1 || cfg.Relays[0] != "wss://relay.example" {
 			t.Fatalf("Relays = %#v, want command relay", cfg.Relays)
 		}
+		if cfg.ServicePubkey != servicePubkey {
+			t.Fatalf("ServicePubkey = %q, want command service pubkey", cfg.ServicePubkey)
+		}
 		return fakeCLIOperatorClient{}, nil
 	})
 	defer restoreFactory()
 
 	cmd := newRootCommand()
-	cmd.SetArgs([]string{"--privkey", key, "--relay", "wss://relay.example", "services", "actions", "restart", "--service", "svc", "--environment", "env"})
+	cmd.SetArgs([]string{"--privkey", key, "--relay", "wss://relay.example", "--service-pubkey", servicePubkey, "services", "actions", "restart", "--service", "svc", "--environment", "env"})
 	if err := cmd.ExecuteContext(context.Background()); err != nil {
 		t.Fatalf("ExecuteContext() error = %v", err)
 	}
@@ -248,6 +258,7 @@ func newOperatorFlagTestCommand(t *testing.T) *cobra.Command {
 	t.Helper()
 	root := &cobra.Command{Use: "bahia"}
 	root.PersistentFlags().StringArrayVar(&operatorRelays, "relay", nil, "")
+	root.PersistentFlags().StringVar(&operatorServicePubkey, "service-pubkey", "", "")
 	root.PersistentFlags().BoolVar(&operatorHTTPFallback, "http-fallback", false, "")
 	root.PersistentFlags().StringVar(&nostrNsec, "nsec", "", "")
 	root.PersistentFlags().StringVar(&nostrPrivateKey, "privkey", "", "")
@@ -270,8 +281,10 @@ func resetOperatorGlobals(t *testing.T) {
 	nostrNsec = ""
 	nostrPrivateKey = ""
 	operatorRelays = nil
+	operatorServicePubkey = ""
 	operatorHTTPFallback = false
 	t.Setenv("BAHIA_NOSTR_RELAYS", "")
+	t.Setenv("BAHIA_NOSTR_SERVICE_PUBKEY", "")
 	t.Setenv("BAHIA_OPERATOR_HTTP_FALLBACK", "")
 	t.Setenv("BAHIA_NOSTR_NSEC", "")
 	t.Setenv("BAHIA_NOSTR_PRIVATE_KEY", "")
@@ -282,6 +295,7 @@ func resetOperatorGlobals(t *testing.T) {
 		nostrNsec = ""
 		nostrPrivateKey = ""
 		operatorRelays = nil
+		operatorServicePubkey = ""
 		operatorHTTPFallback = false
 	})
 }

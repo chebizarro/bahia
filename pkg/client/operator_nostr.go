@@ -21,6 +21,7 @@ import (
 type OperatorControlPlaneConfig struct {
 	Relays             []string
 	PrivateKey         string // 64-character hex or nsec input
+	ServicePubkey      string // optional 64-character Bahia ContextVM service pubkey for #p/authors routing
 	PublishWaitTimeout time.Duration
 }
 
@@ -110,18 +111,16 @@ func (t *relayPoolOperatorTransport) Close() {
 	}
 }
 
-// OperatorControlPlaneClient publishes signed operator request events and waits
-// for correlated status/result replies over Nostr subscriptions.
-// ContextVM JSON-RPC mutation publication is blocked until bahia-viys backend
-// handlers accept kind 25910 methods for these operator actions; this client
-// keeps the legacy event-kind path isolated at the package boundary meanwhile.
+// OperatorControlPlaneClient publishes signed ContextVM JSON-RPC operator
+// requests and waits for correlated ContextVM replies over Nostr subscriptions.
 type OperatorControlPlaneClient struct {
-	relays     []string
-	privateKey string
-	signer     canonicalnostr.Signer
-	pubkey     string
-	transport  operatorRelayTransport
-	timeout    time.Duration
+	relays        []string
+	privateKey    string
+	signer        canonicalnostr.Signer
+	pubkey        string
+	transport     operatorRelayTransport
+	servicePubkey string
+	timeout       time.Duration
 }
 
 // NewOperatorControlPlaneClient builds a signer-first operator control-plane client.
@@ -150,13 +149,18 @@ func NewOperatorControlPlaneClient(cfg OperatorControlPlaneConfig) (*OperatorCon
 	if timeout <= 0 {
 		timeout = 30 * time.Second
 	}
+	servicePubkey := strings.TrimSpace(cfg.ServicePubkey)
+	if servicePubkey != "" && len(servicePubkey) != 64 {
+		return nil, fmt.Errorf("service pubkey must be a 64-character hex pubkey")
+	}
 	return &OperatorControlPlaneClient{
-		relays:     relays,
-		privateKey: privateKey,
-		signer:     signer,
-		pubkey:     pubkey,
-		transport:  &relayPoolOperatorTransport{pool: pool},
-		timeout:    timeout,
+		relays:        relays,
+		privateKey:    privateKey,
+		signer:        signer,
+		pubkey:        pubkey,
+		transport:     &relayPoolOperatorTransport{pool: pool},
+		servicePubkey: servicePubkey,
+		timeout:       timeout,
 	}, nil
 }
 
@@ -189,11 +193,9 @@ func (c *OperatorControlPlaneClient) ScanAdoptionNostr(ctx context.Context, req 
 	}
 	payload := adoptionScanEventRequest{Targets: adoptionEventTargetsFromClient(req.Targets)}
 	event, err := c.publishAndAwait(ctx, operatorRequest{
-		Kind:       controlplane.KindAdoptionScanRequest,
-		StatusKind: controlplane.KindAdoptionStatus,
-		ResultKind: controlplane.KindAdoptionScanResult,
-		Tags:       adoptionRequestTags("scan", req.Targets),
-		Payload:    payload,
+		Method:  "adoption/scan",
+		Tags:    adoptionRequestTags("scan", req.Targets),
+		Payload: payload,
 	}, onStatus)
 	if err != nil {
 		return nil, err
@@ -219,11 +221,9 @@ func (c *OperatorControlPlaneClient) ImportAdoptionNostr(ctx context.Context, re
 		ImportAll:  req.ImportAll,
 	}
 	event, err := c.publishAndAwait(ctx, operatorRequest{
-		Kind:       controlplane.KindAdoptionImportRequest,
-		StatusKind: controlplane.KindAdoptionStatus,
-		ResultKind: controlplane.KindAdoptionImportResult,
-		Tags:       adoptionRequestTags("import", req.Targets),
-		Payload:    payload,
+		Method:  "adoption/import",
+		Tags:    adoptionRequestTags("import", req.Targets),
+		Payload: payload,
 	}, onStatus)
 	if err != nil {
 		return nil, err
@@ -258,11 +258,9 @@ func (c *OperatorControlPlaneClient) runtimeAction(ctx context.Context, action s
 		tags = append(tags, nostr.Tag{"artifact", payload.ArtifactID})
 	}
 	event, err := c.publishAndAwait(ctx, operatorRequest{
-		Kind:       controlplane.KindServiceAction,
-		StatusKind: controlplane.KindActionStatus,
-		ResultKind: controlplane.KindActionResult,
-		Tags:       tags,
-		Payload:    payload,
+		Method:  "service/action",
+		Tags:    tags,
+		Payload: payload,
 	}, onStatus)
 	if err != nil {
 		return nil, err
@@ -279,42 +277,79 @@ func (c *OperatorControlPlaneClient) runtimeAction(ctx context.Context, action s
 }
 
 type operatorRequest struct {
-	Kind       int
-	StatusKind int
-	ResultKind int
-	Tags       nostr.Tags
-	Payload    any
+	Method  string
+	Tags    nostr.Tags
+	Payload any
+}
+
+type contextVMRPCRequest struct {
+	JSONRPC string         `json:"jsonrpc"`
+	ID      string         `json:"id"`
+	Method  string         `json:"method"`
+	Params  map[string]any `json:"params"`
+}
+
+type contextVMRPCResponse struct {
+	JSONRPC string           `json:"jsonrpc"`
+	ID      json.RawMessage  `json:"id,omitempty"`
+	Result  *json.RawMessage `json:"result,omitempty"`
+	Error   *struct {
+		Code    int    `json:"code"`
+		Message string `json:"message"`
+	} `json:"error,omitempty"`
 }
 
 func (c *OperatorControlPlaneClient) publishAndAwait(ctx context.Context, req operatorRequest, onStatus func(OperatorStatusEvent)) (*nostr.Event, error) {
 	if c == nil || c.transport == nil || c.signer == nil || c.pubkey == "" {
 		return nil, &ControlPlaneRequestError{Phase: "configure operator control-plane client", RequestAccepted: false, Cause: fmt.Errorf("operator control-plane client is not configured")}
 	}
-	content, err := json.Marshal(req.Payload)
+	method := strings.TrimSpace(req.Method)
+	if method == "" {
+		return nil, &ControlPlaneRequestError{Phase: "encode operator ContextVM request", RequestAccepted: false, Cause: fmt.Errorf("ContextVM method is required")}
+	}
+	payloadContent, err := json.Marshal(req.Payload)
 	if err != nil {
-		return nil, &ControlPlaneRequestError{Phase: "encode operator request", RequestAccepted: false, Cause: err}
+		return nil, &ControlPlaneRequestError{Phase: "encode operator ContextVM params", RequestAccepted: false, Cause: err}
 	}
 	tags := req.Tags
-	if !tagHasValue(tags, "d", "") && firstTagValue(tags, "d") == "" {
-		tags = append(nostr.Tags{{"d", deterministicOperatorIdempotencyKey(req.Kind, tags, content)}}, tags...)
+	requestID := firstTagValue(tags, "d")
+	if requestID == "" {
+		requestID = deterministicOperatorIdempotencyKey(method, tags, payloadContent)
+		tags = append(nostr.Tags{{"d", requestID}}, tags...)
 	}
-	event := &nostr.Event{Kind: req.Kind, CreatedAt: nostr.Now(), Tags: tags, Content: string(content)}
+	params, err := contextVMParams(req.Payload, requestID)
+	if err != nil {
+		return nil, &ControlPlaneRequestError{Phase: "encode operator ContextVM params", RequestAccepted: false, Cause: err}
+	}
+	tags = append(tags, nostr.Tag{"method", method}, nostr.Tag{controlplane.ContextVMRoutingTag, controlplane.ContextVMWireVersion})
+	if c.servicePubkey != "" {
+		tags = append(tags, nostr.Tag{"p", c.servicePubkey})
+	}
+	rpc := contextVMRPCRequest{JSONRPC: "2.0", ID: requestID, Method: method, Params: params}
+	content, err := json.Marshal(rpc)
+	if err != nil {
+		return nil, &ControlPlaneRequestError{Phase: "encode operator ContextVM request", RequestAccepted: false, Cause: err}
+	}
+	event := &nostr.Event{Kind: controlplane.KindContextVMMessage, CreatedAt: nostr.Now(), Tags: tags, Content: string(content)}
 	if c.timeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, c.timeout)
 		defer cancel()
 	}
 	if err := controlplane.SignGoNostrEvent(ctx, c.signer, event); err != nil {
-		return nil, &ControlPlaneRequestError{Phase: "sign operator request", RequestAccepted: false, Cause: err}
+		return nil, &ControlPlaneRequestError{Phase: "sign operator ContextVM request", RequestAccepted: false, Cause: err}
 	}
 
-	filters := []nostr.Filter{{
-		Kinds: []int{req.StatusKind, req.ResultKind},
+	filter := nostr.Filter{
+		Kinds: []int{controlplane.KindContextVMMessage},
 		Tags:  nostr.TagMap{"e": []string{event.ID}, "p": []string{c.pubkey}},
-	}}
-	sub, err := c.transport.SubscribeAllWithEOSE(ctx, filters)
+	}
+	if c.servicePubkey != "" {
+		filter.Authors = []string{c.servicePubkey}
+	}
+	sub, err := c.transport.SubscribeAllWithEOSE(ctx, []nostr.Filter{filter})
 	if err != nil {
-		return nil, &ControlPlaneRequestError{Phase: "subscribe for operator replies", RequestAccepted: false, Cause: err}
+		return nil, &ControlPlaneRequestError{Phase: "subscribe for operator ContextVM replies", RequestAccepted: false, Cause: err}
 	}
 
 	published, err := c.transport.Publish(ctx, *event)
@@ -322,7 +357,7 @@ func (c *OperatorControlPlaneClient) publishAndAwait(ctx context.Context, req op
 		if err == nil {
 			err = fmt.Errorf("request was not accepted by any relay")
 		}
-		return nil, &ControlPlaneRequestError{Phase: "publish operator request", RequestAccepted: false, PublishedRelays: published, Cause: err}
+		return nil, &ControlPlaneRequestError{Phase: "publish operator ContextVM request", RequestAccepted: false, PublishedRelays: published, Cause: err}
 	}
 
 	seen := map[string]struct{}{}
@@ -330,44 +365,163 @@ func (c *OperatorControlPlaneClient) publishAndAwait(ctx context.Context, req op
 	for {
 		select {
 		case <-ctx.Done():
-			return nil, &ControlPlaneRequestError{Phase: "await operator result", RequestAccepted: true, PublishedRelays: published, Cause: ctx.Err()}
+			return nil, &ControlPlaneRequestError{Phase: "await operator ContextVM result", RequestAccepted: true, PublishedRelays: published, Cause: ctx.Err()}
 		case <-eose:
 			eose = nil
 		case reply, ok := <-sub.Events:
 			if !ok {
-				return nil, &ControlPlaneRequestError{Phase: "await operator result", RequestAccepted: true, PublishedRelays: published, Cause: fmt.Errorf("reply subscription closed before terminal result")}
+				return nil, &ControlPlaneRequestError{Phase: "await operator ContextVM result", RequestAccepted: true, PublishedRelays: published, Cause: fmt.Errorf("reply subscription closed before terminal result")}
 			}
-			if reply == nil || !validSignedEvent(reply) || !correlatesTo(reply, event.ID, c.pubkey) {
+			if reply == nil || reply.Kind != controlplane.KindContextVMMessage || !validSignedEvent(reply) || !correlatesTo(reply, event.ID, c.pubkey) {
+				continue
+			}
+			if c.servicePubkey != "" && reply.PubKey != c.servicePubkey {
 				continue
 			}
 			if _, duplicate := seen[reply.ID]; duplicate {
 				continue
 			}
 			seen[reply.ID] = struct{}{}
-			switch reply.Kind {
-			case req.StatusKind:
-				if onStatus != nil {
-					onStatus(statusEventFromNostr(reply))
-				}
-			case req.ResultKind:
-				return reply, nil
+			var rpc contextVMRPCResponse
+			if err := json.Unmarshal([]byte(reply.Content), &rpc); err != nil || rpc.JSONRPC != "2.0" || !contextVMResponseIDMatches(rpc.ID, requestID) {
+				continue
 			}
+			if rpc.Error != nil {
+				message := strings.TrimSpace(rpc.Error.Message)
+				if message == "" {
+					message = fmt.Sprintf("ContextVM error code %d", rpc.Error.Code)
+				}
+				return nil, &ControlPlaneRequestError{Phase: "await operator ContextVM result", RequestAccepted: true, PublishedRelays: published, Cause: fmt.Errorf("%s", message)}
+			}
+			if rpc.Result == nil {
+				continue
+			}
+			synthetic := *reply
+			synthetic.Content = string(*rpc.Result)
+			synthetic.Tags = append(nostr.Tags{}, reply.Tags...)
+			annotateContextVMResultTags(&synthetic)
+			if onStatus != nil && contextVMResultIsProgress(synthetic.Content) {
+				onStatus(statusEventFromNostr(&synthetic))
+				continue
+			}
+			unwrapSuccessfulContextVMResult(&synthetic)
+			return &synthetic, nil
 		}
 	}
 }
 
-func deterministicOperatorIdempotencyKey(kind int, tags nostr.Tags, content []byte) string {
+func contextVMParams(payload any, progressToken string) (map[string]any, error) {
+	if payload == nil {
+		return map[string]any{"_meta": map[string]any{"progressToken": progressToken}}, nil
+	}
+	content, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+	params := map[string]any{}
+	if len(content) > 0 && string(content) != "null" {
+		if err := json.Unmarshal(content, &params); err != nil {
+			params["value"] = payload
+		}
+	}
+	meta, _ := params["_meta"].(map[string]any)
+	if meta == nil {
+		meta = map[string]any{}
+	}
+	meta["progressToken"] = progressToken
+	params["_meta"] = meta
+	return params, nil
+}
+
+func contextVMResponseIDMatches(id json.RawMessage, want string) bool {
+	if len(id) == 0 || strings.TrimSpace(want) == "" {
+		return true
+	}
+	var s string
+	if err := json.Unmarshal(id, &s); err == nil {
+		return s == want
+	}
+	var v any
+	if err := json.Unmarshal(id, &v); err != nil {
+		return false
+	}
+	return fmt.Sprint(v) == want
+}
+
+func contextVMResultIsProgress(content string) bool {
+	var envelope map[string]any
+	if err := json.Unmarshal([]byte(content), &envelope); err != nil {
+		return false
+	}
+	status := strings.ToLower(strings.TrimSpace(fmt.Sprint(envelope["status"])))
+	return status == "processing" || status == "pending" || status == "running"
+}
+
+func unwrapSuccessfulContextVMResult(event *nostr.Event) {
+	if event == nil {
+		return
+	}
+	var envelope map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(event.Content), &envelope); err != nil {
+		return
+	}
+	var status string
+	if raw, ok := envelope["status"]; ok {
+		_ = json.Unmarshal(raw, &status)
+	}
+	status = strings.ToLower(strings.TrimSpace(status))
+	if status != "ok" && status != "success" {
+		return
+	}
+	for _, key := range []string{"payload", "result"} {
+		if raw, ok := envelope[key]; ok && len(raw) > 0 && string(raw) != "null" {
+			event.Content = string(raw)
+			return
+		}
+	}
+}
+
+func annotateContextVMResultTags(event *nostr.Event) {
+	if event == nil {
+		return
+	}
+	var envelope map[string]any
+	if err := json.Unmarshal([]byte(event.Content), &envelope); err != nil {
+		return
+	}
+	if status := strings.TrimSpace(fmt.Sprint(envelope["status"])); status != "" && status != "<nil>" {
+		event.Tags = append(event.Tags, nostr.Tag{"status", strings.ToLower(status)})
+	}
+	if step := strings.TrimSpace(fmt.Sprint(envelope["step"])); step != "" && step != "<nil>" {
+		event.Tags = append(event.Tags, nostr.Tag{"step", step})
+	}
+	if action := strings.TrimSpace(fmt.Sprint(envelope["action"])); action != "" && action != "<nil>" {
+		event.Tags = append(event.Tags, nostr.Tag{"action", action})
+	}
+	if operation := strings.TrimSpace(fmt.Sprint(envelope["operation"])); operation != "" && operation != "<nil>" {
+		event.Tags = append(event.Tags, nostr.Tag{"operation", operation})
+	}
+	if message := strings.TrimSpace(fmt.Sprint(envelope["message"])); message != "" && message != "<nil>" {
+		event.Tags = append(event.Tags, nostr.Tag{"message", message})
+	}
+	if errMessage := strings.TrimSpace(fmt.Sprint(envelope["error"])); errMessage != "" && errMessage != "<nil>" {
+		event.Tags = append(event.Tags, nostr.Tag{"error", errMessage})
+	}
+}
+
+func deterministicOperatorIdempotencyKey(method string, tags nostr.Tags, content []byte) string {
 	h := sha256.New()
-	_, _ = h.Write([]byte(fmt.Sprintf("operator:%d", kind)))
+	_, _ = h.Write([]byte("operator:" + method))
 	for _, tag := range tags {
-		if len(tag) >= 2 && tag[0] != "d" {
+		if len(tag) >= 2 && tag[0] != "d" && tag[0] != "method" && tag[0] != controlplane.ContextVMRoutingTag {
 			_, _ = h.Write([]byte{0})
 			_, _ = h.Write([]byte(strings.Join(tag, "=")))
 		}
 	}
 	_, _ = h.Write([]byte{0})
 	_, _ = h.Write(content)
-	return fmt.Sprintf("operator:%d:%s", kind, hex.EncodeToString(h.Sum(nil))[:24])
+	safeMethod := strings.NewReplacer("/", "-", " ", "-").Replace(method)
+	return fmt.Sprintf("operator:%s:%s", safeMethod, hex.EncodeToString(h.Sum(nil))[:24])
 }
 
 func validSignedEvent(event *nostr.Event) bool {

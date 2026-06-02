@@ -295,6 +295,13 @@ func (s *Subscriber) handleEvent(ctx context.Context, ev *nostr.Event) {
 		)
 		return
 	}
+	if isLegacyProductionRuntimeKind(ev.Kind) {
+		s.logger.Warn("dropping legacy inbound event after migration boundary",
+			zap.String("event_id", ev.ID),
+			zap.Int("kind", ev.Kind),
+		)
+		return
+	}
 
 	// Serialize tags.
 	tagsJSON, err := json.Marshal(ev.Tags)
@@ -355,6 +362,9 @@ func (s *Subscriber) buildSubscriptionFilters(ctx context.Context) ([]nostr.Filt
 	var adoptionKinds []int
 
 	for _, kind := range s.kinds {
+		if isLegacyProductionRuntimeKind(kind) {
+			continue
+		}
 		switch {
 		case isDirectRuntimeScopedInboundKind(kind):
 			directRuntimeKinds = append(directRuntimeKinds, kind)
@@ -456,29 +466,32 @@ func (s *Subscriber) recordLastSeen(kind int, createdAt time.Time) {
 }
 
 func isCanonicalControlPlaneRequest(kind int) bool {
-	return isControlPlaneRequestKind(kind) || kind == KindAssistantPromptRequest || kind == KindAssistantApproval
+	return kind == kinds.ContextVMMessage || kind == kinds.ContextVMGiftWrap || kind == kinds.ContextVMEphemeralGiftWrap
 }
 
 func isDefaultAuthorScopedInboundKind(kind int) bool {
-	return isControlPlaneRequestKind(kind) || kind == KindAssistantPromptRequest || kind == KindAssistantApproval || (kind >= 31100 && kind <= 31105)
+	return false
 }
 
 func isDirectRuntimeScopedInboundKind(kind int) bool {
-	return kind == 5963
+	return false
 }
 
 func isAdoptionScopedInboundKind(kind int) bool {
-	return kind == 5978 || kind == 5979
+	return false
 }
 
 func isControlPlaneRequestKind(kind int) bool {
-	return (kind >= 5961 && kind <= 5968) ||
-		(kind >= 5971 && kind <= 5976) ||
-		(kind >= 5978 && kind <= 5979) ||
-		(kind >= 5981 && kind <= 5989) ||
-		(kind >= 5991 && kind <= 5996) ||
-		(kind >= 38390 && kind <= 38394) ||
-		kind == 7977
+	return isCanonicalControlPlaneRequest(kind)
+}
+
+func isLegacyProductionRuntimeKind(kind int) bool {
+	return (kind >= 5941 && kind <= 5999) ||
+		(kind >= 6961 && kind <= 6999) ||
+		(kind >= 7961 && kind <= 7999) ||
+		(kind >= 31100 && kind <= 31399) ||
+		(kind >= 31900 && kind <= 32099) ||
+		(kind >= 38390 && kind <= 38499)
 }
 
 func combineAuthors(groups ...[]string) []string {

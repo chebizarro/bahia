@@ -25,9 +25,30 @@
     {
       "id": "T-004",
       "type": "docs",
-      "command": "manual documentation review",
+      "command": "manual documentation review plus stale-claim grep",
       "covers": ["AC-004"],
-      "expected": "Docs include ContextVM methods, canonical read kinds, and dependency beads bahia-viys/bahia-itrq."
+      "expected": "Docs include ContextVM methods, CEP-4/NIP-59 gift-wrap, canonical observable kinds, NIP-09 deletion behavior, and no stale cutover blocker claims."
+    },
+    {
+      "id": "T-005",
+      "type": "unit",
+      "command": "go test ./internal/adapters/nostr ./internal/controlplane ./internal/kinds",
+      "covers": ["AC-005"],
+      "expected": "Production runtime legacy kind reactor/subscriber support remains removed outside startup migration/fixtures."
+    },
+    {
+      "id": "T-006",
+      "type": "unit",
+      "command": "focused transport tests from bahia-dgju",
+      "covers": ["AC-006"],
+      "expected": "CEP-4/NIP-59 1059/21059 random-key gift-wrap transports inner ContextVM 25910 and correlates responses."
+    },
+    {
+      "id": "T-007",
+      "type": "unit",
+      "command": "go test ./pkg/client ./cmd/cli and targeted web unit tests from bahia-viys",
+      "covers": ["AC-007"],
+      "expected": "Web/CLI clients use ContextVM/canonical observables and do not rely on production legacy request-kind runtime support."
     }
   ]
 }

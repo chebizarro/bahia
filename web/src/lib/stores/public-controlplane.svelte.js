@@ -1,118 +1,129 @@
 import { goto } from '$app/navigation';
-import { KINDS, getTagValue, parseJsonContent } from '$lib/nostr/client.js';
-import { requestResult } from '$lib/nostr/controlplane-requests.js';
+import { getTagValue, parseJsonContent } from '$lib/nostr/client.js';
+import { requestEncryptedResult } from '$lib/nostr/encrypted-controlplane.js';
 import { bootstrapControlplane } from './controlplane.svelte.js';
 
-const ACTION_RESULTS = [
-  KINDS.BAHIA_ACTION_RESULT,
-  KINDS.BAHIA_DEPLOYMENT_RESULT,
-  KINDS.BAHIA_SERVICE_CREATE_RESULT,
-  KINDS.BAHIA_ENVIRONMENT_CREATE_RESULT
-];
+function operationResultEvent({ requestEventId, resultEvent, result }) {
+  return resultEvent || {
+    id: requestEventId || '',
+    kind: 25910,
+    tags: [['e', requestEventId || '']],
+    content: JSON.stringify(result ?? {})
+  };
+}
+
+function unwrapCommandPayload(content) {
+  if (!content || typeof content !== 'object' || Array.isArray(content)) return content;
+  const status = String(content.status || '').toLowerCase();
+  if ((status === 'ok' || status === 'success') && Object.prototype.hasOwnProperty.call(content, 'payload')) {
+    return content.payload;
+  }
+  return content;
+}
 
 export function resultContent(event) {
-  return parseJsonContent(event, {});
+  return unwrapCommandPayload(parseJsonContent(event, {}));
 }
 
 export function throwIfErrorResult(event) {
-  const status = String(getTagValue(event, 'status') || resultContent(event)?.status || '').toLowerCase();
+  const rawContent = parseJsonContent(event, {});
+  const status = String(getTagValue(event, 'status') || rawContent?.status || '').toLowerCase();
   if (status === 'error' || status === 'failed') {
-    const content = resultContent(event);
-    throw new Error(getTagValue(event, 'error') || content.error || event.content || 'Nostr command failed');
+    const error = rawContent?.error;
+    const message = typeof error === 'object' && error !== null ? error.message : error;
+    throw new Error(getTagValue(event, 'error') || message || rawContent?.message || event.content || 'Nostr command failed');
   }
   return event;
 }
 
-export async function publishCommand({ kind, tags = [], content = {}, resultKinds = ACTION_RESULTS } = {}) {
-  await bootstrapControlplane();
-  const { resultEvent } = await requestResult({ kind, tags, content, resultKinds });
-  return throwIfErrorResult(resultEvent);
+export async function publishCommand({ operation, tags = [], content = {}, payload, signal, timeoutMs } = {}) {
+  if (typeof operation !== 'string' || !operation.trim()) {
+    throw new Error('ContextVM operation is required for Nostr control-plane commands');
+  }
+  const bootstrap = await bootstrapControlplane();
+  if (!bootstrap?.ok) {
+    throw new Error(bootstrap?.reason || 'Failed to bootstrap relay-backed control plane');
+  }
+  const response = await requestEncryptedResult({
+    operation,
+    payload: payload ?? content,
+    tags,
+    signal,
+    timeoutMs
+  });
+  return throwIfErrorResult(operationResultEvent(response));
 }
 
 export function createService(payload) {
-  return publishCommand({ kind: KINDS.BAHIA_REQUEST_SERVICE_CREATE, content: payload, resultKinds: [KINDS.BAHIA_SERVICE_CREATE_RESULT, KINDS.BAHIA_DEPLOYMENT_RESULT] });
+  return publishCommand({ operation: 'service/create', content: payload });
 }
 
 export function updateService(id, payload) {
-  return publishCommand({ kind: KINDS.BAHIA_REQUEST_SERVICE_UPDATE, tags: [['service', id]], content: { ...payload, id } });
+  return publishCommand({ operation: 'service/update', tags: [['service', id]], content: { ...payload, id } });
 }
 
 export function deleteService(id, force = false) {
-  return publishCommand({ kind: KINDS.BAHIA_REQUEST_SERVICE_DELETE, tags: [['service', id]], content: { id, force } });
+  return publishCommand({ operation: 'service/delete', tags: [['service', id]], content: { id, force } });
 }
 
 export function createEnvironment(payload) {
-  return publishCommand({ kind: KINDS.BAHIA_REQUEST_ENVIRONMENT_CREATE, content: payload, resultKinds: [KINDS.BAHIA_ENVIRONMENT_CREATE_RESULT, KINDS.BAHIA_DEPLOYMENT_RESULT] });
+  return publishCommand({ operation: 'environment/create', content: payload });
 }
 
 export function updateEnvironment(id, payload) {
-  return publishCommand({ kind: KINDS.BAHIA_REQUEST_ENVIRONMENT_UPDATE, tags: [['environment', id]], content: { ...payload, id } });
+  return publishCommand({ operation: 'environment/update', tags: [['environment', id]], content: { ...payload, id } });
 }
 
 export function deleteEnvironment(id, force = false) {
-  return publishCommand({ kind: KINDS.BAHIA_REQUEST_ENVIRONMENT_DELETE, tags: [['environment', id]], content: { id, force } });
+  return publishCommand({ operation: 'environment/delete', tags: [['environment', id]], content: { id, force } });
 }
 
 export function createDeploymentIntent(serviceId, environmentId, artifactId) {
   return publishCommand({
-    kind: KINDS.BAHIA_REQUEST_DEPLOY,
+    operation: 'service/deploy',
     tags: [['service', serviceId], ['environment', environmentId], ['artifact', artifactId]],
-    content: { service_id: serviceId, environment_id: environmentId, artifact_id: artifactId },
-    resultKinds: [KINDS.BAHIA_DEPLOYMENT_RESULT]
+    content: { service_id: serviceId, environment_id: environmentId, artifact_id: artifactId }
   });
 }
 
 export function rollbackDeployment(serviceId, environmentId) {
   return publishCommand({
-    kind: KINDS.BAHIA_REQUEST_ROLLBACK,
+    operation: 'service/rollback',
     tags: [['service', serviceId], ['environment', environmentId]],
-    content: { service_id: serviceId, environment_id: environmentId },
-    resultKinds: [KINDS.BAHIA_DEPLOYMENT_RESULT]
+    content: { service_id: serviceId, environment_id: environmentId }
   });
 }
 
 export function approveDeploymentIntent(id) {
-  return publishCommand({ kind: KINDS.BAHIA_REQUEST_DEPLOYMENT_APPROVAL, tags: [['intent', id], ['decision', 'approve']], content: { intent_id: id, decision: 'approve' } });
+  return publishCommand({ operation: 'approval/approve', tags: [['intent', id], ['decision', 'approve']], content: { intent_id: id, decision: 'approve' } });
 }
 
 export function rejectDeploymentIntent(id) {
-  return publishCommand({ kind: KINDS.BAHIA_REQUEST_DEPLOYMENT_APPROVAL, tags: [['intent', id], ['decision', 'reject']], content: { intent_id: id, decision: 'reject' } });
+  return publishCommand({ operation: 'approval/reject', tags: [['intent', id], ['decision', 'reject']], content: { intent_id: id, decision: 'reject' } });
 }
 
 export function createLLMRoute(payload) {
-  return publishCommand({
-    kind: KINDS.BAHIA_REQUEST_LLM_ROUTE_CREATE,
-    content: payload,
-    resultKinds: [KINDS.BAHIA_LLM_ROUTE_CREATE_RESULT]
-  });
+  return publishCommand({ operation: 'llm/route-create', content: payload });
 }
 
 export function registerLLMRelease(payload) {
   return publishCommand({
-    kind: KINDS.BAHIA_REQUEST_LLM_RELEASE_REGISTER,
+    operation: 'llm/release-register',
     tags: [['route', payload.route_id]].filter((tag) => tag[1]),
-    content: payload,
-    resultKinds: [KINDS.BAHIA_LLM_RELEASE_REGISTER_RESULT]
+    content: payload
   });
 }
 
-async function requestLLMAsyncLifecycle(kind, payload, tags) {
+async function requestLLMAsyncLifecycle(operation, payload, tags) {
   await bootstrapControlplane();
-  const { requestEventId, resultEvent: event } = await requestResult({
-    kind,
-    tags,
-    content: payload,
-    resultKinds: [KINDS.BAHIA_LLM_DEPLOYMENT_RESULT]
-  });
-  return {
-    requestEventId,
-    event: throwIfErrorResult(event)
-  };
+  const response = await requestEncryptedResult({ operation, payload, tags });
+  const event = throwIfErrorResult(operationResultEvent(response));
+  return { requestEventId: response.requestEventId, event };
 }
 
 export function requestLLMDeploy(payload) {
   return requestLLMAsyncLifecycle(
-    KINDS.BAHIA_REQUEST_LLM_DEPLOY,
+    'llm/deploy',
     payload,
     [
       ['route', payload.route_id],
@@ -124,7 +135,7 @@ export function requestLLMDeploy(payload) {
 
 export function requestLLMRollback(payload) {
   return requestLLMAsyncLifecycle(
-    KINDS.BAHIA_REQUEST_LLM_ROLLBACK,
+    'llm/rollback',
     payload,
     [
       ['route', payload.route_id],
@@ -135,29 +146,27 @@ export function requestLLMRollback(payload) {
 
 export function approveLLMDeploymentIntent(id) {
   return publishCommand({
-    kind: KINDS.BAHIA_REQUEST_LLM_DEPLOYMENT_APPROVAL,
+    operation: 'approval/llm-approve',
     tags: [['intent', id], ['decision', 'approve']],
-    content: { intent_id: id, decision: 'approve' },
-    resultKinds: [KINDS.BAHIA_LLM_DEPLOYMENT_RESULT]
+    content: { intent_id: id, decision: 'approve' }
   });
 }
 
 export function rejectLLMDeploymentIntent(id) {
   return publishCommand({
-    kind: KINDS.BAHIA_REQUEST_LLM_DEPLOYMENT_APPROVAL,
+    operation: 'approval/llm-reject',
     tags: [['intent', id], ['decision', 'reject']],
-    content: { intent_id: id, decision: 'reject' },
-    resultKinds: [KINDS.BAHIA_LLM_DEPLOYMENT_RESULT]
+    content: { intent_id: id, decision: 'reject' }
   });
 }
 
 export function registerArtifact(payload) {
-  return publishCommand({ kind: KINDS.BAHIA_REQUEST_ARTIFACT_REGISTER, tags: [['service', payload.service_id], ['build', payload.build_id]].filter((tag) => tag[1]), content: payload });
+  return publishCommand({ operation: 'artifact/register', tags: [['service', payload.service_id], ['build', payload.build_id]].filter((tag) => tag[1]), content: payload });
 }
 
 export function promotePackage(payload) {
   return publishCommand({
-    kind: KINDS.BAHIA_REQUEST_PACKAGE_PROMOTE,
+    operation: 'package/promote',
     tags: [
       ['operation', 'promote'],
       ['repository', payload.source_repository_id],
@@ -169,14 +178,13 @@ export function promotePackage(payload) {
       ['version', payload.version],
       ['filename', payload.filename]
     ].filter((tag) => tag[1]),
-    content: payload,
-    resultKinds: [KINDS.BAHIA_PACKAGE_RESULT]
+    content: payload
   });
 }
 
 export function yankPackage(payload) {
   return publishCommand({
-    kind: KINDS.BAHIA_REQUEST_PACKAGE_YANK,
+    operation: 'package/yank',
     tags: [
       ['operation', payload.deprecated ? 'deprecate' : 'yank'],
       ['repository', payload.repository_id],
@@ -186,25 +194,24 @@ export function yankPackage(payload) {
       ['version', payload.version],
       ['filename', payload.filename]
     ].filter((tag) => tag[1]),
-    content: payload,
-    resultKinds: [KINDS.BAHIA_PACKAGE_RESULT]
+    content: payload
   });
 }
 
 export function createPolicy(payload) {
-  return publishCommand({ kind: KINDS.BAHIA_REQUEST_POLICY_CREATE, tags: payload.environment_id ? [['environment', payload.environment_id]] : [], content: payload });
+  return publishCommand({ operation: 'policy/create', tags: payload.environment_id ? [['environment', payload.environment_id]] : [], content: payload });
 }
 
 export function updatePolicy(id, payload) {
-  return publishCommand({ kind: KINDS.BAHIA_REQUEST_POLICY_UPDATE, tags: [['policy', id]], content: { ...payload, id } });
+  return publishCommand({ operation: 'policy/update', tags: [['policy', id]], content: { ...payload, id } });
 }
 
 export function deletePolicy(id) {
-  return publishCommand({ kind: KINDS.BAHIA_REQUEST_POLICY_DELETE, tags: [['policy', id]], content: { id } });
+  return publishCommand({ operation: 'policy/delete', tags: [['policy', id]], content: { id } });
 }
 
 export async function evaluatePolicy(payload) {
-  const event = await publishCommand({ kind: KINDS.BAHIA_REQUEST_POLICY_EVALUATE, tags: [['artifact', payload.artifact_id], ['environment', payload.environment_id]], content: payload, resultKinds: [KINDS.BAHIA_ACTION_RESULT, KINDS.BAHIA_DEPLOYMENT_RESULT] });
+  const event = await publishCommand({ operation: 'policy/evaluate', tags: [['artifact', payload.artifact_id], ['environment', payload.environment_id]], content: payload });
   return resultContent(event);
 }
 
@@ -228,7 +235,7 @@ export function probeBackupRepository(repository) {
   if (!repositoryId) throw new Error('repository id is required');
   const idempotencyKey = backupIdempotencyKey('repository_probe', repositoryId);
   return publishCommand({
-    kind: KINDS.BAHIA_REQUEST_BACKUP_REPOSITORY_PROBE,
+    operation: 'backup/repository-probe',
     tags: [
       ['d', idempotencyKey],
       ['repository_id', repositoryId],
@@ -239,8 +246,7 @@ export function probeBackupRepository(repository) {
       repository: repository?.name || '',
       idempotency_key: idempotencyKey,
       metadata: { source: 'web.backup.repositories' }
-    },
-    resultKinds: [KINDS.BAHIA_BACKUP_REPOSITORY_PROBE_RESULT]
+    }
   });
 }
 
@@ -250,7 +256,7 @@ export function decideBackupRestore(restore, approved, message = '') {
   const decision = approved ? 'approve' : 'reject';
   const idempotencyKey = backupIdempotencyKey(`restore_${decision}`, restoreId);
   return publishCommand({
-    kind: KINDS.BAHIA_REQUEST_BACKUP_RESTORE_APPROVAL,
+    operation: 'approval/backup-restore-approve',
     tags: [
       ['d', idempotencyKey],
       ['restore_id', restoreId],
@@ -265,8 +271,7 @@ export function decideBackupRestore(restore, approved, message = '') {
       reason_code: approved ? 'operator_approved' : 'operator_rejected',
       reason: { source: 'web.backup.restores' },
       idempotency_key: idempotencyKey
-    },
-    resultKinds: [KINDS.BAHIA_BACKUP_RESTORE_APPROVAL_RESULT]
+    }
   });
 }
 

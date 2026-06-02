@@ -413,23 +413,7 @@ export const HTTP_AUTH = 27235;
  * operator pubkey.
  */
 export function isRequestKind(kind) {
-  // DNS requests (5941-5945)
-  if (kind >= DNS_ZONE_CREATE_REQUEST && kind <= DNS_BACKEND_REGISTER_REQUEST) return true;
-  // Core control-plane requests (5961-5989), excluding encrypted request
-  if (kind >= DEPLOY_REQUEST && kind <= POLICY_EVALUATE && kind !== ENCRYPTED_REQUEST) return true;
-  // Package requests (5991-5996)
-  if (kind >= PACKAGE_REPOSITORY_APPLY && kind <= PACKAGE_DRIFT_DETECT) return true;
-  // Worker requests (5997-6006)
-  if (kind >= WORKER_CORDON_REQUEST && kind <= WORKER_CLEANUP_REQUEST) return true;
-  // ML requests (38390-38394)
-  if (kind >= ML_RECIPE_RUN_REQUEST && kind <= ML_MODEL_IMPORT_REQUEST) return true;
-  // Backup requests (38400-38409)
-  if (kind >= BACKUP_RUN_REQUEST && kind <= BACKUP_REPOSITORY_PROBE) return true;
-  // Assistant requests (38420-38421)
-  if (kind === ASSISTANT_PROMPT_REQUEST || kind === ASSISTANT_APPROVAL) return true;
-  // Continuity requests (38430-38431)
-  if (kind === FAILOVER_REQUEST || kind === RECOVERY_REQUEST) return true;
-  return false;
+  return kind === CONTEXTVM_MESSAGE || kind === CONTEXTVM_GIFT_WRAP || kind === CONTEXTVM_EPHEMERAL_GIFT_WRAP;
 }
 
 /**
@@ -437,52 +421,7 @@ export function isRequestKind(kind) {
  * published by the service pubkey.
  */
 export function isBahiaProjectionKind(kind) {
-  // Relay set discovery
-  if (kind === RELAY_SET_DISCOVERY) return true;
-  // SBOM kinds
-  if (kind === SBOM_ATTESTATION || kind === SBOM_INDEX) return true;
-  // DNS status (6941) and results (7941-7945)
-  if (kind === DNS_OPERATION_STATUS) return true;
-  if (kind >= DNS_ZONE_CREATE_RESULT && kind <= DNS_BACKEND_REGISTER_RESULT) return true;
-  // Core status kinds (6961-6991)
-  if (kind >= DEPLOYMENT_STATUS && kind <= ACTION_STATUS) return true;
-  if (kind === LLM_DEPLOYMENT_STATUS) return true;
-  if (kind === TOOL_PROVISION_STATUS) return true;
-  if (kind === ADOPTION_STATUS) return true;
-  if (kind >= BACKUP_RUN_STATUS && kind <= BACKUP_OBSERVATION) return true;
-  if (kind === PACKAGE_STATUS) return true;
-  if (kind === WORKER_STATUS) return true;
-  // Core result kinds (7961-7997)
-  if (kind >= DEPLOYMENT_RESULT && kind <= REMEDIATION_RESULT) return true;
-  if (kind >= LLM_ROUTE_CREATE_RESULT && kind <= LLM_DEPLOYMENT_RESULT) return true;
-  if (kind >= TOOL_PROVISION_RESULT && kind <= ADOPTION_IMPORT_RESULT) return true;
-  if (kind >= PACKAGE_RESULT && kind <= PACKAGE_DRIFT_EVENT) return true;
-  if (kind === WORKER_RESULT) return true;
-  // Continuity observation/status kinds (30350-30353)
-  if (kind >= HEARTBEAT_OBSERVATION && kind <= RECOVERY_PROGRESS) return true;
-  // Backup attestation kinds (31310-31311)
-  if (kind === BACKUP_RUN_ATTESTATION || kind === BACKUP_VERIFICATION_ATTESTATION) return true;
-  // Continuity definition kinds (31400-31404)
-  if (kind >= CONTINUITY_PROFILE && kind <= RECOVERY_WORKFLOW) return true;
-  // Replaceable registries (31961-31978)
-  if (kind >= SERVICE_STATE && kind <= DNS_BACKEND_STATE) return true;
-  // ML read-model kinds (31980-31989)
-  if (kind >= ML_MODEL_REGISTRY && kind <= ML_RUNTIME_CAPABILITY_PROFILE) return true;
-  // Backup read-model kinds (31991-31999)
-  if (kind >= BACKUP_DEFINITION_REGISTRY && kind <= BACKUP_RUNTIME_OBSERVATION_STATE) return true;
-  // Worker state kinds (32000-32003)
-  if (kind >= WORKER_STATE && kind <= WORKER_ELIGIBILITY_PREVIEW) return true;
-  // Audit kinds (31000-31099)
-  if (kind >= AUDIT_MIN && kind <= AUDIT_MAX) return true;
-  // ML results (38395-38399)
-  if (kind >= ML_RECIPE_RUN_RESULT && kind <= ML_MODEL_IMPORT_RESULT) return true;
-  // Backup results (38410-38419)
-  if (kind >= BACKUP_RUN_RESULT && kind <= BACKUP_REPOSITORY_PROBE_RESULT) return true;
-  // Assistant status/result (38422-38423)
-  if (kind === ASSISTANT_STATUS || kind === ASSISTANT_RESULT) return true;
-  // Assistant session (31990)
-  if (kind === ASSISTANT_SESSION) return true;
-  return false;
+  return CANONICAL_OBSERVABLE_KINDS.includes(kind);
 }
 
 /**
@@ -552,90 +491,21 @@ export const DNS_READ_MODEL_KINDS = [
 export const BAHIA_CANONICAL_READ_KINDS = CANONICAL_OBSERVABLE_KINDS;
 
 export const BAHIA_READ_MODEL_KINDS = [
-  SERVICE_REGISTRY,
-  ENVIRONMENT_REGISTRY,
-  SERVICE_STATE,
-  LLM_ROUTE_REGISTRY,
-  LLM_ROUTE_STATE,
-  ARTIFACT_REGISTRY,
-  DEPLOYMENT_INTENT_REGISTRY,
-  DEPLOYMENT_RUN_REGISTRY,
-  BUILD_REGISTRY,
-  POLICY_REGISTRY,
-  PACKAGE_REPOSITORY_REGISTRY,
-  PACKAGE_ARTIFACT_REGISTRY,
-  PACKAGE_PROMOTION_REGISTRY,
-  DNS_ZONE_STATE,
-  DNS_ENDPOINT_STATE,
-  DNS_POLICY_STATE,
-  DNS_BACKEND_STATE,
-  WORKER_STATE,
-  WORKER_ASSIGNMENT_STATE,
-  WORKER_DRAIN_STATUS,
-  WORKER_ELIGIBILITY_PREVIEW,
-  LEGACY_WORKER_STATE,
-  LEGACY_WORKER_ASSIGNMENT_STATE,
-  LEGACY_WORKER_DRAIN_STATUS,
-  LEGACY_WORKER_ELIGIBILITY_PREVIEW,
-  LOOM_WORKER_ADVERTISEMENT,
-  // ML
-  ML_MODEL_REGISTRY,
-  ML_MODEL_VERSION_REGISTRY,
-  ML_INFERENCE_ENDPOINT_REGISTRY,
-  ML_INFERENCE_ENDPOINT_STATE,
-  ML_RUNTIME_CAPABILITY_PROFILE,
-  // Backup
-  BACKUP_DEFINITION_REGISTRY,
-  BACKUP_POLICY_REGISTRY,
-  BACKUP_REPOSITORY_REGISTRY,
-  BACKUP_RETENTION_REGISTRY,
-  BACKUP_RECIPE_REGISTRY,
-  BACKUP_RUN_STATE,
-  BACKUP_VERIFICATION_STATE,
-  BACKUP_RESTORE_STATE,
-  BACKUP_RUNTIME_OBSERVATION_STATE,
+  CASCADIA_CONTROLPLANE_STATE,
+  CONTEXTVM_SERVER_ANNOUNCEMENT,
+  CONTEXTVM_TOOLS_ANNOUNCEMENT,
+  CONTEXTVM_RESOURCES_ANNOUNCEMENT,
+  CONTEXTVM_RESOURCE_TEMPLATES_ANNOUNCEMENT,
+  CONTEXTVM_PROMPTS_ANNOUNCEMENT,
+  NIP51_RELAY_SET,
+  NIP78_APP_DATA,
 ];
 
 /**
  * All Bahia status kinds for subscriptions.
  */
 export const BAHIA_STATUS_KINDS = [
-  DNS_OPERATION_STATUS,
-  DNS_ZONE_CREATE_RESULT,
-  DNS_POLICY_APPLY_RESULT,
-  DNS_RECORD_OVERRIDE_RESULT,
-  DNS_DRIFT_REMEDIATE_RESULT,
-  DEPLOYMENT_STATUS,
-  SERVICE_STATUS,
-  LLM_DEPLOYMENT_STATUS,
-  PACKAGE_STATUS,
-  WORKER_STATUS,
-  DEPLOYMENT_RESULT,
-  ACTION_RESULT,
-  SERVICE_CREATE_RESULT,
-  ENVIRONMENT_CREATE_RESULT,
-  OBSERVATION_RESULT,
-  REMEDIATION_RESULT,
-  LLM_ROUTE_CREATE_RESULT,
-  LLM_RELEASE_REGISTER_RESULT,
-  LLM_DEPLOYMENT_RESULT,
-  PACKAGE_RESULT,
-  PACKAGE_DRIFT_EVENT,
-  WORKER_RESULT,
-  BACKUP_RUN_STATUS,
-  BACKUP_RESTORE_STATUS,
-  BACKUP_VERIFICATION_STATUS,
-  BACKUP_OBSERVATION,
-  BACKUP_RUN_RESULT,
-  BACKUP_VERIFICATION_RESULT,
-  BACKUP_RESTORE_RESULT,
-  BACKUP_RESTORE_APPROVAL_RESULT,
-  BACKUP_RETENTION_RESULT,
-  BACKUP_REPOSITORY_REGISTER_RESULT,
-  BACKUP_POLICY_APPLY_RESULT,
-  BACKUP_RECIPE_APPLY_RESULT,
-  BACKUP_DEFINITION_APPLY_RESULT,
-  BACKUP_REPOSITORY_PROBE_RESULT,
+  NIP38_STATUS,
 ];
 
 /**
@@ -649,7 +519,7 @@ export const BAHIA_SBOM_KINDS = [
 /**
  * All audit kinds (31000-31099).
  */
-export const BAHIA_AUDIT_KINDS = Array.from({ length: 100 }, (_, i) => AUDIT_MIN + i);
+export const BAHIA_AUDIT_KINDS = [CASCADIA_AUDIT];
 
 /**
  * All control-plane kinds for subscriptions.

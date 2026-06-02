@@ -12,7 +12,7 @@ Removed legacy surfaces:
 - `POST /api/v1/auth/nostr` NIP-98-to-JWT browser exchange
 - `/api/v1/agent/*` custom MCP-inspired HTTP tools
 
-ContextVM discovery (`11316`-`11320`) plus NIP-51 relay sets (`30002`) is the canonical client bootstrap. Legacy `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` may remain during migration and keeps `nostr_auth_exchange`, `legacy_sse`, `legacy_jwt_exchange`, and `legacy_agent_http` keys as `false` values so old clients can fail closed.
+ContextVM discovery (`11316`-`11320`) plus NIP-51 relay sets (`30002`) is the canonical client bootstrap. Production clients must not depend on legacy discovery kind `31974`; startup migration may still read legacy discovery artifacts only to produce canonical discovery and relay-set events.
 
 ---
 
@@ -21,7 +21,7 @@ ContextVM discovery (`11316`-`11320`) plus NIP-51 relay sets (`30002`) is the ca
 > **Nostr kind**: `25910` ContextVM JSON-RPC messages, usually CEP-4/NIP-59 encrypted with `1059` or `21059`.  
 > **HTTP MCP base paths**: `/mcp` and `/api/v1/mcp`
 
-ContextVM clients use JSON-RPC 2.0 over Nostr for mutations; HTTP MCP clients use the same JSON-RPC method model over HTTP. Tool implementations are backed by `internal/mcp/server.go`; long-running tool results include Nostr correlation metadata (`request_event_id`, `request_kind`, `service_id`, `route_id`, `release_id`, `environment_id`, `intent_id`, `run_id`, status/result/read-model kinds) so agents can follow async truth on the relay. `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` advertises core `control_plane` discovery metadata for clients that need bootstrap information before subscribing; broader command families are documented here and in `docs/nostr-commands.md`.
+ContextVM clients use JSON-RPC 2.0 over Nostr for mutations; HTTP MCP clients use the same JSON-RPC method model over HTTP. Tool implementations are backed by `internal/mcp/server.go`; long-running tool results include Nostr correlation metadata (`request_event_id`, `method`, `service_id`, `route_id`, `release_id`, `environment_id`, `intent_id`, `run_id`, and canonical observable kinds) so agents can follow async truth on the relay. ContextVM discovery kinds `11316`-`11320` plus NIP-51 relay sets (`30002`) advertise bootstrap metadata for clients before subscribing.
 
 Example:
 
@@ -75,7 +75,7 @@ Example ContextVM request:
 }
 ```
 
-Backend dependency: `bahia-viys` must complete server-side ContextVM method handlers before the CLI/pkg client can remove legacy request-kind publication. Until then, legacy request kinds are isolated as migration-only fixtures and client docs/tests identify the blocked path explicitly.
+The production cutover is complete: CLI/web/client mutations use the ContextVM method surface, and legacy Bahia request-kind publication is not a production runtime path. Legacy kind constants and fixtures may remain only for startup migration, historical conversion, and tests that prove old events fail closed or migrate to canonical events.
 
 ---
 
@@ -116,17 +116,23 @@ This avoids duplicate event loops: Bahia publishes canonical 696x/796x/3196x/rea
 
 ## Nostr Control Plane
 
-The Nostr reactor subscribes to signed request events and publishes status, terminal results, and replaceable read models. Service registry operations delegate to `RegistryService`; adoption scan/import delegates to `AdoptionService`; direct-runtime `deploy|restart|stop` delegates to `RuntimeLifecycleService`; LLM route/release/deploy/approval/rollback operations delegate to `LLMRegistryService`; DNS operator requests delegate to the configured DNS control-plane operator/reconciler. LLM deploy, adoption/import, direct-runtime, and DNS operator actions are Nostr-first async actions; REST is only a narrowed registry/query/compatibility surface.
+Production runtime subscribes to ContextVM `25910` messages and canonical observable streams, then publishes canonical state, status, audit, discovery, and relay-set events. Legacy Bahia request/status/result/read-model kinds are not production reactor or subscriber inputs outside startup migration and historical conversion. REST is only a narrowed registry/query/compatibility surface.
 
 | Series | Range | Purpose |
 |--------|-------|---------|
-| Service requests | 5961–5968 | Inbound service/environment operation requests |
+| ContextVM CRU | 25910 inside `1059`/`21059` where supported | Browser/CLI/agent JSON-RPC mutation methods |
+| Canonical state | 30900, 30078 | Control-plane state projections and app-specific data |
+| Canonical audit/status | 4903, 30315 | Immutable audit facts and NIP-38 operational statuses |
+| ContextVM discovery | 11316–11320 | Server, tool, resource, prompt, and template announcements |
+| Relay sets | 30002 | NIP-51 relay topology and bootstrap sets |
+| Deletions | 5 | NIP-09 delete events where Nostr deletion semantics apply |
+| Legacy service requests | 5961–5968 | Startup migration inventory only; not production runtime input |
 | LLM requests | 5971–5975 | Inbound LLM route/release/deploy/approval/rollback requests |
 | Tool provisioning loop | 5976, 5977, 6976, 7976, 7977 | Agent request, Bahia→operator approval handoff, progress, final result, and operator approval response |
 | Adoption requests | 5978–5979 | Inbound adoption scan/import operator requests |
 | Public compatibility writes | 5981–5989 | Public signed service/environment/artifact/policy write operations |
 | Encrypted ContextVM requests | 25910 inside `1059`/`21059` where supported | Browser/CLI → Bahia JSON-RPC request-domain methods |
-| Encrypted requests | 5980 | Legacy browser → Bahia encrypted request-domain request retained as migration-only fixture |
+| Encrypted requests | 5980 | Legacy browser → Bahia encrypted request-domain request retained only for startup migration/test fixtures |
 | Service/action status | 6961–6963 | Service deployment/action progress/status updates |
 | LLM status | 6973 | LLM deployment/rollback progress updates |
 | Adoption status | 6978 | Adoption scan/import progress updates |
@@ -134,7 +140,7 @@ The Nostr reactor subscribes to signed request events and publishes status, term
 | LLM results | 7971–7973 | LLM route/release/deployment terminal results |
 | Adoption results | 7978–7979 | Adoption scan/import terminal results |
 | Encrypted ContextVM responses | 25910 inside `1059`/`21059` where supported | Bahia → client JSON-RPC response |
-| Encrypted results | 7980 | Legacy Bahia → Browser encrypted request-domain result retained as migration-only fixture |
+| Encrypted results | 7980 | Legacy Bahia → Browser encrypted request-domain result retained only for startup migration/test fixtures |
 | Registry/read models | 31961–31970 | Replaceable browser/agent read models |
 | AI/ML command/results | 38390–38399 | Phase-1 addressable AI/ML command and terminal result events |
 | AI/ML read models | 31980–31989 | Phase-1 replaceable AI/ML registry, state, provenance, and capability read models |
@@ -471,98 +477,36 @@ Required backup result tags:
 
 Restore and verification consumers must not infer restore eligibility from snapshot existence alone. Read models that expose restore eligibility must derive it from terminal run success plus successful verification according to the active backup policy.
 
-### Signer-First Operator Actions
+### ContextVM Operator Actions
 
-Operator workflows are public signed control-plane requests. They are not RPC and must be consumed as event streams: publish the request, subscribe for `e=<request_event_id>` replies, process `696x`/`697x` status events as progress, and treat the corresponding `796x`/`797x` result event as terminal. Clients should not poll or use timeout-based completion; use EOSE for historical catch-up and keep the subscription open for realtime replies.
+Operator workflows are ContextVM JSON-RPC requests carried as kind `25910`, usually inside CEP-4/NIP-59 gift-wrap (`1059` or `21059`). They are not REST RPC and must be followed as event streams: publish the ContextVM request, subscribe for the correlated ContextVM response and canonical observables, process `30315` statuses and `4903` audit facts as progress/evidence, and treat canonical state convergence (`30900`/domain NIPs) plus explicit JSON-RPC errors as the durable truth. Clients should not poll or use timeout-based completion; use EOSE for historical catch-up and keep subscriptions open for realtime replies.
 
 CLI behavior:
 
-- `bahia adopt scan|import` and `bahia services actions deploy|restart|stop` use signer-first Nostr requests by default.
-- Relay resolution is deterministic: repeatable `--relay` flags, then comma-separated `BAHIA_NOSTR_RELAYS`, then `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` discovery from `nostr.browser_relays` plus `nostr.sidecar_url`.
-- Live status chatter is written to stderr only in table mode; JSON/YAML stdout remains reserved for the final result payload.
-- `--http-fallback` (or `BAHIA_OPERATOR_HTTP_FALLBACK=true`) is explicit compatibility mode and is only safe before any relay accepts the signed request, such as signer/relay discovery failure or publish with zero accepted relays.
-- `--raw-target` is compatibility-only. It skips the public signer-first adoption path and requires explicit `--http-fallback`; use `--target` endpoint refs for the signer-first path.
+- `bahia adopt scan|import` and `bahia services actions deploy|restart|stop` use ContextVM methods such as `adoption/scan`, `adoption/import`, `service/deploy`, `service/restart`, and `service/stop`.
+- Relay resolution is deterministic: repeatable `--relay` flags, then comma-separated `BAHIA_NOSTR_RELAYS`, then ContextVM discovery (`11316`-`11320`) plus NIP-51 relay sets (`30002`).
+- Live status chatter is written to stderr only in table mode; JSON/YAML stdout remains reserved for the final ContextVM acknowledgment or canonical result projection selected by the command.
+- `--http-fallback` (or `BAHIA_OPERATOR_HTTP_FALLBACK=true`) is explicit compatibility mode and is only safe before any relay accepts a signed ContextVM request, such as signer/relay discovery failure or publish with zero accepted relays.
+- `--raw-target` is compatibility-only. ContextVM adoption paths use server-managed endpoint refs; raw Docker transport material is not published as public relay content.
 
-Authorization uses event pubkeys only:
+Authorization uses the verified inner ContextVM event pubkey after unwrap:
 
-- `nostr.authorized_pubkeys` is the global fallback for all public operator requests.
-- `adoption.allowed_pubkeys` additionally authorizes `5978`/`5979` adoption requests.
-- `direct_runtime_actions.allowed_pubkeys` additionally authorizes direct-runtime `5963` requests.
-- Subject/email operator allowlists remain HTTP/NIP-98 compatibility settings and are ignored by signer-first public events.
+- `nostr.authorized_pubkeys` is the global fallback for public operator request authorization.
+- `adoption.allowed_pubkeys` additionally authorizes adoption ContextVM methods.
+- `direct_runtime_actions.allowed_pubkeys` additionally authorizes direct-runtime ContextVM service action methods.
+- Subject/email operator allowlists remain HTTP/NIP-98 compatibility settings and are ignored by ContextVM event authorization.
 
-#### Adoption scan/import (`5978`/`5979`)
+#### Adoption scan/import
 
-Adoption requests are public relay-visible content, so targets must reference server-managed runtime endpoints. Raw Docker transport material is forbidden.
+Adoption requests use ContextVM methods `adoption/scan` and `adoption/import`. Targets must reference server-managed runtime endpoints; raw Docker transport material is forbidden. Historical `5978`/`5979` events may be consumed only by startup migration/fixtures.
 
-Scan request content:
+#### Direct-runtime actions
 
-```json
-{
-  "targets": [
-    {
-      "name": "prod",
-      "endpoint_ref": "prod-docker",
-      "environment_name": "prod"
-    }
-  ]
-}
-```
+Direct-runtime deploy/restart/stop use ContextVM methods `service/deploy`, `service/restart`, and `service/stop`. Historical `5963` service-action events and `6963`/`7962` status/result events are migration inventory only and are not production runtime subscriptions.
 
-Import request content:
+### Legacy Encrypted Request/Result Events (5980/7980)
 
-```json
-{
-  "targets": [{ "name": "prod", "endpoint_ref": "prod-docker" }],
-  "import_all": true,
-  "selections": [
-    {
-      "target_name": "prod",
-      "container_id": "abc123",
-      "service_name_override": "api"
-    }
-  ]
-}
-```
-
-Rules:
-
-- `targets` is required and non-empty.
-- Each target requires normalized `name` and non-empty `endpoint_ref`.
-- `docker_host` is rejected on the public signer-first path.
-- Import requires `import_all=true` or at least one `selection`.
-
-Progress is published as `6978 AdoptionStatus` with `status=processing`, `operation=scan|import`, repeated `target`, `endpoint_ref`, and optional `environment_name` tags. Terminal results are:
-
-- `7978 AdoptionScanResult` with content `[]AdoptionPreviewResponse`.
-- `7979 AdoptionImportResult` with content `[]AdoptionImportResultResponse`.
-
-Both result payloads reuse the HTTP-safe DTO projection: only safe env/labels are included, redacted key names are preserved, and managed endpoint `docker_host` values are omitted.
-
-#### Direct-runtime actions (`5963`)
-
-Signer-first direct-runtime actions reuse `5963 ServiceAction` with JSON content:
-
-```json
-{
-  "action": "deploy",
-  "service_id": "...",
-  "environment_id": "...",
-  "artifact_id": "..."
-}
-```
-
-Rules:
-
-- `action` must be one of `deploy`, `restart`, or `stop`.
-- `service_id` and `environment_id` are required UUIDs.
-- `artifact_id` is optional for `deploy` and invalid for `restart`/`stop`.
-- Existing non-direct-runtime `5963` tag-based actions remain compatibility acknowledgements.
-
-Progress is published as `6963 ActionStatus` with `status=processing`, `step=executing`, `action`, `service`, `environment`, and optional `artifact` tags. Success publishes `7962 ActionResult` with content `RuntimeActionResponse`, including the runtime observation when available. Failures publish `7962 ActionResult` with `status=failed`, `action`, resource tags, and error content.
-
-### Encrypted Request/Result Events (5980/7980)
-
-Sensitive browser route families and encrypted request-domain actions (notifications, orgs, payments, service secrets, stored deployment run logs, and artifact signature verification) use encrypted request/result events instead of public read models. These events are intentionally **not** accepted by the public relay sidecar policy and must be sent only to operator-configured relay URLs for encrypted request/result traffic.
+Legacy encrypted request/result events (`5980`/`7980`) are migration artifacts only. Production sensitive mutations use ContextVM JSON-RPC kind `25910`, usually wrapped with CEP-4/NIP-59 random-key gift-wrap (`1059` or `21059`), and correlate responses with `e=<request_event_id>` / `p=<requester_pubkey>` tags on the inner ContextVM response. Legacy events may be read by startup migration or retained in fixtures, but production browser, CLI, MCP, reactor, and subscriber paths must not use them as the live runtime contract.
 
 Discovery/config contract:
 
@@ -573,14 +517,11 @@ Discovery/config contract:
 
 Event contract:
 
-- Request kind: `5980`; result kind: `7980`.
-- Browser clients subscribe for `7980` results before publishing a built `5980` request and require at least one accepted relay `OK` for the request publish.
-- Request cleartext tags are limited to routing/correlation metadata such as `p=<service_pubkey>` and `encrypted=bahia-encrypted-v1`.
-- Request `content` is NIP-44 encrypted to the Bahia service pubkey and contains `{version, operation, requester_pubkey, payload}`.
-- Result tags include `e=<request_event_id>` with reply marker, `p=<requester_pubkey>`, `encrypted=bahia-encrypted-v1`, and terminal `status`.
-- Result `content` is NIP-44 encrypted to the requester pubkey and contains `{version, request_event_id, status, payload?, error?}`.
-- Encrypted result completion requires both cleartext tags (`e=<request_event_id>`, `p=<requester_pubkey>`, service author) and decrypted `request_event_id` to match the request.
-- Backend handlers reject unauthorized requesters before decrypting/dispatching domain operations, publish encrypted terminal errors for decrypt/validation failures, and deduplicate by event id.
+- Production request kind: inner ContextVM `25910`, optionally wrapped as `1059`/`21059`.
+- Production clients subscribe for correlated ContextVM responses and canonical observable kinds before publishing when the request event id is known.
+- Request routing tags include `p=<service_pubkey>` and ContextVM method/correlation tags; sensitive payloads stay inside the encrypted wrapper.
+- Completion for long-running work is not the JSON-RPC acknowledgment; clients follow canonical observables (`30900`, `4903`, `30315`, domain NIPs) and NIP-09 delete events where applicable.
+- Backend handlers validate the inner event signature/sender after unwrap, reject unauthorized requesters, publish JSON-RPC errors for decrypt/validation failures, and deduplicate by event id plus `_meta.progressToken` where supplied.
 
 Browser signer support:
 
@@ -589,7 +530,7 @@ Browser signer support:
 
 Encrypted operation catalog:
 
-The following operation names are normative for the `5980`/`7980` encrypted request/result family. New encrypted browser-facing operations must be added here when introduced so the documented contract stays aligned with the implementation.
+The following legacy operation names are retained only to document startup migration inputs and historical fixtures. New encrypted browser-facing operations must use ContextVM method names instead of extending `5980`/`7980`.
 
 Notification encrypted operations:
 
@@ -635,7 +576,7 @@ Encrypted route operations:
 
 Use tags for relay-side filtering and MCP follow-up subscriptions. Service flows use `service`, `environment`, `artifact`, `intent`, and `run`. LLM flows use `route`, `release`, `environment`, `intent`, and `run`. Status/result replies also include `e` with marker `reply`, `p` for the requester pubkey, plus `status` and `step` where applicable. Encrypted result replies use the same `e`/`p` pattern but keep payloads encrypted. MCP async LLM tools return the request event id and the relevant request/status/result/read-model kind ids so clients can subscribe directly rather than polling.
 
-Clients should wait for EOSE on bootstrap queries, then keep subscriptions open for live updates. Deduplicate by event id; for replaceable events, latest `created_at` wins for `(kind, pubkey, d-tag)`. Deletions use tombstone content/tags (`deleted=true`), not Nostr delete events.
+Clients should wait for EOSE on bootstrap queries, then keep subscriptions open for live updates. Deduplicate by event id; for replaceable events, latest `created_at` wins for `(kind, pubkey, d-tag)`. Use NIP-09 kind `5` deletions where relay-level Nostr deletion semantics apply; domain projections that require durable tombstone state may also publish canonical tombstone replacements with `deleted=true`.
 
 ---
 

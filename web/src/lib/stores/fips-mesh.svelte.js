@@ -2,6 +2,7 @@ import { loadSystemInfo } from './system.svelte.js';
 import {
   nostr,
   KINDS,
+  CASCADIA_CONTROLPLANE_STATE,
   getDTag,
   getTagValue,
   isReplaceableTombstone,
@@ -9,9 +10,9 @@ import {
   upsertReplaceableEvent
 } from '../nostr/client.js';
 
-const DNS_ENDPOINT_STATE_KIND = KINDS.BAHIA_DNS_ENDPOINT_STATE;
-const WORKER_STATE_KINDS = [KINDS.BAHIA_WORKER_STATE];
-const LEGACY_WORKER_STATE_KIND = KINDS.BAHIA_LEGACY_WORKER_STATE;
+const CAS_STATE_KIND = CASCADIA_CONTROLPLANE_STATE;
+const DNS_ENDPOINT_STATE_LEGACY_KIND = String(KINDS.BAHIA_DNS_ENDPOINT_STATE);
+const WORKER_STATE_LEGACY_KINDS = [String(KINDS.BAHIA_WORKER_STATE), String(KINDS.BAHIA_LEGACY_WORKER_STATE)];
 const READ_MODEL_LIMIT = 1000;
 const MAX_HEALTHY_RTT_NS = 1_000_000_000;
 const MAX_PROJECTABLE_RTT_NS = 5_000_000_000;
@@ -73,14 +74,13 @@ function authorFilter() {
   return fipsMeshState.servicePubkey ? { authors: [fipsMeshState.servicePubkey] } : {};
 }
 
-export function fipsMeshReadModelFilters({ since = null, includeLegacyWorkerState = false } = {}) {
+export function fipsMeshReadModelFilters({ since = null } = {}) {
   const temporal = since ? { since } : { limit: READ_MODEL_LIMIT };
   const scopedAuthor = authorFilter();
-  const workerKinds = includeLegacyWorkerState ? [...WORKER_STATE_KINDS, LEGACY_WORKER_STATE_KIND] : WORKER_STATE_KINDS;
   return [
-    { kinds: [DNS_ENDPOINT_STATE_KIND], '#family': ['mesh'], '#mesh': ['fips'], ...temporal, ...scopedAuthor },
-    { kinds: [DNS_ENDPOINT_STATE_KIND], '#family': ['worker'], '#mesh': ['fips'], ...temporal, ...scopedAuthor },
-    { kinds: workerKinds, ...temporal, ...scopedAuthor }
+    { kinds: [CAS_STATE_KIND], '#domain': ['dns'], '#legacy_kind': [DNS_ENDPOINT_STATE_LEGACY_KIND], '#family': ['mesh'], '#mesh': ['fips'], ...temporal, ...scopedAuthor },
+    { kinds: [CAS_STATE_KIND], '#domain': ['dns'], '#legacy_kind': [DNS_ENDPOINT_STATE_LEGACY_KIND], '#family': ['worker'], '#mesh': ['fips'], ...temporal, ...scopedAuthor },
+    { kinds: [CAS_STATE_KIND], '#domain': ['worker'], '#legacy_kind': WORKER_STATE_LEGACY_KINDS, ...temporal, ...scopedAuthor }
   ];
 }
 
@@ -118,7 +118,7 @@ function contentWithMeta(event) {
 }
 
 export function isMeshEndpointEvent(event) {
-  if (!event || event.kind !== DNS_ENDPOINT_STATE_KIND) return false;
+  if (!event || event.kind !== CAS_STATE_KIND || getTagValue(event, 'legacy_kind') !== DNS_ENDPOINT_STATE_LEGACY_KIND) return false;
   const content = parseJsonContent(event, {});
   if (hasDeletedTagOrContent(event, content)) return true;
   const family = trimString(getTagValue(event, 'family', content.family || '')).toLowerCase();
@@ -327,7 +327,7 @@ function applyEndpointEvent(event) {
 }
 
 function applyWorkerEvent(event) {
-  if (![...WORKER_STATE_KINDS, LEGACY_WORKER_STATE_KIND].includes(event?.kind) || !isCanonicalAuthor(event)) return false;
+  if (event?.kind !== CAS_STATE_KIND || !WORKER_STATE_LEGACY_KINDS.includes(getTagValue(event, 'legacy_kind')) || !isCanonicalAuthor(event)) return false;
   const content = parseJsonContent(event, {});
   const pubkey = trimString(content.pubkey || content.worker_pubkey || getTagValue(event, 'worker', '') || getDTag(event));
   if (!pubkey) return false;
@@ -347,7 +347,7 @@ function applyWorkerEvent(event) {
 
 export function applyFipsMeshEvent(event) {
   if (!event?.id || seenEventIds.has(event.id)) return false;
-  const accepted = event.kind === DNS_ENDPOINT_STATE_KIND ? applyEndpointEvent(event) : applyWorkerEvent(event);
+  const accepted = getTagValue(event, 'legacy_kind') === DNS_ENDPOINT_STATE_LEGACY_KIND ? applyEndpointEvent(event) : applyWorkerEvent(event);
   if (accepted) {
     seenEventIds.add(event.id);
     fipsMeshState.lastEventAt = Date.now();

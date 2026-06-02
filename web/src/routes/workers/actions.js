@@ -1,18 +1,4 @@
-import { KINDS } from '$lib/nostr/client.js';
-
 export const SCHEDULING_STATES = ['active', 'cordoned', 'draining', 'maintenance', 'disabled'];
-
-export const WORKER_KINDS = {
-  CLEANUP_REQUEST: KINDS.BAHIA_REQUEST_WORKER_CLEANUP,
-  CORDON_REQUEST: KINDS.BAHIA_REQUEST_WORKER_CORDON,
-  UNCORDON_REQUEST: KINDS.BAHIA_REQUEST_WORKER_UNCORDON,
-  DRAIN_REQUEST: KINDS.BAHIA_REQUEST_WORKER_DRAIN,
-  UNDRAIN_REQUEST: KINDS.BAHIA_REQUEST_WORKER_UNDRAIN,
-  MAINTENANCE_ENTER_REQUEST: KINDS.BAHIA_REQUEST_WORKER_MAINTENANCE_ENTER,
-  MAINTENANCE_EXIT_REQUEST: KINDS.BAHIA_REQUEST_WORKER_MAINTENANCE_EXIT,
-  LABELS_UPDATE_REQUEST: KINDS.BAHIA_REQUEST_WORKER_LABELS_UPDATE,
-  RESULT: KINDS.BAHIA_WORKER_RESULT
-};
 
 export const WORKER_COMMANDS = {
   CLEANUP_REQUEST: 'worker.cleanup.request',
@@ -24,6 +10,23 @@ export const WORKER_COMMANDS = {
   MAINTENANCE_EXIT: 'worker.maintenance.exit.request',
   LABELS_UPDATE: 'worker.labels.update.request'
 };
+
+export const WORKER_CONTEXTVM_OPERATIONS = {
+  [WORKER_COMMANDS.CLEANUP_REQUEST]: 'worker/cleanup',
+  [WORKER_COMMANDS.CORDON]: 'worker/cordon',
+  [WORKER_COMMANDS.UNCORDON]: 'worker/uncordon',
+  [WORKER_COMMANDS.DRAIN]: 'worker/drain',
+  [WORKER_COMMANDS.UNDRAIN]: 'worker/undrain',
+  [WORKER_COMMANDS.MAINTENANCE_ENTER]: 'worker/maintenance-enter',
+  [WORKER_COMMANDS.MAINTENANCE_EXIT]: 'worker/maintenance-exit',
+  [WORKER_COMMANDS.LABELS_UPDATE]: 'worker/labels-update'
+};
+
+export function workerOperation(action) {
+  const operation = WORKER_CONTEXTVM_OPERATIONS[action?.command];
+  if (!operation) throw new Error(`Unsupported worker command ${action?.command || ''}`.trim());
+  return operation;
+}
 
 export function workerCommandTags(action, worker, key) {
   return [
@@ -50,9 +53,8 @@ export function workerCommandContent(action, worker, key, reason, requesterPubke
 
 export function workerCommandPublishPayload({ action, worker, key, reason = '', requesterPubkey = '', labels = null, cleanupMode = null }) {
   return {
-    kind: action.kind,
+    operation: workerOperation(action),
     tags: workerCommandTags(action, worker, key),
-    content: workerCommandContent(action, worker, key, reason, requesterPubkey, labels, cleanupMode),
-    resultKinds: [WORKER_KINDS.RESULT]
+    content: workerCommandContent(action, worker, key, reason, requesterPubkey, labels, cleanupMode)
   };
 }

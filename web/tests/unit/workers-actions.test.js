@@ -1,15 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { WORKER_COMMANDS, WORKER_KINDS, workerCommandPublishPayload } from '../../src/routes/workers/actions.js';
+import { WORKER_COMMANDS, WORKER_CONTEXTVM_OPERATIONS, workerCommandPublishPayload } from '../../src/routes/workers/actions.js';
 
 describe('workers action publish payloads', () => {
-  it('publishes cleanup requests on Bahia control-plane kind 6006 with cleanup tags and content', () => {
+  it('publishes cleanup requests through the canonical ContextVM worker operation with cleanup tags and content', () => {
     const worker = { pubkey: 'worker-pubkey-1' };
     const action = {
-      command: WORKER_COMMANDS.CLEANUP_REQUEST,
-      kind: WORKER_KINDS.CLEANUP_REQUEST
+      command: WORKER_COMMANDS.CLEANUP_REQUEST
     };
 
-    expect(WORKER_KINDS.CLEANUP_REQUEST).toBe(6006);
+    expect(WORKER_CONTEXTVM_OPERATIONS[WORKER_COMMANDS.CLEANUP_REQUEST]).toBe('worker/cleanup');
 
     expect(workerCommandPublishPayload({
       action,
@@ -19,7 +18,7 @@ describe('workers action publish payloads', () => {
       requesterPubkey: 'operator-pubkey-1',
       cleanupMode: 'reclaimable_only'
     })).toEqual({
-      kind: 6006,
+      operation: 'worker/cleanup',
       tags: [
         ['d', 'worker.cleanup.request:worker-pubkey-1:request-1'],
         ['worker', 'worker-pubkey-1'],
@@ -34,8 +33,7 @@ describe('workers action publish payloads', () => {
           source: 'web.workers.list',
           requested_by: 'operator-pubkey-1'
         }
-      },
-      resultKinds: [7997]
+      }
     });
   });
 });

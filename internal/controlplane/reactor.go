@@ -22,6 +22,7 @@ import (
 	nostrpool "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/events"
+	"github.com/openagentsinc/bahia/internal/kinds"
 	"github.com/openagentsinc/bahia/internal/repository"
 	"github.com/openagentsinc/bahia/internal/service"
 )
@@ -583,7 +584,10 @@ func (r *Reactor) auditInboundEvent(ctx context.Context, event *nostr.Event) boo
 	return true
 }
 
-// handleEvent dispatches events to the appropriate handler.
+// handleEvent audits and tracks canonical runtime replay events. Legacy
+// Bahia command/status/result/read-model kind-number flows are rejected after
+// the startup migration boundary; command dispatch is handled by the ContextVM
+// transport instead of this production reactor subscription.
 func (r *Reactor) handleEvent(ctx context.Context, event *nostr.Event) {
 	if err := nostrpool.ValidateInboundEvent(event, time.Now().UTC(), nostrpool.InboundEventMaxFutureSkew); err != nil {
 		eventID := ""
@@ -593,8 +597,12 @@ func (r *Reactor) handleEvent(ctx context.Context, event *nostr.Event) {
 		r.logger.Warn("dropping invalid control-plane event", "event_id", eventID, "error", err)
 		return
 	}
+	if isLegacyProductionRuntimeKind(event.Kind) {
+		r.logger.Warn("dropping legacy control-plane event after migration boundary", "event_id", event.ID, "kind", event.Kind)
+		return
+	}
 
-	// Deduplicate events (relays may replay during reconnection) and idempotency-keyed commands.
+	// Deduplicate events (relays may replay during reconnection).
 	if r.dedup.IsDuplicate(event.ID) || r.isDuplicateIdempotencyCommand(ctx, event) {
 		return
 	}
@@ -604,147 +612,11 @@ func (r *Reactor) handleEvent(ctx context.Context, event *nostr.Event) {
 	r.dedup.MarkSeen(event.ID)
 	r.trackLastSeen(event)
 
-	switch event.Kind {
-	case KindDeployRequest:
-		go r.handleDeployRequest(ctx, event)
-	case KindRollbackRequest:
-		go r.handleRollbackRequest(ctx, event)
-	case KindServiceAction:
-		go r.handleServiceAction(ctx, event)
-	case KindServiceCreate:
-		go r.handleServiceCreate(ctx, event)
-	case KindEnvironmentCreate:
-		go r.handleEnvironmentCreate(ctx, event)
-	case KindDeploymentApproval:
-		go r.handleDeploymentApproval(ctx, event)
-	case KindObservationSubmit:
-		go r.handleObservationSubmit(ctx, event)
-	case KindDriftRemediate:
-		go r.handleDriftRemediate(ctx, event)
-	case KindLLMRouteCreate:
-		go r.handleLLMRouteCreate(ctx, event)
-	case KindLLMReleaseRegister:
-		go r.handleLLMReleaseRegister(ctx, event)
-	case KindLLMDeployRequest:
-		go r.handleLLMDeployRequest(ctx, event)
-	case KindLLMDeploymentApproval:
-		go r.handleLLMDeploymentApproval(ctx, event)
-	case KindLLMRollbackRequest:
-		go r.handleLLMRollbackRequest(ctx, event)
-	case KindToolProvisionRequest:
-		go r.handleToolProvisionRequest(ctx, event)
-	case KindToolApprovalResponse:
-		go r.handleToolApprovalResponse(ctx, event)
-	case KindAdoptionScanRequest:
-		go r.handleAdoptionScanRequest(ctx, event)
-	case KindAdoptionImportRequest:
-		go r.handleAdoptionImportRequest(ctx, event)
-	case KindServiceUpdate:
-		go r.handleServiceUpdate(ctx, event)
-	case KindServiceDelete:
-		go r.handleServiceDelete(ctx, event)
-	case KindEnvironmentUpdate:
-		go r.handleEnvironmentUpdate(ctx, event)
-	case KindEnvironmentDelete:
-		go r.handleEnvironmentDelete(ctx, event)
-	case KindArtifactRegister:
-		go r.handleArtifactRegister(ctx, event)
-	case KindPolicyCreate:
-		go r.handlePolicyCreate(ctx, event)
-	case KindPolicyUpdate:
-		go r.handlePolicyUpdate(ctx, event)
-	case KindPolicyDelete:
-		go r.handlePolicyDelete(ctx, event)
-	case KindPolicyEvaluate:
-		go r.handlePolicyEvaluate(ctx, event)
-	case KindMLRecipeRunRequest:
-		go r.handleMLRecipeRunRequest(ctx, event)
-	case KindMLInferenceDeployRequest:
-		go r.handleMLInferenceDeployRequest(ctx, event)
-	case KindMLInferenceDeploymentApproval:
-		go r.handleMLInferenceDeploymentApproval(ctx, event)
-	case KindMLInferenceRollbackRequest:
-		go r.handleMLInferenceRollbackRequest(ctx, event)
-	case KindMLModelImportRequest:
-		go r.handleMLModelImportRequest(ctx, event)
-	case KindBackupRunRequest:
-		go r.handleBackupRunRequest(ctx, event)
-	case KindBackupVerificationRequest:
-		go r.handleBackupVerificationRequest(ctx, event)
-	case KindBackupRestoreRequest:
-		go r.handleBackupRestoreRequest(ctx, event)
-	case KindBackupRestoreApproval:
-		go r.handleBackupRestoreApproval(ctx, event)
-	case KindBackupRetentionEnforce:
-		go r.handleBackupRetentionRequest(ctx, event)
-	case KindBackupRepositoryRegister:
-		go r.handleBackupRepositoryRegisterRequest(ctx, event)
-	case KindBackupPolicyApply:
-		go r.handleBackupPolicyApplyRequest(ctx, event)
-	case KindBackupRecipeApply:
-		go r.handleBackupRecipeApplyRequest(ctx, event)
-	case KindBackupDefinitionApply:
-		go r.handleBackupDefinitionApplyRequest(ctx, event)
-	case KindBackupRepositoryProbe:
-		go r.handleBackupRepositoryProbeRequest(ctx, event)
-	case nostrpool.KindContinuityProfile:
-		go r.handleContinuityProfileDefinition(ctx, event)
-	case nostrpool.KindFailoverPolicy:
-		go r.handleFailoverPolicyDefinition(ctx, event)
-	case nostrpool.KindStandbyNodeDefinition:
-		go r.handleStandbyNodeDefinition(ctx, event)
-	case nostrpool.KindReplicationPolicy:
-		go r.handleReplicationPolicyDefinition(ctx, event)
-	case nostrpool.KindRecoveryWorkflow:
-		go r.handleRecoveryWorkflowDefinition(ctx, event)
-	case nostrpool.KindHeartbeatObservation:
+	switch {
+	case event.Kind == nostrpool.KindHeartbeatObservation:
 		go r.handleHeartbeatObservation(ctx, event)
-	case nostrpool.KindFailoverRequest:
-		go r.handleFailoverRequest(ctx, event)
-	case nostrpool.KindRecoveryRequest:
-		go r.handleRecoveryRequest(ctx, event)
-	case KindPackageRepositoryApply:
-		go r.handlePackageRepositoryApply(ctx, event)
-	case KindPackageRepositoryDelete:
-		go r.handlePackageRepositoryDelete(ctx, event)
-	case KindPackagePublishIntent:
-		go r.handlePackagePublishIntent(ctx, event)
-	case KindPackagePromotionRequest:
-		go r.handlePackagePromotionRequest(ctx, event)
-	case KindPackageYankRequest:
-		go r.handlePackageYankRequest(ctx, event)
-	case KindPackageDriftDetect:
-		go r.handlePackageDriftDetect(ctx, event)
-	case KindWorkerCordonRequest:
-		go r.handleWorkerCordonRequest(ctx, event)
-	case KindWorkerUncordonRequest:
-		go r.handleWorkerUncordonRequest(ctx, event)
-	case KindWorkerDrainRequest:
-		go r.handleWorkerDrainRequest(ctx, event)
-	case KindWorkerUndrainRequest:
-		go r.handleWorkerUndrainRequest(ctx, event)
-	case KindWorkerMaintenanceEnter:
-		go r.handleWorkerMaintenanceEnterRequest(ctx, event)
-	case KindWorkerMaintenanceExit:
-		go r.handleWorkerMaintenanceExitRequest(ctx, event)
-	case KindWorkerLabelsUpdate:
-		go r.handleWorkerLabelsUpdateRequest(ctx, event)
-	case KindWorkerPolicyApplyRequest:
-		go r.handleWorkerPolicyApplyRequest(ctx, event)
-	case KindWorkloadPinRequest:
-		go r.handleWorkloadPinRequest(ctx, event)
-	case KindWorkerCleanupRequest:
-		go r.handleWorkerCleanupRequest(ctx, event)
-	case KindDNSZoneCreateRequest, KindDNSPolicyApplyRequest, KindDNSRecordOverrideRequest, KindDNSDriftRemediateRequest, KindDNSBackendRegisterRequest:
-		if r.dnsOperator == nil {
-			r.logger.Warn("DNS control-plane event skipped because DNS operator is not configured", "kind", event.Kind, "event_id", event.ID)
-			return
-		}
-		go r.handleDNSRequest(ctx, event)
-	case domain.KindAssistantPromptRequest:
-		r.handleAssistantPromptRequest(ctx, event)
-	case domain.KindAssistantApproval:
-		r.handleAssistantApprovalRequest(ctx, event)
+	case isCanonicalRuntimeReplayKind(event.Kind):
+		return
 	default:
 		r.logger.Warn("unexpected event kind", "kind", event.Kind)
 	}
@@ -2146,123 +2018,59 @@ func replayCursorWithOverlap(timestamp nostr.Timestamp) nostr.Timestamp {
 }
 
 func (r *Reactor) buildRequestSubscriptionFilters(since nostr.Timestamp) []nostr.Filter {
-	return []nostr.Filter{
-		{
-			Kinds:   defaultRequestSubscriptionKinds(),
-			Authors: r.subscriptionAuthors(operatorScopeDefault),
-			Since:   &since,
-		},
-		{
-			Kinds:   []int{KindServiceAction},
-			Authors: r.subscriptionAuthors(operatorScopeDefault, operatorScopeDirectRuntime),
-			Since:   &since,
-		},
-		{
-			Kinds: []int{
-				KindAdoptionScanRequest,
-				KindAdoptionImportRequest,
-			},
-			Authors: r.subscriptionAuthors(operatorScopeDefault, operatorScopeAdoption),
-			Since:   &since,
-		},
-		{
-			Kinds: []int{nostrpool.KindHeartbeatObservation},
-			Since: &since,
-		},
-	}
+	return []nostr.Filter{{
+		Kinds: canonicalReactorSubscriptionKinds(),
+		Since: &since,
+	}}
 }
 
 func requestSubscriptionKinds() []int {
-	seen := make(map[int]struct{})
-	kinds := make([]int, 0, len(defaultRequestSubscriptionKinds())+4)
-	add := func(kind int) {
-		if _, ok := seen[kind]; ok {
-			return
-		}
-		seen[kind] = struct{}{}
-		kinds = append(kinds, kind)
-	}
-	for _, kind := range defaultRequestSubscriptionKinds() {
-		add(kind)
-	}
-	add(KindServiceAction)
-	add(KindAdoptionScanRequest)
-	add(KindAdoptionImportRequest)
-	add(nostrpool.KindHeartbeatObservation)
-	return kinds
+	return canonicalReactorSubscriptionKinds()
 }
 
 func defaultRequestSubscriptionKinds() []int {
+	return canonicalReactorSubscriptionKinds()
+}
+
+func canonicalReactorSubscriptionKinds() []int {
 	return []int{
-		KindDeployRequest,
-		KindRollbackRequest,
-		KindServiceCreate,
-		KindEnvironmentCreate,
-		KindDeploymentApproval,
-		KindObservationSubmit,
-		KindDriftRemediate,
-		KindLLMRouteCreate,
-		KindLLMReleaseRegister,
-		KindLLMDeployRequest,
-		KindLLMDeploymentApproval,
-		KindLLMRollbackRequest,
-		KindToolProvisionRequest,
-		KindToolApprovalResponse,
-		KindServiceUpdate,
-		KindServiceDelete,
-		KindEnvironmentUpdate,
-		KindEnvironmentDelete,
-		KindArtifactRegister,
-		KindPolicyCreate,
-		KindPolicyUpdate,
-		KindPolicyDelete,
-		KindPolicyEvaluate,
-		KindMLRecipeRunRequest,
-		KindMLInferenceDeployRequest,
-		KindMLInferenceDeploymentApproval,
-		KindMLInferenceRollbackRequest,
-		KindMLModelImportRequest,
-		KindBackupRunRequest,
-		KindBackupVerificationRequest,
-		KindBackupRestoreRequest,
-		KindBackupRestoreApproval,
-		KindBackupRetentionEnforce,
-		KindBackupRepositoryRegister,
-		KindBackupPolicyApply,
-		KindBackupRecipeApply,
-		KindBackupDefinitionApply,
-		KindBackupRepositoryProbe,
-		nostrpool.KindContinuityProfile,
-		nostrpool.KindFailoverPolicy,
-		nostrpool.KindStandbyNodeDefinition,
-		nostrpool.KindReplicationPolicy,
-		nostrpool.KindRecoveryWorkflow,
-		nostrpool.KindFailoverRequest,
-		nostrpool.KindRecoveryRequest,
-		KindPackageRepositoryApply,
-		KindPackageRepositoryDelete,
-		KindPackagePublishIntent,
-		KindPackagePromotionRequest,
-		KindPackageYankRequest,
-		KindPackageDriftDetect,
-		KindWorkerCordonRequest,
-		KindWorkerUncordonRequest,
-		KindWorkerDrainRequest,
-		KindWorkerUndrainRequest,
-		KindWorkerMaintenanceEnter,
-		KindWorkerMaintenanceExit,
-		KindWorkerLabelsUpdate,
-		KindWorkerPolicyApplyRequest,
-		KindWorkloadPinRequest,
-		KindWorkerCleanupRequest,
-		KindDNSZoneCreateRequest,
-		KindDNSPolicyApplyRequest,
-		KindDNSRecordOverrideRequest,
-		KindDNSDriftRemediateRequest,
-		KindDNSBackendRegisterRequest,
-		domain.KindAssistantPromptRequest,
-		domain.KindAssistantApproval,
+		kinds.ContextVMMessage,
+		kinds.ContextVMGiftWrap,
+		kinds.ContextVMEphemeralGiftWrap,
+		nostrpool.KindHeartbeatObservation,
 	}
+}
+
+func canonicalRuntimeReplayKinds() []int {
+	return []int{
+		nostrpool.KindCASControlState,
+		nostrpool.KindCASAudit,
+		nostrpool.KindNIP38Status,
+		kinds.ContextVMMessage,
+		kinds.ContextVMGiftWrap,
+		kinds.ContextVMEphemeralGiftWrap,
+		kinds.ContextVMServerAnnouncement,
+		kinds.ContextVMToolsList,
+		kinds.ContextVMResourcesList,
+		kinds.ContextVMResourceTemplatesList,
+		kinds.ContextVMPromptsList,
+		nostrpool.KindRelaySetDiscovery,
+		nostrpool.KindNIP65RelayList,
+		nostrpool.KindHeartbeatObservation,
+	}
+}
+
+func isCanonicalRuntimeReplayKind(kind int) bool {
+	return slices.Contains(canonicalRuntimeReplayKinds(), kind)
+}
+
+func isLegacyProductionRuntimeKind(kind int) bool {
+	return (kind >= 5941 && kind <= 5999) ||
+		(kind >= 6961 && kind <= 6999) ||
+		(kind >= 7961 && kind <= 7999) ||
+		(kind >= 31100 && kind <= 31399) ||
+		(kind >= 31900 && kind <= 32099) ||
+		(kind >= 38390 && kind <= 38499)
 }
 
 func (r *Reactor) requestSubscriptionAuthors() []string {

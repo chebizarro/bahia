@@ -147,7 +147,6 @@ describe('encrypted controlplane transport', () => {
       tags: expect.arrayContaining([['p', 'b'.repeat(64)], [module.ENCRYPTED_REQUEST_ROUTING_TAG, module.ENCRYPTED_REQUEST_WIRE_VERSION], ['method', 'payments/history']]),
       content: expect.stringMatching(/^cipher:/)
     }));
-    expect(module.LEGACY_ENCRYPTED_REQUEST_KIND).toBe(5980);
     expect(event.id).toBe('request-id');
   });
 
@@ -192,10 +191,10 @@ describe('encrypted controlplane transport', () => {
     });
     const transport = new module.EncryptedControlplaneTransport({ client, relays: ['wss://requests.example'], servicePubkey: 'b'.repeat(64) });
 
-    const promise = transport.awaitEncryptedResult({ requestEventId: 'req-1' });
+    const promise = transport.awaitEncryptedResult({ requestEventId: 'req-1', contextVMRequestId: 'ctxvm-req-1' });
     await handlers.onEvent({ id: 'other', pubkey: 'b'.repeat(64), tags: [['e', 'other'], ['p', 'a'.repeat(64)]], content: 'cipher:{}' });
     await handlers.onEvent({ id: 'spoofed', pubkey: 'c'.repeat(64), tags: [['e', 'req-1'], ['p', 'a'.repeat(64)]], content: 'cipher:{}' });
-    await handlers.onEvent({ id: 'result-1', pubkey: 'b'.repeat(64), tags: [['e', 'req-1'], ['p', 'a'.repeat(64)]], content: 'cipher:{"jsonrpc":"2.0","id":"req-1","result":{"status":"ok","payload":{"count":1}}}' });
+    await handlers.onEvent({ id: 'result-1', pubkey: 'b'.repeat(64), tags: [['e', 'req-1'], ['p', 'a'.repeat(64)]], content: 'cipher:{"jsonrpc":"2.0","id":"ctxvm-req-1","result":{"status":"ok","payload":{"count":1}}}' });
     await handlers.onEvent({ id: 'result-1', pubkey: 'b'.repeat(64), tags: [['e', 'req-1'], ['p', 'a'.repeat(64)]], content: 'cipher:{}' });
 
     await expect(promise).resolves.toMatchObject({ payload: { status: 'ok', payload: { count: 1 } } });

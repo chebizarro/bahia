@@ -1,5 +1,6 @@
 import {
   KINDS,
+  CASCADIA_CONTROLPLANE_STATE,
   BAHIA_READ_MODEL_KINDS,
   BAHIA_STATUS_KINDS,
   BAHIA_AUDIT_KINDS,
@@ -29,7 +30,7 @@ import { refreshCollections, schedulePersistCachedCollections } from '../collect
 const ACTIVITY_BACKFILL_LIMIT = 100;
 const READ_MODEL_LIMIT = 1000;
 const ACTIVITY_BACKFILL_SECONDS = 7 * 24 * 60 * 60;
-const CANONICAL_READ_MODEL_KINDS = BAHIA_READ_MODEL_KINDS.filter((kind) => kind !== KINDS.LOOM_WORKER_AD);
+const CANONICAL_READ_MODEL_KINDS = BAHIA_READ_MODEL_KINDS;
 const ACTIVITY_KINDS = [...BAHIA_AUDIT_KINDS, ...BAHIA_STATUS_KINDS, ...BAHIA_SBOM_KINDS];
 
 const replaceableEvents = new Map();
@@ -62,6 +63,19 @@ function shouldAcceptControlplaneEvent(event) {
   const servicePubkey = controlplaneConnection.servicePubkey;
   if (!servicePubkey || !isCanonicalBahiaKind(event.kind)) return true;
   return event.pubkey === servicePubkey;
+}
+
+function firstTagValue(event, name) {
+  for (const tag of event?.tags || []) {
+    if (Array.isArray(tag) && tag.length >= 2 && tag[0] === name) return tag[1];
+  }
+  return '';
+}
+
+function routedKind(event) {
+  if (event?.kind !== CASCADIA_CONTROLPLANE_STATE) return event?.kind;
+  const legacyKind = Number(firstTagValue(event, 'legacy_kind'));
+  return Number.isInteger(legacyKind) && legacyKind > 0 ? legacyKind : event.kind;
 }
 
 export function resetEventRouting() {
@@ -124,17 +138,18 @@ export function applyControlplaneEvent(event) {
   if (seenEventIds.has(event.id)) return false;
   seenEventIds.add(event.id);
 
+  const kind = routedKind(event);
   let changed = false;
-  if (event.kind === KINDS.BAHIA_LEGACY_WORKER_STATE) {
+  if (kind === KINDS.BAHIA_LEGACY_WORKER_STATE) {
     changed = hasWorkerReadModelTag(event) ? applyWorkerStateEvent(event, replaceableEvents) : false;
-  } else if (event.kind === KINDS.BAHIA_LEGACY_WORKER_ASSIGNMENT_STATE) {
+  } else if (kind === KINDS.BAHIA_LEGACY_WORKER_ASSIGNMENT_STATE) {
     changed = applyLegacyAssignment(event);
-  } else if (event.kind === KINDS.BAHIA_LEGACY_WORKER_DRAIN_STATUS) {
+  } else if (kind === KINDS.BAHIA_LEGACY_WORKER_DRAIN_STATUS) {
     changed = applyLegacyDrainStatus(event);
-  } else if (event.kind === KINDS.BAHIA_LEGACY_WORKER_ELIGIBILITY_PREVIEW) {
+  } else if (kind === KINDS.BAHIA_LEGACY_WORKER_ELIGIBILITY_PREVIEW) {
     changed = applyLegacyEligibility(event);
   } else {
-    const handler = handlers.get(event.kind);
+    const handler = handlers.get(kind);
     changed = handler ? handler(event, replaceableEvents) : applyActivityEvent(event);
   }
 

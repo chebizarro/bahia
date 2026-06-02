@@ -60,7 +60,7 @@ bahia auth status
 
 ## Nostr-native transport
 
-The CLI is migrating mutations to ContextVM JSON-RPC methods over Nostr kind `25910`. Reads should consume canonical observable/state kinds (`30900`, `4903`, `30315`, `11316`-`11320`, `30002`, `30078`) and standard NIPs. Current `pkg/client` operator commands still publish legacy request kinds while backend ContextVM method handlers are completed under `bahia-viys`; this compatibility path is isolated at the client boundary and should not be copied into new CLI commands.
+The CLI uses ContextVM JSON-RPC methods over Nostr kind `25910`, normally wrapped with CEP-4/NIP-59 gift-wrap (`1059` or `21059`) when encrypted transport is available. Reads consume canonical observable/state kinds (`30900`, `4903`, `30315`, `11316`-`11320`, `30002`, `30078`) and standard NIPs. Legacy Bahia request kinds are not production CLI transport; they are retained only as startup migration/test fixtures.
 
 ## Commands
 
@@ -112,7 +112,7 @@ bahia environments delete staging
 
 ### Deployments
 
-Deployment intent create, approval/rejection, and rollback mutations should be ContextVM JSON-RPC methods such as `service/deploy`, `approval/approve`, `approval/reject`, and `service/rollback`. Legacy REST-backed command paths are deprecated; legacy Nostr request-kind publication remains only for backend compatibility until `bahia-viys` lands.
+Deployment intent create, approval/rejection, and rollback mutations use ContextVM JSON-RPC methods such as `service/deploy`, `approval/approve`, `approval/reject`, and `service/rollback`. Legacy REST-backed command paths and legacy Nostr request-kind publication are not production runtime behavior.
 
 ```bash
 # List intents
@@ -145,11 +145,11 @@ bahia state drifted --environment production
 
 ### Direct Runtime Actions
 
-Direct runtime deploy/restart/stop REST endpoints have been removed. The target CLI surface is ContextVM methods `service/deploy`, `service/restart`, and `service/stop`. Current signer-first legacy request kinds are compatibility transport only until backend ContextVM handlers are ready.
+Direct runtime deploy/restart/stop REST endpoints have been removed. The CLI surface is ContextVM methods `service/deploy`, `service/restart`, and `service/stop`; production CLI paths do not publish legacy runtime request kinds.
 
 ### Artifacts
 
-Artifact registration is a signer-first Nostr operation. Legacy REST-backed artifact registration command paths are deprecated until the CLI publishes signed `ArtifactRegister` events directly.
+Artifact registration is a ContextVM Nostr operation. Legacy REST-backed artifact registration command paths are not production CLI mutation transport.
 
 ```bash
 # List artifacts
@@ -198,7 +198,7 @@ bahia workers pricing npub1worker...
 
 ### Policies
 
-Policy create, update, delete, and manual evaluation mutations are signer-first Nostr operations. Legacy REST-backed policy mutation command paths are deprecated until the CLI publishes signed policy events directly.
+Policy create, update, delete, and manual evaluation mutations are ContextVM Nostr operations. Deletion uses NIP-09 kind `5` where relay-level deletion semantics apply; domain state may also publish canonical tombstone projections. Legacy REST-backed policy mutation command paths are not production CLI mutation transport.
 
 ```bash
 # List policies
@@ -239,7 +239,7 @@ bahia llm state list
 bahia llm state drifted
 ```
 
-LLM route creation and release registration are signer-first Nostr operations (`LLMRouteCreate` kind `5971`, `LLMReleaseRegister` kind `5972`). Legacy REST-backed create commands are deprecated until the CLI publishes those events directly.
+LLM route creation and release registration are ContextVM Nostr operations. Legacy request kinds such as `5971`/`5972` are startup migration inventory only and are not production CLI mutation transport.
 
 ### Souls
 

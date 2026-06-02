@@ -7,87 +7,49 @@
   import { workers, loadWorkers } from '$lib/stores';
   import { publishCommand, resultContent } from '$lib/stores/public-controlplane.svelte.js';
   import { currentRequesterPubkey } from '$lib/nostr/controlplane-requests.js';
-  import {
-    WORKER_CORDON_REQUEST,
-    WORKER_UNCORDON_REQUEST,
-    WORKER_DRAIN_REQUEST,
-    WORKER_UNDRAIN_REQUEST,
-    WORKER_MAINTENANCE_ENTER,
-    WORKER_MAINTENANCE_EXIT,
-    WORKER_LABELS_UPDATE,
-    WORKER_RESULT
-  } from '$lib/nostr/kinds.gen.js';
+  import { SCHEDULING_STATES, WORKER_COMMANDS, workerOperation } from '../actions.js';
   import { inferWorkerStatus } from '../list-utils.js';
-
-  const SCHEDULING_STATES = ['active', 'cordoned', 'draining', 'maintenance', 'disabled'];
-  const WORKER_KINDS = {
-    CORDON_REQUEST: WORKER_CORDON_REQUEST,
-    UNCORDON_REQUEST: WORKER_UNCORDON_REQUEST,
-    DRAIN_REQUEST: WORKER_DRAIN_REQUEST,
-    UNDRAIN_REQUEST: WORKER_UNDRAIN_REQUEST,
-    MAINTENANCE_ENTER_REQUEST: WORKER_MAINTENANCE_ENTER,
-    MAINTENANCE_EXIT_REQUEST: WORKER_MAINTENANCE_EXIT,
-    LABELS_UPDATE_REQUEST: WORKER_LABELS_UPDATE,
-    RESULT: WORKER_RESULT
-  };
-
-  const WORKER_COMMANDS = {
-    CORDON: 'worker.cordon.request',
-    UNCORDON: 'worker.uncordon.request',
-    DRAIN: 'worker.drain.request',
-    UNDRAIN: 'worker.undrain.request',
-    MAINTENANCE_ENTER: 'worker.maintenance.enter.request',
-    MAINTENANCE_EXIT: 'worker.maintenance.exit.request',
-    LABELS_UPDATE: 'worker.labels.update.request'
-  };
 
   const WORKER_ACTIONS = [
     {
       label: 'Cordon',
       command: WORKER_COMMANDS.CORDON,
-      kind: WORKER_KINDS.CORDON_REQUEST,
       reasonPrompt: 'Reason for cordoning this worker (optional)',
       allowedFrom: ['active']
     },
     {
       label: 'Uncordon',
       command: WORKER_COMMANDS.UNCORDON,
-      kind: WORKER_KINDS.UNCORDON_REQUEST,
       reasonPrompt: 'Reason for uncordoning this worker (optional)',
       allowedFrom: ['cordoned']
     },
     {
       label: 'Drain',
       command: WORKER_COMMANDS.DRAIN,
-      kind: WORKER_KINDS.DRAIN_REQUEST,
       reasonPrompt: 'Reason for draining this worker (optional)',
       allowedFrom: ['active', 'cordoned']
     },
     {
       label: 'Cancel drain',
       command: WORKER_COMMANDS.UNDRAIN,
-      kind: WORKER_KINDS.UNDRAIN_REQUEST,
       reasonPrompt: 'Reason for canceling drain (optional)',
       allowedFrom: ['draining']
     },
     {
       label: 'Enter maintenance',
       command: WORKER_COMMANDS.MAINTENANCE_ENTER,
-      kind: WORKER_KINDS.MAINTENANCE_ENTER_REQUEST,
       reasonPrompt: 'Reason for entering maintenance (optional)',
       allowedFrom: ['active', 'cordoned', 'draining']
     },
     {
       label: 'Exit maintenance',
       command: WORKER_COMMANDS.MAINTENANCE_EXIT,
-      kind: WORKER_KINDS.MAINTENANCE_EXIT_REQUEST,
       reasonPrompt: 'Reason for exiting maintenance (optional)',
       allowedFrom: ['maintenance']
     },
     {
       label: 'Edit labels',
       command: WORKER_COMMANDS.LABELS_UPDATE,
-      kind: WORKER_KINDS.LABELS_UPDATE_REQUEST,
       labels: true,
       allowedFrom: SCHEDULING_STATES
     }
@@ -384,10 +346,9 @@
     if (!sourceWorker?.pubkey) throw new Error('Worker pubkey is required');
     const key = idempotencyKey(action, sourceWorker);
     const result = await publishCommand({
-      kind: action.kind,
+      operation: workerOperation(action),
       tags: commandTags(action, sourceWorker, key),
-      content: commandContent(action, sourceWorker, key, reason, labels),
-      resultKinds: [WORKER_KINDS.RESULT]
+      content: commandContent(action, sourceWorker, key, reason, labels)
     });
     return resultContent(result);
   }

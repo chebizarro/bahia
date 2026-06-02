@@ -170,7 +170,7 @@ curl -X POST http://localhost:8080/mcp \
 
 ### Policy Tools
 
-Policy mutation tools are being migrated to signer-first Nostr events. Use read tools for current projections; publish signed `PolicyCreate`, `PolicyUpdate`, `PolicyDelete`, and `PolicyEvaluate` events directly for mutations until MCP signer-first support lands.
+Policy mutation tools use the ContextVM method surface for writes and canonical observable projections for reads. Deletion follows NIP-09 kind `5` where relay-level deletion semantics apply, with canonical tombstone projections where domain state requires durable delete markers.
 
 | Tool | Description |
 |------|-------------|
@@ -262,13 +262,13 @@ Response includes Nostr correlation:
   "result": {
     "content": [{
       "type": "text",
-      "text": "{\"request_event_id\":\"abc...\",\"request_kind\":5961,\"status_kind\":6961,\"result_kind\":7961}"
+      "text": "{\"request_event_id\":\"abc...\",\"method\":\"service/deploy\",\"request_kind\":25910,\"observable_kinds\":[30900,4903,30315]}"
     }]
   }
 }
 ```
 
-Use these to subscribe for async completion.
+Use these to subscribe for ContextVM responses and canonical observable completion.
 
 ## Resources
 
@@ -335,9 +335,9 @@ curl -X POST http://localhost:8080/mcp \
 
 ## ContextVM Nostr Transport
 
-ContextVM clients discover Bahia with kind `11316` server announcements and capability announcements `11317`-`11320`, then invoke the same JSON-RPC methods over Nostr kind `25910` with CEP-4 encryption where supported. Long-running tool responses are acknowledgments; agents should follow canonical observable kinds `30900`, `4903`, `30315`, NIP-51 `30002`, NIP-78 `30078`, and standard NIPs for final state.
+ContextVM clients discover Bahia with kind `11316` server announcements and capability announcements `11317`-`11320`, then invoke the same JSON-RPC methods over Nostr kind `25910` with CEP-4/NIP-59 gift-wrap (`1059` or `21059`) where supported. Long-running tool responses are acknowledgments; agents should follow canonical observable kinds `30900`, `4903`, `30315`, NIP-51 `30002`, NIP-78 `30078`, standard NIPs, and NIP-09 kind `5` deletions where applicable for final state.
 
-Backend dependency: server-side ContextVM handlers for legacy operator/package/DNS/backup/ML request families are tracked by `bahia-viys`. HTTP MCP tools remain available while those handlers land.
+Production runtime no longer exposes legacy Bahia request/status/result kinds as the live MCP transport. Legacy kind references are migration fixtures only; new MCP clients should require ContextVM method names and canonical observables.
 
 ## Error Handling
 

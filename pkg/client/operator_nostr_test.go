@@ -13,7 +13,7 @@ import (
 	"github.com/openagentsinc/bahia/internal/controlplane"
 )
 
-func TestOperatorRuntimeDeploySubscribesBeforePublishAndHandlesStatusResultDedup(t *testing.T) {
+func TestOperatorRuntimeDeploySubscribesBeforePublishAndHandlesContextVMProgressResultDedup(t *testing.T) {
 	requestKey := nostr.GeneratePrivateKey()
 	replyKey := nostr.GeneratePrivateKey()
 	transport := newFakeOperatorTransport()
@@ -21,21 +21,10 @@ func TestOperatorRuntimeDeploySubscribesBeforePublishAndHandlesStatusResultDedup
 	artifactID := "artifact-1"
 
 	transport.publishFn = func(ctx context.Context, ev nostr.Event) (int, error) {
-		status := signedOperatorReply(t, replyKey, controlplane.KindActionStatus, nostr.Tags{
-			{"e", ev.ID, "", "reply"},
-			{"p", ev.PubKey},
-			{"status", "processing"},
-			{"action", "deploy"},
-			{"step", "started"},
-		}, "Direct runtime action started")
-		transport.events <- status
-		transport.events <- status // duplicate delivery from another relay must be ignored
-		transport.events <- signedOperatorReply(t, replyKey, controlplane.KindActionResult, nostr.Tags{
-			{"e", ev.ID, "", "reply"},
-			{"p", ev.PubKey},
-			{"status", "success"},
-			{"action", "deploy"},
-		}, `{"action":"deploy","service_id":"svc-1","environment_id":"env-1"}`)
+		progress := signedContextVMResult(t, replyKey, ev, map[string]any{"status": "processing", "step": "started", "action": "deploy", "message": "Direct runtime action started"})
+		transport.events <- progress
+		transport.events <- progress // duplicate delivery from another relay must be ignored
+		transport.events <- signedContextVMResult(t, replyKey, ev, map[string]any{"action": "deploy", "service_id": "svc-1", "environment_id": "env-1"})
 		return 1, nil
 	}
 
@@ -52,7 +41,7 @@ func TestOperatorRuntimeDeploySubscribesBeforePublishAndHandlesStatusResultDedup
 	if len(statuses) != 1 {
 		t.Fatalf("status callback count = %d, want 1", len(statuses))
 	}
-	if statuses[0].Status != "processing" || statuses[0].Step != "started" || statuses[0].Message != "Direct runtime action started" {
+	if statuses[0].Status != "processing" || statuses[0].Step != "started" || !strings.Contains(statuses[0].Message, "Direct runtime action started") {
 		t.Fatalf("unexpected status event: %#v", statuses[0])
 	}
 	if got := transport.calls; len(got) != 2 || got[0] != "subscribe" || got[1] != "publish" {
@@ -60,23 +49,31 @@ func TestOperatorRuntimeDeploySubscribesBeforePublishAndHandlesStatusResultDedup
 	}
 	published := transport.onlyPublished(t)
 	assertSignedEvent(t, published)
-	if published.Kind != controlplane.KindServiceAction {
-		t.Fatalf("request kind = %d, want %d", published.Kind, controlplane.KindServiceAction)
+	if published.Kind != controlplane.KindContextVMMessage {
+		t.Fatalf("request kind = %d, want %d", published.Kind, controlplane.KindContextVMMessage)
 	}
-	var payload map[string]string
-	if err := json.Unmarshal([]byte(published.Content), &payload); err != nil {
-		t.Fatalf("decode request content: %v", err)
+	rpc := decodePublishedContextVMRequest(t, published)
+	if rpc.JSONRPC != "2.0" || rpc.Method != "service/action" || rpc.ID == "" {
+		t.Fatalf("unexpected ContextVM request: %#v", rpc)
 	}
 	for key, want := range map[string]string{"action": "deploy", "service_id": "svc-1", "environment_id": "env-1", "artifact_id": artifactID} {
-		if payload[key] != want {
-			t.Fatalf("payload[%s] = %q, want %q (payload=%#v)", key, payload[key], want, payload)
+		if got, _ := rpc.Params[key].(string); got != want {
+			t.Fatalf("params[%s] = %q, want %q (params=%#v)", key, got, want, rpc.Params)
 		}
+	}
+	if meta, _ := rpc.Params["_meta"].(map[string]any); meta == nil || meta["progressToken"] != rpc.ID {
+		t.Fatalf("missing progress token in ContextVM params: %#v", rpc.Params["_meta"])
 	}
 	assertTagValue(t, published.Tags, "action", "deploy")
 	assertTagValue(t, published.Tags, "service", "svc-1")
 	assertTagValue(t, published.Tags, "environment", "env-1")
 	assertTagValue(t, published.Tags, "artifact", artifactID)
+	assertTagValue(t, published.Tags, "method", "service/action")
+	assertTagValue(t, published.Tags, controlplane.ContextVMRoutingTag, controlplane.ContextVMWireVersion)
 	filter := transport.onlyFilter(t)
+	if got := filter.Kinds; len(got) != 1 || got[0] != controlplane.KindContextVMMessage {
+		t.Fatalf("filter kinds = %#v, want ContextVM kind", got)
+	}
 	if got := filter.Tags["e"]; len(got) != 1 || got[0] != published.ID {
 		t.Fatalf("filter #e = %#v, want request id %s", got, published.ID)
 	}
@@ -103,7 +100,7 @@ func TestOperatorRuntimeRestartStopRequestConstruction(t *testing.T) {
 			transport := newFakeOperatorTransport()
 			client := newTestOperatorClient(t, requestKey, transport)
 			transport.publishFn = func(ctx context.Context, ev nostr.Event) (int, error) {
-				transport.events <- signedOperatorReply(t, replyKey, controlplane.KindActionResult, nostr.Tags{{"e", ev.ID, "", "reply"}, {"p", ev.PubKey}, {"status", "success"}}, `{"action":"`+tc.name+`","service_id":"svc-1","environment_id":"env-1"}`)
+				transport.events <- signedContextVMResult(t, replyKey, ev, map[string]any{"action": tc.name, "service_id": "svc-1", "environment_id": "env-1"})
 				return 1, nil
 			}
 			result, err := tc.run(context.Background(), client)
@@ -114,37 +111,63 @@ func TestOperatorRuntimeRestartStopRequestConstruction(t *testing.T) {
 				t.Fatalf("result action = %q, want %q", result.Action, tc.name)
 			}
 			published := transport.onlyPublished(t)
-			var payload map[string]string
-			if err := json.Unmarshal([]byte(published.Content), &payload); err != nil {
-				t.Fatalf("decode request content: %v", err)
+			rpc := decodePublishedContextVMRequest(t, published)
+			if rpc.Method != "service/action" {
+				t.Fatalf("method = %q, want service/action", rpc.Method)
 			}
-			if payload["action"] != tc.name {
-				t.Fatalf("action = %q, want %q", payload["action"], tc.name)
+			if got, _ := rpc.Params["action"].(string); got != tc.name {
+				t.Fatalf("action = %q, want %q", got, tc.name)
 			}
-			if _, exists := payload["artifact_id"]; exists {
-				t.Fatalf("non-deploy request included artifact_id: %#v", payload)
+			if _, exists := rpc.Params["artifact_id"]; exists {
+				t.Fatalf("non-deploy request included artifact_id: %#v", rpc.Params)
 			}
 		})
 	}
 }
 
-func TestOperatorIgnoresInvalidUncorrelatedAndDuplicateReplies(t *testing.T) {
+func TestOperatorRoutesToConfiguredServicePubkey(t *testing.T) {
+	requestKey := nostr.GeneratePrivateKey()
+	replyKey := nostr.GeneratePrivateKey()
+	servicePubkey, err := nostr.GetPublicKey(replyKey)
+	if err != nil {
+		t.Fatalf("service pubkey: %v", err)
+	}
+	transport := newFakeOperatorTransport()
+	client := newTestOperatorClient(t, requestKey, transport)
+	client.servicePubkey = servicePubkey
+	transport.publishFn = func(ctx context.Context, ev nostr.Event) (int, error) {
+		transport.events <- signedContextVMResult(t, nostr.GeneratePrivateKey(), ev, map[string]any{"action": "spoofed"})
+		transport.events <- signedContextVMResult(t, replyKey, ev, map[string]any{"action": "restart", "service_id": "svc-1", "environment_id": "env-1"})
+		return 1, nil
+	}
+	if _, err := client.RestartServiceRuntimeNostr(context.Background(), "svc-1", "env-1", nil); err != nil {
+		t.Fatalf("RestartServiceRuntimeNostr() error = %v", err)
+	}
+	published := transport.onlyPublished(t)
+	assertTagValue(t, published.Tags, "p", servicePubkey)
+	filter := transport.onlyFilter(t)
+	if got := filter.Authors; len(got) != 1 || got[0] != servicePubkey {
+		t.Fatalf("filter authors = %#v, want service pubkey", got)
+	}
+}
+
+func TestOperatorIgnoresInvalidUncorrelatedAndDuplicateContextVMReplies(t *testing.T) {
 	requestKey := nostr.GeneratePrivateKey()
 	replyKey := nostr.GeneratePrivateKey()
 	transport := newFakeOperatorTransport()
 	client := newTestOperatorClient(t, requestKey, transport)
 	transport.publishFn = func(ctx context.Context, ev nostr.Event) (int, error) {
-		invalid := signedOperatorReply(t, replyKey, controlplane.KindActionResult, nostr.Tags{{"e", ev.ID, "", "reply"}, {"p", ev.PubKey}, {"status", "success"}}, `{"action":"restart"}`)
-		invalid.Content = `{"action":"tampered"}`
+		invalid := signedContextVMResult(t, replyKey, ev, map[string]any{"action": "restart"})
+		invalid.Content = `{"jsonrpc":"2.0","id":"tampered","result":{"action":"tampered"}}`
 		transport.events <- invalid
-		future := signedOperatorReply(t, replyKey, controlplane.KindActionResult, nostr.Tags{{"e", ev.ID, "", "reply"}, {"p", ev.PubKey}, {"status", "success"}}, `{"action":"future"}`)
+		future := signedContextVMResult(t, replyKey, ev, map[string]any{"action": "future"})
 		future.CreatedAt = nostr.Timestamp(int64(nostr.Now()) + 601)
 		if err := future.Sign(replyKey); err != nil {
 			t.Fatalf("sign future reply: %v", err)
 		}
 		transport.events <- future
-		transport.events <- signedOperatorReply(t, replyKey, controlplane.KindActionResult, nostr.Tags{{"e", "different", "", "reply"}, {"p", ev.PubKey}, {"status", "success"}}, `{"action":"restart"}`)
-		good := signedOperatorReply(t, replyKey, controlplane.KindActionResult, nostr.Tags{{"e", ev.ID, "", "reply"}, {"p", ev.PubKey}, {"status", "success"}}, `{"action":"restart","service_id":"svc-1","environment_id":"env-1"}`)
+		transport.events <- signedOperatorReply(t, replyKey, controlplane.KindContextVMMessage, nostr.Tags{{"e", "different", "", "reply"}, {"p", ev.PubKey}}, contextVMResponseContent(t, ev, map[string]any{"action": "restart"}))
+		good := signedContextVMResult(t, replyKey, ev, map[string]any{"action": "restart", "service_id": "svc-1", "environment_id": "env-1"})
 		transport.events <- good
 		transport.events <- good
 		return 1, nil
@@ -164,7 +187,7 @@ func TestOperatorRuntimeTerminalFailure(t *testing.T) {
 	transport := newFakeOperatorTransport()
 	client := newTestOperatorClient(t, requestKey, transport)
 	transport.publishFn = func(ctx context.Context, ev nostr.Event) (int, error) {
-		transport.events <- signedOperatorReply(t, replyKey, controlplane.KindActionResult, nostr.Tags{{"e", ev.ID, "", "reply"}, {"p", ev.PubKey}, {"status", "failed"}, {"error", "runtime denied"}}, `{"status":"failed","error":"json error"}`)
+		transport.events <- signedContextVMResult(t, replyKey, ev, map[string]any{"status": "failed", "error": "runtime denied"})
 		return 1, nil
 	}
 	_, err := client.RestartServiceRuntimeNostr(context.Background(), "svc-1", "env-1", nil)
@@ -175,26 +198,26 @@ func TestOperatorRuntimeTerminalFailure(t *testing.T) {
 
 func TestOperatorAdoptionScanAndImportRequestConstructionAndResults(t *testing.T) {
 	for _, tc := range []struct {
-		name       string
-		operation  string
-		resultKind int
-		run        func(context.Context, *OperatorControlPlaneClient) (any, error)
-		content    string
+		name      string
+		operation string
+		method    string
+		run       func(context.Context, *OperatorControlPlaneClient) (any, error)
+		result    any
 	}{
 		{
-			name:       "scan",
-			operation:  "scan",
-			resultKind: controlplane.KindAdoptionScanResult,
-			content:    `[{"target":{"name":"prod","endpoint_ref":"prod-docker","environment_name":"production"},"containers":[]}]`,
+			name:      "scan",
+			operation: "scan",
+			method:    "adoption/scan",
+			result:    []map[string]any{{"target": map[string]any{"name": "prod", "endpoint_ref": "prod-docker", "environment_name": "production"}, "containers": []any{}}},
 			run: func(ctx context.Context, c *OperatorControlPlaneClient) (any, error) {
 				return c.ScanAdoptionNostr(ctx, AdoptionScanRequest{Targets: []AdoptionTarget{{Name: "prod", EndpointRef: "prod-docker", EnvironmentName: "production"}}}, nil)
 			},
 		},
 		{
-			name:       "import",
-			operation:  "import",
-			resultKind: controlplane.KindAdoptionImportResult,
-			content:    `[{"target_name":"prod","container_id":"abc","service_name":"api","status":"created"}]`,
+			name:      "import",
+			operation: "import",
+			method:    "adoption/import",
+			result:    []map[string]any{{"target_name": "prod", "container_id": "abc", "service_name": "api", "status": "created"}},
 			run: func(ctx context.Context, c *OperatorControlPlaneClient) (any, error) {
 				return c.ImportAdoptionNostr(ctx, AdoptionImportRequest{Targets: []AdoptionTarget{{Name: "prod", EndpointRef: "prod-docker", EnvironmentName: "production"}}, Selections: []AdoptionSelection{{TargetName: "prod", ContainerID: "abc", ServiceNameOverride: "api"}}}, nil)
 			},
@@ -206,7 +229,7 @@ func TestOperatorAdoptionScanAndImportRequestConstructionAndResults(t *testing.T
 			transport := newFakeOperatorTransport()
 			client := newTestOperatorClient(t, requestKey, transport)
 			transport.publishFn = func(ctx context.Context, ev nostr.Event) (int, error) {
-				transport.events <- signedOperatorReply(t, replyKey, tc.resultKind, nostr.Tags{{"e", ev.ID, "", "reply"}, {"p", ev.PubKey}, {"status", "failed"}, {"operation", tc.operation}}, tc.content)
+				transport.events <- signedContextVMResult(t, replyKey, ev, map[string]any{"status": "success", "payload": tc.result})
 				return 1, nil
 			}
 			result, err := tc.run(context.Background(), client)
@@ -217,6 +240,10 @@ func TestOperatorAdoptionScanAndImportRequestConstructionAndResults(t *testing.T
 				t.Fatalf("%s returned nil result", tc.name)
 			}
 			published := transport.onlyPublished(t)
+			rpc := decodePublishedContextVMRequest(t, published)
+			if rpc.Method != tc.method {
+				t.Fatalf("method = %q, want %q", rpc.Method, tc.method)
+			}
 			assertTagValue(t, published.Tags, "operation", tc.operation)
 			assertTagValue(t, published.Tags, "target", "prod")
 			assertTagValue(t, published.Tags, "endpoint_ref", "prod-docker")
@@ -234,12 +261,28 @@ func TestOperatorAdoptionErrorEnvelope(t *testing.T) {
 	transport := newFakeOperatorTransport()
 	client := newTestOperatorClient(t, requestKey, transport)
 	transport.publishFn = func(ctx context.Context, ev nostr.Event) (int, error) {
-		transport.events <- signedOperatorReply(t, replyKey, controlplane.KindAdoptionScanResult, nostr.Tags{{"e", ev.ID, "", "reply"}, {"p", ev.PubKey}, {"status", "failed"}, {"operation", "scan"}, {"error", "not authorized"}}, `{"status":"failed","error":"not authorized"}`)
+		transport.events <- signedContextVMResult(t, replyKey, ev, map[string]any{"status": "failed", "error": "not authorized"})
 		return 1, nil
 	}
 	_, err := client.ScanAdoptionNostr(context.Background(), AdoptionScanRequest{Targets: []AdoptionTarget{{Name: "prod", EndpointRef: "prod-docker"}}}, nil)
 	if err == nil || !strings.Contains(err.Error(), "not authorized") {
 		t.Fatalf("error = %v, want not authorized", err)
+	}
+}
+
+func TestOperatorContextVMErrorIsPostAcceptanceFailure(t *testing.T) {
+	requestKey := nostr.GeneratePrivateKey()
+	replyKey := nostr.GeneratePrivateKey()
+	transport := newFakeOperatorTransport()
+	client := newTestOperatorClient(t, requestKey, transport)
+	transport.publishFn = func(ctx context.Context, ev nostr.Event) (int, error) {
+		transport.events <- signedContextVMError(t, replyKey, ev, "method denied")
+		return 1, nil
+	}
+	_, err := client.RestartServiceRuntimeNostr(context.Background(), "svc-1", "env-1", nil)
+	var reqErr *ControlPlaneRequestError
+	if !errors.As(err, &reqErr) || !reqErr.RequestAccepted || !strings.Contains(err.Error(), "method denied") {
+		t.Fatalf("error = %T %v, want accepted ContextVM error", err, err)
 	}
 }
 
@@ -418,6 +461,44 @@ func newTestOperatorClient(t *testing.T, privateKey string, transport operatorRe
 		t.Fatalf("GetPublicKey() error = %v", err)
 	}
 	return &OperatorControlPlaneClient{relays: []string{"wss://relay.example"}, privateKey: normalized, signer: signer, pubkey: pubkey, transport: transport}
+}
+
+func decodePublishedContextVMRequest(t *testing.T, event nostr.Event) contextVMRPCRequest {
+	t.Helper()
+	var rpc contextVMRPCRequest
+	if err := json.Unmarshal([]byte(event.Content), &rpc); err != nil {
+		t.Fatalf("decode ContextVM request content: %v", err)
+	}
+	return rpc
+}
+
+func signedContextVMResult(t *testing.T, privateKey string, request nostr.Event, result any) *nostr.Event {
+	t.Helper()
+	return signedOperatorReply(t, privateKey, controlplane.KindContextVMMessage, nostr.Tags{{"e", request.ID, "", "reply"}, {"p", request.PubKey}, {controlplane.ContextVMRoutingTag, controlplane.ContextVMWireVersion}}, contextVMResponseContent(t, request, result))
+}
+
+func signedContextVMError(t *testing.T, privateKey string, request nostr.Event, message string) *nostr.Event {
+	t.Helper()
+	rpc := decodePublishedContextVMRequest(t, request)
+	body, err := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": rpc.ID, "error": map[string]any{"code": -32000, "message": message}})
+	if err != nil {
+		t.Fatalf("encode ContextVM error: %v", err)
+	}
+	return signedOperatorReply(t, privateKey, controlplane.KindContextVMMessage, nostr.Tags{{"e", request.ID, "", "reply"}, {"p", request.PubKey}, {controlplane.ContextVMRoutingTag, controlplane.ContextVMWireVersion}}, string(body))
+}
+
+func contextVMResponseContent(t *testing.T, request nostr.Event, result any) string {
+	t.Helper()
+	rpc := decodePublishedContextVMRequest(t, request)
+	resultBytes, err := json.Marshal(result)
+	if err != nil {
+		t.Fatalf("encode ContextVM result: %v", err)
+	}
+	body, err := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": rpc.ID, "result": json.RawMessage(resultBytes)})
+	if err != nil {
+		t.Fatalf("encode ContextVM response: %v", err)
+	}
+	return string(body)
 }
 
 func signedOperatorReply(t *testing.T, privateKey string, kind int, tags nostr.Tags, content string) *nostr.Event {

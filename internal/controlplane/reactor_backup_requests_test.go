@@ -389,26 +389,22 @@ func TestHandleBackupRetentionRequestCreatesDurableRunAndInvokesExecutor(t *test
 	}
 }
 
-func TestBackupRequestSubscriptionIncludesBackupRunKind(t *testing.T) {
+func TestBackupRequestKindsAreOmittedFromRuntimeSubscription(t *testing.T) {
 	since := nostr.Now()
 	reactor := &Reactor{config: Config{AuthorizedPubkeys: []string{"operator"}}}
 	filters := reactor.buildRequestSubscriptionFilters(since)
-	if len(filters) == 0 {
-		t.Fatal("expected subscription filters")
+	if len(filters) != 1 {
+		t.Fatalf("expected one canonical runtime filter, got %d", len(filters))
 	}
-	for _, want := range backupRequestKinds() {
-		found := false
+	for _, legacy := range backupRequestKinds() {
 		for _, kind := range filters[0].Kinds {
-			if kind == want {
-				found = true
+			if kind == legacy {
+				t.Fatalf("canonical runtime filter still includes legacy backup request kind %d: %#v", legacy, filters[0].Kinds)
 			}
 		}
-		if !found {
-			t.Fatalf("default control-plane filter missing backup request kind %d: %#v", want, filters[0].Kinds)
-		}
 	}
-	if len(filters[0].Authors) != 1 || filters[0].Authors[0] != "operator" {
-		t.Fatalf("backup request filter should retain default author scope: %#v", filters[0].Authors)
+	if len(filters[0].Authors) != 0 {
+		t.Fatalf("canonical runtime filter should not retain legacy author scope: %#v", filters[0].Authors)
 	}
 }
 

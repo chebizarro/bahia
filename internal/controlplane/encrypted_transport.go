@@ -370,12 +370,23 @@ func (t *EncryptedRequestTransport) HandleContextVMEvent(ctx context.Context, ou
 	inner := outer
 	encrypted := outer.Kind == KindContextVMGiftWrap || outer.Kind == KindContextVMEphemeralWrap
 	if encrypted {
+		if err := nostrpool.ValidateInboundEvent(outer, time.Now().UTC(), nostrpool.InboundEventMaxFutureSkew); err != nil {
+			t.logger.Warn("invalid ContextVM gift wrap event", zap.String("event_id", outer.ID), zap.Error(err))
+			return
+		}
+		if !t.matchesContextVMWrapperRouting(outer) {
+			return
+		}
 		unwrapped, err := t.unwrapContextVMEvent(outer)
 		if err != nil {
 			t.logger.Warn("failed to unwrap ContextVM event", zap.String("event_id", outer.ID), zap.Error(err))
 			return
 		}
 		inner = unwrapped
+		if !t.validContextVMWrapperPubkey(outer, inner) {
+			t.logger.Warn("invalid ContextVM gift wrap provenance", zap.String("event_id", outer.ID), zap.String("wrapper_pubkey", outer.PubKey), zap.String("inner_pubkey", inner.PubKey))
+			return
+		}
 	}
 	if inner == nil || inner.Kind != KindContextVMMessage {
 		return
@@ -482,14 +493,19 @@ func (t *EncryptedRequestTransport) publishContextVMResponse(ctx context.Context
 	}
 }
 
-func (t *EncryptedRequestTransport) wrapContextVMResponse(ctx context.Context, outer, request, response *nostr.Event) (*nostr.Event, error) {
+func (t *EncryptedRequestTransport) wrapContextVMResponse(_ context.Context, outer, request, response *nostr.Event) (*nostr.Event, error) {
 	content, err := json.Marshal(response)
 	if err != nil {
 		return nil, fmt.Errorf("marshal ContextVM inner response: %w", err)
 	}
-	conversationKey, err := t.responder.conversationKey(request.PubKey)
+	wrapperPrivateKey := nostr.GeneratePrivateKey()
+	wrapperPubkey, err := nostr.GetPublicKey(wrapperPrivateKey)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("derive ContextVM response wrapper pubkey: %w", err)
+	}
+	conversationKey, err := nip44.GenerateConversationKey(request.PubKey, wrapperPrivateKey)
+	if err != nil {
+		return nil, fmt.Errorf("generate ContextVM response wrapper conversation key: %w", err)
 	}
 	ciphertext, err := nip44.Encrypt(string(content), conversationKey)
 	if err != nil {
@@ -499,8 +515,8 @@ func (t *EncryptedRequestTransport) wrapContextVMResponse(ctx context.Context, o
 	if outer != nil && outer.Kind == KindContextVMEphemeralWrap {
 		kind = KindContextVMEphemeralWrap
 	}
-	wrapped := &nostr.Event{Kind: kind, CreatedAt: nostr.Now(), Tags: nostr.Tags{{"e", outer.ID, "", "reply"}, {"p", request.PubKey}}, Content: ciphertext}
-	if err := SignGoNostrEvent(ctx, t.responder.signer, wrapped); err != nil {
+	wrapped := &nostr.Event{Kind: kind, PubKey: wrapperPubkey, CreatedAt: nostr.Now(), Tags: nostr.Tags{{"e", outer.ID, "", "reply"}, {"p", request.PubKey}}, Content: ciphertext}
+	if err := wrapped.Sign(wrapperPrivateKey); err != nil {
 		return nil, fmt.Errorf("sign ContextVM gift wrap response: %w", err)
 	}
 	return wrapped, nil
@@ -531,6 +547,22 @@ func (t *EncryptedRequestTransport) matchesContextVMRouting(event *nostr.Event) 
 	}
 	servicePubkey := t.responder.ServicePubkey()
 	return servicePubkey == "" || tagContains(event.Tags, "p", servicePubkey)
+}
+
+func (t *EncryptedRequestTransport) matchesContextVMWrapperRouting(event *nostr.Event) bool {
+	if t.responder == nil {
+		return false
+	}
+	servicePubkey := t.responder.ServicePubkey()
+	return servicePubkey != "" && tagContains(event.Tags, "p", servicePubkey)
+}
+
+func (t *EncryptedRequestTransport) validContextVMWrapperPubkey(outer, inner *nostr.Event) bool {
+	if t.responder == nil || outer == nil || inner == nil || outer.PubKey == "" {
+		return false
+	}
+	servicePubkey := t.responder.ServicePubkey()
+	return outer.PubKey != inner.PubKey && outer.PubKey != servicePubkey
 }
 
 func contextVMResponseID(id json.RawMessage) json.RawMessage {

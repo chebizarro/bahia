@@ -9,6 +9,7 @@ import (
 
 	gonostr "github.com/nbd-wtf/go-nostr"
 	"github.com/openagentsinc/bahia/internal/adapters/nostr"
+	"github.com/openagentsinc/bahia/internal/repository"
 	"go.uber.org/zap"
 )
 
@@ -34,6 +35,26 @@ func TestReactorHandleEventDropsInvalidBeforeDedupAndDispatch(t *testing.T) {
 	}
 }
 
+func TestReactorHandleEventDropsLegacyRuntimeKindBeforeAudit(t *testing.T) {
+	ctx := context.Background()
+	repo := repository.NewInMemoryNostrEventRepository()
+	r := NewReactor(Config{}, nil, nostr.NewRelayPool(nil, zap.NewNop()), nil, zap.NewNop(), WithNostrEventRepository(repo))
+	event := signedControlPlaneTestEvent(t, KindDeployRequest)
+
+	r.handleEvent(ctx, event)
+
+	rec, err := repo.GetByID(ctx, event.ID)
+	if err != nil {
+		t.Fatalf("get audit record: %v", err)
+	}
+	if rec != nil {
+		t.Fatalf("legacy runtime event should be dropped before audit, got %#v", rec)
+	}
+	if r.dedup.IsDuplicate(event.ID) {
+		t.Fatal("legacy runtime event must not be marked seen")
+	}
+}
+
 func TestReactorHandleEventRecordsEOSEState(t *testing.T) {
 	r := NewReactor(Config{}, nil, nostr.NewRelayPool(nil, zap.NewNop()), nil, zap.NewNop())
 
@@ -50,7 +71,7 @@ func TestReactorHandleEventRecordsEOSEState(t *testing.T) {
 	}
 }
 
-func TestReactorBuildRequestSubscriptionFiltersScopesAuthorsByKind(t *testing.T) {
+func TestReactorBuildRequestSubscriptionFiltersUsesCanonicalKindsOnly(t *testing.T) {
 	since := gonostr.Timestamp(12345)
 	r := NewReactor(Config{
 		AuthorizedPubkeys:              []string{"global", "global", ""},
@@ -59,54 +80,38 @@ func TestReactorBuildRequestSubscriptionFiltersScopesAuthorsByKind(t *testing.T)
 	}, nil, nostr.NewRelayPool(nil, zap.NewNop()), nil, zap.NewNop())
 
 	filters := r.buildRequestSubscriptionFilters(since)
-	if len(filters) != 4 {
-		t.Fatalf("expected default, service-action, adoption, and heartbeat filters, got %d", len(filters))
+	if len(filters) != 1 {
+		t.Fatalf("expected one canonical runtime replay filter, got %d", len(filters))
 	}
-
-	defaultFilter := filterWithoutKinds(t, filters, KindServiceAction, KindAdoptionScanRequest, KindAdoptionImportRequest)
-	assertAuthors(t, defaultFilter.Authors, []string{"global"})
-	assertFilterHasKinds(t, defaultFilter, KindDeployRequest, KindRollbackRequest, KindPackageDriftDetect, nostr.KindContinuityProfile, nostr.KindFailoverRequest)
-	assertFilterMissingKinds(t, defaultFilter, KindServiceAction, KindAdoptionScanRequest, KindAdoptionImportRequest)
-
-	serviceActionFilter := filterWithKinds(t, filters, KindServiceAction)
-	assertAuthors(t, serviceActionFilter.Authors, []string{"global", "runtime"})
-	assertFilterHasKinds(t, serviceActionFilter, KindServiceAction)
-	assertFilterMissingKinds(t, serviceActionFilter, KindAdoptionScanRequest, KindAdoptionImportRequest, KindDeployRequest)
-
-	adoptionFilter := filterWithKinds(t, filters, KindAdoptionScanRequest, KindAdoptionImportRequest)
-	assertAuthors(t, adoptionFilter.Authors, []string{"global", "adoption"})
-	assertFilterHasKinds(t, adoptionFilter, KindAdoptionScanRequest, KindAdoptionImportRequest)
-	assertFilterMissingKinds(t, adoptionFilter, KindServiceAction, KindDeployRequest)
-
-	heartbeatFilter := filterWithKinds(t, filters, nostr.KindHeartbeatObservation)
-	if len(heartbeatFilter.Authors) != 0 {
-		t.Fatalf("heartbeat filter should not be author-scoped, got %v", heartbeatFilter.Authors)
-	}
-	assertFilterHasKinds(t, heartbeatFilter, nostr.KindHeartbeatObservation)
-	assertFilterMissingKinds(t, heartbeatFilter, KindDeployRequest, KindServiceAction)
-
-	for i, filter := range filters {
-		if filter.Since == nil || *filter.Since != since {
-			t.Fatalf("filter %d should preserve shared since cursor %v, got %v", i, since, filter.Since)
-		}
+	filter := filters[0]
+	assertAuthors(t, filter.Authors, nil)
+	assertFilterHasKinds(t, filter, KindContextVMMessage, KindContextVMGiftWrap, KindContextVMEphemeralWrap, nostr.KindHeartbeatObservation)
+	assertFilterMissingKinds(t, filter,
+		nostr.KindCASControlState,
+		nostr.KindCASAudit,
+		nostr.KindNIP38Status,
+		KindDeployRequest,
+		KindRollbackRequest,
+		KindServiceAction,
+		KindAdoptionScanRequest,
+		KindAdoptionImportRequest,
+		KindPackageDriftDetect,
+		nostr.KindFailoverRequest,
+	)
+	if filter.Since == nil || *filter.Since != since {
+		t.Fatalf("filter should preserve shared since cursor %v, got %v", since, filter.Since)
 	}
 }
 
-func TestReactorBuildRequestSubscriptionFiltersPreservesGlobalOnlyBehavior(t *testing.T) {
+func TestReactorBuildRequestSubscriptionFiltersIgnoresLegacyAuthorScopes(t *testing.T) {
 	r := NewReactor(Config{AuthorizedPubkeys: []string{"global"}}, nil, nostr.NewRelayPool(nil, zap.NewNop()), nil, zap.NewNop())
 
 	filters := r.buildRequestSubscriptionFilters(gonostr.Timestamp(67890))
-	if len(filters) != 4 {
-		t.Fatalf("expected split subscription filters, got %d", len(filters))
+	if len(filters) != 1 {
+		t.Fatalf("expected one canonical runtime replay filter, got %d", len(filters))
 	}
-	for _, filter := range filters {
-		if slices.Contains(filter.Kinds, nostr.KindHeartbeatObservation) {
-			assertAuthors(t, filter.Authors, nil)
-			continue
-		}
-		assertAuthors(t, filter.Authors, []string{"global"})
-	}
-	assertFilterMissingKinds(t, filterWithoutKinds(t, filters, KindServiceAction, KindAdoptionScanRequest, KindAdoptionImportRequest, nostr.KindHeartbeatObservation), KindServiceAction, KindAdoptionScanRequest, KindAdoptionImportRequest, nostr.KindHeartbeatObservation)
+	assertAuthors(t, filters[0].Authors, nil)
+	assertFilterMissingKinds(t, filters[0], KindServiceAction, KindAdoptionScanRequest, KindAdoptionImportRequest, KindWorkerCleanupRequest)
 }
 
 func assertAuthors(t *testing.T, got, want []string) {

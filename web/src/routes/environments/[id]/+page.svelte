@@ -23,7 +23,6 @@
     loadWorkers
   } from '$lib/stores';
   import { updateEnvironment, deleteEnvironment, publishCommand, resultContent } from '$lib/stores/public-controlplane.svelte.js';
-  import { KINDS } from '$lib/nostr/client.js';
   import { currentRequesterPubkey } from '$lib/nostr/controlplane-requests.js';
   import { environmentFormSchema, parseRuntimeConfig, validateForm } from '$lib/validation/forms.js';
   import { keyValueLines, parseKeyValueLines } from '../../ml/page-model.js';
@@ -95,12 +94,8 @@
   let deleting = $state(false);
   let deleteError = $state(null);
 
-  const WORKER_PLACEMENT_KINDS = {
-    POLICY_APPLY_REQUEST: KINDS.BAHIA_REQUEST_WORKER_POLICY_APPLY,
-    RESULT: KINDS.BAHIA_WORKER_RESULT
-  };
   const WORKER_PLACEMENT_COMMANDS = {
-    POLICY_APPLY: 'worker-policy.apply.request'
+    POLICY_APPLY: 'worker.policy.apply.request'
   };
 
   const deployStrategyOptions = [
@@ -302,7 +297,7 @@
       ];
       if (policy.pinned_worker) tags.push(['worker', policy.pinned_worker]);
       const result = await publishCommand({
-        kind: WORKER_PLACEMENT_KINDS.POLICY_APPLY_REQUEST,
+        operation: 'worker/policy-apply',
         tags,
         content: {
           environment_id: environmentId,
@@ -313,8 +308,7 @@
             source: 'web.environments.detail',
             requested_by: currentRequesterPubkey() || ''
           }
-        },
-        resultKinds: [WORKER_PLACEMENT_KINDS.RESULT]
+        }
       });
       placementNotice = resultContent(result)?.message || 'Worker placement policy command accepted';
       await loadEnvironment(environmentId);

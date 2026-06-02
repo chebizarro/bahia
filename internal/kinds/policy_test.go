@@ -10,34 +10,20 @@ func TestIsRequestKind(t *testing.T) {
 		kind     int
 		expected bool
 	}{
-		// DNS requests
-		{"DNS zone create", DNSZoneCreateRequest, true},
-		{"DNS backend register", DNSBackendRegisterRequest, true},
-		// Core requests
-		{"Deploy request", DeployRequest, true},
-		{"Rollback request", RollbackRequest, true},
-		{"Service action", ServiceAction, true},
-		{"Policy evaluate", PolicyEvaluate, true},
-		// Encrypted request is NOT a regular request
-		{"Encrypted request", EncryptedRequest, false},
-		// Package requests
-		{"Package repository apply", PackageRepositoryApply, true},
-		{"Package yank request", PackageYankRequest, true},
-		// Worker requests
-		{"Worker cordon", WorkerCordonRequest, true},
-		{"Worker cleanup", WorkerCleanupRequest, true},
-		// ML requests
-		{"ML recipe run", MLRecipeRunRequest, true},
-		{"ML model import", MLModelImportRequest, true},
-		// Backup requests
-		{"Backup run request", BackupRunRequest, true},
-		{"Backup repository probe", BackupRepositoryProbe, true},
-		// Assistant requests
-		{"Assistant prompt request", AssistantPromptRequest, true},
-		{"Assistant approval", AssistantApproval, true},
-		// Continuity requests
-		{"Failover request", FailoverRequest, true},
-		{"Recovery request", RecoveryRequest, true},
+		// ContextVM production request transport
+		{"ContextVM message", ContextVMMessage, true},
+		{"ContextVM gift wrap", ContextVMGiftWrap, true},
+		{"ContextVM ephemeral gift wrap", ContextVMEphemeralGiftWrap, true},
+		// Legacy request kind-number commands are migration inventory only.
+		{"DNS zone create", DNSZoneCreateRequest, false},
+		{"Deploy request", DeployRequest, false},
+		{"Service action", ServiceAction, false},
+		{"Package repository apply", PackageRepositoryApply, false},
+		{"Worker cordon", WorkerCordonRequest, false},
+		{"ML recipe run", MLRecipeRunRequest, false},
+		{"Backup run request", BackupRunRequest, false},
+		{"Assistant prompt request", AssistantPromptRequest, false},
+		{"Failover request", FailoverRequest, false},
 		// Non-request kinds
 		{"DNS operation status", DNSOperationStatus, false},
 		{"Deployment result", DeploymentResult, false},
@@ -166,11 +152,12 @@ func TestIsReadableKind(t *testing.T) {
 }
 
 func TestDNSKindsCompleteness(t *testing.T) {
-	// Legacy DNS requests remain recognized for migration inventory/tests.
+	// Legacy DNS request helpers are inventory data only and must not imply
+	// production runtime request acceptance.
 	requestKinds := DNSRequestKinds()
 	for _, kind := range requestKinds {
-		if !IsRequestKind(kind) {
-			t.Errorf("DNS request kind %d not recognized as request kind", kind)
+		if IsRequestKind(kind) {
+			t.Errorf("legacy DNS request kind %d unexpectedly accepted as production request kind", kind)
 		}
 	}
 
@@ -187,10 +174,11 @@ func TestDNSKindsCompleteness(t *testing.T) {
 }
 
 func TestBackupKindsCompleteness(t *testing.T) {
-	// Verify all backup request kinds are recognized
+	// Legacy backup request helpers are inventory data only and must not imply
+	// production runtime request acceptance.
 	for _, kind := range BackupRequestKinds() {
-		if !IsRequestKind(kind) {
-			t.Errorf("Backup request kind %d not recognized as request kind", kind)
+		if IsRequestKind(kind) {
+			t.Errorf("legacy backup request kind %d unexpectedly accepted as production request kind", kind)
 		}
 	}
 }

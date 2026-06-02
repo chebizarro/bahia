@@ -1,33 +1,12 @@
 package kinds
 
-// IsRequestKind returns true for legacy Bahia command kinds that are kept only
-// for migration/inventory code. Production subscribers and sidecar reads must
-// use ContextVM/NIP-17 intent transport instead of these kind-number commands.
+// IsRequestKind returns true for production-accepted Bahia request transport
+// kinds after the startup migration boundary. Legacy kind-number commands are
+// data-only migration inventory and must not be accepted by production runtime
+// subscribers or sidecar policy.
 func IsRequestKind(kind int) bool {
-	switch {
-	// DNS requests (5941-5945)
-	case kind >= DNSZoneCreateRequest && kind <= DNSBackendRegisterRequest:
-		return true
-	// Core control-plane requests (5961-5989)
-	case kind >= DeployRequest && kind <= PolicyEvaluate:
-		return kind != EncryptedRequest // 5980 is special
-	// Package requests (5991-5996)
-	case kind >= PackageRepositoryApply && kind <= PackageDriftDetect:
-		return true
-	// Worker requests (5997-6006)
-	case kind >= WorkerCordonRequest && kind <= WorkerCleanupRequest:
-		return true
-	// ML requests (38390-38394)
-	case kind >= MLRecipeRunRequest && kind <= MLModelImportRequest:
-		return true
-	// Backup requests (38400-38409)
-	case kind >= BackupRunRequest && kind <= BackupRepositoryProbe:
-		return true
-	// Assistant requests (38420-38421)
-	case kind == AssistantPromptRequest || kind == AssistantApproval:
-		return true
-	// Continuity requests (38430-38431)
-	case kind == FailoverRequest || kind == RecoveryRequest:
+	switch kind {
+	case ContextVMMessage, ContextVMGiftWrap, ContextVMEphemeralGiftWrap:
 		return true
 	default:
 		return false

@@ -34,7 +34,7 @@ Bahia clients now separate private mutation intent from public observable truth.
 | **Canonical state** | `30900`, `30078` | Control-plane state projections and app-specific data |
 | **Canonical audit/status** | `4903`, `30315` | Immutable audit facts and NIP-38 operational statuses |
 | **Collections/relays** | `30002` | NIP-51 relay sets and topology |
-| **Migration fixtures** | `5961`-`6006`, `6961`-`6997`, `7961`-`7997`, `31961`-`32003`, `38390`-`38431` | Legacy request/status/result/read-model kinds retained only while backend handlers migrate |
+| **Migration fixtures** | `5961`-`6006`, `6961`-`6997`, `7961`-`7997`, `31961`-`32003`, `38390`-`38431`, `5980`, `7980` | Legacy custom kinds retained only for startup migration, historical conversion, and fail-closed fixtures; they are not production runtime subscriptions |
 
 ### Read Models
 
@@ -114,7 +114,7 @@ Returns:
 
 ### Discovery Event
 
-ContextVM kind `11316` is the canonical capability bootstrap. During migration, legacy kind `31974` discovery may still be present as a compatibility fixture; new clients should prefer `11316` plus NIP-51 relay sets (`30002`).
+ContextVM kind `11316` is the canonical capability bootstrap. New clients use `11316` plus ContextVM capability announcements (`11317`-`11320`) and NIP-51 relay sets (`30002`). Legacy kind `31974` discovery may appear only as startup migration input or a compatibility fixture.
 
 ```json
 {
@@ -167,18 +167,21 @@ ContextVM commands use JSON-RPC request/response for private intent acknowledgme
 ```javascript
 // Subscribe to deployment events
 const filter = {
-  kinds: [6961, 7961],
+  kinds: [30315, 4903, 30900],
   "#e": [requestEventId]
 };
 
 relay.subscribe(filter, {
   onevent: (event) => {
-    if (event.kind === 6961) {
-      // Progress update
+    if (event.kind === 30315) {
+      // NIP-38 operational status
       console.log("Status:", event.content);
-    } else if (event.kind === 7961) {
-      // Terminal result
-      console.log("Result:", event.content);
+    } else if (event.kind === 4903) {
+      // Immutable audit fact
+      console.log("Audit:", event.content);
+    } else if (event.kind === 30900) {
+      // Canonical state projection
+      console.log("State:", event.content);
     }
   },
   oneose: () => {
@@ -232,34 +235,35 @@ relay.publish(event).then(ok => {
 
 ## Encrypted Events
 
-Sensitive operations use NIP-44 encryption:
+Sensitive operations use ContextVM JSON-RPC kind `25910`, normally wrapped with CEP-4/NIP-59 random-key gift-wrap (`1059` or `21059`). Legacy encrypted Bahia kinds `5980`/`7980` are startup migration/test fixtures only.
 
-### Request (5980)
+### Wrapped ContextVM request
 
 ```json
 {
-  "kind": 5980,
-  "content": "<NIP-44 encrypted>",
+  "kind": 1059,
+  "content": "<gift-wrapped kind 25910 ContextVM JSON-RPC request>",
   "tags": [
     ["p", "<bahia-service-pubkey>"],
-    ["encrypted", "bahia-encrypted-v1"]
+    ["contextvm", "contextvm-jsonrpc-v1"]
   ]
 }
 ```
 
-### Result (7980)
+### Wrapped ContextVM response
 
 ```json
 {
-  "kind": 7980,
-  "content": "<NIP-44 encrypted to requester>",
+  "kind": 1059,
+  "content": "<gift-wrapped kind 25910 ContextVM JSON-RPC response>",
   "tags": [
-    ["e", "<request-event-id>", "", "reply"],
     ["p", "<requester-pubkey>"],
-    ["status", "succeeded"]
+    ["contextvm", "contextvm-jsonrpc-v1"]
   ]
 }
 ```
+
+The unwrapped inner response carries `e=<request-event-id>` with reply marker and `p=<requester-pubkey>`. Long-running completion is observed through canonical kinds `30900`, `4903`, `30315`, domain NIPs, and NIP-09 kind `5` deletions where applicable.
 
 ### Encrypted Operations
 
@@ -320,7 +324,7 @@ const signed = await window.nostr.signEvent(authEvent);
 const header = "Nostr " + btoa(JSON.stringify(signed));
 ```
 
-Service and environment mutations use signed Nostr command events directly, not NIP-98-authenticated REST writes.
+Service and environment mutations use ContextVM JSON-RPC over Nostr directly, not NIP-98-authenticated REST writes.
 
 ## Authorization
 
@@ -336,54 +340,35 @@ Operations check pubkey authorization:
 
 ### Event Pubkey
 
-Authorization is based on `event.pubkey`:
+Authorization is based on the verified inner ContextVM event `pubkey` after unwrap:
 
 ```json
 {
   "pubkey": "abc123...",  // ← This is checked
-  "kind": 5961,
+  "kind": 25910,
+  "tags": [["method", "service/deploy"]],
   ...
 }
 ```
 
 ## Event Kinds Reference
 
-### Service Operations (596x)
+### Production ContextVM and canonical kinds
 
-| Kind | Name |
-|------|------|
-| 5961 | DeployRequest |
-| 5962 | RollbackRequest |
-| 5963 | ServiceAction |
-| 5964 | ServiceCreate |
-| 5965 | EnvironmentCreate |
-| 5966 | DeploymentApproval |
+| Kind | Purpose |
+|------|---------|
+| 25910 | ContextVM JSON-RPC request/response inner message |
+| 1059 / 21059 | CEP-4/NIP-59 gift-wrap envelopes for ContextVM messages |
+| 11316-11320 | ContextVM discovery and capability announcements |
+| 30002 | NIP-51 relay sets |
+| 30900 | Canonical control-plane state projection |
+| 4903 | Canonical audit fact |
+| 30315 | NIP-38 operational status |
+| 5 | NIP-09 delete event where Nostr deletion semantics apply |
 
-### Status (696x)
+### Legacy migration inventory
 
-| Kind | Name |
-|------|------|
-| 6961 | DeploymentStatus |
-| 6962 | ServiceStatus |
-| 6963 | ActionStatus |
-
-### Results (796x)
-
-| Kind | Name |
-|------|------|
-| 7961 | DeploymentResult |
-| 7962 | ActionResult |
-| 7963 | ServiceCreateResult |
-
-### Read Models (3196x)
-
-| Kind | d-tag pattern |
-|------|--------------|
-| 31961 | `service_id:environment_id` |
-| 31962 | `service_id` |
-| 31963 | `environment_id` |
-| 31964 | `route_id` |
-| 31965 | `route_id:environment_id` |
+Legacy Bahia-specific request/status/result/read-model ranges (`5961`-`6006`, `6961`-`6997`, `7961`-`7997`, `31961`-`32003`, `38390`-`38431`, `5980`, `7980`) are retained only for startup migration, historical conversion, and fail-closed fixtures. Production runtime code should not subscribe to or publish them as live control-plane behavior.
 
 ## Best Practices
 

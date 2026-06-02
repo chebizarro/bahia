@@ -18,8 +18,23 @@
     },
     {
       "id": "AC-004",
-      "statement": "Docs explain ContextVM methods, canonical read kinds, migration-only legacy ranges, and exact backend dependency beads.",
+      "statement": "Docs explain final ContextVM methods, CEP-4/NIP-59 gift-wrap, canonical read/audit/status/discovery/relay kinds, NIP-09 deletion behavior, and migration-only legacy ranges with no stale cutover blocker claims.",
       "tests": ["docs review: nostr-integration.md, control-planes.md, mcp-tools.md, cli-reference.md"]
+    },
+    {
+      "id": "AC-005",
+      "statement": "Production runtime legacy request/status/result/read-model/encrypted kind support is removed outside startup migration and historical fixtures.",
+      "tests": ["go test ./internal/adapters/nostr ./internal/controlplane ./internal/kinds"]
+    },
+    {
+      "id": "AC-006",
+      "statement": "CEP-4/NIP-59 random-key gift-wrap supports ContextVM inner kind 25910 over 1059/21059 and preserves response correlation.",
+      "tests": ["focused transport tests from bahia-dgju"]
+    },
+    {
+      "id": "AC-007",
+      "statement": "Web/CLI client surfaces are cut over to ContextVM/canonical observables instead of production legacy request-kind transport.",
+      "tests": ["go test ./pkg/client ./cmd/cli", "targeted web unit tests from bahia-viys"]
     }
   ]
 }

@@ -178,7 +178,7 @@ func isLegacyRuntimeKind(kind int) bool {
 		kind == KindCmdRollbackRequest
 }
 
-func TestSubscriberBuildSubscriptionFiltersUsesScopedAuthorGroups(t *testing.T) {
+func TestSubscriberBuildSubscriptionFiltersOmitsLegacyProductionKinds(t *testing.T) {
 	repo := newMemoryNostrEventRepo()
 	sub := NewSubscriber(nil, repo, zap.NewNop(),
 		WithKinds([]int{5101, 5961, 5963, 5978, 5979, 5981, 5991, 31100}),
@@ -193,24 +193,11 @@ func TestSubscriberBuildSubscriptionFiltersUsesScopedAuthorGroups(t *testing.T) 
 
 	filters, err := sub.buildSubscriptionFilters(context.Background())
 	require.NoError(t, err)
-	require.Len(t, filters, 4)
-
+	require.Len(t, filters, 1)
 	require.Equal(t, []int{5101}, filters[0].Kinds)
-	require.Empty(t, filters[0].Authors)
-
-	require.Equal(t, []int{5961, 5981, 5991, 31100}, filters[1].Kinds)
-	require.Equal(t, []string{"default-a", "shared"}, filters[1].Authors)
-
-	require.Equal(t, []int{5963}, filters[2].Kinds)
-	require.Equal(t, []string{"default-a", "shared", "runtime-a"}, filters[2].Authors)
-
-	require.Equal(t, []int{5978, 5979}, filters[3].Kinds)
-	require.Equal(t, []string{"default-a", "shared", "adoption-a"}, filters[3].Authors)
-
-	for _, filter := range filters {
-		require.Equal(t, int64(500), int64(*filter.Since))
-		require.Equal(t, 10, filter.Limit)
-	}
+	require.Empty(t, filters[0].Authors, "legacy production kinds must be omitted from runtime subscriptions")
+	require.Equal(t, int64(500), int64(*filters[0].Since))
+	require.Equal(t, 10, filters[0].Limit)
 }
 
 func TestSubscriberBuildSubscriptionFiltersUsesPersistedAndLastSeenCursor(t *testing.T) {
@@ -250,9 +237,7 @@ func TestSubscriberBuildSubscriptionFiltersUsesSeparateScopedCursors(t *testing.
 	repo := newMemoryNostrEventRepo()
 	_, err := repo.Record(ctx, &repository.NostrEventRecord{ID: "open-newer", Kind: 5101, PubKey: "worker", Content: "{}", Tags: json.RawMessage("[]"), Sig: "sig", CreatedAt: time.Unix(200, 0).UTC()})
 	require.NoError(t, err)
-	_, err = repo.Record(ctx, &repository.NostrEventRecord{ID: "authorized-command", Kind: 5961, PubKey: "operator", Content: "{}", Tags: json.RawMessage("[]"), Sig: "sig", CreatedAt: time.Unix(120, 0).UTC()})
-	require.NoError(t, err)
-	_, err = repo.Record(ctx, &repository.NostrEventRecord{ID: "unauthorized-command", Kind: 5961, PubKey: "other", Content: "{}", Tags: json.RawMessage("[]"), Sig: "sig", CreatedAt: time.Unix(300, 0).UTC()})
+	_, err = repo.Record(ctx, &repository.NostrEventRecord{ID: "legacy-command", Kind: 5961, PubKey: "operator", Content: "{}", Tags: json.RawMessage("[]"), Sig: "sig", CreatedAt: time.Unix(120, 0).UTC()})
 	require.NoError(t, err)
 
 	sub := NewSubscriber(nil, repo, zap.NewNop(),
@@ -263,12 +248,10 @@ func TestSubscriberBuildSubscriptionFiltersUsesSeparateScopedCursors(t *testing.
 
 	filters, err := sub.buildSubscriptionFilters(ctx)
 	require.NoError(t, err)
-	require.Len(t, filters, 2)
+	require.Len(t, filters, 1)
 	require.Equal(t, []int{5101}, filters[0].Kinds)
-	require.Equal(t, int64(199), int64(*filters[0].Since))
-	require.Equal(t, []int{5961}, filters[1].Kinds)
-	require.Equal(t, []string{"operator"}, filters[1].Authors)
-	require.Equal(t, int64(119), int64(*filters[1].Since), "author-scoped cursor must ignore newer unauthorized command rows and open-kind rows")
+	require.Empty(t, filters[0].Authors)
+	require.Equal(t, int64(199), int64(*filters[0].Since), "legacy command rows must not create runtime cursors")
 }
 
 func TestSubscriberBuildSubscriptionFiltersFallsBackToClockWhenNoCursor(t *testing.T) {
@@ -284,7 +267,7 @@ func TestSubscriberBuildSubscriptionFiltersFallsBackToClockWhenNoCursor(t *testi
 	require.Equal(t, int64(500), int64(*filters[0].Since))
 }
 
-func TestSubscriberBuildSubscriptionFiltersScopesCommandKindsToAuthorizedAuthors(t *testing.T) {
+func TestSubscriberBuildSubscriptionFiltersOmitsLegacyCommandKinds(t *testing.T) {
 	repo := newMemoryNostrEventRepo()
 	sub := NewSubscriber(nil, repo, zap.NewNop(),
 		WithKinds([]int{5961, 38390, 38394, 31100, 5101}),
@@ -295,19 +278,13 @@ func TestSubscriberBuildSubscriptionFiltersScopesCommandKindsToAuthorizedAuthors
 
 	filters, err := sub.buildSubscriptionFilters(context.Background())
 	require.NoError(t, err)
-	require.Len(t, filters, 2)
+	require.Len(t, filters, 1)
 
 	open := filters[0]
 	require.Equal(t, []int{5101}, open.Kinds)
 	require.Empty(t, open.Authors)
 	require.Equal(t, int64(500), int64(*open.Since))
 	require.Equal(t, 10, open.Limit)
-
-	scoped := filters[1]
-	require.Equal(t, []int{5961, 38390, 38394, 31100}, scoped.Kinds)
-	require.Equal(t, []string{"operator-a", "operator-b"}, scoped.Authors)
-	require.Equal(t, int64(500), int64(*scoped.Since))
-	require.Equal(t, 10, scoped.Limit)
 }
 
 func TestSubscriberHandleEventRetriesPersistenceAfterTransientRecordError(t *testing.T) {
@@ -365,6 +342,27 @@ func TestSubscriberHandleEventInvokesHandlersOnlyForNewlyPersistedEvents(t *test
 	sub.handleEvent(ctx, newEvent)
 	require.Equal(t, []string{newEvent.ID}, handled)
 	require.Equal(t, int64(105), sub.latestSeenForKinds([]int{5101}))
+}
+
+func TestSubscriberHandleEventDropsLegacyProductionKindBeforePersistence(t *testing.T) {
+	ctx := context.Background()
+	repo := newMemoryNostrEventRepo()
+	now := time.Unix(200, 0).UTC()
+	legacy := signedTestEvent(t, 5961, time.Unix(105, 0).UTC())
+
+	var handled []string
+	sub := NewSubscriber(nil, repo, zap.NewNop(),
+		WithHandler(func(_ context.Context, ev *gonostr.Event) {
+			handled = append(handled, ev.ID)
+		}),
+		withClock(func() time.Time { return now }),
+	)
+
+	sub.handleEvent(ctx, legacy)
+	require.Empty(t, handled)
+	require.Equal(t, 0, repo.inserted)
+	require.Equal(t, int64(0), sub.latestSeenForKinds([]int{5961}))
+	require.False(t, sub.dedup.IsDuplicate(legacy.ID))
 }
 
 func TestSubscriberHandleEventDropsInvalidBeforePersistenceAndDispatch(t *testing.T) {

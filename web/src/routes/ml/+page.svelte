@@ -3,7 +3,6 @@
   import { MLFabricIcon, ArtifactIcon, DeploymentIcon, WarningIcon, ProgressIcon, AcceleratorIcon } from '$lib/icons/domain-icons.js';
   import { api } from '$lib/api/client.js';
   import { publishCommand, resultContent } from '$lib/stores/public-controlplane.svelte.js';
-  import { KINDS } from '$lib/nostr/client.js';
   import { currentRequesterPubkey } from '$lib/nostr/controlplane-requests.js';
   import {
     buildTaskKindOptions,
@@ -65,12 +64,8 @@
     rollout_to_labels: ''
   });
 
-  const WORKER_PLACEMENT_KINDS = {
-    WORKLOAD_PIN_REQUEST: KINDS.BAHIA_REQUEST_WORKLOAD_PIN,
-    RESULT: KINDS.BAHIA_WORKER_RESULT
-  };
   const WORKER_PLACEMENT_COMMANDS = {
-    WORKLOAD_PIN: 'workload.pin.request'
+    WORKLOAD_PIN: 'worker.workload.pin.request'
   };
 
   $effect(() => {
@@ -163,7 +158,7 @@
     ];
     if (environmentID) tags.push(['environment', environmentID]);
     const result = await publishCommand({
-      kind: WORKER_PLACEMENT_KINDS.WORKLOAD_PIN_REQUEST,
+      operation: 'worker/workload-pin',
       tags,
       content: {
         environment_id: environmentID,
@@ -176,8 +171,7 @@
           source: 'web.ml.deploy',
           requested_by: currentRequesterPubkey() || ''
         }
-      },
-      resultKinds: [WORKER_PLACEMENT_KINDS.RESULT]
+      }
     });
     return resultContent(result);
   }

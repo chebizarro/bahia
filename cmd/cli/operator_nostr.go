@@ -99,7 +99,7 @@ func buildCLIOperatorClient(cmd *cobra.Command) (cliOperatorClient, error) {
 	if err != nil {
 		return nil, &client.ControlPlaneRequestError{Phase: "resolve operator relays", RequestAccepted: false, Cause: err}
 	}
-	op, err := newCLIOperatorClient(client.OperatorControlPlaneConfig{Relays: relays, PrivateKey: key})
+	op, err := newCLIOperatorClient(client.OperatorControlPlaneConfig{Relays: relays, PrivateKey: key, ServicePubkey: resolveOperatorServicePubkey(cmd)})
 	if err != nil {
 		return nil, &client.ControlPlaneRequestError{Phase: "configure operator Nostr client", RequestAccepted: false, Cause: err}
 	}
@@ -123,6 +123,19 @@ func resolveOperatorRelays(cmd *cobra.Command) ([]string, error) {
 	}
 
 	return nil, fmt.Errorf("no operator relays configured; pass --relay or set BAHIA_NOSTR_RELAYS")
+}
+
+func resolveOperatorServicePubkey(cmd *cobra.Command) string {
+	if cmd != nil && cmd.Root() != nil {
+		flags := cmd.Root().PersistentFlags()
+		if flags != nil && flags.Changed("service-pubkey") {
+			return strings.TrimSpace(operatorServicePubkey)
+		}
+	}
+	if servicePubkey := strings.TrimSpace(os.Getenv("BAHIA_NOSTR_SERVICE_PUBKEY")); servicePubkey != "" {
+		return servicePubkey
+	}
+	return strings.TrimSpace(operatorServicePubkey)
 }
 
 func normalizeRelayList(values []string) []string {

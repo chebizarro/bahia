@@ -1,37 +1,50 @@
 {
   "feature_id": "NOSTR_NATIVE_CONTEXTVM_MIGRATION",
-  "title": "ContextVM and canonical Nostr client migration",
-  "beads": ["bahia-viys", "bahia-itrq"],
-  "status": "in_progress",
+  "title": "ContextVM and canonical Nostr runtime migration",
+  "beads": ["bahia-dgju", "bahia-f0uw", "bahia-viys", "bahia-itrq", "bahia-guve", "bahia-7nh4"],
+  "status": "complete",
   "intended_behavior": {
-    "mutations": "Web and CLI client surfaces publish or document ContextVM JSON-RPC 2.0 methods over Nostr kind 25910, using CEP-4/NIP-59 encryption where supported, instead of introducing new legacy request-kind flows.",
-    "reads": "Client reads target canonical observable/state kinds 30900, 4903, 30315, 11316-11320, 30002, 30078 and standard NIPs, with legacy Bahia kinds retained only as migration fixtures.",
-    "worker_actions": "Touched worker UI paths do not hardcode legacy worker request kind numbers; legacy constants are isolated in the Nostr kind surface as migration-only constants.",
-    "documentation": "User-facing docs identify ContextVM method names, canonical read kinds, and backend dependencies."
+    "mutations": "Production web, CLI, MCP, and backend control-plane mutation paths use ContextVM JSON-RPC 2.0 over Nostr kind 25910, normally wrapped with CEP-4/NIP-59 random-key gift-wrap kinds 1059 or 21059 where encrypted transport is available.",
+    "reads": "Production clients read canonical observable/state, audit, status, discovery, and relay topology kinds: 30900, 4903, 30315, 11316-11320, 30002, 30078, and applicable standard NIPs.",
+    "legacy_runtime": "Legacy Bahia custom request/status/result/read-model/encrypted kinds are not production reactor/subscriber/client runtime support outside startup migration, historical conversion, and fail-closed fixtures.",
+    "deletions": "Deletions use NIP-09 kind 5 where relay-level Nostr deletion semantics apply; domain projections may also publish canonical tombstone replacements when durable state semantics require them.",
+    "documentation": "User-facing docs identify final ContextVM transport, canonical observable kinds, NIP-09 deletion behavior, and migration-only legacy boundaries."
   },
   "scope": [
-    "web/src/lib/nostr/kinds.gen.js",
-    "web/src/lib/nostr/encrypted-controlplane.js",
-    "web/src/routes/workers/[pubkey]/+page.svelte",
-    "pkg/client/operator_nostr.go",
+    "internal/controlplane/encrypted_transport*",
+    "internal/adapters/nostr",
+    "internal/controlplane",
+    "internal/kinds",
+    "pkg/client",
+    "cmd/cli",
+    "web/src/lib/nostr",
+    "web/src/routes",
     "docs/user-guide/nostr-integration.md",
     "docs/control-planes.md",
     "docs/user-guide/mcp-tools.md",
     "docs/user-guide/cli-reference.md"
   ],
   "out_of_scope": [
-    "Server-side ContextVM method dispatcher for every legacy request family",
-    "Full removal of legacy backend subscriptions",
-    "Relay-side enforcement policy for canonical audit retention"
+    "Relay operator policy changes outside Bahia runtime/docs",
+    "Additional product features beyond the Nostr-native ContextVM migration"
   ],
-  "remaining_dependencies": [
+  "completed_streams": [
+    {
+      "bead": "bahia-dgju",
+      "result": "CEP-4/NIP-59 random-key gift-wrap support for 1059/21059 around inner ContextVM 25910 implemented in encrypted transport."
+    },
+    {
+      "bead": "bahia-f0uw",
+      "result": "Production runtime legacy kind reactor/subscriber support removed; legacy kinds isolated to startup migration/fixtures."
+    },
     {
       "bead": "bahia-viys",
-      "dependency": "Backend ContextVM kind 25910 JSON-RPC handlers for service, worker, package, DNS, backup, ML, and adoption mutations"
+      "result": "Web/CLI client cutover to ContextVM/canonical observables completed."
     },
     {
       "bead": "bahia-itrq",
-      "dependency": "Migration documentation and PSTF verification must stay updated as backend handlers land"
+      "result": "Docs and PSTF artifacts finalized for the completed migration."
     }
-  ]
+  ],
+  "remaining_dependencies": []
 }

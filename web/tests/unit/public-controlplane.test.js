@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
-const requestResultMock = vi.hoisted(() => vi.fn());
+const requestEncryptedResultMock = vi.hoisted(() => vi.fn());
 const bootstrapMock = vi.hoisted(() => vi.fn());
 const gotoMock = vi.hoisted(() => vi.fn());
 
@@ -8,8 +8,8 @@ vi.mock('$app/navigation', () => ({
   goto: gotoMock
 }));
 
-vi.mock('../../src/lib/nostr/controlplane-requests.js', () => ({
-  requestResult: requestResultMock
+vi.mock('$lib/nostr/encrypted-controlplane.js', () => ({
+  requestEncryptedResult: requestEncryptedResultMock
 }));
 
 vi.mock('../../src/lib/stores/controlplane.svelte.js', () => ({
@@ -23,19 +23,14 @@ describe('public controlplane command helpers', () => {
     vi.resetModules();
     vi.clearAllMocks();
     bootstrapMock.mockResolvedValue({ ok: true });
-    requestResultMock.mockResolvedValue({
+    requestEncryptedResultMock.mockResolvedValue({
       requestEventId: 'req-1',
-      resultEvent: {
-        id: 'result-1',
-        kind: 7963,
-        tags: [['e', 'req-1']],
-        content: JSON.stringify({ status: 'ok' })
-      }
+      result: { status: 'ok' }
     });
     api = await import('../../src/lib/stores/public-controlplane.svelte.js');
   });
 
-  it('creates services through signer-first public request/result helpers', async () => {
+  it('creates services through canonical ContextVM encrypted requests', async () => {
     const payload = {
       name: 'api',
       repo_url: '',
@@ -47,42 +42,45 @@ describe('public controlplane command helpers', () => {
     await api.createService(payload);
 
     expect(bootstrapMock).toHaveBeenCalledTimes(1);
-    expect(requestResultMock).toHaveBeenCalledWith({
-      kind: 5964,
+    expect(requestEncryptedResultMock).toHaveBeenCalledWith({
+      operation: 'service/create',
+      payload,
       tags: [],
-      content: payload,
-      resultKinds: [7963, 7961]
+      signal: undefined,
+      timeoutMs: undefined
     });
   });
 
   it('creates deployment intents with service/environment/artifact routing tags', async () => {
     await api.createDeploymentIntent('svc-1', 'env-1', 'artifact-1');
 
-    expect(requestResultMock).toHaveBeenCalledWith({
-      kind: 5961,
+    expect(requestEncryptedResultMock).toHaveBeenCalledWith({
+      operation: 'service/deploy',
       tags: [['service', 'svc-1'], ['environment', 'env-1'], ['artifact', 'artifact-1']],
-      content: {
+      payload: {
         service_id: 'svc-1',
         environment_id: 'env-1',
         artifact_id: 'artifact-1'
       },
-      resultKinds: [7961]
+      signal: undefined,
+      timeoutMs: undefined
     });
   });
 
-  it('approves deployment intents through signer-first approval requests', async () => {
+  it('approves deployment intents through canonical ContextVM approval requests', async () => {
     await api.approveDeploymentIntent('intent-1');
 
-    expect(requestResultMock).toHaveBeenCalledWith({
-      kind: 5966,
+    expect(requestEncryptedResultMock).toHaveBeenCalledWith({
+      operation: 'approval/approve',
       tags: [['intent', 'intent-1'], ['decision', 'approve']],
-      content: { intent_id: 'intent-1', decision: 'approve' },
-      resultKinds: [7962, 7961, 7963, 7964]
+      payload: { intent_id: 'intent-1', decision: 'approve' },
+      signal: undefined,
+      timeoutMs: undefined
     });
   });
 
-  it('creates LLM routes through canonical signer-first route-create requests', async () => {
-    const payload = {
+  it('creates LLM routes and releases through canonical ContextVM operations', async () => {
+    const routePayload = {
       name: 'chat-prod',
       description: 'Public chat completions route',
       gateway_config: {
@@ -90,145 +88,113 @@ describe('public controlplane command helpers', () => {
         path: '/v1/models/chat-prod'
       }
     };
-
-    await api.createLLMRoute(payload);
-
-    expect(requestResultMock).toHaveBeenCalledWith({
-      kind: 5971,
+    await api.createLLMRoute(routePayload);
+    expect(requestEncryptedResultMock).toHaveBeenLastCalledWith({
+      operation: 'llm/route-create',
       tags: [],
-      content: payload,
-      resultKinds: [7971]
+      payload: routePayload,
+      signal: undefined,
+      timeoutMs: undefined
     });
-  });
 
-  it('registers LLM releases through canonical signer-first release-register requests', async () => {
-    const payload = {
+    const releasePayload = {
       route_id: 'llm-route-1',
       version: 'v1',
       model_ref: 'hf://meta-llama/Llama-3',
-      model_source: 'huggingface',
-      backend_preferences: ['external_api'],
-      external_backend: { base_url: 'https://llm.example.com' }
+      model_source: 'huggingface'
     };
-
-    await api.registerLLMRelease(payload);
-
-    expect(requestResultMock).toHaveBeenCalledWith({
-      kind: 5972,
+    await api.registerLLMRelease(releasePayload);
+    expect(requestEncryptedResultMock).toHaveBeenLastCalledWith({
+      operation: 'llm/release-register',
       tags: [['route', 'llm-route-1']],
-      content: payload,
-      resultKinds: [7972]
+      payload: releasePayload,
+      signal: undefined,
+      timeoutMs: undefined
     });
   });
 
-  it('requests LLM deploys through canonical signer-first deploy requests and awaits terminal result responses', async () => {
-    requestResultMock.mockResolvedValueOnce({
+  it('requests LLM deploys and rollbacks through canonical ContextVM lifecycle methods', async () => {
+    requestEncryptedResultMock.mockResolvedValueOnce({
       requestEventId: 'req-1',
       resultEvent: {
         id: 'result-llm-deploy',
-        kind: 7973,
+        kind: 25910,
         tags: [['e', 'req-1'], ['status', 'success'], ['step', 'completed']],
         content: JSON.stringify({ status: 'success', step: 'completed', message: 'completed' })
       }
     });
 
-    const result = await api.requestLLMDeploy({
+    const deployResult = await api.requestLLMDeploy({
       route_id: 'llm-route-1',
       environment_id: 'env-prod',
       release_id: 'llm-release-1',
       requested_by: 'f'.repeat(64)
     });
 
-    expect(requestResultMock).toHaveBeenCalledWith({
-      kind: 5973,
+    expect(requestEncryptedResultMock).toHaveBeenLastCalledWith({
+      operation: 'llm/deploy',
       tags: [['route', 'llm-route-1'], ['environment', 'env-prod'], ['release', 'llm-release-1']],
-      content: {
+      payload: {
         route_id: 'llm-route-1',
         environment_id: 'env-prod',
         release_id: 'llm-release-1',
         requested_by: 'f'.repeat(64)
-      },
-      resultKinds: [7973]
-    });
-    expect(result).toMatchObject({
-      requestEventId: 'req-1',
-      event: {
-        id: 'result-llm-deploy',
-        kind: 7973
       }
     });
-  });
-
-  it('requests LLM rollback through canonical signer-first rollback requests and awaits terminal result responses', async () => {
-    requestResultMock.mockResolvedValueOnce({
+    expect(deployResult).toMatchObject({
       requestEventId: 'req-1',
+      event: { id: 'result-llm-deploy', kind: 25910 }
+    });
+
+    requestEncryptedResultMock.mockResolvedValueOnce({
+      requestEventId: 'req-2',
       resultEvent: {
         id: 'result-llm-rollback',
-        kind: 7973,
-        tags: [['e', 'req-1'], ['status', 'success'], ['step', 'completed']],
+        kind: 25910,
+        tags: [['e', 'req-2'], ['status', 'success'], ['step', 'completed']],
         content: JSON.stringify({ status: 'success', step: 'completed', message: 'rollback completed' })
       }
     });
 
-    const result = await api.requestLLMRollback({
+    const rollbackResult = await api.requestLLMRollback({
       route_id: 'llm-route-1',
       environment_id: 'env-prod',
       requested_by: 'f'.repeat(64)
     });
-
-    expect(requestResultMock).toHaveBeenCalledWith({
-      kind: 5975,
+    expect(requestEncryptedResultMock).toHaveBeenLastCalledWith({
+      operation: 'llm/rollback',
       tags: [['route', 'llm-route-1'], ['environment', 'env-prod']],
-      content: {
+      payload: {
         route_id: 'llm-route-1',
         environment_id: 'env-prod',
         requested_by: 'f'.repeat(64)
-      },
-      resultKinds: [7973]
-    });
-    expect(result).toMatchObject({
-      requestEventId: 'req-1',
-      event: {
-        id: 'result-llm-rollback',
-        kind: 7973
       }
     });
+    expect(rollbackResult).toMatchObject({ requestEventId: 'req-2', event: { id: 'result-llm-rollback', kind: 25910 } });
   });
 
-  it('approves LLM deployment intents through signer-first approval requests', async () => {
-    await api.approveLLMDeploymentIntent('llm-intent-1');
-
-    expect(requestResultMock).toHaveBeenCalledWith({
-      kind: 5974,
-      tags: [['intent', 'llm-intent-1'], ['decision', 'approve']],
-      content: { intent_id: 'llm-intent-1', decision: 'approve' },
-      resultKinds: [7973]
-    });
-  });
-
-  it('evaluates deployment policy through signer-first requests and returns parsed payload', async () => {
-    requestResultMock.mockResolvedValueOnce({
+  it('evaluates deployment policy through ContextVM and unwraps successful payload envelopes', async () => {
+    requestEncryptedResultMock.mockResolvedValueOnce({
       requestEventId: 'req-1',
-      resultEvent: {
-        id: 'result-policy',
-        kind: 7962,
-        tags: [['e', 'req-1']],
-        content: JSON.stringify({
+      result: {
+        status: 'success',
+        payload: {
           allowed: true,
           warnings: 0,
           blockers: 0,
           results: [{ policy_id: 'sig-required', passed: true }]
-        })
+        }
       }
     });
 
     const result = await api.evaluatePolicy({ artifact_id: 'artifact-1', environment_id: 'env-1' });
 
-    expect(requestResultMock).toHaveBeenCalledWith({
-      kind: 5989,
+    expect(requestEncryptedResultMock).toHaveBeenCalledWith({
+      operation: 'policy/evaluate',
       tags: [['artifact', 'artifact-1'], ['environment', 'env-1']],
-      content: { artifact_id: 'artifact-1', environment_id: 'env-1' },
-      resultKinds: [7962, 7961]
+      payload: { artifact_id: 'artifact-1', environment_id: 'env-1' },
+      signal: undefined,
+      timeoutMs: undefined
     });
     expect(result).toMatchObject({
       allowed: true,
@@ -238,12 +204,12 @@ describe('public controlplane command helpers', () => {
     });
   });
 
-  it('surfaces terminal error results from public command replies', async () => {
-    requestResultMock.mockResolvedValueOnce({
+  it('surfaces terminal error results from ContextVM command replies', async () => {
+    requestEncryptedResultMock.mockResolvedValueOnce({
       requestEventId: 'req-1',
       resultEvent: {
         id: 'result-error',
-        kind: 7961,
+        kind: 25910,
         tags: [['e', 'req-1'], ['status', 'failed'], ['error', 'policy blocked']],
         content: JSON.stringify({ status: 'failed', error: 'policy blocked' })
       }

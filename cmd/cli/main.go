@@ -19,13 +19,14 @@ import (
 )
 
 var (
-	serverURL            string
-	outputFormat         string
-	apiClient            *client.Client
-	nostrNsec            string
-	nostrPrivateKey      string
-	operatorRelays       []string
-	operatorHTTPFallback bool
+	serverURL             string
+	outputFormat          string
+	apiClient             *client.Client
+	nostrNsec             string
+	nostrPrivateKey       string
+	operatorRelays        []string
+	operatorServicePubkey string
+	operatorHTTPFallback  bool
 )
 
 func main() {
@@ -53,6 +54,7 @@ func newRootCommand() *cobra.Command {
 	rootCmd.PersistentFlags().StringVar(&nostrNsec, "nsec", "", "Nostr secret key (nsec) for NIP-98 auth and signer-first operator requests")
 	rootCmd.PersistentFlags().StringVar(&nostrPrivateKey, "privkey", "", "Nostr private key hex for NIP-98 auth and signer-first operator requests")
 	rootCmd.PersistentFlags().StringArrayVar(&operatorRelays, "relay", nil, "Nostr relay URL for signer-first operator requests (repeatable; env BAHIA_NOSTR_RELAYS)")
+	rootCmd.PersistentFlags().StringVar(&operatorServicePubkey, "service-pubkey", getEnvOrDefault("BAHIA_NOSTR_SERVICE_PUBKEY", ""), "Bahia ContextVM service pubkey for signer-first operator request routing (env BAHIA_NOSTR_SERVICE_PUBKEY)")
 	rootCmd.PersistentFlags().BoolVar(&operatorHTTPFallback, "http-fallback", getEnvBool("BAHIA_OPERATOR_HTTP_FALLBACK"), "Allow explicit HTTP compatibility fallback only before any relay accepts a signer-first operator request")
 
 	// Add all command groups

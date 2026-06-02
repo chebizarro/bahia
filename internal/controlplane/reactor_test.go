@@ -81,8 +81,13 @@ func TestReactorFallsBackToNowWhenPlannerReturnsNil(t *testing.T) {
 	}
 }
 
-func TestSubscriberAndReactorDefaultSubscriptionsDoNotOverlap(t *testing.T) {
+func TestSubscriberAndReactorDefaultSubscriptionsDoNotOverlapOrIncludeLegacy(t *testing.T) {
 	reactorKinds := requestSubscriptionKinds()
+	for _, kind := range append(append([]int{}, reactorKinds...), nostradapter.DefaultInboundKinds...) {
+		if isLegacyProductionRuntimeKind(kind) {
+			t.Fatalf("production default subscription still includes legacy runtime kind %d", kind)
+		}
+	}
 	for _, kind := range nostradapter.DefaultInboundKinds {
 		for _, reactorKind := range reactorKinds {
 			if kind == reactorKind {
@@ -96,7 +101,7 @@ func TestReactorAuditsAcceptedInboundEventToRepository(t *testing.T) {
 	ctx := context.Background()
 	repo := repository.NewInMemoryNostrEventRepository()
 	r := NewReactor(Config{}, nil, nostradapter.NewRelayPool(nil, zap.NewNop()), nil, zap.NewNop(), WithNostrEventRepository(repo))
-	event := signedControlPlaneTestEvent(t, KindDNSZoneCreateRequest)
+	event := signedControlPlaneTestEvent(t, nostradapter.KindCASControlState)
 
 	r.handleEvent(ctx, event)
 
