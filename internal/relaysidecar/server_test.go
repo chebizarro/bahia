@@ -8,6 +8,7 @@ import (
 
 	"fiatjaf.com/nostr"
 	"github.com/openagentsinc/bahia/internal/config"
+	"github.com/openagentsinc/bahia/internal/kinds"
 	"go.uber.org/zap"
 )
 
@@ -140,6 +141,111 @@ func TestSidecarAllowsCanonicalStatusAndRejectsLegacyStatusResultKinds(t *testin
 	}
 	if msg == "" {
 		t.Fatalf("expected rejection message")
+	}
+}
+
+func TestSidecarAllowsScopedContextVMSubscriptions(t *testing.T) {
+	cfg := config.Defaults().Nostr
+	cfg.Sidecar.Enabled = true
+	cfg.Sidecar.PublicURL = "ws://localhost:3334"
+	serviceSK := nostr.Generate()
+	servicePubkey := nostr.GetPublicKey(serviceSK)
+	operatorSK := nostr.Generate()
+	operatorPubkey := nostr.GetPublicKey(operatorSK)
+	unknownPubkey := nostr.GetPublicKey(nostr.Generate())
+	cfg.PrivateKey = serviceSK.Hex()
+	cfg.AuthorizedPubkeys = []string{operatorPubkey.Hex()}
+
+	server, err := New(cfg, zap.NewNop())
+	if err != nil {
+		t.Fatalf("New() error: %v", err)
+	}
+
+	allowed := []nostr.Filter{
+		{Kinds: []nostr.Kind{nostr.Kind(kinds.ContextVMMessage)}, Authors: []nostr.PubKey{servicePubkey}},
+		{Kinds: []nostr.Kind{nostr.Kind(kinds.ContextVMMessage)}, Authors: []nostr.PubKey{operatorPubkey}},
+		{Kinds: []nostr.Kind{nostr.Kind(kinds.ContextVMMessage)}, Tags: nostr.TagMap{"p": []string{operatorPubkey.Hex()}}},
+		{Kinds: []nostr.Kind{nostr.Kind(kinds.ContextVMGiftWrap)}, Tags: nostr.TagMap{"p": []string{servicePubkey.Hex()}}},
+		{Kinds: []nostr.Kind{nostr.Kind(kinds.ContextVMEphemeralGiftWrap)}, Tags: nostr.TagMap{"p": []string{operatorPubkey.Hex()}}},
+	}
+	for _, filter := range allowed {
+		reject, msg := server.Relay().OnRequest(context.Background(), filter)
+		if reject {
+			t.Fatalf("expected scoped ContextVM filter %#v to be readable, got rejection %q", filter, msg)
+		}
+	}
+
+	blocked := []nostr.Filter{
+		{Kinds: []nostr.Kind{nostr.Kind(kinds.ContextVMMessage)}},
+		{Kinds: []nostr.Kind{nostr.Kind(kinds.ContextVMGiftWrap)}},
+		{Kinds: []nostr.Kind{nostr.Kind(kinds.ContextVMEphemeralGiftWrap)}, Tags: nostr.TagMap{"p": []string{unknownPubkey.Hex()}}},
+	}
+	for _, filter := range blocked {
+		reject, msg := server.Relay().OnRequest(context.Background(), filter)
+		if !reject {
+			t.Fatalf("expected unscoped/unknown ContextVM filter %#v to be rejected", filter)
+		}
+		if msg == "" {
+			t.Fatalf("expected rejection message for filter %#v", filter)
+		}
+	}
+}
+
+func TestSidecarAcceptsContextVMEventsAndAddressedGiftWraps(t *testing.T) {
+	cfg := config.Defaults().Nostr
+	cfg.Sidecar.Enabled = true
+	cfg.Sidecar.PublicURL = "ws://localhost:3334"
+	serviceSK := nostr.Generate()
+	servicePubkey := nostr.GetPublicKey(serviceSK)
+	operatorSK := nostr.Generate()
+	operatorPubkey := nostr.GetPublicKey(operatorSK)
+	unknownPubkey := nostr.GetPublicKey(nostr.Generate())
+	cfg.PrivateKey = serviceSK.Hex()
+	cfg.AuthorizedPubkeys = []string{operatorPubkey.Hex()}
+
+	server, err := New(cfg, zap.NewNop())
+	if err != nil {
+		t.Fatalf("New() error: %v", err)
+	}
+
+	directRequest := nostr.Event{CreatedAt: nostr.Now(), Kind: nostr.Kind(kinds.ContextVMMessage), Tags: nostr.Tags{{"p", servicePubkey.Hex()}}, Content: `{}`}
+	if err := directRequest.Sign(operatorSK); err != nil {
+		t.Fatalf("sign direct request: %v", err)
+	}
+	if _, err := server.Relay().AddEvent(context.Background(), directRequest); err != nil {
+		t.Fatalf("expected authorized direct ContextVM request to be accepted: %v", err)
+	}
+
+	directResponse := nostr.Event{CreatedAt: nostr.Now(), Kind: nostr.Kind(kinds.ContextVMMessage), Tags: nostr.Tags{{"p", operatorPubkey.Hex()}}, Content: `{}`}
+	if err := directResponse.Sign(serviceSK); err != nil {
+		t.Fatalf("sign direct response: %v", err)
+	}
+	if _, err := server.Relay().AddEvent(context.Background(), directResponse); err != nil {
+		t.Fatalf("expected service-signed direct ContextVM response to be accepted: %v", err)
+	}
+
+	wrapToService := nostr.Event{CreatedAt: nostr.Now(), Kind: nostr.Kind(kinds.ContextVMGiftWrap), Tags: nostr.Tags{{"p", servicePubkey.Hex()}}, Content: `encrypted`}
+	if err := wrapToService.Sign(nostr.Generate()); err != nil {
+		t.Fatalf("sign gift wrap to service: %v", err)
+	}
+	if _, err := server.Relay().AddEvent(context.Background(), wrapToService); err != nil {
+		t.Fatalf("expected gift wrap addressed to service to be accepted despite random wrapper pubkey: %v", err)
+	}
+
+	wrapToOperator := nostr.Event{CreatedAt: nostr.Now(), Kind: nostr.Kind(kinds.ContextVMEphemeralGiftWrap), Tags: nostr.Tags{{"p", operatorPubkey.Hex()}}, Content: `encrypted`}
+	if err := wrapToOperator.Sign(nostr.Generate()); err != nil {
+		t.Fatalf("sign gift wrap to operator: %v", err)
+	}
+	if _, err := server.Relay().AddEvent(context.Background(), wrapToOperator); err != nil {
+		t.Fatalf("expected gift wrap addressed to authorized operator to be accepted despite random wrapper pubkey: %v", err)
+	}
+
+	wrapToUnknown := nostr.Event{CreatedAt: nostr.Now(), Kind: nostr.Kind(kinds.ContextVMGiftWrap), Tags: nostr.Tags{{"p", unknownPubkey.Hex()}}, Content: `encrypted`}
+	if err := wrapToUnknown.Sign(nostr.Generate()); err != nil {
+		t.Fatalf("sign gift wrap to unknown: %v", err)
+	}
+	if _, err := server.Relay().AddEvent(context.Background(), wrapToUnknown); err == nil {
+		t.Fatalf("expected gift wrap addressed to unknown pubkey to be rejected")
 	}
 }
 

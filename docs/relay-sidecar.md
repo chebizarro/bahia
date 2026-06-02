@@ -23,9 +23,9 @@ nostr:
     max_query_limit: 500
 ```
 
-- `public_url` / `browser_relays` are exposed by `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` to the frontend.
+- `public_url` / `browser_relays` are exposed through ContextVM discovery (`11316`-`11320`) and NIP-51 relay sets (`30002`) to the frontend.
 - `backend_url` is used by Bahia itself for publish/subscribe in sidecar-first mode. In Docker Compose this should point at `ws://relay:3334/relay` so backend and browser both target the explicit relay mount.
-- When sidecar mode is enabled, Bahia's own control-plane reactor/projector use the sidecar URL instead of connecting directly to `nostr.relays`. This keeps canonical 696x/796x/3196x projection traffic and public 596x/597x/598x control-plane traffic sidecar-first.
+- When sidecar mode is enabled, Bahia's own ContextVM transport and canonical observable projectors use the sidecar URL instead of connecting directly to `nostr.relays`. This keeps ContextVM `25910`, CEP-4/NIP-59 wrappers (`1059`/`21059`), canonical observables (`30900`, `4903`, `30315`, `11316`-`11320`, `30002`, `30078`), and relevant interop traffic sidecar-first.
 - Interop subscribers use `nostr.relays` unless `mirror_external=true`; with mirroring enabled, Bahia uses the sidecar as the public upstream boundary and does not also connect directly to mirrored upstream URLs. Private and Loom relays stay direct and separate.
 
 ## Local topology
@@ -38,19 +38,21 @@ nostr:
 
 Browser flow:
 
-1. Fetch `Nostr discovery events (kind 31974 + NIP-51 kind 30002)`
-2. Read `nostr.browser_relays`
-3. Connect to `/relay` WebSocket
-4. Query 31961/31962/31963 + activity/status kinds and wait for EOSE
-5. Keep live subscriptions open
+1. Bootstrap from ContextVM discovery (`11316`-`11320`) and NIP-51 relay sets (`30002`).
+2. Read the browser relay set and service pubkey.
+3. Connect to `/relay` WebSocket.
+4. Subscribe to scoped ContextVM responses/gift-wraps and canonical observables (`30900`, `4903`, `30315`, `11316`-`11320`, `30002`, `30078`) and wait for EOSE.
+5. Keep live subscriptions open.
 
 ## Policy
 
 The sidecar validates event IDs, signatures, and timestamp bounds before persistence.
 
-- Operator-authored public control-plane events require authorized pubkeys on the sidecar. That includes inbound request/write kinds `5961`-`5968`, `5971`-`5976`, `5978`-`5979`, `5981`-`5989`, plus the operator-authored `7977` tool approval response.
-- Bahia-authored projection/control-plane events require Bahia's service pubkey. That includes `5977`, `6961`-`6978`, `7961`-`7976`, `7978`-`7979`, `31961`-`31970`, and `31000`-`31099`.
-- `5980` encrypted requests are intentionally excluded from the public sidecar policy; they belong on encrypted-request relays only.
+- Direct ContextVM `25910` events must be signed by either the Bahia service pubkey or an authorized operator pubkey.
+- ContextVM gift-wrap events (`1059` and `21059`) use random outer wrapper pubkeys, so the sidecar authorizes them by recipient `p` tag. The recipient must be the Bahia service pubkey or an authorized operator pubkey.
+- ContextVM subscriptions must be scoped. Reads for `25910`, `1059`, and `21059` are allowed only when the filter scopes `authors` or `#p` to the Bahia service pubkey or authorized operator pubkeys.
+- Bahia-authored canonical observable events require Bahia's service pubkey. That includes `30900`, `4903`, `30315`, `11316`-`11320`, `30002`, `30078`, and Bahia readiness/identity/checkpoint kinds.
+- Legacy Bahia request/status/result/read-model/encrypted kinds (`5961`-`6006`, `6961`-`6997`, `7961`-`7997`, `31961`-`32003`, `31000`-`31024`, `5980`, `7980`) are migration-only and are not accepted as production sidecar contracts.
 - `10100`, `30100`, `5101`, `5102`, `5401`, and `5402` interop events accept any valid signature; Bahia services still decide whether to act.
 
 ## Upstream mirroring guardrail

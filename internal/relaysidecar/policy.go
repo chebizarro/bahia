@@ -55,11 +55,18 @@ func (p *policy) acceptEvent(ctx context.Context, event nostr.Event) (bool, stri
 	}
 
 	switch {
-	case event.Kind == nostr.Kind(kinds.EncryptedRequest) || event.Kind == nostr.Kind(kinds.ContextVMMessage) || event.Kind == nostr.Kind(kinds.ContextVMGiftWrap) || event.Kind == nostr.Kind(kinds.ContextVMEphemeralGiftWrap):
-		if _, ok := p.authorized[event.PubKey]; ok {
+	case event.Kind == nostr.Kind(kinds.ContextVMMessage):
+		if p.isAuthorizedOrServicePubkey(event.PubKey) {
 			return false, ""
 		}
-		return true, "restricted: intent transport kind requires an authorized operator pubkey"
+		return true, "restricted: ContextVM message kind requires the service pubkey or an authorized operator pubkey"
+	case event.Kind == nostr.Kind(kinds.ContextVMGiftWrap) || event.Kind == nostr.Kind(kinds.ContextVMEphemeralGiftWrap):
+		if p.hasAllowedPTag(event.Tags) {
+			return false, ""
+		}
+		return true, "restricted: ContextVM gift-wrap kind requires a p tag addressed to the service pubkey or an authorized operator pubkey"
+	case event.Kind == nostr.Kind(kinds.EncryptedRequest):
+		return true, "restricted: legacy encrypted request kind is migration-only"
 	case isBahiaProjectionKind(event.Kind):
 		if p.hasServiceKey && event.PubKey == p.servicePubkey {
 			return false, ""
@@ -86,6 +93,12 @@ func (p *policy) acceptFilter(ctx context.Context, filter nostr.Filter) (bool, s
 		return false, ""
 	}
 	for _, kind := range filter.Kinds {
+		if isContextVMTransportKind(kind) {
+			if !p.hasScopedContextVMRead(filter) {
+				return true, fmt.Sprintf("blocked: ContextVM kind %d reads must scope authors or #p to the service pubkey or authorized operator pubkeys", kind)
+			}
+			continue
+		}
 		if isAuthorScopedReadableRequestKind(kind) {
 			if !p.hasAuthorizedAuthors(filter.Authors) {
 				return true, fmt.Sprintf("blocked: request kind %d reads must scope authors to authorized operator pubkeys", kind)
@@ -143,6 +156,74 @@ func (p *policy) hasAuthorizedAuthors(authors []nostr.PubKey) bool {
 		}
 	}
 	return true
+}
+
+func (p *policy) hasScopedContextVMRead(filter nostr.Filter) bool {
+	if p.hasAllowedAuthors(filter.Authors) {
+		return true
+	}
+	return p.hasAllowedPFilter(filter)
+}
+
+func (p *policy) hasAllowedAuthors(authors []nostr.PubKey) bool {
+	if len(authors) == 0 {
+		return false
+	}
+	for _, pk := range authors {
+		if !p.isAuthorizedOrServicePubkey(pk) {
+			return false
+		}
+	}
+	return true
+}
+
+func (p *policy) hasAllowedPFilter(filter nostr.Filter) bool {
+	values := filter.Tags["p"]
+	if len(values) == 0 {
+		return false
+	}
+	for _, raw := range values {
+		if !p.isAllowedPubkeyHex(raw) {
+			return false
+		}
+	}
+	return true
+}
+
+func (p *policy) hasAllowedPTag(tags nostr.Tags) bool {
+	for _, tag := range tags {
+		if len(tag) < 2 || tag[0] != "p" {
+			continue
+		}
+		if p.isAllowedPubkeyHex(tag[1]) {
+			return true
+		}
+	}
+	return false
+}
+
+func (p *policy) isAllowedPubkeyHex(raw string) bool {
+	pk, err := nostr.PubKeyFromHex(strings.TrimSpace(raw))
+	if err != nil {
+		return false
+	}
+	return p.isAuthorizedOrServicePubkey(pk)
+}
+
+func (p *policy) isAuthorizedOrServicePubkey(pk nostr.PubKey) bool {
+	if _, ok := p.authorized[pk]; ok {
+		return true
+	}
+	return p.hasServiceKey && pk == p.servicePubkey
+}
+
+func isContextVMTransportKind(kind nostr.Kind) bool {
+	switch int(kind) {
+	case kinds.ContextVMMessage, kinds.ContextVMGiftWrap, kinds.ContextVMEphemeralGiftWrap:
+		return true
+	default:
+		return false
+	}
 }
 
 func isAuthorScopedReadableRequestKind(kind nostr.Kind) bool {
