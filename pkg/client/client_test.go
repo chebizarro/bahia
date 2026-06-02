@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -83,196 +84,87 @@ func TestGetService(t *testing.T) {
 	}
 }
 
-func TestScanAdoption(t *testing.T) {
-	var gotBody AdoptionScanRequest
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			t.Errorf("method = %s, want POST", r.Method)
-		}
-		if r.URL.Path != "/api/v1/adoption/scan" {
-			t.Errorf("path = %s, want /api/v1/adoption/scan", r.URL.Path)
-		}
-		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
-			t.Fatalf("decoding request: %v", err)
-		}
-		w.Header().Set("Content-Type", "application/json")
-		preview := AdoptionPreview{
-			Target: gotBody.Targets[0],
-			Containers: []AdoptionPreviewContainer{{
-				Discovered: DiscoveredContainer{
-					HealthStatus:            "healthy",
-					Compose:                 &ComposeMetadata{ProjectName: "legacy"},
-					Environment:             map[string]string{"APP_ENV": "prod"},
-					RedactedEnvironmentKeys: []string{"DB_PASSWORD"},
-					RedactedLabelKeys:       []string{"secret-token"},
-				},
-				ProposedServiceName: "legacy-api",
-				Adoptable:           true,
-			}},
-		}
-		json.NewEncoder(w).Encode(map[string]any{"data": []AdoptionPreview{preview}})
-	}))
-	defer server.Close()
-
-	c := New(server.URL)
-	result, err := c.ScanAdoption(context.Background(), AdoptionScanRequest{Targets: []AdoptionTarget{{Name: "local", DockerHost: "unix:///docker.sock", EnvironmentName: "prod"}}})
-	if err != nil {
-		t.Fatalf("ScanAdoption() error = %v", err)
-	}
-	if len(gotBody.Targets) != 1 || gotBody.Targets[0].Name != "local" {
-		t.Fatalf("unexpected request body: %#v", gotBody)
-	}
-	if len(result) != 1 || result[0].Containers[0].ProposedServiceName != "legacy-api" {
-		t.Fatalf("unexpected result: %#v", result)
-	}
-	discovered := result[0].Containers[0].Discovered
-	if discovered.HealthStatus != "healthy" || discovered.Compose.ProjectName != "legacy" {
-		t.Fatalf("unexpected discovered response shape: %#v", discovered)
-	}
-	if discovered.Environment["APP_ENV"] != "prod" || len(discovered.RedactedEnvironmentKeys) != 1 || discovered.RedactedEnvironmentKeys[0] != "DB_PASSWORD" || len(discovered.RedactedLabelKeys) != 1 {
-		t.Fatalf("redacted discovered fields not decoded: %#v", discovered)
-	}
-}
-
-func TestImportAdoption(t *testing.T) {
-	var gotBody AdoptionImportRequest
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/v1/adoption/import" {
-			t.Errorf("path = %s, want /api/v1/adoption/import", r.URL.Path)
-		}
-		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
-			t.Fatalf("decoding request: %v", err)
-		}
-		w.Header().Set("Content-Type", "application/json")
-		result := AdoptionImportResult{
-			TargetName:              "local",
-			ContainerID:             "abc123",
-			ServiceName:             "api",
-			Status:                  "created",
-			RedactedEnvironmentKeys: []string{"DB_PASSWORD"},
-			RedactedLabelKeys:       []string{"secret-token"},
-		}
-		json.NewEncoder(w).Encode(map[string]any{"data": []AdoptionImportResult{result}})
-	}))
-	defer server.Close()
-
-	c := New(server.URL)
-	result, err := c.ImportAdoption(context.Background(), AdoptionImportRequest{
-		Targets:    []AdoptionTarget{{Name: "local", DockerHost: "unix:///docker.sock"}},
-		Selections: []AdoptionSelection{{TargetName: "local", ContainerID: "abc123", ServiceNameOverride: "api"}},
-	})
-	if err != nil {
-		t.Fatalf("ImportAdoption() error = %v", err)
-	}
-	if len(gotBody.Selections) != 1 || gotBody.Selections[0].ServiceNameOverride != "api" {
-		t.Fatalf("unexpected request body: %#v", gotBody)
-	}
-	if len(result) != 1 || result[0].Status != "created" {
-		t.Fatalf("unexpected result: %#v", result)
-	}
-	if len(result[0].RedactedEnvironmentKeys) != 1 || result[0].RedactedEnvironmentKeys[0] != "DB_PASSWORD" || len(result[0].RedactedLabelKeys) != 1 {
-		t.Fatalf("redacted import fields not decoded: %#v", result[0])
-	}
-}
-
-func TestPrivilegedMethodsSendNIP98Authorization(t *testing.T) {
-	seen := map[string]string{}
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		seen[r.Method+" "+r.URL.Path] = r.Header.Get("Authorization")
-		w.Header().Set("Content-Type", "application/json")
-		switch r.URL.Path {
-		case "/api/v1/adoption/scan":
-			json.NewEncoder(w).Encode(map[string]any{"data": []AdoptionPreview{}})
-		case "/api/v1/adoption/import":
-			json.NewEncoder(w).Encode(map[string]any{"data": []AdoptionImportResult{}})
-		default:
-			json.NewEncoder(w).Encode(map[string]any{"data": RuntimeActionResult{Action: r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:], ServiceID: "svc", EnvironmentID: "env"}})
-		}
-	}))
-	defer server.Close()
-
-	provider, err := NewNIP98PrivateKeyProvider(nostr.GeneratePrivateKey())
-	if err != nil {
-		t.Fatalf("NewNIP98PrivateKeyProvider() error = %v", err)
-	}
-	c := New(server.URL)
-	c.SetAuthorizationProvider(provider)
-	ctx := context.Background()
-	if _, err := c.ScanAdoption(ctx, AdoptionScanRequest{Targets: []AdoptionTarget{{Name: "prod", EndpointRef: "prod-docker"}}}); err != nil {
-		t.Fatalf("ScanAdoption() error = %v", err)
-	}
-	if _, err := c.ImportAdoption(ctx, AdoptionImportRequest{Targets: []AdoptionTarget{{Name: "prod", EndpointRef: "prod-docker"}}, ImportAll: true}); err != nil {
-		t.Fatalf("ImportAdoption() error = %v", err)
-	}
-	if _, err := c.DeployServiceRuntime(ctx, "svc", "env", nil); err != nil {
-		t.Fatalf("DeployServiceRuntime() error = %v", err)
-	}
-	if _, err := c.RestartServiceRuntime(ctx, "svc", "env"); err != nil {
-		t.Fatalf("RestartServiceRuntime() error = %v", err)
-	}
-	if _, err := c.StopServiceRuntime(ctx, "svc", "env"); err != nil {
-		t.Fatalf("StopServiceRuntime() error = %v", err)
+func TestAdoptionAndDirectRuntimeRestMutationsRemoved(t *testing.T) {
+	tests := []struct {
+		name     string
+		call     func(*Client) (any, error)
+		guidance string
+	}{
+		{
+			name: "scan adoption",
+			call: func(c *Client) (any, error) {
+				return c.ScanAdoption(context.Background(), AdoptionScanRequest{Targets: []AdoptionTarget{{Name: "prod", EndpointRef: "prod-docker"}}})
+			},
+			guidance: "Nostr AdoptionScanRequest",
+		},
+		{
+			name: "import adoption",
+			call: func(c *Client) (any, error) {
+				return c.ImportAdoption(context.Background(), AdoptionImportRequest{Targets: []AdoptionTarget{{Name: "prod", EndpointRef: "prod-docker"}}, ImportAll: true})
+			},
+			guidance: "Nostr AdoptionImportRequest",
+		},
+		{
+			name: "deploy direct runtime",
+			call: func(c *Client) (any, error) {
+				artifactID := uuid.NewString()
+				return c.DeployServiceRuntime(context.Background(), "svc", "env", &artifactID)
+			},
+			guidance: "Nostr DeployRequest",
+		},
+		{
+			name: "restart direct runtime",
+			call: func(c *Client) (any, error) {
+				return c.RestartServiceRuntime(context.Background(), "svc", "env")
+			},
+			guidance: "Nostr ServiceAction",
+		},
+		{
+			name: "stop direct runtime",
+			call: func(c *Client) (any, error) {
+				return c.StopServiceRuntime(context.Background(), "svc", "env")
+			},
+			guidance: "Nostr ServiceAction",
+		},
 	}
 
-	for key, want := range map[string]string{
-		"POST /api/v1/adoption/scan":                         server.URL + "/api/v1/adoption/scan",
-		"POST /api/v1/adoption/import":                       server.URL + "/api/v1/adoption/import",
-		"POST /api/v1/services/svc/environments/env/deploy":  server.URL + "/api/v1/services/svc/environments/env/deploy",
-		"POST /api/v1/services/svc/environments/env/restart": server.URL + "/api/v1/services/svc/environments/env/restart",
-		"POST /api/v1/services/svc/environments/env/stop":    server.URL + "/api/v1/services/svc/environments/env/stop",
-	} {
-		event := decodeNIP98Header(t, seen[key])
-		assertNIP98Event(t, event, http.MethodPost, want)
-	}
-}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			called := false
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				called = true
+				t.Fatalf("%s must not call removed REST endpoint %s %s", tt.name, r.Method, r.URL.Path)
+			}))
+			defer server.Close()
 
-func TestRuntimeActionMethods(t *testing.T) {
-	artifactID := uuid.NewString()
-	var paths []string
-	var deployBody map[string]string
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		paths = append(paths, r.URL.Path)
-		if strings.HasSuffix(r.URL.Path, "/deploy") {
-			if err := json.NewDecoder(r.Body).Decode(&deployBody); err != nil {
-				t.Fatalf("decoding deploy request: %v", err)
+			c := New(server.URL)
+			result, err := tt.call(c)
+			if err == nil {
+				t.Fatalf("%s expected REST deprecation error", tt.name)
 			}
-		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{"data": RuntimeActionResult{
-			Action:        strings.TrimPrefix(r.URL.Path[strings.LastIndex(r.URL.Path, "/"):], "/"),
-			ServiceID:     "svc",
-			EnvironmentID: "env",
-			Observation:   &RuntimeObservation{ID: "obs", ServiceID: "svc", EnvironmentID: "env", HealthStatus: "healthy"},
-		}})
-	}))
-	defer server.Close()
+			if !isNilClientResult(result) {
+				t.Fatalf("%s result = %#v, want nil", tt.name, result)
+			}
+			if !strings.Contains(err.Error(), tt.guidance) {
+				t.Fatalf("%s error = %q, want %s guidance", tt.name, err.Error(), tt.guidance)
+			}
+			if called {
+				t.Fatalf("%s called removed REST endpoint", tt.name)
+			}
+		})
+	}
+}
 
-	c := New(server.URL)
-	result, err := c.DeployServiceRuntime(context.Background(), "svc", "env", &artifactID)
-	if err != nil {
-		t.Fatalf("DeployServiceRuntime() error = %v", err)
+func isNilClientResult(result any) bool {
+	if result == nil {
+		return true
 	}
-	if result.Observation == nil || result.Observation.HealthStatus != "healthy" {
-		t.Fatalf("unexpected runtime action response shape: %#v", result)
-	}
-	if _, err := c.RestartServiceRuntime(context.Background(), "svc", "env"); err != nil {
-		t.Fatalf("RestartServiceRuntime() error = %v", err)
-	}
-	if _, err := c.StopServiceRuntime(context.Background(), "svc", "env"); err != nil {
-		t.Fatalf("StopServiceRuntime() error = %v", err)
-	}
-	wantPaths := []string{
-		"/api/v1/services/svc/environments/env/deploy",
-		"/api/v1/services/svc/environments/env/restart",
-		"/api/v1/services/svc/environments/env/stop",
-	}
-	for i, want := range wantPaths {
-		if paths[i] != want {
-			t.Fatalf("path[%d] = %s, want %s", i, paths[i], want)
-		}
-	}
-	if deployBody["artifact_id"] != artifactID {
-		t.Fatalf("artifact_id = %q, want %q", deployBody["artifact_id"], artifactID)
+	value := reflect.ValueOf(result)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return value.IsNil()
+	default:
+		return false
 	}
 }
 

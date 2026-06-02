@@ -1,0 +1,47 @@
+{
+  "feature_id": "bahia-g0x8",
+  "criteria": [
+    {
+      "id": "AC1",
+      "description": "POST /llm/routes and POST /llm/routes/{routeId}/releases are not mounted; LLM GET routes and PUT /llm/routes/{id} are not intentionally removed.",
+      "tests": [
+        "internal/api/router: TestLLMOperationalRESTRoutesDisabledByDefault",
+        "internal/api/router: TestLLMOperationalRESTRoutesNotMountedEvenWhenCompatibilityFlagEnabled"
+      ]
+    },
+    {
+      "id": "AC2",
+      "description": "POST /adoption/scan and POST /adoption/import are not mounted even when adoption is enabled.",
+      "tests": ["internal/api/router: TestDeprecatedAdoptionAndDirectRuntimeRoutesNotMounted"]
+    },
+    {
+      "id": "AC3",
+      "description": "POST /services/{serviceId}/environments/{envId}/deploy, restart, and stop are not mounted even when direct runtime actions are enabled.",
+      "tests": ["internal/api/router: TestDeprecatedAdoptionAndDirectRuntimeRoutesNotMounted"]
+    },
+    {
+      "id": "AC4",
+      "description": "Deleted HTTP handler methods are no longer callable from routes, while helper mapping/error behavior retained in remaining files compiles and is tested.",
+      "tests": [
+        "internal/api/handlers: TestAdoptionTargetValidationRejectsDuplicateTargetsAfterNormalization",
+        "internal/api/handlers: TestRuntimeLifecycleErrorStatusMapping"
+      ]
+    },
+    {
+      "id": "AC5",
+      "description": "Client SDK helpers for removed adoption/direct-runtime REST mutations fail before network access and guide callers to signed Nostr events.",
+      "tests": ["pkg/client: TestAdoptionAndDirectRuntimeRestMutationsRemoved"]
+    },
+    {
+      "id": "AC6",
+      "description": "Documentation and the REST deprecation plan reflect the final removal and signer-first replacements.",
+      "tests": [
+        "manual review: docs/specs/rest-deprecation-plan.md",
+        "manual review: docs/api.md",
+        "manual review: docs/user-guide/features/services.md",
+        "manual review: docs/user-guide/cli-reference.md",
+        "manual review: docs/deployment.md"
+      ]
+    }
+  ]
+}

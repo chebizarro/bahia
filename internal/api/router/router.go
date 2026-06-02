@@ -103,18 +103,6 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 		Rate:     30,
 		Interval: time.Minute,
 	})
-	adoptionScanLimiter := middleware.NewIPRateLimiter(middleware.RateLimiterConfig{
-		Rate:     5,
-		Interval: time.Minute,
-	})
-	adoptionImportLimiter := middleware.NewIPRateLimiter(middleware.RateLimiterConfig{
-		Rate:     10,
-		Interval: time.Minute,
-	})
-	directRuntimeActionLimiter := middleware.NewIPRateLimiter(middleware.RateLimiterConfig{
-		Rate:     20,
-		Interval: time.Minute,
-	})
 
 	// Auth middleware (applied to API routes, not health checks).
 	authMiddleware := routeAuthConfig(deps, authCfg...)
@@ -166,12 +154,6 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 	artifactH := handlers.NewArtifactHandler(registry)
 	deployH := handlers.NewDeploymentHandler(registry)
 	stateH := handlers.NewStateHandler(registry)
-	var metrics *telemetry.Metrics
-	if telemetryProvider != nil {
-		metrics = telemetryProvider.GetMetrics()
-	}
-	adoptionH := handlers.NewAdoptionHandler(deps.Adoption, handlers.WithAdoptionLogger(logger), handlers.WithAdoptionMetrics(metrics))
-	serviceActionH := handlers.NewServiceActionHandler(deps.RuntimeLifecycle, handlers.WithServiceActionLogger(logger), handlers.WithServiceActionMetrics(metrics))
 	repoCIHandler := handlers.NewRepositoryCIHandler(deps.HiveCI)
 	var llmH *handlers.LLMHandler
 	if deps.LLMRegistry != nil {
@@ -408,11 +390,10 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 				r.With(tier3Gate).Post("/ml/rollback", mlH.Rollback)
 			}
 
-			// LLM control plane (write)
+			// LLM control plane (write): route updates remain REST-compatible;
+			// route/release creation moved to signer-first Nostr commands.
 			if llmH != nil {
-				r.With(tier3Gate).Post("/llm/routes", llmH.CreateRoute)
 				r.With(tier3Gate).Put("/llm/routes/{id}", llmH.UpdateRoute)
-				r.With(tier3Gate).Post("/llm/routes/{routeId}/releases", llmH.CreateRelease)
 			}
 
 			// Deployment Runs (write)
@@ -470,38 +451,9 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 			}
 		})
 
-		// Dedicated operational routes. These are intentionally not covered only
-		// by the generic write limiter because scans and direct runtime actions
-		// are operationally expensive and privileged.
-		if directRuntimeEnabled(deps.Config) {
-			r.Group(func(r chi.Router) {
-				r.Use(tier3Gate)
-				r.Use(middleware.RateLimit(directRuntimeActionLimiter))
-				r.Use(middleware.RequireOperator(operatorAccessMiddlewareConfig(deps.Config.DirectRuntime.OperatorAccessConfig, authMiddleware.NIP05Resolver)))
-				r.Post("/services/{serviceId}/environments/{envId}/deploy", serviceActionH.Deploy)
-				r.Post("/services/{serviceId}/environments/{envId}/restart", serviceActionH.Restart)
-				r.Post("/services/{serviceId}/environments/{envId}/stop", serviceActionH.Stop)
-			})
-		}
-
-		// Deprecated LLM operational REST mutations are intentionally not mounted.
-		// Signer-first Nostr control-plane kinds 5971-5975 are the supported
-		// replacement for LLM deploy/approve/reject/host/observation/rollback flows.
-
-		if adoptionEnabled(deps.Config) {
-			r.Group(func(r chi.Router) {
-				r.Use(tier3Gate)
-				r.Use(middleware.RequireOperator(operatorAccessMiddlewareConfig(deps.Config.Adoption.OperatorAccessConfig, authMiddleware.NIP05Resolver)))
-				r.Group(func(r chi.Router) {
-					r.Use(middleware.RateLimit(adoptionScanLimiter))
-					r.Post("/adoption/scan", adoptionH.Scan)
-				})
-				r.Group(func(r chi.Router) {
-					r.Use(middleware.RateLimit(adoptionImportLimiter))
-					r.Post("/adoption/import", adoptionH.Import)
-				})
-			})
-		}
+		// Deprecated LLM operational, adoption, and direct runtime REST mutations
+		// are intentionally not mounted. Signer-first Nostr control-plane commands
+		// are the supported replacement for these flows.
 	})
 
 	return r

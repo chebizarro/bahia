@@ -365,22 +365,16 @@ func (c *Client) applyAuthorization(ctx context.Context, req *http.Request) erro
 
 // --- Adoption ---
 
-// ScanAdoption previews adoptable containers on one or more Docker targets.
+// ScanAdoption is no longer available through the REST API.
+// Publish a signed Nostr AdoptionScanRequest command instead.
 func (c *Client) ScanAdoption(ctx context.Context, req AdoptionScanRequest) ([]AdoptionPreview, error) {
-	var previews []AdoptionPreview
-	if err := c.do(ctx, http.MethodPost, "/api/v1/adoption/scan", req, &previews); err != nil {
-		return nil, err
-	}
-	return previews, nil
+	return nil, fmt.Errorf("REST adoption scan is removed; publish a signed Nostr AdoptionScanRequest event instead")
 }
 
-// ImportAdoption imports selected or all discovered containers into Bahia models.
+// ImportAdoption is no longer available through the REST API.
+// Publish a signed Nostr AdoptionImportRequest command instead.
 func (c *Client) ImportAdoption(ctx context.Context, req AdoptionImportRequest) ([]AdoptionImportResult, error) {
-	var results []AdoptionImportResult
-	if err := c.do(ctx, http.MethodPost, "/api/v1/adoption/import", req, &results); err != nil {
-		return nil, err
-	}
-	return results, nil
+	return nil, fmt.Errorf("REST adoption import is removed; publish a signed Nostr AdoptionImportRequest event instead")
 }
 
 // --- Services ---
@@ -409,38 +403,22 @@ func (c *Client) CreateService(ctx context.Context, name, artifactRepo string, r
 	return nil, fmt.Errorf("REST service creation is removed; publish a signed Nostr ServiceCreate event instead")
 }
 
-// DeployServiceRuntime deploys the desired or explicit artifact directly through the resolved runtime.
+// DeployServiceRuntime is no longer available through the REST API.
+// Publish a signed Nostr DeployRequest command instead.
 func (c *Client) DeployServiceRuntime(ctx context.Context, serviceID, envID string, artifactID *string) (*RuntimeActionResult, error) {
-	body := map[string]any{}
-	if artifactID != nil && *artifactID != "" {
-		body["artifact_id"] = *artifactID
-	}
-	var result RuntimeActionResult
-	path := "/api/v1/services/" + serviceID + "/environments/" + envID + "/deploy"
-	if err := c.do(ctx, http.MethodPost, path, body, &result); err != nil {
-		return nil, err
-	}
-	return &result, nil
+	return nil, fmt.Errorf("REST direct runtime deploy is removed; publish a signed Nostr DeployRequest event instead")
 }
 
-// RestartServiceRuntime restarts a service directly through the resolved runtime.
+// RestartServiceRuntime is no longer available through the REST API.
+// Publish a signed Nostr ServiceAction command instead.
 func (c *Client) RestartServiceRuntime(ctx context.Context, serviceID, envID string) (*RuntimeActionResult, error) {
-	var result RuntimeActionResult
-	path := "/api/v1/services/" + serviceID + "/environments/" + envID + "/restart"
-	if err := c.do(ctx, http.MethodPost, path, nil, &result); err != nil {
-		return nil, err
-	}
-	return &result, nil
+	return nil, fmt.Errorf("REST direct runtime restart is removed; publish a signed Nostr ServiceAction event instead")
 }
 
-// StopServiceRuntime stops a service directly through the resolved runtime.
+// StopServiceRuntime is no longer available through the REST API.
+// Publish a signed Nostr ServiceAction command instead.
 func (c *Client) StopServiceRuntime(ctx context.Context, serviceID, envID string) (*RuntimeActionResult, error) {
-	var result RuntimeActionResult
-	path := "/api/v1/services/" + serviceID + "/environments/" + envID + "/stop"
-	if err := c.do(ctx, http.MethodPost, path, nil, &result); err != nil {
-		return nil, err
-	}
-	return &result, nil
+	return nil, fmt.Errorf("REST direct runtime stop is removed; publish a signed Nostr ServiceAction event instead")
 }
 
 // --- Environments ---

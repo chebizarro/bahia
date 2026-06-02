@@ -29,7 +29,7 @@ Local development can run with `auth.enabled=false`.
 When Bahia HTTP auth is enabled:
 - protected Nostr event contracts accept **direct NIP-98** via `Authorization: Nostr <base64event>`
 - `Authorization: Bearer ...` is unsupported and should be rejected with `401`
-- adoption/import and direct runtime action routes are privileged operator routes gated by their feature flags and allowlists
+- signer-first adoption/import and direct runtime action events are privileged operator flows gated by their feature flags and allowlists
 
 ## Health
 
@@ -267,9 +267,7 @@ Compatibility note: frontend pre-work found existing synchronous REST consumers 
 |--------|------|-------------|
 | GET | `/api/v1/llm/routes` | List LLM routes |
 | GET | `/api/v1/llm/routes/{id}` | Get route |
-| POST | `/api/v1/llm/routes` | Create route |
 | PUT | `/api/v1/llm/routes/{id}` | Update route |
-| POST | `/api/v1/llm/routes/{routeId}/releases` | Create release |
 | GET | `/api/v1/llm/routes/{routeId}/releases` | List releases |
 | GET | `/api/v1/llm/releases/{id}` | Get release |
 | GET | `/api/v1/llm/intents/{id}` | Get intent |
@@ -281,34 +279,19 @@ Compatibility note: frontend pre-work found existing synchronous REST consumers 
 | GET | `/api/v1/llm/environments/{envId}/state` | List LLM state by environment |
 | GET | `/api/v1/llm/routes/{routeId}/environments/{envId}/state` | Get LLM route state |
 
-Deprecated LLM operational REST mutation endpoints (`POST /api/v1/llm/intents`, approve/reject, rollback, hosts, and observations) are not mounted. Use the signer-first Nostr LLM control-plane request kinds `5971`-`5975` instead.
+Deprecated LLM REST mutation endpoints (`POST /api/v1/llm/routes`, `POST /api/v1/llm/routes/{routeId}/releases`, `POST /api/v1/llm/intents`, approve/reject, rollback, hosts, and observations) are not mounted. Use the signer-first Nostr LLM control-plane request kinds `5971`-`5975` instead.
 
 ## Adoption / import (operator only)
 
-These routes are disabled unless `adoption.enabled=true`.
+Adoption scan/import REST endpoints are removed. Operators should publish signed `AdoptionScanRequest` (`kind:5978`) and `AdoptionImportRequest` (`kind:5979`) events and subscribe for the correlated result/read-model events.
 
-They require NIP-98 HTTP auth when API auth is enabled and the adoption operator allowlist.
-
-| Method | Path | Description |
-|--------|------|-------------|
-| POST | `/api/v1/adoption/scan` | Dry-run discovery of configured runtime endpoint aliases |
-| POST | `/api/v1/adoption/import` | Import selected or all discovered candidates |
-
-Use `endpoint_ref` targets for production. `docker_host` targets are accepted only when raw-host compatibility mode is enabled.
+Use `endpoint_ref` targets for production. `docker_host` targets remain a signer-first compatibility policy decision, not a public REST surface.
 
 ## Direct runtime actions (operator only)
 
-These routes are disabled unless `direct_runtime_actions.enabled=true`.
+Direct runtime deploy/restart/stop REST endpoints are removed. Operators should publish signed `DeployRequest` (`kind:5961`) and `ServiceAction` (`kind:5963`) events and subscribe for the correlated result/read-model events.
 
-They require NIP-98 HTTP auth when API auth is enabled and the direct-runtime operator allowlist. Actions are limited to adopted `direct_runtime` workloads.
-
-| Method | Path | Description |
-|--------|------|-------------|
-| POST | `/api/v1/services/{serviceId}/environments/{envId}/deploy` | Deploy the desired or explicit artifact directly through the runtime |
-| POST | `/api/v1/services/{serviceId}/environments/{envId}/restart` | Restart adopted runtime target |
-| POST | `/api/v1/services/{serviceId}/environments/{envId}/stop` | Stop adopted runtime target |
-
-Operational limits are separate from the generic write limiter: scan 5/min/IP, import 10/min/IP, direct runtime actions 20/min/IP.
+Direct runtime actions remain limited to adopted `direct_runtime` workloads and authorized operator pubkeys.
 
 ## Sensitive browser flows that may not use REST even when REST routes exist
 

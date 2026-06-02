@@ -141,20 +141,7 @@ bahia state drifted --environment production
 
 ### Direct Runtime Actions
 
-```bash
-# Deploy directly to the runtime
-bahia services actions deploy payment-api \
-  --environment production \
-  --artifact art-789
-
-# Restart
-bahia services actions restart payment-api \
-  --environment production
-
-# Stop
-bahia services actions stop payment-api \
-  --environment production
-```
+Direct runtime deploy/restart/stop REST endpoints have been removed. Use signer-first Nostr `DeployRequest` (`kind:5961`) and `ServiceAction` (`kind:5963`) events until the CLI publishes those events directly.
 
 ### Artifacts
 
@@ -226,16 +213,8 @@ bahia llm routes list
 # Get route
 bahia llm routes get gpt4-proxy
 
-# Create route
-bahia llm routes create \
-  --name "gpt4-proxy" \
-  --model-family openai
-
 # Releases
 bahia llm releases list --route-id route-123
-bahia llm releases create \
-  --route-id route-123 \
-  --version "v1.2.0"
 
 # Deploy
 bahia llm deploy \
@@ -255,6 +234,8 @@ bahia llm rollback \
 bahia llm state list
 bahia llm state drifted
 ```
+
+LLM route creation and release registration are signer-first Nostr operations (`LLMRouteCreate` kind `5971`, `LLMReleaseRegister` kind `5972`). Legacy REST-backed create commands are deprecated until the CLI publishes those events directly.
 
 ### Souls
 

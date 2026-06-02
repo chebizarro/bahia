@@ -1,229 +1,72 @@
 package handlers
 
 import (
-	"context"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
-	"github.com/go-chi/chi/v5"
-	"github.com/google/uuid"
-	"github.com/openagentsinc/bahia/internal/adapters/runtime"
 	"github.com/openagentsinc/bahia/internal/api/dto"
-	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/service"
 )
 
-type stubAdoptionService struct {
-	scanReq    service.AdoptionScanRequest
-	scanResp   []service.AdoptionPreview
-	importReq  service.AdoptionImportRequest
-	importResp []service.AdoptionImportResult
-}
-
-type stubAdoptionMetrics struct {
-	importCandidates int
-	importSuccess    int
-	importFailure    int
-	importRedacted   int
-}
-
-func (m *stubAdoptionMetrics) RecordAdoptionScan(_, _, _ int, _ time.Duration, _ bool) {}
-
-func (m *stubAdoptionMetrics) RecordAdoptionImport(candidates, successCount, failureCount, redactedKeys int, _ time.Duration) {
-	m.importCandidates = candidates
-	m.importSuccess = successCount
-	m.importFailure = failureCount
-	m.importRedacted = redactedKeys
-}
-
-func (s *stubAdoptionService) Scan(_ context.Context, req service.AdoptionScanRequest) ([]service.AdoptionPreview, error) {
-	s.scanReq = req
-	return s.scanResp, nil
-}
-
-func (s *stubAdoptionService) Import(_ context.Context, req service.AdoptionImportRequest) ([]service.AdoptionImportResult, error) {
-	s.importReq = req
-	return s.importResp, nil
-}
-
-func TestAdoptionHandlerScanMapsRequestAndResponse(t *testing.T) {
-	serviceID := uuid.New()
-	stub := &stubAdoptionService{scanResp: []service.AdoptionPreview{{
-		Target: service.AdoptionTarget{Name: "local", EndpointRef: "local-docker", DockerHost: "tcp://docker.internal:2376", EnvironmentName: "prod"},
-		Containers: []service.AdoptionPreviewContainer{{
-			Discovered: runtime.DiscoveredContainer{
-				ContainerID:   "abc123",
-				ContainerName: "legacy-api",
-				ImageRef:      "ghcr.io/org/api:v1",
-				Compose:       &domain.ComposeMetadata{ProjectName: "legacy", ServiceName: "api", ConfigFiles: []string{"compose.yml"}},
-				Environment:   map[string]string{"APP_ENV": "prod", "DB_PASSWORD": "secret"},
-				Labels:        map[string]string{"safe": "label", "secret-token": "secret"},
-				HealthStatus:  domain.HealthStatusHealthy,
-				Adoptable:     true,
-			},
-			SafeEnvironment:         map[string]string{"APP_ENV": "prod"},
-			SafeLabels:              map[string]string{"safe": "label"},
-			RedactedEnvironmentKeys: []string{"DB_PASSWORD"},
-			RedactedLabelKeys:       []string{"secret-token"},
-			ProposedServiceName:     "legacy-api",
-			ExistingServiceID:       &serviceID,
-			WillUpdate:              true,
-			Adoptable:               true,
-		}},
-	}}}
-	h := NewAdoptionHandler(stub)
-
-	w := postJSON(t, h.Scan, dto.ScanAdoptionRequest{Targets: []dto.AdoptionTargetRequest{{Name: " local ", EndpointRef: "local-docker", EnvironmentName: " prod "}}})
-	assertStatus(t, w, http.StatusOK)
-	if len(stub.scanReq.Targets) != 1 || stub.scanReq.Targets[0].Name != "local" || stub.scanReq.Targets[0].EnvironmentName != "prod" {
-		t.Fatalf("request was not mapped/trimmed: %#v", stub.scanReq)
-	}
-
-	var resp struct {
-		Data []dto.AdoptionPreviewResponse `json:"data"`
-	}
-	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
-		t.Fatalf("decode response: %v", err)
-	}
-	if len(resp.Data) != 1 || len(resp.Data[0].Containers) != 1 {
-		t.Fatalf("unexpected response: %#v", resp.Data)
-	}
-	if resp.Data[0].Target.EndpointRef != "local-docker" || resp.Data[0].Target.DockerHost != "" {
-		t.Fatalf("managed endpoint response leaked docker_host: %#v", resp.Data[0].Target)
-	}
-	container := resp.Data[0].Containers[0]
-	if container.ProposedServiceName != "legacy-api" || !container.WillUpdate || container.ExistingServiceID == nil || *container.ExistingServiceID != serviceID {
-		t.Fatalf("unexpected preview container: %#v", container)
-	}
-	if container.Discovered.HealthStatus != string(domain.HealthStatusHealthy) {
-		t.Fatalf("health_status = %q, want %q", container.Discovered.HealthStatus, domain.HealthStatusHealthy)
-	}
-	if container.Discovered.Compose == nil || container.Discovered.Compose.ProjectName != "legacy" || len(container.Discovered.Compose.ConfigFiles) != 1 {
-		t.Fatalf("compose metadata not mapped to DTO: %#v", container.Discovered.Compose)
-	}
-	if container.Discovered.Environment["APP_ENV"] != "prod" {
-		t.Fatalf("safe environment not mapped: %#v", container.Discovered.Environment)
-	}
-	if _, ok := container.Discovered.Environment["DB_PASSWORD"]; ok {
-		t.Fatalf("sensitive env leaked in scan response: %#v", container.Discovered.Environment)
-	}
-	if len(container.Discovered.RedactedEnvironmentKeys) != 1 || container.Discovered.RedactedEnvironmentKeys[0] != "DB_PASSWORD" {
-		t.Fatalf("redacted env keys not mapped: %#v", container.Discovered.RedactedEnvironmentKeys)
-	}
-	if _, ok := container.Discovered.Labels["secret-token"]; ok {
-		t.Fatalf("sensitive label leaked in scan response: %#v", container.Discovered.Labels)
-	}
-}
-
-func TestAdoptionHandlerRejectsDuplicateTargetsAfterNormalization(t *testing.T) {
-	h := NewAdoptionHandler(&stubAdoptionService{})
-	w := postJSON(t, h.Scan, dto.ScanAdoptionRequest{Targets: []dto.AdoptionTargetRequest{
+func TestAdoptionTargetValidationRejectsDuplicateTargetsAfterNormalization(t *testing.T) {
+	err := validateAdoptionTargets([]dto.AdoptionTargetRequest{
 		{Name: "Local", DockerHost: "unix:///docker.sock"},
 		{Name: "local", DockerHost: "tcp://docker.example:2376"},
-	}})
-	assertStatus(t, w, http.StatusBadRequest)
-	assertErrorContains(t, w, "normalization")
-}
-
-func TestAdoptionHandlerImportRequiresAllOrSelection(t *testing.T) {
-	h := NewAdoptionHandler(&stubAdoptionService{})
-	w := postJSON(t, h.Import, dto.ImportAdoptionRequest{Targets: []dto.AdoptionTargetRequest{{Name: "local", DockerHost: "unix:///docker.sock"}}})
-	assertStatus(t, w, http.StatusBadRequest)
-	assertErrorContains(t, w, "import_all")
-}
-
-func TestAdoptionHandlerImportValidationFailureRecordsMetrics(t *testing.T) {
-	metrics := &stubAdoptionMetrics{}
-	h := NewAdoptionHandler(&stubAdoptionService{}, WithAdoptionMetrics(metrics))
-	w := postJSON(t, h.Import, dto.ImportAdoptionRequest{Targets: []dto.AdoptionTargetRequest{{Name: "local", DockerHost: "unix:///docker.sock"}}})
-	assertStatus(t, w, http.StatusBadRequest)
-	if metrics.importFailure != 1 || metrics.importSuccess != 0 || metrics.importCandidates != 0 {
-		t.Fatalf("unexpected import metrics: %#v", metrics)
-	}
-}
-
-func TestAdoptionHandlerImportMapsSelections(t *testing.T) {
-	serviceID := uuid.New()
-	stub := &stubAdoptionService{importResp: []service.AdoptionImportResult{{TargetName: "local", ContainerID: "abc123", ServiceName: "api", ServiceID: &serviceID, Status: "created", RedactedEnvironmentKeys: []string{"DB_PASSWORD"}}}}
-	h := NewAdoptionHandler(stub)
-
-	w := postJSON(t, h.Import, dto.ImportAdoptionRequest{
-		Targets:    []dto.AdoptionTargetRequest{{Name: "local", DockerHost: "unix:///docker.sock"}},
-		Selections: []dto.AdoptionSelectionRequest{{TargetName: "local", ContainerID: "abc123", ServiceNameOverride: "api"}},
 	})
-	assertStatus(t, w, http.StatusOK)
-	if len(stub.importReq.Selections) != 1 || stub.importReq.Selections[0].ServiceNameOverride != "api" {
-		t.Fatalf("selection not mapped: %#v", stub.importReq)
-	}
-	var resp struct {
-		Data []dto.AdoptionImportResultResponse `json:"data"`
-	}
-	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
-		t.Fatalf("decode response: %v", err)
-	}
-	if len(resp.Data) != 1 || len(resp.Data[0].RedactedEnvironmentKeys) != 1 || resp.Data[0].RedactedEnvironmentKeys[0] != "DB_PASSWORD" {
-		t.Fatalf("redacted import keys not mapped: %#v", resp.Data)
+	if err == nil || !strings.Contains(err.Error(), "normalization") {
+		t.Fatalf("validateAdoptionTargets() error = %v, want duplicate normalization error", err)
 	}
 }
 
-type stubRuntimeLifecycleService struct {
-	deployServiceID uuid.UUID
-	deployEnvID     uuid.UUID
-	deployArtifact  *uuid.UUID
-	restartCalled   bool
-	stopCalled      bool
-}
-
-func (s *stubRuntimeLifecycleService) Deploy(_ context.Context, serviceID, envID uuid.UUID, artifactID *uuid.UUID) (*domain.RuntimeObservation, error) {
-	s.deployServiceID = serviceID
-	s.deployEnvID = envID
-	s.deployArtifact = artifactID
-	return &domain.RuntimeObservation{ID: uuid.New(), ServiceID: serviceID, EnvironmentID: envID, HealthStatus: domain.HealthStatusHealthy}, nil
-}
-
-func (s *stubRuntimeLifecycleService) Restart(_ context.Context, serviceID, envID uuid.UUID) (*domain.RuntimeObservation, error) {
-	s.restartCalled = true
-	return &domain.RuntimeObservation{ID: uuid.New(), ServiceID: serviceID, EnvironmentID: envID, HealthStatus: domain.HealthStatusHealthy}, nil
-}
-
-func (s *stubRuntimeLifecycleService) Stop(_ context.Context, serviceID, envID uuid.UUID) (*domain.RuntimeObservation, error) {
-	s.stopCalled = true
-	return &domain.RuntimeObservation{ID: uuid.New(), ServiceID: serviceID, EnvironmentID: envID, HealthStatus: domain.HealthStatusStopped}, nil
-}
-
-func TestServiceActionHandlerDeployParsesIDsAndArtifact(t *testing.T) {
-	serviceID := uuid.New()
-	envID := uuid.New()
-	artifactID := uuid.New()
-	stub := &stubRuntimeLifecycleService{}
-	h := NewServiceActionHandler(stub)
-
-	req := httptest.NewRequest(http.MethodPost, "/", nil)
-	req.Body = ioNopCloserString(`{"artifact_id":"` + artifactID.String() + `"}`)
-	rctx := chi.NewRouteContext()
-	rctx.URLParams.Add("serviceId", serviceID.String())
-	rctx.URLParams.Add("envId", envID.String())
-	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
-	w := httptest.NewRecorder()
-	h.Deploy(w, req)
-	assertStatus(t, w, http.StatusOK)
-
-	if stub.deployServiceID != serviceID || stub.deployEnvID != envID || stub.deployArtifact == nil || *stub.deployArtifact != artifactID {
-		t.Fatalf("deploy args not mapped: %#v", stub)
+func TestAdoptionSelectionValidationRequiresTargetAndContainer(t *testing.T) {
+	tests := []struct {
+		name       string
+		selection  dto.AdoptionSelectionRequest
+		wantErrMsg string
+	}{
+		{name: "target", selection: dto.AdoptionSelectionRequest{ContainerID: "abc123"}, wantErrMsg: "target_name"},
+		{name: "container", selection: dto.AdoptionSelectionRequest{TargetName: "local"}, wantErrMsg: "container_id"},
 	}
-	var resp struct {
-		Data dto.RuntimeActionResponse `json:"data"`
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateAdoptionSelections([]dto.AdoptionSelectionRequest{tt.selection})
+			if err == nil || !strings.Contains(err.Error(), tt.wantErrMsg) {
+				t.Fatalf("validateAdoptionSelections() error = %v, want %q", err, tt.wantErrMsg)
+			}
+		})
 	}
-	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
-		t.Fatalf("decode response: %v", err)
+}
+
+func TestAdoptionMappingNormalizesAndTrimsInputs(t *testing.T) {
+	targets := mapAdoptionTargets([]dto.AdoptionTargetRequest{{Name: " Prod API ", EndpointRef: " prod-docker ", EnvironmentName: " Production "}})
+	if len(targets) != 1 || targets[0].Name != "prod-api" || targets[0].EndpointRef != "prod-docker" || targets[0].EnvironmentName != "production" {
+		t.Fatalf("mapAdoptionTargets() = %#v, want normalized target", targets)
 	}
-	if resp.Data.Observation == nil || resp.Data.Observation.HealthStatus != string(domain.HealthStatusHealthy) {
-		t.Fatalf("runtime observation not mapped to DTO: %#v", resp.Data.Observation)
+
+	selections := mapAdoptionSelections([]dto.AdoptionSelectionRequest{{TargetName: " Prod API ", ContainerID: " abc123 ", ServiceNameOverride: " Legacy API "}})
+	if len(selections) != 1 || selections[0].TargetName != "prod-api" || selections[0].ContainerID != "abc123" || selections[0].ServiceNameOverride != "legacy-api" {
+		t.Fatalf("mapAdoptionSelections() = %#v, want normalized selection", selections)
+	}
+}
+
+func TestAdoptionStatsCountCandidatesFailuresAndRedactions(t *testing.T) {
+	candidateCount, redactedEnvKeyCount, redactedLabelKeyCount := adoptionPreviewStats([]service.AdoptionPreview{{
+		Containers: []service.AdoptionPreviewContainer{{RedactedEnvironmentKeys: []string{"DB_PASSWORD"}, RedactedLabelKeys: []string{"secret-token"}}},
+	}})
+	if candidateCount != 1 || redactedEnvKeyCount != 1 || redactedLabelKeyCount != 1 {
+		t.Fatalf("adoptionPreviewStats() = (%d,%d,%d), want (1,1,1)", candidateCount, redactedEnvKeyCount, redactedLabelKeyCount)
+	}
+
+	successCount, failureCount, redactedEnvKeyCount, redactedLabelKeyCount := adoptionImportStats([]service.AdoptionImportResult{
+		{Status: "created", RedactedEnvironmentKeys: []string{"DB_PASSWORD"}},
+		{Status: "failed", Error: "container unavailable", RedactedLabelKeys: []string{"secret-token"}},
+	})
+	if successCount != 1 || failureCount != 1 || redactedEnvKeyCount != 1 || redactedLabelKeyCount != 1 {
+		t.Fatalf("adoptionImportStats() = (%d,%d,%d,%d), want (1,1,1,1)", successCount, failureCount, redactedEnvKeyCount, redactedLabelKeyCount)
 	}
 }
 
@@ -247,21 +90,3 @@ func TestRuntimeLifecycleErrorStatusMapping(t *testing.T) {
 		})
 	}
 }
-
-func TestServiceActionHandlerInvalidServiceID(t *testing.T) {
-	h := NewServiceActionHandler(&stubRuntimeLifecycleService{})
-	req := httptest.NewRequest(http.MethodPost, "/", nil)
-	rctx := chi.NewRouteContext()
-	rctx.URLParams.Add("serviceId", "not-a-uuid")
-	rctx.URLParams.Add("envId", uuid.NewString())
-	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
-	w := httptest.NewRecorder()
-	h.Restart(w, req)
-	assertStatus(t, w, http.StatusBadRequest)
-}
-
-type stringReadCloser struct{ *strings.Reader }
-
-func (s stringReadCloser) Close() error { return nil }
-
-func ioNopCloserString(s string) stringReadCloser { return stringReadCloser{strings.NewReader(s)} }

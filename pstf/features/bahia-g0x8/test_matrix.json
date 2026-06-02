@@ -1,0 +1,23 @@
+{
+  "feature_id": "bahia-g0x8",
+  "test_matrix": [
+    {
+      "test": "go test ./internal/api/... ./pkg/client",
+      "maps_to": ["AC1", "AC2", "AC3", "AC4", "AC5"],
+      "status": "passed",
+      "evidence": "Focused API/router/handler/client suites pass after route and handler removal."
+    },
+    {
+      "test": "go build ./...",
+      "maps_to": ["AC1", "AC2", "AC3", "AC4", "AC5", "AC6"],
+      "status": "passed",
+      "evidence": "Full repository build completed successfully after route, handler, client, docs, and PSTF updates."
+    },
+    {
+      "test": "manual route search",
+      "maps_to": ["AC1", "AC2", "AC3", "AC6"],
+      "status": "passed",
+      "evidence": "Search confirmed removed router registrations and exported handler method names are gone from the touched API files."
+    }
+  ]
+}

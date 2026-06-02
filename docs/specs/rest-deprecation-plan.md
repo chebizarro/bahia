@@ -68,25 +68,25 @@ These REST endpoints duplicate functionality that the Nostr reactor (`internal/c
 
 | REST Endpoint | Nostr Kind | Reactor Handler | File |
 |---------------|------------|-----------------|------|
-| `POST /adoption/scan` | `AdoptionScanRequest` 5978 | `handleAdoptionScanRequest` | `router.go:529` |
-| `POST /adoption/import` | `AdoptionImportRequest` 5979 | `handleAdoptionImportRequest` | `router.go:533` |
+| `POST /adoption/scan` (removed) | `AdoptionScanRequest` 5978 | `handleAdoptionScanRequest` | `internal/controlplane/reactor.go` |
+| `POST /adoption/import` (removed) | `AdoptionImportRequest` 5979 | `handleAdoptionImportRequest` | `internal/controlplane/reactor.go` |
 
 ### LLM
 
 | REST Endpoint | Nostr Kind | Reactor Handler | File |
 |---------------|------------|-----------------|------|
-| `POST /llm/routes` | `LLMRouteCreate` 5971 | `handleLLMRouteCreate` | `router.go:428` |
-| `POST /llm/routes/{routeId}/releases` | `LLMReleaseRegister` 5972 | `handleLLMReleaseRegister` | `router.go:430` |
+| `POST /llm/routes` (removed) | `LLMRouteCreate` 5971 | `handleLLMRouteCreate` | `internal/controlplane/reactor.go` |
+| `POST /llm/routes/{routeId}/releases` (removed) | `LLMReleaseRegister` 5972 | `handleLLMReleaseRegister` | `internal/controlplane/reactor.go` |
 
 ### Direct Runtime (Feature-Flagged)
 
 | REST Endpoint | Nostr Kind | Reactor Handler | File |
 |---------------|------------|-----------------|------|
-| `POST /services/{serviceId}/environments/{envId}/deploy` | `DeployRequest` 5961 | `handleDeployRequest` | `router.go:513` |
-| `POST /services/{serviceId}/environments/{envId}/restart` | `ServiceAction` 5963 | `handleServiceAction` | `router.go:514` |
-| `POST /services/{serviceId}/environments/{envId}/stop` | `ServiceAction` 5963 | `handleServiceAction` | `router.go:515` |
+| `POST /services/{serviceId}/environments/{envId}/deploy` (removed) | `DeployRequest` 5961 | `handleDeployRequest` | `internal/controlplane/reactor.go` |
+| `POST /services/{serviceId}/environments/{envId}/restart` (removed) | `ServiceAction` 5963 | `handleServiceAction` | `internal/controlplane/reactor.go` |
+| `POST /services/{serviceId}/environments/{envId}/stop` (removed) | `ServiceAction` 5963 | `handleServiceAction` | `internal/controlplane/reactor.go` |
 
-**Total: 24 REST endpoints to delete**
+**Total: 25 REST endpoints to delete**
 
 ---
 
@@ -209,16 +209,16 @@ All `GET` endpoints that read projected state are acceptable for browser compati
 - [x] Delete/comment handler methods in policies.go, tools.go
 - [x] Update tests
 
-### Work Item 4: LLM + Adoption + Direct Runtime (6 endpoints)
-- [ ] Remove POST /llm/routes from router.go
-- [ ] Remove POST /llm/routes/{routeId}/releases from router.go
-- [ ] Remove POST /adoption/scan from router.go
-- [ ] Remove POST /adoption/import from router.go
-- [ ] Remove POST /services/{serviceId}/environments/{envId}/deploy from router.go
-- [ ] Remove POST /services/{serviceId}/environments/{envId}/restart from router.go
-- [ ] Remove POST /services/{serviceId}/environments/{envId}/stop from router.go
-- [ ] Delete/comment handler methods in llm.go, adoption.go, service_actions.go
-- [ ] Update tests
+### Work Item 4: LLM + Adoption + Direct Runtime (7 endpoints)
+- [x] Remove POST /llm/routes from router.go
+- [x] Remove POST /llm/routes/{routeId}/releases from router.go
+- [x] Remove POST /adoption/scan from router.go
+- [x] Remove POST /adoption/import from router.go
+- [x] Remove POST /services/{serviceId}/environments/{envId}/deploy from router.go
+- [x] Remove POST /services/{serviceId}/environments/{envId}/restart from router.go
+- [x] Remove POST /services/{serviceId}/environments/{envId}/stop from router.go
+- [x] Delete/comment handler methods in llm.go, adoption.go, service_actions.go
+- [x] Update tests
 
 ---
 

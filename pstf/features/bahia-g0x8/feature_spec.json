@@ -1,0 +1,31 @@
+{
+  "feature_id": "bahia-g0x8",
+  "title": "Remove final LLM, adoption, and direct-runtime REST mutation endpoints",
+  "intent": "Complete the REST deprecation plan by removing remaining REST mutation routes that duplicate signer-first Nostr reactor handlers for LLM route/release creation, adoption scan/import, and direct runtime deploy/restart/stop.",
+  "observed_behavior_before": [
+    "router.go mounted POST /llm/routes and POST /llm/routes/{routeId}/releases when an LLM registry dependency existed.",
+    "router.go mounted POST /adoption/scan and POST /adoption/import when adoption.enabled was true.",
+    "router.go mounted POST /services/{serviceId}/environments/{envId}/deploy|restart|stop when direct_runtime_actions.enabled was true.",
+    "pkg/client still issued HTTP POST calls for adoption scan/import and direct-runtime deploy/restart/stop."
+  ],
+  "intended_behavior_after": [
+    "The seven REST mutation route registrations are not mounted under /api/v1.",
+    "The corresponding exported HTTP handler methods are deleted from llm.go, adoption.go, and service_actions.go without deleting the files/types used elsewhere.",
+    "LLM read routes and PUT /llm/routes/{id} remain mounted when an LLM registry is configured.",
+    "Client helpers for the removed REST mutations fail before network access with Nostr signer-first guidance.",
+    "Docs and the REST deprecation checklist identify signer-first Nostr events as the supported replacement."
+  ],
+  "nostr_replacements": {
+    "llm_route_create": 5971,
+    "llm_release_register": 5972,
+    "adoption_scan_request": 5978,
+    "adoption_import_request": 5979,
+    "deploy_request": 5961,
+    "service_action": 5963
+  },
+  "out_of_scope": [
+    "Deleting LLM read routes or PUT /llm/routes/{id}.",
+    "Changing internal/controlplane/reactor.go handler behavior.",
+    "Deleting whole handler files or domain/client DTO types."
+  ]
+}

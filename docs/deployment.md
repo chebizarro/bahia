@@ -71,12 +71,9 @@ make build-cli
 # List services
 ./bin/bahia services list
 
-# Deploy
-./bin/bahia deploy \
-  --service <service-id> \
-  --environment <env-id> \
-  --artifact <artifact-id> \
-  --requested-by "operator@example.com"
+# Deployments are signer-first Nostr operations.
+# Publish a signed DeployRequest (kind:5961) and subscribe for result/read-model events.
+# Legacy REST-backed deploy CLI paths are deprecated until they publish signed events directly.
 ```
 
 ## Production Deployment
@@ -192,11 +189,7 @@ Raw Docker hosts are a compatibility path only. They require the server to set `
 
 For production rollout, follow the signer-first operator runbook in [`adoption-production-rollout.md`](adoption-production-rollout.md). In short: configure signer/operator pubkeys and relay discovery, keep raw-host mode off, run a signer-first scan-only dry run, import a single low-risk workload first, then monitor correlated adoption/runtime events, logs, and `/metrics` before expanding.
 
-Dedicated operational limits protect runtime endpoints from expensive control-plane bursts:
-
-- adoption scan: 5 requests/minute/IP;
-- adoption import: 10 requests/minute/IP;
-- direct runtime deploy/restart/stop: 20 requests/minute/IP.
+Signer-first adoption/import and direct-runtime events remain subject to relay, authorization, and reactor-side operator controls; the legacy per-IP REST mutation limiters are no longer mounted.
 
 ## Desired-State Persistence
 

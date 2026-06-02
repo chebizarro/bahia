@@ -34,20 +34,6 @@ func (h *LLMHandler) ListRoutes(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, dto.ListResponse{Data: routes, Limit: queryInt(r, "limit", 100), Offset: queryInt(r, "offset", 0)})
 }
 
-func (h *LLMHandler) CreateRoute(w http.ResponseWriter, r *http.Request) {
-	var req dto.CreateLLMRouteRequest
-	if err := decodeJSON(r, &req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
-		return
-	}
-	route := &domain.LLMRoute{Name: req.Name, Description: req.Description, GatewayConfig: gatewayConfig(req.GatewayConfig), DefaultPlacementPolicy: placementPolicy(req.DefaultPlacementPolicy), DefaultPromotionGate: promotionGate(req.DefaultPromotionGate), Metadata: req.Metadata}
-	if err := h.registry.CreateRoute(r.Context(), route); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	writeData(w, http.StatusCreated, route)
-}
-
 func (h *LLMHandler) GetRoute(w http.ResponseWriter, r *http.Request) {
 	id, err := uuidParam(r, "id")
 	if err != nil {
@@ -136,25 +122,6 @@ func (h *LLMHandler) RegisterHost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeData(w, http.StatusCreated, worker)
-}
-
-func (h *LLMHandler) CreateRelease(w http.ResponseWriter, r *http.Request) {
-	routeID, err := uuidParam(r, "routeId")
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid route id")
-		return
-	}
-	var req dto.CreateLLMReleaseRequest
-	if err := decodeJSON(r, &req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
-		return
-	}
-	release := &domain.LLMRelease{RouteID: routeID, Version: req.Version, ModelRef: req.ModelRef, ModelSource: req.ModelSource, ModelRevision: req.ModelRevision, EstimatedVRAMGB: req.EstimatedVRAMGB, BackendPreferences: backendKinds(req.BackendPreferences), RuntimeBackend: runtimeBackend(req.RuntimeBackend), ExternalBackend: externalBackend(req.ExternalBackend), PlacementPolicy: placementPolicy(req.PlacementPolicy), PromotionGate: promotionGate(req.PromotionGate), Metadata: req.Metadata}
-	if err := h.registry.CreateRelease(r.Context(), release); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	writeData(w, http.StatusCreated, release)
 }
 
 func (h *LLMHandler) ListReleases(w http.ResponseWriter, r *http.Request) {

@@ -138,7 +138,7 @@ func TestMLRESTReadRouteMountedWithoutBreakingLLM(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
-	if w.Code != http.StatusNotFound {
-		t.Fatalf("LLM routes should remain controlled by LLM registry presence, got status=%d body=%s", w.Code, w.Body.String())
+	if w.Code != http.StatusNotFound && w.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("removed LLM route creation should not be mounted, got status=%d body=%s", w.Code, w.Body.String())
 	}
 }

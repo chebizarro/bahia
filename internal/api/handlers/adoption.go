@@ -25,7 +25,7 @@ type adoptionMetrics interface {
 	RecordAdoptionImport(candidates, successCount, failureCount, redactedKeys int, duration time.Duration)
 }
 
-// AdoptionHandler exposes adopted-workload scan/import endpoints.
+// AdoptionHandler retains shared adoption dependencies and helpers after REST scan/import endpoint removal.
 type AdoptionHandler struct {
 	adoption adoptionService
 	logger   *zap.Logger
@@ -63,90 +63,6 @@ func WithAdoptionMetrics(metrics adoptionMetrics) AdoptionHandlerOption {
 			h.metrics = metrics
 		}
 	}
-}
-
-// Scan previews adoptable containers on one or more Docker targets.
-func (h *AdoptionHandler) Scan(w http.ResponseWriter, r *http.Request) {
-	start := time.Now()
-	if h.adoption == nil {
-		writeError(w, http.StatusServiceUnavailable, "adoption service is not configured")
-		h.recordScan(r, nil, 0, 0, 0, start, false, "adoption service is not configured")
-		return
-	}
-	var req dto.ScanAdoptionRequest
-	if err := decodeJSON(r, &req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
-		h.recordScan(r, req.Targets, 0, 0, 0, start, false, "invalid request body")
-		return
-	}
-	if err := validateAdoptionTargets(req.Targets); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		h.recordScan(r, req.Targets, 0, 0, 0, start, false, err.Error())
-		return
-	}
-
-	previews, err := h.adoption.Scan(r.Context(), service.AdoptionScanRequest{Targets: mapAdoptionTargets(req.Targets)})
-	if err != nil {
-		writeAdoptionServiceError(w, err)
-		h.recordScan(r, req.Targets, 0, 0, 0, start, false, err.Error())
-		return
-	}
-	candidateCount, redactedEnvKeyCount, redactedLabelKeyCount := adoptionPreviewStats(previews)
-	h.recordScan(r, req.Targets, candidateCount, redactedEnvKeyCount, redactedLabelKeyCount, start, true, "")
-	writeData(w, http.StatusOK, dto.AdoptionPreviewResponsesFromService(previews))
-}
-
-// Import imports selected or all discovered containers into Bahia models.
-func (h *AdoptionHandler) Import(w http.ResponseWriter, r *http.Request) {
-	start := time.Now()
-	if h.adoption == nil {
-		writeError(w, http.StatusServiceUnavailable, "adoption service is not configured")
-		h.recordImport(r, nil, 0, 0, 0, 0, 0, start, "failed", "adoption service is not configured")
-		return
-	}
-	var req dto.ImportAdoptionRequest
-	if err := decodeJSON(r, &req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
-		h.recordImport(r, req.Targets, 0, 0, 0, 0, 0, start, "failed", "invalid request body")
-		return
-	}
-	if err := validateAdoptionTargets(req.Targets); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		h.recordImport(r, req.Targets, 0, 0, 0, 0, 0, start, "failed", err.Error())
-		return
-	}
-	if !req.ImportAll && len(req.Selections) == 0 {
-		writeError(w, http.StatusBadRequest, "import requires import_all=true or at least one selection")
-		h.recordImport(r, req.Targets, 0, 0, 0, 0, 0, start, "failed", "import requires import_all=true or at least one selection")
-		return
-	}
-	if err := validateAdoptionSelections(req.Selections); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		h.recordImport(r, req.Targets, 0, 0, 0, 0, 0, start, "failed", err.Error())
-		return
-	}
-
-	results, err := h.adoption.Import(r.Context(), service.AdoptionImportRequest{
-		Targets:    mapAdoptionTargets(req.Targets),
-		Selections: mapAdoptionSelections(req.Selections),
-		ImportAll:  req.ImportAll,
-		OrgID:      req.OrgID,
-	})
-	if err != nil {
-		writeAdoptionServiceError(w, err)
-		h.recordImport(r, req.Targets, 0, 0, 0, 0, 0, start, "failed", err.Error())
-		return
-	}
-	successCount, failureCount, redactedEnvKeyCount, redactedLabelKeyCount := adoptionImportStats(results)
-	result := "success"
-	if failureCount > 0 {
-		result = "partial_failure"
-	}
-	if len(results) > 0 && successCount == 0 && failureCount > 0 {
-		result = "failed"
-	}
-	h.recordImport(r, req.Targets, len(results), successCount, failureCount, redactedEnvKeyCount, redactedLabelKeyCount, start, result, "")
-	writeData(w, http.StatusOK, dto.AdoptionImportResultResponsesFromService(results))
 }
 
 func (h *AdoptionHandler) recordScan(r *http.Request, targets []dto.AdoptionTargetRequest, candidateCount, redactedEnvKeyCount, redactedLabelKeyCount int, start time.Time, success bool, errMsg string) {

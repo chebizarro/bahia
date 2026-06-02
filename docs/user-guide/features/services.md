@@ -129,37 +129,12 @@ drift: false
 
 ## Service Actions
 
-### Deploy
+Deploy, restart, and stop are signer-first Nostr control-plane operations.
 
-Deploy an artifact to an environment:
+- Deploy by publishing a signed `DeployRequest` event (`kind:5961`) and subscribing for the deployment result/read-model events.
+- Restart or stop an adopted direct-runtime workload by publishing a signed `ServiceAction` event (`kind:5963`) with the action payload.
 
-```bash
-bahia services deploy payment-api \
-  --environment production \
-  --artifact art-789
-```
-
-This creates a deployment intent that goes through the approval workflow.
-
-### Restart
-
-Restart a running service (direct runtime action):
-
-```bash
-bahia services actions restart payment-api \
-  --environment production
-```
-
-Requires `direct_runtime_actions.enabled=true` and authorized pubkey.
-
-### Stop
-
-Stop a running service:
-
-```bash
-bahia services actions stop payment-api \
-  --environment production
-```
+Legacy REST-backed service action endpoints and direct-runtime CLI action paths are deprecated until the CLI publishes signed Nostr events directly.
 
 ## Service Secrets
 

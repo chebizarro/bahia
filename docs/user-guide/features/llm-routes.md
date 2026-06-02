@@ -41,24 +41,9 @@ Deploying a release to an environment makes it live.
 
 ## Creating LLM Routes
 
-### Web UI
+### Web UI and CLI
 
-1. Navigate to **LLM** in the sidebar
-2. Click **New Route**
-3. Fill in:
-   - **Name**: Route identifier
-   - **Description**: What this route provides
-   - **Model Family**: openai, anthropic, local, etc.
-4. Click **Create**
-
-### CLI
-
-```bash
-bahia llm routes create \
-  --name "gpt4-proxy" \
-  --description "GPT-4 API proxy" \
-  --model-family openai
-```
+LLM route creation is a signer-first Nostr operation (`LLMRouteCreate`, kind `5971`). Legacy REST-backed Web UI and CLI create paths are deprecated until they publish signed Nostr events directly.
 
 ### MCP Tool
 
@@ -84,23 +69,9 @@ Returns Nostr correlation metadata:
 
 ## Creating Releases
 
-### Web UI
+### Web UI and CLI
 
-1. Go to route detail
-2. Click **New Release**
-3. Configure:
-   - **Version**: Semantic version
-   - **Model configuration**: Model, parameters
-4. Click **Create Release**
-
-### CLI
-
-```bash
-bahia llm releases create \
-  --route-id route-123 \
-  --version "v1.2.0" \
-  --config model=gpt-4-turbo,max_tokens=4096
-```
+LLM release registration is a signer-first Nostr operation (`LLMReleaseRegister`, kind `5972`). Legacy REST-backed Web UI and CLI release-create paths are deprecated until they publish signed Nostr events directly.
 
 ### MCP Tool
 

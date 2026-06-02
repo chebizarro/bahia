@@ -26,7 +26,7 @@ type runtimeActionMetrics interface {
 	RecordRuntimeAction(action, status string, duration time.Duration)
 }
 
-// ServiceActionHandler exposes direct runtime actions for services.
+// ServiceActionHandler retains shared direct-runtime helpers after REST action endpoint removal.
 type ServiceActionHandler struct {
 	lifecycle runtimeLifecycleService
 	logger    *zap.Logger
@@ -64,65 +64,6 @@ func WithServiceActionMetrics(metrics runtimeActionMetrics) ServiceActionHandler
 			h.metrics = metrics
 		}
 	}
-}
-
-// Deploy deploys the desired or explicit artifact directly through the resolved runtime.
-func (h *ServiceActionHandler) Deploy(w http.ResponseWriter, r *http.Request) {
-	start := time.Now()
-	serviceID, envID, ok := h.parseIDs(w, r)
-	if !ok {
-		h.recordRuntimeAction(r, "deploy", uuid.Nil, uuid.Nil, nil, start, "failed", "invalid service or environment id")
-		return
-	}
-	req, ok := decodeDeployServiceActionRequest(w, r)
-	if !ok {
-		h.recordRuntimeAction(r, "deploy", serviceID, envID, nil, start, "failed", "invalid request body")
-		return
-	}
-	obs, err := h.lifecycle.Deploy(r.Context(), serviceID, envID, req.ArtifactID)
-	if err != nil {
-		writeRuntimeLifecycleError(w, err)
-		h.recordRuntimeAction(r, "deploy", serviceID, envID, req.ArtifactID, start, "failed", err.Error())
-		return
-	}
-	h.recordRuntimeAction(r, "deploy", serviceID, envID, req.ArtifactID, start, "success", "")
-	writeData(w, http.StatusOK, dto.RuntimeActionResponseFromDomain("deploy", serviceID, envID, obs))
-}
-
-// Restart restarts the service directly through the resolved runtime.
-func (h *ServiceActionHandler) Restart(w http.ResponseWriter, r *http.Request) {
-	start := time.Now()
-	serviceID, envID, ok := h.parseIDs(w, r)
-	if !ok {
-		h.recordRuntimeAction(r, "restart", uuid.Nil, uuid.Nil, nil, start, "failed", "invalid service or environment id")
-		return
-	}
-	obs, err := h.lifecycle.Restart(r.Context(), serviceID, envID)
-	if err != nil {
-		writeRuntimeLifecycleError(w, err)
-		h.recordRuntimeAction(r, "restart", serviceID, envID, nil, start, "failed", err.Error())
-		return
-	}
-	h.recordRuntimeAction(r, "restart", serviceID, envID, nil, start, "success", "")
-	writeData(w, http.StatusOK, dto.RuntimeActionResponseFromDomain("restart", serviceID, envID, obs))
-}
-
-// Stop stops the service directly through the resolved runtime.
-func (h *ServiceActionHandler) Stop(w http.ResponseWriter, r *http.Request) {
-	start := time.Now()
-	serviceID, envID, ok := h.parseIDs(w, r)
-	if !ok {
-		h.recordRuntimeAction(r, "stop", uuid.Nil, uuid.Nil, nil, start, "failed", "invalid service or environment id")
-		return
-	}
-	obs, err := h.lifecycle.Stop(r.Context(), serviceID, envID)
-	if err != nil {
-		writeRuntimeLifecycleError(w, err)
-		h.recordRuntimeAction(r, "stop", serviceID, envID, nil, start, "failed", err.Error())
-		return
-	}
-	h.recordRuntimeAction(r, "stop", serviceID, envID, nil, start, "success", "")
-	writeData(w, http.StatusOK, dto.RuntimeActionResponseFromDomain("stop", serviceID, envID, obs))
 }
 
 func (h *ServiceActionHandler) recordRuntimeAction(r *http.Request, action string, serviceID, envID uuid.UUID, artifactID *uuid.UUID, start time.Time, result, errMsg string) {
