@@ -35,6 +35,7 @@ const nip07AvailabilityWatchers = new Set();
 let nip07ObserverInstalled = false;
 let lastKnownNip07Availability = null;
 let lastKnownNip07Provider = null;
+let nip07CryptoQueue = Promise.resolve();
 
 function notifyNip07AvailabilityWatchers({ force = false } = {}) {
   const result = detectNip07();
@@ -180,6 +181,53 @@ function requireNip44Provider() {
   return provider;
 }
 
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isTransientBridgeError(error) {
+  const message = String(error?.message || error || '').toLowerCase();
+  return message.includes('could not establish connection')
+    || message.includes('receiving end does not exist')
+    || message.includes('extension context invalidated')
+    || message.includes('message port closed');
+}
+
+async function runQueuedNip44Operation(operation) {
+  const previous = nip07CryptoQueue.catch(() => {});
+  const next = previous.then(operation);
+  nip07CryptoQueue = next.finally(() => {
+    if (nip07CryptoQueue === next) {
+      nip07CryptoQueue = Promise.resolve();
+    }
+  });
+  return next;
+}
+
+async function withNip44ProviderRetry(action) {
+  const retryDelays = [0, 150, 400];
+  let lastError = null;
+
+  for (let attempt = 0; attempt < retryDelays.length; attempt += 1) {
+    if (retryDelays[attempt] > 0) {
+      await delay(retryDelays[attempt]);
+      await waitForNip07({ timeoutMs: retryDelays[attempt] + 150 });
+    }
+
+    const provider = requireNip44Provider();
+    try {
+      return await action(provider);
+    } catch (error) {
+      lastError = error;
+      if (!isTransientBridgeError(error) || attempt === retryDelays.length - 1) {
+        throw error;
+      }
+    }
+  }
+
+  throw lastError || new Error('Unknown NIP-44 provider failure');
+}
+
 function ensureCryptoPubkey(pubkey, role) {
   if (!isValidHexPubkey(pubkey)) {
     throw new Error(`Invalid ${role} pubkey for NIP-44 encryption`);
@@ -274,12 +322,13 @@ export async function encryptNip44(recipientPubkey, plaintext) {
     throw new Error('NIP-44 plaintext must be a string');
   }
 
-  const provider = requireNip44Provider();
-  try {
-    return await provider.encrypt(recipientPubkey, plaintext);
-  } catch (error) {
-    throw new Error(`Failed to encrypt with NIP-44: ${error.message}`);
-  }
+  return runQueuedNip44Operation(async () => {
+    try {
+      return await withNip44ProviderRetry((provider) => provider.encrypt(recipientPubkey, plaintext));
+    } catch (error) {
+      throw new Error(`Failed to encrypt with NIP-44: ${error.message}`);
+    }
+  });
 }
 
 /**
@@ -294,12 +343,13 @@ export async function decryptNip44(senderPubkey, ciphertext) {
     throw new Error('NIP-44 ciphertext must be a non-empty string');
   }
 
-  const provider = requireNip44Provider();
-  try {
-    return await provider.decrypt(senderPubkey, ciphertext);
-  } catch (error) {
-    throw new Error(`Failed to decrypt with NIP-44: ${error.message}`);
-  }
+  return runQueuedNip44Operation(async () => {
+    try {
+      return await withNip44ProviderRetry((provider) => provider.decrypt(senderPubkey, ciphertext));
+    } catch (error) {
+      throw new Error(`Failed to decrypt with NIP-44: ${error.message}`);
+    }
+  });
 }
 
 /**

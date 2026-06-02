@@ -321,6 +321,46 @@ describe('NIP-07 Utilities', () => {
       await expect(nip07Module.encryptNip44('not-hex', 'secret')).rejects.toThrow('Invalid recipient pubkey');
       await expect(nip07Module.decryptNip44('not-hex', 'ciphertext')).rejects.toThrow('Invalid sender pubkey');
     });
+
+    it('retries transient NIP-44 bridge failures before succeeding', async () => {
+      const encrypt = vi.fn()
+        .mockRejectedValueOnce(new Error('aka-profiles: Could not establish connection. Receiving end does not exist.'))
+        .mockResolvedValueOnce('ciphertext');
+
+      global.window.nostr = {
+        nip44: {
+          encrypt,
+          decrypt: vi.fn()
+        }
+      };
+
+      await expect(nip07Module.encryptNip44('b'.repeat(64), 'secret')).resolves.toBe('ciphertext');
+      expect(encrypt).toHaveBeenCalledTimes(2);
+    });
+
+    it('serializes concurrent NIP-44 encryption calls against the provider', async () => {
+      const order = [];
+      global.window.nostr = {
+        nip44: {
+          encrypt: vi.fn(async (_pubkey, plaintext) => {
+            order.push(`start:${plaintext}`);
+            await new Promise((resolve) => setTimeout(resolve, 10));
+            order.push(`end:${plaintext}`);
+            return `cipher:${plaintext}`;
+          }),
+          decrypt: vi.fn()
+        }
+      };
+
+      const [first, second] = await Promise.all([
+        nip07Module.encryptNip44('b'.repeat(64), 'one'),
+        nip07Module.encryptNip44('b'.repeat(64), 'two')
+      ]);
+
+      expect(first).toBe('cipher:one');
+      expect(second).toBe('cipher:two');
+      expect(order).toEqual(['start:one', 'end:one', 'start:two', 'end:two']);
+    });
   });
 
   describe('getCapabilities', () => {
