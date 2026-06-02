@@ -52,6 +52,14 @@ const initialState = {
   nip46: null
 };
 
+let encryptedSignerProbe = {
+  authMethod: null,
+  recipientPubkey: null,
+  promise: null,
+  ready: false,
+  error: null
+};
+
 export const authState = $state({ ...initialState });
 
 export function isAuthenticated() {
@@ -74,6 +82,16 @@ function updateAuthState(patch) {
   Object.assign(authState, patch);
 }
 
+function resetEncryptedSignerProbe() {
+  encryptedSignerProbe = {
+    authMethod: authState.authMethod,
+    recipientPubkey: null,
+    promise: null,
+    ready: false,
+    error: null
+  };
+}
+
 function isValidHexPubkey(pubkey) {
   return typeof pubkey === 'string' && /^[0-9a-fA-F]{64}$/.test(pubkey);
 }
@@ -87,6 +105,33 @@ function compatibilityPatch({ restNip98Advertised = false, restNip98Ready = fals
     },
     backendAuthenticated: restNip98Ready,
     directNip98Ready: restNip98Ready
+  };
+}
+
+function nip44BridgeFailure(error) {
+  const message = String(error?.message || error || '').toLowerCase();
+  return message.includes('failed to encrypt with nip-44')
+    || message.includes('failed to decrypt with nip-44')
+    || message.includes('receiving end does not exist')
+    || message.includes('could not establish connection')
+    || message.includes('message port closed')
+    || message.includes('extension context invalidated');
+}
+
+function markEncryptedSignerUnavailable(message) {
+  if (!message) return;
+  const nextCapabilities = {
+    ...(authState.capabilities || {}),
+    nip44: false,
+    nip44Blocker: message
+  };
+  updateAuthState({ capabilities: nextCapabilities });
+  encryptedSignerProbe = {
+    authMethod: authState.authMethod,
+    recipientPubkey: encryptedSignerProbe.recipientPubkey,
+    promise: null,
+    ready: false,
+    error: message
   };
 }
 
@@ -680,6 +725,7 @@ export function logout() {
     capabilities: authState.extensionAvailable ? getNip07Capabilities() : authState.nip46Available ? getNip46Capabilities() : {},
     ...compatibilityPatch()
   });
+  resetEncryptedSignerProbe();
 }
 
 export async function signWithAuth(event) {
@@ -702,6 +748,9 @@ export async function encryptWithAuth(recipientPubkey, plaintext) {
     }
     return await signer.encryptNip44(recipientPubkey, plaintext);
   } catch (error) {
+    if (nip44BridgeFailure(error)) {
+      markEncryptedSignerUnavailable(error?.message || String(error));
+    }
     console.error('Failed to encrypt event content:', error);
     throw new Error(`Event encryption failed: ${error.message}`);
   }
@@ -716,9 +765,79 @@ export async function decryptWithAuth(senderPubkey, ciphertext) {
     }
     return await signer.decryptNip44(senderPubkey, ciphertext);
   } catch (error) {
+    if (nip44BridgeFailure(error)) {
+      markEncryptedSignerUnavailable(error?.message || String(error));
+    }
     console.error('Failed to decrypt event content:', error);
     throw new Error(`Event decryption failed: ${error.message}`);
   }
+}
+
+export async function ensureEncryptedSignerReady(recipientPubkey) {
+  if (authState.status !== 'authenticated') {
+    throw new Error('Not authenticated - please login first');
+  }
+  if (!recipientPubkey) {
+    throw new Error('Recipient pubkey is required for encrypted signer readiness checks');
+  }
+
+  const capabilityBlocker = authState.capabilities?.nip44Blocker;
+  if (authState.capabilities?.nip44 === false && capabilityBlocker) {
+    throw new Error(capabilityBlocker);
+  }
+
+  const authMethod = authState.authMethod || 'nip07';
+  if (
+    encryptedSignerProbe.ready &&
+    encryptedSignerProbe.authMethod === authMethod &&
+    encryptedSignerProbe.recipientPubkey === recipientPubkey
+  ) {
+    return true;
+  }
+
+  if (
+    encryptedSignerProbe.promise &&
+    encryptedSignerProbe.authMethod === authMethod &&
+    encryptedSignerProbe.recipientPubkey === recipientPubkey
+  ) {
+    return encryptedSignerProbe.promise;
+  }
+
+  const probePromise = (async () => {
+    await encryptWithAuth(recipientPubkey, JSON.stringify({
+      version: 'bahia-encrypted-v1',
+      probe: true,
+      requester_pubkey: authState.pubkey,
+      created_at: Math.floor(Date.now() / 1000)
+    }));
+    encryptedSignerProbe = {
+      authMethod,
+      recipientPubkey,
+      promise: null,
+      ready: true,
+      error: null
+    };
+    return true;
+  })().catch((error) => {
+    encryptedSignerProbe = {
+      authMethod,
+      recipientPubkey,
+      promise: null,
+      ready: false,
+      error: error?.message || String(error)
+    };
+    throw error;
+  });
+
+  encryptedSignerProbe = {
+    authMethod,
+    recipientPubkey,
+    promise: probePromise,
+    ready: false,
+    error: null
+  };
+
+  return probePromise;
 }
 
 export async function signHttpRequest({ method = 'GET', url }) {

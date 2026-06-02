@@ -137,7 +137,9 @@ describe('Auth Store', () => {
     nip07Module.getNip07Signer.mockReturnValue({
       getPublicKey: nip07Module.getPublicKey,
       signEvent: nip07Module.signEvent,
-      getRelays: nip07Module.getRelays
+      getRelays: nip07Module.getRelays,
+      encryptNip44: vi.fn().mockResolvedValue('ciphertext'),
+      decryptNip44: vi.fn().mockResolvedValue('plaintext')
     });
     nip46Module.detectNip46.mockReturnValue({ available: false, provider: null, reason: 'missing_nip46_provider' });
     nip46Module.parseNostrConnectUri.mockImplementation((uri) => ({
@@ -519,6 +521,44 @@ describe('Auth Store', () => {
       expect(authModule.authState.compatibility.restNip98LastError).toContain('not enabled');
       expect(localStorage.getItem('bahia_token')).toBeNull();
       expect(global.fetch).not.toHaveBeenCalledWith('/api/v1/auth/nostr', expect.any(Object));
+    });
+  });
+
+  describe('encrypted signer readiness', () => {
+    it('probes encrypted signer support once per signer/session target and caches success', async () => {
+      const encryptNip44 = vi.fn().mockResolvedValue('ciphertext');
+      nip07Module.getNip07Signer.mockReturnValue({
+        getPublicKey: nip07Module.getPublicKey,
+        signEvent: nip07Module.signEvent,
+        getRelays: nip07Module.getRelays,
+        encryptNip44,
+        decryptNip44: vi.fn().mockResolvedValue('plaintext')
+      });
+
+      await authModule.login();
+      await authModule.ensureEncryptedSignerReady('b'.repeat(64));
+      await authModule.ensureEncryptedSignerReady('b'.repeat(64));
+
+      expect(encryptNip44).toHaveBeenCalledTimes(1);
+      expect(authModule.authState.capabilities.nip44).not.toBe(false);
+    });
+
+    it('marks the signer unavailable after a NIP-44 bridge failure', async () => {
+      nip07Module.getNip07Signer.mockReturnValue({
+        getPublicKey: nip07Module.getPublicKey,
+        signEvent: nip07Module.signEvent,
+        getRelays: nip07Module.getRelays,
+        encryptNip44: vi.fn().mockRejectedValue(new Error('Failed to encrypt with NIP-44: aka-profiles: Could not establish connection. Receiving end does not exist.')),
+        decryptNip44: vi.fn()
+      });
+
+      await authModule.login();
+
+      await expect(authModule.ensureEncryptedSignerReady('b'.repeat(64))).rejects.toThrow('Receiving end does not exist');
+      expect(authModule.authState.capabilities.nip44).toBe(false);
+      expect(authModule.authState.capabilities.nip44Blocker).toContain('Receiving end does not exist');
+
+      await expect(authModule.ensureEncryptedSignerReady('b'.repeat(64))).rejects.toThrow('Receiving end does not exist');
     });
   });
 

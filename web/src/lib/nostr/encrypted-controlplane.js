@@ -1,4 +1,4 @@
-import { authState, decryptWithAuth, encryptWithAuth, signWithAuth } from '$lib/stores/auth.js';
+import { authState, decryptWithAuth, encryptWithAuth, ensureEncryptedSignerReady, signWithAuth } from '$lib/stores/auth.js';
 import { currentSystemInfo } from '$lib/stores/system.svelte.js';
 import { createNostrPoolClient, getTagValues, nostr } from './client.js';
 
@@ -112,6 +112,7 @@ export class EncryptedControlplaneTransport {
       throw new Error('Encrypted Nostr event operation is required');
     }
     ensureHexPubkey(this.servicePubkey, 'servicePubkey');
+    await ensureEncryptedSignerReady(this.servicePubkey);
 
     const envelope = {
       version: ENCRYPTED_REQUEST_WIRE_VERSION,

@@ -6,6 +6,7 @@ const authMock = vi.hoisted(() => ({
   authState: { status: 'authenticated', pubkey: 'a'.repeat(64) },
   encryptWithAuth: vi.fn(),
   decryptWithAuth: vi.fn(),
+  ensureEncryptedSignerReady: vi.fn(),
   signWithAuth: vi.fn()
 }));
 
@@ -46,6 +47,7 @@ describe('encrypted controlplane transport', () => {
     vi.clearAllMocks();
     authMock.authState.status = 'authenticated';
     authMock.authState.pubkey = 'a'.repeat(64);
+    authMock.ensureEncryptedSignerReady.mockResolvedValue(true);
     authMock.encryptWithAuth.mockImplementation(async (_pubkey, plaintext) => `cipher:${plaintext}`);
     authMock.decryptWithAuth.mockImplementation(async (_pubkey, ciphertext) => ciphertext.replace(/^cipher:/, ''));
     authMock.signWithAuth.mockImplementation(async (event) => ({ ...event, id: 'request-id', pubkey: authMock.authState.pubkey, sig: 'sig' }));
@@ -132,6 +134,7 @@ describe('encrypted controlplane transport', () => {
 
     const event = await transport.buildEncryptedRequestEvent({ operation: 'payments.history', payload: { limit: 10 } });
 
+    expect(authMock.ensureEncryptedSignerReady).toHaveBeenCalledWith('b'.repeat(64));
     expect(authMock.encryptWithAuth).toHaveBeenCalledWith('b'.repeat(64), expect.stringContaining('payments.history'));
     expect(authMock.signWithAuth).toHaveBeenCalledWith(expect.objectContaining({
       kind: module.ENCRYPTED_REQUEST_KIND,
@@ -142,11 +145,11 @@ describe('encrypted controlplane transport', () => {
   });
 
   it('fails locally before publish when the signer lacks browser-visible NIP-44 support', async () => {
-    authMock.encryptWithAuth.mockRejectedValueOnce(new Error('Event encryption failed: Active signer does not expose NIP-44 encryption'));
+    authMock.ensureEncryptedSignerReady.mockRejectedValueOnce(new Error('Failed to encrypt with NIP-44: signer bridge unavailable'));
     const transport = new module.EncryptedControlplaneTransport({ client, relays: ['wss://requests.example'], servicePubkey: 'b'.repeat(64) });
 
     await expect(transport.requestEncryptedResult({ operation: 'notifications.channels.list', payload: {} }))
-      .rejects.toThrow('Active signer does not expose NIP-44 encryption');
+      .rejects.toThrow('signer bridge unavailable');
 
     expect(client.publish).not.toHaveBeenCalled();
     expect(client.subscribe).not.toHaveBeenCalled();
