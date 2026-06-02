@@ -86,7 +86,7 @@ describe('Nostr branch behavior coverage', () => {
     });
   });
 
-  it('still reports an error when branch history is incomplete and no partial events exist', async () => {
+  it('tolerates incomplete branch history with no partial events and returns an empty branch set', async () => {
     nostrMock.queryUntilEose.mockRejectedValue(new NostrIncompleteEOSEError('timeout', {
       partialEvents: [],
       relaySummary: [{ relay: 'wss://relay.example', status: 'pending' }]
@@ -96,7 +96,7 @@ describe('Nostr branch behavior coverage', () => {
 
     expect(result.branches).toEqual([]);
     expect(result.defaultBranch).toBeNull();
-    expect(result.error).toContain('Nostr query did not receive complete EOSE history: timeout');
+    expect(result.error).toBeNull();
   });
 
   it('keeps non-Nostr repository selections out of NIP-34 branch lookup', () => {

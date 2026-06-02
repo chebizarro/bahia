@@ -291,6 +291,20 @@ describe('Nostr Client - Parsing Functions', () => {
       expect(capabilities.map((capability) => capability.id)).toEqual(['new-cap']);
       expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('[runtime-capabilities] Using 2 partial Nostr event(s) after incomplete EOSE'));
     });
+
+    it('fetchRuntimeCapabilities tolerates incomplete EOSE with no partial events', async () => {
+      const module = await import('../../src/lib/nostr/client.js');
+      vi.spyOn(console, 'warn').mockImplementation(() => {});
+      vi.spyOn(module.nostr, 'queryUntilEose').mockRejectedValue(new NostrIncompleteEOSEError('all_relays_closed', {
+        partialEvents: [],
+        relaySummary: [{ relay: 'wss://relay.example', status: 'closed', reason: 'relay closed' }]
+      }));
+
+      const capabilities = await fetchRuntimeCapabilities({ method: 'soulfactory.update' });
+
+      expect(capabilities).toEqual([]);
+      expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('[runtime-capabilities] Using 0 empty partial Nostr event(s) after incomplete EOSE'));
+    });
   });
 
   describe('queryUntilEose', () => {

@@ -73,13 +73,14 @@ export const nostr = createNostrPoolClient();
 
 // --- Soul Factory specific helpers ---
 
-function logIncompleteEoseFallback(scope, error, events) {
+function logIncompleteEoseFallback(scope, error, events, { acceptedEmpty = false } = {}) {
   const relaySummary = Array.isArray(error?.relaySummary)
     ? error.relaySummary.map((relay) => `${relay.relay}:${relay.status}${relay.reason ? ` (${relay.reason})` : ''}`).join(', ')
     : '';
   const reason = error?.reason || 'unknown';
   const detail = relaySummary ? ` relays=${relaySummary}` : '';
-  console.warn(`[${scope}] Using ${events.length} partial Nostr event(s) after incomplete EOSE (${reason}).${detail}`);
+  const qualifier = acceptedEmpty && events.length === 0 ? 'empty partial ' : 'partial ';
+  console.warn(`[${scope}] Using ${events.length} ${qualifier}Nostr event(s) after incomplete EOSE (${reason}).${detail}`);
 }
 
 export function partialEventsFromIncompleteEose(error) {
@@ -89,7 +90,7 @@ export function partialEventsFromIncompleteEose(error) {
 
 export async function queryUntilEoseOrPartial(filters, options = {}) {
   const queryOptions = typeof options === 'number' ? { timeoutMs: options } : (options || {});
-  const { scope = 'nostr.query', ...nostrOptions } = queryOptions;
+  const { scope = 'nostr.query', allowEmptyOnIncomplete = false, ...nostrOptions } = queryOptions;
 
   try {
     return await nostr.queryUntilEose(filters, nostrOptions);
@@ -99,12 +100,17 @@ export async function queryUntilEoseOrPartial(filters, options = {}) {
       logIncompleteEoseFallback(scope, error, partialEvents);
       return partialEvents;
     }
+    if (allowEmptyOnIncomplete && error instanceof NostrIncompleteEOSEError) {
+      logIncompleteEoseFallback(scope, error, partialEvents, { acceptedEmpty: true });
+      return [];
+    }
     throw error;
   }
 }
 
 export async function queryOrPartial(filters, options = {}) {
-  return queryUntilEoseOrPartial(filters, options);
+  const queryOptions = typeof options === 'number' ? { timeoutMs: options } : (options || {});
+  return queryUntilEoseOrPartial(filters, { ...queryOptions, allowEmptyOnIncomplete: true });
 }
 
 export async function fetchTemplates(authorPubkey = null) {
@@ -112,7 +118,7 @@ export async function fetchTemplates(authorPubkey = null) {
   if (authorPubkey) {
     filter.authors = [authorPubkey];
   }
-  return dedupeReplaceableEvents(await queryUntilEoseOrPartial([filter], { scope: 'templates' }));
+  return dedupeReplaceableEvents(await queryUntilEoseOrPartial([filter], { scope: 'templates', allowEmptyOnIncomplete: true }));
 }
 
 export async function fetchSouls(authorPubkey = null) {
@@ -120,7 +126,7 @@ export async function fetchSouls(authorPubkey = null) {
   if (authorPubkey) {
     filter.authors = [authorPubkey];
   }
-  return dedupeReplaceableEvents(await queryUntilEoseOrPartial([filter], { scope: 'souls' }));
+  return dedupeReplaceableEvents(await queryUntilEoseOrPartial([filter], { scope: 'souls', allowEmptyOnIncomplete: true }));
 }
 
 export async function fetchSoulDrafts(authorPubkey = null) {
@@ -128,7 +134,7 @@ export async function fetchSoulDrafts(authorPubkey = null) {
   if (authorPubkey) {
     filter.authors = [authorPubkey];
   }
-  return dedupeReplaceableEvents(await queryUntilEoseOrPartial([filter], { scope: 'soul-drafts' }));
+  return dedupeReplaceableEvents(await queryUntilEoseOrPartial([filter], { scope: 'soul-drafts', allowEmptyOnIncomplete: true }));
 }
 
 export async function fetchSoulDraft(agentId, authorPubkey) {
@@ -136,12 +142,12 @@ export async function fetchSoulDraft(agentId, authorPubkey) {
     kinds: [KINDS.SOUL_DRAFT],
     '#d': [agentId],
     authors: authorPubkey ? [authorPubkey] : undefined
-  }], { scope: 'soul-draft' });
+  }], { scope: 'soul-draft', allowEmptyOnIncomplete: true });
   return dedupeReplaceableEvents(events)[0] || null;
 }
 
 export async function fetchRuntimeCapabilities({ runtime = null, controllerPubkey = null, method = null, limit = 200 } = {}) {
-  const events = dedupeReplaceableEvents(await queryUntilEoseOrPartial([{ kinds: [KINDS.RUNTIME_CAPABILITY], limit }], { scope: 'runtime-capabilities' }));
+  const events = dedupeReplaceableEvents(await queryUntilEoseOrPartial([{ kinds: [KINDS.RUNTIME_CAPABILITY], limit }], { scope: 'runtime-capabilities', allowEmptyOnIncomplete: true }));
   return events
     .map(parseRuntimeCapabilityEvent)
     .filter(Boolean)
@@ -153,7 +159,7 @@ export async function fetchSoul(agentId, authorPubkey) {
     kinds: [KINDS.AGENT_SOUL],
     '#d': [agentId],
     authors: authorPubkey ? [authorPubkey] : undefined
-  }], { scope: 'soul' });
+  }], { scope: 'soul', allowEmptyOnIncomplete: true });
   return dedupeReplaceableEvents(events)[0] || null;
 }
 
