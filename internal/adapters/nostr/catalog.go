@@ -9,108 +9,109 @@ import (
 
 	gonostr "github.com/nbd-wtf/go-nostr"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/kinds"
 )
 
 const KindCatalogVersion = "2026-05-26.item8"
 
 const (
-	KindNIP65RelayList = 10002
+	KindNIP65RelayList = kinds.NIP65RelayList
 
-	KindHiveCIWorkflowRun    = 5401
-	KindHiveCIWorkflowResult = 5402
+	KindHiveCIWorkflowRun    = kinds.HiveCIWorkflowRun
+	KindHiveCIWorkflowResult = kinds.HiveCIWorkflowResult
 
-	KindLoomWorkerAdvertisement = 10100
-	KindLoomJobStatusUpdate     = 30100
-	KindLoomJobResult           = 5101
-	KindLoomJobCancellation     = 5102
+	KindLoomWorkerAdvertisement = kinds.LoomWorkerAdvertisement
+	KindLoomJobStatusUpdate     = kinds.LoomJobStatusUpdate
+	KindLoomJobResult           = kinds.LoomJobResult
+	KindLoomJobCancellation     = kinds.LoomJobCancellation
 
-	KindRelaySetDiscovery = 30002
+	KindRelaySetDiscovery = kinds.RelaySetDiscovery
 
-	KindBahiaIdentityDefinition = 31410
-	KindBahiaReplayCheckpoint   = 31411
-	KindBahiaReadinessStatus    = 30360
+	KindBahiaIdentityDefinition = kinds.BahiaIdentityDefinition
+	KindBahiaReplayCheckpoint   = kinds.BahiaReplayCheckpoint
+	KindBahiaReadinessStatus    = kinds.BahiaReadinessStatus
 
-	KindControlPlaneDeployRequest            = 5961
-	KindControlPlaneRollbackRequest          = 5962
-	KindControlPlaneServiceAction            = 5963
-	KindControlPlaneServiceCreate            = 5964
-	KindControlPlaneEnvironmentCreate        = 5965
-	KindControlPlaneDeploymentApproval       = 5966
-	KindControlPlaneObservationSubmit        = 5967
-	KindControlPlaneDriftRemediate           = 5968
-	KindControlPlaneLLMRouteCreate           = 5971
-	KindControlPlaneLLMReleaseRegister       = 5972
-	KindControlPlaneLLMDeployRequest         = 5973
-	KindControlPlaneLLMDeploymentApproval    = 5974
-	KindControlPlaneLLMRollbackRequest       = 5975
-	KindControlPlaneToolProvisionRequest     = 5976
-	KindControlPlaneToolApprovalRequest      = 5977
-	KindControlPlaneAdoptionScanRequest      = 5978
-	KindControlPlaneAdoptionImportRequest    = 5979
-	KindControlPlaneServiceUpdate            = 5981
-	KindControlPlaneServiceDelete            = 5982
-	KindControlPlaneEnvironmentUpdate        = 5983
-	KindControlPlaneEnvironmentDelete        = 5984
-	KindControlPlaneArtifactRegister         = 5985
-	KindControlPlanePolicyCreate             = 5986
-	KindControlPlanePolicyUpdate             = 5987
-	KindControlPlanePolicyDelete             = 5988
-	KindControlPlanePolicyEvaluate           = 5989
-	KindControlPlanePackageRepositoryApply   = 5991
-	KindControlPlanePackageRepositoryDelete  = 5992
-	KindControlPlanePackagePublishIntent     = 5993
-	KindControlPlanePackagePromotionRequest  = 5994
-	KindControlPlanePackageYankRequest       = 5995
-	KindControlPlanePackageDriftDetect       = 5996
-	KindControlPlaneWorkerCordonRequest      = 5997
-	KindControlPlaneWorkerUncordonRequest    = 5998
-	KindControlPlaneWorkerDrainRequest       = 5999
-	KindControlPlaneWorkerUndrainRequest     = 6000
-	KindControlPlaneWorkerMaintenanceEnter   = 6001
-	KindControlPlaneWorkerMaintenanceExit    = 6002
-	KindControlPlaneWorkerLabelsUpdate       = 6003
-	KindControlPlaneWorkerPolicyApplyRequest = 6004
-	KindControlPlaneWorkloadPinRequest       = 6005
-	KindControlPlaneWorkerCleanupRequest     = 6006
+	KindControlPlaneDeployRequest            = kinds.DeployRequest
+	KindControlPlaneRollbackRequest          = kinds.RollbackRequest
+	KindControlPlaneServiceAction            = kinds.ServiceAction
+	KindControlPlaneServiceCreate            = kinds.ServiceCreate
+	KindControlPlaneEnvironmentCreate        = kinds.EnvironmentCreate
+	KindControlPlaneDeploymentApproval       = kinds.DeploymentApproval
+	KindControlPlaneObservationSubmit        = kinds.ObservationSubmit
+	KindControlPlaneDriftRemediate           = kinds.DriftRemediate
+	KindControlPlaneLLMRouteCreate           = kinds.LLMRouteCreate
+	KindControlPlaneLLMReleaseRegister       = kinds.LLMReleaseRegister
+	KindControlPlaneLLMDeployRequest         = kinds.LLMDeployRequest
+	KindControlPlaneLLMDeploymentApproval    = kinds.LLMDeploymentApproval
+	KindControlPlaneLLMRollbackRequest       = kinds.LLMRollbackRequest
+	KindControlPlaneToolProvisionRequest     = kinds.ToolProvisionRequest
+	KindControlPlaneToolApprovalRequest      = kinds.ToolApprovalRequest
+	KindControlPlaneAdoptionScanRequest      = kinds.AdoptionScanRequest
+	KindControlPlaneAdoptionImportRequest    = kinds.AdoptionImportRequest
+	KindControlPlaneServiceUpdate            = kinds.ServiceUpdate
+	KindControlPlaneServiceDelete            = kinds.ServiceDelete
+	KindControlPlaneEnvironmentUpdate        = kinds.EnvironmentUpdate
+	KindControlPlaneEnvironmentDelete        = kinds.EnvironmentDelete
+	KindControlPlaneArtifactRegister         = kinds.ArtifactRegister
+	KindControlPlanePolicyCreate             = kinds.PolicyCreate
+	KindControlPlanePolicyUpdate             = kinds.PolicyUpdate
+	KindControlPlanePolicyDelete             = kinds.PolicyDelete
+	KindControlPlanePolicyEvaluate           = kinds.PolicyEvaluate
+	KindControlPlanePackageRepositoryApply   = kinds.PackageRepositoryApply
+	KindControlPlanePackageRepositoryDelete  = kinds.PackageRepositoryDelete
+	KindControlPlanePackagePublishIntent     = kinds.PackagePublishIntent
+	KindControlPlanePackagePromotionRequest  = kinds.PackagePromotionRequest
+	KindControlPlanePackageYankRequest       = kinds.PackageYankRequest
+	KindControlPlanePackageDriftDetect       = kinds.PackageDriftDetect
+	KindControlPlaneWorkerCordonRequest      = kinds.WorkerCordonRequest
+	KindControlPlaneWorkerUncordonRequest    = kinds.WorkerUncordonRequest
+	KindControlPlaneWorkerDrainRequest       = kinds.WorkerDrainRequest
+	KindControlPlaneWorkerUndrainRequest     = kinds.WorkerUndrainRequest
+	KindControlPlaneWorkerMaintenanceEnter   = kinds.WorkerMaintenanceEnter
+	KindControlPlaneWorkerMaintenanceExit    = kinds.WorkerMaintenanceExit
+	KindControlPlaneWorkerLabelsUpdate       = kinds.WorkerLabelsUpdate
+	KindControlPlaneWorkerPolicyApplyRequest = kinds.WorkerPolicyApplyRequest
+	KindControlPlaneWorkloadPinRequest       = kinds.WorkloadPinRequest
+	KindControlPlaneWorkerCleanupRequest     = kinds.WorkerCleanupRequest
 
-	KindMLRecipeRunRequest            = 38390
-	KindMLInferenceDeployRequest      = 38391
-	KindMLInferenceDeploymentApproval = 38392
-	KindMLInferenceRollbackRequest    = 38393
-	KindMLModelImportRequest          = 38394
-	KindMLRecipeRunResult             = 38395
-	KindMLInferenceDeployResult       = 38396
-	KindMLInferenceApprovalResult     = 38397
-	KindMLInferenceRollbackResult     = 38398
-	KindMLModelImportResult           = 38399
+	KindMLRecipeRunRequest            = kinds.MLRecipeRunRequest
+	KindMLInferenceDeployRequest      = kinds.MLInferenceDeployRequest
+	KindMLInferenceDeploymentApproval = kinds.MLInferenceDeploymentApproval
+	KindMLInferenceRollbackRequest    = kinds.MLInferenceRollbackRequest
+	KindMLModelImportRequest          = kinds.MLModelImportRequest
+	KindMLRecipeRunResult             = kinds.MLRecipeRunResult
+	KindMLInferenceDeployResult       = kinds.MLInferenceDeployResult
+	KindMLInferenceApprovalResult     = kinds.MLInferenceApprovalResult
+	KindMLInferenceRollbackResult     = kinds.MLInferenceRollbackResult
+	KindMLModelImportResult           = kinds.MLModelImportResult
 
-	KindControlPlaneDeploymentStatus    = 6961
-	KindControlPlaneServiceStatus       = 6962
-	KindControlPlaneActionStatus        = 6963
-	KindControlPlaneLLMDeploymentStatus = 6973
-	KindControlPlaneToolProvisionStatus = 6976
-	KindControlPlaneAdoptionStatus      = 6978
-	KindControlPlanePackageStatus       = 6991
-	KindControlPlaneWorkerStatus        = 6997
+	KindControlPlaneDeploymentStatus    = kinds.DeploymentStatus
+	KindControlPlaneServiceStatus       = kinds.ServiceStatus
+	KindControlPlaneActionStatus        = kinds.ActionStatus
+	KindControlPlaneLLMDeploymentStatus = kinds.LLMDeploymentStatus
+	KindControlPlaneToolProvisionStatus = kinds.ToolProvisionStatus
+	KindControlPlaneAdoptionStatus      = kinds.AdoptionStatus
+	KindControlPlanePackageStatus       = kinds.PackageStatus
+	KindControlPlaneWorkerStatus        = kinds.WorkerStatus
 
-	KindControlPlaneDeploymentResult         = 7961
-	KindControlPlaneActionResult             = 7962
-	KindControlPlaneServiceCreateResult      = 7963
-	KindControlPlaneEnvironmentCreateResult  = 7964
-	KindControlPlaneObservationResult        = 7965
-	KindControlPlaneRemediationResult        = 7966
-	KindControlPlaneLLMRouteCreateResult     = 7971
-	KindControlPlaneLLMReleaseRegisterResult = 7972
-	KindControlPlaneLLMDeploymentResult      = 7973
-	KindControlPlaneToolProvisionResult      = 7976
-	KindControlPlaneToolApprovalResponse     = 7977
-	KindControlPlaneAdoptionScanResult       = 7978
-	KindControlPlaneAdoptionImportResult     = 7979
-	KindControlPlanePackageResult            = 7991
-	KindControlPlanePackageDriftEvent        = 7992
-	KindControlPlaneWorkerResult             = 7997
+	KindControlPlaneDeploymentResult         = kinds.DeploymentResult
+	KindControlPlaneActionResult             = kinds.ActionResult
+	KindControlPlaneServiceCreateResult      = kinds.ServiceCreateResult
+	KindControlPlaneEnvironmentCreateResult  = kinds.EnvironmentCreateResult
+	KindControlPlaneObservationResult        = kinds.ObservationResult
+	KindControlPlaneRemediationResult        = kinds.RemediationResult
+	KindControlPlaneLLMRouteCreateResult     = kinds.LLMRouteCreateResult
+	KindControlPlaneLLMReleaseRegisterResult = kinds.LLMReleaseRegisterResult
+	KindControlPlaneLLMDeploymentResult      = kinds.LLMDeploymentResult
+	KindControlPlaneToolProvisionResult      = kinds.ToolProvisionResult
+	KindControlPlaneToolApprovalResponse     = kinds.ToolApprovalResponse
+	KindControlPlaneAdoptionScanResult       = kinds.AdoptionScanResult
+	KindControlPlaneAdoptionImportResult     = kinds.AdoptionImportResult
+	KindControlPlanePackageResult            = kinds.PackageResult
+	KindControlPlanePackageDriftEvent        = kinds.PackageDriftEvent
+	KindControlPlaneWorkerResult             = kinds.WorkerResult
 
-	KindFIPSOverlayAdvert = 37195
+	KindFIPSOverlayAdvert = kinds.FIPSOverlayAdvert
 )
 
 type ReplayGroup struct {

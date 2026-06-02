@@ -1,0 +1,30 @@
+{
+  "feature_id": "bahia-jxm3",
+  "title": "ML REST-to-Nostr bridge ingress semantics",
+  "status": "verified",
+  "bead_id": "bahia-jxm3",
+  "date": "2026-06-02",
+  "transport_class": "rest_to_nostr_bridge",
+  "intent": "Make ML browser import/deploy semantics explicit: HTTP submits to a bridge that publishes signed Nostr ML command events and returns correlation metadata, while completion remains Nostr event/read-model driven.",
+  "observed_behavior": [
+    "web/src/routes/ml/+page.svelte submits import/deploy through api.importMLModel() and api.deployMLEndpoint().",
+    "internal/api/handlers/ml.go publishes ML request events through MLCommandPublisher and returns HTTP 202 command receipts.",
+    "internal/controlplane/ml_command_publisher.go signs ML request events, requires relay acceptance, and returns request/result/read-model correlation metadata."
+  ],
+  "intended_behavior": [
+    "The ML web route and docs classify browser import/deploy as REST-to-Nostr bridge ingress, not signer-first browser publishing.",
+    "HTTP 202 means publish acceptance only and never terminal workflow completion.",
+    "Terminal completion is observed through correlated ML result kinds and ML read-model projections.",
+    "Existing endpoint worker pinning remains signer-first browser Nostr command ingress."
+  ],
+  "scope": [
+    "web/src/routes/ml/+page.svelte",
+    "web/src/lib/api/client.js",
+    "internal/api/handlers/ml.go",
+    "internal/api/router/ml_routes_test.go",
+    "internal/controlplane/ml_command_publisher.go",
+    "docs/control-planes.md",
+    "docs/user-guide/features/ml-models.md",
+    "pstf/features/BAHIA_NOSTR_AUDIT_PARITY/route_transport_matrix.json"
+  ]
+}

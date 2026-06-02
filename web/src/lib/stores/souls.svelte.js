@@ -11,6 +11,7 @@ import {
   parseTemplateEvent,
   parseRuntimeCapabilityEvent,
   queryOrPartial,
+  readModelEvents,
   normalizeSoulDraftContent,
   upsertReplaceableEvent,
   isReplaceableTombstone,
@@ -88,6 +89,22 @@ export const loading = $state({
 
 // Error state
 export const error = $state({ value: null });
+
+export const readModelMeta = $state({
+  souls: null,
+  templates: null,
+  drafts: null,
+  capabilities: null,
+  history: null
+});
+
+function rememberReadModelMeta(key, result) {
+  readModelMeta[key] = result?.eose || {
+    complete: result?.complete !== false,
+    degraded: result?.degraded || null,
+    relaySummary: Array.isArray(result?.relaySummary) ? result.relaySummary : []
+  };
+}
 
 const soulEvents = new Map();
 const templateEvents = new Map();
@@ -383,6 +400,7 @@ export async function loadSouls(authorPubkey = null) {
   try {
     await ensureRelayConnection();
     const events = await fetchSouls(authorPubkey);
+    rememberReadModelMeta('souls', events);
     resetReplaceableState(soulEvents, events, souls, parseSoulEvent, newestFirst);
   } catch (err) {
     console.error('[souls] Failed to load souls:', err);
@@ -400,6 +418,7 @@ export async function loadTemplates(authorPubkey = null) {
   try {
     await ensureRelayConnection();
     const events = await fetchTemplates(authorPubkey);
+    rememberReadModelMeta('templates', events);
     resetReplaceableState(templateEvents, events, templates, parseTemplateEvent, templateSort);
   } catch (err) {
     console.error('[souls] Failed to load templates:', err);
@@ -416,6 +435,7 @@ export async function loadDrafts(authorPubkey = null) {
   try {
     await ensureRelayConnection();
     const events = await fetchSoulDrafts(authorPubkey);
+    rememberReadModelMeta('drafts', events);
     resetReplaceableState(draftEvents, events, drafts, parseSoulDraftEvent, newestFirst);
   } catch (err) {
     console.error('[souls] Failed to load drafts:', err);
@@ -432,6 +452,7 @@ export async function loadRuntimeCapabilities(options = {}) {
   try {
     await ensureRelayConnection();
     const capabilities = await fetchRuntimeCapabilities(options);
+    rememberReadModelMeta('capabilities', capabilities);
     const events = capabilities.map((capability) => capability?.event || capability).filter((event) => event?.kind === KINDS.RUNTIME_CAPABILITY);
 
     if (events.length === capabilities.length) {
@@ -1065,9 +1086,10 @@ export async function fetchSoulHistory(soul, { limit = 50 } = {}) {
     { kinds: lifecycleKinds, limit }
   ];
 
-  const events = await queryOrPartial(filters, { scope: 'soul-history' });
+  const result = await queryOrPartial(filters, { scope: 'soul-history' });
+  rememberReadModelMeta('history', result);
   const deduped = new Map();
-  for (const event of events) {
+  for (const event of readModelEvents(result)) {
     if (deduped.has(event.id)) continue;
     if (event.kind !== KINDS.AGENT_SOUL && getTag(event, 'soul') !== soulRef) continue;
     deduped.set(event.id, summarizeHistoryEvent(event, soulRef));

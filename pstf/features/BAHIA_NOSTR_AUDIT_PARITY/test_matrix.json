@@ -5,6 +5,16 @@
       "command": "go test ./internal/adapters/nostr ./internal/app",
       "result": "passed",
       "evidence": "Focused package tests passed for scoped subscriber filters, canonical inbound kind coverage, unchanged validation-before-persist behavior, and app control-plane audit wiring."
+    },
+    {
+      "command": "GOCACHE=/tmp/bahia-go-build go test ./internal/kinds ./internal/adapters/nostr ./internal/controlplane",
+      "result": "passed",
+      "evidence": "Focused tests passed for canonical Go kind constants, generated frontend drift guard, adapter catalog aliases, publisher aliases, and control-plane ML/DNS/backup kind aliases."
+    },
+    {
+      "command": "npm run test:unit -- --run tests/unit/route-transport-matrix.test.js",
+      "result": "passed",
+      "evidence": "Focused Vitest guard passed: PSTF matrix uses the shared route transport taxonomy, covers audited surfaces, verifies every matrix route file exists, covers every live SvelteKit +page route/loader, permits exact $lib/api/* imports only for matrix-classified non-signer-first route files, and rejects REST/API imports in pure signer-first route files."
     }
   ]
 }

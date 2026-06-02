@@ -83,6 +83,49 @@ describe('controlplane request helpers', () => {
     await expect(helper.publishRequest({ kind: 5964 })).rejects.toThrow('auth-required');
   });
 
+  it('requestResult subscribes for terminal results before publishing and preserves OK metadata', async () => {
+    const order = [];
+    let handlers;
+    const unsubscribe = vi.fn();
+    nostrMock.subscribe.mockImplementation((_filters, nextHandlers) => {
+      order.push('subscribe');
+      handlers = nextHandlers;
+      return unsubscribe;
+    });
+    nostrMock.publish.mockImplementation(async (event) => {
+      order.push('publish');
+      handlers.onEvent({
+        id: 'terminal-1',
+        kind: 7963,
+        pubkey: 'b'.repeat(64),
+        tags: [['e', event.id]],
+        content: '{"status":"ok"}'
+      });
+      return [{ relay: 'ws://relay.test', sent: true, accepted: true, message: 'duplicate: already have this event' }];
+    });
+
+    await expect(helper.requestResult({ kind: 5964, content: { service_id: 'svc-1' }, resultKinds: [7963] }))
+      .resolves.toMatchObject({
+        requestEventId: 'request-event-id',
+        resultEvent: { id: 'terminal-1', kind: 7963 },
+        acceptedRelays: [{ relay: 'ws://relay.test', sent: true, accepted: true, message: 'duplicate: already have this event' }]
+      });
+    expect(order).toEqual(['subscribe', 'publish']);
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
+  });
+
+  it('awaitResult rejects explicit aborts without timeout-based completion', async () => {
+    const unsubscribe = vi.fn();
+    nostrMock.subscribe.mockReturnValueOnce(unsubscribe);
+    const controller = new AbortController();
+
+    const promise = helper.awaitResult({ requestEventId: 'req-1', resultKinds: [7963], signal: controller.signal });
+    controller.abort(new Error('operator cancelled result wait'));
+
+    await expect(promise).rejects.toThrow('operator cancelled result wait');
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
+  });
+
   it('awaitResult resolves from a correlated event and unsubscribes deterministically', async () => {
     let handlers;
     const unsubscribe = vi.fn();

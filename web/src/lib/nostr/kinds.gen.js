@@ -212,6 +212,18 @@ export const DNS_ENDPOINT_DEREGISTERED_AUDIT = 31024;
 export const AUDIT_MIN = 31000;
 export const AUDIT_MAX = 31099;
 
+
+// =============================================================================
+// Deprecated Legacy Command Kinds (31100-31105)
+// =============================================================================
+
+export const CMD_BUILD_REGISTER = 31100;
+export const CMD_ARTIFACT_REGISTER = 31101;
+export const CMD_INTENT_CREATE = 31102;
+export const CMD_INTENT_APPROVE = 31103;
+export const CMD_INTENT_REJECT = 31104;
+export const CMD_ROLLBACK_REQUEST = 31105;
+
 // =============================================================================
 // Nostr Signature Kind
 // =============================================================================

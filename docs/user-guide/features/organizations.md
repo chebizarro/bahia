@@ -211,15 +211,16 @@ bahia orgs delete acme-corp
 - Revokes all member access
 - Cannot be undone
 
-## Encrypted Operations
+## Encrypted Request/Result Facade
 
-Organization operations use **encrypted Nostr events** (5980/7980):
+Organization operations use the **encrypted request/result facade** over Nostr events (`5980` requests and `7980` terminal results):
 
-- Member data is sensitive
-- Invite tokens are sensitive
-- Operations don't go to public relays
+- The browser signs and encrypts a scoped org operation such as `orgs.create`, `orgs.list`, or `orgs.delete`.
+- Bahia decrypts the request, validates the requester, applies RBAC/repository changes, and publishes an encrypted terminal result correlated to the request event id.
+- Member lists, invites, and org CRUD responses are not public Nostr read models; durable org state remains repository-backed and is returned only through encrypted request/result responses.
+- The UI treats relay `OK`, `AUTH`, `CLOSED`, and encrypted terminal result outcomes according to the shared request/result lifecycle contract.
 
-This requires a NIP-44 capable signer.
+This requires a NIP-44 capable signer and configured encrypted relay/service pubkey settings.
 
 ## Best Practices
 

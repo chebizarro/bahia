@@ -62,10 +62,10 @@
     "criteria_total": 5,
     "criteria_with_tests": 5,
     "known_gaps": [
-      "Tests are placeholders only; implementation and executable verification are future work."
+      "Tests are placeholders only; implementation and executable verification are tracked by bahia-vn8o."
     ]
   },
   "implementation_notes": [
-    "Do not implement code as part of bahia-66ax.1.3."
+    "This PSTF slice records draft criteria only; it is not production-readiness evidence."
   ]
 }

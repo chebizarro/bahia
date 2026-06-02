@@ -155,6 +155,17 @@ Kind 31974 contains capability bootstrap:
 3. **Wait for EOSE** (End of Stored Events)
 4. **Keep open** for realtime updates
 
+### Command Lifecycle Pattern
+
+Signer-first commands use request, status, and result events as an event stream:
+
+1. Sign the request locally and record its event id.
+2. Subscribe for terminal result events scoped by `#e=<request_event_id>` before publishing when possible.
+3. Publish and require at least one relay `OK` with `accepted=true`.
+4. Treat status events as progress only; they never mean completion.
+5. Complete only from the terminal result kind correlated to the request and requester.
+6. Surface `AUTH`, `CLOSED`, zero-accepted publish, explicit abort, and configured timeout outcomes as distinct failures or degraded waits.
+
 ### Example: Deployment Follow
 
 ```javascript
@@ -260,6 +271,22 @@ Sensitive operations use NIP-44 encryption:
 - Secrets (create, reveal)
 - Run logs
 - Artifact verification
+
+## Route Transport Classes
+
+Bahia route/control-surface transport classification is tracked in PSTF at `pstf/features/BAHIA_NOSTR_AUDIT_PARITY/route_transport_matrix.json`. The matrix is the durable source for distinguishing signer-first Nostr surfaces from compatibility ingress.
+
+| Class | Meaning |
+|-------|---------|
+| `nostr_native` | Route/control surface uses Nostr read models, scoped subscriptions, and signed command events where applicable. |
+| `nostr_request_result_facade` | Route uses signed/encrypted Nostr transport, but wraps domain operations as correlated request/result operations rather than durable domain event semantics. |
+| `rest_to_nostr_bridge` | Browser/API HTTP ingress submits work that the backend publishes as Nostr commands. Treat this as compatibility ingress, not signer-first browser control. |
+| `rest_compatibility` | Legacy or compatibility REST endpoint remains mounted for clients or domain reads/writes. |
+| `http_native` | HTTP is the expected protocol for that surface, such as Blossom/SBOM/continuity discovery-style interactions. |
+
+Signer-first route files must not import REST API clients for command submission. The unit guard `web/tests/unit/route-transport-matrix.test.js` fails when a pure `nostr_native` or `nostr_request_result_facade` route adds `$lib/api/*` route imports without an explicit non-signer-first matrix classification.
+
+Current exceptions are matrix-classified: artifact Blossom/SBOM HTTP surfaces, continuity HTTP status/simulation, and ML REST-to-Nostr compatibility ingress.
 
 ## Authentication
 

@@ -35,7 +35,8 @@
     "No code implementation is included in this artifact task."
   ],
   "postconditions": [
-    "Acceptance criteria are mapped to placeholder tests for future implementation verification."
+    "Acceptance criteria are mapped to placeholder tests only.",
+    "Executable signer-first protocol verification remains tracked by bahia-vn8o."
   ],
   "happy_paths": [],
   "failure_paths": [],

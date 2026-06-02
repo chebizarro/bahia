@@ -1,5 +1,5 @@
 import { KINDS } from './kinds.js';
-import { queryOrPartial } from './subscriptions.js';
+import { attachReadModelMetadata, queryOrPartial, readModelEvents } from './subscriptions.js';
 
 export function parseRepositoryEvent(event) {
   if (!event || !event.id || !event.pubkey || !Array.isArray(event.tags)) {
@@ -87,10 +87,10 @@ export async function fetchRepositories({ authors = null, limit = 200, since = n
     filter.since = since;
   }
 
-  const events = await queryOrPartial([filter], { scope: 'repositories' });
+  const result = await queryOrPartial([filter], { scope: 'repositories' });
   const deduped = new Map();
 
-  for (const event of events) {
+  for (const event of readModelEvents(result)) {
     const parsed = parseRepositoryEvent(event);
     if (!parsed) continue;
 
@@ -100,5 +100,5 @@ export async function fetchRepositories({ authors = null, limit = 200, since = n
     }
   }
 
-  return Array.from(deduped.values());
+  return attachReadModelMetadata(Array.from(deduped.values()), result);
 }

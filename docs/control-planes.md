@@ -159,6 +159,24 @@ Agent operators use MCP for synchronous discovery and action entry points while 
 - MCP exposes DNS/FIPS discovery via resources/tools backed by DNS/FIPS projection data, including FIPS mesh node/status resources from mesh DNS projection records.
 - Long-running MCP actions must return Nostr correlation metadata so agents can subscribe to read models/status/results instead of polling REST.
 
+### Request/Result Lifecycle Contract
+
+Public, DNS, encrypted, and operator command clients follow the same lifecycle invariants:
+
+1. Build and sign the request event locally to obtain its event id.
+2. Open scoped status/result subscriptions before publishing whenever the request id is known locally. Filters must include the terminal result kind, `#e=<request_event_id>`, requester `#p` where applicable, and the Bahia service author when known.
+3. Publish the request and require at least one relay `OK` with `accepted=true`. Zero accepted relays is a pre-acceptance failure, even when a relay returns `duplicate` or another message.
+4. Treat status kinds (`696x`, `697x`, `698x`, `6941`) as progress only. Status events may update UI/activity streams but must never satisfy terminal completion.
+5. Complete only from the operation's terminal result kind (`796x`, `797x`, `7980`, `794x`, `3839x/384xx`) whose tags or encrypted envelope correlate to the request event id and requester.
+6. Handle `CLOSED` and `AUTH` explicitly. Auth-related closures fail distinctly; non-auth closures fail when all known result relays close before a terminal result.
+7. Explicit aborts cancel result waits and close subscriptions. Timeouts, when configured, are abort/degraded semantics rather than proof of command failure or success.
+8. Terminal results refresh durable relay-backed read models independently of the request promise; clients must continue using EOSE-aware read-model subscriptions for authoritative state convergence.
+
+Domain-specific compatibility surfaces must label their transport boundary precisely:
+
+- Organization browser operations are `nostr_request_result_facade`: signed/encrypted `5980` requests and encrypted `7980` terminal results protect member/invite data while durable org state remains repository-backed rather than a public relay read model.
+- ML web import/deploy forms are `rest_to_nostr_bridge`: HTTP `202` means Bahia signed and published the ML request event and returned correlation metadata; completion is the correlated ML terminal result/read-model update, not the HTTP response.
+
 ### Status and Result Events
 
 | Kind | Name | Description |
@@ -523,10 +541,12 @@ Discovery/config contract:
 Event contract:
 
 - Request kind: `5980`; result kind: `7980`.
+- Browser clients subscribe for `7980` results before publishing a built `5980` request and require at least one accepted relay `OK` for the request publish.
 - Request cleartext tags are limited to routing/correlation metadata such as `p=<service_pubkey>` and `encrypted=bahia-encrypted-v1`.
 - Request `content` is NIP-44 encrypted to the Bahia service pubkey and contains `{version, operation, requester_pubkey, payload}`.
 - Result tags include `e=<request_event_id>` with reply marker, `p=<requester_pubkey>`, `encrypted=bahia-encrypted-v1`, and terminal `status`.
 - Result `content` is NIP-44 encrypted to the requester pubkey and contains `{version, request_event_id, status, payload?, error?}`.
+- Encrypted result completion requires both cleartext tags (`e=<request_event_id>`, `p=<requester_pubkey>`, service author) and decrypted `request_event_id` to match the request.
 - Backend handlers reject unauthorized requesters before decrypting/dispatching domain operations, publish encrypted terminal errors for decrypt/validation failures, and deduplicate by event id.
 
 Browser signer support:

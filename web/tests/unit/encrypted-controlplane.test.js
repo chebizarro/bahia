@@ -225,6 +225,38 @@ describe('encrypted controlplane transport', () => {
     await expect(promise).rejects.toThrow('bad ciphertext');
   });
 
+  it('requires decrypted encrypted result envelopes to include matching request correlation', async () => {
+    let handlers;
+    client.subscribe.mockImplementation((_filters, nextHandlers) => {
+      handlers = nextHandlers;
+      return vi.fn();
+    });
+    const transport = new module.EncryptedControlplaneTransport({ client, relays: ['wss://requests.example'], servicePubkey: 'b'.repeat(64) });
+
+    const missing = transport.awaitEncryptedResult({ requestEventId: 'req-1' });
+    await handlers.onEvent({ id: 'result-missing-correlation', pubkey: 'b'.repeat(64), tags: [['e', 'req-1'], ['p', 'a'.repeat(64)]], content: 'cipher:{"status":"ok","payload":{}}' });
+    await expect(missing).rejects.toThrow('payload did not correlate');
+  });
+
+  it('reports encrypted result AUTH and all-relay CLOSED failures explicitly', async () => {
+    let handlers;
+    client.subscribe.mockImplementation((_filters, nextHandlers) => {
+      handlers = nextHandlers;
+      return vi.fn();
+    });
+    const transport = new module.EncryptedControlplaneTransport({ client, relays: ['wss://requests.example'], servicePubkey: 'b'.repeat(64) });
+
+    const authFailure = transport.awaitEncryptedResult({ requestEventId: 'req-1' });
+    handlers.onClosed('auth-required: sign in', 'wss://relay.example');
+    await expect(authFailure).rejects.toThrow('Encrypted Nostr result subscription auth closure: wss://relay.example: auth-required: sign in');
+
+    client.getConnectedRelays.mockReturnValueOnce(['wss://relay-1.example', 'wss://relay-2.example']);
+    const closedFailure = transport.awaitEncryptedResult({ requestEventId: 'req-2' });
+    handlers.onClosed('closed: shard restarting', 'wss://relay-1.example');
+    handlers.onClosed('closed: subscription limit', 'wss://relay-2.example');
+    await expect(closedFailure).rejects.toThrow('wss://relay-1.example (closed: shard restarting); wss://relay-2.example (closed: subscription limit)');
+  });
+
   it('times out when no correlated encrypted result arrives', async () => {
     vi.useFakeTimers();
     try {
@@ -236,10 +268,11 @@ describe('encrypted controlplane transport', () => {
         payload: {},
         timeoutMs: 25
       });
+      const assertion = expect(promise).rejects.toThrow('Timed out waiting for encrypted Nostr result for request-id');
 
       await vi.advanceTimersByTimeAsync(25);
 
-      await expect(promise).rejects.toThrow('Timed out waiting for encrypted Nostr result for request-id');
+      await assertion;
     } finally {
       vi.useRealTimers();
     }

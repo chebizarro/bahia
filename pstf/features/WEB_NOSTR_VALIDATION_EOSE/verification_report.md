@@ -7,7 +7,9 @@ Bucket 2 only: browser/web Nostr inbound validation, EOSE-authoritative query co
 - Added browser inbound EVENT validation before subscription callbacks.
 - `queryUntilEose` and `query` now reject timeout/abort/relay-CLOSED-incomplete states with `NostrIncompleteEOSEError` instead of resolving partial history.
 - Relay transport disconnects before EOSE keep active historical queries subscribed so reconnect reissues the scoped REQ and waits for EOSE instead of abandoning dashboard bootstrap.
-- Branch lookup uses EOSE-backed querying and returns explicit errors for incomplete history.
+- Branch lookup uses EOSE-backed querying and returns explicit degraded metadata/errors for incomplete history, including partial and empty partial cases.
+- Partial/degraded read-model helpers return `{ events, complete, degraded, relaySummary }` so incomplete EOSE cannot be mistaken for complete history.
+- Soul Factory and repository read models retain `.eose` metadata on returned arrays and store-level metadata for UI surfacing.
 - Control-plane result waits aggregate CLOSED reasons and distinguish auth-related closures.
 
 ## Verification
@@ -27,5 +29,13 @@ pnpm --dir web exec vitest run --config vitest.config.js tests/unit/sanity.test.
 
 Result: 4 files, 59 tests passed.
 
+Additional bahia-zui7 focused gate passed on 2026-06-02:
+
+```bash
+pnpm --dir web exec vitest run --config vitest.config.js tests/unit/sanity.test.js tests/unit/test-utils-and-fixtures.test.js tests/unit/nostr-client-parsing.test.js tests/unit/repositories-store.test.js tests/unit/souls-store.test.js
+```
+
+Result: 5 files, 104 tests passed.
+
 ## Notes
-A mistaken invocation through `pnpm --dir web test:unit -- ...` ran the broader suite instead of the intended file list and failed in tests outside the Bucket 2 gate. The focused command above is the targeted verification for this patch.
+A mistaken invocation through `pnpm --dir web test:unit -- ...` ran the broader suite instead of the intended file list and failed in tests outside the Bucket 2 gate. The focused commands above are the targeted verification for these patches.

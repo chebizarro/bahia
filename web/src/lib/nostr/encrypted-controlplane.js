@@ -60,6 +60,12 @@ function openRelayUrls(client) {
   return client.getConnectedRelays();
 }
 
+function formatClosedRelays(closedRelays) {
+  return Array.from(closedRelays.entries())
+    .map(([relay, reason]) => `${relay}${reason ? ` (${reason})` : ''}`)
+    .join('; ');
+}
+
 export function encryptedRelayUrlsFromSystemInfo(systemInfo = currentSystemInfo()) {
   return normalizeRelays(systemInfo?.nostr?.browser_relays);
 }
@@ -168,6 +174,7 @@ export class EncryptedControlplaneTransport {
       let timer = null;
       const seen = new Set();
       const pendingRelays = openRelayUrls(this.client);
+      const closedRelays = new Map();
       const requesterPubkey = authState.pubkey;
 
       const cleanup = () => {
@@ -218,23 +225,30 @@ export class EncryptedControlplaneTransport {
           try {
             const plaintext = await decryptWithAuth(servicePubkey, event.content || '');
             const payload = parseJson(plaintext);
-            if (payload?.request_event_id && payload.request_event_id !== requestEventId) return;
+            if (payload?.request_event_id !== requestEventId) {
+              settle(reject, new Error('Encrypted Nostr result payload did not correlate to the request event id'));
+              return;
+            }
             settle(resolve, { event, payload });
           } catch (error) {
             settle(reject, error);
           }
         },
-        onClosed: (reason, relay) => {
+        onClosed: (reason = '', relay) => {
+          const reasonText = String(reason || '');
+          if (relay) closedRelays.set(relay, reasonText);
+          if (reasonText.toLowerCase().includes('auth')) {
+            const relayLabel = relay ? `${relay}: ` : '';
+            settle(reject, new Error(`Encrypted Nostr result subscription auth closure: ${relayLabel}${reasonText}`));
+            return;
+          }
           if (pendingRelays && relay) {
             const index = pendingRelays.indexOf(relay);
             if (index >= 0) pendingRelays.splice(index, 1);
             if (pendingRelays.length === 0) {
-              settle(reject, new Error(`Encrypted Nostr result subscription closed before result: ${reason || 'all relays closed'}`));
-              return;
+              const summary = formatClosedRelays(closedRelays) || reasonText || 'all relays closed';
+              settle(reject, new Error(`Encrypted Nostr result subscription closed before result from all relays: ${summary}`));
             }
-          }
-          if (reason && String(reason).toLowerCase().includes('auth')) {
-            settle(reject, new Error(`Encrypted Nostr result subscription closed: ${reason}`));
           }
         }
       });

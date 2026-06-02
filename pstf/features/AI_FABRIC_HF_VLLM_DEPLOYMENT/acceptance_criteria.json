@@ -69,7 +69,7 @@
     }
   ],
   "coverage_notes": [
-    "Criteria are mapped from the AI/ML inference fabric plan and are placeholders pending implementation tests."
+    "Criteria are mapped to executable D4 harness tests only; production integration readiness remains unverified and tracked by bahia-jicv."
   ],
   "unresolved_questions": []
 }

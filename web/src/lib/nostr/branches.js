@@ -3,7 +3,7 @@
  * Fetches repo state events (NIP-34 kind 30618) to extract branch information
  */
 
-import { KINDS, queryUntilEoseOrPartial } from './client.js';
+import { KINDS, NostrIncompleteEOSEError, nostr, partialEventsFromIncompleteEose } from './client.js';
 
 // Repo state event kind (NIP-34)
 const REPO_STATE_KIND = 30618;
@@ -99,7 +99,7 @@ function parseRepoCoordinate(repoCoordinate) {
  * @param {string} repoCoordinate - Repository coordinate (30617:pubkey:identifier)
  * @param {Object} options
  * @param {number} options.timeout - Incomplete-query timeout in ms (default: 5000)
- * @returns {Promise<{ branches: string[], defaultBranch: string | null, error: string | null }>}
+ * @returns {Promise<{ branches: string[], defaultBranch: string | null, error: string | null, degraded: Object | null }>}
  */
 export async function fetchRepoBranches(repoCoordinate, { timeout = 5000 } = {}) {
   const parsed = parseRepoCoordinate(repoCoordinate);
@@ -107,7 +107,8 @@ export async function fetchRepoBranches(repoCoordinate, { timeout = 5000 } = {})
     return {
       branches: [],
       defaultBranch: null,
-      error: 'Invalid repository coordinate'
+      error: 'Invalid repository coordinate',
+      degraded: null
     };
   }
 
@@ -115,18 +116,20 @@ export async function fetchRepoBranches(repoCoordinate, { timeout = 5000 } = {})
 
   try {
     // Query for repo state events (kind 30618) with matching author and d-tag
-    const events = await queryUntilEoseOrPartial([{
+    const events = await nostr.queryUntilEose([{
       kinds: [REPO_STATE_KIND],
       authors: [pubkey],
       '#d': [identifier]
-    }], { timeoutMs: timeout, scope: 'repo-branches' });
+    }], { timeoutMs: timeout });
+    const degraded = null;
 
     if (!events || events.length === 0) {
       // No state event found - repo may not have state published yet
       return {
         branches: [],
         defaultBranch: null,
-        error: null // Not an error, just no state available
+        error: null,
+        degraded
       };
     }
 
@@ -143,14 +146,46 @@ export async function fetchRepoBranches(repoCoordinate, { timeout = 5000 } = {})
     return {
       branches,
       defaultBranch,
-      error: null
+      error: null,
+      degraded
     };
   } catch (err) {
+    if (err instanceof NostrIncompleteEOSEError) {
+      const events = partialEventsFromIncompleteEose(err);
+      const degraded = {
+        incomplete: true,
+        reason: err.reason || 'unknown',
+        message: err.message,
+        relaySummary: Array.isArray(err.relaySummary) ? err.relaySummary : [],
+        partialEventCount: events.length
+      };
+      if (events.length === 0) {
+        return {
+          branches: [],
+          defaultBranch: null,
+          error: degraded.message,
+          degraded
+        };
+      }
+      const latestEvent = events.reduce((latest, event) => {
+        if (!latest || event.created_at > latest.created_at) return event;
+        return latest;
+      }, null);
+      const { branches, defaultBranch } = parseRepoStateBranches(latestEvent);
+      return {
+        branches,
+        defaultBranch,
+        error: degraded.message,
+        degraded
+      };
+    }
+
     console.error('[branches] Failed to fetch repo state:', err);
     return {
       branches: [],
       defaultBranch: null,
-      error: err?.message || 'Failed to fetch branches'
+      error: err?.message || 'Failed to fetch branches',
+      degraded: null
     };
   }
 }

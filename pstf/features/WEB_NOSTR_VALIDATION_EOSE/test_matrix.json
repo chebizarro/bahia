@@ -14,6 +14,13 @@
       "tests": 59,
       "verification_date": "2026-05-20",
       "notes": "Broader WEB_NOSTR_VALIDATION_EOSE gate passed after regression patch."
+    },
+    {
+      "command": "pnpm --dir web exec vitest run --config vitest.config.js tests/unit/sanity.test.js tests/unit/test-utils-and-fixtures.test.js tests/unit/nostr-client-parsing.test.js tests/unit/repositories-store.test.js tests/unit/souls-store.test.js",
+      "result": "passed",
+      "tests": 104,
+      "verification_date": "2026-06-02",
+      "notes": "bahia-zui7: verifies fail-closed queryUntilEose timeout/abort/CLOSED behavior plus explicit degraded metadata for aborted, CLOSED, timeout-empty, branch, repository, and Soul Factory partial read models."
     }
   ]
 }

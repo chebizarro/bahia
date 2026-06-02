@@ -69,7 +69,7 @@
     }
   ],
   "coverage_notes": [
-    "Criteria are mapped from the AI/ML inference fabric plan and are placeholders pending implementation tests."
+    "Criteria are mapped from the AI/ML inference fabric plan and remain placeholders until bahia-vn8o adds executable verification."
   ],
   "unresolved_questions": []
 }

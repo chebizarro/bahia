@@ -75,6 +75,27 @@ describe('repositories store', () => {
     expect(nostrModule.fetchRepositories).toHaveBeenCalledTimes(2);
   });
 
+  it('records degraded EOSE metadata for partial repository read models', async () => {
+    const repos = [{ displayName: 'Alpha', repoCoordinate: 'github.com/org/alpha' }];
+    Object.defineProperty(repos, 'eose', {
+      value: {
+        complete: false,
+        degraded: { incomplete: true, reason: 'all_relays_closed', partialEventCount: 1 },
+        relaySummary: [{ relay: 'wss://relay.example', status: 'closed', reason: 'relay closed' }]
+      }
+    });
+    nostrModule.fetchRepositories.mockResolvedValue(repos);
+
+    await store.loadRepositories({ force: true });
+
+    expect(store.repositories).toHaveLength(1);
+    expect(store.meta.eose).toMatchObject({
+      complete: false,
+      degraded: { incomplete: true, reason: 'all_relays_closed', partialEventCount: 1 },
+      relaySummary: [{ relay: 'wss://relay.example', status: 'closed', reason: 'relay closed' }]
+    });
+  });
+
   it('sets unsupported CI state when repositories have no coordinates', async () => {
     const repoList = [{ displayName: 'Local repo' }];
 

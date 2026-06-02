@@ -88,21 +88,63 @@ export function partialEventsFromIncompleteEose(error) {
   return Array.isArray(error.partialEvents) ? error.partialEvents.filter(Boolean) : [];
 }
 
+function degradedMetadataFromIncompleteEose(error, events) {
+  return {
+    incomplete: true,
+    reason: error?.reason || 'unknown',
+    message: error?.message || 'Nostr query did not receive complete EOSE history',
+    relaySummary: Array.isArray(error?.relaySummary) ? error.relaySummary : [],
+    partialEventCount: events.length
+  };
+}
+
+function queryResult(events, degraded = null) {
+  return {
+    events,
+    complete: !degraded,
+    degraded,
+    relaySummary: degraded?.relaySummary || []
+  };
+}
+
+export function readModelEvents(result) {
+  if (Array.isArray(result)) return result;
+  return Array.isArray(result?.events) ? result.events : [];
+}
+
+export function readModelDegraded(result) {
+  return result?.degraded || null;
+}
+
+export function attachReadModelMetadata(items, result) {
+  const list = Array.isArray(items) ? items : [];
+  Object.defineProperty(list, 'eose', {
+    value: {
+      complete: result?.complete !== false,
+      degraded: readModelDegraded(result),
+      relaySummary: Array.isArray(result?.relaySummary) ? result.relaySummary : []
+    },
+    enumerable: false,
+    configurable: true
+  });
+  return list;
+}
+
 export async function queryUntilEoseOrPartial(filters, options = {}) {
   const queryOptions = typeof options === 'number' ? { timeoutMs: options } : (options || {});
   const { scope = 'nostr.query', allowEmptyOnIncomplete = false, ...nostrOptions } = queryOptions;
 
   try {
-    return await nostr.queryUntilEose(filters, nostrOptions);
+    return queryResult(await nostr.queryUntilEose(filters, nostrOptions));
   } catch (error) {
     const partialEvents = partialEventsFromIncompleteEose(error);
     if (partialEvents.length > 0) {
       logIncompleteEoseFallback(scope, error, partialEvents);
-      return partialEvents;
+      return queryResult(partialEvents, degradedMetadataFromIncompleteEose(error, partialEvents));
     }
     if (allowEmptyOnIncomplete && error instanceof NostrIncompleteEOSEError) {
       logIncompleteEoseFallback(scope, error, partialEvents, { acceptedEmpty: true });
-      return [];
+      return queryResult([], degradedMetadataFromIncompleteEose(error, partialEvents));
     }
     throw error;
   }
@@ -118,7 +160,8 @@ export async function fetchTemplates(authorPubkey = null) {
   if (authorPubkey) {
     filter.authors = [authorPubkey];
   }
-  return dedupeReplaceableEvents(await queryUntilEoseOrPartial([filter], { scope: 'templates', allowEmptyOnIncomplete: true }));
+  const result = await queryUntilEoseOrPartial([filter], { scope: 'templates', allowEmptyOnIncomplete: true });
+  return attachReadModelMetadata(dedupeReplaceableEvents(readModelEvents(result)), result);
 }
 
 export async function fetchSouls(authorPubkey = null) {
@@ -126,7 +169,8 @@ export async function fetchSouls(authorPubkey = null) {
   if (authorPubkey) {
     filter.authors = [authorPubkey];
   }
-  return dedupeReplaceableEvents(await queryUntilEoseOrPartial([filter], { scope: 'souls', allowEmptyOnIncomplete: true }));
+  const result = await queryUntilEoseOrPartial([filter], { scope: 'souls', allowEmptyOnIncomplete: true });
+  return attachReadModelMetadata(dedupeReplaceableEvents(readModelEvents(result)), result);
 }
 
 export async function fetchSoulDrafts(authorPubkey = null) {
@@ -134,33 +178,38 @@ export async function fetchSoulDrafts(authorPubkey = null) {
   if (authorPubkey) {
     filter.authors = [authorPubkey];
   }
-  return dedupeReplaceableEvents(await queryUntilEoseOrPartial([filter], { scope: 'soul-drafts', allowEmptyOnIncomplete: true }));
+  const result = await queryUntilEoseOrPartial([filter], { scope: 'soul-drafts', allowEmptyOnIncomplete: true });
+  return attachReadModelMetadata(dedupeReplaceableEvents(readModelEvents(result)), result);
 }
 
 export async function fetchSoulDraft(agentId, authorPubkey) {
-  const events = await queryUntilEoseOrPartial([{
+  const result = await queryUntilEoseOrPartial([{
     kinds: [KINDS.SOUL_DRAFT],
     '#d': [agentId],
     authors: authorPubkey ? [authorPubkey] : undefined
   }], { scope: 'soul-draft', allowEmptyOnIncomplete: true });
-  return dedupeReplaceableEvents(events)[0] || null;
+  const [event = null] = dedupeReplaceableEvents(readModelEvents(result));
+  return event ? { ...event, eose: { complete: result.complete, degraded: result.degraded, relaySummary: result.relaySummary } } : null;
 }
 
 export async function fetchRuntimeCapabilities({ runtime = null, controllerPubkey = null, method = null, limit = 200 } = {}) {
-  const events = dedupeReplaceableEvents(await queryUntilEoseOrPartial([{ kinds: [KINDS.RUNTIME_CAPABILITY], limit }], { scope: 'runtime-capabilities', allowEmptyOnIncomplete: true }));
-  return events
+  const result = await queryUntilEoseOrPartial([{ kinds: [KINDS.RUNTIME_CAPABILITY], limit }], { scope: 'runtime-capabilities', allowEmptyOnIncomplete: true });
+  const events = dedupeReplaceableEvents(readModelEvents(result));
+  const capabilities = events
     .map(parseRuntimeCapabilityEvent)
     .filter(Boolean)
     .filter((capability) => runtimeCapabilitySupports(capability, { runtime, controllerPubkey, method }));
+  return attachReadModelMetadata(capabilities, result);
 }
 
 export async function fetchSoul(agentId, authorPubkey) {
-  const events = await queryUntilEoseOrPartial([{
+  const result = await queryUntilEoseOrPartial([{
     kinds: [KINDS.AGENT_SOUL],
     '#d': [agentId],
     authors: authorPubkey ? [authorPubkey] : undefined
   }], { scope: 'soul', allowEmptyOnIncomplete: true });
-  return dedupeReplaceableEvents(events)[0] || null;
+  const [event = null] = dedupeReplaceableEvents(readModelEvents(result));
+  return event ? { ...event, eose: { complete: result.complete, degraded: result.degraded, relaySummary: result.relaySummary } } : null;
 }
 
 export function subscribeToProvisioningProgress(requestEventId, onStatus, onResult) {

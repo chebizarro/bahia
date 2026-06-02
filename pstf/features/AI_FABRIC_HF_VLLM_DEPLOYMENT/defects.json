@@ -1,4 +1,19 @@
 {
   "feature_id": "AI_FABRIC_HF_VLLM_DEPLOYMENT",
-  "defects": []
+  "defects": [
+    {
+      "id": "D-HFV-PROD-001",
+      "bead": "bahia-jicv",
+      "title": "Production HF/vLLM integration verification is not recorded",
+      "severity": "P2",
+      "status": "open",
+      "observed_behavior": "Current PSTF evidence is a D4 fake/no-network harness using fake Hugging Face artifact resolution, fake OCI/provenance state, fake GPU/vLLM provisioning, mocked Nostr read-model events, and UI smoke data.",
+      "intended_behavior": "Production readiness claims require real configured Hugging Face, artifact storage/provenance, GPU/vLLM runtime, gateway, live relay, and Nostr protocol verification evidence, or exact external blockers.",
+      "acceptance_criteria": [
+        "PSTF distinguishes non-production D4 harness evidence from production evidence.",
+        "Production integration verification covers configured external dependencies or records exact blockers.",
+        "Nostr relay evidence validates OK, EOSE, CLOSED, AUTH, event signatures, and scoped filters rather than relying on mocked read-model inputs."
+      ]
+    }
+  ]
 }

@@ -69,15 +69,19 @@ export function isCorrelatedEvent(event, requestEventId) {
   return requestCorrelationValues(event).has(requestEventId);
 }
 
-export async function publishRequest({ kind, tags = [], content = '', created_at = Math.floor(Date.now() / 1000) } = {}) {
+export async function buildRequestEvent({ kind, tags = [], content = '', created_at = Math.floor(Date.now() / 1000) } = {}) {
   ensureKind(kind);
 
-  const event = await signWithAuth({
+  return signWithAuth({
     kind,
     created_at,
     tags: normalizeTags(tags),
     content: normalizeContent(content)
   });
+}
+
+export async function publishSignedRequest(event) {
+  if (!event?.id) throw new Error('Cannot publish unsigned Nostr request event');
 
   const results = await nostr.publish(event);
   const acceptedRelays = results.filter(publishAccepted);
@@ -95,6 +99,11 @@ export async function publishRequest({ kind, tags = [], content = '', created_at
     acceptedRelays,
     rejectedRelays
   };
+}
+
+export async function publishRequest(request = {}) {
+  const event = await buildRequestEvent(request);
+  return publishSignedRequest(event);
 }
 
 export function subscribeStatus({ requestEventId, statusKinds, onStatus, onClosed, servicePubkey } = {}) {
@@ -193,6 +202,30 @@ export function awaitResult({ requestEventId, resultKinds, signal, timeoutMs = n
       }
     });
   });
+}
+
+export async function requestResult({ resultKinds, signal, timeoutMs = null, servicePubkey, ...request } = {}) {
+  const event = await buildRequestEvent(request);
+  const abortController = typeof AbortController !== 'undefined' ? new AbortController() : null;
+  const waitSignal = abortController?.signal || signal;
+  const forwardAbort = () => abortController?.abort(signal?.reason);
+  signal?.addEventListener?.('abort', forwardAbort, { once: true });
+
+  const resultPromise = awaitResult({ requestEventId: event.id, resultKinds, signal: waitSignal, timeoutMs, servicePubkey });
+  try {
+    const publishResult = await publishSignedRequest(event);
+    const resultEvent = await resultPromise;
+    return { ...publishResult, resultEvent };
+  } catch (error) {
+    if (!signal?.aborted) {
+      abortController?.abort(new Error(`Nostr request failed before terminal result: ${error.message}`));
+    }
+    await resultPromise.catch(() => null);
+    signal?.throwIfAborted?.();
+    throw error;
+  } finally {
+    signal?.removeEventListener?.('abort', forwardAbort);
+  }
 }
 
 export function currentRequesterPubkey() {

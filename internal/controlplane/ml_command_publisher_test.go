@@ -108,7 +108,7 @@ func TestMLCommandPublisherFailsWhenNoRelayAccepts(t *testing.T) {
 		t.Fatalf("create signer: %v", err)
 	}
 	publisher := NewMLCommandPublisher(capture, signer)
-	if _, err := publisher.PublishMLInferenceDeployRequest(ctx, MLCommandPayload{Content: map[string]any{"endpoint": "endpoint:qwen:prod"}}); err == nil {
+	if _, err := publisher.PublishMLInferenceDeployRequest(ctx, MLCommandPayload{Content: map[string]any{"endpoint": "endpoint:qwen:prod", "model_version": "model-version:qwen:v1"}}); err == nil {
 		t.Fatalf("expected no relay acceptance error")
 	}
 }

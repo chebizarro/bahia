@@ -67,11 +67,12 @@ describe('Nostr branch behavior coverage', () => {
     expect(result).toEqual({
       branches: ['main', 'feature/auth'],
       defaultBranch: 'main',
-      error: null
+      error: null,
+      degraded: null
     });
   });
 
-  it('uses partial repo state when branch history is incomplete before EOSE', async () => {
+  it('returns degraded metadata with partial repo state when branch history is incomplete before EOSE', async () => {
     nostrMock.queryUntilEose.mockRejectedValue(new NostrIncompleteEOSEError('timeout', {
       partialEvents: [repoStateEvent()],
       relaySummary: [{ relay: 'wss://relay.example', status: 'pending' }]
@@ -79,14 +80,18 @@ describe('Nostr branch behavior coverage', () => {
 
     const result = await fetchRepoBranches(repoCoordinate(), { timeout: 100 });
 
-    expect(result).toEqual({
-      branches: ['main', 'feature/auth'],
-      defaultBranch: 'main',
-      error: null
+    expect(result.branches).toEqual(['main', 'feature/auth']);
+    expect(result.defaultBranch).toBe('main');
+    expect(result.error).toContain('Nostr query did not receive complete EOSE history');
+    expect(result.degraded).toMatchObject({
+      incomplete: true,
+      reason: 'timeout',
+      partialEventCount: 1,
+      relaySummary: [{ relay: 'wss://relay.example', status: 'pending' }]
     });
   });
 
-  it('tolerates incomplete branch history with no partial events and returns an empty branch set', async () => {
+  it('returns degraded metadata for incomplete branch history with no partial events', async () => {
     nostrMock.queryUntilEose.mockRejectedValue(new NostrIncompleteEOSEError('timeout', {
       partialEvents: [],
       relaySummary: [{ relay: 'wss://relay.example', status: 'pending' }]
@@ -96,7 +101,13 @@ describe('Nostr branch behavior coverage', () => {
 
     expect(result.branches).toEqual([]);
     expect(result.defaultBranch).toBeNull();
-    expect(result.error).toBeNull();
+    expect(result.error).toContain('Nostr query did not receive complete EOSE history');
+    expect(result.degraded).toMatchObject({
+      incomplete: true,
+      reason: 'timeout',
+      partialEventCount: 0,
+      relaySummary: [{ relay: 'wss://relay.example', status: 'pending' }]
+    });
   });
 
   it('keeps non-Nostr repository selections out of NIP-34 branch lookup', () => {

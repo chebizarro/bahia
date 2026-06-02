@@ -32,6 +32,8 @@ vi.mock('../../src/lib/nostr/client.js', () => {
   const fetchTemplates = vi.fn();
   const fetchSoulDrafts = vi.fn();
   const fetchRuntimeCapabilities = vi.fn();
+  const queryOrPartial = vi.fn();
+  const readModelEvents = vi.fn((result) => Array.isArray(result) ? result : (result?.events || []));
   
   const parseSoulEvent = vi.fn((event) => ({
     id: event.id,
@@ -86,6 +88,8 @@ vi.mock('../../src/lib/nostr/client.js', () => {
     fetchTemplates,
     fetchSoulDrafts,
     fetchRuntimeCapabilities,
+    queryOrPartial,
+    readModelEvents,
     parseSoulEvent,
     parseTemplateEvent,
     parseSoulDraftEvent,
@@ -114,6 +118,7 @@ describe('Souls Store', () => {
   let fetchSoulDrafts;
   let fetchRuntimeCapabilities;
   let parseSoulEvent;
+  let queryOrPartial;
   let parseTemplateEvent;
   let authModule;
 
@@ -130,6 +135,7 @@ describe('Souls Store', () => {
     fetchSoulDrafts = nostrModule.fetchSoulDrafts;
     fetchRuntimeCapabilities = nostrModule.fetchRuntimeCapabilities;
     parseSoulEvent = nostrModule.parseSoulEvent;
+    queryOrPartial = nostrModule.queryOrPartial;
     parseTemplateEvent = nostrModule.parseTemplateEvent;
     authModule = await import('../../src/lib/stores/auth.js');
 
@@ -173,6 +179,7 @@ describe('Souls Store', () => {
     fetchSoulDrafts.mockResolvedValue([]);
     fetchRuntimeCapabilities.mockResolvedValue([]);
 
+    queryOrPartial.mockResolvedValue([]);
     mockNostr.subscribe.mockReturnValue(() => {});
 
     // Dynamically import souls module
@@ -796,6 +803,35 @@ describe('Souls Store', () => {
       expect(soulsModule.souls[0]).toMatchObject({ id: 'new-soul', name: 'New Scout' });
     });
 
+    it('loadSouls records degraded EOSE metadata from partial read models', async () => {
+      const events = [
+        {
+          id: 'partial-soul',
+          kind: 31951,
+          pubkey: 'factory',
+          created_at: 100,
+          tags: [['d', 'scout'], ['name', 'Partial Scout']]
+        }
+      ];
+      Object.defineProperty(events, 'eose', {
+        value: {
+          complete: false,
+          degraded: { incomplete: true, reason: 'timeout', partialEventCount: 1 },
+          relaySummary: [{ relay: 'wss://relay.example', status: 'pending', reason: '' }]
+        }
+      });
+      fetchSouls.mockResolvedValue(events);
+
+      await soulsModule.loadSouls();
+
+      expect(soulsModule.souls).toHaveLength(1);
+      expect(soulsModule.readModelMeta.souls).toMatchObject({
+        complete: false,
+        degraded: { incomplete: true, reason: 'timeout', partialEventCount: 1 },
+        relaySummary: [{ relay: 'wss://relay.example', status: 'pending', reason: '' }]
+      });
+    });
+
     it('loadDrafts loads deduped editable 31952 drafts', async () => {
       fetchSoulDrafts.mockResolvedValue([
         {
@@ -964,7 +1000,7 @@ describe('Souls Store', () => {
     });
 
     it('fetchSoulHistory includes soul updates and actions sorted newest-first', async () => {
-      mockNostr.query.mockResolvedValue([
+      queryOrPartial.mockResolvedValue({ events: [
         {
           id: 'evt-action',
           kind: 1950,
@@ -979,15 +1015,16 @@ describe('Souls Store', () => {
           pubkey: 'factory',
           tags: [['status', 'active']]
         }
-      ]);
+      ], complete: true, degraded: null, relaySummary: [] });
 
       const history = await soulsModule.fetchSoulHistory({ agentId: 'scout', pubkey: 'factory' }, { limit: 10 });
 
-      expect(mockNostr.query).toHaveBeenCalledWith([
+      expect(queryOrPartial).toHaveBeenCalledWith([
         { kinds: [31951], '#d': ['scout'], limit: 10 },
         { kinds: [1950], limit: 10 },
         { kinds: [6950, 7950, 1951], limit: 10 }
-      ]);
+      ], { scope: 'soul-history' });
+      expect(soulsModule.readModelMeta.history).toEqual({ complete: true, degraded: null, relaySummary: [] });
       expect(history.map((item) => item.id)).toEqual(['evt-action', 'evt-soul']);
       expect(history[0].summary).toBe('suspend: maintenance');
     });

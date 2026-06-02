@@ -1,36 +1,37 @@
 package controlplane
 
-// Backup control-plane kinds. These values are allocated in docs/control-planes.md
-// and intentionally avoid the ML 38390-38399 and artifact attestation 31200 ranges.
+import "github.com/openagentsinc/bahia/internal/kinds"
+
+// Backup control-plane kinds are aliases to the canonical internal/kinds catalog.
 const (
-	KindBackupRunRequest               = 38400
-	KindBackupVerificationRequest      = 38401
-	KindBackupRestoreRequest           = 38402
-	KindBackupRestoreApproval          = 38403
-	KindBackupRetentionEnforce         = 38404
-	KindBackupRepositoryRegister       = 38405
-	KindBackupPolicyApply              = 38406
-	KindBackupRecipeApply              = 38407
-	KindBackupDefinitionApply          = 38408
-	KindBackupRepositoryProbe          = 38409
-	KindBackupRunResult                = 38410
-	KindBackupVerificationResult       = 38411
-	KindBackupRestoreResult            = 38412
-	KindBackupRestoreApprovalResult    = 38413
-	KindBackupRetentionResult          = 38414
-	KindBackupRepositoryRegisterResult = 38415
-	KindBackupPolicyApplyResult        = 38416
-	KindBackupRecipeApplyResult        = 38417
-	KindBackupDefinitionApplyResult    = 38418
-	KindBackupRepositoryProbeResult    = 38419
+	KindBackupRunRequest               = kinds.BackupRunRequest
+	KindBackupVerificationRequest      = kinds.BackupVerificationRequest
+	KindBackupRestoreRequest           = kinds.BackupRestoreRequest
+	KindBackupRestoreApproval          = kinds.BackupRestoreApproval
+	KindBackupRetentionEnforce         = kinds.BackupRetentionEnforce
+	KindBackupRepositoryRegister       = kinds.BackupRepositoryRegister
+	KindBackupPolicyApply              = kinds.BackupPolicyApply
+	KindBackupRecipeApply              = kinds.BackupRecipeApply
+	KindBackupDefinitionApply          = kinds.BackupDefinitionApply
+	KindBackupRepositoryProbe          = kinds.BackupRepositoryProbe
+	KindBackupRunResult                = kinds.BackupRunResult
+	KindBackupVerificationResult       = kinds.BackupVerificationResult
+	KindBackupRestoreResult            = kinds.BackupRestoreResult
+	KindBackupRestoreApprovalResult    = kinds.BackupRestoreApprovalResult
+	KindBackupRetentionResult          = kinds.BackupRetentionResult
+	KindBackupRepositoryRegisterResult = kinds.BackupRepositoryRegisterResult
+	KindBackupPolicyApplyResult        = kinds.BackupPolicyApplyResult
+	KindBackupRecipeApplyResult        = kinds.BackupRecipeApplyResult
+	KindBackupDefinitionApplyResult    = kinds.BackupDefinitionApplyResult
+	KindBackupRepositoryProbeResult    = kinds.BackupRepositoryProbeResult
 
-	KindBackupRunStatus          = 6981
-	KindBackupRestoreStatus      = 6982
-	KindBackupVerificationStatus = 6983
-	KindBackupObservation        = 6984
+	KindBackupRunStatus          = kinds.BackupRunStatus
+	KindBackupRestoreStatus      = kinds.BackupRestoreStatus
+	KindBackupVerificationStatus = kinds.BackupVerificationStatus
+	KindBackupObservation        = kinds.BackupObservation
 
-	KindBackupRunAttestation          = 31310
-	KindBackupVerificationAttestation = 31311
+	KindBackupRunAttestation          = kinds.BackupRunAttestation
+	KindBackupVerificationAttestation = kinds.BackupVerificationAttestation
 )
 
 func backupRequestKinds() []int {

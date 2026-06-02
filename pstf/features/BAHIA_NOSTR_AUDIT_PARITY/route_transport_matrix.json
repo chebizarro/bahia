@@ -1,0 +1,267 @@
+{
+  "feature_id": "BAHIA_NOSTR_AUDIT_PARITY",
+  "source_beads": ["bahia-a84g"],
+  "related_beads": ["bahia-dg3t", "bahia-sv0j", "bahia-jxm3"],
+  "generated_from": "docs/investigations/fake-nostr-routes-audit-2026-06-01.md",
+  "updated_at": "2026-06-02",
+  "taxonomy": ["nostr_native", "nostr_request_result_facade", "rest_to_nostr_bridge", "rest_compatibility", "http_native"],
+  "signer_first_classes": ["nostr_native", "nostr_request_result_facade"],
+  "route_file_rest_import_allowlist": [
+    {
+      "file": "web/src/routes/artifacts/+page.svelte",
+      "permitted_transport_classes": ["http_native"],
+      "allowed_imports": ["$lib/api/client.js"],
+      "allowed_usage": "Blossom server health/list/blob HTTP surfaces only; registry artifacts remain Nostr read-model backed."
+    },
+    {
+      "file": "web/src/routes/artifacts/[id]/+page.svelte",
+      "permitted_transport_classes": ["http_native"],
+      "allowed_imports": ["$lib/api/client.js"],
+      "allowed_usage": "SBOM and attestation HTTP surfaces only; artifact read model and signature verification remain separate Nostr/encrypted flows."
+    },
+    {
+      "file": "web/src/routes/continuity/+page.ts",
+      "permitted_transport_classes": ["http_native"],
+      "allowed_imports": ["$lib/api/continuity"],
+      "allowed_usage": "Continuity status/topology are currently direct HTTP surfaces, not signer-first Nostr routes."
+    },
+    {
+      "file": "web/src/routes/continuity/SimulationPanel.svelte",
+      "permitted_transport_classes": ["http_native"],
+      "allowed_imports": ["$lib/api/continuity"],
+      "allowed_usage": "Continuity failure simulation is currently a direct HTTP surface, not signer-first Nostr command ingress."
+    },
+    {
+      "file": "web/src/routes/ml/+page.svelte",
+      "permitted_transport_classes": ["rest_to_nostr_bridge"],
+      "allowed_imports": ["$lib/api/client.js"],
+      "allowed_usage": "ML import/deploy browser submissions are REST-to-Nostr bridge ingress: HTTP returns Nostr command receipt metadata; terminal completion remains correlated Nostr result/read-model events."
+    }
+  ],
+  "entries": [
+    {
+      "id": "dashboard-read-models",
+      "surface": "Dashboard `/` and shared dashboard stores",
+      "transport_class": "nostr_native",
+      "route_files": ["web/src/routes/+page.svelte"],
+      "control_files": ["web/src/lib/stores/index.svelte.js", "web/src/lib/stores/controlplane/bootstrap.svelte.js"],
+      "evidence": ["Shared dashboard loaders call bootstrapControlplane().", "Read-model bootstrap subscribes to scoped filters, tracks EOSE, and keeps subscriptions open for realtime updates."],
+      "rest_import_policy": "forbidden_for_command_ingress",
+      "pstf_status": "current_audit_evidence"
+    },
+    {
+      "id": "orgs-encrypted-crud-facade",
+      "surface": "`/orgs/**` browser organization operations",
+      "transport_class": "nostr_request_result_facade",
+      "route_files": ["web/src/routes/orgs/+page.svelte", "web/src/routes/orgs/[id]/+page.svelte", "web/src/routes/orgs/new/+page.svelte"],
+      "control_files": ["web/src/lib/stores/orgs.svelte.js", "web/src/lib/nostr/encrypted-controlplane.js", "internal/controlplane/encrypted_domain_handlers.go"],
+      "evidence": ["Org store sends encrypted request/result operations such as orgs.list, orgs.create, and orgs.delete with the orgs domain tag.", "Backend encrypted domain handlers adapt repository-backed organization CRUD/membership/invite operations to encrypted 5980/7980 request/result events without public org read-model projection.", "docs/control-planes.md and docs/user-guide/features/organizations.md classify orgs as an encrypted request/result facade, not nostr_native read models."],
+      "rest_import_policy": "forbidden_for_browser_command_ingress",
+      "pstf_status": "decision_recorded_2026-06-02",
+      "resolved_by_beads": ["bahia-sv0j"]
+    },
+    {
+      "id": "payments-encrypted-history",
+      "surface": "`/payments` private payment history",
+      "transport_class": "nostr_request_result_facade",
+      "route_files": ["web/src/routes/payments/+page.svelte"],
+      "control_files": ["web/src/lib/stores/payments.svelte.js", "internal/controlplane/encrypted_domain_handlers.go"],
+      "evidence": ["Payment store uses encrypted requestEncryptedResult() for payments.history.", "Backend encrypted handler calls the payment service and returns an encrypted correlated result."],
+      "rest_import_policy": "forbidden_for_browser_command_ingress",
+      "pstf_status": "current_audit_evidence"
+    },
+    {
+      "id": "notifications-encrypted-config-log",
+      "surface": "`/notifications/**` channel config, tests, and logs",
+      "transport_class": "nostr_request_result_facade",
+      "route_files": ["web/src/routes/notifications/+page.svelte", "web/src/routes/notifications/[id]/edit/+page.svelte", "web/src/routes/notifications/log/+page.svelte", "web/src/routes/notifications/new/+page.svelte"],
+      "control_files": ["web/src/lib/stores/notifications.svelte.js", "internal/controlplane/notification_encrypted_handlers.go"],
+      "evidence": ["Notification stores send encrypted request/result operations for channels and logs.", "Delivery may target Nostr DMs, but CRUD/log transport is encrypted request/result."],
+      "rest_import_policy": "forbidden_for_browser_command_ingress",
+      "pstf_status": "current_audit_evidence"
+    },
+    {
+      "id": "services-public-controlplane",
+      "surface": "`/services/**` current web route read models and public commands",
+      "transport_class": "nostr_native",
+      "route_files": ["web/src/routes/services/+page.svelte", "web/src/routes/services/[id]/+page.svelte"],
+      "control_files": ["web/src/lib/stores/public-controlplane.svelte.js", "web/src/lib/stores/index.svelte.js"],
+      "evidence": ["Service list/detail pages use relay-backed stores and public control-plane command helpers.", "REST service endpoints remain compatibility surfaces outside current signer-first route command ingress."],
+      "rest_import_policy": "forbidden_for_browser_command_ingress",
+      "pstf_status": "current_audit_evidence"
+    },
+    {
+      "id": "environments-public-controlplane",
+      "surface": "`/environments/**` route read models and public commands",
+      "transport_class": "nostr_native",
+      "route_files": ["web/src/routes/environments/+page.svelte", "web/src/routes/environments/[id]/+page.svelte"],
+      "control_files": ["web/src/lib/stores/public-controlplane.svelte.js", "web/src/lib/stores/index.svelte.js"],
+      "evidence": ["Environment routes read via Nostr stores and create/update through public Nostr command helpers.", "Detail route waits for explicit Nostr result events for worker policy changes."],
+      "rest_import_policy": "forbidden_for_browser_command_ingress",
+      "pstf_status": "current_audit_evidence"
+    },
+    {
+      "id": "deployments-public-and-encrypted",
+      "surface": "`/deployments/**` route read models, commands, and private log snapshots",
+      "transport_class": "nostr_native",
+      "route_files": ["web/src/routes/deployments/+page.svelte", "web/src/routes/deployments/[id]/+page.svelte", "web/src/routes/deployments/pending/+page.svelte", "web/src/routes/deployments/runs/[id]/+page.svelte"],
+      "control_files": ["web/src/lib/stores/public-controlplane.svelte.js", "web/src/lib/stores/deployment-run-logs.svelte.js"],
+      "evidence": ["Deployment routes use Nostr stores and public-controlplane actions.", "Run logs are presented as public relay projection plus encrypted Nostr request/result fetch."],
+      "rest_import_policy": "forbidden_for_browser_command_ingress",
+      "pstf_status": "current_audit_evidence"
+    },
+    {
+      "id": "artifacts-registry-read-model",
+      "surface": "`/artifacts/**` registry artifacts and Nostr signature verification",
+      "transport_class": "nostr_native",
+      "route_files": ["web/src/routes/artifacts/+page.svelte", "web/src/routes/artifacts/[id]/+page.svelte"],
+      "control_files": ["web/src/lib/stores/index.svelte.js", "web/src/lib/stores/artifact-signatures.svelte.js"],
+      "evidence": ["Artifact registry data is loaded from Nostr-backed stores.", "Artifact signature verification uses encrypted Nostr verification UI/store paths."],
+      "rest_import_policy": "mixed_file_allowed_only_for_http_native_artifact_surfaces",
+      "pstf_status": "current_audit_evidence"
+    },
+    {
+      "id": "artifacts-blossom-and-sbom-http",
+      "surface": "Artifact Blossom controls and SBOM/attestation details",
+      "transport_class": "http_native",
+      "route_files": ["web/src/routes/artifacts/+page.svelte", "web/src/routes/artifacts/[id]/+page.svelte"],
+      "control_files": ["web/src/lib/api/client.js", "internal/api/router/router.go"],
+      "evidence": ["Blossom list/server/health calls use HTTP endpoints, which is expected for Blossom storage surfaces.", "Artifact detail SBOM and attestation calls use REST API client methods."],
+      "rest_import_policy": "allowed_http_native_only",
+      "pstf_status": "current_audit_evidence"
+    },
+    {
+      "id": "packages-public-controlplane",
+      "surface": "`/packages/**` package read models and promote/yank commands",
+      "transport_class": "nostr_native",
+      "route_files": ["web/src/routes/packages/+page.svelte", "web/src/routes/packages/[id]/+page.svelte"],
+      "control_files": ["web/src/lib/stores/index.svelte.js", "web/src/lib/stores/public-controlplane.svelte.js"],
+      "evidence": ["Package loaders use Nostr-backed stores.", "Detail actions use public control-plane Nostr command helpers."],
+      "rest_import_policy": "forbidden_for_browser_command_ingress",
+      "pstf_status": "current_audit_evidence"
+    },
+    {
+      "id": "policies-public-controlplane",
+      "surface": "`/policies/**` current route read models and commands",
+      "transport_class": "nostr_native",
+      "route_files": ["web/src/routes/policies/+page.svelte", "web/src/routes/policies/[id]/+page.svelte"],
+      "control_files": ["web/src/lib/stores/index.svelte.js", "web/src/lib/stores/public-controlplane.svelte.js"],
+      "evidence": ["Policy routes import Nostr stores and public-controlplane policy commands.", "REST policy routes remain mounted as compatibility surfaces."],
+      "rest_import_policy": "forbidden_for_browser_command_ingress",
+      "pstf_status": "current_audit_evidence"
+    },
+    {
+      "id": "workers-read-models-and-controls",
+      "surface": "`/workers/**` worker ads, status, and control commands",
+      "transport_class": "nostr_native",
+      "route_files": ["web/src/routes/workers/+page.svelte", "web/src/routes/workers/[pubkey]/+page.svelte"],
+      "control_files": ["web/src/lib/stores/index.svelte.js", "web/src/routes/workers/actions.js"],
+      "evidence": ["Worker pages load worker Nostr stores and publish Nostr commands.", "REST worker reads remain compatibility/catalog endpoints outside current route command ingress."],
+      "rest_import_policy": "forbidden_for_browser_command_ingress",
+      "pstf_status": "current_audit_evidence"
+    },
+    {
+      "id": "ml-rest-to-nostr-ingress",
+      "surface": "`/ml` import and deployment browser submissions",
+      "transport_class": "rest_to_nostr_bridge",
+      "route_files": ["web/src/routes/ml/+page.svelte"],
+      "control_files": ["web/src/lib/api/client.js", "internal/api/handlers/ml.go", "internal/controlplane/ml_command_publisher.go"],
+      "evidence": ["ML page calls api.importMLModel() and api.deployMLEndpoint() for import/deploy bridge ingress while keeping existing endpoint pinning signer-first.", "Backend ML write compatibility handlers publish signed Nostr commands, reject zero relay acceptance, and return request/result/read-model correlation metadata.", "docs/control-planes.md and docs/user-guide/features/ml-models.md state HTTP 202 is publish acceptance only; terminal completion remains correlated Nostr result/read-model events."],
+      "rest_import_policy": "allowed_rest_to_nostr_bridge",
+      "pstf_status": "decision_recorded_2026-06-02",
+      "resolved_by_beads": ["bahia-jxm3"]
+    },
+    {
+      "id": "ml-existing-endpoint-pin-signer-first",
+      "surface": "`/ml` existing endpoint worker pin command",
+      "transport_class": "nostr_native",
+      "route_files": ["web/src/routes/ml/+page.svelte"],
+      "control_files": ["web/src/routes/ml/+page.svelte", "web/src/lib/stores/public-controlplane.svelte.js", "web/src/lib/nostr/controlplane-requests.js"],
+      "evidence": ["Existing endpoint pinning in web/src/routes/ml/+page.svelte calls publishCommand() with workload.pin.request before bridge deployment submission when a pinned worker targets an existing endpoint.", "The pin command follows signer-first browser Nostr request/result lifecycle semantics and is distinct from ML import/deploy REST-to-Nostr bridge ingress."],
+      "rest_import_policy": "forbidden_for_pin_command_ingress",
+      "pstf_status": "decision_recorded_2026-06-02",
+      "resolved_by_beads": ["bahia-jxm3"]
+    },
+    {
+      "id": "llm-public-controlplane",
+      "surface": "`/llm` route read models and operational mutations",
+      "transport_class": "nostr_native",
+      "route_files": ["web/src/routes/llm/+page.svelte"],
+      "control_files": ["web/src/lib/stores/public-controlplane.svelte.js", "web/src/lib/nostr/controlplane-requests.js"],
+      "evidence": ["LLM page imports public-controlplane actions and requester/kind helpers.", "Backend still has registry REST reads, but deprecated operational REST mutations are not mounted in favor of signer-first Nostr kinds."],
+      "rest_import_policy": "forbidden_for_browser_command_ingress",
+      "pstf_status": "current_audit_evidence"
+    },
+    {
+      "id": "dns-public-controlplane",
+      "surface": "`/dns` and FIPS DNS mesh",
+      "transport_class": "nostr_native",
+      "route_files": ["web/src/routes/dns/+page.svelte", "web/src/routes/dns/+page.ts", "web/src/routes/dns/FipsMeshPanel.svelte"],
+      "control_files": ["web/src/lib/stores/dns.svelte.js", "web/src/lib/nostr/dns-controlplane.js"],
+      "evidence": ["DNS store uses scoped Nostr read-model subscriptions with onEvent, onEose, onClosed, and onAuth callbacks.", "DNS command helper publishes signed requests and awaits explicit Bahia result events."],
+      "rest_import_policy": "forbidden_for_browser_command_ingress",
+      "pstf_status": "current_audit_evidence"
+    },
+    {
+      "id": "backup-public-controlplane",
+      "surface": "`/backup/**` read models and public commands",
+      "transport_class": "nostr_native",
+      "route_files": ["web/src/routes/backup/+page.svelte", "web/src/routes/backup/[section]/+page.svelte", "web/src/routes/backup/[section]/[id]/+page.svelte"],
+      "control_files": ["web/src/lib/stores/index.svelte.js", "web/src/lib/stores/public-controlplane.svelte.js"],
+      "evidence": ["Backup routes call relay-backed stores and public-controlplane actions for probe/approve/reject flows."],
+      "rest_import_policy": "forbidden_for_browser_command_ingress",
+      "pstf_status": "current_audit_evidence"
+    },
+    {
+      "id": "continuity-http-surface",
+      "surface": "`/continuity` status, topology, and simulation",
+      "transport_class": "http_native",
+      "route_files": ["web/src/routes/continuity/+page.svelte", "web/src/routes/continuity/+page.ts", "web/src/routes/continuity/SimulationPanel.svelte"],
+      "control_files": ["web/src/lib/api/continuity.ts", "internal/api/router/router.go"],
+      "evidence": ["Continuity load fetches status/topology through $lib/api/continuity.", "SimulationPanel submits worker-failure simulation through $lib/api/continuity."],
+      "rest_import_policy": "allowed_http_native",
+      "pstf_status": "current_audit_evidence"
+    },
+    {
+      "id": "souls-nostr-with-eose-caveats",
+      "surface": "`/souls/**` Soul Factory pages",
+      "transport_class": "nostr_native",
+      "route_files": ["web/src/routes/souls/+page.svelte", "web/src/routes/souls/[id]/+page.svelte", "web/src/routes/souls/[id]/edit/+page.svelte", "web/src/routes/souls/new/+page.svelte"],
+      "control_files": ["web/src/lib/nostr/subscriptions.js", "web/src/lib/stores/souls.svelte.js"],
+      "evidence": ["Soul routes use Nostr client/store helpers and direct subscriptions.", "Partial EOSE fallback and progress subscription gaps are tracked separately."],
+      "rest_import_policy": "forbidden_for_browser_command_ingress",
+      "pstf_status": "current_audit_evidence",
+      "follow_up_beads": ["bahia-zui7"]
+    },
+    {
+      "id": "events-relay-activity",
+      "surface": "`/events` relay activity route",
+      "transport_class": "nostr_native",
+      "route_files": ["web/src/routes/events/+page.svelte"],
+      "control_files": ["web/src/lib/stores/index.svelte.js", "web/src/lib/nostr/client.js"],
+      "evidence": ["Events route imports event/read-model stores and labels relay connection state."],
+      "rest_import_policy": "forbidden_for_browser_command_ingress",
+      "pstf_status": "current_audit_evidence"
+    },
+    {
+      "id": "settings-discovery-and-relay-config",
+      "surface": "`/settings` discovery and local relay/signer configuration",
+      "transport_class": "http_native",
+      "route_files": ["web/src/routes/settings/+page.svelte"],
+      "control_files": ["web/src/lib/stores/system.svelte.js", "web/src/lib/nostr/client.js"],
+      "evidence": ["Settings manipulates Nostr client relay configuration and Nostr Connect auth.", "System discovery/bootstrap may be HTTP-native and is not treated as fake Nostr control-plane command ingress."],
+      "rest_import_policy": "no_rest_client_import_observed",
+      "pstf_status": "current_audit_evidence"
+    },
+    {
+      "id": "backend-rest-compatibility-routes",
+      "surface": "Mounted `/api/v1` compatibility endpoints for legacy/domain reads and writes",
+      "transport_class": "rest_compatibility",
+      "route_files": [],
+      "control_files": ["web/src/lib/api/client.js", "internal/api/router/router.go"],
+      "evidence": ["Router still mounts REST compatibility routes for orgs, services, environments, deployments, workers, policies, payments, notifications, artifacts, SBOM, signatures, and direct runtime/adoption methods.", "These surfaces must not be described as signer-first browser Nostr command ingress unless the route uses Nostr publishing directly."],
+      "rest_import_policy": "allowed_only_when_matrix_classifies_surface_as_rest_compatibility_or_http_native",
+      "pstf_status": "current_audit_evidence"
+    }
+  ]
+}

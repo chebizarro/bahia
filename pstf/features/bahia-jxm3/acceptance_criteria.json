@@ -1,0 +1,30 @@
+{
+  "feature_id": "bahia-jxm3",
+  "status": "ready",
+  "criteria": [
+    {
+      "ac_id": "JXM3-AC-001",
+      "title": "ML ingress policy is recorded",
+      "type": "contract",
+      "priority": "must",
+      "assertion": "PSTF, docs, and UI classify ML browser import/deploy as rest_to_nostr_bridge.",
+      "testable_by": ["static_unit"]
+    },
+    {
+      "ac_id": "JXM3-AC-002",
+      "title": "HTTP receipt exposes Nostr correlation and publish acceptance semantics",
+      "type": "contract",
+      "priority": "must",
+      "assertion": "ML REST routes return 202 receipts with request_event_id, request_kind, result_kind, read-model metadata, relay acceptance, and message text directing clients to Nostr completion events.",
+      "testable_by": ["go_unit"]
+    },
+    {
+      "ac_id": "JXM3-AC-003",
+      "title": "ML command publisher verifies relay acceptance",
+      "type": "protocol",
+      "priority": "must",
+      "assertion": "ML command publisher signs request events, preserves scoped tags/d-tags, and rejects zero accepted relay publishes after payload validation succeeds.",
+      "testable_by": ["go_unit"]
+    }
+  ]
+}

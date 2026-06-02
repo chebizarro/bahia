@@ -243,6 +243,51 @@ func TestOperatorAdoptionErrorEnvelope(t *testing.T) {
 	}
 }
 
+func TestOperatorContextCancelAfterPublishIsPostAcceptanceAbort(t *testing.T) {
+	requestKey := nostr.GeneratePrivateKey()
+	transport := newFakeOperatorTransport()
+	client := newTestOperatorClient(t, requestKey, transport)
+	ctx, cancel := context.WithCancel(context.Background())
+	transport.publishFn = func(ctx context.Context, ev nostr.Event) (int, error) {
+		cancel()
+		return 1, nil
+	}
+
+	_, err := client.RestartServiceRuntimeNostr(ctx, "svc-1", "env-1", nil)
+	var reqErr *ControlPlaneRequestError
+	if !errors.As(err, &reqErr) {
+		t.Fatalf("error = %T %v, want ControlPlaneRequestError", err, err)
+	}
+	if !reqErr.RequestAccepted || reqErr.PublishedRelays != 1 {
+		t.Fatalf("RequestAccepted=%v PublishedRelays=%d, want accepted abort", reqErr.RequestAccepted, reqErr.PublishedRelays)
+	}
+	if !errors.Is(reqErr, context.Canceled) {
+		t.Fatalf("error = %v, want context.Canceled cause", reqErr)
+	}
+}
+
+func TestOperatorReplySubscriptionClosedAfterPublishIsPostAcceptanceFailure(t *testing.T) {
+	requestKey := nostr.GeneratePrivateKey()
+	transport := newFakeOperatorTransport()
+	client := newTestOperatorClient(t, requestKey, transport)
+	transport.publishFn = func(ctx context.Context, ev nostr.Event) (int, error) {
+		close(transport.events)
+		return 1, nil
+	}
+
+	_, err := client.RestartServiceRuntimeNostr(context.Background(), "svc-1", "env-1", nil)
+	var reqErr *ControlPlaneRequestError
+	if !errors.As(err, &reqErr) {
+		t.Fatalf("error = %T %v, want ControlPlaneRequestError", err, err)
+	}
+	if !reqErr.RequestAccepted || reqErr.PublishedRelays != 1 {
+		t.Fatalf("RequestAccepted=%v PublishedRelays=%d, want accepted post-publish failure", reqErr.RequestAccepted, reqErr.PublishedRelays)
+	}
+	if !strings.Contains(reqErr.Error(), "reply subscription closed before terminal result") {
+		t.Fatalf("error = %v, want explicit subscription closure", reqErr)
+	}
+}
+
 func TestOperatorPublishNoRelayAcceptedIsPreAcceptanceFailure(t *testing.T) {
 	requestKey := nostr.GeneratePrivateKey()
 	transport := newFakeOperatorTransport()

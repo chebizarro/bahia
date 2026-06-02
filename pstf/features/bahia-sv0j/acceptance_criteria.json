@@ -1,0 +1,30 @@
+{
+  "feature_id": "bahia-sv0j",
+  "status": "ready",
+  "criteria": [
+    {
+      "ac_id": "SV0J-AC-001",
+      "title": "Org transport class is explicit",
+      "type": "contract",
+      "priority": "must",
+      "assertion": "PSTF and user docs classify org browser operations as nostr_request_result_facade rather than nostr_native public read models.",
+      "testable_by": ["static_unit"]
+    },
+    {
+      "ac_id": "SV0J-AC-002",
+      "title": "Encrypted request ingress validates NIP-01 trust boundary",
+      "type": "protocol",
+      "priority": "must",
+      "assertion": "Encrypted request transport rejects invalid inbound events before handler dispatch.",
+      "testable_by": ["go_unit"]
+    },
+    {
+      "ac_id": "SV0J-AC-003",
+      "title": "Org domain facade remains encrypted and scoped",
+      "type": "privacy",
+      "priority": "must",
+      "assertion": "Org CRUD/membership/invite handlers operate through encrypted 5980/7980 request/result operations with org domain scoping and repository-backed state.",
+      "testable_by": ["go_unit", "static_unit"]
+    }
+  ]
+}

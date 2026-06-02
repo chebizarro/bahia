@@ -1,0 +1,28 @@
+{
+  "feature_id": "bahia-sv0j",
+  "title": "Organization encrypted request/result CRUD facade semantics",
+  "status": "verified",
+  "bead_id": "bahia-sv0j",
+  "date": "2026-06-02",
+  "transport_class": "nostr_request_result_facade",
+  "intent": "Make organization browser operations explicitly use encrypted Nostr request/result facade semantics without implying public Nostr-native org read models.",
+  "observed_behavior": [
+    "web/src/lib/stores/orgs.svelte.js sends encrypted operation strings such as orgs.list, orgs.create, and orgs.delete through requestEncryptedResult().",
+    "internal/controlplane/encrypted_domain_handlers.go applies repository-backed organization CRUD, membership, invite, and RBAC operations after decrypting kind 5980 requests.",
+    "Organization state is not projected as public durable org read-model events."
+  ],
+  "intended_behavior": [
+    "Organization UI and docs classify org operations as encrypted 5980/7980 request/result facade semantics.",
+    "Inbound encrypted requests validate NIP-01 event integrity before handler dispatch.",
+    "Relay OK/AUTH/CLOSED/timeout and encrypted terminal results follow the shared bahia-qtoq lifecycle contract.",
+    "Docs do not imply stronger nostr_native org read-model semantics than implemented."
+  ],
+  "scope": [
+    "web/src/lib/stores/orgs.svelte.js",
+    "internal/controlplane/encrypted_transport.go",
+    "internal/controlplane/encrypted_domain_handlers.go",
+    "docs/control-planes.md",
+    "docs/user-guide/features/organizations.md",
+    "pstf/features/BAHIA_NOSTR_AUDIT_PARITY/route_transport_matrix.json"
+  ]
+}

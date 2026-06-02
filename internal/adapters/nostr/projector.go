@@ -1988,9 +1988,9 @@ func discoveryRegistries(cfg *config.Config) []map[string]any {
 }
 
 func discoveryControlPlane(llmEnabled, mcpTransportEnabled, dnsEnabled bool) map[string]any {
-	requestKinds := map[string]int{"deploy_request": 5961, "rollback_request": 5962, "service_action": 5963, "service_create": 5964, "environment_create": 5965, "deployment_approval": 5966, "observation_submit": 5967, "drift_remediate": 5968}
-	statusKinds := map[string]int{"deployment_status": 6961, "service_status": 6962}
-	resultKinds := map[string]int{"deployment_result": 7961, "action_result": 7962, "service_create_result": 7963, "environment_create_result": 7964, "observation_result": 7965, "remediation_result": 7966}
+	requestKinds := map[string]int{"deploy_request": KindControlPlaneDeployRequest, "rollback_request": KindControlPlaneRollbackRequest, "service_action": KindControlPlaneServiceAction, "service_create": KindControlPlaneServiceCreate, "environment_create": KindControlPlaneEnvironmentCreate, "deployment_approval": KindControlPlaneDeploymentApproval, "observation_submit": KindControlPlaneObservationSubmit, "drift_remediate": KindControlPlaneDriftRemediate}
+	statusKinds := map[string]int{"deployment_status": KindControlPlaneDeploymentStatus, "service_status": KindControlPlaneServiceStatus}
+	resultKinds := map[string]int{"deployment_result": KindControlPlaneDeploymentResult, "action_result": KindControlPlaneActionResult, "service_create_result": KindControlPlaneServiceCreateResult, "environment_create_result": KindControlPlaneEnvironmentCreateResult, "observation_result": KindControlPlaneObservationResult, "remediation_result": KindControlPlaneRemediationResult}
 	readModelKinds := map[string]int{"service_state": KindServiceState, "service_registry": KindServiceRegistry, "environment_registry": KindEnvironmentRegistry, "worker_state": KindWorkerState, "worker_assignment_state": KindWorkerAssignmentState, "worker_drain_status": KindWorkerDrainStatus, "worker_eligibility_preview": KindWorkerEligibilityPreview}
 	legacyReadModelKinds := map[string][]int{
 		"worker_state":               {KindLegacyWorkerState},
@@ -2001,26 +2001,26 @@ func discoveryControlPlane(llmEnabled, mcpTransportEnabled, dnsEnabled bool) map
 	capabilities := []string{"service_deployments", "service_registry_read_models", "worker_management", "worker_read_models", "relay_read_models"}
 	correlationTags := []string{"service", "environment", "artifact", "intent", "run", "worker", "command", "e", "p", "status", "step"}
 	mcpFields := []string{"request_event_id", "request_kind", "status_kind", "result_kind", "registry_kind", "state_kind", "service_id", "environment_id", "intent_id", "run_id", "worker_pubkey", "d_tag", "read_model_kinds"}
-	requestKinds["worker_cordon_request"] = 5997
-	requestKinds["worker_uncordon_request"] = 5998
-	requestKinds["worker_drain_request"] = 5999
-	requestKinds["worker_undrain_request"] = 6000
-	requestKinds["worker_maintenance_enter_request"] = 6001
-	requestKinds["worker_maintenance_exit_request"] = 6002
-	requestKinds["worker_labels_update_request"] = 6003
-	statusKinds["worker_status"] = 6997
-	resultKinds["worker_result"] = 7997
+	requestKinds["worker_cordon_request"] = KindControlPlaneWorkerCordonRequest
+	requestKinds["worker_uncordon_request"] = KindControlPlaneWorkerUncordonRequest
+	requestKinds["worker_drain_request"] = KindControlPlaneWorkerDrainRequest
+	requestKinds["worker_undrain_request"] = KindControlPlaneWorkerUndrainRequest
+	requestKinds["worker_maintenance_enter_request"] = KindControlPlaneWorkerMaintenanceEnter
+	requestKinds["worker_maintenance_exit_request"] = KindControlPlaneWorkerMaintenanceExit
+	requestKinds["worker_labels_update_request"] = KindControlPlaneWorkerLabelsUpdate
+	statusKinds["worker_status"] = KindControlPlaneWorkerStatus
+	resultKinds["worker_result"] = KindControlPlaneWorkerResult
 	if llmEnabled {
 		capabilities = append(capabilities, "llm_routes", "llm_deployments", "llm_rollback")
-		requestKinds["llm_route_create"] = 5971
-		requestKinds["llm_release_register"] = 5972
-		requestKinds["llm_deploy_request"] = 5973
-		requestKinds["llm_deployment_approval"] = 5974
-		requestKinds["llm_rollback_request"] = 5975
-		statusKinds["llm_deployment_status"] = 6973
-		resultKinds["llm_route_create_result"] = 7971
-		resultKinds["llm_release_register_result"] = 7972
-		resultKinds["llm_deployment_result"] = 7973
+		requestKinds["llm_route_create"] = KindControlPlaneLLMRouteCreate
+		requestKinds["llm_release_register"] = KindControlPlaneLLMReleaseRegister
+		requestKinds["llm_deploy_request"] = KindControlPlaneLLMDeployRequest
+		requestKinds["llm_deployment_approval"] = KindControlPlaneLLMDeploymentApproval
+		requestKinds["llm_rollback_request"] = KindControlPlaneLLMRollbackRequest
+		statusKinds["llm_deployment_status"] = KindControlPlaneLLMDeploymentStatus
+		resultKinds["llm_route_create_result"] = KindControlPlaneLLMRouteCreateResult
+		resultKinds["llm_release_register_result"] = KindControlPlaneLLMReleaseRegisterResult
+		resultKinds["llm_deployment_result"] = KindControlPlaneLLMDeploymentResult
 		readModelKinds["llm_route_registry"] = KindLLMRouteRegistry
 		readModelKinds["llm_route_state"] = KindLLMRouteState
 		correlationTags = append(correlationTags, "route", "release")

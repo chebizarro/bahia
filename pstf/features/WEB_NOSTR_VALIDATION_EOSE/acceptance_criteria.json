@@ -1,6 +1,6 @@
 {
   "feature_id": "WEB_NOSTR_VALIDATION_EOSE",
-  "beads": ["bahia-0zzk", "bahia-f1mu", "bahia-o93z:web", "bahia-il2j:web"],
+  "beads": ["bahia-0zzk", "bahia-f1mu", "bahia-o93z:web", "bahia-il2j:web", "bahia-zui7"],
   "criteria": [
     {
       "id": "AC1",
@@ -25,7 +25,12 @@
     {
       "id": "AC4",
       "statement": "Branch and control-plane callers surface incomplete history/relay closure explicitly instead of treating it as empty success.",
-      "tests": ["web/tests/unit/test-utils-and-fixtures.test.js: returns an explicit degraded error when branch history is incomplete before EOSE", "web/tests/unit/controlplane-requests.test.js: awaitResult reports auth-related subscription closures distinctly", "web/tests/unit/controlplane-requests.test.js: awaitResult aggregates relay close reasons when all result subscriptions close incomplete"]
+      "tests": ["web/tests/unit/test-utils-and-fixtures.test.js: returns degraded metadata with partial repo state when branch history is incomplete before EOSE", "web/tests/unit/test-utils-and-fixtures.test.js: returns degraded metadata for incomplete branch history with no partial events", "web/tests/unit/controlplane-requests.test.js: awaitResult reports auth-related subscription closures distinctly", "web/tests/unit/controlplane-requests.test.js: awaitResult aggregates relay close reasons when all result subscriptions close incomplete"]
+    },
+    {
+      "id": "AC6",
+      "statement": "Partial/degraded historical reads return explicit result metadata so empty or partial data cannot be mistaken for complete EOSE history.",
+      "tests": ["web/tests/unit/nostr-client-parsing.test.js: queryOrPartial returns explicit degraded metadata for aborted incomplete history", "web/tests/unit/nostr-client-parsing.test.js: fetchRuntimeCapabilities returns partial capabilities with degraded EOSE metadata when CLOSED incomplete", "web/tests/unit/nostr-client-parsing.test.js: fetchRuntimeCapabilities returns empty capabilities with degraded EOSE metadata when timeout has no partial events", "web/tests/unit/repositories-store.test.js: records degraded EOSE metadata for partial repository read models", "web/tests/unit/souls-store.test.js: loadSouls records degraded EOSE metadata from partial read models"]
     }
   ]
 }

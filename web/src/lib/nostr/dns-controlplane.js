@@ -1,5 +1,5 @@
 import { KINDS, getTagValue, parseJsonContent } from './client.js';
-import { awaitResult, publishRequest, subscribeStatus } from './controlplane-requests.js';
+import { awaitResult, buildRequestEvent, publishSignedRequest, subscribeStatus } from './controlplane-requests.js';
 
 export const DNS_COMMANDS = {
   ZONE_CREATE: 'zone_create',
@@ -123,8 +123,8 @@ export function dnsResultIsFailure(result) {
 
 export async function startDNSCommand({ command, payload = {}, tags = [], signal, onStatus, onClosed, servicePubkey } = {}) {
   const request = buildDNSCommandRequest({ command, payload, tags });
-  const published = await publishRequest(request);
-  const requestEventId = published.requestEventId;
+  const event = await buildRequestEvent(request);
+  const requestEventId = event.id;
   const resultKind = DNS_RESULT_KINDS[command];
 
   let unsubscribeStatus = subscribeStatus({
@@ -139,15 +139,33 @@ export async function startDNSCommand({ command, payload = {}, tags = [], signal
     }
   });
 
+  const abortController = typeof AbortController !== 'undefined' ? new AbortController() : null;
+  const waitSignal = abortController?.signal || signal;
+  const forwardAbort = () => abortController?.abort(signal?.reason);
+  signal?.addEventListener?.('abort', forwardAbort, { once: true });
+
   const result = awaitResult({
     requestEventId,
     resultKinds: [resultKind],
-    signal,
+    signal: waitSignal,
     servicePubkey
   }).then((event) => parseDNSOperationEvent(event)).finally(() => {
     if (unsubscribeStatus) unsubscribeStatus();
     unsubscribeStatus = null;
+    signal?.removeEventListener?.('abort', forwardAbort);
   });
+
+  let published;
+  try {
+    published = await publishSignedRequest(event);
+  } catch (error) {
+    if (!signal?.aborted) {
+      abortController?.abort(new Error(`Nostr DNS request failed before terminal result: ${error.message}`));
+    }
+    await result.catch(() => null);
+    signal?.throwIfAborted?.();
+    throw error;
+  }
 
   return {
     command,
@@ -162,6 +180,7 @@ export async function startDNSCommand({ command, payload = {}, tags = [], signal
     unsubscribeStatus: () => {
       if (unsubscribeStatus) unsubscribeStatus();
       unsubscribeStatus = null;
+      abortController?.abort(new Error('Nostr DNS status/result tracking aborted by caller'));
     }
   };
 }

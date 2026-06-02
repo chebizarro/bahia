@@ -10,117 +10,112 @@ import (
 	"github.com/nbd-wtf/go-nostr"
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/events"
+	"github.com/openagentsinc/bahia/internal/kinds"
 	"github.com/openagentsinc/bahia/internal/repository"
 	"go.uber.org/zap"
 )
 
 // Nostr event kinds for Bahia outbound audit events.
 const (
-	KindBuildRegistered           = 31000
-	KindArtifactRegistered        = 31001
-	KindDeploymentCreated         = 31002
-	KindDeploymentComplete        = 31003
-	KindDriftDetected             = 31004
-	KindObservation               = 31005
-	KindServiceRegistryAudit      = 31006
-	KindEnvironmentRegistryAudit  = 31007
-	KindStateChangedAudit         = 31008
-	KindRuntimeActionAudit        = 31009
-	KindReconcileAudit            = 31010
-	KindAdoptionAudit             = 31011
-	KindDeploymentApprovalAudit   = 31012
-	KindDeploymentRunAudit        = 31013
-	KindLLMRouteRegistryAudit     = 31014
-	KindLLMReleaseRegisteredAudit = 31015
-	KindLLMDeploymentAudit        = 31016
-	KindLLMRunAudit               = 31017
-	KindLLMRouteStateAudit        = 31018
-	KindLLMGatewayAudit           = 31019
+	KindBuildRegistered           = kinds.BuildRegistered
+	KindArtifactRegistered        = kinds.ArtifactRegistered
+	KindDeploymentCreated         = kinds.DeploymentCreated
+	KindDeploymentComplete        = kinds.DeploymentComplete
+	KindDriftDetected             = kinds.DriftDetected
+	KindObservation               = kinds.Observation
+	KindServiceRegistryAudit      = kinds.ServiceRegistryAudit
+	KindEnvironmentRegistryAudit  = kinds.EnvironmentRegistryAudit
+	KindStateChangedAudit         = kinds.StateChangedAudit
+	KindRuntimeActionAudit        = kinds.RuntimeActionAudit
+	KindReconcileAudit            = kinds.ReconcileAudit
+	KindAdoptionAudit             = kinds.AdoptionAudit
+	KindDeploymentApprovalAudit   = kinds.DeploymentApprovalAudit
+	KindDeploymentRunAudit        = kinds.DeploymentRunAudit
+	KindLLMRouteRegistryAudit     = kinds.LLMRouteRegistryAudit
+	KindLLMReleaseRegisteredAudit = kinds.LLMReleaseRegisteredAudit
+	KindLLMDeploymentAudit        = kinds.LLMDeploymentAudit
+	KindLLMRunAudit               = kinds.LLMRunAudit
+	KindLLMRouteStateAudit        = kinds.LLMRouteStateAudit
+	KindLLMGatewayAudit           = kinds.LLMGatewayAudit
 
-	// DNS audit event kinds are reserved for future DNS audit events.
-	KindDNSZoneSyncedAudit           = 31020
-	KindDNSRecordChangedAudit        = 31021
-	KindDNSDriftDetectedAudit        = 31022
-	KindDNSEndpointRegisteredAudit   = 31023
-	KindDNSEndpointDeregisteredAudit = 31024
+	KindDNSZoneSyncedAudit           = kinds.DNSZoneSyncedAudit
+	KindDNSRecordChangedAudit        = kinds.DNSRecordChangedAudit
+	KindDNSDriftDetectedAudit        = kinds.DNSDriftDetectedAudit
+	KindDNSEndpointRegisteredAudit   = kinds.DNSEndpointRegisteredAudit
+	KindDNSEndpointDeregisteredAudit = kinds.DNSEndpointDeregisteredAudit
 )
 
-// Canonical replaceable read-model kinds. Keep these values aligned
-// with internal/controlplane/reactor.go without importing that package (the
-// reactor already imports this adapter package for RelayPool).
+// Canonical replaceable read-model kinds are aliases to internal/kinds.
 const (
-	KindServiceState              = 31961
-	KindServiceRegistry           = 31962
-	KindEnvironmentRegistry       = 31963
-	KindLLMRouteRegistry          = 31964
-	KindLLMRouteState             = 31965
-	KindArtifactRegistry          = 31966
-	KindDeploymentIntentRegistry  = 31967
-	KindDeploymentRunRegistry     = 31968
-	KindBuildRegistry             = 31969
-	KindPolicyRegistry            = 31970
-	KindPackageRepositoryRegistry = 31971
-	KindPackageArtifactRegistry   = 31972
-	KindPackagePromotionRegistry  = 31973
-	KindSystemDiscovery           = 31974
+	KindServiceState              = kinds.ServiceState
+	KindServiceRegistry           = kinds.ServiceRegistry
+	KindEnvironmentRegistry       = kinds.EnvironmentRegistry
+	KindLLMRouteRegistry          = kinds.LLMRouteRegistry
+	KindLLMRouteState             = kinds.LLMRouteState
+	KindArtifactRegistry          = kinds.ArtifactRegistry
+	KindDeploymentIntentRegistry  = kinds.DeploymentIntentRegistry
+	KindDeploymentRunRegistry     = kinds.DeploymentRunRegistry
+	KindBuildRegistry             = kinds.BuildRegistry
+	KindPolicyRegistry            = kinds.PolicyRegistry
+	KindPackageRepositoryRegistry = kinds.PackageRepositoryRegistry
+	KindPackageArtifactRegistry   = kinds.PackageArtifactRegistry
+	KindPackagePromotionRegistry  = kinds.PackagePromotionRegistry
+	KindSystemDiscovery           = kinds.SystemDiscovery
 
-	KindDNSZoneState     = 31975
-	KindDNSEndpointState = 31976
-	KindDNSPolicyState   = 31977
-	KindDNSBackendState  = 31978
+	KindDNSZoneState     = kinds.DNSZoneState
+	KindDNSEndpointState = kinds.DNSEndpointState
+	KindDNSPolicyState   = kinds.DNSPolicyState
+	KindDNSBackendState  = kinds.DNSBackendState
 
-	KindMLModelRegistry             = 31980
-	KindMLModelVersionRegistry      = 31981
-	KindMLDatasetRegistry           = 31982
-	KindMLRecipeRegistry            = 31983
-	KindMLRecipeRunState            = 31984
-	KindMLInferenceEndpointRegistry = 31985
-	KindMLInferenceEndpointState    = 31986
-	KindMLEvaluationExperimentState = 31987
-	KindMLArtifactProvenanceGraph   = 31988
-	KindMLRuntimeCapabilityProfile  = 31989
+	KindMLModelRegistry             = kinds.MLModelRegistry
+	KindMLModelVersionRegistry      = kinds.MLModelVersionRegistry
+	KindMLDatasetRegistry           = kinds.MLDatasetRegistry
+	KindMLRecipeRegistry            = kinds.MLRecipeRegistry
+	KindMLRecipeRunState            = kinds.MLRecipeRunState
+	KindMLInferenceEndpointRegistry = kinds.MLInferenceEndpointRegistry
+	KindMLInferenceEndpointState    = kinds.MLInferenceEndpointState
+	KindMLEvaluationExperimentState = kinds.MLEvaluationExperimentState
+	KindMLArtifactProvenanceGraph   = kinds.MLArtifactProvenanceGraph
+	KindMLRuntimeCapabilityProfile  = kinds.MLRuntimeCapabilityProfile
 
-	KindWorkerState              = 32000
-	KindWorkerAssignmentState    = 32001
-	KindWorkerDrainStatus        = 32002
-	KindWorkerEligibilityPreview = 32003
+	KindWorkerState              = kinds.WorkerState
+	KindWorkerAssignmentState    = kinds.WorkerAssignmentState
+	KindWorkerDrainStatus        = kinds.WorkerDrainStatus
+	KindWorkerEligibilityPreview = kinds.WorkerEligibilityPreview
 )
 
-// Continuity fabric event kinds. Definition and runtime observation kinds are
-// parameterized replaceable Nostr kinds; command kinds are idempotency-keyed
-// request events consumed by the control-plane reactor.
+// Continuity fabric event kinds are aliases to internal/kinds.
 const (
-	KindContinuityProfile      = 31400
-	KindFailoverPolicy         = 31401
-	KindStandbyNodeDefinition  = 31402
-	KindReplicationPolicy      = 31403
-	KindRecoveryWorkflow       = 31404
-	KindHeartbeatObservation   = 30350
-	KindContinuityStatus       = 30351
-	KindDegradedModeActivation = 30352
-	KindRecoveryProgress       = 30353
-	KindFailoverRequest        = 38430
-	KindRecoveryRequest        = 38431
+	KindContinuityProfile      = kinds.ContinuityProfile
+	KindFailoverPolicy         = kinds.FailoverPolicy
+	KindStandbyNodeDefinition  = kinds.StandbyNodeDefinition
+	KindReplicationPolicy      = kinds.ReplicationPolicy
+	KindRecoveryWorkflow       = kinds.RecoveryWorkflow
+	KindHeartbeatObservation   = kinds.HeartbeatObservation
+	KindContinuityStatus       = kinds.ContinuityStatus
+	KindDegradedModeActivation = kinds.DegradedModeActivation
+	KindRecoveryProgress       = kinds.RecoveryProgress
+	KindFailoverRequest        = kinds.FailoverRequest
+	KindRecoveryRequest        = kinds.RecoveryRequest
 )
 
 // Legacy worker read-model kinds accepted during the mixed-version release
 // window. New publisher/projector paths must use the canonical KindWorker*
 // constants above.
 const (
-	KindLegacyWorkerState              = 31974
-	KindLegacyWorkerAssignmentState    = 31991
-	KindLegacyWorkerDrainStatus        = 31992
-	KindLegacyWorkerEligibilityPreview = 31993
+	KindLegacyWorkerState              = kinds.LegacyWorkerState
+	KindLegacyWorkerAssignmentState    = kinds.LegacyWorkerAssignmentState
+	KindLegacyWorkerDrainStatus        = kinds.LegacyWorkerDrainStatus
+	KindLegacyWorkerEligibilityPreview = kinds.LegacyWorkerEligibilityPreview
 )
 
-// Operator assistant event kinds. Keep these values aligned with
-// internal/domain/assistant.go without importing that package.
+// Operator assistant event kinds are aliases to internal/kinds.
 const (
-	KindAssistantSession       = 31990
-	KindAssistantPromptRequest = 38420
-	KindAssistantApproval      = 38421
-	KindAssistantStatus        = 38422
-	KindAssistantResult        = 38423
+	KindAssistantSession       = kinds.AssistantSession
+	KindAssistantPromptRequest = kinds.AssistantPromptRequest
+	KindAssistantApproval      = kinds.AssistantApproval
+	KindAssistantStatus        = kinds.AssistantStatus
+	KindAssistantResult        = kinds.AssistantResult
 )
 
 // Nostr event kinds for Bahia inbound command events (311xx series).
@@ -133,12 +128,12 @@ const (
 //
 // See docs/nostr-commands.md for tag structure and content format.
 const (
-	KindCmdBuildRegister    = 31100 // Deprecated: use reactor API
-	KindCmdArtifactRegister = 31101 // Deprecated: use reactor API
-	KindCmdIntentCreate     = 31102 // Deprecated: use KindDeployRequest (5961)
-	KindCmdIntentApprove    = 31103 // Deprecated: use KindDeploymentApproval (5966)
-	KindCmdIntentReject     = 31104 // Deprecated: use KindDeploymentApproval (5966)
-	KindCmdRollbackRequest  = 31105 // Deprecated: use KindRollbackRequest (5962)
+	KindCmdBuildRegister    = kinds.CmdBuildRegister    // Deprecated: use reactor API
+	KindCmdArtifactRegister = kinds.CmdArtifactRegister // Deprecated: use reactor API
+	KindCmdIntentCreate     = kinds.CmdIntentCreate     // Deprecated: use KindDeployRequest (5961)
+	KindCmdIntentApprove    = kinds.CmdIntentApprove    // Deprecated: use KindDeploymentApproval (5966)
+	KindCmdIntentReject     = kinds.CmdIntentReject     // Deprecated: use KindDeploymentApproval (5966)
+	KindCmdRollbackRequest  = kinds.CmdRollbackRequest  // Deprecated: use KindRollbackRequest (5962)
 )
 
 // Publisher bridges internal events to Nostr relay publication.

@@ -16,12 +16,11 @@ import (
 	"go.uber.org/zap"
 )
 
-// Loom protocol kind constants (duplicated here to avoid import cycle with
-// the loom package, which imports the nostr package for RelayPool).
+// Loom protocol kind constants are package-local aliases to the canonical catalog.
 const (
-	kindLoomWorkerAd  = 10100
-	kindLoomJobStatus = 30100
-	kindLoomJobResult = 5101
+	kindLoomWorkerAd  = KindLoomWorkerAdvertisement
+	kindLoomJobStatus = KindLoomJobStatusUpdate
+	kindLoomJobResult = KindLoomJobResult
 )
 
 // Processor maps ingested Nostr events to domain commands.

@@ -36,33 +36,33 @@ const (
 // =============================================================================
 
 const (
-	DeployRequest            = 5961
-	RollbackRequest          = 5962
-	ServiceAction            = 5963
-	ServiceCreate            = 5964
-	EnvironmentCreate        = 5965
-	DeploymentApproval       = 5966
-	ObservationSubmit        = 5967
-	DriftRemediate           = 5968
-	LLMRouteCreate           = 5971
-	LLMReleaseRegister       = 5972
-	LLMDeployRequest         = 5973
-	LLMDeploymentApproval    = 5974
-	LLMRollbackRequest       = 5975
-	ToolProvisionRequest     = 5976
-	ToolApprovalRequest      = 5977
-	AdoptionScanRequest      = 5978
-	AdoptionImportRequest    = 5979
-	EncryptedRequest         = 5980 // Browser → Bahia encrypted request
-	ServiceUpdate            = 5981
-	ServiceDelete            = 5982
-	EnvironmentUpdate        = 5983
-	EnvironmentDelete        = 5984
-	ArtifactRegister         = 5985
-	PolicyCreate             = 5986
-	PolicyUpdate             = 5987
-	PolicyDelete             = 5988
-	PolicyEvaluate           = 5989
+	DeployRequest         = 5961
+	RollbackRequest       = 5962
+	ServiceAction         = 5963
+	ServiceCreate         = 5964
+	EnvironmentCreate     = 5965
+	DeploymentApproval    = 5966
+	ObservationSubmit     = 5967
+	DriftRemediate        = 5968
+	LLMRouteCreate        = 5971
+	LLMReleaseRegister    = 5972
+	LLMDeployRequest      = 5973
+	LLMDeploymentApproval = 5974
+	LLMRollbackRequest    = 5975
+	ToolProvisionRequest  = 5976
+	ToolApprovalRequest   = 5977
+	AdoptionScanRequest   = 5978
+	AdoptionImportRequest = 5979
+	EncryptedRequest      = 5980 // Browser → Bahia encrypted request
+	ServiceUpdate         = 5981
+	ServiceDelete         = 5982
+	EnvironmentUpdate     = 5983
+	EnvironmentDelete     = 5984
+	ArtifactRegister      = 5985
+	PolicyCreate          = 5986
+	PolicyUpdate          = 5987
+	PolicyDelete          = 5988
+	PolicyEvaluate        = 5989
 )
 
 // =============================================================================
@@ -70,12 +70,12 @@ const (
 // =============================================================================
 
 const (
-	PackageRepositoryApply   = 5991
-	PackageRepositoryDelete  = 5992
-	PackagePublishIntent     = 5993
-	PackagePromotionRequest  = 5994
-	PackageYankRequest       = 5995
-	PackageDriftDetect       = 5996
+	PackageRepositoryApply  = 5991
+	PackageRepositoryDelete = 5992
+	PackagePublishIntent    = 5993
+	PackagePromotionRequest = 5994
+	PackageYankRequest      = 5995
+	PackageDriftDetect      = 5996
 )
 
 // =============================================================================
@@ -100,18 +100,18 @@ const (
 // =============================================================================
 
 const (
-	DeploymentStatus    = 6961
-	ServiceStatus       = 6962
-	ActionStatus        = 6963
-	LLMDeploymentStatus = 6973
-	ToolProvisionStatus = 6976
-	AdoptionStatus      = 6978
+	DeploymentStatus         = 6961
+	ServiceStatus            = 6962
+	ActionStatus             = 6963
+	LLMDeploymentStatus      = 6973
+	ToolProvisionStatus      = 6976
+	AdoptionStatus           = 6978
 	BackupRunStatus          = 6981
 	BackupRestoreStatus      = 6982
 	BackupVerificationStatus = 6983
 	BackupObservation        = 6984
-	PackageStatus       = 6991
-	WorkerStatus        = 6997
+	PackageStatus            = 6991
+	WorkerStatus             = 6997
 )
 
 // =============================================================================
@@ -157,8 +157,8 @@ const (
 // =============================================================================
 
 const (
-	NIP65RelayList        = 10002
-	RelaySetDiscovery     = 30002
+	NIP65RelayList    = 10002
+	RelaySetDiscovery = 30002
 )
 
 // =============================================================================
@@ -205,26 +205,26 @@ const (
 // =============================================================================
 
 const (
-	BuildRegistered           = 31000
-	ArtifactRegistered        = 31001
-	DeploymentCreated         = 31002
-	DeploymentComplete        = 31003
-	DriftDetected             = 31004
-	Observation               = 31005
-	ServiceRegistryAudit      = 31006
-	EnvironmentRegistryAudit  = 31007
-	StateChangedAudit         = 31008
-	RuntimeActionAudit        = 31009
-	ReconcileAudit            = 31010
-	AdoptionAudit             = 31011
-	DeploymentApprovalAudit   = 31012
-	DeploymentRunAudit        = 31013
-	LLMRouteRegistryAudit     = 31014
-	LLMReleaseRegisteredAudit = 31015
-	LLMDeploymentAudit        = 31016
-	LLMRunAudit               = 31017
-	LLMRouteStateAudit        = 31018
-	LLMGatewayAudit           = 31019
+	BuildRegistered              = 31000
+	ArtifactRegistered           = 31001
+	DeploymentCreated            = 31002
+	DeploymentComplete           = 31003
+	DriftDetected                = 31004
+	Observation                  = 31005
+	ServiceRegistryAudit         = 31006
+	EnvironmentRegistryAudit     = 31007
+	StateChangedAudit            = 31008
+	RuntimeActionAudit           = 31009
+	ReconcileAudit               = 31010
+	AdoptionAudit                = 31011
+	DeploymentApprovalAudit      = 31012
+	DeploymentRunAudit           = 31013
+	LLMRouteRegistryAudit        = 31014
+	LLMReleaseRegisteredAudit    = 31015
+	LLMDeploymentAudit           = 31016
+	LLMRunAudit                  = 31017
+	LLMRouteStateAudit           = 31018
+	LLMGatewayAudit              = 31019
 	DNSZoneSyncedAudit           = 31020
 	DNSRecordChangedAudit        = 31021
 	DNSDriftDetectedAudit        = 31022
@@ -234,6 +234,19 @@ const (
 	// Audit kind range bounds
 	AuditMin = 31000
 	AuditMax = 31099
+)
+
+// =============================================================================
+// Deprecated Legacy Command Kinds (31100-31105)
+// =============================================================================
+
+const (
+	CmdBuildRegister    = 31100
+	CmdArtifactRegister = 31101
+	CmdIntentCreate     = 31102
+	CmdIntentApprove    = 31103
+	CmdIntentReject     = 31104
+	CmdRollbackRequest  = 31105
 )
 
 // =============================================================================

@@ -31,10 +31,11 @@
   ],
   "preconditions": [
     "Phase 0 protocol contract is under review.",
-    "No code implementation is included in this artifact task."
+    "Current executable evidence is limited to local fake/no-network D4 harnesses."
   ],
   "postconditions": [
-    "Acceptance criteria are mapped to placeholder tests for future implementation verification."
+    "Acceptance criteria are mapped to D4 harness tests that classify evidence as non-production.",
+    "Production integration verification remains tracked by bahia-jicv."
   ],
   "happy_paths": [],
   "failure_paths": [],

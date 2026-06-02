@@ -1,0 +1,37 @@
+{
+  "feature_id": "bahia-sv0j",
+  "status": "verified",
+  "tests": [
+    {
+      "test_id": "SV0J-T-001",
+      "ac_ids": [
+        "SV0J-AC-001",
+        "SV0J-AC-003"
+      ],
+      "target_path": "web/tests/unit/route-transport-matrix.test.js",
+      "title": "Route matrix and docs lock org encrypted request/result facade decision",
+      "type": "static_unit",
+      "status": "pass"
+    },
+    {
+      "test_id": "SV0J-T-002",
+      "ac_ids": [
+        "SV0J-AC-002"
+      ],
+      "target_path": "internal/controlplane/encrypted_transport_test.go",
+      "title": "Encrypted request transport drops invalid timestamp before handler dispatch",
+      "type": "go_unit",
+      "status": "pass"
+    },
+    {
+      "test_id": "SV0J-T-003",
+      "ac_ids": [
+        "SV0J-AC-003"
+      ],
+      "target_path": "internal/controlplane/encrypted_domain_handlers_test.go",
+      "title": "Encrypted org handlers enforce bootstrap owner, RBAC, and encrypted detail/invite behavior",
+      "type": "go_unit",
+      "status": "pass"
+    }
+  ]
+}

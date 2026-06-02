@@ -1,19 +1,21 @@
 package controlplane
 
-// DNS control-plane kinds are reserved by Phase 0 for future DNS orchestration.
+import "github.com/openagentsinc/bahia/internal/kinds"
+
+// DNS control-plane kinds are aliases to the canonical internal/kinds catalog.
 // Phase 0 intentionally does not modify reactor.go subscriptions or handlers.
 const (
-	KindDNSZoneCreateRequest      = 5941
-	KindDNSPolicyApplyRequest     = 5942
-	KindDNSRecordOverrideRequest  = 5943
-	KindDNSDriftRemediateRequest  = 5944
-	KindDNSBackendRegisterRequest = 5945
+	KindDNSZoneCreateRequest      = kinds.DNSZoneCreateRequest
+	KindDNSPolicyApplyRequest     = kinds.DNSPolicyApplyRequest
+	KindDNSRecordOverrideRequest  = kinds.DNSRecordOverrideRequest
+	KindDNSDriftRemediateRequest  = kinds.DNSDriftRemediateRequest
+	KindDNSBackendRegisterRequest = kinds.DNSBackendRegisterRequest
 
-	KindDNSOperationStatus = 6941
+	KindDNSOperationStatus = kinds.DNSOperationStatus
 
-	KindDNSZoneCreateResult      = 7941
-	KindDNSPolicyApplyResult     = 7942
-	KindDNSRecordOverrideResult  = 7943
-	KindDNSDriftRemediateResult  = 7944
-	KindDNSBackendRegisterResult = 7945
+	KindDNSZoneCreateResult      = kinds.DNSZoneCreateResult
+	KindDNSPolicyApplyResult     = kinds.DNSPolicyApplyResult
+	KindDNSRecordOverrideResult  = kinds.DNSRecordOverrideResult
+	KindDNSDriftRemediateResult  = kinds.DNSDriftRemediateResult
+	KindDNSBackendRegisterResult = kinds.DNSBackendRegisterResult
 )

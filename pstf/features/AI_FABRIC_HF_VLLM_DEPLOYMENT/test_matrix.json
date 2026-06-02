@@ -1,20 +1,85 @@
 {
   "feature_id": "AI_FABRIC_HF_VLLM_DEPLOYMENT",
-  "status": "verified_d4_harness",
+  "status": "verified_d4_harness_non_production",
   "tests": [
-    {"id":"T-HFV-001-001","criteria_ids":["AC-HFV-001"],"type":"integration_harness","level":"service","description":"Fake Hugging Face import path pins hf://Qwen/Qwen2.5-Coder-32B-Instruct@abc123 and resolves a digest-addressed artifact without external network access.","status":"implemented","evidence":["internal/service/ml_inference_provisioning_coordinator_test.go::TestHFVLLMInferenceFabricHarnessUsesFakesForProvenancePlacementDeployAndObservation"]},
-    {"id":"T-HFV-002-001","criteria_ids":["AC-HFV-002"],"type":"integration_harness","level":"service","description":"Registers MLModel and MLModelVersion with Hugging Face source, apache-2.0 license, chat_completions task, safetensors format, vLLM runtime, and GPU requirements.","status":"implemented","evidence":["internal/service/ml_inference_provisioning_coordinator_test.go::TestHFVLLMInferenceFabricHarnessUsesFakesForProvenancePlacementDeployAndObservation"]},
-    {"id":"T-HFV-003-001","criteria_ids":["AC-HFV-003"],"type":"integration_harness","level":"service","description":"Resolves fake HF artifact hashes, records an OCI mirror, validates matching provenance, and records worker-verified digest evidence.","status":"implemented","evidence":["internal/service/ml_inference_provisioning_coordinator_test.go::TestHFVLLMInferenceFabricHarnessUsesFakesForProvenancePlacementDeployAndObservation"]},
-    {"id":"T-HFV-004-001","criteria_ids":["AC-HFV-004"],"type":"integration_harness","level":"service","description":"Placement selects the fake worker advertising vLLM, safetensors, chat_completions, gpu_nvidia_cuda, and 48GB VRAM.","status":"implemented","evidence":["internal/service/ml_inference_provisioning_coordinator_test.go::TestHFVLLMInferenceFabricHarnessUsesFakesForProvenancePlacementDeployAndObservation"]},
-    {"id":"T-HFV-005-001","criteria_ids":["AC-HFV-005"],"type":"integration_harness_and_ui_smoke","level":"service+ui","description":"Fake vLLM provisioning succeeds, gateway syncs OpenAI-compatible endpoint, Nostr lifecycle status/result hooks fire, 31986-ready state is observed, and /ml renders the read-model path.","status":"implemented","evidence":["internal/service/ml_inference_provisioning_coordinator_test.go::TestHFVLLMInferenceFabricHarnessUsesFakesForProvenancePlacementDeployAndObservation","web/tests/e2e/ml-hf-vllm-fabric-smoke.spec.js"]}
+    {
+      "id": "T-HFV-001-001",
+      "criteria_ids": [
+        "AC-HFV-001"
+      ],
+      "type": "integration_harness",
+      "level": "service",
+      "description": "Fake Hugging Face import path pins hf://Qwen/Qwen2.5-Coder-32B-Instruct@abc123 and resolves a digest-addressed artifact without external network access.",
+      "status": "implemented",
+      "evidence": [
+        "internal/service/ml_inference_provisioning_coordinator_test.go::TestHFVLLMInferenceFabricHarnessUsesFakesForProvenancePlacementDeployAndObservation"
+      ]
+    },
+    {
+      "id": "T-HFV-002-001",
+      "criteria_ids": [
+        "AC-HFV-002"
+      ],
+      "type": "integration_harness",
+      "level": "service",
+      "description": "Registers MLModel and MLModelVersion with Hugging Face source, apache-2.0 license, chat_completions task, safetensors format, vLLM runtime, and GPU requirements.",
+      "status": "implemented",
+      "evidence": [
+        "internal/service/ml_inference_provisioning_coordinator_test.go::TestHFVLLMInferenceFabricHarnessUsesFakesForProvenancePlacementDeployAndObservation"
+      ]
+    },
+    {
+      "id": "T-HFV-003-001",
+      "criteria_ids": [
+        "AC-HFV-003"
+      ],
+      "type": "integration_harness",
+      "level": "service",
+      "description": "Resolves fake HF artifact hashes, records an OCI mirror, validates matching provenance, and records worker-verified digest evidence.",
+      "status": "implemented",
+      "evidence": [
+        "internal/service/ml_inference_provisioning_coordinator_test.go::TestHFVLLMInferenceFabricHarnessUsesFakesForProvenancePlacementDeployAndObservation"
+      ]
+    },
+    {
+      "id": "T-HFV-004-001",
+      "criteria_ids": [
+        "AC-HFV-004"
+      ],
+      "type": "integration_harness",
+      "level": "service",
+      "description": "Placement selects the fake worker advertising vLLM, safetensors, chat_completions, gpu_nvidia_cuda, and 48GB VRAM.",
+      "status": "implemented",
+      "evidence": [
+        "internal/service/ml_inference_provisioning_coordinator_test.go::TestHFVLLMInferenceFabricHarnessUsesFakesForProvenancePlacementDeployAndObservation"
+      ]
+    },
+    {
+      "id": "T-HFV-005-001",
+      "criteria_ids": [
+        "AC-HFV-005"
+      ],
+      "type": "integration_harness_and_ui_smoke",
+      "level": "service+ui",
+      "description": "Fake vLLM provisioning succeeds, gateway syncs OpenAI-compatible endpoint, Nostr lifecycle status/result hooks fire, 31986-ready state is observed, and /ml renders the read-model path.",
+      "status": "implemented",
+      "evidence": [
+        "internal/service/ml_inference_provisioning_coordinator_test.go::TestHFVLLMInferenceFabricHarnessUsesFakesForProvenancePlacementDeployAndObservation",
+        "web/tests/e2e/ml-hf-vllm-fabric-smoke.spec.js"
+      ]
+    }
   ],
   "coverage_summary": {
     "criteria_total": 5,
     "criteria_with_tests": 5,
     "known_gaps": [
-      "D4 verifies the acceptance path with fakes and local Nostr read-model mocks only; it intentionally does not contact real Hugging Face, vLLM, GPU, OCI, or relay services.",
+      "D4 verifies the acceptance path with fakes and local Nostr read-model mocks only; it intentionally does not contact real Hugging Face, vLLM, GPU, OCI, Blossom, gateway, or relay services.",
+      "Production integration readiness is unverified and tracked by bahia-jicv.",
       "RKNN recipe work is explicitly out of scope for bahia-66ax.4.4."
     ]
   },
-  "implementation_notes": ["D4 added a no-network Go integration harness and a Playwright /ml read-model smoke test for the HF → artifact provenance → GPU/vLLM placement/deploy → Nostr observation → UI acceptance path."]
+  "implementation_notes": [
+    "D4 added a no-network Go integration harness and a Playwright /ml read-model smoke test for the HF \u2192 artifact provenance \u2192 GPU/vLLM placement/deploy \u2192 Nostr observation \u2192 UI acceptance path.",
+    "The implemented tests are non-production harness evidence only and must not be used as live integration or relay-readiness evidence."
+  ]
 }

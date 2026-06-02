@@ -1,0 +1,34 @@
+{
+  "feature_id": "bahia-qtoq",
+  "title": "Shared public and encrypted Nostr request/result lifecycle contract",
+  "status": "verified",
+  "bead_id": "bahia-qtoq",
+  "date": "2026-06-02",
+  "intent": "Standardize Bahia public, DNS, encrypted browser, and operator Nostr command lifecycles so command completion is driven by correlated terminal result events rather than status progress, polling, or timeout-only behavior.",
+  "observed_behavior": [
+    "Public helper awaitResult already required scoped result filters and at least one accepted relay OK, but callers could pass status kinds as result kinds.",
+    "LLM deploy and rollback browser helpers treated kind 6973 status events as acceptable awaitResult completion candidates.",
+    "DNS status and result handling was separate but published before status/result subscriptions were opened.",
+    "Encrypted result handling subscribed before publish and required accepted OK, but accepted decrypted results without a request_event_id and reported AUTH closures after all-relay closure logic."
+  ],
+  "intended_behavior": [
+    "Clients build/sign request events, open scoped result/status subscriptions before publish where the local request id is known, then publish and verify at least one accepted OK.",
+    "Status events are progress-only and must not satisfy terminal completion.",
+    "Terminal completion requires a result kind correlated to the request event id and requester; encrypted results require matching cleartext tags and decrypted request_event_id.",
+    "Zero accepted OK, AUTH, CLOSED, explicit abort, and configured timeout outcomes are distinct lifecycle failures or degraded waits, not implicit success."
+  ],
+  "scope": [
+    "web/src/lib/nostr/controlplane-requests.js",
+    "web/src/lib/nostr/dns-controlplane.js",
+    "web/src/lib/nostr/encrypted-controlplane.js",
+    "web/src/lib/stores/public-controlplane.svelte.js",
+    "pkg/client/operator_nostr.go",
+    "docs/control-planes.md",
+    "docs/user-guide/nostr-integration.md"
+  ],
+  "out_of_scope": [
+    "EOSE helper rewrites owned by bahia-zui7",
+    "Kind catalog rewrites owned by bahia-piy8",
+    "Nostr audit route taxonomy matrix owned by bahia-a84g"
+  ]
+}

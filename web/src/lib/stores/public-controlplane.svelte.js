@@ -1,6 +1,6 @@
 import { goto } from '$app/navigation';
 import { KINDS, getTagValue, parseJsonContent } from '$lib/nostr/client.js';
-import { publishRequest, awaitResult } from '$lib/nostr/controlplane-requests.js';
+import { requestResult } from '$lib/nostr/controlplane-requests.js';
 import { bootstrapControlplane } from './controlplane.svelte.js';
 
 const ACTION_RESULTS = [
@@ -25,9 +25,8 @@ export function throwIfErrorResult(event) {
 
 export async function publishCommand({ kind, tags = [], content = {}, resultKinds = ACTION_RESULTS } = {}) {
   await bootstrapControlplane();
-  const { requestEventId } = await publishRequest({ kind, tags, content });
-  const result = await awaitResult({ requestEventId, resultKinds });
-  return throwIfErrorResult(result);
+  const { resultEvent } = await requestResult({ kind, tags, content, resultKinds });
+  return throwIfErrorResult(resultEvent);
 }
 
 export function createService(payload) {
@@ -99,14 +98,11 @@ export function registerLLMRelease(payload) {
 
 async function requestLLMAsyncLifecycle(kind, payload, tags) {
   await bootstrapControlplane();
-  const { requestEventId } = await publishRequest({
+  const { requestEventId, resultEvent: event } = await requestResult({
     kind,
     tags,
-    content: payload
-  });
-  const event = await awaitResult({
-    requestEventId,
-    resultKinds: [KINDS.BAHIA_LLM_DEPLOYMENT_STATUS, KINDS.BAHIA_LLM_DEPLOYMENT_RESULT]
+    content: payload,
+    resultKinds: [KINDS.BAHIA_LLM_DEPLOYMENT_RESULT]
   });
   return {
     requestEventId,

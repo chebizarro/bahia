@@ -9,19 +9,20 @@ import (
 	canonicalnostr "fiatjaf.com/nostr"
 	"github.com/google/uuid"
 	"github.com/nbd-wtf/go-nostr"
+	"github.com/openagentsinc/bahia/internal/kinds"
 )
 
 const (
-	KindMLModelRegistry             = 31980
-	KindMLModelVersionRegistry      = 31981
-	KindMLDatasetRegistry           = 31982
-	KindMLRecipeRegistry            = 31983
-	KindMLRecipeRunState            = 31984
-	KindMLInferenceEndpointRegistry = 31985
-	KindMLInferenceEndpointState    = 31986
-	KindMLEvaluationExperimentState = 31987
-	KindMLArtifactProvenanceGraph   = 31988
-	KindMLRuntimeCapabilityProfile  = 31989
+	KindMLModelRegistry             = kinds.MLModelRegistry
+	KindMLModelVersionRegistry      = kinds.MLModelVersionRegistry
+	KindMLDatasetRegistry           = kinds.MLDatasetRegistry
+	KindMLRecipeRegistry            = kinds.MLRecipeRegistry
+	KindMLRecipeRunState            = kinds.MLRecipeRunState
+	KindMLInferenceEndpointRegistry = kinds.MLInferenceEndpointRegistry
+	KindMLInferenceEndpointState    = kinds.MLInferenceEndpointState
+	KindMLEvaluationExperimentState = kinds.MLEvaluationExperimentState
+	KindMLArtifactProvenanceGraph   = kinds.MLArtifactProvenanceGraph
+	KindMLRuntimeCapabilityProfile  = kinds.MLRuntimeCapabilityProfile
 )
 
 // MLCommandPublisher emits generic AI/ML control-plane request events.

@@ -12,7 +12,8 @@ export const error = $state({ value: null });
 export const meta = $state({
   lastLoadedAt: null,
   requestSeq: 0,
-  authors: null
+  authors: null,
+  eose: null
 });
 
 // CI enrichment state
@@ -88,6 +89,7 @@ export async function loadRepositories({ authors = null, force = false } = {}) {
 
     repositories.length = 0;
     repositories.push(...(Array.isArray(fetched) ? fetched : []));
+    meta.eose = fetched?.eose || null;
     meta.lastLoadedAt = Date.now();
     meta.authors = normalizedAuthors;
 

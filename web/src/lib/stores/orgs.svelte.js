@@ -18,6 +18,8 @@ export const orgDetailState = $state({
   error: null
 });
 
+const ORG_ENCRYPTED_DOMAIN_TAG = ['domain', 'orgs'];
+
 function unwrapEncryptedResult(response, fallback = null) {
   const envelope = response?.result;
   if (envelope?.status === 'error') {
@@ -46,7 +48,7 @@ async function encryptedOrgRequest(operation, payload = {}) {
   const response = await requestEncryptedResult({
     operation,
     payload,
-    tags: [['domain', 'orgs']]
+    tags: [ORG_ENCRYPTED_DOMAIN_TAG]
   });
   return unwrapEncryptedResult(response);
 }
@@ -71,7 +73,6 @@ export async function loadOrgsOverview() {
   orgsState.loading = true;
   orgsState.error = null;
   try {
-    // Serialize startup org requests to avoid hammering flaky signer bridges.
     const orgs = await encryptedOrgRequest('orgs.list');
     const myInvites = await encryptedOrgRequest('orgs.my_invites');
     orgsState.orgs = Array.isArray(orgs) ? orgs : [];

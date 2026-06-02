@@ -1,4 +1,19 @@
 {
   "feature_id": "AI_FABRIC_SIGNER_FIRST_PROTOCOL",
-  "defects": []
+  "defects": [
+    {
+      "id": "D-SFP-EXEC-001",
+      "bead": "bahia-vn8o",
+      "title": "Executable signer-first AI/ML protocol verification is missing",
+      "severity": "P2",
+      "status": "open",
+      "observed_behavior": "Current PSTF evidence maps criteria to placeholder tests only; no executable tests prove AI/ML command/result kinds, read-model addressability, correlation tags, or HTTP-polling avoidance.",
+      "intended_behavior": "Signer-first AI/ML protocol readiness requires deterministic event-driven tests and production code evidence for the declared event semantics.",
+      "acceptance_criteria": [
+        "Executable tests cover 38390-38399 command/result events and 31980-31989 read models.",
+        "Tests verify required e, p, status, d, correlation, and scoped tags.",
+        "Tests verify OK, CLOSED, AUTH, EOSE, validation, and no HTTP polling for long-running completion."
+      ]
+    }
+  ]
 }

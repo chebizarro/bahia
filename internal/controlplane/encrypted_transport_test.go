@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/nbd-wtf/go-nostr"
 	"github.com/nbd-wtf/go-nostr/nip44"
+	nostrpool "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"go.uber.org/zap"
 )
 
@@ -173,6 +175,35 @@ func TestEncryptedRequestTransport_HandleEventPublishesDecryptFailure(t *testing
 	envelope := decryptResultEnvelope(t, publisher.events[0], testRequesterKey)
 	if envelope.Status != "error" || envelope.Error == nil || envelope.Error.Code != "decrypt_failed" {
 		t.Fatalf("unexpected error envelope: %+v", envelope)
+	}
+}
+
+func TestEncryptedRequestTransport_HandleEventRejectsInvalidTimestamp(t *testing.T) {
+	publisher := &mockEncryptedPublisher{}
+	responder := newResponder(t, publisher)
+	requesterPubkey, err := nostr.GetPublicKey(testRequesterKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	called := false
+	event := makeEncryptedRequestEvent(t, testRequesterKey, EncryptedRequestEnvelope{Version: EncryptedRequestWireVersion, Operation: "orgs.list", RequesterPubkey: requesterPubkey})
+	event.CreatedAt = nostr.Timestamp(time.Now().Add(nostrpool.InboundEventMaxFutureSkew + time.Minute).Unix())
+	if err := event.Sign(testRequesterKey); err != nil {
+		t.Fatal(err)
+	}
+	transport := NewEncryptedRequestTransport(nil, responder, []string{requesterPubkey}, zap.NewNop())
+	transport.RegisterHandler("orgs.list", func(context.Context, EncryptedRequest) (any, error) {
+		called = true
+		return map[string]any{"orgs": []any{}}, nil
+	})
+
+	transport.HandleEvent(context.Background(), event)
+
+	if called {
+		t.Fatalf("invalid timestamp request should not reach handler")
+	}
+	if len(publisher.events) != 0 {
+		t.Fatalf("invalid trust-boundary events should be dropped without encrypted result, got %d", len(publisher.events))
 	}
 }
 

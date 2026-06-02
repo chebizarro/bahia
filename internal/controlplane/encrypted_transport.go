@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	canonicalnostr "fiatjaf.com/nostr"
 	"github.com/nbd-wtf/go-nostr"
@@ -244,9 +245,8 @@ func (t *EncryptedRequestTransport) HandleEvent(ctx context.Context, event *nost
 	if event == nil || event.Kind != KindEncryptedRequest {
 		return
 	}
-	ok, err := event.CheckSignature()
-	if err != nil || !ok {
-		t.logger.Warn("invalid encrypted request signature", zap.String("event_id", event.ID), zap.Error(err))
+	if err := nostrpool.ValidateInboundEvent(event, time.Now().UTC(), nostrpool.InboundEventMaxFutureSkew); err != nil {
+		t.logger.Warn("invalid encrypted request event", zap.String("event_id", event.ID), zap.Error(err))
 		return
 	}
 	if t.dedup.IsDuplicate(event.ID) {

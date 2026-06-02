@@ -56,6 +56,7 @@ describe('Nostr Client - Parsing Functions', () => {
   let parseRuntimeCapabilityEvent;
   let runtimeCapabilitySupports;
   let fetchRuntimeCapabilities;
+  let queryOrPartial;
   let NostrIncompleteEOSEError;
   let normalizeSoulDraftContent;
   let createNostrPoolClient;
@@ -78,6 +79,7 @@ describe('Nostr Client - Parsing Functions', () => {
     parseRuntimeCapabilityEvent = module.parseRuntimeCapabilityEvent;
     runtimeCapabilitySupports = module.runtimeCapabilitySupports;
     fetchRuntimeCapabilities = module.fetchRuntimeCapabilities;
+    queryOrPartial = module.queryOrPartial;
     NostrIncompleteEOSEError = module.NostrIncompleteEOSEError;
     normalizeSoulDraftContent = module.normalizeSoulDraftContent;
     createNostrPoolClient = module.createNostrPoolClient;
@@ -259,11 +261,12 @@ describe('Nostr Client - Parsing Functions', () => {
 
       const capabilities = await fetchRuntimeCapabilities({ method: 'soulfactory.update' });
 
-      expect(module.nostr.queryUntilEose).toHaveBeenCalledWith([{ kinds: [30317], limit: 200 }]);
+      expect(module.nostr.queryUntilEose).toHaveBeenCalledWith([{ kinds: [30317], limit: 200 }], {});
       expect(capabilities.map((capability) => capability.id)).toEqual(['new-cap']);
+      expect(capabilities.eose).toEqual({ complete: true, degraded: null, relaySummary: [] });
     });
 
-    it('fetchRuntimeCapabilities falls back to partial events when EOSE is incomplete', async () => {
+    it('fetchRuntimeCapabilities returns partial capabilities with degraded EOSE metadata when CLOSED incomplete', async () => {
       const old = {
         id: 'old-cap',
         kind: 30317,
@@ -289,21 +292,66 @@ describe('Nostr Client - Parsing Functions', () => {
       const capabilities = await fetchRuntimeCapabilities({ method: 'soulfactory.update' });
 
       expect(capabilities.map((capability) => capability.id)).toEqual(['new-cap']);
+      expect(capabilities.eose).toMatchObject({
+        complete: false,
+        degraded: {
+          incomplete: true,
+          reason: 'all_relays_closed',
+          partialEventCount: 2,
+          relaySummary: [{ relay: 'wss://relay.example', status: 'closed', reason: 'relay closed' }]
+        }
+      });
       expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('[runtime-capabilities] Using 2 partial Nostr event(s) after incomplete EOSE'));
     });
 
-    it('fetchRuntimeCapabilities tolerates incomplete EOSE with no partial events', async () => {
+    it('fetchRuntimeCapabilities returns empty capabilities with degraded EOSE metadata when timeout has no partial events', async () => {
       const module = await import('../../src/lib/nostr/client.js');
       vi.spyOn(console, 'warn').mockImplementation(() => {});
-      vi.spyOn(module.nostr, 'queryUntilEose').mockRejectedValue(new NostrIncompleteEOSEError('all_relays_closed', {
+      vi.spyOn(module.nostr, 'queryUntilEose').mockRejectedValue(new NostrIncompleteEOSEError('timeout', {
         partialEvents: [],
-        relaySummary: [{ relay: 'wss://relay.example', status: 'closed', reason: 'relay closed' }]
+        relaySummary: [{ relay: 'wss://relay.example', status: 'pending', reason: '' }]
       }));
 
       const capabilities = await fetchRuntimeCapabilities({ method: 'soulfactory.update' });
 
       expect(capabilities).toEqual([]);
+      expect(capabilities.eose).toMatchObject({
+        complete: false,
+        degraded: {
+          incomplete: true,
+          reason: 'timeout',
+          partialEventCount: 0,
+          relaySummary: [{ relay: 'wss://relay.example', status: 'pending', reason: '' }]
+        }
+      });
       expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('[runtime-capabilities] Using 0 empty partial Nostr event(s) after incomplete EOSE'));
+    });
+  });
+
+  describe('partial read results', () => {
+    it('queryOrPartial returns explicit degraded metadata for aborted incomplete history', async () => {
+      const partial = { id: 'partial', kind: 31951, pubkey: 'factory', created_at: 100, tags: [['d', 'scout']] };
+      const module = await import('../../src/lib/nostr/client.js');
+      vi.spyOn(console, 'warn').mockImplementation(() => {});
+      vi.spyOn(module.nostr, 'queryUntilEose').mockRejectedValue(new NostrIncompleteEOSEError('aborted', {
+        partialEvents: [partial],
+        relaySummary: [{ relay: 'wss://relay.example', status: 'pending', reason: 'user cancelled' }],
+        message: 'Nostr query aborted before EOSE completion'
+      }));
+
+      const result = await queryOrPartial([{ kinds: [31951] }], { scope: 'souls' });
+
+      expect(result).toMatchObject({
+        events: [partial],
+        complete: false,
+        degraded: {
+          incomplete: true,
+          reason: 'aborted',
+          message: 'Nostr query aborted before EOSE completion',
+          partialEventCount: 1,
+          relaySummary: [{ relay: 'wss://relay.example', status: 'pending', reason: 'user cancelled' }]
+        }
+      });
     });
   });
 

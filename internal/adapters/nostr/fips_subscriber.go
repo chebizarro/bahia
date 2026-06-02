@@ -19,7 +19,7 @@ import (
 )
 
 const (
-	FIPSOverlayAdvertKind       = 37195
+	FIPSOverlayAdvertKind       = KindFIPSOverlayAdvert
 	FIPSOverlayAdvertIdentifier = "fips-overlay-v1"
 )
 

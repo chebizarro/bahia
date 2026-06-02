@@ -1,0 +1,51 @@
+{
+  "feature_id": "bahia-qtoq",
+  "status": "ready",
+  "criteria": [
+    {
+      "ac_id": "QTOQ-AC-001",
+      "title": "Status events cannot satisfy terminal command completion",
+      "type": "contract",
+      "priority": "must",
+      "assertion": "Public command helpers must subscribe to terminal result kinds for completion and keep status kinds as progress-only side channels.",
+      "testable_by": ["unit"],
+      "expected_result": "LLM deploy and rollback browser helpers await only kind 7973 terminal results; DNS status kind 6941 remains separate from 794x terminal results."
+    },
+    {
+      "ac_id": "QTOQ-AC-002",
+      "title": "Request/result correlation is required",
+      "type": "contract",
+      "priority": "must",
+      "assertion": "Public, DNS, encrypted, and operator result waits must ignore or reject replies that do not correlate to the built request event id and requester.",
+      "testable_by": ["unit"],
+      "expected_result": "Filters include request correlation tags, duplicate events are idempotent, and encrypted results require decrypted request_event_id to match."
+    },
+    {
+      "ac_id": "QTOQ-AC-003",
+      "title": "Publish OK and zero-accepted outcomes are explicit",
+      "type": "reliability",
+      "priority": "must",
+      "assertion": "Request publishers must require at least one accepted relay OK and surface zero accepted relays as pre-acceptance failure.",
+      "testable_by": ["unit"],
+      "expected_result": "Public, encrypted, operator, and backend command publishers reject zero accepted publishes and preserve accepted/rejected OK metadata where returned."
+    },
+    {
+      "ac_id": "QTOQ-AC-004",
+      "title": "CLOSED and AUTH failures are explicit",
+      "type": "reliability",
+      "priority": "must",
+      "assertion": "Result subscriptions must fail distinctly for auth-related closure and all-known-relay closure before terminal result.",
+      "testable_by": ["unit"],
+      "expected_result": "Public and encrypted browser waits report AUTH separately from all-relay CLOSED; operator waits surface post-acceptance subscription closure."
+    },
+    {
+      "ac_id": "QTOQ-AC-005",
+      "title": "Abort and timeout semantics are explicit and deterministic",
+      "type": "reliability",
+      "priority": "must",
+      "assertion": "Abort signals and configured timeouts cancel result waits and clean up subscriptions without being treated as terminal success or backend failure proof.",
+      "testable_by": ["unit"],
+      "expected_result": "Public awaitResult rejects explicit aborts; encrypted waits reject configured timeout; operator context cancellation is post-acceptance abort when publish already succeeded."
+    }
+  ]
+}

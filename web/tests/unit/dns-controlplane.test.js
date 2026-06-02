@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 const helpersMock = vi.hoisted(() => ({
-  publishRequest: vi.fn(),
+  buildRequestEvent: vi.fn(),
+  publishSignedRequest: vi.fn(),
   subscribeStatus: vi.fn(),
   awaitResult: vi.fn()
 }));
@@ -14,7 +15,8 @@ describe('DNS control-plane Nostr helpers', () => {
   beforeEach(async () => {
     vi.resetModules();
     vi.clearAllMocks();
-    helpersMock.publishRequest.mockResolvedValue({
+    helpersMock.buildRequestEvent.mockResolvedValue({ id: 'req-1', kind: 5941, tags: [], content: '{}', pubkey: 'a'.repeat(64) });
+    helpersMock.publishSignedRequest.mockResolvedValue({
       requestEventId: 'req-1',
       event: { id: 'req-1' },
       ok: [{ relay: 'ws://relay.test', sent: true, accepted: true, message: '' }],
@@ -106,11 +108,12 @@ describe('DNS control-plane Nostr helpers', () => {
       content: expect.objectContaining({ message: 'done' })
     });
 
-    expect(helpersMock.publishRequest).toHaveBeenCalledWith({
+    expect(helpersMock.buildRequestEvent).toHaveBeenCalledWith({
       kind: 5941,
       tags: [['zone', 'prod.example'], ['action', 'dns_zone_create']],
       content: { name: 'prod.example' }
     });
+    expect(helpersMock.publishSignedRequest).toHaveBeenCalledWith(expect.objectContaining({ id: 'req-1' }));
     expect(helpersMock.subscribeStatus).toHaveBeenCalledWith(expect.objectContaining({
       requestEventId: 'req-1',
       statusKinds: [6941],
@@ -124,16 +127,29 @@ describe('DNS control-plane Nostr helpers', () => {
     expect(unsubscribeStatus).toHaveBeenCalledTimes(1);
   });
 
-  it('surfaces rejected publish without creating status/result subscriptions', async () => {
-    helpersMock.publishRequest.mockRejectedValueOnce(new Error('Nostr request publish rejected: auth-required'));
+  it('subscribes before publish and cleans up result tracking when publish is rejected', async () => {
+    const unsubscribeStatus = vi.fn();
+    const order = [];
+    helpersMock.subscribeStatus.mockImplementation(() => {
+      order.push('subscribe-status');
+      return unsubscribeStatus;
+    });
+    helpersMock.awaitResult.mockImplementation(() => {
+      order.push('subscribe-result');
+      return Promise.reject(new Error('aborted after rejected publish'));
+    });
+    helpersMock.publishSignedRequest.mockImplementation(async () => {
+      order.push('publish');
+      throw new Error('Nostr request publish rejected: auth-required');
+    });
 
     await expect(dns.startDNSCommand({
       command: dns.DNS_COMMANDS.DRIFT_REMEDIATE,
       payload: { zone: 'prod.example' }
     })).rejects.toThrow('auth-required');
 
-    expect(helpersMock.subscribeStatus).not.toHaveBeenCalled();
-    expect(helpersMock.awaitResult).not.toHaveBeenCalled();
+    expect(order).toEqual(['subscribe-status', 'subscribe-result', 'publish']);
+    expect(unsubscribeStatus).toHaveBeenCalledTimes(1);
   });
 
   it('tracks CLOSED/AUTH status errors and rejects result subscription failures', async () => {

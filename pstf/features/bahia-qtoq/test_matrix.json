@@ -1,0 +1,73 @@
+{
+  "feature_id": "bahia-qtoq",
+  "status": "verified",
+  "tests": [
+    {
+      "test_id": "QTOQ-T-001",
+      "ac_ids": [
+        "QTOQ-AC-001",
+        "QTOQ-AC-002",
+        "QTOQ-AC-003",
+        "QTOQ-AC-005"
+      ],
+      "target_path": "web/tests/unit/controlplane-requests.test.js",
+      "title": "Shared public request/result helper verifies OK, correlation, subscribe-before-publish, CLOSED/AUTH, and abort",
+      "type": "unit",
+      "status": "pass"
+    },
+    {
+      "test_id": "QTOQ-T-002",
+      "ac_ids": [
+        "QTOQ-AC-001"
+      ],
+      "target_path": "web/tests/unit/public-controlplane.test.js",
+      "title": "Public LLM deploy/rollback await only terminal 7973 results",
+      "type": "unit",
+      "status": "pass"
+    },
+    {
+      "test_id": "QTOQ-T-003",
+      "ac_ids": [
+        "QTOQ-AC-001",
+        "QTOQ-AC-003",
+        "QTOQ-AC-005"
+      ],
+      "target_path": "web/tests/unit/dns-controlplane.test.js",
+      "title": "DNS status/result lifecycle subscribes before publish and cleans up rejected publish waits",
+      "type": "unit",
+      "status": "pass"
+    },
+    {
+      "test_id": "QTOQ-T-004",
+      "ac_ids": [
+        "QTOQ-AC-002",
+        "QTOQ-AC-003",
+        "QTOQ-AC-004",
+        "QTOQ-AC-005"
+      ],
+      "target_path": "web/tests/unit/encrypted-controlplane.test.js",
+      "title": "Encrypted request/result requires OK, decrypted correlation, AUTH/CLOSED, cleanup, and timeout",
+      "type": "unit",
+      "status": "pass"
+    },
+    {
+      "test_id": "QTOQ-T-005",
+      "ac_ids": [
+        "QTOQ-AC-001",
+        "QTOQ-AC-002",
+        "QTOQ-AC-003",
+        "QTOQ-AC-004",
+        "QTOQ-AC-005"
+      ],
+      "target_path": "pkg/client/operator_nostr_test.go",
+      "title": "Operator Nostr client keeps status progress separate from terminal result and reports publish/closed/abort outcomes",
+      "type": "unit",
+      "status": "pass"
+    }
+  ],
+  "coverage_summary": {
+    "criteria_total": 5,
+    "criteria_with_tests": 5,
+    "known_gaps": []
+  }
+}

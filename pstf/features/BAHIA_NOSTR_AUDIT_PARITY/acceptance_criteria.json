@@ -4,22 +4,55 @@
     {
       "id": "AC1",
       "statement": "The generic Nostr subscriber audits the canonical control-plane request namespace handled by the reactor.",
-      "tests": ["TestDefaultInboundKindsIncludesCanonicalControlPlaneNamespace"]
+      "tests": [
+        "TestDefaultInboundKindsIncludesCanonicalControlPlaneNamespace"
+      ]
     },
     {
       "id": "AC2",
       "statement": "Control-plane request audit filters are scoped by default, direct-runtime, and adoption operator author groups without widening unrelated filters.",
-      "tests": ["TestSubscriberBuildSubscriptionFiltersUsesScopedAuthorGroups", "TestControlPlaneSubscriberAuthorScopesDoNotWidenDefaultScope"]
+      "tests": [
+        "TestSubscriberBuildSubscriptionFiltersUsesScopedAuthorGroups",
+        "TestControlPlaneSubscriberAuthorScopesDoNotWidenDefaultScope"
+      ]
     },
     {
       "id": "AC3",
       "statement": "Existing validation-before-persistence and deterministic EOSE/CLOSED subscriber behavior remain unchanged.",
-      "tests": ["TestSubscriberHandleEventDropsInvalidBeforePersistenceAndDispatch", "go test ./internal/adapters/nostr"]
+      "tests": [
+        "TestSubscriberHandleEventDropsInvalidBeforePersistenceAndDispatch",
+        "go test ./internal/adapters/nostr"
+      ]
     },
     {
       "id": "AC4",
       "statement": "Reactor outbound event auditing receives the Nostr event repository whether packages are enabled or disabled.",
-      "tests": ["TestControlPlaneReactorAuditOptionIndependentOfPackageFeature"]
+      "tests": [
+        "TestControlPlaneReactorAuditOptionIndependentOfPackageFeature"
+      ]
+    },
+    {
+      "id": "AC5",
+      "statement": "Bahia Nostr kind constants are single-sourced from internal/kinds; backend aliases and generated frontend constants fail tests on drift.",
+      "tests": [
+        "TestGeneratedFrontendKindsMatchCanonicalGoKinds",
+        "go test ./internal/kinds ./internal/adapters/nostr ./internal/controlplane"
+      ]
+    },
+    {
+      "id": "AC6",
+      "statement": "The PSTF route transport matrix records every audited route/control surface using the shared taxonomy and repository-backed evidence.",
+      "tests": [
+        "route-transport-matrix.test.js: uses only the shared orchestration taxonomy and covers every audited route/control surface"
+      ]
+    },
+    {
+      "id": "AC7",
+      "statement": "Signer-first Nostr route files cannot import REST/API clients for command ingress unless the matrix classifies that route file's HTTP use as rest_to_nostr_bridge, rest_compatibility, or http_native.",
+      "tests": [
+        "route-transport-matrix.test.js: keeps REST/API route imports explicit and limited to non-signer-first surfaces",
+        "route-transport-matrix.test.js: fails if a pure signer-first route starts importing REST clients for command ingress"
+      ]
     }
   ]
 }
