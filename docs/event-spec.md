@@ -2,35 +2,184 @@
 
 ## Overview
 
-Bahia publishes signed Nostr events to relay networks for traceability, automation, and control-plane state. Audit/activity events use the 31000-series, replaceable read models use NIP-33-style d-tagged 3196x events, and request/status/result flows use the canonical 596x/696x/796x series.
+Bahia publishes signed Nostr events for control-plane intent, state, status, discovery, relay topology, and audit. The production contract is Nostr-native and ContextVM-first:
 
-## Event Kinds
+- **Intent/mutation**: ContextVM JSON-RPC kind `25910`, usually encrypted with CEP-4 / NIP-59 gift-wrap (`1059` or `21059`).
+- **State**: canonical control-plane projections in kind `30900`, plus NIP-78 app-specific data in kind `30078`.
+- **Status**: NIP-38 operational status kind `30315`.
+- **Audit**: Cascadia/Bahia audit kind `4903`.
+- **Discovery**: ContextVM announcements `11316`-`11320` and NIP-51 relay sets `30002`.
+- **Deletion**: NIP-09 kind `5` where relay-level deletion semantics apply; durable domain tombstones may still be represented as canonical replacement state with `deleted=true`.
 
-| Kind | Label | Description |
-|------|-------|-------------|
-| 31000 | `build.registered` | A new build has been registered |
-| 31001 | `artifact.registered` | A new artifact has been registered |
-| 31002 | `deployment.created` | A deployment intent has been created |
-| 31003 | `deployment.completed` | A deployment run has completed |
-| 31004 | `drift.detected` | Drift has been detected between desired and observed state |
-| 31005 | `runtime.observation` | A runtime observation has been recorded |
-| 31014 | `llm_route.projection` | LLM route registry projection emitted |
-| 31015 | `llm_release.registered` | LLM release registration emitted |
-| 31016 | `llm_deployment.*` | LLM deployment intent/approval/rejection emitted |
-| 31017 | `llm_deployment_run.*` | LLM deployment run lifecycle emitted |
-| 31018 | `llm_route_state.*` | LLM route state/observation/drift emitted |
-| 31019 | `llm_gateway_route.synced` | LLM gateway route synchronization emitted |
-| 31020–31024 | DNS audit events | Reserved for future DNS zone sync, record change, drift, and endpoint lifecycle audit events; not emitted in Phase 0 |
-| 31976 | `DNSEndpointState` | DNS endpoint catalog read model projection |
+Legacy Bahia custom families (`5961`-`6006`, `6961`-`6997`, `7961`-`7997`, `31961`-`32003`, `31000`-`31024`, `38390`-`38431`, `5980`, `7980`) are migration inventory only. Production code should not subscribe to them as live control-plane contracts.
+
+## Production Event Families
+
+| Kind(s) | Layer | Description |
+|---------|-------|-------------|
+| `25910` | Intent | ContextVM JSON-RPC request/response messages. Method names use `<domain>/<operation>`. |
+| `1059`, `21059` | Intent transport | CEP-4 / NIP-59 gift-wrap envelopes for encrypted ContextVM messages. |
+| `30900` | State | Canonical addressable control-plane state projection. |
+| `30078` | State/app data | NIP-78 app-specific configuration, registries, and UI/operator projection data. |
+| `30315` | Status | NIP-38 operational status for agents, workers, services, and long-running actions. |
+| `4903` | Audit | Immutable audit fact / attestation / provenance breadcrumb. |
+| `11316`-`11320` | Discovery | ContextVM server, tools, resources, templates, and prompts announcements. |
+| `30002` | Collection/discovery | NIP-51 relay sets for browser, service, and operational relay topology. |
+| `5` | Deletion | NIP-09 deletion event for relay-level deletion semantics. |
+
+## ContextVM Intent Structure
+
+A non-encrypted ContextVM request is a signed Nostr event with JSON-RPC content:
+
+```json
+{
+  "kind": 25910,
+  "pubkey": "<operator-pubkey>",
+  "tags": [
+    ["p", "<bahia-service-pubkey>"],
+    ["method", "service/deploy"],
+    ["service", "api"],
+    ["environment", "prod"],
+    ["artifact", "api:v2"]
+  ],
+  "content": "{\"jsonrpc\":\"2.0\",\"id\":\"deploy-api-prod-01\",\"method\":\"service/deploy\",\"params\":{\"service_id\":\"api\",\"environment_id\":\"prod\",\"artifact_id\":\"api:v2\",\"_meta\":{\"progressToken\":\"deploy-api-prod-01\"}}}"
+}
+```
+
+Sensitive requests use the same inner event encrypted into a random-key gift-wrap event:
+
+```json
+{
+  "kind": 1059,
+  "pubkey": "<random-wrap-pubkey>",
+  "tags": [["p", "<bahia-service-pubkey>"]],
+  "content": "<nip44-encrypted-inner-contextvm-event>"
+}
+```
+
+Implementations may use `21059` when ephemeral gift-wrap support is available.
+
+## Method Naming
+
+Methods follow `<domain>/<operation>`:
+
+| Domain | Example methods |
+|--------|-----------------|
+| `service` | `deploy`, `rollback`, `restart`, `stop`, `update`, `delete` |
+| `environment` | `create`, `update`, `delete` |
+| `artifact` | `register` |
+| `policy` | `create`, `update`, `delete`, `evaluate` |
+| `worker` | `cordon`, `uncordon`, `drain`, `undrain`, `maintenance-enter`, `maintenance-exit`, `labels-update`, `policy-apply` |
+| `llm` / `ml` | `route-create`, `release-register`, `deploy`, `approve`, `rollback`, `model-import`, `recipe-run`, `inference-deploy` |
+| `dns` | `zone-create`, `policy-apply`, `record-set`, `drift-remediate`, `backend-register` |
+| `backup` | `run`, `restore`, `verify`, `retention-enforce`, `repository-probe` |
+| `adoption` | `scan`, `import` |
+| `assistant` | `prompt`, `approve`, `cancel` |
+| `ci` | `workflow-run`, `cancel`, `retry` |
+
+JSON-RPC responses acknowledge request handling. Long-running completion comes from canonical observable events.
+
+## Canonical State Projection — Kind `30900`
+
+Kind `30900` is addressable. The `d` tag identifies the entity coordinate, and `domain` + `schema` tags identify the projection contract.
+
+```json
+{
+  "kind": 30900,
+  "pubkey": "<bahia-service-pubkey>",
+  "content": "{\"service_id\":\"api\",\"environment_id\":\"prod\",\"status\":\"healthy\"}",
+  "tags": [
+    ["d", "service:api:prod"],
+    ["domain", "service"],
+    ["schema", "bahia.service-state.v1"],
+    ["service", "api"],
+    ["environment", "prod"],
+    ["status", "healthy"]
+  ]
+}
+```
+
+For `(kind, pubkey, d)`, latest replacement wins. Clients query historical state, wait for `EOSE`, and keep the subscription open for realtime updates.
+
+## Operational Status — Kind `30315`
+
+Bahia uses NIP-38 status events for operational status and progress where a status fact is more appropriate than a full state replacement.
+
+```json
+{
+  "kind": 30315,
+  "pubkey": "<bahia-service-pubkey>",
+  "content": "deploying api to prod",
+  "tags": [
+    ["d", "cascadia:service:api:prod"],
+    ["status", "deploying"],
+    ["service", "api"],
+    ["environment", "prod"],
+    ["e", "<contextvm-request-event-id>", "", "reply"]
+  ]
+}
+```
+
+## Audit — Kind `4903`
+
+Audit events are append-only facts for provenance, compliance, deployment evidence, build evidence, and operational attestations.
+
+```json
+{
+  "kind": 4903,
+  "pubkey": "<bahia-service-pubkey>",
+  "content": "{\"action\":\"deployment.completed\",\"service_id\":\"api\",\"environment_id\":\"prod\"}",
+  "tags": [
+    ["domain", "deployment"],
+    ["type", "change-record"],
+    ["schema", "bahia.audit.deployment.v1"],
+    ["service", "api"],
+    ["environment", "prod"],
+    ["e", "<contextvm-request-event-id>"]
+  ]
+}
+```
+
+Relays and clients should treat audit as long-retention evidence. Audit deletion should require explicit policy review.
+
+## Discovery and Relay Topology
+
+Bahia discovery is ContextVM-compatible:
+
+| Kind | Purpose |
+|------|---------|
+| `11316` | Server announcement and transport metadata |
+| `11317` | Tools list |
+| `11318` | Resources list |
+| `11319` | Resource templates list |
+| `11320` | Prompts list |
+| `30002` | NIP-51 relay sets such as browser, service, and operational relay sets |
+
+Legacy discovery kind `31974` is migration input only.
+
+## Loom and Hive-CI External Protocol Events
+
+Bahia still interoperates with external protocols that define their own kinds. These are not Bahia legacy control-plane families:
+
+| Protocol | Kind | Direction | Description |
+|----------|------|-----------|-------------|
+| Loom | `10100` | inbound | Worker advertisement |
+| Loom | `5100` | outbound | Compute job request |
+| Loom | `30100` | inbound | Loom job status update |
+| Loom | `5101` | inbound | Loom job result |
+| Hive-CI | `5401` | inbound | Trusted CI workflow run fact |
+| Hive-CI | `5402` | inbound | Trusted CI workflow result fact |
+
+Where Bahia needs to expose current Loom/Hive-derived truth to browsers or agents, it projects that truth into canonical observables (`30900`, `30315`, `4903`, or `30078`) rather than inventing a Bahia-specific live kind family.
 
 ## Internal Operational Event Types
 
-Bahia also emits typed in-process audit events used by Nostr read-model projectors, automation subscribers, and local observability wiring. Adoption and direct-runtime events are deliberately structured around IDs and counts; they must not contain secret values, raw environment values, Docker TLS material, or bearer/NIP-98 credentials.
+Bahia also emits typed in-process audit events used by projectors, automation subscribers, and local observability wiring. These internal events are not Nostr kind allocations. They must not contain secret values, raw environment values, Docker TLS material, bearer credentials, or NIP-98 credentials.
 
 | Type | Description | Key fields |
 |------|-------------|------------|
-| `adoption.scan_completed` | Adoption dry-run scan completed | `target_count`, `candidate_count`, `target_error_count`, `redacted_env_key_count`, `redacted_label_key_count`, `duration_ms` |
-| `adoption.imported` | One adoption candidate was persisted | `service_id`, `environment_id`, `artifact_id`, `target_name`, `container_id`, `container_name`, `status` |
+| `adoption.scan_completed` | Adoption dry-run scan completed | `target_count`, `candidate_count`, `target_error_count`, redaction counts, `duration_ms` |
+| `adoption.imported` | One adoption candidate was persisted | `service_id`, `environment_id`, `artifact_id`, `target_name`, `status` |
 | `runtime.deploy` | Direct runtime deploy completed | `service_id`, `environment_id`, `artifact_id`, `runtime_target`, `observation_id`, `health_status` |
 | `runtime.restart` | Direct runtime restart completed | `service_id`, `environment_id`, `runtime_target`, `observation_id`, `health_status` |
 | `runtime.stop` | Direct runtime stop completed | `service_id`, `environment_id`, `runtime_target`, `observation_id`, `health_status` |
@@ -42,279 +191,32 @@ Bahia also emits typed in-process audit events used by Nostr read-model projecto
 | `llm_route_state.changed` / `llm_route.drift_detected` | LLM route state projection changed | `route_id`, `environment_id`, `release_id`, `intent_id`, `run_id` |
 | `llm_gateway_route.synced` | Gateway model route synchronized | `route_id`, `environment_id` |
 
-## Event Structure
+## Startup Migration App
 
-All events follow this structure:
+The startup migration app in `internal/nostrmigration` converts historical Bahia custom events to the canonical contract before production runtime processes live traffic.
 
-```json
-{
-  "kind": 31000,
-  "content": "<JSON-encoded event data>",
-  "tags": [
-    ["t", "build.registered"],
-    ["d", "<entity-id>"]
-  ],
-  "created_at": 1234567890,
-  "pubkey": "<bahia-service-pubkey>",
-  "sig": "<schnorr-signature>"
-}
-```
+It performs these steps:
 
-## Loom Integration Events
+1. Scans the local Nostr event repository for `LegacyKinds()`.
+2. Optionally backfills legacy events from configured relays and waits for `EOSE`.
+3. Resolves each legacy event to a canonical disposition.
+4. Skips if a canonical event with `migrated-from=<legacy_event_id>` already exists for the target kind.
+5. Builds a canonical event with tags including `migration=bahia-nostr-native-v1`, `legacy-kind`, `migrated-from`, `schema`, `domain`, and layer metadata.
+6. Signs with the Bahia service key.
+7. Publishes to relays and treats accepted publishes or duplicate acknowledgments as success.
+8. Records the canonical event locally and logs a summary.
 
-Bahia uses the [Loom Protocol](../loom-protocol/SPECIFICATION.md) for decentralised compute.
+This is idempotent and safe to run every startup. If the migration fails because the publisher or service private key is missing, or because relay backfill cannot reach `EOSE`, fix configuration or relay health; do not restore legacy runtime subscribers.
 
-### Job Request (Kind 5100)
-Published when Bahia submits a deployment job to Loom workers:
+## Historical Legacy Mapping Summary
 
-```json
-{
-  "kind": 5100,
-  "content": "",
-  "tags": [
-    ["cmd", "bash"],
-    ["args", "-c", "docker pull image@sha256:abc... && docker run -d --name api image@sha256:abc..."],
-    ["p", "<worker_pubkey>"],
-    ["payment", "<cashu_token>"],
-    ["env", "BAHIA_DEPLOY_SERVICE", "api"],
-    ["env", "BAHIA_DEPLOY_ENVIRONMENT", "staging"],
-    ["env", "BAHIA_DEPLOY_IMAGE", "harbor.example.com/app/api:v1.2.3"],
-    ["env", "BAHIA_DEPLOY_DIGEST", "sha256:abc123..."],
-    ["env", "BAHIA_DEPLOY_TYPE", "deploy"]
-  ]
-}
-```
+| Legacy family | Historical purpose | Canonical target |
+|---------------|--------------------|------------------|
+| `5961`-`6006`, `38390`-`38431`, `5401`, `5102` | CRU/request operations | ContextVM `25910` methods, or NIP-09 `5` for deletion semantics |
+| `6961`-`6997` | status/progress | `30315`, `4903`, correlated ContextVM responses, or domain observables |
+| `7961`-`7997` | terminal results | ContextVM responses plus `30900`/`4903`/`30315` observables |
+| `31961`-`32003`, `31974` | read models/discovery | `30900`, `30078`, `11316`-`11320`, or `30002` depending on semantics |
+| `31000`-`31024`, `31310`-`31311` | audit/activity | `4903` |
+| `5980`, `7980` | encrypted request/result envelope | CEP-4 / NIP-59 `1059` or `21059` around ContextVM `25910` |
+| `31100`-`31105` | deprecated bridge commands | removed; no live canonical runtime path |
 
-### Job Status Update (Kind 30100)
-Received from Loom workers during job execution:
-
-```json
-{
-  "kind": 30100,
-  "content": "Executing command...\nPulling image...",
-  "tags": [
-    ["d", "<job-request-event-id>"],
-    ["e", "<job-request-event-id>"],
-    ["p", "<client-pubkey>"],
-    ["status", "running"]
-  ]
-}
-```
-
-### Job Result (Kind 5101)
-Received from Loom workers upon job completion:
-
-```json
-{
-  "kind": 5101,
-  "content": "",
-  "tags": [
-    ["e", "<job-request-event-id>"],
-    ["p", "<client-pubkey>"],
-    ["success", "true"],
-    ["exit_code", "0"],
-    ["duration", "56"],
-    ["stdout", "https://blossom.server/job-stdout.log"],
-    ["stderr", "https://blossom.server/job-stderr.log"],
-    ["change", "<cashu_change_token>"]
-  ]
-}
-```
-
-### Job Cancellation (Kind 5102)
-Published by Bahia to cancel a running or queued job:
-
-```json
-{
-  "kind": 5102,
-  "content": "",
-  "tags": [
-    ["e", "<job-request-event-id>"],
-    ["p", "<worker_pubkey>"]
-  ]
-}
-```
-
-## LLM Control-Plane Events
-
-Bahia's LLM control plane uses the canonical Nostr contract in `internal/controlplane/reactor.go` and publishes database-backed projections through `internal/adapters/nostr/projector.go`.
-
-### LLM Requests (Kinds 5971–5975)
-
-Operators and MCP tools publish signed request events for route creation, release registration, deployment, approval/rejection, and rollback:
-
-```json
-{
-  "kind": 5973,
-  "content": "{\"route_id\":\"...\",\"environment_id\":\"...\",\"release_id\":\"...\"}",
-  "tags": [
-    ["route", "<route_id>"],
-    ["environment", "<environment_id>"],
-    ["release", "<release_id>"]
-  ]
-}
-```
-
-### LLM Status and Results (Kinds 6973, 7971–7973)
-
-Bahia publishes threaded replies to the original request. Deploy, approval, and rollback share kind `7973`; route create and release register use `7971` and `7972` respectively.
-
-```json
-{
-  "kind": 6973,
-  "content": "{\"status\":\"processing\",\"step\":\"provisioning\",\"message\":\"deploying LLM route\"}",
-  "tags": [
-    ["e", "<request_event_id>", "", "reply"],
-    ["p", "<requester_pubkey>"],
-    ["route", "<route_id>"],
-    ["environment", "<environment_id>"],
-    ["intent", "<intent_id>"],
-    ["run", "<run_id>"],
-    ["status", "processing"],
-    ["step", "provisioning"]
-  ]
-}
-```
-
-### LLM Read Models (Kinds 31964–31965)
-
-LLM route registry and route-state projections are Bahia-signed replaceable events. Clients query them, wait for EOSE, and then keep the subscription open for live updates.
-
-```json
-{
-  "kind": 31965,
-  "content": "{\"route_id\":\"...\",\"environment_id\":\"...\",\"desired_release_id\":\"...\",\"gateway_status\":\"synced\"}",
-  "tags": [
-    ["d", "<route_id>:<environment_id>"],
-    ["route", "<route_id>"],
-    ["environment", "<environment_id>"],
-    ["release", "<desired_release_id>"],
-    ["intent", "<desired_intent_id>"],
-    ["run", "<active_run_id>"],
-    ["gateway", "synced"],
-    ["backend", "vllm"]
-  ]
-}
-```
-
-**Bahia processing:**
-1. Validates request event ID/signature/timestamp and authorized pubkey.
-2. Mutates LLM registry/deployment state through `LLMRegistryService`.
-3. Publishes status/result replies with `route`, `release`, `environment`, `intent`, and `run` tags.
-4. Projects `31964`/`31965` read models and `31014–31019` audit/activity events.
-
-## Service State Drift Semantics
-
-Kind `31960` service-state projections include desired/observed hash metadata when available. Desired-state-managed workloads compare `desired_hash` from `environment_service_state` with the current observation hash (`normalized_state.observation_hash`, or `normalized_hash` when no embedded normalized-state hash exists). `drift_status` is `in_sync` only when hashes match and health is acceptable, `drifted` when hashes differ or matching state is unhealthy, and `unknown` when the observation or either hash is unavailable. Non-desired-state workloads retain artifact digest drift semantics by comparing desired artifact image digest with `observed_image_digest`.
-
-## DNS Endpoint Read Model
-
-When `dns.enabled=true`, Bahia derives healthy DNS endpoints from materialized service, LLM route, ML inference, and worker state, then publishes each endpoint as a kind `31976` replaceable read model. The `d` tag is `DNSEndpoint.Coordinate`, such as `endpoint:service:api:prod`, `endpoint:llm:chat:prod`, `endpoint:ml:embeddings:prod`, or `endpoint:worker:t7920-l40s`.
-
-Example `31976` endpoint projection:
-
-```json
-{
-  "kind": 31976,
-  "content": "{\"id\":\"...\",\"family\":\"service\",\"name\":\"api\",\"environment\":\"prod\",\"zone\":\"prod.cascadia\",\"fqdn\":\"api.prod.cascadia\",\"coordinate\":\"endpoint:service:api:prod\",\"protocol\":\"https\",\"address\":\"10.0.1.44\",\"port\":8443,\"runtime\":\"docker\",\"health\":\"healthy\",\"drift_status\":\"in_sync\",\"source\":\"service_state\",\"materialized_at\":\"2026-05-21T12:00:00Z\"}",
-  "tags": [
-    ["d", "endpoint:service:api:prod"],
-    ["deleted", "false"],
-    ["family", "service"],
-    ["environment", "prod"],
-    ["health", "healthy"],
-    ["runtime", "docker"],
-    ["dns", "api.prod.cascadia"],
-    ["addr", "10.0.1.44"],
-    ["proto", "https"],
-    ["port", "8443"],
-    ["t", "dns-endpoint"],
-    ["t", "bahia"]
-  ]
-}
-```
-
-If a previously published coordinate disappears from the projected snapshot, Bahia publishes a replacement tombstone with the same `d` tag, `deleted=true`, `t=dns-endpoint`, and `t=bahia`. Clients should query kind `31976`, wait for EOSE for historical catch-up, then keep the subscription open for realtime changes.
-
-### DNS Operator and Read-Model Kinds
-
-DNS read models use replaceable events: `31975` zone state, `31976` endpoint state, `31977` policy state, and `31978` backend state. Browser and agent clients should bootstrap them with scoped filters, wait for EOSE, deduplicate by event id, and apply latest-by-`(kind,pubkey,d)` replaceable semantics.
-
-DNS operator commands use signed request/status/result events. Bahia subscribes to request kinds `5941`–`5945` (`DNSZoneCreate`, `DNSPolicyApply`, `DNSRecordOverride`, `DNSDriftRemediate`, `DNSBackendRegister`) when the DNS operator is configured, emits `6941` progress, and emits the matching terminal result kind `7941`–`7945`. Rejections, unsupported operations, and missing DNS operator configuration are represented as explicit result events rather than HTTP fallback completion. DNS audit kinds `31020`–`31024` remain the DNS audit allocation.
-
-## Hive-CI Integration Events
-
-Bahia subscribes to [Hive-CI](../hive-ci-protocol/SPECIFICATION.md) events to auto-ingest CI workflow results.
-
-### Workflow Run (Kind 5401)
-Received from Hive-CI dispatchers when a workflow starts:
-
-```json
-{
-  "kind": 5401,
-  "pubkey": "<trusted-dispatcher-pubkey>",
-  "content": "",
-  "tags": [
-    ["a", "30618:abc123...:my-project"],
-    ["workflow", ".github/workflows/build.yml"],
-    ["commit", "abc123def456"],
-    ["branch", "main"],
-    ["trigger", "push"],
-    ["triggered-by", "<user-pubkey>"],
-    ["publisher", "<ephemeral-pubkey>"]
-  ]
-}
-```
-
-### Workflow Result (Kind 5402)
-Received from the ephemeral key declared in the 5401 event:
-
-```json
-{
-  "kind": 5402,
-  "pubkey": "<ephemeral-pubkey>",
-  "content": "",
-  "tags": [
-    ["e", "<workflow-run-event-id>"],
-    ["log_url", "https://blossom.server/workflow.log"],
-    ["status", "success"],
-    ["exit_code", "0"],
-    ["duration", "234"],
-    ["image_repo", "registry.sharegap.net/cascadia/myapp"],
-    ["image_tag", "v1.2.3"],
-    ["image_digest", "sha256:abc123..."]
-  ]
-}
-```
-
-**Bahia processing:**
-1. Validates `5402.pubkey == 5401.publisher` (ephemeral key relationship)
-2. Creates Build record from CI result
-3. Verifies image exists in OCI registry
-4. Creates Artifact linked to Build
-5. (If configured) Creates staging DeploymentIntent
-
-## Protocol Compatibility Matrix
-
-| Kind | Name | Direction | Bahia Role |
-|------|------|-----------|------------|
-| 10100 | Worker Advertisement | Subscribe (future) | Discover available Loom workers |
-| 5100 | Job Request | **Publish** | Submit deployment / build jobs |
-| 30100 | Job Status Update | Subscribe | Monitor running job status |
-| 5101 | Job Result | Subscribe | Receive final result (exit code, logs) |
-| 5102 | Job Cancellation | **Publish** | Cancel running / queued jobs |
-| 5401 | Workflow Run | Subscribe | Receive CI workflow start (Hive-CI) |
-| 5402 | Workflow Result | Subscribe | Receive CI workflow result (Hive-CI) |
-| 31000–31019 | Bahia Audit Events | **Publish** | Emit build, deploy, drift, and LLM lifecycle events |
-| 31020–31024 | DNS Audit Events | Reserved | DNS audit publication allocation |
-| 31964 | LLM Route Registry | **Publish** | Replaceable LLM route registry read model |
-| 31965 | LLM Route State | **Publish** | Replaceable LLM route/environment state read model |
-| 31975–31978 | DNS Read Models | **Publish** | Replaceable DNS zone, endpoint, policy, and backend projections when DNS is enabled |
-| 5941–5945 / 6941 / 7941–7945 | DNS Operator Commands | Subscribe / **Publish** | Subscribe to signed DNS operator requests; publish progress and terminal result events when DNS operator support is configured |
-| 5971–5975 | LLM Requests | Subscribe | Consume authorized LLM control-plane commands |
-| 6973 | LLM Deployment Status | **Publish** | Emit LLM deployment/rollback progress |
-| 7971–7973 | LLM Results | **Publish** | Emit LLM route/release/deployment terminal results |
-
-## Event Storage
-
-All published and received Nostr events are stored in the `nostr_events` table for local audit trail, indexed by kind and entity reference.

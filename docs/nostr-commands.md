@@ -1,65 +1,91 @@
 # Bahia Nostr Control-Plane Events
 
-Bahia's supported Nostr control-plane contract is the canonical 596x/597x/598x public event surface handled by `internal/controlplane/reactor.go`, together with the related 696x/796x status-result kinds and 3196x read models. The browser and agents observe status/results/read models from the sidecar relay; they do not use SSE or request/response polling.
+Bahia's production Nostr control plane is now ContextVM-first. Mutation intent uses ContextVM JSON-RPC kind `25910`, usually encrypted with ContextVM CEP-4 / NIP-59 wrappers (`1059` or `21059`). Long-running truth is observed through canonical Nostr events, not through legacy Bahia request/status/result kind families.
 
-## Canonical Kind Families
+Legacy Bahia kinds such as `5961`-`6006`, `6961`-`6997`, `7961`-`7997`, `31961`-`32003`, `38390`-`38431`, `5980`, and `7980` are migration inventory only. New clients must not publish or subscribe to those numbers as production runtime contracts.
 
-| Family | Kinds | Direction | Purpose |
-|--------|-------|-----------|---------|
-| Service requests | 5961–5968 | inbound | Service/environment operator commands |
-| LLM requests | 5971–5975 | inbound | LLM route/release/deploy/approval/rollback commands |
-| Tool provisioning / approval loop | 5976, 5977, 6976, 7976, 7977 | mixed | Agent request, Bahia→operator approval handoff, progress, final result, and operator response |
-| Adoption requests | 5978–5979 | inbound | Adoption/import operator commands |
-| Public compatibility writes | 5981–5989 | inbound | Service/environment update-delete, artifact register, and policy commands |
-| Encrypted requests | 5980 | inbound | Encrypted browser request envelope |
-| Service status | 6961–6963 | outbound | Service/action progress updates |
-| LLM status | 6973 | outbound | LLM deployment/rollback progress updates |
-| Adoption status | 6978 | outbound | Adoption progress |
-| Service results | 7961–7966 | outbound | Service terminal operation results |
-| LLM results | 7971–7973 | outbound | LLM route/release/deployment terminal results |
-| Adoption results | 7978–7979 | outbound | Adoption terminal results |
-| Encrypted results | 7980 | outbound | Encrypted browser terminal result envelope |
-| Read models | 31961–31970 | outbound replaceable | Current browser/agent state |
-| Audit/activity | 31000–31099 | outbound append-only | Recent activity feed |
+## Production Kind Families
 
-## Request Kinds
+| Family | Kind(s) | Direction | Purpose |
+|--------|---------|-----------|---------|
+| ContextVM intents | `25910` | inbound/outbound | JSON-RPC mutation requests, immediate acknowledgments, and responses |
+| Encrypted ContextVM transport | `1059`, `21059` | inbound/outbound | CEP-4 / NIP-59 gift-wrap envelopes around inner ContextVM messages |
+| ContextVM discovery | `11316`-`11320` | outbound replaceable | Server, tools, resources, templates, and prompts announcements |
+| Canonical state | `30900`, `30078` | outbound replaceable/addressable | Control-plane state projections and NIP-78 app-specific data |
+| Canonical audit/status | `4903`, `30315` | outbound | Immutable audit facts and NIP-38 operational statuses |
+| Relay sets | `30002` | outbound addressable | NIP-51 relay topology and bootstrap sets |
+| Deletions | `5` | outbound/inbound | NIP-09 delete events where relay-level deletion semantics apply |
 
-| Kind | Name | Description |
-|------|------|-------------|
-| 5961 | `DeployRequest` | Deploy an artifact to an environment |
-| 5962 | `RollbackRequest` | Roll back a service/environment |
-| 5963 | `ServiceAction` | Lifecycle action such as restart/stop |
-| 5964 | `ServiceCreate` | Register a service |
-| 5965 | `EnvironmentCreate` | Register an environment |
-| 5966 | `DeploymentApproval` | Approve or reject an intent |
-| 5967 | `ObservationSubmit` | Submit runtime observation |
-| 5968 | `DriftRemediate` | Request drift remediation |
-| 5971 | `LLMRouteCreate` | Create an LLM route registry entry |
-| 5972 | `LLMReleaseRegister` | Register an immutable LLM release |
-| 5973 | `LLMDeployRequest` | Deploy an LLM release to an environment |
-| 5974 | `LLMDeploymentApproval` | Approve or reject an LLM deployment intent |
-| 5975 | `LLMRollbackRequest` | Roll back an LLM route/environment |
-| 5976 | `ToolProvisionRequest` | Agent → Bahia tool provisioning workflow request |
-| 5977 | `ToolApprovalRequest` | Bahia → operator approval handoff event for tool provisioning |
-| 5978 | `AdoptionScanRequest` | Request adoption scan previews |
-| 5979 | `AdoptionImportRequest` | Request adoption import |
-| 5980 | `EncryptedRequest` | Encrypted browser request envelope |
-| 5981 | `ServiceUpdate` | Update a service registry entry |
-| 5982 | `ServiceDelete` | Delete a service registry entry |
-| 5983 | `EnvironmentUpdate` | Update an environment registry entry |
-| 5984 | `EnvironmentDelete` | Delete an environment registry entry |
-| 5985 | `ArtifactRegister` | Register an artifact |
-| 5986 | `PolicyCreate` | Create a deployment policy |
-| 5987 | `PolicyUpdate` | Update a deployment policy |
-| 5988 | `PolicyDelete` | Delete a deployment policy |
-| 5989 | `PolicyEvaluate` | Evaluate a deployment policy |
+## ContextVM Mutation Methods
 
-Public inbound operator-authored events must be valid signed Nostr events from an authorized pubkey. That includes the normal request/write families (`5961`-`5968`, `5971`-`5976`, `5978`-`5979`, `5981`-`5989`) plus the operator-authored `7977` tool approval response. `5977` is Bahia-authored outbound, not an inbound operator request. `5980` encrypted requests must be sent only to encrypted-request relays, not to the public sidecar. Bahia services remain the final authority for business authorization after relay-side validation.
+ContextVM methods use the `<domain>/<operation>` convention. The relay indexes the transport; Bahia interprets the JSON-RPC method and params after signature verification and, when encrypted, after unwrap.
 
-## Common Tags
+| Domain | Example methods |
+|--------|-----------------|
+| `service` | `deploy`, `rollback`, `restart`, `stop`, `update`, `delete` |
+| `environment` | `create`, `update`, `delete` |
+| `artifact` | `register` |
+| `policy` | `create`, `update`, `delete`, `evaluate` |
+| `worker` | `cordon`, `uncordon`, `drain`, `undrain`, `maintenance-enter`, `maintenance-exit`, `labels-update`, `policy-apply` |
+| `llm` / `ml` | `route-create`, `release-register`, `deploy`, `approve`, `rollback`, `model-import`, `recipe-run`, `inference-deploy` |
+| `dns` | `zone-create`, `policy-apply`, `record-set`, `drift-remediate`, `backend-register` |
+| `backup` | `run`, `restore`, `verify`, `retention-enforce`, `repository-probe` |
+| `adoption` | `scan`, `import` |
+| `assistant` | `prompt`, `approve`, `cancel` |
+| `ci` | `workflow-run`, `cancel`, `retry` |
+
+## Example: Deploy Service
+
+Inner ContextVM request:
+
+```json
+{
+  "kind": 25910,
+  "pubkey": "<operator-pubkey>",
+  "tags": [
+    ["p", "<bahia-service-pubkey>"],
+    ["method", "service/deploy"],
+    ["service", "api"],
+    ["environment", "prod"],
+    ["artifact", "api:v2"]
+  ],
+  "content": "{\"jsonrpc\":\"2.0\",\"id\":\"deploy-api-prod-01\",\"method\":\"service/deploy\",\"params\":{\"service_id\":\"api\",\"environment_id\":\"prod\",\"artifact_id\":\"api:v2\",\"_meta\":{\"progressToken\":\"deploy-api-prod-01\"}}}"
+}
+```
+
+When sensitive, publish that inner message as a CEP-4 / NIP-59 gift wrap (`1059` or `21059`) tagged to the Bahia service pubkey.
+
+## Observable Follow-up
+
+A successful ContextVM response is an acknowledgment that Bahia accepted or rejected the command intent. It is not long-running completion. Clients must follow canonical observables:
+
+```json
+{
+  "kinds": [30900, 30315, 4903],
+  "authors": ["<bahia-service-pubkey>"],
+  "#service": ["api"],
+  "#environment": ["prod"]
+}
+```
+
+Use these rules:
+
+1. Subscribe with scoped filters before publishing when practical.
+2. Process stored events until `EOSE` for historical catch-up.
+3. Keep the subscription open for realtime convergence.
+4. Deduplicate by event id.
+5. Apply replaceable semantics for `(kind, pubkey, d)` on `30900`, `30078`, `11316`-`11320`, and `30002`.
+6. Treat relay `OK`, `CLOSED`, and `AUTH` messages as protocol outcomes, not log noise.
+
+## Canonical Observable Tags
 
 Use tags for routing and correlation so subscribers do not need to parse content to filter:
 
+- `["p", "<requester_pubkey>"]`
+- `["e", "<contextvm_request_event_id>", "", "reply"]`
+- `["d", "<domain>:<entity>:<id>"]` for addressable projections
+- `["domain", "service" | "worker" | "dns" | "backup" | "ml" | ...]`
+- `["schema", "<schema-id>"]`
 - `["service", "<service_id>"]`
 - `["environment", "<environment_id>"]`
 - `["artifact", "<artifact_id>"]`
@@ -67,119 +93,47 @@ Use tags for routing and correlation so subscribers do not need to parse content
 - `["release", "<llm_release_id>"]`
 - `["intent", "<intent_id>"]`
 - `["run", "<run_id>"]`
-- `["e", "<request_event_id>", "", "reply"]` on status/result replies
-- `["p", "<requester_pubkey>"]` on status/result replies
-- `["status", "..."]` and `["step", "..."]` on progress events
+- `["status", "running" | "success" | "failed" | ...]`
 
-## Example Deploy Request
+## Discovery and Relay Sets
 
-```json
-{
-  "kind": 5961,
-  "content": "{\"service_id\":\"...\",\"environment_id\":\"...\",\"artifact_id\":\"...\"}",
-  "tags": [
-    ["service", "<service_id>"],
-    ["environment", "<environment_id>"],
-    ["artifact", "<artifact_id>"]
-  ]
-}
-```
+Clients bootstrap with:
 
-## LLM Request Examples
+- ContextVM server announcement `11316`.
+- ContextVM capability announcements `11317`-`11320`.
+- NIP-51 relay sets `30002` such as browser relay and service relay sets.
+- NIP-65 relay lists where available for broader Nostr routing.
 
-### Create LLM Route (Kind 5971)
+Legacy Bahia discovery kind `31974` is not a production bootstrap contract. It may appear only in migration inputs or compatibility fixtures.
 
-```json
-{
-  "kind": 5971,
-  "content": "{\"name\":\"chat\",\"description\":\"chat completions\",\"gateway_config\":{\"public_model\":\"chat\"}}",
-  "tags": [
-    ["route", "<optional-client-route-id>"],
-    ["model", "chat"]
-  ]
-}
-```
+## Migration App
 
-### Register LLM Release (Kind 5972)
+Bahia includes a startup migration app in `internal/nostrmigration`. It converts stored and optionally relay-backfilled legacy events into canonical ContextVM/canonical observable events before production runtime handles live traffic.
 
-```json
-{
-  "kind": 5972,
-  "content": "{\"route_id\":\"...\",\"version\":\"v1\",\"model_ref\":\"hf/org/model\",\"model_source\":\"huggingface\"}",
-  "tags": [
-    ["route", "<route_id>"],
-    ["model", "hf/org/model"]
-  ]
-}
-```
+The migration app:
 
-### Deploy LLM Release (Kind 5973)
+1. Scans the local Nostr event repository for `LegacyKinds()`.
+2. Optionally backfills legacy events from relays and waits for `EOSE`.
+3. Resolves each legacy event to a canonical disposition.
+4. Skips events that already have a canonical output tagged `migrated-from=<legacy_event_id>`.
+5. Builds a canonical event tagged with `migration=bahia-nostr-native-v1`, `legacy-kind`, `migrated-from`, `schema`, `domain`, and layer metadata.
+6. Signs with the Bahia service key.
+7. Publishes to relays, treating accepted publishes and relay duplicate acknowledgments as success.
+8. Records the canonical event locally and logs a summary.
 
-```json
-{
-  "kind": 5973,
-  "content": "{\"route_id\":\"...\",\"environment_id\":\"...\",\"release_id\":\"...\",\"requested_by\":\"operator\"}",
-  "tags": [
-    ["route", "<route_id>"],
-    ["environment", "<environment_id>"],
-    ["release", "<release_id>"]
-  ]
-}
-```
+Because idempotency is based on `migrated-from`, the app is safe to run at every startup. Operators should fix migration failures rather than re-enabling legacy runtime subscribers.
 
-### Approve or Reject LLM Deployment (Kind 5974)
+## Historical Legacy Families
 
-```json
-{
-  "kind": 5974,
-  "content": "{\"intent_id\":\"...\",\"decision\":\"approve\"}",
-  "tags": [
-    ["intent", "<intent_id>"],
-    ["decision", "approve"]
-  ]
-}
-```
+These families are retained only for migration manifests, historical conversion tests, and fail-closed fixtures:
 
-### Roll Back LLM Route (Kind 5975)
+| Legacy range | Historical purpose | Canonical target |
+|--------------|--------------------|------------------|
+| `5961`-`6006`, `38390`-`38431`, `5401`, `5102` | CRU/request operations | ContextVM `25910` methods, or NIP-09 `5` for deletion semantics |
+| `6961`-`6997` | progress/status | `30315`, `4903`, correlated ContextVM responses, or domain observables |
+| `7961`-`7997` | terminal results | ContextVM responses plus `30900`/`4903`/`30315` observables |
+| `31961`-`32003` | read models | `30900`, `30078`, `11316`-`11320`, or `30002` depending on semantics |
+| `31000`-`31024`, `31310`-`31311` | audit/activity | `4903` |
+| `5980`, `7980` | encrypted request/result envelope | CEP-4 / NIP-59 `1059` or `21059` around ContextVM `25910` |
+| `31100`-`31105` | deprecated bridge commands | removed; no canonical live runtime path |
 
-```json
-{
-  "kind": 5975,
-  "content": "{\"route_id\":\"...\",\"environment_id\":\"...\",\"requested_by\":\"operator\"}",
-  "tags": [
-    ["route", "<route_id>"],
-    ["environment", "<environment_id>"]
-  ]
-}
-```
-
-LLM status/result replies use kind `6973` and `7973` for deploy/approval/rollback and include `route`, `release` when known, `environment`, `intent`, `run`, `e`, and `p` tags. Route create and release register terminal replies use `7971` and `7972`.
-
-MCP LLM tools publish these canonical request events and return `request_event_id`, `request_kind`, `status_kind`, `result_kind`, `registry_kind`, `state_kind`, and resource IDs. Agents should use those fields to subscribe to relay updates; do not poll REST for completion.
-
-## Replaceable Read Models
-
-| Kind | d-tag | Description |
-|------|-------|-------------|
-| 31961 | `service_id:environment_id` | Current service state in an environment |
-| 31962 | `service_id` | Service registry entry |
-| 31963 | `environment_id` | Environment registry entry |
-| 31964 | `route_id` | LLM route registry entry |
-| 31965 | `route_id:environment_id` | Current LLM route state in an environment |
-| 31966 | `artifact_id` | Artifact registry entry |
-| 31967 | `intent_id` | Deployment intent registry entry |
-| 31968 | `run_id` | Deployment run registry entry |
-| 31969 | `build_id` | Build registry entry |
-| 31970 | `policy_id` | Policy registry entry |
-
-Read-model events are Bahia-signed projections from the database. Clients should query them, wait for EOSE, then keep the live subscription open. Latest `created_at` wins for each `(kind, pubkey, d-tag)` key. Deletions use tombstones (`deleted=true`) rather than relying on Nostr delete events.
-
-`7977` is not a normal Bahia result event. It is the operator's signed response back to Bahia after a prior `5977` approval handoff.
-
-## Encrypted request/result note
-
-Kind `5980` requests and kind `7980` results are used for sensitive browser-facing operations such as notifications, org/member flows, payments history, secrets, and selected log/signature actions. These requests should be sent only to encrypted-request relays, not to the public relay sidecar.
-
-## Legacy 311xx Bridge
-
-Kinds 31100–31105 are deprecated compatibility commands. They are not the supported control-plane contract and new integrations must not publish them. If received, Bahia logs a deprecation warning and operators should migrate publishers to the 596x request kinds above.

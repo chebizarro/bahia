@@ -36,6 +36,34 @@ Bahia clients now separate private mutation intent from public observable truth.
 | **Collections/relays** | `30002` | NIP-51 relay sets and topology |
 | **Migration fixtures** | `5961`-`6006`, `6961`-`6997`, `7961`-`7997`, `31961`-`32003`, `38390`-`38431`, `5980`, `7980` | Legacy custom kinds retained only for startup migration, historical conversion, and fail-closed fixtures; they are not production runtime subscriptions |
 
+## Migrating Existing Deployments to the New Kinds
+
+Bahia includes a startup migration app in `internal/nostrmigration` that converts historical Bahia custom events into the canonical ContextVM/canonical observable contract. Operators should run the migrated app with the migration app enabled rather than keeping legacy subscribers in the runtime.
+
+What it converts:
+
+| Legacy input | Canonical output |
+|--------------|------------------|
+| Legacy CRU/request kinds (`5961`-`6006`, `38390`-`38431`, `5102`) | ContextVM `25910` methods, or NIP-09 `5` where the operation is deletion |
+| Legacy status/progress kinds (`6961`-`6997`) | `30315`, `4903`, correlated ContextVM responses, or domain observables |
+| Legacy terminal result kinds (`7961`-`7997`) | ContextVM responses plus `30900` / `4903` / `30315` observables |
+| Legacy read-model/discovery kinds (`31961`-`32003`, `31974`) | `30900`, `30078`, `11316`-`11320`, or `30002` depending on semantics |
+| Legacy audit/activity kinds (`31000`-`31024`, `31310`-`31311`) | `4903` |
+| Legacy encrypted request/result (`5980`, `7980`) | CEP-4 / NIP-59 `1059` or `21059` around ContextVM `25910` |
+
+How it runs:
+
+1. On startup, scan the local Nostr event repository for `LegacyKinds()`.
+2. Optionally backfill legacy events from configured relays and wait for `EOSE`.
+3. Resolve each legacy event to a canonical disposition.
+4. Skip if the target canonical event already exists with `migrated-from=<legacy_event_id>`.
+5. Build a canonical event tagged with `migration=bahia-nostr-native-v1`, `legacy-kind`, `migrated-from`, `schema`, `domain`, and layer metadata.
+6. Sign with the Bahia service private key.
+7. Publish to relays, accepting both fresh relay `OK` and duplicate relay `OK` outcomes as success.
+8. Store the canonical event locally and log the migration summary.
+
+The migration is idempotent and safe to run every startup. Non-dry-run migration requires a configured Nostr publisher and Bahia service private key. If relay backfill does not reach `EOSE`, or if publish/signing fails, fix relay/signing configuration and rerun startup; do not re-enable legacy production subscribers.
+
 ### Read Models
 
 **Read models** are replaceable events reflecting current state. New client code should read canonical state from kind `30900` or NIP-78 kind `30078`, with domain and schema tags identifying the projection:

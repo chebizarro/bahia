@@ -314,25 +314,25 @@ The assistant MUST NOT use timeout-based completion logic for event delivery or 
 
 ## Assistant-safe tool catalog scope
 
-Phase 1 exposes only event-native tools backed by existing Nostr command/result flows:
+Assistant tools are backed by ContextVM JSON-RPC methods carried as Nostr kind `25910`, usually encrypted with CEP-4 / NIP-59 wrappers (`1059` or `21059`) for sensitive payloads. Tool responses are acknowledgments only; the assistant follows canonical observables for progress and terminal truth.
 
-| Action | Downstream request kind | Status/result kinds |
+| Action | ContextVM method | Observable follow-up |
 | --- | --- | --- |
-| Service deploy | `5961` | `6961` / `7961` |
-| Service rollback | `5962` | `6961` / `7961` |
-| LLM deploy | `5973` | `6973` / `7973` |
-| LLM approval | `5974` | `7973` |
-| LLM rollback | `5975` | `7973` |
-| ML deploy | `38391` | `38396` |
-| ML approval | `38392` | `38397` |
-| ML rollback | `38393` | `38398` |
+| Service deploy | `service/deploy` | `30315`, `4903`, `30900` scoped by `service` / `environment` / `artifact` |
+| Service rollback | `service/rollback` | `30315`, `4903`, `30900` scoped by `service` / `environment` |
+| Service restart/stop | `service/restart`, `service/stop` | `30315`, `4903`, `30900` scoped by `service` / `environment` |
+| LLM deploy | `llm/deploy` | `30315`, `4903`, `30900` scoped by `route` / `environment` / `release` |
+| LLM approval | `llm/approve` | `30315`, `4903`, `30900` scoped by `intent` |
+| LLM rollback | `llm/rollback` | `30315`, `4903`, `30900` scoped by `route` / `environment` |
+| ML deploy | `ml/inference-deploy` | `30315`, `4903`, `30900` / `30078` scoped by endpoint/model tags |
+| ML approval | `ml/inference-approve` | `30315`, `4903`, `30900` scoped by deployment/intent tags |
+| ML rollback | `ml/inference-rollback` | `30315`, `4903`, `30900` scoped by endpoint/environment tags |
 
-Excluded in Phase 1:
+Excluded unless explicitly allowlisted:
 
-- ML recipe run (`38390`)
-- ML model import (`38394`)
-- all sync mutation tools
-- any tool not present in the assistant-safe allowlist
+- mutation methods not present in the assistant-safe catalog
+- raw REST mutation fallbacks after any relay has accepted a signed ContextVM request
+- legacy Bahia request/status/result kinds except as migration fixtures
 
 The planner output MUST be validated against this catalog before a plan is shown to the operator.
 
@@ -341,11 +341,9 @@ The planner output MUST be validated against this catalog before a plan is shown
 ```go
 type AsyncToolReceipt struct {
     ToolName        string
+    Method          string
     RequestEventID  string
-    RequestKind     int
-    StatusKinds     []int
-    ResultKinds     []int
-    ReadModelKinds  []int
+    ObservableKinds []int
     DTag            string
     ResourceTags    map[string]string
     IdempotencyKey  string
@@ -353,17 +351,18 @@ type AsyncToolReceipt struct {
 }
 ```
 
-The receipt records the downstream event-native request and the exact kinds/tags the assistant observes for progress and terminal outcomes.
+The receipt records the ContextVM request event and the exact canonical kinds/tags the assistant observes for progress and terminal outcomes. Legacy `request_kind`, `status_kind`, `result_kind`, and read-model kind fields may appear only in migration fixtures or historical conversion reports.
 
 ## Signing model
 
-Phase 1 signing model:
+Production signing model:
 
-- Operator browser key signs `38420` prompt requests and `38421` approval decisions.
-- Bahia service key signs `31990`, `38422`, and `38423` assistant events.
-- Bahia service key also signs downstream control-plane commands on behalf of the assistant in Phase 1.
-- Downstream commands published by the assistant MUST carry `["agent", "<assistant_agent_id>"]` for audit attribution.
-- The assistant soul identity is displayed and referenced for attribution, but does not sign arbitrary downstream control-plane kinds until Signet arbitrary-kind signing is validated in a later phase.
+- Operator browser key signs ContextVM `25910` prompt requests, approval decisions, and other operator intents.
+- Sensitive assistant/operator intents are wrapped with CEP-4 / NIP-59 `1059` or `21059`; authorization uses the verified inner ContextVM event pubkey after unwrap.
+- Bahia service key signs assistant state/discovery/canonical observable events, including `11316`-`11320`, `30900`, `30315`, `4903`, `30002`, and `30078` where applicable.
+- Bahia service key may initiate ContextVM downstream methods on behalf of the assistant only when the approved plan and authorization policy allow it.
+- Downstream ContextVM requests published by the assistant MUST include an `agent` tag or equivalent JSON-RPC metadata for audit attribution.
+- Legacy assistant custom kinds are migration inventory only and are not the production signing surface.
 
 ## Validation requirements
 
@@ -371,8 +370,9 @@ Consumers and handlers MUST validate inbound events before acting:
 
 - NIP-01 event ID hash matches serialized event.
 - Schnorr signature is valid for the event pubkey where the runtime can verify signatures.
+- For encrypted ContextVM, unwrap first, then verify the inner event signature and authorize the inner pubkey.
 - Timestamp is reasonable.
 - Required tags for the event kind are present.
-- Content JSON matches the expected contract.
+- JSON-RPC content matches the expected ContextVM method contract.
 - Events are deduped by event ID.
-- Replaceable `31990` semantics keep only the latest event by service pubkey and `d=<session_id>`.
+- Replaceable/addressable semantics keep only the latest event by service pubkey and `d` tag for `30900`, `30078`, `11316`-`11320`, and `30002`.

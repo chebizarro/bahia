@@ -129,6 +129,23 @@ Production runtime subscribes to ContextVM `25910` messages and canonical observ
 
 Historical Bahia-specific request/status/result/read-model/encrypted ranges (`5961`-`6006`, `6961`-`6997`, `7961`-`7997`, `31961`-`32003`, `38390`-`38431`, `5980`, `7980`) are migration inventory only. Production clients must not publish or subscribe to those numbers as live runtime contracts; they may appear in startup migration manifests, historical conversion tests, and fail-closed fixtures.
 
+### Startup migration app
+
+Bahia includes a startup migration app in `internal/nostrmigration` so deployed relays and local repositories can be converted to the canonical contract without keeping legacy kind support in core runtime code.
+
+Runtime behavior:
+
+1. Scan the local Nostr event repository for `LegacyKinds()`.
+2. Optionally subscribe to configured relays for legacy kinds, bounded by migration backfill settings, and require `EOSE`.
+3. Resolve each legacy event with the migration disposition manifest.
+4. Skip if the target canonical kind already has an event tagged `migrated-from=<legacy_event_id>`.
+5. Build a canonical event tagged with `migration=bahia-nostr-native-v1`, `legacy-kind`, `migrated-from`, `schema`, `domain`, and layer metadata.
+6. Sign with the Bahia service private key.
+7. Publish to relays and treat accepted `OK` or duplicate `OK` as success.
+8. Persist the canonical event locally and emit the migration summary log.
+
+The app is idempotent and can run on every startup. Non-dry-run migration requires a Nostr publisher and service private key. Relay backfill must reach `EOSE`; `CLOSED`, missing `EOSE`, signing failures, or zero accepted publishes are deployment failures to fix before relying on the canonical runtime. They are not a reason to reintroduce legacy reactor/subscriber paths.
+
 ### Canonical ContextVM mutation flow
 
 Public, encrypted, DNS, and operator mutations follow the same ContextVM lifecycle invariants:

@@ -8,7 +8,7 @@ Complete. ContextVM/canonical Nostr migration streams A/B/C are complete and doc
 - `bahia-f0uw` CLOSED: production runtime legacy kind reactor/subscriber support was removed; legacy custom kinds are isolated outside production runtime except startup migration/fixtures.
 - `bahia-viys` CLOSED: web/CLI client cutover to ContextVM/canonical observables was completed.
 - `web/src/lib/nostr/kinds.gen.js` exposes ContextVM (`25910`, `1059`, `21059`, `11316`-`11320`) and canonical observable constants (`30900`, `4903`, `30315`, `30002`, `30078`), while labelling legacy ranges migration-only.
-- Docs finalized: `docs/user-guide/nostr-integration.md`, `docs/control-planes.md`, `docs/user-guide/mcp-tools.md`, `docs/user-guide/cli-reference.md`.
+- Docs finalized: `docs/user-guide/nostr-integration.md`, `docs/control-planes.md`, `docs/user-guide/mcp-tools.md`, `docs/user-guide/cli-reference.md`, `docs/nostr-commands.md`, `docs/event-spec.md`, `docs/protocol-compatibility.md`, `docs/operator-assistant-protocol.md`, and `AGENTS.md`.
 
 ## Tests run
 - PASS (`bahia-dgju`): focused transport tests for CEP-4/NIP-59 random-key gift-wrap around inner ContextVM `25910`.
@@ -47,3 +47,21 @@ Sanity checks for this pass:
 - PASS: static production-contract grep found no stale instructions to publish old deploy request kinds, subscribe to old service-state kinds, or depend on legacy system-discovery wording in target docs.
 - PASS: PSTF JSON artifacts parse with `python3 -m json.tool`.
 - PASS: markdown link sanity check for target docs found no broken relative `.md` links.
+
+## Documentation completion pass — bahia-8w7t
+
+User/agent/operator documentation was updated to reflect the final ContextVM/canonical-kind contract and to document startup migration app usage:
+
+- `docs/user-guide/nostr-integration.md`: added operator-facing migration section covering legacy inputs, canonical outputs, idempotency, relay backfill, signing, and failure handling.
+- `docs/control-planes.md`: added runtime startup migration app section and clarified that migration failures must be fixed rather than reintroducing legacy subscribers.
+- `docs/nostr-commands.md`: rewritten from the old `596x/696x/796x/3196x` production contract to ContextVM `25910`, CEP-4/NIP-59 wrappers, canonical observables, discovery, and migration-only legacy families.
+- `docs/event-spec.md`: rewritten around production families (`25910`, `1059`/`21059`, `30900`, `30078`, `30315`, `4903`, `11316`-`11320`, `30002`, `5`) and startup migration behavior.
+- `docs/protocol-compatibility.md`: replaced stale old-kind compatibility tables and removed an unresolved merge-conflict marker; now distinguishes ContextVM/canonical observables from external Loom/Hive-CI protocol interop.
+- `docs/operator-assistant-protocol.md`: updated the assistant-safe catalog, receipts, signing model, and validation requirements to ContextVM methods and canonical observables.
+- `AGENTS.md`: clarified that ad hoc RPC-over-Nostr remains forbidden while ContextVM `25910` is the approved mutation transport, and expanded required doc-maintenance scope for migration/kind changes.
+
+Verification for this pass:
+
+- PASS: static stale production-kind grep over updated user/agent/operator docs returned only migration/historical-labelled occurrences.
+- PASS: static search confirmed no conflict markers remain in `docs/protocol-compatibility.md`.
+- PASS: markdown link sanity check for updated docs found no broken relative `.md` links.
