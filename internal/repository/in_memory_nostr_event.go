@@ -120,6 +120,60 @@ func (r *InMemoryNostrEventRepository) ListByKind(_ context.Context, kind int, l
 	return limitNostrEventRecords(records, limit), nil
 }
 
+// ListByKinds returns the oldest events for any of kinds so migrations process deterministically.
+func (r *InMemoryNostrEventRepository) ListByKinds(_ context.Context, kinds []int, limit int) ([]NostrEventRecord, error) {
+	if len(kinds) == 0 {
+		return nil, nil
+	}
+	if limit <= 0 {
+		limit = 500
+	}
+	kindSet := intSet(kinds)
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	records := make([]NostrEventRecord, 0)
+	for _, rec := range r.records {
+		if _, ok := kindSet[rec.Kind]; ok {
+			records = append(records, cloneNostrEventRecord(&rec))
+		}
+	}
+	sort.Slice(records, func(i, j int) bool {
+		if records[i].CreatedAt.Equal(records[j].CreatedAt) {
+			return records[i].ID < records[j].ID
+		}
+		return records[i].CreatedAt.Before(records[j].CreatedAt)
+	})
+	return limitNostrEventRecords(records, limit), nil
+}
+
+// FindByTag returns events containing tagName=tagValue, optionally restricted by kind.
+func (r *InMemoryNostrEventRepository) FindByTag(_ context.Context, tagName, tagValue string, kinds []int, limit int) ([]NostrEventRecord, error) {
+	if tagName == "" || tagValue == "" {
+		return nil, nil
+	}
+	if limit <= 0 {
+		limit = 50
+	}
+	kindSet := intSet(kinds)
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	records := make([]NostrEventRecord, 0)
+	for _, rec := range r.records {
+		if len(kindSet) > 0 {
+			if _, ok := kindSet[rec.Kind]; !ok {
+				continue
+			}
+		}
+		if recordHasTag(rec.Tags, tagName, tagValue) {
+			records = append(records, cloneNostrEventRecord(&rec))
+		}
+	}
+	sortNostrEventRecordsNewestFirst(records)
+	return limitNostrEventRecords(records, limit), nil
+}
+
 // ListByEntity returns the most recent events for a given entity.
 func (r *InMemoryNostrEventRepository) ListByEntity(_ context.Context, entityType string, entityID uuid.UUID, limit int) ([]NostrEventRecord, error) {
 	r.mu.RLock()
@@ -192,12 +246,19 @@ func recordHasDTag(raw json.RawMessage, dTag string) bool {
 	if dTag == "" {
 		return false
 	}
+	return recordHasTag(raw, "d", dTag)
+}
+
+func recordHasTag(raw json.RawMessage, tagName, tagValue string) bool {
+	if tagName == "" || tagValue == "" {
+		return false
+	}
 	var tags [][]string
 	if err := json.Unmarshal(raw, &tags); err != nil {
 		return false
 	}
 	for _, tag := range tags {
-		if len(tag) >= 2 && tag[0] == "d" && tag[1] == dTag {
+		if len(tag) >= 2 && tag[0] == tagName && tag[1] == tagValue {
 			return true
 		}
 	}

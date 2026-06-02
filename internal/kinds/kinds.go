@@ -139,6 +139,16 @@ const (
 )
 
 // =============================================================================
+// Canonical Cascadia Observable Kinds
+// =============================================================================
+
+const (
+	CASAudit        = 4903
+	NIP38Status     = 30315
+	CASControlState = 30900
+)
+
+// =============================================================================
 // Interop Kinds (Loom, Hive-CI)
 // =============================================================================
 
@@ -150,6 +160,21 @@ const (
 
 	HiveCIWorkflowRun    = 5401
 	HiveCIWorkflowResult = 5402
+)
+
+// =============================================================================
+// ContextVM Transport and Discovery Kinds
+// =============================================================================
+
+const (
+	ContextVMMessage               = 25910
+	ContextVMGiftWrap              = 1059
+	ContextVMEphemeralGiftWrap     = 21059
+	ContextVMServerAnnouncement    = 11316
+	ContextVMToolsList             = 11317
+	ContextVMResourcesList         = 11318
+	ContextVMResourceTemplatesList = 11319
+	ContextVMPromptsList           = 11320
 )
 
 // =============================================================================

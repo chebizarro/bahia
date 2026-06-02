@@ -1,0 +1,37 @@
+{
+  "feature_id": "NOSTR_NATIVE_CONTEXTVM_MIGRATION",
+  "title": "ContextVM and canonical Nostr client migration",
+  "beads": ["bahia-viys", "bahia-itrq"],
+  "status": "in_progress",
+  "intended_behavior": {
+    "mutations": "Web and CLI client surfaces publish or document ContextVM JSON-RPC 2.0 methods over Nostr kind 25910, using CEP-4/NIP-59 encryption where supported, instead of introducing new legacy request-kind flows.",
+    "reads": "Client reads target canonical observable/state kinds 30900, 4903, 30315, 11316-11320, 30002, 30078 and standard NIPs, with legacy Bahia kinds retained only as migration fixtures.",
+    "worker_actions": "Touched worker UI paths do not hardcode legacy worker request kind numbers; legacy constants are isolated in the Nostr kind surface as migration-only constants.",
+    "documentation": "User-facing docs identify ContextVM method names, canonical read kinds, and backend dependencies."
+  },
+  "scope": [
+    "web/src/lib/nostr/kinds.gen.js",
+    "web/src/lib/nostr/encrypted-controlplane.js",
+    "web/src/routes/workers/[pubkey]/+page.svelte",
+    "pkg/client/operator_nostr.go",
+    "docs/user-guide/nostr-integration.md",
+    "docs/control-planes.md",
+    "docs/user-guide/mcp-tools.md",
+    "docs/user-guide/cli-reference.md"
+  ],
+  "out_of_scope": [
+    "Server-side ContextVM method dispatcher for every legacy request family",
+    "Full removal of legacy backend subscriptions",
+    "Relay-side enforcement policy for canonical audit retention"
+  ],
+  "remaining_dependencies": [
+    {
+      "bead": "bahia-viys",
+      "dependency": "Backend ContextVM kind 25910 JSON-RPC handlers for service, worker, package, DNS, backup, ML, and adoption mutations"
+    },
+    {
+      "bead": "bahia-itrq",
+      "dependency": "Migration documentation and PSTF verification must stay updated as backend handlers land"
+    }
+  ]
+}

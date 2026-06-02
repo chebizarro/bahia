@@ -55,16 +55,11 @@ func (p *policy) acceptEvent(ctx context.Context, event nostr.Event) (bool, stri
 	}
 
 	switch {
-	case event.Kind == nostr.Kind(kinds.EncryptedRequest):
+	case event.Kind == nostr.Kind(kinds.EncryptedRequest) || event.Kind == nostr.Kind(kinds.ContextVMMessage) || event.Kind == nostr.Kind(kinds.ContextVMGiftWrap) || event.Kind == nostr.Kind(kinds.ContextVMEphemeralGiftWrap):
 		if _, ok := p.authorized[event.PubKey]; ok {
 			return false, ""
 		}
-		return true, "restricted: encrypted request kind requires an authorized operator pubkey"
-	case isRequestKind(event.Kind):
-		if _, ok := p.authorized[event.PubKey]; ok {
-			return false, ""
-		}
-		return true, "restricted: request kind requires an authorized operator pubkey"
+		return true, "restricted: intent transport kind requires an authorized operator pubkey"
 	case isBahiaProjectionKind(event.Kind):
 		if p.hasServiceKey && event.PubKey == p.servicePubkey {
 			return false, ""
@@ -128,10 +123,6 @@ func deriveFiatjafPubkey(raw string) (nostr.PubKey, bool, error) {
 		return nostr.ZeroPK, false, fmt.Errorf("decode nostr.private_key hex: %w", err)
 	}
 	return sk.Public(), true, nil
-}
-
-func isRequestKind(kind nostr.Kind) bool {
-	return kinds.IsRequestKind(int(kind))
 }
 
 func isBahiaProjectionKind(kind nostr.Kind) bool {

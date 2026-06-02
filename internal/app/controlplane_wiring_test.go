@@ -32,6 +32,14 @@ func (r *appWiringNostrEventRepo) ListByKind(context.Context, int, int) ([]repos
 	return nil, nil
 }
 
+func (r *appWiringNostrEventRepo) ListByKinds(context.Context, []int, int) ([]repository.NostrEventRecord, error) {
+	return nil, nil
+}
+
+func (r *appWiringNostrEventRepo) FindByTag(context.Context, string, string, []int, int) ([]repository.NostrEventRecord, error) {
+	return nil, nil
+}
+
 func (r *appWiringNostrEventRepo) ListByEntity(context.Context, string, uuid.UUID, int) ([]repository.NostrEventRecord, error) {
 	return nil, nil
 }

@@ -87,7 +87,7 @@ func TestSidecarRejectsBroadRequestKindReadsWithoutAuthorizedAuthors(t *testing.
 	}
 }
 
-func TestSidecarAllowsAuthorScopedRequestKindReadsForAuthorizedOperators(t *testing.T) {
+func TestSidecarRejectsAuthorScopedLegacyRequestKindReadsForAuthorizedOperators(t *testing.T) {
 	cfg := config.Defaults().Nostr
 	cfg.Sidecar.Enabled = true
 	cfg.Sidecar.PublicURL = "ws://localhost:3334"
@@ -103,8 +103,11 @@ func TestSidecarAllowsAuthorScopedRequestKindReadsForAuthorizedOperators(t *test
 
 	filter := nostr.Filter{Kinds: []nostr.Kind{5963, 5978, 5979, 5997, 6005, 38390, 38400, 38420, 38421, 38430}, Authors: []nostr.PubKey{pubkey}}
 	reject, msg := server.Relay().OnRequest(context.Background(), filter)
-	if reject {
-		t.Fatalf("expected author-scoped request kind read filter to be accepted, got rejection %q", msg)
+	if !reject {
+		t.Fatalf("expected author-scoped legacy request kind read filter to be rejected after migration boundary")
+	}
+	if msg == "" {
+		t.Fatalf("expected rejection message")
 	}
 
 	encryptedFilter := nostr.Filter{Kinds: []nostr.Kind{5980}, Authors: []nostr.PubKey{pubkey}}
@@ -114,7 +117,7 @@ func TestSidecarAllowsAuthorScopedRequestKindReadsForAuthorizedOperators(t *test
 	}
 }
 
-func TestSidecarAllowsSignerFirstOperatorStatusAndResultKinds(t *testing.T) {
+func TestSidecarAllowsCanonicalStatusAndRejectsLegacyStatusResultKinds(t *testing.T) {
 	cfg := config.Defaults().Nostr
 	cfg.Sidecar.Enabled = true
 	cfg.Sidecar.PublicURL = "ws://localhost:3334"
@@ -124,10 +127,19 @@ func TestSidecarAllowsSignerFirstOperatorStatusAndResultKinds(t *testing.T) {
 		t.Fatalf("New() error: %v", err)
 	}
 
-	filter := nostr.Filter{Kinds: []nostr.Kind{6963, 6978, 6981, 6984, 6997, 7962, 7978, 7979, 7997, 30350, 30353, 31310, 31311, 38395, 38410, 38422, 38423, 32000, 32003}}
-	reject, msg := server.Relay().OnRequest(context.Background(), filter)
+	canonicalFilter := nostr.Filter{Kinds: []nostr.Kind{30315, 30900, 4903}}
+	reject, msg := server.Relay().OnRequest(context.Background(), canonicalFilter)
 	if reject {
-		t.Fatalf("expected signer-first operator status/result kinds to be readable, got rejection %q", msg)
+		t.Fatalf("expected canonical status/state/audit kinds to be readable, got rejection %q", msg)
+	}
+
+	legacyFilter := nostr.Filter{Kinds: []nostr.Kind{6963, 6978, 6981, 6984, 6997, 7962, 7978, 7979, 7997, 30350, 30353, 31310, 31311, 38395, 38410, 38422, 38423, 32000, 32003}}
+	reject, msg = server.Relay().OnRequest(context.Background(), legacyFilter)
+	if !reject {
+		t.Fatalf("expected legacy signer-first operator status/result/read-model kinds to be rejected after migration boundary")
+	}
+	if msg == "" {
+		t.Fatalf("expected rejection message")
 	}
 }
 
@@ -141,10 +153,19 @@ func TestSidecarAllowsDiscoveryKinds(t *testing.T) {
 		t.Fatalf("New() error: %v", err)
 	}
 
-	filter := nostr.Filter{Kinds: []nostr.Kind{30002, 30078, 30079, 31400, 31404, 31974, 31975, 31976, 31977, 31978, 31991, 31999}}
+	filter := nostr.Filter{Kinds: []nostr.Kind{10002, 30002, 30078, 11316, 11317, 11318, 11319, 11320, 31410, 31411, 30360}}
 	reject, msg := server.Relay().OnRequest(context.Background(), filter)
 	if reject {
-		t.Fatalf("expected discovery/SBOM kinds to be readable, got rejection %q", msg)
+		t.Fatalf("expected canonical discovery/SBOM kinds to be readable, got rejection %q", msg)
+	}
+
+	legacyFilter := nostr.Filter{Kinds: []nostr.Kind{30079, 31400, 31404, 31974, 31975, 31976, 31977, 31978, 31991, 31999}}
+	reject, msg = server.Relay().OnRequest(context.Background(), legacyFilter)
+	if !reject {
+		t.Fatalf("expected legacy discovery/read-model kinds to be rejected after migration boundary")
+	}
+	if msg == "" {
+		t.Fatalf("expected rejection message")
 	}
 }
 

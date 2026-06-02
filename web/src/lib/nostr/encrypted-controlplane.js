@@ -3,9 +3,14 @@ import { currentSystemInfo } from '$lib/stores/system.svelte.js';
 import { createNostrPoolClient, getTagValues, nostr } from './client.js';
 
 export const ENCRYPTED_REQUEST_ROUTING_TAG = 'encrypted';
-export const ENCRYPTED_REQUEST_WIRE_VERSION = 'bahia-encrypted-v1';
-export const ENCRYPTED_REQUEST_KIND = 5980;
-export const ENCRYPTED_RESULT_KIND = 7980;
+export const ENCRYPTED_REQUEST_WIRE_VERSION = 'contextvm-jsonrpc-v1';
+export const CONTEXTVM_MESSAGE_KIND = 25910;
+export const CONTEXTVM_GIFT_WRAP_KIND = 1059;
+export const CONTEXTVM_EPHEMERAL_GIFT_WRAP_KIND = 21059;
+export const ENCRYPTED_REQUEST_KIND = CONTEXTVM_MESSAGE_KIND;
+export const ENCRYPTED_RESULT_KIND = CONTEXTVM_MESSAGE_KIND;
+export const LEGACY_ENCRYPTED_REQUEST_KIND = 5980;
+export const LEGACY_ENCRYPTED_RESULT_KIND = 7980;
 export const ENCRYPTED_RESULT_TIMEOUT_MS = 15000;
 
 function ensureHexPubkey(pubkey, field) {
@@ -43,12 +48,69 @@ function jsonContent(value) {
   return JSON.stringify(value ?? {});
 }
 
+function contextVMMethod(operation) {
+  const trimmed = String(operation || '').trim();
+  if (!trimmed) return '';
+  if (trimmed.includes('/')) return trimmed;
+  const parts = trimmed.split('.').map((part) => part.trim()).filter(Boolean);
+  if (parts.length >= 3 && parts[parts.length - 1] === 'request') {
+    return `${parts[0]}/${parts.slice(1, -1).join('-')}`;
+  }
+  if (parts.length >= 2) {
+    return `${parts[0]}/${parts.slice(1).join('-')}`;
+  }
+  return trimmed;
+}
+
+function buildContextVMRequest({ operation, payload, requestId }) {
+  const method = contextVMMethod(operation);
+  const params = payload && typeof payload === 'object' && !Array.isArray(payload) ? { ...payload } : { value: payload };
+  params._meta = {
+    ...(params._meta && typeof params._meta === 'object' ? params._meta : {}),
+    progressToken: requestId
+  };
+  return {
+    jsonrpc: '2.0',
+    id: requestId,
+    method,
+    params
+  };
+}
+
+function extractContextVMResult(payload, requestEventId) {
+  if (payload?.jsonrpc === '2.0') {
+    if (payload.id !== requestEventId) {
+      throw new Error('ContextVM encrypted result payload did not correlate to the request event id');
+    }
+    if (payload.error) {
+      const message = payload.error.message || 'ContextVM encrypted request failed';
+      throw new Error(message);
+    }
+    return payload.result ?? {};
+  }
+  if (payload?.request_event_id !== requestEventId) {
+    throw new Error('Encrypted Nostr result payload did not correlate to the request event id');
+  }
+  return payload;
+}
+
 function parseJson(value) {
   try {
     return JSON.parse(value);
   } catch (error) {
     throw new Error(`Encrypted Nostr result decrypted but did not contain valid JSON: ${error.message}`);
   }
+}
+
+function randomId() {
+  const cryptoApi = globalThis.crypto;
+  if (cryptoApi?.randomUUID) return cryptoApi.randomUUID();
+  if (cryptoApi?.getRandomValues) {
+    const bytes = new Uint8Array(16);
+    cryptoApi.getRandomValues(bytes);
+    return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
+  }
+  return `req-${Date.now()}`;
 }
 
 function hasTagValue(event, name, value) {
@@ -110,7 +172,7 @@ export class EncryptedControlplaneTransport {
     this.connected = false;
   }
 
-  async buildEncryptedRequestEvent({ operation, payload = {}, tags = [], kind = ENCRYPTED_REQUEST_KIND, created_at = Math.floor(Date.now() / 1000) } = {}) {
+  async buildEncryptedRequestEvent({ operation, payload = {}, tags = [], kind = ENCRYPTED_REQUEST_KIND, created_at = Math.floor(Date.now() / 1000), requestId = randomId() } = {}) {
     if (authState.status !== 'authenticated' || !authState.pubkey) {
       throw new Error('Nostr authentication is required for encrypted Nostr events');
     }
@@ -120,17 +182,13 @@ export class EncryptedControlplaneTransport {
     ensureHexPubkey(this.servicePubkey, 'servicePubkey');
     await ensureEncryptedSignerReady(this.servicePubkey);
 
-    const envelope = {
-      version: ENCRYPTED_REQUEST_WIRE_VERSION,
-      operation: operation.trim(),
-      requester_pubkey: authState.pubkey,
-      payload
-    };
+    const envelope = buildContextVMRequest({ operation, payload, requestId });
     const ciphertext = await encryptWithAuth(this.servicePubkey, jsonContent(envelope));
     const mergedTags = [
       ...normalizeTags(tags),
       ['p', this.servicePubkey],
-      [ENCRYPTED_REQUEST_ROUTING_TAG, ENCRYPTED_REQUEST_WIRE_VERSION]
+      [ENCRYPTED_REQUEST_ROUTING_TAG, ENCRYPTED_REQUEST_WIRE_VERSION],
+      ['method', envelope.method]
     ];
 
     return signWithAuth({
@@ -225,11 +283,8 @@ export class EncryptedControlplaneTransport {
           try {
             const plaintext = await decryptWithAuth(servicePubkey, event.content || '');
             const payload = parseJson(plaintext);
-            if (payload?.request_event_id !== requestEventId) {
-              settle(reject, new Error('Encrypted Nostr result payload did not correlate to the request event id'));
-              return;
-            }
-            settle(resolve, { event, payload });
+            const resultPayload = extractContextVMResult(payload, requestEventId);
+            settle(resolve, { event, payload: resultPayload, jsonrpc: payload?.jsonrpc === '2.0' ? payload : null });
           } catch (error) {
             settle(reject, error);
           }

@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 	gonostr "github.com/nbd-wtf/go-nostr"
+	"github.com/openagentsinc/bahia/internal/kinds"
 	"github.com/openagentsinc/bahia/internal/repository"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -69,6 +70,26 @@ func (r *memoryNostrEventRepo) ListByKind(_ context.Context, kind int, _ int) ([
 	return out, nil
 }
 
+func (r *memoryNostrEventRepo) ListByKinds(_ context.Context, wanted []int, _ int) ([]repository.NostrEventRecord, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	kindSet := make(map[int]struct{}, len(wanted))
+	for _, kind := range wanted {
+		kindSet[kind] = struct{}{}
+	}
+	var out []repository.NostrEventRecord
+	for _, rec := range r.records {
+		if _, ok := kindSet[rec.Kind]; ok {
+			out = append(out, rec)
+		}
+	}
+	return out, nil
+}
+
+func (r *memoryNostrEventRepo) FindByTag(_ context.Context, _ string, _ string, wanted []int, limit int) ([]repository.NostrEventRecord, error) {
+	return r.ListByKinds(context.Background(), wanted, limit)
+}
+
 func (r *memoryNostrEventRepo) ListByEntity(_ context.Context, entityType string, entityID uuid.UUID, _ int) ([]repository.NostrEventRecord, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -120,31 +141,41 @@ func (r *memoryNostrEventRepo) latestCreatedAt(kinds []int, authors []string) *t
 
 func TestDefaultInboundKindsContainsOnlyOperationalNonReactorStreams(t *testing.T) {
 	expected := []int{
+		KindCASControlState,
+		KindCASAudit,
+		KindNIP38Status,
+		kinds.ContextVMServerAnnouncement,
+		kinds.ContextVMToolsList,
+		kinds.ContextVMResourcesList,
+		kinds.ContextVMResourceTemplatesList,
+		kinds.ContextVMPromptsList,
+		KindRelaySetDiscovery,
+		KindNIP65RelayList,
 		KindHiveCIWorkflowRun,
 		KindHiveCIWorkflowResult,
 		KindLoomWorkerAdvertisement,
 		KindLoomJobStatusUpdate,
 		KindLoomJobResult,
 		KindLoomJobCancellation,
-		KindLegacyWorkerState,
-		KindLegacyWorkerAssignmentState,
-		KindLegacyWorkerDrainStatus,
-		KindLegacyWorkerEligibilityPreview,
-		KindWorkerState,
-		KindWorkerAssignmentState,
-		KindWorkerDrainStatus,
-		KindWorkerEligibilityPreview,
-		KindAssistantSession,
-		KindAssistantStatus,
-		KindAssistantResult,
 	}
-	for _, kind := range expected {
-		require.Contains(t, DefaultInboundKinds, kind)
-	}
+	require.ElementsMatch(t, expected, DefaultInboundKinds)
 	for _, kind := range DefaultInboundKinds {
 		require.False(t, isCanonicalControlPlaneRequest(kind), "subscriber default kind %d must not duplicate reactor-owned control-plane traffic", kind)
-		require.False(t, kind >= 31100 && kind <= 31105, "subscriber default kind %d must not include deprecated command traffic", kind)
+		require.False(t, isLegacyRuntimeKind(kind), "subscriber default kind %d must not include legacy runtime traffic", kind)
 	}
+}
+
+func isLegacyRuntimeKind(kind int) bool {
+	return (kind >= 5941 && kind <= 7999) ||
+		(kind >= 31100 && kind <= 31399) ||
+		(kind >= 32000 && kind <= 32099) ||
+		(kind >= 38390 && kind <= 38499) ||
+		kind == KindCmdBuildRegister ||
+		kind == KindCmdArtifactRegister ||
+		kind == KindCmdIntentCreate ||
+		kind == KindCmdIntentApprove ||
+		kind == KindCmdIntentReject ||
+		kind == KindCmdRollbackRequest
 }
 
 func TestSubscriberBuildSubscriptionFiltersUsesScopedAuthorGroups(t *testing.T) {

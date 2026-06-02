@@ -6,20 +6,36 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	canonicalnostr "fiatjaf.com/nostr"
 	"github.com/nbd-wtf/go-nostr"
 	"github.com/nbd-wtf/go-nostr/nip44"
 	nostrpool "github.com/openagentsinc/bahia/internal/adapters/nostr"
+	"github.com/openagentsinc/bahia/internal/kinds"
 	"go.uber.org/zap"
 )
 
 const (
 	EncryptedRequestRoutingTag  = "encrypted"
 	EncryptedRequestWireVersion = "bahia-encrypted-v1"
+	ContextVMRoutingTag         = "contextvm"
+	ContextVMWireVersion        = "contextvm-jsonrpc-v1"
 	KindEncryptedRequest        = 5980 // Browser → Bahia encrypted request
 	KindEncryptedResult         = 7980 // Bahia → Browser encrypted result
+	KindContextVMMessage        = kinds.ContextVMMessage
+	KindContextVMGiftWrap       = kinds.ContextVMGiftWrap
+	KindContextVMEphemeralWrap  = kinds.ContextVMEphemeralGiftWrap
+
+	ContextVMMethodServiceDeploy   = "service/deploy"
+	ContextVMMethodWorkerCordon    = "worker/cordon"
+	ContextVMMethodPackagePromote  = "package/promote"
+	ContextVMMethodDNSZoneCreate   = "dns/zone-create"
+	ContextVMMethodBackupRun       = "backup/run"
+	ContextVMMethodMLRecipeRun     = "ml/recipe-run"
+	ContextVMMethodApprovalApprove = "approval/approve"
+	ContextVMMethodToolsCall       = "tools/call"
 )
 
 // EncryptedRequestSubscriber is the relay subscription contract used by the
@@ -50,6 +66,34 @@ type ResultError struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
 }
+
+type ContextVMJSONRPCRequest struct {
+	JSONRPC string          `json:"jsonrpc"`
+	ID      json.RawMessage `json:"id,omitempty"`
+	Method  string          `json:"method,omitempty"`
+	Params  json.RawMessage `json:"params,omitempty"`
+}
+
+type ContextVMJSONRPCResponse struct {
+	JSONRPC string          `json:"jsonrpc"`
+	ID      json.RawMessage `json:"id,omitempty"`
+	Result  any             `json:"result,omitempty"`
+	Error   *JSONRPCError   `json:"error,omitempty"`
+}
+
+type JSONRPCError struct {
+	Code    int    `json:"code"`
+	Message string `json:"message"`
+}
+
+type ContextVMRequest struct {
+	Event         *nostr.Event
+	OuterEvent    *nostr.Event
+	RPC           ContextVMJSONRPCRequest
+	ProgressToken string
+}
+
+type ContextVMHandler func(ctx context.Context, request ContextVMRequest) (any, error)
 
 // EncryptedRequest is passed to operation handlers after auth and decryption.
 type EncryptedRequest struct {
@@ -185,6 +229,9 @@ type EncryptedRequestTransport struct {
 	responder         *EncryptedResponder
 	authorizedPubkeys []string
 	handlers          map[string]EncryptedRequestHandler
+	contextVMHandlers map[string]ContextVMHandler
+	contextVMDedup    map[string]ContextVMJSONRPCResponse
+	contextVMMu       sync.Mutex
 	dedup             *nostrpool.EventDeduplicator
 	logger            *zap.Logger
 }
@@ -198,6 +245,8 @@ func NewEncryptedRequestTransport(subscriber EncryptedRequestSubscriber, respond
 		responder:         responder,
 		authorizedPubkeys: append([]string(nil), authorizedPubkeys...),
 		handlers:          make(map[string]EncryptedRequestHandler),
+		contextVMHandlers: make(map[string]ContextVMHandler),
+		contextVMDedup:    make(map[string]ContextVMJSONRPCResponse),
 		dedup:             nostrpool.NewEventDeduplicator(10000),
 		logger:            logger.Named("encrypted-request-result-events"),
 	}
@@ -211,14 +260,22 @@ func (t *EncryptedRequestTransport) RegisterHandler(operation string, handler En
 	t.handlers[operation] = handler
 }
 
+func (t *EncryptedRequestTransport) RegisterContextVMHandler(method string, handler ContextVMHandler) {
+	method = strings.TrimSpace(method)
+	if method == "" || handler == nil {
+		return
+	}
+	t.contextVMHandlers[method] = handler
+}
+
 func (t *EncryptedRequestTransport) Run(ctx context.Context) error {
 	if t.subscriber == nil {
 		return fmt.Errorf("encrypted request subscriber is not configured")
 	}
 	now := nostr.Now()
-	filter := nostr.Filter{Kinds: []int{KindEncryptedRequest}, Since: &now, Tags: nostr.TagMap{EncryptedRequestRoutingTag: {EncryptedRequestWireVersion}}}
+	filter := nostr.Filter{Kinds: []int{KindEncryptedRequest, KindContextVMMessage, KindContextVMGiftWrap, KindContextVMEphemeralWrap}, Since: &now}
 	if servicePubkey := t.responder.ServicePubkey(); servicePubkey != "" {
-		filter.Tags["p"] = []string{servicePubkey}
+		filter.Tags = nostr.TagMap{"p": []string{servicePubkey}}
 	}
 	merged, err := t.subscriber.SubscribeAllWithEOSE(ctx, []nostr.Filter{filter})
 	if err != nil {
@@ -242,7 +299,14 @@ func (t *EncryptedRequestTransport) Run(ctx context.Context) error {
 }
 
 func (t *EncryptedRequestTransport) HandleEvent(ctx context.Context, event *nostr.Event) {
-	if event == nil || event.Kind != KindEncryptedRequest {
+	if event == nil {
+		return
+	}
+	if event.Kind == KindContextVMMessage || event.Kind == KindContextVMGiftWrap || event.Kind == KindContextVMEphemeralWrap {
+		t.HandleContextVMEvent(ctx, event)
+		return
+	}
+	if event.Kind != KindEncryptedRequest {
 		return
 	}
 	if err := nostrpool.ValidateInboundEvent(event, time.Now().UTC(), nostrpool.InboundEventMaxFutureSkew); err != nil {
@@ -300,6 +364,196 @@ func (t *EncryptedRequestTransport) HandleEvent(ctx context.Context, event *nost
 	if err := t.responder.PublishEncryptedResult(ctx, event, "ok", payload, nil); err != nil {
 		t.logger.Error("publish encrypted result failed", zap.String("event_id", event.ID), zap.Error(err))
 	}
+}
+
+func (t *EncryptedRequestTransport) HandleContextVMEvent(ctx context.Context, outer *nostr.Event) {
+	inner := outer
+	encrypted := outer.Kind == KindContextVMGiftWrap || outer.Kind == KindContextVMEphemeralWrap
+	if encrypted {
+		unwrapped, err := t.unwrapContextVMEvent(outer)
+		if err != nil {
+			t.logger.Warn("failed to unwrap ContextVM event", zap.String("event_id", outer.ID), zap.Error(err))
+			return
+		}
+		inner = unwrapped
+	}
+	if inner == nil || inner.Kind != KindContextVMMessage {
+		return
+	}
+	if err := nostrpool.ValidateInboundEvent(inner, time.Now().UTC(), nostrpool.InboundEventMaxFutureSkew); err != nil {
+		t.logger.Warn("invalid ContextVM event", zap.String("event_id", inner.ID), zap.Error(err))
+		return
+	}
+	if t.dedup.IsDuplicate(inner.ID) {
+		return
+	}
+	t.dedup.MarkSeen(inner.ID)
+	if !t.matchesContextVMRouting(inner) {
+		return
+	}
+	if !t.authorized(inner.PubKey) {
+		t.publishContextVMResponse(ctx, outer, inner, encrypted, ContextVMJSONRPCResponse{JSONRPC: "2.0", ID: json.RawMessage("null"), Error: &JSONRPCError{Code: -32001, Message: "requester is not authorized for ContextVM Bahia requests"}})
+		return
+	}
+	var rpc ContextVMJSONRPCRequest
+	if err := json.Unmarshal([]byte(inner.Content), &rpc); err != nil {
+		t.publishContextVMResponse(ctx, outer, inner, encrypted, ContextVMJSONRPCResponse{JSONRPC: "2.0", ID: json.RawMessage("null"), Error: &JSONRPCError{Code: -32700, Message: "parse error"}})
+		return
+	}
+	if rpc.JSONRPC != "2.0" || strings.TrimSpace(rpc.Method) == "" {
+		t.publishContextVMResponse(ctx, outer, inner, encrypted, ContextVMJSONRPCResponse{JSONRPC: "2.0", ID: contextVMResponseID(rpc.ID), Error: &JSONRPCError{Code: -32600, Message: "invalid request"}})
+		return
+	}
+	progressToken := contextVMProgressToken(rpc.Params)
+	if progressToken != "" {
+		if cached, ok := t.cachedContextVMResponse(inner.PubKey, progressToken); ok {
+			cached.ID = contextVMResponseID(rpc.ID)
+			t.publishContextVMResponse(ctx, outer, inner, encrypted, cached)
+			return
+		}
+	}
+	handler := t.contextVMHandlers[rpc.Method]
+	if handler == nil {
+		response := ContextVMJSONRPCResponse{JSONRPC: "2.0", ID: contextVMResponseID(rpc.ID), Error: &JSONRPCError{Code: -32601, Message: "method not found"}}
+		t.cacheContextVMResponse(inner.PubKey, progressToken, response)
+		t.publishContextVMResponse(ctx, outer, inner, encrypted, response)
+		return
+	}
+	result, err := handler(ctx, ContextVMRequest{Event: inner, OuterEvent: outer, RPC: rpc, ProgressToken: progressToken})
+	response := ContextVMJSONRPCResponse{JSONRPC: "2.0", ID: contextVMResponseID(rpc.ID), Result: result}
+	if err != nil {
+		response.Result = nil
+		response.Error = &JSONRPCError{Code: -32000, Message: err.Error()}
+	}
+	t.cacheContextVMResponse(inner.PubKey, progressToken, response)
+	t.publishContextVMResponse(ctx, outer, inner, encrypted, response)
+}
+
+func (t *EncryptedRequestTransport) unwrapContextVMEvent(event *nostr.Event) (*nostr.Event, error) {
+	if t.responder == nil {
+		return nil, fmt.Errorf("ContextVM responder is not configured")
+	}
+	conversationKey, err := t.responder.conversationKey(event.PubKey)
+	if err != nil {
+		return nil, err
+	}
+	plaintext, err := nip44.Decrypt(event.Content, conversationKey)
+	if err != nil {
+		return nil, fmt.Errorf("decrypt ContextVM gift wrap: %w", err)
+	}
+	var inner nostr.Event
+	if err := json.Unmarshal([]byte(plaintext), &inner); err != nil {
+		return nil, fmt.Errorf("decode ContextVM inner event: %w", err)
+	}
+	return &inner, nil
+}
+
+func (t *EncryptedRequestTransport) publishContextVMResponse(ctx context.Context, outer, request *nostr.Event, encrypted bool, response ContextVMJSONRPCResponse) {
+	if t.responder == nil || t.responder.publisher == nil {
+		t.logger.Warn("ContextVM responder unavailable", zap.String("event_id", request.ID))
+		return
+	}
+	content, err := json.Marshal(response)
+	if err != nil {
+		t.logger.Error("marshal ContextVM response failed", zap.String("event_id", request.ID), zap.Error(err))
+		return
+	}
+	responseEvent := &nostr.Event{Kind: KindContextVMMessage, CreatedAt: nostr.Now(), Tags: nostr.Tags{{"e", request.ID, "", "reply"}, {"p", request.PubKey}, {ContextVMRoutingTag, ContextVMWireVersion}}, Content: string(content)}
+	if err := SignGoNostrEvent(ctx, t.responder.signer, responseEvent); err != nil {
+		t.logger.Error("sign ContextVM response failed", zap.String("event_id", request.ID), zap.Error(err))
+		return
+	}
+	publishEvent := responseEvent
+	if encrypted {
+		wrapped, err := t.wrapContextVMResponse(ctx, outer, request, responseEvent)
+		if err != nil {
+			t.logger.Error("wrap ContextVM response failed", zap.String("event_id", request.ID), zap.Error(err))
+			return
+		}
+		publishEvent = wrapped
+	}
+	published, err := t.responder.publisher.Publish(ctx, *publishEvent)
+	if err != nil {
+		t.logger.Error("publish ContextVM response failed", zap.String("event_id", request.ID), zap.Error(err))
+		return
+	}
+	if published == 0 {
+		t.logger.Error("publish ContextVM response failed", zap.String("event_id", request.ID), zap.String("error", "no relay accepted event"))
+	}
+}
+
+func (t *EncryptedRequestTransport) wrapContextVMResponse(ctx context.Context, outer, request, response *nostr.Event) (*nostr.Event, error) {
+	content, err := json.Marshal(response)
+	if err != nil {
+		return nil, fmt.Errorf("marshal ContextVM inner response: %w", err)
+	}
+	conversationKey, err := t.responder.conversationKey(request.PubKey)
+	if err != nil {
+		return nil, err
+	}
+	ciphertext, err := nip44.Encrypt(string(content), conversationKey)
+	if err != nil {
+		return nil, fmt.Errorf("encrypt ContextVM response: %w", err)
+	}
+	kind := KindContextVMGiftWrap
+	if outer != nil && outer.Kind == KindContextVMEphemeralWrap {
+		kind = KindContextVMEphemeralWrap
+	}
+	wrapped := &nostr.Event{Kind: kind, CreatedAt: nostr.Now(), Tags: nostr.Tags{{"e", outer.ID, "", "reply"}, {"p", request.PubKey}}, Content: ciphertext}
+	if err := SignGoNostrEvent(ctx, t.responder.signer, wrapped); err != nil {
+		return nil, fmt.Errorf("sign ContextVM gift wrap response: %w", err)
+	}
+	return wrapped, nil
+}
+
+func (t *EncryptedRequestTransport) cachedContextVMResponse(pubkey, progressToken string) (ContextVMJSONRPCResponse, bool) {
+	if progressToken == "" {
+		return ContextVMJSONRPCResponse{}, false
+	}
+	t.contextVMMu.Lock()
+	defer t.contextVMMu.Unlock()
+	response, ok := t.contextVMDedup[pubkey+":"+progressToken]
+	return response, ok
+}
+
+func (t *EncryptedRequestTransport) cacheContextVMResponse(pubkey, progressToken string, response ContextVMJSONRPCResponse) {
+	if progressToken == "" {
+		return
+	}
+	t.contextVMMu.Lock()
+	defer t.contextVMMu.Unlock()
+	t.contextVMDedup[pubkey+":"+progressToken] = response
+}
+
+func (t *EncryptedRequestTransport) matchesContextVMRouting(event *nostr.Event) bool {
+	if t.responder == nil {
+		return false
+	}
+	servicePubkey := t.responder.ServicePubkey()
+	return servicePubkey == "" || tagContains(event.Tags, "p", servicePubkey)
+}
+
+func contextVMResponseID(id json.RawMessage) json.RawMessage {
+	if len(id) == 0 {
+		return json.RawMessage("null")
+	}
+	return id
+}
+
+func contextVMProgressToken(params json.RawMessage) string {
+	if len(params) == 0 {
+		return ""
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(params, &decoded); err != nil {
+		return ""
+	}
+	meta, ok := decoded["_meta"].(map[string]any)
+	if !ok {
+		return ""
+	}
+	token, _ := meta["progressToken"].(string)
+	return strings.TrimSpace(token)
 }
 
 func (t *EncryptedRequestTransport) authorized(pubkey string) bool {

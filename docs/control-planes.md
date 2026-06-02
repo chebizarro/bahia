@@ -2,8 +2,8 @@
 
 Bahia's supported control-plane contract is now sidecar-first and Nostr-native:
 
-1. **Nostr relay sidecar** — primary async/realtime plane for browser state, operator requests, agent progress, and read models.
-2. **Native MCP JSON-RPC** — synchronous tool discovery/invocation at `/mcp` and `/api/v1/mcp`.
+1. **Nostr relay sidecar** — primary async/realtime plane for browser state, ContextVM intent transport, agent progress, and read models.
+2. **ContextVM / native MCP JSON-RPC** — canonical mutation method surface over Nostr kind `25910` and HTTP MCP at `/mcp` / `/api/v1/mcp`.
 3. **REST API** — narrowed CRUD/query/log surface protected by direct NIP-98 when auth is enabled; Bearer credentials are not accepted.
 
 Removed legacy surfaces:
@@ -12,15 +12,16 @@ Removed legacy surfaces:
 - `POST /api/v1/auth/nostr` NIP-98-to-JWT browser exchange
 - `/api/v1/agent/*` custom MCP-inspired HTTP tools
 
-`Nostr discovery events (kind 31974 + NIP-51 kind 30002)` keeps `nostr_auth_exchange`, `legacy_sse`, `legacy_jwt_exchange`, and `legacy_agent_http` keys as `false` values so old clients can fail closed.
+ContextVM discovery (`11316`-`11320`) plus NIP-51 relay sets (`30002`) is the canonical client bootstrap. Legacy `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` may remain during migration and keeps `nostr_auth_exchange`, `legacy_sse`, `legacy_jwt_exchange`, and `legacy_agent_http` keys as `false` values so old clients can fail closed.
 
 ---
 
-## Native MCP Transport
+## ContextVM and Native MCP Transport
 
-> **Base paths**: `/mcp` and `/api/v1/mcp`
+> **Nostr kind**: `25910` ContextVM JSON-RPC messages, usually CEP-4/NIP-59 encrypted with `1059` or `21059`.  
+> **HTTP MCP base paths**: `/mcp` and `/api/v1/mcp`
 
-MCP clients use JSON-RPC 2.0 over HTTP. Tool implementations are backed by `internal/mcp/server.go`; long-running tool results include Nostr correlation metadata (`request_event_id`, `request_kind`, `service_id`, `route_id`, `release_id`, `environment_id`, `intent_id`, `run_id`, status/result/read-model kinds) so agents can follow async truth on the relay. `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` advertises core `control_plane` discovery metadata for clients that need bootstrap information before subscribing; broader command families are documented here and in `docs/nostr-commands.md`.
+ContextVM clients use JSON-RPC 2.0 over Nostr for mutations; HTTP MCP clients use the same JSON-RPC method model over HTTP. Tool implementations are backed by `internal/mcp/server.go`; long-running tool results include Nostr correlation metadata (`request_event_id`, `request_kind`, `service_id`, `route_id`, `release_id`, `environment_id`, `intent_id`, `run_id`, status/result/read-model kinds) so agents can follow async truth on the relay. `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` advertises core `control_plane` discovery metadata for clients that need bootstrap information before subscribing; broader command families are documented here and in `docs/nostr-commands.md`.
 
 Example:
 
@@ -46,6 +47,36 @@ curl -X POST http://localhost:8080/mcp \
   }'
 ```
 
+### ContextVM mutation methods
+
+Client mutation publication should use ContextVM JSON-RPC methods rather than Bahia legacy request kinds. Method names follow `<domain>/<operation>`:
+
+| Domain | Methods |
+|--------|---------|
+| `service` | `deploy`, `rollback`, `scale`, `restart`, `stop`, `update`, `delete` |
+| `worker` | `cordon`, `uncordon`, `drain`, `undrain`, `maintenance-enter`, `maintenance-exit`, `labels-update` |
+| `package` | `publish`, `promote`, `yank`, `deprecate`, `drift-detect` |
+| `dns` | `zone-create`, `zone-delete`, `record-set`, `policy-apply`, `drift-remediate` |
+| `backup` | `run`, `restore`, `verify`, `retention-enforce`, `repository-probe` |
+| `ml` | `model-import`, `recipe-run`, `inference-deploy`, `inference-rollback` |
+
+Example ContextVM request:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "worker-cordon-01",
+  "method": "worker/cordon",
+  "params": {
+    "worker_pubkey": "<worker-pubkey>",
+    "reason": "operator requested",
+    "_meta": { "progressToken": "worker-cordon-01" }
+  }
+}
+```
+
+Backend dependency: `bahia-viys` must complete server-side ContextVM method handlers before the CLI/pkg client can remove legacy request-kind publication. Until then, legacy request kinds are isolated as migration-only fixtures and client docs/tests identify the blocked path explicitly.
+
 ---
 
 ## Command receipts and idempotency
@@ -53,8 +84,8 @@ curl -X POST http://localhost:8080/mcp \
 Every long-running control-plane write surface returns a `CommandReceipt`-compatible object after the request event has been signed and at least one relay has accepted it. The canonical fields are:
 
 - `request_event_id`: signed Nostr request event id.
-- `request_kind`: Nostr request kind.
-- `status_kind` / `result_kind`: progress and terminal event kinds to subscribe to.
+- `request_kind`: legacy Nostr request kind when a migration fixture path is still used; ContextVM clients should instead expose `method` and ContextVM `request_event_id`.
+- `status_kind` / `result_kind`: legacy progress and terminal event kinds when fixture paths are still used; canonical clients should follow `30900`, `4903`, `30315`, domain NIPs, and correlated ContextVM responses.
 - `idempotency_key`: the Nostr `d` tag used to collapse retries of the same logical command.
 - `status`: `submitted` when the request was accepted; `error` when only a partial publish succeeded.
 - `published_relays`: number of relays that accepted the request.
@@ -94,14 +125,16 @@ The Nostr reactor subscribes to signed request events and publishes status, term
 | Tool provisioning loop | 5976, 5977, 6976, 7976, 7977 | Agent request, Bahia→operator approval handoff, progress, final result, and operator approval response |
 | Adoption requests | 5978–5979 | Inbound adoption scan/import operator requests |
 | Public compatibility writes | 5981–5989 | Public signed service/environment/artifact/policy write operations |
-| Encrypted requests | 5980 | Browser → Bahia encrypted request-domain request |
+| Encrypted ContextVM requests | 25910 inside `1059`/`21059` where supported | Browser/CLI → Bahia JSON-RPC request-domain methods |
+| Encrypted requests | 5980 | Legacy browser → Bahia encrypted request-domain request retained as migration-only fixture |
 | Service/action status | 6961–6963 | Service deployment/action progress/status updates |
 | LLM status | 6973 | LLM deployment/rollback progress updates |
 | Adoption status | 6978 | Adoption scan/import progress updates |
 | Service results | 7961–7966 | Service terminal operation results |
 | LLM results | 7971–7973 | LLM route/release/deployment terminal results |
 | Adoption results | 7978–7979 | Adoption scan/import terminal results |
-| Encrypted results | 7980 | Bahia → Browser encrypted request-domain result |
+| Encrypted ContextVM responses | 25910 inside `1059`/`21059` where supported | Bahia → client JSON-RPC response |
+| Encrypted results | 7980 | Legacy Bahia → Browser encrypted request-domain result retained as migration-only fixture |
 | Registry/read models | 31961–31970 | Replaceable browser/agent read models |
 | AI/ML command/results | 38390–38399 | Phase-1 addressable AI/ML command and terminal result events |
 | AI/ML read models | 31980–31989 | Phase-1 replaceable AI/ML registry, state, provenance, and capability read models |

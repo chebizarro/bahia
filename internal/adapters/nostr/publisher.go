@@ -15,6 +15,13 @@ import (
 	"go.uber.org/zap"
 )
 
+// Canonical Cascadia observable event kinds.
+const (
+	KindCASAudit        = kinds.CASAudit
+	KindNIP38Status     = kinds.NIP38Status
+	KindCASControlState = kinds.CASControlState
+)
+
 // Nostr event kinds for Bahia outbound audit events.
 const (
 	KindBuildRegistered           = kinds.BuildRegistered

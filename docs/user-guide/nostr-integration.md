@@ -15,49 +15,45 @@ Nostr provides:
 
 ### Events
 
-Everything in Bahia is an **event**:
+Bahia clients now separate private mutation intent from public observable truth. Mutations are ContextVM JSON-RPC requests carried as kind `25910` messages, normally encrypted with ContextVM CEP-4/NIP-59 gift-wrap (`1059` or `21059`). Public reads subscribe to canonical observable/state kinds such as `30900`, `4903`, `30315`, `11316`-`11320`, `30002`, and `30078`.
 
 ```json
 {
-  "id": "abc123...",
-  "pubkey": "npub1...",
-  "created_at": 1704067200,
-  "kind": 5961,
-  "content": "{\"service_id\":\"svc-123\"}",
-  "tags": [
-    ["service", "svc-123"],
-    ["t", "bahia"]
-  ],
-  "sig": "signature..."
+  "kind": 25910,
+  "tags": [["p", "<bahia-service-pubkey>"], ["method", "service/deploy"]],
+  "content": "{\"jsonrpc\":\"2.0\",\"id\":\"req-123\",\"method\":\"service/deploy\",\"params\":{\"service_id\":\"svc-123\",\"_meta\":{\"progressToken\":\"req-123\"}}}"
 }
 ```
 
 ### Event Categories
 
-| Category | Kind Range | Purpose |
-|----------|------------|---------|
-| **Requests** | 5961-5989 | Operator commands |
-| **Status** | 6961-6984 | Progress updates |
-| **Results** | 7961-7979 | Terminal outcomes |
-| **Read Models** | 31961-31999 | Current state |
-| **AI/ML** | 38390-38399 | ML commands/results |
-| **Backup** | 38400-38419 | Backup operations |
+| Category | Kind(s) | Purpose |
+|----------|---------|---------|
+| **ContextVM intents** | `25910`, `1059`, `21059` | JSON-RPC mutation requests, responses, and encrypted transport |
+| **ContextVM discovery** | `11316`-`11320` | Server, tools, resources, templates, and prompts announcements |
+| **Canonical state** | `30900`, `30078` | Control-plane state projections and app-specific data |
+| **Canonical audit/status** | `4903`, `30315` | Immutable audit facts and NIP-38 operational statuses |
+| **Collections/relays** | `30002` | NIP-51 relay sets and topology |
+| **Migration fixtures** | `5961`-`6006`, `6961`-`6997`, `7961`-`7997`, `31961`-`32003`, `38390`-`38431` | Legacy request/status/result/read-model kinds retained only while backend handlers migrate |
 
 ### Read Models
 
-**Read models** are replaceable events reflecting current state:
+**Read models** are replaceable events reflecting current state. New client code should read canonical state from kind `30900` or NIP-78 kind `30078`, with domain and schema tags identifying the projection:
 
 ```json
 {
-  "kind": 31961,
+  "kind": 30900,
   "content": {
     "service_id": "svc-123",
+    "environment_id": "env-456",
     "desired_artifact": "art-789",
     "observed_artifact": "art-789",
     "status": "healthy"
   },
   "tags": [
-    ["d", "svc-123:env-456"]
+    ["d", "service:svc-123:env-456"],
+    ["domain", "service"],
+    ["schema", "bahia.service-state.v1"]
   ]
 }
 ```
@@ -118,11 +114,11 @@ Returns:
 
 ### Discovery Event
 
-Kind 31974 contains capability bootstrap:
+ContextVM kind `11316` is the canonical capability bootstrap. During migration, legacy kind `31974` discovery may still be present as a compatibility fixture; new clients should prefer `11316` plus NIP-51 relay sets (`30002`).
 
 ```json
 {
-  "kind": 31974,
+  "kind": 11316,
   "content": {
     "nostr": {
       "browser_relays": ["wss://..."],
@@ -157,13 +153,13 @@ Kind 31974 contains capability bootstrap:
 
 ### Command Lifecycle Pattern
 
-Signer-first commands use request, status, and result events as an event stream:
+ContextVM commands use JSON-RPC request/response for private intent acknowledgment, then public canonical events for observable progress and state:
 
-1. Sign the request locally and record its event id.
-2. Subscribe for terminal result events scoped by `#e=<request_event_id>` before publishing when possible.
-3. Publish and require at least one relay `OK` with `accepted=true`.
-4. Treat status events as progress only; they never mean completion.
-5. Complete only from the terminal result kind correlated to the request and requester.
+1. Build a JSON-RPC 2.0 request with a Bahia method such as `service/deploy`, `worker/cordon`, `package/promote`, `dns/zone-create`, or `backup/run`.
+2. Encrypt and route it through ContextVM (`25910` inside CEP-4/NIP-59 `1059` or `21059` where supported), tagged to the Bahia service pubkey.
+3. Subscribe for the correlated ContextVM response and for observable state/audit/status kinds (`30900`, `4903`, `30315`, plus domain-specific standard NIPs) before publishing when possible.
+4. Publish and require at least one relay `OK` with `accepted=true`.
+5. Treat JSON-RPC response status as command acknowledgment only; long-running truth is the canonical observable event stream.
 6. Surface `AUTH`, `CLOSED`, zero-accepted publish, explicit abort, and configured timeout outcomes as distinct failures or degraded waits.
 
 ### Example: Deployment Follow
@@ -199,17 +195,19 @@ Critical operations require signed events:
 
 ```javascript
 const event = {
-  kind: 5961,
+  kind: 25910,
   content: JSON.stringify({
-    service_id: "svc-123",
-    environment_id: "env-456",
-    artifact_id: "art-789"
+    jsonrpc: "2.0",
+    id: "deploy-svc-123-prod",
+    method: "service/deploy",
+    params: {
+      service_id: "svc-123",
+      environment_id: "env-456",
+      artifact_id: "art-789",
+      _meta: { progressToken: "deploy-svc-123-prod" }
+    }
   }),
-  tags: [
-    ["service", "svc-123"],
-    ["environment", "env-456"],
-    ["artifact", "art-789"]
-  ],
+  tags: [["p", "<bahia-service-pubkey>"], ["method", "service/deploy"]],
   created_at: Math.floor(Date.now() / 1000)
 };
 

@@ -62,50 +62,33 @@ func TestIsBahiaProjectionKind(t *testing.T) {
 		kind     int
 		expected bool
 	}{
-		// DNS status/results
-		{"DNS operation status", DNSOperationStatus, true},
-		{"DNS zone create result", DNSZoneCreateResult, true},
-		{"DNS backend register result", DNSBackendRegisterResult, true},
-		// Core status kinds
-		{"Deployment status", DeploymentStatus, true},
-		{"Service status", ServiceStatus, true},
-		{"Package status", PackageStatus, true},
-		{"Worker status", WorkerStatus, true},
-		// Core result kinds
-		{"Deployment result", DeploymentResult, true},
-		{"Action result", ActionResult, true},
-		{"Encrypted result", EncryptedResult, true},
-		{"Package result", PackageResult, true},
-		{"Worker result", WorkerResult, true},
-		// Read-model kinds
-		{"Service registry", ServiceRegistry, true},
-		{"Environment registry", EnvironmentRegistry, true},
-		{"DNS zone state", DNSZoneState, true},
-		{"DNS backend state", DNSBackendState, true},
-		{"Worker state", WorkerState, true},
-		{"Worker assignment state", WorkerAssignmentState, true},
-		// Backup kinds
-		{"Backup run status", BackupRunStatus, true},
-		{"Backup run result", BackupRunResult, true},
-		{"Backup definition registry", BackupDefinitionRegistry, true},
-		// ML kinds
-		{"ML model registry", MLModelRegistry, true},
-		{"ML recipe run result", MLRecipeRunResult, true},
-		// Assistant kinds
-		{"Assistant session", AssistantSession, true},
-		{"Assistant status", AssistantStatus, true},
-		{"Assistant result", AssistantResult, true},
-		// Audit kinds
-		{"Build registered audit", BuildRegistered, true},
-		{"DNS zone synced audit", DNSZoneSyncedAudit, true},
-		// Continuity kinds
-		{"Continuity profile", ContinuityProfile, true},
-		{"Heartbeat observation", HeartbeatObservation, true},
-		// Request kinds should NOT be projection kinds
+		// Canonical observable projections
+		{"CAS control-plane state", CASControlState, true},
+		{"CAS audit", CASAudit, true},
+		{"NIP-38 status", NIP38Status, true},
+		{"ContextVM server announcement", ContextVMServerAnnouncement, true},
+		{"ContextVM tools list", ContextVMToolsList, true},
+		{"ContextVM resources list", ContextVMResourcesList, true},
+		{"ContextVM resource templates list", ContextVMResourceTemplatesList, true},
+		{"ContextVM prompts list", ContextVMPromptsList, true},
+		{"NIP-51 relay set", RelaySetDiscovery, true},
+		{"NIP-65 relay list", NIP65RelayList, true},
+		{"SBOM attestation", SBOMAttestation, true},
+		{"Bahia identity", BahiaIdentityDefinition, true},
+		{"Bahia replay checkpoint", BahiaReplayCheckpoint, true},
+		{"Bahia readiness status", BahiaReadinessStatus, true},
+		// Legacy runtime projections remain migration-only and are not canonical observable projections.
+		{"DNS operation status", DNSOperationStatus, false},
+		{"DNS zone create result", DNSZoneCreateResult, false},
+		{"Deployment status", DeploymentStatus, false},
+		{"Deployment result", DeploymentResult, false},
+		{"Service registry", ServiceRegistry, false},
+		{"Worker state", WorkerState, false},
+		{"Build registered audit", BuildRegistered, false},
+		// Requests and open interop kinds are not Bahia projections.
 		{"Deploy request", DeployRequest, false},
 		{"DNS zone create request", DNSZoneCreateRequest, false},
 		{"Backup run request", BackupRunRequest, false},
-		// Open interop kinds
 		{"Loom worker ad", LoomWorkerAdvertisement, false},
 		{"Hive CI workflow run", HiveCIWorkflowRun, false},
 	}
@@ -149,21 +132,25 @@ func TestIsOpenInteropKind(t *testing.T) {
 }
 
 func TestIsReadableKind(t *testing.T) {
-	// All projection kinds and interop kinds should be readable
 	testCases := []struct {
 		name     string
 		kind     int
 		expected bool
 	}{
-		// Projection kinds
-		{"DNS operation status", DNSOperationStatus, true},
-		{"Service registry", ServiceRegistry, true},
-		{"Worker state", WorkerState, true},
-		{"Encrypted result", EncryptedResult, true},
+		// Canonical observable kinds
+		{"CAS control-plane state", CASControlState, true},
+		{"CAS audit", CASAudit, true},
+		{"NIP-38 status", NIP38Status, true},
+		{"ContextVM tools list", ContextVMToolsList, true},
+		{"NIP-51 relay set", RelaySetDiscovery, true},
 		// Interop kinds
 		{"Loom worker ad", LoomWorkerAdvertisement, true},
 		{"Hive CI workflow run", HiveCIWorkflowRun, true},
-		// Request kinds are not readable without author scope
+		// Legacy runtime kinds and requests are not readable after the migration boundary.
+		{"DNS operation status", DNSOperationStatus, false},
+		{"Service registry", ServiceRegistry, false},
+		{"Worker state", WorkerState, false},
+		{"Encrypted result", EncryptedResult, false},
 		{"Deploy request", DeployRequest, false},
 		{"DNS zone create request", DNSZoneCreateRequest, false},
 	}
@@ -179,7 +166,7 @@ func TestIsReadableKind(t *testing.T) {
 }
 
 func TestDNSKindsCompleteness(t *testing.T) {
-	// Verify all DNS kinds are covered by the policy functions
+	// Legacy DNS requests remain recognized for migration inventory/tests.
 	requestKinds := DNSRequestKinds()
 	for _, kind := range requestKinds {
 		if !IsRequestKind(kind) {
@@ -187,23 +174,15 @@ func TestDNSKindsCompleteness(t *testing.T) {
 		}
 	}
 
-	resultKinds := DNSResultKinds()
-	for _, kind := range resultKinds {
+	// DNS result/read-model helpers should now canonicalize to CAS observable kinds.
+	for _, kind := range append(DNSResultKinds(), DNSReadModelKinds()...) {
 		if !IsBahiaProjectionKind(kind) {
-			t.Errorf("DNS result kind %d not recognized as projection kind", kind)
+			t.Errorf("DNS canonical kind %d not recognized as projection kind", kind)
 		}
 	}
 
-	readModelKinds := DNSReadModelKinds()
-	for _, kind := range readModelKinds {
-		if !IsBahiaProjectionKind(kind) {
-			t.Errorf("DNS read-model kind %d not recognized as projection kind", kind)
-		}
-	}
-
-	// DNS operation status
-	if !IsBahiaProjectionKind(DNSOperationStatus) {
-		t.Errorf("DNS operation status kind %d not recognized as projection kind", DNSOperationStatus)
+	if IsBahiaProjectionKind(DNSOperationStatus) {
+		t.Errorf("legacy DNS operation status kind %d unexpectedly recognized as projection kind", DNSOperationStatus)
 	}
 }
 

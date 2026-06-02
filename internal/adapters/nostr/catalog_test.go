@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	gonostr "github.com/nbd-wtf/go-nostr"
+	"github.com/openagentsinc/bahia/internal/kinds"
 )
 
 func TestNewKindCatalogContainsExpectedKinds(t *testing.T) {
@@ -24,7 +25,7 @@ func TestGroupsForTierReturnsGroupsAtOrBelowTier(t *testing.T) {
 	catalog := NewKindCatalog()
 	groups := catalog.GroupsForTier(1)
 	got := groupNames(groups)
-	want := []string{"system_snapshot", "continuity_snapshot", "worker_snapshot", "continuity_live"}
+	want := []string{"discovery_snapshot", "state_snapshot", "status_live", "audit_live"}
 	assertStringSetEqual(t, got, want)
 	for _, group := range groups {
 		if group.Tier > 1 {
@@ -67,7 +68,7 @@ func TestAllKindsReturnsUniqueSortedValues(t *testing.T) {
 func TestRequiredGroupsForTierFiltersByTierAndRequired(t *testing.T) {
 	catalog := NewKindCatalog()
 	got := groupNames(catalog.RequiredGroupsForTier(2))
-	want := []string{"system_snapshot", "continuity_snapshot", "worker_snapshot", "continuity_live", "core_registry_snapshot", "core_control_plane_live"}
+	want := []string{"discovery_snapshot", "state_snapshot", "status_live", "audit_live"}
 	assertStringSetEqual(t, got, want)
 	for _, group := range catalog.RequiredGroupsForTier(2) {
 		if !group.Required {
@@ -81,11 +82,11 @@ func TestRequiredGroupsForTierFiltersByTierAndRequired(t *testing.T) {
 
 func TestKindsForTierReturnsUniqueTierKinds(t *testing.T) {
 	catalog := NewKindCatalog()
-	kinds := catalog.KindsForTier(2)
-	assertKindsInclude(t, kinds, []int{KindServiceRegistry, KindEnvironmentRegistry, KindControlPlaneDeployRequest, KindControlPlaneDeploymentResult})
-	assertKindsExclude(t, kinds, []int{KindMLRecipeRunRequest, KindAssistantPromptRequest, KindFIPSOverlayAdvert})
+	tierKinds := catalog.KindsForTier(2)
+	assertKindsInclude(t, tierKinds, []int{KindCASControlState, KindCASAudit, KindNIP38Status, KindRelaySetDiscovery, KindNIP65RelayList, kinds.ContextVMServerAnnouncement})
+	assertKindsExclude(t, tierKinds, []int{KindServiceRegistry, KindEnvironmentRegistry, KindControlPlaneDeployRequest, KindControlPlaneDeploymentResult, KindMLRecipeRunRequest, KindAssistantPromptRequest, KindFIPSOverlayAdvert})
 	seen := map[int]struct{}{}
-	for _, kind := range kinds {
+	for _, kind := range tierKinds {
 		if _, ok := seen[kind]; ok {
 			t.Fatalf("KindsForTier returned duplicate kind %d", kind)
 		}
@@ -119,150 +120,96 @@ func TestRequiredGroupsHaveNonErrorDecoders(t *testing.T) {
 	}
 }
 
-func TestProjectorSubscriberReactorKindsAreRepresented(t *testing.T) {
+func TestProjectorSubscriberCanonicalKindsAreRepresented(t *testing.T) {
 	catalog := NewKindCatalog()
-	assertCatalogHasKinds(t, catalog, append(append(projectorKindCoverage(), subscriberKindCoverage()...), reactorKindCoverage()...))
+	assertCatalogHasKinds(t, catalog, append(projectorKindCoverage(), subscriberKindCoverage()...))
 }
 
-func expectedCatalogKinds() []int {
-	return append(append(append(projectorKindCoverage(), subscriberKindCoverage()...), reactorKindCoverage()...),
-		KindNIP65RelayList,
-		KindBahiaIdentityDefinition,
-		KindBahiaReplayCheckpoint,
-		KindBahiaReadinessStatus,
-		KindContinuityProfile,
-		KindFailoverPolicy,
-		KindStandbyNodeDefinition,
-		KindReplicationPolicy,
-		KindRecoveryWorkflow,
-		KindHeartbeatObservation,
-		KindContinuityStatus,
-		KindDegradedModeActivation,
-		KindRecoveryProgress,
-		KindFailoverRequest,
-		KindRecoveryRequest,
-		KindBackupDefinitionRegistry,
-		KindBackupPolicyRegistry,
-		KindBackupRepositoryRegistry,
-		KindBackupRetentionRegistry,
-		KindBackupRecipeRegistry,
-		KindBackupRunState,
-		KindBackupVerificationState,
-		KindBackupRestoreState,
-		KindBackupRuntimeObservationState,
-		KindFIPSOverlayAdvert,
-	)
-}
-
-func projectorKindCoverage() []int {
-	return []int{
-		KindDNSEndpointState,
-		KindRelaySetDiscovery,
-		KindControlPlaneDeployRequest,
-		KindControlPlaneRollbackRequest,
-		KindControlPlaneServiceAction,
-		KindControlPlaneServiceCreate,
-		KindControlPlaneEnvironmentCreate,
-		KindControlPlaneDeploymentApproval,
-		KindControlPlaneObservationSubmit,
-		KindControlPlaneDriftRemediate,
-		KindControlPlaneDeploymentStatus,
-		KindControlPlaneServiceStatus,
-		KindControlPlaneDeploymentResult,
-		KindControlPlaneActionResult,
-		KindControlPlaneServiceCreateResult,
-		KindControlPlaneEnvironmentCreateResult,
-		KindControlPlaneObservationResult,
-		KindControlPlaneRemediationResult,
-		KindServiceState,
-		KindServiceRegistry,
-		KindEnvironmentRegistry,
-		KindLLMRouteRegistry,
-		KindLLMRouteState,
-		KindArtifactRegistry,
-		KindDeploymentIntentRegistry,
-		KindDeploymentRunRegistry,
-		KindBuildRegistry,
-		KindPolicyRegistry,
-		KindWorkerState,
-		KindWorkerAssignmentState,
-		KindWorkerDrainStatus,
-		KindWorkerEligibilityPreview,
-		KindControlPlaneWorkerCordonRequest,
-		KindControlPlaneWorkerUncordonRequest,
-		KindControlPlaneWorkerDrainRequest,
-		KindControlPlaneWorkerUndrainRequest,
-		KindControlPlaneWorkerMaintenanceEnter,
-		KindControlPlaneWorkerMaintenanceExit,
-		KindControlPlaneWorkerLabelsUpdate,
-		KindControlPlaneWorkerStatus,
-		KindControlPlaneWorkerResult,
-		KindMLRecipeRunRequest,
-		KindMLInferenceDeployRequest,
-		KindMLInferenceDeploymentApproval,
-		KindMLInferenceRollbackRequest,
-		KindMLModelImportRequest,
-		KindMLRecipeRunResult,
-		KindMLInferenceDeployResult,
-		KindMLInferenceApprovalResult,
-		KindMLInferenceRollbackResult,
-		KindMLModelImportResult,
+func TestCatalogGroupsExcludeLegacyRuntimeKinds(t *testing.T) {
+	catalog := NewKindCatalog()
+	for _, group := range catalog.Groups {
+		for _, kind := range group.Kinds {
+			if isLegacyCatalogRuntimeKind(kind) {
+				t.Fatalf("catalog group %q includes legacy runtime kind %d", group.Name, kind)
+			}
+		}
 	}
 }
 
-func subscriberKindCoverage() []int {
+func expectedCatalogKinds() []int {
 	return []int{
+		KindCASControlState,
+		KindCASAudit,
+		KindNIP38Status,
+		KindRelaySetDiscovery,
+		KindNIP65RelayList,
+		kinds.ContextVMServerAnnouncement,
+		kinds.ContextVMToolsList,
+		kinds.ContextVMResourcesList,
+		kinds.ContextVMResourceTemplatesList,
+		kinds.ContextVMPromptsList,
+		KindBahiaIdentityDefinition,
+		KindBahiaReplayCheckpoint,
+		KindBahiaReadinessStatus,
 		KindHiveCIWorkflowRun,
 		KindHiveCIWorkflowResult,
 		KindLoomWorkerAdvertisement,
 		KindLoomJobStatusUpdate,
 		KindLoomJobResult,
 		KindLoomJobCancellation,
-		KindCmdBuildRegister,
-		KindCmdArtifactRegister,
-		KindCmdIntentCreate,
-		KindCmdIntentApprove,
-		KindCmdIntentReject,
-		KindCmdRollbackRequest,
-		KindControlPlaneDeployRequest,
-		KindControlPlaneRollbackRequest,
-		KindControlPlaneServiceAction,
-		KindControlPlaneServiceCreate,
-		KindControlPlaneEnvironmentCreate,
-		KindControlPlaneDeploymentApproval,
-		KindControlPlaneObservationSubmit,
-		KindControlPlaneDriftRemediate,
-		KindControlPlaneLLMRouteCreate,
-		KindControlPlaneLLMReleaseRegister,
-		KindControlPlaneLLMDeployRequest,
-		KindControlPlaneLLMDeploymentApproval,
-		KindControlPlaneLLMRollbackRequest,
-		KindControlPlaneToolProvisionRequest,
-		KindControlPlaneToolApprovalResponse,
-		KindControlPlaneAdoptionScanRequest,
-		KindControlPlaneAdoptionImportRequest,
-		KindControlPlaneServiceUpdate,
-		KindControlPlaneServiceDelete,
-		KindControlPlaneEnvironmentUpdate,
-		KindControlPlaneEnvironmentDelete,
-		KindControlPlaneArtifactRegister,
-		KindControlPlanePolicyCreate,
-		KindControlPlanePolicyUpdate,
-		KindControlPlanePolicyDelete,
-		KindControlPlanePolicyEvaluate,
-		KindMLRecipeRunRequest,
-		KindMLInferenceDeployRequest,
-		KindMLInferenceDeploymentApproval,
-		KindMLInferenceRollbackRequest,
-		KindMLModelImportRequest,
-		KindControlPlanePackageRepositoryApply,
-		KindControlPlanePackageRepositoryDelete,
-		KindControlPlanePackagePublishIntent,
-		KindControlPlanePackagePromotionRequest,
-		KindControlPlanePackageYankRequest,
-		KindControlPlanePackageDriftDetect,
-		KindAssistantPromptRequest,
-		KindAssistantApproval,
+		KindFIPSOverlayAdvert,
+	}
+}
+
+func isLegacyCatalogRuntimeKind(kind int) bool {
+	return (kind >= 5941 && kind <= 7999) ||
+		(kind >= 31100 && kind <= 31399) ||
+		(kind >= 32000 && kind <= 32099) ||
+		(kind >= 38390 && kind <= 38499) ||
+		kind == KindCmdBuildRegister ||
+		kind == KindCmdArtifactRegister ||
+		kind == KindCmdIntentCreate ||
+		kind == KindCmdIntentApprove ||
+		kind == KindCmdIntentReject ||
+		kind == KindCmdRollbackRequest
+}
+
+func projectorKindCoverage() []int {
+	return []int{
+		KindCASControlState,
+		KindCASAudit,
+		KindNIP38Status,
+		KindRelaySetDiscovery,
+		KindNIP65RelayList,
+		kinds.ContextVMServerAnnouncement,
+		kinds.ContextVMToolsList,
+		kinds.ContextVMResourcesList,
+		kinds.ContextVMResourceTemplatesList,
+		kinds.ContextVMPromptsList,
+		KindBahiaIdentityDefinition,
+		KindBahiaReplayCheckpoint,
+		KindBahiaReadinessStatus,
+	}
+}
+
+func subscriberKindCoverage() []int {
+	return []int{
+		KindCASControlState,
+		KindCASAudit,
+		KindNIP38Status,
+		kinds.ContextVMServerAnnouncement,
+		kinds.ContextVMToolsList,
+		kinds.ContextVMResourcesList,
+		kinds.ContextVMResourceTemplatesList,
+		kinds.ContextVMPromptsList,
+		KindRelaySetDiscovery,
+		KindNIP65RelayList,
+		KindHiveCIWorkflowRun,
+		KindHiveCIWorkflowResult,
+		KindLoomWorkerAdvertisement,
+		KindLoomJobStatusUpdate,
+		KindLoomJobResult,
+		KindLoomJobCancellation,
 	}
 }
 

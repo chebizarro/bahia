@@ -1,0 +1,25 @@
+{
+  "feature_id": "NOSTR_NATIVE_CONTEXTVM_MIGRATION",
+  "criteria": [
+    {
+      "id": "AC-001",
+      "statement": "Browser encrypted mutation requests build ContextVM JSON-RPC 2.0 payloads on kind 25910 and preserve OK/result correlation checks.",
+      "tests": ["web/tests/unit/encrypted-controlplane.test.js"]
+    },
+    {
+      "id": "AC-002",
+      "statement": "Touched worker web paths do not embed hardcoded 5997-6003 action numbers; legacy values are imported from the migration-only kind surface.",
+      "tests": ["static inspection: web/src/routes/workers/[pubkey]/+page.svelte"]
+    },
+    {
+      "id": "AC-003",
+      "statement": "The web kind surface exposes ContextVM and canonical observable read kinds: 25910, 1059, 21059, 11316-11320, 30900, 4903, 30315, 30002, 30078.",
+      "tests": ["static inspection: web/src/lib/nostr/kinds.gen.js"]
+    },
+    {
+      "id": "AC-004",
+      "statement": "Docs explain ContextVM methods, canonical read kinds, migration-only legacy ranges, and exact backend dependency beads.",
+      "tests": ["docs review: nostr-integration.md, control-planes.md, mcp-tools.md, cli-reference.md"]
+    }
+  ]
+}

@@ -7,18 +7,28 @@
   import { workers, loadWorkers } from '$lib/stores';
   import { publishCommand, resultContent } from '$lib/stores/public-controlplane.svelte.js';
   import { currentRequesterPubkey } from '$lib/nostr/controlplane-requests.js';
+  import {
+    WORKER_CORDON_REQUEST,
+    WORKER_UNCORDON_REQUEST,
+    WORKER_DRAIN_REQUEST,
+    WORKER_UNDRAIN_REQUEST,
+    WORKER_MAINTENANCE_ENTER,
+    WORKER_MAINTENANCE_EXIT,
+    WORKER_LABELS_UPDATE,
+    WORKER_RESULT
+  } from '$lib/nostr/kinds.gen.js';
   import { inferWorkerStatus } from '../list-utils.js';
 
   const SCHEDULING_STATES = ['active', 'cordoned', 'draining', 'maintenance', 'disabled'];
   const WORKER_KINDS = {
-    CORDON_REQUEST: 5997,
-    UNCORDON_REQUEST: 5998,
-    DRAIN_REQUEST: 5999,
-    UNDRAIN_REQUEST: 6000,
-    MAINTENANCE_ENTER_REQUEST: 6001,
-    MAINTENANCE_EXIT_REQUEST: 6002,
-    LABELS_UPDATE_REQUEST: 6003,
-    RESULT: 7997
+    CORDON_REQUEST: WORKER_CORDON_REQUEST,
+    UNCORDON_REQUEST: WORKER_UNCORDON_REQUEST,
+    DRAIN_REQUEST: WORKER_DRAIN_REQUEST,
+    UNDRAIN_REQUEST: WORKER_UNDRAIN_REQUEST,
+    MAINTENANCE_ENTER_REQUEST: WORKER_MAINTENANCE_ENTER,
+    MAINTENANCE_EXIT_REQUEST: WORKER_MAINTENANCE_EXIT,
+    LABELS_UPDATE_REQUEST: WORKER_LABELS_UPDATE,
+    RESULT: WORKER_RESULT
   };
 
   const WORKER_COMMANDS = {

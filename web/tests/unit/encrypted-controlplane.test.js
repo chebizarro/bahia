@@ -132,15 +132,22 @@ describe('encrypted controlplane transport', () => {
   it('builds encrypted request events without targeting public browser relays', async () => {
     const transport = new module.EncryptedControlplaneTransport({ client, relays: ['wss://requests.example'], servicePubkey: 'b'.repeat(64) });
 
-    const event = await transport.buildEncryptedRequestEvent({ operation: 'payments.history', payload: { limit: 10 } });
+    const event = await transport.buildEncryptedRequestEvent({ operation: 'payments.history', payload: { limit: 10 }, requestId: 'ctxvm-req-1' });
 
+    const plaintext = JSON.parse(authMock.encryptWithAuth.mock.calls[0][1]);
+    expect(plaintext).toEqual({
+      jsonrpc: '2.0',
+      id: 'ctxvm-req-1',
+      method: 'payments/history',
+      params: { limit: 10, _meta: { progressToken: 'ctxvm-req-1' } }
+    });
     expect(authMock.ensureEncryptedSignerReady).toHaveBeenCalledWith('b'.repeat(64));
-    expect(authMock.encryptWithAuth).toHaveBeenCalledWith('b'.repeat(64), expect.stringContaining('payments.history'));
     expect(authMock.signWithAuth).toHaveBeenCalledWith(expect.objectContaining({
-      kind: module.ENCRYPTED_REQUEST_KIND,
-      tags: expect.arrayContaining([['p', 'b'.repeat(64)], [module.ENCRYPTED_REQUEST_ROUTING_TAG, module.ENCRYPTED_REQUEST_WIRE_VERSION]]),
+      kind: module.CONTEXTVM_MESSAGE_KIND,
+      tags: expect.arrayContaining([['p', 'b'.repeat(64)], [module.ENCRYPTED_REQUEST_ROUTING_TAG, module.ENCRYPTED_REQUEST_WIRE_VERSION], ['method', 'payments/history']]),
       content: expect.stringMatching(/^cipher:/)
     }));
+    expect(module.LEGACY_ENCRYPTED_REQUEST_KIND).toBe(5980);
     expect(event.id).toBe('request-id');
   });
 
@@ -188,13 +195,13 @@ describe('encrypted controlplane transport', () => {
     const promise = transport.awaitEncryptedResult({ requestEventId: 'req-1' });
     await handlers.onEvent({ id: 'other', pubkey: 'b'.repeat(64), tags: [['e', 'other'], ['p', 'a'.repeat(64)]], content: 'cipher:{}' });
     await handlers.onEvent({ id: 'spoofed', pubkey: 'c'.repeat(64), tags: [['e', 'req-1'], ['p', 'a'.repeat(64)]], content: 'cipher:{}' });
-    await handlers.onEvent({ id: 'result-1', pubkey: 'b'.repeat(64), tags: [['e', 'req-1'], ['p', 'a'.repeat(64)]], content: 'cipher:{"request_event_id":"req-1","status":"ok","payload":{"count":1}}' });
+    await handlers.onEvent({ id: 'result-1', pubkey: 'b'.repeat(64), tags: [['e', 'req-1'], ['p', 'a'.repeat(64)]], content: 'cipher:{"jsonrpc":"2.0","id":"req-1","result":{"status":"ok","payload":{"count":1}}}' });
     await handlers.onEvent({ id: 'result-1', pubkey: 'b'.repeat(64), tags: [['e', 'req-1'], ['p', 'a'.repeat(64)]], content: 'cipher:{}' });
 
     await expect(promise).resolves.toMatchObject({ payload: { status: 'ok', payload: { count: 1 } } });
     expect(unsubscribe).toHaveBeenCalledTimes(1);
     expect(client.subscribe).toHaveBeenCalledWith(
-      [{ kinds: [module.ENCRYPTED_RESULT_KIND], '#e': ['req-1'], '#p': ['a'.repeat(64)], authors: ['b'.repeat(64)] }],
+      [{ kinds: [module.CONTEXTVM_MESSAGE_KIND], '#e': ['req-1'], '#p': ['a'.repeat(64)], authors: ['b'.repeat(64)] }],
       expect.objectContaining({ onEvent: expect.any(Function), onClosed: expect.any(Function) })
     );
   });
@@ -234,8 +241,8 @@ describe('encrypted controlplane transport', () => {
     const transport = new module.EncryptedControlplaneTransport({ client, relays: ['wss://requests.example'], servicePubkey: 'b'.repeat(64) });
 
     const missing = transport.awaitEncryptedResult({ requestEventId: 'req-1' });
-    await handlers.onEvent({ id: 'result-missing-correlation', pubkey: 'b'.repeat(64), tags: [['e', 'req-1'], ['p', 'a'.repeat(64)]], content: 'cipher:{"status":"ok","payload":{}}' });
-    await expect(missing).rejects.toThrow('payload did not correlate');
+    await handlers.onEvent({ id: 'result-missing-correlation', pubkey: 'b'.repeat(64), tags: [['e', 'req-1'], ['p', 'a'.repeat(64)]], content: 'cipher:{"jsonrpc":"2.0","id":"other","result":{}}' });
+    await expect(missing).rejects.toThrow('ContextVM encrypted result payload did not correlate');
   });
 
   it('reports encrypted result AUTH and all-relay CLOSED failures explicitly', async () => {

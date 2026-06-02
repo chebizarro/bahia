@@ -21,7 +21,7 @@ make build
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `BAHIA_API_URL` | API server URL | `http://localhost:8080` |
-| `BAHIA_NOSTR_RELAYS` | Comma-separated relay URLs | (discovery) |
+| `BAHIA_NOSTR_RELAYS` | Comma-separated relay URLs for operator/ContextVM transport | (discovery) |
 | `BAHIA_AUTH_ENABLED` | Enable authentication | `false` |
 | `BAHIA_OPERATOR_HTTP_FALLBACK` | Allow HTTP fallback | `false` |
 
@@ -57,6 +57,10 @@ bahia auth login --nip46 "bunker://pubkey@relay?secret=..."
 ```bash
 bahia auth status
 ```
+
+## Nostr-native transport
+
+The CLI is migrating mutations to ContextVM JSON-RPC methods over Nostr kind `25910`. Reads should consume canonical observable/state kinds (`30900`, `4903`, `30315`, `11316`-`11320`, `30002`, `30078`) and standard NIPs. Current `pkg/client` operator commands still publish legacy request kinds while backend ContextVM method handlers are completed under `bahia-viys`; this compatibility path is isolated at the client boundary and should not be copied into new CLI commands.
 
 ## Commands
 
@@ -108,7 +112,7 @@ bahia environments delete staging
 
 ### Deployments
 
-Deployment intent create, approval/rejection, and rollback mutations are signer-first Nostr operations. The legacy REST-backed `bahia deploy`, `bahia deployments approve`, `bahia deployments reject`, and `bahia rollback` command paths are deprecated until the CLI publishes signed Nostr events directly.
+Deployment intent create, approval/rejection, and rollback mutations should be ContextVM JSON-RPC methods such as `service/deploy`, `approval/approve`, `approval/reject`, and `service/rollback`. Legacy REST-backed command paths are deprecated; legacy Nostr request-kind publication remains only for backend compatibility until `bahia-viys` lands.
 
 ```bash
 # List intents
@@ -141,7 +145,7 @@ bahia state drifted --environment production
 
 ### Direct Runtime Actions
 
-Direct runtime deploy/restart/stop REST endpoints have been removed. Use signer-first Nostr `DeployRequest` (`kind:5961`) and `ServiceAction` (`kind:5963`) events until the CLI publishes those events directly.
+Direct runtime deploy/restart/stop REST endpoints have been removed. The target CLI surface is ContextVM methods `service/deploy`, `service/restart`, and `service/stop`. Current signer-first legacy request kinds are compatibility transport only until backend ContextVM handlers are ready.
 
 ### Artifacts
 

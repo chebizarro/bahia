@@ -1,7 +1,8 @@
 package kinds
 
-// IsRequestKind returns true if the kind is a Bahia request kind that requires
-// an authorized operator pubkey. These are command events sent to Bahia.
+// IsRequestKind returns true for legacy Bahia command kinds that are kept only
+// for migration/inventory code. Production subscribers and sidecar reads must
+// use ContextVM/NIP-17 intent transport instead of these kind-number commands.
 func IsRequestKind(kind int) bool {
 	switch {
 	// DNS requests (5941-5945)
@@ -33,89 +34,27 @@ func IsRequestKind(kind int) bool {
 	}
 }
 
-// IsBahiaProjectionKind returns true if the kind is a Bahia projection kind
-// that should only be published by the service pubkey. These are read-model
-// events emitted by Bahia.
-func IsBahiaProjectionKind(kind int) bool {
-	switch {
-	// Relay set discovery
-	case kind == RelaySetDiscovery:
-		return true
-	// SBOM kinds
-	case kind == SBOMAttestation || kind == SBOMIndex:
-		return true
-	// DNS status (6941) and results (7941-7945)
-	case kind == DNSOperationStatus:
-		return true
-	case kind >= DNSZoneCreateResult && kind <= DNSBackendRegisterResult:
-		return true
-	// Core status kinds (6961-6991)
-	case kind >= DeploymentStatus && kind <= ActionStatus:
-		return true
-	case kind == LLMDeploymentStatus:
-		return true
-	case kind == ToolProvisionStatus:
-		return true
-	case kind == AdoptionStatus:
-		return true
-	case kind >= BackupRunStatus && kind <= BackupObservation:
-		return true
-	case kind == PackageStatus:
-		return true
-	case kind == WorkerStatus:
-		return true
-	// Core result kinds (7961-7997)
-	case kind >= DeploymentResult && kind <= RemediationResult:
-		return true
-	case kind >= LLMRouteCreateResult && kind <= LLMDeploymentResult:
-		return true
-	case kind >= ToolProvisionResult && kind <= AdoptionImportResult:
-		return true
-	case kind == EncryptedResult:
-		return true
-	case kind >= PackageResult && kind <= PackageDriftEvent:
-		return true
-	case kind == WorkerResult:
-		return true
-	// Continuity observation/status kinds (30350-30353)
-	case kind >= HeartbeatObservation && kind <= RecoveryProgress:
-		return true
-	// Backup attestation kinds (31310-31311)
-	case kind == BackupRunAttestation || kind == BackupVerificationAttestation:
-		return true
-	// Continuity definition kinds (31400-31404)
-	case kind >= ContinuityProfile && kind <= RecoveryWorkflow:
-		return true
-	// Replaceable registries (31961-31978)
-	case kind >= ServiceState && kind <= DNSBackendState:
-		return true
-	// ML read-model kinds (31980-31989)
-	case kind >= MLModelRegistry && kind <= MLRuntimeCapabilityProfile:
-		return true
-	// Backup read-model kinds (31991-31999)
-	case kind >= BackupDefinitionRegistry && kind <= BackupRuntimeObservationState:
-		return true
-	// Worker state kinds (32000-32003)
-	case kind >= WorkerState && kind <= WorkerEligibilityPreview:
-		return true
-	// Audit kinds (31000-31099)
-	case kind >= AuditMin && kind <= AuditMax:
-		return true
-	// ML results (38395-38399)
-	case kind >= MLRecipeRunResult && kind <= MLModelImportResult:
-		return true
-	// Backup results (38410-38419)
-	case kind >= BackupRunResult && kind <= BackupRepositoryProbeResult:
-		return true
-	// Assistant status/result (38422-38423)
-	case kind == AssistantStatus || kind == AssistantResult:
-		return true
-	// Assistant session (31990)
-	case kind == AssistantSession:
+// IsCanonicalObservableKind returns true for Bahia runtime kinds that remain
+// production-readable after the Nostr-native migration boundary.
+func IsCanonicalObservableKind(kind int) bool {
+	switch kind {
+	case CASControlState, CASAudit, NIP38Status,
+		ContextVMServerAnnouncement, ContextVMToolsList, ContextVMResourcesList,
+		ContextVMResourceTemplatesList, ContextVMPromptsList,
+		RelaySetDiscovery, NIP65RelayList, SBOMAttestation,
+		BahiaIdentityDefinition, BahiaReplayCheckpoint, BahiaReadinessStatus:
 		return true
 	default:
 		return false
 	}
+}
+
+// IsBahiaProjectionKind returns true if the kind is a Bahia projection kind
+// that should only be published by the service pubkey. After the migration
+// boundary, production projections are canonical state/status/audit/discovery
+// kinds; legacy per-domain projection constants remain migration-only.
+func IsBahiaProjectionKind(kind int) bool {
+	return IsCanonicalObservableKind(kind)
 }
 
 // IsOpenInteropKind returns true if the kind is an open interop kind that
@@ -132,20 +71,20 @@ func IsOpenInteropKind(kind int) bool {
 	}
 }
 
-// IsAuthorScopedReadableRequestKind returns true if the kind is a request kind
-// that can be read when scoped to authorized author pubkeys. Most request kinds
-// allow author-scoped reads except for encrypted requests.
+// IsAuthorScopedReadableRequestKind returns true if the kind is a legacy
+// request kind that may be exposed in migration-only author-scoped reads.
+// Production sidecar policy no longer exposes these kinds.
 func IsAuthorScopedReadableRequestKind(kind int) bool {
-	return IsRequestKind(kind) && kind != EncryptedRequest
+	return false
 }
 
 // IsReadableKind returns true if the kind can be read from the sidecar relay.
-// This includes both Bahia projection kinds and open interop kinds.
+// This includes canonical Bahia observable kinds and open interop kinds only.
 func IsReadableKind(kind int) bool {
-	return IsBahiaProjectionKind(kind) || IsOpenInteropKind(kind)
+	return IsCanonicalObservableKind(kind) || IsOpenInteropKind(kind)
 }
 
-// AllRequestKinds returns all Bahia request kinds.
+// AllRequestKinds returns all legacy Bahia request kinds for migration tools.
 func AllRequestKinds() []int {
 	return []int{
 		// DNS requests
@@ -181,78 +120,28 @@ func AllRequestKinds() []int {
 	}
 }
 
-// AllStatusKinds returns all Bahia status kinds.
+// AllStatusKinds returns canonical operational status kinds.
 func AllStatusKinds() []int {
-	return []int{
-		DNSOperationStatus,
-		DeploymentStatus, ServiceStatus, ActionStatus, LLMDeploymentStatus,
-		ToolProvisionStatus, AdoptionStatus,
-		BackupRunStatus, BackupRestoreStatus, BackupVerificationStatus, BackupObservation,
-		PackageStatus, WorkerStatus,
-		AssistantStatus,
-	}
+	return []int{NIP38Status}
 }
 
-// AllResultKinds returns all Bahia result kinds.
+// AllResultKinds returns canonical task/result kinds used by public compute flows.
 func AllResultKinds() []int {
-	return []int{
-		// DNS results
-		DNSZoneCreateResult, DNSPolicyApplyResult, DNSRecordOverrideResult,
-		DNSDriftRemediateResult, DNSBackendRegisterResult,
-		// Core results
-		DeploymentResult, ActionResult, ServiceCreateResult, EnvironmentCreateResult,
-		ObservationResult, RemediationResult, LLMRouteCreateResult,
-		LLMReleaseRegisterResult, LLMDeploymentResult, ToolProvisionResult,
-		ToolApprovalResponse, AdoptionScanResult, AdoptionImportResult,
-		EncryptedResult, PackageResult, PackageDriftEvent, WorkerResult,
-		// ML results
-		MLRecipeRunResult, MLInferenceDeployResult, MLInferenceApprovalResult,
-		MLInferenceRollbackResult, MLModelImportResult,
-		// Backup results
-		BackupRunResult, BackupVerificationResult, BackupRestoreResult,
-		BackupRestoreApprovalResult, BackupRetentionResult,
-		BackupRepositoryRegisterResult, BackupPolicyApplyResult,
-		BackupRecipeApplyResult, BackupDefinitionApplyResult, BackupRepositoryProbeResult,
-		// Assistant result
-		AssistantResult,
-	}
+	return []int{}
 }
 
-// AllReadModelKinds returns all Bahia replaceable read-model kinds.
+// AllReadModelKinds returns canonical Bahia replaceable state/discovery kinds.
 func AllReadModelKinds() []int {
 	return []int{
-		// Core registries
-		ServiceState, ServiceRegistry, EnvironmentRegistry, LLMRouteRegistry,
-		LLMRouteState, ArtifactRegistry, DeploymentIntentRegistry,
-		DeploymentRunRegistry, BuildRegistry, PolicyRegistry,
-		PackageRepositoryRegistry, PackageArtifactRegistry, PackagePromotionRegistry,
-		SystemDiscovery,
-		// DNS
-		DNSZoneState, DNSEndpointState, DNSPolicyState, DNSBackendState,
-		// ML
-		MLModelRegistry, MLModelVersionRegistry, MLDatasetRegistry, MLRecipeRegistry,
-		MLRecipeRunState, MLInferenceEndpointRegistry, MLInferenceEndpointState,
-		MLEvaluationExperimentState, MLArtifactProvenanceGraph, MLRuntimeCapabilityProfile,
-		// Backup
-		BackupDefinitionRegistry, BackupPolicyRegistry, BackupRepositoryRegistry,
-		BackupRetentionRegistry, BackupRecipeRegistry, BackupRunState,
-		BackupVerificationState, BackupRestoreState, BackupRuntimeObservationState,
-		// Worker
-		WorkerState, WorkerAssignmentState, WorkerDrainStatus, WorkerEligibilityPreview,
-		// Legacy worker (for compatibility)
-		LegacyWorkerState, LegacyWorkerAssignmentState, LegacyWorkerDrainStatus,
-		LegacyWorkerEligibilityPreview,
-		// Assistant
-		AssistantSession,
-		// Continuity
-		ContinuityProfile, FailoverPolicy, StandbyNodeDefinition,
-		ReplicationPolicy, RecoveryWorkflow,
-		// Continuity runtime
-		HeartbeatObservation, ContinuityStatus, DegradedModeActivation, RecoveryProgress,
-		// SBOM
-		SBOMAttestation, SBOMIndex,
-		// System
+		CASControlState,
+		ContextVMServerAnnouncement,
+		ContextVMToolsList,
+		ContextVMResourcesList,
+		ContextVMResourceTemplatesList,
+		ContextVMPromptsList,
 		RelaySetDiscovery,
+		NIP65RelayList,
+		SBOMAttestation,
 	}
 }
 
@@ -264,19 +153,14 @@ func DNSRequestKinds() []int {
 	}
 }
 
-// DNSResultKinds returns all DNS result kinds.
+// DNSResultKinds returns canonical DNS result observable kinds.
 func DNSResultKinds() []int {
-	return []int{
-		DNSZoneCreateResult, DNSPolicyApplyResult, DNSRecordOverrideResult,
-		DNSDriftRemediateResult, DNSBackendRegisterResult,
-	}
+	return []int{CASControlState, CASAudit, NIP38Status}
 }
 
-// DNSReadModelKinds returns all DNS read-model kinds.
+// DNSReadModelKinds returns canonical DNS read-model kinds.
 func DNSReadModelKinds() []int {
-	return []int{
-		DNSZoneState, DNSEndpointState, DNSPolicyState, DNSBackendState,
-	}
+	return []int{CASControlState}
 }
 
 // BackupRequestKinds returns all backup request kinds.

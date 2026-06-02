@@ -3,14 +3,52 @@
  * This file is generated from internal/kinds/kinds.go - do not edit manually.
  *
  * Kind families:
- *   - 5xxx: Request kinds (operator → Bahia)
- *   - 6xxx: Status kinds (Bahia → operator, progress updates)
- *   - 7xxx: Result kinds (Bahia → operator, terminal results)
- *   - 30xxx: NIP-51 style parameterized lists
- *   - 31xxx: Replaceable read-model projections
- *   - 32xxx: Worker state projections
- *   - 38xxx: AI/ML and backup command/result kinds
+ *   - 25910/1059/21059: ContextVM JSON-RPC intent transport
+ *   - 11316-11320: ContextVM server/tool/resource/prompt announcements
+ *   - 30900/4903/30315/30002/30078: canonical observable, collection, and state reads
+ *   - 5xxx/6xxx/7xxx/31xxx/38xxx: legacy Bahia migration-only request/result/read-model fixtures
  */
+
+// =============================================================================
+// ContextVM and Canonical Nostr Kinds
+// =============================================================================
+
+export const CONTEXTVM_MESSAGE = 25910;
+export const CONTEXTVM_GIFT_WRAP = 1059;
+export const CONTEXTVM_EPHEMERAL_GIFT_WRAP = 21059;
+export const CONTEXTVM_SERVER_ANNOUNCEMENT = 11316;
+export const CONTEXTVM_TOOLS_ANNOUNCEMENT = 11317;
+export const CONTEXTVM_RESOURCES_ANNOUNCEMENT = 11318;
+export const CONTEXTVM_RESOURCE_TEMPLATES_ANNOUNCEMENT = 11319;
+export const CONTEXTVM_PROMPTS_ANNOUNCEMENT = 11320;
+export const CONTEXT_VM_MESSAGE = 25910;
+export const CONTEXT_VM_GIFT_WRAP = 1059;
+export const CONTEXT_VM_EPHEMERAL_GIFT_WRAP = 21059;
+export const CONTEXT_VM_SERVER_ANNOUNCEMENT = 11316;
+export const CONTEXT_VM_TOOLS_LIST = 11317;
+export const CONTEXT_VM_RESOURCES_LIST = 11318;
+export const CONTEXT_VM_RESOURCE_TEMPLATES_LIST = 11319;
+export const CONTEXT_VM_PROMPTS_LIST = 11320;
+export const CASCADIA_CONTROLPLANE_STATE = 30900;
+export const CASCADIA_AUDIT = 4903;
+export const CAS_AUDIT = 4903;
+export const CAS_CONTROL_STATE = 30900;
+export const NIP38_STATUS = 30315;
+export const NIP51_RELAY_SET = 30002;
+export const NIP78_APP_DATA = 30078;
+
+export const CANONICAL_OBSERVABLE_KINDS = [
+  CASCADIA_CONTROLPLANE_STATE,
+  CASCADIA_AUDIT,
+  NIP38_STATUS,
+  CONTEXTVM_SERVER_ANNOUNCEMENT,
+  CONTEXTVM_TOOLS_ANNOUNCEMENT,
+  CONTEXTVM_RESOURCES_ANNOUNCEMENT,
+  CONTEXTVM_RESOURCE_TEMPLATES_ANNOUNCEMENT,
+  CONTEXTVM_PROMPTS_ANNOUNCEMENT,
+  NIP51_RELAY_SET,
+  NIP78_APP_DATA,
+];
 
 // =============================================================================
 // DNS Control-Plane Kinds (5941-5945, 6941, 7941-7945)
@@ -31,7 +69,7 @@ export const DNS_DRIFT_REMEDIATE_RESULT = 7944;
 export const DNS_BACKEND_REGISTER_RESULT = 7945;
 
 // =============================================================================
-// Core Control-Plane Request Kinds (5961-5989)
+// Legacy Control-Plane Request Kinds (5961-5989) — migration-only fixtures
 // =============================================================================
 
 export const DEPLOY_REQUEST = 5961;
@@ -63,7 +101,7 @@ export const POLICY_DELETE = 5988;
 export const POLICY_EVALUATE = 5989;
 
 // =============================================================================
-// Package Control-Plane Request Kinds (5991-5996)
+// Legacy Package Control-Plane Request Kinds (5991-5996) — migration-only fixtures
 // =============================================================================
 
 export const PACKAGE_REPOSITORY_APPLY = 5991;
@@ -74,7 +112,7 @@ export const PACKAGE_YANK_REQUEST = 5995;
 export const PACKAGE_DRIFT_DETECT = 5996;
 
 // =============================================================================
-// Worker Control-Plane Request Kinds (5997-6006)
+// Legacy Worker Control-Plane Request Kinds (5997-6006) — migration-only fixtures
 // =============================================================================
 
 export const WORKER_CORDON_REQUEST = 5997;
@@ -238,7 +276,7 @@ export const BACKUP_RUN_ATTESTATION = 31310;
 export const BACKUP_VERIFICATION_ATTESTATION = 31311;
 
 // =============================================================================
-// Replaceable Read-Model Registry Kinds (31961-31999)
+// Legacy Replaceable Read-Model Registry Kinds (31961-31999) — migrate reads to 30900/30078/30002
 // =============================================================================
 
 export const SERVICE_STATE = 31961;
@@ -511,6 +549,8 @@ export const DNS_READ_MODEL_KINDS = [
 /**
  * All Bahia read-model kinds for subscriptions.
  */
+export const BAHIA_CANONICAL_READ_KINDS = CANONICAL_OBSERVABLE_KINDS;
+
 export const BAHIA_READ_MODEL_KINDS = [
   SERVICE_REGISTRY,
   ENVIRONMENT_REGISTRY,

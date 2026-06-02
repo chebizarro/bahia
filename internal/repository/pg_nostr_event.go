@@ -33,6 +33,8 @@ type NostrEventRepository interface {
 	Record(ctx context.Context, rec *NostrEventRecord) (bool, error)
 	GetByID(ctx context.Context, id string) (*NostrEventRecord, error)
 	ListByKind(ctx context.Context, kind int, limit int) ([]NostrEventRecord, error)
+	ListByKinds(ctx context.Context, kinds []int, limit int) ([]NostrEventRecord, error)
+	FindByTag(ctx context.Context, tagName, tagValue string, kinds []int, limit int) ([]NostrEventRecord, error)
 	ListByEntity(ctx context.Context, entityType string, entityID uuid.UUID, limit int) ([]NostrEventRecord, error)
 	LatestCreatedAtForKinds(ctx context.Context, kinds []int) (*time.Time, error)
 	LatestCreatedAtForKindsAndAuthors(ctx context.Context, kinds []int, authors []string) (*time.Time, error)
@@ -119,6 +121,46 @@ func (r *PgNostrEventRepository) ListByKind(ctx context.Context, kind int, limit
 	rows, err := r.pool.Query(ctx, `SELECT `+nostrEventColumns+` FROM nostr_events WHERE kind = $1 ORDER BY created_at DESC LIMIT $2`, kind, limit)
 	if err != nil {
 		return nil, fmt.Errorf("listing nostr events by kind: %w", err)
+	}
+	defer rows.Close()
+	return scanNostrEventRows(rows)
+}
+
+// ListByKinds returns the most recent events for any of kinds.
+func (r *PgNostrEventRepository) ListByKinds(ctx context.Context, kinds []int, limit int) ([]NostrEventRecord, error) {
+	if len(kinds) == 0 {
+		return nil, nil
+	}
+	if limit <= 0 {
+		limit = 500
+	}
+	rows, err := r.pool.Query(ctx, `SELECT `+nostrEventColumns+` FROM nostr_events WHERE kind = ANY($1) ORDER BY created_at ASC, id ASC LIMIT $2`, kinds, limit)
+	if err != nil {
+		return nil, fmt.Errorf("listing nostr events by kinds: %w", err)
+	}
+	defer rows.Close()
+	return scanNostrEventRows(rows)
+}
+
+// FindByTag returns events containing tagName=tagValue, optionally restricted by kind.
+func (r *PgNostrEventRepository) FindByTag(ctx context.Context, tagName, tagValue string, kinds []int, limit int) ([]NostrEventRecord, error) {
+	if tagName == "" || tagValue == "" {
+		return nil, nil
+	}
+	if limit <= 0 {
+		limit = 50
+	}
+	query := `SELECT ` + nostrEventColumns + ` FROM nostr_events WHERE EXISTS (SELECT 1 FROM jsonb_array_elements(tags::jsonb) tag WHERE tag->>0 = $1 AND tag->>1 = $2)`
+	args := []any{tagName, tagValue}
+	if len(kinds) > 0 {
+		query += ` AND kind = ANY($3)`
+		args = append(args, kinds)
+	}
+	query += ` ORDER BY created_at DESC, id DESC LIMIT $` + fmt.Sprint(len(args)+1)
+	args = append(args, limit)
+	rows, err := r.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("finding nostr events by tag: %w", err)
 	}
 	defer rows.Close()
 	return scanNostrEventRows(rows)

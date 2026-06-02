@@ -3,6 +3,7 @@ package nostr
 import (
 	"context"
 	"encoding/json"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -34,11 +35,24 @@ func (p *captureProjectionPublisher) byKind(kind int) []gonostr.Event {
 	defer p.mu.Unlock()
 	var out []gonostr.Event
 	for _, ev := range p.events {
-		if ev.Kind == kind {
+		if ev.Kind == kind || (isCanonicalRuntimeKind(ev.Kind) && hasTag(ev.Tags, "legacy_kind", strconv.Itoa(kind))) {
 			out = append(out, ev)
 		}
 	}
 	return out
+}
+
+func isCanonicalRuntimeKind(kind int) bool {
+	return kind == KindCASControlState || kind == KindCASAudit || kind == KindNIP38Status
+}
+
+func hasTag(tags gonostr.Tags, key, value string) bool {
+	for _, tag := range tags {
+		if len(tag) >= 2 && tag[0] == key && tag[1] == value {
+			return true
+		}
+	}
+	return false
 }
 
 type fakeProjectionSource struct {

@@ -19,7 +19,7 @@ MCP provides:
 
 ## Protocol
 
-MCP uses **JSON-RPC 2.0** over HTTP:
+MCP uses **JSON-RPC 2.0** over HTTP. Bahia's Nostr-native migration uses the same method model over ContextVM: client mutations are JSON-RPC requests on kind `25910` rather than legacy Bahia request kinds.
 
 ```bash
 curl -X POST http://localhost:8080/mcp \
@@ -129,12 +129,14 @@ curl -X POST http://localhost:8080/mcp \
 
 ### Worker Tools
 
-| Tool | Description |
-|------|-------------|
-| `bahia_list_workers` | List workers |
-| `bahia_get_worker` | Get worker details |
-| `bahia_worker_drain` | Drain worker |
-| `bahia_worker_resume` | Resume worker |
+| Tool | Description | ContextVM method |
+|------|-------------|------------------|
+| `bahia_list_workers` | List workers from canonical read models (`30900`/`30078`) | read-only resource |
+| `bahia_get_worker` | Get worker details from canonical read models | read-only resource |
+| `bahia_worker_drain` | Drain worker | `worker/drain` |
+| `bahia_worker_resume` | Resume worker | `worker/undrain` |
+| `bahia_worker_cordon` | Cordon worker | `worker/cordon` |
+| `bahia_worker_uncordon` | Uncordon worker | `worker/uncordon` |
 
 ### Backup Tools
 
@@ -330,6 +332,12 @@ curl -X POST http://localhost:8080/mcp \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{...}}'
 ```
+
+## ContextVM Nostr Transport
+
+ContextVM clients discover Bahia with kind `11316` server announcements and capability announcements `11317`-`11320`, then invoke the same JSON-RPC methods over Nostr kind `25910` with CEP-4 encryption where supported. Long-running tool responses are acknowledgments; agents should follow canonical observable kinds `30900`, `4903`, `30315`, NIP-51 `30002`, NIP-78 `30078`, and standard NIPs for final state.
+
+Backend dependency: server-side ContextVM handlers for legacy operator/package/DNS/backup/ML request families are tracked by `bahia-viys`. HTTP MCP tools remain available while those handlers land.
 
 ## Error Handling
 

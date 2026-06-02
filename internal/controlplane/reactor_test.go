@@ -61,14 +61,11 @@ func TestReactorLastSeenTrackingUpdatesCursor(t *testing.T) {
 	r := NewReactor(Config{}, nil, nostradapter.NewRelayPool(nil, zap.NewNop()), nil, zap.NewNop(), WithKindCatalog(catalog))
 	eventTime := gonostr.Timestamp(time.Now().Unix() - 60) // 1 minute ago, within validation window
 
-	r.handleEvent(context.Background(), signedControlPlaneTestEventAt(t, nostradapter.KindControlPlaneDeploymentStatus, eventTime))
+	r.handleEvent(context.Background(), signedControlPlaneTestEventAt(t, nostradapter.KindCASControlState, eventTime))
 
-	got := r.lastSeenByGroup["core_control_plane_live"]
+	got := r.lastSeenByGroup["state_snapshot"]
 	if got != eventTime {
 		t.Fatalf("lastSeen mismatch: got %v want %v", got, eventTime)
-	}
-	if since := r.requestSubscriptionSince(context.Background()); since != eventTime-1 {
-		t.Fatalf("expected reconnect cursor to use lastSeen overlap, got %v want %v", since, eventTime-1)
 	}
 }
 

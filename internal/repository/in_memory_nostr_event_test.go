@@ -86,6 +86,25 @@ func TestInMemoryNostrEventRepositoryFindSinceKindFiltering(t *testing.T) {
 	require.Equal(t, "kind-3", records[1].ID)
 }
 
+func TestInMemoryNostrEventRepositoryListByKindsAndFindByTag(t *testing.T) {
+	ctx := context.Background()
+	repo := NewInMemoryNostrEventRepository()
+	recordEvents(t, ctx, repo,
+		&NostrEventRecord{ID: "b", Kind: 5961, Tags: []byte(`[["migrated-from","legacy-1"]]`), CreatedAt: time.Unix(102, 0).UTC()},
+		&NostrEventRecord{ID: "a", Kind: 5962, Tags: []byte(`[["migrated-from","legacy-2"]]`), CreatedAt: time.Unix(101, 0).UTC()},
+		&NostrEventRecord{ID: "c", Kind: 7000, Tags: []byte(`[["migrated-from","legacy-1"]]`), CreatedAt: time.Unix(103, 0).UTC()},
+	)
+
+	listed, err := repo.ListByKinds(ctx, []int{5961, 5962}, 10)
+	require.NoError(t, err)
+	require.Equal(t, []string{"a", "b"}, []string{listed[0].ID, listed[1].ID})
+
+	found, err := repo.FindByTag(ctx, "migrated-from", "legacy-1", []int{5961}, 10)
+	require.NoError(t, err)
+	require.Len(t, found, 1)
+	require.Equal(t, "b", found[0].ID)
+}
+
 func TestInMemoryNostrEventRepositoryConcurrentRecord(t *testing.T) {
 	ctx := context.Background()
 	repo := NewInMemoryNostrEventRepository()

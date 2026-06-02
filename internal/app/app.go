@@ -43,6 +43,7 @@ import (
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/events"
 	"github.com/openagentsinc/bahia/internal/mcp"
+	"github.com/openagentsinc/bahia/internal/nostrmigration"
 	"github.com/openagentsinc/bahia/internal/notifications"
 	"github.com/openagentsinc/bahia/internal/pipeline"
 	"github.com/openagentsinc/bahia/internal/reconcile"
@@ -397,12 +398,19 @@ func New(cfg *config.Config) (*App, error) {
 		progress := bootstrapper.Progress()
 		return string(progress.Phase), bootstrapper.Ready()
 	})
-	bgManager.RegisterWithOptions(&bootstrapperRunner{
-		bootstrapper:    bootstrapper,
-		policy:          policy,
-		statusProjector: bahiaStatusProjector,
-		catalogVersion:  catalog.Version,
-	}, RunnerTier(Tier0))
+	migrationRunner := nostrmigration.NewRunner(nostrEventRepo, migrationRelayPublisher{pool: relayPool}, relayPool, nostrmigration.Config{
+		PrivateKey:    cfg.Nostr.PrivateKey,
+		RelayBackfill: len(relayURLs) > 0 && strings.TrimSpace(cfg.Nostr.PrivateKey) != "",
+	}, logger)
+	bgManager.RegisterWithOptions(&orderedStartupRunner{runners: []BackgroundRunner{
+		migrationRunner,
+		&bootstrapperRunner{
+			bootstrapper:    bootstrapper,
+			policy:          policy,
+			statusProjector: bahiaStatusProjector,
+			catalogVersion:  catalog.Version,
+		},
+	}}, RunnerTier(Tier0))
 
 	continuityGraph, err := service.NewContinuityGraph(
 		continuityDefinitionStore,
@@ -957,7 +965,7 @@ func New(cfg *config.Config) (*App, error) {
 		Telemetry:          telemetryProvider,
 		Background:         bgManager,
 		toolCoordinator:    toolCoordinator,
-			relayPools:         []*nostrAdapter.RelayPool{controlPlanePool, relayPool, fipsRelayPool},
+		relayPools:         []*nostrAdapter.RelayPool{controlPlanePool, relayPool, fipsRelayPool},
 		ModePolicy:         policy,
 		Health:             healthProvider,
 		RelayFirstRegistry: relayFirstRegistry,
@@ -1060,6 +1068,23 @@ func (r *inMemoryProjectionMetaRepo) ListByStream(_ context.Context, stream stri
 		}
 	}
 	return result, nil
+}
+
+type orderedStartupRunner struct {
+	runners []BackgroundRunner
+}
+
+func (r *orderedStartupRunner) Name() string { return "tier0-startup" }
+func (r *orderedStartupRunner) Run(ctx context.Context) error {
+	for _, runner := range r.runners {
+		if runner == nil {
+			continue
+		}
+		if err := runner.Run(ctx); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 type bootstrapperRunner struct {
@@ -2048,6 +2073,22 @@ type auditedNostrPublisher struct {
 
 type relayFirstNostrPublisher struct {
 	pool *nostrAdapter.RelayPool
+}
+
+type migrationRelayPublisher struct {
+	pool *nostrAdapter.RelayPool
+}
+
+func (p migrationRelayPublisher) PublishMigrationEvent(ctx context.Context, ev nostr.Event) ([]nostrmigration.PublishOutcome, error) {
+	if p.pool == nil {
+		return nil, fmt.Errorf("migration relay pool is not configured")
+	}
+	results, err := p.pool.PublishWithResults(ctx, ev)
+	outcomes := make([]nostrmigration.PublishOutcome, 0, len(results))
+	for _, result := range results {
+		outcomes = append(outcomes, nostrmigration.PublishOutcome{RelayURL: result.RelayURL, Accepted: result.Accepted, Reason: result.Reason, Error: result.Error})
+	}
+	return outcomes, err
 }
 
 func (p relayFirstNostrPublisher) Publish(ctx context.Context, ev nostr.Event) (int, error) {

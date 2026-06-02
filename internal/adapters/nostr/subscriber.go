@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/nbd-wtf/go-nostr"
+	"github.com/openagentsinc/bahia/internal/kinds"
 	"github.com/openagentsinc/bahia/internal/repository"
 	"go.uber.org/zap"
 )
@@ -21,6 +22,18 @@ import (
 //   - Legacy NIP-90 kind 5900 belongs to the old upstream dvm-cicd-runner path and is
 //     not part of this subscriber contract.
 var DefaultInboundKinds = []int{
+	// Canonical Bahia observables.
+	KindCASControlState,
+	KindCASAudit,
+	KindNIP38Status,
+	kinds.ContextVMServerAnnouncement,
+	kinds.ContextVMToolsList,
+	kinds.ContextVMResourcesList,
+	kinds.ContextVMResourceTemplatesList,
+	kinds.ContextVMPromptsList,
+	KindRelaySetDiscovery,
+	KindNIP65RelayList,
+
 	// Hive-CI protocol kinds.
 	KindHiveCIWorkflowRun,
 	KindHiveCIWorkflowResult,
@@ -30,21 +43,6 @@ var DefaultInboundKinds = []int{
 	KindLoomJobStatusUpdate,
 	KindLoomJobResult,
 	KindLoomJobCancellation,
-
-	// Worker catalog/read-model updates accepted during the mixed-version window.
-	KindLegacyWorkerState,
-	KindLegacyWorkerAssignmentState,
-	KindLegacyWorkerDrainStatus,
-	KindLegacyWorkerEligibilityPreview,
-	KindWorkerState,
-	KindWorkerAssignmentState,
-	KindWorkerDrainStatus,
-	KindWorkerEligibilityPreview,
-
-	// Operator assistant relay events not handled by the reactor.
-	KindAssistantSession,
-	KindAssistantStatus,
-	KindAssistantResult,
 }
 
 // EventHandler is called for each inbound event after persistence.

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -1421,9 +1422,105 @@ func (p *Projector) publishMLProvenanceForEdge(ctx context.Context, edge *domain
 
 func (p *Projector) publishReplaceableJSON(ctx context.Context, kind int, dTag string, tags gonostr.Tags, value any, entityType string, entityID *uuid.UUID) error {
 	content, _ := json.Marshal(value)
+	publishKind := kind
 	baseTags := gonostr.Tags{{"d", dTag}, {"deleted", "false"}}
+	if domain, entity := canonicalStateDomain(kind); domain != "" {
+		publishKind = KindCASControlState
+		baseTags = gonostr.Tags{{"d", canonicalStateDTag(domain, entity, dTag)}, {"domain", domain}, {"schema", "bahia.cp-state.v1"}, {"legacy_kind", strconv.Itoa(kind)}, {"deleted", "false"}}
+	}
 	baseTags = append(baseTags, tags...)
-	return p.publishSigned(ctx, kind, baseTags, string(content), entityType, entityID)
+	return p.publishSigned(ctx, publishKind, baseTags, string(content), entityType, entityID)
+}
+
+func canonicalStateDomain(kind int) (domainName string, entity string) {
+	switch kind {
+	case KindServiceState:
+		return "service", "state"
+	case KindServiceRegistry:
+		return "service", "registry"
+	case KindEnvironmentRegistry:
+		return "environment", "registry"
+	case KindLLMRouteRegistry:
+		return "llm", "route"
+	case KindLLMRouteState:
+		return "llm", "state"
+	case KindArtifactRegistry:
+		return "artifact", "registry"
+	case KindDeploymentIntentRegistry:
+		return "deployment", "intent"
+	case KindDeploymentRunRegistry:
+		return "deployment", "run"
+	case KindBuildRegistry:
+		return "build", "registry"
+	case KindPolicyRegistry:
+		return "policy", "registry"
+	case KindPackageRepositoryRegistry:
+		return "package", "repository"
+	case KindPackageArtifactRegistry:
+		return "package", "artifact"
+	case KindPackagePromotionRegistry:
+		return "package", "promotion"
+	case KindWorkerState:
+		return "worker", "state"
+	case KindWorkerAssignmentState:
+		return "worker", "assignment"
+	case KindWorkerDrainStatus:
+		return "worker", "drain"
+	case KindWorkerEligibilityPreview:
+		return "worker", "eligibility"
+	case KindDNSZoneState:
+		return "dns", "zone"
+	case KindDNSEndpointState:
+		return "dns", "endpoint"
+	case KindDNSPolicyState:
+		return "dns", "policy"
+	case KindDNSBackendState:
+		return "dns", "backend"
+	case KindMLModelRegistry:
+		return "ml", "model"
+	case KindMLModelVersionRegistry:
+		return "ml", "model-version"
+	case KindMLDatasetRegistry:
+		return "ml", "dataset"
+	case KindMLRecipeRegistry:
+		return "ml", "recipe"
+	case KindMLRecipeRunState:
+		return "ml", "recipe-run"
+	case KindMLInferenceEndpointRegistry:
+		return "ml", "endpoint"
+	case KindMLInferenceEndpointState:
+		return "ml", "endpoint-state"
+	case KindMLEvaluationExperimentState:
+		return "ml", "evaluation"
+	case KindMLArtifactProvenanceGraph:
+		return "ml", "provenance"
+	case KindMLRuntimeCapabilityProfile:
+		return "ml", "runtime-capability"
+	case KindBackupDefinitionRegistry:
+		return "backup", "definition"
+	case KindBackupPolicyRegistry:
+		return "backup", "policy"
+	case KindBackupRepositoryRegistry:
+		return "backup", "repository"
+	case KindBackupRetentionRegistry:
+		return "backup", "retention"
+	case KindBackupRecipeRegistry:
+		return "backup", "recipe"
+	case KindBackupRunState:
+		return "backup", "run"
+	case KindBackupVerificationState:
+		return "backup", "verification"
+	case KindBackupRestoreState:
+		return "backup", "restore"
+	case KindBackupRuntimeObservationState:
+		return "backup", "runtime"
+	default:
+		return "", ""
+	}
+}
+
+func canonicalStateDTag(_, _, id string) string {
+	return id
 }
 
 func (p *Projector) publishDNSEndpointSnapshot(ctx context.Context) (int, int, error) {
@@ -2196,7 +2293,8 @@ func (p *Projector) publishPolicyRegistry(ctx context.Context, policy *domain.De
 		tags = append(tags, gonostr.Tag{"name", policy.Name}, gonostr.Tag{"enabled", fmt.Sprintf("%t", policy.Enabled)}, gonostr.Tag{"enforcement", string(policy.Enforcement)})
 	}
 	contentJSON, _ := json.Marshal(content)
-	return p.publishSigned(ctx, KindPolicyRegistry, append(gonostr.Tags{{"d", policy.ID.String()}}, tags...), string(contentJSON), "policy.projection", &policy.ID)
+	baseTags := gonostr.Tags{{"d", canonicalStateDTag("policy", "registry", policy.ID.String())}, {"domain", "policy"}, {"schema", "bahia.cp-state.v1"}, {"legacy_kind", strconv.Itoa(KindPolicyRegistry)}}
+	return p.publishSigned(ctx, KindCASControlState, append(baseTags, tags...), string(contentJSON), "policy.projection", &policy.ID)
 }
 
 func (p *Projector) publishServiceRegistry(ctx context.Context, svc *domain.Service, deleted bool) error {
@@ -2217,7 +2315,10 @@ func (p *Projector) publishServiceRegistry(ctx context.Context, svc *domain.Serv
 	}
 	contentJSON, _ := json.Marshal(content)
 	tags := gonostr.Tags{
-		{"d", svc.ID.String()},
+		{"d", canonicalStateDTag("service", "registry", svc.ID.String())},
+		{"domain", "service"},
+		{"schema", "bahia.cp-state.v1"},
+		{"legacy_kind", strconv.Itoa(KindServiceRegistry)},
 		{"deleted", fmt.Sprintf("%t", deleted)},
 	}
 	if !deleted {
@@ -2226,7 +2327,7 @@ func (p *Projector) publishServiceRegistry(ctx context.Context, svc *domain.Serv
 			gonostr.Tag{"runtime", string(svc.RuntimeType)},
 		)
 	}
-	return p.publishSigned(ctx, KindServiceRegistry, tags, string(contentJSON), "service.projection", &svc.ID)
+	return p.publishSigned(ctx, KindCASControlState, tags, string(contentJSON), "service.projection", &svc.ID)
 }
 
 func (p *Projector) publishEnvironmentRegistry(ctx context.Context, env *domain.Environment, deleted bool) error {
@@ -2251,7 +2352,10 @@ func (p *Projector) publishEnvironmentRegistry(ctx context.Context, env *domain.
 	}
 	contentJSON, _ := json.Marshal(content)
 	tags := gonostr.Tags{
-		{"d", env.ID.String()},
+		{"d", canonicalStateDTag("environment", "registry", env.ID.String())},
+		{"domain", "environment"},
+		{"schema", "bahia.cp-state.v1"},
+		{"legacy_kind", strconv.Itoa(KindEnvironmentRegistry)},
 		{"deleted", fmt.Sprintf("%t", deleted)},
 	}
 	if !deleted {
@@ -2262,7 +2366,7 @@ func (p *Projector) publishEnvironmentRegistry(ctx context.Context, env *domain.
 			gonostr.Tag{"reconcile_mode", string(env.Targeting.DefaultReconcileMode)},
 		)
 	}
-	return p.publishSigned(ctx, KindEnvironmentRegistry, tags, string(contentJSON), "environment.projection", &env.ID)
+	return p.publishSigned(ctx, KindCASControlState, tags, string(contentJSON), "environment.projection", &env.ID)
 }
 
 func (p *Projector) publishBackupRecipeRegistry(ctx context.Context, recipe *domain.BackupRecipe) error {
@@ -2768,14 +2872,14 @@ func (p *Projector) publishLLMRouteRegistry(ctx context.Context, route *domain.L
 		content["updated_at"] = formatTime(route.UpdatedAt)
 	}
 	contentJSON, _ := json.Marshal(content)
-	tags := gonostr.Tags{{"d", route.ID.String()}, {"route", route.ID.String()}, {"deleted", fmt.Sprintf("%t", deleted)}}
+	tags := gonostr.Tags{{"d", canonicalStateDTag("llm", "route", route.ID.String())}, {"route", route.ID.String()}, {"deleted", fmt.Sprintf("%t", deleted)}}
 	if !deleted {
 		tags = append(tags, gonostr.Tag{"name", route.Name})
 		if route.GatewayConfig != nil && route.GatewayConfig.PublicModel != "" {
 			tags = append(tags, gonostr.Tag{"model", route.GatewayConfig.PublicModel})
 		}
 	}
-	return p.publishSigned(ctx, KindLLMRouteRegistry, tags, string(contentJSON), "llm_route.projection", &route.ID)
+	return p.publishSigned(ctx, KindCASControlState, append(gonostr.Tags{{"domain", "llm"}, {"schema", "bahia.cp-state.v1"}, {"legacy_kind", strconv.Itoa(KindLLMRouteRegistry)}}, tags...), string(contentJSON), "llm_route.projection", &route.ID)
 }
 
 func (p *Projector) publishLLMRouteState(ctx context.Context, state *domain.LLMRouteState) error {
@@ -2828,7 +2932,8 @@ func (p *Projector) publishLLMRouteState(ctx context.Context, state *domain.LLMR
 	if state.BackendKind != "" {
 		tags = append(tags, gonostr.Tag{"backend", string(state.BackendKind)})
 	}
-	return p.publishSigned(ctx, KindLLMRouteState, tags, string(contentJSON), "llm_route_state.projection", &state.RouteID)
+	tags[0] = gonostr.Tag{"d", canonicalStateDTag("llm", "state", dTag)}
+	return p.publishSigned(ctx, KindCASControlState, append(gonostr.Tags{{"domain", "llm"}, {"schema", "bahia.cp-state.v1"}, {"legacy_kind", strconv.Itoa(KindLLMRouteState)}}, tags...), string(contentJSON), "llm_route_state.projection", &state.RouteID)
 }
 
 func (p *Projector) publishLLMRouteStateTombstone(ctx context.Context, res events.ResourceData) error {
@@ -2840,7 +2945,8 @@ func (p *Projector) publishLLMRouteStateTombstone(ctx context.Context, res event
 	content, _ := json.Marshal(map[string]any{"deleted": true, "route_id": routeID.String(), "environment_id": envID.String(), "updated_at": formatTime(time.Now().UTC())})
 	dTag := fmt.Sprintf("%s:%s", routeID, envID)
 	tags := gonostr.Tags{{"d", dTag}, {"route", routeID.String()}, {"environment", envID.String()}, {"deleted", "true"}}
-	return p.publishSigned(ctx, KindLLMRouteState, tags, string(content), "llm_route_state.projection", &routeID)
+	tags[0] = gonostr.Tag{"d", canonicalStateDTag("llm", "state", dTag)}
+	return p.publishSigned(ctx, KindCASControlState, append(gonostr.Tags{{"domain", "llm"}, {"schema", "bahia.cp-state.v1"}, {"legacy_kind", strconv.Itoa(KindLLMRouteState)}}, tags...), string(content), "llm_route_state.projection", &routeID)
 }
 
 func (p *Projector) publishState(ctx context.Context, state *domain.EnvironmentServiceState) error {
@@ -2909,7 +3015,8 @@ func (p *Projector) publishState(ctx context.Context, state *domain.EnvironmentS
 	if observedHash != "" {
 		tags = append(tags, gonostr.Tag{"observed_hash", observedHash})
 	}
-	return p.publishSigned(ctx, KindServiceState, tags, string(contentJSON), "state.projection", &state.ServiceID)
+	tags[0] = gonostr.Tag{"d", canonicalStateDTag("service", "state", dTag)}
+	return p.publishSigned(ctx, KindCASControlState, append(gonostr.Tags{{"domain", "service"}, {"schema", "bahia.cp-state.v1"}, {"legacy_kind", strconv.Itoa(KindServiceState)}}, tags...), string(contentJSON), "state.projection", &state.ServiceID)
 }
 
 func (p *Projector) latestObservedHash(ctx context.Context, state *domain.EnvironmentServiceState) string {
@@ -2955,12 +3062,13 @@ func (p *Projector) publishStateTombstone(ctx context.Context, res events.Resour
 		{"unit", domain.DefaultDeploymentUnitKey},
 		{"deleted", "true"},
 	}
-	return p.publishSigned(ctx, KindServiceState, tags, string(content), "state.projection", &serviceID)
+	tags[0] = gonostr.Tag{"d", canonicalStateDTag("service", "state", dTag)}
+	return p.publishSigned(ctx, KindCASControlState, append(gonostr.Tags{{"domain", "service"}, {"schema", "bahia.cp-state.v1"}, {"legacy_kind", strconv.Itoa(KindServiceState)}}, tags...), string(content), "state.projection", &serviceID)
 }
 
 func (p *Projector) publishAudit(ctx context.Context, e events.Event) error {
-	kind := auditKindForEvent(e.Type)
-	if kind == 0 {
+	legacyKind := auditKindForEvent(e.Type)
+	if legacyKind == 0 {
 		return nil
 	}
 	res := resourceFromEvent(e)
@@ -2969,7 +3077,14 @@ func (p *Projector) publishAudit(ctx context.Context, e events.Event) error {
 		"entity_id":  e.EntityID,
 		"data":       e.Data,
 	})
+	domainName := auditDomainForEvent(e.Type)
 	tags := gonostr.Tags{
+		{"domain", domainName},
+		{"type", string(e.Type)},
+		{"schema", "bahia.audit.v1"},
+		{"legacy_kind", strconv.Itoa(legacyKind)},
+		{"protected", "true"},
+		{"-"},
 		{"t", string(e.Type)},
 		{"event_type", string(e.Type)},
 	}
@@ -2979,7 +3094,15 @@ func (p *Projector) publishAudit(ctx context.Context, e events.Event) error {
 	tags = appendResourceTags(tags, res)
 	tags = appendDNSAuditTags(tags, e.Data)
 	entityID := auditEntityID(e.Type, e.EntityID, res)
-	return p.publishSigned(ctx, kind, tags, string(content), string(e.Type), entityID)
+	return p.publishSigned(ctx, KindCASAudit, tags, string(content), string(e.Type), entityID)
+}
+
+func auditDomainForEvent(t events.EventType) string {
+	s := string(t)
+	if idx := strings.Index(s, "."); idx > 0 {
+		return s[:idx]
+	}
+	return "control_plane"
 }
 
 func auditEntityID(t events.EventType, raw string, res events.ResourceData) *uuid.UUID {

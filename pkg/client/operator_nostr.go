@@ -112,6 +112,9 @@ func (t *relayPoolOperatorTransport) Close() {
 
 // OperatorControlPlaneClient publishes signed operator request events and waits
 // for correlated status/result replies over Nostr subscriptions.
+// ContextVM JSON-RPC mutation publication is blocked until bahia-viys backend
+// handlers accept kind 25910 methods for these operator actions; this client
+// keeps the legacy event-kind path isolated at the package boundary meanwhile.
 type OperatorControlPlaneClient struct {
 	relays     []string
 	privateKey string
