@@ -1,29 +1,21 @@
 package handlers
 
 import (
-	"errors"
 	"net/http"
-	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/auth"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/repository"
-	"github.com/openagentsinc/bahia/internal/service"
 )
 
 type ToolHandler struct {
-	repo     repository.ToolProvisioningRepository
-	registry *service.RegistryService
+	repo repository.ToolProvisioningRepository
 }
 
-func NewToolHandler(repo repository.ToolProvisioningRepository, registry *service.RegistryService) *ToolHandler {
-	return &ToolHandler{repo: repo, registry: registry}
-}
-
-type toolDecisionRequest struct {
-	Reason string `json:"reason"`
+func NewToolHandler(repo repository.ToolProvisioningRepository) *ToolHandler {
+	return &ToolHandler{repo: repo}
 }
 
 type toolDenylistRequest struct {
@@ -63,89 +55,6 @@ func (h *ToolHandler) GetIntent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeData(w, http.StatusOK, intent)
-}
-
-func (h *ToolHandler) ApproveIntent(w http.ResponseWriter, r *http.Request) {
-	if !requirePermission(w, r, domain.PermApproveDeployments) {
-		return
-	}
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid intent id")
-		return
-	}
-	var req toolDecisionRequest
-	if err := decodeJSON(r, &req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
-		return
-	}
-	if req.Reason == "" {
-		writeError(w, http.StatusBadRequest, "reason is required")
-		return
-	}
-	intent, err := h.repo.GetIntent(r.Context(), id)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to get tool intent")
-		return
-	}
-	if intent == nil {
-		writeError(w, http.StatusNotFound, "tool intent not found")
-		return
-	}
-	now := time.Now().UTC()
-	intent.Status = domain.ToolProvisionStatusApproved
-	intent.ApprovedAt = &now
-	intent.ApprovedBy = toolActor(r)
-	if err := h.repo.UpdateIntent(r.Context(), intent); err != nil {
-		if errors.Is(err, repository.ErrNotFound) {
-			writeError(w, http.StatusNotFound, "tool intent not found")
-			return
-		}
-		writeError(w, http.StatusInternalServerError, "failed to update tool intent")
-		return
-	}
-	_ = h.repo.LogApproval(r.Context(), id, "approved", toolActor(r), req.Reason)
-	writeMessage(w, http.StatusOK, "tool intent approved")
-}
-
-func (h *ToolHandler) RejectIntent(w http.ResponseWriter, r *http.Request) {
-	if !requirePermission(w, r, domain.PermApproveDeployments) {
-		return
-	}
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid intent id")
-		return
-	}
-	var req toolDecisionRequest
-	if err := decodeJSON(r, &req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
-		return
-	}
-	if req.Reason == "" {
-		writeError(w, http.StatusBadRequest, "reason is required")
-		return
-	}
-	intent, err := h.repo.GetIntent(r.Context(), id)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to get tool intent")
-		return
-	}
-	if intent == nil {
-		writeError(w, http.StatusNotFound, "tool intent not found")
-		return
-	}
-	intent.Status = domain.ToolProvisionStatusRejected
-	if err := h.repo.UpdateIntent(r.Context(), intent); err != nil {
-		if errors.Is(err, repository.ErrNotFound) {
-			writeError(w, http.StatusNotFound, "tool intent not found")
-			return
-		}
-		writeError(w, http.StatusInternalServerError, "failed to update tool intent")
-		return
-	}
-	_ = h.repo.LogApproval(r.Context(), id, "rejected", toolActor(r), req.Reason)
-	writeMessage(w, http.StatusOK, "tool intent rejected")
 }
 
 func (h *ToolHandler) ListDenylist(w http.ResponseWriter, r *http.Request) {

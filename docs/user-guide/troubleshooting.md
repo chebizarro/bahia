@@ -117,10 +117,7 @@ Common issues and solutions when using Bahia.
    bahia deployments get intent-123
    ```
 
-2. Verify policies are passing:
-   ```bash
-   bahia policies evaluate --artifact-id art-123 --environment production
-   ```
+2. Verify policies by publishing a signed `PolicyEvaluate` event for the artifact and environment, or use a UI flow backed by the Nostr control plane.
 
 3. Check authorized approvers are available.
 

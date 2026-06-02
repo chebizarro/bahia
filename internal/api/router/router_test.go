@@ -412,6 +412,164 @@ func (m *mockStateRepo) ListDueForObservation(_ context.Context, _ time.Time) ([
 	return nil, nil
 }
 
+type mockPolicyHTTPRepo struct {
+	policies map[uuid.UUID]*domain.DeploymentPolicy
+}
+
+func newMockPolicyHTTPRepo() *mockPolicyHTTPRepo {
+	return &mockPolicyHTTPRepo{policies: make(map[uuid.UUID]*domain.DeploymentPolicy)}
+}
+func (m *mockPolicyHTTPRepo) Create(_ context.Context, p *domain.DeploymentPolicy) error {
+	if p.ID == uuid.Nil {
+		p.ID = uuid.New()
+	}
+	now := time.Now().UTC()
+	p.CreatedAt = now
+	p.UpdatedAt = now
+	m.policies[p.ID] = p
+	return nil
+}
+func (m *mockPolicyHTTPRepo) GetByID(_ context.Context, id uuid.UUID) (*domain.DeploymentPolicy, error) {
+	policy, ok := m.policies[id]
+	if !ok {
+		return nil, repository.ErrNotFound
+	}
+	return policy, nil
+}
+func (m *mockPolicyHTTPRepo) GetByName(_ context.Context, name string) (*domain.DeploymentPolicy, error) {
+	for _, policy := range m.policies {
+		if policy.Name == name {
+			return policy, nil
+		}
+	}
+	return nil, repository.ErrNotFound
+}
+func (m *mockPolicyHTTPRepo) List(_ context.Context, enabledOnly bool) ([]domain.DeploymentPolicy, error) {
+	var policies []domain.DeploymentPolicy
+	for _, policy := range m.policies {
+		if enabledOnly && !policy.Enabled {
+			continue
+		}
+		policies = append(policies, *policy)
+	}
+	return policies, nil
+}
+func (m *mockPolicyHTTPRepo) ListByEnvironment(_ context.Context, envID uuid.UUID) ([]domain.DeploymentPolicy, error) {
+	var policies []domain.DeploymentPolicy
+	for _, policy := range m.policies {
+		if policy.EnvironmentID != nil && *policy.EnvironmentID == envID && policy.Enabled {
+			policies = append(policies, *policy)
+		}
+	}
+	return policies, nil
+}
+func (m *mockPolicyHTTPRepo) ListGlobal(_ context.Context) ([]domain.DeploymentPolicy, error) {
+	var policies []domain.DeploymentPolicy
+	for _, policy := range m.policies {
+		if policy.EnvironmentID == nil && policy.Enabled {
+			policies = append(policies, *policy)
+		}
+	}
+	return policies, nil
+}
+func (m *mockPolicyHTTPRepo) Update(_ context.Context, p *domain.DeploymentPolicy) error {
+	if _, ok := m.policies[p.ID]; !ok {
+		return repository.ErrNotFound
+	}
+	m.policies[p.ID] = p
+	return nil
+}
+func (m *mockPolicyHTTPRepo) Delete(_ context.Context, id uuid.UUID) error {
+	delete(m.policies, id)
+	return nil
+}
+
+type mockToolProvisioningRepo struct {
+	intents  map[uuid.UUID]*domain.ToolProvisionIntent
+	denylist map[string]*domain.ToolDenylistEntry
+}
+
+func newMockToolProvisioningRepo() *mockToolProvisioningRepo {
+	return &mockToolProvisioningRepo{
+		intents:  make(map[uuid.UUID]*domain.ToolProvisionIntent),
+		denylist: make(map[string]*domain.ToolDenylistEntry),
+	}
+}
+func toolDenylistKey(packageName, manager string) string { return packageName + ":" + manager }
+func (m *mockToolProvisioningRepo) CreateIntent(_ context.Context, intent *domain.ToolProvisionIntent) error {
+	if intent.ID == uuid.Nil {
+		intent.ID = uuid.New()
+	}
+	m.intents[intent.ID] = intent
+	return nil
+}
+func (m *mockToolProvisioningRepo) GetIntent(_ context.Context, id uuid.UUID) (*domain.ToolProvisionIntent, error) {
+	return m.intents[id], nil
+}
+func (m *mockToolProvisioningRepo) UpdateIntent(_ context.Context, intent *domain.ToolProvisionIntent) error {
+	if _, ok := m.intents[intent.ID]; !ok {
+		return repository.ErrNotFound
+	}
+	m.intents[intent.ID] = intent
+	return nil
+}
+func (m *mockToolProvisioningRepo) ListPendingApprovalIntents(_ context.Context) ([]domain.ToolProvisionIntent, error) {
+	return m.ListIntentsByStatus(context.Background(), domain.ToolProvisionStatusAwaitingApproval)
+}
+func (m *mockToolProvisioningRepo) ListIntentsByStatus(_ context.Context, statuses ...domain.ToolProvisionStatus) ([]domain.ToolProvisionIntent, error) {
+	wanted := make(map[domain.ToolProvisionStatus]bool, len(statuses))
+	for _, status := range statuses {
+		wanted[status] = true
+	}
+	var intents []domain.ToolProvisionIntent
+	for _, intent := range m.intents {
+		if wanted[intent.Status] {
+			intents = append(intents, *intent)
+		}
+	}
+	return intents, nil
+}
+func (m *mockToolProvisioningRepo) CreateRun(context.Context, *domain.ToolProvisionRun) error {
+	return nil
+}
+func (m *mockToolProvisioningRepo) GetRun(context.Context, uuid.UUID) (*domain.ToolProvisionRun, error) {
+	return nil, nil
+}
+func (m *mockToolProvisioningRepo) UpdateRun(context.Context, *domain.ToolProvisionRun) error {
+	return nil
+}
+func (m *mockToolProvisioningRepo) GetProfileState(context.Context, uuid.UUID, uuid.UUID) (*domain.ToolProfileState, error) {
+	return &domain.ToolProfileState{}, nil
+}
+func (m *mockToolProvisioningRepo) UpsertProfileState(context.Context, *domain.ToolProfileState) error {
+	return nil
+}
+func (m *mockToolProvisioningRepo) AddToDenylist(_ context.Context, entry *domain.ToolDenylistEntry) error {
+	if entry.BlockedAt.IsZero() {
+		entry.BlockedAt = time.Now().UTC()
+	}
+	m.denylist[toolDenylistKey(entry.PackageName, entry.Manager)] = entry
+	return nil
+}
+func (m *mockToolProvisioningRepo) RemoveFromDenylist(_ context.Context, packageName, manager string) error {
+	delete(m.denylist, toolDenylistKey(packageName, manager))
+	return nil
+}
+func (m *mockToolProvisioningRepo) IsDenylisted(_ context.Context, packageName, manager string) (bool, error) {
+	_, ok := m.denylist[toolDenylistKey(packageName, manager)]
+	return ok, nil
+}
+func (m *mockToolProvisioningRepo) ListDenylist(context.Context) ([]domain.ToolDenylistEntry, error) {
+	var entries []domain.ToolDenylistEntry
+	for _, entry := range m.denylist {
+		entries = append(entries, *entry)
+	}
+	return entries, nil
+}
+func (m *mockToolProvisioningRepo) LogApproval(context.Context, uuid.UUID, string, string, string) error {
+	return nil
+}
+
 // --- Test Setup ---
 
 type rbacMemberLookup struct {
@@ -1235,6 +1393,127 @@ func TestDeprecatedDeploymentObservationArtifactMutationRoutesAreRemoved(t *test
 		{http.MethodPost, "/api/v1/rollback", map[string]any{"service_id": svcID, "environment_id": envID, "requested_by": "deployer"}},
 		{http.MethodPost, "/api/v1/observations", map[string]any{"service_id": svcID, "environment_id": envID, "observed_image_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111", "health_status": "healthy", "source": "test"}},
 		{http.MethodPost, "/api/v1/artifacts", map[string]any{"build_id": buildID, "service_id": svcID, "image_repo": "harbor/removed-deploy", "image_tag": "v6.1", "image_digest": "sha256:1212121212121212121212121212121212121212121212121212121212121212"}},
+	}
+	for _, tt := range tests {
+		resp, body := doJSON(t, tt.method, srv.URL+tt.path, tt.body)
+		assertDeprecatedMutationRouteRemoved(t, tt.method, tt.path, resp, body)
+	}
+}
+
+func TestPolicyReadRoutesRemainAndDeprecatedMutationsAreRemoved(t *testing.T) {
+	policyRepo := newMockPolicyHTTPRepo()
+	policySvc := service.NewPolicyService(policyRepo, nil, nil, zap.NewNop())
+	policy := &domain.DeploymentPolicy{
+		Name:        "require-sbom",
+		Rules:       []domain.PolicyRule{{Type: domain.RuleRequireSBOM}},
+		Enforcement: domain.PolicyEnforcementBlock,
+		Enabled:     true,
+	}
+	if err := policyRepo.Create(context.Background(), policy); err != nil {
+		t.Fatalf("seed policy: %v", err)
+	}
+
+	handler := router.NewWithDeps(newTestRegistryService(), zap.NewNop(), config.CORSConfig{}, nil, router.RouterDeps{Policies: policySvc})
+	srv := httptest.NewServer(handler)
+	defer srv.Close()
+
+	resp, body := doJSON(t, http.MethodGet, srv.URL+"/api/v1/policies", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("list policies: expected 200, got %d: %v", resp.StatusCode, body)
+	}
+
+	resp, body = doJSON(t, http.MethodGet, srv.URL+"/api/v1/policies/"+policy.ID.String(), nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("get policy: expected 200, got %d: %v", resp.StatusCode, body)
+	}
+
+	tests := []struct {
+		method string
+		path   string
+		body   any
+	}{
+		{http.MethodPost, "/api/v1/policies", map[string]any{"name": "removed", "rules": []any{}, "enforcement": "warn"}},
+		{http.MethodPut, "/api/v1/policies/" + policy.ID.String(), map[string]any{"name": "updated"}},
+		{http.MethodDelete, "/api/v1/policies/" + policy.ID.String(), nil},
+		{http.MethodPost, "/api/v1/policies/evaluate", map[string]any{"artifact_id": uuid.New().String(), "environment_id": uuid.New().String()}},
+	}
+	for _, tt := range tests {
+		resp, body := doJSON(t, tt.method, srv.URL+tt.path, tt.body)
+		assertDeprecatedMutationRouteRemoved(t, tt.method, tt.path, resp, body)
+	}
+}
+
+func TestToolDenylistRoutesRemainAndDeprecatedApprovalRoutesAreRemoved(t *testing.T) {
+	toolRepo := newMockToolProvisioningRepo()
+	intentID := uuid.New()
+	if err := toolRepo.CreateIntent(context.Background(), &domain.ToolProvisionIntent{
+		ID:             intentID,
+		ServiceID:      uuid.New(),
+		EnvironmentID:  uuid.New(),
+		RequestedTools: []domain.ToolRequest{{Name: "curl", Version: "8"}},
+		Status:         domain.ToolProvisionStatusAwaitingApproval,
+	}); err != nil {
+		t.Fatalf("seed tool intent: %v", err)
+	}
+
+	handler := router.NewWithDeps(newTestRegistryService(), zap.NewNop(), config.CORSConfig{}, nil, router.RouterDeps{ToolProvisioning: toolRepo})
+	srv := httptest.NewServer(handler)
+	defer srv.Close()
+
+	resp, body := doJSON(t, http.MethodGet, srv.URL+"/api/v1/tools/pending", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("list pending tools: expected 200, got %d: %v", resp.StatusCode, body)
+	}
+
+	resp, body = doJSON(t, http.MethodGet, srv.URL+"/api/v1/tools/denylist", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("list tool denylist: expected 200, got %d: %v", resp.StatusCode, body)
+	}
+
+	resp, body = doJSON(t, http.MethodPost, srv.URL+"/api/v1/tools/denylist", map[string]any{
+		"package": "left-pad",
+		"manager": "npm",
+		"reason":  "blocked by policy",
+	})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("add tool denylist: expected 201, got %d: %v", resp.StatusCode, body)
+	}
+
+	resp, body = doJSON(t, http.MethodDelete, srv.URL+"/api/v1/tools/denylist/left-pad/npm", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("remove tool denylist: expected 200, got %d: %v", resp.StatusCode, body)
+	}
+
+	for _, path := range []string{
+		"/api/v1/tools/" + intentID.String() + "/approve",
+		"/api/v1/tools/" + intentID.String() + "/reject",
+	} {
+		resp, body := doJSON(t, http.MethodPost, srv.URL+path, map[string]any{"reason": "reviewed"})
+		assertDeprecatedMutationRouteRemoved(t, http.MethodPost, path, resp, body)
+	}
+}
+
+func TestDeprecatedPolicyAndToolApprovalMutationRoutesAreRemoved(t *testing.T) {
+	policyRepo := newMockPolicyHTTPRepo()
+	policySvc := service.NewPolicyService(policyRepo, nil, nil, zap.NewNop())
+	policyID := uuid.New()
+	toolRepo := newMockToolProvisioningRepo()
+	intentID := uuid.New()
+	handler := router.NewWithDeps(newTestRegistryService(), zap.NewNop(), config.CORSConfig{}, nil, router.RouterDeps{Policies: policySvc, ToolProvisioning: toolRepo})
+	srv := httptest.NewServer(handler)
+	defer srv.Close()
+
+	tests := []struct {
+		method string
+		path   string
+		body   any
+	}{
+		{http.MethodPost, "/api/v1/policies", map[string]any{"name": "removed", "rules": []any{}, "enforcement": "warn"}},
+		{http.MethodPut, "/api/v1/policies/" + policyID.String(), map[string]any{"name": "updated"}},
+		{http.MethodDelete, "/api/v1/policies/" + policyID.String(), nil},
+		{http.MethodPost, "/api/v1/policies/evaluate", map[string]any{"artifact_id": uuid.New().String(), "environment_id": uuid.New().String()}},
+		{http.MethodPost, "/api/v1/tools/" + intentID.String() + "/approve", map[string]any{"reason": "approved"}},
+		{http.MethodPost, "/api/v1/tools/" + intentID.String() + "/reject", map[string]any{"reason": "rejected"}},
 	}
 	for _, tt := range tests {
 		resp, body := doJSON(t, tt.method, srv.URL+tt.path, tt.body)

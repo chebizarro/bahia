@@ -59,32 +59,9 @@ evaluated_at: "2024-01-15T10:00:00Z"
    - **Environments**: Where to apply
 4. Click **Create**
 
-### CLI
+### CLI and MCP
 
-```bash
-bahia policies create \
-  --name "require-sbom" \
-  --type sbom \
-  --rule require_sbom=true \
-  --rule max_critical_vulns=0 \
-  --environment production
-```
-
-### MCP Tool
-
-```json
-{
-  "tool": "bahia_policy_create",
-  "arguments": {
-    "name": "require-sbom",
-    "type": "sbom",
-    "rules": {
-      "require_sbom": true,
-      "max_critical_vulns": 0
-    }
-  }
-}
-```
+Policy creation is signer-first. The legacy REST-backed CLI/MCP mutation surfaces are being migrated to publish signed Nostr events directly; until that migration lands, publish the Nostr event below or use a UI flow backed by the Nostr control plane.
 
 ### Nostr (Signer-First)
 
@@ -152,19 +129,19 @@ rules:
 
 ### Manual Evaluation
 
-```bash
-bahia policies evaluate \
-  --artifact-id art-123 \
-  --environment production
-```
+Manual policy evaluation is signer-first. Publish a signed `5989` PolicyEvaluate event:
 
 ```json
 {
-  "tool": "bahia_policy_evaluate",
-  "arguments": {
+  "kind": 5989,
+  "content": {
     "artifact_id": "art-123",
     "environment_id": "env-prod"
-  }
+  },
+  "tags": [
+    ["artifact", "art-123"],
+    ["environment", "env-prod"]
+  ]
 }
 ```
 
@@ -226,15 +203,9 @@ bahia policies get require-sbom -o yaml
 3. Modify rules
 4. Click **Save**
 
-### CLI
-
-```bash
-bahia policies update require-sbom \
-  --rule max_critical_vulns=0 \
-  --rule max_high_vulns=3
-```
-
 ### Nostr
+
+Policy updates are signer-first. Publish a signed `5987` PolicyUpdate event:
 
 ```json
 {
@@ -250,9 +221,7 @@ bahia policies update require-sbom \
 
 ## Deleting Policies
 
-```bash
-bahia policies delete require-sbom
-```
+Policy deletion is signer-first. Publish a signed `5988` PolicyDelete event with the policy id in content and correlation tags.
 
 **Note**: Policies linked to active deployments cannot be deleted.
 

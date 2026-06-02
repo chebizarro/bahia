@@ -1,0 +1,11 @@
+{
+  "feature_id": "bahia-3s39",
+  "defects": [
+    {
+      "id": "bahia-pbjq",
+      "title": "Migrate policy and tool mutation CLI/MCP surfaces to signer-first Nostr",
+      "status": "open",
+      "reason": "REST endpoints were removed in this work item; remaining CLI/MCP mutation surfaces need signer-first Nostr publish/follow implementations."
+    }
+  ]
+}

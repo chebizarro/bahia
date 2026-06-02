@@ -1,0 +1,47 @@
+{
+  "feature_id": "bahia-3s39",
+  "criteria": [
+    {
+      "id": "AC1",
+      "statement": "The six Work Item 3 REST mutation routes are not registered in router.go.",
+      "tests": [
+        "TestDeprecatedPolicyAndToolApprovalMutationRoutesAreRemoved"
+      ]
+    },
+    {
+      "id": "AC2",
+      "statement": "The corresponding policy and tool REST mutation handler methods are deleted.",
+      "tests": [
+        "go test ./internal/api/..."
+      ]
+    },
+    {
+      "id": "AC3",
+      "statement": "Policy read routes continue to work while policy mutation routes are unavailable.",
+      "tests": [
+        "TestPolicyReadRoutesRemainAndDeprecatedMutationsAreRemoved"
+      ]
+    },
+    {
+      "id": "AC4",
+      "statement": "Tool denylist keep-section routes continue to work while tool approval/rejection routes are unavailable.",
+      "tests": [
+        "TestToolDenylistRoutesRemainAndDeprecatedApprovalRoutesAreRemoved"
+      ]
+    },
+    {
+      "id": "AC5",
+      "statement": "Client policy creation no longer calls removed REST endpoints and guides callers to Nostr PolicyCreate.",
+      "tests": [
+        "TestCreatePolicyRestMutationRemoved"
+      ]
+    },
+    {
+      "id": "AC6",
+      "statement": "Code compiles after removals.",
+      "tests": [
+        "go build ./..."
+      ]
+    }
+  ]
+}

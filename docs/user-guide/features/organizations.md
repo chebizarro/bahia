@@ -159,11 +159,7 @@ bahia environments create \
 
 ### Policies
 
-```bash
-bahia policies create \
-  --name "require-approval" \
-  --org-id "org-123"
-```
+Policy creation is signer-first. Publish a signed Nostr `PolicyCreate` event scoped to the organization instead of using the deprecated REST-backed policy mutation command path.
 
 ## Access Control
 

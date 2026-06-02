@@ -207,30 +207,14 @@ bahia workers pricing npub1worker...
 
 ### Policies
 
+Policy create, update, delete, and manual evaluation mutations are signer-first Nostr operations. Legacy REST-backed policy mutation command paths are deprecated until the CLI publishes signed policy events directly.
+
 ```bash
 # List policies
 bahia policies list
 
 # Get policy
 bahia policies get require-sbom
-
-# Create policy
-bahia policies create \
-  --name "require-sbom" \
-  --type sbom \
-  --rule require_sbom=true
-
-# Update policy
-bahia policies update require-sbom \
-  --rule max_critical_vulns=0
-
-# Delete policy
-bahia policies delete require-sbom
-
-# Evaluate
-bahia policies evaluate \
-  --artifact-id art-123 \
-  --environment production
 ```
 
 ### LLM Routes

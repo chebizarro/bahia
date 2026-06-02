@@ -363,7 +363,7 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 
 			// Tool provisioning (read)
 			if deps.ToolProvisioning != nil {
-				toolH := handlers.NewToolHandler(deps.ToolProvisioning, registry)
+				toolH := handlers.NewToolHandler(deps.ToolProvisioning)
 				r.With(tier3Gate, coreRBAC(deps, authMiddleware, nil, true)).Get("/tools/pending", toolH.ListPending)
 				r.With(tier3Gate, coreRBAC(deps, authMiddleware, toolIntentOrgResolver(deps.ToolProvisioning, deps.Services, "id"), true)).Get("/tools/{id}", toolH.GetIntent)
 				r.With(tier3Gate, coreRBAC(deps, authMiddleware, nil, true)).Get("/tools/denylist", toolH.ListDenylist)
@@ -437,14 +437,8 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 				r.With(tier2Gate, coreRBAC(deps, authMiddleware, artifactOrgResolver(deps.Artifacts, deps.Services, "id"), true)).Post("/artifacts/{id}/signatures/verify", sigH.Verify)
 			}
 
-			// Policies (write)
-			if deps.Policies != nil {
-				polH := handlers.NewPolicyHandler(deps.Policies)
-				r.With(tier2Gate).Post("/policies", polH.Create)
-				r.With(tier2Gate).Put("/policies/{id}", polH.Update)
-				r.With(tier2Gate).Delete("/policies/{id}", polH.Delete)
-				r.With(tier2Gate).Post("/policies/evaluate", polH.Evaluate)
-			}
+			// Deprecated policy REST mutations are intentionally not mounted.
+			// Signer-first Nostr policy command kinds 5986-5989 are the supported replacement.
 
 			// Secrets (write)
 			if deps.Secrets != nil && deps.Encryptor != nil {
@@ -466,9 +460,7 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 
 			// Tool provisioning (write)
 			if deps.ToolProvisioning != nil {
-				toolH := handlers.NewToolHandler(deps.ToolProvisioning, registry)
-				r.With(tier3Gate, coreRBAC(deps, authMiddleware, toolIntentOrgResolver(deps.ToolProvisioning, deps.Services, "id"), true)).Post("/tools/{id}/approve", toolH.ApproveIntent)
-				r.With(tier3Gate, coreRBAC(deps, authMiddleware, toolIntentOrgResolver(deps.ToolProvisioning, deps.Services, "id"), true)).Post("/tools/{id}/reject", toolH.RejectIntent)
+				toolH := handlers.NewToolHandler(deps.ToolProvisioning)
 				r.With(tier3Gate, coreRBAC(deps, authMiddleware, nil, true)).Post("/tools/denylist", toolH.AddDenylist)
 				r.With(tier3Gate, coreRBAC(deps, authMiddleware, nil, true)).Delete("/tools/denylist/{package}/{manager}", toolH.RemoveDenylist)
 			}

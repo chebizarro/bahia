@@ -1,0 +1,36 @@
+{
+  "feature_id": "bahia-3s39",
+  "title": "REST deprecation work item 3: policies and tool approvals",
+  "intent": "Remove REST mutation endpoints for policy CRUD/evaluation and tool approval/rejection because those mutations are handled by signed Nostr control-plane events.",
+  "observed_behavior_before": [
+    "router.go registered POST /policies, PUT /policies/{id}, DELETE /policies/{id}, POST /policies/evaluate, POST /tools/{id}/approve, and POST /tools/{id}/reject.",
+    "PolicyHandler and ToolHandler accepted direct REST mutation calls for those operations.",
+    "Client policy creation attempted POST /api/v1/policies."
+  ],
+  "intended_behavior": [
+    "The six Work Item 3 REST mutation routes are unavailable.",
+    "Policy read routes remain available for projected state.",
+    "Tool pending/read routes and tool denylist keep-section endpoints remain available.",
+    "Public client policy creation fails before network calls with signer-first Nostr guidance.",
+    "Nostr reactor handling for policy and tool approval events remains unchanged."
+  ],
+  "scope": [
+    "internal/api/router/router.go",
+    "internal/api/handlers/policies.go",
+    "internal/api/handlers/tools.go",
+    "internal/api/router/router_test.go",
+    "pkg/client/client.go",
+    "pkg/client/client_test.go",
+    "docs/specs/rest-deprecation-plan.md",
+    "docs/user-guide/features/policies.md",
+    "docs/user-guide/cli-reference.md",
+    "docs/user-guide/mcp-tools.md",
+    "docs/user-guide/features/organizations.md",
+    "docs/user-guide/troubleshooting.md"
+  ],
+  "out_of_scope": [
+    "Deleting policy or tool domain/service/repository types used by Nostr reactor and read paths.",
+    "Removing tool denylist endpoints, which are listed in the KEEP section.",
+    "Rewriting CLI or MCP mutation surfaces to publish signed Nostr events; tracked by bahia-pbjq."
+  ]
+}

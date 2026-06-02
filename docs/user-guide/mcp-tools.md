@@ -168,13 +168,12 @@ curl -X POST http://localhost:8080/mcp \
 
 ### Policy Tools
 
+Policy mutation tools are being migrated to signer-first Nostr events. Use read tools for current projections; publish signed `PolicyCreate`, `PolicyUpdate`, `PolicyDelete`, and `PolicyEvaluate` events directly for mutations until MCP signer-first support lands.
+
 | Tool | Description |
 |------|-------------|
-| `bahia_policy_create` | Create policy |
-| `bahia_policy_update` | Update policy |
-| `bahia_policy_delete` | Delete policy |
-| `bahia_policy_evaluate` | Evaluate policy |
 | `bahia_list_policies` | List policies |
+| `bahia_get_policy` | Get policy details |
 
 ### Payment Tools
 

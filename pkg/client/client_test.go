@@ -400,6 +400,30 @@ func TestRollbackRestMutationRemoved(t *testing.T) {
 	}
 }
 
+func TestCreatePolicyRestMutationRemoved(t *testing.T) {
+	called := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		t.Fatalf("CreatePolicy must not call removed REST endpoint %s %s", r.Method, r.URL.Path)
+	}))
+	defer server.Close()
+
+	c := New(server.URL)
+	result, err := c.CreatePolicy(context.Background(), "require-sbom", "", map[string]any{"type": "require_sbom"}, "block", true)
+	if err == nil {
+		t.Fatal("CreatePolicy() expected REST deprecation error")
+	}
+	if result != nil {
+		t.Fatalf("CreatePolicy() result = %#v, want nil", result)
+	}
+	if !strings.Contains(err.Error(), "Nostr PolicyCreate") {
+		t.Fatalf("CreatePolicy() error = %q, want Nostr PolicyCreate guidance", err.Error())
+	}
+	if called {
+		t.Fatal("CreatePolicy called removed REST endpoint")
+	}
+}
+
 func TestAPIError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

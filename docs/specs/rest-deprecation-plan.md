@@ -52,17 +52,17 @@ These REST endpoints duplicate functionality that the Nostr reactor (`internal/c
 
 | REST Endpoint | Nostr Kind | Reactor Handler | File |
 |---------------|------------|-----------------|------|
-| `POST /policies` | `PolicyCreate` 5986 | `handlePolicyCreate` | `router.go:464` |
-| `PUT /policies/{id}` | `PolicyUpdate` 5987 | `handlePolicyUpdate` | `router.go:465` |
-| `DELETE /policies/{id}` | `PolicyDelete` 5988 | `handlePolicyDelete` | `router.go:466` |
-| `POST /policies/evaluate` | `PolicyEvaluate` 5989 | `handlePolicyEvaluate` | `router.go:467` |
+| `POST /policies` (removed) | `PolicyCreate` 5986 | `handlePolicyCreate` | `internal/controlplane/reactor.go` |
+| `PUT /policies/{id}` (removed) | `PolicyUpdate` 5987 | `handlePolicyUpdate` | `internal/controlplane/reactor.go` |
+| `DELETE /policies/{id}` (removed) | `PolicyDelete` 5988 | `handlePolicyDelete` | `internal/controlplane/reactor.go` |
+| `POST /policies/evaluate` (removed) | `PolicyEvaluate` 5989 | `handlePolicyEvaluate` | `internal/controlplane/reactor.go` |
 
 ### Tools
 
 | REST Endpoint | Nostr Kind | Reactor Handler | File |
 |---------------|------------|-----------------|------|
-| `POST /tools/{id}/approve` | `ToolApprovalResponse` 7977 | `handleToolApprovalResponse` | `router.go:493` |
-| `POST /tools/{id}/reject` | `ToolApprovalResponse` 7977 | `handleToolApprovalResponse` | `router.go:494` |
+| `POST /tools/{id}/approve` (removed) | `ToolApprovalResponse` 7977 | `handleToolApprovalResponse` | `internal/controlplane/reactor.go` |
+| `POST /tools/{id}/reject` (removed) | `ToolApprovalResponse` 7977 | `handleToolApprovalResponse` | `internal/controlplane/reactor.go` |
 
 ### Adoption
 
@@ -200,14 +200,14 @@ All `GET` endpoints that read projected state are acceptable for browser compati
 - [x] Update tests
 
 ### Work Item 3: Policies + Tools (6 endpoints)
-- [ ] Remove POST /policies from router.go
-- [ ] Remove PUT /policies/{id} from router.go
-- [ ] Remove DELETE /policies/{id} from router.go
-- [ ] Remove POST /policies/evaluate from router.go
-- [ ] Remove POST /tools/{id}/approve from router.go
-- [ ] Remove POST /tools/{id}/reject from router.go
-- [ ] Delete/comment handler methods in policies.go, tools.go
-- [ ] Update tests
+- [x] Remove POST /policies from router.go
+- [x] Remove PUT /policies/{id} from router.go
+- [x] Remove DELETE /policies/{id} from router.go
+- [x] Remove POST /policies/evaluate from router.go
+- [x] Remove POST /tools/{id}/approve from router.go
+- [x] Remove POST /tools/{id}/reject from router.go
+- [x] Delete/comment handler methods in policies.go, tools.go
+- [x] Update tests
 
 ### Work Item 4: LLM + Adoption + Direct Runtime (6 endpoints)
 - [ ] Remove POST /llm/routes from router.go

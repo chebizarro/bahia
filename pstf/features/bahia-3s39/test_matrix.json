@@ -1,0 +1,52 @@
+{
+  "feature_id": "bahia-3s39",
+  "test_matrix": [
+    {
+      "test": "TestDeprecatedPolicyAndToolApprovalMutationRoutesAreRemoved",
+      "acceptance_criteria": [
+        "AC1"
+      ],
+      "evidence": "Exercises POST /policies, PUT/DELETE /policies/{id}, POST /policies/evaluate, POST /tools/{id}/approve, and POST /tools/{id}/reject and expects removed-route status."
+    },
+    {
+      "test": "TestPolicyReadRoutesRemainAndDeprecatedMutationsAreRemoved",
+      "acceptance_criteria": [
+        "AC1",
+        "AC3"
+      ],
+      "evidence": "Seeds policy state directly, verifies GET /policies and GET /policies/{id}, and verifies policy mutation routes are removed."
+    },
+    {
+      "test": "TestToolDenylistRoutesRemainAndDeprecatedApprovalRoutesAreRemoved",
+      "acceptance_criteria": [
+        "AC1",
+        "AC4"
+      ],
+      "evidence": "Seeds a pending tool intent, verifies GET /tools/pending and denylist POST/DELETE keep paths, and verifies approval/rejection routes are removed."
+    },
+    {
+      "test": "TestCreatePolicyRestMutationRemoved",
+      "acceptance_criteria": [
+        "AC5"
+      ],
+      "evidence": "Uses an httptest server that fails if contacted and asserts the client returns Nostr PolicyCreate guidance."
+    },
+    {
+      "test": "go test ./internal/api/... ./pkg/client",
+      "acceptance_criteria": [
+        "AC2",
+        "AC3",
+        "AC4",
+        "AC5"
+      ],
+      "evidence": "Focused API/client package tests."
+    },
+    {
+      "test": "go build ./...",
+      "acceptance_criteria": [
+        "AC6"
+      ],
+      "evidence": "Full repository compile check."
+    }
+  ]
+}

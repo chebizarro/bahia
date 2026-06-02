@@ -635,20 +635,10 @@ func (c *Client) GetPolicy(ctx context.Context, id string) (*domain.DeploymentPo
 	return &policy, nil
 }
 
-// CreatePolicy creates a new deployment policy.
+// CreatePolicy is no longer available through the REST API.
+// Publish a signed Nostr PolicyCreate command instead.
 func (c *Client) CreatePolicy(ctx context.Context, name string, envID string, rules map[string]any, enforcement string, enabled bool) (*domain.DeploymentPolicy, error) {
-	body := map[string]any{
-		"name":           name,
-		"environment_id": envID,
-		"rules":          rules,
-		"enforcement":    enforcement,
-		"enabled":        enabled,
-	}
-	var policy domain.DeploymentPolicy
-	if err := c.do(ctx, http.MethodPost, "/api/v1/policies", body, &policy); err != nil {
-		return nil, err
-	}
-	return &policy, nil
+	return nil, fmt.Errorf("REST policy creation is removed; publish a signed Nostr PolicyCreate event instead")
 }
 
 // --- Secrets ---
