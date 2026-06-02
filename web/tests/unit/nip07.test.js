@@ -361,6 +361,23 @@ describe('NIP-07 Utilities', () => {
       expect(second).toBe('cipher:two');
       expect(order).toEqual(['start:one', 'end:one', 'start:two', 'end:two']);
     });
+
+    it('keeps the internal NIP-44 queue usable after a rejected operation', async () => {
+      const encrypt = vi.fn()
+        .mockRejectedValueOnce(new Error('aka-profiles: Could not establish connection. Receiving end does not exist.'))
+        .mockResolvedValueOnce('ciphertext');
+
+      global.window.nostr = {
+        nip44: {
+          encrypt,
+          decrypt: vi.fn()
+        }
+      };
+
+      await expect(nip07Module.encryptNip44('b'.repeat(64), 'first')).rejects.toThrow('Failed to encrypt with NIP-44');
+      await expect(nip07Module.encryptNip44('b'.repeat(64), 'second')).resolves.toBe('ciphertext');
+      expect(encrypt).toHaveBeenCalledTimes(2);
+    });
   });
 
   describe('getCapabilities', () => {

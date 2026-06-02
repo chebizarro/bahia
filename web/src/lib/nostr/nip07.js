@@ -36,6 +36,7 @@ let nip07ObserverInstalled = false;
 let lastKnownNip07Availability = null;
 let lastKnownNip07Provider = null;
 let nip07CryptoQueue = Promise.resolve();
+let nip07AvailabilityPoller = null;
 
 function notifyNip07AvailabilityWatchers({ force = false } = {}) {
   const result = detectNip07();
@@ -63,29 +64,29 @@ function installNip07Observer() {
     });
   };
 
-  const descriptor = Object.getOwnPropertyDescriptor(window, 'nostr');
-  if (!descriptor || descriptor.configurable) {
-    let currentValue = descriptor?.get ? descriptor.get.call(window) : window.nostr;
-
-    Object.defineProperty(window, 'nostr', {
-      configurable: true,
-      enumerable: descriptor?.enumerable ?? true,
-      get() {
-        return descriptor?.get ? descriptor.get.call(window) : currentValue;
-      },
-      set(value) {
-        if (descriptor?.set) {
-          descriptor.set.call(window, value);
-        }
-        currentValue = descriptor?.get ? descriptor.get.call(window) : value;
-        scheduleCheck();
-      }
-    });
-  }
-
   window.addEventListener?.('focus', scheduleCheck);
   window.addEventListener?.('pageshow', scheduleCheck);
   document?.addEventListener?.('visibilitychange', scheduleCheck);
+}
+
+function updateNip07Polling() {
+  if (typeof window === 'undefined') return;
+  const needsPolling = nip07AvailabilityWatchers.size > 0 && !detectNip07().available;
+  if (needsPolling && !nip07AvailabilityPoller) {
+    nip07AvailabilityPoller = window.setInterval(() => {
+      const result = notifyNip07AvailabilityWatchers();
+      if (result.available && nip07AvailabilityPoller) {
+        clearInterval(nip07AvailabilityPoller);
+        nip07AvailabilityPoller = null;
+      }
+    }, 100);
+    return;
+  }
+
+  if (!needsPolling && nip07AvailabilityPoller) {
+    clearInterval(nip07AvailabilityPoller);
+    nip07AvailabilityPoller = null;
+  }
 }
 
 /**
@@ -109,6 +110,7 @@ export function watchNip07Availability(onChange, { fireImmediately = true } = {}
 
   installNip07Observer();
   nip07AvailabilityWatchers.add(onChange);
+  updateNip07Polling();
 
   if (fireImmediately) {
     onChange(detectNip07());
@@ -116,6 +118,7 @@ export function watchNip07Availability(onChange, { fireImmediately = true } = {}
 
   return () => {
     nip07AvailabilityWatchers.delete(onChange);
+    updateNip07Polling();
   };
 }
 
@@ -196,11 +199,12 @@ function isTransientBridgeError(error) {
 async function runQueuedNip44Operation(operation) {
   const previous = nip07CryptoQueue.catch(() => {});
   const next = previous.then(operation);
-  nip07CryptoQueue = next.finally(() => {
-    if (nip07CryptoQueue === next) {
+  const queueEntry = next.catch(() => {}).finally(() => {
+    if (nip07CryptoQueue === queueEntry) {
       nip07CryptoQueue = Promise.resolve();
     }
   });
+  nip07CryptoQueue = queueEntry;
   return next;
 }
 

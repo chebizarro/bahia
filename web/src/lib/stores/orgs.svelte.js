@@ -1,3 +1,4 @@
+import { authState, initializeAuth } from '$lib/stores/auth.js';
 import { encryptedRequestsAvailable, requestEncryptedResult } from '$lib/nostr/encrypted-controlplane.js';
 import { currentSystemInfo, loadSystemInfo } from './system.svelte.js';
 
@@ -26,6 +27,12 @@ function unwrapEncryptedResult(response, fallback = null) {
 }
 
 async function ensureEncryptedOrgs() {
+  if (authState.status === 'unknown' || authState.status === 'checking') {
+    await initializeAuth();
+  }
+  if (authState.status !== 'authenticated') {
+    throw new Error('Not authenticated - please login first');
+  }
   let info = currentSystemInfo();
   if (!info) info = await loadSystemInfo();
   if (!encryptedRequestsAvailable(info)) {
@@ -64,10 +71,9 @@ export async function loadOrgsOverview() {
   orgsState.loading = true;
   orgsState.error = null;
   try {
-    const [orgs, myInvites] = await Promise.all([
-      encryptedOrgRequest('orgs.list'),
-      encryptedOrgRequest('orgs.my_invites')
-    ]);
+    // Serialize startup org requests to avoid hammering flaky signer bridges.
+    const orgs = await encryptedOrgRequest('orgs.list');
+    const myInvites = await encryptedOrgRequest('orgs.my_invites');
     orgsState.orgs = Array.isArray(orgs) ? orgs : [];
     orgsState.myInvites = Array.isArray(myInvites) ? myInvites : [];
     return { orgs: orgsState.orgs, myInvites: orgsState.myInvites };

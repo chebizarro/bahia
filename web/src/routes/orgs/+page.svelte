@@ -1,4 +1,5 @@
 <script>
+  import { onMount } from 'svelte';
   import { acceptInvite as acceptPrivateInvite, loadOrgsOverview } from '$lib/stores/orgs.svelte.js';
   import { toast } from '$lib/components/toast.js';
   import Card from '$lib/components/Card.svelte';
@@ -9,23 +10,29 @@
   let myInvites = $state([]);
   let loading = $state(true);
   let error = $state(null);
+  let loadGeneration = 0;
 
-  $effect(() => {
+  onMount(() => {
     void loadData();
   });
 
   async function loadData() {
+    const generation = ++loadGeneration;
     loading = true;
     error = null;
     try {
       const data = await loadOrgsOverview();
+      if (generation !== loadGeneration) return;
       orgs = data.orgs;
       myInvites = data.myInvites;
     } catch (e) {
+      if (generation !== loadGeneration) return;
       error = e.message;
       toast.error(`Failed to load organizations: ${e.message}`);
     } finally {
-      loading = false;
+      if (generation === loadGeneration) {
+        loading = false;
+      }
     }
   }
 
