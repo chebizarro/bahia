@@ -72,7 +72,7 @@ make build-cli
 ./bin/bahia services list
 
 # Deployments are signer-first Nostr operations.
-# Publish a signed DeployRequest (kind:5961) and subscribe for result/read-model events.
+# Publish a ContextVM service/deploy request (kind 25910, wrapped with 1059/21059 when encrypted) and subscribe for canonical observables.
 # Legacy REST-backed deploy CLI paths are deprecated until they publish signed events directly.
 ```
 
@@ -166,7 +166,7 @@ A deployment unit is the runtime ownership boundary inside an environment. Each 
 
 Reconcile policy is persisted on `environments.targeting.default_reconcile_mode` and, for explicit units, `deployment_units.reconcile_mode`. Explicit unit policy overrides the environment default; implicit default-unit rows use the environment default.
 
-Scheduled reconciliation always observes through the resolved runtime and compares desired state with normalized observations when desired-state hashes are present, falling back to desired artifact digest comparison for legacy rows. `observe_only` records observations and drift only. `approval_required` records drift as `remediation_needed` and waits for an authorized operator-authored `5968 DriftRemediate` event; Bahia does not synthesize a public remediation request internally. `auto_apply` invokes the same runtime lifecycle desired-state deploy helper used by deploy/apply operations, using the persisted desired artifact and desired-state snapshot.
+Scheduled reconciliation always observes through the resolved runtime and compares desired state with normalized observations when desired-state hashes are present, falling back to desired artifact digest comparison for legacy rows. `observe_only` records observations and drift only. `approval_required` records drift as `remediation_needed` and waits for an authorized operator-authored ContextVM `service/drift-remediate` request; Bahia does not synthesize a public remediation request internally. `auto_apply` invokes the same runtime lifecycle desired-state deploy helper used by deploy/apply operations, using the persisted desired artifact and desired-state snapshot.
 
 Runtime mutation is serialized by the same environment apply lock as user deploy/apply. User-initiated deploys acquire the lock in blocking mode and therefore preempt scheduled auto-remediation. Scheduled `auto_apply` attempts the lock without blocking; if another operation holds it, Bahia keeps the desired state, records failure metadata on `environment_service_state.reconcile_failure_metadata`, sets `reconcile_backoff_until`, increments `reconcile_consecutive_failures`, and retries only after backoff. Apply failures follow the same rule: desired state remains authoritative, failure details are stored, and future scheduled attempts back off. `disabled` excludes the environment or unit from scheduled observation.
 
@@ -176,7 +176,7 @@ Backward compatibility is read-tolerant and write-forward. Runtime fields moved 
 
 Unit persistence is intentionally transition-triggered, not write-triggered. Bahia persists a unit only when an operator explicitly creates one through `POST /environments/{id}/units`, or when the first multi-unit configuration change requires durable unit identities. Deploy, apply, observe, and ordinary environment writes must not materialize the implicit default unit on their own.
 
-The core control-plane tables include nullable `deployment_unit_id` foreign keys on `deployment_intents`, `deployment_runs`, `runtime_observations`, and `environment_service_state`. A `NULL` value means the record belongs to the implicit default unit for the environment. API request DTOs accept additive `deployment_unit_id`, `deployment_units`, `targeting`, and `reconcile_mode` fields. Nostr projections for `31961`, `31963`, `31967`, and `31968` include additive `unit` tags; `NULL` placement is tagged as `default`.
+The core control-plane tables include nullable `deployment_unit_id` foreign keys on `deployment_intents`, `deployment_runs`, `runtime_observations`, and `environment_service_state`. A `NULL` value means the record belongs to the implicit default unit for the environment. API request DTOs accept additive `deployment_unit_id`, `deployment_units`, `targeting`, and `reconcile_mode` fields. Canonical Nostr projections (`30900` state and `30078` app data) include additive `unit` tags; `NULL` placement is tagged as `default`. Historical `31961`, `31963`, `31967`, and `31968` projections are migration inventory only.
 
 For adoption, prefer endpoint aliases:
 
@@ -320,7 +320,7 @@ Enable automatic CI event ingestion:
 hiveci:
   enabled: true
   
-  # Trusted CI dispatcher pubkeys (5401 events)
+  # Trusted CI dispatcher pubkeys (canonical CI dispatch events; legacy 5401 is migration inventory only)
   trusted_ci_pubkeys:
     - <hive-ci-dispatcher-pubkey>
   

@@ -114,7 +114,7 @@ describe('DNS command store APIs', () => {
 
   it('builds narrow DNS read-model relay filters scoped to the Bahia service pubkey', () => {
     expect(store.dnsReadModelFilters('b'.repeat(64))).toEqual([
-      { kinds: [31975, 31976, 31977, 31978], '#t': ['bahia'], limit: 5000, authors: ['b'.repeat(64)] }
+      { kinds: [30900], '#domain': ['dns'], '#schema': ['bahia.state.dns-zone.v1', 'bahia.state.dns-endpoint.v1', 'bahia.state.dns-policy.v1', 'bahia.state.dns-backend.v1'], limit: 5000, authors: ['b'.repeat(64)] }
     ]);
   });
 
@@ -123,10 +123,10 @@ describe('DNS command store APIs', () => {
 
     const endpoint = {
       id: 'event-endpoint-1',
-      kind: 31976,
+      kind: 30900,
       pubkey: 'b'.repeat(64),
       created_at: 100,
-      tags: [['d', 'endpoint:service:api:prod'], ['t', 'dns-endpoint'], ['t', 'bahia'], ['dns', 'api.prod.example'], ['addr', '10.0.1.44'], ['env', 'prod'], ['health', 'healthy'], ['runtime', 'docker'], ['capability', 'http']],
+      tags: [['domain', 'dns'], ['schema', 'bahia.state.dns-endpoint.v1'], ['d', 'endpoint:service:api:prod'], ['dns', 'api.prod.example'], ['addr', '10.0.1.44'], ['env', 'prod'], ['health', 'healthy'], ['runtime', 'docker'], ['capability', 'http']],
       content: JSON.stringify({ service: 'svc-api', route: 'api', env: 'prod', proto: 'https', addr: '10.0.1.44', port: 8443, runtime: 'docker', health: 'healthy', capabilities: ['http'] })
     };
 
@@ -145,7 +145,7 @@ describe('DNS command store APIs', () => {
       ...endpoint,
       id: 'event-endpoint-2',
       created_at: 101,
-      tags: [['d', 'endpoint:service:api:prod'], ['deleted', 'true'], ['t', 'dns-endpoint'], ['t', 'bahia'], ['dns', 'api.prod.example']],
+      tags: [['domain', 'dns'], ['schema', 'bahia.state.dns-endpoint.v1'], ['d', 'endpoint:service:api:prod'], ['deleted', 'true'], ['dns', 'api.prod.example']],
       content: JSON.stringify({ deleted: true, coordinate: 'endpoint:service:api:prod', fqdn: 'api.prod.example' })
     };
 
@@ -158,10 +158,10 @@ describe('DNS command store APIs', () => {
 
     const malformed = {
       id: 'event-bad-json',
-      kind: 31975,
+      kind: 30900,
       pubkey: 'b'.repeat(64),
       created_at: 100,
-      tags: [['d', 'zone:prod.example'], ['t', 'dns-zone'], ['t', 'bahia']],
+      tags: [['domain', 'dns'], ['schema', 'bahia.state.dns-zone.v1'], ['d', 'zone:prod.example']],
       content: '{not-json}'
     };
 

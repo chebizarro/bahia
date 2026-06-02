@@ -169,13 +169,7 @@ func isLegacyRuntimeKind(kind int) bool {
 	return (kind >= 5941 && kind <= 7999) ||
 		(kind >= 31100 && kind <= 31399) ||
 		(kind >= 32000 && kind <= 32099) ||
-		(kind >= 38390 && kind <= 38499) ||
-		kind == KindCmdBuildRegister ||
-		kind == KindCmdArtifactRegister ||
-		kind == KindCmdIntentCreate ||
-		kind == KindCmdIntentApprove ||
-		kind == KindCmdIntentReject ||
-		kind == KindCmdRollbackRequest
+		(kind >= 38390 && kind <= 38499)
 }
 
 func TestSubscriberBuildSubscriptionFiltersOmitsLegacyProductionKinds(t *testing.T) {

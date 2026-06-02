@@ -2,7 +2,6 @@ package controlplane
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -105,7 +104,7 @@ type LLMCommandReceipt struct {
 	Decision        string `json:"decision,omitempty"`
 }
 
-// PublishLLMRouteCreateRequest publishes kind:5971 and returns correlation metadata.
+// PublishLLMRouteCreateRequest publishes a ContextVM route-create request and returns correlation metadata.
 func (p *LLMCommandPublisher) PublishLLMRouteCreateRequest(ctx context.Context, cmd LLMRouteCreateCommand) (*LLMCommandReceipt, error) {
 	content := map[string]any{
 		"name": cmd.Name,
@@ -125,10 +124,10 @@ func (p *LLMCommandPublisher) PublishLLMRouteCreateRequest(ctx context.Context, 
 	if len(cmd.Metadata) > 0 {
 		content["metadata"] = cmd.Metadata
 	}
-	return p.publish(ctx, KindLLMRouteCreate, 0, KindLLMRouteCreateResult, nil, content)
+	return p.publish(ctx, "llm/route-create", 0, KindCASControlState, nil, content)
 }
 
-// PublishLLMReleaseRegisterRequest publishes kind:5972 and returns correlation metadata.
+// PublishLLMReleaseRegisterRequest publishes a ContextVM release-register request and returns correlation metadata.
 func (p *LLMCommandPublisher) PublishLLMReleaseRegisterRequest(ctx context.Context, cmd LLMReleaseRegisterCommand) (*LLMCommandReceipt, error) {
 	content := map[string]any{
 		"route_id":     cmd.RouteID.String(),
@@ -161,14 +160,14 @@ func (p *LLMCommandPublisher) PublishLLMReleaseRegisterRequest(ctx context.Conte
 		content["metadata"] = cmd.Metadata
 	}
 	tags := nostr.Tags{{"route", cmd.RouteID.String()}}
-	receipt, err := p.publish(ctx, KindLLMReleaseRegister, 0, KindLLMReleaseRegisterResult, tags, content)
+	receipt, err := p.publish(ctx, "llm/release-register", 0, KindCASControlState, tags, content)
 	if receipt != nil {
 		receipt.RouteID = cmd.RouteID.String()
 	}
 	return receipt, err
 }
 
-// PublishLLMDeployRequest publishes kind:5973 and returns correlation metadata.
+// PublishLLMDeployRequest publishes a ContextVM deploy request and returns correlation metadata.
 func (p *LLMCommandPublisher) PublishLLMDeployRequest(ctx context.Context, cmd LLMDeployCommand) (*LLMCommandReceipt, error) {
 	content := map[string]any{
 		"route_id":       cmd.RouteID.String(),
@@ -187,7 +186,7 @@ func (p *LLMCommandPublisher) PublishLLMDeployRequest(ctx context.Context, cmd L
 		{"release", cmd.ReleaseID.String()},
 	}
 	appendLLMCommandTags(&tags, cmd.IdempotencyKey, cmd.AgentID)
-	receipt, err := p.publish(ctx, KindLLMDeployRequest, KindLLMDeploymentStatus, KindLLMDeploymentResult, tags, content)
+	receipt, err := p.publish(ctx, "llm/deploy", 0, KindCASControlState, tags, content)
 	if receipt != nil {
 		receipt.RouteID = cmd.RouteID.String()
 		receipt.EnvironmentID = cmd.EnvironmentID.String()
@@ -196,7 +195,7 @@ func (p *LLMCommandPublisher) PublishLLMDeployRequest(ctx context.Context, cmd L
 	return receipt, err
 }
 
-// PublishLLMApprovalRequest publishes kind:5974 and returns correlation metadata.
+// PublishLLMApprovalRequest publishes a ContextVM approval request and returns correlation metadata.
 func (p *LLMCommandPublisher) PublishLLMApprovalRequest(ctx context.Context, cmd LLMApprovalCommand) (*LLMCommandReceipt, error) {
 	content := map[string]any{
 		"intent_id": cmd.IntentID.String(),
@@ -207,7 +206,7 @@ func (p *LLMCommandPublisher) PublishLLMApprovalRequest(ctx context.Context, cmd
 		{"decision", cmd.Decision},
 	}
 	appendLLMCommandTags(&tags, cmd.IdempotencyKey, cmd.AgentID)
-	receipt, err := p.publish(ctx, KindLLMDeploymentApproval, KindLLMDeploymentStatus, KindLLMDeploymentResult, tags, content)
+	receipt, err := p.publish(ctx, "llm/approval", 0, KindCASControlState, tags, content)
 	if receipt != nil {
 		receipt.IntentID = cmd.IntentID.String()
 		receipt.Decision = cmd.Decision
@@ -215,7 +214,7 @@ func (p *LLMCommandPublisher) PublishLLMApprovalRequest(ctx context.Context, cmd
 	return receipt, err
 }
 
-// PublishLLMRollbackRequest publishes kind:5975 and returns correlation metadata.
+// PublishLLMRollbackRequest publishes a ContextVM rollback request and returns correlation metadata.
 func (p *LLMCommandPublisher) PublishLLMRollbackRequest(ctx context.Context, cmd LLMRollbackCommand) (*LLMCommandReceipt, error) {
 	content := map[string]any{
 		"route_id":       cmd.RouteID.String(),
@@ -229,7 +228,7 @@ func (p *LLMCommandPublisher) PublishLLMRollbackRequest(ctx context.Context, cmd
 		{"environment", cmd.EnvironmentID.String()},
 	}
 	appendLLMCommandTags(&tags, cmd.IdempotencyKey, cmd.AgentID)
-	receipt, err := p.publish(ctx, KindLLMRollbackRequest, KindLLMDeploymentStatus, KindLLMDeploymentResult, tags, content)
+	receipt, err := p.publish(ctx, "llm/rollback", 0, KindCASControlState, tags, content)
 	if receipt != nil {
 		receipt.RouteID = cmd.RouteID.String()
 		receipt.EnvironmentID = cmd.EnvironmentID.String()
@@ -248,37 +247,29 @@ func appendLLMCommandTags(tags *nostr.Tags, dTag, agentID string) {
 	}
 }
 
-func (p *LLMCommandPublisher) publish(ctx context.Context, kind, statusKind, resultKind int, tags nostr.Tags, content map[string]any) (*LLMCommandReceipt, error) {
+func (p *LLMCommandPublisher) publish(ctx context.Context, method string, statusKind, resultKind int, tags nostr.Tags, content map[string]any) (*LLMCommandReceipt, error) {
 	if p == nil || p.publisher == nil {
 		return nil, fmt.Errorf("LLM command publisher is not configured")
 	}
 	dTag := strings.TrimSpace(tagValueNostr(tags, "d"))
-	contentJSON, err := json.Marshal(content)
-	if err != nil {
-		return nil, fmt.Errorf("marshal LLM command content: %w", err)
+	if dTag == "" {
+		dTag = "llm-command:" + method + ":" + uuid.NewString()
 	}
-	ev := &nostr.Event{Kind: kind, CreatedAt: nostr.Now(), Tags: tags, Content: string(contentJSON)}
-	if err := SignGoNostrEvent(ctx, p.signer, ev); err != nil {
-		return nil, fmt.Errorf("sign LLM command event: %w", err)
-	}
-	published, err := p.publisher.Publish(ctx, *ev)
+	ev, published, dTag, err := publishContextVMCommand(ctx, p.publisher, p.signer, method, dTag, "", tags, content, "LLM command")
 	if err != nil {
-		if published > 0 {
-			return &LLMCommandReceipt{RequestEventID: ev.ID, RequestPubkey: ev.PubKey, RequestKind: kind, StatusKind: statusKind, ResultKind: resultKind, RegistryKind: KindLLMRouteRegistry, StateKind: KindLLMRouteState, DTag: dTag, IdempotencyKey: dTag, Status: "error", Error: err.Error(), PublishedRelays: published}, nil
+		if ev != nil && published > 0 {
+			return &LLMCommandReceipt{RequestEventID: ev.ID, RequestPubkey: ev.PubKey, RequestKind: KindContextVMMessage, StatusKind: statusKind, ResultKind: resultKind, RegistryKind: KindCASControlState, StateKind: KindCASControlState, DTag: dTag, IdempotencyKey: dTag, Status: "error", Error: err.Error(), PublishedRelays: published}, nil
 		}
-		return nil, fmt.Errorf("publish LLM command event: %w", err)
-	}
-	if published == 0 {
-		return nil, fmt.Errorf("publish LLM command event: no relay accepted the request; retry after relay reconnect")
+		return nil, err
 	}
 	return &LLMCommandReceipt{
 		RequestEventID:  ev.ID,
 		RequestPubkey:   ev.PubKey,
-		RequestKind:     kind,
+		RequestKind:     KindContextVMMessage,
 		StatusKind:      statusKind,
 		ResultKind:      resultKind,
-		RegistryKind:    KindLLMRouteRegistry,
-		StateKind:       KindLLMRouteState,
+		RegistryKind:    KindCASControlState,
+		StateKind:       KindCASControlState,
 		DTag:            dTag,
 		IdempotencyKey:  dTag,
 		Status:          "submitted",

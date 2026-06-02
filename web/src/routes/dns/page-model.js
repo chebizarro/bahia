@@ -3,22 +3,22 @@ import { DNS_COMMANDS } from '$lib/nostr/dns-controlplane.js';
 export const DNS_CONTROL_FORMS = {
   [DNS_COMMANDS.ZONE_CREATE]: {
     title: 'Zone create / reconcile',
-    description: 'Sign kind 5941 to create or reconcile a DNS zone through the Bahia control plane.',
+    description: 'Sign a ContextVM dns/zone-create command to create or reconcile a DNS zone through the Bahia control plane.',
     submitLabel: 'Sign zone command'
   },
   [DNS_COMMANDS.POLICY_APPLY]: {
     title: 'Policy apply',
-    description: 'Sign kind 5942 to apply a DNS policy to the selected scope.',
+    description: 'Sign a ContextVM dns/policy-apply command to apply a DNS policy to the selected scope.',
     submitLabel: 'Sign policy command'
   },
   [DNS_COMMANDS.RECORD_OVERRIDE]: {
     title: 'Record override',
-    description: 'Sign kind 5943 to request an operator record override.',
+    description: 'Sign a ContextVM dns/record-set command to request an operator record override.',
     submitLabel: 'Sign override command'
   },
   [DNS_COMMANDS.DRIFT_REMEDIATE]: {
     title: 'Drift remediation',
-    description: 'Sign kind 5944 to remediate observed DNS drift.',
+    description: 'Sign a ContextVM dns/drift-remediate command to remediate observed DNS drift.',
     submitLabel: 'Sign remediation command'
   }
 };

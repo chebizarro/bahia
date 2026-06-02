@@ -10,13 +10,14 @@ import (
 	"github.com/google/uuid"
 	gonostr "github.com/nbd-wtf/go-nostr"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/kinds"
 	"github.com/openagentsinc/bahia/internal/repository"
 	"go.uber.org/zap"
 )
 
 const (
-	relayFirstKindServiceRegistry     = 31962
-	relayFirstKindEnvironmentRegistry = 31963
+	relayFirstCanonicalStateKind = kinds.CASControlState
+	relayFirstStateSchema        = "bahia.cp-state.v1"
 )
 
 // RelayFirstPublisher publishes signed Nostr events and returns the number of relay OK acceptances.
@@ -180,11 +181,11 @@ func (r *RelayFirstRegistry) publishServiceRegistry(ctx context.Context, svc *do
 	if err != nil {
 		return fmt.Errorf("encode service registry event: %w", err)
 	}
-	tags := gonostr.Tags{{"d", svc.ID.String()}, {"deleted", fmt.Sprintf("%t", deleted)}}
+	tags := relayFirstCanonicalStateTags("service", "registry", svc.ID.String(), deleted)
 	if !deleted {
 		tags = append(tags, gonostr.Tag{"name", svc.Name}, gonostr.Tag{"runtime", string(svc.RuntimeType)})
 	}
-	return r.publishCanonical(ctx, relayFirstKindServiceRegistry, tags, string(contentJSON), "service registry")
+	return r.publishCanonical(ctx, relayFirstCanonicalStateKind, tags, string(contentJSON), "service registry")
 }
 
 func (r *RelayFirstRegistry) publishEnvironmentRegistry(ctx context.Context, env *domain.Environment, deleted bool) error {
@@ -202,11 +203,11 @@ func (r *RelayFirstRegistry) publishEnvironmentRegistry(ctx context.Context, env
 	if err != nil {
 		return fmt.Errorf("encode environment registry event: %w", err)
 	}
-	tags := gonostr.Tags{{"d", env.ID.String()}, {"deleted", fmt.Sprintf("%t", deleted)}}
+	tags := relayFirstCanonicalStateTags("environment", "registry", env.ID.String(), deleted)
 	if !deleted {
 		tags = append(tags, gonostr.Tag{"name", env.Name}, gonostr.Tag{"protected", fmt.Sprintf("%t", env.Protected)})
 	}
-	return r.publishCanonical(ctx, relayFirstKindEnvironmentRegistry, tags, string(contentJSON), "environment registry")
+	return r.publishCanonical(ctx, relayFirstCanonicalStateKind, tags, string(contentJSON), "environment registry")
 }
 
 func (r *RelayFirstRegistry) publishCanonical(ctx context.Context, kind int, tags gonostr.Tags, content, label string) error {
@@ -229,6 +230,16 @@ func (r *RelayFirstRegistry) publishCanonical(ctx context.Context, kind int, tag
 	}
 	r.logger.Debug("relay-first registry event published", zap.Int("kind", kind), zap.String("event_id", ev.ID), zap.Int("relays", published))
 	return nil
+}
+
+func relayFirstCanonicalStateTags(domain, entity, dTag string, deleted bool) gonostr.Tags {
+	return gonostr.Tags{
+		{"d", dTag},
+		{"domain", domain},
+		{"entity", entity},
+		{"schema", relayFirstStateSchema},
+		{"deleted", fmt.Sprintf("%t", deleted)},
+	}
 }
 
 func relayFirstFormatTime(t time.Time) string {

@@ -1,7 +1,7 @@
 import { loadSystemInfo } from './system.svelte.js';
 import {
   nostr,
-  KINDS,
+  BAHIA_STATE_SCHEMAS,
   CASCADIA_CONTROLPLANE_STATE,
   getDTag,
   getTagValue,
@@ -11,8 +11,8 @@ import {
 } from '../nostr/client.js';
 
 const CAS_STATE_KIND = CASCADIA_CONTROLPLANE_STATE;
-const DNS_ENDPOINT_STATE_LEGACY_KIND = String(KINDS.BAHIA_DNS_ENDPOINT_STATE);
-const WORKER_STATE_LEGACY_KINDS = [String(KINDS.BAHIA_WORKER_STATE), String(KINDS.BAHIA_LEGACY_WORKER_STATE)];
+const DNS_ENDPOINT_SCHEMA = BAHIA_STATE_SCHEMAS.DNS_ENDPOINT_STATE;
+const WORKER_STATE_SCHEMA = BAHIA_STATE_SCHEMAS.WORKER_STATE;
 const READ_MODEL_LIMIT = 1000;
 const MAX_HEALTHY_RTT_NS = 1_000_000_000;
 const MAX_PROJECTABLE_RTT_NS = 5_000_000_000;
@@ -78,9 +78,9 @@ export function fipsMeshReadModelFilters({ since = null } = {}) {
   const temporal = since ? { since } : { limit: READ_MODEL_LIMIT };
   const scopedAuthor = authorFilter();
   return [
-    { kinds: [CAS_STATE_KIND], '#domain': ['dns'], '#legacy_kind': [DNS_ENDPOINT_STATE_LEGACY_KIND], '#family': ['mesh'], '#mesh': ['fips'], ...temporal, ...scopedAuthor },
-    { kinds: [CAS_STATE_KIND], '#domain': ['dns'], '#legacy_kind': [DNS_ENDPOINT_STATE_LEGACY_KIND], '#family': ['worker'], '#mesh': ['fips'], ...temporal, ...scopedAuthor },
-    { kinds: [CAS_STATE_KIND], '#domain': ['worker'], '#legacy_kind': WORKER_STATE_LEGACY_KINDS, ...temporal, ...scopedAuthor }
+    { kinds: [CAS_STATE_KIND], '#domain': ['dns'], '#schema': [DNS_ENDPOINT_SCHEMA], '#family': ['mesh'], '#mesh': ['fips'], ...temporal, ...scopedAuthor },
+    { kinds: [CAS_STATE_KIND], '#domain': ['dns'], '#schema': [DNS_ENDPOINT_SCHEMA], '#family': ['worker'], '#mesh': ['fips'], ...temporal, ...scopedAuthor },
+    { kinds: [CAS_STATE_KIND], '#domain': ['worker'], '#schema': [WORKER_STATE_SCHEMA], ...temporal, ...scopedAuthor }
   ];
 }
 
@@ -102,6 +102,14 @@ function isCanonicalAuthor(event) {
   return !fipsMeshState.servicePubkey || event.pubkey === fipsMeshState.servicePubkey;
 }
 
+function eventSchema(event, content = null) {
+  return getTagValue(event, 'schema', content?.schema || '');
+}
+
+function eventDomain(event, content = null) {
+  return getTagValue(event, 'domain', content?.domain || '');
+}
+
 function hasDeletedTagOrContent(event, content) {
   return isReplaceableTombstone(event) || content?.deleted === true;
 }
@@ -118,8 +126,9 @@ function contentWithMeta(event) {
 }
 
 export function isMeshEndpointEvent(event) {
-  if (!event || event.kind !== CAS_STATE_KIND || getTagValue(event, 'legacy_kind') !== DNS_ENDPOINT_STATE_LEGACY_KIND) return false;
+  if (!event || event.kind !== CAS_STATE_KIND) return false;
   const content = parseJsonContent(event, {});
+  if (eventDomain(event, content) !== 'dns' || eventSchema(event, content) !== DNS_ENDPOINT_SCHEMA) return false;
   if (hasDeletedTagOrContent(event, content)) return true;
   const family = trimString(getTagValue(event, 'family', content.family || '')).toLowerCase();
   const meshTags = tagValues(event, 'mesh').map((value) => value.toLowerCase());
@@ -327,8 +336,9 @@ function applyEndpointEvent(event) {
 }
 
 function applyWorkerEvent(event) {
-  if (event?.kind !== CAS_STATE_KIND || !WORKER_STATE_LEGACY_KINDS.includes(getTagValue(event, 'legacy_kind')) || !isCanonicalAuthor(event)) return false;
+  if (event?.kind !== CAS_STATE_KIND || !isCanonicalAuthor(event)) return false;
   const content = parseJsonContent(event, {});
+  if (eventDomain(event, content) !== 'worker' || eventSchema(event, content) !== WORKER_STATE_SCHEMA) return false;
   const pubkey = trimString(content.pubkey || content.worker_pubkey || getTagValue(event, 'worker', '') || getDTag(event));
   if (!pubkey) return false;
   const result = upsertReplaceableEvent(workerEvents, event);
@@ -347,7 +357,12 @@ function applyWorkerEvent(event) {
 
 export function applyFipsMeshEvent(event) {
   if (!event?.id || seenEventIds.has(event.id)) return false;
-  const accepted = getTagValue(event, 'legacy_kind') === DNS_ENDPOINT_STATE_LEGACY_KIND ? applyEndpointEvent(event) : applyWorkerEvent(event);
+  const content = parseJsonContent(event, {});
+  const domain = eventDomain(event, content);
+  const schema = eventSchema(event, content);
+  const accepted = domain === 'dns' && schema === DNS_ENDPOINT_SCHEMA
+    ? applyEndpointEvent(event)
+    : applyWorkerEvent(event);
   if (accepted) {
     seenEventIds.add(event.id);
     fipsMeshState.lastEventAt = Date.now();

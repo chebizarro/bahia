@@ -1,10 +1,12 @@
 import {
-  KINDS,
-  CASCADIA_CONTROLPLANE_STATE,
-  BAHIA_READ_MODEL_KINDS,
-  BAHIA_STATUS_KINDS,
   BAHIA_AUDIT_KINDS,
-  BAHIA_SBOM_KINDS
+  BAHIA_READ_MODEL_KINDS,
+  BAHIA_SBOM_KINDS,
+  BAHIA_STATE_SCHEMAS,
+  BAHIA_STATUS_KINDS,
+  CASCADIA_CONTROLPLANE_STATE,
+  LOOM_WORKER_ADVERTISEMENT,
+  parseJsonContent
 } from '../../nostr/client.js';
 import { controlplaneConnection } from './connection.svelte.js';
 import { applyServiceEvent } from '../collections/services.svelte.js';
@@ -13,16 +15,9 @@ import { deploymentApplicators } from '../collections/deployments.svelte.js';
 import {
   applyWorkerEvent,
   applyWorkerStateEvent,
-  hasWorkerEligibilityPreviewShape,
-  hasWorkerReadModelTag,
   workerApplicators
 } from '../collections/workers.svelte.js';
-import {
-  backupApplicators,
-  hasBackupDefinitionShape,
-  hasBackupPolicyShape,
-  hasBackupRepositoryShape
-} from '../collections/backup.svelte.js';
+import { backupApplicators } from '../collections/backup.svelte.js';
 import { mlApplicators } from '../collections/ml.svelte.js';
 import { applyActivityEvent } from '../collections/activity.svelte.js';
 import { refreshCollections, schedulePersistCachedCollections } from '../collections/index.svelte.js';
@@ -45,7 +40,7 @@ export function readModelFilters() {
   const authorFilter = canonicalAuthorFilter();
   return [
     { kinds: CANONICAL_READ_MODEL_KINDS, limit: READ_MODEL_LIMIT, ...authorFilter },
-    { kinds: [KINDS.LOOM_WORKER_AD], limit: READ_MODEL_LIMIT },
+    { kinds: [LOOM_WORKER_ADVERTISEMENT], limit: READ_MODEL_LIMIT },
     {
       kinds: ACTIVITY_KINDS,
       since: Math.floor(Date.now() / 1000) - ACTIVITY_BACKFILL_SECONDS,
@@ -72,10 +67,17 @@ function firstTagValue(event, name) {
   return '';
 }
 
-function routedKind(event) {
-  if (event?.kind !== CASCADIA_CONTROLPLANE_STATE) return event?.kind;
-  const legacyKind = Number(firstTagValue(event, 'legacy_kind'));
-  return Number.isInteger(legacyKind) && legacyKind > 0 ? legacyKind : event.kind;
+function eventSchema(event) {
+  return firstTagValue(event, 'schema') || parseJsonContent(event, {})?.schema || '';
+}
+
+function eventDomain(event) {
+  return firstTagValue(event, 'domain') || parseJsonContent(event, {})?.domain || '';
+}
+
+function semanticRoute(event) {
+  if (event?.kind === CASCADIA_CONTROLPLANE_STATE) return eventSchema(event);
+  return event?.kind;
 }
 
 export function resetEventRouting() {
@@ -83,53 +85,38 @@ export function resetEventRouting() {
   seenEventIds.clear();
 }
 
-function applyLegacyAssignment(event) {
-  return hasBackupDefinitionShape(event)
-    ? backupApplicators.definition(event, replaceableEvents)
-    : (hasWorkerReadModelTag(event) ? workerApplicators.assignment(event, replaceableEvents) : false);
-}
-
-function applyLegacyDrainStatus(event) {
-  return hasBackupPolicyShape(event)
-    ? backupApplicators.policy(event, replaceableEvents)
-    : (hasWorkerReadModelTag(event) ? workerApplicators.drainStatus(event, replaceableEvents) : false);
-}
-
-function applyLegacyEligibility(event) {
-  return hasBackupRepositoryShape(event)
-    ? backupApplicators.repository(event, replaceableEvents)
-    : (hasWorkerEligibilityPreviewShape(event) ? workerApplicators.eligibilityPreview(event, replaceableEvents) : false);
-}
-
 const handlers = new Map([
-  [KINDS.BAHIA_SERVICE_REGISTRY, applyServiceEvent],
-  [KINDS.BAHIA_ENVIRONMENT_REGISTRY, applyEnvironmentEvent],
-  [KINDS.BAHIA_SERVICE_STATE, deploymentApplicators.serviceState],
-  [KINDS.BAHIA_LLM_ROUTE_REGISTRY, deploymentApplicators.llmRoute],
-  [KINDS.BAHIA_LLM_ROUTE_STATE, deploymentApplicators.llmRouteState],
-  [KINDS.BAHIA_ARTIFACT_REGISTRY, deploymentApplicators.artifact],
-  [KINDS.BAHIA_BUILD_REGISTRY, deploymentApplicators.build],
-  [KINDS.BAHIA_DEPLOYMENT_INTENT_REGISTRY, deploymentApplicators.intent],
-  [KINDS.BAHIA_DEPLOYMENT_RUN_REGISTRY, deploymentApplicators.run],
-  [KINDS.BAHIA_POLICY_REGISTRY, deploymentApplicators.policy],
-  [KINDS.BAHIA_PACKAGE_REPOSITORY_REGISTRY, deploymentApplicators.packageRepository],
-  [KINDS.BAHIA_PACKAGE_ARTIFACT_REGISTRY, deploymentApplicators.packageArtifact],
-  [KINDS.BAHIA_PACKAGE_PROMOTION_REGISTRY, deploymentApplicators.packagePromotion],
-  [KINDS.LOOM_WORKER_AD, applyWorkerEvent],
-  [KINDS.BAHIA_WORKER_STATE, applyWorkerStateEvent],
-  [KINDS.BAHIA_WORKER_ASSIGNMENT_STATE, workerApplicators.assignment],
-  [KINDS.BAHIA_WORKER_DRAIN_STATUS, workerApplicators.drainStatus],
-  [KINDS.BAHIA_WORKER_ELIGIBILITY_PREVIEW, workerApplicators.eligibilityPreview],
-  [KINDS.BAHIA_BACKUP_RETENTION_REGISTRY, backupApplicators.retention],
-  [KINDS.BAHIA_BACKUP_RECIPE_REGISTRY, backupApplicators.recipe],
-  [KINDS.BAHIA_BACKUP_RUN_STATE, backupApplicators.run],
-  [KINDS.BAHIA_BACKUP_VERIFICATION_STATE, backupApplicators.verification],
-  [KINDS.BAHIA_BACKUP_RESTORE_STATE, backupApplicators.restore],
-  [KINDS.BAHIA_BACKUP_RUNTIME_OBSERVATION_STATE, backupApplicators.runtimeObservation],
-  [KINDS.BAHIA_ML_MODEL_REGISTRY, mlApplicators.model],
-  [KINDS.BAHIA_ML_MODEL_VERSION_REGISTRY, mlApplicators.modelVersion],
-  [KINDS.BAHIA_ML_ENDPOINT_REGISTRY, mlApplicators.endpoint],
-  [KINDS.BAHIA_ML_ENDPOINT_STATE, mlApplicators.endpointState]
+  [BAHIA_STATE_SCHEMAS.SERVICE_REGISTRY, applyServiceEvent],
+  [BAHIA_STATE_SCHEMAS.ENVIRONMENT_REGISTRY, applyEnvironmentEvent],
+  [BAHIA_STATE_SCHEMAS.SERVICE_STATE, deploymentApplicators.serviceState],
+  [BAHIA_STATE_SCHEMAS.LLM_ROUTE_REGISTRY, deploymentApplicators.llmRoute],
+  [BAHIA_STATE_SCHEMAS.LLM_ROUTE_STATE, deploymentApplicators.llmRouteState],
+  [BAHIA_STATE_SCHEMAS.ARTIFACT_REGISTRY, deploymentApplicators.artifact],
+  [BAHIA_STATE_SCHEMAS.BUILD_REGISTRY, deploymentApplicators.build],
+  [BAHIA_STATE_SCHEMAS.DEPLOYMENT_INTENT_REGISTRY, deploymentApplicators.intent],
+  [BAHIA_STATE_SCHEMAS.DEPLOYMENT_RUN_REGISTRY, deploymentApplicators.run],
+  [BAHIA_STATE_SCHEMAS.POLICY_REGISTRY, deploymentApplicators.policy],
+  [BAHIA_STATE_SCHEMAS.PACKAGE_REPOSITORY_REGISTRY, deploymentApplicators.packageRepository],
+  [BAHIA_STATE_SCHEMAS.PACKAGE_ARTIFACT_REGISTRY, deploymentApplicators.packageArtifact],
+  [BAHIA_STATE_SCHEMAS.PACKAGE_PROMOTION_REGISTRY, deploymentApplicators.packagePromotion],
+  [LOOM_WORKER_ADVERTISEMENT, applyWorkerEvent],
+  [BAHIA_STATE_SCHEMAS.WORKER_STATE, applyWorkerStateEvent],
+  [BAHIA_STATE_SCHEMAS.WORKER_ASSIGNMENT_STATE, workerApplicators.assignment],
+  [BAHIA_STATE_SCHEMAS.WORKER_DRAIN_STATUS, workerApplicators.drainStatus],
+  [BAHIA_STATE_SCHEMAS.WORKER_ELIGIBILITY_PREVIEW, workerApplicators.eligibilityPreview],
+  [BAHIA_STATE_SCHEMAS.BACKUP_DEFINITION_REGISTRY, backupApplicators.definition],
+  [BAHIA_STATE_SCHEMAS.BACKUP_POLICY_REGISTRY, backupApplicators.policy],
+  [BAHIA_STATE_SCHEMAS.BACKUP_REPOSITORY_REGISTRY, backupApplicators.repository],
+  [BAHIA_STATE_SCHEMAS.BACKUP_RETENTION_REGISTRY, backupApplicators.retention],
+  [BAHIA_STATE_SCHEMAS.BACKUP_RECIPE_REGISTRY, backupApplicators.recipe],
+  [BAHIA_STATE_SCHEMAS.BACKUP_RUN_STATE, backupApplicators.run],
+  [BAHIA_STATE_SCHEMAS.BACKUP_VERIFICATION_STATE, backupApplicators.verification],
+  [BAHIA_STATE_SCHEMAS.BACKUP_RESTORE_STATE, backupApplicators.restore],
+  [BAHIA_STATE_SCHEMAS.BACKUP_RUNTIME_OBSERVATION_STATE, backupApplicators.runtimeObservation],
+  [BAHIA_STATE_SCHEMAS.ML_MODEL_REGISTRY, mlApplicators.model],
+  [BAHIA_STATE_SCHEMAS.ML_MODEL_VERSION_REGISTRY, mlApplicators.modelVersion],
+  [BAHIA_STATE_SCHEMAS.ML_INFERENCE_ENDPOINT_REGISTRY, mlApplicators.endpoint],
+  [BAHIA_STATE_SCHEMAS.ML_INFERENCE_ENDPOINT_STATE, mlApplicators.endpointState]
 ]);
 
 export function applyControlplaneEvent(event) {
@@ -138,20 +125,11 @@ export function applyControlplaneEvent(event) {
   if (seenEventIds.has(event.id)) return false;
   seenEventIds.add(event.id);
 
-  const kind = routedKind(event);
-  let changed = false;
-  if (kind === KINDS.BAHIA_LEGACY_WORKER_STATE) {
-    changed = hasWorkerReadModelTag(event) ? applyWorkerStateEvent(event, replaceableEvents) : false;
-  } else if (kind === KINDS.BAHIA_LEGACY_WORKER_ASSIGNMENT_STATE) {
-    changed = applyLegacyAssignment(event);
-  } else if (kind === KINDS.BAHIA_LEGACY_WORKER_DRAIN_STATUS) {
-    changed = applyLegacyDrainStatus(event);
-  } else if (kind === KINDS.BAHIA_LEGACY_WORKER_ELIGIBILITY_PREVIEW) {
-    changed = applyLegacyEligibility(event);
-  } else {
-    const handler = handlers.get(kind);
-    changed = handler ? handler(event, replaceableEvents) : applyActivityEvent(event);
-  }
+  const route = semanticRoute(event);
+  const handler = handlers.get(route);
+  const changed = handler
+    ? handler(event, replaceableEvents)
+    : applyActivityEvent(event);
 
   if (changed) {
     controlplaneConnection.lastEventAt = new Date().toISOString();
@@ -160,3 +138,8 @@ export function applyControlplaneEvent(event) {
   }
   return changed;
 }
+
+export const controlplaneEventRouting = Object.freeze({
+  schemas: BAHIA_STATE_SCHEMAS,
+  routeFor: (event) => ({ domain: eventDomain(event), schema: eventSchema(event) })
+});

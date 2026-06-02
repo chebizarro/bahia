@@ -2,7 +2,6 @@ package controlplane
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -76,14 +75,14 @@ func (p *MLCommandPublisher) PublishMLModelImportRequest(ctx context.Context, cm
 	if !hasAnyMLField(cmd.Content, "source", "uri", "repo", "model", "model_version", "artifact") {
 		return nil, fmt.Errorf("source, uri, repo, model, model_version, or artifact is required")
 	}
-	return p.publish(ctx, KindMLModelImportRequest, KindMLModelImportResult, mlImportReadModels(), "ml-model-import", cmd)
+	return p.publish(ctx, "ml/model-import", KindCASControlState, mlImportReadModels(), "ml-model-import", cmd)
 }
 
 func (p *MLCommandPublisher) PublishMLRecipeRunRequest(ctx context.Context, cmd MLCommandPayload) (*MLCommandReceipt, error) {
 	if !hasAnyMLField(cmd.Content, "recipe") {
 		return nil, fmt.Errorf("recipe is required")
 	}
-	return p.publish(ctx, KindMLRecipeRunRequest, KindMLRecipeRunResult, mlRecipeReadModels(), "ml-recipe-run", cmd)
+	return p.publish(ctx, ContextVMMethodMLRecipeRun, KindCASControlState, mlRecipeReadModels(), "ml-recipe-run", cmd)
 }
 
 func (p *MLCommandPublisher) PublishMLInferenceDeployRequest(ctx context.Context, cmd MLCommandPayload) (*MLCommandReceipt, error) {
@@ -93,24 +92,24 @@ func (p *MLCommandPublisher) PublishMLInferenceDeployRequest(ctx context.Context
 	if !hasAnyMLField(cmd.Content, "model_version", "model_version_id") {
 		return nil, fmt.Errorf("model_version or model_version_id is required")
 	}
-	return p.publish(ctx, KindMLInferenceDeployRequest, KindMLInferenceDeployResult, mlEndpointReadModels(), "ml-inference-deploy", cmd)
+	return p.publish(ctx, "ml/inference-deploy", KindCASControlState, mlEndpointReadModels(), "ml-inference-deploy", cmd)
 }
 
 func (p *MLCommandPublisher) PublishMLInferenceApprovalRequest(ctx context.Context, cmd MLCommandPayload) (*MLCommandReceipt, error) {
 	if !hasAnyMLField(cmd.Content, "intent_id") {
 		return nil, fmt.Errorf("intent_id is required")
 	}
-	return p.publish(ctx, KindMLInferenceDeploymentApproval, KindMLInferenceApprovalResult, mlEndpointReadModels(), "ml-inference-approval", cmd)
+	return p.publish(ctx, "ml/inference-approval", KindCASControlState, mlEndpointReadModels(), "ml-inference-approval", cmd)
 }
 
 func (p *MLCommandPublisher) PublishMLInferenceRollbackRequest(ctx context.Context, cmd MLCommandPayload) (*MLCommandReceipt, error) {
 	if !hasAnyMLField(cmd.Content, "endpoint", "endpoint_id") {
 		return nil, fmt.Errorf("endpoint or endpoint_id is required")
 	}
-	return p.publish(ctx, KindMLInferenceRollbackRequest, KindMLInferenceRollbackResult, mlRollbackReadModels(), "ml-inference-rollback", cmd)
+	return p.publish(ctx, "ml/inference-rollback", KindCASControlState, mlRollbackReadModels(), "ml-inference-rollback", cmd)
 }
 
-func (p *MLCommandPublisher) publish(ctx context.Context, kind, resultKind int, readModels map[string]int, defaultPrefix string, cmd MLCommandPayload) (*MLCommandReceipt, error) {
+func (p *MLCommandPublisher) publish(ctx context.Context, method string, resultKind int, readModels map[string]int, defaultPrefix string, cmd MLCommandPayload) (*MLCommandReceipt, error) {
 	if p == nil || p.publisher == nil {
 		return nil, fmt.Errorf("ML command publisher is not configured")
 	}
@@ -121,44 +120,37 @@ func (p *MLCommandPublisher) publish(ctx context.Context, kind, resultKind int, 
 		}
 		content[k] = v
 	}
-	contentJSON, err := json.Marshal(content)
-	if err != nil {
-		return nil, fmt.Errorf("marshal ML command content: %w", err)
-	}
 	dTag := strings.TrimSpace(cmd.IdempotencyKey)
 	if dTag == "" {
 		dTag = defaultPrefix + ":" + uuid.NewString()
 	}
-	tags := nostr.Tags{{"d", dTag}}
-	tags = append(tags, mlScopedTags(content, cmd.Tags)...)
-	ev := &nostr.Event{Kind: kind, CreatedAt: nostr.Now(), Tags: tags, Content: string(contentJSON)}
-	if err := SignGoNostrEvent(ctx, p.signer, ev); err != nil {
-		return nil, fmt.Errorf("sign ML command event: %w", err)
-	}
-	published, err := p.publisher.Publish(ctx, *ev)
+	tags := mlScopedTags(content, cmd.Tags)
+	ev, published, dTag, err := publishContextVMCommand(ctx, p.publisher, p.signer, method, dTag, "", tags, content, "ML command")
 	if err != nil {
-		if published > 0 {
-			receipt := &MLCommandReceipt{RequestEventID: ev.ID, RequestPubkey: ev.PubKey, RequestKind: kind, ResultKind: resultKind, ReadModelKinds: readModels, DTag: dTag, IdempotencyKey: dTag, Status: "error", Error: err.Error(), PublishedRelays: published}
+		if ev != nil && published > 0 {
+			receipt := &MLCommandReceipt{RequestEventID: ev.ID, RequestPubkey: ev.PubKey, RequestKind: KindContextVMMessage, ResultKind: resultKind, ReadModelKinds: readModels, DTag: dTag, IdempotencyKey: dTag, Status: "error", Error: err.Error(), PublishedRelays: published}
+			populateMLReceiptTags(receipt, ev.Tags)
 			return receipt, nil
 		}
-		return nil, fmt.Errorf("publish ML command event: %w", err)
+		return nil, err
 	}
-	if published == 0 {
-		return nil, fmt.Errorf("publish ML command event: no relay accepted the request; retry after relay reconnect")
-	}
-	receipt := &MLCommandReceipt{RequestEventID: ev.ID, RequestPubkey: ev.PubKey, RequestKind: kind, ResultKind: resultKind, ReadModelKinds: readModels, DTag: dTag, IdempotencyKey: dTag, Status: "submitted", PublishedRelays: published}
-	receipt.Endpoint = tagValueNostr(ev.Tags, "endpoint")
-	receipt.EndpointID = tagValueNostr(ev.Tags, "endpoint_id")
-	receipt.Environment = tagValueNostr(ev.Tags, "environment")
-	receipt.EnvironmentID = tagValueNostr(ev.Tags, "environment_id")
-	receipt.ModelVersion = tagValueNostr(ev.Tags, "model_version")
-	receipt.ModelVersionID = tagValueNostr(ev.Tags, "model_version_id")
-	receipt.Model = tagValueNostr(ev.Tags, "model")
-	receipt.Recipe = tagValueNostr(ev.Tags, "recipe")
-	receipt.Run = tagValueNostr(ev.Tags, "run")
-	receipt.Artifact = tagValueNostr(ev.Tags, "artifact")
-	receipt.Runtime = tagValueNostr(ev.Tags, "runtime")
+	receipt := &MLCommandReceipt{RequestEventID: ev.ID, RequestPubkey: ev.PubKey, RequestKind: KindContextVMMessage, ResultKind: resultKind, ReadModelKinds: readModels, DTag: dTag, IdempotencyKey: dTag, Status: "submitted", PublishedRelays: published}
+	populateMLReceiptTags(receipt, ev.Tags)
 	return receipt, nil
+}
+
+func populateMLReceiptTags(receipt *MLCommandReceipt, tags nostr.Tags) {
+	receipt.Endpoint = tagValueNostr(tags, "endpoint")
+	receipt.EndpointID = tagValueNostr(tags, "endpoint_id")
+	receipt.Environment = tagValueNostr(tags, "environment")
+	receipt.EnvironmentID = tagValueNostr(tags, "environment_id")
+	receipt.ModelVersion = tagValueNostr(tags, "model_version")
+	receipt.ModelVersionID = tagValueNostr(tags, "model_version_id")
+	receipt.Model = tagValueNostr(tags, "model")
+	receipt.Recipe = tagValueNostr(tags, "recipe")
+	receipt.Run = tagValueNostr(tags, "run")
+	receipt.Artifact = tagValueNostr(tags, "artifact")
+	receipt.Runtime = tagValueNostr(tags, "runtime")
 }
 
 func hasAnyMLField(content map[string]any, keys ...string) bool {
@@ -206,17 +198,17 @@ func mlScopedTags(content map[string]any, explicit map[string]string) nostr.Tags
 }
 
 func mlImportReadModels() map[string]int {
-	return map[string]int{"model_registry": KindMLModelRegistry, "model_version_registry": KindMLModelVersionRegistry, "artifact_provenance_graph": KindMLArtifactProvenanceGraph}
+	return map[string]int{"model_registry": KindCASControlState, "model_version_registry": KindCASControlState, "artifact_provenance_graph": KindCASControlState}
 }
 
 func mlRecipeReadModels() map[string]int {
-	return map[string]int{"recipe_registry": KindMLRecipeRegistry, "recipe_run_state": KindMLRecipeRunState}
+	return map[string]int{"recipe_registry": KindCASControlState, "recipe_run_state": KindCASControlState}
 }
 
 func mlEndpointReadModels() map[string]int {
-	return map[string]int{"endpoint_registry": KindMLInferenceEndpointRegistry, "endpoint_state": KindMLInferenceEndpointState}
+	return map[string]int{"endpoint_registry": KindCASControlState, "endpoint_state": KindCASControlState}
 }
 
 func mlRollbackReadModels() map[string]int {
-	return map[string]int{"endpoint_state": KindMLInferenceEndpointState}
+	return map[string]int{"endpoint_state": KindCASControlState}
 }

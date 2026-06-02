@@ -73,9 +73,11 @@ func TestRelayFirstLLMSuccessfulMutationDelegates(t *testing.T) {
 	if delegate.calls != 1 {
 		t.Fatalf("delegate calls = %d, want 1", delegate.calls)
 	}
-	if len(publisher.events) != 1 || publisher.events[0].Kind != relayFirstKindLLMRollbackRequest {
+	if len(publisher.events) != 1 || publisher.events[0].Kind != relayFirstExtendedKind {
 		t.Fatalf("published events = %#v", publisher.events)
 	}
+	assertRelayFirstTag(t, publisher.events[0].Tags, "domain", "llm")
+	assertRelayFirstTag(t, publisher.events[0].Tags, "entity", "rollback_intent")
 }
 
 type fakeBackupDelegate struct{ calls int }

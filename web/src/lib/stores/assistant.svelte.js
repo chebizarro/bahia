@@ -4,9 +4,7 @@ import { controlplaneConnection, bootstrapControlplane } from './controlplane.sv
 import { publishRequest } from '../nostr/controlplane-requests.js';
 import {
   nostr,
-  KINDS,
   ASSISTANT_KINDS,
-  getDTag,
   getTagValue,
   getTagValues,
   parseJsonContent,
@@ -224,9 +222,9 @@ function parseApprovalEvent(event) {
 }
 
 function normalizeAssistantItem(event) {
-  if (event.kind === KINDS.ASSISTANT_PROMPT_REQUEST) return parsePromptEvent(event);
-  if (event.kind === KINDS.ASSISTANT_APPROVAL) return parseApprovalEvent(event);
-  if (event.kind === KINDS.ASSISTANT_STATUS) {
+  if (event.kind === ASSISTANT_KINDS.PROMPT_REQUEST) return parsePromptEvent(event);
+  if (event.kind === ASSISTANT_KINDS.APPROVAL) return parseApprovalEvent(event);
+  if (event.kind === ASSISTANT_KINDS.STATUS) {
     const parsed = parseAssistantStatusEvent(event);
     return parsed
       ? {
@@ -237,7 +235,7 @@ function normalizeAssistantItem(event) {
         }
       : null;
   }
-  if (event.kind === KINDS.ASSISTANT_RESULT) {
+  if (event.kind === ASSISTANT_KINDS.RESULT) {
     const parsed = parseAssistantResultEvent(event);
     return parsed ? { ...parsed, type: 'result' } : null;
   }
@@ -245,13 +243,13 @@ function normalizeAssistantItem(event) {
 }
 
 function authorAllowed(event) {
-  if (event.kind === KINDS.ASSISTANT_PROMPT_REQUEST || event.kind === KINDS.ASSISTANT_APPROVAL) {
+  if (event.kind === ASSISTANT_KINDS.PROMPT_REQUEST || event.kind === ASSISTANT_KINDS.APPROVAL) {
     if (!assistantConnection.operatorPubkey || event.pubkey === assistantConnection.operatorPubkey) return true;
     const sessionId = eventSessionId(event, parseJsonContent(event, {}));
     const session = sessionMap.get(sessionId);
     return Array.isArray(session?.participants) && session.participants.includes(event.pubkey);
   }
-  if (event.kind === KINDS.ASSISTANT_STATUS || event.kind === KINDS.ASSISTANT_RESULT || event.kind === KINDS.ASSISTANT_SESSION) {
+  if (event.kind === ASSISTANT_KINDS.STATUS || event.kind === ASSISTANT_KINDS.RESULT || event.kind === ASSISTANT_KINDS.SESSION) {
     return !assistantConnection.servicePubkey || event.pubkey === assistantConnection.servicePubkey;
   }
   return false;
@@ -301,13 +299,13 @@ function applyAssistantEvent(event) {
   seenEventIds.add(event.id);
 
   let changed = false;
-  if (event.kind === KINDS.ASSISTANT_SESSION) changed = applySessionEvent(event);
+  if (event.kind === ASSISTANT_KINDS.SESSION) changed = applySessionEvent(event);
   else changed = applyTranscriptEvent(event);
 
   if (changed) {
     if (
       !assistantUi.panelOpen &&
-      (event.kind === KINDS.ASSISTANT_STATUS || event.kind === KINDS.ASSISTANT_RESULT) &&
+      (event.kind === ASSISTANT_KINDS.STATUS || event.kind === ASSISTANT_KINDS.RESULT) &&
       event.created_at > assistantUi.lastDismissedAt
     ) {
       assistantUi.hasUnread = true;
@@ -486,7 +484,7 @@ export async function publishAssistantPrompt({ prompt, sessionId, routeContext =
   };
 
   const result = await publishRequest({
-    kind: KINDS.ASSISTANT_PROMPT_REQUEST,
+    kind: ASSISTANT_KINDS.PROMPT_REQUEST,
     tags: [['d', d], ['session', resolvedSessionId], ['turn', turnId]],
     content
   });
@@ -513,7 +511,7 @@ export async function publishAssistantApproval({ sessionId, planHash, decision, 
   const content = { session_id: sessionId, plan_hash: effectivePlanHash, decision, message };
   if (modifiedPlan) content.modified_plan = modifiedPlan;
   const result = await publishRequest({
-    kind: KINDS.ASSISTANT_APPROVAL,
+    kind: ASSISTANT_KINDS.APPROVAL,
     tags: [['d', d], ['session', sessionId], ['plan-hash', effectivePlanHash], ['decision', decision]],
     content
   });

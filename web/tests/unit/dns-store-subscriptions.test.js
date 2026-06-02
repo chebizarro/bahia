@@ -45,7 +45,7 @@ vi.mock('../../src/lib/nostr/client.js', async () => {
   };
 });
 
-function event({ id, kind = 31976, pubkey = 'b'.repeat(64), created_at = 100, tags = [], content = {} }) {
+function event({ id, kind = 30900, pubkey = 'b'.repeat(64), created_at = 100, tags = [], content = {} }) {
   return {
     id,
     kind,
@@ -59,8 +59,8 @@ function event({ id, kind = 31976, pubkey = 'b'.repeat(64), created_at = 100, ta
 function endpointEvent(overrides = {}) {
   return event({
     id: overrides.id || 'endpoint-1',
-    kind: 31976,
-    tags: overrides.tags || [['d', 'endpoint:service:api:prod'], ['family', 'service'], ['env', 'prod'], ['dns', 'api.prod.example'], ['addr', '10.0.1.44'], ['health', 'healthy'], ['runtime', 'docker'], ['t', 'dns-endpoint'], ['t', 'bahia']],
+    kind: 30900,
+    tags: overrides.tags || [['domain', 'dns'], ['schema', 'bahia.state.dns-endpoint.v1'], ['d', 'endpoint:service:api:prod'], ['family', 'service'], ['env', 'prod'], ['dns', 'api.prod.example'], ['addr', '10.0.1.44'], ['health', 'healthy'], ['runtime', 'docker']],
     content: { coordinate: 'endpoint:service:api:prod', service: 'svc-api', route: 'api', env: 'prod', fqdn: 'api.prod.example', addr: '10.0.1.44', health: 'healthy', runtime: 'docker', capabilities: ['http'], ...overrides.content },
     ...overrides
   });
@@ -69,8 +69,8 @@ function endpointEvent(overrides = {}) {
 function zoneEvent(overrides = {}) {
   return event({
     id: overrides.id || 'zone-1',
-    kind: 31975,
-    tags: overrides.tags || [['d', 'zone:prod.example'], ['zone', 'prod.example'], ['backend', 'coredns'], ['t', 'dns-zone'], ['t', 'bahia']],
+    kind: 30900,
+    tags: overrides.tags || [['domain', 'dns'], ['schema', 'bahia.state.dns-zone.v1'], ['d', 'zone:prod.example'], ['zone', 'prod.example'], ['backend', 'coredns']],
     content: { name: 'prod.example', visibility: 'public', backend_ref: 'coredns', ...overrides.content },
     ...overrides
   });
@@ -105,7 +105,7 @@ describe('DNS dashboard Nostr subscription store', () => {
     expect(nostrMock.connect).toHaveBeenCalledWith(['ws://localhost:10547/relay'], { force: true });
     expect(nostrMock.queryUntilEose).not.toHaveBeenCalled();
     expect(nostrMock.subscribe).toHaveBeenCalledWith([
-      { kinds: [31975, 31976, 31977, 31978], '#t': ['bahia'], limit: 5000, authors: ['b'.repeat(64)] }
+      { kinds: [30900], '#domain': ['dns'], '#schema': ['bahia.state.dns-zone.v1', 'bahia.state.dns-endpoint.v1', 'bahia.state.dns-policy.v1', 'bahia.state.dns-backend.v1'], limit: 5000, authors: ['b'.repeat(64)] }
     ], expect.objectContaining({ onEvent: expect.any(Function), onEose: expect.any(Function), onClosed: expect.any(Function), onAuth: expect.any(Function) }));
   });
 
@@ -133,7 +133,7 @@ describe('DNS dashboard Nostr subscription store', () => {
     const tombstone = endpointEvent({
       id: 'deleted',
       created_at: 130,
-      tags: [['d', 'endpoint:service:api:prod'], ['deleted', 'true'], ['t', 'dns-endpoint'], ['t', 'bahia']],
+      tags: [['domain', 'dns'], ['schema', 'bahia.state.dns-endpoint.v1'], ['d', 'endpoint:service:api:prod'], ['deleted', 'true']],
       content: { deleted: true, coordinate: 'endpoint:service:api:prod' }
     });
 

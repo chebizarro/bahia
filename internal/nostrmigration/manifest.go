@@ -1,8 +1,10 @@
 package nostrmigration
 
 import (
+	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/openagentsinc/bahia/internal/kinds"
 )
@@ -99,6 +101,46 @@ func Lookup(kind int) (Disposition, bool) {
 	return d, ok
 }
 
+// KindJustification records why a kind constant is not present as a legacy
+// migration input, or why a duplicate numeric alias needs event-aware handling.
+type KindJustification struct {
+	Name     string
+	Kind     int
+	Category string
+	Reason   string
+}
+
+// ConstantJustification returns manifest coverage for kind constants that are
+// intentionally not migrated by kind number. It also documents duplicate legacy
+// aliases whose numeric value is shared with another migration disposition.
+func ConstantJustification(name string, kind int) (KindJustification, bool) {
+	j, ok := constantJustifications[name]
+	if !ok || j.Kind != kind {
+		return KindJustification{}, false
+	}
+	return j, true
+}
+
+func JustifiedConstantOmissions() map[string]KindJustification {
+	out := make(map[string]KindJustification, len(constantJustifications))
+	for name, justification := range constantJustifications {
+		out[name] = justification
+	}
+	return out
+}
+
+// ResolveDisposition applies manifest coverage to a concrete legacy event. Most
+// legacy kinds are resolved solely by kind number. The four legacy worker
+// read-model aliases reused kind numbers that later became system/backup
+// projections, so worker-shaped tags/content are resolved to worker schemas;
+// otherwise the primary kind-number disposition remains in force.
+func ResolveDisposition(kind int, tagsJSON []byte, content string) (Disposition, bool) {
+	if alias, ok := legacyWorkerAliasDisposition(kind); ok && hasLegacyWorkerEvidence(kind, tagsJSON, content) {
+		return alias, true
+	}
+	return Lookup(kind)
+}
+
 func LegacyKinds() []int {
 	out := make([]int, 0, len(manifest))
 	for kind := range manifest {
@@ -106,6 +148,93 @@ func LegacyKinds() []int {
 	}
 	sort.Ints(out)
 	return out
+}
+
+var constantJustifications = map[string]KindJustification{
+	"CASAudit":                       omitted("CASAudit", kinds.CASAudit, "canonical-target", "canonical CAS audit output; migration never treats already-canonical audit events as legacy input"),
+	"NIP38Status":                    omitted("NIP38Status", kinds.NIP38Status, "canonical-target", "canonical NIP-38 operational status output; legacy status kinds map to this kind"),
+	"CASControlState":                omitted("CASControlState", kinds.CASControlState, "canonical-target", "canonical CAS control-plane state output; legacy read models map to this kind"),
+	"LoomWorkerAdvertisement":        omitted("LoomWorkerAdvertisement", kinds.LoomWorkerAdvertisement, "interop", "open Loom protocol event consumed directly, not a Bahia legacy kind to rewrite"),
+	"LoomJobStatusUpdate":            omitted("LoomJobStatusUpdate", kinds.LoomJobStatusUpdate, "interop", "open Loom protocol event consumed directly, not a Bahia legacy kind to rewrite"),
+	"LoomJobResult":                  omitted("LoomJobResult", kinds.LoomJobResult, "interop", "open Loom protocol event consumed directly, not a Bahia legacy kind to rewrite"),
+	"LoomJobCancellation":            omitted("LoomJobCancellation", kinds.LoomJobCancellation, "interop", "open Loom protocol event consumed directly, not a Bahia legacy kind to rewrite"),
+	"HiveCIWorkflowRun":              omitted("HiveCIWorkflowRun", kinds.HiveCIWorkflowRun, "interop", "open Hive-CI protocol event consumed directly, not a Bahia legacy kind to rewrite"),
+	"HiveCIWorkflowResult":           omitted("HiveCIWorkflowResult", kinds.HiveCIWorkflowResult, "interop", "open Hive-CI protocol event consumed directly, not a Bahia legacy kind to rewrite"),
+	"ContextVMMessage":               omitted("ContextVMMessage", kinds.ContextVMMessage, "canonical-transport", "canonical ContextVM request transport; legacy requests map to this kind and should not be re-migrated"),
+	"ContextVMGiftWrap":              omitted("ContextVMGiftWrap", kinds.ContextVMGiftWrap, "canonical-transport", "canonical CEP-4 encrypted request transport; legacy encrypted requests map to this kind"),
+	"ContextVMEphemeralGiftWrap":     omitted("ContextVMEphemeralGiftWrap", kinds.ContextVMEphemeralGiftWrap, "canonical-transport", "canonical CEP-19 ephemeral wrapper; not a legacy Bahia event kind"),
+	"ContextVMServerAnnouncement":    omitted("ContextVMServerAnnouncement", kinds.ContextVMServerAnnouncement, "canonical-discovery", "canonical ContextVM discovery event; not a legacy Bahia event kind"),
+	"ContextVMToolsList":             omitted("ContextVMToolsList", kinds.ContextVMToolsList, "canonical-discovery", "canonical ContextVM tools list; not a legacy Bahia event kind"),
+	"ContextVMResourcesList":         omitted("ContextVMResourcesList", kinds.ContextVMResourcesList, "canonical-discovery", "canonical ContextVM resources list; not a legacy Bahia event kind"),
+	"ContextVMResourceTemplatesList": omitted("ContextVMResourceTemplatesList", kinds.ContextVMResourceTemplatesList, "canonical-discovery", "canonical ContextVM resource templates list; not a legacy Bahia event kind"),
+	"ContextVMPromptsList":           omitted("ContextVMPromptsList", kinds.ContextVMPromptsList, "canonical-discovery", "canonical ContextVM prompts list; not a legacy Bahia event kind"),
+	"NIP65RelayList":                 omitted("NIP65RelayList", kinds.NIP65RelayList, "standard", "standard NIP-65 relay list consumed directly, not rewritten by Bahia migration"),
+	"NostrSignature":                 omitted("NostrSignature", kinds.NostrSignature, "custom-support", "signature support event is not part of the legacy control-plane/read-model migration inventory"),
+	"FIPSOverlayAdvert":              omitted("FIPSOverlayAdvert", kinds.FIPSOverlayAdvert, "custom-interop", "FIPS overlay advertisement is handled by the FIPS overlay path, not the Bahia legacy migration"),
+	"HTTPAuth":                       omitted("HTTPAuth", kinds.HTTPAuth, "standard", "standard NIP-98 HTTP auth event; never a Bahia legacy migration input"),
+	"AuditMin":                       omitted("AuditMin", kinds.AuditMin, "range-bound", "audit range lower-bound sentinel; BuildRegistered is the emitted event kind at this numeric value"),
+	"AuditMax":                       omitted("AuditMax", kinds.AuditMax, "range-bound", "audit range sentinel, not an emitted event constant"),
+	"LegacyWorkerState":              omitted("LegacyWorkerState", kinds.LegacyWorkerState, "conflicting-alias", "shares 31974 with SystemDiscovery; ResolveDisposition maps worker-tagged/worker-shaped events to worker state"),
+	"LegacyWorkerAssignmentState":    omitted("LegacyWorkerAssignmentState", kinds.LegacyWorkerAssignmentState, "conflicting-alias", "shares 31991 with BackupDefinitionRegistry; ResolveDisposition maps worker assignment events to worker state"),
+	"LegacyWorkerDrainStatus":        omitted("LegacyWorkerDrainStatus", kinds.LegacyWorkerDrainStatus, "conflicting-alias", "shares 31992 with BackupPolicyRegistry; ResolveDisposition maps worker drain events to worker state"),
+	"LegacyWorkerEligibilityPreview": omitted("LegacyWorkerEligibilityPreview", kinds.LegacyWorkerEligibilityPreview, "conflicting-alias", "shares 31993 with BackupRepositoryRegistry; ResolveDisposition maps worker eligibility events to worker state"),
+}
+
+func omitted(name string, kind int, category, reason string) KindJustification {
+	return KindJustification{Name: name, Kind: kind, Category: category, Reason: reason}
+}
+
+func legacyWorkerAliasDisposition(kind int) (Disposition, bool) {
+	schema := ""
+	switch kind {
+	case kinds.LegacyWorkerState:
+		schema = "bahia.state.worker.v1"
+	case kinds.LegacyWorkerAssignmentState:
+		schema = "bahia.state.worker-assignment.v1"
+	case kinds.LegacyWorkerDrainStatus:
+		schema = "bahia.state.worker-drain.v1"
+	case kinds.LegacyWorkerEligibilityPreview:
+		schema = "bahia.state.worker-eligibility.v1"
+	default:
+		return Disposition{}, false
+	}
+	return Disposition{LegacyKind: kind, CanonicalKind: CanonicalCASCPState, Layer: LayerState, Domain: "worker", Operation: "state", Schema: schema, DTagPrefix: "worker"}, true
+}
+
+func hasLegacyWorkerEvidence(kind int, tagsJSON []byte, content string) bool {
+	var tags [][]string
+	if err := json.Unmarshal(tagsJSON, &tags); err == nil {
+		for _, tag := range tags {
+			if len(tag) < 2 {
+				continue
+			}
+			key := strings.ToLower(strings.TrimSpace(tag[0]))
+			value := strings.ToLower(strings.TrimSpace(tag[1]))
+			if key == "worker" || (key == "domain" && value == "worker") || (key == "schema" && strings.Contains(value, ".worker")) {
+				return true
+			}
+		}
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(content), &payload); err != nil {
+		return false
+	}
+	has := func(key string) bool {
+		_, ok := payload[key]
+		return ok
+	}
+	switch kind {
+	case kinds.LegacyWorkerState:
+		return has("max_concurrent_jobs") || has("current_queue_depth") || has("runtime_target")
+	case kinds.LegacyWorkerAssignmentState:
+		return has("worker_pubkey") && has("active_assignments")
+	case kinds.LegacyWorkerDrainStatus:
+		return has("worker_pubkey") && (has("remaining_assignments") || has("safe_to_enter_maintenance") || has("safe_to_disable") || has("drain_started_at"))
+	case kinds.LegacyWorkerEligibilityPreview:
+		return has("preview_id") && (has("eligible_workers") || has("rejected_workers") || has("ranking_scores"))
+	default:
+		return false
+	}
 }
 
 func buildManifest() map[int]Disposition {

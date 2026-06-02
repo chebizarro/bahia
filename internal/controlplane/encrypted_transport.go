@@ -22,11 +22,14 @@ const (
 	EncryptedRequestWireVersion = "bahia-encrypted-v1"
 	ContextVMRoutingTag         = "contextvm"
 	ContextVMWireVersion        = "contextvm-jsonrpc-v1"
-	KindEncryptedRequest        = 5980 // Browser → Bahia encrypted request
-	KindEncryptedResult         = 7980 // Bahia → Browser encrypted result
 	KindContextVMMessage        = kinds.ContextVMMessage
 	KindContextVMGiftWrap       = kinds.ContextVMGiftWrap
 	KindContextVMEphemeralWrap  = kinds.ContextVMEphemeralGiftWrap
+	// Deprecated compatibility aliases retained for callers/tests that still name
+	// the old encrypted transport API. They resolve to canonical ContextVM kinds;
+	// production subscriptions do not accept legacy Bahia encrypted events.
+	KindEncryptedRequest = KindContextVMGiftWrap
+	KindEncryptedResult  = KindContextVMMessage
 
 	ContextVMMethodServiceDeploy   = "service/deploy"
 	ContextVMMethodWorkerCordon    = "worker/cordon"
@@ -44,7 +47,7 @@ type EncryptedRequestSubscriber interface {
 	SubscribeAllWithEOSE(ctx context.Context, filters []nostr.Filter) (*nostrpool.MergedSubscription, error)
 }
 
-// EncryptedRequestEnvelope is encrypted inside kind:5980 request content.
+// EncryptedRequestEnvelope is the deprecated encrypted request payload shape.
 type EncryptedRequestEnvelope struct {
 	Version         string          `json:"version"`
 	Operation       string          `json:"operation"`
@@ -52,7 +55,7 @@ type EncryptedRequestEnvelope struct {
 	Payload         json.RawMessage `json:"payload"`
 }
 
-// EncryptedResultEnvelope is encrypted inside kind:7980 result content.
+// EncryptedResultEnvelope is the deprecated encrypted result payload shape.
 type EncryptedResultEnvelope struct {
 	Version        string       `json:"version"`
 	RequestEventID string       `json:"request_event_id"`
@@ -273,7 +276,7 @@ func (t *EncryptedRequestTransport) Run(ctx context.Context) error {
 		return fmt.Errorf("encrypted request subscriber is not configured")
 	}
 	now := nostr.Now()
-	filter := nostr.Filter{Kinds: []int{KindEncryptedRequest, KindContextVMMessage, KindContextVMGiftWrap, KindContextVMEphemeralWrap}, Since: &now}
+	filter := nostr.Filter{Kinds: []int{KindContextVMMessage, KindContextVMGiftWrap, KindContextVMEphemeralWrap}, Since: &now}
 	if servicePubkey := t.responder.ServicePubkey(); servicePubkey != "" {
 		filter.Tags = nostr.TagMap{"p": []string{servicePubkey}}
 	}
@@ -306,64 +309,10 @@ func (t *EncryptedRequestTransport) HandleEvent(ctx context.Context, event *nost
 		t.HandleContextVMEvent(ctx, event)
 		return
 	}
-	if event.Kind != KindEncryptedRequest {
-		return
-	}
-	if err := nostrpool.ValidateInboundEvent(event, time.Now().UTC(), nostrpool.InboundEventMaxFutureSkew); err != nil {
-		t.logger.Warn("invalid encrypted request event", zap.String("event_id", event.ID), zap.Error(err))
-		return
-	}
-	if t.dedup.IsDuplicate(event.ID) {
-		return
-	}
-	t.dedup.MarkSeen(event.ID)
-	if !t.matchesRoutingTags(event) {
-		return
-	}
-
-	if !t.authorized(event.PubKey) {
-		t.publishError(ctx, event, "unauthorized", "requester is not authorized for encrypted Bahia requests")
-		return
-	}
-
-	plaintext, err := t.responder.DecryptRequestContent(event)
-	if err != nil {
-		t.logger.Warn("failed to decrypt encrypted request", zap.String("event_id", event.ID), zap.Error(err))
-		t.publishError(ctx, event, "decrypt_failed", "encrypted request content could not be decrypted")
-		return
-	}
-
-	var envelope EncryptedRequestEnvelope
-	if err := json.Unmarshal(plaintext, &envelope); err != nil {
-		t.publishError(ctx, event, "invalid_payload", "encrypted request payload is not valid JSON")
-		return
-	}
-	if envelope.Version != "" && envelope.Version != EncryptedRequestWireVersion {
-		t.publishError(ctx, event, "unsupported_version", "encrypted request version is not supported")
-		return
-	}
-	if envelope.RequesterPubkey != "" && envelope.RequesterPubkey != event.PubKey {
-		t.publishError(ctx, event, "requester_mismatch", "encrypted requester does not match event pubkey")
-		return
-	}
-	operation := strings.TrimSpace(envelope.Operation)
-	if operation == "" {
-		t.publishError(ctx, event, "missing_operation", "encrypted request operation is required")
-		return
-	}
-	handler := t.handlers[operation]
-	if handler == nil {
-		t.publishError(ctx, event, "unknown_operation", "encrypted request operation is not registered")
-		return
-	}
-	payload, err := handler(ctx, EncryptedRequest{Event: event, Envelope: envelope})
-	if err != nil {
-		t.publishError(ctx, event, "handler_failed", err.Error())
-		return
-	}
-	if err := t.responder.PublishEncryptedResult(ctx, event, "ok", payload, nil); err != nil {
-		t.logger.Error("publish encrypted result failed", zap.String("event_id", event.ID), zap.Error(err))
-	}
+	// Legacy Bahia encrypted request/result events are no longer accepted by
+	// production runtime. ContextVM message and wrapper kinds above
+	// are the only active encrypted control-plane transport.
+	return
 }
 
 func (t *EncryptedRequestTransport) HandleContextVMEvent(ctx context.Context, outer *nostr.Event) {

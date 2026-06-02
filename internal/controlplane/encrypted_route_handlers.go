@@ -92,13 +92,22 @@ func (h *EncryptedRouteHandlers) Register(transport *EncryptedRequestTransport) 
 	if h == nil || transport == nil {
 		return
 	}
-	transport.RegisterHandler(EncryptedOperationServiceSecretsList, h.ListSecrets)
-	transport.RegisterHandler(EncryptedOperationServiceSecretsCreate, h.CreateSecret)
-	transport.RegisterHandler(EncryptedOperationServiceSecretsUpdate, h.UpdateSecret)
-	transport.RegisterHandler(EncryptedOperationServiceSecretsDelete, h.DeleteSecret)
-	transport.RegisterHandler(EncryptedOperationServiceSecretsReveal, h.RevealSecret)
-	transport.RegisterHandler(EncryptedOperationDeploymentRunLogsGet, h.GetRunLogs)
-	transport.RegisterHandler(EncryptedOperationArtifactSignaturesVerify, h.VerifyArtifactSignatures)
+	h.registerRouteHandler(transport, EncryptedOperationServiceSecretsList, h.ListSecrets)
+	h.registerRouteHandler(transport, EncryptedOperationServiceSecretsCreate, h.CreateSecret)
+	h.registerRouteHandler(transport, EncryptedOperationServiceSecretsUpdate, h.UpdateSecret)
+	h.registerRouteHandler(transport, EncryptedOperationServiceSecretsDelete, h.DeleteSecret)
+	h.registerRouteHandler(transport, EncryptedOperationServiceSecretsReveal, h.RevealSecret)
+	h.registerRouteHandler(transport, EncryptedOperationDeploymentRunLogsGet, h.GetRunLogs)
+	h.registerRouteHandler(transport, EncryptedOperationArtifactSignaturesVerify, h.VerifyArtifactSignatures)
+}
+
+type encryptedRouteHandler = EncryptedRequestHandler
+
+func (h *EncryptedRouteHandlers) registerRouteHandler(transport *EncryptedRequestTransport, operation string, handler encryptedRouteHandler) {
+	transport.RegisterHandler(operation, handler)
+	transport.RegisterContextVMHandler(operation, func(ctx context.Context, request ContextVMRequest) (any, error) {
+		return handler(ctx, EncryptedRequest{Event: request.Event, Envelope: EncryptedRequestEnvelope{Version: ContextVMWireVersion, Operation: request.RPC.Method, RequesterPubkey: request.Event.PubKey, Payload: request.RPC.Params}})
+	})
 }
 
 type encryptedSecretPayload struct {

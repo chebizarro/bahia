@@ -17,19 +17,19 @@ type captureMLCommandPublisher struct {
 
 func (p *captureMLCommandPublisher) PublishMLModelImportRequest(_ context.Context, cmd controlplane.MLCommandPayload) (*controlplane.MLCommandReceipt, error) {
 	p.importCmd = &cmd
-	return mlTestReceipt(controlplane.KindMLModelImportRequest, controlplane.KindMLModelImportResult, cmd, map[string]int{"model_registry": controlplane.KindMLModelRegistry}), nil
+	return mlTestReceipt(controlplane.KindContextVMMessage, controlplane.KindCASControlState, cmd, map[string]int{"model_registry": controlplane.KindCASControlState}), nil
 }
 func (p *captureMLCommandPublisher) PublishMLRecipeRunRequest(_ context.Context, cmd controlplane.MLCommandPayload) (*controlplane.MLCommandReceipt, error) {
 	p.recipeCmd = &cmd
-	return mlTestReceipt(controlplane.KindMLRecipeRunRequest, controlplane.KindMLRecipeRunResult, cmd, map[string]int{"recipe_run_state": controlplane.KindMLRecipeRunState}), nil
+	return mlTestReceipt(controlplane.KindContextVMMessage, controlplane.KindCASControlState, cmd, map[string]int{"recipe_run_state": controlplane.KindCASControlState}), nil
 }
 func (p *captureMLCommandPublisher) PublishMLInferenceDeployRequest(_ context.Context, cmd controlplane.MLCommandPayload) (*controlplane.MLCommandReceipt, error) {
 	p.deployCmd = &cmd
-	return mlTestReceipt(controlplane.KindMLInferenceDeployRequest, controlplane.KindMLInferenceDeployResult, cmd, map[string]int{"endpoint_state": controlplane.KindMLInferenceEndpointState}), nil
+	return mlTestReceipt(controlplane.KindContextVMMessage, controlplane.KindCASControlState, cmd, map[string]int{"endpoint_state": controlplane.KindCASControlState}), nil
 }
 func (p *captureMLCommandPublisher) PublishMLInferenceRollbackRequest(_ context.Context, cmd controlplane.MLCommandPayload) (*controlplane.MLCommandReceipt, error) {
 	p.rollbackCmd = &cmd
-	return mlTestReceipt(controlplane.KindMLInferenceRollbackRequest, controlplane.KindMLInferenceRollbackResult, cmd, map[string]int{"endpoint_state": controlplane.KindMLInferenceEndpointState}), nil
+	return mlTestReceipt(controlplane.KindContextVMMessage, controlplane.KindCASControlState, cmd, map[string]int{"endpoint_state": controlplane.KindCASControlState}), nil
 }
 
 func mlTestReceipt(requestKind, resultKind int, cmd controlplane.MLCommandPayload, readModels map[string]int) *controlplane.MLCommandReceipt {
@@ -72,7 +72,7 @@ func TestMLMutatingToolsPublishNostrRequestsAndReturnCorrelation(t *testing.T) {
 		t.Fatalf("deploy returned error: %s", deployRes.Content[0].Text)
 	}
 	deployPayload := decodeResultMap(t, deployRes)
-	if deployPayload["request_kind"].(float64) != float64(controlplane.KindMLInferenceDeployRequest) || deployPayload["result_kind"].(float64) != float64(controlplane.KindMLInferenceDeployResult) || deployPayload["request_event_id"] != "ml-event" {
+	if deployPayload["request_kind"].(float64) != float64(controlplane.KindContextVMMessage) || deployPayload["result_kind"].(float64) != float64(controlplane.KindCASControlState) || deployPayload["request_event_id"] != "ml-event" {
 		t.Fatalf("unexpected deploy payload: %#v", deployPayload)
 	}
 	if publisher.deployCmd == nil || publisher.deployCmd.IdempotencyKey != "deploy:1" || publisher.deployCmd.Content["endpoint"] != "endpoint:qwen:prod" {

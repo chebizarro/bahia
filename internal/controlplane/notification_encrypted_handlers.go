@@ -42,21 +42,36 @@ type notificationLogsPayload struct {
 }
 
 // RegisterNotificationEncryptedHandlers wires notification CRUD/test/log queries
-// onto the encrypted request/result runtime. Notification configs and
+// onto the ContextVM encrypted control-plane runtime. Notification configs and
 // delivery logs are never projected to the public sidecar; result payloads are
-// encrypted by the transport before publication.
+// returned through ContextVM responses.
 func RegisterNotificationEncryptedHandlers(transport *EncryptedRequestTransport, repo repository.NotificationRepository, dispatcher *notifications.Dispatcher) {
 	if transport == nil || repo == nil {
 		return
 	}
 	h := &notificationEncryptedHandler{repo: repo, dispatcher: dispatcher}
-	transport.RegisterHandler(EncryptedOperationNotificationChannelsList, h.listChannels)
-	transport.RegisterHandler(EncryptedOperationNotificationChannelsGet, h.getChannel)
-	transport.RegisterHandler(EncryptedOperationNotificationChannelsCreate, h.createChannel)
-	transport.RegisterHandler(EncryptedOperationNotificationChannelsUpdate, h.updateChannel)
-	transport.RegisterHandler(EncryptedOperationNotificationChannelsDelete, h.deleteChannel)
-	transport.RegisterHandler(EncryptedOperationNotificationChannelsTest, h.testChannel)
-	transport.RegisterHandler(EncryptedOperationNotificationLogsList, h.listLogs)
+	h.register(transport, EncryptedOperationNotificationChannelsList, h.listChannels)
+	h.register(transport, EncryptedOperationNotificationChannelsGet, h.getChannel)
+	h.register(transport, EncryptedOperationNotificationChannelsCreate, h.createChannel)
+	h.register(transport, EncryptedOperationNotificationChannelsUpdate, h.updateChannel)
+	h.register(transport, EncryptedOperationNotificationChannelsDelete, h.deleteChannel)
+	h.register(transport, EncryptedOperationNotificationChannelsTest, h.testChannel)
+	h.register(transport, EncryptedOperationNotificationLogsList, h.listLogs)
+}
+
+func (h *notificationEncryptedHandler) register(transport *EncryptedRequestTransport, operation string, handler EncryptedRequestHandler) {
+	transport.RegisterHandler(operation, handler)
+	transport.RegisterContextVMHandler(operation, func(ctx context.Context, request ContextVMRequest) (any, error) {
+		return handler(ctx, EncryptedRequest{
+			Event: request.Event,
+			Envelope: EncryptedRequestEnvelope{
+				Version:         ContextVMWireVersion,
+				Operation:       request.RPC.Method,
+				RequesterPubkey: request.Event.PubKey,
+				Payload:         request.RPC.Params,
+			},
+		})
+	})
 }
 
 func (h *notificationEncryptedHandler) listChannels(ctx context.Context, _ EncryptedRequest) (any, error) {

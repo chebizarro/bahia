@@ -2,7 +2,6 @@ package controlplane
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -57,7 +56,7 @@ type ServiceCommandReceipt struct {
 func (p *ServiceCommandPublisher) PublishDeployRequest(ctx context.Context, cmd ServiceDeployCommand) (*ServiceCommandReceipt, error) {
 	content := map[string]any{"service_id": cmd.ServiceID.String(), "environment_id": cmd.EnvironmentID.String(), "artifact_id": cmd.ArtifactID.String()}
 	tags := nostr.Tags{{"service", cmd.ServiceID.String()}, {"environment", cmd.EnvironmentID.String()}, {"artifact", cmd.ArtifactID.String()}}
-	receipt, err := p.publish(ctx, KindDeployRequest, tags, content, cmd.IdempotencyKey, cmd.AgentID)
+	receipt, err := p.publish(ctx, ContextVMMethodServiceDeploy, tags, content, cmd.IdempotencyKey, cmd.AgentID)
 	if receipt != nil {
 		receipt.ServiceID = cmd.ServiceID.String()
 		receipt.EnvironmentID = cmd.EnvironmentID.String()
@@ -69,7 +68,7 @@ func (p *ServiceCommandPublisher) PublishDeployRequest(ctx context.Context, cmd 
 func (p *ServiceCommandPublisher) PublishRollbackRequest(ctx context.Context, cmd ServiceRollbackCommand) (*ServiceCommandReceipt, error) {
 	content := map[string]any{"service_id": cmd.ServiceID.String(), "environment_id": cmd.EnvironmentID.String()}
 	tags := nostr.Tags{{"service", cmd.ServiceID.String()}, {"environment", cmd.EnvironmentID.String()}}
-	receipt, err := p.publish(ctx, KindRollbackRequest, tags, content, cmd.IdempotencyKey, cmd.AgentID)
+	receipt, err := p.publish(ctx, "service/rollback", tags, content, cmd.IdempotencyKey, cmd.AgentID)
 	if receipt != nil {
 		receipt.ServiceID = cmd.ServiceID.String()
 		receipt.EnvironmentID = cmd.EnvironmentID.String()
@@ -77,35 +76,20 @@ func (p *ServiceCommandPublisher) PublishRollbackRequest(ctx context.Context, cm
 	return receipt, err
 }
 
-func (p *ServiceCommandPublisher) publish(ctx context.Context, kind int, tags nostr.Tags, content map[string]any, dTag, agentID string) (*ServiceCommandReceipt, error) {
+func (p *ServiceCommandPublisher) publish(ctx context.Context, method string, tags nostr.Tags, content map[string]any, dTag, agentID string) (*ServiceCommandReceipt, error) {
 	if p == nil || p.publisher == nil {
 		return nil, fmt.Errorf("service command publisher is not configured")
 	}
 	dTag = strings.TrimSpace(dTag)
 	if dTag == "" {
-		dTag = fmt.Sprintf("service-command:%d:%s", kind, uuid.NewString())
+		dTag = fmt.Sprintf("service-command:%s:%s", method, uuid.NewString())
 	}
-	tags = append(nostr.Tags{{"d", dTag}}, tags...)
-	if agentID = strings.TrimSpace(agentID); agentID != "" {
-		tags = append(tags, nostr.Tag{"agent", agentID})
-	}
-	contentJSON, err := json.Marshal(content)
+	ev, published, dTag, err := publishContextVMCommand(ctx, p.publisher, p.signer, method, dTag, agentID, tags, content, "service command")
 	if err != nil {
-		return nil, fmt.Errorf("marshal service command content: %w", err)
-	}
-	ev := &nostr.Event{Kind: kind, CreatedAt: nostr.Now(), Tags: tags, Content: string(contentJSON)}
-	if err := SignGoNostrEvent(ctx, p.signer, ev); err != nil {
-		return nil, fmt.Errorf("sign service command event: %w", err)
-	}
-	published, err := p.publisher.Publish(ctx, *ev)
-	if err != nil {
-		if published > 0 {
-			return &ServiceCommandReceipt{RequestEventID: ev.ID, RequestPubkey: ev.PubKey, RequestKind: kind, StatusKind: KindDeploymentStatus, ResultKind: KindDeploymentResult, DTag: dTag, IdempotencyKey: dTag, Status: "error", Error: err.Error(), PublishedRelays: published}, nil
+		if ev != nil && published > 0 {
+			return &ServiceCommandReceipt{RequestEventID: ev.ID, RequestPubkey: ev.PubKey, RequestKind: KindContextVMMessage, ResultKind: KindCASControlState, DTag: dTag, IdempotencyKey: dTag, Status: "error", Error: err.Error(), PublishedRelays: published}, nil
 		}
-		return nil, fmt.Errorf("publish service command event: %w", err)
+		return nil, err
 	}
-	if published == 0 {
-		return nil, fmt.Errorf("publish service command event: no relay accepted the request; retry after relay reconnect")
-	}
-	return &ServiceCommandReceipt{RequestEventID: ev.ID, RequestPubkey: ev.PubKey, RequestKind: kind, StatusKind: KindDeploymentStatus, ResultKind: KindDeploymentResult, DTag: dTag, IdempotencyKey: dTag, Status: "submitted", PublishedRelays: published}, nil
+	return &ServiceCommandReceipt{RequestEventID: ev.ID, RequestPubkey: ev.PubKey, RequestKind: KindContextVMMessage, ResultKind: KindCASControlState, DTag: dTag, IdempotencyKey: dTag, Status: "submitted", PublishedRelays: published}, nil
 }

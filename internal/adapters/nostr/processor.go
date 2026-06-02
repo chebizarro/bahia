@@ -74,27 +74,7 @@ func (p *Processor) Handle(ctx context.Context, ev *gonostr.Event) {
 	}
 
 	var err error
-	if isDeprecatedCommandKind(ev.Kind) {
-		p.logger.Warn("deprecated 311xx Bahia command event received; use canonical 596x control-plane requests instead",
-			zap.String("event_id", ev.ID),
-			zap.Int("kind", ev.Kind),
-		)
-	}
 	switch ev.Kind {
-	// --- Bahia command kinds (inbound) ---
-	case KindCmdBuildRegister:
-		err = p.handleBuildRegister(ctx, ev)
-	case KindCmdArtifactRegister:
-		err = p.handleArtifactRegister(ctx, ev)
-	case KindCmdIntentCreate:
-		err = p.handleIntentCreate(ctx, ev)
-	case KindCmdIntentApprove:
-		err = p.handleIntentApprove(ctx, ev)
-	case KindCmdIntentReject:
-		err = p.handleIntentReject(ctx, ev)
-	case KindCmdRollbackRequest:
-		err = p.handleRollback(ctx, ev)
-
 	// --- Loom protocol kinds ---
 	case kindLoomWorkerAd:
 		err = p.handleWorkerAdvertisement(ctx, ev)
@@ -122,17 +102,9 @@ func (p *Processor) Handle(ctx context.Context, ev *gonostr.Event) {
 	}
 }
 
-func isDeprecatedCommandKind(kind int) bool {
-	switch kind {
-	case KindCmdBuildRegister, KindCmdArtifactRegister, KindCmdIntentCreate, KindCmdIntentApprove, KindCmdIntentReject, KindCmdRollbackRequest:
-		return true
-	default:
-		return false
-	}
-}
-
 // ---------------------------------------------------------------------------
-// Bahia command handlers
+// Legacy Bahia command handler helpers retained for explicit migration tests.
+// Production Processor dispatch no longer accepts 311xx command kinds.
 // ---------------------------------------------------------------------------
 
 func (p *Processor) handleBuildRegister(ctx context.Context, ev *gonostr.Event) error {

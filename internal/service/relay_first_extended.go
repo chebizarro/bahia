@@ -9,19 +9,11 @@ import (
 	"github.com/google/uuid"
 	gonostr "github.com/nbd-wtf/go-nostr"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/kinds"
 	"go.uber.org/zap"
 )
 
-const (
-	relayFirstKindLLMRouteCreate       = 5971
-	relayFirstKindLLMDeployRequest     = 5973
-	relayFirstKindLLMRollbackRequest   = 5975
-	relayFirstKindMLModelImportRequest = 38394
-	relayFirstKindPackageRepoApply     = 5991
-	relayFirstKindDNSZoneCreate        = 5941
-	relayFirstKindDNSRecordOverride    = 5943
-	relayFirstKindBackupRecipeRegistry = 31995
-)
+const relayFirstExtendedKind = kinds.CASControlState
 
 type relayFirstExtendedBase struct {
 	publisher RelayFirstPublisher
@@ -37,21 +29,24 @@ func newRelayFirstExtendedBase(family string, publisher RelayFirstPublisher, sig
 	return relayFirstExtendedBase{publisher: publisher, signer: signer, logger: logger, family: family}
 }
 
-func (b relayFirstExtendedBase) publish(ctx context.Context, kind int, dTag string, tags gonostr.Tags, payload any, label string) error {
+func (b relayFirstExtendedBase) publish(ctx context.Context, dTag, domain, entity string, tags gonostr.Tags, payload any, label string) error {
 	if b.publisher == nil {
 		return fmt.Errorf("nostr %s publisher is not configured", b.family)
 	}
 	if b.signer == nil {
 		return fmt.Errorf("nostr %s signer is not configured", b.family)
 	}
-	if strings.TrimSpace(dTag) != "" {
-		tags = append(gonostr.Tags{{"d", strings.TrimSpace(dTag)}}, tags...)
+	dTag = strings.TrimSpace(dTag)
+	if dTag != "" {
+		tags = append(relayFirstCanonicalStateTags(domain, entity, dTag, false), tags...)
+	} else {
+		tags = append(gonostr.Tags{{"domain", domain}, {"entity", entity}, {"schema", relayFirstStateSchema}, {"deleted", "false"}}, tags...)
 	}
 	content, err := json.Marshal(payload)
 	if err != nil {
 		return fmt.Errorf("encode %s event: %w", label, err)
 	}
-	ev := gonostr.Event{Kind: kind, CreatedAt: gonostr.Now(), Tags: tags, Content: string(content)}
+	ev := gonostr.Event{Kind: relayFirstExtendedKind, CreatedAt: gonostr.Now(), Tags: tags, Content: string(content)}
 	if err := b.signer.Sign(ctx, &ev); err != nil {
 		return fmt.Errorf("sign %s event: %w", label, err)
 	}
@@ -62,7 +57,7 @@ func (b relayFirstExtendedBase) publish(ctx context.Context, kind int, dTag stri
 	if published == 0 {
 		return fmt.Errorf("publish %s event: no relay accepted the event", label)
 	}
-	b.logger.Debug("relay-first extended event published", zap.String("family", b.family), zap.Int("kind", kind), zap.String("event_id", ev.ID), zap.Int("relays", published))
+	b.logger.Debug("relay-first extended event published", zap.String("family", b.family), zap.Int("kind", relayFirstExtendedKind), zap.String("event_id", ev.ID), zap.Int("relays", published))
 	return nil
 }
 
@@ -92,7 +87,7 @@ func (r *RelayFirstLLM) CreateRoute(ctx context.Context, route *domain.LLMRoute)
 	if strings.TrimSpace(route.Name) == "" {
 		return fmt.Errorf("LLM route name is required")
 	}
-	if err := r.base.publish(ctx, relayFirstKindLLMRouteCreate, route.ID.String(), gonostr.Tags{{"route", route.ID.String()}, {"name", strings.TrimSpace(route.Name)}}, route, "llm route create"); err != nil {
+	if err := r.base.publish(ctx, route.ID.String(), "llm", "route", gonostr.Tags{{"route", route.ID.String()}, {"name", strings.TrimSpace(route.Name)}}, route, "llm route create"); err != nil {
 		return err
 	}
 	return r.delegate.CreateRoute(ctx, route)
@@ -109,7 +104,7 @@ func (r *RelayFirstLLM) CreateDeploymentIntent(ctx context.Context, intent *doma
 		return fmt.Errorf("requested_by must not be empty")
 	}
 	tags := gonostr.Tags{{"route", intent.RouteID.String()}, {"environment", intent.EnvironmentID.String()}, {"release", intent.ReleaseID.String()}}
-	if err := r.base.publish(ctx, relayFirstKindLLMDeployRequest, intent.ID.String(), tags, intent, "llm deployment request"); err != nil {
+	if err := r.base.publish(ctx, intent.ID.String(), "llm", "deployment_intent", tags, intent, "llm deployment intent"); err != nil {
 		return err
 	}
 	return r.delegate.CreateDeploymentIntent(ctx, intent)
@@ -127,7 +122,7 @@ func (r *RelayFirstLLM) RollbackWithMetadata(ctx context.Context, routeID, envID
 	}
 	payload := map[string]any{"route_id": routeID.String(), "environment_id": envID.String(), "requested_by": strings.TrimSpace(requestedBy), "metadata": metadata}
 	tags := gonostr.Tags{{"route", routeID.String()}, {"environment", envID.String()}}
-	if err := r.base.publish(ctx, relayFirstKindLLMRollbackRequest, fmt.Sprintf("%s:%s:%s", routeID, envID, requestedBy), tags, payload, "llm rollback request"); err != nil {
+	if err := r.base.publish(ctx, fmt.Sprintf("%s:%s:%s", routeID, envID, requestedBy), "llm", "rollback_intent", tags, payload, "llm rollback intent"); err != nil {
 		return nil, err
 	}
 	return r.delegate.RollbackWithMetadata(ctx, routeID, envID, requestedBy, metadata)
@@ -159,7 +154,7 @@ func (r *RelayFirstBackup) CreateOrUpdateRecipe(ctx context.Context, recipe *dom
 		return fmt.Errorf("backup recipe is required")
 	}
 	dTag := "backup-recipe:" + recipe.Name + ":" + recipe.Version
-	if err := r.base.publish(ctx, relayFirstKindBackupRecipeRegistry, dTag, gonostr.Tags{{"recipe", dTag}, {"recipe_id", recipe.ID.String()}, {"name", recipe.Name}}, recipe, "backup recipe registry"); err != nil {
+	if err := r.base.publish(ctx, dTag, "backup", "recipe", gonostr.Tags{{"recipe", dTag}, {"recipe_id", recipe.ID.String()}, {"name", recipe.Name}}, recipe, "backup recipe registry"); err != nil {
 		return err
 	}
 	return r.delegate.CreateOrUpdateRecipe(ctx, recipe)
@@ -208,7 +203,7 @@ func (r *RelayFirstPackage) EnsureRepository(ctx context.Context, repo *domain.P
 	if repo.ID != uuid.Nil {
 		dTag = "package-repository:" + repo.ID.String()
 	}
-	if err := r.base.publish(ctx, relayFirstKindPackageRepoApply, dTag, gonostr.Tags{{"repository", dTag}, {"name", repo.Name}, {"format", string(repo.Format)}}, repo, "package repository apply"); err != nil {
+	if err := r.base.publish(ctx, dTag, "package", "repository", gonostr.Tags{{"repository", dTag}, {"name", repo.Name}, {"format", string(repo.Format)}}, repo, "package repository state"); err != nil {
 		return nil, err
 	}
 	return r.delegate.EnsureRepository(ctx, repo, existing)
@@ -236,7 +231,7 @@ func (r *RelayFirstDNS) CreateZone(ctx context.Context, zone domain.DNSZone) err
 	if strings.TrimSpace(zone.Name) == "" {
 		return fmt.Errorf("DNS zone name is required")
 	}
-	if err := r.base.publish(ctx, relayFirstKindDNSZoneCreate, "dns-zone:"+zone.Name, gonostr.Tags{{"zone", zone.Name}, {"backend", zone.BackendRef}}, zone, "dns zone create"); err != nil {
+	if err := r.base.publish(ctx, "dns-zone:"+zone.Name, "dns", "zone", gonostr.Tags{{"zone", zone.Name}, {"backend", zone.BackendRef}}, zone, "dns zone state"); err != nil {
 		return err
 	}
 	return r.delegate.CreateZone(ctx, zone)
@@ -254,7 +249,7 @@ func (r *RelayFirstDNS) CreateOverride(ctx context.Context, override domain.DNSR
 		dTag = "dns-override:" + override.ID.String()
 	}
 	tags := gonostr.Tags{{"zone", override.ZoneName}, {"record", override.RecordName}, {"type", string(override.RecordType)}}
-	if err := r.base.publish(ctx, relayFirstKindDNSRecordOverride, dTag, tags, override, "dns record override"); err != nil {
+	if err := r.base.publish(ctx, dTag, "dns", "record_override", tags, override, "dns record override state"); err != nil {
 		return err
 	}
 	return r.delegate.CreateOverride(ctx, override)

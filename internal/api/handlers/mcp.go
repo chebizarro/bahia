@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 
+	"github.com/openagentsinc/bahia/internal/kinds"
 	"github.com/openagentsinc/bahia/internal/mcp"
 	"go.uber.org/zap"
 )
@@ -162,9 +163,8 @@ func (h *MCPHandler) nostrCorrelationMetadata(toolName string, args map[string]i
 	meta := map[string]any{
 		"tool":             toolName,
 		"correlation_tags": []string{"e", "service", "environment", "intent", "run"},
-		"status_kinds":     []int{6961, 6962},
-		"result_kinds":     []int{7961, 7962, 7963, 7964, 7965, 7966},
-		"read_model_kinds": []int{31961, 31962, 31963, 10100},
+		"transport_kinds":  []int{kinds.ContextVMMessage, kinds.ContextVMGiftWrap, kinds.ContextVMEphemeralGiftWrap},
+		"observable_kinds": []int{kinds.CASControlState, kinds.CASAudit, kinds.NIP38Status},
 	}
 	for _, key := range []string{"request_event_id", "service_id", "environment_id", "intent_id", "run_id"} {
 		if v, ok := stringFromMap(payload, key); ok {

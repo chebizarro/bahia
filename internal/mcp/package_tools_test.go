@@ -18,29 +18,29 @@ type capturePackageCommandPublisher struct {
 
 func (p *capturePackageCommandPublisher) PublishPackageRepositoryApplyRequest(_ context.Context, cmd controlplane.PackageRepositoryApplyCommand) (*controlplane.PackageCommandReceipt, error) {
 	p.apply = &cmd
-	return packageTestReceipt(controlplane.KindPackageRepositoryApply), nil
+	return packageTestReceipt(), nil
 }
 func (p *capturePackageCommandPublisher) PublishPackageRepositoryDeleteRequest(context.Context, controlplane.PackageRepositoryDeleteCommand) (*controlplane.PackageCommandReceipt, error) {
-	return packageTestReceipt(controlplane.KindPackageRepositoryDelete), nil
+	return packageTestReceipt(), nil
 }
 func (p *capturePackageCommandPublisher) PublishPackagePublishRequest(_ context.Context, cmd controlplane.PackagePublishCommand) (*controlplane.PackageCommandReceipt, error) {
 	p.upload = &cmd
-	return packageTestReceipt(controlplane.KindPackagePublishIntent), nil
+	return packageTestReceipt(), nil
 }
 func (p *capturePackageCommandPublisher) PublishPackagePromotionRequest(_ context.Context, cmd controlplane.PackagePromotionCommand) (*controlplane.PackageCommandReceipt, error) {
 	p.promote = &cmd
-	return packageTestReceipt(controlplane.KindPackagePromotionRequest), nil
+	return packageTestReceipt(), nil
 }
 func (p *capturePackageCommandPublisher) PublishPackageYankRequest(_ context.Context, cmd controlplane.PackageYankCommand) (*controlplane.PackageCommandReceipt, error) {
 	p.yank = &cmd
-	return packageTestReceipt(controlplane.KindPackageYankRequest), nil
+	return packageTestReceipt(), nil
 }
 func (p *capturePackageCommandPublisher) PublishPackageDriftDetectRequest(context.Context, controlplane.PackageDriftDetectCommand) (*controlplane.PackageCommandReceipt, error) {
-	return packageTestReceipt(controlplane.KindPackageDriftDetect), nil
+	return packageTestReceipt(), nil
 }
 
-func packageTestReceipt(kind int) *controlplane.PackageCommandReceipt {
-	return &controlplane.PackageCommandReceipt{RequestEventID: "event-id", RequestPubkey: "pubkey", RequestKind: kind, StatusKind: controlplane.KindPackageStatus, ResultKind: controlplane.KindPackageResult, RepositoryRegistryKind: controlplane.KindPackageRepositoryRegistry, ArtifactRegistryKind: controlplane.KindPackageArtifactRegistry, PromotionRegistryKind: controlplane.KindPackagePromotionRegistry, DriftEventKind: controlplane.KindPackageDriftEvent, PublishedRelays: 1}
+func packageTestReceipt() *controlplane.PackageCommandReceipt {
+	return &controlplane.PackageCommandReceipt{RequestEventID: "event-id", RequestPubkey: "pubkey", RequestKind: controlplane.KindContextVMMessage, ResultKind: controlplane.KindCASControlState, RepositoryRegistryKind: controlplane.KindCASControlState, ArtifactRegistryKind: controlplane.KindCASControlState, PromotionRegistryKind: controlplane.KindCASControlState, DriftEventKind: controlplane.KindNIP38Status, PublishedRelays: 1}
 }
 
 func TestGetToolsIncludesPackageTools(t *testing.T) {

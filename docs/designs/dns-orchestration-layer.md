@@ -2,8 +2,8 @@
 
 > **Status**: Draft
 > **Date**: 2026-05-21
-> **Depends on**: `nostr-native-system-discovery.md` (kind 31974 bootstrap)
-> **Prerequisite**: Phase 0 of system discovery (shared builder, kind 31974 publication)
+> **Depends on**: ContextVM discovery (`11316`-`11320`) plus NIP-51 relay sets (`30002`)
+> **Prerequisite**: Canonical ContextVM bootstrap and observable publication (`25910`, `30900`, `4903`, `30315`, `30078`)
 
 ---
 
@@ -54,11 +54,11 @@ CoreDNS / PowerDNS / dnsmasq / Consul / etcd / filesystem mock
 
 ## 2. Relationship to Existing Systems
 
-### System discovery (kind 31974) is the bootstrap layer
+### ContextVM discovery is the bootstrap layer
 
-The Nostr-native system discovery design (`docs/designs/nostr-native-system-discovery.md`) establishes how clients find Bahia itself — relay URLs, service pubkeys, feature flags. DNS orchestration builds on top of this: once a client has discovered Bahia via kind 31974, it can subscribe to DNS topology events for runtime endpoint resolution.
+The Nostr-native system discovery design (`docs/designs/nostr-native-system-discovery.md`) establishes how clients find Bahia itself — relay URLs, service pubkeys, feature flags. DNS orchestration builds on top of this: once a client has discovered Bahia via ContextVM discovery (`11316`-`11320`) and relay sets (`30002`), it can subscribe to canonical DNS topology observables for runtime endpoint resolution.
 
-**Dependency**: DNS orchestration should ship after system discovery Phase 0 (shared builder, kind 31974/30002 publication). The DNS projection layer consumes the same publisher infrastructure.
+**Dependency**: DNS orchestration depends on canonical ContextVM discovery and relay-set publication. The DNS projection layer consumes the same publisher infrastructure.
 
 ### Existing reconcilers provide the pattern
 
@@ -92,20 +92,22 @@ The DNS reconciler follows this pattern exactly.
 ### Design principle
 
 Follow the established Bahia Nostr contract pattern:
-- **Replaceable read models** (3197x series) for projected DNS state — clients subscribe once and get live updates
-- **Request/status/result** (599x/699x/799x series) for DNS mutation commands — operators issue signed requests, Bahia processes and replies
-- **Audit events** (310xx series) for DNS activity logging
+- **Canonical observables** (`30900` state and `30078` app data) for projected DNS state — clients subscribe once with semantic domain/schema/d tags and get live updates
+- **ContextVM methods** (`25910`, wrapped with `1059`/`21059` where encrypted) for DNS mutation commands — operators issue JSON-RPC methods, Bahia processes and replies
+- **Audit/status observables** (`4903`, `30315`) for DNS activity logging
 
 ### 3.1 Kind allocations
 
-#### Replaceable read-model kinds (continuing from 31974)
+#### Canonical DNS observable schemas
 
-| Kind | Name | d-tag pattern | Purpose |
-|---|---|---|---|
-| 31975 | `DNSZoneState` | `zone:<zone-name>` | Projected zone definition with SOA-level metadata |
-| 31976 | `DNSEndpointState` | `endpoint:<service>.<route>.<env>` | Canonical runtime endpoint projection |
-| 31977 | `DNSPolicyState` | `dnspolicy:<policy-id>` | Active DNS policy (split-horizon, TTL, routing) |
-| 31978 | `DNSBackendState` | `dnsbackend:<backend-id>` | DNS backend health and sync status |
+DNS state is published through `30900`/`30078` with semantic `domain=dns`, `schema`, `d`, and resource tags. The historical `31975`-`31978` DNS read-model allocation is migration inventory only and must not be documented to operators as a production subscription target.
+
+| Schema | d-tag pattern | Purpose |
+|---|---|---|
+| `dns.zone.state` | `zone:<zone-name>` | Projected zone definition with SOA-level metadata |
+| `dns.endpoint.state` | `endpoint:<service>.<route>.<env>` | Canonical runtime endpoint projection |
+| `dns.policy.state` | `dnspolicy:<policy-id>` | Active DNS policy (split-horizon, TTL, routing) |
+| `dns.backend.state` | `dnsbackend:<backend-id>` | DNS backend health and sync status |
 
 #### Audit event kinds (continuing from 31019)
 
@@ -137,7 +139,7 @@ Follow the established Bahia Nostr contract pattern:
 
 ### 3.2 Why these ranges
 
-The 594x/694x/794x request/status/result range is unallocated in the current reactor. It sits between the core deployment series (596x) and the package series (599x), leaving room for future DNS sub-commands. The 3197x read-model range continues sequentially from `KindSystemDiscovery = 31974`. The 310xx audit range continues from `31019` (the last LLM audit kind).
+Historical note: this design originally proposed Bahia-specific DNS request/status/result and `3197x` read-model ranges. Those allocations are not production runtime contracts after the ContextVM cutover. DNS operators now use ContextVM methods and canonical observables (`30900`, `4903`, `30315`, `30078`).
 
 ---
 
@@ -520,13 +522,13 @@ DNS records are only projected for endpoints in a healthy state. The projector a
 
 When an endpoint transitions from healthy → unhealthy, the projector removes the record. When it returns to healthy, the record is re-projected. The TTL determines how quickly clients see the change.
 
-### 6.4 Endpoint Nostr event (kind 31976)
+### 6.4 Endpoint Nostr observable (`30900`/`30078`)
 
-The canonical endpoint is published as a replaceable read-model event:
+The canonical endpoint is published as a canonical state/app-data observable:
 
 ```json
 {
-  "kind": 31976,
+  "kind": 30900,
   "content": "{\"service\":\"drydock\",\"route\":\"review\",\"env\":\"prod\",\"proto\":\"http\",\"addr\":\"10.0.1.44\",\"port\":8000,\"runtime\":\"vllm\",\"hardware\":\"l40s\",\"health\":\"healthy\",\"capabilities\":[\"llm\",\"code-review\"]}",
   "tags": [
     ["d", "endpoint:drydock.review.prod"],
@@ -605,7 +607,7 @@ For each zone:
      - The reconciler remediates drift by calling SyncZone with the complete projected record set
      - Identical snapshots require no backend write
   6. Emit audit events for changes
-  7. Update DNSBackendState read model (kind 31978) with sync timestamp
+  7. Update DNS backend canonical observable with sync timestamp
   8. If diff was non-empty, emit drift detection event (kind 31022)
 ```
 
@@ -618,7 +620,7 @@ The reconciler runs on a configurable interval (default: 30 seconds) as the safe
 | `EventEnvironmentServiceStateChanged` | Service deployment completed |
 | `EventDriftDetected` | Runtime drift detected (may need DNS update) |
 | `llm_route_state.changed` | LLM route state changed |
-| Worker kind 10100 received | New worker online or worker state change |
+| Canonical worker observable received | New worker online or worker state change; legacy worker kind `10100` is migration inventory only |
 
 The reconciler coalesces rapid-fire triggers with a debounce window (default: 5 seconds) to avoid thrashing.
 
@@ -685,13 +687,13 @@ The DNS endpoint projection is also the source for service catalogs. The same `D
 | Output | Format | Consumer |
 |---|---|---|
 | DNS record | A/AAAA/CNAME/SRV | DNS clients |
-| Service catalog entry | Kind 31976 Nostr event | Nostr subscribers |
+| Service catalog entry | Canonical DNS endpoint observable | Nostr subscribers |
 | MCP tool discovery | MCP `resources/list` response | MCP agents |
 | API discovery | REST endpoint | HTTP clients |
 
 ### 9.2 Service catalog event
 
-Each `DNSEndpoint` is published as a kind 31976 event (Section 6.4). Clients can subscribe and build a live service catalog:
+Each `DNSEndpoint` is published as a canonical DNS endpoint observable (Section 6.4). Clients can subscribe and build a live service catalog:
 
 ```
 service:     drydock.review
@@ -737,7 +739,7 @@ The `DNSRecordOverride` request (kind 5943) allows operators to pin a DNS record
 
 - Signed by an authorized operator
 - Recorded in the audit trail
-- Visible in the `DNSEndpointState` read model (marked `source: "manual_override"`)
+- Visible in the canonical DNS endpoint state observable (marked `source: "manual_override"`)
 - Subject to drift detection (override vs. actual backend state)
 
 ---
@@ -817,7 +819,7 @@ dns:
 | File | Change |
 |---|---|
 | `internal/controlplane/reactor.go` | Add DNS kind constants to subscription filters; wire DNS handlers |
-| `internal/adapters/nostr/projector.go` | Add DNS read-model projection (kinds 31975-31978) |
+| `internal/adapters/nostr/projector.go` | Add DNS canonical observable projection (`30900`/`30078`) |
 | `internal/adapters/nostr/publisher.go` | Add DNS audit event publication (kinds 31020-31024) |
 | `internal/config/config.go` | Add `DNS` config section |
 | `internal/app/app.go` | Wire DNS reconciler, projector, backend resolver into app lifecycle |
@@ -835,7 +837,7 @@ dns:
 - Repository interfaces in `internal/repository/dns.go`
 - Filesystem mock backend adapter
 - DNS projector that materializes `DNSEndpoint` records from existing state
-- Kind 31976 endpoint events published to sidecar
+- Canonical DNS endpoint observables published to sidecar
 - DNS config section (disabled by default)
 
 **Risk:** Low — purely additive. No DNS backends connected, no records modified. The projector runs in observation mode, publishing endpoint events to the relay for visibility.
@@ -851,7 +853,7 @@ dns:
 - CoreDNS/etcd backend adapter
 - DNS reconciler with drift detection
 - Zone configuration
-- Kind 31975 (zone state), 31978 (backend state) read models
+- Canonical DNS zone and backend state observables
 - Audit events (kinds 31020-31024)
 - DNS request handlers in reactor (kinds 5941-5945)
 
@@ -931,7 +933,7 @@ dns:
 ### Scenario: "Deploy drydock.review to L40S"
 
 ```
-1. Operator publishes KindDeployRequest (5961) or KindLLMDeployRequest (5973)
+1. Operator publishes a ContextVM deployment request such as `service/deploy` or `llm/deploy` (`25910`, wrapped with `1059`/`21059` where encrypted)
 2. Bahia provisions runtime on L40S worker
 3. Runtime registers endpoint observation
    → RuntimeObservation { Host: "10.0.1.44", HealthStatus: "healthy" }
@@ -948,7 +950,7 @@ dns:
 9. CoreDNS serves:
    drydock-review.prod.cascadia → 10.0.1.44
 10. Bahia publishes:
-    → Kind 31976 (DNSEndpointState) to sidecar
+    → canonical DNS endpoint observable to sidecar
     → Kind 31021 (dns.record_changed) audit event
     → Kind 31020 (dns.zone_synced) after full zone sync
 ```
@@ -967,7 +969,7 @@ dns:
 
 5. **Negative caching**: When an endpoint becomes unhealthy, should the projector emit an explicit "this name does not exist" signal, or simply stop publishing the record? Recommendation: stop publishing; let TTL expiry handle removal.
 
-6. **Nostr-native DNS resolution**: Should a future Nostr client be able to resolve endpoints purely from kind 31976 events without traditional DNS? This would make the Nostr relay itself a service discovery mechanism. Recommendation: yes, this is the long-term vision, but traditional DNS backends remain the primary resolution path.
+6. **Nostr-native DNS resolution**: Should a future Nostr client be able to resolve endpoints purely from canonical DNS endpoint observables without traditional DNS? This would make the Nostr relay itself a service discovery mechanism. Recommendation: yes, this is the long-term vision, but traditional DNS backends remain the primary resolution path.
 
 ---
 
@@ -1013,26 +1015,23 @@ Bahia
 | 31022 | `dns.drift_detected` | Regular | Audit |
 | 31023 | `dns.endpoint_registered` | Regular | Audit |
 | 31024 | `dns.endpoint_deregistered` | Regular | Audit |
-| 31975 | `DNSZoneState` | Parameterized replaceable | Read model |
-| 31976 | `DNSEndpointState` | Parameterized replaceable | Read model |
-| 31977 | `DNSPolicyState` | Parameterized replaceable | Read model |
-| 31978 | `DNSBackendState` | Parameterized replaceable | Read model |
+| `30900`/`30078` `dns.zone.state` | Canonical observable | State/app data |
+| `30900`/`30078` `dns.endpoint.state` | Canonical observable | State/app data |
+| `30900`/`30078` `dns.policy.state` | Canonical observable | State/app data |
+| `30900`/`30078` `dns.backend.state` | Canonical observable | State/app data |
 
-## Appendix B: Existing Kind Registry (for conflict reference)
+## Appendix B: Historical kind registry context
 
-| Range | Allocation |
+The original design considered Bahia-specific custom ranges for DNS. After the ContextVM cutover those allocations are migration context only. Production DNS orchestration uses ContextVM methods and canonical observables.
+
+| Kind(s) | Production allocation |
 |---|---|
-| 5961-5989 | Core deployment + service + policy requests |
-| 5991-5996 | Package registry requests |
-| 5971-5975 | LLM control-plane requests |
-| 5976-5979 | Tool provisioning + adoption requests |
-| 6961-6991 | Status kinds |
-| 7961-7992 | Result kinds |
-| 31000-31019 | Audit events |
-| 31961-31974 | Replaceable read models |
-| 38390-38399 | ML inference commands/results |
+| `25910` | ContextVM mutation methods |
+| `30900`, `30078` | Canonical state/app-data observables |
+| `4903`, `30315` | Canonical audit/status observables |
+| `11316`-`11320`, `30002` | ContextVM discovery and relay sets |
 
-**594x/694x/794x is unallocated** — chosen for DNS to maintain clear separation.
+**Historical note:** `594x`/`694x`/`794x` DNS allocations were proposed before the ContextVM cutover and are not production runtime contracts.
 
 ## Appendix C: CoreDNS etcd Key Format
 

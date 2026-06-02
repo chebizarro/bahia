@@ -2,7 +2,6 @@ package controlplane
 
 import (
 	"context"
-	"encoding/json"
 	"testing"
 
 	"github.com/nbd-wtf/go-nostr"
@@ -14,22 +13,18 @@ func TestWorkerKindConstantsUseNonCollidingCanonicalBlock(t *testing.T) {
 	}
 }
 
-func TestWorkerReadModelCompatibilityKindsAcceptOldAndNewValues(t *testing.T) {
+func TestWorkerReadModelCompatibilityKindsAcceptCanonicalValuesOnly(t *testing.T) {
 	for _, kind := range []int{
 		KindWorkerState,
 		KindWorkerAssignmentState,
 		KindWorkerDrainStatus,
 		KindWorkerEligibilityPreview,
-		KindLegacyWorkerState,
-		KindLegacyWorkerAssignmentState,
-		KindLegacyWorkerDrainStatus,
-		KindLegacyWorkerEligibilityPreview,
 	} {
 		if !isAcceptedWorkerReadModelKind(kind) {
-			t.Fatalf("worker read-model kind %d should be accepted during compatibility window", kind)
+			t.Fatalf("worker read-model kind %d should be accepted", kind)
 		}
 	}
-	for _, kind := range []int{31994, 31995, 31996, 31997, 31998, 31999, 32010} {
+	for _, kind := range []int{31974, 31991, 31992, 31993, 31994, 31995, 31996, 31997, 31998, 31999, 32010} {
 		if isAcceptedWorkerReadModelKind(kind) {
 			t.Fatalf("non-worker read-model kind %d should not be accepted as a worker compatibility kind", kind)
 		}
@@ -59,7 +54,7 @@ func TestWorkerCommandPublisherPublishesLifecycleCommandsWithCorrelation(t *test
 	if err != nil {
 		t.Fatalf("publish cordon: %v", err)
 	}
-	if receipt.RequestKind != KindWorkerCordonRequest || receipt.StatusKind != KindWorkerStatus || receipt.ResultKind != KindWorkerResult || receipt.StateKind != KindWorkerState {
+	if receipt.RequestKind != KindContextVMMessage || receipt.ResultKind != KindCASControlState || receipt.StateKind != KindCASControlState {
 		t.Fatalf("unexpected receipt: %#v", receipt)
 	}
 	if receipt.WorkerPubKey != workerKey || receipt.DTag != "cordon-1" || receipt.Command != WorkerCommandCordon || receipt.PublishedRelays != 2 {
@@ -69,15 +64,9 @@ func TestWorkerCommandPublisherPublishesLifecycleCommandsWithCorrelation(t *test
 		t.Fatalf("expected one event, got %d", len(capture.events))
 	}
 	ev := capture.events[0]
-	if ev.Kind != KindWorkerCordonRequest {
-		t.Fatalf("expected worker cordon kind, got %d", ev.Kind)
-	}
+	content := assertContextVMCommand(t, ev, ContextVMMethodWorkerCordon)
 	if tagValueNostr(ev.Tags, "d") != "cordon-1" || tagValueNostr(ev.Tags, "worker") != workerKey || tagValueNostr(ev.Tags, "command") != WorkerCommandCordon || tagValueNostr(ev.Tags, "agent") != "agent-1" {
 		t.Fatalf("unexpected tags: %#v", ev.Tags)
-	}
-	var content map[string]any
-	if err := json.Unmarshal([]byte(ev.Content), &content); err != nil {
-		t.Fatalf("content json: %v", err)
 	}
 	if content["worker_pubkey"] != workerKey || content["reason"] != "kernel upgrade" || content["idempotency_key"] != "cordon-1" {
 		t.Fatalf("unexpected content: %#v", content)
@@ -101,22 +90,16 @@ func TestWorkerCommandPublisherPublishesLabelsUpdateAndGeneratesIdempotencyKey(t
 	if err != nil {
 		t.Fatalf("publish labels: %v", err)
 	}
-	if receipt.RequestKind != KindWorkerLabelsUpdate || receipt.Command != WorkerCommandLabelsUpdate || receipt.DTag == "" {
+	if receipt.RequestKind != KindContextVMMessage || receipt.Command != WorkerCommandLabelsUpdate || receipt.DTag == "" {
 		t.Fatalf("unexpected receipt: %#v", receipt)
 	}
 	ev := capture.events[0]
 	if tagValueNostr(ev.Tags, "d") != receipt.DTag || tagValueNostr(ev.Tags, "worker") != workerKey {
 		t.Fatalf("unexpected tags: %#v", ev.Tags)
 	}
-	var content struct {
-		WorkerPubKey   string            `json:"worker_pubkey"`
-		IdempotencyKey string            `json:"idempotency_key"`
-		Labels         map[string]string `json:"labels"`
-	}
-	if err := json.Unmarshal([]byte(ev.Content), &content); err != nil {
-		t.Fatalf("content json: %v", err)
-	}
-	if content.WorkerPubKey != workerKey || content.IdempotencyKey != receipt.DTag || content.Labels["role"] != "inference" {
+	content := assertContextVMCommand(t, ev, "worker/labels-update")
+	labels, _ := content["labels"].(map[string]any)
+	if content["worker_pubkey"] != workerKey || content["idempotency_key"] != receipt.DTag || labels["role"] != "inference" {
 		t.Fatalf("unexpected content: %#v", content)
 	}
 }
@@ -145,10 +128,11 @@ func TestWorkerCommandPublisherPublishesPolicyApplyAndWorkloadPin(t *testing.T) 
 	if err != nil {
 		t.Fatalf("publish policy apply: %v", err)
 	}
-	if policyReceipt.RequestKind != KindWorkerPolicyApplyRequest || policyReceipt.Command != WorkerPolicyApplyRequest || policyReceipt.EnvironmentID != "env-1" {
+	if policyReceipt.RequestKind != KindContextVMMessage || policyReceipt.Command != WorkerPolicyApplyRequest || policyReceipt.EnvironmentID != "env-1" {
 		t.Fatalf("unexpected policy receipt: %#v", policyReceipt)
 	}
 	policyEvent := capture.events[0]
+	assertContextVMCommand(t, policyEvent, "worker/policy-apply")
 	if tagValueNostr(policyEvent.Tags, "command") != WorkerPolicyApplyRequest || tagValueNostr(policyEvent.Tags, "environment") != "env-1" {
 		t.Fatalf("unexpected policy tags: %#v", policyEvent.Tags)
 	}
@@ -157,10 +141,11 @@ func TestWorkerCommandPublisherPublishesPolicyApplyAndWorkloadPin(t *testing.T) 
 	if err != nil {
 		t.Fatalf("publish workload pin: %v", err)
 	}
-	if pinReceipt.RequestKind != KindWorkloadPinRequest || pinReceipt.Command != WorkloadPinRequest || pinReceipt.WorkerPubKey != workerKey || pinReceipt.WorkloadKind != "ml_inference" {
+	if pinReceipt.RequestKind != KindContextVMMessage || pinReceipt.Command != WorkloadPinRequest || pinReceipt.WorkerPubKey != workerKey || pinReceipt.WorkloadKind != "ml_inference" {
 		t.Fatalf("unexpected pin receipt: %#v", pinReceipt)
 	}
 	pinEvent := capture.events[1]
+	assertContextVMCommand(t, pinEvent, "worker/workload-pin")
 	if tagValueNostr(pinEvent.Tags, "command") != WorkloadPinRequest || tagValueNostr(pinEvent.Tags, "worker") != workerKey || tagValueNostr(pinEvent.Tags, "workload") != "endpoint-1" {
 		t.Fatalf("unexpected pin tags: %#v", pinEvent.Tags)
 	}

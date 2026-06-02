@@ -1,4 +1,4 @@
-import { KINDS, BAHIA_STATUS_KINDS } from '../../nostr/client.js';
+import { BAHIA_STATUS_KINDS } from '../../nostr/client.js';
 import { getDTag, getTagValue, parseJsonContent, replaceArray } from './utils.js';
 
 const MAX_ACTIVITY = 100;
@@ -20,14 +20,24 @@ export function refreshActivity() {
   );
 }
 
+function eventSchema(event, content) {
+  return getTagValue(event, 'schema', content.schema || '');
+}
+
+function eventDomain(event, content) {
+  return getTagValue(event, 'domain', content.domain || '');
+}
+
 function activityType(event, content) {
   if (content.event_type) return content.event_type;
-  if (event.kind === KINDS.BAHIA_LLM_DEPLOYMENT_STATUS) return 'llm_deployment.status';
-  if (event.kind === KINDS.BAHIA_DEPLOYMENT_STATUS || event.kind === KINDS.BAHIA_SERVICE_STATUS) return 'controlplane.status';
-  if (event.kind === KINDS.BAHIA_LLM_ROUTE_CREATE_RESULT ||
-      event.kind === KINDS.BAHIA_LLM_RELEASE_REGISTER_RESULT ||
-      event.kind === KINDS.BAHIA_LLM_DEPLOYMENT_RESULT) return 'llm_deployment.result';
-  if (BAHIA_STATUS_KINDS.includes(event.kind)) return 'controlplane.result';
+  const schema = eventSchema(event, content);
+  const domain = eventDomain(event, content);
+  const op = getTagValue(event, 'op', content.operation || content.op || '');
+  if (schema.startsWith('bahia.status.')) return `${domain || 'controlplane'}.status`;
+  if (schema.startsWith('bahia.result.')) return `${domain || 'controlplane'}.result`;
+  if (schema === 'bahia.audit.v1') return content.type || content.action || 'controlplane.audit';
+  if (op) return `${domain || 'controlplane'}.${op}`;
+  if (BAHIA_STATUS_KINDS.includes(event.kind)) return `${domain || 'controlplane'}.status`;
   return `nostr.kind.${event.kind}`;
 }
 

@@ -27,11 +27,10 @@ import (
 	"github.com/openagentsinc/bahia/internal/service"
 )
 
-// Event kinds for Bahia control plane (596x/696x/796x series).
-// This is the CANONICAL event kind series for Bahia operations.
-// The 311xx series in internal/adapters/nostr/publisher.go is deprecated.
+// Legacy Bahia control-plane kind aliases retained for direct handler tests and
+// migration rejection. Production subscriptions use ContextVM/canonical kinds.
 const (
-	// Request kinds (5961-5975)
+	// Legacy request kind aliases
 	KindDeployRequest            = nostrpool.KindControlPlaneDeployRequest            // Request to deploy a service
 	KindRollbackRequest          = nostrpool.KindControlPlaneRollbackRequest          // Request to rollback a service
 	KindServiceAction            = nostrpool.KindControlPlaneServiceAction            // Lifecycle action (scale, restart, stop)
@@ -88,7 +87,7 @@ const (
 	KindMLInferenceRollbackResult     = nostrpool.KindMLInferenceRollbackResult     // Rollback terminal result
 	KindMLModelImportResult           = nostrpool.KindMLModelImportResult           // Model/model-version import terminal result
 
-	// Status kinds (6961-6978)
+	// Legacy status kind aliases
 	KindDeploymentStatus    = nostrpool.KindControlPlaneDeploymentStatus    // Deployment progress updates
 	KindServiceStatus       = nostrpool.KindControlPlaneServiceStatus       // Service health/state updates
 	KindActionStatus        = nostrpool.KindControlPlaneActionStatus        // Service action progress updates
@@ -98,7 +97,7 @@ const (
 	KindPackageStatus       = nostrpool.KindControlPlanePackageStatus       // Package lifecycle progress/policy events
 	KindWorkerStatus        = nostrpool.KindControlPlaneWorkerStatus        // Worker lifecycle progress events
 
-	// Result kinds (7961-7979)
+	// Legacy result kind aliases
 	KindDeploymentResult         = nostrpool.KindControlPlaneDeploymentResult         // Final deployment result
 	KindActionResult             = nostrpool.KindControlPlaneActionResult             // Result of a service action
 	KindServiceCreateResult      = nostrpool.KindControlPlaneServiceCreateResult      // Service creation result
@@ -134,16 +133,11 @@ const (
 	KindWorkerAssignmentState     = nostrpool.KindWorkerAssignmentState     // Replaceable worker assignment state (d=worker pubkey)
 	KindWorkerDrainStatus         = nostrpool.KindWorkerDrainStatus         // Replaceable worker drain status (d=worker pubkey)
 	KindWorkerEligibilityPreview  = nostrpool.KindWorkerEligibilityPreview  // Replaceable worker eligibility preview (d=preview id)
-)
 
-// Legacy worker read-model kinds accepted during the mixed-version release
-// window. New reactor/publisher paths must use the canonical KindWorker*
-// constants above.
-const (
-	KindLegacyWorkerState              = nostrpool.KindLegacyWorkerState
-	KindLegacyWorkerAssignmentState    = nostrpool.KindLegacyWorkerAssignmentState
-	KindLegacyWorkerDrainStatus        = nostrpool.KindLegacyWorkerDrainStatus
-	KindLegacyWorkerEligibilityPreview = nostrpool.KindLegacyWorkerEligibilityPreview
+	// Canonical runtime observable kinds.
+	KindCASControlState = nostrpool.KindCASControlState
+	KindCASAudit        = nostrpool.KindCASAudit
+	KindNIP38Status     = nostrpool.KindNIP38Status
 )
 
 // Config holds reactor configuration.
@@ -622,7 +616,7 @@ func (r *Reactor) handleEvent(ctx context.Context, event *nostr.Event) {
 	}
 }
 
-// handleDeployRequest processes a kind:5961 deployment request.
+// handleDeployRequest processes a legacy deployment request in direct tests.
 type idempotencyEventRepository interface {
 	FindLatestByKindPubkeyDTag(ctx context.Context, kind int, pubkey, dTag, excludeID string) (*repository.NostrEventRecord, error)
 }
@@ -873,7 +867,7 @@ func summarizePolicyBlockReason(evaluation *domain.PolicyEvaluation) string {
 	return "deployment blocked by policy evaluation"
 }
 
-// handleRollbackRequest processes a kind:5962 rollback request.
+// handleRollbackRequest processes a legacy rollback request in direct tests.
 func (r *Reactor) handleRollbackRequest(ctx context.Context, event *nostr.Event) {
 	logger := r.logger.With("event_id", event.ID, "requester", event.PubKey)
 	logger.Info("received rollback request")
@@ -918,7 +912,7 @@ func (r *Reactor) handleRollbackRequest(ctx context.Context, event *nostr.Event)
 	r.publishDeploymentResult(ctx, event, intent)
 }
 
-// handleServiceAction processes a kind:5963 service action.
+// handleServiceAction processes a legacy service action in direct tests.
 func (r *Reactor) handleServiceAction(ctx context.Context, event *nostr.Event) {
 	logger := r.logger.With("event_id", event.ID, "requester", event.PubKey)
 	logger.Info("received service action")
@@ -966,7 +960,7 @@ func (r *Reactor) handleServiceAction(ctx context.Context, event *nostr.Event) {
 	r.publishActionResult(ctx, event, action, "acknowledged", nil)
 }
 
-// handleServiceCreate processes a kind:5964 service creation.
+// handleServiceCreate processes a legacy service creation request in direct tests.
 func (r *Reactor) handleServiceCreate(ctx context.Context, event *nostr.Event) {
 	logger := r.logger.With("event_id", event.ID, "requester", event.PubKey)
 	logger.Info("received service create request")
@@ -1020,7 +1014,7 @@ func (r *Reactor) handleServiceCreate(ctx context.Context, event *nostr.Event) {
 	r.publishServiceCreated(ctx, event, svc)
 }
 
-// handleEnvironmentCreate processes a kind:5965 environment creation.
+// handleEnvironmentCreate processes a legacy environment creation request in direct tests.
 func (r *Reactor) handleEnvironmentCreate(ctx context.Context, event *nostr.Event) {
 	logger := r.logger.With("event_id", event.ID, "requester", event.PubKey)
 	logger.Info("received environment create request")
@@ -1269,7 +1263,7 @@ func (r *Reactor) handleArtifactRegister(ctx context.Context, event *nostr.Event
 	r.publishActionResult(ctx, event, "artifact_register", "success", nil)
 }
 
-// handleDeploymentApproval processes a kind:5966 deployment approval/rejection.
+// handleDeploymentApproval processes a legacy deployment approval/rejection request in direct tests.
 func (r *Reactor) handleDeploymentApproval(ctx context.Context, event *nostr.Event) {
 	logger := r.logger.With("event_id", event.ID, "approver", event.PubKey)
 	logger.Info("received deployment approval request")
@@ -1330,7 +1324,7 @@ func (r *Reactor) handleDeploymentApproval(ctx context.Context, event *nostr.Eve
 	r.publishApprovalResult(ctx, event, intentID, decision)
 }
 
-// handleLLMRouteCreate processes a kind:5971 LLM route creation request.
+// handleLLMRouteCreate processes a legacy LLM route creation request in direct tests.
 func (r *Reactor) handleLLMRouteCreate(ctx context.Context, event *nostr.Event) {
 	logger := r.logger.With("event_id", event.ID, "requester", event.PubKey)
 	if !r.authorizeLLMRequest(ctx, event, "route_create") {
@@ -1358,7 +1352,7 @@ func (r *Reactor) handleLLMRouteCreate(ctx context.Context, event *nostr.Event) 
 	r.publishLLMRouteCreateResult(ctx, event, route)
 }
 
-// handleLLMReleaseRegister processes a kind:5972 LLM release registration request.
+// handleLLMReleaseRegister processes a legacy LLM release registration request in direct tests.
 func (r *Reactor) handleLLMReleaseRegister(ctx context.Context, event *nostr.Event) {
 	logger := r.logger.With("event_id", event.ID, "requester", event.PubKey)
 	if !r.authorizeLLMRequest(ctx, event, "release_register") {
@@ -1400,7 +1394,7 @@ func (r *Reactor) handleLLMReleaseRegister(ctx context.Context, event *nostr.Eve
 	r.publishLLMReleaseRegisterResult(ctx, event, release)
 }
 
-// handleLLMDeployRequest processes a kind:5973 LLM deployment request.
+// handleLLMDeployRequest processes a legacy LLM deployment request in direct tests.
 func (r *Reactor) handleLLMDeployRequest(ctx context.Context, event *nostr.Event) {
 	logger := r.logger.With("event_id", event.ID, "requester", event.PubKey)
 	if !r.authorizeLLMRequest(ctx, event, "deploy") {
@@ -1460,7 +1454,7 @@ func (r *Reactor) handleLLMDeployRequest(ctx context.Context, event *nostr.Event
 	r.publishLLMDeploymentStatus(ctx, event, intent, "accepted", "LLM deployment intent accepted")
 }
 
-// handleLLMDeploymentApproval processes a kind:5974 LLM approval/rejection request.
+// handleLLMDeploymentApproval processes a legacy LLM approval/rejection request in direct tests.
 func (r *Reactor) handleLLMDeploymentApproval(ctx context.Context, event *nostr.Event) {
 	logger := r.logger.With("event_id", event.ID, "approver", event.PubKey)
 	if !r.authorizeLLMRequest(ctx, event, "approval") {
@@ -1503,7 +1497,7 @@ func (r *Reactor) handleLLMDeploymentApproval(ctx context.Context, event *nostr.
 	r.publishLLMDeploymentResult(ctx, event, intent, content.Decision, "LLM deployment approval decision recorded")
 }
 
-// handleLLMRollbackRequest processes a kind:5975 LLM rollback request.
+// handleLLMRollbackRequest processes a legacy LLM rollback request in direct tests.
 func (r *Reactor) handleLLMRollbackRequest(ctx context.Context, event *nostr.Event) {
 	logger := r.logger.With("event_id", event.ID, "requester", event.PubKey)
 	if !r.authorizeLLMRequest(ctx, event, "rollback") {
@@ -1888,10 +1882,6 @@ func acceptedWorkerReadModelKinds() []int {
 		KindWorkerAssignmentState,
 		KindWorkerDrainStatus,
 		KindWorkerEligibilityPreview,
-		KindLegacyWorkerState,
-		KindLegacyWorkerAssignmentState,
-		KindLegacyWorkerDrainStatus,
-		KindLegacyWorkerEligibilityPreview,
 	}
 }
 
@@ -2254,7 +2244,7 @@ func (r *Reactor) appendRequestResourceTags(ctx context.Context, tags nostr.Tags
 	return tags
 }
 
-// publishStatus publishes a kind:6961 deployment status event.
+// publishStatus publishes a legacy deployment status event for direct handler tests.
 func (r *Reactor) publishStatus(ctx context.Context, requestEvent *nostr.Event, step, message string) error {
 	tags := nostr.Tags{
 		{"e", requestEvent.ID, "", "reply"},
@@ -2279,7 +2269,7 @@ func (r *Reactor) publishStatus(ctx context.Context, requestEvent *nostr.Event, 
 	return err
 }
 
-// publishDeploymentResult publishes a kind:7961 deployment result event.
+// publishDeploymentResult publishes a legacy deployment result event for direct handler tests.
 func (r *Reactor) publishDeploymentResult(ctx context.Context, requestEvent *nostr.Event, intent *domain.DeploymentIntent) error {
 	payload := map[string]interface{}{
 		"intent_id":      intent.ID.String(),
@@ -2322,7 +2312,7 @@ func (r *Reactor) publishDeploymentResult(ctx context.Context, requestEvent *nos
 	return err
 }
 
-// publishActionResult publishes a kind:7962 action result event.
+// publishActionResult publishes a legacy action result event for direct handler tests.
 func (r *Reactor) publishActionResult(ctx context.Context, requestEvent *nostr.Event, action, status string, err error) error {
 	tags := nostr.Tags{
 		{"e", requestEvent.ID, "", "reply"},
@@ -2626,7 +2616,7 @@ func (r *Reactor) publishEnvironmentCreated(ctx context.Context, requestEvent *n
 	return err
 }
 
-// publishError publishes a kind:7961 error result event.
+// publishError publishes a legacy error result event for direct handler tests.
 func (r *Reactor) publishError(ctx context.Context, requestEvent *nostr.Event, step, message string) error {
 	tags := nostr.Tags{
 		{"e", requestEvent.ID, "", "reply"},
@@ -2691,7 +2681,7 @@ func (r *Reactor) GetRun(requestEventID string) *DeploymentRun {
 	return r.runs[requestEventID]
 }
 
-// ObservationRequest represents a kind:5967 observation submission.
+// ObservationRequest represents a legacy observation submission payload.
 type ObservationRequest struct {
 	ServiceID           uuid.UUID `json:"service_id"`
 	EnvironmentID       uuid.UUID `json:"environment_id"`
@@ -2704,7 +2694,7 @@ type ObservationRequest struct {
 	Source              string    `json:"source"`
 }
 
-// handleObservationSubmit processes a kind:5967 observation submission event.
+// handleObservationSubmit processes a legacy observation submission in direct tests.
 func (r *Reactor) handleObservationSubmit(ctx context.Context, event *nostr.Event) {
 	logger := r.logger.With("event_id", event.ID, "requester", event.PubKey)
 	logger.Info("received observation submission")
@@ -2778,7 +2768,7 @@ func (r *Reactor) handleObservationSubmit(ctx context.Context, event *nostr.Even
 	}
 }
 
-// handleDriftRemediate processes a kind:5968 drift remediation request.
+// handleDriftRemediate processes a legacy drift remediation request in direct tests.
 func (r *Reactor) handleDriftRemediate(ctx context.Context, event *nostr.Event) {
 	logger := r.logger.With("event_id", event.ID, "requester", event.PubKey)
 	logger.Info("received drift remediation request")
@@ -2810,7 +2800,7 @@ func (r *Reactor) handleDriftRemediate(ctx context.Context, event *nostr.Event) 
 	}
 
 	// Check if remediation is currently needed. approval_required reconciliation
-	// records remediation_needed and waits for an authorized kind:5968 request.
+	// records remediation_needed and waits for an authorized remediation request.
 	if state.DriftStatus != domain.DriftStatusDrifted && state.DriftStatus != domain.DriftStatusRemediationNeeded {
 		r.publishRemediationResult(ctx, event, state, "not_drifted", "Service is not in drifted or remediation-needed state")
 		return
@@ -2845,7 +2835,7 @@ func (r *Reactor) handleDriftRemediate(ctx context.Context, event *nostr.Event) 
 	r.publishRemediationResult(ctx, event, state, "remediation_started", fmt.Sprintf("Deployment intent %s created", intent.ID))
 }
 
-// publishObservationResult publishes a kind:7965 observation result event.
+// publishObservationResult publishes a legacy observation result event for direct handler tests.
 func (r *Reactor) publishObservationResult(ctx context.Context, requestEvent *nostr.Event, obs *domain.RuntimeObservation) error {
 	content, _ := json.Marshal(map[string]interface{}{
 		"observation_id":        obs.ID.String(),
@@ -2878,7 +2868,7 @@ func (r *Reactor) publishObservationResult(ctx context.Context, requestEvent *no
 	return err
 }
 
-// publishRemediationResult publishes a kind:7966 remediation result event.
+// publishRemediationResult publishes a legacy remediation result event for direct handler tests.
 func (r *Reactor) publishRemediationResult(ctx context.Context, requestEvent *nostr.Event, state *domain.EnvironmentServiceState, status, message string) error {
 	content, _ := json.Marshal(map[string]interface{}{
 		"service_id":     state.ServiceID.String(),
@@ -2915,7 +2905,7 @@ func (r *Reactor) publishRemediationResult(ctx context.Context, requestEvent *no
 	return err
 }
 
-// publishStateEvent publishes a replaceable kind:31961 service state event.
+// publishStateEvent publishes canonical CAS service state.
 // The d-tag is formatted as "service:env" to allow per-service-environment state tracking.
 func (r *Reactor) publishStateEvent(ctx context.Context, serviceID, envID uuid.UUID) error {
 	state, err := r.registry.GetEnvironmentServiceState(ctx, serviceID, envID)
@@ -2951,10 +2941,13 @@ func (r *Reactor) publishStateEvent(ctx context.Context, serviceID, envID uuid.U
 	dTag := fmt.Sprintf("%s:%s", serviceID.String(), envID.String())
 
 	event := &nostr.Event{
-		Kind:      KindServiceState,
+		Kind:      nostrpool.KindCASControlState,
 		CreatedAt: nostr.Now(),
 		Tags: nostr.Tags{
 			{"d", dTag},
+			{"domain", "service"},
+			{"entity", "state"},
+			{"schema", "bahia.cp-state.v1"},
 			{"service", serviceID.String()},
 			{"environment", envID.String()},
 			{"deleted", "false"},
@@ -3011,7 +3004,7 @@ func (r *Reactor) publishPolicyRegistry(ctx context.Context, policy *domain.Depl
 	return err
 }
 
-// PublishServiceRegistry publishes a replaceable kind:31962 service registry event.
+// PublishServiceRegistry publishes canonical CAS service registry state.
 func (r *Reactor) PublishServiceRegistry(ctx context.Context, svc *domain.Service) error {
 	content, _ := json.Marshal(map[string]interface{}{
 		"deleted":        false,
@@ -3026,10 +3019,13 @@ func (r *Reactor) PublishServiceRegistry(ctx context.Context, svc *domain.Servic
 	})
 
 	event := &nostr.Event{
-		Kind:      KindServiceRegistry,
+		Kind:      nostrpool.KindCASControlState,
 		CreatedAt: nostr.Now(),
 		Tags: nostr.Tags{
 			{"d", svc.ID.String()},
+			{"domain", "service"},
+			{"entity", "registry"},
+			{"schema", "bahia.cp-state.v1"},
 			{"deleted", "false"},
 			{"name", svc.Name},
 			{"runtime", string(svc.RuntimeType)},
@@ -3045,7 +3041,7 @@ func (r *Reactor) PublishServiceRegistry(ctx context.Context, svc *domain.Servic
 	return err
 }
 
-// PublishEnvironmentRegistry publishes a replaceable kind:31963 environment registry event.
+// PublishEnvironmentRegistry publishes canonical CAS environment registry state.
 func (r *Reactor) PublishEnvironmentRegistry(ctx context.Context, env *domain.Environment) error {
 	content, _ := json.Marshal(map[string]interface{}{
 		"deleted":              false,
@@ -3060,10 +3056,13 @@ func (r *Reactor) PublishEnvironmentRegistry(ctx context.Context, env *domain.En
 	})
 
 	event := &nostr.Event{
-		Kind:      KindEnvironmentRegistry,
+		Kind:      nostrpool.KindCASControlState,
 		CreatedAt: nostr.Now(),
 		Tags: nostr.Tags{
 			{"d", env.ID.String()},
+			{"domain", "environment"},
+			{"entity", "registry"},
+			{"schema", "bahia.cp-state.v1"},
 			{"deleted", "false"},
 			{"name", env.Name},
 			{"protected", fmt.Sprintf("%t", env.Protected)},

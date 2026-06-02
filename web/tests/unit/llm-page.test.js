@@ -18,12 +18,7 @@ import {
   environmentName
 } from '../../src/routes/llm/page-model.js';
 
-const KINDS = {
-  BAHIA_LLM_ROUTE_CREATE_RESULT: 7971,
-  BAHIA_LLM_RELEASE_REGISTER_RESULT: 7972,
-  BAHIA_LLM_DEPLOYMENT_STATUS: 6973,
-  BAHIA_LLM_DEPLOYMENT_RESULT: 7973
-};
+const KINDS = {};
 
 function getTagValue(event, name) {
   const tags = event?.tags || [];
@@ -112,7 +107,7 @@ describe('llm page model helpers', () => {
   it('derives activity history, releases, pending approvals, and route state rows', () => {
     const events = [
       {
-        kind: 6973,
+        kind: 30315,
         time: '2026-05-04T12:05:00.000Z',
         data: {
           intent_id: 'llm-intent-1',
@@ -124,19 +119,19 @@ describe('llm page model helpers', () => {
           step: 'accepted',
           message: 'accepted'
         },
-        nostr_event: { tags: [['intent', 'llm-intent-1'], ['route', 'llm-route-1'], ['environment', 'env-prod'], ['release', 'llm-release-1'], ['step', 'accepted']] }
+        nostr_event: { tags: [['domain', 'llm'], ['schema', 'bahia.status.llm.v1'], ['intent', 'llm-intent-1'], ['route', 'llm-route-1'], ['environment', 'env-prod'], ['release', 'llm-release-1'], ['step', 'accepted']] }
       },
       {
-        kind: 7972,
+        kind: 4903,
         time: '2026-05-04T12:00:00.000Z',
         data: { route_id: 'llm-route-1', release_id: 'llm-release-1', version: 'v1', status: 'success' },
-        nostr_event: { tags: [['route', 'llm-route-1'], ['release', 'llm-release-1'], ['status', 'success']] }
+        nostr_event: { tags: [['domain', 'llm'], ['schema', 'bahia.result.llm.v1'], ['op', 'release-register'], ['route', 'llm-route-1'], ['release', 'llm-release-1'], ['status', 'success']] }
       },
       {
-        kind: 9999,
+        kind: 4903,
         time: '2026-05-04T12:10:00.000Z',
-        data: { ignored: true },
-        nostr_event: { tags: [] }
+        data: { ignored: true, domain: 'service', schema: 'bahia.audit.v1' },
+        nostr_event: { tags: [['domain', 'service'], ['schema', 'bahia.audit.v1']] }
       }
     ];
     const llmRoutes = [{ id: 'llm-route-1', route_id: 'llm-route-1', name: 'chat-prod' }];
@@ -152,12 +147,12 @@ describe('llm page model helpers', () => {
     }];
 
     const llmKinds = buildLLMActivityKinds(KINDS);
-    const history = buildLLMEventHistory(events, llmKinds);
+    const history = buildLLMEventHistory(events, llmKinds, getTagValue);
     expect(history).toHaveLength(2);
-    expect(history[0].kind).toBe(6973);
+    expect(history[0].kind).toBe(30315);
     expect(activityData(history[0]).step).toBe('accepted');
 
-    const releases = buildRecentReleases(history.filter((event) => event.kind === KINDS.BAHIA_LLM_RELEASE_REGISTER_RESULT), getTagValue);
+    const releases = buildRecentReleases(history, getTagValue);
     expect(releases).toEqual([{ id: 'llm-release-1', route_id: 'llm-route-1', version: 'v1', created_at: '2026-05-04T12:00:00.000Z', status: 'success' }]);
 
     const rows = buildRouteStateRows(llmRouteStates, llmRoutes, environments, releases);
@@ -197,7 +192,7 @@ describe('llm page model helpers', () => {
     expect(buildReleaseOptions(releases, 'llm-route-1')).toEqual([{ id: 'rel-1', route_id: 'llm-route-1', version: 'v1' }]);
     expect(routeName(routes, 'llm-route-2')).toBe('chat-stage');
     expect(environmentName(environments, 'env-prod')).toBe('production');
-    expect(kindLabel(KINDS, 7973)).toBe('Deploy result');
-    expect(kindLabel(KINDS, 1234)).toBe('Kind 1234');
+    expect(kindLabel({ data: { schema: 'bahia.result.llm.v1', operation: 'deploy' }, nostr_event: { tags: [] } }, getTagValue)).toBe('Deploy result');
+    expect(kindLabel({ data: {}, nostr_event: { tags: [] } }, getTagValue)).toBe('Nostr activity');
   });
 });

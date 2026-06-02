@@ -4,37 +4,53 @@
     {
       "id": "AC-001",
       "statement": "Browser encrypted mutation requests build ContextVM JSON-RPC 2.0 payloads on kind 25910 and preserve OK/result correlation checks.",
-      "tests": ["web/tests/unit/encrypted-controlplane.test.js"]
+      "tests": [
+        "web/tests/unit/encrypted-controlplane.test.js"
+      ]
     },
     {
       "id": "AC-002",
       "statement": "Touched worker web paths do not embed hardcoded 5997-6003 action numbers; legacy values are imported from the migration-only kind surface.",
-      "tests": ["static inspection: web/src/routes/workers/[pubkey]/+page.svelte"]
+      "tests": [
+        "static inspection: web/src/routes/workers/[pubkey]/+page.svelte"
+      ]
     },
     {
       "id": "AC-003",
       "statement": "The web kind surface exposes ContextVM and canonical observable read kinds: 25910, 1059, 21059, 11316-11320, 30900, 4903, 30315, 30002, 30078.",
-      "tests": ["static inspection: web/src/lib/nostr/kinds.gen.js"]
+      "tests": [
+        "static inspection: web/src/lib/nostr/kinds.gen.js"
+      ]
     },
     {
       "id": "AC-004",
       "statement": "Docs explain final ContextVM methods, CEP-4/NIP-59 gift-wrap, canonical read/audit/status/discovery/relay kinds, NIP-09 deletion behavior, and migration-only legacy ranges with no stale cutover blocker claims.",
-      "tests": ["docs review: nostr-integration.md, control-planes.md, mcp-tools.md, cli-reference.md"]
+      "tests": [
+        "docs review: docs/control-planes.md, docs/user-guide/nostr-integration.md, docs/api.md, docs/deployment.md, docs/architecture.md, docs/designs/dns-orchestration-layer.md, docs/designs/nostr-native-system-discovery.md",
+        "static grep: old kind mentions in target docs are absent or explicitly historical/migration-only"
+      ]
     },
     {
       "id": "AC-005",
       "statement": "Production runtime legacy request/status/result/read-model/encrypted kind support is removed outside startup migration and historical fixtures.",
-      "tests": ["go test ./internal/adapters/nostr ./internal/controlplane ./internal/kinds"]
+      "tests": [
+        "go test ./internal/adapters/nostr ./internal/controlplane ./internal/kinds"
+      ]
     },
     {
       "id": "AC-006",
       "statement": "CEP-4/NIP-59 random-key gift-wrap supports ContextVM inner kind 25910 over 1059/21059 and preserves response correlation.",
-      "tests": ["focused transport tests from bahia-dgju"]
+      "tests": [
+        "focused transport tests from bahia-dgju"
+      ]
     },
     {
       "id": "AC-007",
       "statement": "Web/CLI client surfaces are cut over to ContextVM/canonical observables instead of production legacy request-kind transport.",
-      "tests": ["go test ./pkg/client ./cmd/cli", "targeted web unit tests from bahia-viys"]
+      "tests": [
+        "go test ./pkg/client ./cmd/cli",
+        "targeted web unit tests from bahia-viys"
+      ]
     }
   ]
 }

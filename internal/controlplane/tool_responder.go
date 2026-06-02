@@ -28,12 +28,12 @@ func NewToolResponder(publisher NostrEventPublisher, signer canonicalnostr.Signe
 	return &ToolResponder{publisher: publisher, signer: signer, nostrRepo: nostrRepo, logger: logger.Named("tool-responder")}
 }
 
-// PublishStatus publishes a kind 6976 status update.
+// PublishStatus publishes tool provisioning status as canonical CAS state.
 func (r *ToolResponder) PublishStatus(ctx context.Context, requestEvent *nostr.Event, intent *domain.ToolProvisionIntent, step string, message string) error {
-	return r.publishReply(ctx, KindToolProvisionStatus, requestEvent, intent, "processing", step, message, "")
+	return r.publishReply(ctx, requestEvent, intent, "processing", step, message, "")
 }
 
-// PublishResult publishes a kind 7976 final result.
+// PublishResult publishes the final tool provisioning result as canonical CAS state.
 func (r *ToolResponder) PublishResult(ctx context.Context, requestEvent *nostr.Event, intent *domain.ToolProvisionIntent, success bool, errMsg string) error {
 	status := "success"
 	step := "completed"
@@ -43,10 +43,10 @@ func (r *ToolResponder) PublishResult(ctx context.Context, requestEvent *nostr.E
 		step = "failed"
 		message = errMsg
 	}
-	return r.publishReply(ctx, KindToolProvisionResult, requestEvent, intent, status, step, message, errMsg)
+	return r.publishReply(ctx, requestEvent, intent, status, step, message, errMsg)
 }
 
-// PublishApprovalRequest publishes a kind 5977 to operator.
+// PublishApprovalRequest publishes a ContextVM approval request to the operator.
 func (r *ToolResponder) PublishApprovalRequest(ctx context.Context, intent *domain.ToolProvisionIntent, operatorPubkey string) error {
 	if r == nil || r.publisher == nil || intent == nil || operatorPubkey == "" {
 		return nil
@@ -60,25 +60,22 @@ func (r *ToolResponder) PublishApprovalRequest(ctx context.Context, intent *doma
 		"status":          intent.Status,
 		"created_at":      time.Now().UTC().Format(time.RFC3339),
 	}
-	body, _ := json.Marshal(content)
-	ev := &nostr.Event{Kind: KindToolApprovalRequest, CreatedAt: nostr.Now(), Tags: nostr.Tags{
+	tags := nostr.Tags{
 		{"p", operatorPubkey},
 		{"status", string(intent.Status)},
 		{"intent", intent.ID.String()},
 		{"service", intent.ServiceID.String()},
 		{"environment", intent.EnvironmentID.String()},
-	}, Content: string(body)}
-	if err := SignGoNostrEvent(ctx, r.signer, ev); err != nil {
-		return err
 	}
-	if _, err := r.publisher.Publish(ctx, *ev); err != nil {
+	ev, _, _, err := publishContextVMCommand(ctx, r.publisher, r.signer, "tool/approval-request", "tool-approval:"+intent.ID.String(), "", tags, content, "tool approval")
+	if err != nil {
 		return err
 	}
 	r.record(ctx, ev, "tool.provisioning.approval.request", &intent.ID)
 	return nil
 }
 
-func (r *ToolResponder) publishReply(ctx context.Context, kind int, requestEvent *nostr.Event, intent *domain.ToolProvisionIntent, status, step, message, errMsg string) error {
+func (r *ToolResponder) publishReply(ctx context.Context, requestEvent *nostr.Event, intent *domain.ToolProvisionIntent, status, step, message, errMsg string) error {
 	if r == nil || r.publisher == nil || requestEvent == nil || intent == nil {
 		return nil
 	}
@@ -107,7 +104,8 @@ func (r *ToolResponder) publishReply(ctx context.Context, kind int, requestEvent
 	if errMsg != "" {
 		tags = append(tags, nostr.Tag{"error", errMsg})
 	}
-	ev := &nostr.Event{Kind: kind, CreatedAt: nostr.Now(), Tags: tags, Content: string(body)}
+	tags = append(nostr.Tags{{"d", "tool-provisioning:" + intent.ID.String()}, {"domain", "tool"}, {"entity", "provisioning"}, {"schema", "bahia.cp-state.v1"}}, tags...)
+	ev := &nostr.Event{Kind: KindCASControlState, CreatedAt: nostr.Now(), Tags: tags, Content: string(body)}
 	if err := SignGoNostrEvent(ctx, r.signer, ev); err != nil {
 		return err
 	}

@@ -56,9 +56,12 @@ func TestRelayFirstRegistryCreateServicePublishesBeforeDatabaseWrite(t *testing.
 		t.Fatalf("expected one published event, got %d", len(publisher.events))
 	}
 	ev := publisher.events[0]
-	if ev.Kind != relayFirstKindServiceRegistry {
-		t.Fatalf("published kind = %d, want %d", ev.Kind, relayFirstKindServiceRegistry)
+	if ev.Kind != relayFirstCanonicalStateKind {
+		t.Fatalf("published kind = %d, want %d", ev.Kind, relayFirstCanonicalStateKind)
 	}
+	assertRelayFirstTag(t, ev.Tags, "domain", "service")
+	assertRelayFirstTag(t, ev.Tags, "entity", "registry")
+	assertRelayFirstTag(t, ev.Tags, "schema", relayFirstStateSchema)
 	if ev.ID == "" || ev.Sig == "" || ev.PubKey == "" {
 		t.Fatalf("published event was not signed: id=%q sig=%q pubkey=%q", ev.ID, ev.Sig, ev.PubKey)
 	}
@@ -106,9 +109,22 @@ func TestRelayFirstRegistryUpdateEnvironmentPublishesBeforeDatabaseWrite(t *test
 	if len(publisher.events) != 1 {
 		t.Fatalf("expected one published event, got %d", len(publisher.events))
 	}
-	if publisher.events[0].Kind != relayFirstKindEnvironmentRegistry {
-		t.Fatalf("published kind = %d, want %d", publisher.events[0].Kind, relayFirstKindEnvironmentRegistry)
+	if publisher.events[0].Kind != relayFirstCanonicalStateKind {
+		t.Fatalf("published kind = %d, want %d", publisher.events[0].Kind, relayFirstCanonicalStateKind)
 	}
+	assertRelayFirstTag(t, publisher.events[0].Tags, "domain", "environment")
+	assertRelayFirstTag(t, publisher.events[0].Tags, "entity", "registry")
+	assertRelayFirstTag(t, publisher.events[0].Tags, "schema", relayFirstStateSchema)
+}
+
+func assertRelayFirstTag(t *testing.T, tags gonostr.Tags, name, value string) {
+	t.Helper()
+	for _, tag := range tags {
+		if len(tag) >= 2 && tag[0] == name && tag[1] == value {
+			return
+		}
+	}
+	t.Fatalf("missing tag %s=%s in %#v", name, value, tags)
 }
 
 func relayFirstTestSigner(t *testing.T) RelayFirstSigner {

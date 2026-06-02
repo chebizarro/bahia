@@ -71,8 +71,8 @@ func NewToolProvisioningCoordinator(repo repository.ToolProvisioningRepository, 
 func (c *ToolProvisioningCoordinator) Name() string { return "tool-provisioning-recovery" }
 
 // Run performs explicit durable recovery for stored tool provisioning work.
-// Newly-arrived kind 5976 requests remain event-triggered through the reactor;
-// this runner only resumes intents already persisted in non-terminal states.
+// Newly arrived tool requests enter through ContextVM; this runner only resumes
+// intents already persisted in non-terminal states.
 func (c *ToolProvisioningCoordinator) Run(ctx context.Context) error {
 	if c == nil || c.repo == nil {
 		return nil

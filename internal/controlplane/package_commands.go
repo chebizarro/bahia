@@ -2,7 +2,6 @@ package controlplane
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 
 	canonicalnostr "fiatjaf.com/nostr"
@@ -128,7 +127,7 @@ func (p *PackageCommandPublisher) PublishPackageRepositoryApplyRequest(ctx conte
 	if cmd.RepositoryID != uuid.Nil {
 		tags = append(tags, nostr.Tag{"repository", cmd.RepositoryID.String()})
 	}
-	return p.publish(ctx, KindPackageRepositoryApply, tags, content)
+	return p.publish(ctx, "package/repository-apply", tags, content)
 }
 
 func (p *PackageCommandPublisher) PublishPackageRepositoryDeleteRequest(ctx context.Context, cmd PackageRepositoryDeleteCommand) (*PackageCommandReceipt, error) {
@@ -140,7 +139,7 @@ func (p *PackageCommandPublisher) PublishPackageRepositoryDeleteRequest(ctx cont
 	if cmd.RepositoryID != uuid.Nil {
 		tags = append(tags, nostr.Tag{"repository", cmd.RepositoryID.String()})
 	}
-	return p.publish(ctx, KindPackageRepositoryDelete, tags, content)
+	return p.publish(ctx, "package/repository-delete", tags, content)
 }
 
 func (p *PackageCommandPublisher) PublishPackagePublishRequest(ctx context.Context, cmd PackagePublishCommand) (*PackageCommandReceipt, error) {
@@ -149,7 +148,7 @@ func (p *PackageCommandPublisher) PublishPackagePublishRequest(ctx context.Conte
 		content["repository_id"] = cmd.RepositoryID.String()
 	}
 	tags := packageArtifactTags(domain.PackageOperationArtifactPublish, cmd.RepositoryID, cmd.RepositoryName, cmd.Namespace, cmd.PackageName, cmd.Version, cmd.Filename, cmd.SHA256)
-	return p.publish(ctx, KindPackagePublishIntent, tags, content)
+	return p.publish(ctx, "package/publish", tags, content)
 }
 
 func (p *PackageCommandPublisher) PublishPackagePromotionRequest(ctx context.Context, cmd PackagePromotionCommand) (*PackageCommandReceipt, error) {
@@ -167,7 +166,7 @@ func (p *PackageCommandPublisher) PublishPackagePromotionRequest(ctx context.Con
 	if cmd.TargetRepositoryName != "" {
 		tags = append(tags, nostr.Tag{"target_repository_name", cmd.TargetRepositoryName})
 	}
-	return p.publish(ctx, KindPackagePromotionRequest, tags, content)
+	return p.publish(ctx, ContextVMMethodPackagePromote, tags, content)
 }
 
 func (p *PackageCommandPublisher) PublishPackageYankRequest(ctx context.Context, cmd PackageYankCommand) (*PackageCommandReceipt, error) {
@@ -179,7 +178,7 @@ func (p *PackageCommandPublisher) PublishPackageYankRequest(ctx context.Context,
 	if cmd.RepositoryID != uuid.Nil {
 		content["repository_id"] = cmd.RepositoryID.String()
 	}
-	return p.publish(ctx, KindPackageYankRequest, packageArtifactTags(operation, cmd.RepositoryID, cmd.RepositoryName, cmd.Namespace, cmd.PackageName, cmd.Version, cmd.Filename, ""), content)
+	return p.publish(ctx, "package/yank", packageArtifactTags(operation, cmd.RepositoryID, cmd.RepositoryName, cmd.Namespace, cmd.PackageName, cmd.Version, cmd.Filename, ""), content)
 }
 
 func (p *PackageCommandPublisher) PublishPackageDriftDetectRequest(ctx context.Context, cmd PackageDriftDetectCommand) (*PackageCommandReceipt, error) {
@@ -191,29 +190,22 @@ func (p *PackageCommandPublisher) PublishPackageDriftDetectRequest(ctx context.C
 	if cmd.RepositoryID != uuid.Nil {
 		tags = append(tags, nostr.Tag{"repository", cmd.RepositoryID.String()})
 	}
-	return p.publish(ctx, KindPackageDriftDetect, tags, content)
+	return p.publish(ctx, "package/drift-detect", tags, content)
 }
 
-func (p *PackageCommandPublisher) publish(ctx context.Context, kind int, tags nostr.Tags, content map[string]any) (*PackageCommandReceipt, error) {
+func (p *PackageCommandPublisher) publish(ctx context.Context, method string, tags nostr.Tags, content map[string]any) (*PackageCommandReceipt, error) {
 	if p == nil || p.publisher == nil {
 		return nil, fmt.Errorf("package command publisher is not configured")
 	}
-	contentJSON, err := json.Marshal(content)
+	dTag := tagValueNostr(tags, "d")
+	if dTag == "" {
+		dTag = "package-command:" + method + ":" + uuid.NewString()
+	}
+	ev, published, _, err := publishContextVMCommand(ctx, p.publisher, p.signer, method, dTag, "", tags, content, "package command")
 	if err != nil {
-		return nil, fmt.Errorf("marshal package command content: %w", err)
+		return nil, err
 	}
-	ev := &nostr.Event{Kind: kind, CreatedAt: nostr.Now(), Tags: compactTags(tags), Content: string(contentJSON)}
-	if err := SignGoNostrEvent(ctx, p.signer, ev); err != nil {
-		return nil, fmt.Errorf("sign package command event: %w", err)
-	}
-	published, err := p.publisher.Publish(ctx, *ev)
-	if err != nil {
-		return nil, fmt.Errorf("publish package command event: %w", err)
-	}
-	if published == 0 {
-		return nil, fmt.Errorf("publish package command event: no relay accepted the request")
-	}
-	receipt := &PackageCommandReceipt{RequestEventID: ev.ID, RequestPubkey: ev.PubKey, RequestKind: kind, StatusKind: KindPackageStatus, ResultKind: KindPackageResult, RepositoryRegistryKind: KindPackageRepositoryRegistry, ArtifactRegistryKind: KindPackageArtifactRegistry, PromotionRegistryKind: KindPackagePromotionRegistry, DriftEventKind: KindPackageDriftEvent, PublishedRelays: published}
+	receipt := &PackageCommandReceipt{RequestEventID: ev.ID, RequestPubkey: ev.PubKey, RequestKind: KindContextVMMessage, ResultKind: KindCASControlState, RepositoryRegistryKind: KindCASControlState, ArtifactRegistryKind: KindCASControlState, PromotionRegistryKind: KindCASControlState, DriftEventKind: KindNIP38Status, PublishedRelays: published}
 	receipt.RepositoryID = tagValueNostr(ev.Tags, "repository")
 	receipt.RepositoryName = tagValueNostr(ev.Tags, "repository_name")
 	receipt.PackageName = tagValueNostr(ev.Tags, "package")

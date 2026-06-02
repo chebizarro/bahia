@@ -173,7 +173,7 @@ func (r *Runner) migrateRelayBackfill(ctx context.Context, summary *Summary) err
 }
 
 func (r *Runner) migrateRecord(ctx context.Context, rec repository.NostrEventRecord, summary *Summary) error {
-	disp, ok := Lookup(rec.Kind)
+	disp, ok := ResolveDisposition(rec.Kind, rec.Tags, rec.Content)
 	if !ok {
 		return nil
 	}

@@ -106,16 +106,6 @@ const (
 	KindRecoveryRequest        = kinds.RecoveryRequest
 )
 
-// Legacy worker read-model kinds accepted during the mixed-version release
-// window. New publisher/projector paths must use the canonical KindWorker*
-// constants above.
-const (
-	KindLegacyWorkerState              = kinds.LegacyWorkerState
-	KindLegacyWorkerAssignmentState    = kinds.LegacyWorkerAssignmentState
-	KindLegacyWorkerDrainStatus        = kinds.LegacyWorkerDrainStatus
-	KindLegacyWorkerEligibilityPreview = kinds.LegacyWorkerEligibilityPreview
-)
-
 // Operator assistant event kinds are aliases to internal/kinds.
 const (
 	KindAssistantSession       = kinds.AssistantSession
@@ -123,24 +113,6 @@ const (
 	KindAssistantApproval      = kinds.AssistantApproval
 	KindAssistantStatus        = kinds.AssistantStatus
 	KindAssistantResult        = kinds.AssistantResult
-)
-
-// Nostr event kinds for Bahia inbound command events (311xx series).
-// DEPRECATED: These kinds are superseded by the control plane reactor's 596x series
-// (see internal/controlplane/reactor.go). The 311xx series remains for backward
-// compatibility with existing event processors but new implementations should use:
-//   - KindDeployRequest (5961) instead of KindCmdIntentCreate (31102)
-//   - KindDeploymentApproval (5966) instead of KindCmdIntentApprove/Reject (31103/31104)
-//   - KindRollbackRequest (5962) instead of KindCmdRollbackRequest (31105)
-//
-// See docs/nostr-commands.md for tag structure and content format.
-const (
-	KindCmdBuildRegister    = kinds.CmdBuildRegister    // Deprecated: use reactor API
-	KindCmdArtifactRegister = kinds.CmdArtifactRegister // Deprecated: use reactor API
-	KindCmdIntentCreate     = kinds.CmdIntentCreate     // Deprecated: use KindDeployRequest (5961)
-	KindCmdIntentApprove    = kinds.CmdIntentApprove    // Deprecated: use KindDeploymentApproval (5966)
-	KindCmdIntentReject     = kinds.CmdIntentReject     // Deprecated: use KindDeploymentApproval (5966)
-	KindCmdRollbackRequest  = kinds.CmdRollbackRequest  // Deprecated: use KindRollbackRequest (5962)
 )
 
 // Publisher bridges internal events to Nostr relay publication.

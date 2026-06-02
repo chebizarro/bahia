@@ -229,7 +229,7 @@ func TestEncryptedResponder_PublishEncryptedResultCorrelatesToRequest(t *testing
 	}
 }
 
-func TestEncryptedRequestTransport_HandleEventPublishesDecryptFailure(t *testing.T) {
+func TestContextVMTransport_InvalidGiftWrapDropsWithoutResponse(t *testing.T) {
 	publisher := &mockEncryptedPublisher{}
 	responder := newResponder(t, publisher)
 	requesterPubkey, err := nostr.GetPublicKey(testRequesterKey)
@@ -240,7 +240,7 @@ func TestEncryptedRequestTransport_HandleEventPublishesDecryptFailure(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	event := &nostr.Event{Kind: KindEncryptedRequest, CreatedAt: nostr.Now(), Tags: nostr.Tags{{"p", servicePubkey}, {EncryptedRequestRoutingTag, EncryptedRequestWireVersion}}, Content: "not-valid-nip44"}
+	event := &nostr.Event{Kind: KindContextVMGiftWrap, CreatedAt: nostr.Now(), Tags: nostr.Tags{{"p", servicePubkey}}, Content: "not-valid-nip44"}
 	if err := event.Sign(testRequesterKey); err != nil {
 		t.Fatal(err)
 	}
@@ -248,16 +248,12 @@ func TestEncryptedRequestTransport_HandleEventPublishesDecryptFailure(t *testing
 
 	transport.HandleEvent(context.Background(), event)
 
-	if len(publisher.events) != 1 {
-		t.Fatalf("expected encrypted error result, got %d events", len(publisher.events))
-	}
-	envelope := decryptResultEnvelope(t, publisher.events[0], testRequesterKey)
-	if envelope.Status != "error" || envelope.Error == nil || envelope.Error.Code != "decrypt_failed" {
-		t.Fatalf("unexpected error envelope: %+v", envelope)
+	if len(publisher.events) != 0 {
+		t.Fatalf("invalid ContextVM gift wraps should be dropped without response, got %d events", len(publisher.events))
 	}
 }
 
-func TestEncryptedRequestTransport_HandleEventRejectsInvalidTimestamp(t *testing.T) {
+func TestContextVMTransport_RejectsInvalidTimestamp(t *testing.T) {
 	publisher := &mockEncryptedPublisher{}
 	responder := newResponder(t, publisher)
 	requesterPubkey, err := nostr.GetPublicKey(testRequesterKey)
@@ -265,13 +261,13 @@ func TestEncryptedRequestTransport_HandleEventRejectsInvalidTimestamp(t *testing
 		t.Fatal(err)
 	}
 	called := false
-	event := makeEncryptedRequestEvent(t, testRequesterKey, EncryptedRequestEnvelope{Version: EncryptedRequestWireVersion, Operation: "orgs.list", RequesterPubkey: requesterPubkey})
+	event := makeContextVMEvent(t, testRequesterKey, `{"jsonrpc":"2.0","id":"orgs-1","method":"orgs/list"}`)
 	event.CreatedAt = nostr.Timestamp(time.Now().Add(nostrpool.InboundEventMaxFutureSkew + time.Minute).Unix())
 	if err := event.Sign(testRequesterKey); err != nil {
 		t.Fatal(err)
 	}
 	transport := NewEncryptedRequestTransport(nil, responder, []string{requesterPubkey}, zap.NewNop())
-	transport.RegisterHandler("orgs.list", func(context.Context, EncryptedRequest) (any, error) {
+	transport.RegisterContextVMHandler("orgs/list", func(context.Context, ContextVMRequest) (any, error) {
 		called = true
 		return map[string]any{"orgs": []any{}}, nil
 	})
@@ -282,15 +278,15 @@ func TestEncryptedRequestTransport_HandleEventRejectsInvalidTimestamp(t *testing
 		t.Fatalf("invalid timestamp request should not reach handler")
 	}
 	if len(publisher.events) != 0 {
-		t.Fatalf("invalid trust-boundary events should be dropped without encrypted result, got %d", len(publisher.events))
+		t.Fatalf("invalid trust-boundary events should be dropped without ContextVM response, got %d", len(publisher.events))
 	}
 }
 
-func TestEncryptedRequestTransport_HandleEventIgnoresUnroutedEncryptedKind(t *testing.T) {
+func TestContextVMTransport_IgnoresUnroutedMessage(t *testing.T) {
 	publisher := &mockEncryptedPublisher{}
 	responder := newResponder(t, publisher)
-	event := makeEncryptedRequestEvent(t, testRequesterKey, EncryptedRequestEnvelope{Version: EncryptedRequestWireVersion, Operation: "notifications.list"})
-	event.Tags = nostr.Tags{{"p", "c" + event.PubKey[1:]}, {EncryptedRequestRoutingTag, EncryptedRequestWireVersion}}
+	event := makeContextVMEvent(t, testRequesterKey, `{"jsonrpc":"2.0","id":"notifications-1","method":"notifications/list"}`)
+	event.Tags = nostr.Tags{{"p", "c" + event.PubKey[1:]}}
 	if err := event.Sign(testRequesterKey); err != nil {
 		t.Fatal(err)
 	}
@@ -299,11 +295,11 @@ func TestEncryptedRequestTransport_HandleEventIgnoresUnroutedEncryptedKind(t *te
 	transport.HandleEvent(context.Background(), event)
 
 	if len(publisher.events) != 0 {
-		t.Fatalf("unrouted encrypted traffic should be ignored, got %d published events", len(publisher.events))
+		t.Fatalf("unrouted ContextVM traffic should be ignored, got %d published events", len(publisher.events))
 	}
 }
 
-func TestEncryptedRequestTransport_HandleEventRejectsUnauthorizedRequester(t *testing.T) {
+func TestContextVMTransport_RejectsUnauthorizedRequester(t *testing.T) {
 	publisher := &mockEncryptedPublisher{}
 	responder := newResponder(t, publisher)
 	requesterPubkey, err := nostr.GetPublicKey(testRequesterKey)
@@ -315,9 +311,9 @@ func TestEncryptedRequestTransport_HandleEventRejectsUnauthorizedRequester(t *te
 		t.Fatal(err)
 	}
 	called := false
-	event := makeEncryptedRequestEvent(t, testRequesterKey, EncryptedRequestEnvelope{Version: EncryptedRequestWireVersion, Operation: "notifications.list", RequesterPubkey: requesterPubkey})
+	event := makeContextVMEvent(t, testRequesterKey, `{"jsonrpc":"2.0","id":"notifications-1","method":"notifications/list"}`)
 	transport := NewEncryptedRequestTransport(nil, responder, []string{otherPubkey}, zap.NewNop())
-	transport.RegisterHandler("notifications.list", func(context.Context, EncryptedRequest) (any, error) {
+	transport.RegisterContextVMHandler("notifications/list", func(context.Context, ContextVMRequest) (any, error) {
 		called = true
 		return map[string]any{"ok": true}, nil
 	})
@@ -327,55 +323,58 @@ func TestEncryptedRequestTransport_HandleEventRejectsUnauthorizedRequester(t *te
 	if called {
 		t.Fatalf("unauthorized requester should not reach handler")
 	}
-	if len(publisher.events) != 1 {
-		t.Fatalf("expected encrypted unauthorized result, got %d events", len(publisher.events))
+	if event.PubKey != requesterPubkey {
+		t.Fatalf("event pubkey = %s, want %s", event.PubKey, requesterPubkey)
 	}
-	envelope := decryptResultEnvelope(t, publisher.events[0], testRequesterKey)
-	if envelope.Status != "error" || envelope.Error == nil || envelope.Error.Code != "unauthorized" {
-		t.Fatalf("unexpected unauthorized envelope: %+v", envelope)
+	if len(publisher.events) != 1 {
+		t.Fatalf("expected ContextVM unauthorized result, got %d events", len(publisher.events))
+	}
+	response := contextVMResponse(t, publisher.events[0])
+	if response.Error == nil || response.Error.Code != -32001 {
+		t.Fatalf("unexpected unauthorized response: %+v", response)
 	}
 }
 
-func TestEncryptedRequestTransport_HandleEventPublishesHandlerFailure(t *testing.T) {
+func TestContextVMTransport_PublishesHandlerFailure(t *testing.T) {
 	publisher := &mockEncryptedPublisher{}
 	responder := newResponder(t, publisher)
 	requesterPubkey, err := nostr.GetPublicKey(testRequesterKey)
 	if err != nil {
 		t.Fatal(err)
 	}
-	event := makeEncryptedRequestEvent(t, testRequesterKey, EncryptedRequestEnvelope{Version: EncryptedRequestWireVersion, Operation: EncryptedOperationNotificationChannelsCreate, RequesterPubkey: requesterPubkey, Payload: json.RawMessage(`{"name":"Ops Webhook"}`)})
+	event := makeContextVMEvent(t, testRequesterKey, `{"jsonrpc":"2.0","id":"create-1","method":"notifications.channels.create","params":{"name":"Ops Webhook"}}`)
 	transport := NewEncryptedRequestTransport(nil, responder, []string{requesterPubkey}, zap.NewNop())
-	transport.RegisterHandler(EncryptedOperationNotificationChannelsCreate, func(context.Context, EncryptedRequest) (any, error) {
+	transport.RegisterContextVMHandler(EncryptedOperationNotificationChannelsCreate, func(context.Context, ContextVMRequest) (any, error) {
 		return nil, fmt.Errorf("failed to create notification channel")
 	})
 
 	transport.HandleEvent(context.Background(), event)
 
 	if len(publisher.events) != 1 {
-		t.Fatalf("expected encrypted handler error result, got %d events", len(publisher.events))
+		t.Fatalf("expected ContextVM handler error result, got %d events", len(publisher.events))
 	}
 	result := publisher.events[0]
-	if result.Kind != KindEncryptedResult || !hasTag(result.Tags, "e", event.ID) || !hasTag(result.Tags, "p", event.PubKey) {
+	if result.Kind != KindContextVMMessage || !hasTag(result.Tags, "e", event.ID) || !hasTag(result.Tags, "p", event.PubKey) {
 		t.Fatalf("unexpected result event: kind=%d tags=%#v", result.Kind, result.Tags)
 	}
-	envelope := decryptResultEnvelope(t, result, testRequesterKey)
-	if envelope.Status != "error" || envelope.Error == nil || envelope.Error.Code != "handler_failed" || envelope.Error.Message != "failed to create notification channel" {
-		t.Fatalf("unexpected handler failure envelope: %+v", envelope)
+	response := contextVMResponse(t, result)
+	if string(response.ID) != `"create-1"` || response.Error == nil || response.Error.Code != -32000 || response.Error.Message != "failed to create notification channel" {
+		t.Fatalf("unexpected handler failure response: %+v", response)
 	}
 }
 
-func TestEncryptedRequestTransport_HandleEventDispatchesAuthorizedOperation(t *testing.T) {
+func TestContextVMTransport_DispatchesAuthorizedOperation(t *testing.T) {
 	publisher := &mockEncryptedPublisher{}
 	responder := newResponder(t, publisher)
 	requesterPubkey, err := nostr.GetPublicKey(testRequesterKey)
 	if err != nil {
 		t.Fatal(err)
 	}
-	event := makeEncryptedRequestEvent(t, testRequesterKey, EncryptedRequestEnvelope{Version: EncryptedRequestWireVersion, Operation: "payments.history", RequesterPubkey: requesterPubkey, Payload: json.RawMessage(`{"limit":10}`)})
+	event := makeContextVMEvent(t, testRequesterKey, `{"jsonrpc":"2.0","id":"payments-1","method":"payments/history","params":{"limit":10}}`)
 	transport := NewEncryptedRequestTransport(nil, responder, []string{requesterPubkey}, zap.NewNop())
-	transport.RegisterHandler("payments.history", func(_ context.Context, request EncryptedRequest) (any, error) {
-		if string(request.Envelope.Payload) != `{"limit":10}` {
-			t.Fatalf("handler payload = %s", request.Envelope.Payload)
+	transport.RegisterContextVMHandler("payments/history", func(_ context.Context, request ContextVMRequest) (any, error) {
+		if string(request.RPC.Params) != `{"limit":10}` {
+			t.Fatalf("handler payload = %s", request.RPC.Params)
 		}
 		return map[string]any{"records": []any{}}, nil
 	})
@@ -383,11 +382,11 @@ func TestEncryptedRequestTransport_HandleEventDispatchesAuthorizedOperation(t *t
 	transport.HandleEvent(context.Background(), event)
 
 	if len(publisher.events) != 1 {
-		t.Fatalf("expected encrypted success result, got %d events", len(publisher.events))
+		t.Fatalf("expected ContextVM success result, got %d events", len(publisher.events))
 	}
-	envelope := decryptResultEnvelope(t, publisher.events[0], testRequesterKey)
-	if envelope.Status != "ok" || envelope.RequestEventID != event.ID {
-		t.Fatalf("unexpected success envelope: %+v", envelope)
+	response := contextVMResponse(t, publisher.events[0])
+	if response.Error != nil || string(response.ID) != `"payments-1"` {
+		t.Fatalf("unexpected success response: %+v", response)
 	}
 }
 

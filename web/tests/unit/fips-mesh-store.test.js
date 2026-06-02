@@ -42,7 +42,7 @@ vi.mock('../../src/lib/nostr/client.js', async () => {
   };
 });
 
-function event({ id, kind = 31976, pubkey = 'b'.repeat(64), created_at = 100, tags = [], content = {} }) {
+function event({ id, kind = 30900, pubkey = 'b'.repeat(64), created_at = 100, tags = [], content = {} }) {
   return {
     id,
     kind,
@@ -57,7 +57,7 @@ function meshEndpoint(overrides = {}) {
   return event({
     id: overrides.id || 'mesh-endpoint-1',
     created_at: overrides.created_at || 100,
-    tags: overrides.tags || [['d', 'endpoint:mesh:worker-a:mesh'], ['family', 'mesh'], ['mesh', 'fips'], ['npub', 'worker-a'], ['dns', 'worker-a.mesh.example'], ['addr', 'fd00::1'], ['health', 'healthy']],
+    tags: overrides.tags || [['domain', 'dns'], ['schema', 'bahia.state.dns-endpoint.v1'], ['d', 'endpoint:mesh:worker-a:mesh'], ['family', 'mesh'], ['mesh', 'fips'], ['npub', 'worker-a'], ['dns', 'worker-a.mesh.example'], ['addr', 'fd00::1'], ['health', 'healthy']],
     content: {
       family: 'mesh',
       worker_pubkey: 'worker-a',
@@ -99,9 +99,9 @@ describe('FIPS mesh store', () => {
     store.fipsMeshState.servicePubkey = 'b'.repeat(64);
 
     expect(store.fipsMeshReadModelFilters()).toEqual([
-      expect.objectContaining({ kinds: [31976], '#family': ['mesh'], '#mesh': ['fips'], authors: ['b'.repeat(64)], limit: 1000 }),
-      expect.objectContaining({ kinds: [31976], '#family': ['worker'], '#mesh': ['fips'], authors: ['b'.repeat(64)], limit: 1000 }),
-      expect.objectContaining({ kinds: [32000], authors: ['b'.repeat(64)], limit: 1000 })
+      expect.objectContaining({ kinds: [30900], '#domain': ['dns'], '#schema': ['bahia.state.dns-endpoint.v1'], '#family': ['mesh'], '#mesh': ['fips'], authors: ['b'.repeat(64)], limit: 1000 }),
+      expect.objectContaining({ kinds: [30900], '#domain': ['dns'], '#schema': ['bahia.state.dns-endpoint.v1'], '#family': ['worker'], '#mesh': ['fips'], authors: ['b'.repeat(64)], limit: 1000 }),
+      expect.objectContaining({ kinds: [30900], '#domain': ['worker'], '#schema': ['bahia.state.worker.v1'], authors: ['b'.repeat(64)], limit: 1000 })
     ]);
   });
 
@@ -115,7 +115,7 @@ describe('FIPS mesh store', () => {
     expect(nostrMock.setRelays).toHaveBeenCalledWith(['ws://localhost:10547/relay'], false);
     expect(nostrMock.connect).toHaveBeenCalledWith(['ws://localhost:10547/relay'], { force: true });
     expect(nostrMock.queryUntilEose).toHaveBeenCalledWith(expect.arrayContaining([
-      expect.objectContaining({ kinds: [31976], '#family': ['mesh'], '#mesh': ['fips'] })
+      expect.objectContaining({ kinds: [30900], '#domain': ['dns'], '#schema': ['bahia.state.dns-endpoint.v1'], '#family': ['mesh'], '#mesh': ['fips'] })
     ]));
     expect(nostrMock.subscribe).toHaveBeenCalledWith(expect.any(Array), expect.objectContaining({
       onEvent: expect.any(Function),
@@ -159,7 +159,7 @@ describe('FIPS mesh store', () => {
     const tombstone = meshEndpoint({
       id: 'deleted',
       created_at: 130,
-      tags: [['d', 'endpoint:mesh:worker-a:mesh'], ['family', 'mesh'], ['mesh', 'fips'], ['deleted', 'true']],
+      tags: [['domain', 'dns'], ['schema', 'bahia.state.dns-endpoint.v1'], ['d', 'endpoint:mesh:worker-a:mesh'], ['family', 'mesh'], ['mesh', 'fips'], ['deleted', 'true']],
       content: { deleted: true, coordinate: 'endpoint:mesh:worker-a:mesh' }
     });
     const lateReplay = meshEndpoint({ id: 'late-replay', created_at: 120, content: { fqdn: 'late.mesh.example' } });
@@ -175,7 +175,7 @@ describe('FIPS mesh store', () => {
   it('filters non-mesh DNS endpoint read models locally after relay delivery', () => {
     const serviceEndpoint = event({
       id: 'service-endpoint',
-      tags: [['d', 'endpoint:service:api:prod'], ['family', 'service'], ['dns', 'api.example']],
+      tags: [['domain', 'dns'], ['schema', 'bahia.state.dns-endpoint.v1'], ['d', 'endpoint:service:api:prod'], ['family', 'service'], ['dns', 'api.example']],
       content: { family: 'service', fqdn: 'api.example', address: '203.0.113.10', source: 'service_state' }
     });
 
@@ -186,9 +186,9 @@ describe('FIPS mesh store', () => {
   it('merges worker state overlay fields with DNS/FIPS endpoint state', () => {
     const worker = event({
       id: 'worker-state',
-      kind: 32000,
+      kind: 30900,
       created_at: 100,
-      tags: [['d', 'worker-a'], ['worker', 'worker-a'], ['status', 'online']],
+      tags: [['domain', 'worker'], ['schema', 'bahia.state.worker.v1'], ['d', 'worker-a'], ['worker', 'worker-a'], ['status', 'online']],
       content: {
         pubkey: 'worker-a',
         name: 'Worker A',

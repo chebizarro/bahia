@@ -296,7 +296,7 @@
         <span>{zones.length} total</span>
       </div>
       {#if zones.length === 0 && !dnsState.error.subscription}
-        <div class="empty-card"><h3>No DNS zones projected yet</h3><p>Zones will appear after Kind 31975 DNS zone events are projected.</p></div>
+        <div class="empty-card"><h3>No DNS zones projected yet</h3><p>Zones will appear after canonical DNS zone state events are projected.</p></div>
       {:else}
         <div class="table-wrap">
           <table>
@@ -331,7 +331,7 @@
       </form>
 
       {#if endpoints.length === 0 && !dnsState.error.subscription}
-        <div class="empty-card"><h3>No DNS endpoints projected yet</h3><p>Catalog endpoints will appear after Kind 31976 DNS endpoint events are projected.</p></div>
+        <div class="empty-card"><h3>No DNS endpoints projected yet</h3><p>Catalog endpoints will appear after canonical DNS endpoint state events are projected.</p></div>
       {:else}
         <div class="endpoint-layout">
           <div class="table-wrap">
@@ -386,7 +386,7 @@
     <section class="panel" aria-label="DNS policies">
       <div class="panel-header"><h2>Policies</h2><span>{policies.length} active</span></div>
       {#if policies.length === 0 && !dnsState.error.subscription}
-        <div class="empty-card"><h3>No DNS policies projected yet</h3><p>Kind 31977 DNS policies will appear here after relay projection.</p></div>
+        <div class="empty-card"><h3>No DNS policies projected yet</h3><p>Canonical DNS policy state will appear here after relay projection.</p></div>
       {:else}
         <div class="policy-grid">
           {#each policies as policy (valueOf(policy, ['id', 'name', 'd'], JSON.stringify(policy)))}

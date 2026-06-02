@@ -180,7 +180,7 @@ func TestWorkerPolicyApplyHandlerUpdatesEnvironmentPolicy(t *testing.T) {
 	if labels["role"] != "inference" {
 		t.Fatalf("label selector not persisted: %#v", policy)
 	}
-	assertPublishedKind(t, capture.events, KindEnvironmentRegistry)
+	assertPublishedKind(t, capture.events, KindCASControlState)
 	result := lastPublishedKind(t, capture.events, KindWorkerResult)
 	if tagValueNostr(result.Tags, "environment") != envID.String() || tagValueNostr(result.Tags, "command") != WorkerPolicyApplyRequest {
 		t.Fatalf("unexpected policy result tags: %#v", result.Tags)

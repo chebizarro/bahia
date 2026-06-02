@@ -53,7 +53,7 @@ function event({ id, kind, pubkey, created_at, tags = [], content = {} }) {
 
 describe('assistant store', () => {
   let store;
-  let KINDS;
+  let ASSISTANT_KINDS;
   let liveHandlers;
 
   beforeEach(async () => {
@@ -70,7 +70,7 @@ describe('assistant store', () => {
       return vi.fn();
     });
 
-    ({ KINDS } = await import('../../../src/lib/nostr/client.js'));
+    ({ ASSISTANT_KINDS } = await import('../../../src/lib/nostr/client.js'));
     store = await import('../../../src/lib/stores/assistant.svelte.js');
     store.resetAssistantStore();
   });
@@ -92,7 +92,7 @@ describe('assistant store', () => {
     nostrMock.queryUntilEose.mockResolvedValueOnce([
       event({
         id: 'session-event',
-        kind: KINDS.ASSISTANT_SESSION,
+        kind: ASSISTANT_KINDS.SESSION,
         pubkey: service,
         created_at: 100,
         tags: [['d', sessionId], ['session', sessionId], ['p', operator, '', 'operator'], ['agent', 'assistant-agent'], ['status', 'awaiting_approval']],
@@ -108,7 +108,7 @@ describe('assistant store', () => {
       }),
       event({
         id: 'status-planned',
-        kind: KINDS.ASSISTANT_STATUS,
+        kind: ASSISTANT_KINDS.STATUS,
         pubkey: service,
         created_at: 110,
         tags: [['session', sessionId], ['e', requestId, '', 'reply'], ['status', 'planned'], ['plan-hash', planHash]],
@@ -116,7 +116,7 @@ describe('assistant store', () => {
       }),
       event({
         id: 'result-blocked',
-        kind: KINDS.ASSISTANT_RESULT,
+        kind: ASSISTANT_KINDS.RESULT,
         pubkey: service,
         created_at: 120,
         tags: [['session', sessionId], ['e', requestId, '', 'reply'], ['status', 'blocked'], ['downstream-request', 'downstream-1']],
@@ -145,7 +145,7 @@ describe('assistant store', () => {
     nostrMock.queryUntilEose.mockResolvedValueOnce([
       event({
         id: 'session-event',
-        kind: KINDS.ASSISTANT_SESSION,
+        kind: ASSISTANT_KINDS.SESSION,
         pubkey: service,
         created_at: 100,
         tags: [['d', sessionId], ['session', sessionId], ['p', operator, '', 'operator'], ['status', 'executing']],
@@ -161,7 +161,7 @@ describe('assistant store', () => {
 
     liveHandlers.onEvent(event({
       id: 'status-executing',
-      kind: KINDS.ASSISTANT_STATUS,
+      kind: ASSISTANT_KINDS.STATUS,
       pubkey: service,
       created_at: 130,
       tags: [['session', sessionId], ['status', 'executing'], ['downstream-request', 'downstream-live']],

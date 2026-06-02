@@ -2,7 +2,6 @@ package controlplane
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -88,27 +87,27 @@ type WorkerCommandReceipt struct {
 }
 
 func (p *WorkerCommandPublisher) PublishWorkerCordonRequest(ctx context.Context, cmd WorkerLifecycleCommand) (*WorkerCommandReceipt, error) {
-	return p.publishLifecycle(ctx, KindWorkerCordonRequest, WorkerCommandCordon, "worker-cordon", cmd)
+	return p.publishLifecycle(ctx, ContextVMMethodWorkerCordon, WorkerCommandCordon, "worker-cordon", cmd)
 }
 
 func (p *WorkerCommandPublisher) PublishWorkerUncordonRequest(ctx context.Context, cmd WorkerLifecycleCommand) (*WorkerCommandReceipt, error) {
-	return p.publishLifecycle(ctx, KindWorkerUncordonRequest, WorkerCommandUncordon, "worker-uncordon", cmd)
+	return p.publishLifecycle(ctx, "worker/uncordon", WorkerCommandUncordon, "worker-uncordon", cmd)
 }
 
 func (p *WorkerCommandPublisher) PublishWorkerDrainRequest(ctx context.Context, cmd WorkerLifecycleCommand) (*WorkerCommandReceipt, error) {
-	return p.publishLifecycle(ctx, KindWorkerDrainRequest, WorkerCommandDrain, "worker-drain", cmd)
+	return p.publishLifecycle(ctx, "worker/drain", WorkerCommandDrain, "worker-drain", cmd)
 }
 
 func (p *WorkerCommandPublisher) PublishWorkerUndrainRequest(ctx context.Context, cmd WorkerLifecycleCommand) (*WorkerCommandReceipt, error) {
-	return p.publishLifecycle(ctx, KindWorkerUndrainRequest, WorkerCommandUndrain, "worker-undrain", cmd)
+	return p.publishLifecycle(ctx, "worker/undrain", WorkerCommandUndrain, "worker-undrain", cmd)
 }
 
 func (p *WorkerCommandPublisher) PublishWorkerMaintenanceEnterRequest(ctx context.Context, cmd WorkerLifecycleCommand) (*WorkerCommandReceipt, error) {
-	return p.publishLifecycle(ctx, KindWorkerMaintenanceEnter, WorkerCommandMaintenanceEnter, "worker-maintenance-enter", cmd)
+	return p.publishLifecycle(ctx, "worker/maintenance-enter", WorkerCommandMaintenanceEnter, "worker-maintenance-enter", cmd)
 }
 
 func (p *WorkerCommandPublisher) PublishWorkerMaintenanceExitRequest(ctx context.Context, cmd WorkerLifecycleCommand) (*WorkerCommandReceipt, error) {
-	return p.publishLifecycle(ctx, KindWorkerMaintenanceExit, WorkerCommandMaintenanceExit, "worker-maintenance-exit", cmd)
+	return p.publishLifecycle(ctx, "worker/maintenance-exit", WorkerCommandMaintenanceExit, "worker-maintenance-exit", cmd)
 }
 
 func (p *WorkerCommandPublisher) PublishWorkerLabelsUpdateRequest(ctx context.Context, cmd WorkerLabelsUpdateCommand) (*WorkerCommandReceipt, error) {
@@ -119,7 +118,7 @@ func (p *WorkerCommandPublisher) PublishWorkerLabelsUpdateRequest(ctx context.Co
 		"idempotency_key":   strings.TrimSpace(cmd.IdempotencyKey),
 		"labels":            cmd.Labels,
 	}
-	return p.publish(ctx, KindWorkerLabelsUpdate, WorkerCommandLabelsUpdate, "worker-labels-update", cmd.WorkerPubKey, cmd.IdempotencyKey, cmd.AgentID, content)
+	return p.publish(ctx, "worker/labels-update", WorkerCommandLabelsUpdate, "worker-labels-update", cmd.WorkerPubKey, cmd.IdempotencyKey, cmd.AgentID, content)
 }
 
 func (p *WorkerCommandPublisher) PublishWorkerPolicyApplyRequest(ctx context.Context, cmd WorkerPolicyApplyCommand) (*WorkerCommandReceipt, error) {
@@ -130,7 +129,7 @@ func (p *WorkerCommandPublisher) PublishWorkerPolicyApplyRequest(ctx context.Con
 		"operator_metadata": cmd.OperatorMetadata,
 		"idempotency_key":   strings.TrimSpace(cmd.IdempotencyKey),
 	}
-	return p.publishPlacement(ctx, KindWorkerPolicyApplyRequest, WorkerPolicyApplyRequest, "worker-policy-apply", cmd.EnvironmentID, "", "", "", cmd.IdempotencyKey, cmd.AgentID, content)
+	return p.publishPlacement(ctx, "worker/policy-apply", WorkerPolicyApplyRequest, "worker-policy-apply", cmd.EnvironmentID, "", "", "", cmd.IdempotencyKey, cmd.AgentID, content)
 }
 
 func (p *WorkerCommandPublisher) PublishWorkloadPinRequest(ctx context.Context, cmd WorkloadPinCommand) (*WorkerCommandReceipt, error) {
@@ -143,24 +142,24 @@ func (p *WorkerCommandPublisher) PublishWorkloadPinRequest(ctx context.Context, 
 		"operator_metadata": cmd.OperatorMetadata,
 		"idempotency_key":   strings.TrimSpace(cmd.IdempotencyKey),
 	}
-	return p.publishPlacement(ctx, KindWorkloadPinRequest, WorkloadPinRequest, "workload-pin", cmd.EnvironmentID, cmd.WorkloadID, cmd.WorkloadKind, cmd.WorkerPubKey, cmd.IdempotencyKey, cmd.AgentID, content)
+	return p.publishPlacement(ctx, "worker/workload-pin", WorkloadPinRequest, "workload-pin", cmd.EnvironmentID, cmd.WorkloadID, cmd.WorkloadKind, cmd.WorkerPubKey, cmd.IdempotencyKey, cmd.AgentID, content)
 }
 
-func (p *WorkerCommandPublisher) publishLifecycle(ctx context.Context, kind int, command, defaultPrefix string, cmd WorkerLifecycleCommand) (*WorkerCommandReceipt, error) {
+func (p *WorkerCommandPublisher) publishLifecycle(ctx context.Context, method string, command, defaultPrefix string, cmd WorkerLifecycleCommand) (*WorkerCommandReceipt, error) {
 	content := map[string]any{
 		"worker_pubkey":     strings.TrimSpace(cmd.WorkerPubKey),
 		"reason":            cmd.Reason,
 		"operator_metadata": cmd.OperatorMetadata,
 		"idempotency_key":   strings.TrimSpace(cmd.IdempotencyKey),
 	}
-	return p.publish(ctx, kind, command, defaultPrefix, cmd.WorkerPubKey, cmd.IdempotencyKey, cmd.AgentID, content)
+	return p.publish(ctx, method, command, defaultPrefix, cmd.WorkerPubKey, cmd.IdempotencyKey, cmd.AgentID, content)
 }
 
-func (p *WorkerCommandPublisher) publish(ctx context.Context, kind int, command, defaultPrefix, workerPubKey, dTag, agentID string, content map[string]any) (*WorkerCommandReceipt, error) {
-	return p.publishPlacement(ctx, kind, command, defaultPrefix, "", "", "", workerPubKey, dTag, agentID, content)
+func (p *WorkerCommandPublisher) publish(ctx context.Context, method string, command, defaultPrefix, workerPubKey, dTag, agentID string, content map[string]any) (*WorkerCommandReceipt, error) {
+	return p.publishPlacement(ctx, method, command, defaultPrefix, "", "", "", workerPubKey, dTag, agentID, content)
 }
 
-func (p *WorkerCommandPublisher) publishPlacement(ctx context.Context, kind int, command, defaultPrefix, environmentID, workloadID, workloadKind, workerPubKey, dTag, agentID string, content map[string]any) (*WorkerCommandReceipt, error) {
+func (p *WorkerCommandPublisher) publishPlacement(ctx context.Context, method string, command, defaultPrefix, environmentID, workloadID, workloadKind, workerPubKey, dTag, agentID string, content map[string]any) (*WorkerCommandReceipt, error) {
 	if p == nil || p.publisher == nil {
 		return nil, fmt.Errorf("worker command publisher is not configured")
 	}
@@ -179,7 +178,7 @@ func (p *WorkerCommandPublisher) publishPlacement(ctx context.Context, kind int,
 		dTag = defaultPrefix + ":" + uuid.NewString()
 		content["idempotency_key"] = dTag
 	}
-	tags := nostr.Tags{{"d", dTag}, {"command", command}}
+	tags := nostr.Tags{{"command", command}}
 	if workerPubKey != "" {
 		tags = append(tags, nostr.Tag{"worker", workerPubKey})
 	}
@@ -192,23 +191,9 @@ func (p *WorkerCommandPublisher) publishPlacement(ctx context.Context, kind int,
 	if workloadKind != "" {
 		tags = append(tags, nostr.Tag{"workload_kind", workloadKind})
 	}
-	if agentID = strings.TrimSpace(agentID); agentID != "" {
-		tags = append(tags, nostr.Tag{"agent", agentID})
-	}
-	contentJSON, err := json.Marshal(content)
+	ev, published, dTag, err := publishContextVMCommand(ctx, p.publisher, p.signer, method, dTag, agentID, tags, content, "worker command")
 	if err != nil {
-		return nil, fmt.Errorf("marshal worker command content: %w", err)
+		return nil, err
 	}
-	ev := &nostr.Event{Kind: kind, CreatedAt: nostr.Now(), Tags: tags, Content: string(contentJSON)}
-	if err := SignGoNostrEvent(ctx, p.signer, ev); err != nil {
-		return nil, fmt.Errorf("sign worker command event: %w", err)
-	}
-	published, err := p.publisher.Publish(ctx, *ev)
-	if err != nil {
-		return nil, fmt.Errorf("publish worker command event: %w", err)
-	}
-	if published == 0 {
-		return nil, fmt.Errorf("publish worker command event: no relay accepted the request")
-	}
-	return &WorkerCommandReceipt{RequestEventID: ev.ID, RequestPubkey: ev.PubKey, RequestKind: kind, StatusKind: KindWorkerStatus, ResultKind: KindWorkerResult, StateKind: KindWorkerState, DTag: dTag, PublishedRelays: published, WorkerPubKey: workerPubKey, EnvironmentID: environmentID, WorkloadID: workloadID, WorkloadKind: workloadKind, Command: command}, nil
+	return &WorkerCommandReceipt{RequestEventID: ev.ID, RequestPubkey: ev.PubKey, RequestKind: KindContextVMMessage, ResultKind: KindCASControlState, StateKind: KindCASControlState, DTag: dTag, PublishedRelays: published, WorkerPubKey: workerPubKey, EnvironmentID: environmentID, WorkloadID: workloadID, WorkloadKind: workloadKind, Command: command}, nil
 }

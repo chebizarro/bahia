@@ -1,57 +1,13 @@
 /**
- * Central source of truth for all Bahia Nostr event kinds.
- * This file is generated from internal/kinds/kinds.go - do not edit manually.
+ * Generated Bahia web Nostr event kind constants.
  *
- * Kind families:
- *   - 25910/1059/21059: ContextVM JSON-RPC intent transport
- *   - 11316-11320: ContextVM server/tool/resource/prompt announcements
- *   - 30900/4903/30315/30002/30078: canonical observable, collection, and state reads
- *   - 5xxx/6xxx/7xxx/31xxx/38xxx: legacy Bahia migration-only request/result/read-model fixtures
+ * This module mirrors internal/kinds/kinds.go for drift detection while keeping
+ * production subscription lists and facade maps scoped to canonical ContextVM,
+ * CAS/NIP, and schema-routed observables below.
  */
 
 // =============================================================================
-// ContextVM and Canonical Nostr Kinds
-// =============================================================================
-
-export const CONTEXTVM_MESSAGE = 25910;
-export const CONTEXTVM_GIFT_WRAP = 1059;
-export const CONTEXTVM_EPHEMERAL_GIFT_WRAP = 21059;
-export const CONTEXTVM_SERVER_ANNOUNCEMENT = 11316;
-export const CONTEXTVM_TOOLS_ANNOUNCEMENT = 11317;
-export const CONTEXTVM_RESOURCES_ANNOUNCEMENT = 11318;
-export const CONTEXTVM_RESOURCE_TEMPLATES_ANNOUNCEMENT = 11319;
-export const CONTEXTVM_PROMPTS_ANNOUNCEMENT = 11320;
-export const CONTEXT_VM_MESSAGE = 25910;
-export const CONTEXT_VM_GIFT_WRAP = 1059;
-export const CONTEXT_VM_EPHEMERAL_GIFT_WRAP = 21059;
-export const CONTEXT_VM_SERVER_ANNOUNCEMENT = 11316;
-export const CONTEXT_VM_TOOLS_LIST = 11317;
-export const CONTEXT_VM_RESOURCES_LIST = 11318;
-export const CONTEXT_VM_RESOURCE_TEMPLATES_LIST = 11319;
-export const CONTEXT_VM_PROMPTS_LIST = 11320;
-export const CASCADIA_CONTROLPLANE_STATE = 30900;
-export const CASCADIA_AUDIT = 4903;
-export const CAS_AUDIT = 4903;
-export const CAS_CONTROL_STATE = 30900;
-export const NIP38_STATUS = 30315;
-export const NIP51_RELAY_SET = 30002;
-export const NIP78_APP_DATA = 30078;
-
-export const CANONICAL_OBSERVABLE_KINDS = [
-  CASCADIA_CONTROLPLANE_STATE,
-  CASCADIA_AUDIT,
-  NIP38_STATUS,
-  CONTEXTVM_SERVER_ANNOUNCEMENT,
-  CONTEXTVM_TOOLS_ANNOUNCEMENT,
-  CONTEXTVM_RESOURCES_ANNOUNCEMENT,
-  CONTEXTVM_RESOURCE_TEMPLATES_ANNOUNCEMENT,
-  CONTEXTVM_PROMPTS_ANNOUNCEMENT,
-  NIP51_RELAY_SET,
-  NIP78_APP_DATA,
-];
-
-// =============================================================================
-// DNS Control-Plane Kinds (5941-5945, 6941, 7941-7945)
+// Generated canonical Bahia kind constants from internal/kinds/kinds.go
 // =============================================================================
 
 export const DNS_ZONE_CREATE_REQUEST = 5941;
@@ -59,19 +15,12 @@ export const DNS_POLICY_APPLY_REQUEST = 5942;
 export const DNS_RECORD_OVERRIDE_REQUEST = 5943;
 export const DNS_DRIFT_REMEDIATE_REQUEST = 5944;
 export const DNS_BACKEND_REGISTER_REQUEST = 5945;
-
 export const DNS_OPERATION_STATUS = 6941;
-
 export const DNS_ZONE_CREATE_RESULT = 7941;
 export const DNS_POLICY_APPLY_RESULT = 7942;
 export const DNS_RECORD_OVERRIDE_RESULT = 7943;
 export const DNS_DRIFT_REMEDIATE_RESULT = 7944;
 export const DNS_BACKEND_REGISTER_RESULT = 7945;
-
-// =============================================================================
-// Legacy Control-Plane Request Kinds (5961-5989) — migration-only fixtures
-// =============================================================================
-
 export const DEPLOY_REQUEST = 5961;
 export const ROLLBACK_REQUEST = 5962;
 export const SERVICE_ACTION = 5963;
@@ -99,22 +48,12 @@ export const POLICY_CREATE = 5986;
 export const POLICY_UPDATE = 5987;
 export const POLICY_DELETE = 5988;
 export const POLICY_EVALUATE = 5989;
-
-// =============================================================================
-// Legacy Package Control-Plane Request Kinds (5991-5996) — migration-only fixtures
-// =============================================================================
-
 export const PACKAGE_REPOSITORY_APPLY = 5991;
 export const PACKAGE_REPOSITORY_DELETE = 5992;
 export const PACKAGE_PUBLISH_INTENT = 5993;
 export const PACKAGE_PROMOTION_REQUEST = 5994;
 export const PACKAGE_YANK_REQUEST = 5995;
 export const PACKAGE_DRIFT_DETECT = 5996;
-
-// =============================================================================
-// Legacy Worker Control-Plane Request Kinds (5997-6006) — migration-only fixtures
-// =============================================================================
-
 export const WORKER_CORDON_REQUEST = 5997;
 export const WORKER_UNCORDON_REQUEST = 5998;
 export const WORKER_DRAIN_REQUEST = 5999;
@@ -125,11 +64,6 @@ export const WORKER_LABELS_UPDATE = 6003;
 export const WORKER_POLICY_APPLY_REQUEST = 6004;
 export const WORKLOAD_PIN_REQUEST = 6005;
 export const WORKER_CLEANUP_REQUEST = 6006;
-
-// =============================================================================
-// Core Control-Plane Status Kinds (6961-6997)
-// =============================================================================
-
 export const DEPLOYMENT_STATUS = 6961;
 export const SERVICE_STATUS = 6962;
 export const ACTION_STATUS = 6963;
@@ -142,11 +76,6 @@ export const BACKUP_VERIFICATION_STATUS = 6983;
 export const BACKUP_OBSERVATION = 6984;
 export const PACKAGE_STATUS = 6991;
 export const WORKER_STATUS = 6997;
-
-// =============================================================================
-// Core Control-Plane Result Kinds (7961-7997)
-// =============================================================================
-
 export const DEPLOYMENT_RESULT = 7961;
 export const ACTION_RESULT = 7962;
 export const SERVICE_CREATE_RESULT = 7963;
@@ -164,63 +93,41 @@ export const ENCRYPTED_RESULT = 7980;
 export const PACKAGE_RESULT = 7991;
 export const PACKAGE_DRIFT_EVENT = 7992;
 export const WORKER_RESULT = 7997;
-
-// =============================================================================
-// Interop Kinds (Loom, Hive-CI)
-// =============================================================================
-
+export const CAS_AUDIT = 4903;
+export const NIP38_STATUS = 30315;
+export const CAS_CONTROL_STATE = 30900;
 export const LOOM_WORKER_ADVERTISEMENT = 10100;
 export const LOOM_JOB_STATUS_UPDATE = 30100;
 export const LOOM_JOB_RESULT = 5101;
 export const LOOM_JOB_CANCELLATION = 5102;
-
 export const HIVE_CI_WORKFLOW_RUN = 5401;
 export const HIVE_CI_WORKFLOW_RESULT = 5402;
-
-// =============================================================================
-// NIP-65 and Discovery Kinds
-// =============================================================================
-
+export const CONTEXT_VM_MESSAGE = 25910;
+export const CONTEXT_VM_GIFT_WRAP = 1059;
+export const CONTEXT_VM_EPHEMERAL_GIFT_WRAP = 21059;
+export const CONTEXT_VM_SERVER_ANNOUNCEMENT = 11316;
+export const CONTEXT_VM_TOOLS_LIST = 11317;
+export const CONTEXT_VM_RESOURCES_LIST = 11318;
+export const CONTEXT_VM_RESOURCE_TEMPLATES_LIST = 11319;
+export const CONTEXT_VM_PROMPTS_LIST = 11320;
 export const NIP65_RELAY_LIST = 10002;
 export const RELAY_SET_DISCOVERY = 30002;
-
-// =============================================================================
-// Continuity Fabric Kinds (30350-30353, 31400-31404, 38430-38431)
-// =============================================================================
-
 export const HEARTBEAT_OBSERVATION = 30350;
 export const CONTINUITY_STATUS = 30351;
 export const DEGRADED_MODE_ACTIVATION = 30352;
 export const RECOVERY_PROGRESS = 30353;
-
 export const CONTINUITY_PROFILE = 31400;
 export const FAILOVER_POLICY = 31401;
 export const STANDBY_NODE_DEFINITION = 31402;
 export const REPLICATION_POLICY = 31403;
 export const RECOVERY_WORKFLOW = 31404;
-
 export const FAILOVER_REQUEST = 38430;
 export const RECOVERY_REQUEST = 38431;
-
-// =============================================================================
-// SBOM / Attestation Kinds
-// =============================================================================
-
 export const SBOM_ATTESTATION = 30078;
 export const SBOM_INDEX = 30079;
-
-// =============================================================================
-// Bahia System Kinds
-// =============================================================================
-
 export const BAHIA_READINESS_STATUS = 30360;
 export const BAHIA_IDENTITY_DEFINITION = 31410;
 export const BAHIA_REPLAY_CHECKPOINT = 31411;
-
-// =============================================================================
-// Audit Event Kinds (31000-31099)
-// =============================================================================
-
 export const BUILD_REGISTERED = 31000;
 export const ARTIFACT_REGISTERED = 31001;
 export const DEPLOYMENT_CREATED = 31002;
@@ -246,39 +153,17 @@ export const DNS_RECORD_CHANGED_AUDIT = 31021;
 export const DNS_DRIFT_DETECTED_AUDIT = 31022;
 export const DNS_ENDPOINT_REGISTERED_AUDIT = 31023;
 export const DNS_ENDPOINT_DEREGISTERED_AUDIT = 31024;
-
 export const AUDIT_MIN = 31000;
 export const AUDIT_MAX = 31099;
-
-
-// =============================================================================
-// Deprecated Legacy Command Kinds (31100-31105)
-// =============================================================================
-
 export const CMD_BUILD_REGISTER = 31100;
 export const CMD_ARTIFACT_REGISTER = 31101;
 export const CMD_INTENT_CREATE = 31102;
 export const CMD_INTENT_APPROVE = 31103;
 export const CMD_INTENT_REJECT = 31104;
 export const CMD_ROLLBACK_REQUEST = 31105;
-
-// =============================================================================
-// Nostr Signature Kind
-// =============================================================================
-
 export const NOSTR_SIGNATURE = 31200;
-
-// =============================================================================
-// Backup Attestation Kinds
-// =============================================================================
-
 export const BACKUP_RUN_ATTESTATION = 31310;
 export const BACKUP_VERIFICATION_ATTESTATION = 31311;
-
-// =============================================================================
-// Legacy Replaceable Read-Model Registry Kinds (31961-31999) — migrate reads to 30900/30078/30002
-// =============================================================================
-
 export const SERVICE_STATE = 31961;
 export const SERVICE_REGISTRY = 31962;
 export const ENVIRONMENT_REGISTRY = 31963;
@@ -293,13 +178,10 @@ export const PACKAGE_REPOSITORY_REGISTRY = 31971;
 export const PACKAGE_ARTIFACT_REGISTRY = 31972;
 export const PACKAGE_PROMOTION_REGISTRY = 31973;
 export const SYSTEM_DISCOVERY = 31974;
-
 export const DNS_ZONE_STATE = 31975;
 export const DNS_ENDPOINT_STATE = 31976;
 export const DNS_POLICY_STATE = 31977;
 export const DNS_BACKEND_STATE = 31978;
-
-// ML Read-Model Kinds (31980-31989)
 export const ML_MODEL_REGISTRY = 31980;
 export const ML_MODEL_VERSION_REGISTRY = 31981;
 export const ML_DATASET_REGISTRY = 31982;
@@ -310,11 +192,7 @@ export const ML_INFERENCE_ENDPOINT_STATE = 31986;
 export const ML_EVALUATION_EXPERIMENT_STATE = 31987;
 export const ML_ARTIFACT_PROVENANCE_GRAPH = 31988;
 export const ML_RUNTIME_CAPABILITY_PROFILE = 31989;
-
-// Assistant Session
 export const ASSISTANT_SESSION = 31990;
-
-// Backup Read-Model Kinds (31991-31999)
 export const BACKUP_DEFINITION_REGISTRY = 31991;
 export const BACKUP_POLICY_REGISTRY = 31992;
 export const BACKUP_REPOSITORY_REGISTRY = 31993;
@@ -324,35 +202,15 @@ export const BACKUP_RUN_STATE = 31996;
 export const BACKUP_VERIFICATION_STATE = 31997;
 export const BACKUP_RESTORE_STATE = 31998;
 export const BACKUP_RUNTIME_OBSERVATION_STATE = 31999;
-
-// =============================================================================
-// Worker State Kinds (32000-32003)
-// =============================================================================
-
 export const WORKER_STATE = 32000;
 export const WORKER_ASSIGNMENT_STATE = 32001;
 export const WORKER_DRAIN_STATUS = 32002;
 export const WORKER_ELIGIBILITY_PREVIEW = 32003;
-
-// =============================================================================
-// Legacy Worker State Kinds (deprecated, for mixed-version compatibility)
-// =============================================================================
-
 export const LEGACY_WORKER_STATE = 31974;
 export const LEGACY_WORKER_ASSIGNMENT_STATE = 31991;
 export const LEGACY_WORKER_DRAIN_STATUS = 31992;
 export const LEGACY_WORKER_ELIGIBILITY_PREVIEW = 31993;
-
-// =============================================================================
-// FIPS Overlay Kind
-// =============================================================================
-
 export const FIPS_OVERLAY_ADVERT = 37195;
-
-// =============================================================================
-// AI/ML Command/Result Kinds (38390-38399)
-// =============================================================================
-
 export const ML_RECIPE_RUN_REQUEST = 38390;
 export const ML_INFERENCE_DEPLOY_REQUEST = 38391;
 export const ML_INFERENCE_DEPLOYMENT_APPROVAL = 38392;
@@ -363,11 +221,6 @@ export const ML_INFERENCE_DEPLOY_RESULT = 38396;
 export const ML_INFERENCE_APPROVAL_RESULT = 38397;
 export const ML_INFERENCE_ROLLBACK_RESULT = 38398;
 export const ML_MODEL_IMPORT_RESULT = 38399;
-
-// =============================================================================
-// Backup Command/Result Kinds (38400-38419)
-// =============================================================================
-
 export const BACKUP_RUN_REQUEST = 38400;
 export const BACKUP_VERIFICATION_REQUEST = 38401;
 export const BACKUP_RESTORE_REQUEST = 38402;
@@ -388,46 +241,119 @@ export const BACKUP_POLICY_APPLY_RESULT = 38416;
 export const BACKUP_RECIPE_APPLY_RESULT = 38417;
 export const BACKUP_DEFINITION_APPLY_RESULT = 38418;
 export const BACKUP_REPOSITORY_PROBE_RESULT = 38419;
-
-// =============================================================================
-// Operator Assistant Kinds (38420-38423)
-// =============================================================================
-
 export const ASSISTANT_PROMPT_REQUEST = 38420;
 export const ASSISTANT_APPROVAL = 38421;
 export const ASSISTANT_STATUS = 38422;
 export const ASSISTANT_RESULT = 38423;
-
-// =============================================================================
-// NIP-98 HTTP Auth Kind
-// =============================================================================
-
 export const HTTP_AUTH = 27235;
+
+// Web compatibility aliases for current canonical runtime names.
+export const CONTEXTVM_MESSAGE = CONTEXT_VM_MESSAGE;
+export const CONTEXTVM_GIFT_WRAP = CONTEXT_VM_GIFT_WRAP;
+export const CONTEXTVM_EPHEMERAL_GIFT_WRAP = CONTEXT_VM_EPHEMERAL_GIFT_WRAP;
+export const CONTEXTVM_SERVER_ANNOUNCEMENT = CONTEXT_VM_SERVER_ANNOUNCEMENT;
+export const CONTEXTVM_TOOLS_ANNOUNCEMENT = CONTEXT_VM_TOOLS_LIST;
+export const CONTEXTVM_RESOURCES_ANNOUNCEMENT = CONTEXT_VM_RESOURCES_LIST;
+export const CONTEXTVM_RESOURCE_TEMPLATES_ANNOUNCEMENT = CONTEXT_VM_RESOURCE_TEMPLATES_LIST;
+export const CONTEXTVM_PROMPTS_ANNOUNCEMENT = CONTEXT_VM_PROMPTS_LIST;
+export const CASCADIA_CONTROLPLANE_STATE = CAS_CONTROL_STATE;
+export const CASCADIA_AUDIT = CAS_AUDIT;
+export const NIP51_RELAY_SET = RELAY_SET_DISCOVERY;
+export const NIP78_APP_DATA = SBOM_ATTESTATION;
+
+export const CANONICAL_OBSERVABLE_KINDS = [
+  CASCADIA_CONTROLPLANE_STATE,
+  CASCADIA_AUDIT,
+  NIP38_STATUS,
+  CONTEXTVM_SERVER_ANNOUNCEMENT,
+  CONTEXTVM_TOOLS_ANNOUNCEMENT,
+  CONTEXTVM_RESOURCES_ANNOUNCEMENT,
+  CONTEXTVM_RESOURCE_TEMPLATES_ANNOUNCEMENT,
+  CONTEXTVM_PROMPTS_ANNOUNCEMENT,
+  NIP51_RELAY_SET,
+  NIP78_APP_DATA,
+];
+
+// =============================================================================
+// Canonical Bahia CAS state schema identifiers for kind 30900
+// =============================================================================
+
+export const BAHIA_STATE_SCHEMAS = Object.freeze({
+  SERVICE_STATE: 'bahia.state.service.v1',
+  SERVICE_REGISTRY: 'bahia.registry.service.v1',
+  ENVIRONMENT_REGISTRY: 'bahia.registry.environment.v1',
+  LLM_ROUTE_REGISTRY: 'bahia.registry.llm-route.v1',
+  LLM_ROUTE_STATE: 'bahia.state.llm-route.v1',
+  ARTIFACT_REGISTRY: 'bahia.registry.artifact.v1',
+  DEPLOYMENT_INTENT_REGISTRY: 'bahia.registry.deployment-intent.v1',
+  DEPLOYMENT_RUN_REGISTRY: 'bahia.registry.deployment-run.v1',
+  BUILD_REGISTRY: 'bahia.registry.build.v1',
+  POLICY_REGISTRY: 'bahia.registry.policy.v1',
+  PACKAGE_REPOSITORY_REGISTRY: 'bahia.registry.package-repository.v1',
+  PACKAGE_ARTIFACT_REGISTRY: 'bahia.registry.package-artifact.v1',
+  PACKAGE_PROMOTION_REGISTRY: 'bahia.registry.package-promotion.v1',
+  DNS_ZONE_STATE: 'bahia.state.dns-zone.v1',
+  DNS_ENDPOINT_STATE: 'bahia.state.dns-endpoint.v1',
+  DNS_POLICY_STATE: 'bahia.state.dns-policy.v1',
+  DNS_BACKEND_STATE: 'bahia.state.dns-backend.v1',
+  ML_MODEL_REGISTRY: 'bahia.registry.ml-model.v1',
+  ML_MODEL_VERSION_REGISTRY: 'bahia.registry.ml-model-version.v1',
+  ML_DATASET_REGISTRY: 'bahia.registry.ml-dataset.v1',
+  ML_RECIPE_REGISTRY: 'bahia.registry.ml-recipe.v1',
+  ML_RECIPE_RUN_STATE: 'bahia.state.ml-recipe-run.v1',
+  ML_INFERENCE_ENDPOINT_REGISTRY: 'bahia.registry.ml-inference-endpoint.v1',
+  ML_INFERENCE_ENDPOINT_STATE: 'bahia.state.ml-inference-endpoint.v1',
+  ML_EVALUATION_EXPERIMENT_STATE: 'bahia.state.ml-evaluation.v1',
+  ML_ARTIFACT_PROVENANCE_GRAPH: 'bahia.state.ml-provenance.v1',
+  ML_RUNTIME_CAPABILITY_PROFILE: 'bahia.state.ml-runtime-capability.v1',
+  ASSISTANT_SESSION: 'bahia.state.assistant-session.v1',
+  BACKUP_DEFINITION_REGISTRY: 'bahia.registry.backup-definition.v1',
+  BACKUP_POLICY_REGISTRY: 'bahia.registry.backup-policy.v1',
+  BACKUP_REPOSITORY_REGISTRY: 'bahia.registry.backup-repository.v1',
+  BACKUP_RETENTION_REGISTRY: 'bahia.registry.backup-retention.v1',
+  BACKUP_RECIPE_REGISTRY: 'bahia.registry.backup-recipe.v1',
+  BACKUP_RUN_STATE: 'bahia.state.backup-run.v1',
+  BACKUP_VERIFICATION_STATE: 'bahia.state.backup-verification.v1',
+  BACKUP_RESTORE_STATE: 'bahia.state.backup-restore.v1',
+  BACKUP_RUNTIME_OBSERVATION_STATE: 'bahia.state.backup-observation.v1',
+  WORKER_STATE: 'bahia.state.worker.v1',
+  WORKER_ASSIGNMENT_STATE: 'bahia.state.worker-assignment.v1',
+  WORKER_DRAIN_STATUS: 'bahia.state.worker-drain.v1',
+  WORKER_ELIGIBILITY_PREVIEW: 'bahia.state.worker-eligibility.v1',
+  CONTINUITY_PROFILE: 'bahia.state.continuity-profile.v1',
+  FAILOVER_POLICY: 'bahia.state.failover-policy.v1',
+  STANDBY_NODE_DEFINITION: 'bahia.state.standby-node.v1',
+  REPLICATION_POLICY: 'bahia.state.replication-policy.v1',
+  RECOVERY_WORKFLOW: 'bahia.state.recovery-workflow.v1',
+  BAHIA_IDENTITY_DEFINITION: 'bahia.identity.v1',
+  BAHIA_REPLAY_CHECKPOINT: 'bahia.replay-checkpoint.v1'
+});
+
+export const DNS_STATE_SCHEMAS = Object.freeze({
+  ZONE: BAHIA_STATE_SCHEMAS.DNS_ZONE_STATE,
+  ENDPOINT: BAHIA_STATE_SCHEMAS.DNS_ENDPOINT_STATE,
+  POLICY: BAHIA_STATE_SCHEMAS.DNS_POLICY_STATE,
+  BACKEND: BAHIA_STATE_SCHEMAS.DNS_BACKEND_STATE
+});
+
+export const BAHIA_SYSTEM_DISCOVERY_SCHEMA = 'bahia.system-discovery.v1';
+export const BAHIA_RELAY_SET_SCHEMA = 'bahia.relay-set.v1';
+export const BAHIA_SBOM_ATTESTATION_SCHEMA = 'bahia.sbom.attestation.v1';
+export const BAHIA_SBOM_INDEX_SCHEMA = 'bahia.sbom.index.v1';
+export const BAHIA_AUDIT_SCHEMA = 'bahia.audit.v1';
 
 // =============================================================================
 // Helper Functions
 // =============================================================================
 
-/**
- * Returns true if the kind is a Bahia request kind that requires an authorized
- * operator pubkey.
- */
 export function isRequestKind(kind) {
   return kind === CONTEXTVM_MESSAGE || kind === CONTEXTVM_GIFT_WRAP || kind === CONTEXTVM_EPHEMERAL_GIFT_WRAP;
 }
 
-/**
- * Returns true if the kind is a Bahia projection kind that should only be
- * published by the service pubkey.
- */
 export function isBahiaProjectionKind(kind) {
   return CANONICAL_OBSERVABLE_KINDS.includes(kind);
 }
 
-/**
- * Returns true if the kind is an open interop kind that does not require
- * authorization.
- */
 export function isOpenInteropKind(kind) {
   switch (kind) {
     case LOOM_WORKER_ADVERTISEMENT:
@@ -442,9 +368,6 @@ export function isOpenInteropKind(kind) {
   }
 }
 
-/**
- * Returns true if the kind can be read from the sidecar relay.
- */
 export function isReadableKind(kind) {
   return isBahiaProjectionKind(kind) || isOpenInteropKind(kind);
 }
@@ -453,41 +376,6 @@ export function isReadableKind(kind) {
 // Kind Lists for Subscriptions
 // =============================================================================
 
-/**
- * All DNS request kinds.
- */
-export const DNS_REQUEST_KINDS = [
-  DNS_ZONE_CREATE_REQUEST,
-  DNS_POLICY_APPLY_REQUEST,
-  DNS_RECORD_OVERRIDE_REQUEST,
-  DNS_DRIFT_REMEDIATE_REQUEST,
-  DNS_BACKEND_REGISTER_REQUEST,
-];
-
-/**
- * All DNS result kinds.
- */
-export const DNS_RESULT_KINDS = [
-  DNS_ZONE_CREATE_RESULT,
-  DNS_POLICY_APPLY_RESULT,
-  DNS_RECORD_OVERRIDE_RESULT,
-  DNS_DRIFT_REMEDIATE_RESULT,
-  DNS_BACKEND_REGISTER_RESULT,
-];
-
-/**
- * All DNS read-model kinds.
- */
-export const DNS_READ_MODEL_KINDS = [
-  DNS_ZONE_STATE,
-  DNS_ENDPOINT_STATE,
-  DNS_POLICY_STATE,
-  DNS_BACKEND_STATE,
-];
-
-/**
- * All Bahia read-model kinds for subscriptions.
- */
 export const BAHIA_CANONICAL_READ_KINDS = CANONICAL_OBSERVABLE_KINDS;
 
 export const BAHIA_READ_MODEL_KINDS = [
@@ -501,29 +389,9 @@ export const BAHIA_READ_MODEL_KINDS = [
   NIP78_APP_DATA,
 ];
 
-/**
- * All Bahia status kinds for subscriptions.
- */
-export const BAHIA_STATUS_KINDS = [
-  NIP38_STATUS,
-];
-
-/**
- * All SBOM kinds.
- */
-export const BAHIA_SBOM_KINDS = [
-  SBOM_ATTESTATION,
-  SBOM_INDEX,
-];
-
-/**
- * All audit kinds (31000-31099).
- */
+export const BAHIA_STATUS_KINDS = [NIP38_STATUS];
+export const BAHIA_SBOM_KINDS = [NIP78_APP_DATA];
 export const BAHIA_AUDIT_KINDS = [CASCADIA_AUDIT];
-
-/**
- * All control-plane kinds for subscriptions.
- */
 export const BAHIA_CONTROLPLANE_KINDS = [
   ...BAHIA_READ_MODEL_KINDS,
   ...BAHIA_STATUS_KINDS,

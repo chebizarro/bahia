@@ -709,8 +709,8 @@ func New(cfg *config.Config) (*App, error) {
 		logger,
 		service.ToolProvisioningConfig{BaseImageRef: "", TargetRegistry: cfg.Registry.URL, TargetRepo: "tools/swarmstr", InstallerVersion: "v1"},
 	)
-	// Explicit recovery for stranded stored intents; newly-arrived kind 5976
-	// requests are still processed directly by the event-driven reactor path.
+	// Explicit recovery for stranded stored intents; newly arrived tool requests
+	// enter through ContextVM and are handled by the event-driven transport path.
 	bgManager.RegisterWithOptions(toolCoordinator, RunnerTier(Tier3))
 
 	// MCP (Model Context Protocol) server for AI agent integration.

@@ -55,16 +55,16 @@ func dnsAssistantToolDefinitions() []Tool {
 	objectProp := map[string]interface{}{"type": "object"}
 	integerProp := map[string]interface{}{"type": "integer"}
 	return []Tool{
-		{Name: "bahia_assistant_dns_zone_create", Description: "Assistant-safe async DNS zone create command (kind 5941)", InputSchema: dnsObjectSchema(map[string]interface{}{
+		{Name: "bahia_assistant_dns_zone_create", Description: "Assistant-safe async DNS zone create command via ContextVM", InputSchema: dnsObjectSchema(map[string]interface{}{
 			"name": stringProp, "zone": stringProp, "visibility": stringProp, "backend_ref": stringProp, "ttl": integerProp, "idempotency_key": stringProp, "tags": objectProp,
 		}, "idempotency_key")},
-		{Name: "bahia_assistant_dns_policy_apply", Description: "Assistant-safe async DNS policy apply command (kind 5942)", InputSchema: dnsObjectSchema(map[string]interface{}{
+		{Name: "bahia_assistant_dns_policy_apply", Description: "Assistant-safe async DNS policy apply command via ContextVM", InputSchema: dnsObjectSchema(map[string]interface{}{
 			"policy_id": stringProp, "name": stringProp, "zone_id": stringProp, "environment_id": stringProp, "rules": map[string]interface{}{"type": "array", "items": objectProp}, "enabled": map[string]interface{}{"type": "boolean"}, "metadata": objectProp, "idempotency_key": stringProp, "tags": objectProp,
 		}, "idempotency_key")},
-		{Name: "bahia_assistant_dns_record_override", Description: "Assistant-safe async DNS record override command (kind 5943)", InputSchema: dnsObjectSchema(map[string]interface{}{
+		{Name: "bahia_assistant_dns_record_override", Description: "Assistant-safe async DNS record override command via ContextVM", InputSchema: dnsObjectSchema(map[string]interface{}{
 			"override_id": stringProp, "zone_name": stringProp, "record_name": stringProp, "record_type": stringProp, "value": stringProp, "ttl": integerProp, "reason": stringProp, "expires_at": stringProp, "idempotency_key": stringProp, "tags": objectProp,
 		}, "zone_name", "record_name", "record_type", "value", "ttl", "reason", "idempotency_key")},
-		{Name: "bahia_assistant_dns_drift_remediate", Description: "Assistant-safe async DNS drift remediation command (kind 5944)", InputSchema: dnsObjectSchema(map[string]interface{}{
+		{Name: "bahia_assistant_dns_drift_remediate", Description: "Assistant-safe async DNS drift remediation command via ContextVM", InputSchema: dnsObjectSchema(map[string]interface{}{
 			"zone": stringProp, "zone_name": stringProp, "idempotency_key": stringProp, "tags": objectProp,
 		}, "idempotency_key")},
 		{Name: "bahia_assistant_dns_list_endpoints", Description: "Assistant-safe DNS endpoint read model query", InputSchema: dnsObjectSchema(map[string]interface{}{

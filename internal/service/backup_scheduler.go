@@ -12,13 +12,14 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/kinds"
 	"github.com/openagentsinc/bahia/internal/repository"
 	"go.uber.org/zap"
 )
 
 const (
 	BackupSchedulerInternalRequester = "bahia-backup-scheduler"
-	BackupSchedulerRunRequestKind    = 38400
+	BackupSchedulerRunRequestKind    = kinds.ContextVMMessage
 
 	backupRunMetadataScheduled              = "scheduled"
 	backupRunMetadataScheduleDefinitionID   = "schedule_definition_id"

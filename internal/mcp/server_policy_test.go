@@ -147,12 +147,12 @@ func TestGetTools_IncludesPolicyCRUDAndEvaluate(t *testing.T) {
 	tools := server.GetTools()
 
 	required := map[string]bool{
-		"bahia_list_policies":    false,
-		"bahia_get_policy":       false,
-		"bahia_create_policy":    false,
-		"bahia_update_policy":    false,
-		"bahia_delete_policy":    false,
-		"bahia_evaluate_policy":  false,
+		"bahia_list_policies":   false,
+		"bahia_get_policy":      false,
+		"bahia_create_policy":   false,
+		"bahia_update_policy":   false,
+		"bahia_delete_policy":   false,
+		"bahia_evaluate_policy": false,
 	}
 
 	for _, tool := range tools {
@@ -174,7 +174,7 @@ func TestCallTool_PolicyCRUDAndEvaluate(t *testing.T) {
 	envID := uuid.New()
 
 	createRes, err := server.CallTool(ctx, "bahia_create_policy", map[string]interface{}{
-		"name":          "require-signature",
+		"name":           "require-signature",
 		"environment_id": envID.String(),
 		"rules": []interface{}{
 			map[string]interface{}{"type": "require_signature"},

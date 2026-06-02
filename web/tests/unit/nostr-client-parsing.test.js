@@ -49,6 +49,7 @@ describe('Nostr Client - Parsing Functions', () => {
   let KINDS;
   let BAHIA_READ_MODEL_KINDS;
   let BAHIA_STATUS_KINDS;
+  let BAHIA_STATE_SCHEMAS;
   let replaceableKey;
   let shouldAcceptReplaceableEvent;
   let isReplaceableTombstone;
@@ -72,6 +73,7 @@ describe('Nostr Client - Parsing Functions', () => {
     KINDS = module.KINDS;
     BAHIA_READ_MODEL_KINDS = module.BAHIA_READ_MODEL_KINDS;
     BAHIA_STATUS_KINDS = module.BAHIA_STATUS_KINDS;
+    BAHIA_STATE_SCHEMAS = module.BAHIA_STATE_SCHEMAS;
     replaceableKey = module.replaceableKey;
     shouldAcceptReplaceableEvent = module.shouldAcceptReplaceableEvent;
     isReplaceableTombstone = module.isReplaceableTombstone;
@@ -102,24 +104,19 @@ describe('Nostr Client - Parsing Functions', () => {
       expect(KINDS.RUNTIME_CONTROL_RESULT).toBe(38386);
     });
 
-    it('should export Bahia controlplane event kinds', () => {
-      expect(KINDS.BAHIA_SERVICE_STATE).toBe(31961);
-      expect(KINDS.BAHIA_SERVICE_REGISTRY).toBe(31962);
-      expect(KINDS.BAHIA_ENVIRONMENT_REGISTRY).toBe(31963);
-      expect(KINDS.BAHIA_LLM_ROUTE_REGISTRY).toBe(31964);
-      expect(KINDS.BAHIA_LLM_ROUTE_STATE).toBe(31965);
+    it('exports canonical Bahia controlplane kinds and schema identifiers, not old Bahia aliases', () => {
+      expect(KINDS.CASCADIA_CONTROLPLANE_STATE).toBe(30900);
+      expect(KINDS.CONTEXTVM_MESSAGE).toBe(25910);
+      expect(KINDS.NIP38_STATUS).toBe(30315);
+      expect(KINDS.NIP51_RELAY_SET).toBe(30002);
       expect(KINDS.LOOM_WORKER_AD).toBe(10100);
-      expect(KINDS.BAHIA_REQUEST_LLM_ROUTE_CREATE).toBe(5971);
-      expect(KINDS.BAHIA_REQUEST_LLM_RELEASE_REGISTER).toBe(5972);
-      expect(KINDS.BAHIA_REQUEST_LLM_DEPLOY).toBe(5973);
-      expect(KINDS.BAHIA_REQUEST_LLM_DEPLOYMENT_APPROVAL).toBe(5974);
-      expect(KINDS.BAHIA_REQUEST_LLM_ROLLBACK).toBe(5975);
-      expect(KINDS.BAHIA_DEPLOYMENT_STATUS).toBe(6961);
-      expect(KINDS.BAHIA_LLM_DEPLOYMENT_STATUS).toBe(6973);
-      expect(KINDS.BAHIA_DEPLOYMENT_RESULT).toBe(7961);
-      expect(KINDS.BAHIA_LLM_ROUTE_CREATE_RESULT).toBe(7971);
-      expect(KINDS.BAHIA_LLM_RELEASE_REGISTER_RESULT).toBe(7972);
-      expect(KINDS.BAHIA_LLM_DEPLOYMENT_RESULT).toBe(7973);
+      expect(BAHIA_STATE_SCHEMAS.SERVICE_REGISTRY).toBe('bahia.registry.service.v1');
+      expect(BAHIA_STATE_SCHEMAS.LLM_ROUTE_STATE).toBe('bahia.state.llm-route.v1');
+      expect(BAHIA_STATE_SCHEMAS.WORKER_STATE).toBe('bahia.state.worker.v1');
+      expect(KINDS.BAHIA_SERVICE_STATE).toBeUndefined();
+      expect(KINDS.BAHIA_SERVICE_REGISTRY).toBeUndefined();
+      expect(KINDS.BAHIA_REQUEST_LLM_DEPLOY).toBeUndefined();
+      expect(KINDS.BAHIA_LLM_DEPLOYMENT_RESULT).toBeUndefined();
     });
 
     it('uses canonical ContextVM observables in Bahia subscription groups', () => {
@@ -134,7 +131,7 @@ describe('Nostr Client - Parsing Functions', () => {
   describe('replaceable event helpers', () => {
     it('should build replaceable keys using kind, pubkey, and d-tag', () => {
       const pubkey = 'a'.repeat(64);
-      expect(replaceableKey({ kind: 31962, pubkey, tags: [['d', 'svc-1']] })).toBe(`31962:${pubkey}:svc-1`);
+      expect(replaceableKey({ kind: 30900, pubkey, tags: [['d', 'svc-1']] })).toBe(`30900:${pubkey}:svc-1`);
       expect(replaceableKey({ kind: 10100, pubkey, tags: [] })).toBe(`10100:${pubkey}`);
     });
 

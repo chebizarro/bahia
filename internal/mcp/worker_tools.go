@@ -237,7 +237,7 @@ func workerCommandReceiptToMap(status string, receipt *controlplane.WorkerComman
 	if receipt == nil {
 		return result
 	}
-	readModels := []int{receipt.StateKind, controlplane.KindWorkerAssignmentState, controlplane.KindWorkerDrainStatus}
+	readModels := []int{controlplane.KindCASControlState}
 	result["request_event_id"] = receipt.RequestEventID
 	result["request_pubkey"] = receipt.RequestPubkey
 	result["request_kind"] = receipt.RequestKind

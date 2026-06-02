@@ -14,33 +14,46 @@ export function environmentName(environments, environmentId) {
   return environments.find((environment) => environment.id === environmentId)?.name || environmentId || 'Unknown environment';
 }
 
-export function kindLabel(KINDS, kind) {
-  switch (kind) {
-    case KINDS.BAHIA_LLM_ROUTE_CREATE_RESULT:
-      return 'Route created';
-    case KINDS.BAHIA_LLM_RELEASE_REGISTER_RESULT:
-      return 'Release registered';
-    case KINDS.BAHIA_LLM_DEPLOYMENT_STATUS:
-      return 'Deploy status';
-    case KINDS.BAHIA_LLM_DEPLOYMENT_RESULT:
-      return 'Deploy result';
-    default:
-      return `Kind ${kind}`;
-  }
+export function activitySchema(activity, getTagValue) {
+  const data = activityData(activity);
+  return data.schema || activityTag(activity, getTagValue, 'schema') || '';
 }
 
-export function buildLLMActivityKinds(KINDS) {
-  return new Set([
-    KINDS.BAHIA_LLM_ROUTE_CREATE_RESULT,
-    KINDS.BAHIA_LLM_RELEASE_REGISTER_RESULT,
-    KINDS.BAHIA_LLM_DEPLOYMENT_STATUS,
-    KINDS.BAHIA_LLM_DEPLOYMENT_RESULT
-  ]);
+export function activityDomain(activity, getTagValue) {
+  const data = activityData(activity);
+  return data.domain || activityTag(activity, getTagValue, 'domain') || '';
 }
 
-export function buildLLMEventHistory(events, kinds) {
+export function kindLabel(activity, getTagValue) {
+  const data = activityData(activity);
+  const schema = activitySchema(activity, getTagValue);
+  const op = activityTag(activity, getTagValue, 'op') || data.operation || data.op || '';
+  const type = data.event_type || activity?.type || '';
+  if (schema === 'bahia.result.llm.v1' && op === 'route-create') return 'Route created';
+  if (schema === 'bahia.result.llm.v1' && op === 'release-register') return 'Release registered';
+  if (schema === 'bahia.status.llm.v1') return 'Deploy status';
+  if (schema === 'bahia.result.llm.v1' && op === 'deploy') return 'Deploy result';
+  if (schema === 'bahia.result.llm.v1') return 'LLM result';
+  if (type.startsWith('llm.')) return type.replace(/^llm\./, 'LLM ').replace(/[-_.]/g, ' ');
+  return schema || 'Nostr activity';
+}
+
+export function buildLLMActivityKinds() {
+  return new Set([30315, 4903, 30078]);
+}
+
+export function isLLMActivity(activity, _kinds, getTagValue) {
+  const domain = activityDomain(activity, getTagValue);
+  const schema = activitySchema(activity, getTagValue);
+  const type = activityData(activity).event_type || activity?.type || '';
+  if (domain) return domain === 'llm';
+  if (schema) return schema.includes('.llm');
+  return type.startsWith('llm.');
+}
+
+export function buildLLMEventHistory(events, kinds, getTagValue = () => '') {
   return events
-    .filter((activity) => kinds.has(activity.kind))
+    .filter((activity) => isLLMActivity(activity, kinds, getTagValue))
     .sort((a, b) => String(b.time || '').localeCompare(String(a.time || '')));
 }
 
@@ -50,6 +63,8 @@ export function buildRecentReleases(llmEventHistory, getTagValue) {
     const data = activityData(activity);
     const releaseId = data.release_id || activityTag(activity, getTagValue, 'release');
     const routeId = data.route_id || activityTag(activity, getTagValue, 'route');
+    const op = activityTag(activity, getTagValue, 'op') || data.operation || '';
+    if (activitySchema(activity, getTagValue) !== 'bahia.result.llm.v1' || op !== 'release-register') continue;
     if (!releaseId || !routeId || releases.has(releaseId)) continue;
     releases.set(releaseId, {
       id: releaseId,
@@ -75,7 +90,7 @@ export function buildRouteStateRows(llmRouteStates, llmRoutes, environments, rec
     .sort((a, b) => `${a.route_name}:${a.environment_name}`.localeCompare(`${b.route_name}:${b.environment_name}`));
 }
 
-export function buildPendingApprovals(llmEventHistory, llmRouteStates, llmRoutes, environments, recentReleases, KINDS, getTagValue) {
+export function buildPendingApprovals(llmEventHistory, llmRouteStates, llmRoutes, environments, recentReleases, _KINDS, getTagValue) {
   const terminalIntentIds = new Set();
   const acceptedByIntent = new Map();
 
@@ -83,7 +98,7 @@ export function buildPendingApprovals(llmEventHistory, llmRouteStates, llmRoutes
     const data = activityData(activity);
     const intentId = data.intent_id || activityTag(activity, getTagValue, 'intent');
     if (!intentId) continue;
-    if (activity.kind === KINDS.BAHIA_LLM_DEPLOYMENT_STATUS && (data.step || activityTag(activity, getTagValue, 'step')) === 'accepted' && !acceptedByIntent.has(intentId)) {
+    if (activitySchema(activity, getTagValue) === 'bahia.status.llm.v1' && (data.step || activityTag(activity, getTagValue, 'step')) === 'accepted' && !acceptedByIntent.has(intentId)) {
       acceptedByIntent.set(intentId, {
         intent_id: intentId,
         route_id: data.route_id || activityTag(activity, getTagValue, 'route'),
@@ -93,7 +108,7 @@ export function buildPendingApprovals(llmEventHistory, llmRouteStates, llmRoutes
         accepted_at: activity.time || ''
       });
     }
-    if (activity.kind === KINDS.BAHIA_LLM_DEPLOYMENT_RESULT) {
+    if (activitySchema(activity, getTagValue) === 'bahia.result.llm.v1' && (activityTag(activity, getTagValue, 'op') || data.operation || '') === 'deploy') {
       terminalIntentIds.add(intentId);
     }
   }

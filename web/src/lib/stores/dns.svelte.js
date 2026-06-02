@@ -16,20 +16,16 @@ import {
 } from '$lib/nostr/client.js';
 
 import {
-  DNS_ZONE_STATE,
-  DNS_ENDPOINT_STATE,
-  DNS_POLICY_STATE,
-  DNS_BACKEND_STATE,
+  CASCADIA_CONTROLPLANE_STATE,
+  DNS_STATE_SCHEMAS
 } from '$lib/nostr/kinds.gen.js';
 
-export const DNS_READ_MODEL_KINDS = {
-  ZONE: DNS_ZONE_STATE,
-  ENDPOINT: DNS_ENDPOINT_STATE,
-  POLICY: DNS_POLICY_STATE,
-  BACKEND: DNS_BACKEND_STATE
-};
+export const DNS_READ_MODEL_SCHEMAS = DNS_STATE_SCHEMAS;
+export const DNS_READ_MODEL_KINDS = Object.freeze({
+  STATE: CASCADIA_CONTROLPLANE_STATE
+});
 
-const DNS_KIND_LIST = Object.values(DNS_READ_MODEL_KINDS);
+const DNS_SCHEMA_LIST = Object.values(DNS_READ_MODEL_SCHEMAS);
 const DNS_READ_MODEL_LIMIT = 5000;
 
 export const dnsState = $state({
@@ -145,12 +141,12 @@ function clearCollectionError() {
   setCollectionError(null);
 }
 
-function markCollectionLoaded(kind) {
+function markCollectionLoaded(schema) {
   const now = Date.now();
-  if (!kind || kind === DNS_READ_MODEL_KINDS.ZONE) dnsState.lastLoadedAt.zones = now;
-  if (!kind || kind === DNS_READ_MODEL_KINDS.ENDPOINT) dnsState.lastLoadedAt.endpoints = now;
-  if (!kind || kind === DNS_READ_MODEL_KINDS.POLICY) dnsState.lastLoadedAt.policies = now;
-  if (!kind || kind === DNS_READ_MODEL_KINDS.BACKEND) dnsState.lastLoadedAt.backends = now;
+  if (!schema || schema === DNS_READ_MODEL_SCHEMAS.ZONE) dnsState.lastLoadedAt.zones = now;
+  if (!schema || schema === DNS_READ_MODEL_SCHEMAS.ENDPOINT) dnsState.lastLoadedAt.endpoints = now;
+  if (!schema || schema === DNS_READ_MODEL_SCHEMAS.POLICY) dnsState.lastLoadedAt.policies = now;
+  if (!schema || schema === DNS_READ_MODEL_SCHEMAS.BACKEND) dnsState.lastLoadedAt.backends = now;
   dnsState.lastLoadedAt.drift = now;
 }
 
@@ -227,7 +223,7 @@ export function dnsReadModelFilters(pubkey = dnsState.connection.servicePubkey, 
   const servicePubkey = String(pubkey || '').trim();
   const authorFilter = servicePubkey ? { authors: [servicePubkey] } : {};
   const temporal = since ? { since } : { limit: DNS_READ_MODEL_LIMIT };
-  return [{ kinds: DNS_KIND_LIST, '#t': ['bahia'], ...temporal, ...authorFilter }];
+  return [{ kinds: [CASCADIA_CONTROLPLANE_STATE], '#domain': ['dns'], '#schema': DNS_SCHEMA_LIST, ...temporal, ...authorFilter }];
 }
 
 function parseEventContent(event) {
@@ -329,16 +325,20 @@ function normalizeBackendEvent(event, content) {
   };
 }
 
+function dnsEventSchema(event, content) {
+  return getTagValue(event, 'schema', content.schema || '');
+}
+
 function validateDNSReadModelEvent(event, content) {
   if (!event?.id || typeof event.kind !== 'number') return 'DNS read-model event is missing id or kind';
-  if (!DNS_KIND_LIST.includes(event.kind)) return `Unsupported DNS read-model kind ${event.kind}`;
+  if (event.kind !== CASCADIA_CONTROLPLANE_STATE) return `Unsupported DNS read-model kind ${event.kind}; expected canonical CAS state kind`;
+  if (getTagValue(event, 'domain', content.domain || '') !== 'dns') return 'DNS read-model event is missing required dns domain tag';
+  const schema = dnsEventSchema(event, content);
+  if (!DNS_SCHEMA_LIST.includes(schema)) return `Unsupported DNS read-model schema ${schema || '(missing)'}`;
   if (dnsState.connection.servicePubkey && event.pubkey !== dnsState.connection.servicePubkey) {
     return 'DNS read-model event author does not match configured Bahia service pubkey';
   }
   if (!getDTag(event)) return 'DNS read-model event is missing required d tag';
-  if (content.deleted !== true && !getTagValues(event, 't').includes('bahia')) {
-    return 'DNS read-model event is missing required bahia type tag';
-  }
   return '';
 }
 
@@ -373,18 +373,19 @@ export function applyDNSReadModelEvent(event) {
     return false;
   }
 
+  const schema = dnsEventSchema(event, content);
   let changed = false;
-  switch (event.kind) {
-    case DNS_READ_MODEL_KINDS.ZONE:
+  switch (schema) {
+    case DNS_READ_MODEL_SCHEMAS.ZONE:
       changed = applyToKindMap(event, content, zoneMap, normalizeZoneEvent);
       break;
-    case DNS_READ_MODEL_KINDS.ENDPOINT:
+    case DNS_READ_MODEL_SCHEMAS.ENDPOINT:
       changed = applyToKindMap(event, content, endpointMap, normalizeEndpointEvent);
       break;
-    case DNS_READ_MODEL_KINDS.POLICY:
+    case DNS_READ_MODEL_SCHEMAS.POLICY:
       changed = applyToKindMap(event, content, policyMap, normalizePolicyEvent);
       break;
-    case DNS_READ_MODEL_KINDS.BACKEND:
+    case DNS_READ_MODEL_SCHEMAS.BACKEND:
       changed = applyToKindMap(event, content, backendMap, normalizeBackendEvent);
       break;
   }
@@ -392,7 +393,7 @@ export function applyDNSReadModelEvent(event) {
   seenEventIds.add(event.id);
   if (changed) {
     dnsState.connection.lastEventAt = new Date().toISOString();
-    markCollectionLoaded(event.kind);
+    markCollectionLoaded(schema);
     clearCollectionError();
     refreshCollections();
   }

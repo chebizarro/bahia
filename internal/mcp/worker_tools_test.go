@@ -17,49 +17,49 @@ type captureWorkerCommandPublisher struct {
 
 func (p *captureWorkerCommandPublisher) PublishWorkerCordonRequest(_ context.Context, cmd controlplane.WorkerLifecycleCommand) (*controlplane.WorkerCommandReceipt, error) {
 	p.lifecycle = &cmd
-	p.kind = controlplane.KindWorkerCordonRequest
+	p.kind = controlplane.KindContextVMMessage
 	p.command = controlplane.WorkerCommandCordon
 	return workerTestReceipt(p.kind, p.command, cmd.WorkerPubKey, cmd.IdempotencyKey), nil
 }
 func (p *captureWorkerCommandPublisher) PublishWorkerUncordonRequest(_ context.Context, cmd controlplane.WorkerLifecycleCommand) (*controlplane.WorkerCommandReceipt, error) {
 	p.lifecycle = &cmd
-	p.kind = controlplane.KindWorkerUncordonRequest
+	p.kind = controlplane.KindContextVMMessage
 	p.command = controlplane.WorkerCommandUncordon
 	return workerTestReceipt(p.kind, p.command, cmd.WorkerPubKey, cmd.IdempotencyKey), nil
 }
 func (p *captureWorkerCommandPublisher) PublishWorkerDrainRequest(_ context.Context, cmd controlplane.WorkerLifecycleCommand) (*controlplane.WorkerCommandReceipt, error) {
 	p.lifecycle = &cmd
-	p.kind = controlplane.KindWorkerDrainRequest
+	p.kind = controlplane.KindContextVMMessage
 	p.command = controlplane.WorkerCommandDrain
 	return workerTestReceipt(p.kind, p.command, cmd.WorkerPubKey, cmd.IdempotencyKey), nil
 }
 func (p *captureWorkerCommandPublisher) PublishWorkerUndrainRequest(_ context.Context, cmd controlplane.WorkerLifecycleCommand) (*controlplane.WorkerCommandReceipt, error) {
 	p.lifecycle = &cmd
-	p.kind = controlplane.KindWorkerUndrainRequest
+	p.kind = controlplane.KindContextVMMessage
 	p.command = controlplane.WorkerCommandUndrain
 	return workerTestReceipt(p.kind, p.command, cmd.WorkerPubKey, cmd.IdempotencyKey), nil
 }
 func (p *captureWorkerCommandPublisher) PublishWorkerMaintenanceEnterRequest(_ context.Context, cmd controlplane.WorkerLifecycleCommand) (*controlplane.WorkerCommandReceipt, error) {
 	p.lifecycle = &cmd
-	p.kind = controlplane.KindWorkerMaintenanceEnter
+	p.kind = controlplane.KindContextVMMessage
 	p.command = controlplane.WorkerCommandMaintenanceEnter
 	return workerTestReceipt(p.kind, p.command, cmd.WorkerPubKey, cmd.IdempotencyKey), nil
 }
 func (p *captureWorkerCommandPublisher) PublishWorkerMaintenanceExitRequest(_ context.Context, cmd controlplane.WorkerLifecycleCommand) (*controlplane.WorkerCommandReceipt, error) {
 	p.lifecycle = &cmd
-	p.kind = controlplane.KindWorkerMaintenanceExit
+	p.kind = controlplane.KindContextVMMessage
 	p.command = controlplane.WorkerCommandMaintenanceExit
 	return workerTestReceipt(p.kind, p.command, cmd.WorkerPubKey, cmd.IdempotencyKey), nil
 }
 func (p *captureWorkerCommandPublisher) PublishWorkerLabelsUpdateRequest(_ context.Context, cmd controlplane.WorkerLabelsUpdateCommand) (*controlplane.WorkerCommandReceipt, error) {
 	p.labels = &cmd
-	p.kind = controlplane.KindWorkerLabelsUpdate
+	p.kind = controlplane.KindContextVMMessage
 	p.command = controlplane.WorkerCommandLabelsUpdate
 	return workerTestReceipt(p.kind, p.command, cmd.WorkerPubKey, cmd.IdempotencyKey), nil
 }
 
 func workerTestReceipt(kind int, command, worker, dTag string) *controlplane.WorkerCommandReceipt {
-	return &controlplane.WorkerCommandReceipt{RequestEventID: "worker-event", RequestPubkey: "operator-pubkey", RequestKind: kind, StatusKind: controlplane.KindWorkerStatus, ResultKind: controlplane.KindWorkerResult, StateKind: controlplane.KindWorkerState, DTag: dTag, PublishedRelays: 2, WorkerPubKey: worker, Command: command}
+	return &controlplane.WorkerCommandReceipt{RequestEventID: "worker-event", RequestPubkey: "operator-pubkey", RequestKind: kind, ResultKind: controlplane.KindCASControlState, StateKind: controlplane.KindCASControlState, DTag: dTag, PublishedRelays: 2, WorkerPubKey: worker, Command: command}
 }
 
 func TestGetToolsIncludesWorkerManagementAndReadModelTools(t *testing.T) {
@@ -88,7 +88,7 @@ func TestWorkerMutatingToolsPublishSignerFirstRequestsAndReturnCorrelation(t *te
 		t.Fatalf("drain returned error: %s", res.Content[0].Text)
 	}
 	payload := decodeResultMap(t, res)
-	if payload["request_event_id"] != "worker-event" || payload["request_kind"].(float64) != float64(controlplane.KindWorkerDrainRequest) || payload["result_kind"].(float64) != float64(controlplane.KindWorkerResult) {
+	if payload["request_event_id"] != "worker-event" || payload["request_kind"].(float64) != float64(controlplane.KindContextVMMessage) || payload["result_kind"].(float64) != float64(controlplane.KindCASControlState) {
 		t.Fatalf("unexpected worker receipt: %#v", payload)
 	}
 	if publisher.lifecycle == nil || publisher.lifecycle.WorkerPubKey != "worker-pubkey" || publisher.lifecycle.Reason != "kernel upgrade" || publisher.lifecycle.IdempotencyKey != "drain:1" {
@@ -99,8 +99,8 @@ func TestWorkerMutatingToolsPublishSignerFirstRequestsAndReturnCorrelation(t *te
 		t.Fatalf("missing correlation tags: %#v", correlation)
 	}
 	readKinds := payload["read_model_kinds"].([]interface{})
-	if len(readKinds) < 3 {
-		t.Fatalf("expected worker state, assignment, and drain read model kinds: %#v", readKinds)
+	if len(readKinds) != 1 || readKinds[0].(float64) != float64(controlplane.KindCASControlState) {
+		t.Fatalf("expected canonical CAS read model kind: %#v", readKinds)
 	}
 
 	labelsRes, err := server.CallTool(context.Background(), "bahia_worker_labels_update", map[string]interface{}{"worker_pubkey": "worker-pubkey", "idempotency_key": "labels:1", "labels": map[string]interface{}{"role": "inference"}})

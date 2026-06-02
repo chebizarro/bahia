@@ -138,8 +138,9 @@ ContextVM kind `11316` is the canonical capability bootstrap. New clients use `1
 
 ```json
 {
-  "kinds": [31961],
+  "kinds": [30900, 30315, 4903],
   "authors": ["<bahia-service-pubkey>"],
+  "#domain": ["service"],
   "#service": ["svc-123"]
 }
 ```

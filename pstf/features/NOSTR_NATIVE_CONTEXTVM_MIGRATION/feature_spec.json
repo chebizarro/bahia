@@ -1,7 +1,15 @@
 {
   "feature_id": "NOSTR_NATIVE_CONTEXTVM_MIGRATION",
   "title": "ContextVM and canonical Nostr runtime migration",
-  "beads": ["bahia-dgju", "bahia-f0uw", "bahia-viys", "bahia-itrq", "bahia-guve", "bahia-7nh4"],
+  "beads": [
+    "bahia-dgju",
+    "bahia-f0uw",
+    "bahia-viys",
+    "bahia-itrq",
+    "bahia-guve",
+    "bahia-7nh4",
+    "bahia-6xxd.4"
+  ],
   "status": "complete",
   "intended_behavior": {
     "mutations": "Production web, CLI, MCP, and backend control-plane mutation paths use ContextVM JSON-RPC 2.0 over Nostr kind 25910, normally wrapped with CEP-4/NIP-59 random-key gift-wrap kinds 1059 or 21059 where encrypted transport is available.",
@@ -22,7 +30,12 @@
     "docs/user-guide/nostr-integration.md",
     "docs/control-planes.md",
     "docs/user-guide/mcp-tools.md",
-    "docs/user-guide/cli-reference.md"
+    "docs/user-guide/cli-reference.md",
+    "docs/api.md",
+    "docs/deployment.md",
+    "docs/architecture.md",
+    "docs/designs/dns-orchestration-layer.md",
+    "docs/designs/nostr-native-system-discovery.md"
   ],
   "out_of_scope": [
     "Relay operator policy changes outside Bahia runtime/docs",
@@ -44,6 +57,10 @@
     {
       "bead": "bahia-itrq",
       "result": "Docs and PSTF artifacts finalized for the completed migration."
+    },
+    {
+      "bead": "bahia-6xxd.4",
+      "result": "Docs/PSTF pass rewrote target production documentation to describe ContextVM 25910/CEP-4 and canonical observables, with old Bahia kind ranges marked historical/migration-only."
     }
   ],
   "remaining_dependencies": []

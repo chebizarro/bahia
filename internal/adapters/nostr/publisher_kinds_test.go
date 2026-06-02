@@ -41,26 +41,6 @@ func TestWorkerPublisherKindConstantsUseNonCollidingCanonicalBlock(t *testing.T)
 	}
 }
 
-func TestWorkerPublisherLegacyKindConstantsRemainReadable(t *testing.T) {
-	legacy := map[string]int{
-		"KindLegacyWorkerState":              KindLegacyWorkerState,
-		"KindLegacyWorkerAssignmentState":    KindLegacyWorkerAssignmentState,
-		"KindLegacyWorkerDrainStatus":        KindLegacyWorkerDrainStatus,
-		"KindLegacyWorkerEligibilityPreview": KindLegacyWorkerEligibilityPreview,
-	}
-	expected := map[string]int{
-		"KindLegacyWorkerState":              31974,
-		"KindLegacyWorkerAssignmentState":    31991,
-		"KindLegacyWorkerDrainStatus":        31992,
-		"KindLegacyWorkerEligibilityPreview": 31993,
-	}
-	for name, kind := range legacy {
-		if kind != expected[name] {
-			t.Fatalf("%s expected legacy kind %d, got %d", name, expected[name], kind)
-		}
-	}
-}
-
 func TestContinuityPublisherKindConstantsUnique(t *testing.T) {
 	continuityKinds := map[string]int{
 		"KindContinuityProfile":      KindContinuityProfile,

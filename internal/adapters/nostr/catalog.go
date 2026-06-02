@@ -482,13 +482,9 @@ func (c *KindCatalog) registerProjectionDecoders() {
 	c.decoders[KindServiceState] = decodeStateProjection
 
 	c.decoders[KindWorkerState] = decodeWorkerProjection
-	c.decoders[KindLegacyWorkerState] = decodeWorkerProjection
 	c.decoders[KindWorkerAssignmentState] = decodeWorkerAssignmentProjection
-	c.decoders[KindLegacyWorkerAssignmentState] = decodeWorkerAssignmentProjection
 	c.decoders[KindWorkerDrainStatus] = decodeWorkerDrainProjection
-	c.decoders[KindLegacyWorkerDrainStatus] = decodeWorkerDrainProjection
 	c.decoders[KindWorkerEligibilityPreview] = decodeWorkerEligibilityProjection
-	c.decoders[KindLegacyWorkerEligibilityPreview] = decodeWorkerEligibilityProjection
 	c.decoders[KindLoomWorkerAdvertisement] = decodeWorkerAdvertisementProjection
 
 	c.decoders[KindContinuityProfile] = decodeContinuityProfileProjection

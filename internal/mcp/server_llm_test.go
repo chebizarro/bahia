@@ -141,27 +141,27 @@ type captureLLMCommandPublisher struct {
 
 func (p *captureLLMCommandPublisher) PublishLLMRouteCreateRequest(_ context.Context, cmd controlplane.LLMRouteCreateCommand) (*controlplane.LLMCommandReceipt, error) {
 	p.routeCreate = &cmd
-	return &controlplane.LLMCommandReceipt{RequestEventID: "route-create-event", RequestPubkey: "mcp-pubkey", RequestKind: controlplane.KindLLMRouteCreate, ResultKind: controlplane.KindLLMRouteCreateResult, RegistryKind: controlplane.KindLLMRouteRegistry, StateKind: controlplane.KindLLMRouteState, PublishedRelays: 1}, nil
+	return &controlplane.LLMCommandReceipt{RequestEventID: "route-create-event", RequestPubkey: "mcp-pubkey", RequestKind: controlplane.KindContextVMMessage, ResultKind: controlplane.KindCASControlState, RegistryKind: controlplane.KindCASControlState, StateKind: controlplane.KindCASControlState, PublishedRelays: 1}, nil
 }
 
 func (p *captureLLMCommandPublisher) PublishLLMReleaseRegisterRequest(_ context.Context, cmd controlplane.LLMReleaseRegisterCommand) (*controlplane.LLMCommandReceipt, error) {
 	p.releaseRegister = &cmd
-	return &controlplane.LLMCommandReceipt{RequestEventID: "release-register-event", RequestPubkey: "mcp-pubkey", RequestKind: controlplane.KindLLMReleaseRegister, ResultKind: controlplane.KindLLMReleaseRegisterResult, RegistryKind: controlplane.KindLLMRouteRegistry, StateKind: controlplane.KindLLMRouteState, PublishedRelays: 1, RouteID: cmd.RouteID.String()}, nil
+	return &controlplane.LLMCommandReceipt{RequestEventID: "release-register-event", RequestPubkey: "mcp-pubkey", RequestKind: controlplane.KindContextVMMessage, ResultKind: controlplane.KindCASControlState, RegistryKind: controlplane.KindCASControlState, StateKind: controlplane.KindCASControlState, PublishedRelays: 1, RouteID: cmd.RouteID.String()}, nil
 }
 
 func (p *captureLLMCommandPublisher) PublishLLMDeployRequest(_ context.Context, cmd controlplane.LLMDeployCommand) (*controlplane.LLMCommandReceipt, error) {
 	p.deploy = &cmd
-	return &controlplane.LLMCommandReceipt{RequestEventID: "deploy-event", RequestPubkey: "mcp-pubkey", RequestKind: controlplane.KindLLMDeployRequest, StatusKind: controlplane.KindLLMDeploymentStatus, ResultKind: controlplane.KindLLMDeploymentResult, RegistryKind: controlplane.KindLLMRouteRegistry, StateKind: controlplane.KindLLMRouteState, PublishedRelays: 1, RouteID: cmd.RouteID.String(), EnvironmentID: cmd.EnvironmentID.String(), ReleaseID: cmd.ReleaseID.String()}, nil
+	return &controlplane.LLMCommandReceipt{RequestEventID: "deploy-event", RequestPubkey: "mcp-pubkey", RequestKind: controlplane.KindContextVMMessage, ResultKind: controlplane.KindCASControlState, RegistryKind: controlplane.KindCASControlState, StateKind: controlplane.KindCASControlState, PublishedRelays: 1, RouteID: cmd.RouteID.String(), EnvironmentID: cmd.EnvironmentID.String(), ReleaseID: cmd.ReleaseID.String()}, nil
 }
 
 func (p *captureLLMCommandPublisher) PublishLLMApprovalRequest(_ context.Context, cmd controlplane.LLMApprovalCommand) (*controlplane.LLMCommandReceipt, error) {
 	p.approval = &cmd
-	return &controlplane.LLMCommandReceipt{RequestEventID: cmd.Decision + "-event", RequestPubkey: "mcp-pubkey", RequestKind: controlplane.KindLLMDeploymentApproval, StatusKind: controlplane.KindLLMDeploymentStatus, ResultKind: controlplane.KindLLMDeploymentResult, RegistryKind: controlplane.KindLLMRouteRegistry, StateKind: controlplane.KindLLMRouteState, PublishedRelays: 1, IntentID: cmd.IntentID.String(), Decision: cmd.Decision}, nil
+	return &controlplane.LLMCommandReceipt{RequestEventID: cmd.Decision + "-event", RequestPubkey: "mcp-pubkey", RequestKind: controlplane.KindContextVMMessage, ResultKind: controlplane.KindCASControlState, RegistryKind: controlplane.KindCASControlState, StateKind: controlplane.KindCASControlState, PublishedRelays: 1, IntentID: cmd.IntentID.String(), Decision: cmd.Decision}, nil
 }
 
 func (p *captureLLMCommandPublisher) PublishLLMRollbackRequest(_ context.Context, cmd controlplane.LLMRollbackCommand) (*controlplane.LLMCommandReceipt, error) {
 	p.rollback = &cmd
-	return &controlplane.LLMCommandReceipt{RequestEventID: "rollback-event", RequestPubkey: "mcp-pubkey", RequestKind: controlplane.KindLLMRollbackRequest, StatusKind: controlplane.KindLLMDeploymentStatus, ResultKind: controlplane.KindLLMDeploymentResult, RegistryKind: controlplane.KindLLMRouteRegistry, StateKind: controlplane.KindLLMRouteState, PublishedRelays: 1, RouteID: cmd.RouteID.String(), EnvironmentID: cmd.EnvironmentID.String()}, nil
+	return &controlplane.LLMCommandReceipt{RequestEventID: "rollback-event", RequestPubkey: "mcp-pubkey", RequestKind: controlplane.KindContextVMMessage, ResultKind: controlplane.KindCASControlState, RegistryKind: controlplane.KindCASControlState, StateKind: controlplane.KindCASControlState, PublishedRelays: 1, RouteID: cmd.RouteID.String(), EnvironmentID: cmd.EnvironmentID.String()}, nil
 }
 
 func newTestLLMRegistryServer() (*Server, *testLLMRouteRepo, *testLLMReleaseRepo) {
@@ -216,7 +216,7 @@ func TestCallTool_LLMRouteReleaseToolsPublishCanonicalNostrRequests(t *testing.T
 		t.Fatalf("create route returned error: %s", createRes.Content[0].Text)
 	}
 	createPayload := decodeResultMap(t, createRes)
-	if createPayload["request_kind"].(float64) != float64(controlplane.KindLLMRouteCreate) || createPayload["result_kind"].(float64) != float64(controlplane.KindLLMRouteCreateResult) {
+	if createPayload["request_kind"].(float64) != float64(controlplane.KindContextVMMessage) || createPayload["result_kind"].(float64) != float64(controlplane.KindCASControlState) {
 		t.Fatalf("unexpected create route payload: %#v", createPayload)
 	}
 	if _, ok := createPayload["status_kind"]; ok {
@@ -242,7 +242,7 @@ func TestCallTool_LLMRouteReleaseToolsPublishCanonicalNostrRequests(t *testing.T
 		t.Fatalf("register release returned error: %s", releaseRes.Content[0].Text)
 	}
 	releasePayload := decodeResultMap(t, releaseRes)
-	if releasePayload["request_kind"].(float64) != float64(controlplane.KindLLMReleaseRegister) || releasePayload["result_kind"].(float64) != float64(controlplane.KindLLMReleaseRegisterResult) {
+	if releasePayload["request_kind"].(float64) != float64(controlplane.KindContextVMMessage) || releasePayload["result_kind"].(float64) != float64(controlplane.KindCASControlState) {
 		t.Fatalf("unexpected release-register payload: %#v", releasePayload)
 	}
 	if _, ok := releasePayload["status_kind"]; ok {
@@ -293,7 +293,7 @@ func TestCallTool_LLMAsyncToolsPublishCanonicalNostrRequests(t *testing.T) {
 		t.Fatalf("deploy returned error: %s", deployRes.Content[0].Text)
 	}
 	deployPayload := decodeResultMap(t, deployRes)
-	if deployPayload["request_kind"].(float64) != float64(controlplane.KindLLMDeployRequest) || deployPayload["request_event_id"] != "deploy-event" {
+	if deployPayload["request_kind"].(float64) != float64(controlplane.KindContextVMMessage) || deployPayload["request_event_id"] != "deploy-event" {
 		t.Fatalf("unexpected deploy correlation payload: %#v", deployPayload)
 	}
 	if publisher.deploy == nil || publisher.deploy.RouteID != routeID || publisher.deploy.EnvironmentID != envID || publisher.deploy.ReleaseID != releaseID || publisher.deploy.RequestedBy != "alice" {
@@ -308,7 +308,7 @@ func TestCallTool_LLMAsyncToolsPublishCanonicalNostrRequests(t *testing.T) {
 		t.Fatalf("approve returned error: %s", approveRes.Content[0].Text)
 	}
 	approvePayload := decodeResultMap(t, approveRes)
-	if approvePayload["request_kind"].(float64) != float64(controlplane.KindLLMDeploymentApproval) || approvePayload["decision"] != "approve" {
+	if approvePayload["request_kind"].(float64) != float64(controlplane.KindContextVMMessage) || approvePayload["decision"] != "approve" {
 		t.Fatalf("unexpected approve payload: %#v", approvePayload)
 	}
 
@@ -320,7 +320,7 @@ func TestCallTool_LLMAsyncToolsPublishCanonicalNostrRequests(t *testing.T) {
 		t.Fatalf("reject returned error: %s", rejectRes.Content[0].Text)
 	}
 	rejectPayload := decodeResultMap(t, rejectRes)
-	if rejectPayload["request_kind"].(float64) != float64(controlplane.KindLLMDeploymentApproval) || rejectPayload["decision"] != "reject" {
+	if rejectPayload["request_kind"].(float64) != float64(controlplane.KindContextVMMessage) || rejectPayload["decision"] != "reject" {
 		t.Fatalf("unexpected reject payload: %#v", rejectPayload)
 	}
 
@@ -332,7 +332,7 @@ func TestCallTool_LLMAsyncToolsPublishCanonicalNostrRequests(t *testing.T) {
 		t.Fatalf("rollback returned error: %s", rollbackRes.Content[0].Text)
 	}
 	rollbackPayload := decodeResultMap(t, rollbackRes)
-	if rollbackPayload["request_kind"].(float64) != float64(controlplane.KindLLMRollbackRequest) || rollbackPayload["status_kind"].(float64) != float64(controlplane.KindLLMDeploymentStatus) || rollbackPayload["result_kind"].(float64) != float64(controlplane.KindLLMDeploymentResult) {
+	if rollbackPayload["request_kind"].(float64) != float64(controlplane.KindContextVMMessage) || rollbackPayload["result_kind"].(float64) != float64(controlplane.KindCASControlState) {
 		t.Fatalf("unexpected rollback correlation payload: %#v", rollbackPayload)
 	}
 	if publisher.rollback == nil || publisher.rollback.RouteID != routeID || publisher.rollback.EnvironmentID != envID || publisher.rollback.RequestedBy != "operator" {

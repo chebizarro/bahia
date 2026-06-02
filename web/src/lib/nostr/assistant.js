@@ -1,5 +1,11 @@
 import { stableJsonValue, parseJsonContent } from './content.js';
-import { KINDS } from './kinds.js';
+import {
+  ASSISTANT_APPROVAL,
+  ASSISTANT_PROMPT_REQUEST,
+  ASSISTANT_RESULT,
+  ASSISTANT_SESSION,
+  ASSISTANT_STATUS
+} from './kinds.gen.js';
 import { getDTag, getTagValue } from './tags.js';
 import { sha256Hex } from './validation.js';
 
@@ -41,11 +47,11 @@ export async function computeAssistantPlanHash(plan, sessionId) {
 }
 
 export const ASSISTANT_KINDS = {
-  SESSION: KINDS.ASSISTANT_SESSION,
-  PROMPT_REQUEST: KINDS.ASSISTANT_PROMPT_REQUEST,
-  APPROVAL: KINDS.ASSISTANT_APPROVAL,
-  STATUS: KINDS.ASSISTANT_STATUS,
-  RESULT: KINDS.ASSISTANT_RESULT
+  SESSION: ASSISTANT_SESSION,
+  PROMPT_REQUEST: ASSISTANT_PROMPT_REQUEST,
+  APPROVAL: ASSISTANT_APPROVAL,
+  STATUS: ASSISTANT_STATUS,
+  RESULT: ASSISTANT_RESULT
 };
 
 export const ASSISTANT_EVENT_KINDS = Object.values(ASSISTANT_KINDS);
@@ -92,7 +98,7 @@ function getTaggedPubkeyRefs(event, role = '') {
 }
 
 export function parseAssistantSessionEvent(event) {
-  if (!event || event.kind !== KINDS.ASSISTANT_SESSION) return null;
+  if (!event || event.kind !== ASSISTANT_KINDS.SESSION) return null;
   const content = parseJsonContent(event, {});
   const sessionId = getTagValue(event, 'session', content.session_id || getDTag(event));
   const state = getTagValue(event, 'status', content.state || ASSISTANT_SESSION_STATES.IDLE);
@@ -128,7 +134,7 @@ export function parseAssistantSessionEvent(event) {
 }
 
 export function parseAssistantStatusEvent(event) {
-  if (!event || event.kind !== KINDS.ASSISTANT_STATUS) return null;
+  if (!event || event.kind !== ASSISTANT_KINDS.STATUS) return null;
   const content = parseJsonContent(event, {});
   const status = getTagValue(event, 'status', content.status || '');
 
@@ -153,7 +159,7 @@ export function parseAssistantStatusEvent(event) {
 }
 
 export function parseAssistantResultEvent(event) {
-  if (!event || event.kind !== KINDS.ASSISTANT_RESULT) return null;
+  if (!event || event.kind !== ASSISTANT_KINDS.RESULT) return null;
   const content = parseJsonContent(event, {});
   const status = getTagValue(event, 'status', content.status || '');
 

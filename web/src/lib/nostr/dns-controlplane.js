@@ -1,4 +1,4 @@
-import { getTagValue, parseJsonContent } from './client.js';
+import { CONTEXTVM_MESSAGE, getTagValue, parseJsonContent } from './client.js';
 import { requestEncryptedResult } from './encrypted-controlplane.js';
 
 export const DNS_COMMANDS = {
@@ -92,7 +92,7 @@ function resultEventFromContextVM(response) {
   if (response?.resultEvent) return response.resultEvent;
   return {
     id: response?.requestEventId || '',
-    kind: 25910,
+    kind: CONTEXTVM_MESSAGE,
     pubkey: '',
     created_at: Math.floor(Date.now() / 1000),
     tags: [['e', response?.requestEventId || '', '', 'reply']],
@@ -138,7 +138,7 @@ export async function startDNSCommand({ command, payload = {}, tags = [], signal
   return {
     command,
     requestEventId: response.requestEventId,
-    resultKind: 25910,
+    resultKind: CONTEXTVM_MESSAGE,
     request,
     event: response.event,
     ok: response.ok,

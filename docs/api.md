@@ -11,7 +11,7 @@ This document covers Bahia's **HTTP surfaces**.
 It does **not** by itself describe the full product interaction model.
 
 Current Bahia behavior is:
-- shared browser state is primarily bootstrapped from `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` and relay-backed read models
+- shared browser state is primarily bootstrapped from ContextVM discovery (`11316`-`11320`), NIP-51 relay sets (`30002`), and canonical relay-backed observables (`30900`, `4903`, `30315`, `30078`)
 - many control-plane writes are published as signed Nostr request events
 - sensitive browser domains use encrypted Nostr request/result events
 - REST remains a narrowed compatibility/query/log surface
@@ -42,7 +42,7 @@ When Bahia HTTP auth is enabled:
 
 ### Nostr discovery
 
-`Nostr discovery events (kind 31974 + NIP-51 kind 30002)`
+`ContextVM discovery events (11316-11320) + NIP-51 relay sets (30002)`
 
 Returns discovery/capability metadata used by the browser and tooling, including:
 - registries
@@ -52,7 +52,7 @@ Returns discovery/capability metadata used by the browser and tooling, including
 - runtime / OCI / Blossom metadata
 - feature flags such as `relay_read_models`, `direct_nostr_http_auth`, and `encrypted_nostr_requests`
 
-The `control_plane` payload is currently a core discovery subset. Broader command families such as tool provisioning, public compatibility writes, and the extended 31966–31970 read models are documented in `docs/control-planes.md` and `docs/nostr-commands.md`.
+The `control_plane` payload is a compatibility discovery subset. Production command families use ContextVM methods and canonical observables documented in `docs/control-planes.md`; old Bahia read-model kind numbers are migration inventory only.
 
 ### Native MCP
 
@@ -283,13 +283,13 @@ Deprecated LLM REST mutation endpoints (`POST /api/v1/llm/routes`, `POST /api/v1
 
 ## Adoption / import (operator only)
 
-Adoption scan/import REST endpoints are removed. Operators should publish signed `AdoptionScanRequest` (`kind:5978`) and `AdoptionImportRequest` (`kind:5979`) events and subscribe for the correlated result/read-model events.
+Adoption scan/import REST endpoints are removed. Operators should call ContextVM methods `adoption/scan` and `adoption/import` over kind `25910` and subscribe for correlated ContextVM responses plus canonical observables (`30900`, `4903`, `30315`).
 
 Use `endpoint_ref` targets for production. `docker_host` targets remain a signer-first compatibility policy decision, not a public REST surface.
 
 ## Direct runtime actions (operator only)
 
-Direct runtime deploy/restart/stop REST endpoints are removed. Operators should publish signed `DeployRequest` (`kind:5961`) and `ServiceAction` (`kind:5963`) events and subscribe for the correlated result/read-model events.
+Direct runtime deploy/restart/stop REST endpoints are removed. Operators should call ContextVM methods such as `service/deploy`, `service/restart`, and `service/stop` over kind `25910` and subscribe for correlated ContextVM responses plus canonical observables (`30900`, `4903`, `30315`).
 
 Direct runtime actions remain limited to adopted `direct_runtime` workloads and authorized operator pubkeys.
 

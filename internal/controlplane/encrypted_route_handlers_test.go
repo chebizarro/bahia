@@ -262,16 +262,29 @@ func encryptedRouteTransport(t *testing.T, handlers *EncryptedRouteHandlers) (*E
 
 func makeRouteRequest(t *testing.T, operation string, payload any) *nostr.Event {
 	t.Helper()
-	requesterPubkey, err := nostr.GetPublicKey(testRequesterKey)
+	params, err := json.Marshal(payload)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("marshal route request params: %v", err)
 	}
-	return makeEncryptedRequestEvent(t, testRequesterKey, EncryptedRequestEnvelope{
-		Version:         EncryptedRequestWireVersion,
-		Operation:       operation,
-		RequesterPubkey: requesterPubkey,
-		Payload:         encryptedPayload(t, payload),
-	})
+	request := ContextVMJSONRPCRequest{JSONRPC: "2.0", ID: json.RawMessage(`"route-test"`), Method: operation, Params: params}
+	content, err := json.Marshal(request)
+	if err != nil {
+		t.Fatalf("marshal route request: %v", err)
+	}
+	return makeContextVMEvent(t, testRequesterKey, string(content))
+}
+
+func routeResultPayload(t *testing.T, ev nostr.Event) map[string]any {
+	t.Helper()
+	response := contextVMResponse(t, ev)
+	if response.Error != nil {
+		t.Fatalf("unexpected ContextVM error: %+v", response.Error)
+	}
+	payload, ok := response.Result.(map[string]any)
+	if !ok {
+		t.Fatalf("unexpected ContextVM result payload: %#v", response.Result)
+	}
+	return payload
 }
 
 func TestEncryptedRouteHandlers_ServiceSecretsCreateListRevealEncrypted(t *testing.T) {
@@ -291,8 +304,7 @@ func TestEncryptedRouteHandlers_ServiceSecretsCreateListRevealEncrypted(t *testi
 	if len(publisher.events) != 1 {
 		t.Fatalf("create published %d events", len(publisher.events))
 	}
-	created := decryptResultEnvelope(t, publisher.events[0], testRequesterKey)
-	createdPayload := resultPayloadMap(t, created)
+	createdPayload := routeResultPayload(t, publisher.events[0])
 	if _, leaked := createdPayload["value"]; leaked {
 		t.Fatalf("create response leaked value: %#v", createdPayload)
 	}
@@ -306,16 +318,15 @@ func TestEncryptedRouteHandlers_ServiceSecretsCreateListRevealEncrypted(t *testi
 
 	publisher.events = nil
 	transport.HandleEvent(context.Background(), makeRouteRequest(t, EncryptedOperationServiceSecretsList, map[string]any{"service_id": serviceID.String()}))
-	listed := decryptResultEnvelope(t, publisher.events[0], testRequesterKey)
-	listPayload := resultPayloadMap(t, listed)
+	listPayload := routeResultPayload(t, publisher.events[0])
 	if stringified, _ := json.Marshal(listPayload); string(stringified) == "postgres://secret" || containsJSONValue(stringified, "postgres://secret") {
 		t.Fatalf("list response leaked secret value: %s", stringified)
 	}
 
 	publisher.events = nil
 	transport.HandleEvent(context.Background(), makeRouteRequest(t, EncryptedOperationServiceSecretsReveal, map[string]any{"service_id": serviceID.String(), "secret_id": secretID}))
-	revealed := decryptResultEnvelope(t, publisher.events[0], testRequesterKey)
-	if value := resultPayloadMap(t, revealed)["value"]; value != "postgres://secret" {
+	revealed := routeResultPayload(t, publisher.events[0])
+	if value := revealed["value"]; value != "postgres://secret" {
 		t.Fatalf("reveal value = %#v", value)
 	}
 }
@@ -334,9 +345,9 @@ func TestEncryptedRouteHandlers_ServiceSecretsDenyUnauthorizedRole(t *testing.T)
 	transport, publisher := encryptedRouteTransport(t, h)
 
 	transport.HandleEvent(context.Background(), makeRouteRequest(t, EncryptedOperationServiceSecretsList, map[string]any{"service_id": serviceID.String()}))
-	envelope := decryptResultEnvelope(t, publisher.events[0], testRequesterKey)
-	if envelope.Status != "error" || envelope.Error == nil || !strings.Contains(envelope.Error.Message, "access denied") {
-		t.Fatalf("expected encrypted access denied, got %+v", envelope)
+	response := contextVMResponse(t, publisher.events[0])
+	if response.Error == nil || !strings.Contains(response.Error.Message, "access denied") {
+		t.Fatalf("expected ContextVM access denied, got %+v", response)
 	}
 }
 
@@ -357,7 +368,7 @@ func TestEncryptedRouteHandlers_GetRunLogsSuccessAndInProgressError(t *testing.T
 	transport, publisher := encryptedRouteTransport(t, h)
 
 	transport.HandleEvent(context.Background(), makeRouteRequest(t, EncryptedOperationDeploymentRunLogsGet, map[string]any{"run_id": runID.String(), "tail": 2, "stream": "stdout"}))
-	payload := resultPayloadMap(t, decryptResultEnvelope(t, publisher.events[0], testRequesterKey))
+	payload := routeResultPayload(t, publisher.events[0])
 	logs := payload["logs"].(map[string]any)
 	if logs["stdout"] != "two\nthree" || logs["stderr"] != nil {
 		t.Fatalf("unexpected stdout-only logs: %#v", logs)
@@ -366,9 +377,9 @@ func TestEncryptedRouteHandlers_GetRunLogsSuccessAndInProgressError(t *testing.T
 	publisher.events = nil
 	run.Status = domain.RunStatusRunning
 	transport.HandleEvent(context.Background(), makeRouteRequest(t, EncryptedOperationDeploymentRunLogsGet, map[string]any{"run_id": runID.String()}))
-	envelope := decryptResultEnvelope(t, publisher.events[0], testRequesterKey)
-	if envelope.Status != "error" || envelope.Error == nil {
-		t.Fatalf("expected encrypted error for running logs, got %+v", envelope)
+	response := contextVMResponse(t, publisher.events[0])
+	if response.Error == nil {
+		t.Fatalf("expected ContextVM error for running logs, got %+v", response)
 	}
 }
 
@@ -391,7 +402,7 @@ func TestEncryptedRouteHandlers_VerifyArtifactSignaturesStoresCounts(t *testing.
 	transport, publisher := encryptedRouteTransport(t, h)
 
 	transport.HandleEvent(context.Background(), makeRouteRequest(t, EncryptedOperationArtifactSignaturesVerify, map[string]any{"artifact_id": artifactID.String()}))
-	payload := resultPayloadMap(t, decryptResultEnvelope(t, publisher.events[0], testRequesterKey))
+	payload := routeResultPayload(t, publisher.events[0])
 	if payload["found"] != float64(2) || payload["stored"] != float64(2) || payload["verified"] != float64(1) || payload["rejected"] != float64(1) {
 		t.Fatalf("unexpected verify counts: %#v", payload)
 	}

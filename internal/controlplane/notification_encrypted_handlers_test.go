@@ -115,11 +115,42 @@ func encryptedPayload(t *testing.T, payload any) json.RawMessage {
 	return data
 }
 
-func resultPayloadMap(t *testing.T, envelope EncryptedResultEnvelope) map[string]any {
+func makeNotificationContextVMRequest(t *testing.T, id, operation string, payload any) *nostr.Event {
 	t.Helper()
-	payload, ok := envelope.Payload.(map[string]any)
+	params := json.RawMessage(`null`)
+	if payload != nil {
+		params = encryptedPayload(t, payload)
+	}
+	request := ContextVMJSONRPCRequest{
+		JSONRPC: "2.0",
+		ID:      encryptedPayload(t, id),
+		Method:  operation,
+		Params:  params,
+	}
+	data, err := json.Marshal(request)
+	if err != nil {
+		t.Fatalf("marshal ContextVM request: %v", err)
+	}
+	return makeContextVMEvent(t, testRequesterKey, string(data))
+}
+
+func makeNotificationContextVMWrappedRequest(t *testing.T, id, operation string, payload any) *nostr.Event {
+	t.Helper()
+	return wrapContextVMEvent(t, makeNotificationContextVMRequest(t, id, operation, payload), KindContextVMGiftWrap)
+}
+
+func notificationResultPayload(t *testing.T, ev nostr.Event) map[string]any {
+	t.Helper()
+	if ev.Kind == KindContextVMGiftWrap || ev.Kind == KindContextVMEphemeralWrap {
+		ev = unwrapContextVMResponseEvent(t, ev, testRequesterKey)
+	}
+	response := contextVMResponse(t, ev)
+	if response.Error != nil {
+		t.Fatalf("ContextVM response error: %+v", response.Error)
+	}
+	payload, ok := response.Result.(map[string]any)
 	if !ok {
-		t.Fatalf("payload is %T: %#v", envelope.Payload, envelope.Payload)
+		t.Fatalf("payload is %T: %#v", response.Result, response.Result)
 	}
 	return payload
 }
@@ -130,20 +161,11 @@ func TestNotificationEncryptedHandlers_CreateListSanitizesWebhookSecret(t *testi
 	transport := NewEncryptedRequestTransport(nil, newResponder(t, publisher), nil, zap.NewNop())
 	RegisterNotificationEncryptedHandlers(transport, repo, nil)
 
-	requesterPubkey, err := nostrPublicKey(testRequesterKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	event := makeEncryptedRequestEvent(t, testRequesterKey, EncryptedRequestEnvelope{
-		Version:         EncryptedRequestWireVersion,
-		Operation:       EncryptedOperationNotificationChannelsCreate,
-		RequesterPubkey: requesterPubkey,
-		Payload: encryptedPayload(t, map[string]any{
-			"name":         "Prod webhook",
-			"channel_type": "webhook",
-			"config":       map[string]any{"url": "https://hooks.example/bahia", "secret": "super-secret"},
-			"enabled":      true,
-		}),
+	event := makeNotificationContextVMWrappedRequest(t, "create-1", EncryptedOperationNotificationChannelsCreate, map[string]any{
+		"name":         "Prod webhook",
+		"channel_type": "webhook",
+		"config":       map[string]any{"url": "https://hooks.example/bahia", "secret": "super-secret"},
+		"enabled":      true,
 	})
 
 	transport.HandleEvent(context.Background(), event)
@@ -151,11 +173,10 @@ func TestNotificationEncryptedHandlers_CreateListSanitizesWebhookSecret(t *testi
 	if len(publisher.events) != 1 {
 		t.Fatalf("published events = %d", len(publisher.events))
 	}
-	envelope := decryptResultEnvelope(t, publisher.events[0], testRequesterKey)
-	channelPayload := resultPayloadMap(t, envelope)["channel"].(map[string]any)
+	channelPayload := notificationResultPayload(t, publisher.events[0])["channel"].(map[string]any)
 	config := channelPayload["config"].(map[string]any)
 	if _, ok := config["secret"]; ok {
-		t.Fatalf("encrypted create result leaked webhook secret: %#v", config)
+		t.Fatalf("ContextVM create result leaked webhook secret: %#v", config)
 	}
 
 	var stored domain.NotificationChannel
@@ -167,13 +188,12 @@ func TestNotificationEncryptedHandlers_CreateListSanitizesWebhookSecret(t *testi
 	}
 
 	publisher.events = nil
-	listEvent := makeEncryptedRequestEvent(t, testRequesterKey, EncryptedRequestEnvelope{Version: EncryptedRequestWireVersion, Operation: EncryptedOperationNotificationChannelsList, RequesterPubkey: requesterPubkey})
+	listEvent := makeNotificationContextVMWrappedRequest(t, "list-1", EncryptedOperationNotificationChannelsList, nil)
 	transport.HandleEvent(context.Background(), listEvent)
-	envelope = decryptResultEnvelope(t, publisher.events[0], testRequesterKey)
-	channels := resultPayloadMap(t, envelope)["channels"].([]any)
+	channels := notificationResultPayload(t, publisher.events[0])["channels"].([]any)
 	listedConfig := channels[0].(map[string]any)["config"].(map[string]any)
 	if _, ok := listedConfig["secret"]; ok {
-		t.Fatalf("encrypted list result leaked webhook secret: %#v", listedConfig)
+		t.Fatalf("ContextVM list result leaked webhook secret: %#v", listedConfig)
 	}
 }
 
@@ -190,18 +210,9 @@ func TestNotificationEncryptedHandlers_UpdatePreservesOmittedWebhookSecret(t *te
 	publisher := &mockEncryptedPublisher{}
 	transport := NewEncryptedRequestTransport(nil, newResponder(t, publisher), nil, zap.NewNop())
 	RegisterNotificationEncryptedHandlers(transport, repo, nil)
-	requesterPubkey, err := nostrPublicKey(testRequesterKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	event := makeEncryptedRequestEvent(t, testRequesterKey, EncryptedRequestEnvelope{
-		Version:         EncryptedRequestWireVersion,
-		Operation:       EncryptedOperationNotificationChannelsUpdate,
-		RequesterPubkey: requesterPubkey,
-		Payload: encryptedPayload(t, map[string]any{
-			"id":     channelID.String(),
-			"config": map[string]any{"url": "https://hooks.example/new"},
-		}),
+	event := makeNotificationContextVMWrappedRequest(t, "update-1", EncryptedOperationNotificationChannelsUpdate, map[string]any{
+		"id":     channelID.String(),
+		"config": map[string]any{"url": "https://hooks.example/new"},
 	})
 
 	transport.HandleEvent(context.Background(), event)
@@ -210,14 +221,13 @@ func TestNotificationEncryptedHandlers_UpdatePreservesOmittedWebhookSecret(t *te
 	if stored.Config["url"] != "https://hooks.example/new" || stored.Config["secret"] != "super-secret" {
 		t.Fatalf("update did not preserve omitted secret: %#v", stored.Config)
 	}
-	envelope := decryptResultEnvelope(t, publisher.events[0], testRequesterKey)
-	config := resultPayloadMap(t, envelope)["channel"].(map[string]any)["config"].(map[string]any)
+	config := notificationResultPayload(t, publisher.events[0])["channel"].(map[string]any)["config"].(map[string]any)
 	if _, ok := config["secret"]; ok {
-		t.Fatalf("encrypted update result leaked webhook secret: %#v", config)
+		t.Fatalf("ContextVM update result leaked webhook secret: %#v", config)
 	}
 }
 
-func TestNotificationEncryptedHandlers_ListLogsReturnsEncryptedResult(t *testing.T) {
+func TestNotificationEncryptedHandlers_ListLogsReturnsEncryptedContextVMResponse(t *testing.T) {
 	repo := newFakeNotificationRepo()
 	channelID := uuid.New()
 	repo.logs = []domain.NotificationLog{{
@@ -231,29 +241,18 @@ func TestNotificationEncryptedHandlers_ListLogsReturnsEncryptedResult(t *testing
 	publisher := &mockEncryptedPublisher{}
 	transport := NewEncryptedRequestTransport(nil, newResponder(t, publisher), nil, zap.NewNop())
 	RegisterNotificationEncryptedHandlers(transport, repo, nil)
-	requesterPubkey, err := nostrPublicKey(testRequesterKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	event := makeEncryptedRequestEvent(t, testRequesterKey, EncryptedRequestEnvelope{
-		Version:         EncryptedRequestWireVersion,
-		Operation:       EncryptedOperationNotificationLogsList,
-		RequesterPubkey: requesterPubkey,
-		Payload:         encryptedPayload(t, map[string]any{"limit": 50}),
-	})
+	event := makeNotificationContextVMWrappedRequest(t, "logs-1", EncryptedOperationNotificationLogsList, map[string]any{"limit": 50})
 
 	transport.HandleEvent(context.Background(), event)
 
-	if got := publisher.events[0]; got.Kind != KindEncryptedResult || got.Content == "" || got.Content == "only-in-encrypted-result" {
-		t.Fatalf("log result was not published as encrypted result: %#v", got)
+	if len(publisher.events) != 1 {
+		t.Fatalf("published events = %d", len(publisher.events))
 	}
-	envelope := decryptResultEnvelope(t, publisher.events[0], testRequesterKey)
-	logs := resultPayloadMap(t, envelope)["logs"].([]any)
+	if got := publisher.events[0]; got.Kind != KindContextVMGiftWrap || got.Content == "" || got.Content == "only-in-encrypted-result" {
+		t.Fatalf("log result was not published as encrypted ContextVM response: %#v", got)
+	}
+	logs := notificationResultPayload(t, publisher.events[0])["logs"].([]any)
 	if logs[0].(map[string]any)["payload"].(map[string]any)["secret_detail"] != "only-in-encrypted-result" {
 		t.Fatalf("missing decrypted log payload: %#v", logs[0])
 	}
-}
-
-func nostrPublicKey(privateKey string) (string, error) {
-	return nostr.GetPublicKey(privateKey)
 }

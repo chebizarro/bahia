@@ -111,14 +111,11 @@
     notice = { type: 'error', message };
   }
 
-  let llmEventHistory = $derived.by(() => buildLLMEventHistory(events, LLM_ACTIVITY_KINDS));
+  let llmEventHistory = $derived.by(() => buildLLMEventHistory(events, LLM_ACTIVITY_KINDS, getTagValue));
 
   let llmActivity = $derived.by(() => llmEventHistory.slice(0, 20));
 
-  let recentReleases = $derived.by(() => buildRecentReleases(
-    llmEventHistory.filter((activity) => activity.kind === KINDS.BAHIA_LLM_RELEASE_REGISTER_RESULT),
-    getTagValue
-  ));
+  let recentReleases = $derived.by(() => buildRecentReleases(llmEventHistory, getTagValue));
 
   let routeStateRows = $derived.by(() => buildRouteStateRows(llmRouteStates, llmRoutes, environments, recentReleases));
 
@@ -490,7 +487,7 @@
               {#each llmActivity as activity}
                 <tr>
                   <td>{activity.time ? new Date(activity.time).toLocaleString() : '-'}</td>
-                  <td>{kindLabel(KINDS, activity.kind)}</td>
+                  <td>{kindLabel(activity, getTagValue)}</td>
                   <td>{activityData(activity).status || activityTag(activity, getTagValue, 'status') || '-'}</td>
                   <td>{routeName(llmRoutes, activityData(activity).route_id || activityTag(activity, getTagValue, 'route'))}</td>
                   <td>{activityData(activity).message || activityData(activity).version || activityData(activity).name || '-'}</td>

@@ -24,7 +24,7 @@ The HTTP API and MCP server still matter, but they are now **narrowed compatibil
 ## Control-plane hierarchy
 
 ### 1. System discovery
-`Nostr discovery events (kind 31974 + NIP-51 kind 30002)` advertises:
+ContextVM discovery (`11316`-`11320`) plus NIP-51 relay sets (`30002`) advertise:
 - browser relay URLs
 - sidecar URL
 - service pubkey
@@ -35,16 +35,19 @@ The HTTP API and MCP server still matter, but they are now **narrowed compatibil
 This endpoint is the browser and tooling bootstrap contract.
 
 ### 2. Public Nostr control plane
-Bahia's canonical public control-plane contract is the signed Nostr request/status/result/read-model family described in `docs/control-planes.md` and implemented in `internal/controlplane/reactor.go`.
+Bahia's canonical public control-plane contract is ContextVM CRU (`25910`, normally wrapped by CEP-4/NIP-59 `1059`/`21059`) plus canonical observable events described in `docs/control-planes.md`.
 
-Examples:
-- request kinds: `5961-5989`
-- status kinds: `6961-6978`
-- result kinds: `7961-7979`
-- read models: `31961-31970`
+Production examples:
+- ContextVM mutation/request-response: `25910`
+- canonical state/app data: `30900`, `30078`
+- canonical audit/status: `4903`, `30315`
+- ContextVM discovery: `11316`-`11320`
+- relay sets and deletes: `30002`, `5`
+
+Legacy Bahia request/status/result/read-model/encrypted kinds are migration inventory only and are not production runtime contracts.
 
 ### 3. Encrypted Nostr request/result plane
-Sensitive browser-facing domains use encrypted request/result events (`5980/7980`) on separate encrypted-request relays where configured.
+Sensitive browser-facing domains use encrypted ContextVM events (`25910` inside `1059`/`21059` where supported) on configured encrypted-request relays.
 
 ### 4. Native MCP transport
 Bahia exposes JSON-RPC tools over HTTP at `/mcp` and `/api/v1/mcp`. Tool responses include correlation metadata so clients can follow async truth on relays.
@@ -57,7 +60,7 @@ REST remains for narrowed CRUD, query, logs, registry, and operational compatibi
 ## Major components
 
 ### Browser / CLI / MCP clients
-Clients discover capabilities from `Nostr discovery events (kind 31974 + NIP-51 kind 30002)`, then interact with Bahia through a mix of:
+Clients discover capabilities from ContextVM discovery (`11316`-`11320`) plus NIP-51 relay sets (`30002`), then interact with Bahia through a mix of:
 - public relay traffic
 - encrypted relay traffic
 - MCP JSON-RPC
@@ -114,7 +117,7 @@ Authentication includes NIP-98, service accounts, and anonymous pull from allowe
 The Hive-CI bridge subscribes to workflow events and turns them into build/artifact/deployment state.
 
 ```text
-Hive-CI (5401)     Hive-CI (5402)
+Hive-CI (canonical dispatch)     Hive-CI (canonical result)
 Workflow Run  ────▶  Workflow Result
      │                    │
      └────────┬───────────┘
@@ -150,17 +153,17 @@ Bahia persists canonical state in PostgreSQL and stores selected blobs/logs in B
 ## Key browser/runtime flows
 
 ### Browser bootstrap flow
-1. Browser requests `Nostr discovery events (kind 31974 + NIP-51 kind 30002)`
+1. Browser subscribes to ContextVM discovery (`11316`-`11320`) and relay sets (`30002`)
 2. Browser discovers relay topology and feature flags
 3. Browser connects to advertised relays
-4. Browser queries read models until EOSE
+4. Browser queries canonical observables until EOSE
 5. Browser subscribes live for ongoing updates
 
 ### Public action flow
 1. User/operator signs a public Nostr request
 2. Bahia validates and processes the event
 3. Bahia publishes status and terminal result replies
-4. Bahia projects updated read models
+4. Bahia projects updated canonical observables
 5. Browser state updates from relays
 
 ### Encrypted action flow
@@ -184,7 +187,7 @@ Bahia persists canonical state in PostgreSQL and stores selected blobs/logs in B
 | Concern | Primary home |
 |---------|--------------|
 | Desired deployment/runtime state | PostgreSQL |
-| Shared browser state projection | Nostr read models projected from persisted state |
+| Shared browser state projection | Nostr canonical observables projected from persisted state |
 | Runtime observations | PostgreSQL (from runtime queries / action results) |
 | Workflow history | PostgreSQL |
 | Public audit/activity trail | Nostr relays |
@@ -195,7 +198,7 @@ Bahia persists canonical state in PostgreSQL and stores selected blobs/logs in B
 
 ## Key design decisions
 
-1. **Nostr for control-plane coordination** — requests, status/results, and read models are event-driven
+1. **Nostr for control-plane coordination** — ContextVM requests, statuses/audits, and canonical state observables are event-driven
 2. **Intent-based deployments** — request and execution are separate, enabling approvals and auditability
 3. **Signer-first identity** — users and operators act through signed Nostr identities
 4. **Encrypted sensitive domains** — not all browser state belongs on public relays

@@ -2,7 +2,7 @@
 
 > **Status**: Draft
 > **Date**: 2026-05-11
-> **Replaces**: `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` (HTTP discovery endpoint)
+> **Historical design note**: superseded by ContextVM discovery (`11316`-`11320`) plus NIP-51 relay sets (`30002`)
 > **PSTF Feature**: `SYSTEM_DISCOVERY_RELAY_BOOTSTRAP`
 > **Prerequisite HITL Decisions**: HITL-001 (remove `nostr.relays`), HITL-004 (NIP-51 kind 30002 for operator relay visibility)
 
@@ -12,11 +12,11 @@
 
 ### Problem
 
-The web app, CLI, and settings page all bootstrap from `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` — an HTTP request/response endpoint that contradicts Bahia's Nostr-native event-driven architecture. The AGENTS.md guardrails explicitly prohibit request/response patterns and polling APIs. This endpoint is the last major HTTP-bound bootstrap dependency.
+This document originally proposed Bahia-specific discovery kind `31974`. After the ContextVM migration cutover, production web, CLI, and settings flows bootstrap from ContextVM discovery (`11316`-`11320`) plus NIP-51 relay sets (`30002`). Legacy `31974` is startup migration inventory only.
 
 ### Goal
 
-Replace `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` with signed Nostr replaceable events so that:
+Use signed ContextVM discovery and relay-set events so that:
 
 - Browser bootstrap requires no HTTP beyond the initial page serve
 - CLI/operator discovery requires no HTTP at all
@@ -24,7 +24,7 @@ Replace `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` with signed No
 - The discovery contract is cryptographically authenticated (signed by service pubkey)
 - The migration is staged and reversible
 
-### What `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` serves today
+### Historical `31974` discovery payload
 
 | Section | Fields | Primary consumers |
 |---|---|---|
@@ -40,12 +40,12 @@ Replace `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` with signed No
 
 ## 2. Discovery Event Design
 
-### 2.1 Kind 31974 — Bahia System Discovery
+### 2.1 Historical Kind 31974 — Bahia System Discovery
 
 A **parameterized replaceable event** (NIP-33) carrying the full non-relay discovery contract.
 
 ```
-Kind:    31974
+Kind:    31974 (historical migration input only)
 Author:  <service-pubkey>
 d-tag:   "bahia-system-v1"
 Content: JSON snapshot (see below)
@@ -60,10 +60,10 @@ Tags:    ["d", "bahia-system-v1"]
   "control_plane": {
     "version": "bahia-controlplane-v1",
     "capabilities": ["service_deployments", "relay_read_models", ...],
-    "request_kinds":    { "deploy_request": 5961, ... },
-    "status_kinds":     { "deployment_status": 6961, ... },
-    "result_kinds":     { "deployment_result": 7961, ... },
-    "read_model_kinds": { "service_state": 31961, ... },
+    "contextvm_kind": 25910,
+    "discovery_kinds": [11316, 11317, 11318, 11319, 11320],
+    "relay_set_kind": 30002,
+    "observable_kinds": [30900, 4903, 30315, 30078],
     "correlation_tags": ["service", "environment", "artifact", ...],
     "mcp": { "async_correlation": true, "fields": [...] }
   },
@@ -115,9 +115,9 @@ Standard NIP-51 relay set events for relay URL discovery. Each is a parameterize
 
 | Consumer | Filter | Expected events |
 |---|---|---|
-| Browser bootstrap | `{kinds: [31974, 30002], authors: [<service-pubkey>]}` | System discovery + all relay sets |
+| Browser bootstrap | `{kinds: [11316, 11317, 11318, 11319, 11320, 30002], authors: [<service-pubkey>]}` | System discovery + all relay sets |
 | CLI relay resolution | `{kinds: [30002], authors: [<service-pubkey>], "#d": ["bahia-browser-v1"]}` | Browser relay set only |
-| Settings page | `{kinds: [31974, 30002], authors: [<service-pubkey>]}` | Full discovery + all relay sets |
+| Settings page | `{kinds: [11316, 11317, 11318, 11319, 11320, 30002], authors: [<service-pubkey>]}` | Full discovery + all relay sets |
 | Encrypted transport | `{kinds: [30002], authors: [<service-pubkey>], "#d": ["bahia-browser-v1"]}` | Request-domain relay set |
 
 ### 2.4 Service identity
@@ -158,10 +158,10 @@ Key rotation requires accepting events from either the old or new pubkey during 
 ```
 1. Page loads → read window.__BAHIA_BOOTSTRAP__
 2. Connect to seed relay_urls via WebSocket
-3. Subscribe: {kinds: [31974, 30002], authors: service_pubkeys}
+3. Subscribe: {kinds: [11316, 11317, 11318, 11319, 11320, 30002], authors: service_pubkeys}
 4. Collect events until EOSE
 5. Apply latest-wins per (kind, pubkey, d-tag)
-6. Validate: must have ≥1 kind 31974 event AND ≥1 kind 30002 bahia-browser-v1 event
+6. Validate: must have ContextVM discovery events and ≥1 kind 30002 bahia-browser-v1 relay-set event
 7. Fail closed if validation fails
 8. Normalize into current systemInfo.data shape
 9. controlplane.svelte.js consumes normalized discovery (unchanged)
@@ -174,7 +174,7 @@ Key rotation requires accepting events from either the old or new pubkey during 
 
 - No bootstrap seed present → error, no silent fallback
 - No relay connected after seed → error
-- EOSE reached with no kind 31974 event → error
+- EOSE reached with no ContextVM discovery event → error
 - EOSE reached with no `bahia-browser-v1` relay set → error
 - Event from untrusted pubkey → ignored
 - Invalid event signature → ignored
@@ -222,7 +222,7 @@ Operator commands trigger deployments, restarts, stops, and adoption flows. Trus
 ### Publisher-side
 
 - Events signed with the Bahia service private key (same key currently used for `derivePublicKey()`)
-- Kind 31974 content is the canonical JSON snapshot built from `config.Config`
+- ContextVM discovery content is the canonical JSON snapshot built from `config.Config`; legacy `31974` content is migration-only
 - Kind 30002 tags reflect the configured relay sets
 - Events published to the sidecar relay boundary only (not mirrored upstream by default)
 
@@ -236,14 +236,14 @@ All consumers MUST enforce:
 | Event ID = SHA256(serialized) | NIP-01 integrity |
 | Valid schnorr signature over event ID | NIP-01 authenticity |
 | Timestamp not wildly in the future (>10 min ahead) | Prevents pre-dated spoofing; no lower bound — replaceable events may be old |
-| Correct `kind` (31974 or 30002) | Filter validation |
+| Correct `kind` (`11316`-`11320` or `30002`) | Filter validation |
 | Correct `d` tag value | Prevents cross-version confusion |
 | Latest-wins by (kind, pubkey, d-tag) | Parameterized replaceable semantics |
 | Content parses as valid JSON with `schema` field | Forward compatibility |
 
 ### Publication scope & mirroring policy
 
-Discovery events SHOULD be published only to the sidecar relay boundary — the same scope as Bahia's canonical read-model events (kind 31961-31973). Discovery events SHOULD NOT be mirrored to upstream public relays by default, because the payload reveals:
+Discovery events SHOULD be published only to the sidecar relay boundary — the same scope as Bahia's canonical observable events (`30900`, `4903`, `30315`, `30078`). Discovery events SHOULD NOT be mirrored to upstream public relays by default, because the payload reveals:
 
 - Internal registry URLs and configuration
 - Runtime environment names
@@ -267,8 +267,8 @@ If broader publication is desired, it must be an explicit operator decision, not
 
 **What ships:**
 - Extract shared discovery builder from `SystemHandler.GetInfo` into `internal/controlplane/system_discovery.go`
-- Add kind 31974 constant (`KindSystemDiscovery`) to controlplane
-- Publish kind 31974 + kind 30002 events on startup, relay reconnect, and config change
+- Publish ContextVM discovery kinds (`11316`-`11320`) and NIP-51 relay sets (`30002`)
+- Publish ContextVM discovery + kind `30002` events on startup, relay reconnect, and config change
 - Nostr event contract unchanged, now delegates to shared builder
 
 **Risk:** Low — purely additive, no consumer changes.
@@ -291,7 +291,7 @@ If broader publication is desired, it must be an explicit operator decision, not
 - CLI Nostr discovery becomes default when pubkey is configured
 - PSTF artifacts and docs updated to declare Nostr-native discovery as authoritative
 
-**Risk:** Medium — external consumers of `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` break if they haven't migrated. Deprecation period provides warning.
+**Risk:** Medium — external consumers of legacy `31974` discovery break if they have not migrated to ContextVM discovery. Startup migration and compatibility fixtures document the old payload only for historical conversion.
 
 ### Phase 3 — Removal
 
@@ -318,22 +318,22 @@ If broader publication is desired, it must be an explicit operator decision, not
 | Current source | New source | Event |
 |---|---|---|
 | `systemInfo.nostr.relays` ("Server Relays") | Service-authored relay set | Kind 30002, d-tag `bahia-service-v1` |
-| `systemInfo.nostr.service_npub` ("Service Identity") | Event author pubkey (NIP-19 encode) | Kind 31974 author field |
-| `systemInfo.nostr.publish_enabled` | Discovery features | Kind 31974 `features.publish_enabled` (preserved as explicit field; not equivalent to `relay_read_models`) |
-| `systemInfo.oci.*` | Discovery snapshot | Kind 31974 `oci` section |
-| `systemInfo.registries` | Discovery snapshot | Kind 31974 `registries` section |
-| `systemInfo.blossom.*` | Discovery snapshot | Kind 31974 `blossom` section |
+| `systemInfo.nostr.service_npub` ("Service Identity") | Event author pubkey (NIP-19 encode) | ContextVM discovery author field |
+| `systemInfo.nostr.publish_enabled` | Discovery features | ContextVM discovery `features.publish_enabled` (preserved as explicit field; not equivalent to `relay_read_models`) |
+| `systemInfo.oci.*` | Discovery snapshot | ContextVM discovery `oci` section |
+| `systemInfo.registries` | Discovery snapshot | ContextVM discovery `registries` section |
+| `systemInfo.blossom.*` | Discovery snapshot | ContextVM discovery `blossom` section |
 
 ### Registry information
 
-Registries remain in the kind 31974 content. Public registries (ghcr, dockerhub, quay) are static and can be hardcoded client-side or included in the discovery snapshot. The design preserves the current approach of including them in the discovery payload.
+Registries remain in ContextVM discovery content; legacy `31974` registry content is migration-only. Public registries (ghcr, dockerhub, quay) are static and can be hardcoded client-side or included in the discovery snapshot. The design preserves the current approach of including them in the discovery payload.
 
 ### Encrypted request transport
 
 Encrypted capability gating reads from:
 - Kind 30002 `bahia-browser-v1` → relay URLs for request-domain traffic
-- Kind 31974 `features.encrypted_nostr_requests` → feature flag
-- Kind 31974 author pubkey → service pubkey for NIP-44 encryption
+- ContextVM discovery `features.encrypted_nostr_requests` → feature flag
+- ContextVM discovery author pubkey → service pubkey for NIP-44 encryption
 
 The browser encrypted transport module (`encrypted-controlplane.js`) continues checking all three inputs coherently. Encrypted capability is NOT inferred from public relay presence (per HITL-003).
 
@@ -345,7 +345,7 @@ The browser encrypted transport module (`encrypted-controlplane.js`) continues c
 
 | File | Purpose |
 |---|---|
-| `internal/controlplane/system_discovery.go` | Shared discovery builder: assembles snapshot from `config.Config`, produces kind 31974 JSON and kind 30002 tag sets |
+| `internal/controlplane/system_discovery.go` | Shared discovery builder: assembles snapshot from `config.Config`, produces ContextVM discovery JSON and kind 30002 tag sets |
 | `internal/controlplane/system_discovery_test.go` | Unit tests for snapshot assembly, kind constant validation |
 | `web/src/lib/stores/discovery.svelte.js` | Nostr-backed discovery store with seed bootstrap, EOSE handling, normalization |
 | `web/tests/unit/discovery-store.test.js` | Unit tests for Nostr discovery bootstrap |
@@ -354,17 +354,17 @@ The browser encrypted transport module (`encrypted-controlplane.js`) continues c
 
 | File | Change |
 |---|---|
-| `internal/controlplane/reactor.go` | Add `KindSystemDiscovery = 31974` constant |
+| `internal/controlplane/reactor.go` | Historical proposal: add `KindSystemDiscovery = 31974`; production uses ContextVM discovery instead |
 | `internal/adapters/nostr/projector.go` | Delegate to shared builder; keep HTTP shape unchanged during phases 0-2 |
 | `internal/api/handlers/system_test.go` | Verify HTTP output uses shared builder |
-| `internal/adapters/nostr/` (publisher) | Extend existing Bahia event publication to emit kind 31974 + kind 30002 on startup/reconnect/change |
+| `internal/adapters/nostr/` (publisher) | Publish ContextVM discovery and kind `30002` on startup/reconnect/change |
 | `cmd/cli/operator_nostr.go` | Add `--service-pubkey` / env resolution; Nostr discovery path with explicit relay configuration |
 | `cmd/cli/operator_nostr_test.go` | Add precedence + failure tests for Nostr discovery |
 | `pkg/client/client.go` | Keep `SystemInfo` during migration; optionally add Nostr discovery method |
 | `web/src/lib/stores/system.svelte.js` | Dual-path: Nostr-first with explicit relay configuration, normalize to current shape |
 | `web/src/lib/stores/controlplane.svelte.js` | Remove any `nostr.relays` fallback; validate works with normalized Nostr discovery |
 | `web/src/routes/settings/+page.svelte` | Read server relays from kind 30002 subscription; read other metadata from normalized discovery |
-| `web/src/lib/nostr/client.js` | Add `BAHIA_KINDS.SYSTEM_DISCOVERY = 31974`; ensure kind 30002 support |
+| `web/src/lib/nostr/client.js` | Use ContextVM discovery constants (`11316`-`11320`) and ensure kind `30002` support |
 | `web/src/lib/nostr/encrypted-controlplane.js` | Read encrypted relay URLs from kind 30002 `bahia-browser-v1` instead of Nostr discovery |
 | `docs/control-planes.md` | Document discovery protocol, kind constant, relay-set d-tags, bootstrap seed, trust model |
 | `pstf/features/SYSTEM_DISCOVERY_RELAY_BOOTSTRAP/feature_spec.json` | Update feature boundary and intended behavior |
@@ -389,7 +389,7 @@ The browser encrypted transport module (`encrypted-controlplane.js`) continues c
 |---|---|
 | `system_discovery_test.go` — snapshot assembly | Shared builder produces correct JSON from config; kind maps match controlplane constants; feature flags follow derivation rules; legacy flags remain explicit false |
 | `system_discovery_test.go` — relay set assembly | kind 30002 events have correct d-tags and relay tags; sidecar URL is first in browser set; encrypted relays are separate |
-| `system_discovery_test.go` — kind constant | `KindSystemDiscovery = 31974` does not collide with any existing controlplane kind |
+| `system_discovery_test.go` — kind constants | ContextVM discovery kinds do not collide with existing control-plane observables |
 | `discovery-store.test.js` — seed bootstrap | Store reads seed config; connects to seed relays; subscribes with correct filters; normalizes events to systemInfo shape |
 | `discovery-store.test.js` — EOSE handling | Store resolves after EOSE with valid events; fails closed on missing discovery event; fails closed on missing relay set |
 | `discovery-store.test.js` — validation | Rejects events from untrusted pubkey; rejects invalid signatures; applies latest-wins for replaceable events |
@@ -402,7 +402,7 @@ The browser encrypted transport module (`encrypted-controlplane.js`) continues c
 
 | Test | Validates |
 |---|---|
-| Publisher integration | Service publishes kind 31974 + 30002 to sidecar on startup; events are retrievable via subscription |
+| Publisher integration | Service publishes ContextVM discovery + `30002` to sidecar on startup; events are retrievable via subscription |
 | Multi-consumer contract | Single set of published events satisfies browser bootstrap, CLI relay resolution, and settings page consumption |
 | Migration dual-path | Browser Nostr-first with explicit relay configuration works; CLI Nostr-first with explicit relay configuration works |
 
@@ -410,7 +410,7 @@ The browser encrypted transport module (`encrypted-controlplane.js`) continues c
 
 | Test | Validates |
 |---|---|
-| `controlplane-nostr-smoke.spec.js` (extended) | Page load → seed bootstrap → Nostr discovery → EOSE → controlplane live subscription — no `Nostr discovery events (kind 31974 + NIP-51 kind 30002)` call |
+| `controlplane-nostr-smoke.spec.js` (extended) | Page load → seed bootstrap → ContextVM discovery → EOSE → controlplane live subscription — no legacy `31974` discovery dependency |
 | Settings page | Settings page displays service relays from kind 30002 subscription, not from HTTP Nostr discovery |
 
 ### What NOT to test
@@ -430,7 +430,7 @@ Before implementation, the following decisions need human approval:
 | HITL-006 | Is runtime-injected bootstrap seed (via HTML template) acceptable for production browser bootstrap? | A) Yes, runtime injection B) Build-time env vars only C) Both as options |
 | HITL-007 | Should CLI require explicit service pubkey for Nostr discovery, or allow TOFU with opt-in? | A) Require explicit pubkey (recommended) B) Allow TOFU with `--allow-insecure-discovery` C) Defer CLI Nostr discovery |
 | HITL-008 | Should discovery events be published to sidecar boundary only, or also mirrored upstream? | A) Sidecar only (recommended) B) Mirror upstream by default C) Operator-configurable |
-| HITL-009 | Is kind 31974 approved for BahiaSystemDiscovery? | A) Approve 31974 B) Use different kind number |
+| HITL-009 | Historical: kind `31974` was a pre-ContextVM proposal; it is not the production discovery contract after cutover | Resolved by ContextVM discovery |
 
 ---
 
@@ -442,7 +442,7 @@ Before implementation, the following decisions need human approval:
 
 3. **Config live reload:** If Bahia supports hot config reload in the future, should discovery events be republished on config change? The shared builder makes this trivial, but the trigger mechanism is out of scope.
 
-4. **External consumers:** Are there external tools or integrations that depend on `Nostr discovery events (kind 31974 + NIP-51 kind 30002)`? Phase 2 deprecation telemetry should answer this before phase 3.
+4. **External consumers:** Are there external tools or integrations that depend on legacy `31974` discovery? Phase 2 deprecation telemetry should answer this before phase 3.
 
 ---
 
@@ -451,11 +451,10 @@ Before implementation, the following decisions need human approval:
 | Kind | Name | Range | NIP |
 |---|---|---|---|
 | 30002 | Relay sets | Parameterized replaceable | NIP-51 |
-| 31961 | BahiaServiceState | Parameterized replaceable | App-specific |
-| 31962 | BahiaServiceRegistry | Parameterized replaceable | App-specific |
-| 31963 | BahiaEnvironmentRegistry | Parameterized replaceable | App-specific |
-| 31964-31973 | (other Bahia registries) | Parameterized replaceable | App-specific |
-| **31974** | **BahiaSystemDiscovery** | **Parameterized replaceable** | **App-specific (new)** |
+| `30900` | Bahia canonical state | Parameterized replaceable | Production canonical observable |
+| `30078` | Bahia app data | Parameterized replaceable | Production canonical observable |
+| `11316`-`11320` | ContextVM discovery | ContextVM discovery | Production bootstrap |
+| `31961`-`31974` | Legacy Bahia read/discovery models | Parameterized replaceable | Historical migration inventory only |
 
 ## Appendix B: Bootstrap Seed Schema
 

@@ -15,6 +15,7 @@ import (
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/events"
+	"github.com/openagentsinc/bahia/internal/kinds"
 	"github.com/openagentsinc/bahia/internal/repository"
 	"github.com/openagentsinc/bahia/internal/service"
 	"go.uber.org/zap"
@@ -2089,12 +2090,6 @@ func discoveryControlPlane(llmEnabled, mcpTransportEnabled, dnsEnabled bool) map
 	statusKinds := map[string]int{"deployment_status": KindControlPlaneDeploymentStatus, "service_status": KindControlPlaneServiceStatus}
 	resultKinds := map[string]int{"deployment_result": KindControlPlaneDeploymentResult, "action_result": KindControlPlaneActionResult, "service_create_result": KindControlPlaneServiceCreateResult, "environment_create_result": KindControlPlaneEnvironmentCreateResult, "observation_result": KindControlPlaneObservationResult, "remediation_result": KindControlPlaneRemediationResult}
 	readModelKinds := map[string]int{"service_state": KindServiceState, "service_registry": KindServiceRegistry, "environment_registry": KindEnvironmentRegistry, "worker_state": KindWorkerState, "worker_assignment_state": KindWorkerAssignmentState, "worker_drain_status": KindWorkerDrainStatus, "worker_eligibility_preview": KindWorkerEligibilityPreview}
-	legacyReadModelKinds := map[string][]int{
-		"worker_state":               {KindLegacyWorkerState},
-		"worker_assignment_state":    {KindLegacyWorkerAssignmentState},
-		"worker_drain_status":        {KindLegacyWorkerDrainStatus},
-		"worker_eligibility_preview": {KindLegacyWorkerEligibilityPreview},
-	}
 	capabilities := []string{"service_deployments", "service_registry_read_models", "worker_management", "worker_read_models", "relay_read_models"}
 	correlationTags := []string{"service", "environment", "artifact", "intent", "run", "worker", "command", "e", "p", "status", "step"}
 	mcpFields := []string{"request_event_id", "request_kind", "status_kind", "result_kind", "registry_kind", "state_kind", "service_id", "environment_id", "intent_id", "run_id", "worker_pubkey", "d_tag", "read_model_kinds"}
@@ -2135,37 +2130,24 @@ func discoveryControlPlane(llmEnabled, mcpTransportEnabled, dnsEnabled bool) map
 	}
 	aiML := map[string]any{
 		"enabled": true,
-		"command_kinds": map[string]int{
-			"ml_recipe_run_request":            38390,
-			"ml_inference_deploy_request":      38391,
-			"ml_inference_deployment_approval": 38392,
-			"ml_inference_rollback_request":    38393,
-			"ml_model_import_request":          38394,
-			"ml_recipe_run_result":             38395,
-			"ml_inference_deploy_result":       38396,
-			"ml_inference_approval_result":     38397,
-			"ml_inference_rollback_result":     38398,
-			"ml_model_import_result":           38399,
+		"transport_kinds": map[string]int{
+			"contextvm_message":        kinds.ContextVMMessage,
+			"contextvm_gift_wrap":      kinds.ContextVMGiftWrap,
+			"contextvm_ephemeral_wrap": kinds.ContextVMEphemeralGiftWrap,
 		},
-		"read_model_kinds": map[string]int{
-			"ml_model_registry":              KindMLModelRegistry,
-			"ml_model_version_registry":      KindMLModelVersionRegistry,
-			"ml_dataset_registry":            KindMLDatasetRegistry,
-			"ml_recipe_registry":             KindMLRecipeRegistry,
-			"ml_recipe_run_state":            KindMLRecipeRunState,
-			"ml_inference_endpoint_registry": KindMLInferenceEndpointRegistry,
-			"ml_inference_endpoint_state":    KindMLInferenceEndpointState,
-			"ml_evaluation_experiment_state": KindMLEvaluationExperimentState,
-			"ml_artifact_provenance_graph":   KindMLArtifactProvenanceGraph,
-			"ml_runtime_capability_profile":  KindMLRuntimeCapabilityProfile,
+		"methods": []string{"ml/model-import", "ml/recipe-run", "ml/inference-deploy", "ml/inference-approval", "ml/inference-rollback"},
+		"observable_kinds": map[string]int{
+			"control_state": KindCASControlState,
+			"audit":         KindCASAudit,
+			"status":        KindNIP38Status,
 		},
-		"capabilities":            []string{"ml_model_registry_read_models", "ml_model_version_read_models", "ml_inference_endpoint_read_models", "ml_provenance_read_models", "ml_runtime_capability_read_models", "ml_inference_deploy_requests", "ml_inference_approval_requests", "ml_inference_rollback_requests"},
-		"correlation_tags":        []string{"model", "model_version", "recipe", "run", "endpoint", "environment", "deployment", "artifact", "worker", "runtime", "e", "p", "status"},
-		"addressable_commands":    true,
-		"replaceable_read_models": true,
-		"unsupported_in_d1":       []string{"recipe_execution", "model_import_orchestration", "dataset_import", "evaluation", "benchmark", "fine_tune"},
+		"capabilities":          []string{"ml_model_registry_read_models", "ml_model_version_read_models", "ml_inference_endpoint_read_models", "ml_provenance_read_models", "ml_runtime_capability_read_models", "ml_inference_deploy_requests", "ml_inference_approval_requests", "ml_inference_rollback_requests"},
+		"correlation_tags":      []string{"model", "model_version", "recipe", "run", "endpoint", "environment", "deployment", "artifact", "worker", "runtime", "e", "p", "status"},
+		"contextvm_commands":    true,
+		"canonical_observables": true,
+		"unsupported_in_d1":     []string{"recipe_execution", "model_import_orchestration", "dataset_import", "evaluation", "benchmark", "fine_tune"},
 	}
-	return map[string]any{"version": "bahia-controlplane-v1", "capabilities": capabilities, "request_kinds": requestKinds, "status_kinds": statusKinds, "result_kinds": resultKinds, "read_model_kinds": readModelKinds, "legacy_read_model_kinds": legacyReadModelKinds, "ai_ml": aiML, "correlation_tags": correlationTags, "mcp": map[string]any{"async_correlation": mcpTransportEnabled, "fields": mcpFields}}
+	return map[string]any{"version": "bahia-controlplane-v1", "capabilities": capabilities, "request_kinds": requestKinds, "status_kinds": statusKinds, "result_kinds": resultKinds, "read_model_kinds": readModelKinds, "ai_ml": aiML, "correlation_tags": correlationTags, "mcp": map[string]any{"async_correlation": mcpTransportEnabled, "fields": mcpFields}}
 }
 
 func browserDiscoveryRelays(cfg config.NostrConfig) []string {
