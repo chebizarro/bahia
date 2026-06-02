@@ -177,6 +177,51 @@ All `GET` endpoints that read projected state are acceptable for browser compati
 
 ---
 
+## Implementation Progress
+
+### Work Item 1: Services + Environments (6 endpoints)
+- [x] Remove POST /services from router.go
+- [x] Remove PUT /services/{id} from router.go
+- [x] Remove DELETE /services/{id} from router.go
+- [x] Remove POST /environments from router.go
+- [x] Remove PUT /environments/{id} from router.go
+- [x] Remove DELETE /environments/{id} from router.go
+- [x] Delete/comment handler methods in services.go, environments.go
+- [x] Update tests
+
+### Work Item 2: Deployments + Observations + Artifacts (6 endpoints)
+- [ ] Remove POST /deployments/intents from router.go
+- [ ] Remove POST /deployments/intents/{id}/approve from router.go
+- [ ] Remove POST /deployments/intents/{id}/reject from router.go
+- [ ] Remove POST /rollback from router.go
+- [ ] Remove POST /observations from router.go
+- [ ] Remove POST /artifacts from router.go
+- [ ] Delete/comment handler methods in deployments.go, state.go, artifacts.go
+- [ ] Update tests
+
+### Work Item 3: Policies + Tools (6 endpoints)
+- [ ] Remove POST /policies from router.go
+- [ ] Remove PUT /policies/{id} from router.go
+- [ ] Remove DELETE /policies/{id} from router.go
+- [ ] Remove POST /policies/evaluate from router.go
+- [ ] Remove POST /tools/{id}/approve from router.go
+- [ ] Remove POST /tools/{id}/reject from router.go
+- [ ] Delete/comment handler methods in policies.go, tools.go
+- [ ] Update tests
+
+### Work Item 4: LLM + Adoption + Direct Runtime (6 endpoints)
+- [ ] Remove POST /llm/routes from router.go
+- [ ] Remove POST /llm/routes/{routeId}/releases from router.go
+- [ ] Remove POST /adoption/scan from router.go
+- [ ] Remove POST /adoption/import from router.go
+- [ ] Remove POST /services/{serviceId}/environments/{envId}/deploy from router.go
+- [ ] Remove POST /services/{serviceId}/environments/{envId}/restart from router.go
+- [ ] Remove POST /services/{serviceId}/environments/{envId}/stop from router.go
+- [ ] Delete/comment handler methods in llm.go, adoption.go, service_actions.go
+- [ ] Update tests
+
+---
+
 ## Migration Path
 
 ### For Clients

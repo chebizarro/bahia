@@ -307,7 +307,7 @@ const signed = await bunker.signEvent(event);
 
 ### NIP-98 (HTTP Auth)
 
-For REST endpoints:
+For REST endpoints that remain HTTP-compatible, such as read-model queries:
 
 ```javascript
 const authEvent = {
@@ -315,12 +315,14 @@ const authEvent = {
   content: "",
   tags: [
     ["u", "https://bahia.example.com/api/v1/services"],
-    ["method", "POST"]
+    ["method", "GET"]
   ]
 };
 const signed = await window.nostr.signEvent(authEvent);
 const header = "Nostr " + btoa(JSON.stringify(signed));
 ```
+
+Service and environment mutations use signed Nostr command events directly, not NIP-98-authenticated REST writes.
 
 ## Authorization
 

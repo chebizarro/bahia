@@ -1,0 +1,11 @@
+{
+  "feature_id": "bahia-c7s5",
+  "defects": [],
+  "remaining_work": [
+    {
+      "beads_id": "bahia-9sbb",
+      "title": "Migrate service and environment CLI/MCP mutations to signer-first Nostr",
+      "reason": "Out of scope for REST route removal, but discovered CLI/MCP mutation ingress still needs signer-first implementation or explicit removal."
+    }
+  ]
+}

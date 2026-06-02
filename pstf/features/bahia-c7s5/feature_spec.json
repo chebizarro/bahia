@@ -1,0 +1,32 @@
+{
+  "feature_id": "bahia-c7s5",
+  "title": "Remove REST service and environment mutation endpoints",
+  "status": "implemented",
+  "source_intent": [
+    "docs/specs/rest-deprecation-plan.md#work-item-1-services--environments-6-endpoints",
+    "Beads issue bahia-c7s5"
+  ],
+  "observed_before": {
+    "rest_routes": [
+      "POST /api/v1/services",
+      "PUT /api/v1/services/{id}",
+      "DELETE /api/v1/services/{id}",
+      "POST /api/v1/environments",
+      "PUT /api/v1/environments/{id}",
+      "DELETE /api/v1/environments/{id}"
+    ],
+    "handlers": [
+      "internal/api/handlers/services.go ServiceHandler.Create/Update/Delete",
+      "internal/api/handlers/environments.go EnvironmentHandler.Create/Update/Delete"
+    ]
+  },
+  "intended_behavior": {
+    "rest": "Service and environment mutation REST endpoints are not registered and do not mutate state.",
+    "nostr": "Clients use the existing Nostr control-plane reactor handlers for ServiceCreate, ServiceUpdate, ServiceDelete, EnvironmentCreate, EnvironmentUpdate, and EnvironmentDelete events.",
+    "read_routes": "Existing REST read routes for service and environment read models remain available for browser compatibility."
+  },
+  "out_of_scope": [
+    "Deployment, artifact, policy, tool, LLM, adoption, and direct-runtime REST deprecation work items",
+    "Implementing signer-first CLI/MCP mutation clients; tracked separately in Beads issue bahia-9sbb"
+  ]
+}

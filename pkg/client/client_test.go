@@ -276,40 +276,27 @@ func TestRuntimeActionMethods(t *testing.T) {
 	}
 }
 
-func TestCreateService(t *testing.T) {
-	var gotBody map[string]string
+func TestCreateServiceRestMutationRemoved(t *testing.T) {
+	called := false
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			t.Errorf("method = %s, want POST", r.Method)
-		}
-		if r.URL.Path != "/api/v1/services" {
-			t.Errorf("path = %s, want /api/v1/services", r.URL.Path)
-		}
-		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
-			t.Fatalf("decoding request body: %v", err)
-		}
-		w.Header().Set("Content-Type", "application/json")
-		svc := domain.Service{ID: uuid.New(), Name: gotBody["name"], ArtifactRepo: gotBody["artifact_repo"], RuntimeType: domain.RuntimeType(gotBody["runtime_type"])}
-		json.NewEncoder(w).Encode(map[string]any{"data": svc})
+		called = true
+		t.Fatalf("CreateService must not call removed REST endpoint %s %s", r.Method, r.URL.Path)
 	}))
 	defer server.Close()
 
 	c := New(server.URL)
 	result, err := c.CreateService(context.Background(), "api", "registry.example/api", domain.RuntimeTypeCompose)
-	if err != nil {
-		t.Fatalf("CreateService() error = %v", err)
+	if err == nil {
+		t.Fatal("CreateService() expected REST deprecation error")
 	}
-	if gotBody["name"] != "api" {
-		t.Errorf("name = %s, want api", gotBody["name"])
+	if result != nil {
+		t.Fatalf("CreateService() result = %#v, want nil", result)
 	}
-	if gotBody["artifact_repo"] != "registry.example/api" {
-		t.Errorf("artifact_repo = %s, want registry.example/api", gotBody["artifact_repo"])
+	if !strings.Contains(err.Error(), "Nostr ServiceCreate") {
+		t.Fatalf("CreateService() error = %q, want Nostr ServiceCreate guidance", err.Error())
 	}
-	if gotBody["runtime_type"] != string(domain.RuntimeTypeCompose) {
-		t.Errorf("runtime_type = %s, want %s", gotBody["runtime_type"], domain.RuntimeTypeCompose)
-	}
-	if result.Name != "api" {
-		t.Errorf("Name = %s, want api", result.Name)
+	if called {
+		t.Fatal("CreateService called removed REST endpoint")
 	}
 }
 
@@ -341,40 +328,27 @@ func TestGetEnvironment(t *testing.T) {
 	}
 }
 
-func TestCreateEnvironment(t *testing.T) {
-	var gotBody map[string]any
+func TestCreateEnvironmentRestMutationRemoved(t *testing.T) {
+	called := false
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			t.Errorf("method = %s, want POST", r.Method)
-		}
-		if r.URL.Path != "/api/v1/environments" {
-			t.Errorf("path = %s, want /api/v1/environments", r.URL.Path)
-		}
-		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
-			t.Fatalf("decoding request body: %v", err)
-		}
-		w.Header().Set("Content-Type", "application/json")
-		env := domain.Environment{ID: uuid.New(), Name: gotBody["name"].(string), DeployStrategy: domain.DeployStrategy(gotBody["deploy_strategy"].(string)), Protected: gotBody["protected"].(bool)}
-		json.NewEncoder(w).Encode(map[string]any{"data": env})
+		called = true
+		t.Fatalf("CreateEnvironment must not call removed REST endpoint %s %s", r.Method, r.URL.Path)
 	}))
 	defer server.Close()
 
 	c := New(server.URL)
 	result, err := c.CreateEnvironment(context.Background(), "staging", domain.DeployStrategyReplace, true)
-	if err != nil {
-		t.Fatalf("CreateEnvironment() error = %v", err)
+	if err == nil {
+		t.Fatal("CreateEnvironment() expected REST deprecation error")
 	}
-	if gotBody["name"] != "staging" {
-		t.Errorf("name = %v, want staging", gotBody["name"])
+	if result != nil {
+		t.Fatalf("CreateEnvironment() result = %#v, want nil", result)
 	}
-	if gotBody["deploy_strategy"] != string(domain.DeployStrategyReplace) {
-		t.Errorf("deploy_strategy = %v, want %s", gotBody["deploy_strategy"], domain.DeployStrategyReplace)
+	if !strings.Contains(err.Error(), "Nostr EnvironmentCreate") {
+		t.Fatalf("CreateEnvironment() error = %q, want Nostr EnvironmentCreate guidance", err.Error())
 	}
-	if gotBody["protected"] != true {
-		t.Errorf("protected = %v, want true", gotBody["protected"])
-	}
-	if result.Name != "staging" {
-		t.Errorf("Name = %s, want staging", result.Name)
+	if called {
+		t.Fatal("CreateEnvironment called removed REST endpoint")
 	}
 }
 

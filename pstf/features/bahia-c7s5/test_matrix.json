@@ -1,0 +1,45 @@
+{
+  "feature_id": "bahia-c7s5",
+  "test_runs": [
+    {
+      "command": "go test ./internal/api/... ./pkg/client",
+      "status": "pass",
+      "covers": [
+        "RESTDEP-SVCENV-001",
+        "RESTDEP-SVCENV-002",
+        "RESTDEP-SVCENV-003",
+        "RESTDEP-SVCENV-004"
+      ],
+      "evidence": [
+        "internal/api/router TestServiceReadRoutesRemainAndDeprecatedMutationsAreRemoved",
+        "internal/api/router TestEnvironmentReadRoutesRemainAndDeprecatedMutationsAreRemoved",
+        "internal/api/router TestDeprecatedServiceAndEnvironmentMutationRoutesAreRemoved",
+        "pkg/client TestCreateServiceRestMutationRemoved",
+        "pkg/client TestCreateEnvironmentRestMutationRemoved"
+      ]
+    },
+    {
+      "command": "go build ./...",
+      "status": "pass",
+      "covers": [
+        "RESTDEP-SVCENV-003"
+      ],
+      "evidence": [
+        "All Go packages compile after route and handler removals"
+      ]
+    }
+  ],
+  "manual_review": [
+    {
+      "covers": [
+        "RESTDEP-SVCENV-005"
+      ],
+      "evidence": [
+        "docs/specs/rest-deprecation-plan.md Work Item 1 checked complete",
+        "docs/user-guide/features/services.md signer-first service create/delete guidance",
+        "docs/user-guide/features/environments.md signer-first environment create/update/delete guidance",
+        "docs/user-guide/nostr-integration.md NIP-98 example changed to retained GET read route"
+      ]
+    }
+  ]
+}

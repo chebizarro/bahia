@@ -12,6 +12,8 @@ Services are the primary organizational unit in Bahia. Each service:
 
 ## Creating a Service
 
+Service creation is signer-first. Bahia no longer accepts REST `POST /api/v1/services`; clients publish a signed Nostr `5964` `ServiceCreate` command to the control-plane relay and subscribe for the correlated `7963` result/read-model update.
+
 ### Web UI
 
 1. Navigate to **Services** in the sidebar
@@ -21,34 +23,11 @@ Services are the primary organizational unit in Bahia. Each service:
    - **Display Name**: Human-friendly name (optional)
    - **Repository**: Git repository URL
    - **Description**: What the service does
-4. Click **Create**
-
-### CLI
-
-```bash
-bahia services create \
-  --name "payment-api" \
-  --display-name "Payment API" \
-  --repository "https://github.com/company/payment-api" \
-  --description "Handles payment processing"
-```
-
-### MCP Tool
-
-```json
-{
-  "tool": "bahia_service_create",
-  "arguments": {
-    "name": "payment-api",
-    "repository": "https://github.com/company/payment-api",
-    "description": "Handles payment processing"
-  }
-}
-```
+4. Click **Create** to publish the signed Nostr command
 
 ### Nostr (Signer-First)
 
-Publish a `5981` ServiceUpdate event or use `5964` ServiceCreate:
+Publish a `5964` ServiceCreate event:
 
 ```json
 {
@@ -208,14 +187,7 @@ See [Secrets Management](#secrets-management) for details.
 
 ## Tags and Metadata
 
-Use tags to organize services:
-
-```bash
-bahia services update payment-api \
-  --tag team=payments \
-  --tag criticality=high \
-  --tag tier=backend
-```
+Use tags to organize services by publishing a signed `5981` ServiceUpdate command with the updated metadata.
 
 Query services by tag:
 
@@ -225,20 +197,14 @@ bahia services list --tag team=payments
 
 ## Deleting a Service
 
-Services can be deleted when no longer needed:
+Services can be deleted when no longer needed by publishing a signed `5982` ServiceDelete event. REST `DELETE /api/v1/services/{id}` is no longer accepted.
 
 ### Web UI
 
 1. Go to service **Settings**
 2. Scroll to **Danger Zone**
 3. Click **Delete Service**
-4. Confirm deletion
-
-### CLI
-
-```bash
-bahia services delete payment-api
-```
+4. Confirm deletion to publish the signed Nostr command
 
 ### Nostr
 

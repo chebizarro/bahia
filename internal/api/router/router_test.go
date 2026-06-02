@@ -438,9 +438,32 @@ func (m *rbacMemberLookup) ListByPubkey(_ context.Context, pubkey string) ([]dom
 }
 
 func newTestServer() *httptest.Server {
+	srv, _ := newTestServerWithRegistry()
+	return srv
+}
+
+func newTestServerWithRegistry() (*httptest.Server, *service.RegistryService) {
 	registry := newTestRegistryService()
 	handler := router.New(registry, zap.NewNop(), config.CORSConfig{AllowedOrigins: []string{"*"}}, nil)
-	return httptest.NewServer(handler)
+	return httptest.NewServer(handler), registry
+}
+
+func seedTestService(t *testing.T, registry *service.RegistryService, name, artifactRepo string) string {
+	t.Helper()
+	svc := &domain.Service{Name: name, ArtifactRepo: artifactRepo, RuntimeType: domain.RuntimeTypeDocker}
+	if err := registry.CreateService(context.Background(), svc); err != nil {
+		t.Fatalf("seed service: %v", err)
+	}
+	return svc.ID.String()
+}
+
+func seedTestEnvironment(t *testing.T, registry *service.RegistryService, name string, strategy domain.DeployStrategy, protected bool) string {
+	t.Helper()
+	env := &domain.Environment{Name: name, DeployStrategy: strategy, Protected: protected}
+	if err := registry.CreateEnvironment(context.Background(), env); err != nil {
+		t.Fatalf("seed environment: %v", err)
+	}
+	return env.ID.String()
 }
 
 func newHealthTestServer(healthProvider *app.HealthProvider) *httptest.Server {
@@ -806,80 +829,40 @@ func TestCoreRoutesEnforceTenantRBAC(t *testing.T) {
 	}
 }
 
-func TestServiceCRUD(t *testing.T) {
-	srv := newTestServer()
+func TestServiceReadRoutesRemainAndDeprecatedMutationsAreRemoved(t *testing.T) {
+	srv, registry := newTestServerWithRegistry()
 	defer srv.Close()
 	base := srv.URL + "/api/v1/services"
+	svcID := seedTestService(t, registry, "my-service", "harbor/my-service")
 
-	// Create
-	resp, body := doJSON(t, "POST", base, map[string]any{
-		"name":          "my-service",
-		"artifact_repo": "harbor/my-service",
-		"runtime_type":  "docker",
-	})
-	if resp.StatusCode != 201 {
-		t.Fatalf("Create: expected 201, got %d: %v", resp.StatusCode, body)
-	}
-	data := body["data"].(map[string]any)
-	svcID := data["id"].(string)
-	if data["name"] != "my-service" {
-		t.Errorf("expected name my-service, got %v", data["name"])
-	}
-	if data["runtime_type"] != "docker" {
-		t.Errorf("expected runtime_type docker, got %v", data["runtime_type"])
-	}
-
-	// Get
-	resp, body = doJSON(t, "GET", base+"/"+svcID, nil)
-	if resp.StatusCode != 200 {
+	resp, body := doJSON(t, "GET", base+"/"+svcID, nil)
+	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("Get: expected 200, got %d", resp.StatusCode)
 	}
-	data = body["data"].(map[string]any)
+	data := body["data"].(map[string]any)
 	if data["name"] != "my-service" {
 		t.Errorf("Get: expected name my-service, got %v", data["name"])
 	}
 
-	// List
-	resp, body = doJSON(t, "GET", base, nil)
-	if resp.StatusCode != 200 {
+	resp, _ = doJSON(t, "GET", base, nil)
+	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("List: expected 200, got %d", resp.StatusCode)
 	}
 
-	// Update
-	newName := "renamed-service"
-	resp, body = doJSON(t, "PUT", base+"/"+svcID, map[string]any{
-		"name": newName,
-	})
-	if resp.StatusCode != 200 {
-		t.Fatalf("Update: expected 200, got %d: %v", resp.StatusCode, body)
+	removedRoutes := []struct {
+		method string
+		url    string
+		body   any
+	}{
+		{http.MethodPost, base, map[string]any{"name": "removed", "artifact_repo": "harbor/removed"}},
+		{http.MethodPut, base + "/" + svcID, map[string]any{"name": "renamed-service"}},
+		{http.MethodDelete, base + "/" + svcID, nil},
 	}
-	data = body["data"].(map[string]any)
-	if data["name"] != newName {
-		t.Errorf("Update: expected name %s, got %v", newName, data["name"])
-	}
-
-	// Delete
-	resp, body = doJSON(t, "DELETE", base+"/"+svcID, nil)
-	if resp.StatusCode != 200 {
-		t.Fatalf("Delete: expected 200, got %d", resp.StatusCode)
-	}
-
-	// Get after delete → 404
-	resp, _ = doJSON(t, "GET", base+"/"+svcID, nil)
-	if resp.StatusCode != 404 {
-		t.Fatalf("Get after delete: expected 404, got %d", resp.StatusCode)
-	}
-}
-
-func TestServiceCreate_InvalidBody(t *testing.T) {
-	srv := newTestServer()
-	defer srv.Close()
-
-	resp, _ := doJSON(t, "POST", srv.URL+"/api/v1/services", map[string]any{
-		"name": "", // empty name
-	})
-	if resp.StatusCode != 400 {
-		t.Fatalf("expected 400 for empty name, got %d", resp.StatusCode)
+	for _, route := range removedRoutes {
+		resp, body := doJSON(t, route.method, route.url, route.body)
+		if resp.StatusCode != http.StatusMethodNotAllowed {
+			t.Fatalf("%s %s: expected 405 after REST deprecation, got %d: %v", route.method, route.url, resp.StatusCode, body)
+		}
 	}
 }
 
@@ -905,67 +888,48 @@ func TestServiceGet_BadUUID(t *testing.T) {
 
 // --- Environment CRUD ---
 
-func TestEnvironmentCRUD(t *testing.T) {
-	srv := newTestServer()
+func TestEnvironmentReadRoutesRemainAndDeprecatedMutationsAreRemoved(t *testing.T) {
+	srv, registry := newTestServerWithRegistry()
 	defer srv.Close()
 	base := srv.URL + "/api/v1/environments"
+	envID := seedTestEnvironment(t, registry, "staging", domain.DeployStrategyReplace, false)
 
-	// Create
-	resp, body := doJSON(t, "POST", base, map[string]any{
-		"name":            "staging",
-		"deploy_strategy": "replace",
-	})
-	if resp.StatusCode != 201 {
-		t.Fatalf("Create: expected 201, got %d: %v", resp.StatusCode, body)
-	}
-	data := body["data"].(map[string]any)
-	envID := data["id"].(string)
-
-	// Get
-	resp, body = doJSON(t, "GET", base+"/"+envID, nil)
-	if resp.StatusCode != 200 {
+	resp, _ := doJSON(t, "GET", base+"/"+envID, nil)
+	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("Get: expected 200, got %d", resp.StatusCode)
 	}
 
-	// List
 	resp, _ = doJSON(t, "GET", base, nil)
-	if resp.StatusCode != 200 {
+	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("List: expected 200, got %d", resp.StatusCode)
 	}
 
-	// Update
-	resp, body = doJSON(t, "PUT", base+"/"+envID, map[string]any{
-		"name": "production",
-	})
-	if resp.StatusCode != 200 {
-		t.Fatalf("Update: expected 200, got %d: %v", resp.StatusCode, body)
+	removedRoutes := []struct {
+		method string
+		url    string
+		body   any
+	}{
+		{http.MethodPost, base, map[string]any{"name": "removed", "deploy_strategy": "replace"}},
+		{http.MethodPut, base + "/" + envID, map[string]any{"name": "production"}},
+		{http.MethodDelete, base + "/" + envID, nil},
 	}
-
-	// Delete
-	resp, _ = doJSON(t, "DELETE", base+"/"+envID, nil)
-	if resp.StatusCode != 200 {
-		t.Fatalf("Delete: expected 200, got %d", resp.StatusCode)
+	for _, route := range removedRoutes {
+		resp, body := doJSON(t, route.method, route.url, route.body)
+		if resp.StatusCode != http.StatusMethodNotAllowed {
+			t.Fatalf("%s %s: expected 405 after REST deprecation, got %d: %v", route.method, route.url, resp.StatusCode, body)
+		}
 	}
 }
 
 // --- Build Registration ---
 
 func TestBuildLifecycle(t *testing.T) {
-	srv := newTestServer()
+	srv, registry := newTestServerWithRegistry()
 	defer srv.Close()
-
-	// Create a service first.
-	resp, body := doJSON(t, "POST", srv.URL+"/api/v1/services", map[string]any{
-		"name":          "build-svc",
-		"artifact_repo": "harbor/build-svc",
-	})
-	if resp.StatusCode != 201 {
-		t.Fatalf("service create: expected 201, got %d", resp.StatusCode)
-	}
-	svcID := body["data"].(map[string]any)["id"].(string)
+	svcID := seedTestService(t, registry, "build-svc", "harbor/build-svc")
 
 	// Register a build.
-	resp, body = doJSON(t, "POST", srv.URL+"/api/v1/builds", map[string]any{
+	resp, body := doJSON(t, "POST", srv.URL+"/api/v1/builds", map[string]any{
 		"service_id": svcID,
 		"git_sha":    "abc1234",
 		"git_ref":    "refs/heads/main",
@@ -1004,17 +968,12 @@ func TestBuildLifecycle(t *testing.T) {
 // --- Artifact Registration ---
 
 func TestArtifactRegistration(t *testing.T) {
-	srv := newTestServer()
+	srv, registry := newTestServerWithRegistry()
 	defer srv.Close()
-
-	// Create service.
-	resp, body := doJSON(t, "POST", srv.URL+"/api/v1/services", map[string]any{
-		"name": "art-svc", "artifact_repo": "harbor/art-svc",
-	})
-	svcID := body["data"].(map[string]any)["id"].(string)
+	svcID := seedTestService(t, registry, "art-svc", "harbor/art-svc")
 
 	// Register build.
-	resp, body = doJSON(t, "POST", srv.URL+"/api/v1/builds", map[string]any{
+	resp, body := doJSON(t, "POST", srv.URL+"/api/v1/builds", map[string]any{
 		"service_id": svcID, "git_sha": "def4567", "git_ref": "main", "ci_run_id": "r1",
 	})
 	buildID := body["data"].(map[string]any)["id"].(string)
@@ -1052,23 +1011,13 @@ func TestArtifactRegistration(t *testing.T) {
 // --- Deployment Intent & Run Full Flow ---
 
 func TestDeploymentFlow(t *testing.T) {
-	srv := newTestServer()
+	srv, registry := newTestServerWithRegistry()
 	defer srv.Close()
-
-	// Create service.
-	_, body := doJSON(t, "POST", srv.URL+"/api/v1/services", map[string]any{
-		"name": "deploy-svc", "artifact_repo": "harbor/deploy",
-	})
-	svcID := body["data"].(map[string]any)["id"].(string)
-
-	// Create environment (non-protected, so auto-approved).
-	_, body = doJSON(t, "POST", srv.URL+"/api/v1/environments", map[string]any{
-		"name": "staging", "deploy_strategy": "replace",
-	})
-	envID := body["data"].(map[string]any)["id"].(string)
+	svcID := seedTestService(t, registry, "deploy-svc", "harbor/deploy")
+	envID := seedTestEnvironment(t, registry, "staging", domain.DeployStrategyReplace, false)
 
 	// Register build + artifact.
-	_, body = doJSON(t, "POST", srv.URL+"/api/v1/builds", map[string]any{
+	_, body := doJSON(t, "POST", srv.URL+"/api/v1/builds", map[string]any{
 		"service_id": svcID, "git_sha": "aaa1111a", "git_ref": "main", "ci_run_id": "r2",
 	})
 	buildID := body["data"].(map[string]any)["id"].(string)
@@ -1147,23 +1096,13 @@ func TestDeploymentFlow(t *testing.T) {
 // --- Approval Flow (Protected Environment) ---
 
 func TestApprovalFlow(t *testing.T) {
-	srv := newTestServer()
+	srv, registry := newTestServerWithRegistry()
 	defer srv.Close()
-
-	// Create service.
-	_, body := doJSON(t, "POST", srv.URL+"/api/v1/services", map[string]any{
-		"name": "approval-svc", "artifact_repo": "harbor/approval",
-	})
-	svcID := body["data"].(map[string]any)["id"].(string)
-
-	// Create PROTECTED environment.
-	_, body = doJSON(t, "POST", srv.URL+"/api/v1/environments", map[string]any{
-		"name": "production", "deploy_strategy": "replace", "protected": true,
-	})
-	envID := body["data"].(map[string]any)["id"].(string)
+	svcID := seedTestService(t, registry, "approval-svc", "harbor/approval")
+	envID := seedTestEnvironment(t, registry, "production", domain.DeployStrategyReplace, true)
 
 	// Register build + artifact.
-	_, body = doJSON(t, "POST", srv.URL+"/api/v1/builds", map[string]any{
+	_, body := doJSON(t, "POST", srv.URL+"/api/v1/builds", map[string]any{
 		"service_id": svcID, "git_sha": "bbb2222b", "git_ref": "main", "ci_run_id": "r3",
 	})
 	buildID := body["data"].(map[string]any)["id"].(string)
@@ -1203,21 +1142,14 @@ func TestApprovalFlow(t *testing.T) {
 }
 
 func TestRejectFlow(t *testing.T) {
-	srv := newTestServer()
+	srv, registry := newTestServerWithRegistry()
 	defer srv.Close()
 
-	// Create service + protected env + build + artifact.
-	_, body := doJSON(t, "POST", srv.URL+"/api/v1/services", map[string]any{
-		"name": "reject-svc", "artifact_repo": "harbor/reject",
-	})
-	svcID := body["data"].(map[string]any)["id"].(string)
+	// Seed service + protected env + build + artifact.
+	svcID := seedTestService(t, registry, "reject-svc", "harbor/reject")
+	envID := seedTestEnvironment(t, registry, "prod-reject", domain.DeployStrategyReplace, true)
 
-	_, body = doJSON(t, "POST", srv.URL+"/api/v1/environments", map[string]any{
-		"name": "prod-reject", "deploy_strategy": "replace", "protected": true,
-	})
-	envID := body["data"].(map[string]any)["id"].(string)
-
-	_, body = doJSON(t, "POST", srv.URL+"/api/v1/builds", map[string]any{
+	_, body := doJSON(t, "POST", srv.URL+"/api/v1/builds", map[string]any{
 		"service_id": svcID, "git_sha": "ccc3333c", "git_ref": "main", "ci_run_id": "r4",
 	})
 	buildID := body["data"].(map[string]any)["id"].(string)
@@ -1273,19 +1205,10 @@ func TestStateEndpoints(t *testing.T) {
 // --- Observation Recording ---
 
 func TestRecordObservation(t *testing.T) {
-	srv := newTestServer()
+	srv, registry := newTestServerWithRegistry()
 	defer srv.Close()
-
-	// Create service + env.
-	_, body := doJSON(t, "POST", srv.URL+"/api/v1/services", map[string]any{
-		"name": "obs-svc", "artifact_repo": "harbor/obs",
-	})
-	svcID := body["data"].(map[string]any)["id"].(string)
-
-	_, body = doJSON(t, "POST", srv.URL+"/api/v1/environments", map[string]any{
-		"name": "obs-env", "deploy_strategy": "replace",
-	})
-	envID := body["data"].(map[string]any)["id"].(string)
+	svcID := seedTestService(t, registry, "obs-svc", "harbor/obs")
+	envID := seedTestEnvironment(t, registry, "obs-env", domain.DeployStrategyReplace, false)
 
 	// Record observation.
 	resp, body := doJSON(t, "POST", srv.URL+"/api/v1/observations", map[string]any{
@@ -1348,60 +1271,24 @@ func TestGetNonExistentRun(t *testing.T) {
 	}
 }
 
-func TestDeleteNonExistentService(t *testing.T) {
+func TestDeprecatedServiceAndEnvironmentMutationRoutesAreRemoved(t *testing.T) {
 	srv := newTestServer()
 	defer srv.Close()
 
-	resp, body := doJSON(t, "DELETE", srv.URL+"/api/v1/services/"+uuid.New().String(), nil)
-	if resp.StatusCode != 404 {
-		t.Fatalf("expected 404, got %d", resp.StatusCode)
+	tests := []struct {
+		method string
+		path   string
+		body   any
+	}{
+		{http.MethodDelete, "/api/v1/services/" + uuid.New().String(), nil},
+		{http.MethodDelete, "/api/v1/environments/" + uuid.New().String(), nil},
+		{http.MethodPut, "/api/v1/services/" + uuid.New().String(), map[string]any{"name": "updated-name"}},
+		{http.MethodPut, "/api/v1/environments/" + uuid.New().String(), map[string]any{"name": "updated-env"}},
 	}
-	if msg, _ := body["error"].(string); msg != "service not found" {
-		t.Errorf("expected 'service not found', got %q", msg)
-	}
-}
-
-func TestDeleteNonExistentEnvironment(t *testing.T) {
-	srv := newTestServer()
-	defer srv.Close()
-
-	resp, body := doJSON(t, "DELETE", srv.URL+"/api/v1/environments/"+uuid.New().String(), nil)
-	if resp.StatusCode != 404 {
-		t.Fatalf("expected 404, got %d", resp.StatusCode)
-	}
-	if msg, _ := body["error"].(string); msg != "environment not found" {
-		t.Errorf("expected 'environment not found', got %q", msg)
-	}
-}
-
-func TestUpdateNonExistentService(t *testing.T) {
-	srv := newTestServer()
-	defer srv.Close()
-
-	name := "updated-name"
-	resp, body := doJSON(t, "PUT", srv.URL+"/api/v1/services/"+uuid.New().String(), map[string]any{
-		"name": name,
-	})
-	if resp.StatusCode != 404 {
-		t.Fatalf("expected 404, got %d", resp.StatusCode)
-	}
-	if msg, _ := body["error"].(string); msg != "service not found" {
-		t.Errorf("expected 'service not found', got %q", msg)
-	}
-}
-
-func TestUpdateNonExistentEnvironment(t *testing.T) {
-	srv := newTestServer()
-	defer srv.Close()
-
-	name := "updated-env"
-	resp, body := doJSON(t, "PUT", srv.URL+"/api/v1/environments/"+uuid.New().String(), map[string]any{
-		"name": name,
-	})
-	if resp.StatusCode != 404 {
-		t.Fatalf("expected 404, got %d", resp.StatusCode)
-	}
-	if msg, _ := body["error"].(string); msg != "environment not found" {
-		t.Errorf("expected 'environment not found', got %q", msg)
+	for _, tt := range tests {
+		resp, body := doJSON(t, tt.method, srv.URL+tt.path, tt.body)
+		if resp.StatusCode != http.StatusMethodNotAllowed {
+			t.Fatalf("%s %s: expected 405 after REST deprecation, got %d: %v", tt.method, tt.path, resp.StatusCode, body)
+		}
 	}
 }

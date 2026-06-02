@@ -396,15 +396,6 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 				r.Delete("/orgs/{id}/invites/{inviteId}", tenantH.RevokeInvite)
 			}
 
-			// Services (write)
-			r.With(tier2Gate, coreRBAC(deps, authMiddleware, nil, true)).Post("/services", svcH.Create)
-			r.With(tier2Gate, coreRBAC(deps, authMiddleware, serviceOrgResolver(deps.Services, "id"), true)).Put("/services/{id}", svcH.Update)
-			r.With(tier2Gate, coreRBAC(deps, authMiddleware, serviceOrgResolver(deps.Services, "id"), true)).Delete("/services/{id}", svcH.Delete)
-			// Environments (write)
-			r.With(tier2Gate, coreRBAC(deps, authMiddleware, nil, true)).Post("/environments", envH.Create)
-			r.With(tier2Gate, coreRBAC(deps, authMiddleware, environmentOrgResolver(deps.Environments, "id"), true)).Put("/environments/{id}", envH.Update)
-			r.With(tier2Gate, coreRBAC(deps, authMiddleware, environmentOrgResolver(deps.Environments, "id"), true)).Delete("/environments/{id}", envH.Delete)
-
 			// Builds (write)
 			r.With(tier2Gate, coreRBAC(deps, authMiddleware, nil, true)).Post("/builds", buildH.Register)
 			r.With(tier2Gate, coreRBAC(deps, authMiddleware, buildOrgResolver(deps.Builds, deps.Services, "id"), true)).Patch("/builds/{id}/status", buildH.UpdateStatus)

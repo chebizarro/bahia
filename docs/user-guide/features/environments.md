@@ -12,6 +12,8 @@ Environments define:
 
 ## Creating an Environment
 
+Environment creation is signer-first. Bahia no longer accepts REST `POST /api/v1/environments`; clients publish a signed Nostr `5965` `EnvironmentCreate` command to the control-plane relay and subscribe for the correlated `7964` result/read-model update.
+
 ### Web UI
 
 1. Navigate to **Environments** in the sidebar
@@ -20,28 +22,11 @@ Environments define:
    - **Name**: Human-readable name (e.g., "Production")
    - **Slug**: URL-safe identifier (e.g., `production`)
    - **Description**: Purpose of this environment
-4. Click **Create**
+4. Click **Create** to publish the signed Nostr command
 
-### CLI
+### Nostr
 
-```bash
-bahia environments create \
-  --name "Production" \
-  --slug "production" \
-  --description "Live production environment"
-```
-
-### MCP Tool
-
-```json
-{
-  "tool": "bahia_environment_create",
-  "arguments": {
-    "name": "Production",
-    "slug": "production"
-  }
-}
-```
+Publish a `5965` EnvironmentCreate event.
 
 ## Environment Properties
 
@@ -222,19 +207,14 @@ These are available to all services in the environment.
 
 ## Updating Environments
 
+Environment updates are signer-first. REST `PUT /api/v1/environments/{id}` is no longer accepted.
+
 ### Web UI
 
 1. Go to the environment detail page
 2. Click **Settings**
 3. Modify properties
-4. Click **Save**
-
-### CLI
-
-```bash
-bahia environments update production \
-  --requires-approval true
-```
+4. Click **Save** to publish the signed Nostr command
 
 ### Nostr
 
@@ -242,11 +222,7 @@ Publish a `5983` EnvironmentUpdate event.
 
 ## Deleting Environments
 
-Environments can be deleted when no longer needed:
-
-```bash
-bahia environments delete staging
-```
+Environments can be deleted when no longer needed by publishing a signed `5984` EnvironmentDelete event. REST `DELETE /api/v1/environments/{id}` is no longer accepted.
 
 **Warning**: You cannot delete an environment that has:
 - Active deployments

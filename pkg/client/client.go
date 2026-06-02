@@ -403,18 +403,10 @@ func (c *Client) GetService(ctx context.Context, id string) (*domain.Service, er
 	return &svc, nil
 }
 
-// CreateService registers a new service.
+// CreateService is no longer available through the REST API.
+// Publish a signed Nostr ServiceCreate command instead.
 func (c *Client) CreateService(ctx context.Context, name, artifactRepo string, runtimeType domain.RuntimeType) (*domain.Service, error) {
-	body := map[string]string{
-		"name":          name,
-		"artifact_repo": artifactRepo,
-		"runtime_type":  string(runtimeType),
-	}
-	var svc domain.Service
-	if err := c.do(ctx, http.MethodPost, "/api/v1/services", body, &svc); err != nil {
-		return nil, err
-	}
-	return &svc, nil
+	return nil, fmt.Errorf("REST service creation is removed; publish a signed Nostr ServiceCreate event instead")
 }
 
 // DeployServiceRuntime deploys the desired or explicit artifact directly through the resolved runtime.
@@ -471,18 +463,10 @@ func (c *Client) GetEnvironment(ctx context.Context, id string) (*domain.Environ
 	return &env, nil
 }
 
-// CreateEnvironment registers a new environment.
+// CreateEnvironment is no longer available through the REST API.
+// Publish a signed Nostr EnvironmentCreate command instead.
 func (c *Client) CreateEnvironment(ctx context.Context, name string, strategy domain.DeployStrategy, protected bool) (*domain.Environment, error) {
-	body := map[string]any{
-		"name":            name,
-		"deploy_strategy": string(strategy),
-		"protected":       protected,
-	}
-	var env domain.Environment
-	if err := c.do(ctx, http.MethodPost, "/api/v1/environments", body, &env); err != nil {
-		return nil, err
-	}
-	return &env, nil
+	return nil, fmt.Errorf("REST environment creation is removed; publish a signed Nostr EnvironmentCreate event instead")
 }
 
 // --- State ---

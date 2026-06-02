@@ -1,0 +1,74 @@
+{
+  "feature_id": "bahia-c7s5",
+  "criteria": [
+    {
+      "ac_id": "RESTDEP-SVCENV-001",
+      "title": "Service mutation REST routes are removed",
+      "priority": "must",
+      "assertion": "POST /api/v1/services, PUT /api/v1/services/{id}, and DELETE /api/v1/services/{id} are not registered and return 405 against the retained read-route paths.",
+      "testable_by": [
+        "unit"
+      ],
+      "source_evidence": [
+        "internal/api/router/router.go",
+        "internal/api/router/router_test.go"
+      ]
+    },
+    {
+      "ac_id": "RESTDEP-SVCENV-002",
+      "title": "Environment mutation REST routes are removed",
+      "priority": "must",
+      "assertion": "POST /api/v1/environments, PUT /api/v1/environments/{id}, and DELETE /api/v1/environments/{id} are not registered and return 405 against the retained read-route paths.",
+      "testable_by": [
+        "unit"
+      ],
+      "source_evidence": [
+        "internal/api/router/router.go",
+        "internal/api/router/router_test.go"
+      ]
+    },
+    {
+      "ac_id": "RESTDEP-SVCENV-003",
+      "title": "Deprecated REST handlers are deleted without removing read handlers or shared types",
+      "priority": "must",
+      "assertion": "ServiceHandler.Create/Update/Delete, EnvironmentHandler.Create/Update/Delete, and REST-only mutation helper functions are absent while ServiceHandler.Get/List, EnvironmentHandler.Get/List, DTO types, and registry domain services remain available.",
+      "testable_by": [
+        "compile",
+        "unit"
+      ],
+      "source_evidence": [
+        "internal/api/handlers/services.go",
+        "internal/api/handlers/environments.go"
+      ]
+    },
+    {
+      "ac_id": "RESTDEP-SVCENV-004",
+      "title": "Tests and client helpers do not call removed REST mutation endpoints",
+      "priority": "must",
+      "assertion": "Affected router tests seed service/environment prerequisites directly, client mutation helpers return explicit Nostr migration errors instead of POSTing removed endpoints, and tests assert no removed REST call is made.",
+      "testable_by": [
+        "unit"
+      ],
+      "source_evidence": [
+        "internal/api/router/router_test.go",
+        "pkg/client/client.go",
+        "pkg/client/client_test.go"
+      ]
+    },
+    {
+      "ac_id": "RESTDEP-SVCENV-005",
+      "title": "Documentation points service/environment mutations at signer-first Nostr commands",
+      "priority": "must",
+      "assertion": "User-facing docs and the REST deprecation plan no longer present service/environment REST mutations as available behavior and identify the relevant Nostr command path.",
+      "testable_by": [
+        "review"
+      ],
+      "source_evidence": [
+        "docs/specs/rest-deprecation-plan.md",
+        "docs/user-guide/features/services.md",
+        "docs/user-guide/features/environments.md",
+        "docs/user-guide/nostr-integration.md"
+      ]
+    }
+  ]
+}
