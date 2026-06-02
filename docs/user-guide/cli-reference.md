@@ -108,13 +108,9 @@ bahia environments delete staging
 
 ### Deployments
 
-```bash
-# Deploy
-bahia deploy \
-  --service payment-api \
-  --environment production \
-  --artifact art-789
+Deployment intent create, approval/rejection, and rollback mutations are signer-first Nostr operations. The legacy REST-backed `bahia deploy`, `bahia deployments approve`, `bahia deployments reject`, and `bahia rollback` command paths are deprecated until the CLI publishes signed Nostr events directly.
 
+```bash
 # List intents
 bahia deployments list
 bahia deployments list --service payment-api
@@ -122,21 +118,12 @@ bahia deployments list --service payment-api
 # Get intent
 bahia deployments get intent-123
 
-# Approve/reject
-bahia deployments approve intent-123
-bahia deployments reject intent-123 --reason "Missing tests"
-
 # List runs
 bahia deployments runs list
 bahia deployments runs get run-456
 
 # View logs
 bahia deployments logs run-456 --tail 100
-
-# Rollback
-bahia rollback \
-  --service payment-api \
-  --environment production
 ```
 
 ### State
@@ -155,7 +142,7 @@ bahia state drifted --environment production
 ### Direct Runtime Actions
 
 ```bash
-# Deploy (signer-first)
+# Deploy directly to the runtime
 bahia services actions deploy payment-api \
   --environment production \
   --artifact art-789
@@ -171,18 +158,14 @@ bahia services actions stop payment-api \
 
 ### Artifacts
 
+Artifact registration is a signer-first Nostr operation. Legacy REST-backed artifact registration command paths are deprecated until the CLI publishes signed `ArtifactRegister` events directly.
+
 ```bash
 # List artifacts
 bahia artifacts list --service-id svc-123
 
 # Get artifact
 bahia artifacts get art-456
-
-# Register artifact
-bahia artifacts register \
-  --service-id svc-123 \
-  --image "registry.example.com/api:v2.0.0" \
-  --digest "sha256:abc123..."
 
 # SBOM
 bahia artifacts sbom art-456

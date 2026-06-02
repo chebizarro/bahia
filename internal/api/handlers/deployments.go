@@ -34,66 +34,6 @@ func resolveActor(r *http.Request, clientSupplied string) string {
 
 // --- Deployment Intents ---
 
-func (h *DeploymentHandler) CreateIntent(w http.ResponseWriter, r *http.Request) {
-	if !requirePermission(w, r, domain.PermWriteDeployments) {
-		return
-	}
-	var req dto.CreateDeploymentIntentRequest
-	if err := decodeJSON(r, &req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
-		return
-	}
-
-	if err := domain.ValidateRequiredUUID(req.ServiceID, "service_id"); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	if err := domain.ValidateRequiredUUID(req.EnvironmentID, "environment_id"); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	if err := domain.ValidateRequiredUUID(req.ArtifactID, "artifact_id"); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-
-	// Resolve actor: auth principal overrides client-supplied value.
-	req.RequestedBy = resolveActor(r, req.RequestedBy)
-
-	if err := domain.ValidateRequiredString(req.RequestedBy, "requested_by"); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	if err := domain.ValidateSourceKind(domain.SourceKind(req.SourceKind)); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	if !h.validateIntentResourcesInOrg(w, r, req.ServiceID, req.EnvironmentID, req.ArtifactID) {
-		return
-	}
-
-	sourceKind := domain.SourceKind(req.SourceKind)
-	if sourceKind == "" {
-		sourceKind = domain.SourceKindManual
-	}
-
-	di := &domain.DeploymentIntent{
-		ServiceID:        req.ServiceID,
-		EnvironmentID:    req.EnvironmentID,
-		DeploymentUnitID: req.DeploymentUnitID,
-		ArtifactID:       req.ArtifactID,
-		RequestedBy:      req.RequestedBy,
-		SourceKind:       sourceKind,
-		Metadata:         req.Metadata,
-	}
-
-	if err := h.registry.CreateDeploymentIntent(r.Context(), di); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	writeData(w, http.StatusCreated, di)
-}
-
 func (h *DeploymentHandler) GetIntent(w http.ResponseWriter, r *http.Request) {
 	if !requireMember(w, r) {
 		return
@@ -141,46 +81,6 @@ func (h *DeploymentHandler) ListIntents(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, dto.ListResponse{Data: intents, Limit: limit, Offset: offset})
 }
 
-func (h *DeploymentHandler) ApproveIntent(w http.ResponseWriter, r *http.Request) {
-	if !requirePermission(w, r, domain.PermApproveDeployments) {
-		return
-	}
-	id, err := uuidParam(r, "id")
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid intent id")
-		return
-	}
-	if err := h.registry.ApproveDeploymentIntent(r.Context(), id); err != nil {
-		if errors.Is(err, repository.ErrNotFound) {
-			writeError(w, http.StatusNotFound, "deployment intent not found")
-			return
-		}
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	writeMessage(w, http.StatusOK, "deployment intent approved")
-}
-
-func (h *DeploymentHandler) RejectIntent(w http.ResponseWriter, r *http.Request) {
-	if !requirePermission(w, r, domain.PermApproveDeployments) {
-		return
-	}
-	id, err := uuidParam(r, "id")
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid intent id")
-		return
-	}
-	if err := h.registry.RejectDeploymentIntent(r.Context(), id); err != nil {
-		if errors.Is(err, repository.ErrNotFound) {
-			writeError(w, http.StatusNotFound, "deployment intent not found")
-			return
-		}
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	writeMessage(w, http.StatusOK, "deployment intent rejected")
-}
-
 func (h *DeploymentHandler) validateServiceInOrg(w http.ResponseWriter, r *http.Request, serviceID uuid.UUID) bool {
 	if authzOrgID(r) == uuid.Nil {
 		return true
@@ -224,26 +124,6 @@ func (h *DeploymentHandler) validateServiceEnvInOrg(w http.ResponseWriter, r *ht
 		return false
 	}
 	return serviceInAuthzOrg(w, r, svc.OrgID)
-}
-
-func (h *DeploymentHandler) validateIntentResourcesInOrg(w http.ResponseWriter, r *http.Request, serviceID, envID, artifactID uuid.UUID) bool {
-	if !h.validateServiceEnvInOrg(w, r, serviceID, envID) {
-		return false
-	}
-	artifact, err := h.registry.GetArtifact(r.Context(), artifactID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return false
-	}
-	if artifact == nil {
-		writeError(w, http.StatusNotFound, "artifact not found")
-		return false
-	}
-	if artifact.ServiceID != serviceID {
-		writeError(w, http.StatusForbidden, "access denied")
-		return false
-	}
-	return true
 }
 
 // --- Deployment Runs ---
@@ -365,35 +245,4 @@ func (h *DeploymentHandler) CompleteRun(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	writeMessage(w, http.StatusOK, "deployment run completed")
-}
-
-// --- Rollback ---
-
-func (h *DeploymentHandler) Rollback(w http.ResponseWriter, r *http.Request) {
-	if !requirePermission(w, r, domain.PermWriteDeployments) {
-		return
-	}
-	var req dto.RollbackRequest
-	if err := decodeJSON(r, &req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
-		return
-	}
-
-	// Resolve actor: auth principal overrides client-supplied value.
-	req.RequestedBy = resolveActor(r, req.RequestedBy)
-
-	if req.RequestedBy == "" {
-		writeError(w, http.StatusBadRequest, "requested_by is required")
-		return
-	}
-	if !h.validateServiceEnvInOrg(w, r, req.ServiceID, req.EnvironmentID) {
-		return
-	}
-
-	intent, err := h.registry.Rollback(r.Context(), req.ServiceID, req.EnvironmentID, req.RequestedBy)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	writeData(w, http.StatusCreated, intent)
 }

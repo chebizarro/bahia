@@ -1,0 +1,43 @@
+{
+  "feature_id": "bahia-wwnd",
+  "criteria": [
+    {
+      "id": "AC1",
+      "statement": "The six Work Item 2 REST mutation routes are not registered in router.go.",
+      "tests": [
+        "TestDeprecatedDeploymentObservationArtifactMutationRoutesAreRemoved"
+      ]
+    },
+    {
+      "id": "AC2",
+      "statement": "The corresponding REST handler methods are deleted so removed routes cannot be called accidentally.",
+      "tests": [
+        "go test ./internal/api/..."
+      ]
+    },
+    {
+      "id": "AC3",
+      "statement": "Router tests no longer use removed REST mutations for setup and still prove read/deployment-run routes remain functional.",
+      "tests": [
+        "TestArtifactReadRoutesRemainAndDeprecatedRegisterIsRemoved",
+        "TestDeploymentFlow",
+        "TestObservationStateReadRemainsAndDeprecatedRecordRouteIsRemoved"
+      ]
+    },
+    {
+      "id": "AC4",
+      "statement": "Client helpers for removed deploy/rollback REST writes fail before making network calls and guide callers to Nostr events.",
+      "tests": [
+        "TestCreateDeploymentIntentRestMutationRemoved",
+        "TestRollbackRestMutationRemoved"
+      ]
+    },
+    {
+      "id": "AC5",
+      "statement": "Code compiles after the removals.",
+      "tests": [
+        "go build ./..."
+      ]
+    }
+  ]
+}

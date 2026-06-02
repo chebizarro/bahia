@@ -352,6 +352,54 @@ func TestCreateEnvironmentRestMutationRemoved(t *testing.T) {
 	}
 }
 
+func TestCreateDeploymentIntentRestMutationRemoved(t *testing.T) {
+	called := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		t.Fatalf("CreateDeploymentIntent must not call removed REST endpoint %s %s", r.Method, r.URL.Path)
+	}))
+	defer server.Close()
+
+	c := New(server.URL)
+	result, err := c.CreateDeploymentIntent(context.Background(), "svc", "env", "artifact", "deployer")
+	if err == nil {
+		t.Fatal("CreateDeploymentIntent() expected REST deprecation error")
+	}
+	if result != nil {
+		t.Fatalf("CreateDeploymentIntent() result = %#v, want nil", result)
+	}
+	if !strings.Contains(err.Error(), "Nostr DeployRequest") {
+		t.Fatalf("CreateDeploymentIntent() error = %q, want Nostr DeployRequest guidance", err.Error())
+	}
+	if called {
+		t.Fatal("CreateDeploymentIntent called removed REST endpoint")
+	}
+}
+
+func TestRollbackRestMutationRemoved(t *testing.T) {
+	called := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		t.Fatalf("Rollback must not call removed REST endpoint %s %s", r.Method, r.URL.Path)
+	}))
+	defer server.Close()
+
+	c := New(server.URL)
+	result, err := c.Rollback(context.Background(), "svc", "env", "operator")
+	if err == nil {
+		t.Fatal("Rollback() expected REST deprecation error")
+	}
+	if result != nil {
+		t.Fatalf("Rollback() result = %#v, want nil", result)
+	}
+	if !strings.Contains(err.Error(), "Nostr RollbackRequest") {
+		t.Fatalf("Rollback() error = %q, want Nostr RollbackRequest guidance", err.Error())
+	}
+	if called {
+		t.Fatal("Rollback called removed REST endpoint")
+	}
+}
+
 func TestAPIError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

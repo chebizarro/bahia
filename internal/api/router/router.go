@@ -400,14 +400,6 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 			r.With(tier2Gate, coreRBAC(deps, authMiddleware, nil, true)).Post("/builds", buildH.Register)
 			r.With(tier2Gate, coreRBAC(deps, authMiddleware, buildOrgResolver(deps.Builds, deps.Services, "id"), true)).Patch("/builds/{id}/status", buildH.UpdateStatus)
 
-			// Artifacts (write)
-			r.With(tier2Gate, coreRBAC(deps, authMiddleware, nil, true)).Post("/artifacts", artifactH.Register)
-
-			// Deployment Intents (write)
-			r.With(tier2Gate, coreRBAC(deps, authMiddleware, nil, true)).Post("/deployments/intents", deployH.CreateIntent)
-			r.With(tier2Gate, coreRBAC(deps, authMiddleware, intentOrgResolver(registry, deps.Services, "id"), true)).Post("/deployments/intents/{id}/approve", deployH.ApproveIntent)
-			r.With(tier2Gate, coreRBAC(deps, authMiddleware, intentOrgResolver(registry, deps.Services, "id"), true)).Post("/deployments/intents/{id}/reject", deployH.RejectIntent)
-
 			// ML control plane (write compatibility actions publish Nostr commands)
 			if mlH != nil {
 				r.With(tier3Gate).Post("/ml/imports", mlH.ImportModel)
@@ -426,12 +418,6 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 			// Deployment Runs (write)
 			r.With(tier2Gate, coreRBAC(deps, authMiddleware, nil, true)).Post("/deployments/runs", deployH.CreateRun)
 			r.With(tier2Gate, coreRBAC(deps, authMiddleware, runOrgResolver(registry, deps.Services, "id"), true)).Post("/deployments/runs/{id}/complete", deployH.CompleteRun)
-
-			// Rollback
-			r.With(tier2Gate, coreRBAC(deps, authMiddleware, nil, true)).Post("/rollback", deployH.Rollback)
-
-			// Runtime Observations (write)
-			r.With(tier2Gate).Post("/observations", stateH.RecordObservation)
 
 			// Payments (write)
 			if deps.Payments != nil {

@@ -466,6 +466,67 @@ func seedTestEnvironment(t *testing.T, registry *service.RegistryService, name s
 	return env.ID.String()
 }
 
+func seedTestBuild(t *testing.T, registry *service.RegistryService, serviceID, gitSHA string) string {
+	t.Helper()
+	build := &domain.Build{
+		ServiceID: uuid.MustParse(serviceID),
+		GitSHA:    gitSHA,
+		GitRef:    "main",
+		CISystem:  "test",
+		CIRunID:   "run-" + gitSHA,
+		Status:    domain.BuildStatusSucceeded,
+	}
+	if err := registry.RegisterBuild(context.Background(), build); err != nil {
+		t.Fatalf("seed build: %v", err)
+	}
+	return build.ID.String()
+}
+
+func seedTestArtifact(t *testing.T, registry *service.RegistryService, serviceID, buildID, repo, tag, digest string) string {
+	t.Helper()
+	artifact := &domain.Artifact{
+		BuildID:     uuid.MustParse(buildID),
+		ServiceID:   uuid.MustParse(serviceID),
+		ImageRepo:   repo,
+		ImageTag:    tag,
+		ImageDigest: digest,
+		ScanStatus:  domain.ScanStatusClean,
+	}
+	if err := registry.RegisterArtifact(context.Background(), artifact); err != nil {
+		t.Fatalf("seed artifact: %v", err)
+	}
+	return artifact.ID.String()
+}
+
+func seedTestIntent(t *testing.T, registry *service.RegistryService, serviceID, envID, artifactID, requestedBy string) string {
+	t.Helper()
+	intent := &domain.DeploymentIntent{
+		ServiceID:     uuid.MustParse(serviceID),
+		EnvironmentID: uuid.MustParse(envID),
+		ArtifactID:    uuid.MustParse(artifactID),
+		RequestedBy:   requestedBy,
+		SourceKind:    domain.SourceKindManual,
+	}
+	if err := registry.CreateDeploymentIntent(context.Background(), intent); err != nil {
+		t.Fatalf("seed deployment intent: %v", err)
+	}
+	return intent.ID.String()
+}
+
+func seedTestObservation(t *testing.T, registry *service.RegistryService, serviceID, envID, digest string) {
+	t.Helper()
+	obs := &domain.RuntimeObservation{
+		ServiceID:           uuid.MustParse(serviceID),
+		EnvironmentID:       uuid.MustParse(envID),
+		ObservedImageDigest: digest,
+		HealthStatus:        domain.HealthStatusHealthy,
+		Source:              "test-observer",
+	}
+	if err := registry.RecordObservation(context.Background(), obs); err != nil {
+		t.Fatalf("seed observation: %v", err)
+	}
+}
+
 func newHealthTestServer(healthProvider *app.HealthProvider) *httptest.Server {
 	registry := newTestRegistryService()
 	handler := router.NewWithDeps(registry, zap.NewNop(), config.CORSConfig{AllowedOrigins: []string{"*"}}, nil, router.RouterDeps{HealthProvider: healthProvider})
@@ -503,11 +564,22 @@ func doJSON(t *testing.T, method, url string, body any) (*http.Response, map[str
 
 	var result map[string]any
 	if len(respBody) > 0 {
+		trimmed := bytes.TrimSpace(respBody)
+		if len(trimmed) > 0 && trimmed[0] != '{' {
+			return resp, map[string]any{"raw": string(respBody)}
+		}
 		if err := json.Unmarshal(respBody, &result); err != nil {
 			t.Fatalf("decoding response body %q: %v", string(respBody), err)
 		}
 	}
 	return resp, result
+}
+
+func assertDeprecatedMutationRouteRemoved(t *testing.T, method, path string, resp *http.Response, body map[string]any) {
+	t.Helper()
+	if resp.StatusCode != http.StatusNotFound && resp.StatusCode != http.StatusMethodNotAllowed {
+		t.Fatalf("%s %s: expected removed route to return 404 or 405, got %d: %v", method, path, resp.StatusCode, body)
+	}
 }
 
 const routerNIP98Key = "9a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b"
@@ -965,35 +1037,16 @@ func TestBuildLifecycle(t *testing.T) {
 	}
 }
 
-// --- Artifact Registration ---
+// --- Artifacts ---
 
-func TestArtifactRegistration(t *testing.T) {
+func TestArtifactReadRoutesRemainAndDeprecatedRegisterIsRemoved(t *testing.T) {
 	srv, registry := newTestServerWithRegistry()
 	defer srv.Close()
 	svcID := seedTestService(t, registry, "art-svc", "harbor/art-svc")
+	buildID := seedTestBuild(t, registry, svcID, "def4567")
+	artID := seedTestArtifact(t, registry, svcID, buildID, "harbor/art-svc", "v1.0", "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
 
-	// Register build.
-	resp, body := doJSON(t, "POST", srv.URL+"/api/v1/builds", map[string]any{
-		"service_id": svcID, "git_sha": "def4567", "git_ref": "main", "ci_run_id": "r1",
-	})
-	buildID := body["data"].(map[string]any)["id"].(string)
-
-	// Register artifact.
-	resp, body = doJSON(t, "POST", srv.URL+"/api/v1/artifacts", map[string]any{
-		"build_id":     buildID,
-		"service_id":   svcID,
-		"image_repo":   "harbor/art-svc",
-		"image_tag":    "v1.0",
-		"image_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-		"scan_status":  "clean",
-	})
-	if resp.StatusCode != 201 {
-		t.Fatalf("artifact register: expected 201, got %d: %v", resp.StatusCode, body)
-	}
-	artID := body["data"].(map[string]any)["id"].(string)
-
-	// Get artifact.
-	resp, body = doJSON(t, "GET", srv.URL+"/api/v1/artifacts/"+artID, nil)
+	resp, body := doJSON(t, "GET", srv.URL+"/api/v1/artifacts/"+artID, nil)
 	if resp.StatusCode != 200 {
 		t.Fatalf("artifact get: expected 200, got %d", resp.StatusCode)
 	}
@@ -1001,11 +1054,19 @@ func TestArtifactRegistration(t *testing.T) {
 		t.Error("expected image_tag v1.0")
 	}
 
-	// List artifacts by service.
 	resp, _ = doJSON(t, "GET", fmt.Sprintf("%s/api/v1/services/%s/artifacts", srv.URL, svcID), nil)
 	if resp.StatusCode != 200 {
 		t.Fatalf("list artifacts: expected 200, got %d", resp.StatusCode)
 	}
+
+	resp, body = doJSON(t, "POST", srv.URL+"/api/v1/artifacts", map[string]any{
+		"build_id":     buildID,
+		"service_id":   svcID,
+		"image_repo":   "harbor/art-svc",
+		"image_tag":    "v1.1",
+		"image_digest": "sha256:abababababababababababababababababababababababababababababababab",
+	})
+	assertDeprecatedMutationRouteRemoved(t, http.MethodPost, "/api/v1/artifacts", resp, body)
 }
 
 // --- Deployment Intent & Run Full Flow ---
@@ -1015,43 +1076,11 @@ func TestDeploymentFlow(t *testing.T) {
 	defer srv.Close()
 	svcID := seedTestService(t, registry, "deploy-svc", "harbor/deploy")
 	envID := seedTestEnvironment(t, registry, "staging", domain.DeployStrategyReplace, false)
+	buildID := seedTestBuild(t, registry, svcID, "aaa1111a")
+	artID := seedTestArtifact(t, registry, svcID, buildID, "harbor/deploy", "v2.0", "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+	intentID := seedTestIntent(t, registry, svcID, envID, artID, "test-user")
 
-	// Register build + artifact.
-	_, body := doJSON(t, "POST", srv.URL+"/api/v1/builds", map[string]any{
-		"service_id": svcID, "git_sha": "aaa1111a", "git_ref": "main", "ci_run_id": "r2",
-	})
-	buildID := body["data"].(map[string]any)["id"].(string)
-
-	_, body = doJSON(t, "POST", srv.URL+"/api/v1/artifacts", map[string]any{
-		"build_id": buildID, "service_id": svcID,
-		"image_repo": "harbor/deploy", "image_tag": "v2.0",
-		"image_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-	})
-	artID := body["data"].(map[string]any)["id"].(string)
-
-	// Create deployment intent.
-	resp, body := doJSON(t, "POST", srv.URL+"/api/v1/deployments/intents", map[string]any{
-		"service_id":     svcID,
-		"environment_id": envID,
-		"artifact_id":    artID,
-		"requested_by":   "test-user",
-		"source_kind":    "manual",
-	})
-	if resp.StatusCode != 201 {
-		t.Fatalf("create intent: expected 201, got %d: %v", resp.StatusCode, body)
-	}
-	intentData := body["data"].(map[string]any)
-	intentID := intentData["id"].(string)
-	// Non-protected env → should be auto-approved.
-	if intentData["approval_status"] != "not_required" {
-		t.Errorf("expected approval_status not_required, got %v", intentData["approval_status"])
-	}
-	if intentData["status"] != "approved" {
-		t.Errorf("expected status approved, got %v", intentData["status"])
-	}
-
-	// Get the intent.
-	resp, body = doJSON(t, "GET", srv.URL+"/api/v1/deployments/intents/"+intentID, nil)
+	resp, body := doJSON(t, "GET", srv.URL+"/api/v1/deployments/intents/"+intentID, nil)
 	if resp.StatusCode != 200 {
 		t.Fatalf("get intent: expected 200, got %d", resp.StatusCode)
 	}
@@ -1095,86 +1124,46 @@ func TestDeploymentFlow(t *testing.T) {
 
 // --- Approval Flow (Protected Environment) ---
 
-func TestApprovalFlow(t *testing.T) {
+func TestApprovalRoutesAreRemoved(t *testing.T) {
 	srv, registry := newTestServerWithRegistry()
 	defer srv.Close()
 	svcID := seedTestService(t, registry, "approval-svc", "harbor/approval")
 	envID := seedTestEnvironment(t, registry, "production", domain.DeployStrategyReplace, true)
+	buildID := seedTestBuild(t, registry, svcID, "bbb2222b")
+	artID := seedTestArtifact(t, registry, svcID, buildID, "harbor/approval", "v3.0", "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc")
+	intentID := seedTestIntent(t, registry, svcID, envID, artID, "deployer")
 
-	// Register build + artifact.
-	_, body := doJSON(t, "POST", srv.URL+"/api/v1/builds", map[string]any{
-		"service_id": svcID, "git_sha": "bbb2222b", "git_ref": "main", "ci_run_id": "r3",
-	})
-	buildID := body["data"].(map[string]any)["id"].(string)
-
-	_, body = doJSON(t, "POST", srv.URL+"/api/v1/artifacts", map[string]any{
-		"build_id": buildID, "service_id": svcID,
-		"image_repo": "harbor/approval", "image_tag": "v3.0",
-		"image_digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
-	})
-	artID := body["data"].(map[string]any)["id"].(string)
-
-	// Create intent → should be pending approval.
-	resp, body := doJSON(t, "POST", srv.URL+"/api/v1/deployments/intents", map[string]any{
-		"service_id": svcID, "environment_id": envID, "artifact_id": artID,
-		"requested_by": "deployer", "source_kind": "manual",
-	})
-	if resp.StatusCode != 201 {
-		t.Fatalf("create intent: expected 201, got %d: %v", resp.StatusCode, body)
+	resp, body := doJSON(t, "GET", srv.URL+"/api/v1/deployments/intents/"+intentID, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("get seeded protected intent: expected 200, got %d: %v", resp.StatusCode, body)
 	}
 	intentData := body["data"].(map[string]any)
-	intentID := intentData["id"].(string)
-	if intentData["approval_status"] != "pending" {
+	if intentData["approval_status"] != string(domain.ApprovalStatusPending) {
 		t.Errorf("expected pending approval, got %v", intentData["approval_status"])
 	}
 
-	// Approve the intent.
-	resp, body = doJSON(t, "POST", srv.URL+"/api/v1/deployments/intents/"+intentID+"/approve", nil)
-	if resp.StatusCode != 200 {
-		t.Fatalf("approve: expected 200, got %d: %v", resp.StatusCode, body)
-	}
-
-	// Trying to approve again should fail.
-	resp, _ = doJSON(t, "POST", srv.URL+"/api/v1/deployments/intents/"+intentID+"/approve", nil)
-	if resp.StatusCode != 500 {
-		t.Fatalf("double approve: expected 500 (business error), got %d", resp.StatusCode)
-	}
+	path := "/api/v1/deployments/intents/" + intentID + "/approve"
+	resp, body = doJSON(t, http.MethodPost, srv.URL+path, nil)
+	assertDeprecatedMutationRouteRemoved(t, http.MethodPost, path, resp, body)
 }
 
 func TestRejectFlow(t *testing.T) {
 	srv, registry := newTestServerWithRegistry()
 	defer srv.Close()
-
-	// Seed service + protected env + build + artifact.
 	svcID := seedTestService(t, registry, "reject-svc", "harbor/reject")
 	envID := seedTestEnvironment(t, registry, "prod-reject", domain.DeployStrategyReplace, true)
+	buildID := seedTestBuild(t, registry, svcID, "ccc3333c")
+	artID := seedTestArtifact(t, registry, svcID, buildID, "harbor/reject", "v4.0", "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd")
+	intentID := seedTestIntent(t, registry, svcID, envID, artID, "deployer")
 
-	_, body := doJSON(t, "POST", srv.URL+"/api/v1/builds", map[string]any{
-		"service_id": svcID, "git_sha": "ccc3333c", "git_ref": "main", "ci_run_id": "r4",
-	})
-	buildID := body["data"].(map[string]any)["id"].(string)
+	path := "/api/v1/deployments/intents/" + intentID + "/reject"
+	resp, body := doJSON(t, http.MethodPost, srv.URL+path, nil)
+	assertDeprecatedMutationRouteRemoved(t, http.MethodPost, path, resp, body)
 
-	_, body = doJSON(t, "POST", srv.URL+"/api/v1/artifacts", map[string]any{
-		"build_id": buildID, "service_id": svcID,
-		"image_repo": "harbor/reject", "image_tag": "v4.0",
-		"image_digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
-	})
-	artID := body["data"].(map[string]any)["id"].(string)
-
-	// Create intent.
-	_, body = doJSON(t, "POST", srv.URL+"/api/v1/deployments/intents", map[string]any{
-		"service_id": svcID, "environment_id": envID, "artifact_id": artID,
-		"requested_by": "deployer", "source_kind": "manual",
-	})
-	intentID := body["data"].(map[string]any)["id"].(string)
-
-	// Reject the intent.
-	resp, body := doJSON(t, "POST", srv.URL+"/api/v1/deployments/intents/"+intentID+"/reject", nil)
-	if resp.StatusCode != 200 {
-		t.Fatalf("reject: expected 200, got %d: %v", resp.StatusCode, body)
+	if err := registry.RejectDeploymentIntent(context.Background(), uuid.MustParse(intentID)); err != nil {
+		t.Fatalf("reject seeded intent through registry: %v", err)
 	}
 
-	// Creating a run for a rejected intent should fail.
 	resp, _ = doJSON(t, "POST", srv.URL+"/api/v1/deployments/runs", map[string]any{
 		"deployment_intent_id": intentID,
 	})
@@ -1202,30 +1191,54 @@ func TestStateEndpoints(t *testing.T) {
 	}
 }
 
-// --- Observation Recording ---
+// --- Observation State ---
 
-func TestRecordObservation(t *testing.T) {
+func TestObservationStateReadRemainsAndDeprecatedRecordRouteIsRemoved(t *testing.T) {
 	srv, registry := newTestServerWithRegistry()
 	defer srv.Close()
 	svcID := seedTestService(t, registry, "obs-svc", "harbor/obs")
 	envID := seedTestEnvironment(t, registry, "obs-env", domain.DeployStrategyReplace, false)
+	seedTestObservation(t, registry, svcID, envID, "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee")
 
-	// Record observation.
-	resp, body := doJSON(t, "POST", srv.URL+"/api/v1/observations", map[string]any{
+	resp, body := doJSON(t, "GET", fmt.Sprintf("%s/api/v1/services/%s/environments/%s/state", srv.URL, svcID, envID), nil)
+	if resp.StatusCode != 200 {
+		t.Fatalf("get state: expected 200, got %d: %v", resp.StatusCode, body)
+	}
+
+	resp, body = doJSON(t, http.MethodPost, srv.URL+"/api/v1/observations", map[string]any{
 		"service_id":            svcID,
 		"environment_id":        envID,
-		"observed_image_digest": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+		"observed_image_digest": "sha256:efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
 		"health_status":         "healthy",
 		"source":                "docker-observer",
 	})
-	if resp.StatusCode != 201 {
-		t.Fatalf("record observation: expected 201, got %d: %v", resp.StatusCode, body)
-	}
+	assertDeprecatedMutationRouteRemoved(t, http.MethodPost, "/api/v1/observations", resp, body)
+}
 
-	// Check state was updated.
-	resp, body = doJSON(t, "GET", fmt.Sprintf("%s/api/v1/services/%s/environments/%s/state", srv.URL, svcID, envID), nil)
-	if resp.StatusCode != 200 {
-		t.Fatalf("get state: expected 200, got %d: %v", resp.StatusCode, body)
+func TestDeprecatedDeploymentObservationArtifactMutationRoutesAreRemoved(t *testing.T) {
+	srv, registry := newTestServerWithRegistry()
+	defer srv.Close()
+	svcID := seedTestService(t, registry, "removed-deploy-svc", "harbor/removed-deploy")
+	envID := seedTestEnvironment(t, registry, "removed-env", domain.DeployStrategyReplace, true)
+	buildID := seedTestBuild(t, registry, svcID, "fff6666f")
+	artID := seedTestArtifact(t, registry, svcID, buildID, "harbor/removed-deploy", "v6.0", "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff")
+	intentID := seedTestIntent(t, registry, svcID, envID, artID, "deployer")
+
+	tests := []struct {
+		method string
+		path   string
+		body   any
+	}{
+		{http.MethodPost, "/api/v1/deployments/intents", map[string]any{"service_id": svcID, "environment_id": envID, "artifact_id": artID, "requested_by": "deployer"}},
+		{http.MethodPost, "/api/v1/deployments/intents/" + intentID + "/approve", nil},
+		{http.MethodPost, "/api/v1/deployments/intents/" + intentID + "/reject", nil},
+		{http.MethodPost, "/api/v1/rollback", map[string]any{"service_id": svcID, "environment_id": envID, "requested_by": "deployer"}},
+		{http.MethodPost, "/api/v1/observations", map[string]any{"service_id": svcID, "environment_id": envID, "observed_image_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111", "health_status": "healthy", "source": "test"}},
+		{http.MethodPost, "/api/v1/artifacts", map[string]any{"build_id": buildID, "service_id": svcID, "image_repo": "harbor/removed-deploy", "image_tag": "v6.1", "image_digest": "sha256:1212121212121212121212121212121212121212121212121212121212121212"}},
+	}
+	for _, tt := range tests {
+		resp, body := doJSON(t, tt.method, srv.URL+tt.path, tt.body)
+		assertDeprecatedMutationRouteRemoved(t, tt.method, tt.path, resp, body)
 	}
 }
 

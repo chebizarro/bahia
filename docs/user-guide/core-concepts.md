@@ -199,10 +199,20 @@ Benefits of read models:
 
 Critical operations require **signed Nostr events**:
 
-```bash
-# Signer-first deployment via CLI
-bahia deploy --service payment-api --environment prod --artifact v2.1.0
-# Signs a 5961 DeployRequest event
+```json
+{
+  "kind": 5961,
+  "content": {
+    "service_id": "svc-123",
+    "environment_id": "env-456",
+    "artifact_id": "art-789"
+  },
+  "tags": [
+    ["service", "svc-123"],
+    ["environment", "env-456"],
+    ["artifact", "art-789"]
+  ]
+}
 ```
 
 This ensures:

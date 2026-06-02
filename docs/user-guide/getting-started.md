@@ -141,16 +141,7 @@ An **environment** is a deployment target like staging or production.
 
 **Artifacts** are container images produced by CI.
 
-When your CI pipeline builds an image, register it with Bahia:
-
-```bash
-bahia artifacts register \
-  --service-id "<service-uuid>" \
-  --image "registry.example.com/my-api:v1.0.0" \
-  --digest "sha256:abc123..."
-```
-
-Or use the Hive-CI bridge for automatic artifact registration from CI events.
+When your CI pipeline builds an image, register it with Bahia by publishing a signed Nostr `ArtifactRegister` event, or use the Hive-CI bridge for automatic artifact registration from CI events. The legacy REST-backed artifact registration command path is deprecated until the CLI publishes signed Nostr events directly.
 
 ### Step 5: Deploy
 
@@ -162,13 +153,7 @@ Create a **deployment intent** to request a deployment:
 3. Select the environment and artifact
 4. Click **Create Intent**
 
-**Via CLI:**
-```bash
-bahia deploy \
-  --service "<service-id>" \
-  --environment "<environment-id>" \
-  --artifact "<artifact-id>"
-```
+**Via Nostr:** publish a signed `DeployRequest` event, or use a UI flow backed by the Nostr control plane. The legacy REST-backed deploy command path is deprecated until the CLI publishes signed Nostr events directly.
 
 ### Step 6: Monitor the Deployment
 

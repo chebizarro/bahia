@@ -3,8 +3,6 @@ package handlers
 import (
 	"net/http"
 
-	"github.com/openagentsinc/bahia/internal/api/dto"
-	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/service"
 )
 
@@ -72,53 +70,4 @@ func (h *StateHandler) ListAll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeData(w, http.StatusOK, states)
-}
-
-func (h *StateHandler) RecordObservation(w http.ResponseWriter, r *http.Request) {
-	var req dto.RecordObservationRequest
-	if err := decodeJSON(r, &req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
-		return
-	}
-
-	if err := domain.ValidateRequiredUUID(req.ServiceID, "service_id"); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	if err := domain.ValidateRequiredUUID(req.EnvironmentID, "environment_id"); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	if err := domain.ValidateRequiredString(req.ObservedImageDigest, "observed_image_digest"); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	if err := domain.ValidateHealthStatus(domain.HealthStatus(req.HealthStatus)); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	if err := domain.ValidateRequiredString(req.Source, "source"); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-
-	obs := &domain.RuntimeObservation{
-		ServiceID:           req.ServiceID,
-		EnvironmentID:       req.EnvironmentID,
-		DeploymentUnitID:    req.DeploymentUnitID,
-		ObservedImageDigest: req.ObservedImageDigest,
-		ObservedImageRepo:   req.ObservedImageRepo,
-		ObservedContainerID: req.ObservedContainerID,
-		ObservedHost:        req.ObservedHost,
-		ObservedVersion:     req.ObservedVersion,
-		HealthStatus:        domain.HealthStatus(req.HealthStatus),
-		Source:              req.Source,
-		Metadata:            req.Metadata,
-	}
-
-	if err := h.registry.RecordObservation(r.Context(), obs); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	writeData(w, http.StatusCreated, obs)
 }

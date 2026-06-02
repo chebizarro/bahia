@@ -36,17 +36,17 @@ These REST endpoints duplicate functionality that the Nostr reactor (`internal/c
 
 | REST Endpoint | Nostr Kind | Reactor Handler | File |
 |---------------|------------|-----------------|------|
-| `POST /deployments/intents` | `DeployRequest` 5961 | `handleDeployRequest` | `router.go:410` |
-| `POST /deployments/intents/{id}/approve` | `DeploymentApproval` 5966 | `handleDeploymentApproval` | `router.go:411` |
-| `POST /deployments/intents/{id}/reject` | `DeploymentApproval` 5966 | `handleDeploymentApproval` | `router.go:412` |
-| `POST /rollback` | `RollbackRequest` 5962 | `handleRollbackRequest` | `router.go:438` |
-| `POST /observations` | `ObservationSubmit` 5967 | `handleObservationSubmit` | `router.go:441` |
+| `POST /deployments/intents` (removed) | `DeployRequest` 5961 | `handleDeployRequest` | `internal/controlplane/reactor.go` |
+| `POST /deployments/intents/{id}/approve` (removed) | `DeploymentApproval` 5966 | `handleDeploymentApproval` | `internal/controlplane/reactor.go` |
+| `POST /deployments/intents/{id}/reject` (removed) | `DeploymentApproval` 5966 | `handleDeploymentApproval` | `internal/controlplane/reactor.go` |
+| `POST /rollback` (removed) | `RollbackRequest` 5962 | `handleRollbackRequest` | `internal/controlplane/reactor.go` |
+| `POST /observations` (removed) | `ObservationSubmit` 5967 | `handleObservationSubmit` | `internal/controlplane/reactor.go` |
 
 ### Artifacts
 
 | REST Endpoint | Nostr Kind | Reactor Handler | File |
 |---------------|------------|-----------------|------|
-| `POST /artifacts` | `ArtifactRegister` 5985 | `handleArtifactRegister` | `router.go:407` |
+| `POST /artifacts` (removed) | `ArtifactRegister` 5985 | `handleArtifactRegister` | `internal/controlplane/reactor.go` |
 
 ### Policies
 
@@ -190,14 +190,14 @@ All `GET` endpoints that read projected state are acceptable for browser compati
 - [x] Update tests
 
 ### Work Item 2: Deployments + Observations + Artifacts (6 endpoints)
-- [ ] Remove POST /deployments/intents from router.go
-- [ ] Remove POST /deployments/intents/{id}/approve from router.go
-- [ ] Remove POST /deployments/intents/{id}/reject from router.go
-- [ ] Remove POST /rollback from router.go
-- [ ] Remove POST /observations from router.go
-- [ ] Remove POST /artifacts from router.go
-- [ ] Delete/comment handler methods in deployments.go, state.go, artifacts.go
-- [ ] Update tests
+- [x] Remove POST /deployments/intents from router.go
+- [x] Remove POST /deployments/intents/{id}/approve from router.go
+- [x] Remove POST /deployments/intents/{id}/reject from router.go
+- [x] Remove POST /rollback from router.go
+- [x] Remove POST /observations from router.go
+- [x] Remove POST /artifacts from router.go
+- [x] Delete/comment handler methods in deployments.go, state.go, artifacts.go
+- [x] Update tests
 
 ### Work Item 3: Policies + Tools (6 endpoints)
 - [ ] Remove POST /policies from router.go

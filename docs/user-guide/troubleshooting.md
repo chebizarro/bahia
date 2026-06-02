@@ -162,10 +162,7 @@ Common issues and solutions when using Bahia.
    bahia state list --service svc-123
    ```
 
-2. Deploy to correct the drift:
-   ```bash
-   bahia deploy --service svc-123 --environment env-456 --artifact art-789
-   ```
+2. Deploy to correct the drift by publishing a signed `DeployRequest` event or using a UI flow backed by the Nostr control plane. The legacy REST-backed deploy command path is deprecated until the CLI publishes signed Nostr events directly.
 
 3. Investigate why drift occurred (manual changes, crashes, etc.)
 

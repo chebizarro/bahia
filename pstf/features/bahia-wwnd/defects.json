@@ -1,0 +1,11 @@
+{
+  "feature_id": "bahia-wwnd",
+  "defects": [
+    {
+      "id": "bahia-hygp",
+      "title": "Migrate deployment artifact CLI and MCP mutations to signer-first Nostr",
+      "status": "open",
+      "reason": "REST endpoints were removed in this work item; CLI deploy/rollback and MCP mutation tools require signer-first Nostr implementations as follow-up work."
+    }
+  ]
+}

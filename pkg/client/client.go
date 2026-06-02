@@ -491,33 +491,16 @@ func (c *Client) ListDriftedStates(ctx context.Context) ([]domain.EnvironmentSer
 
 // --- Deployments ---
 
-// CreateDeploymentIntent creates a new deployment intent.
+// CreateDeploymentIntent is no longer available through the REST API.
+// Publish a signed Nostr DeployRequest command instead.
 func (c *Client) CreateDeploymentIntent(ctx context.Context, serviceID, envID, artifactID, requestedBy string) (*domain.DeploymentIntent, error) {
-	body := map[string]string{
-		"service_id":     serviceID,
-		"environment_id": envID,
-		"artifact_id":    artifactID,
-		"requested_by":   requestedBy,
-	}
-	var intent domain.DeploymentIntent
-	if err := c.do(ctx, http.MethodPost, "/api/v1/deployments/intents", body, &intent); err != nil {
-		return nil, err
-	}
-	return &intent, nil
+	return nil, fmt.Errorf("REST deployment intent creation is removed; publish a signed Nostr DeployRequest event instead")
 }
 
-// Rollback creates a rollback deployment intent.
+// Rollback is no longer available through the REST API.
+// Publish a signed Nostr RollbackRequest command instead.
 func (c *Client) Rollback(ctx context.Context, serviceID, envID, requestedBy string) (*domain.DeploymentIntent, error) {
-	body := map[string]string{
-		"service_id":     serviceID,
-		"environment_id": envID,
-		"requested_by":   requestedBy,
-	}
-	var intent domain.DeploymentIntent
-	if err := c.do(ctx, http.MethodPost, "/api/v1/rollback", body, &intent); err != nil {
-		return nil, err
-	}
-	return &intent, nil
+	return nil, fmt.Errorf("REST rollback is removed; publish a signed Nostr RollbackRequest event instead")
 }
 
 // GetDeploymentRun retrieves a deployment run by ID.

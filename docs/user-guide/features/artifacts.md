@@ -23,49 +23,37 @@ Artifacts represent:
 
 ## Registering Artifacts
 
+Artifact registration is signer-first. The legacy `POST /api/v1/artifacts` REST mutation has been removed; CI systems should publish a signed Nostr `ArtifactRegister` event or use the Hive-CI bridge.
+
 ### From CI (Recommended)
 
-Use the Hive-CI bridge or webhooks to auto-register:
-
-```yaml
-# In CI workflow
-- name: Register artifact
-  run: |
-    curl -X POST "$BAHIA_URL/api/v1/artifacts" \
-      -H "Authorization: Nostr $NIP98_TOKEN" \
-      -d '{
-        "service_id": "'"$SERVICE_ID"'",
-        "image": "registry.example.com/my-api:'"$TAG"'",
-        "digest": "'"$DIGEST"'",
-        "metadata": {
-          "git_commit": "'"$GITHUB_SHA"'",
-          "build_timestamp": "'"$(date -Iseconds)"'"
-        }
-      }'
-```
-
-### CLI
-
-```bash
-bahia artifacts register \
-  --service-id svc-123 \
-  --image "registry.example.com/my-api:v2.0.0" \
-  --digest "sha256:abc123..." \
-  --metadata git_commit=abc123
-```
-
-### MCP Tool
+Use the Hive-CI bridge or publish the event directly from CI with your configured Nostr signer:
 
 ```json
 {
-  "tool": "bahia_artifact_register",
-  "arguments": {
+  "kind": 5985,
+  "content": {
     "service_id": "svc-123",
-    "image": "registry.example.com/my-api:v2.0.0",
-    "digest": "sha256:abc123..."
-  }
+    "build_id": "build-456",
+    "image_repo": "registry.example.com/my-api",
+    "image_tag": "v2.0.0",
+    "image_digest": "sha256:abc123...",
+    "metadata": {
+      "git_commit": "abc123",
+      "build_timestamp": "2026-06-01T12:00:00Z"
+    }
+  },
+  "tags": [
+    ["service", "svc-123"],
+    ["build", "build-456"],
+    ["digest", "sha256:abc123..."]
+  ]
 }
 ```
+
+### CLI and MCP
+
+Artifact registration mutations are signer-first. Legacy CLI/MCP registration surfaces are being migrated to publish signed Nostr events directly; until that migration lands, publish the Nostr event below or use the Hive-CI bridge.
 
 ### Nostr (Signer-First)
 
@@ -241,14 +229,24 @@ bahia builds register \
 
 ### Linking to Artifacts
 
-When registering an artifact, link to its build:
+When publishing an `ArtifactRegister` event, include the source build id so the artifact is linked to build provenance:
 
-```bash
-bahia artifacts register \
-  --service-id svc-123 \
-  --build-id build-456 \
-  --image "registry.example.com/my-api:v2.0.0" \
-  --digest "sha256:abc123..."
+```json
+{
+  "kind": 5985,
+  "content": {
+    "service_id": "svc-123",
+    "build_id": "build-456",
+    "image_repo": "registry.example.com/my-api",
+    "image_tag": "v2.0.0",
+    "image_digest": "sha256:abc123..."
+  },
+  "tags": [
+    ["service", "svc-123"],
+    ["build", "build-456"],
+    ["digest", "sha256:abc123..."]
+  ]
+}
 ```
 
 ## Read Models

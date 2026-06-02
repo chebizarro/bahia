@@ -61,47 +61,9 @@ After deployment:
    - **Reason**: Why you're deploying (optional)
 4. Click **Create Deployment**
 
-### CLI
+### CLI and MCP
 
-```bash
-bahia deploy \
-  --service payment-api \
-  --environment production \
-  --artifact art-789 \
-  --reason "Hotfix for payment timeout"
-```
-
-Or using signer-first Nostr:
-
-```bash
-bahia services actions deploy payment-api \
-  --environment production \
-  --artifact art-789
-```
-
-### MCP Tool
-
-```json
-{
-  "tool": "bahia_deploy",
-  "arguments": {
-    "service_id": "svc-123",
-    "environment_id": "env-456",
-    "artifact_id": "art-789"
-  }
-}
-```
-
-Returns correlation metadata for Nostr follow-up:
-```json
-{
-  "request_event_id": "abc123...",
-  "request_kind": 5961,
-  "status_kind": 6961,
-  "result_kind": 7961,
-  "service_id": "svc-123"
-}
-```
+Deployment intent creation is signer-first. The legacy `POST /api/v1/deployments/intents` REST mutation has been removed. Legacy CLI/MCP mutation surfaces are being migrated to publish signed Nostr events; until that migration lands, publish the Nostr event directly or use a UI flow backed by the Nostr control plane.
 
 ### Nostr (Signer-First)
 
@@ -175,15 +137,9 @@ When an intent requires approval:
 2. Review the intent details
 3. Click **Approve** or **Reject**
 
-### CLI
+### CLI and MCP
 
-```bash
-# Approve
-bahia deployments approve intent-123
-
-# Reject
-bahia deployments reject intent-123 --reason "Missing tests"
-```
+Approval and rejection mutations are signer-first. Legacy CLI/MCP approval surfaces are being migrated to publish signed Nostr events directly; until that migration lands, publish the Nostr event below or use a UI flow backed by the Nostr control plane.
 
 ### Nostr
 
@@ -213,12 +169,22 @@ Roll back to a previous artifact:
 2. Find the deployment to roll back to
 3. Click **Rollback to this version**
 
-### CLI
+### Nostr
 
-```bash
-bahia rollback \
-  --service payment-api \
-  --environment production
+Rollback is signer-first. The legacy `POST /api/v1/rollback` REST mutation has been removed; publish a signed `5962` RollbackRequest event:
+
+```json
+{
+  "kind": 5962,
+  "content": {
+    "service_id": "svc-123",
+    "environment_id": "env-456"
+  },
+  "tags": [
+    ["service", "svc-123"],
+    ["environment", "env-456"]
+  ]
+}
 ```
 
 This creates a new intent to deploy the previously successful artifact.

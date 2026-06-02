@@ -1,0 +1,56 @@
+{
+  "feature_id": "bahia-wwnd",
+  "test_matrix": [
+    {
+      "test": "TestDeprecatedDeploymentObservationArtifactMutationRoutesAreRemoved",
+      "acceptance_criteria": [
+        "AC1"
+      ],
+      "evidence": "Exercises POST /deployments/intents, /deployments/intents/{id}/approve, /deployments/intents/{id}/reject, /rollback, /observations, and /artifacts and expects 404 or 405."
+    },
+    {
+      "test": "TestArtifactReadRoutesRemainAndDeprecatedRegisterIsRemoved",
+      "acceptance_criteria": [
+        "AC1",
+        "AC3"
+      ],
+      "evidence": "Seeds artifact state through RegistryService, verifies artifact GET/list remain available, and verifies POST /artifacts is removed."
+    },
+    {
+      "test": "TestDeploymentFlow",
+      "acceptance_criteria": [
+        "AC3"
+      ],
+      "evidence": "Seeds build/artifact/intent through RegistryService and verifies deployment intent read plus deployment run create/get/complete/list routes remain functional."
+    },
+    {
+      "test": "TestObservationStateReadRemainsAndDeprecatedRecordRouteIsRemoved",
+      "acceptance_criteria": [
+        "AC1",
+        "AC3"
+      ],
+      "evidence": "Seeds observation through RegistryService, verifies state GET remains available, and verifies POST /observations is removed."
+    },
+    {
+      "test": "TestCreateDeploymentIntentRestMutationRemoved",
+      "acceptance_criteria": [
+        "AC4"
+      ],
+      "evidence": "Uses an httptest server that fails if contacted and asserts the client returns Nostr DeployRequest guidance."
+    },
+    {
+      "test": "TestRollbackRestMutationRemoved",
+      "acceptance_criteria": [
+        "AC4"
+      ],
+      "evidence": "Uses an httptest server that fails if contacted and asserts the client returns Nostr RollbackRequest guidance."
+    },
+    {
+      "test": "go build ./...",
+      "acceptance_criteria": [
+        "AC5"
+      ],
+      "evidence": "Full repository compile check."
+    }
+  ]
+}

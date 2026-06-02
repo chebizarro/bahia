@@ -1,0 +1,37 @@
+{
+  "feature_id": "bahia-wwnd",
+  "title": "REST deprecation work item 2: deployments, observations, artifacts",
+  "intent": "Remove REST mutation endpoints for deployment intent creation, deployment approval/rejection, rollback, runtime observation submission, and artifact registration because these mutations are handled by signed Nostr control-plane events.",
+  "observed_behavior_before": [
+    "router.go registered POST /deployments/intents, POST /deployments/intents/{id}/approve, POST /deployments/intents/{id}/reject, POST /rollback, POST /observations, and POST /artifacts.",
+    "HTTP handlers accepted direct JSON mutations for those operations.",
+    "Router tests used removed REST mutations as setup paths."
+  ],
+  "intended_behavior": [
+    "The six REST mutation routes are unavailable.",
+    "Read endpoints and deployment run endpoints that remain in scope continue to work.",
+    "Public client helpers do not attempt removed REST writes and instead fail with signer-first Nostr guidance.",
+    "Nostr reactor handling for these operations remains unchanged."
+  ],
+  "scope": [
+    "internal/api/router/router.go",
+    "internal/api/handlers/deployments.go",
+    "internal/api/handlers/state.go",
+    "internal/api/handlers/artifacts.go",
+    "internal/api/router/router_test.go",
+    "internal/api/handlers/validation_test.go",
+    "pkg/client/client.go",
+    "pkg/client/client_test.go",
+    "docs/specs/rest-deprecation-plan.md",
+    "docs/user-guide/features/deployments.md",
+    "docs/user-guide/features/artifacts.md",
+    "docs/user-guide/cli-reference.md",
+    "docs/user-guide/getting-started.md",
+    "docs/user-guide/core-concepts.md",
+    "docs/user-guide/troubleshooting.md"
+  ],
+  "out_of_scope": [
+    "Deleting domain types or repository/service methods used by the Nostr reactor.",
+    "Rewriting CLI or MCP mutation surfaces to publish signed Nostr events; tracked by bahia-hygp."
+  ]
+}
